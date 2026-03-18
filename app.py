@@ -18,7 +18,6 @@ from langgraph.checkpoint.postgres import PostgresSaver
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    os.makedirs("uploads", exist_ok=True)
     
     if connection_pool:
         connection_pool.open()
@@ -40,6 +39,8 @@ async def lifespan(app: FastAPI):
         print("🔌 [psycopg] Pool de conexiones cerrado.")
 
 
+# Asegurarnos de que el directorio de uploads exista antes de montar recursos estáticos
+os.makedirs("uploads", exist_ok=True)
 
 app = FastAPI(lifespan=lifespan)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
