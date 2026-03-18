@@ -375,26 +375,40 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
         await asyncio.to_thread(get_or_create_session, session_id, user_id=user_id if user_id != "guest" else None)
         await asyncio.to_thread(save_message, session_id, "user", prompt)
         
-        # Sincronizar form_data al health_profile si está vacío en la DB
-        if form_data and user_id and user_id != "guest" and user_id != session_id:
-            profile = get_user_profile(user_id)
-            if profile:
-                existing_hp = profile.get("health_profile") or {}
-                if not existing_hp:
-                    print(f"🔄 [SYNC STREAM] health_profile vacío, sincronizando...")
-                    await asyncio.to_thread(update_user_health_profile, user_id, form_data)
-            else:
-                try:
-                    from db import supabase as sb_client
-                    if sb_client:
-                        def _upsert_profile():
-                            sb_client.table("user_profiles").upsert({
-                                "id": user_id,
-                                "health_profile": form_data
-                            }).execute()
-                        await asyncio.to_thread(_upsert_profile)
-                except Exception as e:
-                    print(f"❌ [SYNC STREAM] Error creando perfil: {e}")
+        # Handle form_data: merge frontend data with DB health_profile
+        merged_form_data = form_data or {}
+        if user_id and user_id != "guest" and user_id != session_id:
+            try:
+                profile = await asyncio.to_thread(get_user_profile, user_id)
+                if profile:
+                    existing_hp = profile.get("health_profile") or {}
+                    
+                    if existing_hp:
+                        # Si hay datos en la DB, los usamos y los actualizamos con lo nuevo del frontend
+                        existing_hp.update(merged_form_data)
+                        merged_form_data = existing_hp
+                    
+                    # Sincronizar de vuelta a la DB si el frontend envió algo válido pero la DB estaba vacía o diferente
+                    if form_data and not existing_hp:
+                        print(f"🔄 [SYNC STREAM] health_profile vacío, sincronizando...")
+                        await asyncio.to_thread(update_user_health_profile, user_id, merged_form_data)
+                else:
+                    if form_data:
+                        try:
+                            from db import supabase as sb_client
+                            if sb_client:
+                                def _upsert_profile():
+                                    sb_client.table("user_profiles").upsert({
+                                        "id": user_id,
+                                        "health_profile": merged_form_data
+                                    }).execute()
+                                await asyncio.to_thread(_upsert_profile)
+                        except Exception as e:
+                            print(f"❌ [SYNC STREAM] Error creando perfil: {e}")
+            except Exception as e:
+                print(f"⚠️ Error cargando health profile en chat: {e}")
+                
+        form_data = merged_form_data
         
         if not current_plan and user_id and user_id != "guest":
             current_plan = await asyncio.to_thread(get_latest_meal_plan, user_id)
@@ -506,33 +520,38 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
         save_message(session_id, "user", prompt)
         
-        # Sincronizar form_data al health_profile si está vacío en la DB
-        if form_data and user_id and user_id != "guest" and user_id != session_id:
-            profile = get_user_profile(user_id)
-            if profile:
-                existing_hp = profile.get("health_profile") or {}
-                if not existing_hp:
-                    print(f"🔄 [SYNC] health_profile vacío, sincronizando desde formData del frontend...")
-                    print(f"🔍 [SYNC] form_data a guardar: {list(form_data.keys())}")
-                    result = update_user_health_profile(user_id, form_data)
-                    print(f"🔍 [SYNC] Resultado update: {result}")
-                    # Verificar que se guardó
-                    verify = get_user_profile(user_id)
-                    if verify:
-                        print(f"✅ [SYNC] Verificación: health_profile ahora tiene {list((verify.get('health_profile') or {}).keys())}")
-            else:
-                # No existe el perfil, crear uno con upsert
-                print(f"⚠️ [SYNC] No existe user_profile para {user_id}, intentando crear...")
-                try:
-                    from db import supabase as sb_client
-                    if sb_client:
-                        sb_client.table("user_profiles").upsert({
-                            "id": user_id,
-                            "health_profile": form_data
-                        }).execute()
-                        print(f"✅ [SYNC] Perfil creado con health_profile")
-                except Exception as e:
-                    print(f"❌ [SYNC] Error creando perfil: {e}")
+        # Handle form_data: merge frontend data with DB health_profile
+        merged_form_data = form_data or {}
+        if user_id and user_id != "guest" and user_id != session_id:
+            try:
+                profile = get_user_profile(user_id)
+                if profile:
+                    existing_hp = profile.get("health_profile") or {}
+                    
+                    if existing_hp:
+                        existing_hp.update(merged_form_data)
+                        merged_form_data = existing_hp
+                        
+                    if form_data and not existing_hp:
+                        print(f"🔄 [SYNC] health_profile vacío, sincronizando desde formData del frontend...")
+                        update_user_health_profile(user_id, merged_form_data)
+                else:
+                    if form_data:
+                        print(f"⚠️ [SYNC] No existe user_profile para {user_id}, intentando crear...")
+                        try:
+                            from db import supabase as sb_client
+                            if sb_client:
+                                sb_client.table("user_profiles").upsert({
+                                    "id": user_id,
+                                    "health_profile": merged_form_data
+                                }).execute()
+                                print(f"✅ [SYNC] Perfil creado con health_profile")
+                        except Exception as e:
+                            print(f"❌ [SYNC] Error creando perfil: {e}")
+            except Exception as e:
+                print(f"⚠️ Error cargando health profile en chat: {e}")
+                
+        form_data = merged_form_data
         
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)
