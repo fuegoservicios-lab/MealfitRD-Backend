@@ -70,8 +70,9 @@ app.add_middleware(
         "http://localhost:5173", 
         "http://127.0.0.1:5173",
         "http://localhost:5174", 
-        "http://127.0.0.1:5174"
-    ], # Especificamos las URLs exactas en lugar de "*"
+        "http://127.0.0.1:5174",
+        "https://mealfit-rd.vercel.app"
+    ], # Añadida la URL de producción de Vercel
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
