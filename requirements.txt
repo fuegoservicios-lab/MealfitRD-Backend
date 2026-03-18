@@ -5,3 +5,7 @@ langchain-google-genai
 supabase
 pydantic
 python-dotenv
+langgraph
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
+tenacity
