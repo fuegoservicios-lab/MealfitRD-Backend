@@ -39,7 +39,7 @@ class MealModel(BaseModel):
 
 class DailyPlanModel(BaseModel):
     day: int = Field(description="Número de día (1, 2, o 3)")
-    meals: List[MealModel] = Field(description="Lista de comidas estrictamente en orden cronológico: Desayuno, Almuerzo, Merienda, Cena")
+    meals: List[MealModel] = Field(description="Lista de comidas en orden cronológico. MUY IMPORTANTE: Si el usuario omite el almuerzo, genera SOLO 3 comidas: Desayuno, Merienda, Cena.")
 
 class PlanModel(BaseModel):
     main_goal: str = Field(description="El objetivo principal identificado. Ej: 'Pérdida de Peso (Déficit)'")
@@ -71,6 +71,7 @@ REGLAS ESTRICTAS:
 6. ESTRUCTURA: Si el usuario indicó `skipLunch: true`, NO incluyas Almuerzo, distribuye las calorías en las demás comidas y asume que comerá la comida familiar.
 7. VARIEDAD ESTRICTA: Revisa el historial de comidas anteriores provisto en el prompt (si lo hay) y NO PITAS LOS MISMOS PLATOS NI NOMBRES EXACTOS DE LAS ÚLTIMAS 24-48 HORAS. Ofrécele opciones radicalmente diferentes pero dentro de sus macros.
 8. PROHIBICIÓN ABSOLUTA DE RECHAZOS: Lee detenidamente el Perfil de Gustos adjunto. Si el perfil dice que el usuario odia o rechazó un ingrediente (ej. plátano, avena), está TOTALMENTE PROHIBIDO incluirlo en este plan. Si fallas en esto, podrías causar daño al paciente.
+9. ALIMENTOS SALUDABLES OBLIGATORIOS Y PROHIBICIÓN DE COMIDA CHATARRA: ESTÁ ESTRICTAMENTE PROHIBIDO generar platos que sean comida rápida o chatarra (como Pizza regular, Hamburguesas comerciales, Hot Dogs, etc). MealfitRD es un sistema de nutrición saludable. Todas las recetas deben enfocarse en alimentos ricos en nutrientes. Si propones una opción estilo 'cheat meal', DEBE especificar claramente que es una versión saludable casera, baja en grasa y rica en nutrientes.
 """
 
 def analyze_preferences_agent(likes: list, history: list, active_rejections: Optional[list] = None):
@@ -174,27 +175,38 @@ La SUMA de las calorías de todas las comidas individuales DEBE ser cercana a {n
         if recent_assistant_msgs:
             recent_meals_context = f"\n\n--- HISTORIAL RECIENTE LIGERAMENTE RESUMIDO PARA EVITAR REPETICIONES ---\nEl usuario ya ha recibido las siguientes comidas recientemente. Es obligatorio darle variedad y generar nombres, ingredientes y estilos diferentes para este nuevo día:\n{json.dumps(recent_assistant_msgs)}\n----------------------------------------------------------------------"
     
-    prompt_text = f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días ajustado a sus necesidades diarias.\n\nInformación del Usuario:\n{json.dumps(form_data, indent=2)}\n{nutrition_context}\n{taste_profile}\n{recent_meals_context}\n\n{ANALYZE_SYSTEM_PROMPT}"
+    # Manejo dinámico de skipLunch para forzar al LLM a respetar la exclusión del Almuerzo
+    skip_lunch_instruction = ""
+    is_skip_lunch_active = form_data.get("skipLunch", False)
+    if is_skip_lunch_active:
+        skip_lunch_instruction = "\n\n⚠️ INSTRUCCIÓN CRÍTICA Y OBLIGATORIA DE ESTRUCTURA ⚠️\nEl usuario indicó 'Almuerzo Familiar / Ya resuelto' (`skipLunch: true`). ESTÁ TOTAL Y ABSOLUTAMENTE PROHIBIDO incluir la comida 'Almuerzo' en este plan. Si incluyes un Almuerzo, el plan será rechazado. \nDebes generar EXACTAMENTE 3 comidas por el día entero: 'Desayuno', 'Merienda' y 'Cena'. \nLas calorías objetivo proporcionadas ya tienen descontada la porción del almuerzo resuelto. Dives dividir todas esas calorías ÚNICAMENTE entre Desayuno, Merienda y Cena."
+
+    prompt_text = f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días ajustado a sus necesidades diarias.\n\nInformación del Usuario:\n{json.dumps(form_data, indent=2)}\n{nutrition_context}\n{taste_profile}\n{recent_meals_context}\n{skip_lunch_instruction}\n\n{ANALYZE_SYSTEM_PROMPT}"
     
     # Enforce Pydantic Output schema
     structured_llm = llm.with_structured_output(PlanModel)
     
-    response = structured_llm.invoke(prompt_text)
+    # Retry mechanism for LLM invocation
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=5))
+    def invoke_with_validation():
+        resp = structured_llm.invoke(prompt_text)
+        res_dict = resp.model_dump() if hasattr(resp, "model_dump") else (resp if isinstance(resp, dict) else resp.dict())
+        if is_skip_lunch_active:
+            for d in res_dict.get("days", []):
+                for m in d.get("meals", []):
+                    if "almuerzo" in m.get("meal", "").lower():
+                        print("⚠️ EL MODELO GENERÓ ALMUERZO IGNORANDO INSTRUCCIONES. REINTENTANDO...")
+                        raise ValueError("El LLM ignoró la instrucción de omitir Almuerzo.")
+        return res_dict
+    
+    response_dict = invoke_with_validation()
     
     end_time = time.time()
     duration_secs = round(float(end_time - start_time), 2)
     print(f"✅ [COMPLETADO] El modelo LangChain finalizó en {duration_secs} segundos.")
     print("-------------------------------------------------------------\n")
     
-    result: dict = {}
-    if hasattr(response, "model_dump"):
-        result = getattr(response, "model_dump")()
-    elif isinstance(response, dict):
-        result = response
-    elif hasattr(response, "dict"):
-        result = getattr(response, "dict")()
-    else:
-        raise ValueError("El modelo de IA generó una respuesta inválida o incompleta. Por favor, reintenta.")
+    result: dict = response_dict
     
     # ========== POST-PROCESO: Forzar valores exactos del calculador ==========
     result["calories"] = nutrition["target_calories"]
@@ -909,6 +921,9 @@ El user_id del usuario actual es: {user_id}"""
 
     if current_plan:
         system_prompt += f"\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas activo:\n{json.dumps(current_plan)}\n\nUsa esta información para responder con exactitud preguntas sobre lo que le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado (como desayuno, almuerzo o cena)."
+        
+        if form_data and form_data.get("skipLunch"):
+            system_prompt += "\n⚠️ IMPORTANTE SOBRE EL ALMUERZO: El plan actual NO tiene 'Almuerzo' NO porque se haya omitido y redistribuido, sino porque el usuario eligió 'Almuerzo Familiar / Ya resuelto'. Esto significa que EL USUARIO SÍ VA A ALMORZAR en su casa libremente. NUNCA digas que 'omitimos el almuerzo y redistribuimos las calorías' porque eso es falso. Dile que en realidad tiene un 'Cupo Vacío' en el plan porque reservamos las calorías para que almorzara libremente en su casa, y aliéntalo a que te cuente qué comerá para anotarlo en su registro."
     
         system_prompt += f"\n\nCONTEXTO HISTÓRICO DEL USUARIO (resúmenes de conversaciones pasadas):\n{memory['summary_context']}"
         
@@ -1034,6 +1049,9 @@ El user_id actual es: {user_id}"""
 
     if current_plan:
         system_prompt += f"\nCONTEXTO CRÍTICO: Plan activo:\n{json.dumps(current_plan)}\n"
+        
+        if form_data and form_data.get("skipLunch"):
+            system_prompt += "⚠️ IMPORTANTE SOBRE EL ALMUERZO: El usuario escogió 'Almuerzo Familiar', EL USUARIO SÍ VA A ALMORZAR. NO digas que se omitió y redistribuyó. Dile que le dejaste un 'Cupo Vacío' y coméntale que te dicte qué almorzó para registrarlo.\n"
         system_prompt += f"\nHISTÓRICO:\n{memory['summary_context']}"
         
     config = {"configurable": {"thread_id": session_id}}
