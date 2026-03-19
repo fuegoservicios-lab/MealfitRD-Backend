@@ -1,3 +1,6 @@
+drop function if exists match_user_facts(vector(768), float, int, uuid);
+drop function if exists hybrid_search_user_facts(text, vector(768), int, uuid);
+
 create or replace function match_user_facts (
   query_embedding vector(768),
   match_threshold float,
