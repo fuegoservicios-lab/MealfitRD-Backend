@@ -133,11 +133,11 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
                                    memory_context=memory.get("full_context_str", "") if session_id else "")
         
         # 4. Persistir los datos del formulario en user_profiles.health_profile
-        if user_id and user_id != "guest":
+        if actual_user_id and actual_user_id != "guest":
             hp_data = {k: v for k, v in data.items() if k not in ['session_id', 'user_id']}
             if hp_data:
-                update_user_health_profile(user_id, hp_data)
-                print(f"💾 [SYNC] health_profile guardado para user {user_id}")
+                update_user_health_profile(actual_user_id, hp_data)
+                print(f"💾 [SYNC] health_profile guardado para user {actual_user_id}")
         
         if session_id:
             goal = data.get('mainGoal', 'Desconocido')
@@ -148,11 +148,11 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
             background_tasks.add_task(summarize_and_prune, session_id)
             
         # 👇 NUEVO: Registramos uso de API de Gemini
-        if user_id and user_id != "guest":
-            log_api_usage(user_id, "gemini_analyze")
+        if actual_user_id and actual_user_id != "guest":
+            log_api_usage(actual_user_id, "gemini_analyze")
             
         # 👇 NUEVO: Guardar el plan generado en la base de datos
-        if user_id and user_id != "guest":
+        if actual_user_id and actual_user_id != "guest":
             try:
                 from db import supabase
                 from datetime import datetime
@@ -160,13 +160,13 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
                     calories = result.get("calories", 0)
                     macros = result.get("macros", {})
                     supabase.table("meal_plans").insert({
-                        "user_id": user_id,
+                        "user_id": actual_user_id,
                         "plan_data": result,
                         "name": f"Plan Evolutivo - {datetime.now().strftime('%d/%m/%Y')}",
                         "calories": int(calories) if calories else 0,
                         "macros": macros,
                     }).execute()
-                    print(f"💾 [DB] Plan guardado exitosamente en meal_plans para {user_id}")
+                    print(f"💾 [DB] Plan guardado exitosamente en meal_plans para {actual_user_id}")
             except Exception as db_e:
                 print(f"⚠️ [DB ERROR] No se pudo guardar el plan en Supabase: {db_e}")
 
