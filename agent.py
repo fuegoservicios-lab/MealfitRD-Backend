@@ -323,6 +323,22 @@ def swap_meal(form_data: dict):
         
     if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
 
+    # --- ANTI MODE-COLLAPSE PARA SWAPS ---
+    # Sugerir una proteína diferente al LLM para evitar que siempre use Pollo+Arroz
+    try:
+        import random
+        available_for_swap = [p for p in DOMINICAN_PROTEINS if p.lower() not in rejected_meal.lower()]
+        # Filtrar por dieta
+        if diet_type in ["vegano", "vegan"]:
+            available_for_swap = [p for p in available_for_swap if p.lower() in ["habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos", "soya/tofu", "berenjena"]]
+        elif diet_type in ["vegetariano", "vegetarian"]:
+            available_for_swap = [p for p in available_for_swap if p.lower() not in ["pollo", "cerdo", "res", "pescado", "atún", "camarones", "chuleta", "longaniza", "salami dominicano"]]
+        if available_for_swap:
+            suggested_protein = random.choice(available_for_swap)
+            context_extras += f"\n    - 💡 SUGERENCIA DE VARIEDAD: Para este swap, intenta basar el plato en **{suggested_protein}** como proteína principal (o en un ingrediente radicalmente diferente al rechazado)."
+    except Exception:
+        pass  # No bloquear el swap si falla la sugerencia
+
     print("\n-------------------------------------------------------------")
     print("⏳ [AGENTE DE SUSTITUCIÓN INTERPRETATIVO] Analizando rechazo...")
     print(f"➡️  Interpretando por qué rechazó: \"{rejected_meal}\" ({meal_type})")
