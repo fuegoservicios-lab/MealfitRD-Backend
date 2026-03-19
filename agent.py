@@ -116,12 +116,17 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
     # Mapeo de sinónimos comunes para ingredientes
     protein_synonyms = {
         "pollo": ["pollo", "pechuga", "muslo", "alitas", "chicharrón de pollo", "filete de pollo"],
-        "cerdo": ["cerdo", "chuleta", "masita", "chicharrón de cerdo", "lomo", "pernil"],
+        "cerdo": ["cerdo", "masita", "chicharrón de cerdo", "lomo", "pernil", "costilla"],
         "res": ["res", "carne molida", "bistec", "filete", "churrasco", "vaca", "picadillo", "carne de res"],
         "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "tilapia", "filete de pescado"],
         "atún": ["atún", "atun"],
         "huevos": ["huevos", "huevo", "tortilla", "revoltillo"],
+        "queso de freír": ["queso de freír", "queso de freir", "queso frito", "queso de hoja"],
+        "salami dominicano": ["salami dominicano", "salami", "salchichón"],
         "camarones": ["camarones", "camarón", "camaron"],
+        "chuleta": ["chuleta", "chuletas", "chuleta frita", "chuleta al horno"],
+        "longaniza": ["longaniza", "longanizas"],
+        "berenjena": ["berenjena", "berenjenas", "berenjena rellena"],
         "habichuelas rojas": ["habichuelas rojas", "frijoles rojos", "habichuela roja"],
         "habichuelas negras": ["habichuelas negras", "frijoles negros", "habichuela negra"],
         "gandules": ["gandules", "guandules", "gandul", "guandul"],
@@ -136,10 +141,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
         "yuca": ["yuca", "casabe", "arepitas de yuca", "puré de yuca"],
         "arroz blanco": ["arroz blanco", "arroz"],
         "arroz integral": ["arroz integral"],
-        "avena": ["avena"],
-        "papas": ["papas", "papa", "puré de papas"],
+        "avena": ["avena", "avena en hojuelas", "overnight oats"],
+        "pan integral": ["pan integral", "pan", "tostada integral", "tostada"],
+        "papas": ["papas", "papa", "puré de papas", "papa hervida"],
         "guineítos verdes": ["guineítos", "guineitos", "guineos verdes", "guineito verde", "guineitos verdes"],
-        "batata": ["batata", "puré de batata"]
+        "ñame": ["ñame", "name", "ñame hervido"],
+        "yautía": ["yautía", "yautia", "yautía hervida"],
+        "batata": ["batata", "puré de batata", "batata hervida", "boniato"]
     }
     
     for p in filtered_proteins:
