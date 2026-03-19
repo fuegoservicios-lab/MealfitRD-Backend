@@ -720,23 +720,43 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         print(f"Error guardando comida consumida: {e}")
         return None
 
-def get_consumed_meals_today(user_id: str):
-    """Obtiene las comidas consumidas del día actual (UTC) para un usuario."""
+def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins: int = None):
+    """Obtiene las comidas consumidas del día especificado en base a la zona horaria del usuario."""
     if not supabase: return []
     max_retries = 2
     for attempt in range(max_retries):
         try:
-            from datetime import datetime, timezone
+            from datetime import datetime, timezone, timedelta
             
-            # Obtener la fecha actual (año-mes-día)
-            today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if date_str and tz_offset_mins is not None:
+                # El frontend envía tz_offset en minutos (JS: getTimezoneOffset() - diferencia a UTC)
+                # Parsear el inicio del día local
+                try:
+                    local_start = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S")
+                    local_end = datetime.strptime(f"{date_str} 23:59:59", "%Y-%m-%d %H:%M:%S")
+                    
+                    # Convertir local a UTC sumando tz_offset_mins (para UTC-4 el offset es 240)
+                    utc_start = local_start + timedelta(minutes=tz_offset_mins)
+                    utc_end = local_end + timedelta(minutes=tz_offset_mins)
+                    
+                    start_str = utc_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    end_str = utc_end.strftime("%Y-%m-%dT%H:%M:%SZ")
+                except Exception as e:
+                    print(f"⚠️ Error procesando la zona horaria, usando fallback a UTC: {e}")
+                    today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    start_str = f"{today_date}T00:00:00Z"
+                    end_str = f"{today_date}T23:59:59Z"
+            else:
+                today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                start_str = f"{today_date}T00:00:00Z"
+                end_str = f"{today_date}T23:59:59Z"
             
-            # Consultar la DB filtrando las comidas de hoy
+            # Consultar la DB filtrando las comidas dentro del rango de horas local
             res = supabase.table("consumed_meals")\
                 .select("*")\
                 .eq("user_id", user_id)\
-                .gte("created_at", f"{today_date}T00:00:00Z")\
-                .lt("created_at", f"{today_date}T23:59:59Z")\
+                .gte("created_at", start_str)\
+                .lt("created_at", end_str)\
                 .execute()
                 
             return res.data

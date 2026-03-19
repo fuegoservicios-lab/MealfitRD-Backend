@@ -751,7 +751,7 @@ def api_delete_custom_shopping_item(item_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/diary/consumed/{user_id}")
-def api_get_consumed_today(user_id: str, verified_user_id: str = Depends(get_verified_user_id)):
+def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: Optional[int] = None, verified_user_id: str = Depends(get_verified_user_id)):
     """Obtiene las métricas agregadas de las comidas registradas en el día por la IA."""
     try:
         # Validación de seguridad IDOR
@@ -763,7 +763,7 @@ def api_get_consumed_today(user_id: str, verified_user_id: str = Depends(get_ver
             return {"meals": [], "totals": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}}
         
         from db import get_consumed_meals_today
-        meals = get_consumed_meals_today(user_id)
+        meals = get_consumed_meals_today(user_id, date_str=date, tz_offset_mins=tzOffset)
         
         total_cal = sum(m.get("calories", 0) for m in meals)
         total_pro = sum(m.get("protein", 0) for m in meals)
