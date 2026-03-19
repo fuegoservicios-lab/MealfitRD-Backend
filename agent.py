@@ -69,7 +69,7 @@ REGLAS ESTRICTAS:
    - "Montaje: [Instrucciones de cómo servir para que luzca apetitoso]"
 5. CUMPLE RESTRICCIONES ABSOLUTAMENTE: Si el usuario es vegetariano, tiene alergias (Ej. Lácteos), condiciones médicas (Ej. Diabetes T2) o indicó obstáculos (Ej: falta de tiempo, no sabe cocinar), el plan DEBE reflejar soluciones inmediatas a eso (comidas rápidas, sin azúcar, sin carne, etc).
 6. ESTRUCTURA: Si el usuario indicó `skipLunch: true`, NO incluyas Almuerzo, distribuye las calorías en las demás comidas y asume que comerá la comida familiar.
-7. VARIEDAD ESTRICTA: Revisa el historial de comidas anteriores provisto en el prompt (si lo hay) y NO PITAS LOS MISMOS PLATOS NI NOMBRES EXACTOS DE LAS ÚLTIMAS 24-48 HORAS. Ofrécele opciones radicalmente diferentes pero dentro de sus macros.
+7. VARIEDAD EXTRAMA Y CERO MONOTONÍA: Revisa cuidadosamente el historial de comidas anteriores provisto en el prompt. ESTÁ ESTRICTAMENTE PROHIBIDO repetir platos, nombres o incluso los mismos ingredientes principales de los planes recientes. Tienes permiso para ser muy creativo, usar distintas fuentes de carbohidratos, diferentes cortes de carne, métodos de cocción variados (horno, guisos, plancha, asado) y combinaciones nuevas. ¡Sorprende al usuario con opciones radicalmente diferentes!
 8. PROHIBICIÓN ABSOLUTA DE RECHAZOS: Lee detenidamente el Perfil de Gustos adjunto. Si el perfil dice que el usuario odia o rechazó un ingrediente, está TOTALMENTE PROHIBIDO incluirlo en este plan. EXCEPCIÓN CRÍTICA: Si el usuario te pidió EXPLÍCITAMENTE ahora mismo (en sus instrucciones o en el chat reciente) que le incluyas un ingrediente específico (ej. "quiero avena"), DEBES priorizar esa petición reciente e ignorar por completo la prohibición histórica sobre ese ingrediente.
 9. ALIMENTOS SALUDABLES OBLIGATORIOS Y PROHIBICIÓN DE COMIDA CHATARRA: ESTÁ ESTRICTAMENTE PROHIBIDO generar platos que sean comida rápida o chatarra (como Pizza regular, Hamburguesas comerciales, Hot Dogs, etc). MealfitRD es un sistema de nutrición saludable. Todas las recetas deben enfocarse en alimentos ricos en nutrientes. Si propones una opción estilo 'cheat meal', DEBE especificar claramente que es una versión saludable casera, baja en grasa y rica en nutrientes.
 """
@@ -173,7 +173,7 @@ La SUMA de las calorías de todas las comidas individuales DEBE ser cercana a {n
         # Solo tomamos los últimos 3 planes para no saturar el prompt
         recent_assistant_msgs = recent_assistant_msgs[-3:]
         if recent_assistant_msgs:
-            recent_meals_context = f"\n\n--- HISTORIAL RECIENTE LIGERAMENTE RESUMIDO PARA EVITAR REPETICIONES ---\nEl usuario ya ha recibido las siguientes comidas recientemente. Es obligatorio darle variedad y generar nombres, ingredientes y estilos diferentes para este nuevo día:\n{json.dumps(recent_assistant_msgs)}\n----------------------------------------------------------------------"
+            recent_meals_context = f"\n\n--- HISTORIAL RECIENTE DE COMIDAS (¡¡EVITAR REPETICIÓN A TODA COSTA!!) ---\nEl usuario ya ha estado comiendo lo siguiente en sus últimos planes. SU QUEJA PRINCIPAL ES LA MONOTONÍA. Es OBLIGATORIO que el nuevo plan sea COMPLETAMENTE DIFERENTE a esto. Inventa recetas nuevas, usa otros ingredientes, cambia la estructura. ¡Muestra tu máxima creatividad culinaria!\nHistorial reciente:\n{json.dumps(recent_assistant_msgs)}\n----------------------------------------------------------------------"
     
     # Manejo dinámico de skipLunch para forzar al LLM a respetar la exclusión del Almuerzo
     skip_lunch_instruction = ""
