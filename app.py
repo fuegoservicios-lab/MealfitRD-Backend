@@ -63,6 +63,23 @@ def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optiona
         print(f"⚠️ [AUTH] Error validando token: {e}")
     return None
 
+def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user_id)) -> Optional[str]:
+    """Dependencia para verificar los límites de uso de la API (Paywall) evitando repetición (DRY)."""
+    if verified_user_id:
+        credits_used = get_monthly_api_usage(verified_user_id)
+        plan_tier = "gratis"
+        
+        profile = get_user_profile(verified_user_id)
+        if profile:
+            plan_tier = profile.get("plan_tier", "gratis")
+            
+        limit = 15 if plan_tier == "gratis" else (100 if plan_tier == "plus" else 999999)
+        
+        if credits_used >= limit:
+            raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
+            
+    return verified_user_id
+
 # Setup CORS para el frontend React local
 app.add_middleware(
     CORSMiddleware,
@@ -79,7 +96,7 @@ app.add_middleware(
 )
 
 @app.post("/api/analyze")
-def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id")
         user_id = data.get("user_id") # Para buscar likes (si está logueado)
@@ -102,22 +119,6 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         actual_user_id = user_id if user_id and user_id != "guest" else None
         if actual_user_id:
             likes = get_user_likes(actual_user_id)
-            
-        # --- LÍMITE DE USO (PAYWALL) ---
-        if actual_user_id:
-            from db import get_monthly_api_usage
-            credits_used = get_monthly_api_usage(actual_user_id)
-            plan_tier = "gratis"
-            
-            profile = get_user_profile(actual_user_id)
-            if profile:
-                plan_tier = profile.get("plan_tier", "gratis")
-                
-            limit = 15 if plan_tier == "gratis" else (100 if plan_tier == "plus" else 999999)
-            
-            if credits_used >= limit:
-                raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
-        # -------------------------------
 
         # 1. Obtener rechazos activos (últimos 7 días solamente)
         active_rejections = get_active_rejections(user_id=actual_user_id, session_id=session_id)
@@ -345,7 +346,7 @@ from fastapi.responses import StreamingResponse
 import asyncio
 
 @app.post("/api/chat/stream")
-async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
@@ -359,22 +360,6 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
         if user_id and user_id != "guest" and user_id != session_id:
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
-                
-        # --- LÍMITE DE USO (PAYWALL) ---
-        if user_id and user_id != "guest":
-            from db import get_monthly_api_usage
-            credits_used = get_monthly_api_usage(user_id)
-            plan_tier = "gratis"
-            
-            profile = get_user_profile(user_id)
-            if profile:
-                plan_tier = profile.get("plan_tier", "gratis")
-                
-            limit = 15 if plan_tier == "gratis" else (100 if plan_tier == "plus" else 999999)
-            
-            if credits_used >= limit:
-                raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
-        # -------------------------------
                 
         print(f"🔍 [DEBUG API CHAT STREAM] session_id={session_id}, user_id={user_id}")
         
@@ -495,7 +480,7 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
 
 
 @app.post("/api/chat")
-def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
@@ -507,22 +492,6 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         if user_id and user_id != "guest" and user_id != session_id:
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
-                
-        # --- LÍMITE DE USO (PAYWALL) ---
-        if user_id and user_id != "guest":
-            from db import get_monthly_api_usage
-            credits_used = get_monthly_api_usage(user_id)
-            plan_tier = "gratis"
-            
-            profile = get_user_profile(user_id)
-            if profile:
-                plan_tier = profile.get("plan_tier", "gratis")
-                
-            limit = 15 if plan_tier == "gratis" else (100 if plan_tier == "plus" else 999999)
-            
-            if credits_used >= limit:
-                raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
-        # -------------------------------
                 
         print(f"🔍 [DEBUG API CHAT] session_id={session_id}, user_id={user_id}")
         
@@ -616,7 +585,7 @@ async def api_diary_upload(
     file: UploadFile = File(...),
     user_id: str = Form("guest"),
     session_id: str = Form(None),
-    verified_user_id: str = Depends(get_verified_user_id)
+    verified_user_id: str = Depends(verify_api_quota)
 ):
     try:
         # Validación de seguridad IDOR
@@ -624,22 +593,7 @@ async def api_diary_upload(
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
                 
-        # --- LÍMITE DE USO (PAYWALL) ---
         actual_user_id = user_id if user_id != "guest" else session_id
-        if actual_user_id and actual_user_id != session_id:
-            from db import get_monthly_api_usage
-            credits_used = get_monthly_api_usage(actual_user_id)
-            plan_tier = "gratis"
-            
-            profile = get_user_profile(actual_user_id)
-            if profile:
-                plan_tier = profile.get("plan_tier", "gratis")
-                
-            limit = 15 if plan_tier == "gratis" else (100 if plan_tier == "plus" else 999999)
-            
-            if credits_used >= limit:
-                raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
-        # -------------------------------
 
         from vision_agent import process_image_with_vision
         from db import supabase
