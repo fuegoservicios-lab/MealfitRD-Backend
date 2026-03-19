@@ -874,7 +874,6 @@ def get_monthly_api_usage(user_id: str) -> int:
             start_date = datetime(now.year, now.month, 1).isoformat()
             
             # En Supabase count es más eficiente
-            res = supabase.table("api_usage").select("*", count="exact").eq("user_id", user_id).gte("created_at", start_date).execute()
             return res.count if res.count is not None else 0
         except Exception as e:
             if attempt < max_retries - 1:
@@ -884,3 +883,61 @@ def get_monthly_api_usage(user_id: str) -> int:
             print(f"Error obteniendo api_usage mensual: {e}")
             return 0
     return 0
+
+# ============================================================
+# MEMORIA PROACTIVA: TRACKING DE FRICCIÓN SILENCIOSA
+# ============================================================
+
+def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
+    """
+    Memoria Conductual: Trackea cuántas veces el usuario rechaza platos con la misma proteína base.
+    Al tercer rechazo (strike 3), inserta el ingrediente en rechazos temporales y notifica proactivamente.
+    """
+    if not user_id or user_id == "guest" or not rejected_meal: return False
+    
+    from agent import DOMINICAN_PROTEINS
+    base_ingredient = None
+    lower_meal = rejected_meal.lower()
+    for p in DOMINICAN_PROTEINS:
+        if p.lower() in lower_meal:
+            base_ingredient = p
+            break
+            
+    if not base_ingredient: return False
+            
+    profile = get_user_profile(user_id)
+    if not profile: return False
+    
+    hp = profile.get("health_profile") or {}
+    frictions = hp.get("frictions", {})
+    
+    current_count = frictions.get(base_ingredient, 0) + 1
+    
+    if current_count >= 3:
+        # 3er strike -> Bloqueo automático del ingrediente base
+        print(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente.")
+        
+        rejection_record = {
+            "meal_name": base_ingredient,
+            "meal_type": "Ingrediente Fricción",
+            "user_id": user_id,
+            "session_id": session_id if session_id else None
+        }
+        insert_rejection(rejection_record)
+        
+        # Reset counter
+        frictions[base_ingredient] = 0
+        hp["frictions"] = frictions
+        update_user_health_profile(user_id, hp)
+        
+        # Mensaje proactivo en el chat del agente
+        if session_id:
+            msg = f"He notado que últimamente has estado evitando opciones con **{base_ingredient}**, así que lo he sacado de tu radar y guardado en tus rechazos temporales por unas semanas para asegurar variedad. 🤖"
+            save_message(session_id, "model", msg)
+        return True
+    else:
+        frictions[base_ingredient] = current_count
+        hp["frictions"] = frictions
+        update_user_health_profile(user_id, hp)
+        return False
+

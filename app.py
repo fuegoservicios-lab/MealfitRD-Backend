@@ -211,6 +211,10 @@ def api_swap_meal(data: dict = Body(...), verified_user_id: Optional[str] = Depe
             insert_rejection(rejection_record)
             print(f"📝 Rechazo temporal guardado: '{rejected_meal}' (expira en 7 días)")
             
+            # Fricción Silenciosa: Validar si la base ya se rechazó 3 veces
+            from db import track_meal_friction
+            track_meal_friction(user_id, session_id, rejected_meal)
+            
         if user_id and user_id != "guest":
             log_api_usage(user_id, "gemini_swap_meal")
             
