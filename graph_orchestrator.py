@@ -10,8 +10,6 @@ import json
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import BaseModel, Field
-from typing import List
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 import logging
 
@@ -43,34 +41,9 @@ class PlanState(TypedDict):
 
 
 # ============================================================
-# SCHEMAS (importados de agent.py para consistencia)
+# SCHEMAS (importados del módulo canónico schemas.py)
 # ============================================================
-class MacrosModel(BaseModel):
-    protein: str = Field(description="Gramos de proteína totales, ej: '150g'")
-    carbs: str = Field(description="Gramos de carbohidratos totales, ej: '200g'")
-    fats: str = Field(description="Gramos de grasas totales, ej: '60g'")
-
-class MealModel(BaseModel):
-    meal: str = Field(description="Momento del día")
-    time: str = Field(description="Hora sugerida")
-    name: str = Field(description="Nombre del plato")
-    desc: str = Field(description="Descripción del plato")
-    prep_time: str = Field(description="Tiempo de preparación")
-    cals: int = Field(description="Calorías del plato")
-    macros: List[str] = Field(description="Lista rápida de macros")
-    ingredients: List[str] = Field(description="Lista de ingredientes")
-    recipe: List[str] = Field(description="Pasos de preparación con prefijos")
-
-class DailyPlanModel(BaseModel):
-    day: int = Field(description="Número de día (1, 2, o 3)")
-    meals: List[MealModel] = Field(description="Lista de comidas estrictamente en orden cronológico: Desayuno, Almuerzo, Merienda, Cena")
-
-class PlanModel(BaseModel):
-    main_goal: str = Field(description="Objetivo principal")
-    calories: int = Field(description="Total de calorías por día")
-    macros: MacrosModel = Field(description="Macronutrientes por día")
-    insights: List[str] = Field(description="3 frases: Diagnóstico, Estrategia, Tip del Chef")
-    days: List[DailyPlanModel] = Field(description="Lista de 3 días planificados")
+from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
 
 
 # ============================================================
@@ -192,7 +165,10 @@ Estos son datos críticos que debes respetar.
     # --- 🎲 INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ---
     # Python selecciona proteínas y carbos; el LLM solo "cocina" con ellos.
     from agent import get_deterministic_variety_prompt
-    variety_prompt = get_deterministic_variety_prompt(history_context, form_data)
+    # Extraer user_id para análisis de frecuencia basado en JSON de planes guardados
+    _uid = form_data.get("user_id") or form_data.get("session_id")
+    if _uid == "guest": _uid = None
+    variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid)
     print(f"🎲 [ORQUESTADOR] Inyectando variedad determinista en el generador.")
     
     # --- 🎲 INYECTOR DINÁMICO DE VARIEDAD CULINARIA ---
@@ -610,7 +586,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     # === PRUNING FACT-BY-FACT (Basado en Tokens) ===
     # Estrategia: Los hechos estrictos (alergias, condiciones, rechazos) son NON-NEGOTIABLE.
     # Luego se agregan hechos generales y visuales uno por uno calculando ~4 caracteres por token.
-    MAX_CONTEXT_TOKENS = 1500000
+    MAX_CONTEXT_TOKENS = 30000
     
     def estimate_tokens(text: str) -> int:
         return len(text) // 4

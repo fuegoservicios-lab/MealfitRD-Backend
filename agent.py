@@ -19,7 +19,8 @@ import random
 from typing import List, Optional, Annotated, TypedDict
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from nutrition_calculator import get_nutrition_targets
+
+
 from db import get_user_profile, update_user_health_profile
 from dotenv import load_dotenv
 
@@ -27,10 +28,11 @@ load_dotenv()
 
 from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, ShoppingListModel
 from prompts import (
-    ANALYZE_SYSTEM_PROMPT, DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE, 
+    DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE, 
     AUTO_SHOPPING_LIST_PROMPT, TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT,
     CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE
 )
+
 from tools import (
     update_form_field, generate_new_plan_from_chat,
     log_consumed_meal, modify_single_meal,
@@ -59,7 +61,7 @@ DOMINICAN_CARBS = [
     "Arroz Integral", "Avena", "Pan Integral", "Papas", "Guineítos Verdes", "Ñame", "Yautía"
 ]
 
-def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) -> str:
+def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
     print("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
     history_lower = history_text.lower() if history_text else ""
@@ -150,10 +152,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
         "batata": ["batata", "puré de batata", "batata hervida", "boniato"]
     }
     
-    # 1. Contar frecuencia de uso (cuántas veces aparece cada ingrediente en el historial)
+    # 1. Contar frecuencia de uso (FUENTE DUAL: texto del chat + JSON real de planes)
     protein_freq = {}
     carb_freq = {}
     
+    # Fuente A: Análisis de texto libre (historial de chat)
     for p in filtered_proteins:
         syns = protein_synonyms.get(p.lower(), [p.lower()])
         count = 0
@@ -170,6 +173,35 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
             count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
         carb_freq[c] = count
     
+    # Fuente B: Análisis directo del JSON de planes guardados (más preciso)
+    if user_id:
+        try:
+            from db import get_ingredient_frequencies_from_plans
+            raw_ingredients = get_ingredient_frequencies_from_plans(user_id, limit=5)
+            if raw_ingredients:
+                # Normalizar todos los ingredientes crudos del JSON
+                ingredients_blob = strip_accents(" ".join(raw_ingredients).lower())
+                
+                for p in filtered_proteins:
+                    syns = protein_synonyms.get(p.lower(), [p.lower()])
+                    json_count = 0
+                    for syn in syns:
+                        syn_normalized = strip_accents(syn.lower())
+                        json_count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', ingredients_blob))
+                    protein_freq[p] = protein_freq.get(p, 0) + json_count
+                
+                for c in filtered_carbs:
+                    syns = carb_synonyms.get(c.lower(), [c.lower()])
+                    json_count = 0
+                    for syn in syns:
+                        syn_normalized = strip_accents(syn.lower())
+                        json_count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', ingredients_blob))
+                    carb_freq[c] = carb_freq.get(c, 0) + json_count
+                    
+                print(f"📊 [ANTI MODE-COLLAPSE] Ingredientes JSON analizados: {len(raw_ingredients)} items de {5} planes")
+        except Exception as e:
+            print(f"⚠️ [ANTI MODE-COLLAPSE] Error analizando JSON de planes: {e}")
+    
     used_proteins = [p for p, freq in protein_freq.items() if freq > 0]
     used_carbs = [c for c, freq in carb_freq.items() if freq > 0]
     
@@ -181,6 +213,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
     available_carbs = [c for c in filtered_carbs if c not in used_carbs]
     if len(available_carbs) < 3:
         available_carbs = filtered_carbs.copy()
+    
+    # Guard clause: si las restricciones eliminaron TODOS los ingredientes
+    # (ej: vegano con muchas alergias), dejar libertad total al LLM
+    if not available_proteins or not available_carbs:
+        print("⚠️ [ANTI MODE-COLLAPSE] No quedan ingredientes disponibles tras filtrar restricciones. Dejando libertad al LLM.")
+        return ""
         
     # 3. Restricción Dura: Elegir 2 proteínas y 2 carbohidratos (reduciendo costo de supermercado)
     # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos
@@ -232,94 +270,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
     print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (optimizados para costo): {chosen_carbs}")
     return prompt
 
-def analyze_form(form_data: dict, history: Optional[list] = None, taste_profile: str = ""):
-    print("\n-------------------------------------------------------------")
-    print("⏳[INICIANDO] Generando Plan Alimenticio con Gemini 3.1 Pro (Python LangChain)...")
-    goal = form_data.get("mainGoal", form_data.get("goal", "Desconocido"))
-    print(f"➡️  Objetivo Principal: {goal}")
-    print("-------------------------------------------------------------")
-    
-    start_time = time.time()
-    
-    # ========== AGENTE CALCULADOR (Pre-cálculo exacto en Python) ==========
-    nutrition = get_nutrition_targets(form_data)
-    
-    nutrition_context = f"""
---- TARGETS NUTRICIONALES CALCULADOS (Fórmula Mifflin-St Jeor / Harris-Benedict Revisada) ---
-⚠️ ESTOS NÚMEROS SON EXACTOS. NO LOS RECALCULES. ÚSALOS TAL CUAL.
 
-• BMR (Tasa Metabólica Basal): {nutrition['bmr']} kcal
-• TDEE (Gasto Energético Total Diario): {nutrition['tdee']} kcal  
-• 🎯 CALORÍAS OBJETIVO DEL DÍA: {nutrition['target_calories']} kcal ({nutrition['goal_label']})
-• Proteína: {nutrition['macros']['protein_g']}g ({nutrition['macros']['protein_str']})
-• Carbohidratos: {nutrition['macros']['carbs_g']}g ({nutrition['macros']['carbs_str']})
-• Grasas: {nutrition['macros']['fats_g']}g ({nutrition['macros']['fats_str']})
 
-Detalles del cálculo: {nutrition['calculation_details']}
-
-IMPORTANTE: El campo 'calories' del plan DEBE ser {nutrition['target_calories']}.
-Los macros del plan DEBEN ser: protein='{nutrition['macros']['protein_str']}', carbs='{nutrition['macros']['carbs_str']}', fats='{nutrition['macros']['fats_str']}'.
-La SUMA de las calorías de todas las comidas individuales DEBE ser cercana a {nutrition['target_calories']} kcal.
-------------------------------------------------------------------------------------------
-"""
-    
-    # Extraer comidas recientes del historial para dar contexto al modelo (evitar repetición)
-    recent_meals_context = ""
-    if history and len(history) > 0:
-        recent_assistant_msgs = [msg["content"] for msg in history if msg["role"] == "model"]
-        # Solo tomamos los últimos 3 planes para no saturar el prompt
-        recent_assistant_msgs = recent_assistant_msgs[-3:]
-        if recent_assistant_msgs:
-            recent_meals_context = f"\n\n--- HISTORIAL RECIENTE DE COMIDAS (¡¡EVITAR REPETICIÓN A TODA COSTA!!) ---\nEl usuario ya ha estado comiendo lo siguiente en sus últimos planes. SU QUEJA PRINCIPAL ES LA MONOTONÍA. Es OBLIGATORIO que el nuevo plan sea COMPLETAMENTE DIFERENTE a esto. Inventa recetas nuevas, usa otros ingredientes, cambia la estructura. ¡Muestra tu máxima creatividad culinaria!\nHistorial reciente:\n{json.dumps(recent_assistant_msgs)}\n----------------------------------------------------------------------"
-    
-    # Manejo dinámico de skipLunch para forzar al LLM a respetar la exclusión del Almuerzo
-    skip_lunch_instruction = ""
-    is_skip_lunch_active = form_data.get("skipLunch", False)
-    if is_skip_lunch_active:
-        skip_lunch_instruction = "\n\n⚠️ INSTRUCCIÓN CRÍTICA Y OBLIGATORIA DE ESTRUCTURA ⚠️\nEl usuario indicó 'Almuerzo Familiar / Ya resuelto' (`skipLunch: true`). ESTÁ TOTAL Y ABSOLUTAMENTE PROHIBIDO incluir la comida 'Almuerzo' en este plan. Si incluyes un Almuerzo, el plan será rechazado. \nDebes generar EXACTAMENTE 3 comidas por el día entero: 'Desayuno', 'Merienda' y 'Cena'. \nIMPORTANTE PARA TU 'Estrategia' o 'PLAN DE ACCIÓN': EL ALMUERZO LO ELEGIRÁ EL USUARIO MANUALMENTE. Tu plan de acción debe felicitar y mencionar directamente que estás excluyendo el almuerzo y dejando espacio calórico porque **él/ella elegirá su almuerzo manualmente** (ya sea comiendo lo que cocinen en su casa o por su cuenta). NUNCA digas que estás concentrando las calorías en el desayuno/cena, sino que estás diseñando un plan de 3 comidas para darle libertad de que elija su almuerzo manualmente."
-
-    # Intervención Determinista (Python)
-    deterministic_variety_instruction = get_deterministic_variety_prompt(recent_meals_context, form_data)
-
-    prompt_text = f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días ajustado a sus necesidades diarias.\n\nInformación del Usuario:\n{json.dumps(form_data, indent=2)}\n{nutrition_context}\n{taste_profile}\n{recent_meals_context}\n{deterministic_variety_instruction}\n{skip_lunch_instruction}\n\n{ANALYZE_SYSTEM_PROMPT}"
-    
-    # Enforce Pydantic Output schema
-    structured_llm = llm.with_structured_output(PlanModel)
-    
-    # Retry mechanism for LLM invocation
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=5))
-    def invoke_with_validation():
-        resp = structured_llm.invoke(prompt_text)
-        res_dict = resp.model_dump() if hasattr(resp, "model_dump") else (resp if isinstance(resp, dict) else resp.dict())
-        if is_skip_lunch_active:
-            for d in res_dict.get("days", []):
-                for m in d.get("meals", []):
-                    if "almuerzo" in m.get("meal", "").lower():
-                        print("⚠️ EL MODELO GENERÓ ALMUERZO IGNORANDO INSTRUCCIONES. REINTENTANDO...")
-                        raise ValueError("El LLM ignoró la instrucción de omitir Almuerzo.")
-        return res_dict
-    
-    response_dict = invoke_with_validation()
-    
-    end_time = time.time()
-    duration_secs = round(float(end_time - start_time), 2)
-    print(f"✅ [COMPLETADO] El modelo LangChain finalizó en {duration_secs} segundos.")
-    print("-------------------------------------------------------------\n")
-    
-    result: dict = response_dict
-    
-    # ========== POST-PROCESO: Forzar valores exactos del calculador ==========
-    result["calories"] = nutrition["target_calories"]
-    result["macros"] = {
-        "protein": nutrition["macros"]["protein_str"],
-        "carbs": nutrition["macros"]["carbs_str"],
-        "fats": nutrition["macros"]["fats_str"],
-    }
-    result["main_goal"] = nutrition["goal_label"]
-    
-    print(f"🔒 [POST-PROCESO] Calorías forzadas a {nutrition['target_calories']} kcal (calculador Python)")
-    
-    return result
 
 def swap_meal(form_data: dict):
     rejected_meal = form_data.get("rejected_meal", "")

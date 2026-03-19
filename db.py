@@ -708,6 +708,29 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
         print(f"Error obteniendo comidas recientes: {e}")
         return []
 
+def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
+    """Extrae los ingredientes crudos directamente del JSON de los planes recientes.
+    Retorna una lista plana de strings de ingredientes (ej: ['1 plátano verde', '2 huevos', ...]).
+    Esto es más preciso que buscar en texto libre porque usa la estructura real del plan."""
+    if not supabase or not user_id: return []
+    try:
+        res = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        all_ingredients = []
+        if res.data:
+            for row in res.data:
+                plan_data = row.get("plan_data", {})
+                if isinstance(plan_data, dict):
+                    for day in plan_data.get("days", []):
+                        for meal in day.get("meals", []):
+                            ingredients = meal.get("ingredients", [])
+                            if isinstance(ingredients, list):
+                                all_ingredients.extend(ingredients)
+        return all_ingredients
+    except Exception as e:
+        print(f"Error extrayendo ingredientes de planes: {e}")
+        return []
+
+
 def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0):
     """Guarda una comida consumida en la tabla consumed_meals de Supabase."""
     if not supabase: return None
