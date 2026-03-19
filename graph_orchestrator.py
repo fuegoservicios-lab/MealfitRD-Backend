@@ -81,8 +81,8 @@ Eres un Nutricionista Clínico, Chef Profesional y la IA oficial de MealfitRD.
 Tu misión es crear un plan alimenticio de EXACTAMENTE 3 DÍAS VARIADOS, altamente profesional y 100% adaptado a la biometría y preferencias del usuario.
 
 REGLAS ESTRICTAS:
-1. CALORÍAS Y MACROS PRE-CALCULADOS: Los cálculos de BMR, TDEE, calorías objetivo y macronutrientes ya fueron realizados por el Sistema Calculador. NO calcules estos números tú mismo. Usa EXACTAMENTE los valores provistos. La suma de las calorías de cada comida en un día DEBE coincidir con el total provisto diario.
-2. ESTRUCTURA DE 3 DÍAS (OPCIONES): Debes generar exactamente 3 opciones (`day: 1` para Opción A, `day: 2` para Opción B, `day: 3` para Opción C). Cada opción debe tener un ENFOQUE DE PROTEÍNAS DIFERENTE (Ej. Opción A: Pollo, Opción B: Pescado, Opción C: Huevos/Res) para evitar la fatiga alimenticia.
+1. CALORÍAS Y MACROS PRE-CALCULADOS: Los cálculos de BMR, TDEE, calorías objetivo y macronutrientes ya fueron realizados por el Sistema Calculador. NO calcules estos números tú mismo. Usa EXACTAMENTE los valores provistos. La suma de calorías, proteínas, carbohidratos y grasas de todas las comidas de un día DEBE coincidir milimétricamente con el OBJETIVO DIARIO aportado. Distribuye las porciones con cuidado para lograr esta meta estricta.
+2. EFICIENCIA DE SUPERMERCADO Y VARIEDAD: Diseña los 3 días utilizando listas de compras e ingredientes principales MUY SIMILARES (ej. usar Pollo, Huevos, Yuca, Avena a lo largo de los 3 días) para no gastar mucho en varias compras. Sin embargo, DEBES crear PREPARACIONES Y PLATOS COMPLETAMENTE DISTINTOS cada día usando esos mismos ingredientes combinados de forma diferente. NUNCA repitas la misma preparación exacta (Ej. Si la Opción A tiene Pollo Guisado, la Opción B debe tener Pollo a la Plancha o Desmenuzado).
 3. INGREDIENTES DOMINICANOS: El menú DEBE usar alimentos típicos, accesibles y económicos de República Dominicana (Ej: Plátano, Yuca, Batata, Huevos, Salami, Queso de freír/hoja, Pollo guisado, Aguacate, Habichuelas, Arroz, Avena).
 4. RECETAS PROFESIONALES: Los pasos de las recetas (`recipe`) DEBEN incluir obligatoriamente estos prefijos para la UI:
    - "Mise en place: [Instrucciones de preparación previa y cortes]"
@@ -186,8 +186,12 @@ Estos son datos críticos que debes respetar.
 ----------------------------------------------------------
 """
 
+    import random
+    random_seed = random.randint(10000, 99999)
+    
     prompt_text = (
-        f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días.\n\n"
+        f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días.\n"
+        f"IMPORTANTE: Genera opciones creativas y diferentes a planes anteriores. Semilla de generación aleatoria: {random_seed}\n\n"
         f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
         f"{nutrition_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n\n"
         f"{GENERATOR_SYSTEM_PROMPT}"
@@ -195,7 +199,7 @@ Estos son datos críticos que debes respetar.
     
     generator_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
-        temperature=0.2 if attempt == 1 else 0.4,  # Más creatividad en reintentos
+        temperature=1.0 if attempt == 1 else 1.2,  # Máxima creatividad para evitar repeticiones
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=0,
         timeout=120
@@ -476,9 +480,12 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
             recent_meals = get_recent_meals_from_plans(user_id, days=5)
             if recent_meals:
                 history_context += (
-                    "\n\n--- HISTORIAL RECIENTE (PLATOS CONSUMIDOS) ---\n"
-                    "El usuario comió esto esta semana, PROHIBIDO repetir estos platos o nombres similares:\n"
+                    "\n\n--- HISTORIAL RECIENTE (PLATOS YA GENERADOS) ---\n"
+                    "Estos platos fueron generados recientemente para el usuario:\n"
                     f"{json.dumps(recent_meals, ensure_ascii=False)}\n"
+                    "🚨 REGLA DE ORO OBLIGATORIA: Puedes reutilizar los mismos INGREDIENTES de estos platos para optimizar las compras del supermercado, PERO ESTÁ ESTRICTAMENTE PROHIBIDO repetir el mismo PLATO O PREPARACIÓN EXACTA.\n"
+                    "Por ejemplo: Si dice 'Mangú de Plátano', NO uses Mangú, pero sí puedes usar el plátano para un Mofongo o Plátano Hervido.\n"
+                    "Cambia la forma de cocinarlos y combínalos distinto. NO repitas el mismo nombre o concepto de plato en toda la semana (a menos que el usuario lo pida).\n"
                     "----------------------------------------------------------------------"
                 )
         except Exception as e:
