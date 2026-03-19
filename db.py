@@ -874,6 +874,7 @@ def get_monthly_api_usage(user_id: str) -> int:
             start_date = datetime(now.year, now.month, 1).isoformat()
             
             # En Supabase count es más eficiente
+            res = supabase.table("api_usage").select("*", count="exact").eq("user_id", user_id).gte("created_at", start_date).execute()
             return res.count if res.count is not None else 0
         except Exception as e:
             if attempt < max_retries - 1:
