@@ -21,36 +21,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Schema Definitions for Strict Structured Output (Sincronizado con React)
-class MacrosModel(BaseModel):
-    protein: str = Field(description="Gramos de proteína totales, ej: '150g'")
-    carbs: str = Field(description="Gramos de carbohidratos totales, ej: '200g'")
-    fats: str = Field(description="Gramos de grasas totales, ej: '60g'")
-
-class MealModel(BaseModel):
-    meal: str = Field(description="Momento del día, Ej: 'Desayuno', 'Almuerzo', 'Merienda', 'Cena'")
-    time: str = Field(description="Hora sugerida, Ej: '8:00 AM'")
-    name: str = Field(description="Nombre creativo y descriptivo del plato")
-    desc: str = Field(description="Descripción apetitosa y profesional de la receta")
-    prep_time: str = Field(description="Tiempo estimado de preparación, Ej: '15 min'")
-    cals: int = Field(description="Calorías aproximadas de este plato")
-    macros: List[str] = Field(description="Lista rápida de macros, Ej:['Alto en proteína', 'Bajo en carbohidratos']")
-    ingredients: List[str] = Field(description="Lista de ingredientes con cantidades (texto simple), Ej:['1 plátano verde maduro', '2 huevos', '1/2 aguacate']")
-    recipe: List[str] = Field(description="Pasos de preparación. DEBES usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'")
-
-class DailyPlanModel(BaseModel):
-    day: int = Field(description="Número de día (1, 2, o 3)")
-    meals: List[MealModel] = Field(description="Lista de comidas en orden cronológico. MUY IMPORTANTE: Si el usuario omite el almuerzo, genera SOLO 3 comidas: Desayuno, Merienda, Cena.")
-
-class PlanModel(BaseModel):
-    main_goal: str = Field(description="El objetivo principal identificado. Ej: 'Pérdida de Peso (Déficit)'")
-    calories: int = Field(description="Total de calorías estrictas planificadas sumando todas las comidas")
-    macros: MacrosModel = Field(description="Distribución matemática de macronutrientes para el día")
-    insights: List[str] = Field(description="Lista EXACTA de 3 frases: 1. Inicia con 'Diagnóstico: ', 2. Inicia con 'Estrategia: ', 3. Inicia con 'Tip del Chef: '")
-    days: List[DailyPlanModel] = Field(description="Lista de 3 días con planes de comida variados")
-
-class ShoppingListModel(BaseModel):
-    items: List[str] = Field(description="Lista de ingredientes consolidados y agrupados. Ej: ['🥩 Carnes: 2 pechugas de pollo, 1 lb carne molida', '🥬 Vegetales: 3 plátanos, 1 tomate']")
+from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, ShoppingListModel
+from prompts import (
+    ANALYZE_SYSTEM_PROMPT, DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE, 
+    AUTO_SHOPPING_LIST_PROMPT, TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT,
+    CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE
+)
+from tools import (
+    update_form_field, generate_new_plan_from_chat,
+    log_consumed_meal, modify_single_meal,
+    add_to_shopping_list, search_deep_memory, agent_tools, analyze_preferences_agent
+)
 
 # Langchain Chat Model Initialization
 llm = ChatGoogleGenerativeAI(
@@ -59,85 +40,6 @@ llm = ChatGoogleGenerativeAI(
     google_api_key=os.environ.get("GEMINI_API_KEY")
 )
 
-ANALYZE_SYSTEM_PROMPT = """
-Eres un Nutricionista Clínico, Chef Profesional y la IA oficial de MealfitRD.
-Tu misión es crear un plan alimenticio de EXACTAMENTE 3 DÍAS VARIADOS, altamente profesional y 100% adaptado a la biometría y preferencias del usuario.
-
-REGLAS ESTRICTAS:
-1. CALORÍAS Y MACROS PRE-CALCULADOS (REGLA INQUEBRANTABLE): Los cálculos de calorías objetivo y macronutrientes (proteína, carbohidratos, grasas) ya fueron realizados por el Sistema Calculador. Es OBLIGATORIO Y NO NEGOCIABLE que el menú que diseñes cumpla EXACTAMENTE con estos gramos de macros y calorías diarias. La inmensa variedad culinaria JAMÁS debe comprometer el cumplimiento estricto de las matemáticas nutricionales (macros). La suma de las calorías de cada comida en un día DEBE coincidir con el total provisto diario.
-2. ESTRUCTURA DE 3 DÍAS (OPCIONES): Debes generar exactamente 3 opciones (`day: 1` para Opción A, `day: 2` para Opción B, `day: 3` para Opción C). Cada opción debe tener un ENFOQUE DE PROTEÍNAS DIFERENTE (Ej. Opción A: Pollo, Opción B: Pescado/Atún, Opción C: Huevos/Res) para evitar la fatiga alimenticia.
-3. INGREDIENTES DOMINICANOS: El menú DEBE usar alimentos típicos, accesibles y económicos de República Dominicana (Ej: Plátano, Yuca, Batata, Huevos, Salami, Queso de freír/hoja, Pollo guisado, Aguacate, Habichuelas, Arroz, Avena).
-4. RECETAS PROFESIONALES: Los pasos de las recetas (`recipe`) DEBEN incluir obligatoriamente estos prefijos para la UI:
-   - "Mise en place: [Instrucciones de preparación previa y cortes]"
-   - "El Toque de Fuego: [Instrucciones de cocción en sartén, horno o airfryer]"
-   - "Montaje: [Instrucciones de cómo servir para que luzca apetitoso]"
-5. CUMPLE RESTRICCIONES ABSOLUTAMENTE: Si el usuario es vegetariano, tiene alergias (Ej. Lácteos), condiciones médicas (Ej. Diabetes T2) o indicó obstáculos (Ej: falta de tiempo, no sabe cocinar), el plan DEBE reflejar soluciones inmediatas a eso (comidas rápidas, sin azúcar, sin carne, etc).
-6. ESTRUCTURA: Si el usuario indicó `skipLunch: true`, NO incluyas Almuerzo, distribuye las calorías en las demás comidas y asume que comerá la comida familiar.
-7. VARIEDAD EXTREMA Y CERO MONOTONÍA (DENTRO DE LOS MACROS): Revisa cuidadosamente el historial de comidas anteriores provisto en el prompt. ESTÁ ESTRICTAMENTE PROHIBIDO repetir platos, nombres o incluso los mismos ingredientes principales de los planes recientes. Tienes permiso para ser muy creativo, usar distintas fuentes de carbohidratos, diferentes cortes de carne, métodos de cocción variados (horno, guisos, plancha, asado) y combinaciones nuevas... PERO SIEMPRE respetando matemáticamente los macros asignados en la Regla 1. ¡Sorprende al usuario con opciones radicalmente diferentes que encajen perfecto en sus números!
-8. PROHIBICIÓN ABSOLUTA DE RECHAZOS: Lee detenidamente el Perfil de Gustos adjunto. Si el perfil dice que el usuario odia o rechazó un ingrediente, está TOTALMENTE PROHIBIDO incluirlo en este plan. EXCEPCIÓN CRÍTICA: Si el usuario te pidió EXPLÍCITAMENTE ahora mismo (en sus instrucciones o en el chat reciente) que le incluyas un ingrediente específico (ej. "quiero avena"), DEBES priorizar esa petición reciente e ignorar por completo la prohibición histórica sobre ese ingrediente.
-9. ALIMENTOS SALUDABLES OBLIGATORIOS Y PROHIBICIÓN DE COMIDA CHATARRA: ESTÁ ESTRICTAMENTE PROHIBIDO generar platos que sean comida rápida o chatarra (como Pizza regular, Hamburguesas comerciales, Hot Dogs, etc). MealfitRD es un sistema de nutrición saludable. Todas las recetas deben enfocarse en alimentos ricos en nutrientes. Si propones una opción estilo 'cheat meal', DEBE especificar claramente que es una versión saludable casera, baja en grasa y rica en nutrientes.
-"""
-
-def analyze_preferences_agent(likes: list, history: list, active_rejections: Optional[list] = None):
-    """
-    Agente #1: Especialista en Preferencias y Perfiles de Gusto.
-    Analiza el historial de Me Gusta y Rechazos ACTIVOS (últimos 7 días) 
-    y devuelve un perfil conciso de los gustos del usuario.
-    
-    Los rechazos expiran después de 7 días, permitiendo que la IA vuelva a sugerir esos alimentos.
-    """
-    print("\n-------------------------------------------------------------")
-    print("🧠 [AGENTE DE PREFERENCIAS] Analizando Perfil de Gustos...")
-    
-    # 1. Mapear likes a un formato legible
-    liked_meals = [f"{like.get('meal_name')} ({like.get('meal_type')})" for like in likes] if likes else []
-    
-    # 2. Usar rechazos activos (últimos 7 días) en lugar de permanentes
-    rejected_meals = active_rejections if active_rejections else []
-    
-    if rejected_meals:
-        print(f"🚫 Rechazos activos (últimos 7 días): {rejected_meals}")
-    else:
-        print("➡️  No hay rechazos activos en los últimos 7 días.")
-                
-    if not liked_meals and not rejected_meals:
-        print("➡️  No hay datos suficientes para un perfil. Asumiendo gustos estándar.")
-        print("-------------------------------------------------------------")
-        return ""
-        
-    prompt = f"""
-    Eres el Analista Psicológico de Gustos de MealfitRD. Tu trabajo es leer los "Me Gusta" y los "Rechazos TEMPORALES activos" de un paciente para extraer un perfil psicológico.
-    
-    IMPORTANTE: Los rechazos listados abajo son TEMPORALES (activos por 7 días). Después de ese período, estos alimentos podrán volver a sugerirse.
-    
-    Es CRÍTICO que extraigas los ingredientes base de las comidas rechazadas para prohibirlos TEMPORALMENTE. Por ejemplo, si el usuario rechazó "Mangú de Poder", debes deducir y ordenar explícitamente la prohibición temporal de "plátano verde" y "mangú".
-    
-    Comidas a las que el usuario le dio ME GUSTA (Sus favoritas):
-    {json.dumps(liked_meals)}
-    
-    Comidas que el usuario RECHAZÓ RECIENTEMENTE (Exclusiones temporales activas):
-    {json.dumps(rejected_meals)}
-    
-    Redacta el perfil de gustos AHORA. El formato DEBE ser directo y dictatorial para la IA que creará el plan: 
-    "PERFIL: Al usuario le encanta [X].
-    PROHIBICIONES TEMPORALES ACTIVAS: Está prohibido servirle [ingrediente principal del rechazo 1], [ingrediente principal del rechazo 2] porque los rechazó recientemente. Cero tolerancia con estos ingredientes en este plan."
-    """
-    
-    pref_llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
-        temperature=0.3, # Baja temperatura para ser analítico
-        google_api_key=os.environ.get("GEMINI_API_KEY")
-    )
-    
-    start_time = time.time()
-    response = pref_llm.invoke(prompt)
-    taste_profile = response.content
-    
-    end_time = time.time()
-    print(f"✅ [PERFIL LISTO] Resuelto en {round(end_time - start_time, 2)}s: {taste_profile}")
-    print("-------------------------------------------------------------\n")
-    
-    return f"\n\n--- PERFIL DE GUSTOS DEL USUARIO (OBLIGATORIO RESPETAR) ---\n{taste_profile}\n-----------------------------------------------------------"
 
 # ============================================================
 # INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE)
@@ -179,16 +81,12 @@ def get_deterministic_variety_prompt(history_text: str) -> str:
         blocked_items = used_proteins + used_carbs
         blocked_text = f"🚫 BLOQUEO MATEMÁTICO: Quedan ESTRICTAMENTE PROHIBIDOS como base principal (porque el usuario ya comió mucho de esto): {', '.join(blocked_items[:6])}."
         
-    prompt = f"""
-    ⚠️ REGLA DE INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ⚠️
-    Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccionado los núcleos base obligatorios. Debes construir las Opciones alrededor de estos ingredientes (o basar los almuerzos / cenas principales en ellos):
-    
-    - 🔴 OPCIÓN A (Día 1) DEBE enfocarse en: {chosen_proteins[0]} + {chosen_carbs[0]}.
-    - 🔵 OPCIÓN B (Día 2) DEBE enfocarse en: {chosen_proteins[1]} + {chosen_carbs[1]}.
-    - 🟢 OPCIÓN C (Día 3) DEBE enfocarse en: {chosen_proteins[2]} + {chosen_carbs[2]}.
-    
-    {blocked_text}
-    """
+    prompt = DETERMINISTIC_VARIETY_PROMPT.format(
+        protein_0=chosen_proteins[0], carb_0=chosen_carbs[0],
+        protein_1=chosen_proteins[1], carb_1=chosen_carbs[1],
+        protein_2=chosen_proteins[2], carb_2=chosen_carbs[2],
+        blocked_text=blocked_text
+    )
     print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas: {chosen_proteins}")
     print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos: {chosen_carbs}")
     return prompt
@@ -313,18 +211,13 @@ def swap_meal(form_data: dict):
     
     start_time = time.time()
     
-    prompt_text = f"""
-    Eres el Chef Analítico e Inteligencia Artificial de Intervención Rápida de MealfitRD.
-    El usuario acaba de darle click a "Cambiar / No me gusta" para la siguiente comida: "{rejected_meal}" (Momento del día: {meal_type}).
-    
-    TAREA DEL AGENTE (INTERPRETACIÓN EN TIEMPO REAL):
-    1. Interpreta silenciosamente POR QUÉ pudo haberlo rechazado. ¿Era muy pesado? ¿Ingredientes muy secos? ¿Quizás no le gustan esos ingredientes principales?
-    2. Como respuesta a esa interpretación, diseña una alternativa RADICALMENTE OPUESTA en perfil de sabor y textura a la que acaba de rechazar, pero que mantenga las calorías cercanas a {target_calories} kcal.
-    3. Asegura que la comida siga una dieta tipo '{diet_type}' y utilice gastronomía/ingredientes locales dominicanos.{context_extras}
-    4. ⚠️ CRÍTICO: Bajo ninguna circunstancia puedes sugerir un plato que esté en la lista de exclusión o que tenga los mismos ingredientes principales de los platos rechazados.
-    5. Devuelve estrictamente el esquema de comida solicitado, en español.
-    6. Asegúrate de incluir los prefijos en la receta (Mise en place:, El Toque de Fuego:, Montaje:).
-    """
+    prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
+        rejected_meal=rejected_meal,
+        meal_type=meal_type,
+        target_calories=target_calories,
+        diet_type=diet_type,
+        context_extras=context_extras
+    )
     
     swap_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
@@ -357,336 +250,6 @@ def swap_meal(form_data: dict):
     else:
         raise ValueError("El modelo de IA generó una respuesta inválida. Por favor, reintenta.")
 
-# ============================================================
-# TOOL: Actualizar Health Profile del usuario
-# ============================================================
-
-@tool
-def update_form_field(user_id: str, field: str, new_value: str) -> str:
-    """
-    Actualiza el formulario en tiempo real en la UI del usuario.
-    Campos válidos (field): 'weight', 'height', 'age', 'gender', 'weightUnit', 'dietType', 'mainGoal', 'allergies', 'medicalConditions', 'activityLevel', 'dislikes', 'struggles'.
-    """
-    print(f"🔧 [TOOL EXECUTION] Actualizando form del usuario {user_id}: {field} -> {new_value}")
-    
-    if field in ['weight', 'height', 'age']:
-        import re
-        extracted = re.sub(r'[^\d.]', '', str(new_value))
-        if extracted:
-            new_value = extracted
-            
-    if user_id and user_id != "guest":
-        profile = get_user_profile(user_id)
-        if profile:
-            health_profile = profile.get("health_profile") or {}
-            if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
-                health_profile[field] = [item.strip() for item in new_value.split(",") if item.strip()]
-            else:
-                health_profile[field] = new_value
-            update_user_health_profile(user_id, health_profile)
-            
-            # --- NUEVA LÓGICA DE LIMPIEZA DE VECTORES ---
-            from db import delete_user_facts_by_metadata
-            category_map = {
-                'allergies': 'alergia',
-                'medicalConditions': 'condicion_medica',
-                'dislikes': 'rechazo',
-                'dietType': 'dieta',
-                'mainGoal': 'objetivo'
-            }
-            if field in category_map:
-                cat = category_map[field]
-                print(f"🧹 [CLEANUP] Borrando vectores de categoría '{cat}' para evitar conflictos con el formulario.")
-                delete_user_facts_by_metadata(user_id, {"categoria": cat})
-            # ---------------------------------------------
-            
-            
-    return f"¡Éxito! El campo '{field}' ha sido actualizado a '{new_value}'."
-
-# ============================================================
-# TOOL: Generar nuevo plan desde el Chat
-# ============================================================
-
-def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str = "") -> str:
-    print(f"\n🚀 [TOOL] Generando plan nuevo desde el chat para user_id: {user_id}")
-    if instructions:
-        print(f"📝 [TOOL] Instrucciones específicas del usuario: {instructions}")
-    
-    from graph_orchestrator import run_plan_pipeline
-    from db import get_user_likes, get_active_rejections, get_user_profile
-    
-    # 1. Validar y consolidar form_data (Priorizar el del frontend)
-    actual_form_data = form_data or {}
-    
-    if not actual_form_data.get("age"):
-        profile = get_user_profile(user_id)
-        if profile:
-            actual_form_data = profile.get("health_profile") or {}
-            
-    if not actual_form_data or not actual_form_data.get("age"):
-        return "ERROR: No se encontraron datos de salud. Completa el formulario de evaluación primero."
-    
-    actual_form_data["user_id"] = user_id
-    
-    # 2. Obtener preferencias de gustos
-    likes = get_user_likes(user_id)
-    active_rejections = get_active_rejections(user_id=user_id)
-    rejected_meal_names = [r["meal_name"] for r in active_rejections] if active_rejections else []
-    taste_profile = analyze_preferences_agent(likes, [], active_rejections=rejected_meal_names)
-    
-    # Construir el contexto del usuario basado en sus peticiones del chat
-    custom_memory_context = ""
-    if instructions:
-        custom_memory_context = f"\n\n--- INSTRUCCIÓN ESPECÍFICA DEL USUARIO PARA ESTE PLAN ---\nEL USUARIO PIDIÓ ESTO EXPLÍCITAMENTE, CUMPLE SU PETICIÓN A TODA COSTA:\n'{instructions}'\n------------------------------------------------------------\n"
-
-    # 3. Ejecutar el pipeline multi-agente
-    try:
-        result = run_plan_pipeline(actual_form_data, [], taste_profile, memory_context=custom_memory_context)
-        if result:
-            # Intentar guardar en la tabla meal_plans (no crítico)
-            try:
-                from supabase import create_client
-                import os
-                from datetime import datetime
-                supabase_url = os.environ.get("SUPABASE_URL")
-                
-                # Intentamos usar la KEY de servicio si existe para saltar el RLS, o la anónima
-                supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
-                
-                if supabase_url and supabase_key:
-                    sb = create_client(supabase_url, supabase_key)
-                    calories = result.get("calories", 0)
-                    macros = result.get("macros", {})
-                    sb.table("meal_plans").insert({
-                        "user_id": user_id,
-                        "plan_data": result,
-                        "name": f"Plan del {datetime.now().strftime('%A %d de %B %Y')}",
-                        "calories": int(calories) if calories else 0,
-                        "macros": macros,
-                    }).execute()
-                    print("💾 Plan generado desde chat guardado en DB.")
-            except Exception as db_e:
-                print(f"⚠️ Aviso: No se pudo guardar el plan en Supabase (error {db_e}), pero el plan se devolverá al usuario.")
-            
-            return json.dumps(result)
-        else:
-            return "ERROR: El pipeline no pudo generar un plan. Intenta de nuevo."
-    except Exception as e:
-        print(f"❌ Error generando plan desde chat: {e}")
-        return f"ERROR: {str(e)}"
-
-@tool
-def generate_new_plan_from_chat(user_id: str, instructions: str = "") -> str:
-    """
-    Genera un plan alimenticio completamente nuevo ejecutando el pipeline multi-agente completo (LangGraph).
-    Usa esta herramienta SOLO cuando el usuario pida explícitamente un plan nuevo desde el chat.
-    Ejemplos: 'Hazme un plan nuevo', 'Genera mi rutina', 'Quiero un menú diferente', 'Cambia todo el plan'.
-    El parámetro 'instructions' DEBE contener las peticiones específicas del usuario para el nuevo plan (ej: 'dame alimentos diferentes al plan anterior', 'quiero más atún', 'incluye mi receta favorita').
-    NO la uses si el usuario solo pregunta sobre su plan actual o da información de salud.
-    """
-    return "DUMMY_CALL_ACTUALLY_INTERCEPTED"
-
-@tool
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0) -> str:
-    """
-    Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
-    Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
-    Incluye carbohidratos y grasas saludables si están disponibles.
-    """
-    from db import log_consumed_meal as db_log_consumed_meal
-    print(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas)")
-    result = db_log_consumed_meal(user_id, meal_name, calories, protein, carbs, healthy_fats)
-    if result is not None:
-        return f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) en tu diario."
-    else:
-        return "Hubo un error al intentar registrar la comida consumida. Por favor, intenta de nuevo."
-
-# ============================================================
-# TOOL: Modificar una comida individual del plan activo
-# ============================================================
-
-def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str) -> str:
-    """Ejecuta la modificación de una comida individual en el plan activo del usuario."""
-    from db import get_latest_meal_plan_with_id, update_meal_plan_data
-    
-    print(f"\n🔧 [TOOL] modify_single_meal: Día {day_number}, {meal_type}, cambios: '{changes}'")
-    
-    # 1. Obtener el plan actual con su ID
-    plan_record = get_latest_meal_plan_with_id(user_id)
-    if not plan_record:
-        return "ERROR: No se encontró un plan activo. Genera un plan primero."
-    
-    plan_id = plan_record["id"]
-    plan_data = plan_record["plan_data"]
-    
-    if not plan_data or not isinstance(plan_data, dict):
-        return "ERROR: El plan guardado está corrupto o vacío."
-    
-    # 2. Localizar la comida específica
-    days = plan_data.get("days", [])
-    target_day = None
-    target_meal = None
-    target_meal_index = None
-    
-    for day in days:
-        if day.get("day") == day_number:
-            target_day = day
-            break
-    
-    if not target_day:
-        return f"ERROR: No se encontró el día {day_number} en el plan."
-    
-    meals = target_day.get("meals", [])
-    for idx, meal in enumerate(meals):
-        if meal.get("meal", "").lower().strip() == meal_type.lower().strip():
-            target_meal = meal
-            target_meal_index = idx
-            break
-    
-    if target_meal is None:
-        return f"ERROR: No se encontró '{meal_type}' en el día {day_number}. Comidas disponibles: {[m.get('meal') for m in meals]}"
-    
-    # 3. Regenerar solo esa comida con Gemini
-    original_cals = target_meal.get("cals", 500)
-    
-    modify_prompt = f"""Eres el Chef Profesional de MealfitRD. El usuario quiere MODIFICAR una comida específica de su plan.
-
-COMIDA ORIGINAL:
-- Nombre: {target_meal.get('name')}
-- Descripción: {target_meal.get('desc')}
-- Momento: {target_meal.get('meal')} ({target_meal.get('time')})
-- Calorías: {original_cals}
-- Ingredientes: {json.dumps(target_meal.get('ingredients', []))}
-
-CAMBIO SOLICITADO POR EL USUARIO:
-"{changes}"
-
-INSTRUCCIONES:
-1. Aplica EXACTAMENTE el cambio que pide el usuario (ej: si dice "cámbiale el salami por huevos", sustituye el salami por huevos en ingredientes y receta). EXCEPCIÓN CRÍTICA: Si el usuario pide explícitamente un ingrediente, DEBES incluirlo priorizando su deseo reciente, incluso si el algoritmo creía que no le gustaba históricamente.
-2. Mantén las calorías lo más cercanas posible a {original_cals} kcal
-3. Conserva el momento del día ({target_meal.get('meal')}) y la hora ({target_meal.get('time')})
-4. Usa ingredientes dominicanos
-5. Los pasos de la receta DEBEN usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'
-6. Dale un nombre nuevo y creativo al plato modificado
-"""
-    
-    modify_llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
-        temperature=0.5,
-        google_api_key=os.environ.get("GEMINI_API_KEY")
-    ).with_structured_output(MealModel)
-    
-    try:
-        new_meal_response = modify_llm.invoke(modify_prompt)
-        
-        if hasattr(new_meal_response, "model_dump"):
-            new_meal_data = new_meal_response.model_dump()
-        elif isinstance(new_meal_response, dict):
-            new_meal_data = new_meal_response
-        else:
-            return "ERROR: La IA generó una respuesta inválida al modificar la comida."
-        
-        # 4. Reemplazar la comida en el plan
-        # Preservar el momento y la hora originales
-        new_meal_data["meal"] = target_meal.get("meal")
-        new_meal_data["time"] = target_meal.get("time")
-        
-        target_day["meals"][target_meal_index] = new_meal_data
-        
-        # 5. Actualizar en Supabase
-        update_result = update_meal_plan_data(plan_id, plan_data)
-        if update_result is not None:
-            print(f"✅ [TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
-            return json.dumps({"modified_meal": new_meal_data, "day": day_number, "meal_index": target_meal_index})
-        else:
-            return "ERROR: Se generó la nueva comida pero no se pudo guardar en la base de datos."
-    except Exception as e:
-        print(f"❌ [TOOL] Error modificando comida: {e}")
-        return f"ERROR: {str(e)}"
-
-@tool
-def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str) -> str:
-    """
-    Modifica UNA comida específica del plan activo del usuario. No genera un plan nuevo, solo cambia la comida indicada.
-    Usa esta herramienta cuando el usuario pida un cambio puntual a una comida de su plan,
-    como 'cámbiale el salami al mangú por huevos en la Opción A', 'quítale el arroz al almuerzo de la Opción B', 'ponle más proteína al desayuno'.
-    IMPORTANTE: Opción A = day_number 1, Opción B = day_number 2, Opción C = day_number 3.
-    
-    Parámetros:
-    - user_id: ID del usuario
-    - day_number: número de la opción (1 para Opción A, 2 para Opción B, 3 para Opción C)
-    - meal_type: momento exacto del día: 'Desayuno', 'Almuerzo', 'Merienda' o 'Cena'
-    - changes: descripción en lenguaje natural del cambio solicitado por el usuario
-    """
-    return "DUMMY_CALL_ACTUALLY_INTERCEPTED"
-
-# ============================================================
-# TOOL: Añadir items a la lista de compras
-# ============================================================
-
-@tool
-def add_to_shopping_list(user_id: str, items: str) -> str:
-    """
-    Añade uno o más ingredientes/items a la lista de compras personal del usuario.
-    Usa esta herramienta cuando el usuario diga que se quedó sin algo, necesita comprar algo,
-    o pida añadir items a su lista de compras.
-    Ejemplos: 'Me quedé sin plátanos', 'Añade leche y huevos a mi lista', 'Necesito comprar arroz'.
-    
-    - items: string con items separados por coma, ej: 'plátanos, huevos, leche'
-    """
-    from db import add_custom_shopping_items
-    
-    print(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id}: {items}")
-    
-    items_list = [item.strip() for item in items.split(",") if item.strip()]
-    
-    if not items_list:
-        return "No se proporcionaron items válidos para añadir."
-    
-    result = add_custom_shopping_items(user_id, items_list)
-    if result is not None:
-        items_formatted = ", ".join(items_list)
-        return f"¡Éxito! Se añadieron {len(items_list)} item(s) a tu lista de compras: {items_formatted}."
-    else:
-        return "Hubo un error al añadir los items a la lista de compras. Intenta de nuevo."
-
-# ============================================================
-# TOOL: Buscar en Memoria Profunda (Cold Storage)
-# ============================================================
-
-@tool
-def search_deep_memory(user_id: str, query: str) -> str:
-    """
-    Busca en la memoria profunda (archivo frío) los recuerdos históricos del usuario que ya fueron condensados y archivados.
-    Usa esta herramienta SOLO cuando el usuario pregunte sobre su pasado lejano, experiencias anteriores con la dieta,
-    o datos que no aparecen en la memoria reciente del chat.
-    Ejemplos: '¿Recuerdas qué comía al principio?', '¿Qué me costó más en las primeras semanas?',
-    '¿Cómo me sentía hace meses?', '¿Cuál era mi rutina anterior?'.
-    
-    Parámetros:
-    - user_id: ID del usuario
-    - query: palabra clave o frase corta para buscar en los archivos históricos (ej: 'adherencia', 'estrés', 'primera semana')
-    """
-    from db import search_deep_memory as db_search_deep_memory
-    
-    print(f"🔍 [TOOL EXECUTION] Buscando en memoria profunda para user {user_id}: '{query}'")
-    
-    results = db_search_deep_memory(user_id, query, limit=5)
-    
-    if not results:
-        return "No se encontraron recuerdos históricos que coincidan con esa búsqueda. Es posible que aún no haya suficiente historial archivado."
-    
-    # Formatear los resultados para el agente
-    formatted = []
-    for idx, r in enumerate(results, 1):
-        period = f"{r.get('messages_start', '?')} → {r.get('messages_end', '?')}"
-        summary = r.get('summary', 'Sin contenido')
-        formatted.append(f"📁 Recuerdo #{idx} (Período: {period}):\n{summary}")
-    
-    return "\n\n".join(formatted)
-
-# Lista de tools disponibles para el agente
-agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, add_to_shopping_list, search_deep_memory]
 
 def generate_auto_shopping_list(plan_data: dict) -> list:
     """Extrae ingredientes del plan, los consolida y categoriza por pasillo de supermercado."""
@@ -704,25 +267,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     if not ingredients:
         return []
         
-    prompt = f"""
-    Eres el Asistente de Compras Inteligente de MealfitRD.
-    A continuación se listan TODOS los ingredientes extraídos de un plan de comidas de 3 días completo.
-    
-    REGLA CRÍTICA DE CANTIDADES AL SÓLO COMPRAR:
-    - NUNCA devuelvas fracciones raras ni decimales inexactos (ej. "53 1/3 g", "16.7 h", "66.7 g", "0.3 lbs").
-    - Redondea siempre a unidades reales de supermercado o gramos exactos y cerrados. (ej: en vez de "66.7g de pollo" pon "100g de pollo" o "1 Pechuga").
-    - Para carnes, plátanos, huevos, y vegetales, PREFIERE usar Unidades, Medias Libras o Libras si tiene sentido (ej. "2 Pechugas de pollo", "3 Plátanos Maduros", "Media libra de Yuca").
-    - Usa el sentido común: Nadie va al súper a comprar "83 1/3 g Yuca", la gente compra "1 Libra de Yuca" o "1 Yuca Mediana". Redondea todo SIEMPRE hacia arriba a algo que un humano compraría.
-
-    Tu tarea es:
-    1. SUMAR Y CONSOLIDAR cantidades de ingredientes iguales o similares. APLICA LA REGLA CRÍTICA DE CANTIDADES MENCIONADA AL RESULTADO TOTAL (Convierte todas las sumas de gramos raras a unidades claras o libras).
-    2. Agruparlos y categorizarlos por pasillo de supermercado. Debes generar un string por cada CATEGORÍA PRINCIPAL en formato: "[Emoji] [Nombre de la Categoría]: [Cantidades redondeadas y listadas separadas por comas]".
-    
-    Devuelve exactamente la lista de estos strings ya procesados y listos para leer, limpiando cualquier fracción matemática.
-    
-    Lista bruta de ingredientes extraídos:
-    {json.dumps(ingredients)}
-    """
+    prompt = AUTO_SHOPPING_LIST_PROMPT.format(ingredients_json=json.dumps(ingredients))
     
     shopping_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
@@ -896,7 +441,7 @@ def generate_chat_title_background(session_id: str, first_message: str):
             return 
             
         title_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0.4, google_api_key=os.environ.get("GEMINI_API_KEY"))
-        prompt = f"Genera un título muy corto y atractivo (máximo 4 palabras) para este inicio de chat sobre nutrición/comida.\nMensaje del usuario: {first_message}\n\nSolo devuelve el título, sin comillas ni formato adicional."
+        prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message)
         response = title_llm.invoke(prompt)
         content = response.content
         if isinstance(content, list):
@@ -953,18 +498,7 @@ def rag_query_router(prompt: str) -> dict:
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
         
-        rewrite_prompt = f"""Eres un optimizador de búsqueda vectorial para una app de nutrición.
-Dado el mensaje del usuario, genera UNA SOLA frase de búsqueda optimizada para encontrar hechos relevantes en una base de datos vectorial de salud/nutrición.
-
-REGLAS:
-- Si el mensaje menciona alimentos, dieta, salud, alergias, ejercicio, peso, objetivos → genera una query precisa.
-- Si el mensaje es una pregunta sobre su plan de comidas → genera una query sobre preferencias alimenticias.
-- Si el mensaje NO tiene nada que ver con nutrición/salud (ej: chit-chat, preguntas generales) → responde exactamente: SKIP
-- La query debe ser en español, concisa (máx 15 palabras), sin explicaciones.
-
-Mensaje del usuario: "{prompt}"
-
-Query optimizada:"""
+        rewrite_prompt = RAG_ROUTER_PROMPT.format(prompt=prompt)
         
         response = router_llm.invoke(rewrite_prompt)
         content = response.content
@@ -1246,37 +780,12 @@ El user_id actual es: {user_id}"""
         
     yield f"data: {json.dumps({'type': 'progress', 'message': 'Analizando tu mensaje...'})}\n\n"
     
-    print(f"⏳ [CHAT STREAM] LangGraph iniciando stream via thread para {session_id}...")
+    print(f"⏳ [CHAT STREAM] LangGraph iniciando astream nativo para {session_id}...")
     
     final_state_snapshot = None
     
-    import asyncio
-    queue = asyncio.Queue()
-    loop = asyncio.get_running_loop()
-    
-    def run_sync_stream():
-        try:
-            for event in chat_graph_app.stream(inputs, config=config, stream_mode="messages"):
-                # Capturamos eventos de streaming de texto del modelo
-                asyncio.run_coroutine_threadsafe(queue.put(event), loop)
-            # Mandar señal de cierre
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
-        except Exception as e:
-            asyncio.run_coroutine_threadsafe(queue.put(e), loop)
-            
-    # Ejecutar en thread para no bloquear event loop
-    task = asyncio.create_task(asyncio.to_thread(run_sync_stream))
-    
     try:
-        while True:
-            event = await queue.get()
-            
-            if event is None:
-                break
-                
-            if isinstance(event, Exception):
-                raise event
-                
+        async for event in chat_graph_app.astream(inputs, config=config, stream_mode="messages"):
             # Identificar el contenido exacto del evento 'messages' (tupla mensaje, dict)
             if isinstance(event, tuple) and len(event) == 2:
                 msg_chunk, metadata = event
@@ -1301,19 +810,17 @@ El user_id actual es: {user_id}"""
                                     yield f"data: {json.dumps({'type': 'progress', 'message': 'Registrando progreso de hoy...'})}\n\n"
                                     
     except Exception as e:
-        print(f"❌ [CHAT STREAM] Error en stream sync mode: {e}")
+        print(f"❌ [CHAT STREAM] Error en astream nativo: {e}")
         import traceback
         traceback.print_exc()
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         return
-    finally:
-        await task
         
     # Obtener el estado final actualizado
     try:
-        final_state_snapshot = await asyncio.to_thread(chat_graph_app.get_state, config)
+        final_state_snapshot = await chat_graph_app.aget_state(config)
     except Exception as e:
-        print(f"⚠️ Error obteniendo get_state tras stream: {e}")
+        print(f"⚠️ Error obteniendo aget_state tras stream: {e}")
 
     final_content = ""
     updated_fields = {}

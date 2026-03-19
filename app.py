@@ -790,5 +790,81 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         print(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/auth/migrate")
+def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    """
+    Endpoint invocado post-registro para migrar la metadata acumulada por un 'guest' a su nuevo UUID.
+    """
+    try:
+        session_ids = data.get("session_ids", [])
+        session_id = data.get("session_id")
+        new_user_id = data.get("user_id")
+        current_plan = data.get("current_plan")
+        health_profile = data.get("health_profile")
+        
+        # Validar token
+        if not verified_user_id or verified_user_id != new_user_id:
+            raise HTTPException(status_code=401, detail="No autorizado o token no coincide con user_id.")
+            
+        # Homologar session_ids a lista
+        if not session_ids and session_id:
+            session_ids = [session_id]
+        if isinstance(session_ids, str):
+            session_ids = [session_ids]
+            
+        if not session_ids or not new_user_id:
+            raise HTTPException(status_code=400, detail="Faltan parámetros (session_ids o user_id).")
+            
+        from db import migrate_guest_data, update_user_health_profile, get_latest_meal_plan, get_user_profile
+        from db import supabase
+        
+        # 1. Transformar data guest a registrada
+        success = migrate_guest_data(session_ids, new_user_id)
+        if not success:
+            print(f"⚠️ Aviso: La función de migración base devolvió False, pero continuamos con profile y planes.")
+        
+        # 2. Upsert health_profile si el frontend lo provee
+        if health_profile:
+            try:
+                from db import get_user_profile
+                profile = get_user_profile(new_user_id)
+                # Si el usuario es nuevo, puede no existir su perfil
+                if profile:
+                    update_user_health_profile(new_user_id, health_profile)
+                else:
+                    if supabase:
+                        supabase.table("user_profiles").upsert({
+                            "id": new_user_id,
+                            "health_profile": health_profile
+                        }).execute()
+            except Exception as e:
+                print(f"Error migrando health_profile: {e}")
+                
+        # 3. Guardar el plan "guest" si existe
+        if current_plan:
+            existing_plan = get_latest_meal_plan(new_user_id)
+            if not existing_plan:
+                try:
+                    from datetime import datetime
+                    if supabase:
+                        calories = current_plan.get("calories", 0)
+                        macros = current_plan.get("macros", {})
+                        supabase.table("meal_plans").insert({
+                            "user_id": new_user_id,
+                            "plan_data": current_plan,
+                            "name": f"Plan Evolutivo - {datetime.now().strftime('%d/%m/%Y')}",
+                            "calories": int(calories) if calories else 0,
+                            "macros": macros,
+                        }).execute()
+                except Exception as e:
+                    print(f"Error migrando current_plan: {e}")
+                    
+        return {"success": True, "message": "Tu progreso como invitado se ha migrado a tu nueva cuenta."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ [ERROR] Error en /api/auth/migrate: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=3001, reload=True)

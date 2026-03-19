@@ -942,3 +942,52 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
         update_user_health_profile(user_id, hp)
         return False
 
+# ============================================================
+# MIGRACIÓN DE DATOS (De Guest a Usuario Registrado)
+# ============================================================
+
+def migrate_guest_data(session_ids: list, new_user_id: str):
+    """
+    Migra todos los datos asociados a uno o varios session_ids temporales
+    (creados cuando el usuario era invitado) hacia el nuevo UUID del usuario registrado.
+    """
+    if not supabase or not session_ids or not new_user_id: 
+        return False
+    
+    try:
+        # 1. Actualizar agent_sessions para vincular historiales de chat
+        supabase.table("agent_sessions").update({"user_id": new_user_id}).in_("id", session_ids).execute()
+        
+        # 2. Actualizar visual_diary (Vectores/Diario Visual)
+        supabase.table("visual_diary").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        # 3. Actualizar user_facts (Vectores/Memoria a largo plazo)
+        supabase.table("user_facts").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        # 4. Actualizar meal_plans (Planes guardados como guest, si los hubiera)
+        supabase.table("meal_plans").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        # 5. Actualizar consumed_meals (Comidas registradas)
+        supabase.table("consumed_meals").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        # 6. Actualizar pending_facts_queue
+        supabase.table("pending_facts_queue").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        # 7. Actualizar meal_rejections (Ojo: estas usan session_id o user_id)
+        # Primero intentamos por session_id (como se guardan usualmente los rechazos guest)
+        supabase.table("meal_rejections").update({"user_id": new_user_id}).in_("session_id", session_ids).execute()
+        # Y también por user_id por si acaso
+        supabase.table("meal_rejections").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        # 8. Actualizar meal_likes
+        supabase.table("meal_likes").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        # 9. Actualizar custom_shopping_items
+        supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        print(f"✅ Migración exitosa de {session_ids} a UUID {new_user_id}")
+        return True
+    except Exception as e:
+        print(f"❌ Error migrando datos de invitado: {e}")
+        return False
+
