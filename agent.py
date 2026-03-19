@@ -150,24 +150,28 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
         "batata": ["batata", "puré de batata", "batata hervida", "boniato"]
     }
     
+    # 1. Contar frecuencia de uso (cuántas veces aparece cada ingrediente en el historial)
+    protein_freq = {}
+    carb_freq = {}
+    
     for p in filtered_proteins:
         syns = protein_synonyms.get(p.lower(), [p.lower()])
+        count = 0
         for syn in syns:
             syn_normalized = strip_accents(syn.lower())
-            if re.search(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized):
-                used_proteins.add(p)
-                break
+            count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
+        protein_freq[p] = count
                 
     for c in filtered_carbs:
         syns = carb_synonyms.get(c.lower(), [c.lower()])
+        count = 0
         for syn in syns:
             syn_normalized = strip_accents(syn.lower())
-            if re.search(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized):
-                used_carbs.add(c)
-                break
-                
-    used_proteins = list(used_proteins)
-    used_carbs = list(used_carbs)
+            count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
+        carb_freq[c] = count
+    
+    used_proteins = [p for p, freq in protein_freq.items() if freq > 0]
+    used_carbs = [c for c, freq in carb_freq.items() if freq > 0]
     
     # 2. Filtrar catálogo (si quedan muy pocos, usamos todos revertiendo el filtro)
     available_proteins = [p for p in filtered_proteins if p not in used_proteins]
@@ -179,12 +183,31 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
         available_carbs = filtered_carbs.copy()
         
     # 3. Restricción Dura: Elegir 2 proteínas y 2 carbohidratos (reduciendo costo de supermercado)
-    # Seleccionamos solo 2 diferentes para ahorrar dinero, y uno se repetirá en el 3er día.
+    # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos
     num_proteins_to_pick = min(2, len(available_proteins))
     num_carbs_to_pick = min(2, len(available_carbs))
     
-    unique_proteins = random.sample(available_proteins, num_proteins_to_pick)
-    unique_carbs = random.sample(available_carbs, num_carbs_to_pick)
+    # Calcular pesos inversos (freq 0 → peso alto, freq 5 → peso bajo)
+    max_pf = max(protein_freq.get(p, 0) for p in available_proteins) + 1
+    protein_weights = [max_pf - protein_freq.get(p, 0) for p in available_proteins]
+    
+    max_cf = max(carb_freq.get(c, 0) for c in available_carbs) + 1
+    carb_weights = [max_cf - carb_freq.get(c, 0) for c in available_carbs]
+    
+    # random.choices puede dar duplicados, así que aseguramos unicidad
+    unique_proteins = []
+    _pool_p = list(zip(available_proteins, protein_weights))
+    while len(unique_proteins) < num_proteins_to_pick and _pool_p:
+        pick = random.choices([x[0] for x in _pool_p], weights=[x[1] for x in _pool_p], k=1)[0]
+        unique_proteins.append(pick)
+        _pool_p = [(p, w) for p, w in _pool_p if p != pick]
+    
+    unique_carbs = []
+    _pool_c = list(zip(available_carbs, carb_weights))
+    while len(unique_carbs) < num_carbs_to_pick and _pool_c:
+        pick = random.choices([x[0] for x in _pool_c], weights=[x[1] for x in _pool_c], k=1)[0]
+        unique_carbs.append(pick)
+        _pool_c = [(c, w) for c, w in _pool_c if c != pick]
     
     # Llenamos los 3 días asegurando que al menos aparezcan los 2 elegidos
     chosen_proteins = [unique_proteins[0], unique_proteins[1 if num_proteins_to_pick > 1 else 0], random.choice(unique_proteins)]
