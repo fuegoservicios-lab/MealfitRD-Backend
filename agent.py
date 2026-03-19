@@ -990,7 +990,7 @@ El user_id del usuario actual es: {user_id}"""
 import asyncio
 from typing import AsyncGenerator
 
-async def achat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None) -> AsyncGenerator[str, None]:
+async def achat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None) -> AsyncGenerator[str, None]:
     """Versión asíncrona de chat_with_agent que emite eventos del modelo y herramientas mediante SSE (JSONlines)."""
     from memory_manager import build_memory_context
     memory = build_memory_context(session_id)
@@ -1054,6 +1054,18 @@ El user_id actual es: {user_id}"""
             system_prompt += "⚠️ IMPORTANTE SOBRE EL ALMUERZO: El usuario escogió 'Almuerzo Familiar', EL USUARIO SÍ VA A ALMORZAR. NO digas que se omitió y redistribuyó. Dile que le dejaste un 'Cupo Vacío' y coméntale que te dicte qué almorzó para registrarlo.\n"
         system_prompt += f"\nHISTÓRICO:\n{memory['summary_context']}"
         
+    if user_id and user_id != "guest":
+        try:
+            from db import get_consumed_meals_today
+            consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=tz_offset)
+            if consumed_today:
+                meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
+                system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. Revisa esto ANTES de preguntar si ya comió algo (por ejemplo, si ya tiene una cena registrada, no le preguntes si esa foto es su cena, asume que es un snack nocturno o pregúntale por qué repite). Si la foto o mensaje coincide con algo que ya está registrado, felicítalo o no lo registres de nuevo."
+            else:
+                system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
+        except Exception as e:
+            print(f"⚠️ Error inyectando contexto de diario: {e}")
+            
     config = {"configurable": {"thread_id": session_id}}
     
     # Compilamos usando PostgresSaver sincrónico porque astream_events nativo asíncrono tiene problemas en Windows
