@@ -686,16 +686,24 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
     if not supabase: return []
     try:
         res = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(days).execute()
-        meals = []
+        meals = set() # 👈 Usar un Set evita enviar nombres duplicados al LLM y ahorra tokens
         if res.data:
             for row in res.data:
                 plan_data = row.get("plan_data", {})
                 if isinstance(plan_data, dict):
-                     for meal in plan_data.get("meals", []):
-                         meal_name = meal.get("name")
-                         if meal_name:
-                             meals.append(meal_name)
-        return meals
+                     # ✅ BÚSQUEDA CORREGIDA: Iterar sobre "days" primero y luego sobre "meals"
+                     for day in plan_data.get("days", []):
+                         for meal in day.get("meals", []):
+                             meal_name = meal.get("name")
+                             if meal_name:
+                                 meals.add(meal_name)
+                     # Fallback por si en la base de datos hay planes muy antiguos
+                     if "meals" in plan_data:
+                         for meal in plan_data.get("meals", []):
+                             meal_name = meal.get("name")
+                             if meal_name:
+                                 meals.add(meal_name)
+        return list(meals)
     except Exception as e:
         print(f"Error obteniendo comidas recientes: {e}")
         return []

@@ -48,6 +48,9 @@ class PlanModel(BaseModel):
     insights: List[str] = Field(description="Lista EXACTA de 3 frases: 1. Inicia con 'Diagnóstico: ', 2. Inicia con 'Estrategia: ', 3. Inicia con 'Tip del Chef: '")
     days: List[DailyPlanModel] = Field(description="Lista de 3 días con planes de comida variados")
 
+class ShoppingListModel(BaseModel):
+    items: List[str] = Field(description="Lista de ingredientes consolidados y agrupados. Ej: ['🥩 Carnes: 2 pechugas de pollo, 1 lb carne molida', '🥬 Vegetales: 3 plátanos, 1 tomate']")
+
 # Langchain Chat Model Initialization
 llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-pro-preview",
@@ -626,6 +629,63 @@ def search_deep_memory(user_id: str, query: str) -> str:
 
 # Lista de tools disponibles para el agente
 agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, add_to_shopping_list, search_deep_memory]
+
+def generate_auto_shopping_list(plan_data: dict) -> list:
+    """Extrae ingredientes del plan, los consolida y categoriza por pasillo de supermercado."""
+    print("\n-------------------------------------------------------------")
+    print("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan...")
+    
+    ingredients = []
+    days = plan_data.get("days", [])
+    for d in days:
+        for m in d.get("meals", []):
+            ing = m.get("ingredients", [])
+            if ing:
+                ingredients.extend(ing)
+                
+    if not ingredients:
+        return []
+        
+    prompt = f"""
+    Eres el Asistente de Compras Inteligente de MealfitRD.
+    A continuación se listan TODOS los ingredientes extraídos de un plan de comidas de 3 días completo.
+    Tu tarea es:
+    1. SUMAR Y CONSOLIDAR cantidades de ingredientes iguales o similares (ej: si en una receta dice "2 huevos" y en otra "4 huevos", consolida y suma a "6 huevos").
+    2. Agruparlos y categorizarlos por pasillo de supermercado. Debes generar un string por cada CATEGORÍA PRINCIPAL en formato: "[Emoji] [Nombre de la Categoría]: [Cantidades y nombres de los ingredientes consolidados separados por comas]".
+    Ejemplos de categorías:
+    - "🥩 Carnes y Pescados: 2 pechugas de pollo, 1 lb carne molida, 2 latas de atún"
+    - "🥚 Lácteos y Huevos: 6 huevos, 1/2 taza de leche de almendras, 1 paquete de queso mozzarella"
+    - "🥬 Vegetales y Frutas: 3 plátanos verdes, 1 cebolla, 2 manzanas, 1 aguacate"
+    - "🍝 Gramos y Carbohidratos: 1 libra de arroz, 1 funda de avena"
+    - "🥫 Despensa y Grasas: Aceite de oliva, 1 cdta de sal, pimienta negra"
+    
+    Devuelve exactamente la lista de estos strings ya procesados y listos para leer.
+    
+    Lista bruta de ingredientes extraídos:
+    {json.dumps(ingredients)}
+    """
+    
+    shopping_llm = ChatGoogleGenerativeAI(
+        model="gemini-3.1-pro-preview",
+        temperature=0.2,
+        google_api_key=os.environ.get("GEMINI_API_KEY")
+    ).with_structured_output(ShoppingListModel)
+    
+    try:
+        response = shopping_llm.invoke(prompt)
+        if hasattr(response, "items"):
+            items = response.items
+        elif isinstance(response, dict) and "items" in response:
+            items = response["items"]
+        else:
+            items = []
+            
+        print(f"✅ Se consolidaron ingredientes en {len(items)} categorías.")
+        print("-------------------------------------------------------------\n")
+        return items
+    except Exception as e:
+        print(f"❌ Error generando auto shopping list: {e}")
+        return []
 
 # ============================================================
 # ORQUESTACIÓN LANGGRAPH CHAT CON MEMORYSAVER

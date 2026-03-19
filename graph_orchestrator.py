@@ -90,7 +90,7 @@ REGLAS ESTRICTAS:
    - "Montaje: [Instrucciones de cómo servir para que luzca apetitoso]"
 5. CUMPLE RESTRICCIONES ABSOLUTAMENTE: Si el usuario es vegetariano, tiene alergias (Ej. Lácteos), condiciones médicas (Ej. Diabetes T2) o indicó obstáculos (Ej: falta de tiempo, no sabe cocinar), el plan DEBE reflejar soluciones inmediatas a eso (comidas rápidas, sin azúcar, sin carne, etc).
 6. ESTRUCTURA: Si el usuario indicó `skipLunch: true`, NO incluyas Almuerzo, distribuye las calorías en las demás comidas y asume que comerá la comida familiar.
-7. VARIEDAD ESTRICTA: Revisa el historial de comidas anteriores provisto en el prompt (si lo hay) y NO PITAS LOS MISMOS PLATOS NI NOMBRES EXACTOS DE LAS ÚLTIMAS 24-48 HORAS. Ofrécele opciones radicalmente diferentes pero dentro de sus macros.
+7. VARIEDAD ESTRICTA: Revisa el historial de comidas anteriores provisto en el prompt (si lo hay) y NO REPITAS LOS MISMOS PLATOS NI NOMBRES EXACTOS DE LAS ÚLTIMAS 24-48 HORAS. Ofrécele opciones radicalmente diferentes en presentación y técnica de cocción, pero MANTENIENDO los mismos ingredientes base para ahorrar en el supermercado.
 8. PROHIBICIÓN ABSOLUTA DE RECHAZOS: Lee detenidamente el Perfil de Gustos adjunto. Si el perfil dice que el usuario odia o rechazó un ingrediente (ej. plátano, avena), está TOTALMENTE PROHIBIDO incluirlo en este plan.
 9. PESO EMOCIONAL (INTENSIDAD): Los hechos proporcionados en el contexto tienen un metadato de "intensidad" (1 a 5).
    - Intensidad 5: REGLA DE ORO. DEBES incluir este ingrediente/preferencia en el plan siempre que se ajuste a los macros.
@@ -189,11 +189,32 @@ Estos son datos críticos que debes respetar.
     import random
     random_seed = random.randint(10000, 99999)
     
+    # --- 🎲 INYECTOR DINÁMICO DE VARIEDAD CULINARIA ---
+    cooking_techniques = [
+        "Estilo Fusión Criolla", "Horneado Saludable", "Al Vapor con Finas Hierbas",
+        "A la Plancha con Cítricos", "Guiso o Estofado Ligero", "Salteado tipo Wok",
+        "Desmenuzado (Ropa Vieja)", "En Puré o Majado", "Estilo Ceviche o Fresco",
+        "Asado a la Parrilla", "En Salsa a base de Vegetales Naturales", "En Airfryer Crujiente",
+        "Croquetas o Tortitas al Horno", "Relleno (Ej. Canoas, Vegetales rellenos)"
+    ]
+    selected_techniques = random.sample(cooking_techniques, 3)
+    
+    technique_injection = (
+        f"\n--- 👨🍳 INSTRUCCIÓN DINÁMICA DE VARIEDAD (OBLIGATORIA) ---\n"
+        f"Para cumplir la regla de usar los MISMOS ingredientes del supermercado pero crear PLATOS DIFERENTES, "
+        f"aplica obligatoriamente estas técnicas de cocción a las comidas principales:\n"
+        f"• Día 1 (Opción A): Aplica técnica '{selected_techniques[0]}'\n"
+        f"• Día 2 (Opción B): Aplica técnica '{selected_techniques[1]}'\n"
+        f"• Día 3 (Opción C): Aplica técnica '{selected_techniques[2]}'\n"
+        f"Ajusta los gramos matemáticamente para cumplir las macros.\n"
+        f"----------------------------------------------------------\n"
+    )
+    
     prompt_text = (
         f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días.\n"
         f"IMPORTANTE: Genera opciones creativas y diferentes a planes anteriores. Semilla de generación aleatoria: {random_seed}\n\n"
         f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
-        f"{nutrition_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n\n"
+        f"{nutrition_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{technique_injection}\n\n"
         f"{GENERATOR_SYSTEM_PROMPT}"
     )
     

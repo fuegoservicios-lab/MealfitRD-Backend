@@ -680,6 +680,49 @@ def _save_visual_entry_background(user_id: str, image_url: str, description: str
     else:
         print("⚠️ No se pudo vectorizar la imagen. Abortando guardado.")
 
+@app.post("/api/shopping/auto-generate")
+def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    """Genera y guarda la lista de compras consolidada a partir del plan activo de 3 días."""
+    try:
+        user_id = data.get("user_id")
+        
+        # Validación de seguridad IDOR
+        if user_id and user_id != "guest":
+            if not verified_user_id or verified_user_id != user_id:
+                raise HTTPException(status_code=403, detail="Prohibido. Token inválido o no coincide.")
+                
+        if not user_id or user_id == "guest":
+            raise HTTPException(status_code=400, detail="Usuario no válido para auto-generar lista.")
+            
+        from db import get_latest_meal_plan
+        current_plan = get_latest_meal_plan(user_id)
+        
+        if not current_plan:
+            raise HTTPException(status_code=404, detail="No se encontró un plan activo para extraer ingredientes.")
+            
+        from agent import generate_auto_shopping_list
+        items = generate_auto_shopping_list(current_plan)
+        
+        if not items:
+            return {"success": False, "message": "No se encontraron ingredientes para consolidar en el plan activo."}
+            
+        from db import add_custom_shopping_items
+        # Guardar cada string consolidado como un item en la tabla custom_shopping_items
+        result = add_custom_shopping_items(user_id, items)
+        
+        if result is not None:
+            return {"success": True, "items": items, "message": f"Se auto-generaron y guardaron {len(items)} categorías de compras en tu lista con éxito."}
+        else:
+            raise HTTPException(status_code=500, detail="Error al intentar guardar los ingredientes en la base de datos.")
+            
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"❌ [ERROR] Error en /api/shopping/auto-generate POST: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/shopping/custom/{user_id}")
 def api_get_custom_shopping_items(user_id: str, verified_user_id: str = Depends(get_verified_user_id)):
     """Obtiene los items custom de la lista de compras añadidos por la IA."""
