@@ -4,6 +4,10 @@ import os
 import time
 import json
 import re
+import unicodedata
+
+def strip_accents(s: str) -> str:
+    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -46,7 +50,8 @@ llm = ChatGoogleGenerativeAI(
 # ============================================================
 DOMINICAN_PROTEINS = [
     "Pollo", "Cerdo", "Res", "Pescado", "Atún", "Huevos", "Queso de Freír",
-    "Salami Dominicano", "Camarones", "Chuleta", "Longaniza", "Berenjena"
+    "Salami Dominicano", "Camarones", "Chuleta", "Longaniza", "Berenjena",
+    "Habichuelas Rojas", "Habichuelas Negras", "Gandules", "Lentejas", "Garbanzos", "Soya/Tofu"
 ]
 
 DOMINICAN_CARBS = [
@@ -54,27 +59,123 @@ DOMINICAN_CARBS = [
     "Arroz Integral", "Avena", "Pan Integral", "Papas", "Guineítos Verdes", "Ñame", "Yautía"
 ]
 
-def get_deterministic_variety_prompt(history_text: str) -> str:
+def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
     print("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
     history_lower = history_text.lower() if history_text else ""
+    history_normalized = strip_accents(history_lower)
     
-    # 1. Analizar qué se ha usado
-    used_proteins = [p for p in DOMINICAN_PROTEINS if p.lower() in history_lower]
-    used_carbs = [c for c in DOMINICAN_CARBS if c.lower() in history_lower]
+    # --- FILTRO DE RESTRICCIONES MÉDICAS Y DIETÉTICAS ---
+    filtered_proteins = DOMINICAN_PROTEINS.copy()
+    filtered_carbs = DOMINICAN_CARBS.copy()
+    
+    if form_data:
+        allergies = [a.lower() for a in form_data.get("allergies", [])]
+        dislikes = [d.lower() for d in form_data.get("dislikes", [])]
+        diet = form_data.get("diet", form_data.get("dietType", "")).lower()
+        
+        restrictions = allergies + dislikes
+        
+        if diet in ["vegano", "vegan"]:
+            restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "huevos", "queso", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco", "lácteo", "leche"])
+        elif diet in ["vegetariano", "vegetarian"]:
+            restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco"])
+        elif diet in ["pescetariano", "pescatarian"]:
+            restrictions.extend(["pollo", "cerdo", "res", "salami", "chuleta", "longaniza", "carne"])
+            
+        def is_allowed(item):
+            item_lower = item.lower()
+            for r in restrictions:
+                if r in item_lower or item_lower in r:
+                    return False
+                if r in ["mariscos", "seafood", "marisco"] and any(x in item_lower for x in ["camaron", "camarones", "pescado", "atun", "atún"]):
+                    return False
+                if r in ["carne", "carnes", "meat"] and any(x in item_lower for x in ["pollo", "cerdo", "res", "chuleta", "longaniza", "salami"]):
+                    return False
+            return True
+            
+        filtered_proteins = [p for p in filtered_proteins if is_allowed(p)]
+        filtered_carbs = [c for c in filtered_carbs if is_allowed(c)]
+        
+
+    # ----------------------------------------------------
+    
+    # 1. Analizar qué se ha usado (con Regex para evitar falsos positivos y atrapar sinónimos)
+    used_proteins = set()
+    used_carbs = set()
+    
+    # Mapeo de sinónimos comunes para ingredientes
+    protein_synonyms = {
+        "pollo": ["pollo", "pechuga", "muslo", "alitas", "chicharrón de pollo", "filete de pollo"],
+        "cerdo": ["cerdo", "chuleta", "masita", "chicharrón de cerdo", "lomo", "pernil"],
+        "res": ["res", "carne molida", "bistec", "filete", "churrasco", "vaca", "picadillo", "carne de res"],
+        "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "tilapia", "filete de pescado"],
+        "atún": ["atún", "atun"],
+        "huevos": ["huevos", "huevo", "tortilla", "revoltillo"],
+        "camarones": ["camarones", "camarón", "camaron"],
+        "habichuelas rojas": ["habichuelas rojas", "frijoles rojos", "habichuela roja"],
+        "habichuelas negras": ["habichuelas negras", "frijoles negros", "habichuela negra"],
+        "gandules": ["gandules", "guandules", "gandul", "guandul"],
+        "lentejas": ["lentejas", "lenteja"],
+        "garbanzos": ["garbanzos", "garbanzo"],
+        "soya/tofu": ["soya", "tofu", "carne de soya"]
+    }
+    
+    carb_synonyms = {
+        "plátano verde": ["plátano verde", "platano verde", "mangú", "mangu", "tostones", "fritos verdes", "mangú de plátano", "mangu de platano"],
+        "plátano maduro": ["plátano maduro", "platano maduro", "maduros", "plátano al caldero", "fritos maduros"],
+        "yuca": ["yuca", "casabe", "arepitas de yuca", "puré de yuca"],
+        "arroz blanco": ["arroz blanco", "arroz"],
+        "arroz integral": ["arroz integral"],
+        "avena": ["avena"],
+        "papas": ["papas", "papa", "puré de papas"],
+        "guineítos verdes": ["guineítos", "guineitos", "guineos verdes", "guineito verde", "guineitos verdes"],
+        "batata": ["batata", "puré de batata"]
+    }
+    
+    for p in filtered_proteins:
+        syns = protein_synonyms.get(p.lower(), [p.lower()])
+        for syn in syns:
+            syn_normalized = strip_accents(syn.lower())
+            if re.search(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized):
+                used_proteins.add(p)
+                break
+                
+    for c in filtered_carbs:
+        syns = carb_synonyms.get(c.lower(), [c.lower()])
+        for syn in syns:
+            syn_normalized = strip_accents(syn.lower())
+            if re.search(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized):
+                used_carbs.add(c)
+                break
+                
+    used_proteins = list(used_proteins)
+    used_carbs = list(used_carbs)
     
     # 2. Filtrar catálogo (si quedan muy pocos, usamos todos revertiendo el filtro)
-    available_proteins = [p for p in DOMINICAN_PROTEINS if p not in used_proteins]
+    available_proteins = [p for p in filtered_proteins if p not in used_proteins]
     if len(available_proteins) < 3:
-        available_proteins = DOMINICAN_PROTEINS.copy()
+        available_proteins = filtered_proteins.copy()
         
-    available_carbs = [c for c in DOMINICAN_CARBS if c not in used_carbs]
+    available_carbs = [c for c in filtered_carbs if c not in used_carbs]
     if len(available_carbs) < 3:
-        available_carbs = DOMINICAN_CARBS.copy()
+        available_carbs = filtered_carbs.copy()
         
-    # 3. Restricción Dura: Elegir 3 aleatorios
-    chosen_proteins = random.sample(available_proteins, 3)
-    chosen_carbs = random.sample(available_carbs, 3)
+    # 3. Restricción Dura: Elegir 2 proteínas y 2 carbohidratos (reduciendo costo de supermercado)
+    # Seleccionamos solo 2 diferentes para ahorrar dinero, y uno se repetirá en el 3er día.
+    num_proteins_to_pick = min(2, len(available_proteins))
+    num_carbs_to_pick = min(2, len(available_carbs))
+    
+    unique_proteins = random.sample(available_proteins, num_proteins_to_pick)
+    unique_carbs = random.sample(available_carbs, num_carbs_to_pick)
+    
+    # Llenamos los 3 días asegurando que al menos aparezcan los 2 elegidos
+    chosen_proteins = [unique_proteins[0], unique_proteins[1 if num_proteins_to_pick > 1 else 0], random.choice(unique_proteins)]
+    chosen_carbs = [unique_carbs[0], unique_carbs[1 if num_carbs_to_pick > 1 else 0], random.choice(unique_carbs)]
+    
+    # Mezclamos para que el orden de los días sea dinámico
+    random.shuffle(chosen_proteins)
+    random.shuffle(chosen_carbs)
     
     blocked_text = ""
     if used_proteins or used_carbs:
@@ -87,8 +188,8 @@ def get_deterministic_variety_prompt(history_text: str) -> str:
         protein_2=chosen_proteins[2], carb_2=chosen_carbs[2],
         blocked_text=blocked_text
     )
-    print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas: {chosen_proteins}")
-    print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos: {chosen_carbs}")
+    print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas (optimizadas para costo): {chosen_proteins}")
+    print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (optimizados para costo): {chosen_carbs}")
     return prompt
 
 def analyze_form(form_data: dict, history: Optional[list] = None, taste_profile: str = ""):
@@ -138,7 +239,7 @@ La SUMA de las calorías de todas las comidas individuales DEBE ser cercana a {n
         skip_lunch_instruction = "\n\n⚠️ INSTRUCCIÓN CRÍTICA Y OBLIGATORIA DE ESTRUCTURA ⚠️\nEl usuario indicó 'Almuerzo Familiar / Ya resuelto' (`skipLunch: true`). ESTÁ TOTAL Y ABSOLUTAMENTE PROHIBIDO incluir la comida 'Almuerzo' en este plan. Si incluyes un Almuerzo, el plan será rechazado. \nDebes generar EXACTAMENTE 3 comidas por el día entero: 'Desayuno', 'Merienda' y 'Cena'. \nIMPORTANTE PARA TU 'Estrategia' o 'PLAN DE ACCIÓN': EL ALMUERZO LO ELEGIRÁ EL USUARIO MANUALMENTE. Tu plan de acción debe felicitar y mencionar directamente que estás excluyendo el almuerzo y dejando espacio calórico porque **él/ella elegirá su almuerzo manualmente** (ya sea comiendo lo que cocinen en su casa o por su cuenta). NUNCA digas que estás concentrando las calorías en el desayuno/cena, sino que estás diseñando un plan de 3 comidas para darle libertad de que elija su almuerzo manualmente."
 
     # Intervención Determinista (Python)
-    deterministic_variety_instruction = get_deterministic_variety_prompt(recent_meals_context)
+    deterministic_variety_instruction = get_deterministic_variety_prompt(recent_meals_context, form_data)
 
     prompt_text = f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días ajustado a sus necesidades diarias.\n\nInformación del Usuario:\n{json.dumps(form_data, indent=2)}\n{nutrition_context}\n{taste_profile}\n{recent_meals_context}\n{deterministic_variety_instruction}\n{skip_lunch_instruction}\n\n{ANALYZE_SYSTEM_PROMPT}"
     
