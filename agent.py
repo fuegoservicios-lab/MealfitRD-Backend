@@ -11,6 +11,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import MessagesState
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
+import random
 from typing import List, Optional, Annotated, TypedDict
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -138,6 +139,60 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
     
     return f"\n\n--- PERFIL DE GUSTOS DEL USUARIO (OBLIGATORIO RESPETAR) ---\n{taste_profile}\n-----------------------------------------------------------"
 
+# ============================================================
+# INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE)
+# ============================================================
+DOMINICAN_PROTEINS = [
+    "Pollo", "Cerdo", "Res", "Pescado", "Atún", "Huevos", "Queso de Freír",
+    "Salami Dominicano", "Camarones", "Chuleta", "Longaniza", "Berenjena"
+]
+
+DOMINICAN_CARBS = [
+    "Plátano Verde", "Plátano Maduro", "Yuca", "Batata", "Arroz Blanco", 
+    "Arroz Integral", "Avena", "Pan Integral", "Papas", "Guineítos Verdes", "Ñame", "Yautía"
+]
+
+def get_deterministic_variety_prompt(history_text: str) -> str:
+    """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
+    print("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
+    history_lower = history_text.lower() if history_text else ""
+    
+    # 1. Analizar qué se ha usado
+    used_proteins = [p for p in DOMINICAN_PROTEINS if p.lower() in history_lower]
+    used_carbs = [c for c in DOMINICAN_CARBS if c.lower() in history_lower]
+    
+    # 2. Filtrar catálogo (si quedan muy pocos, usamos todos revertiendo el filtro)
+    available_proteins = [p for p in DOMINICAN_PROTEINS if p not in used_proteins]
+    if len(available_proteins) < 3:
+        available_proteins = DOMINICAN_PROTEINS.copy()
+        
+    available_carbs = [c for c in DOMINICAN_CARBS if c not in used_carbs]
+    if len(available_carbs) < 3:
+        available_carbs = DOMINICAN_CARBS.copy()
+        
+    # 3. Restricción Dura: Elegir 3 aleatorios
+    chosen_proteins = random.sample(available_proteins, 3)
+    chosen_carbs = random.sample(available_carbs, 3)
+    
+    blocked_text = ""
+    if used_proteins or used_carbs:
+        blocked_items = used_proteins + used_carbs
+        blocked_text = f"🚫 BLOQUEO MATEMÁTICO: Quedan ESTRICTAMENTE PROHIBIDOS como base principal (porque el usuario ya comió mucho de esto): {', '.join(blocked_items[:6])}."
+        
+    prompt = f"""
+    ⚠️ REGLA DE INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ⚠️
+    Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccionado los núcleos base obligatorios. Debes construir las Opciones alrededor de estos ingredientes (o basar los almuerzos / cenas principales en ellos):
+    
+    - 🔴 OPCIÓN A (Día 1) DEBE enfocarse en: {chosen_proteins[0]} + {chosen_carbs[0]}.
+    - 🔵 OPCIÓN B (Día 2) DEBE enfocarse en: {chosen_proteins[1]} + {chosen_carbs[1]}.
+    - 🟢 OPCIÓN C (Día 3) DEBE enfocarse en: {chosen_proteins[2]} + {chosen_carbs[2]}.
+    
+    {blocked_text}
+    """
+    print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas: {chosen_proteins}")
+    print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos: {chosen_carbs}")
+    return prompt
+
 def analyze_form(form_data: dict, history: Optional[list] = None, taste_profile: str = ""):
     print("\n-------------------------------------------------------------")
     print("⏳[INICIANDO] Generando Plan Alimenticio con Gemini 3.1 Pro (Python LangChain)...")
@@ -184,7 +239,10 @@ La SUMA de las calorías de todas las comidas individuales DEBE ser cercana a {n
     if is_skip_lunch_active:
         skip_lunch_instruction = "\n\n⚠️ INSTRUCCIÓN CRÍTICA Y OBLIGATORIA DE ESTRUCTURA ⚠️\nEl usuario indicó 'Almuerzo Familiar / Ya resuelto' (`skipLunch: true`). ESTÁ TOTAL Y ABSOLUTAMENTE PROHIBIDO incluir la comida 'Almuerzo' en este plan. Si incluyes un Almuerzo, el plan será rechazado. \nDebes generar EXACTAMENTE 3 comidas por el día entero: 'Desayuno', 'Merienda' y 'Cena'. \nIMPORTANTE PARA TU 'Estrategia' o 'PLAN DE ACCIÓN': EL ALMUERZO LO ELEGIRÁ EL USUARIO MANUALMENTE. Tu plan de acción debe felicitar y mencionar directamente que estás excluyendo el almuerzo y dejando espacio calórico porque **él/ella elegirá su almuerzo manualmente** (ya sea comiendo lo que cocinen en su casa o por su cuenta). NUNCA digas que estás concentrando las calorías en el desayuno/cena, sino que estás diseñando un plan de 3 comidas para darle libertad de que elija su almuerzo manualmente."
 
-    prompt_text = f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días ajustado a sus necesidades diarias.\n\nInformación del Usuario:\n{json.dumps(form_data, indent=2)}\n{nutrition_context}\n{taste_profile}\n{recent_meals_context}\n{skip_lunch_instruction}\n\n{ANALYZE_SYSTEM_PROMPT}"
+    # Intervención Determinista (Python)
+    deterministic_variety_instruction = get_deterministic_variety_prompt(recent_meals_context)
+
+    prompt_text = f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días ajustado a sus necesidades diarias.\n\nInformación del Usuario:\n{json.dumps(form_data, indent=2)}\n{nutrition_context}\n{taste_profile}\n{recent_meals_context}\n{deterministic_variety_instruction}\n{skip_lunch_instruction}\n\n{ANALYZE_SYSTEM_PROMPT}"
     
     # Enforce Pydantic Output schema
     structured_llm = llm.with_structured_output(PlanModel)
