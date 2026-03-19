@@ -130,6 +130,10 @@ def get_nutrition_targets(form_data: dict) -> dict:
         f"Objetivo ({goal}): {target_calories} kcal"
     )
 
+    # Preservar el cálculo original para el Dashboard
+    original_target_calories = target_calories
+    original_macros = calculate_macros(original_target_calories, goal)
+
     # Ajuste por 'Almuerzo Familiar / Ya resuelto'
     if skip_lunch:
         # Reservar ~35% de las calorías para el almuerzo que el usuario comerá por su cuenta
@@ -137,7 +141,7 @@ def get_nutrition_targets(form_data: dict) -> dict:
         target_calories = target_calories - reserved_cals
         calculation_details_str += f" | ⚠️ skipLunch ACTIVO: Se reservaron {reserved_cals} kcal para el Almuerzo Familiar. Calorías restantes asignadas a la IA: {target_calories} kcal."
     
-    # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS
+    # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS para la IA
     macros = calculate_macros(target_calories, goal)
     
     # Descripción legible del objetivo
@@ -152,6 +156,8 @@ def get_nutrition_targets(form_data: dict) -> dict:
         "bmr": bmr,
         "tdee": tdee,
         "target_calories": target_calories,
+        "total_daily_calories": original_target_calories,
+        "total_daily_macros": original_macros,
         "goal_label": goal_labels.get(goal, goal),
         "macros": macros,
         "calculation_details": calculation_details_str

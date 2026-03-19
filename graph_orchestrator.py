@@ -226,11 +226,14 @@ Estos son datos críticos que debes respetar.
         result = response.dict()
     
     # Post-proceso: forzar valores exactos del calculador
-    result["calories"] = nutrition["target_calories"]
+    # Usamos total_daily_calories si existe para que el Dashboard muestre el objetivo completo del día.
+    result["calories"] = nutrition.get("total_daily_calories", nutrition["target_calories"])
+    
+    active_macros = nutrition.get("total_daily_macros", nutrition["macros"])
     result["macros"] = {
-        "protein": nutrition["macros"]["protein_str"],
-        "carbs": nutrition["macros"]["carbs_str"],
-        "fats": nutrition["macros"]["fats_str"],
+        "protein": active_macros["protein_str"],
+        "carbs": active_macros["carbs_str"],
+        "fats": active_macros["fats_str"],
     }
     result["main_goal"] = nutrition["goal_label"]
     

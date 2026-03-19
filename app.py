@@ -247,6 +247,9 @@ def api_get_user_credits(user_id: str, verified_user_id: Optional[str] = Depends
             return {"credits": 0}
         credits_used = get_monthly_api_usage(user_id)
         return {"credits": credits_used}
+    except HTTPException as he:
+        # Re-lanzar excepciones HTTP explícitas (ej. 401/403 de Auth)
+        raise he
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/user/credits GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -261,8 +264,10 @@ def api_get_user_facts(user_id: str, verified_user_id: Optional[str] = Depends(g
                 
         if not user_id or user_id == "guest":
             return {"facts": []}
-        facts = get_all_user_facts(user_id)
-        return {"facts": facts}
+        facts_data = get_all_user_facts(user_id)
+        return {"success": True, "facts": facts_data}
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/user-facts GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -774,6 +779,8 @@ def api_get_consumed_today(user_id: str, verified_user_id: str = Depends(get_ver
                 "healthy_fats": total_fat
             }
         }
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
