@@ -707,17 +707,18 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     prompt = f"""
     Eres el Asistente de Compras Inteligente de MealfitRD.
     A continuación se listan TODOS los ingredientes extraídos de un plan de comidas de 3 días completo.
-    Tu tarea es:
-    1. SUMAR Y CONSOLIDAR cantidades de ingredientes iguales o similares (ej: si en una receta dice "2 huevos" y en otra "4 huevos", consolida y suma a "6 huevos").
-    2. Agruparlos y categorizarlos por pasillo de supermercado. Debes generar un string por cada CATEGORÍA PRINCIPAL en formato: "[Emoji] [Nombre de la Categoría]: [Cantidades y nombres de los ingredientes consolidados separados por comas]".
-    Ejemplos de categorías:
-    - "🥩 Carnes y Pescados: 2 pechugas de pollo, 1 lb carne molida, 2 latas de atún"
-    - "🥚 Lácteos y Huevos: 6 huevos, 1/2 taza de leche de almendras, 1 paquete de queso mozzarella"
-    - "🥬 Vegetales y Frutas: 3 plátanos verdes, 1 cebolla, 2 manzanas, 1 aguacate"
-    - "🍝 Gramos y Carbohidratos: 1 libra de arroz, 1 funda de avena"
-    - "🥫 Despensa y Grasas: Aceite de oliva, 1 cdta de sal, pimienta negra"
     
-    Devuelve exactamente la lista de estos strings ya procesados y listos para leer.
+    REGLA CRÍTICA DE CANTIDADES AL SÓLO COMPRAR:
+    - NUNCA devuelvas fracciones raras ni decimales inexactos (ej. "53 1/3 g", "16.7 h", "66.7 g", "0.3 lbs").
+    - Redondea siempre a unidades reales de supermercado o gramos exactos y cerrados. (ej: en vez de "66.7g de pollo" pon "100g de pollo" o "1 Pechuga").
+    - Para carnes, plátanos, huevos, y vegetales, PREFIERE usar Unidades, Medias Libras o Libras si tiene sentido (ej. "2 Pechugas de pollo", "3 Plátanos Maduros", "Media libra de Yuca").
+    - Usa el sentido común: Nadie va al súper a comprar "83 1/3 g Yuca", la gente compra "1 Libra de Yuca" o "1 Yuca Mediana". Redondea todo SIEMPRE hacia arriba a algo que un humano compraría.
+
+    Tu tarea es:
+    1. SUMAR Y CONSOLIDAR cantidades de ingredientes iguales o similares. APLICA LA REGLA CRÍTICA DE CANTIDADES MENCIONADA AL RESULTADO TOTAL (Convierte todas las sumas de gramos raras a unidades claras o libras).
+    2. Agruparlos y categorizarlos por pasillo de supermercado. Debes generar un string por cada CATEGORÍA PRINCIPAL en formato: "[Emoji] [Nombre de la Categoría]: [Cantidades redondeadas y listadas separadas por comas]".
+    
+    Devuelve exactamente la lista de estos strings ya procesados y listos para leer, limpiando cualquier fracción matemática.
     
     Lista bruta de ingredientes extraídos:
     {json.dumps(ingredients)}
