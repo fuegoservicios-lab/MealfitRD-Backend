@@ -70,7 +70,7 @@ REGLAS ESTRICTAS:
 5. CUMPLE RESTRICCIONES ABSOLUTAMENTE: Si el usuario es vegetariano, tiene alergias (Ej. Lácteos), condiciones médicas (Ej. Diabetes T2) o indicó obstáculos (Ej: falta de tiempo, no sabe cocinar), el plan DEBE reflejar soluciones inmediatas a eso (comidas rápidas, sin azúcar, sin carne, etc).
 6. ESTRUCTURA: Si el usuario indicó `skipLunch: true`, NO incluyas Almuerzo, distribuye las calorías en las demás comidas y asume que comerá la comida familiar.
 7. VARIEDAD ESTRICTA: Revisa el historial de comidas anteriores provisto en el prompt (si lo hay) y NO PITAS LOS MISMOS PLATOS NI NOMBRES EXACTOS DE LAS ÚLTIMAS 24-48 HORAS. Ofrécele opciones radicalmente diferentes pero dentro de sus macros.
-8. PROHIBICIÓN ABSOLUTA DE RECHAZOS: Lee detenidamente el Perfil de Gustos adjunto. Si el perfil dice que el usuario odia o rechazó un ingrediente (ej. plátano, avena), está TOTALMENTE PROHIBIDO incluirlo en este plan. Si fallas en esto, podrías causar daño al paciente.
+8. PROHIBICIÓN ABSOLUTA DE RECHAZOS: Lee detenidamente el Perfil de Gustos adjunto. Si el perfil dice que el usuario odia o rechazó un ingrediente, está TOTALMENTE PROHIBIDO incluirlo en este plan. EXCEPCIÓN CRÍTICA: Si el usuario te pidió EXPLÍCITAMENTE ahora mismo (en sus instrucciones o en el chat reciente) que le incluyas un ingrediente específico (ej. "quiero avena"), DEBES priorizar esa petición reciente e ignorar por completo la prohibición histórica sobre ese ingrediente.
 9. ALIMENTOS SALUDABLES OBLIGATORIOS Y PROHIBICIÓN DE COMIDA CHATARRA: ESTÁ ESTRICTAMENTE PROHIBIDO generar platos que sean comida rápida o chatarra (como Pizza regular, Hamburguesas comerciales, Hot Dogs, etc). MealfitRD es un sistema de nutrición saludable. Todas las recetas deben enfocarse en alimentos ricos en nutrientes. Si propones una opción estilo 'cheat meal', DEBE especificar claramente que es una versión saludable casera, baja en grasa y rica en nutrientes.
 """
 
@@ -227,6 +227,25 @@ def swap_meal(form_data: dict):
     target_calories = form_data.get("target_calories", 0)
     diet_type = form_data.get("diet_type", "balanced")
     
+    allergies = form_data.get("allergies", [])
+    dislikes = form_data.get("dislikes", [])
+    liked_meals = form_data.get("liked_meals", [])
+    disliked_meals = form_data.get("disliked_meals", [])
+    
+    context_extras = ""
+    if allergies: context_extras += f"\n    - ALERGIAS (PROHIBIDO INCLUIR): {', '.join(allergies)}"
+    if dislikes: context_extras += f"\n    - DISGUSTOS (PROHIBIDO INCLUIR): {', '.join(dislikes)}"
+    
+    # Ensure the temporarily rejected meal is added to disliked for this prompt
+    all_disliked = set(disliked_meals)
+    if rejected_meal:
+        all_disliked.add(rejected_meal)
+        
+    if all_disliked: 
+        context_extras += f"\n    - 🚫 EXCLUSIÓN ESTRICTA: ESTÁ TOTALMENTE PROHIBIDO generar cualquier plato o ingrediente principal de esta lista: {', '.join(list(all_disliked))}. NINGÚN PLATO NUEVO PUEDE LLAMARSE IGUAL NI PARECERSE."
+        
+    if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
+
     print("\n-------------------------------------------------------------")
     print("⏳ [AGENTE DE SUSTITUCIÓN INTERPRETATIVO] Analizando rechazo...")
     print(f"➡️  Interpretando por qué rechazó: \"{rejected_meal}\" ({meal_type})")
@@ -240,9 +259,10 @@ def swap_meal(form_data: dict):
     TAREA DEL AGENTE (INTERPRETACIÓN EN TIEMPO REAL):
     1. Interpreta silenciosamente POR QUÉ pudo haberlo rechazado. ¿Era muy pesado? ¿Ingredientes muy secos? ¿Quizás no le gustan esos ingredientes principales?
     2. Como respuesta a esa interpretación, diseña una alternativa RADICALMENTE OPUESTA en perfil de sabor y textura a la que acaba de rechazar, pero que mantenga las calorías cercanas a {target_calories} kcal.
-    3. Asegura que la comida siga una dieta tipo '{diet_type}' y utilice gastronomía/ingredientes locales dominicanos.
-    4. Devuelve estrictamente el esquema de comida solicitado, en español.
-    5. Asegúrate de incluir los prefijos en la receta (Mise en place:, El Toque de Fuego:, Montaje:).
+    3. Asegura que la comida siga una dieta tipo '{diet_type}' y utilice gastronomía/ingredientes locales dominicanos.{context_extras}
+    4. ⚠️ CRÍTICO: Bajo ninguna circunstancia puedes sugerir un plato que esté en la lista de exclusión o que tenga los mismos ingredientes principales de los platos rechazados.
+    5. Devuelve estrictamente el esquema de comida solicitado, en español.
+    6. Asegúrate de incluir los prefijos en la receta (Mise en place:, El Toque de Fuego:, Montaje:).
     """
     
     swap_llm = ChatGoogleGenerativeAI(
@@ -481,7 +501,7 @@ CAMBIO SOLICITADO POR EL USUARIO:
 "{changes}"
 
 INSTRUCCIONES:
-1. Aplica EXACTAMENTE el cambio que pide el usuario (ej: si dice "cámbiale el salami por huevos", sustituye el salami por huevos en ingredientes y receta)
+1. Aplica EXACTAMENTE el cambio que pide el usuario (ej: si dice "cámbiale el salami por huevos", sustituye el salami por huevos en ingredientes y receta). EXCEPCIÓN CRÍTICA: Si el usuario pide explícitamente un ingrediente, DEBES incluirlo priorizando su deseo reciente, incluso si el algoritmo creía que no le gustaba históricamente.
 2. Mantén las calorías lo más cercanas posible a {original_cals} kcal
 3. Conserva el momento del día ({target_meal.get('meal')}) y la hora ({target_meal.get('time')})
 4. Usa ingredientes dominicanos
