@@ -189,6 +189,12 @@ Estos son datos críticos que debes respetar.
     import random
     random_seed = random.randint(10000, 99999)
     
+    # --- 🎲 INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ---
+    # Python selecciona proteínas y carbos; el LLM solo "cocina" con ellos.
+    from agent import get_deterministic_variety_prompt
+    variety_prompt = get_deterministic_variety_prompt(history_context, form_data)
+    print(f"🎲 [ORQUESTADOR] Inyectando variedad determinista en el generador.")
+    
     # --- 🎲 INYECTOR DINÁMICO DE VARIEDAD CULINARIA ---
     cooking_techniques = [
         "Estilo Fusión Criolla", "Horneado Saludable", "Al Vapor con Finas Hierbas",
@@ -214,7 +220,7 @@ Estos son datos críticos que debes respetar.
         f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días.\n"
         f"IMPORTANTE: Genera opciones creativas y diferentes a planes anteriores. Semilla de generación aleatoria: {random_seed}\n\n"
         f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
-        f"{nutrition_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{technique_injection}\n\n"
+        f"{nutrition_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{variety_prompt}\n{technique_injection}\n\n"
         f"{GENERATOR_SYSTEM_PROMPT}"
     )
     
