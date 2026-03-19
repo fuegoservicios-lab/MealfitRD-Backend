@@ -84,13 +84,22 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None) 
             restrictions.extend(["pollo", "cerdo", "res", "salami", "chuleta", "longaniza", "carne"])
             
         def is_allowed(item):
-            item_lower = item.lower()
+            item_normalized = strip_accents(item.lower())
             for r in restrictions:
-                if r in item_lower or item_lower in r:
+                r_normalized = strip_accents(r.lower())
+                # Comparación con word-boundary para evitar falsos positivos
+                # (ej: restricción "res" NO debe bloquear "camarones")
+                if re.search(r'\b' + re.escape(r_normalized) + r'\b', item_normalized):
                     return False
-                if r in ["mariscos", "seafood", "marisco"] and any(x in item_lower for x in ["camaron", "camarones", "pescado", "atun", "atún"]):
+                if r_normalized in ["mariscos", "seafood", "marisco"] and any(
+                    re.search(r'\b' + x + r'\b', item_normalized) 
+                    for x in ["camaron", "camarones", "pescado", "atun"]
+                ):
                     return False
-                if r in ["carne", "carnes", "meat"] and any(x in item_lower for x in ["pollo", "cerdo", "res", "chuleta", "longaniza", "salami"]):
+                if r_normalized in ["carne", "carnes", "meat"] and any(
+                    re.search(r'\b' + x + r'\b', item_normalized) 
+                    for x in ["pollo", "cerdo", "res", "chuleta", "longaniza", "salami"]
+                ):
                     return False
             return True
             
