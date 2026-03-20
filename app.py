@@ -214,19 +214,7 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict):
             
     except Exception as e:
         print(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")
-def _track_plan_frequencies_background(user_id: str, plan_data: dict):
-    """Background task: extraer y contar ingredientes del nuevo plan para guardarlos en frecuencias O(1)."""
-    from db import increment_ingredient_frequencies
-    try:
-        raw_ingredients = []
-        for d in plan_data.get("days", []):
-            for m in d.get("meals", []):
-                raw_ingredients.extend(m.get("ingredients", []))
-        if raw_ingredients:
-            increment_ingredient_frequencies(user_id, raw_ingredients)
-            print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id}")
-    except Exception as e:
-        print(f"⚠️ [FREQ TRACKING ERROR] No se pudieron actualizar frecuencias: {e}")
+
 
 def _process_swap_rejection_background(session_id: str, user_id: str, rejected_meal: str, meal_type: str):
     """Background task: Loguea mensajes y rechazos que expiran en 7 días, asíncronamente."""

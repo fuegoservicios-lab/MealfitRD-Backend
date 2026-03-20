@@ -971,12 +971,25 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     if not user_id or user_id == "guest" or not rejected_meal: return False
     
     from agent import DOMINICAN_PROTEINS
+    from constants import get_reverse_synonyms_map
+    
+    reverse_map = get_reverse_synonyms_map()
     base_ingredient = None
     lower_meal = rejected_meal.lower()
-    for p in DOMINICAN_PROTEINS:
-        if p.lower() in lower_meal:
-            base_ingredient = p
+    
+    # Primero intentar resolver sinónimos (ej: "pechuga" → "pollo", "chuleta" → "cerdo")
+    for word in lower_meal.split():
+        word_clean = word.strip(".,;:!?()\"'")
+        if word_clean in reverse_map:
+            base_ingredient = reverse_map[word_clean].capitalize()
             break
+    
+    # Fallback: búsqueda directa por nombre de proteína base
+    if not base_ingredient:
+        for p in DOMINICAN_PROTEINS:
+            if p.lower() in lower_meal:
+                base_ingredient = p
+                break
             
     if not base_ingredient: return False
             

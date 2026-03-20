@@ -180,18 +180,15 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     used_carbs = [c for c, freq in carb_freq.items() if freq > 0]
     used_veggies = [v for v, freq in veggie_freq.items() if freq > 0]
     
-    # 2. Filtrar catálogo (si quedan muy pocos, usamos todos revertiendo el filtro)
-    available_proteins = [p for p in filtered_proteins if p not in used_proteins]
-    if len(available_proteins) < 2:
-        available_proteins = filtered_proteins.copy()
-        
-    available_carbs = [c for c in filtered_carbs if c not in used_carbs]
-    if len(available_carbs) < 2:
-        available_carbs = filtered_carbs.copy()
-        
-    available_veggies = [v for v in filtered_veggies if v not in used_veggies]
-    if len(available_veggies) < 3:
-        available_veggies = filtered_veggies.copy()
+    # 2. Construir pools de candidatos con Penalización Suave (Soft Penalty)
+    # En vez de un reset total cuando quedan pocos, SIEMPRE usamos toda la lista filtrada
+    # pero penalizamos los ya usados con un multiplicador ×0.1 (10x menos probable).
+    # Esto evita la desincronización entre available_* y *_freq que causaba contradicciones.
+    USED_PENALTY = 0.1  # Los ingredientes ya usados tienen 10x menos probabilidad
+    
+    available_proteins = list(filtered_proteins)
+    available_carbs = list(filtered_carbs)
+    available_veggies = list(filtered_veggies)
     
     # Guard clause: si las restricciones eliminaron TODOS los ingredientes
     # (ej: vegano con muchas alergias), dejar libertad total al LLM
@@ -206,15 +203,26 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     num_carbs_to_pick = min(2, len(available_carbs))
     num_veggies_to_pick = min(3, len(available_veggies))
     
-    # Calcular pesos inversos (freq 0 → peso alto, freq 5 → peso bajo)
+    # Calcular pesos inversos con penalización suave para ingredientes ya usados
+    # freq 0 → peso alto (nunca usado = máxima prioridad)
+    # freq > 0 → peso inverso × USED_PENALTY (ya usado = 10x menos probable, pero NO imposible)
     max_pf = max(protein_freq.get(p, 0) for p in available_proteins) + 1
-    protein_weights = [max_pf - protein_freq.get(p, 0) for p in available_proteins]
+    protein_weights = []
+    for p in available_proteins:
+        base_weight = max_pf - protein_freq.get(p, 0)
+        protein_weights.append(base_weight * USED_PENALTY if protein_freq.get(p, 0) > 0 else base_weight)
     
     max_cf = max(carb_freq.get(c, 0) for c in available_carbs) + 1
-    carb_weights = [max_cf - carb_freq.get(c, 0) for c in available_carbs]
+    carb_weights = []
+    for c in available_carbs:
+        base_weight = max_cf - carb_freq.get(c, 0)
+        carb_weights.append(base_weight * USED_PENALTY if carb_freq.get(c, 0) > 0 else base_weight)
     
     max_vf = max(veggie_freq.get(v, 0) for v in available_veggies) + 1
-    veggie_weights = [max_vf - veggie_freq.get(v, 0) for v in available_veggies]
+    veggie_weights = []
+    for v in available_veggies:
+        base_weight = max_vf - veggie_freq.get(v, 0)
+        veggie_weights.append(base_weight * USED_PENALTY if veggie_freq.get(v, 0) > 0 else base_weight)
     
     # random.choices puede dar duplicados, así que aseguramos unicidad
     unique_proteins = []
@@ -261,8 +269,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     
     blocked_text = ""
     if used_proteins or used_carbs or used_veggies:
-        blocked_items = used_proteins + used_carbs + used_veggies
-        blocked_text = f"🚫 BLOQUEO MATEMÁTICO: Quedan ESTRICTAMENTE PROHIBIDOS como base principal (porque el usuario ya comió mucho de esto): {', '.join(blocked_items)}."
+        # Solo bloquear ingredientes usados que NO fueron elegidos por el determinismo.
+        # Esto elimina la contradicción: si el picker eligió "Pollo", no le decimos al LLM que está prohibido.
+        chosen_set = set(p.lower() for p in chosen_proteins + chosen_carbs + chosen_veggies)
+        blocked_items = [item for item in (used_proteins + used_carbs + used_veggies)
+                         if item.lower() not in chosen_set]
+        if blocked_items:
+            blocked_text = f"🚫 BLOQUEO MATEMÁTICO: Quedan ESTRICTAMENTE PROHIBIDOS como base principal (porque el usuario ya comió mucho de esto): {', '.join(blocked_items)}."
         
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
         protein_0=chosen_proteins[0], carb_0=chosen_carbs[0], veggie_0=chosen_veggies[0],
@@ -315,27 +328,23 @@ def swap_meal(form_data: dict):
             available_for_swap = [p for p in available_for_swap if p.lower() not in ["pollo", "cerdo", "res", "pescado", "atún", "camarones", "chuleta", "longaniza", "salami dominicano"]]
         
         if available_for_swap:
-            # Consultar frecuencia real de ingredientes del historial de planes
+            # Consultar frecuencia optimizada O(1) desde la tabla pre-calculada con decaimiento temporal
+            # (Misma fuente que get_deterministic_variety_prompt para consistencia)
             user_id = form_data.get("user_id")
             swap_weights = None
             if user_id and user_id != "guest":
                 try:
-                    from db import get_ingredient_frequencies_from_plans
-                    raw_ingredients = get_ingredient_frequencies_from_plans(user_id, limit=5)
-                    if raw_ingredients:
-                        ingredients_blob = strip_accents(" ".join(raw_ingredients).lower())
+                    from db import get_user_ingredient_frequencies
+                    db_freq_map = get_user_ingredient_frequencies(user_id)
+                    if db_freq_map:
                         freq = {}
                         for p in available_for_swap:
                             syns = protein_synonyms.get(p.lower(), [p.lower()])
-                            count = 0
-                            for syn in syns:
-                                syn_n = strip_accents(syn.lower())
-                                count += len(re.findall(r'\b' + re.escape(syn_n) + r'\b', ingredients_blob))
-                            freq[p] = count
+                            freq[p] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
                         
                         max_f = max(freq.values()) + 1
                         swap_weights = [max_f - freq.get(p, 0) for p in available_for_swap]
-                        print(f"🎲 [SWAP ANTI MODE-COLLAPSE] Pesos por frecuencia inversa: {dict(zip(available_for_swap, swap_weights))}")
+                        print(f"🎲 [SWAP ANTI MODE-COLLAPSE] Pesos por frecuencia inversa (DB O(1)): {dict(zip(available_for_swap, swap_weights))}")
                 except Exception as freq_e:
                     print(f"⚠️ [SWAP] Error consultando frecuencia, usando random simple: {freq_e}")
             
