@@ -865,6 +865,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
     try:
         user_id = data.get("user_id")
         force = data.get("force", False)  # Forzar regeneración incluso si el plan no cambió
+        days = data.get("days", 7) # Multiplicador de días
         
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
@@ -888,7 +889,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
                 ing = m.get("ingredients", [])
                 if ing:
                     ingredients_for_hash.extend(ing)
-        plan_hash = hashlib.sha256(_json.dumps(ingredients_for_hash, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+        plan_hash = hashlib.sha256(_json.dumps({"ingredients": ingredients_for_hash, "days": days}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
         
         # Verificar si el plan ya fue procesado (cache hit)
         if not force:
@@ -903,7 +904,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
                         "message": "La lista ya está actualizada con tu plan actual."}
             
         from agent import generate_auto_shopping_list
-        items = generate_auto_shopping_list(current_plan)
+        items = generate_auto_shopping_list(current_plan, days_to_shop=days)
         
         if not items:
             return {"success": False, "message": "No se encontraron ingredientes para consolidar en el plan activo."}

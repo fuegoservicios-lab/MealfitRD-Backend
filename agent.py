@@ -491,7 +491,7 @@ def swap_meal(form_data: dict):
         raise ValueError("El modelo de IA generó una respuesta inválida. Por favor, reintenta.")
 
 
-def _pre_consolidate_ingredients(ingredients: list) -> list:
+def _pre_consolidate_ingredients(ingredients: list, multiplier: float = 1.0) -> list:
     """Pre-consolida ingredientes idénticos sumando cantidades en Python.
     Reduce la carga al LLM y elimina errores de suma.
     Ej: ['2 huevos', '3 huevos', '1 huevo'] → ['6 huevos']
@@ -553,7 +553,7 @@ def _pre_consolidate_ingredients(ingredients: list) -> list:
     for key in order:
         entry = groups[key]
         if entry["can_sum"] and entry["total"] is not None:
-            total = entry["total"]
+            total = entry["total"] * multiplier
             total_str = str(int(total)) if total == int(total) else f"{total:.1f}"
             unit_part = f" {entry['unit']}" if entry["unit"] else ""
             result.append(f"{total_str}{unit_part} {entry['name']}")
@@ -563,13 +563,16 @@ def _pre_consolidate_ingredients(ingredients: list) -> list:
     return result
 
 
-def generate_auto_shopping_list(plan_data: dict) -> list:
+def generate_auto_shopping_list(plan_data: dict, days_to_shop: int = 7) -> list:
     """Extrae ingredientes del plan, los consolida y categoriza por pasillo de supermercado."""
     logger.info("\n-------------------------------------------------------------")
     logger.debug("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan...")
     
     ingredients = []
     days = plan_data.get("days", [])
+    base_plan_length = len(days) or 1
+    multiplier = days_to_shop / base_plan_length
+    
     for d in days:
         for m in d.get("meals", []):
             ing = m.get("ingredients", [])
@@ -580,7 +583,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
         return []
     
     # 🧮 Pre-consolidación determinista en Python (reduce tokens y elimina errores de suma del LLM)
-    ingredients = _pre_consolidate_ingredients(ingredients)
+    ingredients = _pre_consolidate_ingredients(ingredients, multiplier=multiplier)
     logger.debug(f"🧮 [PRE-CONSOLIDACIÓN] {len(ingredients)} ingredientes únicos tras fusión en Python.")
         
     prompt = AUTO_SHOPPING_LIST_PROMPT.format(ingredients_json=json.dumps(ingredients))
@@ -588,7 +591,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     shopping_llm = ChatGoogleGenerativeAI(
         model="gemini-3-flash-preview",
         temperature=0.2,
-        timeout=30,  # 30s por intento; con 3 reintentos = ~90s máx total
+        timeout=90,  # 90s por intento para evitar 504 Deadline Exceeded
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(ShoppingListModel)
     
