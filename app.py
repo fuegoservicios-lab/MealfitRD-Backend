@@ -151,27 +151,9 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         if actual_user_id and actual_user_id != "guest":
             log_api_usage(actual_user_id, "gemini_analyze")
             
-        # 👇 NUEVO: Guardar el plan generado en la base de datos
+        # 👇 NUEVO: Guardar el plan generado y trackear frecuencias en Background
         if actual_user_id and actual_user_id != "guest":
-            try:
-                from db import supabase
-                from datetime import datetime
-                if supabase:
-                    calories = result.get("calories", 0)
-                    macros = result.get("macros", {})
-                    supabase.table("meal_plans").insert({
-                        "user_id": actual_user_id,
-                        "plan_data": result,
-                        "name": f"Plan Evolutivo - {datetime.now().strftime('%d/%m/%Y')}",
-                        "calories": int(calories) if calories else 0,
-                        "macros": macros,
-                    }).execute()
-                    print(f"💾 [DB] Plan guardado exitosamente en meal_plans para {actual_user_id}")
-            except Exception as db_e:
-                print(f"⚠️ [DB ERROR] No se pudo guardar el plan en Supabase: {db_e}")
-                
-            # 📈 Background: Trackear frecuencias de ingredientes del nuevo plan
-            background_tasks.add_task(_track_plan_frequencies_background, actual_user_id, result)
+            background_tasks.add_task(_save_plan_and_track_background, actual_user_id, result)
 
         return result
     except Exception as e:
@@ -180,6 +162,58 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         print(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _save_plan_and_track_background(user_id: str, plan_data: dict):
+    """Background task: Guarda el plan JSON en supabase y trackea frecuencias, O(1)."""
+    try:
+        from db import supabase, increment_ingredient_frequencies
+        from datetime import datetime
+        
+        # 1. Guardar Plan O(1) Arrays
+        if supabase:
+            calories = plan_data.get("calories", 0)
+            macros = plan_data.get("macros", {})
+            
+            meal_names = []
+            ingredients = []
+            raw_ingredients = []
+            for d in plan_data.get("days", []):
+                for m in d.get("meals", []):
+                    if m.get("name"):
+                        meal_names.append(m.get("name"))
+                    if m.get("ingredients"):
+                        ingredients.extend(m.get("ingredients"))
+                        raw_ingredients.extend(m.get("ingredients"))
+                        
+            insert_data = {
+                "user_id": user_id,
+                "plan_data": plan_data,
+                "name": f"Plan Evolutivo - {datetime.now().strftime('%d/%m/%Y')}",
+                "calories": int(calories) if calories else 0,
+                "macros": macros,
+                "meal_names": meal_names,
+                "ingredients": ingredients
+            }
+            
+            try:
+                supabase.table("meal_plans").insert(insert_data).execute()
+            except Exception as try_db_e:
+                err_msg = str(try_db_e)
+                if "meal_names" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
+                    print("⚠️ [DB] Faltan columnas optimizadas (meal_names). Ejecute migration_fast_meals.sql")
+                    del insert_data["meal_names"]
+                    del insert_data["ingredients"]
+                    supabase.table("meal_plans").insert(insert_data).execute()
+                else:
+                    raise try_db_e
+            print(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
+            
+        # 2. Track Frequencies
+        if raw_ingredients:
+            increment_ingredient_frequencies(user_id, raw_ingredients)
+            print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id}")
+            
+    except Exception as e:
+        print(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")
 def _track_plan_frequencies_background(user_id: str, plan_data: dict):
     """Background task: extraer y contar ingredientes del nuevo plan para guardarlos en frecuencias O(1)."""
     from db import increment_ingredient_frequencies
@@ -194,8 +228,32 @@ def _track_plan_frequencies_background(user_id: str, plan_data: dict):
     except Exception as e:
         print(f"⚠️ [FREQ TRACKING ERROR] No se pudieron actualizar frecuencias: {e}")
 
+def _process_swap_rejection_background(session_id: str, user_id: str, rejected_meal: str, meal_type: str):
+    """Background task: Loguea mensajes y rechazos que expiran en 7 días, asíncronamente."""
+    try:
+        from db import get_or_create_session, save_message, insert_rejection
+        if session_id and rejected_meal:
+            get_or_create_session(session_id)
+            save_message(session_id, "user", f"Rechacé explícitamente: {rejected_meal}")
+        
+        # Guardar rechazo TEMPORAL (expira en 7 días)
+        if rejected_meal:
+            rejection_record = {
+                "meal_name": rejected_meal,
+                "meal_type": meal_type,
+            }
+            if user_id and user_id != "guest":
+                rejection_record["user_id"] = user_id
+            if session_id:
+                rejection_record["session_id"] = session_id
+            
+            insert_rejection(rejection_record)
+            print(f"💾 [DB BACKGROUND] Rechazo temporal guardado para {rejected_meal}")
+    except Exception as e:
+        print(f"⚠️ [BACKGROUND ERROR] Error procesando swap rejection: {e}")
+
 @app.post("/api/swap-meal")
-def api_swap_meal(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     try:
         
         # Guardar en memoria el rechazo para que el Agente de Preferencias aprenda
@@ -210,23 +268,9 @@ def api_swap_meal(data: dict = Body(...), verified_user_id: Optional[str] = Depe
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
         
-        if session_id and rejected_meal:
-            get_or_create_session(session_id)
-            save_message(session_id, "user", f"Rechacé explícitamente: {rejected_meal}")
-        
-        # Guardar rechazo TEMPORAL (expira en 7 días) en la tabla meal_rejections
+        # 👇 NUEVO: Mover logueos DB a Background Tasks
         if rejected_meal:
-            rejection_record = {
-                "meal_name": rejected_meal,
-                "meal_type": meal_type,
-            }
-            if user_id and user_id != "guest":
-                rejection_record["user_id"] = user_id
-            if session_id:
-                rejection_record["session_id"] = session_id
-            
-            insert_rejection(rejection_record)
-            print(f"📝 Rechazo temporal guardado: '{rejected_meal}' (expira en 7 días)")
+            background_tasks.add_task(_process_swap_rejection_background, session_id, user_id, rejected_meal, meal_type)
             
             # Fricción Silenciosa: Validar si la base ya se rechazó 3 veces
             from db import track_meal_friction
@@ -867,13 +911,35 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
                     if supabase:
                         calories = current_plan.get("calories", 0)
                         macros = current_plan.get("macros", {})
-                        supabase.table("meal_plans").insert({
+                        
+                        meal_names = []
+                        ingredients = []
+                        for d in current_plan.get("days", []):
+                            for m in d.get("meals", []):
+                                if m.get("name"):
+                                    meal_names.append(m.get("name"))
+                                if m.get("ingredients"):
+                                    ingredients.extend(m.get("ingredients"))
+                                    
+                        insert_data = {
                             "user_id": new_user_id,
                             "plan_data": current_plan,
                             "name": f"Plan Evolutivo - {datetime.now().strftime('%d/%m/%Y')}",
                             "calories": int(calories) if calories else 0,
                             "macros": macros,
-                        }).execute()
+                            "meal_names": meal_names,
+                            "ingredients": ingredients
+                        }
+                        try:
+                            supabase.table("meal_plans").insert(insert_data).execute()
+                        except Exception as try_db_e:
+                            err_msg = str(try_db_e)
+                            if "meal_names" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
+                                del insert_data["meal_names"]
+                                del insert_data["ingredients"]
+                                supabase.table("meal_plans").insert(insert_data).execute()
+                            else:
+                                raise try_db_e
                 except Exception as e:
                     print(f"Error migrando current_plan: {e}")
                     

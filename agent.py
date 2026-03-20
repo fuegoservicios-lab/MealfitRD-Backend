@@ -182,11 +182,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     
     # 2. Filtrar catálogo (si quedan muy pocos, usamos todos revertiendo el filtro)
     available_proteins = [p for p in filtered_proteins if p not in used_proteins]
-    if len(available_proteins) < 3:
+    if len(available_proteins) < 2:
         available_proteins = filtered_proteins.copy()
         
     available_carbs = [c for c in filtered_carbs if c not in used_carbs]
-    if len(available_carbs) < 3:
+    if len(available_carbs) < 2:
         available_carbs = filtered_carbs.copy()
         
     available_veggies = [v for v in filtered_veggies if v not in used_veggies]
@@ -199,10 +199,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         print("⚠️ [ANTI MODE-COLLAPSE] No quedan ingredientes disponibles tras filtrar restricciones. Dejando libertad al LLM.")
         return ""
         
-    # 3. Restricción Dura: Elegir 3 proteínas y 3 carbohidratos (1 distinto por día)
+    # 3. Restricción para Variedad y Costo: Elegir 2 proteínas y 2 carbohidratos base para rotarlos.
+    # Así ahorramos en el supermercado, y 3 vegetales/grasas.
     # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos
-    num_proteins_to_pick = min(3, len(available_proteins))
-    num_carbs_to_pick = min(3, len(available_carbs))
+    num_proteins_to_pick = min(2, len(available_proteins))
+    num_carbs_to_pick = min(2, len(available_carbs))
     num_veggies_to_pick = min(3, len(available_veggies))
     
     # Calcular pesos inversos (freq 0 → peso alto, freq 5 → peso bajo)

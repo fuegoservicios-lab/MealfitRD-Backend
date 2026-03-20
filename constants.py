@@ -70,3 +70,27 @@ VEGGIE_FAT_SYNONYMS = {
     "aceite de oliva": ["aceite de oliva", "aceite verde"],
     "nueces/almendras": ["nueces", "almendras", "maní"]
 }
+
+def get_reverse_synonyms_map():
+    """Crea un diccionario inverso donde la clave es la variante ('pechuga') y el valor es el término base ('pollo')."""
+    reverse_map = {}
+    for synonyms_dict in [PROTEIN_SYNONYMS, CARB_SYNONYMS, VEGGIE_FAT_SYNONYMS]:
+        for base, variants in synonyms_dict.items():
+            for variant in variants:
+                reverse_map[variant.lower()] = base.lower()
+    return reverse_map
+
+GLOBAL_REVERSE_MAP = get_reverse_synonyms_map()
+# Ordenamos las variantes de mayor a menor longitud para no reemplazar subpalabras accidentalmente.
+# Por ejemplo, reemplazar "habichuelas rojas" antes de "habichuelas".
+SORTED_VARIANTS = sorted(GLOBAL_REVERSE_MAP.keys(), key=len, reverse=True)
+
+def apply_synonyms(text: str) -> str:
+    """Reemplaza variantes por sus términos base en un texto usando expresiones regulares."""
+    import re
+    text = text.lower()
+    for variant in SORTED_VARIANTS:
+        if variant in text:
+            # Usar \b para límites de palabra y evitar reemplazos parciales
+            text = re.sub(rf'\b{re.escape(variant)}\b', GLOBAL_REVERSE_MAP[variant], text)
+    return text

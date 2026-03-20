@@ -155,13 +155,37 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                     sb = create_client(supabase_url, supabase_key)
                     calories = result.get("calories", 0)
                     macros = result.get("macros", {})
-                    sb.table("meal_plans").insert({
+                    
+                    meal_names = []
+                    ingredients = []
+                    for d in result.get("days", []):
+                        for m in d.get("meals", []):
+                            if m.get("name"):
+                                meal_names.append(m.get("name"))
+                            if m.get("ingredients"):
+                                ingredients.extend(m.get("ingredients"))
+                                
+                    insert_data = {
                         "user_id": user_id,
                         "plan_data": result,
                         "name": f"Plan del {datetime.now().strftime('%A %d de %B %Y')}",
                         "calories": int(calories) if calories else 0,
                         "macros": macros,
-                    }).execute()
+                        "meal_names": meal_names,
+                        "ingredients": ingredients
+                    }
+                    
+                    try:
+                        sb.table("meal_plans").insert(insert_data).execute()
+                    except Exception as try_db_e:
+                        err_msg = str(try_db_e)
+                        if "meal_names" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
+                            print("⚠️ [DB] Faltan columnas en DB (meal_names). Guardando sin optimización.")
+                            del insert_data["meal_names"]
+                            del insert_data["ingredients"]
+                            sb.table("meal_plans").insert(insert_data).execute()
+                        else:
+                            raise try_db_e
                     print("💾 Plan generado desde chat guardado en DB.")
                     
                     # 📈 Frequency Tracking para plan generado por chat

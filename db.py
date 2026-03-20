@@ -685,48 +685,99 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
     """Obtiene una lista de nombres de comidas de los planes recientes para evitar repeticiones."""
     if not supabase: return []
     try:
-        res = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(days).execute()
+        res = supabase.table("meal_plans").select("plan_data, meal_names").eq("user_id", user_id).order("created_at", desc=True).limit(days).execute()
         meals = set() # 👈 Usar un Set evita enviar nombres duplicados al LLM y ahorra tokens
         if res.data:
             for row in res.data:
-                plan_data = row.get("plan_data", {})
-                if isinstance(plan_data, dict):
-                     # ✅ BÚSQUEDA CORREGIDA: Iterar sobre "days" primero y luego sobre "meals"
-                     for day in plan_data.get("days", []):
-                         for meal in day.get("meals", []):
-                             meal_name = meal.get("name")
-                             if meal_name:
-                                 meals.add(meal_name)
-                     # Fallback por si en la base de datos hay planes muy antiguos
-                     if "meals" in plan_data:
-                         for meal in plan_data.get("meals", []):
-                             meal_name = meal.get("name")
-                             if meal_name:
-                                 meals.add(meal_name)
+                meal_names_sql = row.get("meal_names")
+                if meal_names_sql:
+                    # 🚀 Fast Path O(1)
+                    for n in meal_names_sql:
+                        meals.add(n)
+                else:
+                    # 🐢 Slow Path O(N)
+                    plan_data = row.get("plan_data", {})
+                    if isinstance(plan_data, dict):
+                         for day in plan_data.get("days", []):
+                             for meal in day.get("meals", []):
+                                 meal_name = meal.get("name")
+                                 if meal_name:
+                                     meals.add(meal_name)
+                         if "meals" in plan_data:
+                             for meal in plan_data.get("meals", []):
+                                 meal_name = meal.get("name")
+                                 if meal_name:
+                                     meals.add(meal_name)
         return list(meals)
     except Exception as e:
+        error_msg = str(e)
+        if "meal_names" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            try:
+                print("⚠️ [DB] Columna meal_names ausente en GET, usando fallback O(N)...")
+                res_fb = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(days).execute()
+                meals_fb = set()
+                if res_fb.data:
+                    for row in res_fb.data:
+                        plan_data = row.get("plan_data", {})
+                        if isinstance(plan_data, dict):
+                             for day in plan_data.get("days", []):
+                                 for meal in day.get("meals", []):
+                                     if meal.get("name"): meals_fb.add(meal.get("name"))
+                             if "meals" in plan_data:
+                                 for meal in plan_data.get("meals", []):
+                                     if meal.get("name"): meals_fb.add(meal.get("name"))
+                return list(meals_fb)
+            except Exception as e2:
+                print(f"Error obteniendo comidas recientes (fallback): {e2}")
+                return []
+                
         print(f"Error obteniendo comidas recientes: {e}")
         return []
 
 def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
-    """Extrae los ingredientes crudos directamente del JSON de los planes recientes.
-    Retorna una lista plana de strings de ingredientes (ej: ['1 plátano verde', '2 huevos', ...]).
-    Esto es más preciso que buscar en texto libre porque usa la estructura real del plan."""
+    """Extrae los ingredientes crudos directamente del JSON o de la columna optimizada si existe.
+    Retorna una lista plana de strings de ingredientes."""
     if not supabase or not user_id: return []
     try:
-        res = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        res = supabase.table("meal_plans").select("plan_data, ingredients").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
         all_ingredients = []
         if res.data:
             for row in res.data:
-                plan_data = row.get("plan_data", {})
-                if isinstance(plan_data, dict):
-                    for day in plan_data.get("days", []):
-                        for meal in day.get("meals", []):
-                            ingredients = meal.get("ingredients", [])
-                            if isinstance(ingredients, list):
-                                all_ingredients.extend(ingredients)
+                ingredients_sql = row.get("ingredients")
+                if ingredients_sql:
+                    # 🚀 Fast Path O(1)
+                    all_ingredients.extend(ingredients_sql)
+                else:
+                    # 🐢 Slow Path O(N)
+                    plan_data = row.get("plan_data", {})
+                    if isinstance(plan_data, dict):
+                        for day in plan_data.get("days", []):
+                            for meal in day.get("meals", []):
+                                ingredients = meal.get("ingredients", [])
+                                if isinstance(ingredients, list):
+                                    all_ingredients.extend(ingredients)
         return all_ingredients
     except Exception as e:
+        error_msg = str(e)
+        if "ingredients" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            try:
+                print("⚠️ [DB] Columna ingredients ausente en GET, usando fallback O(N)...")
+                res_fb = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+                all_ings_fb = []
+                if res_fb.data:
+                    for row in res_fb.data:
+                        plan_data = row.get("plan_data", {})
+                        if isinstance(plan_data, dict):
+                            for day in plan_data.get("days", []):
+                                for meal in day.get("meals", []):
+                                    ings = meal.get("ingredients", [])
+                                    if isinstance(ings, list):
+                                        all_ings_fb.extend(ings)
+                return all_ings_fb
+            except Exception as e2:
+                print(f"Error extrayendo ingredientes de planes (fallback): {e2}")
+                return []
+                
         print(f"Error extrayendo ingredientes de planes: {e}")
         return []
 
