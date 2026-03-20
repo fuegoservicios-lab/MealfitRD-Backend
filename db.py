@@ -1016,7 +1016,10 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
 
 
 def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
-    """Incrementa la frecuencia histórica de los ingredientes consumidos por un usuario (Optimización O(1))."""
+    """Incrementa la frecuencia histórica de los ingredientes consumidos por un usuario.
+    Intenta usar un RPC atómico O(1) robusto ante Race Conditions,
+    con fallback al viejo método Select+Upsert si la función SQL no se ha creado.
+    """
     if not supabase or not user_id or user_id == "guest": return
     
     try:
@@ -1028,41 +1031,101 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
             return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
             
         normalized_ings = [strip_accents(i.lower()).strip() for i in ingredients if i]
-        incoming_counts = Counter(normalized_ings)
+        if not normalized_ings: return
         
-        # Fetch actual state
+        incoming_counts = Counter(normalized_ings)
+        ingredients_list = list(incoming_counts.keys())
+        counts_list = list(incoming_counts.values())
+        
+        # 1. Intentar método atómico (RPC) para evitar Race Conditions
+        try:
+            supabase.rpc("increment_ingredient_frequencies_rpc", {
+                "p_user_id": user_id,
+                "p_ingredients": ingredients_list,
+                "p_counts": counts_list
+            }).execute()
+            print(f"✅ [DB] Frecuencia atómica (RPC) incrementada para {user_id} ({len(ingredients_list)} items)")
+            return
+        except Exception as rpc_e:
+            error_msg = str(rpc_e)
+            if "Could not find the function" in error_msg or "PGRST202" in error_msg:
+                # El usuario aún no corre el código SQL en Supabase, pasamos al fallback silenciosamente
+                pass
+            else:
+                print(f"⚠️ [DB] Aviso de RPC, recurriendo a fallback... Detalles: {rpc_e}")
+
+        # 2. Fallback clásico: Leer estado actual y luego hacer upsert
         res = supabase.table("ingredient_frequencies").select("ingredient, count").eq("user_id", user_id).execute()
         current_map = {row["ingredient"]: row["count"] for row in res.data} if res.data else {}
         
         upsert_rows = []
+        now_str = datetime.utcnow().isoformat()
+        
         for ing, inc_val in incoming_counts.items():
             new_val = current_map.get(ing, 0) + inc_val
             upsert_rows.append({
                 "user_id": user_id,
                 "ingredient": ing,
                 "count": new_val,
-                "last_used": datetime.utcnow().isoformat()
+                "last_used": now_str
             })
             
         if upsert_rows:
             supabase.table("ingredient_frequencies").upsert(upsert_rows).execute()
-            print(f"✅ [DB] Frecuencia de ingredientes incrementada para {user_id} ({len(upsert_rows)} items)")
+            print(f"✅ [DB] Frecuencia (Fallback Clásico) incrementada para {user_id} ({len(upsert_rows)} items)")
+            
     except Exception as e:
         print(f"⚠️ [DB] Error incrementando frecuecia de ingredientes: {e}")
 
-def get_user_ingredient_frequencies(user_id: str, days_limit: int = 30) -> dict:
-    """Retorna un diccionario {ingrediente_normalizado: conteo_entero} en O(1) de la DB.
-    Implementa Decaimiento Temporal, ignorando ingredientes no usados en los últimos `days_limit` días.
+def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
+    """Retorna un diccionario {ingrediente_normalizado: conteo_decaimiento} de la DB.
+    Implementa Decaimiento Temporal Continuo Matemático: count * (0.9 ^ dias_transcurridos).
+    Se amplía days_limit a 60 días por defecto para dar margen al decaimiento suave.
     """
     if not supabase or not user_id or user_id == "guest": return {}
     try:
         from datetime import datetime, timedelta, timezone
-        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_limit)).isoformat()
         
-        res = supabase.table("ingredient_frequencies").select("ingredient, count").eq("user_id", user_id).gte("last_used", cutoff_date).execute()
-        if res.data:
-            return {row["ingredient"]: row["count"] for row in res.data}
-        return {}
+        now = datetime.now(timezone.utc)
+        cutoff_date = (now - timedelta(days=days_limit)).isoformat()
+        
+        res = supabase.table("ingredient_frequencies").select("ingredient, count, last_used").eq("user_id", user_id).gte("last_used", cutoff_date).execute()
+        
+        if not res.data:
+            return {}
+            
+        freq_dict = {}
+        decay_factor = 0.9  # Retiene 90% del peso por cada día que pasa sin uso
+        
+        for row in res.data:
+            ingredient = row["ingredient"]
+            count = row["count"]
+            last_used_str = row.get("last_used")
+            
+            if not last_used_str:
+                freq_dict[ingredient] = count
+                continue
+                
+            try:
+                # Parse robusto para last_used asumiendo formato de Supabase
+                if last_used_str.endswith("Z"):
+                    last_used_dt = datetime.fromisoformat(last_used_str[:-1]).replace(tzinfo=timezone.utc)
+                else:
+                    last_used_dt = datetime.fromisoformat(last_used_str)
+                    if last_used_dt.tzinfo is None:
+                        last_used_dt = last_used_dt.replace(tzinfo=timezone.utc)
+                        
+                days_elapsed = max(0, (now - last_used_dt).days)
+                
+                # Fórmula decaimiento matemático: count * (decay_factor ^ days_elapsed)
+                decayed_count = count * (decay_factor ** days_elapsed)
+                
+                freq_dict[ingredient] = round(decayed_count, 2)
+            except Exception as parse_e:
+                print(f"⚠️ [DB] Error parseando fecha {last_used_str}: {parse_e}")
+                freq_dict[ingredient] = count
+                
+        return freq_dict
     except Exception as e:
         print(f"⚠️ [DB] Error obteniendo diccionario de frecuencias: {e}")
         return {}

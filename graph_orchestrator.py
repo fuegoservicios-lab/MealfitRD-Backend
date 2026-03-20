@@ -431,31 +431,17 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     s = re.sub(r'\b(con|de|y|al|a|la|el|en|las|los)\b', '', s.lower())
                     return re.sub(r'\s+', ' ', s).strip()
                 
-                def _is_similar(name1: str, name2: str) -> bool:
-                    if not name1 or not name2:
-                        return False
-                    # 1. Similitud de Secuencia (Difflib) - Para typos y variaciones menores
-                    if difflib.SequenceMatcher(None, name1, name2).ratio() >= 0.75:
-                        return True
-                        
-                    # 2. Similitud de Sets de Tokens (Jaccard Approximation)
-                    # Ideal para atrapar: "Pollo guisado" vs "Pollo guisado con vegetales"
-                    words1 = set(name1.split())
-                    words2 = set(name2.split())
-                    if words1 and words2:
-                        intersection = words1.intersection(words2)
-                        overlap1 = len(intersection) / len(words1)
-                        overlap2 = len(intersection) / len(words2)
-                        
-                        # Si comparten el 80% de los tokens de cualquiera de los dos platos
-                        if max(overlap1, overlap2) >= 0.8:
-                            return True
-                            
-                    return False
-                
                 recent_meal_names = get_recent_meals_from_plans(user_id, days=3)
                 if recent_meal_names:
-                    recent_normalized = [_normalize(n) for n in recent_meal_names if n]
+                    # PRE-COMPUTACIÓN DE TOKENS O(N) para evitar operaciones repetitivas O(NxM)
+                    recent_data = []
+                    for name in recent_meal_names:
+                        if name:
+                            norm = _normalize(name)
+                            recent_data.append({
+                                "norm": norm,
+                                "tokens": set(norm.split())
+                            })
                     
                     # Solo verificar comidas principales (Almuerzo/Cena), no desayunos/meriendas
                     repeated_meals = []
@@ -463,15 +449,34 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         for meal in day_obj.get("meals", []):
                             meal_type = meal.get("meal", "").lower()
                             if meal_type in ["almuerzo", "cena"]:
-                                meal_name = _normalize(meal.get("name", ""))
-                                if not meal_name:
+                                raw_name = meal.get("name", "")
+                                new_norm = _normalize(raw_name)
+                                if not new_norm:
                                     continue
                                 
-                                # Fuzzy Matching contra platos recientes
-                                for recent_name in recent_normalized:
-                                    if _is_similar(meal_name, recent_name):
-                                        repeated_meals.append(meal.get("name", "?"))
-                                        break
+                                new_tokens = set(new_norm.split())
+                                is_repeated = False
+                                
+                                # Bucle Optimizado contra platos pre-procesados
+                                for recent in recent_data:
+                                    # 1. Similitud de Sets de Tokens (Jaccard Approximation - Fast Path)
+                                    if new_tokens and recent["tokens"]:
+                                        intersection = new_tokens.intersection(recent["tokens"])
+                                        overlap1 = len(intersection) / len(new_tokens)
+                                        overlap2 = len(intersection) / len(recent["tokens"])
+                                        
+                                        if max(overlap1, overlap2) >= 0.8:
+                                            is_repeated = True
+                                            break
+                                            
+                                    # 2. Similitud de Secuencia (Difflib) - Aplicado solo si las longitudes son parecidas (Guard)
+                                    if abs(len(new_norm) - len(recent["norm"])) <= 5:
+                                        if difflib.SequenceMatcher(None, new_norm, recent["norm"]).ratio() >= 0.75:
+                                            is_repeated = True
+                                            break
+                                            
+                                if is_repeated:
+                                    repeated_meals.append(raw_name)
                     
                     # Umbral: cero tolerancia - si 1 o más comidas principales se repiten, rechazar
                     if len(repeated_meals) > 0:
@@ -482,7 +487,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         severity = "minor"
                         print(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados: {repeated_meals}")
                     else:
-                        print(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_set)} platos recientes.")
+                        print(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_data)} platos recientes.")
         except Exception as e:
             print(f"⚠️ [ANTI-REPETICIÓN] Error en validación (no bloqueante): {e}")
     
