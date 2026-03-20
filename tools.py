@@ -346,6 +346,82 @@ def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: s
 # TOOL: Añadir items a la lista de compras
 # ============================================================
 
+# Mapping local de keywords → (categoría, emoji) para categorización inteligente sin LLM
+_CATEGORY_KEYWORDS = {
+    ("Frutas y Verduras", "🥬"): [
+        "lechuga", "tomate", "cebolla", "ajo", "pimiento", "zanahoria", "brocoli", "brócoli",
+        "espinaca", "pepino", "aguacate", "limon", "limón", "naranja", "manzana", "banana",
+        "platano", "plátano", "guineo", "mango", "piña", "papaya", "fresa", "uva", "melon",
+        "sandia", "sandía", "cilantro", "perejil", "apio", "repollo", "coliflor", "batata",
+        "yuca", "ñame", "tayota", "berro", "remolacha", "berenjena", "calabaza", "mazorca",
+        "maiz", "maíz", "kiwi", "cereza", "arandano", "arándano", "mandarina", "guayaba",
+        "chinola", "lechosa", "habichuela", "vaina", "verde", "maduro"
+    ],
+    ("Proteínas", "🥩"): [
+        "pollo", "pechuga", "muslo", "carne", "res", "cerdo", "chuleta", "costilla",
+        "salmon", "salmón", "atun", "atún", "pescado", "camaron", "camarón", "camarones",
+        "jamon", "jamón", "salami", "salchicha", "tocino", "bacon", "pavo", "cordero",
+        "filete", "bistec", "molida", "longaniza", "chorizo", "tilapia", "sardina",
+        "pulpo", "calamar", "langosta", "cangrejo"
+    ],
+    ("Lácteos", "🥛"): [
+        "leche", "queso", "yogur", "yogurt", "crema", "mantequilla", "nata", "requesón",
+        "mozzarella", "parmesano", "ricotta", "cheddar", "queso crema", "suero"
+    ],
+    ("Huevos", "🥚"): [
+        "huevo", "huevos"
+    ],
+    ("Granos y Cereales", "🌾"): [
+        "arroz", "avena", "quinoa", "trigo", "cebada", "lenteja", "frijol", "frijoles",
+        "garbanzo", "guandule", "guandules", "habichuela", "habichuelas", "alubia",
+        "pasta", "espagueti", "macarron", "fideos", "cereal", "granola", "pan", "harina",
+        "tortilla", "arepa", "casabe"
+    ],
+    ("Condimentos y Especias", "🧂"): [
+        "sal", "pimienta", "oregano", "orégano", "comino", "curry", "canela", "paprika",
+        "adobo", "sazon", "sazón", "vinagre", "salsa", "ketchup", "mostaza", "mayonesa",
+        "soya", "sillao", "miel", "azucar", "azúcar", "sabora"
+    ],
+    ("Aceites y Grasas", "🫒"): [
+        "aceite", "oliva", "vegetal", "girasol", "manteca", "spray", "ghee", "coco"
+    ],
+    ("Bebidas", "🥤"): [
+        "agua", "jugo", "refresco", "soda", "cafe", "café", "te", "té", "cerveza",
+        "vino", "ron", "whisky", "gaseosa", "energizante"
+    ],
+    ("Snacks y Dulces", "🍪"): [
+        "galleta", "chocolate", "dulce", "caramelo", "chicle", "chips", "palomita",
+        "nuez", "almendra", "mani", "maní", "semilla", "barra", "peanut"
+    ],
+    ("Enlatados y Conservas", "🥫"): [
+        "lata", "enlatado", "conserva", "pasta de tomate", "sardinas en lata",
+        "atun en lata", "maiz en lata"
+    ],
+    ("Limpieza y Hogar", "🧹"): [
+        "jabon", "jabón", "detergente", "cloro", "desinfectante", "papel", "servilleta",
+        "bolsa", "esponja", "fabuloso", "suavizante", "toalla"
+    ],
+    ("Higiene Personal", "🧴"): [
+        "shampoo", "champú", "pasta dental", "cepillo", "desodorante", "crema dental"
+    ]
+}
+
+def _categorize_item(item_name: str) -> tuple:
+    """Categoriza un item por keywords locales. Retorna (categoría, emoji)."""
+    import unicodedata
+    # Normalizar: minúsculas, sin acentos
+    normalized = item_name.lower().strip()
+    nfkd = unicodedata.normalize('NFKD', normalized)
+    normalized = ''.join(c for c in nfkd if not unicodedata.combining(c))
+    
+    for (category, emoji), keywords in _CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            kw_norm = ''.join(c for c in unicodedata.normalize('NFKD', kw) if not unicodedata.combining(c))
+            if kw_norm in normalized:
+                return category, emoji
+    
+    return "Otros", "🛒"
+
 @tool
 def add_to_shopping_list(user_id: str, items: str) -> str:
     """
@@ -366,9 +442,10 @@ def add_to_shopping_list(user_id: str, items: str) -> str:
     # Normalizar a JSON struct consistente con los items auto-generados (ShoppingItemModel)
     structured_items = []
     for item_name in items_list:
+        cat, emoji = _categorize_item(item_name)
         structured_items.append({
-            "category": "Extras (Chat)",
-            "emoji": "🛒",
+            "category": cat,
+            "emoji": emoji,
             "name": item_name.capitalize(),
             "qty": ""
         })

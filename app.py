@@ -839,11 +839,27 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
             
         from db import add_custom_shopping_items, delete_auto_generated_shopping_items, save_shopping_plan_hash
         
-        # Limpiar ítems previos generados por IA (Phase 2 - Anti Bloat)
-        delete_auto_generated_shopping_items(user_id)
-        
-        # Guardar cada string/objeto consolidado como un item en la tabla custom_shopping_items
+        # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
+        # Insertar los nuevos items ANTES de borrar los viejos.
+        # Si el proceso muere entre el INSERT y el DELETE, el usuario tiene duplicados (fácilmente deduplicables),
+        # en vez de perder toda su lista (irrecuperable).
         result = add_custom_shopping_items(user_id, items, source="auto")
+        
+        # Extraer IDs de los items recién insertados para excluirlos del borrado
+        new_ids = []
+        if result and isinstance(result, list):
+            new_ids = [r.get("id") for r in result if r.get("id")]
+        
+        # Borrar items auto-generados ANTERIORES (excluyendo los que acabamos de insertar)
+        delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
+        
+        # 🧹 Auto-purga oportunista: limpiar items checked viejos y enforce tope global
+        from db import purge_old_shopping_items
+        purge_old_shopping_items(user_id)
+        
+        # 🔄 Auto-deduplicación: unificar items duplicados automáticamente
+        from db import deduplicate_shopping_items
+        deduplicate_shopping_items(user_id)
         
         # Guardar hash del plan para cache futuro
         save_shopping_plan_hash(user_id, plan_hash)
@@ -879,6 +895,10 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
         if not items:
             raise HTTPException(status_code=400, detail="No se proporcionaron items para añadir.")
         
+        MAX_ITEMS = 50
+        if len(items) > MAX_ITEMS:
+            raise HTTPException(status_code=400, detail=f"Máximo {MAX_ITEMS} items por solicitud.")
+        
         # Normalizar a JSON struct consistente con ShoppingItemModel
         structured_items = []
         for item_name in items:
@@ -908,8 +928,10 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/shopping/custom/{user_id}")
-def api_get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0, verified_user_id: str = Depends(get_verified_user_id)):
-    """Obtiene los items custom de la lista de compras con paginación."""
+def api_get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0, sort_by: str = "category", sort_order: str = "asc", verified_user_id: str = Depends(get_verified_user_id)):
+    """Obtiene los items custom de la lista de compras con paginación y ordenamiento.
+    sort_by: category | created_at | display_name | is_checked (default: category)
+    sort_order: asc | desc (default: asc)"""
     try:
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
@@ -918,7 +940,7 @@ def api_get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 
                 
         if not user_id or user_id == "guest":
             return {"items": [], "total": 0}
-        result = get_custom_shopping_items(user_id, limit=limit, offset=offset)
+        result = get_custom_shopping_items(user_id, limit=limit, offset=offset, sort_by=sort_by, sort_order=sort_order)
         return {"items": result.get("data", []), "total": result.get("total", 0)}
     except HTTPException as he:
         raise he
@@ -934,13 +956,44 @@ def api_delete_custom_shopping_item(item_id: str, verified_user_id: str = Depend
             raise HTTPException(status_code=401, detail="No autorizado. Token requerido para eliminar items.")
         from db import delete_custom_shopping_item
         result = delete_custom_shopping_item(item_id, user_id=verified_user_id)
-        if not result:
+        if result is None or (isinstance(result, list) and len(result) == 0):
             raise HTTPException(status_code=404, detail="Item no encontrado o no pertenece al usuario.")
         return {"success": True, "message": "Item eliminado de la lista."}
     except HTTPException as he:
         raise he
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/shopping/custom DELETE: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/shopping/custom/{item_id}")
+def api_update_custom_shopping_item(item_id: str, data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    """Edita campos de un item existente (display_name, qty, category, emoji) con validación IDOR."""
+    try:
+        if not verified_user_id:
+            raise HTTPException(status_code=401, detail="No autorizado. Token requerido para editar items.")
+        
+        # Extraer campos editables del body
+        updates = {}
+        for field in ["display_name", "qty", "category", "emoji"]:
+            if field in data:
+                updates[field] = data[field]
+        
+        if not updates:
+            raise HTTPException(status_code=400, detail="No se proporcionaron campos para actualizar. Campos permitidos: display_name, qty, category, emoji.")
+        
+        from db import update_custom_shopping_item
+        result = update_custom_shopping_item(item_id, updates, user_id=verified_user_id)
+        
+        if result is None:
+            raise HTTPException(status_code=500, detail="Error interno al actualizar el item.")
+        if isinstance(result, list) and len(result) == 0:
+            raise HTTPException(status_code=404, detail="Item no encontrado o no pertenece al usuario.")
+        
+        return {"success": True, "message": "Item actualizado.", "updated": updates}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"❌ [ERROR] Error en /api/shopping/custom PUT: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/shopping/custom/{item_id}/check")

@@ -1034,24 +1034,30 @@ def _add_shopping_items_minimal(user_id: str, items: list):
         print(f"Error añadiendo items a shopping list (minimal fallback): {e}")
         return None
 
-def delete_auto_generated_shopping_items(user_id: str):
+def delete_auto_generated_shopping_items(user_id: str, exclude_ids: list = None):
     """Elimina los items auto-generados de la lista de compras del usuario.
-    Usa columna source='auto' para borrado O(1). Fallback a JSON parsing si la columna no existe."""
+    Usa columna source='auto' para borrado O(1). Fallback a JSON parsing si la columna no existe.
+    exclude_ids: IDs de items recién insertados que NO deben borrarse (patrón insert-first / delete-old)."""
     if not supabase: return False
     try:
         # 🚀 Borrado directo por columna source (O(1) con índice, sin parsear JSON)
-        supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "auto").execute()
+        query = supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "auto")
+        if exclude_ids:
+            # No borrar los items que acabamos de insertar
+            for eid in exclude_ids:
+                query = query.neq("id", eid)
+        query.execute()
         return True
     except Exception as e:
         error_msg = str(e)
         if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             # Columna source no existe → fallback al método legacy (JSON parsing)
             print("⚠️ [DB] Columna source ausente. Usando fallback JSON. Ejecute migration_shopping_is_checked.sql")
-            return _delete_auto_shopping_items_legacy(user_id)
+            return _delete_auto_shopping_items_legacy(user_id, exclude_ids)
         print(f"Error borrando items auto-generados: {e}")
         return False
 
-def _delete_auto_shopping_items_legacy(user_id: str):
+def _delete_auto_shopping_items_legacy(user_id: str, exclude_ids: list = None):
     """Fallback legacy: borra items auto-generados parseando JSON (O(N) full table scan)."""
     import json
     try:
@@ -1059,8 +1065,11 @@ def _delete_auto_shopping_items_legacy(user_id: str):
         existing = res.data
         if not existing: return True
         
+        exclude_set = set(exclude_ids) if exclude_ids else set()
         ids_to_delete = []
         for item in existing:
+            if item['id'] in exclude_set:
+                continue
             try:
                 parsed = json.loads(item['item_name'])
                 if isinstance(parsed, dict) and 'category' in parsed:
@@ -1075,16 +1084,25 @@ def _delete_auto_shopping_items_legacy(user_id: str):
         print(f"Error borrando items auto-generados (legacy fallback): {e}")
         return False
 
-def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0):
-    """Obtiene los items custom de la lista de compras del usuario con paginación.
+def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0, sort_by: str = "category", sort_order: str = "asc"):
+    """Obtiene los items custom de la lista de compras del usuario con paginación y ordenamiento.
+    sort_by: 'category' | 'created_at' | 'display_name' | 'is_checked' (default: 'category')
+    sort_order: 'asc' | 'desc' (default: 'asc')
     Retorna columnas estructuradas (category, display_name, qty, emoji) si están disponibles."""
     if not supabase: return {"data": [], "total": 0}
+    
+    # Whitelist de campos para evitar inyección
+    ALLOWED_SORT = {"category", "created_at", "display_name", "is_checked", "name"}
+    if sort_by not in ALLOWED_SORT:
+        sort_by = "category"
+    is_desc = sort_order.lower() == "desc"
+    
     try:
         # Intento 1: con columnas estructuradas → permite ordenar por categoría a nivel DB
         query = supabase.table("custom_shopping_items").select(
             "id, item_name, is_checked, checked_at, source, category, display_name, qty, emoji, created_at",
             count="exact"
-        ).eq("user_id", user_id).order("category").order("created_at", desc=True).range(offset, offset + limit - 1)
+        ).eq("user_id", user_id).order(sort_by, desc=is_desc).range(offset, offset + limit - 1)
         res = query.execute()
         return {"data": res.data, "total": res.count or 0}
     except Exception as e:
@@ -1093,9 +1111,10 @@ def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0):
             # Fallback 2: sin columnas estructuradas pero con is_checked/source
             print("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
             try:
+                fb_sort = sort_by if sort_by in {"created_at", "is_checked"} else "created_at"
                 query_fb = supabase.table("custom_shopping_items").select(
                     "id, item_name, is_checked, source, created_at", count="exact"
-                ).eq("user_id", user_id).order("created_at", desc=True).range(offset, offset + limit - 1)
+                ).eq("user_id", user_id).order(fb_sort, desc=is_desc).range(offset, offset + limit - 1)
                 res_fb = query_fb.execute()
                 return {"data": res_fb.data, "total": res_fb.count or 0}
             except Exception as e2:
@@ -1112,12 +1131,13 @@ def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0):
         print(f"Error obteniendo custom shopping items: {e}")
         return {"data": [], "total": 0}
 
-def _get_shopping_items_minimal(user_id: str, limit: int = 200, offset: int = 0):
+def _get_shopping_items_minimal(user_id: str, limit: int = 200, offset: int = 0, sort_order: str = "desc"):
     """Fallback mínimo: solo id, item_name, created_at (pre-migración)."""
+    is_desc = sort_order.lower() == "desc"
     try:
         res = supabase.table("custom_shopping_items").select(
             "id, item_name, created_at", count="exact"
-        ).eq("user_id", user_id).order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+        ).eq("user_id", user_id).order("created_at", desc=is_desc).range(offset, offset + limit - 1).execute()
         return {"data": res.data, "total": res.count or 0}
     except Exception as e:
         print(f"Error obteniendo custom shopping items (minimal fallback): {e}")
@@ -1284,6 +1304,66 @@ def deduplicate_shopping_items(user_id: str):
         print(f"Error en deduplicación: {e}")
         return {"removed": 0, "merged": [], "error": str(e)}
 
+MAX_SHOPPING_ITEMS_PER_USER = 500
+CHECKED_ITEM_EXPIRY_DAYS = 30
+
+def purge_old_shopping_items(user_id: str):
+    """Auto-purga items viejos de la lista de compras.
+    1) Elimina items checked con checked_at > 30 días.
+    2) Si aún hay más de 500 items, elimina los más antiguos.
+    Retorna el número total de items purgados."""
+    if not supabase: return 0
+    
+    from datetime import datetime, timezone, timedelta
+    total_purged = 0
+    
+    try:
+        # --- Fase 1: Purgar items checked hace más de 30 días ---
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=CHECKED_ITEM_EXPIRY_DAYS)).isoformat()
+        try:
+            res = supabase.table("custom_shopping_items").delete()\
+                .eq("user_id", user_id)\
+                .eq("is_checked", True)\
+                .lt("checked_at", cutoff)\
+                .execute()
+            phase1 = len(res.data) if res.data else 0
+            total_purged += phase1
+            if phase1 > 0:
+                print(f"🧹 [PURGE] Fase 1: eliminados {phase1} items checked hace >{CHECKED_ITEM_EXPIRY_DAYS} días")
+        except Exception as e:
+            # Columna is_checked/checked_at puede no existir aún
+            print(f"⚠️ [PURGE] Fase 1 skipped (columnas ausentes): {e}")
+        
+        # --- Fase 2: Enforce tope global ---
+        try:
+            count_res = supabase.table("custom_shopping_items")\
+                .select("id", count="exact")\
+                .eq("user_id", user_id)\
+                .execute()
+            total_items = count_res.count if hasattr(count_res, 'count') and count_res.count else len(count_res.data or [])
+            
+            if total_items > MAX_SHOPPING_ITEMS_PER_USER:
+                excess = total_items - MAX_SHOPPING_ITEMS_PER_USER
+                # Obtener los IDs más antiguos a eliminar
+                oldest_res = supabase.table("custom_shopping_items")\
+                    .select("id")\
+                    .eq("user_id", user_id)\
+                    .order("created_at", desc=False)\
+                    .limit(excess)\
+                    .execute()
+                if oldest_res.data:
+                    old_ids = [r["id"] for r in oldest_res.data]
+                    supabase.table("custom_shopping_items").delete().in_("id", old_ids).execute()
+                    total_purged += len(old_ids)
+                    print(f"🧹 [PURGE] Fase 2: eliminados {len(old_ids)} items (tope {MAX_SHOPPING_ITEMS_PER_USER} excedido)")
+        except Exception as e:
+            print(f"⚠️ [PURGE] Fase 2 error: {e}")
+        
+        return total_purged
+    except Exception as e:
+        print(f"Error en purge_old_shopping_items: {e}")
+        return 0
+
 def delete_custom_shopping_item(item_id: str, user_id: str = None):
     """Elimina un item custom de la lista de compras. Si se provee user_id, verifica ownership."""
     if not supabase: return None
@@ -1295,6 +1375,85 @@ def delete_custom_shopping_item(item_id: str, user_id: str = None):
         return res.data
     except Exception as e:
         print(f"Error borrando custom shopping item: {e}")
+        return None
+
+def update_custom_shopping_item(item_id: str, updates: dict, user_id: str = None):
+    """Actualiza campos editables de un item (display_name, qty, category, emoji).
+    Si se provee user_id, verifica ownership (IDOR protection).
+    Fallback: si no existen columnas estructuradas, actualiza el JSON en item_name."""
+    if not supabase: return None
+    
+    # Solo permitir campos editables
+    allowed_fields = {"display_name", "qty", "category", "emoji"}
+    clean_updates = {k: v for k, v in updates.items() if k in allowed_fields and v is not None}
+    
+    if not clean_updates:
+        return []
+    
+    try:
+        # 🚀 Método directo: UPDATE a columnas estructuradas
+        query = supabase.table("custom_shopping_items").update(clean_updates).eq("id", item_id)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        res = query.execute()
+        
+        # También actualizar item_name JSON para mantener consistencia con el fallback legacy
+        if res.data and len(res.data) > 0:
+            import json
+            row = res.data[0]
+            try:
+                raw = row.get("item_name", "{}")
+                parsed = json.loads(raw) if isinstance(raw, str) and raw.startswith("{") else {}
+                for k, v in clean_updates.items():
+                    field_map = {"display_name": "name", "qty": "qty", "category": "category", "emoji": "emoji"}
+                    if k in field_map:
+                        parsed[field_map[k]] = v
+                supabase.table("custom_shopping_items").update(
+                    {"item_name": json.dumps(parsed, ensure_ascii=False)}
+                ).eq("id", item_id).execute()
+            except Exception:
+                pass  # No bloquear si falla la sincronización del JSON legacy
+        
+        return res.data
+    except Exception as e:
+        error_msg = str(e)
+        if any(col in error_msg for col in ["display_name", "qty", "category", "emoji", "PGRST205"]):
+            # Columnas estructuradas no existen → fallback a JSON en item_name
+            print("⚠️ [DB] Columnas estructuradas ausentes. Usando fallback JSON para update.")
+            return _update_shopping_item_legacy(item_id, clean_updates, user_id)
+        print(f"Error actualizando custom shopping item: {e}")
+        return None
+
+def _update_shopping_item_legacy(item_id: str, updates: dict, user_id: str = None):
+    """Fallback: actualiza el JSON embebido en item_name."""
+    import json
+    try:
+        query = supabase.table("custom_shopping_items").select("id, item_name").eq("id", item_id)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        res = query.execute()
+        if not res.data:
+            return []
+        
+        row = res.data[0]
+        raw = row.get("item_name", "{}")
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else {}
+        except (json.JSONDecodeError, ValueError):
+            parsed = {}
+        
+        field_map = {"display_name": "name", "qty": "qty", "category": "category", "emoji": "emoji"}
+        for k, v in updates.items():
+            if k in field_map:
+                parsed[field_map[k]] = v
+        
+        supabase.table("custom_shopping_items").update(
+            {"item_name": json.dumps(parsed, ensure_ascii=False)}
+        ).eq("id", item_id).execute()
+        
+        return [{"id": item_id, **updates}]
+    except Exception as e:
+        print(f"Error actualizando item (legacy fallback): {e}")
         return None
 
 def update_custom_shopping_item_status(item_id: str, is_checked: bool, user_id: str = None):

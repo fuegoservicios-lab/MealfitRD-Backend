@@ -489,6 +489,78 @@ def swap_meal(form_data: dict):
         raise ValueError("El modelo de IA generó una respuesta inválida. Por favor, reintenta.")
 
 
+def _pre_consolidate_ingredients(ingredients: list) -> list:
+    """Pre-consolida ingredientes idénticos sumando cantidades en Python.
+    Reduce la carga al LLM y elimina errores de suma.
+    Ej: ['2 huevos', '3 huevos', '1 huevo'] → ['6 huevos']
+    """
+    import re, unicodedata
+    
+    def _normalize(text: str) -> str:
+        if not text: return ""
+        nfkd = unicodedata.normalize('NFKD', text.lower().strip())
+        return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
+    
+    def _parse_ingredient(raw: str):
+        """Extrae (número, unidad, nombre_base) de un string como '2 lb Pollo' o '1/2 aguacate'."""
+        raw = raw.strip()
+        # Intentar match: número (con fracción) + unidad opcional + nombre
+        match = re.match(r'^([\d.,/]+)\s*(g|kg|lb|lbs|oz|ml|l|taza|tazas|cda|cdta|und|unidades?)?\s+(.+)$', raw, re.IGNORECASE)
+        if match:
+            num_str = match.group(1).replace(',', '.')
+            if '/' in num_str:
+                parts = num_str.split('/')
+                try:
+                    num = float(parts[0]) / float(parts[1])
+                except (ValueError, ZeroDivisionError):
+                    return None, "", raw
+            else:
+                try:
+                    num = float(num_str)
+                except ValueError:
+                    return None, "", raw
+            unit = (match.group(2) or "").lower().strip()
+            name = match.group(3).strip()
+            return num, unit, name
+        
+        # Sin número al inicio — devolver como está
+        return None, "", raw
+    
+    # Agrupar por (nombre_normalizado, unidad_normalizada)
+    groups = {}  # (norm_name, norm_unit) → {total, unit_original, name_original, extras: []}
+    order = []   # preservar orden de aparición
+    
+    for ing in ingredients:
+        if not isinstance(ing, str) or not ing.strip():
+            continue
+        num, unit, name = _parse_ingredient(ing)
+        key = (_normalize(name), _normalize(unit))
+        
+        if key not in groups:
+            groups[key] = {"total": num, "unit": unit, "name": name, "raw": ing, "can_sum": num is not None}
+            order.append(key)
+        else:
+            entry = groups[key]
+            if entry["can_sum"] and num is not None:
+                entry["total"] = (entry["total"] or 0) + num
+            else:
+                entry["can_sum"] = False
+    
+    # Reconstruir lista consolidada
+    result = []
+    for key in order:
+        entry = groups[key]
+        if entry["can_sum"] and entry["total"] is not None:
+            total = entry["total"]
+            total_str = str(int(total)) if total == int(total) else f"{total:.1f}"
+            unit_part = f" {entry['unit']}" if entry["unit"] else ""
+            result.append(f"{total_str}{unit_part} {entry['name']}")
+        else:
+            result.append(entry["raw"])
+    
+    return result
+
+
 def generate_auto_shopping_list(plan_data: dict) -> list:
     """Extrae ingredientes del plan, los consolida y categoriza por pasillo de supermercado."""
     print("\n-------------------------------------------------------------")
@@ -504,6 +576,10 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
                 
     if not ingredients:
         return []
+    
+    # 🧮 Pre-consolidación determinista en Python (reduce tokens y elimina errores de suma del LLM)
+    ingredients = _pre_consolidate_ingredients(ingredients)
+    print(f"🧮 [PRE-CONSOLIDACIÓN] {len(ingredients)} ingredientes únicos tras fusión en Python.")
         
     prompt = AUTO_SHOPPING_LIST_PROMPT.format(ingredients_json=json.dumps(ingredients))
     
