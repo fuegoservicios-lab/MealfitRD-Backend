@@ -434,7 +434,18 @@ def add_to_shopping_list(user_id: str, items: str) -> str:
     """
     print(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id}: {items}")
     
-    items_list = [item.strip() for item in items.split(",") if item.strip()]
+    import re as _re
+    MAX_ITEM_LENGTH = 100
+    MAX_ITEMS_PER_CALL = 20
+    
+    def _sanitize(text: str) -> str:
+        """Elimina HTML/JS tags y limita longitud."""
+        clean = _re.sub(r'<[^>]+>', '', text).strip()
+        clean = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean)  # control chars
+        return clean[:MAX_ITEM_LENGTH]
+    
+    items_list = [_sanitize(item) for item in items.split(",") if item.strip()]
+    items_list = [i for i in items_list if i][:MAX_ITEMS_PER_CALL]
     
     if not items_list:
         return "No se proporcionaron items válidos para añadir."

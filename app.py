@@ -255,8 +255,16 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                     from agent import generate_auto_shopping_list
                     items = generate_auto_shopping_list(plan_data)
                     if items:
-                        delete_auto_generated_shopping_items(user_id)
-                        add_custom_shopping_items(user_id, items, source="auto")
+                        # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
+                        # Si el proceso muere entre INSERT y DELETE, el usuario tiene duplicados
+                        # (fácilmente deduplicables) en vez de perder toda su lista (irrecuperable).
+                        result = add_custom_shopping_items(user_id, items, source="auto")
+                        new_ids = [r.get("id") for r in result if r.get("id")] if result and isinstance(result, list) else []
+                        delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
+                        # 🧹 Auto-purga + deduplicación (consistente con /api/shopping/auto-generate)
+                        from db import purge_old_shopping_items, deduplicate_shopping_items
+                        purge_old_shopping_items(user_id)
+                        deduplicate_shopping_items(user_id)
                         save_shopping_plan_hash(user_id, plan_hash)
                         print(f"🛒 [BACKGROUND] Lista de compras auto-generada ({len(items)} items) para {user_id}")
                     else:
@@ -899,10 +907,20 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
         if len(items) > MAX_ITEMS:
             raise HTTPException(status_code=400, detail=f"Máximo {MAX_ITEMS} items por solicitud.")
         
+        # Sanitización: eliminar HTML/JS tags, control chars, y limitar longitud
+        import re as _re
+        MAX_ITEM_LENGTH = 100
+        
+        def _sanitize(text: str) -> str:
+            clean = _re.sub(r'<[^>]+>', '', text).strip()
+            clean = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean)
+            return clean[:MAX_ITEM_LENGTH]
+        
         # Normalizar a JSON struct consistente con ShoppingItemModel
         structured_items = []
         for item_name in items:
-            name = item_name.strip() if isinstance(item_name, str) else ""
+            raw = item_name.strip() if isinstance(item_name, str) else ""
+            name = _sanitize(raw) if raw else ""
             if name:
                 structured_items.append({
                     "category": "Extras (Manual)",
@@ -1062,6 +1080,21 @@ def api_deduplicate_shopping_items(user_id: str, verified_user_id: str = Depends
         raise he
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/shopping/custom/deduplicate POST: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/shopping/custom/purge/{user_id}")
+def api_purge_shopping_items(user_id: str, verified_user_id: str = Depends(get_verified_user_id)):
+    """Purga items checked hace más de 30 días y aplica el tope global de 500 items."""
+    try:
+        if not verified_user_id or verified_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        from db import purge_old_shopping_items
+        result = purge_old_shopping_items(user_id)
+        return {"success": True, "message": "Purga completada.", "details": result}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"❌ [ERROR] Error en /api/shopping/custom/purge POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/diary/consumed/{user_id}")

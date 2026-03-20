@@ -1291,12 +1291,27 @@ def deduplicate_shopping_items(user_id: str):
     if not ids_to_delete:
         return {"removed": 0, "merged": []}
     
-    # Ejecutar deletes y updates
+    # Ejecutar deletes y updates en batch (reducir N+1 queries)
     try:
-        supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
+        # 🚀 Batch DELETE: Supabase .in_() ya es batch, pero chunkeamos por si hay >500 IDs
+        CHUNK_SIZE = 100
+        for i in range(0, len(ids_to_delete), CHUNK_SIZE):
+            chunk = ids_to_delete[i:i + CHUNK_SIZE]
+            supabase.table("custom_shopping_items").delete().in_("id", chunk).execute()
         
-        for item_id, new_qty in ids_to_update.items():
-            supabase.table("custom_shopping_items").update({"qty": new_qty}).eq("id", item_id).execute()
+        # 🚀 Batch UPDATE: agrupar por qty para reducir queries individuales
+        # En vez de N updates (1 por item), agrupamos items con la misma qty en 1 sola query.
+        if ids_to_update:
+            from collections import defaultdict
+            qty_groups = defaultdict(list)  # qty_value → [item_ids]
+            for item_id, new_qty in ids_to_update.items():
+                qty_groups[new_qty].append(item_id)
+            
+            for qty_value, item_ids in qty_groups.items():
+                if len(item_ids) == 1:
+                    supabase.table("custom_shopping_items").update({"qty": qty_value}).eq("id", item_ids[0]).execute()
+                else:
+                    supabase.table("custom_shopping_items").update({"qty": qty_value}).in_("id", item_ids).execute()
         
         print(f"🧹 [DEDUP] Eliminados {len(ids_to_delete)} duplicados, {len(ids_to_update)} cantidades actualizadas")
         return {"removed": len(ids_to_delete), "merged": merged_info}
