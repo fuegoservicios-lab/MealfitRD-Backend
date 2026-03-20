@@ -1014,3 +1014,50 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         print(f"❌ Error migrando datos de invitado: {e}")
         return False
 
+
+def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
+    """Incrementa la frecuencia histórica de los ingredientes consumidos por un usuario (Optimización O(1))."""
+    if not supabase or not user_id or user_id == "guest": return
+    
+    try:
+        import unicodedata
+        from collections import Counter
+        from datetime import datetime
+        
+        def strip_accents(s):
+            return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+            
+        normalized_ings = [strip_accents(i.lower()).strip() for i in ingredients if i]
+        incoming_counts = Counter(normalized_ings)
+        
+        # Fetch actual state
+        res = supabase.table("ingredient_frequencies").select("ingredient, count").eq("user_id", user_id).execute()
+        current_map = {row["ingredient"]: row["count"] for row in res.data} if res.data else {}
+        
+        upsert_rows = []
+        for ing, inc_val in incoming_counts.items():
+            new_val = current_map.get(ing, 0) + inc_val
+            upsert_rows.append({
+                "user_id": user_id,
+                "ingredient": ing,
+                "count": new_val,
+                "last_used": datetime.utcnow().isoformat()
+            })
+            
+        if upsert_rows:
+            supabase.table("ingredient_frequencies").upsert(upsert_rows).execute()
+            print(f"✅ [DB] Frecuencia de ingredientes incrementada para {user_id} ({len(upsert_rows)} items)")
+    except Exception as e:
+        print(f"⚠️ [DB] Error incrementando frecuecia de ingredientes: {e}")
+
+def get_user_ingredient_frequencies(user_id: str) -> dict:
+    """Retorna un diccionario {ingrediente_normalizado: conteo_entero} en O(1) de la DB."""
+    if not supabase or not user_id or user_id == "guest": return {}
+    try:
+        res = supabase.table("ingredient_frequencies").select("ingredient, count").eq("user_id", user_id).execute()
+        if res.data:
+            return {row["ingredient"]: row["count"] for row in res.data}
+        return {}
+    except Exception as e:
+        print(f"⚠️ [DB] Error obteniendo diccionario de frecuencias: {e}")
+        return {}

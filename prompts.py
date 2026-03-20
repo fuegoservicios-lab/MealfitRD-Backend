@@ -22,9 +22,9 @@ DETERMINISTIC_VARIETY_PROMPT = """
 ⚠️ REGLA DE INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ⚠️
 Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccionado los núcleos base obligatorios. Debes construir las Opciones alrededor de estos ingredientes (o basar los almuerzos / cenas principales en ellos):
 
-- 🔴 OPCIÓN A (Día 1) -> El Almuerzo o Cena principal DEBE basarse obligatoriamente en: {protein_0} + {carb_0}. Para el desayuno y meriendas, usa libertad creativa con opciones ligeras (huevos, avena, frutas, víveres).
-- 🔵 OPCIÓN B (Día 2) -> El Almuerzo o Cena principal DEBE basarse obligatoriamente en: {protein_1} + {carb_1}. Para el desayuno y meriendas, usa libertad creativa con opciones ligeras (huevos, avena, frutas, víveres).
-- 🟢 OPCIÓN C (Día 3) -> El Almuerzo o Cena principal DEBE basarse obligatoriamente en: {protein_2} + {carb_2}. Para el desayuno y meriendas, usa libertad creativa con opciones ligeras (huevos, avena, frutas, víveres).
+- 🔴 OPCIÓN A (Día 1) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_0} + {carb_0} y como acompañante vegetal/grasa: {veggie_0}. Para desayunos y meriendas, usa libertad creativa.
+- 🔵 OPCIÓN B (Día 2) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_1} + {carb_1} y como acompañante vegetal/grasa: {veggie_1}. Para desayunos y meriendas, usa libertad creativa.
+- 🟢 OPCIÓN C (Día 3) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_2} + {carb_2} y como acompañante vegetal/grasa: {veggie_2}. Para desayunos y meriendas, usa libertad creativa.
 
 {blocked_text}
 """

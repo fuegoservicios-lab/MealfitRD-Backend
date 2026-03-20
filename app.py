@@ -710,7 +710,16 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         if not items:
             return {"success": False, "message": "No se encontraron ingredientes para consolidar en el plan activo."}
             
-        from db import add_custom_shopping_items
+        from db import add_custom_shopping_items, increment_ingredient_frequencies
+        
+        # 1. Background DB Frequency Tracking Optimization
+        raw_ingredients = []
+        for d in current_plan.get("days", []):
+            for m in d.get("meals", []):
+                raw_ingredients.extend(m.get("ingredients", []))
+                
+        increment_ingredient_frequencies(user_id, raw_ingredients)
+        
         # Guardar cada string consolidado como un item en la tabla custom_shopping_items
         result = add_custom_shopping_items(user_id, items)
         

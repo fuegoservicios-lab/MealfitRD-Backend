@@ -50,16 +50,14 @@ llm = ChatGoogleGenerativeAI(
 # ============================================================
 # INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE)
 # ============================================================
-DOMINICAN_PROTEINS = [
-    "Pollo", "Cerdo", "Res", "Pescado", "Atún", "Huevos", "Queso de Freír",
-    "Salami Dominicano", "Camarones", "Chuleta", "Longaniza", "Berenjena",
-    "Habichuelas Rojas", "Habichuelas Negras", "Gandules", "Lentejas", "Garbanzos", "Soya/Tofu"
-]
-
-DOMINICAN_CARBS = [
-    "Plátano Verde", "Plátano Maduro", "Yuca", "Batata", "Arroz Blanco", 
-    "Arroz Integral", "Avena", "Pan Integral", "Papas", "Guineítos Verdes", "Ñame", "Yautía"
-]
+from constants import (
+    DOMINICAN_PROTEINS, 
+    DOMINICAN_CARBS, 
+    DOMINICAN_VEGGIES_FATS,
+    PROTEIN_SYNONYMS as protein_synonyms, 
+    CARB_SYNONYMS as carb_synonyms,
+    VEGGIE_FAT_SYNONYMS as veggie_fat_synonyms
+)
 
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
@@ -70,6 +68,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # --- FILTRO DE RESTRICCIONES MÉDICAS Y DIETÉTICAS ---
     filtered_proteins = DOMINICAN_PROTEINS.copy()
     filtered_carbs = DOMINICAN_CARBS.copy()
+    filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
     
     if form_data:
         allergies = [a.lower() for a in form_data.get("allergies", [])]
@@ -107,103 +106,70 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             
         filtered_proteins = [p for p in filtered_proteins if is_allowed(p)]
         filtered_carbs = [c for c in filtered_carbs if is_allowed(c)]
+        filtered_veggies = [v for v in filtered_veggies if is_allowed(v)]
         
 
     # ----------------------------------------------------
     
-    # 1. Analizar qué se ha usado (con Regex para evitar falsos positivos y atrapar sinónimos)
+    # 1. Analizar qué se ha usado (Optimización O(1) con DB o Fallback a Regex)
     used_proteins = set()
     used_carbs = set()
+    used_veggies = set()
     
-    # Mapeo de sinónimos comunes para ingredientes
-    protein_synonyms = {
-        "pollo": ["pollo", "pechuga", "muslo", "alitas", "chicharrón de pollo", "filete de pollo"],
-        "cerdo": ["cerdo", "masita", "chicharrón de cerdo", "lomo", "pernil", "costilla"],
-        "res": ["res", "carne molida", "bistec", "filete", "churrasco", "vaca", "picadillo", "carne de res"],
-        "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "tilapia", "filete de pescado"],
-        "atún": ["atún", "atun"],
-        "huevos": ["huevos", "huevo", "tortilla", "revoltillo"],
-        "queso de freír": ["queso de freír", "queso de freir", "queso frito", "queso de hoja"],
-        "salami dominicano": ["salami dominicano", "salami", "salchichón"],
-        "camarones": ["camarones", "camarón", "camaron"],
-        "chuleta": ["chuleta", "chuletas", "chuleta frita", "chuleta al horno"],
-        "longaniza": ["longaniza", "longanizas"],
-        "berenjena": ["berenjena", "berenjenas", "berenjena rellena"],
-        "habichuelas rojas": ["habichuelas rojas", "frijoles rojos", "habichuela roja"],
-        "habichuelas negras": ["habichuelas negras", "frijoles negros", "habichuela negra"],
-        "gandules": ["gandules", "guandules", "gandul", "guandul"],
-        "lentejas": ["lentejas", "lenteja"],
-        "garbanzos": ["garbanzos", "garbanzo"],
-        "soya/tofu": ["soya", "tofu", "carne de soya"]
-    }
-    
-    carb_synonyms = {
-        "plátano verde": ["plátano verde", "platano verde", "mangú", "mangu", "tostones", "fritos verdes", "mangú de plátano", "mangu de platano"],
-        "plátano maduro": ["plátano maduro", "platano maduro", "maduros", "plátano al caldero", "fritos maduros"],
-        "yuca": ["yuca", "casabe", "arepitas de yuca", "puré de yuca"],
-        "arroz blanco": ["arroz blanco", "arroz"],
-        "arroz integral": ["arroz integral"],
-        "avena": ["avena", "avena en hojuelas", "overnight oats"],
-        "pan integral": ["pan integral", "pan", "tostada integral", "tostada"],
-        "papas": ["papas", "papa", "puré de papas", "papa hervida"],
-        "guineítos verdes": ["guineítos", "guineitos", "guineos verdes", "guineito verde", "guineitos verdes"],
-        "ñame": ["ñame", "name", "ñame hervido"],
-        "yautía": ["yautía", "yautia", "yautía hervida"],
-        "batata": ["batata", "puré de batata", "batata hervida", "boniato"]
-    }
-    
-    # 1. Contar frecuencia de uso (FUENTE DUAL: texto del chat + JSON real de planes)
     protein_freq = {}
     carb_freq = {}
+    veggie_freq = {}
     
-    # Fuente A: Análisis de texto libre (historial de chat)
-    for p in filtered_proteins:
-        syns = protein_synonyms.get(p.lower(), [p.lower()])
-        count = 0
-        for syn in syns:
-            syn_normalized = strip_accents(syn.lower())
-            count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-        protein_freq[p] = count
-                
-    for c in filtered_carbs:
-        syns = carb_synonyms.get(c.lower(), [c.lower()])
-        count = 0
-        for syn in syns:
-            syn_normalized = strip_accents(syn.lower())
-            count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-        carb_freq[c] = count
-    
-    # Fuente B: Análisis directo del JSON de planes guardados (más preciso)
-    if user_id:
+    db_freq_map = {}
+    if user_id and user_id != "guest":
         try:
-            from db import get_ingredient_frequencies_from_plans
-            raw_ingredients = get_ingredient_frequencies_from_plans(user_id, limit=5)
-            if raw_ingredients:
-                # Normalizar todos los ingredientes crudos del JSON
-                ingredients_blob = strip_accents(" ".join(raw_ingredients).lower())
-                
-                for p in filtered_proteins:
-                    syns = protein_synonyms.get(p.lower(), [p.lower()])
-                    json_count = 0
-                    for syn in syns:
-                        syn_normalized = strip_accents(syn.lower())
-                        json_count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', ingredients_blob))
-                    protein_freq[p] = protein_freq.get(p, 0) + json_count
-                
-                for c in filtered_carbs:
-                    syns = carb_synonyms.get(c.lower(), [c.lower()])
-                    json_count = 0
-                    for syn in syns:
-                        syn_normalized = strip_accents(syn.lower())
-                        json_count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', ingredients_blob))
-                    carb_freq[c] = carb_freq.get(c, 0) + json_count
-                    
-                print(f"📊 [ANTI MODE-COLLAPSE] Ingredientes JSON analizados: {len(raw_ingredients)} items de {5} planes")
+            from db import get_user_ingredient_frequencies
+            db_freq_map = get_user_ingredient_frequencies(user_id)
         except Exception as e:
-            print(f"⚠️ [ANTI MODE-COLLAPSE] Error analizando JSON de planes: {e}")
-    
+            print(f"⚠️ [ANTI MODE-COLLAPSE] Error obteniendo frecuencias de DB: {e}")
+            
+    if db_freq_map:
+        # ======= NUEVO FLUJO OPTIMIZADO O(1) =======
+        print(f"⚡ [ANTI MODE-COLLAPSE] Usando Hash Map O(1) de DB con {len(db_freq_map)} métricas pre-calculadas.")
+        for p in filtered_proteins:
+            syns = protein_synonyms.get(p.lower(), [p.lower()])
+            protein_freq[p] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
+        for c in filtered_carbs:
+            syns = carb_synonyms.get(c.lower(), [c.lower()])
+            carb_freq[c] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
+        for v in filtered_veggies:
+            syns = veggie_fat_synonyms.get(v.lower(), [v.lower()])
+            veggie_freq[v] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
+    else:
+        # ======= FALLBACK: Regex en Runtime (O(n×m)) para Invitados =======
+        print(f"⚠️ [ANTI MODE-COLLAPSE] Fallback Regex en runtime usado para guest o sin historial.")
+        for p in filtered_proteins:
+            syns = protein_synonyms.get(p.lower(), [p.lower()])
+            count = 0
+            for syn in syns:
+                syn_normalized = strip_accents(syn.lower())
+                count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
+            protein_freq[p] = count
+                
+        for c in filtered_carbs:
+            syns = carb_synonyms.get(c.lower(), [c.lower()])
+            count = 0
+            for syn in syns:
+                syn_normalized = strip_accents(syn.lower())
+                count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
+            carb_freq[c] = count
+            
+        for v in filtered_veggies:
+            syns = veggie_fat_synonyms.get(v.lower(), [v.lower()])
+            count = 0
+            for syn in syns:
+                syn_normalized = strip_accents(syn.lower())
+                count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
+            veggie_freq[v] = count
+
     used_proteins = [p for p, freq in protein_freq.items() if freq > 0]
     used_carbs = [c for c, freq in carb_freq.items() if freq > 0]
+    used_veggies = [v for v, freq in veggie_freq.items() if freq > 0]
     
     # 2. Filtrar catálogo (si quedan muy pocos, usamos todos revertiendo el filtro)
     available_proteins = [p for p in filtered_proteins if p not in used_proteins]
@@ -213,6 +179,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     available_carbs = [c for c in filtered_carbs if c not in used_carbs]
     if len(available_carbs) < 3:
         available_carbs = filtered_carbs.copy()
+        
+    available_veggies = [v for v in filtered_veggies if v not in used_veggies]
+    if len(available_veggies) < 3:
+        available_veggies = filtered_veggies.copy()
     
     # Guard clause: si las restricciones eliminaron TODOS los ingredientes
     # (ej: vegano con muchas alergias), dejar libertad total al LLM
@@ -224,6 +194,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos
     num_proteins_to_pick = min(3, len(available_proteins))
     num_carbs_to_pick = min(3, len(available_carbs))
+    num_veggies_to_pick = min(3, len(available_veggies))
     
     # Calcular pesos inversos (freq 0 → peso alto, freq 5 → peso bajo)
     max_pf = max(protein_freq.get(p, 0) for p in available_proteins) + 1
@@ -231,6 +202,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     
     max_cf = max(carb_freq.get(c, 0) for c in available_carbs) + 1
     carb_weights = [max_cf - carb_freq.get(c, 0) for c in available_carbs]
+    
+    max_vf = max(veggie_freq.get(v, 0) for v in available_veggies) + 1
+    veggie_weights = [max_vf - veggie_freq.get(v, 0) for v in available_veggies]
     
     # random.choices puede dar duplicados, así que aseguramos unicidad
     unique_proteins = []
@@ -246,8 +220,15 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         pick = random.choices([x[0] for x in _pool_c], weights=[x[1] for x in _pool_c], k=1)[0]
         unique_carbs.append(pick)
         _pool_c = [(c, w) for c, w in _pool_c if c != pick]
+        
+    unique_veggies = []
+    _pool_v = list(zip(available_veggies, veggie_weights))
+    while len(unique_veggies) < num_veggies_to_pick and _pool_v:
+        pick = random.choices([x[0] for x in _pool_v], weights=[x[1] for x in _pool_v], k=1)[0]
+        unique_veggies.append(pick)
+        _pool_v = [(v, w) for v, w in _pool_v if v != pick]
     
-    # Cada día recibe una proteína y un carbohidrato únicos (sin repeticiones entre días)
+    # Cada día recibe una proteína, un carbohidrato, y un vegetal únicos (sin repeticiones entre días)
     # Si no se pudieron elegir 3 (pool muy pequeño tras filtros), rellenamos ciclando lo que hay
     _base_proteins = list(unique_proteins)
     while len(unique_proteins) < 3:
@@ -255,27 +236,33 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     _base_carbs = list(unique_carbs)
     while len(unique_carbs) < 3:
         unique_carbs.append(_base_carbs[len(unique_carbs) % len(_base_carbs)])
+    _base_veggies = list(unique_veggies)
+    while len(unique_veggies) < 3:
+        unique_veggies.append(_base_veggies[len(unique_veggies) % len(_base_veggies)])
     
     chosen_proteins = unique_proteins[:3]
     chosen_carbs = unique_carbs[:3]
+    chosen_veggies = unique_veggies[:3]
     
     # Mezclamos para que el orden de los días sea dinámico
     random.shuffle(chosen_proteins)
     random.shuffle(chosen_carbs)
+    random.shuffle(chosen_veggies)
     
     blocked_text = ""
-    if used_proteins or used_carbs:
-        blocked_items = used_proteins + used_carbs
+    if used_proteins or used_carbs or used_veggies:
+        blocked_items = used_proteins + used_carbs + used_veggies
         blocked_text = f"🚫 BLOQUEO MATEMÁTICO: Quedan ESTRICTAMENTE PROHIBIDOS como base principal (porque el usuario ya comió mucho de esto): {', '.join(blocked_items)}."
         
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
-        protein_0=chosen_proteins[0], carb_0=chosen_carbs[0],
-        protein_1=chosen_proteins[1], carb_1=chosen_carbs[1],
-        protein_2=chosen_proteins[2], carb_2=chosen_carbs[2],
+        protein_0=chosen_proteins[0], carb_0=chosen_carbs[0], veggie_0=chosen_veggies[0],
+        protein_1=chosen_proteins[1], carb_1=chosen_carbs[1], veggie_1=chosen_veggies[1],
+        protein_2=chosen_proteins[2], carb_2=chosen_carbs[2], veggie_2=chosen_veggies[2],
         blocked_text=blocked_text
     )
     print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas (1 distinta por día): {chosen_proteins}")
     print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (1 distinto por día): {chosen_carbs}")
+    print(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (1 distinto por día): {chosen_veggies}")
     return prompt
 
 
@@ -327,21 +314,9 @@ def swap_meal(form_data: dict):
                     raw_ingredients = get_ingredient_frequencies_from_plans(user_id, limit=5)
                     if raw_ingredients:
                         ingredients_blob = strip_accents(" ".join(raw_ingredients).lower())
-                        protein_synonyms_local = {
-                            "pollo": ["pollo", "pechuga", "muslo"], "cerdo": ["cerdo", "masita", "pernil"],
-                            "res": ["res", "carne molida", "bistec", "churrasco"], "pescado": ["pescado", "salmón", "tilapia"],
-                            "atún": ["atún", "atun"], "huevos": ["huevos", "huevo", "revoltillo"],
-                            "camarones": ["camarones", "camarón"], "chuleta": ["chuleta"],
-                            "longaniza": ["longaniza"], "berenjena": ["berenjena"],
-                            "habichuelas rojas": ["habichuelas rojas", "frijoles rojos"],
-                            "habichuelas negras": ["habichuelas negras", "frijoles negros"],
-                            "gandules": ["gandules", "guandules"], "lentejas": ["lentejas"],
-                            "garbanzos": ["garbanzos"], "soya/tofu": ["soya", "tofu"],
-                            "salami dominicano": ["salami"], "queso de freír": ["queso de freír", "queso frito"],
-                        }
                         freq = {}
                         for p in available_for_swap:
-                            syns = protein_synonyms_local.get(p.lower(), [p.lower()])
+                            syns = protein_synonyms.get(p.lower(), [p.lower()])
                             count = 0
                             for syn in syns:
                                 syn_n = strip_accents(syn.lower())
