@@ -224,12 +224,18 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             # Filtrar: solo trackear ingredientes que resolvieron a un término base conocido.
             # Esto evita que condimentos/hierbas (cilantro, orégano, ajo) polucionen la tabla.
             canonical = [n for n in normalized if n and n in canonical_bases]
-            skipped = len([n for n in normalized if n]) - len(canonical)
+            non_canonical = [n for n in normalized if n and n not in canonical_bases]
             
             if canonical:
                 increment_ingredient_frequencies(user_id, canonical)
-            if skipped > 0:
-                print(f"🧹 [FREQ TRACKING] {skipped} ingredientes no-canónicos filtrados (condimentos/hierbas)")
+            
+            # 2b. Loguear ingredientes no reconocidos para revisión y expansión del catálogo
+            if non_canonical:
+                from db import log_unknown_ingredients
+                raw_map = {normalize_ingredient_for_tracking(r): r for r in raw_ingredients if r}
+                log_unknown_ingredients(user_id, non_canonical, raw_map)
+                print(f"🧹 [FREQ TRACKING] {len(non_canonical)} ingredientes no-canónicos logueados para revisión")
+                
             print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
             
     except Exception as e:
@@ -257,6 +263,10 @@ def _process_swap_rejection_background(session_id: str, user_id: str, rejected_m
             
             insert_rejection(rejection_record)
             print(f"💾 [DB BACKGROUND] Rechazo temporal guardado para {rejected_meal}")
+            
+            # Fricción Silenciosa: Validar si la base ya se rechazó 3 veces
+            from db import track_meal_friction
+            track_meal_friction(user_id, session_id, rejected_meal)
     except Exception as e:
         print(f"⚠️ [BACKGROUND ERROR] Error procesando swap rejection: {e}")
 
@@ -276,13 +286,9 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
         
-        # 👇 NUEVO: Mover logueos DB a Background Tasks
+        # 👇 NUEVO: Mover logueos DB a Background Tasks (incluye fricción silenciosa)
         if rejected_meal:
             background_tasks.add_task(_process_swap_rejection_background, session_id, user_id, rejected_meal, meal_type)
-            
-            # Fricción Silenciosa: Validar si la base ya se rechazó 3 veces
-            from db import track_meal_friction
-            track_meal_friction(user_id, session_id, rejected_meal)
             
         if user_id and user_id != "guest":
             log_api_usage(user_id, "gemini_swap_meal")

@@ -197,7 +197,9 @@ Estos son datos críticos que debes respetar.
             "Al Vapor con Finas Hierbas"
         ],
         "fusión": [
-            "Estilo Fusión Criolla"
+            "Estilo Fusión Criolla",
+            "Estilo Bowl/Poke Tropical",
+            "Wrap o Burrito Dominicano"
         ]
     }
     # Lista plana para compatibilidad con persistencia y frecuencias
@@ -209,17 +211,33 @@ Estos son datos críticos que debes respetar.
         for t in techs:
             _tech_to_family[t] = family
     
-    # Query estructurado contra la DB para contar frecuencia de cada técnica
+    # Query estructurado contra la DB para contar frecuencia de cada técnica CON decaimiento temporal
     technique_freq = {}
     if _uid:
         try:
             from db import get_recent_techniques
+            from datetime import datetime, timezone
             recent_techs = get_recent_techniques(_uid, limit=6)
-            # Construir mapa de frecuencia: cuántas veces apareció cada técnica
-            for t in recent_techs:
-                technique_freq[t] = technique_freq.get(t, 0) + 1
+            # Construir mapa de frecuencia con decaimiento: 0.9^days_elapsed
+            now = datetime.now(timezone.utc)
+            decay_factor = 0.9
+            for t, created_at_str in recent_techs:
+                days_elapsed = 0
+                if created_at_str:
+                    try:
+                        if created_at_str.endswith("Z"):
+                            dt = datetime.fromisoformat(created_at_str[:-1]).replace(tzinfo=timezone.utc)
+                        else:
+                            dt = datetime.fromisoformat(created_at_str)
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                        days_elapsed = max(0, (now - dt).days)
+                    except Exception:
+                        pass
+                decayed_weight = decay_factor ** days_elapsed  # 1.0 hoy, 0.9 ayer, 0.81 antier...
+                technique_freq[t] = technique_freq.get(t, 0) + decayed_weight
             if technique_freq:
-                print(f"🔍 [TÉCNICAS] Frecuencias recientes: {technique_freq}")
+                print(f"🔍 [TÉCNICAS] Frecuencias con decaimiento temporal: { {k: round(v, 2) for k, v in technique_freq.items()} }")
         except Exception as e:
             print(f"⚠️ [TÉCNICAS] Error consultando DB, usando pesos uniformes: {e}")
     
@@ -484,6 +502,38 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         print(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados: {repeated_meals}")
                     else:
                         print(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_meal_names)} platos recientes.")
+            else:
+                # Fallback para guests: validar contra el history_context in-memory
+                history_ctx = state.get("history_context", "") if isinstance(state, dict) else ""
+                if history_ctx and days:
+                    import concurrent.futures
+                    from cpu_tasks import _validar_repeticiones_cpu_bound, _normalize_meal_name
+                    import re as _re
+                    # Extraer nombres de platos del history_context usando patrón común
+                    # Los planes en history usan formato: "- NombrePlato" o "name: NombrePlato"
+                    guest_recent = []
+                    for line in history_ctx.split("\n"):
+                        line = line.strip()
+                        if line.startswith("- ") and len(line) > 5 and not line[2:].strip().startswith("["):
+                            candidate = line[2:].strip()
+                            # Filtrar líneas que parecen ingredientes (contienen cantidades)
+                            if not _re.match(r'^\d', candidate) and len(candidate.split()) <= 8:
+                                guest_recent.append(candidate)
+                    if guest_recent:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                            future = executor.submit(
+                                _validar_repeticiones_cpu_bound,
+                                guest_recent,
+                                days
+                            )
+                            repeated_meals = future.result()
+                        if len(repeated_meals) > 0:
+                            approved = False
+                            issues.append(
+                                f"REPETICIÓN DETECTADA (Guest): {', '.join(repeated_meals)}. Regenerar con variantes diferentes."
+                            )
+                            severity = "minor"
+                            print(f"🔄 [ANTI-REPETICIÓN GUEST] {len(repeated_meals)} platos repetidos detectados")
         except Exception as e:
             print(f"⚠️ [ANTI-REPETICIÓN] Error en validación (no bloqueante): {e}")
     

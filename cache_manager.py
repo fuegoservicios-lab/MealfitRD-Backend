@@ -3,6 +3,7 @@ import json
 import hashlib
 import functools
 import threading
+import time as _time_mod
 
 # Intentar importar redis
 try:
@@ -24,14 +25,14 @@ except Exception as e:
     redis_client = None
     print(f"⚠️ [CACHE] Error conectando a Redis, se usará caché local: {e}")
 
-# Fallback local cache (LRU artesanal simple)
+# Fallback local cache (LRU artesanal simple CON TTL real)
 _local_cache = {}
 _cache_lock = threading.Lock()
 
 def centralized_cache(ttl_seconds=3600, maxsize=1000):
     """
     Decorador que intenta usar Redis (distribuido y compartido entre workers).
-    Si Redis no está configurado, hace fallback a una caché local en memoria.
+    Si Redis no está configurado, hace fallback a una caché local en memoria CON TTL real.
     Asume que los argumentos y el valor de retorno de la función decorada
     son 100% serializables a JSON.
     """
@@ -59,13 +60,16 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
                 except Exception as e:
                     print(f"⚠️ [CACHE] Error Leyendo de Redis para {cache_key}: {e}")
             
-            # 3. Intentar buscar en Local Cache (Fallback)
+            # 3. Intentar buscar en Local Cache (Fallback CON TTL real)
             else:
                 with _cache_lock:
                     if cache_key in _local_cache:
-                        # Aunque sea un diccionario eterno sin un TTL estricto cronológico,
-                        # protegemos contra desbordamiento con maxsize.
-                        return _local_cache[cache_key]
+                        stored_time, stored_value = _local_cache[cache_key]
+                        if (_time_mod.time() - stored_time) < ttl_seconds:
+                            return stored_value
+                        else:
+                            # TTL expirado → eliminar y tratar como cache miss
+                            del _local_cache[cache_key]
 
             # 4. Cache Miss: Ejecutar función pesada original
             result = func(*args, **kwargs)
@@ -78,13 +82,14 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
                     print(f"⚠️ [CACHE] Error Escribiendo a Redis para {cache_key}: {e}")
             else:
                 with _cache_lock:
-                    _local_cache[cache_key] = result
+                    _local_cache[cache_key] = (_time_mod.time(), result)
                     # Lógica LRU pobre (Evicción completa si pasa el maxsize para no tumbar la RAM)
                     if len(_local_cache) > maxsize:
                         _local_cache.clear()
-                        _local_cache[cache_key] = result
+                        _local_cache[cache_key] = (_time_mod.time(), result)
                         print("🧹 [CACHE LOCAL] Limpieza de caché local forzada (capacidad alcanzada).")
                         
             return result
         return wrapper
     return decorator
+

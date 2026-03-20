@@ -27,7 +27,7 @@ if SUPABASE_DB_URL:
 
 # Pre-computar mapa de sinónimos sin acentos para track_meal_friction() (O(1) por llamada)
 import unicodedata as _uc
-from constants import GLOBAL_REVERSE_MAP as _GLOBAL_REVERSE_MAP
+from constants import GLOBAL_REVERSE_MAP as _GLOBAL_REVERSE_MAP, strip_accents as _strip_accents_canonical
 _ACCENT_SAFE_REVERSE_MAP = {
     ''.join(c for c in _uc.normalize('NFD', k) if _uc.category(c) != 'Mn'): v
     for k, v in _GLOBAL_REVERSE_MAP.items()
@@ -744,21 +744,22 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
 
 def get_recent_techniques(user_id: str, limit: int = 5) -> list:
     """Obtiene las técnicas de cocción usadas en planes recientes desde la columna `techniques` (text[]).
-    Retorna una lista plana de strings, ej: ['Horneado Saludable', 'Al Vapor con Finas Hierbas'].
+    Retorna una lista de tuplas (technique, created_at) para que el caller pueda aplicar decaimiento temporal.
+    Ejemplo: [('Horneado Saludable', '2026-03-18T...'), ('Al Vapor', '2026-03-15T...')]
     """
     if not supabase or not user_id or user_id == "guest": return []
     try:
-        res = supabase.table("meal_plans").select("techniques").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
-        # Retornar lista plana CON duplicados para que el caller pueda contar frecuencias.
-        # Ejemplo: ['Horneado', 'Al Vapor', 'Horneado'] → freq = {Horneado: 2, Al Vapor: 1}
+        res = supabase.table("meal_plans").select("techniques, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        # Retornar lista de tuplas CON duplicados y timestamps para decaimiento temporal.
         techniques = []
         if res.data:
             for row in res.data:
                 techs = row.get("techniques")
+                created_at = row.get("created_at", "")
                 if techs and isinstance(techs, list):
                     for t in techs:
                         if t:
-                            techniques.append(t)
+                            techniques.append((t, created_at))
         return techniques
     except Exception as e:
         error_msg = str(e)
@@ -1006,10 +1007,8 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     
     from agent import DOMINICAN_PROTEINS
     from constants import GLOBAL_REVERSE_MAP
-    import unicodedata
     
-    def _strip_accents(s: str) -> str:
-        return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    _strip_accents = _strip_accents_canonical
     
     # Usar el mapa pre-computado a nivel de módulo (O(1)) en vez de reconstruirlo por llamada.
     # Crear versión sin acentos para matching robusto
@@ -1178,6 +1177,49 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         return False
 
 
+def log_unknown_ingredients(user_id: str, unknown_ings: list, raw_map: dict = None):
+    """Loguea ingredientes que el LLM genera pero que el sistema de sinónimos no reconoce.
+    Se guardan en la tabla `unknown_ingredients` para revisión periódica y expansión del catálogo.
+    Usa RPC atómico con fallback a upsert clásico.
+    """
+    if not supabase or not user_id or user_id == "guest" or not unknown_ings:
+        return
+    
+    try:
+        for ing in unknown_ings[:20]:  # Cap a 20 por plan para no saturar
+            raw_text = raw_map.get(ing, "") if raw_map else ""
+            try:
+                # Intentar RPC atómico
+                supabase.rpc("log_unknown_ingredient_rpc", {
+                    "p_user_id": user_id,
+                    "p_ingredient": ing,
+                    "p_raw_text": raw_text or None
+                }).execute()
+            except Exception as rpc_e:
+                err = str(rpc_e)
+                if "Could not find the function" in err or "PGRST202" in err or "unknown_ingredients" in err:
+                    # RPC o tabla no desplegados aún → silenciar
+                    return
+                # Fallback: upsert directo
+                try:
+                    from datetime import datetime
+                    supabase.table("unknown_ingredients").upsert({
+                        "user_id": user_id,
+                        "ingredient": ing,
+                        "raw_text": raw_text or None,
+                        "occurrences": 1,
+                        "last_seen": datetime.utcnow().isoformat()
+                    }, on_conflict="user_id,ingredient").execute()
+                except Exception as fb_e:
+                    if "unknown_ingredients" in str(fb_e) or "PGRST205" in str(fb_e):
+                        return  # Tabla no existe aún → silenciar
+                    print(f"⚠️ [UNKNOWN ING] Error en fallback: {fb_e}")
+                    return
+        
+        print(f"📝 [UNKNOWN ING] {len(unknown_ings)} ingredientes no reconocidos logueados para revisión")
+    except Exception as e:
+        print(f"⚠️ [UNKNOWN ING] Error logueando ingredientes desconocidos: {e}")
+
 def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
     """Incrementa la frecuencia histórica de los ingredientes consumidos por un usuario.
     Intenta usar un RPC atómico O(1) robusto ante Race Conditions,
@@ -1186,12 +1228,10 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
     if not supabase or not user_id or user_id == "guest": return
     
     try:
-        import unicodedata
         from collections import Counter
         from datetime import datetime
         
-        def strip_accents(s):
-            return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+        strip_accents = _strip_accents_canonical
             
         normalized_ings = [strip_accents(i.lower()).strip() for i in ingredients if i]
         if not normalized_ings: return

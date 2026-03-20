@@ -6,8 +6,7 @@ import json
 import re
 import unicodedata
 
-def strip_accents(s: str) -> str:
-    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+from constants import strip_accents
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -206,14 +205,24 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # 3. Restricción para Variedad y Costo: Elegir proteínas y carbohidratos base para rotarlos.
     # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos.
     #
-    # 🏷️ FEATURE FLAG INTERNO: variety_level
+    # 🏷️ FEATURE FLAG: variety_level (ahora expuesto al frontend)
     #   - "standard" (default): 2 proteínas + 2 carbos → optimizado para costo de supermercado.
     #   - "max": 3 proteínas + 3 carbos → máxima variedad (1 distinto por día).
-    #   Actualmente NO expuesto en el frontend. Para activarlo manualmente, enviar
-    #   form_data.variety_level = "max" desde el cliente o forzar aquí el default.
-    #   Futuro: exponer como toggle en Settings del usuario.
+    #   Prioridad: form_data > health_profile en DB > "standard"
+    #   Frontend: exponer como toggle en Settings del usuario con key "variety_level".
     skip_lunch = form_data.get("skipLunch", False) if form_data else False
-    variety_level = form_data.get("variety_level", "standard") if form_data else "standard"
+    variety_level = form_data.get("variety_level", "") if form_data else ""
+    
+    # Si no viene en form_data, intentar leer del perfil persistido en DB
+    if not variety_level and user_id and user_id != "guest":
+        try:
+            profile = get_user_profile(user_id)
+            if profile:
+                hp = profile.get("health_profile") or {}
+                variety_level = hp.get("variety_level", "standard")
+        except Exception:
+            pass
+    variety_level = variety_level or "standard"
     
     if skip_lunch:
         num_proteins_to_pick = min(1, len(available_proteins))  # 1 proteína (solo Cena la necesita fuerte)

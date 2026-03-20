@@ -29,7 +29,7 @@ PROTEIN_SYNONYMS = {
     "gandules": ["gandules", "guandules", "gandul", "guandul"],
     "lentejas": ["lentejas", "lenteja"],
     "garbanzos": ["garbanzos", "garbanzo"],
-    "soya/tofu": ["soya", "tofu", "carne de soya"]
+    "soya/tofu": ["soya/tofu", "soya", "tofu", "carne de soya"]
 }
 
 CARB_SYNONYMS = {
@@ -41,7 +41,7 @@ CARB_SYNONYMS = {
     "avena": ["avena", "avena en hojuelas", "overnight oats"],
     "pan integral": ["pan integral", "pan", "tostada integral", "tostada"],
     "papas": ["papas", "papa", "puré de papas", "papa hervida"],
-    "guineítos verdes": ["guineítos", "guineitos", "guineos verdes", "guineito verde", "guineitos verdes"],
+    "guineítos verdes": ["guineítos verdes", "guineítos", "guineitos", "guineos verdes", "guineito verde", "guineitos verdes"],
     "ñame": ["ñame", "name", "ñame hervido"],
     "yautía": ["yautía", "yautia", "yautía hervida"],
     "batata": ["batata", "puré de batata", "batata hervida", "boniato"]
@@ -68,7 +68,7 @@ VEGGIE_FAT_SYNONYMS = {
     "cebolla": ["cebolla", "cebollas"],
     "ajíes": ["ajíes", "ají", "pimientos", "pimiento"],
     "aceite de oliva": ["aceite de oliva", "aceite verde"],
-    "nueces/almendras": ["nueces", "almendras", "maní"]
+    "nueces/almendras": ["nueces/almendras", "nueces", "almendras", "maní"]
 }
 
 DOMINICAN_FRUITS = [
@@ -117,6 +117,11 @@ def apply_synonyms(text: str) -> str:
     return text
 
 import unicodedata
+
+def strip_accents(s: str) -> str:
+    """Remueve acentos de un string para comparaciones normalizadas.
+    Esta es la definición CANÓNICA. Importar desde aquí en todos los módulos."""
+    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
 # Regex pre-compilado para stripear cantidades/unidades al inicio de un string de ingrediente.
 # Captura patrones como: "200g", "1/2", "3 cdas", "1 lb", "2 tazas de", "100 ml de", etc.

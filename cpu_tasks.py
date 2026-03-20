@@ -1,10 +1,7 @@
 import re
 import unicodedata
 import difflib
-
-def strip_accents(s: str) -> str:
-    """Remueve acentos de un string para comparaciones normalizadas."""
-    return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+from constants import strip_accents, _QUANTITY_PATTERN
 
 def _calcular_frecuencias_regex_cpu_bound(
     history_normalized, 
@@ -61,9 +58,12 @@ def _normalize_meal_name(s: str) -> str:
     """
     Normaliza NOMBRES DE PLATOS para anti-repetición (Jaccard/SequenceMatcher).
     Preserva técnicas de cocción pero elimina stopwords largas para que Jaccard se enfoque.
+    También stripea cantidades/unidades para evitar falsos negativos (ej: "200g Pollo" vs "Pollo").
     """
     s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
     s = s.lower()
+    # Stripear cantidades/unidades del inicio (ej: "200g", "1/2 lb de")
+    s = _QUANTITY_PATTERN.sub('', s).strip()
     s = re.sub(r'\b(con|de|y|al|a|la|el|en|las|los|del|para|por|tipo|estilo)\b', '', s)
     return re.sub(r'\s+', ' ', s).strip()
 
