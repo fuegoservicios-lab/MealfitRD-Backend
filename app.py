@@ -214,13 +214,23 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                     raise try_db_e
             print(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
             
-        # 2. Track Frequencies (con normalización para que las keys coincidan con los sinónimos)
+        # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad)
         if raw_ingredients:
-            from constants import normalize_ingredient_for_tracking
+            from constants import normalize_ingredient_for_tracking, GLOBAL_REVERSE_MAP
+            # Conjunto de términos base canónicos (ej: "pollo", "platano verde", "aguacate")
+            canonical_bases = set(GLOBAL_REVERSE_MAP.values())
+            
             normalized = [normalize_ingredient_for_tracking(ing) for ing in raw_ingredients]
-            normalized = [n for n in normalized if n]  # Filtrar vacíos
-            increment_ingredient_frequencies(user_id, normalized)
-            print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(normalized)} ingredientes normalizados)")
+            # Filtrar: solo trackear ingredientes que resolvieron a un término base conocido.
+            # Esto evita que condimentos/hierbas (cilantro, orégano, ajo) polucionen la tabla.
+            canonical = [n for n in normalized if n and n in canonical_bases]
+            skipped = len([n for n in normalized if n]) - len(canonical)
+            
+            if canonical:
+                increment_ingredient_frequencies(user_id, canonical)
+            if skipped > 0:
+                print(f"🧹 [FREQ TRACKING] {skipped} ingredientes no-canónicos filtrados (condimentos/hierbas)")
+            print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
             
     except Exception as e:
         print(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")

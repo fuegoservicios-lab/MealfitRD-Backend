@@ -198,9 +198,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     
     # 2. Construir pools de candidatos con Penalización Suave (Soft Penalty)
     # En vez de un reset total cuando quedan pocos, SIEMPRE usamos toda la lista filtrada
-    # pero penalizamos los ya usados con un multiplicador ×0.1 (10x menos probable).
+    # pero ponderamos inversamente por frecuencia: 1/(freq+1).
     # Esto evita la desincronización entre available_* y *_freq que causaba contradicciones.
-    USED_PENALTY = 0.1  # Los ingredientes ya usados tienen 10x menos probabilidad
+
     
     available_proteins = list(filtered_proteins)
     available_carbs = list(filtered_carbs)
@@ -215,48 +215,37 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         
     # 3. Restricción para Variedad y Costo: Elegir proteínas y carbohidratos base para rotarlos.
     # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos
-    # Si skipLunch está activo (solo 3 comidas: Desayuno, Merienda, Cena), reducimos picks
-    # para evitar forzar combinaciones extrañas (ej: res de desayuno).
+    # variety_level configurable: "max" = 3 proteínas/carbos distintos (máxima variedad),
+    # "standard" (default) = 2 proteínas/carbos (optimizado para costo de supermercado).
     skip_lunch = form_data.get("skipLunch", False) if form_data else False
+    variety_level = form_data.get("variety_level", "standard") if form_data else "standard"
     
     if skip_lunch:
         num_proteins_to_pick = min(1, len(available_proteins))  # 1 proteína (solo Cena la necesita fuerte)
         num_carbs_to_pick = min(2, len(available_carbs))         # 2 carbos (Desayuno y Cena)
         num_veggies_to_pick = min(2, len(available_veggies))     # 2 vegetales (menos comidas = menos variedad forzada)
         print(f"⚡ [ANTI MODE-COLLAPSE] skipLunch=true → distribución reducida (1P/2C/2V)")
+    elif variety_level == "max":
+        num_proteins_to_pick = min(3, len(available_proteins))   # 1 proteína distinta por día
+        num_carbs_to_pick = min(3, len(available_carbs))         # 1 carb distinto por día
+        num_veggies_to_pick = min(3, len(available_veggies))
+        print(f"🎯 [ANTI MODE-COLLAPSE] variety_level=max → distribución máxima (3P/3C/3V)")
     else:
         num_proteins_to_pick = min(2, len(available_proteins))
         num_carbs_to_pick = min(2, len(available_carbs))
         num_veggies_to_pick = min(3, len(available_veggies))
     num_fruits_to_pick = min(1, len(available_fruits)) if available_fruits else 0
     
-    # Calcular pesos inversos con penalización suave para ingredientes ya usados
-    # freq 0 → peso alto (nunca usado = máxima prioridad)
-    # freq > 0 → peso inverso × USED_PENALTY (ya usado = 10x menos probable, pero NO imposible)
-    max_pf = max(protein_freq.get(p, 0) for p in available_proteins) + 1
-    protein_weights = []
-    for p in available_proteins:
-        base_weight = max_pf - protein_freq.get(p, 0)
-        protein_weights.append(base_weight * USED_PENALTY if protein_freq.get(p, 0) > 0 else base_weight)
-    
-    max_cf = max(carb_freq.get(c, 0) for c in available_carbs) + 1
-    carb_weights = []
-    for c in available_carbs:
-        base_weight = max_cf - carb_freq.get(c, 0)
-        carb_weights.append(base_weight * USED_PENALTY if carb_freq.get(c, 0) > 0 else base_weight)
-    
-    max_vf = max(veggie_freq.get(v, 0) for v in available_veggies) + 1
-    veggie_weights = []
-    for v in available_veggies:
-        base_weight = max_vf - veggie_freq.get(v, 0)
-        veggie_weights.append(base_weight * USED_PENALTY if veggie_freq.get(v, 0) > 0 else base_weight)
+    # Pesos inversos: ingredientes menos usados tienen más probabilidad de ser elegidos.
+    # Fórmula: 1 / (freq + 1)  →  freq 0 = peso 1.0, freq 1 = 0.5, freq 3 = 0.25, ...
+    # Esta fórmula da una penalización consistente e independiente del max_freq del dataset.
+    protein_weights = [1.0 / (protein_freq.get(p, 0) + 1) for p in available_proteins]
+    carb_weights = [1.0 / (carb_freq.get(c, 0) + 1) for c in available_carbs]
+    veggie_weights = [1.0 / (veggie_freq.get(v, 0) + 1) for v in available_veggies]
     
     fruit_weights = []
     if available_fruits:
-        max_ff = max(fruit_freq.get(f, 0) for f in available_fruits) + 1
-        for f in available_fruits:
-            base_weight = max_ff - fruit_freq.get(f, 0)
-            fruit_weights.append(base_weight * USED_PENALTY if fruit_freq.get(f, 0) > 0 else base_weight)
+        fruit_weights = [1.0 / (fruit_freq.get(f, 0) + 1) for f in available_fruits]
     
     # random.choices puede dar duplicados, así que aseguramos unicidad
     unique_proteins = []
@@ -334,7 +323,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             "fruit_0": chosen_fruits[0], "fruit_1": chosen_fruits[1], "fruit_2": chosen_fruits[2]
         }
     else:
-        fruit_params = {"fruit_0": "libertad creativa", "fruit_1": "libertad creativa", "fruit_2": "libertad creativa"}
+        _fallback_fruit = "elige la fruta dominicana que mejor combine con la preparación"
+        fruit_params = {"fruit_0": _fallback_fruit, "fruit_1": _fallback_fruit, "fruit_2": _fallback_fruit}
         
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
         protein_0=chosen_proteins[0], carb_0=chosen_carbs[0], veggie_0=chosen_veggies[0],

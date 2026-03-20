@@ -429,11 +429,15 @@ Responde ÚNICAMENTE con el JSON de revisión.
 
                 
                 def _normalize(s: str) -> str:
+                    """Normaliza NOMBRES DE PLATOS para anti-repetición (Jaccard/SequenceMatcher).
+                    
+                    ⚠️ DIFERENTE a constants.normalize_ingredient_for_tracking(), que colapsa
+                    sinónimos al ingrediente base (ej: "tostones" → "platano verde").
+                    Aquí preservamos las técnicas de cocción para poder distinguir
+                    "Pollo a la Plancha" de "Pollo Guisado" como platos diferentes.
+                    """
                     s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
                     s = s.lower()
-                    # NO usar apply_synonyms aquí: colapsa técnicas de cocción al ingrediente base
-                    # (ej: "tostones" → "platano verde", "mangu" → "platano verde")
-                    # lo que causa falsos positivos entre platos con mismo ingrediente pero diferente preparación.
                     # Solo eliminamos stopwords para comparar los tokens significativos.
                     s = re.sub(r'\b(con|de|y|al|a|la|el|en|las|los|del|para|por|tipo|estilo)\b', '', s)
                     return re.sub(r'\s+', ' ', s).strip()
@@ -472,7 +476,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                                         overlap1 = len(intersection) / len(new_tokens)
                                         overlap2 = len(intersection) / len(recent["tokens"])
                                         
-                                        if max(overlap1, overlap2) >= 0.8:
+                                        if max(overlap1, overlap2) >= 0.85:  # 0.85 para evitar falsos positivos entre platos con misma base pero técnica diferente
                                             is_repeated = True
                                             break
                                             

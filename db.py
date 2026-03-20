@@ -996,10 +996,18 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     
     from agent import DOMINICAN_PROTEINS
     from constants import get_reverse_synonyms_map
+    import unicodedata
+    
+    def _strip_accents(s: str) -> str:
+        return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
     
     reverse_map = get_reverse_synonyms_map()
+    # Crear versión sin acentos del reverse_map para matching robusto
+    # (el LLM no siempre preserva tildes: "platano" vs "plátano")
+    accent_safe_map = {_strip_accents(k): v for k, v in reverse_map.items()}
+    
     base_ingredient = None
-    lower_meal = rejected_meal.lower()
+    lower_meal = _strip_accents(rejected_meal.lower())
     
     # Resolver sinónimos con n-gramas (trigrams → bigrams → unigrams)
     # para detectar multipalabra como "carne molida" → "res", "queso de freír" → "queso de freír"
@@ -1009,8 +1017,8 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
             break
         for i in range(len(words) - n + 1):
             ngram = " ".join(words[i:i+n])
-            if ngram in reverse_map:
-                base_ingredient = reverse_map[ngram].capitalize()
+            if ngram in accent_safe_map:
+                base_ingredient = accent_safe_map[ngram].capitalize()
                 break
     
     # Fallback: búsqueda directa por nombre de proteína base
@@ -1148,6 +1156,10 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
                 print(f"⚠️ [DB] Aviso de RPC, recurriendo a fallback... Detalles: {rpc_e}")
 
         # 2. Fallback clásico: Leer estado actual y luego hacer upsert
+        # ⚠️ RACE CONDITION: Si dos requests concurrentes leen el mismo count antes de que
+        # cualquiera escriba, un incremento se pierde (lost update).
+        # En producción, desplegar el RPC `increment_ingredient_frequencies_rpc` en Supabase
+        # para garantizar atomicidad. Este fallback solo existe para desarrollo local.
         res = supabase.table("ingredient_frequencies").select("ingredient, count").eq("user_id", user_id).execute()
         current_map = {row["ingredient"]: row["count"] for row in res.data} if res.data else {}
         

@@ -143,6 +143,10 @@ def normalize_ingredient_for_tracking(raw: str) -> str:
             →  apply synonyms  →  "pollo"
     
     Retorna el término base canónico (ej: "pollo", "platano verde", "aguacate").
+    
+    ⚠️ DIFERENTE a graph_orchestrator._normalize(), que normaliza NOMBRES DE PLATOS
+    para anti-repetición y preserva las técnicas de cocción (ej: "plancha", "guisado")
+    para poder distinguir preparaciones diferentes del mismo ingrediente.
     """
     if not raw or not raw.strip():
         return ""
