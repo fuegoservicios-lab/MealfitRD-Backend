@@ -938,6 +938,25 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict):
 # LISTA DE COMPRAS CUSTOM (Items añadidos por la IA)
 # ============================================================
 
+# --- Lock por usuario para operaciones de shopping list ---
+# Previene race conditions cuando deduplicación, auto-generación
+# o purga se ejecutan concurrentemente para el mismo usuario.
+# RLock (reentrant) permite que un flujo externo (auto-generate)
+# adquiera el lock y llame a deduplicate_shopping_items internamente
+# sin deadlock, ya que ambos corren en el mismo thread.
+import threading as _threading
+
+_shopping_user_locks: dict = {}
+_shopping_meta_lock = _threading.Lock()
+
+def get_user_shopping_lock(user_id: str) -> _threading.RLock:
+    """Obtiene un RLock exclusivo por usuario para serializar
+    operaciones de shopping list que requieren atomicidad."""
+    with _shopping_meta_lock:
+        if user_id not in _shopping_user_locks:
+            _shopping_user_locks[user_id] = _threading.RLock()
+        return _shopping_user_locks[user_id]
+
 def add_custom_shopping_items(user_id: str, items: list, source: str = "manual"):
     """Inserta uno o más items custom a la lista de compras del usuario.
     source: 'auto' (IA auto-generados), 'chat' (añadidos vía chat), 'manual' (default/legacy)
@@ -1043,9 +1062,8 @@ def delete_auto_generated_shopping_items(user_id: str, exclude_ids: list = None)
         # 🚀 Borrado directo por columna source (O(1) con índice, sin parsear JSON)
         query = supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "auto")
         if exclude_ids:
-            # No borrar los items que acabamos de insertar
-            for eid in exclude_ids:
-                query = query.neq("id", eid)
+            # PostgREST NOT IN: 1 sola cláusula SQL vs N cláusulas neq encadenadas
+            query = query.not_.in_("id", exclude_ids)
         query.execute()
         return True
     except Exception as e:
@@ -1170,9 +1188,25 @@ def uncheck_all_shopping_items(user_id: str):
 def deduplicate_shopping_items(user_id: str):
     """Encuentra y fusiona items duplicados en la lista de compras del usuario.
     Agrupa por display_name normalizado. Suma cantidades numéricas cuando es posible.
-    Retorna el número de duplicados eliminados."""
+    Retorna el número de duplicados eliminados.
+    
+    Thread-safe: usa un RLock per-user para serializar el SELECT→process→DELETE/UPDATE
+    y evitar race conditions con auto-generación o purga concurrentes."""
     if not supabase: return {"removed": 0, "merged": []}
+    
+    lock = get_user_shopping_lock(user_id)
+    acquired = lock.acquire(timeout=10)
+    if not acquired:
+        print(f"⚠️ [DEDUP] Timeout adquiriendo lock para {user_id}. Otra operación en curso.")
+        return {"removed": 0, "merged": [], "error": "Deduplicación en curso para este usuario, intenta más tarde."}
+    
     import re, json as _json
+    try:
+        return _deduplicate_shopping_items_impl(user_id, re, _json)
+    finally:
+        lock.release()
+
+def _deduplicate_shopping_items_impl(user_id: str, re, _json):
     
     try:
         # Obtener todos los items del usuario

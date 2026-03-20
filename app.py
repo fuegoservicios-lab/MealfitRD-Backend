@@ -80,6 +80,38 @@ def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user
             
     return verified_user_id
 
+# --- Rate limiter ligero (in-memory, sliding window) ---
+# Zero dependencias extra. Para multi-worker (gunicorn), cada worker tiene su propio contador,
+# lo cual es aceptable (el rate real es N * max_calls). Para rate-limiting distribuido,
+# usar Redis + slowapi.
+import time as _time
+from collections import defaultdict as _defaultdict
+
+class RateLimiter:
+    """Sliding-window rate limiter como dependencia FastAPI reutilizable.
+    Uso: Depends(RateLimiter(max_calls=10, period_seconds=60))"""
+    def __init__(self, max_calls: int = 10, period_seconds: int = 60):
+        self.max_calls = max_calls
+        self.period = period_seconds
+        self._hits: dict = _defaultdict(list)  # user_id → [timestamps]
+
+    def __call__(self, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+        uid = verified_user_id or "anon"
+        now = _time.monotonic()
+        # Purga timestamps viejos (fuera de la ventana)
+        self._hits[uid] = [t for t in self._hits[uid] if now - t < self.period]
+        if len(self._hits[uid]) >= self.max_calls:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Demasiadas solicitudes. Máximo {self.max_calls} por {self.period}s. Intenta de nuevo en unos segundos."
+            )
+        self._hits[uid].append(now)
+        return verified_user_id
+
+# Instancias reutilizables para endpoints de shopping list
+_shopping_write_limiter = RateLimiter(max_calls=10, period_seconds=60)
+_shopping_autogen_limiter = RateLimiter(max_calls=5, period_seconds=60)
+
 # Setup CORS para el frontend React local
 app.add_middleware(
     CORSMiddleware,
@@ -255,17 +287,21 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                     from agent import generate_auto_shopping_list
                     items = generate_auto_shopping_list(plan_data)
                     if items:
-                        # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
-                        # Si el proceso muere entre INSERT y DELETE, el usuario tiene duplicados
-                        # (fácilmente deduplicables) en vez de perder toda su lista (irrecuperable).
-                        result = add_custom_shopping_items(user_id, items, source="auto")
-                        new_ids = [r.get("id") for r in result if r.get("id")] if result and isinstance(result, list) else []
-                        delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
-                        # 🧹 Auto-purga + deduplicación (consistente con /api/shopping/auto-generate)
-                        from db import purge_old_shopping_items, deduplicate_shopping_items
-                        purge_old_shopping_items(user_id)
-                        deduplicate_shopping_items(user_id)
-                        save_shopping_plan_hash(user_id, plan_hash)
+                        # 🔒 Lock per-user: serializa insert→delete→purge→dedup
+                        from db import get_user_shopping_lock
+                        shopping_lock = get_user_shopping_lock(user_id)
+                        with shopping_lock:
+                            # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
+                            # Si el proceso muere entre INSERT y DELETE, el usuario tiene duplicados
+                            # (fácilmente deduplicables) en vez de perder toda su lista (irrecuperable).
+                            result = add_custom_shopping_items(user_id, items, source="auto")
+                            new_ids = [r.get("id") for r in result if r.get("id")] if result and isinstance(result, list) else []
+                            delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
+                            # 🧹 Auto-purga + deduplicación (consistente con /api/shopping/auto-generate)
+                            from db import purge_old_shopping_items, deduplicate_shopping_items
+                            purge_old_shopping_items(user_id)
+                            deduplicate_shopping_items(user_id)
+                            save_shopping_plan_hash(user_id, plan_hash)
                         print(f"🛒 [BACKGROUND] Lista de compras auto-generada ({len(items)} items) para {user_id}")
                     else:
                         print(f"⚠️ [BACKGROUND] No se pudieron consolidar ingredientes para {user_id}")
@@ -389,10 +425,24 @@ def api_get_user_facts(user_id: str, verified_user_id: Optional[str] = Depends(g
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/user-facts/{fact_id}")
-def api_delete_user_fact(fact_id: str):
+def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     try:
+        if not verified_user_id:
+            raise HTTPException(status_code=401, detail="Token de autenticación requerido.")
+        
+        # Validación IDOR: verificar que el fact pertenece al usuario autenticado
+        from db import supabase
+        if supabase:
+            check = supabase.table("user_facts").select("user_id").eq("id", fact_id).execute()
+            if not check.data:
+                raise HTTPException(status_code=404, detail="Hecho no encontrado.")
+            if check.data[0].get("user_id") != verified_user_id:
+                raise HTTPException(status_code=403, detail="Prohibido. Este hecho no te pertenece.")
+        
         result = delete_user_fact(fact_id)
         return {"success": True, "message": "Hecho eliminado de la IA."}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/user-facts DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -796,7 +846,7 @@ def _save_visual_entry_background(user_id: str, image_url: str, description: str
         print("⚠️ No se pudo vectorizar la imagen. Abortando guardado.")
 
 @app.post("/api/shopping/auto-generate")
-def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = Depends(_shopping_autogen_limiter)):
     """Genera y guarda la lista de compras consolidada a partir del plan activo de 3 días.
     Usa cache por hash del plan: si el plan no cambió, retorna la lista existente sin llamar al LLM."""
     try:
@@ -847,30 +897,34 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
             
         from db import add_custom_shopping_items, delete_auto_generated_shopping_items, save_shopping_plan_hash
         
-        # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
-        # Insertar los nuevos items ANTES de borrar los viejos.
-        # Si el proceso muere entre el INSERT y el DELETE, el usuario tiene duplicados (fácilmente deduplicables),
-        # en vez de perder toda su lista (irrecuperable).
-        result = add_custom_shopping_items(user_id, items, source="auto")
-        
-        # Extraer IDs de los items recién insertados para excluirlos del borrado
-        new_ids = []
-        if result and isinstance(result, list):
-            new_ids = [r.get("id") for r in result if r.get("id")]
-        
-        # Borrar items auto-generados ANTERIORES (excluyendo los que acabamos de insertar)
-        delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
-        
-        # 🧹 Auto-purga oportunista: limpiar items checked viejos y enforce tope global
-        from db import purge_old_shopping_items
-        purge_old_shopping_items(user_id)
-        
-        # 🔄 Auto-deduplicación: unificar items duplicados automáticamente
-        from db import deduplicate_shopping_items
-        deduplicate_shopping_items(user_id)
-        
-        # Guardar hash del plan para cache futuro
-        save_shopping_plan_hash(user_id, plan_hash)
+        # 🔒 Lock per-user: serializa insert→delete→purge→dedup para evitar race conditions
+        from db import get_user_shopping_lock
+        shopping_lock = get_user_shopping_lock(user_id)
+        with shopping_lock:
+            # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
+            # Insertar los nuevos items ANTES de borrar los viejos.
+            # Si el proceso muere entre el INSERT y el DELETE, el usuario tiene duplicados (fácilmente deduplicables),
+            # en vez de perder toda su lista (irrecuperable).
+            result = add_custom_shopping_items(user_id, items, source="auto")
+            
+            # Extraer IDs de los items recién insertados para excluirlos del borrado
+            new_ids = []
+            if result and isinstance(result, list):
+                new_ids = [r.get("id") for r in result if r.get("id")]
+            
+            # Borrar items auto-generados ANTERIORES (excluyendo los que acabamos de insertar)
+            delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
+            
+            # 🧹 Auto-purga oportunista: limpiar items checked viejos y enforce tope global
+            from db import purge_old_shopping_items
+            purge_old_shopping_items(user_id)
+            
+            # 🔄 Auto-deduplicación: unificar items duplicados automáticamente
+            from db import deduplicate_shopping_items
+            deduplicate_shopping_items(user_id)
+            
+            # Guardar hash del plan para cache futuro
+            save_shopping_plan_hash(user_id, plan_hash)
         
         if result is not None:
             return {"success": True, "items": items, "cached": False, "message": f"Se auto-generaron y guardaron {len(items)} ingredientes estructurados en tu lista con éxito."}
@@ -886,7 +940,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/shopping/custom")
-def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str = Depends(_shopping_write_limiter)):
     """Añade uno o más items a la lista de compras manualmente desde el frontend."""
     try:
         user_id = data.get("user_id")
@@ -917,14 +971,16 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
             return clean[:MAX_ITEM_LENGTH]
         
         # Normalizar a JSON struct consistente con ShoppingItemModel
+        from tools import _categorize_item
         structured_items = []
         for item_name in items:
             raw = item_name.strip() if isinstance(item_name, str) else ""
             name = _sanitize(raw) if raw else ""
             if name:
+                cat, emoji = _categorize_item(name)
                 structured_items.append({
-                    "category": "Extras (Manual)",
-                    "emoji": "📝",
+                    "category": cat,
+                    "emoji": emoji,
                     "name": name.capitalize(),
                     "qty": ""
                 })
@@ -991,10 +1047,29 @@ def api_update_custom_shopping_item(item_id: str, data: dict = Body(...), verifi
             raise HTTPException(status_code=401, detail="No autorizado. Token requerido para editar items.")
         
         # Extraer campos editables del body
+        import re as _re
+        MAX_FIELD_LENGTH = 100
+        
+        def _sanitize_field(text: str) -> str:
+            clean = _re.sub(r'<[^>]+>', '', text).strip()
+            clean = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean)
+            return clean[:MAX_FIELD_LENGTH]
+        
         updates = {}
         for field in ["display_name", "qty", "category", "emoji"]:
             if field in data:
-                updates[field] = data[field]
+                val = data[field]
+                if isinstance(val, str):
+                    updates[field] = _sanitize_field(val)
+                else:
+                    updates[field] = val
+        
+        # Si se renombra el item, re-categorizar automáticamente
+        if "display_name" in updates and "category" not in data:
+            from tools import _categorize_item
+            cat, emoji = _categorize_item(updates["display_name"])
+            updates["category"] = cat
+            updates["emoji"] = emoji
         
         if not updates:
             raise HTTPException(status_code=400, detail="No se proporcionaron campos para actualizar. Campos permitidos: display_name, qty, category, emoji.")

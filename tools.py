@@ -463,6 +463,12 @@ def add_to_shopping_list(user_id: str, items: str) -> str:
     
     result = add_custom_shopping_items(user_id, structured_items, source="chat")
     if result is not None:
+        # Auto-deduplicar: si el usuario ya tenía "Leche" y añade "leche", se fusionan
+        try:
+            from db import deduplicate_shopping_items
+            deduplicate_shopping_items(user_id)
+        except Exception:
+            pass  # No bloquear la respuesta si falla la dedup
         items_formatted = ", ".join(items_list)
         return f"¡Éxito! Se añadieron {len(items_list)} item(s) a tu lista de compras: {items_formatted}."
     else:

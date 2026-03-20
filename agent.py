@@ -586,6 +586,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     shopping_llm = ChatGoogleGenerativeAI(
         model="gemini-3-flash-preview",
         temperature=0.2,
+        timeout=30,  # 30s por intento; con 3 reintentos = ~90s máx total
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(ShoppingListModel)
     
