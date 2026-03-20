@@ -461,87 +461,18 @@ Responde ÚNICAMENTE con el JSON de revisión.
             user_id = form_data.get("user_id") or form_data.get("session_id")
             if user_id and user_id != "guest":
                 from db import get_recent_meals_from_plans
-                import unicodedata
-                import difflib
-                import re
+                import concurrent.futures
+                from cpu_tasks import _validar_repeticiones_cpu_bound
 
-                
-                def _normalize(s: str) -> str:
-                    """Normaliza NOMBRES DE PLATOS para anti-repetición (Jaccard/SequenceMatcher).
-                    
-                    ⚠️ DIFERENTE a constants.normalize_ingredient_for_tracking(), que colapsa
-                    sinónimos al ingrediente base (ej: "tostones" → "platano verde").
-                    Aquí preservamos las técnicas de cocción para poder distinguir
-                    "Pollo a la Plancha" de "Pollo Guisado" como platos diferentes.
-                    """
-                    s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
-                    s = s.lower()
-                    # Solo eliminamos stopwords para comparar los tokens significativos.
-                    s = re.sub(r'\b(con|de|y|al|a|la|el|en|las|los|del|para|por|tipo|estilo)\b', '', s)
-                    return re.sub(r'\s+', ' ', s).strip()
-                    
                 recent_meal_names = get_recent_meals_from_plans(user_id, days=3)
                 if recent_meal_names:
-                    # PRE-COMPUTACIÓN DE TOKENS O(N) para evitar operaciones repetitivas O(NxM)
-                    recent_data = []
-                    for name in recent_meal_names:
-                        if name:
-                            norm = _normalize(name)
-                            recent_data.append({
-                                "norm": norm,
-                                "tokens": set(norm.split())
-                            })
-                    
-                    # Verificar todas las comidas (principales + meriendas con umbrales diferenciados)
-                    # Meriendas usan umbrales más estrictos porque hay menos variedad natural en snacks.
-                    MAIN_MEAL_JACCARD = 0.85
-                    MAIN_MEAL_SEQ = 0.75
-                    SNACK_JACCARD = 0.95      # Más estricto: solo bloquear snacks prácticamente idénticos
-                    SNACK_SEQ = 0.90
-                    
-                    repeated_meals = []
-                    for day_obj in days:
-                        for meal in day_obj.get("meals", []):
-                            meal_type = meal.get("meal", "").lower()
-                            
-                            # Determinar umbrales según tipo de comida
-                            if meal_type in ["desayuno", "almuerzo", "cena"]:
-                                jaccard_threshold = MAIN_MEAL_JACCARD
-                                seq_threshold = MAIN_MEAL_SEQ
-                            elif meal_type in ["merienda", "snack", "merienda am", "merienda pm"]:
-                                jaccard_threshold = SNACK_JACCARD
-                                seq_threshold = SNACK_SEQ
-                            else:
-                                continue  # Tipo desconocido, skip
-                            
-                            raw_name = meal.get("name", "")
-                            new_norm = _normalize(raw_name)
-                            if not new_norm:
-                                continue
-                            
-                            new_tokens = set(new_norm.split())
-                            is_repeated = False
-                            
-                            # Bucle Optimizado contra platos pre-procesados
-                            for recent in recent_data:
-                                # 1. Similitud de Sets de Tokens (Jaccard Approximation - Fast Path)
-                                if new_tokens and recent["tokens"]:
-                                    intersection = new_tokens.intersection(recent["tokens"])
-                                    overlap1 = len(intersection) / len(new_tokens)
-                                    overlap2 = len(intersection) / len(recent["tokens"])
-                                    
-                                    if max(overlap1, overlap2) >= jaccard_threshold:
-                                        is_repeated = True
-                                        break
-                                        
-                                # 2. Similitud de Secuencia (Difflib) - Guard por longitud similar
-                                if abs(len(new_norm) - len(recent["norm"])) <= 5:
-                                    if difflib.SequenceMatcher(None, new_norm, recent["norm"]).ratio() >= seq_threshold:
-                                        is_repeated = True
-                                        break
-                                        
-                            if is_repeated:
-                                repeated_meals.append(raw_name)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                        future = executor.submit(
+                            _validar_repeticiones_cpu_bound,
+                            recent_meal_names,
+                            days
+                        )
+                        repeated_meals = future.result()
                     
                     # Umbral: cero tolerancia - si 1 o más comidas se repiten, rechazar
                     if len(repeated_meals) > 0:
@@ -552,7 +483,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         severity = "minor"
                         print(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados: {repeated_meals}")
                     else:
-                        print(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_data)} platos recientes.")
+                        print(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_meal_names)} platos recientes.")
         except Exception as e:
             print(f"⚠️ [ANTI-REPETICIÓN] Error en validación (no bloqueante): {e}")
     

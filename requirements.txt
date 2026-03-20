@@ -10,3 +10,4 @@ langgraph-checkpoint-postgres
 psycopg[binary,pool]
 tenacity
 python-multipart
+redis

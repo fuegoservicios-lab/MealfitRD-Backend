@@ -62,8 +62,9 @@ from constants import (
 )
 
 import functools
+from cache_manager import centralized_cache
 
-@functools.lru_cache(maxsize=1000)
+@centralized_cache(ttl_seconds=3600)
 def _get_cached_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
     """Filtra y guarda en caché (O(1)) el catálogo dominicano basado en restricciones del usuario."""
     filtered_proteins = DOMINICAN_PROTEINS.copy()
@@ -162,37 +163,20 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # Truncar historial a los últimos ~5000 chars (~1250 tokens) para proteger de O(N×M) si la sesión guest es larga.
         history_normalized = history_normalized[-5000:] if len(history_normalized) > 5000 else history_normalized
         print(f"⚠️ [ANTI MODE-COLLAPSE] Fallback Regex en runtime usado para guest o sin historial.")
-        for p in filtered_proteins:
-            syns = protein_synonyms.get(p.lower(), [p.lower()])
-            count = 0
-            for syn in syns:
-                syn_normalized = strip_accents(syn.lower())
-                count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-            protein_freq[p] = count
-                
-        for c in filtered_carbs:
-            syns = carb_synonyms.get(c.lower(), [c.lower()])
-            count = 0
-            for syn in syns:
-                syn_normalized = strip_accents(syn.lower())
-                count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-            carb_freq[c] = count
-            
-        for v in filtered_veggies:
-            syns = veggie_fat_synonyms.get(v.lower(), [v.lower()])
-            count = 0
-            for syn in syns:
-                syn_normalized = strip_accents(syn.lower())
-                count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-            veggie_freq[v] = count
         
-        for f in filtered_fruits:
-            syns = fruit_synonyms.get(f.lower(), [f.lower()])
-            count = 0
-            for syn in syns:
-                syn_normalized = strip_accents(syn.lower())
-                count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
-            fruit_freq[f] = count
+        import concurrent.futures
+        from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future = executor.submit(
+                _calcular_frecuencias_regex_cpu_bound,
+                history_normalized,
+                filtered_proteins, protein_synonyms,
+                filtered_carbs, carb_synonyms,
+                filtered_veggies, veggie_fat_synonyms,
+                filtered_fruits, fruit_synonyms
+            )
+            protein_freq, carb_freq, veggie_freq, fruit_freq = future.result()
 
     # Umbral mínimo: solo considerar "sobreusados" ingredientes con freq >= 3.
     # Con freq=1 o 2 el soft-penalty 1/(freq+1) ya reduce su probabilidad suficientemente;
