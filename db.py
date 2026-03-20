@@ -677,6 +677,29 @@ def update_user_health_profile(user_id: str, health_profile: dict):
         print(f"Error actualizando health_profile: {e}")
         return None
 
+def get_shopping_plan_hash(user_id: str) -> str:
+    """Obtiene el hash del plan usado para la última auto-generación de shopping list."""
+    if not supabase: return None
+    try:
+        res = supabase.table("user_profiles").select("shopping_plan_hash").eq("id", user_id).execute()
+        if res.data and res.data[0].get("shopping_plan_hash"):
+            return res.data[0]["shopping_plan_hash"]
+        return None
+    except Exception as e:
+        # Columna no existe aún → no hay cache
+        return None
+
+def save_shopping_plan_hash(user_id: str, plan_hash: str):
+    """Guarda el hash del plan para cache de auto-generación de shopping list."""
+    if not supabase: return None
+    try:
+        res = supabase.table("user_profiles").update({"shopping_plan_hash": plan_hash}).eq("id", user_id).execute()
+        return res.data
+    except Exception as e:
+        # Columna no existe → silenciar (cache es opcional)
+        print(f"⚠️ [DB] No se pudo guardar shopping_plan_hash: {e}")
+        return None
+
 def get_latest_meal_plan(user_id: str):
     """Obtiene el JSON del plan de comidas más reciente del usuario."""
     if not supabase: return None
@@ -917,22 +940,45 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict):
 
 def add_custom_shopping_items(user_id: str, items: list, source: str = "manual"):
     """Inserta uno o más items custom a la lista de compras del usuario.
-    source: 'auto' (IA auto-generados), 'chat' (añadidos vía chat), 'manual' (default/legacy)"""
+    source: 'auto' (IA auto-generados), 'chat' (añadidos vía chat), 'manual' (default/legacy)
+    Dual-write: guarda JSON en item_name (legacy) + columnas estructuradas (category, display_name, qty, emoji)."""
     if not supabase or not items: return None
     import json
+    
+    def _extract_fields(item):
+        """Extrae campos estructurados de un item (dict, model, o string)."""
+        if hasattr(item, 'model_dump'):
+            d = item.model_dump()
+        elif isinstance(item, dict):
+            d = item
+        elif isinstance(item, str) and item.strip():
+            return item.strip(), {"category": "", "display_name": item.strip(), "qty": "", "emoji": ""}
+        else:
+            return None, None
+        item_name_json = json.dumps(d, ensure_ascii=False)
+        structured = {
+            "category": d.get("category", ""),
+            "display_name": d.get("name", ""),
+            "qty": d.get("qty", ""),
+            "emoji": d.get("emoji", "")
+        }
+        return item_name_json, structured
+    
     try:
         rows = []
         for item in items:
-            row = {"user_id": user_id}
-            if hasattr(item, 'model_dump'):
-                row["item_name"] = json.dumps(item.model_dump(), ensure_ascii=False)
-            elif isinstance(item, dict):
-                row["item_name"] = json.dumps(item, ensure_ascii=False)
-            elif isinstance(item, str) and item.strip():
-                row["item_name"] = item.strip()
-            else:
+            item_name, fields = _extract_fields(item)
+            if item_name is None:
                 continue
-            row["source"] = source
+            row = {
+                "user_id": user_id,
+                "item_name": item_name,
+                "source": source,
+                "category": fields["category"],
+                "display_name": fields["display_name"],
+                "qty": fields["qty"],
+                "emoji": fields["emoji"]
+            }
             rows.append(row)
                 
         if rows:
@@ -941,26 +987,51 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual")
         return None
     except Exception as e:
         error_msg = str(e)
-        if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
-            # Columna source aún no existe → fallback sin ella
-            print("⚠️ [DB] Columna source ausente. Insertando sin source. Ejecute migration_shopping_is_checked.sql")
+        # Fallback 1: columnas estructuradas no existen → insertar sin ellas
+        if "category" in error_msg or "display_name" in error_msg or "qty" in error_msg or "emoji" in error_msg:
+            print("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
             try:
                 rows_fb = []
                 for item in items:
-                    if hasattr(item, 'model_dump'):
-                        rows_fb.append({"user_id": user_id, "item_name": json.dumps(item.model_dump(), ensure_ascii=False)})
-                    elif isinstance(item, dict):
-                        rows_fb.append({"user_id": user_id, "item_name": json.dumps(item, ensure_ascii=False)})
-                    elif isinstance(item, str) and item.strip():
-                        rows_fb.append({"user_id": user_id, "item_name": item.strip()})
+                    item_name, _ = _extract_fields(item)
+                    if item_name:
+                        rows_fb.append({"user_id": user_id, "item_name": item_name, "source": source})
                 if rows_fb:
                     res_fb = supabase.table("custom_shopping_items").insert(rows_fb).execute()
                     return res_fb.data
                 return None
             except Exception as e2:
-                print(f"Error añadiendo items a shopping list (fallback): {e2}")
+                error_msg2 = str(e2)
+                if "source" in error_msg2 or "PGRST205" in error_msg2:
+                    # Fallback 2: ni source ni columnas estructuradas
+                    return _add_shopping_items_minimal(user_id, items)
+                print(f"Error añadiendo items (fallback sin columnas estructuradas): {e2}")
                 return None
+        if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            # Fallback 2: columna source tampoco existe
+            print("⚠️ [DB] Columna source ausente. Ejecute migration_shopping_is_checked.sql")
+            return _add_shopping_items_minimal(user_id, items)
         print(f"Error añadiendo items a shopping list: {e}")
+        return None
+
+def _add_shopping_items_minimal(user_id: str, items: list):
+    """Fallback mínimo: solo user_id + item_name (pre-migración)."""
+    import json
+    try:
+        rows = []
+        for item in items:
+            if hasattr(item, 'model_dump'):
+                rows.append({"user_id": user_id, "item_name": json.dumps(item.model_dump(), ensure_ascii=False)})
+            elif isinstance(item, dict):
+                rows.append({"user_id": user_id, "item_name": json.dumps(item, ensure_ascii=False)})
+            elif isinstance(item, str) and item.strip():
+                rows.append({"user_id": user_id, "item_name": item.strip()})
+        if rows:
+            res = supabase.table("custom_shopping_items").insert(rows).execute()
+            return res.data
+        return None
+    except Exception as e:
+        print(f"Error añadiendo items a shopping list (minimal fallback): {e}")
         return None
 
 def delete_auto_generated_shopping_items(user_id: str):
@@ -1004,25 +1075,214 @@ def _delete_auto_shopping_items_legacy(user_id: str):
         print(f"Error borrando items auto-generados (legacy fallback): {e}")
         return False
 
-def get_custom_shopping_items(user_id: str):
-    """Obtiene todos los items custom de la lista de compras del usuario."""
-    if not supabase: return []
+def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0):
+    """Obtiene los items custom de la lista de compras del usuario con paginación.
+    Retorna columnas estructuradas (category, display_name, qty, emoji) si están disponibles."""
+    if not supabase: return {"data": [], "total": 0}
     try:
-        res = supabase.table("custom_shopping_items").select("id, item_name, is_checked, source, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(200).execute()
-        return res.data
+        # Intento 1: con columnas estructuradas → permite ordenar por categoría a nivel DB
+        query = supabase.table("custom_shopping_items").select(
+            "id, item_name, is_checked, checked_at, source, category, display_name, qty, emoji, created_at",
+            count="exact"
+        ).eq("user_id", user_id).order("category").order("created_at", desc=True).range(offset, offset + limit - 1)
+        res = query.execute()
+        return {"data": res.data, "total": res.count or 0}
     except Exception as e:
         error_msg = str(e)
-        if "is_checked" in error_msg or "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
-            # Columnas is_checked/source aún no existen → fallback sin ellas
-            print("⚠️ [DB] Columnas is_checked/source ausentes en custom_shopping_items. Ejecute migration_shopping_is_checked.sql")
+        if "category" in error_msg or "display_name" in error_msg or "qty" in error_msg or "emoji" in error_msg:
+            # Fallback 2: sin columnas estructuradas pero con is_checked/source
+            print("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
             try:
-                res_fb = supabase.table("custom_shopping_items").select("id, item_name, created_at").eq("user_id", user_id).order("created_at", desc=True).execute()
-                return res_fb.data
+                query_fb = supabase.table("custom_shopping_items").select(
+                    "id, item_name, is_checked, source, created_at", count="exact"
+                ).eq("user_id", user_id).order("created_at", desc=True).range(offset, offset + limit - 1)
+                res_fb = query_fb.execute()
+                return {"data": res_fb.data, "total": res_fb.count or 0}
             except Exception as e2:
-                print(f"Error obteniendo custom shopping items (fallback): {e2}")
-                return []
+                error_msg2 = str(e2)
+                if "is_checked" in error_msg2 or "source" in error_msg2:
+                    # Fallback 3: schema mínimo
+                    return _get_shopping_items_minimal(user_id, limit, offset)
+                print(f"Error obteniendo items (fallback sin columnas estructuradas): {e2}")
+                return {"data": [], "total": 0}
+        if "is_checked" in error_msg or "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            # Fallback 3: schema mínimo (solo id, item_name, created_at)
+            print("⚠️ [DB] Columnas is_checked/source ausentes. Ejecute migration_shopping_is_checked.sql")
+            return _get_shopping_items_minimal(user_id, limit, offset)
         print(f"Error obteniendo custom shopping items: {e}")
-        return []
+        return {"data": [], "total": 0}
+
+def _get_shopping_items_minimal(user_id: str, limit: int = 200, offset: int = 0):
+    """Fallback mínimo: solo id, item_name, created_at (pre-migración)."""
+    try:
+        res = supabase.table("custom_shopping_items").select(
+            "id, item_name, created_at", count="exact"
+        ).eq("user_id", user_id).order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+        return {"data": res.data, "total": res.count or 0}
+    except Exception as e:
+        print(f"Error obteniendo custom shopping items (minimal fallback): {e}")
+        return {"data": [], "total": 0}
+
+def clear_all_shopping_items(user_id: str):
+    """Elimina TODOS los items de la lista de compras del usuario."""
+    if not supabase: return False
+    try:
+        supabase.table("custom_shopping_items").delete().eq("user_id", user_id).execute()
+        return True
+    except Exception as e:
+        print(f"Error limpiando lista de compras: {e}")
+        return False
+
+def uncheck_all_shopping_items(user_id: str):
+    """Desmarca (is_checked=false) TODOS los items de la lista de compras del usuario."""
+    if not supabase: return False
+    try:
+        supabase.table("custom_shopping_items").update({"is_checked": False, "checked_at": None}).eq("user_id", user_id).execute()
+        return True
+    except Exception as e:
+        error_msg = str(e)
+        if "is_checked" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            print("⚠️ [DB] Columna is_checked ausente. Ejecute migration_shopping_is_checked.sql")
+            return False
+        print(f"Error desmarcando items: {e}")
+        return False
+
+def deduplicate_shopping_items(user_id: str):
+    """Encuentra y fusiona items duplicados en la lista de compras del usuario.
+    Agrupa por display_name normalizado. Suma cantidades numéricas cuando es posible.
+    Retorna el número de duplicados eliminados."""
+    if not supabase: return {"removed": 0, "merged": []}
+    import re, json as _json
+    
+    try:
+        # Obtener todos los items del usuario
+        res = supabase.table("custom_shopping_items").select(
+            "id, item_name, display_name, qty, category, emoji, source, is_checked, created_at"
+        ).eq("user_id", user_id).order("created_at", desc=True).execute()
+        
+        if not res.data or len(res.data) < 2:
+            return {"removed": 0, "merged": []}
+        
+        items = res.data
+    except Exception as e:
+        # Fallback: sin columnas estructuradas
+        try:
+            res = supabase.table("custom_shopping_items").select("id, item_name, created_at").eq("user_id", user_id).order("created_at", desc=True).execute()
+            if not res.data or len(res.data) < 2:
+                return {"removed": 0, "merged": []}
+            items = res.data
+        except Exception as e2:
+            print(f"Error obteniendo items para dedup: {e2}")
+            return {"removed": 0, "merged": []}
+    
+    def _normalize(text: str) -> str:
+        """Normaliza texto para comparación: minúsculas, sin acentos, sin espacios extra."""
+        if not text: return ""
+        import unicodedata
+        nfkd = unicodedata.normalize('NFKD', text.lower().strip())
+        return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
+    
+    def _extract_number(qty_str: str):
+        """Extrae número y unidad de una cantidad (ej: '2 lb' → (2.0, 'lb'))."""
+        if not qty_str: return None, ""
+        match = re.match(r'([\d.,/]+)\s*(.*)', qty_str.strip())
+        if match:
+            num_str = match.group(1).replace(',', '.')
+            # Manejar fracciones tipo "1/2"
+            if '/' in num_str:
+                parts = num_str.split('/')
+                try:
+                    return float(parts[0]) / float(parts[1]), match.group(2).strip()
+                except (ValueError, ZeroDivisionError):
+                    return None, qty_str
+            try:
+                return float(num_str), match.group(2).strip()
+            except ValueError:
+                return None, qty_str
+        return None, qty_str
+    
+    # Agrupar por nombre normalizado
+    groups = {}  # normalized_name -> [items]
+    for item in items:
+        # Preferir display_name (estructurado) sobre item_name (JSON legacy)
+        name = item.get("display_name") or ""
+        if not name:
+            # Intentar extraer name del JSON en item_name
+            raw = item.get("item_name", "")
+            if raw.startswith("{"):
+                try:
+                    parsed = _json.loads(raw)
+                    name = parsed.get("name", raw)
+                except Exception:
+                    name = raw
+            else:
+                name = raw
+        
+        key = _normalize(name)
+        if not key:
+            continue
+        if key not in groups:
+            groups[key] = []
+        groups[key].append({"item": item, "name": name})
+    
+    ids_to_delete = []
+    ids_to_update = {}  # id -> {new_qty, merged_info}
+    merged_info = []
+    
+    for key, group in groups.items():
+        if len(group) < 2:
+            continue  # No hay duplicados
+        
+        # El primer item es el más reciente (ordenamos por created_at desc)
+        keeper = group[0]
+        duplicates = group[1:]
+        
+        # Intentar sumar cantidades
+        keeper_qty_str = keeper["item"].get("qty", "")
+        keeper_num, keeper_unit = _extract_number(keeper_qty_str)
+        total = keeper_num
+        can_sum = keeper_num is not None
+        
+        for dup in duplicates:
+            dup_qty_str = dup["item"].get("qty", "")
+            dup_num, dup_unit = _extract_number(dup_qty_str)
+            
+            if can_sum and dup_num is not None and _normalize(dup_unit) == _normalize(keeper_unit):
+                total += dup_num
+            else:
+                can_sum = False
+            
+            ids_to_delete.append(dup["item"]["id"])
+            
+            # Si algún duplicado estaba checked, mantener ese estado
+            if dup["item"].get("is_checked") and not keeper["item"].get("is_checked"):
+                keeper["item"]["is_checked"] = True
+        
+        # Actualizar cantidad del keeper si pudimos sumar
+        if can_sum and total is not None and total != keeper_num:
+            # Formatear: si es entero, sin decimales
+            total_str = str(int(total)) if total == int(total) else f"{total:.1f}"
+            new_qty = f"{total_str} {keeper_unit}".strip()
+            ids_to_update[keeper["item"]["id"]] = new_qty
+            merged_info.append(f"{keeper['name']}: {new_qty}")
+        elif len(duplicates) > 0:
+            merged_info.append(f"{keeper['name']}: {len(duplicates)} duplicados removidos")
+    
+    if not ids_to_delete:
+        return {"removed": 0, "merged": []}
+    
+    # Ejecutar deletes y updates
+    try:
+        supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
+        
+        for item_id, new_qty in ids_to_update.items():
+            supabase.table("custom_shopping_items").update({"qty": new_qty}).eq("id", item_id).execute()
+        
+        print(f"🧹 [DEDUP] Eliminados {len(ids_to_delete)} duplicados, {len(ids_to_update)} cantidades actualizadas")
+        return {"removed": len(ids_to_delete), "merged": merged_info}
+    except Exception as e:
+        print(f"Error en deduplicación: {e}")
+        return {"removed": 0, "merged": [], "error": str(e)}
 
 def delete_custom_shopping_item(item_id: str, user_id: str = None):
     """Elimina un item custom de la lista de compras. Si se provee user_id, verifica ownership."""
@@ -1045,7 +1305,10 @@ def update_custom_shopping_item_status(item_id: str, is_checked: bool, user_id: 
     if not supabase: return None
     try:
         # 🚀 Método atómico: UPDATE directo a columna nativa (O(1), sin race conditions)
-        update_query = supabase.table("custom_shopping_items").update({"is_checked": is_checked}).eq("id", item_id)
+        from datetime import datetime, timezone
+        update_data = {"is_checked": is_checked}
+        update_data["checked_at"] = datetime.now(timezone.utc).isoformat() if is_checked else None
+        update_query = supabase.table("custom_shopping_items").update(update_data).eq("id", item_id)
         if user_id:
             update_query = update_query.eq("user_id", user_id)
         update_res = update_query.execute()
@@ -1303,8 +1566,35 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         # 8. Actualizar meal_likes
         supabase.table("meal_likes").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
         
-        # 9. Actualizar custom_shopping_items
-        supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        # 9. Actualizar custom_shopping_items (con deduplicación)
+        try:
+            # Obtener items existentes del usuario registrado
+            existing_res = supabase.table("custom_shopping_items").select("item_name").eq("user_id", new_user_id).execute()
+            existing_names = set()
+            if existing_res.data:
+                existing_names = {row.get("item_name", "") for row in existing_res.data}
+            
+            # Obtener items del guest
+            guest_res = supabase.table("custom_shopping_items").select("id, item_name").in_("user_id", session_ids).execute()
+            if guest_res.data:
+                ids_to_migrate = []
+                ids_to_delete = []
+                for item in guest_res.data:
+                    if item.get("item_name", "") in existing_names:
+                        ids_to_delete.append(item["id"])  # Duplicado → eliminar
+                    else:
+                        ids_to_migrate.append(item["id"])
+                        existing_names.add(item.get("item_name", ""))  # Evitar dup entre guests
+                
+                if ids_to_migrate:
+                    supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("id", ids_to_migrate).execute()
+                if ids_to_delete:
+                    supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
+                    print(f"🧹 [MIGRATION] {len(ids_to_delete)} items duplicados eliminados, {len(ids_to_migrate)} migrados.")
+        except Exception as shop_mig_e:
+            print(f"⚠️ [MIGRATION] Error migrando shopping items: {shop_mig_e}")
+            # Fallback: migrar todo sin deduplicar
+            supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
         
         # 10. Recalcular frecuencias de ingredientes a partir de los planes migrados
         # Sin esto, el usuario registrado parte con freq=0 y pierde el historial de variedad.

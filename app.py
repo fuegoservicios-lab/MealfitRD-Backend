@@ -238,6 +238,34 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                 
             print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
             
+        # 3. Auto-generar lista de compras (background, con cache por hash)
+        try:
+            import hashlib, json as _json
+            all_ingredients = []
+            for d in plan_data.get("days", []):
+                for m in d.get("meals", []):
+                    ing = m.get("ingredients", [])
+                    if ing:
+                        all_ingredients.extend(ing)
+            if all_ingredients:
+                plan_hash = hashlib.sha256(_json.dumps(all_ingredients, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+                from db import get_shopping_plan_hash, save_shopping_plan_hash, add_custom_shopping_items, delete_auto_generated_shopping_items
+                stored_hash = get_shopping_plan_hash(user_id)
+                if stored_hash != plan_hash:
+                    from agent import generate_auto_shopping_list
+                    items = generate_auto_shopping_list(plan_data)
+                    if items:
+                        delete_auto_generated_shopping_items(user_id)
+                        add_custom_shopping_items(user_id, items, source="auto")
+                        save_shopping_plan_hash(user_id, plan_hash)
+                        print(f"🛒 [BACKGROUND] Lista de compras auto-generada ({len(items)} items) para {user_id}")
+                    else:
+                        print(f"⚠️ [BACKGROUND] No se pudieron consolidar ingredientes para {user_id}")
+                else:
+                    print(f"✅ [BACKGROUND CACHE HIT] Plan sin cambios, lista de compras ya actualizada para {user_id}")
+        except Exception as shop_e:
+            print(f"⚠️ [BACKGROUND] Error auto-generando lista de compras: {shop_e}")
+            
     except Exception as e:
         print(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")
 
@@ -761,9 +789,11 @@ def _save_visual_entry_background(user_id: str, image_url: str, description: str
 
 @app.post("/api/shopping/auto-generate")
 def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
-    """Genera y guarda la lista de compras consolidada a partir del plan activo de 3 días."""
+    """Genera y guarda la lista de compras consolidada a partir del plan activo de 3 días.
+    Usa cache por hash del plan: si el plan no cambió, retorna la lista existente sin llamar al LLM."""
     try:
         user_id = data.get("user_id")
+        force = data.get("force", False)  # Forzar regeneración incluso si el plan no cambió
         
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
@@ -778,6 +808,28 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         
         if not current_plan:
             raise HTTPException(status_code=404, detail="No se encontró un plan activo para extraer ingredientes.")
+        
+        # Calcular hash del plan para detectar cambios
+        import hashlib, json as _json
+        ingredients_for_hash = []
+        for d in current_plan.get("days", []):
+            for m in d.get("meals", []):
+                ing = m.get("ingredients", [])
+                if ing:
+                    ingredients_for_hash.extend(ing)
+        plan_hash = hashlib.sha256(_json.dumps(ingredients_for_hash, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+        
+        # Verificar si el plan ya fue procesado (cache hit)
+        if not force:
+            from db import get_shopping_plan_hash
+            stored_hash = get_shopping_plan_hash(user_id)
+            if stored_hash == plan_hash:
+                print(f"✅ [CACHE HIT] Plan sin cambios (hash={plan_hash}). Retornando lista existente.")
+                from db import get_custom_shopping_items
+                existing = get_custom_shopping_items(user_id)
+                existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
+                return {"success": True, "items": existing_items, "cached": True,
+                        "message": "La lista ya está actualizada con tu plan actual."}
             
         from agent import generate_auto_shopping_list
         items = generate_auto_shopping_list(current_plan)
@@ -785,7 +837,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         if not items:
             return {"success": False, "message": "No se encontraron ingredientes para consolidar en el plan activo."}
             
-        from db import add_custom_shopping_items, delete_auto_generated_shopping_items
+        from db import add_custom_shopping_items, delete_auto_generated_shopping_items, save_shopping_plan_hash
         
         # Limpiar ítems previos generados por IA (Phase 2 - Anti Bloat)
         delete_auto_generated_shopping_items(user_id)
@@ -793,8 +845,11 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         # Guardar cada string/objeto consolidado como un item en la tabla custom_shopping_items
         result = add_custom_shopping_items(user_id, items, source="auto")
         
+        # Guardar hash del plan para cache futuro
+        save_shopping_plan_hash(user_id, plan_hash)
+        
         if result is not None:
-            return {"success": True, "items": items, "message": f"Se auto-generaron y guardaron {len(items)} ingredientes estructurados en tu lista con éxito."}
+            return {"success": True, "items": items, "cached": False, "message": f"Se auto-generaron y guardaron {len(items)} ingredientes estructurados en tu lista con éxito."}
         else:
             raise HTTPException(status_code=500, detail="Error al intentar guardar los ingredientes en la base de datos.")
             
@@ -806,9 +861,55 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         print(f"❌ [ERROR] Error en /api/shopping/auto-generate POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/shopping/custom")
+def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    """Añade uno o más items a la lista de compras manualmente desde el frontend."""
+    try:
+        user_id = data.get("user_id")
+        items = data.get("items", [])  # Lista de strings: ["Leche", "Pan", "Huevos"]
+        
+        # Validación de seguridad IDOR
+        if user_id and user_id != "guest":
+            if not verified_user_id or verified_user_id != user_id:
+                raise HTTPException(status_code=403, detail="Prohibido. Token inválido o no coincide.")
+                
+        if not user_id or user_id == "guest":
+            raise HTTPException(status_code=400, detail="Usuario no válido para añadir items.")
+            
+        if not items:
+            raise HTTPException(status_code=400, detail="No se proporcionaron items para añadir.")
+        
+        # Normalizar a JSON struct consistente con ShoppingItemModel
+        structured_items = []
+        for item_name in items:
+            name = item_name.strip() if isinstance(item_name, str) else ""
+            if name:
+                structured_items.append({
+                    "category": "Extras (Manual)",
+                    "emoji": "📝",
+                    "name": name.capitalize(),
+                    "qty": ""
+                })
+        
+        if not structured_items:
+            raise HTTPException(status_code=400, detail="Ningún item válido proporcionado.")
+            
+        from db import add_custom_shopping_items
+        result = add_custom_shopping_items(user_id, structured_items, source="manual")
+        
+        if result is not None:
+            return {"success": True, "items": result, "message": f"Se añadieron {len(structured_items)} item(s) a tu lista de compras."}
+        else:
+            raise HTTPException(status_code=500, detail="Error al guardar los items en la base de datos.")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"❌ [ERROR] Error en /api/shopping/custom POST: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/shopping/custom/{user_id}")
-def api_get_custom_shopping_items(user_id: str, verified_user_id: str = Depends(get_verified_user_id)):
-    """Obtiene los items custom de la lista de compras añadidos por la IA."""
+def api_get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0, verified_user_id: str = Depends(get_verified_user_id)):
+    """Obtiene los items custom de la lista de compras con paginación."""
     try:
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
@@ -816,9 +917,11 @@ def api_get_custom_shopping_items(user_id: str, verified_user_id: str = Depends(
                 raise HTTPException(status_code=403, detail="Prohibido.")
                 
         if not user_id or user_id == "guest":
-            return {"items": []}
-        items = get_custom_shopping_items(user_id)
-        return {"items": items}
+            return {"items": [], "total": 0}
+        result = get_custom_shopping_items(user_id, limit=limit, offset=offset)
+        return {"items": result.get("data", []), "total": result.get("total", 0)}
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/shopping/custom GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -830,7 +933,9 @@ def api_delete_custom_shopping_item(item_id: str, verified_user_id: str = Depend
         if not verified_user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token requerido para eliminar items.")
         from db import delete_custom_shopping_item
-        delete_custom_shopping_item(item_id, user_id=verified_user_id)
+        result = delete_custom_shopping_item(item_id, user_id=verified_user_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Item no encontrado o no pertenece al usuario.")
         return {"success": True, "message": "Item eliminado de la lista."}
     except HTTPException as he:
         raise he
@@ -855,6 +960,55 @@ def api_update_custom_shopping_item_check(item_id: str, data: dict = Body(...), 
         raise he
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/shopping/custom PUT: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/shopping/custom/clear/{user_id}")
+def api_clear_all_shopping_items(user_id: str, verified_user_id: str = Depends(get_verified_user_id)):
+    """Elimina TODOS los items de la lista de compras del usuario."""
+    try:
+        if not verified_user_id or verified_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        from db import clear_all_shopping_items
+        result = clear_all_shopping_items(user_id)
+        if result:
+            return {"success": True, "message": "Lista de compras vaciada."}
+        raise HTTPException(status_code=500, detail="Error al vaciar la lista.")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"❌ [ERROR] Error en /api/shopping/custom/clear DELETE: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/shopping/custom/uncheck-all/{user_id}")
+def api_uncheck_all_shopping_items(user_id: str, verified_user_id: str = Depends(get_verified_user_id)):
+    """Desmarca todos los items de la lista de compras del usuario."""
+    try:
+        if not verified_user_id or verified_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        from db import uncheck_all_shopping_items
+        result = uncheck_all_shopping_items(user_id)
+        if result:
+            return {"success": True, "message": "Todos los items desmarcados."}
+        raise HTTPException(status_code=500, detail="Error al desmarcar items.")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"❌ [ERROR] Error en /api/shopping/custom/uncheck-all PUT: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/shopping/custom/deduplicate/{user_id}")
+def api_deduplicate_shopping_items(user_id: str, verified_user_id: str = Depends(get_verified_user_id)):
+    """Detecta y fusiona items duplicados en la lista de compras. Suma cantidades cuando es posible."""
+    try:
+        if not verified_user_id or verified_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Prohibido.")
+        from db import deduplicate_shopping_items
+        result = deduplicate_shopping_items(user_id)
+        return {"success": True, **result}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"❌ [ERROR] Error en /api/shopping/custom/deduplicate POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/diary/consumed/{user_id}")
