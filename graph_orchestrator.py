@@ -189,23 +189,32 @@ Estos son datos críticos que debes respetar.
         "Relleno (Ej. Canoas, Vegetales rellenos)"
     ]
     
-    # Query estructurado O(1) contra la DB en vez de regex O(n) contra texto
-    recently_used_techniques = set()
+    # Query estructurado contra la DB para contar frecuencia de cada técnica
+    technique_freq = {}
     if _uid:
         try:
             from db import get_recent_techniques
-            recently_used_techniques = set(get_recent_techniques(_uid, limit=3))
-            if recently_used_techniques:
-                print(f"🔍 [TÉCNICAS] {len(recently_used_techniques)} técnicas recientes encontradas en DB: {recently_used_techniques}")
+            recent_techs = get_recent_techniques(_uid, limit=6)
+            # Construir mapa de frecuencia: cuántas veces apareció cada técnica
+            for t in recent_techs:
+                technique_freq[t] = technique_freq.get(t, 0) + 1
+            if technique_freq:
+                print(f"🔍 [TÉCNICAS] Frecuencias recientes: {technique_freq}")
         except Exception as e:
-            print(f"⚠️ [TÉCNICAS] Error consultando DB, usando todas: {e}")
+            print(f"⚠️ [TÉCNICAS] Error consultando DB, usando pesos uniformes: {e}")
     
-    available_techniques = [t for t in ALL_TECHNIQUES if t not in recently_used_techniques]
+    # Selección ponderada por frecuencia inversa: 1/(freq+1)
+    # Técnicas nunca usadas tienen peso 1.0, usadas 1 vez = 0.5, 2 veces = 0.33, etc.
+    # Esto es consistente con la fórmula de ingredientes en get_deterministic_variety_prompt().
+    tech_weights = [1.0 / (technique_freq.get(t, 0) + 1) for t in ALL_TECHNIQUES]
     
-    if len(available_techniques) < 3:
-        available_techniques = list(ALL_TECHNIQUES)
-        
-    selected_techniques = random.sample(available_techniques, 3)
+    # Seleccionar 3 técnicas únicas con pesos inversos (sin duplicados)
+    selected_techniques = []
+    _pool_t = list(zip(ALL_TECHNIQUES, tech_weights))
+    while len(selected_techniques) < 3 and _pool_t:
+        pick = random.choices([x[0] for x in _pool_t], weights=[x[1] for x in _pool_t], k=1)[0]
+        selected_techniques.append(pick)
+        _pool_t = [(t, w) for t, w in _pool_t if t != pick]
     
     technique_injection = (
         f"\n--- 👨🍳 INSTRUCCIÓN DINÁMICA DE VARIEDAD (OBLIGATORIA) ---\n"
@@ -454,12 +463,12 @@ Responde ÚNICAMENTE con el JSON de revisión.
                                 "tokens": set(norm.split())
                             })
                     
-                    # Solo verificar comidas principales (Almuerzo/Cena), no desayunos/meriendas
+                    # Verificar comidas principales (Desayuno/Almuerzo/Cena), no meriendas
                     repeated_meals = []
                     for day_obj in days:
                         for meal in day_obj.get("meals", []):
                             meal_type = meal.get("meal", "").lower()
-                            if meal_type in ["almuerzo", "cena"]:
+                            if meal_type in ["desayuno", "almuerzo", "cena"]:
                                 raw_name = meal.get("name", "")
                                 new_norm = _normalize(raw_name)
                                 if not new_norm:

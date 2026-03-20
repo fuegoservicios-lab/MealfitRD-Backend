@@ -25,6 +25,14 @@ if SUPABASE_DB_URL:
     except Exception as pool_err:
         print(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")
 
+# Pre-computar mapa de sinónimos sin acentos para track_meal_friction() (O(1) por llamada)
+import unicodedata as _uc
+from constants import GLOBAL_REVERSE_MAP as _GLOBAL_REVERSE_MAP
+_ACCENT_SAFE_REVERSE_MAP = {
+    ''.join(c for c in _uc.normalize('NFD', k) if _uc.category(c) != 'Mn'): v
+    for k, v in _GLOBAL_REVERSE_MAP.items()
+}
+
 def get_or_create_session(session_id: str, user_id: str = None):
     if not supabase: return None
     try:
@@ -741,15 +749,17 @@ def get_recent_techniques(user_id: str, limit: int = 5) -> list:
     if not supabase or not user_id or user_id == "guest": return []
     try:
         res = supabase.table("meal_plans").select("techniques").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
-        techniques = set()
+        # Retornar lista plana CON duplicados para que el caller pueda contar frecuencias.
+        # Ejemplo: ['Horneado', 'Al Vapor', 'Horneado'] → freq = {Horneado: 2, Al Vapor: 1}
+        techniques = []
         if res.data:
             for row in res.data:
                 techs = row.get("techniques")
                 if techs and isinstance(techs, list):
                     for t in techs:
                         if t:
-                            techniques.add(t)
-        return list(techniques)
+                            techniques.append(t)
+        return techniques
     except Exception as e:
         error_msg = str(e)
         if "techniques" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
@@ -995,16 +1005,16 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     if not user_id or user_id == "guest" or not rejected_meal: return False
     
     from agent import DOMINICAN_PROTEINS
-    from constants import get_reverse_synonyms_map
+    from constants import GLOBAL_REVERSE_MAP
     import unicodedata
     
     def _strip_accents(s: str) -> str:
         return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
     
-    reverse_map = get_reverse_synonyms_map()
-    # Crear versión sin acentos del reverse_map para matching robusto
+    # Usar el mapa pre-computado a nivel de módulo (O(1)) en vez de reconstruirlo por llamada.
+    # Crear versión sin acentos para matching robusto
     # (el LLM no siempre preserva tildes: "platano" vs "plátano")
-    accent_safe_map = {_strip_accents(k): v for k, v in reverse_map.items()}
+    accent_safe_map = _ACCENT_SAFE_REVERSE_MAP
     
     base_ingredient = None
     lower_meal = _strip_accents(rejected_meal.lower())
@@ -1108,6 +1118,21 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         
         # 9. Actualizar custom_shopping_items
         supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
+        # 10. Recalcular frecuencias de ingredientes a partir de los planes migrados
+        # Sin esto, el usuario registrado parte con freq=0 y pierde el historial de variedad.
+        try:
+            from constants import normalize_ingredient_for_tracking
+            migrated_ings = get_ingredient_frequencies_from_plans(new_user_id, limit=10)
+            if migrated_ings:
+                normalized = [normalize_ingredient_for_tracking(i) for i in migrated_ings if i]
+                normalized = [n for n in normalized if n]  # Filtrar vacíos
+                if normalized:
+                    increment_ingredient_frequencies(new_user_id, normalized)
+                    print(f"✅ [MIGRACIÓN] Frecuencias recalculadas para {new_user_id} ({len(normalized)} ingredientes)")
+        except Exception as freq_e:
+            # No bloquear la migración si falla el recálculo de frecuencias
+            print(f"⚠️ [MIGRACIÓN] Error recalculando frecuencias (no crítico): {freq_e}")
         
         print(f"✅ Migración exitosa de {session_ids} a UUID {new_user_id}")
         return True

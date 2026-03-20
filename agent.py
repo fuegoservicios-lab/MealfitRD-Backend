@@ -192,9 +192,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 count += len(re.findall(r'\b' + re.escape(syn_normalized) + r'\b', history_normalized))
             fruit_freq[f] = count
 
-    used_proteins = [p for p, freq in protein_freq.items() if freq > 0]
-    used_carbs = [c for c, freq in carb_freq.items() if freq > 0]
-    used_veggies = [v for v, freq in veggie_freq.items() if freq > 0]
+    # Umbral mínimo: solo considerar "sobreusados" ingredientes con freq >= 3.
+    # Con freq=1 o 2 el soft-penalty 1/(freq+1) ya reduce su probabilidad suficientemente;
+    # marcarlos como "PROHIBIDOS" en el prompt contradice el modelo de penalización suave.
+    OVERUSE_THRESHOLD = 3
+    used_proteins = [p for p, freq in protein_freq.items() if freq >= OVERUSE_THRESHOLD]
+    used_carbs = [c for c, freq in carb_freq.items() if freq >= OVERUSE_THRESHOLD]
+    used_veggies = [v for v, freq in veggie_freq.items() if freq >= OVERUSE_THRESHOLD]
     
     # 2. Construir pools de candidatos con Penalización Suave (Soft Penalty)
     # En vez de un reset total cuando quedan pocos, SIEMPRE usamos toda la lista filtrada
@@ -279,6 +283,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     
     # Cada día recibe una proteína, un carbohidrato, y un vegetal únicos (sin repeticiones entre días)
     # Si no se pudieron elegir 3 (pool muy pequeño tras filtros), rellenamos ciclando lo que hay
+    #
+    # Excepción: skipLunch con 1 sola proteína → repetir la misma explícitamente.
+    # El technique_injection ya se encarga de que cada día use una técnica diferente,
+    # así que repetir la proteína base + variar técnica ≠ plato repetido.
     _base_proteins = list(unique_proteins)
     while len(unique_proteins) < 3:
         unique_proteins.append(_base_proteins[len(unique_proteins) % len(_base_proteins)])
@@ -308,13 +316,18 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     
     blocked_text = ""
     if used_proteins or used_carbs or used_veggies:
-        # Solo bloquear ingredientes usados que NO fueron elegidos por el determinismo.
+        # Solo bloquear ingredientes sobreusados (freq >= OVERUSE_THRESHOLD) que NO fueron elegidos por el determinismo.
         # Esto elimina la contradicción: si el picker eligió "Pollo", no le decimos al LLM que está prohibido.
         chosen_set = set(p.lower() for p in chosen_proteins + chosen_carbs + chosen_veggies + chosen_fruits)
         blocked_items = [item for item in (used_proteins + used_carbs + used_veggies)
                          if item.lower() not in chosen_set]
         if blocked_items:
-            blocked_text = f"🚫 BLOQUEO MATEMÁTICO: Quedan ESTRICTAMENTE PROHIBIDOS como base principal (porque el usuario ya comió mucho de esto): {', '.join(blocked_items)}."
+            blocked_text = f"⚠️ EVITA usar como base principal estos ingredientes sobreusados (el usuario ya los ha comido frecuentemente): {', '.join(blocked_items)}. Prioriza alternativas frescas."
+    
+    # Si skipLunch y solo 1 proteína base, agregar nota al blocked_text
+    # para que el LLM sepa que debe variar la PREPARACIÓN, no el ingrediente.
+    if skip_lunch and len(_base_proteins) == 1:
+        blocked_text += f"\n💡 NOTA: Solo hay 1 proteína base ({_base_proteins[0]}) para los 3 días porque el usuario omite Almuerzo. Varía la PREPARACIÓN y TÉCNICA de cocción cada día, no el ingrediente."
     
     # Construir parámetros de frutas para el prompt
     fruit_params = {}
@@ -403,8 +416,9 @@ def swap_meal(form_data: dict):
                 for item in available_items:
                     syns = synonyms_map.get(item.lower(), [item.lower()])
                     freq[item] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
-                max_f = max(freq.values()) + 1
-                weights = [max_f - freq.get(item, 0) for item in available_items]
+                # Peso inverso consistente con get_deterministic_variety_prompt(): 1/(freq+1)
+                # Independiente del max del dataset → distribución estable y determinista.
+                weights = [1.0 / (freq.get(item, 0) + 1) for item in available_items]
                 return random.choices(available_items, weights=weights, k=1)[0]
             return random.choice(available_items)
         
