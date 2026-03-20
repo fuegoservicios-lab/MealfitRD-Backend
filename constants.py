@@ -2,7 +2,7 @@
 
 DOMINICAN_PROTEINS = [
     "Pollo", "Cerdo", "Res", "Pescado", "Atún", "Huevos", "Queso de Freír",
-    "Salami Dominicano", "Camarones", "Chuleta", "Longaniza", "Berenjena",
+    "Salami Dominicano", "Camarones", "Chuleta", "Longaniza",
     "Habichuelas Rojas", "Habichuelas Negras", "Gandules", "Lentejas", "Garbanzos", "Soya/Tofu"
 ]
 
@@ -23,7 +23,7 @@ PROTEIN_SYNONYMS = {
     "camarones": ["camarones", "camarón", "camaron"],
     "chuleta": ["chuleta", "chuletas", "chuleta frita", "chuleta al horno"],
     "longaniza": ["longaniza", "longanizas"],
-    "berenjena": ["berenjena", "berenjenas", "berenjena rellena"],
+
     "habichuelas rojas": ["habichuelas rojas", "frijoles rojos", "habichuela roja"],
     "habichuelas negras": ["habichuelas negras", "frijoles negros", "habichuela negra"],
     "gandules": ["gandules", "guandules", "gandul", "guandul"],
@@ -55,7 +55,7 @@ DOMINICAN_VEGGIES_FATS = [
 
 VEGGIE_FAT_SYNONYMS = {
     "aguacate": ["aguacate", "palta"],
-    "berenjena": ["berenjena", "berenjenas"],
+    "berenjena": ["berenjena", "berenjenas", "berenjena rellena"],
     "tayota": ["tayota", "chayote"],
     "repollo": ["repollo"],
     "zanahoria": ["zanahoria", "zanahorias"],
@@ -71,10 +71,28 @@ VEGGIE_FAT_SYNONYMS = {
     "nueces/almendras": ["nueces", "almendras", "maní"]
 }
 
+DOMINICAN_FRUITS = [
+    "Guineo", "Mango", "Piña", "Lechosa", "Chinola",
+    "Limón", "Fresa", "Naranja", "Sandía", "Melón"
+]
+
+FRUIT_SYNONYMS = {
+    "guineo": ["guineo", "guineo maduro", "banana", "banano"],
+    "mango": ["mango", "mangos", "mango maduro"],
+    "piña": ["piña", "pina", "piña natural"],
+    "lechosa": ["lechosa", "papaya"],
+    "chinola": ["chinola", "maracuyá", "maracuya", "parcha"],
+    "limón": ["limón", "limon", "lima", "jugo de limón"],
+    "fresa": ["fresa", "fresas", "frutilla"],
+    "naranja": ["naranja", "naranjas", "jugo de naranja"],
+    "sandía": ["sandía", "sandia", "patilla"],
+    "melón": ["melón", "melon"]
+}
+
 def get_reverse_synonyms_map():
     """Crea un diccionario inverso donde la clave es la variante ('pechuga') y el valor es el término base ('pollo')."""
     reverse_map = {}
-    for synonyms_dict in [PROTEIN_SYNONYMS, CARB_SYNONYMS, VEGGIE_FAT_SYNONYMS]:
+    for synonyms_dict in [PROTEIN_SYNONYMS, CARB_SYNONYMS, VEGGIE_FAT_SYNONYMS, FRUIT_SYNONYMS]:
         for base, variants in synonyms_dict.items():
             for variant in variants:
                 reverse_map[variant.lower()] = base.lower()
@@ -84,13 +102,17 @@ GLOBAL_REVERSE_MAP = get_reverse_synonyms_map()
 # Ordenamos las variantes de mayor a menor longitud para no reemplazar subpalabras accidentalmente.
 # Por ejemplo, reemplazar "habichuelas rojas" antes de "habichuelas".
 SORTED_VARIANTS = sorted(GLOBAL_REVERSE_MAP.keys(), key=len, reverse=True)
+import re
+# Pre-compilar patrones regex con \b al cargar el módulo (O(1) por llamada posterior)
+_SYNONYM_PATTERNS = [
+    (re.compile(rf'\b{re.escape(variant)}\b'), GLOBAL_REVERSE_MAP[variant])
+    for variant in SORTED_VARIANTS
+]
 
 def apply_synonyms(text: str) -> str:
-    """Reemplaza variantes por sus términos base en un texto usando expresiones regulares."""
-    import re
+    """Reemplaza variantes por sus términos base en un texto usando patrones pre-compilados."""
     text = text.lower()
-    for variant in SORTED_VARIANTS:
-        if variant in text:
-            # Usar \b para límites de palabra y evitar reemplazos parciales
-            text = re.sub(rf'\b{re.escape(variant)}\b', GLOBAL_REVERSE_MAP[variant], text)
+    for pattern, base in _SYNONYM_PATTERNS:
+        text = pattern.sub(base, text)
     return text
+

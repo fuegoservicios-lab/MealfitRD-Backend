@@ -429,12 +429,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 
                 def _normalize(s: str) -> str:
                     s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
-                    # Eliminar palabras de conexión para enfocar similitud en ingredientes clave
-                    s = re.sub(r'\b(con|de|y|al|a|la|el|en|las|los)\b', '', s.lower())
-                    
-                    # 🚀 Aplicar mapeo de sinónimos dominicanos ("pechuga" -> "pollo")
+                    # apply_synonyms ya hace .lower() internamente ("pechuga" -> "pollo")
                     s = apply_synonyms(s)
-                    
+                    # Eliminar palabras de conexión para enfocar similitud en ingredientes clave
+                    s = re.sub(r'\b(con|de|y|al|a|la|el|en|las|los)\b', '', s)
                     return re.sub(r'\s+', ' ', s).strip()
                     
                 recent_meal_names = get_recent_meals_from_plans(user_id, days=3)
