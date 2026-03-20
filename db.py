@@ -1050,11 +1050,16 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
     except Exception as e:
         print(f"⚠️ [DB] Error incrementando frecuecia de ingredientes: {e}")
 
-def get_user_ingredient_frequencies(user_id: str) -> dict:
-    """Retorna un diccionario {ingrediente_normalizado: conteo_entero} en O(1) de la DB."""
+def get_user_ingredient_frequencies(user_id: str, days_limit: int = 30) -> dict:
+    """Retorna un diccionario {ingrediente_normalizado: conteo_entero} en O(1) de la DB.
+    Implementa Decaimiento Temporal, ignorando ingredientes no usados en los últimos `days_limit` días.
+    """
     if not supabase or not user_id or user_id == "guest": return {}
     try:
-        res = supabase.table("ingredient_frequencies").select("ingredient, count").eq("user_id", user_id).execute()
+        from datetime import datetime, timedelta, timezone
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_limit)).isoformat()
+        
+        res = supabase.table("ingredient_frequencies").select("ingredient, count").eq("user_id", user_id).gte("last_used", cutoff_date).execute()
         if res.data:
             return {row["ingredient"]: row["count"] for row in res.data}
         return {}

@@ -59,6 +59,46 @@ from constants import (
     VEGGIE_FAT_SYNONYMS as veggie_fat_synonyms
 )
 
+import functools
+
+@functools.lru_cache(maxsize=1000)
+def _get_cached_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
+    """Filtra y guarda en caché (O(1)) el catálogo dominicano basado en restricciones del usuario."""
+    filtered_proteins = DOMINICAN_PROTEINS.copy()
+    filtered_carbs = DOMINICAN_CARBS.copy()
+    filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
+    
+    restrictions = list(allergies) + list(dislikes)
+    
+    if diet in ["vegano", "vegan"]:
+        restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "huevos", "queso", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco", "lácteo", "leche"])
+    elif diet in ["vegetariano", "vegetarian"]:
+        restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco"])
+    elif diet in ["pescetariano", "pescatarian"]:
+        restrictions.extend(["pollo", "cerdo", "res", "salami", "chuleta", "longaniza", "carne"])
+        
+    def is_allowed(item):
+        item_normalized = strip_accents(item.lower())
+        for r in restrictions:
+            r_normalized = strip_accents(r.lower())
+            if re.search(r'\b' + re.escape(r_normalized) + r'\b', item_normalized):
+                return False
+            if r_normalized in ["mariscos", "seafood", "marisco"] and any(
+                re.search(r'\b' + x + r'\b', item_normalized) for x in ["camaron", "camarones", "pescado", "atun"]
+            ):
+                return False
+            if r_normalized in ["carne", "carnes", "meat"] and any(
+                re.search(r'\b' + x + r'\b', item_normalized) for x in ["pollo", "cerdo", "res", "chuleta", "longaniza", "salami"]
+            ):
+                return False
+        return True
+        
+    filtered_proteins = [p for p in filtered_proteins if is_allowed(p)]
+    filtered_carbs = [c for c in filtered_carbs if is_allowed(c)]
+    filtered_veggies = [v for v in filtered_veggies if is_allowed(v)]
+    
+    return filtered_proteins, filtered_carbs, filtered_veggies
+
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
     print("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
@@ -71,42 +111,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
     
     if form_data:
-        allergies = [a.lower() for a in form_data.get("allergies", [])]
-        dislikes = [d.lower() for d in form_data.get("dislikes", [])]
+        allergies = tuple([a.lower() for a in form_data.get("allergies", [])])
+        dislikes = tuple([d.lower() for d in form_data.get("dislikes", [])])
         diet = form_data.get("diet", form_data.get("dietType", "")).lower()
         
-        restrictions = allergies + dislikes
-        
-        if diet in ["vegano", "vegan"]:
-            restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "huevos", "queso", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco", "lácteo", "leche"])
-        elif diet in ["vegetariano", "vegetarian"]:
-            restrictions.extend(["pollo", "cerdo", "res", "pescado", "atún", "salami", "camarones", "chuleta", "longaniza", "carne", "marisco"])
-        elif diet in ["pescetariano", "pescatarian"]:
-            restrictions.extend(["pollo", "cerdo", "res", "salami", "chuleta", "longaniza", "carne"])
-            
-        def is_allowed(item):
-            item_normalized = strip_accents(item.lower())
-            for r in restrictions:
-                r_normalized = strip_accents(r.lower())
-                # Comparación con word-boundary para evitar falsos positivos
-                # (ej: restricción "res" NO debe bloquear "camarones")
-                if re.search(r'\b' + re.escape(r_normalized) + r'\b', item_normalized):
-                    return False
-                if r_normalized in ["mariscos", "seafood", "marisco"] and any(
-                    re.search(r'\b' + x + r'\b', item_normalized) 
-                    for x in ["camaron", "camarones", "pescado", "atun"]
-                ):
-                    return False
-                if r_normalized in ["carne", "carnes", "meat"] and any(
-                    re.search(r'\b' + x + r'\b', item_normalized) 
-                    for x in ["pollo", "cerdo", "res", "chuleta", "longaniza", "salami"]
-                ):
-                    return False
-            return True
-            
-        filtered_proteins = [p for p in filtered_proteins if is_allowed(p)]
-        filtered_carbs = [c for c in filtered_carbs if is_allowed(c)]
-        filtered_veggies = [v for v in filtered_veggies if is_allowed(v)]
+        filtered_proteins, filtered_carbs, filtered_veggies = _get_cached_filtered_catalogs(allergies, dislikes, diet)
         
 
     # ----------------------------------------------------

@@ -172,14 +172,41 @@ Estos son datos críticos que debes respetar.
     print(f"🎲 [ORQUESTADOR] Inyectando variedad determinista en el generador.")
     
     # --- 🎲 INYECTOR DINÁMICO DE VARIEDAD CULINARIA ---
-    cooking_techniques = [
-        "Estilo Fusión Criolla", "Horneado Saludable", "Al Vapor con Finas Hierbas",
-        "A la Plancha con Cítricos", "Guiso o Estofado Ligero", "Salteado tipo Wok",
-        "Desmenuzado (Ropa Vieja)", "En Puré o Majado", "Estilo Ceviche o Fresco",
-        "Asado a la Parrilla", "En Salsa a base de Vegetales Naturales", "En Airfryer Crujiente",
-        "Croquetas o Tortitas al Horno", "Relleno (Ej. Canoas, Vegetales rellenos)"
-    ]
-    selected_techniques = random.sample(cooking_techniques, 3)
+    technique_keywords = {
+        "Estilo Fusión Criolla": ["fusion", "criolla", "criollo"],
+        "Horneado Saludable": ["horneado", "horno", "al horno", "horneada"],
+        "Al Vapor con Finas Hierbas": ["vapor", "al vapor"],
+        "A la Plancha con Cítricos": ["plancha", "a la plancha"],
+        "Guiso o Estofado Ligero": ["guiso", "guisado", "guisada", "estofado"],
+        "Salteado tipo Wok": ["wok", "salteado", "salteada"],
+        "Desmenuzado (Ropa Vieja)": ["desmenuzado", "desmenuzada", "ropa vieja", "ripiao"],
+        "En Puré o Majado": ["pure", "majado", "mangu", "cepa"],
+        "Estilo Ceviche o Fresco": ["ceviche", "fresco", "fresca", "crudo", "cruda"],
+        "Asado a la Parrilla": ["asado", "asada", "parrilla", "bbq", "carbon"],
+        "En Salsa a base de Vegetales Naturales": ["en salsa", "salsa"],
+        "En Airfryer Crujiente": ["airfryer", "crujiente", "freidora de aire"],
+        "Croquetas o Tortitas al Horno": ["croqueta", "croquetas", "tortita", "tortitas"],
+        "Relleno (Ej. Canoas, Vegetales rellenos)": ["relleno", "rellena", "canoa", "canoas"]
+    }
+    
+    import unicodedata
+    import re
+    history_norm = ''.join(c for c in unicodedata.normalize('NFD', history_context or "") if unicodedata.category(c) != 'Mn').lower()
+    
+    available_techniques = []
+    for tech, keywords in technique_keywords.items():
+        used = False
+        for kw in keywords:
+            if re.search(r'\b' + re.escape(kw) + r'\b', history_norm):
+                used = True
+                break
+        if not used:
+            available_techniques.append(tech)
+            
+    if len(available_techniques) < 3:
+        available_techniques = list(technique_keywords.keys())
+        
+    selected_techniques = random.sample(available_techniques, 3)
     
     technique_injection = (
         f"\n--- 👨🍳 INSTRUCCIÓN DINÁMICA DE VARIEDAD (OBLIGATORIA) ---\n"
@@ -446,16 +473,14 @@ Responde ÚNICAMENTE con el JSON de revisión.
                                         repeated_meals.append(meal.get("name", "?"))
                                         break
                     
-                    # Umbral: si más de 1 comida principal se repite, rechazar
-                    if len(repeated_meals) > 1:
+                    # Umbral: cero tolerancia - si 1 o más comidas principales se repiten, rechazar
+                    if len(repeated_meals) > 0:
                         approved = False
                         issues.append(
                             f"REPETICIÓN DETECTADA: Los siguientes platos principales ya aparecieron en planes recientes y deben ser reemplazados por alternativas completamente diferentes: {', '.join(repeated_meals)}."
                         )
                         severity = "minor"
                         print(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados: {repeated_meals}")
-                    elif repeated_meals:
-                        print(f"⚠️  [ANTI-REPETICIÓN] 1 plato repetido tolerado: {repeated_meals}")
                     else:
                         print(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_set)} platos recientes.")
         except Exception as e:

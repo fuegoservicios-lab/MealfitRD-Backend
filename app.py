@@ -169,6 +169,9 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
                     print(f"💾 [DB] Plan guardado exitosamente en meal_plans para {actual_user_id}")
             except Exception as db_e:
                 print(f"⚠️ [DB ERROR] No se pudo guardar el plan en Supabase: {db_e}")
+                
+            # 📈 Background: Trackear frecuencias de ingredientes del nuevo plan
+            background_tasks.add_task(_track_plan_frequencies_background, actual_user_id, result)
 
         return result
     except Exception as e:
@@ -176,6 +179,20 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         traceback.print_exc()
         print(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def _track_plan_frequencies_background(user_id: str, plan_data: dict):
+    """Background task: extraer y contar ingredientes del nuevo plan para guardarlos en frecuencias O(1)."""
+    from db import increment_ingredient_frequencies
+    try:
+        raw_ingredients = []
+        for d in plan_data.get("days", []):
+            for m in d.get("meals", []):
+                raw_ingredients.extend(m.get("ingredients", []))
+        if raw_ingredients:
+            increment_ingredient_frequencies(user_id, raw_ingredients)
+            print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id}")
+    except Exception as e:
+        print(f"⚠️ [FREQ TRACKING ERROR] No se pudieron actualizar frecuencias: {e}")
 
 @app.post("/api/swap-meal")
 def api_swap_meal(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -710,15 +727,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         if not items:
             return {"success": False, "message": "No se encontraron ingredientes para consolidar en el plan activo."}
             
-        from db import add_custom_shopping_items, increment_ingredient_frequencies
-        
-        # 1. Background DB Frequency Tracking Optimization
-        raw_ingredients = []
-        for d in current_plan.get("days", []):
-            for m in d.get("meals", []):
-                raw_ingredients.extend(m.get("ingredients", []))
-                
-        increment_ingredient_frequencies(user_id, raw_ingredients)
+        from db import add_custom_shopping_items
         
         # Guardar cada string consolidado como un item en la tabla custom_shopping_items
         result = add_custom_shopping_items(user_id, items)

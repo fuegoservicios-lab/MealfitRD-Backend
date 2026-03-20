@@ -163,6 +163,20 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                         "macros": macros,
                     }).execute()
                     print("💾 Plan generado desde chat guardado en DB.")
+                    
+                    # 📈 Frequency Tracking para plan generado por chat
+                    try:
+                        from db import increment_ingredient_frequencies
+                        raw_ingredients = []
+                        for d in result.get("days", []):
+                            for m in d.get("meals", []):
+                                raw_ingredients.extend(m.get("ingredients", []))
+                        if raw_ingredients:
+                            increment_ingredient_frequencies(user_id, raw_ingredients)
+                            print(f"📈 [FREQ TRACKING] Frecuencias de chat actualizadas para {user_id}")
+                    except Exception as freq_e:
+                        print(f"⚠️ [FREQ TRACKING ERROR] Error en tools: {freq_e}")
+
             except Exception as db_e:
                 print(f"⚠️ Aviso: No se pudo guardar el plan en Supabase (error {db_e}), pero el plan se devolverá al usuario.")
             
