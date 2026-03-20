@@ -69,6 +69,7 @@ def _get_cached_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
     filtered_proteins = DOMINICAN_PROTEINS.copy()
     filtered_carbs = DOMINICAN_CARBS.copy()
     filtered_veggies = DOMINICAN_VEGGIES_FATS.copy()
+    filtered_fruits = DOMINICAN_FRUITS.copy()
     
     restrictions = list(allergies) + list(dislikes)
     
@@ -98,8 +99,9 @@ def _get_cached_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
     filtered_proteins = [p for p in filtered_proteins if is_allowed(p)]
     filtered_carbs = [c for c in filtered_carbs if is_allowed(c)]
     filtered_veggies = [v for v in filtered_veggies if is_allowed(v)]
+    filtered_fruits = [f for f in filtered_fruits if is_allowed(f)]
     
-    return filtered_proteins, filtered_carbs, filtered_veggies
+    return filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits
 
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
@@ -113,9 +115,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         dislikes = tuple([d.lower() for d in form_data.get("dislikes", [])])
         diet = form_data.get("diet", form_data.get("dietType", "")).lower()
         
-        filtered_proteins, filtered_carbs, filtered_veggies = _get_cached_filtered_catalogs(allergies, dislikes, diet)
-        # Filtrar frutas por alergias y dislikes (no dependen de dieta)
-        filtered_fruits = [f for f in DOMINICAN_FRUITS if f.lower() not in allergies and f.lower() not in dislikes]
+        filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_cached_filtered_catalogs(allergies, dislikes, diet)
     else:
         # Guest sin form_data: usar catálogos completos sin filtrar
         filtered_proteins = DOMINICAN_PROTEINS
@@ -377,7 +377,7 @@ def swap_meal(form_data: dict):
         swap_dislikes = tuple([d.lower() for d in dislikes]) if dislikes else ()
         swap_diet = diet_type.lower() if diet_type else ""
         
-        filtered_p, filtered_c, filtered_v = _get_cached_filtered_catalogs(swap_allergies, swap_dislikes, swap_diet)
+        filtered_p, filtered_c, filtered_v, _ = _get_cached_filtered_catalogs(swap_allergies, swap_dislikes, swap_diet)
         
         # Excluir ingredientes del plato rechazado
         rejected_lower = rejected_meal.lower()

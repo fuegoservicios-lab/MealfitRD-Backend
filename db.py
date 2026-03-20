@@ -977,12 +977,17 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     base_ingredient = None
     lower_meal = rejected_meal.lower()
     
-    # Primero intentar resolver sinónimos (ej: "pechuga" → "pollo", "chuleta" → "cerdo")
-    for word in lower_meal.split():
-        word_clean = word.strip(".,;:!?()\"'")
-        if word_clean in reverse_map:
-            base_ingredient = reverse_map[word_clean].capitalize()
+    # Resolver sinónimos con n-gramas (trigrams → bigrams → unigrams)
+    # para detectar multipalabra como "carne molida" → "res", "queso de freír" → "queso de freír"
+    words = [w.strip(".,;:!?()\"'") for w in lower_meal.split()]
+    for n in range(min(3, len(words)), 0, -1):  # 3-grams primero, luego 2, luego 1
+        if base_ingredient:
             break
+        for i in range(len(words) - n + 1):
+            ngram = " ".join(words[i:i+n])
+            if ngram in reverse_map:
+                base_ingredient = reverse_map[ngram].capitalize()
+                break
     
     # Fallback: búsqueda directa por nombre de proteína base
     if not base_ingredient:
