@@ -17,6 +17,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Silenciar logs verbosos de httpx (Supabase client)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 from agent import swap_meal, chat_with_agent, analyze_preferences_agent
 from graph_orchestrator import run_plan_pipeline
 from db import get_or_create_session, save_message, insert_like, get_user_likes, insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile, update_user_health_profile, get_all_user_facts, delete_user_fact, get_custom_shopping_items, delete_custom_shopping_item, log_api_usage, get_monthly_api_usage, connection_pool
