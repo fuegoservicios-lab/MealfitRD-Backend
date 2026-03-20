@@ -116,3 +116,62 @@ def apply_synonyms(text: str) -> str:
         text = pattern.sub(base, text)
     return text
 
+import unicodedata
+
+# Regex pre-compilado para stripear cantidades/unidades al inicio de un string de ingrediente.
+# Captura patrones como: "200g", "1/2", "3 cdas", "1 lb", "2 tazas de", "100 ml de", etc.
+_QUANTITY_PATTERN = re.compile(
+    r'^[\d\s/.,]+'                           # Números, fracciones, espacios iniciales
+    r'(?:'
+        r'g\b|gr\b|kg\b|mg\b|ml\b|l\b|lb\b|lbs\b|oz\b'   # Unidades métricas/imperiales
+        r'|cdas?\b|cdtas?\b|cucharadas?\b|cucharaditas?\b'  # Cucharadas
+        r'|tazas?\b|vasos?\b|porciones?\b|unidades?\b'      # Medidas de volumen
+        r'|rodajas?\b|rebanadas?\b|lascas?\b|tiras?\b'      # Formas de corte
+        r'|pizcas?\b|puñados?\b|ramitas?\b'                  # Cantidades imprecisas
+        r'|libras?\b|medias?\b|media\b'                      # Libras / fracciones
+    r')?'
+    r'\s*(?:de\s+)?',                        # "de " opcional que conecta cantidad con ingrediente
+    re.IGNORECASE
+)
+
+def normalize_ingredient_for_tracking(raw: str) -> str:
+    """Normaliza un string crudo de ingrediente para frequency tracking.
+    
+    Pipeline:  "200g Pechuga de Pollo deshuesada" 
+            →  strip accents  →  "200g pechuga de pollo deshuesada"
+            →  strip quantities →  "pechuga de pollo deshuesada"
+            →  apply synonyms  →  "pollo"
+    
+    Retorna el término base canónico (ej: "pollo", "platano verde", "aguacate").
+    """
+    if not raw or not raw.strip():
+        return ""
+    
+    # 1. Normalizar acentos y minúsculas
+    text = ''.join(
+        c for c in unicodedata.normalize('NFD', raw)
+        if unicodedata.category(c) != 'Mn'
+    ).lower().strip()
+    
+    # 2. Stripear cantidades y unidades del inicio
+    text = _QUANTITY_PATTERN.sub('', text).strip()
+    
+    # Si quedó vacío tras stripear (ej: el input era solo "200g"), devolver el original limpio
+    if not text:
+        text = ''.join(
+            c for c in unicodedata.normalize('NFD', raw)
+            if unicodedata.category(c) != 'Mn'
+        ).lower().strip()
+    
+    # 3. Aplicar mapa de sinónimos para colapsar a término base
+    #    Usamos n-gramas (de mayor a menor) contra el GLOBAL_REVERSE_MAP
+    #    para detectar multipalabra como "pechuga de pollo" → "pollo"
+    words = text.split()
+    for n in range(min(4, len(words)), 0, -1):
+        for i in range(len(words) - n + 1):
+            ngram = " ".join(words[i:i+n])
+            if ngram in GLOBAL_REVERSE_MAP:
+                return GLOBAL_REVERSE_MAP[ngram]
+    
+    # 4. Fallback: si no matcheó ningún sinónimo, devolver el texto limpio
+    return text

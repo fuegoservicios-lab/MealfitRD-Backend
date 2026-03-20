@@ -734,6 +734,30 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
         print(f"Error obteniendo comidas recientes: {e}")
         return []
 
+def get_recent_techniques(user_id: str, limit: int = 5) -> list:
+    """Obtiene las técnicas de cocción usadas en planes recientes desde la columna `techniques` (text[]).
+    Retorna una lista plana de strings, ej: ['Horneado Saludable', 'Al Vapor con Finas Hierbas'].
+    """
+    if not supabase or not user_id or user_id == "guest": return []
+    try:
+        res = supabase.table("meal_plans").select("techniques").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        techniques = set()
+        if res.data:
+            for row in res.data:
+                techs = row.get("techniques")
+                if techs and isinstance(techs, list):
+                    for t in techs:
+                        if t:
+                            techniques.add(t)
+        return list(techniques)
+    except Exception as e:
+        error_msg = str(e)
+        if "techniques" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            # La columna aún no existe en la DB → retornar vacío silenciosamente
+            return []
+        print(f"Error obteniendo técnicas recientes: {e}")
+        return []
+
 def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
     """Extrae los ingredientes crudos directamente del JSON o de la columna optimizada si existe.
     Retorna una lista plana de strings de ingredientes."""

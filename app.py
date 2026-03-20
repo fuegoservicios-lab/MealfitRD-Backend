@@ -152,8 +152,10 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
             log_api_usage(actual_user_id, "gemini_analyze")
             
         # 👇 NUEVO: Guardar el plan generado y trackear frecuencias en Background
+        # Extraer técnicas ANTES del background (dicts son by-reference, el pop debe ser previo)
+        selected_techniques = result.pop("_selected_techniques", None)
         if actual_user_id and actual_user_id != "guest":
-            background_tasks.add_task(_save_plan_and_track_background, actual_user_id, result)
+            background_tasks.add_task(_save_plan_and_track_background, actual_user_id, result, selected_techniques)
 
         return result
     except Exception as e:
@@ -162,7 +164,7 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         print(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def _save_plan_and_track_background(user_id: str, plan_data: dict):
+def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
     """Background task: Guarda el plan JSON en supabase y trackea frecuencias, O(1)."""
     try:
         from db import supabase, increment_ingredient_frequencies
@@ -194,23 +196,31 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict):
                 "ingredients": ingredients
             }
             
+            # Añadir técnicas de cocción si están disponibles
+            if selected_techniques:
+                insert_data["techniques"] = selected_techniques
+            
             try:
                 supabase.table("meal_plans").insert(insert_data).execute()
             except Exception as try_db_e:
                 err_msg = str(try_db_e)
-                if "meal_names" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
-                    print("⚠️ [DB] Faltan columnas optimizadas (meal_names). Ejecute migration_fast_meals.sql")
-                    del insert_data["meal_names"]
-                    del insert_data["ingredients"]
+                if "meal_names" in err_msg or "techniques" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
+                    print("⚠️ [DB] Faltan columnas optimizadas (meal_names/techniques). Ejecute migration_fast_meals.sql")
+                    insert_data.pop("meal_names", None)
+                    insert_data.pop("ingredients", None)
+                    insert_data.pop("techniques", None)
                     supabase.table("meal_plans").insert(insert_data).execute()
                 else:
                     raise try_db_e
             print(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
             
-        # 2. Track Frequencies
+        # 2. Track Frequencies (con normalización para que las keys coincidan con los sinónimos)
         if raw_ingredients:
-            increment_ingredient_frequencies(user_id, raw_ingredients)
-            print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id}")
+            from constants import normalize_ingredient_for_tracking
+            normalized = [normalize_ingredient_for_tracking(ing) for ing in raw_ingredients]
+            normalized = [n for n in normalized if n]  # Filtrar vacíos
+            increment_ingredient_frequencies(user_id, normalized)
+            print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(normalized)} ingredientes normalizados)")
             
     except Exception as e:
         print(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")

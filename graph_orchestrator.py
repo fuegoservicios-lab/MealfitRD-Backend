@@ -172,46 +172,45 @@ Estos son datos críticos que debes respetar.
     print(f"🎲 [ORQUESTADOR] Inyectando variedad determinista en el generador.")
     
     # --- 🎲 INYECTOR DINÁMICO DE VARIEDAD CULINARIA ---
-    technique_keywords = {
-        "Estilo Fusión Criolla": ["fusion", "criolla", "criollo"],
-        "Horneado Saludable": ["horneado", "horno", "al horno", "horneada"],
-        "Al Vapor con Finas Hierbas": ["vapor", "al vapor"],
-        "A la Plancha con Cítricos": ["plancha", "a la plancha"],
-        "Guiso o Estofado Ligero": ["guiso", "guisado", "guisada", "estofado"],
-        "Salteado tipo Wok": ["wok", "salteado", "salteada"],
-        "Desmenuzado (Ropa Vieja)": ["desmenuzado", "desmenuzada", "ropa vieja", "ripiao"],
-        "En Puré o Majado": ["pure", "majado", "mangu", "cepa"],
-        "Estilo Ceviche o Fresco": ["ceviche", "fresco", "fresca", "crudo", "cruda"],
-        "Asado a la Parrilla": ["asado", "asada", "parrilla", "bbq", "carbon"],
-        "En Salsa a base de Vegetales Naturales": ["en salsa", "salsa"],
-        "En Airfryer Crujiente": ["airfryer", "crujiente", "freidora de aire"],
-        "Croquetas o Tortitas al Horno": ["croqueta", "croquetas", "tortita", "tortitas"],
-        "Relleno (Ej. Canoas, Vegetales rellenos)": ["relleno", "rellena", "canoa", "canoas"]
-    }
+    ALL_TECHNIQUES = [
+        "Estilo Fusión Criolla",
+        "Horneado Saludable",
+        "Al Vapor con Finas Hierbas",
+        "A la Plancha con Cítricos",
+        "Guiso o Estofado Ligero",
+        "Salteado tipo Wok",
+        "Desmenuzado (Ropa Vieja)",
+        "En Puré o Majado",
+        "Estilo Ceviche o Fresco",
+        "Asado a la Parrilla",
+        "En Salsa a base de Vegetales Naturales",
+        "En Airfryer Crujiente",
+        "Croquetas o Tortitas al Horno",
+        "Relleno (Ej. Canoas, Vegetales rellenos)"
+    ]
     
-    import unicodedata
-    import re
-    history_norm = ''.join(c for c in unicodedata.normalize('NFD', history_context or "") if unicodedata.category(c) != 'Mn').lower()
+    # Query estructurado O(1) contra la DB en vez de regex O(n) contra texto
+    recently_used_techniques = set()
+    if _uid:
+        try:
+            from db import get_recent_techniques
+            recently_used_techniques = set(get_recent_techniques(_uid, limit=3))
+            if recently_used_techniques:
+                print(f"🔍 [TÉCNICAS] {len(recently_used_techniques)} técnicas recientes encontradas en DB: {recently_used_techniques}")
+        except Exception as e:
+            print(f"⚠️ [TÉCNICAS] Error consultando DB, usando todas: {e}")
     
-    available_techniques = []
-    for tech, keywords in technique_keywords.items():
-        used = False
-        for kw in keywords:
-            if re.search(r'\b' + re.escape(kw) + r'\b', history_norm):
-                used = True
-                break
-        if not used:
-            available_techniques.append(tech)
-            
+    available_techniques = [t for t in ALL_TECHNIQUES if t not in recently_used_techniques]
+    
     if len(available_techniques) < 3:
-        available_techniques = list(technique_keywords.keys())
+        available_techniques = list(ALL_TECHNIQUES)
         
     selected_techniques = random.sample(available_techniques, 3)
     
     technique_injection = (
         f"\n--- 👨🍳 INSTRUCCIÓN DINÁMICA DE VARIEDAD (OBLIGATORIA) ---\n"
         f"Para cumplir la regla de usar los MISMOS ingredientes del supermercado pero crear PLATOS DIFERENTES, "
-        f"aplica obligatoriamente estas técnicas de cocción a las comidas principales:\n"
+        f"aplica obligatoriamente estas técnicas de cocción a las comidas principales (Almuerzo o Cena):\n"
         f"• Día 1 (Opción A): Aplica técnica '{selected_techniques[0]}'\n"
         f"• Día 2 (Opción B): Aplica técnica '{selected_techniques[1]}'\n"
         f"• Día 3 (Opción C): Aplica técnica '{selected_techniques[2]}'\n"
@@ -270,6 +269,9 @@ Estos son datos críticos que debes respetar.
         "fats": active_macros["fats_str"],
     }
     result["main_goal"] = nutrition["goal_label"]
+    
+    # Guardar técnicas seleccionadas para persistencia en DB (se extraen en app.py)
+    result["_selected_techniques"] = selected_techniques
     
     return {
         "plan_result": result,

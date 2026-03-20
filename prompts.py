@@ -22,9 +22,9 @@ DETERMINISTIC_VARIETY_PROMPT = """
 ⚠️ REGLA DE INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ⚠️
 Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccionado los núcleos base obligatorios. Debes construir las Opciones alrededor de estos ingredientes (o basar los almuerzos / cenas principales en ellos):
 
-- 🔴 OPCIÓN A (Día 1) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_0} + {carb_0} y como acompañante vegetal/grasa: {veggie_0}. Para desayunos y meriendas, incluye {fruit_0} como fruta.
-- 🔵 OPCIÓN B (Día 2) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_1} + {carb_1} y como acompañante vegetal/grasa: {veggie_1}. Para desayunos y meriendas, incluye {fruit_1} como fruta.
-- 🟢 OPCIÓN C (Día 3) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_2} + {carb_2} y como acompañante vegetal/grasa: {veggie_2}. Para desayunos y meriendas, incluye {fruit_2} como fruta.
+- 🔴 OPCIÓN A (Día 1) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_0} + {carb_0} y como acompañante vegetal/grasa: {veggie_0}. Fruta sugerida para desayunos/meriendas: {fruit_0}.
+- 🔵 OPCIÓN B (Día 2) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_1} + {carb_1} y como acompañante vegetal/grasa: {veggie_1}. Fruta sugerida para desayunos/meriendas: {fruit_1}.
+- 🟢 OPCIÓN C (Día 3) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_2} + {carb_2} y como acompañante vegetal/grasa: {veggie_2}. Fruta sugerida para desayunos/meriendas: {fruit_2}.
 
 {blocked_text}
 """
