@@ -918,8 +918,17 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict):
 def add_custom_shopping_items(user_id: str, items: list):
     """Inserta uno o más items custom a la lista de compras del usuario."""
     if not supabase or not items: return None
+    import json
     try:
-        rows = [{"user_id": user_id, "item_name": item.strip()} for item in items if item.strip()]
+        rows = []
+        for item in items:
+            if hasattr(item, 'model_dump'):
+                rows.append({"user_id": user_id, "item_name": json.dumps(item.model_dump(), ensure_ascii=False)})
+            elif isinstance(item, dict):
+                rows.append({"user_id": user_id, "item_name": json.dumps(item, ensure_ascii=False)})
+            elif isinstance(item, str) and item.strip():
+                rows.append({"user_id": user_id, "item_name": item.strip()})
+                
         if rows:
             res = supabase.table("custom_shopping_items").insert(rows).execute()
             return res.data
@@ -927,6 +936,31 @@ def add_custom_shopping_items(user_id: str, items: list):
     except Exception as e:
         print(f"Error añadiendo items a shopping list: {e}")
         return None
+
+def delete_auto_generated_shopping_items(user_id: str):
+    """Elimina los items de la lista de compras auto-generados previamente por la IA (JSON struct)."""
+    if not supabase: return False
+    try:
+        res = supabase.table("custom_shopping_items").select("id, item_name").eq("user_id", user_id).execute()
+        existing = res.data
+        if not existing: return True
+        
+        ids_to_delete = []
+        import json
+        for item in existing:
+            try:
+                parsed = json.loads(item['item_name'])
+                if isinstance(parsed, dict) and 'category' in parsed:
+                    ids_to_delete.append(item['id'])
+            except:
+                pass
+        
+        if ids_to_delete:
+            supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
+        return True
+    except Exception as e:
+        print(f"Error borrando items auto-generados: {e}")
+        return False
 
 def get_custom_shopping_items(user_id: str):
     """Obtiene todos los items custom de la lista de compras del usuario."""
@@ -946,6 +980,39 @@ def delete_custom_shopping_item(item_id: str):
         return res.data
     except Exception as e:
         print(f"Error borrando custom shopping item: {e}")
+        return None
+
+def update_custom_shopping_item_status(item_id: str, is_checked: bool):
+    """Actualiza el estado is_checked de un item guardando la variable en el JSON de item_name."""
+    if not supabase: return None
+    import json
+    try:
+        res = supabase.table("custom_shopping_items").select("item_name").eq("id", item_id).execute()
+        if not res.data: return None
+        
+        current_name = res.data[0]['item_name']
+        try:
+            parsed = json.loads(current_name)
+            if isinstance(parsed, dict):
+                parsed['is_checked'] = is_checked
+                new_name = json.dumps(parsed, ensure_ascii=False)
+            else:
+                raise ValueError("Not a dict")
+        except:
+            # Auto-migrar strings legacy a JSON cuando se marcan/desmarcan
+            parsed = {
+                "category": "Extras (Legacy)",
+                "emoji": "📝",
+                "name": current_name,
+                "qty": "",
+                "is_checked": is_checked
+            }
+            new_name = json.dumps(parsed, ensure_ascii=False)
+            
+        update_res = supabase.table("custom_shopping_items").update({"item_name": new_name}).eq("id", item_id).execute()
+        return update_res.data
+    except Exception as e:
+        print(f"Error actualizando estado de item: {e}")
         return None
 
 # ============================================================

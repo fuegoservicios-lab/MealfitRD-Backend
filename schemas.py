@@ -28,5 +28,11 @@ class PlanModel(BaseModel):
     insights: List[str] = Field(description="Lista EXACTA de 3 frases: 1. Inicia con 'Diagnóstico: ', 2. Inicia con 'Estrategia: ', 3. Inicia con 'Tip del Chef: '")
     days: List[DailyPlanModel] = Field(description="Lista de 3 días con planes de comida variados")
 
+class ShoppingItemModel(BaseModel):
+    category: str = Field(description="Nombre de la categoría principal, Ej: 'Carnes', 'Frutas y Verduras'")
+    emoji: str = Field(description="Un emoji representativo de la categoría, Ej: '🥩', '🥬'")
+    name: str = Field(description="Nombre del ingrediente o producto, Ej: 'Pechuga de pollo'")
+    qty: str = Field(description="Cantidad redondeada a unidades reales de supermercado, Ej: '2 Unidades', '1 Libra', '250g'")
+
 class ShoppingListModel(BaseModel):
-    items: List[str] = Field(description="Lista de ingredientes consolidados y agrupados. Ej: ['🥩 Carnes: 2 pechugas de pollo, 1 lb carne molida', '🥬 Vegetales: 3 plátanos, 1 tomate']")
+    items: List[ShoppingItemModel] = Field(description="Lista de ingredientes parseados y estructurados individualmente.")

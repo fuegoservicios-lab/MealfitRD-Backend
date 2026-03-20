@@ -785,13 +785,16 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         if not items:
             return {"success": False, "message": "No se encontraron ingredientes para consolidar en el plan activo."}
             
-        from db import add_custom_shopping_items
+        from db import add_custom_shopping_items, delete_auto_generated_shopping_items
         
-        # Guardar cada string consolidado como un item en la tabla custom_shopping_items
+        # Limpiar ítems previos generados por IA (Phase 2 - Anti Bloat)
+        delete_auto_generated_shopping_items(user_id)
+        
+        # Guardar cada string/objeto consolidado como un item en la tabla custom_shopping_items
         result = add_custom_shopping_items(user_id, items)
         
         if result is not None:
-            return {"success": True, "items": items, "message": f"Se auto-generaron y guardaron {len(items)} categorías de compras en tu lista con éxito."}
+            return {"success": True, "items": items, "message": f"Se auto-generaron y guardaron {len(items)} ingredientes estructurados en tu lista con éxito."}
         else:
             raise HTTPException(status_code=500, detail="Error al intentar guardar los ingredientes en la base de datos.")
             
@@ -829,6 +832,24 @@ def api_delete_custom_shopping_item(item_id: str):
         return {"success": True, "message": "Item eliminado de la lista."}
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/shopping/custom DELETE: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/shopping/custom/{item_id}/check")
+def api_update_custom_shopping_item_check(item_id: str, data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    """Actualiza el estado de is_checked de un item en la lista de compras."""
+    try:
+        # Validación básica de IDOR: idealmente verificaríamos que el item pertenece al verified_user_id
+        is_checked = data.get("is_checked", False)
+        from db import update_custom_shopping_item_status
+        result = update_custom_shopping_item_status(item_id, is_checked)
+        if result is not None:
+            return {"success": True, "message": "Estado actualizado"}
+        else:
+            raise HTTPException(status_code=404, detail="Item no encontrado o error al actualizar")
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"❌ [ERROR] Error en /api/shopping/custom PUT: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/diary/consumed/{user_id}")

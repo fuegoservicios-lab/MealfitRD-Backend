@@ -74,10 +74,8 @@ REGLA CRÍTICA DE CANTIDADES AL SÓLO COMPRAR:
 - Usa el sentido común: Nadie va al súper a comprar "83 1/3 g Yuca", la gente compra "1 Libra de Yuca" o "1 Yuca Mediana". Redondea todo SIEMPRE hacia arriba a algo que un humano compraría.
 
 Tu tarea es:
-1. SUMAR Y CONSOLIDAR cantidades de ingredientes iguales o similares. APLICA LA REGLA CRÍTICA DE CANTIDADES MENCIONADA AL RESULTADO TOTAL (Convierte todas las sumas de gramos raras a unidades claras o libras).
-2. Agruparlos y categorizarlos por pasillo de supermercado. Debes generar un string por cada CATEGORÍA PRINCIPAL en formato: "[Emoji] [Nombre de la Categoría]: [Cantidades redondeadas y listadas separadas por comas]".
-
-Devuelve exactamente la lista de estos strings ya procesados y listos para leer, limpiando cualquier fracción matemática.
+1. SUMAR Y CONSOLIDAR cantidades de ingredientes iguales o similares. APLICA LA REGLA CRÍTICA DE CANTIDADES MENCIONADA AL RESULTADO TOTAL.
+2. Agruparlos lógicamente en categorías de supermercado. Debes devolver la respuesta en un formato estructurado JSON donde cada ingrediente ES UN APARTE, especificando su 'category', 'emoji', 'name' y 'qty'.
 
 Lista bruta de ingredientes extraídos:
 {ingredients_json}

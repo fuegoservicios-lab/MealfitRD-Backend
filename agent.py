@@ -508,7 +508,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     prompt = AUTO_SHOPPING_LIST_PROMPT.format(ingredients_json=json.dumps(ingredients))
     
     shopping_llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
+        model="gemini-3.1-flash-preview",
         temperature=0.2,
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(ShoppingListModel)
