@@ -915,79 +915,161 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict):
 # LISTA DE COMPRAS CUSTOM (Items añadidos por la IA)
 # ============================================================
 
-def add_custom_shopping_items(user_id: str, items: list):
-    """Inserta uno o más items custom a la lista de compras del usuario."""
+def add_custom_shopping_items(user_id: str, items: list, source: str = "manual"):
+    """Inserta uno o más items custom a la lista de compras del usuario.
+    source: 'auto' (IA auto-generados), 'chat' (añadidos vía chat), 'manual' (default/legacy)"""
     if not supabase or not items: return None
     import json
     try:
         rows = []
         for item in items:
+            row = {"user_id": user_id}
             if hasattr(item, 'model_dump'):
-                rows.append({"user_id": user_id, "item_name": json.dumps(item.model_dump(), ensure_ascii=False)})
+                row["item_name"] = json.dumps(item.model_dump(), ensure_ascii=False)
             elif isinstance(item, dict):
-                rows.append({"user_id": user_id, "item_name": json.dumps(item, ensure_ascii=False)})
+                row["item_name"] = json.dumps(item, ensure_ascii=False)
             elif isinstance(item, str) and item.strip():
-                rows.append({"user_id": user_id, "item_name": item.strip()})
+                row["item_name"] = item.strip()
+            else:
+                continue
+            row["source"] = source
+            rows.append(row)
                 
         if rows:
             res = supabase.table("custom_shopping_items").insert(rows).execute()
             return res.data
         return None
     except Exception as e:
+        error_msg = str(e)
+        if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            # Columna source aún no existe → fallback sin ella
+            print("⚠️ [DB] Columna source ausente. Insertando sin source. Ejecute migration_shopping_is_checked.sql")
+            try:
+                rows_fb = []
+                for item in items:
+                    if hasattr(item, 'model_dump'):
+                        rows_fb.append({"user_id": user_id, "item_name": json.dumps(item.model_dump(), ensure_ascii=False)})
+                    elif isinstance(item, dict):
+                        rows_fb.append({"user_id": user_id, "item_name": json.dumps(item, ensure_ascii=False)})
+                    elif isinstance(item, str) and item.strip():
+                        rows_fb.append({"user_id": user_id, "item_name": item.strip()})
+                if rows_fb:
+                    res_fb = supabase.table("custom_shopping_items").insert(rows_fb).execute()
+                    return res_fb.data
+                return None
+            except Exception as e2:
+                print(f"Error añadiendo items a shopping list (fallback): {e2}")
+                return None
         print(f"Error añadiendo items a shopping list: {e}")
         return None
 
 def delete_auto_generated_shopping_items(user_id: str):
-    """Elimina los items de la lista de compras auto-generados previamente por la IA (JSON struct)."""
+    """Elimina los items auto-generados de la lista de compras del usuario.
+    Usa columna source='auto' para borrado O(1). Fallback a JSON parsing si la columna no existe."""
     if not supabase: return False
+    try:
+        # 🚀 Borrado directo por columna source (O(1) con índice, sin parsear JSON)
+        supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "auto").execute()
+        return True
+    except Exception as e:
+        error_msg = str(e)
+        if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            # Columna source no existe → fallback al método legacy (JSON parsing)
+            print("⚠️ [DB] Columna source ausente. Usando fallback JSON. Ejecute migration_shopping_is_checked.sql")
+            return _delete_auto_shopping_items_legacy(user_id)
+        print(f"Error borrando items auto-generados: {e}")
+        return False
+
+def _delete_auto_shopping_items_legacy(user_id: str):
+    """Fallback legacy: borra items auto-generados parseando JSON (O(N) full table scan)."""
+    import json
     try:
         res = supabase.table("custom_shopping_items").select("id, item_name").eq("user_id", user_id).execute()
         existing = res.data
         if not existing: return True
         
         ids_to_delete = []
-        import json
         for item in existing:
             try:
                 parsed = json.loads(item['item_name'])
                 if isinstance(parsed, dict) and 'category' in parsed:
                     ids_to_delete.append(item['id'])
-            except:
+            except (json.JSONDecodeError, ValueError):
                 pass
         
         if ids_to_delete:
             supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
         return True
     except Exception as e:
-        print(f"Error borrando items auto-generados: {e}")
+        print(f"Error borrando items auto-generados (legacy fallback): {e}")
         return False
 
 def get_custom_shopping_items(user_id: str):
     """Obtiene todos los items custom de la lista de compras del usuario."""
     if not supabase: return []
     try:
-        res = supabase.table("custom_shopping_items").select("id, item_name, created_at").eq("user_id", user_id).order("created_at", desc=True).execute()
+        res = supabase.table("custom_shopping_items").select("id, item_name, is_checked, source, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(200).execute()
         return res.data
     except Exception as e:
+        error_msg = str(e)
+        if "is_checked" in error_msg or "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            # Columnas is_checked/source aún no existen → fallback sin ellas
+            print("⚠️ [DB] Columnas is_checked/source ausentes en custom_shopping_items. Ejecute migration_shopping_is_checked.sql")
+            try:
+                res_fb = supabase.table("custom_shopping_items").select("id, item_name, created_at").eq("user_id", user_id).order("created_at", desc=True).execute()
+                return res_fb.data
+            except Exception as e2:
+                print(f"Error obteniendo custom shopping items (fallback): {e2}")
+                return []
         print(f"Error obteniendo custom shopping items: {e}")
         return []
 
-def delete_custom_shopping_item(item_id: str):
-    """Elimina un item custom de la lista de compras."""
+def delete_custom_shopping_item(item_id: str, user_id: str = None):
+    """Elimina un item custom de la lista de compras. Si se provee user_id, verifica ownership."""
     if not supabase: return None
     try:
-        res = supabase.table("custom_shopping_items").delete().eq("id", item_id).execute()
+        query = supabase.table("custom_shopping_items").delete().eq("id", item_id)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        res = query.execute()
         return res.data
     except Exception as e:
         print(f"Error borrando custom shopping item: {e}")
         return None
 
-def update_custom_shopping_item_status(item_id: str, is_checked: bool):
-    """Actualiza el estado is_checked de un item guardando la variable en el JSON de item_name."""
+def update_custom_shopping_item_status(item_id: str, is_checked: bool, user_id: str = None):
+    """Actualiza el estado is_checked de un item.
+    Intenta usar la columna nativa is_checked (1 query atómica, sin race conditions).
+    Si la columna no existe aún, hace fallback al método legacy (JSON en item_name).
+    Si se provee user_id, verifica ownership (IDOR protection)."""
     if not supabase: return None
+    try:
+        # 🚀 Método atómico: UPDATE directo a columna nativa (O(1), sin race conditions)
+        update_query = supabase.table("custom_shopping_items").update({"is_checked": is_checked}).eq("id", item_id)
+        if user_id:
+            update_query = update_query.eq("user_id", user_id)
+        update_res = update_query.execute()
+        # Verificar que se actualizó al menos 1 fila
+        if update_res.data:
+            return update_res.data
+        return None
+    except Exception as e:
+        error_msg = str(e)
+        if "is_checked" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            # Columna nativa no existe → fallback al método legacy (JSON en item_name)
+            print("⚠️ [DB] Columna is_checked ausente. Usando fallback JSON. Ejecute migration_shopping_is_checked.sql")
+            return _update_shopping_item_status_legacy(item_id, is_checked, user_id)
+        print(f"Error actualizando estado de item: {e}")
+        return None
+
+def _update_shopping_item_status_legacy(item_id: str, is_checked: bool, user_id: str = None):
+    """Fallback legacy: guarda is_checked dentro del JSON de item_name (read-modify-write)."""
     import json
     try:
-        res = supabase.table("custom_shopping_items").select("item_name").eq("id", item_id).execute()
+        query = supabase.table("custom_shopping_items").select("item_name").eq("id", item_id)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        res = query.execute()
         if not res.data: return None
         
         current_name = res.data[0]['item_name']
@@ -998,8 +1080,7 @@ def update_custom_shopping_item_status(item_id: str, is_checked: bool):
                 new_name = json.dumps(parsed, ensure_ascii=False)
             else:
                 raise ValueError("Not a dict")
-        except:
-            # Auto-migrar strings legacy a JSON cuando se marcan/desmarcan
+        except (json.JSONDecodeError, ValueError, KeyError):
             parsed = {
                 "category": "Extras (Legacy)",
                 "emoji": "📝",
@@ -1008,11 +1089,14 @@ def update_custom_shopping_item_status(item_id: str, is_checked: bool):
                 "is_checked": is_checked
             }
             new_name = json.dumps(parsed, ensure_ascii=False)
-            
-        update_res = supabase.table("custom_shopping_items").update({"item_name": new_name}).eq("id", item_id).execute()
+        
+        update_query = supabase.table("custom_shopping_items").update({"item_name": new_name}).eq("id", item_id)
+        if user_id:
+            update_query = update_query.eq("user_id", user_id)
+        update_res = update_query.execute()
         return update_res.data
     except Exception as e:
-        print(f"Error actualizando estado de item: {e}")
+        print(f"Error actualizando estado de item (legacy fallback): {e}")
         return None
 
 # ============================================================

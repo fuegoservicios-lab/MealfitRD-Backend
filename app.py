@@ -791,7 +791,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         delete_auto_generated_shopping_items(user_id)
         
         # Guardar cada string/objeto consolidado como un item en la tabla custom_shopping_items
-        result = add_custom_shopping_items(user_id, items)
+        result = add_custom_shopping_items(user_id, items, source="auto")
         
         if result is not None:
             return {"success": True, "items": items, "message": f"Se auto-generaron y guardaron {len(items)} ingredientes estructurados en tu lista con éxito."}
@@ -824,28 +824,33 @@ def api_get_custom_shopping_items(user_id: str, verified_user_id: str = Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/shopping/custom/{item_id}")
-def api_delete_custom_shopping_item(item_id: str):
-    """Elimina un item custom de la lista de compras."""
+def api_delete_custom_shopping_item(item_id: str, verified_user_id: str = Depends(get_verified_user_id)):
+    """Elimina un item custom de la lista de compras (con validación IDOR)."""
     try:
+        if not verified_user_id:
+            raise HTTPException(status_code=401, detail="No autorizado. Token requerido para eliminar items.")
         from db import delete_custom_shopping_item
-        delete_custom_shopping_item(item_id)
+        delete_custom_shopping_item(item_id, user_id=verified_user_id)
         return {"success": True, "message": "Item eliminado de la lista."}
+    except HTTPException as he:
+        raise he
     except Exception as e:
         print(f"❌ [ERROR] Error en /api/shopping/custom DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/shopping/custom/{item_id}/check")
 def api_update_custom_shopping_item_check(item_id: str, data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
-    """Actualiza el estado de is_checked de un item en la lista de compras."""
+    """Actualiza el estado de is_checked de un item en la lista de compras (con validación IDOR)."""
     try:
-        # Validación básica de IDOR: idealmente verificaríamos que el item pertenece al verified_user_id
+        if not verified_user_id:
+            raise HTTPException(status_code=401, detail="No autorizado. Token requerido.")
         is_checked = data.get("is_checked", False)
         from db import update_custom_shopping_item_status
-        result = update_custom_shopping_item_status(item_id, is_checked)
+        result = update_custom_shopping_item_status(item_id, is_checked, user_id=verified_user_id)
         if result is not None:
             return {"success": True, "message": "Estado actualizado"}
         else:
-            raise HTTPException(status_code=404, detail="Item no encontrado o error al actualizar")
+            raise HTTPException(status_code=404, detail="Item no encontrado o no pertenece al usuario")
     except HTTPException as he:
         raise he
     except Exception as e:

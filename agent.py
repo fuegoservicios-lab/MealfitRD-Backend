@@ -514,7 +514,16 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     ).with_structured_output(ShoppingListModel)
     
     try:
-        response = shopping_llm.invoke(prompt)
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=2, max=8),
+            reraise=True,
+            before_sleep=lambda retry_state: print(f"⚠️  [SHOPPING] Reintento #{retry_state.attempt_number} tras error en auto-generación...")
+        )
+        def invoke_shopping_with_retry():
+            return shopping_llm.invoke(prompt)
+        
+        response = invoke_shopping_with_retry()
         if hasattr(response, "items"):
             items = response.items
         elif isinstance(response, dict) and "items" in response:
@@ -526,7 +535,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
         print("-------------------------------------------------------------\n")
         return items
     except Exception as e:
-        print(f"❌ Error generando auto shopping list: {e}")
+        print(f"❌ Error generando auto shopping list (tras reintentos): {e}")
         return []
 
 # ============================================================

@@ -363,7 +363,17 @@ def add_to_shopping_list(user_id: str, items: str) -> str:
     if not items_list:
         return "No se proporcionaron items válidos para añadir."
     
-    result = add_custom_shopping_items(user_id, items_list)
+    # Normalizar a JSON struct consistente con los items auto-generados (ShoppingItemModel)
+    structured_items = []
+    for item_name in items_list:
+        structured_items.append({
+            "category": "Extras (Chat)",
+            "emoji": "🛒",
+            "name": item_name.capitalize(),
+            "qty": ""
+        })
+    
+    result = add_custom_shopping_items(user_id, structured_items, source="chat")
     if result is not None:
         items_formatted = ", ".join(items_list)
         return f"¡Éxito! Se añadieron {len(items_list)} item(s) a tu lista de compras: {items_formatted}."
