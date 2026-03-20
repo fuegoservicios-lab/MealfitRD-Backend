@@ -1039,7 +1039,47 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
                 break
             
     if not base_ingredient: return False
+    
+    # --- MÉTODO ATÓMICO (RPC) para evitar Race Conditions ---
+    # Si dos requests de swap llegan simultáneos, el FOR UPDATE en PostgreSQL
+    # serializa las escrituras garantizando que ambos incrementos se registren.
+    try:
+        rpc_result = supabase.rpc("increment_friction_rpc", {
+            "p_user_id": user_id,
+            "p_ingredient": base_ingredient
+        }).execute()
+        
+        # El RPC retorna el conteo PRE-RESET (ej: 3 si alcanzó el umbral)
+        new_count = rpc_result.data if isinstance(rpc_result.data, int) else 0
+        
+        if new_count >= 3:
+            print(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente (vía RPC atómico).")
             
+            rejection_record = {
+                "meal_name": base_ingredient,
+                "meal_type": "Ingrediente Fricción",
+                "user_id": user_id,
+                "session_id": session_id if session_id else None
+            }
+            insert_rejection(rejection_record)
+            
+            if session_id:
+                msg = f"He notado que últimamente has estado evitando opciones con **{base_ingredient}**, así que lo he sacado de tu radar y guardado en tus rechazos temporales por unas semanas para asegurar variedad. 🤖"
+                save_message(session_id, "model", msg)
+            return True
+        
+        return False
+        
+    except Exception as rpc_e:
+        error_msg = str(rpc_e)
+        if "Could not find the function" in error_msg or "PGRST202" in error_msg:
+            # RPC aún no desplegado → fallback al método clásico (read-modify-write)
+            pass
+        else:
+            print(f"⚠️ [FRICCIÓN] Error en RPC atómico, usando fallback: {rpc_e}")
+    
+    # --- FALLBACK CLÁSICO (read-modify-write, vulnerable a race condition) ---
+    # ⚠️ En producción, desplegar rpc_increment_friction.sql en Supabase para eliminar esto.
     profile = get_user_profile(user_id)
     if not profile: return False
     
@@ -1049,8 +1089,7 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     current_count = frictions.get(base_ingredient, 0) + 1
     
     if current_count >= 3:
-        # 3er strike -> Bloqueo automático del ingrediente base
-        print(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente.")
+        print(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente (fallback).")
         
         rejection_record = {
             "meal_name": base_ingredient,
@@ -1060,12 +1099,10 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
         }
         insert_rejection(rejection_record)
         
-        # Reset counter
         frictions[base_ingredient] = 0
         hp["frictions"] = frictions
         update_user_health_profile(user_id, hp)
         
-        # Mensaje proactivo en el chat del agente
         if session_id:
             msg = f"He notado que últimamente has estado evitando opciones con **{base_ingredient}**, así que lo he sacado de tu radar y guardado en tus rechazos temporales por unas semanas para asegurar variedad. 🤖"
             save_message(session_id, "model", msg)

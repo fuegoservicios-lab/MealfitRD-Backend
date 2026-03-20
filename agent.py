@@ -159,6 +159,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             fruit_freq[f] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
     else:
         # ======= FALLBACK: Regex en Runtime (O(n×m)) para Invitados =======
+        # Truncar historial a los últimos ~5000 chars (~1250 tokens) para proteger de O(N×M) si la sesión guest es larga.
+        history_normalized = history_normalized[-5000:] if len(history_normalized) > 5000 else history_normalized
         print(f"⚠️ [ANTI MODE-COLLAPSE] Fallback Regex en runtime usado para guest o sin historial.")
         for p in filtered_proteins:
             syns = protein_synonyms.get(p.lower(), [p.lower()])
@@ -218,27 +220,32 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         return ""
         
     # 3. Restricción para Variedad y Costo: Elegir proteínas y carbohidratos base para rotarlos.
-    # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos
-    # variety_level configurable: "max" = 3 proteínas/carbos distintos (máxima variedad),
-    # "standard" (default) = 2 proteínas/carbos (optimizado para costo de supermercado).
+    # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos.
+    #
+    # 🏷️ FEATURE FLAG INTERNO: variety_level
+    #   - "standard" (default): 2 proteínas + 2 carbos → optimizado para costo de supermercado.
+    #   - "max": 3 proteínas + 3 carbos → máxima variedad (1 distinto por día).
+    #   Actualmente NO expuesto en el frontend. Para activarlo manualmente, enviar
+    #   form_data.variety_level = "max" desde el cliente o forzar aquí el default.
+    #   Futuro: exponer como toggle en Settings del usuario.
     skip_lunch = form_data.get("skipLunch", False) if form_data else False
     variety_level = form_data.get("variety_level", "standard") if form_data else "standard"
     
     if skip_lunch:
         num_proteins_to_pick = min(1, len(available_proteins))  # 1 proteína (solo Cena la necesita fuerte)
         num_carbs_to_pick = min(2, len(available_carbs))         # 2 carbos (Desayuno y Cena)
-        num_veggies_to_pick = min(2, len(available_veggies))     # 2 vegetales (menos comidas = menos variedad forzada)
+        num_veggies_to_pick = min(4, len(available_veggies))     # 4 vegetales (2 por día × 2 días con comida principal)
         print(f"⚡ [ANTI MODE-COLLAPSE] skipLunch=true → distribución reducida (1P/2C/2V)")
     elif variety_level == "max":
         num_proteins_to_pick = min(3, len(available_proteins))   # 1 proteína distinta por día
         num_carbs_to_pick = min(3, len(available_carbs))         # 1 carb distinto por día
-        num_veggies_to_pick = min(3, len(available_veggies))
+        num_veggies_to_pick = min(6, len(available_veggies))   # 2 vegetales distintos por día
         print(f"🎯 [ANTI MODE-COLLAPSE] variety_level=max → distribución máxima (3P/3C/3V)")
     else:
         num_proteins_to_pick = min(2, len(available_proteins))
         num_carbs_to_pick = min(2, len(available_carbs))
-        num_veggies_to_pick = min(3, len(available_veggies))
-    num_fruits_to_pick = min(1, len(available_fruits)) if available_fruits else 0
+        num_veggies_to_pick = min(6, len(available_veggies))   # 2 vegetales distintos por día
+    num_fruits_to_pick = min(2, len(available_fruits)) if available_fruits else 0
     
     # Pesos inversos: ingredientes menos usados tienen más probabilidad de ser elegidos.
     # Fórmula: 1 / (freq + 1)  →  freq 0 = peso 1.0, freq 1 = 0.5, freq 3 = 0.25, ...
@@ -294,7 +301,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     while len(unique_carbs) < 3:
         unique_carbs.append(_base_carbs[len(unique_carbs) % len(_base_carbs)])
     _base_veggies = list(unique_veggies)
-    while len(unique_veggies) < 3:
+    while len(unique_veggies) < 6:
         unique_veggies.append(_base_veggies[len(unique_veggies) % len(_base_veggies)])
     if unique_fruits:
         # Frutas: 1 seleccionada por anti-mode-collapse, repetida para los 3 días
@@ -304,7 +311,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     
     chosen_proteins = unique_proteins[:3]
     chosen_carbs = unique_carbs[:3]
-    chosen_veggies = unique_veggies[:3]
+    chosen_veggies = unique_veggies[:6]
     chosen_fruits = unique_fruits[:3] if unique_fruits else []
     
     # Mezclamos para que el orden de los días sea dinámico
@@ -340,16 +347,19 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         fruit_params = {"fruit_0": _fallback_fruit, "fruit_1": _fallback_fruit, "fruit_2": _fallback_fruit}
         
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
-        protein_0=chosen_proteins[0], carb_0=chosen_carbs[0], veggie_0=chosen_veggies[0],
-        protein_1=chosen_proteins[1], carb_1=chosen_carbs[1], veggie_1=chosen_veggies[1],
-        protein_2=chosen_proteins[2], carb_2=chosen_carbs[2], veggie_2=chosen_veggies[2],
+        protein_0=chosen_proteins[0], carb_0=chosen_carbs[0],
+        veggie_0=chosen_veggies[0], veggie_0b=chosen_veggies[3],
+        protein_1=chosen_proteins[1], carb_1=chosen_carbs[1],
+        veggie_1=chosen_veggies[1], veggie_1b=chosen_veggies[4],
+        protein_2=chosen_proteins[2], carb_2=chosen_carbs[2],
+        veggie_2=chosen_veggies[2], veggie_2b=chosen_veggies[5],
         blocked_text=blocked_text,
         **fruit_params
     )
     print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas (1 distinta por día): {chosen_proteins}")
     print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (1 distinto por día): {chosen_carbs}")
-    print(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (1 distinto por día): {chosen_veggies}")
-    print(f"✅ [ANTI MODE-COLLAPSE] Fruta sugerida (1 seleccionada, menor peso): {chosen_fruits}")
+    print(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (2 distintos por día): {chosen_veggies}")
+    print(f"✅ [ANTI MODE-COLLAPSE] Fruta sugerida: {chosen_fruits}")
     return prompt
 
 

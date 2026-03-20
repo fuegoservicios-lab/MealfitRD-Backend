@@ -172,22 +172,42 @@ Estos son datos críticos que debes respetar.
     print(f"🎲 [ORQUESTADOR] Inyectando variedad determinista en el generador.")
     
     # --- 🎲 INYECTOR DINÁMICO DE VARIEDAD CULINARIA ---
-    ALL_TECHNIQUES = [
-        "Estilo Fusión Criolla",
-        "Horneado Saludable",
-        "Al Vapor con Finas Hierbas",
-        "A la Plancha con Cítricos",
-        "Guiso o Estofado Ligero",
-        "Salteado tipo Wok",
-        "Desmenuzado (Ropa Vieja)",
-        "En Puré o Majado",
-        "Estilo Ceviche o Fresco",
-        "Asado a la Parrilla",
-        "En Salsa a base de Vegetales Naturales",
-        "En Airfryer Crujiente",
-        "Croquetas o Tortitas al Horno",
-        "Relleno (Ej. Canoas, Vegetales rellenos)"
-    ]
+    # Clasificación por familia: garantiza que los 3 días usen perfiles de cocción diferentes.
+    # Evita que las 3 técnicas sean "secas" (ej: Horneado + Airfryer + Parrilla).
+    TECHNIQUE_FAMILIES = {
+        "seca": [
+            "Horneado Saludable",
+            "En Airfryer Crujiente",
+            "Asado a la Parrilla",
+            "A la Plancha con Cítricos"
+        ],
+        "húmeda": [
+            "Guiso o Estofado Ligero",
+            "En Salsa a base de Vegetales Naturales"
+        ],
+        "transformada": [
+            "Desmenuzado (Ropa Vieja)",
+            "En Puré o Majado",
+            "Croquetas o Tortitas al Horno",
+            "Relleno (Ej. Canoas, Vegetales rellenos)"
+        ],
+        "fresca": [
+            "Estilo Ceviche o Fresco",
+            "Salteado tipo Wok",
+            "Al Vapor con Finas Hierbas"
+        ],
+        "fusión": [
+            "Estilo Fusión Criolla"
+        ]
+    }
+    # Lista plana para compatibilidad con persistencia y frecuencias
+    ALL_TECHNIQUES = [t for techs in TECHNIQUE_FAMILIES.values() for t in techs]
+    
+    # Mapa inverso: técnica → familia (para filtrar familias ya usadas)
+    _tech_to_family = {}
+    for family, techs in TECHNIQUE_FAMILIES.items():
+        for t in techs:
+            _tech_to_family[t] = family
     
     # Query estructurado contra la DB para contar frecuencia de cada técnica
     technique_freq = {}
@@ -203,18 +223,27 @@ Estos son datos críticos que debes respetar.
         except Exception as e:
             print(f"⚠️ [TÉCNICAS] Error consultando DB, usando pesos uniformes: {e}")
     
-    # Selección ponderada por frecuencia inversa: 1/(freq+1)
-    # Técnicas nunca usadas tienen peso 1.0, usadas 1 vez = 0.5, 2 veces = 0.33, etc.
-    # Esto es consistente con la fórmula de ingredientes en get_deterministic_variety_prompt().
-    tech_weights = [1.0 / (technique_freq.get(t, 0) + 1) for t in ALL_TECHNIQUES]
-    
-    # Seleccionar 3 técnicas únicas con pesos inversos (sin duplicados)
+    # Selección ponderada por frecuencia inversa CON diversificación de familias.
+    # Algoritmo: elegir 1 técnica de una familia diferente en cada iteración.
+    # Esto garantiza que "Horneado + Guiso + Ceviche" (seca/húmeda/fresca) sea más
+    # probable que "Horneado + Airfryer + Parrilla" (seca/seca/seca).
     selected_techniques = []
-    _pool_t = list(zip(ALL_TECHNIQUES, tech_weights))
+    used_families = set()
+    _pool_t = [(t, 1.0 / (technique_freq.get(t, 0) + 1)) for t in ALL_TECHNIQUES]
+    
     while len(selected_techniques) < 3 and _pool_t:
-        pick = random.choices([x[0] for x in _pool_t], weights=[x[1] for x in _pool_t], k=1)[0]
+        # Fase 1: Preferir técnicas de familias NO usadas aún
+        cross_family_pool = [(t, w) for t, w in _pool_t if _tech_to_family.get(t) not in used_families]
+        
+        # Fase 2: Si todas las familias ya fueron usadas, tomar de cualquier familia restante
+        active_pool = cross_family_pool if cross_family_pool else _pool_t
+        
+        pick = random.choices([x[0] for x in active_pool], weights=[x[1] for x in active_pool], k=1)[0]
         selected_techniques.append(pick)
+        used_families.add(_tech_to_family.get(pick, ""))
         _pool_t = [(t, w) for t, w in _pool_t if t != pick]
+    
+    print(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({_tech_to_family.get(t)})' for t in selected_techniques]}")
     
     technique_injection = (
         f"\n--- 👨🍳 INSTRUCCIÓN DINÁMICA DE VARIEDAD (OBLIGATORIA) ---\n"
@@ -463,42 +492,58 @@ Responde ÚNICAMENTE con el JSON de revisión.
                                 "tokens": set(norm.split())
                             })
                     
-                    # Verificar comidas principales (Desayuno/Almuerzo/Cena), no meriendas
+                    # Verificar todas las comidas (principales + meriendas con umbrales diferenciados)
+                    # Meriendas usan umbrales más estrictos porque hay menos variedad natural en snacks.
+                    MAIN_MEAL_JACCARD = 0.85
+                    MAIN_MEAL_SEQ = 0.75
+                    SNACK_JACCARD = 0.95      # Más estricto: solo bloquear snacks prácticamente idénticos
+                    SNACK_SEQ = 0.90
+                    
                     repeated_meals = []
                     for day_obj in days:
                         for meal in day_obj.get("meals", []):
                             meal_type = meal.get("meal", "").lower()
+                            
+                            # Determinar umbrales según tipo de comida
                             if meal_type in ["desayuno", "almuerzo", "cena"]:
-                                raw_name = meal.get("name", "")
-                                new_norm = _normalize(raw_name)
-                                if not new_norm:
-                                    continue
-                                
-                                new_tokens = set(new_norm.split())
-                                is_repeated = False
-                                
-                                # Bucle Optimizado contra platos pre-procesados
-                                for recent in recent_data:
-                                    # 1. Similitud de Sets de Tokens (Jaccard Approximation - Fast Path)
-                                    if new_tokens and recent["tokens"]:
-                                        intersection = new_tokens.intersection(recent["tokens"])
-                                        overlap1 = len(intersection) / len(new_tokens)
-                                        overlap2 = len(intersection) / len(recent["tokens"])
+                                jaccard_threshold = MAIN_MEAL_JACCARD
+                                seq_threshold = MAIN_MEAL_SEQ
+                            elif meal_type in ["merienda", "snack", "merienda am", "merienda pm"]:
+                                jaccard_threshold = SNACK_JACCARD
+                                seq_threshold = SNACK_SEQ
+                            else:
+                                continue  # Tipo desconocido, skip
+                            
+                            raw_name = meal.get("name", "")
+                            new_norm = _normalize(raw_name)
+                            if not new_norm:
+                                continue
+                            
+                            new_tokens = set(new_norm.split())
+                            is_repeated = False
+                            
+                            # Bucle Optimizado contra platos pre-procesados
+                            for recent in recent_data:
+                                # 1. Similitud de Sets de Tokens (Jaccard Approximation - Fast Path)
+                                if new_tokens and recent["tokens"]:
+                                    intersection = new_tokens.intersection(recent["tokens"])
+                                    overlap1 = len(intersection) / len(new_tokens)
+                                    overlap2 = len(intersection) / len(recent["tokens"])
+                                    
+                                    if max(overlap1, overlap2) >= jaccard_threshold:
+                                        is_repeated = True
+                                        break
                                         
-                                        if max(overlap1, overlap2) >= 0.85:  # 0.85 para evitar falsos positivos entre platos con misma base pero técnica diferente
-                                            is_repeated = True
-                                            break
-                                            
-                                    # 2. Similitud de Secuencia (Difflib) - Aplicado solo si las longitudes son parecidas (Guard)
-                                    if abs(len(new_norm) - len(recent["norm"])) <= 5:
-                                        if difflib.SequenceMatcher(None, new_norm, recent["norm"]).ratio() >= 0.75:
-                                            is_repeated = True
-                                            break
-                                            
-                                if is_repeated:
-                                    repeated_meals.append(raw_name)
+                                # 2. Similitud de Secuencia (Difflib) - Guard por longitud similar
+                                if abs(len(new_norm) - len(recent["norm"])) <= 5:
+                                    if difflib.SequenceMatcher(None, new_norm, recent["norm"]).ratio() >= seq_threshold:
+                                        is_repeated = True
+                                        break
+                                        
+                            if is_repeated:
+                                repeated_meals.append(raw_name)
                     
-                    # Umbral: cero tolerancia - si 1 o más comidas principales se repiten, rechazar
+                    # Umbral: cero tolerancia - si 1 o más comidas se repiten, rechazar
                     if len(repeated_meals) > 0:
                         approved = False
                         issues.append(
