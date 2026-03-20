@@ -1,6 +1,9 @@
 import os
+import logging
 from supabase import create_client, Client
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -21,9 +24,9 @@ if SUPABASE_DB_URL:
         # Limpiar comillas basura por si acaso
         clean_url = SUPABASE_DB_URL.strip().strip("'").strip('"')
         connection_pool = ConnectionPool(conninfo=clean_url, max_size=20, open=False)
-        print("🔌 [psycopg] ConnectionPool de Postgres configurado.")
+        logger.info("🔌 [psycopg] ConnectionPool de Postgres configurado.")
     except Exception as pool_err:
-        print(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")
+        logger.error(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")
 
 # Pre-computar mapa de sinónimos sin acentos para track_meal_friction() (O(1) por llamada)
 import unicodedata as _uc
@@ -46,7 +49,7 @@ def get_or_create_session(session_id: str, user_id: str = None):
                     if update_res.data:
                         return update_res.data[0]
                 except Exception as update_e:
-                    print(f"Error actualizando user_id en sesión: {update_e}")
+                    logger.error(f"Error actualizando user_id en sesión: {update_e}")
             return existing_session
         
         insert_data = {"id": session_id, "locked_at": None}
@@ -56,7 +59,7 @@ def get_or_create_session(session_id: str, user_id: str = None):
         new_res = supabase.table("agent_sessions").insert(insert_data).execute()
         return new_res.data[0]
     except Exception as e:
-        print(f"Fallback creando sesión: {e}")
+        logger.info(f"Fallback creando sesión: {e}")
         try:
             # Si falló la inserción normal (probablemente porque 'user_id' no existe en DB),
             # intentamos crear la sesión *sin* 'user_id' para no romper el chat.
@@ -66,7 +69,7 @@ def get_or_create_session(session_id: str, user_id: str = None):
                 return new_res_fallback.data[0]
             return None
         except Exception as inner_e:
-            print(f"Error fatal creando sesión: {inner_e}")
+            logger.error(f"Error fatal creando sesión: {inner_e}")
             # Si aún así falla, es posible que la sesión ya existiera pero el .select() fallara
             return None
 
@@ -79,7 +82,7 @@ def get_guest_chat_sessions(session_ids: list):
         sessions = res.data
         return _process_and_sort_sessions(sessions)
     except Exception as e:
-        print(f"Error en get_guest_chat_sessions: {e}")
+        logger.error(f"Error en get_guest_chat_sessions: {e}")
         return []
 
 def get_user_chat_sessions(user_id: str):
@@ -100,7 +103,7 @@ def get_user_chat_sessions(user_id: str):
                 continue
             error_msg = str(e)
             if "42703" not in error_msg and "PGRST204" not in error_msg:
-                print(f"Error en getsessions: {e}")
+                logger.error(f"Error en getsessions: {e}")
             return []
 
 def _process_and_sort_sessions(sessions: list):
@@ -125,7 +128,7 @@ def _process_and_sort_sessions(sessions: list):
                     time.sleep(0.5)
                     continue
                 else:
-                    print(f"Error recuperando batch de mensajes para {len(session_ids)} sesiones: {db_e}")
+                    logger.error(f"Error recuperando batch de mensajes para {len(session_ids)} sesiones: {db_e}")
         
         messages_by_session = {s_id: [] for s_id in session_ids}
         for m in all_messages:
@@ -170,7 +173,7 @@ def _process_and_sort_sessions(sessions: list):
         valid_sessions.sort(key=lambda x: x.get("last_activity") or x.get("created_at") or "1970-01-01T00:00:00", reverse=True)
         return valid_sessions
     except Exception as e:
-        print(f"Error en getsessions: {e}")
+        logger.error(f"Error en getsessions: {e}")
         return
 
 def get_session_messages(session_id: str):
@@ -180,7 +183,7 @@ def get_session_messages(session_id: str):
         res = supabase.table("agent_messages").select("*").eq("session_id", session_id).order("created_at", desc=False).execute()
         return res.data
     except Exception as e:
-        print(f"Error get_session_messages: {e}")
+        logger.error(f"Error get_session_messages: {e}")
         return []
 
 def acquire_summarizing_lock(session_id: str) -> bool:
@@ -210,7 +213,7 @@ def acquire_summarizing_lock(session_id: str) -> bool:
             
         return len(update_res.data) > 0
     except Exception as e:
-        print(f"Error acquiring summarizing lock: {e}")
+        logger.error(f"Error acquiring summarizing lock: {e}")
         return False
 
 def release_summarizing_lock(session_id: str):
@@ -221,7 +224,7 @@ def release_summarizing_lock(session_id: str):
     except Exception as e:
         error_msg = str(e)
         if "Server disconnected" not in error_msg:
-            print(f"Error releasing summarizing lock: {e}")
+            logger.error(f"Error releasing summarizing lock: {e}")
 
 def acquire_fact_lock(user_id: str) -> bool:
     """Intenta adquirir el bloqueo para extracción de hechos. Retorna True si lo logra, False si ya está bloqueado."""
@@ -252,7 +255,7 @@ def acquire_fact_lock(user_id: str) -> bool:
         # Si falla (ej. la columna no existe), imprimimos el error pero no bloqueamos
         error_msg = str(e)
         if "PGRST204" not in error_msg:
-            print(f"Error acquiring fact lock: {e}")
+            logger.error(f"Error acquiring fact lock: {e}")
         return True
 
 def release_fact_lock(user_id: str):
@@ -263,7 +266,7 @@ def release_fact_lock(user_id: str):
     except Exception as e:
         error_msg = str(e)
         if "PGRST204" not in error_msg:
-            print(f"Error releasing fact lock: {e}")
+            logger.error(f"Error releasing fact lock: {e}")
 
 def save_message(session_id: str, role: str, content: str):
     if not supabase: return None
@@ -363,7 +366,7 @@ def archive_summaries(summaries_list: list):
             return res.data
         return None
     except Exception as e:
-        print(f"Error archivando resúmenes en cold storage: {e}")
+        logger.error(f"Error archivando resúmenes en cold storage: {e}")
         return None
 
 def search_deep_memory(user_id: str, query: str, limit: int = 5):
@@ -392,7 +395,7 @@ def search_deep_memory(user_id: str, query: str, limit: int = 5):
         
         return res.data
     except Exception as e:
-        print(f"Error buscando en deep memory (summary_archive): {e}")
+        logger.error(f"Error buscando en deep memory (summary_archive): {e}")
         return []
 
 def delete_summaries(summary_ids: list):
@@ -402,7 +405,7 @@ def delete_summaries(summary_ids: list):
         res = supabase.table("conversation_summaries").delete().in_("id", summary_ids).execute()
         return res.data
     except Exception as e:
-        print(f"Error borrando resúmenes: {e}")
+        logger.error(f"Error borrando resúmenes: {e}")
         return None
 
 def delete_old_messages(session_id: str, before_timestamp: str):
@@ -437,7 +440,7 @@ def save_user_fact(user_id: str, fact: str, embedding: list, metadata: dict = No
         res = supabase.table("user_facts").insert(data_to_insert).execute()
         return res.data
     except Exception as e:
-        print(f"Error guardando user_fact: {e}")
+        logger.error(f"Error guardando user_fact: {e}")
         return None
 
 def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
@@ -455,7 +458,7 @@ def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
         res = query.execute()
         return res.data
     except Exception as e:
-        print(f"Error borrando temporal facts expirados: {e}")
+        logger.error(f"Error borrando temporal facts expirados: {e}")
         return None
 
 def get_user_facts_by_metadata(user_id: str, key: str, value: str):
@@ -475,7 +478,7 @@ def get_user_facts_by_metadata(user_id: str, key: str, value: str):
         res = supabase.table("user_facts").select("*").eq("user_id", user_id).eq("is_active", True).contains("metadata", filter_dict).execute()
         return res.data
     except Exception as e:
-        print(f"Error buscando facts por metadata: {e}")
+        logger.error(f"Error buscando facts por metadata: {e}")
         return []
 
 def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):
@@ -485,7 +488,7 @@ def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):
         res = supabase.table("user_facts").update({"is_active": False}).eq("user_id", user_id).contains("metadata", filter_dict).execute()
         return res.data
     except Exception as e:
-        print(f"Error haciendo soft delete a facts por metadata: {e}")
+        logger.error(f"Error haciendo soft delete a facts por metadata: {e}")
         return None
 
 def search_user_facts(user_id: str, query_embedding: list, query_text: str = None, threshold: float = 0.5, limit: int = 5):
@@ -514,7 +517,7 @@ def search_user_facts(user_id: str, query_embedding: list, query_text: str = Non
             }).execute()
         return res.data
     except Exception as e:
-        print(f"Error buscando facts: {e}")
+        logger.error(f"Error buscando facts: {e}")
         return []
 
 def delete_user_fact(fact_id: str):
@@ -525,7 +528,7 @@ def delete_user_fact(fact_id: str):
         res = supabase.table("user_facts").update({"is_active": False}).eq("id", fact_id).execute()
         return res.data
     except Exception as e:
-        print(f"Error haciendo soft delete a user_fact: {e}")
+        logger.error(f"Error haciendo soft delete a user_fact: {e}")
         return None
 
 # ============================================================
@@ -544,7 +547,7 @@ def enqueue_pending_fact(user_id: str, message: str, recent_history: str = ""):
         }).execute()
         return res.data
     except Exception as e:
-        print(f"Error encolando hecho pendiente: {e}")
+        logger.error(f"Error encolando hecho pendiente: {e}")
         return None
 
 def dequeue_pending_facts(user_id: str):
@@ -554,7 +557,7 @@ def dequeue_pending_facts(user_id: str):
         res = supabase.table("pending_facts_queue").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
         return res.data
     except Exception as e:
-        print(f"Error obteniendo hechos pendientes: {e}")
+        logger.error(f"Error obteniendo hechos pendientes: {e}")
         return []
 
 def delete_pending_facts(fact_ids: list):
@@ -564,7 +567,7 @@ def delete_pending_facts(fact_ids: list):
         res = supabase.table("pending_facts_queue").delete().in_("id", fact_ids).execute()
         return res.data
     except Exception as e:
-        print(f"Error eliminando hechos pendientes procesados: {e}")
+        logger.error(f"Error eliminando hechos pendientes procesados: {e}")
         return None
 
 def get_all_user_facts(user_id: str):
@@ -575,7 +578,7 @@ def get_all_user_facts(user_id: str):
         res = supabase.table("user_facts").select("id, fact, metadata, created_at").eq("user_id", user_id).eq("is_active", True).order("created_at", desc=True).execute()
         return res.data
     except Exception as e:
-        print(f"Error obteniendo ALL user facts: {e}")
+        logger.error(f"Error obteniendo ALL user facts: {e}")
         return []
 
 # ============================================================
@@ -617,11 +620,11 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
                     "description": description   # Actualizar con la descripción más reciente
                 }).eq("id", existing_id).execute()
                 
-                print(f"✅ [DEDUP VISUAL] Registro {str(existing_id)[:8]}... actualizado.")
+                logger.debug(f"✅ [DEDUP VISUAL] Registro {str(existing_id)[:8]}... actualizado.")
                 return similar.data
         except Exception as dedup_err:
             # Si la deduplicación falla (ej. columnas aún no existen), insertar normalmente
-            print(f"⚠️ [DEDUP VISUAL] Error en deduplicación, insertando normalmente: {dedup_err}")
+            logger.error(f"⚠️ [DEDUP VISUAL] Error en deduplicación, insertando normalmente: {dedup_err}")
         
         # === INSERCIÓN NORMAL (no hay duplicado) ===
         res = supabase.table("visual_diary").insert({
@@ -633,7 +636,7 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
         }).execute()
         return res.data
     except Exception as e:
-        print(f"Error guardando visual_entry: {e}")
+        logger.error(f"Error guardando visual_entry: {e}")
         return None
 
 def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 0.5, limit: int = 5):
@@ -648,7 +651,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         }).execute()
         return res.data
     except Exception as e:
-        print(f"Error buscando visual_diary: {e}")
+        logger.error(f"Error buscando visual_diary: {e}")
         return []
 
 # ============================================================
@@ -662,7 +665,7 @@ def get_user_profile(user_id: str):
         res = supabase.table("user_profiles").select("*").eq("id", user_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
-        print(f"Error obteniendo perfil: {e}")
+        logger.error(f"Error obteniendo perfil: {e}")
         return None
 
 def update_user_health_profile(user_id: str, health_profile: dict):
@@ -674,7 +677,7 @@ def update_user_health_profile(user_id: str, health_profile: dict):
         }).eq("id", user_id).execute()
         return res.data
     except Exception as e:
-        print(f"Error actualizando health_profile: {e}")
+        logger.error(f"Error actualizando health_profile: {e}")
         return None
 
 def get_shopping_plan_hash(user_id: str) -> str:
@@ -697,7 +700,7 @@ def save_shopping_plan_hash(user_id: str, plan_hash: str):
         return res.data
     except Exception as e:
         # Columna no existe → silenciar (cache es opcional)
-        print(f"⚠️ [DB] No se pudo guardar shopping_plan_hash: {e}")
+        logger.warning(f"⚠️ [DB] No se pudo guardar shopping_plan_hash: {e}")
         return None
 
 def get_latest_meal_plan(user_id: str):
@@ -709,7 +712,7 @@ def get_latest_meal_plan(user_id: str):
             return res.data[0].get("plan_data")
         return None
     except Exception as e:
-        print(f"Error obteniendo plan actual: {e}")
+        logger.error(f"Error obteniendo plan actual: {e}")
         return None
 
 def get_recent_meals_from_plans(user_id: str, days: int = 5):
@@ -744,7 +747,7 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
         error_msg = str(e)
         if "meal_names" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             try:
-                print("⚠️ [DB] Columna meal_names ausente en GET, usando fallback O(N)...")
+                logger.warning("⚠️ [DB] Columna meal_names ausente en GET, usando fallback O(N)...")
                 res_fb = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(days).execute()
                 meals_fb = set()
                 if res_fb.data:
@@ -759,10 +762,10 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
                                      if meal.get("name"): meals_fb.add(meal.get("name"))
                 return list(meals_fb)
             except Exception as e2:
-                print(f"Error obteniendo comidas recientes (fallback): {e2}")
+                logger.error(f"Error obteniendo comidas recientes (fallback): {e2}")
                 return []
                 
-        print(f"Error obteniendo comidas recientes: {e}")
+        logger.error(f"Error obteniendo comidas recientes: {e}")
         return []
 
 def get_recent_techniques(user_id: str, limit: int = 5) -> list:
@@ -789,7 +792,7 @@ def get_recent_techniques(user_id: str, limit: int = 5) -> list:
         if "techniques" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             # La columna aún no existe en la DB → retornar vacío silenciosamente
             return []
-        print(f"Error obteniendo técnicas recientes: {e}")
+        logger.error(f"Error obteniendo técnicas recientes: {e}")
         return []
 
 def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
@@ -819,7 +822,7 @@ def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
         error_msg = str(e)
         if "ingredients" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             try:
-                print("⚠️ [DB] Columna ingredients ausente en GET, usando fallback O(N)...")
+                logger.warning("⚠️ [DB] Columna ingredients ausente en GET, usando fallback O(N)...")
                 res_fb = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
                 all_ings_fb = []
                 if res_fb.data:
@@ -833,10 +836,10 @@ def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
                                         all_ings_fb.extend(ings)
                 return all_ings_fb
             except Exception as e2:
-                print(f"Error extrayendo ingredientes de planes (fallback): {e2}")
+                logger.error(f"Error extrayendo ingredientes de planes (fallback): {e2}")
                 return []
                 
-        print(f"Error extrayendo ingredientes de planes: {e}")
+        logger.error(f"Error extrayendo ingredientes de planes: {e}")
         return []
 
 
@@ -857,7 +860,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         }).execute()
         return res.data
     except Exception as e:
-        print(f"Error guardando comida consumida: {e}")
+        logger.error(f"Error guardando comida consumida: {e}")
         return None
 
 def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins: int = None):
@@ -882,7 +885,7 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
                     start_str = utc_start.strftime("%Y-%m-%dT%H:%M:%SZ")
                     end_str = utc_end.strftime("%Y-%m-%dT%H:%M:%SZ")
                 except Exception as e:
-                    print(f"⚠️ Error procesando la zona horaria, usando fallback a UTC: {e}")
+                    logger.error(f"⚠️ Error procesando la zona horaria, usando fallback a UTC: {e}")
                     today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     start_str = f"{today_date}T00:00:00Z"
                     end_str = f"{today_date}T23:59:59Z"
@@ -905,7 +908,7 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
                 import time
                 time.sleep(0.5)
                 continue
-            print(f"Error obteniendo comidas consumidas de hoy: {e}")
+            logger.error(f"Error obteniendo comidas consumidas de hoy: {e}")
             return []
 
 # ============================================================
@@ -921,7 +924,7 @@ def get_latest_meal_plan_with_id(user_id: str):
             return res.data[0]
         return None
     except Exception as e:
-        print(f"Error obteniendo plan con ID: {e}")
+        logger.error(f"Error obteniendo plan con ID: {e}")
         return None
 
 def update_meal_plan_data(plan_id: str, new_plan_data: dict):
@@ -931,7 +934,7 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict):
         res = supabase.table("meal_plans").update({"plan_data": new_plan_data}).eq("id", plan_id).execute()
         return res.data
     except Exception as e:
-        print(f"Error actualizando plan_data: {e}")
+        logger.error(f"Error actualizando plan_data: {e}")
         return None
 
 # ============================================================
@@ -946,16 +949,14 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict):
 # sin deadlock, ya que ambos corren en el mismo thread.
 import threading as _threading
 
-_shopping_user_locks: dict = {}
-_shopping_meta_lock = _threading.Lock()
+from functools import lru_cache as _lru_cache
 
+@_lru_cache(maxsize=1024)
 def get_user_shopping_lock(user_id: str) -> _threading.RLock:
     """Obtiene un RLock exclusivo por usuario para serializar
-    operaciones de shopping list que requieren atomicidad."""
-    with _shopping_meta_lock:
-        if user_id not in _shopping_user_locks:
-            _shopping_user_locks[user_id] = _threading.RLock()
-        return _shopping_user_locks[user_id]
+    operaciones de shopping list que requieren atomicidad.
+    LRU(1024) evita memory leak: los locks menos usados se evictan automáticamente."""
+    return _threading.RLock()
 
 def add_custom_shopping_items(user_id: str, items: list, source: str = "manual"):
     """Inserta uno o más items custom a la lista de compras del usuario.
@@ -1008,7 +1009,7 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual")
         error_msg = str(e)
         # Fallback 1: columnas estructuradas no existen → insertar sin ellas
         if "category" in error_msg or "display_name" in error_msg or "qty" in error_msg or "emoji" in error_msg:
-            print("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
+            logger.warning("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
             try:
                 rows_fb = []
                 for item in items:
@@ -1024,13 +1025,13 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual")
                 if "source" in error_msg2 or "PGRST205" in error_msg2:
                     # Fallback 2: ni source ni columnas estructuradas
                     return _add_shopping_items_minimal(user_id, items)
-                print(f"Error añadiendo items (fallback sin columnas estructuradas): {e2}")
+                logger.error(f"Error añadiendo items (fallback sin columnas estructuradas): {e2}")
                 return None
         if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             # Fallback 2: columna source tampoco existe
-            print("⚠️ [DB] Columna source ausente. Ejecute migration_shopping_is_checked.sql")
+            logger.warning("⚠️ [DB] Columna source ausente. Ejecute migration_shopping_is_checked.sql")
             return _add_shopping_items_minimal(user_id, items)
-        print(f"Error añadiendo items a shopping list: {e}")
+        logger.error(f"Error añadiendo items a shopping list: {e}")
         return None
 
 def _add_shopping_items_minimal(user_id: str, items: list):
@@ -1050,7 +1051,7 @@ def _add_shopping_items_minimal(user_id: str, items: list):
             return res.data
         return None
     except Exception as e:
-        print(f"Error añadiendo items a shopping list (minimal fallback): {e}")
+        logger.error(f"Error añadiendo items a shopping list (minimal fallback): {e}")
         return None
 
 def delete_auto_generated_shopping_items(user_id: str, exclude_ids: list = None):
@@ -1070,9 +1071,9 @@ def delete_auto_generated_shopping_items(user_id: str, exclude_ids: list = None)
         error_msg = str(e)
         if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             # Columna source no existe → fallback al método legacy (JSON parsing)
-            print("⚠️ [DB] Columna source ausente. Usando fallback JSON. Ejecute migration_shopping_is_checked.sql")
+            logger.warning("⚠️ [DB] Columna source ausente. Usando fallback JSON. Ejecute migration_shopping_is_checked.sql")
             return _delete_auto_shopping_items_legacy(user_id, exclude_ids)
-        print(f"Error borrando items auto-generados: {e}")
+        logger.error(f"Error borrando items auto-generados: {e}")
         return False
 
 def _delete_auto_shopping_items_legacy(user_id: str, exclude_ids: list = None):
@@ -1099,7 +1100,7 @@ def _delete_auto_shopping_items_legacy(user_id: str, exclude_ids: list = None):
             supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
         return True
     except Exception as e:
-        print(f"Error borrando items auto-generados (legacy fallback): {e}")
+        logger.error(f"Error borrando items auto-generados (legacy fallback): {e}")
         return False
 
 def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0, sort_by: str = "category", sort_order: str = "asc"):
@@ -1127,7 +1128,7 @@ def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0, s
         error_msg = str(e)
         if "category" in error_msg or "display_name" in error_msg or "qty" in error_msg or "emoji" in error_msg:
             # Fallback 2: sin columnas estructuradas pero con is_checked/source
-            print("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
+            logger.warning("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
             try:
                 fb_sort = sort_by if sort_by in {"created_at", "is_checked"} else "created_at"
                 query_fb = supabase.table("custom_shopping_items").select(
@@ -1140,13 +1141,13 @@ def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0, s
                 if "is_checked" in error_msg2 or "source" in error_msg2:
                     # Fallback 3: schema mínimo
                     return _get_shopping_items_minimal(user_id, limit, offset)
-                print(f"Error obteniendo items (fallback sin columnas estructuradas): {e2}")
+                logger.error(f"Error obteniendo items (fallback sin columnas estructuradas): {e2}")
                 return {"data": [], "total": 0}
         if "is_checked" in error_msg or "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             # Fallback 3: schema mínimo (solo id, item_name, created_at)
-            print("⚠️ [DB] Columnas is_checked/source ausentes. Ejecute migration_shopping_is_checked.sql")
+            logger.warning("⚠️ [DB] Columnas is_checked/source ausentes. Ejecute migration_shopping_is_checked.sql")
             return _get_shopping_items_minimal(user_id, limit, offset)
-        print(f"Error obteniendo custom shopping items: {e}")
+        logger.error(f"Error obteniendo custom shopping items: {e}")
         return {"data": [], "total": 0}
 
 def _get_shopping_items_minimal(user_id: str, limit: int = 200, offset: int = 0, sort_order: str = "desc"):
@@ -1158,7 +1159,7 @@ def _get_shopping_items_minimal(user_id: str, limit: int = 200, offset: int = 0,
         ).eq("user_id", user_id).order("created_at", desc=is_desc).range(offset, offset + limit - 1).execute()
         return {"data": res.data, "total": res.count or 0}
     except Exception as e:
-        print(f"Error obteniendo custom shopping items (minimal fallback): {e}")
+        logger.error(f"Error obteniendo custom shopping items (minimal fallback): {e}")
         return {"data": [], "total": 0}
 
 def clear_all_shopping_items(user_id: str):
@@ -1168,7 +1169,7 @@ def clear_all_shopping_items(user_id: str):
         supabase.table("custom_shopping_items").delete().eq("user_id", user_id).execute()
         return True
     except Exception as e:
-        print(f"Error limpiando lista de compras: {e}")
+        logger.error(f"Error limpiando lista de compras: {e}")
         return False
 
 def uncheck_all_shopping_items(user_id: str):
@@ -1180,9 +1181,9 @@ def uncheck_all_shopping_items(user_id: str):
     except Exception as e:
         error_msg = str(e)
         if "is_checked" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
-            print("⚠️ [DB] Columna is_checked ausente. Ejecute migration_shopping_is_checked.sql")
+            logger.warning("⚠️ [DB] Columna is_checked ausente. Ejecute migration_shopping_is_checked.sql")
             return False
-        print(f"Error desmarcando items: {e}")
+        logger.error(f"Error desmarcando items: {e}")
         return False
 
 def deduplicate_shopping_items(user_id: str):
@@ -1197,7 +1198,7 @@ def deduplicate_shopping_items(user_id: str):
     lock = get_user_shopping_lock(user_id)
     acquired = lock.acquire(timeout=10)
     if not acquired:
-        print(f"⚠️ [DEDUP] Timeout adquiriendo lock para {user_id}. Otra operación en curso.")
+        logger.warning(f"⚠️ [DEDUP] Timeout adquiriendo lock para {user_id}. Otra operación en curso.")
         return {"removed": 0, "merged": [], "error": "Deduplicación en curso para este usuario, intenta más tarde."}
     
     import re, json as _json
@@ -1226,7 +1227,7 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
                 return {"removed": 0, "merged": []}
             items = res.data
         except Exception as e2:
-            print(f"Error obteniendo items para dedup: {e2}")
+            logger.error(f"Error obteniendo items para dedup: {e2}")
             return {"removed": 0, "merged": []}
     
     def _normalize(text: str) -> str:
@@ -1347,10 +1348,10 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
                 else:
                     supabase.table("custom_shopping_items").update({"qty": qty_value}).in_("id", item_ids).execute()
         
-        print(f"🧹 [DEDUP] Eliminados {len(ids_to_delete)} duplicados, {len(ids_to_update)} cantidades actualizadas")
+        logger.debug(f"🧹 [DEDUP] Eliminados {len(ids_to_delete)} duplicados, {len(ids_to_update)} cantidades actualizadas")
         return {"removed": len(ids_to_delete), "merged": merged_info}
     except Exception as e:
-        print(f"Error en deduplicación: {e}")
+        logger.error(f"Error en deduplicación: {e}")
         return {"removed": 0, "merged": [], "error": str(e)}
 
 MAX_SHOPPING_ITEMS_PER_USER = 500
@@ -1378,10 +1379,10 @@ def purge_old_shopping_items(user_id: str):
             phase1 = len(res.data) if res.data else 0
             total_purged += phase1
             if phase1 > 0:
-                print(f"🧹 [PURGE] Fase 1: eliminados {phase1} items checked hace >{CHECKED_ITEM_EXPIRY_DAYS} días")
+                logger.info(f"🧹 [PURGE] Fase 1: eliminados {phase1} items checked hace >{CHECKED_ITEM_EXPIRY_DAYS} días")
         except Exception as e:
             # Columna is_checked/checked_at puede no existir aún
-            print(f"⚠️ [PURGE] Fase 1 skipped (columnas ausentes): {e}")
+            logger.warning(f"⚠️ [PURGE] Fase 1 skipped (columnas ausentes): {e}")
         
         # --- Fase 2: Enforce tope global ---
         try:
@@ -1404,13 +1405,13 @@ def purge_old_shopping_items(user_id: str):
                     old_ids = [r["id"] for r in oldest_res.data]
                     supabase.table("custom_shopping_items").delete().in_("id", old_ids).execute()
                     total_purged += len(old_ids)
-                    print(f"🧹 [PURGE] Fase 2: eliminados {len(old_ids)} items (tope {MAX_SHOPPING_ITEMS_PER_USER} excedido)")
+                    logger.info(f"🧹 [PURGE] Fase 2: eliminados {len(old_ids)} items (tope {MAX_SHOPPING_ITEMS_PER_USER} excedido)")
         except Exception as e:
-            print(f"⚠️ [PURGE] Fase 2 error: {e}")
+            logger.warning(f"⚠️ [PURGE] Fase 2 error: {e}")
         
         return total_purged
     except Exception as e:
-        print(f"Error en purge_old_shopping_items: {e}")
+        logger.error(f"Error en purge_old_shopping_items: {e}")
         return 0
 
 def delete_custom_shopping_item(item_id: str, user_id: str = None):
@@ -1423,13 +1424,13 @@ def delete_custom_shopping_item(item_id: str, user_id: str = None):
         res = query.execute()
         return res.data
     except Exception as e:
-        print(f"Error borrando custom shopping item: {e}")
+        logger.error(f"Error borrando custom shopping item: {e}")
         return None
 
 def update_custom_shopping_item(item_id: str, updates: dict, user_id: str = None):
     """Actualiza campos editables de un item (display_name, qty, category, emoji).
     Si se provee user_id, verifica ownership (IDOR protection).
-    Fallback: si no existen columnas estructuradas, actualiza el JSON en item_name."""
+    Si las columnas estructuradas no existen, cae al fallback legacy (JSON en item_name)."""
     if not supabase: return None
     
     # Solo permitir campos editables
@@ -1446,31 +1447,18 @@ def update_custom_shopping_item(item_id: str, updates: dict, user_id: str = None
             query = query.eq("user_id", user_id)
         res = query.execute()
         
-        # También actualizar item_name JSON para mantener consistencia con el fallback legacy
-        if res.data and len(res.data) > 0:
-            import json
-            row = res.data[0]
-            try:
-                raw = row.get("item_name", "{}")
-                parsed = json.loads(raw) if isinstance(raw, str) and raw.startswith("{") else {}
-                for k, v in clean_updates.items():
-                    field_map = {"display_name": "name", "qty": "qty", "category": "category", "emoji": "emoji"}
-                    if k in field_map:
-                        parsed[field_map[k]] = v
-                supabase.table("custom_shopping_items").update(
-                    {"item_name": json.dumps(parsed, ensure_ascii=False)}
-                ).eq("id", item_id).execute()
-            except Exception:
-                pass  # No bloquear si falla la sincronización del JSON legacy
+        # NOTA: Ya no sincronizamos item_name JSON (dual-write legacy eliminado).
+        # Las columnas estructuradas son la fuente de verdad.
+        # Si necesitas el fallback legacy, se activa automáticamente en el except.
         
         return res.data
     except Exception as e:
         error_msg = str(e)
         if any(col in error_msg for col in ["display_name", "qty", "category", "emoji", "PGRST205"]):
             # Columnas estructuradas no existen → fallback a JSON en item_name
-            print("⚠️ [DB] Columnas estructuradas ausentes. Usando fallback JSON para update.")
+            logger.warning("⚠️ [DB] Columnas estructuradas ausentes. Usando fallback JSON para update.")
             return _update_shopping_item_legacy(item_id, clean_updates, user_id)
-        print(f"Error actualizando custom shopping item: {e}")
+        logger.error(f"Error actualizando custom shopping item: {e}")
         return None
 
 def _update_shopping_item_legacy(item_id: str, updates: dict, user_id: str = None):
@@ -1502,7 +1490,7 @@ def _update_shopping_item_legacy(item_id: str, updates: dict, user_id: str = Non
         
         return [{"id": item_id, **updates}]
     except Exception as e:
-        print(f"Error actualizando item (legacy fallback): {e}")
+        logger.error(f"Error actualizando item (legacy fallback): {e}")
         return None
 
 def update_custom_shopping_item_status(item_id: str, is_checked: bool, user_id: str = None):
@@ -1528,9 +1516,9 @@ def update_custom_shopping_item_status(item_id: str, is_checked: bool, user_id: 
         error_msg = str(e)
         if "is_checked" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             # Columna nativa no existe → fallback al método legacy (JSON en item_name)
-            print("⚠️ [DB] Columna is_checked ausente. Usando fallback JSON. Ejecute migration_shopping_is_checked.sql")
+            logger.warning("⚠️ [DB] Columna is_checked ausente. Usando fallback JSON. Ejecute migration_shopping_is_checked.sql")
             return _update_shopping_item_status_legacy(item_id, is_checked, user_id)
-        print(f"Error actualizando estado de item: {e}")
+        logger.error(f"Error actualizando estado de item: {e}")
         return None
 
 def _update_shopping_item_status_legacy(item_id: str, is_checked: bool, user_id: str = None):
@@ -1567,7 +1555,7 @@ def _update_shopping_item_status_legacy(item_id: str, is_checked: bool, user_id:
         update_res = update_query.execute()
         return update_res.data
     except Exception as e:
-        print(f"Error actualizando estado de item (legacy fallback): {e}")
+        logger.error(f"Error actualizando estado de item (legacy fallback): {e}")
         return None
 
 # ============================================================
@@ -1590,7 +1578,7 @@ def log_api_usage(user_id: str, endpoint: str = "gemini"):
                 import time
                 time.sleep(0.5)
                 continue
-            print(f"Error registrando api_usage: {e}")
+            logger.error(f"Error registrando api_usage: {e}")
             return None
 
 def get_monthly_api_usage(user_id: str) -> int:
@@ -1612,7 +1600,7 @@ def get_monthly_api_usage(user_id: str) -> int:
                 import time
                 time.sleep(0.5)
                 continue
-            print(f"Error obteniendo api_usage mensual: {e}")
+            logger.error(f"Error obteniendo api_usage mensual: {e}")
             return 0
     return 0
 
@@ -1674,7 +1662,7 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
         new_count = rpc_result.data if isinstance(rpc_result.data, int) else 0
         
         if new_count >= 3:
-            print(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente (vía RPC atómico).")
+            logger.info(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente (vía RPC atómico).")
             
             rejection_record = {
                 "meal_name": base_ingredient,
@@ -1697,7 +1685,7 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
             # RPC aún no desplegado → fallback al método clásico (read-modify-write)
             pass
         else:
-            print(f"⚠️ [FRICCIÓN] Error en RPC atómico, usando fallback: {rpc_e}")
+            logger.error(f"⚠️ [FRICCIÓN] Error en RPC atómico, usando fallback: {rpc_e}")
     
     # --- FALLBACK CLÁSICO (read-modify-write, vulnerable a race condition) ---
     # ⚠️ En producción, desplegar rpc_increment_friction.sql en Supabase para eliminar esto.
@@ -1710,7 +1698,7 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     current_count = frictions.get(base_ingredient, 0) + 1
     
     if current_count >= 3:
-        print(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente (fallback).")
+        logger.info(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente (fallback).")
         
         rejection_record = {
             "meal_name": base_ingredient,
@@ -1798,9 +1786,9 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
                     supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("id", ids_to_migrate).execute()
                 if ids_to_delete:
                     supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
-                    print(f"🧹 [MIGRATION] {len(ids_to_delete)} items duplicados eliminados, {len(ids_to_migrate)} migrados.")
+                    logger.warning(f"🧹 [MIGRATION] {len(ids_to_delete)} items duplicados eliminados, {len(ids_to_migrate)} migrados.")
         except Exception as shop_mig_e:
-            print(f"⚠️ [MIGRATION] Error migrando shopping items: {shop_mig_e}")
+            logger.error(f"⚠️ [MIGRATION] Error migrando shopping items: {shop_mig_e}")
             # Fallback: migrar todo sin deduplicar
             supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
         
@@ -1814,15 +1802,15 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
                 normalized = [n for n in normalized if n]  # Filtrar vacíos
                 if normalized:
                     increment_ingredient_frequencies(new_user_id, normalized)
-                    print(f"✅ [MIGRACIÓN] Frecuencias recalculadas para {new_user_id} ({len(normalized)} ingredientes)")
+                    logger.info(f"✅ [MIGRACIÓN] Frecuencias recalculadas para {new_user_id} ({len(normalized)} ingredientes)")
         except Exception as freq_e:
             # No bloquear la migración si falla el recálculo de frecuencias
-            print(f"⚠️ [MIGRACIÓN] Error recalculando frecuencias (no crítico): {freq_e}")
+            logger.error(f"⚠️ [MIGRACIÓN] Error recalculando frecuencias (no crítico): {freq_e}")
         
-        print(f"✅ Migración exitosa de {session_ids} a UUID {new_user_id}")
+        logger.info(f"✅ Migración exitosa de {session_ids} a UUID {new_user_id}")
         return True
     except Exception as e:
-        print(f"❌ Error migrando datos de invitado: {e}")
+        logger.error(f"❌ Error migrando datos de invitado: {e}")
         return False
 
 
@@ -1862,12 +1850,12 @@ def log_unknown_ingredients(user_id: str, unknown_ings: list, raw_map: dict = No
                 except Exception as fb_e:
                     if "unknown_ingredients" in str(fb_e) or "PGRST205" in str(fb_e):
                         return  # Tabla no existe aún → silenciar
-                    print(f"⚠️ [UNKNOWN ING] Error en fallback: {fb_e}")
+                    logger.error(f"⚠️ [UNKNOWN ING] Error en fallback: {fb_e}")
                     return
         
-        print(f"📝 [UNKNOWN ING] {len(unknown_ings)} ingredientes no reconocidos logueados para revisión")
+        logger.info(f"📝 [UNKNOWN ING] {len(unknown_ings)} ingredientes no reconocidos logueados para revisión")
     except Exception as e:
-        print(f"⚠️ [UNKNOWN ING] Error logueando ingredientes desconocidos: {e}")
+        logger.error(f"⚠️ [UNKNOWN ING] Error logueando ingredientes desconocidos: {e}")
 
 def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
     """Incrementa la frecuencia histórica de los ingredientes consumidos por un usuario.
@@ -1896,7 +1884,7 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
                 "p_ingredients": ingredients_list,
                 "p_counts": counts_list
             }).execute()
-            print(f"✅ [DB] Frecuencia atómica (RPC) incrementada para {user_id} ({len(ingredients_list)} items)")
+            logger.info(f"✅ [DB] Frecuencia atómica (RPC) incrementada para {user_id} ({len(ingredients_list)} items)")
             return
         except Exception as rpc_e:
             error_msg = str(rpc_e)
@@ -1904,7 +1892,7 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
                 # El usuario aún no corre el código SQL en Supabase, pasamos al fallback silenciosamente
                 pass
             else:
-                print(f"⚠️ [DB] Aviso de RPC, recurriendo a fallback... Detalles: {rpc_e}")
+                logger.warning(f"⚠️ [DB] Aviso de RPC, recurriendo a fallback... Detalles: {rpc_e}")
 
         # 2. Fallback clásico: Leer estado actual y luego hacer upsert
         # ⚠️ RACE CONDITION: Si dos requests concurrentes leen el mismo count antes de que
@@ -1928,10 +1916,10 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
             
         if upsert_rows:
             supabase.table("ingredient_frequencies").upsert(upsert_rows).execute()
-            print(f"✅ [DB] Frecuencia (Fallback Clásico) incrementada para {user_id} ({len(upsert_rows)} items)")
+            logger.info(f"✅ [DB] Frecuencia (Fallback Clásico) incrementada para {user_id} ({len(upsert_rows)} items)")
             
     except Exception as e:
-        print(f"⚠️ [DB] Error incrementando frecuecia de ingredientes: {e}")
+        logger.error(f"⚠️ [DB] Error incrementando frecuecia de ingredientes: {e}")
 
 def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
     """Retorna un diccionario {ingrediente_normalizado: conteo_decaimiento} de la DB.
@@ -1978,10 +1966,10 @@ def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
                 
                 freq_dict[ingredient] = round(decayed_count, 2)
             except Exception as parse_e:
-                print(f"⚠️ [DB] Error parseando fecha {last_used_str}: {parse_e}")
+                logger.error(f"⚠️ [DB] Error parseando fecha {last_used_str}: {parse_e}")
                 freq_dict[ingredient] = count
                 
         return freq_dict
     except Exception as e:
-        print(f"⚠️ [DB] Error obteniendo diccionario de frecuencias: {e}")
+        logger.error(f"⚠️ [DB] Error obteniendo diccionario de frecuencias: {e}")
         return {}

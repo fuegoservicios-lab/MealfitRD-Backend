@@ -1,10 +1,12 @@
 # backend/agent.py
 
 import os
+import logging
 import time
 import json
 import re
 import unicodedata
+logger = logging.getLogger(__name__)
 
 from constants import strip_accents
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -105,7 +107,7 @@ def _get_cached_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
 
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
-    print("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
+    logger.debug("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
     history_lower = history_text.lower() if history_text else ""
     history_normalized = strip_accents(history_lower)
     
@@ -140,11 +142,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             from db import get_user_ingredient_frequencies
             db_freq_map = get_user_ingredient_frequencies(user_id)
         except Exception as e:
-            print(f"⚠️ [ANTI MODE-COLLAPSE] Error obteniendo frecuencias de DB: {e}")
+            logger.error(f"⚠️ [ANTI MODE-COLLAPSE] Error obteniendo frecuencias de DB: {e}")
             
     if db_freq_map:
         # ======= NUEVO FLUJO OPTIMIZADO O(1) =======
-        print(f"⚡ [ANTI MODE-COLLAPSE] Usando Hash Map O(1) de DB con {len(db_freq_map)} métricas pre-calculadas.")
+        logger.info(f"⚡ [ANTI MODE-COLLAPSE] Usando Hash Map O(1) de DB con {len(db_freq_map)} métricas pre-calculadas.")
         for p in filtered_proteins:
             syns = protein_synonyms.get(p.lower(), [p.lower()])
             protein_freq[p] = sum(db_freq_map.get(strip_accents(syn.lower()), 0) for syn in syns)
@@ -161,7 +163,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # ======= FALLBACK: Regex en Runtime (O(n×m)) para Invitados =======
         # Truncar historial a los últimos ~5000 chars (~1250 tokens) para proteger de O(N×M) si la sesión guest es larga.
         history_normalized = history_normalized[-5000:] if len(history_normalized) > 5000 else history_normalized
-        print(f"⚠️ [ANTI MODE-COLLAPSE] Fallback Regex en runtime usado para guest o sin historial.")
+        logger.warning(f"⚠️ [ANTI MODE-COLLAPSE] Fallback Regex en runtime usado para guest o sin historial.")
         
         import concurrent.futures
         from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
@@ -199,7 +201,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Guard clause: si las restricciones eliminaron TODOS los ingredientes
     # (ej: vegano con muchas alergias), dejar libertad total al LLM
     if not available_proteins or not available_carbs:
-        print("⚠️ [ANTI MODE-COLLAPSE] No quedan ingredientes disponibles tras filtrar restricciones. Dejando libertad al LLM.")
+        logger.warning("⚠️ [ANTI MODE-COLLAPSE] No quedan ingredientes disponibles tras filtrar restricciones. Dejando libertad al LLM.")
         return ""
         
     # 3. Restricción para Variedad y Costo: Elegir proteínas y carbohidratos base para rotarlos.
@@ -228,12 +230,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         num_proteins_to_pick = min(1, len(available_proteins))  # 1 proteína (solo Cena la necesita fuerte)
         num_carbs_to_pick = min(2, len(available_carbs))         # 2 carbos (Desayuno y Cena)
         num_veggies_to_pick = min(4, len(available_veggies))     # 4 vegetales (2 por día × 2 días con comida principal)
-        print(f"⚡ [ANTI MODE-COLLAPSE] skipLunch=true → distribución reducida (1P/2C/2V)")
+        logger.info(f"⚡ [ANTI MODE-COLLAPSE] skipLunch=true → distribución reducida (1P/2C/2V)")
     elif variety_level == "max":
         num_proteins_to_pick = min(3, len(available_proteins))   # 1 proteína distinta por día
         num_carbs_to_pick = min(3, len(available_carbs))         # 1 carb distinto por día
         num_veggies_to_pick = min(6, len(available_veggies))   # 2 vegetales distintos por día
-        print(f"🎯 [ANTI MODE-COLLAPSE] variety_level=max → distribución máxima (3P/3C/3V)")
+        logger.info(f"🎯 [ANTI MODE-COLLAPSE] variety_level=max → distribución máxima (3P/3C/3V)")
     else:
         num_proteins_to_pick = min(2, len(available_proteins))
         num_carbs_to_pick = min(2, len(available_carbs))
@@ -349,10 +351,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         blocked_text=blocked_text,
         **fruit_params
     )
-    print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas (1 distinta por día): {chosen_proteins}")
-    print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (1 distinto por día): {chosen_carbs}")
-    print(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (2 distintos por día): {chosen_veggies}")
-    print(f"✅ [ANTI MODE-COLLAPSE] Fruta sugerida: {chosen_fruits}")
+    logger.info(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas (1 distinta por día): {chosen_proteins}")
+    logger.info(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (1 distinto por día): {chosen_carbs}")
+    logger.info(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (2 distintos por día): {chosen_veggies}")
+    logger.info(f"✅ [ANTI MODE-COLLAPSE] Fruta sugerida: {chosen_fruits}")
     return prompt
 
 
@@ -408,7 +410,7 @@ def swap_meal(form_data: dict):
                 from db import get_user_ingredient_frequencies
                 db_freq_map = get_user_ingredient_frequencies(user_id)
             except Exception as freq_e:
-                print(f"⚠️ [SWAP] Error consultando frecuencia, usando random simple: {freq_e}")
+                logger.error(f"⚠️ [SWAP] Error consultando frecuencia, usando random simple: {freq_e}")
         
         def _pick_by_inverse_freq(available_items, synonyms_map):
             """Elige un ingrediente usando peso inverso por frecuencia."""
@@ -439,13 +441,13 @@ def swap_meal(form_data: dict):
         
         if suggestions:
             context_extras += f"\n    - 💡 SUGERENCIA DE VARIEDAD: Para este swap, intenta usar {', '.join(suggestions)} (o ingredientes radicalmente diferentes al rechazado)."
-            print(f"🎲 [SWAP ANTI MODE-COLLAPSE] Sugerencias: {suggestions}")
+            logger.debug(f"🎲 [SWAP ANTI MODE-COLLAPSE] Sugerencias: {suggestions}")
     except Exception:
         pass  # No bloquear el swap si falla la sugerencia
 
-    print("\n-------------------------------------------------------------")
-    print("⏳ [AGENTE DE SUSTITUCIÓN INTERPRETATIVO] Analizando rechazo...")
-    print(f"➡️  Interpretando por qué rechazó: \"{rejected_meal}\" ({meal_type})")
+    logger.info("\n-------------------------------------------------------------")
+    logger.info("⏳ [AGENTE DE SUSTITUCIÓN INTERPRETATIVO] Analizando rechazo...")
+    logger.info(f"➡️  Interpretando por qué rechazó: \"{rejected_meal}\" ({meal_type})")
     
     start_time = time.time()
     
@@ -477,8 +479,8 @@ def swap_meal(form_data: dict):
     
     end_time = time.time()
     duration_secs = round(float(end_time - start_time), 2)
-    print(f"✅ [COMPLETADO] Nueva alternativa {meal_type} generada en {duration_secs} segundos.")
-    print("-------------------------------------------------------------\n")
+    logger.info(f"✅ [COMPLETADO] Nueva alternativa {meal_type} generada en {duration_secs} segundos.")
+    logger.info("-------------------------------------------------------------\n")
     if hasattr(response, "model_dump"):
         return getattr(response, "model_dump")()
     elif isinstance(response, dict):
@@ -563,8 +565,8 @@ def _pre_consolidate_ingredients(ingredients: list) -> list:
 
 def generate_auto_shopping_list(plan_data: dict) -> list:
     """Extrae ingredientes del plan, los consolida y categoriza por pasillo de supermercado."""
-    print("\n-------------------------------------------------------------")
-    print("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan...")
+    logger.info("\n-------------------------------------------------------------")
+    logger.debug("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan...")
     
     ingredients = []
     days = plan_data.get("days", [])
@@ -579,7 +581,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     
     # 🧮 Pre-consolidación determinista en Python (reduce tokens y elimina errores de suma del LLM)
     ingredients = _pre_consolidate_ingredients(ingredients)
-    print(f"🧮 [PRE-CONSOLIDACIÓN] {len(ingredients)} ingredientes únicos tras fusión en Python.")
+    logger.debug(f"🧮 [PRE-CONSOLIDACIÓN] {len(ingredients)} ingredientes únicos tras fusión en Python.")
         
     prompt = AUTO_SHOPPING_LIST_PROMPT.format(ingredients_json=json.dumps(ingredients))
     
@@ -608,12 +610,31 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
         else:
             items = []
             
-        print(f"✅ Se consolidaron ingredientes en {len(items)} categorías.")
-        print("-------------------------------------------------------------\n")
+        logger.info(f"✅ Se consolidaron ingredientes en {len(items)} categorías.")
+        logger.info("-------------------------------------------------------------\n")
         return items
     except Exception as e:
-        print(f"❌ Error generando auto shopping list (tras reintentos): {e}")
-        return []
+        logger.error(f"❌ Error generando auto shopping list (tras reintentos): {e}")
+        # 🛡️ Fallback local: categorizar ingredientes sin LLM para no perder la lista
+        logger.debug("🔄 [FALLBACK] Generando lista básica con categorización local (sin LLM)...")
+        try:
+            from tools import _categorize_item
+            fallback_items = []
+            for ing in ingredients:
+                if not isinstance(ing, str) or not ing.strip():
+                    continue
+                cat, emoji = _categorize_item(ing)
+                fallback_items.append({
+                    "category": cat,
+                    "emoji": emoji,
+                    "name": ing.strip().capitalize(),
+                    "qty": ""
+                })
+            logger.debug(f"✅ [FALLBACK] {len(fallback_items)} ingredientes categorizados localmente.")
+            return fallback_items
+        except Exception as fallback_e:
+            logger.error(f"❌ [FALLBACK] Error en categorización local: {fallback_e}")
+            return []
 
 # ============================================================
 # ORQUESTACIÓN LANGGRAPH CHAT CON MEMORYSAVER
@@ -628,7 +649,7 @@ class ChatState(MessagesState):
     sys_prompt: str
 
 def call_model(state: ChatState):
-    print(f"🧠 [LANGGRAPH NODE] call_model")
+    logger.info(f"🧠 [LANGGRAPH NODE] call_model")
     messages = state["messages"]
     sys_prompt = state.get("sys_prompt", "")
     
@@ -666,7 +687,7 @@ def execute_tools(state: ChatState):
             tool_id = tool_call["id"]
             
             tool_result = ""
-            print(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
+            logger.debug(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
             
             if tool_name == "update_form_field":
                 field = tool_args.get("field")
@@ -777,9 +798,9 @@ def generate_chat_title_background(session_id: str, first_message: str):
             "role": "model",
             "content": f"[SYSTEM_TITLE] {title}"
         }).execute()
-        print(f"✅ Título generado para sesión {session_id}: {title}")
+        logger.info(f"✅ Título generado para sesión {session_id}: {title}")
     except Exception as e:
-        print(f"⚠️ Error generando título: {e}")
+        logger.error(f"⚠️ Error generando título: {e}")
 
 # ============================================================
 # RAG QUERY ROUTING (Patrón HyDE)
@@ -805,13 +826,13 @@ def rag_query_router(prompt: str) -> dict:
     clean = prompt.strip().lower().rstrip('!?.,')
     # Si es un mensaje muy corto O coincide con un patrón casual
     if len(clean) < 4 or clean in casual_patterns:
-        print(f"⏭️ [RAG ROUTER] Mensaje casual detectado: '{prompt[:30]}' → Saltando RAG.")
+        logger.info(f"⏭️ [RAG ROUTER] Mensaje casual detectado: '{prompt[:30]}' → Saltando RAG.")
         return {"skip": True}
     
     # Paso 2: Combos casuales ("ok gracias", "sí perfecto", etc.)
     words = clean.split()
     if len(words) <= 3 and all(w in casual_patterns for w in words):
-        print(f"⏭️ [RAG ROUTER] Combo casual detectado: '{prompt[:30]}' → Saltando RAG.")
+        logger.info(f"⏭️ [RAG ROUTER] Combo casual detectado: '{prompt[:30]}' → Saltando RAG.")
         return {"skip": True}
     
     # Paso 3: Para mensajes sustanciales, usar Flash-Lite para reescribir la query
@@ -831,14 +852,14 @@ def rag_query_router(prompt: str) -> dict:
         result = str(content).strip().strip('"').strip("'")
         
         if result.upper() == "SKIP":
-            print(f"⏭️ [RAG ROUTER] Flash-Lite determinó que no necesita RAG: '{prompt[:30]}'")
+            logger.info(f"⏭️ [RAG ROUTER] Flash-Lite determinó que no necesita RAG: '{prompt[:30]}'")
             return {"skip": True}
         
-        print(f"🎯 [RAG ROUTER] Query reescrita: '{prompt[:30]}...' → '{result}'")
+        logger.info(f"🎯 [RAG ROUTER] Query reescrita: '{prompt[:30]}...' → '{result}'")
         return {"skip": False, "query": result}
         
     except Exception as e:
-        print(f"⚠️ [RAG ROUTER] Error en rewrite, usando prompt original: {e}")
+        logger.error(f"⚠️ [RAG ROUTER] Error en rewrite, usando prompt original: {e}")
         return {"skip": False, "query": prompt}
 
 def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None):
@@ -862,14 +883,14 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 optimized_query = rag_decision.get("query", prompt)
                 
                 # 1. Buscar hechos textuales con query optimizada
-                print(f"🔍 [CHAT RAG] Buscando con query optimizada: '{optimized_query}'")
+                logger.info(f"🔍 [CHAT RAG] Buscando con query optimizada: '{optimized_query}'")
                 query_emb = get_embedding(optimized_query)
                 if query_emb:
                     facts_data = search_user_facts(user_id, query_emb, threshold=0.5, limit=10)
                     if facts_data:
                         fact_list = [f"• {item['fact']}" for item in facts_data]
                         user_facts_text = "\n".join(fact_list)
-                        print(f"🧠 [CHAT RAG] Hechos textuales recuperados: {len(facts_data)}")
+                        logger.info(f"🧠 [CHAT RAG] Hechos textuales recuperados: {len(facts_data)}")
                 
                 # 2. Buscar memoria visual
                 from vision_agent import get_multimodal_embedding
@@ -879,9 +900,9 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                     if visual_data:
                         visual_list = [f"• {item['description']}" for item in visual_data]
                         visual_facts_text = "\n".join(visual_list)
-                        print(f"📸 [CHAT RAG VISUAL] Entradas visuales recuperadas: {len(visual_data)}")
+                        logger.debug(f"📸 [CHAT RAG VISUAL] Entradas visuales recuperadas: {len(visual_data)}")
             except Exception as e:
-                print(f"⚠️ [CHAT RAG] Error recuperando memoria: {e}")
+                logger.error(f"⚠️ [CHAT RAG] Error recuperando memoria: {e}")
             
     rag_context = ""
     if user_facts_text or visual_facts_text:
@@ -934,7 +955,7 @@ El user_id del usuario actual es: {user_id}"""
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
     else:
         from langgraph.checkpoint.memory import MemorySaver
-        print("⚠️ [LangGraph] No pool de PostgreSQL, usando MemorySaver en RAM.")
+        logger.warning("⚠️ [LangGraph] No pool de PostgreSQL, usando MemorySaver en RAM.")
         checkpointer = MemorySaver()
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
         
@@ -951,7 +972,7 @@ El user_id del usuario actual es: {user_id}"""
     }
     
     if not existing_state.values:
-        print(f"🔄 [LANGGRAPH] Inicializando nuevo thread O restaurando tras reinicio para session_id: {session_id}")
+        logger.debug(f"🔄 [LANGGRAPH] Inicializando nuevo thread O restaurando tras reinicio para session_id: {session_id}")
         messages = []
         for msg in memory["recent_messages"]:
             if msg["role"] == "user":
@@ -961,19 +982,19 @@ El user_id del usuario actual es: {user_id}"""
         messages.append(HumanMessage(content=prompt))
         inputs["messages"] = messages
     else:
-        print(f"🔄 [LANGGRAPH] Thread existente detectado en Checkpointer. Inyectando solo el prompt actual.")
+        logger.debug(f"🔄 [LANGGRAPH] Thread existente detectado en Checkpointer. Inyectando solo el prompt actual.")
         inputs["messages"] = [HumanMessage(content=prompt)]
         
-    print("\n-------------------------------------------------------------")
-    print("⏳ [CHAT] LangGraph ejecutando pipeline...")
+    logger.info("\n-------------------------------------------------------------")
+    logger.info("⏳ [CHAT] LangGraph ejecutando pipeline...")
     start_time = time.time()
     
     final_state = chat_graph_app.invoke(inputs, config=config)
     
     end_time = time.time()
     duration_secs = round(float(end_time - start_time), 2)
-    print(f"✅ [COMPLETADO] LangGraph finalizó en {duration_secs} segundos.")
-    print("-------------------------------------------------------------\n")
+    logger.info(f"✅ [COMPLETADO] LangGraph finalizó en {duration_secs} segundos.")
+    logger.info("-------------------------------------------------------------\n")
     
     final_messages = final_state["messages"]
     last_msg = final_messages[-1]
@@ -1020,7 +1041,7 @@ async def achat_with_agent_stream(session_id: str, prompt: str, current_plan: Op
                         visual_list = [f"• {item['description']}" for item in visual_data]
                         visual_facts_text = "\n".join(visual_list)
             except Exception as e:
-                print(f"⚠️ [CHAT RAG] Error en stream: {e}")
+                logger.error(f"⚠️ [CHAT RAG] Error en stream: {e}")
             
     rag_context = ""
     if user_facts_text or visual_facts_text:
@@ -1066,7 +1087,7 @@ El user_id actual es: {user_id}"""
             else:
                 system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
         except Exception as e:
-            print(f"⚠️ Error inyectando contexto de diario: {e}")
+            logger.error(f"⚠️ Error inyectando contexto de diario: {e}")
             
     config = {"configurable": {"thread_id": session_id}}
     
@@ -1104,7 +1125,7 @@ El user_id actual es: {user_id}"""
         
     yield f"data: {json.dumps({'type': 'progress', 'message': 'Analizando tu mensaje...'})}\n\n"
     
-    print(f"⏳ [CHAT STREAM] LangGraph iniciando astream nativo para {session_id}...")
+    logger.info(f"⏳ [CHAT STREAM] LangGraph iniciando astream nativo para {session_id}...")
     
     final_state_snapshot = None
     
@@ -1134,7 +1155,7 @@ El user_id actual es: {user_id}"""
                                     yield f"data: {json.dumps({'type': 'progress', 'message': 'Registrando progreso de hoy...'})}\n\n"
                                     
     except Exception as e:
-        print(f"❌ [CHAT STREAM] Error en astream nativo: {e}")
+        logger.error(f"❌ [CHAT STREAM] Error en astream nativo: {e}")
         import traceback
         traceback.print_exc()
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -1144,7 +1165,7 @@ El user_id actual es: {user_id}"""
     try:
         final_state_snapshot = await chat_graph_app.aget_state(config)
     except Exception as e:
-        print(f"⚠️ Error obteniendo aget_state tras stream: {e}")
+        logger.error(f"⚠️ Error obteniendo aget_state tras stream: {e}")
 
     final_content = ""
     updated_fields = {}
@@ -1161,5 +1182,5 @@ El user_id actual es: {user_id}"""
                 extracted_content = "\n".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in extracted_content])
             final_content = str(extracted_content)
 
-    print("✅ [CHAT STREAM] Finalizado con éxito.")
+    logger.info("✅ [CHAT STREAM] Finalizado con éxito.")
     yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan})}\n\n"

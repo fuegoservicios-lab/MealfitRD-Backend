@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, UploadFile, File, Form, Body, Header, Depends
+import logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -7,6 +8,14 @@ import uuid
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
+
+# Configuración centralizada de logging para todo el backend
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 from agent import swap_meal, chat_with_agent, analyze_preferences_agent
 from graph_orchestrator import run_plan_pipeline
@@ -27,16 +36,16 @@ async def lifespan(app: FastAPI):
             # Setup requires a direct connection with autocommit=True because CREATE INDEX CONCURRENTLY cannot run inside a transaction
             with psycopg.connect(db_uri, autocommit=True) as conn:
                 PostgresSaver(conn).setup()
-            print("🚀 [Postgres] Tablas de LangGraph Checkpointer verificadas/creadas.")
+            logger.info("🚀 [Postgres] Tablas de LangGraph Checkpointer verificadas/creadas.")
         except Exception as e:
-            print(f"⚠️ [Postgres] Error configurando checkpointer: {e}")
+            logger.error(f"⚠️ [Postgres] Error configurando checkpointer: {e}")
             
-    print("🚀 [FastAPI] Servidor de MealfitRD IA iniciado con éxito en el puerto 3001.")
+    logger.info("🚀 [FastAPI] Servidor de MealfitRD IA iniciado con éxito en el puerto 3001.")
     yield
     
     if connection_pool:
         connection_pool.close()
-        print("🔌 [psycopg] Pool de conexiones cerrado.")
+        logger.info("🔌 [psycopg] Pool de conexiones cerrado.")
 
 
 # Asegurarnos de que el directorio de uploads exista antes de montar recursos estáticos
@@ -60,7 +69,7 @@ def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optiona
         if user_res and user_res.user:
             return user_res.user.id
     except Exception as e:
-        print(f"⚠️ [AUTH] Error validando token: {e}")
+        logger.error(f"⚠️ [AUTH] Error validando token: {e}")
     return None
 
 def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user_id)) -> Optional[str]:
@@ -169,7 +178,7 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
             hp_data = {k: v for k, v in data.items() if k not in ['session_id', 'user_id']}
             if hp_data:
                 update_user_health_profile(actual_user_id, hp_data)
-                print(f"💾 [SYNC] health_profile guardado para user {actual_user_id}")
+                logger.info(f"💾 [SYNC] health_profile guardado para user {actual_user_id}")
         
         if session_id:
             goal = data.get('mainGoal', 'Desconocido')
@@ -193,7 +202,7 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
@@ -237,14 +246,14 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             except Exception as try_db_e:
                 err_msg = str(try_db_e)
                 if "meal_names" in err_msg or "techniques" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
-                    print("⚠️ [DB] Faltan columnas optimizadas (meal_names/techniques). Ejecute migration_fast_meals.sql")
+                    logger.warning("⚠️ [DB] Faltan columnas optimizadas (meal_names/techniques). Ejecute migration_fast_meals.sql")
                     insert_data.pop("meal_names", None)
                     insert_data.pop("ingredients", None)
                     insert_data.pop("techniques", None)
                     supabase.table("meal_plans").insert(insert_data).execute()
                 else:
                     raise try_db_e
-            print(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
+            logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
             
         # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad)
         if raw_ingredients:
@@ -266,9 +275,9 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                 from db import log_unknown_ingredients
                 raw_map = {normalize_ingredient_for_tracking(r): r for r in raw_ingredients if r}
                 log_unknown_ingredients(user_id, non_canonical, raw_map)
-                print(f"🧹 [FREQ TRACKING] {len(non_canonical)} ingredientes no-canónicos logueados para revisión")
+                logger.info(f"🧹 [FREQ TRACKING] {len(non_canonical)} ingredientes no-canónicos logueados para revisión")
                 
-            print(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
+            logger.info(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
             
         # 3. Auto-generar lista de compras (background, con cache por hash)
         try:
@@ -302,16 +311,16 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                             purge_old_shopping_items(user_id)
                             deduplicate_shopping_items(user_id)
                             save_shopping_plan_hash(user_id, plan_hash)
-                        print(f"🛒 [BACKGROUND] Lista de compras auto-generada ({len(items)} items) para {user_id}")
+                        logger.debug(f"🛒 [BACKGROUND] Lista de compras auto-generada ({len(items)} items) para {user_id}")
                     else:
-                        print(f"⚠️ [BACKGROUND] No se pudieron consolidar ingredientes para {user_id}")
+                        logger.warning(f"⚠️ [BACKGROUND] No se pudieron consolidar ingredientes para {user_id}")
                 else:
-                    print(f"✅ [BACKGROUND CACHE HIT] Plan sin cambios, lista de compras ya actualizada para {user_id}")
+                    logger.debug(f"✅ [BACKGROUND CACHE HIT] Plan sin cambios, lista de compras ya actualizada para {user_id}")
         except Exception as shop_e:
-            print(f"⚠️ [BACKGROUND] Error auto-generando lista de compras: {shop_e}")
+            logger.error(f"⚠️ [BACKGROUND] Error auto-generando lista de compras: {shop_e}")
             
     except Exception as e:
-        print(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")
+        logger.error(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")
 
 
 def _process_swap_rejection_background(session_id: str, user_id: str, rejected_meal: str, meal_type: str):
@@ -334,13 +343,13 @@ def _process_swap_rejection_background(session_id: str, user_id: str, rejected_m
                 rejection_record["session_id"] = session_id
             
             insert_rejection(rejection_record)
-            print(f"💾 [DB BACKGROUND] Rechazo temporal guardado para {rejected_meal}")
+            logger.debug(f"💾 [DB BACKGROUND] Rechazo temporal guardado para {rejected_meal}")
             
             # Fricción Silenciosa: Validar si la base ya se rechazó 3 veces
             from db import track_meal_friction
             track_meal_friction(user_id, session_id, rejected_meal)
     except Exception as e:
-        print(f"⚠️ [BACKGROUND ERROR] Error procesando swap rejection: {e}")
+        logger.error(f"⚠️ [BACKGROUND ERROR] Error procesando swap rejection: {e}")
 
 @app.post("/api/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -368,7 +377,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         result = swap_meal(data)
         return result
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/swap-meal: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/swap-meal: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/like")
@@ -403,7 +412,7 @@ def api_get_user_credits(user_id: str, verified_user_id: Optional[str] = Depends
         # Re-lanzar excepciones HTTP explícitas (ej. 401/403 de Auth)
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/user/credits GET: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/user/credits GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/user-facts/{user_id}")
@@ -421,7 +430,7 @@ def api_get_user_facts(user_id: str, verified_user_id: Optional[str] = Depends(g
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/user-facts GET: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/user-facts GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/user-facts/{fact_id}")
@@ -444,7 +453,7 @@ def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/user-facts DELETE: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/user-facts DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/chat/sessions/{user_id}")
@@ -474,7 +483,7 @@ def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verif
             
         return {"sessions": sessions}
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/chat/sessions GET: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/chat/sessions GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/chat/history/{session_id}")
@@ -486,7 +495,7 @@ def api_get_chat_history(session_id: str):
         filtered_messages = [m for m in messages if not m.get("content", "").startswith("[SYSTEM_TITLE]")]
         return {"messages": filtered_messages}
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/chat/history GET: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/chat/history GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/chat/message")
@@ -526,7 +535,7 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
                 
-        print(f"🔍 [DEBUG API CHAT STREAM] session_id={session_id}, user_id={user_id}")
+        logger.info(f"🔍 [DEBUG API CHAT STREAM] session_id={session_id}, user_id={user_id}")
         
         # Estas operaciones son síncronas pero muy rápidas
         await asyncio.to_thread(get_or_create_session, session_id, user_id=user_id if user_id != "guest" else None)
@@ -547,7 +556,7 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                     
                     # Sincronizar de vuelta a la DB si el frontend envió algo válido pero la DB estaba vacía o diferente
                     if form_data and not existing_hp:
-                        print(f"🔄 [SYNC STREAM] health_profile vacío, sincronizando...")
+                        logger.debug(f"🔄 [SYNC STREAM] health_profile vacío, sincronizando...")
                         await asyncio.to_thread(update_user_health_profile, user_id, merged_form_data)
                 else:
                     if form_data:
@@ -561,9 +570,9 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                                     }).execute()
                                 await asyncio.to_thread(_upsert_profile)
                         except Exception as e:
-                            print(f"❌ [SYNC STREAM] Error creando perfil: {e}")
+                            logger.error(f"❌ [SYNC STREAM] Error creando perfil: {e}")
             except Exception as e:
-                print(f"⚠️ Error cargando health profile en chat: {e}")
+                logger.error(f"⚠️ Error cargando health profile en chat: {e}")
                 
         form_data = merged_form_data
         
@@ -622,11 +631,11 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                                         generate_chat_title_background(session_id, prompt)
                                         summarize_and_prune(session_id)
                                     except Exception as inner_e:
-                                        print(f"Error en bg tasks: {inner_e}")
+                                        logger.error(f"Error en bg tasks: {inner_e}")
                                 
                                 await asyncio.to_thread(bg_tasks)
                         except Exception as e_json:
-                            print(f"Error parseando chunk de fin: {e_json}")
+                            logger.error(f"Error parseando chunk de fin: {e_json}")
                             
             except Exception as e:
                 import traceback
@@ -658,7 +667,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
                 
-        print(f"🔍 [DEBUG API CHAT] session_id={session_id}, user_id={user_id}")
+        logger.info(f"🔍 [DEBUG API CHAT] session_id={session_id}, user_id={user_id}")
         
         get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
         save_message(session_id, "user", prompt)
@@ -676,11 +685,11 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
                         merged_form_data = existing_hp
                         
                     if form_data and not existing_hp:
-                        print(f"🔄 [SYNC] health_profile vacío, sincronizando desde formData del frontend...")
+                        logger.debug(f"🔄 [SYNC] health_profile vacío, sincronizando desde formData del frontend...")
                         update_user_health_profile(user_id, merged_form_data)
                 else:
                     if form_data:
-                        print(f"⚠️ [SYNC] No existe user_profile para {user_id}, intentando crear...")
+                        logger.warning(f"⚠️ [SYNC] No existe user_profile para {user_id}, intentando crear...")
                         try:
                             from db import supabase as sb_client
                             if sb_client:
@@ -688,11 +697,11 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
                                     "id": user_id,
                                     "health_profile": merged_form_data
                                 }).execute()
-                                print(f"✅ [SYNC] Perfil creado con health_profile")
+                                logger.info(f"✅ [SYNC] Perfil creado con health_profile")
                         except Exception as e:
-                            print(f"❌ [SYNC] Error creando perfil: {e}")
+                            logger.error(f"❌ [SYNC] Error creando perfil: {e}")
             except Exception as e:
-                print(f"⚠️ Error cargando health profile en chat: {e}")
+                logger.error(f"⚠️ Error cargando health profile en chat: {e}")
                 
         form_data = merged_form_data
         
@@ -730,7 +739,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
             # 🧠 Background: Extraer hechos y vectorizarlos
             background_tasks.add_task(async_extract_and_save_facts, user_id, prompt, recent_history_str)
         else:
-            print("INFO: Memoria a Largo Plazo deshabilitada para usuario Gratis.")
+            logger.info("INFO: Memoria a Largo Plazo deshabilitada para usuario Gratis.")
         
         # 🧠 Background: Generar un título si es el primer mensaje
         background_tasks.add_task(generate_chat_title_background, session_id, prompt)
@@ -788,27 +797,27 @@ async def api_diary_upload(
                 )
                 image_url = supabase.storage.from_("visual_diary_images").get_public_url(unique_filename)
                 upload_success = True
-                print(f"☁️ Imagen guardada en Supabase: {image_url}")
+                logger.info(f"☁️ Imagen guardada en Supabase: {image_url}")
             except Exception as sb_err:
-                print(f"⚠️ Error subiendo a Supabase (¿Existe el bucket 'visual_diary_images'?): {sb_err}")
+                logger.error(f"⚠️ Error subiendo a Supabase (¿Existe el bucket 'visual_diary_images'?): {sb_err}")
                 upload_success = False
 
         # 2. Si no se pudo subir a Supabase, fallar (evitar guardar localmente en la nube)
         if not upload_success:
-            print("❌ No se pudo subir la imagen a Supabase. Abortando.")
+            logger.error("❌ No se pudo subir la imagen a Supabase. Abortando.")
             raise HTTPException(status_code=500, detail="Error uploading image to cloud storage.")
             
             
         # 3. Procesar imagen con Visión SINCRÓNICAMENTE
-        print("\n-------------------------------------------------------------")
-        print("📸 [VISION AGENT] Procesando nueva imagen subida...")
+        logger.info("\n-------------------------------------------------------------")
+        logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
         vision_result = await process_image_with_vision(file_bytes)
         
         description = vision_result.get("description", "No se pudo analizar la imagen.")
         is_food = vision_result.get("is_food", False)
         
         if is_food:
-            print(f"✅ Descripción generada: '{description}'")
+            logger.info(f"✅ Descripción generada: '{description}'")
             
             if actual_user_id and actual_user_id != "guest" and actual_user_id != session_id:
                 from db import log_api_usage
@@ -820,7 +829,7 @@ async def api_diary_upload(
                 actual_user_id, image_url, description
             )
         else:
-            print("➡️ La imagen fue ignorada porque no se detectaron alimentos.")
+            logger.info("➡️ La imagen fue ignorada porque no se detectaron alimentos.")
         
         return {
             "success": True, 
@@ -829,7 +838,7 @@ async def api_diary_upload(
             "image_url": image_url
         }
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/diary/upload: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/diary/upload: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 def _save_visual_entry_background(user_id: str, image_url: str, description: str):
@@ -839,11 +848,11 @@ def _save_visual_entry_background(user_id: str, image_url: str, description: str
     
     embedding = get_multimodal_embedding(description)
     if embedding:
-        print(f"📦 Guardando entrada visual en la DB (Vector 768d)...")
+        logger.info(f"📦 Guardando entrada visual en la DB (Vector 768d)...")
         save_visual_entry(user_id=user_id, image_url=image_url, description=description, embedding=embedding)
-        print("✅ ¡Imagen registrada en el Diario Visual con éxito!")
+        logger.info("✅ ¡Imagen registrada en el Diario Visual con éxito!")
     else:
-        print("⚠️ No se pudo vectorizar la imagen. Abortando guardado.")
+        logger.warning("⚠️ No se pudo vectorizar la imagen. Abortando guardado.")
 
 @app.post("/api/shopping/auto-generate")
 def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = Depends(_shopping_autogen_limiter)):
@@ -882,7 +891,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
             from db import get_shopping_plan_hash
             stored_hash = get_shopping_plan_hash(user_id)
             if stored_hash == plan_hash:
-                print(f"✅ [CACHE HIT] Plan sin cambios (hash={plan_hash}). Retornando lista existente.")
+                logger.info(f"✅ [CACHE HIT] Plan sin cambios (hash={plan_hash}). Retornando lista existente.")
                 from db import get_custom_shopping_items
                 existing = get_custom_shopping_items(user_id)
                 existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
@@ -936,7 +945,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
     except Exception as e:
         import traceback
         traceback.print_exc()
-        print(f"❌ [ERROR] Error en /api/shopping/auto-generate POST: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/auto-generate POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/shopping/custom")
@@ -992,13 +1001,19 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
         result = add_custom_shopping_items(user_id, structured_items, source="manual")
         
         if result is not None:
+            # Auto-deduplicar: si el usuario ya tenía "Leche" y añade "leche", se fusionan
+            try:
+                from db import deduplicate_shopping_items
+                deduplicate_shopping_items(user_id)
+            except Exception:
+                pass  # No bloquear la respuesta si falla la dedup
             return {"success": True, "items": result, "message": f"Se añadieron {len(structured_items)} item(s) a tu lista de compras."}
         else:
             raise HTTPException(status_code=500, detail="Error al guardar los items en la base de datos.")
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom POST: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/shopping/custom/{user_id}")
@@ -1019,7 +1034,7 @@ def api_get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom GET: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/shopping/custom/{item_id}")
@@ -1036,7 +1051,7 @@ def api_delete_custom_shopping_item(item_id: str, verified_user_id: str = Depend
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom DELETE: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/shopping/custom/{item_id}")
@@ -1086,7 +1101,7 @@ def api_update_custom_shopping_item(item_id: str, data: dict = Body(...), verifi
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom PUT: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom PUT: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/shopping/custom/{item_id}/check")
@@ -1105,7 +1120,7 @@ def api_update_custom_shopping_item_check(item_id: str, data: dict = Body(...), 
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom PUT: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom PUT: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/shopping/custom/clear/{user_id}")
@@ -1122,7 +1137,7 @@ def api_clear_all_shopping_items(user_id: str, verified_user_id: str = Depends(g
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom/clear DELETE: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom/clear DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/shopping/custom/uncheck-all/{user_id}")
@@ -1139,7 +1154,7 @@ def api_uncheck_all_shopping_items(user_id: str, verified_user_id: str = Depends
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom/uncheck-all PUT: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom/uncheck-all PUT: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/shopping/custom/deduplicate/{user_id}")
@@ -1154,7 +1169,7 @@ def api_deduplicate_shopping_items(user_id: str, verified_user_id: str = Depends
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom/deduplicate POST: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom/deduplicate POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/shopping/custom/purge/{user_id}")
@@ -1169,7 +1184,7 @@ def api_purge_shopping_items(user_id: str, verified_user_id: str = Depends(get_v
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/shopping/custom/purge POST: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/shopping/custom/purge POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/diary/consumed/{user_id}")
@@ -1204,7 +1219,7 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
     except HTTPException as he:
         raise he
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/auth/migrate")
@@ -1238,7 +1253,7 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
         # 1. Transformar data guest a registrada
         success = migrate_guest_data(session_ids, new_user_id)
         if not success:
-            print(f"⚠️ Aviso: La función de migración base devolvió False, pero continuamos con profile y planes.")
+            logger.warning(f"⚠️ Aviso: La función de migración base devolvió False, pero continuamos con profile y planes.")
         
         # 2. Upsert health_profile si el frontend lo provee
         if health_profile:
@@ -1255,7 +1270,7 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
                             "health_profile": health_profile
                         }).execute()
             except Exception as e:
-                print(f"Error migrando health_profile: {e}")
+                logger.error(f"Error migrando health_profile: {e}")
                 
         # 3. Guardar el plan "guest" si existe
         if current_plan:
@@ -1296,13 +1311,13 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
                             else:
                                 raise try_db_e
                 except Exception as e:
-                    print(f"Error migrando current_plan: {e}")
+                    logger.error(f"Error migrando current_plan: {e}")
                     
         return {"success": True, "message": "Tu progreso como invitado se ha migrado a tu nueva cuenta."}
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ [ERROR] Error en /api/auth/migrate: {str(e)}")
+        logger.error(f"❌ [ERROR] Error en /api/auth/migrate: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

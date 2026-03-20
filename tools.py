@@ -1,4 +1,5 @@
 import os
+import logging
 import json
 import time
 from typing import Optional
@@ -6,6 +7,7 @@ from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
+logger = logging.getLogger(__name__)
 
 from db import (
     get_user_profile, update_user_health_profile, delete_user_facts_by_metadata,
@@ -22,20 +24,20 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
     Analiza el historial de Me Gusta y Rechazos ACTIVOS (últimos 7 días) 
     y devuelve un perfil conciso de los gustos del usuario.
     """
-    print("\n-------------------------------------------------------------")
-    print("🧠 [AGENTE DE PREFERENCIAS] Analizando Perfil de Gustos...")
+    logger.info("\n-------------------------------------------------------------")
+    logger.info("🧠 [AGENTE DE PREFERENCIAS] Analizando Perfil de Gustos...")
     
     liked_meals = [f"{like.get('meal_name')} ({like.get('meal_type')})" for like in likes] if likes else []
     rejected_meals = active_rejections if active_rejections else []
     
     if rejected_meals:
-        print(f"🚫 Rechazos activos (últimos 7 días): {rejected_meals}")
+        logger.info(f"🚫 Rechazos activos (últimos 7 días): {rejected_meals}")
     else:
-        print("➡️  No hay rechazos activos en los últimos 7 días.")
+        logger.info("➡️  No hay rechazos activos en los últimos 7 días.")
                 
     if not liked_meals and not rejected_meals:
-        print("➡️  No hay datos suficientes para un perfil. Asumiendo gustos estándar.")
-        print("-------------------------------------------------------------")
+        logger.info("➡️  No hay datos suficientes para un perfil. Asumiendo gustos estándar.")
+        logger.info("-------------------------------------------------------------")
         return ""
         
     prompt = PREFERENCES_AGENT_PROMPT.format(
@@ -54,8 +56,8 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
     taste_profile = response.content
     
     end_time = time.time()
-    print(f"✅ [PERFIL LISTO] Resuelto en {round(end_time - start_time, 2)}s: {taste_profile}")
-    print("-------------------------------------------------------------\n")
+    logger.info(f"✅ [PERFIL LISTO] Resuelto en {round(end_time - start_time, 2)}s: {taste_profile}")
+    logger.info("-------------------------------------------------------------\n")
     
     return f"\n\n--- PERFIL DE GUSTOS DEL USUARIO (OBLIGATORIO RESPETAR) ---\n{taste_profile}\n-----------------------------------------------------------"
 
@@ -69,7 +71,7 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
     Actualiza el formulario en tiempo real en la UI del usuario.
     Campos válidos (field): 'weight', 'height', 'age', 'gender', 'weightUnit', 'dietType', 'mainGoal', 'allergies', 'medicalConditions', 'activityLevel', 'dislikes', 'struggles'.
     """
-    print(f"🔧 [TOOL EXECUTION] Actualizando form del usuario {user_id}: {field} -> {new_value}")
+    logger.debug(f"🔧 [TOOL EXECUTION] Actualizando form del usuario {user_id}: {field} -> {new_value}")
     
     if field in ['weight', 'height', 'age']:
         import re
@@ -97,7 +99,7 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
             }
             if field in category_map:
                 cat = category_map[field]
-                print(f"🧹 [CLEANUP] Borrando vectores de categoría '{cat}' para evitar conflictos con el formulario.")
+                logger.info(f"🧹 [CLEANUP] Borrando vectores de categoría '{cat}' para evitar conflictos con el formulario.")
                 delete_user_facts_by_metadata(user_id, {"categoria": cat})
             # ---------------------------------------------
             
@@ -108,9 +110,9 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
 # ============================================================
 
 def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str = "") -> str:
-    print(f"\n🚀 [TOOL] Generando plan nuevo desde el chat para user_id: {user_id}")
+    logger.info(f"\n🚀 [TOOL] Generando plan nuevo desde el chat para user_id: {user_id}")
     if instructions:
-        print(f"📝 [TOOL] Instrucciones específicas del usuario: {instructions}")
+        logger.info(f"📝 [TOOL] Instrucciones específicas del usuario: {instructions}")
     
     from graph_orchestrator import run_plan_pipeline
     
@@ -180,13 +182,13 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                     except Exception as try_db_e:
                         err_msg = str(try_db_e)
                         if "meal_names" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
-                            print("⚠️ [DB] Faltan columnas en DB (meal_names). Guardando sin optimización.")
+                            logger.warning("⚠️ [DB] Faltan columnas en DB (meal_names). Guardando sin optimización.")
                             del insert_data["meal_names"]
                             del insert_data["ingredients"]
                             sb.table("meal_plans").insert(insert_data).execute()
                         else:
                             raise try_db_e
-                    print("💾 Plan generado desde chat guardado en DB.")
+                    logger.info("💾 Plan generado desde chat guardado en DB.")
                     
                     # 📈 Frequency Tracking para plan generado por chat
                     try:
@@ -197,18 +199,18 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                                 raw_ingredients.extend(m.get("ingredients", []))
                         if raw_ingredients:
                             increment_ingredient_frequencies(user_id, raw_ingredients)
-                            print(f"📈 [FREQ TRACKING] Frecuencias de chat actualizadas para {user_id}")
+                            logger.info(f"📈 [FREQ TRACKING] Frecuencias de chat actualizadas para {user_id}")
                     except Exception as freq_e:
-                        print(f"⚠️ [FREQ TRACKING ERROR] Error en tools: {freq_e}")
+                        logger.error(f"⚠️ [FREQ TRACKING ERROR] Error en tools: {freq_e}")
 
             except Exception as db_e:
-                print(f"⚠️ Aviso: No se pudo guardar el plan en Supabase (error {db_e}), pero el plan se devolverá al usuario.")
+                logger.error(f"⚠️ Aviso: No se pudo guardar el plan en Supabase (error {db_e}), pero el plan se devolverá al usuario.")
             
             return json.dumps(result)
         else:
             return "ERROR: El pipeline no pudo generar un plan. Intenta de nuevo."
     except Exception as e:
-        print(f"❌ Error generando plan desde chat: {e}")
+        logger.error(f"❌ Error generando plan desde chat: {e}")
         return f"ERROR: {str(e)}"
 
 @tool
@@ -229,7 +231,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
     Incluye carbohidratos y grasas saludables si están disponibles.
     """
-    print(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas)")
+    logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas)")
     result = db_log_consumed_meal(user_id, meal_name, calories, protein, carbs, healthy_fats)
     if result is not None:
         return f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) en tu diario."
@@ -242,7 +244,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
 
 def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str) -> str:
     """Ejecuta la modificación de una comida individual en el plan activo del usuario."""
-    print(f"\n🔧 [TOOL] modify_single_meal: Día {day_number}, {meal_type}, cambios: '{changes}'")
+    logger.debug(f"\n🔧 [TOOL] modify_single_meal: Día {day_number}, {meal_type}, cambios: '{changes}'")
     
     # 1. Obtener el plan actual con su ID
     plan_record = get_latest_meal_plan_with_id(user_id)
@@ -318,12 +320,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # 5. Actualizar en Supabase
         update_result = update_meal_plan_data(plan_id, plan_data)
         if update_result is not None:
-            print(f"✅ [TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
+            logger.info(f"✅ [TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
             return json.dumps({"modified_meal": new_meal_data, "day": day_number, "meal_index": target_meal_index})
         else:
             return "ERROR: Se generó la nueva comida pero no se pudo guardar en la base de datos."
     except Exception as e:
-        print(f"❌ [TOOL] Error modificando comida: {e}")
+        logger.error(f"❌ [TOOL] Error modificando comida: {e}")
         return f"ERROR: {str(e)}"
 
 @tool
@@ -347,6 +349,9 @@ def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: s
 # ============================================================
 
 # Mapping local de keywords → (categoría, emoji) para categorización inteligente sin LLM
+# ⚠️ Las keywords se emparejan con \b (word boundary), NO con substring.
+#     Esto evita falsos positivos como "sal" matcheando "salmón".
+#     Para frases multi-palabra ("pasta de tomate"), se prueban primero.
 _CATEGORY_KEYWORDS = {
     ("Frutas y Verduras", "🥬"): [
         "lechuga", "tomate", "cebolla", "ajo", "pimiento", "zanahoria", "brocoli", "brócoli",
@@ -355,69 +360,113 @@ _CATEGORY_KEYWORDS = {
         "sandia", "sandía", "cilantro", "perejil", "apio", "repollo", "coliflor", "batata",
         "yuca", "ñame", "tayota", "berro", "remolacha", "berenjena", "calabaza", "mazorca",
         "maiz", "maíz", "kiwi", "cereza", "arandano", "arándano", "mandarina", "guayaba",
-        "chinola", "lechosa", "habichuela", "vaina", "verde", "maduro"
+        "chinola", "lechosa", "vaina",
+        # Multi-palabra (se prueban primero por ser más específicos)
+        "platano verde", "plátano verde", "platano maduro", "plátano maduro",
     ],
     ("Proteínas", "🥩"): [
-        "pollo", "pechuga", "muslo", "carne", "res", "cerdo", "chuleta", "costilla",
+        "pollo", "pechuga", "muslo", "carne", "cerdo", "chuleta", "costilla",
         "salmon", "salmón", "atun", "atún", "pescado", "camaron", "camarón", "camarones",
         "jamon", "jamón", "salami", "salchicha", "tocino", "bacon", "pavo", "cordero",
         "filete", "bistec", "molida", "longaniza", "chorizo", "tilapia", "sardina",
-        "pulpo", "calamar", "langosta", "cangrejo"
+        "pulpo", "calamar", "langosta", "cangrejo",
+        # Multi-palabra
+        "carne de res", "carne molida",
     ],
     ("Lácteos", "🥛"): [
-        "leche", "queso", "yogur", "yogurt", "crema", "mantequilla", "nata", "requesón",
-        "mozzarella", "parmesano", "ricotta", "cheddar", "queso crema", "suero"
+        "leche", "queso", "yogur", "yogurt", "mantequilla", "nata", "requesón",
+        "mozzarella", "parmesano", "ricotta", "cheddar", "suero",
+        # Multi-palabra (más específicos, se prueban primero)
+        "queso crema", "crema de leche", "crema agria",
     ],
     ("Huevos", "🥚"): [
-        "huevo", "huevos"
+        "huevo", "huevos",
     ],
     ("Granos y Cereales", "🌾"): [
-        "arroz", "avena", "quinoa", "trigo", "cebada", "lenteja", "frijol", "frijoles",
-        "garbanzo", "guandule", "guandules", "habichuela", "habichuelas", "alubia",
-        "pasta", "espagueti", "macarron", "fideos", "cereal", "granola", "pan", "harina",
-        "tortilla", "arepa", "casabe"
+        "arroz", "avena", "quinoa", "trigo", "cebada", "lenteja", "lentejas",
+        "frijol", "frijoles", "garbanzo", "guandule", "guandules",
+        "habichuela", "habichuelas", "alubia",
+        "pasta", "espagueti", "macarron", "fideos", "cereal", "granola", "harina",
+        "tortilla", "arepa", "casabe",
+        # Multi-palabra
+        "pan integral", "pan de agua",
     ],
     ("Condimentos y Especias", "🧂"): [
-        "sal", "pimienta", "oregano", "orégano", "comino", "curry", "canela", "paprika",
+        "pimienta", "oregano", "orégano", "comino", "curry", "canela", "paprika",
         "adobo", "sazon", "sazón", "vinagre", "salsa", "ketchup", "mostaza", "mayonesa",
-        "soya", "sillao", "miel", "azucar", "azúcar", "sabora"
+        "soya", "sillao", "miel", "azucar", "azúcar", "sabora",
+        # Multi-palabra
+        "salsa de tomate", "sal de ajo", "sal marina", "sal rosada",
     ],
     ("Aceites y Grasas", "🫒"): [
-        "aceite", "oliva", "vegetal", "girasol", "manteca", "spray", "ghee", "coco"
+        "aceite", "oliva", "girasol", "manteca", "spray", "ghee",
+        # Multi-palabra (evita que "coco" matchee "agua de coco")
+        "aceite de coco", "aceite vegetal", "aceite de girasol",
     ],
     ("Bebidas", "🥤"): [
-        "agua", "jugo", "refresco", "soda", "cafe", "café", "te", "té", "cerveza",
-        "vino", "ron", "whisky", "gaseosa", "energizante"
+        "agua", "jugo", "refresco", "soda", "cafe", "café", "cerveza",
+        "vino", "whisky", "gaseosa", "energizante",
+        # Multi-palabra
+        "agua de coco",
     ],
     ("Snacks y Dulces", "🍪"): [
         "galleta", "chocolate", "dulce", "caramelo", "chicle", "chips", "palomita",
-        "nuez", "almendra", "mani", "maní", "semilla", "barra", "peanut"
+        "nuez", "almendra", "mani", "maní", "semilla", "barra", "peanut",
     ],
     ("Enlatados y Conservas", "🥫"): [
-        "lata", "enlatado", "conserva", "pasta de tomate", "sardinas en lata",
-        "atun en lata", "maiz en lata"
+        # Solo multi-palabra para evitar que "lata" matchee "chocolate"
+        "enlatado", "conserva",
+        "pasta de tomate", "sardinas en lata", "atun en lata", "maiz en lata",
+    ],
+    ("Panadería", "🍞"): [
+        "pan",
     ],
     ("Limpieza y Hogar", "🧹"): [
-        "jabon", "jabón", "detergente", "cloro", "desinfectante", "papel", "servilleta",
-        "bolsa", "esponja", "fabuloso", "suavizante", "toalla"
+        "jabon", "jabón", "detergente", "cloro", "desinfectante", "servilleta",
+        "esponja", "fabuloso", "suavizante",
+        # Multi-palabra
+        "papel toalla", "bolsa de basura",
     ],
     ("Higiene Personal", "🧴"): [
-        "shampoo", "champú", "pasta dental", "cepillo", "desodorante", "crema dental"
-    ]
+        "shampoo", "champú", "desodorante",
+        "pasta dental", "crema dental", "cepillo dental",
+    ],
 }
 
 def _categorize_item(item_name: str) -> tuple:
-    """Categoriza un item por keywords locales. Retorna (categoría, emoji)."""
-    import unicodedata
+    """Categoriza un item por keywords locales con word-boundary matching.
+    Retorna (categoría, emoji).
+    
+    Orden de matching (más específico primero):
+    1. ALL multi-word keywords across ALL categories (substring match)
+    2. ALL single-word keywords across ALL categories (\\b word boundary)
+    Esto evita que 'tomate' (Frutas) gane a 'salsa de tomate' (Condimentos)."""
+    import unicodedata, re
+    if not item_name or not item_name.strip():
+        return "Otros", "🛒"
     # Normalizar: minúsculas, sin acentos
     normalized = item_name.lower().strip()
     nfkd = unicodedata.normalize('NFKD', normalized)
     normalized = ''.join(c for c in nfkd if not unicodedata.combining(c))
     
+    def _norm_kw(kw):
+        return ''.join(c for c in unicodedata.normalize('NFKD', kw.lower()) if not unicodedata.combining(c))
+    
+    # Fase 1: Multi-word keywords (más específicos, substring match OK)
     for (category, emoji), keywords in _CATEGORY_KEYWORDS.items():
         for kw in keywords:
-            kw_norm = ''.join(c for c in unicodedata.normalize('NFKD', kw) if not unicodedata.combining(c))
-            if kw_norm in normalized:
+            if ' ' not in kw:
+                continue
+            if _norm_kw(kw) in normalized:
+                return category, emoji
+    
+    # Fase 2: Single-word keywords con word boundary
+    for (category, emoji), keywords in _CATEGORY_KEYWORDS.items():
+        for kw in keywords:
+            if ' ' in kw:
+                continue
+            kw_norm = _norm_kw(kw)
+            if re.search(r'\b' + re.escape(kw_norm) + r'\b', normalized):
                 return category, emoji
     
     return "Otros", "🛒"
@@ -432,7 +481,7 @@ def add_to_shopping_list(user_id: str, items: str) -> str:
     
     - items: string con items separados por coma, ej: 'plátanos, huevos, leche'
     """
-    print(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id}: {items}")
+    logger.debug(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id}: {items}")
     
     import re as _re
     MAX_ITEM_LENGTH = 100
@@ -491,7 +540,7 @@ def search_deep_memory(user_id: str, query: str) -> str:
     - user_id: ID del usuario
     - query: palabra clave o frase corta para buscar en los archivos históricos (ej: 'adherencia', 'estrés', 'primera semana')
     """
-    print(f"🔍 [TOOL EXECUTION] Buscando en memoria profunda para user {user_id}: '{query}'")
+    logger.info(f"🔍 [TOOL EXECUTION] Buscando en memoria profunda para user {user_id}: '{query}'")
     
     results = db_search_deep_memory(user_id, query, limit=5)
     
