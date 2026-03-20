@@ -384,6 +384,51 @@ Responde ÚNICAMENTE con el JSON de revisión.
         issues = ["Error de formato en la revisión médica. Forzando regeneración por seguridad clínica."]
         severity = "critical"
     
+    # ============================================================
+    # VALIDACIÓN DETERMINISTA ANTI-REPETICIÓN (Post-LLM)
+    # Verifica que el plan NO repita platos recientes del usuario.
+    # Esto es puro Python, sin costo de LLM adicional.
+    # ============================================================
+    if approved:
+        try:
+            user_id = form_data.get("user_id") or form_data.get("session_id")
+            if user_id and user_id != "guest":
+                from db import get_recent_meals_from_plans
+                import unicodedata
+                
+                def _normalize(s: str) -> str:
+                    s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+                    return s.lower().strip()
+                
+                recent_meal_names = get_recent_meals_from_plans(user_id, days=3)
+                if recent_meal_names:
+                    recent_set = {_normalize(n) for n in recent_meal_names}
+                    
+                    # Solo verificar comidas principales (Almuerzo/Cena), no desayunos/meriendas
+                    repeated_meals = []
+                    for day_obj in days:
+                        for meal in day_obj.get("meals", []):
+                            meal_type = meal.get("meal", "").lower()
+                            if meal_type in ["almuerzo", "cena"]:
+                                meal_name = _normalize(meal.get("name", ""))
+                                if meal_name and meal_name in recent_set:
+                                    repeated_meals.append(meal.get("name", "?"))
+                    
+                    # Umbral: si más de 1 comida principal se repite, rechazar
+                    if len(repeated_meals) > 1:
+                        approved = False
+                        issues.append(
+                            f"REPETICIÓN DETECTADA: Los siguientes platos principales ya aparecieron en planes recientes y deben ser reemplazados por alternativas completamente diferentes: {', '.join(repeated_meals)}."
+                        )
+                        severity = "minor"
+                        print(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados: {repeated_meals}")
+                    elif repeated_meals:
+                        print(f"⚠️  [ANTI-REPETICIÓN] 1 plato repetido tolerado: {repeated_meals}")
+                    else:
+                        print(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_set)} platos recientes.")
+        except Exception as e:
+            print(f"⚠️ [ANTI-REPETICIÓN] Error en validación (no bloqueante): {e}")
+    
     if approved:
         print(f"✅ [REVISOR MÉDICO] Plan APROBADO en {duration}s ✅")
         return {

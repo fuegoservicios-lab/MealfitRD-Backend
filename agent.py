@@ -220,10 +220,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         print("⚠️ [ANTI MODE-COLLAPSE] No quedan ingredientes disponibles tras filtrar restricciones. Dejando libertad al LLM.")
         return ""
         
-    # 3. Restricción Dura: Elegir 2 proteínas y 2 carbohidratos (reduciendo costo de supermercado)
+    # 3. Restricción Dura: Elegir 3 proteínas y 3 carbohidratos (1 distinto por día)
     # Peso inverso: ingredientes menos usados tienen MÁS probabilidad de ser elegidos
-    num_proteins_to_pick = min(2, len(available_proteins))
-    num_carbs_to_pick = min(2, len(available_carbs))
+    num_proteins_to_pick = min(3, len(available_proteins))
+    num_carbs_to_pick = min(3, len(available_carbs))
     
     # Calcular pesos inversos (freq 0 → peso alto, freq 5 → peso bajo)
     max_pf = max(protein_freq.get(p, 0) for p in available_proteins) + 1
@@ -247,9 +247,17 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         unique_carbs.append(pick)
         _pool_c = [(c, w) for c, w in _pool_c if c != pick]
     
-    # Llenamos los 3 días asegurando que al menos aparezcan los 2 elegidos
-    chosen_proteins = [unique_proteins[0], unique_proteins[1 if num_proteins_to_pick > 1 else 0], random.choice(unique_proteins)]
-    chosen_carbs = [unique_carbs[0], unique_carbs[1 if num_carbs_to_pick > 1 else 0], random.choice(unique_carbs)]
+    # Cada día recibe una proteína y un carbohidrato únicos (sin repeticiones entre días)
+    # Si no se pudieron elegir 3 (pool muy pequeño tras filtros), rellenamos ciclando lo que hay
+    _base_proteins = list(unique_proteins)
+    while len(unique_proteins) < 3:
+        unique_proteins.append(_base_proteins[len(unique_proteins) % len(_base_proteins)])
+    _base_carbs = list(unique_carbs)
+    while len(unique_carbs) < 3:
+        unique_carbs.append(_base_carbs[len(unique_carbs) % len(_base_carbs)])
+    
+    chosen_proteins = unique_proteins[:3]
+    chosen_carbs = unique_carbs[:3]
     
     # Mezclamos para que el orden de los días sea dinámico
     random.shuffle(chosen_proteins)
@@ -258,7 +266,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     blocked_text = ""
     if used_proteins or used_carbs:
         blocked_items = used_proteins + used_carbs
-        blocked_text = f"🚫 BLOQUEO MATEMÁTICO: Quedan ESTRICTAMENTE PROHIBIDOS como base principal (porque el usuario ya comió mucho de esto): {', '.join(blocked_items[:6])}."
+        blocked_text = f"🚫 BLOQUEO MATEMÁTICO: Quedan ESTRICTAMENTE PROHIBIDOS como base principal (porque el usuario ya comió mucho de esto): {', '.join(blocked_items)}."
         
     prompt = DETERMINISTIC_VARIETY_PROMPT.format(
         protein_0=chosen_proteins[0], carb_0=chosen_carbs[0],
@@ -266,8 +274,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         protein_2=chosen_proteins[2], carb_2=chosen_carbs[2],
         blocked_text=blocked_text
     )
-    print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas (optimizadas para costo): {chosen_proteins}")
-    print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (optimizados para costo): {chosen_carbs}")
+    print(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas (1 distinta por día): {chosen_proteins}")
+    print(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (1 distinto por día): {chosen_carbs}")
     return prompt
 
 
@@ -298,8 +306,8 @@ def swap_meal(form_data: dict):
         
     if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
 
-    # --- ANTI MODE-COLLAPSE PARA SWAPS ---
-    # Sugerir una proteína diferente al LLM para evitar que siempre use Pollo+Arroz
+    # --- ANTI MODE-COLLAPSE PARA SWAPS (con frecuencia real del historial) ---
+    # Sugerir una proteína diferente al LLM usando peso inverso por frecuencia
     try:
         import random
         available_for_swap = [p for p in DOMINICAN_PROTEINS if p.lower() not in rejected_meal.lower()]
@@ -308,8 +316,48 @@ def swap_meal(form_data: dict):
             available_for_swap = [p for p in available_for_swap if p.lower() in ["habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos", "soya/tofu", "berenjena"]]
         elif diet_type in ["vegetariano", "vegetarian"]:
             available_for_swap = [p for p in available_for_swap if p.lower() not in ["pollo", "cerdo", "res", "pescado", "atún", "camarones", "chuleta", "longaniza", "salami dominicano"]]
+        
         if available_for_swap:
-            suggested_protein = random.choice(available_for_swap)
+            # Consultar frecuencia real de ingredientes del historial de planes
+            user_id = form_data.get("user_id")
+            swap_weights = None
+            if user_id and user_id != "guest":
+                try:
+                    from db import get_ingredient_frequencies_from_plans
+                    raw_ingredients = get_ingredient_frequencies_from_plans(user_id, limit=5)
+                    if raw_ingredients:
+                        ingredients_blob = strip_accents(" ".join(raw_ingredients).lower())
+                        protein_synonyms_local = {
+                            "pollo": ["pollo", "pechuga", "muslo"], "cerdo": ["cerdo", "masita", "pernil"],
+                            "res": ["res", "carne molida", "bistec", "churrasco"], "pescado": ["pescado", "salmón", "tilapia"],
+                            "atún": ["atún", "atun"], "huevos": ["huevos", "huevo", "revoltillo"],
+                            "camarones": ["camarones", "camarón"], "chuleta": ["chuleta"],
+                            "longaniza": ["longaniza"], "berenjena": ["berenjena"],
+                            "habichuelas rojas": ["habichuelas rojas", "frijoles rojos"],
+                            "habichuelas negras": ["habichuelas negras", "frijoles negros"],
+                            "gandules": ["gandules", "guandules"], "lentejas": ["lentejas"],
+                            "garbanzos": ["garbanzos"], "soya/tofu": ["soya", "tofu"],
+                            "salami dominicano": ["salami"], "queso de freír": ["queso de freír", "queso frito"],
+                        }
+                        freq = {}
+                        for p in available_for_swap:
+                            syns = protein_synonyms_local.get(p.lower(), [p.lower()])
+                            count = 0
+                            for syn in syns:
+                                syn_n = strip_accents(syn.lower())
+                                count += len(re.findall(r'\b' + re.escape(syn_n) + r'\b', ingredients_blob))
+                            freq[p] = count
+                        
+                        max_f = max(freq.values()) + 1
+                        swap_weights = [max_f - freq.get(p, 0) for p in available_for_swap]
+                        print(f"🎲 [SWAP ANTI MODE-COLLAPSE] Pesos por frecuencia inversa: {dict(zip(available_for_swap, swap_weights))}")
+                except Exception as freq_e:
+                    print(f"⚠️ [SWAP] Error consultando frecuencia, usando random simple: {freq_e}")
+            
+            if swap_weights:
+                suggested_protein = random.choices(available_for_swap, weights=swap_weights, k=1)[0]
+            else:
+                suggested_protein = random.choice(available_for_swap)
             context_extras += f"\n    - 💡 SUGERENCIA DE VARIEDAD: Para este swap, intenta basar el plato en **{suggested_protein}** como proteína principal (o en un ingrediente radicalmente diferente al rechazado)."
     except Exception:
         pass  # No bloquear el swap si falla la sugerencia

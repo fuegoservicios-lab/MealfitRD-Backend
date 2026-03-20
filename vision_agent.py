@@ -1,6 +1,7 @@
 import os
 import io
 import base64
+from functools import lru_cache
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
@@ -63,17 +64,25 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
 
 def get_multimodal_embedding(text: str) -> list:
     """
-    Genera un embedding de la descripción de la imagen usando el modelo text-multilingual-embedding-002
-    (recortado a 768 para pgvector local).
+    Genera un embedding de la descripción usando Gemini (con caché TTL de 5 min).
     """
+    import time
+    
+    time_bucket = int(time.time() // 300)
+    result = _cached_multimodal_embedding(text, time_bucket)
+    return list(result) if result else None
+
+@lru_cache(maxsize=128)
+def _cached_multimodal_embedding(text: str, _time_bucket: int):
+    """Wrapper cacheado para embeddings multimodales."""
     try:
         embeddings = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-2-preview",
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
-        # Recortamos a 768 dimensiones
         emb = embeddings.embed_query(text)
-        return emb[:768]
+        print(f"🔑 [VISUAL EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
+        return tuple(emb[:768])
     except Exception as e:
         print(f"⚠️ Error al generar embedding multimodal: {e}")
         return None

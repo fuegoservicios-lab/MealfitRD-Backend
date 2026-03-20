@@ -1,5 +1,6 @@
 import os
 import json
+from functools import lru_cache
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -202,15 +203,25 @@ def extract_facts(user_message: str, recent_history: str = ""):
         return []
 
 def get_embedding(text: str):
-    """Genera un vector embedding usando Gemini text-embedding-004"""
+    """Genera un vector embedding usando Gemini embedding (con caché TTL de 5 min)."""
+    import time
+    
+    # Bucket de tiempo: misma key durante 5 minutos → cache hit
+    time_bucket = int(time.time() // 300)
+    result = _cached_embedding(text, time_bucket)
+    return list(result) if result else None
+
+@lru_cache(maxsize=256)
+def _cached_embedding(text: str, _time_bucket: int):
+    """Wrapper cacheado (lru_cache necesita args hashable, por eso el time_bucket)."""
     try:
         embeddings = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-2-preview",
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
-        # Recortar a 768 dimensiones (los modelos nuevos de Gemini son Matryoshka y soportan recorte sin perder semántica)
         emb = embeddings.embed_query(text)
-        return emb[:768]
+        print(f"🔑 [EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
+        return tuple(emb[:768])  # tuple es hashable para lru_cache
     except Exception as e:
         print(f"⚠️ Error al generar embedding: {e}")
         return None
