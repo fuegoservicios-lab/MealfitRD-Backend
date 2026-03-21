@@ -491,11 +491,8 @@ def swap_meal(form_data: dict):
         raise ValueError("El modelo de IA generó una respuesta inválida. Por favor, reintenta.")
 
 
-def _pre_consolidate_ingredients(ingredients: list, multiplier: float = 1.0) -> list:
-    """Pre-consolida ingredientes idénticos sumando cantidades en Python.
-    Reduce la carga al LLM y elimina errores de suma.
-    Ej: ['2 huevos', '3 huevos', '1 huevo'] → ['6 huevos']
-    """
+def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3) -> list:
+    """Pre-consolida ingredientes sumando cantidades en Python, y genera las cantidades crudas para 1, 3 y 7 días."""
     import re, unicodedata
     
     def _normalize(text: str) -> str:
@@ -504,33 +501,30 @@ def _pre_consolidate_ingredients(ingredients: list, multiplier: float = 1.0) -> 
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
     
     def _parse_ingredient(raw: str):
-        """Extrae (número, unidad, nombre_base) de un string como '2 lb Pollo' o '1/2 aguacate'."""
         raw = raw.strip()
-        # Intentar match: número (con fracción) + unidad opcional + nombre
-        match = re.match(r'^([\d.,/]+)\s*(g|kg|lb|lbs|oz|ml|l|taza|tazas|cda|cdta|und|unidades?)?\s+(.+)$', raw, re.IGNORECASE)
+        match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(g|kg|lb|lbs|oz|ml|l|taza|tazas|cda|cdta|und|unidades?)?\s+(.+)$', raw, re.IGNORECASE)
         if match:
-            num_str = match.group(1).replace(',', '.')
-            if '/' in num_str:
-                parts = num_str.split('/')
-                try:
-                    num = float(parts[0]) / float(parts[1])
-                except (ValueError, ZeroDivisionError):
-                    return None, "", raw
-            else:
-                try:
-                    num = float(num_str)
-                except ValueError:
-                    return None, "", raw
+            num_str = match.group(1).replace(',', '.').strip()
             unit = (match.group(2) or "").lower().strip()
             name = match.group(3).strip()
-            return num, unit, name
-        
-        # Sin número al inicio — devolver como está
+            try:
+                if ' ' in num_str or '-' in num_str:
+                    sep = ' ' if ' ' in num_str else '-'
+                    whole, frac = num_str.split(sep)
+                    num, den = frac.split('/')
+                    num = float(whole) + (float(num) / float(den))
+                elif '/' in num_str:
+                    numerator, denominator = num_str.split('/')
+                    num = float(numerator) / float(denominator)
+                else:
+                    num = float(num_str)
+                return num, unit, name
+            except (ValueError, ZeroDivisionError):
+                return None, "", raw
         return None, "", raw
-    
-    # Agrupar por (nombre_normalizado, unidad_normalizada)
-    groups = {}  # (norm_name, norm_unit) → {total, unit_original, name_original, extras: []}
-    order = []   # preservar orden de aparición
+
+    groups = {}
+    order = []
     
     for ing in ingredients:
         if not isinstance(ing, str) or not ing.strip():
@@ -548,33 +542,53 @@ def _pre_consolidate_ingredients(ingredients: list, multiplier: float = 1.0) -> 
             else:
                 entry["can_sum"] = False
     
-    # Reconstruir lista consolidada
     result = []
+    
+    def format_qty(qty):
+        return str(int(qty)) if qty == int(qty) else f"{qty:.2f}"
+            
     for key in order:
         entry = groups[key]
         if entry["can_sum"] and entry["total"] is not None:
-            total = entry["total"] * multiplier
-            total_str = str(int(total)) if total == int(total) else f"{total:.1f}"
+            base_total = entry["total"]
+            div = base_days if base_days > 0 else 1
+            
+            t1 = base_total / div
+            t3 = base_total * (3 / div)
+            t7 = base_total * (7 / div)
+            
             unit_part = f" {entry['unit']}" if entry["unit"] else ""
-            result.append(f"{total_str}{unit_part} {entry['name']}")
+            
+            result.append({
+                "name": entry['name'],
+                "raw_qty_1_day": f"{format_qty(t1)}{unit_part}".strip(),
+                "raw_qty_3_days": f"{format_qty(t3)}{unit_part}".strip(),
+                "raw_qty_7_days": f"{format_qty(t7)}{unit_part}".strip()
+            })
         else:
-            result.append(entry["raw"])
+            result.append({
+                "name": entry["raw"],
+                "raw_qty_1_day": "Al gusto / Variable",
+                "raw_qty_3_days": "Al gusto / Variable",
+                "raw_qty_7_days": "Al gusto / Variable"
+            })
     
     return result
 
-
-def generate_auto_shopping_list(plan_data: dict, days_to_shop: int = 7) -> list:
-    """Extrae ingredientes del plan, los consolida y categoriza por pasillo de supermercado."""
+def generate_auto_shopping_list(plan_data: dict) -> list:
+    """Extrae ingredientes del plan, pre-conslida las cantidades para 1, 3 y 7 días y categoriza por pasillo de supermercado."""
     logger.info("\n-------------------------------------------------------------")
-    logger.debug("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan...")
+    logger.debug("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan para 1/3/7 días...")
     
     ingredients = []
     days = plan_data.get("days", [])
-    base_plan_length = len(days) or 1
-    multiplier = days_to_shop / base_plan_length
+    base_plan_length = len(days)
     
-    for d in days:
-        for m in d.get("meals", []):
+    if base_plan_length == 0:
+        return []
+        
+    for day_data in days:
+        for m in day_data.get("meals", []):
             ing = m.get("ingredients", [])
             if ing:
                 ingredients.extend(ing)
@@ -582,14 +596,13 @@ def generate_auto_shopping_list(plan_data: dict, days_to_shop: int = 7) -> list:
     if not ingredients:
         return []
     
-    # 🧮 Pre-consolidación determinista en Python (reduce tokens y elimina errores de suma del LLM)
-    ingredients = _pre_consolidate_ingredients(ingredients, multiplier=multiplier)
-    logger.debug(f"🧮 [PRE-CONSOLIDACIÓN] {len(ingredients)} ingredientes únicos tras fusión en Python.")
+    ingredients_json = _pre_consolidate_ingredients_multiday(ingredients, base_days=base_plan_length)
+    logger.debug(f"🧮 [PRE-CONSOLIDACIÓN] {len(ingredients_json)} ingredientes únicos listos para LLM.")
         
-    prompt = AUTO_SHOPPING_LIST_PROMPT.format(ingredients_json=json.dumps(ingredients))
+    prompt = AUTO_SHOPPING_LIST_PROMPT.format(ingredients_json=json.dumps(ingredients_json, ensure_ascii=False))
     
     shopping_llm = ChatGoogleGenerativeAI(
-        model="gemini-3-flash-preview",
+        model="gemini-3.1-flash-lite-preview",
         temperature=0.2,
         timeout=90,  # 90s por intento para evitar 504 Deadline Exceeded
         google_api_key=os.environ.get("GEMINI_API_KEY")
@@ -613,25 +626,30 @@ def generate_auto_shopping_list(plan_data: dict, days_to_shop: int = 7) -> list:
         else:
             items = []
             
-        logger.info(f"✅ Se consolidaron ingredientes en {len(items)} categorías.")
+        logger.info(f"✅ Se consolidaron ingredientes en {len(items)} categorías multiday.")
         logger.info("-------------------------------------------------------------\n")
+        
+        # Pydantic a Dict serializable si no lo es
+        if items and not isinstance(items[0], dict):
+            items = [item.model_dump() if hasattr(item, "model_dump") else getattr(item, "dict")() for item in items]
+            
         return items
     except Exception as e:
-        logger.error(f"❌ Error generando auto shopping list (tras reintentos): {e}")
+        logger.error(f"❌ Error generando auto shopping list multiday (tras reintentos): {e}")
         # 🛡️ Fallback local: categorizar ingredientes sin LLM para no perder la lista
         logger.debug("🔄 [FALLBACK] Generando lista básica con categorización local (sin LLM)...")
         try:
             from tools import _categorize_item
             fallback_items = []
-            for ing in ingredients:
-                if not isinstance(ing, str) or not ing.strip():
-                    continue
-                cat, emoji = _categorize_item(ing)
+            for ing in ingredients_json:
+                cat, emoji = _categorize_item(ing["name"])
                 fallback_items.append({
                     "category": cat,
                     "emoji": emoji,
-                    "name": ing.strip().capitalize(),
-                    "qty": ""
+                    "name": str(ing.get("name", "")).strip().capitalize(),
+                    "qty_1": ing.get("raw_qty_1_day", ""),
+                    "qty_3": ing.get("raw_qty_3_days", ""),
+                    "qty_7": ing.get("raw_qty_7_days", "")
                 })
             logger.debug(f"✅ [FALLBACK] {len(fallback_items)} ingredientes categorizados localmente.")
             return fallback_items
@@ -788,7 +806,7 @@ def generate_chat_title_background(session_id: str, first_message: str):
         if res.data and len(res.data) > 0:
             return 
             
-        title_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0.4, google_api_key=os.environ.get("GEMINI_API_KEY"))
+        title_llm = ChatGoogleGenerativeAI(model="gemini-3.1-pro-preview", temperature=0.4, google_api_key=os.environ.get("GEMINI_API_KEY"))
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message)
         response = title_llm.invoke(prompt)
         content = response.content
@@ -841,7 +859,7 @@ def rag_query_router(prompt: str) -> dict:
     # Paso 3: Para mensajes sustanciales, usar Flash-Lite para reescribir la query
     try:
         router_llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3.1-pro-preview",
             temperature=0.0,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )

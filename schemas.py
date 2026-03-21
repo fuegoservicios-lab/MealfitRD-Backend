@@ -32,7 +32,9 @@ class ShoppingItemModel(BaseModel):
     category: str = Field(description="Nombre de la categoría principal, Ej: 'Carnes', 'Frutas y Verduras'")
     emoji: str = Field(description="Un emoji representativo de la categoría, Ej: '🥩', '🥬'")
     name: str = Field(description="Nombre del ingrediente o producto, Ej: 'Pechuga de pollo'")
-    qty: str = Field(description="Cantidad redondeada a unidades reales de supermercado, Ej: '2 Unidades', '1 Libra', '250g'")
+    qty_1: str = Field(description="Cantidad redondeada para 1 DÍA de compras, Ej: '1/2 Libra', '1 Unidad'")
+    qty_3: str = Field(description="Cantidad redondeada para 3 DÍAS de compras, Ej: '1.5 Libras', '3 Unidades'")
+    qty_7: str = Field(description="Cantidad redondeada para 7 DÍAS de compras, Ej: '3.5 Libras', '7 Unidades'")
 
 class ShoppingListModel(BaseModel):
     items: List[ShoppingItemModel] = Field(description="Lista de ingredientes parseados y estructurados individualmente.")

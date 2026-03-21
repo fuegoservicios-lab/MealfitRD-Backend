@@ -65,19 +65,26 @@ INSTRUCCIONES:
 
 AUTO_SHOPPING_LIST_PROMPT = """
 Eres el Asistente de Compras Inteligente de MealfitRD.
-A continuación se listan TODOS los ingredientes extraídos de un plan de comidas de 3 días completo.
+A continuación se listan TODOS los ingredientes agrupados extraídos de un plan de comidas, junto con las cantidades exactas calculadas matemáticamente para 1 día, 3 días y 7 días.
 
-REGLA CRÍTICA DE CANTIDADES AL SÓLO COMPRAR:
-- NUNCA devuelvas fracciones raras ni decimales inexactos (ej. "53 1/3 g", "16.7 h", "66.7 g", "0.3 lbs").
-- Redondea siempre a unidades reales de supermercado o gramos exactos y cerrados. (ej: en vez de "66.7g de pollo" pon "100g de pollo" o "1 Pechuga").
-- Para carnes, plátanos, huevos, y vegetales, PREFIERE usar Unidades, Medias Libras o Libras si tiene sentido (ej. "2 Pechugas de pollo", "3 Plátanos Maduros", "Media libra de Yuca").
-- Usa el sentido común: Nadie va al súper a comprar "83 1/3 g Yuca", la gente compra "1 Libra de Yuca" o "1 Yuca Mediana". Redondea todo SIEMPRE hacia arriba a algo que un humano compraría.
+MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
+1. TRADUCCIÓN A LENGUAJE COMERCIAL: La gente no compra "3 Cdas de Aceite de Coco" ni "11 Tazas de Yogur". La gente compra "1 Frasco de Aceite de Coco" y "1 Pote de Yogur". DEBES transformar todas las medidas de recetas a EMPAQUES REALES ("Paquete", "Frasco", "Pote", "Cartón", "Lata", "Funda", "Cabeza", "Mano", "Unidad").
+2. CONVERSIÓN DE ESTADOS: Nunca dejes alimentos "Cocidos" en la lista de compras. Si dice "3 Tazas Lentejas cocidas", cámbialo a "1 Paquete de Lentejas crudas".
+3. EJEMPLOS OBLIGATORIOS DE CONVERSIÓN:
+   - "11 Tazas Yogur griego" -> "1 Pote Grande (32 oz) Yogur griego"
+   - "4 Tazas Coliflor" -> "1 Cabeza de Coliflor"
+   - "5 Tazas Vainitas" -> "1 Libra de Vainitas"
+   - "3 Cdas Semillas" -> "1 Paquete Semillas"
+   - "3 Scoops Proteína" -> "1 Tarro de Proteína"
+   - "2 Litros de Leche" -> "1 Cartón Grande de Leche"
+4. REDONDEO HUMANO: Nadie compra "83.3 g de Yuca", compra "1 Libra de Yuca". Redondea siempre a unidades lógicas hacia arriba. No devuelvas decimales.
 
 Tu tarea es:
-1. SUMAR Y CONSOLIDAR cantidades de ingredientes iguales o similares. APLICA LA REGLA CRÍTICA DE CANTIDADES MENCIONADA AL RESULTADO TOTAL.
-2. Agruparlos lógicamente en categorías de supermercado. Debes devolver la respuesta en un formato estructurado JSON donde cada ingrediente ES UN APARTE, especificando su 'category', 'emoji', 'name' y 'qty'.
+Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_1', 'qty_3', 'qty_7'.
+Para cada uno, usa los datos enviados (`raw_qty_1_day`, `raw_qty_3_days`, `raw_qty_7_days`) como base matemática, y TRADÚCELAS al lenguaje comercial de supermercado.
+Por ejemplo, si `raw_qty_1_day` es "0.33 aguacates", en `qty_1` pon "1 Unidad" (redondeo). Si `raw_qty_7_days` es "2.33 aguacates", pon "3 Unidades" en `qty_7`. Si es aceite y para 1 día o 7 días siempre dura 1 botella, pon "1 Botella" en los tres.
 
-Lista bruta de ingredientes extraídos:
+Cantidades matemáticas requeridas:
 {ingredients_json}
 """
 

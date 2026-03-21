@@ -4,6 +4,9 @@ import hashlib
 import functools
 import threading
 import time as _time_mod
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Intentar importar redis
 try:
@@ -15,15 +18,15 @@ try:
     if REDIS_URL:
         # Usamos decode_responses=True para que devuelva strings en lugar de bytes
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        print("🔗 [CACHE] Conectado a Redis exitosamente.")
+        logger.info("🔗 [CACHE] Conectado a Redis exitosamente.")
     else:
         redis_client = None
 except ImportError:
     redis_client = None
-    print("⚠️ [CACHE] Redis no instalado, se usará caché en memoria local.")
+    logger.warning("⚠️ [CACHE] Redis no instalado, se usará caché en memoria local.")
 except Exception as e:
     redis_client = None
-    print(f"⚠️ [CACHE] Error conectando a Redis, se usará caché local: {e}")
+    logger.warning(f"⚠️ [CACHE] Error conectando a Redis, se usará caché local: {e}")
 
 # Fallback local cache (LRU artesanal simple CON TTL real)
 _local_cache = {}
@@ -44,7 +47,7 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
             try:
                 args_repr = json.dumps({"args": args, "kwargs": kwargs}, sort_keys=True)
             except Exception as j_err:
-                print(f"⚠️ [CACHE] Argumentos no serializables en {func.__name__}, saltando caché: {j_err}")
+                logger.warning(f"⚠️ [CACHE] Argumentos no serializables en {func.__name__}, saltando caché: {j_err}")
                 return func(*args, **kwargs)
 
             # Usar MD5 (es suficientemente rápido para keys de caché cortas)
@@ -58,7 +61,7 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
                     if cached_val:
                         return json.loads(cached_val)
                 except Exception as e:
-                    print(f"⚠️ [CACHE] Error Leyendo de Redis para {cache_key}: {e}")
+                    logger.warning(f"⚠️ [CACHE] Error Leyendo de Redis para {cache_key}: {e}")
             
             # 3. Intentar buscar en Local Cache (Fallback CON TTL real)
             else:
@@ -79,7 +82,7 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
                 try:
                     redis_client.setex(cache_key, ttl_seconds, json.dumps(result))
                 except Exception as e:
-                    print(f"⚠️ [CACHE] Error Escribiendo a Redis para {cache_key}: {e}")
+                    logger.warning(f"⚠️ [CACHE] Error Escribiendo a Redis para {cache_key}: {e}")
             else:
                 with _cache_lock:
                     _local_cache[cache_key] = (_time_mod.time(), result)
@@ -87,7 +90,7 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
                     if len(_local_cache) > maxsize:
                         _local_cache.clear()
                         _local_cache[cache_key] = (_time_mod.time(), result)
-                        print("🧹 [CACHE LOCAL] Limpieza de caché local forzada (capacidad alcanzada).")
+                        logger.info("🧹 [CACHE LOCAL] Limpieza de caché local forzada (capacidad alcanzada).")
                         
             return result
         return wrapper

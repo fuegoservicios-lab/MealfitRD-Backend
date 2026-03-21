@@ -948,15 +948,94 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict):
 # adquiera el lock y llame a deduplicate_shopping_items internamente
 # sin deadlock, ya que ambos corren en el mismo thread.
 import threading as _threading
-
 from functools import lru_cache as _lru_cache
+import time as _time
+from datetime import datetime as _datetime, timezone as _timezone, timedelta as _timedelta
+
+class DistributedShoppingLock:
+    """Un Distributed Lock (RLock reentrante) apoyado en Supabase para evitar 
+    race conditions en instancias distribuidas (Serverless/Varios workers)."""
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        self._acquired = False
+        self._local_lock = _threading.RLock()
+        self._recursions = 0
+
+    def acquire(self, timeout=10):
+        # 1. Bloqueo local para hilos en el mismo proceso (Reentrancy)
+        local_acq = self._local_lock.acquire(timeout=timeout)
+        if not local_acq: return False
+        
+        # Si ya teníamos el lock distribuido en este proceso, somos reentrantes
+        if self._recursions > 0:
+            self._recursions += 1
+            return True
+            
+        # 2. Bloqueo Distribuido (Intentar en la Base de Datos)
+        start = _time.time()
+        while _time.time() - start < timeout:
+            try:
+                # Si inserta, nadie lo tenía. Si falla por Primary Key, alguien más lo tiene.
+                if supabase:
+                    supabase.table("shopping_locks").insert({"user_id": self.user_id}).execute()
+                self._acquired = True
+                self._recursions = 1
+                return True
+            except Exception as e:
+                error_str = str(e)
+                # Manejar conflicto de llave primaria (lock existente) o tabla inexistente
+                if "23505" in error_str or "duplicate" in error_str.lower() or "already exists" in error_str.lower() or "PGRST116" in error_str:
+                    # Limpiar Locks Rancios (Stale Locks > 2 minutos)
+                    try:
+                        if supabase:
+                            check = supabase.table("shopping_locks").select("locked_at").eq("user_id", self.user_id).execute()
+                            if check.data:
+                                locked_at_str = check.data[0].get("locked_at")
+                                if locked_at_str:
+                                    locked_at = _datetime.fromisoformat(locked_at_str.replace("Z", "+00:00"))
+                                    if _datetime.now(_timezone.utc) - locked_at > _timedelta(minutes=2):
+                                        supabase.table("shopping_locks").delete().eq("user_id", self.user_id).execute()
+                                        continue
+                    except Exception:
+                        pass
+                elif "relation \"shopping_locks\" does not exist" in error_str.lower() or "404" in error_str:
+                    # Fallback si la migración no se ha corrido: actuar solo como RLock local
+                    logger.warning("⚠️ [LOCK] Tabla shopping_locks no existe. Cayendo a fallback RLock en memoria. Ejecuta migration_shopping_locks.sql")
+                    self._acquired = False 
+                    self._recursions = 1
+                    return True
+            _time.sleep(0.5)
+            
+        # Timeout distribuido
+        self._local_lock.release()
+        return False
+
+    def release(self):
+        if self._recursions > 0:
+            self._recursions -= 1
+            if self._recursions == 0 and self._acquired:
+                try:
+                    if supabase:
+                        supabase.table("shopping_locks").delete().eq("user_id", self.user_id).execute()
+                except Exception as e:
+                    logger.error(f"Error liberando distributed lock: {e}")
+                finally:
+                    self._acquired = False
+        self._local_lock.release()
+
+    def __enter__(self):
+        self.acquire(timeout=15)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
 
 @_lru_cache(maxsize=1024)
-def get_user_shopping_lock(user_id: str) -> _threading.RLock:
-    """Obtiene un RLock exclusivo por usuario para serializar
-    operaciones de shopping list que requieren atomicidad.
-    LRU(1024) evita memory leak: los locks menos usados se evictan automáticamente."""
-    return _threading.RLock()
+def get_user_shopping_lock(user_id: str) -> DistributedShoppingLock:
+    """Obtiene un Distributed RLock exclusivo por usuario para serializar
+    operaciones de shopping list que requieren atomicidad en entornos serverless.
+    LRU(1024) previene memory leaks devolviendo la misma instancia por usuario."""
+    return DistributedShoppingLock(user_id)
 
 def add_custom_shopping_items(user_id: str, items: list, source: str = "manual"):
     """Inserta uno o más items custom a la lista de compras del usuario.
@@ -1238,21 +1317,24 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
     
     def _extract_number(qty_str: str):
-        """Extrae número y unidad de una cantidad (ej: '2 lb' → (2.0, 'lb'))."""
+        """Extrae número y unidad de una cantidad (ej: '2 lb', '1 1/2 taza' → (1.5, 'taza'))."""
         if not qty_str: return None, ""
-        match = re.match(r'([\d.,/]+)\s*(.*)', qty_str.strip())
+        match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(.*)', qty_str.strip())
         if match:
-            num_str = match.group(1).replace(',', '.')
-            # Manejar fracciones tipo "1/2"
-            if '/' in num_str:
-                parts = num_str.split('/')
-                try:
-                    return float(parts[0]) / float(parts[1]), match.group(2).strip()
-                except (ValueError, ZeroDivisionError):
-                    return None, qty_str
+            num_str = match.group(1).replace(',', '.').strip()
+            unit_str = match.group(2).strip()
             try:
-                return float(num_str), match.group(2).strip()
-            except ValueError:
+                if ' ' in num_str or '-' in num_str:
+                    sep = ' ' if ' ' in num_str else '-'
+                    whole, frac = num_str.split(sep)
+                    num, den = frac.split('/')
+                    return float(whole) + (float(num) / float(den)), unit_str
+                elif '/' in num_str:
+                    num, den = num_str.split('/')
+                    return float(num) / float(den), unit_str
+                else:
+                    return float(num_str), unit_str
+            except (ValueError, ZeroDivisionError):
                 return None, qty_str
         return None, qty_str
     

@@ -69,7 +69,7 @@ def should_extract_facts(user_message: str) -> bool:
     """
     
     llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-pro-preview",
         temperature=0.0,
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(RouterResult)
@@ -185,7 +185,7 @@ def extract_facts(user_message: str, recent_history: str = ""):
     """
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-pro-preview",
         temperature=0.1,
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(FactsModel)
@@ -366,7 +366,7 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
             """
         
             llm = ChatGoogleGenerativeAI(
-                model="gemini-3.1-flash-lite-preview",
+                model="gemini-3.1-pro-preview",
                 temperature=0.0,
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             ).with_structured_output(BatchContradictionResult)
