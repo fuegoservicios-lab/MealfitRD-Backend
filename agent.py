@@ -632,6 +632,39 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
         # Pydantic a Dict serializable si no lo es
         if items and not isinstance(items[0], dict):
             items = [item.model_dump() if hasattr(item, "model_dump") else getattr(item, "dict")() for item in items]
+        
+        # 🏷️ Normalizar nombres de categoría para evitar duplicados del LLM
+        # (ej: "Frutas" y "Frutas y Verduras" deben ser la misma categoría)
+        CATEGORY_NORMALIZATION = {
+            "frutas": "Frutas y Verduras",
+            "verduras": "Frutas y Verduras",
+            "vegetales": "Frutas y Verduras",
+            "frutas y vegetales": "Frutas y Verduras",
+            "carnes": "Carnes y Pescados",
+            "pescados": "Carnes y Pescados",
+            "proteinas": "Carnes y Pescados",
+            "proteínas": "Carnes y Pescados",
+            "carnes y proteínas": "Carnes y Pescados",
+            "carnes y proteinas": "Carnes y Pescados",
+            "lácteos": "Lácteos y Huevos",
+            "lacteos": "Lácteos y Huevos",
+            "huevos": "Lácteos y Huevos",
+            "granos": "Despensa",
+            "granos y cereales": "Despensa",
+            "cereales": "Despensa",
+            "especias": "Condimentos y Especias",
+            "condimentos": "Condimentos y Especias",
+            "aceites": "Aceites y Grasas",
+            "grasas": "Aceites y Grasas",
+            "aceites y grasas saludables": "Aceites y Grasas",
+        }
+        for item in items:
+            if "category" in item:
+                cat_lower = item["category"].strip().lower()
+                if cat_lower in CATEGORY_NORMALIZATION:
+                    item["category"] = CATEGORY_NORMALIZATION[cat_lower]
+        
+        logger.debug(f"🏷️ [NORMALIZACIÓN] Categorías finales: {set(item.get('category', '') for item in items)}")
             
         return items
     except Exception as e:
