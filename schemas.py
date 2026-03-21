@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 
 class MacrosModel(BaseModel):
     protein: str = Field(description="Gramos de proteína totales, ej: '150g'")
@@ -17,9 +17,16 @@ class MealModel(BaseModel):
     ingredients: List[str] = Field(description="Lista de ingredientes con cantidades (texto simple), Ej:['1 plátano verde maduro', '2 huevos', '1/2 aguacate']")
     recipe: List[str] = Field(description="Pasos de preparación. DEBES usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'")
 
+class SupplementModel(BaseModel):
+    name: str = Field(description="Nombre del suplemento, Ej: 'Creatina Monohidrato'")
+    dose: str = Field(description="Dosis recomendada, Ej: '5g (1 cucharadita)'")
+    timing: str = Field(description="Momento del día para tomarlo, Ej: 'Post-entreno', 'Con el desayuno'")
+    reason: str = Field(description="Justificación breve de por qué se recomienda para el usuario")
+
 class DailyPlanModel(BaseModel):
     day: int = Field(description="Número de día (1, 2, o 3)")
     meals: List[MealModel] = Field(description="Lista de comidas en orden cronológico. MUY IMPORTANTE: Si el usuario omite el almuerzo, genera SOLO 3 comidas: Desayuno, Merienda, Cena.")
+    supplements: Optional[List[SupplementModel]] = Field(default=None, description="Lista de suplementos para este día. Solo se incluye si el usuario activó includeSupplements: true.")
 
 class PlanModel(BaseModel):
     main_goal: str = Field(description="El objetivo principal identificado. Ej: 'Pérdida de Peso (Déficit)'")

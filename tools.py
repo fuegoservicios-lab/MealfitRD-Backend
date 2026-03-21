@@ -170,12 +170,21 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                     insert_data = {
                         "user_id": user_id,
                         "plan_data": result,
-                        "name": f"Plan del {datetime.now().strftime('%A %d de %B %Y')}",
                         "calories": int(calories) if calories else 0,
                         "macros": macros,
                         "meal_names": meal_names,
                         "ingredients": ingredients
                     }
+                    
+                    # Nombre inteligente: primeras 2 comidas + calorías
+                    if len(meal_names) >= 2:
+                        n1 = meal_names[0][:30] if len(meal_names[0]) > 30 else meal_names[0]
+                        n2 = meal_names[1][:30] if len(meal_names[1]) > 30 else meal_names[1]
+                        insert_data["name"] = f"{n1} · {n2} — {calories} kcal"
+                    elif meal_names:
+                        insert_data["name"] = f"{meal_names[0][:30]} — {calories} kcal"
+                    else:
+                        insert_data["name"] = f"Plan {calories} kcal — {datetime.now().strftime('%d/%m/%Y')}"
                     
                     try:
                         sb.table("meal_plans").insert(insert_data).execute()

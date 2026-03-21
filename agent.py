@@ -331,6 +331,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     if skip_lunch and len(_base_proteins) == 1:
         blocked_text += f"\n💡 NOTA: Solo hay 1 proteína base ({_base_proteins[0]}) para los 3 días porque el usuario omite Almuerzo. Varía la PREPARACIÓN y TÉCNICA de cocción cada día, no el ingrediente."
     
+    # Nota de conservación de alimentos según frecuencia de compras
+    grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
+    if grocery_duration == "monthly":
+        blocked_text += "\n🛒 COMPRA MENSUAL: El usuario compra para 30 días. Prioriza ingredientes de larga duración (tubérculos, granos secos, proteínas congelables). Evita depender de perecederos de vida corta."
+    elif grocery_duration == "biweekly":
+        blocked_text += "\n🛒 COMPRA QUINCENAL: El usuario compra para 15 días. Equilibra frescos con ingredientes duraderos. Sugiere congelación para proteínas frescas."
+    
     # Construir parámetros de frutas para el prompt
     fruit_params = {}
     if chosen_fruits and len(chosen_fruits) == 3:
@@ -665,6 +672,25 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
                     item["category"] = CATEGORY_NORMALIZATION[cat_lower]
         
         logger.debug(f"🏷️ [NORMALIZACIÓN] Categorías finales: {set(item.get('category', '') for item in items)}")
+        
+        # 💊 Inyectar suplementos del plan como items de lista de compras
+        seen_supps = set()
+        for day_data in days:
+            for supp in day_data.get("supplements") or []:
+                supp_name = supp.get("name", "").strip()
+                if supp_name and supp_name.lower() not in seen_supps:
+                    seen_supps.add(supp_name.lower())
+                    dose = supp.get("dose", "1 unidad")
+                    items.append({
+                        "category": "Suplementos",
+                        "emoji": "💊",
+                        "name": supp_name,
+                        "qty_1": dose,
+                        "qty_3": f"{dose} /día · 3 días",
+                        "qty_7": f"{dose} /día · 7 días",
+                    })
+        if seen_supps:
+            logger.info(f"💊 [SUPLEMENTOS] {len(seen_supps)} suplementos añadidos a la lista de compras: {seen_supps}")
             
         return items
     except Exception as e:
@@ -855,6 +881,75 @@ def generate_chat_title_background(session_id: str, first_message: str):
         logger.info(f"✅ Título generado para sesión {session_id}: {title}")
     except Exception as e:
         logger.error(f"⚠️ Error generando título: {e}")
+
+
+def generate_plan_title(plan_data: dict) -> str:
+    """Genera un título corto y creativo para un plan nutricional usando Gemini Flash-Lite."""
+    try:
+        # Extraer nombres de comidas para contexto
+        meal_names = []
+        for d in plan_data.get("days", []):
+            for m in d.get("meals", []):
+                if m.get("name"):
+                    meal_names.append(m["name"])
+        
+        calories = plan_data.get("calories", 0)
+        goal = plan_data.get("goal", plan_data.get("assessment", {}).get("mainGoal", ""))
+        
+        if not meal_names:
+            from datetime import datetime
+            return f"Plan Evolutivo - {datetime.now().strftime('%d/%m/%Y')}"
+        
+        meals_summary = ", ".join(meal_names[:6])
+        
+        goal_map = {
+            "lose_weight": "pérdida de grasa",
+            "build_muscle": "ganar masa muscular",
+            "maintain": "mantenimiento",
+            "health": "salud general"
+        }
+        goal_text = goal_map.get(goal, "nutrición personalizada")
+        
+        prompt = f"""Genera UN título corto y creativo en español para un plan de comidas. 
+REGLAS ESTRICTAS:
+- Máximo 5-6 palabras
+- Debe sonar motivador, atractivo y premium
+- NO incluir calorías, números ni emojis
+- NO usar la palabra "Plan" sola
+- Puede ser metafórico o usar referencias dominicanas sutiles
+- Ejemplos de buenos títulos: "Energía Tropical al Máximo", "Sabor Sin Culpa", "Fuerza y Balance Criollo", "Combustible Para Tu Meta", "Ruta Fit Dominicana", "Poder Verde y Proteína"
+
+Contexto:
+- Objetivo: {goal_text}
+- Calorías: {calories} kcal
+- Platos incluidos: {meals_summary}
+
+Responde SOLO con el título, nada más."""
+        
+        title_llm = ChatGoogleGenerativeAI(
+            model="gemini-3.1-flash-lite-preview",
+            temperature=0.9,
+            google_api_key=os.environ.get("GEMINI_API_KEY")
+        )
+        response = title_llm.invoke(prompt)
+        content = response.content
+        if isinstance(content, list):
+            content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
+        title = str(content).replace('"', '').replace("'", "").strip()
+        
+        # Validar que no sea absurdamente largo
+        if len(title) > 50 or len(title) < 3:
+            raise ValueError(f"Título inválido: '{title}'")
+        
+        logger.info(f"✨ [PLAN TITLE] Título creativo generado: {title}")
+        return title
+        
+    except Exception as e:
+        logger.error(f"⚠️ [PLAN TITLE] Error generando título creativo, usando fallback: {e}")
+        # Fallback determinista
+        first_meal = meal_names[0] if meal_names else "Plan Personalizado"
+        short_name = first_meal[:20] + "…" if len(first_meal) > 20 else first_meal
+        return f"{short_name} — {calories} kcal"
 
 # ============================================================
 # RAG QUERY ROUTING (Patrón HyDE)
@@ -1129,6 +1224,19 @@ El user_id actual es: {user_id}"""
         
         if form_data and form_data.get("skipLunch"):
             system_prompt += "⚠️ IMPORTANTE SOBRE EL ALMUERZO: El usuario escogió 'Almuerzo Familiar', EL USUARIO SÍ VA A ALMORZAR. NO digas que se omitió y redistribuyó. Dile que le dejaste un 'Cupo Vacío' y coméntale que te dicte qué almorzó para registrarlo.\n"
+        if form_data and form_data.get("includeSupplements"):
+            selected_supps = form_data.get("selectedSupplements", [])
+            if selected_supps:
+                SUPP_NAMES = {
+                    "whey_protein": "Proteína Whey", "creatine": "Creatina", "bcaa": "BCAA",
+                    "glutamine": "Glutamina", "omega3": "Omega-3", "multivitamin": "Multivitamínico",
+                    "vitamin_d": "Vitamina D3", "magnesium": "Magnesio", "pre_workout": "Pre-Entreno",
+                    "collagen": "Colágeno"
+                }
+                names = [SUPP_NAMES.get(s, s) for s in selected_supps]
+                system_prompt += f"💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos.\n"
+            else:
+                system_prompt += "💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación.\n"
         system_prompt += f"\nHISTÓRICO:\n{memory['summary_context']}"
         
     if user_id and user_id != "guest":

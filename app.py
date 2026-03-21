@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-from agent import swap_meal, chat_with_agent, analyze_preferences_agent
+from agent import swap_meal, chat_with_agent, analyze_preferences_agent, generate_plan_title
 from graph_orchestrator import run_plan_pipeline
 from db import get_or_create_session, save_message, insert_like, get_user_likes, insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile, update_user_health_profile, get_all_user_facts, delete_user_fact, get_custom_shopping_items, delete_custom_shopping_item, log_api_usage, get_monthly_api_usage, connection_pool
 from memory_manager import summarize_and_prune, build_memory_context
@@ -231,10 +231,13 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                         ingredients.extend(m.get("ingredients"))
                         raw_ingredients.extend(m.get("ingredients"))
                         
+            # Nombre creativo generado por IA (Gemini Flash-Lite)
+            plan_name = generate_plan_title(plan_data)
+                
             insert_data = {
                 "user_id": user_id,
                 "plan_data": plan_data,
-                "name": f"Plan Evolutivo - {datetime.now().strftime('%d/%m/%Y')}",
+                "name": plan_name,
                 "calories": int(calories) if calories else 0,
                 "macros": macros,
                 "meal_names": meal_names,
@@ -245,6 +248,20 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             if selected_techniques:
                 insert_data["techniques"] = selected_techniques
             
+            # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
+            try:
+                recent = supabase.table("meal_plans").select("created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+                if recent.data and len(recent.data) > 0:
+                    from datetime import timezone
+                    last_saved = datetime.fromisoformat(recent.data[0]["created_at"].replace("Z", "+00:00"))
+                    now_utc = datetime.now(timezone.utc)
+                    diff_secs = (now_utc - last_saved).total_seconds()
+                    if diff_secs < 30:
+                        logger.info(f"🛡️ [DEDUP] Plan ya guardado hace {diff_secs:.0f}s para {user_id}. Omitiendo duplicado.")
+                        return
+            except Exception as dedup_e:
+                logger.warning(f"⚠️ [DEDUP] Error en verificación anti-duplicados: {dedup_e}")
+
             try:
                 supabase.table("meal_plans").insert(insert_data).execute()
             except Exception as try_db_e:
@@ -287,13 +304,16 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
         try:
             import hashlib, json as _json
             all_ingredients = []
+            all_supplements = []
             for d in plan_data.get("days", []):
                 for m in d.get("meals", []):
                     ing = m.get("ingredients", [])
                     if ing:
                         all_ingredients.extend(ing)
+                for s in d.get("supplements") or []:
+                    all_supplements.append(s.get("name", ""))
             if all_ingredients:
-                plan_hash = hashlib.sha256(_json.dumps(all_ingredients, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+                plan_hash = hashlib.sha256(_json.dumps({"ingredients": all_ingredients, "supplements": sorted(set(all_supplements)), "version": "v3"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
                 from db import get_shopping_plan_hash, save_shopping_plan_hash, add_custom_shopping_items, delete_auto_generated_shopping_items
                 stored_hash = get_shopping_plan_hash(user_id)
                 if stored_hash != plan_hash:
@@ -881,15 +901,18 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         if not current_plan:
             raise HTTPException(status_code=404, detail="No se encontró un plan activo para extraer ingredientes.")
         
-        # Calcular hash del plan para detectar cambios
+        # Calcular hash del plan para detectar cambios (incluye suplementos)
         import hashlib, json as _json
         ingredients_for_hash = []
+        supplements_for_hash = []
         for d in current_plan.get("days", []):
             for m in d.get("meals", []):
                 ing = m.get("ingredients", [])
                 if ing:
                     ingredients_for_hash.extend(ing)
-        plan_hash = hashlib.sha256(_json.dumps({"ingredients": ingredients_for_hash, "version": "v2"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+            for s in d.get("supplements") or []:
+                supplements_for_hash.append(s.get("name", ""))
+        plan_hash = hashlib.sha256(_json.dumps({"ingredients": ingredients_for_hash, "supplements": sorted(set(supplements_for_hash)), "version": "v3"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
         
         # Verificar si el plan ya fue procesado (cache hit)
         if not force:

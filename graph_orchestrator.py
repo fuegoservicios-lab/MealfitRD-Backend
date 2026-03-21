@@ -70,6 +70,12 @@ REGLAS ESTRICTAS:
    - Intensidad 4: Usa este ingrediente frecuentemente.
    - Intensidad 2: Usa con extrema moderación, o evítalo si es posible.
    - Intensidad 1: RECHAZO TOTAL. Trátalo igual que una prohibición o alergia.
+10. SUPLEMENTOS: Si el usuario activó `includeSupplements: true`, DEBES agregar para CADA día una sección `supplements` (lista). REGLA CRÍTICA: Si `selectedSupplements` contiene suplementos, incluye EXCLUSIVAMENTE esos y NINGUNO más. Está PROHIBIDO agregar suplementos que el usuario NO seleccionó (ej: si solo eligió Creatina, NO pongas Proteína Whey, NUNCA). Si `selectedSupplements` está vacío, entonces sí recomienda libremente. Cada suplemento: nombre, dosis, momento del día, justificación. Si `includeSupplements` es false, NO incluyas suplementos.
+11. DURACIÓN DE COMPRA DE ALIMENTOS: Revisa el campo `groceryDuration` del usuario. Este indica cuánto tiempo le duran los mismos alimentos de una sola compra de supermercado:
+   - "weekly" (7 días): Compra semanal. Puedes usar ingredientes frescos sin restricción (frutas maduras, vegetales de hoja, pescado fresco, etc.).
+   - "biweekly" (15 días): Compra quincenal. Prioriza ingredientes que se conserven al menos 2 semanas (tubérculos, granos, proteínas congelables, vegetales resistentes). Para perecederos, indica cómo congelarlos o conservarlos.
+   - "monthly" (30 días): Compra mensual. Usa predominantemente ingredientes de larga duración (arroz, habichuelas secas, avena, carnes para congelar, raíces/tubérculos, enlatados saludables). SIEMPRE incluye tips breves de conservación y congelación en las recetas cuando uses perecederos.
+   RECUERDA: Los PLATOS (preparaciones) deben variar cada día, pero los ALIMENTOS (ingredientes base) pueden y DEBEN repetirse durante todo el período de compra. Esto es la clave del ahorro.
 """
 
 REVIEWER_SYSTEM_PROMPT = """
@@ -274,11 +280,94 @@ Estos son datos críticos que debes respetar.
         f"----------------------------------------------------------\n"
     )
     
+    # --- SUPLEMENTOS (Condicional) ---
+    supplements_context = ""
+    if form_data.get("includeSupplements"):
+        selected_supps = form_data.get("selectedSupplements", [])
+        
+        # Mapa de keys a nombres legibles para el prompt
+        SUPPLEMENT_NAMES = {
+            "whey_protein": "Proteína Whey",
+            "creatine": "Creatina Monohidrato",
+            "bcaa": "Aminoácidos BCAA",
+            "glutamine": "Glutamina",
+            "omega3": "Omega-3 (Aceite de Pescado)",
+            "multivitamin": "Multivitamínico Completo",
+            "vitamin_d": "Vitamina D3",
+            "magnesium": "Magnesio (Citrato o Glicinato)",
+            "pre_workout": "Pre-Entreno (Cafeína + Beta-Alanina)",
+            "collagen": "Colágeno Hidrolizado",
+        }
+        
+        if selected_supps:
+            # El usuario eligió suplementos específicos
+            supp_names = [SUPPLEMENT_NAMES.get(s, s) for s in selected_supps]
+            # Generar lista de suplementos NO seleccionados para refuerzo negativo
+            all_supps = set(SUPPLEMENT_NAMES.keys())
+            not_selected = all_supps - set(selected_supps)
+            not_selected_names = [SUPPLEMENT_NAMES.get(s, s) for s in not_selected]
+            
+            supplements_context = (
+                "\n--- 💊 SUPLEMENTOS SELECCIONADOS (OBLIGATORIO — LEE CON CUIDADO) ---\n"
+                f"LISTA EXACTA de suplementos que DEBES incluir: {', '.join(supp_names)}\n"
+                f"TOTAL: {len(supp_names)} suplemento(s). Ni más, ni menos.\n\n"
+                "⚠️ PROHIBIDO incluir cualquier suplemento que NO esté en la lista de arriba.\n"
+            )
+            if not_selected_names:
+                supplements_context += (
+                    f"❌ NO INCLUIR (el usuario NO los seleccionó): {', '.join(not_selected_names)}\n"
+                )
+            supplements_context += (
+                "\nPara CADA día del plan, agrega una sección 'supplements' con SOLO los suplementos listados arriba.\n"
+                "Cada suplemento: 'name' (nombre exacto), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación).\n"
+                "---------------------------------------------------\n"
+            )
+        else:
+            # Toggle activado pero sin selección específica → recomendación libre
+            supplements_context = (
+                "\n--- 💊 SUPLEMENTOS PERSONALIZADOS (OBLIGATORIO) ---\n"
+                "El usuario ACTIVÓ la opción de incluir suplementos en su plan pero NO seleccionó suplementos específicos.\n"
+                "DEBES agregar para CADA día del plan una sección 'supplements' (lista de objetos) con suplementos personalizados.\n"
+                "Cada suplemento debe tener: 'name' (nombre), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación breve).\n"
+                "Adapta las recomendaciones al objetivo del usuario, su nivel de actividad y condiciones médicas.\n"
+                "Ejemplos: Proteína Whey, Creatina Monohidrato, Omega-3, Vitamina D3, Multivitamínico, Magnesio, etc.\n"
+                "---------------------------------------------------\n"
+            )
+    
+    # --- DURACIÓN DE COMPRA (Condicional) ---
+    grocery_duration = form_data.get("groceryDuration", "weekly")
+    grocery_duration_context = ""
+    DURATION_LABELS = {"weekly": "SEMANAL (7 días)", "biweekly": "QUINCENAL (15 días)", "monthly": "MENSUAL (30 días)"}
+    DURATION_DAYS = {"weekly": 7, "biweekly": 15, "monthly": 30}
+    if grocery_duration and grocery_duration != "weekly":
+        label = DURATION_LABELS.get(grocery_duration, "SEMANAL (7 días)")
+        days_num = DURATION_DAYS.get(grocery_duration, 7)
+        grocery_duration_context = (
+            f"\n--- 🛒 DURACIÓN DE COMPRA: {label} (OBLIGATORIO) ---\n"
+            f"El usuario compra alimentos para {days_num} días en una sola ida al supermercado.\n"
+            f"DEBES priorizar ingredientes que se conserven bien durante {days_num} días.\n"
+        )
+        if grocery_duration == "monthly":
+            grocery_duration_context += (
+                "Usa predominantemente: granos secos, arroz, avena, tubérculos (yuca, batata, plátano verde),\n"
+                "proteínas congelables (pollo, carne, pescado empacado al vacío), leche en polvo o UHT, huevos.\n"
+                "Para cualquier perecedero, incluye instrucciones de congelación en la receta.\n"
+            )
+        elif grocery_duration == "biweekly":
+            grocery_duration_context += (
+                "Equilibra entre frescos e ingredientes duraderos. Los vegetales de hoja y frutas muy maduras\n"
+                "deben usarse en los primeros días del plan. Planifica congelación para proteínas frescas.\n"
+            )
+        grocery_duration_context += (
+            f"RECUERDA: Los PLATOS varían cada día, pero los ALIMENTOS BASE se repiten durante los {days_num} días.\n"
+            "---------------------------------------------------\n"
+        )
+    
     prompt_text = (
         f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días.\n"
         f"IMPORTANTE: Genera opciones creativas y diferentes a planes anteriores. Semilla de generación aleatoria: {random_seed}\n\n"
         f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
-        f"{nutrition_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{variety_prompt}\n{technique_injection}\n\n"
+        f"{nutrition_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{variety_prompt}\n{technique_injection}\n{supplements_context}\n{grocery_duration_context}\n\n"
         f"{GENERATOR_SYSTEM_PROMPT}"
     )
     
@@ -359,6 +448,11 @@ def review_plan_node(state: PlanState) -> dict:
         allergies = list(allergies) + extra_allergies
     
     medical_conditions = form_data.get("medicalConditions", [])
+    # Combinar condiciones del array con las escritas en texto libre (otherConditions)
+    other_conditions_text = form_data.get("otherConditions", "")
+    if other_conditions_text:
+        extra_conditions = [c.strip() for c in other_conditions_text.replace(",", ",").split(",") if c.strip()]
+        medical_conditions = list(medical_conditions) + extra_conditions
     diet_type = form_data.get("dietType", "balanced")
     dislikes = form_data.get("dislikes", [])
     
