@@ -1192,6 +1192,35 @@ def api_purge_shopping_items(user_id: str, verified_user_id: str = Depends(get_v
         logger.error(f"❌ [ERROR] Error en /api/shopping/custom/purge POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/diary/consumed")
+def api_log_consumed_meal(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    """Registra una comida consumida manualmente desde el frontend."""
+    try:
+        user_id = data.get("user_id")
+        meal_name = data.get("meal_name")
+        calories = data.get("calories", 0)
+        protein = data.get("protein", 0)
+        carbs = data.get("carbs", 0)
+        healthy_fats = data.get("healthy_fats", 0)
+        
+        # Validación de seguridad IDOR
+        if user_id and user_id != "guest":
+            if not verified_user_id or verified_user_id != user_id:
+                raise HTTPException(status_code=403, detail="Prohibido.")
+                
+        if not user_id or user_id == "guest":
+            return {"success": False, "message": "Inicia sesión para registrar comidas."}
+            
+        from db import log_consumed_meal
+        log_consumed_meal(user_id, meal_name, int(calories), int(protein), int(carbs), int(healthy_fats))
+        
+        return {"success": True, "message": "Comida registrada exitosamente."}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/consumed POST: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/diary/consumed/{user_id}")
 def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: Optional[int] = None, verified_user_id: str = Depends(get_verified_user_id)):
     """Obtiene las métricas agregadas de las comidas registradas en el día por la IA."""
