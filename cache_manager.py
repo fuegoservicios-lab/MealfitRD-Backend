@@ -5,6 +5,7 @@ import functools
 import threading
 import time as _time_mod
 import logging
+from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,8 @@ except Exception as e:
     redis_client = None
     logger.warning(f"⚠️ [CACHE] Error conectando a Redis, se usará caché local: {e}")
 
-# Fallback local cache (LRU artesanal simple CON TTL real)
-_local_cache = {}
+# Fallback local cache (LRU con TTL real utilizando OrderedDict)
+_local_cache = OrderedDict()
 _cache_lock = threading.Lock()
 
 def centralized_cache(ttl_seconds=3600, maxsize=1000):
@@ -69,10 +70,11 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
                     if cache_key in _local_cache:
                         stored_time, stored_value = _local_cache[cache_key]
                         if (_time_mod.time() - stored_time) < ttl_seconds:
+                            _local_cache.move_to_end(cache_key)  # Actualizar como usado recientemente
                             return stored_value
                         else:
                             # TTL expirado → eliminar y tratar como cache miss
-                            del _local_cache[cache_key]
+                            _local_cache.pop(cache_key, None)
 
             # 4. Cache Miss: Ejecutar función pesada original
             result = func(*args, **kwargs)
@@ -86,11 +88,10 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
             else:
                 with _cache_lock:
                     _local_cache[cache_key] = (_time_mod.time(), result)
-                    # Lógica LRU pobre (Evicción completa si pasa el maxsize para no tumbar la RAM)
-                    if len(_local_cache) > maxsize:
-                        _local_cache.clear()
-                        _local_cache[cache_key] = (_time_mod.time(), result)
-                        logger.info("🧹 [CACHE LOCAL] Limpieza de caché local forzada (capacidad alcanzada).")
+                    _local_cache.move_to_end(cache_key)
+                    # Lógica LRU real: Eliminar el elemento más antiguo si se excede capacidad
+                    while len(_local_cache) > maxsize:
+                        _local_cache.popitem(last=False)
                         
             return result
         return wrapper

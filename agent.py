@@ -37,7 +37,8 @@ from prompts import (
 from tools import (
     update_form_field, generate_new_plan_from_chat,
     log_consumed_meal, modify_single_meal,
-    add_to_shopping_list, search_deep_memory, agent_tools, analyze_preferences_agent
+    add_to_shopping_list, search_deep_memory, agent_tools, analyze_preferences_agent,
+    execute_generate_new_plan, execute_modify_single_meal
 )
 
 # Langchain Chat Model Initialization
@@ -857,29 +858,82 @@ chat_builder.add_edge("execute_tools", "call_model")
 # CHAT CON AGENTE (Wrapper Principal)
 # ============================================================
 
-def generate_chat_title_background(session_id: str, first_message: str):
+_generating_titles = set()
+
+def generate_chat_title_background(user_id: str, session_id: str, first_message_text: str = None):
+    """
+    Se ejecuta en un thread separado. Llama a Gemini para generar el título
+    y luego lo guarda en agent_messages con role='SYSTEM_TITLE'.
+    """
+    import time
+    from datetime import datetime
+    t0 = time.time()
+    def dlog(msg):
+        with open("title_debug.log", "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().isoformat()}] [{session_id}] {time.time()-t0:.2f}s - {msg}\n")
+    dlog("Thread started")
+    if session_id in _generating_titles:
+        dlog("Already generating, returning")
+        return
     try:
-        from db import supabase
-        if not supabase: return
-        res = supabase.table("agent_messages").select("id").eq("session_id", session_id).like("content", "[SYSTEM_TITLE]%").execute()
-        if res.data and len(res.data) > 0:
+        _generating_titles.add(session_id)
+        import os
+        from supabase import create_client
+        dlog("Creating local supabase client")
+        local_supabase = create_client(os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY"))
+        
+        # Check if a title already exists for this session
+        res = local_supabase.table("agent_messages").select("content").eq("session_id", session_id).execute()
+        if res.data and any(str(m.get("content", "")).startswith("[SYSTEM_TITLE]") for m in res.data):
+            dlog("Title exists, returning")
             return 
             
-        title_llm = ChatGoogleGenerativeAI(model="gemini-3.1-pro-preview", temperature=0.4, google_api_key=os.environ.get("GEMINI_API_KEY"))
+        first_message = ""
+        if first_message_text:
+            first_message = first_message_text
+        else:
+            first_message = "Consulta nueva"
+            
+        import re
+        first_message = re.sub(r'\[\(Hora actual del usuario:.*?\)\]', '', first_message, flags=re.IGNORECASE|re.DOTALL)
+        first_message = re.sub(r'\[Sistema:.*?\]', '', first_message, flags=re.IGNORECASE|re.DOTALL)
+        first_message = re.sub(r'Instrucción:.*?$', '', first_message, flags=re.IGNORECASE|re.MULTILINE|re.DOTALL)
+        first_message = re.sub(r'\[IMAGE:.*?\]', '', first_message, flags=re.IGNORECASE|re.DOTALL)
+        first_message = first_message.strip()
+        if not first_message:
+            first_message = "Interacción con imagen o sistema"
+        
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        dlog("Initializing LLM client")
+        title_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0.4, google_api_key=os.environ.get("GEMINI_API_KEY"))
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message)
+        dlog("Calling LLM API")
         response = title_llm.invoke(prompt)
+        dlog("LLM response received")
         content = response.content
         if isinstance(content, list):
             content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
         title = str(content).replace('"', '').replace("'", "").strip()
         
-        supabase.table("agent_messages").insert({
+        # Strip prefijos indeseados si el LLM los generó
+        lower_t = title.lower()
+        if lower_t.startswith("título:"):
+            title = title[7:].strip()
+        elif lower_t.startswith("titulo:"):
+            title = title[7:].strip()
+        elif lower_t.startswith("title:"):
+            title = title[6:].strip()
+        
+        dlog("Inserting SYSTEM_TITLE msg into DB")
+        local_supabase.table("agent_messages").insert({
             "session_id": session_id,
             "role": "model",
             "content": f"[SYSTEM_TITLE] {title}"
         }).execute()
+        dlog("Insert successful. Finished.")
         logger.info(f"✅ Título generado para sesión {session_id}: {title}")
     except Exception as e:
+        dlog(f"Exception caught: {e}")
         logger.error(f"⚠️ Error generando título: {e}")
 
 
@@ -1091,8 +1145,9 @@ El user_id del usuario actual es: {user_id}"""
         
         if form_data and form_data.get("skipLunch"):
             system_prompt += "\n⚠️ IMPORTANTE SOBRE EL ALMUERZO: El plan actual NO tiene 'Almuerzo' NO porque se haya omitido y redistribuido, sino porque el usuario eligió 'Almuerzo Familiar / Ya resuelto'. Esto significa que EL USUARIO SÍ VA A ALMORZAR en su casa libremente. NUNCA digas que 'omitimos el almuerzo y redistribuimos las calorías' porque eso es falso. Dile que en realidad tiene un 'Cupo Vacío' en el plan porque reservamos las calorías para que almorzara libremente en su casa, y aliéntalo a que te cuente qué comerá para anotarlo en su registro."
-    
-        system_prompt += f"\n\nCONTEXTO HISTÓRICO DEL USUARIO (resúmenes de conversaciones pasadas):\n{memory['summary_context']}"
+
+    if memory.get('summary_context'):
+        system_prompt += f"\n\n<contexto_evolutivo_historico>\n{memory['summary_context']}\n</contexto_evolutivo_historico>"
         
     config = {"configurable": {"thread_id": session_id}}
     
@@ -1237,7 +1292,9 @@ El user_id actual es: {user_id}"""
                 system_prompt += f"💊 SUPLEMENTOS SELECCIONADOS: El usuario toma o quiere incluir: {', '.join(names)}. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre estos suplementos específicos.\n"
             else:
                 system_prompt += "💊 SUPLEMENTOS ACTIVOS: El usuario activó la opción de incluir suplementos en su plan. Su plan incluye recomendaciones de suplementos personalizados. Puedes referirte a ellos, dar consejos sobre timing y dosis, y responder preguntas sobre suplementación.\n"
-        system_prompt += f"\nHISTÓRICO:\n{memory['summary_context']}"
+
+    if memory.get('summary_context'):
+        system_prompt += f"\n\n<contexto_evolutivo_historico>\n{memory['summary_context']}\n</contexto_evolutivo_historico>"
         
     if user_id and user_id != "guest":
         try:
@@ -1285,14 +1342,25 @@ El user_id actual es: {user_id}"""
     else:
         inputs["messages"] = [HumanMessage(content=prompt)]
         
-    yield f"data: {json.dumps({'type': 'progress', 'message': 'Analizando tu mensaje...'})}\n\n"
+    import random
+    def get_progress_msg(msg_type):
+        opts = {
+            "analizando": ["Procesando tu solicitud detalladamente...", "Evaluando tu perfil y macros...", "Alineando tu genética con el plan...", "Analizando tu objetivo con Inteligencia Nutricional...", "Revisando tus preferencias y contexto..."],
+            "generando_plan": ["Armando la química perfecta de tus comidas...", "Diseñando un plan de alimentación premium...", "Calculando macros y esculpiendo tu dieta...", "Generando distribución óptima de nutrientes..."],
+            "modificando_comida": ["Ajustando la receta a tus exigencias...", "Reemplazando ingredientes inteligentemente...", "Rediseñando esta comida sin perder tus macros...", "Aplicando cambios culinarios a tu plato..."],
+            "actualizando_bd": ["Guardando tus preferencias en el sistema...", "Sincronizando perfil con tu base de datos...", "Actualizando tu historial clínico nutricional..."],
+            "registrando_progreso": ["Inscribiendo tu ingesta en el registro diario...", "Contabilizando calorías y macros consumidos...", "Actualizando tu impacto metabólico del día..."]
+        }
+        return random.choice(opts.get(msg_type, ["Procesando..."]))
+
+    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('analizando')})}\n\n"
     
     logger.info(f"⏳ [CHAT STREAM] LangGraph iniciando astream nativo para {session_id}...")
     
     final_state_snapshot = None
     
     try:
-        async for event in chat_graph_app.astream(inputs, config=config, stream_mode="messages"):
+        for event in chat_graph_app.stream(inputs, config=config, stream_mode="messages"):
             # Identificar el contenido exacto del evento 'messages' (tupla mensaje, dict)
             if isinstance(event, tuple) and len(event) == 2:
                 msg_chunk, metadata = event
@@ -1308,13 +1376,13 @@ El user_id actual es: {user_id}"""
                             if idx == 0:  # Mostrar el mensaje 1 sola vez por llamada múltiple
                                 tool_name = tool_call.get("name", "")
                                 if tool_name == "generate_new_plan_from_chat":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Calculando macros y diseñando plan...'})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('generando_plan')})}\n\n"
                                 elif tool_name == "modify_single_meal":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Modificando comida...'})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('modificando_comida')})}\n\n"
                                 elif tool_name == "update_form_field":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Actualizando base de datos...'})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('actualizando_bd')})}\n\n"
                                 elif tool_name == "log_consumed_meal":
-                                    yield f"data: {json.dumps({'type': 'progress', 'message': 'Registrando progreso de hoy...'})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('registrando_progreso')})}\n\n"
                                     
     except Exception as e:
         logger.error(f"❌ [CHAT STREAM] Error en astream nativo: {e}")
@@ -1325,9 +1393,9 @@ El user_id actual es: {user_id}"""
         
     # Obtener el estado final actualizado
     try:
-        final_state_snapshot = await chat_graph_app.aget_state(config)
+        final_state_snapshot = chat_graph_app.get_state(config)
     except Exception as e:
-        logger.error(f"⚠️ Error obteniendo aget_state tras stream: {e}")
+        logger.error(f"⚠️ Error obteniendo get_state tras stream: {e}")
 
     final_content = ""
     updated_fields = {}

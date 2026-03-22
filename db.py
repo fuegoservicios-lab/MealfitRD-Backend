@@ -144,21 +144,31 @@ def _process_and_sort_sessions(sessions: list):
                 
                 if title_msgs:
                     s["title"] = str(title_msgs[0].get("content", "")).replace("[SYSTEM_TITLE] ", "")
+                    s["is_fallback"] = False
                 elif user_msgs:
                     content_str = str(user_msgs[0].get("content", ""))
-                    clean_str = re.sub(r'\[IMAGE:\s*.*?\]', '', content_str)
-                    if '[El usuario subió una imagen.' in clean_str:
-                        match = re.search(r'Mensaje del usuario:\s*(.+)$', clean_str, re.DOTALL)
-                        if match:
-                            clean_str = match.group(1)
-                        else:
-                            clean_str = re.sub(r'\[El usuario subió una imagen\..+?\]', '', clean_str, flags=re.DOTALL)
-                    clean_str = clean_str.strip()
+                    # Limpiar el prefijo inyectado por el frontend con la hora, sistema y comandos
+                    clean_str = re.sub(r'\[\(Hora actual del usuario:.*?\)\]', '', content_str, flags=re.IGNORECASE|re.DOTALL)
+                    clean_str = re.sub(r'\[Sistema:.*?\]', '', clean_str, flags=re.IGNORECASE|re.DOTALL)
+                    clean_str = re.sub(r'Instrucción:.*?$', '', clean_str, flags=re.IGNORECASE|re.MULTILINE|re.DOTALL)
+                    clean_str = re.sub(r'\[IMAGE:\s*.*?\]', '', clean_str, flags=re.IGNORECASE|re.DOTALL)
                     
+                    # SIEMPRE limpiar "Mensaje del usuario:" ya sea que haya imagen o no
+                    clean_str = re.sub(r'Mensaje del usuario:\s*', '', clean_str, flags=re.IGNORECASE|re.DOTALL)
+                    
+                    if '[El usuario subió una imagen.' in clean_str:
+                        clean_str = re.sub(r'\[El usuario subió una imagen\..+?\]', '', clean_str, flags=re.DOTALL)
+                            
+                    clean_str = clean_str.strip()
+                    if not clean_str:
+                        clean_str = "Interacción con imagen o sistema"
+                        
                     if clean_str:
                         s["title"] = clean_str[:40] + ("..." if len(clean_str) > 40 else "")
                     else:
-                        s["title"] = "Chat con Imagen"
+                        s["title"] = "Nuevo chat"
+                    # Como no hay SYSTEM_TITLE, es fallback
+                    s["is_fallback"] = True
                 else:
                     s["title"] = "Nuevo Chat"
                     
@@ -275,6 +285,42 @@ def save_message(session_id: str, role: str, content: str):
         "role": role,
         "content": content
     }).execute()
+
+def save_message_feedback(session_id: str, content: str, feedback: str):
+    """Guarda o remueve la retroalimentación (up/down/null) para un mensaje del modelo."""
+    if not supabase: return False
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        # feedback can be 'up', 'down', or None.
+        logger.info(f"Intentando guardar feedback '{feedback}' para session '{session_id}'")
+        
+        # We use a robust matching strategy because long strings with newlines often fail exact match
+        robust_prefix = content.strip()[:60]
+        # Escape SQL LIKE special chars just in case
+        robust_prefix = robust_prefix.replace("%", "").replace("_", "")
+        search_pattern = robust_prefix + "%"
+        
+        res = supabase.table("agent_messages").update({
+            "feedback": feedback
+        }).eq("session_id", session_id).eq("role", "model").ilike("content", search_pattern).execute()
+        
+        rows_affected = len(res.data) if res.data else 0
+        logger.info(f"Feedback guardado, rows affected: {rows_affected}")
+        
+        # Si aun así falla, intenta actualizar el ULTIMO mensaje del modelo en la sesion
+        if rows_affected == 0:
+            logger.warning("Fallo el match por sufijo. Actualizando el ultimo mensaje de modelo de esta sesion.")
+            last_msg = supabase.table("agent_messages").select("id").eq("session_id", session_id).eq("role", "model").order("created_at", desc=True).limit(1).execute()
+            if last_msg.data and len(last_msg.data) > 0:
+                msg_id = last_msg.data[0]["id"]
+                supabase.table("agent_messages").update({"feedback": feedback}).eq("id", msg_id).execute()
+                rows_affected = 1
+
+        return rows_affected > 0
+    except Exception as e:
+        logger.error(f"Error saving message feedback: {e}")
+        return False
 
 def get_memory(session_id: str):
     if not supabase: return []
@@ -520,6 +566,26 @@ def search_user_facts(user_id: str, query_embedding: list, query_text: str = Non
         logger.error(f"Error buscando facts: {e}")
         return []
 
+def search_user_facts_hybrid(user_id: str, query_embedding: list, filter_metadata: dict = None, threshold: float = 0.5, limit: int = 5):
+    """Búsqueda Híbrida Vectorial: similitud de vectores pre-filtrada por metadatos (JSONB) usando pgvector RPC."""
+    if not supabase: return []
+    
+    # Auto-Limpieza de síntomas temporales antes de buscar
+    delete_expired_temporal_facts(user_id)
+    
+    try:
+        res = supabase.rpc("match_user_facts_hybrid_metadata", {
+            "query_embedding": query_embedding,
+            "match_threshold": threshold,
+            "match_count": limit,
+            "p_user_id": user_id,
+            "p_metadata": filter_metadata if filter_metadata else None
+        }).execute()
+        return res.data
+    except Exception as e:
+        logger.error(f"Error en búsqueda híbrida vectorial (metadatos): {e}")
+        return []
+        
 def delete_user_fact(fact_id: str):
     """Hace un soft delete cambiando is_active a False"""
     if not supabase: return None

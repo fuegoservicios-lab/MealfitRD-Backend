@@ -1,12 +1,12 @@
 import os
 import json
-from functools import lru_cache
+from cache_manager import centralized_cache
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
 from db import (
-    save_user_fact, search_user_facts, delete_user_fact,
+    save_user_fact, search_user_facts, delete_user_fact, search_user_facts_hybrid,
     get_user_facts_by_metadata, acquire_fact_lock, release_fact_lock,
     enqueue_pending_fact, dequeue_pending_facts, delete_pending_facts
 )
@@ -69,7 +69,7 @@ def should_extract_facts(user_message: str) -> bool:
     """
     
     llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
+        model="gemini-3.1-flash-lite-preview",
         temperature=0.0,
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(RouterResult)
@@ -202,18 +202,9 @@ def extract_facts(user_message: str, recent_history: str = ""):
         print(f"⚠️ Error al extraer hechos: {e}")
         return []
 
-def get_embedding(text: str):
-    """Genera un vector embedding usando Gemini embedding (con caché TTL de 5 min)."""
-    import time
-    
-    # Bucket de tiempo: misma key durante 5 minutos → cache hit
-    time_bucket = int(time.time() // 300)
-    result = _cached_embedding(text, time_bucket)
-    return list(result) if result else None
-
-@lru_cache(maxsize=256)
-def _cached_embedding(text: str, _time_bucket: int):
-    """Wrapper cacheado (lru_cache necesita args hashable, por eso el time_bucket)."""
+@centralized_cache(ttl_seconds=3153600000, maxsize=10000)
+def get_embedding(text: str) -> list:
+    """Genera un vector embedding usando Gemini embedding (Caché Distribuido)."""
     try:
         embeddings = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-2-preview",
@@ -221,10 +212,10 @@ def _cached_embedding(text: str, _time_bucket: int):
         )
         emb = embeddings.embed_query(text)
         print(f"🔑 [EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
-        return tuple(emb[:768])  # tuple es hashable para lru_cache
+        return list(emb[:768])
     except Exception as e:
         print(f"⚠️ Error al generar embedding: {e}")
-        return None
+        return []
 
 CRITICAL_CATEGORIES = {"condicion_medica", "alergia", "dieta", "objetivo"}
 
@@ -285,24 +276,14 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
             if not emb:
                 continue
         
-            similar_facts = search_user_facts(user_id, emb, threshold=0.6, limit=5)
-        
-            # === ANTI FALSOS NEGATIVOS: Query directo por categoría ===
-            categoria = metadata.get("category", "") # Changed from 'categoria' to 'category'
-            if categoria in CRITICAL_CATEGORIES:
-                print(f"🔎 [CATEGORY QUERY] Categoría crítica '{categoria}' detectada. Buscando TODOS los hechos de esta categoría...")
-                category_facts = get_user_facts_by_metadata(user_id, "category", categoria) # Changed from 'categoria' to 'category'
+            categoria = metadata.get("category", "")
+            filter_meta = {"category": categoria} if categoria in CRITICAL_CATEGORIES else None
             
-                if category_facts:
-                    # Merge: deduplicar por ID con los resultados del vector search
-                    existing_ids = {f.get("id") for f in similar_facts if f.get("id")}
-                    new_from_category = [f for f in category_facts if f.get("id") not in existing_ids]
-                
-                    if new_from_category:
-                        print(f"   ➕ {len(new_from_category)} hechos adicionales recuperados por categoría (no encontrados por similitud vectorial).")
-                        similar_facts = similar_facts + new_from_category
-            # ==========================================================
-        
+            similar_facts = search_user_facts_hybrid(user_id, emb, filter_metadata=filter_meta, threshold=0.6, limit=5)
+            
+            if filter_meta and similar_facts:
+                print(f"🔎 [HIBRID SEARCH] Búsqueda optimizada por similitud y categoría crítica '{categoria}'. Recuperados: {len(similar_facts)}")
+            
             prepared_facts.append({
                 "item": item,
                 "fact_text": fact_text,
@@ -439,29 +420,46 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
         track = traceback.format_exc()
         print(f"Trazabilidad extendida de error: {track}")
     finally:
-        # ====== PROCESAR COLA PERSISTENTE (Supabase) antes de liberar el lock ======
-        try:
-            pending_items = dequeue_pending_facts(user_id)
-            
-            if pending_items:
-                print(f"\n📋 [FACT EXTRACTOR] Procesando {len(pending_items)} mensajes pendientes de la cola (Supabase)...")
-                processed_ids = []
-                for idx, pending in enumerate(pending_items, 1):
-                    try:
-                        print(f"   📋 [{idx}/{len(pending_items)}] Procesando: '{pending['message'][:50]}...'")
-                        _process_single_extraction(user_id, pending["message"], pending.get("recent_history", ""))
-                        processed_ids.append(pending["id"])
-                    except Exception as pe:
-                        print(f"   ⚠️ Error procesando pendiente #{idx}: {pe}")
-                        # Aún así marcarlo como procesado para no re-intentar infinitamente
-                        processed_ids.append(pending["id"])
-                
-                if processed_ids:
-                    delete_pending_facts(processed_ids)
-                print(f"✅ [FACT EXTRACTOR] Cola pendiente procesada y limpiada de Supabase.")
-        except Exception as qe:
-            print(f"⚠️ [FACT EXTRACTOR] Error procesando cola pendiente: {qe}")
+        # Liberar el lock de BD para que la respuesta de FastAPI/UI no se bloquee ni devuelva timeout
+        release_fact_lock(user_id)
         
+        # PROCESAR COLA PERSISTENTE (SUPABASE WEBHOOKS)
+        # El hilo asíncrono daemonizado (Fire-and-Forget local) fue removido debido a inestabilidad 
+        # en entornos serverless/PaaS donde el proceso muere tras devolver la respuesta HTTP.
+        # Ahora, un TRIGGER AFTER INSERT en Supabase llamará de forma robusta a nuestro endpoint especial.
+        print(f"✅ Extracción en línea terminada. Webhook externo procesará la cola si quedaron pendientes.")
+
+
+def process_pending_queue_sync(user_id: str):
+    """Worker síncrono para drenar la cola de pendientes. Llamado por el Webhook de Supabase de manera robusta."""
+    
+    if not acquire_fact_lock(user_id):
+        print(f"⚠️ [WEBHOOK QUEUE] Lock ocupado para {user_id}. Se procesará luego.")
+        return
+        
+    try:
+        pending_items = dequeue_pending_facts(user_id)
+        if not pending_items:
+            print("➡️ [WEBHOOK QUEUE] No hay hechos pendientes en cola.")
+            return
+            
+        print(f"\n📋 [FACT EXTRACTOR WEBHOOK] Iniciando drenaje estructurado para {len(pending_items)} mensajes pendientes...")
+        processed_ids = []
+        for idx, pending in enumerate(pending_items, 1):
+            try:
+                print(f"   📋 [{idx}/{len(pending_items)}] Procesando: '{pending['message'][:50]}...'")
+                _process_single_extraction(user_id, pending["message"], pending.get("recent_history", ""))
+                processed_ids.append(pending["id"])
+            except Exception as pe:
+                print(f"   ⚠️ Error procesando pendiente #{idx}: {pe}")
+                processed_ids.append(pending["id"]) # Evitar loop infinito fallido
+        
+        if processed_ids:
+            delete_pending_facts(processed_ids)
+        print(f"✅ [FACT EXTRACTOR] Cola pendiente finalizada en Hilo Secundario.")
+    except Exception as qe:
+        print(f"⚠️ Error general en hilo secundario de cola: {qe}")
+    finally:
         release_fact_lock(user_id)
 
 
@@ -494,17 +492,10 @@ def _process_single_extraction(user_id: str, message: str, recent_history: str =
         if not emb:
             continue
         
-        similar_facts = search_user_facts(user_id, emb, threshold=0.6, limit=5)
-        
-        # Anti falsos negativos: query por categoría
         categoria = metadata.get("category", "")
-        if categoria in CRITICAL_CATEGORIES:
-            category_facts = get_user_facts_by_metadata(user_id, "category", categoria)
-            if category_facts:
-                existing_ids = {f.get("id") for f in similar_facts if f.get("id")}
-                new_from_category = [f for f in category_facts if f.get("id") not in existing_ids]
-                if new_from_category:
-                    similar_facts = similar_facts + new_from_category
+        filter_meta = {"category": categoria} if categoria in CRITICAL_CATEGORIES else None
+        
+        similar_facts = search_user_facts_hybrid(user_id, emb, filter_metadata=filter_meta, threshold=0.6, limit=5)
         
         prepared_facts.append({
             "item": item,

@@ -402,9 +402,8 @@ def build_memory_context(session_id: str) -> dict:
             if summary_text.startswith('{'):
                 try:
                     state_json = json.loads(summary_text)
-                    formatted = _format_evolutionary_state(state_json)
                     summary_parts.append(
-                        f"[ESTADO EVOLUTIVO DEL PACIENTE — Período {period}]:\n{formatted}"
+                        f"[ESTADO EVOLUTIVO DEL PACIENTE — Período {period}]:\n```json\n{json.dumps(state_json, ensure_ascii=False, indent=2)}\n```"
                     )
                     continue
                 except json.JSONDecodeError:

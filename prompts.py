@@ -88,10 +88,18 @@ Cantidades matemáticas requeridas:
 {ingredients_json}
 """
 
-TITLE_GENERATION_PROMPT = """Genera un título muy corto y atractivo (máximo 4 palabras) para este inicio de chat sobre nutrición/comida.
-Mensaje del usuario: {first_message}
+TITLE_GENERATION_PROMPT = """Actúa como el motor de títulos de un historial de chat avanzado (estilo ChatGPT o Claude).
+Tu tarea es generar un título MUY CORTO (máximo 4-5 palabras) basado en el primer mensaje de la conversación.
 
-Solo devuelve el título, sin comillas ni formato adicional."""
+REGLAS CRÍTICAS:
+1. DESCRIPCIÓN LITERAL Y ANALÍTICA: El título debe resumir de forma neutra y directa la primera interacción. No uses lenguaje motivacional exagerado ni marketing.
+2. EJEMPLO EXACTO: Si el usuario dice "hola", "qué tal", el título debe ser algo como "Saludo y Oferta de Ayuda" o "Interacción Inicial". Si el usuario pregunta por recetas, "Consulta de Recetas". Si pide cambiar un alimento, "Modificación de Alimento".
+3. TONO NEUTRO PROFESIONAL: Evita los títulos como "Nuevo Día, Nuevas Metas" o "Charla Amistosa". Mantén la estructura descriptiva clásica de las IA.
+4. FORMATO: No uses comillas, puntos finales ni prefijos. DEVUELVE ÚNICAMENTE EL TEXTO DEL TÍTULO LIMPIO. Usa formato 'Title Case' (ejemplo: Saludo Y Oferta De Ayuda).
+
+Mensaje del usuario: 
+"{first_message}"
+"""
 
 RAG_ROUTER_PROMPT = """Eres un optimizador de búsqueda vectorial para una app de nutrición.
 Dado el mensaje del usuario, genera UNA SOLA frase de búsqueda optimizada para encontrar hechos relevantes en una base de datos vectorial de salud/nutrición.

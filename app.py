@@ -23,9 +23,9 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from agent import swap_meal, chat_with_agent, analyze_preferences_agent, generate_plan_title
 from graph_orchestrator import run_plan_pipeline
-from db import get_or_create_session, save_message, insert_like, get_user_likes, insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile, update_user_health_profile, get_all_user_facts, delete_user_fact, get_custom_shopping_items, delete_custom_shopping_item, log_api_usage, get_monthly_api_usage, connection_pool
+from db import get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes, insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile, update_user_health_profile, get_all_user_facts, delete_user_fact, get_custom_shopping_items, delete_custom_shopping_item, log_api_usage, get_monthly_api_usage, connection_pool
 from memory_manager import summarize_and_prune, build_memory_context
-from fact_extractor import async_extract_and_save_facts
+from fact_extractor import async_extract_and_save_facts, process_pending_queue_sync
 from agent import generate_chat_title_background
 from langgraph.checkpoint.postgres import PostgresSaver
 
@@ -99,6 +99,7 @@ def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user
 # usar Redis + slowapi.
 import time as _time
 from collections import defaultdict as _defaultdict
+from cache_manager import redis_client
 
 class RateLimiter:
     """Sliding-window rate limiter como dependencia FastAPI reutilizable.
@@ -110,15 +111,54 @@ class RateLimiter:
 
     def __call__(self, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
         uid = verified_user_id or "anon"
-        now = _time.monotonic()
+        
+        # Opcional: Soporte Redis para Rate Limiting Distribuido (#Mejora 3)
+        if redis_client:
+            now = _time.time()
+            key = f"rl:{self.max_calls}:{self.period}:{uid}"
+            window_start = now - self.period
+            try:
+                pipe = redis_client.pipeline()
+                pipe.zremrangebyscore(key, 0, window_start) # Eliminar timestamps viejos
+                pipe.zcard(key)                             # Contar peticiones en la ventana
+                pipe.zadd(key, {str(now): now})             # Añadir petición actual
+                pipe.expire(key, self.period)               # Expirar key para no consumir RAM eterna
+                results = pipe.execute()
+                
+                count = results[1]
+                if count >= self.max_calls:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Demasiadas solicitudes. Máximo {self.max_calls} por {self.period}s. Intenta de nuevo en unos segundos."
+                    )
+                return verified_user_id
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"⚠️ [RATE LIMIT] Error en Redis, cambiando a memoria local transparente: {e}")
+                # Hacemos fallback transparente a memoria local
+
+        # --- Fallback Memoria Local ---
+        now_mono = _time.monotonic()
+        
+        # Ocasionalmente (1% de tolerancia) limpiar llaves inactivas globales para evitar fugas de RAM
+        import random
+        if random.random() < 0.01:
+            expired_keys = [
+                k for k, timestamps in self._hits.items() 
+                if not timestamps or now_mono - timestamps[-1] < now_mono - self.period
+            ]
+            for k in expired_keys:
+                del self._hits[k]
+
         # Purga timestamps viejos (fuera de la ventana)
-        self._hits[uid] = [t for t in self._hits[uid] if now - t < self.period]
+        self._hits[uid] = [t for t in self._hits[uid] if now_mono - t < self.period]
         if len(self._hits[uid]) >= self.max_calls:
             raise HTTPException(
                 status_code=429,
                 detail=f"Demasiadas solicitudes. Máximo {self.max_calls} por {self.period}s. Intenta de nuevo en unos segundos."
             )
-        self._hits[uid].append(now)
+        self._hits[uid].append(now_mono)
         return verified_user_id
 
 # Instancias reutilizables para endpoints de shopping list
@@ -480,6 +520,51 @@ def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends
         logger.error(f"❌ [ERROR] Error en /api/user-facts DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/webhooks/process-pending-facts")
+def api_webhook_process_pending_facts(request: Request, data: dict = Body(...), authorization: Optional[str] = Header(None)):
+    """
+    Endpoint consumido por el Webhook de Supabase (Database Trigger AFTER INSERT en pending_facts_queue).
+    Permite procesar asíncronamente y de manera segura la cola de extracción sin depender de demonios en memoria.
+    """
+    try:
+        # 1. Validación de seguridad robusta
+        webhook_secret = os.environ.get("WEBHOOK_SECRET")
+        if webhook_secret:
+            # Extraer token de múltiples fuentes posibles (Supabase custom headers)
+            token = None
+            if authorization and authorization.startswith("Bearer "):
+                token = authorization.split(" ")[1]
+            elif authorization:
+                token = authorization
+                
+            custom_header_secret = request.headers.get("X-Webhook-Secret")
+            
+            if token != webhook_secret and custom_header_secret != webhook_secret:
+                logger.warning("🔒 Intento no autorizado al Webhook de hechos (Secret inválido).")
+                raise HTTPException(status_code=401, detail="Unauthorized webhook invocation")
+        
+        # 2. Extraer el Payload del trigger
+        # Supabase webhooks mandan la fila en data["record"] cuando es un trigger INSERT
+        record = data.get("record", {})
+        user_id = record.get("user_id") or data.get("user_id")
+        
+        if not user_id:
+            logger.warning("⚠️ Webhook llamado sin parametro user_id.")
+            return {"success": False, "message": "Falta user_id"}
+            
+        logger.info(f"⚡ [WEBHOOK RECIBIDO] Procesando cola pendiente para user_id: {user_id}")
+        
+        # 3. Procesamiento síncrono (garantiza que serverless espere a terminar)
+        process_pending_queue_sync(user_id)
+        
+        return {"success": True, "message": f"Cola procesada para {user_id}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [WEBHOOK ERROR]: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/chat/sessions/{user_id}")
 def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     from db import get_guest_chat_sessions, get_user_chat_sessions
@@ -508,6 +593,20 @@ def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verif
         return {"sessions": sessions}
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions GET: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/chat/sessions/{user_id}")
+def api_delete_chat_sessions(user_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    from db import supabase
+    try:
+        if user_id and user_id != "guest":
+            if not verified_user_id or verified_user_id != user_id:
+                raise HTTPException(status_code=403, detail="Prohibido.")
+            if supabase:
+                supabase.table("agent_sessions").delete().eq("user_id", user_id).execute()
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/chat/sessions DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/chat/history/{session_id}")
@@ -542,6 +641,21 @@ def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depend
 
 from fastapi.responses import StreamingResponse
 import asyncio
+
+@app.post("/api/chat/feedback")
+async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    session_id = data.get("session_id")
+    content = data.get("content")
+    feedback = data.get("feedback")
+    
+    if not session_id or not content:
+        raise HTTPException(status_code=400, detail="Missing session_id or content")
+
+    success = await asyncio.to_thread(save_message_feedback, session_id, content, feedback)
+    if success:
+        return {"success": True}
+    else:
+        raise HTTPException(status_code=500, detail="Error saving feedback")
 
 @app.post("/api/chat/stream")
 async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
@@ -603,7 +717,15 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
         if not current_plan and user_id and user_id != "guest":
             current_plan = await asyncio.to_thread(get_latest_meal_plan, user_id)
             
-        from agent import achat_with_agent_stream
+        import threading
+        from agent import achat_with_agent_stream, generate_chat_title_background
+        
+        # Iniciar generación del título de inmediato en paralelo a la respuesta del stream (usar OS threads previene bloqueo por el grafo síncrono)
+        threading.Thread(
+            target=generate_chat_title_background,
+            args=(user_id, session_id, prompt),
+            daemon=True
+        ).start()
         
         async def event_generator():
             try:
@@ -652,7 +774,6 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                                         if is_plus:
                                             async_extract_and_save_facts(user_id, prompt, recent_history_str)
                                             
-                                        generate_chat_title_background(session_id, prompt)
                                         summarize_and_prune(session_id)
                                     except Exception as inner_e:
                                         logger.error(f"Error en bg tasks: {inner_e}")
@@ -766,7 +887,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
             logger.info("INFO: Memoria a Largo Plazo deshabilitada para usuario Gratis.")
         
         # 🧠 Background: Generar un título si es el primer mensaje
-        background_tasks.add_task(generate_chat_title_background, session_id, prompt)
+        background_tasks.add_task(generate_chat_title_background, user_id, session_id, prompt)
         
         result = {"response": response_text, "updated_fields": updated_fields}
         if new_plan:
