@@ -711,8 +711,11 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     
     pipeline_start = time.time()
     
+    # 0. Copia segura de form_data para no mutar origenes (evita guardar vars temporales en DB)
+    actual_form_data = form_data.copy()
+    
     # 1. Pre-calcular nutrición
-    nutrition = get_nutrition_targets(form_data)
+    nutrition = get_nutrition_targets(actual_form_data)
     
     # 2. Preparar contexto del historial (memoria inteligente y platos recientes)
     history_context = ""
@@ -741,6 +744,62 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
         except Exception as e:
             print(f"⚠️ Error recuperando comidas recientes desde db: {e}")
             
+    # 2.2 --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
+    if user_id:
+        try:
+            from db import get_custom_shopping_items
+            existing = get_custom_shopping_items(user_id)
+            existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
+            if existing_items:
+                excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
+                ingredient_names = []
+                forced_proteins = []
+                forced_carbs = []
+                forced_veggies = []
+                
+                for item in existing_items:
+                    cat = item.get("category", "")
+                    
+                    # El nombre ahora está prioritariamente en display_name (columnas estructuradas)
+                    name = item.get("display_name") or ""
+                    
+                    # Fallback legacy: extraer de item_name si era JSON
+                    if not name:
+                        raw_name = item.get("item_name", "")
+                        if raw_name.startswith("{"):
+                            try:
+                                import json
+                                parsed = json.loads(raw_name)
+                                name = parsed.get("name", raw_name)
+                            except Exception:
+                                name = raw_name
+                        else:
+                            name = raw_name
+                                
+                    if not name or cat in excluded_cats:
+                        continue
+                    
+                    ingredient_names.append(name)
+                    
+                    cat_lower = cat.lower()
+                    if any(k in cat_lower for k in ["carne", "pescado", "proteína", "protein", "huevo", "lácteo", "queso", "leche", "yogur"]):
+                        forced_proteins.append(name)
+                    elif any(k in cat_lower for k in ["despensa", "grano", "cereal", "arroz", "avena", "pan", "pasta", "vívere", "yuca", "plátano", "batata", "papa"]):
+                        forced_carbs.append(name)
+                    elif any(k in cat_lower for k in ["fruta", "verdura", "vegetal"]):
+                        forced_veggies.append(name)
+                
+                if ingredient_names:
+                    history_context += f"\n\n⚠️ RESTRICCIÓN DE INGREDIENTES (CRÍTICO): El usuario ya tiene una lista de compras vigente. DEBES crear el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes: {', '.join(ingredient_names)}. NUNCA agregues proteínas, carbohidratos o vegetales que no estén en esta lista.\n"
+                    print(f"🛒 [CONSTRAINT] Aplicando restricción de lista de compras en graph_orchestrator ({len(ingredient_names)} items).")
+                    
+                    if forced_proteins: actual_form_data["_force_base_proteins"] = forced_proteins
+                    if forced_carbs: actual_form_data["_force_base_carbs"] = forced_carbs
+                    if forced_veggies: actual_form_data["_force_base_veggies"] = forced_veggies
+                    
+        except Exception as check_e:
+            print(f"⚠️ Error revisando lista de compras para restricción en orquestador: {check_e}")
+
     # 2.5 Buscar Hechos y Diario Visual en Memoria Vectorial (RAG multimodal)
     user_facts_text = ""
     visual_facts_text = ""
@@ -894,7 +953,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     
     # 3. Estado inicial del grafo
     initial_state: PlanState = {
-        "form_data": form_data,
+        "form_data": actual_form_data,
         "taste_profile": taste_profile,
         "nutrition": nutrition,
         "history_context": history_context,

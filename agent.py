@@ -350,6 +350,33 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             logger.error(f"Error procesando Shopping Cycle Lock: {e}")
     # ==========================================================
 
+    # ======= FORCED SHOPPING LIST INJECTION =======
+    if form_data and "_force_base_proteins" in form_data:
+        unique_proteins = form_data.get("_force_base_proteins", unique_proteins)
+        unique_carbs = form_data.get("_force_base_carbs", unique_carbs)
+        forced_veg = form_data.get("_force_base_veggies", unique_veggies)
+        
+        # Frutas usualmente entran como vegetales desde el prompt, las filtramos manualmente
+        fruit_names_lower = [strip_accents(f.strip().lower()) for f in DOMINICAN_FRUITS]
+        extracted_fruits = []
+        extracted_veggies = []
+        
+        for v in forced_veg:
+            if strip_accents(v.strip().lower()) in fruit_names_lower:
+                extracted_fruits.append(v)
+            else:
+                extracted_veggies.append(v)
+                
+        unique_veggies = extracted_veggies if extracted_veggies else unique_veggies
+        if extracted_fruits:
+            unique_fruits = extracted_fruits
+            
+        logger.info(f"🔒 [FORCE LOCK] Proteínas: {unique_proteins}")
+        logger.info(f"🔒 [FORCE LOCK] Carbos: {unique_carbs}")
+        logger.info(f"🔒 [FORCE LOCK] Vegetales: {unique_veggies}")
+        logger.info(f"🔒 [FORCE LOCK] Frutas Extraídas: {unique_fruits}")
+    # ==========================================================
+
     # Cada día recibe una proteína, un carbohidrato, y un vegetal únicos (sin repeticiones entre días)
     # Si no se pudieron elegir 3 (pool muy pequeño tras filtros), rellenamos ciclando lo que hay
     #
@@ -462,7 +489,25 @@ def swap_meal(form_data: dict):
     if all_disliked: 
         context_extras += f"\n    - 🚫 EXCLUSIÓN ESTRICTA: ESTÁ TOTALMENTE PROHIBIDO generar cualquier plato o ingrediente principal de esta lista: {', '.join(list(all_disliked))}. NINGÚN PLATO NUEVO PUEDE LLAMARSE IGUAL NI PARECERSE."
         
+        
     if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
+
+    # --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
+    user_id = form_data.get("user_id")
+    if user_id and user_id != "guest":
+        try:
+            from db import get_custom_shopping_items
+            existing = get_custom_shopping_items(user_id)
+            existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
+            if existing_items:
+                excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
+                ingredient_names = [item.get("name") for item in existing_items if item.get("category") not in excluded_cats]
+                if ingredient_names:
+                    context_extras += f"\n    - ⚠️ RESTRICCIÓN DE INGREDIENTES (SUPERMERCADO): El usuario ya compró y tiene disponibles los siguientes ingredientes: {', '.join(ingredient_names)}. DEBES priorizar la creación de recetas usando ESTOS ingredientes. NO inventes ingredientes principales nuevos."
+                    logger.info("🛒 [CONSTRAINT] Restricción de lista de compras añadida en swap_meal (agent).")
+        except Exception as check_e:
+            logger.error(f"Error revisando lista de compras en swap_meal: {check_e}")
+    # ----------------------------------------
 
     # --- ANTI MODE-COLLAPSE PARA SWAPS (Proteína + Carbohidrato + Vegetal) ---
     # Sugerir alternativas en las 3 dimensiones usando peso inverso por frecuencia
@@ -579,13 +624,13 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
         nfkd = unicodedata.normalize('NFKD', text.lower().strip())
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
     
-    def _parse_ingredient(raw: str):
         raw = raw.strip()
-        match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(g|kg|lb|lbs|oz|ml|l|taza|tazas|cda|cdta|und|unidades?)?\s+(.+)$', raw, re.IGNORECASE)
+        # Captura cualquier número inicial (ej: "1", "1.5", "1 1/2", "1/2", "1,5")
+        match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(.+)$', raw, re.IGNORECASE)
         if match:
             num_str = match.group(1).replace(',', '.').strip()
-            unit = (match.group(2) or "").lower().strip()
-            name = match.group(3).strip()
+            name = match.group(2).strip()
+            unit = "" # Ya no es necesario extraer la unidad sola, la dejamos en el nombre
             try:
                 if ' ' in num_str or '-' in num_str:
                     sep = ' ' if ' ' in num_str else '-'
