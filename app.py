@@ -58,6 +58,11 @@ os.makedirs("uploads", exist_ok=True)
 app = FastAPI(lifespan=lifespan)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
+@app.get("/")
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "message": "MealfitRD AI Backend is running"}
+
 # Dependencia de seguridad para validar token JWT de Supabase
 def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
     """Extrae el user_id del token JWT en el header Authorization."""
