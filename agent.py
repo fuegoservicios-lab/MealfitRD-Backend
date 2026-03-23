@@ -623,7 +623,7 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
         if not text: return ""
         nfkd = unicodedata.normalize('NFKD', text.lower().strip())
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
-    
+    def _parse_ingredient(raw: str) -> tuple:
         raw = raw.strip()
         # Captura cualquier número inicial (ej: "1", "1.5", "1 1/2", "1/2", "1,5")
         match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(.+)$', raw, re.IGNORECASE)
