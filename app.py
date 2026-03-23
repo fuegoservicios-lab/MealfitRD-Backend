@@ -358,10 +358,41 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                 for s in d.get("supplements") or []:
                     all_supplements.append(s.get("name", ""))
             if all_ingredients:
-                plan_hash = hashlib.sha256(_json.dumps({"ingredients": all_ingredients, "supplements": sorted(set(all_supplements)), "version": "v3"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
-                from db import get_shopping_plan_hash, save_shopping_plan_hash, add_custom_shopping_items, delete_auto_generated_shopping_items
+                plan_hash = hashlib.sha256(_json.dumps({"ingredients": all_ingredients, "supplements": sorted(set(all_supplements)), "version": "v4_multiday"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+                from db import get_shopping_plan_hash, save_shopping_plan_hash, add_custom_shopping_items, delete_auto_generated_shopping_items, get_custom_shopping_items, get_user_profile
+                
                 stored_hash = get_shopping_plan_hash(user_id)
-                if stored_hash != plan_hash:
+                existing = get_custom_shopping_items(user_id)
+                existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
+                
+                # 🔒 REGLA DE TIEMPO PARA BACKGROUND (Evita mutación sutil si ya hay lista vigente)
+                locked = False
+                if existing_items:
+                    try:
+                        hp = get_user_profile(user_id)
+                        hp_data = hp.get("health_profile", {}) if hp else {}
+                        cycle_days = hp_data.get("shopping_cycle", {}).get("duration_days", 7)
+                        
+                        from datetime import datetime, timezone
+                        created_at_strs = [i.get("created_at") for i in existing_items if i.get("created_at")]
+                        if created_at_strs:
+                            oldest_str = min(created_at_strs)
+                            if oldest_str.endswith("Z"):
+                                oldest_str = oldest_str[:-1] + "+00:00"
+                            created_dt = datetime.fromisoformat(oldest_str)
+                            if created_dt.tzinfo is None:
+                                created_dt = created_dt.replace(tzinfo=timezone.utc)
+                                
+                            days_elapsed = (datetime.now(timezone.utc) - created_dt).days
+                            if days_elapsed < cycle_days:
+                                locked = True
+                                logger.info(f"🔒 [BACKGROUND BLOCKED] Lista auto-generada está vigente: {days_elapsed}/{cycle_days} días. Cancelando regeneración destructiva en background.")
+                    except Exception as e:
+                        logger.error(f"Error parseando límite de compras en background para {user_id}: {e}")
+
+                if locked:
+                    logger.debug(f"✅ [BACKGROUND SKIP] Plan ignorado por la lista de compras actual (Aún válida).")
+                elif stored_hash != plan_hash:
                     from agent import generate_auto_shopping_list
                     items = generate_auto_shopping_list(plan_data)
                     if items:
@@ -370,8 +401,6 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                         shopping_lock = get_user_shopping_lock(user_id)
                         with shopping_lock:
                             # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
-                            # Si el proceso muere entre INSERT y DELETE, el usuario tiene duplicados
-                            # (fácilmente deduplicables) en vez de perder toda su lista (irrecuperable).
                             result = add_custom_shopping_items(user_id, items, source="auto")
                             new_ids = [r.get("id") for r in result if r.get("id")] if result and isinstance(result, list) else []
                             delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
