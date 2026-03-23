@@ -1035,16 +1035,41 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
                 supplements_for_hash.append(s.get("name", ""))
         plan_hash = hashlib.sha256(_json.dumps({"ingredients": ingredients_for_hash, "supplements": sorted(set(supplements_for_hash)), "version": "v4_multiday"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
         
-        # Verificar si el plan ya fue procesado (cache hit)
+        # Verificar si el plan ya fue procesado y si la lista sigue vigente
         if not force:
             from db import get_shopping_plan_hash
+            from db import get_custom_shopping_items
             stored_hash = get_shopping_plan_hash(user_id)
+            existing = get_custom_shopping_items(user_id)
+            existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
+            
+            # Bloqueo Automático: Si ya hay items, calculamos si todavía no expira según los días seleccionados
+            if existing_items:
+                try:
+                    from datetime import datetime, timezone
+                    created_at_strs = [i.get("created_at") for i in existing_items if i.get("created_at")]
+                    if created_at_strs:
+                        oldest_str = min(created_at_strs)
+                        if oldest_str.endswith("Z"):
+                            oldest_str = oldest_str[:-1] + "+00:00"
+                        created_dt = datetime.fromisoformat(oldest_str)
+                        if created_dt.tzinfo is None:
+                            created_dt = created_dt.replace(tzinfo=timezone.utc)
+                            
+                        days_elapsed = (datetime.now(timezone.utc) - created_dt).days
+                        
+                        # Si los días transcurridos son menores a los días seleccionados, BLOQUEAR regeneración (así cambie el plan)
+                        if days_elapsed < days:
+                            logger.info(f"🔒 [LISTA BLOQUEADA] Vigente: {days_elapsed}/{days} días (Ignorando cambios en plan).")
+                            return {"success": True, "items": existing_items, "cached": True, "locked": True,
+                                    "message": f"Lista bloqueada para preservar tus compras de {days} días."}
+                except Exception as e:
+                    logger.error(f"Error calculando expiración: {e}")
+            
+            # Si expiró o falló la verificación de tiempo, validamos por hash clásico
             if stored_hash == plan_hash:
                 logger.info(f"✅ [CACHE HIT] Plan sin cambios (hash={plan_hash}). Retornando lista existente.")
-                from db import get_custom_shopping_items
-                existing = get_custom_shopping_items(user_id)
-                existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
-                return {"success": True, "items": existing_items, "cached": True,
+                return {"success": True, "items": existing_items, "cached": True, "locked": False,
                         "message": "La lista ya está actualizada con tu plan actual."}
             
         from agent import generate_auto_shopping_list
