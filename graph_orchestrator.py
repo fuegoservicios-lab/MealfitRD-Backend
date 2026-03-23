@@ -729,6 +729,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     # Nuevo motor anti-repetición robusto: Query directo a la base de datos
     if user_id:
         try:
+            import json
             from db import get_recent_meals_from_plans
             recent_meals = get_recent_meals_from_plans(user_id, days=5)
             if recent_meals:
