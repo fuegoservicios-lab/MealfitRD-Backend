@@ -78,6 +78,7 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
    - "3 Scoops Proteína" -> "1 Tarro de Proteína"
    - "2 Litros de Leche" -> "1 Cartón Grande de Leche"
 4. REDONDEO HUMANO: Nadie compra "83.3 g de Yuca", compra "1 Libra de Yuca". Redondea siempre a unidades lógicas hacia arriba. No devuelvas decimales.
+5. FRUTAS PEQUEÑAS Y VEGETALES DE USO COMÚN: Para alimentos que se compran típicamente por docena, mallas o libras (ej. Chinola, Limón, Guineo, Manzana, Tomate), NUNCA sugieras cantidades muy pequeñas como "2 Unidades" o "3 Unidades" para 7 días. Si el cálculo da pocas unidades, ajústalo inteligentemente a "1/2 Docena", "1 Docena", o "1 Libra" (o su equivalente en mallas) para que el empaque tenga sentido en un supermercado real.
 
 Tu tarea es:
 Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.
