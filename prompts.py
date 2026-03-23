@@ -79,8 +79,8 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
    - "2 Litros de Leche" -> "1 Cartón Grande de Leche"
 4. REDONDEO HUMANO: Nadie compra "83.3 g de Yuca", compra "1 Libra de Yuca". Redondea siempre a unidades lógicas hacia arriba. No devuelvas decimales.
 5. REGLA ESTRICTA DE UNIDADES VS LIBRAS (Cultura Dominicana):
-   - SE COMPRAN POR UNIDAD O DOCENA (NUNCA POR LIBRA): Plátanos, Guineos (verdes o maduros), Naranjas, Limones, Chinolas, Aguacates, Manzanas, Mangos, Huevos. Para estos, agrupa siempre en: "Unidades" (si son pocos, ej. 3-5), "Media Docena", u "8 Unidades", "1 Docena", etc. 
-   - SE COMPRAN POR LIBRA (PESO): Víveres (Yuca, Yautía, Ñame, Batata, Papa), Vegetales densos (Tomate, Cebolla, Zanahoria, Ajíes, Berenjena), y todas las Carnes/Quesos.
+   - PROHIBICIÓN ABSOLUTA de usar "Libras" para: Plátanos, Guineos / Guineítos (verdes o maduros), Naranjas, Limones, Chinolas, Aguacates, Manzanas, Mangos, Huevos. Si el nombre del alimento contiene alguna de estas palabras, JAMÁS uses la palabra "Libra" o "LB". DEBES agruparlos siempre usando: "Unidad(es)", "Media Docena", "Docena(s)" o "Mallas".
+   - SÍ LLEVAN "Libras": Víveres pesados (Yuca, Yautía, Ñame, Batata, Papa), Vegetales (Tomate, Cebolla, Zanahoria, Ajíes, Berenjena) y Carnes/Quesos.
 6. ACOMPAÑANTES DE ALTO CONSUMO: Si el usuario va a comprar Aguacate, Plátano, Guineíto verde o Mango para 7 días, NUNCA pongas "1 Unidad". Redondea el mínimo a por lo menos "3 Unidades", "Media Docena" o el formato que tenga sentido para la semana entera. Todo debe sobrar antes que faltar.
 7. CONSOLIDACIÓN OBLIGATORIA (NO CLONAR ALIMENTOS): Si en los datos JSON recibes ingredientes repetidos o muy similares (ej. "Papas" y "Papa", o varios "Limón fresco"), DEBES SUMAR SUS CANTIDADES MATEMÁTICAMENTE y generar UN SOLO ÍTEM en la lista final. NUNCA devuelvas ingredientes duplicados en la misma categoría.
 
