@@ -78,8 +78,10 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
    - "3 Scoops Proteína" -> "1 Tarro de Proteína"
    - "2 Litros de Leche" -> "1 Cartón Grande de Leche"
 4. REDONDEO HUMANO: Nadie compra "83.3 g de Yuca", compra "1 Libra de Yuca". Redondea siempre a unidades lógicas hacia arriba. No devuelvas decimales.
-5. FRUTAS PEQUEÑAS Y VEGETALES DE USO COMÚN: Para alimentos que se compran típicamente por docena, mallas o libras (ej. Chinola, Limón, Guineo, Manzana, Tomate), NUNCA sugieras cantidades muy pequeñas como "2 Unidades" o "3 Unidades" para 7 días. Si el cálculo da pocas unidades, ajústalo inteligentemente a "1/2 Docena", "1 Docena", o "1 Libra" (o su equivalente en mallas) para que el empaque tenga sentido en un supermercado real.
-6. ACOMPAÑANTES Y VEGETALES DE ALTO CONSUMO (Aguacate, Plátano, Cebolla, etc.): Si el usuario va a comprar para 7 días, NUNCA pongas "1 Unidad de Aguacate" o "1 Plátano". Redondea el mínimo a por lo menos "3 Unidades", "Media Docena" o el formato que tenga sentido para una persona dominicana comer en la semana. Todo debe sobrar antes que faltar.
+5. REGLA ESTRICTA DE UNIDADES VS LIBRAS (Cultura Dominicana):
+   - SE COMPRAN POR UNIDAD O DOCENA (NUNCA POR LIBRA): Plátanos, Guineos (verdes o maduros), Naranjas, Limones, Chinolas, Aguacates, Manzanas, Huevos. Para estos, agrupa siempre en: "Unidades" (si son pocos, ej. 3-5), "Media Docena", u "8 Unidades", "1 Docena", etc. 
+   - SE COMPRAN POR LIBRA (PESO): Víveres (Yuca, Yautía, Ñame, Batata, Papa), Vegetales densos (Tomate, Cebolla, Zanahoria, Ajíes, Berenjena), y todas las Carnes/Quesos.
+6. ACOMPAÑANTES DE ALTO CONSUMO: Si el usuario va a comprar Aguacate, Plátano o Guineo para 7 días, NUNCA pongas "1 Unidad". Redondea el mínimo a por lo menos "3 Unidades", "Media Docena" o el formato que tenga sentido para la semana entera. Todo debe sobrar antes que faltar.
 
 Tu tarea es:
 Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.
