@@ -79,9 +79,10 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
    - "2 Litros de Leche" -> "1 Cartón Grande de Leche"
 4. REDONDEO HUMANO: Nadie compra "83.3 g de Yuca", compra "1 Libra de Yuca". Redondea siempre a unidades lógicas hacia arriba. No devuelvas decimales.
 5. REGLA ESTRICTA DE UNIDADES VS LIBRAS (Cultura Dominicana):
-   - SE COMPRAN POR UNIDAD O DOCENA (NUNCA POR LIBRA): Plátanos, Guineos (verdes o maduros), Naranjas, Limones, Chinolas, Aguacates, Manzanas, Huevos. Para estos, agrupa siempre en: "Unidades" (si son pocos, ej. 3-5), "Media Docena", u "8 Unidades", "1 Docena", etc. 
+   - SE COMPRAN POR UNIDAD O DOCENA (NUNCA POR LIBRA): Plátanos, Guineos (verdes o maduros), Naranjas, Limones, Chinolas, Aguacates, Manzanas, Mangos, Huevos. Para estos, agrupa siempre en: "Unidades" (si son pocos, ej. 3-5), "Media Docena", u "8 Unidades", "1 Docena", etc. 
    - SE COMPRAN POR LIBRA (PESO): Víveres (Yuca, Yautía, Ñame, Batata, Papa), Vegetales densos (Tomate, Cebolla, Zanahoria, Ajíes, Berenjena), y todas las Carnes/Quesos.
-6. ACOMPAÑANTES DE ALTO CONSUMO: Si el usuario va a comprar Aguacate, Plátano o Guineo para 7 días, NUNCA pongas "1 Unidad". Redondea el mínimo a por lo menos "3 Unidades", "Media Docena" o el formato que tenga sentido para la semana entera. Todo debe sobrar antes que faltar.
+6. ACOMPAÑANTES DE ALTO CONSUMO: Si el usuario va a comprar Aguacate, Plátano, Guineíto verde o Mango para 7 días, NUNCA pongas "1 Unidad". Redondea el mínimo a por lo menos "3 Unidades", "Media Docena" o el formato que tenga sentido para la semana entera. Todo debe sobrar antes que faltar.
+7. CONSOLIDACIÓN OBLIGATORIA (NO CLONAR ALIMENTOS): Si en los datos JSON recibes ingredientes repetidos o muy similares (ej. "Papas" y "Papa", o varios "Limón fresco"), DEBES SUMAR SUS CANTIDADES MATEMÁTICAMENTE y generar UN SOLO ÍTEM en la lista final. NUNCA devuelvas ingredientes duplicados en la misma categoría.
 
 Tu tarea es:
 Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.
