@@ -476,8 +476,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         blocked_text=blocked_text,
         **fruit_params
     )
-    logger.info(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas (1 distinta por día): {chosen_proteins}")
-    logger.info(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos (1 distinto por día): {chosen_carbs}")
+    logger.info(f"✅ [ANTI MODE-COLLAPSE] Proteínas elegidas para 3 días (rotadas si es necesario): {chosen_proteins}")
+    logger.info(f"✅ [ANTI MODE-COLLAPSE] Carbohidratos elegidos para 3 días (rotados si es necesario): {chosen_carbs}")
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (2 distintos por día): {chosen_veggies}")
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Fruta sugerida: {chosen_fruits}")
     return prompt
