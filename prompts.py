@@ -60,7 +60,7 @@ INSTRUCCIONES:
 3. Conserva el momento del día ({meal}) y la hora ({time})
 4. Usa ingredientes dominicanos
 5. Los pasos de la receta DEBEN usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'
-6. Dale un nombre nuevo y creativo al plato modificado
+6. Dale un nombre nuevo y creativo al plato modificado{context_extras}
 """
 
 AUTO_SHOPPING_LIST_PROMPT = """
@@ -82,7 +82,13 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
    - PROHIBICIÓN GLOBAL DE LIBRAS: Está TOTALMENTE PROHIBIDO usar la palabra "Libra", "Libras" o "LB" para Frutas, Vegetales, Víveres, Lácteos o Despensa. Todo lo que no sea carne debe agruparse en: "Unidad(es)", "Cabeza", "Mazo", "Media Docena", "Docena(s)", "Mallas", "Frasco", "Paquete" o "Tarro".
    - ÚNICA EXCEPCIÓN PARA LIBRAS: Las "Libras" SOLO están permitidas única y exclusivamente para la categoría de "Carnes y Pescados" (Pollo, Res, Cerdo, Pescado, Embutidos).
 6. ACOMPAÑANTES DE ALTO CONSUMO: Si el usuario va a comprar Aguacate, Plátano, Guineíto verde o Mango para 7 días, NUNCA pongas "1 Unidad". Redondea el mínimo a por lo menos "3 Unidades", "Media Docena" o el formato que tenga sentido para la semana entera. Todo debe sobrar antes que faltar.
-7. CONSOLIDACIÓN OBLIGATORIA (NO CLONAR ALIMENTOS): Si en los datos JSON recibes ingredientes repetidos o muy similares (ej. "Papas" y "Papa", o varios "Limón fresco"), DEBES SUMAR SUS CANTIDADES MATEMÁTICAMENTE y generar UN SOLO ÍTEM en la lista final. NUNCA devuelvas ingredientes duplicados en la misma categoría.
+7. CONSOLIDACIÓN EXTREMA Y LIMPIEZA DE NOMBRES (PROHIBIDO CLONAR): ¡ATENCIÓN! Recibirás los nombres tal cual vienen de la receta, a menudo con instrucciones de preparación (ej. "Sandía en dados", "Sandía sin semillas", "Repollo rallado", "Longaniza desmenuzada"). EN EL SUPERMERCADO NO VENDEN "SANDÍA EN DADOS", VENDEN "SANDÍA". 
+   - DEBES ELIMINAR todas las coletillas de preparación (en dados, rallado, finamente, pelada, hervida, desmenuzada, cortada en rodajas, maduros, etc.).
+   - Si al limpiarlos tienes el mismo ingrediente base repetido MÚLTIPLES veces (ej. tres registros de "Sandía"), DEBES SUMAR SUS CANTIDADES MATEMÁTICAMENTE y generar UN SOLO ítem en la lista final (ej. "6 lb Sandía"). NUNCA PUEDE HABER DOS ÍTEMS QUE SEAN EL MISMO ALIMENTO BASE EN LA LISTA.
+8. CATEGORIZACIÓN LÓGICA:
+   - "Víveres" (Yuca, Batata, Papa, Plátano, Guineíto, Yautía, Ñame, Cepas, etc.) DEBEN ir obligatoriamente en la categoría "Frutas y Verduras" (o crea la categoría "Víveres"). NUNCA los pongas en "Otros" o "Especias".
+   - Quesos, Mantequilla, Huevos y Yogurt van en "Lácteos y Refrigerados". NUNCA en "Frutas y Verduras".
+   - Avena, Arroz, Pan, Casabe y Granos Secos van en "Despensa y Granos".
 
 Tu tarea es:
 Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.
