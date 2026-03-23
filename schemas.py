@@ -24,24 +24,24 @@ class SupplementModel(BaseModel):
     reason: str = Field(description="Justificación breve de por qué se recomienda para el usuario")
 
 class DailyPlanModel(BaseModel):
-    day: int = Field(description="Número de día (1, 2, o 3)")
-    meals: List[MealModel] = Field(description="Lista de comidas en orden cronológico. MUY IMPORTANTE: Si el usuario omite el almuerzo, genera SOLO 3 comidas: Desayuno, Merienda, Cena.")
-    supplements: Optional[List[SupplementModel]] = Field(default=None, description="Lista de suplementos para este día. Solo se incluye si el usuario activó includeSupplements: true.")
+    day: int = Field(description="Identificador de la Opción/Alternativa (ej. 1 para Opción A, 2 para Opción B, 3 para Opción C)")
+    meals: List[MealModel] = Field(description="Lista de comidas de esta alternativa en orden cronológico. MUY IMPORTANTE: Si el usuario omite el almuerzo, genera SOLO 3 comidas: Desayuno, Merienda, Cena.")
+    supplements: Optional[List[SupplementModel]] = Field(default=None, description="Lista de suplementos para esta alternativa. Solo se incluye si el usuario activó includeSupplements: true.")
 
 class PlanModel(BaseModel):
     main_goal: str = Field(description="El objetivo principal identificado. Ej: 'Pérdida de Peso (Déficit)'")
     calories: int = Field(description="Total de calorías estrictas planificadas sumando todas las comidas")
     macros: MacrosModel = Field(description="Distribución matemática de macronutrientes para el día")
     insights: List[str] = Field(description="Lista EXACTA de 3 frases: 1. Inicia con 'Diagnóstico: ', 2. Inicia con 'Estrategia: ', 3. Inicia con 'Tip del Chef: '")
-    days: List[DailyPlanModel] = Field(description="Lista de 3 días con planes de comida variados")
+    days: List[DailyPlanModel] = Field(description="Lista de 3 OPCIONES DIARIAS INTERCAMBIABLES (plantillas de un mismo día) con comidas variadas")
 
 class ShoppingItemModel(BaseModel):
     category: str = Field(description="Nombre de la categoría principal, Ej: 'Carnes', 'Frutas y Verduras'")
     emoji: str = Field(description="Un emoji representativo de la categoría, Ej: '🥩', '🥬'")
     name: str = Field(description="Nombre del ingrediente o producto, Ej: 'Pechuga de pollo'")
-    qty_1: str = Field(description="Cantidad redondeada para 1 DÍA de compras, Ej: '1/2 Libra', '1 Unidad'")
-    qty_3: str = Field(description="Cantidad redondeada para 3 DÍAS de compras, Ej: '1.5 Libras', '3 Unidades'")
-    qty_7: str = Field(description="Cantidad redondeada para 7 DÍAS de compras, Ej: '3.5 Libras', '7 Unidades'")
+    qty_7: str = Field(description="Cantidad redondeada para 7 DÍAS de compras, Ej: '1/2 Libra', '1 Unidad'")
+    qty_15: str = Field(description="Cantidad redondeada para 15 DÍAS de compras, Ej: '1.5 Libras', '3 Unidades'")
+    qty_30: str = Field(description="Cantidad redondeada para 30 DÍAS de compras, Ej: '3.5 Libras', '7 Unidades'")
 
 class ShoppingListModel(BaseModel):
     items: List[ShoppingItemModel] = Field(description="Lista de ingredientes parseados y estructurados individualmente.")

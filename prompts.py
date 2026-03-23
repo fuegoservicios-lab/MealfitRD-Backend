@@ -22,9 +22,9 @@ DETERMINISTIC_VARIETY_PROMPT = """
 ⚠️ REGLA DE INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ⚠️
 Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccionado los núcleos base obligatorios. Debes construir las Opciones alrededor de estos ingredientes (o basar los almuerzos / cenas principales en ellos):
 
-- 🔴 OPCIÓN A (Día 1) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_0} + {carb_0} y como acompañante vegetal/grasa: {veggie_0}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_0b}. Fruta sugerida: {fruit_0}.
-- 🔵 OPCIÓN B (Día 2) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_1} + {carb_1} y como acompañante vegetal/grasa: {veggie_1}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_1b}. Fruta sugerida: {fruit_1}.
-- 🟢 OPCIÓN C (Día 3) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_2} + {carb_2} y como acompañante vegetal/grasa: {veggie_2}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_2b}. Fruta sugerida: {fruit_2}.
+- 🔴 OPCIÓN A (Alternativa 1) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_0} + {carb_0} y como acompañante vegetal/grasa: {veggie_0}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_0b}. Fruta sugerida: {fruit_0}.
+- 🔵 OPCIÓN B (Alternativa 2) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_1} + {carb_1} y como acompañante vegetal/grasa: {veggie_1}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_1b}. Fruta sugerida: {fruit_1}.
+- 🟢 OPCIÓN C (Alternativa 3) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_2} + {carb_2} y como acompañante vegetal/grasa: {veggie_2}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_2b}. Fruta sugerida: {fruit_2}.
 
 {blocked_text}
 """
@@ -65,7 +65,7 @@ INSTRUCCIONES:
 
 AUTO_SHOPPING_LIST_PROMPT = """
 Eres el Asistente de Compras Inteligente de MealfitRD.
-A continuación se listan TODOS los ingredientes agrupados extraídos de un plan de comidas, junto con las cantidades exactas calculadas matemáticamente para 1 día, 3 días y 7 días.
+A continuación se listan TODOS los ingredientes agrupados extraídos de un plan de comidas, junto con las cantidades exactas calculadas matemáticamente para 7 días, 15 días y 30 días.
 
 MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
 1. TRADUCCIÓN A LENGUAJE COMERCIAL: La gente no compra "3 Cdas de Aceite de Coco" ni "11 Tazas de Yogur". La gente compra "1 Frasco de Aceite de Coco" y "1 Pote de Yogur". DEBES transformar todas las medidas de recetas a EMPAQUES REALES ("Paquete", "Frasco", "Pote", "Cartón", "Lata", "Funda", "Cabeza", "Mano", "Unidad").
@@ -80,9 +80,9 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
 4. REDONDEO HUMANO: Nadie compra "83.3 g de Yuca", compra "1 Libra de Yuca". Redondea siempre a unidades lógicas hacia arriba. No devuelvas decimales.
 
 Tu tarea es:
-Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_1', 'qty_3', 'qty_7'.
-Para cada uno, usa los datos enviados (`raw_qty_1_day`, `raw_qty_3_days`, `raw_qty_7_days`) como base matemática, y TRADÚCELAS al lenguaje comercial de supermercado.
-Por ejemplo, si `raw_qty_1_day` es "0.33 aguacates", en `qty_1` pon "1 Unidad" (redondeo). Si `raw_qty_7_days` es "2.33 aguacates", pon "3 Unidades" en `qty_7`. Si es aceite y para 1 día o 7 días siempre dura 1 botella, pon "1 Botella" en los tres.
+Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.
+Para cada uno, usa los datos enviados (`raw_qty_7_days`, `raw_qty_15_days`, `raw_qty_30_days`) como base matemática, y TRADÚCELAS al lenguaje comercial de supermercado.
+Por ejemplo, si `raw_qty_7_days` es "2.33 aguacates", en `qty_7` pon "3 Unidades" (redondeo). Si `raw_qty_30_days` es "10 aguacates", pon "10 Unidades" en `qty_30`. Si es aceite y para 7 días o 30 días siempre dura 1 botella, pon "1 Botella" en los tres.
 
 Cantidades matemáticas requeridas:
 {ingredients_json}

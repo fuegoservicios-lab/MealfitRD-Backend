@@ -69,10 +69,35 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
 def update_form_field(user_id: str, field: str, new_value: str) -> str:
     """
     Actualiza el formulario en tiempo real en la UI del usuario.
-    Campos válidos (field): 'weight', 'height', 'age', 'gender', 'weightUnit', 'dietType', 'mainGoal', 'allergies', 'medicalConditions', 'activityLevel', 'dislikes', 'struggles'.
+    Campos válidos (field) y valores esperados (DEBES usar estos valores exactos en inglés para los selects):
+    - 'weight': Ej: "129" (solo números)
+    - 'height': Ej: "180" (en cm)
+    - 'age': Ej: "30"
+    - 'gender': "male" o "female"
+    - 'dietType': "balanced", "vegetarian" o "vegan"
+    - 'mainGoal': "lose_fat", "gain_muscle", "maintenance", o "performance"
+    - 'activityLevel': "sedentary", "light", "moderate", "active", o "athlete"
+    - 'budget': "low", "medium", "high", o "unlimited"
+    - 'cookingTime': "none", "30min", "1hour", o "plenty"
+    - 'allergies', 'medicalConditions', 'dislikes', 'struggles': Listas separadas por coma (Ej: "Lacteos, Gluten")
     """
     logger.debug(f"🔧 [TOOL EXECUTION] Actualizando form del usuario {user_id}: {field} -> {new_value}")
     
+    # Auto-corrección de valores comunes al formato esperado por la UI
+    new_value_lower = str(new_value).lower().strip()
+    if field == 'dietType':
+        if 'vegetariano' in new_value_lower or 'vegetariana' in new_value_lower: new_value = 'vegetarian'
+        elif 'vegano' in new_value_lower or 'vegana' in new_value_lower: new_value = 'vegan'
+        elif 'balanceado' in new_value_lower or 'balanceada' in new_value_lower: new_value = 'balanced'
+    elif field == 'mainGoal':
+        if 'perder' in new_value_lower or 'bajar' in new_value_lower or 'grasa' in new_value_lower or 'peso' in new_value_lower: new_value = 'lose_fat'
+        elif 'ganar' in new_value_lower or 'musculo' in new_value_lower or 'masa' in new_value_lower: new_value = 'gain_muscle'
+        elif 'mantener' in new_value_lower or 'mantenimiento' in new_value_lower: new_value = 'maintenance'
+        elif 'rendimiento' in new_value_lower: new_value = 'performance'
+    elif field == 'gender':
+        if 'hombre' in new_value_lower or 'masculino' in new_value_lower: new_value = 'male'
+        elif 'mujer' in new_value_lower or 'femenino' in new_value_lower: new_value = 'female'
+        
     if field in ['weight', 'height', 'age']:
         import re
         extracted = re.sub(r'[^\d.]', '', str(new_value))
@@ -84,7 +109,7 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
         if profile:
             health_profile = profile.get("health_profile") or {}
             if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
-                health_profile[field] = [item.strip() for item in new_value.split(",") if item.strip()]
+                health_profile[field] = [item.strip() for item in str(new_value).split(",") if item.strip()]
             else:
                 health_profile[field] = new_value
             update_user_health_profile(user_id, health_profile)

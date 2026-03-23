@@ -1033,7 +1033,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
                     ingredients_for_hash.extend(ing)
             for s in d.get("supplements") or []:
                 supplements_for_hash.append(s.get("name", ""))
-        plan_hash = hashlib.sha256(_json.dumps({"ingredients": ingredients_for_hash, "supplements": sorted(set(supplements_for_hash)), "version": "v3"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+        plan_hash = hashlib.sha256(_json.dumps({"ingredients": ingredients_for_hash, "supplements": sorted(set(supplements_for_hash)), "version": "v4_multiday"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
         
         # Verificar si el plan ya fue procesado (cache hit)
         if not force:

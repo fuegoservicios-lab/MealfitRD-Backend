@@ -283,7 +283,73 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             pick = random.choices([x[0] for x in _pool_f], weights=[x[1] for x in _pool_f], k=1)[0]
             unique_fruits.append(pick)
             _pool_f = [(f, w) for f, w in _pool_f if f != pick]
+            
+    # ======= SHOPPING CYCLE LOCK (Ahorro de Supermercado) =======
+    grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
+    grocery_days = 7
+    if grocery_duration == "biweekly": grocery_days = 15
+    elif grocery_duration == "monthly": grocery_days = 30
     
+    cycle_locked = False
+    new_cycle_started = False
+    
+    # Excepción: la regla no aplica si grocery_days es 7 y no queremos complicar o si es guest
+    if grocery_days > 7 and user_id and user_id != "guest":
+        try:
+            profile = get_user_profile(user_id)
+            if profile:
+                hp = profile.get("health_profile") or {}
+                if not isinstance(hp, dict): hp = {}
+                shopping_cycle = hp.get("shopping_cycle")
+                
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+                
+                if shopping_cycle and "start_date" in shopping_cycle:
+                    try:
+                        cycle_start = datetime.fromisoformat(shopping_cycle["start_date"].replace("Z", "+00:00"))
+                        days_elapsed = (now - cycle_start).days
+                        
+                        # Si es < 2 días, es regeneración del mismo plan base, actualizaremos el ciclo.
+                        if 2 <= days_elapsed < grocery_days:
+                            # ¡BLOQUEO ACTIVO! Forzamos la reutilización de ingredientes.
+                            cycle_locked = True
+                            unique_proteins = shopping_cycle.get("base_proteins", unique_proteins)
+                            unique_carbs = shopping_cycle.get("base_carbs", unique_carbs)
+                            unique_veggies = shopping_cycle.get("base_veggies", unique_veggies)
+                            logger.info(f"🔒 [SHOPPING CYCLE LOCK] Reutiizando ingredientes del ciclo (Día {days_elapsed} de {grocery_days}).")
+                        elif days_elapsed >= grocery_days:
+                            logger.info(f"🔓 [SHOPPING CYCLE] Ciclo expirado ({days_elapsed} >= {grocery_days} días). Iniciando nuevo ciclo.")
+                            new_cycle_started = True
+                        else:
+                            logger.info(f"🔄 [SHOPPING CYCLE] Regeneración en Día {days_elapsed} del ciclo. Actualizando Plan Base.")
+                            new_cycle_started = True
+                    except Exception as e:
+                        logger.error(f"Error parseando fecha del ciclo: {e}")
+                        new_cycle_started = True
+                else:
+                    new_cycle_started = True
+                    
+                # Si se necesita un nuevo ciclo o regeneración, guardamos los ingredientes recién elegidos
+                if new_cycle_started:
+                    start_date_to_save = now.isoformat()
+                    # Si es regeneración (< 2 días), mantener el start_date original
+                    if shopping_cycle and "start_date" in shopping_cycle and not (days_elapsed >= grocery_days if 'days_elapsed' in locals() else True):
+                        start_date_to_save = shopping_cycle["start_date"]
+                        
+                    hp["shopping_cycle"] = {
+                        "start_date": start_date_to_save,
+                        "duration_days": grocery_days,
+                        "base_proteins": unique_proteins,
+                        "base_carbs": unique_carbs,
+                        "base_veggies": unique_veggies
+                    }
+                    update_user_health_profile(user_id, hp)
+                    logger.info("💾 [SHOPPING CYCLE] Guardados nuevos ingredientes base del ciclo.")
+        except Exception as e:
+            logger.error(f"Error procesando Shopping Cycle Lock: {e}")
+    # ==========================================================
+
     # Cada día recibe una proteína, un carbohidrato, y un vegetal únicos (sin repeticiones entre días)
     # Si no se pudieron elegir 3 (pool muy pequeño tras filtros), rellenamos ciclando lo que hay
     #
@@ -338,6 +404,11 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         blocked_text += "\n🛒 COMPRA MENSUAL: El usuario compra para 30 días. Prioriza ingredientes de larga duración (tubérculos, granos secos, proteínas congelables). Evita depender de perecederos de vida corta."
     elif grocery_duration == "biweekly":
         blocked_text += "\n🛒 COMPRA QUINCENAL: El usuario compra para 15 días. Equilibra frescos con ingredientes duraderos. Sugiere congelación para proteínas frescas."
+        
+    if cycle_locked:
+        # Use a safe fallback for days_elapsed in case it wasn't defined perfectly
+        d_elapsed = locals().get('days_elapsed', '?')
+        blocked_text += f"\n\n🚨 [REGLA DE AHORRO EXTREMA]: El usuario está en el Día {d_elapsed} de su ciclo de compras de {grocery_days} días. TIENES LA OBLIGACIÓN ESTRICTA de basar todas las comidas en usar EXACTAMENTE las proteínas, carbohidratos y vegetales asignados explícitamente en el prompt. Usa diferentes preparaciones y técnicas de cocción para que no se aburra, pero NO MANDES A COMPRAR ALIMENTOS BASE NUEVOS."
     
     # Construir parámetros de frutas para el prompt
     fruit_params = {}
@@ -500,7 +571,7 @@ def swap_meal(form_data: dict):
 
 
 def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3) -> list:
-    """Pre-consolida ingredientes sumando cantidades en Python, y genera las cantidades crudas para 1, 3 y 7 días."""
+    """Pre-consolida ingredientes sumando cantidades en Python, y genera las cantidades crudas para 7, 15 y 30 días."""
     import re, unicodedata
     
     def _normalize(text: str) -> str:
@@ -561,32 +632,32 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
             base_total = entry["total"]
             div = base_days if base_days > 0 else 1
             
-            t1 = base_total / div
-            t3 = base_total * (3 / div)
             t7 = base_total * (7 / div)
+            t15 = base_total * (15 / div)
+            t30 = base_total * (30 / div)
             
             unit_part = f" {entry['unit']}" if entry["unit"] else ""
             
             result.append({
                 "name": entry['name'],
-                "raw_qty_1_day": f"{format_qty(t1)}{unit_part}".strip(),
-                "raw_qty_3_days": f"{format_qty(t3)}{unit_part}".strip(),
-                "raw_qty_7_days": f"{format_qty(t7)}{unit_part}".strip()
+                "raw_qty_7_days": f"{format_qty(t7)}{unit_part}".strip(),
+                "raw_qty_15_days": f"{format_qty(t15)}{unit_part}".strip(),
+                "raw_qty_30_days": f"{format_qty(t30)}{unit_part}".strip()
             })
         else:
             result.append({
                 "name": entry["raw"],
-                "raw_qty_1_day": "Al gusto / Variable",
-                "raw_qty_3_days": "Al gusto / Variable",
-                "raw_qty_7_days": "Al gusto / Variable"
+                "raw_qty_7_days": "Al gusto / Variable",
+                "raw_qty_15_days": "Al gusto / Variable",
+                "raw_qty_30_days": "Al gusto / Variable"
             })
     
     return result
 
 def generate_auto_shopping_list(plan_data: dict) -> list:
-    """Extrae ingredientes del plan, pre-conslida las cantidades para 1, 3 y 7 días y categoriza por pasillo de supermercado."""
+    """Extrae ingredientes del plan, pre-conslida las cantidades para 7, 15 y 30 días y categoriza por pasillo de supermercado."""
     logger.info("\n-------------------------------------------------------------")
-    logger.debug("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan para 1/3/7 días...")
+    logger.debug("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan para 7/15/30 días...")
     
     ingredients = []
     days = plan_data.get("days", [])
@@ -686,9 +757,9 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
                         "category": "Suplementos",
                         "emoji": "💊",
                         "name": supp_name,
-                        "qty_1": dose,
-                        "qty_3": f"{dose} /día · 3 días",
                         "qty_7": f"{dose} /día · 7 días",
+                        "qty_15": f"{dose} /día · 15 días",
+                        "qty_30": f"{dose} /día · 30 días",
                     })
         if seen_supps:
             logger.info(f"💊 [SUPLEMENTOS] {len(seen_supps)} suplementos añadidos a la lista de compras: {seen_supps}")
@@ -707,9 +778,9 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
                     "category": cat,
                     "emoji": emoji,
                     "name": str(ing.get("name", "")).strip().capitalize(),
-                    "qty_1": ing.get("raw_qty_1_day", ""),
-                    "qty_3": ing.get("raw_qty_3_days", ""),
-                    "qty_7": ing.get("raw_qty_7_days", "")
+                    "qty_7": ing.get("raw_qty_7_days", ""),
+                    "qty_15": ing.get("raw_qty_15_days", ""),
+                    "qty_30": ing.get("raw_qty_30_days", "")
                 })
             logger.debug(f"✅ [FALLBACK] {len(fallback_items)} ingredientes categorizados localmente.")
             return fallback_items
@@ -1131,7 +1202,7 @@ REGLA CRUCIAL: El plan del usuario tiene 3 opciones distintas. Llámalas SIEMPRE
     system_prompt += f"""
 
 TIENES HERRAMIENTAS DISPONIBLES:
-- OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE y SIN EXCEPCIÓN cada vez que el usuario mencione un nuevo dato sobre sí mismo que deba actualizarse en su perfil (ej: "a partir de hoy soy vegano", "peso 80kg", "tengo diabetes", "soy intolerante a la lactosa", "no me gusta el tomate"). Si no usas esta herramienta para esos casos, la Interfaz Gráfica del usuario quedará desincronizada y el sistema fallará.
+- OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE y SIN EXCEPCIÓN cada vez que el usuario mencione un nuevo dato sobre sí mismo que deba actualizarse en su perfil (ej: "a partir de hoy soy vegano", "peso 80kg", "tengo diabetes", "soy intolerante a la lactosa", "no me gusta el tomate"). Si no usas esta herramienta para esos casos, la Interfaz Gráfica del usuario quedará desincronizada. ATENCIÓN: Lee atentamente los parámetros de esta herramienta, debes usar valores exactos en INGLÉS como 'lose_fat', 'vegetarian', 'male', etc. para que la UI los reconozca.
 - Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente'). Esta herramienta ejecuta el pipeline completo y genera un plan personalizado al instante.
 - NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida que el usuario afirme haber comido. Si analizas una foto de una comida y el usuario confirma que se la comió, USA ESTA HERRAMIENTA usando los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos a la herramienta.
@@ -1267,7 +1338,7 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
     
     system_prompt += f"""
 TIENES HERRAMIENTAS DISPONIBLES:
-- Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil.
+- Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil. IMPORTANTE: Revisa los valores permitidos, la UI usa nombres clave (ej: 'lose_fat', 'vegetarian', 'male').
 - Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida consumida.
 - Usa `modify_single_meal` para cambios puntuales.
