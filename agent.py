@@ -377,12 +377,33 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         logger.info(f"🔒 [FORCE LOCK] Frutas Extraídas: {unique_fruits}")
     # ==========================================================
 
+    # Dedupicamos usando minúsculas normalizadas para evitar seleccionar "Huevos" y "Huevo s" en la misma corrida
+    def _dedup_list(items):
+        seen = set()
+        out = []
+        for i in items:
+            # Remover espacios extra (ej. "Huevo s" -> "Huevos") solo como parche seguro si es común
+            norm = i.lower().strip().replace(" s", "s")
+            if norm not in seen:
+                seen.add(norm)
+                out.append(i)
+        return out
+        
+    unique_proteins = _dedup_list(unique_proteins)
+    unique_carbs = _dedup_list(unique_carbs)
+    unique_veggies = _dedup_list(unique_veggies)
+    if unique_fruits:
+        unique_fruits = _dedup_list(unique_fruits)
+
+    # Mezclar ANTES de rellenar o truncar, para asegurar rotación de todos los items en la lista de compras
+    random.shuffle(unique_proteins)
+    random.shuffle(unique_carbs)
+    random.shuffle(unique_veggies)
+    if unique_fruits:
+        random.shuffle(unique_fruits)
+
     # Cada día recibe una proteína, un carbohidrato, y un vegetal únicos (sin repeticiones entre días)
-    # Si no se pudieron elegir 3 (pool muy pequeño tras filtros), rellenamos ciclando lo que hay
-    #
-    # Excepción: skipLunch con 1 sola proteína → repetir la misma explícitamente.
-    # El technique_injection ya se encarga de que cada día use una técnica diferente,
-    # así que repetir la proteína base + variar técnica ≠ plato repetido.
+    # Si no se pudieron elegir 3, rellenamos ciclando lo que hay
     _base_proteins = list(unique_proteins)
     while len(unique_proteins) < 3:
         unique_proteins.append(_base_proteins[len(unique_proteins) % len(_base_proteins)])
@@ -393,8 +414,6 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     while len(unique_veggies) < 6:
         unique_veggies.append(_base_veggies[len(unique_veggies) % len(_base_veggies)])
     if unique_fruits:
-        # Frutas: 1 seleccionada por anti-mode-collapse, repetida para los 3 días
-        # (impacto bajo en variedad percibida vs proteínas/carbos)
         while len(unique_fruits) < 3:
             unique_fruits.append(unique_fruits[0])
     
@@ -403,7 +422,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     chosen_veggies = unique_veggies[:6]
     chosen_fruits = unique_fruits[:3] if unique_fruits else []
     
-    # Mezclamos para que el orden de los días sea dinámico
+    # Repetimos mezcla final de los 3 días elegidos para distribuir el orden
     random.shuffle(chosen_proteins)
     random.shuffle(chosen_carbs)
     random.shuffle(chosen_veggies)
