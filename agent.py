@@ -541,7 +541,7 @@ def swap_meal(form_data: dict):
                     if name_val:
                         ingredient_names.append(str(name_val).strip())
                 if ingredient_names:
-                    context_extras += f"\n    - ⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE: El usuario YA COMPRÓ su comida y no puede comprar nada más. TIENES ESTRICTAMENTE PROHIBIDO sugerir frutas, vegetales, carnes, lácteos, cereales o cualquier ingrediente que no esté en esta lista exacta: [{', '.join(ingredient_names)}]. Si la lista incluye tomate y cebolla, usa SOLO tomate y cebolla, no inventes lechuga ni aguacate. La receta alternativa DEBE limitarse al 100% a lo que hay en esta lista."
+                    context_extras += f"\n    - ⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE: El usuario YA COMPRÓ su comida y no puede comprar nada más. TIENES ESTRICTAMENTE PROHIBIDO sugerir frutas, vegetales, carnes, lácteos, cereales o cualquier ingrediente que no esté en esta lista exacta: [{', '.join(ingredient_names)}]. Si la lista incluye tomate y cebolla, usa SOLO tomate y cebolla, no inventes lechuga ni aguacate. ESPECIAL ATENCIÓN: Si no ves pollo, pescado ni carnes en la lista, TIENES PROHIBIDO inventarlos; debes crear un plato vegetariano o basado en los granos/quesos que sí tenga la lista. La receta alternativa DEBE limitarse al 100% a lo que hay en esta lista."
                     logger.info("🛒 [CONSTRAINT] Restricción de lista de compras añadida en swap_meal (agent).")
         except Exception as check_e:
             logger.error(f"Error revisando lista de compras en swap_meal: {check_e}")
@@ -624,9 +624,10 @@ def swap_meal(form_data: dict):
         context_extras=context_extras
     )
     
+    temp = 0.2 if ingredient_names else 0.8
     swap_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
-        temperature=0.8, # Temperatura más alta para buscar alternativas extremadamente creativas
+        temperature=temp, 
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(MealModel)
     
