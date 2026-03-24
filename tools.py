@@ -332,7 +332,26 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         if existing_items:
             # Extract food items to constrain the AI
             excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
-            ingredient_names = [(item.get("display_name") or item.get("name")) for item in existing_items if item.get("category") not in excluded_cats and (item.get("display_name") or item.get("name"))]
+            ingredient_names = []
+            import json
+            for item in existing_items:
+                if item.get("category") in excluded_cats:
+                    continue
+                
+                name_val = item.get("display_name")
+                if not name_val:
+                    i_name = item.get("item_name")
+                    if i_name:
+                        try:
+                            parsed = json.loads(i_name)
+                            name_val = parsed.get("name") if isinstance(parsed, dict) else str(i_name)
+                        except Exception:
+                            name_val = str(i_name)
+                if not name_val:
+                    name_val = item.get("name")
+                    
+                if name_val:
+                    ingredient_names.append(str(name_val).strip())
             if ingredient_names:
                 shopping_constraint = f"\n\n⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE: El usuario YA COMPRÓ su comida y no puede comprar nada más. TIENES ESTRICTAMENTE PROHIBIDO sugerir frutas, vegetales, carnes, lácteos, cereales o cualquier ingrediente que no esté en esta lista exacta: [{', '.join(ingredient_names)}]. Si la lista incluye tomate y cebolla, usa SOLO tomate y cebolla, no inventes lechuga ni aguacate. Si creas una receta, la receta DEBE limitarse al 100% a lo que hay en esta lista o lo que sobró del plato original."
                 logger.info("🛒 [CONSTRAINT] Aplicando restricción de lista de compras en regeneración de comida.")
