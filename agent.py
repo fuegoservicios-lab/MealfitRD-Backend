@@ -1335,7 +1335,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida que el usuario afirme haber comido. Si analizas una foto de una comida y el usuario confirma que se la comió, USA ESTA HERRAMIENTA usando los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos a la herramienta.
 - Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos en la Opción A', 'ponle más proteína al almuerzo', 'quítale el arroz a la cena de la Opción B'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. Debes identificar correctamente el day_number (1 para Opción A, 2 para Opción B, o 3 para Opción C) y el meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda') del plan activo del usuario. Si el usuario no especifica, asume 1 (Opción A).
-- Usa `add_to_shopping_list` cuando el usuario diga que se quedó sin algo o pida añadir items. **ATENCIÓN:** Si el usuario te envía una foto o lista completa diciendo "esta es mi lista de compras actual sin contar el almuerzo" o similar, extrae TODOS los alimentos válidos e invoca esta herramienta con `overwrite=True` para REEMPLAZAR por completo todos sus ingredientes guardados.
+- Usa `add_to_shopping_list` cuando el usuario diga que se quedó sin algo o pida añadir items. **ATENCIÓN:** Si el usuario te envía una foto o lista completa diciendo "esta es mi lista de compras actual sin contar el almuerzo" o similar, usa esta herramienta con `overwrite=True` para REEMPLAZAR todo. CRÍTICO: 1) Extrae cada alimento JUNTO CON SU CANTIDAD EXACTA unitaria (ej: "1 paquete de Avena", "2 libras de Pollo"). 2) Como `overwrite=True` borrará también los ingredientes del Almuerzo auto-generado, DEBES buscar en el PLAN ACTIVO actual los ingredientes de la comida "Almuerzo" y AGREGARLOS expresamente a tu lista de items en esta llamada para rescatarlos de la purga.
 
 El user_id del usuario actual es: {user_id}"""
 
@@ -1480,7 +1480,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida consumida.
 - Usa `modify_single_meal` para cambios puntuales.
-- Usa `add_to_shopping_list` para añadir compras, o usa `overwrite=True` si el usuario envía una lista o foto diciendo 'esta es mi despensa actual' para reemplazarla por completo.
+- Usa `add_to_shopping_list` para añadir compras, o con `overwrite=True` si envía toda su despensa actual. CRÍTICO: Extrae cada alimento CON SU CANTIDAD (ej: '1 paquete de Avena'). Además, si el usuario dice 'sin contar el almuerzo', debes añadir a la lista de esta herramienta los ingredientes de su 'Almuerzo' (lépelos de su plan activo) para que no se borren en el reemplazo.
 El user_id actual es: {user_id}"""
 
     if current_plan:
