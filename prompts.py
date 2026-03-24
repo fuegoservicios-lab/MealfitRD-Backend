@@ -89,6 +89,9 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
    - "Víveres" (Yuca, Batata, Papa, Plátano, Guineíto, Yautía, Ñame, Cepas, etc.) DEBEN ir obligatoriamente en la categoría "Frutas y Verduras" (o crea la categoría "Víveres"). NUNCA los pongas en "Otros" o "Especias".
    - Quesos, Mantequilla, Huevos y Yogurt van en "Lácteos y Refrigerados". NUNCA en "Frutas y Verduras".
    - Avena, Arroz, Pan, Casabe y Granos Secos van en "Despensa y Granos".
+9. GESTIÓN ESTRICTA DE CADUCIDAD Y CONSERVACIÓN:
+   - Si la lista incluye proyecciones para 15 días o 30 días, DEBES considerar el tiempo de caducidad de los alimentos frescos.
+   - Para alimentos altamente perecederos (vegetales de hoja verde, frutas maduras, pescado/carnes frescas) que se compren para 15 o 30 días, AÑADE una breve instrucción de conservación al lado del nombre limpio. Ejemplo: "Espinaca (Consumir/Congelar 1ra semana)", "Pechuga de Pollo (Empacar en porciones y congelar)". Esto ayudará al usuario a no desperdiciar alimentos en compras a largo plazo.
 
 Tu tarea es:
 Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.

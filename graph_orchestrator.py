@@ -76,6 +76,7 @@ REGLAS ESTRICTAS:
    - "biweekly" (15 días): Compra quincenal. Prioriza ingredientes que se conserven al menos 2 semanas (tubérculos, granos, proteínas congelables, vegetales resistentes). Para perecederos, indica cómo congelarlos o conservarlos.
    - "monthly" (30 días): Compra mensual. Usa predominantemente ingredientes de larga duración (arroz, habichuelas secas, avena, carnes para congelar, raíces/tubérculos, enlatados saludables). SIEMPRE incluye tips breves de conservación y congelación en las recetas cuando uses perecederos.
    RECUERDA: Los PLATOS (preparaciones) deben variar cada día, pero los ALIMENTOS (ingredientes base) pueden y DEBEN repetirse durante todo el período de compra. Esto es la clave del ahorro.
+12. CONTINUIDAD TEMPORAL Y MEAL PREP: Tendrás el contexto temporal exacto de hoy (fecha, día de la semana y estación). Usa esta información de manera lógica y proactiva. Si generas planes que tocan días laborables (Lunes a Viernes), prioriza comidas rápidas de preparar o sugiere hacer sobras abundantes en la cena para usar como almuerzo al día siguiente (Meal Prep). Si toca fin de semana, puedes incluir recetas más elaboradas. Sugiere alimentos frescos propios de la estación para dar realismo y frescura.
 """
 
 REVIEWER_SYSTEM_PROMPT = """
@@ -164,6 +165,27 @@ Estos son datos críticos que debes respetar.
 {user_facts}
 ----------------------------------------------------------
 """
+
+    # --- 🕒 INYECCIÓN DE CONTEXTO TEMPORAL DINÁMICO ---
+    from datetime import datetime
+    now = datetime.now()
+    dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+    meses_es = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+    dia_str = dias[now.weekday()]
+    mes_str = meses_es[now.month - 1]
+    
+    # Estación simplificada adaptada al trópico/Hemisferio Norte
+    estacion = "Verano"
+    if now.month in [3, 4, 5]: estacion = "Primavera"
+    elif now.month in [9, 10, 11]: estacion = "Otoño"
+    elif now.month in [12, 1, 2]: estacion = "Invierno"
+
+    time_context = (
+        f"\n--- 📅 CONTEXTO TEMPORAL ACTUAL (OBLIGATORIO) ---\n"
+        f"Hoy es {dia_str}, {now.day} de {mes_str} de {now.year}. Estación promedio local: {estacion} tropical.\n"
+        f"Aplica las estrategias de Continuidad Temporal considerando que el usuario comenzará este plan en estos días.\n"
+        f"--------------------------------------------------\n"
+    )
 
     import random
     random_seed = random.randint(10000, 99999)
@@ -367,7 +389,7 @@ Estos son datos críticos que debes respetar.
         f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días.\n"
         f"IMPORTANTE: Genera opciones creativas y diferentes a planes anteriores. Semilla de generación aleatoria: {random_seed}\n\n"
         f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
-        f"{nutrition_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{variety_prompt}\n{technique_injection}\n{supplements_context}\n{grocery_duration_context}\n\n"
+        f"{nutrition_context}\n{time_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{variety_prompt}\n{technique_injection}\n{supplements_context}\n{grocery_duration_context}\n\n"
         f"{GENERATOR_SYSTEM_PROMPT}"
     )
     
