@@ -371,9 +371,14 @@ Estos son datos críticos que debes respetar.
         f"{GENERATOR_SYSTEM_PROMPT}"
     )
     
+    is_re_roll = form_data.get("_is_same_day_reroll", False)
+    # Structured Output constraints crash/hang on Gemini if temperature > 1.0 due to generation mask mismatch.
+    # We use 0.7 for standard, 0.95 for maximum variety same-day reroll.
+    base_temp = 0.95 if is_re_roll else 0.7
+    
     generator_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
-        temperature=1.0 if attempt == 1 else 1.2,  # Máxima creatividad para evitar repeticiones
+        temperature=base_temp if attempt == 1 else (base_temp + 0.1),  
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=0,
         timeout=120
@@ -745,6 +750,43 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
         except Exception as e:
             print(f"⚠️ Error recuperando comidas recientes desde db: {e}")
             
+    # 2.15 --- REGENERACIÓN DEL MISMO DÍA (RECHAZO EXPLÍCITO) ---
+    previous_meals = actual_form_data.get("previous_meals", [])
+    if previous_meals and user_id:
+        try:
+            from db import supabase
+            from datetime import datetime, timezone
+            if supabase:
+                # Comprobar si el último plan se generó HOY
+                res = supabase.table("meal_plans").select("created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+                if res.data and len(res.data) > 0:
+                    last_saved = res.data[0]["created_at"]
+                    # Handle specific supabase UTC format
+                    if last_saved.endswith("Z"): last_saved = last_saved[:-1] + "+00:00"
+                    last_saved_dt = datetime.fromisoformat(last_saved)
+                    if last_saved_dt.tzinfo is None:
+                        last_saved_dt = last_saved_dt.replace(tzinfo=timezone.utc)
+                    
+                    now_utc = datetime.now(timezone.utc)
+                    
+                    # Si el plan anterior se generó en el mismo día
+                    if last_saved_dt.date() == now_utc.date():
+                        print("🔄 [REGENERACIÓN] Usuario solicitó 'Generar Nueva Opción' el mismo día = RECHAZO del menú actual.")
+                        
+                        # Inyectamos una regla simplificada y positiva para evitar que el LLM sufra parálisis de restricciones (504 Timeout)
+                        history_context += (
+                            f"\n\n🚨 INSTRUCCIÓN DE VARIEDAD (RE-ROLL) 🚨\n"
+                            f"El usuario quiere cambiar las siguientes opciones de hoy:\n{', '.join(previous_meals)}\n"
+                            f"REGLA CREATIVA: Inventa preparaciones inéditas. Cambia el método de cocción, la combinación o el corte para sorprender al usuario con algo nuevo usando la misma lista de compras.\n"
+                            f"----------------------------------------------------------------------\n"
+                        )
+                        # Añadimos una bandera secreta para subir la temperatura del LLM
+                        actual_form_data["_is_same_day_reroll"] = True
+                    else:
+                        print("🌅 [NUEVO DÍA] Generación para un nuevo día iniciada.")
+        except Exception as e:
+            print(f"⚠️ Error validando regeneración del mismo día: {e}")
+
     # 2.2 --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
     if user_id:
         try:

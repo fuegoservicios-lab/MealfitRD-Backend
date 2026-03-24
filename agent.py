@@ -352,9 +352,40 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
 
     # ======= FORCED SHOPPING LIST INJECTION =======
     if form_data and "_force_base_proteins" in form_data:
-        unique_proteins = form_data.get("_force_base_proteins", unique_proteins)
-        unique_carbs = form_data.get("_force_base_carbs", unique_carbs)
-        forced_veg = form_data.get("_force_base_veggies", unique_veggies)
+        _forced_p = form_data.get("_force_base_proteins", unique_proteins)
+        _forced_c = form_data.get("_force_base_carbs", unique_carbs)
+        _forced_v = form_data.get("_force_base_veggies", unique_veggies)
+        
+        # --- FILTAR INGREDIENTES RECHAZADOS (EVITAR LOOP DE REVISOR MÉDICO) ---
+        _banned_strings = []
+        for pm in form_data.get("previous_meals", []):
+            _banned_strings.append(strip_accents(pm.lower()))
+        for dm in form_data.get("disliked_meals", []):
+            _banned_strings.append(strip_accents(dm.lower()))
+            
+        def _is_forced_allowed(item):
+            item_n = strip_accents(item.lower())
+            for banned in _banned_strings:
+                if item_n in banned or banned in item_n:
+                    return False
+                # Keywords fuertes
+                words = item_n.split()
+                banned_words = banned.split()
+                if "pollo" in item_n and "pollo" in banned: return False
+                if "res" in words and "res" in banned_words: return False
+                if "cerdo" in item_n and "cerdo" in banned: return False
+                if "pescado" in item_n and "pescado" in banned: return False
+                if "habichuelas" in item_n and "habichuelas" in banned: return False
+            return True
+        
+        unique_proteins = [p for p in _forced_p if _is_forced_allowed(p)]
+        if len(unique_proteins) < 3: unique_proteins = _forced_p # Fallback de seguridad
+        
+        unique_carbs = [c for c in _forced_c if _is_forced_allowed(c)]
+        if len(unique_carbs) < 3: unique_carbs = _forced_c
+        
+        forced_veg = [v for v in _forced_v if _is_forced_allowed(v)]
+        if len(forced_veg) < 6: forced_veg = _forced_v
         
         # Frutas usualmente entran como vegetales desde el prompt, las filtramos manualmente
         fruit_names_lower = [strip_accents(f.strip().lower()) for f in DOMINICAN_FRUITS]
@@ -371,10 +402,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         if extracted_fruits:
             unique_fruits = extracted_fruits
             
-        logger.info(f"🔒 [FORCE LOCK] Proteínas: {unique_proteins}")
-        logger.info(f"🔒 [FORCE LOCK] Carbos: {unique_carbs}")
-        logger.info(f"🔒 [FORCE LOCK] Vegetales: {unique_veggies}")
-        logger.info(f"🔒 [FORCE LOCK] Frutas Extraídas: {unique_fruits}")
+        logger.info(f"🔒 [FORCE LOCK + FILTRADO] Proteínas: {unique_proteins}")
+        logger.info(f"🔒 [FORCE LOCK + FILTRADO] Carbos: {unique_carbs}")
+        logger.info(f"🔒 [FORCE LOCK + FILTRADO] Vegetales: {unique_veggies}")
+        logger.info(f"🔒 [FORCE LOCK + FILTRADO] Frutas Extraídas: {unique_fruits}")
     # ==========================================================
 
     # Dedupicamos usando minúsculas normalizadas para evitar seleccionar "Huevos" y "Huevo s" en la misma corrida
