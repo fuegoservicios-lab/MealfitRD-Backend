@@ -791,7 +791,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                         forced_veggies.append(name)
                 
                 if ingredient_names:
-                    history_context += f"\n\n⚠️ RESTRICCIÓN DE INGREDIENTES (CRÍTICO): El usuario ya tiene una lista de compras vigente. DEBES crear el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes: {', '.join(ingredient_names)}. NUNCA agregues proteínas, carbohidratos o vegetales que no estén en esta lista.\n"
+                    history_context += f"\n\n⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE (CRÍTICO): El usuario ya tiene una lista de compras vigente y NO PUEDE IR AL SUPERMERCADO. DEBES crear TODO el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes: [{', '.join(ingredient_names)}]. TIENES ESTRICTAMENTE PROHIBIDO sugerir o agregar frutas, vegetales, carnes, víveres o lácteos que no estén en esta lista exacta. Si la lista solo tiene tomate, usa solo tomate (no inventes lechuga ni cebolla).\n"
                     print(f"🛒 [CONSTRAINT] Aplicando restricción de lista de compras en graph_orchestrator ({len(ingredient_names)} items).")
                     
                     if forced_proteins: actual_form_data["_force_base_proteins"] = forced_proteins

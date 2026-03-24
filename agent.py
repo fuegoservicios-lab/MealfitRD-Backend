@@ -520,9 +520,9 @@ def swap_meal(form_data: dict):
             existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
             if existing_items:
                 excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
-                ingredient_names = [item.get("name") for item in existing_items if item.get("category") not in excluded_cats]
+                ingredient_names = [item.get("name") for item in existing_items if item.get("category") not in excluded_cats and item.get("name")]
                 if ingredient_names:
-                    context_extras += f"\n    - ⚠️ RESTRICCIÓN DE INGREDIENTES (SUPERMERCADO): El usuario ya compró y tiene disponibles los siguientes ingredientes: {', '.join(ingredient_names)}. DEBES priorizar la creación de recetas usando ESTOS ingredientes. NO inventes ingredientes principales nuevos."
+                    context_extras += f"\n    - ⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE: El usuario YA COMPRÓ su comida y no puede comprar nada más. TIENES ESTRICTAMENTE PROHIBIDO sugerir frutas, vegetales, carnes, lácteos, cereales o cualquier ingrediente que no esté en esta lista exacta: [{', '.join(ingredient_names)}]. Si la lista incluye tomate y cebolla, usa SOLO tomate y cebolla, no inventes lechuga ni aguacate. La receta alternativa DEBE limitarse al 100% a lo que hay en esta lista."
                     logger.info("🛒 [CONSTRAINT] Restricción de lista de compras añadida en swap_meal (agent).")
         except Exception as check_e:
             logger.error(f"Error revisando lista de compras en swap_meal: {check_e}")
