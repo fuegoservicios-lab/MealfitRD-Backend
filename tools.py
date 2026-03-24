@@ -334,7 +334,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
             ingredient_names = [item.get("name") for item in existing_items if item.get("category") not in excluded_cats and item.get("name")]
             if ingredient_names:
-                shopping_constraint = f"\n\n⚠️ RESTRICCIÓN DE INGREDIENTES (CRÍTICO): El usuario ya hizo sus compras del supermercado para este ciclo. DEBES crear la nueva receta utilizando EXCLUSIVAMENTE (o en su inmensa mayoría) los siguientes ingredientes que ya tiene disponibles: {', '.join(ingredient_names)}. NUNCA inventes ingredientes principales (ej: proteínas o víveres) que no estén en esta lista."
+                shopping_constraint = f"\n\n⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE: El usuario YA COMPRÓ su comida y no puede comprar nada más. TIENES ESTRICTAMENTE PROHIBIDO sugerir frutas, vegetales, carnes, lácteos, cereales o cualquier ingrediente que no esté en esta lista exacta: [{', '.join(ingredient_names)}]. Si la lista incluye tomate y cebolla, usa SOLO tomate y cebolla, no inventes lechuga ni aguacate. Si creas una receta, la receta DEBE limitarse al 100% a lo que hay en esta lista o lo que sobró del plato original."
                 logger.info("🛒 [CONSTRAINT] Aplicando restricción de lista de compras en regeneración de comida.")
     except Exception as check_e:
         logger.error(f"Error revisando lista de compras para restricción: {check_e}")
