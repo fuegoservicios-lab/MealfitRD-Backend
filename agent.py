@@ -583,8 +583,11 @@ def swap_meal(form_data: dict):
             suggestions.append(f"**{suggested_veggie}** como vegetal/grasa")
         
         if suggestions:
-            context_extras += f"\n    - 💡 SUGERENCIA DE VARIEDAD: Para este swap, intenta usar {', '.join(suggestions)} (o ingredientes radicalmente diferentes al rechazado)."
-            logger.debug(f"🎲 [SWAP ANTI MODE-COLLAPSE] Sugerencias: {suggestions}")
+            if not ingredient_names:
+                context_extras += f"\n    - 💡 SUGERENCIA DE VARIEDAD: Para este swap, intenta usar {', '.join(suggestions)} (o ingredientes radicalmente diferentes al rechazado)."
+                logger.debug(f"🎲 [SWAP ANTI MODE-COLLAPSE] Sugerencias: {suggestions}")
+            else:
+                logger.debug("🛡️ [SWAP ANTI MODE-COLLAPSE] Desactivado debido a la Regla de Supermercado estricta.")
     except Exception:
         pass  # No bloquear el swap si falla la sugerencia
 
