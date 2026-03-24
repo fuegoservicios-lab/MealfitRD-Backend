@@ -332,7 +332,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         if existing_items:
             # Extract food items to constrain the AI
             excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
-            ingredient_names = [item.get("name") for item in existing_items if item.get("category") not in excluded_cats]
+            ingredient_names = [item.get("name") for item in existing_items if item.get("category") not in excluded_cats and item.get("name")]
             if ingredient_names:
                 shopping_constraint = f"\n\n⚠️ RESTRICCIÓN DE INGREDIENTES (CRÍTICO): El usuario ya hizo sus compras del supermercado para este ciclo. DEBES crear la nueva receta utilizando EXCLUSIVAMENTE (o en su inmensa mayoría) los siguientes ingredientes que ya tiene disponibles: {', '.join(ingredient_names)}. NUNCA inventes ingredientes principales (ej: proteínas o víveres) que no estén en esta lista."
                 logger.info("🛒 [CONSTRAINT] Aplicando restricción de lista de compras en regeneración de comida.")

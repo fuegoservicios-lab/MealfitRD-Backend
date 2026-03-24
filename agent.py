@@ -955,10 +955,10 @@ def execute_tools(state: ChatState):
                 try:
                     parsed_mod = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
                     if isinstance(parsed_mod, dict) and "modified_meal" in parsed_mod:
-                        from db import get_latest_meal_plan
-                        updated_plan = get_latest_meal_plan(user_id if user_id and user_id != 'guest' else session_id)
-                        if updated_plan:
-                            new_plan = updated_plan
+                        from db import get_latest_meal_plan_with_id
+                        updated_plan_record = get_latest_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
+                        if updated_plan_record and "plan_data" in updated_plan_record:
+                            new_plan = updated_plan_record["plan_data"]
                         tool_result = f"La comida fue modificada exitosamente. La nueva comida es: {parsed_mod['modified_meal'].get('name', 'Comida actualizada')}. Dile al usuario que su plan ya fue actualizado."
                 except Exception:
                     pass
