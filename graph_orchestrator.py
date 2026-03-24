@@ -62,7 +62,7 @@ REGLAS ESTRICTAS:
    - "El Toque de Fuego: [Instrucciones de cocción en sartén, horno o airfryer]"
    - "Montaje: [Instrucciones de cómo servir para que luzca apetitoso]"
 5. CUMPLE RESTRICCIONES ABSOLUTAMENTE: Si el usuario es vegetariano, tiene alergias (Ej. Lácteos), condiciones médicas (Ej. Diabetes T2) o indicó obstáculos (Ej: falta de tiempo, no sabe cocinar), el plan DEBE reflejar soluciones inmediatas a eso (comidas rápidas, sin azúcar, sin carne, etc).
-6. ESTRUCTURA: Si el usuario indicó `skipLunch: true`, NO incluyas Almuerzo, distribuye las calorías en las demás comidas y asume que comerá la comida familiar.
+6. ESTRUCTURA: Si el usuario indicó `skipLunch: true`, NO incluyas la comida de "Almuerzo" en tu JSON de respuesta. El usuario elegirá su almuerzo manualmente enviándole una foto o mensaje al Agente IA en el chat. NO intentes hacer los desayunos y cenas "más ligeros" ni distribuyas las calorías del almuerzo; el sistema ya descontó esas calorías previamente. Por tanto, debes estructurar el Desayuno, Cena y Meriendas de forma completamente normal y sustancial.
 7. VARIEDAD ESTRICTA: Revisa el historial de comidas anteriores provisto en el prompt (si lo hay) y NO REPITAS LOS MISMOS PLATOS NI NOMBRES EXACTOS DE LAS ÚLTIMAS 24-48 HORAS. Ofrécele opciones radicalmente diferentes en presentación y técnica de cocción, pero MANTENIENDO los mismos ingredientes base para ahorrar en el supermercado.
 8. PROHIBICIÓN ABSOLUTA DE RECHAZOS: Lee detenidamente el Perfil de Gustos adjunto. Si el perfil dice que el usuario odia o rechazó un ingrediente (ej. plátano, avena), está TOTALMENTE PROHIBIDO incluirlo en este plan.
 9. PESO EMOCIONAL (INTENSIDAD): Los hechos proporcionados en el contexto tienen un metadato de "intensidad" (1 a 5).
