@@ -548,20 +548,21 @@ def _categorize_item(item_name: str) -> tuple:
     return "Otros", "🛒"
 
 @tool
-def add_to_shopping_list(user_id: str, items: str) -> str:
+def add_to_shopping_list(user_id: str, items: str, overwrite: bool = False) -> str:
     """
-    Añade uno o más ingredientes/items a la lista de compras personal del usuario.
-    Usa esta herramienta cuando el usuario diga que se quedó sin algo, necesita comprar algo,
-    o pida añadir items a su lista de compras.
-    Ejemplos: 'Me quedé sin plátanos', 'Añade leche y huevos a mi lista', 'Necesito comprar arroz'.
+    Añade uno o más ingredientes/items a la lista de compras personal del usuario o la sobreescribe completamente.
+    Usa esta herramienta cuando el usuario diga que se quedó sin algo, necesita comprar algo, o pida añadir items.
+    NUEVA REGLA CRÍTICA: Si el usuario te envía una lista COMPLETA o foto diciendo "esta es mi lista de compras actual" (o variaciones como "sin contar el almuerzo"), DEBES establecer overwrite=True para REEMPLAZAR por completo su despensa por los alimentos listados.
+    Si solo te dice "añade X" o "me quedé sin Y", usa overwrite=False (el valor por defecto).
     
-    - items: string con items separados por coma, ej: 'plátanos, huevos, leche'
+    - items: string con todos los items extraídos separados por coma.
+    - overwrite: booleano (True o False).
     """
-    logger.debug(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id}: {items}")
+    logger.debug(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id} (overwrite={overwrite}): {items}")
     
     import re as _re
     MAX_ITEM_LENGTH = 100
-    MAX_ITEMS_PER_CALL = 20
+    MAX_ITEMS_PER_CALL = 40
     
     def _sanitize(text: str) -> str:
         """Elimina HTML/JS tags y limita longitud."""
@@ -573,7 +574,7 @@ def add_to_shopping_list(user_id: str, items: str) -> str:
     items_list = [i for i in items_list if i][:MAX_ITEMS_PER_CALL]
     
     if not items_list:
-        return "No se proporcionaron items válidos para añadir."
+        return "No se proporcionaron items válidos."
     
     # Normalizar a JSON struct consistente con los items auto-generados (ShoppingItemModel)
     structured_items = []
@@ -586,7 +587,7 @@ def add_to_shopping_list(user_id: str, items: str) -> str:
             "qty": ""
         })
     
-    result = add_custom_shopping_items(user_id, structured_items, source="chat")
+    result = add_custom_shopping_items(user_id, structured_items, source="chat", overwrite=overwrite)
     if result is not None:
         # Auto-deduplicar: si el usuario ya tenía "Leche" y añade "leche", se fusionan
         try:

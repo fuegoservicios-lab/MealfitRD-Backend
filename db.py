@@ -1103,12 +1103,18 @@ def get_user_shopping_lock(user_id: str) -> DistributedShoppingLock:
     LRU(1024) previene memory leaks devolviendo la misma instancia por usuario."""
     return DistributedShoppingLock(user_id)
 
-def add_custom_shopping_items(user_id: str, items: list, source: str = "manual"):
+def add_custom_shopping_items(user_id: str, items: list, source: str = "manual", overwrite: bool = False):
     """Inserta uno o más items custom a la lista de compras del usuario.
     source: 'auto' (IA auto-generados), 'chat' (añadidos vía chat), 'manual' (default/legacy)
     Dual-write: guarda JSON en item_name (legacy) + columnas estructuradas (category, display_name, qty, emoji)."""
     if not supabase or not items: return None
     import json
+    
+    if overwrite:
+        try:
+            clear_all_shopping_items(user_id)
+        except Exception as cle:
+            logger.warning(f"⚠️ Aviso: No se pudieron borrar los items viejos durante overwrite: {cle}")
     
     def _extract_fields(item):
         """Extrae campos estructurados de un item (dict, model, o string)."""
