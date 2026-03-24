@@ -163,7 +163,12 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
     # Construir el contexto del usuario basado en sus peticiones del chat
     custom_memory_context = ""
     if instructions:
-        custom_memory_context = f"\n\n--- INSTRUCCIÓN ESPECÍFICA DEL USUARIO PARA ESTE PLAN ---\nEL USUARIO PIDIÓ ESTO EXPLÍCITAMENTE, CUMPLE SU PETICIÓN A TODA COSTA:\n'{instructions}'\n------------------------------------------------------------\n"
+        custom_memory_context += f"\n\n--- INSTRUCCIÓN ESPECÍFICA DEL USUARIO PARA ESTE PLAN ---\nEL USUARIO PIDIÓ ESTO EXPLÍCITAMENTE, CUMPLE SU PETICIÓN A TODA COSTA:\n'{instructions}'\n------------------------------------------------------------\n"
+
+    # --- CONSTRICCIÓN DE LISTA DE COMPRAS MOVIDA A GRAPH_ORCHESTRATOR ---
+    # La lógica para forzar los ingredientes de la lista de compras del usuario
+    # ahora se ejecuta centralizadamente dentro de run_plan_pipeline para cubrir
+    # tanto este tool como la generación desde el dashboard.
 
     # 3. Ejecutar el pipeline multi-agente
     try:
@@ -318,6 +323,23 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # 3. Regenerar solo esa comida con Gemini
     original_cals = target_meal.get("cals", 500)
     
+    # --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
+    shopping_constraint = ""
+    try:
+        from db import get_custom_shopping_items
+        existing = get_custom_shopping_items(user_id)
+        existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
+        if existing_items:
+            # Extract food items to constrain the AI
+            excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
+            ingredient_names = [item.get("name") for item in existing_items if item.get("category") not in excluded_cats]
+            if ingredient_names:
+                shopping_constraint = f"\n\n⚠️ RESTRICCIÓN DE INGREDIENTES (CRÍTICO): El usuario ya hizo sus compras del supermercado para este ciclo. DEBES crear la nueva receta utilizando EXCLUSIVAMENTE (o en su inmensa mayoría) los siguientes ingredientes que ya tiene disponibles: {', '.join(ingredient_names)}. NUNCA inventes ingredientes principales (ej: proteínas o víveres) que no estén en esta lista."
+                logger.info("🛒 [CONSTRAINT] Aplicando restricción de lista de compras en regeneración de comida.")
+    except Exception as check_e:
+        logger.error(f"Error revisando lista de compras para restricción: {check_e}")
+    # ----------------------------------------
+    
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
@@ -325,7 +347,8 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         time=target_meal.get('time'),
         original_cals=original_cals,
         ingredients_json=json.dumps(target_meal.get('ingredients', [])),
-        changes=changes
+        changes=changes,
+        context_extras=shopping_constraint
     )
     
     modify_llm = ChatGoogleGenerativeAI(
