@@ -13,7 +13,7 @@ from db import (
     get_user_profile, update_user_health_profile, delete_user_facts_by_metadata,
     get_user_likes, get_active_rejections, get_latest_meal_plan_with_id, 
     update_meal_plan_data, add_custom_shopping_items, search_deep_memory as db_search_deep_memory,
-    log_consumed_meal as db_log_consumed_meal
+    log_consumed_meal as db_log_consumed_meal, deduct_inventory_items
 )
 from schemas import MealModel
 from prompts import PREFERENCES_AGENT_PROMPT, MODIFY_MEAL_PROMPT_TEMPLATE
@@ -264,16 +264,22 @@ def generate_new_plan_from_chat(user_id: str, instructions: str = "") -> str:
     return "DUMMY_CALL_ACTUALLY_INTERCEPTED"
 
 @tool
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0) -> str:
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None) -> str:
     """
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
     Incluye carbohidratos y grasas saludables si están disponibles.
+    NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients'. El sistema deducirá automáticamente estas cantidades de su despensa virtual/lista de compras actualizando su inventario físico en tiempo real.
     """
-    logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas)")
+    logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas). Ingredientes a deducir: {ingredients}")
     result = db_log_consumed_meal(user_id, meal_name, calories, protein, carbs, healthy_fats)
     if result is not None:
-        return f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) en tu diario."
+        msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) en tu diario."
+        if ingredients:
+            deducted = deduct_inventory_items(user_id, ingredients)
+            if deducted > 0:
+                msg += f" Adicionalmente, se actualizaron y dedujeron {deducted} ingrediente(s) de tu despensa."
+        return msg
     else:
         return "Hubo un error al intentar registrar la comida consumida. Por favor, intenta de nuevo."
 
@@ -336,6 +342,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             import json
             for item in existing_items:
                 if item.get("category") in excluded_cats:
+                    continue
+                
+                # Solo consideramos ingredientes que ya están marcados como comprados (en despensa)
+                if not item.get("is_checked", False):
                     continue
                 
                 name_val = item.get("display_name")
@@ -548,55 +558,218 @@ def _categorize_item(item_name: str) -> tuple:
     return "Otros", "🛒"
 
 @tool
-def add_to_shopping_list(user_id: str, items: str, overwrite: bool = False) -> str:
+def add_to_shopping_list(user_id: str, items: list, overwrite: bool = False, protected_meals: list = None) -> str:
     """
     Añade uno o más ingredientes/items a la lista de compras personal del usuario o la sobreescribe completamente.
     Usa esta herramienta cuando el usuario diga que se quedó sin algo, necesita comprar algo, o pida añadir items.
-    NUEVA REGLA CRÍTICA: Si el usuario te envía una lista COMPLETA o foto diciendo "esta es mi lista de compras actual" (o variaciones como "sin contar el almuerzo"), DEBES establecer overwrite=True para REEMPLAZAR por completo su despensa por los alimentos listados.
-    Si solo te dice "añade X" o "me quedé sin Y", usa overwrite=False (el valor por defecto).
     
-    - items: string con todos los items extraídos separados por coma.
+    REGLA DE SOBREESCRITURA: Si el usuario te envía una lista COMPLETA o foto diciendo "esta es mi lista actual", DEBES establecer overwrite=True para REEMPLAZAR su despensa/lista.
+    Si solo dice "añade X" o "me quedé sin Y", usa overwrite=False.
+    
+    REGLA DE INVENTARIO (is_checked):
+    Si el usuario sube una FOTO DE SU DESPENSA/NEVERA o dice "tengo exactamente esto en mi cocina", DEBES incluir `"is_checked": true` en CADA ÍTEM de la lista `items` para registrar que ya los posee en su inventario (WMS).
+    Si el usuario dice "añade esto para comprar" o "me falta pan", debes enviar `"is_checked": false` (o simplemente omitirlo).
+    Puedes enviar ambos en la misma llamada si es necesario dependiendo del ingrediente.
+    
+    - items: Lista de objetos JSON. Cada objeto tiene 'name' (nombre), 'qty' (cantidad), 'category' y opcionalmente 'is_checked' (booleano). Ej: [{"name": "Avena", "qty": "1 paquete", "category": "Cereales", "is_checked": true}].
     - overwrite: booleano (True o False).
+    - protected_meals: (Opcional) Array de strings con nombres de comidas protegidas si overwrite=True.
     """
-    logger.debug(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id} (overwrite={overwrite}): {items}")
+    logger.debug(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id} (overwrite={overwrite}, protected_meals={protected_meals}): {items}")
     
     import re as _re
+    import json
     MAX_ITEM_LENGTH = 100
-    MAX_ITEMS_PER_CALL = 40
+    MAX_ITEMS_PER_CALL = 150
     
+    # Soporte para legacy (si la IA envía un string roto o array encadenado)
+    if isinstance(items, str):
+        try:
+            items = json.loads(items.replace("'", '"'))
+        except Exception:
+            items = [{"name": i.strip(), "qty": "", "category": ""} for i in items.split(",") if i.strip()]
+    
+    if not isinstance(items, list):
+        items = [items]
+        
     def _sanitize(text: str) -> str:
         """Elimina HTML/JS tags y limita longitud."""
-        clean = _re.sub(r'<[^>]+>', '', text).strip()
+        if not text: return ""
+        clean = _re.sub(r'<[^>]+>', '', str(text)).strip()
         clean = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean)  # control chars
         return clean[:MAX_ITEM_LENGTH]
     
-    items_list = [_sanitize(item) for item in items.split(",") if item.strip()]
-    items_list = [i for i in items_list if i][:MAX_ITEMS_PER_CALL]
-    
-    if not items_list:
-        return "No se proporcionaron items válidos."
-    
-    # Normalizar a JSON struct consistente con los items auto-generados (ShoppingItemModel)
     structured_items = []
-    for item_name in items_list:
-        cat, emoji = _categorize_item(item_name)
+    items_names = []
+    
+    was_truncated = len(items) > MAX_ITEMS_PER_CALL
+    
+    for item in items[:MAX_ITEMS_PER_CALL]:
+        is_checked_val = False
+        if isinstance(item, dict):
+            raw_name = item.get("name", "")
+            raw_qty = item.get("qty", "")
+            raw_cat = item.get("category", "")
+            check_raw = item.get("is_checked", False)
+            is_checked_val = (str(check_raw).lower() == 'true') if isinstance(check_raw, str) else bool(check_raw)
+        elif isinstance(item, str):
+            raw_name = item
+            raw_qty = ""
+            raw_cat = ""
+        else:
+            continue
+            
+        name_clean = _sanitize(raw_name).capitalize()
+        qty_clean = _sanitize(raw_qty)
+        cat_clean = _sanitize(raw_cat).strip().title()
+        
+        if not name_clean: continue
+        
+        # Fallback local categorizer
+        cat, emoji = _categorize_item(name_clean)
+        
+        # Si el LLM proveyó una categoría inteligente, intentamos empatarla a nuestro sistema
+        if cat_clean and cat_clean.lower() != "otros" and cat == "Otros":
+            ai_matched = False
+            for (key_cat, key_emj) in _CATEGORY_KEYWORDS.keys():
+                if cat_clean.lower() in key_cat.lower() or key_cat.lower() in cat_clean.lower():
+                    cat = key_cat
+                    emoji = key_emj
+                    ai_matched = True
+                    break
+            
+            if not ai_matched:
+                cat = cat_clean
+                emoji = "✨"
+                
         structured_items.append({
             "category": cat,
             "emoji": emoji,
-            "name": item_name.capitalize(),
-            "qty": ""
+            "name": name_clean,
+            "qty": qty_clean,
+            "is_checked": is_checked_val
         })
+        items_names.append(name_clean)
+    
+    if overwrite:
+        try:
+            from db import get_latest_meal_plan
+            plan_data = get_latest_meal_plan(user_id)
+            if plan_data:
+                protected_ingredients = set()
+                
+                if not protected_meals:
+                    protected_list = ["almuerzo", "comida", "lunch", "comida principal"]
+                else:
+                    protected_list = [m.lower().strip() for m in protected_meals]
+                
+                # Soportar esquema nuevo (V2) donde plan_data tiene "days" (lista)
+                if "days" in plan_data and isinstance(plan_data["days"], list):
+                    for day_data in plan_data["days"]:
+                        if isinstance(day_data, dict):
+                            for meal_info in day_data.get("meals", []):
+                                meal_type = meal_info.get("meal", "")
+                                if isinstance(meal_info, dict) and meal_type and meal_type.lower() in protected_list:
+                                    for ing in meal_info.get("ingredients", []):
+                                        protected_ingredients.add(ing)
+                else:
+                    # Fallback para esquema viejo (V1)
+                    for day_key, meals in plan_data.items():
+                        if isinstance(meals, dict):
+                            for meal_name, meal_info in meals.items():
+                                if isinstance(meal_info, dict) and meal_name.lower() in protected_list:
+                                    for ing in meal_info.get("ingredients", []):
+                                        protected_ingredients.add(ing)
+                
+                def _parse_ingredient_local(raw: str) -> tuple:
+                    import re
+                    raw = raw.strip()
+                    raw = re.sub(r'^(media|medio)\b', '0.5', raw, flags=re.IGNORECASE)
+                    raw = re.sub(r'^(un|una)\b', '1', raw, flags=re.IGNORECASE)
+                    raw = re.sub(r'^dos\b', '2', raw, flags=re.IGNORECASE)
+                    raw = re.sub(r'^tres\b', '3', raw, flags=re.IGNORECASE)
+                    raw = re.sub(r'^cuatro\b', '4', raw, flags=re.IGNORECASE)
+                    raw = re.sub(r'^cinco\b', '5', raw, flags=re.IGNORECASE)
+                    
+                    unit_map = {
+                        "tazas": "taza", "taza": "taza",
+                        "cucharadas": "cda", "cucharada": "cda", "cdas": "cda", "cda": "cda",
+                        "cucharaditas": "cdita", "cucharadita": "cdita", "cditas": "cdita", "cdita": "cdita",
+                        "onzas": "oz", "onza": "oz", "oz": "oz",
+                        "libras": "lb", "libra": "lb", "lbs": "lb", "lb": "lb",
+                        "gramos": "g", "gramo": "g", "gr": "g", "g": "g",
+                        "mililitros": "ml", "mililitro": "ml", "ml": "ml",
+                        "litros": "lt", "litro": "lt", "lts": "lt", "lt": "lt", "l": "lt",
+                        "rebanadas": "rebanada", "rebanada": "rebanada",
+                        "lonchas": "loncha", "loncha": "loncha",
+                        "porciones": "porcion", "porcion": "porcion",
+                        "dientes": "diente", "diente": "diente",
+                        "paquetes": "paquete", "paquete": "paquete",
+                        "unidades": "unidad", "unidad": "unidad",
+                        "latas": "lata", "lata": "lata",
+                        "vasos": "vaso", "vaso": "vaso",
+                        "puñados": "puñado", "puñado": "puñado",
+                        "piezas": "pieza", "pieza": "pieza",
+                        "pizcas": "pizca", "pizca": "pizca",
+                        "hojas": "hoja", "hoja": "hoja",
+                        "tallos": "tallo", "tallo": "tallo",
+                    }
+                    
+                    units_pattern = r"(tazas?|cucharadas?|cdas?|cucharaditas?|cditas?|onzas?|oz|libras?|lbs?|gramos?|gr|g|mililitros?|ml|litros?|lts?|l|rebanadas?|lonchas?|porciones?|dientes?|paquetes?|unidades?|latas?|vasos?|puñados?|piezas?|pizcas?|hojas?|tallos?)"
+                    pattern = r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(?:' + units_pattern + r'\b\s*(?:de\s+)?)?(.+)$'
+                    match = re.match(pattern, raw, re.IGNORECASE)
+                    
+                    if match:
+                        num_str = match.group(1).replace(',', '.').strip()
+                        raw_unit = match.group(2)
+                        unit = ""
+                        if raw_unit:
+                            unit = unit_map.get(raw_unit.lower(), raw_unit.lower())
+                        name = match.group(3).strip()
+                        return num_str, unit, name
+                    return "", "", raw
+
+                existing_names = set(item["name"].lower() for item in structured_items)
+                
+                for ing in protected_ingredients:
+                    num_str, unit, name_raw = _parse_ingredient_local(ing)
+                    
+                    if num_str or unit:
+                        qty = _sanitize(f"{num_str} {unit}".strip())
+                        name = _sanitize(name_raw).capitalize()
+                    else:
+                        qty = ""
+                        name = _sanitize(ing).capitalize()
+                        
+                    if name.lower() not in existing_names:
+                        cat, emoji = _categorize_item(name)
+                        structured_items.append({
+                            "category": cat,
+                            "emoji": emoji,
+                            "name": name,
+                            "qty": qty
+                        })
+                        items_names.append(name)
+        except Exception as e:
+            logger.error(f"Error extrayendo comidas protegidas de plan para shopping list (overwrite): {e}")
+
+    if not structured_items:
+        return "No se proporcionaron items válidos."
     
     result = add_custom_shopping_items(user_id, structured_items, source="chat", overwrite=overwrite)
     if result is not None:
-        # Auto-deduplicar: si el usuario ya tenía "Leche" y añade "leche", se fusionan
+        # Auto-deduplicar en segundo plano (Fire-and-forget) para no bloquear el Agent
         try:
             from db import deduplicate_shopping_items
-            deduplicate_shopping_items(user_id)
+            import threading
+            threading.Thread(target=deduplicate_shopping_items, args=(user_id,), daemon=True).start()
         except Exception:
             pass  # No bloquear la respuesta si falla la dedup
-        items_formatted = ", ".join(items_list)
-        return f"¡Éxito! Se añadieron {len(items_list)} item(s) a tu lista de compras: {items_formatted}."
+        items_formatted = ", ".join(items_names)
+        msg = f"¡Éxito! Se añadieron {len(structured_items)} item(s) a tu lista de compras: {items_formatted}."
+        if was_truncated:
+            msg += f"\n(Nota: La lista original excedía el límite, por lo que insertamos solo los primeros {MAX_ITEMS_PER_CALL} productos)"
+        return msg
     else:
         return "Hubo un error al añadir los items a la lista de compras. Intenta de nuevo."
 
@@ -633,5 +806,86 @@ def search_deep_memory(user_id: str, query: str) -> str:
     
     return "\n\n".join(formatted)
 
+# ============================================================
+# TOOL: Eliminar de Lista de Compras
+# ============================================================
+
+@tool
+def remove_from_shopping_list(user_id: str, item_names: list) -> str:
+    """
+    Elimina uno o más ingredientes específicos de la lista de compras del usuario.
+    Usa esta herramienta cuando el usuario pida explícitamente quitar o remover algo de su lista (ej: "quita la manzana").
+    No uses overwrite=True en add_to_shopping_list si el usuario solo pidió quitar un par de items.
+    
+    Parámetros:
+    - user_id: ID del usuario
+    - item_names: Lista de strings con los nombres a borrar (ej: ["manzana", "leche descremada"]).
+    """
+    if not item_names or not isinstance(item_names, list):
+        return "No se ha especificado qué elementos borrar."
+        
+    logger.info(f"🗑️ [TOOL] Intentando eliminar {len(item_names)} items de la lista de compras: {item_names}")
+    
+    try:
+        from db import get_custom_shopping_items
+        # Obtener los items actuales para buscar coincidencias
+        current = get_custom_shopping_items(user_id, limit=500)
+        items_db = current.get("data", [])
+        
+        if not items_db:
+            return "La lista de compras ya está vacía."
+            
+        import unicodedata
+        import json as _json
+        import re
+
+        def _norm(text: str) -> str:
+            if not text: return ""
+            nfkd = unicodedata.normalize('NFKD', str(text).lower().strip())
+            return re.sub(r'[\s+]', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
+            
+        targets = [_norm(t) for t in item_names if t]
+        if not targets:
+            return "Nombres inválidos."
+            
+        ids_to_del = set()
+        removed_names = set()
+        
+        for row in items_db:
+            name = row.get("display_name", "")
+            if not name:
+                raw = row.get("item_name", "")
+                if raw.startswith("{"):
+                    try:
+                        name = _json.loads(raw).get("name", raw)
+                    except:
+                        name = raw
+                else:
+                    name = raw
+            
+            norm_name = _norm(name)
+            
+            # Matchear si el target es una palabra completa dentro del nombre en DB o viceversa
+            for t in targets:
+                # Usa \b con plurales opcionales para que "habichuela" borre "habichuelas"
+                if re.search(r'\b' + re.escape(t) + r'(s|es)?\b', norm_name) or re.search(r'\b' + re.escape(norm_name) + r'(s|es)?\b', t):
+                    ids_to_del.add(row["id"])
+                    removed_names.add(name)
+                    break
+                    
+        if not ids_to_del:
+            return f"No encontré ninguno de estos ingredientes ({', '.join(item_names)}) en tu lista activa."
+            
+        # Ejecutar borrado usando el supabase global
+        global supabase
+        supabase.table("custom_shopping_items").delete().in_("id", list(ids_to_del)).execute()
+        
+        items_formatted = ", ".join(removed_names)
+        return f"¡Éxito! Eliminé {len(ids_to_del)} item(s) de tu lista: {items_formatted}."
+        
+    except Exception as e:
+        logger.error(f"Error en remove_from_shopping_list: {e}")
+        return f"Hubo un error al intentar borrar los items. Detalle: {e}"
+
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, add_to_shopping_list, search_deep_memory]
+agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, add_to_shopping_list, remove_from_shopping_list, search_deep_memory]

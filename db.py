@@ -1131,7 +1131,8 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual",
             "category": d.get("category", ""),
             "display_name": d.get("name", ""),
             "qty": d.get("qty", ""),
-            "emoji": d.get("emoji", "")
+            "emoji": d.get("emoji", ""),
+            "is_checked": d.get("is_checked", False)
         }
         return item_name_json, structured
     
@@ -1148,8 +1149,12 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual",
                 "category": fields["category"],
                 "display_name": fields["display_name"],
                 "qty": fields["qty"],
-                "emoji": fields["emoji"]
+                "emoji": fields["emoji"],
+                "is_checked": fields["is_checked"]
             }
+            if fields["is_checked"]:
+                from datetime import datetime, timezone
+                row["checked_at"] = datetime.now(timezone.utc).isoformat()
             rows.append(row)
                 
         if rows:
@@ -1387,27 +1392,6 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
         import unicodedata
         nfkd = unicodedata.normalize('NFKD', text.lower().strip())
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
-    
-    def _extract_number(qty_str: str):
-        """Extrae número y unidad de una cantidad (ej: '2 lb', '1 1/2 taza' → (1.5, 'taza'))."""
-        if not qty_str: return None, ""
-        match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(.*)', qty_str.strip())
-        if match:
-            num_str = match.group(1).replace(',', '.').strip()
-            unit_str = match.group(2).strip()
-            try:
-                if ' ' in num_str or '-' in num_str:
-                    sep = ' ' if ' ' in num_str else '-'
-                    whole, frac = num_str.split(sep)
-                    num, den = frac.split('/')
-                    return float(whole) + (float(num) / float(den)), unit_str
-                elif '/' in num_str:
-                    num, den = num_str.split('/')
-                    return float(num) / float(den), unit_str
-                else:
-                    return float(num_str), unit_str
-            except (ValueError, ZeroDivisionError):
-                return None, qty_str
         return None, qty_str
     
     # Agrupar por nombre normalizado
@@ -1435,31 +1419,39 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
         groups[key].append({"item": item, "name": name})
     
     ids_to_delete = []
-    ids_to_update = {}  # id -> {new_qty, merged_info}
+    ids_to_update = {}  # id -> {updates}
     merged_info = []
     
+    # ===== FASE 1: Deduplicación exacta/regex =====
+    unique_survivors = []
+    
     for key, group in groups.items():
-        if len(group) < 2:
-            continue  # No hay duplicados
-        
         # El primer item es el más reciente (ordenamos por created_at desc)
         keeper = group[0]
         duplicates = group[1:]
         
         # Intentar sumar cantidades
         keeper_qty_str = keeper["item"].get("qty", "")
-        keeper_num, keeper_unit = _extract_number(keeper_qty_str)
+        keeper_name = keeper["name"]
+        keeper_num, keeper_unit, _ = parse_ingredient_qty(f"{keeper_qty_str} {keeper_name}")
         total = keeper_num
         can_sum = keeper_num is not None
         
+        # Si no podemos sumar matemáticamente, concatenamos strings
+        concatenated_qtys = []
+        if keeper_qty_str:
+            concatenated_qtys.append(keeper_qty_str)
+            
         for dup in duplicates:
             dup_qty_str = dup["item"].get("qty", "")
-            dup_num, dup_unit = _extract_number(dup_qty_str)
+            dup_num, dup_unit, _ = parse_ingredient_qty(f"{dup_qty_str} {dup['name']}")
             
             if can_sum and dup_num is not None and _normalize(dup_unit) == _normalize(keeper_unit):
                 total += dup_num
             else:
                 can_sum = False
+                if dup_qty_str and dup_qty_str not in concatenated_qtys:
+                    concatenated_qtys.append(dup_qty_str)
             
             ids_to_delete.append(dup["item"]["id"])
             
@@ -1467,17 +1459,96 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
             if dup["item"].get("is_checked") and not keeper["item"].get("is_checked"):
                 keeper["item"]["is_checked"] = True
         
-        # Actualizar cantidad del keeper si pudimos sumar
-        if can_sum and total is not None and total != keeper_num:
-            # Formatear: si es entero, sin decimales
-            total_str = str(int(total)) if total == int(total) else f"{total:.1f}"
-            new_qty = f"{total_str} {keeper_unit}".strip()
-            ids_to_update[keeper["item"]["id"]] = new_qty
-            merged_info.append(f"{keeper['name']}: {new_qty}")
+        # Actualizar cantidad del keeper
+        update_payload = {}
+        if can_sum and total is not None:
+            new_qty = format_qty(total, keeper_unit)
+            if new_qty != keeper_qty_str:
+                keeper["item"]["qty"] = new_qty
+                update_payload["qty"] = new_qty
+                if len(duplicates) > 0:
+                    merged_info.append(f"{keeper_name}: {new_qty}")
+        elif not can_sum and len(concatenated_qtys) > 1:
+            # Concatenar como '1 lb + 2 unidades'
+            new_qty = " + ".join(filter(bool, concatenated_qtys))
+            if new_qty != keeper_qty_str:
+                keeper["item"]["qty"] = new_qty
+                update_payload["qty"] = new_qty
+                merged_info.append(f"{keeper_name}: {new_qty} (texto combinado)")
         elif len(duplicates) > 0:
-            merged_info.append(f"{keeper['name']}: {len(duplicates)} duplicados removidos")
+            merged_info.append(f"{keeper_name}: {len(duplicates)} duplicados removidos sin sumar")
+            
+        if keeper["item"].get("is_checked"):
+            update_payload["is_checked"] = True
+            
+        if update_payload:
+            ids_to_update[keeper["item"]["id"]] = update_payload
+            
+        unique_survivors.append(keeper)
+        
+    # ===== FASE 2: Deduplicación Semántica (LLM) =====
+    try:
+        # Extraer items sobrevivientes a la fase 1 (que no están ya marcados para borrar)
+        # Filtramos possible_survivors asegurando que su ID no esté en ids_to_delete
+        final_survivors = [s for s in unique_survivors if s["item"]["id"] not in ids_to_delete]
+        if len(final_survivors) > 1:
+            from agent import semantic_merge_items
+            clusters = semantic_merge_items(final_survivors)
+            
+            for cluster in clusters:
+                c_name = cluster.get("merged_name")
+                c_qty = cluster.get("merged_qty")
+                c_ids = cluster.get("item_ids_to_merge", [])
+                
+                # Ignorar si no hay al menos 2 para mergear
+                if not c_name or not c_qty or len(c_ids) < 2:
+                    continue
+                
+                # Encontrar cuál de estos IDs dejaremos vivo (el primero que encontremos vigente)
+                valid_items = [s for s in final_survivors if s["item"]["id"] in c_ids]
+                if len(valid_items) < 2:
+                    continue
+                    
+                semantic_keeper = valid_items[0]
+                keeper_id = semantic_keeper["item"]["id"]
+                semantic_dups = valid_items[1:]
+                
+                # Configurar el keeper
+                update_payload = {"display_name": c_name, "qty": c_qty}
+                semantic_keeper["name"] = c_name
+                semantic_keeper["item"]["display_name"] = c_name
+                semantic_keeper["item"]["qty"] = c_qty
+                
+                has_checked = semantic_keeper["item"].get("is_checked", False)
+                
+                # Borrar los duplicados
+                for dup in semantic_dups:
+                    dup_id = dup["item"]["id"]
+                    if dup_id not in ids_to_delete:
+                        ids_to_delete.append(dup_id)
+                    
+                    if dup["item"].get("is_checked"):
+                        has_checked = True
+                        
+                    # Purgar de updates pendientes de fase 1
+                    if dup_id in ids_to_update:
+                        del ids_to_update[dup_id]
+                        
+                if has_checked:
+                    update_payload["is_checked"] = True
+                    semantic_keeper["item"]["is_checked"] = True
+                    
+                merged_info.append(f"{c_name} (IA Semántica): {c_qty} (eliminó {len(semantic_dups)} variaciones)")
+                
+                if keeper_id in ids_to_update:
+                    ids_to_update[keeper_id].update(update_payload)
+                else:
+                    ids_to_update[keeper_id] = update_payload
+                    
+    except Exception as e:
+        logger.error(f"⚠️ [DEDUP] Error en fase semántica, ignorando: {e}")
     
-    if not ids_to_delete:
+    if not ids_to_delete and not ids_to_update:
         return {"removed": 0, "merged": []}
     
     # Ejecutar deletes y updates en batch (reducir N+1 queries)
@@ -1488,19 +1559,13 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
             chunk = ids_to_delete[i:i + CHUNK_SIZE]
             supabase.table("custom_shopping_items").delete().in_("id", chunk).execute()
         
-        # 🚀 Batch UPDATE: agrupar por qty para reducir queries individuales
-        # En vez de N updates (1 por item), agrupamos items con la misma qty en 1 sola query.
+        # 🚀 UPDATEs serializados (en vez de batch complex porque enviamos múltiples columnas)
         if ids_to_update:
-            from collections import defaultdict
-            qty_groups = defaultdict(list)  # qty_value → [item_ids]
-            for item_id, new_qty in ids_to_update.items():
-                qty_groups[new_qty].append(item_id)
-            
-            for qty_value, item_ids in qty_groups.items():
-                if len(item_ids) == 1:
-                    supabase.table("custom_shopping_items").update({"qty": qty_value}).eq("id", item_ids[0]).execute()
-                else:
-                    supabase.table("custom_shopping_items").update({"qty": qty_value}).in_("id", item_ids).execute()
+            for item_id, payload in ids_to_update.items():
+                if "is_checked" in payload:
+                    from datetime import datetime, timezone
+                    payload["checked_at"] = datetime.now(timezone.utc).isoformat()
+                supabase.table("custom_shopping_items").update(payload).eq("id", item_id).execute()
         
         logger.debug(f"🧹 [DEDUP] Eliminados {len(ids_to_delete)} duplicados, {len(ids_to_update)} cantidades actualizadas")
         return {"removed": len(ids_to_delete), "merged": merged_info}
@@ -2127,3 +2192,220 @@ def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
     except Exception as e:
         logger.error(f"⚠️ [DB] Error obteniendo diccionario de frecuencias: {e}")
         return {}
+
+
+def parse_ingredient_qty(raw: str):
+    """Extrae cantidad (float), unidad y nombre de un ingrediente."""
+    import re, unicodedata
+    raw = raw.strip()
+    
+    # Mapeo numérico básico
+    raw = re.sub(r'^(media|medio)\b', '0.5', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'^(un|una)\b', '1', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'^dos\b', '2', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'^tres\b', '3', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'^cuatro\b', '4', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'^cinco\b', '5', raw, flags=re.IGNORECASE)
+    
+    unit_map = {
+        "tazas": "taza", "taza": "taza",
+        "cucharadas": "cda", "cucharada": "cda", "cdas": "cda", "cda": "cda",
+        "cucharaditas": "cdita", "cucharadita": "cdita", "cditas": "cdita", "cdita": "cdita",
+        "onzas": "oz", "onza": "oz", "oz": "oz",
+        "libras": "lb", "libra": "lb", "lbs": "lb", "lb": "lb",
+        "gramos": "g", "gramo": "g", "gr": "g", "g": "g",
+        "mililitros": "ml", "mililitro": "ml", "ml": "ml",
+        "litros": "lt", "litro": "lt", "lts": "lt", "lt": "lt", "l": "lt",
+        "rebanadas": "rebanada", "rebanada": "rebanada",
+        "lonchas": "loncha", "loncha": "loncha",
+        "porciones": "porcion", "porcion": "porcion",
+        "dientes": "diente", "diente": "diente",
+        "paquetes": "paquete", "paquete": "paquete",
+        "unidades": "unidad", "unidad": "unidad",
+        "latas": "lata", "lata": "lata",
+        "vasos": "vaso", "vaso": "vaso",
+        "puñados": "puñado", "puñado": "puñado",
+        "piezas": "pieza", "pieza": "pieza",
+        "pizcas": "pizca", "pizca": "pizca",
+        "hojas": "hoja", "hoja": "hoja",
+        "tallos": "tallo", "tallo": "tallo",
+    }
+    
+    units_pattern = r"(tazas?|cucharadas?|cdas?|cucharaditas?|cditas?|onzas?|oz|libras?|lbs?|gramos?|gr|g|mililitros?|ml|litros?|lts?|l|rebanadas?|lonchas?|porciones?|dientes?|paquetes?|unidades?|latas?|vasos?|puñados?|piezas?|pizcas?|hojas?|tallos?)"
+    
+    # Captura: 1(Número) 2(Unidad opcional) 3(Nombre)
+    pattern = r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(?:' + units_pattern + r'\b\s*(?:de\s+)?)?(.+)$'
+    match = re.match(pattern, raw, re.IGNORECASE)
+    
+    if match:
+        num_str = match.group(1).replace(',', '.').strip()
+        raw_unit = match.group(2)
+        unit = unit_map.get(raw_unit.lower(), raw_unit.lower()) if raw_unit else ""
+        name = match.group(3).strip()
+        
+        try:
+            if ' ' in num_str or '-' in num_str:
+                sep = ' ' if ' ' in num_str else '-'
+                whole, frac = num_str.split(sep)
+                num_part, den = frac.split('/')
+                num = float(float(whole) if whole else 0.0) + (float(num_part) / float(den))
+            elif '/' in num_str:
+                numerator, denominator = num_str.split('/')
+                num = float(numerator) / float(denominator)
+            else:
+                num = float(num_str)
+                
+            # --- Estandarización a Métrica Base ---
+            if unit in ["lb", "lbs"]:
+                num *= 453.592
+                unit = "g"
+            elif unit in ["oz", "onzas", "onza"]:
+                num *= 28.3495
+                unit = "g"
+            elif unit == "kg":
+                num *= 1000.0
+                unit = "g"
+            elif unit in ["taza", "tazas"]:
+                num *= 240.0
+                unit = "ml"
+            elif unit in ["cda", "cdas", "cucharada", "cucharadas"]:
+                num *= 15.0
+                unit = "ml"
+            elif unit in ["cdita", "cditas", "cucharadita", "cucharaditas"]:
+                num *= 5.0
+                unit = "ml"
+            elif unit in ["lt", "lts", "litro", "litros"]:
+                num *= 1000.0
+                unit = "ml"
+
+            return num, unit, name
+        except (ValueError, ZeroDivisionError):
+            return None, "", raw
+    return None, "", raw
+
+def format_qty(qty: float, unit: str) -> str:
+    """Aplica pretty-formatting convirtiendo unidades base largas (g, ml) a legibles (kg, lt)."""
+    if not unit:
+        return str(int(qty)) if qty == int(qty) else f"{qty:.2f}".rstrip('0').rstrip('.')
+        
+    if unit == "g":
+        if qty >= 1000:
+            val = qty / 1000.0
+            val_str = str(int(val)) if val == int(val) else f"{val:.2f}".rstrip('0').rstrip('.')
+            return f"{val_str} kg"
+        return f"{int(round(qty))} g"
+        
+    if unit == "ml":
+        if qty >= 1000:
+            val = qty / 1000.0
+            val_str = str(int(val)) if val == int(val) else f"{val:.2f}".rstrip('0').rstrip('.')
+            return f"{val_str} lt"
+        return f"{int(round(qty))} ml"
+        
+    qty_str = str(int(qty)) if qty == int(qty) else f"{qty:.2f}".rstrip('0').rstrip('.')
+    return f"{qty_str} {unit}".strip()
+
+
+def deduct_inventory_items(user_id: str, consumed_ingredients: list) -> int:
+    """Resta ingredientes consumidos de la lista de compras/despensa (is_checked=True)."""
+    if not supabase or not consumed_ingredients or user_id == "guest": 
+        return 0
+        
+    logger.info(f"📦 [WMS] Buscando ítems en despensa para deducir {len(consumed_ingredients)} ingredientes consumidos...")
+    try:
+        import unicodedata
+        import re
+        import json
+        
+        def _normalize(text: str) -> str:
+            if not text: return ""
+            nfkd = unicodedata.normalize('NFKD', str(text).lower().strip())
+            return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
+            
+        # 1. Obtener los ítems del inventario actual (solo los que están "comprados" -> en casa)
+        res = supabase.table("custom_shopping_items").select("*").eq("user_id", user_id).eq("is_checked", True).execute()
+        inventory = res.data if res.data else []
+        
+        if not inventory:
+            logger.info("📦 [WMS] El usuario no tiene ingredientes marcados como comprados en la despensa.")
+            return 0
+            
+        # Mapa para búsqueda rápida: nombre normalizado -> list de items en BD
+        normalized_inventory = {}
+        for row in inventory:
+            name_val = row.get("display_name") or row.get("name")
+            if not name_val:
+                try:
+                    parsed = json.loads(row.get("item_name", "{}"))
+                    name_val = parsed.get("name") if isinstance(parsed, dict) else str(row.get("item_name", ""))
+                except Exception:
+                    name_val = str(row.get("item_name", ""))
+                    
+            norm_name = _normalize(name_val)
+            if norm_name not in normalized_inventory:
+                normalized_inventory[norm_name] = []
+            normalized_inventory[norm_name].append(row)
+            
+        items_to_delete = []
+        items_to_update = []
+        deducted_count = 0
+        
+        # 2. Procesar cada ingrediente consumido
+        for consumed_raw in consumed_ingredients:
+            if not isinstance(consumed_raw, str) or not consumed_raw.strip():
+                continue
+                
+            cons_num, cons_unit, cons_name = parse_ingredient_qty(consumed_raw)
+            if cons_num is None: 
+                continue
+                
+            norm_cons_name = _normalize(cons_name)
+            
+            # Buscar coincidencia exacta por nombre en la despensa
+            if norm_cons_name in normalized_inventory:
+                candidates = normalized_inventory[norm_cons_name]
+                for candidate in candidates:
+                    # Traer cantidad del inventario
+                    inv_raw = candidate.get("qty", "")
+                    if not inv_raw:
+                        continue
+                        
+                    # Extraer unidad y valor de lo que hay en BD (ej. "3 taza")
+                    inv_num, inv_unit, _ = parse_ingredient_qty(f"{inv_raw} {norm_cons_name}")
+                    if inv_num is None:
+                        continue
+                        
+                    # Si la unidad combinada coincide lógicamente
+                    if (cons_unit == inv_unit) or (not cons_unit and not inv_unit):
+                        new_qty = float(inv_num) - float(cons_num)
+                        
+                        if new_qty <= 0.05:
+                            items_to_delete.append(candidate["id"])
+                            logger.info(f"🗑️ [WMS] Agotado de despensa: {cons_name} (se comieron {cons_num} {cons_unit})")
+                        else:
+                            new_qty_label = format_qty(new_qty, inv_unit)
+                            items_to_update.append({
+                                "id": candidate["id"],
+                                "qty": new_qty_label
+                            })
+                            logger.info(f"📉 [WMS] Dedcido en despensa: Quedan {new_qty_label} de {cons_name} (se comieron {cons_num} {cons_unit})")
+                            
+                        # Actualizamos el elemento en el diccionario en memoria para no seguir descontándole el mismo plato si hay duplicados
+                        candidates.remove(candidate)
+                        deducted_count += 1
+                        break # Ya dedujimos de este match exitoso
+                        
+        # 3. Ejecutar transacciones SQL
+        if items_to_delete:
+            supabase.table("custom_shopping_items").delete().in_("id", items_to_delete).execute()
+            
+        for update_item in items_to_update:
+            supabase.table("custom_shopping_items").update({"qty": update_item["qty"]}).eq("id", update_item["id"]).execute()
+            
+        if deducted_count > 0:
+            logger.info(f"✅ [WMS] Se dedujeron con éxito {deducted_count} ingredientes consumidos del almacenamiento del usuario.")
+        return deducted_count
+        
+    except Exception as e:
+        logger.error(f"⚠️ [WMS] Error en deduct_inventory_items: {e}")
+        return 0

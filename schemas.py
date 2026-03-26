@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 class MacrosModel(BaseModel):
     protein: str = Field(description="Gramos de proteína totales, ej: '150g'")
@@ -36,7 +36,7 @@ class PlanModel(BaseModel):
     days: List[DailyPlanModel] = Field(description="Lista de 3 OPCIONES DIARIAS INTERCAMBIABLES (plantillas de un mismo día) con comidas variadas")
 
 class ShoppingItemModel(BaseModel):
-    category: str = Field(description="Nombre de la categoría principal, Ej: 'Carnes', 'Frutas y Verduras'")
+    category: Literal["Frutas y Verduras", "Carnes y Pescados", "Lácteos y Huevos", "Despensa", "Condimentos y Especias", "Aceites y Grasas", "Bebidas", "Snacks y Dulces", "Enlatados y Conservas", "Panadería", "Otros"] = Field(description="Categoría estricta del supermercado para organizar el ingrediente.")
     emoji: str = Field(description="Un emoji representativo de la categoría, Ej: '🥩', '🥬'")
     name: str = Field(description="Nombre del ingrediente o producto, Ej: 'Pechuga de pollo'")
     qty_7: str = Field(description="Cantidad redondeada para 7 DÍAS de compras, Ej: '1/2 Libra', '1 Unidad'")
@@ -45,3 +45,11 @@ class ShoppingItemModel(BaseModel):
 
 class ShoppingListModel(BaseModel):
     items: List[ShoppingItemModel] = Field(description="Lista de ingredientes parseados y estructurados individualmente.")
+
+class DedupCluster(BaseModel):
+    merged_name: str = Field(description="Nombre canónico y descriptivo para agrupar los ingredientes fusionados")
+    merged_qty: str = Field(description="Cantidad total unificada (suma matemática de cantidades si estaban en unidades compatibles, sino concatenación)")
+    item_ids_to_merge: List[str] = Field(description="Lista EXACTA de los IDs (UUID) de los ítems que deben fusionarse en este grupo")
+
+class SemanticDedupResult(BaseModel):
+    clusters: List[DedupCluster] = Field(description="Agrupaciones semánticas detectadas (ignorar ítems que no tienen duplicados semánticos)")

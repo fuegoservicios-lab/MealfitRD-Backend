@@ -31,13 +31,13 @@ from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, ShoppingL
 from prompts import (
     DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE, 
     AUTO_SHOPPING_LIST_PROMPT, TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT,
-    CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE
+    CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE, SEMANTIC_DEDUP_PROMPT
 )
 
 from tools import (
     update_form_field, generate_new_plan_from_chat,
     log_consumed_meal, modify_single_meal,
-    add_to_shopping_list, search_deep_memory, agent_tools, analyze_preferences_agent,
+    add_to_shopping_list, remove_from_shopping_list, search_deep_memory, agent_tools, analyze_preferences_agent,
     execute_generate_new_plan, execute_modify_single_meal
 )
 
@@ -557,6 +557,10 @@ def swap_meal(form_data: dict):
                     if item.get("category") in excluded_cats:
                         continue
                     
+                    # Solo consideramos ingredientes que ya están marcados como comprados (en despensa)
+                    if not item.get("is_checked", False):
+                        continue
+                    
                     name_val = item.get("display_name")
                     if not name_val:
                         i_name = item.get("item_name")
@@ -698,12 +702,55 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
     def _parse_ingredient(raw: str) -> tuple:
         raw = raw.strip()
-        # Captura cualquier número inicial (ej: "1", "1.5", "1 1/2", "1/2", "1,5")
-        match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(.+)$', raw, re.IGNORECASE)
+        
+        # Mapeo de palabras numéricas a dígitos para que el regex las detecte
+        raw = re.sub(r'^(media|medio)\b', '0.5', raw, flags=re.IGNORECASE)
+        raw = re.sub(r'^(un|una)\b', '1', raw, flags=re.IGNORECASE)
+        raw = re.sub(r'^dos\b', '2', raw, flags=re.IGNORECASE)
+        raw = re.sub(r'^tres\b', '3', raw, flags=re.IGNORECASE)
+        raw = re.sub(r'^cuatro\b', '4', raw, flags=re.IGNORECASE)
+        raw = re.sub(r'^cinco\b', '5', raw, flags=re.IGNORECASE)
+        
+        # Mapeo de unidades canónicas
+        unit_map = {
+            "tazas": "taza", "taza": "taza",
+            "cucharadas": "cda", "cucharada": "cda", "cdas": "cda", "cda": "cda",
+            "cucharaditas": "cdita", "cucharadita": "cdita", "cditas": "cdita", "cdita": "cdita",
+            "onzas": "oz", "onza": "oz", "oz": "oz",
+            "libras": "lb", "libra": "lb", "lbs": "lb", "lb": "lb",
+            "gramos": "g", "gramo": "g", "gr": "g", "g": "g",
+            "mililitros": "ml", "mililitro": "ml", "ml": "ml",
+            "litros": "lt", "litro": "lt", "lts": "lt", "lt": "lt", "l": "lt",
+            "rebanadas": "rebanada", "rebanada": "rebanada",
+            "lonchas": "loncha", "loncha": "loncha",
+            "porciones": "porcion", "porcion": "porcion",
+            "dientes": "diente", "diente": "diente",
+            "paquetes": "paquete", "paquete": "paquete",
+            "unidades": "unidad", "unidad": "unidad",
+            "latas": "lata", "lata": "lata",
+            "vasos": "vaso", "vaso": "vaso",
+            "puñados": "puñado", "puñado": "puñado",
+            "piezas": "pieza", "pieza": "pieza",
+            "pizcas": "pizca", "pizca": "pizca",
+            "hojas": "hoja", "hoja": "hoja",
+            "tallos": "tallo", "tallo": "tallo",
+        }
+        
+        units_pattern = r"(tazas?|cucharadas?|cdas?|cucharaditas?|cditas?|onzas?|oz|libras?|lbs?|gramos?|gr|g|mililitros?|ml|litros?|lts?|l|rebanadas?|lonchas?|porciones?|dientes?|paquetes?|unidades?|latas?|vasos?|puñados?|piezas?|pizcas?|hojas?|tallos?)"
+        
+        # Captura: 1(Número) 2(Unidad opcional) 3(Nombre)
+        # Ignora la palabra "de" opcional que conecta unidad y nombre
+        pattern = r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(?:' + units_pattern + r'\b\s*(?:de\s+)?)?(.+)$'
+        match = re.match(pattern, raw, re.IGNORECASE)
+        
         if match:
             num_str = match.group(1).replace(',', '.').strip()
-            name = match.group(2).strip()
-            unit = "" # Ya no es necesario extraer la unidad sola, la dejamos en el nombre
+            raw_unit = match.group(2)
+            unit = ""
+            if raw_unit:
+                unit = unit_map.get(raw_unit.lower(), raw_unit.lower())
+            name = match.group(3).strip()
+            
             try:
                 if ' ' in num_str or '-' in num_str:
                     sep = ' ' if ' ' in num_str else '-'
@@ -830,38 +877,8 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
         if items and not isinstance(items[0], dict):
             items = [item.model_dump() if hasattr(item, "model_dump") else getattr(item, "dict")() for item in items]
         
-        # 🏷️ Normalizar nombres de categoría para evitar duplicados del LLM
-        # (ej: "Frutas" y "Frutas y Verduras" deben ser la misma categoría)
-        CATEGORY_NORMALIZATION = {
-            "frutas": "Frutas y Verduras",
-            "verduras": "Frutas y Verduras",
-            "vegetales": "Frutas y Verduras",
-            "frutas y vegetales": "Frutas y Verduras",
-            "carnes": "Carnes y Pescados",
-            "pescados": "Carnes y Pescados",
-            "proteinas": "Carnes y Pescados",
-            "proteínas": "Carnes y Pescados",
-            "carnes y proteínas": "Carnes y Pescados",
-            "carnes y proteinas": "Carnes y Pescados",
-            "lácteos": "Lácteos y Huevos",
-            "lacteos": "Lácteos y Huevos",
-            "huevos": "Lácteos y Huevos",
-            "granos": "Despensa",
-            "granos y cereales": "Despensa",
-            "cereales": "Despensa",
-            "especias": "Condimentos y Especias",
-            "condimentos": "Condimentos y Especias",
-            "aceites": "Aceites y Grasas",
-            "grasas": "Aceites y Grasas",
-            "aceites y grasas saludables": "Aceites y Grasas",
-        }
-        for item in items:
-            if "category" in item:
-                cat_lower = item["category"].strip().lower()
-                if cat_lower in CATEGORY_NORMALIZATION:
-                    item["category"] = CATEGORY_NORMALIZATION[cat_lower]
-        
-        logger.debug(f"🏷️ [NORMALIZACIÓN] Categorías finales: {set(item.get('category', '') for item in items)}")
+        # 🏷️ Las categorías ya están estrictamente normalizadas por el uso de Literal en ShoppingItemModel
+        logger.debug(f"🏷️ [NORMALIZACIÓN ESTRICTA] Categorías finales: {set(item.get('category', '') for item in items)}")
         
         # 💊 Inyectar suplementos del plan como items de lista de compras
         seen_supps = set()
@@ -905,6 +922,64 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
         except Exception as fallback_e:
             logger.error(f"❌ [FALLBACK] Error en categorización local: {fallback_e}")
             return []
+
+def semantic_merge_items(survivors: list) -> list:
+    """Usa LLM para agrupar ingredientes que son el mismo producto (ej: 'Pollo desmenuzado' y 'Pechuga de pollo')."""
+    if not survivors or len(survivors) < 2:
+        return []
+        
+    logger.info(f"🧠 [SEMANTIC DEDUP] Analizando {len(survivors)} ingredientes únicos con LLM...")
+    
+    import json
+    from schemas import SemanticDedupResult
+    
+    # Preparamos una lista simplificada para el LLM para ahorrar tokens
+    items_for_prompt = []
+    for s in survivors:
+        items_for_prompt.append({
+            "id": s["item"]["id"],
+            "name": s["name"],
+            "qty": s["item"].get("qty", "")
+        })
+    
+    prompt = f"""Dado este listado exacto de ingredientes con sus IDs y cantidades, agrupa ESTRICTAMENTE aquellos que sean variantes del mismo producto alimenticio base en la vida real (ej: 'Pollo desmenuzado' y 'Pechuga de pollo' -> 'Pechuga de pollo', 'Huevos' y 'Huevos grandes' -> 'Huevos', 'Cebolla roja' y 'Cebolla blanca' -> 'Cebolla').
+REGLAS:
+- SOLO AGRUPA si son variaciones del MISMO producto y pueden comprarse/usarse como lo mismo.
+- NO agrupes 'Manzana verde' con 'Banana' bajo 'Frutas'. NO agrupes 'Cerdo' con 'Pollo'.
+- Calcula el "merged_qty" de manera inteligente: Si ambos tienen unidades compatibles (ej "1 lb" y "2 lb"), súmalos ("3 lb"). Si las unidades son incompatibles o vagas (ej "1 lb" y "2 unidades"), concaténalos ("1 lb + 2 unidades").
+- Si un ingrediente NO tiene otros pares similares en esta lista, NO lo incluyas en tu respuesta.
+- Retorna SOLO los clusters que resulten en la fusión de 2 o más ítems de la lista.
+
+Lista de ingredientes:
+{json.dumps(items_for_prompt, ensure_ascii=False)}"""
+
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        from tenacity import retry, stop_after_attempt, wait_exponential
+        import os
+        
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-3.1-flash-lite-preview",
+            temperature=0.0,
+            google_api_key=os.environ.get("GEMINI_API_KEY")
+        ).with_structured_output(SemanticDedupResult)
+        
+        @retry(
+            stop=stop_after_attempt(2),
+            wait=wait_exponential(multiplier=1, min=1, max=3)
+        )
+        def _invoke():
+            return llm.invoke(prompt)
+            
+        response = _invoke()
+        if hasattr(response, "clusters") and response.clusters:
+            clusters = [c.model_dump() for c in response.clusters if len(c.item_ids_to_merge) > 1]
+            logger.info(f"✅ [SEMANTIC DEDUP] Encontrados {len(clusters)} grupos semánticos aptos para fusión.")
+            return clusters
+        return []
+    except Exception as e:
+        logger.error(f"❌ [SEMANTIC DEDUP] Error de LLM agrupando ingredientes: {e}")
+        return []
 
 # ============================================================
 # ORQUESTACIÓN LANGGRAPH CHAT CON MEMORYSAVER
@@ -1335,7 +1410,8 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida que el usuario afirme haber comido. Si analizas una foto de una comida y el usuario confirma que se la comió, USA ESTA HERRAMIENTA usando los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos a la herramienta.
 - Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos en la Opción A', 'ponle más proteína al almuerzo', 'quítale el arroz a la cena de la Opción B'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. Debes identificar correctamente el day_number (1 para Opción A, 2 para Opción B, o 3 para Opción C) y el meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda') del plan activo del usuario. Si el usuario no especifica, asume 1 (Opción A).
-- Usa `add_to_shopping_list` cuando el usuario diga que se quedó sin algo o pida añadir items. **ATENCIÓN:** Si el usuario te envía una foto o lista completa diciendo "esta es mi lista de compras actual sin contar el almuerzo" o similar, usa esta herramienta con `overwrite=True` para REEMPLAZAR todo. CRÍTICO: 1) Extrae cada alimento JUNTO CON SU CANTIDAD EXACTA unitaria (ej: "1 paquete de Avena", "2 libras de Pollo"). 2) Como `overwrite=True` borrará también los ingredientes del Almuerzo auto-generado, DEBES buscar en el PLAN ACTIVO actual los ingredientes de la comida "Almuerzo" y AGREGARLOS expresamente a tu lista de items en esta llamada para rescatarlos de la purga.
+- Usa `add_to_shopping_list` cuando el usuario diga que se quedó sin algo o pida añadir items. **ATENCIÓN:** Si el usuario te envía una foto o lista completa diciendo "esta es mi lista de compras actual", usa esta herramienta con `overwrite=True` para REEMPLAZAR todo. CRÍTICO: Extrae cada alimento y asígnale su CANTIDAD EXACTA unitaria (campo 'qty') y CATEGORÍA (campo 'category') (ej: name: "Avena", qty: "1 paquete", category: "Granos y Cereales"). El sistema protegerá automáticamente los ingredientes de su almuerzo.
+- Usa `remove_from_shopping_list` cuando el usuario pida explícitamente quitar, remover o borrar uno o más productos de su lista de compras activa.
 
 El user_id del usuario actual es: {user_id}"""
 
@@ -1480,7 +1556,8 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida consumida.
 - Usa `modify_single_meal` para cambios puntuales.
-- Usa `add_to_shopping_list` para añadir compras, o con `overwrite=True` si envía toda su despensa actual. CRÍTICO: Extrae cada alimento CON SU CANTIDAD (ej: '1 paquete de Avena'). Además, si el usuario dice 'sin contar el almuerzo', debes añadir a la lista de esta herramienta los ingredientes de su 'Almuerzo' (lépelos de su plan activo) para que no se borren en el reemplazo.
+- Usa `add_to_shopping_list` para añadir compras, o con `overwrite=True` si envía toda su despensa actual. CRÍTICO: Extrae cada alimento, su 'qty' y su 'category' de cada elemento JSON (ej: name: 'Avena', qty: '1 paquete', category: 'Frutas y Vegetales'). El sistema salvará automáticamente los ingredientes del almuerzo.
+- Usa `remove_from_shopping_list` para remover puntualmente items de su lista de compras.
 El user_id actual es: {user_id}"""
 
     if current_plan:

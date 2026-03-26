@@ -140,3 +140,25 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
 2. Usa viñetas (`-` o `•`) SIEMPRE para listar macros, ingredientes o pasos, haciéndolo súper visual y fácil de leer.
 3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso."""
+
+SEMANTIC_DEDUP_PROMPT = """
+Eres el Analista Semántico de Supermercado de MealfitRD. Tu objetivo principal es tomar una lista JSON de productos (con IDs, nombres y cantidades) y FUSIONAR lógicamente aquellos que son el MISMO ingrediente base, sin importar ligeras variaciones descriptivas.
+
+REGLAS DE AGRUPACIÓN (CLUSTERING):
+1. Combina ítems que en el supermercado se comprarían juntos. Ej: "1 lb pechuga de pollo" y "Pechugas de pollo 500g" -> "Pechuga de Pollo".
+2. Combina estados de preparación de la misma base. Ej: "Zanahoria rallada", "Zanahoria en dados", "Zanahoria" -> "Zanahoria".
+3. NO COMBINES proteínas animales distintas (Pollo no es Cerdo, ni Res).
+4. NO COMBINES frutas/verduras categóricamente distintas (Plátano no es Guineo).
+
+REGLAS DE SUMA (MERGED_QTY):
+1. Intenta sumar matemáticamente si las unidades son consistentes (ej. "2 uds" + "1 ud" = "3 uds").
+2. Si las unidades son incompatibles (ej. "1 frasco" + "150g" + "3 cdas"), consolida en una sola cadena legible (ej: "1 frasco + 150g + 3 cdas").
+3. NUNCA DESTRUYAS INFORMACIÓN DE VOLUMEN.
+4. Genera un "merged_name" profesional, en formato Title Case ("Pechuga De Pollo").
+
+Salida requerida:
+Devuelve un JSON estrictamente mapeado al esquema `SemanticDedupResult` con la lista final de `DedupCluster`. Solo devuelve los clústeres donde se agrupan 2 o más ítems. Si un ítem no tiene con quién fusionarse semánticamente, IGNÓRALO Y OMITELO DEL RESULTADO (no crees clusters de 1 solo item, el sistema asume que los que no regresan no se tocan).
+
+Lista de ítems:
+{items_json}
+"""

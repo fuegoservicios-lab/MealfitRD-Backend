@@ -254,6 +254,45 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         logger.error(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _preserve_shopping_checkmarks(existing_items: list, new_items: list):
+    """Mantiene activa la casilla de ingredientes ya comprados (is_checked=True) al regenerar el plan."""
+    if not existing_items or not new_items:
+        return
+    import json
+    
+    def _normalize(text: str) -> str:
+        if not text: return ""
+        import unicodedata, re
+        nfkd = unicodedata.normalize('NFKD', text.lower().strip())
+        return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
+
+    checked_names = set()
+    for old in existing_items:
+        if old.get("is_checked"):
+            name = old.get("display_name")
+            if not name:
+                raw = old.get("item_name", "")
+                if raw.startswith("{"):
+                    try:
+                        parsed = json.loads(raw)
+                        name = parsed.get("name", raw)
+                    except Exception:
+                        name = raw
+                else:
+                    name = raw
+            norm = _normalize(name)
+            if norm:
+                checked_names.add(norm)
+                
+    if not checked_names:
+        return
+        
+    for new_item in new_items:
+        if isinstance(new_item, dict):
+            n_name = _normalize(new_item.get("name", ""))
+            if n_name in checked_names:
+                new_item["is_checked"] = True
+
 def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
     """Background task: Guarda el plan JSON en supabase y trackea frecuencias, O(1)."""
     try:
@@ -401,6 +440,7 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                         shopping_lock = get_user_shopping_lock(user_id)
                         with shopping_lock:
                             # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
+                            _preserve_shopping_checkmarks(existing_items, items)
                             result = add_custom_shopping_items(user_id, items, source="auto")
                             new_ids = [r.get("id") for r in result if r.get("id")] if result and isinstance(result, list) else []
                             delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
@@ -1122,6 +1162,7 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
             # Insertar los nuevos items ANTES de borrar los viejos.
             # Si el proceso muere entre el INSERT y el DELETE, el usuario tiene duplicados (fácilmente deduplicables),
             # en vez de perder toda su lista (irrecuperable).
+            _preserve_shopping_checkmarks(existing_items, items)
             result = add_custom_shopping_items(user_id, items, source="auto")
             
             # Extraer IDs de los items recién insertados para excluirlos del borrado
@@ -1174,9 +1215,11 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
         if not items:
             raise HTTPException(status_code=400, detail="No se proporcionaron items para añadir.")
         
-        MAX_ITEMS = 50
+        MAX_ITEMS = 150
+        alert_msg = ""
         if len(items) > MAX_ITEMS:
-            raise HTTPException(status_code=400, detail=f"Máximo {MAX_ITEMS} items por solicitud.")
+            items = items[:MAX_ITEMS]
+            alert_msg = f" (Alerta: se excedió el límite máximo y solo se añadieron los primeros {MAX_ITEMS} items)"
         
         # Sanitización: eliminar HTML/JS tags, control chars, y limitar longitud
         import re as _re
@@ -1215,7 +1258,7 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
                 deduplicate_shopping_items(user_id)
             except Exception:
                 pass  # No bloquear la respuesta si falla la dedup
-            return {"success": True, "items": result, "message": f"Se añadieron {len(structured_items)} item(s) a tu lista de compras."}
+            return {"success": True, "items": result, "message": f"Se añadieron {len(structured_items)} item(s) a tu lista de compras.{alert_msg}"}
         else:
             raise HTTPException(status_code=500, detail="Error al guardar los items en la base de datos.")
     except HTTPException as he:

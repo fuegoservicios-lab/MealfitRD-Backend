@@ -1,0 +1,178 @@
+commit bb76449e17f9a365b6d60c0f1a83e91268cec38c
+Author: Angelo Brito <angelobrito500@gmail.com>
+Date:   Mon Mar 23 00:50:59 2026 -0400
+
+    fix(backend): fix shopping list parsing and fruit segregation enforcing deterministic generation
+
+diff --git a/agent.py b/agent.py
+index ddf01eb..b0a5986 100644
+--- a/agent.py
++++ b/agent.py
+@@ -350,6 +350,33 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None,
+             logger.error(f"Error procesando Shopping Cycle Lock: {e}")
+     # ==========================================================
+ 
++    # ======= FORCED SHOPPING LIST INJECTION =======
++    if form_data and "_force_base_proteins" in form_data:
++        unique_proteins = form_data.get("_force_base_proteins", unique_proteins)
++        unique_carbs = form_data.get("_force_base_carbs", unique_carbs)
++        forced_veg = form_data.get("_force_base_veggies", unique_veggies)
++        
++        # Frutas usualmente entran como vegetales desde el prompt, las filtramos manualmente
++        fruit_names_lower = [strip_accents(f.strip().lower()) for f in DOMINICAN_FRUITS]
++        extracted_fruits = []
++        extracted_veggies = []
++        
++        for v in forced_veg:
++            if strip_accents(v.strip().lower()) in fruit_names_lower:
++                extracted_fruits.append(v)
++            else:
++                extracted_veggies.append(v)
++                
++        unique_veggies = extracted_veggies if extracted_veggies else unique_veggies
++        if extracted_fruits:
++            unique_fruits = extracted_fruits
++            
++        logger.info(f"🔒 [FORCE LOCK] Proteínas: {unique_proteins}")
++        logger.info(f"🔒 [FORCE LOCK] Carbos: {unique_carbs}")
++        logger.info(f"🔒 [FORCE LOCK] Vegetales: {unique_veggies}")
++        logger.info(f"🔒 [FORCE LOCK] Frutas Extraídas: {unique_fruits}")
++    # ==========================================================
++
+     # Cada día recibe una proteína, un carbohidrato, y un vegetal únicos (sin repeticiones entre días)
+     # Si no se pudieron elegir 3 (pool muy pequeño tras filtros), rellenamos ciclando lo que hay
+     #
+@@ -462,8 +489,26 @@ def swap_meal(form_data: dict):
+     if all_disliked: 
+         context_extras += f"\n    - 🚫 EXCLUSIÓN ESTRICTA: ESTÁ TOTALMENTE PROHIBIDO generar cualquier plato o ingrediente principal de esta lista: {', '.join(list(all_disliked))}. NINGÚN PLATO NUEVO PUEDE LLAMARSE IGUAL NI PARECERSE."
+         
++        
+     if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
+ 
++    # --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
++    user_id = form_data.get("user_id")
++    if user_id and user_id != "guest":
++        try:
++            from db import get_custom_shopping_items
++            existing = get_custom_shopping_items(user_id)
++            existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
++            if existing_items:
++                excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
++                ingredient_names = [item.get("name") for item in existing_items if item.get("category") not in excluded_cats]
++                if ingredient_names:
++                    context_extras += f"\n    - ⚠️ RESTRICCIÓN DE INGREDIENTES (SUPERMERCADO): El usuario ya compró y tiene disponibles los siguientes ingredientes: {', '.join(ingredient_names)}. DEBES priorizar la creación de recetas usando ESTOS ingredientes. NO inventes ingredientes principales nuevos."
++                    logger.info("🛒 [CONSTRAINT] Restricción de lista de compras añadida en swap_meal (agent).")
++        except Exception as check_e:
++            logger.error(f"Error revisando lista de compras en swap_meal: {check_e}")
++    # ----------------------------------------
++
+     # --- ANTI MODE-COLLAPSE PARA SWAPS (Proteína + Carbohidrato + Vegetal) ---
+     # Sugerir alternativas en las 3 dimensiones usando peso inverso por frecuencia
+     try:
+@@ -579,13 +624,13 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
+         nfkd = unicodedata.normalize('NFKD', text.lower().strip())
+         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
+     
+-    def _parse_ingredient(raw: str):
+         raw = raw.strip()
+-        match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(g|kg|lb|lbs|oz|ml|l|taza|tazas|cda|cdta|und|unidades?)?\s+(.+)$', raw, re.IGNORECASE)
++        # Captura cualquier número inicial (ej: "1", "1.5", "1 1/2", "1/2", "1,5")
++        match = re.match(r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(.+)$', raw, re.IGNORECASE)
+         if match:
+             num_str = match.group(1).replace(',', '.').strip()
+-            unit = (match.group(2) or "").lower().strip()
+-            name = match.group(3).strip()
++            name = match.group(2).strip()
++            unit = "" # Ya no es necesario extraer la unidad sola, la dejamos en el nombre
+             try:
+                 if ' ' in num_str or '-' in num_str:
+                     sep = ' ' if ' ' in num_str else '-'
+diff --git a/graph_orchestrator.py b/graph_orchestrator.py
+index a1aab81..685912f 100644
+--- a/graph_orchestrator.py
++++ b/graph_orchestrator.py
+@@ -711,8 +711,11 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str
+     
+     pipeline_start = time.time()
+     
++    # 0. Copia segura de form_data para no mutar origenes (evita guardar vars temporales en DB)
++    actual_form_data = form_data.copy()
++    
+     # 1. Pre-calcular nutrición
+-    nutrition = get_nutrition_targets(form_data)
++    nutrition = get_nutrition_targets(actual_form_data)
+     
+     # 2. Preparar contexto del historial (memoria inteligente y platos recientes)
+     history_context = ""
+@@ -741,6 +744,62 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str
+         except Exception as e:
+             print(f"⚠️ Error recuperando comidas recientes desde db: {e}")
+             
++    # 2.2 --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
++    if user_id:
++        try:
++            from db import get_custom_shopping_items
++            existing = get_custom_shopping_items(user_id)
++            existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
++            if existing_items:
++                excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
++                ingredient_names = []
++                forced_proteins = []
++                forced_carbs = []
++                forced_veggies = []
++                
++                for item in existing_items:
++                    cat = item.get("category", "")
++                    
++                    # El nombre ahora está prioritariamente en display_name (columnas estructuradas)
++                    name = item.get("display_name") or ""
++                    
++                    # Fallback legacy: extraer de item_name si era JSON
++                    if not name:
++                        raw_name = item.get("item_name", "")
++                        if raw_name.startswith("{"):
++                            try:
++                                import json
++                                parsed = json.loads(raw_name)
++                                name = parsed.get("name", raw_name)
++                            except Exception:
++                                name = raw_name
++                        else:
++                            name = raw_name
++                                
++                    if not name or cat in excluded_cats:
++                        continue
++                    
++                    ingredient_names.append(name)
++                    
++                    cat_lower = cat.lower()
++                    if any(k in cat_lower for k in ["carne", "pescado", "proteína", "protein", "huevo", "lácteo", "queso", "leche", "yogur"]):
++                        forced_proteins.append(name)
++                    elif any(k in cat_lower for k in ["despensa", "grano", "cereal", "arroz", "avena", "pan", "pasta", "vívere", "yuca", "plátano", "batata", "papa"]):
++                        forced_carbs.append(name)
++                    elif any(k in cat_lower for k in ["fruta", "verdura", "vegetal"]):
++                        forced_veggies.append(name)
++                
++                if ingredient_names:
++                    history_context += f"\n\n⚠️ RESTRICCIÓN DE INGREDIENTES (CRÍTICO): El usuario ya tiene una lista de compras vigente. DEBES crear el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes: {', '.join(ingredient_names)}. NUNCA agregues proteínas, carbohidratos o vegetales que no estén en esta lista.\n"
++                    print(f"🛒 [CONSTRAINT] Aplicando restricción de lista de compras en graph_orchestrator ({len(ingredient_names)} items).")
++                    
++                    if forced_proteins: actual_form_data["_force_base_proteins"] = forced_proteins
++                    if forced_carbs: actual_form_data["_force_base_carbs"] = forced_carbs
++                    if forced_veggies: actual_form_data["_force_base_veggies"] = forced_veggies
++                    
++        except Exception as check_e:
++            print(f"⚠️ Error revisando lista de compras para restricción en orquestador: {check_e}")
++
+     # 2.5 Buscar Hechos y Diario Visual en Memoria Vectorial (RAG multimodal)
+     user_facts_text = ""
+     visual_facts_text = ""
+@@ -894,7 +953,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str
+     
+     # 3. Estado inicial del grafo
+     initial_state: PlanState = {
+-        "form_data": form_data,
++        "form_data": actual_form_data,
+         "taste_profile": taste_profile,
+         "nutrition": nutrition,
+         "history_context": history_context,
