@@ -264,7 +264,7 @@ def generate_new_plan_from_chat(user_id: str, instructions: str = "") -> str:
     return "DUMMY_CALL_ACTUALLY_INTERCEPTED"
 
 @tool
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None) -> str:
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list[str] = None) -> str:
     """
     Registra una comida que el usuario afirma haber consumido realmente en su diario de consumo ("fuera del plan").
     Úsala SOLO cuando el usuario confirme que se ha comido lo que le analizaste o subió en la foto, o cuando explícitamente diga que comió algo.
@@ -558,7 +558,7 @@ def _categorize_item(item_name: str) -> tuple:
     return "Otros", "🛒"
 
 @tool
-def add_to_shopping_list(user_id: str, items: list, overwrite: bool = False, protected_meals: list = None) -> str:
+def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = False, protected_meals: list[str] = None) -> str:
     """
     Añade uno o más ingredientes/items a la lista de compras personal del usuario o la sobreescribe completamente.
     Usa esta herramienta cuando el usuario diga que se quedó sin algo, necesita comprar algo, o pida añadir items.
@@ -811,7 +811,7 @@ def search_deep_memory(user_id: str, query: str) -> str:
 # ============================================================
 
 @tool
-def remove_from_shopping_list(user_id: str, item_names: list) -> str:
+def remove_from_shopping_list(user_id: str, item_names: list[str]) -> str:
     """
     Elimina uno o más ingredientes específicos de la lista de compras del usuario.
     Usa esta herramienta cuando el usuario pida explícitamente quitar o remover algo de su lista (ej: "quita la manzana").
