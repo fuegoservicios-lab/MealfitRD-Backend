@@ -91,7 +91,8 @@ def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user
         if profile:
             plan_tier = profile.get("plan_tier", "gratis")
             
-        limit = 15 if plan_tier == "gratis" else (100 if plan_tier == "plus" else 999999)
+        tier_limits = {"gratis": 15, "basic": 50, "plus": 200, "ultra": 999999, "admin": 999999}
+        limit = tier_limits.get(plan_tier, 15)
         
         if credits_used >= limit:
             raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
@@ -843,7 +844,7 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                                             profile_sync = get_user_profile(user_id)
                                             if profile_sync:
                                                 plan_tier_sync = profile_sync.get("plan_tier", "gratis")
-                                                is_plus = plan_tier_sync in ["plus", "admin", "ultra"]
+                                                is_plus = plan_tier_sync in ["basic", "plus", "admin", "ultra"]
                                                 
                                         if is_plus:
                                             async_extract_and_save_facts(user_id, prompt, recent_history_str)
@@ -952,7 +953,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
             profile = get_user_profile(user_id)
             if profile:
                 plan_tier = profile.get("plan_tier", "gratis")
-                is_plus = plan_tier in ["plus", "admin", "ultra"]
+                is_plus = plan_tier in ["basic", "plus", "admin", "ultra"]
         
         if is_plus:
             # 🧠 Background: Extraer hechos y vectorizarlos
