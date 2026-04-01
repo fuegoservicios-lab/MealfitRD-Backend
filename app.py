@@ -35,6 +35,7 @@ from db import (
     deduplicate_shopping_items, get_shopping_plan_hash, save_new_meal_plan_robust,
     log_consumed_meal, get_consumed_meals_today, save_visual_entry, get_session_messages,
     get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
+    delete_single_agent_session, update_session_title,
     check_fact_ownership, upsert_user_profile, migrate_guest_data, log_api_usage, get_monthly_api_usage
 )
 from agent import (
@@ -675,6 +676,36 @@ def api_delete_chat_sessions(user_id: str, verified_user_id: Optional[str] = Dep
         return {"success": True}
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions DELETE: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/chat/session/{session_id}")
+def api_delete_single_chat_session(session_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    try:
+        session_owner = get_session_owner(session_id)
+        if session_owner and session_owner != "guest":
+            if not verified_user_id or verified_user_id != session_owner:
+                raise HTTPException(status_code=403, detail="Prohibido.")
+        delete_single_agent_session(session_id)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/chat/session DELETE: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+from pydantic import BaseModel
+class RenameSessionReq(BaseModel):
+    title: str
+
+@app.put("/api/chat/session/{session_id}")
+def api_rename_chat_session(session_id: str, data: RenameSessionReq, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    try:
+        session_owner = get_session_owner(session_id)
+        if session_owner and session_owner != "guest":
+            if not verified_user_id or verified_user_id != session_owner:
+                raise HTTPException(status_code=403, detail="Prohibido.")
+        update_session_title(session_id, data.title)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/chat/session PUT: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/chat/history/{session_id}")

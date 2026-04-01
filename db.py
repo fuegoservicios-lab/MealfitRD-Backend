@@ -193,6 +193,33 @@ def delete_user_agent_sessions(user_id: str) -> bool:
         logger.error(f"Error eliminando sesiones de agente de {user_id}: {e}")
         return False
 
+def delete_single_agent_session(session_id: str) -> bool:
+    """Elimina una sesión específica de agente."""
+    if not supabase: return False
+    try:
+        supabase.table("agent_sessions").delete().eq("id", session_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Error eliminando sesion de agente {session_id}: {e}")
+        return False
+
+def update_session_title(session_id: str, new_title: str) -> bool:
+    """Actualiza el título de una sesión."""
+    if not supabase: return False
+    try:
+        # Buscar si ya existe el mensaje de titulo
+        res = supabase.table("agent_messages").select("id").eq("session_id", session_id).like("content", "[SYSTEM_TITLE] %").execute()
+        if res.data and len(res.data) > 0:
+            msg_id = res.data[0]["id"]
+            supabase.table("agent_messages").update({"content": f"[SYSTEM_TITLE] {new_title}"}).eq("id", msg_id).execute()
+        else:
+            # Si no existe, insertar un mensaje especial al inicio (fecha muy antigua o la misma de la sesion)
+            save_message(session_id, "model", f"[SYSTEM_TITLE] {new_title}")
+        return True
+    except Exception as e:
+        logger.error(f"Error actualizando titulo de sesion {session_id}: {e}")
+        return False
+
 def upsert_user_profile(user_id: str, health_profile: dict) -> bool:
     """Hace upsert del perfil de usuario y health_profile en user_profiles."""
     if not supabase: return False
@@ -286,7 +313,7 @@ def get_user_chat_sessions(user_id: str):
     for attempt in range(max_retries):
         try:
             # Fallback de seguridad si no existe user_id en la base de datos
-            res = supabase.table("agent_sessions").select("*").eq("user_id", user_id).execute()
+            res = supabase.table("agent_sessions").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(60).execute()
             sessions = res.data
             return _process_and_sort_sessions(sessions)
         except Exception as e:
