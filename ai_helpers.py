@@ -13,12 +13,13 @@ import concurrent.futures
 # Prompts
 from prompts import (
     TITLE_GENERATION_PROMPT,
-    DETERMINISTIC_VARIETY_PROMPT
+    DETERMINISTIC_VARIETY_PROMPT,
+    RECIPE_EXPANSION_PROMPT
 )
 
 # Langchain
 from langchain_google_genai import ChatGoogleGenerativeAI
-from schemas import SemanticDedupResult
+from schemas import SemanticDedupResult, ExpandedRecipeModel
 
 from constants import (
     strip_accents,
@@ -555,6 +556,40 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Vegetales/Grasas elegidos (2 distintos por día): {chosen_veggies}")
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Fruta sugerida: {chosen_fruits}")
     return prompt
+
+def expand_recipe_agent(meal_data: dict) -> list[str]:
+    """Expande una receta genérica en instrucciones súper detalladas actuando como un Chef Instructor Premium."""
+    logger.info(f"👨‍🍳 [CHEF AGENT] Expandiendo instrucciones para: {meal_data.get('name', 'Receta')}")
+    
+    prompt = RECIPE_EXPANSION_PROMPT.format(
+        name=meal_data.get("name", "Receta sin nombre"),
+        desc=meal_data.get("desc", ""),
+        ingredients_json=json.dumps(meal_data.get("ingredients", []), ensure_ascii=False),
+        recipe_json=json.dumps(meal_data.get("recipe", []), ensure_ascii=False)
+    )
+    
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-3.1-flash-lite-preview",
+            temperature=0.7,
+            google_api_key=os.environ.get("GEMINI_API_KEY")
+        ).with_structured_output(ExpandedRecipeModel)
+        
+        @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=5))
+        def _invoke():
+            return llm.invoke(prompt)
+            
+        response = _invoke()
+        if hasattr(response, "recipe") and response.recipe:
+            logger.info("✅ [CHEF AGENT] Receta expandida con éxito.")
+            return response.recipe
+        else:
+            logger.warning("⚠️ [CHEF AGENT] El modelo no regresó la lista 'recipe'. Usando original.")
+            return meal_data.get("recipe", [])
+            
+    except Exception as e:
+        logger.error(f"❌ [CHEF AGENT] Falla al expandir receta: {e}")
+        return meal_data.get("recipe", [])
 
 
 

@@ -22,7 +22,11 @@ class MealModel(BaseModel):
     name: str = Field(description="Nombre creativo y descriptivo del plato")
     desc: str = Field(description="Descripción apetitosa y profesional de la receta")
     prep_time: str = Field(description="Tiempo estimado de preparación, Ej: '15 min'")
+    difficulty: str = Field(default="Fácil", description="Nivel de dificultad, Ej: 'Fácil', 'Intermedio', 'Difícil'")
     cals: int = Field(description="Calorías aproximadas de este plato")
+    protein: int = Field(default=0, description="Gramos de proteína estimados en esta porción, Ej: 30")
+    carbs: int = Field(default=0, description="Gramos de carbohidratos estimados en esta porción, Ej: 45")
+    fats: int = Field(default=0, description="Gramos de grasas estimados en esta porción, Ej: 15")
     macros: List[str] = Field(description="Lista rápida de macros, Ej:['Alto en proteína', 'Bajo en carbohidratos']")
     ingredients: List[str] = Field(description="Lista de ingredientes con cantidades (texto simple), Ej:['1 plátano verde maduro', '2 huevos', '1/2 aguacate']")
     recipe: List[str] = Field(description="Pasos de preparación. DEBES usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'")
@@ -63,3 +67,6 @@ class DedupCluster(BaseModel):
 
 class SemanticDedupResult(BaseModel):
     clusters: List[DedupCluster] = Field(description="Agrupaciones semánticas detectadas (ignorar ítems que no tienen duplicados semánticos)")
+
+class ExpandedRecipeModel(BaseModel):
+    recipe: List[str] = Field(description="Lista de EXACTAMENTE 3 pasos: Mise en place, El Toque de Fuego y Montaje, magistralmente detallados.")

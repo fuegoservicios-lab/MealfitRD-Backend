@@ -41,7 +41,7 @@ from agent import (
     swap_meal, chat_with_agent, analyze_preferences_agent,
     generate_chat_title_background, generate_auto_shopping_list, chat_with_agent_stream
 )
-from ai_helpers import generate_plan_title
+from ai_helpers import generate_plan_title, expand_recipe_agent
 from graph_orchestrator import run_plan_pipeline
 from memory_manager import summarize_and_prune, build_memory_context
 from fact_extractor import async_extract_and_save_facts, process_pending_queue_sync
@@ -180,6 +180,51 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+@app.post("/api/recipe/expand")
+def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    try:
+        user_id = data.get("user_id")
+        # Validación opcional de seguridad
+        if user_id and user_id != "guest":
+            if not verified_user_id or verified_user_id != user_id:
+                raise HTTPException(status_code=401, detail="No autorizado.")
+                
+        # data contendrá la receta entera (name, desc, ingredients, recipe, cals)
+        if not data.get("recipe") or not data.get("name"):
+            raise HTTPException(status_code=400, detail="Faltan datos de la receta para expandir.")
+            
+        if user_id and user_id != "guest":
+            log_api_usage(user_id, "gemini_recipe_expand")
+            
+        expanded_steps = expand_recipe_agent(data)
+        
+        # Persistencia Automática en la DB
+        if user_id and user_id != "guest":
+            from db import get_latest_meal_plan, get_latest_meal_plan_with_id, update_meal_plan_data
+            current_plan = get_latest_meal_plan(user_id)
+            if current_plan and "days" in current_plan:
+                updated = False
+                for day in current_plan.get("days", []):
+                    for m in day.get("meals", []):
+                        if m.get("name") == data.get("name"):
+                            m["recipe"] = expanded_steps
+                            m["isExpanded"] = True
+                            updated = True
+                            break
+                    if updated: break
+                
+                if updated:
+                    plan_with_id = get_latest_meal_plan_with_id(user_id)
+                    if plan_with_id and "id" in plan_with_id:
+                        update_meal_plan_data(plan_with_id["id"], current_plan)
+
+        return {"success": True, "expanded_recipe": expanded_steps}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/recipe/expand: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
