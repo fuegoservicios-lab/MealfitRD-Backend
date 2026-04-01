@@ -57,10 +57,17 @@ def purge_langgraph_checkpoint(session_id: str, keep_recent: int = KEEP_RECENT):
     
     try:
         from langgraph.checkpoint.postgres import PostgresSaver
-        from agent import chat_builder
+        from langgraph.graph import StateGraph, START
+        from langgraph.graph.message import MessagesState
+        from langchain_core.messages import RemoveMessage
+        
+        # Grafo ligero (dummy) para manipular el estado sin importar agent.py
+        builder = StateGraph(MessagesState)
+        builder.add_node("dummy", lambda state: state)
+        builder.add_edge(START, "dummy")
         
         checkpointer = PostgresSaver(connection_pool)
-        graph = chat_builder.compile(checkpointer=checkpointer)
+        graph = builder.compile(checkpointer=checkpointer)
         
         config = {"configurable": {"thread_id": session_id}}
         state = graph.get_state(config)
@@ -218,7 +225,7 @@ def summarize_and_prune(session_id: str):
         
         # Invocar Gemini para generar el resumen
         summary_llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-pro-preview",  # Modelo rápido y económico para resúmenes
+            model="gemini-3.1-flash-lite-preview",  # Modelo rápido y económico para resúmenes
             temperature=0.1,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
@@ -280,7 +287,7 @@ def summarize_and_prune(session_id: str):
             
             # Usar .with_structured_output() para garantizar JSON perfecto (0% fallos de parseo)
             structured_summary_llm = ChatGoogleGenerativeAI(
-                model="gemini-3.1-pro-preview",
+                model="gemini-3.1-flash-lite-preview",
                 temperature=0.1,
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             ).with_structured_output(EvolutionaryState)

@@ -8,6 +8,9 @@ import uuid
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
+import json
+import traceback
+import threading
 
 # Configuración centralizada de logging para todo el backend
 logging.basicConfig(
@@ -21,13 +24,31 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-from agent import swap_meal, chat_with_agent, analyze_preferences_agent, generate_plan_title
+from db import (
+    connection_pool, supabase,
+    get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes,
+    insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile,
+    update_user_health_profile, get_all_user_facts, delete_user_fact, get_custom_shopping_items,
+    get_custom_shopping_items as _get_items, update_custom_shopping_item,
+    update_custom_shopping_item_status, delete_custom_shopping_item, clear_all_shopping_items,
+    add_custom_shopping_items, uncheck_all_shopping_items, purge_old_shopping_items,
+    deduplicate_shopping_items, get_shopping_plan_hash, save_new_meal_plan_robust,
+    log_consumed_meal, get_consumed_meals_today, save_visual_entry, get_session_messages,
+    get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
+    check_fact_ownership, upsert_user_profile, migrate_guest_data, log_api_usage, get_monthly_api_usage
+)
+from agent import (
+    swap_meal, chat_with_agent, analyze_preferences_agent,
+    generate_chat_title_background, generate_auto_shopping_list, chat_with_agent_stream
+)
+from ai_helpers import generate_plan_title
 from graph_orchestrator import run_plan_pipeline
-from db import get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes, insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile, update_user_health_profile, get_all_user_facts, delete_user_fact, get_custom_shopping_items, delete_custom_shopping_item, log_api_usage, get_monthly_api_usage, connection_pool
 from memory_manager import summarize_and_prune, build_memory_context
 from fact_extractor import async_extract_and_save_facts, process_pending_queue_sync
-from agent import generate_chat_title_background
 from langgraph.checkpoint.postgres import PostgresSaver
+from services import compute_plan_hash, merge_form_data_with_profile, regenerate_shopping_list_safe
+from constants import categorize_shopping_item
+from vision_agent import process_image_with_vision, get_multimodal_embedding
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,6 +76,13 @@ async def lifespan(app: FastAPI):
 # Asegurarnos de que el directorio de uploads exista antes de montar recursos estáticos
 os.makedirs("uploads", exist_ok=True)
 
+import re as _re
+def sanitize_shopping_text(text: str, max_length: int = 100) -> str:
+    """Escapa y sanitiza inputs en la lista de compras previniendo XSS ciego y control chars destructivos."""
+    clean = _re.sub(r'<[^>]+>', '', text).strip()
+    clean = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean)
+    return clean[:max_length]
+
 app = FastAPI(lifespan=lifespan)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
@@ -63,113 +91,9 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 def health_check():
     return {"status": "ok", "message": "MealfitRD AI Backend is running"}
 
-# Dependencia de seguridad para validar token JWT de Supabase
-def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
-    """Extrae el user_id del token JWT en el header Authorization."""
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    token = authorization.split(" ")[1]
-    from db import supabase
-    if not supabase:
-        return None
-    try:
-        # User auth verification with supabase
-        user_res = supabase.auth.get_user(token)
-        if user_res and user_res.user:
-            return user_res.user.id
-    except Exception as e:
-        logger.error(f"⚠️ [AUTH] Error validando token: {e}")
-    return None
-
-def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user_id)) -> Optional[str]:
-    """Dependencia para verificar los límites de uso de la API (Paywall) evitando repetición (DRY)."""
-    if verified_user_id:
-        credits_used = get_monthly_api_usage(verified_user_id)
-        plan_tier = "gratis"
-        
-        profile = get_user_profile(verified_user_id)
-        if profile:
-            plan_tier = profile.get("plan_tier", "gratis")
-            
-        tier_limits = {"gratis": 15, "basic": 50, "plus": 200, "ultra": 999999, "admin": 999999}
-        limit = tier_limits.get(plan_tier, 15)
-        
-        if credits_used >= limit:
-            raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")
-            
-    return verified_user_id
-
-# --- Rate limiter ligero (in-memory, sliding window) ---
-# Zero dependencias extra. Para multi-worker (gunicorn), cada worker tiene su propio contador,
-# lo cual es aceptable (el rate real es N * max_calls). Para rate-limiting distribuido,
-# usar Redis + slowapi.
-import time as _time
-from collections import defaultdict as _defaultdict
-from cache_manager import redis_client
-
-class RateLimiter:
-    """Sliding-window rate limiter como dependencia FastAPI reutilizable.
-    Uso: Depends(RateLimiter(max_calls=10, period_seconds=60))"""
-    def __init__(self, max_calls: int = 10, period_seconds: int = 60):
-        self.max_calls = max_calls
-        self.period = period_seconds
-        self._hits: dict = _defaultdict(list)  # user_id → [timestamps]
-
-    def __call__(self, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
-        uid = verified_user_id or "anon"
-        
-        # Opcional: Soporte Redis para Rate Limiting Distribuido (#Mejora 3)
-        if redis_client:
-            now = _time.time()
-            key = f"rl:{self.max_calls}:{self.period}:{uid}"
-            window_start = now - self.period
-            try:
-                pipe = redis_client.pipeline()
-                pipe.zremrangebyscore(key, 0, window_start) # Eliminar timestamps viejos
-                pipe.zcard(key)                             # Contar peticiones en la ventana
-                pipe.zadd(key, {str(now): now})             # Añadir petición actual
-                pipe.expire(key, self.period)               # Expirar key para no consumir RAM eterna
-                results = pipe.execute()
-                
-                count = results[1]
-                if count >= self.max_calls:
-                    raise HTTPException(
-                        status_code=429,
-                        detail=f"Demasiadas solicitudes. Máximo {self.max_calls} por {self.period}s. Intenta de nuevo en unos segundos."
-                    )
-                return verified_user_id
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.warning(f"⚠️ [RATE LIMIT] Error en Redis, cambiando a memoria local transparente: {e}")
-                # Hacemos fallback transparente a memoria local
-
-        # --- Fallback Memoria Local ---
-        now_mono = _time.monotonic()
-        
-        # Ocasionalmente (1% de tolerancia) limpiar llaves inactivas globales para evitar fugas de RAM
-        import random
-        if random.random() < 0.01:
-            expired_keys = [
-                k for k, timestamps in self._hits.items() 
-                if not timestamps or now_mono - timestamps[-1] < now_mono - self.period
-            ]
-            for k in expired_keys:
-                del self._hits[k]
-
-        # Purga timestamps viejos (fuera de la ventana)
-        self._hits[uid] = [t for t in self._hits[uid] if now_mono - t < self.period]
-        if len(self._hits[uid]) >= self.max_calls:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Demasiadas solicitudes. Máximo {self.max_calls} por {self.period}s. Intenta de nuevo en unos segundos."
-            )
-        self._hits[uid].append(now_mono)
-        return verified_user_id
-
-# Instancias reutilizables para endpoints de shopping list
-_shopping_write_limiter = RateLimiter(max_calls=10, period_seconds=60)
-_shopping_autogen_limiter = RateLimiter(max_calls=5, period_seconds=60)
+from auth import get_verified_user_id, verify_api_quota
+from rate_limiter import RateLimiter, _shopping_write_limiter, _shopping_autogen_limiter
+from services import _preserve_shopping_checkmarks, _save_plan_and_track_background, _process_swap_rejection_background
 
 # Setup CORS para el frontend React local
 app.add_middleware(
@@ -224,7 +148,7 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
                                    memory_context=memory.get("full_context_str", "") if session_id else "")
         
         # 4. Persistir los datos del formulario en user_profiles.health_profile
-        if actual_user_id and actual_user_id != "guest":
+        if actual_user_id:
             hp_data = {k: v for k, v in data.items() if k not in ['session_id', 'user_id']}
             if hp_data:
                 update_user_health_profile(actual_user_id, hp_data)
@@ -239,13 +163,13 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
             background_tasks.add_task(summarize_and_prune, session_id)
             
         # 👇 NUEVO: Registramos uso de API de Gemini
-        if actual_user_id and actual_user_id != "guest":
+        if actual_user_id:
             log_api_usage(actual_user_id, "gemini_analyze")
             
         # 👇 NUEVO: Guardar el plan generado y trackear frecuencias en Background
         # Extraer técnicas ANTES del background (dicts son by-reference, el pop debe ser previo)
         selected_techniques = result.pop("_selected_techniques", None)
-        if actual_user_id and actual_user_id != "guest":
+        if actual_user_id:
             background_tasks.add_task(_save_plan_and_track_background, actual_user_id, result, selected_techniques)
 
         return result
@@ -255,240 +179,7 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         logger.error(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def _preserve_shopping_checkmarks(existing_items: list, new_items: list):
-    """Mantiene activa la casilla de ingredientes ya comprados (is_checked=True) al regenerar el plan."""
-    if not existing_items or not new_items:
-        return
-    import json
-    
-    def _normalize(text: str) -> str:
-        if not text: return ""
-        import unicodedata, re
-        nfkd = unicodedata.normalize('NFKD', text.lower().strip())
-        return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
 
-    checked_names = set()
-    for old in existing_items:
-        if old.get("is_checked"):
-            name = old.get("display_name")
-            if not name:
-                raw = old.get("item_name", "")
-                if raw.startswith("{"):
-                    try:
-                        parsed = json.loads(raw)
-                        name = parsed.get("name", raw)
-                    except Exception:
-                        name = raw
-                else:
-                    name = raw
-            norm = _normalize(name)
-            if norm:
-                checked_names.add(norm)
-                
-    if not checked_names:
-        return
-        
-    for new_item in new_items:
-        if isinstance(new_item, dict):
-            n_name = _normalize(new_item.get("name", ""))
-            if n_name in checked_names:
-                new_item["is_checked"] = True
-
-def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
-    """Background task: Guarda el plan JSON en supabase y trackea frecuencias, O(1)."""
-    try:
-        from db import supabase, increment_ingredient_frequencies
-        from datetime import datetime
-        
-        # 1. Guardar Plan O(1) Arrays
-        if supabase:
-            calories = plan_data.get("calories", 0)
-            macros = plan_data.get("macros", {})
-            
-            meal_names = []
-            ingredients = []
-            raw_ingredients = []
-            for d in plan_data.get("days", []):
-                for m in d.get("meals", []):
-                    if m.get("name"):
-                        meal_names.append(m.get("name"))
-                    if m.get("ingredients"):
-                        ingredients.extend(m.get("ingredients"))
-                        raw_ingredients.extend(m.get("ingredients"))
-                        
-            # Nombre creativo generado por IA (Gemini Flash-Lite)
-            plan_name = generate_plan_title(plan_data)
-                
-            insert_data = {
-                "user_id": user_id,
-                "plan_data": plan_data,
-                "name": plan_name,
-                "calories": int(calories) if calories else 0,
-                "macros": macros,
-                "meal_names": meal_names,
-                "ingredients": ingredients
-            }
-            
-            # Añadir técnicas de cocción si están disponibles
-            if selected_techniques:
-                insert_data["techniques"] = selected_techniques
-            
-            # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
-            try:
-                recent = supabase.table("meal_plans").select("created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-                if recent.data and len(recent.data) > 0:
-                    from datetime import timezone
-                    last_saved = datetime.fromisoformat(recent.data[0]["created_at"].replace("Z", "+00:00"))
-                    now_utc = datetime.now(timezone.utc)
-                    diff_secs = (now_utc - last_saved).total_seconds()
-                    if diff_secs < 30:
-                        logger.info(f"🛡️ [DEDUP] Plan ya guardado hace {diff_secs:.0f}s para {user_id}. Omitiendo duplicado.")
-                        return
-            except Exception as dedup_e:
-                logger.warning(f"⚠️ [DEDUP] Error en verificación anti-duplicados: {dedup_e}")
-
-            try:
-                supabase.table("meal_plans").insert(insert_data).execute()
-            except Exception as try_db_e:
-                err_msg = str(try_db_e)
-                if "meal_names" in err_msg or "techniques" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
-                    logger.warning("⚠️ [DB] Faltan columnas optimizadas (meal_names/techniques). Ejecute migration_fast_meals.sql")
-                    insert_data.pop("meal_names", None)
-                    insert_data.pop("ingredients", None)
-                    insert_data.pop("techniques", None)
-                    supabase.table("meal_plans").insert(insert_data).execute()
-                else:
-                    raise try_db_e
-            logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
-            
-        # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad)
-        if raw_ingredients:
-            from constants import normalize_ingredient_for_tracking, GLOBAL_REVERSE_MAP
-            # Conjunto de términos base canónicos (ej: "pollo", "platano verde", "aguacate")
-            canonical_bases = set(GLOBAL_REVERSE_MAP.values())
-            
-            normalized = [normalize_ingredient_for_tracking(ing) for ing in raw_ingredients]
-            # Filtrar: solo trackear ingredientes que resolvieron a un término base conocido.
-            # Esto evita que condimentos/hierbas (cilantro, orégano, ajo) polucionen la tabla.
-            canonical = [n for n in normalized if n and n in canonical_bases]
-            non_canonical = [n for n in normalized if n and n not in canonical_bases]
-            
-            if canonical:
-                increment_ingredient_frequencies(user_id, canonical)
-            
-            # 2b. Loguear ingredientes no reconocidos para revisión y expansión del catálogo
-            if non_canonical:
-                from db import log_unknown_ingredients
-                raw_map = {normalize_ingredient_for_tracking(r): r for r in raw_ingredients if r}
-                log_unknown_ingredients(user_id, non_canonical, raw_map)
-                logger.info(f"🧹 [FREQ TRACKING] {len(non_canonical)} ingredientes no-canónicos logueados para revisión")
-                
-            logger.info(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
-            
-        # 3. Auto-generar lista de compras (background, con cache por hash)
-        try:
-            import hashlib, json as _json
-            all_ingredients = []
-            all_supplements = []
-            for d in plan_data.get("days", []):
-                for m in d.get("meals", []):
-                    ing = m.get("ingredients", [])
-                    if ing:
-                        all_ingredients.extend(ing)
-                for s in d.get("supplements") or []:
-                    all_supplements.append(s.get("name", ""))
-            if all_ingredients:
-                plan_hash = hashlib.sha256(_json.dumps({"ingredients": all_ingredients, "supplements": sorted(set(all_supplements)), "version": "v4_multiday"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
-                from db import get_shopping_plan_hash, save_shopping_plan_hash, add_custom_shopping_items, delete_auto_generated_shopping_items, get_custom_shopping_items, get_user_profile
-                
-                stored_hash = get_shopping_plan_hash(user_id)
-                existing = get_custom_shopping_items(user_id)
-                existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
-                
-                # 🔒 REGLA DE TIEMPO PARA BACKGROUND (Evita mutación sutil si ya hay lista vigente)
-                locked = False
-                if existing_items:
-                    try:
-                        hp = get_user_profile(user_id)
-                        hp_data = hp.get("health_profile", {}) if hp else {}
-                        cycle_days = hp_data.get("shopping_cycle", {}).get("duration_days", 7)
-                        
-                        from datetime import datetime, timezone
-                        created_at_strs = [i.get("created_at") for i in existing_items if i.get("created_at")]
-                        if created_at_strs:
-                            oldest_str = min(created_at_strs)
-                            if oldest_str.endswith("Z"):
-                                oldest_str = oldest_str[:-1] + "+00:00"
-                            created_dt = datetime.fromisoformat(oldest_str)
-                            if created_dt.tzinfo is None:
-                                created_dt = created_dt.replace(tzinfo=timezone.utc)
-                                
-                            days_elapsed = (datetime.now(timezone.utc) - created_dt).days
-                            if days_elapsed < cycle_days:
-                                locked = True
-                                logger.info(f"🔒 [BACKGROUND BLOCKED] Lista auto-generada está vigente: {days_elapsed}/{cycle_days} días. Cancelando regeneración destructiva en background.")
-                    except Exception as e:
-                        logger.error(f"Error parseando límite de compras en background para {user_id}: {e}")
-
-                if locked:
-                    logger.debug(f"✅ [BACKGROUND SKIP] Plan ignorado por la lista de compras actual (Aún válida).")
-                elif stored_hash != plan_hash:
-                    from agent import generate_auto_shopping_list
-                    items = generate_auto_shopping_list(plan_data)
-                    if items:
-                        # 🔒 Lock per-user: serializa insert→delete→purge→dedup
-                        from db import get_user_shopping_lock
-                        shopping_lock = get_user_shopping_lock(user_id)
-                        with shopping_lock:
-                            # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
-                            _preserve_shopping_checkmarks(existing_items, items)
-                            result = add_custom_shopping_items(user_id, items, source="auto")
-                            new_ids = [r.get("id") for r in result if r.get("id")] if result and isinstance(result, list) else []
-                            delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
-                            # 🧹 Auto-purga + deduplicación (consistente con /api/shopping/auto-generate)
-                            from db import purge_old_shopping_items, deduplicate_shopping_items
-                            purge_old_shopping_items(user_id)
-                            deduplicate_shopping_items(user_id)
-                            save_shopping_plan_hash(user_id, plan_hash)
-                        logger.debug(f"🛒 [BACKGROUND] Lista de compras auto-generada ({len(items)} items) para {user_id}")
-                    else:
-                        logger.warning(f"⚠️ [BACKGROUND] No se pudieron consolidar ingredientes para {user_id}")
-                else:
-                    logger.debug(f"✅ [BACKGROUND CACHE HIT] Plan sin cambios, lista de compras ya actualizada para {user_id}")
-        except Exception as shop_e:
-            logger.error(f"⚠️ [BACKGROUND] Error auto-generando lista de compras: {shop_e}")
-            
-    except Exception as e:
-        logger.error(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")
-
-
-def _process_swap_rejection_background(session_id: str, user_id: str, rejected_meal: str, meal_type: str):
-    """Background task: Loguea mensajes y rechazos que expiran en 7 días, asíncronamente."""
-    try:
-        from db import get_or_create_session, save_message, insert_rejection
-        if session_id and rejected_meal:
-            get_or_create_session(session_id)
-            save_message(session_id, "user", f"Rechacé explícitamente: {rejected_meal}")
-        
-        # Guardar rechazo TEMPORAL (expira en 7 días)
-        if rejected_meal:
-            rejection_record = {
-                "meal_name": rejected_meal,
-                "meal_type": meal_type,
-            }
-            if user_id and user_id != "guest":
-                rejection_record["user_id"] = user_id
-            if session_id:
-                rejection_record["session_id"] = session_id
-            
-            insert_rejection(rejection_record)
-            logger.debug(f"💾 [DB BACKGROUND] Rechazo temporal guardado para {rejected_meal}")
-            
-            # Fricción Silenciosa: Validar si la base ya se rechazó 3 veces
-            from db import track_meal_friction
-            track_meal_friction(user_id, session_id, rejected_meal)
-    except Exception as e:
-        logger.error(f"⚠️ [BACKGROUND ERROR] Error procesando swap rejection: {e}")
 
 @app.post("/api/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -533,6 +224,229 @@ def api_like(data: dict = Body(...), verified_user_id: Optional[str] = Depends(g
     except Exception as e:
         return {"error": str(e)}
 
+import httpx
+
+@app.post("/api/subscription/verify")
+async def api_verify_subscription(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    try:
+        user_id = data.get("user_id")
+        subscription_id = data.get("subscriptionID")
+        tier = data.get("tier")
+
+        if not user_id or not subscription_id or not tier:
+            raise HTTPException(status_code=400, detail="Missing parameters")
+
+        if not verified_user_id or verified_user_id != user_id:
+            logger.warning(f"Intento no autorizado de verificar suscripcion: req_user={user_id}, auth_user={verified_user_id}")
+            raise HTTPException(status_code=401, detail="No autorizado.")
+
+        PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
+        PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
+        # Por defecto asumo live, a menos que especifique ambiente testing
+        is_sandbox = os.environ.get("ENVIRONMENT") != "production"
+        PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
+
+        success = False
+
+        if not PAYPAL_CLIENT_ID or not PAYPAL_SECRET:
+            # Bypass en desarrollo si no hay llaves aún configuradas (para no bloquearte las pruebas locales iniciales)
+            logger.warning("⚠️ No Paypal keys found in backend .env. Bypassing real validation! (SECURITY RISK IF PRODUCTION)")
+            success = True
+        else:
+            # 1. Obtener Token OAuth de PayPal
+            async with httpx.AsyncClient() as client:
+                auth_resp = await client.post(
+                    f"{PAYPAL_API_BASE}/v1/oauth2/token",
+                    auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
+                    data={"grant_type": "client_credentials"}
+                )
+                if auth_resp.status_code != 200:
+                    logger.error(f"Error auth Paypal: {auth_resp.text}")
+                    raise HTTPException(status_code=500, detail="Error de autenticación con proveedor de pagos.")
+                
+                access_token = auth_resp.json().get("access_token")
+
+                # 2. Verificar el estado de la suscripción
+                sub_resp = await client.get(
+                    f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}",
+                    headers={"Authorization": f"Bearer {access_token}"}
+                )
+                if sub_resp.status_code != 200:
+                    logger.error(f"Error fetching sub: {sub_resp.text}")
+                    raise HTTPException(status_code=400, detail="La suscripción no fue recocida por PayPal.")
+                
+                sub_data = sub_resp.json()
+                status = sub_data.get("status")
+
+                if status != "ACTIVE":
+                    raise HTTPException(status_code=400, detail=f"Suscripción no válida. Estado actual: {status}")
+
+                # Validacion extra: Que el cliente coincida
+                # payer_email = sub_data.get("subscriber", {}).get("email_address")
+                success = True
+
+        # 3. Si PayPal dice que todo está bien, actualizamos localmente al usuario usando Server Role Permissions.
+        if success:
+            logger.info(f"✅ Subscripcion Verificada B2B ({subscription_id}) para usuario {user_id}. Asignando tier: {tier}")
+            
+            # Ejecutamos el update en Supabase.
+            # Nota: usamos la libreria oficial de supabase que ya corre con el SERVICE_ROLE KEY en backend
+            res = supabase.table("user_profiles").update({
+                "plan_tier": tier,
+                "paypal_subscription_id": subscription_id, 
+                "subscription_status": "ACTIVE"
+            }).eq("id", user_id).execute()
+            
+            return {"success": True, "message": "Suscripción verificada y plan actualizado B2B."}
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error interno en /api/subscription/verify: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/subscription/cancel")
+async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    """ Endpoint que el cliente llama para cancelar voluntariamente su suscripción """
+    try:
+        user_id = data.get("user_id")
+        
+        if not verified_user_id or verified_user_id != user_id:
+            logger.warning(f"Intento no autorizado de cancelar suscripcion: req_user={user_id}, auth_user={verified_user_id}")
+            raise HTTPException(status_code=401, detail="No autorizado.")
+            
+        # Obtener el ID de la suscripción de la DB
+        res = supabase.table("user_profiles").select("paypal_subscription_id").eq("id", user_id).execute()
+        if not res.data or not res.data[0].get("paypal_subscription_id"):
+            raise HTTPException(status_code=400, detail="No active subscription found to cancel.")
+            
+        subscription_id = res.data[0]["paypal_subscription_id"]
+        
+        PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
+        PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
+        is_sandbox = os.environ.get("ENVIRONMENT") != "production"
+        PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
+        
+        if PAYPAL_CLIENT_ID and PAYPAL_SECRET:
+            async with httpx.AsyncClient() as client:
+                auth_resp = await client.post(
+                    f"{PAYPAL_API_BASE}/v1/oauth2/token",
+                    auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
+                    data={"grant_type": "client_credentials"}
+                )
+                if auth_resp.status_code == 200:
+                    access_token = auth_resp.json().get("access_token")
+                    
+                    # Llamada a PayPal para cancelar la suscripción
+                    cancel_resp = await client.post(
+                        f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}/cancel",
+                        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                        json={"reason": "El usuario solicitó la cancelación desde la App"}
+                    )
+                    
+                    # 204 No Content indica éxito
+                    if cancel_resp.status_code not in [204, 200]:
+                        logger.error(f"Error cancelando suscripcion con PayPal: {cancel_resp.text}")
+                        # Podríamos fallar aquí, pero para evitar inconsistencias locales dejamos que proceda al fallback
+        
+        # Siempre forzamos el local downgrade como red de seguridad (Cancelado o error de API temporal)
+        logger.info(f"✅ Suscripción {subscription_id} de usuario {user_id} cancelada. Pasando a gratis.")
+        supabase.table("user_profiles").update({
+            "plan_tier": "gratis",
+            "subscription_status": "CANCELLED"
+        }).eq("id", user_id).execute()
+        
+        return {"success": True, "message": "Tu suscripción ha sido cancelada exitosamente."}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error en /api/subscription/cancel: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/webhooks/paypal")
+async def api_webhook_paypal(request: Request):
+    """ Webhook pasivo que escucha eventos silenciosos de PayPal (Tarjetas denegadas o cancelaciones remotas) """
+    try:
+        PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
+        PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
+        PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID")
+        is_sandbox = os.environ.get("ENVIRONMENT") != "production"
+        PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
+        
+        body = await request.body()
+        headers = request.headers
+        
+        if not PAYPAL_WEBHOOK_ID or not PAYPAL_CLIENT_ID or not PAYPAL_SECRET:
+            logger.warning("⚠️ PAYPAL_WEBHOOK_ID o llaves no configuradas. Saltando verificación de firma en webhook.")
+            if not is_sandbox:
+                raise HTTPException(status_code=400, detail="Missing webhook config")
+                
+        payload_dict = json.loads(body.decode('utf-8'))
+        
+        # Validación CRÍTICA: Confirmar usando la API de PayPal que este webhook es legítimo
+        if PAYPAL_CLIENT_ID and PAYPAL_SECRET and PAYPAL_WEBHOOK_ID:
+            async with httpx.AsyncClient() as client:
+                auth_resp = await client.post(
+                    f"{PAYPAL_API_BASE}/v1/oauth2/token",
+                    auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
+                    data={"grant_type": "client_credentials"}
+                )
+                if auth_resp.status_code != 200:
+                    logger.error("Error autenticando con PayPal en webhook")
+                    return {"success": False}
+                
+                access_token = auth_resp.json().get("access_token")
+                
+                verify_payload = {
+                    "auth_algo": headers.get("paypal-auth-algo"),
+                    "cert_url": headers.get("paypal-cert-url"),
+                    "transmission_id": headers.get("paypal-transmission-id"),
+                    "transmission_sig": headers.get("paypal-transmission-sig"),
+                    "transmission_time": headers.get("paypal-transmission-time"),
+                    "webhook_id": PAYPAL_WEBHOOK_ID,
+                    "webhook_event": payload_dict
+                }
+                
+                verify_resp = await client.post(
+                    f"{PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature",
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    json=verify_payload
+                )
+                
+                if verify_resp.status_code != 200 or verify_resp.json().get("verification_status") != "SUCCESS":
+                    logger.warning(f"🔒 Bloqueado: Firma del Webhook PayPal inválida: {verify_resp.text}")
+                    return {"success": False, "message": "Signature mismatch"}
+        
+        event_type = payload_dict.get("event_type")
+        resource = payload_dict.get("resource", {})
+        
+        logger.info(f"⚡ [WEBHOOK PAYPAL] Evento recibido: {event_type}")
+        
+        # Eventos que implican remover el acceso al plan
+        cancellation_events = [
+            "BILLING.SUBSCRIPTION.CANCELLED", 
+            "BILLING.SUBSCRIPTION.SUSPENDED", 
+            "BILLING.SUBSCRIPTION.EXPIRED",
+            "BILLING.SUBSCRIPTION.PAYMENT.FAILED"
+        ]
+        
+        if event_type in cancellation_events:
+            subscription_id = resource.get("id")
+            if subscription_id:
+                logger.info(f"⬇️ Degradando suscripción {subscription_id} en BD debido a {event_type}.")
+                supabase.table("user_profiles").update({
+                    "plan_tier": "gratis",
+                    "subscription_status": "INACTIVE"
+                }).eq("paypal_subscription_id", subscription_id).execute()
+        
+        return {"success": True}
+
+    except Exception as e:
+        logger.error(f"❌ Error procesando webhook PayPal: {e}")
+        return {"success": False}
+
+
 @app.get("/api/user/credits/{user_id}")
 def api_get_user_credits(user_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     """Consulta los créditos consumidos en el mes usando api_usage."""
@@ -542,7 +456,6 @@ def api_get_user_credits(user_id: str, verified_user_id: Optional[str] = Depends
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=403, detail="Prohibido. Token inválido o no coincide.")
                 
-        from db import get_monthly_api_usage
         if not user_id or user_id == "guest":
             return {"credits": 0}
         credits_used = get_monthly_api_usage(user_id)
@@ -579,13 +492,8 @@ def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends
             raise HTTPException(status_code=401, detail="Token de autenticación requerido.")
         
         # Validación IDOR: verificar que el fact pertenece al usuario autenticado
-        from db import supabase
-        if supabase:
-            check = supabase.table("user_facts").select("user_id").eq("id", fact_id).execute()
-            if not check.data:
-                raise HTTPException(status_code=404, detail="Hecho no encontrado.")
-            if check.data[0].get("user_id") != verified_user_id:
-                raise HTTPException(status_code=403, detail="Prohibido. Este hecho no te pertenece.")
+        if not check_fact_ownership(fact_id, verified_user_id):
+            raise HTTPException(status_code=403, detail="No tienes permiso para borrar este hecho.")
         
         result = delete_user_fact(fact_id)
         return {"success": True, "message": "Hecho eliminado de la IA."}
@@ -642,7 +550,6 @@ def api_webhook_process_pending_facts(request: Request, data: dict = Body(...), 
 
 @app.get("/api/chat/sessions/{user_id}")
 def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
-    from db import get_guest_chat_sessions, get_user_chat_sessions
     try:
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
@@ -672,26 +579,31 @@ def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verif
 
 @app.delete("/api/chat/sessions/{user_id}")
 def api_delete_chat_sessions(user_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
-    from db import supabase
     try:
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=403, detail="Prohibido.")
-            if supabase:
-                supabase.table("agent_sessions").delete().eq("user_id", user_id).execute()
+            delete_user_agent_sessions(user_id)
         return {"success": True}
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/chat/history/{session_id}")
-def api_get_chat_history(session_id: str):
-    from db import get_session_messages
+def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     try:
+        # 🛡️ Validación IDOR: Verificar que el session pertenece al usuario autenticado
+        session_owner = get_session_owner(session_id)
+        if session_owner and session_owner != "guest":
+            if not verified_user_id or verified_user_id != session_owner:
+                raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
+
         messages = get_session_messages(session_id)
         # Ocultar mensajes de sistema como el system_title
         filtered_messages = [m for m in messages if not m.get("content", "").startswith("[SYSTEM_TITLE]")]
         return {"messages": filtered_messages}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/history GET: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -733,7 +645,7 @@ async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[s
         raise HTTPException(status_code=500, detail="Error saving feedback")
 
 @app.post("/api/chat/stream")
-async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
+def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id", "default_session")
         prompt = data.get("prompt", "")
@@ -750,62 +662,30 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                 
         logger.info(f"🔍 [DEBUG API CHAT STREAM] session_id={session_id}, user_id={user_id}")
         
-        # Estas operaciones son síncronas pero muy rápidas
-        await asyncio.to_thread(get_or_create_session, session_id, user_id=user_id if user_id != "guest" else None)
-        await asyncio.to_thread(save_message, session_id, "user", prompt)
+        # Operaciones síncronas directas (ya estamos en un threadpool worker)
+        get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
+        save_message(session_id, "user", prompt)
         
-        # Handle form_data: merge frontend data with DB health_profile
-        merged_form_data = form_data or {}
-        if user_id and user_id != "guest" and user_id != session_id:
-            try:
-                profile = await asyncio.to_thread(get_user_profile, user_id)
-                if profile:
-                    existing_hp = profile.get("health_profile") or {}
-                    
-                    if existing_hp:
-                        # Si hay datos en la DB, los usamos y los actualizamos con lo nuevo del frontend
-                        existing_hp.update(merged_form_data)
-                        merged_form_data = existing_hp
-                    
-                    # Sincronizar de vuelta a la DB si el frontend envió algo válido pero la DB estaba vacía o diferente
-                    if form_data and not existing_hp:
-                        logger.debug(f"🔄 [SYNC STREAM] health_profile vacío, sincronizando...")
-                        await asyncio.to_thread(update_user_health_profile, user_id, merged_form_data)
-                else:
-                    if form_data:
-                        try:
-                            from db import supabase as sb_client
-                            if sb_client:
-                                def _upsert_profile():
-                                    sb_client.table("user_profiles").upsert({
-                                        "id": user_id,
-                                        "health_profile": merged_form_data
-                                    }).execute()
-                                await asyncio.to_thread(_upsert_profile)
-                        except Exception as e:
-                            logger.error(f"❌ [SYNC STREAM] Error creando perfil: {e}")
-            except Exception as e:
-                logger.error(f"⚠️ Error cargando health profile en chat: {e}")
-                
-        form_data = merged_form_data
+        # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
+        form_data = merge_form_data_with_profile(
+            user_id if user_id != "guest" and user_id != session_id else "",
+            form_data
+        )
         
         if not current_plan and user_id and user_id != "guest":
-            current_plan = await asyncio.to_thread(get_latest_meal_plan, user_id)
+            current_plan = get_latest_meal_plan(user_id)
             
-        import threading
-        from agent import achat_with_agent_stream, generate_chat_title_background
         
-        # Iniciar generación del título de inmediato en paralelo a la respuesta del stream (usar OS threads previene bloqueo por el grafo síncrono)
+        # Iniciar generación del título de inmediato en paralelo
         threading.Thread(
             target=generate_chat_title_background,
             args=(user_id, session_id, prompt),
             daemon=True
         ).start()
         
-        async def event_generator():
+        def event_generator():
             try:
-                # Obtenemos los chunks del generador de LangGraph
-                async for chunk in achat_with_agent_stream(
+                for chunk in chat_with_agent_stream(
                     session_id=session_id, 
                     prompt=prompt, 
                     current_plan=current_plan, 
@@ -818,14 +698,12 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                     
                     # Interceptar el evento 'done' para lanzar background tasks
                     if chunk.startswith("data: "):
-                        import json
                         try:
                             data_obj = json.loads(chunk[len("data: "):].strip())
                             if data_obj.get("type") == "done":
                                 response_text = data_obj.get("response", "")
                                 if response_text:
-                                    # Guardamos la respuesta final en DB  
-                                    await asyncio.to_thread(save_message, session_id, "model", response_text)
+                                    save_message(session_id, "model", response_text)
                                     
                                 # Lógica Background (resumir, uso de API, embeddings)
                                 def bg_tasks():
@@ -833,7 +711,6 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                                         log_api_usage(user_id, "gemini_chat")
                                         
                                     try:
-                                        from db import get_session_messages
                                         raw_history = get_session_messages(session_id)
                                         recent_history_str = ""
                                         if raw_history:
@@ -853,14 +730,12 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
                                     except Exception as inner_e:
                                         logger.error(f"Error en bg tasks: {inner_e}")
                                 
-                                await asyncio.to_thread(bg_tasks)
+                                threading.Thread(target=bg_tasks, daemon=True).start()
                         except Exception as e_json:
                             logger.error(f"Error parseando chunk de fin: {e_json}")
                             
             except Exception as e:
-                import traceback
                 traceback.print_exc()
-                import json
                 yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -868,7 +743,6 @@ async def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(.
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -892,38 +766,11 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
         save_message(session_id, "user", prompt)
         
-        # Handle form_data: merge frontend data with DB health_profile
-        merged_form_data = form_data or {}
-        if user_id and user_id != "guest" and user_id != session_id:
-            try:
-                profile = get_user_profile(user_id)
-                if profile:
-                    existing_hp = profile.get("health_profile") or {}
-                    
-                    if existing_hp:
-                        existing_hp.update(merged_form_data)
-                        merged_form_data = existing_hp
-                        
-                    if form_data and not existing_hp:
-                        logger.debug(f"🔄 [SYNC] health_profile vacío, sincronizando desde formData del frontend...")
-                        update_user_health_profile(user_id, merged_form_data)
-                else:
-                    if form_data:
-                        logger.warning(f"⚠️ [SYNC] No existe user_profile para {user_id}, intentando crear...")
-                        try:
-                            from db import supabase as sb_client
-                            if sb_client:
-                                sb_client.table("user_profiles").upsert({
-                                    "id": user_id,
-                                    "health_profile": merged_form_data
-                                }).execute()
-                                logger.info(f"✅ [SYNC] Perfil creado con health_profile")
-                        except Exception as e:
-                            logger.error(f"❌ [SYNC] Error creando perfil: {e}")
-            except Exception as e:
-                logger.error(f"⚠️ Error cargando health profile en chat: {e}")
-                
-        form_data = merged_form_data
+        # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
+        form_data = merge_form_data_with_profile(
+            user_id if user_id != "guest" and user_id != session_id else "",
+            form_data
+        )
         
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)
@@ -940,7 +787,6 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         
         # === CONTEXTO PARA HECHOS (Debounce Semántico) ===
         # Obtenemos el historial de la sesión para darle contexto al LLM extractor
-        from db import get_session_messages
         raw_history = get_session_messages(session_id)
         recent_history_str = ""
         if raw_history:
@@ -989,8 +835,6 @@ async def api_diary_upload(
                 
         actual_user_id = user_id if user_id != "guest" else session_id
 
-        from vision_agent import process_image_with_vision
-        from db import supabase
         
         MAX_FILE_SIZE = 20 * 1024 * 1024 # 20 MB
         file_bytes = b""
@@ -1000,7 +844,6 @@ async def api_diary_upload(
                 raise HTTPException(status_code=413, detail="La imagen es demasiado grande. Máximo 20MB permitidos.")
         
         file_ext = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
-        actual_user_id = user_id if user_id != "guest" else session_id
         unique_filename = f"{actual_user_id}/{uuid.uuid4().hex}.{file_ext}"
         
         image_url = ""
@@ -1039,8 +882,7 @@ async def api_diary_upload(
         if is_food:
             logger.info(f"✅ Descripción generada: '{description}'")
             
-            if actual_user_id and actual_user_id != "guest" and actual_user_id != session_id:
-                from db import log_api_usage
+            if actual_user_id and actual_user_id != session_id:
                 log_api_usage(actual_user_id, "gemini_vision")
                 
             # 4. Guardar en DB en segundo plano (embedding + insert)
@@ -1063,8 +905,6 @@ async def api_diary_upload(
 
 def _save_visual_entry_background(user_id: str, image_url: str, description: str):
     """Background task: genera embedding y guarda en la tabla visual_diary."""
-    from vision_agent import get_multimodal_embedding
-    from db import save_visual_entry
     
     embedding = get_multimodal_embedding(description)
     if embedding:
@@ -1091,29 +931,16 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         if not user_id or user_id == "guest":
             raise HTTPException(status_code=400, detail="Usuario no válido para auto-generar lista.")
             
-        from db import get_latest_meal_plan
         current_plan = get_latest_meal_plan(user_id)
         
         if not current_plan:
             raise HTTPException(status_code=404, detail="No se encontró un plan activo para extraer ingredientes.")
         
-        # Calcular hash del plan para detectar cambios (incluye suplementos)
-        import hashlib, json as _json
-        ingredients_for_hash = []
-        supplements_for_hash = []
-        for d in current_plan.get("days", []):
-            for m in d.get("meals", []):
-                ing = m.get("ingredients", [])
-                if ing:
-                    ingredients_for_hash.extend(ing)
-            for s in d.get("supplements") or []:
-                supplements_for_hash.append(s.get("name", ""))
-        plan_hash = hashlib.sha256(_json.dumps({"ingredients": ingredients_for_hash, "supplements": sorted(set(supplements_for_hash)), "version": "v4_multiday"}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+        # Calcular hash del plan para detectar cambios (SSoT: compute_plan_hash en services.py)
+        plan_hash = compute_plan_hash(current_plan)
         
         # Verificar si el plan ya fue procesado y si la lista sigue vigente
         if not force:
-            from db import get_shopping_plan_hash
-            from db import get_custom_shopping_items
             stored_hash = get_shopping_plan_hash(user_id)
             existing = get_custom_shopping_items(user_id)
             existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
@@ -1147,43 +974,15 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
                 return {"success": True, "items": existing_items, "cached": True, "locked": False,
                         "message": "La lista ya está actualizada con tu plan actual."}
             
-        from agent import generate_auto_shopping_list
         items = generate_auto_shopping_list(current_plan)
         
         if not items:
             return {"success": False, "message": "No se encontraron ingredientes para consolidar en el plan activo."}
             
-        from db import add_custom_shopping_items, delete_auto_generated_shopping_items, save_shopping_plan_hash
+        existing = _get_items(user_id)
+        existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
         
-        # 🔒 Lock per-user: serializa insert→delete→purge→dedup para evitar race conditions
-        from db import get_user_shopping_lock
-        shopping_lock = get_user_shopping_lock(user_id)
-        with shopping_lock:
-            # 🛡️ Patrón INSERT-FIRST / DELETE-OLD (Crash-Safe)
-            # Insertar los nuevos items ANTES de borrar los viejos.
-            # Si el proceso muere entre el INSERT y el DELETE, el usuario tiene duplicados (fácilmente deduplicables),
-            # en vez de perder toda su lista (irrecuperable).
-            _preserve_shopping_checkmarks(existing_items, items)
-            result = add_custom_shopping_items(user_id, items, source="auto")
-            
-            # Extraer IDs de los items recién insertados para excluirlos del borrado
-            new_ids = []
-            if result and isinstance(result, list):
-                new_ids = [r.get("id") for r in result if r.get("id")]
-            
-            # Borrar items auto-generados ANTERIORES (excluyendo los que acabamos de insertar)
-            delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
-            
-            # 🧹 Auto-purga oportunista: limpiar items checked viejos y enforce tope global
-            from db import purge_old_shopping_items
-            purge_old_shopping_items(user_id)
-            
-            # 🔄 Auto-deduplicación: unificar items duplicados automáticamente
-            from db import deduplicate_shopping_items
-            deduplicate_shopping_items(user_id)
-            
-            # Guardar hash del plan para cache futuro
-            save_shopping_plan_hash(user_id, plan_hash)
+        result = regenerate_shopping_list_safe(user_id, items, existing_items, plan_hash)
         
         if result is not None:
             return {"success": True, "items": items, "cached": False, "message": f"Se auto-generaron y guardaron {len(items)} ingredientes estructurados en tu lista con éxito."}
@@ -1222,23 +1021,13 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
             items = items[:MAX_ITEMS]
             alert_msg = f" (Alerta: se excedió el límite máximo y solo se añadieron los primeros {MAX_ITEMS} items)"
         
-        # Sanitización: eliminar HTML/JS tags, control chars, y limitar longitud
-        import re as _re
-        MAX_ITEM_LENGTH = 100
-        
-        def _sanitize(text: str) -> str:
-            clean = _re.sub(r'<[^>]+>', '', text).strip()
-            clean = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean)
-            return clean[:MAX_ITEM_LENGTH]
-        
         # Normalizar a JSON struct consistente con ShoppingItemModel
-        from tools import _categorize_item
         structured_items = []
         for item_name in items:
             raw = item_name.strip() if isinstance(item_name, str) else ""
-            name = _sanitize(raw) if raw else ""
+            name = sanitize_shopping_text(raw) if raw else ""
             if name:
-                cat, emoji = _categorize_item(name)
+                cat, emoji = categorize_shopping_item(name)
                 structured_items.append({
                     "category": cat,
                     "emoji": emoji,
@@ -1249,13 +1038,11 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
         if not structured_items:
             raise HTTPException(status_code=400, detail="Ningún item válido proporcionado.")
             
-        from db import add_custom_shopping_items
         result = add_custom_shopping_items(user_id, structured_items, source="manual")
         
         if result is not None:
             # Auto-deduplicar: si el usuario ya tenía "Leche" y añade "leche", se fusionan
             try:
-                from db import deduplicate_shopping_items
                 deduplicate_shopping_items(user_id)
             except Exception:
                 pass  # No bloquear la respuesta si falla la dedup
@@ -1295,7 +1082,6 @@ def api_delete_custom_shopping_item(item_id: str, verified_user_id: str = Depend
     try:
         if not verified_user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token requerido para eliminar items.")
-        from db import delete_custom_shopping_item
         result = delete_custom_shopping_item(item_id, user_id=verified_user_id)
         if result is None or (isinstance(result, list) and len(result) == 0):
             raise HTTPException(status_code=404, detail="Item no encontrado o no pertenece al usuario.")
@@ -1313,35 +1099,24 @@ def api_update_custom_shopping_item(item_id: str, data: dict = Body(...), verifi
         if not verified_user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token requerido para editar items.")
         
-        # Extraer campos editables del body
-        import re as _re
-        MAX_FIELD_LENGTH = 100
-        
-        def _sanitize_field(text: str) -> str:
-            clean = _re.sub(r'<[^>]+>', '', text).strip()
-            clean = _re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean)
-            return clean[:MAX_FIELD_LENGTH]
-        
         updates = {}
         for field in ["display_name", "qty", "category", "emoji"]:
             if field in data:
                 val = data[field]
                 if isinstance(val, str):
-                    updates[field] = _sanitize_field(val)
+                    updates[field] = sanitize_shopping_text(val)
                 else:
                     updates[field] = val
         
         # Si se renombra el item, re-categorizar automáticamente
         if "display_name" in updates and "category" not in data:
-            from tools import _categorize_item
-            cat, emoji = _categorize_item(updates["display_name"])
+            cat, emoji = categorize_shopping_item(updates["display_name"])
             updates["category"] = cat
             updates["emoji"] = emoji
         
         if not updates:
             raise HTTPException(status_code=400, detail="No se proporcionaron campos para actualizar. Campos permitidos: display_name, qty, category, emoji.")
         
-        from db import update_custom_shopping_item
         result = update_custom_shopping_item(item_id, updates, user_id=verified_user_id)
         
         if result is None:
@@ -1363,7 +1138,6 @@ def api_update_custom_shopping_item_check(item_id: str, data: dict = Body(...), 
         if not verified_user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token requerido.")
         is_checked = data.get("is_checked", False)
-        from db import update_custom_shopping_item_status
         result = update_custom_shopping_item_status(item_id, is_checked, user_id=verified_user_id)
         if result is not None:
             return {"success": True, "message": "Estado actualizado"}
@@ -1381,7 +1155,6 @@ def api_clear_all_shopping_items(user_id: str, verified_user_id: str = Depends(g
     try:
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=403, detail="Prohibido.")
-        from db import clear_all_shopping_items
         result = clear_all_shopping_items(user_id)
         if result:
             return {"success": True, "message": "Lista de compras vaciada."}
@@ -1398,7 +1171,6 @@ def api_uncheck_all_shopping_items(user_id: str, verified_user_id: str = Depends
     try:
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=403, detail="Prohibido.")
-        from db import uncheck_all_shopping_items
         result = uncheck_all_shopping_items(user_id)
         if result:
             return {"success": True, "message": "Todos los items desmarcados."}
@@ -1415,7 +1187,6 @@ def api_deduplicate_shopping_items(user_id: str, verified_user_id: str = Depends
     try:
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=403, detail="Prohibido.")
-        from db import deduplicate_shopping_items
         result = deduplicate_shopping_items(user_id)
         return {"success": True, **result}
     except HTTPException as he:
@@ -1430,7 +1201,6 @@ def api_purge_shopping_items(user_id: str, verified_user_id: str = Depends(get_v
     try:
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=403, detail="Prohibido.")
-        from db import purge_old_shopping_items
         result = purge_old_shopping_items(user_id)
         return {"success": True, "message": "Purga completada.", "details": result}
     except HTTPException as he:
@@ -1458,7 +1228,6 @@ def api_log_consumed_meal(data: dict = Body(...), verified_user_id: str = Depend
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar comidas."}
             
-        from db import log_consumed_meal
         log_consumed_meal(user_id, meal_name, int(calories), int(protein), int(carbs), int(healthy_fats))
         
         return {"success": True, "message": "Comida registrada exitosamente."}
@@ -1480,7 +1249,6 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         if not user_id or user_id == "guest":
             return {"meals": [], "totals": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}}
         
-        from db import get_consumed_meals_today
         meals = get_consumed_meals_today(user_id, date_str=date, tz_offset_mins=tzOffset)
         
         total_cal = sum(m.get("calories", 0) for m in meals)
@@ -1528,8 +1296,6 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
         if not session_ids or not new_user_id:
             raise HTTPException(status_code=400, detail="Faltan parámetros (session_ids o user_id).")
             
-        from db import migrate_guest_data, update_user_health_profile, get_latest_meal_plan, get_user_profile
-        from db import supabase
         
         # 1. Transformar data guest a registrada
         success = migrate_guest_data(session_ids, new_user_id)
@@ -1539,17 +1305,12 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
         # 2. Upsert health_profile si el frontend lo provee
         if health_profile:
             try:
-                from db import get_user_profile
                 profile = get_user_profile(new_user_id)
                 # Si el usuario es nuevo, puede no existir su perfil
                 if profile:
                     update_user_health_profile(new_user_id, health_profile)
                 else:
-                    if supabase:
-                        supabase.table("user_profiles").upsert({
-                            "id": new_user_id,
-                            "health_profile": health_profile
-                        }).execute()
+                    upsert_user_profile(new_user_id, health_profile)
             except Exception as e:
                 logger.error(f"Error migrando health_profile: {e}")
                 
@@ -1581,16 +1342,7 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
                             "meal_names": meal_names,
                             "ingredients": ingredients
                         }
-                        try:
-                            supabase.table("meal_plans").insert(insert_data).execute()
-                        except Exception as try_db_e:
-                            err_msg = str(try_db_e)
-                            if "meal_names" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
-                                del insert_data["meal_names"]
-                                del insert_data["ingredients"]
-                                supabase.table("meal_plans").insert(insert_data).execute()
-                            else:
-                                raise try_db_e
+                        save_new_meal_plan_robust(insert_data)
                 except Exception as e:
                     logger.error(f"Error migrando current_plan: {e}")
                     

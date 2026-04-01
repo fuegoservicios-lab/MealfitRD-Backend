@@ -1,22 +1,29 @@
 import os
 import logging
 import json
+import re
+import unicodedata
 import time
 from typing import Optional
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
-from tenacity import retry, stop_after_attempt, wait_exponential
 logger = logging.getLogger(__name__)
 
 from db import (
     get_user_profile, update_user_health_profile, delete_user_facts_by_metadata,
     get_user_likes, get_active_rejections, get_latest_meal_plan_with_id, 
     update_meal_plan_data, add_custom_shopping_items, search_deep_memory as db_search_deep_memory,
-    log_consumed_meal as db_log_consumed_meal, deduct_inventory_items
+    log_consumed_meal as db_log_consumed_meal, deduct_inventory_items,
+    save_new_meal_plan_robust, increment_ingredient_frequencies, get_custom_shopping_items,
+    get_latest_meal_plan, deduplicate_shopping_items, delete_custom_shopping_items_batch,
+    get_user_shopping_lock
 )
 from schemas import MealModel
 from prompts import PREFERENCES_AGENT_PROMPT, MODIFY_MEAL_PROMPT_TEMPLATE
+from datetime import datetime
+import threading
+from graph_orchestrator import run_plan_pipeline
 
 def analyze_preferences_agent(likes: list, history: list, active_rejections: Optional[list] = None):
     """
@@ -99,10 +106,9 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
         elif 'mujer' in new_value_lower or 'femenino' in new_value_lower: new_value = 'female'
         
     if field in ['weight', 'height', 'age']:
-        import re
-        extracted = re.sub(r'[^\d.]', '', str(new_value))
+        extracted = re.search(r'\d+\.?\d*', str(new_value))
         if extracted:
-            new_value = extracted
+            new_value = extracted.group()
             
     if user_id and user_id != "guest":
         profile = get_user_profile(user_id)
@@ -125,7 +131,7 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
             if field in category_map:
                 cat = category_map[field]
                 logger.info(f"🧹 [CLEANUP] Borrando vectores de categoría '{cat}' para evitar conflictos con el formulario.")
-                delete_user_facts_by_metadata(user_id, {"categoria": cat})
+                delete_user_facts_by_metadata(user_id, {"category": cat})
             # ---------------------------------------------
             
     return f"¡Éxito! El campo '{field}' ha sido actualizado a '{new_value}'."
@@ -138,8 +144,6 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
     logger.info(f"\n🚀 [TOOL] Generando plan nuevo desde el chat para user_id: {user_id}")
     if instructions:
         logger.info(f"📝 [TOOL] Instrucciones específicas del usuario: {instructions}")
-    
-    from graph_orchestrator import run_plan_pipeline
     
     # 1. Validar y consolidar form_data (Priorizar el del frontend)
     actual_form_data = form_data or {}
@@ -176,71 +180,55 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
         if result:
             # Intentar guardar en la tabla meal_plans (no crítico)
             try:
-                from supabase import create_client
-                supabase_url = os.environ.get("SUPABASE_URL")
+                calories = result.get("calories", 0)
+                macros = result.get("macros", {})
                 
-                # Intentamos usar la KEY de servicio si existe para saltar el RLS, o la anónima
-                supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+                meal_names = []
+                ingredients = []
+                for d in result.get("days", []):
+                    for m in d.get("meals", []):
+                        if m.get("name"):
+                            meal_names.append(m.get("name"))
+                        if m.get("ingredients"):
+                            ingredients.extend(m.get("ingredients"))
+                            
+                insert_data = {
+                    "user_id": user_id,
+                    "plan_data": result,
+                    "calories": int(calories) if calories else 0,
+                    "macros": macros,
+                    "meal_names": meal_names,
+                    "ingredients": ingredients
+                }
                 
-                if supabase_url and supabase_key:
-                    from datetime import datetime
-                    sb = create_client(supabase_url, supabase_key)
-                    calories = result.get("calories", 0)
-                    macros = result.get("macros", {})
-                    
-                    meal_names = []
-                    ingredients = []
+                # Nombre inteligente: primeras 2 comidas + calorías
+                if len(meal_names) >= 2:
+                    n1 = meal_names[0][:30] if len(meal_names[0]) > 30 else meal_names[0]
+                    n2 = meal_names[1][:30] if len(meal_names[1]) > 30 else meal_names[1]
+                    insert_data["name"] = f"{n1} · {n2} — {calories} kcal"
+                elif meal_names:
+                    insert_data["name"] = f"{meal_names[0][:30]} — {calories} kcal"
+                else:
+                    insert_data["name"] = f"Plan {calories} kcal — {datetime.now().strftime('%d/%m/%Y')}"
+                
+                salvo_ok = save_new_meal_plan_robust(insert_data)
+                
+                if salvo_ok:
+                    logger.info("💾 Plan generado desde chat guardado en DB.")
+                else:
+                    logger.warning("⚠️ No se pudo guardar el plan generado desde chat.")
+                
+                # 📈 Frequency Tracking para plan generado por chat (siempre, independiente del guardado)
+                try:
+                    raw_ingredients = []
                     for d in result.get("days", []):
                         for m in d.get("meals", []):
-                            if m.get("name"):
-                                meal_names.append(m.get("name"))
-                            if m.get("ingredients"):
-                                ingredients.extend(m.get("ingredients"))
-                                
-                    insert_data = {
-                        "user_id": user_id,
-                        "plan_data": result,
-                        "calories": int(calories) if calories else 0,
-                        "macros": macros,
-                        "meal_names": meal_names,
-                        "ingredients": ingredients
-                    }
-                    
-                    # Nombre inteligente: primeras 2 comidas + calorías
-                    if len(meal_names) >= 2:
-                        n1 = meal_names[0][:30] if len(meal_names[0]) > 30 else meal_names[0]
-                        n2 = meal_names[1][:30] if len(meal_names[1]) > 30 else meal_names[1]
-                        insert_data["name"] = f"{n1} · {n2} — {calories} kcal"
-                    elif meal_names:
-                        insert_data["name"] = f"{meal_names[0][:30]} — {calories} kcal"
-                    else:
-                        insert_data["name"] = f"Plan {calories} kcal — {datetime.now().strftime('%d/%m/%Y')}"
-                    
-                    try:
-                        sb.table("meal_plans").insert(insert_data).execute()
-                    except Exception as try_db_e:
-                        err_msg = str(try_db_e)
-                        if "meal_names" in err_msg or "PGRST205" in err_msg or "Could not find" in err_msg:
-                            logger.warning("⚠️ [DB] Faltan columnas en DB (meal_names). Guardando sin optimización.")
-                            del insert_data["meal_names"]
-                            del insert_data["ingredients"]
-                            sb.table("meal_plans").insert(insert_data).execute()
-                        else:
-                            raise try_db_e
-                    logger.info("💾 Plan generado desde chat guardado en DB.")
-                    
-                    # 📈 Frequency Tracking para plan generado por chat
-                    try:
-                        from db import increment_ingredient_frequencies
-                        raw_ingredients = []
-                        for d in result.get("days", []):
-                            for m in d.get("meals", []):
-                                raw_ingredients.extend(m.get("ingredients", []))
-                        if raw_ingredients:
-                            increment_ingredient_frequencies(user_id, raw_ingredients)
-                            logger.info(f"📈 [FREQ TRACKING] Frecuencias de chat actualizadas para {user_id}")
-                    except Exception as freq_e:
-                        logger.error(f"⚠️ [FREQ TRACKING ERROR] Error en tools: {freq_e}")
+                            raw_ingredients.extend(m.get("ingredients", []))
+                    if raw_ingredients:
+                        increment_ingredient_frequencies(user_id, raw_ingredients)
+                        logger.info(f"📈 [FREQ TRACKING] Frecuencias de chat actualizadas para {user_id}")
+                except Exception as freq_e:
+                    logger.error(f"⚠️ [FREQ TRACKING ERROR] Error en tools: {freq_e}")
 
             except Exception as db_e:
                 logger.error(f"⚠️ Aviso: No se pudo guardar el plan en Supabase (error {db_e}), pero el plan se devolverá al usuario.")
@@ -332,14 +320,12 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
     shopping_constraint = ""
     try:
-        from db import get_custom_shopping_items
         existing = get_custom_shopping_items(user_id)
         existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
         if existing_items:
             # Extract food items to constrain the AI
             excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
             ingredient_names = []
-            import json
             for item in existing_items:
                 if item.get("category") in excluded_cats:
                     continue
@@ -434,129 +420,7 @@ def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: s
 # TOOL: Añadir items a la lista de compras
 # ============================================================
 
-# Mapping local de keywords → (categoría, emoji) para categorización inteligente sin LLM
-# ⚠️ Las keywords se emparejan con \b (word boundary), NO con substring.
-#     Esto evita falsos positivos como "sal" matcheando "salmón".
-#     Para frases multi-palabra ("pasta de tomate"), se prueban primero.
-_CATEGORY_KEYWORDS = {
-    ("Frutas y Verduras", "🥬"): [
-        "lechuga", "tomate", "cebolla", "ajo", "pimiento", "zanahoria", "brocoli", "brócoli",
-        "espinaca", "pepino", "aguacate", "limon", "limón", "naranja", "manzana", "banana",
-        "platano", "plátano", "guineo", "mango", "piña", "papaya", "fresa", "uva", "melon",
-        "sandia", "sandía", "cilantro", "perejil", "apio", "repollo", "coliflor", "batata",
-        "yuca", "ñame", "tayota", "berro", "remolacha", "berenjena", "calabaza", "mazorca",
-        "maiz", "maíz", "kiwi", "cereza", "arandano", "arándano", "mandarina", "guayaba",
-        "chinola", "lechosa", "vaina",
-        # Multi-palabra (se prueban primero por ser más específicos)
-        "platano verde", "plátano verde", "platano maduro", "plátano maduro",
-    ],
-    ("Proteínas", "🥩"): [
-        "pollo", "pechuga", "muslo", "carne", "cerdo", "chuleta", "costilla",
-        "salmon", "salmón", "atun", "atún", "pescado", "camaron", "camarón", "camarones",
-        "jamon", "jamón", "salami", "salchicha", "tocino", "bacon", "pavo", "cordero",
-        "filete", "bistec", "molida", "longaniza", "chorizo", "tilapia", "sardina",
-        "pulpo", "calamar", "langosta", "cangrejo",
-        # Multi-palabra
-        "carne de res", "carne molida",
-    ],
-    ("Lácteos", "🥛"): [
-        "leche", "queso", "yogur", "yogurt", "mantequilla", "nata", "requesón",
-        "mozzarella", "parmesano", "ricotta", "cheddar", "suero",
-        # Multi-palabra (más específicos, se prueban primero)
-        "queso crema", "crema de leche", "crema agria",
-    ],
-    ("Huevos", "🥚"): [
-        "huevo", "huevos",
-    ],
-    ("Granos y Cereales", "🌾"): [
-        "arroz", "avena", "quinoa", "trigo", "cebada", "lenteja", "lentejas",
-        "frijol", "frijoles", "garbanzo", "guandule", "guandules",
-        "habichuela", "habichuelas", "alubia",
-        "pasta", "espagueti", "macarron", "fideos", "cereal", "granola", "harina",
-        "tortilla", "arepa", "casabe",
-        # Multi-palabra
-        "pan integral", "pan de agua",
-    ],
-    ("Condimentos y Especias", "🧂"): [
-        "pimienta", "oregano", "orégano", "comino", "curry", "canela", "paprika",
-        "adobo", "sazon", "sazón", "vinagre", "salsa", "ketchup", "mostaza", "mayonesa",
-        "soya", "sillao", "miel", "azucar", "azúcar", "sabora",
-        # Multi-palabra
-        "salsa de tomate", "sal de ajo", "sal marina", "sal rosada",
-    ],
-    ("Aceites y Grasas", "🫒"): [
-        "aceite", "oliva", "girasol", "manteca", "spray", "ghee",
-        # Multi-palabra (evita que "coco" matchee "agua de coco")
-        "aceite de coco", "aceite vegetal", "aceite de girasol",
-    ],
-    ("Bebidas", "🥤"): [
-        "agua", "jugo", "refresco", "soda", "cafe", "café", "cerveza",
-        "vino", "whisky", "gaseosa", "energizante",
-        # Multi-palabra
-        "agua de coco",
-    ],
-    ("Snacks y Dulces", "🍪"): [
-        "galleta", "chocolate", "dulce", "caramelo", "chicle", "chips", "palomita",
-        "nuez", "almendra", "mani", "maní", "semilla", "barra", "peanut",
-    ],
-    ("Enlatados y Conservas", "🥫"): [
-        # Solo multi-palabra para evitar que "lata" matchee "chocolate"
-        "enlatado", "conserva",
-        "pasta de tomate", "sardinas en lata", "atun en lata", "maiz en lata",
-    ],
-    ("Panadería", "🍞"): [
-        "pan",
-    ],
-    ("Limpieza y Hogar", "🧹"): [
-        "jabon", "jabón", "detergente", "cloro", "desinfectante", "servilleta",
-        "esponja", "fabuloso", "suavizante",
-        # Multi-palabra
-        "papel toalla", "bolsa de basura",
-    ],
-    ("Higiene Personal", "🧴"): [
-        "shampoo", "champú", "desodorante",
-        "pasta dental", "crema dental", "cepillo dental",
-    ],
-}
-
-def _categorize_item(item_name: str) -> tuple:
-    """Categoriza un item por keywords locales con word-boundary matching.
-    Retorna (categoría, emoji).
-    
-    Orden de matching (más específico primero):
-    1. ALL multi-word keywords across ALL categories (substring match)
-    2. ALL single-word keywords across ALL categories (\\b word boundary)
-    Esto evita que 'tomate' (Frutas) gane a 'salsa de tomate' (Condimentos)."""
-    import unicodedata, re
-    if not item_name or not item_name.strip():
-        return "Otros", "🛒"
-    # Normalizar: minúsculas, sin acentos
-    normalized = item_name.lower().strip()
-    nfkd = unicodedata.normalize('NFKD', normalized)
-    normalized = ''.join(c for c in nfkd if not unicodedata.combining(c))
-    
-    def _norm_kw(kw):
-        return ''.join(c for c in unicodedata.normalize('NFKD', kw.lower()) if not unicodedata.combining(c))
-    
-    # Fase 1: Multi-word keywords (más específicos, substring match OK)
-    for (category, emoji), keywords in _CATEGORY_KEYWORDS.items():
-        for kw in keywords:
-            if ' ' not in kw:
-                continue
-            if _norm_kw(kw) in normalized:
-                return category, emoji
-    
-    # Fase 2: Single-word keywords con word boundary
-    for (category, emoji), keywords in _CATEGORY_KEYWORDS.items():
-        for kw in keywords:
-            if ' ' in kw:
-                continue
-            kw_norm = _norm_kw(kw)
-            if re.search(r'\b' + re.escape(kw_norm) + r'\b', normalized):
-                return category, emoji
-    
-    return "Otros", "🛒"
-
+from constants import SHOPPING_CATEGORIES, parse_ingredient_qty, categorize_shopping_item
 @tool
 def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = False, protected_meals: list[str] = None) -> str:
     """
@@ -577,8 +441,7 @@ def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = Fals
     """
     logger.debug(f"🔧 [TOOL EXECUTION] Añadiendo items a shopping list del usuario {user_id} (overwrite={overwrite}, protected_meals={protected_meals}): {items}")
     
-    import re as _re
-    import json
+    _re = re  # alias local para compatibilidad con el código existente
     MAX_ITEM_LENGTH = 100
     MAX_ITEMS_PER_CALL = 150
     
@@ -625,22 +488,8 @@ def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = Fals
         
         if not name_clean: continue
         
-        # Fallback local categorizer
-        cat, emoji = _categorize_item(name_clean)
-        
-        # Si el LLM proveyó una categoría inteligente, intentamos empatarla a nuestro sistema
-        if cat_clean and cat_clean.lower() != "otros" and cat == "Otros":
-            ai_matched = False
-            for (key_cat, key_emj) in _CATEGORY_KEYWORDS.keys():
-                if cat_clean.lower() in key_cat.lower() or key_cat.lower() in cat_clean.lower():
-                    cat = key_cat
-                    emoji = key_emj
-                    ai_matched = True
-                    break
-            
-            if not ai_matched:
-                cat = cat_clean
-                emoji = "✨"
+        # Use global categorizer from constants
+        cat, emoji = categorize_shopping_item(name_clean, suggested_category=cat_clean)
                 
         structured_items.append({
             "category": cat,
@@ -653,7 +502,6 @@ def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = Fals
     
     if overwrite:
         try:
-            from db import get_latest_meal_plan
             plan_data = get_latest_meal_plan(user_id)
             if plan_data:
                 protected_ingredients = set()
@@ -681,58 +529,14 @@ def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = Fals
                                     for ing in meal_info.get("ingredients", []):
                                         protected_ingredients.add(ing)
                 
-                def _parse_ingredient_local(raw: str) -> tuple:
-                    import re
-                    raw = raw.strip()
-                    raw = re.sub(r'^(media|medio)\b', '0.5', raw, flags=re.IGNORECASE)
-                    raw = re.sub(r'^(un|una)\b', '1', raw, flags=re.IGNORECASE)
-                    raw = re.sub(r'^dos\b', '2', raw, flags=re.IGNORECASE)
-                    raw = re.sub(r'^tres\b', '3', raw, flags=re.IGNORECASE)
-                    raw = re.sub(r'^cuatro\b', '4', raw, flags=re.IGNORECASE)
-                    raw = re.sub(r'^cinco\b', '5', raw, flags=re.IGNORECASE)
-                    
-                    unit_map = {
-                        "tazas": "taza", "taza": "taza",
-                        "cucharadas": "cda", "cucharada": "cda", "cdas": "cda", "cda": "cda",
-                        "cucharaditas": "cdita", "cucharadita": "cdita", "cditas": "cdita", "cdita": "cdita",
-                        "onzas": "oz", "onza": "oz", "oz": "oz",
-                        "libras": "lb", "libra": "lb", "lbs": "lb", "lb": "lb",
-                        "gramos": "g", "gramo": "g", "gr": "g", "g": "g",
-                        "mililitros": "ml", "mililitro": "ml", "ml": "ml",
-                        "litros": "lt", "litro": "lt", "lts": "lt", "lt": "lt", "l": "lt",
-                        "rebanadas": "rebanada", "rebanada": "rebanada",
-                        "lonchas": "loncha", "loncha": "loncha",
-                        "porciones": "porcion", "porcion": "porcion",
-                        "dientes": "diente", "diente": "diente",
-                        "paquetes": "paquete", "paquete": "paquete",
-                        "unidades": "unidad", "unidad": "unidad",
-                        "latas": "lata", "lata": "lata",
-                        "vasos": "vaso", "vaso": "vaso",
-                        "puñados": "puñado", "puñado": "puñado",
-                        "piezas": "pieza", "pieza": "pieza",
-                        "pizcas": "pizca", "pizca": "pizca",
-                        "hojas": "hoja", "hoja": "hoja",
-                        "tallos": "tallo", "tallo": "tallo",
-                    }
-                    
-                    units_pattern = r"(tazas?|cucharadas?|cdas?|cucharaditas?|cditas?|onzas?|oz|libras?|lbs?|gramos?|gr|g|mililitros?|ml|litros?|lts?|l|rebanadas?|lonchas?|porciones?|dientes?|paquetes?|unidades?|latas?|vasos?|puñados?|piezas?|pizcas?|hojas?|tallos?)"
-                    pattern = r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(?:' + units_pattern + r'\b\s*(?:de\s+)?)?(.+)$'
-                    match = re.match(pattern, raw, re.IGNORECASE)
-                    
-                    if match:
-                        num_str = match.group(1).replace(',', '.').strip()
-                        raw_unit = match.group(2)
-                        unit = ""
-                        if raw_unit:
-                            unit = unit_map.get(raw_unit.lower(), raw_unit.lower())
-                        name = match.group(3).strip()
-                        return num_str, unit, name
-                    return "", "", raw
-
                 existing_names = set(item["name"].lower() for item in structured_items)
                 
                 for ing in protected_ingredients:
-                    num_str, unit, name_raw = _parse_ingredient_local(ing)
+                    num_float, unit, name_raw = parse_ingredient_qty(ing, to_metric=False)
+                    num_str = ""
+                    if num_float is not None:
+                        num_str = str(int(num_float)) if num_float.is_integer() else str(num_float)
+                    
                     
                     if num_str or unit:
                         qty = _sanitize(f"{num_str} {unit}".strip())
@@ -742,12 +546,13 @@ def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = Fals
                         name = _sanitize(ing).capitalize()
                         
                     if name.lower() not in existing_names:
-                        cat, emoji = _categorize_item(name)
+                        cat, emoji = categorize_shopping_item(name)
                         structured_items.append({
                             "category": cat,
                             "emoji": emoji,
                             "name": name,
-                            "qty": qty
+                            "qty": qty,
+                            "is_checked": False
                         })
                         items_names.append(name)
         except Exception as e:
@@ -756,13 +561,18 @@ def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = Fals
     if not structured_items:
         return "No se proporcionaron items válidos."
     
-    result = add_custom_shopping_items(user_id, structured_items, source="chat", overwrite=overwrite)
+    lock = get_user_shopping_lock(user_id)
+    with lock:
+        result = add_custom_shopping_items(user_id, structured_items, source="chat", overwrite=overwrite)
+        
     if result is not None:
         # Auto-deduplicar en segundo plano (Fire-and-forget) para no bloquear el Agent
         try:
-            from db import deduplicate_shopping_items
-            import threading
             threading.Thread(target=deduplicate_shopping_items, args=(user_id,), daemon=True).start()
+            
+            # Lanzamos deduplicación semántica (LLM) también separada
+            from services import async_semantic_deduplication
+            async_semantic_deduplication(user_id)
         except Exception:
             pass  # No bloquear la respuesta si falla la dedup
         items_formatted = ", ".join(items_names)
@@ -827,7 +637,6 @@ def remove_from_shopping_list(user_id: str, item_names: list[str]) -> str:
     logger.info(f"🗑️ [TOOL] Intentando eliminar {len(item_names)} items de la lista de compras: {item_names}")
     
     try:
-        from db import get_custom_shopping_items
         # Obtener los items actuales para buscar coincidencias
         current = get_custom_shopping_items(user_id, limit=500)
         items_db = current.get("data", [])
@@ -835,9 +644,8 @@ def remove_from_shopping_list(user_id: str, item_names: list[str]) -> str:
         if not items_db:
             return "La lista de compras ya está vacía."
             
-        import unicodedata
-        import json as _json
-        import re
+        # re, json y unicodedata ya importados a nivel de módulo
+        _json = json  # alias local para compatibilidad
 
         def _norm(text: str) -> str:
             if not text: return ""
@@ -876,9 +684,10 @@ def remove_from_shopping_list(user_id: str, item_names: list[str]) -> str:
         if not ids_to_del:
             return f"No encontré ninguno de estos ingredientes ({', '.join(item_names)}) en tu lista activa."
             
-        # Ejecutar borrado usando el supabase global
-        global supabase
-        supabase.table("custom_shopping_items").delete().in_("id", list(ids_to_del)).execute()
+        # Ejecutar borrado usando el cliente de db.py (fuente centralizada) dentro de un lock
+        lock = get_user_shopping_lock(user_id)
+        with lock:
+            delete_custom_shopping_items_batch(list(ids_to_del), user_id)
         
         items_formatted = ", ".join(removed_names)
         return f"¡Éxito! Eliminé {len(ids_to_del)} item(s) de tu lista: {items_formatted}."

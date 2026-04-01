@@ -3,7 +3,7 @@ import json
 from cache_manager import centralized_cache
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 from db import (
     save_user_fact, search_user_facts, delete_user_fact, search_user_facts_hybrid,
@@ -11,9 +11,15 @@ from db import (
     enqueue_pending_fact, dequeue_pending_facts, delete_pending_facts
 )
 
+# Categorías canónicas alineadas con extract_facts() prompt y graph_orchestrator.py CATEGORY_PRIORITY_WEIGHTS
+FactCategoryLiteral = Literal[
+    "alergia", "condicion_medica", "dieta", "rechazo",
+    "preferencia", "objetivo", "sintoma_temporal"
+]
+
 
 class FactMetadata(BaseModel):
-    category: str = Field(description="Una de: 'alergia', 'condicion_medica', 'dieta', 'gusto', 'objetivo'")
+    category: FactCategoryLiteral = Field(description="Categoría del hecho: 'alergia', 'condicion_medica', 'dieta', 'rechazo', 'preferencia', 'objetivo' o 'sintoma_temporal'.")
     ingrediente_canonico: Optional[str] = Field(description="ID de catálogo universal del ingrediente en minúsculas. OBLIGATORIO usar los IDs definidos en el Catálogo Canónico (ej. 'peanut' para maní/cacahuete). Si no está en el catálogo, usa su traducción al inglés en minúscula y singular.", default=None)
     ingrediente: str = Field(description="Ingrediente principal si aplica, ej: 'mani', 'camarones'. Vacío si no aplica.")
     intensidad: int = Field(description="Intensidad del sentimiento (1 a 5). 1=Rechazo/Odio, 2=No le gusta, 3=Neutral/Info, 4=Le gusta, 5=Le fascina", default=3)
@@ -96,50 +102,42 @@ def should_extract_facts(user_message: str) -> bool:
         return True # Fallback seguro: ante la duda, extraemos
 
 
-DOMINICAN_INGREDIENT_CATALOG = """Catálogo Canónico de Ingredientes y Alérgenos (USA ESTOS IDs SIEMPRE QUE APLIQUE):
-- peanut (maní, cacahuete)
-- dairy (leche, queso, lactosa, yogur, mantequilla)
-- egg (huevo)
-- shellfish (mariscos, camarones, langosta, cangrejo, lambí)
-- fish (pescado, salmón, atún, bacalao, arenque)
-- soy (soja, soya)
-- wheat (trigo, gluten, pan, pasta, harina)
-- tree_nut (nueces, almendras, cajuil, macadamia)
-- chicken (pollo)
-- beef (carne de res, vaca, ternera)
-- pork (cerdo, chuleta, tocino, chicharrón)
-- plantain (plátano verde, plátano maduro, fritos, mangú)
-- banana (guineo, guineíto)
-- rice (arroz, locrio, moro)
-- beans (habichuelas, frijoles, gandules)
-- corn (maíz, harina de maíz)
-- avocado (aguacate)
-- cassava (yuca, casabe)
-- potato (papa)
-- sweet_potato (batata)
-- squash (auyama)
-- garlic (ajo)
-- onion (cebolla)
-- bell_pepper (ají, pimiento, cubanela)
-- tomato (tomate)
-- cilantro (verdura, cilantro, verdurita)
-- oregano (orégano)
-- sugar (azúcar)
-- salt (sal)
-- oats (avena)
-- honey (miel)
-- coffee (café)
-- cocoa (chocolate, cacao)
-- coconut (coco)
-- pineapple (piña)
-- mango (mango)
-- papaya (lechosa)
-- passion_fruit (chinola)
-- soursop (guanábana)
-- tamarind (tamarindo)
-- strawberry (fresa)
-- orange (naranja, china)
-- lemon (limón)"""
+def _build_ingredient_catalog() -> str:
+    """Genera el catálogo canónico de ingredientes dinámicamente desde constants.py (SSoT)."""
+    from constants import PROTEIN_SYNONYMS, CARB_SYNONYMS, VEGGIE_FAT_SYNONYMS, FRUIT_SYNONYMS
+    
+    lines = ["Catálogo Canónico de Ingredientes y Alérgenos (USA ESTOS IDs SIEMPRE QUE APLIQUE):"]
+    
+    # Alérgenos comunes (hardcoded porque son clínicos y no tienen sinónimos en constants)
+    allergens = {
+        "peanut": "maní, cacahuete",
+        "dairy": "leche, queso, lactosa, yogur, mantequilla",
+        "egg": "huevo",
+        "shellfish": "mariscos, camarones, langosta, cangrejo, lambí",
+        "fish": "pescado, salmón, atún, bacalao, arenque",
+        "soy": "soja, soya",
+        "wheat": "trigo, gluten, pan, pasta, harina",
+        "tree_nut": "nueces, almendras, cajuil, macadamia",
+    }
+    for canon_id, synonyms_str in allergens.items():
+        lines.append(f"- {canon_id} ({synonyms_str})")
+    
+    # Generar desde los synonym maps del sistema
+    all_maps = {
+        "PROTEÍNAS": PROTEIN_SYNONYMS,
+        "CARBOHIDRATOS": CARB_SYNONYMS,
+        "VEGETALES/GRASAS": VEGGIE_FAT_SYNONYMS,
+        "FRUTAS": FRUIT_SYNONYMS,
+    }
+    for _group_name, syn_dict in all_maps.items():
+        for base_name, variants in syn_dict.items():
+            # Usar el nombre base como ID canónico y las primeras 4 variantes como ejemplos
+            sample = ", ".join(variants[:4])
+            lines.append(f"- {base_name} ({sample})")
+    
+    return "\n".join(lines)
+
+DOMINICAN_INGREDIENT_CATALOG = _build_ingredient_catalog()
 
 def extract_facts(user_message: str, recent_history: str = ""):
     """
@@ -158,10 +156,10 @@ def extract_facts(user_message: str, recent_history: str = ""):
     prompt = f"""
     Eres un Analista Nutricional que extrae "Hechos" (Facts) de los mensajes de los pacientes y los clasifica.
     Tu objetivo es leer un mensaje y determinar si contiene información útil para el perfil del usuario:
-    - Preferencias alimenticias (gustos, rechazos fuertes) -> categoria: 'preferencia' o 'rechazo'
-    - Alergias o condiciones crónicas -> categoria: 'alergia' o 'condicion_medica'
-    - Síntomas o estados pasajeros (ej. "estómago revuelto esta semana", "estoy resfriado") -> categoria: 'sintoma_temporal'
-    - Objetivos o rutinas -> categoria: 'objetivo'
+    - Preferencias alimenticias (gustos, rechazos fuertes) -> category: 'preferencia' o 'rechazo'
+    - Alergias o condiciones crónicas -> category: 'alergia' o 'condicion_medica'
+    - Síntomas o estados pasajeros (ej. "estómago revuelto esta semana", "estoy resfriado") -> category: 'sintoma_temporal'
+    - Objetivos o rutinas -> category: 'objetivo'
     
     Además, clasifica la 'intensidad' (del 1 al 5) del sentimiento si aplica:
     - 1: Odio absoluto, rechazo frontal ("no soporto el brócoli")
@@ -202,7 +200,9 @@ def extract_facts(user_message: str, recent_history: str = ""):
         print(f"⚠️ Error al extraer hechos: {e}")
         return []
 
-@centralized_cache(ttl_seconds=3153600000, maxsize=10000)
+CACHE_TTL_PERMANENT = 3153600000  # ~100 years — embeddings are deterministic for the same input
+
+@centralized_cache(ttl_seconds=CACHE_TTL_PERMANENT, maxsize=10000)
 def get_embedding(text: str) -> list:
     """Genera un vector embedding usando Gemini embedding (Caché Distribuido)."""
     try:
@@ -218,6 +218,157 @@ def get_embedding(text: str) -> list:
         return []
 
 CRITICAL_CATEGORIES = {"condicion_medica", "alergia", "dieta", "objetivo"}
+
+
+def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
+    """
+    Pipeline compartido de Fases 1-3: Preparar hechos, verificar contradicciones/fusiones en batch,
+    borrar obsoletos y guardar nuevos. Usado por async_extract_and_save_facts y _process_single_extraction.
+    """
+    # FASE 1: Generar embeddings y buscar similares para TODOS los hechos
+    prepared_facts = []
+
+    for item in fact_items:
+        if isinstance(item, dict):
+            fact_text = item.get("fact", "")
+            metadata = item.get("metadata", {})
+        else:
+            fact_text = getattr(item, "fact", "")
+            metadata = item.metadata.model_dump() if hasattr(item, 'metadata') else {}
+        
+        if not fact_text:
+            continue
+        
+        emb = get_embedding(fact_text)
+        if not emb:
+            continue
+        
+        category = metadata.get("category", "")
+        filter_meta = {"category": category} if category in CRITICAL_CATEGORIES else None
+        
+        similar_facts = search_user_facts_hybrid(user_id, emb, filter_metadata=filter_meta, threshold=0.6, limit=5)
+        
+        if filter_meta and similar_facts:
+            print(f"{log_prefix}🔎 [HIBRID SEARCH] Búsqueda optimizada por categoría crítica '{category}'. Recuperados: {len(similar_facts)}")
+        
+        prepared_facts.append({
+            "item": item,
+            "fact_text": fact_text,
+            "metadata": metadata,
+            "emb": emb,
+            "similar_facts": similar_facts
+        })
+
+    if not prepared_facts:
+        return
+
+    # FASE 2: Verificar contradicciones en BATCH (una sola llamada LLM)
+    facts_with_similar = [pf for pf in prepared_facts if pf["similar_facts"]]
+    
+    ids_to_delete_all = set()
+    merged_facts_to_save = []
+    skipped_new_facts = set()
+
+    if facts_with_similar:
+        print(f"{log_prefix}🔄 [BATCH] Verificando contradicciones para {len(facts_with_similar)} hechos...")
+        
+        sections = []
+        for idx, pf in enumerate(facts_with_similar, 1):
+            existing_str = "\n".join(
+                [f"    ID: {f['id']} - Hecho: {f['fact']}" for f in pf["similar_facts"] if 'id' in f and 'fact' in f]
+            )
+            sections.append(
+                f"  NUEVO HECHO #{idx}: \"{pf['fact_text']}\"\n"
+                f"  Hechos existentes relacionados:\n{existing_str}"
+            )
+        
+        all_sections = "\n\n".join(sections)
+        
+        batch_prompt = f"""
+        Analiza TODOS los nuevos hechos y compáralos con sus hechos existentes correspondientes.
+        Para cada nuevo hecho, determina:
+    
+        A) CONTRADICCIÓN: Si el nuevo hecho INVALIDA directamente uno viejo.
+           Ejemplo: "no come pescado" vs "ahora le gusta el pescado" → CONTRADICCIÓN.
+    
+        B) REDUNDANCIA/FUSIÓN: Si el nuevo hecho es COMPLEMENTARIO o REDUNDANTE con uno existente.
+           Ejemplo: "Le gusta el pollo" + "Amo el pollo asado" → FUSIÓN: "Al usuario le encanta el pollo, especialmente asado".
+           Ejemplo: "Es alérgico al maní" + "Tiene alergia a los cacahuetes" → FUSIÓN: "El usuario es alérgico al maní/cacahuetes".
+    
+        Reglas:
+        - Si un hecho nuevo contradice uno viejo, ponlo en "contradictions" con los IDs a borrar.
+        - Si un hecho nuevo es redundante/complementario, ponlo en "merges":
+          crea un "merged_fact" combinado en tercera persona.
+          Incluye "ids_to_delete" de los viejos y "skip_new_fact" con el texto del nuevo.
+        - Si un hecho nuevo es INDEPENDIENTE, NO lo incluyas en ninguna lista.
+        - NO fusiones hechos de temas distintos.
+
+        HECHOS A ANALIZAR:
+        {all_sections}
+        """
+        
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-3.1-pro-preview",
+            temperature=0.0,
+            google_api_key=os.environ.get("GEMINI_API_KEY")
+        ).with_structured_output(BatchContradictionResult)
+        
+        try:
+            response = llm.invoke(batch_prompt)
+        
+            if response and response.contradictions:
+                for contradiction in response.contradictions:
+                    if contradiction.ids_to_delete:
+                        print(f"{log_prefix}⚠️ [CONTRADICCIÓN] \"{contradiction.new_fact}\" → Borrar IDs: {contradiction.ids_to_delete}")
+                        ids_to_delete_all.update(contradiction.ids_to_delete)
+        
+            if response and response.merges:
+                for merge in response.merges:
+                    if merge.ids_to_delete and merge.merged_fact:
+                        print(f"{log_prefix}🔀 [FUSIÓN] \"{merge.merged_fact}\" ← Absorbe IDs: {merge.ids_to_delete}")
+                        ids_to_delete_all.update(merge.ids_to_delete)
+                        skipped_new_facts.add(merge.skip_new_fact)
+                    
+                        original_metadata = {}
+                        for pf in facts_with_similar:
+                            if pf["fact_text"] == merge.skip_new_fact:
+                                original_metadata = pf["metadata"]
+                                break
+                    
+                        merged_facts_to_save.append({
+                            "fact_text": merge.merged_fact,
+                            "metadata": original_metadata
+                        })
+                    
+        except Exception as e:
+            print(f"{log_prefix}⚠️ [Error en validación batch de contradicciones/fusiones]: {e}")
+
+    # FASE 3: Borrar contradictorios/redundantes y guardar hechos
+    if ids_to_delete_all:
+        print(f"{log_prefix}🗑️ [BATCH] Borrando {len(ids_to_delete_all)} hechos (contradictorios + redundantes)...")
+        for f_id in ids_to_delete_all:
+            delete_user_fact(f_id)
+
+    saved_count = 0
+    for pf in prepared_facts:
+        if pf["fact_text"] in skipped_new_facts:
+            print(f"{log_prefix}⏭️ Hecho absorbido en fusión: '{pf['fact_text']}'")
+            continue
+        save_user_fact(user_id, pf["fact_text"], pf["emb"], metadata=pf["metadata"])
+        print(f"{log_prefix}📦 Nuevo hecho guardado: '{pf['fact_text']}' | Metadatos: {pf['metadata']}")
+        saved_count += 1
+    
+    merge_count = 0
+    for mf in merged_facts_to_save:
+        merged_emb = get_embedding(mf["fact_text"])
+        if merged_emb:
+            save_user_fact(user_id, mf["fact_text"], merged_emb, metadata=mf["metadata"])
+            print(f"{log_prefix}🔀 Hecho fusionado guardado: '{mf['fact_text']}' | Metadatos: {mf['metadata']}")
+            merge_count += 1
+    
+    total_deleted = len(ids_to_delete_all)
+    print(f"{log_prefix}✅ [BATCH COMPLETO] {saved_count} nuevos + {merge_count} fusionados, {total_deleted} eliminados.")
+
 
 def async_extract_and_save_facts(user_id: str, message: str, recent_history: str = ""):
     """
@@ -254,165 +405,7 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
             release_fact_lock(user_id)
             return
 
-        # ================================================================
-        # FASE 1: Generar embeddings y buscar similares para TODOS los hechos
-        #         + Query directo por categoría para categorías críticas
-        # ================================================================
-        prepared_facts = []  # Lista de dicts: {item, fact_text, metadata, emb, similar_facts}
-
-        for item in fact_items:
-            if isinstance(item, dict):
-                fact_text = item.get("fact", "")
-                metadata = item.get("metadata", {})
-            else:
-                fact_text = getattr(item, "fact", "")
-                metadata = item.metadata.model_dump() if hasattr(item, 'metadata') else {}
-            
-            if not fact_text:
-                continue
-            
-        
-            emb = get_embedding(fact_text)
-            if not emb:
-                continue
-        
-            categoria = metadata.get("category", "")
-            filter_meta = {"category": categoria} if categoria in CRITICAL_CATEGORIES else None
-            
-            similar_facts = search_user_facts_hybrid(user_id, emb, filter_metadata=filter_meta, threshold=0.6, limit=5)
-            
-            if filter_meta and similar_facts:
-                print(f"🔎 [HIBRID SEARCH] Búsqueda optimizada por similitud y categoría crítica '{categoria}'. Recuperados: {len(similar_facts)}")
-            
-            prepared_facts.append({
-                "item": item,
-                "fact_text": fact_text,
-                "metadata": metadata,
-                "emb": emb,
-                "similar_facts": similar_facts
-            })
-
-        if not prepared_facts:
-            return
-
-        # ================================================================
-        # FASE 2: Verificar contradicciones en BATCH (una sola llamada LLM)
-        # ================================================================
-        # Construir el prompt batch solo con hechos que tienen similares
-        facts_with_similar = [pf for pf in prepared_facts if pf["similar_facts"]]
-    
-        ids_to_delete_all = set()  # Acumular todos los IDs a borrar
-        merged_facts_to_save = []   # Lista de {merged_fact, metadata} para guardar después
-        skipped_new_facts = set()   # Textos de hechos nuevos absorbidos en fusiones
-
-        if facts_with_similar:
-            print(f"🔄 [BATCH] Verificando contradicciones para {len(facts_with_similar)} hechos en una sola llamada...")
-        
-            # Construir secciones del prompt
-            sections = []
-            for idx, pf in enumerate(facts_with_similar, 1):
-                existing_str = "\n".join(
-                    [f"    ID: {f['id']} - Hecho: {f['fact']}" for f in pf["similar_facts"] if 'id' in f and 'fact' in f]
-                )
-                sections.append(
-                    f"  NUEVO HECHO #{idx}: \"{pf['fact_text']}\"\n"
-                    f"  Hechos existentes relacionados:\n{existing_str}"
-                )
-        
-            all_sections = "\n\n".join(sections)
-        
-            batch_prompt = f"""
-            Analiza TODOS los nuevos hechos y compáralos con sus hechos existentes correspondientes en la memoria del usuario.
-            Para cada nuevo hecho, determina:
-        
-            A) CONTRADICCIÓN: Si el nuevo hecho INVALIDA directamente uno viejo.
-               Ejemplo: "no come pescado" vs "ahora le gusta el pescado" → CONTRADICCIÓN.
-        
-            B) REDUNDANCIA/FUSIÓN: Si el nuevo hecho es COMPLEMENTARIO o REDUNDANTE con uno existente 
-               (hablan del mismo tema/ingrediente sin contradecirse).
-               Ejemplo: "Le gusta el pollo" + "Amo el pollo asado" → FUSIÓN: "Al usuario le encanta el pollo, especialmente asado".
-               Ejemplo: "Es alérgico al maní" + "Tiene alergia a los cacahuetes" → FUSIÓN: "El usuario es alérgico al maní/cacahuetes".
-        
-            Reglas:
-            - Si un hecho nuevo contradice uno viejo, ponlo en "contradictions" con los IDs a borrar.
-            - Si un hecho nuevo es redundante o complementario a uno existente (mismo tema), ponlo en "merges":
-              crea un "merged_fact" que combine la info de ambos de forma concisa en tercera persona.
-              Incluye en "ids_to_delete" los IDs de los hechos viejos que se absorben.
-              Incluye en "skip_new_fact" el texto exacto del nuevo hecho (para no guardarlo como duplicado).
-            - Si un hecho nuevo es TOTALMENTE INDEPENDIENTE de los existentes, NO lo incluyas en ninguna lista.
-            - NO fusiones hechos que hablan de temas distintos (ej: "le gusta el pollo" y "es diabético" son independientes).
-
-            HECHOS A ANALIZAR:
-            {all_sections}
-            """
-        
-            llm = ChatGoogleGenerativeAI(
-                model="gemini-3.1-pro-preview",
-                temperature=0.0,
-                google_api_key=os.environ.get("GEMINI_API_KEY")
-            ).with_structured_output(BatchContradictionResult)
-        
-            try:
-                response = llm.invoke(batch_prompt)
-            
-                if response and response.contradictions:
-                    for contradiction in response.contradictions:
-                        if contradiction.ids_to_delete:
-                            print(f"⚠️ [CONTRADICCIÓN] Hecho: \"{contradiction.new_fact}\" → Borrar IDs: {contradiction.ids_to_delete}")
-                            ids_to_delete_all.update(contradiction.ids_to_delete)
-            
-                if response and response.merges:
-                    for merge in response.merges:
-                        if merge.ids_to_delete and merge.merged_fact:
-                            print(f"🔀 [FUSIÓN] \"{merge.merged_fact}\" ← Absorbe IDs: {merge.ids_to_delete}")
-                            ids_to_delete_all.update(merge.ids_to_delete)
-                            skipped_new_facts.add(merge.skip_new_fact)
-                        
-                            # Buscar los metadatos del hecho nuevo original para preservar la categoría
-                            original_metadata = {}
-                            for pf in facts_with_similar:
-                                if pf["fact_text"] == merge.skip_new_fact:
-                                    original_metadata = pf["metadata"]
-                                    break
-                        
-                            merged_facts_to_save.append({
-                                "fact_text": merge.merged_fact,
-                                "metadata": original_metadata
-                            })
-                        
-            except Exception as e:
-                print(f"⚠️ [Error en validación batch de contradicciones/fusiones]: {e}")
-
-        # ================================================================
-        # FASE 3: Borrar contradictorios/redundantes y guardar hechos
-        # ================================================================
-        # Borrar todos los hechos marcados (contradictorios + absorbidos por fusión)
-        if ids_to_delete_all:
-            print(f"🗑️ [BATCH] Borrando {len(ids_to_delete_all)} hechos (contradictorios + redundantes)...")
-            for f_id in ids_to_delete_all:
-                delete_user_fact(f_id)
-
-        # Guardar hechos nuevos (excluyendo los absorbidos en fusiones)
-        saved_count = 0
-        for pf in prepared_facts:
-            if pf["fact_text"] in skipped_new_facts:
-                print(f"⏭️ Hecho absorbido en fusión, no se guarda por separado: '{pf['fact_text']}'")
-                continue
-            save_user_fact(user_id, pf["fact_text"], pf["emb"], metadata=pf["metadata"])
-            print(f"📦 Nuevo hecho guardado: '{pf['fact_text']}' | Metadatos: {pf['metadata']}")
-            saved_count += 1
-        
-        # Guardar hechos fusionados (con nuevo embedding)
-        merge_count = 0
-        for mf in merged_facts_to_save:
-            merged_emb = get_embedding(mf["fact_text"])
-            if merged_emb:
-                save_user_fact(user_id, mf["fact_text"], merged_emb, metadata=mf["metadata"])
-                print(f"🔀 Hecho fusionado guardado: '{mf['fact_text']}' | Metadatos: {mf['metadata']}")
-                merge_count += 1
-        
-        total_deleted = len(ids_to_delete_all)
-        print(f"✅ [BATCH COMPLETO] {saved_count} nuevos + {merge_count} fusionados guardados, {total_deleted} eliminados (contradictorios + redundantes).")
+        _run_fact_pipeline(user_id, fact_items, log_prefix="")
 
     except Exception as e:
         import traceback
@@ -467,6 +460,7 @@ def _process_single_extraction(user_id: str, message: str, recent_history: str =
     """
     Procesa una sola extracción de hechos SIN manejar el lock.
     Usado internamente para drenar la cola de pendientes.
+    Delega al pipeline compartido _run_fact_pipeline.
     """
     if not should_extract_facts(message):
         return
@@ -475,40 +469,4 @@ def _process_single_extraction(user_id: str, message: str, recent_history: str =
     if not fact_items:
         return
     
-    # Preparar hechos
-    prepared_facts = []
-    for item in fact_items:
-        if isinstance(item, dict):
-            fact_text = item.get("fact", "")
-            metadata = item.get("metadata", {})
-        else:
-            fact_text = getattr(item, "fact", "")
-            metadata = item.metadata.model_dump() if hasattr(item, 'metadata') else {}
-        
-        if not fact_text:
-            continue
-        
-        emb = get_embedding(fact_text)
-        if not emb:
-            continue
-        
-        categoria = metadata.get("category", "")
-        filter_meta = {"category": categoria} if categoria in CRITICAL_CATEGORIES else None
-        
-        similar_facts = search_user_facts_hybrid(user_id, emb, filter_metadata=filter_meta, threshold=0.6, limit=5)
-        
-        prepared_facts.append({
-            "item": item,
-            "fact_text": fact_text,
-            "metadata": metadata,
-            "emb": emb,
-            "similar_facts": similar_facts
-        })
-    
-    if not prepared_facts:
-        return
-    
-    # Guardar directamente (sin batch de contradicciones para pendientes, ya se verificará en la próxima extracción)
-    for pf in prepared_facts:
-        save_user_fact(user_id, pf["fact_text"], pf["emb"], metadata=pf["metadata"])
-        print(f"   📦 Hecho pendiente guardado: '{pf['fact_text']}'")
+    _run_fact_pipeline(user_id, fact_items, log_prefix="   ")

@@ -1,5 +1,15 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
+from constants import SHOPPING_CATEGORIES_AI
+
+# Literal sincronizado con constants.SHOPPING_CATEGORIES_AI + categorías extra del sistema.
+# Si se añade una categoría en constants.py, DEBE añadirse aquí también.
+ShoppingCategoryLiteral = Literal[
+    "Frutas y Verduras", "Carnes y Pescados", "Lácteos y Huevos",
+    "Granos y Cereales", "Condimentos y Especias", "Aceites y Grasas",
+    "Bebidas", "Snacks y Dulces", "Enlatados y Conservas", "Panadería",
+    "Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros",
+]
 
 class MacrosModel(BaseModel):
     protein: str = Field(description="Gramos de proteína totales, ej: '150g'")
@@ -36,7 +46,7 @@ class PlanModel(BaseModel):
     days: List[DailyPlanModel] = Field(description="Lista de 3 OPCIONES DIARIAS INTERCAMBIABLES (plantillas de un mismo día) con comidas variadas")
 
 class ShoppingItemModel(BaseModel):
-    category: Literal["Frutas y Verduras", "Carnes y Pescados", "Lácteos y Huevos", "Despensa", "Condimentos y Especias", "Aceites y Grasas", "Bebidas", "Snacks y Dulces", "Enlatados y Conservas", "Panadería", "Otros"] = Field(description="Categoría estricta del supermercado para organizar el ingrediente.")
+    category: ShoppingCategoryLiteral = Field(description="Categoría estricta del supermercado para organizar el ingrediente.")
     emoji: str = Field(description="Un emoji representativo de la categoría, Ej: '🥩', '🥬'")
     name: str = Field(description="Nombre del ingrediente o producto, Ej: 'Pechuga de pollo'")
     qty_7: str = Field(description="Cantidad redondeada para 7 DÍAS de compras, Ej: '1/2 Libra', '1 Unidad'")

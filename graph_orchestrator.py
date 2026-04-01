@@ -13,7 +13,18 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
 import logging
 
+import concurrent.futures
+from datetime import datetime, timezone
+import random
+import re as _re
+# NOTA: NO importar 'from agent import ...' a nivel de módulo → causa import circular
+# (app → agent → tools → graph_orchestrator → agent). Se usa lazy import donde se necesite.
+from cpu_tasks import _validar_repeticiones_cpu_bound, _normalize_meal_name
+from fact_extractor import get_embedding
+from vision_agent import get_multimodal_embedding
+from db import get_recent_techniques, get_recent_meals_from_plans, check_meal_plan_generated_today, get_custom_shopping_items, search_user_facts, search_visual_diary, get_user_facts_by_metadata
 from nutrition_calculator import get_nutrition_targets
+from constants import TECHNIQUE_FAMILIES, ALL_TECHNIQUES, TECH_TO_FAMILY, SUPPLEMENT_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -47,67 +58,9 @@ from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
 
 
 # ============================================================
-# PROMPTS
+# PROMPTS (importados de prompts.py)
 # ============================================================
-GENERATOR_SYSTEM_PROMPT = """
-Eres un Nutricionista Clínico, Chef Profesional y la IA oficial de MealfitRD.
-Tu misión es crear un plan alimenticio de EXACTAMENTE 3 DÍAS VARIADOS, altamente profesional y 100% adaptado a la biometría y preferencias del usuario.
-
-REGLAS ESTRICTAS:
-1. CALORÍAS Y MACROS PRE-CALCULADOS: Los cálculos de BMR, TDEE, calorías objetivo y macronutrientes ya fueron realizados por el Sistema Calculador. NO calcules estos números tú mismo. Usa EXACTAMENTE los valores provistos. La suma de calorías, proteínas, carbohidratos y grasas de todas las comidas de un día DEBE coincidir milimétricamente con el OBJETIVO DIARIO aportado. Distribuye las porciones con cuidado para lograr esta meta estricta.
-2. EFICIENCIA DE SUPERMERCADO Y VARIEDAD: Diseña los 3 días utilizando listas de compras e ingredientes principales MUY SIMILARES (ej. usar Pollo, Huevos, Yuca, Avena a lo largo de los 3 días) para no gastar mucho en varias compras. Sin embargo, DEBES crear PREPARACIONES Y PLATOS COMPLETAMENTE DISTINTOS cada día usando esos mismos ingredientes combinados de forma diferente. NUNCA repitas la misma preparación exacta (Ej. Si la Opción A tiene Pollo Guisado, la Opción B debe tener Pollo a la Plancha o Desmenuzado).
-3. INGREDIENTES DOMINICANOS: El menú DEBE usar alimentos típicos, accesibles y económicos de República Dominicana (Ej: Plátano, Yuca, Batata, Huevos, Salami, Queso de freír/hoja, Pollo guisado, Aguacate, Habichuelas, Arroz, Avena).
-4. RECETAS PROFESIONALES: Los pasos de las recetas (`recipe`) DEBEN incluir obligatoriamente estos prefijos para la UI:
-   - "Mise en place: [Instrucciones de preparación previa y cortes]"
-   - "El Toque de Fuego: [Instrucciones de cocción en sartén, horno o airfryer]"
-   - "Montaje: [Instrucciones de cómo servir para que luzca apetitoso]"
-5. CUMPLE RESTRICCIONES ABSOLUTAMENTE: Si el usuario es vegetariano, tiene alergias (Ej. Lácteos), condiciones médicas (Ej. Diabetes T2) o indicó obstáculos (Ej: falta de tiempo, no sabe cocinar), el plan DEBE reflejar soluciones inmediatas a eso (comidas rápidas, sin azúcar, sin carne, etc).
-6. ESTRUCTURA: Si el usuario indicó `skipLunch: true`, NO incluyas la comida de "Almuerzo" en tu JSON de respuesta. El usuario elegirá su almuerzo manualmente enviándole una foto o mensaje al Agente IA en el chat. NO intentes hacer los desayunos y cenas "más ligeros" ni distribuyas las calorías del almuerzo; el sistema ya descontó esas calorías previamente. Por tanto, debes estructurar el Desayuno, Cena y Meriendas de forma completamente normal y sustancial.
-7. VARIEDAD ESTRICTA: Revisa el historial de comidas anteriores provisto en el prompt (si lo hay) y NO REPITAS LOS MISMOS PLATOS NI NOMBRES EXACTOS DE LAS ÚLTIMAS 24-48 HORAS. Ofrécele opciones radicalmente diferentes en presentación y técnica de cocción, pero MANTENIENDO los mismos ingredientes base para ahorrar en el supermercado.
-8. PROHIBICIÓN ABSOLUTA DE RECHAZOS: Lee detenidamente el Perfil de Gustos adjunto. Si el perfil dice que el usuario odia o rechazó un ingrediente (ej. plátano, avena), está TOTALMENTE PROHIBIDO incluirlo en este plan.
-9. PESO EMOCIONAL (INTENSIDAD): Los hechos proporcionados en el contexto tienen un metadato de "intensidad" (1 a 5).
-   - Intensidad 5: REGLA DE ORO. DEBES incluir este ingrediente/preferencia en el plan siempre que se ajuste a los macros.
-   - Intensidad 4: Usa este ingrediente frecuentemente.
-   - Intensidad 2: Usa con extrema moderación, o evítalo si es posible.
-   - Intensidad 1: RECHAZO TOTAL. Trátalo igual que una prohibición o alergia.
-10. SUPLEMENTOS: Si el usuario activó `includeSupplements: true`, DEBES agregar para CADA día una sección `supplements` (lista). REGLA CRÍTICA: Si `selectedSupplements` contiene suplementos, incluye EXCLUSIVAMENTE esos y NINGUNO más. Está PROHIBIDO agregar suplementos que el usuario NO seleccionó (ej: si solo eligió Creatina, NO pongas Proteína Whey, NUNCA). Si `selectedSupplements` está vacío, entonces sí recomienda libremente. Cada suplemento: nombre, dosis, momento del día, justificación. Si `includeSupplements` es false, NO incluyas suplementos.
-11. DURACIÓN DE COMPRA DE ALIMENTOS: Revisa el campo `groceryDuration` del usuario. Este indica cuánto tiempo le duran los mismos alimentos de una sola compra de supermercado:
-   - "weekly" (7 días): Compra semanal. Puedes usar ingredientes frescos sin restricción (frutas maduras, vegetales de hoja, pescado fresco, etc.).
-   - "biweekly" (15 días): Compra quincenal. Prioriza ingredientes que se conserven al menos 2 semanas (tubérculos, granos, proteínas congelables, vegetales resistentes). Para perecederos, indica cómo congelarlos o conservarlos.
-   - "monthly" (30 días): Compra mensual. Usa predominantemente ingredientes de larga duración (arroz, habichuelas secas, avena, carnes para congelar, raíces/tubérculos, enlatados saludables). SIEMPRE incluye tips breves de conservación y congelación en las recetas cuando uses perecederos.
-   RECUERDA: Los PLATOS (preparaciones) deben variar cada día, pero los ALIMENTOS (ingredientes base) pueden y DEBEN repetirse durante todo el período de compra. Esto es la clave del ahorro.
-12. CONTINUIDAD TEMPORAL Y MEAL PREP: Tendrás el contexto temporal exacto de hoy (fecha, día de la semana y estación). Usa esta información de manera lógica y proactiva. Si generas planes que tocan días laborables (Lunes a Viernes), prioriza comidas rápidas de preparar o sugiere hacer sobras abundantes en la cena para usar como almuerzo al día siguiente (Meal Prep). Si toca fin de semana, puedes incluir recetas más elaboradas. Sugiere alimentos frescos propios de la estación para dar realismo y frescura.
-"""
-
-REVIEWER_SYSTEM_PROMPT = """
-Eres el Agente Revisor Médico de MealfitRD. Tu ÚNICA misión es verificar que un plan alimenticio generado por la IA sea SEGURO para el paciente.
-
-DEBES verificar estos puntos CRÍTICOS:
-
-1. ALERGIAS: Revisa TODOS los ingredientes de TODAS las comidas. Si el paciente declaró alergia a un alimento (ej: "Lácteos", "Gluten", "Maní"), NINGÚN ingrediente debe contener ese alérgeno. Incluso derivados cuentan (ej: "queso" es lácteo, "pan" es gluten).
-
-2. CONDICIONES MÉDICAS: 
-   - Diabetes T2: No debe haber exceso de azúcares simples, harinas refinadas o miel
-   - Hipertensión: Cuidado con salami, embutidos, exceso de sal
-   - Enfermedades renales: Controlar exceso de proteína
-
-3. DIETA DECLARADA:
-   - Vegetariano: CERO carne, pollo, pescado, mariscos
-   - Vegano: CERO productos animales (incluyendo huevos, lácteos, miel)
-   - Sin gluten: CERO trigo, avena regular, cebada
-
-4. RECHAZOS DEL PERFIL DE GUSTOS: Si el perfil dice que rechazó un ingrediente, NO debe aparecer.
-
-Tu respuesta DEBE ser EXACTAMENTE en este formato JSON:
-{
-    "approved": true/false,
-    "issues": ["Descripción del problema 1", "Descripción del problema 2"],
-    "severity": "none" | "minor" | "critical"
-}
-
-Si approved es true, issues debe ser una lista vacía.
-Si hay cualquier violación de alergias o condiciones médicas, severity DEBE ser "critical".
-"""
+from prompts import GENERATOR_SYSTEM_PROMPT, REVIEWER_SYSTEM_PROMPT
 
 
 # ============================================================
@@ -167,87 +120,47 @@ Estos son datos críticos que debes respetar.
 """
 
     # --- 🕒 INYECCIÓN DE CONTEXTO TEMPORAL DINÁMICO ---
-    from datetime import datetime
-    now = datetime.now()
+    now_local = datetime.now()
     dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     meses_es = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-    dia_str = dias[now.weekday()]
-    mes_str = meses_es[now.month - 1]
+    dia_str = dias[now_local.weekday()]
+    mes_str = meses_es[now_local.month - 1]
     
     # Estación simplificada adaptada al trópico/Hemisferio Norte
     estacion = "Verano"
-    if now.month in [3, 4, 5]: estacion = "Primavera"
-    elif now.month in [9, 10, 11]: estacion = "Otoño"
-    elif now.month in [12, 1, 2]: estacion = "Invierno"
+    if now_local.month in [3, 4, 5]: estacion = "Primavera"
+    elif now_local.month in [9, 10, 11]: estacion = "Otoño"
+    elif now_local.month in [12, 1, 2]: estacion = "Invierno"
 
     time_context = (
         f"\n--- 📅 CONTEXTO TEMPORAL ACTUAL (OBLIGATORIO) ---\n"
-        f"Hoy es {dia_str}, {now.day} de {mes_str} de {now.year}. Estación promedio local: {estacion} tropical.\n"
+        f"Hoy es {dia_str}, {now_local.day} de {mes_str} de {now_local.year}. Estación promedio local: {estacion} tropical.\n"
         f"Aplica las estrategias de Continuidad Temporal considerando que el usuario comenzará este plan en estos días.\n"
         f"--------------------------------------------------\n"
     )
 
-    import random
     random_seed = random.randint(10000, 99999)
     
     # --- 🎲 INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ---
     # Python selecciona proteínas y carbos; el LLM solo "cocina" con ellos.
-    from agent import get_deterministic_variety_prompt
     # Extraer user_id para análisis de frecuencia basado en JSON de planes guardados
     _uid = form_data.get("user_id") or form_data.get("session_id")
     if _uid == "guest": _uid = None
+    from ai_helpers import get_deterministic_variety_prompt  # No genera ciclo
     variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid)
     print(f"🎲 [ORQUESTADOR] Inyectando variedad determinista en el generador.")
     
     # --- 🎲 INYECTOR DINÁMICO DE VARIEDAD CULINARIA ---
     # Clasificación por familia: garantiza que los 3 días usen perfiles de cocción diferentes.
     # Evita que las 3 técnicas sean "secas" (ej: Horneado + Airfryer + Parrilla).
-    TECHNIQUE_FAMILIES = {
-        "seca": [
-            "Horneado Saludable",
-            "En Airfryer Crujiente",
-            "Asado a la Parrilla",
-            "A la Plancha con Cítricos"
-        ],
-        "húmeda": [
-            "Guiso o Estofado Ligero",
-            "En Salsa a base de Vegetales Naturales"
-        ],
-        "transformada": [
-            "Desmenuzado (Ropa Vieja)",
-            "En Puré o Majado",
-            "Croquetas o Tortitas al Horno",
-            "Relleno (Ej. Canoas, Vegetales rellenos)"
-        ],
-        "fresca": [
-            "Estilo Ceviche o Fresco",
-            "Salteado tipo Wok",
-            "Al Vapor con Finas Hierbas"
-        ],
-        "fusión": [
-            "Estilo Fusión Criolla",
-            "Estilo Bowl/Poke Tropical",
-            "Wrap o Burrito Dominicano"
-        ]
-    }
-    # Lista plana para compatibilidad con persistencia y frecuencias
-    ALL_TECHNIQUES = [t for techs in TECHNIQUE_FAMILIES.values() for t in techs]
-    
-    # Mapa inverso: técnica → familia (para filtrar familias ya usadas)
-    _tech_to_family = {}
-    for family, techs in TECHNIQUE_FAMILIES.items():
-        for t in techs:
-            _tech_to_family[t] = family
     
     # Query estructurado contra la DB para contar frecuencia de cada técnica CON decaimiento temporal
     technique_freq = {}
     if _uid:
         try:
-            from db import get_recent_techniques
-            from datetime import datetime, timezone
             recent_techs = get_recent_techniques(_uid, limit=6)
             # Construir mapa de frecuencia con decaimiento: 0.9^days_elapsed
-            now = datetime.now(timezone.utc)
+            now_utc = datetime.now(timezone.utc)
             decay_factor = 0.9
             for t, created_at_str in recent_techs:
                 days_elapsed = 0
@@ -259,7 +172,7 @@ Estos son datos críticos que debes respetar.
                             dt = datetime.fromisoformat(created_at_str)
                             if dt.tzinfo is None:
                                 dt = dt.replace(tzinfo=timezone.utc)
-                        days_elapsed = max(0, (now - dt).days)
+                        days_elapsed = max(0, (now_utc - dt).days)
                     except Exception:
                         pass
                 decayed_weight = decay_factor ** days_elapsed  # 1.0 hoy, 0.9 ayer, 0.81 antier...
@@ -279,17 +192,17 @@ Estos son datos críticos que debes respetar.
     
     while len(selected_techniques) < 3 and _pool_t:
         # Fase 1: Preferir técnicas de familias NO usadas aún
-        cross_family_pool = [(t, w) for t, w in _pool_t if _tech_to_family.get(t) not in used_families]
+        cross_family_pool = [(t, w) for t, w in _pool_t if TECH_TO_FAMILY.get(t) not in used_families]
         
         # Fase 2: Si todas las familias ya fueron usadas, tomar de cualquier familia restante
         active_pool = cross_family_pool if cross_family_pool else _pool_t
         
         pick = random.choices([x[0] for x in active_pool], weights=[x[1] for x in active_pool], k=1)[0]
         selected_techniques.append(pick)
-        used_families.add(_tech_to_family.get(pick, ""))
+        used_families.add(TECH_TO_FAMILY.get(pick, ""))
         _pool_t = [(t, w) for t, w in _pool_t if t != pick]
     
-    print(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({_tech_to_family.get(t)})' for t in selected_techniques]}")
+    print(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({TECH_TO_FAMILY.get(t)})' for t in selected_techniques]}")
     
     technique_injection = (
         f"\n--- 👨🍳 INSTRUCCIÓN DINÁMICA DE VARIEDAD (OBLIGATORIA) ---\n"
@@ -308,18 +221,6 @@ Estos son datos críticos que debes respetar.
         selected_supps = form_data.get("selectedSupplements", [])
         
         # Mapa de keys a nombres legibles para el prompt
-        SUPPLEMENT_NAMES = {
-            "whey_protein": "Proteína Whey",
-            "creatine": "Creatina Monohidrato",
-            "bcaa": "Aminoácidos BCAA",
-            "glutamine": "Glutamina",
-            "omega3": "Omega-3 (Aceite de Pescado)",
-            "multivitamin": "Multivitamínico Completo",
-            "vitamin_d": "Vitamina D3",
-            "magnesium": "Magnesio (Citrato o Glicinato)",
-            "pre_workout": "Pre-Entreno (Cafeína + Beta-Alanina)",
-            "collagen": "Colágeno Hidrolizado",
-        }
         
         if selected_supps:
             # El usuario eligió suplementos específicos
@@ -535,7 +436,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
     reviewer_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
         temperature=0.1,  # Temperatura muy baja para ser preciso
-        google_api_key=os.environ.get("GEMINI_API_KEY")
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        max_retries=0,
+        timeout=60
     )
     
     # Invocar con reintentos automáticos
@@ -599,9 +502,6 @@ Responde ÚNICAMENTE con el JSON de revisión.
         try:
             user_id = form_data.get("user_id") or form_data.get("session_id")
             if user_id and user_id != "guest":
-                from db import get_recent_meals_from_plans
-                import concurrent.futures
-                from cpu_tasks import _validar_repeticiones_cpu_bound
 
                 recent_meal_names = get_recent_meals_from_plans(user_id, days=3)
                 if recent_meal_names:
@@ -627,9 +527,6 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # Fallback para guests: validar contra el history_context in-memory
                 history_ctx = state.get("history_context", "") if isinstance(state, dict) else ""
                 if history_ctx and days:
-                    import concurrent.futures
-                    from cpu_tasks import _validar_repeticiones_cpu_bound, _normalize_meal_name
-                    import re as _re
                     # Extraer nombres de platos del history_context usando patrón común
                     # Los planes en history usan formato: "- NombrePlato" o "name: NombrePlato"
                     guest_recent = []
@@ -688,6 +585,9 @@ def should_retry(state: PlanState) -> str:
         return "end"
     
     if state.get("attempt", 0) >= MAX_ATTEMPTS:
+        if not state.get("review_passed", False):
+            print(f"🚨 [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado y revisión NO aprobada → ABORTANDO por seguridad.")
+            raise ValueError("Imposible generar un plan seguro tras varios intentos. Por favor, inténtalo de nuevo.")
         print(f"⚠️  [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado → Enviando mejor versión disponible.")
         return "end"
     
@@ -723,6 +623,9 @@ def build_plan_graph() -> StateGraph:
     
     return graph.compile()
 
+# Module-level singleton: el grafo compilado es stateless y reutilizable entre requests.
+_PLAN_GRAPH = build_plan_graph()
+
 
 # ============================================================
 # FUNCIÓN PÚBLICA: Ejecutar el pipeline completo
@@ -756,8 +659,6 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     # Nuevo motor anti-repetición robusto: Query directo a la base de datos
     if user_id:
         try:
-            import json
-            from db import get_recent_meals_from_plans
             recent_meals = get_recent_meals_from_plans(user_id, days=5)
             if recent_meals:
                 history_context += (
@@ -776,43 +677,28 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     previous_meals = actual_form_data.get("previous_meals", [])
     if previous_meals and user_id:
         try:
-            from db import supabase
-            from datetime import datetime, timezone
-            if supabase:
-                # Comprobar si el último plan se generó HOY
-                res = supabase.table("meal_plans").select("created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-                if res.data and len(res.data) > 0:
-                    last_saved = res.data[0]["created_at"]
-                    # Handle specific supabase UTC format
-                    if last_saved.endswith("Z"): last_saved = last_saved[:-1] + "+00:00"
-                    last_saved_dt = datetime.fromisoformat(last_saved)
-                    if last_saved_dt.tzinfo is None:
-                        last_saved_dt = last_saved_dt.replace(tzinfo=timezone.utc)
-                    
-                    now_utc = datetime.now(timezone.utc)
-                    
-                    # Si el plan anterior se generó en el mismo día
-                    if last_saved_dt.date() == now_utc.date():
-                        print("🔄 [REGENERACIÓN] Usuario solicitó 'Generar Nueva Opción' el mismo día = RECHAZO del menú actual.")
-                        
-                        # Inyectamos una regla simplificada y positiva para evitar que el LLM sufra parálisis de restricciones (504 Timeout)
-                        history_context += (
-                            f"\n\n🚨 INSTRUCCIÓN DE VARIEDAD (RE-ROLL) 🚨\n"
-                            f"El usuario quiere cambiar las siguientes opciones de hoy:\n{', '.join(previous_meals)}\n"
-                            f"REGLA CREATIVA: Inventa preparaciones inéditas. Cambia el método de cocción, la combinación o el corte para sorprender al usuario con algo nuevo usando la misma lista de compras.\n"
-                            f"----------------------------------------------------------------------\n"
-                        )
-                        # Añadimos una bandera secreta para subir la temperatura del LLM
-                        actual_form_data["_is_same_day_reroll"] = True
-                    else:
-                        print("🌅 [NUEVO DÍA] Generación para un nuevo día iniciada.")
+            
+            # Si el plan anterior se generó en el mismo día, interpretamos como RECHAZO
+            if check_meal_plan_generated_today(user_id):
+                print("🔄 [REGENERACIÓN] Usuario solicitó 'Generar Nueva Opción' el mismo día = RECHAZO del menú actual.")
+                
+                # Inyectamos una regla simplificada y positiva para evitar que el LLM sufra parálisis de restricciones (504 Timeout)
+                history_context += (
+                    f"\n\n🚨 INSTRUCCIÓN DE VARIEDAD (RE-ROLL) 🚨\n"
+                    f"El usuario quiere cambiar las siguientes opciones de hoy:\n{', '.join(previous_meals)}\n"
+                    f"REGLA CREATIVA: Inventa preparaciones inéditas. Cambia el método de cocción, la combinación o el corte para sorprender al usuario con algo nuevo usando la misma lista de compras.\n"
+                    f"----------------------------------------------------------------------\n"
+                )
+                # Añadimos una bandera secreta para subir la temperatura del LLM
+                actual_form_data["_is_same_day_reroll"] = True
+            else:
+                print("🌅 [NUEVO DÍA] Generación para un nuevo día iniciada.")
         except Exception as e:
             print(f"⚠️ Error validando regeneración del mismo día: {e}")
 
     # 2.2 --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
     if user_id:
         try:
-            from db import get_custom_shopping_items
             existing = get_custom_shopping_items(user_id)
             existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
             if existing_items:
@@ -833,7 +719,6 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                         raw_name = item.get("item_name", "")
                         if raw_name.startswith("{"):
                             try:
-                                import json
                                 parsed = json.loads(raw_name)
                                 name = parsed.get("name", raw_name)
                             except Exception:
@@ -872,20 +757,18 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     visual_list = []
     if user_id:
         try:
-            from fact_extractor import get_embedding
-            from db import search_user_facts, search_visual_diary, get_user_facts_by_metadata
             
             # 1. Recuperación estricta (Metadata JSONB) - ALERGIAS, CONDICIONES, RECHAZOS
             strict_facts_text = ""
-            alergias = get_user_facts_by_metadata(user_id, 'categoria', 'alergia')
+            alergias = get_user_facts_by_metadata(user_id, 'category', 'alergia')
             if alergias:
                 strict_facts_text += "🔴 ALERGIAS ESTRICTAS (PROHIBIDO USAR):\n" + "\n".join([f"  - {a['fact']}" for a in alergias]) + "\n"
                 
-            rechazos = get_user_facts_by_metadata(user_id, 'categoria', 'rechazo')
+            rechazos = get_user_facts_by_metadata(user_id, 'category', 'rechazo')
             if rechazos:
                 strict_facts_text += "🔴 RECHAZOS (NO USAR):\n" + "\n".join([f"  - {r['fact']}" for r in rechazos]) + "\n"
                 
-            condiciones = get_user_facts_by_metadata(user_id, 'categoria', 'condicion_medica')
+            condiciones = get_user_facts_by_metadata(user_id, 'category', 'condicion_medica')
             if condiciones:
                 strict_facts_text += "⚠️ CONDICIONES MÉDICAS (ADAPTAR PLAN):\n" + "\n".join([f"  - {c['fact']}" for c in condiciones]) + "\n"
 
@@ -935,7 +818,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                     def get_fact_weight(fact_item):
                         meta = fact_item.get("metadata", {})
                         if isinstance(meta, dict):
-                            cat = meta.get("categoria", "")
+                            cat = meta.get("category", "")
                             return CATEGORY_PRIORITY_WEIGHTS.get(cat, 7)
                         return 7  # Sin categoría → al final
                     
@@ -943,7 +826,6 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                     print(f"🧠 [RAG] Hechos textuales recuperados: {len(facts_data)} (ordenados por prioridad de categoría)")
                     
             # Buscar memoria visual 
-            from vision_agent import get_multimodal_embedding
             visual_query_emb = get_multimodal_embedding(dynamic_query)
             if visual_query_emb:
                 visual_data = search_visual_diary(user_id, visual_query_emb, threshold=0.5, limit=10)
@@ -1029,9 +911,8 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
         "attempt": 0,
     }
     
-    # 4. Compilar y ejecutar el grafo
-    graph = build_plan_graph()
-    final_state = graph.invoke(initial_state)
+    # 4. Ejecutar el grafo (singleton compilado a nivel de módulo)
+    final_state = _PLAN_GRAPH.invoke(initial_state)
     
     pipeline_duration = round(time.time() - pipeline_start, 2)
     

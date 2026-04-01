@@ -1,7 +1,7 @@
 import os
 import io
 import base64
-from functools import lru_cache
+from cache_manager import centralized_cache
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
@@ -64,17 +64,15 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
 
 def get_multimodal_embedding(text: str) -> list:
     """
-    Genera un embedding de la descripción usando Gemini (con caché TTL de 5 min).
+    Genera un embedding de la descripción usando Gemini.
+    Usa el mismo patrón de caché centralizado que fact_extractor.get_embedding().
     """
-    import time
-    
-    time_bucket = int(time.time() // 300)
-    result = _cached_multimodal_embedding(text, time_bucket)
+    result = _cached_multimodal_embedding(text)
     return list(result) if result else None
 
-@lru_cache(maxsize=128)
-def _cached_multimodal_embedding(text: str, _time_bucket: int):
-    """Wrapper cacheado para embeddings multimodales."""
+@centralized_cache(ttl_seconds=3153600000, maxsize=10000)
+def _cached_multimodal_embedding(text: str):
+    """Wrapper cacheado para embeddings multimodales (Redis o local OrderedDict)."""
     try:
         embeddings = GoogleGenerativeAIEmbeddings(
             model="models/gemini-embedding-2-preview",
@@ -82,7 +80,7 @@ def _cached_multimodal_embedding(text: str, _time_bucket: int):
         )
         emb = embeddings.embed_query(text)
         print(f"🔑 [VISUAL EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
-        return tuple(emb[:768])
+        return list(emb[:768])
     except Exception as e:
         print(f"⚠️ Error al generar embedding multimodal: {e}")
         return None
@@ -133,5 +131,6 @@ async def async_process_and_save_visual_entry(user_id: str, file_bytes: bytes, i
     combined_context = f"Comentario del usuario sobre su comida actual: '{user_message}'. Lo que estaba comiendo (según análisis de imagen): '{description}'"
     
     print("🔄 [VISION AGENT] Enviando contexto combinado al Extractor de Hechos...")
-    # Llamamos al extractor de hechos para que analice esta experiencia y actualice los user_facts
-    await async_extract_and_save_facts(user_id, combined_context)
+    # async_extract_and_save_facts es síncrona — usamos asyncio.to_thread para no bloquear el event loop
+    import asyncio
+    await asyncio.to_thread(async_extract_and_save_facts, user_id, combined_context)

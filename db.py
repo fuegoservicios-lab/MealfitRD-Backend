@@ -1,7 +1,10 @@
 import os
 import logging
+from typing import Optional, List, Dict, Any, Tuple, Union
 from supabase import create_client, Client
 from dotenv import load_dotenv
+
+from constants import parse_ingredient_qty
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +26,185 @@ if SUPABASE_DB_URL:
         from psycopg_pool import ConnectionPool
         # Limpiar comillas basura por si acaso
         clean_url = SUPABASE_DB_URL.strip().strip("'").strip('"')
-        connection_pool = ConnectionPool(conninfo=clean_url, max_size=20, open=False)
-        logger.info("🔌 [psycopg] ConnectionPool de Postgres configurado.")
+        def get_client_kwargs():
+            return {
+                "keepalives": 1,
+                "keepalives_idle": 30,
+                "keepalives_interval": 10,
+                "keepalives_count": 5,
+            }
+
+        connection_pool = ConnectionPool(
+            conninfo=clean_url, 
+            max_size=20, 
+            kwargs=get_client_kwargs(),
+            open=False
+        )
+        logger.info("🔌 [psycopg] ConnectionPool de Postgres configurado con keepalives.")
     except Exception as pool_err:
         logger.error(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")
+
+def close_connection_pool():
+    if connection_pool:
+        connection_pool.close()
+        logger.info("Connection pool cerrado.")
+
+# ============================================================
+# SQL HELPERS (MIGRACIÓN REST -> PSYCOPG DIRECTO)
+# ============================================================
+def execute_sql_query(query: str, params: tuple = None, fetch_one: bool = False, fetch_all: bool = False):
+    """Ejecuta una consulta SQL directa usando el pool de psycopg."""
+    if not connection_pool:
+        # Fallback de seguridad si el pool no estuviera disponible (aunque no debería)
+        raise RuntimeError("db connection_pool is not available.")
+    
+    import psycopg
+    from psycopg.rows import dict_row
+    
+    with connection_pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(query, params)
+            if fetch_one:
+                return cursor.fetchone()
+            if fetch_all:
+                return cursor.fetchall()
+            return []
+
+def execute_sql_write(query: str, params: tuple = None, returning: bool = False):
+    """Ejecuta una transacción INSERT/UPDATE/DELETE."""
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+    
+    import psycopg
+    from psycopg.rows import dict_row
+    
+    with connection_pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(query, params)
+            if returning:
+                return cursor.fetchall()
+            return True
+
+# ============================================================
+# WRAPPERS PARA CONTROLADORES (Refactorización)
+# ============================================================
+
+def check_recent_meal_plan_exists(user_id: str, max_seconds: int = 30) -> bool:
+    """Verifica si ya se ha guardado un plan para este usuario recientemente."""
+    if not connection_pool: return False
+    try:
+        from datetime import datetime, timezone
+        query = "SELECT created_at FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1"
+        res = execute_sql_query(query, (user_id,), fetch_one=True)
+        
+        if res and "created_at" in res:
+            last_saved = res["created_at"]
+            if isinstance(last_saved, str):
+                if last_saved.endswith("Z"):
+                    last_saved = last_saved[:-1] + "+00:00"
+                last_saved = datetime.fromisoformat(last_saved)
+            if last_saved.tzinfo is None:
+                last_saved = last_saved.replace(tzinfo=timezone.utc)
+                
+            now_utc = datetime.now(timezone.utc)
+            if (now_utc - last_saved).total_seconds() < max_seconds:
+                return True
+    except Exception as e:
+        logger.warning(f"⚠️ [DEDUP] Error en check_recent_meal_plan_exists: {e}")
+    return False
+
+def check_meal_plan_generated_today(user_id: str) -> bool:
+    """Valida si el último plan generado por el usuario se realizó el día actual."""
+    if not connection_pool: return False
+    try:
+        from datetime import datetime, timezone
+        query = "SELECT created_at FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1"
+        res = execute_sql_query(query, (user_id,), fetch_one=True)
+        
+        if res and "created_at" in res:
+            last_saved = res["created_at"]
+            if isinstance(last_saved, str):
+                if last_saved.endswith("Z"): 
+                    last_saved = last_saved[:-1] + "+00:00"
+                last_saved = datetime.fromisoformat(last_saved)
+            if last_saved.tzinfo is None:
+                last_saved = last_saved.replace(tzinfo=timezone.utc)
+            
+            now_utc = datetime.now(timezone.utc)
+            if last_saved.date() == now_utc.date():
+                return True
+    except Exception as e:
+        logger.error(f"Error comprobando si plan fue hoy: {e}")
+    return False
+
+def save_new_meal_plan_robust(insert_data: dict) -> bool:
+    """Guarda un nuevo plan nutricional con fallback por si faltan columnas optimizadas."""
+    if not connection_pool: return False
+    try:
+        import copy
+        from psycopg.types.json import Jsonb
+        safe_data = copy.deepcopy(insert_data)
+        
+        def dict_to_insert(d):
+            cols = list(d.keys())
+            vals = [Jsonb(v) if isinstance(v, (dict, list)) else v for v in d.values()]
+            placeholders = ", ".join(["%s"] * len(cols))
+            col_str = ", ".join(cols)
+            return f"INSERT INTO meal_plans ({col_str}) VALUES ({placeholders})", vals
+            
+        query, vals = dict_to_insert(safe_data)
+        execute_sql_write(query, tuple(vals))
+        return True
+    except Exception as try_db_e:
+        err_msg = str(try_db_e)
+        if "column" in err_msg and ("meal_names" in err_msg or "techniques" in err_msg):
+            logger.warning("⚠️ [DB] Faltan columnas optimizadas (meal_names/techniques). Guardando sin ellas.")
+            safe_data.pop("meal_names", None)
+            safe_data.pop("ingredients", None)
+            safe_data.pop("techniques", None)
+            query, vals = dict_to_insert(safe_data)
+            try:
+                execute_sql_write(query, tuple(vals))
+                return True
+            except Exception as e2:
+                raise e2
+        else:
+            raise try_db_e
+
+def check_fact_ownership(fact_id: str, user_id: str) -> bool:
+    """Verifica si un hecho corresponde a un determinado usuario."""
+    if not connection_pool: return False
+    try:
+        query = "SELECT user_id FROM user_facts WHERE id = %s"
+        res = execute_sql_query(query, (fact_id,), fetch_one=True)
+        if res:
+            return str(res.get("user_id")) == str(user_id)
+    except Exception as e:
+        logger.error(f"Error en check_fact_ownership: {e}")
+    return False
+
+def delete_user_agent_sessions(user_id: str) -> bool:
+    """Elimina todas las sesiones de agente para un usuario."""
+    if not supabase: return False
+    try:
+        supabase.table("agent_sessions").delete().eq("user_id", user_id).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Error eliminando sesiones de agente de {user_id}: {e}")
+        return False
+
+def upsert_user_profile(user_id: str, health_profile: dict) -> bool:
+    """Hace upsert del perfil de usuario y health_profile en user_profiles."""
+    if not supabase: return False
+    try:
+        supabase.table("user_profiles").upsert({
+            "id": user_id,
+            "health_profile": health_profile
+        }).execute()
+        return True
+    except Exception as e:
+        logger.error(f"Error en upsert_user_profile: {e}")
+        return False
 
 # Pre-computar mapa de sinónimos sin acentos para track_meal_friction() (O(1) por llamada)
 import unicodedata as _uc
@@ -37,41 +215,56 @@ _ACCENT_SAFE_REVERSE_MAP = {
 }
 
 def get_or_create_session(session_id: str, user_id: str = None):
-    if not supabase: return None
+    if not connection_pool: return None
     try:
-        res = supabase.table("agent_sessions").select("*").eq("id", session_id).execute()
+        query = "SELECT * FROM agent_sessions WHERE id = %s"
+        res = execute_sql_query(query, (session_id,), fetch_one=True)
         
-        if res.data and len(res.data) > 0:
-            existing_session = res.data[0]
+        if res:
+            existing_session = res
             if not existing_session.get("user_id") and user_id:
                 try:
-                    update_res = supabase.table("agent_sessions").update({"user_id": user_id}).eq("id", session_id).execute()
-                    if update_res.data:
-                        return update_res.data[0]
+                    update_q = "UPDATE agent_sessions SET user_id = %s WHERE id = %s RETURNING *"
+                    update_res = execute_sql_write(update_q, (user_id, session_id), returning=True)
+                    if update_res:
+                        return update_res[0]
                 except Exception as update_e:
                     logger.error(f"Error actualizando user_id en sesión: {update_e}")
             return existing_session
         
-        insert_data = {"id": session_id, "locked_at": None}
         if user_id:
-            insert_data["user_id"] = user_id
+            insert_q = "INSERT INTO agent_sessions (id, user_id, locked_at) VALUES (%s, %s, %s) RETURNING *"
+            new_res = execute_sql_write(insert_q, (session_id, user_id, None), returning=True)
+        else:
+            insert_q = "INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) RETURNING *"
+            new_res = execute_sql_write(insert_q, (session_id, None), returning=True)
             
-        new_res = supabase.table("agent_sessions").insert(insert_data).execute()
-        return new_res.data[0]
+        return new_res[0] if new_res else None
     except Exception as e:
         logger.info(f"Fallback creando sesión: {e}")
         try:
-            # Si falló la inserción normal (probablemente porque 'user_id' no existe en DB),
-            # intentamos crear la sesión *sin* 'user_id' para no romper el chat.
-            insert_data_fallback = {"id": session_id, "locked_at": None}
-            new_res_fallback = supabase.table("agent_sessions").insert(insert_data_fallback).execute()
-            if new_res_fallback.data:
-                return new_res_fallback.data[0]
+            insert_q = "INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) RETURNING *"
+            new_res_fallback = execute_sql_write(insert_q, (session_id, None), returning=True)
+            if new_res_fallback:
+                return new_res_fallback[0]
             return None
         except Exception as inner_e:
             logger.error(f"Error fatal creando sesión: {inner_e}")
-            # Si aún así falla, es posible que la sesión ya existiera pero el .select() fallara
             return None
+
+def get_session_owner(session_id: str) -> Optional[str]:
+    """Retorna el user_id propietario de una sesión, o None si no existe/no tiene dueño.
+    Usado para validación IDOR en endpoints de historial."""
+    if not connection_pool: return None
+    try:
+        res = execute_sql_query(
+            "SELECT user_id FROM agent_sessions WHERE id = %s",
+            (session_id,), fetch_one=True
+        )
+        return res.get("user_id") if res else None
+    except Exception as e:
+        logger.error(f"Error consultando session owner: {e}")
+        return None
 
 def get_guest_chat_sessions(session_ids: list):
     """Obtiene la lista de sesiones para invitados, mediante sus IDs."""
@@ -497,7 +690,7 @@ def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
     threshold_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     
     try:
-        query = supabase.table("user_facts").delete().contains("metadata", {"categoria": "sintoma_temporal"}).lt("created_at", threshold_time)
+        query = supabase.table("user_facts").delete().contains("metadata", {"category": "sintoma_temporal"}).lt("created_at", threshold_time)
         if user_id:
             query = query.eq("user_id", user_id)
         
@@ -509,7 +702,7 @@ def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
 
 def get_user_facts_by_metadata(user_id: str, key: str, value: str):
     """Busca hechos Exactos filtrando dentro del JSONB de metadata.
-    Ejemplo: get_user_facts_by_metadata(user_id, 'categoria', 'alergia')
+    Ejemplo: get_user_facts_by_metadata(user_id, 'category', 'alergia')
     """
     if not supabase: return []
     
@@ -539,49 +732,45 @@ def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):
 
 def search_user_facts(user_id: str, query_embedding: list, query_text: str = None, threshold: float = 0.5, limit: int = 5):
     """Busca hechos similares usando búsqueda híbrida (si hay texto) o vectorial pura en Supabase."""
-    if not supabase: return []
+    if not connection_pool: return []
     
     # Auto-Limpieza de síntomas temporales antes de buscar
     delete_expired_temporal_facts(user_id)
     
     try:
+        # Array Python a string pgvector '[1.2, 0.4, ...]'
+        emb_str = f"[{','.join(map(str, query_embedding))}]"
+        
         if query_text:
             # Búsqueda híbrida (vector + full-text search)
-            res = supabase.rpc("hybrid_search_user_facts", {
-                "query_text": query_text,
-                "query_embedding": query_embedding,
-                "match_count": limit,
-                "p_user_id": user_id
-            }).execute()
+            query = "SELECT * FROM hybrid_search_user_facts(query_text => %s, query_embedding => %s, match_count => %s, p_user_id => %s)"
+            res = execute_sql_query(query, (query_text, emb_str, limit, user_id), fetch_all=True)
+            return res
         else:
             # Búsqueda vectorial pura
-            res = supabase.rpc("match_user_facts", {
-                "query_embedding": query_embedding,
-                "match_threshold": threshold,
-                "match_count": limit,
-                "p_user_id": user_id
-            }).execute()
-        return res.data
+            query = "SELECT * FROM match_user_facts(query_embedding => %s, match_threshold => %s, match_count => %s, p_user_id => %s)"
+            res = execute_sql_query(query, (emb_str, threshold, limit, user_id), fetch_all=True)
+            return res
     except Exception as e:
         logger.error(f"Error buscando facts: {e}")
         return []
 
 def search_user_facts_hybrid(user_id: str, query_embedding: list, filter_metadata: dict = None, threshold: float = 0.5, limit: int = 5):
     """Búsqueda Híbrida Vectorial: similitud de vectores pre-filtrada por metadatos (JSONB) usando pgvector RPC."""
-    if not supabase: return []
+    if not connection_pool: return []
     
     # Auto-Limpieza de síntomas temporales antes de buscar
     delete_expired_temporal_facts(user_id)
     
     try:
-        res = supabase.rpc("match_user_facts_hybrid_metadata", {
-            "query_embedding": query_embedding,
-            "match_threshold": threshold,
-            "match_count": limit,
-            "p_user_id": user_id,
-            "p_metadata": filter_metadata if filter_metadata else None
-        }).execute()
-        return res.data
+        from psycopg.types.json import Jsonb
+        emb_str = f"[{','.join(map(str, query_embedding))}]"
+        
+        query = "SELECT * FROM match_user_facts_hybrid_metadata(query_embedding => %s, match_threshold => %s, match_count => %s, p_user_id => %s, p_metadata => %s)"
+        meta_param = Jsonb(filter_metadata) if filter_metadata else None
+        
+        res = execute_sql_query(query, (emb_str, threshold, limit, user_id, meta_param), fetch_all=True)
+        return res
     except Exception as e:
         logger.error(f"Error en búsqueda híbrida vectorial (metadatos): {e}")
         return []
@@ -1217,7 +1406,8 @@ def delete_auto_generated_shopping_items(user_id: str, exclude_ids: list = None)
     if not supabase: return False
     try:
         # 🚀 Borrado directo por columna source (O(1) con índice, sin parsear JSON)
-        query = supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "auto")
+        # 🛡️ NUNCA borrar items ya comprados (is_checked=True) — son inventario físico del usuario
+        query = supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "auto").eq("is_checked", False)
         if exclude_ids:
             # PostgREST NOT IN: 1 sola cláusula SQL vs N cláusulas neq encadenadas
             query = query.not_.in_("id", exclude_ids)
@@ -1392,7 +1582,6 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
         import unicodedata
         nfkd = unicodedata.normalize('NFKD', text.lower().strip())
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
-        return None, qty_str
     
     # Agrupar por nombre normalizado
     groups = {}  # normalized_name -> [items]
@@ -1433,7 +1622,7 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
         # Intentar sumar cantidades
         keeper_qty_str = keeper["item"].get("qty", "")
         keeper_name = keeper["name"]
-        keeper_num, keeper_unit, _ = parse_ingredient_qty(f"{keeper_qty_str} {keeper_name}")
+        keeper_num, keeper_unit, _ = parse_ingredient_qty(f"{keeper_qty_str} {keeper_name}", to_metric=False)
         total = keeper_num
         can_sum = keeper_num is not None
         
@@ -1444,7 +1633,7 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
             
         for dup in duplicates:
             dup_qty_str = dup["item"].get("qty", "")
-            dup_num, dup_unit, _ = parse_ingredient_qty(f"{dup_qty_str} {dup['name']}")
+            dup_num, dup_unit, _ = parse_ingredient_qty(f"{dup_qty_str} {dup['name']}", to_metric=False)
             
             if can_sum and dup_num is not None and _normalize(dup_unit) == _normalize(keeper_unit):
                 total += dup_num
@@ -1486,68 +1675,6 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
             
         unique_survivors.append(keeper)
         
-    # ===== FASE 2: Deduplicación Semántica (LLM) =====
-    try:
-        # Extraer items sobrevivientes a la fase 1 (que no están ya marcados para borrar)
-        # Filtramos possible_survivors asegurando que su ID no esté en ids_to_delete
-        final_survivors = [s for s in unique_survivors if s["item"]["id"] not in ids_to_delete]
-        if len(final_survivors) > 1:
-            from agent import semantic_merge_items
-            clusters = semantic_merge_items(final_survivors)
-            
-            for cluster in clusters:
-                c_name = cluster.get("merged_name")
-                c_qty = cluster.get("merged_qty")
-                c_ids = cluster.get("item_ids_to_merge", [])
-                
-                # Ignorar si no hay al menos 2 para mergear
-                if not c_name or not c_qty or len(c_ids) < 2:
-                    continue
-                
-                # Encontrar cuál de estos IDs dejaremos vivo (el primero que encontremos vigente)
-                valid_items = [s for s in final_survivors if s["item"]["id"] in c_ids]
-                if len(valid_items) < 2:
-                    continue
-                    
-                semantic_keeper = valid_items[0]
-                keeper_id = semantic_keeper["item"]["id"]
-                semantic_dups = valid_items[1:]
-                
-                # Configurar el keeper
-                update_payload = {"display_name": c_name, "qty": c_qty}
-                semantic_keeper["name"] = c_name
-                semantic_keeper["item"]["display_name"] = c_name
-                semantic_keeper["item"]["qty"] = c_qty
-                
-                has_checked = semantic_keeper["item"].get("is_checked", False)
-                
-                # Borrar los duplicados
-                for dup in semantic_dups:
-                    dup_id = dup["item"]["id"]
-                    if dup_id not in ids_to_delete:
-                        ids_to_delete.append(dup_id)
-                    
-                    if dup["item"].get("is_checked"):
-                        has_checked = True
-                        
-                    # Purgar de updates pendientes de fase 1
-                    if dup_id in ids_to_update:
-                        del ids_to_update[dup_id]
-                        
-                if has_checked:
-                    update_payload["is_checked"] = True
-                    semantic_keeper["item"]["is_checked"] = True
-                    
-                merged_info.append(f"{c_name} (IA Semántica): {c_qty} (eliminó {len(semantic_dups)} variaciones)")
-                
-                if keeper_id in ids_to_update:
-                    ids_to_update[keeper_id].update(update_payload)
-                else:
-                    ids_to_update[keeper_id] = update_payload
-                    
-    except Exception as e:
-        logger.error(f"⚠️ [DEDUP] Error en fase semántica, ignorando: {e}")
-    
     if not ids_to_delete and not ids_to_update:
         return {"removed": 0, "merged": []}
     
@@ -1644,6 +1771,19 @@ def delete_custom_shopping_item(item_id: str, user_id: str = None):
         return res.data
     except Exception as e:
         logger.error(f"Error borrando custom shopping item: {e}")
+        return None
+
+def delete_custom_shopping_items_batch(item_ids: list, user_id: str = None):
+    """Elimina múltiples items custom de la lista de compras de una vez. Si se provee user_id, verifica ownership."""
+    if not supabase or not item_ids: return None
+    try:
+        query = supabase.table("custom_shopping_items").delete().in_("id", item_ids)
+        if user_id:
+            query = query.eq("user_id", user_id)
+        res = query.execute()
+        return res.data
+    except Exception as e:
+        logger.error(f"Error borrando custom shopping items en batch: {e}")
         return None
 
 def update_custom_shopping_item(item_id: str, updates: dict, user_id: str = None):
@@ -1760,7 +1900,7 @@ def _update_shopping_item_status_legacy(item_id: str, is_checked: bool, user_id:
                 raise ValueError("Not a dict")
         except (json.JSONDecodeError, ValueError, KeyError):
             parsed = {
-                "category": "Extras (Legacy)",
+                "category": "Otros",
                 "emoji": "📝",
                 "name": current_name,
                 "qty": "",
@@ -1834,7 +1974,7 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     """
     if not user_id or user_id == "guest" or not rejected_meal: return False
     
-    from agent import DOMINICAN_PROTEINS
+    from constants import DOMINICAN_PROTEINS
     from constants import GLOBAL_REVERSE_MAP
     
     _strip_accents = _strip_accents_canonical
@@ -2058,13 +2198,13 @@ def log_unknown_ingredients(user_id: str, unknown_ings: list, raw_map: dict = No
                     return
                 # Fallback: upsert directo
                 try:
-                    from datetime import datetime
+                    from datetime import datetime, timezone
                     supabase.table("unknown_ingredients").upsert({
                         "user_id": user_id,
                         "ingredient": ing,
                         "raw_text": raw_text or None,
                         "occurrences": 1,
-                        "last_seen": datetime.utcnow().isoformat()
+                        "last_seen": datetime.now(timezone.utc).isoformat()
                     }, on_conflict="user_id,ingredient").execute()
                 except Exception as fb_e:
                     if "unknown_ingredients" in str(fb_e) or "PGRST205" in str(fb_e):
@@ -2085,7 +2225,7 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
     
     try:
         from collections import Counter
-        from datetime import datetime
+        from datetime import datetime, timezone
         
         strip_accents = _strip_accents_canonical
             
@@ -2122,7 +2262,7 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
         current_map = {row["ingredient"]: row["count"] for row in res.data} if res.data else {}
         
         upsert_rows = []
-        now_str = datetime.utcnow().isoformat()
+        now_str = datetime.now(timezone.utc).isoformat()
         
         for ing, inc_val in incoming_counts.items():
             new_val = current_map.get(ing, 0) + inc_val
@@ -2193,95 +2333,6 @@ def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
         logger.error(f"⚠️ [DB] Error obteniendo diccionario de frecuencias: {e}")
         return {}
 
-
-def parse_ingredient_qty(raw: str):
-    """Extrae cantidad (float), unidad y nombre de un ingrediente."""
-    import re, unicodedata
-    raw = raw.strip()
-    
-    # Mapeo numérico básico
-    raw = re.sub(r'^(media|medio)\b', '0.5', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'^(un|una)\b', '1', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'^dos\b', '2', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'^tres\b', '3', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'^cuatro\b', '4', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'^cinco\b', '5', raw, flags=re.IGNORECASE)
-    
-    unit_map = {
-        "tazas": "taza", "taza": "taza",
-        "cucharadas": "cda", "cucharada": "cda", "cdas": "cda", "cda": "cda",
-        "cucharaditas": "cdita", "cucharadita": "cdita", "cditas": "cdita", "cdita": "cdita",
-        "onzas": "oz", "onza": "oz", "oz": "oz",
-        "libras": "lb", "libra": "lb", "lbs": "lb", "lb": "lb",
-        "gramos": "g", "gramo": "g", "gr": "g", "g": "g",
-        "mililitros": "ml", "mililitro": "ml", "ml": "ml",
-        "litros": "lt", "litro": "lt", "lts": "lt", "lt": "lt", "l": "lt",
-        "rebanadas": "rebanada", "rebanada": "rebanada",
-        "lonchas": "loncha", "loncha": "loncha",
-        "porciones": "porcion", "porcion": "porcion",
-        "dientes": "diente", "diente": "diente",
-        "paquetes": "paquete", "paquete": "paquete",
-        "unidades": "unidad", "unidad": "unidad",
-        "latas": "lata", "lata": "lata",
-        "vasos": "vaso", "vaso": "vaso",
-        "puñados": "puñado", "puñado": "puñado",
-        "piezas": "pieza", "pieza": "pieza",
-        "pizcas": "pizca", "pizca": "pizca",
-        "hojas": "hoja", "hoja": "hoja",
-        "tallos": "tallo", "tallo": "tallo",
-    }
-    
-    units_pattern = r"(tazas?|cucharadas?|cdas?|cucharaditas?|cditas?|onzas?|oz|libras?|lbs?|gramos?|gr|g|mililitros?|ml|litros?|lts?|l|rebanadas?|lonchas?|porciones?|dientes?|paquetes?|unidades?|latas?|vasos?|puñados?|piezas?|pizcas?|hojas?|tallos?)"
-    
-    # Captura: 1(Número) 2(Unidad opcional) 3(Nombre)
-    pattern = r'^([\d]+/[\d]+|[\d.,]+(?:[ \-][\d]+/[\d]+)?)\s*(?:' + units_pattern + r'\b\s*(?:de\s+)?)?(.+)$'
-    match = re.match(pattern, raw, re.IGNORECASE)
-    
-    if match:
-        num_str = match.group(1).replace(',', '.').strip()
-        raw_unit = match.group(2)
-        unit = unit_map.get(raw_unit.lower(), raw_unit.lower()) if raw_unit else ""
-        name = match.group(3).strip()
-        
-        try:
-            if ' ' in num_str or '-' in num_str:
-                sep = ' ' if ' ' in num_str else '-'
-                whole, frac = num_str.split(sep)
-                num_part, den = frac.split('/')
-                num = float(float(whole) if whole else 0.0) + (float(num_part) / float(den))
-            elif '/' in num_str:
-                numerator, denominator = num_str.split('/')
-                num = float(numerator) / float(denominator)
-            else:
-                num = float(num_str)
-                
-            # --- Estandarización a Métrica Base ---
-            if unit in ["lb", "lbs"]:
-                num *= 453.592
-                unit = "g"
-            elif unit in ["oz", "onzas", "onza"]:
-                num *= 28.3495
-                unit = "g"
-            elif unit == "kg":
-                num *= 1000.0
-                unit = "g"
-            elif unit in ["taza", "tazas"]:
-                num *= 240.0
-                unit = "ml"
-            elif unit in ["cda", "cdas", "cucharada", "cucharadas"]:
-                num *= 15.0
-                unit = "ml"
-            elif unit in ["cdita", "cditas", "cucharadita", "cucharaditas"]:
-                num *= 5.0
-                unit = "ml"
-            elif unit in ["lt", "lts", "litro", "litros"]:
-                num *= 1000.0
-                unit = "ml"
-
-            return num, unit, name
-        except (ValueError, ZeroDivisionError):
-            return None, "", raw
-    return None, "", raw
 
 def format_qty(qty: float, unit: str) -> str:
     """Aplica pretty-formatting convirtiendo unidades base largas (g, ml) a legibles (kg, lt)."""
@@ -2355,7 +2406,7 @@ def deduct_inventory_items(user_id: str, consumed_ingredients: list) -> int:
             if not isinstance(consumed_raw, str) or not consumed_raw.strip():
                 continue
                 
-            cons_num, cons_unit, cons_name = parse_ingredient_qty(consumed_raw)
+            cons_num, cons_unit, cons_name = parse_ingredient_qty(consumed_raw, to_metric=True)
             if cons_num is None: 
                 continue
                 
@@ -2371,7 +2422,7 @@ def deduct_inventory_items(user_id: str, consumed_ingredients: list) -> int:
                         continue
                         
                     # Extraer unidad y valor de lo que hay en BD (ej. "3 taza")
-                    inv_num, inv_unit, _ = parse_ingredient_qty(f"{inv_raw} {norm_cons_name}")
+                    inv_num, inv_unit, _ = parse_ingredient_qty(f"{inv_raw} {norm_cons_name}", to_metric=True)
                     if inv_num is None:
                         continue
                         

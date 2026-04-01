@@ -1,16 +1,15 @@
 # backend/nutrition_calculator.py
 """
-Agente Calculador: Cálculos nutricionales exactos con Harris-Benedict Revisada.
+Agente Calculador: Cálculos nutricionales exactos con la ecuación de Mifflin-St Jeor.
 Elimina la carga matemática del LLM para evitar alucinaciones numéricas.
 """
 
 def calculate_bmr(weight_kg: float, height_cm: float, age: int, gender: str) -> int:
     """
-    Calcula el BMR (Tasa Metabólica Basal) usando la ecuación de Mifflin-St Jeor
-    (versión más precisa de Harris-Benedict Revisada).
+    Calcula el BMR (Tasa Metabólica Basal) usando la ecuación de Mifflin-St Jeor.
     
-    Hombres: BMR = 10×peso(kg) + 6.25×altura(cm) - 5×edad - 5 + 5  →  10w + 6.25h - 5a + 5
-    Mujeres: BMR = 10×peso(kg) + 6.25×altura(cm) - 5×edad - 161
+    Hombres: BMR = 10×peso(kg) + 6.25×altura(cm) − 5×edad + 5
+    Mujeres: BMR = 10×peso(kg) + 6.25×altura(cm) − 5×edad − 161
     """
     if gender.lower() in ["male", "masculino", "m", "hombre"]:
         bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5

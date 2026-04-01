@@ -9,26 +9,26 @@ import sys, os, re, unicodedata
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest  # type: ignore[import-unresolved]
-from tools import _categorize_item, _CATEGORY_KEYWORDS  # type: ignore[import-unresolved]
+from constants import categorize_shopping_item, _CATEGORY_KEYWORDS  # type: ignore[import-unresolved]
 from agent import _pre_consolidate_ingredients  # type: ignore[import-unresolved]
 
 
 # ============================================================
-# 1. TESTS DE _categorize_item
+# 1. TESTS DE categorize_shopping_item
 # ============================================================
 
 class TestCategorizeItem:
-    """Verifica que _categorize_item clasifica items correctamente."""
+    """Verifica que categorize_shopping_item clasifica items correctamente."""
 
-    # --- Proteínas ---
+    # --- Carnes y Pescados ---
     @pytest.mark.parametrize("item", [
         "Pechuga de pollo", "1 lb Pollo", "Salmón fresco", "Carne molida",
         "Chuleta de cerdo", "Camarones", "Bistec de res",
         "Carne de res", "Atún",
     ])
-    def test_proteinas(self, item):
-        cat, emoji = _categorize_item(item)
-        assert cat == "Proteínas", f"'{item}' debería ser Proteínas, pero fue '{cat}'"
+    def test_carnes_pescados(self, item):
+        cat, emoji = categorize_shopping_item(item)
+        assert cat == "Carnes y Pescados", f"'{item}' debería ser Carnes y Pescados, pero fue '{cat}'"
         assert emoji == "🥩"
 
     # --- Frutas y Verduras ---
@@ -37,26 +37,26 @@ class TestCategorizeItem:
         "Brócoli", "Zanahoria", "Guineo", "Mango", "Batata",
     ])
     def test_frutas_verduras(self, item):
-        cat, emoji = _categorize_item(item)
+        cat, emoji = categorize_shopping_item(item)
         assert cat == "Frutas y Verduras", f"'{item}' debería ser Frutas y Verduras, pero fue '{cat}'"
         assert emoji == "🥬"
 
-    # --- Lácteos ---
+    # --- Lácteos y Huevos ---
     @pytest.mark.parametrize("item", [
         "Leche entera", "Queso cheddar", "Yogurt natural", "Mantequilla",
         "Crema de leche", "Crema agria", "Queso crema",
     ])
-    def test_lacteos(self, item):
-        cat, emoji = _categorize_item(item)
-        assert cat == "Lácteos", f"'{item}' debería ser Lácteos, pero fue '{cat}'"
+    def test_lacteos_huevos(self, item):
+        cat, emoji = categorize_shopping_item(item)
+        assert cat == "Lácteos y Huevos", f"'{item}' debería ser Lácteos y Huevos, pero fue '{cat}'"
         assert emoji == "🥛"
 
-    # --- Huevos ---
+    # --- Huevos (ahora dentro de Lácteos y Huevos) ---
     @pytest.mark.parametrize("item", ["Huevos", "1 docena de huevo", "huevos revueltos"])
-    def test_huevos(self, item):
-        cat, emoji = _categorize_item(item)
-        assert cat == "Huevos", f"'{item}' debería ser Huevos, pero fue '{cat}'"
-        assert emoji == "🥚"
+    def test_huevos_en_lacteos(self, item):
+        cat, emoji = categorize_shopping_item(item)
+        assert cat == "Lácteos y Huevos", f"'{item}' debería ser Lácteos y Huevos, pero fue '{cat}'"
+        assert emoji == "🥛"
 
     # --- Granos y Cereales ---
     @pytest.mark.parametrize("item", [
@@ -65,7 +65,7 @@ class TestCategorizeItem:
         "Habichuelas rojas",
     ])
     def test_granos_cereales(self, item):
-        cat, emoji = _categorize_item(item)
+        cat, emoji = categorize_shopping_item(item)
         assert cat == "Granos y Cereales", f"'{item}' debería ser Granos y Cereales, pero fue '{cat}'"
         assert emoji == "🌾"
 
@@ -74,28 +74,28 @@ class TestCategorizeItem:
         "Pimienta negra", "Orégano", "Sazón", "Vinagre", "Sal marina",
     ])
     def test_condimentos(self, item):
-        cat, emoji = _categorize_item(item)
+        cat, emoji = categorize_shopping_item(item)
         assert cat == "Condimentos y Especias", f"'{item}' debería ser Condimentos y Especias, pero fue '{cat}'"
         assert emoji == "🧂"
 
     # --- Aceites y Grasas ---
     @pytest.mark.parametrize("item", ["Aceite de oliva", "Aceite vegetal", "Aceite de coco"])
     def test_aceites(self, item):
-        cat, emoji = _categorize_item(item)
+        cat, emoji = categorize_shopping_item(item)
         assert cat == "Aceites y Grasas", f"'{item}' debería ser Aceites y Grasas, pero fue '{cat}'"
         assert emoji == "🫒"
 
     # --- Bebidas ---
     @pytest.mark.parametrize("item", ["Agua de coco", "Jugo", "Café"])
     def test_bebidas(self, item):
-        cat, emoji = _categorize_item(item)
+        cat, emoji = categorize_shopping_item(item)
         assert cat == "Bebidas", f"'{item}' debería ser Bebidas, pero fue '{cat}'"
         assert emoji == "🥤"
 
     # --- Panadería ---
     @pytest.mark.parametrize("item", ["Pan"])
     def test_panaderia(self, item):
-        cat, emoji = _categorize_item(item)
+        cat, emoji = categorize_shopping_item(item)
         assert cat == "Panadería", f"'{item}' debería ser Panadería, pero fue '{cat}'"
         assert emoji == "🍞"
 
@@ -104,22 +104,22 @@ class TestCategorizeItem:
         "XYZABC123", "producto desconocido", "",
     ])
     def test_otros_fallback(self, item):
-        cat, emoji = _categorize_item(item)
+        cat, emoji = categorize_shopping_item(item)
         assert cat == "Otros", f"'{item}' debería ser Otros, pero fue '{cat}'"
         assert emoji == "🛒"
 
     # --- Insensibilidad a acentos ---
     def test_accent_insensitive(self):
-        cat1, _ = _categorize_item("Plátano")
-        cat2, _ = _categorize_item("Platano")
+        cat1, _ = categorize_shopping_item("Plátano")
+        cat2, _ = categorize_shopping_item("Platano")
         assert cat1 == cat2 == "Frutas y Verduras"
 
     # --- Case insensitive ---
     def test_case_insensitive(self):
-        cat1, _ = _categorize_item("POLLO")
-        cat2, _ = _categorize_item("pollo")
-        cat3, _ = _categorize_item("Pollo")
-        assert cat1 == cat2 == cat3 == "Proteínas"
+        cat1, _ = categorize_shopping_item("POLLO")
+        cat2, _ = categorize_shopping_item("pollo")
+        cat3, _ = categorize_shopping_item("Pollo")
+        assert cat1 == cat2 == cat3 == "Carnes y Pescados"
 
 
 # ============================================================
@@ -131,32 +131,32 @@ class TestCategorizeItemFalsePositives:
 
     def test_salmon_not_condimento(self):
         """'Salmón' NO debe matchear 'sal' (Condimentos)."""
-        cat, _ = _categorize_item("Salmón")
-        assert cat == "Proteínas", f"'Salmón' fue '{cat}', debería ser 'Proteínas'"
+        cat, _ = categorize_shopping_item("Salmón")
+        assert cat == "Carnes y Pescados", f"'Salmón' fue '{cat}', debería ser 'Carnes y Pescados'"
 
     def test_fresa_not_proteina(self):
         """'Fresa' NO debe matchear 'res' (Proteínas)."""
-        cat, _ = _categorize_item("Fresa")
+        cat, _ = categorize_shopping_item("Fresa")
         assert cat == "Frutas y Verduras", f"'Fresa' fue '{cat}', debería ser 'Frutas y Verduras'"
 
     def test_agua_de_coco_not_aceites(self):
         """'Agua de coco' debe ser Bebidas, no Aceites."""
-        cat, _ = _categorize_item("Agua de coco")
+        cat, _ = categorize_shopping_item("Agua de coco")
         assert cat == "Bebidas", f"'Agua de coco' fue '{cat}', debería ser 'Bebidas'"
 
     def test_habichuelas_goes_to_granos(self):
         """'Habichuelas' debe ir a Granos, no a Frutas y Verduras."""
-        cat, _ = _categorize_item("Habichuelas rojas")
+        cat, _ = categorize_shopping_item("Habichuelas rojas")
         assert cat == "Granos y Cereales", f"'Habichuelas rojas' fue '{cat}', debería ser 'Granos y Cereales'"
 
     def test_crema_de_leche_is_lacteos(self):
         """'Crema de leche' debe ser Lácteos, no algo genérico."""
-        cat, _ = _categorize_item("Crema de leche")
-        assert cat == "Lácteos", f"'Crema de leche' fue '{cat}', debería ser 'Lácteos'"
+        cat, _ = categorize_shopping_item("Crema de leche")
+        assert cat == "Lácteos y Huevos", f"'Crema de leche' fue '{cat}', debería ser 'Lácteos y Huevos'"
 
     def test_salsa_is_condimento(self):
         """'Salsa' (word boundary) debe matchear Condimentos, no Proteínas por 'sal'."""
-        cat, _ = _categorize_item("Salsa de tomate")
+        cat, _ = categorize_shopping_item("Salsa de tomate")
         assert cat == "Condimentos y Especias", f"'Salsa de tomate' fue '{cat}', debería ser 'Condimentos y Especias'"
 
 
