@@ -346,6 +346,8 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
         is_sandbox = os.environ.get("ENVIRONMENT") != "production"
         PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
         
+        end_date = None
+        
         if PAYPAL_CLIENT_ID and PAYPAL_SECRET:
             async with httpx.AsyncClient() as client:
                 auth_resp = await client.post(
@@ -355,6 +357,15 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
                 )
                 if auth_resp.status_code == 200:
                     access_token = auth_resp.json().get("access_token")
+                    
+                    # Llamada a PayPal para obtener next_billing_time ANTES de cancelar
+                    sub_info_resp = await client.get(
+                        f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}",
+                        headers={"Authorization": f"Bearer {access_token}"}
+                    )
+                    if sub_info_resp.status_code == 200:
+                        billing_info = sub_info_resp.json().get("billing_info", {})
+                        end_date = billing_info.get("next_billing_time")
                     
                     # Llamada a PayPal para cancelar la suscripción
                     cancel_resp = await client.post(
@@ -366,15 +377,16 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
                     # 204 No Content indica éxito
                     if cancel_resp.status_code not in [204, 200]:
                         logger.error(f"Error cancelando suscripcion con PayPal: {cancel_resp.text}")
-                        # Podríamos fallar aquí, pero para evitar inconsistencias locales dejamos que proceda al fallback
+                        # Fallback pasivo continua...
         
-        # Graceful Degradation: Dejamos el tier intacto pero marcamos el status como CANCELLED
-        # El usuario mantendrá el acceso hasta el fin de ciclo, y el webhook lo bajará a 'gratis' cuando reciba EXPIRED.
-        logger.info(f"✅ Suscripción {subscription_id} de usuario {user_id} cancelada. Mantendrá acceso hasta el fin de ciclo.")
-        supabase.table("user_profiles").update({
-            "subscription_status": "CANCELLED"
-            # No degradamos "plan_tier" a "gratis" aquí
-        }).eq("id", user_id).execute()
+        # Graceful Degradation: Dejamos el tier intacto pero marcamos el status como CANCELLED e insertamos el Fin de Ciclo
+        logger.info(f"✅ Suscripción {subscription_id} de usuario {user_id} cancelada. Mantendrá acceso hasta {end_date or 'fin de ciclo'}.")
+        
+        update_payload = {"subscription_status": "CANCELLED"}
+        if end_date:
+            update_payload["subscription_end_date"] = end_date
+            
+        supabase.table("user_profiles").update(update_payload).eq("id", user_id).execute()
         
         return {"success": True, "message": "Tu suscripción no se renovará, pero mantendrás tu plan actual hasta el final del ciclo pagado."}
 
@@ -460,11 +472,16 @@ async def api_webhook_paypal(request: Request):
                 }).eq("paypal_subscription_id", subscription_id).execute()
         elif event_type == "BILLING.SUBSCRIPTION.CANCELLED":
             subscription_id = resource.get("id")
+            end_date = resource.get("billing_info", {}).get("next_billing_time")
+            
             if subscription_id:
-                logger.info(f"ℹ️ Suscripción {subscription_id} cancelada. Mantendrá el plan_tier actual hasta que pase a EXPIRED u otro evento.")
-                supabase.table("user_profiles").update({
-                    "subscription_status": "CANCELLED"
-                }).eq("paypal_subscription_id", subscription_id).execute()
+                logger.info(f"ℹ️ Webhook: Suscripción {subscription_id} cancelada remota/silenciosamente. Acceso hasta: {end_date or 'fin de ciclo'}.")
+                
+                update_payload = {"subscription_status": "CANCELLED"}
+                if end_date:
+                    update_payload["subscription_end_date"] = end_date
+                    
+                supabase.table("user_profiles").update(update_payload).eq("paypal_subscription_id", subscription_id).execute()
         
         return {"success": True}
 

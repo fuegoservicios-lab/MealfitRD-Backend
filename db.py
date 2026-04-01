@@ -917,8 +917,37 @@ def get_user_profile(user_id: str):
     """Obtiene el perfil completo del usuario, incluyendo el health_profile."""
     if not supabase: return None
     try:
+        from datetime import datetime, timezone
         res = supabase.table("user_profiles").select("*").eq("id", user_id).execute()
-        return res.data[0] if res.data else None
+        if not res.data:
+            return None
+            
+        profile = res.data[0]
+        
+        # --- Graceful Degradation Middleware ---
+        if profile.get("subscription_status") == "CANCELLED" and profile.get("subscription_end_date"):
+            end_date_str = profile.get("subscription_end_date")
+            try:
+                if end_date_str.endswith("Z"):
+                    end_date_str = end_date_str[:-1] + "+00:00"
+                end_date = datetime.fromisoformat(end_date_str)
+                now_utc = datetime.now(timezone.utc)
+                
+                # Si ya cruzamos la hora exacta de terminación, lo degradamos
+                if now_utc > end_date:
+                    logger.info(f"⬇️ Degradando perfil de {user_id} a 'gratis'. El tiempo de su cancelación (Graceful) terminó.")
+                    supabase.table("user_profiles").update({
+                        "plan_tier": "gratis",
+                        "subscription_status": "INACTIVE"
+                    }).eq("id", user_id).execute()
+                    
+                    profile["plan_tier"] = "gratis"
+                    profile["subscription_status"] = "INACTIVE"
+            except Exception as d_e:
+                logger.error(f"Error parseando fechas en graceful degradation para {user_id}: {d_e}")
+        # ---------------------------------------
+        
+        return profile
     except Exception as e:
         logger.error(f"Error obteniendo perfil: {e}")
         return None
