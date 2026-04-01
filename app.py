@@ -246,6 +246,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         is_sandbox = os.environ.get("ENVIRONMENT") != "production"
         PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
 
+        access_token = None
         success = False
 
         if not PAYPAL_CLIENT_ID or not PAYPAL_SECRET:
@@ -281,16 +282,34 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
                 if status != "ACTIVE":
                     raise HTTPException(status_code=400, detail=f"Suscripción no válida. Estado actual: {status}")
 
-                # Validacion extra: Que el cliente coincida
-                # payer_email = sub_data.get("subscriber", {}).get("email_address")
                 success = True
 
-        # 3. Si PayPal dice que todo está bien, actualizamos localmente al usuario usando Server Role Permissions.
+        # 3. Si PayPal dice que todo está bien, actualizamos localmente al usuario.
         if success:
             logger.info(f"✅ Subscripcion Verificada B2B ({subscription_id}) para usuario {user_id}. Asignando tier: {tier}")
             
+            # --- PROTECCIÓN CONTRA PAGOS DOBLES (UPGRADES/CROSSGRADES) ---
+            # Si el usuario ya tiene una suscripcion activa y es distinta a esta, la cancelamos en PayPal.
+            existing_res = supabase.table("user_profiles").select("paypal_subscription_id, subscription_status").eq("id", user_id).execute()
+            if existing_res.data and len(existing_res.data) > 0:
+                old_sub_id = existing_res.data[0].get("paypal_subscription_id")
+                old_status = existing_res.data[0].get("subscription_status")
+                
+                if old_sub_id and old_sub_id != subscription_id and old_status != "INACTIVE":
+                    logger.info(f"🔄 Detectado Upgrade/Cambio. Cancelando suscripción antigua {old_sub_id} en PayPal...")
+                    if access_token:
+                        async with httpx.AsyncClient() as cancel_client:
+                            cancel_resp = await cancel_client.post(
+                                f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{old_sub_id}/cancel",
+                                headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                                json={"reason": "Upgrade o cambio a una nueva suscripción."}
+                            )
+                            if cancel_resp.status_code == 204:
+                                logger.info(f"✅ Suscripción antigua {old_sub_id} cancelada exitosamente en PayPal.")
+                            else:
+                                logger.warning(f"⚠️ Error intentando cancelar suscripción antigua {old_sub_id}: {cancel_resp.text}")
+            
             # Ejecutamos el update en Supabase.
-            # Nota: usamos la libreria oficial de supabase que ya corre con el SERVICE_ROLE KEY en backend
             res = supabase.table("user_profiles").update({
                 "plan_tier": tier,
                 "paypal_subscription_id": subscription_id, 
@@ -349,14 +368,15 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
                         logger.error(f"Error cancelando suscripcion con PayPal: {cancel_resp.text}")
                         # Podríamos fallar aquí, pero para evitar inconsistencias locales dejamos que proceda al fallback
         
-        # Siempre forzamos el local downgrade como red de seguridad (Cancelado o error de API temporal)
-        logger.info(f"✅ Suscripción {subscription_id} de usuario {user_id} cancelada. Pasando a gratis.")
+        # Graceful Degradation: Dejamos el tier intacto pero marcamos el status como CANCELLED
+        # El usuario mantendrá el acceso hasta el fin de ciclo, y el webhook lo bajará a 'gratis' cuando reciba EXPIRED.
+        logger.info(f"✅ Suscripción {subscription_id} de usuario {user_id} cancelada. Mantendrá acceso hasta el fin de ciclo.")
         supabase.table("user_profiles").update({
-            "plan_tier": "gratis",
             "subscription_status": "CANCELLED"
+            # No degradamos "plan_tier" a "gratis" aquí
         }).eq("id", user_id).execute()
         
-        return {"success": True, "message": "Tu suscripción ha sido cancelada exitosamente."}
+        return {"success": True, "message": "Tu suscripción no se renovará, pero mantendrás tu plan actual hasta el final del ciclo pagado."}
 
     except HTTPException:
         raise
@@ -424,20 +444,26 @@ async def api_webhook_paypal(request: Request):
         logger.info(f"⚡ [WEBHOOK PAYPAL] Evento recibido: {event_type}")
         
         # Eventos que implican remover el acceso al plan
-        cancellation_events = [
-            "BILLING.SUBSCRIPTION.CANCELLED", 
+        downgrade_events = [
             "BILLING.SUBSCRIPTION.SUSPENDED", 
             "BILLING.SUBSCRIPTION.EXPIRED",
             "BILLING.SUBSCRIPTION.PAYMENT.FAILED"
         ]
         
-        if event_type in cancellation_events:
+        if event_type in downgrade_events:
             subscription_id = resource.get("id")
             if subscription_id:
                 logger.info(f"⬇️ Degradando suscripción {subscription_id} en BD debido a {event_type}.")
                 supabase.table("user_profiles").update({
                     "plan_tier": "gratis",
                     "subscription_status": "INACTIVE"
+                }).eq("paypal_subscription_id", subscription_id).execute()
+        elif event_type == "BILLING.SUBSCRIPTION.CANCELLED":
+            subscription_id = resource.get("id")
+            if subscription_id:
+                logger.info(f"ℹ️ Suscripción {subscription_id} cancelada. Mantendrá el plan_tier actual hasta que pase a EXPIRED u otro evento.")
+                supabase.table("user_profiles").update({
+                    "subscription_status": "CANCELLED"
                 }).eq("paypal_subscription_id", subscription_id).execute()
         
         return {"success": True}
