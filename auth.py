@@ -25,7 +25,7 @@ def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optiona
                 time.sleep(0.5)
                 continue
             logger.error(f"⚠️ [AUTH] Error validando token: {e}")
-            break
+            raise HTTPException(status_code=403, detail=f"Token validation failed: {str(e)}")
             
     return None
 
