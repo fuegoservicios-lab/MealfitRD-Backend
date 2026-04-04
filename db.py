@@ -242,30 +242,37 @@ _ACCENT_SAFE_REVERSE_MAP = {
 }
 
 def get_or_create_session(session_id: str, user_id: str = None):
-    if not connection_pool: return None
+    if not connection_pool: 
+        logger.error(f"🚨 [SESSION] connection_pool es None! No se puede crear sesión {session_id}")
+        return None
     try:
+        logger.info(f"📋 [SESSION] get_or_create_session(id={session_id}, user_id={user_id})")
         query = "SELECT * FROM agent_sessions WHERE id = %s"
         res = execute_sql_query(query, (session_id,), fetch_one=True)
         
         if res:
             existing_session = res
+            logger.info(f"📋 [SESSION] Sesión {session_id} ya existe. user_id en DB: {existing_session.get('user_id')}")
             if not existing_session.get("user_id") and user_id:
                 try:
                     update_q = "UPDATE agent_sessions SET user_id = %s WHERE id = %s RETURNING *"
                     update_res = execute_sql_write(update_q, (user_id, session_id), returning=True)
                     if update_res:
+                        logger.info(f"✅ [SESSION] user_id actualizado a {user_id} para sesión {session_id}")
                         return update_res[0]
                 except Exception as update_e:
                     logger.error(f"Error actualizando user_id en sesión: {update_e}")
             return existing_session
         
+        logger.info(f"📋 [SESSION] Sesión {session_id} NO existe. Creando nueva...")
         if user_id:
             insert_q = "INSERT INTO agent_sessions (id, user_id, locked_at) VALUES (%s, %s, %s) RETURNING *"
             new_res = execute_sql_write(insert_q, (session_id, user_id, None), returning=True)
         else:
             insert_q = "INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) RETURNING *"
             new_res = execute_sql_write(insert_q, (session_id, None), returning=True)
-            
+        
+        logger.info(f"✅ [SESSION] Sesión creada: {new_res}")
         return new_res[0] if new_res else None
     except Exception as e:
         logger.info(f"Fallback creando sesión: {e}")
@@ -288,7 +295,7 @@ def get_session_owner(session_id: str) -> Optional[str]:
             "SELECT user_id FROM agent_sessions WHERE id = %s",
             (session_id,), fetch_one=True
         )
-        return res.get("user_id") if res else None
+        return str(res.get("user_id")) if res and res.get("user_id") else None
     except Exception as e:
         logger.error(f"Error consultando session owner: {e}")
         return None
@@ -455,6 +462,20 @@ def release_summarizing_lock(session_id: str):
         error_msg = str(e)
         if "Server disconnected" not in error_msg:
             logger.error(f"Error releasing summarizing lock: {e}")
+
+def delete_chat_session(session_id: str) -> Tuple[bool, str]:
+    """Elimina una sesión de chat y todos sus mensajes y resúmenes asociados.
+    Usa SQL directo (psycopg) para bypassear completamente el REST API de Supabase."""
+    try:
+        # Borramos en orden para respetar Foreign Key constraints
+        execute_sql_write("DELETE FROM conversation_summaries WHERE session_id = %s", (session_id,))
+        execute_sql_write("DELETE FROM agent_messages WHERE session_id = %s", (session_id,))
+        execute_sql_write("DELETE FROM agent_sessions WHERE id = %s", (session_id,))
+        logger.info(f"🗑️ [DB] Sesión {session_id} eliminada exitosamente (SQL directo)")
+        return True, ""
+    except Exception as e:
+        logger.error(f"❌ [DB] Error eliminando la sesión {session_id}: {e}", exc_info=True)
+        return False, str(e)
 
 def acquire_fact_lock(user_id: str) -> bool:
     """Intenta adquirir el bloqueo para extracción de hechos. Retorna True si lo logra, False si ya está bloqueado."""

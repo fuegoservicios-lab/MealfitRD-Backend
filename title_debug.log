@@ -1,96 +1,20 @@
-[2026-03-21T22:51:42.365169] [dfa82610-8cca-4b9f-9431-2679672d0e98] 0.00s - Thread started
-[2026-03-21T22:51:42.365747] [dfa82610-8cca-4b9f-9431-2679672d0e98] 0.00s - Creating local supabase client
-[2026-03-21T22:51:42.594762] [dfa82610-8cca-4b9f-9431-2679672d0e98] 0.23s - Querying agent_messages
-[2026-03-21T22:51:43.522904] [dfa82610-8cca-4b9f-9431-2679672d0e98] 1.16s - Supabase response received
-[2026-03-21T22:51:43.522904] [dfa82610-8cca-4b9f-9431-2679672d0e98] 1.16s - Initializing LLM client
-[2026-03-21T22:51:44.008366] [dfa82610-8cca-4b9f-9431-2679672d0e98] 1.64s - Calling LLM API
-[2026-03-21T22:51:50.472022] [dfa82610-8cca-4b9f-9431-2679672d0e98] 8.11s - LLM response received
-[2026-03-21T22:51:50.474926] [dfa82610-8cca-4b9f-9431-2679672d0e98] 8.11s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-21T22:51:51.048688] [dfa82610-8cca-4b9f-9431-2679672d0e98] 8.69s - Insert successful. Finished.
-[2026-03-21T22:57:46.076720] [c246008f-feb1-4181-abb0-738230340184] 0.00s - Thread started
-[2026-03-21T22:57:46.078796] [c246008f-feb1-4181-abb0-738230340184] 0.00s - Creating local supabase client
-[2026-03-21T22:57:46.294569] [c246008f-feb1-4181-abb0-738230340184] 0.22s - Querying agent_messages
-[2026-03-21T22:57:47.089338] [c246008f-feb1-4181-abb0-738230340184] 1.01s - Supabase response received
-[2026-03-21T22:57:47.089338] [c246008f-feb1-4181-abb0-738230340184] 1.01s - Initializing LLM client
-[2026-03-21T22:57:47.522457] [c246008f-feb1-4181-abb0-738230340184] 1.45s - Calling LLM API
-[2026-03-21T22:57:54.358592] [c246008f-feb1-4181-abb0-738230340184] 8.28s - LLM response received
-[2026-03-21T22:57:54.358592] [c246008f-feb1-4181-abb0-738230340184] 8.28s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-21T22:57:54.797620] [c246008f-feb1-4181-abb0-738230340184] 8.72s - Insert successful. Finished.
-[2026-03-21T23:05:16.842188] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 0.00s - Thread started
-[2026-03-21T23:05:16.844333] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 0.00s - Creating local supabase client
-[2026-03-21T23:05:17.189275] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 0.35s - Querying agent_messages
-[2026-03-21T23:05:17.875532] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 1.03s - Supabase response received
-[2026-03-21T23:05:17.878253] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 1.04s - Initializing LLM client
-[2026-03-21T23:05:18.473477] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 1.63s - Calling LLM API
-[2026-03-21T23:05:19.431186] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 2.59s - LLM response received
-[2026-03-21T23:05:19.431186] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 2.59s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-21T23:05:19.579242] [4b0844bb-4e9d-4d53-9288-08efed9f2186] 2.74s - Insert successful. Finished.
-[2026-03-21T23:10:02.939302] [3f429ccd-389b-498b-8db8-3499adc8ce58] 0.00s - Thread started
-[2026-03-21T23:10:02.939302] [3f429ccd-389b-498b-8db8-3499adc8ce58] 0.00s - Creating local supabase client
-[2026-03-21T23:10:03.974811] [3f429ccd-389b-498b-8db8-3499adc8ce58] 1.04s - Exception caught: cannot access local variable 'first_message' where it is not associated with a value
-[2026-03-21T23:12:23.978982] [7b9593b6-faac-4fcb-a39e-32a4eba67d87] 0.00s - Thread started
-[2026-03-21T23:12:23.980065] [7b9593b6-faac-4fcb-a39e-32a4eba67d87] 0.00s - Creating local supabase client
-[2026-03-21T23:12:24.850336] [7b9593b6-faac-4fcb-a39e-32a4eba67d87] 0.87s - Initializing LLM client
-[2026-03-21T23:12:25.413040] [7b9593b6-faac-4fcb-a39e-32a4eba67d87] 1.43s - Calling LLM API
-[2026-03-21T23:12:26.242926] [7b9593b6-faac-4fcb-a39e-32a4eba67d87] 2.26s - LLM response received
-[2026-03-21T23:12:26.242926] [7b9593b6-faac-4fcb-a39e-32a4eba67d87] 2.26s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-21T23:12:26.484676] [7b9593b6-faac-4fcb-a39e-32a4eba67d87] 2.51s - Insert successful. Finished.
-[2026-03-21T23:17:33.061771] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 0.00s - Thread started
-[2026-03-21T23:17:33.066204] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 0.00s - Creating local supabase client
-[2026-03-21T23:17:33.998527] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 0.94s - Initializing LLM client
-[2026-03-21T23:17:34.601275] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 1.54s - Calling LLM API
-[2026-03-21T23:17:35.705128] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 2.64s - LLM response received
-[2026-03-21T23:17:35.707185] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 2.65s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-21T23:17:35.941666] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 2.88s - Insert successful. Finished.
-[2026-03-21T23:20:41.848281] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 0.00s - Thread started
-[2026-03-21T23:20:41.851336] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 0.00s - Already generating, returning
-[2026-03-21T23:21:58.338088] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 0.00s - Thread started
-[2026-03-21T23:21:58.340605] [5b0ef409-c2b3-4583-8b4e-597a04620ce7] 0.00s - Already generating, returning
-[2026-03-21T23:27:40.103897] [29f8cc63-d4eb-4d03-8f61-ea4cbbdf6736] 0.00s - Thread started
-[2026-03-21T23:27:40.103897] [29f8cc63-d4eb-4d03-8f61-ea4cbbdf6736] 0.00s - Creating local supabase client
-[2026-03-21T23:27:40.984584] [29f8cc63-d4eb-4d03-8f61-ea4cbbdf6736] 0.88s - Initializing LLM client
-[2026-03-21T23:27:41.529977] [29f8cc63-d4eb-4d03-8f61-ea4cbbdf6736] 1.43s - Calling LLM API
-[2026-03-21T23:27:42.681987] [29f8cc63-d4eb-4d03-8f61-ea4cbbdf6736] 2.58s - LLM response received
-[2026-03-21T23:27:42.681987] [29f8cc63-d4eb-4d03-8f61-ea4cbbdf6736] 2.58s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-21T23:27:42.839328] [29f8cc63-d4eb-4d03-8f61-ea4cbbdf6736] 2.74s - Insert successful. Finished.
-[2026-03-21T23:32:20.616304] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.01s - Thread started
-[2026-03-21T23:32:20.617502] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.01s - Creating local supabase client
-[2026-03-21T23:32:21.309622] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.70s - Initializing LLM client
-[2026-03-21T23:32:21.927549] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 1.32s - Calling LLM API
-[2026-03-21T23:32:23.031601] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 2.42s - LLM response received
-[2026-03-21T23:32:23.034642] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 2.42s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-21T23:32:23.205620] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 2.60s - Insert successful. Finished.
-[2026-03-21T23:37:29.273187] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Thread started
-[2026-03-21T23:37:29.275665] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Already generating, returning
-[2026-03-21T23:51:06.178563] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.01s - Thread started
-[2026-03-21T23:51:06.181170] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.01s - Already generating, returning
-[2026-03-21T23:51:40.671130] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Thread started
-[2026-03-21T23:51:40.674675] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Already generating, returning
-[2026-03-21T23:52:00.695771] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Thread started
-[2026-03-21T23:52:00.697357] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Already generating, returning
-[2026-03-21T23:53:41.984825] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Thread started
-[2026-03-21T23:53:41.987573] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Already generating, returning
-[2026-03-21T23:57:58.422703] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Thread started
-[2026-03-21T23:57:58.422703] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Already generating, returning
-[2026-03-22T00:02:48.453797] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Thread started
-[2026-03-22T00:02:48.458392] [7d7d0489-64d9-4aee-abd3-7f7faf17585d] 0.00s - Already generating, returning
-[2026-03-22T00:14:03.573168] [a90bda68-ac5c-4af5-b8da-70a9ffe990b4] 0.00s - Thread started
-[2026-03-22T00:14:03.577054] [a90bda68-ac5c-4af5-b8da-70a9ffe990b4] 0.00s - Creating local supabase client
-[2026-03-22T00:14:04.250215] [a90bda68-ac5c-4af5-b8da-70a9ffe990b4] 0.68s - Initializing LLM client
-[2026-03-22T00:14:04.809461] [a90bda68-ac5c-4af5-b8da-70a9ffe990b4] 1.24s - Calling LLM API
-[2026-03-22T00:14:05.530565] [a90bda68-ac5c-4af5-b8da-70a9ffe990b4] 1.96s - LLM response received
-[2026-03-22T00:14:05.530565] [a90bda68-ac5c-4af5-b8da-70a9ffe990b4] 1.96s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-22T00:14:05.689201] [a90bda68-ac5c-4af5-b8da-70a9ffe990b4] 2.12s - Insert successful. Finished.
-[2026-03-22T00:19:20.163443] [e6041394-c9ed-49f6-bf5e-bd0bad922e52] 0.00s - Thread started
-[2026-03-22T00:19:20.166152] [e6041394-c9ed-49f6-bf5e-bd0bad922e52] 0.00s - Creating local supabase client
-[2026-03-22T00:19:20.913291] [e6041394-c9ed-49f6-bf5e-bd0bad922e52] 0.75s - Initializing LLM client
-[2026-03-22T00:19:21.393978] [e6041394-c9ed-49f6-bf5e-bd0bad922e52] 1.23s - Calling LLM API
-[2026-03-22T00:19:22.252488] [e6041394-c9ed-49f6-bf5e-bd0bad922e52] 2.09s - LLM response received
-[2026-03-22T00:19:22.252488] [e6041394-c9ed-49f6-bf5e-bd0bad922e52] 2.09s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-22T00:19:22.397125] [e6041394-c9ed-49f6-bf5e-bd0bad922e52] 2.23s - Insert successful. Finished.
-[2026-03-31T15:54:25.571206] [6290814d-a836-4925-ae46-cfc823b14580] 0.00s - Thread started
-[2026-03-31T15:54:26.004386] [6290814d-a836-4925-ae46-cfc823b14580] 0.43s - Initializing LLM client
-[2026-03-31T15:54:26.346342] [6290814d-a836-4925-ae46-cfc823b14580] 0.78s - Calling LLM API
-[2026-03-31T15:54:27.445955] [6290814d-a836-4925-ae46-cfc823b14580] 1.87s - LLM response received
-[2026-03-31T15:54:27.449985] [6290814d-a836-4925-ae46-cfc823b14580] 1.88s - Inserting SYSTEM_TITLE msg into DB
-[2026-03-31T15:54:27.600137] [6290814d-a836-4925-ae46-cfc823b14580] 2.03s - Insert successful. Finished.
+[2026-04-04T11:35:17.461410] [6eec8819-aa28-43fa-8f77-29e3ac5b815a] 0.00s - Thread started
+[2026-04-04T11:35:17.641496] [6eec8819-aa28-43fa-8f77-29e3ac5b815a] 0.18s - Title exists, returning
+[2026-04-04T11:36:23.112512] [b6a6ae48-c8c5-4ec7-bd2a-f11931767bfa] 0.00s - Thread started
+[2026-04-04T11:36:23.276643] [b6a6ae48-c8c5-4ec7-bd2a-f11931767bfa] 0.16s - Initializing LLM client
+[2026-04-04T11:36:24.011981] [b6a6ae48-c8c5-4ec7-bd2a-f11931767bfa] 0.90s - Calling LLM API
+[2026-04-04T11:36:25.009167] [b6a6ae48-c8c5-4ec7-bd2a-f11931767bfa] 1.90s - LLM response received
+[2026-04-04T11:36:25.009167] [b6a6ae48-c8c5-4ec7-bd2a-f11931767bfa] 1.90s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-04T11:36:25.227941] [b6a6ae48-c8c5-4ec7-bd2a-f11931767bfa] 2.12s - Insert successful. Finished.
+[2026-04-04T11:50:20.746128] [36384ec4-5f13-495d-b9d4-938affe2182c] 0.00s - Thread started
+[2026-04-04T11:50:20.897229] [36384ec4-5f13-495d-b9d4-938affe2182c] 0.15s - Initializing LLM client
+[2026-04-04T11:50:21.647772] [36384ec4-5f13-495d-b9d4-938affe2182c] 0.90s - Calling LLM API
+[2026-04-04T11:50:22.675203] [36384ec4-5f13-495d-b9d4-938affe2182c] 1.93s - LLM response received
+[2026-04-04T11:50:22.675203] [36384ec4-5f13-495d-b9d4-938affe2182c] 1.93s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-04T11:50:22.826356] [36384ec4-5f13-495d-b9d4-938affe2182c] 2.08s - Insert successful. Finished.
+[2026-04-04T11:52:13.199004] [b950cfcf-72fc-4228-a612-ef069c6a22bb] 0.00s - Thread started
+[2026-04-04T11:52:13.521041] [b950cfcf-72fc-4228-a612-ef069c6a22bb] 0.32s - Initializing LLM client
+[2026-04-04T11:52:14.229418] [b950cfcf-72fc-4228-a612-ef069c6a22bb] 1.03s - Calling LLM API
+[2026-04-04T11:52:15.159885] [b950cfcf-72fc-4228-a612-ef069c6a22bb] 1.96s - LLM response received
+[2026-04-04T11:52:15.159885] [b950cfcf-72fc-4228-a612-ef069c6a22bb] 1.96s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-04T11:52:15.430758] [b950cfcf-72fc-4228-a612-ef069c6a22bb] 2.23s - Insert successful. Finished.

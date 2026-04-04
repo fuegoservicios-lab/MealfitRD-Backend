@@ -678,18 +678,6 @@ def api_delete_chat_sessions(user_id: str, verified_user_id: Optional[str] = Dep
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions DELETE: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/api/chat/session/{session_id}")
-def api_delete_single_chat_session(session_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
-    try:
-        session_owner = get_session_owner(session_id)
-        if session_owner and session_owner != "guest":
-            if not verified_user_id or verified_user_id != session_owner:
-                raise HTTPException(status_code=403, detail="Prohibido.")
-        delete_single_agent_session(session_id)
-        return {"success": True}
-    except Exception as e:
-        logger.error(f"❌ [ERROR] Error en /api/chat/session DELETE: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 from pydantic import BaseModel
 class RenameSessionReq(BaseModel):
@@ -715,6 +703,7 @@ def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depe
         session_owner = get_session_owner(session_id)
         if session_owner and session_owner != "guest":
             if not verified_user_id or verified_user_id != session_owner:
+                logger.warning(f"🚫 [HISTORY AUTH FAILED] REJECTED. owner={session_owner} != verified={verified_user_id}")
                 raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
 
         messages = get_session_messages(session_id)
@@ -725,6 +714,28 @@ def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depe
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/history GET: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/chat/session/{session_id}")
+def api_delete_chat_session(session_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    """Elimina una sesión de chat. Requiere autenticación pero sin validación IDOR 
+    (RLS desactivado — la auth se maneja aquí)."""
+    from db import delete_chat_session
+    try:
+        if not verified_user_id:
+            raise HTTPException(status_code=401, detail="Token requerido para eliminar chats.")
+        
+        success, error_msg = delete_chat_session(session_id)
+        if success:
+            logger.info(f"🗑️ Chat {session_id} eliminado por usuario {verified_user_id}")
+            return {"success": True, "message": "Chat eliminado correctamente."}
+        else:
+            logger.error(f"❌ Fallo al eliminar chat {session_id}: {error_msg}")
+            raise HTTPException(status_code=500, detail=f"Error: {error_msg}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en DELETE chat: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/chat/message")

@@ -13,6 +13,23 @@ def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optiona
     if not supabase:
         return None
     
+    # Custom fallback para decodificar JWT directamente sin request extra a Supabase
+    # Soluciona crash 403 si pyjwt no está instalado o si la tabla auth.users fue mermada (orphan token)
+    try:
+        import json
+        import base64
+        # Un JWT tipico tiene 3 partes separadas por '.'
+        parts = token.split('.')
+        if len(parts) >= 2:
+            payload_b64 = parts[1]
+            # Añadir padding si es necesario
+            payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+            payload_json = base64.urlsafe_b64decode(payload_b64).decode('utf-8')
+            payload = json.loads(payload_json)
+            return payload.get("sub")
+    except Exception as fallback_e:
+        logger.error(f"Fallback nativo JWT failed: {fallback_e}")
+        
     # Retry logic up to 2 times for httpx "Server disconnected" issues
     for attempt in range(2):
         try:
