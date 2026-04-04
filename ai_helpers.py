@@ -163,7 +163,20 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # --- FILTRO DE RESTRICCIONES MÉDICAS Y DIETÉTICAS ---
     if form_data:
         allergies = tuple([a.lower() for a in form_data.get("allergies", [])])
-        dislikes = tuple([d.lower() for d in form_data.get("dislikes", [])])
+        
+        dislikes_list = [d.lower() for d in form_data.get("dislikes", [])]
+        temp_dislikes = form_data.get("temporary_dislikes", {})
+        if isinstance(temp_dislikes, dict):
+            now = datetime.now(timezone.utc)
+            for item, expiry_iso in temp_dislikes.items():
+                try:
+                    expiry_dt = datetime.fromisoformat(expiry_iso.replace("Z", "+00:00"))
+                    if now < expiry_dt:
+                        dislikes_list.append(item.lower())
+                except Exception:
+                    pass
+        dislikes = tuple(dislikes_list)
+        
         diet = form_data.get("diet", form_data.get("dietType", "")).lower()
         
         filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits = _get_fast_filtered_catalogs(allergies, dislikes, diet)
