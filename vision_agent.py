@@ -52,15 +52,15 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
             healthy_fats = response.healthy_fats if hasattr(response, 'healthy_fats') else 0
             if calories > 0 or protein > 0:
                 description += f" (Estimación: Calorías: {calories}, Proteína: {protein}g, Carbohidratos: {carbs}g, Grasas Saludables: {healthy_fats}g)"
-        
         return {
             "description": description,
-            "is_food": is_food
+            "is_food": is_food,
+            "calories": calories if is_food else 0
         }
 
     except Exception as e:
         print(f"⚠️ Error procesando imagen con Gemini Vision: {e}")
-        return {"description": "Error analizando imagen.", "is_food": False}
+        return {"description": "Error analizando imagen.", "is_food": False, "calories": 0}
 
 def get_multimodal_embedding(text: str) -> list:
     """

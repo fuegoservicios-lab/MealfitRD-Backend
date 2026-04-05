@@ -955,6 +955,7 @@ async def api_diary_upload(
     file: UploadFile = File(...),
     user_id: str = Form("guest"),
     session_id: str = Form(None),
+    tz_offset_mins: int = Form(0),
     verified_user_id: str = Depends(verify_api_quota)
 ):
     try:
@@ -1008,9 +1009,37 @@ async def api_diary_upload(
         
         description = vision_result.get("description", "No se pudo analizar la imagen.")
         is_food = vision_result.get("is_food", False)
+        calories = vision_result.get("calories", 0)
         
         if is_food:
-            logger.info(f"✅ Descripción generada: '{description}'")
+            logger.info(f"✅ Descripción generada: '{description}' (Calorías: {calories})")
+            
+            # --- EVALUACIÓN DETERMINISTA DE CRONONUTRICIÓN (PYTHON) ---
+            if calories > 500:
+                from datetime import datetime, timedelta
+                # Calcular la hora exacta del usuario usando el offset proporcionado por el frontend
+                local_time = datetime.utcnow() - timedelta(minutes=tz_offset_mins)
+                local_hour = local_time.hour
+                
+                # Obtener el perfil para ver el tipo de turno
+                schedule_type = "standard"
+                if user_id != "guest":
+                    profile = get_user_profile(user_id)
+                    if profile and profile.get("health_profile"):
+                        schedule_type = profile["health_profile"].get("scheduleType", "standard")
+                
+                # Reglas matemáticas duras e inquebrantables
+                is_red_alert = False
+                if schedule_type == "standard" and (0 <= local_hour < 6):
+                    is_red_alert = True
+                elif schedule_type == "night_shift" and (14 <= local_hour < 20):  # Ej: 2 PM a 8 PM
+                    is_red_alert = True
+                
+                if is_red_alert:
+                    poison_pill = " [⚠️ INSTRUCCIÓN CLÍNICA PRIORITARIA DE SISTEMA: El análisis de esta imagen indica que el usuario está a punto de consumir más de 500 kcal en una hora sumamente crítica para su reloj biológico (madrugada o contra-turno). TIENES LA ORDEN DIRECTA Y OBLIGATORIA de cambiar tu tono y emitir inmediatamente una advertencia y reprimenda constructiva sobre el grave impacto digestivo de comer así a esta hora.]"
+                    description += poison_pill
+                    logger.warning(f"🚨 [RULE POISONING] Inyectando alerta roja determinista. Hora local: {local_hour}, Calorías: {calories}, Turno: {schedule_type}")
+            # ------------------------------------------------------------
             
             if actual_user_id and actual_user_id != session_id:
                 log_api_usage(actual_user_id, "gemini_vision")

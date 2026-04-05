@@ -63,6 +63,7 @@ def should_extract_facts(user_message: str) -> bool:
     prompt = f"""
     Analiza este mensaje y responde True SOLO si el usuario menciona algo sobre:
     - Preferencias alimenticias (gustos, rechazos)
+    - Hábitos de consumo o registro de comidas recientes (qué comió o qué bebió)
     - Alergias o condiciones médicas
     - Síntomas temporales o estado de salud
     - Objetivos de salud, condición física o peso
@@ -157,6 +158,7 @@ def extract_facts(user_message: str, recent_history: str = ""):
     Eres un Analista Nutricional que extrae "Hechos" (Facts) de los mensajes de los pacientes y los clasifica.
     Tu objetivo es leer un mensaje y determinar si contiene información útil para el perfil del usuario:
     - Preferencias alimenticias (gustos, rechazos fuertes) -> category: 'preferencia' o 'rechazo'
+    - Hábitos de consumo o registro de comidas recientes -> category: 'dieta' o 'preferencia'
     - Alergias o condiciones crónicas -> category: 'alergia' o 'condicion_medica'
     - Síntomas o estados pasajeros (ej. "estómago revuelto esta semana", "estoy resfriado") -> category: 'sintoma_temporal'
     - Objetivos o rutinas -> category: 'objetivo'

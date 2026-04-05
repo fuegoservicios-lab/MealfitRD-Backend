@@ -375,10 +375,10 @@ def _process_and_sort_sessions(sessions: list):
                 elif user_msgs:
                     content_str = str(user_msgs[0].get("content", ""))
                     # Limpiar el prefijo inyectado por el frontend con la hora, sistema y comandos
-                    clean_str = re.sub(r'\[\(Hora actual del usuario:.*?\)\]', '', content_str, flags=re.IGNORECASE|re.DOTALL)
-                    clean_str = re.sub(r'\[Sistema:.*?\]', '', clean_str, flags=re.IGNORECASE|re.DOTALL)
+                    clean_str = re.sub(r'\[?\(Hora actual del usuario:[^)]*\)\]?', '', content_str, flags=re.IGNORECASE|re.DOTALL)
+                    clean_str = re.sub(r'\[Sistema:[^\]]*\]', '', clean_str, flags=re.IGNORECASE)
                     clean_str = re.sub(r'Instrucción:.*?$', '', clean_str, flags=re.IGNORECASE|re.MULTILINE|re.DOTALL)
-                    clean_str = re.sub(r'\[IMAGE:\s*.*?\]', '', clean_str, flags=re.IGNORECASE|re.DOTALL)
+                    clean_str = re.sub(r'\[IMAGE:[^\]]*\]', '', clean_str, flags=re.IGNORECASE)
                     
                     # SIEMPRE limpiar "Mensaje del usuario:" ya sea que haya imagen o no
                     clean_str = re.sub(r'Mensaje del usuario:\s*', '', clean_str, flags=re.IGNORECASE|re.DOTALL)
@@ -391,7 +391,7 @@ def _process_and_sort_sessions(sessions: list):
                         clean_str = "Interacción con imagen o sistema"
                         
                     if clean_str:
-                        s["title"] = clean_str[:40] + ("..." if len(clean_str) > 40 else "")
+                        s["title"] = clean_str[:45] + ("..." if len(clean_str) > 45 else "")
                     else:
                         s["title"] = "Nuevo chat"
                     # Como no hay SYSTEM_TITLE, es fallback

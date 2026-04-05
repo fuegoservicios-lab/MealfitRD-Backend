@@ -8,7 +8,7 @@ import re
 import unicodedata
 logger = logging.getLogger(__name__)
 
-from constants import strip_accents, parse_ingredient_qty
+from constants import strip_accents, parse_ingredient_qty, CULINARY_KNOWLEDGE_BASE
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -572,22 +572,47 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             return 
             
         first_message = ""
-        if first_message_text:
+        # Garantizar que siempre se use el primer mensaje histórico real, no el prompt actual
+        if res_data:
+            for m in res_data:
+                msg_role = str(m.get("role", "")).lower()
+                if msg_role == "user" or msg_role == "human":
+                    first_message = m.get("content", "")
+                    break
+                    
+        if not first_message and first_message_text:
             first_message = first_message_text
-        else:
+        elif not first_message:
             first_message = "Consulta nueva"
             
-        first_message = re.sub(r'\[\(Hora actual del usuario:.*?\)\]', '', first_message, flags=re.IGNORECASE|re.DOTALL)
-        first_message = re.sub(r'\[Sistema:.*?\]', '', first_message, flags=re.IGNORECASE|re.DOTALL)
+        first_message = re.sub(r'\[?\(Hora actual del usuario:[^)]*\)\]?', '', first_message, flags=re.IGNORECASE|re.DOTALL)
+        first_message = re.sub(r'\[Sistema:[^\]]*\]', '', first_message, flags=re.IGNORECASE)
         first_message = re.sub(r'Instrucción:.*?$', '', first_message, flags=re.IGNORECASE|re.MULTILINE|re.DOTALL)
-        first_message = re.sub(r'\[IMAGE:.*?\]', '', first_message, flags=re.IGNORECASE|re.DOTALL)
+        first_message = re.sub(r'\[IMAGE:[^\]]*\]', '', first_message, flags=re.IGNORECASE)
+        first_message = re.sub(r'Mensaje del usuario:\s*', '', first_message, flags=re.IGNORECASE|re.DOTALL)
+        
+        if '[El usuario subió una imagen.' in first_message:
+            first_message = re.sub(r'\[El usuario subió una imagen\..+?\]', '', first_message, flags=re.DOTALL)
+            
         first_message = first_message.strip()
         if not first_message:
-            first_message = "Interacción con imagen o sistema"
+            first_message = "El usuario acaba de subir una fotografía (probablemente de su comida o progreso físico) para ser analizada."
         
         dlog("Initializing LLM client")
-        title_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0.4, google_api_key=os.environ.get("GEMINI_API_KEY"))
-        prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message)
+        
+        # Obtener títulos recientes para evitar repetirlos
+        used_titles_str = ""
+        try:
+            from db import getsessions
+            recent = getsessions(user_id)
+            if recent:
+                used = [str(s.get("title")) for s in recent[:15] if s.get("title") and s.get("title") not in ["Nuevo chat", "Nuevo Chat"]]
+                used_titles_str = ", ".join(list(set(used)))
+        except Exception as e:
+            logger.error(f"Error fetching recent titles for anti-duplication: {e}")
+            
+        title_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"))
+        prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str)
         dlog("Calling LLM API")
         response = title_llm.invoke(prompt)
         dlog("LLM response received")
@@ -604,6 +629,13 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             title = title[7:].strip()
         elif lower_t.startswith("title:"):
             title = title[6:].strip()
+            
+        # Hard limit para evitar que rompa la UI
+        if len(title) > 32:
+            title = title[:32]
+            # Truncar amablemente hasta el último espacio para no dejar palabras a medias
+            if " " in title:
+                title = title.rsplit(" ", 1)[0]
         
         dlog("Inserting SYSTEM_TITLE msg into DB")
         save_message(session_id, "model", f"[SYSTEM_TITLE] {title}")
@@ -733,10 +765,21 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
     dias_chat = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     meses_chat = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     system_prompt += f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, {now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. La hora local es {now_chat.strftime('%I:%M %p')}."
+
+    schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    if schedule_type == "night_shift":
+        system_prompt += "\n⚠️ RITMO CIRCADIANO: El usuario tiene un 'Turno Nocturno' (duerme de día, trabaja de noche). INVIERTE LAS REGLAS DE CRONONUTRICIÓN: las madrugadas son su 'cena' y las tardes son su 'desayuno'. JAMÁS lo reprimas por comer de madrugada."
+    elif schedule_type == "variable":
+        system_prompt += "\n⚠️ RITMO CIRCADIANO: Horario 'Rotativo/Variable'. Sé benévolo al evaluar horas (crononutrición), asume que sus horas de sueño pueden estar alteradas por turnos."
+    else:
+        system_prompt += "\n⚠️ RITMO CIRCADIANO: 'Día Clásico'. Aplica con rigor estricto la regla de crononutrición si cena muy pesado o desayuna arroz a las deshoras indicadas en tu sistema."
+
     system_prompt += "\n🌟 REGLA DE CONTINUIDAD TEMPORAL PROACTIVA: Usa el día de la semana para dar sugerencias asombrosamente orgánicas, pero solo si la conversación se presta para ello. Por ejemplo:"
     system_prompt += "\n  - Si es Domingo o Lunes: Sugiere sutilmente hacer 'Meal Prep' (cocinar porciones extra) para ahorrar tiempo en la ajetreada semana laboral."
     system_prompt += "\n  - Si es Viernes o Sábado: Anímalo a disfrutar el fin de semana sin perder el control, o sugiérele ideas de comidas relajadas."
     system_prompt += "\nSé conversacional e intuitivo; no suenes como un robot leyendo el calendario, que se sienta natural."
+    
+    system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
     
     if rag_context:
         system_prompt += f"\n{rag_context}"
@@ -897,10 +940,21 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
     dias_chat = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
     meses_chat = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
     system_prompt += f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, {now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. La hora local es {now_chat.strftime('%I:%M %p')}."
+    
+    schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
+    if schedule_type == "night_shift":
+        system_prompt += "\n⚠️ RITMO CIRCADIANO: El usuario tiene un 'Turno Nocturno' (duerme de día, trabaja de noche). INVIERTE LAS REGLAS DE CRONONUTRICIÓN: las madrugadas son su 'cena' y las tardes son su 'desayuno'. JAMÁS lo reprimas por comer de madrugada."
+    elif schedule_type == "variable":
+        system_prompt += "\n⚠️ RITMO CIRCADIANO: Horario 'Rotativo/Variable'. Sé benévolo al evaluar horas (crononutrición), asume que sus horas de sueño pueden estar alteradas por turnos."
+    else:
+        system_prompt += "\n⚠️ RITMO CIRCADIANO: 'Día Clásico'. Aplica con rigor estricto la regla de crononutrición si cena muy pesado o desayuna arroz a las 4 AM."
+
     system_prompt += "\n🌟 REGLA DE CONTINUIDAD TEMPORAL PROACTIVA: Usa el día de la semana para dar sugerencias asombrosamente orgánicas, pero solo si la conversación se presta para ello. Por ejemplo:"
     system_prompt += "\n  - Si es Domingo o Lunes: Sugiere sutilmente hacer 'Meal Prep' (cocinar porciones extra) para ahorrar tiempo en la ajetreada semana laboral."
     system_prompt += "\n  - Si es Viernes o Sábado: Anímalo a disfrutar el fin de semana sin perder el control, o sugiérele ideas de comidas relajadas."
     system_prompt += "\nSé conversacional e intuitivo; no suenes como un robot leyendo el calendario, que se sienta natural."
+    
+    system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
     
     if rag_context: system_prompt += f"\n{rag_context}"
     

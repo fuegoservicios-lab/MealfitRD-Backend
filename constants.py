@@ -539,3 +539,18 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
     filtered_fruits = [f for f in filtered_fruits if is_allowed(f)]
     
     return filtered_proteins, filtered_carbs, filtered_veggies, filtered_fruits
+
+# ============================================================
+# BASE DE DATOS CLINICA / DIGESTIVA (RAG CULINARIO)
+# ============================================================
+CULINARY_KNOWLEDGE_BASE = """
+<biblioteca_culinaria_local>
+[BASE DE DATOS CLÍNICA DE PLATOS DOMINICANOS]
+Mofongo: 5-6 horas de digestión (Fritura profusa + almidón denso). Peligro de reflujo nocturno y pico insulínico si se consume antes de dormir.
+Mangú (Los Tres Golpes): 4-5 horas de digestión aguda. Altísima carga de grasas saturadas (salami/queso frito) combinadas con carbohidrato puro.
+La Bandera (arroz, habichuela, carne, concón): 4.5 horas. Demasiada carga glucémica para horarios sin desgaste físico posterior.
+Yaroa: 6+ horas de digestión. Bomba de grasas trans/saturadas y carbohidratos fritos. Arruina el ciclo REM del sueño.
+Pica Pollo / Chimi: 5+ horas. Exceso de aceites hidrogenados e irritantes gástricos.
+Sancocho: 4-5 horas. Extrema condensación de viandas pesadas y caldos grasos.
+</biblioteca_culinaria_local>
+"""
