@@ -11,3 +11,4 @@ psycopg[binary,pool]
 tenacity
 python-multipart
 redis
+sentry-sdk[fastapi]

@@ -11,6 +11,13 @@ from typing import Optional
 import json
 import traceback
 import threading
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN"),
+    traces_sample_rate=1.0,
+    profiles_sample_rate=1.0,
+)
 
 # Configuración centralizada de logging para todo el backend
 logging.basicConfig(
