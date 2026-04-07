@@ -94,15 +94,21 @@ def get_session_owner(session_id: str) -> Optional[str]:
     """Retorna el user_id propietario de una sesión, o None si no existe/no tiene dueño.
     Usado para validación IDOR en endpoints de historial."""
     if not connection_pool: return None
-    try:
-        res = execute_sql_query(
-            "SELECT user_id FROM agent_sessions WHERE id = %s",
-            (session_id,), fetch_one=True
-        )
-        return str(res.get("user_id")) if res and res.get("user_id") else None
-    except Exception as e:
-        logger.error(f"Error consultando session owner: {e}")
-        return None
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            res = execute_sql_query(
+                "SELECT user_id FROM agent_sessions WHERE id = %s",
+                (session_id,), fetch_one=True
+            )
+            return str(res.get("user_id")) if res and res.get("user_id") else None
+        except Exception as e:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(0.3)
+                continue
+            logger.error(f"Error consultando session owner: {e}")
+            return None
 
 def get_guest_chat_sessions(session_ids: list):
     """Obtiene la lista de sesiones para invitados, mediante sus IDs."""
@@ -220,12 +226,18 @@ def _process_and_sort_sessions(sessions: list):
 def get_session_messages(session_id: str):
     """Obtiene todos los mensajes de una sesion, ordenados cronologicamente."""
     if not supabase: return []
-    try:
-        res = supabase.table("agent_messages").select("*").eq("session_id", session_id).order("created_at", desc=False).execute()
-        return res.data
-    except Exception as e:
-        logger.error(f"Error get_session_messages: {e}")
-        return []
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            res = supabase.table("agent_messages").select("*").eq("session_id", session_id).order("created_at", desc=False).execute()
+            return res.data
+        except Exception as e:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(0.3)
+                continue
+            logger.error(f"Error get_session_messages: {e}")
+            return []
 
 def acquire_summarizing_lock(session_id: str) -> bool:
     """Intenta adquirir el bloqueo para resumir. Retorna True si lo logra, False si ya está bloqueado."""

@@ -1,0 +1,345 @@
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:12:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:13:6 - error: Import "langchain_core.tools" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:14:6 - error: Import "langchain_core.messages" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:15:6 - error: Import "langgraph.graph" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:16:6 - error: Import "langgraph.graph.message" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:17:6 - error: Import "langgraph.checkpoint.memory" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:18:6 - error: Import "pydantic" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:21:6 - error: Import "tenacity" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:35:6 - error: Import "langgraph.checkpoint.postgres" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:37:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:482:49 - error: Cannot access attribute "invoke" for class "FunctionType"
+  ┬á┬áAttribute "invoke" is unknown (reportFunctionMemberAccess)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:552:93 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:606:28 - error: "getsessions" is unknown import symbol (reportAttributeAccessIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:813:103 - error: No overloads for "join" match the provided arguments (reportCallIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:813:113 - error: Argument of type "list[str | None]" cannot be assigned to parameter "iterable" of type "Iterable[str]" in function "join"
+  ┬á┬á"list[str | None]" is not assignable to "Iterable[str]"
+  ┬á┬á┬á┬áType parameter "_T_co@Iterable" is covariant, but "str | None" is not a subtype of "str"
+  ┬á┬á┬á┬á┬á┬áType "str | None" is not assignable to type "str"
+  ┬á┬á┬á┬á┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:981:101 - error: No overloads for "join" match the provided arguments (reportCallIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:981:111 - error: Argument of type "list[str | None]" cannot be assigned to parameter "iterable" of type "Iterable[str]" in function "join"
+  ┬á┬á"list[str | None]" is not assignable to "Iterable[str]"
+  ┬á┬á┬á┬áType parameter "_T_co@Iterable" is covariant, but "str | None" is not a subtype of "str"
+  ┬á┬á┬á┬á┬á┬áType "str | None" is not assignable to type "str"
+  ┬á┬á┬á┬á┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:990:73 - error: Argument of type "str | None" cannot be assigned to parameter "date_str" of type "str" in function "get_consumed_meals_today"
+  ┬á┬áType "str | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\agent.py:990:100 - error: Argument of type "int | None" cannot be assigned to parameter "tz_offset_mins" of type "int" in function "get_consumed_meals_today"
+  ┬á┬áType "int | None" is not assignable to type "int"
+  ┬á┬á┬á┬á"None" is not assignable to "int" (reportArgumentType)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\ai_helpers.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\ai_helpers.py:7:6 - error: Import "tenacity" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\ai_helpers.py:21:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\ai_helpers.py:152:39 - error: "meal_names" is possibly unbound (reportPossiblyUnboundVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\ai_helpers.py:154:34 - error: "calories" is possibly unbound (reportPossiblyUnboundVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\ai_helpers.py:157:75 - error: Expression of type "None" cannot be assigned to parameter of type "dict[Unknown, Unknown]"
+  ┬á┬á"None" is not assignable to "dict[Unknown, Unknown]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\ai_helpers.py:157:96 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\ai_helpers.py:394:83 - error: "days_elapsed" is possibly unbound (reportPossiblyUnboundVariable)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\app.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\app.py:1:6 - error: Import "fastapi" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\app.py:3:6 - error: Import "fastapi.middleware.cors" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\app.py:4:6 - error: Import "fastapi.staticfiles" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\app.py:5:8 - error: Import "uvicorn" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\app.py:14:8 - error: Import "sentry_sdk" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\app.py:56:6 - error: Import "langgraph.checkpoint.postgres" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\app.py:67:20 - error: Import "psycopg" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\auth.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\auth.py:3:6 - error: Import "fastapi" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\cache_manager.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\cache_manager.py:14:12 - error: Import "redis" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\cache_manager.py:15:10 - error: Import "dotenv" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:48:59 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:59:104 - error: Cannot access attribute "get" for class "list[Unknown]"
+  ┬á┬áAttribute "get" is unknown (reportAttributeAccessIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:60:37 - error: Cannot access attribute "get" for class "list[Unknown]"
+  ┬á┬áAttribute "get" is unknown (reportAttributeAccessIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:66:32 - error: "__getitem__" method not defined on type "Literal[True]" (reportIndexIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:80:16 - error: "__getitem__" method not defined on type "Literal[True]" (reportIndexIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:87:24 - error: "__getitem__" method not defined on type "Literal[True]" (reportIndexIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:102:24 - error: Cannot access attribute "get" for class "list[Unknown]"
+  ┬á┬áAttribute "get" is unknown (reportAttributeAccessIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:102:55 - error: Cannot access attribute "get" for class "list[Unknown]"
+  ┬á┬áAttribute "get" is unknown (reportAttributeAccessIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:442:42 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_chat.py:442:66 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:9:6 - error: Import "supabase" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:10:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:31:14 - error: Import "psycopg_pool" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:57:51 - error: Expression of type "None" cannot be assigned to parameter of type "tuple[Unknown, ...]"
+  ┬á┬á"None" is not assignable to "tuple[Unknown, ...]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:63:12 - error: Import "psycopg" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:64:10 - error: Import "psycopg.rows" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:75:51 - error: Expression of type "None" cannot be assigned to parameter of type "tuple[Unknown, ...]"
+  ┬á┬á"None" is not assignable to "tuple[Unknown, ...]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:80:12 - error: Import "psycopg" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_core.py:81:10 - error: Import "psycopg.rows" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py:18:28 - error: Cannot access attribute "get" for class "list[Unknown]"
+  ┬á┬áAttribute "get" is unknown (reportAttributeAccessIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py:65:79 - error: Expression of type "None" cannot be assigned to parameter of type "dict[Unknown, Unknown]"
+  ┬á┬á"None" is not assignable to "dict[Unknown, Unknown]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py:83:50 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py:131:78 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py:156:91 - error: Expression of type "None" cannot be assigned to parameter of type "dict[Unknown, Unknown]"
+  ┬á┬á"None" is not assignable to "dict[Unknown, Unknown]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py:164:14 - error: Import "psycopg.types.json" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py:321:60 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_facts.py:321:88 - error: Expression of type "None" cannot be assigned to parameter of type "int"
+  ┬á┬á"None" is not assignable to "int" (reportArgumentType)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:19:26 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:19:26 - error: Argument of type "Literal['created_at']" cannot be assigned to parameter "s" of type "slice[Any, Any, Any]" in function "__getitem__"
+  ┬á┬á"Literal['created_at']" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:43:26 - error: No overloads for "__getitem__" match the provided arguments (reportCallIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:43:26 - error: Argument of type "Literal['created_at']" cannot be assigned to parameter "s" of type "slice[Any, Any, Any]" in function "__getitem__"
+  ┬á┬á"Literal['created_at']" is not assignable to "slice[Any, Any, Any]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:63:14 - error: Import "psycopg.types.json" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:80:13 - error: "safe_data" is possibly unbound (reportPossiblyUnboundVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:81:13 - error: "safe_data" is possibly unbound (reportPossiblyUnboundVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:82:13 - error: "safe_data" is possibly unbound (reportPossiblyUnboundVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:83:27 - error: "dict_to_insert" is possibly unbound (reportPossiblyUnboundVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:83:42 - error: "safe_data" is possibly unbound (reportPossiblyUnboundVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:263:22 - error: "_strip_accents_canonical" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:268:23 - error: "_ACCENT_SAFE_REVERSE_MAP" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:315:13 - error: "insert_rejection" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:319:17 - error: "save_message" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:334:15 - error: "get_user_profile" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:351:9 - error: "insert_rejection" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:355:9 - error: "update_user_health_profile" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:359:13 - error: "save_message" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:364:9 - error: "update_user_health_profile" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:367:79 - error: Expression of type "None" cannot be assigned to parameter of type "dict[Unknown, Unknown]"
+  ┬á┬á"None" is not assignable to "dict[Unknown, Unknown]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:421:25 - error: "_strip_accents_canonical" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:584:36 - error: Argument of type "Unknown | str | None" cannot be assigned to parameter "text" of type "str" in function "_normalize"
+  ┬á┬áType "Unknown | str | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:598:46 - error: "parse_ingredient_qty" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_plans.py:614:44 - error: "parse_ingredient_qty" is not defined (reportUndefinedVariable)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_profiles.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_profiles.py:187:29 - error: "get_ingredient_frequencies_from_plans" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_profiles.py:192:21 - error: "increment_ingredient_frequencies" is not defined (reportUndefinedVariable)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:12:29 - error: Type "None" is not assignable to return type "str"
+  ┬á┬á"None" is not assignable to "str" (reportReturnType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:17:16 - error: Type "None" is not assignable to return type "str"
+  ┬á┬á"None" is not assignable to "str" (reportReturnType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:20:16 - error: Type "None" is not assignable to return type "str"
+  ┬á┬á"None" is not assignable to "str" (reportReturnType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:101:29 - error: Object of type "None" is not subscriptable (reportOptionalSubscript)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:102:33 - error: Object of type "None" is not subscriptable (reportOptionalSubscript)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:103:24 - error: Object of type "None" is not subscriptable (reportOptionalSubscript)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:104:26 - error: Object of type "None" is not subscriptable (reportOptionalSubscript)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:105:31 - error: Object of type "None" is not subscriptable (reportOptionalSubscript)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:107:16 - error: Object of type "None" is not subscriptable (reportOptionalSubscript)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:165:76 - error: Expression of type "None" cannot be assigned to parameter of type "list[Unknown]"
+  ┬á┬á"None" is not assignable to "list[Unknown]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:188:74 - error: Expression of type "None" cannot be assigned to parameter of type "list[Unknown]"
+  ┬á┬á"None" is not assignable to "list[Unknown]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:388:38 - error: "parse_ingredient_qty" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:399:36 - error: "parse_ingredient_qty" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:417:23 - error: "format_qty" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:478:63 - error: "CHECKED_ITEM_EXPIRY_DAYS" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:488:91 - error: "CHECKED_ITEM_EXPIRY_DAYS" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:501:30 - error: "MAX_SHOPPING_ITEMS_PER_USER" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:502:40 - error: "MAX_SHOPPING_ITEMS_PER_USER" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:514:93 - error: "MAX_SHOPPING_ITEMS_PER_USER" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:523:62 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:536:71 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:549:77 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:583:78 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:615:87 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:625:9 - error: Argument of type "str | None" cannot be assigned to parameter "value" of type "bool" in function "__setitem__"
+  ┬á┬áType "str | None" is not assignable to type "bool"
+  ┬á┬á┬á┬á"str" is not assignable to "bool" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\db_shopping.py:643:88 - error: Expression of type "None" cannot be assigned to parameter of type "str"
+  ┬á┬á"None" is not assignable to "str" (reportArgumentType)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\fact_extractor.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\fact_extractor.py:4:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\fact_extractor.py:5:6 - error: Import "pydantic" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\fact_extractor.py:251:80 - error: Argument of type "dict[str, Unknown] | None" cannot be assigned to parameter "filter_metadata" of type "dict[Unknown, Unknown]" in function "search_user_facts_hybrid"
+  ┬á┬áType "dict[str, Unknown] | None" is not assignable to type "dict[Unknown, Unknown]"
+  ┬á┬á┬á┬á"None" is not assignable to "dict[Unknown, Unknown]" (reportArgumentType)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:11:6 - error: Import "langgraph.graph" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:12:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:13:6 - error: Import "tenacity" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:150:91 - error: Argument of type "Unknown | None" cannot be assigned to parameter "user_id" of type "str" in function "get_deterministic_variety_prompt"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:235:67 - error: No overloads for "join" match the provided arguments (reportCallIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:235:77 - error: Argument of type "list[str | None]" cannot be assigned to parameter "iterable" of type "Iterable[str]" in function "join"
+  ┬á┬á"list[str | None]" is not assignable to "Iterable[str]"
+  ┬á┬á┬á┬áType parameter "_T_co@Iterable" is covariant, but "str | None" is not a subtype of "str"
+  ┬á┬á┬á┬á┬á┬áType "str | None" is not assignable to type "str"
+  ┬á┬á┬á┬á┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:400:17 - error: "get" is not a known attribute of "None" (reportOptionalMemberAccess)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:401:26 - error: "get" is not a known attribute of "None" (reportOptionalMemberAccess)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:402:42 - error: "get" is not a known attribute of "None" (reportOptionalMemberAccess)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:425:25 - error: "get" is not a known attribute of "None" (reportOptionalMemberAccess)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\graph_orchestrator.py:633:56 - error: Expression of type "None" cannot be assigned to parameter of type "list[Unknown]"
+  ┬á┬á"None" is not assignable to "list[Unknown]" (reportArgumentType)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py:11:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py:12:6 - error: Import "langchain_core.messages" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py:13:6 - error: Import "pydantic" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py:15:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py:59:14 - error: Import "langgraph.checkpoint.postgres" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py:60:14 - error: Import "langgraph.graph" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py:61:14 - error: Import "langgraph.graph.message" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\memory_manager.py:62:14 - error: Import "langchain_core.messages" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\migrate_subscriptions.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\migrate_subscriptions.py:2:8 - error: Import "psycopg" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\migrate_subscriptions.py:3:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\rate_limiter.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\rate_limiter.py:4:6 - error: Import "fastapi" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\billing.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\billing.py:4:8 - error: Import "httpx" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\billing.py:5:6 - error: Import "fastapi" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:1:6 - error: Import "fastapi" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:2:6 - error: Import "fastapi.responses" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:69:6 - error: Import "pydantic" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:145:51 - error: Argument of type "Unknown | None" cannot be assigned to parameter "user_id" of type "str" in function "get_or_create_session"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:150:6 - error: Import "fastapi.responses" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:163:83 - error: Argument of type "Unknown | None" cannot be assigned to parameter "feedback" of type "str"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:189:51 - error: Argument of type "Unknown | None" cannot be assigned to parameter "user_id" of type "str" in function "get_or_create_session"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:199:28 - error: "get_latest_meal_plan" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:203:9 - error: "threading" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:244:60 - error: "get_user_profile" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:250:45 - error: "async_extract_and_save_facts" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:256:33 - error: "threading" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:290:51 - error: Argument of type "Unknown | None" cannot be assigned to parameter "user_id" of type "str" in function "get_or_create_session"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:300:28 - error: "get_latest_meal_plan" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:323:23 - error: "get_user_profile" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\chat.py:330:39 - error: "async_extract_and_save_facts" is not defined (reportUndefinedVariable)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:1:6 - error: Import "fastapi" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:42:47 - error: "uuid" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:48:12 - error: "supabase" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:50:29 - error: "asyncio" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:51:21 - error: "supabase" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:56:29 - error: "supabase" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:91:31 - error: "get_user_profile" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:109:17 - error: "log_api_usage" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:160:36 - error: Argument of type "Unknown | None" cannot be assigned to parameter "meal_name" of type "str" in function "log_consumed_meal"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:182:60 - error: Argument of type "str | None" cannot be assigned to parameter "date_str" of type "str" in function "get_consumed_meals_today"
+  ┬á┬áType "str | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:182:81 - error: Argument of type "int | None" cannot be assigned to parameter "tz_offset_mins" of type "int" in function "get_consumed_meals_today"
+  ┬á┬áType "int | None" is not assignable to type "int"
+  ┬á┬á┬á┬á"None" is not assignable to "int" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:184:55 - error: Object of type "None" cannot be used as iterable value (reportOptionalIterable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:185:54 - error: Object of type "None" cannot be used as iterable value (reportOptionalIterable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:186:52 - error: Object of type "None" cannot be used as iterable value (reportOptionalIterable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\diary.py:187:59 - error: Object of type "None" cannot be used as iterable value (reportOptionalIterable)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\plans.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\plans.py:1:6 - error: Import "fastapi" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\plans.py:51:59 - error: Argument of type "Unknown | None" cannot be assigned to parameter "user_id" of type "str" in function "get_active_rejections"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\plans.py:51:86 - error: Argument of type "Unknown | None" cannot be assigned to parameter "session_id" of type "str" in function "get_active_rejections"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\plans.py:57:51 - error: "memory" is possibly unbound (reportPossiblyUnboundVariable)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:1:6 - error: Import "fastapi" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:40:24 - error: "get_latest_meal_plan" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:46:21 - error: "compute_plan_hash" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:50:27 - error: "get_shopping_plan_hash" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:51:24 - error: "get_custom_shopping_items" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:135:20 - error: "sanitize_shopping_text" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:137:30 - error: "categorize_shopping_item" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:179:18 - error: "get_custom_shopping_items" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:217:38 - error: "sanitize_shopping_text" is not defined (reportUndefinedVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\routers\shopping.py:223:26 - error: "categorize_shopping_item" is not defined (reportUndefinedVariable)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\schemas.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\schemas.py:1:6 - error: Import "pydantic" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\services.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\services.py:73:10 - error: Object of type "DistributedShoppingLock" cannot be used with "with" because it does not correctly implement __enter__
+  ┬á┬áAttribute "__enter__" is unknown (reportGeneralTypeIssues)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\services.py:73:10 - error: Object of type "DistributedShoppingLock" cannot be used with "with" because it does not correctly implement __exit__
+  ┬á┬áAttribute "__exit__" is unknown (reportGeneralTypeIssues)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\services.py:153:96 - error: Expression of type "None" cannot be assigned to parameter of type "list[Unknown]"
+  ┬á┬á"None" is not assignable to "list[Unknown]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\services.py:198:12 - error: "raw_ingredients" is possibly unbound (reportPossiblyUnboundVariable)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test.py:2:6 - error: Import "supabase" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test.py:3:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_caching.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_caching.py:2:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_caching.py:4:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_diagnose.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_diagnose.py:3:8 - error: Import "dotenv" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_error.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_error.py:1:6 - error: Import "fastapi.testclient" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_feedback.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_feedback.py:3:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_model.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_model.py:3:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_model.py:4:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_script.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_script.py:16:15 - error: Argument of type "dict[str, Unknown | str | None]" cannot be assigned to parameter "headers" of type "MutableMapping[str, str]" in function "__init__"
+  ┬á┬áType "Unknown | None" is not assignable to type "str"
+  ┬á┬á┬á┬á"None" is not assignable to "str" (reportArgumentType)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_sync_stream.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_sync_stream.py:1:6 - error: Import "langgraph.graph" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_sync_stream.py:2:6 - warning: Import "typing_extensions" could not be resolved from source (reportMissingModuleSource)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_title.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\test_title.py:2:6 - error: Import "dotenv" could not be resolved (reportMissingImports)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:8:6 - error: Import "langchain_core.tools" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:9:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:10:6 - error: Import "pydantic" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:255:146 - error: Expression of type "None" cannot be assigned to parameter of type "list[str]"
+  ┬á┬á"None" is not assignable to "list[str]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:425:113 - error: Expression of type "None" cannot be assigned to parameter of type "list[str]"
+  ┬á┬á"None" is not assignable to "list[str]" (reportArgumentType)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:565:10 - error: Object of type "DistributedShoppingLock" cannot be used with "with" because it does not correctly implement __enter__
+  ┬á┬áAttribute "__enter__" is unknown (reportGeneralTypeIssues)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:565:10 - error: Object of type "DistributedShoppingLock" cannot be used with "with" because it does not correctly implement __exit__
+  ┬á┬áAttribute "__exit__" is unknown (reportGeneralTypeIssues)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:574:34 - error: "async_semantic_deduplication" is unknown import symbol (reportAttributeAccessIssue)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:689:14 - error: Object of type "DistributedShoppingLock" cannot be used with "with" because it does not correctly implement __enter__
+  ┬á┬áAttribute "__enter__" is unknown (reportGeneralTypeIssues)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\tools.py:689:14 - error: Object of type "DistributedShoppingLock" cannot be used with "with" because it does not correctly implement __exit__
+  ┬á┬áAttribute "__exit__" is unknown (reportGeneralTypeIssues)
+c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\vision_agent.py
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\vision_agent.py:5:6 - error: Import "langchain_google_genai" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\vision_agent.py:6:6 - error: Import "langchain_core.messages" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\vision_agent.py:7:6 - error: Import "pydantic" could not be resolved (reportMissingImports)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\vision_agent.py:58:25 - error: "calories" is possibly unbound (reportPossiblyUnboundVariable)
+  c:\Users\angel\OneDrive\Escritorio\MealfitRD.IA\backend\vision_agent.py:71:12 - error: Type "list[Unknown] | None" is not assignable to return type "list[Unknown]"
+  ┬á┬áType "list[Unknown] | None" is not assignable to type "list[Unknown]"
+  ┬á┬á┬á┬á"None" is not assignable to "list[Unknown]" (reportReturnType)
+219 errors, 1 warning, 0 informations

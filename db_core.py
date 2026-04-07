@@ -41,11 +41,15 @@ if SUPABASE_DB_URL:
 
         connection_pool = ConnectionPool(
             conninfo=clean_url, 
+            min_size=2,
             max_size=20, 
+            max_idle=300,  # Kill idle connections after 5 minutes
+            reconnect_timeout=5,  # Wait up to 5s for reconnection
             kwargs=get_client_kwargs(),
+            check=ConnectionPool.check_connection,  # Health check on each checkout
             open=False
         )
-        logger.info("🔌 [psycopg] ConnectionPool de Postgres configurado con keepalives.")
+        logger.info("🔌 [psycopg] ConnectionPool de Postgres configurado con keepalives + health checks.")
     except Exception as pool_err:
         logger.error(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")
 

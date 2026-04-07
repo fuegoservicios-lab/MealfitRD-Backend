@@ -1,0 +1,2878 @@
+{
+    "version": "1.1.408",
+    "time": "1775565305949",
+    "generalDiagnostics": [
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 11,
+                    "character": 5
+                },
+                "end": {
+                    "line": 11,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"langchain_core.tools\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 12,
+                    "character": 5
+                },
+                "end": {
+                    "line": 12,
+                    "character": 25
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"langchain_core.messages\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 13,
+                    "character": 5
+                },
+                "end": {
+                    "line": 13,
+                    "character": 28
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"langgraph.graph\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 14,
+                    "character": 5
+                },
+                "end": {
+                    "line": 14,
+                    "character": 20
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"langgraph.graph.message\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 15,
+                    "character": 5
+                },
+                "end": {
+                    "line": 15,
+                    "character": 28
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"langgraph.checkpoint.memory\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 16,
+                    "character": 5
+                },
+                "end": {
+                    "line": 16,
+                    "character": 32
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"pydantic\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 17,
+                    "character": 5
+                },
+                "end": {
+                    "line": 17,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"tenacity\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 20,
+                    "character": 5
+                },
+                "end": {
+                    "line": 20,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"langgraph.checkpoint.postgres\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 34,
+                    "character": 5
+                },
+                "end": {
+                    "line": 34,
+                    "character": 34
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 36,
+                    "character": 5
+                },
+                "end": {
+                    "line": 36,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Cannot access attribute \"invoke\" for class \"FunctionType\"\n┬á┬áAttribute \"invoke\" is unknown",
+            "range": {
+                "start": {
+                    "line": 481,
+                    "character": 48
+                },
+                "end": {
+                    "line": 481,
+                    "character": 54
+                }
+            },
+            "rule": "reportFunctionMemberAccess"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 551,
+                    "character": 92
+                },
+                "end": {
+                    "line": 551,
+                    "character": 96
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "\"getsessions\" is unknown import symbol",
+            "range": {
+                "start": {
+                    "line": 605,
+                    "character": 27
+                },
+                "end": {
+                    "line": 605,
+                    "character": 38
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "No overloads for \"join\" match the provided arguments",
+            "range": {
+                "start": {
+                    "line": 812,
+                    "character": 102
+                },
+                "end": {
+                    "line": 812,
+                    "character": 118
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Argument of type \"list[str | None]\" cannot be assigned to parameter \"iterable\" of type \"Iterable[str]\" in function \"join\"\n┬á┬á\"list[str | None]\" is not assignable to \"Iterable[str]\"\n┬á┬á┬á┬áType parameter \"_T_co@Iterable\" is covariant, but \"str | None\" is not a subtype of \"str\"\n┬á┬á┬á┬á┬á┬áType \"str | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 812,
+                    "character": 112
+                },
+                "end": {
+                    "line": 812,
+                    "character": 117
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "No overloads for \"join\" match the provided arguments",
+            "range": {
+                "start": {
+                    "line": 980,
+                    "character": 100
+                },
+                "end": {
+                    "line": 980,
+                    "character": 116
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Argument of type \"list[str | None]\" cannot be assigned to parameter \"iterable\" of type \"Iterable[str]\" in function \"join\"\n┬á┬á\"list[str | None]\" is not assignable to \"Iterable[str]\"\n┬á┬á┬á┬áType parameter \"_T_co@Iterable\" is covariant, but \"str | None\" is not a subtype of \"str\"\n┬á┬á┬á┬á┬á┬áType \"str | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 980,
+                    "character": 110
+                },
+                "end": {
+                    "line": 980,
+                    "character": 115
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Argument of type \"str | None\" cannot be assigned to parameter \"date_str\" of type \"str\" in function \"get_consumed_meals_today\"\n┬á┬áType \"str | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 989,
+                    "character": 72
+                },
+                "end": {
+                    "line": 989,
+                    "character": 82
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\agent.py",
+            "severity": "error",
+            "message": "Argument of type \"int | None\" cannot be assigned to parameter \"tz_offset_mins\" of type \"int\" in function \"get_consumed_meals_today\"\n┬á┬áType \"int | None\" is not assignable to type \"int\"\n┬á┬á┬á┬á\"None\" is not assignable to \"int\"",
+            "range": {
+                "start": {
+                    "line": 989,
+                    "character": 99
+                },
+                "end": {
+                    "line": 989,
+                    "character": 108
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\ai_helpers.py",
+            "severity": "error",
+            "message": "Import \"tenacity\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 6,
+                    "character": 5
+                },
+                "end": {
+                    "line": 6,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\ai_helpers.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 20,
+                    "character": 5
+                },
+                "end": {
+                    "line": 20,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\ai_helpers.py",
+            "severity": "error",
+            "message": "\"meal_names\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 151,
+                    "character": 38
+                },
+                "end": {
+                    "line": 151,
+                    "character": 48
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\ai_helpers.py",
+            "severity": "error",
+            "message": "\"calories\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 153,
+                    "character": 33
+                },
+                "end": {
+                    "line": 153,
+                    "character": 41
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\ai_helpers.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"dict[Unknown, Unknown]\"\n┬á┬á\"None\" is not assignable to \"dict[Unknown, Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 156,
+                    "character": 74
+                },
+                "end": {
+                    "line": 156,
+                    "character": 78
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\ai_helpers.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 156,
+                    "character": 95
+                },
+                "end": {
+                    "line": 156,
+                    "character": 99
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\ai_helpers.py",
+            "severity": "error",
+            "message": "\"days_elapsed\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 393,
+                    "character": 82
+                },
+                "end": {
+                    "line": 393,
+                    "character": 94
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\app.py",
+            "severity": "error",
+            "message": "Import \"fastapi\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 0,
+                    "character": 5
+                },
+                "end": {
+                    "line": 0,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\app.py",
+            "severity": "error",
+            "message": "Import \"fastapi.middleware.cors\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 2,
+                    "character": 5
+                },
+                "end": {
+                    "line": 2,
+                    "character": 28
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\app.py",
+            "severity": "error",
+            "message": "Import \"fastapi.staticfiles\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 3,
+                    "character": 5
+                },
+                "end": {
+                    "line": 3,
+                    "character": 24
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\app.py",
+            "severity": "error",
+            "message": "Import \"uvicorn\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 4,
+                    "character": 7
+                },
+                "end": {
+                    "line": 4,
+                    "character": 14
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\app.py",
+            "severity": "error",
+            "message": "Import \"sentry_sdk\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 13,
+                    "character": 7
+                },
+                "end": {
+                    "line": 13,
+                    "character": 17
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\app.py",
+            "severity": "error",
+            "message": "Import \"langgraph.checkpoint.postgres\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 55,
+                    "character": 5
+                },
+                "end": {
+                    "line": 55,
+                    "character": 34
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\app.py",
+            "severity": "error",
+            "message": "Import \"psycopg\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 66,
+                    "character": 19
+                },
+                "end": {
+                    "line": 66,
+                    "character": 26
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\auth.py",
+            "severity": "error",
+            "message": "Import \"fastapi\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 2,
+                    "character": 5
+                },
+                "end": {
+                    "line": 2,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\cache_manager.py",
+            "severity": "error",
+            "message": "Import \"redis\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 13,
+                    "character": 11
+                },
+                "end": {
+                    "line": 13,
+                    "character": 16
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\cache_manager.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 14,
+                    "character": 9
+                },
+                "end": {
+                    "line": 14,
+                    "character": 15
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 47,
+                    "character": 58
+                },
+                "end": {
+                    "line": 47,
+                    "character": 62
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "Cannot access attribute \"get\" for class \"list[Unknown]\"\n┬á┬áAttribute \"get\" is unknown",
+            "range": {
+                "start": {
+                    "line": 58,
+                    "character": 103
+                },
+                "end": {
+                    "line": 58,
+                    "character": 106
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "Cannot access attribute \"get\" for class \"list[Unknown]\"\n┬á┬áAttribute \"get\" is unknown",
+            "range": {
+                "start": {
+                    "line": 59,
+                    "character": 36
+                },
+                "end": {
+                    "line": 59,
+                    "character": 39
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "\"__getitem__\" method not defined on type \"Literal[True]\"",
+            "range": {
+                "start": {
+                    "line": 65,
+                    "character": 31
+                },
+                "end": {
+                    "line": 65,
+                    "character": 41
+                }
+            },
+            "rule": "reportIndexIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "\"__getitem__\" method not defined on type \"Literal[True]\"",
+            "range": {
+                "start": {
+                    "line": 79,
+                    "character": 15
+                },
+                "end": {
+                    "line": 79,
+                    "character": 22
+                }
+            },
+            "rule": "reportIndexIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "\"__getitem__\" method not defined on type \"Literal[True]\"",
+            "range": {
+                "start": {
+                    "line": 86,
+                    "character": 23
+                },
+                "end": {
+                    "line": 86,
+                    "character": 39
+                }
+            },
+            "rule": "reportIndexIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "Cannot access attribute \"get\" for class \"list[Unknown]\"\n┬á┬áAttribute \"get\" is unknown",
+            "range": {
+                "start": {
+                    "line": 101,
+                    "character": 23
+                },
+                "end": {
+                    "line": 101,
+                    "character": 26
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "Cannot access attribute \"get\" for class \"list[Unknown]\"\n┬á┬áAttribute \"get\" is unknown",
+            "range": {
+                "start": {
+                    "line": 101,
+                    "character": 54
+                },
+                "end": {
+                    "line": 101,
+                    "character": 57
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 441,
+                    "character": 41
+                },
+                "end": {
+                    "line": 441,
+                    "character": 45
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_chat.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 441,
+                    "character": 65
+                },
+                "end": {
+                    "line": 441,
+                    "character": 69
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Import \"supabase\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 8,
+                    "character": 5
+                },
+                "end": {
+                    "line": 8,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 9,
+                    "character": 5
+                },
+                "end": {
+                    "line": 9,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Import \"psycopg_pool\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 30,
+                    "character": 13
+                },
+                "end": {
+                    "line": 30,
+                    "character": 25
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"tuple[Unknown, ...]\"\n┬á┬á\"None\" is not assignable to \"tuple[Unknown, ...]\"",
+            "range": {
+                "start": {
+                    "line": 56,
+                    "character": 50
+                },
+                "end": {
+                    "line": 56,
+                    "character": 54
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Import \"psycopg\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 62,
+                    "character": 11
+                },
+                "end": {
+                    "line": 62,
+                    "character": 18
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Import \"psycopg.rows\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 63,
+                    "character": 9
+                },
+                "end": {
+                    "line": 63,
+                    "character": 21
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"tuple[Unknown, ...]\"\n┬á┬á\"None\" is not assignable to \"tuple[Unknown, ...]\"",
+            "range": {
+                "start": {
+                    "line": 74,
+                    "character": 50
+                },
+                "end": {
+                    "line": 74,
+                    "character": 54
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Import \"psycopg\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 79,
+                    "character": 11
+                },
+                "end": {
+                    "line": 79,
+                    "character": 18
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_core.py",
+            "severity": "error",
+            "message": "Import \"psycopg.rows\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 80,
+                    "character": 9
+                },
+                "end": {
+                    "line": 80,
+                    "character": 21
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_facts.py",
+            "severity": "error",
+            "message": "Cannot access attribute \"get\" for class \"list[Unknown]\"\n┬á┬áAttribute \"get\" is unknown",
+            "range": {
+                "start": {
+                    "line": 17,
+                    "character": 27
+                },
+                "end": {
+                    "line": 17,
+                    "character": 30
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_facts.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"dict[Unknown, Unknown]\"\n┬á┬á\"None\" is not assignable to \"dict[Unknown, Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 64,
+                    "character": 78
+                },
+                "end": {
+                    "line": 64,
+                    "character": 82
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_facts.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 82,
+                    "character": 49
+                },
+                "end": {
+                    "line": 82,
+                    "character": 53
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_facts.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 130,
+                    "character": 77
+                },
+                "end": {
+                    "line": 130,
+                    "character": 81
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_facts.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"dict[Unknown, Unknown]\"\n┬á┬á\"None\" is not assignable to \"dict[Unknown, Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 155,
+                    "character": 90
+                },
+                "end": {
+                    "line": 155,
+                    "character": 94
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_facts.py",
+            "severity": "error",
+            "message": "Import \"psycopg.types.json\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 163,
+                    "character": 13
+                },
+                "end": {
+                    "line": 163,
+                    "character": 31
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_facts.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 320,
+                    "character": 59
+                },
+                "end": {
+                    "line": 320,
+                    "character": 63
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_facts.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"int\"\n┬á┬á\"None\" is not assignable to \"int\"",
+            "range": {
+                "start": {
+                    "line": 320,
+                    "character": 87
+                },
+                "end": {
+                    "line": 320,
+                    "character": 91
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "No overloads for \"__getitem__\" match the provided arguments",
+            "range": {
+                "start": {
+                    "line": 21,
+                    "character": 25
+                },
+                "end": {
+                    "line": 21,
+                    "character": 42
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "Argument of type \"Literal['created_at']\" cannot be assigned to parameter \"s\" of type \"slice[Any, Any, Any]\" in function \"__getitem__\"\n┬á┬á\"Literal['created_at']\" is not assignable to \"slice[Any, Any, Any]\"",
+            "range": {
+                "start": {
+                    "line": 21,
+                    "character": 25
+                },
+                "end": {
+                    "line": 21,
+                    "character": 42
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "No overloads for \"__getitem__\" match the provided arguments",
+            "range": {
+                "start": {
+                    "line": 45,
+                    "character": 25
+                },
+                "end": {
+                    "line": 45,
+                    "character": 42
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "Argument of type \"Literal['created_at']\" cannot be assigned to parameter \"s\" of type \"slice[Any, Any, Any]\" in function \"__getitem__\"\n┬á┬á\"Literal['created_at']\" is not assignable to \"slice[Any, Any, Any]\"",
+            "range": {
+                "start": {
+                    "line": 45,
+                    "character": 25
+                },
+                "end": {
+                    "line": 45,
+                    "character": 42
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "Import \"psycopg.types.json\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 65,
+                    "character": 13
+                },
+                "end": {
+                    "line": 65,
+                    "character": 31
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "\"safe_data\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 82,
+                    "character": 12
+                },
+                "end": {
+                    "line": 82,
+                    "character": 21
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "\"safe_data\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 83,
+                    "character": 12
+                },
+                "end": {
+                    "line": 83,
+                    "character": 21
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "\"safe_data\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 84,
+                    "character": 12
+                },
+                "end": {
+                    "line": 84,
+                    "character": 21
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "\"dict_to_insert\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 85,
+                    "character": 26
+                },
+                "end": {
+                    "line": 85,
+                    "character": 40
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "\"safe_data\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 85,
+                    "character": 41
+                },
+                "end": {
+                    "line": 85,
+                    "character": 50
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"dict[Unknown, Unknown]\"\n┬á┬á\"None\" is not assignable to \"dict[Unknown, Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 367,
+                    "character": 78
+                },
+                "end": {
+                    "line": 367,
+                    "character": 82
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_plans.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | str | None\" cannot be assigned to parameter \"text\" of type \"str\" in function \"_normalize\"\n┬á┬áType \"Unknown | str | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 584,
+                    "character": 35
+                },
+                "end": {
+                    "line": 584,
+                    "character": 43
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_profiles.py",
+            "severity": "error",
+            "message": "\"get_ingredient_frequencies_from_plans\" is not defined",
+            "range": {
+                "start": {
+                    "line": 186,
+                    "character": 28
+                },
+                "end": {
+                    "line": 186,
+                    "character": 65
+                }
+            },
+            "rule": "reportUndefinedVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_profiles.py",
+            "severity": "error",
+            "message": "\"increment_ingredient_frequencies\" is not defined",
+            "range": {
+                "start": {
+                    "line": 191,
+                    "character": 20
+                },
+                "end": {
+                    "line": 191,
+                    "character": 52
+                }
+            },
+            "rule": "reportUndefinedVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Type \"None\" is not assignable to return type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 16,
+                    "character": 28
+                },
+                "end": {
+                    "line": 16,
+                    "character": 32
+                }
+            },
+            "rule": "reportReturnType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Type \"None\" is not assignable to return type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 21,
+                    "character": 15
+                },
+                "end": {
+                    "line": 21,
+                    "character": 19
+                }
+            },
+            "rule": "reportReturnType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Type \"None\" is not assignable to return type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 24,
+                    "character": 15
+                },
+                "end": {
+                    "line": 24,
+                    "character": 19
+                }
+            },
+            "rule": "reportReturnType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Object of type \"None\" is not subscriptable",
+            "range": {
+                "start": {
+                    "line": 105,
+                    "character": 28
+                },
+                "end": {
+                    "line": 105,
+                    "character": 34
+                }
+            },
+            "rule": "reportOptionalSubscript"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Object of type \"None\" is not subscriptable",
+            "range": {
+                "start": {
+                    "line": 106,
+                    "character": 32
+                },
+                "end": {
+                    "line": 106,
+                    "character": 38
+                }
+            },
+            "rule": "reportOptionalSubscript"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Object of type \"None\" is not subscriptable",
+            "range": {
+                "start": {
+                    "line": 107,
+                    "character": 23
+                },
+                "end": {
+                    "line": 107,
+                    "character": 29
+                }
+            },
+            "rule": "reportOptionalSubscript"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Object of type \"None\" is not subscriptable",
+            "range": {
+                "start": {
+                    "line": 108,
+                    "character": 25
+                },
+                "end": {
+                    "line": 108,
+                    "character": 31
+                }
+            },
+            "rule": "reportOptionalSubscript"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Object of type \"None\" is not subscriptable",
+            "range": {
+                "start": {
+                    "line": 109,
+                    "character": 30
+                },
+                "end": {
+                    "line": 109,
+                    "character": 36
+                }
+            },
+            "rule": "reportOptionalSubscript"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Object of type \"None\" is not subscriptable",
+            "range": {
+                "start": {
+                    "line": 111,
+                    "character": 15
+                },
+                "end": {
+                    "line": 111,
+                    "character": 21
+                }
+            },
+            "rule": "reportOptionalSubscript"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"list[Unknown]\"\n┬á┬á\"None\" is not assignable to \"list[Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 169,
+                    "character": 75
+                },
+                "end": {
+                    "line": 169,
+                    "character": 79
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"list[Unknown]\"\n┬á┬á\"None\" is not assignable to \"list[Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 192,
+                    "character": 73
+                },
+                "end": {
+                    "line": 192,
+                    "character": 77
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Operator \"+=\" not supported for types \"float | None\" and \"float\"\n┬á┬áOperator \"+\" not supported for types \"None\" and \"float\"",
+            "range": {
+                "start": {
+                    "line": 406,
+                    "character": 16
+                },
+                "end": {
+                    "line": 406,
+                    "character": 32
+                }
+            },
+            "rule": "reportOperatorIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 527,
+                    "character": 61
+                },
+                "end": {
+                    "line": 527,
+                    "character": 65
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 540,
+                    "character": 70
+                },
+                "end": {
+                    "line": 540,
+                    "character": 74
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 553,
+                    "character": 76
+                },
+                "end": {
+                    "line": 553,
+                    "character": 80
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 587,
+                    "character": 77
+                },
+                "end": {
+                    "line": 587,
+                    "character": 81
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 619,
+                    "character": 86
+                },
+                "end": {
+                    "line": 619,
+                    "character": 90
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Argument of type \"str | None\" cannot be assigned to parameter \"value\" of type \"bool\" in function \"__setitem__\"\n┬á┬áType \"str | None\" is not assignable to type \"bool\"\n┬á┬á┬á┬á\"str\" is not assignable to \"bool\"",
+            "range": {
+                "start": {
+                    "line": 629,
+                    "character": 8
+                },
+                "end": {
+                    "line": 629,
+                    "character": 33
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\db_shopping.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"str\"\n┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 647,
+                    "character": 87
+                },
+                "end": {
+                    "line": 647,
+                    "character": 91
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\fact_extractor.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 3,
+                    "character": 5
+                },
+                "end": {
+                    "line": 3,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\fact_extractor.py",
+            "severity": "error",
+            "message": "Import \"pydantic\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 4,
+                    "character": 5
+                },
+                "end": {
+                    "line": 4,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\fact_extractor.py",
+            "severity": "error",
+            "message": "Argument of type \"dict[str, Unknown] | None\" cannot be assigned to parameter \"filter_metadata\" of type \"dict[Unknown, Unknown]\" in function \"search_user_facts_hybrid\"\n┬á┬áType \"dict[str, Unknown] | None\" is not assignable to type \"dict[Unknown, Unknown]\"\n┬á┬á┬á┬á\"None\" is not assignable to \"dict[Unknown, Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 250,
+                    "character": 79
+                },
+                "end": {
+                    "line": 250,
+                    "character": 90
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "Import \"langgraph.graph\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 10,
+                    "character": 5
+                },
+                "end": {
+                    "line": 10,
+                    "character": 20
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 11,
+                    "character": 5
+                },
+                "end": {
+                    "line": 11,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "Import \"tenacity\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 12,
+                    "character": 5
+                },
+                "end": {
+                    "line": 12,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"user_id\" of type \"str\" in function \"get_deterministic_variety_prompt\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 149,
+                    "character": 90
+                },
+                "end": {
+                    "line": 149,
+                    "character": 94
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "No overloads for \"join\" match the provided arguments",
+            "range": {
+                "start": {
+                    "line": 234,
+                    "character": 66
+                },
+                "end": {
+                    "line": 234,
+                    "character": 87
+                }
+            },
+            "rule": "reportCallIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "Argument of type \"list[str | None]\" cannot be assigned to parameter \"iterable\" of type \"Iterable[str]\" in function \"join\"\n┬á┬á\"list[str | None]\" is not assignable to \"Iterable[str]\"\n┬á┬á┬á┬áType parameter \"_T_co@Iterable\" is covariant, but \"str | None\" is not a subtype of \"str\"\n┬á┬á┬á┬á┬á┬áType \"str | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 234,
+                    "character": 76
+                },
+                "end": {
+                    "line": 234,
+                    "character": 86
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "\"get\" is not a known attribute of \"None\"",
+            "range": {
+                "start": {
+                    "line": 399,
+                    "character": 16
+                },
+                "end": {
+                    "line": 399,
+                    "character": 19
+                }
+            },
+            "rule": "reportOptionalMemberAccess"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "\"get\" is not a known attribute of \"None\"",
+            "range": {
+                "start": {
+                    "line": 400,
+                    "character": 25
+                },
+                "end": {
+                    "line": 400,
+                    "character": 28
+                }
+            },
+            "rule": "reportOptionalMemberAccess"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "\"get\" is not a known attribute of \"None\"",
+            "range": {
+                "start": {
+                    "line": 401,
+                    "character": 41
+                },
+                "end": {
+                    "line": 401,
+                    "character": 44
+                }
+            },
+            "rule": "reportOptionalMemberAccess"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "\"get\" is not a known attribute of \"None\"",
+            "range": {
+                "start": {
+                    "line": 424,
+                    "character": 24
+                },
+                "end": {
+                    "line": 424,
+                    "character": 27
+                }
+            },
+            "rule": "reportOptionalMemberAccess"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\graph_orchestrator.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"list[Unknown]\"\n┬á┬á\"None\" is not assignable to \"list[Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 632,
+                    "character": 55
+                },
+                "end": {
+                    "line": 632,
+                    "character": 59
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\memory_manager.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 10,
+                    "character": 5
+                },
+                "end": {
+                    "line": 10,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\memory_manager.py",
+            "severity": "error",
+            "message": "Import \"langchain_core.messages\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 11,
+                    "character": 5
+                },
+                "end": {
+                    "line": 11,
+                    "character": 28
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\memory_manager.py",
+            "severity": "error",
+            "message": "Import \"pydantic\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 12,
+                    "character": 5
+                },
+                "end": {
+                    "line": 12,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\memory_manager.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 14,
+                    "character": 5
+                },
+                "end": {
+                    "line": 14,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\memory_manager.py",
+            "severity": "error",
+            "message": "Import \"langgraph.checkpoint.postgres\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 58,
+                    "character": 13
+                },
+                "end": {
+                    "line": 58,
+                    "character": 42
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\memory_manager.py",
+            "severity": "error",
+            "message": "Import \"langgraph.graph\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 59,
+                    "character": 13
+                },
+                "end": {
+                    "line": 59,
+                    "character": 28
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\memory_manager.py",
+            "severity": "error",
+            "message": "Import \"langgraph.graph.message\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 60,
+                    "character": 13
+                },
+                "end": {
+                    "line": 60,
+                    "character": 36
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\memory_manager.py",
+            "severity": "error",
+            "message": "Import \"langchain_core.messages\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 61,
+                    "character": 13
+                },
+                "end": {
+                    "line": 61,
+                    "character": 36
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\migrate_subscriptions.py",
+            "severity": "error",
+            "message": "Import \"psycopg\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 1,
+                    "character": 7
+                },
+                "end": {
+                    "line": 1,
+                    "character": 14
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\migrate_subscriptions.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 2,
+                    "character": 5
+                },
+                "end": {
+                    "line": 2,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\rate_limiter.py",
+            "severity": "error",
+            "message": "Import \"fastapi\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 3,
+                    "character": 5
+                },
+                "end": {
+                    "line": 3,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\billing.py",
+            "severity": "error",
+            "message": "Import \"httpx\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 3,
+                    "character": 7
+                },
+                "end": {
+                    "line": 3,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\billing.py",
+            "severity": "error",
+            "message": "Import \"fastapi\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 4,
+                    "character": 5
+                },
+                "end": {
+                    "line": 4,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\chat.py",
+            "severity": "error",
+            "message": "Import \"fastapi\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 0,
+                    "character": 5
+                },
+                "end": {
+                    "line": 0,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\chat.py",
+            "severity": "error",
+            "message": "Import \"fastapi.responses\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 1,
+                    "character": 5
+                },
+                "end": {
+                    "line": 1,
+                    "character": 22
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\chat.py",
+            "severity": "error",
+            "message": "Import \"pydantic\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 72,
+                    "character": 5
+                },
+                "end": {
+                    "line": 72,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\chat.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"user_id\" of type \"str\" in function \"get_or_create_session\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 148,
+                    "character": 50
+                },
+                "end": {
+                    "line": 148,
+                    "character": 89
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\chat.py",
+            "severity": "error",
+            "message": "Import \"fastapi.responses\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 153,
+                    "character": 5
+                },
+                "end": {
+                    "line": 153,
+                    "character": 22
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\chat.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"feedback\" of type \"str\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 166,
+                    "character": 82
+                },
+                "end": {
+                    "line": 166,
+                    "character": 90
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\chat.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"user_id\" of type \"str\" in function \"get_or_create_session\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 192,
+                    "character": 50
+                },
+                "end": {
+                    "line": 192,
+                    "character": 89
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\chat.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"user_id\" of type \"str\" in function \"get_or_create_session\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 293,
+                    "character": 50
+                },
+                "end": {
+                    "line": 293,
+                    "character": 89
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\diary.py",
+            "severity": "error",
+            "message": "Import \"fastapi\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 0,
+                    "character": 5
+                },
+                "end": {
+                    "line": 0,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\diary.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"meal_name\" of type \"str\" in function \"log_consumed_meal\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 162,
+                    "character": 35
+                },
+                "end": {
+                    "line": 162,
+                    "character": 44
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\diary.py",
+            "severity": "error",
+            "message": "Argument of type \"str | None\" cannot be assigned to parameter \"date_str\" of type \"str\" in function \"get_consumed_meals_today\"\n┬á┬áType \"str | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 184,
+                    "character": 59
+                },
+                "end": {
+                    "line": 184,
+                    "character": 63
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\diary.py",
+            "severity": "error",
+            "message": "Argument of type \"int | None\" cannot be assigned to parameter \"tz_offset_mins\" of type \"int\" in function \"get_consumed_meals_today\"\n┬á┬áType \"int | None\" is not assignable to type \"int\"\n┬á┬á┬á┬á\"None\" is not assignable to \"int\"",
+            "range": {
+                "start": {
+                    "line": 184,
+                    "character": 80
+                },
+                "end": {
+                    "line": 184,
+                    "character": 88
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\diary.py",
+            "severity": "error",
+            "message": "Object of type \"None\" cannot be used as iterable value",
+            "range": {
+                "start": {
+                    "line": 186,
+                    "character": 54
+                },
+                "end": {
+                    "line": 186,
+                    "character": 59
+                }
+            },
+            "rule": "reportOptionalIterable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\diary.py",
+            "severity": "error",
+            "message": "Object of type \"None\" cannot be used as iterable value",
+            "range": {
+                "start": {
+                    "line": 187,
+                    "character": 53
+                },
+                "end": {
+                    "line": 187,
+                    "character": 58
+                }
+            },
+            "rule": "reportOptionalIterable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\diary.py",
+            "severity": "error",
+            "message": "Object of type \"None\" cannot be used as iterable value",
+            "range": {
+                "start": {
+                    "line": 188,
+                    "character": 51
+                },
+                "end": {
+                    "line": 188,
+                    "character": 56
+                }
+            },
+            "rule": "reportOptionalIterable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\diary.py",
+            "severity": "error",
+            "message": "Object of type \"None\" cannot be used as iterable value",
+            "range": {
+                "start": {
+                    "line": 189,
+                    "character": 58
+                },
+                "end": {
+                    "line": 189,
+                    "character": 63
+                }
+            },
+            "rule": "reportOptionalIterable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\plans.py",
+            "severity": "error",
+            "message": "Import \"fastapi\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 0,
+                    "character": 5
+                },
+                "end": {
+                    "line": 0,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\plans.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"user_id\" of type \"str\" in function \"get_active_rejections\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 50,
+                    "character": 58
+                },
+                "end": {
+                    "line": 50,
+                    "character": 72
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\plans.py",
+            "severity": "error",
+            "message": "Argument of type \"Unknown | None\" cannot be assigned to parameter \"session_id\" of type \"str\" in function \"get_active_rejections\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 50,
+                    "character": 85
+                },
+                "end": {
+                    "line": 50,
+                    "character": 95
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\plans.py",
+            "severity": "error",
+            "message": "\"memory\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 56,
+                    "character": 50
+                },
+                "end": {
+                    "line": 56,
+                    "character": 56
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\shopping.py",
+            "severity": "error",
+            "message": "Import \"fastapi\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 0,
+                    "character": 5
+                },
+                "end": {
+                    "line": 0,
+                    "character": 12
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\shopping.py",
+            "severity": "error",
+            "message": "\"get_custom_shopping_items\" is not defined",
+            "range": {
+                "start": {
+                    "line": 54,
+                    "character": 23
+                },
+                "end": {
+                    "line": 54,
+                    "character": 48
+                }
+            },
+            "rule": "reportUndefinedVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\routers\\shopping.py",
+            "severity": "error",
+            "message": "\"get_custom_shopping_items\" is not defined",
+            "range": {
+                "start": {
+                    "line": 182,
+                    "character": 17
+                },
+                "end": {
+                    "line": 182,
+                    "character": 42
+                }
+            },
+            "rule": "reportUndefinedVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\schemas.py",
+            "severity": "error",
+            "message": "Import \"pydantic\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 0,
+                    "character": 5
+                },
+                "end": {
+                    "line": 0,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\services.py",
+            "severity": "error",
+            "message": "Object of type \"DistributedShoppingLock\" cannot be used with \"with\" because it does not correctly implement __enter__\n┬á┬áAttribute \"__enter__\" is unknown",
+            "range": {
+                "start": {
+                    "line": 72,
+                    "character": 9
+                },
+                "end": {
+                    "line": 72,
+                    "character": 22
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\services.py",
+            "severity": "error",
+            "message": "Object of type \"DistributedShoppingLock\" cannot be used with \"with\" because it does not correctly implement __exit__\n┬á┬áAttribute \"__exit__\" is unknown",
+            "range": {
+                "start": {
+                    "line": 72,
+                    "character": 9
+                },
+                "end": {
+                    "line": 72,
+                    "character": 22
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\services.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"list[Unknown]\"\n┬á┬á\"None\" is not assignable to \"list[Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 152,
+                    "character": 95
+                },
+                "end": {
+                    "line": 152,
+                    "character": 99
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\services.py",
+            "severity": "error",
+            "message": "\"raw_ingredients\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 197,
+                    "character": 11
+                },
+                "end": {
+                    "line": 197,
+                    "character": 26
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test.py",
+            "severity": "error",
+            "message": "Import \"supabase\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 1,
+                    "character": 5
+                },
+                "end": {
+                    "line": 1,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 2,
+                    "character": 5
+                },
+                "end": {
+                    "line": 2,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_caching.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 1,
+                    "character": 5
+                },
+                "end": {
+                    "line": 1,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_caching.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 3,
+                    "character": 5
+                },
+                "end": {
+                    "line": 3,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_diagnose.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 2,
+                    "character": 7
+                },
+                "end": {
+                    "line": 2,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_error.py",
+            "severity": "error",
+            "message": "Import \"fastapi.testclient\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 0,
+                    "character": 5
+                },
+                "end": {
+                    "line": 0,
+                    "character": 23
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_feedback.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 2,
+                    "character": 5
+                },
+                "end": {
+                    "line": 2,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_model.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 2,
+                    "character": 5
+                },
+                "end": {
+                    "line": 2,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_model.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 3,
+                    "character": 5
+                },
+                "end": {
+                    "line": 3,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_script.py",
+            "severity": "error",
+            "message": "Argument of type \"dict[str, Unknown | str | None]\" cannot be assigned to parameter \"headers\" of type \"MutableMapping[str, str]\" in function \"__init__\"\n┬á┬áType \"Unknown | None\" is not assignable to type \"str\"\n┬á┬á┬á┬á\"None\" is not assignable to \"str\"",
+            "range": {
+                "start": {
+                    "line": 15,
+                    "character": 14
+                },
+                "end": {
+                    "line": 15,
+                    "character": 17
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_sync_stream.py",
+            "severity": "error",
+            "message": "Import \"langgraph.graph\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 0,
+                    "character": 5
+                },
+                "end": {
+                    "line": 0,
+                    "character": 20
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_sync_stream.py",
+            "severity": "warning",
+            "message": "Import \"typing_extensions\" could not be resolved from source",
+            "range": {
+                "start": {
+                    "line": 1,
+                    "character": 5
+                },
+                "end": {
+                    "line": 1,
+                    "character": 22
+                }
+            },
+            "rule": "reportMissingModuleSource"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\test_title.py",
+            "severity": "error",
+            "message": "Import \"dotenv\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 1,
+                    "character": 5
+                },
+                "end": {
+                    "line": 1,
+                    "character": 11
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Import \"langchain_core.tools\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 7,
+                    "character": 5
+                },
+                "end": {
+                    "line": 7,
+                    "character": 25
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 8,
+                    "character": 5
+                },
+                "end": {
+                    "line": 8,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Import \"pydantic\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 9,
+                    "character": 5
+                },
+                "end": {
+                    "line": 9,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"list[str]\"\n┬á┬á\"None\" is not assignable to \"list[str]\"",
+            "range": {
+                "start": {
+                    "line": 254,
+                    "character": 145
+                },
+                "end": {
+                    "line": 254,
+                    "character": 149
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Expression of type \"None\" cannot be assigned to parameter of type \"list[str]\"\n┬á┬á\"None\" is not assignable to \"list[str]\"",
+            "range": {
+                "start": {
+                    "line": 424,
+                    "character": 112
+                },
+                "end": {
+                    "line": 424,
+                    "character": 116
+                }
+            },
+            "rule": "reportArgumentType"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Object of type \"DistributedShoppingLock\" cannot be used with \"with\" because it does not correctly implement __enter__\n┬á┬áAttribute \"__enter__\" is unknown",
+            "range": {
+                "start": {
+                    "line": 564,
+                    "character": 9
+                },
+                "end": {
+                    "line": 564,
+                    "character": 13
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Object of type \"DistributedShoppingLock\" cannot be used with \"with\" because it does not correctly implement __exit__\n┬á┬áAttribute \"__exit__\" is unknown",
+            "range": {
+                "start": {
+                    "line": 564,
+                    "character": 9
+                },
+                "end": {
+                    "line": 564,
+                    "character": 13
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "\"async_semantic_deduplication\" is unknown import symbol",
+            "range": {
+                "start": {
+                    "line": 573,
+                    "character": 33
+                },
+                "end": {
+                    "line": 573,
+                    "character": 61
+                }
+            },
+            "rule": "reportAttributeAccessIssue"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Object of type \"DistributedShoppingLock\" cannot be used with \"with\" because it does not correctly implement __enter__\n┬á┬áAttribute \"__enter__\" is unknown",
+            "range": {
+                "start": {
+                    "line": 688,
+                    "character": 13
+                },
+                "end": {
+                    "line": 688,
+                    "character": 17
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\tools.py",
+            "severity": "error",
+            "message": "Object of type \"DistributedShoppingLock\" cannot be used with \"with\" because it does not correctly implement __exit__\n┬á┬áAttribute \"__exit__\" is unknown",
+            "range": {
+                "start": {
+                    "line": 688,
+                    "character": 13
+                },
+                "end": {
+                    "line": 688,
+                    "character": 17
+                }
+            },
+            "rule": "reportGeneralTypeIssues"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\vision_agent.py",
+            "severity": "error",
+            "message": "Import \"langchain_google_genai\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 4,
+                    "character": 5
+                },
+                "end": {
+                    "line": 4,
+                    "character": 27
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\vision_agent.py",
+            "severity": "error",
+            "message": "Import \"langchain_core.messages\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 5,
+                    "character": 5
+                },
+                "end": {
+                    "line": 5,
+                    "character": 28
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\vision_agent.py",
+            "severity": "error",
+            "message": "Import \"pydantic\" could not be resolved",
+            "range": {
+                "start": {
+                    "line": 6,
+                    "character": 5
+                },
+                "end": {
+                    "line": 6,
+                    "character": 13
+                }
+            },
+            "rule": "reportMissingImports"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\vision_agent.py",
+            "severity": "error",
+            "message": "\"calories\" is possibly unbound",
+            "range": {
+                "start": {
+                    "line": 57,
+                    "character": 24
+                },
+                "end": {
+                    "line": 57,
+                    "character": 32
+                }
+            },
+            "rule": "reportPossiblyUnboundVariable"
+        },
+        {
+            "file": "c:\\Users\\angel\\OneDrive\\Escritorio\\MealfitRD.IA\\backend\\vision_agent.py",
+            "severity": "error",
+            "message": "Type \"list[Unknown] | None\" is not assignable to return type \"list[Unknown]\"\n┬á┬áType \"list[Unknown] | None\" is not assignable to type \"list[Unknown]\"\n┬á┬á┬á┬á\"None\" is not assignable to \"list[Unknown]\"",
+            "range": {
+                "start": {
+                    "line": 70,
+                    "character": 11
+                },
+                "end": {
+                    "line": 70,
+                    "character": 43
+                }
+            },
+            "rule": "reportReturnType"
+        }
+    ],
+    "summary": {
+        "filesAnalyzed": 55,
+        "errorCount": 178,
+        "warningCount": 1,
+        "informationCount": 0,
+        "timeInSec": 2.951
+    }
+}
+
