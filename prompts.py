@@ -81,7 +81,7 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
 5. REGLA ESTRICTA DE UNIDADES VS LIBRAS (Cultura Dominicana):
    - PROHIBICIÓN GLOBAL DE LIBRAS: Está TOTALMENTE PROHIBIDO usar la palabra "Libra", "Libras" o "LB" para Frutas, Vegetales, Víveres, Lácteos o Despensa. Todo lo que no sea carne debe agruparse en: "Unidad(es)", "Cabeza", "Mazo", "Media Docena", "Docena(s)", "Mallas", "Frasco", "Paquete" o "Tarro".
    - ÚNICA EXCEPCIÓN PARA LIBRAS: Las "Libras" SOLO están permitidas única y exclusivamente para la categoría de "Carnes y Pescados" (Pollo, Res, Cerdo, Pescado, Embutidos).
-6. ACOMPAÑANTES DE ALTO CONSUMO: Si el usuario va a comprar Aguacate, Plátano, Guineíto verde o Mango para 7 días, NUNCA pongas "1 Unidad". Redondea el mínimo a por lo menos "3 Unidades", "Media Docena" o el formato que tenga sentido para la semana entera. Todo debe sobrar antes que faltar.
+6. MARGEN SELECTIVO SOLO EN FRUTAS Y SNACKS: Las cantidades de carnes, granos, enlatados y lácteos deben ser EXACTAS según el cálculo matemático. NO infles todo. SOLO agrega un pequeño extra (+2-3 unidades) en FRUTAS frescas (Aguacate, Mango, Melón, Plátano, Guineo, etc.) porque se consumen fácilmente como snack extra y se dañan rápido. El resto debe ser realista para que no sobre demasiada comida al final de la semana.
 7. CONSOLIDACIÓN EXTREMA Y LIMPIEZA DE NOMBRES (PROHIBIDO CLONAR): ¡ATENCIÓN! Recibirás los nombres tal cual vienen de la receta, a menudo con instrucciones de preparación (ej. "Sandía en dados", "Sandía sin semillas", "Repollo rallado", "Longaniza desmenuzada"). EN EL SUPERMERCADO NO VENDEN "SANDÍA EN DADOS", VENDEN "SANDÍA". 
    - DEBES ELIMINAR todas las coletillas de preparación (en dados, rallado, finamente, pelada, hervida, desmenuzada, cortada en rodajas, maduros, etc.).
    - Si al limpiarlos tienes el mismo ingrediente base repetido MÚLTIPLES veces (ej. tres registros de "Sandía"), DEBES SUMAR SUS CANTIDADES MATEMÁTICAMENTE y generar UN SOLO ítem en la lista final (ej. "6 lb Sandía"). NUNCA PUEDE HABER DOS ÍTEMS QUE SEAN EL MISMO ALIMENTO BASE EN LA LISTA.
@@ -90,20 +90,33 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
    - "Víveres" (Yuca, Batata, Papa, Plátano, Guineíto, Yautía, Ñame, Cepas, etc.) DEBEN ir obligatoriamente en "Frutas y Verduras". NUNCA los pongas en "Otros" o "Condimentos y Especias".
    - Quesos, Mantequilla, Huevos y Yogurt van en "Lácteos y Huevos". NUNCA en "Frutas y Verduras".
    - Avena, Arroz, Pan, Casabe y Granos Secos van en "Granos y Cereales".
-9. CONTEXTO DE COMIDA (MEAL SLOT) - ¡MANDATO STRICTO!:
-   El usuario quiere SU LISTA ESTRICTAMENTE DIVIDIDA por los momentos de comida. 
-   Para CADA ingrediente, DEBES COPIAR EXACTAMENTE la información del campo `meal_slot` que te llega de entrada (ej. "Desayuno", "Almuerzo", "Merienda", "Cena"). 
-   - PROHIBIDO enviar alimentos principales a "Despensa General" si vienen con un `meal_slot` definido. Avena va a Desayuno, Pollo va a Almuerzo o Cena, etc.
-   - Si un ingrediente trajo múltiples slots separados por coma (Ej: "Desayuno, Merienda"), escoge EL MÁS IMPORTANTE (ej: "Desayuno"). NUNCA uses "Despensa General" a menos que sea sal, aceite o condimentos.
-   - ÚNICAMENTE los Aceites, Sal, Sazones, Caldo y Especias deben ir obligatoriamente a "Despensa General". Todo lo demás DEBE estar asignado a una comida específica.
+9. CONTEXTO DE COMIDA (MEAL SLOT) - ¡MANDATO ABSOLUTO!:
+   El usuario quiere SU LISTA DIVIDIDA por: "Desayuno", "Almuerzo", "Merienda", "Cena", "Versátil" y "Despensa".
+   ⛔ LA CATEGORÍA "Despensa General" NO EXISTE. Está TOTALMENTE PROHIBIDO usarla. NUNCA la devuelvas.
+   
+   REGLA ÚNICA E INQUEBRANTABLE: Para CADA ingrediente, DEBES COPIAR EXACTAMENTE el campo `meal_slot` que te llega de entrada. NO lo cambies. NO apliques tu propio criterio. El sistema ya clasificó cada ingrediente en su slot correcto antes de enviártelo.
+   - Si te llega meal_slot: "Versátil" → devuelves "Versátil"
+   - Si te llega meal_slot: "Despensa" → devuelves "Despensa"
+   - Si te llega meal_slot: "Desayuno" → devuelves "Desayuno"
+   - NUNCA devuelvas "Despensa General" — el sistema FALLARÁ.
+   
+   Los únicos valores válidos para meal_slot son: "Desayuno", "Almuerzo", "Merienda", "Cena", "Versátil", "Despensa".
 10. GESTIÓN ESTRICTA DE CADUCIDAD Y CONSERVACIÓN:
    - Si la lista incluye proyecciones para 15 días o 30 días, DEBES considerar el tiempo de caducidad de los alimentos frescos.
    - Para alimentos altamente perecederos (vegetales de hoja verde, frutas maduras, pescado/carnes frescas) que se compren para 15 o 30 días, AÑADE una breve instrucción de conservación al lado del nombre limpio. Ejemplo: "Espinaca (Consumir/Congelar 1ra semana)", "Pechuga de Pollo (Empacar en porciones y congelar)". Esto ayudará al usuario a no desperdiciar alimentos en compras a largo plazo.
 
 Tu tarea es:
 Agrupar los ingredientes lógicamente en categorías de supermercado y momentos de comida. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'meal_slot', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.
+RECUERDA: 'meal_slot' DEBE SER EXACTAMENTE el mismo valor que te llegó en la entrada. CÓPIALO TAL CUAL. NUNCA devuelvas "Despensa General".
 Para cada uno, usa los datos enviados (`raw_qty_7_days`, `raw_qty_15_days`, `raw_qty_30_days`) como base matemática, y TRADÚCELAS al lenguaje comercial de supermercado.
-Por ejemplo, si `raw_qty_7_days` es "2.33 aguacates", en `qty_7` pon "3 Unidades" (redondeo). Si `raw_qty_30_days` es "10 aguacates", pon "10 Unidades" en `qty_30`. Si es aceite y para 7 días o 30 días siempre dura 1 botella, pon "1 Botella" en los tres.
+
+⚠️ REGLA ABSOLUTA DE ESCALAMIENTO: Los valores de qty_7, qty_15 y qty_30 DEBEN SER DIFERENTES (excepto productos que duran mucho como Aceite, Sal, Canela).
+- Si qty_7 es "2 Libras", qty_15 debe ser aproximadamente el doble ("4 Libras") y qty_30 cuádruple ("7 Libras").
+- EJEMPLO CORRECTO: Pechuga: qty_7="2 Libras", qty_15="4 Libras", qty_30="7 Libras"
+- EJEMPLO INCORRECTO: Pechuga: qty_7="2 lb", qty_15="2 lb", qty_30="2 lb" (¡INACEPTABLE! No puedes poner lo mismo para 7 y 30 días)
+- EXCEPCIÓN: Productos de larga duración (Aceite de oliva, Sal, Canela, Sazón) pueden repetir la misma cantidad si 1 unidad dura todo el mes.
+
+SIEMPRE incluye la UNIDAD COMERCIAL real: "1 Paquete", "1 Botella", "1 Sobre", "1 Cabeza", "3 Unidades", "1 Cartón", "2 Latas", "1 Frasco". NUNCA pongas solo "1" o "2" sin unidad — eso no sirve para ir al supermercado.
 
 Cantidades matemáticas requeridas:
 {ingredients_json}
@@ -208,6 +221,13 @@ REGLAS ESTRICTAS:
    - "monthly" (30 días): Compra mensual. Usa predominantemente ingredientes de larga duración (arroz, habichuelas secas, avena, carnes para congelar, raíces/tubérculos, enlatados saludables). SIEMPRE incluye tips breves de conservación y congelación en las recetas cuando uses perecederos.
    RECUERDA: Los PLATOS (preparaciones) deben variar cada día, pero los ALIMENTOS (ingredientes base) pueden y DEBEN repetirse durante todo el período de compra. Esto es la clave del ahorro.
 12. CONTINUIDAD TEMPORAL Y MEAL PREP: Tendrás el contexto temporal exacto de hoy (fecha, día de la semana y estación). Usa esta información de manera lógica y proactiva. Si generas planes que tocan días laborables (Lunes a Viernes), prioriza comidas rápidas de preparar o sugiere hacer sobras abundantes en la cena para usar como almuerzo al día siguiente (Meal Prep). Si toca fin de semana, puedes incluir recetas más elaboradas. Sugiere alimentos frescos propios de la estación para dar realismo y frescura.
+13. COMPLETITUD NUTRICIONAL DOMINICANA: Para que el plan sea REAL y VALIOSO, CADA opción diaria debe cubrir estos pilares nutricionales mínimos:
+   - LEGUMINOSAS: Al menos 1 de las 3 opciones DEBE incluir habichuelas, gandules, lentejas o garbanzos en almuerzo o cena. Las legumbres son esenciales para fibra, hierro y proteína vegetal.
+   - DESAYUNO COMPLETO: El desayuno DEBE tener una base sólida (avena, pan integral, plátano, yautía para mangú, batata) + una proteína (huevos, queso) + una fruta. Un desayuno solo con "ajíes y repollo" no es suficiente — esos son ACOMPAÑAMIENTOS, no la base.
+   - FRUTAS VARIADAS: Cada opción debería incorporar al menos 1 fruta distinta (la del pool asignado) como parte de desayuno, merienda o postre. Las frutas aportan vitaminas C, A, potasio y fibra.
+   - VEGETALES EN CADA COMIDA PRINCIPAL: Almuerzo y cena DEBEN incluir al menos 1 vegetal o ensalada como acompañamiento, no solo proteína + carbohidrato.
+   - LÁCTEO O FUENTE DE CALCIO: Al menos 1 de las 3 opciones debe incluir leche, yogurt o queso (salvo alergia a lácteos).
+   - LA MERIENDA APORTA VALOR: La merienda NO es relleno — debe aportar macros reales (proteína + carbohidrato complejo). Ejemplos: yogurt con avena y fruta, batido de guineo con avena, galletas integrales con atún.
 """
 
 REVIEWER_SYSTEM_PROMPT = """

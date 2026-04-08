@@ -256,7 +256,7 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
     
     for item in ingredients:
         ing_str = item.get("raw", "") if isinstance(item, dict) else item
-        meal_slot = item.get("meal_slot", "Despensa General") if isinstance(item, dict) else "Despensa General"
+        meal_slot = item.get("meal_slot", "Desayuno") if isinstance(item, dict) else "Desayuno"
         
         if not isinstance(ing_str, str) or not ing_str.strip():
             continue
@@ -284,15 +284,44 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
             
     for key in order:
         entry = groups[key]
-        slot = entry["meal_slots"][0] if entry["meal_slots"] else "Despensa General"
+        slots = entry["meal_slots"] if entry["meal_slots"] else ["Desayuno"]
+        
+        # Intelligent meal_slot selection for shared ingredients
+        name_lower = entry["name"].lower()
+        DESPENSA_NAMES = {"aceite", "sal", "sazón", "sazon", "caldo", "pimienta", "orégano", "oregano", "ajo", "cebolla", "canela", "vinagre", "mayonesa", "mostaza", "aderezo", "salsa"}
+        VERSATIL_NAMES = {"aguacate", "ensalada", "melón", "melon", "lechuga", "tomate", "limón", "limon", "pepino", "atún", "atun", "avena", "galleta", "huevo", "huevos", "leche", "yogur", "yogurt", "mango"}
+        
+        if any(kw in name_lower for kw in DESPENSA_NAMES):
+            slot = "Despensa"
+        elif any(kw in name_lower for kw in VERSATIL_NAMES):
+            # Estos alimentos son versátiles por naturaleza — sirven para cualquier comida
+            slot = "Versátil"
+        elif len(slots) > 1:
+            # Ingrediente compartido entre 2+ comidas → es versátil
+            slot = "Versátil"
+        else:
+            slot = slots[0]
+        
+        all_slots_str = ", ".join(slots)  # Pass all slots to LLM for context
         
         if entry["can_sum"] and entry["total"] is not None:
             base_total = entry["total"]
             div = base_days if base_days > 0 else 1
             
-            t7 = base_total * (7 / div)
-            t15 = base_total * (15 / div)
-            t30 = base_total * (30 / div)
+            bulk_units = {"paquete", "paquetes", "botella", "botellas", "funda", "fundas", "lata", "latas", "frasco", "frascos", "galón", "galones", "cartón", "cartones", "pote", "potes", "caja", "cajas", "saco", "sacos", "fardo", "fardos", "bandeja", "bandejas"}
+            unit_lower = entry["unit"].lower() if entry["unit"] else ""
+
+            if unit_lower in bulk_units:
+                # Prevenir escalado agresivo para unidades de compra masiva (ej: paquete, botella)
+                # Si el usuario solicitó 1 paquete explícitamente en el plan, mantenemos 1 paquete para la semana.
+                # Al escalar a más días (15 o 30), incrementamos basándonos en semanas.
+                t7 = max(int(round(base_total)), 1)
+                t15 = t7 * 2
+                t30 = t7 * 4
+            else:
+                t7 = base_total * (7 / div)
+                t15 = base_total * (15 / div)
+                t30 = base_total * (30 / div)
             
             unit_part = f" {entry['unit']}" if entry["unit"] else ""
             
@@ -329,7 +358,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     for day_data in days:
         for m in day_data.get("meals", []):
             ing = m.get("ingredients", [])
-            meal_name = m.get("meal", "Despensa General")
+            meal_name = m.get("meal", "Desayuno")
             if ing:
                 for idx in ing:
                     ingredients.append({
@@ -376,9 +405,46 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
         # Pydantic a Dict serializable si no lo es
         if items and not isinstance(items[0], dict):
             items = [item.model_dump() if hasattr(item, "model_dump") else getattr(item, "dict")() for item in items]
+            
+        # Si el array results estaba vacío (el modelo no supo generar por rate limits/fallo total rápido) y no lanzó error
+        if not items:
+            raise ValueError("Fallback local forzado: Respuesta del modelo vacía.")
         
         # 🏷️ Las categorías ya están estrictamente normalizadas por el uso de Literal en ShoppingItemModel
         logger.debug(f"🏷️ [NORMALIZACIÓN ESTRICTA] Categorías finales: {set(item.get('category', '') for item in items)}")
+        
+        # 🛡️ POST-PROCESAMIENTO: Atrapar "Despensa General" o slot inválido
+        VALID_MEAL_SLOTS = {"Desayuno", "Almuerzo", "Merienda", "Cena", "Versátil", "Despensa", "Suplementos"}
+        BREAKFAST_KEYWORDS = {"pan", "queso cottage", "cereal", "granola", "miel", "mermelada", "mantequilla de maní", "café", "té"}
+        DESPENSA_KEYWORDS = {"aceite", "sal", "sazón", "sazon", "caldo", "pimienta", "orégano", "oregano", "ajo", "cebolla", "canela", "vinagre", "mayonesa", "mostaza", "salsa", "aderezo"}
+        VERSATIL_KEYWORDS = {"aguacate", "ensalada", "lechuga", "tomate", "pepino", "limón", "limon", "atún", "atun", "avena", "galleta", "huevo", "huevos", "leche", "yogur", "yogurt", "mango", "melón", "melon"}
+        for item in items:
+            slot = item.get("meal_slot", "")
+            if slot == "Despensa General":
+                item["meal_slot"] = "Despensa"
+                logger.debug(f"🔄 [RECLASIFICACIÓN] '{item.get('name')}' 'Despensa General' → 'Despensa'")
+            elif slot not in VALID_MEAL_SLOTS:
+                item_name_lower = item.get("name", "").lower()
+                if any(kw in item_name_lower for kw in BREAKFAST_KEYWORDS):
+                    item["meal_slot"] = "Desayuno"
+                elif any(kw in item_name_lower for kw in DESPENSA_KEYWORDS):
+                    item["meal_slot"] = "Despensa"
+                elif any(kw in item_name_lower for kw in VERSATIL_KEYWORDS):
+                    item["meal_slot"] = "Versátil"
+                else:
+                    item["meal_slot"] = "Almuerzo"
+                logger.debug(f"🔄 [RECLASIFICACIÓN] '{item.get('name')}' movido de '{slot}' → '{item['meal_slot']}'")
+        # Segunda pasada: Forzar Despensa y Versátil por keywords
+        for item in items:
+            item_name_lower = item.get("name", "").lower()
+            if any(kw in item_name_lower for kw in DESPENSA_KEYWORDS) and item.get("meal_slot") not in {"Despensa", "Suplementos"}:
+                old_slot = item["meal_slot"]
+                item["meal_slot"] = "Despensa"
+                logger.debug(f"🏪 [DESPENSA] '{item.get('name')}' movido de '{old_slot}' → 'Despensa'")
+            elif any(kw in item_name_lower for kw in VERSATIL_KEYWORDS) and item.get("meal_slot") not in {"Versátil", "Despensa", "Suplementos"}:
+                old_slot = item["meal_slot"]
+                item["meal_slot"] = "Versátil"
+                logger.debug(f"🔄 [VERSÁTIL] '{item.get('name')}' movido de '{old_slot}' → 'Versátil'")
         
         # 💊 Inyectar suplementos del plan como items de lista de compras
         seen_supps = set()
@@ -411,7 +477,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
                 cat, emoji = categorize_shopping_item(ing["name"])
                 fallback_items.append({
                     "category": cat,
-                    "meal_slot": ing.get("meal_slot", "Despensa General"),
+                    "meal_slot": ing.get("meal_slot", "Desayuno"),
                     "emoji": emoji,
                     "name": str(ing.get("name", "")).strip().capitalize(),
                     "qty_7": ing.get("raw_qty_7_days", ""),
@@ -812,7 +878,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida que el usuario afirme haber comido. Si analizas una foto de una comida y el usuario confirma que se la comió, USA ESTA HERRAMIENTA usando los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos a la herramienta.
 - Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos en la Opción A', 'ponle más proteína al almuerzo', 'quítale el arroz a la cena de la Opción B'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. Debes identificar correctamente el day_number (1 para Opción A, 2 para Opción B, o 3 para Opción C) y el meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda') del plan activo del usuario. Si el usuario no especifica, asume 1 (Opción A).
-- Usa `add_to_shopping_list` cuando el usuario diga que se quedó sin algo o pida añadir items. **ATENCIÓN:** Si el usuario te envía una foto o lista completa diciendo "esta es mi lista de compras actual", usa esta herramienta con `overwrite=True` para REEMPLAZAR todo. CRÍTICO: Extrae cada alimento y asígnale su CANTIDAD EXACTA unitaria (campo 'qty') y CATEGORÍA (campo 'category') (ej: name: "Avena", qty: "1 paquete", category: "Granos y Cereales"). El sistema protegerá automáticamente los ingredientes de su almuerzo.
+- Usa `add_to_shopping_list` cuando el usuario diga que se quedó sin algo o pida añadir items. **ATENCIÓN:** Si el usuario te envía una foto o lista completa diciendo "esta es mi lista de compras actual", usa esta herramienta con `overwrite=True` para REEMPLAZAR todo. CRÍTICO: Extrae cada alimento y asígnale su CANTIDAD EXACTA unitaria (campo 'qty'), CATEGORÍA (campo 'category') y MOMENTO DE COMIDA (campo 'meal_slot': "Desayuno", "Almuerzo", "Merienda" o "Cena") (ej: name: "Huevos", qty: "1 Cartón (30 unidades)", category: "Lácteos y Huevos", meal_slot: "Desayuno"). El sistema protegerá automáticamente los ingredientes de su almuerzo.
 - Usa `remove_from_shopping_list` cuando el usuario pida explícitamente quitar, remover o borrar uno o más productos de su lista de compras activa.
 
 El user_id del usuario actual es: {user_id}"""

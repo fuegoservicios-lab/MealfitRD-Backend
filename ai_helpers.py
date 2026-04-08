@@ -320,6 +320,24 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         unique_proteins.append(pick)
         _pool_p = [(p, w) for p, w in _pool_p if p != pick]
     
+    # 🥗 GARANTÍA NUTRICIONAL: Asegurar al menos 1 leguminosa en la selección
+    LEGUME_NAMES = {"habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos"}
+    has_legume = any(p.lower() in LEGUME_NAMES for p in unique_proteins)
+    if not has_legume and not skip_lunch:
+        available_legumes = [p for p in available_proteins if p.lower() in LEGUME_NAMES]
+        if available_legumes:
+            legume_pick = random.choice(available_legumes)
+            if len(unique_proteins) >= 2:
+                freqs = [(p, protein_freq.get(p, 0)) for p in unique_proteins]
+                freqs.sort(key=lambda x: x[1], reverse=True)
+                replaced = freqs[0][0]
+                idx = unique_proteins.index(replaced)
+                unique_proteins[idx] = legume_pick
+                logger.info(f"🥗 [GARANTÍA NUTRICIONAL] Leguminosa '{legume_pick}' reemplaza a '{replaced}'")
+            else:
+                unique_proteins.append(legume_pick)
+                logger.info(f"🥗 [GARANTÍA NUTRICIONAL] Leguminosa '{legume_pick}' añadida")
+    
     unique_carbs = []
     _pool_c = list(zip(available_carbs, carb_weights))
     while len(unique_carbs) < num_carbs_to_pick and _pool_c:

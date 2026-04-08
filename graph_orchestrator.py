@@ -710,7 +710,6 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                     "Almuerzo": [],
                     "Merienda": [],
                     "Cena": [],
-                    "Despensa General": [],
                 }
                 
                 forced_proteins = []
@@ -738,7 +737,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                     if not name or cat in excluded_cats:
                         continue
                     
-                    meal_slot = item.get("meal_slot") or "Despensa General"
+                    meal_slot = item.get("meal_slot") or "Almuerzo"
                     if meal_slot not in ingredients_by_slot:
                         ingredients_by_slot[meal_slot] = []
                     ingredients_by_slot[meal_slot].append(name)
@@ -756,7 +755,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                 if total_ingredients > 0:
                     shopping_str = "\n".join([f"- {slot}: {', '.join(items) if items else 'Ninguno'}" for slot, items in ingredients_by_slot.items() if items])
                     
-                    history_context += f"\n\n⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE (CRÍTICO): El usuario ya tiene una lista de compras vigente y la ha categorizado por momento del día. DEBES crear TODO el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes, respetando el momento para el que fueron comprados (Desayuno, Almuerzo, Cena, etc.). Los ingredientes de 'Despensa General' se pueden usar en cualquier comida.\n\nInventario Disponible:\n{shopping_str}\n\nTIENES ESTRICTAMENTE PROHIBIDO sugerir o agregar ingredientes que no estén en este inventario.\n"
+                    history_context += f"\n\n⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE (CRÍTICO): El usuario ya tiene una lista de compras vigente y la ha categorizado por momento del día. DEBES crear TODO el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes, respetando el momento para el que fueron comprados (Desayuno, Almuerzo, Cena, etc.). Los ingredientes asignados a un momento del día pueden usarse en cualquier comida si es necesario.\n\nInventario Disponible:\n{shopping_str}\n\nTIENES ESTRICTAMENTE PROHIBIDO sugerir o agregar ingredientes que no estén en este inventario.\n"
                     print(f"🛒 [CONSTRAINT] Aplicando restricción de lista de compras categorizada en graph_orchestrator.")
                     
                     if forced_proteins: actual_form_data["_force_base_proteins"] = forced_proteins

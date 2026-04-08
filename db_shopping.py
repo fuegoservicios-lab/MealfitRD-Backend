@@ -93,7 +93,7 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual",
         item_name_json = json.dumps(d, ensure_ascii=False)
         structured = {
             "category": d.get("category", ""),
-            "meal_slot": d.get("meal_slot", "Despensa General"),
+            "meal_slot": d.get("meal_slot", "Desayuno"),
             "display_name": d.get("name", ""),
             "qty": d.get("qty", ""),
             "emoji": d.get("emoji", ""),
@@ -183,26 +183,40 @@ def _add_shopping_items_minimal(user_id: str, items: list, source: str = "manual
         return None
 
 def delete_auto_generated_shopping_items(user_id: str, exclude_ids: list = None):
-    """Elimina los items auto-generados de la lista de compras del usuario.
-    Usa columna source='auto' para borrado O(1). Fallback a JSON parsing si la columna no existe.
-    exclude_ids: IDs de items recién insertados que NO deben borrarse (patrón insert-first / delete-old)."""
+    """Elimina items auto-generados y legacy de la lista durante una reorganización.
+    🛡️ PROTEGE: 
+      - items ya comprados (is_checked=True)
+      - items añadidos manualmente por el usuario via chat (source='chat')
+      - items recién insertados (exclude_ids)
+    🔥 BORRA: source='auto', source=null, source='' (vacío)"""
     if not supabase: return False
     try:
-        # 🚀 Borrado directo por columna source (O(1) con índice, sin parsear JSON)
-        # 🛡️ NUNCA borrar items ya comprados (is_checked=True) — son inventario físico del usuario
-        query = supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "auto").eq("is_checked", False)
+        # 1. Borrar items auto-generados por el plan
+        query_auto = supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "auto").eq("is_checked", False)
         if exclude_ids:
-            # PostgREST NOT IN: 1 sola cláusula SQL vs N cláusulas neq encadenadas
-            query = query.not_.in_("id", exclude_ids)
-        query.execute()
+            query_auto = query_auto.not_.in_("id", exclude_ids)
+        query_auto.execute()
+        
+        # 2. Borrar items legacy sin source (NULL)
+        query_null = supabase.table("custom_shopping_items").delete().eq("user_id", user_id).is_("source", "null").eq("is_checked", False)
+        if exclude_ids:
+            query_null = query_null.not_.in_("id", exclude_ids)
+        query_null.execute()
+        
+        # 3. Borrar items con source vacío ("")
+        query_empty = supabase.table("custom_shopping_items").delete().eq("user_id", user_id).eq("source", "").eq("is_checked", False)
+        if exclude_ids:
+            query_empty = query_empty.not_.in_("id", exclude_ids)
+        query_empty.execute()
+        
+        # ✅ Items con source='chat' (añadidos por el usuario via IA) se PRESERVAN
         return True
     except Exception as e:
         error_msg = str(e)
-        if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
-            # Columna source no existe → fallback al método legacy (JSON parsing)
-            logger.warning("⚠️ [DB] Columna source ausente. Usando fallback JSON. Ejecute migration_shopping_is_checked.sql")
+        if "is_checked" in error_msg or "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
+            logger.warning("⚠️ [DB] Columna is_checked/source ausente. Usando fallback JSON.")
             return _delete_auto_shopping_items_legacy(user_id, exclude_ids)
-        logger.error(f"Error borrando items auto-generados: {e}")
+        logger.error(f"Error borrando items durante reorganización: {e}")
         return False
 
 def _delete_auto_shopping_items_legacy(user_id: str, exclude_ids: list = None):

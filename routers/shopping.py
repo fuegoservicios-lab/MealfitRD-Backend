@@ -90,10 +90,6 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
                         "message": "La lista ya está actualizada con tu plan actual."}
             
         items = generate_auto_shopping_list(current_plan)
-        
-        if not items:
-            return {"success": False, "message": "No se encontraron ingredientes para consolidar en el plan activo."}
-            
         existing = get_custom_shopping_items(user_id)
         existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
         
@@ -144,7 +140,7 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
         structured_items = []
         for item_data in items:
             raw = ""
-            meal_slot = "Despensa General"
+            meal_slot = "Desayuno"
             qty = ""
             qty_7 = ""
             qty_15 = ""
@@ -152,7 +148,7 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
             
             if isinstance(item_data, dict):
                 raw = item_data.get("name", "").strip()
-                meal_slot = item_data.get("meal_slot", "Despensa General")
+                meal_slot = item_data.get("meal_slot", "Desayuno")
                 qty = item_data.get("qty", "")
                 qty_7 = item_data.get("qty_7", qty)
                 qty_15 = item_data.get("qty_15", qty)

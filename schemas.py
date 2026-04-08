@@ -12,7 +12,7 @@ ShoppingCategoryLiteral = Literal[
 ]
 
 MealSlotLiteral = Literal[
-    "Desayuno", "Almuerzo", "Merienda", "Cena", "Despensa General", "Suplementos"
+    "Desayuno", "Almuerzo", "Merienda", "Cena", "Versátil", "Despensa", "Suplementos"
 ]
 
 class MacrosModel(BaseModel):

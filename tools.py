@@ -435,7 +435,7 @@ def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = Fals
     Si el usuario dice "añade esto para comprar" o "me falta pan", debes enviar `"is_checked": false` (o simplemente omitirlo).
     Puedes enviar ambos en la misma llamada si es necesario dependiendo del ingrediente.
     
-    - items: Lista de objetos JSON. Cada objeto tiene 'name' (nombre), 'qty' (cantidad), 'category' y opcionalmente 'is_checked' (booleano). Ej: [{"name": "Avena", "qty": "1 paquete", "category": "Cereales", "is_checked": true}].
+    - items: Lista de objetos JSON. Cada objeto tiene 'name' (nombre), 'qty' (cantidad), 'category', opcionalmente 'meal_slot' (Desayuno|Almuerzo|Merienda|Cena) y 'is_checked' (booleano). Ej: [{"name": "Avena", "qty": "1 paquete", "category": "Cereales", "meal_slot": "Desayuno", "is_checked": true}].
     - overwrite: booleano (True o False).
     - protected_meals: (Opcional) Array de strings con nombres de comidas protegidas si overwrite=True.
     """
@@ -491,11 +491,37 @@ def add_to_shopping_list(user_id: str, items: list[dict], overwrite: bool = Fals
         # Use global categorizer from constants
         cat, emoji = categorize_shopping_item(name_clean, suggested_category=cat_clean)
                 
+        # Intelligent meal_slot inference
+        raw_meal_slot = item.get("meal_slot", "") if isinstance(item, dict) else ""
+        if not raw_meal_slot:
+            name_lower = name_clean.lower()
+            BREAKFAST_KW = {"pan", "queso cottage", "cereal", "granola", "mermelada", "mantequilla", "café", "té", "miel"}
+            LUNCH_KW = {"arroz", "habichuela", "pollo", "res", "cerdo", "gandules"}
+            DINNER_KW = {"pescado", "yautía", "tayota", "coliflor"}
+            SNACK_KW = {"manzana", "fruta", "almendra", "nuez"}
+            DESPENSA_KW = {"aceite", "sal", "sazón", "sazon", "cebolla", "ajo", "canela", "pimienta", "orégano", "oregano", "vinagre", "mayonesa", "mostaza", "salsa", "caldo", "aderezo"}
+            VERSATIL_KW = {"aguacate", "ensalada", "lechuga", "tomate", "pepino", "limón", "limon", "atún", "atun", "avena", "galleta", "huevo", "huevos", "leche", "yogur", "yogurt", "mango", "melón", "melon"}
+            if any(kw in name_lower for kw in DESPENSA_KW):
+                raw_meal_slot = "Despensa"
+            elif any(kw in name_lower for kw in VERSATIL_KW):
+                raw_meal_slot = "Versátil"
+            elif any(kw in name_lower for kw in BREAKFAST_KW):
+                raw_meal_slot = "Desayuno"
+            elif any(kw in name_lower for kw in DINNER_KW):
+                raw_meal_slot = "Cena"
+            elif any(kw in name_lower for kw in SNACK_KW):
+                raw_meal_slot = "Merienda"
+            elif any(kw in name_lower for kw in LUNCH_KW):
+                raw_meal_slot = "Almuerzo"
+            else:
+                raw_meal_slot = "Almuerzo"  # Default seguro
+        
         structured_items.append({
             "category": cat,
             "emoji": emoji,
             "name": name_clean,
             "qty": qty_clean,
+            "meal_slot": raw_meal_slot,
             "is_checked": is_checked_val
         })
         items_names.append(name_clean)
