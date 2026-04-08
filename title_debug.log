@@ -132,3 +132,15 @@
 [2026-04-05T05:13:24.408593] [708058e8-6a54-49a9-b8ca-89003cca7879] 2.15s - LLM response received
 [2026-04-05T05:13:24.408593] [708058e8-6a54-49a9-b8ca-89003cca7879] 2.15s - Inserting SYSTEM_TITLE msg into DB
 [2026-04-05T05:13:24.552363] [708058e8-6a54-49a9-b8ca-89003cca7879] 2.30s - Insert successful. Finished.
+[2026-04-08T12:19:50.516824] [e5bb9d7e-b8aa-4a73-b655-efa69a124d9e] 0.00s - Thread started
+[2026-04-08T12:19:50.693053] [e5bb9d7e-b8aa-4a73-b655-efa69a124d9e] 0.18s - Initializing LLM client
+[2026-04-08T12:19:51.767286] [e5bb9d7e-b8aa-4a73-b655-efa69a124d9e] 1.25s - Calling LLM API
+[2026-04-08T12:19:52.754906] [e5bb9d7e-b8aa-4a73-b655-efa69a124d9e] 2.24s - LLM response received
+[2026-04-08T12:19:52.755415] [e5bb9d7e-b8aa-4a73-b655-efa69a124d9e] 2.24s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-08T12:19:52.910835] [e5bb9d7e-b8aa-4a73-b655-efa69a124d9e] 2.40s - Insert successful. Finished.
+[2026-04-08T12:22:48.402141] [c40fe9e0-62a4-48a9-91ee-241c481f3390] 0.00s - Thread started
+[2026-04-08T12:22:48.571870] [c40fe9e0-62a4-48a9-91ee-241c481f3390] 0.17s - Initializing LLM client
+[2026-04-08T12:22:49.210735] [c40fe9e0-62a4-48a9-91ee-241c481f3390] 0.81s - Calling LLM API
+[2026-04-08T12:22:50.985061] [c40fe9e0-62a4-48a9-91ee-241c481f3390] 2.58s - LLM response received
+[2026-04-08T12:22:50.987075] [c40fe9e0-62a4-48a9-91ee-241c481f3390] 2.58s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-08T12:22:51.264720] [c40fe9e0-62a4-48a9-91ee-241c481f3390] 2.86s - Insert successful. Finished.
