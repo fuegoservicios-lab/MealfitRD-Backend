@@ -52,6 +52,13 @@ class DistributedShoppingLock:
             self._lock.release()
         except RuntimeError:
             pass
+            
+    def __enter__(self):
+        self.acquire()
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
 
 @_lru_cache(maxsize=1024)
 def get_user_shopping_lock(user_id: str) -> DistributedShoppingLock:
@@ -86,6 +93,7 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual",
         item_name_json = json.dumps(d, ensure_ascii=False)
         structured = {
             "category": d.get("category", ""),
+            "meal_slot": d.get("meal_slot", "Despensa General"),
             "display_name": d.get("name", ""),
             "qty": d.get("qty", ""),
             "emoji": d.get("emoji", ""),
@@ -104,6 +112,7 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual",
                 "item_name": item_name,
                 "source": source,
                 "category": fields["category"],
+                "meal_slot": fields["meal_slot"],
                 "display_name": fields["display_name"],
                 "qty": fields["qty"],
                 "emoji": fields["emoji"],
@@ -121,8 +130,8 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual",
     except Exception as e:
         error_msg = str(e)
         # Fallback 1: columnas estructuradas no existen → insertar sin ellas
-        if "category" in error_msg or "display_name" in error_msg or "qty" in error_msg or "emoji" in error_msg:
-            logger.warning("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
+        if "category" in error_msg or "display_name" in error_msg or "qty" in error_msg or "emoji" in error_msg or "meal_slot" in error_msg:
+            logger.warning("⚠️ [DB] Columnas estructuradas ausentes o incompletas. Ejecute migration_shopping_structured_columns.sql")
             try:
                 rows_fb = []
                 for item in items:
@@ -143,22 +152,28 @@ def add_custom_shopping_items(user_id: str, items: list, source: str = "manual",
         if "source" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
             # Fallback 2: columna source tampoco existe
             logger.warning("⚠️ [DB] Columna source ausente. Ejecute migration_shopping_is_checked.sql")
-            return _add_shopping_items_minimal(user_id, items)
+            return _add_shopping_items_minimal(user_id, items, source=source)
         logger.error(f"Error añadiendo items a shopping list: {e}")
         return None
 
-def _add_shopping_items_minimal(user_id: str, items: list):
-    """Fallback mínimo: solo user_id + item_name (pre-migración)."""
+def _add_shopping_items_minimal(user_id: str, items: list, source: str = "manual"):
+    """Fallback mínimo: solo user_id + item_name. Inyecta 'source' dentro del JSON para evitar borrados accidentales al hacer Reorganizar."""
     import json
     try:
         rows = []
         for item in items:
+            d = {}
             if hasattr(item, 'model_dump'):
-                rows.append({"user_id": user_id, "item_name": json.dumps(item.model_dump(), ensure_ascii=False)})
+                d = item.model_dump()
             elif isinstance(item, dict):
-                rows.append({"user_id": user_id, "item_name": json.dumps(item, ensure_ascii=False)})
+                d = dict(item)
             elif isinstance(item, str) and item.strip():
-                rows.append({"user_id": user_id, "item_name": item.strip()})
+                d = {"name": item.strip()}
+            
+            if d:
+                d["source"] = source
+                rows.append({"user_id": user_id, "item_name": json.dumps(d, ensure_ascii=False)})
+
         if rows:
             res = supabase.table("custom_shopping_items").insert(rows).execute()
             return res.data
@@ -191,10 +206,15 @@ def delete_auto_generated_shopping_items(user_id: str, exclude_ids: list = None)
         return False
 
 def _delete_auto_shopping_items_legacy(user_id: str, exclude_ids: list = None):
-    """Fallback legacy: borra items auto-generados parseando JSON (O(N) full table scan)."""
+    """Fallback legacy: borra items auto-generados parseando JSON previendo borrar manuales o checkeados."""
     import json
     try:
-        res = supabase.table("custom_shopping_items").select("id, item_name").eq("user_id", user_id).execute()
+        # Extraemos is_checked si existe nativamente
+        try:
+            res = supabase.table("custom_shopping_items").select("id, item_name, is_checked").eq("user_id", user_id).execute()
+        except:
+            res = supabase.table("custom_shopping_items").select("id, item_name").eq("user_id", user_id).execute()
+            
         existing = res.data
         if not existing: return True
         
@@ -203,15 +223,32 @@ def _delete_auto_shopping_items_legacy(user_id: str, exclude_ids: list = None):
         for item in existing:
             if item['id'] in exclude_set:
                 continue
+                
+            # NUNCA borrar items físicos ya comprados
+            if item.get('is_checked') is True:
+                continue
+                
             try:
-                parsed = json.loads(item['item_name'])
-                if isinstance(parsed, dict) and 'category' in parsed:
+                parsed = dict(json.loads(item['item_name']))
+                if parsed.get("is_checked") is True:
+                    continue
+                    
+                src = parsed.get("source")
+                # Si es estrictamente manual, ignorar, no queremos destruirlo con el auto-reorganizar
+                if src == "manual":
+                    continue
+                    
+                # Borrar si fue generado por la IA (source="auto" o asumiendo auto por su categoría legacy)
+                if src == "auto" or (not src and 'category' in parsed):
                     ids_to_delete.append(item['id'])
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError, TypeError):
                 pass
         
         if ids_to_delete:
-            supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
+            CHUNK_SIZE = 100
+            for i in range(0, len(ids_to_delete), CHUNK_SIZE):
+                chunk = ids_to_delete[i:i + CHUNK_SIZE]
+                supabase.table("custom_shopping_items").delete().in_("id", chunk).execute()
         return True
     except Exception as e:
         logger.error(f"Error borrando items auto-generados (legacy fallback): {e}")
@@ -233,14 +270,14 @@ def get_custom_shopping_items(user_id: str, limit: int = 200, offset: int = 0, s
     try:
         # Intento 1: con columnas estructuradas → permite ordenar por categoría a nivel DB
         query = supabase.table("custom_shopping_items").select(
-            "id, item_name, is_checked, checked_at, source, category, display_name, qty, emoji, created_at",
+            "id, item_name, is_checked, checked_at, source, category, display_name, qty, emoji, created_at, meal_slot",
             count="exact"
         ).eq("user_id", user_id).order(sort_by, desc=is_desc).range(offset, offset + limit - 1)
         res = query.execute()
         return {"data": res.data, "total": res.count or 0}
     except Exception as e:
         error_msg = str(e)
-        if "category" in error_msg or "display_name" in error_msg or "qty" in error_msg or "emoji" in error_msg:
+        if "category" in error_msg or "display_name" in error_msg or "qty" in error_msg or "emoji" in error_msg or "meal_slot" in error_msg:
             # Fallback 2: sin columnas estructuradas pero con is_checked/source
             logger.warning("⚠️ [DB] Columnas estructuradas ausentes. Ejecute migration_shopping_structured_columns.sql")
             try:
@@ -326,7 +363,7 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
     try:
         # Obtener todos los items del usuario
         res = supabase.table("custom_shopping_items").select(
-            "id, item_name, display_name, qty, category, emoji, source, is_checked, created_at"
+            "id, item_name, display_name, qty, category, emoji, source, is_checked, created_at, meal_slot"
         ).eq("user_id", user_id).order("created_at", desc=True).execute()
         
         if not res.data or len(res.data) < 2:
@@ -350,6 +387,18 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
         import unicodedata
         nfkd = unicodedata.normalize('NFKD', text.lower().strip())
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
+        
+    def _extract_qty(item_dict: dict) -> str:
+        q = item_dict.get("qty")
+        if q: return str(q)
+        raw = item_dict.get("item_name", "")
+        if raw.startswith("{"):
+            try:
+                parsed = _json.loads(raw)
+                return str(parsed.get("qty_7") or parsed.get("qty") or "")
+            except Exception:
+                pass
+        return ""
     
     # Agrupar por nombre normalizado
     groups = {}  # normalized_name -> [items]
@@ -388,7 +437,7 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
         duplicates = group[1:]
         
         # Intentar sumar cantidades
-        keeper_qty_str = keeper["item"].get("qty", "")
+        keeper_qty_str = _extract_qty(keeper["item"])
         keeper_name = keeper["name"]
         keeper_num, keeper_unit, _ = parse_ingredient_qty(f"{keeper_qty_str} {keeper_name}", to_metric=False)
         total = keeper_num
@@ -400,7 +449,7 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
             concatenated_qtys.append(keeper_qty_str)
             
         for dup in duplicates:
-            dup_qty_str = dup["item"].get("qty", "")
+            dup_qty_str = _extract_qty(dup["item"])
             dup_num, dup_unit, _ = parse_ingredient_qty(f"{dup_qty_str} {dup['name']}", to_metric=False)
             
             if can_sum and dup_num is not None and _normalize(dup_unit) == _normalize(keeper_unit):
@@ -454,13 +503,15 @@ def _deduplicate_shopping_items_impl(user_id: str, re, _json):
             chunk = ids_to_delete[i:i + CHUNK_SIZE]
             supabase.table("custom_shopping_items").delete().in_("id", chunk).execute()
         
-        # 🚀 UPDATEs serializados (en vez de batch complex porque enviamos múltiples columnas)
+        # 🚀 UPDATEs serializados de forma segura usando las funciones de core (con fallback robusto)
         if ids_to_update:
             for item_id, payload in ids_to_update.items():
                 if "is_checked" in payload:
-                    from datetime import datetime, timezone
-                    payload["checked_at"] = datetime.now(timezone.utc).isoformat()
-                supabase.table("custom_shopping_items").update(payload).eq("id", item_id).execute()
+                    update_custom_shopping_item_status(item_id, payload["is_checked"])
+                if "qty" in payload:
+                    # Update quantity and its variations
+                    q = payload["qty"]
+                    update_custom_shopping_item(item_id, {"qty": q, "qty_7": q, "qty_15": q, "qty_30": q}, user_id=None)
         
         logger.debug(f"🧹 [DEDUP] Eliminados {len(ids_to_delete)} duplicados, {len(ids_to_update)} cantidades actualizadas")
         return {"removed": len(ids_to_delete), "merged": merged_info}
@@ -558,9 +609,10 @@ def update_custom_shopping_item(item_id: str, updates: dict, user_id: str = None
     if not supabase: return None
     
     # Solo permitir campos editables
-    allowed_fields = {"display_name", "qty", "category", "emoji"}
+    allowed_fields = {"display_name", "qty", "qty_7", "qty_15", "qty_30", "category", "emoji", "meal_slot"}
     clean_updates = {k: v for k, v in updates.items() if k in allowed_fields and v is not None}
     
+    # We must pass the original 'updates' because 'clean_updates' might filter out JSON-only fields if they don't map directly to table columns, but here we just pass 'clean_updates' and ensure allowed_fields has everything.
     if not clean_updates:
         return []
     
@@ -578,7 +630,7 @@ def update_custom_shopping_item(item_id: str, updates: dict, user_id: str = None
         return res.data
     except Exception as e:
         error_msg = str(e)
-        if any(col in error_msg for col in ["display_name", "qty", "category", "emoji", "PGRST205"]):
+        if any(col in error_msg for col in ["display_name", "qty", "category", "emoji", "meal_slot", "PGRST205"]):
             # Columnas estructuradas no existen → fallback a JSON en item_name
             logger.warning("⚠️ [DB] Columnas estructuradas ausentes. Usando fallback JSON para update.")
             return _update_shopping_item_legacy(item_id, clean_updates, user_id)
@@ -603,7 +655,7 @@ def _update_shopping_item_legacy(item_id: str, updates: dict, user_id: str = Non
         except (json.JSONDecodeError, ValueError):
             parsed = {}
         
-        field_map = {"display_name": "name", "qty": "qty", "category": "category", "emoji": "emoji"}
+        field_map = {"display_name": "name", "qty": "qty", "qty_7": "qty_7", "qty_15": "qty_15", "qty_30": "qty_30", "category": "category", "emoji": "emoji", "meal_slot": "meal_slot"}
         for k, v in updates.items():
             if k in field_map:
                 parsed[field_map[k]] = v

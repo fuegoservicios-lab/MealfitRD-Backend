@@ -11,6 +11,10 @@ ShoppingCategoryLiteral = Literal[
     "Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros",
 ]
 
+MealSlotLiteral = Literal[
+    "Desayuno", "Almuerzo", "Merienda", "Cena", "Despensa General", "Suplementos"
+]
+
 class MacrosModel(BaseModel):
     protein: str = Field(description="Gramos de proteína totales, ej: '150g'")
     carbs: str = Field(description="Gramos de carbohidratos totales, ej: '200g'")
@@ -51,6 +55,7 @@ class PlanModel(BaseModel):
 
 class ShoppingItemModel(BaseModel):
     category: ShoppingCategoryLiteral = Field(description="Categoría estricta del supermercado para organizar el ingrediente.")
+    meal_slot: MealSlotLiteral = Field(description="Momento del día principal para el cual se comprará este producto.")
     emoji: str = Field(description="Un emoji representativo de la categoría, Ej: '🥩', '🥬'")
     name: str = Field(description="Nombre del ingrediente o producto, Ej: 'Pechuga de pollo'")
     qty_7: str = Field(description="Cantidad redondeada para 7 DÍAS de compras, Ej: '1/2 Libra', '1 Unidad'")

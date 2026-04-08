@@ -703,7 +703,16 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
             existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
             if existing_items:
                 excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
-                ingredient_names = []
+                
+                # Agrupamos los ingredientes por meal_slot para darle una instrucción detallada al modelo
+                ingredients_by_slot = {
+                    "Desayuno": [],
+                    "Almuerzo": [],
+                    "Merienda": [],
+                    "Cena": [],
+                    "Despensa General": [],
+                }
+                
                 forced_proteins = []
                 forced_carbs = []
                 forced_veggies = []
@@ -729,7 +738,10 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                     if not name or cat in excluded_cats:
                         continue
                     
-                    ingredient_names.append(name)
+                    meal_slot = item.get("meal_slot") or "Despensa General"
+                    if meal_slot not in ingredients_by_slot:
+                        ingredients_by_slot[meal_slot] = []
+                    ingredients_by_slot[meal_slot].append(name)
                     
                     cat_lower = cat.lower()
                     if any(k in cat_lower for k in ["carne", "pescado", "proteína", "protein", "huevo", "lácteo", "queso", "leche", "yogur"]):
@@ -739,9 +751,13 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                     elif any(k in cat_lower for k in ["fruta", "verdura", "vegetal"]):
                         forced_veggies.append(name)
                 
-                if ingredient_names:
-                    history_context += f"\n\n⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE (CRÍTICO): El usuario ya tiene una lista de compras vigente y NO PUEDE IR AL SUPERMERCADO. DEBES crear TODO el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes: [{', '.join(ingredient_names)}]. TIENES ESTRICTAMENTE PROHIBIDO sugerir o agregar frutas, vegetales, carnes, víveres o lácteos que no estén en esta lista exacta. Si la lista solo tiene tomate, usa solo tomate (no inventes lechuga ni cebolla).\n"
-                    print(f"🛒 [CONSTRAINT] Aplicando restricción de lista de compras en graph_orchestrator ({len(ingredient_names)} items).")
+                total_ingredients = sum(len(lst) for lst in ingredients_by_slot.values())
+                
+                if total_ingredients > 0:
+                    shopping_str = "\n".join([f"- {slot}: {', '.join(items) if items else 'Ninguno'}" for slot, items in ingredients_by_slot.items() if items])
+                    
+                    history_context += f"\n\n⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE (CRÍTICO): El usuario ya tiene una lista de compras vigente y la ha categorizado por momento del día. DEBES crear TODO el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes, respetando el momento para el que fueron comprados (Desayuno, Almuerzo, Cena, etc.). Los ingredientes de 'Despensa General' se pueden usar en cualquier comida.\n\nInventario Disponible:\n{shopping_str}\n\nTIENES ESTRICTAMENTE PROHIBIDO sugerir o agregar ingredientes que no estén en este inventario.\n"
+                    print(f"🛒 [CONSTRAINT] Aplicando restricción de lista de compras categorizada en graph_orchestrator.")
                     
                     if forced_proteins: actual_form_data["_force_base_proteins"] = forced_proteins
                     if forced_carbs: actual_form_data["_force_base_carbs"] = forced_carbs

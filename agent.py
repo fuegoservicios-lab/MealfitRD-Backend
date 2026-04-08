@@ -251,21 +251,27 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
         nfkd = unicodedata.normalize('NFKD', text.lower().strip())
         return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
 
-
     groups = {}
     order = []
     
-    for ing in ingredients:
-        if not isinstance(ing, str) or not ing.strip():
+    for item in ingredients:
+        ing_str = item.get("raw", "") if isinstance(item, dict) else item
+        meal_slot = item.get("meal_slot", "Despensa General") if isinstance(item, dict) else "Despensa General"
+        
+        if not isinstance(ing_str, str) or not ing_str.strip():
             continue
-        num, unit, name = parse_ingredient_qty(ing, to_metric=False)
+            
+        num, unit, name = parse_ingredient_qty(ing_str, to_metric=False)
         key = (_normalize(name), _normalize(unit))
         
         if key not in groups:
-            groups[key] = {"total": num, "unit": unit, "name": name, "raw": ing, "can_sum": num is not None}
+            groups[key] = {"total": num, "unit": unit, "name": name, "raw": ing_str, "meal_slots": [meal_slot], "can_sum": num is not None}
             order.append(key)
         else:
             entry = groups[key]
+            if meal_slot not in entry["meal_slots"]:
+                entry["meal_slots"].append(meal_slot)
+                
             if entry["can_sum"] and num is not None:
                 entry["total"] = (entry["total"] or 0) + num
             else:
@@ -278,6 +284,8 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
             
     for key in order:
         entry = groups[key]
+        slot = entry["meal_slots"][0] if entry["meal_slots"] else "Despensa General"
+        
         if entry["can_sum"] and entry["total"] is not None:
             base_total = entry["total"]
             div = base_days if base_days > 0 else 1
@@ -290,6 +298,7 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
             
             result.append({
                 "name": entry['name'],
+                "meal_slot": slot,
                 "raw_qty_7_days": f"{format_qty(t7)}{unit_part}".strip(),
                 "raw_qty_15_days": f"{format_qty(t15)}{unit_part}".strip(),
                 "raw_qty_30_days": f"{format_qty(t30)}{unit_part}".strip()
@@ -297,6 +306,7 @@ def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3)
         else:
             result.append({
                 "name": entry["raw"],
+                "meal_slot": slot,
                 "raw_qty_7_days": "Al gusto / Variable",
                 "raw_qty_15_days": "Al gusto / Variable",
                 "raw_qty_30_days": "Al gusto / Variable"
@@ -319,8 +329,13 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
     for day_data in days:
         for m in day_data.get("meals", []):
             ing = m.get("ingredients", [])
+            meal_name = m.get("meal", "Despensa General")
             if ing:
-                ingredients.extend(ing)
+                for idx in ing:
+                    ingredients.append({
+                        "raw": idx,
+                        "meal_slot": meal_name
+                    })
                 
     if not ingredients:
         return []
@@ -375,6 +390,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
                     dose = supp.get("dose", "1 unidad")
                     items.append({
                         "category": "Suplementos",
+                        "meal_slot": "Suplementos",
                         "emoji": "💊",
                         "name": supp_name,
                         "qty_7": f"{dose} /día · 7 días",
@@ -395,6 +411,7 @@ def generate_auto_shopping_list(plan_data: dict) -> list:
                 cat, emoji = categorize_shopping_item(ing["name"])
                 fallback_items.append({
                     "category": cat,
+                    "meal_slot": ing.get("meal_slot", "Despensa General"),
                     "emoji": emoji,
                     "name": str(ing.get("name", "")).strip().capitalize(),
                     "qty_7": ing.get("raw_qty_7_days", ""),

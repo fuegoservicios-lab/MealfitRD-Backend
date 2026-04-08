@@ -85,17 +85,23 @@ MANDAMIENTOS CRÍTICOS PARA UNA LISTA DE SUPERMERCADO REAL:
 7. CONSOLIDACIÓN EXTREMA Y LIMPIEZA DE NOMBRES (PROHIBIDO CLONAR): ¡ATENCIÓN! Recibirás los nombres tal cual vienen de la receta, a menudo con instrucciones de preparación (ej. "Sandía en dados", "Sandía sin semillas", "Repollo rallado", "Longaniza desmenuzada"). EN EL SUPERMERCADO NO VENDEN "SANDÍA EN DADOS", VENDEN "SANDÍA". 
    - DEBES ELIMINAR todas las coletillas de preparación (en dados, rallado, finamente, pelada, hervida, desmenuzada, cortada en rodajas, maduros, etc.).
    - Si al limpiarlos tienes el mismo ingrediente base repetido MÚLTIPLES veces (ej. tres registros de "Sandía"), DEBES SUMAR SUS CANTIDADES MATEMÁTICAMENTE y generar UN SOLO ítem en la lista final (ej. "6 lb Sandía"). NUNCA PUEDE HABER DOS ÍTEMS QUE SEAN EL MISMO ALIMENTO BASE EN LA LISTA.
-8. CATEGORIZACIÓN LÓGICA (CATEGORÍAS CANÓNICAS EXACTAS):
-   Usa ÚNICAMENTE estas categorías: "Frutas y Verduras", "Carnes y Pescados", "Lácteos y Huevos", "Granos y Cereales", "Condimentos y Especias", "Aceites y Grasas", "Bebidas", "Snacks y Dulces", "Enlatados y Conservas", "Panadería", "Otros".
+8. CATEGORIZACIÓN LÓGICA POR PASILLO (CATEGORÍAS CANÓNICAS EXACTAS):
+   Usa ÚNICAMENTE estas categorías en el campo 'category': "Frutas y Verduras", "Carnes y Pescados", "Lácteos y Huevos", "Granos y Cereales", "Condimentos y Especias", "Aceites y Grasas", "Bebidas", "Snacks y Dulces", "Enlatados y Conservas", "Panadería", "Otros".
    - "Víveres" (Yuca, Batata, Papa, Plátano, Guineíto, Yautía, Ñame, Cepas, etc.) DEBEN ir obligatoriamente en "Frutas y Verduras". NUNCA los pongas en "Otros" o "Condimentos y Especias".
    - Quesos, Mantequilla, Huevos y Yogurt van en "Lácteos y Huevos". NUNCA en "Frutas y Verduras".
    - Avena, Arroz, Pan, Casabe y Granos Secos van en "Granos y Cereales".
-9. GESTIÓN ESTRICTA DE CADUCIDAD Y CONSERVACIÓN:
+9. CONTEXTO DE COMIDA (MEAL SLOT) - ¡MANDATO STRICTO!:
+   El usuario quiere SU LISTA ESTRICTAMENTE DIVIDIDA por los momentos de comida. 
+   Para CADA ingrediente, DEBES COPIAR EXACTAMENTE la información del campo `meal_slot` que te llega de entrada (ej. "Desayuno", "Almuerzo", "Merienda", "Cena"). 
+   - PROHIBIDO enviar alimentos principales a "Despensa General" si vienen con un `meal_slot` definido. Avena va a Desayuno, Pollo va a Almuerzo o Cena, etc.
+   - Si un ingrediente trajo múltiples slots separados por coma (Ej: "Desayuno, Merienda"), escoge EL MÁS IMPORTANTE (ej: "Desayuno"). NUNCA uses "Despensa General" a menos que sea sal, aceite o condimentos.
+   - ÚNICAMENTE los Aceites, Sal, Sazones, Caldo y Especias deben ir obligatoriamente a "Despensa General". Todo lo demás DEBE estar asignado a una comida específica.
+10. GESTIÓN ESTRICTA DE CADUCIDAD Y CONSERVACIÓN:
    - Si la lista incluye proyecciones para 15 días o 30 días, DEBES considerar el tiempo de caducidad de los alimentos frescos.
    - Para alimentos altamente perecederos (vegetales de hoja verde, frutas maduras, pescado/carnes frescas) que se compren para 15 o 30 días, AÑADE una breve instrucción de conservación al lado del nombre limpio. Ejemplo: "Espinaca (Consumir/Congelar 1ra semana)", "Pechuga de Pollo (Empacar en porciones y congelar)". Esto ayudará al usuario a no desperdiciar alimentos en compras a largo plazo.
 
 Tu tarea es:
-Agrupar los ingredientes lógicamente en categorías de supermercado. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.
+Agrupar los ingredientes lógicamente en categorías de supermercado y momentos de comida. Debes devolver la respuesta estructurada donde cada ingrediente especifica 'category', 'meal_slot', 'emoji', 'name' (nombre limpio de medidas) y TRES campos de cantidad: 'qty_7', 'qty_15', 'qty_30'.
 Para cada uno, usa los datos enviados (`raw_qty_7_days`, `raw_qty_15_days`, `raw_qty_30_days`) como base matemática, y TRADÚCELAS al lenguaje comercial de supermercado.
 Por ejemplo, si `raw_qty_7_days` es "2.33 aguacates", en `qty_7` pon "3 Unidades" (redondeo). Si `raw_qty_30_days` es "10 aguacates", pon "10 Unidades" en `qty_30`. Si es aceite y para 7 días o 30 días siempre dura 1 botella, pon "1 Botella" en los tres.
 
@@ -180,7 +186,7 @@ Tu misión es crear un plan alimenticio de EXACTAMENTE 3 DÍAS VARIADOS, altamen
 
 REGLAS ESTRICTAS:
 1. CALORÍAS Y MACROS PRE-CALCULADOS: Los cálculos de BMR, TDEE, calorías objetivo y macronutrientes ya fueron realizados por el Sistema Calculador. NO calcules estos números tú mismo. Usa EXACTAMENTE los valores provistos. La suma de calorías, proteínas, carbohidratos y grasas de todas las comidas de un día DEBE coincidir milimétricamente con el OBJETIVO DIARIO aportado. Distribuye las porciones con cuidado para lograr esta meta estricta.
-2. EFICIENCIA DE SUPERMERCADO Y VARIEDAD: Diseña los 3 días utilizando listas de compras e ingredientes principales MUY SIMILARES (ej. usar Pollo, Huevos, Yuca, Avena a lo largo de los 3 días) para no gastar mucho en varias compras. Sin embargo, DEBES crear PREPARACIONES Y PLATOS COMPLETAMENTE DISTINTOS cada día usando esos mismos ingredientes combinados de forma diferente. NUNCA repitas la misma preparación exacta (Ej. Si la Opción A tiene Pollo Guisado, la Opción B debe tener Pollo a la Plancha o Desmenuzado).
+2. LA LISTA DE COMPRAS ES LA LEY ABSOLUTA: Tienes anexa la LISTA DE COMPRAS ACTUAL DEL USUARIO, segmentada por Desayuno, Almuerzo, Merienda y Cena. DEBES BASAR TODOS los platos de tus 3 opciones EXACTAMENTE y EXCLUSIVAMENTE en esos ingredientes. Está terminantemente prohibido inventar proteínas, carbohidratos, futas o verduras que no estén en esa lista para ese momento del día. Si "Avena" está en Desayuno, úsala solo en Desayunos. Si "Pollo" está en Cena, úsalo en Cenas. NUNCA sugieras compras que no estén ahí. Si la lista está vacía, ignora este punto y genera libremente ingredientes económicos dominicanos.
 3. INGREDIENTES DOMINICANOS: El menú DEBE usar alimentos típicos, accesibles y económicos de República Dominicana (Ej: Plátano, Yuca, Batata, Huevos, Salami, Queso de freír/hoja, Pollo guisado, Aguacate, Habichuelas, Arroz, Avena).
 4. RECETAS PROFESIONALES: Los pasos de las recetas (`recipe`) DEBEN incluir obligatoriamente estos prefijos para la UI:
    - "Mise en place: [Instrucciones de preparación previa y cortes]"

@@ -100,7 +100,10 @@ def api_shopping_auto_generate(data: dict = Body(...), verified_user_id: str = D
         result = regenerate_shopping_list_safe(user_id, items, existing_items, plan_hash)
         
         if result is not None:
-            return {"success": True, "items": items, "cached": False, "message": f"Se auto-generaron y guardaron {len(items)} ingredientes estructurados en tu lista con éxito."}
+            # Re-fetch from DB so the frontend gets exactly what's actually stored (JSON wrapped with id & source)
+            final_items = get_custom_shopping_items(user_id, limit=500)
+            final_items_list = final_items.get("data", []) if isinstance(final_items, dict) else final_items
+            return {"success": True, "items": final_items_list, "cached": False, "message": f"Se auto-generaron y guardaron {len(items)} ingredientes estructurados en tu lista con éxito."}
         else:
             raise HTTPException(status_code=500, detail="Error al intentar guardar los ingredientes en la base de datos.")
             
@@ -139,16 +142,36 @@ def api_add_custom_shopping_item(data: dict = Body(...), verified_user_id: str =
         
         # Normalizar a JSON struct consistente con ShoppingItemModel
         structured_items = []
-        for item_name in items:
-            raw = item_name.strip() if isinstance(item_name, str) else ""
+        for item_data in items:
+            raw = ""
+            meal_slot = "Despensa General"
+            qty = ""
+            qty_7 = ""
+            qty_15 = ""
+            qty_30 = ""
+            
+            if isinstance(item_data, dict):
+                raw = item_data.get("name", "").strip()
+                meal_slot = item_data.get("meal_slot", "Despensa General")
+                qty = item_data.get("qty", "")
+                qty_7 = item_data.get("qty_7", qty)
+                qty_15 = item_data.get("qty_15", qty)
+                qty_30 = item_data.get("qty_30", qty)
+            elif isinstance(item_data, str):
+                raw = item_data.strip()
+                
             name = sanitize_shopping_text(raw) if raw else ""
             if name:
                 cat, emoji = categorize_shopping_item(name)
                 structured_items.append({
                     "category": cat,
+                    "meal_slot": meal_slot,
                     "emoji": emoji,
                     "name": name.capitalize(),
-                    "qty": ""
+                    "qty": qty,
+                    "qty_7": qty_7,
+                    "qty_15": qty_15,
+                    "qty_30": qty_30
                 })
         
         if not structured_items:
@@ -219,13 +242,17 @@ def api_update_custom_shopping_item(item_id: str, data: dict = Body(...), verifi
             raise HTTPException(status_code=401, detail="No autorizado. Token requerido para editar items.")
         
         updates = {}
-        for field in ["display_name", "qty", "category", "emoji"]:
+        for field in ["display_name", "qty_7", "qty_15", "qty_30", "category", "emoji", "meal_slot"]:
             if field in data:
                 val = data[field]
                 if isinstance(val, str):
                     updates[field] = sanitize_shopping_text(val)
                 else:
                     updates[field] = val
+        
+        # Backward compatibility for qty
+        if "qty" in data and "qty_7" not in data:
+             updates["qty_7"] = sanitize_shopping_text(data["qty"])
         
         # Si se renombra el item, re-categorizar automáticamente
         if "display_name" in updates and "category" not in data:
@@ -234,7 +261,7 @@ def api_update_custom_shopping_item(item_id: str, data: dict = Body(...), verifi
             updates["emoji"] = emoji
         
         if not updates:
-            raise HTTPException(status_code=400, detail="No se proporcionaron campos para actualizar. Campos permitidos: display_name, qty, category, emoji.")
+            raise HTTPException(status_code=400, detail="No se proporcionaron campos para actualizar. Campos permitidos: display_name, qty_7, qty_15, qty_30, category, emoji, meal_slot.")
         
         result = update_custom_shopping_item(item_id, updates, user_id=verified_user_id)
         
