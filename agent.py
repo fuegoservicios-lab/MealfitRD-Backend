@@ -248,7 +248,8 @@ def call_model(state: ChatState):
     chat_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
         temperature=0.7,
-        google_api_key=os.environ.get("GEMINI_API_KEY")
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        safety_settings=_safety_settings
     )
     llm_with_tools = chat_llm.bind_tools(agent_tools)
     response = llm_with_tools.invoke(llm_messages)
