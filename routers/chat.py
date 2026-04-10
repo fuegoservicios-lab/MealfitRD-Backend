@@ -192,8 +192,11 @@ async def api_chat_tts(data: dict = Body(...)):
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             return Response(content=resp.content, media_type="audio/mpeg")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Error ElevenLabs {e.response.status_code}: {e.response.text}")
+        raise HTTPException(status_code=500, detail="Error en generación TTS")
     except Exception as e:
-        logger.error(f"Error llamando a ElevenLabs: {str(e)}")
+        logger.error(f"Error general llamando a ElevenLabs: {str(e)}")
         raise HTTPException(status_code=500, detail="Error en generación TTS")
 
 @router.post("/feedback")
