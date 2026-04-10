@@ -162,8 +162,8 @@ async def api_chat_tts(data: dict = Body(...)):
     if not text:
         raise HTTPException(status_code=400, detail="Missing text")
     
-    # Load and strip the API key to prevent whitespace errors from user copy-pasting
-    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    # Load and strip the API key to prevent whitespace or quotation errors
+    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip().strip('"').strip("'")
     if not api_key:
         raise HTTPException(status_code=500, detail="ElevenLabs API Key no configurada.")
         
