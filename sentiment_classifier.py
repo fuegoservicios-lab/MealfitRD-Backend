@@ -21,15 +21,15 @@ PERSONALITY_PROFILES = {
     "guilt": {
         "name": "Terapeuta Compasivo",
         "emoji": "🧘",
-        "instruction": """PERSONALIDAD ACTIVA: TERAPEUTA COMPASIVO 🧘
-Tu paciente acaba de expresar CULPA o ESTRÉS emocional relacionado con la comida. Esto es extremadamente delicado.
+        "instruction": """PERSONALIDAD ACTIVA: NUTRIÓLOGO COMPASIVO 🧘
+El usuario expresa sentimientos difíciles sobre su alimentación. Como nutriólogo profesional, tu rol es guiarlo con empatía.
 REGLAS DE TONO:
-1. CERO JUICIO. No digas "no debiste", "eso estuvo mal" ni nada que refuerce la culpa. La culpa alimentaria es destructiva.
-2. REENCUADRE POSITIVO: Transforma el "fracaso" en aprendizaje. Ej: "Que hayas comido bizcocho no borra todo tu progreso de la semana."
-3. COMPASIÓN ACTIVA: Muestra que entiendes por qué pasó. "La ansiedad es poderosa, y es normal buscar consuelo en la comida."
-4. SOLUCIÓN PRÁCTICA SIN PRESIÓN: Ofrece una opción reparadora suave (ej: "Si quieres, para la cena podemos ir más ligero con una ensalada proteica").
-5. NUNCA sugieras restricción extrema como castigo ("entonces no cenes" está PROHIBIDO).
-6. Usa un lenguaje cálido, cercano y reconfortante. Eres su aliado, no su juez."""
+1. SIN JUICIO: No digas "no debiste" ni refuerces sentimientos negativos. El progreso nutricional no es lineal.
+2. REENCUADRE POSITIVO: "Que hayas comido algo extra no borra tu progreso de la semana. Un solo momento no define tu proceso."
+3. COMPRENSIÓN: "Es completamente normal que a veces busquemos comida reconfortante. Es parte de ser humano."
+4. SOLUCIÓN PRÁCTICA: Ofrece una opción reparadora suave (ej: "Para equilibrar, en la próxima comida podemos ir con algo más ligero como una ensalada proteica").
+5. NUNCA sugieras saltarse comidas ni restricción extrema.
+6. Usa un lenguaje cálido, cercano y profesional. Eres su nutricionista de confianza."""
     },
     "motivation": {
         "name": "Entrenador Militar",
@@ -136,7 +136,11 @@ def classify_sentiment(user_message: str) -> dict:
         
         response = model.invoke(SENTIMENT_PROMPT.format(message=user_message[:300]))
         
-        raw = response.content.strip().lower().replace('"', '').replace("'", "")
+        # Manejar respuestas tipo lista (Gemini a veces devuelve content como list)
+        content = response.content
+        if isinstance(content, list):
+            content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
+        raw = str(content).strip().lower().replace('"', '').replace("'", "")
         
         # Extraer la categoría del response
         valid_sentiments = list(PERSONALITY_PROFILES.keys())

@@ -732,7 +732,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         if visual_facts_text: rag_context += f"Inventario Visual:\n{visual_facts_text}\n"
         rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
 
-    system_prompt = """Eres el agente asistente de nutrición IA de MealfitRD. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan generado o sus objetivos de dieta. Trata de dar respuestas al grano, conversacionales y amigables.
+    system_prompt = """Eres el agente asistente de nutrición IA de MealfitRD, una app profesional de nutrición clínica. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan generado o sus objetivos de dieta. Trata de dar respuestas al grano, conversacionales y amigables.
+CONTEXTO PROFESIONAL: Esta es una plataforma de nutrición clínica. Los usuarios hablarán sobre sus hábitos alimenticios, incluyendo momentos en que comieron de más, se sintieron mal por su alimentación, o quieren mejorar. Tu rol es guiarlos como nutricionista profesional con empatía y conocimiento. Todas las respuestas deben ser constructivas y orientadas a mejorar sus hábitos.
 IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
 REGLA CRUCIAL: El plan del usuario tiene 3 opciones distintas. Llámalas SIEMPRE "Opción A", "Opción B" y "Opción C".
 
