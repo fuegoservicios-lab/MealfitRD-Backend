@@ -54,6 +54,16 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from services import compute_plan_hash, merge_form_data_with_profile
 from vision_agent import process_image_with_vision, get_multimodal_embedding
 
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from proactive_agent import run_proactive_checks
+    scheduler = BackgroundScheduler()
+    HAS_SCHEDULER = True
+except ImportError as e:
+    logger.error(f"⚠️ [APScheduler] Falta instalar apscheduler o dependencias: {e}. El agente proactivo está deshabilitado.")
+    HAS_SCHEDULER = False
+    scheduler = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     
@@ -65,12 +75,31 @@ async def lifespan(app: FastAPI):
             # Setup requires a direct connection with autocommit=True because CREATE INDEX CONCURRENTLY cannot run inside a transaction
             with psycopg.connect(db_uri, autocommit=True) as conn:
                 PostgresSaver(conn).setup()
-            logger.info("🚀 [Postgres] Tablas de LangGraph Checkpointer verificadas/creadas.")
+                
+                # Crear tabla para Push Subscriptions
+                conn.execute("""
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
+                    subscription_data JSONB NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+                """)
+                
+            logger.info("🚀 [Postgres] Tablas de LangGraph Checkpointer y Push Subscriptions verificadas/creadas.")
         except Exception as e:
-            logger.error(f"⚠️ [Postgres] Error configurando checkpointer: {e}")
+            logger.error(f"⚠️ [Postgres] Error configurando DDL inicial: {e}")
+            
+    if HAS_SCHEDULER and scheduler:
+        scheduler.add_job(run_proactive_checks, "cron", minute=30)
+        scheduler.start()
+        logger.info("⏰ [APScheduler] Tareas proactivas en segundo plano iniciadas.")
             
     logger.info("🚀 [FastAPI] Servidor de MealfitRD IA iniciado con éxito en el puerto 3001.")
     yield
+    
+    if HAS_SCHEDULER and scheduler:
+        scheduler.shutdown()
     
     if connection_pool:
         connection_pool.close()
@@ -85,8 +114,11 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 from routers.billing import router as billing_router, webhooks_router
+from routers.notifications import router as notifications_router
+
 app.include_router(billing_router)
 app.include_router(webhooks_router)
+app.include_router(notifications_router)
 from routers.plans import router as plans_router
 app.include_router(plans_router)
 from routers.chat import router as chat_router

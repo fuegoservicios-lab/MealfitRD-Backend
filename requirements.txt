@@ -12,3 +12,5 @@ tenacity
 python-multipart
 redis
 sentry-sdk[fastapi]
+apscheduler
+pywebpush
