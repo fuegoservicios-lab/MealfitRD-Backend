@@ -164,6 +164,7 @@ async def api_chat_tts(data: dict = Body(...)):
     
     # Load and strip the API key to prevent whitespace or quotation errors
     api_key = os.getenv("ELEVENLABS_API_KEY", "").strip().strip('"').strip("'")
+    print(f"[DEBUG ELEVENLABS] Key starts with: '{api_key[:5]}', length: {len(api_key)}")
     if not api_key:
         raise HTTPException(status_code=500, detail="ElevenLabs API Key no configurada.")
         
