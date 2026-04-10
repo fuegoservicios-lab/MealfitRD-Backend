@@ -151,9 +151,50 @@ def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depend
         return {"success": True}
     return {"success": False, "error": "Faltan parámetros"}
 
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 import asyncio
+import os
+import httpx
 
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+
+@router.post("/tts")
+async def api_chat_tts(data: dict = Body(...)):
+    text = data.get("text")
+    if not text:
+        raise HTTPException(status_code=400, detail="Missing text")
+    
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=500, detail="ElevenLabs API Key no configurada.")
+        
+    # Voz "Rachel" predeterminada (fuerte en inglés/multilingüe) o equivalente
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL") # Bella
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
+    
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            return Response(content=resp.content, media_type="audio/mpeg")
+    except Exception as e:
+        from config import logger
+        logger.error(f"Error llamando a ElevenLabs: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error en generación TTS")
 
 @router.post("/feedback")
 async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
