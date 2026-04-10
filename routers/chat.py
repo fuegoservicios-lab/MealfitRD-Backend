@@ -192,7 +192,6 @@ async def api_chat_tts(data: dict = Body(...)):
             resp.raise_for_status()
             return Response(content=resp.content, media_type="audio/mpeg")
     except Exception as e:
-        from config import logger
         logger.error(f"Error llamando a ElevenLabs: {str(e)}")
         raise HTTPException(status_code=500, detail="Error en generación TTS")
 
