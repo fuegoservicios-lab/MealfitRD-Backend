@@ -688,11 +688,15 @@ El user_id del usuario actual es: {user_id}"""
     return str(content), final_state.get("updated_fields", {}), final_state.get("new_plan")
 
 from typing import Generator
+from sentiment_classifier import classify_sentiment
 
 def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
     memory = build_memory_context(session_id)
+    
+    # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO
+    sentiment_result = classify_sentiment(prompt)
     
     # RAG INJECTION (con Query Routing inteligente)
     user_facts_text = ""
@@ -754,6 +758,10 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
     system_prompt += "\n  - Si es Domingo o Lunes: Sugiere sutilmente hacer 'Meal Prep' (cocinar porciones extra) para ahorrar tiempo en la ajetreada semana laboral."
     system_prompt += "\n  - Si es Viernes o Sábado: Anímalo a disfrutar el fin de semana sin perder el control, o sugiérele ideas de comidas relajadas."
     system_prompt += "\nSé conversacional e intuitivo; no suenes como un robot leyendo el calendario, que se sienta natural."
+    
+    # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
+    if sentiment_result.get("instruction"):
+        system_prompt += f"\n\n{sentiment_result['instruction']}"
     
     system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
     
@@ -838,6 +846,10 @@ El user_id actual es: {user_id}"""
         return random.choice(opts.get(msg_type, ["Procesando..."]))
 
     yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('analizando')})}\n\n"
+    
+    # Emitir el sentimiento detectado al frontend
+    if sentiment_result.get("sentiment") != "neutral":
+        yield f"data: {json.dumps({'type': 'sentiment', 'sentiment': sentiment_result.get('sentiment'), 'personality': sentiment_result.get('name'), 'emoji': sentiment_result.get('emoji')})}\n\n"
     
     logger.info(f"⏳ [CHAT STREAM] LangGraph iniciando astream nativo para {session_id}...")
     
