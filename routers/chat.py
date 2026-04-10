@@ -185,6 +185,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         form_data = data.get("form_data", None)
         local_date = data.get("local_date", None)
         tz_offset = data.get("tz_offset", None)
+        is_call_mode = data.get("is_call_mode", False)
         
         # Validación de seguridad IDOR
         if user_id and user_id != "guest" and user_id != session_id:
@@ -223,7 +224,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                     user_id=user_id, 
                     form_data=form_data,
                     local_date=local_date,
-                    tz_offset=tz_offset
+                    tz_offset=tz_offset,
+                    is_call_mode=is_call_mode
                 ):
                     yield chunk
                     

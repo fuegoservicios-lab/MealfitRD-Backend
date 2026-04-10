@@ -28,3 +28,65 @@
 [2026-04-10T12:04:02.694399] [5f731500-d29f-47d8-a521-6922b1a7020f] 2.24s - LLM response received
 [2026-04-10T12:04:02.694399] [5f731500-d29f-47d8-a521-6922b1a7020f] 2.24s - Inserting SYSTEM_TITLE msg into DB
 [2026-04-10T12:04:02.853449] [5f731500-d29f-47d8-a521-6922b1a7020f] 2.40s - Insert successful. Finished.
+[2026-04-10T12:05:35.080204] [5f731500-d29f-47d8-a521-6922b1a7020f] 0.00s - Thread started
+[2026-04-10T12:05:35.301398] [5f731500-d29f-47d8-a521-6922b1a7020f] 0.22s - Title exists, returning
+[2026-04-10T12:08:33.276956] [5f731500-d29f-47d8-a521-6922b1a7020f] 0.00s - Thread started
+[2026-04-10T12:08:33.279007] [5f731500-d29f-47d8-a521-6922b1a7020f] 0.00s - Already generating, returning
+[2026-04-10T12:11:18.679998] [5f731500-d29f-47d8-a521-6922b1a7020f] 0.00s - Thread started
+[2026-04-10T12:11:18.682355] [5f731500-d29f-47d8-a521-6922b1a7020f] 0.00s - Already generating, returning
+[2026-04-10T12:38:55.790765] [4863c38a-8da8-4fdb-9b39-f60a644f939b] 0.00s - Thread started
+[2026-04-10T12:38:55.962962] [4863c38a-8da8-4fdb-9b39-f60a644f939b] 0.17s - Initializing LLM client
+[2026-04-10T12:38:56.740310] [4863c38a-8da8-4fdb-9b39-f60a644f939b] 0.95s - Calling LLM API
+[2026-04-10T12:38:58.060645] [4863c38a-8da8-4fdb-9b39-f60a644f939b] 2.27s - LLM response received
+[2026-04-10T12:38:58.060645] [4863c38a-8da8-4fdb-9b39-f60a644f939b] 2.27s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-10T12:38:58.239013] [4863c38a-8da8-4fdb-9b39-f60a644f939b] 2.45s - Insert successful. Finished.
+[2026-04-10T12:45:16.078404] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.00s - Thread started
+[2026-04-10T12:45:16.428591] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.35s - Initializing LLM client
+[2026-04-10T12:45:17.419330] [411a5628-b65b-4b32-bda5-59f5436721e1] 1.34s - Calling LLM API
+[2026-04-10T12:45:18.544246] [411a5628-b65b-4b32-bda5-59f5436721e1] 2.47s - LLM response received
+[2026-04-10T12:45:18.544246] [411a5628-b65b-4b32-bda5-59f5436721e1] 2.47s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-10T12:45:18.708796] [411a5628-b65b-4b32-bda5-59f5436721e1] 2.63s - Insert successful. Finished.
+[2026-04-10T12:45:43.014794] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.00s - Thread started
+[2026-04-10T12:45:43.021514] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.01s - Already generating, returning
+[2026-04-10T12:46:14.632038] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.00s - Thread started
+[2026-04-10T12:46:14.635078] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.00s - Already generating, returning
+[2026-04-10T12:47:39.289583] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.00s - Thread started
+[2026-04-10T12:47:39.290641] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.00s - Already generating, returning
+[2026-04-10T12:48:27.766106] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.00s - Thread started
+[2026-04-10T12:48:27.768644] [411a5628-b65b-4b32-bda5-59f5436721e1] 0.00s - Already generating, returning
+[2026-04-10T12:48:35.530249] [b8a5aa6d-48d8-4b09-8f50-0be9694346fe] 0.00s - Thread started
+[2026-04-10T12:48:35.687890] [b8a5aa6d-48d8-4b09-8f50-0be9694346fe] 0.16s - Initializing LLM client
+[2026-04-10T12:48:36.243457] [b8a5aa6d-48d8-4b09-8f50-0be9694346fe] 0.71s - Calling LLM API
+[2026-04-10T12:48:37.550515] [b8a5aa6d-48d8-4b09-8f50-0be9694346fe] 2.02s - LLM response received
+[2026-04-10T12:48:37.550515] [b8a5aa6d-48d8-4b09-8f50-0be9694346fe] 2.02s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-10T12:48:37.690918] [b8a5aa6d-48d8-4b09-8f50-0be9694346fe] 2.16s - Insert successful. Finished.
+[2026-04-10T12:49:41.850704] [1c7e2326-79fd-43a8-a0e4-7fbb455e6e7e] 0.00s - Thread started
+[2026-04-10T12:49:42.585460] [1c7e2326-79fd-43a8-a0e4-7fbb455e6e7e] 0.73s - Initializing LLM client
+[2026-04-10T12:49:43.110567] [1c7e2326-79fd-43a8-a0e4-7fbb455e6e7e] 1.26s - Calling LLM API
+[2026-04-10T12:49:44.410860] [1c7e2326-79fd-43a8-a0e4-7fbb455e6e7e] 2.56s - LLM response received
+[2026-04-10T12:49:44.411885] [1c7e2326-79fd-43a8-a0e4-7fbb455e6e7e] 2.56s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-10T12:49:44.566052] [1c7e2326-79fd-43a8-a0e4-7fbb455e6e7e] 2.72s - Insert successful. Finished.
+[2026-04-10T12:50:33.797670] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.00s - Thread started
+[2026-04-10T12:50:33.960036] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.16s - Initializing LLM client
+[2026-04-10T12:50:34.441507] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.64s - Calling LLM API
+[2026-04-10T12:50:36.239899] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 2.44s - LLM response received
+[2026-04-10T12:50:36.240431] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 2.44s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-10T12:50:36.426330] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 2.63s - Insert successful. Finished.
+[2026-04-10T12:53:08.208014] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.00s - Thread started
+[2026-04-10T12:53:08.210538] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.00s - Already generating, returning
+[2026-04-10T12:54:48.940120] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.00s - Thread started
+[2026-04-10T12:54:48.943297] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.01s - Already generating, returning
+[2026-04-10T12:55:24.265938] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.00s - Thread started
+[2026-04-10T12:55:24.269524] [0685fe0e-2d76-46c8-8300-ba476eecdc86] 0.00s - Already generating, returning
+[2026-04-10T12:57:11.293955] [d6343747-9564-47ac-accc-14866606cb0e] 0.00s - Thread started
+[2026-04-10T12:57:11.460274] [d6343747-9564-47ac-accc-14866606cb0e] 0.17s - Initializing LLM client
+[2026-04-10T12:57:11.973392] [d6343747-9564-47ac-accc-14866606cb0e] 0.68s - Calling LLM API
+[2026-04-10T12:57:13.487999] [d6343747-9564-47ac-accc-14866606cb0e] 2.19s - LLM response received
+[2026-04-10T12:57:13.489031] [d6343747-9564-47ac-accc-14866606cb0e] 2.20s - Inserting SYSTEM_TITLE msg into DB
+[2026-04-10T12:57:13.635773] [d6343747-9564-47ac-accc-14866606cb0e] 2.34s - Insert successful. Finished.
+[2026-04-10T13:01:20.285229] [d6343747-9564-47ac-accc-14866606cb0e] 0.00s - Thread started
+[2026-04-10T13:01:20.290389] [d6343747-9564-47ac-accc-14866606cb0e] 0.01s - Already generating, returning
+[2026-04-10T13:02:26.371391] [d6343747-9564-47ac-accc-14866606cb0e] 0.00s - Thread started
+[2026-04-10T13:02:26.373531] [d6343747-9564-47ac-accc-14866606cb0e] 0.00s - Already generating, returning
+[2026-04-10T13:03:33.016336] [d6343747-9564-47ac-accc-14866606cb0e] 0.00s - Thread started
+[2026-04-10T13:03:33.018363] [d6343747-9564-47ac-accc-14866606cb0e] 0.00s - Already generating, returning

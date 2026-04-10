@@ -703,7 +703,7 @@ El user_id del usuario actual es: {user_id}"""
 from typing import Generator
 from sentiment_classifier import classify_sentiment
 
-def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None) -> Generator[str, None, None]:
+def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False) -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
     memory = build_memory_context(session_id)
@@ -754,6 +754,15 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
 1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
 2. Usa viñetas (`-` o `•`) SIEMPRE para listar macros, ingredientes o pasos, haciéndolo súper visual y fácil de leer.
 3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso."""
+
+    if is_call_mode:
+        system_prompt = """Eres el agente asistente de nutrición IA de MealfitRD.
+🎙️ MODO LLAMADA DE VOZ ACTIVO: El usuario te está hablando mediante una llamada telefónica por voz.
+REGLAS SUPREMAS PARA LLAMADAS DE VOZ:
+- ¡EVITA EL MARKDOWN! No uses negritas, no uses viñetas, no uses listas.
+- HABLA COMO UN HUMANO: Tus respuestas deben leerse natural en voz alta. 
+- SÉ EXTREMADAMENTE BREVE: Resume toda tu respuesta a 1 o 2 oraciones máximo. Ve hiper directo al grano.
+- NUNCA des largas descripciones de platos a menos que el usuario te lo pida. Menciona solo el nombre principal."""
 
     now_chat = datetime.now()
     dias_chat = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
