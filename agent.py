@@ -53,11 +53,13 @@ from tools import (
 # Langchain Chat Model Initialization
 # Safety settings relajados: esta es una app de nutrición clínica donde los usuarios
 # hablan sobre hábitos alimenticios y emociones — los filtros por defecto bloquean falsamente.
+from google.genai.types import HarmCategory, HarmBlockThreshold
+
 _safety_settings = {
-    "HARM_CATEGORY_DANGEROUS_CONTENT": "OFF",
-    "HARM_CATEGORY_HARASSMENT": "BLOCK_ONLY_HIGH",
-    "HARM_CATEGORY_HATE_SPEECH": "BLOCK_ONLY_HIGH",
-    "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_ONLY_HIGH",
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.OFF,
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
 }
 
 llm = ChatGoogleGenerativeAI(
