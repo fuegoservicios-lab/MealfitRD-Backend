@@ -150,35 +150,7 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         # 8. Actualizar meal_likes
         supabase.table("meal_likes").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
         
-        # 9. Actualizar custom_shopping_items (con deduplicación)
-        try:
-            # Obtener items existentes del usuario registrado
-            existing_res = supabase.table("custom_shopping_items").select("item_name").eq("user_id", new_user_id).execute()
-            existing_names = set()
-            if existing_res.data:
-                existing_names = {row.get("item_name", "") for row in existing_res.data}
-            
-            # Obtener items del guest
-            guest_res = supabase.table("custom_shopping_items").select("id, item_name").in_("user_id", session_ids).execute()
-            if guest_res.data:
-                ids_to_migrate = []
-                ids_to_delete = []
-                for item in guest_res.data:
-                    if item.get("item_name", "") in existing_names:
-                        ids_to_delete.append(item["id"])  # Duplicado → eliminar
-                    else:
-                        ids_to_migrate.append(item["id"])
-                        existing_names.add(item.get("item_name", ""))  # Evitar dup entre guests
-                
-                if ids_to_migrate:
-                    supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("id", ids_to_migrate).execute()
-                if ids_to_delete:
-                    supabase.table("custom_shopping_items").delete().in_("id", ids_to_delete).execute()
-                    logger.warning(f"🧹 [MIGRATION] {len(ids_to_delete)} items duplicados eliminados, {len(ids_to_migrate)} migrados.")
-        except Exception as shop_mig_e:
-            logger.error(f"⚠️ [MIGRATION] Error migrando shopping items: {shop_mig_e}")
-            # Fallback: migrar todo sin deduplicar
-            supabase.table("custom_shopping_items").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        
         
         # 10. Recalcular frecuencias de ingredientes a partir de los planes migrados
         # Sin esto, el usuario registrado parte con freq=0 y pierde el historial de variedad.

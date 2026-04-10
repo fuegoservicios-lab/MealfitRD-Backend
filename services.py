@@ -13,15 +13,7 @@ from db import (
     check_recent_meal_plan_exists, 
     save_new_meal_plan_robust, 
     log_unknown_ingredients, 
-    get_shopping_plan_hash, 
-    save_shopping_plan_hash, 
-    add_custom_shopping_items, 
-    delete_auto_generated_shopping_items, 
-    get_custom_shopping_items, 
     get_user_profile, 
-    get_user_shopping_lock, 
-    purge_old_shopping_items, 
-    deduplicate_shopping_items, 
     get_or_create_session, 
     save_message, 
     insert_rejection, 
@@ -34,7 +26,6 @@ from constants import normalize_ingredient_for_tracking, GLOBAL_REVERSE_MAP
 
 # ⚠️ RESTRICCIÓN ARQUITECTÓNICA: services.py importa agent.py → agent.py NUNCA debe importar services.py.
 # Si agent.py necesita lógica de services.py en el futuro, usar lazy import dentro de la función.
-from agent import generate_auto_shopping_list
 from ai_helpers import generate_plan_title
 
 logger = logging.getLogger(__name__)
@@ -42,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 def compute_plan_hash(plan_data: dict) -> str:
     """Calcula un hash SHA-256 truncado del plan basado en ingredientes y suplementos.
-    Fuente única de verdad para detectar si un plan cambió (usado por cache de shopping list)."""
+    Fuente única de verdad para detectar si un plan cambió."""
     all_ingredients = []
     all_supplements = []
     for d in plan_data.get("days", []):
@@ -54,31 +45,13 @@ def compute_plan_hash(plan_data: dict) -> str:
             all_supplements.append(s.get("name", ""))
     return hashlib.sha256(
         json.dumps(
-            {"ingredients": all_ingredients, "supplements": sorted(set(all_supplements)), "version": "v4_multiday"},
+            {"ingredients": all_ingredients, "supplements": sorted(set(all_supplements)), "version": "v7_deterministic_math"},
             sort_keys=True, ensure_ascii=False
         ).encode()
     ).hexdigest()[:16]
 
 
-def regenerate_shopping_list_safe(
-    user_id: str,
-    items: list,
-    existing_items: list,
-    plan_hash: str
-):
-    """Ejecuta la operación atómica INSERT-FIRST / DELETE-OLD de la lista de compras.
-    Incluye lock per-user, preservación de checkmarks, purga y deduplicación.
-    Centralizado para evitar DRY violation entre app.py y _save_plan_and_track_background."""
-    shopping_lock = get_user_shopping_lock(user_id)
-    with shopping_lock:
-        _preserve_shopping_checkmarks(existing_items, items)
-        result = add_custom_shopping_items(user_id, items, source="auto")
-        new_ids = [r.get("id") for r in result if r.get("id")] if result and isinstance(result, list) else []
-        delete_auto_generated_shopping_items(user_id, exclude_ids=new_ids)
-        purge_old_shopping_items(user_id)
-        deduplicate_shopping_items(user_id)
-        save_shopping_plan_hash(user_id, plan_hash)
-    return result
+
 
 
 def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dict:
@@ -113,45 +86,10 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
         logger.error(f"⚠️ Error cargando health profile en chat: {e}")
     return merged
 
-def _preserve_shopping_checkmarks(existing_items: list, new_items: list):
-    """Mantiene activa la casilla de ingredientes ya comprados (is_checked=True) al regenerar el plan."""
-    if not existing_items or not new_items:
-        return
-    
-    def _normalize(text: str) -> str:
-        if not text: return ""
-        nfkd = unicodedata.normalize('NFKD', text.lower().strip())
-        return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
 
-    checked_names = set()
-    for old in existing_items:
-        if old.get("is_checked"):
-            name = old.get("display_name")
-            if not name:
-                raw = old.get("item_name", "")
-                if raw.startswith("{"):
-                    try:
-                        parsed = json.loads(raw)
-                        name = parsed.get("name", raw)
-                    except Exception:
-                        name = raw
-                else:
-                    name = raw
-            norm = _normalize(name)
-            if norm:
-                checked_names.add(norm)
-                
-    if not checked_names:
-        return
-        
-    for new_item in new_items:
-        if isinstance(new_item, dict):
-            n_name = _normalize(new_item.get("name", ""))
-            if n_name in checked_names:
-                new_item["is_checked"] = True
 
 def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
-    """Background task: Guarda el plan JSON en supabase y trackea frecuencias, O(1)."""
+    """Background task para guardar plan y actualizar frecuencias de ingredientes."""
     try:
         # 1. Guardar Plan O(1) Arrays
         if supabase:
@@ -216,54 +154,7 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                 
             logger.info(f"📈 [FREQ TRACKING] Frecuencias actualizadas en background para {user_id} ({len(canonical)} ingredientes canónicos trackeados)")
             
-        # 3. Auto-generar lista de compras (background, con cache por hash)
-        try:
-            plan_hash = compute_plan_hash(plan_data)
-            if not plan_hash:
-                raise ValueError("Plan sin ingredientes para hashear")
-                
-            stored_hash = get_shopping_plan_hash(user_id)
-            existing = get_custom_shopping_items(user_id)
-            existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
-            
-            # 🔒 REGLA DE TIEMPO PARA BACKGROUND (Evita mutación sutil si ya hay lista vigente)
-            locked = False
-            if existing_items:
-                try:
-                    from datetime import timezone
-                    hp = get_user_profile(user_id)
-                    hp_data = hp.get("health_profile", {}) if hp else {}
-                    cycle_days = hp_data.get("shopping_cycle", {}).get("duration_days", 7)
-                    
-                    created_at_strs = [i.get("created_at") for i in existing_items if i.get("created_at")]
-                    if created_at_strs:
-                        oldest_str = min(created_at_strs)
-                        if oldest_str.endswith("Z"):
-                            oldest_str = oldest_str[:-1] + "+00:00"
-                        created_dt = datetime.fromisoformat(oldest_str)
-                        if created_dt.tzinfo is None:
-                            created_dt = created_dt.replace(tzinfo=timezone.utc)
-                            
-                        days_elapsed = (datetime.now(timezone.utc) - created_dt).days
-                        if days_elapsed < cycle_days:
-                            locked = True
-                            logger.info(f"🔒 [BACKGROUND BLOCKED] Lista auto-generada está vigente: {days_elapsed}/{cycle_days} días. Cancelando regeneración destructiva en background.")
-                except Exception as e:
-                    logger.error(f"Error parseando límite de compras en background para {user_id}: {e}")
 
-            if locked:
-                logger.debug(f"✅ [BACKGROUND SKIP] Plan ignorado por la lista de compras actual (Aún válida).")
-            elif stored_hash != plan_hash:
-                items = generate_auto_shopping_list(plan_data)
-                if items:
-                    regenerate_shopping_list_safe(user_id, items, existing_items, plan_hash)
-                    logger.debug(f"🛒 [BACKGROUND] Lista de compras auto-generada ({len(items)} items) para {user_id}")
-                else:
-                    logger.warning(f"⚠️ [BACKGROUND] No se pudieron consolidar ingredientes para {user_id}")
-            else:
-                logger.debug(f"✅ [BACKGROUND CACHE HIT] Plan sin cambios, lista de compras ya actualizada para {user_id}")
-        except Exception as shop_e:
-            logger.error(f"⚠️ [BACKGROUND] Error auto-generando lista de compras: {shop_e}")
             
     except Exception as e:
         logger.error(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")

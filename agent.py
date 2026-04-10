@@ -8,7 +8,7 @@ import re
 import unicodedata
 logger = logging.getLogger(__name__)
 
-from constants import strip_accents, parse_ingredient_qty, CULINARY_KNOWLEDGE_BASE
+from constants import strip_accents, CULINARY_KNOWLEDGE_BASE
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -27,28 +27,26 @@ import concurrent.futures
 import traceback
 from datetime import datetime, timezone
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
-from schemas import SemanticDedupResult
-from constants import categorize_shopping_item
 from memory_manager import build_memory_context
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
 from langgraph.checkpoint.postgres import PostgresSaver
-from db import get_user_ingredient_frequencies, get_custom_shopping_items, get_latest_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, get_consumed_meals_today
+from db import get_user_ingredient_frequencies, get_latest_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, get_consumed_meals_today
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, ShoppingListModel
+from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
 from prompts import (
     DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE, 
-    AUTO_SHOPPING_LIST_PROMPT, TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT,
-    CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE, SEMANTIC_DEDUP_PROMPT
+    CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE,
+    TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT
 )
 
 from tools import (
     update_form_field, generate_new_plan_from_chat,
     log_consumed_meal, modify_single_meal,
-    add_to_shopping_list, remove_from_shopping_list, search_deep_memory, agent_tools, analyze_preferences_agent,
+    search_deep_memory, agent_tools, analyze_preferences_agent,
     execute_generate_new_plan, execute_modify_single_meal
 )
 
@@ -71,7 +69,6 @@ from constants import (
     _get_fast_filtered_catalogs
 )
 def swap_meal(form_data: dict):
-    ingredient_names = []  # Inicializar para evitar NameError si el bloque de shopping constraint no se ejecuta
     rejected_meal = form_data.get("rejected_meal", "")
     meal_type = form_data.get("meal_type", "Comida")
     target_calories = form_data.get("target_calories", 0)
@@ -94,46 +91,14 @@ def swap_meal(form_data: dict):
     if all_disliked: 
         context_extras += f"\n    - 🚫 EXCLUSIÓN ESTRICTA: ESTÁ TOTALMENTE PROHIBIDO generar cualquier plato o ingrediente principal de esta lista: {', '.join(list(all_disliked))}. NINGÚN PLATO NUEVO PUEDE LLAMARSE IGUAL NI PARECERSE."
         
-        
     if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
-
-    # --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
-    user_id = form_data.get("user_id")
-    if user_id and user_id != "guest":
-        try:
-            existing = get_custom_shopping_items(user_id)
-            existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
-            if existing_items:
-                excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
-                ingredient_names = []
-                for item in existing_items:
-                    if item.get("category") in excluded_cats:
-                        continue
-                    
-                    # Solo consideramos ingredientes que ya están marcados como comprados (en despensa)
-                    if not item.get("is_checked", False):
-                        continue
-                    
-                    name_val = item.get("display_name")
-                    if not name_val:
-                        i_name = item.get("item_name")
-                        if i_name:
-                            try:
-                                parsed = json.loads(i_name)
-                                name_val = parsed.get("name") if isinstance(parsed, dict) else str(i_name)
-                            except Exception:
-                                name_val = str(i_name)
-                    if not name_val:
-                        name_val = item.get("name")
-                        
-                    if name_val:
-                        ingredient_names.append(str(name_val).strip())
-                if ingredient_names:
-                    context_extras += f"\n    - ⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE: El usuario YA COMPRÓ su comida y no puede comprar nada más. TIENES ESTRICTAMENTE PROHIBIDO sugerir frutas, vegetales, carnes, lácteos, cereales o cualquier ingrediente que no esté en esta lista exacta: [{', '.join(ingredient_names)}]. Si la lista incluye tomate y cebolla, usa SOLO tomate y cebolla, no inventes lechuga ni aguacate. ESPECIAL ATENCIÓN: Si no ves pollo, pescado ni carnes en la lista, TIENES PROHIBIDO inventarlos; debes crear un plato vegetariano o basado en los granos/quesos que sí tenga la lista. La receta alternativa DEBE limitarse al 100% a lo que hay en esta lista."
-                    logger.info("🛒 [CONSTRAINT] Restricción de lista de compras añadida en swap_meal (agent).")
-        except Exception as check_e:
-            logger.error(f"Error revisando lista de compras en swap_meal: {check_e}")
-    # ----------------------------------------
+    
+    # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES ---
+    current_shopping_list = form_data.get("current_shopping_list", [])
+    if current_shopping_list and isinstance(current_shopping_list, list) and len(current_shopping_list) > 0:
+        clean_ingredients = [item.strip() for item in current_shopping_list if item and isinstance(item, str) and len(item) > 2]
+        if clean_ingredients:
+            context_extras += f"\n    - ⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario quiere cambiar este plato pero DEBES utilizar ingredientes que ya estén en su lista actual. Ingredientes disponibles: {', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, sin agregar ingredientes foráneos."
 
     # --- ANTI MODE-COLLAPSE PARA SWAPS (Proteína + Carbohidrato + Vegetal) ---
     # Sugerir alternativas en las 3 dimensiones usando peso inverso por frecuencia
@@ -188,11 +153,8 @@ def swap_meal(form_data: dict):
             suggestions.append(f"**{suggested_veggie}** como vegetal/grasa")
         
         if suggestions:
-            if not ingredient_names:
-                context_extras += f"\n    - 💡 SUGERENCIA DE VARIEDAD: Para este swap, intenta usar {', '.join(suggestions)} (o ingredientes radicalmente diferentes al rechazado)."
-                logger.debug(f"🎲 [SWAP ANTI MODE-COLLAPSE] Sugerencias: {suggestions}")
-            else:
-                logger.debug("🛡️ [SWAP ANTI MODE-COLLAPSE] Desactivado debido a la Regla de Supermercado estricta.")
+            context_extras += f"\n    - 💡 SUGERENCIA DE VARIEDAD: Para este swap, intenta usar {', '.join(suggestions)} (o ingredientes radicalmente diferentes al rechazado)."
+            logger.debug(f"🎲 [SWAP ANTI MODE-COLLAPSE] Sugerencias: {suggestions}")
     except Exception:
         pass  # No bloquear el swap si falla la sugerencia
 
@@ -210,7 +172,7 @@ def swap_meal(form_data: dict):
         context_extras=context_extras
     )
     
-    temp = 0.2 if ingredient_names else 0.8
+    temp = 0.8
     swap_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
         temperature=temp, 
@@ -243,252 +205,8 @@ def swap_meal(form_data: dict):
         raise ValueError("El modelo de IA generó una respuesta inválida. Por favor, reintenta.")
 
 
-def _pre_consolidate_ingredients_multiday(ingredients: list, base_days: int = 3) -> list:
-    """Pre-consolida ingredientes sumando cantidades en Python, y genera las cantidades crudas para 7, 15 y 30 días."""
-    
-    def _normalize(text: str) -> str:
-        if not text: return ""
-        nfkd = unicodedata.normalize('NFKD', text.lower().strip())
-        return re.sub(r'\s+', ' ', ''.join(c for c in nfkd if not unicodedata.combining(c)))
 
-    groups = {}
-    order = []
-    
-    for item in ingredients:
-        ing_str = item.get("raw", "") if isinstance(item, dict) else item
-        meal_slot = item.get("meal_slot", "Desayuno") if isinstance(item, dict) else "Desayuno"
-        
-        if not isinstance(ing_str, str) or not ing_str.strip():
-            continue
-            
-        num, unit, name = parse_ingredient_qty(ing_str, to_metric=False)
-        key = (_normalize(name), _normalize(unit))
-        
-        if key not in groups:
-            groups[key] = {"total": num, "unit": unit, "name": name, "raw": ing_str, "meal_slots": [meal_slot], "can_sum": num is not None}
-            order.append(key)
-        else:
-            entry = groups[key]
-            if meal_slot not in entry["meal_slots"]:
-                entry["meal_slots"].append(meal_slot)
-                
-            if entry["can_sum"] and num is not None:
-                entry["total"] = (entry["total"] or 0) + num
-            else:
-                entry["can_sum"] = False
-    
-    result = []
-    
-    def format_qty(qty):
-        return str(int(qty)) if qty == int(qty) else f"{qty:.2f}"
-            
-    for key in order:
-        entry = groups[key]
-        slots = entry["meal_slots"] if entry["meal_slots"] else ["Desayuno"]
-        
-        # Intelligent meal_slot selection for shared ingredients
-        name_lower = entry["name"].lower()
-        DESPENSA_NAMES = {"aceite", "sal", "sazón", "sazon", "caldo", "pimienta", "orégano", "oregano", "ajo", "cebolla", "canela", "vinagre", "mayonesa", "mostaza", "aderezo", "salsa"}
-        VERSATIL_NAMES = {"aguacate", "ensalada", "melón", "melon", "lechuga", "tomate", "limón", "limon", "pepino", "atún", "atun", "avena", "galleta", "huevo", "huevos", "leche", "yogur", "yogurt", "mango"}
-        
-        if any(kw in name_lower for kw in DESPENSA_NAMES):
-            slot = "Despensa"
-        elif any(kw in name_lower for kw in VERSATIL_NAMES):
-            # Estos alimentos son versátiles por naturaleza — sirven para cualquier comida
-            slot = "Versátil"
-        elif len(slots) > 1:
-            # Ingrediente compartido entre 2+ comidas → es versátil
-            slot = "Versátil"
-        else:
-            slot = slots[0]
-        
-        all_slots_str = ", ".join(slots)  # Pass all slots to LLM for context
-        
-        if entry["can_sum"] and entry["total"] is not None:
-            base_total = entry["total"]
-            div = base_days if base_days > 0 else 1
-            
-            bulk_units = {"paquete", "paquetes", "botella", "botellas", "funda", "fundas", "lata", "latas", "frasco", "frascos", "galón", "galones", "cartón", "cartones", "pote", "potes", "caja", "cajas", "saco", "sacos", "fardo", "fardos", "bandeja", "bandejas"}
-            unit_lower = entry["unit"].lower() if entry["unit"] else ""
 
-            if unit_lower in bulk_units:
-                # Prevenir escalado agresivo para unidades de compra masiva (ej: paquete, botella)
-                # Si el usuario solicitó 1 paquete explícitamente en el plan, mantenemos 1 paquete para la semana.
-                # Al escalar a más días (15 o 30), incrementamos basándonos en semanas.
-                t7 = max(int(round(base_total)), 1)
-                t15 = t7 * 2
-                t30 = t7 * 4
-            else:
-                t7 = base_total * (7 / div)
-                t15 = base_total * (15 / div)
-                t30 = base_total * (30 / div)
-            
-            unit_part = f" {entry['unit']}" if entry["unit"] else ""
-            
-            result.append({
-                "name": entry['name'],
-                "meal_slot": slot,
-                "raw_qty_7_days": f"{format_qty(t7)}{unit_part}".strip(),
-                "raw_qty_15_days": f"{format_qty(t15)}{unit_part}".strip(),
-                "raw_qty_30_days": f"{format_qty(t30)}{unit_part}".strip()
-            })
-        else:
-            result.append({
-                "name": entry["raw"],
-                "meal_slot": slot,
-                "raw_qty_7_days": "Al gusto / Variable",
-                "raw_qty_15_days": "Al gusto / Variable",
-                "raw_qty_30_days": "Al gusto / Variable"
-            })
-    
-    return result
-
-def generate_auto_shopping_list(plan_data: dict) -> list:
-    """Extrae ingredientes del plan, pre-conslida las cantidades para 7, 15 y 30 días y categoriza por pasillo de supermercado."""
-    logger.info("\n-------------------------------------------------------------")
-    logger.debug("🛒 [AUTO-SHOPPING LIST] Consolidando ingredientes del plan para 7/15/30 días...")
-    
-    ingredients = []
-    days = plan_data.get("days", [])
-    base_plan_length = len(days)
-    
-    if base_plan_length == 0:
-        return []
-        
-    for day_data in days:
-        for m in day_data.get("meals", []):
-            ing = m.get("ingredients", [])
-            meal_name = m.get("meal", "Desayuno")
-            if ing:
-                for idx in ing:
-                    ingredients.append({
-                        "raw": idx,
-                        "meal_slot": meal_name
-                    })
-                
-    if not ingredients:
-        return []
-    
-    ingredients_json = _pre_consolidate_ingredients_multiday(ingredients, base_days=base_plan_length)
-    logger.debug(f"🧮 [PRE-CONSOLIDACIÓN] {len(ingredients_json)} ingredientes únicos listos para LLM.")
-        
-    prompt = AUTO_SHOPPING_LIST_PROMPT.format(ingredients_json=json.dumps(ingredients_json, ensure_ascii=False))
-    
-    shopping_llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
-        temperature=0.0,
-        timeout=120,  # 120s por intento (Pro es un poco más lento pero más preciso)
-        google_api_key=os.environ.get("GEMINI_API_KEY")
-    ).with_structured_output(ShoppingListModel)
-    
-    try:
-        @retry(
-            stop=stop_after_attempt(3),
-            wait=wait_exponential(multiplier=1, min=2, max=8),
-            reraise=True,
-            before_sleep=lambda retry_state: print(f"⚠️  [SHOPPING] Reintento #{retry_state.attempt_number} tras error en auto-generación...")
-        )
-        def invoke_shopping_with_retry():
-            return shopping_llm.invoke(prompt)
-        
-        response = invoke_shopping_with_retry()
-        if hasattr(response, "items"):
-            items = response.items
-        elif isinstance(response, dict) and "items" in response:
-            items = response["items"]
-        else:
-            items = []
-            
-        logger.info(f"✅ Se consolidaron ingredientes en {len(items)} categorías multiday.")
-        logger.info("-------------------------------------------------------------\n")
-        
-        # Pydantic a Dict serializable si no lo es
-        if items and not isinstance(items[0], dict):
-            items = [item.model_dump() if hasattr(item, "model_dump") else getattr(item, "dict")() for item in items]
-            
-        # Si el array results estaba vacío (el modelo no supo generar por rate limits/fallo total rápido) y no lanzó error
-        if not items:
-            raise ValueError("Fallback local forzado: Respuesta del modelo vacía.")
-        
-        # 🏷️ Las categorías ya están estrictamente normalizadas por el uso de Literal en ShoppingItemModel
-        logger.debug(f"🏷️ [NORMALIZACIÓN ESTRICTA] Categorías finales: {set(item.get('category', '') for item in items)}")
-        
-        # 🛡️ POST-PROCESAMIENTO: Atrapar "Despensa General" o slot inválido
-        VALID_MEAL_SLOTS = {"Desayuno", "Almuerzo", "Merienda", "Cena", "Versátil", "Despensa", "Suplementos"}
-        BREAKFAST_KEYWORDS = {"pan", "queso cottage", "cereal", "granola", "miel", "mermelada", "mantequilla de maní", "café", "té"}
-        DESPENSA_KEYWORDS = {"aceite", "sal", "sazón", "sazon", "caldo", "pimienta", "orégano", "oregano", "ajo", "cebolla", "canela", "vinagre", "mayonesa", "mostaza", "salsa", "aderezo"}
-        VERSATIL_KEYWORDS = {"aguacate", "ensalada", "lechuga", "tomate", "pepino", "limón", "limon", "atún", "atun", "avena", "galleta", "huevo", "huevos", "leche", "yogur", "yogurt", "mango", "melón", "melon"}
-        for item in items:
-            slot = item.get("meal_slot", "")
-            if slot == "Despensa General":
-                item["meal_slot"] = "Despensa"
-                logger.debug(f"🔄 [RECLASIFICACIÓN] '{item.get('name')}' 'Despensa General' → 'Despensa'")
-            elif slot not in VALID_MEAL_SLOTS:
-                item_name_lower = item.get("name", "").lower()
-                if any(kw in item_name_lower for kw in BREAKFAST_KEYWORDS):
-                    item["meal_slot"] = "Desayuno"
-                elif any(kw in item_name_lower for kw in DESPENSA_KEYWORDS):
-                    item["meal_slot"] = "Despensa"
-                elif any(kw in item_name_lower for kw in VERSATIL_KEYWORDS):
-                    item["meal_slot"] = "Versátil"
-                else:
-                    item["meal_slot"] = "Almuerzo"
-                logger.debug(f"🔄 [RECLASIFICACIÓN] '{item.get('name')}' movido de '{slot}' → '{item['meal_slot']}'")
-        # Segunda pasada: Forzar Despensa y Versátil por keywords
-        for item in items:
-            item_name_lower = item.get("name", "").lower()
-            if any(kw in item_name_lower for kw in DESPENSA_KEYWORDS) and item.get("meal_slot") not in {"Despensa", "Suplementos"}:
-                old_slot = item["meal_slot"]
-                item["meal_slot"] = "Despensa"
-                logger.debug(f"🏪 [DESPENSA] '{item.get('name')}' movido de '{old_slot}' → 'Despensa'")
-            elif any(kw in item_name_lower for kw in VERSATIL_KEYWORDS) and item.get("meal_slot") not in {"Versátil", "Despensa", "Suplementos"}:
-                old_slot = item["meal_slot"]
-                item["meal_slot"] = "Versátil"
-                logger.debug(f"🔄 [VERSÁTIL] '{item.get('name')}' movido de '{old_slot}' → 'Versátil'")
-        
-        # 💊 Inyectar suplementos del plan como items de lista de compras
-        seen_supps = set()
-        for day_data in days:
-            for supp in day_data.get("supplements") or []:
-                supp_name = supp.get("name", "").strip()
-                if supp_name and supp_name.lower() not in seen_supps:
-                    seen_supps.add(supp_name.lower())
-                    dose = supp.get("dose", "1 unidad")
-                    items.append({
-                        "category": "Suplementos",
-                        "meal_slot": "Suplementos",
-                        "emoji": "💊",
-                        "name": supp_name,
-                        "qty_7": f"{dose} /día · 7 días",
-                        "qty_15": f"{dose} /día · 15 días",
-                        "qty_30": f"{dose} /día · 30 días",
-                    })
-        if seen_supps:
-            logger.info(f"💊 [SUPLEMENTOS] {len(seen_supps)} suplementos añadidos a la lista de compras: {seen_supps}")
-            
-        return items
-    except Exception as e:
-        logger.error(f"❌ Error generando auto shopping list multiday (tras reintentos): {e}")
-        # 🛡️ Fallback local: categorizar ingredientes sin LLM para no perder la lista
-        logger.debug("🔄 [FALLBACK] Generando lista básica con categorización local (sin LLM)...")
-        try:
-            fallback_items = []
-            for ing in ingredients_json:
-                cat, emoji = categorize_shopping_item(ing["name"])
-                fallback_items.append({
-                    "category": cat,
-                    "meal_slot": ing.get("meal_slot", "Desayuno"),
-                    "emoji": emoji,
-                    "name": str(ing.get("name", "")).strip().capitalize(),
-                    "qty_7": ing.get("raw_qty_7_days", ""),
-                    "qty_15": ing.get("raw_qty_15_days", ""),
-                    "qty_30": ing.get("raw_qty_30_days", "")
-                })
-            logger.debug(f"✅ [FALLBACK] {len(fallback_items)} ingredientes categorizados localmente.")
-            return fallback_items
-        except Exception as fallback_e:
-            logger.error(f"❌ [FALLBACK] Error en categorización local: {fallback_e}")
-            return []
 
 
 
@@ -878,8 +596,8 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida que el usuario afirme haber comido. Si analizas una foto de una comida y el usuario confirma que se la comió, USA ESTA HERRAMIENTA usando los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos a la herramienta.
 - Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos en la Opción A', 'ponle más proteína al almuerzo', 'quítale el arroz a la cena de la Opción B'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. Debes identificar correctamente el day_number (1 para Opción A, 2 para Opción B, o 3 para Opción C) y el meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda') del plan activo del usuario. Si el usuario no especifica, asume 1 (Opción A).
-- Usa `add_to_shopping_list` cuando el usuario diga que se quedó sin algo o pida añadir items. **ATENCIÓN:** Si el usuario te envía una foto o lista completa diciendo "esta es mi lista de compras actual", usa esta herramienta con `overwrite=True` para REEMPLAZAR todo. CRÍTICO: Extrae cada alimento y asígnale su CANTIDAD EXACTA unitaria (campo 'qty'), CATEGORÍA (campo 'category') y MOMENTO DE COMIDA (campo 'meal_slot': "Desayuno", "Almuerzo", "Merienda" o "Cena") (ej: name: "Huevos", qty: "1 Cartón (30 unidades)", category: "Lácteos y Huevos", meal_slot: "Desayuno"). El sistema protegerá automáticamente los ingredientes de su almuerzo.
-- Usa `remove_from_shopping_list` cuando el usuario pida explícitamente quitar, remover o borrar uno o más productos de su lista de compras activa.
+
+
 
 El user_id del usuario actual es: {user_id}"""
 
@@ -1047,8 +765,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida consumida.
 - Usa `modify_single_meal` para cambios puntuales.
-- Usa `add_to_shopping_list` para añadir compras, o con `overwrite=True` si envía toda su despensa actual. CRÍTICO: Extrae cada alimento, su 'qty' y su 'category' de cada elemento JSON (ej: name: 'Avena', qty: '1 paquete', category: 'Frutas y Vegetales'). El sistema salvará automáticamente los ingredientes del almuerzo.
-- Usa `remove_from_shopping_list` para remover puntualmente items de su lista de compras.
+
 El user_id actual es: {user_id}"""
 
     if current_plan:

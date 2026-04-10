@@ -20,11 +20,11 @@ import re as _re
 # NOTA: NO importar 'from agent import ...' a nivel de módulo → causa import circular
 # (app → agent → tools → graph_orchestrator → agent). Se usa lazy import donde se necesite.
 from cpu_tasks import _validar_repeticiones_cpu_bound, _normalize_meal_name
+from constants import normalize_ingredient_for_tracking, strip_accents, TECHNIQUE_FAMILIES, ALL_TECHNIQUES, TECH_TO_FAMILY, SUPPLEMENT_NAMES
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
-from db import get_recent_techniques, get_recent_meals_from_plans, check_meal_plan_generated_today, get_custom_shopping_items, search_user_facts, search_visual_diary, get_user_facts_by_metadata
+from db import get_recent_techniques, get_recent_meals_from_plans, check_meal_plan_generated_today, search_user_facts, search_visual_diary, get_user_facts_by_metadata
 from nutrition_calculator import get_nutrition_targets
-from constants import TECHNIQUE_FAMILIES, ALL_TECHNIQUES, TECH_TO_FAMILY, SUPPLEMENT_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,8 @@ class PlanState(TypedDict):
     # Control de flujo
     attempt: int
     user_facts: str
+    
+
 
 
 # ============================================================
@@ -296,8 +298,11 @@ Estos son datos críticos que debes respetar.
     
     is_re_roll = form_data.get("_is_same_day_reroll", False)
     # Structured Output constraints crash/hang on Gemini if temperature > 1.0 due to generation mask mismatch.
-    # We use 0.7 for standard, 0.95 for maximum variety same-day reroll.
-    base_temp = 0.95 if is_re_roll else 0.7
+    # We use 0.7 for standard and 0.95 for maximum variety same-day reroll.
+    if is_re_roll:
+        base_temp = 0.95
+    else:
+        base_temp = 0.7
     
     generator_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
@@ -555,6 +560,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         except Exception as e:
             print(f"⚠️ [ANTI-REPETICIÓN] Error en validación (no bloqueante): {e}")
     
+    
     if approved:
         print(f"✅ [REVISOR MÉDICO] Plan APROBADO en {duration}s ✅")
         return {
@@ -665,7 +671,7 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                     "\n\n--- HISTORIAL RECIENTE (PLATOS YA GENERADOS) ---\n"
                     "Estos platos fueron generados recientemente para el usuario:\n"
                     f"{json.dumps(recent_meals, ensure_ascii=False)}\n"
-                    "🚨 REGLA DE ORO OBLIGATORIA: Puedes reutilizar los mismos INGREDIENTES de estos platos para optimizar las compras del supermercado, PERO ESTÁ ESTRICTAMENTE PROHIBIDO repetir el mismo PLATO O PREPARACIÓN EXACTA.\n"
+                    "🚨 REGLA DE ORO OBLIGATORIA: Puedes reutilizar los mismos INGREDIENTES de estos platos para optimizar tus ingredientes, PERO ESTÁ ESTRICTAMENTE PROHIBIDO repetir el mismo PLATO O PREPARACIÓN EXACTA.\n"
                     "Por ejemplo: Si dice 'Mangú de Plátano', NO uses Mangú, pero sí puedes usar el plátano para un Mofongo o Plátano Hervido.\n"
                     "Cambia la forma de cocinarlos y combínalos distinto. NO repitas el mismo nombre o concepto de plato en toda la semana (a menos que el usuario lo pida).\n"
                     "----------------------------------------------------------------------"
@@ -678,92 +684,35 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     if previous_meals and user_id:
         try:
             
-            # Si el plan anterior se generó en el mismo día, interpretamos como RECHAZO
+            # Check if this is a Pantry Rotation vs a Full Rejected Plan Regeneration
+            is_rotation = bool(actual_form_data.get("current_shopping_list"))
+
+            # Si el plan anterior se generó en el mismo día, interpretamos como RECHAZO o ROTACIÓN
             if check_meal_plan_generated_today(user_id):
-                print("🔄 [REGENERACIÓN] Usuario solicitó 'Generar Nueva Opción' el mismo día = RECHAZO del menú actual.")
-                
-                # Inyectamos una regla simplificada y positiva para evitar que el LLM sufra parálisis de restricciones (504 Timeout)
-                history_context += (
-                    f"\n\n🚨 INSTRUCCIÓN DE VARIEDAD (RE-ROLL) 🚨\n"
-                    f"El usuario quiere cambiar las siguientes opciones de hoy:\n{', '.join(previous_meals)}\n"
-                    f"REGLA CREATIVA: Inventa preparaciones inéditas. Cambia el método de cocción, la combinación o el corte para sorprender al usuario con algo nuevo usando la misma lista de compras.\n"
-                    f"----------------------------------------------------------------------\n"
-                )
-                # Añadimos una bandera secreta para subir la temperatura del LLM
-                actual_form_data["_is_same_day_reroll"] = True
+                if is_rotation:
+                    print("🔄 [ROTACIÓN DE PLATOS] Generando nuevas recetas ESTRICTAMENTE con la misma despensa.")
+                    history_context += (
+                        f"\n\n🚨 INSTRUCCIÓN DE ROTACIÓN DE MENÚ 🚨\n"
+                        f"El usuario solicitó 'Rotar Platos'. EVITA estas preparaciones anteriores:\n{', '.join(previous_meals)}\n"
+                        f"DEBES inventar nuevas recetas pero OBLIGATORIAMENTE usando SOLO los ingredientes explícitos permitidos en la despensa base.\n"
+                        f"----------------------------------------------------------------------\n"
+                    )
+                    actual_form_data["_is_rotation_reroll"] = True
+                else:
+                    print("🔄 [REGENERACIÓN] Usuario solicitó 'Generar Nueva Opción' el mismo día = RECHAZO del menú actual.")
+                    
+                    history_context += (
+                        f"\n\n🚨 INSTRUCCIÓN DE VARIEDAD (RE-ROLL) 🚨\n"
+                        f"El usuario quiere cambiar completamente las opciones de hoy:\n{', '.join(previous_meals)}\n"
+                        f"REGLA CREATIVA: Inventa preparaciones inéditas. Cambia el método de cocción, la combinación o el corte para sorprender al usuario con algo nuevo.\n"
+                        f"----------------------------------------------------------------------\n"
+                    )
+                    actual_form_data["_is_same_day_reroll"] = True
             else:
                 print("🌅 [NUEVO DÍA] Generación para un nuevo día iniciada.")
         except Exception as e:
             print(f"⚠️ Error validando regeneración del mismo día: {e}")
 
-    # 2.2 --- CONSTRICCIÓN DE LISTA DE COMPRAS ---
-    if user_id:
-        try:
-            existing = get_custom_shopping_items(user_id)
-            existing_items = existing.get("data", []) if isinstance(existing, dict) else existing
-            if existing_items:
-                excluded_cats = ["Suplementos", "Limpieza y Hogar", "Higiene Personal", "Otros"]
-                
-                # Agrupamos los ingredientes por meal_slot para darle una instrucción detallada al modelo
-                ingredients_by_slot = {
-                    "Desayuno": [],
-                    "Almuerzo": [],
-                    "Merienda": [],
-                    "Cena": [],
-                }
-                
-                forced_proteins = []
-                forced_carbs = []
-                forced_veggies = []
-                
-                for item in existing_items:
-                    cat = item.get("category", "")
-                    
-                    # El nombre ahora está prioritariamente en display_name (columnas estructuradas)
-                    name = item.get("display_name") or ""
-                    
-                    # Fallback legacy: extraer de item_name si era JSON
-                    if not name:
-                        raw_name = item.get("item_name", "")
-                        if raw_name.startswith("{"):
-                            try:
-                                parsed = json.loads(raw_name)
-                                name = parsed.get("name", raw_name)
-                            except Exception:
-                                name = raw_name
-                        else:
-                            name = raw_name
-                                
-                    if not name or cat in excluded_cats:
-                        continue
-                    
-                    meal_slot = item.get("meal_slot") or "Almuerzo"
-                    if meal_slot not in ingredients_by_slot:
-                        ingredients_by_slot[meal_slot] = []
-                    ingredients_by_slot[meal_slot].append(name)
-                    
-                    cat_lower = cat.lower()
-                    if any(k in cat_lower for k in ["carne", "pescado", "proteína", "protein", "huevo", "lácteo", "queso", "leche", "yogur"]):
-                        forced_proteins.append(name)
-                    elif any(k in cat_lower for k in ["despensa", "grano", "cereal", "arroz", "avena", "pan", "pasta", "vívere", "yuca", "plátano", "batata", "papa"]):
-                        forced_carbs.append(name)
-                    elif any(k in cat_lower for k in ["fruta", "verdura", "vegetal"]):
-                        forced_veggies.append(name)
-                
-                total_ingredients = sum(len(lst) for lst in ingredients_by_slot.values())
-                
-                if total_ingredients > 0:
-                    shopping_str = "\n".join([f"- {slot}: {', '.join(items) if items else 'Ninguno'}" for slot, items in ingredients_by_slot.items() if items])
-                    
-                    history_context += f"\n\n⚠️ REGLA DE SUPERMERCADO ABSOLUTA E INQUEBRANTABLE (CRÍTICO): El usuario ya tiene una lista de compras vigente y la ha categorizado por momento del día. DEBES crear TODO el nuevo plan utilizando EXCLUSIVAMENTE los siguientes ingredientes, respetando el momento para el que fueron comprados (Desayuno, Almuerzo, Cena, etc.). Los ingredientes asignados a un momento del día pueden usarse en cualquier comida si es necesario.\n\nInventario Disponible:\n{shopping_str}\n\nTIENES ESTRICTAMENTE PROHIBIDO sugerir o agregar ingredientes que no estén en este inventario.\n"
-                    print(f"🛒 [CONSTRAINT] Aplicando restricción de lista de compras categorizada en graph_orchestrator.")
-                    
-                    if forced_proteins: actual_form_data["_force_base_proteins"] = forced_proteins
-                    if forced_carbs: actual_form_data["_force_base_carbs"] = forced_carbs
-                    if forced_veggies: actual_form_data["_force_base_veggies"] = forced_veggies
-                    
-        except Exception as check_e:
-            print(f"⚠️ Error revisando lista de compras para restricción en orquestador: {check_e}")
 
     # 2.5 Buscar Hechos y Diario Visual en Memoria Vectorial (RAG multimodal)
     user_facts_text = ""

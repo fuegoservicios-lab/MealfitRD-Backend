@@ -331,6 +331,15 @@ def save_message_feedback(session_id: str, content: str, feedback: str):
                 msg_id = last_msg.data[0]["id"]
                 supabase.table("agent_messages").update({"feedback": feedback}).eq("id", msg_id).execute()
                 rows_affected = 1
+            else:
+                logger.warning("No hay mensajes previos del modelo. Insertando el mensaje (posiblemente bienvenida autogenerada).")
+                supabase.table("agent_messages").insert({
+                    "session_id": session_id,
+                    "role": "model",
+                    "content": content,
+                    "feedback": feedback
+                }).execute()
+                rows_affected = 1
 
         return rows_affected > 0
     except Exception as e:

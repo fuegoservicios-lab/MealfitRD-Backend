@@ -164,6 +164,10 @@ async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[s
     if not session_id or not content:
         raise HTTPException(status_code=400, detail="Missing session_id or content")
 
+    # Asegurarnos de que exista la sesión en la base de datos antes de guardar feedback
+    from db import get_or_create_session
+    await asyncio.to_thread(get_or_create_session, session_id, user_id=verified_user_id)
+
     success = await asyncio.to_thread(save_message_feedback, session_id, content, feedback)
     if success:
         return {"success": True}

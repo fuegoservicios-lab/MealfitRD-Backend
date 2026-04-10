@@ -8,7 +8,7 @@ url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
 supabase = create_client(url, key)
 
-res = supabase.table("user_meal_plans").select("plan_data").eq("user_id", "de7003de-683b-46e1-93a1-c02a28dd7478").order("created_at", desc=True).limit(1).execute()
+res = supabase.table("meal_plans").select("plan_data").eq("user_id", "de7003de-683b-46e1-93a1-c02a28dd7478").order("created_at", desc=True).limit(1).execute()
 
 if res.data:
     plan = res.data[0]["plan_data"]

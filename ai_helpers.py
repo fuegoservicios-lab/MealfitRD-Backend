@@ -19,7 +19,7 @@ from prompts import (
 
 # Langchain
 from langchain_google_genai import ChatGoogleGenerativeAI
-from schemas import SemanticDedupResult, ExpandedRecipeModel
+from schemas import ExpandedRecipeModel
 
 from constants import (
     strip_accents,
@@ -35,56 +35,6 @@ from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
 
 logger = logging.getLogger(__name__)
 
-def semantic_merge_items(survivors: list) -> list:
-    """Usa LLM para agrupar ingredientes que son el mismo producto (ej: 'Pollo desmenuzado' y 'Pechuga de pollo')."""
-    if not survivors or len(survivors) < 2:
-        return []
-        
-    logger.info(f"🧠 [SEMANTIC DEDUP] Analizando {len(survivors)} ingredientes únicos con LLM...")
-    
-    # Preparamos una lista simplificada para el LLM para ahorrar tokens
-    items_for_prompt = []
-    for s in survivors:
-        items_for_prompt.append({
-            "id": s["item"]["id"],
-            "name": s["name"],
-            "qty": s["item"].get("qty", "")
-        })
-    
-    prompt = f"""Dado este listado exacto de ingredientes con sus IDs y cantidades, agrupa ESTRICTAMENTE aquellos que sean variantes del mismo producto alimenticio base en la vida real (ej: 'Pollo desmenuzado' y 'Pechuga de pollo' -> 'Pechuga de pollo', 'Huevos' y 'Huevos grandes' -> 'Huevos', 'Cebolla roja' y 'Cebolla blanca' -> 'Cebolla').
-REGLAS:
-- SOLO AGRUPA si son variaciones del MISMO producto y pueden comprarse/usarse como lo mismo.
-- NO agrupes 'Manzana verde' con 'Banana' bajo 'Frutas'. NO agrupes 'Cerdo' con 'Pollo'.
-- Calcula el "merged_qty" de manera inteligente: Si ambos tienen unidades compatibles (ej "1 lb" y "2 lb"), súmalos ("3 lb"). Si las unidades son incompatibles o vagas (ej "1 lb" y "2 unidades"), concaténalos ("1 lb + 2 unidades").
-- Si un ingrediente NO tiene otros pares similares en esta lista, NO lo incluyas en tu respuesta.
-- Retorna SOLO los clusters que resulten en la fusión de 2 o más ítems de la lista.
-
-Lista de ingredientes:
-{json.dumps(items_for_prompt, ensure_ascii=False)}"""
-
-    try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview",
-            temperature=0.0,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
-        ).with_structured_output(SemanticDedupResult)
-        
-        @retry(
-            stop=stop_after_attempt(2),
-            wait=wait_exponential(multiplier=1, min=1, max=3)
-        )
-        def _invoke():
-            return llm.invoke(prompt)
-            
-        response = _invoke()
-        if hasattr(response, "clusters") and response.clusters:
-            clusters = [c.model_dump() for c in response.clusters if len(c.item_ids_to_merge) > 1]
-            logger.info(f"✅ [SEMANTIC DEDUP] Encontrados {len(clusters)} grupos semánticos aptos para fusión.")
-            return clusters
-        return []
-    except Exception as e:
-        logger.error(f"❌ [SEMANTIC DEDUP] Error de LLM agrupando ingredientes: {e}")
-        return []
 
 def generate_plan_title(plan_data: dict) -> str:
     """Genera un título corto y creativo para un plan nutricional usando Gemini Flash-Lite."""
@@ -360,7 +310,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             unique_fruits.append(pick)
             _pool_f = [(f, w) for f, w in _pool_f if f != pick]
             
-    # ======= SHOPPING CYCLE LOCK (Ahorro de Supermercado) =======
+    # ======= GROCERY CYCLE LOCK (Ahorro de Supermercado) =======
     grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
     grocery_days = 7
     if grocery_duration == "biweekly": grocery_days = 15
@@ -376,28 +326,28 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             if profile:
                 hp = profile.get("health_profile") or {}
                 if not isinstance(hp, dict): hp = {}
-                shopping_cycle = hp.get("shopping_cycle")
+                grocery_cycle = hp.get("grocery_cycle")
                 
                 now = datetime.now(timezone.utc)
                 
-                if shopping_cycle and "start_date" in shopping_cycle:
+                if grocery_cycle and "start_date" in grocery_cycle:
                     try:
-                        cycle_start = datetime.fromisoformat(shopping_cycle["start_date"].replace("Z", "+00:00"))
+                        cycle_start = datetime.fromisoformat(grocery_cycle["start_date"].replace("Z", "+00:00"))
                         days_elapsed = (now - cycle_start).days
                         
                         # Si es < 2 días, es regeneración del mismo plan base, actualizaremos el ciclo.
                         if 2 <= days_elapsed < grocery_days:
                             # ¡BLOQUEO ACTIVO! Forzamos la reutilización de ingredientes.
                             cycle_locked = True
-                            unique_proteins = shopping_cycle.get("base_proteins", unique_proteins)
-                            unique_carbs = shopping_cycle.get("base_carbs", unique_carbs)
-                            unique_veggies = shopping_cycle.get("base_veggies", unique_veggies)
-                            logger.info(f"🔒 [SHOPPING CYCLE LOCK] Reutiizando ingredientes del ciclo (Día {days_elapsed} de {grocery_days}).")
+                            unique_proteins = grocery_cycle.get("base_proteins", unique_proteins)
+                            unique_carbs = grocery_cycle.get("base_carbs", unique_carbs)
+                            unique_veggies = grocery_cycle.get("base_veggies", unique_veggies)
+                            logger.info(f"🔒 [GROCERY CYCLE LOCK] Reutilizando ingredientes del ciclo (Día {days_elapsed} de {grocery_days}).")
                         elif days_elapsed >= grocery_days:
-                            logger.info(f"🔓 [SHOPPING CYCLE] Ciclo expirado ({days_elapsed} >= {grocery_days} días). Iniciando nuevo ciclo.")
+                            logger.info(f"🔓 [GROCERY CYCLE] Ciclo expirado ({days_elapsed} >= {grocery_days} días). Iniciando nuevo ciclo.")
                             new_cycle_started = True
                         else:
-                            logger.info(f"🔄 [SHOPPING CYCLE] Regeneración en Día {days_elapsed} del ciclo. Actualizando Plan Base.")
+                            logger.info(f"🔄 [GROCERY CYCLE] Regeneración en Día {days_elapsed} del ciclo. Actualizando Plan Base.")
                             new_cycle_started = True
                     except Exception as e:
                         logger.error(f"Error parseando fecha del ciclo: {e}")
@@ -409,10 +359,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 if new_cycle_started:
                     start_date_to_save = now.isoformat()
                     # Si es regeneración (< 2 días), mantener el start_date original
-                    if shopping_cycle and "start_date" in shopping_cycle and not (days_elapsed >= grocery_days if 'days_elapsed' in locals() else True):
-                        start_date_to_save = shopping_cycle["start_date"]
+                    if grocery_cycle and "start_date" in grocery_cycle and not (days_elapsed >= grocery_days if 'days_elapsed' in locals() else True):
+                        start_date_to_save = grocery_cycle["start_date"]
                         
-                    hp["shopping_cycle"] = {
+                    hp["grocery_cycle"] = {
                         "start_date": start_date_to_save,
                         "duration_days": grocery_days,
                         "base_proteins": unique_proteins,
@@ -420,12 +370,43 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                         "base_veggies": unique_veggies
                     }
                     update_user_health_profile(user_id, hp)
-                    logger.info("💾 [SHOPPING CYCLE] Guardados nuevos ingredientes base del ciclo.")
+                    logger.info("💾 [GROCERY CYCLE] Guardados nuevos ingredientes base del ciclo.")
         except Exception as e:
-            logger.error(f"Error procesando Shopping Cycle Lock: {e}")
+            logger.error(f"Error procesando Grocery Cycle Lock: {e}")
     # ==========================================================
 
-    # ======= FORCED SHOPPING LIST INJECTION =======
+    # ======= CURRENT SHOPPING LIST INJECTION (ROTATION MODE) =======
+    current_shopping_list = form_data.get("current_shopping_list", []) if form_data else []
+    if current_shopping_list:
+        logger.info(f"🔄 [ROTATION MODE] Extrayendo ingredientes base de la lista actual.")
+        extracted_p, extracted_c, extracted_v, extracted_f = [], [], [], []
+        csl_lower = [strip_accents(i.lower()) for i in current_shopping_list]
+        
+        for item in csl_lower:
+            for p in DOMINICAN_PROTEINS:
+                syns = protein_synonyms.get(p.lower(), [p.lower()])
+                if any(strip_accents(s) in item for s in syns) and p not in extracted_p: 
+                    extracted_p.append(p)
+            for c in DOMINICAN_CARBS:
+                syns = carb_synonyms.get(c.lower(), [c.lower()])
+                if any(strip_accents(s) in item for s in syns) and c not in extracted_c: 
+                    extracted_c.append(c)
+            for v in DOMINICAN_VEGGIES_FATS:
+                syns = veggie_fat_synonyms.get(v.lower(), [v.lower()])
+                if any(strip_accents(s) in item for s in syns) and v not in extracted_v: 
+                    extracted_v.append(v)
+            for f in DOMINICAN_FRUITS:
+                syns = fruit_synonyms.get(f.lower(), [f.lower()])
+                if any(strip_accents(s) in item for s in syns) and f not in extracted_f: 
+                    extracted_f.append(f)
+                
+        if extracted_p: unique_proteins = extracted_p
+        if extracted_c: unique_carbs = extracted_c
+        if extracted_v: unique_veggies = extracted_v
+        if extracted_f: unique_fruits = extracted_f
+        cycle_locked = True # We force cycle locked mode to ensure pure rotation
+        
+    # ======= FORCED INGREDIENT INJECTION (FROM RAG/HISTORY) =======
     if form_data and "_force_base_proteins" in form_data:
         _forced_p = form_data.get("_force_base_proteins", unique_proteins)
         _forced_c = form_data.get("_force_base_carbs", unique_carbs)
@@ -501,7 +482,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     if unique_fruits:
         unique_fruits = _dedup_list(unique_fruits)
 
-    # Mezclar ANTES de rellenar o truncar, para asegurar rotación de todos los items en la lista de compras
+    # Mezclar ANTES de rellenar o truncar, para asegurar rotación de todos los items en la lista de ingredientes base
     random.shuffle(unique_proteins)
     random.shuffle(unique_carbs)
     random.shuffle(unique_veggies)
@@ -553,14 +534,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Nota de conservación de alimentos según frecuencia de compras
     grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
     if grocery_duration == "monthly":
-        blocked_text += "\n🛒 COMPRA MENSUAL: El usuario compra para 30 días. Prioriza ingredientes de larga duración (tubérculos, granos secos, proteínas congelables). Evita depender de perecederos de vida corta."
+        blocked_text += "\n🛒 DESPENSA MENSUAL: El usuario se abastece para 30 días. PRIORIZA ingredientes no perecederos o fácilmente congelables, granos secos, proteínas congelables. Evita depender de perecederos de vida corta."
     elif grocery_duration == "biweekly":
-        blocked_text += "\n🛒 COMPRA QUINCENAL: El usuario compra para 15 días. Equilibra frescos con ingredientes duraderos. Sugiere congelación para proteínas frescas."
+        blocked_text += "\n🛒 DESPENSA QUINCENAL: El usuario se abastece para 15 días. PRIORIZA ingredientes de duración media o congelables."
         
     if cycle_locked:
         # Use a safe fallback for days_elapsed in case it wasn't defined perfectly
         d_elapsed = locals().get('days_elapsed', '?')
-        blocked_text += f"\n\n🚨 [REGLA DE AHORRO EXTREMA]: El usuario está en el Día {d_elapsed} de su ciclo de compras de {grocery_days} días. TIENES LA OBLIGACIÓN ESTRICTA de basar todas las comidas en usar EXACTAMENTE las proteínas, carbohidratos y vegetales asignados explícitamente en el prompt. Usa diferentes preparaciones y técnicas de cocción para que no se aburra, pero NO MANDES A COMPRAR ALIMENTOS BASE NUEVOS."
+        blocked_text += f"\n\n🚨 [REGLA DE AHORRO EXTREMA]: El usuario está en el Día {d_elapsed} de su ciclo de despensa de {grocery_days} días. TIENES LA OBLIGACIÓN ESTRICTA de basar todas las comidas en usar EXACTAMENTE las proteínas, carbohidratos y vegetales asignados explícitamente en el prompt. Usa diferentes preparaciones y técnicas de cocción para que no se aburra, pero NO SUGIERAS ALIMENTOS BASE NUEVOS."
     
     # Construir parámetros de frutas para el prompt
     fruit_params = {}

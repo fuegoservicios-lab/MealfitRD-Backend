@@ -35,11 +35,8 @@ from db import (
     connection_pool, supabase,
     get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes,
     insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile,
-    update_user_health_profile, get_all_user_facts, delete_user_fact, get_custom_shopping_items,
-    get_custom_shopping_items as _get_items, update_custom_shopping_item,
-    update_custom_shopping_item_status, delete_custom_shopping_item, clear_all_shopping_items,
-    add_custom_shopping_items, uncheck_all_shopping_items, purge_old_shopping_items,
-    deduplicate_shopping_items, get_shopping_plan_hash, save_new_meal_plan_robust,
+    update_user_health_profile, get_all_user_facts, delete_user_fact,
+    save_new_meal_plan_robust,
     log_consumed_meal, get_consumed_meals_today, save_visual_entry, get_session_messages,
     get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
     delete_single_agent_session, update_session_title,
@@ -47,15 +44,14 @@ from db import (
 )
 from agent import (
     swap_meal, chat_with_agent, analyze_preferences_agent,
-    generate_chat_title_background, generate_auto_shopping_list, chat_with_agent_stream
+    generate_chat_title_background, chat_with_agent_stream
 )
 from ai_helpers import generate_plan_title, expand_recipe_agent
 from graph_orchestrator import run_plan_pipeline
 from memory_manager import summarize_and_prune, build_memory_context
 from fact_extractor import async_extract_and_save_facts, process_pending_queue_sync
 from langgraph.checkpoint.postgres import PostgresSaver
-from services import compute_plan_hash, merge_form_data_with_profile, regenerate_shopping_list_safe
-from constants import categorize_shopping_item
+from services import compute_plan_hash, merge_form_data_with_profile
 from vision_agent import process_image_with_vision, get_multimodal_embedding
 
 @asynccontextmanager
@@ -95,8 +91,6 @@ from routers.plans import router as plans_router
 app.include_router(plans_router)
 from routers.chat import router as chat_router
 app.include_router(chat_router)
-from routers.shopping import router as shopping_router
-app.include_router(shopping_router)
 from routers.diary import router as diary_router
 app.include_router(diary_router)
 
@@ -107,8 +101,8 @@ def health_check():
     return {"status": "ok", "message": "MealfitRD AI Backend is running"}
 
 from auth import get_verified_user_id, verify_api_quota
-from rate_limiter import RateLimiter, _shopping_write_limiter, _shopping_autogen_limiter
-from services import _preserve_shopping_checkmarks, _save_plan_and_track_background, _process_swap_rejection_background
+from rate_limiter import RateLimiter
+from services import _save_plan_and_track_background, _process_swap_rejection_background
 
 # Setup CORS para el frontend React local
 app.add_middleware(

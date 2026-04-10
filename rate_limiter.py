@@ -74,6 +74,4 @@ class RateLimiter:
         self._hits[uid].append(now_mono)
         return verified_user_id
 
-# Instancias reutilizables para endpoints de shopping list
-_shopping_write_limiter = RateLimiter(max_calls=10, period_seconds=60)
-_shopping_autogen_limiter = RateLimiter(max_calls=5, period_seconds=60)
+

@@ -9,7 +9,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 from supabase import create_client, Client
 from dotenv import load_dotenv
 
-from constants import parse_ingredient_qty
+
 
 logger = logging.getLogger(__name__)
 
