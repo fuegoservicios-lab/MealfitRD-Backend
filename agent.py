@@ -703,18 +703,20 @@ El user_id del usuario actual es: {user_id}"""
 from typing import Generator
 from sentiment_classifier import classify_sentiment
 
-def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False) -> Generator[str, None, None]:
+def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis") -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
     memory = build_memory_context(session_id)
     
-    # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO
-    sentiment_result = classify_sentiment(prompt)
+    # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO (Solo Plus o superior)
+    sentiment_result = {}
+    if plan_tier in ["plus", "ultra", "admin"]:
+        sentiment_result = classify_sentiment(prompt)
     
     # RAG INJECTION (con Query Routing inteligente)
     user_facts_text = ""
     visual_facts_text = ""
-    if user_id:
+    if user_id and plan_tier in ["basic", "plus", "ultra", "admin"]:
         rag_decision = rag_query_router(prompt)
         
         if not rag_decision.get("skip"):

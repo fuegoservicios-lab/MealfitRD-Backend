@@ -248,6 +248,12 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             form_data
         )
         
+        plan_tier = "gratis"
+        if user_id and user_id != "guest":
+            profile_sync = get_user_profile(user_id)
+            if profile_sync:
+                plan_tier = profile_sync.get("plan_tier", "gratis")
+        
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)
             
@@ -269,7 +275,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                     form_data=form_data,
                     local_date=local_date,
                     tz_offset=tz_offset,
-                    is_call_mode=is_call_mode
+                    is_call_mode=is_call_mode,
+                    plan_tier=plan_tier
                 ):
                     yield chunk
                     
@@ -293,12 +300,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                         if raw_history:
                                             recent_history_str = "\n".join([f"{m.get('role', 'unknown')}: {m.get('content', '')}" for m in raw_history[-6:]])
                                         
-                                        is_plus = False
-                                        if user_id and user_id != "guest":
-                                            profile_sync = get_user_profile(user_id)
-                                            if profile_sync:
-                                                plan_tier_sync = profile_sync.get("plan_tier", "gratis")
-                                                is_plus = plan_tier_sync in ["basic", "plus", "admin", "ultra"]
+                                        is_plus = plan_tier in ["basic", "plus", "admin", "ultra"]
                                                 
                                         if is_plus:
                                             async_extract_and_save_facts(user_id, prompt, recent_history_str)

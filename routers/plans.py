@@ -83,7 +83,7 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/recipe/expand")
-def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
     try:
         user_id = data.get("user_id")
         if user_id and user_id != "guest":
@@ -124,7 +124,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/swap-meal")
-def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id")
         user_id = data.get("user_id")
