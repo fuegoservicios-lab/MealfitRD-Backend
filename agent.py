@@ -417,10 +417,10 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         # Obtener títulos recientes para evitar repetirlos
         used_titles_str = ""
         try:
-            from db import getsessions
-            recent = getsessions(user_id)
+            from db import get_user_chat_sessions
+            recent = get_user_chat_sessions(user_id)
             if recent:
-                used = [str(s.get("title")) for s in recent[:15] if s.get("title") and s.get("title") not in ["Nuevo chat", "Nuevo Chat"]]
+                used = [str(s.get("title")) for s in recent[:15] if s.get("title") and str(s.get("title")) not in ["Nuevo chat", "Nuevo Chat"]]
                 used_titles_str = ", ".join(list(set(used)))
         except Exception as e:
             logger.error(f"Error fetching recent titles for anti-duplication: {e}")
