@@ -156,15 +156,15 @@ import asyncio
 import os
 import httpx
 
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-
 @router.post("/tts")
 async def api_chat_tts(data: dict = Body(...)):
     text = data.get("text")
     if not text:
         raise HTTPException(status_code=400, detail="Missing text")
     
-    if not ELEVENLABS_API_KEY:
+    # Load and strip the API key to prevent whitespace errors from user copy-pasting
+    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not api_key:
         raise HTTPException(status_code=500, detail="ElevenLabs API Key no configurada.")
         
     # Voz "Rachel" predeterminada (fuerte en inglés/multilingüe) o equivalente
@@ -174,7 +174,7 @@ async def api_chat_tts(data: dict = Body(...)):
     headers = {
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
-        "xi-api-key": ELEVENLABS_API_KEY
+        "xi-api-key": api_key
     }
     
     payload = {
