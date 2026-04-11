@@ -56,6 +56,9 @@ def run_proactive_checks():
     elif hour == 16:
         meal_to_check = "Almuerzo"
         trigger_time_str = "4:00 PM"
+    elif hour == 18:
+        meal_to_check = "Merienda"
+        trigger_time_str = "6:00 PM"
     elif hour == 20 or hour == 21:
         meal_to_check = "Cena"
         trigger_time_str = f"{hour - 12}:00 PM"
@@ -72,7 +75,7 @@ def run_proactive_checks():
         user_id = s.get("user_id")
         
         try:
-            # Regla de Anti-Spam: Solo enviar si no hemos enviado/recibido nada en las últimas 4 horas
+            # Regla de Anti-Spam: Solo enviar si no hemos enviado/recibido nada en las últimas 2 horas
             recent = get_recent_messages(session_id, limit=1)
             if recent:
                 last_msg_time_str = recent[0].get("created_at")
@@ -82,8 +85,8 @@ def run_proactive_checks():
                     last_time = datetime.fromisoformat(last_msg_time_str)
                     
                     diff_hours = (datetime.now(timezone.utc) - last_time).total_seconds() / 3600
-                    if diff_hours < 4:
-                        # Si hay actividad menor a 4h, no interrumpimos
+                    if diff_hours < 2:
+                        # Si hay actividad menor a 2h, no interrumpimos
                         continue
             
             # Vemos perfil para checar scheduleType (turno nocturno)

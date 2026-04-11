@@ -91,3 +91,64 @@ async def unsubscribe_push(request: Request, user_id: str = Depends(get_verified
     except Exception as e:
         logger.error(f"Error borrando push subscription: {e}")
         raise HTTPException(status_code=500, detail="Error de BDD borrando suscripción")
+
+@router.get("/test")
+async def test_push_route(user_id: str):
+    """
+    Ruta de depuración para probar el envío forzado de notificaciones Push a todos los dispositivos suscritos de un usuario.
+    """
+    if not connection_pool:
+        raise HTTPException(status_code=500, detail="Database connection pool unavailable")
+    try:
+        import os, json
+        from pywebpush import webpush, WebPushException
+        
+        vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
+        vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")
+        
+        if not vapid_private or not vapid_claim:
+            return {"status": "error", "message": "Faltan las VAPID keys en el entorno."}
+
+        with connection_pool.connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT subscription_data FROM push_subscriptions WHERE user_id = %s",
+                    (user_id,)
+                )
+                subs = cursor.fetchall()
+        
+        if not subs:
+            return {"status": "error", "message": f"El usuario {user_id} no tiene dispositivos suscritos en la base de datos."}
+
+        push_payload = json.dumps({
+            "title": "Aviso de tu Nutricionista IA \U0001f9d1\u200d\u2615",
+            "body": "¡Esta es una notificación de prueba manual forzada!",
+            "url": f"/dashboard/agent"
+        })
+        
+        success_count = 0
+        errors = []
+        for row in subs:
+            sub_info = row[0]
+            if isinstance(sub_info, str):
+                sub_info = json.loads(sub_info)
+            try:
+                webpush(
+                    subscription_info=sub_info,
+                    data=push_payload,
+                    vapid_private_key=vapid_private,
+                    vapid_claims={"sub": vapid_claim}
+                )
+                success_count += 1
+            except WebPushException as ex:
+                errors.append(repr(ex))
+                
+        return {
+            "status": "success", 
+            "message": f"Notificaciones intentadas: {len(subs)}. Éxitos: {success_count}.",
+            "errores": errors
+        }
+
+    except Exception as e:
+        logger.error(f"Error test push subscription: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
