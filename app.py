@@ -133,6 +133,23 @@ app.include_router(diary_router)
 def health_check():
     return {"status": "ok", "message": "MealfitRD AI Backend is running"}
 
+@app.get("/api/admin/test-proactive")
+def api_test_proactive():
+    import traceback
+    with open("push_log.txt", "w", encoding="utf-8") as f:
+        try:
+            from test_push import trigger_manual_notification
+            import sys, io
+            old_stdout = sys.stdout
+            sys.stdout = io.StringIO()
+            trigger_manual_notification("Almuerzo", "1:30 PM")
+            f.write(sys.stdout.getvalue())
+            sys.stdout = old_stdout
+            return {"status": "success", "message": "Checked log"}
+        except Exception as e:
+            f.write(traceback.format_exc())
+            return {"status": "error", "message": str(e)}
+
 from auth import get_verified_user_id, verify_api_quota
 from rate_limiter import RateLimiter
 from services import _save_plan_and_track_background, _process_swap_rejection_background

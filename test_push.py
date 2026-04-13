@@ -24,8 +24,8 @@ def trigger_manual_notification(meal_to_check, trigger_time_str):
     print(f"Sesiones activas encontradas: {len(sessions)}")
     
     for s in sessions:
-        user_id = s.get("user_id")
-        session_id = s.get("id")
+        user_id = str(s.get("user_id"))
+        session_id = str(s.get("id"))
         print(f"\n=> Evaluando usuario: {user_id}")
         
         profile = proactive_agent.get_user_profile(user_id)
@@ -55,7 +55,11 @@ def trigger_manual_notification(meal_to_check, trigger_time_str):
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             )
             response = chat_llm.invoke(prompt)
-            content = str(response.content).strip()
+            raw_content = response.content
+            if isinstance(raw_content, list):
+                content = " ".join([b.get("text", "") for b in raw_content if isinstance(b, dict) and "text" in b]).strip()
+            else:
+                content = str(raw_content).strip()
             
             if content:
                 print(f"Mensaje generado: {content}")
@@ -67,7 +71,7 @@ def trigger_manual_notification(meal_to_check, trigger_time_str):
                 vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
                 vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")
                 
-                subs_query = "SELECT subscription_data FROM push_subscriptions WHERE user_id = %s"
+                subs_query = "SELECT subscription_data FROM push_subscriptions WHERE user_id = %s ORDER BY id DESC LIMIT 1"
                 subs = proactive_agent.execute_sql_query(subs_query, (user_id,), fetch_all=True)
                 print(f"Suscripciones encontradas: {len(subs) if subs else 0}")
                 

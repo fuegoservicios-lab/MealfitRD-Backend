@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from db_core import connection_pool, execute_sql_query
+from db_core import connection_pool, execute_sql_query, execute_sql_write
 from db_chat import save_message, get_recent_messages
 from db import get_consumed_meals_today, get_user_profile
 
@@ -51,18 +51,18 @@ def run_proactive_checks():
     meal_to_check = None
     trigger_time_str = ""
     
-    if hour == 11:
+    if hour == 10:
         meal_to_check = "Desayuno"
-        trigger_time_str = "11:00 AM"
-    elif hour == 16:
+        trigger_time_str = "10:30 AM"
+    elif hour == 13 or hour == 14:
         meal_to_check = "Almuerzo"
-        trigger_time_str = "4:00 PM"
-    elif hour == 18:
+        trigger_time_str = f"{hour if hour == 12 else hour - 12}:30 PM"
+    elif hour == 17:
         meal_to_check = "Merienda"
-        trigger_time_str = "6:00 PM"
+        trigger_time_str = "5:30 PM"
     elif hour == 20 or hour == 21:
         meal_to_check = "Cena"
-        trigger_time_str = f"{hour - 12}:00 PM"
+        trigger_time_str = f"{hour - 12}:30 PM"
         
     if not meal_to_check:
         logger.debug(f"[CRON] Hora actual ({hour}): No hay triggers de comida primaria a esta hora.")
@@ -137,7 +137,11 @@ def run_proactive_checks():
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             )
             response = chat_llm.invoke(prompt)
-            content = str(response.content).strip()
+            raw_content = response.content
+            if isinstance(raw_content, list):
+                content = " ".join([b.get("text", "") for b in raw_content if isinstance(b, dict) and "text" in b]).strip()
+            else:
+                content = str(raw_content).strip()
             
             if content:
                 # Enviar a la base de datos con rol de modelo
@@ -180,6 +184,15 @@ def run_proactive_checks():
                                 logger.info(f"📲 [CRON] Push Notification exitosa al dispositivo del usuario {user_id}")
                             except WebPushException as ex:
                                 logger.error(f"❌ [CRON] Error mandando Push al usuario {user_id}: {repr(ex)}")
+                                if ex.response is not None and ex.response.status_code in [404, 410]:
+                                    # La suscripción expiró o el usuario revocó permisos. Limpiarla de la base de datos.
+                                    endpoint = sub_info.get("endpoint")
+                                    if endpoint:
+                                        execute_sql_write(
+                                            "DELETE FROM push_subscriptions WHERE user_id = %s AND subscription_data->>'endpoint' = %s",
+                                            (user_id, endpoint)
+                                        )
+                                        logger.info(f"🗑️ [CRON] Suscripción muerta eliminada para {user_id}")
                     else:
                         logger.warning(f"⚠️ [CRON] No se pueden mandar Web Push Notifications porque faltan llaves VAPID en el entorno.")
                 except ImportError:
