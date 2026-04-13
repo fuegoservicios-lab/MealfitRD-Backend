@@ -1,0 +1,10 @@
+Forzando verificación de Almuerzo...
+Sesiones activas encontradas: 1
+
+=> Evaluando usuario: de7003de-683b-46e1-93a1-c02a28dd7478
+Preparando para enviar push notification a de7003de-683b-46e1-93a1-c02a28dd7478
+Mensaje generado: Ya son más de la 1:30 PM y no quiero que pierdas el ritmo de tu alimentación balanceada; ¿qué tal estuvo tu almuerzo hoy? ¡No olvides registrarlo en la app para mantener tu progreso al día!
+Suscripciones encontradas: 3
+✅ Push enviado con éxito a de7003de-683b-46e1-93a1-c02a28dd7478
+✅ Push enviado con éxito a de7003de-683b-46e1-93a1-c02a28dd7478
+✅ Push enviado con éxito a de7003de-683b-46e1-93a1-c02a28dd7478

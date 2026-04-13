@@ -71,7 +71,7 @@ def trigger_manual_notification(meal_to_check, trigger_time_str):
                 vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
                 vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")
                 
-                subs_query = "SELECT subscription_data FROM push_subscriptions WHERE user_id = %s ORDER BY id DESC LIMIT 1"
+                subs_query = "SELECT subscription_data FROM push_subscriptions WHERE user_id = %s"
                 subs = proactive_agent.execute_sql_query(subs_query, (user_id,), fetch_all=True)
                 print(f"Suscripciones encontradas: {len(subs) if subs else 0}")
                 
@@ -94,7 +94,15 @@ def trigger_manual_notification(meal_to_check, trigger_time_str):
                         )
                         print(f"✅ Push enviado con éxito a {user_id}")
                     except WebPushException as ex:
-                        print(f"❌ Error enviando Push: {repr(ex)}")
+                        print(f"❌ Error mandando a {user_id}: {repr(ex)}")
+                        if ex.response is not None and ex.response.status_code in [404, 410]:
+                            endpoint = sub_info.get("endpoint")
+                            if endpoint:
+                                proactive_agent.execute_sql_write(
+                                    "DELETE FROM push_subscriptions WHERE user_id = %s AND subscription_data->>'endpoint' = %s",
+                                    (user_id, endpoint)
+                                )
+                                print(f"🗑️ Suscripción muerta eliminada.")
                         if ex.response is not None:
                             print("Response Text:", ex.response.text)
         except Exception as e:
