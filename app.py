@@ -113,11 +113,12 @@ os.makedirs("uploads", exist_ok=True)
 app = FastAPI(lifespan=lifespan)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-from routers.billing import router as billing_router, webhooks_router
+from routers.billing import router as billing_router, webhooks_router, discount_router
 from routers.notifications import router as notifications_router
 
 app.include_router(billing_router)
 app.include_router(webhooks_router)
+app.include_router(discount_router)
 app.include_router(notifications_router)
 from routers.plans import router as plans_router
 app.include_router(plans_router)

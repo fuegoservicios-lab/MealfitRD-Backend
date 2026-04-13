@@ -24,6 +24,67 @@ webhooks_router = APIRouter(
     tags=["webhooks"]
 )
 
+discount_router = APIRouter(
+    prefix="/api/discount",
+    tags=["discount"],
+)
+
+@discount_router.post("/validate")
+async def api_validate_discount(data: dict = Body(...)):
+    """Valida un código de descuento contra la tabla discount_codes en Supabase."""
+    try:
+        code = (data.get("code") or "").strip().upper()
+        tier = (data.get("tier") or "").strip().lower()
+
+        if not code:
+            raise HTTPException(status_code=400, detail="Código requerido")
+
+        # Buscar el código en la tabla
+        res = supabase.table("discount_codes").select("*").eq("code", code).eq("is_active", True).execute()
+
+        if not res.data or len(res.data) == 0:
+            return {"valid": False, "message": "Código no encontrado o inactivo."}
+
+        discount = res.data[0]
+
+        # Verificar vigencia
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+
+        if discount.get("valid_from"):
+            valid_from = datetime.fromisoformat(discount["valid_from"].replace("Z", "+00:00"))
+            if now < valid_from:
+                return {"valid": False, "message": "Este código aún no está activo."}
+
+        if discount.get("valid_until"):
+            valid_until = datetime.fromisoformat(discount["valid_until"].replace("Z", "+00:00"))
+            if now > valid_until:
+                return {"valid": False, "message": "Este código ha expirado."}
+
+        # Verificar usos
+        if discount.get("max_uses") is not None:
+            if discount.get("current_uses", 0) >= discount["max_uses"]:
+                return {"valid": False, "message": "Este código ya alcanzó su límite de usos."}
+
+        # Verificar tier aplicable
+        applicable = discount.get("applicable_tiers", [])
+        if applicable and tier and tier not in applicable:
+            return {"valid": False, "message": f"Este código no aplica al plan seleccionado."}
+
+        logger.info(f"✅ Código de descuento '{code}' validado: {discount['discount_percent']}% off")
+
+        return {
+            "valid": True,
+            "discount_percent": discount["discount_percent"],
+            "message": f"¡{discount['discount_percent']}% de descuento aplicado!"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error validando código de descuento: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error validando código")
+
 @router.post("/verify")
 async def api_verify_subscription(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
     try:
