@@ -71,33 +71,44 @@ def run_proactive_checks():
     logger.info(f"🔍 [CRON] Verificando registros de {meal_to_check} a las {trigger_time_str}.")
     
     sessions = get_active_users_for_proactive()
+    logger.info(f"🔍 [CRON] Encontradas {len(sessions)} sesiones activas para verificar.")
     for s in sessions:
         session_id = str(s.get("id"))
         user_id = str(s.get("user_id"))
         
         try:
-            # Regla de Anti-Spam: Solo enviar si no hemos enviado/recibido nada en las últimas 2 horas
-            recent = get_recent_messages(session_id, limit=1)
+            # Regla Anti-Spam: Solo bloquear si ya enviamos un mensaje PROACTIVO (model) en la última hora.
+            # Los mensajes del usuario NO bloquean recordatorios — chatear no impide recibir nudges.
+            recent = get_recent_messages(session_id, limit=5)
+            spam_blocked = False
             if recent:
-                last_msg_time_str = recent[0].get("created_at")
-                if last_msg_time_str:
-                    if last_msg_time_str.endswith("Z"):
-                        last_msg_time_str = last_msg_time_str[:-1] + "+00:00"
-                    last_time = datetime.fromisoformat(last_msg_time_str)
-                    
-                    diff_hours = (datetime.now(timezone.utc) - last_time).total_seconds() / 3600
-                    if diff_hours < 2:
-                        # Si hay actividad menor a 2h, no interrumpimos
-                        continue
+                for msg in recent:
+                    if msg.get("role") != "model":
+                        continue  # Solo nos importan mensajes del modelo
+                    last_msg_time_str = msg.get("created_at")
+                    if last_msg_time_str:
+                        if last_msg_time_str.endswith("Z"):
+                            last_msg_time_str = last_msg_time_str[:-1] + "+00:00"
+                        last_time = datetime.fromisoformat(last_msg_time_str)
+                        diff_hours = (datetime.now(timezone.utc) - last_time).total_seconds() / 3600
+                        if diff_hours < 1:
+                            spam_blocked = True
+                            logger.info(f"🚫 [CRON] Anti-spam: Usuario {user_id} ya recibió mensaje del modelo hace {diff_hours:.1f}h. Saltando.")
+                            break
+            
+            if spam_blocked:
+                continue
             
             # Vemos perfil para checar scheduleType (turno nocturno)
             profile = get_user_profile(user_id)
-            if not profile: continue
+            if not profile:
+                logger.info(f"🚫 [CRON] Usuario {user_id}: sin perfil. Saltando.")
+                continue
             
             health = profile.get("health_profile", {})
             schedule = health.get("scheduleType", "standard")
             if schedule == "night_shift" or schedule == "variable":
-                # MVP simple: saltamos la proactividad estricta horaria si tiene turno raro
+                logger.info(f"🚫 [CRON] Usuario {user_id}: turno {schedule}. Saltando.")
                 continue
                 
             # Validar el consumo de HOY
@@ -106,7 +117,6 @@ def run_proactive_checks():
             # Checar si la comida objetivo o algo con ese nombre ya se consumió
             already_ate = False
             for m in consumed:
-                # El usuario pudo llamarlo "desayuno" o por el nombre de la comida.
                 mt = m.get("meal_type", "").lower()
                 mn = m.get("meal_name", "").lower()
                 if meal_to_check.lower() in mt or meal_to_check.lower() in mn:
@@ -114,7 +124,7 @@ def run_proactive_checks():
                     break
                     
             if already_ate:
-                # Todo en orden, registró la comida.
+                logger.info(f"✅ [CRON] Usuario {user_id}: ya registró {meal_to_check}. Todo ok.")
                 continue
                 
             # ESTADO: olvido registrar. Generar mensaje proactivo.
