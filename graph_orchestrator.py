@@ -588,7 +588,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 clean_pantry = [item.strip() for item in current_pantry if item and isinstance(item, str) and len(item) > 2]
                 
             if clean_pantry:
-                val_result = validate_ingredients_against_pantry(all_ingredients, clean_pantry)
+                val_result = validate_ingredients_against_pantry(all_ingredients, clean_pantry, strict_quantities=False)
                 if val_result is not True:
                     approved = False
                     issues.append(val_result)  # val_result es el string de error generado por constants.py

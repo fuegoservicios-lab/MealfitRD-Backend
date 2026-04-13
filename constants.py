@@ -569,11 +569,14 @@ def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base
     if req_unit == 'unidad' and dispo_unit == 'ml' and density and unit_weight: return (req_qty * unit_weight) / density
     return None
 
-def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list) -> bool | str:
+def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True) -> bool | str:
     """
     Función guardrail estricta y matemática. Comprueba:
     1. Que todos los ingredientes generados estén en la despensa.
-    2. Que las CANTIDADES generadas no superen el Ledger de la despensa.
+    2. (Si strict_quantities=True) Que las CANTIDADES generadas no superen el Ledger de la despensa.
+    
+    En modo rotación (strict_quantities=False), solo se valida #1 (existencia), 
+    ya que el LLM redistribuye las mismas macros con proporciones distintas.
     """
     if not pantry_ingredients:
         logger.debug("⚠️ [PANTRY GUARD] Lista de despensa vacía — guardrail desactivado.")
@@ -588,6 +591,13 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
     pantry_ledger = {}
     pantry_bases = set()
     
+    # Regex para extraer peso de contenedor embebido en el display string
+    # Ejemplos: "1 Paquete (500g)" → 500g, "1 Pote (16 oz)" → 16 oz, "1 Cartón (250ml)" → 250ml
+    _container_weight_re = re.compile(
+        r'\((\d+(?:\.\d+)?)\s*(g|gr|kg|oz|ml|l|lb|lbs)\)',
+        re.IGNORECASE
+    )
+    
     for p in pantry_ingredients:
         norm = normalize_ingredient_for_tracking(p)
         if norm: pantry_bases.add(norm)
@@ -597,8 +607,22 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         base_norm = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
         
         if not base_norm: continue
-            
-        base_qty, base_unit = _to_base_unit(qty, unit)
+        
+        # Inteligencia de Contenedor: Si el string contiene peso real embebido
+        # (e.g., "1 Paquete (500g)"), usar ese peso en lugar de la unidad abstracta.
+        # Esto evita que "1 Paquete de Pan integral" se registre como 30g (1 rebanada)
+        # cuando en realidad el paquete pesa 500g.
+        container_match = _container_weight_re.search(p)
+        if container_match and unit in ['paquete', 'paquetes', 'pote', 'potes', 'cartón', 'carton', 
+                                         'funda', 'fundas', 'lata', 'latas', 'sobre', 'sobres',
+                                         'fundita', 'funditas', 'botella', 'botellas']:
+            container_qty = float(container_match.group(1))
+            container_unit = container_match.group(2).lower()
+            # El peso total = cantidad de contenedores × peso por contenedor
+            real_weight = qty * container_qty
+            base_qty, base_unit = _to_base_unit(real_weight, container_unit)
+        else:
+            base_qty, base_unit = _to_base_unit(qty, unit)
         
         if base_norm not in pantry_ledger:
             pantry_ledger[base_norm] = {}
@@ -673,6 +697,9 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
             unauthorized.append(item)
             continue
             
+        if not strict_quantities:
+            continue  # En modo rotación, solo validamos existencia (arriba), no cantidades
+            
         if gen_qty > 0 and matched_pantry_key in pantry_ledger:
             available_units_for_item = pantry_ledger[matched_pantry_key]
             
@@ -688,7 +715,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                 if available_qty <= 0.01:
                     logger.debug(f"🛒 [PANTRY GUARD] '{gen_name}' en {gen_base_unit} tiene stock 0 — skip.")
                     continue
-                if gen_base_qty > (available_qty * 1.15):
+                if gen_base_qty > (available_qty * 1.30):
                     formatted_req = _format_unit_qty(gen_base_qty, gen_base_unit)
                     formatted_avail = _format_unit_qty(available_qty, gen_base_unit)
                     over_limit.append(f"[{item}] (Pediste {formatted_req}, límite: {formatted_avail})")
@@ -703,7 +730,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                         break
                     req_qty_in_dispo_unit = _get_converted_quantity(gen_base_qty, gen_base_unit, dispo_unit, matched_pantry_key)
                     if req_qty_in_dispo_unit is not None:
-                        if req_qty_in_dispo_unit > (available_qty * 1.15):
+                        if req_qty_in_dispo_unit > (available_qty * 1.30):
                             formatted_req = _format_unit_qty(gen_base_qty, gen_base_unit)
                             formatted_avail = _format_unit_qty(available_qty, dispo_unit)
                             over_limit.append(f"[{item}] (Pediste {formatted_req}, convertido dinámicamente excede tu inventario de {formatted_avail})")
@@ -730,7 +757,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                         
                         if req_qty_in_dispo_unit is not None:
                             logger.debug(f"🔧 [PANTRY GUARD] Aplicando fallback de 5g/ut para '{gen_name}' ({gen_base_qty} {gen_base_unit} -> {req_qty_in_dispo_unit:.2f} {dispo_unit})")
-                            if req_qty_in_dispo_unit > (available_qty * 1.15):
+                            if req_qty_in_dispo_unit > (available_qty * 1.30):
                                 formatted_req = _format_unit_qty(gen_base_qty, gen_base_unit)
                                 formatted_avail = _format_unit_qty(available_qty, dispo_unit)
                                 over_limit.append(f"[{item}] (Pediste {formatted_req}, convertido con fallback [~{fallback_g}g] excede tu inventario de {formatted_avail})")

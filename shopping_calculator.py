@@ -323,7 +323,7 @@ DISPLAY_CATEGORY_MAP = {
     "Vegetales":        "🥗 VEGETALES",
     "Víveres":          "🥔 VÍVERES",
     "Despensa":         "🥫 DESPENSA",
-    "Despensa y Granos": "🥫 DESPENSA Y GRANOS",
+    "Despensa y Granos": "🥫 DESPENSA",
     "Especias":         "🧂 ESPECIAS",
     "Suplementos":      "💊 SUPLEMENTOS",
 }
@@ -345,7 +345,7 @@ def _get_display_category(db_category: str, name: str = "") -> str:
     if re.search(r'pl[aá]tano|papa|yuca|batata|yaut[ií]a|[ñn]ame|guine[ií]to', n):
         return "🥔 VÍVERES"
     if re.search(r'arroz|pasta|avena|harina|habichuela|frijol|lenteja|garbanzo|quinoa|guand[uú]l|\bpan\b', n):
-        return "🥫 DESPENSA Y GRANOS"
+        return "🥫 DESPENSA"
     if re.search(r'aceite|\bsal\b|pimienta|or[eé]gano|canela|comino|vinagre|miel|salsa|semilla|almendra|nuez|man[ií]|ch[ií]a|az[uú]car|caf[eé]|saz[oó]n', n):
         return "🥫 DESPENSA"
     return "🛒 OTROS"
@@ -825,12 +825,14 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     if consumed_ingredients is None:
         consumed_ingredients = []
     
+    plan_names = set()
     for item in plan_ingredients:
         if not item or len(item) < 3: continue
         qty, unit, name = _parse_quantity(item)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
         aggregated[name][unit] += (qty * multiplier)
+        plan_names.add(name)
 
     for item in consumed_ingredients:
         if not item or len(item) < 3: continue
@@ -978,21 +980,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 categorized_results[display_cat].append(item_val)
                 added = True
                 
-        if not added and name in PANTRY_STAPLES:
-            market_obj = {
-                "name": name,
-                "market_qty": "Disponible",
-                "market_unit": "",
-                "display_string": f"{name} (Disponible)",
-                "category": cat,
-                "display_category": display_cat,
-                "is_staple": True,
-                "estimated_cost_rd": None
-            }
-            item_val = market_obj if structured else market_obj["display_string"]
-            results.append(item_val)
-            categorized_results[display_cat].append(item_val)
-                    
+        # Removido el PANTRY_STAPLES force-add ("Disponible"). 
+        # Si un alimento (incluyendo los estables) se deduce al 100%, 
+        # no debe irrumpir en la lista de compras del supermercado.
+
     results.sort(key=lambda x: x["display_string"] if structured else x)
     
     if categorize:
@@ -1029,7 +1020,11 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
     physical_inventory = []
     consumed_ingredients = []
     
-    if user_id and user_id != "guest":
+    # Cuando es un plan NUEVO (generación o rotación), la lista de compras debe mostrar
+    # TODOS los ingredientes necesarios, sin restar el inventario físico actual.
+    # El Delta contra inventario solo aplica para planes EN CURSO (is_new_plan=False),
+    # por ejemplo cuando el usuario consulta "¿qué me falta por comprar?" a mitad de semana.
+    if user_id and user_id != "guest" and not is_new_plan:
         try:
             from db_inventory import get_raw_user_inventory
             from datetime import datetime
