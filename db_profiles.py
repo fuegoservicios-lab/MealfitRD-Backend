@@ -36,9 +36,10 @@ def get_user_profile(user_id: str):
         if profile.get("subscription_status") == "CANCELLED" and profile.get("subscription_end_date"):
             end_date_str = profile.get("subscription_end_date")
             try:
-                if end_date_str.endswith("Z"):
-                    end_date_str = end_date_str[:-1] + "+00:00"
-                end_date = datetime.fromisoformat(end_date_str)
+                from constants import safe_fromisoformat
+                end_date = safe_fromisoformat(end_date_str)
+                if end_date.tzinfo is None:
+                    end_date = end_date.replace(tzinfo=timezone.utc)
                 now_utc = datetime.now(timezone.utc)
                 
                 # Si ya cruzamos la hora exacta de terminación, lo degradamos

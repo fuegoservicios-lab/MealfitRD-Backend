@@ -21,9 +21,8 @@ def check_recent_meal_plan_exists(user_id: str, max_seconds: int = 30) -> bool:
         if res and "created_at" in res:
             last_saved = res["created_at"]
             if isinstance(last_saved, str):
-                if last_saved.endswith("Z"):
-                    last_saved = last_saved[:-1] + "+00:00"
-                last_saved = datetime.fromisoformat(last_saved)
+                from constants import safe_fromisoformat
+                last_saved = safe_fromisoformat(last_saved)
             if last_saved.tzinfo is None:
                 last_saved = last_saved.replace(tzinfo=timezone.utc)
                 
@@ -45,9 +44,8 @@ def check_meal_plan_generated_today(user_id: str) -> bool:
         if res and "created_at" in res:
             last_saved = res["created_at"]
             if isinstance(last_saved, str):
-                if last_saved.endswith("Z"): 
-                    last_saved = last_saved[:-1] + "+00:00"
-                last_saved = datetime.fromisoformat(last_saved)
+                from constants import safe_fromisoformat
+                last_saved = safe_fromisoformat(last_saved)
             if last_saved.tzinfo is None:
                 last_saved = last_saved.replace(tzinfo=timezone.utc)
             
@@ -503,12 +501,10 @@ def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
                 
             try:
                 # Parse robusto para last_used asumiendo formato de Supabase
-                if last_used_str.endswith("Z"):
-                    last_used_dt = datetime.fromisoformat(last_used_str[:-1]).replace(tzinfo=timezone.utc)
-                else:
-                    last_used_dt = datetime.fromisoformat(last_used_str)
-                    if last_used_dt.tzinfo is None:
-                        last_used_dt = last_used_dt.replace(tzinfo=timezone.utc)
+                from constants import safe_fromisoformat
+                last_used_dt = safe_fromisoformat(last_used_str)
+                if last_used_dt.tzinfo is None:
+                    last_used_dt = last_used_dt.replace(tzinfo=timezone.utc)
                         
                 days_elapsed = max(0, (now - last_used_dt).days)
                 

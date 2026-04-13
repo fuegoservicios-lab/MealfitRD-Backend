@@ -130,6 +130,17 @@ FRUIT_SYNONYMS = {
 
 import unicodedata
 import re
+from datetime import datetime
+
+def safe_fromisoformat(date_str: str) -> datetime:
+    """Parche robusto para Python 3.10 que falla si los milisegundos no son exactamente 0, 3 o 6 dígitos.
+    Soporta fechas con 'Z' al final o '+00:00'.
+    """
+    if date_str.endswith("Z"):
+        date_str = date_str[:-1] + "+00:00"
+    if "." in date_str:
+        date_str = re.sub(r'\.(\d+)', lambda m: '.' + m.group(1).ljust(6, '0')[:6], date_str)
+    return datetime.fromisoformat(date_str)
 
 def strip_accents(s: str) -> str:
     """Remueve acentos de un string para comparaciones normalizadas.

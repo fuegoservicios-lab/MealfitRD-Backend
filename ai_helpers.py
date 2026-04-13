@@ -120,7 +120,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             now = datetime.now(timezone.utc)
             for item, expiry_iso in temp_dislikes.items():
                 try:
-                    expiry_dt = datetime.fromisoformat(expiry_iso.replace("Z", "+00:00"))
+                    from constants import safe_fromisoformat
+                    expiry_dt = safe_fromisoformat(expiry_iso)
+                    if expiry_dt.tzinfo is None:
+                        expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
                     if now < expiry_dt:
                         dislikes_list.append(item.lower())
                 except Exception:
@@ -332,7 +335,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                 
                 if grocery_cycle and "start_date" in grocery_cycle:
                     try:
-                        cycle_start = datetime.fromisoformat(grocery_cycle["start_date"].replace("Z", "+00:00"))
+                        from constants import safe_fromisoformat
+                        cycle_start = safe_fromisoformat(grocery_cycle["start_date"])
+                        if cycle_start.tzinfo is None:
+                            cycle_start = cycle_start.replace(tzinfo=timezone.utc)
                         days_elapsed = (now - cycle_start).days
                         
                         # Si es < 2 días, es regeneración del mismo plan base, actualizaremos el ciclo.
