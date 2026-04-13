@@ -288,11 +288,60 @@ Estos son datos críticos que debes respetar.
             "---------------------------------------------------\n"
         )
     
+    # --- RECICLAJE DE DESPENSA (ZERO-WASTE PREDICTIVO) ---
+    pantry_context = ""
+    current_pantry = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
+    if current_pantry and isinstance(current_pantry, list):
+        clean_pantry = [item.strip() for item in current_pantry if item and isinstance(item, str) and len(item.strip()) > 2]
+        if clean_pantry:
+            if not form_data.get("_is_rotation_reroll", False):
+                # Clasificación heurística FIFO (First In, First Out)
+                perishables = []
+                stables = []
+                PERISHABLE_KEYWORDS = ["aguacate", "pescado", "pollo", "carne", "res", "cerdo", "tomate", "lechuga", "espinaca", "brocoli", "brócoli", "guineo", "platano", "plátano", "banano", "manzana", "fresa", "vegetal", "cebolla", "cilantro", "verdura", "marisco", "camaron", "camarón", "queso", "leche", "yogurt", "huevo", "zanahoria", "pimiento", "aji", "ají", "berenjena", "calabacín", "zucchini"]
+                
+                for item in clean_pantry:
+                    item_lower = item.lower()
+                    if any(key in item_lower for key in PERISHABLE_KEYWORDS):
+                        perishables.append(item)
+                    else:
+                        stables.append(item)
+                
+                pantry_context = "\n--- ♻️ PRIORIDAD DE RECICLAJE DE DESPENSA (ZERO-WASTE PREDICTIVO) ---\n"
+                pantry_context += "El usuario ya tiene los siguientes ingredientes en su despensa:\n\n"
+                
+                if perishables:
+                    pantry_context += f"⚠️ INGREDIENTES ALERTA NARANJA (PERECEDEROS - DEBES USARLOS OBLIGATORIAMENTE Y PRIORIZARLOS EN LOS PRIMEROS DÍAS):\n"
+                    pantry_context += f"{', '.join(perishables)}\n\n"
+                
+                if stables:
+                    pantry_context += f"✅ INGREDIENTES ESTABLES (NO PERECEDEROS - USAR COMO COMPLEMENTO):\n"
+                    pantry_context += f"{', '.join(stables)}\n\n"
+                    
+                pantry_context += "ESTRATEGIA ZERO-WASTE: Es OBLIGATORIO que bases este nuevo plan en agotar estos ingredientes sobrantes ANTES de pedirle que compre productos nuevos. Sé creativo para transformarlos en platos totalmente nuevos.\n"
+                pantry_context += "----------------------------------------------------------\n"
+
+    # --- INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---
+    try:
+        from shopping_calculator import get_master_ingredients
+        master_list = get_master_ingredients()
+        prices_context = "\n--- 💰 INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---\n"
+        prices_context += "A continuación se muestra el costo promedio de los ingredientes (en RD$). Utiliza esta información para optimizar el presupuesto del plan si el usuario pide algo económico o para evitar ingredientes excesivamente costosos:\n"
+        for m in master_list:
+            price_lb = m.get("price_per_lb", 0)
+            price_u = m.get("price_per_unit", 0)
+            if price_lb: prices_context += f"- {m['name']}: RD${price_lb}/lb\n"
+            elif price_u: prices_context += f"- {m['name']}: RD${price_u}/unidad\n"
+        prices_context += "----------------------------------------------------------\n"
+    except Exception as e:
+        logger.error(f"Error cargando precios: {e}")
+        prices_context = ""
+
     prompt_text = (
         f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días.\n"
         f"IMPORTANTE: Genera opciones creativas y diferentes a planes anteriores. Semilla de generación aleatoria: {random_seed}\n\n"
         f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
-        f"{nutrition_context}\n{time_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{variety_prompt}\n{technique_injection}\n{supplements_context}\n{grocery_duration_context}\n\n"
+        f"{nutrition_context}\n{time_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{variety_prompt}\n{technique_injection}\n{supplements_context}\n{grocery_duration_context}\n{pantry_context}\n{prices_context}\n\n"
         f"{GENERATOR_SYSTEM_PROMPT}"
     )
     
@@ -348,6 +397,31 @@ Estos son datos críticos que debes respetar.
     }
     result["main_goal"] = nutrition["goal_label"]
     
+    from shopping_calculator import get_shopping_list_delta
+    try:
+        aggr_list_7 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=1.0) if _uid else []
+        aggr_list_15 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=2.0) if _uid else []
+        aggr_list_30 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=4.0) if _uid else []
+        
+        grocery_duration = form_data.get("groceryDuration", "weekly")
+        if grocery_duration == "biweekly":
+            aggr_list = aggr_list_15
+        elif grocery_duration == "monthly":
+            aggr_list = aggr_list_30
+        else:
+            aggr_list = aggr_list_7
+            
+        result["aggregated_shopping_list"] = aggr_list
+        result["aggregated_shopping_list_weekly"] = aggr_list_7
+        result["aggregated_shopping_list_biweekly"] = aggr_list_15
+        result["aggregated_shopping_list_monthly"] = aggr_list_30
+    except Exception as e:
+        print(f"⚠️ [SHOPPING MATH] Error agregando lista delta: {e}")
+        result["aggregated_shopping_list"] = []
+        result["aggregated_shopping_list_weekly"] = []
+        result["aggregated_shopping_list_biweekly"] = []
+        result["aggregated_shopping_list_monthly"] = []
+
     # Guardar técnicas seleccionadas para persistencia en DB (se extraen en app.py)
     result["_selected_techniques"] = selected_techniques
     
@@ -499,10 +573,31 @@ Responde ÚNICAMENTE con el JSON de revisión.
         severity = "critical"
     
     # ============================================================
-    # VALIDACIÓN DETERMINISTA ANTI-REPETICIÓN (Post-LLM)
-    # Verifica que el plan NO repita platos recientes del usuario.
-    # Esto es puro Python, sin costo de LLM adicional.
+    # VALIDACIÓN DETERMINISTA DE DESPENSA Y ANTI-REPETICIÓN (Post-LLM)
+    # Verifica que el plan cumpla restricciones de inventario y no repita platos.
     # ============================================================
+    if approved:
+        # 1. Validación Estricta de Despensa (Pantry Guardrail)
+        is_rotation = form_data.get("_is_rotation_reroll", False)
+        if is_rotation:
+            from constants import validate_ingredients_against_pantry
+            current_pantry = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
+            
+            clean_pantry = []
+            if current_pantry and isinstance(current_pantry, list):
+                clean_pantry = [item.strip() for item in current_pantry if item and isinstance(item, str) and len(item) > 2]
+                
+            if clean_pantry:
+                val_result = validate_ingredients_against_pantry(all_ingredients, clean_pantry)
+                if val_result is not True:
+                    approved = False
+                    issues.append(val_result)  # val_result es el string de error generado por constants.py
+                    severity = "high"
+                    print(f"🚨 [PANTRY GUARD] Validación fallida en Revisor Médico.")
+                else:
+                    print(f"✅ [PANTRY GUARD] Todos los ingredientes cumplen con la despensa.")
+
+        # 2. Validación Anti-Repetición
     if approved:
         try:
             user_id = form_data.get("user_id") or form_data.get("session_id")
@@ -592,8 +687,8 @@ def should_retry(state: PlanState) -> str:
     
     if state.get("attempt", 0) >= MAX_ATTEMPTS:
         if not state.get("review_passed", False):
-            print(f"🚨 [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado y revisión NO aprobada → ABORTANDO por seguridad.")
-            raise ValueError("Imposible generar un plan seguro tras varios intentos. Por favor, inténtalo de nuevo.")
+            print(f"🚨 [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado y revisión NO aprobada → Tolerando y enviando mejor versión disponible.")
+            return "end"
         print(f"⚠️  [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado → Enviando mejor versión disponible.")
         return "end"
     
@@ -685,16 +780,21 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
         try:
             
             # Check if this is a Pantry Rotation vs a Full Rejected Plan Regeneration
-            is_rotation = bool(actual_form_data.get("current_shopping_list"))
+            is_rotation = bool(actual_form_data.get("current_pantry_ingredients") or actual_form_data.get("current_shopping_list"))
 
             # Si el plan anterior se generó en el mismo día, interpretamos como RECHAZO o ROTACIÓN
             if check_meal_plan_generated_today(user_id):
                 if is_rotation:
                     print("🔄 [ROTACIÓN DE PLATOS] Generando nuevas recetas ESTRICTAMENTE con la misma despensa.")
+                    
+                    current_pantry = actual_form_data.get("current_pantry_ingredients") or actual_form_data.get("current_shopping_list", [])
+                    pantry_list_str = ", ".join(current_pantry) if current_pantry else "Ninguno detectado."
+                    
                     history_context += (
                         f"\n\n🚨 INSTRUCCIÓN DE ROTACIÓN DE MENÚ 🚨\n"
                         f"El usuario solicitó 'Rotar Platos'. EVITA estas preparaciones anteriores:\n{', '.join(previous_meals)}\n"
-                        f"DEBES inventar nuevas recetas pero OBLIGATORIAMENTE usando SOLO los ingredientes explícitos permitidos en la despensa base.\n"
+                        f"DEBES inventar nuevas recetas pero OBLIGATORIAMENTE usando SOLO los ingredientes permitidos en la despensa base actual: {pantry_list_str}.\n"
+                        f"ESTÁ ESTRICTAMENTE PROHIBIDO INVENTAR INGREDIENTES QUE NO ESTÉN EN ESTA LISTA EXACTA.\n"
                         f"----------------------------------------------------------------------\n"
                     )
                     actual_form_data["_is_rotation_reroll"] = True

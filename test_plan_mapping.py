@@ -1,6 +1,6 @@
 import sys
 import json
-from db_shopping import supabase
+from db_core import supabase
 
 def main():
     if not supabase:

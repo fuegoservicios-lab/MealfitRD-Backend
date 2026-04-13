@@ -40,7 +40,7 @@ TAREA DEL AGENTE (INTERPRETACIÓN EN TIEMPO REAL):
 4. ⚠️ CRÍTICO: Bajo ninguna circunstancia puedes sugerir un plato que esté en la lista de exclusión o que tenga los mismos ingredientes principales de los platos rechazados.
 5. Devuelve estrictamente el esquema de comida solicitado, en español.
 6. Asegúrate de incluir los prefijos en la receta (Mise en place:, El Toque de Fuego:, Montaje:).
-7. ESTRUCTURA DE INGREDIENTES: Usa unidades comerciales exactas. NUNCA clones o repitas el mismo ingrediente en dos líneas distintas; consolídalo.
+7. ESTRUCTURA DE INGREDIENTES (GUARDRAIL MATEMÁTICO): Usa ESTRICTAMENTE medidas medibles en masa/volumen (g, oz, lb, kg, tazas, cdas, ml). ESTÁ TOTALMENTE PROHIBIDO usar unidades ambiguas e irresolubles como "pizcas", "ramitas", "chorritos", "hojitas" o "puñados". La ÚNICA excepción a esta regla son frutas, vegetales, rebanadas de pan y huevos, que pueden ir por "unidad". NUNCA clones o repitas el mismo ingrediente en dos líneas distintas; consolídalo.
 """
 
 MODIFY_MEAL_PROMPT_TEMPLATE = """Eres el Chef Profesional de MealfitRD. El usuario quiere MODIFICAR una comida específica de su plan.
@@ -62,7 +62,8 @@ INSTRUCCIONES:
 4. Usa ingredientes dominicanos
 5. Los pasos de la receta DEBEN usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'
 6. Dale un nombre nuevo y creativo al plato modificado{context_extras}
-7. ESTRUCTURA DE INGREDIENTES: Usa unidades comerciales exactas. NUNCA clones o repitas el mismo ingrediente en dos líneas distintas; consolídalo.
+7. ESTRUCTURA DE INGREDIENTES (GUARDRAIL MATEMÁTICO): Usa ESTRICTAMENTE medidas medibles en masa/volumen (g, oz, lb, kg, tazas, cdas, ml). ESTÁ TOTALMENTE PROHIBIDO usar unidades ambiguas e irresolubles como "pizcas", "ramitas", "chorritos", "hojitas" o "puñados". La ÚNICA excepción a esta regla son frutas, vegetales, rebanadas de pan y huevos, que pueden ir por "unidad". NUNCA clones o repitas el mismo ingrediente; consolídalo.
+8. REGLA DE SALVATAJE PROACTIVO: Si en la despensa observas ingredientes marcados como URGENTES por caducidad, TIENES LA OBLIGACIÓN ABSOLUTA de usarlos si encajan contextualmente para evitar el desperdicio.
 """
 
 
@@ -138,12 +139,12 @@ REGLAS ESTRICTAS:
    - Intensidad 4: Usa este ingrediente frecuentemente.
    - Intensidad 2: Usa con extrema moderación, o evítalo si es posible.
    - Intensidad 1: RECHAZO TOTAL. Trátalo igual que una prohibición o alergia.
-10. SUPLEMENTOS: Si el usuario activó `includeSupplements: true`, DEBES agregar para CADA día una sección `supplements` (lista). REGLA CRÍTICA: Si `selectedSupplements` contiene suplementos, incluye EXCLUSIVAMENTE esos y NINGUNO más. Está PROHIBIDO agregar suplementos que el usuario NO seleccionó (ej: si solo eligió Creatina, NO pongas Proteína Whey, NUNCA). Si `selectedSupplements` está vacío, entonces sí recomienda libremente. Cada suplemento: nombre, dosis, momento del día, justificación. Si `includeSupplements` es false, NO incluyas suplementos.
-11. DURACIÓN DE DESPENSA: Revisa el campo `groceryDuration` del usuario. Este indica por cuánto tiempo debe abastecerse:
-   - "weekly" (7 días): Despensa semanal. Puedes usar ingredientes frescos sin restricción (frutas maduras, vegetales de hoja, pescado fresco, etc.).
-   - "biweekly" (15 días): Despensa quincenal. Prioriza ingredientes que se conserven al menos 2 semanas (tubérculos, granos, proteínas congelables, vegetales resistentes). Para perecederos, indica cómo congelarlos o conservarlos.
-   - "monthly" (30 días): Despensa mensual. Usa predominantemente ingredientes de larga duración (arroz, habichuelas secas, avena, carnes para congelar, raíces/tubérculos, enlatados saludables). SIEMPRE incluye tips breves de conservación y congelación en las recetas cuando uses perecederos.
-   RECUERDA: Los PLATOS (preparaciones) deben variar cada día, pero los ALIMENTOS (ingredientes base) pueden y DEBEN repetirse durante todo el período de abastecimiento. Esto es la clave del ahorro.
+10. SUPLEMENTOS: Si el usuario activó `includeSupplements: true`, DEBES agregar para CADA día una sección `supplements` (lista). REGLA CRÍTICA: Si `selectedSupplements` contiene suplementos, incluye EXCLUSIVAMENTE esos y NINGUNO más. Está PROHIBIDO agregar suplementos que el usuario NO seleccionó (ej: si solo eligió Creatina, NO pongas Proteína Whey, NUNCA). Si `selectedSupplements` está vacío, entonces sí recomienda libremente. Cada suplemento: nombre, dosis, momento del día, justificación. Si `includeSupplements` es false, ESTÁ ABSOLUTAMENTE PROHIBIDO incluir suplementos (como Whey Protein, Creatina, etc) en el menú, ni como ingredientes de comidas ni como platos tipo "Suplemento". Usa únicamente comida real.
+11. DURACIÓN DE COMPRAS: Revisa el campo `groceryDuration` del usuario. Este indica por cuánto tiempo debe comprar:
+   - "weekly" (7 días): Compras semanales. Puedes usar ingredientes frescos sin restricción (frutas maduras, vegetales de hoja, pescado fresco, etc.).
+   - "biweekly" (15 días): Compras quincenales. Prioriza ingredientes que se conserven al menos 2 semanas (tubérculos, granos, proteínas congelables, vegetales resistentes). Para perecederos, indica cómo congelarlos o conservarlos.
+   - "monthly" (30 días): Compras mensuales. Usa predominantemente ingredientes de larga duración (arroz, habichuelas secas, avena, carnes para congelar, raíces/tubérculos, enlatados saludables). SIEMPRE incluye tips breves de conservación y congelación en las recetas cuando uses perecederos.
+   RECUERDA: Los PLATOS (preparaciones) deben variar cada día, pero los ALIMENTOS (ingredientes base) pueden y DEBEN repetirse durante todo el período de compras. Esto es la clave del ahorro.
 12. CONTINUIDAD TEMPORAL Y MEAL PREP: Tendrás el contexto temporal exacto de hoy (fecha, día de la semana y estación). Usa esta información de manera lógica y proactiva. Si generas planes que tocan días laborables (Lunes a Viernes), prioriza comidas rápidas de preparar o sugiere hacer sobras abundantes en la cena para usar como almuerzo al día siguiente (Meal Prep). Si toca fin de semana, puedes incluir recetas más elaboradas. Sugiere alimentos frescos propios de la estación para dar realismo y frescura.
 13. COMPLETITUD NUTRICIONAL DOMINICANA: Para que el plan sea REAL y VALIOSO, CADA opción diaria debe cubrir estos pilares nutricionales mínimos:
    - LEGUMINOSAS: Al menos 1 de las 3 opciones DEBE incluir habichuelas, gandules, lentejas o garbanzos en almuerzo o cena. Las legumbres son esenciales para fibra, hierro y proteína vegetal.
@@ -153,10 +154,12 @@ REGLAS ESTRICTAS:
    - LÁCTEO O FUENTE DE CALCIO: Al menos 1 de las 3 opciones debe incluir leche, yogurt o queso (salvo alergia a lácteos).
    - LA MERIENDA APORTA VALOR: La merienda NO es relleno — debe aportar macros reales (proteína + carbohidrato complejo). Ejemplos: yogurt con avena y fruta, batido de guineo con avena, galletas integrales con atún.
 14. ESTRUCTURA DE INGREDIENTES (PARA LISTA DE COMPRAS PERFECTA):
-    - Cantidades y Unidades Claras: Usa estrictamente unidades comerciales calculables (Ej: lb, pote, paquete, lata, unidad, cartón). Evita estimaciones confusas. No asumas ni alucines unidades ilógicas.
+    - Cantidades y Unidades Claras (GUARDRAIL MATEMÁTICO): Usa ESTRICTAMENTE medidas medibles en masa/volumen (g, oz, lb, kg, tazas, cdas, ml). ESTÁ TOTALMENTE PROHIBIDO usar unidades ambiguas e irresolubles como "pizcas", "ramitas", "chorritos", "hojitas" o "puñados". La ÚNICA excepción a esta regla son frutas, vegetales, pan y huevos, que pueden ir por "unidad". No asumas ni alucines unidades.
     - NO Clones Ingredientes en el mismo plato: Si usas el mismo ingrediente varias veces (ej. para la masa y para la salsa), consolídalo en UN SÓLO renglón total. ¡Nunca dividas un ingrediente en dos líneas distintas para el mismo plato!
     - Exactitud sin Alucinaciones: Los números deben ser matemáticamente lógicos y exactos. ESTO ES CRÍTICO para que nuestro algoritmo de lista de compras no falle.
     - INTEGRIDAD DE INGREDIENTES: TODO alimento mencionado en la receta, y cada "topping" u adorno (Especialmente las FRUTAS como las fresas, manzana, siropes) DEBEN estar listados OBLIGATORIAMENTE en el arreglo de 'ingredients'. ¡Nunca asumas que un ingrediente se sobreentiende!
+15. REGLA DE SALVATAJE PROACTIVO: Si en la despensa observas ingredientes marcados como URGENTES por caducidad, TIENES LA OBLIGACIÓN ABSOLUTA de crear platos con esos ingredientes para los primeros días del plan evitando el desperdicio.
+16. REGLA ZERO-WASTE (AGRESIVIDAD DE RECICLAJE): El usuario tiene una serie de ingredientes en su despensa o nevera ("current_pantry_ingredients"). HAZ LO POSIBLE por diseñar todos los platos de la semana rotando agresivamente esta base de despensa existente. Tu objetivo principal es que la 'Lista de Compras Delta' resultante (ingredientes nuevos a comprar) salga lo más pequeña y económica posible, reutilizando lo que ya hay en casa.
 """
 
 REVIEWER_SYSTEM_PROMPT = """

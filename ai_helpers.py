@@ -375,12 +375,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             logger.error(f"Error procesando Grocery Cycle Lock: {e}")
     # ==========================================================
 
-    # ======= CURRENT SHOPPING LIST INJECTION (ROTATION MODE) =======
-    current_shopping_list = form_data.get("current_shopping_list", []) if form_data else []
-    if current_shopping_list:
+    # ======= CURRENT PANTRY INGREDIENTS INJECTION (ROTATION MODE) =======
+    current_pantry_ingredients = (form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])) if form_data else []
+    if current_pantry_ingredients:
         logger.info(f"🔄 [ROTATION MODE] Extrayendo ingredientes base de la lista actual.")
         extracted_p, extracted_c, extracted_v, extracted_f = [], [], [], []
-        csl_lower = [strip_accents(i.lower()) for i in current_shopping_list]
+        csl_lower = [strip_accents(i.lower()) for i in current_pantry_ingredients]
         
         for item in csl_lower:
             for p in DOMINICAN_PROTEINS:
@@ -534,14 +534,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Nota de conservación de alimentos según frecuencia de compras
     grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
     if grocery_duration == "monthly":
-        blocked_text += "\n🛒 DESPENSA MENSUAL: El usuario se abastece para 30 días. PRIORIZA ingredientes no perecederos o fácilmente congelables, granos secos, proteínas congelables. Evita depender de perecederos de vida corta."
+        blocked_text += "\n🛒 COMPRAS MENSUALES: El usuario compra para 30 días. PRIORIZA ingredientes no perecederos o fácilmente congelables, granos secos, proteínas congelables. Evita depender de perecederos de vida corta."
     elif grocery_duration == "biweekly":
-        blocked_text += "\n🛒 DESPENSA QUINCENAL: El usuario se abastece para 15 días. PRIORIZA ingredientes de duración media o congelables."
+        blocked_text += "\n🛒 COMPRAS QUINCENALES: El usuario compra para 15 días. PRIORIZA ingredientes de duración media o congelables."
         
     if cycle_locked:
         # Use a safe fallback for days_elapsed in case it wasn't defined perfectly
         d_elapsed = locals().get('days_elapsed', '?')
-        blocked_text += f"\n\n🚨 [REGLA DE AHORRO EXTREMA]: El usuario está en el Día {d_elapsed} de su ciclo de despensa de {grocery_days} días. TIENES LA OBLIGACIÓN ESTRICTA de basar todas las comidas en usar EXACTAMENTE las proteínas, carbohidratos y vegetales asignados explícitamente en el prompt. Usa diferentes preparaciones y técnicas de cocción para que no se aburra, pero NO SUGIERAS ALIMENTOS BASE NUEVOS."
+        blocked_text += f"\n\n🚨 [REGLA DE AHORRO EXTREMA]: El usuario está en el Día {d_elapsed} de su ciclo de compras de {grocery_days} días. TIENES LA OBLIGACIÓN ESTRICTA de basar todas las comidas en usar EXACTAMENTE las proteínas, carbohidratos y vegetales asignados explícitamente en el prompt. Usa diferentes preparaciones y técnicas de cocción para que no se aburra, pero NO SUGIERAS ALIMENTOS BASE NUEVOS."
     
     # Construir parámetros de frutas para el prompt
     fruit_params = {}

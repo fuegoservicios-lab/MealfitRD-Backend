@@ -1,5 +1,5 @@
 import json
-from db_shopping import supabase
+from db_core import supabase
 from agent import _pre_consolidate_ingredients_multiday
 
 def main():

@@ -101,7 +101,7 @@ async def test_push_route(user_id: str):
         raise HTTPException(status_code=500, detail="Database connection pool unavailable")
     try:
         import os, json
-        from pywebpush import webpush, WebPushException
+        from pywebpush import webpush, WebPushException  # type: ignore[import-untyped]
         
         vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
         vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")

@@ -150,12 +150,13 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         # 8. Actualizar meal_likes
         supabase.table("meal_likes").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
         
-        
-        
+        # 9. Actualizar Inventario Físico (Despensa)
+        supabase.table("user_inventory").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
         # 10. Recalcular frecuencias de ingredientes a partir de los planes migrados
         # Sin esto, el usuario registrado parte con freq=0 y pierde el historial de variedad.
         try:
             from constants import normalize_ingredient_for_tracking
+            from db_plans import get_ingredient_frequencies_from_plans, increment_ingredient_frequencies
             migrated_ings = get_ingredient_frequencies_from_plans(new_user_id, limit=10)
             if migrated_ings:
                 normalized = [normalize_ingredient_for_tracking(i) for i in migrated_ings if i]

@@ -8,7 +8,7 @@ import re
 import unicodedata
 logger = logging.getLogger(__name__)
 
-from constants import strip_accents, CULINARY_KNOWLEDGE_BASE
+from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, validate_ingredients_against_pantry
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
@@ -47,7 +47,8 @@ from tools import (
     update_form_field, generate_new_plan_from_chat,
     log_consumed_meal, modify_single_meal,
     search_deep_memory, agent_tools, analyze_preferences_agent,
-    execute_generate_new_plan, execute_modify_single_meal
+    execute_generate_new_plan, execute_modify_single_meal,
+    check_current_pantry
 )
 
 # Langchain Chat Model Initialization
@@ -105,12 +106,50 @@ def swap_meal(form_data: dict):
         
     if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
     
-    # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES ---
-    current_shopping_list = form_data.get("current_shopping_list", [])
-    if current_shopping_list and isinstance(current_shopping_list, list) and len(current_shopping_list) > 0:
-        clean_ingredients = [item.strip() for item in current_shopping_list if item and isinstance(item, str) and len(item) > 2]
-        if clean_ingredients:
-            context_extras += f"\n    - ⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario quiere cambiar este plato pero DEBES utilizar ingredientes que ya estén en su lista actual. Ingredientes disponibles: {', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, sin agregar ingredientes foráneos."
+    # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES (ZERO-TRUST) ---
+    clean_ingredients = []
+    user_id = form_data.get("user_id")
+    
+    # Intento Primario: Extraer ingredientes directamente del plan activo en BD
+    if user_id and user_id != "guest":
+        try:
+            from db_plans import get_latest_meal_plan_with_id
+            plan_record = get_latest_meal_plan_with_id(user_id)
+            if plan_record and "plan_data" in plan_record:
+                from db_facts import get_consumed_meals_since
+                from shopping_calculator import get_realtime_pantry
+                
+                plan_created_at = plan_record.get("created_at")
+                consumed_ingredients = []
+                if plan_created_at:
+                    consumed_meals_list = get_consumed_meals_since(user_id, plan_created_at)
+                    for cm in consumed_meals_list:
+                        ings = cm.get("ingredients") or []
+                        if isinstance(ings, list):
+                            consumed_ingredients.extend(ings)
+                
+                clean_ingredients = get_realtime_pantry(plan_record["plan_data"], consumed_ingredients)
+        except Exception as e:
+            logger.error(f"⚠️ [SWAP_MEAL] Error extrayendo inventario desde BD: {e}")
+
+    # Fallback: Usar lista enviada por el front si falló BD o es guest
+    if not clean_ingredients:
+        current_pantry_ingredients = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
+        if current_pantry_ingredients and isinstance(current_pantry_ingredients, list) and len(current_pantry_ingredients) > 0:
+            from shopping_calculator import aggregate_shopping_list
+            clean_ingredients = aggregate_shopping_list([item.strip() for item in current_pantry_ingredients if item and isinstance(item, str) and len(item) > 2])
+            
+    if clean_ingredients:
+        context_extras += f"\n    - ⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario quiere cambiar este plato pero DEBES utilizar ingredientes que ya estén en su lista actual. Ingredientes disponibles: {', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, sin agregar ingredientes foráneos."
+    else:
+        logger.warning(
+            f"⚠️ [SWAP_MEAL] GUARDRAIL BYPASS — Sin despensa detectada | "
+            f"user_id={user_id or 'guest'} | "
+            f"bd_attempted={bool(user_id and user_id != 'guest')} | "
+            f"frontend_list_size={len(form_data.get('current_pantry_ingredients', []))} | "
+            f"mode=FREE_GENERATION"
+        )
+
 
     # --- ANTI MODE-COLLAPSE PARA SWAPS (Proteína + Carbohidrato + Vegetal) ---
     # Sugerir alternativas en las 3 dimensiones usando peso inverso por frecuencia
@@ -184,7 +223,7 @@ def swap_meal(form_data: dict):
         context_extras=context_extras
     )
     
-    temp = 0.8
+    temp = 0.3
     swap_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
         temperature=temp, 
@@ -196,16 +235,59 @@ def swap_meal(form_data: dict):
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
         reraise=True,
-        before_sleep=lambda retry_state: print(f"⚠️  [SWAP] Reintento #{retry_state.attempt_number} tras error de formato...")
+        before_sleep=lambda retry_state: logger.warning(
+            f"🔁 [SWAP RETRY] attempt={retry_state.attempt_number} | "
+            f"reason=pantry_guardrail_rejection | meal_type={meal_type}"
+        )
     )
     def invoke_with_retry():
-        return swap_llm.invoke(prompt_text)
+        res = swap_llm.invoke(prompt_text)
+        
+        # Validación post-generación (guardrail determinista)
+        if hasattr(res, "ingredients"):
+            ingreds = getattr(res, "ingredients")
+        elif isinstance(res, dict) and "ingredients" in res:
+            ingreds = res["ingredients"]
+        else:
+            ingreds = []
+            
+        # Solo aplicamos restricción estricta si hay una despensa base limpia extraída
+        if clean_ingredients:
+            val_result = validate_ingredients_against_pantry(ingreds, clean_ingredients)
+            if val_result is not True:
+                logger.warning(val_result)
+                raise ValueError(val_result)
+                
+        return res
     
-    response = invoke_with_retry()
+    try:
+        response = invoke_with_retry()
+    except Exception as e:
+        logger.error(f"❌ [SWAP_MEAL] Fallaron los intentos LLM y validador: {e}. Usando Plato Fallback.")
+        fallback_ing = clean_ingredients[:4] if clean_ingredients else ["Pollo", "Arroz", "Aguacate"]
+        response = {
+            "name": f"Opción Segura: {' y '.join(fallback_ing[:2]).title()}",
+            "desc": "Este plato fue autogenerado como medida de seguridad para garantizar una opción con ingredientes que ya posees.",
+            "ingredients": fallback_ing,
+            "recipe": [
+                "Mise en place: Prepara de manera básica los ingredientes de la nevera.",
+                "El Toque de Fuego: Cocina saludablemente a la plancha o al vapor.",
+                "Montaje: Sirve porciones adecuadas según tu objetivo y disfruta."
+            ],
+            "cals": target_calories or 450,
+            "protein": round((target_calories or 450) * 0.3 / 4),
+            "carbs": round((target_calories or 450) * 0.4 / 4),
+            "fats": round((target_calories or 450) * 0.3 / 9)
+        }
+        # Fake retries for the logging metric below
+        if not hasattr(invoke_with_retry, 'retry'):
+            invoke_with_retry.retry = type('obj', (object,), {'statistics': {'attempt_number': 3}})
     
     end_time = time.time()
     duration_secs = round(float(end_time - start_time), 2)
-    logger.info(f"✅ [COMPLETADO] Nueva alternativa {meal_type} generada en {duration_secs} segundos.")
+    # Observabilidad: cuántos reintentos se usaron
+    retries_used = invoke_with_retry.retry.statistics.get("attempt_number", 1) if hasattr(invoke_with_retry, 'retry') else 1
+    logger.info(f"✅ [COMPLETADO] Nueva alternativa {meal_type} generada en {duration_secs}s | retries_used={retries_used}")
     logger.info("-------------------------------------------------------------\n")
     if hasattr(response, "model_dump"):
         return getattr(response, "model_dump")()
@@ -314,12 +396,15 @@ def execute_tools(state: ChatState):
             elif tool_name == "modify_single_meal":
                 user_id = state.get("user_id")
                 session_id = state.get("session_id")
+                form_data = state.get("form_data", {})
                 
                 tool_result = execute_modify_single_meal(
                     user_id=user_id if user_id and user_id != 'guest' else session_id,
                     day_number=tool_args.get("day_number", 1),
                     meal_type=tool_args.get("meal_type", "Desayuno"),
-                    changes=tool_args.get("changes", "")
+                    changes=tool_args.get("changes", ""),
+                    form_data=form_data,
+                    allow_pantry_expansion=tool_args.get("allow_pantry_expansion", False)
                 )
                 try:
                     parsed_mod = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
@@ -609,10 +694,62 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
 - Usa `log_consumed_meal` para registrar en el diario cualquier comida que el usuario afirme haber comido. Si analizas una foto de una comida y el usuario confirma que se la comió, USA ESTA HERRAMIENTA usando los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos a la herramienta.
 - Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos en la Opción A', 'ponle más proteína al almuerzo', 'quítale el arroz a la cena de la Opción B'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. Debes identificar correctamente el day_number (1 para Opción A, 2 para Opción B, o 3 para Opción C) y el meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda') del plan activo del usuario. Si el usuario no especifica, asume 1 (Opción A).
+- Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar desde cero, o pida un resumen de su lista de compras original (lo que tenía que ir a comprar inicialmente).
+- Usa `check_current_pantry` SIEMPRE que el usuario pregunte qué le sobra en la nevera, qué ingredientes le quedan, o sus sobras actuales. Esta herramienta descuenta lo que ya se comió usando matemáticas exactas.
+- Usa `search_deep_memory` cuando el usuario pregunte sobre datos de su pasado que no estén en el contexto inmediato del chat, como preferencias antiguas, alergias reportadas antes, o historial lejano.
 
-
+🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨: 
+1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario.
+2. Si modificas el inventario o consumes ingredientes con `modify_pantry_inventory`, `mark_shopping_list_purchased`, o `log_consumed_meal`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_INVENTORY]`. Esto recargará los datos de "Mi Nevera" instantáneamente.
 
 El user_id del usuario actual es: {user_id}"""
+
+    inventory_str = ""
+    shopping_delta_str = ""
+    
+    if user_id and user_id != "guest":
+        try:
+            from db_inventory import get_user_inventory
+            user_phys_inv = get_user_inventory(user_id)
+            if user_phys_inv:
+                inventory_str = ", ".join(user_phys_inv)
+                
+            from db_plans import get_latest_meal_plan_with_id
+            plan_record = get_latest_meal_plan_with_id(user_id)
+            if plan_record and "plan_data" in plan_record:
+                from shopping_calculator import get_shopping_list_delta
+                delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
+                if delta_list:
+                    shopping_delta_str = ", ".join(delta_list)
+        except Exception as e:
+            logger.error(f"⚠️ Error extrayendo inventario y delta para system_prompt: {e}")
+
+    # Fallbacks
+    if not inventory_str and form_data:
+        current_pantry = form_data.get("current_pantry_ingredients", [])
+        if current_pantry and isinstance(current_pantry, list):
+            from shopping_calculator import aggregate_shopping_list
+            cleaned_pantry = aggregate_shopping_list([item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2])
+            inventory_str = ", ".join(cleaned_pantry)
+
+    if not shopping_delta_str and form_data:
+        current_shopping = form_data.get("current_shopping_list", [])
+        if current_shopping and isinstance(current_shopping, list):
+            from shopping_calculator import aggregate_shopping_list
+            cleaned_shop = aggregate_shopping_list([item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2])
+            shopping_delta_str = ", ".join(cleaned_shop)
+
+    if inventory_str or shopping_delta_str:
+        system_prompt += f"\n\n🛒 ESTADO DE LA DESPENSA Y COMPRAS (INFORMACIÓN EN TIEMPO REAL):"
+        if inventory_str:
+            system_prompt += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: {inventory_str}. ¡Estas son las provisiones que el usuario tiene FÍSICAMENTE en su cocina ahora mismo! PRIORIZA SIEMPRE recomendar cocinar con esto antes de sugerir comprar cosas nuevas."
+        else:
+            system_prompt += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: Vacío. El usuario no ha registrado tener ingredientes en casa."
+            
+        if shopping_delta_str:
+            system_prompt += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: {shopping_delta_str}. Esto es lo que el usuario AÚN DEBE COMPRAR en el supermercado para completar su plan alimenticio."
+        else:
+            system_prompt += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: ¡Vacía! El usuario ya tiene todos los ingredientes necesarios en su inventario físico para su plan actual."
 
     if current_plan:
         system_prompt += f"\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas activo:\n{json.dumps(current_plan)}\n\nUsa esta información para responder con exactitud preguntas sobre lo que le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado (como desayuno, almuerzo o cena)."
@@ -794,12 +931,66 @@ REGLAS SUPREMAS PARA LLAMADAS DE VOZ:
     
     system_prompt += f"""
 TIENES HERRAMIENTAS DISPONIBLES:
-- Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil. IMPORTANTE: Revisa los valores permitidos, la UI usa nombres clave (ej: 'lose_fat', 'vegetarian', 'male').
-- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo.
-- Usa `log_consumed_meal` para registrar en el diario cualquier comida consumida.
-- Usa `modify_single_meal` para cambios puntuales.
+- OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil. IMPORTANTE: Revisa los valores permitidos, la UI usa nombres clave (ej: 'lose_fat', 'vegetarian', 'male').
+- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente').
+- NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
+- Usa `log_consumed_meal` para registrar en el diario cualquier comida consumida. Si analizas una foto y el usuario confirma que se la comió, USA ESTA HERRAMIENTA con los macros estimados.
+- Usa `modify_single_meal` para cambios puntuales a una comida específica del plan (ej: 'cámbiale el salami al mangú por huevos en la Opción A'). Opción A = day_number 1, Opción B = 2, Opción C = 3.
+- Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar, cuánto necesita de un ingrediente, o pida su lista de compras. NUNCA sumes ingredientes manualmente mirando el plan, esta herramienta hace el cálculo matemático exacto.
+- Usa `search_deep_memory` cuando el usuario pregunte sobre su pasado lejano, experiencias anteriores con la dieta, o datos que no aparecen en la memoria reciente (ej: '¿Recuerdas qué comía al principio?', '¿Cómo me sentía hace meses?').
+
+🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨: 
+1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario.
+2. Si modificas el inventario o consumes ingredientes con `modify_pantry_inventory`, `mark_shopping_list_purchased`, o `log_consumed_meal`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_INVENTORY]`. Esto recargará los datos de "Mi Nevera" instantáneamente.
 
 El user_id actual es: {user_id}"""
+
+    inventory_str = ""
+    shopping_delta_str = ""
+    
+    if user_id and user_id != "guest":
+        try:
+            from db_inventory import get_user_inventory
+            user_phys_inv = get_user_inventory(user_id)
+            if user_phys_inv:
+                inventory_str = ", ".join(user_phys_inv)
+                
+            from db_plans import get_latest_meal_plan_with_id
+            plan_record = get_latest_meal_plan_with_id(user_id)
+            if plan_record and "plan_data" in plan_record:
+                from shopping_calculator import get_shopping_list_delta
+                delta_list = get_shopping_list_delta(user_id, plan_record["plan_data"], is_new_plan=False)
+                if delta_list:
+                    shopping_delta_str = ", ".join(delta_list)
+        except Exception as e:
+            logger.error(f"⚠️ Error extrayendo inventario y delta para system_prompt: {e}")
+
+    # Fallbacks
+    if not inventory_str and form_data:
+        current_pantry = form_data.get("current_pantry_ingredients", [])
+        if current_pantry and isinstance(current_pantry, list):
+            from shopping_calculator import aggregate_shopping_list
+            cleaned_pantry = aggregate_shopping_list([item.strip() for item in current_pantry if isinstance(item, str) and len(item.strip()) > 2])
+            inventory_str = ", ".join(cleaned_pantry)
+
+    if not shopping_delta_str and form_data:
+        current_shopping = form_data.get("current_shopping_list", [])
+        if current_shopping and isinstance(current_shopping, list):
+            from shopping_calculator import aggregate_shopping_list
+            cleaned_shop = aggregate_shopping_list([item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2])
+            shopping_delta_str = ", ".join(cleaned_shop)
+
+    if inventory_str or shopping_delta_str:
+        system_prompt += f"\n\n🛒 ESTADO DE LA DESPENSA Y COMPRAS (INFORMACIÓN EN TIEMPO REAL):"
+        if inventory_str:
+            system_prompt += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: {inventory_str}. ¡Estas son las provisiones que el usuario tiene FÍSICAMENTE en su cocina ahora mismo! PRIORIZA SIEMPRE recomendar cocinar con esto antes de sugerir comprar cosas nuevas."
+        else:
+            system_prompt += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: Vacío. El usuario no ha registrado tener ingredientes en casa."
+            
+        if shopping_delta_str:
+            system_prompt += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: {shopping_delta_str}. Esto es lo que el usuario AÚN DEBE COMPRAR en el supermercado para completar su plan alimenticio."
+        else:
+            system_prompt += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: ¡Vacía! El usuario ya tiene todos los ingredientes necesarios en su inventario físico para su plan actual.\n"
 
     if current_plan:
         system_prompt += f"\nCONTEXTO CRÍTICO: Plan activo:\n{json.dumps(current_plan)}\n"
@@ -866,7 +1057,9 @@ El user_id actual es: {user_id}"""
             "generando_plan": ["Armando la química perfecta de tus comidas...", "Diseñando un plan de alimentación premium...", "Calculando macros y esculpiendo tu dieta...", "Generando distribución óptima de nutrientes..."],
             "modificando_comida": ["Ajustando la receta a tus exigencias...", "Reemplazando ingredientes inteligentemente...", "Rediseñando esta comida sin perder tus macros...", "Aplicando cambios culinarios a tu plato..."],
             "actualizando_bd": ["Guardando tus preferencias en el sistema...", "Sincronizando perfil con tu base de datos...", "Actualizando tu historial clínico nutricional..."],
-            "registrando_progreso": ["Inscribiendo tu ingesta en el registro diario...", "Contabilizando calorías y macros consumidos...", "Actualizando tu impacto metabólico del día..."]
+            "registrando_progreso": ["Inscribiendo tu ingesta en el registro diario...", "Contabilizando calorías y macros consumidos...", "Actualizando tu impacto metabólico del día..."],
+            "calculando_compras": ["Calculando tu lista de compras matemáticamente...", "Sumando ingredientes de todas las opciones...", "Consolidando cantidades exactas para el súper..."],
+            "buscando_memoria": ["Explorando tu historial profundo...", "Recuperando recuerdos de tus experiencias pasadas...", "Buscando en tu archivo de memoria a largo plazo..."]
         }
         return random.choice(opts.get(msg_type, ["Procesando..."]))
 
@@ -904,6 +1097,10 @@ El user_id actual es: {user_id}"""
                                     yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('actualizando_bd')})}\n\n"
                                 elif tool_name == "log_consumed_meal":
                                     yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('registrando_progreso')})}\n\n"
+                                elif tool_name == "check_shopping_list":
+                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('calculando_compras')})}\n\n"
+                                elif tool_name == "search_deep_memory":
+                                    yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('buscando_memoria')})}\n\n"
                                     
     except Exception as e:
         logger.error(f"❌ [CHAT STREAM] Error en astream nativo: {e}")

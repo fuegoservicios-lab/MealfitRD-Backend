@@ -298,7 +298,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         logger.error(f"Error buscando visual_diary: {e}")
         return []
 
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0):
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None):
     """Guarda una comida consumida en la tabla consumed_meals de Supabase."""
     if not supabase: return None
     try:
@@ -311,6 +311,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             "protein": protein,
             "carbs": carbs,
             "healthy_fats": healthy_fats,
+            "ingredients": ingredients if ingredients is not None else [],
             "created_at": now
         }).execute()
         return res.data
@@ -366,3 +367,16 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
             logger.error(f"Error obteniendo comidas consumidas de hoy: {e}")
             return []
 
+def get_consumed_meals_since(user_id: str, since_iso_date: str):
+    """Obtiene todas las comidas consumidas por el usuario desde una fecha específica."""
+    if not supabase: return []
+    try:
+        res = supabase.table("consumed_meals")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .gte("created_at", since_iso_date)\
+            .execute()
+        return res.data
+    except Exception as e:
+        logger.error(f"Error obteniendo comidas consumidas desde {since_iso_date}: {e}")
+        return []

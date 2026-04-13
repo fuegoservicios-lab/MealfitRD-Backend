@@ -1,4 +1,4 @@
-from db_shopping import get_custom_shopping_items
+# NOTE: db_shopping module was removed (legacy shopping list architecture)
 from db import get_session_messages
 from dotenv import load_dotenv
 import json

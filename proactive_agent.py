@@ -26,14 +26,15 @@ def get_active_users_for_proactive() -> list:
     try:
         # Obtenemos sesiones que sí tienen un user_id y han estado activas en los últimos 3 días (72 hrs)
         if not connection_pool: return []
-        query = """
-            SELECT id, user_id
-            FROM agent_sessions
-            WHERE user_id IS NOT NULL 
-              AND user_id != 'guest'
-              AND created_at >= NOW() - INTERVAL '3 days'
-        """
-        res = execute_sql_query(query)
+        query = (
+            "SELECT DISTINCT ON (user_id) id, user_id "
+            "FROM agent_sessions "
+            "WHERE user_id IS NOT NULL "
+            "AND user_id::text != 'guest' "
+            "AND created_at >= NOW() - INTERVAL '3 days' "
+            "ORDER BY user_id, created_at DESC"
+        )
+        res = execute_sql_query(query, fetch_all=True)
         return res if res else []
     except Exception as e:
         logger.error(f"Error fetching active sessions for proactive check: {e}")
@@ -71,8 +72,8 @@ def run_proactive_checks():
     
     sessions = get_active_users_for_proactive()
     for s in sessions:
-        session_id = s.get("id")
-        user_id = s.get("user_id")
+        session_id = str(s.get("id"))
+        user_id = str(s.get("user_id"))
         
         try:
             # Regla de Anti-Spam: Solo enviar si no hemos enviado/recibido nada en las últimas 2 horas
@@ -131,7 +132,7 @@ def run_proactive_checks():
             )
             
             chat_llm = ChatGoogleGenerativeAI(
-                model="gemini-3.1-flash-preview", 
+                model="gemini-3.1-flash-lite-preview", 
                 temperature=0.8,
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             )
@@ -148,7 +149,7 @@ def run_proactive_checks():
                 # ---------------------------------------------
                 try:
                     import json
-                    from pywebpush import webpush, WebPushException
+                    from pywebpush import webpush, WebPushException  # type: ignore[import-untyped]
                     
                     vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
                     vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")

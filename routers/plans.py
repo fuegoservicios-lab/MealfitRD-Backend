@@ -17,6 +17,7 @@ from agent import analyze_preferences_agent, swap_meal
 from graph_orchestrator import run_plan_pipeline
 from ai_helpers import expand_recipe_agent
 from services import _save_plan_and_track_background, _process_swap_rejection_background
+from db_inventory import restock_inventory, consume_inventory_items_completely
 
 logger = logging.getLogger(__name__)
 
@@ -160,3 +161,74 @@ def api_like(data: dict = Body(...), verified_user_id: Optional[str] = Depends(g
         return {"success": True, "message": "Tu like/dislike ha sido guardado exitosamente."}
     except Exception as e:
         return {"error": str(e)}
+
+@router.post("/restock")
+def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+    try:
+        user_id = data.get("user_id")
+        plan_id = data.get("plan_id")
+        ingredients = data.get("ingredients")
+        
+        if not user_id or user_id == "guest":
+            return {"success": False, "message": "Debes iniciar sesión para usar la nevera virtual."}
+            
+        if not verified_user_id or verified_user_id != user_id:
+            raise HTTPException(status_code=401, detail="No autorizado.")
+            
+        if not ingredients or not isinstance(ingredients, list):
+            return {"success": False, "message": "Lista de ingredientes inválida."}
+
+        # Validación MURO: Comprobar si el plan ya fue registrado para evitar duplicados
+        plan_res = None
+        if plan_id and supabase:
+            plan_res = supabase.table("meal_plans").select("plan_data").eq("id", plan_id).execute()
+            if plan_res.data and len(plan_res.data) > 0:
+                plan_data = plan_res.data[0].get("plan_data", {})
+                if plan_data.get("is_restocked") is True:
+                    return {"success": False, "message": "El plan ya ha sido registrado en la despensa previamente."}
+            
+        success = restock_inventory(user_id, ingredients)
+        
+        if success:
+            log_api_usage(user_id, "restock_inventory")
+
+            # Marcar el plan como "restocked" en BD para proteger futuras peticiones
+            if plan_id and supabase and plan_res and plan_res.data and len(plan_res.data) > 0:
+                plan_data = plan_res.data[0].get("plan_data", {})
+                plan_data["is_restocked"] = True
+                supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", plan_id).execute()
+
+            return {"success": True, "message": "¡Despensa actualizada exitosamente!"}
+        else:
+            return {"success": False, "message": "Hubo un problema actualizando algunos ingredientes."}
+            
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/restock: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/inventory/consume")
+def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+    try:
+        user_id = data.get("user_id")
+        ingredients = data.get("ingredients")
+        
+        if not user_id or user_id == "guest":
+            return {"success": False, "message": "Debes iniciar sesión."}
+            
+        if not verified_user_id or verified_user_id != user_id:
+            raise HTTPException(status_code=401, detail="No autorizado.")
+            
+        if not ingredients or not isinstance(ingredients, list):
+            return {"success": False, "message": "Lista de ingredientes inválida."}
+            
+        success = consume_inventory_items_completely(user_id, ingredients)
+        
+        if success:
+            log_api_usage(user_id, "consume_inventory")
+            return {"success": True, "message": "Inventario actualizado exitosamente."}
+        else:
+            return {"success": False, "message": "Hubo un problema vaciando algunos ingredientes."}
+            
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/inventory/consume: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

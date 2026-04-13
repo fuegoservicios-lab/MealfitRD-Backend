@@ -7,3 +7,4 @@ from db_profiles import *
 from db_chat import *
 from db_plans import *
 from db_facts import *
+from db_inventory import *

@@ -8,7 +8,8 @@ from typing import Optional
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
-from constants import normalize_ingredient_for_tracking, strip_accents
+from tenacity import retry, stop_after_attempt, wait_exponential
+from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry
 logger = logging.getLogger(__name__)
 
 from db import (
@@ -146,12 +147,23 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
         logger.info(f"📝 [TOOL] Instrucciones específicas del usuario: {instructions}")
     
     # 1. Validar y consolidar form_data (Priorizar el del frontend)
-    actual_form_data = form_data or {}
+    actual_form_data = form_data.copy() if form_data else {}
     
     if not actual_form_data.get("age"):
         profile = get_user_profile(user_id)
         if profile:
-            actual_form_data = profile.get("health_profile") or {}
+            health_prof = profile.get("health_profile") or {}
+            for k, v in health_prof.items():
+                if k not in actual_form_data:
+                    actual_form_data[k] = v
+            
+    # Extraer la despensa física activa de la BD para forzar Zero-Waste realista
+    if user_id and user_id != "guest" and not actual_form_data.get("current_pantry_ingredients"):
+        try:
+            from db_inventory import get_user_inventory
+            actual_form_data["current_pantry_ingredients"] = get_user_inventory(user_id)
+        except Exception as e:
+            logger.error(f"⚠️ Error intentando extraer despensa para zero-waste nuevo plan: {e}")
             
     if not actual_form_data or not actual_form_data.get("age"):
         return "ERROR: No se encontraron datos de salud. Completa el formulario de evaluación primero."
@@ -256,7 +268,11 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado.
     """
     logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas). Ingredientes a deducir: {ingredients}")
-    result = db_log_consumed_meal(user_id, meal_name, calories, protein, carbs, healthy_fats)
+    result = db_log_consumed_meal(user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients)
+    import db_inventory
+    if ingredients:
+        db_inventory.deduct_consumed_meal_from_inventory(user_id, ingredients)
+        
     if result is not None:
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) en tu diario."
         return msg
@@ -267,7 +283,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
 # TOOL: Modificar una comida individual del plan activo
 # ============================================================
 
-def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str) -> str:
+def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str, form_data: dict = None, allow_pantry_expansion: bool = False) -> str:
     """Ejecuta la modificación de una comida individual en el plan activo del usuario."""
     logger.debug(f"\n🔧 [TOOL] modify_single_meal: Día {day_number}, {meal_type}, cambios: '{changes}'")
     
@@ -309,6 +325,52 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # 3. Regenerar solo esa comida con Gemini
     original_cals = target_meal.get("cals", 500)
     
+    # Extraer ingredientes de la despensa física + lista de compras (Mejora 1: Virtual Pantry Expandido)
+    clean_ingredients = []
+    try:
+        from db_inventory import get_user_inventory
+        physical_inventory = get_user_inventory(user_id)
+        if physical_inventory:
+            clean_ingredients.extend(physical_inventory)
+            
+        # Añadir la lista de compras del plan actual (futuras compras)
+        if plan_data and "aggregated_shopping_list" in plan_data:
+            shopping_list = plan_data.get("aggregated_shopping_list")
+            if shopping_list and isinstance(shopping_list, list):
+                for item in shopping_list:
+                    val = item.get("display_string", str(item)) if isinstance(item, dict) else str(item)
+                    if val not in clean_ingredients:
+                        clean_ingredients.append(val)
+    except Exception as e:
+        logger.error(f"⚠️ Error extrayendo Virtual Pantry en modify_meal: {e}")
+    
+    # Fallback al inventario del fronend si la base de datos no arrojó datos
+    if not clean_ingredients and form_data:
+        current_pantry = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
+        if current_pantry and isinstance(current_pantry, list):
+            clean_ingredients = [item.strip() for item in current_pantry if item and isinstance(item, str) and len(item.strip()) > 2]
+            
+    context_extras = ""
+    if clean_ingredients and not allow_pantry_expansion:
+        context_extras = f"\n⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario solicitó un cambio. DEBES utilizar OBLIGATORIAMENTE ingredientes que ya formen parte de su despensa actual. Ingredientes disponibles: {', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, sin agregar ingredientes foráneos."
+    elif allow_pantry_expansion:
+        context_extras = f"\n💡 PERMISO DE EXPANSIÓN DE DESPENSA: El usuario ha autorizado explícitamente agregar ingredientes nuevos que no están en su despensa para este cambio (¡Va de compras!). Siéntete libre de proponer CUALQUIER ingrediente ideal para lograr la mejor comida."
+        
+    try:
+        from shopping_calculator import get_master_ingredients
+        master_list = get_master_ingredients()
+        prices_context = "\n--- 💰 INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---\n"
+        prices_context += "Costo promedio de los ingredientes (en RD$). Utilízalo si el usuario pide sustituciones más baratas u opciones económicas:\n"
+        for m in master_list:
+            price_lb = m.get("price_per_lb", 0)
+            price_u = m.get("price_per_unit", 0)
+            if price_lb: prices_context += f"- {m['name']}: RD${price_lb}/lb\n"
+            elif price_u: prices_context += f"- {m['name']}: RD${price_u}/unidad\n"
+        prices_context += "----------------------------------------------------------\n"
+        context_extras += prices_context
+    except Exception as e:
+        logger.error(f"Error cargando precios en modify_meal: {e}")
+    
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
@@ -317,17 +379,59 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         original_cals=original_cals,
         ingredients_json=json.dumps(target_meal.get('ingredients', [])),
         changes=changes,
-        context_extras=""
+        context_extras=context_extras
     )
     
     modify_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
-        temperature=0.5,
+        temperature=0.1,
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(MealModel)
+    current_prompt = [modify_prompt]
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        reraise=True,
+        before_sleep=lambda retry_state: logger.warning(
+            f"🔁 [MODIFY_MEAL RETRY] attempt={retry_state.attempt_number} | "
+            f"reason=pantry_guardrail_rejection"
+        )
+    )
+    def invoke_with_retry():
+        res = modify_llm.invoke(current_prompt[0])
+        
+        # Validación post-generación
+        if hasattr(res, "ingredients"):
+            ingreds = getattr(res, "ingredients")
+        elif isinstance(res, dict) and "ingredients" in res:
+            ingreds = res["ingredients"]
+        else:
+            ingreds = []
+            
+        if clean_ingredients and not allow_pantry_expansion:
+            val_result = validate_ingredients_against_pantry(ingreds, clean_ingredients)
+            if val_result is not True:
+                logger.warning(val_result)
+                # Inyectar el feedback específico matematico al LLM para el próximo intento de @retry
+                current_prompt[0] = modify_prompt + f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{val_result}\nPor favor revisa el inventario y ajusta la receta para que cumpla estrictamente."
+                raise ValueError(val_result)
+                
+        return res
     
     try:
-        new_meal_response = modify_llm.invoke(modify_prompt)
+        try:
+            new_meal_response = invoke_with_retry()
+        except Exception as e:
+            logger.error(f"❌ [TOOL] Fallaron los intentos: {e}. Aplicando Fallback de Seguridad Abortivo.")
+            
+            # En lugar de corromper la BD con ingredientes aleatorios, 
+            # abortamos limpiamente la transacción e informamos al Agente principal.
+            return ("FALLO POR INVENTARIO INSUFICIENTE: Después de varios intentos, "
+                    "no fue posible hacer este cambio respetando de forma estricta los ingredientes de la despensa. "
+                    "Informa al usuario amablemente que el cambio fue revertido porque carece de los ingredientes "
+                    "adecuados en su inventario para lo que solicitó, y que el plato original se mantuvo intacto.")
+        
         
         if hasattr(new_meal_response, "model_dump"):
             new_meal_data = new_meal_response.model_dump()
@@ -343,6 +447,27 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         
         target_day["meals"][target_meal_index] = new_meal_data
         
+        # 4.5 Recalcular la lista de compras consolidada para mantener coherencia
+        try:
+            grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
+            
+            from shopping_calculator import get_shopping_list_delta
+            aggr_7 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=1.0)
+            aggr_15 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=2.0)
+            aggr_30 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=4.0)
+            
+            if grocery_duration == "biweekly": aggr_list = aggr_15
+            elif grocery_duration == "monthly": aggr_list = aggr_30
+            else: aggr_list = aggr_7
+                
+            plan_data["aggregated_shopping_list"] = aggr_list
+            plan_data["aggregated_shopping_list_weekly"] = aggr_7
+            plan_data["aggregated_shopping_list_biweekly"] = aggr_15
+            plan_data["aggregated_shopping_list_monthly"] = aggr_30
+            logger.info("✅ [TOOL] aggregated_shopping_list (7, 15, 30) recalculada post-modificación con Delta.")
+        except Exception as e:
+            logger.warning(f"⚠️ [TOOL] No se pudo recalcular aggregated_shopping_list Delta: {e}")
+        
         # 5. Actualizar en Supabase
         update_result = update_meal_plan_data(plan_id, plan_data)
         if update_result is not None:
@@ -355,11 +480,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         return f"ERROR: {str(e)}"
 
 @tool
-def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str) -> str:
+def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: str, allow_pantry_expansion: bool = False) -> str:
     """
     Modifica UNA comida específica del plan activo del usuario. No genera un plan nuevo, solo cambia la comida indicada.
-    Usa esta herramienta cuando el usuario pida un cambio puntual a una comida de su plan,
-    como 'cámbiale el salami al mangú por huevos en la Opción A', 'quítale el arroz al almuerzo de la Opción B', 'ponle más proteína al desayuno'.
+    Usa esta herramienta cuando el usuario pida un cambio puntual a una comida de su plan.
     IMPORTANTE: Opción A = day_number 1, Opción B = day_number 2, Opción C = day_number 3.
     
     Parámetros:
@@ -367,6 +491,7 @@ def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: s
     - day_number: número de la opción (1 para Opción A, 2 para Opción B, 3 para Opción C)
     - meal_type: momento exacto del día: 'Desayuno', 'Almuerzo', 'Merienda' o 'Cena'
     - changes: descripción en lenguaje natural del cambio solicitado por el usuario
+    - allow_pantry_expansion: ponlo en True SOLO SI el usuario explícitamente autoriza comprar ingredientes nuevos, ir al súper, o salir de la regla de zero-waste para esta comida. Por defecto es False.
     """
     return "DUMMY_CALL_ACTUALLY_INTERCEPTED"
 
@@ -405,5 +530,190 @@ def search_deep_memory(user_id: str, query: str) -> str:
     
     return "\n\n".join(formatted)
 
+# ============================================================
+# TOOL: Herramienta de Consulta Matemática del Carrito
+# ============================================================
+
+@tool
+def check_shopping_list(user_id: str) -> str:
+    """
+    Herramienta de Consulta Matemática del Carrito (EL DELTA DE COMPRAS).
+    Usa esta herramienta SIEMPRE que el usuario pregunte qué ingredientes o qué cantidades le FALTAN comprar
+    o cuánto necesita de un ingrediente específico para su plan actual (ej: '¿cuántas libras de tomate debo comprar?', 'dame mi lista de compras').
+    NUNCA SUMES INGREDIENTES MANUALMENTE MIRANDO EL PLAN, INVOCA ESTA HERRAMIENTA. Hará la suma matemática exacta EXTRAEYENDO tu despensa actual.
+    
+    Parámetros:
+    - user_id: ID del usuario
+    """
+    logger.info(f"🛒 [TOOL EXECUTION] Calculando lista de compras matemática para user {user_id}")
+            
+    plan = get_latest_meal_plan(user_id)
+    if not plan:
+        return "El usuario no tiene un plan de comidas activo estructurado para calcular la lista de compras."
+        
+    try:
+        from shopping_calculator import get_shopping_list_delta
+        shop_list = get_shopping_list_delta(user_id, plan, categorize=True, structured=True)
+        if not shop_list:
+            return "¡Buenas noticias! El usuario tiene todos los ingredientes necesarios en su despensa física para el plan actual. No necesita comprar nada adicional."
+        
+        formatted_sections = []
+        for category, items in shop_list.items():
+            icon = "🛒"
+            cat_upper = category.upper()
+            if "PROTE" in cat_upper or "CARNE" in cat_upper: icon = "🥩"
+            elif "FRUTA" in cat_upper or "VEGETAL" in cat_upper: icon = "🥗"
+            elif "LÁCTEO" in cat_upper or "LACTEO" in cat_upper: icon = "🥛"
+            elif "ESPECIA" in cat_upper: icon = "🧂"
+            elif "ESTIMADO" in cat_upper or "💲" in cat_upper: icon = "💸"
+            
+            # Si el titulo ya trae icono como "💲", no duplicamos
+            if icon == "💸":
+                formatted_sections.append(f"**{cat_upper}**")
+            else:
+                formatted_sections.append(f"**{icon} {cat_upper}**")
+            for item in items:
+                val = item.get("display_string", str(item)) if isinstance(item, dict) else str(item)
+                formatted_sections.append(f"- {val}")
+            formatted_sections.append("")
+            
+        formatted_list = "\n".join(formatted_sections).strip()
+        return f"RESULTADO MATEMÁTICO DE LA LISTA DE COMPRAS (SOLO LO QUE FALTA COMPRAR):\n{formatted_list}"
+    except Exception as e:
+        logger.error(f"❌ [TOOL] Error calculando lista de compras: {e}")
+        return f"Error interno matemático al calcular la lista de ingredientes: {str(e)}"
+
+@tool
+def check_current_pantry(user_id: str) -> str:
+    """
+    Herramienta de Consulta de Inventario Físico / Despensa (Nevera Digital).
+    Usa esta herramienta SIEMPRE que el usuario pregunte "qué me queda en la despensa",
+    "qué me sobra", o "qué tengo en la nevera ahora mismo". 
+    """
+    logger.info(f"🛒 [TOOL EXECUTION] Consultando despensa física BD para user {user_id}")
+            
+    try:
+        from db_inventory import get_user_inventory
+        pantry = get_user_inventory(user_id)
+        
+        if not pantry:
+            return "Al parecer el usuario no tiene inventario registrado en su despensa física actualmente."
+            
+        formatted_list = "\n".join([f"- {item}" for item in pantry])
+        res_str = f"RESULTADO DEL INVENTARIO FÍSICO ACTUAL EN LA DESPENSA:\n{formatted_list}"
+        return res_str
+        
+    except Exception as e:
+        logger.error(f"❌ [TOOL] Error consultando despensa actual física: {e}")
+        return f"Error consultando la base de datos de la despensa: {str(e)}"
+
+@tool
+def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_to_remove: list[str] = None) -> str:
+    """
+    Agrega o elimina ingredientes específicos de la despensa física del usuario (user_inventory).
+    Usa esta herramienta cuando el usuario diga que compró algo extra (ej: 'añade 2 manzanas a mi nevera') 
+    o que botó/gastó algo (ej: 'se me dañó el arroz, quítalo').
+    Los ítems deben venir en formato string con cantidad, unidad e ingrediente (Ej: '2 unidades de Manzana', '500 g de Arroz').
+    
+    Parámetros:
+    - items_to_add: Lista de strings con los ingredientes a sumar a la despensa.
+    - items_to_remove: Lista de strings con los ingredientes a restar de la despensa.
+    """
+    logger.info(f"🛒 [TOOL EXECUTION] Modificando despensa física manual para user {user_id}")
+    try:
+        from db_inventory import add_or_update_inventory_item, deduct_consumed_meal_from_inventory
+        from shopping_calculator import _parse_quantity
+        
+        added_count = 0
+        removed_count = 0
+        
+        if items_to_add:
+            for item in items_to_add:
+                qty, unit, name = _parse_quantity(item)
+                if name and qty > 0:
+                    add_or_update_inventory_item(user_id, name, qty, unit)
+                    added_count += 1
+                    
+        if items_to_remove:
+            deduct_consumed_meal_from_inventory(user_id, items_to_remove)
+            removed_count += len(items_to_remove)
+            
+        return f"¡Despensa actualizada! Se agregaron {added_count} ítems y se redujeron/eliminaron {removed_count} ítems físicamente en la nevera digital."
+    except Exception as e:
+        logger.error(f"❌ [TOOL] Error modificando despensa manualmente: {e}")
+        return f"Error al modificar el inventario físico: {str(e)}"
+
+@tool
+def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None, modified_items: list[str] = None) -> str:
+    """
+    Herramienta de Registro de Compras Automático y Parcial Inteligente.
+    Usa esta herramienta cuando el usuario indique que FUE AL SUPERMERCADO.
+    - excluded_items (Opcional): Lista de nombres de ingredientes que el usuario explícitamente NO compró o no encontró (ej: ["Aguacate", "Atún"]).
+    - modified_items (Opcional): Lista de ingredientes que compró con una CANTIDAD diferente a la esperada, o ingredientes EXTRA (ej: ["3 lbs de Pollo", "2 paquetes de Galletas"]).
+    """
+    logger.info(f"🛒 [TOOL EXECUTION] Registrando compra completa/parcial para user {user_id}")
+    
+    try:
+        from db_inventory import restock_inventory
+        from shopping_calculator import get_shopping_list_delta, _parse_quantity
+        from constants import strip_accents, normalize_ingredient_for_tracking
+        
+        plan = get_latest_meal_plan(user_id)
+        if not plan:
+            return "El usuario no tiene un plan activo para extraer la lista de compras."
+            
+        shop_list = get_shopping_list_delta(user_id, plan, structured=True)
+        if not shop_list and not modified_items:
+            return "La lista de compras Delta (ingredientes faltantes) está vacía, no hay nada nuevo que añadir a la despensa."
+            
+        # Normalizar bases a excluir
+        excluded_bases = set()
+        if excluded_items:
+            for item in excluded_items:
+                _, _, name = _parse_quantity(item)
+                base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
+                if base: excluded_bases.add(base)
+                
+        # Normalizar bases a modificar
+        modified_bases = set()
+        if modified_items:
+            for item in modified_items:
+                _, _, name = _parse_quantity(item)
+                base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
+                if base: modified_bases.add(base)
+                
+        # Filtrar shop_list original (excluyendo o si fue modificado con otra cantidad)
+        final_shop_list = []
+        for item in shop_list:
+            val = item.get("display_string", str(item)) if isinstance(item, dict) else str(item)
+            _, _, name = _parse_quantity(val)
+            base = normalize_ingredient_for_tracking(name) or strip_accents(name.lower().strip())
+            
+            if base in excluded_bases or base in modified_bases:
+                continue # Fue excluido o lo agregaremos con la nueva cantidad de modified_items
+                
+            final_shop_list.append(val)
+            
+        # Agregar los items modificados crudos
+        if modified_items:
+            final_shop_list.extend(modified_items)
+            
+        success = restock_inventory(user_id, final_shop_list)
+        if success:
+            msg = f"¡Felicidades! Se han agregado los {len(final_shop_list)} ingredientes a tu Nevera Virtual."
+            if excluded_items:
+                msg += f" (Se excluyeron {len(excluded_items)} ítems que indicaste)."
+                msg += f"\n\n[ALERTA INTERNA PARA LA IA]: El usuario no pudo comprar: {', '.join(excluded_items)}. "
+                msg += "Debes disparar INMEDIATAMENTE una recomendación proactiva en el chat preguntando si quiere que sustituyas los platos de esta semana que requerían esos ingredientes faltantes."
+            if modified_items:
+                msg += f" (Se modificaron/añadieron {len(modified_items)} ítems)."
+            return msg
+        else:
+            return "Hubo un error al intentar agregar los ingredientes a la despensa."
+            
+    except Exception as e:
+        logger.error(f"❌ [TOOL] Error en mark_shopping_list_purchased: {e}")
+        return f"Error interno al realizar el registro de la compra: {str(e)}"
+
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory]
+agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased]

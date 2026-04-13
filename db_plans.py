@@ -235,7 +235,7 @@ def get_latest_meal_plan_with_id(user_id: str):
     """Obtiene el plan más reciente del usuario incluyendo su ID para poder actualizarlo."""
     if not supabase: return None
     try:
-        res = supabase.table("meal_plans").select("id, plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+        res = supabase.table("meal_plans").select("id, plan_data, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
         if res.data and len(res.data) > 0:
             return res.data[0]
         return None

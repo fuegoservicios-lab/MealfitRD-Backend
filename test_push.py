@@ -50,7 +50,7 @@ def trigger_manual_notification(meal_to_check, trigger_time_str):
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
             chat_llm = ChatGoogleGenerativeAI(
-                model="gemini-3.1-flash-preview", 
+                model="gemini-3.1-flash-lite-preview", 
                 temperature=0.8,
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             )
@@ -63,7 +63,7 @@ def trigger_manual_notification(meal_to_check, trigger_time_str):
                 
                 # ENVIAR PUSH
                 import json
-                from pywebpush import webpush, WebPushException
+                from pywebpush import webpush, WebPushException  # type: ignore[import-untyped]
                 vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
                 vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")
                 
