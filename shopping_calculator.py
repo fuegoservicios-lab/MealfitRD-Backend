@@ -476,9 +476,11 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
 
     # Fallback Semántico si no hay densidad en Supabase
     if not density_per_u:
+        from constants import UNIT_WEIGHTS
         n_clean = ''.join(c for c in unicodedata.normalize('NFD', n_lower) if unicodedata.category(c) != 'Mn')
+        # Búsqueda exacta o como palabra entera para evitar "agua" == "pan de agua"
         for k, v in UNIT_WEIGHTS.items():
-            if k in n_clean or n_clean in k:
+            if k == n_clean or (re.search(rf'\b{re.escape(k)}(s|es)?\b', n_clean)):
                 density_per_u = v
                 break
 
@@ -860,8 +862,30 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # Si un ingrediente se contabilizó en conteos/volúmenes o incluso en contenedores (pote, lata)
         # pero tenemos constancia en BD de su peso (density/container), lo sumamos hacia el gramo
         # para que fluya hacia el Bloque 1/2 y asigne empaques matemáticamente exactos.
-        g_per_taza = float(master_item.get("density_g_per_cup") or DEFAULT_G_PER_TAZA)
+        g_per_taza = float(master_item.get("density_g_per_cup") or 0)
         g_per_u = float(master_item.get("density_g_per_unit") or 0)
+        
+        # [Fallback] Si no hay densidad en la BD, buscamos en constants
+        if g_per_u <= 0 or g_per_taza <= 0:
+            from constants import UNIT_WEIGHTS, strip_accents, VOLUMETRIC_DENSITIES
+            n_clean = strip_accents(name.lower())
+            
+            if g_per_u <= 0:
+                for k, v in UNIT_WEIGHTS.items():
+                    if k == n_clean or (re.search(rf'\b{re.escape(k)}(s|es)?\b', n_clean)):
+                        g_per_u = v
+                        break
+                        
+            if g_per_taza <= 0:
+                for k, v in VOLUMETRIC_DENSITIES.items():
+                    if k == n_clean or (re.search(rf'\b{re.escape(k)}(s|es)?\b', n_clean)):
+                        # VOLUMETRIC_DENSITIES es g/ml, 1 taza = 236.588 ml
+                        g_per_taza = v * 236.588
+                        break
+        
+        if g_per_taza <= 0:
+            g_per_taza = DEFAULT_G_PER_TAZA
+
         container_weight_g = float(master_item.get("container_weight_g") or 0)
         db_container = (master_item.get("market_container") or "").lower()
         
@@ -911,11 +935,18 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         'Aceite de sésamo o maní', 'Salsa de soya', 'Orégano', 
         'Canela', 'Pimienta', 'Sal', 'Vinagre', 'Ajo en polvo'
     }
+    IGNORE_SHOPPING = {'agua', 'hielo', 'agua potable', 'cubos de hielo'}
     
     for name, units in aggregated.items():
+        master_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title()) or {}
+        
+        # Evitar líquidos comunes/ilimitados en casa
+        from constants import strip_accents
+        if strip_accents(name.lower()) in IGNORE_SHOPPING:
+            continue
+            
         weight_in_lbs = 0.0
         has_weight = False
-        master_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title()) or {}
         cat = master_item.get("category") or "Otros"
         display_cat = _get_display_category(cat, name)
         
@@ -951,7 +982,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             
         added = False
         if has_weight:
-            if weight_in_lbs > 0.05:
+            if weight_in_lbs > 0.0001:
                 item_cost = weight_in_lbs * price_per_lb
                 total_estimated_cost += item_cost
                 market_obj = apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item)
@@ -965,7 +996,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 added = True
                 
         for u, q in units.items():
-            if q > 0.05:
+            if q > 0.0001:
                 item_cost = 0.0
                 if u in ['unidad', 'unidades', 'lata', 'latas', 'paquete', 'paquetes']:
                     item_cost = q * price_per_unit

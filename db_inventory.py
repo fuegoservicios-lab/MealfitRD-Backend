@@ -209,6 +209,13 @@ def restock_inventory(user_id: str, ingredients_list: list):
     
     from shopping_calculator import normalize_name
     
+    # 🧹 Limpiar el inventario anterior para evitar que se sumen alimentos de planes anteriores
+    try:
+        logger.info(f"🧹 [RESTOCK] Limpiando inventario anterior para el usuario {user_id}")
+        supabase.table("user_inventory").delete().eq("user_id", user_id).execute()
+    except Exception as e:
+        logger.error(f"Error limpiando inventario anterior para {user_id}: {e}")
+    
     success = True
     items_saved = 0
     for item in ingredients_list:
