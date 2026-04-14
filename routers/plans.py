@@ -360,6 +360,12 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         plan_data["aggregated_shopping_list_biweekly"] = scaled_15
         plan_data["aggregated_shopping_list_monthly"] = scaled_30
         
+        # 🔄 Limpiar is_restocked: las cantidades cambiaron, el usuario necesita
+        # re-registrar las compras con las nuevas cantidades en la despensa
+        if plan_data.get("is_restocked"):
+            plan_data.pop("is_restocked", None)
+            logger.info(f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron, requiere re-registro")
+        
         # DEBUG fingerprint: allows frontend to verify it received fresh data
         import time
         plan_data["_debug_recalc"] = {
