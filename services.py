@@ -124,6 +124,39 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             if selected_techniques:
                 insert_data["techniques"] = selected_techniques
             
+            # 🔄 Heredar is_restocked del plan anterior si sigue en el mismo ciclo de compras
+            # Esto evita que "Registrar Compras" reaparezca en otros dispositivos
+            # cuando el usuario solo hizo "Actualizar Platos" (rotación de recetas).
+            try:
+                prev_plan = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+                if prev_plan.data and len(prev_plan.data) > 0:
+                    prev_data = prev_plan.data[0].get("plan_data", {})
+                    if prev_data.get("is_restocked") is True:
+                        # Verificar que el ciclo de compras no expiró
+                        prev_start = prev_data.get("grocery_start_date")
+                        if prev_start:
+                            from datetime import datetime as dt_check
+                            try:
+                                start_dt = dt_check.fromisoformat(prev_start.replace("Z", "+00:00"))
+                                days_elapsed = (datetime.now(start_dt.tzinfo) - start_dt).days if start_dt.tzinfo else (datetime.now() - start_dt).days
+                                # Si el ciclo no ha expirado (30 días max), heredar el flag
+                                if days_elapsed <= 30:
+                                    plan_data["is_restocked"] = True
+                                    plan_data["grocery_start_date"] = prev_start
+                                    logger.info(f"🔄 [RESTOCK INHERIT] Plan hereda is_restocked=True del ciclo anterior ({days_elapsed}d elapsed)")
+                            except Exception as date_err:
+                                logger.warning(f"⚠️ [RESTOCK INHERIT] Error parseando fecha: {date_err}")
+                                # Safe fallback: heredar de todos modos si la fecha no se puede parsear
+                                plan_data["is_restocked"] = True
+                                if prev_start:
+                                    plan_data["grocery_start_date"] = prev_start
+                        else:
+                            # Sin fecha de inicio, heredar de todos modos (seguridad)
+                            plan_data["is_restocked"] = True
+                            logger.info(f"🔄 [RESTOCK INHERIT] Plan hereda is_restocked=True (sin grocery_start_date)")
+            except Exception as restock_err:
+                logger.warning(f"⚠️ [RESTOCK INHERIT] Error consultando plan anterior: {restock_err}")
+
             # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
             if check_recent_meal_plan_exists(user_id, max_seconds=30):
                 logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
