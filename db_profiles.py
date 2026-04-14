@@ -75,45 +75,55 @@ def update_user_health_profile(user_id: str, health_profile: dict):
 
 def log_api_usage(user_id: str, endpoint: str = "gemini"):
     """Guarda un registro de uso de la API (consume 1 crédito)."""
-    if not supabase or not user_id or user_id == "guest": return None
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
+    if not user_id or user_id == "guest": return None
+    try:
+        from db_core import connection_pool
+        if connection_pool:
+            res = execute_sql_write("INSERT INTO api_usage (user_id, endpoint) VALUES (%s, %s)", (user_id, endpoint))
+            return res
+        else:
+            if not supabase: return None
             res = supabase.table("api_usage").insert({
                 "user_id": user_id,
                 "endpoint": endpoint
             }).execute()
             return res.data
-        except Exception as e:
-            if attempt < max_retries - 1:
-                import time
-                time.sleep(0.5)
-                continue
-            logger.error(f"Error registrando api_usage: {e}")
-            return None
+    except Exception as e:
+        logger.error(f"Error registrando api_usage: {e}")
+        return None
 
 def get_monthly_api_usage(user_id: str) -> int:
     """Cuenta cuántas llamadas a la API ha hecho el usuario este mes."""
-    if not supabase or not user_id or user_id == "guest": return 0
+    if not user_id or user_id == "guest": return 0
     from datetime import datetime
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            # Obtener inicio de mes actual
-            now = datetime.now()
-            start_date = datetime(now.year, now.month, 1).isoformat()
-            
-            # En Supabase count es más eficiente
-            res = supabase.table("api_usage").select("*", count="exact").eq("user_id", user_id).gte("created_at", start_date).execute()
-            return res.count if res.count is not None else 0
-        except Exception as e:
-            if attempt < max_retries - 1:
-                import time
-                time.sleep(0.5)
-                continue
-            logger.error(f"Error obteniendo api_usage mensual: {e}")
+    
+    try:
+        now = datetime.now()
+        start_date = datetime(now.year, now.month, 1).isoformat()
+        
+        from db_core import connection_pool
+        if connection_pool:
+            res = execute_sql_query("SELECT count(*) as total FROM api_usage WHERE user_id = %s AND created_at >= %s", (user_id, start_date), fetch_one=True)
+            if res and 'total' in res:
+                return int(res['total'])
             return 0
-    return 0
+        else:
+            if not supabase: return 0
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    res = supabase.table("api_usage").select("*", count="exact").eq("user_id", user_id).gte("created_at", start_date).execute()
+                    return res.count if hasattr(res, 'count') and res.count is not None else 0
+                except Exception as inner_e:
+                    if attempt < max_retries - 1:
+                        import time
+                        time.sleep(0.5)
+                        continue
+                    logger.error(f"Error supabase get_monthly_api_usage: {inner_e}")
+                    return 0
+    except Exception as e:
+        logger.error(f"Error obteniendo api_usage mensual: {e}")
+        return 0
 
 def migrate_guest_data(session_ids: list, new_user_id: str):
     """

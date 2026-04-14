@@ -88,6 +88,9 @@ def execute_sql_write(query: str, params: tuple = None, returning: bool = False)
         with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute(query, params)
             if returning:
-                return cursor.fetchall()
+                result = cursor.fetchall()
+                conn.commit()
+                return result
+            conn.commit()
             return True
 

@@ -26,6 +26,63 @@ router = APIRouter(
     tags=["plans"],
 )
 
+# ─── TEMPORARY DEBUG ENDPOINT (REMOVE AFTER DIAGNOSIS) ───
+@router.get("/debug-scaling/{user_id}")
+def debug_scaling(user_id: str):
+    """Temporary: compare shopping list output for household sizes 1-6."""
+    from shopping_calculator import get_shopping_list_delta
+    from db_plans import get_latest_meal_plan_with_id as _get_plan
+    
+    plan_record = _get_plan(user_id)
+    
+    # Fallback: try to find ANY recent plan if user_id yields nothing
+    if not plan_record:
+        try:
+            from db_core import execute_sql_query
+            row = execute_sql_query(
+                "SELECT id, user_id, plan_data FROM meal_plans ORDER BY created_at DESC LIMIT 1",
+                fetch_one=True
+            )
+            if row:
+                plan_record = row
+                user_id = row.get("user_id", user_id)
+            else:
+                return {"error": f"No plans exist in database at all"}
+        except Exception as e:
+            return {"error": f"No plan found for {user_id} and fallback failed: {e}"}
+    
+    if not plan_record:
+        return {"error": f"No plan found for {user_id}"}
+    
+    plan_data = plan_record["plan_data"]
+    days = plan_data.get("days", [])
+    num_days = len(days)
+    
+    KEYWORDS = ['pechuga', 'pavo', 'yogurt', 'lechosa', 'aguacate', 'arroz', 'pollo', 'cebolla', 'tomate', 'melón', 'melon']
+    
+    comparison = {}
+    for h in [1, 2, 3, 4, 5, 6]:
+        scaled = get_shopping_list_delta(user_id, plan_data, is_new_plan=True, structured=True, multiplier=float(h))
+        row = {}
+        for item in scaled:
+            name = item.get("name", "")
+            if any(kw in name.lower() for kw in KEYWORDS):
+                row[name] = {
+                    "display_qty": item.get("display_qty"),
+                    "market_qty": item.get("market_qty"),
+                    "market_unit": item.get("market_unit"),
+                }
+        comparison[f"{h}_personas"] = row
+    
+    return {
+        "found_user_id": user_id,
+        "plan_id": plan_record.get("id"),
+        "num_days_in_plan": num_days,
+        "base_duration_scale": round(7.0 / max(1, num_days), 4),
+        "comparison": comparison
+    }
+# ─── END TEMPORARY DEBUG ENDPOINT ───
+
 @router.post("/analyze")
 def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
     try:
@@ -231,4 +288,99 @@ def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str
             
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/inventory/consume: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/recalculate-shopping-list")
+def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    """
+    Recalcula la lista de compras escalando las recetas por el householdSize 
+    y LUEGO deduciendo el inventario físico (is_new_plan=False).
+    Este acercamiento garantiza exactitud matemática.
+    """
+    try:
+        user_id = data.get("user_id")
+        household_size = max(1, int(data.get("householdSize", 1) or 1))
+        grocery_duration = data.get("groceryDuration", "weekly")
+        
+        if not user_id or user_id == "guest":
+            return {"success": False, "message": "Debes iniciar sesión."}
+            
+        if not verified_user_id or verified_user_id != user_id:
+            raise HTTPException(status_code=401, detail="No autorizado.")
+        
+        plan_record = get_latest_meal_plan_with_id(user_id)
+        if not plan_record:
+            return {"success": False, "message": "No hay plan activo."}
+        
+        plan_id = plan_record["id"]
+        plan_data = plan_record["plan_data"]
+        
+        if not plan_data or not isinstance(plan_data, dict):
+            return {"success": False, "message": "Plan corrupto."}
+        
+        logger.info(f"🔄 [RECALC] Escalando lista de compras ×{household_size} personas para user {user_id}")
+        
+        from shopping_calculator import get_shopping_list_delta
+        from db_plans import update_meal_plan_data
+        
+        # Generar las listas estructuradas con el multiplier
+        # is_new_plan=True para obtener la lista COMPLETA sin deducción de inventario
+        # La deducción del inventario no tiene sentido aquí porque los ingredientes
+        # ya fueron escalados para N personas — el inventario es fijo.
+        scaled_7 = get_shopping_list_delta(user_id, plan_data, is_new_plan=True, structured=True, multiplier=float(household_size))
+        scaled_15 = get_shopping_list_delta(user_id, plan_data, is_new_plan=True, structured=True, multiplier=float(household_size) * 2.0)
+        scaled_30 = get_shopping_list_delta(user_id, plan_data, is_new_plan=True, structured=True, multiplier=float(household_size) * 4.0)
+        
+        # Debug: Log DETAILED per-item comparison to diagnose scaling
+        if scaled_7:
+            sample = [f"{it.get('display_string','?')}" for it in scaled_7[:3]]
+            has_days = bool(plan_data.get("days"))
+            len_days = len(plan_data.get("days", []))
+            has_perfectDay = bool(plan_data.get("perfectDay"))
+            logger.info(f"🔍 [RECALC DEBUG] ×{household_size} sample (7d): {sample} | has_days={has_days} len={len_days} has_perf={has_perfectDay}")
+            
+            # DEBUG GRANULAR: rastear proteínas y frutas específicas
+            debug_keywords = ['pechuga', 'pavo', 'yogurt', 'lechosa', 'melón', 'melon', 'aguacate', 'arroz', 'pollo']
+            for it in scaled_7:
+                name_lower = it.get('name', '').lower()
+                if any(kw in name_lower for kw in debug_keywords):
+                    logger.info(f"  📊 [{household_size}p] {it.get('name')}: display_qty={it.get('display_qty')} | market_qty={it.get('market_qty')} {it.get('market_unit')} | display_string={it.get('display_string')}")
+        
+        # Seleccionar lista activa para el frontend legacy
+        if grocery_duration == "biweekly":
+            active_list = scaled_15
+        elif grocery_duration == "monthly":
+            active_list = scaled_30
+        else:
+            active_list = scaled_7
+        
+        # Actualizar plan en BD
+        plan_data["aggregated_shopping_list"] = active_list
+        plan_data["aggregated_shopping_list_weekly"] = scaled_7
+        plan_data["aggregated_shopping_list_biweekly"] = scaled_15
+        plan_data["aggregated_shopping_list_monthly"] = scaled_30
+        
+        # DEBUG fingerprint: allows frontend to verify it received fresh data
+        import time
+        plan_data["_debug_recalc"] = {
+            "household_size": household_size,
+            "timestamp": time.time(),
+            "weekly_items_count": len(scaled_7),
+            "sample_item": scaled_7[0].get("display_string", "?") if scaled_7 else "empty"
+        }
+        
+        update_meal_plan_data(plan_id, plan_data)
+        
+        logger.info(f"✅ [RECALC] Listas recalculadas exitosamente ×{household_size} personas")
+        
+        # Devolver el plan_data actualizado directamente para evitar race conditions
+        # (el frontend no necesita re-fetch de Supabase)
+        return {"success": True, "plan_data": plan_data}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/recalculate-shopping-list: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

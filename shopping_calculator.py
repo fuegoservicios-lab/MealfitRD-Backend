@@ -4,7 +4,7 @@ import os
 from collections import defaultdict
 import logging
 from fractions import Fraction
-from db_core import supabase
+from db_core import supabase, connection_pool, execute_sql_query
 
 _master_cache = None
 _semantic_cache = None
@@ -47,14 +47,15 @@ def cosine_similarity(v1, v2):
 def get_master_ingredients():
     global _master_cache
     if _master_cache is None:
-        if supabase:
+        if connection_pool:
             try:
-                res = supabase.table("master_ingredients").select("*").execute()
-                _master_cache = res.data or []
+                res = execute_sql_query("SELECT * FROM master_ingredients", fetch_all=True)
+                _master_cache = res or []
             except Exception as e:
-                logging.error(f"Error fetching master_ingredients: {e}")
+                logging.error(f"Error fetching master_ingredients via pool: {e}")
                 _master_cache = []
         else:
+            logging.error("No connection_pool available to fetch master_ingredients")
             _master_cache = []
     return _master_cache
 
@@ -366,8 +367,8 @@ def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: floa
     sizes = sorted([float(s) for s in available_sizes_g])  # ascendente
     
     # Estrategia 1: Un solo paquete que cubre la necesidad
-    # Solo considera tamaños hasta 2x la necesidad (no 10lb para 1lb)
-    SINGLE_PKG_TOLERANCE = 0.20
+    # Tolerancia muy ajustada (5%) para obligar escalar visualmente cuando aumentan personas.
+    SINGLE_PKG_TOLERANCE = 0.05
     for size in sizes:
         if size >= g_total and size <= g_total * 2:
             waste_pct = (size - g_total) / size
@@ -513,12 +514,10 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     # Usa market_container + container_weight_g directamente de la DB.
     # Cubre: Lácteos(Pote/Cartón), Despensa(Paquete/Fundita/Botella),
     #         Especias(Sobre), Vegetales(Mazo/Cabeza/Lata), etc.
-    # Anti-desperdicio: si necesitas ≤10% extra de un envase, redondea
-    # hacia abajo (ej: 1.05 potes → 1, no 2).
-    # SKU-Aware: si hay available_sizes_g, optimiza tamaño de empaque
-    #   (ej: 3lb arroz → 1 Paquete de 3lb, no 3 Paquetes de 1lb)
-    # ═══════════════════════════════════════════════════════════════
-    ANTI_WASTE_THRESHOLD = 0.10  # 10% del envase
+    # Anti-desperdicio (Ahora estricto): 2% de colchón para errores de coma flotante. 
+    # Forzará compras mayores a la mínima escalada matemática (Ej: 4 personas vs 6).
+    ANTI_WASTE_THRESHOLD = 0.02
+
     db_container = master_item.get("market_container")
     db_container_weight_g = master_item.get("container_weight_g")
     available_sizes = master_item.get("available_sizes_g")
@@ -983,6 +982,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         added = False
         if has_weight:
             if weight_in_lbs > 0.0001:
+                # DEBUG: Log raw lbs for key items to trace scaling effectiveness
+                _n_lower = name.lower()
+                if any(kw in _n_lower for kw in ['pechuga', 'pavo', 'yogurt', 'lechosa', 'aguacate', 'arroz']):
+                    logging.info(f"  🔬 [RAW LBS] {name}: {weight_in_lbs:.4f} lbs (mult={multiplier})")
                 item_cost = weight_in_lbs * price_per_lb
                 total_estimated_cost += item_cost
                 market_obj = apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item)
@@ -996,7 +999,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 added = True
                 
         for u, q in units.items():
-            if q > 0.0001:
+            if q > 0.0001 or (q == 0.0 and u in ['pizca', 'al gusto', 'cantidad necesaria', 'chin', 'toque', 'chorrito']):
                 item_cost = 0.0
                 if u in ['unidad', 'unidades', 'lata', 'latas', 'paquete', 'paquetes']:
                     item_cost = q * price_per_unit
@@ -1036,6 +1039,17 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
     days = plan_result.get("days", [])
     if not days and plan_result.get("meals"):
         days = [{"day": 1, "meals": plan_result.get("meals")}] 
+    if not days and plan_result.get("perfectDay"):
+        days = [{"day": 1, "meals": plan_result.get("perfectDay")}]
+
+    # Si hay 3 días generados, representan un ciclo rotativo. Promediamos por día y proyectamos a 7 días.
+    num_days = max(1, len(days))
+    base_duration_scale = 7.0 / num_days
+    
+    effective_multiplier = multiplier * base_duration_scale
+    
+    logging.info(f"🔄 [SHOPPING MATH] days_len={num_days} base_scale={base_duration_scale} raw_mult={multiplier} eff_mult={effective_multiplier}")
+
 
     for day in days:
         for meal in day.get("meals", []):
@@ -1046,7 +1060,13 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
                 if isinstance(i, str):
                     all_ingredients.append(i)
                 elif isinstance(i, dict):
-                    all_ingredients.append(i.get("display_name") or i.get("name") or i.get("item_name") or str(i))
+                    q = i.get("quantity", 0)
+                    u = i.get("unit", "unidad")
+                    n = i.get("name") or i.get("item_name") or i.get("display_name") or "Desconocido"
+                    if q > 0 or u in ['pizca', 'al gusto', 'cantidad necesaria', 'chin', 'toque', 'chorrito']:
+                        all_ingredients.append(f"{q} {u} de {n}")
+                    else:
+                        all_ingredients.append(n)
                     
     physical_inventory = []
     consumed_ingredients = []
@@ -1114,13 +1134,16 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
     if consumed_ingredients:
         items_to_deduct.extend(consumed_ingredients)
         
-    return aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=multiplier)
+    return aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier)
 
 def get_realtime_pantry(plan_result: dict, consumed_ingredients: list[str]) -> list[str]:
     all_ingredients = []
     days = plan_result.get("days", [])
     if not days and plan_result.get("meals"):
         days = [{"day": 1, "meals": plan_result.get("meals")}] 
+    if not days and plan_result.get("perfectDay"):
+        days = [{"day": 1, "meals": plan_result.get("perfectDay")}]
+
 
     for day in days:
         for meal in day.get("meals", []):
@@ -1131,6 +1154,12 @@ def get_realtime_pantry(plan_result: dict, consumed_ingredients: list[str]) -> l
                 if isinstance(i, str):
                     all_ingredients.append(i)
                 elif isinstance(i, dict):
-                    all_ingredients.append(i.get("display_name") or i.get("name") or i.get("item_name") or str(i))
+                    q = i.get("quantity", 0)
+                    u = i.get("unit", "unidad")
+                    n = i.get("name") or i.get("item_name") or i.get("display_name") or "Desconocido"
+                    if q > 0 or u in ['pizca', 'al gusto', 'cantidad necesaria', 'chin', 'toque', 'chorrito']:
+                        all_ingredients.append(f"{q} {u} de {n}")
+                    else:
+                        all_ingredients.append(n)
                     
     return aggregate_and_deduct_shopping_list(all_ingredients, consumed_ingredients)

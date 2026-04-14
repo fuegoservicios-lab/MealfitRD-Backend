@@ -452,9 +452,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
             
             from shopping_calculator import get_shopping_list_delta
-            aggr_7 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=1.0)
-            aggr_15 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=2.0)
-            aggr_30 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=4.0)
+            household = max(1, int(form_data.get("householdSize", 1) or 1) if form_data else 1)
+            aggr_7 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=1.0 * household)
+            aggr_15 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=2.0 * household)
+            aggr_30 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=4.0 * household)
             
             if grocery_duration == "biweekly": aggr_list = aggr_15
             elif grocery_duration == "monthly": aggr_list = aggr_30

@@ -64,9 +64,21 @@ def save_new_meal_plan_robust(insert_data: dict) -> bool:
         from psycopg.types.json import Jsonb
         safe_data = copy.deepcopy(insert_data)
         
+        # Columnas que son text[] en PostgreSQL (no jsonb)
+        _ARRAY_COLS = {"meal_names", "ingredients", "techniques"}
+        
         def dict_to_insert(d):
             cols = list(d.keys())
-            vals = [Jsonb(v) if isinstance(v, (dict, list)) else v for v in d.values()]
+            vals = []
+            for col, v in zip(cols, d.values()):
+                if col in _ARRAY_COLS:
+                    # text[] — pasar lista nativa, psycopg la mapea a text[] automáticamente
+                    vals.append(v)
+                elif isinstance(v, (dict, list)):
+                    # jsonb — plan_data, macros, etc.
+                    vals.append(Jsonb(v))
+                else:
+                    vals.append(v)
             placeholders = ", ".join(["%s"] * len(cols))
             col_str = ", ".join(cols)
             return f"INSERT INTO meal_plans ({col_str}) VALUES ({placeholders})", vals
@@ -76,8 +88,8 @@ def save_new_meal_plan_robust(insert_data: dict) -> bool:
         return True
     except Exception as try_db_e:
         err_msg = str(try_db_e)
-        if "column" in err_msg and ("meal_names" in err_msg or "techniques" in err_msg):
-            logger.warning("⚠️ [DB] Faltan columnas optimizadas (meal_names/techniques). Guardando sin ellas.")
+        if "column" in err_msg and ("meal_names" in err_msg or "techniques" in err_msg or "ingredients" in err_msg):
+            logger.warning(f"⚠️ [DB] Error con columnas optimizadas ({err_msg[:120]}). Guardando sin ellas.")
             safe_data.pop("meal_names", None)
             safe_data.pop("ingredients", None)
             safe_data.pop("techniques", None)
@@ -231,22 +243,33 @@ def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
 
 def get_latest_meal_plan_with_id(user_id: str):
     """Obtiene el plan más reciente del usuario incluyendo su ID para poder actualizarlo."""
-    if not supabase: return None
     try:
-        res = supabase.table("meal_plans").select("id, plan_data, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-        if res.data and len(res.data) > 0:
-            return res.data[0]
-        return None
+        if connection_pool:
+            res = execute_sql_query("SELECT id, plan_data, created_at FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True)
+            if res:
+                return res
+            return None
+        else:
+            if not supabase: return None
+            res = supabase.table("meal_plans").select("id, plan_data, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+            if res.data and len(res.data) > 0:
+                return res.data[0]
+            return None
     except Exception as e:
         logger.error(f"Error obteniendo plan con ID: {e}")
         return None
 
 def update_meal_plan_data(plan_id: str, new_plan_data: dict):
     """Actualiza el plan_data JSONB de un plan existente por su ID."""
-    if not supabase: return None
     try:
-        res = supabase.table("meal_plans").update({"plan_data": new_plan_data}).eq("id", plan_id).execute()
-        return res.data
+        if connection_pool:
+            from psycopg.types.json import Jsonb
+            execute_sql_write("UPDATE meal_plans SET plan_data = %s WHERE id = %s", (Jsonb(new_plan_data), plan_id))
+            return True
+        else:
+            if not supabase: return None
+            res = supabase.table("meal_plans").update({"plan_data": new_plan_data}).eq("id", plan_id).execute()
+            return res.data
     except Exception as e:
         logger.error(f"Error actualizando plan_data: {e}")
         return None

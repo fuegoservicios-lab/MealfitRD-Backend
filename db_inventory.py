@@ -141,7 +141,8 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
         
         master_list = get_master_ingredients()
         master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
-        master_id = master_item.get("id", None) if master_item else None
+        master_id_raw = master_item.get("id", None) if master_item else None
+        master_id = str(master_id_raw) if master_id_raw is not None else None
 
         updated = False
         

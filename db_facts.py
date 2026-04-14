@@ -300,28 +300,35 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
 
 def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None):
     """Guarda una comida consumida en la tabla consumed_meals de Supabase."""
-    if not supabase: return None
     try:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
-        res = supabase.table("consumed_meals").insert({
-            "user_id": user_id,
-            "meal_name": meal_name,
-            "calories": calories,
-            "protein": protein,
-            "carbs": carbs,
-            "healthy_fats": healthy_fats,
-            "ingredients": ingredients if ingredients is not None else [],
-            "created_at": now
-        }).execute()
-        return res.data
+        if connection_pool:
+            from psycopg.types.json import Jsonb
+            execute_sql_write(
+                "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients if ingredients is not None else [], now)
+            )
+            return True
+        else:
+            if not supabase: return None
+            res = supabase.table("consumed_meals").insert({
+                "user_id": user_id,
+                "meal_name": meal_name,
+                "calories": calories,
+                "protein": protein,
+                "carbs": carbs,
+                "healthy_fats": healthy_fats,
+                "ingredients": ingredients if ingredients is not None else [],
+                "created_at": now
+            }).execute()
+            return res.data
     except Exception as e:
         logger.error(f"Error guardando comida consumida: {e}")
         return None
 
 def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins: int = None):
     """Obtiene las comidas consumidas del día especificado en base a la zona horaria del usuario."""
-    if not supabase: return []
     max_retries = 2
     for attempt in range(max_retries):
         try:
@@ -350,15 +357,19 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
                 start_str = f"{today_date}T00:00:00Z"
                 end_str = f"{today_date}T23:59:59Z"
             
-            # Consultar la DB filtrando las comidas dentro del rango de horas local
-            res = supabase.table("consumed_meals")\
-                .select("*")\
-                .eq("user_id", user_id)\
-                .gte("created_at", start_str)\
-                .lt("created_at", end_str)\
-                .execute()
-                
-            return res.data
+            if connection_pool:
+                query = "SELECT * FROM consumed_meals WHERE user_id = %s AND created_at >= %s AND created_at < %s"
+                res = execute_sql_query(query, (user_id, start_str, end_str), fetch_all=True)
+                return res
+            else:
+                if not supabase: return []
+                res = supabase.table("consumed_meals")\
+                    .select("*")\
+                    .eq("user_id", user_id)\
+                    .gte("created_at", start_str)\
+                    .lt("created_at", end_str)\
+                    .execute()
+                return res.data
         except Exception as e:
             if attempt < max_retries - 1:
                 import time
@@ -369,14 +380,19 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
 
 def get_consumed_meals_since(user_id: str, since_iso_date: str):
     """Obtiene todas las comidas consumidas por el usuario desde una fecha específica."""
-    if not supabase: return []
     try:
-        res = supabase.table("consumed_meals")\
-            .select("*")\
-            .eq("user_id", user_id)\
-            .gte("created_at", since_iso_date)\
-            .execute()
-        return res.data
+        if connection_pool:
+            query = "SELECT * FROM consumed_meals WHERE user_id = %s AND created_at >= %s"
+            res = execute_sql_query(query, (user_id, since_iso_date), fetch_all=True)
+            return res
+        else:
+            if not supabase: return []
+            res = supabase.table("consumed_meals")\
+                .select("*")\
+                .eq("user_id", user_id)\
+                .gte("created_at", since_iso_date)\
+                .execute()
+            return res.data
     except Exception as e:
         logger.error(f"Error obteniendo comidas consumidas desde {since_iso_date}: {e}")
         return []

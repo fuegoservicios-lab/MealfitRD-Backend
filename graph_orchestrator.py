@@ -399,9 +399,14 @@ Estos son datos críticos que debes respetar.
     
     from shopping_calculator import get_shopping_list_delta
     try:
-        aggr_list_7 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=1.0) if _uid else []
-        aggr_list_15 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=2.0) if _uid else []
-        aggr_list_30 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=4.0) if _uid else []
+        # Multiplicador de personas: si el usuario cocina para N personas, escalar cantidades
+        household = max(1, int(form_data.get("householdSize", 1) or 1))
+        if household > 1:
+            print(f"👨‍👩‍👧‍👦 [HOUSEHOLD] Escalando lista de compras ×{household} personas")
+        
+        aggr_list_7 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=1.0 * household) if _uid else []
+        aggr_list_15 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=2.0 * household) if _uid else []
+        aggr_list_30 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=4.0 * household) if _uid else []
         
         grocery_duration = form_data.get("groceryDuration", "weekly")
         if grocery_duration == "biweekly":
