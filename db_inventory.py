@@ -157,7 +157,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                 
                 if converted_qty is not None:
                     # Logramos convertir y emparejar. Aplicar suma/resta.
-                    new_qty = current_qty + converted_qty
+                    new_qty = round(current_qty + converted_qty, 4)  # Evitar floating point overflow
                     
                     if new_qty < 0.01:
                         supabase.table("user_inventory").delete().eq("id", row_id).execute()
@@ -173,7 +173,7 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                 supabase.table("user_inventory").insert({
                     "user_id": user_id,
                     "ingredient_name": ingredient_name,
-                    "quantity": quantity,
+                    "quantity": round(quantity, 4),  # Evitar floating point overflow
                     "unit": unit,
                     "master_ingredient_id": master_id
                 }).execute()
