@@ -967,6 +967,14 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if re.search(r'^tortillas?\s+integral', _can_lower):
             canonical_name = 'Tortilla integral'
 
+        # Consolidación: Tomate variantes (de ensalada, bugalú, sin semillas, etc.) → Tomate
+        if re.search(r'^tomates?\b', _can_lower) and 'pasta' not in _can_lower and 'salsa' not in _can_lower:
+            canonical_name = 'Tomate'
+
+        # Consolidación: Cebolla variantes (blanca, roja, morada) → Cebolla
+        if re.search(r'^cebollas?\s+(blanca|roja|morada|amarilla)', _can_lower):
+            canonical_name = 'Cebolla'
+
         for u, q in units.items():
             canonical_aggregated[canonical_name][u] += q
             
@@ -1204,10 +1212,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 continue
             if q > 0.0001:
                 # DEDUP: Si este ingrediente ya fue agregado por peso (has_weight path),
-                # y esta unidad residual es 'unidad/uds' que no se pudo convertir a gramos,
+                # y esta unidad residual es contable (unidad, cabeza, diente, mazo) que no se pudo convertir a gramos,
                 # NO agregarlo de nuevo — ya está representado en la entrada de peso.
-                if added and u.lower() in ['unidad', 'unidades', 'ud', 'uds', 'ud.', 'uds.']:
-                    logging.info(f"🔀 [DEDUP] Saltando entrada duplicada por unidad para '{name}' (ya tiene entrada por peso)")
+                if added and u.lower() in ['unidad', 'unidades', 'ud', 'uds', 'ud.', 'uds.', 'cabeza', 'cabezas', 'diente', 'dientes', 'mazo', 'mazos']:
+                    logging.info(f"🔀 [DEDUP] Saltando entrada duplicada por {u} para '{name}' (ya tiene entrada por peso)")
                     continue
                 item_cost = 0.0
                 if u in ['unidad', 'unidades', 'lata', 'latas', 'paquete', 'paquetes']:
