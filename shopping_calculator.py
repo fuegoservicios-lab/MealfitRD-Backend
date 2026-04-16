@@ -943,8 +943,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if re.search(r'^miel\b', _can_lower):
             canonical_name = 'Miel'
 
-        # Consolidación: Ajo con preparación (majado, triturado) → Ajo (no ajo en polvo)
-        if re.search(r'^ajo\b', _can_lower) and 'polvo' not in _can_lower:
+        # Consolidación: Ajo con preparación (majado, triturado) o "diente de ajo" → Ajo (no ajo en polvo)
+        if (re.search(r'^ajo\b', _can_lower) or re.search(r'dientes?\s+de\s+ajo', _can_lower)) and 'polvo' not in _can_lower:
             canonical_name = 'Ajo'
 
         # Consolidación: Pechuga de pavo variantes (en lonjas, picadita, etc.) → Jamón de pavo
@@ -958,6 +958,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # Consolidación: Almendras variantes → Almendras fileteadas
         if re.search(r'^almendras?\b', _can_lower) and 'mantequilla' not in _can_lower:
             canonical_name = 'Almendras fileteadas'
+
+        # Consolidación: Orégano variantes (seco, dominicano) → Orégano dominicano
+        if re.search(r'^or[eé]gano\b', _can_lower):
+            canonical_name = 'Orégano dominicano'
 
         # Consolidación: Tortilla/Tortillas integral/integrales → Tortilla integral
         if re.search(r'^tortillas?\s+integral', _can_lower):
