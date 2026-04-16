@@ -33,7 +33,7 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
 # ---------------------------
 
 DOMINICAN_PROTEINS = [
-    "Pollo", "Cerdo", "Res", "Pescado", "Atún", "Huevos", "Queso de Freír",
+    "Pollo", "Cerdo", "Res", "Pavo", "Pescado", "Atún", "Huevos", "Queso de Freír",
     "Salami Dominicano", "Camarones", "Chuleta", "Longaniza",
     "Habichuelas Rojas", "Habichuelas Negras", "Gandules", "Lentejas", "Garbanzos", "Soya/Tofu"
 ]
@@ -61,8 +61,9 @@ PROTEIN_SYNONYMS = {
     "habichuelas negras": ["habichuelas negras", "frijoles negros", "habichuela negra"],
     "gandules": ["gandules", "guandules", "gandul", "guandul"],
     "lentejas": ["lentejas", "lenteja"],
-    "garbanzos": ["garbanzos", "garbanzo"],
-    "soya/tofu": ["soya/tofu", "soya", "tofu", "carne de soya", "tofu/soya", "tofu/soya firme", "tofu firme", "soya firme"]
+    "garbanzos": ["garbanzos", "garbanzo", "hummus", "puré de garbanzos"],
+    "soya/tofu": ["soya/tofu", "soya", "tofu", "carne de soya", "tofu/soya", "tofu/soya firme", "tofu firme", "soya firme"],
+    "pavo": ["pavo", "pechuga de pavo", "pavo asado", "pavo desmenuzado", "jamón de pavo", "pavo molido", "carne de pavo"]
 }
 
 CARB_SYNONYMS = {

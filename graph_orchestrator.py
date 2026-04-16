@@ -1,13 +1,13 @@
 # backend/graph_orchestrator.py
 """
-Orquestación LangGraph: Flujo cíclico multi-agente para generación de planes nutricionales.
-Generador → Revisor Médico → (loop si falla, max 2 intentos)
+Orquestación LangGraph: Flujo Map-Reduce multi-agente para generación de planes nutricionales.
+Planificador → Generadores Paralelos (×3 días) → Ensamblador → Revisor Médico → (loop si falla)
 """
 
 import os
 import time
 import json
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Callable, Any
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
@@ -42,6 +42,9 @@ class PlanState(TypedDict):
     # Plan generado (output del generador)
     plan_result: Optional[dict]
     
+    # Esqueleto del planificador (fase map)
+    plan_skeleton: Optional[dict]
+    
     # Revisión médica
     review_passed: bool
     review_feedback: str
@@ -50,118 +53,57 @@ class PlanState(TypedDict):
     attempt: int
     user_facts: str
     
+    # Callback de progreso para SSE streaming (opcional)
+    progress_callback: Optional[Any]  # Callable o None
+    
 
 
 
 # ============================================================
 # SCHEMAS (importados del módulo canónico schemas.py)
 # ============================================================
-from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
+from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, PlanSkeletonModel, SingleDayPlanModel
 
 
 # ============================================================
-# PROMPTS (importados de prompts.py)
+# PROMPTS (importados del paquete prompts/)
 # ============================================================
-from prompts import GENERATOR_SYSTEM_PROMPT, REVIEWER_SYSTEM_PROMPT
+from prompts.plan_generator import (
+    GENERATOR_SYSTEM_PROMPT,
+    build_nutrition_context,
+    build_correction_context,
+    build_rag_context,
+    build_time_context,
+    build_technique_injection,
+    build_supplements_context,
+    build_grocery_duration_context,
+    build_pantry_context,
+    build_prices_context,
+)
+from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
+from prompts.planner import PLANNER_SYSTEM_PROMPT
+from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignment_context
 
 
 # ============================================================
-# NODO 1: AGENTE GENERADOR
+# HELPERS: Selección de técnicas y contextos compartidos
 # ============================================================
-def generate_plan_node(state: PlanState) -> dict:
-    """Genera el plan alimenticio."""
-    attempt = state.get("attempt", 0) + 1
-    form_data = state["form_data"]
-    nutrition = state["nutrition"]
-    taste_profile = state.get("taste_profile", "")
-    history_context = state.get("history_context", "")
-    review_feedback = state.get("review_feedback", "")
-    
-    print(f"\n{'='*60}")
-    print(f"🍽️  [AGENTE GENERADOR] Intento #{attempt}")
-    print(f"{'='*60}")
-    
-    start_time = time.time()
-    
-    nutrition_context = f"""
---- TARGETS NUTRICIONALES CALCULADOS (Fórmula Mifflin-St Jeor) ---
-⚠️ ESTOS NÚMEROS SON EXACTOS. NO LOS RECALCULES.
-
-• BMR: {nutrition['bmr']} kcal
-• TDEE: {nutrition['tdee']} kcal  
-• 🎯 CALORÍAS OBJETIVO: {nutrition['target_calories']} kcal ({nutrition['goal_label']})
-• Proteína: {nutrition['macros']['protein_g']}g | Carbos: {nutrition['macros']['carbs_g']}g | Grasas: {nutrition['macros']['fats_g']}g
-
-IMPORTANTE: calories DEBE ser {nutrition['target_calories']}.
-macros DEBEN ser: protein='{nutrition['macros']['protein_str']}', carbs='{nutrition['macros']['carbs_str']}', fats='{nutrition['macros']['fats_str']}'.
--------------------------------------------------------------------
-"""
-    
-    # Si hay feedback del revisor, agregarlo como corrección urgente
-    correction_context = ""
-    if review_feedback:
-        correction_context = f"""
-⚠️⚠️⚠️ CORRECCIÓN URGENTE DEL REVISOR MÉDICO ⚠️⚠️⚠️
-El plan anterior fue RECHAZADO por las siguientes razones:
-{review_feedback}
-
-DEBES corregir TODOS estos problemas en esta nueva versión.
-Genera comidas COMPLETAMENTE DIFERENTES que NO tengan estos problemas.
-⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
-"""
-    
-    # Inyectar hechos recuperados de RAG
-    rag_context = ""
-    user_facts = state.get("user_facts", "")
-    if user_facts:
-        rag_context = f"""
---- HECHOS PERMANENTES DEL USUARIO (MEMORIA VECTORIAL) ---
-Estos son datos críticos que debes respetar.
-{user_facts}
-----------------------------------------------------------
-"""
-
-    # --- 🕒 INYECCIÓN DE CONTEXTO TEMPORAL DINÁMICO ---
-    now_local = datetime.now()
-    dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-    meses_es = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-    dia_str = dias[now_local.weekday()]
-    mes_str = meses_es[now_local.month - 1]
-    
-    # Estación simplificada adaptada al trópico/Hemisferio Norte
-    estacion = "Verano"
-    if now_local.month in [3, 4, 5]: estacion = "Primavera"
-    elif now_local.month in [9, 10, 11]: estacion = "Otoño"
-    elif now_local.month in [12, 1, 2]: estacion = "Invierno"
-
-    time_context = (
-        f"\n--- 📅 CONTEXTO TEMPORAL ACTUAL (OBLIGATORIO) ---\n"
-        f"Hoy es {dia_str}, {now_local.day} de {mes_str} de {now_local.year}. Estación promedio local: {estacion} tropical.\n"
-        f"Aplica las estrategias de Continuidad Temporal considerando que el usuario comenzará este plan en estos días.\n"
-        f"--------------------------------------------------\n"
-    )
-
-    random_seed = random.randint(10000, 99999)
-    
-    # --- 🎲 INVERSIÓN DE CONTROL DETERMINISTA (ANTI MODE-COLLAPSE) ---
-    # Python selecciona proteínas y carbos; el LLM solo "cocina" con ellos.
-    # Extraer user_id para análisis de frecuencia basado en JSON de planes guardados
-    _uid = form_data.get("user_id") or form_data.get("session_id")
-    if _uid == "guest": _uid = None
-    from ai_helpers import get_deterministic_variety_prompt  # No genera ciclo
-    variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid)
-    print(f"🎲 [ORQUESTADOR] Inyectando variedad determinista en el generador.")
-    
-    # --- 🎲 INYECTOR DINÁMICO DE VARIEDAD CULINARIA ---
-    # Clasificación por familia: garantiza que los 3 días usen perfiles de cocción diferentes.
-    # Evita que las 3 técnicas sean "secas" (ej: Horneado + Airfryer + Parrilla).
-    
-    # Query estructurado contra la DB para contar frecuencia de cada técnica CON decaimiento temporal
-    technique_freq = {}
-    if _uid:
+def _emit_progress(state: PlanState, event: str, data: dict):
+    """Emite un evento de progreso si hay callback registrado."""
+    cb = state.get("progress_callback")
+    if cb:
         try:
-            recent_techs = get_recent_techniques(_uid, limit=6)
-            # Construir mapa de frecuencia con decaimiento: 0.9^days_elapsed
+            cb({"event": event, "data": data})
+        except Exception:
+            pass
+
+
+def _select_techniques(user_id: str | None) -> list:
+    """Selecciona 7 técnicas de cocción diversificadas por familia con decaimiento temporal."""
+    technique_freq = {}
+    if user_id:
+        try:
+            recent_techs = get_recent_techniques(user_id, limit=6)
             now_utc = datetime.now(timezone.utc)
             decay_factor = 0.9
             for t, created_at_str in recent_techs:
@@ -177,218 +119,281 @@ Estos son datos críticos que debes respetar.
                         days_elapsed = max(0, (now_utc - dt).days)
                     except Exception:
                         pass
-                decayed_weight = decay_factor ** days_elapsed  # 1.0 hoy, 0.9 ayer, 0.81 antier...
+                decayed_weight = decay_factor ** days_elapsed
                 technique_freq[t] = technique_freq.get(t, 0) + decayed_weight
             if technique_freq:
                 print(f"🔍 [TÉCNICAS] Frecuencias con decaimiento temporal: { {k: round(v, 2) for k, v in technique_freq.items()} }")
         except Exception as e:
             print(f"⚠️ [TÉCNICAS] Error consultando DB, usando pesos uniformes: {e}")
-    
-    # Selección ponderada por frecuencia inversa CON diversificación de familias.
-    # Algoritmo: elegir 1 técnica de una familia diferente en cada iteración.
-    # Esto garantiza que "Horneado + Guiso + Ceviche" (seca/húmeda/fresca) sea más
-    # probable que "Horneado + Airfryer + Parrilla" (seca/seca/seca).
+
     selected_techniques = []
     used_families = set()
     _pool_t = [(t, 1.0 / (technique_freq.get(t, 0) + 1)) for t in ALL_TECHNIQUES]
-    
+
     while len(selected_techniques) < 3 and _pool_t:
-        # Fase 1: Preferir técnicas de familias NO usadas aún
         cross_family_pool = [(t, w) for t, w in _pool_t if TECH_TO_FAMILY.get(t) not in used_families]
-        
-        # Fase 2: Si todas las familias ya fueron usadas, tomar de cualquier familia restante
         active_pool = cross_family_pool if cross_family_pool else _pool_t
-        
         pick = random.choices([x[0] for x in active_pool], weights=[x[1] for x in active_pool], k=1)[0]
         selected_techniques.append(pick)
         used_families.add(TECH_TO_FAMILY.get(pick, ""))
         _pool_t = [(t, w) for t, w in _pool_t if t != pick]
-    
-    print(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({TECH_TO_FAMILY.get(t)})' for t in selected_techniques]}")
-    
-    technique_injection = (
-        f"\n--- 👨🍳 INSTRUCCIÓN DINÁMICA DE VARIEDAD (OBLIGATORIA) ---\n"
-        f"Para cumplir la regla de usar los MISMOS ingredientes del supermercado pero crear PLATOS DIFERENTES, "
-        f"aplica obligatoriamente estas técnicas de cocción a las comidas principales (Almuerzo o Cena):\n"
-        f"• Día 1 (Opción A): Aplica técnica '{selected_techniques[0]}'\n"
-        f"• Día 2 (Opción B): Aplica técnica '{selected_techniques[1]}'\n"
-        f"• Día 3 (Opción C): Aplica técnica '{selected_techniques[2]}'\n"
-        f"Ajusta los gramos matemáticamente para cumplir las macros.\n"
-        f"----------------------------------------------------------\n"
-    )
-    
-    # --- SUPLEMENTOS (Condicional) ---
-    supplements_context = ""
-    if form_data.get("includeSupplements"):
-        selected_supps = form_data.get("selectedSupplements", [])
-        
-        # Mapa de keys a nombres legibles para el prompt
-        
-        if selected_supps:
-            # El usuario eligió suplementos específicos
-            supp_names = [SUPPLEMENT_NAMES.get(s, s) for s in selected_supps]
-            # Generar lista de suplementos NO seleccionados para refuerzo negativo
-            all_supps = set(SUPPLEMENT_NAMES.keys())
-            not_selected = all_supps - set(selected_supps)
-            not_selected_names = [SUPPLEMENT_NAMES.get(s, s) for s in not_selected]
-            
-            supplements_context = (
-                "\n--- 💊 SUPLEMENTOS SELECCIONADOS (OBLIGATORIO — LEE CON CUIDADO) ---\n"
-                f"LISTA EXACTA de suplementos que DEBES incluir: {', '.join(supp_names)}\n"
-                f"TOTAL: {len(supp_names)} suplemento(s). Ni más, ni menos.\n\n"
-                "⚠️ PROHIBIDO incluir cualquier suplemento que NO esté en la lista de arriba.\n"
-            )
-            if not_selected_names:
-                supplements_context += (
-                    f"❌ NO INCLUIR (el usuario NO los seleccionó): {', '.join(not_selected_names)}\n"
-                )
-            supplements_context += (
-                "\nPara CADA día del plan, agrega una sección 'supplements' con SOLO los suplementos listados arriba.\n"
-                "Cada suplemento: 'name' (nombre exacto), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación).\n"
-                "---------------------------------------------------\n"
-            )
-        else:
-            # Toggle activado pero sin selección específica → recomendación libre
-            supplements_context = (
-                "\n--- 💊 SUPLEMENTOS PERSONALIZADOS (OBLIGATORIO) ---\n"
-                "El usuario ACTIVÓ la opción de incluir suplementos en su plan pero NO seleccionó suplementos específicos.\n"
-                "DEBES agregar para CADA día del plan una sección 'supplements' (lista de objetos) con suplementos personalizados.\n"
-                "Cada suplemento debe tener: 'name' (nombre), 'dose' (dosis), 'timing' (momento del día), 'reason' (justificación breve).\n"
-                "Adapta las recomendaciones al objetivo del usuario, su nivel de actividad y condiciones médicas.\n"
-                "Ejemplos: Proteína Whey, Creatina Monohidrato, Omega-3, Vitamina D3, Multivitamínico, Magnesio, etc.\n"
-                "---------------------------------------------------\n"
-            )
-    
-    # --- DURACIÓN DE COMPRA (Condicional) ---
-    grocery_duration = form_data.get("groceryDuration", "weekly")
-    grocery_duration_context = ""
-    DURATION_LABELS = {"weekly": "SEMANAL (7 días)", "biweekly": "QUINCENAL (15 días)", "monthly": "MENSUAL (30 días)"}
-    DURATION_DAYS = {"weekly": 7, "biweekly": 15, "monthly": 30}
-    if grocery_duration and grocery_duration != "weekly":
-        label = DURATION_LABELS.get(grocery_duration, "SEMANAL (7 días)")
-        days_num = DURATION_DAYS.get(grocery_duration, 7)
-        grocery_duration_context = (
-            f"\n--- 🛒 DURACIÓN DE COMPRA: {label} (OBLIGATORIO) ---\n"
-            f"El usuario compra alimentos para {days_num} días en una sola ida al supermercado.\n"
-            f"DEBES priorizar ingredientes que se conserven bien durante {days_num} días.\n"
-        )
-        if grocery_duration == "monthly":
-            grocery_duration_context += (
-                "Usa predominantemente: granos secos, arroz, avena, tubérculos (yuca, batata, plátano verde),\n"
-                "proteínas congelables (pollo, carne, pescado empacado al vacío), leche en polvo o UHT, huevos.\n"
-                "Para cualquier perecedero, incluye instrucciones de congelación en la receta.\n"
-            )
-        elif grocery_duration == "biweekly":
-            grocery_duration_context += (
-                "Equilibra entre frescos e ingredientes duraderos. Los vegetales de hoja y frutas muy maduras\n"
-                "deben usarse en los primeros días del plan. Planifica congelación para proteínas frescas.\n"
-            )
-        grocery_duration_context += (
-            f"RECUERDA: Los PLATOS varían cada día, pero los ALIMENTOS BASE se repiten durante los {days_num} días.\n"
-            "---------------------------------------------------\n"
-        )
-    
-    # --- RECICLAJE DE DESPENSA (ZERO-WASTE PREDICTIVO) ---
-    pantry_context = ""
-    current_pantry = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
-    if current_pantry and isinstance(current_pantry, list):
-        clean_pantry = [item.strip() for item in current_pantry if item and isinstance(item, str) and len(item.strip()) > 2]
-        if clean_pantry:
-            if not form_data.get("_is_rotation_reroll", False):
-                # Clasificación heurística FIFO (First In, First Out)
-                perishables = []
-                stables = []
-                PERISHABLE_KEYWORDS = ["aguacate", "pescado", "pollo", "carne", "res", "cerdo", "tomate", "lechuga", "espinaca", "brocoli", "brócoli", "guineo", "platano", "plátano", "banano", "manzana", "fresa", "vegetal", "cebolla", "cilantro", "verdura", "marisco", "camaron", "camarón", "queso", "leche", "yogurt", "huevo", "zanahoria", "pimiento", "aji", "ají", "berenjena", "calabacín", "zucchini"]
-                
-                for item in clean_pantry:
-                    item_lower = item.lower()
-                    if any(key in item_lower for key in PERISHABLE_KEYWORDS):
-                        perishables.append(item)
-                    else:
-                        stables.append(item)
-                
-                pantry_context = "\n--- ♻️ PRIORIDAD DE RECICLAJE DE DESPENSA (ZERO-WASTE PREDICTIVO) ---\n"
-                pantry_context += "El usuario ya tiene los siguientes ingredientes en su despensa:\n\n"
-                
-                if perishables:
-                    pantry_context += f"⚠️ INGREDIENTES ALERTA NARANJA (PERECEDEROS - DEBES USARLOS OBLIGATORIAMENTE Y PRIORIZARLOS EN LOS PRIMEROS DÍAS):\n"
-                    pantry_context += f"{', '.join(perishables)}\n\n"
-                
-                if stables:
-                    pantry_context += f"✅ INGREDIENTES ESTABLES (NO PERECEDEROS - USAR COMO COMPLEMENTO):\n"
-                    pantry_context += f"{', '.join(stables)}\n\n"
-                    
-                pantry_context += "ESTRATEGIA ZERO-WASTE: Es OBLIGATORIO que bases este nuevo plan en agotar estos ingredientes sobrantes ANTES de pedirle que compre productos nuevos. Sé creativo para transformarlos en platos totalmente nuevos.\n"
-                pantry_context += "----------------------------------------------------------\n"
 
-    # --- INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---
-    try:
-        from shopping_calculator import get_master_ingredients
-        master_list = get_master_ingredients()
-        prices_context = "\n--- 💰 INTELIGENCIA DE PRECIOS (BUDGET-AWARE) ---\n"
-        prices_context += "A continuación se muestra el costo promedio de los ingredientes (en RD$). Utiliza esta información para optimizar el presupuesto del plan si el usuario pide algo económico o para evitar ingredientes excesivamente costosos:\n"
-        for m in master_list:
-            price_lb = m.get("price_per_lb", 0)
-            price_u = m.get("price_per_unit", 0)
-            if price_lb: prices_context += f"- {m['name']}: RD${price_lb}/lb\n"
-            elif price_u: prices_context += f"- {m['name']}: RD${price_u}/unidad\n"
-        prices_context += "----------------------------------------------------------\n"
-    except Exception as e:
-        logger.error(f"Error cargando precios: {e}")
-        prices_context = ""
+    print(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({TECH_TO_FAMILY.get(t)})' for t in selected_techniques]}")
+    return selected_techniques
+
+
+def _build_shared_context(state: PlanState) -> dict:
+    """Construye todos los bloques de contexto compartidos entre nodos."""
+    form_data = state["form_data"]
+    nutrition = state["nutrition"]
+    review_feedback = state.get("review_feedback", "")
+    user_facts = state.get("user_facts", "")
+    history_context = state.get("history_context", "")
+    taste_profile = state.get("taste_profile", "")
+
+    _uid = form_data.get("user_id") or form_data.get("session_id")
+    if _uid == "guest": _uid = None
+
+    from ai_helpers import get_deterministic_variety_prompt
+    variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid)
+
+    return {
+        "nutrition_context": build_nutrition_context(nutrition),
+        "correction_context": build_correction_context(review_feedback),
+        "rag_context": build_rag_context(user_facts),
+        "time_context": build_time_context(),
+        "variety_prompt": variety_prompt,
+        "supplements_context": build_supplements_context(form_data),
+        "grocery_duration_context": build_grocery_duration_context(form_data),
+        "pantry_context": build_pantry_context(form_data),
+        "prices_context": build_prices_context(),
+        "taste_profile": taste_profile,
+        "history_context": history_context,
+        "user_id": _uid,
+    }
+
+
+# ============================================================
+# NODO 1: PLANIFICADOR (Fase Map — esqueleto liviano)
+# ============================================================
+def plan_skeleton_node(state: PlanState) -> dict:
+    """Genera un esqueleto liviano del plan: asignaciones de ingredientes y técnicas por día (~8s)."""
+    attempt = state.get("attempt", 0) + 1
+    form_data = state["form_data"]
+    nutrition = state["nutrition"]
+
+    print(f"\n{'='*60}")
+    print(f"📋 [PLANIFICADOR] Diseñando estructura del plan (intento #{attempt})...")
+    print(f"{'='*60}")
+
+    _emit_progress(state, "phase", {"phase": "skeleton", "message": "Diseñando la estructura del plan..."})
+    start_time = time.time()
+
+    ctx = _build_shared_context(state)
+    _uid = ctx["user_id"]
+
+    # Seleccionar técnicas de cocción
+    selected_techniques = _select_techniques(_uid)
+
+    random_seed = random.randint(10000, 99999)
+
+    techniques_str = "\n".join([f"• Día/Opción {i+1}: {selected_techniques[i] if len(selected_techniques) > i else 'Libre'}" for i in range(3)])
 
     prompt_text = (
-        f"Analiza la siguiente información del usuario y genera un plan de comidas de 3 días.\n"
-        f"IMPORTANTE: Genera opciones creativas y diferentes a planes anteriores. Semilla de generación aleatoria: {random_seed}\n\n"
+        f"Analiza la siguiente información del usuario y diseña el ESQUELETO de un plan de 3 alternativas/días.\n"
+        f"Semilla de generación aleatoria: {random_seed}\n\n"
         f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
-        f"{nutrition_context}\n{time_context}\n{taste_profile}\n{rag_context}\n{correction_context}\n{history_context}\n{variety_prompt}\n{technique_injection}\n{supplements_context}\n{grocery_duration_context}\n{pantry_context}\n{prices_context}\n\n"
-        f"{GENERATOR_SYSTEM_PROMPT}"
+        f"{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
+        f"{ctx['rag_context']}\n{ctx['correction_context']}\n{ctx['history_context']}\n"
+        f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['prices_context']}\n\n"
+        f"Técnicas de cocción asignadas (una por día):\n"
+        f"{techniques_str}\n\n"
+        f"{PLANNER_SYSTEM_PROMPT}"
     )
-    
+
     is_re_roll = form_data.get("_is_same_day_reroll", False)
-    # Structured Output constraints crash/hang on Gemini if temperature > 1.0 due to generation mask mismatch.
-    # We use 0.7 for standard and 0.95 for maximum variety same-day reroll.
-    if is_re_roll:
-        base_temp = 0.95
-    else:
-        base_temp = 0.7
-    
-    generator_llm = ChatGoogleGenerativeAI(
+    base_temp = 0.95 if is_re_roll else 0.7
+
+    planner_llm = ChatGoogleGenerativeAI(
         model="gemini-3.1-pro-preview",
-        temperature=base_temp if attempt == 1 else (base_temp + 0.1),  
+        temperature=base_temp if attempt == 1 else (base_temp + 0.1),
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=0,
-        timeout=120
-    ).with_structured_output(PlanModel)
-    
-    # Invocar LLM con reintentos automáticos (tenacity)
+        timeout=60
+    ).with_structured_output(PlanSkeletonModel)
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
         reraise=True,
-        before_sleep=lambda retry_state: print(f"⚠️  [GENERADOR] Reintento #{retry_state.attempt_number} tras error de formato...")
+        before_sleep=lambda retry_state: print(f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
     )
-    def invoke_with_retry():
-        print(f"⏳ [DEBUG] LLM invocado. Generando esquema JSON gigante, espera hasta 60s...")
-        return generator_llm.invoke(prompt_text)
-    
-    response = invoke_with_retry()
-    
+    def invoke_planner():
+        print(f"⏳ [PLANIFICADOR] Generando esqueleto del plan...")
+        return planner_llm.invoke(prompt_text)
+
+    response = invoke_planner()
+
     duration = round(time.time() - start_time, 2)
-    print(f"✅ [GENERADOR] Plan creado en {duration}s")
-    
-    # Convertir a dict
+    print(f"✅ [PLANIFICADOR] Esqueleto generado en {duration}s")
+
     if hasattr(response, "model_dump"):
-        result = response.model_dump()
+        skeleton = response.model_dump()
     elif isinstance(response, dict):
-        result = response
+        skeleton = response
     else:
-        result = response.dict()
-    
+        skeleton = response.dict()
+
+    # Guardar técnicas seleccionadas para persistencia
+    skeleton["_selected_techniques"] = selected_techniques
+
+    return {
+        "plan_skeleton": skeleton,
+        "attempt": attempt
+    }
+
+
+# ============================================================
+# NODO 2: GENERADORES PARALELOS (Fase Reduce — 3 días simultáneos)
+# ============================================================
+def generate_days_parallel_node(state: PlanState) -> dict:
+    """Genera los 7 días completos en PARALELO usando el esqueleto del planificador."""
+    skeleton = state["plan_skeleton"]
+    form_data = state["form_data"]
+    nutrition = state["nutrition"]
+
+    print(f"\n{'='*60}")
+    print(f"🚀 [GENERADORES PARALELOS] Lanzando 3 workers para generar las opciones...\n")
+    print(f"{'='*60}")
+
+    _emit_progress(state, "phase", {"phase": "parallel_generation", "message": "Generando las 3 opciones en paralelo..."})
+
+    ctx = _build_shared_context(state)
+    skeleton_days = skeleton.get("days", [])
+
+    is_re_roll = form_data.get("_is_same_day_reroll", False)
+    base_temp = 0.95 if is_re_roll else 0.7
+    attempt = state.get("attempt", 1)
+
+    def generate_single_day(skeleton_day: dict, day_num: int) -> dict:
+        """Worker: genera un solo día completo."""
+        _emit_progress(state, "day_started", {"day": day_num, "message": f"Generando Día {day_num}..."})
+        day_start = time.time()
+
+        assignment_context = build_day_assignment_context(skeleton_day, day_num)
+
+        random_seed = random.randint(10000, 99999)
+
+        prompt_text = (
+            f"Genera las comidas completas para el DÍA {day_num} del plan.\n"
+            f"Semilla de generación aleatoria: {random_seed}\n\n"
+            f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
+            f"{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
+            f"{ctx['rag_context']}\n{ctx['correction_context']}\n"
+            f"{ctx['supplements_context']}\n{ctx['grocery_duration_context']}\n"
+            f"{ctx['pantry_context']}\n"
+            f"{assignment_context}\n\n"
+            f"{DAY_GENERATOR_SYSTEM_PROMPT}"
+        )
+
+        day_llm = ChatGoogleGenerativeAI(
+            model="gemini-3.1-pro-preview",
+            temperature=base_temp if attempt == 1 else (base_temp + 0.1),
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            max_retries=0,
+            timeout=90
+        ).with_structured_output(SingleDayPlanModel)
+
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=2, max=8),
+            reraise=True,
+            before_sleep=lambda rs: print(f"⚠️  [DÍA {day_num}] Reintento #{rs.attempt_number}...")
+        )
+        def invoke_day():
+            return day_llm.invoke(prompt_text)
+
+        response = invoke_day()
+
+        if hasattr(response, "model_dump"):
+            day_result = response.model_dump()
+        elif isinstance(response, dict):
+            day_result = response
+        else:
+            day_result = response.dict()
+
+        # Forzar day number correcto
+        day_result["day"] = day_num
+
+        day_duration = round(time.time() - day_start, 2)
+        print(f"✅ [DÍA {day_num}] Generado en {day_duration}s")
+        _emit_progress(state, "day_complete", {"day": day_num, "duration": day_duration})
+
+        return day_result
+
+    # Lanzar generaciones en paralelo
+    parallel_start = time.time()
+    generated_days = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {}
+        for i, skel_day in enumerate(skeleton_days[:3]):
+            day_num = i + 1
+            futures[executor.submit(generate_single_day, skel_day, day_num)] = day_num
+
+        for future in concurrent.futures.as_completed(futures):
+            day_num = futures[future]
+            try:
+                result = future.result()
+                generated_days.append(result)
+            except Exception as e:
+                print(f"❌ [DÍA {day_num}] Error fatal en generación paralela: {e}")
+                # Crear un día placeholder mínimo para no romper el flujo
+                generated_days.append({
+                    "day": day_num,
+                    "meals": [],
+                    "supplements": None
+                })
+
+    # Ordenar por número de día
+    generated_days.sort(key=lambda d: d.get("day", 0))
+
+    parallel_duration = round(time.time() - parallel_start, 2)
+    print(f"✅ [PARALELO] Los 3 días generados en {parallel_duration}s (en paralelo)")
+
+    return {
+        "plan_result": {
+            "days": generated_days,
+            "_skeleton": skeleton,
+            "_parallel_duration": parallel_duration,
+        }
+    }
+
+
+# ============================================================
+# NODO 3: ENSAMBLADOR (combina días + shopping list + macros del calculador)
+# ============================================================
+def assemble_plan_node(state: PlanState) -> dict:
+    """Ensambla el plan final combinando skeleton + días paralelos + datos del calculador."""
+    partial = state["plan_result"]
+    skeleton = partial.get("_skeleton", state.get("plan_skeleton", {}))
+    form_data = state["form_data"]
+    nutrition = state["nutrition"]
+
+    print(f"\n{'='*60}")
+    print(f"🔧 [ENSAMBLADOR] Combinando plan final...")
+    print(f"{'='*60}")
+
+    _emit_progress(state, "phase", {"phase": "assembly", "message": "Ensamblando tu plan final..."})
+
+    result = {
+        "main_goal": skeleton.get("main_goal", nutrition.get("goal_label", "")),
+        "insights": skeleton.get("insights", []),
+        "days": partial.get("days", []),
+    }
+
     # Post-proceso: forzar valores exactos del calculador
-    # Usamos total_daily_calories si existe para que el Dashboard muestre el objetivo completo del día.
     result["calories"] = nutrition.get("total_daily_calories", nutrition["target_calories"])
-    
     active_macros = nutrition.get("total_daily_macros", nutrition["macros"])
     result["macros"] = {
         "protein": active_macros["protein_str"],
@@ -396,18 +401,21 @@ Estos son datos críticos que debes respetar.
         "fats": active_macros["fats_str"],
     }
     result["main_goal"] = nutrition["goal_label"]
-    
+
+    # Calcular shopping lists
+    _uid = form_data.get("user_id") or form_data.get("session_id")
+    if _uid == "guest": _uid = None
+
     from shopping_calculator import get_shopping_list_delta
     try:
-        # Multiplicador de personas: si el usuario cocina para N personas, escalar cantidades
         household = max(1, int(form_data.get("householdSize", 1) or 1))
         if household > 1:
             print(f"👨‍👩‍👧‍👦 [HOUSEHOLD] Escalando lista de compras ×{household} personas")
-        
+
         aggr_list_7 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=1.0 * household) if _uid else []
         aggr_list_15 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=2.0 * household) if _uid else []
         aggr_list_30 = get_shopping_list_delta(_uid, result, is_new_plan=True, structured=True, multiplier=4.0 * household) if _uid else []
-        
+
         grocery_duration = form_data.get("groceryDuration", "weekly")
         if grocery_duration == "biweekly":
             aggr_list = aggr_list_15
@@ -415,24 +423,27 @@ Estos son datos críticos que debes respetar.
             aggr_list = aggr_list_30
         else:
             aggr_list = aggr_list_7
-            
+
         result["aggregated_shopping_list"] = aggr_list
         result["aggregated_shopping_list_weekly"] = aggr_list_7
         result["aggregated_shopping_list_biweekly"] = aggr_list_15
         result["aggregated_shopping_list_monthly"] = aggr_list_30
     except Exception as e:
+        import traceback
         print(f"⚠️ [SHOPPING MATH] Error agregando lista delta: {e}")
+        traceback.print_exc()
         result["aggregated_shopping_list"] = []
         result["aggregated_shopping_list_weekly"] = []
         result["aggregated_shopping_list_biweekly"] = []
         result["aggregated_shopping_list_monthly"] = []
 
-    # Guardar técnicas seleccionadas para persistencia en DB (se extraen en app.py)
-    result["_selected_techniques"] = selected_techniques
-    
+    # Guardar técnicas seleccionadas para persistencia en DB
+    result["_selected_techniques"] = skeleton.get("_selected_techniques", [])
+
+    print(f"✅ [ENSAMBLADOR] Plan final ensamblado")
+
     return {
-        "plan_result": result,
-        "attempt": attempt
+        "plan_result": result
     }
 
 
@@ -449,6 +460,8 @@ def review_plan_node(state: PlanState) -> dict:
     print(f"\n{'='*60}")
     print(f"🩺 [AGENTE REVISOR MÉDICO] Verificando plan (intento #{attempt})...")
     print(f"{'='*60}")
+    
+    _emit_progress(state, "phase", {"phase": "review", "message": "Verificación médica en curso..."})
     
     # Extraer restricciones del usuario
     allergies = form_data.get("allergies", [])
@@ -618,8 +631,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         )
                         repeated_meals = future.result()
                     
-                    # Umbral: cero tolerancia - si 1 o más comidas se repiten, rechazar
-                    if len(repeated_meals) > 0:
+                    # Umbral: cero tolerancia, pero excluir nombres genéricos de desayuno
+                    generic_ignores = ['huevosrevueltos', 'huevoshervidos', 'avenacocida', 'panezekiel', 'tostada', 'arepa']
+                    filtered_repeated = [rm for rm in repeated_meals if not any(g in rm for g in generic_ignores)]
+                    
+                    if len(filtered_repeated) > 0:
                         approved = False
                         issues.append(
                             f"REPETICIÓN DETECTADA: Los siguientes platos principales ya aparecieron en planes recientes y deben ser reemplazados por alternativas completamente diferentes: {', '.join(repeated_meals)}."
@@ -650,13 +666,14 @@ Responde ÚNICAMENTE con el JSON de revisión.
                                 days
                             )
                             repeated_meals = future.result()
-                        if len(repeated_meals) > 0:
+                        filtered_guest_repeated = [rm for rm in repeated_meals if not any(g in rm for g in ['huevosrevueltos', 'huevoshervidos', 'avenacocida', 'panezekiel', 'tostada', 'arepa'])]
+                        if len(filtered_guest_repeated) > 0:
                             approved = False
                             issues.append(
-                                f"REPETICIÓN DETECTADA (Guest): {', '.join(repeated_meals)}. Regenerar con variantes diferentes."
+                                f"REPETICIÓN DETECTADA (Guest): {', '.join(filtered_guest_repeated)}. Regenerar con variantes diferentes."
                             )
                             severity = "minor"
-                            print(f"🔄 [ANTI-REPETICIÓN GUEST] {len(repeated_meals)} platos repetidos detectados")
+                            print(f"🔄 [ANTI-REPETICIÓN GUEST] {len(filtered_guest_repeated)} platos repetidos detectados")
         except Exception as e:
             print(f"⚠️ [ANTI-REPETICIÓN] Error en validación (no bloqueante): {e}")
     
@@ -705,28 +722,32 @@ def should_retry(state: PlanState) -> str:
 # CONSTRUCTOR DEL GRAFO
 # ============================================================
 def build_plan_graph() -> StateGraph:
-    """Construye y compila el grafo de orquestación LangGraph."""
-    
+    """Construye y compila el grafo de orquestación LangGraph Map-Reduce."""
+
     graph = StateGraph(PlanState)
-    
-    # Agregar nodos
-    graph.add_node("generate_plan", generate_plan_node)
+
+    # Agregar nodos del pipeline Map-Reduce
+    graph.add_node("plan_skeleton", plan_skeleton_node)
+    graph.add_node("generate_days_parallel", generate_days_parallel_node)
+    graph.add_node("assemble_plan", assemble_plan_node)
     graph.add_node("review_plan", review_plan_node)
-    
-    # Definir flujo
-    graph.set_entry_point("generate_plan")
-    graph.add_edge("generate_plan", "review_plan")
-    
-    # Edge condicional: revisor decide si repetir o terminar
+
+    # Definir flujo: skeleton → parallel days → assemble → review
+    graph.set_entry_point("plan_skeleton")
+    graph.add_edge("plan_skeleton", "generate_days_parallel")
+    graph.add_edge("generate_days_parallel", "assemble_plan")
+    graph.add_edge("assemble_plan", "review_plan")
+
+    # Edge condicional: revisor decide si regenerar o terminar
     graph.add_conditional_edges(
         "review_plan",
         should_retry,
         {
-            "retry": "generate_plan",
+            "retry": "plan_skeleton",  # Vuelve al planificador en caso de rechazo
             "end": END
         }
     )
-    
+
     return graph.compile()
 
 # Module-level singleton: el grafo compilado es stateless y reutilizable entre requests.
@@ -736,10 +757,13 @@ _PLAN_GRAPH = build_plan_graph()
 # ============================================================
 # FUNCIÓN PÚBLICA: Ejecutar el pipeline completo
 # ============================================================
-def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str = "", memory_context: str = "") -> dict:
+def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str = "", memory_context: str = "", progress_callback=None) -> dict:
     """
-    Ejecuta el pipeline completo de generación de planes:
-    Calculador → Generador → Revisor Médico → (loop si falla)
+    Ejecuta el pipeline completo de generación de planes (Map-Reduce):
+    Calculador → Planificador → Generadores Paralelos (×3) → Ensamblador → Revisor Médico → (loop si falla)
+    
+    Args:
+        progress_callback: Función opcional que recibe dicts de progreso para streaming SSE.
     """
     print("\n" + "🔗" * 30)
     print("🔗 [LANGGRAPH] Iniciando Pipeline Multi-Agente")
@@ -778,6 +802,26 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
                 )
         except Exception as e:
             print(f"⚠️ Error recuperando comidas recientes desde db: {e}")
+            
+        try:
+            from db_facts import get_consumed_meals_since
+            from datetime import datetime, timezone, timedelta
+            
+            since_date = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+            consumed = get_consumed_meals_since(user_id, since_date)
+            
+            if consumed:
+                consumed_names = [f"- {m.get('meal_name')} ({m.get('calories')} kcals)" for m in consumed]
+                history_context += (
+                    "\n\n--- FEEDBACK EVOLUTIVO (ÚLTIMOS 7 DÍAS) ---\n"
+                    "El usuario hizo tracking de los siguientes platos en la ventana JIT anterior:\n"
+                    f"{chr(10).join(consumed_names)}\n"
+                    "INSTRUCCIÓN: Observa qué tipos de platos tuvieron éxito. "
+                    "Incentiva opciones similares pero NO repitas las mismas recetas exactas.\n"
+                    "----------------------------------------------------------------------\n"
+                )
+        except Exception as e:
+            print(f"⚠️ Error recuperando feedback evolutivo de 7 días: {e}")
             
     # 2.15 --- REGENERACIÓN DEL MISMO DÍA (RECHAZO EXPLÍCITO) ---
     previous_meals = actual_form_data.get("previous_meals", [])
@@ -975,9 +1019,11 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
         "history_context": history_context,
         "user_facts": full_rag_context,
         "plan_result": None,
+        "plan_skeleton": None,
         "review_passed": False,
         "review_feedback": "",
         "attempt": 0,
+        "progress_callback": progress_callback,
     }
     
     # 4. Ejecutar el grafo (singleton compilado a nivel de módulo)

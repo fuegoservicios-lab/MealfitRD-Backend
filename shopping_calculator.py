@@ -6,8 +6,19 @@ import logging
 from fractions import Fraction
 from db_core import supabase, connection_pool, execute_sql_query
 
+import time as _time
+
 _master_cache = None
+_master_cache_ts = 0
+_MASTER_CACHE_TTL = 300  # 5 minutos de TTL para que aliases nuevos se refresquen
 _semantic_cache = None
+
+def invalidate_master_cache():
+    """Invalida el caché de master_ingredients para forzar recarga desde DB."""
+    global _master_cache, _master_cache_ts, _semantic_cache
+    _master_cache = None
+    _master_cache_ts = 0
+    _semantic_cache = None
 
 def get_semantic_cache():
     global _semantic_cache
@@ -45,18 +56,22 @@ def cosine_similarity(v1, v2):
     return dot / (mag1 * mag2)
 
 def get_master_ingredients():
-    global _master_cache
-    if _master_cache is None:
+    global _master_cache, _master_cache_ts
+    now = _time.time()
+    if _master_cache is None or (now - _master_cache_ts) > _MASTER_CACHE_TTL:
         if connection_pool:
             try:
                 res = execute_sql_query("SELECT * FROM master_ingredients", fetch_all=True)
                 _master_cache = res or []
+                _master_cache_ts = now
             except Exception as e:
                 logging.error(f"Error fetching master_ingredients via pool: {e}")
-                _master_cache = []
+                if _master_cache is None:
+                    _master_cache = []
         else:
             logging.error("No connection_pool available to fetch master_ingredients")
-            _master_cache = []
+            if _master_cache is None:
+                _master_cache = []
     return _master_cache
 
 DEFAULT_G_PER_TAZA = 150
@@ -82,30 +97,55 @@ def normalize_name(orig_name: str) -> str:
     # Limpieza de prefijos contenedores o medidas informales
     n = re.sub(r'^(cda|cdta|cdita|cucharada|cucharadita|taza|vaso|pizca|chorrito|puñado|atado|manojo|scoop|lonja|loncha|paquete|paquetico|funda|lata|sobre|sobrecito|chin|toque)(s)?\s*(de\s+|del\s+)?', '', n, flags=re.IGNORECASE)
     # Nueva mejora: Limpieza estricta de pseudo-unidades anatómicas LATINAS SOLO si están seguidas de 'de'
-    n = re.sub(r'^(pechuga|filete|muslo|trozo|chuleta|pieza|corte|ración|racion|porción|porcion|filetico|medallón|medallones)(s)?\s+(de\s+|del\s+)', '', n, flags=re.IGNORECASE)
+    n = re.sub(r'^(pechuga|filete|muslo|trozo|chuleta|pieza|corte|ración|racion|porción|porcion|filetico|medallón|medallones|carne)(s)?\s+(de\s+|del\s+)', '', n, flags=re.IGNORECASE)
     n = re.sub(r'^(de\s+|del\s+)', '', n, flags=re.IGNORECASE)
     
-    stops = ['picada', 'picado', 'en tiras', 'en cubos', 'rallado', 'rallada', 'magra', 'para rebozar', 'en hojuelas', 'hervida', 'desmenuzada', 'fresco', 'fresca', 'cocido', 'cocida', 'pelada', 'pelado', 'en dados', 'al gusto', 'pizca de', 'rodajas de', 'en aros', 'de la despensa', 'ralladura y jugo de 1/2', 'natural', 'bajo en grasa', 'descremado', 'descremada', 'horneado', 'grandes', 'firme', 'la', 'el', 'los', 'las', 'en trozos', 'en rodajas', 'en porciones', 'sin piel', 'sin hueso', 'crudo', 'cruda', 'asado', 'asada', 'entero', 'entera', 'fina', 'finas', 'gruesa', 'gruesas']
+    stops = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
     clean_n = n
     for s in stops:
         clean_n = re.sub(r'\b' + s + r'\b', '', clean_n, flags=re.IGNORECASE)
-    clean_n = clean_n.replace(',', '').strip()
-
+        
+    # Limpiar conjunciones o preposiciones que quedan colgadas al quitar los stops al inicio o al final
+    clean_n = re.sub(r'^\s*(y|e|en|con|de|del|para)\b', '', clean_n, flags=re.IGNORECASE)
+    clean_n = re.sub(r'\b(y|e|en|con|de|del|para)\s*$', '', clean_n, flags=re.IGNORECASE)
+    clean_n = re.sub(r'\s+', ' ', clean_n).replace(',', '').strip()
+    
     master_list = get_master_ingredients()
     
-    # Intento 1: Match por regex exacto sobre la palabra limpia
+    # Recolectar todos los aliases + nombres canónicos para búsqueda,
+    # ordenados por longitud (más largos primero) para evitar que 
+    # 'platano' se trague 'platano maduro' o 'queso' se trague 'queso cottage'
+    all_aliases = []
     for master in master_list:
-        aliases = master.get("aliases") or []
-        for alias in aliases:
-            if re.search(r'\b' + re.escape(alias) + r'\b', clean_n, flags=re.IGNORECASE):
-                return master["name"]
+        # El nombre canónico también cuenta como alias para búsqueda exacta
+        all_aliases.append((master["name"].strip(), master["name"]))
+        for alias in (master.get("aliases") or []):
+            all_aliases.append((alias.strip(), master["name"]))
+            
+    all_aliases.sort(key=lambda x: len(x[0]), reverse=True)
 
-    # Intento 2: Búsqueda cruda sobre el string ruidoso
-    for master in master_list:
-        aliases = master.get("aliases") or []
-        for alias in aliases:
-            if re.search(r'\b' + re.escape(alias) + r'\b', n, flags=re.IGNORECASE):
-                return master["name"]
+    # ── INTENTO 1: Match Exacto sobre el texto RAW (sin mutilar por stops) ──
+    # Esto es CRÍTICO porque los stops eliminan palabras como 'natural', 'descremado',
+    # 'bajo en grasa' que son parte de aliases legítimos como 'yogurt griego natural'.
+    for alias, master_name in all_aliases:
+        if n == alias.lower().strip():
+            return master_name
+
+    # ── INTENTO 2: Regex sobre el texto RAW (sin mutilar) ──
+    # Buscar "queso mozzarella bajo en grasa" dentro de "queso mozzarella bajo en grasa rallado"
+    for alias, master_name in all_aliases:
+        if re.search(r'\b' + re.escape(alias) + r'\b', n, flags=re.IGNORECASE):
+            return master_name
+
+    # ── INTENTO 3: Match Exacto sobre clean_n (texto limpio, fallback) ──
+    for alias, master_name in all_aliases:
+        if clean_n == alias.lower().strip():
+            return master_name
+
+    # ── INTENTO 4: Regex sobre clean_n (último recurso antes de semántica) ──
+    for alias, master_name in all_aliases:
+        if re.search(r'\b' + re.escape(alias) + r'\b', clean_n, flags=re.IGNORECASE):
+            return master_name
 
     # Intento 3: Búsqueda de Similitud Semántica Vectorial (Fallback Local)
     # Solo vale la pena gastar un request si la palabra no fue encontrada en absoluto y tiene suficiente longitud
@@ -217,7 +257,17 @@ def _calculate_yield_multiplier(raw_name: str) -> float:
         
     return 1.0
 
-def _parse_quantity(s: str):
+def _parse_quantity(s):
+    if isinstance(s, dict):
+        qty = float(s.get("quantity", 0))
+        unit = s.get("unit", "unidad")
+        if unit:
+            unit = str(unit).strip().lower()
+        if not unit:
+            unit = "unidad"
+        name_raw = s.get("name") or s.get("ingredient_name") or s.get("item_name") or "Desconocido"
+        return qty, unit, normalize_name(name_raw).strip()
+
     s_lower = str(s).lower().strip()
     
     # Mejora 3: Si contiene términos puramente informales SIN NÚMEROS (ej: "sal al gusto")
@@ -226,14 +276,14 @@ def _parse_quantity(s: str):
     for term in abstract_terms:
         if term in s_lower and not any(char.isdigit() for char in s_lower):
             clean_s = s_lower.replace(term, '').replace(' de ', ' ').strip()
-            return 0.0, 'pizca', normalize_name(clean_s)
+            return 0.0, 'pizca', normalize_name(clean_s).strip()
             
     s = _preprocess_nlp_quantities(s)
     # Limpieza previa: si el AI genera "1 Ud." o "2 Uds.", limpiar el punto
     s = re.sub(r'\b([Uu]ds?)\.', r'\1', s)
     match = re.search(r'^(\d+(?:\s+\d+\/\d+|\/\d+|\.\d+)?)\s*(?:de\s+)?([a-zA-ZáéíóúÁÉÍÓÚñÑ]+)?(?:\s+(.*))?$', s)
     if not match:
-        return 0.0, 'unidad', normalize_name(s)
+        return 0.0, 'cantidad necesaria', normalize_name(s).strip()
     
     qty_str = match.group(1)
     unit_str = match.group(2)
@@ -272,7 +322,7 @@ def _parse_quantity(s: str):
     else:
         unit_str = 'unidad'
         
-    return qty, unit_str, normalize_name(rest_str)
+    return qty, unit_str, normalize_name(rest_str).strip()
     
 def get_plural_unit(num, u):
     if num <= 1 or not u: return u
@@ -318,15 +368,15 @@ MARKET_MINIMUMS = {
 
 # Mapeo canónico de categorías DB → categorías de display para PDF
 DISPLAY_CATEGORY_MAP = {
-    "Proteínas":        "🥩 PROTEÍNAS",
-    "Lácteos":          "🥛 LÁCTEOS",
-    "Frutas":           "🍎 FRUTAS",
-    "Vegetales":        "🥗 VEGETALES",
-    "Víveres":          "🥔 VÍVERES",
-    "Despensa":         "🥫 DESPENSA",
-    "Despensa y Granos": "🥫 DESPENSA",
-    "Especias":         "🧂 ESPECIAS",
-    "Suplementos":      "💊 SUPLEMENTOS",
+    "Proteínas":        "PROTEÍNAS",
+    "Lácteos":          "LÁCTEOS",
+    "Frutas":           "FRUTAS",
+    "Vegetales":        "VEGETALES",
+    "Víveres":          "VÍVERES",
+    "Despensa":         "DESPENSA",
+    "Despensa y Granos": "DESPENSA",
+    "Especias":         "ESPECIAS",
+    "Suplementos":      "SUPLEMENTOS",
 }
 
 def _get_display_category(db_category: str, name: str = "") -> str:
@@ -336,20 +386,20 @@ def _get_display_category(db_category: str, name: str = "") -> str:
     # Fallback NLP para ingredientes sin categoría en DB
     n = name.lower()
     if re.search(r'pollo|carne|pescado|\bres\b|cerdo|huevo|camar|at[uú]n|sardina|pavo|jam[oó]n|tocineta|salchicha|longaniza|salami', n):
-        return "🥩 PROTEÍNAS"
+        return "PROTEÍNAS"
     if re.search(r'queso|leche|yogur|crema|ricotta|cottage|mozzarella|mantequilla|margarina', n):
-        return "🥛 LÁCTEOS"
+        return "LÁCTEOS"
     if re.search(r'manzana|guineo|naranja|fresa|chinola|mango|pi[ñn]a|lechosa|aguacate|lim[oó]n|pera|uva|mel[oó]n|sand[ií]a|kiwi|cereza|durazno|banana', n):
-        return "🍎 FRUTAS"
+        return "FRUTAS"
     if re.search(r'tomate|cebolla|aj[ií]|zanahoria|br[oó]coli|espinaca|lechuga|pepino|ajo|cilantro|apio|repollo|coliflor|tayota|berenjena|vainita|molondr|auyama|jengibre|r[aá]bano|pimiento|habichuel[ií]ta', n):
-        return "🥗 VEGETALES"
+        return "VEGETALES"
     if re.search(r'pl[aá]tano|papa|yuca|batata|yaut[ií]a|[ñn]ame|guine[ií]to', n):
-        return "🥔 VÍVERES"
+        return "VÍVERES"
     if re.search(r'arroz|pasta|avena|harina|habichuela|frijol|lenteja|garbanzo|quinoa|guand[uú]l|\bpan\b', n):
-        return "🥫 DESPENSA"
+        return "DESPENSA"
     if re.search(r'aceite|\bsal\b|pimienta|or[eé]gano|canela|comino|vinagre|miel|salsa|semilla|almendra|nuez|man[ií]|ch[ií]a|az[uú]car|caf[eé]|saz[oó]n', n):
-        return "🥫 DESPENSA"
-    return "🛒 OTROS"
+        return "DESPENSA"
+    return "OTROS"
 
 # ═══════════════════════════════════════════════════════════════
 # Helpers para SKU-Aware Sizing (P3)
@@ -419,6 +469,9 @@ def _sku_size_label(size_g: float, unit_hint: str = None) -> str:
     453g → '1lb', 908g → '2lb', 473g → '473ml', 946g → '946ml', 200g → '200g'
     Con soporte especial para potes/frascos en onzas fluidas.
     """
+    if size_g is None:
+        return ""
+    size_g = float(size_g)
     if unit_hint and unit_hint.lower() in ['cartón', 'carton', 'botella', 'ml', 'l', 'galón', 'envase', 'lata']:
         # Tamaños de volumen conocidos (leche, jugos — se venden por ml, no por peso)
         VOLUME_LABELS = {250: "250ml", 473: "473ml", 946: "946ml", 1000: "1L", 1892: "1/2 Galón"}
@@ -832,15 +885,17 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         qty, unit, name = _parse_quantity(item)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
-        aggregated[name][unit] += (qty * multiplier)
+        aggregated[name][unit] += float(qty) * float(multiplier)
         plan_names.add(name)
+
+    logging.info(f"🛒 [AGGREGATE] {len(plan_ingredients)} raw items → {len(plan_names)} unique names: {sorted(plan_names)[:30]}...")
 
     for item in consumed_ingredients:
         if not item or len(item) < 3: continue
         qty, unit, name = _parse_quantity(item)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
-        aggregated[name][unit] -= qty
+        aggregated[name][unit] -= float(qty)
 
     # --- RESOLUCIÓN DE FRICCIÓN DE UNIDADES (Híbridas) ---
     master_list = get_master_ingredients()
@@ -853,6 +908,25 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             master_map[alias.strip().lower()] = m
             # También indexar con capitalización Title
             master_map[alias.strip().title()] = m
+
+    # ── Re-agrupación por Nombre Canónico ──
+    # Si el LLM devolvió "Huevo", "Huevos" y "Huevos enteros", el agregador original
+    # los tiene como 3 llaves. Aquí los fusionamos en la llave canónica oficial ("Huevos")
+    # para que su volumen se sume correctamente antes de calcular empaques comerciales.
+    canonical_aggregated = defaultdict(lambda: defaultdict(float))
+    for name, units in aggregated.items():
+        m_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title())
+        canonical_name = m_item["name"] if m_item else name
+
+        # Consolidación dura para huevos y sus derivados
+        _can_lower = canonical_name.lower()
+        if re.search(r'^(huevo|huevos|clara de huevo|claras de huevo|claras de huevo hervidas|clara de huevo hervida|yema de huevo|yemas de huevo|huevo hervido|huevos hervidos|huevos enteros|huevo entero)$', _can_lower, re.IGNORECASE):
+            canonical_name = 'Huevo'
+
+        for u, q in units.items():
+            canonical_aggregated[canonical_name][u] += q
+            
+    aggregated = canonical_aggregated
 
     for name, units in aggregated.items():
         master_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title()) or {}
@@ -889,6 +963,61 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         db_container = (master_item.get("market_container") or "").lower()
         
         # Guardamos llaves en lista para modificar diccionario on-the-fly
+        
+        # Consolidation para Ajo
+        if name.lower() == 'ajo':
+            u_dientes = 0
+            for k in list(units.keys()):
+                if k.strip().lower() in ['diente', 'dientes', 'diente.', 'dientes.']:
+                    u_dientes += units.pop(k)
+            if u_dientes > 0:
+                units['cabeza'] = units.get('cabeza', 0) + (u_dientes / 10.0)
+                
+        # Empaque comercial mínimo para Huevos (Cartones en RD)
+        # PRE-PASO: Convertir cualquier peso/volumen de huevos a unidades
+        # (ej: "150ml de claras de huevo" ≈ 5 huevos, "100g de huevo" ≈ 2 huevos)
+        # Esto evita que claras generen una entrada duplicada por el bloque de peso.
+        if name.lower() in ['huevo', 'huevos']:
+            egg_weight_g = 50  # 1 huevo entero ≈ 50g
+            egg_white_ml = 30  # 1 clara ≈ 30ml
+            extra_eggs_from_weight = 0
+            
+            for k in list(units.keys()):
+                k_lower = k.strip().lower()
+                if k_lower == 'g':
+                    extra_eggs_from_weight += units.pop(k) / egg_weight_g
+                elif k_lower == 'ml':
+                    extra_eggs_from_weight += units.pop(k) / egg_white_ml
+                elif k_lower == 'kg':
+                    extra_eggs_from_weight += (units.pop(k) * 1000) / egg_weight_g
+                elif k_lower == 'oz':
+                    extra_eggs_from_weight += (units.pop(k) * 28.35) / egg_weight_g
+                elif k_lower == 'lb':
+                    extra_eggs_from_weight += (units.pop(k) * 453.592) / egg_weight_g
+                elif k_lower == 'taza':
+                    extra_eggs_from_weight += (units.pop(k) * g_per_taza) / egg_weight_g
+                elif k_lower in ['cda', 'cdas', 'cucharada', 'cucharadas']:
+                    extra_eggs_from_weight += (units.pop(k) * (g_per_taza / 16.0)) / egg_weight_g
+                    
+            if extra_eggs_from_weight > 0:
+                units['unidad'] = units.get('unidad', 0) + math.ceil(extra_eggs_from_weight)
+            
+            # Ahora consolidar TODAS las unidades en cartones
+            u_qty = 0
+            for k in list(units.keys()):
+                if k.strip().lower() in ['unidad', 'unidades', 'ud', 'uds', 'ud.', 'uds.', 'u', 'u.', 'pieza', 'piezas']:
+                    u_qty += units.pop(k)
+                elif hasattr(k, 'lower') and 'ud' in k.lower():
+                    # Fallback agresivo para atrapar ' Uds.' o cualquier sufijo
+                    u_qty += units.pop(k)
+            if u_qty > 0:
+                if u_qty <= 6:
+                    units['cartón (6 uds.)'] = units.get('cartón (6 uds.)', 0) + 1
+                elif u_qty <= 15:
+                    units['medio cartón (15 uds.)'] = units.get('medio cartón (15 uds.)', 0) + 1
+                else:
+                    units['cartón (30 uds.)'] = units.get('cartón (30 uds.)', 0) + math.ceil(u_qty / 30.0)
+
         for u in list(units.keys()):
             q = units[u]
             u_lower = u.lower()
@@ -980,9 +1109,28 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             del units['l']
             
         added = False
+        
+        # DEDUP: Si el ingrediente tiene cantidades reales (peso ó unidades concretas),
+        # eliminar las entradas nominales (pizca, al gusto) porque son redundantes.
+        nominal_units = {'pizca', 'al gusto', 'cantidad necesaria', 'chin', 'toque', 'chorrito'}
+        has_real_qty = has_weight or any(
+            u not in nominal_units and q > 0.0001 
+            for u, q in list(units.items())
+        )
+        if has_real_qty:
+            # Tiene cantidades reales → borrar las nominales redundantes
+            for nom_u in list(units.keys()):
+                if nom_u in nominal_units:
+                    del units[nom_u]
+        
+        # Si SOLO quedan nominales (pizca, al gusto) y no hay peso → saltar ingrediente
+        # No aporta a una lista de compras real
+        remaining_real = any(u not in nominal_units for u in units) or has_weight
+        if not remaining_real:
+            continue
+            
         if has_weight:
             if weight_in_lbs > 0.0001:
-                # DEBUG: Log raw lbs for key items to trace scaling effectiveness
                 _n_lower = name.lower()
                 if any(kw in _n_lower for kw in ['pechuga', 'pavo', 'yogurt', 'lechosa', 'aguacate', 'arroz']):
                     logging.info(f"  🔬 [RAW LBS] {name}: {weight_in_lbs:.4f} lbs (mult={multiplier})")
@@ -998,8 +1146,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 categorized_results[display_cat].append(item_val)
                 added = True
                 
-        for u, q in units.items():
-            if q > 0.0001 or (q == 0.0 and u in ['pizca', 'al gusto', 'cantidad necesaria', 'chin', 'toque', 'chorrito']):
+        for u, q in list(units.items()):
+            # Saltar entradas nominales
+            if u in nominal_units:
+                continue
+            if q > 0.0001:
                 item_cost = 0.0
                 if u in ['unidad', 'unidades', 'lata', 'latas', 'paquete', 'paquetes']:
                     item_cost = q * price_per_unit
@@ -1019,6 +1170,9 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # no debe irrumpir en la lista de compras del supermercado.
 
     results.sort(key=lambda x: x["display_string"] if structured else x)
+    
+    result_names = [r["name"] if structured and isinstance(r, dict) else str(r) for r in results]
+    logging.info(f"🛒 [AGGREGATE FINAL] {len(results)} output items: {result_names[:20]}...")
     
     if categorize:
         for k in categorized_results:
@@ -1051,11 +1205,18 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
     logging.info(f"🔄 [SHOPPING MATH] days_len={num_days} base_scale={base_duration_scale} raw_mult={multiplier} eff_mult={effective_multiplier}")
 
 
+    meal_count = 0
     for day in days:
         for meal in day.get("meals", []):
             if "suplemento" in meal.get("meal", "").lower():
                 continue
+            meal_count += 1
             ingredients = meal.get("ingredients", [])
+            if not ingredients:
+                # Fallback: check if ingredients are inside a 'recipe' dict
+                recipe = meal.get("recipe")
+                if isinstance(recipe, dict):
+                    ingredients = recipe.get("ingredients", [])
             for i in ingredients:
                 if isinstance(i, str):
                     all_ingredients.append(i)
@@ -1068,14 +1229,14 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
                     else:
                         all_ingredients.append(n)
                     
+    logging.info(f"🛒 [SHOPPING EXTRACT] {len(days)} days, {meal_count} meals, {len(all_ingredients)} raw ingredients")
     physical_inventory = []
     consumed_ingredients = []
     
-    # Cuando es un plan NUEVO (generación o rotación), la lista de compras debe mostrar
-    # TODOS los ingredientes necesarios, sin restar el inventario físico actual.
-    # El Delta contra inventario solo aplica para planes EN CURSO (is_new_plan=False),
-    # por ejemplo cuando el usuario consulta "¿qué me falta por comprar?" a mitad de semana.
-    if user_id and user_id != "guest" and not is_new_plan:
+    # JIT Rolling Windows: La lista de compras ahora SIEMPRE se calcula como un verdadero delta
+    # contra el inventario físico. En el modelo JIT, el usuario siempre tiene ingredientes remanentes
+    # de la ventana anterior, por lo que un plan nuevo debe descontar la despensa para evitar desperdicio.
+    if user_id and user_id != "guest":
         try:
             from db_inventory import get_raw_user_inventory
             from datetime import datetime

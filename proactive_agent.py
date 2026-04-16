@@ -9,17 +9,7 @@ from db import get_consumed_meals_today, get_user_profile
 
 logger = logging.getLogger(__name__)
 
-PROACTIVE_PROMPT = """Eres el Nutricionista IA de MealfitRD. Has notado proactivamente que tu paciente aún no ha registrado su {missing_meal}.
-Su zona horaria marca que son pasadas las {trigger_time}.
-
-Contexto del paciente:
-- Dieta actual: {diet_type}
-- Objetivos: {goals}
-
-Escribe un SOLO mensaje conversacional (corto, máximo 2-3 oraciones) animándolo a no olvidarse de su progreso o preguntándole si ya preparó su {missing_meal}.
-¡MUY IMPORTANTE! NO SALUDES CON Hola, el usuario verá este mensaje en la interfaz del chat que ya está abierto. Entra directo al tema como una nota de seguimiento.
-Usa un tono amistoso y motivacional, nunca de regaño, ni parezcas un robot asustadizo.
-"""
+from prompts.proactive import PROACTIVE_PROMPT
 
 def get_active_users_for_proactive() -> list:
     """Busca session_ids que pertenezcan a usuarios registrados con actividad reciente."""
@@ -44,6 +34,10 @@ def run_proactive_checks():
     """Esta función será llamada por apscheduler (cron job)."""
     logger.info("⏱️ [CRON] Iniciando verificación proactiva de comidas.")
     
+    # --- PHASE 3: JIT Rolling Window Trigger ---
+    # check_and_trigger_jit_rolling_windows() # Desactivado: El paso a Micro-Batching usa triggers interactivos vía UI ("Actualizar Platos")
+
+    
     # 1. Obtenemos las horas actuales (asumiendo AST / -04:00 por simplicidad para MVP en RD)
     now_ast = datetime.now(timezone(timedelta(hours=-4)))
     hour = now_ast.hour
@@ -63,6 +57,9 @@ def run_proactive_checks():
     elif hour == 20 or hour == 21:
         meal_to_check = "Cena"
         trigger_time_str = f"{hour - 12}:30 PM"
+    elif hour == 23:
+        meal_to_check = "Resumen del día"
+        trigger_time_str = "11:00 PM"
         
     if not meal_to_check:
         logger.debug(f"[CRON] Hora actual ({hour}): No hay triggers de comida primaria a esta hora.")
@@ -114,33 +111,48 @@ def run_proactive_checks():
             # Validar el consumo de HOY
             consumed = get_consumed_meals_today(user_id, date_str=now_ast.strftime("%Y-%m-%d"))
             
-            # Checar si la comida objetivo o algo con ese nombre ya se consumió
-            already_ate = False
-            for m in consumed:
-                mt = m.get("meal_type", "").lower()
-                mn = m.get("meal_name", "").lower()
-                if meal_to_check.lower() in mt or meal_to_check.lower() in mn:
-                    already_ate = True
-                    break
+            if meal_to_check == "Resumen del día":
+                if consumed:
+                    logger.info(f"✅ [CRON] Usuario {user_id}: registró comidas hoy. Todo ok para el resumen.")
+                    continue
+                else:
+                    # Enviar mensaje especial: No comió nada
+                    logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró NADA. Generando nudge indulgente...")
+                    prompt = f"""
+Eres tu nutricionista IA. Son las {trigger_time_str} de la noche.
+He notado que el paciente no ha registrado NINGUNA comida en todo el día en su diario de Mealfit.
+Escríbele un mensaje corto (máximo 2 líneas) muy amistoso e indulgente al estilo WhatsApp preguntándole:
+"Veo que no registraste nada hoy, ¿restamos lo de hoy de tu nevera como si lo hubieras cocinado o comiste fuera?"
+No uses demasiados emojis. Sé directo, breve y empático.
+"""
+            else:
+                # Checar si la comida objetivo o algo con ese nombre ya se consumió
+                already_ate = False
+                for m in consumed:
+                    mt = m.get("meal_type", "").lower()
+                    mn = m.get("meal_name", "").lower()
+                    if meal_to_check.lower() in mt or meal_to_check.lower() in mn:
+                        already_ate = True
+                        break
+                        
+                if already_ate:
+                    logger.info(f"✅ [CRON] Usuario {user_id}: ya registró {meal_to_check}. Todo ok.")
+                    continue
                     
-            if already_ate:
-                logger.info(f"✅ [CRON] Usuario {user_id}: ya registró {meal_to_check}. Todo ok.")
-                continue
+                # ESTADO: olvido registrar. Generar mensaje proactivo.
+                logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró {meal_to_check}. Generando mensaje...")
                 
-            # ESTADO: olvido registrar. Generar mensaje proactivo.
-            logger.info(f"⚠️ [CRON] Usuario {user_id} ({session_id}) no registró {meal_to_check}. Generando mensaje...")
-            
-            diet_types = health.get("dietTypes", ["balanceada"])
-            diet_type = diet_types[0] if diet_types else "balanceada"
-            goals = ", ".join(health.get("goals", ["mantener de manera saludable"]))
-            
-            prompt = PROACTIVE_PROMPT.format(
-                missing_meal=meal_to_check,
-                trigger_time=trigger_time_str,
-                diet_type=diet_type,
-                goals=goals
-            )
-            
+                diet_types = health.get("dietTypes", ["balanceada"])
+                diet_type = diet_types[0] if diet_types else "balanceada"
+                goals = ", ".join(health.get("goals", ["mantener de manera saludable"]))
+                
+                prompt = PROACTIVE_PROMPT.format(
+                    missing_meal=meal_to_check,
+                    trigger_time=trigger_time_str,
+                    diet_type=diet_type,
+                    goals=goals
+                )
+                
             chat_llm = ChatGoogleGenerativeAI(
                 model="gemini-3.1-flash-lite-preview", 
                 temperature=0.8,
@@ -161,54 +173,90 @@ def run_proactive_checks():
                 # ---------------------------------------------
                 # NUEVO: Enviar Web Push Notification a todos los dispositivos del paciente
                 # ---------------------------------------------
-                try:
-                    import json
-                    from pywebpush import webpush, WebPushException  # type: ignore[import-untyped]
-                    
-                    vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
-                    vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")
-                    
-                    if vapid_private and vapid_claim:
-                        # Buscar las suscripciones de este usuario en DDBB
-                        subs_query = "SELECT subscription_data FROM push_subscriptions WHERE user_id = %s"
-                        subs = execute_sql_query(subs_query, (user_id,), fetch_all=True)
-                        
-                        push_payload = json.dumps({
-                            "title": "Aviso de tu Nutricionista IA \U0001f9d1\u200d\u2615",
-                            "body": content,
-                            "url": f"/dashboard/agent?session_id={session_id}"
-                        })
-                        
-                        for sub_row in subs:
-                            sub_info = sub_row['subscription_data']
-                            if isinstance(sub_info, str):
-                                sub_info = json.loads(sub_info)
-                                
-                            try:
-                                webpush(
-                                    subscription_info=sub_info,
-                                    data=push_payload,
-                                    vapid_private_key=vapid_private,
-                                    vapid_claims={"sub": vapid_claim}
-                                )
-                                logger.info(f"📲 [CRON] Push Notification exitosa al dispositivo del usuario {user_id}")
-                            except WebPushException as ex:
-                                logger.error(f"❌ [CRON] Error mandando Push al usuario {user_id}: {repr(ex)}")
-                                if ex.response is not None and ex.response.status_code in [404, 410]:
-                                    # La suscripción expiró o el usuario revocó permisos. Limpiarla de la base de datos.
-                                    endpoint = sub_info.get("endpoint")
-                                    if endpoint:
-                                        execute_sql_write(
-                                            "DELETE FROM push_subscriptions WHERE user_id = %s AND subscription_data->>'endpoint' = %s",
-                                            (user_id, endpoint)
-                                        )
-                                        logger.info(f"🗑️ [CRON] Suscripción muerta eliminada para {user_id}")
-                    else:
-                        logger.warning(f"⚠️ [CRON] No se pueden mandar Web Push Notifications porque faltan llaves VAPID en el entorno.")
-                except ImportError:
-                    logger.warning("No se ha instalado 'pywebpush'. Las notificaciones nativas a móviles no se enviarán.")
-                except Exception as e:
-                    logger.error(f"Error despachando Push notification proactiva a {user_id}: {e}")
+                from utils_push import send_push_notification
+                send_push_notification(
+                    user_id=user_id,
+                    title="Aviso de tu Nutricionista IA \U0001f9d1\u200d\u2615",
+                    body=content,
+                    url=f"/dashboard/agent?session_id={session_id}"
+                )
                 
         except Exception as e:
             logger.error(f"Error procesando proactividad para {session_id}: {e}")
+
+def _trigger_week2_background_generation(user_id, plan_id, existing_plan_data):
+    """Generates the next 7 days in the background and appends to the existing plan."""
+    from graph_orchestrator import run_plan_pipeline
+    from db_profiles import get_user_profile
+    from db_plans import update_meal_plan_data
+    from db import get_user_likes, get_active_rejections
+    from agent import analyze_preferences_agent
+    import threading
+    
+    def _bg_task():
+        try:
+            logger.info(f"🔄 [JIT BG TASK] Arrancando generación asíncrona de Semana 2 para {user_id}...")
+            profile = get_user_profile(user_id) or {}
+            health_profile = profile.get("health_profile", {})
+            form_data = health_profile.copy()
+            form_data["user_id"] = user_id
+            
+            likes = get_user_likes(user_id)
+            rejections = get_active_rejections(user_id)
+            rej_names = [r["meal_name"] for r in rejections] if rejections else []
+            taste_profile = analyze_preferences_agent(likes, [], active_rejections=rej_names)
+            
+            result = run_plan_pipeline(form_data, [], taste_profile, memory_context="")
+            
+            new_days = result.get("days", [])
+            existing_days = existing_plan_data.get("days", [])
+            
+            start_idx = len(existing_days) + 1
+            for i, d in enumerate(new_days):
+                d["day"] = start_idx + i
+                
+            existing_plan_data["days"] = existing_days + new_days
+            update_meal_plan_data(plan_id, existing_plan_data)
+            logger.info(f"✅ [JIT BG TASK] Semana 2 añadida exitosamente al plan {plan_id} de {user_id}")
+        except Exception as e:
+            logger.error(f"❌ [JIT BG TASK] Error en generación de semana 2 para {user_id}: {e}")
+
+    threading.Thread(target=_bg_task, daemon=True).start()
+
+def check_and_trigger_jit_rolling_windows():
+    """
+    JIT Rolling Windows Trigger:
+    Detects users who are on Day 5 or 6 (i.e. plan generated 4-6 days ago)
+    and if their plan has only 7 days, generates Week 2.
+    """
+    logger.info("⏱️ [CRON JIT] Chequeando ventanas JIT (Rolling Windows) para Semana 2...")
+    if not connection_pool: return
+    
+    try:
+        from db_core import execute_sql_query
+        query = """
+            SELECT id, user_id, plan_data
+            FROM meal_plans
+            WHERE created_at >= NOW() - INTERVAL '6 days'
+            AND created_at <= NOW() - INTERVAL '4 days'
+            ORDER BY created_at DESC
+        """
+        res = execute_sql_query(query, fetch_all=True)
+        if not res: return
+        
+        seen_users = set()
+        for row in res:
+            uid = row.get("user_id")
+            if uid in seen_users: continue
+            seen_users.add(uid)
+            
+            plan_data = row.get("plan_data")
+            if not isinstance(plan_data, dict): continue
+            
+            days = plan_data.get("days", [])
+            if len(days) == 7:
+                logger.info(f"🔄 [JIT TRIGGER] Usuario {uid} está en Día 5-6. Disparando Fase 3 (Semana 2)...")
+                _trigger_week2_background_generation(uid, str(row.get("id")), plan_data)
+                
+    except Exception as e:
+        logger.error(f"⚠️ [JIT CRON] Error en check_and_trigger_jit_rolling_windows: {e}")

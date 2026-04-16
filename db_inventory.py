@@ -210,12 +210,9 @@ def restock_inventory(user_id: str, ingredients_list: list):
     
     from shopping_calculator import normalize_name
     
-    # 🧹 Limpiar el inventario anterior para evitar que se sumen alimentos de planes anteriores
-    try:
-        logger.info(f"🧹 [RESTOCK] Limpiando inventario anterior para el usuario {user_id}")
-        supabase.table("user_inventory").delete().eq("user_id", user_id).execute()
-    except Exception as e:
-        logger.error(f"Error limpiando inventario anterior para {user_id}: {e}")
+    # 🔄 [MEJORA] Ya NO borramos el inventario completo. El frontend aplica Delta Shopping
+    # para enviar solo ingredientes que el usuario no tiene, preservando items manuales.
+    # add_or_update_inventory_item() maneja el upsert individual (suma si existe, inserta si no).
     
     success = True
     items_saved = 0
@@ -276,6 +273,107 @@ def restock_inventory(user_id: str, ingredients_list: list):
         return False
             
     return success
+
+def merge_inventory_after_rotation(user_id: str, plan_data: dict) -> int:
+    """
+    Merge inteligente post-rotación: sincroniza la Nevera con el nuevo plan
+    SIN borrar el inventario existente.
+    
+    - Ingredientes que ya están en la Nevera → no se tocan (respeta cantidades del usuario)
+    - Ingredientes nuevos del plan → se insertan con la cantidad del plan
+    - Ingredientes manuales del usuario → se preservan intactos
+    
+    Returns: número de ingredientes nuevos añadidos.
+    """
+    if not supabase or not plan_data:
+        return 0
+    
+    from shopping_calculator import normalize_name
+    
+    # 1. Leer la lista de compras del nuevo plan — preferir la lista del ciclo actual
+    # Cascada: weekly (7d) > biweekly (15d) > monthly (30d) > genérica (puede estar inflada)
+    shopping_list = None
+    source_key = "aggregated_shopping_list"
+    
+    for key in ("aggregated_shopping_list_weekly", "aggregated_shopping_list_biweekly", "aggregated_shopping_list_monthly", "aggregated_shopping_list"):
+        candidate = plan_data.get(key, [])
+        if candidate and isinstance(candidate, list) and len(candidate) > 0:
+            shopping_list = candidate
+            source_key = key
+            break
+    
+    if not shopping_list:
+        logger.info(f"🔄 [MERGE] Sin lista de compras en el plan, omitiendo merge para {user_id}")
+        return 0
+    
+    logger.info(f"🔄 [MERGE] Usando '{source_key}' ({len(shopping_list)} items) para merge de {user_id}")
+    
+    # 2. Leer inventario actual (incluyendo items con qty > 0)
+    try:
+        existing_res = supabase.table("user_inventory") \
+            .select("ingredient_name") \
+            .eq("user_id", user_id) \
+            .gt("quantity", 0) \
+            .execute()
+        existing_names = set()
+        if existing_res.data:
+            existing_names = {row["ingredient_name"].lower().strip() for row in existing_res.data}
+    except Exception as e:
+        logger.error(f"❌ [MERGE] Error leyendo inventario actual para {user_id}: {e}")
+        return 0
+    
+    # 3. Filtrar: solo procesar ingredientes que NO están ya en la Nevera
+    items_added = 0
+    UNIT_NORMALIZE = {
+        'ud': 'unidad', 'uds': 'unidad', 'unidades': 'unidad',
+        'lbs': 'lb', 'libra': 'lb', 'libras': 'lb',
+        'paquetes': 'paquete', 'potes': 'pote', 'mazos': 'mazo',
+        'cabezas': 'cabeza', 'sobres': 'sobre', 'latas': 'lata',
+        'botellas': 'botella', 'hojas': 'hoja', 'rebanadas': 'rebanada',
+        'dientes': 'diente', 'gramos': 'g', 'gr': 'g',
+        'kilos': 'kg', 'kilogramo': 'kg', 'kilogramos': 'kg',
+        'onzas': 'oz', 'onza': 'oz',
+        'tazas': 'taza', 'cucharada': 'cda', 'cucharadas': 'cda',
+        'cucharadita': 'cdta', 'cucharaditas': 'cdta',
+        'al gusto': 'pizca',
+    }
+    
+    for item in shopping_list:
+        try:
+            # Solo procesamos objetos estructurados (formato moderno)
+            if not isinstance(item, dict) or "name" not in item:
+                continue
+            
+            name = normalize_name(item["name"])
+            if not name:
+                continue
+            
+            # Si ya existe en la Nevera, no lo tocamos
+            if name.lower().strip() in existing_names:
+                continue
+            
+            qty = float(item.get("quantity", item.get("market_qty", 0)) or 0)
+            unit = item.get("unit", item.get("market_unit", "unidad")) or "unidad"
+            unit_lower = unit.lower().rstrip('.')
+            unit = UNIT_NORMALIZE.get(unit_lower, unit_lower if unit_lower else 'unidad')
+            
+            if qty <= 0:
+                continue
+            
+            # Insertar el nuevo ingrediente
+            result = add_or_update_inventory_item(user_id, name, qty, unit)
+            if result:
+                items_added += 1
+                # Marcar como existente para evitar duplicados dentro del mismo batch
+                existing_names.add(name.lower().strip())
+                
+        except Exception as e:
+            logger.error(f"⚠️ [MERGE] Error procesando item '{item}': {e}")
+            continue
+    
+    logger.info(f"🔄 [MERGE] Post-rotación: {items_added} ingredientes nuevos añadidos a la Nevera de {user_id} (de {len(shopping_list)} en el plan)")
+    return items_added
+
 
 def consume_inventory_items_completely(user_id: str, ingredient_names: List[str]):
     """

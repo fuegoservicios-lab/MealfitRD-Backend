@@ -157,6 +157,15 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             except Exception as restock_err:
                 logger.warning(f"⚠️ [RESTOCK INHERIT] Error consultando plan anterior: {restock_err}")
 
+            # 🔄 Merge inteligente: Si heredamos is_restocked, sincronizar la Nevera con el nuevo plan
+            # Esto añade ingredientes nuevos del plan sin borrar los existentes
+            if plan_data.get("is_restocked") is True:
+                try:
+                    from db_inventory import merge_inventory_after_rotation
+                    merge_inventory_after_rotation(user_id, plan_data)
+                except Exception as merge_err:
+                    logger.warning(f"⚠️ [MERGE] Error en merge post-rotación (no-blocking): {merge_err}")
+
             # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
             if check_recent_meal_plan_exists(user_id, max_seconds=30):
                 logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")

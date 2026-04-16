@@ -1,9 +1,13 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request
+from fastapi.responses import StreamingResponse
 from typing import Optional
 import logging
 import traceback
 import os
 import threading
+import asyncio
+import json as _json
+import time as _time
 
 # Importaciones relativas del entorno
 from auth import get_verified_user_id, verify_api_quota
@@ -140,6 +144,167 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         logger.error(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/analyze/stream")
+async def api_analyze_stream(request: Request, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+    """
+    Streaming SSE endpoint para generación de planes con progreso en tiempo real.
+    Emite eventos:
+      - phase: cambio de fase del pipeline (skeleton, parallel_generation, assembly, review)
+      - day_started: un worker paralelo inició la generación de un día
+      - day_complete: un worker paralelo terminó un día
+      - complete: plan final listo (contiene el plan JSON completo)
+      - error: hubo un error
+    """
+    try:
+        session_id = data.get("session_id")
+        user_id = data.get("user_id")
+
+        if user_id and user_id != "guest":
+            if not verified_user_id or verified_user_id != user_id:
+                raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
+
+        history = []
+        likes = []
+        taste_profile = ""
+
+        if session_id:
+            get_or_create_session(session_id)
+            memory = build_memory_context(session_id)
+            history = memory["recent_messages"]
+
+        actual_user_id = user_id if user_id and user_id != "guest" else None
+        if actual_user_id:
+            likes = get_user_likes(actual_user_id)
+
+        active_rejections = get_active_rejections(user_id=actual_user_id, session_id=session_id)
+        rejected_meal_names = [r["meal_name"] for r in active_rejections] if active_rejections else []
+
+        taste_profile = analyze_preferences_agent(likes, history, active_rejections=rejected_meal_names)
+
+        # Cola async para comunicar progreso entre el thread del pipeline y el generador SSE
+        progress_queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+
+        def progress_callback(event_data: dict):
+            """Callback thread-safe que pone eventos en la cola async."""
+            try:
+                loop.call_soon_threadsafe(progress_queue.put_nowait, event_data)
+            except Exception:
+                pass
+
+        # Ejecutar el pipeline en un thread separado para no bloquear el event loop
+        pipeline_result = {"result": None, "error": None}
+
+        def run_pipeline():
+            try:
+                result = run_plan_pipeline(
+                    data, history, taste_profile,
+                    memory_context=memory.get("full_context_str", "") if session_id else "",
+                    progress_callback=progress_callback,
+                )
+                pipeline_result["result"] = result
+            except Exception as e:
+                pipeline_result["error"] = str(e)
+                logger.error(f"❌ [SSE PIPELINE ERROR]: {e}")
+                traceback.print_exc()
+            finally:
+                # Señal de fin para que el generador SSE cierre
+                try:
+                    loop.call_soon_threadsafe(progress_queue.put_nowait, {"event": "_done"})
+                except Exception:
+                    pass
+
+        pipeline_thread = threading.Thread(target=run_pipeline, daemon=True)
+        pipeline_thread.start()
+
+        async def event_generator():
+            """Generador SSE que consume la cola de progreso."""
+            try:
+                while True:
+                    # Esperar eventos con timeout para detectar desconexión del cliente
+                    try:
+                        event_data = await asyncio.wait_for(progress_queue.get(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        # Heartbeat para mantener la conexión viva
+                        yield f"data: {_json.dumps({'event': 'heartbeat'})}\n\n"
+
+                        # Verificar si el cliente cerró la conexión
+                        if await request.is_disconnected():
+                            logger.info("🔌 [SSE] Cliente desconectado, abortando stream.")
+                            return
+                        continue
+
+                    # Señal de fin del pipeline
+                    if event_data.get("event") == "_done":
+                        # Enviar resultado final o error
+                        if pipeline_result["error"]:
+                            yield f"data: {_json.dumps({'event': 'error', 'data': {'message': pipeline_result['error']}})}\n\n"
+                        elif pipeline_result["result"]:
+                            result = pipeline_result["result"]
+
+                            # Post-procesamiento idéntico al endpoint síncrono
+                            if actual_user_id:
+                                hp_data = {k: v for k, v in data.items() if k not in ['session_id', 'user_id']}
+                                if hp_data:
+                                    try:
+                                        update_user_health_profile(actual_user_id, hp_data)
+                                    except Exception:
+                                        pass
+
+                            if session_id:
+                                goal = data.get('mainGoal', 'Desconocido')
+                                try:
+                                    save_message(session_id, "user", f"Generar plan para mi objetivo: {goal}")
+                                    save_message(session_id, "model", "¡Aquí tienes tu estrategia nutricional personalizada!")
+                                    # summarize_and_prune se ejecuta en background
+                                    threading.Thread(target=summarize_and_prune, args=(session_id,), daemon=True).start()
+                                except Exception:
+                                    pass
+
+                            if actual_user_id:
+                                try:
+                                    log_api_usage(actual_user_id, "gemini_analyze")
+                                except Exception:
+                                    pass
+
+                            selected_techniques = result.pop("_selected_techniques", None)
+                            if actual_user_id:
+                                threading.Thread(
+                                    target=_save_plan_and_track_background,
+                                    args=(actual_user_id, result, selected_techniques),
+                                    daemon=True
+                                ).start()
+
+                            yield f"data: {_json.dumps({'event': 'complete', 'data': result}, ensure_ascii=False, default=str)}\n\n"
+                        return
+
+                    # Evento de progreso normal
+                    yield f"data: {_json.dumps(event_data, ensure_ascii=False)}\n\n"
+
+            except asyncio.CancelledError:
+                logger.info("🔌 [SSE] Stream cancelado por el cliente.")
+            except Exception as e:
+                logger.error(f"❌ [SSE] Error en generador: {e}")
+                yield f"data: {_json.dumps({'event': 'error', 'data': {'message': str(e)}})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        logger.error(f"❌ [ERROR] Error en /api/analyze/stream: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/recipe/expand")
 def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
     try:
@@ -193,9 +358,14 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
+        swap_reason = data.get("swap_reason", "dislike")  # variety | time | dislike | similar
         
-        if rejected_meal:
+        # Solo registrar rechazo cuando el usuario explícitamente dice "No me gusta"
+        if rejected_meal and swap_reason == "dislike":
+            logger.info(f"👎 [SWAP] Rechazo real registrado: '{rejected_meal}' (razón: {swap_reason})")
             background_tasks.add_task(_process_swap_rejection_background, session_id, user_id, rejected_meal, meal_type)
+        else:
+            logger.info(f"🔄 [SWAP] Cambio sin rechazo: '{rejected_meal or 'N/A'}' (razón: {swap_reason})")
             
         if user_id and user_id != "guest":
             log_api_usage(user_id, "gemini_swap_meal")
@@ -235,25 +405,29 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         if not ingredients or not isinstance(ingredients, list):
             return {"success": False, "message": "Lista de ingredientes inválida."}
 
-        # Validación MURO: Comprobar si el plan ya fue registrado para evitar duplicados
-        plan_res = None
-        if plan_id and supabase:
-            plan_res = supabase.table("meal_plans").select("plan_data").eq("id", plan_id).execute()
-            if plan_res.data and len(plan_res.data) > 0:
-                plan_data = plan_res.data[0].get("plan_data", {})
-                if plan_data.get("is_restocked") is True:
-                    return {"success": False, "message": "El plan ya ha sido registrado en la despensa previamente."}
-            
+        # Validación MURO Omitida: Ahora confiamos en el Delta Shopping del frontend.
+        # El frontend solo envía los ingredientes que no están en la Nevera.
         success = restock_inventory(user_id, ingredients)
         
         if success:
             log_api_usage(user_id, "restock_inventory")
 
-            # Marcar el plan como "restocked" en BD para proteger futuras peticiones
-            if plan_id and supabase and plan_res and plan_res.data and len(plan_res.data) > 0:
-                plan_data = plan_res.data[0].get("plan_data", {})
-                plan_data["is_restocked"] = True
-                supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", plan_id).execute()
+            # Marcar el plan como "restocked" en BD para futuras peticiones
+            if supabase:
+                try:
+                    if plan_id:
+                        plan_res = supabase.table("meal_plans").select("id, plan_data").eq("id", plan_id).execute()
+                    else:
+                        plan_res = supabase.table("meal_plans").select("id, plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+                        
+                    if plan_res and plan_res.data and len(plan_res.data) > 0:
+                        real_plan_id = plan_res.data[0].get("id")
+                        plan_data = plan_res.data[0].get("plan_data", {})
+                        plan_data["is_restocked"] = True
+                        supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", real_plan_id).execute()
+                        logger.info(f"✅ [RESTOCK] plan_data 'is_restocked' guardado en DB para plan ID {real_plan_id}")
+                except Exception as mark_err:
+                    logger.warning(f"⚠️ No se pudo marcar plan como restocked: {mark_err}")
 
             return {"success": True, "message": "¡Despensa actualizada exitosamente!"}
         else:
@@ -360,11 +534,17 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         plan_data["aggregated_shopping_list_biweekly"] = scaled_15
         plan_data["aggregated_shopping_list_monthly"] = scaled_30
         
-        # 🔄 Limpiar is_restocked: las cantidades cambiaron, el usuario necesita
-        # re-registrar las compras con las nuevas cantidades en la despensa
-        if plan_data.get("is_restocked"):
+        # Solo limpiar `is_restocked` si los parámetros cambiaron realmente
+        prev_hh = plan_data.get("calc_household_size")
+        prev_dur = plan_data.get("calc_grocery_duration")
+        has_changed = (prev_hh != household_size) or (prev_dur != grocery_duration)
+        
+        plan_data["calc_household_size"] = household_size
+        plan_data["calc_grocery_duration"] = grocery_duration
+        
+        if has_changed and plan_data.get("is_restocked"):
             plan_data.pop("is_restocked", None)
-            logger.info(f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron, requiere re-registro")
+            logger.info(f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron de {prev_hh}p/{prev_dur} a {household_size}p/{grocery_duration}, requiere re-registro")
         
         # DEBUG fingerprint: allows frontend to verify it received fresh data
         import time

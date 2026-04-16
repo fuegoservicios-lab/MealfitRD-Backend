@@ -42,6 +42,17 @@ from prompts import (
     CHAT_SYSTEM_PROMPT_BASE, CHAT_STREAM_SYSTEM_PROMPT_BASE,
     TITLE_GENERATION_PROMPT, RAG_ROUTER_PROMPT
 )
+from prompts.chat_agent import (
+    CHAT_AGENT_INLINE_PROMPT,
+    CHAT_VOICE_MODE_PROMPT,
+    CHAT_STREAM_INLINE_PROMPT,
+    build_temporal_context,
+    build_circadian_context,
+    build_temporal_proactive_context,
+    build_tools_instructions,
+    build_tools_instructions_stream,
+    build_inventory_context,
+)
 
 from tools import (
     update_form_field, generate_new_plan_from_chat,
@@ -389,7 +400,7 @@ def execute_tools(state: ChatState):
                     parsed_plan = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
                     if isinstance(parsed_plan, dict) and ("days" in parsed_plan or "meals" in parsed_plan):
                         new_plan = parsed_plan
-                        tool_result = "El plan de comidas de 3 días fue generado exitosamente. Dile al usuario que lo revise en su dashboard."
+                        tool_result = "El plan de comidas de 7 días fue generado exitosamente. Dile al usuario que lo revise en su dashboard."
                 except Exception:
                     pass
                     
@@ -651,32 +662,14 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         rag_context += "⚠️ REGLA DE CONFLICTO: Si hay conflicto entre el historial reciente o los resúmenes y estos Hechos Permanentes, LOS HECHOS PERMANENTES SON LA LEY y tienen prioridad absoluta.\n"
         rag_context += "---------------------------------------------\n"
 
-    system_prompt = """Eres el agente asistente de nutrición IA de MealfitRD. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan generado o sus objetivos de dieta. Trata de dar respuestas al grano, conversacionales y amigables.
-IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios. El usuario ya fue saludado al iniciar el chat. Ve directo al punto en cada respuesta.
-REGLA CRUCIAL: El plan del usuario tiene 3 opciones distintas. Llámalas SIEMPRE "Opción A", "Opción B" y "Opción C". NUNCA te refieras a ellas como "Día 1", "Día 2" o "Día 3" en tu conversación con el usuario.
+    system_prompt = CHAT_AGENT_INLINE_PROMPT
 
-REGLAS DE FORMATO VISUAL (ESTRICTAS):
-1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
-2. Usa viñetas (`-` o `•`) SIEMPRE para listar macros, ingredientes o pasos, haciéndolo súper visual y fácil de leer.
-3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso."""
-
-    now_chat = datetime.now()
-    dias_chat = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-    meses_chat = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-    system_prompt += f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, {now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. La hora local es {now_chat.strftime('%I:%M %p')}."
+    system_prompt += build_temporal_context()
 
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
-    if schedule_type == "night_shift":
-        system_prompt += "\n⚠️ RITMO CIRCADIANO: El usuario tiene un 'Turno Nocturno' (duerme de día, trabaja de noche). INVIERTE LAS REGLAS DE CRONONUTRICIÓN: las madrugadas son su 'cena' y las tardes son su 'desayuno'. JAMÁS lo reprimas por comer de madrugada."
-    elif schedule_type == "variable":
-        system_prompt += "\n⚠️ RITMO CIRCADIANO: Horario 'Rotativo/Variable'. Sé benévolo al evaluar horas (crononutrición), asume que sus horas de sueño pueden estar alteradas por turnos."
-    else:
-        system_prompt += "\n⚠️ RITMO CIRCADIANO: 'Día Clásico'. Aplica con rigor estricto la regla de crononutrición si cena muy pesado o desayuna arroz a las deshoras indicadas en tu sistema."
+    system_prompt += build_circadian_context(schedule_type)
 
-    system_prompt += "\n🌟 REGLA DE CONTINUIDAD TEMPORAL PROACTIVA: Usa el día de la semana para dar sugerencias asombrosamente orgánicas, pero solo si la conversación se presta para ello. Por ejemplo:"
-    system_prompt += "\n  - Si es Domingo o Lunes: Sugiere sutilmente hacer 'Meal Prep' (cocinar porciones extra) para ahorrar tiempo en la ajetreada semana laboral."
-    system_prompt += "\n  - Si es Viernes o Sábado: Anímalo a disfrutar el fin de semana sin perder el control, o sugiérele ideas de comidas relajadas."
-    system_prompt += "\nSé conversacional e intuitivo; no suenes como un robot leyendo el calendario, que se sienta natural."
+    system_prompt += build_temporal_proactive_context()
     
     system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
     
@@ -686,23 +679,7 @@ REGLAS DE FORMATO VISUAL (ESTRICTAS):
     # Determinar si es un usuario autenticado o invitado
     is_authenticated = user_id and user_id != session_id and user_id != "guest"
     
-    system_prompt += f"""
-
-TIENES HERRAMIENTAS DISPONIBLES:
-- OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE y SIN EXCEPCIÓN cada vez que el usuario mencione un nuevo dato sobre sí mismo que deba actualizarse en su perfil (ej: "a partir de hoy soy vegano", "peso 80kg", "tengo diabetes", "soy intolerante a la lactosa", "no me gusta el tomate"). Si no usas esta herramienta para esos casos, la Interfaz Gráfica del usuario quedará desincronizada. ATENCIÓN: Lee atentamente los parámetros de esta herramienta, debes usar valores exactos en INGLÉS como 'lose_fat', 'vegetarian', 'male', etc. para que la UI los reconozca.
-- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente'). Esta herramienta ejecuta el pipeline completo y genera un plan personalizado al instante.
-- NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
-- Usa `log_consumed_meal` para registrar en el diario cualquier comida que el usuario afirme haber comido. Si analizas una foto de una comida y el usuario confirma que se la comió, USA ESTA HERRAMIENTA usando los macros estimados (calorías, proteína, carbohidratos y grasas saludables), pasándolos todos a la herramienta.
-- Usa `modify_single_meal` cuando el usuario pida un CAMBIO PUNTUAL a una comida específica de su plan (ej: 'cámbiale el salami al mangú por huevos en la Opción A', 'ponle más proteína al almuerzo', 'quítale el arroz a la cena de la Opción B'). Esta herramienta modifica SOLO esa comida, no regenera todo el plan. Debes identificar correctamente el day_number (1 para Opción A, 2 para Opción B, o 3 para Opción C) y el meal_type ('Desayuno', 'Almuerzo', 'Cena', 'Merienda') del plan activo del usuario. Si el usuario no especifica, asume 1 (Opción A).
-- Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar desde cero, o pida un resumen de su lista de compras original (lo que tenía que ir a comprar inicialmente).
-- Usa `check_current_pantry` SIEMPRE que el usuario pregunte qué le sobra en la nevera, qué ingredientes le quedan, o sus sobras actuales. Esta herramienta descuenta lo que ya se comió usando matemáticas exactas.
-- Usa `search_deep_memory` cuando el usuario pregunte sobre datos de su pasado que no estén en el contexto inmediato del chat, como preferencias antiguas, alergias reportadas antes, o historial lejano.
-
-🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨: 
-1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario.
-2. Si modificas el inventario o consumes ingredientes con `modify_pantry_inventory`, `mark_shopping_list_purchased`, o `log_consumed_meal`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_INVENTORY]`. Esto recargará los datos de "Mi Nevera" instantáneamente.
-
-El user_id del usuario actual es: {user_id}"""
+    system_prompt += build_tools_instructions(user_id)
 
     inventory_str = ""
     shopping_delta_str = ""
@@ -739,17 +716,7 @@ El user_id del usuario actual es: {user_id}"""
             cleaned_shop = aggregate_shopping_list([item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2])
             shopping_delta_str = ", ".join(cleaned_shop)
 
-    if inventory_str or shopping_delta_str:
-        system_prompt += f"\n\n🛒 ESTADO DE LA DESPENSA Y COMPRAS (INFORMACIÓN EN TIEMPO REAL):"
-        if inventory_str:
-            system_prompt += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: {inventory_str}. ¡Estas son las provisiones que el usuario tiene FÍSICAMENTE en su cocina ahora mismo! PRIORIZA SIEMPRE recomendar cocinar con esto antes de sugerir comprar cosas nuevas."
-        else:
-            system_prompt += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: Vacío. El usuario no ha registrado tener ingredientes en casa."
-            
-        if shopping_delta_str:
-            system_prompt += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: {shopping_delta_str}. Esto es lo que el usuario AÚN DEBE COMPRAR en el supermercado para completar su plan alimenticio."
-        else:
-            system_prompt += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: ¡Vacía! El usuario ya tiene todos los ingredientes necesarios en su inventario físico para su plan actual."
+    system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
 
     if current_plan:
         system_prompt += f"\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas activo:\n{json.dumps(current_plan)}\n\nUsa esta información para responder con exactitud preguntas sobre lo que le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado (como desayuno, almuerzo o cena)."
@@ -884,42 +851,17 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         if visual_facts_text: rag_context += f"Inventario Visual:\n{visual_facts_text}\n"
         rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
 
-    system_prompt = """Eres el agente asistente de nutrición IA de MealfitRD, una app profesional de nutrición clínica. Tu objetivo principal es ayudar a los usuarios con dudas sobre su plan generado o sus objetivos de dieta. Trata de dar respuestas al grano, conversacionales y amigables.
-CONTEXTO PROFESIONAL: Esta es una plataforma de nutrición clínica. Los usuarios hablarán sobre sus hábitos alimenticios, incluyendo momentos en que comieron de más, se sintieron mal por su alimentación, o quieren mejorar. Tu rol es guiarlos como nutricionista profesional con empatía y conocimiento. Todas las respuestas deben ser constructivas y orientadas a mejorar sus hábitos.
-IMPORTANTE: NUNCA saludes con 'Hola' ni repitas saludos introductorios.
-REGLA CRUCIAL: El plan del usuario tiene 3 opciones distintas. Llámalas SIEMPRE "Opción A", "Opción B" y "Opción C".
-
-REGLAS DE FORMATO VISUAL (ESTRICTAS):
-1. Usa **negritas** para resaltar nombres de alimentos, cantidades (ej. **350 kcal**, **35g de proteína**) y conceptos clave.
-2. Usa viñetas (`-` o `•`) SIEMPRE para listar macros, ingredientes o pasos, haciéndolo súper visual y fácil de leer.
-3. Aplica saltos de línea (párrafos cortos) para que el texto respire y no sea un bloque denso."""
+    system_prompt = CHAT_STREAM_INLINE_PROMPT
 
     if is_call_mode:
-        system_prompt = """Eres el agente asistente de nutrición IA de MealfitRD.
-🎙️ MODO LLAMADA DE VOZ ACTIVO: El usuario te está hablando mediante una llamada telefónica por voz.
-REGLAS SUPREMAS PARA LLAMADAS DE VOZ:
-- ¡EVITA EL MARKDOWN! No uses negritas, no uses viñetas, no uses listas.
-- HABLA COMO UN HUMANO: Tus respuestas deben leerse natural en voz alta. 
-- SÉ EXTREMADAMENTE BREVE: Resume toda tu respuesta a 1 o 2 oraciones máximo. Ve hiper directo al grano.
-- NUNCA des largas descripciones de platos a menos que el usuario te lo pida. Menciona solo el nombre principal."""
+        system_prompt = CHAT_VOICE_MODE_PROMPT
 
-    now_chat = datetime.now()
-    dias_chat = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
-    meses_chat = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-    system_prompt += f"\n\n🕒 CONTEXTO TEMPORAL ACTUAL: Hoy es {dias_chat[now_chat.weekday()]}, {now_chat.day} de {meses_chat[now_chat.month - 1]} de {now_chat.year}. La hora local es {now_chat.strftime('%I:%M %p')}."
+    system_prompt += build_temporal_context()
     
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
-    if schedule_type == "night_shift":
-        system_prompt += "\n⚠️ RITMO CIRCADIANO: El usuario tiene un 'Turno Nocturno' (duerme de día, trabaja de noche). INVIERTE LAS REGLAS DE CRONONUTRICIÓN: las madrugadas son su 'cena' y las tardes son su 'desayuno'. JAMÁS lo reprimas por comer de madrugada."
-    elif schedule_type == "variable":
-        system_prompt += "\n⚠️ RITMO CIRCADIANO: Horario 'Rotativo/Variable'. Sé benévolo al evaluar horas (crononutrición), asume que sus horas de sueño pueden estar alteradas por turnos."
-    else:
-        system_prompt += "\n⚠️ RITMO CIRCADIANO: 'Día Clásico'. Aplica con rigor estricto la regla de crononutrición si cena muy pesado o desayuna arroz a las 4 AM."
+    system_prompt += build_circadian_context(schedule_type)
 
-    system_prompt += "\n🌟 REGLA DE CONTINUIDAD TEMPORAL PROACTIVA: Usa el día de la semana para dar sugerencias asombrosamente orgánicas, pero solo si la conversación se presta para ello. Por ejemplo:"
-    system_prompt += "\n  - Si es Domingo o Lunes: Sugiere sutilmente hacer 'Meal Prep' (cocinar porciones extra) para ahorrar tiempo en la ajetreada semana laboral."
-    system_prompt += "\n  - Si es Viernes o Sábado: Anímalo a disfrutar el fin de semana sin perder el control, o sugiérele ideas de comidas relajadas."
-    system_prompt += "\nSé conversacional e intuitivo; no suenes como un robot leyendo el calendario, que se sienta natural."
+    system_prompt += build_temporal_proactive_context()
     
     # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
     if sentiment_result.get("instruction"):
@@ -929,21 +871,7 @@ REGLAS SUPREMAS PARA LLAMADAS DE VOZ:
     
     if rag_context: system_prompt += f"\n{rag_context}"
     
-    system_prompt += f"""
-TIENES HERRAMIENTAS DISPONIBLES:
-- OBLIGATORIO: Usa `update_form_field` INMEDIATAMENTE al haber nuevos datos de perfil. IMPORTANTE: Revisa los valores permitidos, la UI usa nombres clave (ej: 'lose_fat', 'vegetarian', 'male').
-- Usa `generate_new_plan_from_chat` SOLO cuando el usuario pida explícitamente generar un plan nuevo (ej: 'hazme un plan', 'genera mi rutina', 'quiero un menú diferente').
-- NO uses generate_new_plan_from_chat si el usuario solo da información de salud o pregunta sobre su plan actual.
-- Usa `log_consumed_meal` para registrar en el diario cualquier comida consumida. Si analizas una foto y el usuario confirma que se la comió, USA ESTA HERRAMIENTA con los macros estimados.
-- Usa `modify_single_meal` para cambios puntuales a una comida específica del plan (ej: 'cámbiale el salami al mangú por huevos en la Opción A'). Opción A = day_number 1, Opción B = 2, Opción C = 3.
-- Usa `check_shopping_list` SIEMPRE que el usuario pregunte qué ingredientes necesita comprar, cuánto necesita de un ingrediente, o pida su lista de compras. NUNCA sumes ingredientes manualmente mirando el plan, esta herramienta hace el cálculo matemático exacto.
-- Usa `search_deep_memory` cuando el usuario pregunte sobre su pasado lejano, experiencias anteriores con la dieta, o datos que no aparecen en la memoria reciente (ej: '¿Recuerdas qué comía al principio?', '¿Cómo me sentía hace meses?').
-
-🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨: 
-1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario.
-2. Si modificas el inventario o consumes ingredientes con `modify_pantry_inventory`, `mark_shopping_list_purchased`, o `log_consumed_meal`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_INVENTORY]`. Esto recargará los datos de "Mi Nevera" instantáneamente.
-
-El user_id actual es: {user_id}"""
+    system_prompt += build_tools_instructions_stream(user_id)
 
     inventory_str = ""
     shopping_delta_str = ""
@@ -980,17 +908,7 @@ El user_id actual es: {user_id}"""
             cleaned_shop = aggregate_shopping_list([item.strip() for item in current_shopping if isinstance(item, str) and len(item.strip()) > 2])
             shopping_delta_str = ", ".join(cleaned_shop)
 
-    if inventory_str or shopping_delta_str:
-        system_prompt += f"\n\n🛒 ESTADO DE LA DESPENSA Y COMPRAS (INFORMACIÓN EN TIEMPO REAL):"
-        if inventory_str:
-            system_prompt += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: {inventory_str}. ¡Estas son las provisiones que el usuario tiene FÍSICAMENTE en su cocina ahora mismo! PRIORIZA SIEMPRE recomendar cocinar con esto antes de sugerir comprar cosas nuevas."
-        else:
-            system_prompt += f"\n- 📦 [INVENTARIO FÍSICO ACTUAL]: Vacío. El usuario no ha registrado tener ingredientes en casa."
-            
-        if shopping_delta_str:
-            system_prompt += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: {shopping_delta_str}. Esto es lo que el usuario AÚN DEBE COMPRAR en el supermercado para completar su plan alimenticio."
-        else:
-            system_prompt += f"\n- 📝 [LISTA DE COMPRAS PENDIENTE]: ¡Vacía! El usuario ya tiene todos los ingredientes necesarios en su inventario físico para su plan actual.\n"
+    system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
 
     if current_plan:
         system_prompt += f"\nCONTEXTO CRÍTICO: Plan activo:\n{json.dumps(current_plan)}\n"

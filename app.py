@@ -86,14 +86,27 @@ async def lifespan(app: FastAPI):
                 );
                 """)
                 
+                # Crear tabla para Nightly Rotation Queue
+                conn.execute("""
+                CREATE TABLE IF NOT EXISTS nightly_rotation_queue (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
+                    status VARCHAR(50) DEFAULT 'pending',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+                """)
+                
             logger.info("🚀 [Postgres] Tablas de LangGraph Checkpointer y Push Subscriptions verificadas/creadas.")
         except Exception as e:
             logger.error(f"⚠️ [Postgres] Error configurando DDL inicial: {e}")
             
     if HAS_SCHEDULER and scheduler:
         scheduler.add_job(run_proactive_checks, "cron", minute=30)
+        from cron_tasks import run_nightly_auto_rotation, process_rotation_queue
+        scheduler.add_job(run_nightly_auto_rotation, "cron", hour=2, minute=0)
+        scheduler.add_job(process_rotation_queue, "interval", minutes=5)
         scheduler.start()
-        logger.info("⏰ [APScheduler] Tareas proactivas en segundo plano iniciadas.")
+        logger.info("⏰ [APScheduler] Tareas proactivas y CRON jobs nocturnos iniciados.")
             
     logger.info("🚀 [FastAPI] Servidor de MealfitRD IA iniciado con éxito en el puerto 3001.")
     yield
@@ -168,6 +181,51 @@ def api_test_proactive(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(run_push)
     return {"status": "started", "message": "Task queued"}
+
+@app.post("/api/cron/nightly-rotation")
+def api_trigger_nightly_rotation(
+    background_tasks: BackgroundTasks,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Trigger seguro para Vercel Cron. Dispara la rotación de planes.
+    Requiere Bearer token que coincida con CRON_SECRET en el entorno.
+    Se envía a BackgroundTasks para que no bloquee el request de Cron (timeout).
+    """
+    # Validar Bearer token contra CRON_SECRET (Vercel lo inyecta automáticamente)
+    cron_secret = os.environ.get("CRON_SECRET")
+    if cron_secret:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        token = authorization.replace("Bearer ", "").strip()
+        if token != cron_secret:
+            raise HTTPException(status_code=403, detail="Invalid cron token")
+    else:
+        logging.warning("⚠️ CRON_SECRET not set — cron endpoint is unprotected (dev mode)")
+    
+    from cron_tasks import run_nightly_auto_rotation
+    background_tasks.add_task(run_nightly_auto_rotation)
+    return {"status": "started", "message": "Nightly rotation queued in background"}
+
+@app.post("/api/cron/process-rotation-queue")
+def api_trigger_process_rotation_queue(
+    background_tasks: BackgroundTasks,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Trigger para procesar usuarios encolados (para Vercel Cron cada 5 mins).
+    """
+    cron_secret = os.environ.get("CRON_SECRET")
+    if cron_secret:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+        token = authorization.replace("Bearer ", "").strip()
+        if token != cron_secret:
+            raise HTTPException(status_code=403, detail="Invalid cron token")
+            
+    from cron_tasks import process_rotation_queue
+    background_tasks.add_task(process_rotation_queue)
+    return {"status": "started", "message": "Queue processor triggered in background"}
 
 from auth import get_verified_user_id, verify_api_quota
 from rate_limiter import RateLimiter
