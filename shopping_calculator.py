@@ -932,7 +932,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
 
         # Consolidación dura para huevos y sus derivados
         _can_lower = canonical_name.lower()
-        if re.search(r'^(huevo|huevos|clara de huevo|claras de huevo|claras de huevo hervidas|clara de huevo hervida|yema de huevo|yemas de huevo|huevo hervido|huevos hervidos|huevos enteros|huevo entero)$', _can_lower, re.IGNORECASE):
+        if re.search(r'^(huevos?|claras?\s+de\s+huevo|yemas?\s+de\s+huevo)', _can_lower, re.IGNORECASE):
             canonical_name = 'Huevo'
 
         # Consolidación: Ñame variantes (blanco, amarillo, etc.) → Ñame
