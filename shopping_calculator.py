@@ -542,6 +542,13 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             if k == n_clean or (re.search(rf'\b{re.escape(k)}(s|es)?\b', n_clean)):
                 density_per_u = v
                 break
+        # Fallback plurales multi-palabra: "guineitos verdes" → "guineito verde"
+        if not density_per_u:
+            n_singular = re.sub(r'(es|s)\b', '', n_clean).strip()
+            for k, v in UNIT_WEIGHTS.items():
+                if k == n_singular or n_singular.startswith(k) or k.startswith(n_singular):
+                    density_per_u = v
+                    break
 
     # Autocorrección de Alucinaciones (unidades líquidas para sólidos)
     if unit_str.lower() in ['ml', 'l', 'lt', 'oz', 'onzas'] and re.search(r'queso|pollo|cerdo|carne|arroz|avena|lenteja|habichuela|almendra', n_lower):
@@ -953,6 +960,14 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     if k == n_clean or (re.search(rf'\b{re.escape(k)}(s|es)?\b', n_clean)):
                         g_per_u = v
                         break
+                # Fallback para plurales multi-palabra: singularizar cada palabra del input
+                # Ej: "guineitos verdes" → "guineito verde" para matchear UNIT_WEIGHTS
+                if g_per_u <= 0:
+                    n_singular = re.sub(r'(es|s)\b', '', n_clean).strip()
+                    for k, v in UNIT_WEIGHTS.items():
+                        if k == n_singular or n_singular.startswith(k) or k.startswith(n_singular):
+                            g_per_u = v
+                            break
                         
             if g_per_taza <= 0:
                 for k, v in VOLUMETRIC_DENSITIES.items():
@@ -1156,6 +1171,12 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if u in nominal_units:
                 continue
             if q > 0.0001:
+                # DEDUP: Si este ingrediente ya fue agregado por peso (has_weight path),
+                # y esta unidad residual es 'unidad/uds' que no se pudo convertir a gramos,
+                # NO agregarlo de nuevo — ya está representado en la entrada de peso.
+                if added and u.lower() in ['unidad', 'unidades', 'ud', 'uds', 'ud.', 'uds.']:
+                    logging.info(f"🔀 [DEDUP] Saltando entrada duplicada por unidad para '{name}' (ya tiene entrada por peso)")
+                    continue
                 item_cost = 0.0
                 if u in ['unidad', 'unidades', 'lata', 'latas', 'paquete', 'paquetes']:
                     item_cost = q * price_per_unit

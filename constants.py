@@ -468,6 +468,8 @@ UNIT_WEIGHTS = {
     "platano verde": 280.0,
     "platano maduro": 280.0,
     "guineito verde": 100.0,
+    "guineitos verdes": 100.0,
+    "guineos verdes": 100.0,
     "yuca": 400.0,
     "batata": 220.0,
     "papa": 150.0,
