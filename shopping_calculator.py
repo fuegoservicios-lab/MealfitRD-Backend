@@ -100,14 +100,14 @@ def normalize_name(orig_name: str) -> str:
     n = re.sub(r'^(pechuga|filete|muslo|trozo|chuleta|pieza|corte|ración|racion|porción|porcion|filetico|medallón|medallones|carne)(s)?\s+(de\s+|del\s+)', '', n, flags=re.IGNORECASE)
     n = re.sub(r'^(de\s+|del\s+)', '', n, flags=re.IGNORECASE)
     
-    stops = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
+    stops = ['cortado', 'cortada', 'cortados', 'cortadas', 'picado', 'picada', 'picados', 'picadas', 'picadito', 'picadita', 'picaditos', 'picaditas', 'pelado', 'pelada', 'pelados', 'peladas', 'hervido', 'hervida', 'hervidos', 'hervidas', 'cocido', 'cocida', 'cocidos', 'cocidas', 'asado', 'asada', 'asados', 'asadas', 'crudo', 'cruda', 'crudos', 'crudas', 'horneado', 'horneada', 'horneados', 'horneadas', 'desmenuzado', 'desmenuzada', 'desmenuzados', 'desmenuzadas', 'rallado', 'rallada', 'rallados', 'ralladas', 'guisado', 'guisada', 'guisados', 'guisadas', 'frito', 'frita', 'fritos', 'fritas', 'majado', 'majada', 'majados', 'majadas', 'triturado', 'triturada', 'triturados', 'trituradas', 'hecha puré', 'hecho puré', 'puré', 'en julianas', 'en tiras', 'en cubos', 'en hojuelas', 'en dados', 'en aros', 'en trozos', 'en rodajas', 'en porciones', 'en lonjas', 'en lonja', 'finamente', 'muy', 'pequeño', 'pequeña', 'pequeños', 'pequeñas', 'grande', 'grandes', 'mediano', 'mediana', 'medianos', 'medianas', 'maduro', 'madura', 'maduros', 'maduras', 'fresco', 'fresca', 'frescos', 'frescas', 'firme', 'firmes', 'entero', 'entera', 'enteros', 'enteras', 'fina', 'finas', 'gruesa', 'gruesas', 'magro', 'magra', 'magros', 'magras', 'natural', 'naturales', 'bajo en grasa', 'bajas en grasa', 'bajos en grasa', 'bajo en sodio', 'bajas en sodio', 'bajos en sodio', 'descremado', 'descremada', 'descremados', 'descremadas', 'sin sal', 'con sal', 'sin piel', 'sin hueso', 'para rebozar', 'al gusto', 'pizca de', 'rodajas de', 'de la despensa', 'ralladura y jugo de 1/2', 'la', 'el', 'los', 'las']
     clean_n = n
     for s in stops:
         clean_n = re.sub(r'\b' + s + r'\b', '', clean_n, flags=re.IGNORECASE)
         
     # Limpiar conjunciones o preposiciones que quedan colgadas al quitar los stops al inicio o al final
-    clean_n = re.sub(r'^\s*(y|e|en|con|de|del|para)\b', '', clean_n, flags=re.IGNORECASE)
-    clean_n = re.sub(r'\b(y|e|en|con|de|del|para)\s*$', '', clean_n, flags=re.IGNORECASE)
+    clean_n = re.sub(r'^\s*(y|e|o|en|con|de|del|para)\b', '', clean_n, flags=re.IGNORECASE)
+    clean_n = re.sub(r'\b(y|e|o|en|con|de|del|para)\s*$', '', clean_n, flags=re.IGNORECASE)
     clean_n = re.sub(r'\s+', ' ', clean_n).replace(',', '').strip()
     
     master_list = get_master_ingredients()
@@ -934,6 +934,34 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         _can_lower = canonical_name.lower()
         if re.search(r'^(huevo|huevos|clara de huevo|claras de huevo|claras de huevo hervidas|clara de huevo hervida|yema de huevo|yemas de huevo|huevo hervido|huevos hervidos|huevos enteros|huevo entero)$', _can_lower, re.IGNORECASE):
             canonical_name = 'Huevo'
+
+        # Consolidación: Ñame variantes (blanco, amarillo, etc.) → Ñame
+        if re.search(r'^[ñn]ame\b', _can_lower):
+            canonical_name = 'Ñame'
+
+        # Consolidación: Miel variantes → Miel
+        if re.search(r'^miel\b', _can_lower):
+            canonical_name = 'Miel'
+
+        # Consolidación: Ajo con preparación (majado, triturado) → Ajo (no ajo en polvo)
+        if re.search(r'^ajo\b', _can_lower) and 'polvo' not in _can_lower:
+            canonical_name = 'Ajo'
+
+        # Consolidación: Pechuga de pavo variantes (en lonjas, picadita, etc.) → Jamón de pavo
+        if re.search(r'pavo', _can_lower) and re.search(r'(pechuga|lonjas?|rebanada|picadit[oa])', _can_lower):
+            canonical_name = 'Jamón de pavo'
+
+        # Consolidación: Fresas variantes (congeladas, frescas) → Fresas
+        if re.search(r'^fresas?\b', _can_lower):
+            canonical_name = 'Fresas'
+
+        # Consolidación: Almendras variantes → Almendras fileteadas
+        if re.search(r'^almendras?\b', _can_lower) and 'mantequilla' not in _can_lower:
+            canonical_name = 'Almendras fileteadas'
+
+        # Consolidación: Tortilla/Tortillas integral/integrales → Tortilla integral
+        if re.search(r'^tortillas?\s+integral', _can_lower):
+            canonical_name = 'Tortilla integral'
 
         for u, q in units.items():
             canonical_aggregated[canonical_name][u] += q
