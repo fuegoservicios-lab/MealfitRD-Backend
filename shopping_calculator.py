@@ -111,6 +111,10 @@ def normalize_name(orig_name: str) -> str:
     clean_n = re.sub(r'\s+', ' ', clean_n).replace(',', '').strip()
     
     master_list = get_master_ingredients()
+    from constants import strip_accents
+    
+    n_stripped = strip_accents(n)
+    clean_n_stripped = strip_accents(clean_n)
     
     # Recolectar todos los aliases + nombres canónicos para búsqueda,
     # ordenados por longitud (más largos primero) para evitar que 
@@ -118,33 +122,34 @@ def normalize_name(orig_name: str) -> str:
     all_aliases = []
     for master in master_list:
         # El nombre canónico también cuenta como alias para búsqueda exacta
-        all_aliases.append((master["name"].strip(), master["name"]))
+        master_name = master["name"]
+        all_aliases.append((strip_accents(master_name.strip().lower()), master_name))
         for alias in (master.get("aliases") or []):
-            all_aliases.append((alias.strip(), master["name"]))
+            all_aliases.append((strip_accents(alias.strip().lower()), master_name))
             
     all_aliases.sort(key=lambda x: len(x[0]), reverse=True)
 
     # ── INTENTO 1: Match Exacto sobre el texto RAW (sin mutilar por stops) ──
     # Esto es CRÍTICO porque los stops eliminan palabras como 'natural', 'descremado',
     # 'bajo en grasa' que son parte de aliases legítimos como 'yogurt griego natural'.
-    for alias, master_name in all_aliases:
-        if n == alias.lower().strip():
+    for alias_stripped, master_name in all_aliases:
+        if n_stripped == alias_stripped:
             return master_name
 
     # ── INTENTO 2: Regex sobre el texto RAW (sin mutilar) ──
     # Buscar "queso mozzarella bajo en grasa" dentro de "queso mozzarella bajo en grasa rallado"
-    for alias, master_name in all_aliases:
-        if re.search(r'\b' + re.escape(alias) + r'\b', n, flags=re.IGNORECASE):
+    for alias_stripped, master_name in all_aliases:
+        if re.search(r'\b' + re.escape(alias_stripped) + r'\b', n_stripped, flags=re.IGNORECASE):
             return master_name
 
     # ── INTENTO 3: Match Exacto sobre clean_n (texto limpio, fallback) ──
-    for alias, master_name in all_aliases:
-        if clean_n == alias.lower().strip():
+    for alias_stripped, master_name in all_aliases:
+        if clean_n_stripped == alias_stripped:
             return master_name
 
     # ── INTENTO 4: Regex sobre clean_n (último recurso antes de semántica) ──
-    for alias, master_name in all_aliases:
-        if re.search(r'\b' + re.escape(alias) + r'\b', clean_n, flags=re.IGNORECASE):
+    for alias_stripped, master_name in all_aliases:
+        if re.search(r'\b' + re.escape(alias_stripped) + r'\b', clean_n_stripped, flags=re.IGNORECASE):
             return master_name
 
     # Intento 3: Búsqueda de Similitud Semántica Vectorial (Fallback Local)
