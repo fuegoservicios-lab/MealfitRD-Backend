@@ -56,36 +56,52 @@ def check_meal_plan_generated_today(user_id: str) -> bool:
         logger.error(f"Error comprobando si plan fue hoy: {e}")
     return False
 
-def save_new_meal_plan_robust(insert_data: dict) -> bool:
-    """Guarda un nuevo plan nutricional con fallback por si faltan columnas optimizadas."""
-    if not connection_pool: return False
+def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[str, tuple]] = None, return_id: bool = False):
+    """Guarda un nuevo plan nutricional con fallback por si faltan columnas optimizadas.
+
+    Si return_id=True, añade RETURNING id y devuelve el UUID del plan insertado (str).
+    Si return_id=False (default), devuelve True al éxito como antes.
+    """
+    if not connection_pool: return None if return_id else False
     try:
         import copy
         from psycopg.types.json import Jsonb
         safe_data = copy.deepcopy(insert_data)
-        
+
         # Columnas que son text[] en PostgreSQL (no jsonb)
         _ARRAY_COLS = {"meal_names", "ingredients", "techniques"}
-        
-        def dict_to_insert(d):
+
+        def dict_to_insert(d, with_returning=False):
             cols = list(d.keys())
             vals = []
             for col, v in zip(cols, d.values()):
                 if col in _ARRAY_COLS:
-                    # text[] — pasar lista nativa, psycopg la mapea a text[] automáticamente
                     vals.append(v)
+                elif col == "profile_embedding" and isinstance(v, list):
+                    vals.append(str(v))
                 elif isinstance(v, (dict, list)):
-                    # jsonb — plan_data, macros, etc.
                     vals.append(Jsonb(v))
                 else:
                     vals.append(v)
             placeholders = ", ".join(["%s"] * len(cols))
             col_str = ", ".join(cols)
-            return f"INSERT INTO meal_plans ({col_str}) VALUES ({placeholders})", vals
-            
-        query, vals = dict_to_insert(safe_data)
-        execute_sql_write(query, tuple(vals))
-        return True
+            sql = f"INSERT INTO meal_plans ({col_str}) VALUES ({placeholders})"
+            if with_returning:
+                sql += " RETURNING id"
+            return sql, vals
+
+        query, vals = dict_to_insert(safe_data, with_returning=return_id)
+
+        if additional_queries:
+            from db_core import execute_sql_transaction
+            queries_to_run = [(query, tuple(vals))] + additional_queries
+            execute_sql_transaction(queries_to_run)
+            return True
+        else:
+            result = execute_sql_write(query, tuple(vals), returning=return_id)
+            if return_id:
+                return str(result[0]["id"]) if result else None
+            return True
     except Exception as try_db_e:
         err_msg = str(try_db_e)
         if "column" in err_msg and ("meal_names" in err_msg or "techniques" in err_msg or "ingredients" in err_msg):
@@ -93,10 +109,18 @@ def save_new_meal_plan_robust(insert_data: dict) -> bool:
             safe_data.pop("meal_names", None)
             safe_data.pop("ingredients", None)
             safe_data.pop("techniques", None)
-            query, vals = dict_to_insert(safe_data)
+            query, vals = dict_to_insert(safe_data, with_returning=return_id)
             try:
-                execute_sql_write(query, tuple(vals))
-                return True
+                if additional_queries:
+                    from db_core import execute_sql_transaction
+                    queries_to_run = [(query, tuple(vals))] + additional_queries
+                    execute_sql_transaction(queries_to_run)
+                    return True
+                else:
+                    result = execute_sql_write(query, tuple(vals), returning=return_id)
+                    if return_id:
+                        return str(result[0]["id"]) if result else None
+                    return True
             except Exception as e2:
                 raise e2
         else:
@@ -113,6 +137,20 @@ def get_latest_meal_plan(user_id: str):
     except Exception as e:
         logger.error(f"Error obteniendo plan actual: {e}")
         return None
+
+def get_recent_plans(user_id: str, days: int = 14) -> list:
+    """Obtiene los JSON de los planes recientes dentro del rango de días especificado."""
+    if not supabase: return []
+    try:
+        from datetime import datetime, timezone, timedelta
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        res = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).gte("created_at", cutoff_date).order("created_at", desc=True).execute()
+        if res.data:
+            return [row.get("plan_data") for row in res.data if row.get("plan_data")]
+        return []
+    except Exception as e:
+        logger.error(f"Error obteniendo planes recientes: {e}")
+        return []
 
 def get_recent_meals_from_plans(user_id: str, days: int = 5):
     """Obtiene una lista de nombres de comidas de los planes recientes para evitar repeticiones."""
@@ -544,4 +582,16 @@ def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
         logger.error(f"⚠️ [DB] Error obteniendo diccionario de frecuencias: {e}")
         return {}
 
-
+def search_similar_plan(query_embedding: list, threshold: float = 0.98, limit: int = 1):
+    """Busca planes similares usando búsqueda vectorial (similitud coseno) a través de la RPC."""
+    if not supabase: return []
+    try:
+        res = supabase.rpc("match_similar_plan", {
+            "query_embedding": query_embedding,
+            "match_threshold": threshold,
+            "match_count": limit
+        }).execute()
+        return res.data
+    except Exception as e:
+        logger.error(f"Error buscando planes similares: {e}")
+        return []

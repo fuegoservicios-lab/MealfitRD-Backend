@@ -12,8 +12,7 @@ from shopping_calculator import get_shopping_list_delta, invalidate_master_cache
 invalidate_master_cache()
 
 # Buscar plan activo
-user_id = "0b6f2489-a41a-49e2-9eec-212ccea71852"
-res = supabase.table("meal_plans").select("id, plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+res = supabase.table("meal_plans").select("id, plan_data, user_id").order("created_at", desc=True).limit(1).execute()
 
 if not res.data:
     print("NO ENCONTRE PLAN ACTIVO")
@@ -21,7 +20,9 @@ if not res.data:
 
 plan_id = res.data[0]["id"]
 plan_data = res.data[0]["plan_data"]
+user_id = res.data[0]["user_id"]
 print(f"Plan ID: {plan_id}")
+print(f"User ID: {user_id}")
 print(f"Dias en el plan: {len(plan_data.get('days', []))}")
 
 # Recalcular con código actual

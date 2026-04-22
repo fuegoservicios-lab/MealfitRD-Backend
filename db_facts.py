@@ -7,6 +7,21 @@ import os
 import logging
 logger = logging.getLogger(__name__)
 from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
+from cache_manager import redis_client
+
+def _invalidate_rag_cache(user_id: str):
+    """Invalida la caché RAG del usuario para evitar servir datos médicos obsoletos."""
+    prefix = f"rag_{user_id}_"
+    if redis_client:
+        try:
+            for key in redis_client.scan_iter(f"{prefix}*"):
+                redis_client.delete(key)
+        except Exception as e:
+            logger.warning(f"Redis cache invalidate error: {e}")
+    try:
+        execute_sql_write("DELETE FROM app_kv_store WHERE key LIKE %s", (prefix + '%',))
+    except Exception as e:
+        logger.warning(f"DB cache invalidate error: {e}")
 
 def check_fact_ownership(fact_id: str, user_id: str) -> bool:
     """Verifica si un hecho corresponde a un determinado usuario."""
@@ -19,6 +34,30 @@ def check_fact_ownership(fact_id: str, user_id: str) -> bool:
     except Exception as e:
         logger.error(f"Error en check_fact_ownership: {e}")
     return False
+
+def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Optional[float]:
+    """Calcula la hora promedio en la que el usuario registra un tipo de comida (ej: 10.5 para 10:30 AM)."""
+    if not connection_pool: return None
+    try:
+        from datetime import datetime, timezone, timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
+        
+        # Ajustamos a AST (-4) sumando/restando horas o simplemente extrayendo la hora local
+        query = """
+            SELECT EXTRACT(HOUR FROM (consumed_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santo_Domingo')) as hr,
+                   EXTRACT(MINUTE FROM (consumed_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santo_Domingo')) as mn
+            FROM consumed_meals
+            WHERE user_id = %s AND meal_type ILIKE %s AND consumed_at >= %s
+        """
+        res = execute_sql_query(query, (user_id, f"%{meal_type}%", cutoff), fetch_all=True)
+        if not res:
+            return None
+            
+        total_hours = sum([float(r['hr']) + float(r['mn'])/60.0 for r in res])
+        return round(total_hours / len(res), 2)
+    except Exception as e:
+        logger.error(f"Error calculando avg_meal_hour para {meal_type}: {e}")
+        return None
 
 def acquire_fact_lock(user_id: str) -> bool:
     """Intenta adquirir el bloqueo para extracción de hechos. Retorna True si lo logra, False si ya está bloqueado."""
@@ -75,6 +114,7 @@ def save_user_fact(user_id: str, fact: str, embedding: list, metadata: dict = No
             data_to_insert["metadata"] = metadata
             
         res = supabase.table("user_facts").insert(data_to_insert).execute()
+        _invalidate_rag_cache(user_id)
         return res.data
     except Exception as e:
         logger.error(f"Error guardando user_fact: {e}")
@@ -123,6 +163,7 @@ def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):
     if not supabase: return None
     try:
         res = supabase.table("user_facts").update({"is_active": False}).eq("user_id", user_id).contains("metadata", filter_dict).execute()
+        _invalidate_rag_cache(user_id)
         return res.data
     except Exception as e:
         logger.error(f"Error haciendo soft delete a facts por metadata: {e}")
@@ -177,8 +218,16 @@ def delete_user_fact(fact_id: str):
     """Hace un soft delete cambiando is_active a False"""
     if not supabase: return None
     try:
+        # Extraer user_id antes de borrar para invalidar su caché
+        res_user = supabase.table("user_facts").select("user_id").eq("id", fact_id).execute()
+        user_id = res_user.data[0]["user_id"] if res_user.data else None
+
         # En lugar de .delete(), usamos .update()
         res = supabase.table("user_facts").update({"is_active": False}).eq("id", fact_id).execute()
+        
+        if user_id:
+            _invalidate_rag_cache(user_id)
+            
         return res.data
     except Exception as e:
         logger.error(f"Error haciendo soft delete a user_fact: {e}")
@@ -298,7 +347,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         logger.error(f"Error buscando visual_diary: {e}")
         return []
 
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None):
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None, meal_type: str = "snack"):
     """Guarda una comida consumida en la tabla consumed_meals de Supabase."""
     try:
         from datetime import datetime, timezone
@@ -306,8 +355,8 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         if connection_pool:
             from psycopg.types.json import Jsonb
             execute_sql_write(
-                "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, created_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients if ingredients is not None else [], now)
+                "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients if ingredients is not None else [], now, meal_type)
             )
             return True
         else:
@@ -315,12 +364,13 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
             res = supabase.table("consumed_meals").insert({
                 "user_id": user_id,
                 "meal_name": meal_name,
+                "meal_type": meal_type,
                 "calories": calories,
                 "protein": protein,
                 "carbs": carbs,
                 "healthy_fats": healthy_fats,
                 "ingredients": ingredients if ingredients is not None else [],
-                "created_at": now
+                "consumed_at": now
             }).execute()
             return res.data
     except Exception as e:
@@ -358,7 +408,7 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
                 end_str = f"{today_date}T23:59:59Z"
             
             if connection_pool:
-                query = "SELECT * FROM consumed_meals WHERE user_id = %s AND created_at >= %s AND created_at < %s"
+                query = "SELECT * FROM consumed_meals WHERE user_id = %s AND consumed_at >= %s AND consumed_at < %s"
                 res = execute_sql_query(query, (user_id, start_str, end_str), fetch_all=True)
                 return res
             else:
@@ -366,8 +416,8 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
                 res = supabase.table("consumed_meals")\
                     .select("*")\
                     .eq("user_id", user_id)\
-                    .gte("created_at", start_str)\
-                    .lt("created_at", end_str)\
+                    .gte("consumed_at", start_str)\
+                    .lt("consumed_at", end_str)\
                     .execute()
                 return res.data
         except Exception as e:
@@ -382,7 +432,7 @@ def get_consumed_meals_since(user_id: str, since_iso_date: str):
     """Obtiene todas las comidas consumidas por el usuario desde una fecha específica."""
     try:
         if connection_pool:
-            query = "SELECT * FROM consumed_meals WHERE user_id = %s AND created_at >= %s"
+            query = "SELECT * FROM consumed_meals WHERE user_id = %s AND consumed_at >= %s"
             res = execute_sql_query(query, (user_id, since_iso_date), fetch_all=True)
             return res
         else:
@@ -390,7 +440,7 @@ def get_consumed_meals_since(user_id: str, since_iso_date: str):
             res = supabase.table("consumed_meals")\
                 .select("*")\
                 .eq("user_id", user_id)\
-                .gte("created_at", since_iso_date)\
+                .gte("consumed_at", since_iso_date)\
                 .execute()
             return res.data
     except Exception as e:

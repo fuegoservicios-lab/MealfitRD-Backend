@@ -142,11 +142,16 @@ def _save_visual_entry_background(user_id: str, image_url: str, description: str
 
 
 @router.post("/consumed")
-def api_log_consumed_meal(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+def api_log_consumed_meal(
+    data: dict = Body(...), 
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    verified_user_id: str = Depends(get_verified_user_id)
+):
     """Registra una comida consumida manualmente desde el frontend."""
     try:
         user_id = data.get("user_id")
         meal_name = data.get("meal_name")
+        meal_type = data.get("meal_type", "snack")
         calories = data.get("calories", 0)
         protein = data.get("protein", 0)
         carbs = data.get("carbs", 0)
@@ -160,7 +165,11 @@ def api_log_consumed_meal(data: dict = Body(...), verified_user_id: str = Depend
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar comidas."}
             
-        log_consumed_meal(user_id, meal_name, int(calories), int(protein), int(carbs), int(healthy_fats))
+        log_consumed_meal(user_id, meal_name, int(calories), int(protein), int(carbs), int(healthy_fats), meal_type=meal_type)
+        
+        # [GAP 4] Latencia de 18+ horas: Recalcular adherencia intradía en background
+        from cron_tasks import trigger_incremental_learning
+        background_tasks.add_task(trigger_incremental_learning, user_id)
         
         return {"success": True, "message": "Comida registrada exitosamente."}
     except HTTPException as he:
@@ -202,5 +211,58 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/progress")
+def api_log_progress(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+    """Registra el peso actual en el historial de progreso (Progress Tracker)."""
+    try:
+        user_id = data.get("user_id")
+        weight = float(data.get("weight"))
+        unit = data.get("unit", "lb")
+        
+        # Validación de seguridad IDOR
+        if user_id and user_id != "guest":
+            if not verified_user_id or verified_user_id != user_id:
+                raise HTTPException(status_code=403, detail="Prohibido.")
+                
+        if not user_id or user_id == "guest":
+            return {"success": False, "message": "Inicia sesión para registrar progreso."}
+            
+        profile = get_user_profile(user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+            
+        health_profile = profile.get("health_profile") or {}
+        weight_history = health_profile.get("weight_history", [])
+        
+        from datetime import datetime
+        now_date = datetime.now().strftime("%Y-%m-%d")
+        
+        # Evitar múltiples registros en el mismo día (actualizar si ya existe)
+        existing_entry = next((e for e in weight_history if e.get("date") == now_date), None)
+        if existing_entry:
+            existing_entry["weight"] = weight
+            existing_entry["unit"] = unit
+        else:
+            weight_history.append({"date": now_date, "weight": weight, "unit": unit})
+            
+        # Ordenar cronológicamente y mantener solo los últimos 30 registros
+        weight_history = sorted(weight_history, key=lambda x: x["date"])[-30:]
+        
+        health_profile["weight_history"] = weight_history
+        # También actualizamos el peso estático actual para el UI
+        health_profile["weight"] = weight
+        health_profile["weightUnit"] = unit
+        
+        from db_profiles import update_user_health_profile
+        res = update_user_health_profile(user_id, health_profile)
+        if res is None:
+            raise Exception("Error guardando progreso en DB.")
+            
+        return {"success": True, "message": "Progreso guardado exitosamente.", "weight_history": weight_history}
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/diary/progress POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 

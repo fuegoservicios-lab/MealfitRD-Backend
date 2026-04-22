@@ -200,6 +200,9 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                         if m.get("ingredients"):
                             ingredients.extend(m.get("ingredients"))
                             
+                # Extraer _profile_embedding
+                profile_embedding = result.pop("_profile_embedding", None)
+
                 insert_data = {
                     "user_id": user_id,
                     "plan_data": result,
@@ -208,6 +211,9 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                     "meal_names": meal_names,
                     "ingredients": ingredients
                 }
+                
+                if profile_embedding:
+                    insert_data["profile_embedding"] = profile_embedding
                 
                 # Nombre inteligente: primeras 2 comidas + calorías
                 if len(meal_names) >= 2:

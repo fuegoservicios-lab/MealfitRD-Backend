@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 # Intentar importar redis
 try:
     import redis
+    import redis.asyncio as redis_async
     from dotenv import load_dotenv
     load_dotenv()
     
@@ -19,11 +20,14 @@ try:
     if REDIS_URL:
         # Usamos decode_responses=True para que devuelva strings en lugar de bytes
         redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        logger.info("🔗 [CACHE] Conectado a Redis exitosamente.")
+        redis_async_client = redis_async.from_url(REDIS_URL, decode_responses=True)
+        logger.info("🔗 [CACHE] Conectado a Redis exitosamente (Sync y Async).")
     else:
         redis_client = None
+        redis_async_client = None
 except ImportError:
     redis_client = None
+    redis_async_client = None
     logger.warning("⚠️ [CACHE] Redis no instalado, se usará caché en memoria local.")
 except Exception as e:
     redis_client = None

@@ -22,7 +22,7 @@ from db import (
     upsert_user_profile
 )
 
-from constants import normalize_ingredient_for_tracking, GLOBAL_REVERSE_MAP
+from constants import normalize_ingredient_for_tracking, GLOBAL_REVERSE_MAP, IGNORED_TRACKING_TERMS
 
 # ⚠️ RESTRICCIÓN ARQUITECTÓNICA: services.py importa agent.py → agent.py NUNCA debe importar services.py.
 # Si agent.py necesita lógica de services.py en el futuro, usar lazy import dentro de la función.
@@ -88,7 +88,68 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
 
 
 
-def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
+def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: list = None, total_days_requested: int = 7) -> str:
+    """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
+    Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
+    """
+    from db_plans import save_new_meal_plan_robust
+    try:
+        # [GAP 3] Limpieza de días huérfanos al regenerar
+        if "days" in plan_data and len(plan_data["days"]) > total_days_requested:
+            import logging
+            logger.warning(f"🧹 [GAP 3] Recortando días huérfanos en partial plan. De {len(plan_data['days'])} a {total_days_requested}")
+            plan_data["days"] = plan_data["days"][:total_days_requested]
+
+        calories = plan_data.get("calories", 0)
+        macros = plan_data.get("macros", {})
+
+        meal_names = []
+        ingredients = []
+        for d in plan_data.get("days", []):
+            for m in d.get("meals", []):
+                if m.get("name"):
+                    meal_names.append(m["name"])
+                if m.get("ingredients"):
+                    ingredients.extend(m["ingredients"])
+
+        plan_name = generate_plan_title(plan_data)
+        profile_embedding = plan_data.pop("_profile_embedding", None)
+
+        insert_data = {
+            "user_id": user_id,
+            "plan_data": {**plan_data, "generation_status": "partial", "total_days_requested": total_days_requested},
+            "name": plan_name,
+            "calories": int(calories) if calories else 0,
+            "macros": macros,
+            "meal_names": meal_names,
+            "ingredients": ingredients,
+        }
+        if profile_embedding:
+            insert_data["profile_embedding"] = profile_embedding
+        if selected_techniques:
+            insert_data["techniques"] = selected_techniques
+
+        plan_id = save_new_meal_plan_robust(insert_data, return_id=True)
+        
+        # [GAP 5] Invalidar chunks antiguos para que no interfieran con este nuevo plan
+        try:
+            from db_core import execute_sql_write
+            execute_sql_write(
+                "UPDATE plan_chunk_queue SET status = 'cancelled' WHERE user_id = %s AND status = 'pending' AND meal_plan_id != %s",
+                (user_id, plan_id)
+            )
+            logger.info(f"✅ [GAP 5] Chunks anteriores cancelados para {user_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ [GAP 5] Error cancelando chunks: {e}")
+            
+        logger.info(f"💾 [CHUNK] Plan parcial (semana 1) guardado para {user_id}, plan_id={plan_id}")
+        return plan_id
+    except Exception as e:
+        logger.error(f"❌ [CHUNK] Error guardando plan parcial para {user_id}: {e}")
+        return None
+
+
+def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None, additional_db_queries: list = None):
     """Background task para guardar plan y actualizar frecuencias de ingredientes."""
     try:
         # 1. Guardar Plan O(1) Arrays
@@ -110,6 +171,9 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             # Nombre creativo generado por IA (Gemini Flash-Lite)
             plan_name = generate_plan_title(plan_data)
                 
+            # Extraer _profile_embedding si fue inyectado por la caché semántica
+            profile_embedding = plan_data.pop("_profile_embedding", None)
+
             insert_data = {
                 "user_id": user_id,
                 "plan_data": plan_data,
@@ -119,59 +183,35 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                 "meal_names": meal_names,
                 "ingredients": ingredients
             }
+            if profile_embedding:
+                insert_data["profile_embedding"] = profile_embedding
             
             # Añadir técnicas de cocción si están disponibles
             if selected_techniques:
                 insert_data["techniques"] = selected_techniques
             
-            # 🔄 Heredar is_restocked del plan anterior si sigue en el mismo ciclo de compras
-            # Esto evita que "Registrar Compras" reaparezca en otros dispositivos
-            # cuando el usuario solo hizo "Actualizar Platos" (rotación de recetas).
-            try:
-                prev_plan = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-                if prev_plan.data and len(prev_plan.data) > 0:
-                    prev_data = prev_plan.data[0].get("plan_data", {})
-                    if prev_data.get("is_restocked") is True:
-                        # Verificar que el ciclo de compras no expiró
-                        prev_start = prev_data.get("grocery_start_date")
-                        if prev_start:
-                            from datetime import datetime as dt_check
-                            try:
-                                start_dt = dt_check.fromisoformat(prev_start.replace("Z", "+00:00"))
-                                days_elapsed = (datetime.now(start_dt.tzinfo) - start_dt).days if start_dt.tzinfo else (datetime.now() - start_dt).days
-                                # Si el ciclo no ha expirado (30 días max), heredar el flag
-                                if days_elapsed <= 30:
-                                    plan_data["is_restocked"] = True
-                                    plan_data["grocery_start_date"] = prev_start
-                                    logger.info(f"🔄 [RESTOCK INHERIT] Plan hereda is_restocked=True del ciclo anterior ({days_elapsed}d elapsed)")
-                            except Exception as date_err:
-                                logger.warning(f"⚠️ [RESTOCK INHERIT] Error parseando fecha: {date_err}")
-                                # Safe fallback: heredar de todos modos si la fecha no se puede parsear
-                                plan_data["is_restocked"] = True
-                                if prev_start:
-                                    plan_data["grocery_start_date"] = prev_start
-                        else:
-                            # Sin fecha de inicio, heredar de todos modos (seguridad)
-                            plan_data["is_restocked"] = True
-                            logger.info(f"🔄 [RESTOCK INHERIT] Plan hereda is_restocked=True (sin grocery_start_date)")
-            except Exception as restock_err:
-                logger.warning(f"⚠️ [RESTOCK INHERIT] Error consultando plan anterior: {restock_err}")
-
-            # 🔄 Merge inteligente: Si heredamos is_restocked, sincronizar la Nevera con el nuevo plan
-            # Esto añade ingredientes nuevos del plan sin borrar los existentes
-            if plan_data.get("is_restocked") is True:
-                try:
-                    from db_inventory import merge_inventory_after_rotation
-                    merge_inventory_after_rotation(user_id, plan_data)
-                except Exception as merge_err:
-                    logger.warning(f"⚠️ [MERGE] Error en merge post-rotación (no-blocking): {merge_err}")
+            # [P0-3] Eliminada la herencia de is_restocked y merge_inventory_after_rotation.
+            # Razón: Si el usuario rota un plan y se introducen ingredientes nuevos, heredarlo como True
+            # inyectaba físicamente los ingredientes en la Nevera sin que el usuario los haya comprado (Compras Mágicas).
+            # Al no heredarlo, la UI mostrará "Registrar Compras" SOLO con el Delta exacto faltante.
 
             # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
             if check_recent_meal_plan_exists(user_id, max_seconds=30):
                 logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
                 return
                 
-            save_new_meal_plan_robust(insert_data)
+            # [GAP 5] Invalidar chunks antiguos al crear un plan completo
+            try:
+                from db_core import execute_sql_write
+                execute_sql_write(
+                    "UPDATE plan_chunk_queue SET status = 'cancelled' WHERE user_id = %s AND status = 'pending'",
+                    (user_id,)
+                )
+                logger.info(f"✅ [GAP 5] Chunks anteriores cancelados para {user_id} en plan completo")
+            except Exception as e:
+                logger.warning(f"⚠️ [GAP 5] Error cancelando chunks: {e}")
+                
+            save_new_meal_plan_robust(insert_data, additional_queries=additional_db_queries)
             logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
             
         # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad)
@@ -183,7 +223,16 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             # Filtrar: solo trackear ingredientes que resolvieron a un término base conocido.
             # Esto evita que condimentos/hierbas (cilantro, orégano, ajo) polucionen la tabla.
             canonical = [n for n in normalized if n and n in canonical_bases]
-            non_canonical = [n for n in normalized if n and n not in canonical_bases]
+
+            def _is_ignored(term: str) -> bool:
+                """Ignora el término si es exacto o si alguna de sus palabras está en IGNORED_TRACKING_TERMS.
+                Cubre compuestos como 'pimienta negra', 'canela en polvo', 'oregano dominicano'.
+                """
+                if term in IGNORED_TRACKING_TERMS:
+                    return True
+                return bool(set(term.split()) & IGNORED_TRACKING_TERMS)
+
+            non_canonical = [n for n in normalized if n and n not in canonical_bases and not _is_ignored(n)]
             
             if canonical:
                 increment_ingredient_frequencies(user_id, canonical)

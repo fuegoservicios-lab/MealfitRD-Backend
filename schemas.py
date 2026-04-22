@@ -29,6 +29,7 @@ class SupplementModel(BaseModel):
 
 class DailyPlanModel(BaseModel):
     day: int = Field(description="Identificador del día o alternativa (1 al 3)")
+    day_name: Optional[str] = Field(default=None, description="Nombre del día de la semana (ej: Lunes, Martes)")
     meals: List[MealModel] = Field(description="Lista de comidas de esta alternativa en orden cronológico. MUY IMPORTANTE: Si el usuario omite el almuerzo, genera SOLO 3 comidas: Desayuno, Merienda, Cena.")
     supplements: Optional[List[SupplementModel]] = Field(default=None, description="Lista de suplementos para esta alternativa. Solo se incluye si el usuario activó includeSupplements: true.")
 
@@ -55,6 +56,7 @@ class DaySkeletonModel(BaseModel):
     carb_pool: List[str] = Field(description="Carbohidratos base asignados a este día, Ej: ['Arroz integral', 'Batata']")
     fruit_pool: List[str] = Field(description="Frutas asignadas a este día, Ej: ['Guineo', 'Manzana']")
     meal_types: List[str] = Field(description="Tipos de comidas a generar en orden, Ej: ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']")
+    breakfast_category: str = Field(default="Libre", description="Categoría base del desayuno asignada a este día. DEBE ser diferente para cada día. Valores: 'Mangú/Tubérculos', 'Avena/Cereales', 'Pan/Tostadas', 'Batido/Bowl', 'Revoltillo/Tortilla'")
     brief_concept: str = Field(description="Concepto temático breve de este día, Ej: 'Día Caribeño con enfoque en proteína magra y tubérculos'")
 
 class PlanSkeletonModel(BaseModel):
@@ -66,5 +68,27 @@ class PlanSkeletonModel(BaseModel):
 class SingleDayPlanModel(BaseModel):
     """Plan detallado de un solo día, producido por cada worker paralelo."""
     day: int = Field(description="Identificador del día (e.g. 1 para Día 1)")
+    day_name: Optional[str] = Field(default=None, description="Nombre del día de la semana (ej: Lunes, Martes)")
     meals: List[MealModel] = Field(description="Lista de comidas completas con ingredientes y recetas")
     supplements: Optional[List[SupplementModel]] = Field(default=None, description="Suplementos si aplica")
+
+from typing import Dict, Any
+class HealthProfileSchema(BaseModel):
+    meal_adherence_weekday: Dict[str, float] = Field(default_factory=dict)
+    meal_adherence_weekend: Dict[str, float] = Field(default_factory=dict)
+    quality_history: List[Any] = Field(default_factory=list)
+    emergency_backup_plan: List[Any] = Field(default_factory=list)
+    mainGoal: Optional[str] = None
+    activityLevel: Optional[str] = None
+    dietTypes: List[str] = Field(default_factory=list)
+    country: Optional[str] = None
+    inventoryMode: Optional[str] = 'indulgent'
+    tzOffset: Optional[int] = 0
+    householdSize: Optional[int] = 1
+    groceryDuration: Optional[str] = 'weekly'
+    totalDays: Optional[int] = 3
+    last_rotated_at: Optional[str] = None
+    autoRotateMeals: Optional[bool] = False
+    timezone: Optional[str] = 'America/Santo_Domingo'
+    class Config:
+        extra = 'allow'

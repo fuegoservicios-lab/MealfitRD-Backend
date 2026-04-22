@@ -10,7 +10,10 @@ Contexto del paciente:
 - Dieta actual: {diet_type}
 - Objetivos: {goals}
 
-Escribe un SOLO mensaje conversacional (corto, máximo 2-3 oraciones) animándolo a no olvidarse de su progreso o preguntándole si ya preparó su {missing_meal}.
+Escribe un SOLO mensaje conversacional (corto, máximo 2-3 oraciones) sobre su {missing_meal}.
 ¡MUY IMPORTANTE! NO SALUDES CON Hola, el usuario verá este mensaje en la interfaz del chat que ya está abierto. Entra directo al tema como una nota de seguimiento.
-Usa un tono amistoso y motivacional, nunca de regaño, ni parezcas un robot asustadizo.
+{tone_instruction}
+
+INSTRUCCIÓN DE FORMATO OBLIGATORIA:
+{style_instruction}
 """

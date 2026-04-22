@@ -6,6 +6,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 logger = logging.getLogger(__name__)
 
+PLAN_CHUNK_SIZE = 3  # Días generados por chunk en el pipeline de langgraph
 # --- VECTOR SEARCH CACHE ---
 _embedding_model = None
 _embedding_cache = {}
@@ -35,7 +36,9 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
 DOMINICAN_PROTEINS = [
     "Pollo", "Cerdo", "Res", "Pavo", "Pescado", "Atún", "Huevos", "Queso de Freír",
     "Salami Dominicano", "Camarones", "Chuleta", "Longaniza",
-    "Habichuelas Rojas", "Habichuelas Negras", "Gandules", "Lentejas", "Garbanzos", "Soya/Tofu"
+    "Habichuelas Rojas", "Habichuelas Negras", "Habichuelas Blancas",
+    "Gandules", "Lentejas", "Garbanzos", "Soya/Tofu",
+    "Queso Ricotta", "Queso Blanco", "Queso Mozzarella", "Yogurt"
 ]
 
 DOMINICAN_CARBS = [
@@ -47,7 +50,9 @@ PROTEIN_SYNONYMS = {
     "pollo": ["pollo", "pechuga", "muslo", "alitas", "chicharrón de pollo", "filete de pollo"],
     "cerdo": ["cerdo", "masita", "chicharrón de cerdo", "lomo", "pernil", "costilla"],
     "res": ["res", "carne molida", "bistec", "filete", "churrasco", "vaca", "picadillo", "carne de res"],
-    "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "tilapia", "filete de pescado"],
+    "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "tilapia", "filete de pescado",
+                "bacalao", "bacalao desalado", "bacalao salado", "filete de bacalao",
+                "filete de mero", "filete de tilapia", "filete de chillo", "filete de dorado"],
     "atún": ["atún", "atun", "atun en agua", "atun en lata"],
     "sardina": ["sardina", "sardinas", "sardina en lata"],
     "huevos": ["huevos", "huevo", "tortilla", "revoltillo"],
@@ -59,6 +64,15 @@ PROTEIN_SYNONYMS = {
 
     "habichuelas rojas": ["habichuelas rojas", "frijoles rojos", "habichuela roja"],
     "habichuelas negras": ["habichuelas negras", "frijoles negros", "habichuela negra"],
+    "habichuelas blancas": ["habichuelas blancas", "frijoles blancos", "habichuela blanca", "porotos blancos", "alubias blancas"],
+    "queso ricotta": ["queso ricotta", "ricotta", "queso ricotta descremado", "ricotta descremada", "ricotta light"],
+    "yogurt": ["yogurt", "yogur", "yogurt griego", "yogurt natural", "yogurt griego natural",
+               "yogurt griego sin azucar", "yogurt griego sin azúcar", "yogurt sin azucar",
+               "yogurt descremado", "greek yogurt"],
+    "queso blanco": ["queso blanco", "queso blanco fresco", "queso de pasta", "queso fresco",
+                     "queso de mano", "queso crema", "queso campesino"],
+    "queso mozzarella": ["queso mozzarella", "mozzarella", "mozzarella fresca", "queso mozarela",
+                         "queso mozarella", "queso mozzarella fresco"],
     "gandules": ["gandules", "guandules", "gandul", "guandul"],
     "lentejas": ["lentejas", "lenteja"],
     "garbanzos": ["garbanzos", "garbanzo", "hummus", "puré de garbanzos"],
@@ -73,7 +87,8 @@ CARB_SYNONYMS = {
     "arroz blanco": ["arroz blanco", "arroz"],
     "arroz integral": ["arroz integral"],
     "avena": ["avena", "avena en hojuelas", "overnight oats", "avena instantanea"],
-    "pasta": ["pasta", "espagueti", "espaguetis", "spaghetti", "macarrones", "coditos", "fideos"],
+    "pasta": ["pasta", "espagueti", "espaguetis", "spaghetti", "macarrones", "coditos", "fideos",
+              "pasta integral", "espagueti integral", "fideos integrales", "macarrones integrales"],
     "quinoa": ["quinoa", "quinua"],
     "pan integral": ["pan integral", "pan", "tostada integral", "tostada"],
     "papas": ["papas", "papa", "puré de papas", "papa hervida"],
@@ -84,9 +99,10 @@ CARB_SYNONYMS = {
 }
 
 DOMINICAN_VEGGIES_FATS = [
-    "Aguacate", "Berenjena", "Tayota", "Repollo", "Zanahoria", 
+    "Aguacate", "Berenjena", "Tayota", "Repollo", "Zanahoria",
     "Molondrones", "Brócoli", "Coliflor", "Tomate", "Vainitas",
-    "Aceitunas", "Cebolla", "Ajíes", "Aceite de Oliva", "Nueces/Almendras"
+    "Aceitunas", "Cebolla", "Ajíes", "Aceite de Oliva", "Nueces/Almendras",
+    "Auyama"
 ]
 
 VEGGIE_FAT_SYNONYMS = {
@@ -106,7 +122,8 @@ VEGGIE_FAT_SYNONYMS = {
     "vainitas": ["vainitas", "judías verdes", "ejotes"],
     "aceitunas": ["aceitunas", "aceituna"],
     "cebolla": ["cebolla", "cebollas"],
-    "ajíes": ["ajíes", "ají", "pimientos", "pimiento"],
+    "ajíes": ["ajíes", "ají", "pimientos", "pimiento", "pimiento morrón", "pimiento morron", "ajies"],
+    "auyama": ["auyama", "calabaza", "zapallo", "squash", "ahuyama"],
     "aceite de oliva": ["aceite de oliva", "aceite verde"],
     "nueces/almendras": ["nueces/almendras", "nueces", "almendras", "maní"]
 }
@@ -128,6 +145,25 @@ FRUIT_SYNONYMS = {
     "sandía": ["sandía", "sandia", "patilla"],
     "melón": ["melón", "melon"]
 }
+
+NUTRITIONAL_CATEGORIES = {
+    "aves": ["pollo", "pavo"],
+    "carnes rojas y embutidos": ["cerdo", "res", "chuleta", "longaniza", "salami dominicano"],
+    "pescados y mariscos": ["pescado", "atún", "sardina", "camarones"],
+    "huevos y lácteos": ["huevos", "queso de freír", "queso", "yogurt", "leche", "queso crema", "ricotta", "cottage", "yogurt griego"],
+    "legumbres": ["habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos", "soya/tofu"],
+    "víveres y almidones": ["plátano verde", "plátano maduro", "yuca", "batata", "guineítos verdes", "ñame", "yautía", "papas", "casabe"],
+    "cereales": ["arroz blanco", "arroz integral", "avena", "pasta", "quinoa", "pan integral", "pan"]
+}
+
+def get_nutritional_category(base_ingredient: str) -> str:
+    """Retorna la categoría nutricional amplia de un ingrediente base para detectar fatiga cruzada."""
+    if not base_ingredient:
+        return None
+    for category, items in NUTRITIONAL_CATEGORIES.items():
+        if base_ingredient in items:
+            return category
+    return None
 
 import unicodedata
 import re
@@ -168,6 +204,22 @@ GLOBAL_REVERSE_MAP = get_reverse_synonyms_map()
 # Por ejemplo, reemplazar "habichuelas rojas" antes de "habichuelas".
 SORTED_VARIANTS = sorted(GLOBAL_REVERSE_MAP.keys(), key=len, reverse=True)
 
+IGNORED_TRACKING_TERMS = {
+    # Condimentos y sazonadores básicos
+    "sal", "pimienta", "agua", "ajo", "oregano", "cilantro",
+    "limon", "aceite", "soya", "canela", "vinagre", "salsa", "salsas",
+    # Hierbas, especias e ingredientes de procesado
+    "albahaca", "hierbabuena", "mostaza", "comino", "paprika", "pimenton",
+    "laurel", "tomillo", "romero", "jengibre", "curcuma", "perejil",
+    "nuez", "moscada", "pimienton", "achiote", "sazon",
+    "harina", "tortilla", "maicena", "almidón", "almidon",
+    # Términos genéricos nutricionales
+    "proteina", "proteinas", "carbohidrato", "carbohidratos",
+    "vegetal", "vegetales", "fruta", "frutas", "grasa", "grasas",
+    "aderezo", "aderezos", "caldo", "condimento", "condimentos",
+    "especias", "hierbas", "azucar", "miel", "polvo", "cucharada", "cucharadita", "taza"
+}
+
 # Pre-compilar patrones regex con \b al cargar el módulo (O(1) por llamada posterior)
 _SYNONYM_PATTERNS = [
     (re.compile(rf'\b{re.escape(variant)}\b'), GLOBAL_REVERSE_MAP[variant])
@@ -192,7 +244,7 @@ _QUANTITY_PATTERN = re.compile(
         r'|cdas?\b|cdtas?\b|cucharadas?\b|cucharaditas?\b'  # Cucharadas
         r'|tazas?\b|vasos?\b|porciones?\b|unidades?\b'      # Medidas de volumen
         r'|rodajas?\b|rebanadas?\b|lascas?\b|tiras?\b'      # Formas de corte
-        r'|pizcas?\b|puñados?\b|ramitas?\b'                  # Cantidades imprecisas
+        r'|pizcas?\b|puñados?\b|ramitas?\b|ramas?\b'                  # Cantidades imprecisas
         r'|libras?\b|medias?\b|media\b'                      # Libras / fracciones
         r'|paquetes?\b|paqueticos?\b|fundas?\b|latas?\b|sobres?\b|sobrecitos?\b|chin\b|toques?\b|chorritos?\b|hojitas?\b' # Términos dominicanos y extremos
     r')?'

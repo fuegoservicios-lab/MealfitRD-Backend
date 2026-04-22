@@ -94,11 +94,22 @@ def purge_langgraph_checkpoint(session_id: str, keep_recent: int = KEEP_RECENT):
         
         print(f"🔄 [MEMORY MANAGER] Purgando {len(remove_messages)} mensajes del checkpoint de LangGraph...")
         
-        # Usar update_state para aplicar las eliminaciones
-        graph.update_state(config, {"messages": remove_messages})
+        # Snapshot de seguridad antes de modificar
+        pre_update_snapshot = graph.get_state(config)
         
-        print(f"✅ [MEMORY MANAGER] {len(remove_messages)} mensajes eliminados del checkpoint de LangGraph. State sincronizado.")
-        
+        try:
+            # Usar update_state para aplicar las eliminaciones
+            graph.update_state(config, {"messages": remove_messages})
+            print(f"✅ [MEMORY MANAGER] {len(remove_messages)} mensajes eliminados del checkpoint de LangGraph. State sincronizado.")
+        except Exception as update_err:
+            print(f"🚨 [MEMORY MANAGER] Fallo parcial en update_state: {update_err}. Restaurando snapshot...")
+            if pre_update_snapshot and hasattr(pre_update_snapshot, 'values'):
+                # Forzar la re-escritura del estado original
+                graph.update_state(config, pre_update_snapshot.values)
+                print("♻️ [MEMORY MANAGER] Snapshot restaurado tras fallo.")
+            # Propagar para que el except global lo capture
+            raise update_err
+            
     except Exception as e:
         # Nunca bloquear al usuario por un error de sincronización
         print(f"⚠️ [MEMORY MANAGER] Error no-crítico purgando checkpoint de LangGraph: {e}")

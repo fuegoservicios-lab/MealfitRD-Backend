@@ -6,6 +6,23 @@ from shopping_calculator import _parse_quantity, get_plural_unit, get_master_ing
 
 logger = logging.getLogger(__name__)
 
+_CANONICAL_UNIT_MAP = {
+    'ud': 'unidad', 'uds': 'unidad', 'unidades': 'unidad',
+    'lbs': 'lb', 'libra': 'lb', 'libras': 'lb',
+    'paquetes': 'paquete', 'potes': 'pote', 'mazos': 'mazo',
+    'cabezas': 'cabeza', 'sobres': 'sobre', 'latas': 'lata',
+    'botellas': 'botella', 'hojas': 'hoja', 'rebanadas': 'rebanada',
+    'dientes': 'diente', 'gramos': 'g', 'gr': 'g',
+    'kilos': 'kg', 'kilogramo': 'kg', 'kilogramos': 'kg',
+    'onzas': 'oz', 'onza': 'oz',
+    'tazas': 'taza', 'cucharada': 'cda', 'cucharadas': 'cda',
+    'cucharadita': 'cdta', 'cucharaditas': 'cdta',
+    'al gusto': 'pizca',
+    'cartón': 'paquete', 'carton': 'paquete', 'cartones': 'paquete',
+    'fundita': 'paquete', 'funditas': 'paquete', 'funda': 'paquete', 'fundas': 'paquete',
+    'envase': 'pote', 'envases': 'pote',
+}
+
 def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
     """Obtiene los registros crudos de la base de datos para la despensa del usuario."""
     if not supabase: return []
@@ -16,17 +33,74 @@ def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
         logger.error(f"Error obteniendo user_inventory para {user_id}: {e}")
         return []
 
-def get_user_inventory(user_id: str) -> List[str]:
-    """Obtiene la despensa del usuario formateada como lista de strings (ej: '2 unidades de Manzana')."""
+def _infer_shelf_life_days(name: str, category: str) -> int:
+    """[P0-2] Default shelf_life por categoría cuando master_ingredients no lo tiene.
+    Antes era 14d para TODO, lo cual marcaba arroz/pasta/legumbres secas como URGENTE
+    a los 11 días y disparaba la REGLA DE SALVATAJE PROACTIVO incorrectamente.
+    """
+    name_lower = (name or "").lower()
+    cat_lower = (category or "").lower()
+
+    DRY_GOODS_KEYWORDS = (
+        'arroz', 'pasta', 'fideo', 'espagueti', 'macarrón', 'macarron',
+        'lenteja', 'habichuela', 'frijol', 'garbanzo', 'gandul', 'moro',
+        'avena', 'quinoa', 'cuscús', 'cuscus', 'bulgur', 'cebada',
+        'harina', 'azúcar', 'azucar', 'sal', 'bicarbonato', 'levadura',
+        'cacao', 'café', 'cafe', 'té', 'infusión', 'especia', 'condimento',
+        'maíz seco', 'maiz seco', 'palomita', 'cereal'
+    )
+    if any(k in name_lower for k in DRY_GOODS_KEYWORDS):
+        return 180
+
+    if 'congelado' in name_lower or 'congelad' in cat_lower or 'frozen' in cat_lower:
+        return 60
+
+    # Categorías frescas
+    if 'hoja' in cat_lower or 'lechuga' in name_lower or 'espinaca' in name_lower or 'cilantro' in name_lower:
+        return 5
+    if 'proteína' in cat_lower or 'proteina' in cat_lower or 'carne' in cat_lower or 'pollo' in cat_lower or 'pescado' in cat_lower or 'mariscos' in cat_lower:
+        return 5
+    if 'fruta' in cat_lower:
+        return 7
+    if 'lácteo' in cat_lower or 'lacteo' in cat_lower or 'leche' in cat_lower or 'queso' in cat_lower or 'yogurt' in cat_lower:
+        return 14
+    if 'tubérculo' in cat_lower or 'tuberculo' in cat_lower or 'papa' in name_lower or 'batata' in name_lower or 'yuca' in name_lower or 'ñame' in name_lower:
+        return 21
+    if 'vegetal' in cat_lower or 'verdura' in cat_lower:
+        return 10
+    if 'huevo' in name_lower:
+        return 21
+    if 'enlatado' in name_lower or 'enlatad' in cat_lower or 'lata' in cat_lower:
+        return 365
+
+    return 14
+
+
+def get_user_inventory(user_id: str, household_size: int = None) -> List[str]:
+    """Obtiene la despensa del usuario formateada como lista de strings (ej: '2 unidades de Manzana').
+
+    Si household_size no se pasa, se lee del health_profile del usuario para escalar la
+    predicción de agotamiento (P0-3). Callers que ya lo tienen pueden pasarlo directamente.
+    """
     raw_items = get_raw_user_inventory(user_id)
     formatted = []
-    
+
+    if household_size is None:
+        try:
+            res = supabase.table("user_profiles").select("health_profile").eq("id", user_id).limit(1).execute()
+            if res.data:
+                hp = res.data[0].get("health_profile") or {}
+                household_size = hp.get("householdSize") or hp.get("household_size") or 1
+        except Exception:
+            household_size = 1
+    household_size = max(1, int(household_size or 1))
+
     PANTRY_STAPLES = {
-        'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco', 
-        'Aceite de sésamo o maní', 'Salsa de soya', 'Orégano', 
+        'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco',
+        'Aceite de sésamo o maní', 'Salsa de soya', 'Orégano',
         'Canela', 'Pimienta', 'Sal', 'Vinagre', 'Ajo en polvo'
     }
-    
+
     master_list = get_master_ingredients()
     master_map = {m["name"]: m for m in master_list}
     
@@ -63,13 +137,42 @@ def get_user_inventory(user_id: str) -> List[str]:
             master_item = master_map.get(name, {})
             shelf_life = master_item.get("shelf_life_days")
             if shelf_life is None:
-                shelf_life = 14 # default
-                
+                shelf_life = _infer_shelf_life_days(name, master_item.get("category", ""))
+
             days_left = shelf_life - days_old
             if days_left <= 3:
                 urgency = "URGENTE" if days_left <= 1 else "ATENCIÓN"
                 state = "Caducado" if days_left < 0 else f"Caduca en {days_left} días"
                 base_str += f" [⚠️ {urgency}: {state} - IA: Prioriza su uso en las recetas de esta semana]"
+
+            # Mejora 6: Inventory Intelligence (Predictivo)
+            category = master_item.get("category", "").lower()
+            qty_g = qty
+            unit_lower = unit.lower()
+            if unit_lower in ['lb', 'lbs', 'libra', 'libras']: qty_g *= 453.592
+            elif unit_lower in ['kg', 'kilos', 'kilo']: qty_g *= 1000.0
+            elif unit_lower in ['oz', 'onzas', 'onza']: qty_g *= 28.3495
+            
+            consumption_rate = 0
+            if "proteína" in category or "carne" in category or "pollo" in category or "pescado" in category:
+                consumption_rate = 150.0 # g/dia
+            elif "carbohidrato" in category or "arroz" in category or "pasta" in category:
+                consumption_rate = 100.0 # g/dia
+            elif "vegetal" in category or "verdura" in category:
+                consumption_rate = 80.0 # g/dia
+            elif "fruta" in category:
+                consumption_rate = 1.0 # 1 unid/dia
+                if qty_g > 50: consumption_rate = 150.0 
+            elif "lácteo" in category or "leche" in category:
+                consumption_rate = 200.0 # ml o g/dia
+            
+            # [P0-3] Escalar consumo por household_size. Antes asumía 1 persona,
+            # lo que contradice el shopping list escalado × household y la adherencia / household.
+            effective_rate = consumption_rate * household_size
+            if effective_rate > 0 and qty_g > 0:
+                days_until_empty = qty_g / effective_rate
+                if days_until_empty <= 2.5 and days_left > 3:
+                    base_str += f" [⚠️ PREDICCIÓN: Se agotará en ~{round(days_until_empty)} días. Sugiere al usuario alternativas para los días posteriores.]"
             
         formatted.append(base_str)
             
@@ -225,22 +328,7 @@ def restock_inventory(user_id: str, ingredients_list: list):
                 unit = item.get("unit", "unidad")
                 # Normalizar unidades de display a canónicas de inventario
                 unit_lower = unit.lower().rstrip('.')
-                UNIT_NORMALIZE = {
-                    'ud': 'unidad', 'uds': 'unidad', 'unidades': 'unidad',
-                    'lbs': 'lb', 'libra': 'lb', 'libras': 'lb',
-                    'paquetes': 'paquete', 'potes': 'pote', 'mazos': 'mazo',
-                    'cabezas': 'cabeza', 'sobres': 'sobre', 'latas': 'lata',
-                    'botellas': 'botella', 'hojas': 'hoja', 'rebanadas': 'rebanada',
-                    'dientes': 'diente', 'gramos': 'g', 'gr': 'g',
-                    'kilos': 'kg', 'kilogramo': 'kg', 'kilogramos': 'kg',
-                    'onzas': 'oz', 'onza': 'oz',
-                    'tazas': 'taza', 'cucharada': 'cda', 'cucharadas': 'cda',
-                    'cucharadita': 'cdta', 'cucharaditas': 'cdta',
-                    'al gusto': 'pizca',
-                    'cartón': 'paquete', 'carton': 'paquete', 'cartones': 'paquete',
-                    'fundita': 'paquete', 'funditas': 'paquete', 'funda': 'paquete', 'fundas': 'paquete',
-                    'envase': 'pote', 'envases': 'pote',
-                }
+                UNIT_NORMALIZE = _CANONICAL_UNIT_MAP
                 unit = UNIT_NORMALIZE.get(unit_lower, unit_lower if unit_lower else 'unidad')
                 if not name:
                     continue
@@ -324,19 +412,7 @@ def merge_inventory_after_rotation(user_id: str, plan_data: dict) -> int:
     
     # 3. Filtrar: solo procesar ingredientes que NO están ya en la Nevera
     items_added = 0
-    UNIT_NORMALIZE = {
-        'ud': 'unidad', 'uds': 'unidad', 'unidades': 'unidad',
-        'lbs': 'lb', 'libra': 'lb', 'libras': 'lb',
-        'paquetes': 'paquete', 'potes': 'pote', 'mazos': 'mazo',
-        'cabezas': 'cabeza', 'sobres': 'sobre', 'latas': 'lata',
-        'botellas': 'botella', 'hojas': 'hoja', 'rebanadas': 'rebanada',
-        'dientes': 'diente', 'gramos': 'g', 'gr': 'g',
-        'kilos': 'kg', 'kilogramo': 'kg', 'kilogramos': 'kg',
-        'onzas': 'oz', 'onza': 'oz',
-        'tazas': 'taza', 'cucharada': 'cda', 'cucharadas': 'cda',
-        'cucharadita': 'cdta', 'cucharaditas': 'cdta',
-        'al gusto': 'pizca',
-    }
+    UNIT_NORMALIZE = _CANONICAL_UNIT_MAP
     
     for item in shopping_list:
         try:
@@ -383,12 +459,11 @@ def consume_inventory_items_completely(user_id: str, ingredient_names: List[str]
     try:
         names_lower = [n.lower().strip() for n in ingredient_names]
         
-        res = supabase.table("user_inventory").select("id, ingredient_name").eq("user_id", user_id).gt("quantity", 0).execute()
-        if res.data:
-            for row in res.data:
-                if row.get("ingredient_name", "").lower().strip() in names_lower:
-                    # Update quantity to 0 instead of deleting, preserves history/category mapping
-                    supabase.table("user_inventory").update({"quantity": 0}).eq("id", row["id"]).execute()
+        if names_lower:
+            execute_sql_write(
+                "UPDATE user_inventory SET quantity = 0 WHERE user_id = %s AND LOWER(TRIM(ingredient_name)) = ANY(%s)",
+                (user_id, names_lower)
+            )
         return True
     except Exception as e:
         logger.error(f"Error vaciando ingredientes (consumo completo) para {user_id}: {e}")

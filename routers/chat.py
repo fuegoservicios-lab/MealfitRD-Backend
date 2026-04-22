@@ -327,7 +327,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
 
 
-@router.post("/")
+@router.post("")
 def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id", "default_session")

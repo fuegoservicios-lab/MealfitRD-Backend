@@ -104,7 +104,28 @@ Responde SOLO con el título, nada más."""
         return f"{short_name} — {calories} kcal"
 
 
-def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None) -> str:
+def _apply_recency_fatigue(freq_map, user_id):
+    """Ingredientes usados recientemente pesan más que los usados hace 2 semanas."""
+    if not freq_map or not user_id or user_id == "guest":
+        return freq_map
+        
+    try:
+        # Query: ingredientes de los últimos 3 días pesan x3, últimos 7 días pesan x1.5
+        recent_3d = get_user_ingredient_frequencies(user_id, days_limit=3)
+        recent_7d = get_user_ingredient_frequencies(user_id, days_limit=7)
+        
+        fatigued = {}
+        for ing, freq in freq_map.items():
+            recent_boost = recent_3d.get(ing, 0) * 3.0 + recent_7d.get(ing, 0) * 1.5
+            fatigued[ing] = freq + recent_boost
+            
+        return fatigued
+    except Exception as e:
+        logger.warning(f"⚠️ [FATIGUE] Error aplicando fatiga temporal: {e}")
+        return freq_map
+
+
+def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None, rejection_reasons: list = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
     logger.debug("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
     history_lower = history_text.lower() if history_text else ""
@@ -155,6 +176,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     if user_id and user_id != "guest":
         try:
             db_freq_map = get_user_ingredient_frequencies(user_id)
+            db_freq_map = _apply_recency_fatigue(db_freq_map, user_id)
         except Exception as e:
             logger.error(f"⚠️ [ANTI MODE-COLLAPSE] Error obteniendo frecuencias de DB: {e}")
             
@@ -548,6 +570,92 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         # Use a safe fallback for days_elapsed in case it wasn't defined perfectly
         d_elapsed = locals().get('days_elapsed', '?')
         blocked_text += f"\n\n🚨 [REGLA DE AHORRO EXTREMA]: El usuario está en el Día {d_elapsed} de su ciclo de compras de {grocery_days} días. TIENES LA OBLIGACIÓN ESTRICTA de basar todas las comidas en usar EXACTAMENTE las proteínas, carbohidratos y vegetales asignados explícitamente en el prompt. Usa diferentes preparaciones y técnicas de cocción para que no se aburra, pero NO SUGIERAS ALIMENTOS BASE NUEVOS."
+        
+    is_plan_expired = form_data.get("is_plan_expired", False) if form_data else False
+    if is_plan_expired:
+        blocked_text += "\n\n♻️ [NUEVO CICLO DE COMPRAS]: El plan anterior del usuario ha expirado. Este es un ciclo de compras completamente nuevo. TIENES PERMISO PARA SUGERIR NUEVOS INGREDIENTES BASE. Ignora las restricciones de ahorro extremo del ciclo anterior."    
+    if user_id and user_id != "guest":
+        try:
+            profile = get_user_profile(user_id)
+            if profile:
+                hp = profile.get("health_profile") or {}
+                persisted_rejections = hp.get("rejection_patterns", [])
+                if persisted_rejections:
+                    blocked_text += "\n\n🧠 [MEMORIA DEL REVISOR MÉDICO - EVITA ESTOS ERRORES HISTÓRICOS]:"
+                    for r in persisted_rejections[-5:]: # Solo los últimos 5 para no sobrecargar el prompt
+                        blocked_text += f"\n - {r}"
+        except Exception:
+            pass
+
+    # Inyectar razones de rechazo del intento anterior (Mutación de Retry - GAP 1)
+    if rejection_reasons:
+        blocked_text += "\n\n🚨 [REVISIÓN RECHAZADA] El Revisor Médico rechazó tu intento anterior por los siguientes motivos. MUTA TU ESTRATEGIA INMEDIATAMENTE Y EVITA:"
+        for reason in rejection_reasons:
+            blocked_text += f"\n - {reason}"
+            
+    update_reason = form_data.get("update_reason") if form_data else None
+    
+    # ======= [GAP 1] PERSISTENCIA DE SEÑALES DE APRENDIZAJE =======
+    # Guardamos los "dislikes" y "skips" como patrones de rechazo permanentes
+    if form_data and user_id and user_id != 'guest':
+        disliked_m = form_data.get("disliked_meals", [])
+        skipped_m = form_data.get("skipped_meals", [])
+        
+        # Si se genera con update_reason == 'dislike', también consideramos previous_meals como disliked
+        if update_reason == 'dislike':
+            prev_m = form_data.get("previous_meals", [])
+            if isinstance(prev_m, list):
+                # [P0 FIX GAP 2] Evitar Mode Collapse por baneo masivo.
+                # Solo persistimos las primeras 3 comidas (ej. el día actual) para aprender la señal
+                # sin agotar la base de ingredientes permitidos a largo plazo.
+                disliked_m.extend(prev_m[:3])
+                
+        meals_to_ban = set()
+        if isinstance(disliked_m, list): meals_to_ban.update(disliked_m)
+        if isinstance(skipped_m, list): meals_to_ban.update(skipped_m)
+        
+        if meals_to_ban:
+            try:
+                # Usar los métodos ya importados al inicio de ai_helpers.py
+                profile = get_user_profile(user_id)
+                if profile:
+                    hp = profile.get("health_profile") or {}
+                    if not isinstance(hp, dict): hp = {}
+                    
+                    rejected = hp.get("rejection_patterns", [])
+                    if not isinstance(rejected, list): rejected = []
+                    
+                    new_bans = []
+                    for m in meals_to_ban:
+                        if m and isinstance(m, str) and m not in rejected:
+                            new_bans.append(m)
+                            rejected.append(m)
+                    
+                    if new_bans:
+                        hp["rejection_patterns"] = rejected[-50:]  # Limitar para no saturar JSON
+                        update_user_health_profile(user_id, hp)
+                        logger.info(f"🧠 [GAP 1] Aprendizaje Continuo: Persistidos {len(new_bans)} platos en rejection_patterns por acciones 'dislike'/'skip'.")
+            except Exception as e:
+                logger.error(f"❌ [GAP 1] Error persistiendo señales de dislike/skip: {e}")
+    # ==============================================================
+
+    if update_reason == 'variety':
+        blocked_text += "\n\n💡 [INTENCIÓN DEL USUARIO]: El usuario solicitó explícitamente MAYOR VARIEDAD al actualizar el plan. Ofrece combinaciones creativas, diferentes técnicas de cocción y perfiles de sabor novedosos."
+    elif update_reason == 'dislike':
+        blocked_text += "\n\n🚨 [INTENCIÓN DEL USUARIO]: El usuario solicitó actualizar el plan porque NO LE GUSTARON las opciones generadas. EVITA los perfiles de sabor de los platos anteriores y cambia radicalmente la estrategia."
+    elif update_reason == 'time':
+        blocked_text += "\n\n⏱️ [INTENCIÓN DEL USUARIO]: El usuario NO TIENE TIEMPO HOY. Obligatorio: propón recetas extremadamente rápidas (menos de 20 min) y que requieran muy poca preparación."
+    elif update_reason == 'similar':
+        blocked_text += "\n\n🍽️ [INTENCIÓN DEL USUARIO]: El usuario ya comió algo similar recientemente. Ofrece un perfil de sabor o técnica de cocción COMPLETAMENTE DISTINTA a lo que normalmente sugiere."
+    elif update_reason == 'budget':
+        blocked_text += "\n\n💰 [INTENCIÓN DEL USUARIO]: El usuario busca opciones ECONÓMICAS. Prioriza ingredientes de muy bajo costo y alto rendimiento, evitando proteínas premium o ingredientes importados costosos."
+    elif update_reason == 'pantry_first':
+        if not cycle_locked:
+            blocked_text += "\n\n📦 [INTENCIÓN DEL USUARIO]: El usuario quiere MAXIMIZAR EL USO DE SU INVENTARIO. Las recetas deben depender exclusivamente de ingredientes base comunes de despensa sin requerir compras exóticas."
+    elif update_reason == 'cravings':
+        blocked_text += "\n\n🤤 [INTENCIÓN DEL USUARIO]: El usuario tiene un ANTOJO. Ofrece opciones más indulgentes, comfort food dominicano o versiones saludables de platos tipo cheat-meal, pero manteniendo los macros."
+    elif update_reason == 'weekend':
+        blocked_text += "\n\n🎉 [INTENCIÓN DEL USUARIO]: El usuario busca algo para un FIN DE SEMANA ESPECIAL. Propón platos más elaborados, con presentación premium, ideales para disfrutar con tiempo o en familia."
     
     # Construir parámetros de frutas para el prompt
     fruit_params = {}
@@ -610,5 +718,86 @@ def expand_recipe_agent(meal_data: dict) -> list[str]:
         return meal_data.get("recipe", [])
 
 
+def generate_llm_retrospective(user_id: str, plan_data: dict, consumed_records: list, recent_likes: list, recent_rejections: list) -> str:
+    """
+    [MEJORA 5] LLM-as-Judge Offline: Analiza la dieta planificada vs ejecutada y genera
+    lecciones aprendidas cualitativas sobre por qué el usuario tuvo éxito o fracasó.
+    """
+    logger.info(f"🧠 [LLM-as-Judge] Generando retrospectiva semanal para user: {user_id}")
+    
+    try:
+        # Simplificar datos para no ahogar la ventana de contexto
+        planned_meals = []
+        for day in plan_data.get("days", []):
+            for m in day.get("meals", []):
+                planned_meals.append(f"{m.get('meal')}: {m.get('name')}")
+                
+        consumed_meals = [cm.get("meal_name", "") for cm in consumed_records if cm.get("meal_name")]
+        liked_names = [l.get("meal_name", "") for l in recent_likes] if recent_likes else []
+        rejected_names = [r.get("meal_name", "") for r in recent_rejections] if recent_rejections else []
+        
+        prompt = f"""Eres el Juez Clínico Nutricional (LLM-as-Judge). 
+Tu trabajo es analizar el plan de comidas de la última semana de un usuario, qué comió realmente y qué rechazó o le gustó.
+A partir de estos datos, extrae EXACTAMENTE 3 lecciones cualitativas altamente accionables sobre su comportamiento.
 
+DATOS:
+- Comidas planificadas: {', '.join(planned_meals[:15])} (truncado a 15)
+- Comidas REALMENTE consumidas (adherencia): {', '.join(consumed_meals[:15])}
+- Comidas a las que dio "Me Gusta": {', '.join(liked_names)}
+- Comidas que rechazó explícitamente: {', '.join(rejected_names)}
 
+REGLAS DE SALIDA:
+- Escribe una lista de 3 puntos (bullet points).
+- Cada punto debe explicar POR QUÉ algo funcionó o falló.
+- Usa un tono clínico pero directo.
+- NO ofrezcas consejos futuros, SOLO hechos observados (ej: "El usuario respondió excelente a desayunos salados, pero rechazó todos los batidos dulces").
+"""
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-3.1-flash-lite-preview",
+            temperature=0.2,
+            google_api_key=os.environ.get("GEMINI_API_KEY")
+        )
+        response = llm.invoke(prompt)
+        content = response.content
+        if isinstance(content, list):
+            content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
+        
+        retrospective = str(content).strip()
+        logger.info(f"✅ [LLM-as-Judge] Retrospectiva generada: {retrospective[:100]}...")
+        return retrospective
+    except Exception as e:
+        logger.error(f"❌ [LLM-as-Judge] Error generando retrospectiva: {e}")
+        return ""
+
+def extract_liked_flavor_profiles(recent_likes: list) -> list[str]:
+    """Extrae características subyacentes (perfiles de sabor, ingredientes clave, técnicas) de los likes del usuario."""
+    if not recent_likes:
+        return []
+        
+    try:
+        from pydantic import BaseModel, Field
+        class FlavorProfiles(BaseModel):
+            profiles: list[str] = Field(description="Lista de 2-3 perfiles de sabor, ingredientes o técnicas que el usuario disfruta explícitamente.")
+            
+        liked_names = [l.get("meal_name", "") for l in recent_likes if l.get("meal_name")]
+        if not liked_names:
+            return []
+            
+        prompt = f"""Analiza los siguientes platos a los que el usuario dio "Me Gusta".
+Extrae 2 o 3 características subyacentes (ej: ingredientes clave, perfiles de sabor, tipo de preparación) que tengan en común o que definan sus gustos.
+Platos: {', '.join(liked_names)}
+Ejemplos de características: "Prefiere desayunos salados con plátano", "Le gustan los guisos tradicionales dominicanos con salsa", "Disfruta de proteínas a la plancha"
+"""
+        
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-3.1-flash-lite-preview",
+            temperature=0.2,
+            google_api_key=os.environ.get("GEMINI_API_KEY")
+        ).with_structured_output(FlavorProfiles)
+        
+        response = llm.invoke(prompt)
+        logger.info(f"❤️ [FEATURE EXTRACTION] Perfiles de sabor extraídos: {response.profiles}")
+        return response.profiles
+    except Exception as e:
+        logger.error(f"❌ [FEATURE EXTRACTION] Error extrayendo perfiles de sabor: {e}")
+        return []

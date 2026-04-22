@@ -1,0 +1,28 @@
+--- Line 504 ---
+            print(f"⏳ [PLANIFICADOR] Generando esqueleto del plan...")
+            res = planner_llm.invoke(prompt_text)
+            _circuit_breaker.record_success()
+--- Line 824 ---
+        try:
+            critique: CritiqueEvaluation = evaluator_llm.invoke(prompt)
+            _circuit_breaker.record_success()
+--- Line 881 ---
+                try:
+                    corrected_result: CorrectedDays = corrector_llm.invoke(correction_prompt)
+                    _circuit_breaker.record_success()
+--- Line 891 ---
+                    try:
+                        re_eval: CritiqueEvaluation = evaluator_llm.invoke(
+                            f"Re-evalúa este plan CORREGIDO (verifica que las correcciones no introdujeron problemas nuevos):\n{_compress_for_evaluation(corrected_days)}\n\nEvalúa los mismos 4 criterios. Si algún score sigue < 6, marca needs_correction=True y especifica por qué en suggestions."
+--- Line 1157 ---
+                raise Exception("Circuit Breaker OPEN")
+            batch_result = parser_llm.invoke(prompt)
+            _circuit_breaker.record_success()
+--- Line 1493 ---
+            try:
+                res = reviewer_llm.invoke(review_prompt)
+                _circuit_breaker.record_success()
+--- Line 1775 ---
+        try:
+            result = reflector_llm.invoke(prompt)
+            _circuit_breaker.record_success()

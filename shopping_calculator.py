@@ -975,9 +975,75 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if re.search(r'^cebollas?\s+(blanca|roja|morada|amarilla)', _can_lower):
             canonical_name = 'Cebolla'
 
+        # Consolidación: Espinaca/Espinacas → Espinacas
+        if re.search(r'^espinacas?$', _can_lower):
+            canonical_name = 'Espinacas'
+
+        # Consolidación: Zanahoria/Zanahorias → Zanahoria
+        if re.search(r'^zanahorias?$', _can_lower):
+            canonical_name = 'Zanahoria'
+
+        # Consolidación: Vainita/Vainitas → Vainitas
+        if re.search(r'^vainitas?$', _can_lower):
+            canonical_name = 'Vainitas'
+
+        # Consolidación: Habichuela variantes sin adjetivo (solo habichuela/habichuelas) → Habichuelas
+        if re.search(r'^habichuelas?$', _can_lower):
+            canonical_name = 'Habichuelas'
+
+        # Consolidación: Tofu variantes (ahumado, firme, suave) → Tofu
+        if re.search(r'^tofu\b', _can_lower):
+            canonical_name = 'Tofu'
+
+        # Consolidación: Perejil variantes → Perejil
+        if re.search(r'\bperejil\b', _can_lower):
+            canonical_name = 'Perejil'
+
         for u, q in units.items():
             canonical_aggregated[canonical_name][u] += q
-            
+
+    # ── Post-proceso: Fusionar variantes plural/singular que escaparon las reglas explícitas ──
+    # Cubre casos como "Brócoli"/"Brócolis", "Tomate"/"Tomates", etc.
+    # Estrategia: si existe tanto la forma sin 's' final como con 's', conservar la que
+    # esté en master_map; si ambas o ninguna está, conservar la plural.
+    _keys_snapshot = list(canonical_aggregated.keys())
+    for key in _keys_snapshot:
+        if key not in canonical_aggregated:
+            continue  # ya fue fusionada
+        k_lower = key.lower()
+        # Generar variante hermana (singular↔plural simple)
+        if k_lower.endswith('es') and len(k_lower) > 4:
+            sister = k_lower[:-2]
+        elif k_lower.endswith('s') and not k_lower.endswith('ss') and len(k_lower) > 3:
+            sister = k_lower[:-1]
+        else:
+            sister = k_lower + 's'
+
+        # Buscar la variante hermana en el dict (case-insensitive)
+        sister_key = next(
+            (k for k in canonical_aggregated if k.lower() == sister),
+            None
+        )
+        if not sister_key or sister_key == key:
+            continue
+
+        # Decidir cuál es el nombre canónico: preferir el que esté en master_map
+        in_master_key = bool(master_map.get(key) or master_map.get(key.lower()) or master_map.get(key.title()))
+        in_master_sister = bool(master_map.get(sister_key) or master_map.get(sister_key.lower()) or master_map.get(sister_key.title()))
+
+        if in_master_sister and not in_master_key:
+            target, source = sister_key, key
+        elif in_master_key and not in_master_sister:
+            target, source = key, sister_key
+        else:
+            # Ninguna o ambas en master: conservar la plural (más legible en RD)
+            target, source = (key, sister_key) if k_lower.endswith('s') else (sister_key, key)
+
+        for u, q in canonical_aggregated[source].items():
+            canonical_aggregated[target][u] += q
+        del canonical_aggregated[source]
+        logging.info(f"🔀 [PLURAL-MERGE] '{source}' → '{target}'")
+
     aggregated = canonical_aggregated
 
     for name, units in aggregated.items():
@@ -1328,7 +1394,11 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
                             try:
                                 item_date = datetime.strptime(created_at_str[:10], "%Y-%m-%d").date()
                                 days_old = (datetime.now().date() - item_date).days
-                                shelf_life = master_map.get(name, {}).get("shelf_life_days", 14)
+                                mi = master_map.get(name, {})
+                                shelf_life = mi.get("shelf_life_days")
+                                if shelf_life is None:
+                                    from db_inventory import _infer_shelf_life_days
+                                    shelf_life = _infer_shelf_life_days(name, mi.get("category", ""))
                                 if (shelf_life - days_old) < 0:
                                     is_expired = True
                             except Exception:

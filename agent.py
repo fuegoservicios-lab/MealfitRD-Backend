@@ -117,6 +117,24 @@ def swap_meal(form_data: dict):
         
     if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
     
+    swap_reason = form_data.get("swap_reason", "dislike")
+    
+    if swap_reason == 'variety':
+        context_extras += "\n    - 💡 INTENCIÓN: El usuario NO rechaza este plato, solo quiere VARIEDAD. Sugiere combinaciones creativas, diferentes técnicas de cocción o perfiles de sabor novedosos pero accesibles."
+    elif swap_reason == 'time':
+        context_extras += "\n    - ⏱️ INTENCIÓN: El usuario NO TIENE TIEMPO HOY. Propón una receta extremadamente rápida (< 20 min), preferiblemente sin cocción extensa o usando ingredientes fáciles de armar."
+    elif swap_reason == 'budget':
+        context_extras += "\n    - 💰 INTENCIÓN: El usuario busca opciones ECONÓMICAS. Prioriza ingredientes de muy bajo costo y alto rendimiento, evitando proteínas premium."
+    elif swap_reason == 'pantry_first':
+        context_extras += "\n    - 📦 INTENCIÓN: El usuario quiere MAXIMIZAR SU INVENTARIO. Limítate estrictamente a usar ingredientes base comunes de despensa. Cero compras nuevas o ingredientes exóticos."
+    elif swap_reason == 'cravings':
+        context_extras += "\n    - 🤤 INTENCIÓN: El usuario tiene un ANTOJO. Propón algo indulgente, comfort food o una versión saludable de comida rápida, pero manteniendo los macros."
+    elif swap_reason == 'weekend':
+        context_extras += "\n    - 🎉 INTENCIÓN: FIN DE SEMANA ESPECIAL. El usuario quiere un plato más elaborado, festivo o premium. Ideal para disfrutar con tiempo."
+    elif swap_reason == 'similar':
+        context_extras += "\n    - 🍽️ INTENCIÓN: El usuario YA COMIÓ ALGO SIMILAR. Ofrece un perfil de sabor o técnica de cocción COMPLETAMENTE DISTINTA a la opción rechazada."
+
+    
     # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES (ZERO-TRUST) ---
     clean_ingredients = []
     user_id = form_data.get("user_id")
@@ -740,8 +758,27 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         try:
             consumed_today = get_consumed_meals_today(user_id)
             if consumed_today:
+                total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
+                
+                target_calories = form_data.get("target_calories") if form_data else None
+                if not target_calories and current_plan:
+                    target_calories = current_plan.get("calories")
+                
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}."
+                
+                if target_calories:
+                    try:
+                        target_cal_int = int(target_calories)
+                        system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
+                        
+                        remaining = target_cal_int - total_consumed
+                        if remaining < (target_cal_int * 0.35) and remaining > 0:
+                            system_prompt += f"\n🚨 ALERTA DE MICRO-ADAPTACIÓN (MEJORA 6): Al usuario solo le quedan {remaining} kcal para el resto del día. TIENES LA OBLIGACIÓN PROACTIVA de hacerle notar este ajustado presupuesto con amabilidad de coach. Sugiérele usar tu herramienta 'modify_single_meal' para recalcular y reducir las porciones de sus próximas comidas de hoy para mantener su déficit."
+                        elif remaining <= 0:
+                            system_prompt += f"\n🚨 ALERTA CRÍTICA (MEJORA 6): El usuario ha superado su presupuesto calórico de hoy. Tiene un exceso de {abs(remaining)} kcal. Indícale esto con empatía y dale recomendaciones proactivas sobre cómo equilibrarse."
+                    except ValueError:
+                        pass
             else:
                 system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
         except Exception as e:
@@ -931,8 +968,27 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         try:
             consumed_today = get_consumed_meals_today(user_id, date_str=local_date, tz_offset_mins=tz_offset)
             if consumed_today:
+                total_consumed = sum(m.get('calories', 0) for m in consumed_today)
                 meals_text = ", ".join([f"{m.get('meal_name')} ({m.get('calories')} kcal)" for m in consumed_today])
+                
+                target_calories = form_data.get("target_calories") if form_data else None
+                if not target_calories and current_plan:
+                    target_calories = current_plan.get("calories")
+                
                 system_prompt += f"\n\nDIARIO DE HOY: El usuario ya ha registrado consumir hoy las siguientes comidas: {meals_text}. Revisa esto ANTES de preguntar si ya comió algo (por ejemplo, si ya tiene una cena registrada, no le preguntes si esa foto es su cena, asume que es un snack nocturno o pregúntale por qué repite). Si la foto o mensaje coincide con algo que ya está registrado, felicítalo o no lo registres de nuevo."
+                
+                if target_calories:
+                    try:
+                        target_cal_int = int(target_calories)
+                        system_prompt += f" Total consumido: {total_consumed} kcal de un presupuesto de {target_cal_int} kcal."
+                        
+                        remaining = target_cal_int - total_consumed
+                        if remaining < (target_cal_int * 0.35) and remaining > 0:
+                            system_prompt += f"\n🚨 ALERTA DE MICRO-ADAPTACIÓN (MEJORA 6): Al usuario solo le quedan {remaining} kcal para el resto del día. TIENES LA OBLIGACIÓN PROACTIVA de hacerle notar este ajustado presupuesto con amabilidad de coach. Sugiérele usar tu herramienta 'modify_single_meal' para recalcular y reducir las porciones de sus próximas comidas de hoy para mantener su déficit."
+                        elif remaining <= 0:
+                            system_prompt += f"\n🚨 ALERTA CRÍTICA (MEJORA 6): El usuario ha superado su presupuesto calórico de hoy. Tiene un exceso de {abs(remaining)} kcal. Indícale esto con empatía de coach y dale recomendaciones proactivas sobre cómo equilibrarse en la cena o mañana."
+                    except ValueError:
+                        pass
             else:
                 system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
         except Exception as e:

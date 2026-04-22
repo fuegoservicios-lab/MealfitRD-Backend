@@ -295,6 +295,16 @@ def delete_chat_session(session_id: str) -> Tuple[bool, str]:
 
 def save_message(session_id: str, role: str, content: str):
     if not supabase: return None
+    
+    if role == "user":
+        uid = get_session_owner(session_id)
+        if uid:
+            try:
+                from proactive_agent import handle_nudge_response
+                handle_nudge_response(uid, content)
+            except Exception as e:
+                logger.error(f"Error procesando respuesta al nudge en save_message: {e}")
+
     supabase.table("agent_messages").insert({
         "session_id": session_id,
         "role": role,

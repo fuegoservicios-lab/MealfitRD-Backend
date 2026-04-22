@@ -61,10 +61,52 @@ def get_user_profile(user_id: str):
         logger.error(f"Error obteniendo perfil: {e}")
         return None
 
+def _invalidate_stale_chunks(user_id: str, reason: str):
+    """Marca chunks pendientes como 'stale' para que el worker los re-genere con datos frescos."""
+    from db_core import execute_sql_write
+    result = execute_sql_write("""
+        UPDATE plan_chunk_queue 
+        SET status = 'stale', 
+            updated_at = NOW()
+        WHERE user_id = %s 
+        AND status = 'pending'
+        RETURNING id, week_number
+    """, (user_id,), returning=True)
+    
+    if result:
+        logger.info(f"♻️ [CHUNK INVALIDATION] {len(result)} chunks marcados como 'stale' para {user_id} (razón: {reason})")
+        return True
+    return False
+
 def update_user_health_profile(user_id: str, health_profile: dict):
     """Sobreescribe el JSONB de health_profile en la base de datos."""
     if not supabase: return None
     try:
+        # --- GAP 4: Chunk Invalidation Detector (Conservative) ---
+        try:
+            old_profile_data = get_user_profile(user_id)
+            if old_profile_data and old_profile_data.get('health_profile'):
+                old_hp = old_profile_data['health_profile']
+                
+                invalidation_reasons = []
+                if old_hp.get('goal') != health_profile.get('goal'):
+                    invalidation_reasons.append("goal_changed")
+                if old_hp.get('budget') != health_profile.get('budget'):
+                    invalidation_reasons.append("budget_changed")
+                if set(old_hp.get('allergies', [])) != set(health_profile.get('allergies', [])):
+                    invalidation_reasons.append("allergies_changed")
+                    
+                old_w = float(old_hp.get('weight', 0) or 0)
+                new_w = float(health_profile.get('weight', 0) or 0)
+                if old_w and new_w and abs(old_w - new_w) >= 5:
+                    invalidation_reasons.append("significant_weight_change")
+                    
+                if invalidation_reasons:
+                    _invalidate_stale_chunks(user_id, ", ".join(invalidation_reasons))
+        except Exception as check_e:
+            logger.warning(f"⚠️ [CHUNK INVALIDATION] Error checking for critical profile changes: {check_e}")
+        # ---------------------------------------------------------
+            
         res = supabase.table("user_profiles").update({
             "health_profile": health_profile
         }).eq("id", user_id).execute()
@@ -185,3 +227,30 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         logger.error(f"❌ Error migrando datos de invitado: {e}")
         return False
 
+def reset_user_account_preferences(user_id: str) -> bool:
+    """Borra preferencias, rechazos, inventario, planes históricos y limpia el health_profile para un verdadero inicio desde cero."""
+    if not supabase or not user_id or user_id == "guest": 
+        return False
+        
+    try:
+        from db_core import execute_sql_write
+        # 1. Borrar likes
+        execute_sql_write("DELETE FROM meal_likes WHERE user_id = %s", (user_id,))
+        # 2. Borrar rejections
+        execute_sql_write("DELETE FROM meal_rejections WHERE user_id = %s", (user_id,))
+        # 3. Borrar inventario
+        execute_sql_write("DELETE FROM user_inventory WHERE user_id = %s", (user_id,))
+        # 4. Borrar knowledge graph/facts (preferencias aprendidas)
+        execute_sql_write("DELETE FROM user_facts WHERE user_id = %s", (user_id,))
+        # 5. Borrar frecuencias de ingredientes (para que no rote basado en el pasado)
+        execute_sql_write("DELETE FROM ingredient_frequencies WHERE user_id = %s", (user_id,))
+        # 6. Borrar planes históricos (esto borra en cascada la plan_chunk_queue)
+        execute_sql_write("DELETE FROM meal_plans WHERE user_id = %s", (user_id,))
+        # 7. Limpiar health_profile en user_profiles (dejándolo vacío)
+        execute_sql_write("UPDATE user_profiles SET health_profile = '{}'::jsonb WHERE id = %s", (user_id,))
+        
+        logger.info(f"♻️ Preferencias y planes reseteados DESDE CERO con éxito para UUID {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Error reseteando preferencias para {user_id}: {e}")
+        return False

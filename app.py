@@ -32,7 +32,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from db import (
-    connection_pool, supabase,
+    connection_pool, async_connection_pool, supabase,
     get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes,
     insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile,
     update_user_health_profile, get_all_user_facts, delete_user_fact,
@@ -69,6 +69,10 @@ async def lifespan(app: FastAPI):
     
     if connection_pool:
         connection_pool.open()
+    if async_connection_pool:
+        await async_connection_pool.open()
+        
+    if connection_pool:
         try:
             import psycopg
             db_uri = os.environ.get("SUPABASE_DB_URL")
@@ -92,9 +96,145 @@ async def lifespan(app: FastAPI):
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
                     status VARCHAR(50) DEFAULT 'pending',
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+                """)
+                
+                # Asegurar que exista la columna updated_at para tablas antiguas
+                conn.execute("""
+                ALTER TABLE nightly_rotation_queue
+                ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+                """)
+
+                # Cola para generación de chunks en background (Background Chunking Just-in-Time)
+                conn.execute("""
+                CREATE TABLE IF NOT EXISTS plan_chunk_queue (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
+                    meal_plan_id UUID NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
+                    week_number INT NOT NULL,
+                    days_offset INT NOT NULL,
+                    days_count INT NOT NULL DEFAULT 3,
+                    pipeline_snapshot JSONB NOT NULL,
+                    status VARCHAR(50) DEFAULT 'pending',
+                    attempts INT DEFAULT 0,
+                    execute_after TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+                """)
+
+                # Migración on-the-fly para la columna execute_after (tablas pre-existentes)
+                conn.execute("""
+                ALTER TABLE plan_chunk_queue
+                ADD COLUMN IF NOT EXISTS execute_after TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+                """)
+
+                # Backfill: filas insertadas antes de la migración tienen execute_after=NULL
+                # y nunca serían procesadas por `execute_after <= NOW()`. Las marcamos como listas.
+                conn.execute("""
+                UPDATE plan_chunk_queue
+                SET execute_after = NOW()
+                WHERE execute_after IS NULL AND status = 'pending';
+                """)
+
+                # [GAP A] Métricas de SLA: tier de calidad y lag al hacer pickup
+                conn.execute("""
+                ALTER TABLE plan_chunk_queue
+                ADD COLUMN IF NOT EXISTS quality_tier VARCHAR(20),
+                ADD COLUMN IF NOT EXISTS lag_seconds_at_pickup INT,
+                ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;
+                """)
+
+                # [GAP F] Métricas de aprendizaje inter-chunk (JSON estructurado)
+                conn.execute("""
+                ALTER TABLE plan_chunk_queue
+                ADD COLUMN IF NOT EXISTS learning_metrics JSONB;
+                """)
+
+                # [GAP E] Dedup previo de chunks duplicados (meal_plan_id, week_number) antes del UNIQUE
+                # Si hay duplicados históricos, conservamos el más reciente (updated_at DESC) y cancelamos
+                # los demás. Sin esto, el CREATE UNIQUE INDEX fallaría en tablas pre-existentes.
+                try:
+                    conn.execute("""
+                        UPDATE plan_chunk_queue
+                        SET status = 'cancelled', updated_at = NOW()
+                        WHERE id IN (
+                            SELECT id FROM (
+                                SELECT id,
+                                       ROW_NUMBER() OVER (
+                                           PARTITION BY meal_plan_id, week_number
+                                           ORDER BY updated_at DESC, created_at DESC
+                                       ) AS rn
+                                FROM plan_chunk_queue
+                                WHERE status IN ('pending', 'processing', 'stale')
+                            ) t
+                            WHERE t.rn > 1
+                        );
+                    """)
+                except Exception as _dedup_e:
+                    logger.warning(f"[GAP E] No se pudo dedupar chunks previos: {_dedup_e}")
+
+                # [GAP E] UNIQUE parcial: idempotencia a nivel DB. Solo aplica a chunks vivos.
+                # chunks 'completed' y 'cancelled' pueden tener duplicados históricos (archivos).
+                conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_plan_chunk_queue_live_week
+                ON plan_chunk_queue (meal_plan_id, week_number)
+                WHERE status IN ('pending', 'processing', 'stale', 'failed');
+                """)
+
+                # [GAP G] Tabla de métricas históricas del pipeline de chunks
+                conn.execute("""
+                CREATE TABLE IF NOT EXISTS plan_chunk_metrics (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    chunk_id UUID,
+                    meal_plan_id UUID,
+                    user_id UUID,
+                    week_number INT,
+                    days_count INT,
+                    duration_ms INT,
+                    quality_tier VARCHAR(20),
+                    was_degraded BOOLEAN DEFAULT FALSE,
+                    retries INT DEFAULT 0,
+                    lag_seconds INT,
+                    learning_repeat_pct NUMERIC(5,2),
+                    rejection_violations INT DEFAULT 0,
+                    allergy_violations INT DEFAULT 0,
+                    error_message TEXT,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 );
                 """)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plan_chunk_metrics_recent
+                ON plan_chunk_metrics (created_at DESC);
+                """)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plan_chunk_metrics_plan
+                ON plan_chunk_metrics (meal_plan_id);
+                """)
+
+                # Índice parcial: acelera el polling del worker (status='pending' ordenado por execute_after)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plan_chunk_queue_pending
+                ON plan_chunk_queue (execute_after, created_at)
+                WHERE status = 'pending';
+                """)
+
+                # Índice para el rescate de zombies (status='processing' con updated_at antiguo)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plan_chunk_queue_processing
+                ON plan_chunk_queue (updated_at)
+                WHERE status = 'processing';
+                """)
+
+                # [GAP A] Índice para detección rápida de chunks atrasados (stuck)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_plan_chunk_queue_stuck
+                ON plan_chunk_queue (execute_after)
+                WHERE status IN ('pending', 'stale');
+                """)
+                
                 
             logger.info("🚀 [Postgres] Tablas de LangGraph Checkpointer y Push Subscriptions verificadas/creadas.")
         except Exception as e:
@@ -102,11 +242,20 @@ async def lifespan(app: FastAPI):
             
     if HAS_SCHEDULER and scheduler:
         scheduler.add_job(run_proactive_checks, "cron", minute=30)
-        from cron_tasks import run_nightly_auto_rotation, process_rotation_queue
+        from cron_tasks import run_nightly_auto_rotation, process_rotation_queue, process_plan_chunk_queue
         scheduler.add_job(run_nightly_auto_rotation, "cron", hour=2, minute=0)
         scheduler.add_job(process_rotation_queue, "interval", minutes=5)
+        # max_instances=1 evita solapes si un tick tarda >1 min (ej. por LLM lento).
+        # coalesce=True: si se acumulan ticks durante un downtime, solo ejecuta uno al reanudar.
+        scheduler.add_job(
+            process_plan_chunk_queue,
+            "interval",
+            minutes=1,
+            max_instances=1,
+            coalesce=True,
+        )
         scheduler.start()
-        logger.info("⏰ [APScheduler] Tareas proactivas y CRON jobs nocturnos iniciados.")
+        logger.info("⏰ [APScheduler] Tareas proactivas, CRON jobs nocturnos y Background Chunking iniciados.")
             
     logger.info("🚀 [FastAPI] Servidor de MealfitRD IA iniciado con éxito en el puerto 3001.")
     yield
@@ -117,6 +266,9 @@ async def lifespan(app: FastAPI):
     if connection_pool:
         connection_pool.close()
         logger.info("🔌 [psycopg] Pool de conexiones cerrado.")
+    if async_connection_pool:
+        await async_connection_pool.close()
+        logger.info("🔌 [psycopg] Pool de conexiones asíncronas cerrado.")
 
 
 # Asegurarnos de que el directorio de uploads exista antes de montar recursos estáticos
@@ -139,7 +291,8 @@ from routers.chat import router as chat_router
 app.include_router(chat_router)
 from routers.diary import router as diary_router
 app.include_router(diary_router)
-
+from routers.system import router as system_router
+app.include_router(system_router)
 
 @app.get("/")
 @app.get("/health")
@@ -184,13 +337,12 @@ def api_test_proactive(background_tasks: BackgroundTasks):
 
 @app.post("/api/cron/nightly-rotation")
 def api_trigger_nightly_rotation(
-    background_tasks: BackgroundTasks,
     authorization: Optional[str] = Header(None)
 ):
     """
     Trigger seguro para Vercel Cron. Dispara la rotación de planes.
     Requiere Bearer token que coincida con CRON_SECRET en el entorno.
-    Se envía a BackgroundTasks para que no bloquee el request de Cron (timeout).
+    Se ejecuta de forma síncrona para evitar que Vercel mate el proceso background.
     """
     # Validar Bearer token contra CRON_SECRET (Vercel lo inyecta automáticamente)
     cron_secret = os.environ.get("CRON_SECRET")
@@ -204,16 +356,16 @@ def api_trigger_nightly_rotation(
         logging.warning("⚠️ CRON_SECRET not set — cron endpoint is unprotected (dev mode)")
     
     from cron_tasks import run_nightly_auto_rotation
-    background_tasks.add_task(run_nightly_auto_rotation)
-    return {"status": "started", "message": "Nightly rotation queued in background"}
+    run_nightly_auto_rotation()
+    return {"status": "completed", "message": "Nightly rotation queued synchronously"}
 
 @app.post("/api/cron/process-rotation-queue")
 def api_trigger_process_rotation_queue(
-    background_tasks: BackgroundTasks,
     authorization: Optional[str] = Header(None)
 ):
     """
     Trigger para procesar usuarios encolados (para Vercel Cron cada 5 mins).
+    Ejecución síncrona para Vercel Serverless.
     """
     cron_secret = os.environ.get("CRON_SECRET")
     if cron_secret:
@@ -224,8 +376,8 @@ def api_trigger_process_rotation_queue(
             raise HTTPException(status_code=403, detail="Invalid cron token")
             
     from cron_tasks import process_rotation_queue
-    background_tasks.add_task(process_rotation_queue)
-    return {"status": "started", "message": "Queue processor triggered in background"}
+    process_rotation_queue()
+    return {"status": "completed", "message": "Queue processor finished synchronously"}
 
 from auth import get_verified_user_id, verify_api_quota
 from rate_limiter import RateLimiter
@@ -303,6 +455,26 @@ def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/user-facts DELETE: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/account/reset-preferences")
+def api_reset_user_preferences(verified_user_id: str = Depends(get_verified_user_id)):
+    """Borra preferencias (likes, dislikes), inventario y vacía el health_profile."""
+    try:
+        if not verified_user_id:
+            raise HTTPException(status_code=401, detail="Token de autenticación requerido.")
+            
+        from db_profiles import reset_user_account_preferences
+        success = reset_user_account_preferences(verified_user_id)
+        
+        if success:
+            return {"success": True, "message": "Preferencias de la cuenta restablecidas."}
+        else:
+            raise HTTPException(status_code=500, detail="Error al restablecer las preferencias.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /api/account/reset-preferences: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/webhooks/process-pending-facts")
