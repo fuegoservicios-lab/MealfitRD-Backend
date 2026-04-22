@@ -28,6 +28,7 @@ else:
 
 # Configuración del ConnectionPool para psycopg (Usado por LangGraph PostgresSaver)
 connection_pool = None
+async_connection_pool = None  # Siempre declarado a nivel de módulo para garantizar importabilidad
 if SUPABASE_DB_URL:
     try:
         from psycopg_pool import ConnectionPool, AsyncConnectionPool
