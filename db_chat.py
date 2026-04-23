@@ -472,28 +472,20 @@ def insert_rejection(rejection_data: dict):
 
 def get_active_rejections(user_id: str = None, session_id: str = None):
     """
-    Obtiene los rechazos activos (últimos 7 días).
-    Después de 7 días, el rechazo expira y la IA puede volver a sugerir esa comida.
+    Obtiene todos los rechazos permanentes del usuario.
+    Una vez que el usuario rechaza un plato, nunca vuelve a sugerirse.
     """
     if not supabase: return []
-    from datetime import datetime, timedelta, timezone
-    
-    # Calcular la fecha límite (hace 7 días)
-    one_week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-    
+
     query = supabase.table("meal_rejections").select("meal_name, meal_type, rejected_at")
-    
-    # Filtrar por user_id o session_id
+
     if user_id:
         query = query.eq("user_id", user_id)
     elif session_id:
         query = query.eq("session_id", session_id)
     else:
         return []
-    
-    # Solo rechazos de los últimos 7 días
-    query = query.gte("rejected_at", one_week_ago)
-    
+
     res = query.order("rejected_at", desc=True).execute()
     return res.data
 
