@@ -7,6 +7,7 @@ import random
 from db_core import execute_sql_query, execute_sql_write
 from db_inventory import (
     deduct_consumed_meal_from_inventory,
+    get_inventory_activity_since,
     get_raw_user_inventory,
     get_user_inventory,
     reserve_plan_ingredients,
@@ -29,6 +30,11 @@ from constants import (
     CHUNK_PANTRY_EMPTY_MAX_REMINDERS,
     CHUNK_PANTRY_EMPTY_REMINDER_HOURS,
     CHUNK_PANTRY_EMPTY_TTL_HOURS,
+    CHUNK_PANTRY_PROACTIVE_REFRESH_HORIZON_HOURS,
+    CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS,
+    CHUNK_PANTRY_PROACTIVE_REFRESH_MINUTES,
+    CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS,
+    CHUNK_PANTRY_QUANTITY_MODE,
     CHUNK_PANTRY_SNAPSHOT_TTL_HOURS,
     CHUNK_RETRY_BASE_MINUTES,
     CHUNK_RETRY_CRITICAL_MINUTES,
@@ -49,27 +55,126 @@ def register_plan_chunk_scheduler(scheduler) -> None:
     if not scheduler:
         return
 
-    existing_job = None
-    try:
-        existing_job = scheduler.get_job("process_plan_chunk_queue")
-    except Exception:
-        existing_job = None
+    if not scheduler.get_job("process_plan_chunk_queue"):
+        scheduler.add_job(
+            process_plan_chunk_queue,
+            "interval",
+            minutes=CHUNK_SCHEDULER_INTERVAL_MINUTES,
+            id="process_plan_chunk_queue",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [CHUNK SCHEDULER] Worker plan_chunk_queue registrado cada "
+            f"{CHUNK_SCHEDULER_INTERVAL_MINUTES} min."
+        )
 
-    if existing_job:
+    # [P0-C] Job separado: refresh proactivo de snapshots de despensa en chunks pending/stale
+    # cuyo _pantry_captured_at supera la mitad del TTL. Evita que el worker llegue al
+    # execute_after con un snapshot vencido si su live fetch puntual falla.
+    if not scheduler.get_job("proactive_refresh_pantry_snapshots"):
+        scheduler.add_job(
+            _proactive_refresh_pending_pantry_snapshots,
+            "interval",
+            minutes=CHUNK_PANTRY_PROACTIVE_REFRESH_MINUTES,
+            id="proactive_refresh_pantry_snapshots",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P0-C] Refresh proactivo de despensa registrado cada "
+            f"{CHUNK_PANTRY_PROACTIVE_REFRESH_MINUTES} min "
+            f"(horizonte={CHUNK_PANTRY_PROACTIVE_REFRESH_HORIZON_HOURS}h, "
+            f"max_users={CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS})."
+        )
+
+
+def _proactive_refresh_pending_pantry_snapshots() -> None:
+    """[P0-C] Refresca snapshots de inventario en chunks pending/stale antes de su execute_after.
+
+    Solo targetea chunks cuyo _pantry_captured_at supera la mitad del TTL y que ejecutan
+    dentro del horizonte (default 48h). Reusa _persist_fresh_pantry_to_chunks que ya
+    propaga el live a todos los siblings vivos del mismo plan.
+    """
+    refresh_threshold_hours = CHUNK_PANTRY_SNAPSHOT_TTL_HOURS / 2.0
+    horizon_hours = CHUNK_PANTRY_PROACTIVE_REFRESH_HORIZON_HOURS
+    max_users = CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS
+
+    try:
+        # Una fila por (user_id, meal_plan_id) con el chunk más urgente como ancla.
+        # Filtramos por edad del snapshot dentro de SQL para no traer chunks ya frescos.
+        candidates = execute_sql_query(
+            """
+            SELECT DISTINCT ON (user_id, meal_plan_id)
+                id AS task_id,
+                user_id::text AS user_id,
+                meal_plan_id::text AS meal_plan_id,
+                week_number,
+                COALESCE(
+                    (pipeline_snapshot->'form_data'->>'_pantry_captured_at')::timestamptz,
+                    created_at
+                ) AS captured_at
+            FROM plan_chunk_queue
+            WHERE status IN ('pending', 'stale')
+              AND execute_after <= NOW() + make_interval(hours => %s)
+              AND COALESCE(
+                  (pipeline_snapshot->'form_data'->>'_pantry_captured_at')::timestamptz,
+                  created_at
+              ) < NOW() - make_interval(mins => %s)
+            ORDER BY user_id, meal_plan_id, execute_after ASC
+            LIMIT %s
+            """,
+            (horizon_hours, int(refresh_threshold_hours * 60), max_users * 4),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P0-C/PROACTIVE] Error consultando candidatos: {e}")
         return
 
-    scheduler.add_job(
-        process_plan_chunk_queue,
-        "interval",
-        minutes=CHUNK_SCHEDULER_INTERVAL_MINUTES,
-        id="process_plan_chunk_queue",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
+    if not candidates:
+        return
+
+    # Agrupar por user_id (una sola lectura live por usuario, sirve para todos sus planes).
+    by_user: dict[str, list[dict]] = {}
+    for row in candidates:
+        by_user.setdefault(row["user_id"], []).append(row)
+        if len(by_user) >= max_users:
+            break
+
+    refreshed_users = 0
+    refreshed_plans = 0
+    failed_users = 0
+
+    for user_id, rows in by_user.items():
+        try:
+            live_inventory = get_user_inventory(user_id)
+        except Exception as e:
+            failed_users += 1
+            logger.debug(f"[P0-C/PROACTIVE] Live fetch falló para {user_id}: {e}")
+            continue
+
+        if live_inventory is None:
+            failed_users += 1
+            continue
+
+        refreshed_users += 1
+        for row in rows:
+            try:
+                _persist_fresh_pantry_to_chunks(
+                    row["task_id"], row["meal_plan_id"], list(live_inventory)
+                )
+                refreshed_plans += 1
+            except Exception as e:
+                logger.debug(
+                    f"[P0-C/PROACTIVE] No se pudo propagar a plan {row['meal_plan_id']}: {e}"
+                )
+
     logger.info(
-        f"⏰ [CHUNK SCHEDULER] Worker plan_chunk_queue registrado cada "
-        f"{CHUNK_SCHEDULER_INTERVAL_MINUTES} min."
+        f"[P0-C/PROACTIVE] Refresh ejecutado: users_ok={refreshed_users} "
+        f"users_failed={failed_users} plans_propagated={refreshed_plans} "
+        f"(threshold={refresh_threshold_hours:.1f}h, horizon={horizon_hours}h)."
     )
 
 
@@ -234,6 +339,133 @@ def _count_meaningful_pantry_items(pantry_ingredients: list) -> int:
             normalized_items.add(normalized)
 
     return len(normalized_items)
+
+
+def _persist_fresh_pantry_to_chunks(
+    task_id: str | int,
+    meal_plan_id: str,
+    fresh_inventory: list,
+) -> None:
+    """[P0-3] Propaga el inventario live recién leído al snapshot del chunk actual y de sus siblings.
+
+    Sin esto, los siblings pending/stale conservan el snapshot capturado al crear el plan;
+    si su live fetch falla, caen al fallback con datos de hace días. Aquí refrescamos esos
+    snapshots para que el fallback sea, como mucho, tan viejo como el último chunk procesado
+    con éxito y no la fecha de creación del plan.
+    """
+    if fresh_inventory is None:
+        return
+    captured_at = datetime.now(timezone.utc).isoformat()
+    pantry_json = json.dumps(list(fresh_inventory), ensure_ascii=False)
+    try:
+        # Chunk actual: garantizado existir y estar en processing.
+        execute_sql_write(
+            """
+            UPDATE plan_chunk_queue
+            SET pipeline_snapshot = jsonb_set(
+                    jsonb_set(
+                        pipeline_snapshot,
+                        '{form_data,current_pantry_ingredients}',
+                        %s::jsonb,
+                        true
+                    ),
+                    '{form_data,_pantry_captured_at}',
+                    to_jsonb(%s::text),
+                    true
+                )
+            WHERE id = %s
+            """,
+            (pantry_json, captured_at, task_id),
+        )
+        # Siblings vivos del mismo plan: pending y stale (no cancelled, completed, processing).
+        execute_sql_write(
+            """
+            UPDATE plan_chunk_queue
+            SET pipeline_snapshot = jsonb_set(
+                    jsonb_set(
+                        pipeline_snapshot,
+                        '{form_data,current_pantry_ingredients}',
+                        %s::jsonb,
+                        true
+                    ),
+                    '{form_data,_pantry_captured_at}',
+                    to_jsonb(%s::text),
+                    true
+                ),
+                updated_at = updated_at
+            WHERE meal_plan_id = %s
+              AND id <> %s
+              AND status IN ('pending', 'stale')
+            """,
+            (pantry_json, captured_at, str(meal_plan_id), task_id),
+        )
+        logger.info(
+            f"[P0-3/PANTRY-PROP] Snapshot de inventario propagado a chunk {task_id} y siblings "
+            f"del plan {meal_plan_id} ({len(fresh_inventory)} items, captured_at={captured_at})."
+        )
+    except Exception as prop_err:
+        # Best-effort: si el UPDATE falla, el chunk actual igual usa el live en memoria.
+        logger.warning(
+            f"[P0-3/PANTRY-PROP] No se pudo propagar inventario fresco al snapshot "
+            f"(plan {meal_plan_id}, chunk {task_id}): {prop_err}"
+        )
+
+
+def _pause_chunk_for_stale_inventory(
+    task_id: str | int,
+    user_id: str,
+    week_number: int,
+    snapshot_age_hours: float | None,
+) -> None:
+    """[P0-3] Pausa el chunk cuando el inventario en vivo no se pudo leer y el snapshot está vencido.
+
+    Antes esto se aceptaba silenciosamente y se generaba contra datos viejos, rompiendo
+    la promesa "los platos solo usan lo que hay en la nevera". Ahora congelamos el chunk
+    hasta que el usuario refresque su nevera (mismo mecanismo de TTL/recordatorio que
+    usa _pause_chunk_for_pantry_refresh, con un motivo distinto para telemetría).
+    """
+    pause_snapshot = execute_sql_query(
+        "SELECT pipeline_snapshot FROM plan_chunk_queue WHERE id = %s",
+        (task_id,),
+        fetch_one=True,
+    )
+    pause_snapshot = copy.deepcopy((pause_snapshot or {}).get("pipeline_snapshot") or {})
+    if isinstance(pause_snapshot, str):
+        pause_snapshot = json.loads(pause_snapshot)
+
+    pause_snapshot.setdefault("_pantry_pause_started_at", datetime.now(timezone.utc).isoformat())
+    pause_snapshot.setdefault("_pantry_pause_reminders", 0)
+    pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_PANTRY_EMPTY_TTL_HOURS
+    pause_snapshot["_pantry_pause_reminder_hours"] = CHUNK_PANTRY_EMPTY_REMINDER_HOURS
+    pause_snapshot["_pantry_pause_reason"] = "stale_snapshot"
+    if snapshot_age_hours is not None:
+        pause_snapshot["_pantry_snapshot_age_hours"] = round(snapshot_age_hours, 1)
+
+    execute_sql_write(
+        """
+        UPDATE plan_chunk_queue
+        SET status = 'pending_user_action',
+            pipeline_snapshot = %s::jsonb,
+            updated_at = NOW()
+        WHERE id = %s
+        """,
+        (json.dumps(pause_snapshot, ensure_ascii=False), task_id),
+    )
+    age_str = f" (snapshot {snapshot_age_hours:.1f}h)" if snapshot_age_hours is not None else ""
+    logger.warning(
+        f"[P0-3/STALE-PANTRY] Chunk {week_number} pausado para {user_id}: inventario live inaccesible "
+        f"y snapshot vencido{age_str}. Esperando refresco manual de nevera."
+    )
+
+    _dispatch_push_notification(
+        user_id=user_id,
+        title="Refresca tu nevera para continuar",
+        body=(
+            "No pudimos verificar tu inventario para generar el siguiente bloque del plan. "
+            "Abre 'Mi Nevera', confirma lo que tienes y reintentaremos en automático."
+        ),
+        url="/dashboard",
+    )
 
 
 def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list):
@@ -2189,7 +2421,53 @@ def _enqueue_plan_chunk(
         (str(meal_plan_id), week_number), fetch_one=True
     )
     if failed_existing:
-        logger.warning(f"⚠️ [GAP E] Refill re-encolado sobre chunk failed (id={failed_existing['id']}) para plan {meal_plan_id} week {week_number} (fallback)")
+        # [P0-3 FIX] Antes solo logeaba warning y caía al INSERT con ON CONFLICT DO NOTHING,
+        # dejando el chunk failed sin reintento (huecos permanentes en planes 15/30d).
+        # Replicamos el UPDATE explícito del primer path para reactivar el chunk con snapshot
+        # fresco, attempts=0 y delay recalculado para retry.
+        retry_delay_days, _, _, _ = _compute_chunk_delay_days(
+            days_offset_int,
+            days_count_int,
+            week_number,
+            pipeline_snapshot or {},
+            for_failed_retry=True,
+        )
+        retry_preemption_seconds = _compute_expected_preemption_seconds(days_offset_int, retry_delay_days)
+        logger.warning(
+            f"⚠️ [P0-3] Re-encolando chunk failed (id={failed_existing['id']}) "
+            f"para plan {meal_plan_id} week {week_number} en modo {chunk_mode} "
+            f"(fallback, delay={retry_delay_days}d)"
+        )
+        execute_sql_write(
+            """
+            UPDATE plan_chunk_queue
+            SET status = 'pending',
+                attempts = 0,
+                chunk_kind = %s,
+                pipeline_snapshot = %s::jsonb,
+                execute_after = NOW() + make_interval(days => %s),
+                expected_preemption_seconds = %s,
+                updated_at = NOW(),
+                days_offset = %s,
+                days_count = %s
+            WHERE id = %s
+            """,
+            (
+                normalized_chunk_kind,
+                json.dumps(pipeline_snapshot, ensure_ascii=False),
+                retry_delay_days,
+                retry_preemption_seconds,
+                days_offset_int,
+                days_count_int,
+                failed_existing['id'],
+            )
+        )
+        logger.info(
+            f" [CHUNK] Chunk {week_number} reactivado para plan {meal_plan_id} "
+            f"(días {days_offset_int+1}–{days_offset_int+days_count_int}, kind={normalized_chunk_kind}, mode={chunk_mode}) "
+            f"con delay de {retry_delay_days} días"
+        )
+        return
 
     execute_sql_write(
         """
@@ -2532,7 +2810,12 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
         and explicit_logged > 0
         and explicit_logged < max(2, planned_total * _SPARSE_LOGGING_THRESHOLD)
     )
-    use_implicit_proxy = planned_total > 0 and (explicit_logged == 0 or sparse_logging)
+    # [P0-1] Distinguir zero-log de sparse-log. Antes ambos colapsaban en used_implicit_proxy
+    # con ratio=1.0; eso permitía que un chunk generara sin NINGUNA señal real de adherencia
+    # (el caso más frágil del aprendizaje continuo). Ahora exponemos zero_log_proxy aparte
+    # para que el caller pueda pausar / forzar variedad / notificar de forma diferenciada.
+    zero_log_proxy = planned_total > 0 and explicit_logged == 0
+    use_implicit_proxy = zero_log_proxy or sparse_logging
     matched = planned_total if use_implicit_proxy else explicit_matched
     ratio = matched / planned_total if planned_total else 1.0
 
@@ -2544,6 +2827,7 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
         "explicit_logged_meals": explicit_logged,
         "used_implicit_proxy": use_implicit_proxy,
         "sparse_logging_proxy": sparse_logging,
+        "zero_log_proxy": zero_log_proxy,
     }
 
 
@@ -2635,8 +2919,31 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     ratio_info = _calculate_chunk_consumption_ratio(previous_chunk_days, consumed_records)
     ratio = ratio_info["ratio"]
 
+    # [P0-1] zero_log_proxy=True significa que NO hubo logs reales del chunk previo.
+    # El gate "técnicamente" pasa con ratio=1.0 por el proxy, pero no hay señal de aprendizaje.
+    # Marcamos ready=False en este caso aunque el ratio sea 1.0, para que el worker pueda
+    # decidir entre deferral/pausa/forzado con criterio explícito.
+    is_zero_log = ratio_info.get("zero_log_proxy", False)
+    ratio_ready = ratio >= CHUNK_LEARNING_READY_MIN_RATIO
+
+    # [P0-D] Si no hay logs explícitos, mirar mutaciones del inventario como proxy de actividad.
+    # Si el usuario tocó su nevera ≥ N veces desde el inicio del chunk previo (auto-deducción
+    # al consumir, edición manual de cantidades, agregar items), asumimos que está siguiendo
+    # el plan aunque no loguee. Mantenemos zero_log_proxy=True para que el worker sepa que
+    # el aprendizaje será débil, pero ya no bloqueamos la generación silenciosamente.
+    inventory_proxy_used = False
+    inventory_mutations = 0
+    if is_zero_log:
+        try:
+            activity = get_inventory_activity_since(user_id, prev_start_iso)
+            inventory_mutations = int(activity.get("mutations_count") or 0)
+            if inventory_mutations >= CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS:
+                inventory_proxy_used = True
+        except Exception as e:
+            logger.debug(f"[P0-D] No se pudo medir actividad de inventario para {user_id}: {e}")
+
     return {
-        "ready": ratio >= CHUNK_LEARNING_READY_MIN_RATIO,
+        "ready": (ratio_ready and not is_zero_log) or inventory_proxy_used,
         "ratio": ratio,
         "matched_meals": ratio_info["matched_meals"],
         "planned_meals": ratio_info["planned_meals"],
@@ -2644,6 +2951,9 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
         "explicit_logged_meals": ratio_info.get("explicit_logged_meals", 0),
         "used_implicit_proxy": ratio_info.get("used_implicit_proxy", False),
         "sparse_logging_proxy": ratio_info.get("sparse_logging_proxy", False),
+        "zero_log_proxy": is_zero_log,
+        "inventory_proxy_used": inventory_proxy_used,
+        "inventory_mutations": inventory_mutations,
         "previous_chunk_start_day": prev_start_day,
         "previous_chunk_end_day": prev_end_day,
         "previous_chunk_start_iso": prev_start_iso,
@@ -3208,6 +3518,8 @@ def process_plan_chunk_queue(target_plan_id=None):
                 _proxy_flags = []
                 if learning_ready.get("used_implicit_proxy"):
                     _proxy_flags.append("sparse_proxy" if learning_ready.get("sparse_logging_proxy") else "zero_log_proxy")
+                if learning_ready.get("inventory_proxy_used"):
+                    _proxy_flags.append(f"inv_proxy({learning_ready.get('inventory_mutations', 0)}m)")
                 _proxy_tag = f" [{','.join(_proxy_flags)}]" if _proxy_flags else ""
                 logger.info(
                     f"[CHUNK/LEARNING-READY] plan={meal_plan_id} chunk={week_number} "
@@ -3217,10 +3529,25 @@ def process_plan_chunk_queue(target_plan_id=None):
                     f"window=days {learning_ready.get('previous_chunk_start_day')}–{learning_ready.get('previous_chunk_end_day')} "
                     f"deferrals={learning_ready_deferrals}/{CHUNK_LEARNING_READY_MAX_DEFERRALS}"
                 )
-            if not learning_ready.get("ready", True) and learning_ready_deferrals < CHUNK_LEARNING_READY_MAX_DEFERRALS:
+
+            # [P0-D] Si el inventory proxy aprobó el chunk pese a zero-log, marcamos para que
+            # learning_metrics y _last_chunk_learning lo registren (telemetría + lección).
+            if learning_ready.get("inventory_proxy_used"):
+                form_data["_inventory_activity_proxy_used"] = True
+                form_data["_inventory_activity_mutations"] = int(learning_ready.get("inventory_mutations") or 0)
+            # [P0-1] El gate ahora distingue tres casos al fallar:
+            #   (a) zero-log: el usuario no logueó NADA del chunk previo → no hay aprendizaje real.
+            #   (b) sparse-log o ratio bajo: hay alguna señal pero por debajo del umbral.
+            #   (c) prior_chunk_not_elapsed: el chunk previo aún no terminó en el calendario.
+            # flexible_mode (heredado de pausa por nevera vacía o de un opt-in del usuario) bypasea el gate.
+            _learning_flexible_mode = bool(snap.get("_pantry_flexible_mode") or snap.get("_learning_flexible_mode"))
+            _is_zero_log = bool(learning_ready.get("zero_log_proxy"))
+
+            if not learning_ready.get("ready", True) and learning_ready_deferrals < CHUNK_LEARNING_READY_MAX_DEFERRALS and not _learning_flexible_mode:
                 deferred_snapshot = copy.deepcopy(snap)
                 deferred_snapshot["_learning_ready_deferrals"] = learning_ready_deferrals + 1
                 deferred_snapshot["_last_learning_ready_ratio"] = learning_ready_ratio
+                deferred_snapshot["_last_learning_zero_log"] = _is_zero_log
                 execute_sql_write(
                     """
                     UPDATE plan_chunk_queue
@@ -3238,19 +3565,116 @@ def process_plan_chunk_queue(target_plan_id=None):
                 )
                 logger.warning(
                     f"[CHUNK/LEARNING-READY] chunk {week_number} pospuesto {CHUNK_LEARNING_READY_DELAY_HOURS}h "
-                    f"por baja adherencia real ({learning_ready_ratio:.0%} < {CHUNK_LEARNING_READY_MIN_RATIO:.0%}). "
+                    f"por baja adherencia real ({learning_ready_ratio:.0%} < {CHUNK_LEARNING_READY_MIN_RATIO:.0%}, "
+                    f"zero_log={_is_zero_log}). "
                     f"Re-encolado {learning_ready_deferrals + 1}/{CHUNK_LEARNING_READY_MAX_DEFERRALS}."
                 )
+                # [P0-1] Push solo en el PRIMER deferral para no spamear. Mensaje cambia según motivo.
+                if learning_ready_deferrals == 0:
+                    if _is_zero_log:
+                        _push_title = "Loguea tus comidas para tu próximo bloque"
+                        _push_body = (
+                            "No hemos visto qué comiste de tu plan actual. "
+                            "Loguea tus comidas en el diario para que el siguiente bloque aprenda de ti."
+                        )
+                    else:
+                        _push_title = "Tu próximo bloque espera más feedback"
+                        _push_body = (
+                            "Loguea las comidas que hiciste estos días — el siguiente bloque del plan "
+                            "se ajusta a partir de eso."
+                        )
+                    _dispatch_push_notification(
+                        user_id=user_id,
+                        title=_push_title,
+                        body=_push_body,
+                        url="/dashboard",
+                    )
                 return
-            if not learning_ready.get("ready", True):
+            if not learning_ready.get("ready", True) and not _learning_flexible_mode:
+                # [P0-1] Deferrals agotados. Si el motivo es zero-log, NO forzamos la generación
+                # silenciosamente: pausamos en pending_user_action. El recovery ya existente
+                # (_recover_pantry_paused_chunks) cae a flexible_mode tras CHUNK_PANTRY_EMPTY_TTL_HOURS,
+                # con lo cual el chunk se acaba generando aunque el usuario nunca responda — pero
+                # como camino explícito, no como bypass silencioso.
+                if _is_zero_log:
+                    pause_snapshot = copy.deepcopy(snap)
+                    pause_snapshot.setdefault("_pantry_pause_started_at", datetime.now(timezone.utc).isoformat())
+                    pause_snapshot.setdefault("_pantry_pause_reminders", 0)
+                    pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_PANTRY_EMPTY_TTL_HOURS
+                    pause_snapshot["_pantry_pause_reminder_hours"] = CHUNK_PANTRY_EMPTY_REMINDER_HOURS
+                    pause_snapshot["_pantry_pause_reason"] = "learning_zero_logs"
+                    pause_snapshot["_last_learning_ready_ratio"] = learning_ready_ratio
+                    execute_sql_write(
+                        """
+                        UPDATE plan_chunk_queue
+                        SET status = 'pending_user_action',
+                            pipeline_snapshot = %s::jsonb,
+                            updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (json.dumps(pause_snapshot, ensure_ascii=False), task_id),
+                    )
+                    logger.warning(
+                        f"[P0-1/LEARNING-PAUSED] chunk {week_number} plan {meal_plan_id} pausado: "
+                        f"zero-log tras {CHUNK_LEARNING_READY_MAX_DEFERRALS} deferrals. "
+                        f"Esperando que el usuario loguee o que expire el TTL."
+                    )
+                    _dispatch_push_notification(
+                        user_id=user_id,
+                        title="Loguea tus comidas para continuar",
+                        body=(
+                            "Tu siguiente bloque está en pausa porque no tenemos registro de tus comidas. "
+                            "Abre el diario y loguea lo que hayas comido para que aprenda de ti."
+                        ),
+                        url="/dashboard",
+                    )
+                    return
+
+                # Sparse-log o ratio explícito bajo: generamos pero marcamos el chunk como
+                # forzado para compensar con _force_variety y dejar trazado en plan_data.
                 logger.warning(
-                    f"[CHUNK/LEARNING-READY] chunk {week_number} sigue bajo ({learning_ready_ratio:.0%}) "
-                    f"pero agotó deferrals. Continúa generación para no bloquear el plan."
+                    f"[P0-1/LEARNING-FORCED] chunk {week_number} sigue bajo ({learning_ready_ratio:.0%}) "
+                    f"tras {CHUNK_LEARNING_READY_MAX_DEFERRALS} deferrals. Generando con _force_variety=True."
                 )
+                form_data["_force_variety"] = True
+                form_data["_learning_forced"] = True
+                form_data["_learning_forced_reason"] = (
+                    "sparse_log" if learning_ready.get("sparse_logging_proxy") else "low_ratio"
+                )
+                snap["_learning_forced"] = True
+            elif not learning_ready.get("ready", True) and _learning_flexible_mode:
+                # flexible_mode bypassea el gate (usuario optó por seguir aunque sin aprendizaje).
+                # Igualmente marcamos para que la lección y el prompt lo sepan.
+                logger.warning(
+                    f"[P0-1/LEARNING-FLEXIBLE] chunk {week_number} ratio={learning_ready_ratio:.0%}, "
+                    f"flexible_mode activo. Generando con _force_variety=True como compensación."
+                )
+                form_data["_force_variety"] = True
+                form_data["_learning_forced"] = True
+                form_data["_learning_forced_reason"] = "flexible_mode_bypass"
+                snap["_learning_forced"] = True
 
             form_data = _refresh_chunk_pantry(user_id, form_data, snapshot_form_data)
             fresh_inventory = form_data.get("current_pantry_ingredients", [])
             fresh_inventory_source = form_data.get("_fresh_pantry_source")
+
+            # [P0-3] Si el live falló y el snapshot está vencido, no generamos contra datos viejos:
+            # pausamos para que el usuario refresque su nevera (flexible_mode lo bypassea, igual que la pausa por nevera vacía).
+            _flexible_mode = bool(snap.get("_pantry_flexible_mode") or form_data.get("_pantry_flexible_mode"))
+            if fresh_inventory_source == "stale_snapshot" and not _flexible_mode:
+                _pause_chunk_for_stale_inventory(
+                    task_id,
+                    user_id,
+                    week_number,
+                    form_data.get("_pantry_snapshot_age_hours"),
+                )
+                return
+
+            # [P0-3] Si tenemos lectura live, propagamos al snapshot del chunk actual y de los siblings vivos
+            # para que su fallback futuro sea reciente (antes era la foto del momento de creación del plan).
+            if fresh_inventory_source == "live":
+                _persist_fresh_pantry_to_chunks(task_id, meal_plan_id, fresh_inventory)
+
             if _should_pause_for_empty_pantry(fresh_inventory_source, fresh_inventory, snap, form_data):
                 _pause_chunk_for_pantry_refresh(task_id, user_id, week_number, fresh_inventory)
                 return
@@ -3798,6 +4222,44 @@ def process_plan_chunk_queue(target_plan_id=None):
                         from constants import validate_ingredients_against_pantry as _vip
                         _val_result = _vip(_all_gen_ing, _pantry_snapshot, strict_quantities=False)
                         if _val_result is True:
+                            # [P0-B] Existencia OK. Validamos cantidades según el modo configurado.
+                            #   off      → aceptar tal cual.
+                            #   advisory → loguear violaciones, anotarlas en form_data y aceptar.
+                            #   strict   → reintentar con feedback al LLM, fallar tras agotar retries.
+                            _qty_mode = (CHUNK_PANTRY_QUANTITY_MODE or "advisory").lower()
+                            if _qty_mode == "off":
+                                _pantry_ok = True
+                                form_data.pop("_pantry_correction", None)
+                                break
+
+                            _qty_result = _vip(_all_gen_ing, _pantry_snapshot, strict_quantities=True)
+                            if _qty_result is True:
+                                _pantry_ok = True
+                                form_data.pop("_pantry_correction", None)
+                                form_data.pop("_pantry_quantity_violations", None)
+                                break
+
+                            _qty_feedback = str(_qty_result)
+                            # Solo nos interesa la línea de over-limit; las "inexistentes" ya pasaron
+                            # la primera validación (matchearon vía similitud/fallback). Recortamos para logs.
+                            _qty_summary = _qty_feedback.split("\n", 2)[0][:300]
+
+                            if _qty_mode == "strict" and _pantry_attempt < _PANTRY_MAX_RETRIES:
+                                logger.warning(
+                                    f"[P0-B/QTY-STRICT] Cantidad fuera de límite en plan={meal_plan_id} "
+                                    f"chunk={week_number} intento={_pantry_attempt + 1}/{_PANTRY_MAX_RETRIES}: "
+                                    f"{_qty_summary}"
+                                )
+                                form_data["_pantry_correction"] = _qty_feedback
+                                continue  # retry con feedback de cantidades
+
+                            # Advisory (o strict con retries agotados): aceptamos pero anotamos.
+                            logger.warning(
+                                f"[P0-B/QTY-{_qty_mode.upper()}] plan={meal_plan_id} chunk={week_number} "
+                                f"acepta sobreuso de despensa (modo={_qty_mode}, "
+                                f"intento={_pantry_attempt + 1}): {_qty_summary}"
+                            )
+                            form_data["_pantry_quantity_violations"] = _qty_feedback
                             _pantry_ok = True
                             form_data.pop("_pantry_correction", None)
                             break
@@ -3874,6 +4336,26 @@ def process_plan_chunk_queue(target_plan_id=None):
                             f"[P0-3/HIGH-BASE-REPEAT] Chunk {week_number} plan {meal_plan_id}: "
                             f"{ingredient_base_repeat_pct}% repite ingrediente base: {learning_metrics['sample_repeated_bases']}"
                         )
+
+                    # [P0-B] Anotar violaciones de cantidad detectadas en advisory mode para que
+                    # queden en plan_chunk_queue.learning_metrics y en _last_chunk_learning.
+                    _qty_violations_str = form_data.get("_pantry_quantity_violations")
+                    if _qty_violations_str:
+                        learning_metrics["pantry_quantity_violations"] = 1
+                        learning_metrics["sample_pantry_quantity_violations"] = _qty_violations_str[:500]
+                    else:
+                        learning_metrics.setdefault("pantry_quantity_violations", 0)
+
+                    # [P0-D] Marcar si el chunk avanzó por inventory_proxy en lugar de logs reales.
+                    # Permite filtrar en métricas: chunks con inventory_proxy_used=true son de
+                    # "aprendizaje débil" (señal indirecta) y no deberían contar como adherencia plena.
+                    if form_data.get("_inventory_activity_proxy_used"):
+                        learning_metrics["inventory_activity_proxy_used"] = True
+                        learning_metrics["inventory_activity_mutations"] = int(
+                            form_data.get("_inventory_activity_mutations") or 0
+                        )
+                    else:
+                        learning_metrics.setdefault("inventory_activity_proxy_used", False)
                 except Exception as lm_e:
                     logger.warning(f"[GAP F] Error calculando learning_metrics: {lm_e}")
                     learning_metrics = None
@@ -4180,7 +4662,92 @@ def process_plan_chunk_queue(target_plan_id=None):
                             new_total = len(existing_days)
                             new_status = plan_data.get('generation_status', 'partial')
                             merged_days = existing_days
-                            
+
+                            # [P0-2] Backfill defensivo: si el chunk fue mergeado en una versión pre-P0-2
+                            # (o si la transacción anterior se commit-eó pero la lección no se escribió por
+                            # un bug), _last_chunk_learning puede no corresponder a ESTE chunk. Mientras
+                            # estamos aún dentro del FOR UPDATE, reconstruimos la lección desde
+                            # plan_chunk_queue.learning_metrics si existe, o un stub si no, y reescribimos
+                            # plan_data atómicamente. Esto cierra la única ventana donde un chunk podía
+                            # pasar a 'completed' sin dejar lección.
+                            _persisted_lesson = plan_data.get('_last_chunk_learning') or {}
+                            _persisted_chunk_id = _persisted_lesson.get('chunk') if isinstance(_persisted_lesson, dict) else None
+                            if _persisted_chunk_id != week_number:
+                                cursor.execute(
+                                    "SELECT learning_metrics FROM plan_chunk_queue WHERE id = %s",
+                                    (task_id,),
+                                )
+                                _row_lm = cursor.fetchone()
+                                _queue_lm = (_row_lm or {}).get('learning_metrics') if _row_lm else None
+                                if isinstance(_queue_lm, str):
+                                    try:
+                                        _queue_lm = json.loads(_queue_lm)
+                                    except Exception:
+                                        _queue_lm = None
+
+                                from datetime import datetime as _dt_bf, timezone as _tz_bf
+                                if _queue_lm:
+                                    _backfill_lesson = {
+                                        'repeat_pct': _queue_lm.get('learning_repeat_pct', 0),
+                                        'ingredient_base_repeat_pct': _queue_lm.get('ingredient_base_repeat_pct', 0),
+                                        'rejection_violations': _queue_lm.get('rejection_violations', 0),
+                                        'allergy_violations': _queue_lm.get('allergy_violations', 0),
+                                        'fatigued_violations': _queue_lm.get('fatigued_violations', 0),
+                                        'repeated_bases': _queue_lm.get('sample_repeated_bases', []),
+                                        'repeated_meal_names': _queue_lm.get('sample_repeats', []),
+                                        'rejected_meals_that_reappeared': _queue_lm.get('sample_rejection_hits', []),
+                                        'allergy_hits': _queue_lm.get('sample_allergy_hits', []),
+                                        'chunk': week_number,
+                                        'timestamp': _dt_bf.now(_tz_bf.utc).isoformat(),
+                                        'metrics_unavailable': False,
+                                        'backfilled': True,
+                                    }
+                                else:
+                                    _backfill_lesson = {
+                                        'repeat_pct': 0,
+                                        'ingredient_base_repeat_pct': 0,
+                                        'rejection_violations': 0,
+                                        'allergy_violations': 0,
+                                        'fatigued_violations': 0,
+                                        'repeated_bases': [],
+                                        'repeated_meal_names': [],
+                                        'rejected_meals_that_reappeared': [],
+                                        'allergy_hits': [],
+                                        'chunk': week_number,
+                                        'timestamp': _dt_bf.now(_tz_bf.utc).isoformat(),
+                                        'metrics_unavailable': True,
+                                        'backfilled': True,
+                                    }
+                                logger.warning(
+                                    f"[P0-2/BACKFILL] Chunk {task_id} (week {week_number}) ya mergeado pero "
+                                    f"sin lección coherente en plan_data (encontrada chunk={_persisted_chunk_id}). "
+                                    f"Reconstruyendo desde plan_chunk_queue.learning_metrics "
+                                    f"(disponible={_queue_lm is not None})."
+                                )
+                                plan_data['_last_chunk_learning'] = _backfill_lesson
+                                _recent_bf = plan_data.get('_recent_chunk_lessons', [])
+                                if not isinstance(_recent_bf, list):
+                                    _recent_bf = []
+                                # No duplicar si ya hay una entrada para este week_number
+                                _recent_bf = [l for l in _recent_bf if not (isinstance(l, dict) and l.get('chunk') == week_number)]
+                                _recent_bf.append(_backfill_lesson)
+                                plan_data['_recent_chunk_lessons'] = _recent_bf[-4:]
+
+                                # Re-escribir plan_data dentro del mismo FOR UPDATE
+                                cursor.execute(
+                                    "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s",
+                                    (json.dumps(plan_data, ensure_ascii=False), meal_plan_id),
+                                )
+                                # Sellar también en la cola que la lección ya está garantizada
+                                cursor.execute(
+                                    """
+                                    UPDATE plan_chunk_queue
+                                    SET learning_persisted_at = COALESCE(learning_persisted_at, NOW())
+                                    WHERE id = %s
+                                    """,
+                                    (task_id,),
+                                )
+
                             update_result = [{
                                 "new_total": new_total,
                                 "new_status": new_status,
@@ -4231,12 +4798,18 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 plan_data['_merged_chunk_ids'] = []
                             plan_data['_merged_chunk_ids'].append(str(task_id))
 
-                            # [P1-5 / P0-4] Persistir métricas de aprendizaje en plan_data con muestras
+                            # [P1-5 / P0-4 / P0-2] Persistir métricas de aprendizaje en plan_data con muestras
                             # concretas para que el chunk siguiente pueda construir LECCIONES accionables.
                             # _last_chunk_learning: lección del chunk inmediatamente anterior (compat).
                             # _recent_chunk_lessons: ventana rolling de las últimas 4 lecciones (P0-4).
+                            #
+                            # [P0-2] Siempre escribimos una lección, incluso si _calculate_learning_metrics
+                            # falló o el path es Smart Shuffle sin métricas. Si no hay datos, persistimos
+                            # un stub con metrics_unavailable=True para que la ventana rolling no quede
+                            # con huecos silenciosos (chunk N+1 necesita saber que chunk N ocurrió,
+                            # aunque no se pudieron medir las violaciones).
+                            from datetime import datetime, timezone
                             if learning_metrics:
-                                from datetime import datetime, timezone
                                 _new_lesson = {
                                     'repeat_pct': learning_metrics.get('learning_repeat_pct', 0),
                                     'ingredient_base_repeat_pct': learning_metrics.get('ingredient_base_repeat_pct', 0),
@@ -4249,14 +4822,51 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     'allergy_hits': learning_metrics.get('sample_allergy_hits', []),
                                     'chunk': week_number,
                                     'timestamp': datetime.now(timezone.utc).isoformat(),
+                                    'metrics_unavailable': False,
                                 }
-                                plan_data['_last_chunk_learning'] = _new_lesson
-                                # [P0-4] Append a la ventana rolling (máximo 4 entradas).
-                                _recent = plan_data.get('_recent_chunk_lessons', [])
-                                if not isinstance(_recent, list):
-                                    _recent = []
-                                _recent.append(_new_lesson)
-                                plan_data['_recent_chunk_lessons'] = _recent[-4:]
+                            else:
+                                _new_lesson = {
+                                    'repeat_pct': 0,
+                                    'ingredient_base_repeat_pct': 0,
+                                    'rejection_violations': 0,
+                                    'allergy_violations': 0,
+                                    'fatigued_violations': 0,
+                                    'repeated_bases': [],
+                                    'repeated_meal_names': [],
+                                    'rejected_meals_that_reappeared': [],
+                                    'allergy_hits': [],
+                                    'chunk': week_number,
+                                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                                    'metrics_unavailable': True,
+                                }
+                                logger.warning(
+                                    f"[P0-2/STUB-LESSON] Chunk {week_number} plan {meal_plan_id}: "
+                                    f"learning_metrics no disponible. Persistiendo lección stub para "
+                                    f"mantener la cadena de aprendizaje sin huecos."
+                                )
+                            plan_data['_last_chunk_learning'] = _new_lesson
+                            # [P0-4] Append a la ventana rolling (máximo 4 entradas).
+                            _recent = plan_data.get('_recent_chunk_lessons', [])
+                            if not isinstance(_recent, list):
+                                _recent = []
+                            _recent.append(_new_lesson)
+                            plan_data['_recent_chunk_lessons'] = _recent[-4:]
+
+                            # [P0-2] Persistir learning_metrics en plan_chunk_queue DENTRO de la misma
+                            # transacción que el plan_data. Antes esto se escribía después (línea ~4631)
+                            # con un UPDATE separado: si el server crasheaba entre commits, plan_data
+                            # tenía la lección pero la cola quedaba con learning_metrics=NULL, perdiendo
+                            # la traza para auditoría/backfill. Ahora ambos van juntos en el mismo commit.
+                            _lm_for_queue = json.dumps(learning_metrics, ensure_ascii=False) if learning_metrics else None
+                            cursor.execute(
+                                """
+                                UPDATE plan_chunk_queue
+                                SET learning_metrics = %s::jsonb,
+                                    learning_persisted_at = NOW()
+                                WHERE id = %s
+                                """,
+                                (_lm_for_queue, task_id),
+                            )
                             
                             # [P0-2] Si el CAS detectó datos obsoletos (degraded mode),
                             # NO escribir en BD. La transacción termina sin cambios,
@@ -4811,7 +5421,10 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                     if days_remaining_in_plan == 0 and not is_expired_weekly:
                         return False
 
-                    # Planes de 7 días activos no usan rolling refill (P1-1)
+                    # [P0-4 FIX] Antes bloqueaba TODO refill mientras un plan de 7d siguiera vivo,
+                    # incluso si su encolado síncrono inicial había fallado dejando huecos.
+                    # Ahora solo bloqueamos si NO existe gap huérfano (plan completo en su día actual).
+                    # La detección de gap se hace tras los guards de chunks-en-vuelo más abajo.
                     disable_rolling_refill_for_active_7d = (
                         total_planned_days == 7 and days_remaining_in_plan > 0
                     )
@@ -4828,6 +5441,20 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                     )
                     if ((cursor.fetchone() or {}).get("cnt") or 0) > 0:
                         return False
+
+                    # [P0-4 FIX] Llegamos aquí con 0 chunks vivos. Si el plan de 7d aún tiene días
+                    # por delante pero len(days) < total_planned_days, hay gap huérfano real:
+                    # destrabar el refill para recuperarlo.
+                    if (
+                        disable_rolling_refill_for_active_7d
+                        and len(days) < total_planned_days
+                    ):
+                        logger.warning(
+                            f"[P0-4] Plan de 7 días {plan_id}: gap huérfano detectado "
+                            f"(visibles={len(days)}/{total_planned_days}, sin chunks vivos). "
+                            f"Habilitando rolling refill de recuperación."
+                        )
+                        disable_rolling_refill_for_active_7d = False
 
                     window_size = chunk_size_for_next_slot(
                         max(0, days_since_creation), total_planned_days, PLAN_CHUNK_SIZE
@@ -4884,6 +5511,15 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                                 else []
                             )
 
+                            # [P0-1 FIX] Propagar _plan_start_date vigente (post-shift) al snapshot
+                            # para que _check_chunk_learning_ready pueda calcular ventanas de adherencia.
+                            # Sin esto, el gate retornaba ready=True con reason=missing_plan_start_date
+                            # y el aprendizaje continuo se desactivaba para todo rolling refill.
+                            new_plan_start_iso = (
+                                (start_dt + timedelta(days=days_since_creation)).isoformat()
+                                if needs_shift else start_date_str
+                            )
+
                             cursor.execute(
                                 "SELECT COALESCE(MAX(week_number), 1) AS max_week "
                                 "FROM plan_chunk_queue WHERE meal_plan_id = %s AND status <> 'cancelled'",
@@ -4905,7 +5541,12 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                                     continue
 
                                 snapshot = {
-                                    "form_data": {**hp, "user_id": user_id, "totalDays": chunk_count},
+                                    "form_data": {
+                                        **hp,
+                                        "user_id": user_id,
+                                        "totalDays": chunk_count,
+                                        "_plan_start_date": new_plan_start_iso,
+                                    },
                                     "taste_profile": "",
                                     "memory_context": "",
                                     "previous_meals": previous_meals,
@@ -4957,9 +5598,16 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                                 if m.get("name")
                             ]
                             current_offset = 0
+                            # [P0-1 FIX] El plan semanal se renueva con start = today.
+                            renewal_plan_start_iso = today.isoformat()
                             for chunk_count in [3, 4]:
                                 snapshot = {
-                                    "form_data": {**hp, "user_id": user_id, "totalDays": chunk_count},
+                                    "form_data": {
+                                        **hp,
+                                        "user_id": user_id,
+                                        "totalDays": chunk_count,
+                                        "_plan_start_date": renewal_plan_start_iso,
+                                    },
                                     "taste_profile": "",
                                     "memory_context": "",
                                     "previous_meals": previous_meals,
@@ -4987,14 +5635,37 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
 
                     if modified:
                         shifted_data["days"] = shifted_days
+                        new_plan_start_iso = None
                         if needs_shift and not is_expired_weekly:
                             new_start = start_dt + timedelta(days=days_since_creation)
-                            shifted_data["grocery_start_date"] = new_start.isoformat()
+                            new_plan_start_iso = new_start.isoformat()
+                            shifted_data["grocery_start_date"] = new_plan_start_iso
+                        elif is_expired_weekly:
+                            new_plan_start_iso = today.isoformat()
                         shifted_data["_plan_modified_at"] = datetime.now(timezone.utc).isoformat()
                         cursor.execute(
                             "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s",
                             (_json_bg.dumps(shifted_data, ensure_ascii=False), plan_id),
                         )
+
+                        # [P0-5 FIX] Sincronizar _plan_start_date en los snapshots de chunks
+                        # vivos (ver justificación en routers/plans.py).
+                        if new_plan_start_iso:
+                            cursor.execute(
+                                """
+                                UPDATE plan_chunk_queue
+                                SET pipeline_snapshot = jsonb_set(
+                                        pipeline_snapshot,
+                                        '{form_data,_plan_start_date}',
+                                        %s::jsonb,
+                                        true
+                                    ),
+                                    updated_at = NOW()
+                                WHERE meal_plan_id = %s
+                                  AND status IN ('pending', 'processing', 'stale', 'failed', 'pending_user_action')
+                                """,
+                                (_json_bg.dumps(new_plan_start_iso), plan_id),
+                            )
 
                     return chunks_enqueued > 0
 

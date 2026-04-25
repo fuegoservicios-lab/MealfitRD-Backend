@@ -172,6 +172,15 @@ async def lifespan(app: FastAPI):
                 ADD COLUMN IF NOT EXISTS learning_metrics JSONB;
                 """)
 
+                # [P0-2] Timestamp atómico que indica que la lección de este chunk se persistió
+                # dentro de la transacción FOR UPDATE de meal_plans (es decir, está garantizada
+                # en plan_data._last_chunk_learning y _recent_chunk_lessons). Sirve para detectar
+                # chunks "completed" cuya lección quedó desincronizada en crashes pre-P0-2.
+                conn.execute("""
+                ALTER TABLE plan_chunk_queue
+                ADD COLUMN IF NOT EXISTS learning_persisted_at TIMESTAMP WITH TIME ZONE;
+                """)
+
                 conn.execute("""
                 ALTER TABLE plan_chunk_queue
                 ADD COLUMN IF NOT EXISTS dead_lettered_at TIMESTAMP WITH TIME ZONE,

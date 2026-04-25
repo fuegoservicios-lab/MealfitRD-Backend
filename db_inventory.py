@@ -484,6 +484,41 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
         logger.error(f"Error actualizando inventario para {user_id}: {e}")
         return False
 
+def get_inventory_activity_since(user_id: str, since_iso: str) -> Dict[str, Any]:
+    """[P0-D] Señal implícita de adherencia: ¿el usuario tocó su nevera desde `since_iso`?
+
+    Usado por _check_chunk_learning_ready cuando NO hay logs explícitos de comidas
+    (zero_log_proxy=True). Si el inventario muestra mutaciones desde la fecha de inicio
+    del chunk previo, asumimos que el usuario está consumiendo el plan aunque no loguee.
+
+    Retorna {mutations_count, last_mutation_at, low_stock_items} — el caller decide el umbral.
+    """
+    if not supabase or not user_id or not since_iso:
+        return {"mutations_count": 0, "last_mutation_at": None, "low_stock_items": 0}
+    try:
+        res = (
+            supabase.table("user_inventory")
+            .select("id, ingredient_name, quantity, updated_at")
+            .eq("user_id", user_id)
+            .gte("updated_at", since_iso)
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            return {"mutations_count": 0, "last_mutation_at": None, "low_stock_items": 0}
+        last_mutation = max((r.get("updated_at") for r in rows if r.get("updated_at")), default=None)
+        # Items con stock muy bajo (≤ 0.5 en unidad arbitraria) sugieren consumo reciente
+        low_stock = sum(1 for r in rows if float(r.get("quantity") or 0) <= 0.5)
+        return {
+            "mutations_count": len(rows),
+            "last_mutation_at": last_mutation,
+            "low_stock_items": low_stock,
+        }
+    except Exception as e:
+        logger.warning(f"[P0-D] Error consultando actividad de inventario para {user_id}: {e}")
+        return {"mutations_count": 0, "last_mutation_at": None, "low_stock_items": 0}
+
+
 def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str]):
     """
     Resta matemáticamente una lista de ingredientes crudos (los de una comida consumida)

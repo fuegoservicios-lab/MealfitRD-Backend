@@ -206,12 +206,34 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                     modified = needs_shift
                     is_partial = plan_data.get('generation_status') in ('partial', 'generating_next')
                     needs_fill = len(shifted_days) < window_needed and days_remaining_in_plan > 0
-                    disable_rolling_refill_for_active_7d = total_planned_days == 7 and days_remaining_in_plan > 0
+
+                    # [P0-4 FIX] Antes: disable_rolling_refill_for_active_7d bloqueaba TODO refill
+                    # mientras el plan de 7d siguiera vivo. Eso dejaba huérfanos los planes donde
+                    # el encolado síncrono inicial (chunk 2 de 4d) falló: 3 días generados y 4 vacíos
+                    # sin recuperación automática. Ahora solo bloqueamos cuando hay chunks vivos
+                    # en queue (estado normal); si no hay chunks pendientes y existe gap real, se
+                    # permite refill para recuperar el hueco.
+                    disable_rolling_refill_for_active_7d = False
+                    if total_planned_days == 7 and days_remaining_in_plan > 0:
+                        cursor.execute(
+                            "SELECT COUNT(*) AS cnt FROM plan_chunk_queue "
+                            "WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')",
+                            (plan_id,)
+                        )
+                        chunks_in_flight = int(((cursor.fetchone() or {}).get('cnt') or 0))
+                        has_orphan_gap = chunks_in_flight == 0 and len(shifted_days) < total_planned_days
+                        disable_rolling_refill_for_active_7d = not has_orphan_gap
 
                     if disable_rolling_refill_for_active_7d and needs_fill:
                         logger.info(
                             f"[P1-1] Plan de 7 días {plan_id}: rolling refill bloqueado durante vida útil "
                             f"(restantes={days_remaining_in_plan}, visibles={len(shifted_days)})."
+                        )
+                    elif total_planned_days == 7 and days_remaining_in_plan > 0 and needs_fill and not is_partial:
+                        logger.warning(
+                            f"[P0-4] Plan de 7 días {plan_id}: detectado gap huérfano "
+                            f"(visibles={len(shifted_days)}/{total_planned_days}, sin chunks vivos). "
+                            f"Habilitando rolling refill de recuperación."
                         )
                     elif total_planned_days == 7 and days_remaining_in_plan == 0 and not is_partial:
                         # [P0-1] Plan semanal expirado: auto-renovar con señales de aprendizaje frescas.
@@ -239,9 +261,17 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                         for m in d.get('meals', []) if m.get('name')
                                     ]
                                     current_offset = 0
+                                    # [P0-1 FIX] Plan renovado: start = today para que el gate
+                                    # de adherencia previa calcule ventanas correctas.
+                                    renewal_plan_start_iso = today.isoformat()
                                     for chunk_count in [3, 4]:
                                         snapshot = {
-                                            "form_data": {**hp, "user_id": user_id, "totalDays": chunk_count},
+                                            "form_data": {
+                                                **hp,
+                                                "user_id": user_id,
+                                                "totalDays": chunk_count,
+                                                "_plan_start_date": renewal_plan_start_iso,
+                                            },
                                             "taste_profile": "",
                                             "memory_context": "",
                                             "previous_meals": previous_meals,
@@ -304,6 +334,13 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                 current_offset = days_offset
                                 chunks_enqueued = 0
 
+                                # [P0-1 FIX] _plan_start_date vigente (post-shift) para que el
+                                # gate de adherencia previa pueda calcular ventanas correctas.
+                                catchup_plan_start_iso = (
+                                    (start_dt + timedelta(days=days_since_creation)).isoformat()
+                                    if needs_shift else start_date_str
+                                )
+
                                 for chunk_count in catchup_chunks:
                                     cursor.execute(
                                         """
@@ -328,7 +365,12 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                         )
                                     else:
                                         snapshot = {
-                                            "form_data": {**hp, "user_id": user_id, "totalDays": chunk_count},
+                                            "form_data": {
+                                                **hp,
+                                                "user_id": user_id,
+                                                "totalDays": chunk_count,
+                                                "_plan_start_date": catchup_plan_start_iso,
+                                            },
                                             "taste_profile": "",
                                             "memory_context": "",
                                             "previous_meals": previous_meals,
@@ -370,9 +412,11 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                     # 4. Save rolling window updates
                     if modified:
                         shifted_data['days'] = shifted_days
+                        new_plan_start_iso = None
                         if needs_shift and start_date_str:
                             new_start = start_dt + timedelta(days=days_since_creation)
-                            shifted_data['grocery_start_date'] = new_start.isoformat()
+                            new_plan_start_iso = new_start.isoformat()
+                            shifted_data['grocery_start_date'] = new_plan_start_iso
 
                         # [P0-2] Sello CAS: timestamp que el worker compara para detectar
                         # si el plan fue modificado externamente durante el LLM call.
@@ -382,6 +426,29 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                             "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s",
                             (json.dumps(shifted_data, ensure_ascii=False), plan_id)
                         )
+
+                        # [P0-5 FIX] Sincronizar _plan_start_date en los snapshots de los chunks
+                        # vivos del plan: tras un shift, grocery_start_date avanza pero los chunks
+                        # ya encolados conservaban el origen original, desfasando los cálculos de
+                        # _check_chunk_learning_ready (ventana de adherencia) y la asignación de
+                        # day_name en Smart Shuffle. Ahora todos los chunks no terminales heredan
+                        # el nuevo origen del plan en la misma transacción.
+                        if needs_shift and new_plan_start_iso:
+                            cursor.execute(
+                                """
+                                UPDATE plan_chunk_queue
+                                SET pipeline_snapshot = jsonb_set(
+                                        pipeline_snapshot,
+                                        '{form_data,_plan_start_date}',
+                                        %s::jsonb,
+                                        true
+                                    ),
+                                    updated_at = NOW()
+                                WHERE meal_plan_id = %s
+                                  AND status IN ('pending', 'processing', 'stale', 'failed', 'pending_user_action')
+                                """,
+                                (json.dumps(new_plan_start_iso), plan_id)
+                            )
 
         return {"success": True, "message": "Plan actualizado a la fecha.", "plan_data": shifted_data}
     

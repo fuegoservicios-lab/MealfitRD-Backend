@@ -10,7 +10,10 @@ PLAN_CHUNK_SIZE = 3  # Días generados por chunk en el pipeline de langgraph
 CHUNK_LEARNING_MODE = os.environ.get("CHUNK_LEARNING_MODE", "strict").strip().lower()
 if CHUNK_LEARNING_MODE not in {"strict", "safety_margin"}:
     CHUNK_LEARNING_MODE = "strict"
-CHUNK_PROACTIVE_MARGIN_DAYS = max(0, int(os.environ.get("CHUNK_PROACTIVE_MARGIN_DAYS", "1")))
+# [P0-A] Default 0: chunk N+1 se ejecuta DESPUÉS de que termine N para que el aprendizaje
+# vea la adherencia completa del chunk previo. Subir a 1 solo si el usuario reporta gaps de
+# disponibilidad al despertar (chunk listo recién a media mañana en vez de a primera hora).
+CHUNK_PROACTIVE_MARGIN_DAYS = max(0, int(os.environ.get("CHUNK_PROACTIVE_MARGIN_DAYS", "0")))
 CHUNK_SCHEDULER_INTERVAL_MINUTES = max(1, int(os.environ.get("CHUNK_SCHEDULER_INTERVAL_MINUTES", "1")))
 CHUNK_LEARNING_READY_MIN_RATIO = float(os.environ.get("CHUNK_LEARNING_READY_MIN_RATIO", "0.5"))
 CHUNK_LEARNING_READY_DELAY_HOURS = max(1, int(os.environ.get("CHUNK_LEARNING_READY_DELAY_HOURS", "12")))
@@ -25,6 +28,31 @@ CHUNK_RETRY_CRITICAL_MINUTES = max(5, int(os.environ.get("CHUNK_RETRY_CRITICAL_M
 # [P0-4] Máxima edad permitida para el snapshot de pantry antes de intentar un live-retry adicional.
 # Pasado este TTL, si el live sigue fallando se marca como stale_snapshot en los logs.
 CHUNK_PANTRY_SNAPSHOT_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_SNAPSHOT_TTL_HOURS", "6")))
+# [P0-B] Validación de CANTIDADES (no solo existencia) contra la despensa. Modos:
+#   - "off"      : solo validamos existencia (comportamiento previo).
+#   - "advisory" : sumamos uso vs. inventario, logueamos violaciones y las anotamos en
+#                  form_data["_pantry_quantity_violations"] para telemetría, pero NO bloqueamos
+#                  el chunk. El LLM verá la corrección en el primer reintento si ocurre.
+#   - "strict"   : reintentamos con feedback como en la validación de existencia. Si tras
+#                  CHUNK_PANTRY_MAX_RETRIES el LLM sigue excediendo, fallamos el chunk.
+CHUNK_PANTRY_QUANTITY_MODE = os.environ.get("CHUNK_PANTRY_QUANTITY_MODE", "advisory").strip().lower()
+if CHUNK_PANTRY_QUANTITY_MODE not in {"off", "advisory", "strict"}:
+    CHUNK_PANTRY_QUANTITY_MODE = "advisory"
+# [P0-C] Cada N minutos se refresca el snapshot de despensa en chunks pending/stale cuyo
+# _pantry_captured_at supere la mitad del TTL. Esto evita que un chunk de plan 15d/30d
+# llegue a su execute_after con snapshot de hace días y se quede pausado por stale_snapshot
+# si el live fetch del worker falla puntualmente. Default: 180 min (3h, mitad del TTL=6h).
+CHUNK_PANTRY_PROACTIVE_REFRESH_MINUTES = max(15, int(os.environ.get("CHUNK_PANTRY_PROACTIVE_REFRESH_MINUTES", "180")))
+# Horizonte máximo (en horas) para targetear chunks: solo refrescamos los que ejecutan
+# dentro de esta ventana, para no gastar lecturas en chunks lejanos del plan 30d.
+CHUNK_PANTRY_PROACTIVE_REFRESH_HORIZON_HOURS = max(6, int(os.environ.get("CHUNK_PANTRY_PROACTIVE_REFRESH_HORIZON_HOURS", "48")))
+# Tope de usuarios procesados por corrida para no saturar Supabase en picos.
+CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS = max(1, int(os.environ.get("CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS", "50")))
+# [P0-D] Mínimo de mutaciones de inventario (rows con updated_at >= prev_chunk_start) para
+# considerar que el usuario está consumiendo el plan aunque no loguee comidas explícitamente.
+# Solo se usa como fallback cuando zero_log_proxy=True; evita pausar chunks de usuarios
+# activos pero no-logueadores. Subir si hay falsos positivos por edits manuales triviales.
+CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS = max(1, int(os.environ.get("CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS", "3")))
 
 
 def split_with_absorb(total_days: int, base: int = 3) -> list[int]:
