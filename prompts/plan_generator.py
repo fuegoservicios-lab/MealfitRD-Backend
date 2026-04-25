@@ -115,6 +115,25 @@ Genera comidas COMPLETAMENTE DIFERENTES que NO tengan estos problemas.
 """
 
 
+def build_pantry_correction_context(pantry_feedback: str) -> str:
+    """Genera el bloque de corrección cuando el plan usó ingredientes fuera de la nevera del usuario."""
+    if not pantry_feedback:
+        return ""
+    return f"""
+🚨🚨🚨 CORRECCIÓN OBLIGATORIA: VIOLACIÓN DE INVENTARIO 🚨🚨🚨
+El intento anterior generó platos con ingredientes que el usuario NO tiene en su nevera.
+Detalles de la violación:
+{pantry_feedback}
+
+REGLA ABSOLUTA PARA ESTE REINTENTO:
+- USA ÚNICAMENTE los ingredientes listados en la sección "PRIORIDAD DE RECICLAJE DE DESPENSA".
+- NO inventes ni añadas ingredientes que no aparezcan en esa lista.
+- Si no hay suficientes ingredientes para un plato completo, simplifica el plato para usar solo lo disponible.
+- Condimentos básicos (sal, pimienta, aceite, ajo, cebolla, cilantro) están siempre permitidos.
+🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨
+"""
+
+
 def build_rag_context(user_facts: str) -> str:
     """Genera el bloque de hechos permanentes del usuario (memoria vectorial)."""
     if not user_facts:
@@ -488,6 +507,73 @@ def build_quality_hint_context(quality_hint: str, drastic_strategy: str = None) 
     return ctx
 
 
+def build_chunk_lessons_context(chunk_lessons: dict) -> str:
+    """[P1-5] Bloque de lecciones concretas del chunk anterior para el LLM.
+
+    Convierte métricas de learning_metrics en instrucciones accionables:
+    ingredientes sobre-usados, platos rechazados que reaparecieron, y violaciones de alergia.
+    Solo se activa a partir del chunk 3 (cuando hay datos del chunk N-1 con learning_metrics).
+    """
+    if not chunk_lessons or not isinstance(chunk_lessons, dict):
+        return ""
+
+    lines = []
+
+    # Ingredientes base sobre-repetidos
+    pct = float(chunk_lessons.get("ingredient_base_repeat_pct") or 0)
+    repeated_bases = chunk_lessons.get("repeated_bases") or []
+    if pct > 30.0 and repeated_bases:
+        base_names = []
+        for entry in repeated_bases[:4]:
+            if isinstance(entry, dict):
+                base_names.extend(entry.get("bases") or [])
+        unique_bases = list(dict.fromkeys(b for b in base_names if b))[:6]
+        if unique_bases:
+            severity = "URGENTE — DIVERSIFICA" if pct > 60 else "DIVERSIFICA"
+            lines.append(
+                f"• Ingredientes base repetidos en {pct:.0f}% de platos [{severity}]: "
+                f"{', '.join(unique_bases)}. "
+                f"Usa fuentes de proteína, carbohidrato o vegetal DISTINTAS a estas."
+            )
+
+    # Platos rechazados que reaparecieron
+    rej_viol = int(chunk_lessons.get("rejection_violations") or 0)
+    rejected_reappeared = chunk_lessons.get("rejected_meals_that_reappeared") or []
+    if rej_viol > 0 and rejected_reappeared:
+        lines.append(
+            f"• {rej_viol} plato(s) RECHAZADOS reaparecieron: {', '.join(rejected_reappeared[:4])}. "
+            f"NUNCA los incluyas ni variaciones con los mismos ingredientes principales."
+        )
+
+    # Violaciones de alergia
+    alg_viol = int(chunk_lessons.get("allergy_violations") or 0)
+    allergy_hits = chunk_lessons.get("allergy_hits") or []
+    if alg_viol > 0 and allergy_hits:
+        lines.append(
+            f"• {alg_viol} ingrediente(s) de alergia detectados en el chunk anterior: "
+            f"{', '.join(allergy_hits[:4])}. "
+            f"Revisa CADA ingrediente de tus recetas contra la lista de alergias del usuario."
+        )
+
+    # Repetición de nombres exactos de platos
+    repeat_pct = float(chunk_lessons.get("repeat_pct") or 0)
+    repeated_names = chunk_lessons.get("repeated_meal_names") or []
+    if repeat_pct > 15.0 and repeated_names:
+        lines.append(
+            f"• Nombres de platos repetidos ({repeat_pct:.0f}%): {', '.join(repeated_names[:4])}. "
+            f"Inventa NUEVOS nombres y recetas, no reutilices estos."
+        )
+
+    if not lines:
+        return ""
+
+    chunk_num = chunk_lessons.get("chunk_number", "anterior")
+    ctx = f"\n--- 📋 LECCIONES DEL CHUNK {chunk_num} (APLICA OBLIGATORIAMENTE) ---\n"
+    ctx += "\n".join(lines) + "\n"
+    ctx += "------------------------------------------------------------\n"
+    return ctx
+
+
 def build_weight_history_context(weight_history: list) -> str:
     """Genera el bloque de contexto motivacional basado en el historial de peso (Gap C)."""
     if not weight_history or len(weight_history) < 2:
@@ -604,14 +690,7 @@ def build_pantry_context(form_data: dict) -> str:
         ctx += f"✅ INGREDIENTES ESTABLES (Larga duración - Usar como complemento):\n"
         ctx += f"{json.dumps(stables, ensure_ascii=False)}\n\n"
 
-    if form_data.get("_is_background_rotation"):
-        ctx += "🛑 REGLA DE RECICLAJE ESTRICTA ('ACTUALIZAR PLATOS'): El usuario solicitó cambiar su menú PERO sin tener que ir al supermercado de nuevo.\n"
-        ctx += "Tu ÚNICO POOL de ingredientes permitidos es ESTRICTAMENTE la lista dictada arriba.\n"
-        ctx += "ESTÁ ESTRICTAMENTE PROHIBIDO inventar ingredientes (proteínas, vegetales, carbohidratos principales) que no estén en la lista anterior.\n"
-        ctx += "Diseña los platos como si estuvieras en una cocina solo con esos ingredientes.\n"
-        ctx += "Sólo puedes añadir ingredientes básicos no mencionados si son absolutos pilares estructurales (sal, pimienta, aceite, ajo).\n"
-    else:
-        ctx += "ESTRATEGIA ZERO-WASTE: Es OBLIGATORIO que bases este nuevo plan en agotar estos ingredientes sobrantes ANTES de pedirle que compre productos nuevos. Sé creativo para transformarlos en platos totalmente nuevos.\n"
+    ctx += "ESTRATEGIA ZERO-WASTE: Es OBLIGATORIO que bases este nuevo plan en agotar estos ingredientes sobrantes ANTES de pedirle que compre productos nuevos. Sé creativo para transformarlos en platos totalmente nuevos.\n"
         
     ctx += "----------------------------------------------------------\n"
     return ctx

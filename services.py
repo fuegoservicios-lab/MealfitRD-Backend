@@ -8,21 +8,23 @@ import hashlib
 
 # Imports globales locales, movidos al tope para evitar el code smell "Lazy Loading"
 from db import (
-    supabase, 
-    increment_ingredient_frequencies, 
-    check_recent_meal_plan_exists, 
-    save_new_meal_plan_robust, 
-    log_unknown_ingredients, 
-    get_user_profile, 
-    get_or_create_session, 
-    save_message, 
-    insert_rejection, 
+    supabase,
+    increment_ingredient_frequencies,
+    check_recent_meal_plan_exists,
+    save_new_meal_plan_robust,
+    log_unknown_ingredients,
+    get_user_profile,
+    get_or_create_session,
+    save_message,
+    insert_rejection,
     track_meal_friction,
     update_user_health_profile,
     upsert_user_profile
 )
+from db_plans import save_new_meal_plan_atomic
 
 from constants import normalize_ingredient_for_tracking, GLOBAL_REVERSE_MAP, IGNORED_TRACKING_TERMS
+from db_inventory import release_meal_reservation
 
 # ⚠️ RESTRICCIÓN ARQUITECTÓNICA: services.py importa agent.py → agent.py NUNCA debe importar services.py.
 # Si agent.py necesita lógica de services.py en el futuro, usar lazy import dentro de la función.
@@ -129,19 +131,10 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         if selected_techniques:
             insert_data["techniques"] = selected_techniques
 
-        plan_id = save_new_meal_plan_robust(insert_data, return_id=True)
-        
-        # [GAP 5] Invalidar chunks antiguos para que no interfieran con este nuevo plan
-        try:
-            from db_core import execute_sql_write
-            execute_sql_write(
-                "UPDATE plan_chunk_queue SET status = 'cancelled' WHERE user_id = %s AND status = 'pending' AND meal_plan_id != %s",
-                (user_id, plan_id)
-            )
-            logger.info(f"✅ [GAP 5] Chunks anteriores cancelados para {user_id}")
-        except Exception as e:
-            logger.warning(f"⚠️ [GAP 5] Error cancelando chunks: {e}")
-            
+        # [P0-2/ATOMIC] INSERT del plan + cancelación de chunks en una sola transacción.
+        # Elimina la ventana TOCTOU entre guardar el plan y cancelar los chunks viejos.
+        plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=True)
+
         logger.info(f"💾 [CHUNK] Plan parcial (semana 1) guardado para {user_id}, plan_id={plan_id}")
         return plan_id
     except Exception as e:
@@ -190,28 +183,34 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             if selected_techniques:
                 insert_data["techniques"] = selected_techniques
             
-            # [P0-3] Eliminada la herencia de is_restocked y merge_inventory_after_rotation.
-            # Razón: Si el usuario rota un plan y se introducen ingredientes nuevos, heredarlo como True
-            # inyectaba físicamente los ingredientes en la Nevera sin que el usuario los haya comprado (Compras Mágicas).
-            # Al no heredarlo, la UI mostrará "Registrar Compras" SOLO con el Delta exacto faltante.
 
             # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
             if check_recent_meal_plan_exists(user_id, max_seconds=30):
                 logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
                 return
                 
-            # [GAP 5] Invalidar chunks antiguos al crear un plan completo
-            try:
-                from db_core import execute_sql_write
-                execute_sql_write(
-                    "UPDATE plan_chunk_queue SET status = 'cancelled' WHERE user_id = %s AND status = 'pending'",
-                    (user_id,)
-                )
-                logger.info(f"✅ [GAP 5] Chunks anteriores cancelados para {user_id} en plan completo")
-            except Exception as e:
-                logger.warning(f"⚠️ [GAP 5] Error cancelando chunks: {e}")
-                
-            save_new_meal_plan_robust(insert_data, additional_queries=additional_db_queries)
+            if additional_db_queries:
+                # Si hay queries adicionales, cancelar chunks primero y luego ejecutar
+                # todo en una transacción via save_new_meal_plan_robust con additional_queries.
+                # [P0-2] Cancelar chunks justo antes del INSERT (misma conexión, no la misma transacción
+                # porque execute_sql_transaction no soporta RETURNING). Riesgo residual es mínimo
+                # dado que el P0-1/TOCTOU guard en el worker actúa como red de seguridad.
+                try:
+                    from db_core import execute_sql_write
+                    cancelled = execute_sql_write(
+                        "UPDATE plan_chunk_queue SET status = 'cancelled', updated_at = NOW() "
+                        "WHERE user_id = %s AND status IN ('pending', 'processing') RETURNING id",
+                        (user_id,), returning=True
+                    )
+                    n_cancelled = len(cancelled) if cancelled else 0
+                    if n_cancelled > 0:
+                        logger.info(f"✅ [P0-2] {n_cancelled} chunks cancelados (pre-additional_queries) para {user_id}")
+                except Exception as ce:
+                    logger.warning(f"⚠️ [P0-2] Error cancelando chunks pre-additional_queries: {ce}")
+                save_new_meal_plan_robust(insert_data, additional_queries=additional_db_queries)
+            else:
+                # [P0-2/ATOMIC] Cancelar chunks + INSERT en una sola transacción.
+                save_new_meal_plan_atomic(user_id, insert_data, return_id=False)
             logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
             
         # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad)
@@ -271,6 +270,8 @@ def _process_swap_rejection_background(session_id: str, user_id: str, rejected_m
             
             insert_rejection(rejection_record)
             logger.debug(f"💾 [DB BACKGROUND] Rechazo temporal guardado para {rejected_meal}")
+            if user_id and user_id != "guest":
+                release_meal_reservation(user_id, rejected_meal)
             
             # Fricción Silenciosa: Validar si la base ya se rechazó 3 veces
             track_meal_friction(user_id, session_id, rejected_meal)

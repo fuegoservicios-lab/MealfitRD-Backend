@@ -1,10 +1,15 @@
+import json
 import logging
+import re
+import unicodedata
 from datetime import datetime
 from typing import List, Dict, Any
 from db_core import supabase, execute_sql_write
 from shopping_calculator import _parse_quantity, get_plural_unit, get_master_ingredients
+from constants import normalize_ingredient_for_tracking
 
 logger = logging.getLogger(__name__)
+_RESERVATION_MEAL_TOKEN_RE = re.compile(r":meal:(.+)$")
 
 _CANONICAL_UNIT_MAP = {
     'ud': 'unidad', 'uds': 'unidad', 'unidades': 'unidad',
@@ -28,10 +33,64 @@ def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
     if not supabase: return []
     try:
         res = supabase.table("user_inventory").select("*").eq("user_id", user_id).gt("quantity", 0).execute()
-        return res.data or []
+        rows = res.data or []
+        for row in rows:
+            qty = float(row.get("quantity") or 0)
+            reserved = float(row.get("reserved_quantity") or 0)
+            row["available_quantity"] = max(qty - reserved, 0.0)
+        return rows
     except Exception as e:
         logger.error(f"Error obteniendo user_inventory para {user_id}: {e}")
         return []
+
+
+def _normalize_reservation_details(raw_details: Any) -> Dict[str, float]:
+    if isinstance(raw_details, dict):
+        details = raw_details
+    elif isinstance(raw_details, str):
+        try:
+            details = json.loads(raw_details)
+        except Exception:
+            details = {}
+    else:
+        details = {}
+
+    normalized = {}
+    for key, value in details.items():
+        try:
+            qty = float(value or 0)
+        except Exception:
+            continue
+        if qty > 0:
+            normalized[str(key)] = qty
+    return normalized
+
+
+def _make_reservation_key(chunk_id: str, meal_name: str) -> str:
+    meal_token = _slug_meal_name(meal_name)
+    return f"chunk:{chunk_id}:meal:{meal_token}"
+
+
+def _reservation_matches_meal(reservation_key: str, meal_name: str) -> bool:
+    target = _slug_meal_name(meal_name)
+    if not target:
+        return False
+    match = _RESERVATION_MEAL_TOKEN_RE.search(str(reservation_key))
+    return bool(match and match.group(1) == target)
+
+
+def _slug_meal_name(meal_name: str) -> str:
+    raw = unicodedata.normalize("NFKD", (meal_name or "").strip().lower())
+    raw = "".join(ch for ch in raw if not unicodedata.combining(ch))
+    raw = re.sub(r"[^a-z0-9]+", "_", raw)
+    return raw.strip("_")
+
+
+def _update_row_reservation(row_id: str, reserved_quantity: float, reservation_details: Dict[str, float]) -> None:
+    supabase.table("user_inventory").update({
+        "reserved_quantity": round(max(reserved_quantity, 0.0), 4),
+        "reservation_details": reservation_details,
+    }).eq("id", row_id).execute()
 
 def _infer_shelf_life_days(name: str, category: str) -> int:
     """[P0-2] Default shelf_life por categoría cuando master_ingredients no lo tiene.
@@ -105,7 +164,7 @@ def get_user_inventory(user_id: str, household_size: int = None) -> List[str]:
     master_map = {m["name"]: m for m in master_list}
     
     for item in raw_items:
-        qty = float(item.get("quantity", 0))
+        qty = float(item.get("available_quantity", item.get("quantity", 0)) or 0)
         unit = item.get("unit", "unidad")
         name = item.get("ingredient_name", "")
         
@@ -232,6 +291,146 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
     # Incompatibles
     return None
 
+
+def _apply_reservation_delta(
+    user_id: str,
+    ingredient_name: str,
+    quantity: float,
+    unit: str,
+    reservation_key: str,
+    *,
+    release_only: bool = False,
+) -> bool:
+    existing = supabase.table("user_inventory").select(
+        "id, quantity, unit, reserved_quantity, reservation_details"
+    ).eq("user_id", user_id).eq("ingredient_name", ingredient_name).execute()
+
+    master_list = get_master_ingredients()
+    master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
+
+    for row in existing.data or []:
+        current_unit = row.get("unit") or unit or "unidad"
+        converted_qty = convert_amount(quantity, unit, current_unit, master_item)
+        if converted_qty is None:
+            continue
+
+        reserved_quantity = float(row.get("reserved_quantity") or 0)
+        current_quantity = float(row.get("quantity") or 0)
+        reservation_details = _normalize_reservation_details(row.get("reservation_details"))
+        previous = float(reservation_details.get(reservation_key) or 0)
+
+        if release_only:
+            if previous <= 0:
+                return False
+            reservation_details.pop(reservation_key, None)
+            reserved_quantity = max(reserved_quantity - previous, 0.0)
+        else:
+            target_qty = round(max(converted_qty, 0.0), 4)
+            if abs(previous - target_qty) < 0.0001:
+                return True
+            reserved_quantity = max(reserved_quantity - previous, 0.0)
+            if target_qty > 0:
+                available_after_other_reservations = max(current_quantity - reserved_quantity, 0.0)
+                applied_qty = min(target_qty, available_after_other_reservations)
+                if applied_qty <= 0:
+                    return False
+                reservation_details[reservation_key] = round(applied_qty, 4)
+                reserved_quantity += applied_qty
+
+        _update_row_reservation(row["id"], reserved_quantity, reservation_details)
+        return True
+
+    return False
+
+
+def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, Any]]) -> int:
+    """Reserva ingredientes de un chunk confirmado para que el siguiente vea stock disponible real."""
+    if not supabase or not days:
+        return 0
+
+    reserved_items = 0
+    for day in days:
+        for meal in (day or {}).get("meals", []):
+            reservation_key = _make_reservation_key(chunk_id, meal.get("name", ""))
+            for item in meal.get("ingredients", []) or []:
+                if not item or len(str(item).strip()) < 3:
+                    continue
+                try:
+                    qty, unit, name = _parse_quantity(str(item))
+                    if name and qty > 0 and _apply_reservation_delta(user_id, name, qty, unit, reservation_key):
+                        reserved_items += 1
+                except Exception as e:
+                    logger.error(f"Error reservando '{item}' para {user_id}: {e}")
+    return reserved_items
+
+
+def release_meal_reservation(user_id: str, meal_name: str) -> int:
+    """Libera reservas asociadas a una comida rechazada."""
+    if not supabase or not user_id or not meal_name:
+        return 0
+
+    released = 0
+    try:
+        res = supabase.table("user_inventory").select(
+            "id, reserved_quantity, reservation_details"
+        ).eq("user_id", user_id).gt("reserved_quantity", 0).execute()
+        for row in res.data or []:
+            reservation_details = _normalize_reservation_details(row.get("reservation_details"))
+            keys_to_remove = [k for k in reservation_details.keys() if _reservation_matches_meal(k, meal_name)]
+            if not keys_to_remove:
+                continue
+            reserved_quantity = float(row.get("reserved_quantity") or 0)
+            for key in keys_to_remove:
+                reserved_quantity = max(reserved_quantity - float(reservation_details.get(key) or 0), 0.0)
+                reservation_details.pop(key, None)
+                released += 1
+            _update_row_reservation(row["id"], reserved_quantity, reservation_details)
+    except Exception as e:
+        logger.error(f"Error liberando reserva de '{meal_name}' para {user_id}: {e}")
+    return released
+
+
+def _consume_reserved_inventory(user_id: str, ingredient_name: str, quantity: float, unit: str) -> bool:
+    """Convierte reserva planificada en consumo real reduciendo reserved_quantity antes del descuento físico."""
+    if not supabase or quantity <= 0:
+        return False
+
+    existing = supabase.table("user_inventory").select(
+        "id, unit, reserved_quantity, reservation_details"
+    ).eq("user_id", user_id).eq("ingredient_name", ingredient_name).gt("reserved_quantity", 0).execute()
+
+    master_list = get_master_ingredients()
+    master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
+
+    for row in existing.data or []:
+        current_unit = row.get("unit") or unit or "unidad"
+        converted_qty = convert_amount(quantity, unit, current_unit, master_item)
+        if converted_qty is None:
+            continue
+
+        remaining = round(max(converted_qty, 0.0), 4)
+        if remaining <= 0:
+            return False
+
+        reservation_details = _normalize_reservation_details(row.get("reservation_details"))
+        for key in list(reservation_details.keys()):
+            if remaining <= 0:
+                break
+            current_reserved = float(reservation_details.get(key) or 0)
+            consumed = min(current_reserved, remaining)
+            leftover = round(current_reserved - consumed, 4)
+            remaining = round(remaining - consumed, 4)
+            if leftover > 0:
+                reservation_details[key] = leftover
+            else:
+                reservation_details.pop(key, None)
+
+        reserved_quantity = sum(float(v) for v in reservation_details.values())
+        _update_row_reservation(row["id"], reserved_quantity, reservation_details)
+        return True
+
+    return False
+
 def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: float, unit: str):
     """
     Agrega o actualiza un ingrediente en la despensa del usuario.
@@ -297,6 +496,7 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
         try:
             qty, unit, name = _parse_quantity(item)
             if name and qty > 0:
+                _consume_reserved_inventory(user_id, name, qty, unit)
                 # Actualizar restando
                 add_or_update_inventory_item(user_id, name, -qty, unit)
         except Exception as e:
@@ -361,95 +561,6 @@ def restock_inventory(user_id: str, ingredients_list: list):
         return False
             
     return success
-
-def merge_inventory_after_rotation(user_id: str, plan_data: dict) -> int:
-    """
-    Merge inteligente post-rotación: sincroniza la Nevera con el nuevo plan
-    SIN borrar el inventario existente.
-    
-    - Ingredientes que ya están en la Nevera → no se tocan (respeta cantidades del usuario)
-    - Ingredientes nuevos del plan → se insertan con la cantidad del plan
-    - Ingredientes manuales del usuario → se preservan intactos
-    
-    Returns: número de ingredientes nuevos añadidos.
-    """
-    if not supabase or not plan_data:
-        return 0
-    
-    from shopping_calculator import normalize_name
-    
-    # 1. Leer la lista de compras del nuevo plan — preferir la lista del ciclo actual
-    # Cascada: weekly (7d) > biweekly (15d) > monthly (30d) > genérica (puede estar inflada)
-    shopping_list = None
-    source_key = "aggregated_shopping_list"
-    
-    for key in ("aggregated_shopping_list_weekly", "aggregated_shopping_list_biweekly", "aggregated_shopping_list_monthly", "aggregated_shopping_list"):
-        candidate = plan_data.get(key, [])
-        if candidate and isinstance(candidate, list) and len(candidate) > 0:
-            shopping_list = candidate
-            source_key = key
-            break
-    
-    if not shopping_list:
-        logger.info(f"🔄 [MERGE] Sin lista de compras en el plan, omitiendo merge para {user_id}")
-        return 0
-    
-    logger.info(f"🔄 [MERGE] Usando '{source_key}' ({len(shopping_list)} items) para merge de {user_id}")
-    
-    # 2. Leer inventario actual (incluyendo items con qty > 0)
-    try:
-        existing_res = supabase.table("user_inventory") \
-            .select("ingredient_name") \
-            .eq("user_id", user_id) \
-            .gt("quantity", 0) \
-            .execute()
-        existing_names = set()
-        if existing_res.data:
-            existing_names = {row["ingredient_name"].lower().strip() for row in existing_res.data}
-    except Exception as e:
-        logger.error(f"❌ [MERGE] Error leyendo inventario actual para {user_id}: {e}")
-        return 0
-    
-    # 3. Filtrar: solo procesar ingredientes que NO están ya en la Nevera
-    items_added = 0
-    UNIT_NORMALIZE = _CANONICAL_UNIT_MAP
-    
-    for item in shopping_list:
-        try:
-            # Solo procesamos objetos estructurados (formato moderno)
-            if not isinstance(item, dict) or "name" not in item:
-                continue
-            
-            name = normalize_name(item["name"])
-            if not name:
-                continue
-            
-            # Si ya existe en la Nevera, no lo tocamos
-            if name.lower().strip() in existing_names:
-                continue
-            
-            qty = float(item.get("quantity", item.get("market_qty", 0)) or 0)
-            unit = item.get("unit", item.get("market_unit", "unidad")) or "unidad"
-            unit_lower = unit.lower().rstrip('.')
-            unit = UNIT_NORMALIZE.get(unit_lower, unit_lower if unit_lower else 'unidad')
-            
-            if qty <= 0:
-                continue
-            
-            # Insertar el nuevo ingrediente
-            result = add_or_update_inventory_item(user_id, name, qty, unit)
-            if result:
-                items_added += 1
-                # Marcar como existente para evitar duplicados dentro del mismo batch
-                existing_names.add(name.lower().strip())
-                
-        except Exception as e:
-            logger.error(f"⚠️ [MERGE] Error procesando item '{item}': {e}")
-            continue
-    
-    logger.info(f"🔄 [MERGE] Post-rotación: {items_added} ingredientes nuevos añadidos a la Nevera de {user_id} (de {len(shopping_list)} en el plan)")
-    return items_added
-
 
 def consume_inventory_items_completely(user_id: str, ingredient_names: List[str]):
     """

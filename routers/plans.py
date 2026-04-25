@@ -87,7 +87,16 @@ def debug_scaling(user_id: str):
     }
 # ─── END TEMPORARY DEBUG ENDPOINT ───
 
-from constants import PLAN_CHUNK_SIZE
+from constants import PLAN_CHUNK_SIZE, split_with_absorb
+
+def chunk_size_for_next_slot(days_since_creation: int, total_planned_days: int, base: int = 3):
+    chunks = split_with_absorb(total_planned_days, base)
+    consumed = 0
+    for c in chunks:
+        if days_since_creation < consumed + c:
+            return c
+        consumed += c
+    return base
 
 @router.post("/shift-plan")
 def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
@@ -107,153 +116,272 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado.")
 
-        # Get latest plan
-        plan_record = execute_sql_query(
-            "SELECT id, plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
-            (user_id,), fetch_one=True
-        )
-        if not plan_record:
-            return {"success": False, "message": "No hay plan activo."}
-
-        plan_id = plan_record["id"]
-        plan_data = plan_record.get("plan_data", {})
-        days = plan_data.get("days", [])
-        total_planned_days = max(3, int(plan_data.get("total_days_requested", len(days))))
-        window_size = 3  # Siempre mostrar bloques de 3 días (aprendizaje continuo)
+        # P0-2 FIX: Get latest plan using FOR UPDATE to prevent race conditions with chunk workers doing blind overwrites
+        from db_core import connection_pool
+        from psycopg.rows import dict_row
         
-        if len(days) == 0:
-            return {"success": False, "message": "El plan está vacío."}
-
-        # Check if shift is needed
-        tz_offset = data.get('tzOffset', 0)
-        today = datetime.now(timezone.utc)
-        if tz_offset:
-            try:
-                today -= timedelta(minutes=int(tz_offset))
-            except (ValueError, TypeError):
-                pass
-
-        # Parse grocery_start_date to find actual day index
-        start_date_str = plan_data.get("grocery_start_date")
-        if not start_date_str:
-            return {"success": False, "message": "Falta fecha de inicio."}
-            
-        from constants import safe_fromisoformat
-        try:
-            start_dt = safe_fromisoformat(start_date_str)
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=timezone.utc)
-            else:
-                start_dt = start_dt.astimezone(timezone.utc)
-            start_dt = start_dt - timedelta(minutes=int(tz_offset))
-            
-            # Remove time component
-            today_date = today.date()
-            start_date = start_dt.date()
-            days_since_creation = (today_date - start_date).days
-        except Exception as e:
-            return {"success": False, "message": f"Error parseando fecha: {e}"}
-
-        # Cuántos días del plan total quedan por vivir
-        days_remaining_in_plan = max(0, total_planned_days - days_since_creation)
-        # La ventana necesita min(window_size, días restantes) días; si el plan expiró no necesita nada
-        window_needed = min(window_size, days_remaining_in_plan)
-
-        needs_shift = days_since_creation > 0
-        needs_fill_initial = len(days) < window_needed  # Para la guard de cortocircuito inicial
-
-        if not needs_shift and not needs_fill_initial:
-            return {"success": True, "message": "Plan ya est\u00e1 al d\u00eda y completo.", "plan_data": plan_data}
-
-        logger.info(f"\ud83d\udd04 [API SHIFT] Shifting {days_since_creation} días. Plan total={total_planned_days}, restantes={days_remaining_in_plan}")
-
-        shifted_data = copy.deepcopy(plan_data)
-
-        # 1. Atomic Shift (if needed)
-        if needs_shift:
-            for _ in range(min(days_since_creation, len(days))):  # No shiftar más de los días existentes
-                updated = execute_sql_write(
-                    "UPDATE meal_plans SET plan_data = plan_data #- '{days,0}' WHERE id = %s RETURNING plan_data",
-                    (plan_id,), returning=True
-                )
-                if updated:
-                    shifted_data = updated[0].get('plan_data', {})
-
-            if not shifted_data:
-                return {"success": False, "message": "No se pudo actualizar el plan durante el shift."}
-
-        shifted_days = shifted_data.get('days', [])
-
-        # 2. Update day names AND renumber days 1..N (requerido para continuidad del chunk worker)
-        dias_es = ["Lunes", "Martes", "Mi\u00e9rcoles", "Jueves", "Viernes", "S\u00e1bado", "Domingo"]
-        for i, day_obj in enumerate(shifted_days):
-            target_date = today + timedelta(days=i)
-            day_obj['day_name'] = dias_es[target_date.weekday()]
-            day_obj['day'] = i + 1  # Renumerar desde 1 para mantener secuencia 1..N
-
-        # 3. Rolling window: si el plan no ha expirado y la ventana actual tiene menos de window_size días,
-        #    y no hay ya un chunk de IA en camino, encolar generación IA real (aprendizaje continuo).
-        modified = needs_shift
-        is_partial = plan_data.get('generation_status') in ('partial', 'generating_next')
-        needs_fill = len(shifted_days) < window_needed and days_remaining_in_plan > 0
-
-        if not is_partial and needs_fill:
-            # Verificar si ya hay un chunk pendiente/procesando que cubra los días faltantes
-            pending_chunk = execute_sql_query(
-                """SELECT id FROM plan_chunk_queue
-                   WHERE meal_plan_id = %s AND status IN ('pending', 'processing')
-                   LIMIT 1""",
-                (plan_id,), fetch_one=True
-            )
-            if pending_chunk:
-                logger.info(f"⏳ [ROLLING WINDOW] Ya hay un chunk IA en cola para plan {plan_id}. Esperando.")
-            else:
-                try:
-                    from cron_tasks import _enqueue_plan_chunk
-                    profile_row = execute_sql_query(
-                        "SELECT health_profile FROM user_profiles WHERE id = %s",
-                        (user_id,), fetch_one=True
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(
+                        "SELECT id, plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+                        (user_id,)
                     )
-                    hp = (profile_row or {}).get("health_profile", {}) or {}
-                    if hp:
-                        previous_meals = [
-                            m.get('name', '') for d in shifted_days
-                            for m in d.get('meals', []) if m.get('name')
-                        ]
-                        days_offset = len(shifted_days)
-                        days_needed = window_needed - days_offset
-                        # week_number único por ciclo de 3 días
-                        completed_chunks = execute_sql_query(
-                            "SELECT COUNT(*) as cnt FROM plan_chunk_queue WHERE meal_plan_id = %s AND status = 'completed'",
-                            (plan_id,), fetch_one=True
-                        )
-                        next_week = int((completed_chunks or {}).get('cnt') or 0) + 2
-                        snapshot = {
-                            "form_data": {**hp, "user_id": user_id, "totalDays": window_size},
-                            "taste_profile": "",
-                            "memory_context": "",
-                            "previous_meals": previous_meals,
-                            "totalDays": window_size,
-                            "_is_rolling_refill": True,  # Señal para el chunk worker: skip GAP E validation
-                        }
-                        _enqueue_plan_chunk(user_id, plan_id, next_week, days_offset, days_needed, snapshot)
-                        shifted_data['generation_status'] = 'generating_next'
-                        logger.info(f"🤖 [ROLLING WINDOW] Chunk IA encolado (week={next_week}, offset={days_offset}, count={days_needed}) para plan {plan_id}")
-                        modified = True
-                    else:
-                        logger.warning(f"⚠️ [ROLLING WINDOW] Sin health_profile para user {user_id}.")
-                except Exception as e:
-                    logger.error(f"❌ [ROLLING WINDOW] Error encolando chunk IA: {e}")
+                    plan_record = cursor.fetchone()
+                    if not plan_record:
+                        return {"success": False, "message": "No hay plan activo."}
 
-        # 4. Save rolling window updates
-        if modified:
-            shifted_data['days'] = shifted_days
-            if needs_shift and start_date_str:
-                new_start = start_dt + timedelta(days=days_since_creation)
-                shifted_data['grocery_start_date'] = new_start.isoformat()
-                
-            from db_plans import update_meal_plan_data
-            update_meal_plan_data(plan_id, shifted_data)
+                    plan_id = plan_record["id"]
+                    plan_data = plan_record.get("plan_data", {})
+                    days = plan_data.get("days", [])
+                    total_planned_days = max(3, int(plan_data.get("total_days_requested", len(days))))
+                    
+                    if len(days) == 0:
+                        return {"success": False, "message": "El plan está vacío."}
+
+                    # Check if shift is needed
+                    tz_offset = data.get('tzOffset', 0)
+                    today = datetime.now(timezone.utc)
+                    if tz_offset:
+                        try:
+                            today -= timedelta(minutes=int(tz_offset))
+                        except (ValueError, TypeError):
+                            pass
+
+                    # Parse grocery_start_date to find actual day index
+                    start_date_str = plan_data.get("grocery_start_date")
+                    if not start_date_str:
+                        return {"success": False, "message": "Falta fecha de inicio."}
+                        
+                    from constants import safe_fromisoformat
+                    try:
+                        start_dt = safe_fromisoformat(start_date_str)
+                        if start_dt.tzinfo is None:
+                            start_dt = start_dt.replace(tzinfo=timezone.utc)
+                        else:
+                            start_dt = start_dt.astimezone(timezone.utc)
+                        start_dt = start_dt - timedelta(minutes=int(tz_offset))
+                        
+                        # Remove time component
+                        today_date = today.date()
+                        start_date = start_dt.date()
+                        days_since_creation = (today_date - start_date).days
+                    except Exception as e:
+                        return {"success": False, "message": f"Error parseando fecha: {e}"}
+
+                    # Cuántos días del plan total quedan por vivir
+                    days_remaining_in_plan = max(0, total_planned_days - days_since_creation)
+                    
+                    # Bloque dinámico P0-2: window_size depende de la posición en la distribución
+                    window_size = chunk_size_for_next_slot(max(0, days_since_creation), total_planned_days, PLAN_CHUNK_SIZE)
+                    
+                    # La ventana necesita min(window_size, días restantes) días; si el plan expiró no necesita nada
+                    window_needed = min(window_size, days_remaining_in_plan)
+
+                    needs_shift = days_since_creation > 0
+                    needs_fill_initial = len(days) < window_needed  # Para la guard de cortocircuito inicial
+
+                    if not needs_shift and not needs_fill_initial:
+                        return {"success": True, "message": "Plan ya est\u00e1 al d\u00eda y completo.", "plan_data": plan_data}
+
+                    logger.info(f"\ud83d\udd04 [API SHIFT] Shifting {days_since_creation} días. Plan total={total_planned_days}, restantes={days_remaining_in_plan}")
+
+                    shifted_data = copy.deepcopy(plan_data)
+                    shifted_days = shifted_data.get('days', [])
+
+                    # 1. Atomic Shift (in-memory, saved at the end within transaction)
+                    if needs_shift:
+                        shift_amount = min(days_since_creation, len(shifted_days))
+                        shifted_days = shifted_days[shift_amount:]
+
+                    # 2. Update day names AND renumber days 1..N (requerido para continuidad del chunk worker)
+                    dias_es = ["Lunes", "Martes", "Mi\u00e9rcoles", "Jueves", "Viernes", "S\u00e1bado", "Domingo"]
+                    for i, day_obj in enumerate(shifted_days):
+                        target_date = today + timedelta(days=i)
+                        day_obj['day_name'] = dias_es[target_date.weekday()]
+                        day_obj['day'] = i + 1  # Renumerar desde 1 para mantener secuencia 1..N
+
+                    # 3. Rolling window: si el plan no ha expirado y la ventana actual tiene menos de window_size días,
+                    #    y no hay ya un chunk de IA en camino, encolar generación IA real (aprendizaje continuo).
+                    modified = needs_shift
+                    is_partial = plan_data.get('generation_status') in ('partial', 'generating_next')
+                    needs_fill = len(shifted_days) < window_needed and days_remaining_in_plan > 0
+                    disable_rolling_refill_for_active_7d = total_planned_days == 7 and days_remaining_in_plan > 0
+
+                    if disable_rolling_refill_for_active_7d and needs_fill:
+                        logger.info(
+                            f"[P1-1] Plan de 7 días {plan_id}: rolling refill bloqueado durante vida útil "
+                            f"(restantes={days_remaining_in_plan}, visibles={len(shifted_days)})."
+                        )
+                    elif total_planned_days == 7 and days_remaining_in_plan == 0 and not is_partial:
+                        # [P0-1] Plan semanal expirado: auto-renovar con señales de aprendizaje frescas.
+                        # Genera una nueva semana [3,4] en el mismo plan_id, preservando historial.
+                        try:
+                            from cron_tasks import _enqueue_plan_chunk
+                            cursor.execute(
+                                "SELECT COUNT(*) AS cnt FROM plan_chunk_queue "
+                                "WHERE meal_plan_id = %s AND status IN ('pending', 'processing', 'stale')",
+                                (plan_id,)
+                            )
+                            if ((cursor.fetchone() or {}).get('cnt') or 0) == 0:
+                                cursor.execute("SELECT health_profile FROM user_profiles WHERE id = %s", (user_id,))
+                                profile_row = cursor.fetchone()
+                                hp = (profile_row or {}).get("health_profile", {}) or {}
+                                if hp:
+                                    cursor.execute(
+                                        "SELECT COALESCE(MAX(week_number), 0) AS max_week FROM plan_chunk_queue "
+                                        "WHERE meal_plan_id = %s AND status <> 'cancelled'",
+                                        (plan_id,)
+                                    )
+                                    next_week = int((cursor.fetchone() or {}).get('max_week') or 0) + 1
+                                    previous_meals = [
+                                        m.get('name', '') for d in shifted_days
+                                        for m in d.get('meals', []) if m.get('name')
+                                    ]
+                                    current_offset = 0
+                                    for chunk_count in [3, 4]:
+                                        snapshot = {
+                                            "form_data": {**hp, "user_id": user_id, "totalDays": chunk_count},
+                                            "taste_profile": "",
+                                            "memory_context": "",
+                                            "previous_meals": previous_meals,
+                                            "totalDays": chunk_count,
+                                            "_is_rolling_refill": True,
+                                            "_is_weekly_renewal": True,
+                                        }
+                                        _enqueue_plan_chunk(
+                                            user_id, plan_id, next_week, current_offset,
+                                            chunk_count, snapshot, chunk_kind="rolling_refill",
+                                        )
+                                        logger.info(
+                                            f"🔄 [P0-1 RENEWAL] Chunk semana {next_week} encolado "
+                                            f"(offset={current_offset}, count={chunk_count}) plan {plan_id}"
+                                        )
+                                        next_week += 1
+                                        current_offset += chunk_count
+                                    shifted_days = []
+                                    shifted_data['grocery_start_date'] = today.isoformat()
+                                    shifted_data['generation_status'] = 'generating_next'
+                                    modified = True
+                                    logger.info(f"🔄 [P0-1 RENEWAL] Plan semanal {plan_id} renovado.")
+                                else:
+                                    logger.warning(f"⚠️ [P0-1 RENEWAL] Sin health_profile para user {user_id}.")
+                        except Exception as e:
+                            logger.error(f"❌ [P0-1 RENEWAL] Error renovando plan semanal: {e}")
+                    elif not is_partial and needs_fill:
+                        try:
+                            from cron_tasks import _enqueue_plan_chunk
+                            cursor.execute("SELECT health_profile FROM user_profiles WHERE id = %s", (user_id,))
+                            profile_row = cursor.fetchone()
+                            hp = (profile_row or {}).get("health_profile", {}) or {}
+                            if hp:
+                                previous_meals = [
+                                    m.get('name', '') for d in shifted_days
+                                    for m in d.get('meals', []) if m.get('name')
+                                ]
+                                days_offset = len(shifted_days)
+
+                                # [P0-5] Catch-up: enqueue ALL missing days as sequential chunks,
+                                # not just the current window. This ensures that after a long absence
+                                # (e.g. 13 days missing) the entire gap gets filled, not just 3 days.
+                                total_missing = days_remaining_in_plan - days_offset
+                                catchup_chunks = split_with_absorb(total_missing, PLAN_CHUNK_SIZE) if total_missing > 0 else []
+
+                                # [P1-3] El siguiente week_number debe seguir al máximo chunk no-cancelado,
+                                # no solo a los completed, para no desalinearse si hubo failed/stale intermedios.
+                                cursor.execute(
+                                    """
+                                    SELECT COALESCE(MAX(week_number), 1) AS max_week
+                                    FROM plan_chunk_queue
+                                    WHERE meal_plan_id = %s
+                                      AND status <> 'cancelled'
+                                    """,
+                                    (plan_id,)
+                                )
+                                existing_chunks = cursor.fetchone()
+                                next_week = int((existing_chunks or {}).get('max_week') or 1) + 1
+
+                                current_offset = days_offset
+                                chunks_enqueued = 0
+
+                                for chunk_count in catchup_chunks:
+                                    cursor.execute(
+                                        """
+                                        SELECT id, status, chunk_kind
+                                        FROM plan_chunk_queue
+                                        WHERE meal_plan_id = %s
+                                          AND week_number = %s
+                                          AND status IN ('pending', 'processing', 'stale', 'failed')
+                                        ORDER BY updated_at DESC NULLS LAST, created_at DESC
+                                        LIMIT 1
+                                        """,
+                                        (plan_id, next_week)
+                                    )
+                                    conflicting_chunk = cursor.fetchone()
+
+                                    if conflicting_chunk:
+                                        logger.info(
+                                            f"[P1-2] Saltando catch-up rolling refill para plan {plan_id}: "
+                                            f"ya existe chunk objetivo week={next_week} "
+                                            f"(id={conflicting_chunk['id']}, status={conflicting_chunk['status']}, "
+                                            f"kind={conflicting_chunk.get('chunk_kind', 'unknown')})."
+                                        )
+                                    else:
+                                        snapshot = {
+                                            "form_data": {**hp, "user_id": user_id, "totalDays": chunk_count},
+                                            "taste_profile": "",
+                                            "memory_context": "",
+                                            "previous_meals": previous_meals,
+                                            "totalDays": chunk_count,
+                                            "_is_rolling_refill": True,
+                                        }
+                                        _enqueue_plan_chunk(
+                                            user_id,
+                                            plan_id,
+                                            next_week,
+                                            current_offset,
+                                            chunk_count,
+                                            snapshot,
+                                            chunk_kind="rolling_refill",
+                                        )
+                                        chunks_enqueued += 1
+                                        logger.info(
+                                            f"🤖 [ROLLING WINDOW] Chunk IA encolado "
+                                            f"(week={next_week}, offset={current_offset}, count={chunk_count}) "
+                                            f"para plan {plan_id}"
+                                        )
+
+                                    next_week += 1
+                                    current_offset += chunk_count
+
+                                if chunks_enqueued > 0:
+                                    shifted_data['generation_status'] = 'generating_next'
+                                    logger.info(
+                                        f"🤖 [P0-5 CATCHUP] {chunks_enqueued} chunk(s) encolados "
+                                        f"(total_missing={total_missing}, sizes={catchup_chunks}) "
+                                        f"para plan {plan_id}"
+                                    )
+                                    modified = True
+                            else:
+                                logger.warning(f"⚠️ [ROLLING WINDOW] Sin health_profile para user {user_id}.")
+                        except Exception as e:
+                            logger.error(f"❌ [ROLLING WINDOW] Error encolando chunk IA: {e}")
+
+                    # 4. Save rolling window updates
+                    if modified:
+                        shifted_data['days'] = shifted_days
+                        if needs_shift and start_date_str:
+                            new_start = start_dt + timedelta(days=days_since_creation)
+                            shifted_data['grocery_start_date'] = new_start.isoformat()
+
+                        # [P0-2] Sello CAS: timestamp que el worker compara para detectar
+                        # si el plan fue modificado externamente durante el LLM call.
+                        shifted_data['_plan_modified_at'] = datetime.now(timezone.utc).isoformat()
+
+                        cursor.execute(
+                            "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s",
+                            (json.dumps(shifted_data, ensure_ascii=False), plan_id)
+                        )
 
         return {"success": True, "message": "Plan actualizado a la fecha.", "plan_data": shifted_data}
     
@@ -377,13 +505,13 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
                     "previous_meals": week1_meals,
                     "totalDays": total_days_requested,
                 }
-                weeks_total = math.ceil(total_days_requested / PLAN_CHUNK_SIZE)
-                for wk in range(2, weeks_total + 1):
-                    offset = (wk - 1) * PLAN_CHUNK_SIZE
-                    count = min(PLAN_CHUNK_SIZE, total_days_requested - offset)
+                chunks = split_with_absorb(total_days_requested, PLAN_CHUNK_SIZE)
+                offset = chunks[0]
+                for wk, count in enumerate(chunks[1:], start=2):
                     if count > 0:
-                        _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot)
-                logger.info(f"🚀 [CHUNK] Plan {plan_id} creado con semana 1. {weeks_total - 1} semanas encoladas en background.")
+                        _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot, chunk_kind="initial_plan")
+                    offset += count
+                logger.info(f"🚀 [CHUNK] Plan {plan_id} creado con semana 1. {len(chunks) - 1} chunks encolados en background.")
 
             # [GAP 6] Sembrar emergency_backup_plan con los 3 días recién generados (sin LLM).
             # Así Smart Shuffle tiene pool real si chunk 2+ falla antes de la rotación nocturna.
@@ -599,13 +727,13 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
                                         "previous_meals": week1_meals,
                                         "totalDays": total_days_requested,
                                     }
-                                    weeks_total = math.ceil(total_days_requested / PLAN_CHUNK_SIZE)
-                                    for wk in range(2, weeks_total + 1):
-                                        offset = (wk - 1) * PLAN_CHUNK_SIZE
-                                        count = min(PLAN_CHUNK_SIZE, total_days_requested - offset)
+                                    chunks = split_with_absorb(total_days_requested, PLAN_CHUNK_SIZE)
+                                    offset = chunks[0]
+                                    for wk, count in enumerate(chunks[1:], start=2):
                                         if count > 0:
-                                            _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot)
-                                    logger.info(f"🚀 [CHUNK SSE] Plan {plan_id} creado con semana 1. {weeks_total - 1} semanas encoladas en background.")
+                                            _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot, chunk_kind="initial_plan")
+                                        offset += count
+                                    logger.info(f"🚀 [CHUNK SSE] Plan {plan_id} creado con semana 1. {len(chunks) - 1} chunks encolados en background.")
 
                                 # [GAP 6] Sembrar emergency_backup_plan con los 3 días recién generados.
                                 if actual_user_id:
@@ -717,7 +845,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
-        swap_reason = data.get("swap_reason", "dislike")  # variety | time | dislike | similar | budget
+        swap_reason = data.get("swap_reason", "variety")  # variety | time | dislike | similar | budget
         
         # Solo registrar rechazo cuando el usuario explícitamente dice "No me gusta"
         if rejected_meal and swap_reason == "dislike":

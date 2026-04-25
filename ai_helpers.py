@@ -130,6 +130,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     logger.debug("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
     history_lower = history_text.lower() if history_text else ""
     history_normalized = strip_accents(history_lower)
+    force_variety = bool(form_data.get("_force_variety")) if form_data else False
     
     # --- FILTRO DE RESTRICCIONES MÉDICAS Y DIETÉTICAS ---
     if form_data:
@@ -259,6 +260,9 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         except Exception:
             pass
     variety_level = variety_level or "standard"
+    if force_variety:
+        variety_level = "max"
+        logger.warning("🎯 [P0-3] _force_variety=true -> elevando variety_level a max para el siguiente chunk.")
     
     if skip_lunch:
         num_proteins_to_pick = min(1, len(available_proteins))  # 1 proteína (solo Cena la necesita fuerte)

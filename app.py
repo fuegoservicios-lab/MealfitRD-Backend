@@ -89,24 +89,40 @@ async def lifespan(app: FastAPI):
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                 );
                 """)
-                
-                # Crear tabla para Nightly Rotation Queue
+
                 conn.execute("""
-                CREATE TABLE IF NOT EXISTS nightly_rotation_queue (
+                CREATE TABLE IF NOT EXISTS system_alerts (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
-                    status VARCHAR(50) DEFAULT 'pending',
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                    alert_key TEXT NOT NULL UNIQUE,
+                    alert_type TEXT NOT NULL,
+                    severity TEXT NOT NULL DEFAULT 'warning',
+                    title TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    affected_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    triggered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+                    resolved_at TIMESTAMP WITH TIME ZONE NULL
                 );
                 """)
-                
-                # Asegurar que exista la columna updated_at para tablas antiguas
+
                 conn.execute("""
-                ALTER TABLE nightly_rotation_queue
-                ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW();
+                ALTER TABLE user_profiles
+                ADD COLUMN IF NOT EXISTS quality_alert_at TIMESTAMP WITH TIME ZONE;
                 """)
 
+                conn.execute("""
+                ALTER TABLE user_inventory
+                ADD COLUMN IF NOT EXISTS reserved_quantity NUMERIC(12,4) DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS reservation_details JSONB DEFAULT '{}'::jsonb;
+                """)
+
+                conn.execute("""
+                UPDATE user_inventory
+                SET reserved_quantity = COALESCE(reserved_quantity, 0),
+                    reservation_details = COALESCE(reservation_details, '{}'::jsonb)
+                WHERE reserved_quantity IS NULL OR reservation_details IS NULL;
+                """)
+                
                 # Cola para generación de chunks en background (Background Chunking Just-in-Time)
                 conn.execute("""
                 CREATE TABLE IF NOT EXISTS plan_chunk_queue (
@@ -114,6 +130,7 @@ async def lifespan(app: FastAPI):
                     user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
                     meal_plan_id UUID NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
                     week_number INT NOT NULL,
+                    chunk_kind VARCHAR(32) NOT NULL DEFAULT 'initial_plan',
                     days_offset INT NOT NULL,
                     days_count INT NOT NULL DEFAULT 3,
                     pipeline_snapshot JSONB NOT NULL,
@@ -144,6 +161,8 @@ async def lifespan(app: FastAPI):
                 ALTER TABLE plan_chunk_queue
                 ADD COLUMN IF NOT EXISTS quality_tier VARCHAR(20),
                 ADD COLUMN IF NOT EXISTS lag_seconds_at_pickup INT,
+                ADD COLUMN IF NOT EXISTS expected_preemption_seconds INT DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS effective_lag_seconds_at_pickup INT DEFAULT 0,
                 ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;
                 """)
 
@@ -151,6 +170,27 @@ async def lifespan(app: FastAPI):
                 conn.execute("""
                 ALTER TABLE plan_chunk_queue
                 ADD COLUMN IF NOT EXISTS learning_metrics JSONB;
+                """)
+
+                conn.execute("""
+                ALTER TABLE plan_chunk_queue
+                ADD COLUMN IF NOT EXISTS dead_lettered_at TIMESTAMP WITH TIME ZONE,
+                ADD COLUMN IF NOT EXISTS dead_letter_reason TEXT;
+                """)
+
+                # [P1-2] Tipo explícito de chunk para distinguir chunks iniciales vs rolling refill.
+                conn.execute("""
+                ALTER TABLE plan_chunk_queue
+                ADD COLUMN IF NOT EXISTS chunk_kind VARCHAR(32) DEFAULT 'initial_plan';
+                """)
+
+                conn.execute("""
+                UPDATE plan_chunk_queue
+                SET chunk_kind = CASE
+                    WHEN COALESCE((pipeline_snapshot->>'_is_rolling_refill')::boolean, false) THEN 'rolling_refill'
+                    ELSE 'initial_plan'
+                END
+                WHERE chunk_kind IS NULL OR chunk_kind = '';
                 """)
 
                 # [GAP E] Dedup previo de chunks duplicados (meal_plan_id, week_number) antes del UNIQUE
@@ -242,17 +282,18 @@ async def lifespan(app: FastAPI):
             
     if HAS_SCHEDULER and scheduler:
         scheduler.add_job(run_proactive_checks, "cron", minute=30)
-        from cron_tasks import run_nightly_auto_rotation, process_rotation_queue, process_plan_chunk_queue
-        scheduler.add_job(run_nightly_auto_rotation, "cron", hour=2, minute=0)
-        scheduler.add_job(process_rotation_queue, "interval", minutes=5)
-        # max_instances=1 evita solapes si un tick tarda >1 min (ej. por LLM lento).
-        # coalesce=True: si se acumulan ticks durante un downtime, solo ejecuta uno al reanudar.
+        from cron_tasks import register_plan_chunk_scheduler, trigger_background_rolling_refill
+        register_plan_chunk_scheduler(scheduler)
+        # [P0-2] Rolling refill para usuarios que no abren la app (cada día a la 1:00 AM UTC)
         scheduler.add_job(
-            process_plan_chunk_queue,
-            "interval",
-            minutes=1,
+            trigger_background_rolling_refill,
+            "cron",
+            hour=1,
+            minute=0,
+            id="background_rolling_refill",
             max_instances=1,
             coalesce=True,
+            replace_existing=True,
         )
         scheduler.start()
         logger.info("⏰ [APScheduler] Tareas proactivas, CRON jobs nocturnos y Background Chunking iniciados.")
@@ -334,50 +375,6 @@ def api_test_proactive(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(run_push)
     return {"status": "started", "message": "Task queued"}
-
-@app.post("/api/cron/nightly-rotation")
-def api_trigger_nightly_rotation(
-    authorization: Optional[str] = Header(None)
-):
-    """
-    Trigger seguro para Vercel Cron. Dispara la rotación de planes.
-    Requiere Bearer token que coincida con CRON_SECRET en el entorno.
-    Se ejecuta de forma síncrona para evitar que Vercel mate el proceso background.
-    """
-    # Validar Bearer token contra CRON_SECRET (Vercel lo inyecta automáticamente)
-    cron_secret = os.environ.get("CRON_SECRET")
-    if cron_secret:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-        token = authorization.replace("Bearer ", "").strip()
-        if token != cron_secret:
-            raise HTTPException(status_code=403, detail="Invalid cron token")
-    else:
-        logging.warning("⚠️ CRON_SECRET not set — cron endpoint is unprotected (dev mode)")
-    
-    from cron_tasks import run_nightly_auto_rotation
-    run_nightly_auto_rotation()
-    return {"status": "completed", "message": "Nightly rotation queued synchronously"}
-
-@app.post("/api/cron/process-rotation-queue")
-def api_trigger_process_rotation_queue(
-    authorization: Optional[str] = Header(None)
-):
-    """
-    Trigger para procesar usuarios encolados (para Vercel Cron cada 5 mins).
-    Ejecución síncrona para Vercel Serverless.
-    """
-    cron_secret = os.environ.get("CRON_SECRET")
-    if cron_secret:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-        token = authorization.replace("Bearer ", "").strip()
-        if token != cron_secret:
-            raise HTTPException(status_code=403, detail="Invalid cron token")
-            
-    from cron_tasks import process_rotation_queue
-    process_rotation_queue()
-    return {"status": "completed", "message": "Queue processor finished synchronously"}
 
 from auth import get_verified_user_id, verify_api_quota
 from rate_limiter import RateLimiter

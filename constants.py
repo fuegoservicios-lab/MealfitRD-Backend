@@ -7,6 +7,47 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 logger = logging.getLogger(__name__)
 
 PLAN_CHUNK_SIZE = 3  # Días generados por chunk en el pipeline de langgraph
+CHUNK_LEARNING_MODE = os.environ.get("CHUNK_LEARNING_MODE", "strict").strip().lower()
+if CHUNK_LEARNING_MODE not in {"strict", "safety_margin"}:
+    CHUNK_LEARNING_MODE = "strict"
+CHUNK_PROACTIVE_MARGIN_DAYS = max(0, int(os.environ.get("CHUNK_PROACTIVE_MARGIN_DAYS", "1")))
+CHUNK_SCHEDULER_INTERVAL_MINUTES = max(1, int(os.environ.get("CHUNK_SCHEDULER_INTERVAL_MINUTES", "1")))
+CHUNK_LEARNING_READY_MIN_RATIO = float(os.environ.get("CHUNK_LEARNING_READY_MIN_RATIO", "0.5"))
+CHUNK_LEARNING_READY_DELAY_HOURS = max(1, int(os.environ.get("CHUNK_LEARNING_READY_DELAY_HOURS", "12")))
+CHUNK_LEARNING_READY_MAX_DEFERRALS = max(0, int(os.environ.get("CHUNK_LEARNING_READY_MAX_DEFERRALS", "2")))
+CHUNK_MIN_FRESH_PANTRY_ITEMS = max(1, int(os.environ.get("CHUNK_MIN_FRESH_PANTRY_ITEMS", "3")))
+CHUNK_PANTRY_EMPTY_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_TTL_HOURS", "12")))
+CHUNK_PANTRY_EMPTY_REMINDER_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_REMINDER_HOURS", "4")))
+CHUNK_PANTRY_EMPTY_MAX_REMINDERS = max(0, int(os.environ.get("CHUNK_PANTRY_EMPTY_MAX_REMINDERS", "2")))
+CHUNK_MAX_FAILURE_ATTEMPTS = max(2, int(os.environ.get("CHUNK_MAX_FAILURE_ATTEMPTS", "5")))
+CHUNK_RETRY_BASE_MINUTES = max(1, int(os.environ.get("CHUNK_RETRY_BASE_MINUTES", "2")))
+CHUNK_RETRY_CRITICAL_MINUTES = max(5, int(os.environ.get("CHUNK_RETRY_CRITICAL_MINUTES", "30")))
+# [P0-4] Máxima edad permitida para el snapshot de pantry antes de intentar un live-retry adicional.
+# Pasado este TTL, si el live sigue fallando se marca como stale_snapshot en los logs.
+CHUNK_PANTRY_SNAPSHOT_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_SNAPSHOT_TTL_HOURS", "6")))
+
+
+def split_with_absorb(total_days: int, base: int = 3) -> list[int]:
+    """Divide total_days en chunks de tamaño >= base sin perder días.
+
+    Invariantes garantizados:
+      - sum(result) == total_days
+      - todos los elementos >= base (o == total_days si total_days <= base+1)
+    """
+    if total_days == 7 and base == 3:
+        return [3, 4]
+    if total_days <= base + 1:
+        return [total_days]
+    n_full = total_days // base
+    rem = total_days % base
+    if rem == 0:
+        return [base] * n_full
+    if n_full == 1:
+        # Solo un chunk: absorber todo el resto en él
+        return [total_days]
+    # Distribuir el resto (+1) entre los últimos `rem` chunks
+    n_base = n_full - rem
+    return [base] * n_base + [base + 1] * rem
 # --- VECTOR SEARCH CACHE ---
 _embedding_model = None
 _embedding_cache = {}

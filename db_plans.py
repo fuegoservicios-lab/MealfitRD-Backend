@@ -56,6 +56,87 @@ def check_meal_plan_generated_today(user_id: str) -> bool:
         logger.error(f"Error comprobando si plan fue hoy: {e}")
     return False
 
+# Columnas que son text[] en PostgreSQL (no jsonb) — constante de módulo compartida
+_MEAL_PLAN_ARRAY_COLS = {"meal_names", "ingredients", "techniques"}
+
+
+def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
+    """Construye la SQL de INSERT para meal_plans a partir de un dict.
+
+    Retorna (sql, vals) listos para pasar a cursor.execute.
+    """
+    from psycopg.types.json import Jsonb
+    cols = list(data.keys())
+    vals = []
+    for col, v in zip(cols, data.values()):
+        if col in _MEAL_PLAN_ARRAY_COLS:
+            vals.append(v)
+        elif col == "profile_embedding" and isinstance(v, list):
+            vals.append(str(v))
+        elif isinstance(v, (dict, list)):
+            vals.append(Jsonb(v))
+        else:
+            vals.append(v)
+    placeholders = ", ".join(["%s"] * len(cols))
+    col_str = ", ".join(cols)
+    sql = f"INSERT INTO meal_plans ({col_str}) VALUES ({placeholders})"
+    if with_returning:
+        sql += " RETURNING id"
+    return sql, vals
+
+
+def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool = False):
+    """Inserta nuevo plan nutricional Y cancela chunks pending/processing del usuario en una sola transacción.
+
+    Garantiza que no queden chunks huérfanos de planes anteriores que puedan mergear en el nuevo plan.
+    Si return_id=True retorna el UUID del plan insertado (str). Si return_id=False retorna True.
+    Lanza excepción en caso de error.
+    """
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available.")
+
+    import copy
+    from psycopg.rows import dict_row
+
+    def _run(data: dict):
+        sql, vals = _build_meal_plan_insert_sql(data, with_returning=True)
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    # [P0-2] Cancelar todos los chunks pending/processing del usuario ANTES de insertar
+                    # el nuevo plan, dentro de la misma transacción, para que sea atómico.
+                    # Si el INSERT falla después, el UPDATE se revierte automáticamente.
+                    cursor.execute(
+                        "UPDATE plan_chunk_queue SET status = 'cancelled', updated_at = NOW() "
+                        "WHERE user_id = %s AND status IN ('pending', 'processing') "
+                        "RETURNING id",
+                        (user_id,)
+                    )
+                    cancelled_rows = cursor.fetchall()
+                    cursor.execute(sql, vals)
+                    row = cursor.fetchone()
+                    plan_id = str(row["id"]) if row else None
+        return plan_id, len(cancelled_rows)
+
+    safe_data = copy.deepcopy(insert_data)
+    try:
+        plan_id, n_cancelled = _run(safe_data)
+    except Exception as e:
+        err_msg = str(e)
+        if "column" in err_msg and any(c in err_msg for c in ("meal_names", "techniques", "ingredients")):
+            logger.warning(f"⚠️ [DB/ATOMIC] Columnas optimizadas ausentes, reintentando sin ellas: {err_msg[:120]}")
+            safe_data.pop("meal_names", None)
+            safe_data.pop("ingredients", None)
+            safe_data.pop("techniques", None)
+            plan_id, n_cancelled = _run(safe_data)
+        else:
+            raise
+
+    if n_cancelled > 0:
+        logger.info(f"✅ [P0-2/ATOMIC] {n_cancelled} chunk(s) huérfano(s) cancelados atómicamente al crear plan {plan_id} para {user_id}")
+    return plan_id if return_id else True
+
+
 def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[str, tuple]] = None, return_id: bool = False):
     """Guarda un nuevo plan nutricional con fallback por si faltan columnas optimizadas.
 
@@ -65,32 +146,9 @@ def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[
     if not connection_pool: return None if return_id else False
     try:
         import copy
-        from psycopg.types.json import Jsonb
         safe_data = copy.deepcopy(insert_data)
 
-        # Columnas que son text[] en PostgreSQL (no jsonb)
-        _ARRAY_COLS = {"meal_names", "ingredients", "techniques"}
-
-        def dict_to_insert(d, with_returning=False):
-            cols = list(d.keys())
-            vals = []
-            for col, v in zip(cols, d.values()):
-                if col in _ARRAY_COLS:
-                    vals.append(v)
-                elif col == "profile_embedding" and isinstance(v, list):
-                    vals.append(str(v))
-                elif isinstance(v, (dict, list)):
-                    vals.append(Jsonb(v))
-                else:
-                    vals.append(v)
-            placeholders = ", ".join(["%s"] * len(cols))
-            col_str = ", ".join(cols)
-            sql = f"INSERT INTO meal_plans ({col_str}) VALUES ({placeholders})"
-            if with_returning:
-                sql += " RETURNING id"
-            return sql, vals
-
-        query, vals = dict_to_insert(safe_data, with_returning=return_id)
+        query, vals = _build_meal_plan_insert_sql(safe_data, with_returning=return_id)
 
         if additional_queries:
             from db_core import execute_sql_transaction
@@ -109,7 +167,7 @@ def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[
             safe_data.pop("meal_names", None)
             safe_data.pop("ingredients", None)
             safe_data.pop("techniques", None)
-            query, vals = dict_to_insert(safe_data, with_returning=return_id)
+            query, vals = _build_meal_plan_insert_sql(safe_data, with_returning=return_id)
             try:
                 if additional_queries:
                     from db_core import execute_sql_transaction

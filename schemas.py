@@ -87,8 +87,6 @@ class HealthProfileSchema(BaseModel):
     householdSize: Optional[int] = 1
     groceryDuration: Optional[str] = 'weekly'
     totalDays: Optional[int] = 3
-    last_rotated_at: Optional[str] = None
-    autoRotateMeals: Optional[bool] = False
     timezone: Optional[str] = 'America/Santo_Domingo'
     class Config:
         extra = 'allow'
