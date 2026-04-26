@@ -568,10 +568,17 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
         return ""
 
     chunk_num = chunk_lessons.get("chunk_number", "anterior")
-    ctx = f"\n--- 📋 LECCIONES DEL CHUNK {chunk_num} (APLICA OBLIGATORIAMENTE) ---\n"
+    is_lifetime = chunk_lessons.get("is_lifetime_aggregated", False)
+    
+    header = f"--- 📋 LECCIONES DEL CHUNK {chunk_num} (APLICA OBLIGATORIAMENTE) ---"
+    if is_lifetime:
+        header = f"--- 🧠 PATRONES CRÍTICOS Y LECCIONES ACUMULADAS (TODA LA VIDA DEL PLAN) ---"
+    
+    ctx = f"\n{header}\n"
     ctx += "\n".join(lines) + "\n"
     ctx += "------------------------------------------------------------\n"
     return ctx
+
 
 
 def build_weight_history_context(weight_history: list) -> str:

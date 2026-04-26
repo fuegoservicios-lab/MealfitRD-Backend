@@ -18,6 +18,7 @@ CHUNK_SCHEDULER_INTERVAL_MINUTES = max(1, int(os.environ.get("CHUNK_SCHEDULER_IN
 CHUNK_LEARNING_READY_MIN_RATIO = float(os.environ.get("CHUNK_LEARNING_READY_MIN_RATIO", "0.5"))
 CHUNK_LEARNING_READY_DELAY_HOURS = max(1, int(os.environ.get("CHUNK_LEARNING_READY_DELAY_HOURS", "12")))
 CHUNK_LEARNING_READY_MAX_DEFERRALS = max(0, int(os.environ.get("CHUNK_LEARNING_READY_MAX_DEFERRALS", "2")))
+LIFETIME_LESSONS_WINDOW_DAYS = max(1, int(os.environ.get("LIFETIME_LESSONS_WINDOW_DAYS", "60")))
 CHUNK_MIN_FRESH_PANTRY_ITEMS = max(1, int(os.environ.get("CHUNK_MIN_FRESH_PANTRY_ITEMS", "3")))
 CHUNK_PANTRY_EMPTY_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_TTL_HOURS", "12")))
 CHUNK_PANTRY_EMPTY_REMINDER_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_REMINDER_HOURS", "4")))
@@ -28,16 +29,22 @@ CHUNK_RETRY_CRITICAL_MINUTES = max(5, int(os.environ.get("CHUNK_RETRY_CRITICAL_M
 # [P0-4] Máxima edad permitida para el snapshot de pantry antes de intentar un live-retry adicional.
 # Pasado este TTL, si el live sigue fallando se marca como stale_snapshot en los logs.
 CHUNK_PANTRY_SNAPSHOT_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_SNAPSHOT_TTL_HOURS", "6")))
+# [P0-2] Pasada esta edad (24h), si el live falla, forzamos generación con flexible_mode=True
+# para no bloquear el plan indefinidamente si el live fetch del usuario está roto.
+CHUNK_STALE_SNAPSHOT_FORCE_GENERATE_HOURS = max(6, int(os.environ.get("CHUNK_STALE_SNAPSHOT_FORCE_GENERATE_HOURS", "24")))
 # [P0-B] Validación de CANTIDADES (no solo existencia) contra la despensa. Modos:
 #   - "off"      : solo validamos existencia (comportamiento previo).
 #   - "advisory" : sumamos uso vs. inventario, logueamos violaciones y las anotamos en
 #                  form_data["_pantry_quantity_violations"] para telemetría, pero NO bloqueamos
 #                  el chunk. El LLM verá la corrección en el primer reintento si ocurre.
+#   - "hybrid"   : reintentamos con feedback igual que strict, pero si los retries se agotan
+#                  anotamos la violación y continuamos (no fallamos el chunk). Mejor equilibrio
+#                  entre calidad y resiliencia. DEFAULT.
 #   - "strict"   : reintentamos con feedback como en la validación de existencia. Si tras
 #                  CHUNK_PANTRY_MAX_RETRIES el LLM sigue excediendo, fallamos el chunk.
-CHUNK_PANTRY_QUANTITY_MODE = os.environ.get("CHUNK_PANTRY_QUANTITY_MODE", "advisory").strip().lower()
-if CHUNK_PANTRY_QUANTITY_MODE not in {"off", "advisory", "strict"}:
-    CHUNK_PANTRY_QUANTITY_MODE = "advisory"
+CHUNK_PANTRY_QUANTITY_MODE = os.environ.get("CHUNK_PANTRY_QUANTITY_MODE", "hybrid").strip().lower()
+if CHUNK_PANTRY_QUANTITY_MODE not in {"off", "advisory", "hybrid", "strict"}:
+    CHUNK_PANTRY_QUANTITY_MODE = "hybrid"
 # [P0-C] Cada N minutos se refresca el snapshot de despensa en chunks pending/stale cuyo
 # _pantry_captured_at supere la mitad del TTL. Esto evita que un chunk de plan 15d/30d
 # llegue a su execute_after con snapshot de hace días y se quede pausado por stale_snapshot
@@ -693,7 +700,7 @@ def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base
     if req_unit == 'unidad' and dispo_unit == 'ml' and density and unit_weight: return (req_qty * unit_weight) / density
     return None
 
-def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True) -> bool | str:
+def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30) -> bool | str:
     """
     Función guardrail estricta y matemática. Comprueba:
     1. Que todos los ingredientes generados estén en la despensa.
@@ -839,7 +846,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                 if available_qty <= 0.01:
                     logger.debug(f"🛒 [PANTRY GUARD] '{gen_name}' en {gen_base_unit} tiene stock 0 — skip.")
                     continue
-                if gen_base_qty > (available_qty * 1.30):
+                if gen_base_qty > (available_qty * tolerance):
                     formatted_req = _format_unit_qty(gen_base_qty, gen_base_unit)
                     formatted_avail = _format_unit_qty(available_qty, gen_base_unit)
                     over_limit.append(f"[{item}] (Pediste {formatted_req}, límite: {formatted_avail})")
@@ -854,7 +861,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                         break
                     req_qty_in_dispo_unit = _get_converted_quantity(gen_base_qty, gen_base_unit, dispo_unit, matched_pantry_key)
                     if req_qty_in_dispo_unit is not None:
-                        if req_qty_in_dispo_unit > (available_qty * 1.30):
+                        if req_qty_in_dispo_unit > (available_qty * tolerance):
                             formatted_req = _format_unit_qty(gen_base_qty, gen_base_unit)
                             formatted_avail = _format_unit_qty(available_qty, dispo_unit)
                             over_limit.append(f"[{item}] (Pediste {formatted_req}, convertido dinámicamente excede tu inventario de {formatted_avail})")
@@ -881,7 +888,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                         
                         if req_qty_in_dispo_unit is not None:
                             logger.debug(f"🔧 [PANTRY GUARD] Aplicando fallback de 5g/ut para '{gen_name}' ({gen_base_qty} {gen_base_unit} -> {req_qty_in_dispo_unit:.2f} {dispo_unit})")
-                            if req_qty_in_dispo_unit > (available_qty * 1.30):
+                            if req_qty_in_dispo_unit > (available_qty * tolerance):
                                 formatted_req = _format_unit_qty(gen_base_qty, gen_base_unit)
                                 formatted_avail = _format_unit_qty(available_qty, dispo_unit)
                                 over_limit.append(f"[{item}] (Pediste {formatted_req}, convertido con fallback [~{fallback_g}g] excede tu inventario de {formatted_avail})")

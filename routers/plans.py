@@ -89,6 +89,24 @@ def debug_scaling(user_id: str):
 
 from constants import PLAN_CHUNK_SIZE, split_with_absorb
 
+def _user_has_profile(user_id: str) -> bool:
+    """Devuelve True si user_id tiene fila en user_profiles. Auto-crea fila mínima si falta."""
+    if not user_id or not supabase:
+        return False
+    try:
+        res = supabase.table("user_profiles").select("id").eq("id", user_id).limit(1).execute()
+        if res.data:
+            return True
+        # Usuario autenticado sin perfil → crear fila mínima para habilitar chunking y FK
+        supabase.table("user_profiles").upsert({"id": user_id, "health_profile": {}}).execute()
+        import logging as _log
+        _log.getLogger(__name__).info(f"✅ [PROFILE] Fila mínima creada en user_profiles para {user_id}")
+        return True
+    except Exception as e:
+        import logging as _log
+        _log.getLogger(__name__).warning(f"⚠️ [PROFILE] No se pudo crear user_profiles para {user_id}: {e}")
+        return False
+
 def chunk_size_for_next_slot(days_since_creation: int, total_planned_days: int, base: int = 3):
     chunks = split_with_absorb(total_planned_days, base)
     consumed = 0
@@ -298,6 +316,40 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                     logger.warning(f"⚠️ [P0-1 RENEWAL] Sin health_profile para user {user_id}.")
                         except Exception as e:
                             logger.error(f"❌ [P0-1 RENEWAL] Error renovando plan semanal: {e}")
+                    elif is_partial and needs_fill and total_planned_days > 7:
+                        # [VISUAL CONTINUITY] Plan mensual/quincenal en estado partial:
+                        # los chunks futuros ya están encolados, pero el usuario está viendo
+                        # un gap porque el día pasó y el siguiente chunk aún no fue disparado.
+                        # No re-encolamos (causaría días duplicados); aceleramos el siguiente
+                        # chunk pendiente para que execute_after = NOW() y el cron lo tome
+                        # en su próxima corrida (≤ 1 minuto).
+                        try:
+                            cursor.execute(
+                                """
+                                UPDATE plan_chunk_queue
+                                SET execute_after = NOW(),
+                                    updated_at = NOW()
+                                WHERE id = (
+                                    SELECT id FROM plan_chunk_queue
+                                    WHERE meal_plan_id = %s
+                                      AND status IN ('pending', 'stale')
+                                      AND execute_after > NOW()
+                                    ORDER BY week_number ASC
+                                    LIMIT 1
+                                )
+                                RETURNING id, week_number
+                                """,
+                                (plan_id,)
+                            )
+                            accelerated = cursor.fetchone()
+                            if accelerated:
+                                logger.info(
+                                    f"⚡ [VISUAL CONTINUITY] Chunk {accelerated['week_number']} "
+                                    f"(id={accelerated['id']}) acelerado a NOW() para plan {plan_id} "
+                                    f"(gap visible: {len(shifted_days)}/{window_needed} días)"
+                                )
+                        except Exception as e:
+                            logger.error(f"❌ [VISUAL CONTINUITY] Error acelerando chunk pendiente: {e}")
                     elif not is_partial and needs_fill:
                         try:
                             from cron_tasks import _enqueue_plan_chunk
@@ -489,7 +541,8 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
 
         # Detectar si es un plan de largo plazo que se beneficia del chunking
         total_days_requested = int(data.get("totalDays", 3))
-        use_chunking = actual_user_id and total_days_requested > PLAN_CHUNK_SIZE
+        user_has_profile = actual_user_id and _user_has_profile(actual_user_id)
+        use_chunking = bool(user_has_profile and total_days_requested > PLAN_CHUNK_SIZE)
 
         pipeline_data = dict(data)
         from datetime import datetime, timezone, timedelta
@@ -508,6 +561,9 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
 
         if use_chunking:
             # Solo generar la Semana 1 ahora; las semanas 2-4 se generan en background
+            pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
+        elif total_days_requested > PLAN_CHUNK_SIZE:
+            # Usuario sin perfil o guest solicitó plan largo → capear a 3 días
             pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
 
         # [P0 FIX GAP 1] Persistir update_reason global como señal de aprendizaje
@@ -561,22 +617,20 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
             if plan_id:
                 import math
                 from cron_tasks import _enqueue_plan_chunk
-                week1_meals = [
-                    m["name"] for d in result.get("days", [])
-                    for m in d.get("meals", []) if m.get("name")
-                ]
                 snapshot = {
                     "form_data": data,
                     "taste_profile": taste_profile,
                     "memory_context": memory_ctx,
-                    "previous_meals": week1_meals,
                     "totalDays": total_days_requested,
                 }
                 chunks = split_with_absorb(total_days_requested, PLAN_CHUNK_SIZE)
                 offset = chunks[0]
                 for wk, count in enumerate(chunks[1:], start=2):
                     if count > 0:
-                        _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot, chunk_kind="initial_plan")
+                        try:
+                            _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot, chunk_kind="initial_plan")
+                        except Exception as chunk_err:
+                            logger.warning(f"⚠️ [CHUNK] Error encolando chunk semana {wk} para {actual_user_id}: {chunk_err}")
                     offset += count
                 logger.info(f"🚀 [CHUNK] Plan {plan_id} creado con semana 1. {len(chunks) - 1} chunks encolados en background.")
 
@@ -645,7 +699,8 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
 
         # [GAP 4 FIX: Detectar si es un plan de largo plazo que se beneficia del chunking]
         total_days_requested = int(data.get("totalDays", 3))
-        use_chunking = actual_user_id and total_days_requested > PLAN_CHUNK_SIZE
+        user_has_profile = actual_user_id and _user_has_profile(actual_user_id)
+        use_chunking = bool(user_has_profile and total_days_requested > PLAN_CHUNK_SIZE)
 
         pipeline_data = dict(data)
         from datetime import datetime, timezone, timedelta
@@ -664,6 +719,9 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
 
         if use_chunking:
             # Solo generar la Semana 1 ahora; las semanas 2-4 se generan en background
+            pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
+        elif total_days_requested > PLAN_CHUNK_SIZE:
+            # Usuario sin perfil o guest solicitó plan largo → capear a 3 días
             pipeline_data["_days_to_generate"] = PLAN_CHUNK_SIZE
 
         # [P0 FIX GAP 1] Persistir update_reason global como señal de aprendizaje
@@ -798,7 +856,10 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
                                     offset = chunks[0]
                                     for wk, count in enumerate(chunks[1:], start=2):
                                         if count > 0:
-                                            _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot, chunk_kind="initial_plan")
+                                            try:
+                                                _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot, chunk_kind="initial_plan")
+                                            except Exception as chunk_err:
+                                                logger.warning(f"⚠️ [CHUNK SSE] Error encolando chunk semana {wk} para {actual_user_id}: {chunk_err}")
                                         offset += count
                                     logger.info(f"🚀 [CHUNK SSE] Plan {plan_id} creado con semana 1. {len(chunks) - 1} chunks encolados en background.")
 

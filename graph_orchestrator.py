@@ -1848,6 +1848,49 @@ class CorrectedDays(BaseModel):
 # Número máximo de días que el self-critique corregirá en un solo run
 _SELF_CRITIQUE_MAX_DAYS = 2
 
+# Staples de desayuno/merienda que tienden a repetirse silenciosamente entre días.
+# El ANTI MODE-COLLAPSE solo rota proteína/carbo principal, no estos.
+# Map: etiqueta canónica → aliases buscados (case-insensitive, sin acentos).
+_STAPLE_INGREDIENT_ALIASES = {
+    "avena": ["avena"],
+    "claras de huevo": ["clara de huevo", "claras de huevo", "clara"],
+    "pan integral": ["pan integral", "pan de centeno", "pan de molde"],
+    "yogurt griego": ["yogurt griego", "yogur griego", "yogurt", "yogur"],
+    "queso blanco": ["queso blanco", "queso fresco"],
+    "queso ricotta": ["ricotta"],
+    "lechosa": ["lechosa", "papaya"],
+    "guineo": ["guineo", "banano"],
+    "platano maduro": ["platano maduro", "plátano maduro"],
+    "aguacate": ["aguacate"],
+    "tortilla integral": ["tortilla integral", "tortilla de trigo"],
+}
+
+
+def _count_staple_repetitions(days: list) -> dict:
+    """Cuenta en cuántos días distintos aparece cada staple. Devuelve solo staples
+    que aparecen en >=2 días (señal de mode-collapse a nivel de staples).
+    """
+    import unicodedata as _ud
+
+    def _norm(s: str) -> str:
+        s = _ud.normalize("NFD", s.lower()).encode("ascii", "ignore").decode("ascii")
+        return s
+
+    aliases_norm = {label: [_norm(a) for a in als] for label, als in _STAPLE_INGREDIENT_ALIASES.items()}
+    day_counts: dict = {}
+    for day in days:
+        text_blob = ""
+        for meal in day.get("meals", []):
+            text_blob += " " + meal.get("name", "")
+            for ing in meal.get("ingredients", []) or []:
+                text_blob += " " + str(ing)
+        text_norm = _norm(text_blob)
+        for label, alias_list in aliases_norm.items():
+            if any(a in text_norm for a in alias_list):
+                day_counts[label] = day_counts.get(label, 0) + 1
+    return {k: v for k, v in day_counts.items() if v >= 2}
+
+
 async def self_critique_node(state: PlanState) -> dict:
     """Evalúa los días generados y aplica correcciones in-place si hay deficiencias."""
     partial = state.get("plan_result", {})
@@ -1898,30 +1941,53 @@ async def self_critique_node(state: PlanState) -> dict:
         return json.dumps(summary, ensure_ascii=False)
 
     days_summary_json = _compress_for_evaluation(days)
-    
+
+    # Conteo determinístico de staples repetidos (pre-LLM hard signal).
+    # Cubre el blind spot del compresor: el LLM no ve los ingredientes, así que
+    # le damos esta tabla calculada por código para que penalice con certeza.
+    staple_repetitions = _count_staple_repetitions(days)
+    if staple_repetitions:
+        items_str = ", ".join([f"'{k}' en {v} días" for k, v in staple_repetitions.items()])
+        print(f"🔁 [SELF-CRITIQUE] Staples repetidos detectados: {items_str}")
+        staples_block = (
+            f"\n⚠️ STAPLES REPETIDOS DETECTADOS (conteo determinístico, no opinable): {items_str}\n"
+            f"   Por cada staple en >=2 días, BAJA diversity_score a 4 o menos y especifica en suggestions "
+            f"qué día cambiar para variar el staple.\n"
+        )
+        # Mencionar día(s) afectado(s) para que el extractor de día (regex 'Día N')
+        # pueda apuntar la corrección. Día 1 es default razonable.
+        suggested_day_hint = "Día 1"
+    else:
+        staples_block = ""
+        suggested_day_hint = ""
+
     # Brecha 4: Inyección de Contexto de Usuario
     form_data = state.get("form_data", {})
     adherence = form_data.get("_adherence_hint", "")
     emotional = form_data.get("_emotional_state", "")
-    
+
     user_context = ""
     if adherence == "low":
         user_context += "\nNOTA CRÍTICA: Este usuario tiene BAJA adherencia. Un plan extremadamente simple, repetitivo y fácil de cocinar es BUENO para él. NO penalices el plan por falta de variedad excesiva o simplicidad."
     if emotional == "needs_comfort":
         user_context += "\nNOTA CRÍTICA: Este usuario reportó necesitar 'comfort food'. Platos calientes, densos y reconfortantes son POSITIVOS. NO los penalices por falta de frescura o ensaladas."
-    
+
     prompt = f"""
     Eres un Crítico Culinario Experto. Evalúa el siguiente plan de comidas (días generados):
     {days_summary_json}
-    {user_context}
-    
+    {staples_block}{user_context}
+
     Evalúa del 1 al 10:
     1. Atractivo visual (¿Se lee apetitoso o son combinaciones raras?)
-    2. Diversidad real de sabores (¿Se repite la misma proteína o guarnición con nombres distintos?)
+    2. Diversidad real de sabores. Penaliza con score <=4 si:
+       - Se repite la misma proteína o guarnición principal con nombres distintos.
+       - Un staple (avena, claras, pan, yogurt, queso, lechosa, guineo, plátano maduro, aguacate, tortilla)
+         aparece en 2+ días (ver bloque 'STAPLES REPETIDOS' arriba si está presente).
     3. Coherencia cultural Dominicana (¿El desayuno tiene sentido? ¿La cena es coherente?)
     4. Balance de temperaturas (¿Hay 3 días seguidos de ensaladas frías o todo es sopa?)
-    
-    Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=True y da instrucciones CLARAS Y CORTAS de qué cambiar.
+
+    Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=True y da instrucciones CLARAS Y CORTAS de qué cambiar, mencionando explícitamente el día (ej. "Día 2").
+    {f"Pista: empieza por {suggested_day_hint} si necesitas elegir cuál corregir primero." if suggested_day_hint else ""}
     """
     
     try:
@@ -2432,8 +2498,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # =========================================================
 
     # Calcular shopping lists
-    _uid = form_data.get("user_id") or form_data.get("session_id")
-    if _uid == "guest": _uid = None
+    # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
+    _uid = form_data.get("user_id")
+    if not _uid or _uid == "guest": _uid = None
 
     from shopping_calculator import get_shopping_list_delta
     try:
