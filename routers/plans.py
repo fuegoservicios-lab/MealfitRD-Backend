@@ -469,6 +469,10 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                             new_start = start_dt + timedelta(days=days_since_creation)
                             new_plan_start_iso = new_start.isoformat()
                             shifted_data['grocery_start_date'] = new_plan_start_iso
+                            
+                            # [P0-C] Accumulate shift days
+                            current_accum = int(shifted_data.get("_shift_days_accumulated", 0))
+                            shifted_data["_shift_days_accumulated"] = current_accum + days_since_creation
 
                         # [P0-2] Sello CAS: timestamp que el worker compara para detectar
                         # si el plan fue modificado externamente durante el LLM call.
@@ -500,6 +504,19 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                   AND status IN ('pending', 'processing', 'stale', 'failed', 'pending_user_action')
                                 """,
                                 (json.dumps(new_plan_start_iso), plan_id)
+                            )
+
+                            # [P0-C] Shift execute_after for all pending future chunks
+                            cursor.execute(
+                                """
+                                UPDATE plan_chunk_queue
+                                SET execute_after = execute_after + (%s || ' days')::interval,
+                                    updated_at = NOW()
+                                WHERE meal_plan_id = %s
+                                  AND status IN ('pending', 'stale')
+                                  AND execute_after > NOW()
+                                """,
+                                (days_since_creation, plan_id)
                             )
 
         return {"success": True, "message": "Plan actualizado a la fecha.", "plan_data": shifted_data}

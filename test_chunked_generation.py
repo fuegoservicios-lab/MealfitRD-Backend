@@ -1627,3 +1627,382 @@ def test_chunk_persists_learning_signals_after_completion(
     assert isinstance(persist_args[1], dict)
     assert len(persist_args[2]) == 6
     assert persist_args[3] == consumed_records
+
+def test_pantry_hybrid_tolerance_quantity():
+    from constants import validate_ingredients_against_pantry, CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE
+    pantry = ["200g pechuga de pollo"]
+    
+    # 220g is 10% more, should fail with hybrid tolerance (1.05)
+    res_fail = validate_ingredients_against_pantry(["220g pechuga de pollo"], pantry, strict_quantities=True, tolerance=CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE)
+    assert isinstance(res_fail, str)
+    
+    # 205g is 2.5% more, should pass with hybrid tolerance (1.05)
+    res_pass = validate_ingredients_against_pantry(["205g pechuga de pollo"], pantry, strict_quantities=True, tolerance=CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE)
+    assert res_pass is True
+
+@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('db_core.connection_pool')
+@patch('shopping_calculator.get_shopping_list_delta')
+@patch('cron_tasks.execute_sql_query')
+@patch('cron_tasks.execute_sql_write')
+@patch('cron_tasks.get_user_inventory')
+@patch('db.get_user_likes')
+@patch('db.get_active_rejections')
+@patch('db_facts.get_consumed_meals_since')
+@patch('db_facts.get_all_user_facts')
+def test_chunk_degraded_fallback_pauses_when_no_pantry_coverage(
+    mock_facts, mock_consumed, mock_rejections, mock_likes, mock_inventory,
+    mock_write, mock_query, mock_shop, mock_pool, mock_llm
+):
+    mock_llm.return_value.invoke.side_effect = Exception("Simulated LLM Outage")
+    mock_likes.return_value = []
+    mock_rejections.return_value = []
+    mock_consumed.return_value = []
+    mock_facts.return_value = []
+    # 5 ingredients not matching prior plan
+    mock_inventory.return_value = ["manzana", "pera", "uva", "kiwi", "melon"]
+    tasks = [{
+        "id": 1,
+        "user_id": "user_123",
+        "meal_plan_id": "plan_456",
+        "week_number": 2,
+        "days_offset": 3,
+        "days_count": 1,
+        "pipeline_snapshot": json.dumps({
+            "_degraded": True,
+            "form_data": {"current_pantry_ingredients": ["manzana", "pera", "uva", "kiwi", "melon"]},
+        })
+    }]
+
+    prior_plan = {
+        "days": [
+            {
+                "day": 1,
+                "meals": [{"name": "Res con quinoa", "ingredients": ["res", "quinoa", "esparragos"]}],
+            }
+        ]
+    }
+
+    mock_write.side_effect = _mock_execute_sql_write_factory(tasks)
+    mock_query.side_effect = _mock_execute_sql_query_factory(prior_plan, backup_plan=[], tasks=tasks)
+    mock_shop.return_value = {"categories": []}
+    mock_conn = MagicMock()
+    mock_pool.connection.return_value.__enter__.return_value = mock_conn
+    mock_cursor = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    mock_cursor.fetchone.return_value = {"plan_data": prior_plan}
+
+    with patch('concurrent.futures.ThreadPoolExecutor') as mock_executor:
+        def sync_submit(fn, *args, **kwargs):
+            future = MagicMock()
+            future.result.return_value = fn(*args, **kwargs)
+            return future
+        mock_executor.return_value.__enter__.return_value.submit.side_effect = sync_submit
+        
+        from cron_tasks import process_plan_chunk_queue
+        process_plan_chunk_queue()
+
+    # Should pause chunk
+    update_calls = [call for call in mock_write.call_args_list if "UPDATE plan_chunk_queue" in call[0][0]]
+    assert len(update_calls) > 0
+    pause_call = update_calls[-1]
+    assert "status = 'pending_user_action'" in pause_call[0][0]
+    
+    # Verify reason is in pipeline_snapshot
+    snapshot_json = pause_call[0][1][0]
+    snapshot = json.loads(snapshot_json)
+    assert snapshot.get("_pantry_pause_reason") == "degraded_no_pantry_coverage"
+
+@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('db_core.connection_pool')
+@patch('shopping_calculator.get_shopping_list_delta')
+@patch('cron_tasks.execute_sql_query')
+@patch('cron_tasks.execute_sql_write')
+@patch('cron_tasks.get_user_inventory')
+@patch('db.get_user_likes')
+@patch('db.get_active_rejections')
+@patch('db_facts.get_consumed_meals_since')
+@patch('db_facts.get_all_user_facts')
+def test_chunk_learning_stub_starved_window(
+    mock_facts, mock_consumed, mock_rejections, mock_likes, mock_inventory,
+    mock_write, mock_query, mock_shop, mock_pool, mock_llm
+):
+    mock_llm.return_value.invoke.return_value.content = '```json\n{"days": [{"day": 7, "meals": [{"name": "Pollo"}]}]}\n```'
+    mock_likes.return_value = []
+    mock_rejections.return_value = []
+    mock_consumed.return_value = []
+    mock_facts.return_value = []
+    mock_inventory.return_value = []
+    
+    tasks = [{
+        "id": 1,
+        "user_id": "user_123",
+        "meal_plan_id": "plan_456",
+        "week_number": 3,
+        "days_offset": 6,
+        "days_count": 3,
+        "pipeline_snapshot": json.dumps({"form_data": {}})
+    }]
+
+    prior_plan = {
+        "total_days_requested": 15,
+        "days": [
+            {"day": 1, "meals": [{"name": "A"}]},
+            {"day": 2, "meals": [{"name": "B"}]}
+        ],
+        "_last_chunk_learning": {"metrics_unavailable": True, "chunk_learning_stub_count": 1},
+        "_recent_chunk_lessons": [{"metrics_unavailable": True}]
+    }
+
+    mock_write.side_effect = _mock_execute_sql_write_factory(tasks)
+    mock_query.side_effect = _mock_execute_sql_query_factory(prior_plan, backup_plan=[], tasks=tasks)
+    mock_shop.return_value = {"categories": []}
+    mock_conn = MagicMock()
+    mock_pool.connection.return_value.__enter__.return_value = mock_conn
+    mock_cursor = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    mock_cursor.fetchone.return_value = {"plan_data": prior_plan}
+
+    with patch('concurrent.futures.ThreadPoolExecutor') as mock_executor:
+        def sync_submit(fn, *args, **kwargs):
+            future = MagicMock()
+            future.result.return_value = fn(*args, **kwargs)
+            return future
+        mock_executor.return_value.__enter__.return_value.submit.side_effect = sync_submit
+        
+        from cron_tasks import process_plan_chunk_queue
+        process_plan_chunk_queue()
+
+    # Because metrics were filtered, form_data should have got _learning_window_starved = True and _force_variety = True
+    # We can check that the LLM invocation had it.
+    prompt_used = mock_llm.return_value.invoke.call_args[0][0]
+    assert "forzar la variedad" in prompt_used.lower() or "diversificar" in prompt_used.lower() or "distint" in prompt_used.lower()
+
+def test_release_chunk_reservations_frees_inventory():
+    """P0-4: reservar 100g de pollo en chunk X, cancelar chunk, verificar que get_user_inventory_net no descuenta."""
+    from unittest.mock import patch, MagicMock
+    from db_inventory import (
+        release_chunk_reservations,
+        _make_reservation_key,
+        _normalize_reservation_details,
+    )
+    
+    chunk_id = "test-chunk-999"
+    user_id = "user_p04"
+    reservation_key = _make_reservation_key(chunk_id, "Pollo Asado")
+    
+    # Simulate a row with 500g total, 100g reserved for our chunk
+    mock_row = {
+        "id": "row-1",
+        "reserved_quantity": 100.0,
+        "reservation_details": {reservation_key: 100.0},
+    }
+    
+    mock_supabase = MagicMock()
+    mock_select = MagicMock()
+    mock_select.eq.return_value.gt.return_value.execute.return_value.data = [mock_row]
+    mock_supabase.table.return_value.select.return_value = mock_select
+    mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
+    
+    with patch("db_inventory.supabase", mock_supabase):
+        released = release_chunk_reservations(user_id, chunk_id)
+    
+    assert released == 1
+    # Verify _update_row_reservation was called with reserved_quantity=0 and empty details
+    update_call = mock_supabase.table.return_value.update
+    update_call.assert_called_once()
+    call_args = update_call.call_args[0][0]
+    assert call_args["reserved_quantity"] == 0.0
+    assert reservation_key not in call_args["reservation_details"]
+
+def test_partial_reservation_marks_chunk_and_defers_next():
+    """P0-5: mock Supabase to fail 4 of 5 reservations → reservation_status='partial'."""
+    from unittest.mock import patch, MagicMock, call
+    from cron_tasks import _reconcile_chunk_reservations
+
+    new_days = [{
+        "day": 1,
+        "meals": [{
+            "name": "Pollo Asado",
+            "ingredients": ["200g pechuga de pollo", "100g arroz", "50g brocoli", "30g cebolla", "10ml aceite"]
+        }]
+    }]
+
+    # Mock reserve_plan_ingredients to return only 1 (out of 5 expected)
+    with patch("cron_tasks.reserve_plan_ingredients", return_value=1) as mock_reserve, \
+         patch("cron_tasks.execute_sql_write") as mock_write:
+
+        _reconcile_chunk_reservations("user_123", "chunk-42", new_days, max_retries=1)
+
+        # Should have tried to reserve
+        mock_reserve.assert_called_once_with("user_123", "chunk-42", new_days)
+
+        # Should NOT have marked 'ok' since 1 < 50% of 5
+        ok_calls = [c for c in mock_write.call_args_list if "reservation_status = 'ok'" in str(c)]
+        assert len(ok_calls) == 0
+
+    # Now test success path
+    with patch("cron_tasks.reserve_plan_ingredients", return_value=5) as mock_reserve2, \
+         patch("cron_tasks.execute_sql_write") as mock_write2:
+
+        _reconcile_chunk_reservations("user_123", "chunk-42", new_days, max_retries=1)
+
+        ok_calls2 = [c for c in mock_write2.call_args_list if "reservation_status = 'ok'" in str(c)]
+        assert len(ok_calls2) == 1
+
+@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('db_core.connection_pool')
+@patch('shopping_calculator.get_shopping_list_delta')
+@patch('cron_tasks.execute_sql_query')
+@patch('cron_tasks.execute_sql_write')
+@patch('cron_tasks.get_user_inventory')
+@patch('db.get_user_likes')
+@patch('db.get_active_rejections')
+@patch('db_facts.get_consumed_meals_since')
+@patch('db_facts.get_all_user_facts')
+def test_degraded_shuffle_rejects_day_exceeding_pantry_quantities(
+    mock_facts, mock_consumed, mock_rejections, mock_likes, mock_inventory,
+    mock_write, mock_query, mock_shop, mock_pool, mock_llm
+):
+    """P0-#1: Verify degraded mode validates quantities and falls back to edge recipe or pauses."""
+    mock_llm.return_value.invoke.side_effect = Exception("Simulated LLM Outage")
+    mock_likes.return_value = []
+    mock_rejections.return_value = []
+    mock_consumed.return_value = []
+    mock_facts.return_value = []
+    
+    # Pantry only has 80g of pollo, but prior day needs 300g
+    mock_inventory.return_value = ["80g pechuga de pollo", "500g arroz"]
+    
+    tasks = [{
+        "id": 1,
+        "user_id": "user_123",
+        "meal_plan_id": "plan_456",
+        "week_number": 2,
+        "days_offset": 3,
+        "days_count": 1,
+        "pipeline_snapshot": json.dumps({
+            "_degraded": True,
+            "form_data": {"current_pantry_ingredients": ["80g pechuga de pollo", "500g arroz"]},
+        })
+    }]
+
+    # A pool day that exceeds the pantry quantity
+    prior_plan = {
+        "days": [
+            {
+                "day": 1,
+                "meals": [{"name": "Pollo mucho", "ingredients": ["300g pechuga de pollo", "100g arroz"]}],
+            }
+        ]
+    }
+
+    mock_write.side_effect = _mock_execute_sql_write_factory(tasks)
+    mock_query.side_effect = _mock_execute_sql_query_factory(prior_plan, backup_plan=[], tasks=tasks)
+    mock_shop.return_value = {"categories": []}
+    mock_conn = MagicMock()
+    mock_pool.connection.return_value.__enter__.return_value = mock_conn
+    mock_cursor = MagicMock()
+    mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    mock_cursor.fetchone.return_value = {"plan_data": prior_plan}
+
+    with patch('concurrent.futures.ThreadPoolExecutor') as mock_executor:
+        def sync_submit(fn, *args, **kwargs):
+            future = MagicMock()
+            future.result.return_value = fn(*args, **kwargs)
+            return future
+        mock_executor.return_value.__enter__.return_value.submit.side_effect = sync_submit
+        
+        from cron_tasks import process_plan_chunk_queue
+        process_plan_chunk_queue()
+
+    # The original day should have been rejected.
+    # It either fell back to an edge recipe that respects 80g pollo, or paused the chunk.
+    # Let's check if it paused
+    update_calls = [call for call in mock_write.call_args_list if "UPDATE plan_chunk_queue" in call[0][0]]
+    if len(update_calls) > 0:
+        last_call_sql = update_calls[-1][0][0]
+        if "status = 'pending_user_action'" in last_call_sql:
+            # Paused successfully!
+            snapshot_json = update_calls[-1][0][1][0]
+            snapshot = json.loads(snapshot_json)
+            assert snapshot.get("_pantry_pause_reason") == "degraded_quantities_unfeasible"
+            return
+
+    # If it didn't pause, it means Edge Recipe worked and saved the plan
+    plan_update_calls = [call for call in mock_cursor.execute.call_args_list if "UPDATE meal_plans SET plan_data =" in call[0][0]]
+    assert len(plan_update_calls) == 1
+    
+    args = plan_update_calls[0][0]
+    merged_data = json.loads(args[1][0]) if isinstance(args[1][0], str) else args[1][0]
+    
+    # Verify the day from prior plan (Pollo mucho) is NOT the one generated
+    generated_day = merged_data["days"][-1]
+    # If edge recipe worked, it should not have the "Pollo mucho" meal
+    meal_names = [m["name"] for m in generated_day["meals"]]
+    assert "Pollo mucho" not in meal_names
+
+
+@patch('cron_tasks.get_inventory_activity_since')
+@patch('cron_tasks.get_consumed_meals_since')
+def test_sparse_logging_proxy_passes_with_inventory_mutations(mock_consumed, mock_inv_activity):
+    from cron_tasks import _check_chunk_learning_ready
+    prior_plan = {
+        "days": [
+            {"day": 1, "meals": [{"name": "A"}]},
+            {"day": 2, "meals": [{"name": "B"}]},
+            {"day": 3, "meals": [{"name": "C"}]},
+            {"day": 4, "meals": [{"name": "D"}]},
+            {"day": 5, "meals": [{"name": "E"}]},
+        ]
+    }
+    snapshot = {"form_data": {"_plan_start_date": "2026-04-21T00:00:00+00:00"}}
+    
+    mock_consumed.return_value = [{"meal_name": "A", "status": "consumed", "id": "1"}]
+    mock_inv_activity.return_value = {"mutations_count": 5}
+
+    learning_ready = _check_chunk_learning_ready(
+        user_id="user_123",
+        meal_plan_id="plan_456",
+        week_number=2,
+        days_offset=5,
+        plan_data=prior_plan,
+        snapshot=snapshot,
+    )
+
+    assert learning_ready["ready"] is True
+    assert learning_ready["sparse_logging_proxy"] is True
+    assert learning_ready["inventory_proxy_used"] is True
+
+
+@patch('cron_tasks.get_inventory_activity_since')
+@patch('cron_tasks.get_consumed_meals_since')
+def test_sparse_logging_proxy_defers_without_inventory_mutations(mock_consumed, mock_inv_activity):
+    from cron_tasks import _check_chunk_learning_ready
+    prior_plan = {
+        "days": [
+            {"day": 1, "meals": [{"name": "A"}]},
+            {"day": 2, "meals": [{"name": "B"}]},
+            {"day": 3, "meals": [{"name": "C"}]},
+            {"day": 4, "meals": [{"name": "D"}]},
+            {"day": 5, "meals": [{"name": "E"}]},
+        ]
+    }
+    snapshot = {"form_data": {"_plan_start_date": "2026-04-21T00:00:00+00:00"}}
+    
+    mock_consumed.return_value = [{"meal_name": "A", "status": "consumed", "id": "1"}]
+    mock_inv_activity.return_value = {"mutations_count": 0}
+
+    learning_ready = _check_chunk_learning_ready(
+        user_id="user_123",
+        meal_plan_id="plan_456",
+        week_number=2,
+        days_offset=5,
+        plan_data=prior_plan,
+        snapshot=snapshot,
+    )
+
+    assert learning_ready["ready"] is False
+    assert learning_ready["sparse_logging_proxy"] is True
+    assert learning_ready["inventory_proxy_used"] is False
+

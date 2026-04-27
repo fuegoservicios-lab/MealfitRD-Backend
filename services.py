@@ -192,21 +192,25 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             if additional_db_queries:
                 # Si hay queries adicionales, cancelar chunks primero y luego ejecutar
                 # todo en una transacción via save_new_meal_plan_robust con additional_queries.
-                # [P0-2] Cancelar chunks justo antes del INSERT (misma conexión, no la misma transacción
+                # [P0-3] Cancelar chunks justo antes del INSERT (misma conexión, no la misma transacción
                 # porque execute_sql_transaction no soporta RETURNING). Riesgo residual es mínimo
                 # dado que el P0-1/TOCTOU guard en el worker actúa como red de seguridad.
+                # Cubre todos los estados que pueden re-disparar generación contra el plan nuevo
+                # (incl. failed/stale/pending_user_action que recovery crons podrían levantar).
                 try:
                     from db_core import execute_sql_write
                     cancelled = execute_sql_write(
                         "UPDATE plan_chunk_queue SET status = 'cancelled', updated_at = NOW() "
-                        "WHERE user_id = %s AND status IN ('pending', 'processing') RETURNING id",
+                        "WHERE user_id = %s "
+                        "AND status IN ('pending', 'processing', 'stale', 'pending_user_action', 'failed') "
+                        "RETURNING id",
                         (user_id,), returning=True
                     )
                     n_cancelled = len(cancelled) if cancelled else 0
                     if n_cancelled > 0:
-                        logger.info(f"✅ [P0-2] {n_cancelled} chunks cancelados (pre-additional_queries) para {user_id}")
+                        logger.info(f"✅ [P0-3] {n_cancelled} chunks cancelados (pre-additional_queries, incl. failed/stale) para {user_id}")
                 except Exception as ce:
-                    logger.warning(f"⚠️ [P0-2] Error cancelando chunks pre-additional_queries: {ce}")
+                    logger.warning(f"⚠️ [P0-3] Error cancelando chunks pre-additional_queries: {ce}")
                 save_new_meal_plan_robust(insert_data, additional_queries=additional_db_queries)
             else:
                 # [P0-2/ATOMIC] Cancelar chunks + INSERT en una sola transacción.

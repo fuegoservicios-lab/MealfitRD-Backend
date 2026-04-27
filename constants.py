@@ -23,6 +23,10 @@ CHUNK_MIN_FRESH_PANTRY_ITEMS = max(1, int(os.environ.get("CHUNK_MIN_FRESH_PANTRY
 CHUNK_PANTRY_EMPTY_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_TTL_HOURS", "12")))
 CHUNK_PANTRY_EMPTY_REMINDER_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_REMINDER_HOURS", "4")))
 CHUNK_PANTRY_EMPTY_MAX_REMINDERS = max(0, int(os.environ.get("CHUNK_PANTRY_EMPTY_MAX_REMINDERS", "2")))
+# [P0-2] TTL específico para pausas por stale_snapshot (live fetch caído + snapshot vencido).
+# Más corto que la pausa por nevera vacía porque el usuario no puede accionar nada — la causa
+# es del lado servidor; conviene reintentar pronto y, si persiste, escalar rápido a flexible.
+CHUNK_STALE_SNAPSHOT_PAUSE_TTL_HOURS = max(1, int(os.environ.get("CHUNK_STALE_SNAPSHOT_PAUSE_TTL_HOURS", "4")))
 CHUNK_MAX_FAILURE_ATTEMPTS = max(2, int(os.environ.get("CHUNK_MAX_FAILURE_ATTEMPTS", "5")))
 CHUNK_RETRY_BASE_MINUTES = max(1, int(os.environ.get("CHUNK_RETRY_BASE_MINUTES", "2")))
 CHUNK_RETRY_CRITICAL_MINUTES = max(5, int(os.environ.get("CHUNK_RETRY_CRITICAL_MINUTES", "30")))
@@ -45,6 +49,7 @@ CHUNK_STALE_SNAPSHOT_FORCE_GENERATE_HOURS = max(6, int(os.environ.get("CHUNK_STA
 CHUNK_PANTRY_QUANTITY_MODE = os.environ.get("CHUNK_PANTRY_QUANTITY_MODE", "hybrid").strip().lower()
 if CHUNK_PANTRY_QUANTITY_MODE not in {"off", "advisory", "hybrid", "strict"}:
     CHUNK_PANTRY_QUANTITY_MODE = "hybrid"
+CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE = float(os.environ.get("CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE", "1.05"))
 # [P0-C] Cada N minutos se refresca el snapshot de despensa en chunks pending/stale cuyo
 # _pantry_captured_at supere la mitad del TTL. Esto evita que un chunk de plan 15d/30d
 # llegue a su execute_after con snapshot de hace días y se quede pausado por stale_snapshot

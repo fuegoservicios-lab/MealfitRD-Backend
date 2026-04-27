@@ -507,6 +507,42 @@ def build_quality_hint_context(quality_hint: str, drastic_strategy: str = None) 
     return ctx
 
 
+def build_prev_chunk_adherence_context(prev_chunk_adherence: dict) -> str:
+    """[P0-5] Bloque chunk-específico: qué consumió/saltó el usuario en el chunk N-1.
+
+    Complementa a `build_chunk_lessons_context` (que trata violaciones de repetición/alergia)
+    con la señal positiva: nombres de platos efectivamente comidos vs saltados, para que el
+    LLM refuerce variantes de lo aceptado y evite re-proponer lo descartado.
+    """
+    if not prev_chunk_adherence or not isinstance(prev_chunk_adherence, dict):
+        return ""
+
+    consumed = prev_chunk_adherence.get("consumed_meals") or []
+    skipped = prev_chunk_adherence.get("skipped_meals") or []
+    if not consumed and not skipped:
+        return ""
+
+    chunk_num = prev_chunk_adherence.get("chunk_number", "anterior")
+    consumed_total = int(prev_chunk_adherence.get("consumed_count") or len(consumed))
+    skipped_total = int(prev_chunk_adherence.get("skipped_count") or len(skipped))
+
+    lines = [f"\n--- 🔁 ADHERENCIA REAL DEL BLOQUE {chunk_num} (APRENDIZAJE OBLIGATORIO) ---"]
+    if consumed:
+        lines.append(
+            f"✅ El usuario SÍ consumió ({consumed_total}): {', '.join(consumed[:6])}.\n"
+            f"  → Refuerza el ESTILO/SABOR de estos platos con variantes (no repitas el nombre exacto, "
+            f"  pero conserva la familia de proteína, técnica o flavor profile que claramente aceptó)."
+        )
+    if skipped:
+        lines.append(
+            f"⛔ El usuario NO consumió ({skipped_total}): {', '.join(skipped[:6])}.\n"
+            f"  → NO repitas estos platos ni recetas con la misma combinación principal de ingredientes/técnica. "
+            f"  Si una comida (ej: desayuno) fue saltada repetidamente, simplifica esa franja al máximo."
+        )
+    lines.append("--------------------------------------------------------------\n")
+    return "\n".join(lines)
+
+
 def build_chunk_lessons_context(chunk_lessons: dict) -> str:
     """[P1-5] Bloque de lecciones concretas del chunk anterior para el LLM.
 

@@ -9,7 +9,8 @@ from db_inventory import (
     deduct_consumed_meal_from_inventory,
     get_inventory_activity_since,
     get_raw_user_inventory,
-    get_user_inventory,
+    get_user_inventory_net,
+    release_chunk_reservations,
     reserve_plan_ingredients,
 )
 from db import get_latest_meal_plan_with_id, get_user_likes, get_active_rejections, get_recent_plans
@@ -30,6 +31,7 @@ from constants import (
     CHUNK_PANTRY_EMPTY_MAX_REMINDERS,
     CHUNK_PANTRY_EMPTY_REMINDER_HOURS,
     CHUNK_PANTRY_EMPTY_TTL_HOURS,
+    CHUNK_STALE_SNAPSHOT_PAUSE_TTL_HOURS,
     CHUNK_PANTRY_PROACTIVE_REFRESH_HORIZON_HOURS,
     CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS,
     CHUNK_PANTRY_PROACTIVE_REFRESH_MINUTES,
@@ -42,11 +44,14 @@ from constants import (
     CHUNK_PROACTIVE_MARGIN_DAYS,
     CHUNK_SCHEDULER_INTERVAL_MINUTES,
     strip_accents,
+    get_embedding,
+    cosine_similarity,
 )
 from graph_orchestrator import run_plan_pipeline
 from memory_manager import build_memory_context
 from services import _save_plan_and_track_background
 from agent import analyze_preferences_agent
+from apscheduler.triggers.cron import CronTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +109,81 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         )
         logger.info("⏰ [P1-B] Cron _recover_failed_chunks_for_long_plans registrado cada 15 min.")
 
+    # [P0-D] Job nocturno: refrescar snapshots far-future (>48h)
+    if not scheduler.get_job("nightly_refresh_far_future_snapshots"):
+        scheduler.add_job(
+            _nightly_refresh_all_pending_snapshots,
+            CronTrigger(hour=3, minute=0, timezone=timezone.utc),
+            id="nightly_refresh_far_future_snapshots",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info("⏰ [P0-D] Cron _nightly_refresh_all_pending_snapshots registrado a las 03:00 UTC.")
+
+def _nightly_refresh_all_pending_snapshots() -> None:
+    """[P0-D] Refresca diariamente snapshots de chunks que ejecutarán más allá del horizonte (48h).
+    En planes largos, el chunk 10 (t+27d) no se refrescaba sino hasta 48h antes,
+    quedando congelado con inventario de 3 semanas atrás si ocurría un fallo de red.
+    """
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT DISTINCT user_id::text, meal_plan_id::text
+            FROM plan_chunk_queue
+            WHERE status = 'pending'
+              AND execute_after > NOW() + interval '48 hours'
+            LIMIT 100
+            """,
+            fetch_all=True
+        )
+        
+        if not rows:
+            return
+            
+        refreshed_count = 0
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+        
+        for row in rows:
+            uid = row.get("user_id")
+            plan_id = row.get("meal_plan_id")
+            if not uid or not plan_id:
+                continue
+                
+            live_inventory = get_user_inventory_net(uid)
+            if live_inventory is not None:
+                try:
+                    execute_sql_write(
+                        """
+                        UPDATE plan_chunk_queue
+                        SET pipeline_snapshot = jsonb_set(
+                                jsonb_set(
+                                    pipeline_snapshot,
+                                    '{form_data,userPantry}',
+                                    %s::jsonb,
+                                    true
+                                ),
+                                '{form_data,_pantry_captured_at}',
+                                %s::jsonb,
+                                true
+                            ),
+                            updated_at = NOW()
+                        WHERE meal_plan_id = %s
+                          AND status = 'pending'
+                          AND execute_after > NOW() + interval '48 hours'
+                        """,
+                        (json.dumps(live_inventory, ensure_ascii=False), json.dumps(now_iso), plan_id)
+                    )
+                    refreshed_count += 1
+                except Exception as inner_e:
+                    logger.warning(f"[NIGHTLY REFRESH] Error actualizando plan {plan_id}: {inner_e}")
+                    
+        if refreshed_count > 0:
+            logger.info(f"🌙 [P0-D] Nightly refresh completado: actualizados {refreshed_count} planes far-future.")
+            
+    except Exception as e:
+        logger.error(f"❌ [NIGHTLY REFRESH] Error general: {e}")
 
 def _proactive_refresh_pending_pantry_snapshots() -> None:
     """[P0-C] Refresca snapshots de inventario en chunks pending/stale antes de su execute_after.
@@ -163,7 +243,7 @@ def _proactive_refresh_pending_pantry_snapshots() -> None:
 
     for user_id, rows in by_user.items():
         try:
-            live_inventory = get_user_inventory(user_id)
+            live_inventory = get_user_inventory_net(user_id)
         except Exception as e:
             failed_users += 1
             logger.debug(f"[P0-C/PROACTIVE] Live fetch falló para {user_id}: {e}")
@@ -218,7 +298,7 @@ def _refresh_chunk_pantry(
         return form_data
 
     try:
-        pantry_live = get_user_inventory(user_id)
+        pantry_live = get_user_inventory_net(user_id)
         pantry_result = pantry_live if pantry_live is not None else pantry_fallback
         form_data["current_pantry_ingredients"] = pantry_result
         form_data["_fresh_pantry_source"] = "live"
@@ -249,7 +329,7 @@ def _refresh_chunk_pantry(
             f"(TTL={CHUNK_PANTRY_SNAPSHOT_TTL_HOURS}h). Intentando live retry adicional..."
         )
         try:
-            pantry_live_retry = get_user_inventory(user_id)
+            pantry_live_retry = get_user_inventory_net(user_id)
             if pantry_live_retry is not None:
                 form_data["current_pantry_ingredients"] = pantry_live_retry
                 form_data["_fresh_pantry_source"] = "live"
@@ -545,7 +625,9 @@ def _pause_chunk_for_stale_inventory(
 
     pause_snapshot.setdefault("_pantry_pause_started_at", datetime.now(timezone.utc).isoformat())
     pause_snapshot.setdefault("_pantry_pause_reminders", 0)
-    pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_PANTRY_EMPTY_TTL_HOURS
+    # [P0-2] TTL específico para infraestructura caída (4h por defecto): el usuario no puede
+    # accionar; conviene escalar rápido a flexible_mode si el live no se recupera.
+    pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_STALE_SNAPSHOT_PAUSE_TTL_HOURS
     pause_snapshot["_pantry_pause_reminder_hours"] = CHUNK_PANTRY_EMPTY_REMINDER_HOURS
     pause_snapshot["_pantry_pause_reason"] = "stale_snapshot"
     if snapshot_age_hours is not None:
@@ -564,20 +646,15 @@ def _pause_chunk_for_stale_inventory(
     age_str = f" (snapshot {snapshot_age_hours:.1f}h)" if snapshot_age_hours is not None else ""
     logger.warning(
         f"[P0-2/STALE-PAUSE] Chunk {task_id} (Week {week_number}) pausado para {user_id}: "
-        f"inventario live inaccesible y snapshot vencido{age_str}. Esperando refresco manual."
+        f"inventario live inaccesible y snapshot vencido{age_str}. "
+        f"Recovery cron retentará live cada tick; escalará a flexible tras "
+        f"{CHUNK_STALE_SNAPSHOT_PAUSE_TTL_HOURS}h."
     )
-
-    _dispatch_push_notification(
-        user_id=user_id,
-        title="Refresca tu nevera para continuar",
-        body=(
-            "No pudimos sincronizar tu nevera. Abre la app para refrescar y continuar tu plan."
-        ),
-        url="/dashboard",
-    )
+    # [P0-2] No enviamos push al usuario en stale_snapshot: la causa es server-side
+    # (live fetch caído) y el usuario no puede accionar nada. El recovery cron resuelve solo.
 
 
-def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list):
+def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list, reason: str = None):
     """Pauses chunk generation when the live pantry is too empty to preserve the zero-waste promise."""
     pause_snapshot = execute_sql_query(
         "SELECT pipeline_snapshot FROM plan_chunk_queue WHERE id = %s",
@@ -590,6 +667,8 @@ def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_numbe
 
     pause_snapshot.setdefault("_pantry_pause_started_at", datetime.now(timezone.utc).isoformat())
     pause_snapshot.setdefault("_pantry_pause_reminders", 0)
+    if reason:
+        pause_snapshot["_pantry_pause_reason"] = reason
     pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_PANTRY_EMPTY_TTL_HOURS
     pause_snapshot["_pantry_pause_reminder_hours"] = CHUNK_PANTRY_EMPTY_REMINDER_HOURS
 
@@ -635,6 +714,55 @@ def _dispatch_push_notification(user_id: str, title: str, body: str, url: str = 
         logger.warning(f"[P1-3/PANTRY] No se pudo enviar push: {push_err}")
 
 
+def _reconcile_chunk_reservations(user_id: str, chunk_id: str, days: list, max_retries: int = 3) -> None:
+    """[P0-5] Reintenta las reservas faltantes de un chunk con reservation_status='partial'.
+
+    Se llama de forma síncrona tras detectar reservas parciales. Itera hasta max_retries
+    intentando reserve_plan_ingredients de nuevo. Si logra >= 50% de ingredientes parseables,
+    marca reservation_status='ok'. Si no lo logra, lo deja en 'partial' y el bloqueo de 5 min
+    en el pickup query protege al siguiente chunk de double-spend.
+    """
+    import time
+    for _attempt in range(max_retries):
+        try:
+            reserved = reserve_plan_ingredients(user_id, chunk_id, days)
+            from shopping_calculator import _parse_quantity
+            _expected = 0
+            for _d in days:
+                for _m in (_d or {}).get('meals', []):
+                    for _i in (_m.get('ingredients') or []):
+                        if _i and len(str(_i).strip()) >= 3:
+                            try:
+                                _q, _u, _n = _parse_quantity(str(_i))
+                                if _n and _q > 0:
+                                    _expected += 1
+                            except Exception:
+                                pass
+            _min_ok = max(1, int(_expected * 0.5))
+            if reserved >= _min_ok:
+                execute_sql_write(
+                    "UPDATE plan_chunk_queue SET reservation_status = 'ok', updated_at = NOW() WHERE id = %s",
+                    (chunk_id,)
+                )
+                logger.info(
+                    f"[P0-5/RECONCILE] Reconciliación exitosa chunk {chunk_id}: "
+                    f"{reserved}/{_expected} ingredientes reservados (intento {_attempt + 1})."
+                )
+                return
+            logger.warning(
+                f"[P0-5/RECONCILE] Intento {_attempt + 1}/{max_retries} parcial para chunk {chunk_id}: "
+                f"{reserved}/{_expected}."
+            )
+        except Exception as e:
+            logger.error(f"[P0-5/RECONCILE] Error en intento {_attempt + 1} chunk {chunk_id}: {e}")
+        if _attempt < max_retries - 1:
+            time.sleep(2)
+    logger.error(
+        f"[P0-5/RECONCILE] Reconciliación agotada para chunk {chunk_id} tras {max_retries} intentos. "
+        f"reservation_status permanece 'partial'."
+    )
+
+
 def _should_pause_for_empty_pantry(
     fresh_inventory_source: str,
     fresh_inventory: list,
@@ -675,7 +803,82 @@ def _recover_pantry_paused_chunks() -> None:
             reminder_hours = int(snap.get("_pantry_pause_reminder_hours") or CHUNK_PANTRY_EMPTY_REMINDER_HOURS)
             ttl_hours = int(snap.get("_pantry_pause_ttl_hours") or CHUNK_PANTRY_EMPTY_TTL_HOURS)
             reminders_sent = int(snap.get("_pantry_pause_reminders") or 0)
+            pause_reason = str(snap.get("_pantry_pause_reason") or "empty_pantry")
+            user_id_str = str(row["user_id"])
+            row_id = row["id"]
+            week_num = row.get("week_number")
 
+            # [P0-2] stale_snapshot: la causa es server-side (live fetch caído).
+            # En cada tick (~15 min) intentamos un live-retry. Si pasa, refrescamos
+            # los snapshots y desbloqueamos al instante; el usuario no recibe push.
+            if pause_reason == "stale_snapshot":
+                try:
+                    fresh_inv = get_user_inventory_net(user_id_str)
+                except Exception as live_e:
+                    fresh_inv = None
+                    logger.debug(f"[P0-2/STALE-RETRY] Live retry falló para {user_id_str}: {live_e}")
+
+                if fresh_inv is not None:
+                    # Live se recuperó. Persistimos al snapshot y re-encolamos sin escalar a flex.
+                    try:
+                        meal_plan_id_row = execute_sql_query(
+                            "SELECT meal_plan_id FROM plan_chunk_queue WHERE id = %s",
+                            (row_id,),
+                            fetch_one=True,
+                        )
+                        mpid = meal_plan_id_row.get("meal_plan_id") if meal_plan_id_row else None
+                        if mpid:
+                            _persist_fresh_pantry_to_chunks(row_id, str(mpid), fresh_inv)
+                    except Exception as prop_e:
+                        logger.warning(f"[P0-2/STALE-RETRY] No se pudo propagar inv fresco: {prop_e}")
+
+                    resumed_snapshot = copy.deepcopy(snap)
+                    resumed_snapshot["_pantry_pause_resolution"] = "live_recovered"
+                    resumed_snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+                    execute_sql_write(
+                        """
+                        UPDATE plan_chunk_queue
+                        SET status = 'pending',
+                            execute_after = NOW(),
+                            pipeline_snapshot = %s::jsonb,
+                            updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (json.dumps(resumed_snapshot, ensure_ascii=False), row_id),
+                    )
+                    logger.info(
+                        f"[P0-2/STALE-RECOVERED] Chunk {week_num} reanudado: live fetch volvió "
+                        f"tras {paused_seconds//60} min en stale_snapshot."
+                    )
+                    continue
+
+                # Live sigue caído. Si superamos el TTL corto, escalamos a flexible.
+                if paused_seconds >= ttl_hours * 3600:
+                    degraded_snapshot = copy.deepcopy(snap)
+                    degraded_snapshot["_degraded"] = True
+                    degraded_snapshot["_pantry_flexible_mode"] = True
+                    degraded_snapshot["_pantry_pause_resolution"] = "stale_snapshot_force_flex"
+                    degraded_snapshot["_pantry_pause_resolved_at"] = datetime.now(timezone.utc).isoformat()
+                    execute_sql_write(
+                        """
+                        UPDATE plan_chunk_queue
+                        SET status = 'pending',
+                            attempts = COALESCE(attempts, 0) + 1,
+                            execute_after = NOW(),
+                            pipeline_snapshot = %s::jsonb,
+                            updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (json.dumps(degraded_snapshot, ensure_ascii=False), row_id),
+                    )
+                    logger.warning(
+                        f"[P0-2/STALE-FORCE-FLEX] Chunk {week_num} expiró tras {ttl_hours}h en "
+                        f"stale_snapshot sin recuperar live. Re-encolando en flexible_mode."
+                    )
+                # Antes del TTL: silencio. No spameamos push en pausa server-side.
+                continue
+
+            # empty_pantry / otros: mantenemos el comportamiento original (12h TTL + push).
             if paused_seconds >= ttl_hours * 3600:
                 degraded_snapshot = copy.deepcopy(snap)
                 degraded_snapshot["_degraded"] = True
@@ -693,14 +896,14 @@ def _recover_pantry_paused_chunks() -> None:
                         updated_at = NOW()
                     WHERE id = %s
                     """,
-                    (json.dumps(degraded_snapshot, ensure_ascii=False), row["id"]),
+                    (json.dumps(degraded_snapshot, ensure_ascii=False), row_id),
                 )
                 logger.warning(
-                    f"[P1-3/PANTRY] Chunk {row['week_number']} expiró en pending_user_action. "
+                    f"[P1-3/PANTRY] Chunk {week_num} expiró en pending_user_action. "
                     f"Re-encolando en modo flexible."
                 )
                 _dispatch_push_notification(
-                    user_id=str(row["user_id"]),
+                    user_id=user_id_str,
                     title="Seguimos con un plato flexible",
                     body="Tu chunk seguía en pausa por nevera vacía. Lo reintentaremos con un plato flexible para no bloquear tu plan.",
                     url="/dashboard",
@@ -719,10 +922,10 @@ def _recover_pantry_paused_chunks() -> None:
                         updated_at = NOW()
                     WHERE id = %s
                     """,
-                    (json.dumps(reminder_snapshot, ensure_ascii=False), row["id"]),
+                    (json.dumps(reminder_snapshot, ensure_ascii=False), row_id),
                 )
                 _dispatch_push_notification(
-                    user_id=str(row["user_id"]),
+                    user_id=user_id_str,
                     title="Tu chunk sigue esperando tu nevera",
                     body="Actualiza 'Mi Nevera' para continuar con el siguiente bloque del plan. Si no, usaremos una opción flexible más adelante.",
                     url="/dashboard",
@@ -733,24 +936,27 @@ def _recover_pantry_paused_chunks() -> None:
 
 def _recover_failed_chunks_for_long_plans() -> None:
     """
-    [P1-B] Cron task que detecta chunks failed/dead_lettered en planes largos (15d+)
+    [P0-4] Cron task que detecta chunks failed/dead_lettered en cualquier plan (7d+)
     con días remanentes y los re-encola con chunk_kind="catchup".
     Garantiza que el plan se complete aunque el usuario no abra la app.
+
+    Antes el umbral era 15d+; planes de 7d quedaban sin recuperación y un fallo
+    del chunk 2 dejaba al usuario con solo 3 de los 7 días generados.
     """
     try:
-        # 1. Buscar chunks failed en planes de 15 días o más que aún no han expirado
-        # Consideramos el margen de seguridad: fecha_inicio + total_dias > NOW()
+        # 1. Buscar chunks failed en cualquier plan (>= 7 días, mínimo soportado)
+        # que aún no haya expirado: fecha_inicio + total_dias > NOW()
         failed_candidates = execute_sql_query("""
-            SELECT 
+            SELECT
                 q.id, q.user_id, q.meal_plan_id, q.week_number, q.days_offset, q.days_count, q.pipeline_snapshot,
                 (p.plan_data->>'total_days_requested')::int as total_days,
                 (p.plan_data->>'grocery_start_date')::text as start_date_iso
             FROM plan_chunk_queue q
             JOIN meal_plans p ON q.meal_plan_id = p.id
             WHERE q.status = 'failed'
-              AND (p.plan_data->>'total_days_requested')::int >= 15
+              AND (p.plan_data->>'total_days_requested')::int >= 7
               AND (
-                  (p.plan_data->>'grocery_start_date')::timestamptz + 
+                  (p.plan_data->>'grocery_start_date')::timestamptz +
                   ((p.plan_data->>'total_days_requested')::int * interval '1 day')
               ) > NOW()
             ORDER BY q.updated_at ASC
@@ -772,8 +978,9 @@ def _recover_failed_chunks_for_long_plans() -> None:
                 snapshot = json.loads(snapshot)
 
             logger.info(
-                f"🔄 [P1-B/CATCHUP] Recuperando chunk failed (id={task_id}) "
-                f"week={week_number} para plan {plan_id} (15d+). Re-encolando como catchup..."
+                f"🔄 [P0-4/CATCHUP] Recuperando chunk failed (id={task_id}) "
+                f"week={week_number} para plan {plan_id} (total_days={row.get('total_days')}). "
+                f"Re-encolando como catchup..."
             )
 
             # Re-encolar usando la lógica centralizada que ya maneja el UPDATE de failed records.
@@ -2957,17 +3164,14 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
     [P0-3] Proxy implícito extendido a logging esparso:
     Si el usuario logea 0 comidas → se asume 100 % consumido (comportamiento original).
     Si logea MUY pocas (< 25 % del total planeado), también se usa el proxy porque
-    ese nivel de logging no es señal representativa de baja adherencia — el usuario
-    probablemente comió el plan, solo no lo registró todo. Así se evita la paradoja
-    de que logear 1 comida de 9 bloquee el chunk más que no logear ninguna.
+    ese nivel de logging no es señal representativa de baja adherencia.
+    
+    [P0-B] Matching flexible (exact, substring bidireccional, embedding top-3)
+    para evitar castigar al usuario por variaciones menores al registrar manualmente.
     """
-    # [P0-3] Fracción mínima de comidas registradas para considerar el logging "representativo".
-    # Por debajo de este umbral se activa el proxy implícito aunque haya algún registro.
     _SPARSE_LOGGING_THRESHOLD = 0.25
 
-    planned_counter = Counter()
-    consumed_counter = Counter()
-
+    planned_pool = {}
     for day in previous_chunk_days or []:
         if not isinstance(day, dict):
             continue
@@ -2976,16 +3180,73 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
                 continue
             meal_name = _normalize_meal_name(meal.get("name"))
             if meal_name and meal.get("status") not in ["swapped_out", "skipped", "rejected"]:
-                planned_counter[meal_name] += 1
+                planned_pool[meal_name] = planned_pool.get(meal_name, 0) + 1
 
+    consumed_list = []
     for record in consumed_records or []:
         meal_name = _normalize_meal_name(record.get("meal_name") or record.get("name"))
         if meal_name:
-            consumed_counter[meal_name] += 1
+            consumed_list.append(meal_name)
 
-    planned_total = sum(planned_counter.values())
-    explicit_matched = sum(min(count, consumed_counter.get(name, 0)) for name, count in planned_counter.items())
-    explicit_logged = sum(consumed_counter.values())
+    planned_total = sum(planned_pool.values())
+    explicit_logged = len(consumed_list)
+    
+    match_stats = {"exact": 0, "substring": 0, "embedding": 0, "unmatched": 0}
+    explicit_matched = 0
+
+    def _word_overlap(a: str, b: str) -> int:
+        return len(set(a.split()) & set(b.split()))
+
+    for c_name in consumed_list:
+        # 1. Exact Match
+        if planned_pool.get(c_name, 0) > 0:
+            planned_pool[c_name] -= 1
+            match_stats["exact"] += 1
+            explicit_matched += 1
+            continue
+
+        # 2. Substring Match Bidireccional
+        matched_p = None
+        for p_name, count in planned_pool.items():
+            if count > 0 and len(c_name) > 3 and len(p_name) > 3:
+                if c_name in p_name or p_name in c_name:
+                    matched_p = p_name
+                    break
+        
+        if matched_p:
+            planned_pool[matched_p] -= 1
+            match_stats["substring"] += 1
+            explicit_matched += 1
+            continue
+
+        # 3. Embedding Match Cosine >= 0.85 (Top 3 candidatos)
+        available_planned = [p for p, count in planned_pool.items() if count > 0]
+        if available_planned:
+            candidates = sorted(available_planned, key=lambda p: _word_overlap(c_name, p), reverse=True)[:3]
+            try:
+                c_emb = get_embedding(c_name)
+                best_score = -1.0
+                best_cand = None
+                
+                for cand in candidates:
+                    cand_emb = get_embedding(cand)
+                    score = cosine_similarity(c_emb, cand_emb)
+                    if score > best_score:
+                        best_score = score
+                        best_cand = cand
+                
+                if best_score >= 0.85 and best_cand:
+                    planned_pool[best_cand] -= 1
+                    match_stats["embedding"] += 1
+                    explicit_matched += 1
+                    continue
+            except Exception as e:
+                logger.warning(f"[P0-B/MATCH] Error en embedding para '{c_name}': {e}")
+                
+        # Unmatched
+        match_stats["unmatched"] += 1
+
+    logger.info(f"[P0-B/MATCH] Auditoría de Adherencia: exact={match_stats['exact']} substr={match_stats['substring']} emb={match_stats['embedding']} unmatched={match_stats['unmatched']}")
 
     # [P0-3] Proxy implícito: sin logs O logging esparso (< 25 % de lo planeado).
     sparse_logging = (
@@ -3011,6 +3272,84 @@ def _calculate_chunk_consumption_ratio(previous_chunk_days: list, consumed_recor
         "used_implicit_proxy": use_implicit_proxy,
         "sparse_logging_proxy": sparse_logging,
         "zero_log_proxy": zero_log_proxy,
+        "match_breakdown": match_stats,
+    }
+
+
+def _compute_prev_chunk_meal_breakdown(
+    plan_days: list,
+    prev_offset: int,
+    prev_count: int,
+    consumed_records: list,
+    prev_chunk_number: int,
+) -> dict | None:
+    """[P0-5] Devuelve qué platos del chunk previo INMEDIATO consumió/saltó el usuario.
+
+    A diferencia de `_meal_level_adherence` (EMA por TIPO de comida acumulada en todos
+    los chunks), este breakdown es chunk-específico y por NOMBRE de plato — el insumo
+    directo para que el LLM refuerce variantes de lo aceptado y evite repetir lo saltado.
+
+    Devuelve None si no hay datos planeados (chunk_number<2, sin prior_days, etc.) para
+    que el caller pueda omitir la inyección sin condicionales.
+    """
+    if not plan_days or prev_count <= 0 or prev_chunk_number < 1:
+        return None
+
+    prev_start_day = prev_offset + 1
+    prev_end_day = prev_offset + prev_count
+
+    planned_names: list[str] = []
+    seen: set = set()
+    for day in plan_days:
+        if not isinstance(day, dict):
+            continue
+        day_num = int(day.get("day") or 0)
+        if not (prev_start_day <= day_num <= prev_end_day):
+            continue
+        for meal in day.get("meals") or []:
+            if not isinstance(meal, dict):
+                continue
+            if meal.get("status") in ("swapped_out", "skipped", "rejected"):
+                continue
+            raw_name = meal.get("name")
+            if not raw_name:
+                continue
+            norm = _normalize_meal_name(raw_name)
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            planned_names.append(raw_name)
+
+    if not planned_names:
+        return None
+
+    consumed_norm = set()
+    for record in consumed_records or []:
+        if not isinstance(record, dict):
+            continue
+        norm = _normalize_meal_name(record.get("meal_name") or record.get("name"))
+        if norm:
+            consumed_norm.add(norm)
+
+    consumed: list[str] = []
+    skipped: list[str] = []
+    for raw_name in planned_names:
+        if _normalize_meal_name(raw_name) in consumed_norm:
+            consumed.append(raw_name)
+        else:
+            skipped.append(raw_name)
+
+    if not consumed and not skipped:
+        return None
+
+    return {
+        "chunk_number": int(prev_chunk_number),
+        "prev_start_day": prev_start_day,
+        "prev_end_day": prev_end_day,
+        "consumed_meals": consumed[:8],
+        "skipped_meals": skipped[:8],
+        "consumed_count": len(consumed),
+        "skipped_count": len(skipped),
     }
 
 
@@ -3076,15 +3415,19 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     from constants import safe_fromisoformat, CHUNK_PROACTIVE_MARGIN_DAYS as _proactive_margin
     plan_start_dt = safe_fromisoformat(plan_start_date_str)
 
-    # [P0-B FIX] Temporal gate: verificar que el último día del chunk previo haya ocurrido
-    # (o esté dentro del margen proactivo configurado). Sin esto, el sparse_logging_proxy
-    # puede devolver ready=True cuando el usuario ni ha vivido el día final del chunk anterior,
-    # rompiendo el aprendizaje con datos incompletos.
+    # [P0-1 FIX] Temporal gate: el chunk N+1 sólo puede aprender de N una vez el último día
+    # de N haya transcurrido (margin=0, default). Antes la comparación era `>` lo que permitía
+    # disparar el gate el MISMO día en que terminaba el chunk previo, antes de que el usuario
+    # hubiera tenido cena/última comida — produciendo "aprendizaje" con un día incompleto.
+    # Con `>=`, margin=0 bloquea cuando today<=prev_end y sólo pasa cuando today>prev_end.
+    # Para usuarios que reporten gaps al despertar, subir CHUNK_PROACTIVE_MARGIN_DAYS a 1
+    # restaura la posibilidad de disparar el chunk el mismo día que termina el previo.
     from datetime import datetime as _dt_p0b, timezone as _tz_p0b
     _today_utc = _dt_p0b.now(_tz_p0b.utc).date()
-    _prev_end_date = (plan_start_dt + timedelta(days=prev_end_day - 1)).date()
-    _days_until_prev_end = (_prev_end_date - _today_utc).days  # >0 = último día aún no llegó
-    if _days_until_prev_end > _proactive_margin:
+    _shift_days_accumulated = int(plan_data.get("_shift_days_accumulated", 0))
+    _prev_end_date = (plan_start_dt + timedelta(days=prev_end_day - 1 + _shift_days_accumulated)).date()
+    _days_until_prev_end = (_prev_end_date - _today_utc).days  # >=0 = último día aún no concluyó
+    if _days_until_prev_end >= _proactive_margin:
         _prev_start_iso_log = (plan_start_dt + timedelta(days=prev_offset)).isoformat()
         return {
             "ready": False,
@@ -3116,17 +3459,18 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
     # el aprendizaje será débil, pero ya no bloqueamos la generación silenciosamente.
     inventory_proxy_used = False
     inventory_mutations = 0
-    if is_zero_log:
+    _signal_too_weak = is_zero_log or ratio_info.get("sparse_logging_proxy")
+    if _signal_too_weak:
         try:
             activity = get_inventory_activity_since(user_id, prev_start_iso)
             inventory_mutations = int(activity.get("mutations_count") or 0)
             if inventory_mutations >= CHUNK_LEARNING_INVENTORY_PROXY_MIN_MUTATIONS:
                 inventory_proxy_used = True
         except Exception as e:
-            logger.debug(f"[P0-D] No se pudo medir actividad de inventario para {user_id}: {e}")
+            logger.debug(f"[P0-NEW2] No se pudo medir actividad de inventario para {user_id}: {e}")
 
     return {
-        "ready": (ratio_ready and not is_zero_log) or inventory_proxy_used,
+        "ready": (ratio_ready and not _signal_too_weak) or inventory_proxy_used,
         "ratio": ratio,
         "matched_meals": ratio_info["matched_meals"],
         "planned_meals": ratio_info["planned_meals"],
@@ -3341,13 +3685,40 @@ def _build_filtered_edge_recipe_day(
     else:
         pantry_proteins, pantry_carbs, pantry_veggies = filtered_proteins, filtered_carbs, filtered_veggies
 
-    breakfast_protein = random.choice(pantry_proteins)
-    breakfast_carb = random.choice(pantry_carbs)
-    lunch_protein = random.choice(pantry_proteins)
-    lunch_carb = random.choice(pantry_carbs)
-    lunch_veggie = random.choice(pantry_veggies)
-    dinner_protein = random.choice(pantry_proteins)
-    dinner_veggie = random.choice(pantry_veggies)
+    def _cap_ingredient(ingredient: str, default_g: int) -> str:
+        if not pantry_items:
+            return f"{default_g}g {ingredient}"
+        from constants import normalize_ingredient_for_tracking
+        norm = normalize_ingredient_for_tracking(ingredient)
+        if not norm:
+            return f"{default_g}g {ingredient}"
+            
+        total_g = 0.0
+        try:
+            from shopping_calculator import _parse_quantity
+            from constants import _to_base_unit
+            for p in pantry_items:
+                p_norm = normalize_ingredient_for_tracking(str(p))
+                if p_norm == norm:
+                    q, u, _ = _parse_quantity(str(p))
+                    bq, bu = _to_base_unit(q, u)
+                    if bu == 'g' or bu == 'ml':
+                        total_g += bq
+        except Exception as e:
+            logger.warning(f"[P0-NEW1] Error parsing quantity in Edge Recipe builder: {e}")
+
+        if total_g > 0:
+            capped_g = min(default_g, int(total_g))
+            return f"{capped_g}g {ingredient}"
+        return f"{default_g}g {ingredient}"
+
+    breakfast_protein = _cap_ingredient(random.choice(pantry_proteins), 150)
+    breakfast_carb = _cap_ingredient(random.choice(pantry_carbs), 100)
+    lunch_protein = _cap_ingredient(random.choice(pantry_proteins), 200)
+    lunch_carb = _cap_ingredient(random.choice(pantry_carbs), 150)
+    lunch_veggie = _cap_ingredient(random.choice(pantry_veggies), 100)
+    dinner_protein = _cap_ingredient(random.choice(pantry_proteins), 150)
+    dinner_veggie = _cap_ingredient(random.choice(pantry_veggies), 150)
 
     return {
         "day": 0,
@@ -3520,7 +3891,15 @@ def process_plan_chunk_queue(target_plan_id=None):
     _recover_pantry_paused_chunks()
 
     # [GAP 3 FIX: Cleanup chunks huérfanos]
+    # [P0-4] Liberar reservas antes de cancelar para evitar phantom reserved_quantity
     try:
+        _orphan_chunks = execute_sql_query("""
+            SELECT id, user_id FROM plan_chunk_queue
+            WHERE status IN ('pending', 'stale', 'processing')
+            AND meal_plan_id::text NOT IN (SELECT id::text FROM meal_plans)
+        """)
+        for _oc in (_orphan_chunks or []):
+            release_chunk_reservations(str(_oc["user_id"]), str(_oc["id"]))
         execute_sql_write("""
             UPDATE plan_chunk_queue SET status = 'cancelled', updated_at = NOW()
             WHERE status IN ('pending', 'stale', 'processing')
@@ -3620,6 +3999,11 @@ def process_plan_chunk_queue(target_plan_id=None):
                 AND q1.meal_plan_id NOT IN (
                     SELECT meal_plan_id FROM plan_chunk_queue WHERE status = 'processing'
                 )
+                AND q1.meal_plan_id NOT IN (
+                    SELECT meal_plan_id FROM plan_chunk_queue
+                    WHERE reservation_status = 'partial'
+                    AND updated_at > NOW() - INTERVAL '5 minutes'
+                )
                 AND q1.id = (
                     SELECT q2.id FROM plan_chunk_queue q2
                     WHERE q2.meal_plan_id = q1.meal_plan_id
@@ -3702,11 +4086,13 @@ def process_plan_chunk_queue(target_plan_id=None):
             )
             if not active_plan:
                 logger.info(f" [CHUNK] Plan {meal_plan_id} no existe. Cancelando chunk {week_number}.")
+                release_chunk_reservations(user_id, str(task_id))
                 execute_sql_write("UPDATE plan_chunk_queue SET status = 'cancelled' WHERE id = %s", (task_id,))
                 return
                 
             if active_plan.get('status') == 'failed':
                 logger.info(f" [CHUNK] Plan {meal_plan_id} esta fallido. Cancelando chunk {week_number}.")
+                release_chunk_reservations(user_id, str(task_id))
                 execute_sql_write("UPDATE plan_chunk_queue SET status = 'cancelled' WHERE id = %s", (task_id,))
                 return
 
@@ -3756,6 +4142,8 @@ def process_plan_chunk_queue(target_plan_id=None):
             # flexible_mode (heredado de pausa por nevera vacía o de un opt-in del usuario) bypasea el gate.
             _learning_flexible_mode = bool(snap.get("_pantry_flexible_mode") or snap.get("_learning_flexible_mode"))
             _is_zero_log = bool(learning_ready.get("zero_log_proxy"))
+            _is_sparse_log = bool(learning_ready.get("sparse_logging_proxy"))
+            _signal_too_weak = _is_zero_log or _is_sparse_log
 
             if not learning_ready.get("ready", True) and learning_ready_deferrals < CHUNK_LEARNING_READY_MAX_DEFERRALS and not _learning_flexible_mode:
                 deferred_snapshot = copy.deepcopy(snap)
@@ -3780,7 +4168,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                 logger.warning(
                     f"[CHUNK/LEARNING-READY] chunk {week_number} pospuesto {CHUNK_LEARNING_READY_DELAY_HOURS}h "
                     f"por baja adherencia real ({(learning_ready_ratio or 0):.0%} < {CHUNK_LEARNING_READY_MIN_RATIO:.0%}, "
-                    f"zero_log={_is_zero_log}). "
+                    f"zero_log={_is_zero_log}, sparse={_is_sparse_log}). "
                     f"Re-encolado {learning_ready_deferrals + 1}/{CHUNK_LEARNING_READY_MAX_DEFERRALS}."
                 )
                 # [P0-1] Push solo en el PRIMER deferral para no spamear. Mensaje cambia según motivo.
@@ -3790,6 +4178,13 @@ def process_plan_chunk_queue(target_plan_id=None):
                         _push_body = (
                             "No hemos visto qué comiste de tu plan actual. "
                             "Loguea tus comidas en el diario para que el siguiente bloque aprenda de ti."
+                        )
+                    elif _is_sparse_log:
+                        _explicit = learning_ready.get('explicit_logged_meals', 0)
+                        _planned = learning_ready.get('planned_meals', 0)
+                        _push_title = "Loguea más comidas para que el plan aprenda"
+                        _push_body = (
+                            f"Solo registramos {_explicit} de {_planned} comidas — necesitamos al menos un 25 % para ajustar el siguiente bloque."
                         )
                     else:
                         _push_title = "Tu próximo bloque espera más feedback"
@@ -3852,6 +4247,8 @@ def process_plan_chunk_queue(target_plan_id=None):
                 )
                 form_data["_force_variety"] = True
                 form_data["_learning_forced"] = True
+                if learning_ready.get("sparse_logging_proxy"):
+                    form_data["_sparse_logging_proxy"] = True
                 form_data["_learning_forced_reason"] = (
                     "sparse_log" if learning_ready.get("sparse_logging_proxy") else "low_ratio"
                 )
@@ -4089,6 +4486,16 @@ def process_plan_chunk_queue(target_plan_id=None):
                         )
                     safe_pool = pantry_filtered_pool
                 elif safe_pool:
+                    _current_pantry = form_data.get("current_pantry_ingredients", [])
+                    from constants import CHUNK_MIN_FRESH_PANTRY_ITEMS
+                    if _count_meaningful_pantry_items(_current_pantry) >= CHUNK_MIN_FRESH_PANTRY_ITEMS:
+                        logger.warning(
+                            f"[P0-2/PANTRY] Smart Shuffle sin cobertura para inventario fresco ({len(_current_pantry)} items). "
+                            f"Pausando chunk en lugar de ignorar despensa."
+                        )
+                        _pause_chunk_for_pantry_refresh(task_id, user_id, week_number, _current_pantry, reason="degraded_no_pantry_coverage")
+                        return
+
                     logger.warning(
                         f"[P1-2/PANTRY] Ningún día del Smart Shuffle quedó mayoritariamente cubierto por "
                         f"el inventario fresco de {user_id}. Se conservan fallbacks previos."
@@ -4148,6 +4555,86 @@ def process_plan_chunk_queue(target_plan_id=None):
                             fallback_failed = True
                             break
                     shuffled_day = copy.deepcopy(random.choice(available_days))
+                    
+                    # [P0-NEW1] Validate quantities against pantry for ALL day types in degraded mode
+                    from constants import validate_ingredients_against_pantry, CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE
+                    _pantry_snap = form_data.get("current_pantry_ingredients", [])
+                    _qty_validated = False
+                    _shuffle_qty_attempts = 0
+                    _max_shuffle_qty_attempts = 3
+                    _fell_to_edge = is_edge_recipe
+                    
+                    while not _qty_validated and _shuffle_qty_attempts < _max_shuffle_qty_attempts:
+                        _shuffled_ing = [
+                            ing for m in shuffled_day.get('meals', [])
+                            for ing in m.get('ingredients', []) if isinstance(ing, str) and ing.strip()
+                        ]
+                        _qty_check = validate_ingredients_against_pantry(
+                            _shuffled_ing,
+                            _pantry_snap,
+                            strict_quantities=True,
+                            tolerance=CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE,
+                        )
+                        if _qty_check is True:
+                            _qty_validated = True
+                            break
+                        
+                        _shuffle_qty_attempts += 1
+                        logger.debug(f" [SHUFFLE-QTY] Candidato falló validación de cantidad: {_qty_check}")
+                        
+                        # Remove the failing candidate and try another
+                        available_days = [d for d in available_days if d is not shuffled_day]
+                        if not available_days:
+                            break
+                        shuffled_day = copy.deepcopy(random.choice(available_days))
+                        _fell_to_edge = False # Reset flag if we pick a new day
+                        is_emergency_repeat = False # Also reset this since it's a new day
+                        is_edge_recipe = False
+
+                    # Fallback to quantity-aware Edge Recipe if all 3 attempts fail
+                    if not _qty_validated:
+                        logger.warning(f"[P0-NEW1] Smart Shuffle falló {_shuffle_qty_attempts} intentos de cantidades, intentando Edge Recipe.")
+                        try:
+                            edge_day = _build_filtered_edge_recipe_day(
+                                current_allergies,
+                                current_dislikes,
+                                current_diet,
+                                pantry_items=_pantry_snap,
+                            )
+                            if edge_day:
+                                _edge_ing = [
+                                    ing for m in edge_day.get('meals', [])
+                                    for ing in m.get('ingredients', []) if isinstance(ing, str) and ing.strip()
+                                ]
+                                _edge_qty_check = validate_ingredients_against_pantry(
+                                    _edge_ing, _pantry_snap, strict_quantities=True, tolerance=CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE
+                                )
+                                if _edge_qty_check is True:
+                                    shuffled_day = edge_day
+                                    is_edge_recipe = True
+                                    _fell_to_edge = True
+                                    _qty_validated = True
+                                else:
+                                    logger.warning(f"[P0-NEW1] Edge Recipe también falló cantidades: {_edge_qty_check}")
+                        except Exception as e:
+                            logger.error(f"[P0-NEW1] Error construyendo Edge Recipe con cantidades: {e}")
+
+                    # If still unfeasible, pause the chunk
+                    if not _qty_validated:
+                        logger.warning(
+                            f"[P0-NEW1/SHUFFLE-QTY] plan={meal_plan_id} chunk={week_number} "
+                            f"candidate_attempts={_shuffle_qty_attempts} fallback=pause "
+                            f"reason=degraded_quantities_unfeasible"
+                        )
+                        _pause_chunk_for_pantry_refresh(task_id, user_id, week_number, _pantry_snap, reason="degraded_quantities_unfeasible")
+                        return
+                    
+                    logger.info(
+                        f"[P0-NEW1/SHUFFLE-QTY] plan={meal_plan_id} chunk={week_number} "
+                        f"day_idx={_shuffle_idx} candidate_attempts={_shuffle_qty_attempts} "
+                        f"fallback={'edge' if _fell_to_edge else 'none'}"
+                    )
+
                     last_chosen_hash = str([m.get('name') for m in shuffled_day.get('meals', [])])
                     
                     meals = shuffled_day.get('meals', [])
@@ -4283,6 +4770,15 @@ def process_plan_chunk_queue(target_plan_id=None):
                 # Agrega: repeated_bases (unión), violaciones (suma), repeat_pct (máx).
                 # [P1-A] Ahora incluye también _lifetime_lessons_summary si existe.
                 _all_lessons = ([last_chunk_learning] if last_chunk_learning else []) + recent_chunk_lessons
+                _all_lessons_filtered = [l for l in _all_lessons if not l.get("metrics_unavailable")]
+                _high_conf = [l for l in _all_lessons_filtered if not l.get("low_confidence")]
+                if _high_conf:
+                    _all_lessons_filtered = _high_conf
+                if _all_lessons and not _all_lessons_filtered:
+                    form_data["_learning_window_starved"] = True
+                    form_data["_force_variety"] = True
+                _all_lessons = _all_lessons_filtered
+                
                 lifetime_summary = prior_plan_data.get("_lifetime_lessons_summary", {})
 
                 if _all_lessons or lifetime_summary:
@@ -4449,7 +4945,38 @@ def process_plan_chunk_queue(target_plan_id=None):
                     since_time = (now_utc - timedelta(days=max(7, days_offset))).isoformat()
                     
                 chunk_consumed_records = get_consumed_meals_since(user_id, since_time)
-                
+
+                # [P0-5] Inyectar adherencia chunk-específica del previo INMEDIATO al prompt.
+                # Diferencia con _meal_level_adherence (EMA por tipo, todo el historial):
+                # esto lista NOMBRES de platos que el usuario consumió/saltó del chunk N-1.
+                # El builder lo traduce a "refuerza variantes de X / evita repetir Y".
+                if int(week_number) >= 2 and prior_days:
+                    try:
+                        _total_days_for_split = (
+                            (snap.get("form_data", {}) or {}).get("totalDays")
+                            or (snap.get("form_data", {}) or {}).get("total_days_requested")
+                            or snap.get("totalDays")
+                        )
+                        _prev_offset, _prev_count = _resolve_previous_chunk_window(
+                            meal_plan_id, int(week_number), int(days_offset or 0), _total_days_for_split
+                        )
+                        _breakdown = _compute_prev_chunk_meal_breakdown(
+                            plan_days=prior_days,
+                            prev_offset=_prev_offset,
+                            prev_count=_prev_count,
+                            consumed_records=chunk_consumed_records or [],
+                            prev_chunk_number=int(week_number) - 1,
+                        )
+                        if _breakdown:
+                            form_data["_prev_chunk_adherence"] = _breakdown
+                            logger.info(
+                                f"[P0-5/PREV-ADHERENCE] chunk={week_number} prev={_breakdown['chunk_number']} "
+                                f"consumed={_breakdown['consumed_count']} skipped={_breakdown['skipped_count']} "
+                                f"window=days {_breakdown['prev_start_day']}-{_breakdown['prev_end_day']}"
+                            )
+                    except Exception as _adh_e:
+                        logger.warning(f"[P0-5/PREV-ADHERENCE] No se pudo calcular breakdown: {_adh_e}")
+
                 user_res = execute_sql_query("SELECT health_profile FROM user_profiles WHERE id = %s", (user_id,), fetch_one=True)
                 chunk_health_profile = user_res.get("health_profile", {}) if user_res else {}
                 
@@ -4536,19 +5063,20 @@ def process_plan_chunk_queue(target_plan_id=None):
                             #   advisory → loguear violaciones, anotarlas en form_data y aceptar.
                             #   hybrid   → reintentar con feedback; si retries se agotan, anotar y aceptar.
                             #   strict   → reintentar con feedback al LLM, fallar tras agotar retries.
+                            from constants import CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE
                             _qty_mode = (chunk_health_profile.get("_pantry_quantity_mode") or CHUNK_PANTRY_QUANTITY_MODE or "hybrid").lower()
-                            _tolerance = 1.20 # Default hybrid (20% overflow)
+                            _tolerance = CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE
                             if _qty_mode == "strict":
                                 _tolerance = 1.00
                             elif _qty_mode in ("off", "advisory"):
-                                _tolerance = 1.30 # Legacy/Advisory (30% overflow)
+                                _tolerance = 1.10 # Legacy/Advisory (10% overflow)
 
                             if _qty_mode == "off":
                                 # [P1-D] Race condition: User edits inventory during LLM generation
                                 # Re-validate with a fresh live inventory check right before final merge.
                                 if not form_data.get("_is_drift_retry"):
                                     try:
-                                        fresh_live_inv = get_user_inventory(user_id)
+                                        fresh_live_inv = get_user_inventory_net(user_id)
                                         if fresh_live_inv is not None:
                                             old_inv = form_data.get("current_pantry_ingredients", [])
                                             drift_pct = _calculate_inventory_drift(old_inv, fresh_live_inv)
@@ -4578,7 +5106,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 # [P1-D] Race condition check
                                 if not form_data.get("_is_drift_retry"):
                                     try:
-                                        fresh_live_inv = get_user_inventory(user_id)
+                                        fresh_live_inv = get_user_inventory_net(user_id)
                                         if fresh_live_inv is not None:
                                             old_inv = form_data.get("current_pantry_ingredients", [])
                                             drift_pct = _calculate_inventory_drift(old_inv, fresh_live_inv)
@@ -4622,15 +5150,16 @@ def process_plan_chunk_queue(target_plan_id=None):
                                 raise Exception(f"Violación de despensa estricta tras {_PANTRY_MAX_RETRIES} reintentos: {_qty_feedback}")
 
                             # Advisory / hybrid-retries-agotados: anotamos y seguimos.
+                            _delta_pct_str = f"{(_tolerance - 1.0) * 100:.0f}%"
                             logger.warning(
                                 f"[P1-1/QTY-{_qty_mode.upper()}] plan={meal_plan_id} chunk={week_number} "
                                 f"acepta sobreuso de despensa tras agotar reintentos (modo={_qty_mode}, "
-                                f"intento={_pantry_attempt + 1}): {_qty_summary}"
+                                f"intento={_pantry_attempt + 1}, delta_pct={_delta_pct_str}): {_qty_summary}"
                             )
                             # [P1-D] Race condition check
                             if not form_data.get("_is_drift_retry"):
                                 try:
-                                    fresh_live_inv = get_user_inventory(user_id)
+                                    fresh_live_inv = get_user_inventory_net(user_id)
                                     if fresh_live_inv is not None:
                                         old_inv = form_data.get("current_pantry_ingredients", [])
                                         drift_pct = _calculate_inventory_drift(old_inv, fresh_live_inv)
@@ -4669,7 +5198,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                         # [P1-D] Race condition check
                         if not form_data.get("_is_drift_retry"):
                             try:
-                                fresh_live_inv = get_user_inventory(user_id)
+                                fresh_live_inv = get_user_inventory_net(user_id)
                                 if fresh_live_inv is not None:
                                     old_inv = form_data.get("current_pantry_ingredients", [])
                                     drift_pct = _calculate_inventory_drift(old_inv, fresh_live_inv)
@@ -4754,6 +5283,10 @@ def process_plan_chunk_queue(target_plan_id=None):
                         )
                     else:
                         learning_metrics.setdefault("inventory_activity_proxy_used", False)
+                        
+                    # [P0-NEW2] Auditar sparse_logging_proxy
+                    if form_data.get("_sparse_logging_proxy"):
+                        learning_metrics["sparse_logging_proxy_used"] = True
                 except Exception as lm_e:
                     logger.warning(f"[GAP F] Error calculando learning_metrics: {lm_e}")
                     learning_metrics = None
@@ -5098,6 +5631,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                         'chunk': week_number,
                                         'timestamp': _dt_bf.now(_tz_bf.utc).isoformat(),
                                         'metrics_unavailable': False,
+                                        'low_confidence': bool(_queue_lm.get('inventory_activity_proxy_used') or _queue_lm.get('sparse_logging_proxy_used')),
                                         'backfilled': True,
                                     }
                                 else:
@@ -5114,6 +5648,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                         'chunk': week_number,
                                         'timestamp': _dt_bf.now(_tz_bf.utc).isoformat(),
                                         'metrics_unavailable': True,
+                                        'low_confidence': True,
                                         'backfilled': True,
                                     }
                                 logger.warning(
@@ -5231,27 +5766,73 @@ def process_plan_chunk_queue(target_plan_id=None):
                                     'chunk': week_number,
                                     'timestamp': datetime.now(timezone.utc).isoformat(),
                                     'metrics_unavailable': False,
+                                    'low_confidence': bool(learning_metrics.get('inventory_activity_proxy_used') or learning_metrics.get('sparse_logging_proxy_used')),
                                 }
                             else:
-                                _new_lesson = {
-                                    'repeat_pct': 0,
-                                    'ingredient_base_repeat_pct': 0,
-                                    'rejection_violations': 0,
-                                    'allergy_violations': 0,
-                                    'fatigued_violations': 0,
-                                    'repeated_bases': [],
-                                    'repeated_meal_names': [],
-                                    'rejected_meals_that_reappeared': [],
-                                    'allergy_hits': [],
-                                    'chunk': week_number,
-                                    'timestamp': datetime.now(timezone.utc).isoformat(),
-                                    'metrics_unavailable': True,
-                                }
-                                logger.warning(
-                                    f"[P0-2/STUB-LESSON] Chunk {week_number} plan {meal_plan_id}: "
-                                    f"learning_metrics no disponible. Persistiendo lección stub para "
-                                    f"mantener la cadena de aprendizaje sin huecos."
-                                )
+                                _prior_days_for_stub = prior_plan_data.get("days", [])
+                                _prior_meals_for_stub = [
+                                    m.get("name") for d in _prior_days_for_stub
+                                    for m in (d.get("meals") or [])
+                                    if m.get("name") and m.get("status") not in ["swapped_out", "skipped", "rejected"]
+                                ]
+                                _new_lesson = None
+                                if _prior_meals_for_stub and new_days:
+                                    try:
+                                        _stub_rechazos = get_active_rejections(user_id=user_id)
+                                        _stub_rejected_names = [r["meal_name"] for r in _stub_rechazos] if _stub_rechazos else []
+                                        _stub_metrics = _calculate_learning_metrics(
+                                            new_days=new_days,
+                                            prior_meals=_prior_meals_for_stub,
+                                            prior_days=_prior_days_for_stub,
+                                            rejected_names=_stub_rejected_names,
+                                            allergy_keywords=current_allergies,
+                                            fatigued_ingredients=list(_learned_bases_to_avoid)
+                                        )
+                                        _new_lesson = {
+                                            'repeat_pct': _stub_metrics.get('learning_repeat_pct', 0),
+                                            'ingredient_base_repeat_pct': _stub_metrics.get('ingredient_base_repeat_pct', 0),
+                                            'rejection_violations': _stub_metrics.get('rejection_violations', 0),
+                                            'allergy_violations': _stub_metrics.get('allergy_violations', 0),
+                                            'fatigued_violations': _stub_metrics.get('fatigued_violations', 0),
+                                            'repeated_bases': _stub_metrics.get('sample_repeated_bases', []),
+                                            'repeated_meal_names': _stub_metrics.get('sample_repeats', []),
+                                            'rejected_meals_that_reappeared': _stub_metrics.get('sample_rejection_hits', []),
+                                            'allergy_hits': _stub_metrics.get('sample_allergy_hits', []),
+                                            'chunk': week_number,
+                                            'timestamp': datetime.now(timezone.utc).isoformat(),
+                                            'metrics_unavailable': False,
+                                            'low_confidence': True,
+                                        }
+                                        logger.info(f"[P0-3/STUB-LESSON] Chunk {week_number} plan {meal_plan_id}: "
+                                                    f"Métricas reconstruidas a partir de prior_meals.")
+                                    except Exception as e:
+                                        logger.error(f"Error reconstruyendo stub metrics: {e}")
+                                
+                                if not _new_lesson:
+                                    plan_data['_chunk_learning_stub_count'] = plan_data.get('_chunk_learning_stub_count', 0) + 1
+                                    if plan_data['_chunk_learning_stub_count'] >= 2:
+                                        logger.error(f"[P0-3/STUB-ALERT] El plan {meal_plan_id} acumula {plan_data['_chunk_learning_stub_count']} stubs puros. Posible problema sistémico.")
+                                    _new_lesson = {
+                                        'repeat_pct': 0,
+                                        'ingredient_base_repeat_pct': 0,
+                                        'rejection_violations': 0,
+                                        'allergy_violations': 0,
+                                        'fatigued_violations': 0,
+                                        'repeated_bases': [],
+                                        'repeated_meal_names': [],
+                                        'rejected_meals_that_reappeared': [],
+                                        'allergy_hits': [],
+                                        'chunk': week_number,
+                                        'timestamp': datetime.now(timezone.utc).isoformat(),
+                                        'metrics_unavailable': True,
+                                        'chunk_learning_stub_count': plan_data['_chunk_learning_stub_count'],
+                                        'low_confidence': True
+                                    }
+                                    logger.warning(
+                                        f"[P0-3/STUB-LESSON] Chunk {week_number} plan {meal_plan_id}: "
+                                        f"learning_metrics no disponible y no se pudo reconstruir. Persistiendo lección stub pura para "
+                                        f"mantener la cadena de aprendizaje sin huecos."
+                                    )
                             plan_data['_last_chunk_learning'] = _new_lesson
                             # [P0-4] Append a la ventana rolling (P1-A: 8 para planes largos, else 4).
                             _recent = plan_data.get('_recent_chunk_lessons', [])
@@ -5470,14 +6051,57 @@ def process_plan_chunk_queue(target_plan_id=None):
                 return  # Abortamos para no marcarlo como completed ni sobreescribir status
 
             try:
+                from shopping_calculator import _parse_quantity
+                _expected_ingredients = 0
+                for _rd in new_days:
+                    for _rm in (_rd or {}).get('meals', []):
+                        for _ri in (_rm.get('ingredients') or []):
+                            if _ri and len(str(_ri).strip()) >= 3:
+                                try:
+                                    _rq, _ru, _rn = _parse_quantity(str(_ri))
+                                    if _rn and _rq > 0:
+                                        _expected_ingredients += 1
+                                except Exception:
+                                    pass
                 reserved_items = reserve_plan_ingredients(user_id, str(task_id), new_days)
-                if reserved_items:
+                _expected_min = max(1, int(_expected_ingredients * 0.5))
+                if reserved_items >= _expected_min:
                     logger.info(
                         f"[P1-2] Reservas de inventario aplicadas para chunk {week_number} "
-                        f"plan {meal_plan_id}: {reserved_items} ingredientes."
+                        f"plan {meal_plan_id}: {reserved_items}/{_expected_ingredients} ingredientes."
                     )
+                    try:
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET reservation_status = 'ok' WHERE id = %s",
+                            (task_id,)
+                        )
+                    except Exception:
+                        pass
+                else:
+                    logger.warning(
+                        f"[P0-5/PARTIAL] Reservas parciales chunk {week_number} plan {meal_plan_id}: "
+                        f"{reserved_items}/{_expected_ingredients} (min={_expected_min}). "
+                        f"Marcando reservation_status='partial'."
+                    )
+                    try:
+                        execute_sql_write(
+                            "UPDATE plan_chunk_queue SET reservation_status = 'partial', updated_at = NOW() WHERE id = %s",
+                            (task_id,)
+                        )
+                    except Exception as _partial_err:
+                        logger.error(f"[P0-5] Error marcando partial: {_partial_err}")
+                    # Agendar reconciliación
+                    _reconcile_chunk_reservations(user_id, str(task_id), new_days)
             except Exception as reserve_err:
-                logger.warning(f"[P1-2] No se pudieron persistir reservas del chunk {task_id}: {reserve_err}")
+                logger.warning(f"[P0-5] Reservas fallidas para chunk {task_id}: {reserve_err}")
+                try:
+                    execute_sql_write(
+                        "UPDATE plan_chunk_queue SET reservation_status = 'partial', updated_at = NOW() WHERE id = %s",
+                        (task_id,)
+                    )
+                except Exception:
+                    pass
+                _reconcile_chunk_reservations(user_id, str(task_id), new_days)
 
             # [GAP C] Determinar tier dominante del chunk (peor tier de los días generados)
             chunk_tier = 'llm'

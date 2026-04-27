@@ -601,6 +601,7 @@ from prompts.plan_generator import (
     build_weight_history_context,
     build_liked_meals_context,
     build_chunk_lessons_context,
+    build_prev_chunk_adherence_context,
     build_pantry_correction_context,
 )
 from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
@@ -809,12 +810,14 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     cold_start_recs = form_data.get("_cold_start_recommendations", [])
     llm_retrospective = form_data.get("_llm_retrospective", "")
     chunk_lessons = form_data.get("_chunk_lessons")
+    prev_chunk_adherence = form_data.get("_prev_chunk_adherence")
 
     return {
         "user_id": _uid,
         "quality_context": build_skeleton_quality_context(previous_plan_quality, meal_level_adherence),
         "quality_hint_context": build_quality_hint_context(quality_hint, drastic_strategy),
         "chunk_lessons_context": build_chunk_lessons_context(chunk_lessons),
+        "prev_chunk_adherence_context": build_prev_chunk_adherence_context(prev_chunk_adherence),
         "weight_history_context": build_weight_history_context(weight_history),
         "nutrition_context": build_nutrition_context(nutrition),
         "adherence_context": build_adherence_context(adherence_hint, meal_level_adherence, ignored_meal_types, abandoned_reasons, emotional_state, successful_tone_strategies, nudge_conversion_rates, frustrated_meal_types),
@@ -1016,7 +1019,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"Analiza la siguiente información del usuario y diseña el ESQUELETO de un plan de {days_in_chunk} alternativas/días.\n"
         f"Semilla de generación aleatoria: {random_seed}\n\n"
         f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
-        f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n{ctx['weight_history_context']}\n{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
+        f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n{ctx['prev_chunk_adherence_context']}\n{ctx['weight_history_context']}\n{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
         f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n{ctx['history_context']}\n"
         f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['prices_context']}\n"
         f"{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
@@ -1256,7 +1259,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             f"Genera las comidas completas para el DÍA {day_num} del plan.\n"
             f"Semilla de generación aleatoria: {random_seed}\n\n"
             f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
-            f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n"
+            f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n{ctx['prev_chunk_adherence_context']}\n"
             f"{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
             f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n"
             f"{ctx['supplements_context']}\n{ctx['grocery_duration_context']}\n"

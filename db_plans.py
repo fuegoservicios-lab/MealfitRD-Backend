@@ -86,9 +86,10 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
 
 
 def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool = False):
-    """Inserta nuevo plan nutricional Y cancela chunks pending/processing del usuario en una sola transacción.
+    """Inserta nuevo plan nutricional Y cancela chunks vivos del usuario en una sola transacción.
 
-    Garantiza que no queden chunks huérfanos de planes anteriores que puedan mergear en el nuevo plan.
+    Garantiza que no queden chunks huérfanos de planes anteriores que puedan re-encolarse
+    contra el nuevo plan (vía recovery crons o re-pickup del worker).
     Si return_id=True retorna el UUID del plan insertado (str). Si return_id=False retorna True.
     Lanza excepción en caso de error.
     """
@@ -103,12 +104,30 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
         with connection_pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cursor:
-                    # [P0-2] Cancelar todos los chunks pending/processing del usuario ANTES de insertar
-                    # el nuevo plan, dentro de la misma transacción, para que sea atómico.
-                    # Si el INSERT falla después, el UPDATE se revierte automáticamente.
+                    # [P0-3] Cancelar TODOS los estados que puedan re-disparar generación contra
+                    # el plan nuevo. Antes solo se cubrían 'pending' y 'processing', dejando
+                    # huérfanos:
+                    #   - 'failed' → _recover_failed_chunks_for_long_plans los re-encola.
+                    #   - 'pending_user_action' → _recover_pantry_paused_chunks puede levantarlos.
+                    #   - 'stale' → el worker los re-pickea al refrescar pantry.
+                    # Atómico con el INSERT: si algo falla después, el UPDATE se revierte.
+
+                    # [P0-4] Liberar reservas ANTES de cancelar para evitar phantom reserved_quantity.
+                    cursor.execute(
+                        "SELECT id FROM plan_chunk_queue "
+                        "WHERE user_id = %s "
+                        "AND status IN ('pending', 'processing', 'stale', 'pending_user_action', 'failed')",
+                        (user_id,)
+                    )
+                    chunks_to_cancel = cursor.fetchall()
+                    from db_inventory import release_chunk_reservations
+                    for _ctc in chunks_to_cancel:
+                        release_chunk_reservations(user_id, str(_ctc["id"]))
+
                     cursor.execute(
                         "UPDATE plan_chunk_queue SET status = 'cancelled', updated_at = NOW() "
-                        "WHERE user_id = %s AND status IN ('pending', 'processing') "
+                        "WHERE user_id = %s "
+                        "AND status IN ('pending', 'processing', 'stale', 'pending_user_action', 'failed') "
                         "RETURNING id",
                         (user_id,)
                     )
@@ -133,7 +152,7 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
             raise
 
     if n_cancelled > 0:
-        logger.info(f"✅ [P0-2/ATOMIC] {n_cancelled} chunk(s) huérfano(s) cancelados atómicamente al crear plan {plan_id} para {user_id}")
+        logger.info(f"✅ [P0-3/ATOMIC] {n_cancelled} chunk(s) huérfano(s) cancelados (incl. failed/stale/pending_user_action) al crear plan {plan_id} para {user_id}")
     return plan_id if return_id else True
 
 

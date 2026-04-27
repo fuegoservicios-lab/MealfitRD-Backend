@@ -164,6 +164,105 @@ def get_user_inventory(user_id: str, household_size: int = None) -> List[str]:
     master_map = {m["name"]: m for m in master_list}
     
     for item in raw_items:
+        qty = float(item.get("quantity", 0) or 0)
+        unit = item.get("unit", "unidad")
+        name = item.get("ingredient_name", "")
+        
+        if qty <= 0 and name not in PANTRY_STAPLES:
+            continue
+            
+        q_rounded = f"{qty:.2f}".rstrip('0').rstrip('.') if qty > 0 else "0"
+        if q_rounded == "": q_rounded = "0"
+        
+        if name in PANTRY_STAPLES and qty <= 0:
+             # Just in case Staples exist with 0, show as available
+             formatted.append(f"{name} (Disponible)")
+             continue
+             
+        created_at_str = item.get("created_at")
+        days_old = 0
+        if created_at_str:
+            try:
+                # Extraemos fecha formato ISO (ej: 2024-05-18T12:00:00)
+                item_date = datetime.strptime(created_at_str[:10], "%Y-%m-%d").date()
+                days_old = (datetime.now().date() - item_date).days
+            except Exception:
+                pass
+
+        base_str = f"{q_rounded} {name}" if unit == 'unidad' else f"{q_rounded} {get_plural_unit(qty, unit)} de {name}"
+        
+        # Mejora 4: Fecha de Caducidad Inferida (Smart Spoilage Tracking)
+        if name not in PANTRY_STAPLES:
+            master_item = master_map.get(name, {})
+            shelf_life = master_item.get("shelf_life_days")
+            if shelf_life is None:
+                shelf_life = _infer_shelf_life_days(name, master_item.get("category", ""))
+
+            days_left = shelf_life - days_old
+            if days_left <= 3:
+                urgency = "URGENTE" if days_left <= 1 else "ATENCIÓN"
+                state = "Caducado" if days_left < 0 else f"Caduca en {days_left} días"
+                base_str += f" [⚠️ {urgency}: {state} - IA: Prioriza su uso en las recetas de esta semana]"
+
+            # Mejora 6: Inventory Intelligence (Predictivo)
+            category = master_item.get("category", "").lower()
+            qty_g = qty
+            unit_lower = unit.lower()
+            if unit_lower in ['lb', 'lbs', 'libra', 'libras']: qty_g *= 453.592
+            elif unit_lower in ['kg', 'kilos', 'kilo']: qty_g *= 1000.0
+            elif unit_lower in ['oz', 'onzas', 'onza']: qty_g *= 28.3495
+            
+            consumption_rate = 0
+            if "proteína" in category or "carne" in category or "pollo" in category or "pescado" in category:
+                consumption_rate = 150.0 # g/dia
+            elif "carbohidrato" in category or "arroz" in category or "pasta" in category:
+                consumption_rate = 100.0 # g/dia
+            elif "vegetal" in category or "verdura" in category:
+                consumption_rate = 80.0 # g/dia
+            elif "fruta" in category:
+                consumption_rate = 1.0 # 1 unid/dia
+                if qty_g > 50: consumption_rate = 150.0 
+            elif "lácteo" in category or "leche" in category:
+                consumption_rate = 200.0 # ml o g/dia
+            
+            # [P0-3] Escalar consumo por household_size. Antes asumía 1 persona,
+            # lo que contradice el shopping list escalado × household y la adherencia / household.
+            effective_rate = consumption_rate * household_size
+            if effective_rate > 0 and qty_g > 0:
+                days_until_empty = qty_g / effective_rate
+                if days_until_empty <= 2.5 and days_left > 3:
+                    base_str += f" [⚠️ PREDICCIÓN: Se agotará en ~{round(days_until_empty)} días. Sugiere al usuario alternativas para los días posteriores.]"
+            
+        formatted.append(base_str)
+            
+    formatted.sort()
+    return formatted
+
+def get_user_inventory_net(user_id: str, household_size: int = None) -> List[str]:
+    """Obtiene la despensa del usuario descontando las reservas activas (Neto)."""
+    raw_items = get_raw_user_inventory(user_id)
+    formatted = []
+
+    if household_size is None:
+        try:
+            res = supabase.table("user_profiles").select("health_profile").eq("id", user_id).limit(1).execute()
+            if res.data:
+                hp = res.data[0].get("health_profile") or {}
+                household_size = hp.get("householdSize") or hp.get("household_size") or 1
+        except Exception:
+            household_size = 1
+    household_size = max(1, int(household_size or 1))
+
+    PANTRY_STAPLES = {
+        'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco',
+        'Aceite de sésamo o maní', 'Salsa de soya', 'Orégano',
+        'Canela', 'Pimienta', 'Sal', 'Vinagre', 'Ajo en polvo'
+    }
+
+    master_list = get_master_ingredients()
+    master_map = {m["name"]: m for m in master_list}
+    
+    for item in raw_items:
         qty = float(item.get("available_quantity", item.get("quantity", 0)) or 0)
         unit = item.get("unit", "unidad")
         name = item.get("ingredient_name", "")
@@ -387,6 +486,40 @@ def release_meal_reservation(user_id: str, meal_name: str) -> int:
             _update_row_reservation(row["id"], reserved_quantity, reservation_details)
     except Exception as e:
         logger.error(f"Error liberando reserva de '{meal_name}' para {user_id}: {e}")
+    return released
+
+
+def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
+    """[P0-4] Libera TODAS las reservas de inventario asociadas a un chunk cancelado/fallido.
+
+    Recorre user_inventory buscando reservation_details cuyas keys empiecen con
+    'chunk:{chunk_id}:' y las elimina, ajustando reserved_quantity en consecuencia.
+    Debe llamarse ANTES o DENTRO de la misma transacción que cancela el chunk.
+    """
+    if not supabase or not user_id or not chunk_id:
+        return 0
+
+    prefix = f"chunk:{chunk_id}:"
+    released = 0
+    try:
+        res = supabase.table("user_inventory").select(
+            "id, reserved_quantity, reservation_details"
+        ).eq("user_id", user_id).gt("reserved_quantity", 0).execute()
+        for row in res.data or []:
+            reservation_details = _normalize_reservation_details(row.get("reservation_details"))
+            keys_to_remove = [k for k in reservation_details if k.startswith(prefix)]
+            if not keys_to_remove:
+                continue
+            reserved_quantity = float(row.get("reserved_quantity") or 0)
+            for key in keys_to_remove:
+                reserved_quantity = max(reserved_quantity - float(reservation_details.get(key) or 0), 0.0)
+                reservation_details.pop(key, None)
+                released += 1
+            _update_row_reservation(row["id"], reserved_quantity, reservation_details)
+        if released:
+            logger.info(f"[P0-4] Liberadas {released} reservas del chunk {chunk_id} para {user_id}.")
+    except Exception as e:
+        logger.error(f"[P0-4] Error liberando reservas del chunk {chunk_id} para {user_id}: {e}")
     return released
 
 
