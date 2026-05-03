@@ -60,12 +60,417 @@ def check_meal_plan_generated_today(user_id: str) -> bool:
 _MEAL_PLAN_ARRAY_COLS = {"meal_names", "ingredients", "techniques"}
 
 
+# [P1-5] Lock advisory unificado para serializar operaciones sobre un meal_plan.
+# Antes coexistían dos invocaciones de `pg_advisory_xact_lock` con hash functions
+# diferentes (`hashtext` en routers/plans.py vs `hashtextextended` en cron_tasks.py)
+# y keys diferentes, así que dos call sites que SÍ querían colisionar (e.g., dos
+# catchups concurrentes con dos invocaciones desincronizadas) podían no hacerlo.
+# Este helper estandariza:
+#   - Función de hash: `hashtextextended(text, 0)` (seed fijo, bigint estable).
+#   - Espacio de keys: `meal_plan:<purpose>:<plan_id>`.
+# El parámetro `purpose` permite múltiples namespaces sobre el mismo plan_id sin
+# colisionar accidentalmente entre sí: dos `purpose='catchup'` se serializan,
+# dos `purpose='tz_resync'` se serializan, pero un catchup y un tz_resync NO
+# se bloquean (es lo deseado: operan sobre filas distintas).
+#
+# Uso:
+#     with conn.cursor() as cur:
+#         acquire_meal_plan_advisory_lock(cur, plan_id, purpose='catchup')
+#         # ... resto de la transacción protegida
+# El lock se libera automáticamente al cerrar la transacción (xact_lock).
+_MEAL_PLAN_LOCK_PURPOSES = {
+    "general",
+    "catchup",        # routers/plans.py: serializar inserción de chunks por shift_plan
+    "tz_resync",      # cron_tasks.py: serializar resync de _tz_offset_snapshot
+    "anchor_recovery",  # reservado para futuros recovery flows
+}
+
+
+def acquire_meal_plan_advisory_lock(cursor, meal_plan_id, purpose: str = "general") -> None:
+    """[P1-5] Adquiere advisory lock transaccional por (meal_plan_id, purpose).
+
+    `cursor` debe estar dentro de una transacción abierta; el lock se libera
+    cuando la transacción termina (commit o rollback). Si otro caller con la
+    misma key ya posee el lock, esta llamada bloquea hasta liberación.
+
+    Args:
+        cursor: psycopg cursor activo dentro de transacción.
+        meal_plan_id: UUID del meal_plan (str o UUID).
+        purpose: namespace del lock (ver `_MEAL_PLAN_LOCK_PURPOSES`). Strings
+            arbitrarios funcionan pero un valor desconocido emite un warning para
+            captar typos en code review (no es bloqueante: el lock se adquiere
+            igual y la coherencia depende de que todos los call sites usen la
+            misma cadena).
+    """
+    if purpose not in _MEAL_PLAN_LOCK_PURPOSES:
+        logger.warning(
+            f"[P1-5] acquire_meal_plan_advisory_lock recibió purpose desconocido "
+            f"{purpose!r}. ¿Typo? Valores conocidos: {sorted(_MEAL_PLAN_LOCK_PURPOSES)}"
+        )
+    key = f"meal_plan:{purpose}:{meal_plan_id}"
+    cursor.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s::text, 0))",
+        (key,),
+    )
+
+
+def update_plan_data_atomic(
+    plan_id: str,
+    mutator,
+    lock_timeout_ms: int = None,
+) -> dict:
+    """[P0-2] Read-Modify-Write atómico de meal_plans.plan_data.
+
+    Aplica `mutator(plan_data)` (que MUTA o RETORNA un nuevo dict) dentro de un
+    `SELECT … FOR UPDATE` que serializa concurrentes contra la misma fila. Es la
+    forma segura de tocar keys acumulativas como _consecutive_zero_log_chunks,
+    _last_chunk_learning, _recent_chunk_lessons, _critical_lessons_permanent y
+    _recovery_exhausted_chunks: dos chunks que escriben simultáneamente NO se
+    sobrescriben — el segundo ve el plan_data ya actualizado por el primero.
+
+    Args:
+        plan_id: UUID del meal_plan a modificar.
+        mutator: callable(plan_data: dict) -> dict | None. Si retorna un dict
+            nuevo se persiste; si retorna None se persiste el dict original
+            (asume mutación in-place). Si retorna `False` literal, se aborta el
+            UPDATE (caller decidió que no había cambios).
+        lock_timeout_ms: timeout para adquirir el FOR UPDATE; default toma
+            CHUNK_LEARNING_LOCK_TIMEOUT_MS de constants. Si excede el timeout,
+            la función propaga la excepción de psycopg para que el caller
+            decida re-encolar / saltar.
+
+    Returns:
+        El dict plan_data resultante tras la mutación. Si la fila no existe,
+        retorna {} y NO ejecuta UPDATE.
+    """
+    if not connection_pool:
+        raise RuntimeError("db connection_pool is not available for atomic plan_data update.")
+
+    if lock_timeout_ms is None:
+        from constants import CHUNK_LEARNING_LOCK_TIMEOUT_MS
+        lock_timeout_ms = int(CHUNK_LEARNING_LOCK_TIMEOUT_MS)
+
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+
+    with connection_pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cursor:
+                try:
+                    cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")
+                except Exception as set_err:
+                    logger.debug(f"[P0-2] No se pudo setear lock_timeout en update_plan_data_atomic: {set_err}")
+
+                cursor.execute(
+                    "SELECT plan_data FROM meal_plans WHERE id = %s FOR UPDATE",
+                    (plan_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(
+                        f"[P0-2] update_plan_data_atomic: meal_plan {plan_id} no existe "
+                        f"(probablemente cancelado por save_new_meal_plan_atomic). Skip."
+                    )
+                    return {}
+
+                current = row["plan_data"] or {}
+                if not isinstance(current, dict):
+                    current = {}
+
+                result = mutator(current)
+                if result is False:
+                    return current
+
+                new_data = result if isinstance(result, dict) else current
+                cursor.execute(
+                    "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s",
+                    (Jsonb(new_data), plan_id),
+                )
+                return new_data
+
+
+def _ensure_grocery_start_date(plan_data: dict) -> dict:
+    """[P0-1-RECOVERY/C] Garantiza que plan_data tenga grocery_start_date persistido.
+
+    El pipeline LLM no siempre lo incluye; cuando falta, downstream:
+      - El cron de recovery lo necesitaba para calcular si el plan sigue activo
+        (ahora cubierto con COALESCE → created_at, pero éste es el fix at the source).
+      - routers/plans.py:175 retorna 'Falta fecha de inicio.' y el shift-renewal falla.
+      - cron_tasks.py:5118 hace backfill on-demand al procesar el primer chunk, pero
+        si el chunk falla antes de llegar al worker el plan queda con NULL para siempre.
+
+    Esta función mute el dict in-place (también lo retorna) y asume que el caller
+    está en el momento de inserción. Si plan_data ya tiene un valor truthy lo respeta;
+    si no, persiste hoy en formato ISO date (YYYY-MM-DD) en UTC.
+    """
+    if not isinstance(plan_data, dict):
+        return plan_data
+    existing = plan_data.get("grocery_start_date")
+    if existing:
+        return plan_data
+    from datetime import datetime, timezone
+    plan_data["grocery_start_date"] = datetime.now(timezone.utc).date().isoformat()
+    logger.info(
+        "[P0-1-RECOVERY/C] grocery_start_date ausente al insertar meal_plan; "
+        f"persistido fallback={plan_data['grocery_start_date']}."
+    )
+    return plan_data
+
+
+def _inherit_lifetime_lessons_from_prior_plan(cursor, user_id: str) -> Optional[Dict[str, Any]]:
+    """[P0-1] Lee lecciones del plan más reciente del usuario para sembrar el plan nuevo.
+
+    Devuelve {"history": [...], "summary": {...}, "from_plan_id": "<uuid>"} o None.
+    Filtra el historial por LIFETIME_LESSONS_WINDOW_DAYS (60d por defecto) y recomputa
+    el summary si el filtro descartó entradas. Si `cursor` es None, abre su propia
+    consulta vía execute_sql_query (path no-transaccional, p.ej. save_new_meal_plan_robust).
+    Cualquier excepción se loguea y retorna None — la herencia es best-effort, no
+    debe bloquear el INSERT del plan nuevo.
+    """
+    try:
+        from constants import LIFETIME_LESSONS_WINDOW_DAYS, safe_fromisoformat
+        from datetime import datetime, timezone, timedelta
+
+        if cursor is not None:
+            cursor.execute(
+                "SELECT id, plan_data FROM meal_plans "
+                "WHERE user_id = %s "
+                "ORDER BY created_at DESC "
+                "LIMIT 1",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+        else:
+            row = execute_sql_query(
+                "SELECT id, plan_data FROM meal_plans "
+                "WHERE user_id = %s "
+                "ORDER BY created_at DESC "
+                "LIMIT 1",
+                (user_id,),
+                fetch_one=True,
+            )
+        if not row:
+            return None
+
+        prior_plan_data = row.get("plan_data") if isinstance(row, dict) else None
+        if not isinstance(prior_plan_data, dict):
+            return None
+
+        history_raw = prior_plan_data.get("_lifetime_lessons_history")
+        summary_raw = prior_plan_data.get("_lifetime_lessons_summary")
+        if not isinstance(history_raw, list):
+            history_raw = []
+        if not isinstance(summary_raw, dict):
+            summary_raw = {}
+
+        if not history_raw and not summary_raw:
+            return None
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=LIFETIME_LESSONS_WINDOW_DAYS))
+        history_filtered: List[Dict[str, Any]] = []
+        for lesson in history_raw:
+            if not isinstance(lesson, dict):
+                continue
+            ts = lesson.get("timestamp")
+            if not ts:
+                continue
+            try:
+                ts_dt = safe_fromisoformat(ts) if isinstance(ts, str) else ts
+                if ts_dt.tzinfo is None:
+                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+                if ts_dt >= cutoff:
+                    history_filtered.append(lesson)
+            except Exception:
+                continue
+
+        if not history_filtered and not summary_raw:
+            return None
+
+        # [P1-5] Recomputamos siempre, no solo cuando se filtró historial. Razón:
+        # `summary_raw` puede venir de una versión anterior del schema sin los campos
+        # `top_repeated_meal_names` y `permanent_meal_blocklist`. Forzar el recompute
+        # garantiza que el plan nuevo siempre reciba un summary completo, independiente
+        # de cuándo fue generado el plan anterior. El costo es despreciable (dict ops
+        # sobre history filtered de ≤60 entradas máximo).
+        # [P1-4] Aplicamos el mismo decay temporal que el worker (cron_tasks._chunk_worker
+        # ~14210). Sin esto, la herencia cross-plan trata como iguales lecciones del
+        # primer chunk del plan previo (~8 semanas atrás) y del último (~1 semana
+        # atrás): el plan nuevo arranca con un summary cuyo ranking es arbitrario
+        # (por inserción del set) en vez de priorizar recencia.
+        from cron_tasks import (
+            compute_lifetime_lesson_weight as _p14_weight,
+            _derive_learning_provenance as _p17_provenance,
+            LIFETIME_LESSON_PROXY_WEIGHT_FACTOR as _P17_FACTOR,
+        )
+        from constants import LIFETIME_LESSON_MIN_WEIGHT as _P14_MIN_W
+        from datetime import datetime as _p14_datetime
+        _p14_now = _p14_datetime.now(timezone.utc)
+
+        rej_weights: dict = {}
+        base_weights: dict = {}
+        meal_chunk_counts: dict = {}  # [P1-5] meal_name → set(chunk)
+        meal_weights: dict = {}       # [P1-4] meal_name → suma de pesos (ranking por recencia)
+        total_rej = 0
+        total_alg = 0
+        # [P1-7] Tracking de provenance para persistir ratio en el summary heredado.
+        _p17_user_logs_count = 0
+        _p17_proxy_count = 0
+        for l in history_filtered:
+            total_rej += int(l.get("rejection_violations") or 0)
+            total_alg += int(l.get("allergy_violations") or 0)
+            _w = _p14_weight(l, now=_p14_now)
+            if _w < float(_P14_MIN_W):
+                # Lección demasiado vieja para influir en el ranking heredado.
+                # `total_rej` y `total_alg` SÍ se acumulan independientemente del
+                # decay (representan totales históricos brutos para telemetría).
+                continue
+            # [P1-7] Aplicar factor por provenance simétricamente al worker recompute.
+            # Sin esto, el plan nuevo heredaba un summary donde lessons de proxy/synthesis
+            # del plan previo competían igualadas con user_logs por los caps de top-N,
+            # diluyendo señal real al inicializar el aprendizaje cross-plan.
+            _prov = _p17_provenance(l)
+            if _prov == "user_logs":
+                _p17_user_logs_count += 1
+            else:
+                _p17_proxy_count += 1
+            _w *= 1.0 if _prov == "user_logs" else float(_P17_FACTOR)
+            _ch = l.get("chunk")
+            for rj in (l.get("rejected_meals_that_reappeared") or []):
+                rej_weights[str(rj)] = rej_weights.get(str(rj), 0.0) + _w
+            for rb_entry in (l.get("repeated_bases") or []):
+                if isinstance(rb_entry, dict):
+                    for b in (rb_entry.get("bases") or []):
+                        base_weights[str(b)] = base_weights.get(str(b), 0.0) + _w
+                else:
+                    base_weights[str(rb_entry)] = base_weights.get(str(rb_entry), 0.0) + _w
+            for rm in (l.get("repeated_meal_names") or []):
+                if rm:
+                    _mk = str(rm)
+                    meal_chunk_counts.setdefault(_mk, set()).add(_ch)
+                    meal_weights[_mk] = meal_weights.get(_mk, 0.0) + _w
+
+        # [P1-4] Ranking por peso descendente (recencia primero), luego truncar.
+        all_repeated_meals = sorted(
+            meal_weights.keys(),
+            key=lambda m: (-meal_weights[m], -len(meal_chunk_counts[m])),
+        )
+        # [P1-7] Ratio proxy persistido para telemetría cross-plan.
+        _p17_total = _p17_user_logs_count + _p17_proxy_count
+        summary_filtered = {
+            "total_rejection_violations": total_rej,
+            "total_allergy_violations": total_alg,
+            "top_rejection_hits": [
+                k for k, _ in sorted(rej_weights.items(), key=lambda kv: -kv[1])
+            ][:20],
+            "top_repeated_bases": [
+                k for k, _ in sorted(base_weights.items(), key=lambda kv: -kv[1])
+            ][:20],
+            # [P1-5] Mantener consistencia con el recompute en cron_tasks.py.
+            "top_repeated_meal_names": all_repeated_meals[:30],
+            "permanent_meal_blocklist": sorted(
+                [m for m in all_repeated_meals if len(meal_chunk_counts[m]) >= 2],
+                key=lambda m: -meal_weights[m],
+            )[:50],
+            "_lifetime_window_days": LIFETIME_LESSONS_WINDOW_DAYS,
+            "_lifetime_proxy_ratio": (
+                round(_p17_proxy_count / _p17_total, 3) if _p17_total > 0 else 0.0
+            ),
+            "_lifetime_user_logs_count": _p17_user_logs_count,
+            "_lifetime_proxy_count": _p17_proxy_count,
+        }
+
+        from_plan_id = str(row.get("id")) if row.get("id") else None
+        return {
+            "history": history_filtered,
+            "summary": summary_filtered,
+            "from_plan_id": from_plan_id,
+        }
+    except Exception as e:
+        logger.warning(f"⚠️ [P0-1/INHERIT] Error leyendo lecciones del plan previo de {user_id}: {e}")
+        return None
+
+
+def _apply_inherited_lifetime_lessons(user_id: str, insert_data: dict, cursor=None) -> None:
+    """[P0-1] Inyecta lecciones heredadas en `insert_data['plan_data']` si faltan.
+
+    Mutación in-place. Best-effort: si algo falla o no hay plan previo, deja el
+    plan_data como estaba y los chunks empezarán con aprendizaje vacío.
+    """
+    plan_data_dict = insert_data.get("plan_data")
+    if not isinstance(plan_data_dict, dict):
+        return
+    already_has_history = bool(plan_data_dict.get("_lifetime_lessons_history"))
+    already_has_summary = bool(plan_data_dict.get("_lifetime_lessons_summary"))
+    if already_has_history and already_has_summary:
+        return
+    inherited = _inherit_lifetime_lessons_from_prior_plan(cursor, user_id)
+    if not inherited:
+        return
+    if not already_has_history and inherited.get("history"):
+        plan_data_dict["_lifetime_lessons_history"] = inherited["history"]
+    if not already_has_summary and inherited.get("summary"):
+        plan_data_dict["_lifetime_lessons_summary"] = inherited["summary"]
+    if inherited.get("from_plan_id"):
+        plan_data_dict["_lifetime_lessons_inherited_from"] = inherited["from_plan_id"]
+    logger.info(
+        f"🧠 [P0-1/INHERIT] {user_id}: heredadas "
+        f"{len(inherited.get('history') or [])} lecciones "
+        f"(bases={len((inherited.get('summary') or {}).get('top_repeated_bases') or [])}, "
+        f"hits={len((inherited.get('summary') or {}).get('top_rejection_hits') or [])}) "
+        f"de plan {inherited.get('from_plan_id')}."
+    )
+
+
 def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
     """Construye la SQL de INSERT para meal_plans a partir de un dict.
 
     Retorna (sql, vals) listos para pasar a cursor.execute.
     """
     from psycopg.types.json import Jsonb
+    # [P0-1-RECOVERY/C] Defensa centralizada: cualquier path que use este helper para
+    # insertar a meal_plans tendrá grocery_start_date garantizado. Evita reintroducir
+    # el bug donde el pipeline LLM omitía el campo y sólo el backfill en runtime
+    # (cron_tasks.py:5118) lo poblaba a costa de chunks que fallaban antes.
+    if "plan_data" in data:
+        data["plan_data"] = _ensure_grocery_start_date(data["plan_data"])
+
+    # [P0-1/CENTRAL] Último escudo para herencia cross-plan de lifetime lessons.
+    # save_new_meal_plan_atomic y save_new_meal_plan_robust ya invocan
+    # _apply_inherited_lifetime_lessons explícitamente (con el cursor óptimo:
+    # transaccional para atomic, independiente para robust). Este bloque cubre:
+    #   1) call sites futuros que inserten vía _build_meal_plan_insert_sql sin
+    #      pasar por los helpers (única forma documentada de insertar plans en
+    #      producción — verificado en audit P0-1).
+    #   2) refactors que extraigan parte del flujo y olviden replicar la herencia.
+    # _apply_inherited_lifetime_lessons es idempotente: si plan_data ya tiene
+    # _lifetime_lessons_history Y _lifetime_lessons_summary, retorna sin trabajo.
+    # Si entra al fallback Y rellena algo, emitimos warning con el user_id para
+    # detectar el call site infractor sin romper el INSERT.
+    _user_id = data.get("user_id")
+    _plan_data_dict = data.get("plan_data") if isinstance(data.get("plan_data"), dict) else None
+    if _user_id and _plan_data_dict is not None:
+        _had_history_before = bool(_plan_data_dict.get("_lifetime_lessons_history"))
+        _had_summary_before = bool(_plan_data_dict.get("_lifetime_lessons_summary"))
+        if not (_had_history_before and _had_summary_before):
+            _apply_inherited_lifetime_lessons(_user_id, data, cursor=None)
+            _filled_history = (
+                bool(_plan_data_dict.get("_lifetime_lessons_history"))
+                and not _had_history_before
+            )
+            _filled_summary = (
+                bool(_plan_data_dict.get("_lifetime_lessons_summary"))
+                and not _had_summary_before
+            )
+            if _filled_history or _filled_summary:
+                logger.warning(
+                    "[P0-1/CENTRAL] _build_meal_plan_insert_sql aplicó herencia "
+                    f"fallback para user_id={_user_id} "
+                    f"(history={_filled_history}, summary={_filled_summary}). "
+                    "El call site no invocó _apply_inherited_lifetime_lessons "
+                    "antes; preferir save_new_meal_plan_atomic/_robust como "
+                    "entrada para que la herencia use el cursor óptimo."
+                )
+
     cols = list(data.keys())
     vals = []
     for col, v in zip(cols, data.values()):
@@ -100,7 +505,6 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
     from psycopg.rows import dict_row
 
     def _run(data: dict):
-        sql, vals = _build_meal_plan_insert_sql(data, with_returning=True)
         with connection_pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cursor:
@@ -132,6 +536,14 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
                         (user_id,)
                     )
                     cancelled_rows = cursor.fetchall()
+
+                    # [P0-1/INHERIT] Heredar lecciones del plan previo si el plan nuevo no
+                    # las trae explícitas. Sin esto, cambiar de 7d → 15d → 30d reseteaba el
+                    # aprendizaje del usuario: cada plan partía de cero pese a que el
+                    # _lifetime_lessons_history del plan previo seguía vivo en meal_plans.
+                    _apply_inherited_lifetime_lessons(user_id, data, cursor=cursor)
+
+                    sql, vals = _build_meal_plan_insert_sql(data, with_returning=True)
                     cursor.execute(sql, vals)
                     row = cursor.fetchone()
                     plan_id = str(row["id"]) if row else None
@@ -166,6 +578,12 @@ def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[
     try:
         import copy
         safe_data = copy.deepcopy(insert_data)
+
+        # [P0-1/INHERIT] Misma herencia cross-plan que el path atomic, pero sin
+        # cursor compartido: el helper abre su propio SELECT vía execute_sql_query.
+        _user_id = safe_data.get("user_id")
+        if _user_id:
+            _apply_inherited_lifetime_lessons(_user_id, safe_data, cursor=None)
 
         query, vals = _build_meal_plan_insert_sql(safe_data, with_returning=return_id)
 
@@ -610,24 +1028,28 @@ def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
 
 def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
     """Retorna un diccionario {ingrediente_normalizado: conteo_decaimiento} de la DB.
-    Implementa Decaimiento Temporal Continuo Matemático: count * (0.9 ^ dias_transcurridos).
+    Implementa Decaimiento Temporal Continuo Matemático: count * (decay ^ dias_transcurridos).
     Se amplía days_limit a 60 días por defecto para dar margen al decaimiento suave.
+
+    [P1-4] El factor de decay viene de constants.INGREDIENT_FATIGUE_DECAY_FACTOR para
+    estar alineado con cron_tasks.calculate_ingredient_fatigue. Antes ambos usaban 0.9
+    hardcoded por separado — riesgo de drift si alguien tuneaba uno y olvidaba el otro.
     """
     if not supabase or not user_id or user_id == "guest": return {}
     try:
         from datetime import datetime, timedelta, timezone
-        
+        from constants import INGREDIENT_FATIGUE_DECAY_FACTOR as decay_factor
+
         now = datetime.now(timezone.utc)
         cutoff_date = (now - timedelta(days=days_limit)).isoformat()
-        
+
         res = supabase.table("ingredient_frequencies").select("ingredient, count, last_used").eq("user_id", user_id).gte("last_used", cutoff_date).execute()
-        
+
         if not res.data:
             return {}
-            
+
         freq_dict = {}
-        decay_factor = 0.9  # Retiene 90% del peso por cada día que pasa sin uso
-        
+
         for row in res.data:
             ingredient = row["ingredient"]
             count = row["count"]

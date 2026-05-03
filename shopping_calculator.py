@@ -1,12 +1,58 @@
 import re
 import math
 import os
+import random
 from collections import defaultdict
 import logging
 from fractions import Fraction
 from db_core import supabase, connection_pool, execute_sql_query
 
 import time as _time
+
+
+# [P1.4] Backoff exponencial con jitter para 429 / RESOURCE_EXHAUSTED de Gemini.
+# Sin esto, una ráfaga puntual de quota tira el cache semántico (embed_documents)
+# o pierde matches por ingrediente (embed_query), degradando la lista de compras
+# de cualquier plan en curso. langchain_google_genai cambia el wrapping de la
+# excepción entre versiones (a veces ResourceExhausted, a veces ClientError con
+# code=429), así que detectamos por substring del mensaje + nombre de clase.
+def _is_gemini_quota_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    if exc.__class__.__name__ == "ResourceExhausted":
+        return True
+    return (
+        "429" in msg
+        or "resource_exhausted" in msg
+        or "resourceexhausted" in msg
+        or "quota" in msg
+    )
+
+
+def _gemini_call_with_retry(fn, *args, _label: str = "gemini_call", **kwargs):
+    """Llama `fn(*args, **kwargs)` reintentando 429 con backoff + jitter.
+
+    3 intentos máximo. Delays base 2s y 8s, cada uno con jitter ±25%. Errores
+    no relacionados con quota se propagan inmediatamente.
+    """
+    delays = (2.0, 8.0)
+    for attempt in range(3):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if not _is_gemini_quota_error(exc):
+                raise
+            if attempt == 2:
+                logging.error(
+                    f"[GEMINI/QUOTA] {_label} agotó 3 intentos por 429: {exc}"
+                )
+                raise
+            base = delays[attempt]
+            delay = base * (0.75 + 0.5 * random.random())
+            logging.warning(
+                f"[GEMINI/QUOTA] {_label} 429 (intento {attempt + 1}/3); "
+                f"backoff {delay:.1f}s antes de reintentar."
+            )
+            _time.sleep(delay)
 
 _master_cache = None
 _master_cache_ts = 0
@@ -35,7 +81,10 @@ def get_semantic_cache():
         embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2-preview", google_api_key=api_key)
         
         texts = [f"{m['name']} - Categoría: {m.get('category','')}. Alias: {', '.join(m.get('aliases') or [])}" for m in master_list]
-        vectors = embeddings.embed_documents(texts)
+        vectors = _gemini_call_with_retry(
+            embeddings.embed_documents, texts,
+            _label="embed_documents (master_ingredients cache init)",
+        )
         
         _semantic_cache = {
             "master_list": master_list,
@@ -159,7 +208,10 @@ def normalize_name(orig_name: str) -> str:
         if cache:
             try:
                 # Calculamos el vector del texto no reconocido
-                query_vector = cache["embeddings_client"].embed_query(n)
+                query_vector = _gemini_call_with_retry(
+                    cache["embeddings_client"].embed_query, n,
+                    _label=f"embed_query (semantic match: {n[:40]!r})",
+                )
                 best_score = -1.0
                 best_match = None
                 
@@ -1431,7 +1483,40 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
     if consumed_ingredients:
         items_to_deduct.extend(consumed_ingredients)
         
-    return aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier)
+    res = aggregate_and_deduct_shopping_list(all_ingredients, items_to_deduct, categorize=categorize, structured=structured, multiplier=effective_multiplier)
+    
+    # [P0-3] Inyectar items de compra urgente si el plan superó validación de despensa en flexible_mode
+    urgent_items = plan_result.get("_pantry_supplement_required", [])
+    if urgent_items:
+        if categorize:
+            if isinstance(res, dict):
+                res["🚨 Compra Urgente"] = []
+                for item in urgent_items:
+                    res["🚨 Compra Urgente"].append({
+                        "name": item,
+                        "market_qty": 1,
+                        "market_unit": "ud",
+                        "display_qty": item,
+                        "display_string": f"⚠️ {item}",
+                        "category": "🚨 Compra Urgente",
+                        "display_category": "🚨 Compra Urgente",
+                        "is_staple": False
+                    } if structured else f"⚠️ {item}")
+        else:
+            if isinstance(res, list):
+                for item in urgent_items:
+                    res.append({
+                        "name": item,
+                        "market_qty": 1,
+                        "market_unit": "ud",
+                        "display_qty": item,
+                        "display_string": f"⚠️ {item}",
+                        "category": "🚨 Compra Urgente",
+                        "display_category": "🚨 Compra Urgente",
+                        "is_staple": False
+                    } if structured else f"⚠️ {item}")
+    
+    return res
 
 def get_realtime_pantry(plan_result: dict, consumed_ingredients: list[str]) -> list[str]:
     all_ingredients = []

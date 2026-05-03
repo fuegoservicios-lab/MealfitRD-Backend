@@ -347,21 +347,27 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         logger.error(f"Error buscando visual_diary: {e}")
         return []
 
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None, meal_type: str = "snack"):
-    """Guarda una comida consumida en la tabla consumed_meals de Supabase."""
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None, meal_type: str = "snack", mark_inventory_synced: bool = False):
+    """Guarda una comida consumida en la tabla consumed_meals de Supabase.
+
+    [P0.1] Si el caller acaba de descontar los ingredientes del inventario,
+    debe pasar `mark_inventory_synced=True` para que la reconciliación al
+    cierre del chunk no vuelva a descontarlos.
+    """
     try:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
+        synced_at = now if mark_inventory_synced else None
         if connection_pool:
             from psycopg.types.json import Jsonb
             execute_sql_write(
-                "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients if ingredients is not None else [], now, meal_type)
+                "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type, inventory_synced_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients if ingredients is not None else [], now, meal_type, synced_at)
             )
             return True
         else:
             if not supabase: return None
-            res = supabase.table("consumed_meals").insert({
+            payload = {
                 "user_id": user_id,
                 "meal_name": meal_name,
                 "meal_type": meal_type,
@@ -370,8 +376,11 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                 "carbs": carbs,
                 "healthy_fats": healthy_fats,
                 "ingredients": ingredients if ingredients is not None else [],
-                "consumed_at": now
-            }).execute()
+                "consumed_at": now,
+            }
+            if synced_at:
+                payload["inventory_synced_at"] = synced_at
+            res = supabase.table("consumed_meals").insert(payload).execute()
             return res.data
     except Exception as e:
         logger.error(f"Error guardando comida consumida: {e}")

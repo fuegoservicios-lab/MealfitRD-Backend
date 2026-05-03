@@ -266,3 +266,41 @@ def api_log_progress(data: dict = Body(...), verified_user_id: str = Depends(get
         logger.error(f"❌ [ERROR] Error en /api/diary/progress POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# [P1-4] Endpoints de preferencia de logging.
+# 'manual' (default): el sistema pausa chunks si el usuario deja de loguear comidas.
+# 'auto_proxy': el usuario opta por confiar en el plan; el sistema NO pausa por falta de logs.
+_P14_VALID_PREFERENCES = ("manual", "auto_proxy")
+
+
+@router.get("/preferences/logging")
+def api_get_logging_preference(verified_user_id: str = Depends(get_verified_user_id)):
+    from db_core import execute_sql_query
+    row = execute_sql_query(
+        "SELECT logging_preference FROM user_profiles WHERE id = %s",
+        (verified_user_id,),
+        fetch_one=True,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+    return {"logging_preference": row.get("logging_preference") or "manual"}
+
+
+@router.put("/preferences/logging")
+def api_set_logging_preference(
+    data: dict = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    pref = (data or {}).get("logging_preference")
+    if pref not in _P14_VALID_PREFERENCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"logging_preference debe ser uno de: {list(_P14_VALID_PREFERENCES)}.",
+        )
+    from db_core import execute_sql_write
+    execute_sql_write(
+        "UPDATE user_profiles SET logging_preference = %s WHERE id = %s",
+        (pref, verified_user_id),
+    )
+    return {"success": True, "logging_preference": pref}
+

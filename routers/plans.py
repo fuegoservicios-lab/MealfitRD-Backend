@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request, Response
 from fastapi.responses import StreamingResponse
 from typing import Optional
 import logging
@@ -29,6 +29,101 @@ router = APIRouter(
     prefix="/api/plans",
     tags=["plans"],
 )
+
+
+def _resolve_request_tz_offset(payload_value, user_id: Optional[str]) -> int:
+    """[P1-1] Resuelve `tz_offset_minutes` con prioridad explícita.
+
+    Antes los handlers (/analyze, /analyze/stream, /shift-plan) hacían
+    `int(data.get("tzOffset", 0))`, colapsando "frontend no envió" con
+    "frontend envió 0 (UTC)". Para usuarios genuinamente UTC el resultado es
+    correcto, pero para usuarios en TZ no-UTC cuyo cliente legacy/móvil
+    omitió `tzOffset`, todo el cálculo de localización y `days_since_creation`
+    quedaba en UTC — produciendo off-by-one en `chunk_size_for_next_slot`
+    (e.g., un plan 7d generaba el chunk 2 con count=3 cuando debía ser 4).
+
+    Resolución:
+      1. Si `payload_value` es no-None: usarlo (incluyendo `0` explícito).
+         Es la fuente de verdad más fresca cuando el frontend la provee.
+      2. Si es None y hay `user_id`: leer `health_profile.tz_offset_minutes`
+         vivo vía `cron_tasks._get_user_tz_live` (helper que ya usan los
+         flujos sensibles a TZ del worker).
+      3. Si tampoco hay perfil o falla la lectura: 0 (UTC).
+
+    Args:
+        payload_value: valor crudo de `data.get("tzOffset")` — puede ser int,
+            string convertible a int, o None.
+        user_id: id del usuario para fallback al perfil; None para guest.
+
+    Returns:
+        Offset en minutos (formato JS: positivo para TZ negativas, e.g. +240
+        para UTC-4).
+    """
+    if payload_value is not None:
+        try:
+            return int(payload_value)
+        except (TypeError, ValueError):
+            pass  # cae a fallback de perfil
+    if user_id and user_id != "guest":
+        try:
+            from cron_tasks import _get_user_tz_live
+            return _get_user_tz_live(user_id, fallback_minutes=0)
+        except Exception as _tz_err:
+            logger.debug(f"[P1-1] Fallback de TZ desde perfil falló para {user_id}: {_tz_err}")
+    return 0
+
+
+def _attach_pantry_degraded_response_meta(response: Optional[Response], plan_data: dict) -> dict:
+    """[P0-2] Calcula el resumen de degradación de pantry, adjunta los headers HTTP
+    `X-Pantry-Degraded` / `X-Pantry-Degraded-Days` cuando aplica, y devuelve el dict
+    resumen para inclusión en el body de la respuesta.
+
+    El frontend puede leer la señal de DOS formas:
+      1. Vía header `X-Pantry-Degraded: true` — útil para banners interceptados a
+         nivel de fetch wrapper sin parsear JSON.
+      2. Vía campo `_pantry_degraded_summary` dentro del body — útil para mostrar
+         badges per-día y reasons específicos.
+
+    Args:
+        response: objeto FastAPI Response inyectado en el handler (None en path
+            de fallback / tests directos).
+        plan_data: dict con la estructura del plan. Puede contener:
+            - `_initial_chunk_pantry_degraded` (P0-1)
+            - `days[i]._pantry_degraded` (P0-2)
+            - `_current_mode == "flexible"` (persistido por _activate_flexible_mode).
+
+    Returns:
+        El dict resumen (siempre devuelto, aunque el header no se haya adjuntado).
+    """
+    try:
+        from cron_tasks import compute_pantry_degraded_summary
+        summary = compute_pantry_degraded_summary(plan_data or {})
+    except Exception as _summary_err:
+        logger.debug(f"[P0-2] No se pudo computar pantry summary: {_summary_err}")
+        summary = {
+            "degraded": False,
+            "degraded_days": [],
+            "reasons": [],
+            "initial_chunk_degraded": False,
+            "current_mode": None,
+        }
+    if response is not None and summary.get("degraded"):
+        try:
+            response.headers["X-Pantry-Degraded"] = "true"
+            if summary.get("degraded_days"):
+                response.headers["X-Pantry-Degraded-Days"] = ",".join(
+                    str(d) for d in summary["degraded_days"]
+                )
+            if summary.get("reasons"):
+                # Headers HTTP no permiten coma en valores arbitrarios sin escape;
+                # usamos pipe como separador (compatible con HTTP/1.1).
+                response.headers["X-Pantry-Degraded-Reasons"] = "|".join(
+                    summary["reasons"]
+                )
+        except Exception as _h_err:
+            logger.debug(f"[P0-2] No se pudo setear headers pantry degraded: {_h_err}")
+    return summary
+
 
 # ─── TEMPORARY DEBUG ENDPOINT (REMOVE AFTER DIAGNOSIS) ───
 @router.get("/debug-scaling/{user_id}")
@@ -117,7 +212,7 @@ def chunk_size_for_next_slot(days_since_creation: int, total_planned_days: int, 
     return base
 
 @router.post("/shift-plan")
-def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
     """
     On-demand endpoint to trigger an atomic shift + rolling window generation.
     Idempotent: if the plan is already up-to-date, does nothing.
@@ -150,6 +245,16 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                         return {"success": False, "message": "No hay plan activo."}
 
                     plan_id = plan_record["id"]
+
+                    # [P0-4] Advisory lock 'general' por meal_plan: serializa este shift
+                    # contra el merge del worker (cron_tasks._chunk_worker T1+T2) que
+                    # también adquiere el mismo lock antes de tocar plan_data. Sin esto,
+                    # T2 del worker (que escribe plan_data POSTERIOR a su propio T1 con
+                    # un dict en memoria) podía sobrescribir los cambios de /shift-plan
+                    # ejecutados entre T1 y T2 — perdiendo el shift y la renumeración
+                    # de days. El lock se libera al cerrar la transacción.
+                    from db_plans import acquire_meal_plan_advisory_lock as _p04_acquire_lock
+                    _p04_acquire_lock(cursor, plan_id, purpose="general")
                     plan_data = plan_record.get("plan_data", {})
                     days = plan_data.get("days", [])
                     total_planned_days = max(3, int(plan_data.get("total_days_requested", len(days))))
@@ -158,8 +263,22 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                         return {"success": False, "message": "El plan está vacío."}
 
                     # Check if shift is needed
-                    tz_offset = data.get('tzOffset', 0)
+                    # [P1-1] Resolver tz con fallback al perfil cuando el frontend no
+                    # envía tzOffset. Antes `data.get('tzOffset', 0)` colapsaba "no
+                    # enviado" con "UTC explícito" y `days_since_creation` se calculaba
+                    # en UTC para usuarios en TZ no-UTC con clientes que omiten el
+                    # campo, produciendo off-by-one en chunk_size_for_next_slot.
+                    _payload_tz = data.get('tzOffset')
+                    tz_offset = _resolve_request_tz_offset(_payload_tz, user_id)
                     today = datetime.now(timezone.utc)
+                    if _payload_tz is not None:
+                        try:
+                            # [P0-delta] Persistir TZ offset en health_profile silenciosamente
+                            # SOLO cuando llegó del request (evitamos overwrite cuando
+                            # estamos usando el valor que ya está en el perfil).
+                            update_user_health_profile(user_id, {"tz_offset_minutes": int(tz_offset), "tzOffset": int(tz_offset)})
+                        except Exception:
+                            pass
                     if tz_offset:
                         try:
                             today -= timedelta(minutes=int(tz_offset))
@@ -200,7 +319,14 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                     needs_fill_initial = len(days) < window_needed  # Para la guard de cortocircuito inicial
 
                     if not needs_shift and not needs_fill_initial:
-                        return {"success": True, "message": "Plan ya est\u00e1 al d\u00eda y completo.", "plan_data": plan_data}
+                        # [P0-2] Resumen de pantry-degraded + headers para esta rama.
+                        _p02_summary = _attach_pantry_degraded_response_meta(response, plan_data)
+                        return {
+                            "success": True,
+                            "message": "Plan ya est\u00e1 al d\u00eda y completo.",
+                            "plan_data": plan_data,
+                            "_pantry_degraded_summary": _p02_summary,
+                        }
 
                     logger.info(f"\ud83d\udd04 [API SHIFT] Shifting {days_since_creation} días. Plan total={total_planned_days}, restantes={days_remaining_in_plan}")
 
@@ -253,9 +379,9 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                             f"(visibles={len(shifted_days)}/{total_planned_days}, sin chunks vivos). "
                             f"Habilitando rolling refill de recuperación."
                         )
-                    elif total_planned_days == 7 and days_remaining_in_plan == 0 and not is_partial:
-                        # [P0-1] Plan semanal expirado: auto-renovar con señales de aprendizaje frescas.
-                        # Genera una nueva semana [3,4] en el mismo plan_id, preservando historial.
+                    elif total_planned_days in (7, 15, 30) and days_remaining_in_plan == 0 and not is_partial:
+                        # [P0-1] Plan expirado: auto-renovar con señales de aprendizaje frescas.
+                        # Genera un nuevo ciclo en el mismo plan_id, preservando historial.
                         try:
                             from cron_tasks import _enqueue_plan_chunk
                             cursor.execute(
@@ -282,36 +408,79 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                     # [P0-1 FIX] Plan renovado: start = today para que el gate
                                     # de adherencia previa calcule ventanas correctas.
                                     renewal_plan_start_iso = today.isoformat()
-                                    for chunk_count in [3, 4]:
-                                        snapshot = {
-                                            "form_data": {
-                                                **hp,
-                                                "user_id": user_id,
-                                                "totalDays": chunk_count,
-                                                "_plan_start_date": renewal_plan_start_iso,
-                                            },
-                                            "taste_profile": "",
-                                            "memory_context": "",
-                                            "previous_meals": previous_meals,
-                                            "totalDays": chunk_count,
-                                            "_is_rolling_refill": True,
-                                            "_is_weekly_renewal": True,
+                                    is_first_chunk = True
+                                    
+                                    from db_inventory import get_user_inventory_net
+                                    live_inv = get_user_inventory_net(user_id)
+                                    
+                                    if live_inv is None:
+                                        shifted_data['generation_status'] = 'expired_pending_pantry'
+                                        shifted_data['pending_user_action'] = {
+                                            "type": "pantry_required",
+                                            "message": "Actualiza tu nevera para renovar tu plan"
                                         }
-                                        _enqueue_plan_chunk(
-                                            user_id, plan_id, next_week, current_offset,
-                                            chunk_count, snapshot, chunk_kind="rolling_refill",
-                                        )
-                                        logger.info(
-                                            f"🔄 [P0-1 RENEWAL] Chunk semana {next_week} encolado "
-                                            f"(offset={current_offset}, count={chunk_count}) plan {plan_id}"
-                                        )
-                                        next_week += 1
-                                        current_offset += chunk_count
-                                    shifted_days = []
-                                    shifted_data['grocery_start_date'] = today.isoformat()
-                                    shifted_data['generation_status'] = 'generating_next'
-                                    modified = True
-                                    logger.info(f"🔄 [P0-1 RENEWAL] Plan semanal {plan_id} renovado.")
+                                        shifted_days = []
+                                        modified = True
+                                        logger.warning(f"⚠️ [P0-1 RENEWAL] Plan {plan_id} pendiente de nevera.")
+                                        try:
+                                            import threading
+                                            from utils_push import send_push_notification
+                                            threading.Thread(
+                                                target=send_push_notification,
+                                                kwargs={
+                                                    "user_id": user_id,
+                                                    "title": "Renovación pausada",
+                                                    "body": "Actualiza tu nevera para renovar tu plan.",
+                                                    "url": "/dashboard"
+                                                },
+                                                daemon=True
+                                            ).start()
+                                        except Exception as e_push:
+                                            logger.error(f"Error push renewal: {e_push}")
+                                    else:
+                                        for chunk_count in split_with_absorb(total_planned_days, PLAN_CHUNK_SIZE):
+                                            snapshot = {
+                                                "form_data": {
+                                                    **hp,
+                                                    "user_id": user_id,
+                                                    "totalDays": chunk_count,
+                                                    "_plan_start_date": renewal_plan_start_iso,
+                                                    "current_pantry_ingredients": live_inv or [],
+                                                    "_pantry_captured_at": today.isoformat(),
+                                                },
+                                                "taste_profile": "",
+                                                "memory_context": "",
+                                                "previous_meals": previous_meals,
+                                                "totalDays": chunk_count,
+                                                "_is_rolling_refill": True,
+                                                "_is_weekly_renewal": True,
+                                            }
+                                            
+                                            if is_first_chunk:
+                                                _history = plan_data.get("_lifetime_lessons_history")
+                                                _summary = plan_data.get("_lifetime_lessons_summary")
+                                                if _history or _summary:
+                                                    snapshot["_inherited_lifetime_lessons"] = {
+                                                        "history": _history or [],
+                                                        "summary": _summary or {}
+                                                    }
+                                                is_first_chunk = False
+    
+                                            _enqueue_plan_chunk(
+                                                user_id, plan_id, next_week, current_offset,
+                                                chunk_count, snapshot, chunk_kind="rolling_refill",
+                                            )
+                                            logger.info(
+                                                f"🔄 [P0-1 RENEWAL] Chunk semana {next_week} encolado "
+                                                f"(offset={current_offset}, count={chunk_count}) plan {plan_id}"
+                                            )
+                                            next_week += 1
+                                            current_offset += chunk_count
+                                        shifted_days = []
+                                        shifted_data['grocery_start_date'] = today.isoformat()
+                                        shifted_data['generation_status'] = 'generating_next'
+                                        modified = True
+                                        logger.info(f"🔄 [P0-1 RENEWAL] Plan semanal {plan_id} renovado.")
                                 else:
                                     logger.warning(f"⚠️ [P0-1 RENEWAL] Sin health_profile para user {user_id}.")
                         except Exception as e:
@@ -369,8 +538,22 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                 total_missing = days_remaining_in_plan - days_offset
                                 catchup_chunks = split_with_absorb(total_missing, PLAN_CHUNK_SIZE) if total_missing > 0 else []
 
-                                # [P1-3] El siguiente week_number debe seguir al máximo chunk no-cancelado,
-                                # no solo a los completed, para no desalinearse si hubo failed/stale intermedios.
+                                # [P1-5] Advisory lock por meal_plan para serializar catchups concurrentes.
+                                # Sin esto, dos request paralelos al dashboard podían leer el mismo MAX(week_number)
+                                # y duplicar chunks para la misma semana, dejando reservas dobles de inventario.
+                                # pg_advisory_xact_lock se libera al cerrar la transacción.
+                                # Antes este sitio invocaba la SQL directa con la hash function
+                                # alternativa (no extended) y key `meal_plan_catchup_<id>`; ahora
+                                # delega en el helper canónico (hashtextextended con seed 0, key
+                                # namespaced por purpose) para que cualquier nuevo lock por
+                                # meal_plan use el mismo espacio.
+                                from db_plans import acquire_meal_plan_advisory_lock
+                                acquire_meal_plan_advisory_lock(cursor, plan_id, purpose="catchup")
+
+                                # [P1-3 / P1-5] El siguiente week_number debe seguir al máximo chunk
+                                # no-cancelado (incluye completed/processing/pending/stale/failed) para
+                                # no desalinearse si hubo failed/stale intermedios ni colisionar con un
+                                # chunk que actualmente está en 'processing' (que aún no completó).
                                 cursor.execute(
                                     """
                                     SELECT COALESCE(MAX(week_number), 1) AS max_week
@@ -392,6 +575,10 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                     (start_dt + timedelta(days=days_since_creation)).isoformat()
                                     if needs_shift else start_date_str
                                 )
+                                _hist = plan_data.get("_lifetime_lessons_history", [])
+                                _summ = plan_data.get("_lifetime_lessons_summary", {})
+                                inherited = {"history": _hist, "summary": _summ} if (_hist or _summ) else None
+                                is_first_catchup = True
 
                                 for chunk_count in catchup_chunks:
                                     cursor.execute(
@@ -402,7 +589,7 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                           AND week_number = %s
                                           AND status IN ('pending', 'processing', 'stale', 'failed')
                                         ORDER BY updated_at DESC NULLS LAST, created_at DESC
-                                        LIMIT 1
+                                        LIMIT 1 FOR UPDATE
                                         """,
                                         (plan_id, next_week)
                                     )
@@ -429,6 +616,9 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                             "totalDays": chunk_count,
                                             "_is_rolling_refill": True,
                                         }
+                                        if is_first_catchup and inherited:
+                                            snapshot["_inherited_lifetime_lessons"] = inherited
+                                            is_first_catchup = False
                                         _enqueue_plan_chunk(
                                             user_id,
                                             plan_id,
@@ -519,14 +709,21 @@ def api_shift_plan(data: dict = Body(...), verified_user_id: Optional[str] = Dep
                                 (days_since_creation, plan_id)
                             )
 
-        return {"success": True, "message": "Plan actualizado a la fecha.", "plan_data": shifted_data}
-    
+        # [P0-2] Resumen de pantry-degraded + headers para la rama de shift exitoso.
+        _p02_summary = _attach_pantry_degraded_response_meta(response, shifted_data)
+        return {
+            "success": True,
+            "message": "Plan actualizado a la fecha.",
+            "plan_data": shifted_data,
+            "_pantry_degraded_summary": _p02_summary,
+        }
+
     except Exception as e:
         logger.error(f"❌ [API SHIFT ERROR] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/analyze")
-def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_analyze(background_tasks: BackgroundTasks, response: Response, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id")
         user_id = data.get("user_id")
@@ -547,9 +744,35 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         actual_user_id = user_id if user_id and user_id != "guest" else None
         if actual_user_id:
             likes = get_user_likes(actual_user_id)
-            
+
             # [GAP 10] → Movido a inject_learning_signals_from_profile (P0 fix)
             pass
+
+        # [P1-2 FIX] Guard de pantry mínima antes de generar el plan.
+        # Sin esto, un usuario sin compras registradas podía disparar /api/plan y
+        # el LLM producía recetas inventadas que rompen la promesa "solo ingredientes
+        # en la nevera". Validamos contra inventario live para usuarios registrados,
+        # y contra el payload para guests.
+        from constants import CHUNK_MIN_FRESH_PANTRY_ITEMS
+        from cron_tasks import _count_meaningful_pantry_items
+        if actual_user_id:
+            try:
+                from db_inventory import get_user_inventory_net
+                _live_pantry = get_user_inventory_net(actual_user_id) or []
+            except Exception as _pantry_err:
+                logger.warning(f"⚠️ [P1-2] No se pudo leer inventario live ({_pantry_err}); cayendo al payload")
+                _live_pantry = data.get("current_pantry_ingredients") or []
+        else:
+            _live_pantry = data.get("current_pantry_ingredients") or []
+        if _count_meaningful_pantry_items(_live_pantry) < CHUNK_MIN_FRESH_PANTRY_ITEMS:
+            logger.info(
+                f"🛑 [P1-2] Plan rechazado por pantry insuficiente "
+                f"(items={len(_live_pantry)}, min={CHUNK_MIN_FRESH_PANTRY_ITEMS}) user={actual_user_id or 'guest'}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Actualiza tu nevera para generar un plan: necesitamos al menos algunos ingredientes reales para crear recetas."
+            )
 
         active_rejections = get_active_rejections(user_id=actual_user_id, session_id=session_id)
         rejected_meal_names = [r["meal_name"] for r in active_rejections] if active_rejections else []
@@ -567,7 +790,11 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
         # SIEMPRE recalcular _plan_start_date en el backend a midnight local de HOY.
         # Nunca confiar en lo que venga del frontend/localStorage: observamos valores
         # obsoletos (día anterior) que corrompían day_name.
-        tz_offset_mins = int(data.get("tzOffset", 0))
+        # [P1-1] Resolver tz con fallback a `user_profiles.health_profile.tz_offset_minutes`
+        # cuando el cliente omite `tzOffset` (móvil legacy, etc). Antes el fallback a 0
+        # producía start_date_iso en UTC, desplazando el plan hasta 24h para usuarios
+        # en TZ no-UTC.
+        tz_offset_mins = _resolve_request_tz_offset(data.get("tzOffset"), actual_user_id)
         now_utc = datetime.now(timezone.utc)
         local_time = now_utc - timedelta(minutes=tz_offset_mins)
         local_midnight = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -575,6 +802,7 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
 
         pipeline_data["_plan_start_date"] = start_date_iso
         data["_plan_start_date"] = start_date_iso
+        data["tz_offset_minutes"] = tz_offset_mins
 
         if use_chunking:
             # Solo generar la Semana 1 ahora; las semanas 2-4 se generan en background
@@ -607,6 +835,60 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
                                    memory_context=memory_ctx,
                                    background_tasks=background_tasks)
 
+        # [P0-1] Validar el primer chunk (3 días sync) contra la nevera y reintentar
+        # con feedback al LLM si genera ingredientes fuera de inventario. Antes solo
+        # los chunks 2..N (worker async) validaban; este path síncrono persistía vía
+        # save_partial_plan_get_id sin filtro, y el primer plato podía contener
+        # ingredientes que el usuario no tiene — rompiendo la promesa central del
+        # producto. Replica el patrón del worker (cron_tasks.py:13050-13380) sin la
+        # rama pause: el usuario está esperando, así que tras agotar reintentos
+        # degradamos con flag _initial_chunk_pantry_degraded en lugar de pausar.
+        #
+        # [P0-1 GAP-A FIX] La validación corre también para guests cuando envían
+        # `current_pantry_ingredients` en el payload. Antes la condición exigía
+        # `actual_user_id`, dejando a los guests fuera del guardrail: el LLM podía
+        # devolverles platos con ingredientes que su pantry declarada no contiene
+        # y el endpoint los servía sin filtro. Ahora la única precondición es que
+        # exista pantry (live para auth, payload para guest) — la promesa
+        # "platos solo con alimentos de la nevera" aplica al producto, no al rol.
+        if _live_pantry:
+            try:
+                from cron_tasks import _validate_and_retry_initial_chunk_against_pantry
+                result, _initial_audit = _validate_and_retry_initial_chunk_against_pantry(
+                    pipeline_data=pipeline_data,
+                    history=history,
+                    taste_profile=taste_profile,
+                    memory_context=memory_ctx,
+                    background_tasks=background_tasks,
+                    pantry_ingredients=_live_pantry,
+                    initial_result=result,
+                    user_id=actual_user_id,
+                )
+                _audit_user_label = actual_user_id or "guest"
+                if _initial_audit.get("degraded"):
+                    result["_initial_chunk_pantry_degraded"] = True
+                    result["_initial_chunk_pantry_violation"] = (
+                        (_initial_audit.get("last_violation") or "")[:500]
+                    )
+                    logger.error(
+                        f"❌ [P0-1] Primer chunk para user={_audit_user_label} degradado tras "
+                        f"{_initial_audit.get('attempts')} intento(s) "
+                        f"(mode={_initial_audit.get('mode')}). Plan se entrega con flag de aviso."
+                    )
+                else:
+                    logger.info(
+                        f"✅ [P0-1] Primer chunk validado contra nevera para user={_audit_user_label} "
+                        f"en {_initial_audit.get('attempts')} intento(s) "
+                        f"(mode={_initial_audit.get('mode')})."
+                    )
+            except Exception as _p01_err:
+                # Best-effort: si la validación misma falla, no rompemos el flujo del
+                # usuario. Logueamos error visible para que aparezca en alertas.
+                logger.error(
+                    f"❌ [P0-1] Excepción inesperada en validación inicial pantry "
+                    f"user={actual_user_id or 'guest'}: {_p01_err}. Continuando sin validar."
+                )
+
         if actual_user_id:
             hp_data = {k: v for k, v in data.items() if k not in ['session_id', 'user_id']}
             if hp_data:
@@ -632,6 +914,95 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
             plan_id = save_partial_plan_get_id(actual_user_id, result, selected_techniques, total_days_requested)
 
             if plan_id:
+                # [P0-α FIX] Calcular learning_metrics REALES sobre los días del chunk 1
+                # síncrono antes de persistir la lección. Sin esto, el chunk 2 nacía
+                # con una lección stub vacía (todos los campos en cero) y no podía
+                # detectar repeticiones de bases proteicas dentro del chunk 1.
+                try:
+                    from db_core import execute_sql_write, execute_sql_query
+                    import json
+                    from cron_tasks import _calculate_learning_metrics
+
+                    chunk1_days = result.get("days", [])
+                    _c1_metrics = _calculate_learning_metrics(
+                        new_days=chunk1_days,
+                        prior_meals=[],
+                        prior_days=[],
+                        rejected_names=rejected_meal_names,
+                        allergy_keywords=[],
+                        fatigued_ingredients=[],
+                    )
+                    week1_lesson = {
+                        'repeat_pct': _c1_metrics.get('learning_repeat_pct', 0),
+                        'ingredient_base_repeat_pct': _c1_metrics.get('ingredient_base_repeat_pct', 0),
+                        'rejection_violations': _c1_metrics.get('rejection_violations', 0),
+                        'allergy_violations': _c1_metrics.get('allergy_violations', 0),
+                        'fatigued_violations': _c1_metrics.get('fatigued_violations', 0),
+                        'repeated_bases': _c1_metrics.get('sample_repeated_bases', []),
+                        'repeated_meal_names': _c1_metrics.get('sample_repeats', []),
+                        'rejected_meals_that_reappeared': _c1_metrics.get('sample_rejection_hits', []),
+                        'allergy_hits': _c1_metrics.get('sample_allergy_hits', []),
+                        'chunk': 1,
+                        'timestamp': datetime.now(timezone.utc).isoformat(),
+                        'metrics_unavailable': False,
+                        'low_confidence': False,
+                    }
+                    # [P0-3] Retry + verificación: si la persistencia falla silenciosamente,
+                    # el chunk 2 arranca con dict vacío y se rompe la cadena de aprendizaje.
+                    # Reintentamos una vez y validamos por read-back. Si tras la verificación
+                    # sigue sin coincidir, logueamos error visible (no warning) — el worker
+                    # tiene auto-recovery desde plan_chunk_queue, pero solo si chunk 1 se
+                    # completó realmente, así que esta ruta debe quedar instrumentada.
+                    # [P0.3] La escritura se delega a `persist_legacy_learning_to_plan_data`,
+                    # que sella `_plan_modified_at` para CAS y registra telemetría por context.
+                    from cron_tasks import persist_legacy_learning_to_plan_data
+                    _seed_attempts = 0
+                    _seed_persisted = False
+                    _seed_last_err = None
+                    while _seed_attempts < 2 and not _seed_persisted:
+                        _seed_attempts += 1
+                        try:
+                            ok = persist_legacy_learning_to_plan_data(
+                                plan_id, week1_lesson,
+                                recent_chunk_lessons=[week1_lesson],
+                                context="seed_chunk1_sync",
+                            )
+                            if not ok:
+                                _seed_last_err = "persist_helper_returned_false"
+                                continue
+                            # Verificación read-back: confirmar que el campo existe.
+                            _verify = execute_sql_query(
+                                "SELECT plan_data->'_last_chunk_learning'->>'chunk' AS chunk "
+                                "FROM meal_plans WHERE id = %s",
+                                (plan_id,),
+                                fetch_one=True,
+                            )
+                            if _verify and str(_verify.get("chunk")) == "1":
+                                _seed_persisted = True
+                            else:
+                                _seed_last_err = (
+                                    f"verification_failed(verify={_verify})"
+                                )
+                        except Exception as _seed_attempt_err:
+                            _seed_last_err = repr(_seed_attempt_err)
+
+                    if _seed_persisted:
+                        logger.info(
+                            f"🌱 [P0-α] Seed _last_chunk_learning con métricas REALES para plan {plan_id} "
+                            f"(repeat_pct={_c1_metrics.get('learning_repeat_pct', 0)}% "
+                            f"base_repeat={_c1_metrics.get('ingredient_base_repeat_pct', 0)}% "
+                            f"rej_viol={_c1_metrics.get('rejection_violations', 0)} "
+                            f"attempts={_seed_attempts})"
+                        )
+                    else:
+                        logger.error(
+                            f"❌ [P0-3/SEED-FAILED] No se pudo persistir _last_chunk_learning "
+                            f"para plan {plan_id} tras {_seed_attempts} intento(s). "
+                            f"Último error: {_seed_last_err}. El worker intentará auto-recovery "
+                            f"desde plan_chunk_queue cuando chunk 1 complete."
+                        )
+                except Exception as seed_err:
+                    logger.error(f"❌ [P0-3/SEED-FAILED] Error sembrando _last_chunk_learning: {seed_err}")
                 import math
                 from cron_tasks import _enqueue_plan_chunk
                 snapshot = {
@@ -640,12 +1011,29 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
                     "memory_context": memory_ctx,
                     "totalDays": total_days_requested,
                 }
+                from db_core import execute_sql_query
+                prior_plan = execute_sql_query(
+                    "SELECT plan_data FROM meal_plans WHERE user_id = %s "
+                    "ORDER BY created_at DESC OFFSET 1 LIMIT 1",
+                    (actual_user_id,), fetch_one=True
+                )
+                inherited = None
+                if prior_plan:
+                    pd = prior_plan.get("plan_data", {})
+                    _hist = pd.get("_lifetime_lessons_history", [])
+                    _summ = pd.get("_lifetime_lessons_summary", {})
+                    if _hist or _summ:
+                        inherited = {"history": _hist, "summary": _summ}
+
                 chunks = split_with_absorb(total_days_requested, PLAN_CHUNK_SIZE)
                 offset = chunks[0]
                 for wk, count in enumerate(chunks[1:], start=2):
                     if count > 0:
                         try:
-                            _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot, chunk_kind="initial_plan")
+                            chunk_snapshot = dict(snapshot)
+                            if inherited:
+                                chunk_snapshot["_inherited_lifetime_lessons"] = inherited
+                            _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, chunk_snapshot, chunk_kind="initial_plan")
                         except Exception as chunk_err:
                             logger.warning(f"⚠️ [CHUNK] Error encolando chunk semana {wk} para {actual_user_id}: {chunk_err}")
                     offset += count
@@ -667,6 +1055,12 @@ def api_analyze(background_tasks: BackgroundTasks, data: dict = Body(...), verif
             # [GAP 6] También sembrar el backup para planes no-chunked (tier gratis).
             from cron_tasks import _seed_emergency_backup_if_empty
             background_tasks.add_task(_seed_emergency_backup_if_empty, actual_user_id, result.get("days", []))
+
+        # [P0-2] Adjuntar resumen de pantry-degraded al body + headers HTTP.
+        # Cubre el caso P0-1 (initial chunk degraded) y el path futuro donde el
+        # primer chunk ya viene marcado per-día — el frontend recibe la señal en
+        # ambos sitios sin ambigüedad.
+        result["_pantry_degraded_summary"] = _attach_pantry_degraded_response_meta(response, result)
 
         return result
     except Exception as e:
@@ -705,9 +1099,35 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
         actual_user_id = user_id if user_id and user_id != "guest" else None
         if actual_user_id:
             likes = get_user_likes(actual_user_id)
-            
+
             # [GAP 10] → Movido a inject_learning_signals_from_profile (P0 fix)
             pass
+
+        # [P1-2 FIX] Guard de pantry mínima antes de generar el plan.
+        # Sin esto, un usuario sin compras registradas podía disparar /api/plan y
+        # el LLM producía recetas inventadas que rompen la promesa "solo ingredientes
+        # en la nevera". Validamos contra inventario live para usuarios registrados,
+        # y contra el payload para guests.
+        from constants import CHUNK_MIN_FRESH_PANTRY_ITEMS
+        from cron_tasks import _count_meaningful_pantry_items
+        if actual_user_id:
+            try:
+                from db_inventory import get_user_inventory_net
+                _live_pantry = get_user_inventory_net(actual_user_id) or []
+            except Exception as _pantry_err:
+                logger.warning(f"⚠️ [P1-2] No se pudo leer inventario live ({_pantry_err}); cayendo al payload")
+                _live_pantry = data.get("current_pantry_ingredients") or []
+        else:
+            _live_pantry = data.get("current_pantry_ingredients") or []
+        if _count_meaningful_pantry_items(_live_pantry) < CHUNK_MIN_FRESH_PANTRY_ITEMS:
+            logger.info(
+                f"🛑 [P1-2] Plan rechazado por pantry insuficiente "
+                f"(items={len(_live_pantry)}, min={CHUNK_MIN_FRESH_PANTRY_ITEMS}) user={actual_user_id or 'guest'}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Actualiza tu nevera para generar un plan: necesitamos al menos algunos ingredientes reales para crear recetas."
+            )
 
         active_rejections = get_active_rejections(user_id=actual_user_id, session_id=session_id)
         rejected_meal_names = [r["meal_name"] for r in active_rejections] if active_rejections else []
@@ -725,7 +1145,11 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
         # SIEMPRE recalcular _plan_start_date en el backend a midnight local de HOY.
         # Nunca confiar en lo que venga del frontend/localStorage: observamos valores
         # obsoletos (día anterior) que corrompían day_name.
-        tz_offset_mins = int(data.get("tzOffset", 0))
+        # [P1-1] Resolver tz con fallback a `user_profiles.health_profile.tz_offset_minutes`
+        # cuando el cliente omite `tzOffset` (móvil legacy, etc). Antes el fallback a 0
+        # producía start_date_iso en UTC, desplazando el plan hasta 24h para usuarios
+        # en TZ no-UTC.
+        tz_offset_mins = _resolve_request_tz_offset(data.get("tzOffset"), actual_user_id)
         now_utc = datetime.now(timezone.utc)
         local_time = now_utc - timedelta(minutes=tz_offset_mins)
         local_midnight = local_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -733,6 +1157,7 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
 
         pipeline_data["_plan_start_date"] = start_date_iso
         data["_plan_start_date"] = start_date_iso
+        data["tz_offset_minutes"] = tz_offset_mins
 
         if use_chunking:
             # Solo generar la Semana 1 ahora; las semanas 2-4 se generan en background
@@ -856,7 +1281,86 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
                             if use_chunking:
                                 plan_id = save_partial_plan_get_id(actual_user_id, result, selected_techniques, total_days_requested)
                                 if plan_id:
-                                    import math
+                                    # [P0-α FIX] Calcular learning_metrics REALES sobre chunk 1
+                                    # antes de persistir, para que chunk 2 tenga datos accionables.
+                                    try:
+                                        from db_core import execute_sql_write, execute_sql_query
+                                        import json as _json_mod
+                                        from cron_tasks import _calculate_learning_metrics
+
+                                        chunk1_days = result.get("days", [])
+                                        _c1_metrics = _calculate_learning_metrics(
+                                            new_days=chunk1_days,
+                                            prior_meals=[],
+                                            prior_days=[],
+                                            rejected_names=rejected_meal_names,
+                                            allergy_keywords=[],
+                                            fatigued_ingredients=[],
+                                        )
+                                        week1_lesson = {
+                                            'repeat_pct': _c1_metrics.get('learning_repeat_pct', 0),
+                                            'ingredient_base_repeat_pct': _c1_metrics.get('ingredient_base_repeat_pct', 0),
+                                            'rejection_violations': _c1_metrics.get('rejection_violations', 0),
+                                            'allergy_violations': _c1_metrics.get('allergy_violations', 0),
+                                            'fatigued_violations': _c1_metrics.get('fatigued_violations', 0),
+                                            'repeated_bases': _c1_metrics.get('sample_repeated_bases', []),
+                                            'repeated_meal_names': _c1_metrics.get('sample_repeats', []),
+                                            'rejected_meals_that_reappeared': _c1_metrics.get('sample_rejection_hits', []),
+                                            'allergy_hits': _c1_metrics.get('sample_allergy_hits', []),
+                                            'chunk': 1,
+                                            'timestamp': datetime.now(timezone.utc).isoformat(),
+                                            'metrics_unavailable': False,
+                                            'low_confidence': False,
+                                        }
+                                        # [P0-3] Retry + read-back verification (mismo patrón que la
+                                        # ruta sync). Si la persistencia falla, chunk 2 arrancaría
+                                        # con dict vacío. El worker tiene auto-recovery, pero esta
+                                        # ruta debe quedar instrumentada con error log visible.
+                                        # [P0.3] Centralizado vía `persist_legacy_learning_to_plan_data`.
+                                        from cron_tasks import persist_legacy_learning_to_plan_data
+                                        _seed_attempts = 0
+                                        _seed_persisted = False
+                                        _seed_last_err = None
+                                        while _seed_attempts < 2 and not _seed_persisted:
+                                            _seed_attempts += 1
+                                            try:
+                                                ok = persist_legacy_learning_to_plan_data(
+                                                    plan_id, week1_lesson,
+                                                    recent_chunk_lessons=[week1_lesson],
+                                                    context="seed_chunk1_sse",
+                                                )
+                                                if not ok:
+                                                    _seed_last_err = "persist_helper_returned_false"
+                                                    continue
+                                                _verify = execute_sql_query(
+                                                    "SELECT plan_data->'_last_chunk_learning'->>'chunk' AS chunk "
+                                                    "FROM meal_plans WHERE id = %s",
+                                                    (plan_id,),
+                                                    fetch_one=True,
+                                                )
+                                                if _verify and str(_verify.get("chunk")) == "1":
+                                                    _seed_persisted = True
+                                                else:
+                                                    _seed_last_err = f"verification_failed(verify={_verify})"
+                                            except Exception as _seed_attempt_err:
+                                                _seed_last_err = repr(_seed_attempt_err)
+
+                                        if _seed_persisted:
+                                            logger.info(
+                                                f"🌱 [P0-α SSE] Seed _last_chunk_learning con métricas REALES para plan {plan_id} "
+                                                f"(repeat_pct={_c1_metrics.get('learning_repeat_pct', 0)}% "
+                                                f"base_repeat={_c1_metrics.get('ingredient_base_repeat_pct', 0)}% "
+                                                f"rej_viol={_c1_metrics.get('rejection_violations', 0)} "
+                                                f"attempts={_seed_attempts})"
+                                            )
+                                        else:
+                                            logger.error(
+                                                f"❌ [P0-3 SSE/SEED-FAILED] No se pudo persistir _last_chunk_learning "
+                                                f"para plan {plan_id} tras {_seed_attempts} intento(s). "
+                                                f"Último error: {_seed_last_err}. El worker intentará auto-recovery."
+                                            )
+                                    except Exception as seed_err:
+                                        logger.error(f"❌ [P0-3 SSE/SEED-FAILED] Error sembrando _last_chunk_learning: {seed_err}")
                                     from cron_tasks import _enqueue_plan_chunk
                                     week1_meals = [
                                         m["name"] for d in result.get("days", [])
@@ -869,12 +1373,29 @@ async def api_analyze_stream(request: Request, background_tasks: BackgroundTasks
                                         "previous_meals": week1_meals,
                                         "totalDays": total_days_requested,
                                     }
+                                    from db_core import execute_sql_query
+                                    prior_plan = execute_sql_query(
+                                        "SELECT plan_data FROM meal_plans WHERE user_id = %s "
+                                        "ORDER BY created_at DESC OFFSET 1 LIMIT 1",
+                                        (actual_user_id,), fetch_one=True
+                                    )
+                                    inherited = None
+                                    if prior_plan:
+                                        pd = prior_plan.get("plan_data", {})
+                                        _hist = pd.get("_lifetime_lessons_history", [])
+                                        _summ = pd.get("_lifetime_lessons_summary", {})
+                                        if _hist or _summ:
+                                            inherited = {"history": _hist, "summary": _summ}
+
                                     chunks = split_with_absorb(total_days_requested, PLAN_CHUNK_SIZE)
                                     offset = chunks[0]
                                     for wk, count in enumerate(chunks[1:], start=2):
                                         if count > 0:
                                             try:
-                                                _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, snapshot, chunk_kind="initial_plan")
+                                                chunk_snapshot = dict(snapshot)
+                                                if inherited:
+                                                    chunk_snapshot["_inherited_lifetime_lessons"] = inherited
+                                                _enqueue_plan_chunk(actual_user_id, plan_id, wk, offset, count, chunk_snapshot, chunk_kind="initial_plan")
                                             except Exception as chunk_err:
                                                 logger.warning(f"⚠️ [CHUNK SSE] Error encolando chunk semana {wk} para {actual_user_id}: {chunk_err}")
                                         offset += count
@@ -1241,7 +1762,7 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{plan_id}/chunk-status")
-def api_chunk_status(plan_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optional[str] = Depends(verify_api_quota)):
     from db_core import execute_sql_query
     try:
         res = execute_sql_query("SELECT user_id, plan_data FROM meal_plans WHERE id = %s", (plan_id,), fetch_one=True)
@@ -1293,6 +1814,11 @@ def api_chunk_status(plan_id: str, verified_user_id: Optional[str] = Depends(ver
         """, (plan_id,)) or []
         tier_summary = {r['quality_tier']: int(r['cnt']) for r in tier_breakdown}
 
+        # [P0-2] Resumen de pantry-degraded para el polling de chunk-status. El frontend
+        # consulta este endpoint repetidamente mientras el plan está partial, así que
+        # aquí es donde puede actualizar el banner cuando llegan chunks degraded.
+        _p02_summary = _attach_pantry_degraded_response_meta(response, plan_data)
+
         return {
             "status": status,
             "days_generated": days_generated,
@@ -1304,12 +1830,128 @@ def api_chunk_status(plan_id: str, verified_user_id: Optional[str] = Depends(ver
             "quality_warning": quality_warning,
             "quality_degraded_ratio": quality_degraded_ratio,
             "tier_breakdown": tier_summary,
+            "_pantry_degraded_summary": _p02_summary,
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] en chunk-status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{plan_id}/blocked_reasons")
+def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
+    """[P1-2] Devuelve los motivos legibles por los que un plan está bloqueado.
+
+    El frontend usa este endpoint para mostrar un banner persistente cuando un chunk
+    está pausado en `pending_user_action` con su motivo (zero-log, pantry vacía, snapshot
+    obsoleto), evitando que el usuario crea que el plan "se estancó" sin razón visible.
+
+    Antes solo se mandaban hasta 2 push notifications y luego silencio durante horas.
+    """
+    from db_core import execute_sql_query
+    try:
+        plan = execute_sql_query(
+            "SELECT user_id FROM meal_plans WHERE id = %s",
+            (plan_id,),
+            fetch_one=True,
+        )
+        if not plan:
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+        if verified_user_id and str(plan["user_id"]) != str(verified_user_id):
+            raise HTTPException(status_code=403, detail="No autorizado")
+
+        rows = execute_sql_query(
+            """
+            SELECT id, week_number, pipeline_snapshot, status,
+                   EXTRACT(EPOCH FROM (NOW() - updated_at))::int AS paused_seconds
+            FROM plan_chunk_queue
+            WHERE meal_plan_id = %s AND status = 'pending_user_action'
+            ORDER BY week_number ASC
+            """,
+            (plan_id,),
+        ) or []
+
+        # [P1-4] Lectura de logging_preference para enriquecer el motivo learning_zero_logs:
+        # si el usuario aún no ha optado por auto_proxy, indicamos que la opción está disponible
+        # para que el frontend ofrezca un toggle "continuar sin registrar" → PUT /preferences/logging.
+        current_logging_pref = "manual"
+        try:
+            _pref_row = execute_sql_query(
+                "SELECT logging_preference FROM user_profiles WHERE id = %s",
+                (str(plan["user_id"]),),
+                fetch_one=True,
+            )
+            if _pref_row and _pref_row.get("logging_preference"):
+                current_logging_pref = str(_pref_row["logging_preference"])
+        except Exception:
+            pass
+
+        reasons = []
+        reason_to_text = {
+            "learning_zero_logs": {
+                "title": "Registra tus comidas para continuar tu plan",
+                "body": "Necesitamos saber qué comiste para generar el siguiente bloque adaptado a ti.",
+                "cta": "Ir al diario",
+                "url": "/diary",
+                # [P1-4] Acción secundaria: opt-in a auto_proxy para que el plan continúe
+                # automáticamente sin requerir log explícito. Solo se ofrece si está en 'manual'.
+                "secondary_action": (
+                    {
+                        "label": "Continuar sin registrar",
+                        "endpoint": "/api/diary/preferences/logging",
+                        "method": "PUT",
+                        "body": {"logging_preference": "auto_proxy"},
+                        "hint": "El plan continuará usando tu inventario como señal de actividad.",
+                    }
+                    if current_logging_pref == "manual"
+                    else None
+                ),
+            },
+            "stale_snapshot": {
+                "title": "Validando tu inventario",
+                "body": "Estamos refrescando tu nevera. El plan continuará en breve.",
+                "cta": None,
+                "url": None,
+            },
+            "stale_snapshot_live_unreachable": {
+                "title": "Actualiza tu nevera para continuar",
+                "body": "No pudimos validar tu inventario en vivo. Abre la app para refrescar y continuar el plan.",
+                "cta": "Abrir nevera",
+                "url": "/inventory",
+            },
+            "empty_pantry": {
+                "title": "Tu nevera está vacía",
+                "body": "Añade ingredientes a 'Mi Nevera' para que generemos el siguiente bloque del plan.",
+                "cta": "Actualizar nevera",
+                "url": "/inventory",
+            },
+        }
+
+        import json as _json
+        for row in rows:
+            snap = row.get("pipeline_snapshot") or {}
+            if isinstance(snap, str):
+                try:
+                    snap = _json.loads(snap)
+                except Exception:
+                    snap = {}
+            reason_code = str(snap.get("_pantry_pause_reason") or "empty_pantry")
+            template = reason_to_text.get(reason_code, reason_to_text["empty_pantry"])
+            reasons.append({
+                "chunk_id": row.get("id"),
+                "week_number": row.get("week_number"),
+                "reason_code": reason_code,
+                "paused_seconds": int(row.get("paused_seconds") or 0),
+                **template,
+            })
+
+        return {"plan_id": plan_id, "blocked": len(reasons) > 0, "reasons": reasons}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] en blocked_reasons: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/{plan_id}/retry-chunk/{chunk_id}")
 def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
@@ -1428,6 +2070,145 @@ def api_admin_chunks_stuck(
         }
     except Exception as e:
         logger.error(f"❌ [GAP A] Error en /admin/chunks/stuck: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/chunks/dead-lettered")
+def api_admin_chunks_dead_lettered(
+    request: Request,
+    limit: int = 100,
+    window_hours: Optional[int] = None,
+):
+    """[P1-2] Inspección operacional: lista chunks marcados con `dead_lettered_at`.
+
+    Complementa a `/admin/chunks/stuck`: aquel filtra chunks atrasados en estados
+    activos (pending/stale/processing/failed) por lag; este expone los chunks que
+    YA fueron escalados a dead-letter por `_escalate_unrecoverable_chunk` y para
+    los que el sistema no intentará más generaciones automáticas — el plan del
+    usuario está bloqueado hasta acción manual de soporte (regenerar el plan,
+    actualizar nevera, etc).
+
+    Parámetros opcionales:
+      - `limit` (default 100): cap de filas devueltas.
+      - `window_hours`: si se pasa, filtra `dead_lettered_at > NOW() - INTERVAL Nh`.
+        Útil para correlacionar con la alerta `dead_lettered_chunks_recent` que
+        usa la misma ventana (`CHUNK_DEAD_LETTER_ALERT_WINDOW_HOURS`).
+
+    Requiere `Authorization: Bearer <CRON_SECRET>`.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    from db_core import execute_sql_query
+    try:
+        params: list = []
+        sql = """
+            SELECT
+                q.id,
+                q.user_id,
+                q.meal_plan_id,
+                q.week_number,
+                q.days_offset,
+                q.days_count,
+                q.status,
+                q.attempts,
+                q.dead_lettered_at,
+                q.dead_letter_reason,
+                q.learning_metrics,
+                q.pipeline_snapshot->'_pantry_pause_reason' AS pantry_pause_reason,
+                EXTRACT(EPOCH FROM (NOW() - q.dead_lettered_at))::int AS dead_seconds,
+                (mp.plan_data->>'total_days_requested')::int AS total_days_requested,
+                jsonb_array_length(COALESCE(mp.plan_data->'days', '[]'::jsonb)) AS days_generated
+            FROM plan_chunk_queue q
+            LEFT JOIN meal_plans mp ON mp.id = q.meal_plan_id
+            WHERE q.dead_lettered_at IS NOT NULL
+        """
+        if window_hours is not None and window_hours > 0:
+            sql += " AND q.dead_lettered_at > NOW() - make_interval(hours => %s)"
+            params.append(int(window_hours))
+        sql += " ORDER BY q.dead_lettered_at DESC LIMIT %s"
+        params.append(int(limit))
+
+        rows = execute_sql_query(sql, tuple(params)) or []
+
+        # Resumen agregado por reason (mismo shape que la alerta de cron).
+        by_reason: dict = {}
+        affected_users: set = set()
+        affected_plans: set = set()
+        for r in rows:
+            reason = str(r.get("dead_letter_reason") or "unknown")
+            by_reason[reason] = by_reason.get(reason, 0) + 1
+            if r.get("user_id"):
+                affected_users.add(str(r["user_id"]))
+            if r.get("meal_plan_id"):
+                affected_plans.add(str(r["meal_plan_id"]))
+
+        return {
+            "count": len(rows),
+            "window_hours": window_hours,
+            "affected_users": len(affected_users),
+            "affected_plans": len(affected_plans),
+            "by_reason": by_reason,
+            "chunks": rows,
+        }
+    except Exception as e:
+        logger.error(f"❌ [P1-2] Error en /admin/chunks/dead-lettered: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/chunk_deferrals/{user_id}")
+def api_admin_chunk_deferrals(
+    user_id: str,
+    request: Request,
+    window_hours: int = 48,
+    limit: int = 100,
+):
+    """[P1-3] Inspección operacional: lista deferrals recientes de un usuario.
+
+    Cada vez que el learning gate rechaza un chunk porque su día previo aún no
+    concluyó, se registra una fila en `chunk_deferrals`. Acumulación alta sobre
+    el mismo (meal_plan_id, week_number) suele indicar TZ desalineada en el
+    perfil del usuario o `_plan_start_date` con offset incorrecto.
+
+    Devuelve: lista de deferrals en la ventana, conteo agregado por
+    (meal_plan_id, week_number, reason) y el deferral más reciente para
+    diagnóstico rápido.
+
+    Requiere Authorization: Bearer <CRON_SECRET>.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    from db_core import execute_sql_query
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT id, user_id::text AS user_id, meal_plan_id::text AS meal_plan_id,
+                   week_number, reason, days_until_prev_end, created_at
+            FROM chunk_deferrals
+            WHERE user_id = %s::uuid
+              AND created_at > NOW() - make_interval(hours => %s)
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (user_id, int(window_hours), int(limit)),
+        ) or []
+
+        # Agregado por (meal_plan_id, week_number, reason) para detectar patrones.
+        agg: dict = {}
+        for r in rows:
+            key = (r.get("meal_plan_id"), r.get("week_number"), r.get("reason"))
+            agg[key] = agg.get(key, 0) + 1
+        by_plan_week_reason = [
+            {"meal_plan_id": k[0], "week_number": k[1], "reason": k[2], "count": v}
+            for k, v in sorted(agg.items(), key=lambda kv: -kv[1])
+        ]
+
+        return {
+            "user_id": user_id,
+            "window_hours": window_hours,
+            "total": len(rows),
+            "by_plan_week_reason": by_plan_week_reason,
+            "deferrals": rows,
+        }
+    except Exception as e:
+        logger.error(f"❌ [P1-3] Error en /admin/chunk_deferrals/{user_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1596,6 +2377,72 @@ def api_admin_metrics(
             (interval_str,),
         ) or []
 
+        # [P1-6] Learning loss: agrega events `learning_rebuild_failed` desde
+        # `chunk_lesson_telemetry`. Sin esto, una racha de chunks con
+        # _last_chunk_learning corrupto degrada silenciosamente el aprendizaje
+        # continuo y el equipo de operaciones se entera tarde (vía quejas de
+        # usuarios sobre planes repetitivos).
+        # Best-effort: si la tabla no existe (deploy híbrido) o el SELECT falla,
+        # devolvemos zeros/empty en lugar de propagar la excepción.
+        learning_loss_row = {}
+        learning_loss_by_reason = []
+        proxy_ratio_row = {}
+        try:
+            learning_loss_row = execute_sql_query(
+                """
+                SELECT
+                    COUNT(*)::int AS total_events,
+                    COUNT(DISTINCT meal_plan_id)::int AS plans_with_loss,
+                    COUNT(DISTINCT user_id)::int AS users_with_loss
+                FROM chunk_lesson_telemetry
+                WHERE created_at > NOW() - %s::interval
+                  AND event = 'learning_rebuild_failed'
+                """,
+                (interval_str,), fetch_one=True,
+            ) or {}
+            learning_loss_by_reason = execute_sql_query(
+                """
+                SELECT COALESCE(metadata->>'reason', 'unknown') AS reason,
+                       COUNT(*)::int AS cnt
+                FROM chunk_lesson_telemetry
+                WHERE created_at > NOW() - %s::interval
+                  AND event = 'learning_rebuild_failed'
+                GROUP BY COALESCE(metadata->>'reason', 'unknown')
+                ORDER BY cnt DESC
+                """,
+                (interval_str,),
+            ) or []
+            # [P1-7] Ratio de aprendizaje basado en proxy/synthesis vs user_logs en
+            # el lifetime acumulado de planes ACTIVOS. Si crece, indica que muchos
+            # usuarios no logean comidas y el sistema cae a inferir desde inventario.
+            # No es un fallo (tenemos pause vía CHUNK_MAX_LIFETIME_PROXY_RATIO en el
+            # gate) pero sí es señal operacional: marketing/UX podría querer
+            # intervenir con onboarding sobre "registra tus comidas".
+            proxy_ratio_row = execute_sql_query(
+                """
+                SELECT
+                    AVG((plan_data->'_lifetime_lessons_summary'->>'_lifetime_proxy_ratio')::float)::float AS avg_ratio,
+                    MAX((plan_data->'_lifetime_lessons_summary'->>'_lifetime_proxy_ratio')::float)::float AS max_ratio,
+                    COUNT(*) FILTER (
+                        WHERE (plan_data->'_lifetime_lessons_summary'->>'_lifetime_proxy_ratio')::float > 0.5
+                    )::int AS plans_above_50pct,
+                    COUNT(*) FILTER (
+                        WHERE (plan_data->'_lifetime_lessons_summary'->>'_lifetime_proxy_ratio') IS NOT NULL
+                    )::int AS plans_with_ratio,
+                    COUNT(DISTINCT user_id)::int AS users_with_ratio
+                FROM meal_plans
+                WHERE created_at > NOW() - %s::interval
+                  AND plan_data->'_lifetime_lessons_summary' IS NOT NULL
+                """,
+                (interval_str,), fetch_one=True,
+            ) or {}
+        except Exception as _learning_loss_err:
+            # Telemetría es secundaria al endpoint; no fallamos el response.
+            logger.warning(
+                f"[P1-6/P1-7] /admin/metrics no pudo agregar learning_loss/proxy_ratio "
+                f"(¿tabla chunk_lesson_telemetry missing o schema regresivo?): {_learning_loss_err}"
+            )
+
         return {
             "window_days": int(days),
             "total_chunks": total,
@@ -1621,6 +2468,26 @@ def api_admin_metrics(
                 "allergy_violations_total": int(learning_row.get("allergy_violations_total") or 0),
                 "chunks_with_rejection_violations": int(learning_row.get("chunks_with_rej_violations") or 0),
                 "chunks_with_allergy_violations": int(learning_row.get("chunks_with_alg_violations") or 0),
+            },
+            # [P1-6] Pérdida de learning durante el rebuild del chunk previo —
+            # señal de corrupción en plan_chunk_queue.learning_metrics o de
+            # blips de DB que silentemente degradan el aprendizaje continuo.
+            "learning_loss": {
+                "total_events": int(learning_loss_row.get("total_events") or 0),
+                "plans_with_loss": int(learning_loss_row.get("plans_with_loss") or 0),
+                "users_with_loss": int(learning_loss_row.get("users_with_loss") or 0),
+                "by_reason": learning_loss_by_reason,
+            },
+            # [P1-7] Provenance del aprendizaje agregado: cuánto del lifetime
+            # depende de proxy/synthesis (low signal) vs logs reales del usuario.
+            # Ratios altos (>50%) sugieren que el aprendizaje del usuario está
+            # dominado por inferencias en lugar de datos concretos.
+            "learning_provenance": {
+                "avg_proxy_ratio": float(proxy_ratio_row.get("avg_ratio") or 0.0),
+                "max_proxy_ratio": float(proxy_ratio_row.get("max_ratio") or 0.0),
+                "plans_above_50pct_proxy": int(proxy_ratio_row.get("plans_above_50pct") or 0),
+                "plans_with_ratio": int(proxy_ratio_row.get("plans_with_ratio") or 0),
+                "users_with_ratio": int(proxy_ratio_row.get("users_with_ratio") or 0),
             },
             "top_errors": top_errors,
         }

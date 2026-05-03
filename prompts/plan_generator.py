@@ -543,12 +543,98 @@ def build_prev_chunk_adherence_context(prev_chunk_adherence: dict) -> str:
     return "\n".join(lines)
 
 
+# [P1-7] Sanitizer para strings que se interpolan en prompts del LLM.
+# Cubre dos riesgos:
+#   1. Prompt injection: nombres de platos / ingredientes que vienen del usuario
+#      o del LLM previo podrían incluir newlines + role markers ("\n\nSYSTEM:")
+#      diseñados para escaparse del contexto. Replazamos newlines por espacios y
+#      filtramos secuencias que parezcan role markers al inicio de línea.
+#   2. Stuffing: un solo nombre de 10kb saturaría el prompt. Truncamos a 200 chars
+#      por string (suficiente para nombres reales: el plato más largo en el catálogo
+#      tiene ~80 chars).
+import re as _p17_re
+_P17_ROLE_MARKER_PREFIX_RE = _p17_re.compile(
+    r"^\s*(SYSTEM|ASSISTANT|USER|HUMAN|MODEL|AI)\s*:",
+    _p17_re.IGNORECASE,
+)
+# Detección de role markers TRAS la conversión newline→espacio: el atacante puede
+# poner `\n\nSYSTEM:` que tras conversión queda como `  SYSTEM:` mid-string. Detectamos
+# 2+ espacios + role marker como señal de boundary forzado y lo neutralizamos.
+_P17_ROLE_MARKER_BOUNDARY_RE = _p17_re.compile(
+    r"\s{2,}(SYSTEM|ASSISTANT|USER|HUMAN|MODEL|AI)\s*:",
+    _p17_re.IGNORECASE,
+)
+_P17_CONTROL_CHARS_RE = _p17_re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+
+
+def _sanitize_lesson_string(value, max_len: int = 200) -> str:
+    """[P1-7] Normaliza un string que va a interpolarse en un prompt del LLM.
+
+    - Convierte a str (tolera int/float silenciosamente).
+    - Reemplaza newlines y tabs por espacios (un nombre no puede tener saltos
+      de línea legítimos, y permitir `\\n\\nSYSTEM:` rompe el contexto).
+    - Strip de role markers al INICIO ("SYSTEM:", "ASSISTANT:", "USER:", etc.).
+    - Elimina caracteres de control (excepto espacio).
+    - Trunca a `max_len` chars con `…` si excede.
+    - Devuelve `""` para None / valores vacíos / no-stringificables.
+    """
+    if value is None:
+        return ""
+    try:
+        s = str(value)
+    except Exception:
+        return ""
+    # Reemplazar newlines, tabs, CR por DOBLE espacio (marcador interno de
+    # boundary: la regex `_P17_ROLE_MARKER_BOUNDARY_RE` busca 2+ espacios
+    # seguidos de role marker para detectar `Plato\n\nSYSTEM:` post-conversión).
+    s = s.replace("\r\n", "  ").replace("\n", "  ").replace("\r", "  ").replace("\t", "  ")
+    # Quitar caracteres de control restantes.
+    s = _P17_CONTROL_CHARS_RE.sub("", s)
+    # Strip role markers al inicio (caso clásico: input ya empieza con "SYSTEM:").
+    # Aplica iterativamente porque un atacante podría encadenar "USER:SYSTEM:..."
+    for _ in range(3):
+        m = _P17_ROLE_MARKER_PREFIX_RE.match(s)
+        if not m:
+            break
+        s = s[m.end():].lstrip()
+    # [P1-7] Truncar desde role marker mid-string si va precedido de boundary forzado
+    # (2+ espacios — solo ocurre tras newline-conversion). Todo lo que sigue al marker
+    # es payload del atacante. Iteramos por si encadena varios.
+    for _ in range(3):
+        m = _P17_ROLE_MARKER_BOUNDARY_RE.search(s)
+        if not m:
+            break
+        s = s[: m.start()].rstrip()
+    # Colapsar runs de espacios.
+    s = _p17_re.sub(r"\s+", " ", s).strip()
+    if len(s) > max_len:
+        s = s[: max_len - 1].rstrip() + "…"
+    return s
+
+
+def _sanitize_lesson_strings(values, max_len: int = 200) -> list:
+    """[P1-7] Aplica `_sanitize_lesson_string` a cada item y filtra los vacíos.
+    Útil antes de un `, '.join(...)` para asegurar que cada item es seguro."""
+    if not values:
+        return []
+    out = []
+    for v in values:
+        sanitized = _sanitize_lesson_string(v, max_len=max_len)
+        if sanitized:
+            out.append(sanitized)
+    return out
+
+
 def build_chunk_lessons_context(chunk_lessons: dict) -> str:
     """[P1-5] Bloque de lecciones concretas del chunk anterior para el LLM.
 
     Convierte métricas de learning_metrics en instrucciones accionables:
     ingredientes sobre-usados, platos rechazados que reaparecieron, y violaciones de alergia.
     Solo se activa a partir del chunk 3 (cuando hay datos del chunk N-1 con learning_metrics).
+
+    [P1-7] Strings interpolados (ingredientes, nombres de platos) pasan por
+    `_sanitize_lesson_strings` para evitar prompt injection: newlines, role markers
+    y caracteres de control son neutralizados antes de llegar al prompt del LLM.
     """
     if not chunk_lessons or not isinstance(chunk_lessons, dict):
         return ""
@@ -563,7 +649,9 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
         for entry in repeated_bases[:4]:
             if isinstance(entry, dict):
                 base_names.extend(entry.get("bases") or [])
-        unique_bases = list(dict.fromkeys(b for b in base_names if b))[:6]
+        # [P1-7] Sanitizar ANTES del dict.fromkeys para que dos entradas que solo
+        # difieren en role-marker prefix se deduplican correctamente.
+        unique_bases = list(dict.fromkeys(_sanitize_lesson_strings(base_names)))[:6]
         if unique_bases:
             severity = "URGENTE — DIVERSIFICA" if pct > 60 else "DIVERSIFICA"
             lines.append(
@@ -576,29 +664,126 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
     rej_viol = int(chunk_lessons.get("rejection_violations") or 0)
     rejected_reappeared = chunk_lessons.get("rejected_meals_that_reappeared") or []
     if rej_viol > 0 and rejected_reappeared:
-        lines.append(
-            f"• {rej_viol} plato(s) RECHAZADOS reaparecieron: {', '.join(rejected_reappeared[:4])}. "
-            f"NUNCA los incluyas ni variaciones con los mismos ingredientes principales."
-        )
+        # [P1-7] Nombres de platos pueden contener apóstrofes (legít) o vienen del LLM
+        # previo (que en teoría podría haberse desbordado). Sanitizar antes de unir.
+        safe_rejected = _sanitize_lesson_strings(rejected_reappeared[:4])
+        if safe_rejected:
+            lines.append(
+                f"• {rej_viol} plato(s) RECHAZADOS reaparecieron: {', '.join(safe_rejected)}. "
+                f"NUNCA los incluyas ni variaciones con los mismos ingredientes principales."
+            )
 
     # Violaciones de alergia
     alg_viol = int(chunk_lessons.get("allergy_violations") or 0)
     allergy_hits = chunk_lessons.get("allergy_hits") or []
     if alg_viol > 0 and allergy_hits:
-        lines.append(
-            f"• {alg_viol} ingrediente(s) de alergia detectados en el chunk anterior: "
-            f"{', '.join(allergy_hits[:4])}. "
-            f"Revisa CADA ingrediente de tus recetas contra la lista de alergias del usuario."
-        )
+        safe_allergy = _sanitize_lesson_strings(allergy_hits[:4])
+        if safe_allergy:
+            lines.append(
+                f"• {alg_viol} ingrediente(s) de alergia detectados en el chunk anterior: "
+                f"{', '.join(safe_allergy)}. "
+                f"Revisa CADA ingrediente de tus recetas contra la lista de alergias del usuario."
+            )
 
     # Repetición de nombres exactos de platos
     repeat_pct = float(chunk_lessons.get("repeat_pct") or 0)
     repeated_names = chunk_lessons.get("repeated_meal_names") or []
     if repeat_pct > 15.0 and repeated_names:
+        safe_repeated = _sanitize_lesson_strings(repeated_names[:4])
+        if safe_repeated:
+            lines.append(
+                f"• Nombres de platos repetidos ({repeat_pct:.0f}%): {', '.join(safe_repeated)}. "
+                f"Inventa NUEVOS nombres y recetas, no reutilices estos."
+            )
+
+    if chunk_lessons.get("weak_signal"):
+        banned_proteins = chunk_lessons.get("banned_proteins") or []
+        if banned_proteins:
+            safe_proteins = _sanitize_lesson_strings(banned_proteins[:5])
+            if safe_proteins:
+                lines.append(
+                    f"• 📉 SEÑAL DÉBIL DE INVENTARIO: Debes rotar activamente las proteínas para evitar el aburrimiento. "
+                    f"Proteínas base del chunk anterior: {', '.join(safe_proteins)}. "
+                    f"REGLA ESTRICTA: Debes usar fuentes de proteína DIFERENTES a estas en al menos 2 de las 3 proteínas principales."
+                )
+
+    # [P0-gamma] Advertencia de diversidad de nevera agotada
+    if chunk_lessons.get("pantry_diversity_warning"):
         lines.append(
-            f"• Nombres de platos repetidos ({repeat_pct:.0f}%): {', '.join(repeated_names[:4])}. "
-            f"Inventa NUEVOS nombres y recetas, no reutilices estos."
+            f"• ⚠️ ALERTA DE INVENTARIO AGOTADO: El inventario es limitado — prioriza variar TÉCNICA CULINARIA y ACOMPAÑAMIENTO en vez de intentar variar la proteína base."
         )
+
+    # [P1-5] BLOCKS HISTÓRICOS — siempre se emiten si hay datos en lifetime,
+    # SIN gate de métricas recientes. Antes los bullets de
+    # `rejected_meals_that_reappeared` y `repeated_meal_names` se suprimían cuando
+    # `rej_viol == 0` o `repeat_pct == 0` (rolling window limpio), pero lifetime
+    # podía tener señales acumuladas de chunks pasados (e.g., "pollo rechazado
+    # hace 5 chunks" → fuera de la ventana de 8 pero todavía en
+    # `_lifetime_lessons_summary`). El LLM no recibía esas señales y podía
+    # regenerar comidas sistemáticamente bloqueadas.
+    permanent_blocklist = chunk_lessons.get("permanent_meal_blocklist") or []
+    if permanent_blocklist:
+        # `permanent_meal_blocklist` viene de `_lifetime_lessons_summary` —
+        # meals que aparecieron en >=2 chunks distintos del historial: patrón
+        # sistémico, no un repeat de chunk único. NUNCA regenerar.
+        safe_blocklist = _sanitize_lesson_strings(permanent_blocklist[:8])
+        if safe_blocklist:
+            lines.append(
+                f"• 🚫 BLOQUEO PERMANENTE (ACUMULADO HISTÓRICO): los siguientes platos "
+                f"han reaparecido en múltiples chunks pasados — NUNCA los generes ni "
+                f"variaciones cercanas: {', '.join(safe_blocklist)}."
+            )
+
+    lifetime_rej = chunk_lessons.get("lifetime_top_rejection_hits") or []
+    if lifetime_rej and rej_viol == 0:
+        # Recent rejection_violations==0 pero lifetime tiene rejection_hits acumulados.
+        # Sin esto, el LLM ve "todo limpio" y puede regenerar platos rechazados
+        # históricamente. Solo emitimos cuando recent NO duplica el contenido
+        # (rej_viol==0 → la sección recent ya quedó suprimida).
+        safe_lifetime_rej = _sanitize_lesson_strings(lifetime_rej[:6])
+        if safe_lifetime_rej:
+            lines.append(
+                f"• 🧠 RECHAZOS HISTÓRICOS DEL USUARIO (acumulado): "
+                f"{', '.join(safe_lifetime_rej)}. NO incluyas estos ingredientes "
+                f"ni platos basados en ellos, aunque el chunk anterior no los "
+                f"haya tocado."
+            )
+
+    lifetime_meals = chunk_lessons.get("lifetime_top_repeated_meal_names") or []
+    if lifetime_meals and repeat_pct == 0 and not permanent_blocklist:
+        # Recent repeat_pct==0 (no repeticiones en rolling window) pero lifetime
+        # tiene meals que aparecieron en chunks pasados. Lo emitimos solo si
+        # `permanent_meal_blocklist` está vacío (sino se duplica con el bullet
+        # de bloqueo permanente que ya cubre el caso ≥2 chunks).
+        safe_lifetime_meals = _sanitize_lesson_strings(lifetime_meals[:6])
+        if safe_lifetime_meals:
+            lines.append(
+                f"• 📜 PLATOS HISTÓRICOS YA GENERADOS (acumulado): "
+                f"{', '.join(safe_lifetime_meals)}. Inventa nombres y "
+                f"recetas distintas — el usuario ya los vio en chunks anteriores."
+            )
+
+    # [P1-B] Awareness de chunks históricos comprimidos: cuando el rolling window
+    # ya no incluye los chunks más antiguos pero sus métricas siguen pesando vía
+    # `_lifetime_lessons_summary`, anotamos cuántos chunks están detrás de los
+    # números agregados. AUMENTATIVO — solo se emite si ya hay otros bullets
+    # accionables; sin items concretos sería ruido (lo evitamos).
+    _ch_count = int(chunk_lessons.get("compressed_history_chunks_count") or 0)
+    if _ch_count > 0 and lines:
+        _ch_avg = float(chunk_lessons.get("compressed_history_avg_repeat_pct") or 0)
+        _ch_max = float(chunk_lessons.get("compressed_history_max_repeat_pct") or 0)
+        _ch_max_viol = int(chunk_lessons.get("compressed_history_max_violations") or 0)
+        # Solo emitimos el bullet si la compresión esconde señal accionable —
+        # un avg_repeat alto, max_repeat alto o violaciones presentes.
+        if _ch_avg > 15.0 or _ch_max > 30.0 or _ch_max_viol > 0:
+            lines.append(
+                f"• 📚 HISTORIAL COMPRIMIDO: {_ch_count} chunk(s) anteriores no se "
+                f"muestran en detalle pero contribuyen a estas métricas "
+                f"(repeat_pct prom={_ch_avg:.0f}%, máx={_ch_max:.0f}%"
+                + (f", máx violaciones por chunk={_ch_max_viol}" if _ch_max_viol > 0 else "")
+                + "). Los patrones reportados arriba llevan rotando varios chunks; "
+                f"prioriza ROMPERLOS, no solo evitarlos en el chunk actual."
+            )
 
     if not lines:
         return ""

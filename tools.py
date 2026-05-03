@@ -274,9 +274,15 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado.
     """
     logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas). Ingredientes a deducir: {ingredients}")
-    result = db_log_consumed_meal(user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients)
+    # [P0.1] Marcar inventory_synced_at en la fila de consumed_meals si vamos a deducir
+    # acto seguido — así la reconciliación al cierre del chunk no vuelve a descontar.
+    has_ingredients = bool(ingredients)
+    result = db_log_consumed_meal(
+        user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients,
+        mark_inventory_synced=has_ingredients,
+    )
     import db_inventory
-    if ingredients:
+    if has_ingredients:
         db_inventory.deduct_consumed_meal_from_inventory(user_id, ingredients)
         
     if result is not None:

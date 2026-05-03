@@ -1062,7 +1062,8 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     is_re_roll = form_data.get("_is_same_day_reroll", False)
     
     # Mutación estratégica de temperatura: 0.7 en intento 1, 0.9 en intento 2 para forzar variabilidad extrema
-    base_temp = 0.95 if is_re_roll else (0.7 if attempt == 1 else 0.9)
+    weak_signal_mod = -0.1 if form_data.get("_chunk_lessons", {}).get("weak_signal") else 0.0
+    base_temp = (0.95 if is_re_roll else (0.7 if attempt == 1 else 0.9)) + weak_signal_mod
 
     # Ruteo dinámico por complejidad (antes se forzaba pro-preview en retry pero era
     # demasiado lento — consumía budget y bloqueaba la generación paralela).
@@ -1189,7 +1190,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     skeleton_days = skeleton.get("days", [])
 
     is_re_roll = form_data.get("_is_same_day_reroll", False)
-    base_temp = 0.95 if is_re_roll else 0.7
+    weak_signal_mod = -0.1 if form_data.get("_chunk_lessons", {}).get("weak_signal") else 0.0
+    base_temp = (0.95 if is_re_roll else 0.7) + weak_signal_mod
     attempt = state.get("attempt", 1)
 
     # --- INICIO MEJORA 2: Extraer días reciclados ANTES del worker para inyectar contexto ---
@@ -1665,7 +1667,8 @@ def _select_ab_temp_pair(user_id: str) -> dict:
                  AND node = 'adversarial_judge'
                  AND metadata->>'pair_label' IS NOT NULL
                ORDER BY created_at DESC LIMIT 90""",
-            (user_id,)
+            (user_id,),
+            fetch_all=True,
         ) or []
     except Exception as e:
         print(f"⚠️ [AB-TEMP] Error leyendo historial: {e}")

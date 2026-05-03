@@ -110,6 +110,33 @@ async def lifespan(app: FastAPI):
                 ADD COLUMN IF NOT EXISTS quality_alert_at TIMESTAMP WITH TIME ZONE;
                 """)
 
+                # [P1-D] Tolerancia de cantidades de inventario por usuario.
+                # Antes la tolerancia para `validate_ingredients_against_pantry` venía hardcoded
+                # (1.30 default function-level, 1.05 vía CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE)
+                # y era idéntica para todos. Para usuarios con macros médicos estrictos, 30%
+                # over-budget en proteína es excesivo (500g pollo vs 384g real); para usuarios
+                # casuales, una tolerancia más relajada reduce las pausas por validación.
+                # Permitimos override per-usuario en [1.00, 1.50]. NULL = usar default global.
+                conn.execute("""
+                ALTER TABLE user_profiles
+                ADD COLUMN IF NOT EXISTS pantry_tolerance NUMERIC(4,2);
+                """)
+                # CHECK constraint idempotente vía DO block para evitar errores en re-deploy.
+                conn.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint
+                        WHERE conname = 'pantry_tolerance_range_check'
+                    ) THEN
+                        ALTER TABLE user_profiles
+                        ADD CONSTRAINT pantry_tolerance_range_check
+                        CHECK (pantry_tolerance IS NULL OR (pantry_tolerance >= 1.00 AND pantry_tolerance <= 1.50));
+                    END IF;
+                END
+                $$;
+                """)
+
                 conn.execute("""
                 ALTER TABLE user_inventory
                 ADD COLUMN IF NOT EXISTS reserved_quantity NUMERIC(12,4) DEFAULT 0,
@@ -283,8 +310,65 @@ async def lifespan(app: FastAPI):
                 ON plan_chunk_queue (execute_after)
                 WHERE status IN ('pending', 'stale');
                 """)
-                
-                
+
+                # [P1-3] Tabla de telemetría de deferrals: cada vez que el learning gate
+                # rechaza un chunk porque el día previo aún no concluyó, registramos el
+                # evento aquí. Sin esta tabla, los deferrals se silenciaban con
+                # `logger.debug` y _detect_chronic_deferrals no podía detectar usuarios
+                # con TZ desalineada. La DDL está aquí para garantizar que el schema
+                # exista incluso en deploys nuevos sin migraciones manuales.
+                conn.execute("""
+                CREATE TABLE IF NOT EXISTS chunk_deferrals (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id UUID NOT NULL,
+                    meal_plan_id UUID,
+                    week_number INT NOT NULL,
+                    reason TEXT NOT NULL,
+                    days_until_prev_end INT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+                """)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chunk_deferrals_user_recent
+                ON chunk_deferrals (user_id, created_at DESC);
+                """)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chunk_deferrals_plan_week
+                ON chunk_deferrals (meal_plan_id, week_number, created_at DESC);
+                """)
+
+                # [P0-A] Tabla de telemetría de resolución de lecciones por chunk.
+                # Cada vez que el sistema cae a la ruta de síntesis (low-confidence)
+                # porque `plan_chunk_queue.learning_metrics` está NULL, registramos
+                # el evento aquí. Sin esta tabla, no había visibilidad sobre qué
+                # porcentaje de chunks "aprenden" desde señales degradadas vs.
+                # métricas reales — el aprendizaje continuo podía estar roto en
+                # producción sin alarma. El cron `_alert_high_synthesized_lesson_ratio`
+                # consume esta tabla para disparar `system_alerts` si el ratio
+                # supera el umbral configurado.
+                conn.execute("""
+                CREATE TABLE IF NOT EXISTS chunk_lesson_telemetry (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id UUID NOT NULL,
+                    meal_plan_id UUID NOT NULL,
+                    week_number INT NOT NULL,
+                    event TEXT NOT NULL,
+                    synthesized_count INT NOT NULL DEFAULT 0,
+                    queue_count INT NOT NULL DEFAULT 0,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+                """)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chunk_lesson_telemetry_event_recent
+                ON chunk_lesson_telemetry (event, created_at DESC);
+                """)
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chunk_lesson_telemetry_user_recent
+                ON chunk_lesson_telemetry (user_id, created_at DESC);
+                """)
+
+
             logger.info("🚀 [Postgres] Tablas de LangGraph Checkpointer y Push Subscriptions verificadas/creadas.")
         except Exception as e:
             logger.error(f"⚠️ [Postgres] Error configurando DDL inicial: {e}")

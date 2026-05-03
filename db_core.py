@@ -98,14 +98,31 @@ async def aclose_connection_pool():
         logger.info("Async Connection pool cerrado.")
 
 def execute_sql_query(query: str, params: tuple = None, fetch_one: bool = False, fetch_all: bool = False):
-    """Ejecuta una consulta SQL directa usando el pool de psycopg."""
+    """Ejecuta una consulta SQL directa usando el pool de psycopg.
+
+    [P0-bonus] Antes, si el caller olvidaba pasar `fetch_one=True` o `fetch_all=True`,
+    este helper devolvía silenciosamente `[]` aunque la query produjera filas. Esto
+    enmascaró bugs serios — `_recover_pantry_paused_chunks` y otros 8 callsites en
+    `cron_tasks.py` y `graph_orchestrator.py` venían recibiendo `[]` en producción
+    sin que ningún test lo detectara (los tests usan mocks que esquivan el helper
+    real). El comportamiento ahora:
+
+      - Si `fetch_one`: devuelve `cursor.fetchone()` (un dict o None).
+      - Si `fetch_all`: devuelve `cursor.fetchall()` (lista de dicts).
+      - Si ninguno y la query produjo filas: emite un WARNING con el query truncado
+        y devuelve `cursor.fetchall()` (default seguro). El caller debería pasar el
+        flag explícito; el WARNING permite detectar callsites pendientes.
+      - Si ninguno y la query NO produjo filas (UPDATE/DELETE sin RETURNING, etc.):
+        devuelve `[]` silenciosamente — comportamiento histórico preservado para no
+        romper callers que usan este helper como variante de execute_sql_write.
+    """
     if not connection_pool:
         # Fallback de seguridad si el pool no estuviera disponible (aunque no debería)
         raise RuntimeError("db connection_pool is not available.")
-    
+
     import psycopg
     from psycopg.rows import dict_row
-    
+
     with connection_pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cursor:
             cursor.execute(query, params)
@@ -113,6 +130,24 @@ def execute_sql_query(query: str, params: tuple = None, fetch_one: bool = False,
                 return cursor.fetchone()
             if fetch_all:
                 return cursor.fetchall()
+            # [P0-bonus] Default seguro: si la query devolvió filas pero el caller
+            # no pidió ninguna, devolvemos las filas + WARNING en lugar de tirarlas
+            # silenciosamente.
+            try:
+                if cursor.description is not None:
+                    rows = cursor.fetchall()
+                    if rows:
+                        _query_preview = " ".join((query or "").split())[:120]
+                        logger.warning(
+                            f"[db_core/execute_sql_query] Caller no pasó "
+                            f"fetch_one/fetch_all pero la query devolvió "
+                            f"{len(rows)} filas. Retornando filas como default seguro; "
+                            f"el caller debería marcar fetch_all=True explícito. "
+                            f"Query: {_query_preview!r}"
+                        )
+                        return rows
+            except Exception:
+                pass
             return []
 
 def execute_sql_write(query: str, params: tuple = None, returning: bool = False):

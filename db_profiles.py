@@ -83,11 +83,15 @@ def update_user_health_profile(user_id: str, health_profile: dict):
     if not supabase: return None
     try:
         # --- GAP 4: Chunk Invalidation Detector (Conservative) ---
+        # [P0-5] También detectamos cambio de tz_offset_minutes para sincronizar chunks
+        # encolados con el nuevo offset. Sin este hook, un usuario que viajaba y
+        # actualizaba su perfil seguía con chunks que disparaban en la TZ vieja.
+        _tz_changed = False
         try:
             old_profile_data = get_user_profile(user_id)
             if old_profile_data and old_profile_data.get('health_profile'):
                 old_hp = old_profile_data['health_profile']
-                
+
                 invalidation_reasons = []
                 if old_hp.get('goal') != health_profile.get('goal'):
                     invalidation_reasons.append("goal_changed")
@@ -95,21 +99,48 @@ def update_user_health_profile(user_id: str, health_profile: dict):
                     invalidation_reasons.append("budget_changed")
                 if set(old_hp.get('allergies', [])) != set(health_profile.get('allergies', [])):
                     invalidation_reasons.append("allergies_changed")
-                    
+
                 old_w = float(old_hp.get('weight', 0) or 0)
                 new_w = float(health_profile.get('weight', 0) or 0)
                 if old_w and new_w and abs(old_w - new_w) >= 5:
                     invalidation_reasons.append("significant_weight_change")
-                    
+
+                # [P0-5] Detección de cambio de TZ. Acepta tanto `tz_offset_minutes` como
+                # `tzOffset` (legacy). Si cambió y el delta supera el threshold, marcamos
+                # para disparar el sync inmediato tras persistir.
+                _old_tz = old_hp.get('tz_offset_minutes')
+                if _old_tz is None:
+                    _old_tz = old_hp.get('tzOffset')
+                _new_tz = health_profile.get('tz_offset_minutes')
+                if _new_tz is None:
+                    _new_tz = health_profile.get('tzOffset')
+                try:
+                    if _old_tz is not None and _new_tz is not None and int(_old_tz) != int(_new_tz):
+                        _tz_changed = True
+                except (TypeError, ValueError):
+                    pass
+
                 if invalidation_reasons:
                     _invalidate_stale_chunks(user_id, ", ".join(invalidation_reasons))
         except Exception as check_e:
             logger.warning(f"⚠️ [CHUNK INVALIDATION] Error checking for critical profile changes: {check_e}")
         # ---------------------------------------------------------
-            
+
         res = supabase.table("user_profiles").update({
             "health_profile": health_profile
         }).eq("id", user_id).execute()
+
+        # [P0-5] Tras persistir el nuevo perfil, propagar el cambio de TZ a chunks
+        # pending/stale del usuario. Lazy import para evitar ciclo (cron_tasks → db).
+        # Si el sync falla, no abortamos el update — el cron horario lo arrastrará en
+        # la siguiente pasada.
+        if _tz_changed:
+            try:
+                from cron_tasks import _sync_chunk_queue_tz_offsets
+                _sync_chunk_queue_tz_offsets(target_user_id=user_id)
+            except Exception as sync_e:
+                logger.warning(f"⚠️ [P0-5] Sync inmediato de TZ falló para {user_id}: {sync_e}")
+
         return res.data
     except Exception as e:
         logger.error(f"Error actualizando health_profile: {e}")
