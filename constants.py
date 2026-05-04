@@ -1158,17 +1158,110 @@ for family, techs in TECHNIQUE_FAMILIES.items():
     for t in techs:
         TECH_TO_FAMILY[t] = family
 
+# P1-11: Vocabulario de técnicas culinarias COMPLEJAS para análisis de complejidad
+# del plan en graph_orchestrator._calculate_complexity_score. Antes el orquestador
+# hardcodeaba una lista corta de 7 términos en español; si el LLM usaba sinónimos,
+# conjugaciones o términos en inglés (planes bilingües), la métrica colapsaba a
+# score=1 (falso negativo) y el guard de complejidad fallaba en silencio.
+# Esta lista cubre vocabulario expandido + términos comunes en inglés.
+COMPLEX_TECHNIQUE_KEYWORDS = [
+    # ES — cocción lenta / al horno (alta complejidad temporal)
+    "horno", "horneado", "horneada", "horneados", "horneadas",
+    "asado", "asada", "asados", "asadas", "rostizado", "rostizada",
+    "guiso", "guisado", "guisada",
+    "estofado", "estofada", "estofar",
+    "braseado", "braseada", "brasear",
+    "lento", "lenta", "cocción lenta", "fuego lento",
+    # ES — preparaciones que requieren múltiples pasos previos
+    "marinado", "marinada", "marinar", "macerado", "macerar",
+    "relleno", "rellena", "rellenar", "rellenado",
+    "empanizado", "empanizada", "empanizar", "empanado",
+    "desmenuzado", "desmenuzar", "deshilachado", "ropa vieja",
+    "majado", "majar", "puré",
+    "croqueta", "croquetas", "tortita", "tortitas",
+    "fermentado", "fermentar", "fermentación",
+    "confitado", "confitar",
+    # EN — términos que el LLM bilingüe puede inyectar
+    "roast", "roasted", "bake", "baked", "stew", "stewed",
+    "braise", "braised", "marinate", "marinated",
+    "stuffed", "breaded", "slow-cook", "slow cooked",
+    "shredded", "ferment", "fermented", "confit",
+]
+
+# P1-11: Stopwords para extracción de "core noun" desde strings de ingredientes.
+# Antes este set vivía hardcodeado dentro de `assemble_plan_node` en
+# graph_orchestrator (~80 líneas inline). Eso dificultaba mantenimiento: si una
+# unidad o adjetivo nuevo aparecía en planes generados (ej. "cdta", "lonjas"),
+# había que editar el orquestador para evitar falsos positivos en la validación
+# de coherencia receta↔ingredientes. Centralizado aquí para que la fuente única
+# de verdad esté junto a otros vocabularios (COMPLEX_TECHNIQUE_KEYWORDS, etc.).
+#
+# IMPORTANTE: este set y COMPLEX_TECHNIQUE_KEYWORDS son CONCEPTUALMENTE distintos:
+#   - RECIPE_INGREDIENT_STOPWORDS = palabras NO-significativas que se descartan al
+#     extraer el sustantivo principal de un ingrediente (cantidades, adjetivos
+#     de preparación, conectores). Aplica al string de INGREDIENTES.
+#   - COMPLEX_TECHNIQUE_KEYWORDS = vocabulario para detectar TÉCNICAS culinarias
+#     complejas en RECETAS (cocción al horno, marinado, etc.). Aplica al string
+#     de RECETA. NO confundir uno con otro.
+RECIPE_INGREDIENT_STOPWORDS = frozenset({
+    "cdta", "semillas", "semilla", "guineo", "guineítos", "guineito", "guineitos",
+    "esencia", "extracto", "polvo", "jugo", "zumo", "salsa", "pasta", "concentrado",
+    "caldo", "gotas", "de", "la", "el", "los", "las", "un", "una", "unos", "unas",
+    "taza", "tazas", "cucharada", "cucharadas", "cucharadita", "cucharaditas",
+    "cdita", "cditas", "g", "ml", "oz", "libra", "libras", "kg", "litro", "litros",
+    "pizca", "al", "gusto", "para", "con", "y", "o",
+    "fresco", "fresca", "frescos", "frescas",
+    "picado", "picada", "molido", "molida", "rallado", "rallada",
+    "cocido", "cocida", "crudo", "cruda", "mediano", "grande", "pequeño",
+    "rebanada", "rebanadas", "diente", "dientes", "filete", "filetes",
+    "porción", "porcion", "sobre", "proteína", "proteina",
+    "carbohidratos", "carbohidrato", "vegetales", "vegetal",
+    "grasas", "grasa", "macronutriente", "macronutrientes",
+    "opcional", "acompañamiento", "acompañante",
+    "unidad", "unidades", "lonja", "lonjas", "pote", "potes", "lata", "latas",
+    "puñado", "manojo", "hoja", "hojas", "rama", "ramas",
+    "vaso", "vasos", "botella", "botellas", "paquete", "paquetes", "bolsa", "bolsas",
+    "gramos", "mililitros", "onzas", "pedazo", "pedazos", "trozo", "trozos",
+    "mitad", "cuarto", "tercio", "entero", "entera",
+    # Adjetivos de madurez y preparación — si aparecen solos (sin sustantivo) no son ingredientes
+    "maduro", "madura", "maduros", "maduras",
+    "verde", "verdes",  # excepción: "plátano verde" → "plátano" será el core noun
+    "hervido", "hervida", "hervidos", "hervidas",
+    "asado", "asada", "asados", "asadas",
+    "frito", "frita", "fritos", "fritas",
+    "desalado", "desalada", "remojado", "remojada",
+    "fileteado", "fileteada",
+    "natural", "naturales",
+})
+
+# [P1-FORM-11] SSOT con `frontend/src/components/assessment/questions/InteractiveQuestions.jsx`
+# (componente `QSupplements` líneas ~1034-1046). El frontend ofrece exactamente
+# estas 12 opciones; el backend DEBE conocerlas todas para que `build_supplements_context`
+# las traduzca a su nombre legible al inyectarlas al prompt del LLM. ANTES había
+# drift: el wizard ofrecía `vegan_protein`, `fat_burner`, `probiotics`, `electrolytes`
+# que NO estaban acá → `SUPPLEMENT_NAMES.get(s, s)` devolvía la key snake_case
+# cruda al LLM ("DEBES incluir: vegan_protein") y, peor, un cliente legacy podía
+# inyectar strings arbitrarios como "esteroides anabolicos" — vector de
+# prompt-injection ortogonal al patrón regex de P1-Q8 (que detecta patrones
+# textuales, no enums).
+#
+# Mantenimiento: si se añade/quita una opción en el frontend, actualizar AMBOS
+# lados Y `_SUPPLEMENT_ENUM` en `routers/plans.py`. El validador de boundary
+# rechaza con 422 cualquier valor fuera del set; el filtro defensivo de
+# `build_supplements_context` ignora con warning si el router se saltó.
 SUPPLEMENT_NAMES = {
-    "whey_protein": "Proteína Whey",
-    "creatine": "Creatina Monohidrato",
-    "bcaa": "Aminoácidos BCAA",
-    "glutamine": "Glutamina",
-    "omega3": "Omega-3 (Aceite de Pescado)",
-    "multivitamin": "Multivitamínico Completo",
-    "vitamin_d": "Vitamina D3",
-    "magnesium": "Magnesio (Citrato o Glicinato)",
-    "pre_workout": "Pre-Entreno (Cafeína + Beta-Alanina)",
-    "collagen": "Colágeno Hidrolizado",
+    "whey_protein":  "Proteína Whey",
+    "vegan_protein": "Proteína Vegana (guisante/arroz/cáñamo)",
+    "creatine":      "Creatina Monohidrato",
+    "bcaa":          "Aminoácidos BCAA / EAA",
+    "pre_workout":   "Pre-Entreno (Cafeína + Beta-Alanina)",
+    "fat_burner":    "Quemador de Grasa Termogénico",
+    "collagen":      "Colágeno Hidrolizado",
+    "multivitamin":  "Multivitamínico Completo",
+    "omega3":        "Omega-3 (Aceite de Pescado)",
+    "magnesium":     "Magnesio (Citrato o Glicinato)",
+    "probiotics":    "Probióticos (Cepas Mixtas)",
+    "electrolytes":  "Electrolitos (Sodio + Potasio + Magnesio)",
 }
 
 def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):

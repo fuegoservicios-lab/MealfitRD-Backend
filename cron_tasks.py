@@ -7601,7 +7601,13 @@ def _refill_emergency_backup_plan(user_id: str, pipeline_data: dict, taste_profi
                 emergency_memory += f"\n- Platos recurrentes: {', '.join(freq_meals[:5])}"
         
         from graph_orchestrator import run_plan_pipeline
-        result = run_plan_pipeline(pipeline_data, [], taste_profile, emergency_memory, None, None)
+        # [P1-4] Antes este call pasaba 6 args posicionales: (..., None, None) donde
+        # el 6° era `previous_ai_error` (ya eliminado del signature). Ahora son 5
+        # explícitos vía kwargs para inmunizar contra futuros cambios de orden.
+        result = run_plan_pipeline(
+            pipeline_data, [], taste_profile, emergency_memory,
+            progress_callback=None, background_tasks=None,
+        )
         
         if 'error' not in result and 'days' in result and isinstance(result['days'], list) and len(result['days']) > 0:
             execute_sql_write(
@@ -8351,15 +8357,93 @@ def _inject_advanced_learning_signals(user_id: str, pipeline_data: dict, health_
     return pipeline_data
 
 
+# [P1-7] Cache TTL para inject_learning_signals_from_profile.
+# Antes, cuando el SSE fallaba (LLM circuit breaker, timeout) y el frontend
+# caía al endpoint sync, esta función volvía a ejecutar ~7-8 SELECTs a Postgres
+# (~50-300ms) que ya habían corrido segundos antes. No corrompe datos
+# (read-only + setdefault), pero desperdicia latencia + un slot de connection
+# pool en el path donde el usuario ya está esperando un fallback. 5 minutos
+# cubre el escenario típico SSE→sync (ocurre en <1 minuto por timeout).
+#
+# Multi-worker: cache in-memory por proceso. Si el segundo request cae en
+# OTRO worker (Gunicorn round-robin), no hay hit y se re-consulta — mismo
+# comportamiento que hoy. Para distribución cross-worker se podría migrar a
+# Redis con la misma API; out of scope para P1-7.
+_SIGNAL_CACHE: dict = {}  # user_id → (monotonic_cached_at, injected_signals_dict)
+_SIGNAL_CACHE_TTL_S = 300
+_SIGNAL_CACHE_LOCK = None  # lazy init en primer uso para evitar early threading import
+
+
+def _signal_cache_lock():
+    global _SIGNAL_CACHE_LOCK
+    if _SIGNAL_CACHE_LOCK is None:
+        import threading as _t
+        _SIGNAL_CACHE_LOCK = _t.Lock()
+    return _SIGNAL_CACHE_LOCK
+
+
+def _signal_cache_get(user_id: str):
+    """Retorna el dict de señales cacheado si está fresco, o `None`."""
+    import time as _t
+    lock = _signal_cache_lock()
+    with lock:
+        entry = _SIGNAL_CACHE.get(user_id)
+    if not entry:
+        return None
+    cached_at, signals = entry
+    if _t.monotonic() - cached_at >= _SIGNAL_CACHE_TTL_S:
+        return None
+    return signals
+
+
+def _signal_cache_set(user_id: str, signals: dict) -> None:
+    """Cachea las señales y hace GC oportunista de entries stale (>2× TTL)."""
+    import time as _t
+    now = _t.monotonic()
+    lock = _signal_cache_lock()
+    with lock:
+        _SIGNAL_CACHE[user_id] = (now, signals)
+        # GC oportunista: previene leak si el proceso vive días con muchos users.
+        stale = [
+            uid for uid, (ts, _) in _SIGNAL_CACHE.items()
+            if now - ts > _SIGNAL_CACHE_TTL_S * 2
+        ]
+        for uid in stale:
+            _SIGNAL_CACHE.pop(uid, None)
+
+
 def inject_learning_signals_from_profile(user_id: str, pipeline_data: dict) -> dict:
     """Inyecta señales de aprendizaje para generaciones manuales (API path).
 
     Equivalente ligero de _inject_advanced_learning_signals (cron path).
     Lee señales persistidas del health_profile + queries ligeros en vivo.
     Solo escribe keys que NO estén ya presentes (no sobreescribe).
+
+    [P1-7] Cacheado in-memory por 5 minutos para mitigar doble ejecución
+    cuando el frontend cae del SSE al endpoint sync (segundo request reusa
+    señales del primero sin re-consultar DB).
     """
     from db_core import execute_sql_query
     from datetime import datetime, timezone, timedelta
+
+    # [P1-7] Cache hit → fusionar señales cacheadas vía setdefault y salir
+    # sin tocar DB. La fusión usa setdefault para preservar valores que el
+    # caller ya pudo haber inyectado en `pipeline_data` (e.g., overrides
+    # explícitos pasados por la request).
+    if user_id:
+        _cached = _signal_cache_get(user_id)
+        if _cached is not None:
+            for _k, _v in _cached.items():
+                pipeline_data.setdefault(_k, _v)
+            logger.info(
+                f" [SIGNAL INJECT/CACHE-HIT] {len(_cached)} señales servidas desde "
+                f"cache para user={user_id} (TTL {_SIGNAL_CACHE_TTL_S}s, sin DB hits)."
+            )
+            return pipeline_data
+
+    # [P1-7] Snapshot de keys ANTES de la lógica original — al final calculamos
+    # el delta para cachear solo lo que realmente inyectamos en este call.
+    _keys_before = set(pipeline_data.keys())
 
     try:
         profile_row = execute_sql_query(
@@ -8609,6 +8693,20 @@ def inject_learning_signals_from_profile(user_id: str, pipeline_data: dict) -> d
 
     injected_keys = [k for k in pipeline_data if k.startswith('_') or k in ('fatigued_ingredients', 'weight_history', 'successful_techniques', 'day_of_week_adherence', 'frequent_meals')]
     logger.info(f" [SIGNAL INJECT] {len(injected_keys)} señales inyectadas para generación manual: user={user_id}")
+
+    # [P1-7] Cachear el delta (keys que esta llamada agregó) para que un
+    # request subsiguiente del mismo user dentro de TTL las reuse sin re-DB.
+    # Solo capturamos las keys NUEVAS — si el caller ya traía un valor
+    # explícito en `pipeline_data`, lo preservamos via setdefault y NO lo
+    # sobrescribimos en el cache (no es nuestro para guardarlo).
+    if user_id:
+        _new_keys = set(pipeline_data.keys()) - _keys_before
+        if _new_keys:
+            _signal_cache_set(
+                user_id,
+                {k: pipeline_data[k] for k in _new_keys},
+            )
+
     return pipeline_data
 
 
@@ -9314,6 +9412,19 @@ _chunk_deferral_telemetry_failures: dict = {"count": 0, "last_error": None}
 import threading as _p16_threading
 _p16_buffer_lock = _p16_threading.Lock()
 
+import uuid as _p16_uuid
+
+
+def _is_valid_uuid(value) -> bool:
+    """True si `value` es parseable como UUID (cubre str y uuid.UUID)."""
+    if value is None:
+        return False
+    try:
+        _p16_uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
 
 def _append_deferral_to_buffer(record: dict) -> bool:
     """[P1-6] Escribe un deferral fallido al buffer local jsonl para retry posterior.
@@ -9367,7 +9478,7 @@ def _flush_pending_deferrals() -> dict:
     """[P1-6] Cron: re-intenta INSERT de deferrals buffered cuando DB se recupera.
 
     Lee `CHUNK_DEFERRALS_BUFFER_PATH`, intenta persistir cada record en
-    `chunk_deferrals` preservando el `deferred_at` original (timestamp del
+    `chunk_deferrals` preservando el `created_at` original (timestamp del
     momento del deferral, no del flush). Records que fallan con violación de
     NOT NULL (e.g. meal_plan_id None) se descartan permanentemente — un retry
     no los recuperará. Records con otros errores quedan en el archivo para el
@@ -9399,16 +9510,24 @@ def _flush_pending_deferrals() -> dict:
                 stats["discarded_invalid"] += 1
                 continue
 
-            # Validación previa: meal_plan_id es NOT NULL en la tabla.
-            # Si el record llegó aquí con None, descartar permanentemente.
-            if rec.get("meal_plan_id") is None:
+            # Validación previa de schema: descarte silencioso para casos que
+            # sabemos que el INSERT rechazará siempre (no se recuperan en retry):
+            #   - meal_plan_id es NOT NULL en la tabla.
+            #   - user_id y meal_plan_id deben ser UUIDs parseables.
+            # Sin este pre-check, cada record basura generaba un warning por tick
+            # del cron (spam masivo cuando el buffer acumulaba records de tests).
+            if (
+                rec.get("meal_plan_id") is None
+                or not _is_valid_uuid(rec.get("user_id"))
+                or not _is_valid_uuid(rec.get("meal_plan_id"))
+            ):
                 stats["discarded_invalid"] += 1
                 continue
 
             try:
                 execute_sql_write(
                     "INSERT INTO chunk_deferrals "
-                    "(user_id, meal_plan_id, week_number, reason, days_until_prev_end, deferred_at) "
+                    "(user_id, meal_plan_id, week_number, reason, days_until_prev_end, created_at) "
                     "VALUES (%s, %s, %s, %s, %s, COALESCE(%s::timestamptz, NOW()))",
                     (
                         rec.get("user_id"),
@@ -9430,10 +9549,6 @@ def _flush_pending_deferrals() -> dict:
                 _err_msg = str(_flush_err).lower()
                 if "violates not-null" in _err_msg or "invalid input syntax" in _err_msg:
                     stats["discarded_invalid"] += 1
-                    logger.warning(
-                        f"[P1-6/FLUSH] Record descartado por schema invalid: "
-                        f"{type(_flush_err).__name__}: {_flush_err}"
-                    )
                 else:
                     remaining_records.append(line.rstrip())
 
@@ -9640,6 +9755,18 @@ def _record_chunk_deferral(
     crítico.
     """
     global _chunk_deferral_telemetry_failures
+
+    # Hard guard: si user_id o meal_plan_id no son UUID válidos, no intentes el
+    # INSERT (siempre fallará por type uuid) y NO escribas al buffer (donde se
+    # acumularía como basura permanente). Esto bloquea contaminación desde tests
+    # que pasan strings tipo "user-x" / "test_user_race" sin mockear esta función.
+    if not _is_valid_uuid(user_id) or (meal_plan_id is not None and not _is_valid_uuid(meal_plan_id)):
+        logger.debug(
+            f"[P1-3/DEFERRAL-TELEMETRY] Skip por UUID inválido: "
+            f"user={user_id!r} plan={meal_plan_id!r} (probablemente test o datos legacy)"
+        )
+        return False
+
     try:
         execute_sql_write(
             "INSERT INTO chunk_deferrals "

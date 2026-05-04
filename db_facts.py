@@ -1,5 +1,6 @@
 from functools import lru_cache as _lru_cache
 import json
+import time as _time
 import uuid
 import unicodedata as _uc
 from typing import Optional, List, Dict, Any, Tuple, Union
@@ -8,6 +9,51 @@ import logging
 logger = logging.getLogger(__name__)
 from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
 from cache_manager import redis_client
+
+
+# Errores transitorios típicos del pooler de Supabase / red. Reintentar con
+# backoff corto. Otros errores (sintaxis SQL, permisos) NO se reintentan.
+_TRANSIENT_DB_ERROR_FRAGMENTS = (
+    "server disconnected",
+    "connection reset",
+    "connection refused",
+    "connection closed",
+    "consuming input failed",
+    "ssl connection has been closed",
+    "broken pipe",
+    "timeout",
+)
+
+
+def _is_transient_db_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(frag in msg for frag in _TRANSIENT_DB_ERROR_FRAGMENTS)
+
+
+def _with_db_retry(fn, *args, _label: str = "db_op", _attempts: int = 2, **kwargs):
+    """Llama `fn(*args, **kwargs)` reintentando errores transitorios de DB.
+
+    Crítico para queries que alimentan decisiones médicas (alergias, condiciones):
+    devolver `[]` por un disconnect transitorio podría dejar pasar un alérgeno
+    al plan generado. Reintento corto (2s + 4s) cubre la reconexión típica del
+    pooler de Supabase sin bloquear el pipeline.
+    """
+    last_exc = None
+    delays = (2.0, 4.0)
+    for attempt in range(_attempts + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient_db_error(exc) or attempt == _attempts:
+                raise
+            delay = delays[min(attempt, len(delays) - 1)]
+            logger.warning(
+                f"[DB-RETRY] {_label} falló por error transitorio ({type(exc).__name__}: {exc}); "
+                f"reintentando en {delay:.1f}s ({attempt + 1}/{_attempts})."
+            )
+            _time.sleep(delay)
+    raise last_exc
 
 def _invalidate_rag_cache(user_id: str):
     """Invalida la caché RAG del usuario para evitar servir datos médicos obsoletos."""
@@ -124,38 +170,44 @@ def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
     """Elimina los hechos con categoría 'sintoma_temporal' que son más antiguos que 'hours'."""
     if not supabase: return None
     from datetime import datetime, timedelta, timezone
-    
+
     threshold_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    
-    try:
+
+    def _do_delete():
         query = supabase.table("user_facts").delete().contains("metadata", {"category": "sintoma_temporal"}).lt("created_at", threshold_time)
         if user_id:
             query = query.eq("user_id", user_id)
-        
-        res = query.execute()
-        return res.data
+        return query.execute().data
+
+    try:
+        return _with_db_retry(_do_delete, _label="delete_expired_temporal_facts")
     except Exception as e:
-        logger.error(f"Error borrando temporal facts expirados: {e}")
+        logger.error(f"Error borrando temporal facts expirados (tras retries): {e}")
         return None
 
 def get_user_facts_by_metadata(user_id: str, key: str, value: str):
-    """Busca hechos Exactos filtrando dentro del JSONB de metadata.
+    """Busca hechos exactos filtrando dentro del JSONB de metadata.
+
+    CRÍTICO para alergias/condiciones — devolver `[]` por un disconnect transitorio
+    podría dejar pasar un alérgeno al plan generado. Reintenta errores transitorios
+    antes de degradar.
+
     Ejemplo: get_user_facts_by_metadata(user_id, 'category', 'alergia')
     """
     if not supabase: return []
-    
+
     # Auto-Limpieza de síntomas temporales antes de buscar
     delete_expired_temporal_facts(user_id)
-    
-    try:
-        # Supabase Python client filter for JSONB: metadata->>key = value
-        # we can use eq() if we query a specific path, but simpler is using contains
+
+    def _do_select():
         filter_dict = {key: value}
-        # Añadimos el filtro is_active
         res = supabase.table("user_facts").select("*").eq("user_id", user_id).eq("is_active", True).contains("metadata", filter_dict).execute()
         return res.data
+
+    try:
+        return _with_db_retry(_do_select, _label=f"get_user_facts_by_metadata({key}={value})")
     except Exception as e:
-        logger.error(f"Error buscando facts por metadata: {e}")
+        logger.error(f"Error buscando facts por metadata (tras retries): {e}")
         return []
 
 def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):

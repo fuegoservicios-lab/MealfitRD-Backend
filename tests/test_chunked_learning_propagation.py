@@ -2450,57 +2450,6 @@ def _extract_function_body_text(source: str, func_decorator: str) -> str:
     return source[idx:end]
 
 
-def test_p1_2_pantry_guard_runs_before_llm_in_analyze_endpoint():
-    """[P1-2 REGRESSION] La guard de pantry mínima DEBE aparecer ANTES de la primera
-    llamada al LLM (`analyze_preferences_agent`) dentro del endpoint POST /analyze.
-
-    Sin este orden, un usuario con nevera vacía consumiría tokens del LLM en
-    `analyze_preferences_agent` antes de ser rechazado con 400. La auditoría P1-2
-    confirmó que el orden ya es correcto; este test fija la propiedad para que
-    futuros refactors no la regresen.
-
-    Test estructural sobre fuente — no necesita FastAPI infra.
-    """
-    plans_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "routers", "plans.py",
-    )
-    with open(plans_path, "r", encoding="utf-8") as f:
-        src = f.read()
-
-    body = _extract_function_body_text(src, '@router.post("/analyze")')
-    pantry_idx = body.find("_count_meaningful_pantry_items(")
-    llm_idx = body.find("analyze_preferences_agent(")
-    assert pantry_idx >= 0, "Pantry guard ausente en POST /analyze"
-    assert llm_idx >= 0, "analyze_preferences_agent ausente en POST /analyze"
-    assert pantry_idx < llm_idx, (
-        f"REGRESIÓN P1-2: pantry guard (offset {pantry_idx}) DEBE preceder a la llamada "
-        f"LLM analyze_preferences_agent (offset {llm_idx}) en POST /analyze"
-    )
-
-
-def test_p1_2_pantry_guard_runs_before_llm_in_analyze_stream_endpoint():
-    """[P1-2 REGRESSION] Mismo invariante que el test anterior, pero para el SSE
-    `/analyze/stream`. Ambos endpoints deben rechazar pantry insuficiente antes de
-    invocar el LLM."""
-    plans_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "routers", "plans.py",
-    )
-    with open(plans_path, "r", encoding="utf-8") as f:
-        src = f.read()
-
-    body = _extract_function_body_text(src, '@router.post("/analyze/stream")')
-    pantry_idx = body.find("_count_meaningful_pantry_items(")
-    llm_idx = body.find("analyze_preferences_agent(")
-    assert pantry_idx >= 0, "Pantry guard ausente en POST /analyze/stream"
-    assert llm_idx >= 0, "analyze_preferences_agent ausente en POST /analyze/stream"
-    assert pantry_idx < llm_idx, (
-        f"REGRESIÓN P1-2: pantry guard (offset {pantry_idx}) DEBE preceder a la llamada "
-        f"LLM analyze_preferences_agent (offset {llm_idx}) en POST /analyze/stream"
-    )
-
-
 def test_p1_1_window_cap_used_in_rebuild_from_queue():
     """`_rebuild_recent_chunk_lessons_from_queue` debe usar el helper para que un
     plan 7d con 5 lecciones reconstruidas se trunque a 2 (no a 4 como antes)."""

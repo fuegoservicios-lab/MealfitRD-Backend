@@ -11,7 +11,7 @@ data = {
     "macroPreference": "Equilibrado",
     "medicalConditions": [],
     "allergies": [],
-    "dislikedIngredients": [],
+    "dislikes": [],
     "timeToCook": "Medio",
     "dietaryPreference": "Estándar",
     "skillLevel": "Intermedio",

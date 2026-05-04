@@ -146,6 +146,48 @@ Estos son datos críticos que debes respetar.
 """
 
 
+def build_motivation_context(form_data: dict) -> str:
+    """[P0-FORM-3] Genera el bloque de motivación personal del usuario.
+
+    El campo `motivation` se captura en el step QMotivation del wizard ("¿Por
+    qué quieres hacer esto AHORA?") con el subtitle "Será tu gasolina en días
+    difíciles." Antes, el campo se persistía a `health_profile` y se enviaba
+    al pipeline pero NINGÚN consumer lo leía — promesa rota al usuario y
+    señal emocional valiosa descartada.
+
+    Ahora se inyecta como bloque dedicado al planner + day generator. La
+    motivación es contexto emocional (no una restricción dura), así que la
+    instrucción es "personaliza el tono de coaching y las descripciones de
+    platos, sin ser cursi y sin alterar restricciones médicas/nutricionales".
+
+    Asume `form_data["motivation"]` ya saneado por `_sanitize_form_data_recursive`
+    en el call site de `arun_plan_pipeline` (string seguro contra prompt
+    injection). Si está vacío/whitespace, retorna string vacío (no-op).
+    """
+    if not isinstance(form_data, dict):
+        return ""
+    motivation = form_data.get("motivation")
+    if not isinstance(motivation, str):
+        return ""
+    motivation = motivation.strip()
+    if not motivation:
+        return ""
+    return f"""
+--- MOTIVACIÓN PERSONAL DEL USUARIO ---
+💪 El usuario expresó por qué quiere hacer este cambio AHORA:
+"{motivation}"
+
+INSTRUCCIÓN: Usa esta motivación SOLO para personalizar el tono y las
+descripciones de los platos (campos `desc` / `name` cuando sea natural).
+Refleja la intención emocional del usuario sin ser cursi y sin inventar
+referencias personales que no estén en este texto. NO la uses para alterar
+restricciones médicas, alergias, macros, ni reglas nutricionales — esas son
+estrictas y vienen de otros bloques. La motivación es señal emocional, no
+nutricional.
+----------------------------------------
+"""
+
+
 def build_time_context() -> str:
     """Genera el bloque de contexto temporal dinámico (fecha, día, clima caribeño y cultura)."""
     now_local = datetime.now()
@@ -214,16 +256,49 @@ def build_technique_injection(selected_techniques: list) -> str:
 def build_supplements_context(form_data: dict) -> str:
     """Genera el bloque de suplementos condicionado a la selección del usuario."""
     if not form_data.get("includeSupplements"):
-        return ""
+        # ANTES devolvía "" (ausencia de instrucción), pero el schema
+        # `SingleDayPlanModel.supplements` es Optional → el LLM lo veía y rellenaba
+        # por su cuenta con cosas como 'Proteína en polvo' o 'Whey'. Ahora emitimos
+        # una prohibición EXPLÍCITA para que ni el campo `supplements` ni los
+        # `ingredients` de las comidas contengan suplementos.
+        return (
+            "\n--- 💊 SUPLEMENTOS: NO INCLUIR (OBLIGATORIO) ---\n"
+            "El usuario NO activó la opción de suplementos en su plan.\n"
+            "PROHIBIDO ABSOLUTO en TODO el plan:\n"
+            "  - El campo `supplements` de cada día DEBE estar vacío o ausente.\n"
+            "  - NO menciones suplementos en ninguna comida ni receta.\n"
+            "  - NO incluyas como ingredientes: proteína en polvo, whey, caseína,\n"
+            "    creatina, BCAA, glutamina, pre-entreno, colágeno hidrolizado,\n"
+            "    multivitamínico, omega-3 en cápsulas, vitamina D3, magnesio en cápsulas.\n"
+            "Las proteínas y nutrientes deben venir EXCLUSIVAMENTE de alimentos reales\n"
+            "(pollo, huevo, pescado, lentejas, yogurt natural, queso, etc.).\n"
+            "---------------------------------------------------\n"
+        )
 
     from constants import SUPPLEMENT_NAMES
+    import logging as _logging
 
-    selected_supps = form_data.get("selectedSupplements", [])
+    raw_selected = form_data.get("selectedSupplements", []) or []
+    # [P1-FORM-11] Filtro defensivo: descarta strings que no estén en
+    # `SUPPLEMENT_NAMES`. El validador en `routers/plans.py` ya rechaza con 422
+    # los valores fuera del enum, pero callers no-router (cron, proactive_agent,
+    # scripts) pueden saltarse esa capa. Sin este filtro, un valor desconocido
+    # se inyectaba al prompt LLM como "DEBES incluir: <texto cliente>" — vector
+    # de prompt-injection ortogonal al regex anti-injection de P1-Q8.
+    selected_supps = [s for s in raw_selected if s in SUPPLEMENT_NAMES]
+    if len(selected_supps) != len(raw_selected):
+        _dropped = [s for s in raw_selected if s not in SUPPLEMENT_NAMES]
+        _logging.getLogger(__name__).warning(
+            f"[P1-FORM-11] selectedSupplements: filtrados {len(_dropped)} valor(es) "
+            f"fuera de SUPPLEMENT_NAMES: {_dropped[:10]!r}"
+            f"{' ...(truncado)' if len(_dropped) > 10 else ''}. "
+            f"Caller no pasó por `_validate_form_data_ranges` o hay drift de schema."
+        )
     if selected_supps:
-        supp_names = [SUPPLEMENT_NAMES.get(s, s) for s in selected_supps]
+        supp_names = [SUPPLEMENT_NAMES[s] for s in selected_supps]
         all_supps = set(SUPPLEMENT_NAMES.keys())
         not_selected = all_supps - set(selected_supps)
-        not_selected_names = [SUPPLEMENT_NAMES.get(s, s) for s in not_selected]
+        not_selected_names = [SUPPLEMENT_NAMES[s] for s in not_selected]
 
         ctx = (
             "\n--- 💊 SUPLEMENTOS SELECCIONADOS (OBLIGATORIO — LEE CON CUIDADO) ---\n"

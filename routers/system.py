@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Request
 import logging
 from db_core import execute_sql_query
 import json
+from typing import Optional
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -10,8 +12,10 @@ router = APIRouter(
     tags=["system"]
 )
 
-# Puedes añadir una dependencia de autenticación de admin aquí después si es necesario
-# async def verify_admin(token: str = Header(...)): ...
+# P1-A4: reuso del helper Bearer-token de routers/plans.py para mantener una
+# sola implementación de auth admin (CRON_SECRET). Importar desde el sibling
+# router no genera ciclo: plans.py no importa system.py.
+from routers.plans import _verify_admin_token  # noqa: E402
 
 @router.get("/health")
 def get_system_health():
@@ -314,3 +318,115 @@ def get_tz_fallback_health():
         "active_dedupe_keys": len(_dedupe),
         "buffer_capacity": int(_cap),
     }
+
+
+@router.get("/health/plan-graph")
+def get_plan_graph_health():
+    """[P1-9] Health detallado del grafo LangGraph del orquestador.
+
+    Antes la única señal era el endpoint global `/ready` en `app.py`, que es
+    binario (200/503) — útil para readiness probe de Kubernetes pero opaco
+    para dashboards: no exponía el contador `_PLAN_GRAPH_BUILD_FAILURES`.
+
+    Una situación común en producción: el build inicial falla (e.g., import
+    cyclic transitorio post-deploy), reintenta, eventualmente compila. El
+    grafo termina `ready=True` pero `build_failures > 0` indica inestabilidad
+    histórica que merece investigación. `/ready` ya da 200 a esa altura;
+    este endpoint expone el contador para que Grafana/alerting puedan
+    detectarlo y escalar.
+
+    Comportamiento:
+      - 200 cuando `ready=True`. Body incluye `build_failures` para tracking.
+      - 503 cuando `ready=False`: build aún no exitoso, requests caerán al
+        fallback matemático.
+
+    Diferencia con `/ready` (en app.py):
+      - `/ready`: readiness probe k8s (binario, sin métricas).
+      - `/api/system/health/plan-graph`: dashboard / alerting (con
+        `build_failures` accesible siempre).
+    """
+    try:
+        from graph_orchestrator import get_plan_graph_status
+        status = get_plan_graph_status()
+    except Exception as e:
+        logger.error(f"[P1-9] No se pudo obtener plan_graph status: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "ready": False,
+                "build_failures": -1,
+                "status": "unknown",
+                "message": (
+                    f"No se pudo importar/consultar el estado del orquestador: "
+                    f"{type(e).__name__}: {e}"
+                ),
+            },
+        )
+
+    if status.get("ready"):
+        return {"success": True, **status}
+
+    raise HTTPException(status_code=503, detail={"success": False, **status})
+
+
+class _InvalidatePlanGraphBody(BaseModel):
+    """[P1-A4] Body opcional para `POST /admin/plan-graph/invalidate`.
+
+    `reason` se loguea y se persiste como `last_invalidation_reason` en el
+    status — útil para auditoría (qué disparó cada invalidación).
+    """
+    reason: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/admin/plan-graph/invalidate")
+def admin_invalidate_plan_graph(request: Request, body: Optional[_InvalidatePlanGraphBody] = None):
+    """[P1-A4] Invalida el grafo LangGraph cacheado del orquestador.
+
+    Antes, `_PLAN_GRAPH` se construía lazy en la primera request y luego se
+    reutilizaba para siempre. Si en producción se necesitaba reflejar un
+    cambio dinámico (hot-fix de prompt sin redeploy, monkeypatch de un nodo,
+    recovery de corrupción detectada upstream), la única vía era reiniciar
+    el proceso completo — outage parcial + cold start del worker.
+
+    Ahora este endpoint expone `invalidate_plan_graph()` con auth Bearer
+    (mismo patrón que el resto de endpoints `/admin/*` del backend, vía
+    `CRON_SECRET`). La próxima request al pipeline reconstruye el grafo
+    sobre el estado actual del módulo.
+
+    Auth:
+        Header `Authorization: Bearer <CRON_SECRET>`. 401 si falta, 403 si
+        no matchea, 503 si `CRON_SECRET` no está seteado en el ambiente
+        (fail-secure: admin endpoints no se exponen sin secreto).
+
+    Body (opcional):
+        `{"reason": "hotfix prompt review_plan"}` — persistido para audit.
+
+    Responde 200 con el snapshot post-invalidación (mismo shape que
+    `GET /api/system/health/plan-graph` ampliado con `invalidations_total`,
+    `last_invalidation_ts`, `last_invalidation_reason`).
+
+    Notas operacionales:
+      - NO reconstruye inmediatamente: la primera request post-invalidate
+        paga la latencia de compile (~<100ms en hardware típico). Si querés
+        warm-up post-invalidación, llamá también `warm_plan_graph()` desde
+        un script o pegale al endpoint de generación con un payload mínimo.
+      - Idempotente: invalidar dos veces seguidas suma 2 al counter pero
+        no falla aunque el grafo ya estuviera en None.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    try:
+        from graph_orchestrator import invalidate_plan_graph
+    except Exception as e:
+        logger.error(f"[P1-A4] No se pudo importar invalidate_plan_graph: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Orquestador no disponible: {type(e).__name__}: {e}",
+        )
+
+    reason = (body.reason if body and body.reason else "admin_endpoint")
+    status = invalidate_plan_graph(reason=reason)
+    logger.warning(
+        f"[P1-A4] plan_graph invalidado vía endpoint admin "
+        f"(reason={reason!r}, total={status.get('invalidations_total')})."
+    )
+    return {"success": True, **status}

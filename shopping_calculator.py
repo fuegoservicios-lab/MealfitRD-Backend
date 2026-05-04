@@ -33,6 +33,10 @@ def _gemini_call_with_retry(fn, *args, _label: str = "gemini_call", **kwargs):
 
     3 intentos máximo. Delays base 2s y 8s, cada uno con jitter ±25%. Errores
     no relacionados con quota se propagan inmediatamente.
+
+    Logs en INFO (no WARNING/ERROR): el caller maneja el fallo cayendo a un
+    fast-path determinista; no es una condición crítica. Los warnings/errors
+    quedaban señalando como roto algo que el sistema ya degrada graciosamente.
     """
     delays = (2.0, 8.0)
     for attempt in range(3):
@@ -42,15 +46,16 @@ def _gemini_call_with_retry(fn, *args, _label: str = "gemini_call", **kwargs):
             if not _is_gemini_quota_error(exc):
                 raise
             if attempt == 2:
-                logging.error(
-                    f"[GEMINI/QUOTA] {_label} agotó 3 intentos por 429: {exc}"
+                logging.info(
+                    f"[GEMINI/QUOTA] {_label} agotó 3 intentos por 429 — "
+                    f"upstream sin quota; el caller cae al fast-path."
                 )
                 raise
             base = delays[attempt]
             delay = base * (0.75 + 0.5 * random.random())
-            logging.warning(
+            logging.info(
                 f"[GEMINI/QUOTA] {_label} 429 (intento {attempt + 1}/3); "
-                f"backoff {delay:.1f}s antes de reintentar."
+                f"backoff {delay:.1f}s."
             )
             _time.sleep(delay)
 
@@ -59,43 +64,78 @@ _master_cache_ts = 0
 _MASTER_CACHE_TTL = 300  # 5 minutos de TTL para que aliases nuevos se refresquen
 _semantic_cache = None
 
+# Negative cache: cuando la inicialización del caché semántico falla (típicamente
+# 429 RESOURCE_EXHAUSTED de Gemini), recordamos el fallo durante este TTL para no
+# reintentar inmediatamente. Sin esto, cada llamada a `get_semantic_cache()`
+# disparaba otros 3 reintentos × ~10s de backoff y spammeaba 3 logs ERROR.
+# El sistema downstream tiene Regex Fast-Path como fallback, así que devolver
+# None rápidamente es preferible a bloquear.
+_SEMANTIC_INIT_FAIL_COOLDOWN_S = 300  # 5 min: suficiente para que el quota minute-window de Gemini se renueve
+_semantic_cache_failed_until = 0.0
+
+# Lock para serializar inicializaciones concurrentes. Sin esto, cuando el shopping
+# list se calcula 3 veces en paralelo (mult ×2/×4/×8), las 3 disparan el fetch
+# de embeddings simultáneamente — triplicando consumo de quota y latencia.
+import threading as _threading
+_semantic_cache_lock = _threading.Lock()
+
+
 def invalidate_master_cache():
     """Invalida el caché de master_ingredients para forzar recarga desde DB."""
-    global _master_cache, _master_cache_ts, _semantic_cache
+    global _master_cache, _master_cache_ts, _semantic_cache, _semantic_cache_failed_until
     _master_cache = None
     _master_cache_ts = 0
     _semantic_cache = None
+    _semantic_cache_failed_until = 0.0
 
 def get_semantic_cache():
-    global _semantic_cache
+    global _semantic_cache, _semantic_cache_failed_until
     if _semantic_cache is not None:
         return _semantic_cache
-        
-    master_list = get_master_ingredients()
-    if not master_list:
+
+    # Fast-fail si fallamos recientemente (evita 3×retries+backoff redundantes)
+    if _time.time() < _semantic_cache_failed_until:
         return None
-        
-    try:
-        from langchain_google_genai import GoogleGenerativeAIEmbeddings
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2-preview", google_api_key=api_key)
-        
-        texts = [f"{m['name']} - Categoría: {m.get('category','')}. Alias: {', '.join(m.get('aliases') or [])}" for m in master_list]
-        vectors = _gemini_call_with_retry(
-            embeddings.embed_documents, texts,
-            _label="embed_documents (master_ingredients cache init)",
-        )
-        
-        _semantic_cache = {
-            "master_list": master_list,
-            "vectors": vectors,
-            "embeddings_client": embeddings
-        }
-        logging.info("🧠 Caché semántico local inicializado con éxito por primera vez.")
-        return _semantic_cache
-    except Exception as e:
-        logging.error(f"Error inicializando caché semántico: {e}")
-        return None
+
+    with _semantic_cache_lock:
+        # Re-check tras adquirir el lock (otro thread pudo haber inicializado o fallado)
+        if _semantic_cache is not None:
+            return _semantic_cache
+        if _time.time() < _semantic_cache_failed_until:
+            return None
+
+        master_list = get_master_ingredients()
+        if not master_list:
+            return None
+
+        try:
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings
+            api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+            embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2-preview", google_api_key=api_key)
+
+            texts = [f"{m['name']} - Categoría: {m.get('category','')}. Alias: {', '.join(m.get('aliases') or [])}" for m in master_list]
+            vectors = _gemini_call_with_retry(
+                embeddings.embed_documents, texts,
+                _label="embed_documents (master_ingredients cache init)",
+            )
+
+            _semantic_cache = {
+                "master_list": master_list,
+                "vectors": vectors,
+                "embeddings_client": embeddings
+            }
+            logging.info("🧠 Caché semántico local inicializado con éxito por primera vez.")
+            return _semantic_cache
+        except Exception as e:
+            _semantic_cache_failed_until = _time.time() + _SEMANTIC_INIT_FAIL_COOLDOWN_S
+            # INFO en vez de ERROR: el sistema cae al Regex Fast-Path y sigue trabajando.
+            # Solo es notable la PRIMERA vez del cooldown; las llamadas siguientes
+            # devuelven None instantáneamente sin loggear nada.
+            logging.info(
+                f"🟡 Caché semántico no disponible ({type(e).__name__}); "
+                f"usando Regex Fast-Path. Reintentos pausados {_SEMANTIC_INIT_FAIL_COOLDOWN_S}s."
+            )
+            return None
 
 def cosine_similarity(v1, v2):
     dot = sum(a*b for a,b in zip(v1, v2))

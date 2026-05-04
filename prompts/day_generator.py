@@ -60,6 +60,43 @@ REGLAS ESTRICTAS:
      d) Ultraprocesados salados (galletas de soda, sazonadores en cubos tipo knorr/maggi)
    Si ya usas una categoría, las otras tres quedan PROHIBIDAS ese día.
    Para quesos: si el día ya tiene embutido o conserva, usa SOLO quesos bajos en sodio (ricotta, mozzarella fresca, queso blanco fresco), NUNCA queso de hoja ni queso de freír.
+15. COHERENCIA POR SLOT (cultura dominicana — el self-critique rechaza si la incumples):
+    Cada comida DEBE encajar con su horario. No basta con cuadrar macros: el plato tiene que TENER SENTIDO en ese momento del día para un dominicano promedio.
+
+    a) DESAYUNO: ya cubierto por las 5 categorías asignadas (Mangú, Avena, Pan, Batido, Revoltillo).
+       PROHIBIDO: arroz, locrio, asopao, sancocho, pasta, sopas, platos de almuerzo disfrazados.
+
+    b) ALMUERZO — PLATO FUERTE TRADICIONAL. Patrones válidos:
+       • Bandera: arroz blanco + habichuela guisada + proteína (carne/pollo/pescado) + ensalada/vegetal
+       • Locrio (pollo, cerdo, gandules, arenque, bacalao)
+       • Asopao / sancocho / sopa sustanciosa
+       • Moro de habichuelas/gandules/lentejas + proteína + ensalada
+       • Pasta criolla con proteína (espaguetis con pollo, lasagna, pastelón)
+       • Mofongo/Mangú de almuerzo + proteína guisada
+       • Pescado/pollo/cerdo a la plancha/horno + tubérculo + ensalada/vegetal
+       PROHIBIDO en almuerzo: ensaladas frías como plato único, batidos, bowls de cereal, snacks.
+
+    c) MERIENDA — SNACK LIGERO entre comidas. Rango ideal: 150-300 kcal (max 350).
+       PROHIBIDO ABSOLUTO: técnicas de plato fuerte (salteado, locrio, asopao, guisado, frito completo, horneado tipo cazuela). Si la receta lleva "Mise en place" elaborado y >15 min de cocción, NO es merienda.
+       Categorías VÁLIDAS de merienda dominicana:
+         • Yogurt griego + fruta + granola/nueces/semillas
+         • Batido proteico con frutas (mamey, lechosa, guineo, fresas)
+         • Casabe / galletas integrales + queso bajo en sodio O aguacate
+         • Sándwich pequeño (1 pan + 1 proteína + vegetal)
+         • Fruta + mantequilla de maní/almendras (manzana con pb, guineo con pb)
+         • Pinchitos sencillos (pollo/queso) + fruta
+         • Huevo duro + fruta + nueces
+         • Avena overnight / chia pudding pequeño
+         • Tostada de aguacate con huevo
+       Ejemplos PROHIBIDOS: "Salteado de lentejas", "Locrio de…", "Pechuga al grill con puré", "Croquetas horneadas con guarnición", cualquier cosa que parezca un mini-almuerzo.
+
+    d) CENA — más ligera que el almuerzo. PROHIBIDO repetir la PROTEÍNA PRINCIPAL del almuerzo del mismo día (si almuerzo fue cerdo, cena NO puede ser cerdo). PROHIBIDO repetir el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día (si almuerzo fue plátano, cena NO puede ser plátano). Rota a otra proteína del pool y a otro carbo (batata/arroz/yuca/ñame/casabe). Patrones válidos:
+       • Pescado/pollo a la plancha + ensalada + tubérculo distinto al del almuerzo
+       • Tortilla/revoltillo de cena con vegetales + casabe o pan integral
+       • Sopa ligera de pollo/vegetales con proteína magra
+       • Wrap/pita con proteína + vegetales
+       • Bowl de proteína magra + vegetales asados + 1 carbo
+       Evita frituras pesadas, locrios densos y guisos calóricos en la noche.
 """
 
 

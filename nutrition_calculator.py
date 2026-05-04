@@ -4,6 +4,10 @@ Agente Calculador: Cálculos nutricionales exactos con la ecuación de Mifflin-S
 Elimina la carga matemática del LLM para evitar alucinaciones numéricas.
 """
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def calculate_bmr(weight_kg: float, height_cm: float, age: int, gender: str, body_fat_pct: float = None) -> int:
     """
     Calcula el BMR (Tasa Metabólica Basal).
@@ -56,14 +60,46 @@ MACRO_SPLITS = {
 
 
 def calculate_tdee(bmr: float, activity_level: str) -> int:
-    """Calcula el TDEE (Gasto Energético Total Diario) = BMR × multiplicador de actividad."""
-    multiplier = ACTIVITY_MULTIPLIERS.get(activity_level, 1.55)  # Default: moderado
+    """Calcula el TDEE (Gasto Energético Total Diario) = BMR × multiplicador de actividad.
+
+    [P0-FORM-5] Si `activity_level` no está en `ACTIVITY_MULTIPLIERS`, se aplica
+    el default ×1.55 (moderate) PERO se loguea WARNING. El path normal pasa
+    `_validate_form_data_ranges` en el router y rechaza con 422 antes de llegar
+    aquí, así que cualquier warning aquí es señal de:
+      - caller no-router (cron, proactive_agent, scripts) que saltó la validación
+      - bug upstream que mutó el value entre router y calculator
+      - test/fixture con valor desconocido
+    Sin este warning el plan se generaba con TDEE incorrecto sin telemetría.
+    """
+    multiplier = ACTIVITY_MULTIPLIERS.get(activity_level)
+    if multiplier is None:
+        logger.warning(
+            f"[P0-FORM-5] activity_level={activity_level!r} no está en "
+            f"ACTIVITY_MULTIPLIERS={list(ACTIVITY_MULTIPLIERS.keys())}. "
+            f"Aplicando default 1.55 (moderate). Caller no pasó por "
+            f"`_validate_form_data_ranges` o hay drift de schema."
+        )
+        multiplier = 1.55
     return int(round(bmr * multiplier))
 
 
 def apply_goal_adjustment(tdee: float, goal: str) -> int:
-    """Aplica el ajuste calórico según el objetivo (déficit/superávit)."""
-    adjustment = GOAL_ADJUSTMENTS.get(goal, 0.0)
+    """Aplica el ajuste calórico según el objetivo (déficit/superávit).
+
+    [P0-FORM-5] Mismo patrón que `calculate_tdee`: warning si `goal` no está
+    en `GOAL_ADJUSTMENTS`. Default `0.0` (maintenance) puede ser razonable
+    para "no sé qué meta" pero debe alertarse — un usuario que pidió `lose_fat`
+    pero envió un valor desconocido recibiría un plan de mantenimiento.
+    """
+    adjustment = GOAL_ADJUSTMENTS.get(goal)
+    if adjustment is None:
+        logger.warning(
+            f"[P0-FORM-5] goal={goal!r} no está en "
+            f"GOAL_ADJUSTMENTS={list(GOAL_ADJUSTMENTS.keys())}. "
+            f"Aplicando default 0.0 (maintenance). Caller no pasó por "
+            f"`_validate_form_data_ranges` o hay drift de schema."
+        )
+        adjustment = 0.0
     target_calories = tdee * (1 + adjustment)
     # Redondear a múltiplos de 50 para números más limpios
     return int(round(target_calories / 50) * 50)
@@ -196,8 +232,30 @@ def get_nutrition_targets(form_data: dict) -> dict:
     except (ValueError, TypeError):
         weight_raw, height, age = 154, 170, 25  # Defaults seguros
     
-    weight_unit = form_data.get("weightUnit", "lb")  # 'lb' o 'kg'
-    
+    # [P0-FORM-4] El path normal pasa por `_validate_form_data_min` (router) que
+    # ya rechaza payloads sin `weightUnit`. Pero esta función también la invocan
+    # callers internos (cron tasks, agent.py modify_meal, etc.) que leen perfiles
+    # almacenados en DB. Si un perfil legacy no tiene la key, antes asumíamos
+    # silenciosamente "lb" y producíamos un BMR incorrecto cuando el usuario
+    # originalmente había ingresado kg. Ahora WARNEAMOS para tener observabilidad
+    # del drift y aplicamos el default solo como fallback explícito.
+    weight_unit_raw = form_data.get("weightUnit")
+    if not weight_unit_raw:
+        logger.warning(
+            f"[P0-FORM-4] nutrition_calculator: weightUnit ausente en form_data "
+            f"(user_id={form_data.get('user_id')}). Asumiendo 'lb' por compatibilidad "
+            f"con perfiles legacy. Si el usuario es nuevo este es un bug del caller."
+        )
+        weight_unit = "lb"
+    else:
+        weight_unit = str(weight_unit_raw).lower().strip()
+        if weight_unit not in ("lb", "kg"):
+            logger.warning(
+                f"[P0-FORM-4] nutrition_calculator: weightUnit={weight_unit_raw!r} "
+                f"inválido (esperado 'lb' o 'kg'). Asumiendo 'lb'."
+            )
+            weight_unit = "lb"
+
     # Convertir a kilogramos si está en libras
     if weight_unit == "kg":
         weight = weight_raw

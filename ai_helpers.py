@@ -263,6 +263,21 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     if force_variety:
         variety_level = "max"
         logger.warning("🎯 [P0-3] _force_variety=true -> elevando variety_level a max para el siguiente chunk.")
+
+    # Auto-promoción a "max" para objetivos que se benefician de mayor diversidad
+    # de proteínas. Razón: con 'standard' el sistema elige solo 2 proteínas base y
+    # las cicla (P[0], P[1], P[0]) — eso fuerza repetición almuerzo↔cena del mismo
+    # día y dispara incoherencias de slot. Para gain_muscle/lose_weight el aporte
+    # de aminoácidos completos y la variedad de fuentes importa más que optimizar
+    # el costo del supermercado (3 proteínas vs 2 al mes es marginal en costo).
+    _GOALS_FORCE_MAX_VARIETY = {"gain_muscle", "lose_weight"}
+    _main_goal_for_variety = (form_data.get("mainGoal") or "").strip().lower() if form_data else ""
+    if variety_level != "max" and _main_goal_for_variety in _GOALS_FORCE_MAX_VARIETY:
+        variety_level = "max"
+        logger.info(
+            f"🎯 [GOAL VARIETY] Auto-promovido a variety_level=max por goal='{_main_goal_for_variety}' "
+            f"(más proteínas distintas = menos repetición almuerzo↔cena)."
+        )
     
     if skip_lunch:
         num_proteins_to_pick = min(1, len(available_proteins))  # 1 proteína (solo Cena la necesita fuerte)
@@ -286,6 +301,35 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     protein_weights = [1.0 / (protein_freq.get(p, 0) + 1) for p in available_proteins]
     carb_weights = [1.0 / (carb_freq.get(c, 0) + 1) for c in available_carbs]
     veggie_weights = [1.0 / (veggie_freq.get(v, 0) + 1) for v in available_veggies]
+
+    # Penalización de embutidos según objetivo nutricional.
+    # Salami/longaniza/jamón/chorizo/tocineta/salchichón son procesados con sodio
+    # alto y grasas saturadas — apropiados ocasionalmente en perfiles 'balanced'
+    # pero contraindicados como base recurrente en perfiles que buscan ganancia
+    # muscular limpia, pérdida de peso o mejora de salud cardiovascular.
+    # Multiplicador 0.1 = 90% menos probabilidad de ser elegido (no eliminado:
+    # puede aparecer ocasionalmente como variación cultural).
+    _PROCESSED_MEAT_KEYWORDS = (
+        "salami", "longaniza", "jamón", "jamon", "chorizo",
+        "tocineta", "tocino", "salchichón", "salchichon", "salchicha",
+        "mortadela", "embutido",
+    )
+    _GOALS_PENALIZE_PROCESSED = {
+        "gain_muscle", "lose_weight", "health_improvement",
+    }
+    _main_goal = (form_data.get("mainGoal") or "").strip().lower() if form_data else ""
+    if _main_goal in _GOALS_PENALIZE_PROCESSED:
+        _penalized_count = 0
+        for i, p in enumerate(available_proteins):
+            p_norm = strip_accents(p.lower())
+            if any(kw in p_norm for kw in _PROCESSED_MEAT_KEYWORDS):
+                protein_weights[i] *= 0.1
+                _penalized_count += 1
+        if _penalized_count:
+            logger.info(
+                f"🥩 [GOAL PENALTY] Embutidos penalizados ×0.1 ({_penalized_count} items) "
+                f"por goal='{_main_goal}'."
+            )
     
     fruit_weights = []
     if available_fruits:

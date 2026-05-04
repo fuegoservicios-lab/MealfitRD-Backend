@@ -73,6 +73,45 @@ class SingleDayPlanModel(BaseModel):
     supplements: Optional[List[SupplementModel]] = Field(default=None, description="Suplementos si aplica")
 
 from typing import Dict, Any
+
+
+# ============================================================
+# [P1-11] Schema explícito de eventos SSE para `/api/plans/analyze/stream`.
+# ------------------------------------------------------------
+# Antes el endpoint reenviaba CUALQUIER evento que llegara del
+# `progress_callback` al cliente — incluyendo eventos internos como `metric`,
+# `token`, `tool_call`, `token_reset` que el frontend silenciosamente ignora
+# (~50 eventos extras × ~200 bytes = ~10 KB de bandwidth desperdiciado por
+# request, más ruido en logs de DevTools del cliente).
+#
+# Además había un bug latente: el orquestador emite `day_completed` pero el
+# frontend (`Plan.jsx`) escucha `day_complete` — el progreso por día nunca
+# se actualizaba vía SSE (solo vía polling de /chunk-status cada 5s).
+#
+# Esta lista declarativa centraliza el contrato público SSE; cualquier evento
+# fuera del set se filtra antes de yieldearse al cliente. El alias
+# `day_completed` → `day_complete` se aplica en el filtro (ver
+# `routers/plans.py:event_generator`) para fixear el bug sin tocar las ~50
+# llamadas a `_emit_progress("day_completed", ...)` en el orquestador.
+# ============================================================
+SseEventName = Literal[
+    "phase",         # cambio de fase del pipeline (skeleton, parallel_generation, ...)
+    "day_started",   # un worker paralelo inició la generación de un día
+    "day_complete",  # un día terminó (alias canónico; backend emite "day_completed")
+    "complete",      # plan final listo (contiene el plan JSON completo)
+    "error",         # error durante la generación
+    "heartbeat",     # keep-alive emitido cada ~5s por el SSE handler
+]
+
+# Set para lookup O(1) en el filtro. Incluye también `day_completed` como
+# entrada legítima para que el filtro no la tire antes de renombrarla; el
+# rename a `day_complete` ocurre en el handler SSE.
+PUBLIC_SSE_EVENTS = frozenset({
+    "phase", "day_started", "day_complete", "day_completed",
+    "complete", "error", "heartbeat",
+})
+
+
 class HealthProfileSchema(BaseModel):
     meal_adherence_weekday: Dict[str, float] = Field(default_factory=dict)
     meal_adherence_weekend: Dict[str, float] = Field(default_factory=dict)

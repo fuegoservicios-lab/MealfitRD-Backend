@@ -47,7 +47,10 @@ from agent import (
     generate_chat_title_background, chat_with_agent_stream
 )
 from ai_helpers import generate_plan_title, expand_recipe_agent
-from graph_orchestrator import run_plan_pipeline
+from graph_orchestrator import (
+    run_plan_pipeline, warm_plan_graph, is_plan_graph_ready,
+    verify_pipeline_metrics_guest_insert,
+)
 from memory_manager import summarize_and_prune, build_memory_context
 from fact_extractor import async_extract_and_save_facts, process_pending_queue_sync
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -103,6 +106,62 @@ async def lifespan(app: FastAPI):
                     triggered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
                     resolved_at TIMESTAMP WITH TIME ZONE NULL
                 );
+                """)
+
+                # P1-Q10: Schema canónico de `pipeline_metrics` (idempotente).
+                # ----------------------------------------------------------
+                # La tabla se introdujo originalmente fuera de migrations/ y
+                # quedó con schema potencialmente derivado (en algunos entornos
+                # `user_id` quedó como `NOT NULL`, lo que hacía que TODAS las
+                # métricas de guests fallaran silenciosamente — pérdida de señal
+                # de meta-learning para el segmento anónimo). Esta migración:
+                #   1. CREATE IF NOT EXISTS con `user_id NULL` (correcto para
+                #      pipelines de guests / cron sin tenant atribuible).
+                #   2. ALTER ... DROP NOT NULL idempotente, por si una versión
+                #      antigua del schema la había marcado obligatoria. Funciona
+                #      como no-op si ya está NULL-allowed.
+                #   3. Columna generada `is_guest` = (user_id IS NULL) para
+                #      filtrado eficiente en queries de Grafana / análisis.
+                conn.execute("""
+                CREATE TABLE IF NOT EXISTS pipeline_metrics (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    user_id UUID NULL,
+                    session_id TEXT,
+                    node TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    retries INTEGER NOT NULL DEFAULT 0,
+                    tokens_estimated INTEGER NOT NULL DEFAULT 0,
+                    confidence NUMERIC(5,4) NOT NULL DEFAULT 0.0,
+                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+                );
+                """)
+                # Idempotente: drop NOT NULL si por alguna razón quedó marcado.
+                # NO falla si ya es nullable; ALTER es no-op en ese caso.
+                conn.execute("""
+                ALTER TABLE pipeline_metrics
+                ALTER COLUMN user_id DROP NOT NULL;
+                """)
+                # Columna generada para filtrado downstream. Idempotente vía
+                # IF NOT EXISTS. STORED es necesario en Postgres para columnas
+                # generadas (no admite VIRTUAL).
+                conn.execute("""
+                ALTER TABLE pipeline_metrics
+                ADD COLUMN IF NOT EXISTS is_guest BOOLEAN
+                    GENERATED ALWAYS AS (user_id IS NULL) STORED;
+                """)
+                # Índice por (node, created_at DESC) — el patrón de query más
+                # común es "métricas recientes por tipo de nodo" (A/B sampler,
+                # preflight analytics).
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_node_created
+                ON pipeline_metrics (node, created_at DESC);
+                """)
+                # Índice parcial para queries de guest analytics (cardinalidad
+                # típica baja vs total → índice parcial es más eficiente).
+                conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_guest_node
+                ON pipeline_metrics (node, created_at DESC) WHERE is_guest = TRUE;
                 """)
 
                 conn.execute("""
@@ -391,6 +450,72 @@ async def lifespan(app: FastAPI):
         scheduler.start()
         logger.info("⏰ [APScheduler] Tareas proactivas, CRON jobs nocturnos y Background Chunking iniciados.")
             
+    # P1-Q2: warm-up del grafo LangGraph antes de empezar a aceptar tráfico.
+    # Mueve la latencia de compile (~ms-cientos-ms) fuera del path de la
+    # primera request real. Si el build falla, `warm_plan_graph()` loguea
+    # CRITICAL internamente y devuelve False — NO derribamos el startup
+    # (las requests caen al fallback matemático vía P0-1, mejor que tener
+    # el pod en CrashLoopBackOff). El endpoint `/ready` reflejará el estado
+    # real para que el orquestador (Kubernetes / load balancer) decida si
+    # enrutar tráfico.
+    if warm_plan_graph():
+        logger.info("✅ [STARTUP] LangGraph plan_graph pre-compilado.")
+    else:
+        logger.critical(
+            "🚨 [STARTUP] LangGraph plan_graph NO se pudo compilar. "
+            "El servidor arranca igual; las requests caerán al fallback "
+            "matemático (P0-1) hasta que el problema se resuelva. "
+            "Revisa los logs CRITICAL anteriores para el traceback."
+        )
+
+    # P1-Q10: Probe de schema de pipeline_metrics.user_id (NULL allowed).
+    # La migración del bloque anterior aplica `ALTER COLUMN user_id DROP NOT
+    # NULL` idempotente. Este probe verifica el resultado real haciendo un
+    # INSERT/DELETE de prueba — si falla, deja `_GUEST_METRICS_ENABLED=False`
+    # internamente para que los emitters skipeen guest inserts en lugar de
+    # fallar 50× por pipeline. CRITICAL log con remediation steps explícitos
+    # si detecta drift entre schema deseado y schema real.
+    if verify_pipeline_metrics_guest_insert():
+        logger.info("✅ [STARTUP] pipeline_metrics schema OK (guest inserts habilitados).")
+    # else: el probe ya logueó CRITICAL con remediation; no spam adicional.
+
+    # [P1-ORQ-5] Observabilidad: contar planes con `CACHE_SCHEMA_VERSION`
+    # obsoleta. Antes, bumpear la versión (ej. v1→v2) invalidaba todos los
+    # planes pre-deploy de forma silenciosa: `semantic_cache_check_node` los
+    # descartaba post-filter pero los planes seguían en `meal_plans`
+    # consumiendo slots del vector search → cache hit rate caía sin que
+    # operadores pudieran correlacionar con el cambio. Ahora el deploy log
+    # muestra explícitamente "N planes con versión obsoleta" para que el
+    # equipo decida si necesita correr cleanup manual o ajustar el limit del
+    # vector search. NO bloqueante: si el probe falla, el startup continúa
+    # (es observabilidad pura, no salud del sistema). NO automático: deletes
+    # masivos sobre `meal_plans` perderían historia válida del usuario
+    # (cache version solo afecta REUSO, no validez del registro).
+    try:
+        from db_plans import count_stale_cache_schema_plans
+        from graph_orchestrator import CACHE_SCHEMA_VERSION, _LEGACY_CACHE_SCHEMA_VERSION
+        _stale_summary = count_stale_cache_schema_plans(CACHE_SCHEMA_VERSION, _LEGACY_CACHE_SCHEMA_VERSION)
+        _stale_count = _stale_summary.get("stale_count", 0)
+        _total = _stale_summary.get("total", 0)
+        if _stale_count > 0:
+            logger.warning(
+                f"🟠 [P1-ORQ-5] CACHE_SCHEMA_VERSION='{CACHE_SCHEMA_VERSION}' actual; "
+                f"{_stale_count}/{_total} planes en `meal_plans` tienen versión "
+                f"obsoleta y serán descartados por el cache semántico post-filter "
+                f"(distribución: {_stale_summary.get('stale_versions', {})}). "
+                f"El cache hit rate puede caer hasta que los planes nuevos los "
+                f"reemplacen orgánicamente. Si el bump es intencional y operativo, "
+                f"considerar bumpear el `limit` de `search_similar_plan` "
+                f"temporalmente (graph_orchestrator.py:~6430) para compensar."
+            )
+        elif _total > 0:
+            logger.info(
+                f"✅ [STARTUP] Cache schema OK: {_total} planes alineados con "
+                f"CACHE_SCHEMA_VERSION='{CACHE_SCHEMA_VERSION}'."
+            )
+    except Exception as _stale_err:
+        logger.warning(f"⚠️ [P1-ORQ-5] Probe de stale cache schema falló: {_stale_err}")
+
     logger.info("🚀 [FastAPI] Servidor de MealfitRD IA iniciado con éxito en el puerto 3001.")
     yield
     
@@ -431,7 +556,43 @@ app.include_router(system_router)
 @app.get("/")
 @app.get("/health")
 def health_check():
+    """Liveness probe: el proceso está vivo y atendiendo HTTP. NO valida que
+    los componentes downstream (LangGraph, DB, Redis) estén operativos —
+    para eso usar `/ready`."""
     return {"status": "ok", "message": "MealfitRD AI Backend is running"}
+
+
+@app.get("/ready")
+def readiness_check():
+    """P1-Q2: Readiness probe para orquestadores (Kubernetes, load balancer).
+
+    Devuelve 200 solo si el grafo LangGraph está compilado y listo para
+    servir. Si el build inicial falló, `warm_plan_graph()` lo intentó al
+    startup y `is_plan_graph_ready()` retorna False; el orquestador NO
+    enruta tráfico y reintenta el probe periódicamente. Si el grafo se
+    compila exitosamente en una request posterior (vía `_get_plan_graph()`
+    lazy), el probe pasa a 200 automáticamente sin restart del pod.
+
+    Diferencia con `/health`:
+      - `/health` (liveness): el proceso está vivo. Si falla, K8s reinicia.
+      - `/ready`  (readiness): el servicio puede servir requests útiles. Si
+                                falla, K8s deja el pod corriendo pero quita
+                                del load balancer hasta que se recupere.
+    """
+    if is_plan_graph_ready():
+        return {"status": "ready", "plan_graph": "compiled"}
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "status": "not_ready",
+            "plan_graph": "not_compiled",
+            "message": (
+                "LangGraph plan_graph no está compilado. Las requests al "
+                "pipeline de generación caerán al fallback matemático. "
+                "Revisa los logs CRITICAL del worker para el traceback."
+            ),
+        },
+    )
 
 @app.get("/api/admin/test-proactive")
 def api_test_proactive():

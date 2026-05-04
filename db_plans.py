@@ -1094,3 +1094,75 @@ def search_similar_plan(query_embedding: list, threshold: float = 0.98, limit: i
     except Exception as e:
         logger.error(f"Error buscando planes similares: {e}")
         return []
+
+
+def count_stale_cache_schema_plans(current_version: str, legacy_version: str) -> dict:
+    """[P1-ORQ-5] Cuenta planes en `meal_plans` con `_cache_schema_version`
+    distinto al actual.
+
+    Usado por el startup hook (`app.py` lifespan) para emitir warning con el
+    conteo cuando un deploy bumpea `CACHE_SCHEMA_VERSION` y deja N planes
+    legacy en la tabla. Sin este probe, operadores veían un drop súbito en
+    el cache hit rate (planes legacy pasan el vector search pero son
+    descartados por `semantic_cache_check_node` post-filter) sin manera de
+    correlacionarlo con el cambio de schema.
+
+    Args:
+        current_version: la versión actual de `CACHE_SCHEMA_VERSION`.
+        legacy_version: la versión legacy asumida para planes pre-fix sin
+            el flag (típicamente "v1").
+
+    Returns:
+        Dict con:
+          - `stale_count`: total de planes con versión != current_version
+          - `stale_versions`: dict version → count de cada versión obsoleta
+          - `total`: total de planes en la tabla
+        Vacío `{}` si Supabase no está disponible o el query falló.
+
+    Best-effort: cualquier excepción se loguea como warning y devuelve {}.
+    El startup NO debe fallar si este probe falla — es observabilidad pura.
+    """
+    if not supabase:
+        return {}
+    try:
+        # COUNT exact total para contexto.
+        total_res = supabase.table("meal_plans").select("id", count="exact").limit(1).execute()
+        total = total_res.count or 0
+        if total == 0:
+            return {"stale_count": 0, "stale_versions": {}, "total": 0}
+
+        # Bucket por versión via SQL crudo: el supabase-py no expone GROUP BY
+        # sobre extracciones de JSONB de forma fluida, y el RPC sería overkill.
+        # `COALESCE(... ->> '_cache_schema_version', legacy)` aplica la misma
+        # convención que `_is_cached_plan_schema_compatible` (línea ~6324 de
+        # graph_orchestrator): planes pre-fix sin la key se cuentan como
+        # legacy_version.
+        rows = execute_sql_query(
+            """
+            SELECT COALESCE(plan_data->>'_cache_schema_version', %s) AS schema_v,
+                   COUNT(*) AS cnt
+            FROM meal_plans
+            GROUP BY schema_v
+            """,
+            (legacy_version,),
+            fetch_all=True,
+        )
+        if not rows:
+            return {"stale_count": 0, "stale_versions": {}, "total": total}
+
+        stale_versions: dict[str, int] = {}
+        stale_count = 0
+        for row in rows:
+            v = row.get("schema_v") or legacy_version
+            cnt = int(row.get("cnt") or 0)
+            if v != current_version:
+                stale_versions[v] = cnt
+                stale_count += cnt
+        return {
+            "stale_count": stale_count,
+            "stale_versions": stale_versions,
+            "total": total,
+        }
+    except Exception as e:
+        logger.warning(f"⚠️ [P1-ORQ-5] Error contando planes con schema obsoleto: {e}")
+        return {}
