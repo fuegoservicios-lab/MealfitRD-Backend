@@ -206,10 +206,32 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
     """
     Recorre el plan completo y humaniza los ingredientes en cada comida.
     Solo afecta la lista `ingredients` de las `meals`, no toca recipe ni macros.
+
+    [P1-4] Preserva la lista pre-humanización en `meal["ingredients_raw"]`
+    para que el aggregator de la lista de compras (`get_shopping_list_delta`)
+    pueda re-procesar el plan persistido sin perder las unidades métricas.
+
+    ANTES, si un plan ya humanizado ("1 pechuga de pollo (porción)") se
+    re-aggregaba después (regenerar con `/shift-plan`, recalcular shopping
+    al cambiar householdSize, etc), `_parse_quantity` no encontraba la
+    unidad métrica original ("200g pechuga") y caía a `unit='unidad'` →
+    el aggregator consolidaba "1 unidad pollo" en lugar del peso real.
+    Para listas escaladas ×4 mensual, "4 pechugas" llegaban con cantidad
+    derivada del `density_g_per_unit` del master (que puede divergir
+    significativamente del peso semántico real del plato), produciendo
+    listas de compras descuadradas.
+
+    AHORA `ingredients_raw` se setea SOLO en la primera invocación
+    (idempotente: si ya existe, no se sobrescribe — protege contra
+    re-humanización que perdería el original).
     """
     for day in plan_result.get("days", []):
         for meal in day.get("meals", []):
             if "ingredients" in meal:
+                # [P1-4] Preservar el original SOLO si no existe.
+                # Idempotente ante re-llamadas.
+                if "ingredients_raw" not in meal:
+                    meal["ingredients_raw"] = list(meal["ingredients"])
                 humanized_ingredients = []
                 for ing in meal["ingredients"]:
                     humanized = humanize_ingredient(ing)

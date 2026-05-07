@@ -102,6 +102,21 @@ LLM_USER_LOCK_TIMEOUT_S     = _env_int  ("MEALFIT_LLM_USER_LOCK_TIMEOUT_S",     
 # que el grafo continúe vía global).
 LLM_USER_MAX_WAIT_S         = _env_int  ("MEALFIT_LLM_USER_MAX_WAIT_S",         30)
 
+# [P1-28] Cap COMBINADO sobre la composición per-user → global.
+# `acquire_user_and_global` antes podía esperar hasta
+# `LLM_USER_MAX_WAIT_S + LLM_MAX_WAIT_S` (default 30+90=120s) en el peor
+# caso porque cada semáforo aplicaba su propio bound de espera de forma
+# independiente. Bajo carga, un usuario saturando per-user que luego
+# encontraba el global saturado pagaba el peor caso completo. Ahora,
+# cuando el tiempo gastado en per-user agota >=`LLM_COMBINED_MAX_WAIT_S`,
+# degradamos global a su semáforo local in-process (`_local_semaphore`)
+# en lugar de esperar otros 90s.
+# Default = SUMA de los dos individuales para preservar el comportamiento
+# previo en steady state. Operadores que quieran un cap más estricto
+# (e.g. 60s) solo necesitan setear el env var.
+LLM_COMBINED_MAX_WAIT_S     = _env_int  ("MEALFIT_LLM_COMBINED_MAX_WAIT_S",
+                                          LLM_USER_MAX_WAIT_S + LLM_MAX_WAIT_S)
+
 # --- Circuit breaker LLM ---
 CB_FAILURE_THRESHOLD        = _env_int  ("MEALFIT_CB_FAILURE_THRESHOLD",        3)
 CB_RESET_TIMEOUT_S          = _env_int  ("MEALFIT_CB_RESET_TIMEOUT_S",          30)
@@ -173,19 +188,119 @@ RETRY_HEDGE_BUDGET_DELTA_S  = _env_float("MEALFIT_RETRY_HEDGE_BUDGET_DELTA_S",
 
 # --- Fact-check ---
 FACT_CHECK_TOOL_TIMEOUT_S   = _env_float("MEALFIT_FACT_CHECK_TOOL_TIMEOUT_S",   20.0)
+# [P1-31] Tamaño del pool dedicado de fact-checking médico
+# (`_FACT_CHECK_EXECUTOR`). Antes hardcodeado a 2 → bajo carga (5+
+# pipelines concurrentes) generaba backlog de fact-checks que tardaban
+# 20-90s extra por encolamiento, sin que un operador pudiera tunear el
+# tradeoff (concurrencia LLM clínico vs throughput) sin redeploy. Ahora
+# vía env. Default 2 preserva comportamiento previo. Clamp a [1, 16]:
+#   - 1: deshabilita paralelismo (debugging, providers con rate limit
+#     extremo).
+#   - 2 (default): el provider clínico tolera ~2 calls concurrentes sin
+#     degradar latency.
+#   - >2: solo si el provider tolera más concurrencia (test loads). Cap
+#     16 evita config errors absurdos (e.g. "MEALFIT_FACT_CHECK_POOL_SIZE=200")
+#     que saturarían threads del proceso sin beneficio.
+FACT_CHECK_POOL_SIZE        = max(1, min(16, _env_int("MEALFIT_FACT_CHECK_POOL_SIZE", 2)))
 
-# --- Self-critique correction timeout (P1-FIX-CRITIQUE) ---
+# --- Self-critique correction timeout (P1-FIX-CRITIQUE / P4-TIMEOUT-1) ---
 # Timeout por día corregido en `self_critique_node._correct_single_day`.
-# Antes era hardcoded 70s; observado en producción: el último día corregido
-# (Día 3 cuando se corrigen 3 días) sufría peak de carga del proveedor LLM
-# y disparaba TimeoutError → mantenía el día original SIN corregir, justamente
-# el día que tenía las violaciones más graves (8.5 lonjas de pavo en cena en
-# incidente real). El día sin corregir luego era flageado por `review_plan_node`
-# pero ya sin presupuesto para retry → plan rechazado entregado al usuario.
-# Subir a 90s da margen de cola del proveedor (~25-30% headroom adicional).
-# Las 3 correcciones corren en `asyncio.gather`, así que el costo wall-clock
-# es el max de las 3, no la suma — subir el cap individual no mueve el total.
-CRITIQUE_FIX_TIMEOUT_S      = _env_float("MEALFIT_CRITIQUE_FIX_TIMEOUT_S",      90.0)
+#
+# Historia de bumps:
+#   - 70s (original): hardcoded. Día 3 (último corregido) sufría peak de
+#     cola del proveedor → TimeoutError → día sin corregir, justamente el
+#     que tenía las violaciones más graves (8.5 lonjas pavo en cena en
+#     incidente real). Plan luego rechazado por review_plan_node sin
+#     budget para retry.
+#   - 90s (P1-FIX-CRITIQUE): +25-30% headroom para cola normal. Resolvió
+#     ~70% de los timeouts de Día 3.
+#   - 120s (P4-TIMEOUT-1): bump tras 3 corridas en producción 2026-05-05
+#     mostrando 504 DEADLINE_EXCEEDED de Gemini cuando el provider está
+#     bajo carga. Patrón observado:
+#       - SDK de Gemini hace retry interno con exponential backoff (1.3-2s)
+#         tras 504 → +2-5s al wall-clock de la llamada
+#       - Si la llamada original ya estaba cerca de 60-70s (común con
+#         tools), el retry empuja el total a 85-95s, justo en el cap.
+#     Subir a 120s absorbe ~95% de estos casos sin penalizar el happy path.
+#
+# Costo wall-clock: las 3 correcciones corren en `asyncio.gather`, así que
+# el costo es max(3) no sum(3). Subir el cap individual añade hasta +30s en
+# el peor caso (los 3 días en cola simultáneamente). En el happy path
+# (primary day termina rápido, los demás no necesitan max budget) cero
+# impacto. Trade-off favorable.
+#
+# Sinergia: este bump reduce la frecuencia de `_critique_unresolved`
+# markers que P1-SURGICAL-1 detecta para forzar regen en retry. Menos
+# markers = menos retries innecesarios = menos costo total.
+#
+# [P4-TIMEOUT-3] (corrida 2026-05-04 03:26): aún con 120s, observamos
+# 3 days timeoutear simultáneamente bajo Gemini cascade-overload. P4-TIMEOUT-2
+# añadió circuit breaker (abort tras N timeouts), pero el knob individual
+# también sube a 150s — gana 30s extra de tolerancia para los retries
+# internos del SDK (1-3 backoffs de 2-5s cada uno). Sigue paliativo (la
+# solución estructural es P4-TIMEOUT-2), pero quita el último 5% de casos
+# borderline que P4-TIMEOUT-1 dejó sin cubrir. Wall-clock self-critique
+# en happy path no cambia (max(3) en gather, igual que antes).
+# [P6-TIMEOUT-4] (corrida 2026-05-05 19:58 [c6eaf808]): los 3 días
+# timeoutearon en self-critique a 150s, después Día 2 timeoutea OTRA vez en
+# P5-MARKER-REGEN. Causa: Gemini API lento (504 DEADLINE_EXCEEDED visto 2×)
+# + correctores con prompts largos (sugerencias verbosas del evaluator).
+# Bump 150→180s gana 30s extra para días borderline sin afectar happy path
+# (gather paralelo, max(3) wall-clock = 1 timeout). Trade-off: peor caso
+# pipeline +90s (3 días × 30s extra), mejor caso 0 cambio. P4-TIMEOUT-2 CB
+# aún limita explosión bajo cascade-overload.
+CRITIQUE_FIX_TIMEOUT_S      = _env_float("MEALFIT_CRITIQUE_FIX_TIMEOUT_S",      180.0)
+
+# ============================================================
+# [P4-TIMEOUT-2] Self-critique circuit breaker
+# ------------------------------------------------------------
+# P4-TIMEOUT-1 subió `CRITIQUE_FIX_TIMEOUT_S` 90→120s. Cubre el ~95% de
+# los 504 cuando el peak es individual, PERO no ayuda cuando Gemini está
+# en cascada (provider overload correlacionado). Observado 2026-05-04
+# corrida 03:26: los 3 días corrieron en `asyncio.gather` y los 3 se
+# timeoutearon a 120s simultáneamente. Wall-clock self-critique = 120s
+# (no 360s gracias a gather), pero el costo real fue:
+#   - 0 días corregidos
+#   - 3 markers `_critique_unresolved` → P1-SURGICAL-1 fuerza regen
+#   - retry path completo (otros ~250s) → pipeline ~400s
+#
+# El waste no es el timeout en sí (ya es paralelo), es seguir esperando
+# a los demás cuando ya sabemos que el provider está saturado. Si el
+# primer día timeoutea, los siguientes muy probablemente también — son
+# el mismo proveedor en el mismo segundo. Mejor abortar temprano y
+# proceder al assemble (snapshot fallback de P0-PIPE-1 ya cubre quality),
+# dejando que los días no resueltos vayan a regen en retry vía P1-SURGICAL-1.
+#
+# Threshold = 2 (default): después de 2 timeouts cancelamos los pendientes.
+# - Threshold = 1 sería muy agresivo (un timeout aislado podría ser flaky
+#   y los otros días sí completarían).
+# - Threshold = 3 nunca abortaría con `critique_max_days=3` (el típico).
+#
+# Trade-off: en peak provider-load aceptamos perder días de corrección
+# (el snapshot del intento original sigue válido + retry los regenera),
+# a cambio de no quemar 120s de wall-clock esperando fallos seguros.
+# ============================================================
+CRITIQUE_TIMEOUT_ABORT_THRESHOLD = _env_int("MEALFIT_CRITIQUE_TIMEOUT_ABORT_THRESHOLD", 2)
+
+# ============================================================
+# [2026-05-06] Pro fallback para correcciones del self-critique
+# ------------------------------------------------------------
+# Cuando Flash hace timeout corrigiendo un día (caso real corrida 16:30:
+# 3/3 días con 504 DEADLINE_EXCEEDED), reintentamos con Gemini Pro.
+# Pro es ~2x más lento y caro pero más estable bajo prompts complejos
+# y bajo provider load. Trade-off:
+#   - Costo: ~$0.001 extra por día corregido vía fallback.
+#   - Wall-clock: +PRO_FALLBACK_TIMEOUT_S al peor caso (gather paralelo
+#     amortigua: max de los días que cayeron a fallback).
+#   - Calidad: días que antes quedaban con `_critique_unresolved` ahora
+#     se corrigen → menos regens en retry, mejor plan al usuario.
+#
+# Si Pro también timeoutea o el CB está OPEN, mantenemos el original con
+# marker (comportamiento idéntico al pre-fallback). El knob permite
+# desactivar el fallback rápido si Pro queda saturado y solo añade latencia.
+# ============================================================
+CRITIQUE_PRO_FALLBACK_ENABLED   = _env_bool("MEALFIT_CRITIQUE_PRO_FALLBACK_ENABLED",  True)
+CRITIQUE_PRO_FALLBACK_TIMEOUT_S = _env_float("MEALFIT_CRITIQUE_PRO_FALLBACK_TIMEOUT_S", 120.0)
 
 # --- Progress callbacks (SSE) ---
 PROGRESS_CB_MAX_PENDING     = _env_int  ("MEALFIT_PROGRESS_CB_MAX_PENDING",     1000)
@@ -193,6 +308,18 @@ PROGRESS_CB_TIMEOUT_S       = _env_float("MEALFIT_PROGRESS_CB_TIMEOUT_S",       
 
 # --- LLM cache TTL ---
 LLM_CACHE_TTL_S             = _env_int  ("MEALFIT_LLM_CACHE_TTL_S",             300)
+
+# --- Egg-whites cap por meal/día ---
+# El planner usa "claras de huevo" como proteína fácil sin mesura. Se vio
+# corrida 2026-05-06 02:44 [b0791cfb]: 11 claras en una sola comida, 36 en 3 días,
+# revisor médico rechazó CRÍTICO ("riesgo de estrés renal, deficiencia de
+# biotina por avidina"). El usuario re-disparó y el sistema iba a generar el
+# mismo problema. Guard programático en assemble_plan_node corta el meal a
+# MAX_PER_MEAL antes de pasarlo al revisor. Defaults conservadores:
+#   - 6 claras/meal ≈ 21g proteína de claras puras (suficiente).
+#   - 12 claras/día ≈ 42g (cubre 2 comidas con claras como proteína principal).
+MAX_EGG_WHITES_PER_MEAL = _env_int("MEALFIT_MAX_EGG_WHITES_PER_MEAL", 6)
+MAX_EGG_WHITES_PER_DAY  = _env_int("MEALFIT_MAX_EGG_WHITES_PER_DAY",  12)
 
 # ============================================================
 # P0-A3: Versionado del schema del plan cacheado.
@@ -325,7 +452,11 @@ def _log_active_knobs():
         "RETRY_SAFETY_MARGIN_S": RETRY_SAFETY_MARGIN_S,
         "RETRY_HEDGE_BUDGET_DELTA_S": RETRY_HEDGE_BUDGET_DELTA_S,
         "FACT_CHECK_TOOL_TIMEOUT_S": FACT_CHECK_TOOL_TIMEOUT_S,
+        "FACT_CHECK_POOL_SIZE": FACT_CHECK_POOL_SIZE,  # [P1-31]
         "CRITIQUE_FIX_TIMEOUT_S": CRITIQUE_FIX_TIMEOUT_S,
+        "CRITIQUE_TIMEOUT_ABORT_THRESHOLD": CRITIQUE_TIMEOUT_ABORT_THRESHOLD,
+        "CRITIQUE_PRO_FALLBACK_ENABLED": CRITIQUE_PRO_FALLBACK_ENABLED,
+        "CRITIQUE_PRO_FALLBACK_TIMEOUT_S": CRITIQUE_PRO_FALLBACK_TIMEOUT_S,
         "PROGRESS_CB_MAX_PENDING": PROGRESS_CB_MAX_PENDING,
         "PROGRESS_CB_TIMEOUT_S": PROGRESS_CB_TIMEOUT_S,
         "LLM_CACHE_TTL_S": LLM_CACHE_TTL_S,
@@ -766,6 +897,34 @@ PER_USER_LLM_SEMAPHORE = DistributedPerUserSemaphore(
 )
 
 
+# [P1-28] Counters de observabilidad del cap combinado per-user → global.
+# Permiten a SRE monitorear cuándo el budget se agota y la degradación a
+# local kicks in. Si `combined_budget_exceeded` crece sostenidamente,
+# señal de que `LLM_COMBINED_MAX_WAIT_S` está mal calibrado (subir) o
+# que el provider está saturado (revisar Redis/proveedor).
+_LLM_BUDGET_STATS: dict = {
+    "combined_budget_exceeded": 0,   # Veces que per-user agotó el budget
+                                     # combinado y global se degradó a local.
+    "combined_total_warnings": 0,    # Veces que el total elapsed superó
+                                     # el budget tras yield (caller hizo
+                                     # más wait del esperado).
+}
+_LLM_BUDGET_STATS_LOCK = threading.Lock()
+
+
+def _inc_budget_stat(kind: str, n: int = 1) -> None:
+    if n <= 0:
+        return
+    with _LLM_BUDGET_STATS_LOCK:
+        _LLM_BUDGET_STATS[kind] = _LLM_BUDGET_STATS.get(kind, 0) + n
+
+
+def get_llm_budget_stats_snapshot() -> dict:
+    """[P1-28] Snapshot read-only de los counters del budget combinado."""
+    with _LLM_BUDGET_STATS_LOCK:
+        return dict(_LLM_BUDGET_STATS)
+
+
 @contextmanager
 def acquire_user_and_global(user_id):
     """P1-NEW-1: composición sync — adquiere per-user antes que global.
@@ -773,16 +932,58 @@ def acquire_user_and_global(user_id):
     El orden importa: per-user PRIMERO. Si invertimos, un usuario saturando
     su cuota tomaría slots globales y luego bloquearía esperando per-user,
     desperdiciando slots compartidos.
+
+    [P1-28] Cap COMBINADO de espera. Antes la composición podía esperar
+    hasta `LLM_USER_MAX_WAIT_S + LLM_MAX_WAIT_S` porque cada semáforo
+    aplicaba su bound independientemente. Ahora medimos elapsed tras
+    per-user; si ya gastó >=`LLM_COMBINED_MAX_WAIT_S`, degradamos global
+    a su `_local_semaphore` en lugar de esperar otros 90s — el caller
+    no pagará 2× wait inesperado.
     """
+    _t_start = time.monotonic()
     with PER_USER_LLM_SEMAPHORE.acquire(user_id):
+        _elapsed_after_per_user = time.monotonic() - _t_start
+        if _elapsed_after_per_user >= LLM_COMBINED_MAX_WAIT_S:
+            # [P1-28] Budget agotado: degradar global a local in-process
+            # para no extender el wait. El local semaphore mantiene back-
+            # pressure intra-proceso (sin ir a Redis), y dado que ya
+            # esperamos ≥ combined_max_wait, asumimos que la cola Redis
+            # no se vacía pronto y un wait adicional no aporta.
+            _inc_budget_stat("combined_budget_exceeded")
+            logger.warning(
+                f"🟠 [P1-28] Combined budget agotado tras per-user "
+                f"({_elapsed_after_per_user:.1f}s ≥ "
+                f"{LLM_COMBINED_MAX_WAIT_S}s). Degradando global a "
+                f"local sin tocar Redis."
+            )
+            with LLM_SEMAPHORE._local_semaphore:
+                yield
+            return
         with LLM_SEMAPHORE.acquire():
             yield
 
 
 @asynccontextmanager
 async def aacquire_user_and_global(user_id):
-    """P1-NEW-1: composición async, mismo orden que la versión sync."""
+    """P1-NEW-1: composición async, mismo orden que la versión sync.
+
+    [P1-28] Mismo cap combinado que la versión sync. Ver docstring de
+    `acquire_user_and_global` para rationale.
+    """
+    _t_start = time.monotonic()
     async with PER_USER_LLM_SEMAPHORE.aacquire(user_id):
+        _elapsed_after_per_user = time.monotonic() - _t_start
+        if _elapsed_after_per_user >= LLM_COMBINED_MAX_WAIT_S:
+            _inc_budget_stat("combined_budget_exceeded")
+            logger.warning(
+                f"🟠 [P1-28] Combined budget agotado tras per-user async "
+                f"({_elapsed_after_per_user:.1f}s ≥ "
+                f"{LLM_COMBINED_MAX_WAIT_S}s). Degradando global a "
+                f"local async sin tocar Redis."
+            )
+            async with LLM_SEMAPHORE._alocal_acquire():
+                yield
+            return
         async with LLM_SEMAPHORE.aacquire():
             yield
 
@@ -1050,15 +1251,27 @@ class LLMCircuitBreaker:
                 return
             except Exception as e:
                 logger.warning(f"Redis CB write error: {e}")
-        # Fallback DB (best-effort, no atómico pero funcional)
+        # [P1-27] Fallback DB ATÓMICO. Antes el path era un read-modify-write
+        # multi-step:
+        #   1. SELECT value FROM app_kv_store WHERE key = ?
+        #   2. state['failures'] += 1; if >= threshold: state['is_open'] = True
+        #   3. INSERT ... ON CONFLICT DO UPDATE SET value = (re-serialized state)
+        # `self._lock` (threading.Lock) garantizaba atomicidad SOLO dentro del
+        # mismo proceso. Bajo Gunicorn `--workers N` cada worker tiene su propia
+        # instancia de `LLMCircuitBreaker` con su propio lock — dos workers que
+        # registraban fallos concurrentes leían `failures=2` cada uno y
+        # escribían `failures=3` (lost-update). Resultado: el threshold se
+        # cruzaba con DELAY proporcional al número de workers — el CB no se
+        # abría cuando debía, dejando seguir requests contra un proveedor
+        # saturado.
+        # Ahora la SQL hace el INCR del lado del servidor con jsonb_build_object,
+        # garantizando atomicidad cross-worker. Mantenemos el `with self._lock`
+        # para evitar thundering herd (N threads del mismo proceso lanzando
+        # SQL en paralelo cuando una sola serializada basta), pero el lock ya
+        # no es necesario para la corrección — la SQL lo es.
         with self._lock:
             try:
-                state = self._get_db_state()
-                state["failures"] = state.get("failures", 0) + 1
-                state["last_failure"] = time.time()
-                if state["failures"] >= self.threshold:
-                    state["is_open"] = True
-                self._save_db_state(state)
+                self._atomic_record_failure_db()
             except Exception as e:
                 logger.warning(f"DB CB write error: {e}")
 
@@ -1080,9 +1293,13 @@ class LLMCircuitBreaker:
                 logger.warning(f"Redis CB reset error: {e}")
         with self._lock:
             try:
-                state = self._get_db_state()
-                if state.get("failures", 0) > 0 or state.get("is_open", False):
-                    self._save_db_state({"failures": 0, "last_failure": 0, "is_open": False})
+                # [P1-27] Reset atómico: una sola UPSERT idempotente reemplaza
+                # el patrón SELECT-then-conditional-UPDATE. Sin esto, dos
+                # workers que registraban éxito tras una racha de fallos
+                # podían leer `failures=5,is_open=true` cada uno y escribir
+                # el reset; con SQL atómica el último write gana siempre con
+                # el estado correcto y no hay ventana de lectura stale.
+                self._atomic_reset_db()
                 with self._local_state_lock:
                     self._local_healthy = True
                     self._last_db_check = time.time()
@@ -1143,6 +1360,72 @@ class LLMCircuitBreaker:
             (self._db_kv_key, json.dumps(state))  # P1-Q3
         )
 
+    def _atomic_record_failure_db(self) -> None:
+        """[P1-27] Increment atómico server-side del contador de fallos.
+
+        Reemplaza el patrón inseguro `SELECT → mutate → UPSERT`. La SQL
+        construye el `value` JSON desde el valor actual leído por la
+        misma fila (`app_kv_store.value` referenciado en la cláusula DO
+        UPDATE), garantizando que el INCR no pierda updates bajo dos
+        workers concurrentes — Postgres serializa a nivel de fila el
+        ON CONFLICT DO UPDATE.
+
+        - En INSERT (primera falla, no existe la fila): inicializa
+          {failures: 1, last_failure: now, is_open: 1 >= threshold}.
+        - En UPDATE (fila existe): usa COALESCE((value->>'failures')::int, 0)
+          + 1 → resistente a JSON corrupto / key faltante.
+        """
+        now_ts = time.time()
+        execute_sql_write(
+            """
+            INSERT INTO app_kv_store (key, value)
+            VALUES (
+                %s,
+                jsonb_build_object(
+                    'failures',     1,
+                    'last_failure', %s::float,
+                    'is_open',      (1 >= %s::int)
+                )
+            )
+            ON CONFLICT (key) DO UPDATE SET
+                value = jsonb_build_object(
+                    'failures',
+                        COALESCE((app_kv_store.value->>'failures')::int, 0) + 1,
+                    'last_failure',
+                        %s::float,
+                    'is_open',
+                        (COALESCE((app_kv_store.value->>'failures')::int, 0) + 1)
+                            >= %s::int
+                ),
+                updated_at = NOW()
+            """,
+            (
+                self._db_kv_key,
+                now_ts, self.threshold,           # INSERT params
+                now_ts, self.threshold,           # UPDATE params
+            ),
+        )
+
+    def _atomic_reset_db(self) -> None:
+        """[P1-27] Reset atómico del estado del CB en DB.
+
+        UPSERT idempotente: en cada llamada deja la fila en
+        `{failures: 0, last_failure: 0, is_open: false}`. Equivalente
+        funcional al patrón previo `if any: save({…zeros…})` pero sin la
+        lectura previa, eliminando la ventana de race entre SELECT y
+        UPDATE bajo concurrencia multi-worker.
+        """
+        execute_sql_write(
+            """
+            INSERT INTO app_kv_store (key, value)
+            VALUES (%s, '{"failures": 0, "last_failure": 0, "is_open": false}'::jsonb)
+            ON CONFLICT (key) DO UPDATE SET
+                value = '{"failures": 0, "last_failure": 0, "is_open": false}'::jsonb,
+                updated_at = NOW()
+            """,
+            (self._db_kv_key,),
+        )
+
     async def arecord_failure(self):
         with self._local_state_lock:
             self._local_healthy = False
@@ -1158,12 +1441,9 @@ class LLMCircuitBreaker:
                 logger.warning(f"Redis async CB write error: {e}")
         async with self._alock_acquire():
             try:
-                state = await self._aget_db_state()
-                state["failures"] = state.get("failures", 0) + 1
-                state["last_failure"] = time.time()
-                if state["failures"] >= self.threshold:
-                    state["is_open"] = True
-                await self._asave_db_state(state)
+                # [P1-27] Ver `record_failure` para rationale de atomicidad.
+                # Mismo patrón sync: SQL UPSERT con INCR server-side.
+                await self._aatomic_record_failure_db()
             except Exception as e:
                 logger.warning(f"DB async CB write error: {e}")
 
@@ -1185,9 +1465,8 @@ class LLMCircuitBreaker:
                 logger.warning(f"Redis async CB reset error: {e}")
         async with self._alock_acquire():
             try:
-                state = await self._aget_db_state()
-                if state.get("failures", 0) > 0 or state.get("is_open", False):
-                    await self._asave_db_state({"failures": 0, "last_failure": 0, "is_open": False})
+                # [P1-27] Reset atómico async (ver `record_success` sync).
+                await self._aatomic_reset_db()
                 with self._local_state_lock:
                     self._local_healthy = True
                     self._last_db_check = time.time()
@@ -1247,6 +1526,56 @@ class LLMCircuitBreaker:
         await aexecute_sql_write(
             "INSERT INTO app_kv_store (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
             (self._db_kv_key, json.dumps(state))  # P1-Q3
+        )
+
+    async def _aatomic_record_failure_db(self) -> None:
+        """[P1-27] Versión async de `_atomic_record_failure_db`.
+
+        Mismo SQL, ejecutado vía `aexecute_sql_write`. Ver el método sync
+        para el rationale de atomicidad cross-worker.
+        """
+        now_ts = time.time()
+        await aexecute_sql_write(
+            """
+            INSERT INTO app_kv_store (key, value)
+            VALUES (
+                %s,
+                jsonb_build_object(
+                    'failures',     1,
+                    'last_failure', %s::float,
+                    'is_open',      (1 >= %s::int)
+                )
+            )
+            ON CONFLICT (key) DO UPDATE SET
+                value = jsonb_build_object(
+                    'failures',
+                        COALESCE((app_kv_store.value->>'failures')::int, 0) + 1,
+                    'last_failure',
+                        %s::float,
+                    'is_open',
+                        (COALESCE((app_kv_store.value->>'failures')::int, 0) + 1)
+                            >= %s::int
+                ),
+                updated_at = NOW()
+            """,
+            (
+                self._db_kv_key,
+                now_ts, self.threshold,
+                now_ts, self.threshold,
+            ),
+        )
+
+    async def _aatomic_reset_db(self) -> None:
+        """[P1-27] Versión async de `_atomic_reset_db`. UPSERT idempotente."""
+        await aexecute_sql_write(
+            """
+            INSERT INTO app_kv_store (key, value)
+            VALUES (%s, '{"failures": 0, "last_failure": 0, "is_open": false}'::jsonb)
+            ON CONFLICT (key) DO UPDATE SET
+                value = '{"failures": 0, "last_failure": 0, "is_open": false}'::jsonb,
+                updated_at = NOW()
+            """,
+            (self._db_kv_key,),
         )
 
 # P1-NEW-2: knobs configurables vía env (`MEALFIT_CB_*`).
@@ -1529,10 +1858,17 @@ def _shutdown_drainable_executor(
 # RAG search, embeddings, SQL writes, etc.). Bajo carga concurrente (N pipelines
 # en paralelo), el pool default se saturaba con fact-checks lentos y otras
 # operaciones rápidas se encolaban detrás de ellos.
-# Solución: pool dedicado con max_workers=2. Limita la concurrencia de fact-checks
+# Solución: pool dedicado. Limita la concurrencia de fact-checks
 # globalmente sin afectar el resto de operaciones to_thread. Si llegan 5 pipelines
-# simultáneos, los primeros 2 corren, los otros 3 se encolan en este executor
-# (no en el pool default), preservando throughput de operaciones más rápidas.
+# simultáneos, los primeros 2 (default) corren, los otros 3 se encolan en este
+# executor (no en el pool default), preservando throughput de operaciones más
+# rápidas.
+#
+# [P1-31] `max_workers` ahora viene del knob `FACT_CHECK_POOL_SIZE`
+# (`MEALFIT_FACT_CHECK_POOL_SIZE`, default 2). Antes era hardcoded a 2 — un
+# operador que detectaba backlog del fact-checker bajo carga no podía subir
+# la concurrencia sin redeploy con código modificado. Ahora se tunea por env,
+# preservando default histórico.
 #
 # P1-Q9: variante drainable. Bajo SIGTERM (rolling deploy, autoscaling), antes
 # se cancelaban abruptamente los fact-checks en vuelo dejando sockets HTTP
@@ -1540,7 +1876,8 @@ def _shutdown_drainable_executor(
 # espera hasta `FACT_CHECK_SHUTDOWN_DRAIN_S` (~8s default) para que la mayoría
 # complete y cierre sockets gracefully.
 _FACT_CHECK_EXECUTOR = _DrainableThreadPoolExecutor(
-    max_workers=2, thread_name_prefix="fact-check", name="fact-check"
+    max_workers=FACT_CHECK_POOL_SIZE,  # [P1-31]
+    thread_name_prefix="fact-check", name="fact-check"
 )
 _atexit.register(
     _shutdown_drainable_executor,
@@ -1823,8 +2160,15 @@ class PersistentLLMCache:
             except Exception as e:
                 logger.warning(f"Redis cache read error: {e}")
         try:
+            # [P0-4] Antes: `interval '%s seconds'` con `params=(key, self.ttl)`.
+            # Psycopg NO sustituye `%s` dentro de literales SQL — el parser solo
+            # cuenta UN placeholder real (`key = %s`) pero recibimos DOS params,
+            # disparando `ProgrammingError` SIEMPRE. Resultado: cuando Redis
+            # cae, el fallback DB del cache LLM tiene 100% miss garantizado y
+            # cada lectura paga el costo del query + parse error silenciado.
+            # Fix: `make_interval(secs => %s)` parametriza correctamente.
             res = execute_sql_query(
-                "SELECT value FROM app_kv_store WHERE key = %s AND updated_at > now() - interval '%s seconds'",
+                "SELECT value FROM app_kv_store WHERE key = %s AND updated_at > now() - make_interval(secs => %s)",
                 (key, self.ttl), fetch_one=True
             )
             if res:
@@ -1842,8 +2186,10 @@ class PersistentLLMCache:
             except Exception as e:
                 logger.warning(f"Redis async cache read error: {e}")
         try:
+            # [P0-4] Ver comentario equivalente en `get` arriba — mismo bug,
+            # mismo fix vía `make_interval(secs => %s)`.
             res = await aexecute_sql_query(
-                "SELECT value FROM app_kv_store WHERE key = %s AND updated_at > now() - interval '%s seconds'",
+                "SELECT value FROM app_kv_store WHERE key = %s AND updated_at > now() - make_interval(secs => %s)",
                 (key, self.ttl), fetch_one=True
             )
             if res:
@@ -1963,6 +2309,46 @@ class PlanState(TypedDict):
     # cambios futuros.
     _token_buffers: dict
 
+    # [P0-PIPE-1] Snapshot del MEJOR intento por severidad de rechazo.
+    # ------------------------------------------------------------
+    # Antes el orquestador entregaba SIEMPRE el plan del último intento al
+    # usuario, incluso cuando era CATASTRÓFICAMENTE peor que un intento
+    # previo. Caso real (incidente 2026-05-05):
+    #   - Intento #1: rechazo `minor` (pavo procesado, camarones repetidos)
+    #     — plan estructuralmente válido pero con observaciones no-críticas.
+    #   - Intento #2: rechazo `high` (3 días con skeleton fidelity rotos +
+    #     ingredientes que no aparecen en `ingredients_raw`) — plan inválido.
+    #   - `should_retry` retornaba "end" → END del grafo → arun retornaba
+    #     `final_state["plan_result"]` (intento #2 roto) al cliente.
+    #
+    # Ahora `review_plan_node` mantiene un snapshot del intento con MENOR
+    # severidad (rank: approved < minor < high < critical). Tras el grafo,
+    # `_swap_to_best_attempt_if_better` (en `arun_plan_pipeline`) compara
+    # current vs best y restaura el best si es mejor — ANTES de aplicar los
+    # guardrails de critical/transparency, para que el cliente reciba el
+    # plan de mayor calidad disponible.
+    #
+    # Costo en memoria: 1 deepcopy de plan_result (~50KB por intento).
+    # Despreciable comparado con el contexto LLM ya en memoria. La política
+    # "preservar el menos roto" es la red de seguridad que P0-1 transparency
+    # no provee (transparency solo MARCA el plan; aquí lo SUSTITUIMOS).
+    _best_attempt_plan: Optional[dict]
+    _best_attempt_severity: Optional[str]
+    _best_attempt_reasons: list
+    _best_attempt_review_passed: bool
+    _best_attempt_number: Optional[int]
+
+    # [P5-MARKER-APPROVED-1] Flag de re-entrada para `surgical_marker_regen_node`.
+    # Cuando el reviewer aprueba un plan que tiene `_critique_unresolved` markers
+    # en algún día (caso real 2026-05-05 03:54: Día 2 timeoutó la corrección de
+    # slot-coherence, reviewer aprobó porque su lente es médico, plan fue al
+    # usuario con repetición almuerzo↔cena sin resolver), `should_retry` enruta
+    # a `surgical_marker_regen_node` que re-corrige solo esos días con budget
+    # fresco. Este flag previene re-entrada infinita: una sola pasada por gate.
+    # Reseteado en `retry_reflection_node` para que cada attempt nuevo tenga
+    # su propia oportunidad de surgical regen.
+    _marker_regen_attempted: bool
+
 
 
 # ============================================================
@@ -1977,6 +2363,7 @@ from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel, PlanSkele
 from prompts.plan_generator import (
     GENERATOR_SYSTEM_PROMPT,
     build_nutrition_context,
+    build_minimal_correction_context,
     build_correction_context,
     build_unified_behavioral_profile,
     build_rag_context,
@@ -2010,10 +2397,25 @@ from prompts.day_generator import DAY_GENERATOR_SYSTEM_PROMPT, build_day_assignm
 # ============================================================
 
 def _flatten_ingredient(ing) -> str:
-    """Asegura que un ingrediente sea un string plano, incluso si el LLM devuelve una lista anidada."""
+    """Asegura que un ingrediente sea un string plano, incluso si el LLM devuelve una lista anidada.
+
+    [P6-HTML-ENTITY-FIX] Decodifica HTML entities (&oacute;→ó, &iacute;→í,
+    &eacute;→é, &ntilde;→ñ, etc.) para evitar items duplicados en aggregate.
+    Bug observable PDF 2026-05-05 21:02 ([775ce092]): el corrector LLM emitió
+    `'120g de mel&oacute;n'` en algunos días y `'100g de melón'` en otros →
+    aggregator los trató como ingredientes DIFERENTES → lista de compras
+    mostró 'Melón' Y 'Mel&oacute;n' como entradas separadas, igual para
+    'Orégano dominicano' y 'Yautía blanca' (rota la consolidación + display
+    al usuario muestra `Yaut&iacute;a blanca` literal).
+
+    `html.unescape` es idempotente (no rompe strings sin entities).
+    """
+    import html
     if isinstance(ing, list):
-        return " ".join(str(x) for x in ing)
-    return str(ing) if ing is not None else ""
+        s = " ".join(str(x) for x in ing)
+    else:
+        s = str(ing) if ing is not None else ""
+    return html.unescape(s)
 
 def _calculate_complexity_score(plan: dict) -> float:
     """Calcula la complejidad promedio del plan (1 a 10).
@@ -2211,6 +2613,36 @@ _PROGRESS_FLUSH_TRIGGERS = frozenset({
 })
 
 
+async def _drain_cancelled_progress_task(t) -> None:
+    """[P1-29] Drena una task de progreso cancelada por el cap blando.
+
+    `task.cancel()` solo SCHEDULES la cancelación (set un flag); la task
+    sigue ejecutando hasta su próximo checkpoint async. Si la task estaba
+    bloqueada en un callback colgado o en una operación I/O larga, sus
+    referencias internas (closures, ContextVars copiados, payload del
+    evento) permanecen vivas mientras la cancelación no se propaga
+    realmente.
+
+    Este drain `await t` con manejo de excepción asegura que:
+      - La task termina antes de que el drainer mismo complete.
+      - Excepciones (CancelledError o cualquier otra del cb) se silencian
+        — ya fueron contabilizadas por `_run_async_cb_safe` /
+        `_run_sync_cb_safe`.
+      - El GC del cb + payload ocurre prontamente, sin esperar al ciclo
+        completo del event loop.
+
+    Diseñado para fire-and-forget: el caller (`_register_progress_task`)
+    crea esta drain task pero NO la awaita — su único propósito es
+    asegurar que el `await t` ocurra en algún checkpoint próximo.
+    """
+    try:
+        await t
+    except BaseException:
+        # CancelledError, Exception del cb, o cualquier cosa: silenciar.
+        # `_run_*_cb_safe` ya registró failed_async/failed_sync.
+        pass
+
+
 def _register_progress_task(loop, task, kind: str) -> None:
     """P1-X2: registra una task de progreso en el sub-dict per-loop y aplica
     el cap blando (`_PROGRESS_CB_TASKS_MAX`).
@@ -2224,6 +2656,15 @@ def _register_progress_task(loop, task, kind: str) -> None:
     per-loop, no global) — ambas siguen funcionando porque el helper opera
     sobre `tasks_dict` que `_get_progress_cb_tasks_for_loop` resuelve para el
     loop activo.
+
+    [P1-29] Cuando el cap blando dispara y cancelamos tasks viejas,
+    schedularizamos un drainer (`_drain_cancelled_progress_task`) por cada
+    una. Sin esto, `task.cancel()` quedaba fire-and-forget: la task
+    cancelada sigue retenida hasta su próximo checkpoint async + el
+    procesamiento de la CancelledError. Si el cb estaba bloqueado en una
+    op larga, la memoria del payload + ContextVars copiados quedaba viva
+    minutos. El drainer fuerza el `await t` en un checkpoint próximo, así
+    el cleanup se materializa rápido.
     """
     tasks_dict = _get_progress_cb_tasks_for_loop(loop)
     tasks_dict[task] = None
@@ -2240,6 +2681,14 @@ def _register_progress_task(loop, task, kind: str) -> None:
         for old_t in oldest:
             old_t.cancel()
             tasks_dict.pop(old_t, None)
+            # [P1-29] Drainer fire-and-forget que `await old_t` para que la
+            # cancelación se propague y el GC libere refs prontamente.
+            try:
+                loop.create_task(_drain_cancelled_progress_task(old_t))
+            except RuntimeError:
+                # Loop cerrado: la cancelación quedará pendiente hasta GC.
+                # No es bloqueante para el resto del cap eviction.
+                pass
         # P1-NEW-4: registrar la pérdida en counters observables.
         _inc_cb_stat("dropped_cap", n_drop)
         if _should_log_cb_error(kind):
@@ -2383,6 +2832,55 @@ def _flush_token_buffer_for_day(state, day_key) -> bool:
         event="token",
     )
     return True
+
+
+def _flush_all_token_buffers(state) -> int:
+    """[P1-26] Flushea TODOS los token buffers pendientes en el estado.
+
+    Llamadores típicos:
+      - El except del global timeout en `arun_plan_pipeline`
+        (`asyncio.wait_for(run_graph(), timeout=GLOBAL_PIPELINE_TIMEOUT_S)`):
+        cuando el timeout dispara antes de que el último día complete su
+        finally, los buffers per-day SÍ flushean (asyncio cancellation
+        respeta finally), pero el buffer `_default` (eventos sin `day`
+        key — phase, metric, status emitidos desde nodos NO de
+        generate_days) no tiene un finally simétrico. Sin un flush
+        explícito al timeout, los tokens acumulados en `_default` se
+        pierden y la UI muestra texto cortado a mitad.
+
+      - Cualquier path graceful-degradation que entre al fallback antes
+        de un return ordenado.
+
+    Idempotente: si no hay buffers o todos están vacíos, devuelve 0.
+    Best-effort: una excepción del callback en un día no aborta el flush
+    de los otros días (prevenir que un callback roto bloquee la limpieza).
+
+    Returns:
+        int: cantidad de buffers que se flushearon con contenido.
+    """
+    if not isinstance(state, dict):
+        return 0
+    cb = state.get("progress_callback")
+    if not cb:
+        return 0
+    buffers = state.get("_token_buffers")
+    if not isinstance(buffers, dict) or not buffers:
+        return 0
+    flushed = 0
+    # `list(buffers.keys())` para no iterar el dict mientras se muta
+    # (el helper `_flush_token_buffer_for_day` modifica el text in-place
+    # pero NO añade/borra keys; aun así blindamos contra refactors futuros).
+    for day_key in list(buffers.keys()):
+        try:
+            if _flush_token_buffer_for_day(state, day_key):
+                flushed += 1
+        except Exception as _flush_err:
+            # Best-effort: log y continuar con los demás buffers.
+            logger.debug(
+                f"[P1-26] Flush de buffer day_key={day_key!r} falló: "
+                f"{_flush_err!r}. Continuando con los demás."
+            )
+    return flushed
 
 
 # P0-5: Throttling de logs de errores de callback. Un callback roto puede
@@ -2629,6 +3127,12 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         "prev_chunk_adherence_context": build_prev_chunk_adherence_context(prev_chunk_adherence),
         "weight_history_context": build_weight_history_context(weight_history),
         "nutrition_context": build_nutrition_context(nutrition),
+        # [P5-PROMPT-D] Versión mínima del bloque para el corrector
+        # (self_critique correction y surgical_marker_regen). Quita
+        # kinematics + adaptación evolutiva — el corrector solo necesita
+        # los targets duros para preservar balance. Reduce ~60-75% del
+        # bloque, traduce a ~20-30s menos por corrección bajo provider load.
+        "nutrition_context_minimal": build_minimal_correction_context(nutrition),
         "adherence_context": build_adherence_context(adherence_hint, meal_level_adherence, ignored_meal_types, abandoned_reasons, emotional_state, successful_tone_strategies, nudge_conversion_rates, frustrated_meal_types),
         "success_patterns_context": build_success_patterns_context(succ_techs, aban_techs, []),
         "temporal_adherence_context": build_temporal_adherence_context(form_data.get("day_of_week_adherence", {})),
@@ -2652,6 +3156,203 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         "taste_profile": taste_profile,
         "history_context": history_context,
     }
+
+
+# [P4-MODEL-1] Escalación dinámica a Pro para el day generator cuando el
+# intento previo falló por skeleton fidelity violation.
+# ------------------------------------------------------------
+# Patrón observado en producción (corridas 2026-05-05 múltiples):
+#   - Planner asigna proteínas distintas (ej. ['Atún', 'Lentejas', 'Huevos']).
+#   - Day generator (Flash) las IGNORA, pone pavo procesado o omite proteínas.
+#   - Medical reviewer rechaza con HIGH "Día N omitió proteínas asignadas".
+#   - Retry permitido por P1-RETRY-CLASSIFY → segundo intento con Flash.
+#   - Flash sigue inconsistente → segundo HIGH → P0-PIPE-1 swap al intento #1
+#     menos malo, pero el usuario sigue recibiendo plan con disclaimer.
+#
+# Análisis del trade-off:
+#   - Flash: ~30s/día, $0.075/M tokens input. Adherencia ~70%.
+#   - Pro: ~75s/día, $1.25/M tokens input. Adherencia ~95%.
+#   - Costo Pro = ~17× más por token; latencia ~2.5×.
+#
+# Política conservadora: escalar a Pro SOLO en retry SOLO cuando la causa
+# fue skeleton fidelity. Esto evita pagar Pro para retries por otras
+# razones (despensa, alergia, repetición proteína sin omisión asignada).
+# Knob default `True`; operador puede desactivar via env si quiere costo
+# mínimo a riesgo de más fallos cascading.
+#
+# Latencia retry esperada con Pro:
+#   3 días × (75s Pro − 35s Flash) = +120s vs retry todo en Flash.
+#   Pipeline budget 720s, intento #1 típicamente 230-300s, deja
+#   ~420-490s. Pro retry consume ~370s → margen de 50-120s. Tight pero OK.
+DAY_GEN_RETRY_USE_PRO = _env_bool("MEALFIT_DAY_GEN_RETRY_USE_PRO", True)
+_PRO_MODEL_NAME = "gemini-3.1-pro-preview"
+_FLASH_MODEL_NAME = "gemini-3-flash-preview"
+
+# [P6-EVALUATOR-USE-PRO] Knob para escalar EL EVALUATOR del self-critique a Pro,
+# manteniendo Flash en day_generators y corrector. El evaluator es UN solo call
+# (vs 3 paralelos en day_gen) y su decisión gate-quea las correcciones — si
+# omite un día (como en PDF 2026-05-05 19:13 donde dejó Día 2 sin mencionar),
+# todo el downstream pierde la chance de corregirlo.
+#
+# Trade-off: ~$0.001-0.003 extra/plan, +5-10s en self-critique, mejor cobertura
+# de incoherencias. Bajo riesgo, fácil de revertir con OFF.
+#
+# OFF por default mientras se valida en producción (cualquier change al evaluator
+# afecta todos los planes). Activar con `MEALFIT_EVALUATOR_USE_PRO=1`.
+EVALUATOR_USE_PRO = _env_bool("MEALFIT_EVALUATOR_USE_PRO", False)
+
+
+async def _attempt_pro_critique_correction(
+    correction_prompt: str,
+    day_num: int,
+    log_prefix: str = "[CRITIQUE/PRO-FALLBACK]",
+):
+    """[2026-05-06] Reintenta corrección con Gemini Pro tras fallo de Flash.
+
+    Llamado desde `_correct_single_day` (self_critique_node) y `_re_correct_one`
+    (P5 marker regen) cuando el corrector Flash hace timeout o devuelve None.
+    Pro es ~2x más lento pero más estable bajo prompts complejos. Solo se
+    invoca si `CRITIQUE_PRO_FALLBACK_ENABLED` está activo.
+
+    Returns
+    -------
+    tuple
+        `(corrected_day_dict | None, reason_str)` donde:
+          - corrected_day_dict: dict del día corregido (con `day=day_num`
+            inyectado) en éxito; None en cualquier fallo.
+          - reason_str: una de "fallback_disabled", "pro_cb_open",
+            "pro_success", "pro_returned_none", "pro_timeout",
+            "pro_error:<ExcName>".
+    """
+    if not CRITIQUE_PRO_FALLBACK_ENABLED:
+        return None, "fallback_disabled"
+    pro_cb = _get_circuit_breaker(_PRO_MODEL_NAME)
+    if not await pro_cb.acan_proceed():
+        print(
+            f"⚠️ {log_prefix} CB OPEN para {_PRO_MODEL_NAME}. "
+            f"Día {day_num} sin reintento Pro."
+        )
+        return None, "pro_cb_open"
+    try:
+        print(
+            f"🔄 {log_prefix} Día {day_num} reintentando con {_PRO_MODEL_NAME} "
+            f"(timeout={CRITIQUE_PRO_FALLBACK_TIMEOUT_S:.0f}s)..."
+        )
+        pro_corrector = ChatGoogleGenerativeAI(
+            model=_PRO_MODEL_NAME,
+            temperature=0.3,
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            max_retries=0,
+            timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
+        ).with_structured_output(SingleDayPlanModel)
+        result = await _safe_ainvoke(
+            pro_corrector,
+            correction_prompt,
+            timeout=CRITIQUE_PRO_FALLBACK_TIMEOUT_S,
+        )
+        if result:
+            await pro_cb.arecord_success()
+            corrected = result.model_dump()
+            corrected["day"] = day_num
+            print(
+                f"✅ {log_prefix} Día {day_num} corregido con {_PRO_MODEL_NAME}."
+            )
+            return corrected, "pro_success"
+        await pro_cb.arecord_failure()
+        print(
+            f"⚠️ {log_prefix} {_PRO_MODEL_NAME} retornó None para Día {day_num}. "
+            f"Manteniendo original."
+        )
+        return None, "pro_returned_none"
+    except asyncio.TimeoutError:
+        print(
+            f"⏱️ {log_prefix} {_PRO_MODEL_NAME} también timeout para Día {day_num} "
+            f"({CRITIQUE_PRO_FALLBACK_TIMEOUT_S:.0f}s)."
+        )
+        return None, "pro_timeout"
+    except Exception as e:
+        try:
+            await pro_cb.arecord_failure()
+        except Exception:
+            pass
+        print(
+            f"⚠️ {log_prefix} Error con {_PRO_MODEL_NAME} para Día {day_num}: "
+            f"{type(e).__name__}: {e}"
+        )
+        return None, f"pro_error:{type(e).__name__}"
+
+
+def _is_skeleton_fidelity_rejection(rejection_reasons) -> bool:
+    """[P4-MODEL-1 / P4-MODEL-2] Detecta si el rechazo previo es síntoma
+    de baja adherencia del LLM al skeleton del planner — caso donde
+    escalar a Pro en retry mejora outcomes (~25 puntos de adherencia).
+
+    P4-MODEL-1 (original) — skeleton fidelity literal:
+      - "Día N omitió múltiples proteínas clave asignadas: [...]"
+      - "skeleton fidelity"
+
+    P4-MODEL-2 (expansión) — síntomas de "model laziness" del mismo origen.
+    Cuando Flash no respeta el skeleton suele también:
+      - Repetir la misma proteína (toma el camino fácil) → "repetición excesiva"
+      - Colapsar variedad en el menú → "falta de variedad"
+    Ambos son señales correlacionadas con baja adherencia, no causas
+    independientes — en producción aparecen frecuentemente JUNTAS al
+    skeleton fidelity violation, y cuando aparecen solos suelen ser el
+    primer síntoma del mismo modo de fallo. Tratarlos también como trigger
+    de escalación a Pro evita el cascading donde Flash falla 2 retries
+    seguidos por la misma raíz (model laziness) sin que el clasificador
+    lo detecte por usar palabras distintas en cada review.
+
+    NOTA: rechazos ortogonales (despensa, alergia, gluten, recipe-ingredient
+    mismatch) NO entran aquí — esos no se arreglan con un modelo más
+    grande; se arreglan con prompt o con datos. Solo señales de adherencia.
+    """
+    if not rejection_reasons:
+        return False
+    text = " ".join(str(r).lower() for r in rejection_reasons)
+    return bool(
+        _re.search(
+            r'omiti[oó]\s+m[uú]ltiples\s+prote[ií]nas|'
+            r'skeleton\s+fidelity|'
+            r'omiti[oó]\s+prote[ií]nas\s+asignadas|'
+            r'repetici[oó]n\s+excesiva|'
+            r'falta\s+de\s+variedad',
+            text,
+        )
+    )
+
+
+def _route_model_for_day_generator(
+    form_data: dict,
+    attempt: int,
+    prev_rejection_reasons=None,
+) -> str:
+    """[P4-MODEL-1] Routing especializado para el day generator.
+
+    Reglas:
+      1. Attempt #1 o knob deshabilitado → routing default (`_route_model`).
+      2. Attempt > 1 + prev rejection con skeleton fidelity → escalar a Pro.
+      3. Attempt > 1 sin esa señal → routing default (Flash si easy, Pro
+         si clinical complex).
+
+    Esto cierra el cascading de falla observado en producción donde Flash
+    fallaba el skeleton 2 intentos seguidos. El swap de P0-PIPE-1
+    rescataba el menos malo, pero el usuario aún recibía disclaimer.
+    Pro en el retry específico mejora la adherencia ~25 puntos a costo
+    de ~$0.05 extra por plan (estimado por intento que escala).
+    """
+    if attempt <= 1 or not DAY_GEN_RETRY_USE_PRO:
+        return _route_model(form_data, attempt)
+
+    if _is_skeleton_fidelity_rejection(prev_rejection_reasons):
+        print(
+            f"🔀 [ROUTER P4] Day generator escalado a PRO ({_PRO_MODEL_NAME}) "
+            f"en retry attempt={attempt} por skeleton fidelity violation previa. "
+            f"Trade: ~+40s/día vs Flash, +25pts de adherencia esperada."
+        )
+        return _PRO_MODEL_NAME
+
+    return _route_model(form_data, attempt)
 
 
 def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) -> str:
@@ -3030,12 +3731,22 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     # P1-10: PLAN_CHUNK_SIZE a nivel módulo
     days_in_chunk = form_data.get("_days_to_generate", PLAN_CHUNK_SIZE) or PLAN_CHUNK_SIZE
     days_in_chunk = max(1, days_in_chunk) # [GAP 1 FIX] Validar >= 1
-    affected_days = state.get("_affected_days") or []
+    affected_days = list(state.get("_affected_days") or [])
+
+    # [P1-SURGICAL-1] Augmentar `affected_days` con días que arrastran un
+    # `_critique_unresolved` del intento previo. Helper extraído para
+    # testabilidad — ver docstring de `_augment_affected_days_with_critique_markers`.
+    if attempt > 1:
+        affected_days = _augment_affected_days_with_critique_markers(
+            affected_days,
+            state.get("plan_result", {}).get("days", []) if isinstance(state.get("plan_result"), dict) else [],
+        )
+
     surgical_mode = attempt > 1 and affected_days and len(affected_days) < len(skeleton_days[:days_in_chunk])
-    
+
     recycled_days_context = ""
     recycled_days_cache = {} # day_num -> recycled_day
-    
+
     if surgical_mode:
         print(f"🔪 [SURGICAL FIX] Reciclando días válidos. Regenerando SOLO los días afectados: {affected_days}")
         previous_days = state.get("plan_result", {}).get("days", [])
@@ -3105,7 +3816,15 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             f"{DAY_GENERATOR_SYSTEM_PROMPT}"
         )
 
-        day_model = _route_model(form_data, attempt)
+        # [P4-MODEL-1] Usar router especializado del day generator que
+        # escala a Pro en retry cuando el rechazo previo fue skeleton
+        # fidelity. Para attempt #1 o causas no-skeleton, routing default
+        # (Flash si easy, Pro si clinical complex).
+        day_model = _route_model_for_day_generator(
+            form_data,
+            attempt,
+            prev_rejection_reasons=state.get("rejection_reasons") or [],
+        )
         # P1-Q3: CB per-modelo. Cada día puede usar pro o flash según routing;
         # la salud de cada modelo se rastrea independientemente.
         _day_cb = _get_circuit_breaker(day_model)
@@ -3354,16 +4073,32 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 f"(hedge skipped por límite P0-D de concurrencia)"
             )
 
-        # 3. Hay slot disponible → reservar e inyectar hedge especulativo
+        # 3. Hay slot disponible → reservar e inyectar hedge especulativo.
+        #
+        # [P0-7] Increment + try/finally simétricos. ANTES, el increment
+        # vivía FUERA del `try` (separado por `print` + `create_task` +
+        # init de `racing`/`last_exc`). Si cualquiera de esas tres líneas
+        # lanzaba — `print` con codificador roto, `asyncio.create_task`
+        # con `RuntimeError: no running event loop` durante teardown,
+        # mismo `CancelledError` externa entrando mid-setup — el counter
+        # quedaba en +1 permanente porque el `finally` que decrementa
+        # nunca ejecutaba. Bajo carga sostenida con N pipelines concurrentes
+        # esto saturaba `HEDGE_MAX_CONCURRENT` para SIEMPRE, forzando que
+        # todos los días lentos esperaran al primary hasta `HARD_CEILING_S`
+        # sin posibilidad de hedge → degradación de p99 invisible.
+        # AHORA el increment es la PRIMERA línea protegida por el try, y el
+        # decremento se condiciona a que el increment haya completado
+        # exitosamente (defensa simétrica si list[0]+=1 fallara — no debe
+        # bajo GIL pero el contrato queda explícito).
         hedge_in_flight[0] += 1
-        print(f"🪁 [HEDGE] Día {day_num} lleva >{elapsed}s. Lanzando intento especulativo "
-              f"({hedge_in_flight[0]}/{HEDGE_MAX_CONCURRENT} hedges activos).")
-        hedge = asyncio.create_task(generate_single_day(skel_day, day_num, temp_override))
-
-        racing = {primary, hedge}
-        last_exc: Optional[Exception] = None
-
         try:
+            print(f"🪁 [HEDGE] Día {day_num} lleva >{elapsed}s. Lanzando intento especulativo "
+                  f"({hedge_in_flight[0]}/{HEDGE_MAX_CONCURRENT} hedges activos).")
+            hedge = asyncio.create_task(generate_single_day(skel_day, day_num, temp_override))
+
+            racing = {primary, hedge}
+            last_exc: Optional[Exception] = None
+
             while racing:
                 remaining = max(5.0, HARD_CEILING - (time.time() - day_start_time))
                 done, pending = await asyncio.wait(
@@ -3395,10 +4130,20 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
 
             raise last_exc or RuntimeError(f"Día {day_num}: ambos intentos fallaron sin excepción")
         finally:
-            # P0-D: liberar slot SIEMPRE (éxito, falla o cancelación) para que
-            # otros días puedan hedge. El finally se ejecuta antes de que
-            # cualquier excepción propague al caller.
+            # P0-D + P0-7: liberar slot SIEMPRE (éxito, falla o cancelación)
+            # para que otros días puedan hedge. El finally se ejecuta antes de
+            # que cualquier excepción propague al caller.
+            #
+            # Sanity log: si el counter quedara en negativo (imposible bajo el
+            # contrato actual, pero detectable si alguien introduce un decremento
+            # extra en el futuro), avisar al SRE en lugar de silenciarlo.
             hedge_in_flight[0] -= 1
+            if hedge_in_flight[0] < 0:
+                logger.error(
+                    "[HEDGE][INVARIANT] hedge_in_flight=%s tras decrement (esperado >= 0). "
+                    "Día %s. Decremento sin increment correspondiente — bug en flow.",
+                    hedge_in_flight[0], day_num,
+                )
 
     # Lanzar generaciones en paralelo (con hedging per-day)
     parallel_start = time.time()
@@ -4281,7 +5026,15 @@ def _count_staple_repetitions(days: list) -> dict:
 # Proteínas y carbohidratos principales para detectar overlap almuerzo/cena
 # del mismo día. Match por substring sobre nombre+ingredientes normalizados.
 _MAIN_PROTEIN_ALIASES = {
-    "pollo": ["pollo", "pechuga"],
+    # [P6-SLOT-CROSS-PROTEIN] 'pollo' ahora requiere "pollo" o "pechuga
+    # de pollo" explícito — antes "pechuga" solo creaba colisión con
+    # "pechuga de pavo" (ambos quedaban etiquetados 'pollo'), permitiendo
+    # que pavo pasara desapercibido en checks de duplicación.
+    "pollo": ["pollo", "pechuga de pollo", "filete de pollo"],
+    # [P6-SLOT-CROSS-PROTEIN] 'pavo' añadido. Antes faltaba, lo que dejaba
+    # cualquier repetición de pavo invisible al detector de slot incoherence.
+    # Caso real (Día Martes): pavo en desayuno + merienda no se flagaba.
+    "pavo": ["pavo", "pechuga de pavo", "carne de pavo", "pavo molido"],
     "cerdo": ["cerdo", "lomo de cerdo", "chuleta"],
     "res": ["res", "carne molida", "bistec"],
     "pescado": ["pescado", "tilapia", "salmon", "merluza", "mero", "dorado"],
@@ -4292,6 +5045,13 @@ _MAIN_PROTEIN_ALIASES = {
     "lentejas": ["lentejas"],
     "yogurt": ["yogurt", "yogur"],
 }
+
+# [P6-SLOT-CROSS-PROTEIN] Set de proteínas "pesadas" — carnes principales
+# que no deberían repetirse en >1 comida del mismo día. Light proteins
+# (huevo, claras, yogurt, gandules, habichuelas, lentejas) sí pueden
+# aparecer en múltiples slots (ej. huevo en desayuno + huevo duro snack)
+# sin ser problema.
+_HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun"}
 
 _MAIN_CARB_ALIASES = {
     "arroz": ["arroz"],
@@ -4368,6 +5128,37 @@ def _detect_slot_incoherence(days: list) -> list:
                     f"({', '.join(sorted(shared_carb))}). Cambia el carbo de la cena."
                 )
 
+        # [P6-SLOT-CROSS-PROTEIN] 1.5: Detectar HEAVY protein duplicada
+        # en >1 slot del día (no solo almuerzo+cena). Caso real (corrida
+        # Día Martes): pavo aparecía en desayuno (Revoltillo de Pavo) +
+        # merienda (Casabe con Pavo) — el check anterior solo veía
+        # almuerzo+cena, dejando esta repetición invisible. Skip si ya
+        # cubierto por el check #1 (ahorra mensaje duplicado).
+        protein_in_slots: dict = {}
+        for slot_name, meal in by_slot.items():
+            if not meal:
+                continue
+            for label in _detect_main_items(meal, _MAIN_PROTEIN_ALIASES):
+                if label not in _HEAVY_PROTEIN_LABELS:
+                    continue
+                protein_in_slots.setdefault(label, set()).add(slot_name)
+
+        for protein_label, slots_set in protein_in_slots.items():
+            if len(slots_set) < 2:
+                continue
+            # Skip duplicado: el check almuerzo+cena ya emitió mensaje
+            # específico para ese caso.
+            if slots_set == {"almuerzo", "cena"}:
+                continue
+            slot_list = sorted(slots_set)
+            issues.append(
+                f"Día {day_num}: la proteína '{protein_label}' aparece en "
+                f"{len(slots_set)} comidas ({', '.join(slot_list)}). "
+                f"Para mayor variedad de proteínas en el día, sustituye en "
+                f"una de ellas (ej. desayuno con huevo/queso/yogurt, "
+                f"merienda con yogurt+fruta o casabe+queso)."
+            )
+
         # 2. Merienda con técnica de plato fuerte
         snack = by_slot.get("merienda") or by_slot.get("snack")
         if snack:
@@ -4407,8 +5198,16 @@ async def self_critique_node(state: PlanState) -> dict:
     _emit_progress(state, "phase", {"phase": "critique", "message": "Evaluando atractivo y coherencia del plan..."})
     start_time = time.time()
 
-    # P1-Q3: capturar modelo del evaluator para CB per-modelo
-    _evaluator_model = _route_model(state.get("form_data", {}), force_fast=True)
+    # P1-Q3: capturar modelo del evaluator para CB per-modelo.
+    # [P6-EVALUATOR-USE-PRO] Si el knob está ON, el evaluator (decisor de qué
+    # días corregir) usa Pro en vez de Flash. Day generators y corrector siguen
+    # en Flash — solo escalamos el "juez", no los "ejecutores".
+    if EVALUATOR_USE_PRO:
+        _evaluator_model = _PRO_MODEL_NAME
+        print(f"🎓 [SELF-CRITIQUE] Evaluator escalado a PRO ({_PRO_MODEL_NAME}) "
+              f"vía MEALFIT_EVALUATOR_USE_PRO=1 (mejor cobertura de incoherencias).")
+    else:
+        _evaluator_model = _route_model(state.get("form_data", {}), force_fast=True)
     _evaluator_cb = _get_circuit_breaker(_evaluator_model)
     evaluator_llm = ChatGoogleGenerativeAI(
         model=_evaluator_model,
@@ -4518,10 +5317,13 @@ async def self_critique_node(state: PlanState) -> dict:
             raise Exception(f"Circuit Breaker OPEN para {_evaluator_model} - LLM cascade failure prevented")
         try:
             # P0-4: Hard timeout con cancelación graceful. Self-critique es
-            # opcional/quality-of-life; 30s es suficiente para una evaluación
-            # con structured output.
+            # opcional/quality-of-life; 30s es suficiente para Flash con
+            # structured output. [P6-EVALUATOR-USE-PRO] Pro tarda más en
+            # structured output (~20-40s) → bumpear a 60s cuando el knob está
+            # ON para no perder evaluaciones por timeout.
+            _eval_timeout = 60.0 if EVALUATOR_USE_PRO else 30.0
             critique: CritiqueEvaluation = await _safe_ainvoke(
-                evaluator_llm, prompt, timeout=30.0
+                evaluator_llm, prompt, timeout=_eval_timeout
             )
             await _evaluator_cb.arecord_success()  # P1-Q3
         except Exception as e:
@@ -4537,6 +5339,23 @@ async def self_critique_node(state: PlanState) -> dict:
             mentioned = list(dict.fromkeys(
                 int(d) for d in _re.findall(r'[Dd]ía\s*(\d+)', critique.suggestions)
             ))
+            # [P6-CRITIQUE-DAY-FLOOR] Las señales determinísticas (slot_issues,
+            # staple_repetitions) se calcularon ANTES del LLM y mencionan los
+            # días afectados con certeza. El LLM a veces omite días en su
+            # `suggestions` (corrida 2026-05-05 19:13: LLM mencionó solo
+            # [1, 3] aunque slot_issues listaba Día 2 con 'res' x3 → Día 2
+            # quedó sin corregir aunque cap dinámico=3 tenía capacidad).
+            # Fix: usar las señales determinísticas como FLOOR; el LLM puede
+            # añadir días, pero no puede dropear días con incoherencia conocida.
+            deterministic_days = list(dict.fromkeys(
+                int(d) for d in _re.findall(r'[Dd]ía\s*(\d+)', "\n".join(slot_issues or []))
+            ))
+            if deterministic_days:
+                missing = [d for d in deterministic_days if d not in mentioned]
+                if missing:
+                    print(f"🛟 [SELF-CRITIQUE] Días con incoherencia determinística no mencionados "
+                          f"por el LLM: {missing} → añadidos al floor de corrección.")
+                    mentioned = list(dict.fromkeys(mentioned + missing))
             if not mentioned:
                 mentioned = [1]  # Default: corregir día 1 si no se menciona ninguno
             critique_max_days = _compute_self_critique_max_days(state)
@@ -4560,13 +5379,41 @@ async def self_critique_node(state: PlanState) -> dict:
             _skeleton = state.get("plan_result", {}).get("_skeleton", {})
             _skeleton_days = _skeleton.get("days", [])
 
+            # [P1-SURGICAL-1] Helper para marcar días cuya corrección de
+            # self-critique no se completó (timeout / CB-skip / error / None
+            # result). El marcador `_critique_unresolved` viaja con el día en
+            # `partial["days"]` → `assemble_plan_node` → `state["plan_result"]`.
+            # Si `review_plan_node` no flagea estos días explícitamente (porque
+            # medical reviewer usa otro lente), el siguiente retry los REGENERA
+            # igualmente vía `plan_skeleton_node` que augmenta `affected_days`
+            # con los días marcados. Cierra el modo de fallo del incidente
+            # 2026-05-05 donde Día 2 con timeout de corrección fue reciclado y
+            # arrastró el problema (pollo en receta sin estar en ingredients).
+            _attempt_n_for_marker = state.get("attempt", 1)
+
+            def _mark_critique_unresolved(day_dict, reason: str, issue_text: str):
+                if not isinstance(day_dict, dict):
+                    return
+                day_dict["_critique_unresolved"] = {
+                    "reason": reason,
+                    "issue": issue_text,
+                    "attempt": _attempt_n_for_marker,
+                }
+
             async def _correct_single_day(day_num: int):
+                """Devuelve `(day_num, corrected_day_or_None, failure_reason_or_None)`.
+
+                `failure_reason` codifica el modo de fallo para que el caller
+                (P4-TIMEOUT-2 circuit breaker) pueda contar timeouts y abortar
+                tareas pendientes antes de quemar wall-clock en cascada.
+                """
                 target_day = next((d for d in days if d.get("day") == day_num), None)
                 if not target_day:
-                    return day_num, None
+                    return day_num, None, "no_target"
                 if not await _corrector_cb.acan_proceed():  # P1-Q3
                     print(f"⚠️ [SELF-CRITIQUE] Circuit Breaker OPEN ({_corrector_model}). Saltando corrección Día {day_num}.")
-                    return day_num, None
+                    _mark_critique_unresolved(target_day, "cb_open", critique.suggestions or "")
+                    return day_num, None, "cb_open"
                 try:
                     print(f"🔧 [SELF-CRITIQUE] Corrigiendo Día {day_num}...")
 
@@ -4577,13 +5424,38 @@ async def self_critique_node(state: PlanState) -> dict:
                         from prompts.day_generator import build_day_assignment_context
                         skeleton_block = f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n{build_day_assignment_context(skeleton_day, day_num)}"
 
+                    # [P5-PROMPT-D] Usa `nutrition_context_minimal` en vez del
+                    # full context — el corrector solo necesita targets duros,
+                    # no kinematics/adaptación. Reduce tokens ~30%, traduce a
+                    # ~20-30s menos bajo provider load (caso real Día 3 04:14
+                    # tomó 143s contra cap 150s — sin margen).
+                    #
+                    # [P6-CRITIQUE-VS-SKELETON] Regla de precedencia añadida
+                    # explícitamente. Caso real corrida 14:53: critique pidió
+                    # "cambiar proteína de cena (pavo) por res/pescado" para
+                    # resolver slot violation almuerzo↔cena. Corrector obedeció
+                    # → removió pavo → skeleton fidelity validator rechazó HIGH
+                    # ("Día 3 omitió pavo asignado"). Loop sin salida: 2/2
+                    # attempts fallaron idéntico, plan tolerado entregado con
+                    # violación. La regla explícita instruye al LLM: skeleton
+                    # GANA, resolver slot por OTRO medio (cambiar carbo,
+                    # técnica, vegetal — NUNCA la proteína asignada).
                     correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
 
 PROBLEMA DETECTADO: {critique.suggestions}
 
 RESTRICCIONES NUTRICIONALES (respétalas siempre):
-{ctx['nutrition_context']}
+{ctx['nutrition_context_minimal']}
 {skeleton_block}
+REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
+- La ASIGNACIÓN DEL PLANIFICADOR es HARD CONSTRAINT — NUNCA la violes aunque el critique pida cambiar una proteína/carbohidrato asignado.
+- Si el critique sugiere cambiar la proteína de almuerzo o cena (slot coherence violation), pero esa proteína FUE ASIGNADA por el planificador para este día, MANTÉN la proteína y resuelve la coherencia de slot por OTRO medio:
+  • Cambia el CARBOHIDRATO de la cena (yuca→batata, arroz→ñame, papas→casabe).
+  • Cambia la TÉCNICA de cocción (a la plancha→guisada→al horno→ceviche).
+  • Cambia el VEGETAL/acompañamiento (ensalada→sopa, fresca→cocida).
+  • Cambia la PRESENTACIÓN (bowl→wrap, plato→pita).
+- Solo si NINGUNA proteína está duplicada en el skeleton (ej. skeleton dice "pavo" Y "queso") puedes alternarlas entre slots.
+
 REGLA BIDIRECCIONAL CRÍTICA:
 - Todo ingrediente en `ingredients` DEBE aparecer nombrado en la receta (Mise en place, El Toque de Fuego o Montaje).
 - Todo alimento nombrado en la receta DEBE estar en `ingredients`.
@@ -4611,21 +5483,141 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                         corrected_day = corrected_result.model_dump()
                         corrected_day["day"] = day_num
                         print(f"✅ [SELF-CRITIQUE] Día {day_num} corregido exitosamente.")
-                        return day_num, corrected_day
+                        # [P1-SURGICAL-1] Corrección exitosa → el day NUEVO
+                        # (`corrected_day`) reemplaza al anterior en `days[i]`
+                        # (line ~5054), así que cualquier marcador previo en
+                        # `target_day` queda descartado naturalmente.
+                        return day_num, corrected_day, None
+                    # `corrected_result` None: LLM retornó respuesta no-parseable
+                    # tras `_safe_ainvoke`. No es timeout ni excepción, pero el
+                    # día sigue sin corrección — mismo modo de fallo.
+                    print(f"⚠️ [SELF-CRITIQUE] Día {day_num}: corrector LLM retornó None. Manteniendo original.")
+                    _mark_critique_unresolved(target_day, "llm_returned_none", critique.suggestions or "")
+                    return day_num, None, "llm_returned_none"
                 except asyncio.TimeoutError:
-                    print(f"⏱️ [SELF-CRITIQUE] Timeout corrigiendo Día {day_num} ({CRITIQUE_FIX_TIMEOUT_S:.0f}s). Manteniendo original.")
+                    # [P6-TIMEOUT-DIAG] Log diagnóstico del prompt y target_day
+                    # cuando un día timeoutea para detectar patrones (ej. Día 2
+                    # consistentemente más lento por densidad de ingredientes,
+                    # sugerencias verbosas, etc.). Tamaño en chars: el LLM
+                    # latency correlaciona con input tokens.
+                    _prompt_chars = len(correction_prompt)
+                    _target_chars = len(json.dumps(target_day, ensure_ascii=False))
+                    _suggestion_chars = len(critique.suggestions or "")
+                    _ingredients_count = sum(
+                        len(m.get("ingredients", [])) for m in target_day.get("meals", [])
+                    )
+                    print(
+                        f"⏱️ [SELF-CRITIQUE] Timeout corrigiendo Día {day_num} "
+                        f"({CRITIQUE_FIX_TIMEOUT_S:.0f}s) con {_corrector_model}."
+                    )
+                    print(
+                        f"📐 [P6-TIMEOUT-DIAG] Día {day_num} sizes: "
+                        f"prompt={_prompt_chars}c, target_day={_target_chars}c, "
+                        f"suggestion={_suggestion_chars}c, "
+                        f"ingredients={_ingredients_count}"
+                    )
+                    pro_corrected, pro_reason = await _attempt_pro_critique_correction(
+                        correction_prompt, day_num,
+                        log_prefix="[SELF-CRITIQUE/PRO-FALLBACK]",
+                    )
+                    if pro_corrected:
+                        return day_num, pro_corrected, None
+                    _mark_critique_unresolved(
+                        target_day, f"timeout+{pro_reason}", critique.suggestions or ""
+                    )
+                    return day_num, None, "timeout"
                 except Exception as e:
                     await _corrector_cb.arecord_failure()  # P1-Q3
                     print(f"⚠️ [SELF-CRITIQUE] Error corrigiendo Día {day_num}: {e}. Manteniendo original.")
-                return day_num, None
+                    _mark_critique_unresolved(target_day, f"error:{type(e).__name__}", critique.suggestions or "")
+                    return day_num, None, f"error:{type(e).__name__}"
 
             days_to_fix = mentioned[:critique_max_days]
-            correction_results = await asyncio.gather(
-                *[_correct_single_day(d) for d in days_to_fix]
-            )
+
+            # ============================================================
+            # [P4-TIMEOUT-2] Circuit breaker en self-critique correction
+            # ------------------------------------------------------------
+            # Antes: `asyncio.gather(*[_correct_single_day(d) ...])` esperaba
+            # a TODAS las correcciones aunque el provider estuviera saturado.
+            # En cascade-failure (Gemini overload) los 3 días timeoutean en
+            # paralelo a 120s — 0 días corregidos por el costo de 1 timeout
+            # de wall-clock.
+            #
+            # Ahora: scheduling con `asyncio.wait(FIRST_COMPLETED)`. Cuando
+            # acumulamos `CRITIQUE_TIMEOUT_ABORT_THRESHOLD` timeouts, cancelamos
+            # las tareas pendientes — su día queda con marker `_critique_unresolved`
+            # ("cb_aborted_provider_overload") y P1-SURGICAL-1 lo regenera en retry.
+            #
+            # Sigue costando 1 ciclo de timeout en el peor caso (los timeouts
+            # son simultáneos), pero evita el escenario donde 1 día corregido
+            # válido quedaría enmascarado por 2 timeouts paralelos. La única
+            # asimetría es: si threshold=2 y al primer timeout aún hay 1 task
+            # pendiente, esperamos su resultado antes de evaluar (puede ser
+            # éxito y entonces no abortamos).
+            # ============================================================
+            tasks_by_day: dict = {}
+            for d in days_to_fix:
+                tasks_by_day[asyncio.ensure_future(_correct_single_day(d))] = d
+
+            correction_results: list = []
+            timeout_count = 0
+            aborted_pending = False
+            pending = set(tasks_by_day.keys())
+
+            while pending:
+                done, pending = await asyncio.wait(
+                    pending, return_when=asyncio.FIRST_COMPLETED
+                )
+                for finished in done:
+                    try:
+                        result = await finished
+                    except Exception as e:
+                        # Defensa: `_correct_single_day` ya captura todo y
+                        # devuelve tuple. Si por bug futuro escapa una excepción,
+                        # la tratamos como fallo del día asociado.
+                        day_num = tasks_by_day[finished]
+                        print(f"⚠️ [SELF-CRITIQUE] Excepción no esperada en task del Día {day_num}: {e}")
+                        result = (day_num, None, f"unhandled:{type(e).__name__}")
+                    correction_results.append(result)
+                    _, _, fail_reason = result
+                    if fail_reason == "timeout":
+                        timeout_count += 1
+
+                if (
+                    timeout_count >= CRITIQUE_TIMEOUT_ABORT_THRESHOLD
+                    and pending
+                    and not aborted_pending
+                ):
+                    aborted_count = len(pending)
+                    print(
+                        f"⚡ [SELF-CRITIQUE/CB] {timeout_count} timeouts detectados "
+                        f"(threshold={CRITIQUE_TIMEOUT_ABORT_THRESHOLD}) → abortando "
+                        f"{aborted_count} task(s) pendiente(s) (provider overload pattern)."
+                    )
+                    aborted_pending = True
+                    for p in pending:
+                        p.cancel()
+                        aborted_day = tasks_by_day[p]
+                        target_day = next(
+                            (d for d in days if d.get("day") == aborted_day), None
+                        )
+                        if target_day is not None:
+                            _mark_critique_unresolved(
+                                target_day,
+                                "cb_aborted_provider_overload",
+                                critique.suggestions or "",
+                            )
+                        correction_results.append(
+                            (aborted_day, None, "cb_aborted_provider_overload")
+                        )
+                    # Drenar las tasks canceladas para no dejar warnings de
+                    # "Task was destroyed but it is pending".
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
+                    pending = set()
 
             corrected_any = False
-            for day_num, corrected_day in correction_results:
+            for day_num, corrected_day, _fail_reason in correction_results:
                 if corrected_day is not None:
                     for i, d in enumerate(days):
                         if d.get("day") == day_num:
@@ -4668,6 +5660,225 @@ class ParsedIngredient(BaseModel):
 
 class BatchParsedIngredients(BaseModel):
     parsed_ingredients: list[ParsedIngredient] = Field(description="Lista de ingredientes parseados")
+
+
+# [P0-6] Helper compartido para las validaciones críticas post-assembly que
+# DEBEN ejecutarse SIEMPRE, independiente de si el plan vino del cache
+# semántico (`semantic_cache_hit=True`) o del path LLM normal.
+#
+# El audit P0-6 identificó el riesgo de divergencia: en cache-hit, `skeleton`
+# es `{}` (los días vienen completos del cache, no hay skeleton intermedio),
+# y un futuro refactor que agregue una validación entre la rama if/else y
+# este punto podría olvidar aplicarla a cache-hit. Centralizar las 3
+# validaciones (skeleton fidelity, recipe coherence, schema validation)
+# en un único helper hace el contrato explícito y testeable en aislamiento.
+#
+# Reglas:
+#   1. Skeleton Fidelity — solo aplica si hay skeleton (path LLM). Para
+#      cache-hit es trivial-pass: el plan cacheado ya pasó la validación
+#      cuando se generó originalmente.
+#   2. Recipe Coherence — aplica SIEMPRE: detecta inconsistencias receta↔
+#      ingredientes en cache-hit (humanización corrompiendo, schema viejo).
+#   3. Schema Validation `PlanModel` — aplica SIEMPRE: si el plan cacheado
+#      tiene shape vieja (campo renombrado, schema bumped sin invalidar
+#      entradas en vuelo, validación nueva añadida después), `_schema_invalid`
+#      se setea y `review_plan_node` lo eleva a critical → guardrail entrega
+#      fallback matemático.
+def _run_assembly_validations(
+    result: dict,
+    skeleton: dict,
+    affected_days_set: set,
+) -> None:
+    """Ejecuta las validaciones post-assembly y mutará `result` con las
+    keys `_skeleton_fidelity_errors`, `_recipe_coherence_errors`,
+    `_schema_invalid`, `_schema_errors` cuando aplique.
+
+    Diseñado para ejecutarse SIEMPRE — tanto en cache-hit como en path LLM.
+    """
+    import re as _re
+
+    # 1. Skeleton Fidelity (Brecha 1) — trivial-pass cuando skeleton={}.
+    skeleton_fidelity_errors = []
+    skeleton_days = (skeleton or {}).get("days", [])
+    for i, day in enumerate(result.get("days", [])):
+        day_num = day.get("day", i + 1)
+        if affected_days_set and day_num not in affected_days_set:
+            continue
+        skeleton_day = next((s for s in skeleton_days if s.get("day") == day_num), {})
+        assigned_proteins = [_flatten_ingredient(p).lower() for p in skeleton_day.get("protein_pool", [])]
+        if not assigned_proteins:
+            continue  # cache-hit u skeleton vacío → nada que validar
+        day_ingredients_text = " ".join(
+            _flatten_ingredient(ing).lower() for meal in day.get("meals", [])
+            for ing in meal.get("ingredients", [])
+        )
+        missing_proteins = [p for p in assigned_proteins if p not in day_ingredients_text]
+        if len(missing_proteins) >= 2:
+            msg = f"Día {day_num} omitió múltiples proteínas clave asignadas: {missing_proteins}"
+            print(f"⚠️ [SKELETON FIDELITY] {msg}")
+            skeleton_fidelity_errors.append(msg)
+    if skeleton_fidelity_errors:
+        result["_skeleton_fidelity_errors"] = skeleton_fidelity_errors
+
+    # 2. Recipe Coherence (Brechas 3 y 4) — aplica SIEMPRE.
+    # ------------------------------------------------------------
+    # Estructura: `{ KEY_GENERICA: [SINONIMOS_PERMITIDOS_EN_INGREDIENTES] }`
+    # - KEY = palabra que el LLM puede escribir GENÉRICAMENTE en el texto
+    #   de la receta ("La receta indica `pescado`...").
+    # - VALUES = todos los nombres específicos que pueden aparecer en
+    #   `ingredients` y SATISFACEN el match (incluyendo el KEY mismo).
+    #
+    # Si recipe.text contiene el KEY pero ingredients NO contienen ningún
+    # synonym → flag como `_recipe_coherence_errors` → review_plan_node
+    # eleva a HIGH severity → retry forzado (o entrega del best previo
+    # vía P0-PIPE-1).
+    #
+    # [P2-COH-1] Fish list expandida: merluza, róbalo, pargo, corvina,
+    # mahi-mahi, lubina, carite, jurel — todos comunes en plan dominicano.
+    # Sin estos, recetas como "Merluza Estofada Boca Chica" cuyo texto
+    # decía "el pescado" disparaban falso positivo HIGH y rechazaban planes
+    # válidos (incidente 2026-05-05).
+    #
+    # Nota: constants.PROTEIN_SYNONYMS tiene el mapa canónico para
+    # categorización de ingredients (consumido por fact_extractor,
+    # ai_helpers, agent). Este mapa LOCAL es complementario — incluye
+    # singulares ("huevo", "camarón") porque el LLM frecuentemente los
+    # escribe en singular en el texto de receta, mientras el mapa canónico
+    # solo tiene plurales para evitar pollution con el reverse-map global.
+    # Mantener AMBOS sincronizados al añadir nuevos sinónimos comunes.
+    recipe_coherence_errors = []
+    protein_synonyms = {
+        "pescado": [
+            "pescado", "pescados",
+            # Fish específicos comunes en RD/Caribbean
+            "chillo", "dorado", "mero", "salmón", "salmon", "tilapia",
+            "bacalao", "atún", "atun", "sardina", "sardinas",
+            # [P2-COH-1] Adiciones del incidente 2026-05-05
+            "merluza", "róbalo", "robalo", "pargo", "corvina",
+            "mahi-mahi", "mahi mahi", "mahimahi", "lubina",
+            "carite", "jurel", "lambí", "lambi",
+            # Filete genérico + composiciones
+            "filete de pescado", "filete de mero", "filete de tilapia",
+            "filete de chillo", "filete de dorado", "filete de bacalao",
+            "filete de merluza", "filete de salmón", "filete de salmon",
+        ],
+        "pollo": [
+            "pollo", "pechuga", "muslo", "muslos", "alitas", "alas",
+            # Cortes / preparaciones comunes
+            "encuentros", "cuartos", "pernil de pollo", "filete de pollo",
+            "chicharrón de pollo", "chicharron de pollo",
+        ],
+        "res": [
+            "res", "carne", "filete", "sirloin", "churrasco", "molida",
+            # Cortes dominicanos comunes
+            "carne de res", "carne molida", "lomo", "vacío", "vacio",
+            "puyazo", "asado", "picadillo", "ropa vieja", "falda",
+            "bistec", "bisteck",
+        ],
+        "cerdo": [
+            "cerdo", "chuleta", "chuletas", "lomo", "masita",
+            # [P2-COH-1] Cortes faltantes
+            "costilla", "costillas", "pernil", "pernil de cerdo",
+            "tocino", "chicharrón", "chicharron",
+        ],
+        "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas",
+                  "tortilla", "revoltillo"],
+        "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas",
+                   "tortilla", "revoltillo"],
+        "pavo": [
+            "pavo", "pechuga de pavo", "jamón de pavo", "jamon de pavo",
+            # [P2-COH-1] LLM también escribe estas variantes
+            "pavo molido", "carne de pavo", "pavo asado", "pavo desmenuzado",
+        ],
+        "camarón": [
+            "camarón", "camarones", "camaron",
+            # [P2-COH-1] Variantes comerciales
+            "gambas", "langostinos",
+        ],
+        "camarones": [
+            "camarón", "camarones", "camaron",
+            "gambas", "langostinos",
+        ],
+    }
+    stopwords = RECIPE_INGREDIENT_STOPWORDS
+    for day in result.get("days", []):
+        for meal in day.get("meals", []):
+            ingredients = [_flatten_ingredient(i).lower() for i in meal.get("ingredients", [])]
+            recipe = meal.get("recipe", "")
+            if isinstance(recipe, list):
+                recipe = " ".join(recipe)
+            recipe = recipe.lower()
+            for cp, synonyms in protein_synonyms.items():
+                pattern = r'\b' + _re.escape(cp) + r'\b'
+                if _re.search(pattern, recipe):
+                    if not any(any(_re.search(r'\b' + _re.escape(syn) + r'\b', ing) for syn in synonyms) for ing in ingredients):
+                        msg = f"Día {day.get('day')}, {meal.get('name')}: La receta indica '{cp}' pero no hay ningún ingrediente equivalente (ej. {', '.join(synonyms[:3])}) listado."
+                        recipe_coherence_errors.append(msg)
+            completion_pattern = r'\b(sirve|servir|montaje|monta|emplata|emplatar|empaca|empacar|disfruta|disfrutar|agrega)\b'
+            if not _re.search(completion_pattern, recipe):
+                msg = f"Día {day.get('day')}, {meal.get('name')}: La receta parece incompleta, falta un paso final (ej: 'Servir', 'Montaje' o 'Empacar')."
+                recipe_coherence_errors.append(msg)
+            for ing in ingredients:
+                clean_ing = _re.sub(r'[\d\.,\(\)/\-]', ' ', ing)
+                words = [w.strip() for w in clean_ing.split() if w.strip() and len(w.strip()) > 2]
+                core_nouns = [w for w in words if w not in stopwords]
+                if not core_nouns:
+                    continue
+                # [P6-AUTO-PATCH-1] Antes: solo `core_nouns[0]` se chequeaba
+                # contra la receta. Para ingredientes multi-palabra como
+                # "lomo de cerdo", "queso mozzarella fresco", "ensalada de
+                # tomate y cebolla", esto producía falso positivo cuando la
+                # receta usaba el segundo o tercer núcleo (ej. recipe dice
+                # "el cerdo" pero no "el lomo").
+                #
+                # El falso positivo cascadeaba: emitía error "ingrediente
+                # principal 'lomo' está listado pero no se menciona" →
+                # `_auto_patch_ingredient_coherence` removía CUALQUIER
+                # ingrediente con substring 'lomo' → "lomo de cerdo"
+                # eliminado → re-review forward-check fallaba "recipe dice
+                # 'cerdo' pero no hay ingrediente equivalente".
+                # Caso real corrida 2026-05-05 13:12 — Día 1 Cerdo en
+                # Salsa Criolla terminó rechazado por minor en Día 1
+                # (ortogonal al surgical regen en Días 2/3) → P0-PIPE-1
+                # rolled back todo el surgical fix de P5.
+                #
+                # Ahora chequeamos TODOS los core_nouns. Si AL MENOS UNO
+                # aparece en la receta, el ingrediente está "usado". Solo
+                # flageamos si NINGUNO se menciona.
+                any_mentioned = False
+                for cn in core_nouns:
+                    if len(cn) < 4:
+                        continue
+                    prefix = cn[:min(5, len(cn))]
+                    permissive_pattern = r'\b' + _re.escape(prefix) + r'[a-z]*\b'
+                    if _re.search(permissive_pattern, recipe):
+                        any_mentioned = True
+                        break
+                if not any_mentioned:
+                    # Mensaje conserva el primer core_noun de tamaño ≥4
+                    # (más identificativo); fallback a core_nouns[0] si
+                    # ninguno alcanza el threshold.
+                    err_noun = next(
+                        (cn for cn in core_nouns if len(cn) >= 4),
+                        core_nouns[0],
+                    )
+                    msg = f"Día {day.get('day')}, {meal.get('name')}: El ingrediente principal '{err_noun}' está listado pero no se menciona en las instrucciones de la receta."
+                    recipe_coherence_errors.append(msg)
+    if recipe_coherence_errors:
+        result["_recipe_coherence_errors"] = list(set(recipe_coherence_errors))
+
+    # 3. Schema Validation contra PlanModel — aplica SIEMPRE.
+    # Un plan cacheado con shape vieja (campo renombrado, validación nueva
+    # añadida después) cae aquí. `review_plan_node` luego eleva a critical
+    # vía la cláusula `if plan.get("_schema_invalid")`.
+    try:
+        PlanModel(**result)
+    except Exception as e:
+        err_msg = str(e)[:500]
+        print(f"🚨 [ASSEMBLY VALIDATION] Plan corrupto post-assembly detectado: {err_msg}")
+        result["_schema_invalid"] = True
+        result["_schema_errors"] = err_msg
+
 
 async def assemble_plan_node(state: PlanState) -> dict:
     """Ensambla el plan final combinando skeleton + días paralelos + datos del calculador, o re-ensambla un plan en caché."""
@@ -4788,6 +5999,73 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 f"💊 [SUPPLEMENTS] Eliminados {_stripped_supps} en campo supplements + "
                 f"{_stripped_ings} colados en ingredients (includeSupplements=false)."
             )
+
+    # [EGG-WHITE-CAP] Cap programático de claras de huevo por meal y por día.
+    # El planner las usa como proteína fácil sin límite (visto 2026-05-06: 16
+    # claras en una cena → revisor médico rechazó CRÍTICO por avidina/estrés
+    # renal, usuario quedaba en bucle). Aquí parseamos cada ingredient string
+    # tipo "11 claras de huevo" / "5 claras", recortamos a MAX_PER_MEAL y
+    # luego sumamos por día y recortamos a MAX_PER_DAY (raspando el último
+    # meal con claras del día).
+    # NOTA: usamos `_re` (alias módulo, línea 1013), no `re`. Esta función
+    # tiene `import re` local más abajo (línea ~6329 en consolidación), lo
+    # que convierte `re` en variable local en toda la función — referenciar
+    # `re` aquí, antes de ese import, lanza UnboundLocalError.
+    _egg_white_pattern = _re.compile(r'^\s*(\d+(?:[.,]\d+)?)\s+(claras?\b.*)', _re.IGNORECASE)
+
+    def _parse_eggw_count(_ing_str):
+        m = _egg_white_pattern.match(str(_ing_str))
+        if not m:
+            return None, None
+        try:
+            n = float(m.group(1).replace(',', '.'))
+        except (TypeError, ValueError):
+            return None, None
+        return n, m.group(2)
+
+    _capped_per_meal = 0
+    _capped_per_day = 0
+    for _d in result.get("days") or []:
+        _day_total = 0.0
+        _day_meals_with_eggw = []
+        for _m in _d.get("meals") or []:
+            _ings = _m.get("ingredients") or []
+            for _idx, _ing in enumerate(_ings):
+                _count, _rest = _parse_eggw_count(_ing)
+                if _count is None:
+                    continue
+                _new_count = _count
+                if _new_count > MAX_EGG_WHITES_PER_MEAL:
+                    _new_count = float(MAX_EGG_WHITES_PER_MEAL)
+                    _capped_per_meal += 1
+                if _new_count != _count:
+                    _ings[_idx] = f"{int(_new_count) if _new_count.is_integer() else _new_count} {_rest}"
+                _day_total += _new_count
+                _day_meals_with_eggw.append((_m, _idx, _new_count, _rest))
+            _m["ingredients"] = _ings
+        # Cap por día: raspar de los últimos meals con claras hasta cumplir el cap.
+        while _day_total > MAX_EGG_WHITES_PER_DAY and _day_meals_with_eggw:
+            _meal_ref, _ing_idx, _cur_count, _rest = _day_meals_with_eggw.pop()
+            _excess = _day_total - MAX_EGG_WHITES_PER_DAY
+            _reduced = max(0.0, _cur_count - _excess)
+            if _reduced <= 0:
+                # Eliminar el ingrediente entero
+                _meal_ref["ingredients"][_ing_idx] = ""
+            else:
+                _meal_ref["ingredients"][_ing_idx] = (
+                    f"{int(_reduced) if _reduced.is_integer() else _reduced} {_rest}"
+                )
+            _day_total -= (_cur_count - _reduced)
+            _capped_per_day += 1
+        # Limpiar ingredients vacíos que pudimos haber dejado al recortar.
+        for _m in _d.get("meals") or []:
+            _m["ingredients"] = [i for i in (_m.get("ingredients") or []) if str(i).strip()]
+    if _capped_per_meal or _capped_per_day:
+        print(
+            f"🥚 [EGG-WHITE-CAP] {_capped_per_meal} meal(s) con >{MAX_EGG_WHITES_PER_MEAL} "
+            f"claras recortado(s); {_capped_per_day} ajuste(s) por cap diario "
+            f"({MAX_EGG_WHITES_PER_DAY}/día)."
+        )
 
     # Renumerar días y asignar day_name obligatoriamente (para parchar planes del semantic_cache)
     days_offset = form_data.get("_days_offset", 0)
@@ -5073,6 +6351,73 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     smallest_meal["fats"] = max(0, int(smallest_meal.get("fats", 0) * scale_up))
 
 
+    # [P1-30] Final macro coherence pass: recomputar `meal["cals"]` desde
+    # canonical `4*P + 4*C + 9*F` cuando deriva del valor displayado tras
+    # las 3 fases de balancing previas.
+    #
+    # Por qué: las secciones 1, 1.5 y 1.6 modifican `cals` y los macros
+    # individuales con operaciones que NO preservan la invariante
+    # `cals == 4*P + 4*C + 9*F`:
+    #   - Sección 1 ajusta `cals += adjustment` (full kcal) pero solo
+    #     splitea el `adjustment` en carbs (60%) + fats (40%) — protein
+    #     queda intacto. Más: el `int()` en `carb_delta = int(adj/4)` y
+    #     `fat_delta = int(adj/9)` introduce drift por truncación. Bajo
+    #     condiciones de borde (carbs/fats bajos), `max(0, ...)` clampa el
+    #     decremento real a menos del esperado, dejando `cals` aún más
+    #     desincrónico.
+    #   - Sección 1.5 escala uniformemente cals + macros por scale_factor
+    #     pero usa `int()` por field, introduciendo drift incremental.
+    #   - Sección 1.6 transfiere kcal entre meals con scale_up/down per-
+    #     macro, también con `int()` rounding.
+    #
+    # Resultado pre-fix: la UI mostraba "Almuerzo: 500 kcal | 40g P / 35g
+    # C / 20g F" — pero 4*40 + 4*35 + 9*20 = 480, no 500. Una desviación
+    # de N kcal repetida 3-4 veces/día acumula 60-80 kcal/día → ~600
+    # kcal/semana de desfase entre macros y kcal mostrados, alimentando
+    # quejas de usuarios sobre adherencia y disparando flags "macros no
+    # coinciden con cals" en revisor médico.
+    #
+    # Fix: tras los 3 balancing phases, recomputar cals desde macros
+    # SI la deriva supera 5% (tolerancia para variabilidad genuina del
+    # LLM — agua de cocción, mezclas, etc.). Si está dentro del 5%, el
+    # valor original del LLM se preserva (puede capturar nutrientes
+    # sutiles fuera del 4-4-9). Si excede, sustituimos por el valor
+    # canónico — los macros mostrados son la fuente de verdad.
+    if _balancing_safe:
+        _p130_recomputed = 0
+        for day in days:
+            for meal in day.get("meals", []):
+                try:
+                    p = max(0, int(meal.get("protein", 0) or 0))
+                    c = max(0, int(meal.get("carbs", 0) or 0))
+                    f = max(0, int(meal.get("fats", 0) or 0))
+                except (TypeError, ValueError):
+                    # Macros corruptos (strings no numéricos, etc.):
+                    # saltar, no podemos derivar coherencia.
+                    continue
+                macro_kcal = 4 * p + 4 * c + 9 * f
+                if macro_kcal == 0:
+                    # Sin señal de macros (todos 0): conservar cals
+                    # original del LLM, no podemos sobre-restar a 0.
+                    continue
+                current_cals = meal.get("cals", 0)
+                if not isinstance(current_cals, (int, float)):
+                    # cals corrupto: forzar al canonical.
+                    meal["cals"] = macro_kcal
+                    _p130_recomputed += 1
+                    continue
+                # Tolerancia 5%: drift natural del LLM (agua cocción,
+                # mezclas, redondeo de ingredientes) NO requiere ajuste.
+                deviation = abs(macro_kcal - current_cals)
+                if current_cals > 0 and deviation / current_cals > 0.05:
+                    meal["cals"] = macro_kcal
+                    _p130_recomputed += 1
+        if _p130_recomputed > 0:
+            print(
+                f"⚖️ [P1-30] Macro coherence: {_p130_recomputed} meal(s) "
+                f"recomputaron cals desde 4P+4C+9F (deriva > 5% post-balancing)."
+            )
+
     # 2. Ingredient Consolidation Intelligence
     # Consolida compras. Si hay variaciones leves en ingredientes (e.g. 200g pollo vs 230g pollo), se promedian a un estándar.
     ingredient_map = {}
@@ -5096,8 +6441,26 @@ async def assemble_plan_node(state: PlanState) -> dict:
         parse_start = time.time()
         
         import re
+        # [P6-FRACTION-MIXED-FIX] Fracción mixta pegada al entero ("6¼") debe
+        # convertirse a "6.25", NO a "60.25". El loop literal `replace('¼','0.25')`
+        # concatenaba string-wise → qty inflada 10× en consolidación →
+        # rechazo médico falso por "120 lonjas pavo / 160 fresas" (PDF 18:48).
+        # [P6-FRACTION-MIXED-FIX-2] Tolerar whitespace opcional entre dígito y
+        # fracción ("1 ¼" → "1.25"). PDF 20:14 ([825c94ef]) mostró:
+        #   '1 ¼ lonjas de queso' → '1 0.25 lonjas de queso' (BUG)
+        # → aggregator interpretó "0.25" como NOMBRE del ingrediente
+        # → output incluyó '0.25 lonjas de queso' como item huérfano.
+        # Pre-fix regex `(\d)([½⅓⅔¼¾])` requería pegado; ahora `\s*` tolera
+        # uno o más espacios. Ambas formas (pegada y separada) son comunes:
+        # LLM emite "1¼" cuando concatena, "1 ¼" cuando formatea.
+        _MIXED_FRAC = {'½': 0.5, '⅓': 1/3, '⅔': 2/3, '¼': 0.25, '¾': 0.75}
         for raw in all_raw_ingredients:
             raw_lower = raw.lower().strip()
+            raw_lower = re.sub(
+                r'(\d)\s*([½⅓⅔¼¾])',
+                lambda m: f"{int(m.group(1)) + _MIXED_FRAC[m.group(2)]:.4g}",
+                raw_lower,
+            )
             fractions = {'½': '0.5', '⅓': '0.33', '⅔': '0.67', '¼': '0.25', '¾': '0.75'}
             for f_char, f_val in fractions.items():
                 raw_lower = raw_lower.replace(f_char, f_val)
@@ -5191,38 +6554,77 @@ async def assemble_plan_node(state: PlanState) -> dict:
     _uid = form_data.get("user_id")
     if not _uid or _uid == "guest": _uid = None
 
-    from shopping_calculator import get_shopping_list_delta
+    from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan
+    from constants import compute_household_multiplier
     try:
-        household = max(1, int(form_data.get("householdSize", 1) or 1))
-        if household > 1:
-            print(f"👨‍👩‍👧‍👦 [HOUSEHOLD] Escalando lista de compras ×{household} personas")
+        # [P1-3] householdComposition (adults/children) — fallback a householdSize legacy.
+        household = compute_household_multiplier(form_data)
+        if household > 1.0:
+            _hc = form_data.get("householdComposition") or {}
+            _label = (
+                f"{_hc.get('adults', 0)}A+{_hc.get('children', 0)}N (×{household:.2f})"
+                if isinstance(_hc, dict) and (_hc.get("adults") or _hc.get("children"))
+                else f"×{household:.2f}"
+            )
+            print(f"👨‍👩‍👧‍👦 [HOUSEHOLD] Escalando lista de compras {_label}")
 
         # P0-NEW-1.b: paralelizar las 3 multiplicidades en `_DB_EXECUTOR`. Antes
         # corrían secuenciales bloqueando el event loop ~150-600ms total
         # (cada `get_shopping_list_delta` hace queries a inventory + pricing).
         # Ahora: 3 calls en paralelo → latencia ≈ max(latencias) y el loop libre
         # para SSE callbacks y otras coroutines del worker.
+        #
+        # [P1-5] Fetch inventario + consumidos UNA vez antes de las 3 calls.
+        # ANTES, cada `get_shopping_list_delta` re-consultaba `user_inventory`
+        # y `consumed_meals` independientemente — si entre llamadas un
+        # cron, restock o Realtime channel mutaba el inventario, las 3 listas
+        # weekly/biweekly/monthly quedaban inconsistentes (basadas en
+        # snapshots distintos). El usuario veía cantidades dispares al
+        # cambiar `groceryDuration` para el mismo plan. Ahora pasamos el
+        # snapshot atómico vía `inventory_override` + `consumed_override`.
         if _uid:
+            inv_snapshot, consumed_snapshot = await _adb(
+                fetch_inventory_and_consumed_for_plan, _uid, result, True
+            )
             aggr_list_7, aggr_list_15, aggr_list_30 = await asyncio.gather(
-                _adb(get_shopping_list_delta, _uid, result, is_new_plan=True, structured=True, multiplier=1.0 * household),
-                _adb(get_shopping_list_delta, _uid, result, is_new_plan=True, structured=True, multiplier=2.0 * household),
-                _adb(get_shopping_list_delta, _uid, result, is_new_plan=True, structured=True, multiplier=4.0 * household),
+                _adb(get_shopping_list_delta, _uid, result, True, False, True, 1.0 * household,
+                     inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+                _adb(get_shopping_list_delta, _uid, result, True, False, True, 2.0 * household,
+                     inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+                _adb(get_shopping_list_delta, _uid, result, True, False, True, 4.0 * household,
+                     inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
             )
         else:
             aggr_list_7, aggr_list_15, aggr_list_30 = [], [], []
 
         grocery_duration = form_data.get("groceryDuration", "weekly")
+
+        # [VISIÓN-C / HYBRID-SHOPPING-LIST] Para periodos > 1 semana,
+        # construir versión híbrida: staples (despensa, granos, conservas, etc.)
+        # se compran al periodo completo; perishables (carnes frescas, frutas,
+        # lácteos perecederos, vegetales) se compran semanalmente. Resuelve
+        # la sobreestimación de perecederos en planes mensuales que asumen
+        # menú repetido, mientras que en realidad chunks 2-N traen variedad.
+        try:
+            from shopping_calculator import _build_hybrid_shopping_list as _build_hybrid
+            aggr_list_15_hybrid = _build_hybrid(aggr_list_7, aggr_list_15) if aggr_list_15 else aggr_list_15
+            aggr_list_30_hybrid = _build_hybrid(aggr_list_7, aggr_list_30) if aggr_list_30 else aggr_list_30
+        except Exception as e_hybrid:
+            print(f"⚠️ [HYBRID-SHOPPING-LIST] Error construyendo híbrida: {e_hybrid}")
+            aggr_list_15_hybrid = aggr_list_15
+            aggr_list_30_hybrid = aggr_list_30
+
         if grocery_duration == "biweekly":
-            aggr_list = aggr_list_15
+            aggr_list = aggr_list_15_hybrid
         elif grocery_duration == "monthly":
-            aggr_list = aggr_list_30
+            aggr_list = aggr_list_30_hybrid
         else:
             aggr_list = aggr_list_7
 
         result["aggregated_shopping_list"] = aggr_list
         result["aggregated_shopping_list_weekly"] = aggr_list_7
-        result["aggregated_shopping_list_biweekly"] = aggr_list_15
-        result["aggregated_shopping_list_monthly"] = aggr_list_30
+        result["aggregated_shopping_list_biweekly"] = aggr_list_15_hybrid
+        result["aggregated_shopping_list_monthly"] = aggr_list_30_hybrid
     except Exception as e:
         import traceback
         print(f"⚠️ [SHOPPING MATH] Error agregando lista delta: {e}")
@@ -5247,116 +6649,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
 
     print(f"✅ [ENSAMBLADOR] Plan final ensamblado")
 
-    # Brecha 1: Skeleton Fidelity Validation (Correctiva)
-    # Se salta para días reciclados en surgical mode: esos días fueron generados con el
-    # skeleton ANTERIOR y compararlos contra el skeleton NUEVO produce falsos positivos.
-    skeleton_fidelity_errors = []
-    skeleton_days = skeleton.get("days", [])
+    # [P0-6] Validaciones críticas post-assembly extraídas a un helper compartido.
+    # Antes estas tres validaciones (Skeleton Fidelity, Recipe Coherence, Schema
+    # Validation contra PlanModel) vivían inline aquí. Aunque el flujo SÍ las
+    # ejecutaba para cache-hit, su entremezcla con código no relacionado hacía
+    # que un futuro refactor pudiera olvidar aplicarlas o moverlas a una rama
+    # exclusiva del path LLM. El helper centralizado documenta el contrato:
+    # se ejecuta SIEMPRE para ambas ramas (cache-hit y LLM), garantizando que
+    # un plan cacheado con shape vieja, incoherencia receta↔ingredientes, o
+    # schema bumped sin invalidar entradas en vuelo, sea detectado y elevado
+    # a critical por `review_plan_node`.
     affected_days_set = set(state.get("_affected_days") or [])
-
-    for i, day in enumerate(result.get("days", [])):
-        day_num = day.get("day", i + 1)
-
-        # Si hay affected_days seteados (surgical mode) y este día NO fue regenerado → skip
-        if affected_days_set and day_num not in affected_days_set:
-            continue
-
-        skeleton_day = next((s for s in skeleton_days if s.get("day") == day_num), {})
-        assigned_proteins = [_flatten_ingredient(p).lower() for p in skeleton_day.get("protein_pool", [])]
-
-        day_ingredients_text = " ".join(
-            _flatten_ingredient(ing).lower() for meal in day.get("meals", [])
-            for ing in meal.get("ingredients", [])
-        )
-
-        missing_proteins = [p for p in assigned_proteins if p not in day_ingredients_text]
-        if len(missing_proteins) >= 2:
-            msg = f"Día {day_num} omitió múltiples proteínas clave asignadas: {missing_proteins}"
-            print(f"⚠️ [SKELETON FIDELITY] {msg}")
-            skeleton_fidelity_errors.append(msg)
-
-    if skeleton_fidelity_errors:
-        result["_skeleton_fidelity_errors"] = skeleton_fidelity_errors
-
-    # Brecha 3 y 4: Coherencia Intra-Receta y Receta <-> Ingredientes (Determinista)
-    recipe_coherence_errors = []
-    common_proteins = ["pollo", "res", "cerdo", "salmón", "salmon", "pescado", "atún", "atun", "huevo", "huevos", "pavo", "camarón", "camaron"]
-    import re
-    
-    # P1-11: Stopwords para extracción de "core noun" de ingredientes.
-    # Centralizado en constants.RECIPE_INGREDIENT_STOPWORDS — antes vivía
-    # hardcodeado aquí con ~80 términos in-place y riesgo de divergir de
-    # COMPLEX_TECHNIQUE_KEYWORDS al añadir vocabulario nuevo.
-    stopwords = RECIPE_INGREDIENT_STOPWORDS
-
-
-    # Brecha 4: Validación de Proteína en Ingredientes (con sinónimos)
-    protein_synonyms = {
-        "pescado": ["pescado", "chillo", "dorado", "mero", "salmón", "salmon", "tilapia", "bacalao", "atún", "atun", "sardina"],
-        "pollo": ["pollo", "pechuga", "muslo", "alitas"],
-        "res": ["res", "carne", "filete", "sirloin", "churrasco", "molida"],
-        "cerdo": ["cerdo", "chuleta", "lomo", "masita"],
-        "huevo": ["huevo", "huevos", "clara", "claras", "yema"],
-        "huevos": ["huevo", "huevos", "clara", "claras", "yema"],
-        "pavo": ["pavo", "pechuga de pavo", "jamón de pavo"],
-        "camarón": ["camarón", "camarones", "camaron"],
-        "camarones": ["camarón", "camarones", "camaron"]
-    }
-    
-    for day in result.get("days", []):
-        for meal in day.get("meals", []):
-            ingredients = [_flatten_ingredient(i).lower() for i in meal.get("ingredients", [])]
-            recipe = meal.get("recipe", "")
-            if isinstance(recipe, list):
-                recipe = " ".join(recipe)
-            recipe = recipe.lower()
-            
-            # Brecha 4: Validación de Proteína en Ingredientes
-            for cp, synonyms in protein_synonyms.items():
-                pattern = r'\b' + re.escape(cp) + r'\b'
-                if re.search(pattern, recipe):
-                    # La receta menciona la proteína (ej. 'pescado'). Buscar si algún sinónimo está en los ingredientes.
-                    if not any(any(re.search(r'\b' + re.escape(syn) + r'\b', ing) for syn in synonyms) for ing in ingredients):
-                        msg = f"Día {day.get('day')}, {meal.get('name')}: La receta indica '{cp}' pero no hay ningún ingrediente equivalente (ej. {', '.join(synonyms[:3])}) listado."
-                        recipe_coherence_errors.append(msg)
-            
-            # Brecha 3: Validación de Completitud Estructural
-            completion_pattern = r'\b(sirve|servir|montaje|monta|emplata|emplatar|empaca|empacar|disfruta|disfrutar|agrega)\b'
-            if not re.search(completion_pattern, recipe):
-                msg = f"Día {day.get('day')}, {meal.get('name')}: La receta parece incompleta, falta un paso final (ej: 'Servir', 'Montaje' o 'Empacar')."
-                recipe_coherence_errors.append(msg)
-                
-            # Brecha 3: Validación de Sustantivos de Ingredientes en Instrucciones
-            for ing in ingredients:
-                clean_ing = re.sub(r'[\d\.,\(\)/\-]', ' ', ing)
-                words = [w.strip() for w in clean_ing.split() if w.strip() and len(w.strip()) > 2]
-                core_nouns = [w for w in words if w not in stopwords]
-                
-                if core_nouns:
-                    core_noun = core_nouns[0]
-                    if len(core_noun) >= 4:
-                        prefix = core_noun[:min(5, len(core_noun))]
-                        permissive_pattern = r'\b' + re.escape(prefix) + r'[a-z]*\b'
-                        if not re.search(permissive_pattern, recipe):
-                            msg = f"Día {day.get('day')}, {meal.get('name')}: El ingrediente principal '{core_noun}' está listado pero no se menciona en las instrucciones de la receta."
-                            recipe_coherence_errors.append(msg)
-                    
-    if recipe_coherence_errors:
-         result["_recipe_coherence_errors"] = list(set(recipe_coherence_errors))
-
-    # Schema Validation Post-Assembly
-    # P1-8: Si el schema canónico falla, marcar el plan como inválido. El revisor
-    # médico detecta esta marca y eleva a severity=critical, lo que encadena con
-    # el guardrail P0-1 al final del pipeline para entregar fallback matemático
-    # en vez de un plan que el frontend no puede renderizar.
-    try:
-        # P1-10: PlanModel ya está importado a nivel módulo
-        PlanModel(**result)
-    except Exception as e:
-        err_msg = str(e)[:500]
-        print(f"🚨 [ASSEMBLY VALIDATION] Plan corrupto post-assembly detectado: {err_msg}")
-        result["_schema_invalid"] = True
-        result["_schema_errors"] = err_msg
+    _run_assembly_validations(result, skeleton, affected_days_set)
 
     duration = round(time.time() - start_time, 2)
     _emit_progress(state, "metric", {
@@ -5378,7 +6682,22 @@ async def assemble_plan_node(state: PlanState) -> dict:
 def _auto_patch_ingredient_coherence(plan: dict, errors: list) -> int:
     """Elimina ingredientes listados que no aparecen en las instrucciones (cosmético, seguro).
     Retorna el número de ingredientes eliminados efectivamente.
+
+    [P6-AUTO-PATCH-1] Defensa-en-profundidad contra remover proteínas
+    principales por substring match accidental. Si el ingrediente a
+    remover contiene un synonym de proteína (cerdo, pollo, res, etc.)
+    Y ese synonym aparece en la receta, NO removemos — la presencia del
+    synonym en recipe satisface el bidirectional check, así que el
+    "huérfano" reportado por el reverse-check fue un falso positivo
+    (probablemente el primer fix P6 ya lo eliminó del error stream,
+    pero esta defensa cierra el modo de fallo desde dos lados).
     """
+    # Map de protein synonyms para defensa secundaria. Mantenido en sync
+    # manualmente con el del recipe-coherence forward check (línea ~5478).
+    _PROTEIN_KEYS_FOR_PATCH = (
+        "cerdo", "pollo", "res", "carne", "pescado",
+        "huevo", "huevos", "pavo", "camarón", "camarones",
+    )
     patched = 0
     for error in errors:
         m = _re.search(r"D[ií]a (\d+), (.+?): El ingrediente principal '(.+?)' está listado", error)
@@ -5393,10 +6712,37 @@ def _auto_patch_ingredient_coherence(plan: dict, errors: list) -> int:
             for meal in day.get("meals", []):
                 if meal.get("name", "").strip() != meal_name:
                     continue
+                # Pre-extraer recipe text para el guard de proteínas
+                recipe_txt = meal.get("recipe", "")
+                if isinstance(recipe_txt, list):
+                    recipe_txt = " ".join(recipe_txt)
+                recipe_lower = recipe_txt.lower()
+
                 ings = meal.get("ingredients", [])
-                orig_len = len(ings)
-                meal["ingredients"] = [i for i in ings if core_noun not in i.lower()]
-                if len(meal["ingredients"]) < orig_len:
+                new_ings = []
+                for i in ings:
+                    i_lower = i.lower() if isinstance(i, str) else str(i).lower()
+                    if core_noun not in i_lower:
+                        new_ings.append(i)
+                        continue
+                    # Match candidate. Aplicar defensa: si el ingrediente
+                    # contiene un protein synonym Y la receta también lo
+                    # menciona, preservar. Ejemplo: core_noun='lomo',
+                    # ingrediente='lomo de cerdo', recipe contiene 'cerdo'
+                    # → preservar.
+                    protected = any(
+                        p in i_lower and _re.search(
+                            r'\b' + _re.escape(p) + r'[a-z]*\b', recipe_lower
+                        )
+                        for p in _PROTEIN_KEYS_FOR_PATCH
+                    )
+                    if protected:
+                        new_ings.append(i)
+                        continue
+                    # No proteína presente o no en receta — proceder a
+                    # eliminar (caso original del auto-patch).
+                meal["ingredients"] = new_ings
+                if len(new_ings) < len(ings):
                     patched += 1
                 break
     return patched
@@ -5430,6 +6776,461 @@ def _severity_max(current: str, new: str) -> str:
     cur_rank = _SEVERITY_RANK.get(current or "none", 0)
     new_rank = _SEVERITY_RANK.get(new or "none", 0)
     return new if new_rank > cur_rank else (current or "none")
+
+
+def _augment_affected_days_with_critique_markers(
+    affected_days: list,
+    previous_days: list,
+) -> list:
+    """[P1-SURGICAL-1] Augmenta `affected_days` con días del intento previo
+    cuyo self-critique no logró corregir su problema.
+
+    Por qué importa:
+      `plan_skeleton_node` decide qué días RECICLAR vs REGENERAR en el retry
+      basándose en `affected_days` (escrito por `review_plan_node` parsing
+      "Día N" desde las razones de rechazo médico). El revisor médico usa un
+      lente específico (alergias, sodio, repetición proteína, etc.) y puede
+      pasar por alto problemas que el self-critique YA detectó pero NO logró
+      corregir por timeout / CB-open / excepción / LLM-returned-None. Esos
+      días tienen `_critique_unresolved` set por `_correct_single_day`.
+
+      Sin esta augmentación, el surgical fix recicla esos días como "válidos"
+      y el bug latente entra al intento N+1 — caso real del incidente
+      2026-05-05 (Día 2 con timeout de corrección reciclado en attempt #2,
+      review_plan rechazó con HIGH "Día 2: receta indica 'pollo' pero no hay
+      ingrediente equivalente listado").
+
+    Política: forzamos regen aunque medical no lo flagee. Costo: ~30-40s
+    por día regenerado. Beneficio: el usuario no recibe planes con
+    problemas conocidos sin resolver.
+
+    Args:
+        affected_days: lista actual de días a regenerar (de `state["_affected_days"]`).
+        previous_days: lista de días del intento previo (de `state["plan_result"]["days"]`),
+                       potencialmente con marker `_critique_unresolved` por día.
+
+    Returns:
+        Lista ordenada (orden ascendente) de día_num únicos. Si ninguno tiene
+        marker, devuelve `affected_days` sin cambios (mismo objeto reordenado
+        es OK — el caller no depende de identidad).
+    """
+    affected_set = set(affected_days or [])
+    forced_by_marker = []
+    for d in (previous_days or []):
+        if not isinstance(d, dict):
+            continue
+        day_num = d.get("day")
+        if not isinstance(day_num, int):
+            continue
+        marker = d.get("_critique_unresolved")
+        if isinstance(marker, dict) and day_num not in affected_set:
+            affected_set.add(day_num)
+            forced_by_marker.append((day_num, marker.get("reason", "?")))
+
+    if forced_by_marker:
+        for d_n, reason in forced_by_marker:
+            logger.info(
+                f"📌 [P1-SURGICAL-1] Día {d_n} añadido a regen forzada por "
+                f"warning previo no resuelto (reason={reason!r}); medical no lo "
+                f"flageó pero el self-critique lo dejó sin corregir."
+            )
+        return sorted(affected_set)
+
+    return list(affected_days or [])
+
+
+def _collect_unresolved_marker_days(plan_result) -> list[int]:
+    """[P5-MARKER-APPROVED-1] Devuelve los `day` numbers que tienen un
+    marker `_critique_unresolved` pendiente.
+
+    Helper compartido entre `should_retry` (decide ruta) y
+    `surgical_marker_regen_node` (ejecuta la regen). Mantenerlo en un
+    solo sitio evita drift en la heurística de detección.
+
+    Solo incluye días con marker dict no-vacío. Markers con valor None,
+    {}, o con shape inesperado se ignoran (defensa ante state corrupto)."""
+    if not isinstance(plan_result, dict):
+        return []
+    days = plan_result.get("days") or []
+    if not isinstance(days, list):
+        return []
+    out = []
+    for d in days:
+        if not isinstance(d, dict):
+            continue
+        marker = d.get("_critique_unresolved")
+        if isinstance(marker, dict) and marker:
+            day_num = d.get("day")
+            if isinstance(day_num, int):
+                out.append(day_num)
+    return sorted(out)
+
+
+async def surgical_marker_regen_node(state: PlanState) -> dict:
+    """[P5-MARKER-APPROVED-1] Re-corrige días con `_critique_unresolved`
+    después de que el reviewer médico aprobó.
+
+    Caso real (corrida 2026-05-05 03:54):
+      Self-critique detectó repetición almuerzo↔cena en Días 1, 2, 3.
+      Día 1 corrigió OK (43s), Día 3 corrigió OK (90s), Día 2 timeoutó
+      al cap individual de 150s (P4-TIMEOUT-3) → marker `_critique_unresolved`.
+      Reviewer médico aprobó porque su lente (alergias, sodio, despensa,
+      skeleton fidelity) es ortogonal a slot coherence.
+      Plan llegó al usuario con Día 2 mostrando la repetición intacta.
+
+    Este nodo cierra ese gap: cuando review_passed=True PERO hay markers,
+    re-corremos el corrector LLM con budget fresco solo para esos días.
+    El provider típicamente se ha recuperado del overload momentáneo
+    (~5-10 min después). Si la re-corrección también falla, dejamos el
+    marker en su lugar y aceptamos el plan parcial — mejor que loop
+    infinito.
+
+    Diseño:
+      - Una sola pasada por gate (`_marker_regen_attempted` lo previene).
+      - Siguiente nodo: `assemble_plan` (re-aggregate shopping list con
+        los días corregidos), luego `review_plan` re-evalúa.
+      - Si el segundo review aprueba → END.
+      - Si rechaza (la regen introdujo otro issue, raro) → cae al retry
+        path normal.
+    """
+    plan_result = state.get("plan_result") or {}
+    if not isinstance(plan_result, dict):
+        return {"_marker_regen_attempted": True}
+
+    marker_day_nums = _collect_unresolved_marker_days(plan_result)
+    if not marker_day_nums:
+        # Defensa: should_retry ya filtra este caso pero el nodo es resiliente.
+        return {"_marker_regen_attempted": True}
+
+    days = list(plan_result.get("days") or [])
+    form_data = state.get("form_data") or {}
+    skeleton = plan_result.get("_skeleton") or {}
+    skeleton_days = skeleton.get("days", []) if isinstance(skeleton, dict) else []
+
+    print(
+        f"🩹 [P5-MARKER-REGEN] Re-corrigiendo {len(marker_day_nums)} día(s) "
+        f"con `_critique_unresolved` tras approved: {marker_day_nums}"
+    )
+    start_time = time.time()
+
+    # Setup del corrector — paridad con self_critique_node line ~5124.
+    _corrector_model = _route_model(form_data, force_fast=True)
+    _corrector_cb = _get_circuit_breaker(_corrector_model)
+    corrector_llm = ChatGoogleGenerativeAI(
+        model=_corrector_model,
+        temperature=0.3,
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        max_retries=0,
+        timeout=80,
+    ).with_structured_output(SingleDayPlanModel)
+
+    ctx = _build_shared_context(state)
+
+    async def _re_correct_one(day_num: int):
+        target_day = next((d for d in days if d.get("day") == day_num), None)
+        if not target_day:
+            return day_num, None
+        marker = target_day.get("_critique_unresolved") or {}
+        original_issue = marker.get("issue") or ""
+
+        if not await _corrector_cb.acan_proceed():
+            print(
+                f"⚠️ [P5-MARKER-REGEN] CB OPEN ({_corrector_model}). "
+                f"Saltando Día {day_num}, marker preservado."
+            )
+            return day_num, None
+
+        skeleton_day = next(
+            (d for d in skeleton_days if d.get("day") == day_num), {}
+        )
+        skeleton_block = ""
+        if skeleton_day:
+            skeleton_block = (
+                f"\n⚠️ ASIGNACIÓN OBLIGATORIA DEL PLANIFICADOR (no la ignores):\n"
+                f"{build_day_assignment_context(skeleton_day, day_num)}"
+            )
+
+        # [P5-PROMPT-D] Mismo prompt mínimo que self_critique correction.
+        # [P6-CRITIQUE-VS-SKELETON] Misma regla de precedencia inviolable
+        # que el corrector — el surgical regen también puede recibir
+        # "issue" del critique original que pidió cambiar protein asignada.
+        correction_prompt = f"""Eres un nutricionista chef. Corrige SOLO el Día {day_num} del plan alimenticio.
+
+PROBLEMA DETECTADO (sin resolver en pasada anterior): {original_issue}
+
+RESTRICCIONES NUTRICIONALES (respétalas siempre):
+{ctx['nutrition_context_minimal']}
+{skeleton_block}
+REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
+- La ASIGNACIÓN DEL PLANIFICADOR es HARD CONSTRAINT — NUNCA la violes aunque el problema previo pida cambiar una proteína/carbohidrato asignado.
+- Si el problema sugiere cambiar proteína de almuerzo o cena para resolver slot coherence, pero esa proteína FUE ASIGNADA por el planificador, MANTÉN la proteína y resuelve por OTRO medio: cambiar carbohidrato, técnica, vegetal o presentación.
+
+REGLA BIDIRECCIONAL CRÍTICA:
+- Todo ingrediente en `ingredients` DEBE aparecer nombrado en la receta (Mise en place, El Toque de Fuego o Montaje).
+- Todo alimento nombrado en la receta DEBE estar en `ingredients`.
+- Si un ingrediente no se usa en la receta, elimínalo de `ingredients`.
+
+Día {day_num} actual (JSON):
+{json.dumps({k: v for k, v in target_day.items() if k != "_critique_unresolved"}, ensure_ascii=False)}
+
+Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y los mismos targets calóricos."""
+
+        try:
+            print(f"🩹 [P5-MARKER-REGEN] Re-corrigiendo Día {day_num}...")
+            corrected_result: SingleDayPlanModel = await _safe_ainvoke(
+                corrector_llm, correction_prompt, timeout=CRITIQUE_FIX_TIMEOUT_S
+            )
+            await _corrector_cb.arecord_success()
+            if corrected_result:
+                corrected_day = corrected_result.model_dump()
+                corrected_day["day"] = day_num
+                # IMPORTANTE: NO copiar `_critique_unresolved` — la corrección
+                # es el evento que limpia el marker.
+                print(f"✅ [P5-MARKER-REGEN] Día {day_num} re-corregido exitosamente.")
+                return day_num, corrected_day
+            print(
+                f"⚠️ [P5-MARKER-REGEN] Día {day_num}: corrector LLM retornó None. "
+                f"Marker preservado, plan sigue al usuario sin la corrección."
+            )
+        except asyncio.TimeoutError:
+            # [P6-TIMEOUT-DIAG] Mismo logging diagnóstico que en self_critique_node
+            # — captura el patrón "Día N timeoutea dos veces" (corrida 19:58 [c6eaf808]
+            # mostró Día 2 fallando en self-critique Y en marker-regen).
+            _prompt_chars = len(correction_prompt)
+            _target_chars = len(json.dumps(target_day, ensure_ascii=False)) if target_day else 0
+            _ingredients_count = sum(
+                len(m.get("ingredients", [])) for m in (target_day or {}).get("meals", [])
+            )
+            print(
+                f"⏱️ [P5-MARKER-REGEN] Día {day_num} timeout otra vez "
+                f"({CRITIQUE_FIX_TIMEOUT_S:.0f}s) con {_corrector_model}."
+            )
+            print(
+                f"📐 [P6-TIMEOUT-DIAG] Día {day_num} (regen) sizes: "
+                f"prompt={_prompt_chars}c, target_day={_target_chars}c, "
+                f"ingredients={_ingredients_count}"
+            )
+            pro_corrected, _pro_reason = await _attempt_pro_critique_correction(
+                correction_prompt, day_num,
+                log_prefix="[P5-MARKER-REGEN/PRO-FALLBACK]",
+            )
+            if pro_corrected:
+                return day_num, pro_corrected
+        except Exception as e:
+            await _corrector_cb.arecord_failure()
+            print(
+                f"⚠️ [P5-MARKER-REGEN] Error re-corrigiendo Día {day_num}: {e}. "
+                f"Marker preservado."
+            )
+        return day_num, None
+
+    results = await asyncio.gather(
+        *[_re_correct_one(d) for d in marker_day_nums]
+    )
+
+    fixed_count = 0
+    for day_num, corrected_day in results:
+        if corrected_day is not None:
+            for i, d in enumerate(days):
+                if d.get("day") == day_num:
+                    days[i] = corrected_day
+                    break
+            fixed_count += 1
+
+    duration = round(time.time() - start_time, 2)
+    print(
+        f"🩹 [P5-MARKER-REGEN] Completado en {duration}s — "
+        f"{fixed_count}/{len(marker_day_nums)} días re-corregidos."
+    )
+
+    new_plan_result = {**plan_result, "days": days}
+
+    # ============================================================
+    # [P6-SURGICAL-PROMOTE] Promover snapshot tras surgical regen exitoso
+    # ------------------------------------------------------------
+    # Sin esto: el flujo después de surgical regen es:
+    #   surgical_marker_regen → assemble_plan → review_plan (re-review)
+    # Si re-review demote el nuevo plan (ej. de 'approved' a 'minor' por
+    # un issue ortogonal en un día NO regenerado), `should_retry` enruta
+    # a "end" (review_passed=False + no budget para retry). Ahí
+    # `_swap_to_best_attempt_if_better` compara:
+    #   - best_snapshot = pre-surgical (approved con markers, rank=0)
+    #   - current = post-surgical (minor, rank=1)
+    # Y restaura el snapshot pre-surgical → el usuario recibe el plan
+    # con markers SIN RESOLVER, tirando el trabajo del surgical regen.
+    #
+    # Caso real corrida 2026-05-05 13:11-13:12: surgical regen fixed
+    # exitosamente Días 2 y 3 (slot violations resueltas), pero re-review
+    # rechazó por mismatch ingredient↔recipe en Día 1 (no relacionado al
+    # surgical regen). P0-PIPE-1 restauró el plan pre-surgical → usuario
+    # recibió plan CON las violaciones de slot que P5 había resuelto.
+    #
+    # Política: si AL MENOS 1 marker se resolvió, el plan post-surgical
+    # es por construcción ≥ al pre-surgical (mismos otros días, ≥ markers
+    # resueltos). Promoverlo a best garantiza que el usuario reciba la
+    # mejora aunque re-review demote por issues ortogonales. Si re-review
+    # APRUEBA, el branch `if approved` en review_plan_node sobrescribe
+    # best con el plan re-aprobado — no hay regresión.
+    # ============================================================
+    state_update = {
+        "plan_result": new_plan_result,
+        "_marker_regen_attempted": True,
+    }
+    if fixed_count > 0:
+        state_update["_best_attempt_plan"] = copy.deepcopy(new_plan_result)
+        state_update["_best_attempt_severity"] = "approved"
+        state_update["_best_attempt_reasons"] = []
+        state_update["_best_attempt_review_passed"] = True
+        state_update["_best_attempt_number"] = state.get("attempt", 1)
+        print(
+            f"📌 [P6-SURGICAL-PROMOTE] Promoviendo plan post-surgical "
+            f"({fixed_count}/{len(marker_day_nums)} markers resueltos) a "
+            f"best_attempt — protege contra rollback si re-review demote "
+            f"por issue ortogonal."
+        )
+    return state_update
+
+
+_HIGH_SEVERITY_CONTEXTUAL_KEYWORDS = (
+    # Restricciones del contexto del usuario que NO cambian entre intentos:
+    # despensa, alergias, condiciones médicas, intolerancias.
+    "despensa estricta", "despensa solo tiene", "no está en la despensa",
+    "ingrediente no disponible", "no se encuentra en", "no existe en",
+    "no tiene en la nevera",
+    # Variantes de "fuera de inventario" que el LLM/reviewer escribe
+    # con/sin contracción "del".
+    "fuera de inventario", "fuera del inventario",
+    "fuera de la despensa",
+    "violación de pantry", "violacion de pantry",
+    "violación de despensa", "violacion de despensa",
+    # Estos disparan severity=critical normalmente, pero por defensa también
+    # los listamos aquí — si por alguna razón un rechazo de alergia/condición
+    # se clasifica como HIGH (no critical), tampoco debemos retry.
+    "alergia", "alérgeno", "alergeno",
+    "condición médica", "condicion medica", "intolerancia",
+    "celíaco", "celiaco", "diabetes", "hipertensión", "hipertension",
+)
+
+
+def _classify_high_severity(rejection_reasons: list) -> str:
+    """[P1-RETRY-CLASSIFY] Clasifica un rechazo HIGH como `contextual`
+    (regenerar NO ayuda) vs `regenerable` (otro intento puede arreglarlo).
+
+    Heurística por keywords en las razones del rechazo:
+      - **Contextual** (no retry): la causa es una restricción del usuario
+        que no cambia entre intentos — despensa estricta, alergias,
+        condiciones médicas, intolerancias declaradas. Regenerar produciría
+        el mismo error o un loop.
+      - **Regenerable** (retry permitido): la causa es un fallo de calidad
+        del LLM que un segundo intento puede corregir — skeleton fidelity
+        violation, repetición excesiva, falta de variedad, recipe-ingredient
+        coherence false positives, falta de proteína asignada.
+
+    Default: `regenerable`. La política original (antes de este fix) era
+    "todo HIGH = no retry" por miedo a loops. La realidad de producción
+    (incidente 2026-05-05 + corrida 2026-05-05 01:49) muestra que la mayoría
+    de HIGH son fallos de adherencia del LLM al prompt, no restricciones
+    contextuales — y el retry funciona en la mayoría de los casos. Combinado
+    con el cap de `MAX_ATTEMPTS=2` y el snapshot P0-PIPE-1, no hay riesgo
+    de loop ni de entregar plan peor.
+
+    Args:
+        rejection_reasons: lista de strings de razones del rechazo médico.
+
+    Returns:
+        "contextual" o "regenerable".
+    """
+    if not rejection_reasons:
+        return "regenerable"
+    joined = " ".join(str(r) for r in rejection_reasons).lower()
+    for kw in _HIGH_SEVERITY_CONTEXTUAL_KEYWORDS:
+        if kw in joined:
+            return "contextual"
+    return "regenerable"
+
+
+def _attempt_quality_rank(review_passed: bool, severity: Optional[str]) -> int:
+    """[P0-PIPE-1] Rank de calidad de un intento: menor = mejor.
+
+    Approved siempre gana (rank 0). Para rechazados, ordena por severidad
+    según `_SEVERITY_RANK` (minor=1, high=2, critical=3). Usado por
+    `review_plan_node` para decidir si el intento actual debe promoverse a
+    `_best_attempt_*` y por `_swap_to_best_attempt_if_better` para decidir
+    si restaurar el best al final del pipeline.
+    """
+    if review_passed:
+        return 0
+    return _SEVERITY_RANK.get(severity or "minor", 1)
+
+
+def _swap_to_best_attempt_if_better(final_state: dict) -> bool:
+    """[P0-PIPE-1] Restaura el snapshot del MEJOR intento como `plan_result`
+    si el actual fue rechazado con peor severidad.
+
+    Mutación in-place sobre `final_state`. Devuelve True si hubo swap.
+
+    Lógica:
+      1. Si no hay `_best_attempt_plan` snapshot → no-op (primera generación,
+         o nada que rescatar).
+      2. Si el intento actual fue aprobado → no-op (ya es el mejor posible).
+      3. Si rank(best) < rank(current) → swap completo (plan, severity,
+         reasons, review_passed) y marca `_best_attempt_swapped=True` en el
+         plan resultante para que el frontend pueda mostrar telemetría.
+      4. Si rank(best) >= rank(current) → no-op (current ya es el mejor o
+         igual; preservamos coherencia con `attempt` actual).
+
+    Por qué ANTES de `_apply_critical_review_guardrails`:
+      Si el best era `approved`/`minor` y el actual es `critical`, el
+      guardrail dispararía un fallback matemático innecesario. Restaurar el
+      best primero permite que el guardrail vea el plan correcto y solo
+      marque transparency en lugar de regenerar.
+    """
+    best_plan = final_state.get("_best_attempt_plan")
+    if not isinstance(best_plan, dict) or not best_plan:
+        return False
+
+    current_passed = bool(final_state.get("review_passed"))
+    if current_passed:
+        # Current ya está aprobado — el snapshot best (si existe) puede ser
+        # otro aprobado igual de bueno o uno rechazado peor; nunca peor que
+        # el actual. No-op.
+        return False
+
+    current_severity = final_state.get("_rejection_severity") or "minor"
+    best_passed = bool(final_state.get("_best_attempt_review_passed"))
+    best_severity = final_state.get("_best_attempt_severity") or "minor"
+
+    current_rank = _attempt_quality_rank(current_passed, current_severity)
+    best_rank = _attempt_quality_rank(best_passed, best_severity)
+
+    if best_rank >= current_rank:
+        return False  # Current es igual o mejor que el best.
+
+    # Best gana — restauramos.
+    best_attempt_n = final_state.get("_best_attempt_number")
+    current_attempt_n = final_state.get("attempt", 1)
+    best_reasons = list(final_state.get("_best_attempt_reasons") or [])
+
+    logger.warning(
+        f"🔄 [P0-PIPE-1] Plan del intento #{current_attempt_n} rechazado "
+        f"con severity={current_severity!r} (rank={current_rank}); "
+        f"restaurando intento #{best_attempt_n} con "
+        f"severity={best_severity!r} review_passed={best_passed} "
+        f"(rank={best_rank}). Razones del intento descartado: "
+        f"{(final_state.get('rejection_reasons') or [])[:3]}"
+    )
+
+    final_state["plan_result"] = best_plan
+    final_state["review_passed"] = best_passed
+    final_state["_rejection_severity"] = best_severity if not best_passed else "minor"
+    final_state["rejection_reasons"] = best_reasons
+    # Marcador en el plan para telemetría / debugging downstream. NO
+    # afecta a guardrails (que leen `_review_failed_but_delivered` /
+    # `_critical_rejection`).
+    if isinstance(final_state["plan_result"], dict):
+        final_state["plan_result"]["_best_attempt_swapped_from"] = current_attempt_n
+        final_state["plan_result"]["_best_attempt_swapped_severity"] = current_severity
+    return True
 
 
 async def review_plan_node(state: PlanState) -> dict:
@@ -5904,10 +7705,22 @@ Responde ÚNICAMENTE con el JSON de revisión.
     
     if approved:
         print(f"✅ [REVISOR MÉDICO] Plan APROBADO en {duration}s ✅")
+        # [P0-PIPE-1] Approved siempre es el mejor posible (rank 0). Snapshot
+        # incondicional. `copy.deepcopy` ya importado a nivel módulo.
+        _approved_attempt = state.get("attempt", 1)
+        _approved_plan_snap = (
+            copy.deepcopy(state.get("plan_result"))
+            if isinstance(state.get("plan_result"), dict) else None
+        )
         return {
             "review_passed": True,
             "review_feedback": "",
-            "rejection_reasons": []
+            "rejection_reasons": [],
+            "_best_attempt_plan": _approved_plan_snap,
+            "_best_attempt_severity": "approved",
+            "_best_attempt_reasons": [],
+            "_best_attempt_review_passed": True,
+            "_best_attempt_number": _approved_attempt,
         }
     else:
         feedback = "\n".join([f"• {issue}" for issue in issues])
@@ -5954,13 +7767,49 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 if 1 <= day_int <= days_in_chunk:
                     final_affected_days.add(day_int)
                 
-        return {
+        result = {
             "review_passed": False,
             "review_feedback": feedback,
             "rejection_reasons": issues,
             "_rejection_severity": severity,
             "_affected_days": list(final_affected_days)
         }
+
+        # [P0-PIPE-1] Promover el intento actual a `_best_attempt_*` SOLO si:
+        #   (a) no hay best previo (primer rechazo registrado), O
+        #   (b) el current tiene MENOR rank de severidad que el best previo
+        #       (rank: approved=0, minor=1, high=2, critical=3 — menor = mejor).
+        # Approved nunca pasa por aquí; se promueve incondicional en el branch
+        # `if approved` arriba.
+        prior_best_passed = bool(state.get("_best_attempt_review_passed"))
+        prior_best_severity = state.get("_best_attempt_severity")
+        prior_has_best = isinstance(state.get("_best_attempt_plan"), dict) and \
+            bool(state.get("_best_attempt_plan"))
+
+        current_rank = _attempt_quality_rank(False, severity)
+        prior_rank = _attempt_quality_rank(prior_best_passed, prior_best_severity) \
+            if prior_has_best else 99  # 99 = "peor que cualquier real" → siempre promover
+
+        if current_rank < prior_rank:
+            _attempt_n = state.get("attempt", 1)
+            _plan_snap = (
+                copy.deepcopy(state.get("plan_result"))
+                if isinstance(state.get("plan_result"), dict) else None
+            )
+            if _plan_snap:
+                result["_best_attempt_plan"] = _plan_snap
+                result["_best_attempt_severity"] = severity
+                result["_best_attempt_reasons"] = list(issues)
+                result["_best_attempt_review_passed"] = False
+                result["_best_attempt_number"] = _attempt_n
+                logger.info(
+                    f"📌 [P0-PIPE-1] Snapshot intento #{_attempt_n} promovido "
+                    f"a best (severity={severity!r}, rank={current_rank}; "
+                    f"best previo: "
+                    f"{'ninguno' if not prior_has_best else f'severity={prior_best_severity!r}, rank={prior_rank}'})."
+                )
+
+        return result
 
 
 # ============================================================
@@ -6004,22 +7853,82 @@ def should_retry(state: PlanState) -> str:
     HEDGE_DELTA = RETRY_HEDGE_BUDGET_DELTA_S  # P1-A6
 
     if state.get("review_passed", False):
+        # [P5-MARKER-APPROVED-1] Antes de despachar al usuario, verificar si
+        # algún día tiene `_critique_unresolved` (self-critique falló para
+        # ese día por timeout / CB / error). El reviewer médico aprueba
+        # porque su lente es médico, pero markers de slot coherence quedan
+        # silenciados. Si los hay y NO hemos intentado el surgical regen
+        # todavía, enrutamos al gate. Una sola pasada por gate (flag).
+        if not state.get("_marker_regen_attempted", False):
+            marker_days = _collect_unresolved_marker_days(state.get("plan_result"))
+            if marker_days:
+                print(
+                    f"🩹 [ORQUESTADOR] Revisión aprobada PERO {len(marker_days)} "
+                    f"día(s) con `_critique_unresolved` (días {marker_days}) → "
+                    f"surgical regen antes de enviar al usuario."
+                )
+                return "marker_regen"
         print("✅ [ORQUESTADOR] Revisión aprobada → Enviando al usuario.")
         return "end"
 
-    severity = state.get("_rejection_severity", "minor")
+    # [P0-5] `dict.get(k, default)` devuelve `None` cuando la key existe con
+    # valor None (NO el default). El `initial_state` ahora setea
+    # `_rejection_severity="minor"` por defecto (P0-5), pero un nodo
+    # intermedio podría escribir `None` explícitamente (excepción no
+    # capturada en `review_plan_node`, schema_invalid silencioso, refactor
+    # futuro). Si eso ocurre, `severity == "critical"` y `severity == "high"`
+    # ambos fallan, cae a la rama "retry" sin honrar la severidad → loop
+    # silencioso. La normalización con `or "minor"` garantiza que cualquier
+    # falsy (None, "", 0) se trate como "minor" (recuperable, retry permitido).
+    raw_severity = state.get("_rejection_severity")
+    if raw_severity is None:
+        # Invariant: si llegamos aquí sin severity poblada, hay un bug
+        # upstream — loggear para que SRE detecte el estado inconsistente.
+        logger.error(
+            "[ORQUESTADOR][INVARIANT] _rejection_severity=None pero "
+            "review_passed=False — review_plan_node lanzó excepción sin "
+            "setear severidad? attempt=%s, rejection_reasons=%s",
+            state.get("attempt", 1),
+            (state.get("rejection_reasons") or [])[:3],
+        )
+    severity = raw_severity or "minor"
 
     # Brecha 6 + P0-2: Retry por Severidad
     # 'critical' = peligro médico (alergia/condición). Abortar y delegar a P0-1 guardrail
     # para entregar fallback matemático con disclaimer.
-    # 'high' = no-recuperable por retry (ej. violación de despensa estricta: la despensa
-    # no cambia entre intentos, regenerar produciría el mismo error o un loop).
     if severity == "critical":
         print("🚨 [ORQUESTADOR] Rechazo CRÍTICO → No tiene sentido reintentar con el mismo contexto. Abortando temprano.")
         return "end"
+
+    # [P1-RETRY-CLASSIFY] Clasificación fina de HIGH:
+    #   - 'contextual' (despensa, alergia, condición médica) → no retry, las
+    #     restricciones del usuario no cambian entre intentos.
+    #   - 'regenerable' (skeleton fidelity, repetición, variedad, coherence)
+    #     → SÍ retry, el LLM puede hacerlo mejor en intento #2.
+    #
+    # Pre-fix: TODO HIGH abortaba sin retry, conflando ambos casos. Caso real
+    # 2026-05-05 01:49: planner asignó ['Atún, Lentejas, Huevos'] pero el LLM
+    # ignoró y puso pavo procesado en casi todas las comidas → HIGH "skeleton
+    # fidelity + repetición pavo + falta variedad" → entregado roto al usuario
+    # con disclaimer (holistic 0.850), cuando un retry probablemente lo habría
+    # arreglado.
     if severity == "high":
-        print("🛑 [ORQUESTADOR] Rechazo HIGH (no-recuperable por retry) → Abortando y entregando plan marcado.")
-        return "end"
+        _retry_class = _classify_high_severity(state.get("rejection_reasons") or [])
+        if _retry_class == "contextual":
+            print(
+                f"🛑 [ORQUESTADOR] Rechazo HIGH (contextual: despensa/alergia/"
+                f"condición — no-recuperable por retry) → Abortando y entregando "
+                f"plan marcado. Razones: "
+                f"{(state.get('rejection_reasons') or [])[:2]}"
+            )
+            return "end"
+        # 'regenerable' → cae al check de attempts/budget para decidir retry.
+        # Si pasa los gates, ejecutará el retry como cualquier minor.
+        print(
+            f"🔁 [ORQUESTADOR] Rechazo HIGH (regenerable: fallo de calidad del LLM, "
+            f"no contextual) → Evaluando retry. Razones: "
+            f"{(state.get('rejection_reasons') or [])[:2]}"
+        )
 
     # P1-X4: default `attempt=1` para alinear con el resto del archivo
     # (initial_state lo setea a 1; otros nodos leen `state.get("attempt", 1)`).
@@ -6427,6 +8336,12 @@ async def retry_reflection_node(state: PlanState) -> dict:
         # El consumer en `_build_planner_prompt` (línea ~2764) usa
         # `state.get("reflection_directive")` con truthy check → None es safe.
         "reflection_directive": None,
+        # [P5-MARKER-APPROVED-1] Reset del flag para que el nuevo attempt
+        # tenga su propia oportunidad de surgical regen post-approval si
+        # el self-critique vuelve a dejar markers. Sin reset, attempt #2
+        # aprobado-con-markers iría directo a "end" porque arrastraría
+        # el flag del attempt #1.
+        "_marker_regen_attempted": False,
     }
     if reasons:
         directive = f"El plan anterior fue RECHAZADO por: {'; '.join(reasons)}. MUTA DRÁSTICAMENTE la estrategia."
@@ -6549,6 +8464,45 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
     # 1. No usar caché si el usuario pidió un re-roll forzado hoy (quiere algo distinto explícitamente)
     is_reroll = actual_form_data.get("_is_same_day_reroll") or actual_form_data.get("_is_rotation_reroll")
     if is_reroll:
+        return {"semantic_cache_hit": False, "cached_plan_data": None}
+
+    # [P1-25] Attempt-guard: si el form_data carga señales de que ESTA
+    # invocación es un reintento posterior a un rechazo, bypasear el cache.
+    # Sin esto, el wrapper externo `_validate_pantry_and_retry_pipeline`
+    # (cron_tasks.py:4979/5042) re-invoca `run_plan_pipeline` con
+    # `_pantry_correction` no-vacío tras un fallo de pantry, y este nodo
+    # puede devolver el MISMO plan (cualquier candidato compatible por
+    # similitud de embedding del perfil — el cache no sabe que el plan ya
+    # fue rechazado por pantry hace segundos). Resultado: retry no-op +
+    # rápida degradación a fallback matemático.
+    #
+    # Señales reconocidas (cualquiera truthy → bypass):
+    #   - `_pantry_correction`: string con la violación que provocó el retry.
+    #     `_validate_pantry_and_retry_pipeline` lo escribe antes de re-invocar.
+    #   - `_drift_retries`: contador de reintentos por pantry drift
+    #     (`cron_tasks.py:17280`). >0 indica al menos un fallo previo.
+    #
+    # Telemetría: log warning per-bypass para que `cache_hit_rate` no caiga
+    # silenciosamente en producción si los retries proliferan (señal de
+    # problema upstream — pantry validation flaky, drift detector mal
+    # calibrado, etc.).
+    _p125_bypass_reasons: list = []
+    if actual_form_data.get("_pantry_correction"):
+        _p125_bypass_reasons.append("_pantry_correction set")
+    try:
+        _drift_n = int(actual_form_data.get("_drift_retries") or 0)
+    except (TypeError, ValueError):
+        _drift_n = 0
+    if _drift_n > 0:
+        _p125_bypass_reasons.append(f"_drift_retries={_drift_n}")
+    if _p125_bypass_reasons:
+        _uid = actual_form_data.get("user_id") or "unknown"
+        logger.warning(
+            f"🟠 [P1-25] Cache bypass para user_id={_uid} por retry "
+            f"signals: {', '.join(_p125_bypass_reasons)}. El intento previo "
+            f"fue rechazado; servir un cache hit re-introduciría el mismo "
+            f"plan rechazado."
+        )
         return {"semantic_cache_hit": False, "cached_plan_data": None}
 
     # [P1-ORQ-6] Observabilidad de embedding ausente. ANTES, si `profile_embedding`
@@ -6921,6 +8875,9 @@ def build_plan_graph() -> StateGraph:
     graph.add_node("self_critique", self_critique_node)
     graph.add_node("assemble_plan", assemble_plan_node)
     graph.add_node("review_plan", review_plan_node)
+    # [P5-MARKER-APPROVED-1] Gate post-approval para re-corregir días que
+    # quedaron con `_critique_unresolved` cuando el reviewer aprobó.
+    graph.add_node("surgical_marker_regen", surgical_marker_regen_node)
 
     # Definir flujo: preflight -> reflection -> compression -> cache_check -> skeleton/assemble
     graph.set_entry_point("preflight_optimization")
@@ -6945,15 +8902,23 @@ def build_plan_graph() -> StateGraph:
     graph.add_edge("assemble_plan", "review_plan")
     graph.add_edge("retry_reflection", "plan_skeleton")
 
-    # Edge condicional: revisor decide si regenerar o terminar
+    # Edge condicional: revisor decide si regenerar, hacer surgical regen
+    # de markers post-approval, o terminar.
     graph.add_conditional_edges(
         "review_plan",
         should_retry,
         {
             "retry": "retry_reflection",  # Vuelve a reflexión ligera en caso de rechazo (GAP 1)
-            "end": END
+            "marker_regen": "surgical_marker_regen",  # [P5-MARKER-APPROVED-1]
+            "end": END,
         }
     )
+
+    # [P5-MARKER-APPROVED-1] Tras re-corregir markers, re-aggregar shopping
+    # list (assemble) y re-evaluar (review). El flag `_marker_regen_attempted`
+    # previene loop: la 2da pasada por `should_retry` enrutará a "end" o
+    # "retry" pero NUNCA a "marker_regen" otra vez.
+    graph.add_edge("surgical_marker_regen", "assemble_plan")
 
     return graph.compile()
 
@@ -7198,10 +9163,76 @@ def get_plan_graph_status() -> dict:
 # ============================================================
 _GUEST_METRICS_ENABLED = True  # default optimista; el probe lo desactiva si schema mal
 
+# [P1-33] State tracking adicional para el endpoint admin. Permite a SRE
+# inspeccionar (a) cuándo se evaluó el flag por última vez, (b) si el último
+# evento fue probe automático o forzado por admin, (c) el error original si
+# el probe falló. Esto convierte una decisión startup-only en algo
+# observable y operable sin redeploy.
+_GUEST_METRICS_LAST_PROBE_AT: Optional[float] = None
+_GUEST_METRICS_LAST_PROBE_RESULT: Optional[bool] = None
+_GUEST_METRICS_LAST_ERROR: Optional[str] = None
+_GUEST_METRICS_LAST_SOURCE: str = "default"  # "default" | "probe" | "admin_force"
+_GUEST_METRICS_LAST_REASON: Optional[str] = None
+_GUEST_METRICS_STATE_LOCK = threading.Lock()
+
 
 def _is_guest_metrics_enabled() -> bool:
     """P1-Q10: snapshot del flag para emitters. Lectura atómica (bool en GIL)."""
     return _GUEST_METRICS_ENABLED
+
+
+def get_guest_metrics_status() -> dict:
+    """[P1-33] Snapshot read-only del estado de `_GUEST_METRICS_ENABLED`
+    + metadata útil para el endpoint admin.
+
+    Devuelve:
+      - `enabled`: bool actual del flag.
+      - `last_probe_at`: epoch seconds del último probe (None si nunca).
+      - `last_probe_result`: bool del último probe (None si nunca).
+      - `last_error`: string del último fallo (None si OK o nunca probado).
+      - `last_source`: "default" | "probe" | "admin_force".
+      - `last_reason`: string opcional explicando el último cambio (admin
+        override) o None.
+    """
+    with _GUEST_METRICS_STATE_LOCK:
+        return {
+            "enabled": _GUEST_METRICS_ENABLED,
+            "last_probe_at": _GUEST_METRICS_LAST_PROBE_AT,
+            "last_probe_result": _GUEST_METRICS_LAST_PROBE_RESULT,
+            "last_error": _GUEST_METRICS_LAST_ERROR,
+            "last_source": _GUEST_METRICS_LAST_SOURCE,
+            "last_reason": _GUEST_METRICS_LAST_REASON,
+        }
+
+
+def force_set_guest_metrics_enabled(enabled: bool, reason: Optional[str] = None) -> dict:
+    """[P1-33] Override administrativo del flag `_GUEST_METRICS_ENABLED`.
+
+    Permite a SRE forzar el flag sin esperar a un re-probe (útil cuando el
+    operador acaba de aplicar la migración manual y quiere habilitar
+    inmediatamente, o cuando detecta inserts fallidos en logs y quiere
+    desactivar antes de que la siguiente verificación auto corra).
+
+    Args:
+        enabled: True para habilitar, False para deshabilitar.
+        reason: string opcional explicando el motivo (queda en
+            `last_reason` para auditoría posterior).
+
+    Returns:
+        Snapshot del estado tras el cambio (mismo formato que
+        `get_guest_metrics_status`).
+    """
+    global _GUEST_METRICS_ENABLED, _GUEST_METRICS_LAST_SOURCE, _GUEST_METRICS_LAST_REASON
+    with _GUEST_METRICS_STATE_LOCK:
+        previous = _GUEST_METRICS_ENABLED
+        _GUEST_METRICS_ENABLED = bool(enabled)
+        _GUEST_METRICS_LAST_SOURCE = "admin_force"
+        _GUEST_METRICS_LAST_REASON = reason
+    logger.warning(
+        f"[P1-33] _GUEST_METRICS_ENABLED forced via admin: "
+        f"{previous} → {_GUEST_METRICS_ENABLED!r}. Reason: {reason!r}"
+    )
+    return get_guest_metrics_status()
 
 
 def verify_pipeline_metrics_guest_insert() -> bool:
@@ -7222,7 +9253,9 @@ def verify_pipeline_metrics_guest_insert() -> bool:
     migración (que es la que crea/repara el schema). Esta función NO crea
     la tabla — solo verifica que la migración funcionó.
     """
-    global _GUEST_METRICS_ENABLED
+    global _GUEST_METRICS_ENABLED, _GUEST_METRICS_LAST_PROBE_AT
+    global _GUEST_METRICS_LAST_PROBE_RESULT, _GUEST_METRICS_LAST_ERROR
+    global _GUEST_METRICS_LAST_SOURCE, _GUEST_METRICS_LAST_REASON
     try:
         # Probe: INSERT + ROLLBACK manual. Usamos `execute_sql_query` con un
         # bloque explícito de DO + ROLLBACK para no requerir API transaccional
@@ -7257,14 +9290,30 @@ def verify_pipeline_metrics_guest_insert() -> bool:
                 f"(node={probe_node!r}): {cleanup_err}. Filtrar manualmente "
                 f"con DELETE FROM pipeline_metrics WHERE node='{probe_node}'."
             )
-        _GUEST_METRICS_ENABLED = True
+        # [P1-33] Tracking del resultado del probe.
+        with _GUEST_METRICS_STATE_LOCK:
+            _GUEST_METRICS_ENABLED = True
+            _GUEST_METRICS_LAST_PROBE_AT = time.time()
+            _GUEST_METRICS_LAST_PROBE_RESULT = True
+            _GUEST_METRICS_LAST_ERROR = None
+            _GUEST_METRICS_LAST_SOURCE = "probe"
+            _GUEST_METRICS_LAST_REASON = None
         logger.info(
             "[STARTUP] P1-Q10: pipeline_metrics acepta inserts con user_id=NULL "
             "(guest metrics habilitadas)."
         )
         return True
     except Exception as probe_err:
-        _GUEST_METRICS_ENABLED = False
+        # [P1-33] Tracking del fallo del probe.
+        with _GUEST_METRICS_STATE_LOCK:
+            _GUEST_METRICS_ENABLED = False
+            _GUEST_METRICS_LAST_PROBE_AT = time.time()
+            _GUEST_METRICS_LAST_PROBE_RESULT = False
+            _GUEST_METRICS_LAST_ERROR = (
+                f"{type(probe_err).__name__}: {probe_err!s}"[:500]
+            )
+            _GUEST_METRICS_LAST_SOURCE = "probe"
+            _GUEST_METRICS_LAST_REASON = None
         logger.critical(
             f"[STARTUP] P1-Q10: pipeline_metrics RECHAZA inserts con user_id=NULL "
             f"({type(probe_err).__name__}: {probe_err}). Las métricas de pipelines "
@@ -7453,7 +9502,12 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
     "_pantry_drift_warning",
     "_drift_retries",
     "_pantry_quantity_violations",
-    "_strict_post_gen_required",
+    # [P1-A] Removida `_strict_post_gen_required`: era un dead-write en
+    # `cron_tasks.py` sin consumer. El gate post-gen estricto que la habría
+    # justificado ya corre inline vía `_is_flex` recomputado. Si en el futuro
+    # se cablea un consumer cross-pipeline (e.g. propagar al snapshot del
+    # siguiente chunk para forzar strict tras live-recovery), volver a añadirla
+    # acá Y documentar el caller que la consume.
     "_pantry_supplement_required",
 
     # cron_tasks.py — `inject_learning_signals_from_profile` (señales meta-learning)
@@ -8440,6 +10494,48 @@ def _apply_critical_review_guardrails(
     already_fallback = isinstance(plan_result, dict) and plan_result.get("_is_fallback")
     schema_invalid = isinstance(plan_result, dict) and plan_result.get("_schema_invalid")
 
+    # [P1-32] Caso anómalo: el plan YA es `_is_fallback=True` PERO
+    # presenta `_schema_invalid=True` o un rechazo médico crítico.
+    # `_get_extreme_fallback_plan()` siempre produce un plan válido y
+    # médicamente seguro (template matemático sin LLM), así que esta
+    # combinación NUNCA debería ocurrir naturalmente. Si llegamos aquí
+    # con ese estado, indica:
+    #   (a) Mutación downstream corrompió el plan post-fallback (race,
+    #       bug aislado en `_repair_partial_plan`, etc.).
+    #   (b) Doble graceful degradation (e.g. el except del global timeout
+    #       generó fallback, luego un nodo posterior lo marcó schema_invalid).
+    #   (c) `_get_extreme_fallback_plan()` rompió su contrato de "siempre
+    #       válido" por bug — alerta de regression.
+    #
+    # Pre-fix, el guard `not already_fallback` short-circuiteaba toda la
+    # rama crítica, entregando un plan `_is_fallback + _schema_invalid`
+    # al frontend que no podía renderizarlo (hojas en blanco). Y para
+    # `_is_fallback + critical_rejection`, el plan se entregaba pese a
+    # violar alergias/condiciones médicas — riesgo de salud.
+    #
+    # Fix: detectar la anomalía explícitamente, emitir error logging para
+    # que SRE pueda alertar (la frecuencia del log mide la salud del
+    # `_get_extreme_fallback_plan`), y forzar regeneración de un fallback
+    # fresco (`already_fallback=False` reentra al path estándar).
+    if already_fallback and (
+        schema_invalid
+        or (not review_passed and rejection_severity == "critical")
+    ):
+        _p132_cause = (
+            "_schema_invalid=True" if schema_invalid
+            else f"rechazo médico critical (severity={rejection_severity!r})"
+        )
+        logger.error(
+            f"🚨 [P1-32] Plan ya `_is_fallback=True` PERO también "
+            f"{_p132_cause}. Anómalo — `_get_extreme_fallback_plan()` "
+            f"debería producir planes válidos y médicamente seguros. "
+            f"Forzando regeneración. razones={rejection_reasons}"
+        )
+        # Reset del flag para forzar entrada a la rama de needs_critical_
+        # fallback (regeneración fresca + disclaimer + preservación del
+        # embedding del intento original).
+        already_fallback = False
+
     needs_critical_fallback = isinstance(plan_result, dict) and not already_fallback and (
         schema_invalid
         or (not review_passed and rejection_severity == "critical")
@@ -9388,7 +11484,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
 
     # 3. Estado inicial del grafo
     req_id = str(uuid.uuid4())[:8]
-    request_id_var.set(req_id)
+    _p134_req_token = request_id_var.set(req_id)
     # P1-NEW-1: setear user_id en ContextVar para que el wrapper
     # `ChatGoogleGenerativeAI` lo lea y aplique rate limit per-user.
     # Resolución del user_id efectivo:
@@ -9404,267 +11500,384 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
     )
     if _rate_limit_uid == "guest" or not _rate_limit_uid:
         _rate_limit_uid = None
-    user_id_var.set(_rate_limit_uid)
+    _p134_uid_token = user_id_var.set(_rate_limit_uid)
 
     # P1-NEW-4: dict mutable per-pipeline para trackear pérdidas de eventos
     # SSE. Las tasks descendientes (asyncio.Task, run_in_executor) heredan
     # el contexto y mutan este mismo objeto. Al final del pipeline, los
     # totales se emiten como métrica `progress_cb`.
-    _pipeline_cb_stats_var.set({
+    _p134_cb_token = _pipeline_cb_stats_var.set({
         "dropped_cap": 0,
         "timed_out": 0,
         "failed_async": 0,
         "failed_sync": 0,
     })
 
-    # [P1-ORQ-9] Cierre de schema drift: TODOS los campos declarados en
-    # `PlanState` (líneas ~1827-1885) deben aparecer en `initial_state` con
-    # un default explícito. Antes faltaban 9 campos opcionales; LangGraph en
-    # strict-schema mode (modo recomendado para producción) puede filtrar
-    # writes a keys no presentes en el initial_state, descartando silenciosamente
-    # actualizaciones de nodos downstream. La línea 1877-1885 del propio
-    # archivo documenta este riesgo: "Antes, sin esta declaración, LangGraph en
-    # strict-schema mode lo filtraba al pasar `state` entre nodos, perdiendo
-    # los buffers acumulados de forma silenciosa". El mismo riesgo existe para
-    # campos declarados pero no inicializados. Defaults:
-    #   - Optional[T] → None excepto donde el patrón existente requiere otro
-    #     valor (ver `_token_buffers` abajo).
-    #   - Todos los consumidores leen vía `state.get(...)` con fallback,
-    #     así que None es semánticamente equivalente a "key missing" para
-    #     ellos. Los nodos que ESCRIBEN estos campos (review, adversarial,
-    #     compress_history, etc.) ahora tienen su update garantizado a no
-    #     ser filtrado por LangGraph.
-    initial_state: PlanState = {
-        "request_id": req_id,
-        "form_data": actual_form_data,
-        "taste_profile": taste_profile,
-        "nutrition": nutrition,
-        "history_context": history_context,
-        # [P1-ORQ-9] reflection_directive: escrito por `retry_reflection_node`
-        # (línea ~6256) tras una review fallida. Consumer en `_build_planner_prompt`
-        # (línea ~2764) usa truthy check → None es safe. P1-ORQ-2 ya garantizaba
-        # reset en cada retry; este init asegura que LangGraph no filtre el write.
-        "reflection_directive": None,
-        # [P1-ORQ-9] compressed_context: escrito por nodos de compresión de
-        # historial (líneas 2613, 2646, 2671, 2674, 2678) cuando el chunk de
-        # historia es demasiado grande para inyectar crudo al prompt. Consumer
-        # en `_build_shared_context` (línea 2498) usa `state.get(...) or
-        # state.get("history_context", "")` — None pasa al fallback original.
-        "compressed_context": None,
-        "user_facts": full_rag_context,
-        "semantic_cache_hit": False,
-        "cached_plan_data": None,
-        "profile_embedding": query_emb,
-        "plan_result": None,
-        "plan_skeleton": None,
-        # [P1-ORQ-9] candidate_a/b + adversarial_rationale + _ab_temp_meta:
-        # escritos por el nodo adversarial self-play (línea 3467+). Consumers
-        # downstream (judge, assemble) usan `.get()` con fallback. None safe.
-        "candidate_a": None,
-        "candidate_b": None,
-        "adversarial_rationale": None,
-        "_ab_temp_meta": None,
-        "review_passed": False,
-        "review_feedback": "",
-        "attempt": 1,
-        "rejection_reasons": [],
-        # [P1-ORQ-9] _rejection_severity: escrito por `review_node` (línea
-        # 5834) cuando rechaza con clasificación crítica/high/minor. Consumer
-        # en `should_retry` (línea 5883) usa `state.get(..., "minor")` —
-        # con None presente, el get devuelve None (no "minor"), pero los
-        # downstream checks `severity == "critical"` y `severity == "high"`
-        # fallan idénticamente con None y con "minor", así que falls through
-        # a la rama de retry — comportamiento funcional equivalente.
-        "_rejection_severity": None,
-        # P0-ORQ-3: declarado en PlanState (línea ~1872) y escrito por
-        # `review_node` (línea ~5794) para alimentar la corrección quirúrgica
-        # (`assemble_plan_node` línea ~5087, `_chunked_generation` línea ~2933).
-        # Sin este key en `initial_state`, LangGraph en strict-schema mode podía
-        # filtrar la escritura del nodo → set de días afectados queda vacío en
-        # el read → toda regeneración quirúrgica validaba TODOS los días contra
-        # el skeleton (no solo los regenerados) → falsos positivos de fidelidad
-        # rechazaban planes válidos. Inicializado a None = "sin surgical fix
-        # pendiente" (semántica equivalente a `state.get(...) or []`).
-        "_affected_days": None,
-        # [P1-ORQ-9] _cached_context: cacheo de los blocks de contexto del
-        # prompt para reducir latencia de retries (los blocks no cambian
-        # entre attempt 1 y 2). Escrito por `_build_shared_context` (línea
-        # 2909) la primera vez. Consumer en líneas 2491-2492 usa truthy check
-        # antes de retornar — None / {} ambos falsy → rebuild. Safe.
-        "_cached_context": None,
-        "progress_callback": progress_callback,
-        "background_tasks": background_tasks,
-        "pipeline_start": pipeline_start,
-        # [P1-ORQ-9] _token_buffers: dict mutado in-place vía
-        # `state.setdefault("_token_buffers", {})` desde `_emit_progress`
-        # (línea 2081). IMPORTANTE: inicializar a {} (no a None). Si fuera
-        # None, `state.setdefault("_token_buffers", {})` retornaría None
-        # (clave existe), y luego `None.setdefault(day_key, ...)` lanzaría
-        # AttributeError. Con {} preservamos el patrón existente: setdefault
-        # devuelve el dict existente y la mutación per-day funciona.
-        "_token_buffers": {},
-    }
-    
-    # 4. Ejecutar el grafo con Timeout Global y Graceful Degradation (Mejora 5)
-    latest_state = [initial_state]
-    
-    async def run_graph():
-        # Usamos astream con stream_mode="values".
-        # P1-Q2: `_get_plan_graph()` construye el grafo lazy en la primera
-        # request por proceso. Si el build falla, propaga la excepción al
-        # `except` de afuera que dispara el fallback matemático (P0-1) en
-        # lugar de devolver 5xx al cliente.
-        plan_graph = _get_plan_graph()
-        async for event in plan_graph.astream(initial_state, stream_mode="values"):
-            latest_state[0] = event
-        return latest_state[0]
-
-    # P0-1: cantidad de días que el caller solicitó. El plan final SIEMPRE debe
-    # tener este número de días, ya sea generado por la IA, fallback puro, o
-    # mezcla (parcial + relleno fallback). Antes el fallback hardcodeaba 3 y el
-    # frontend recibía planes truncados sin advertencia.
-    # P1-A5: helpers de fallback (`_build_fallback_day`, `_get_extreme_fallback_plan`,
-    # `_is_day_valid`, `_is_plan_complete`, `_repair_partial_plan`) ahora viven
-    # a nivel módulo. `nutrition` y `requested_days` se les pasan como kwargs.
-    #
-    # [P1-ORQ-8] Logging explícito cuando triggea la corrección defensiva.
-    # ANTES, el cómputo `int(... or PLAN_CHUNK_SIZE) or PLAN_CHUNK_SIZE`
-    # corregía silenciosamente strings no-numéricos (TypeError no atrapado),
-    # `"0"` (int(=0) → falsy → segundo or), y negativos (`if < 1`) sin avisar.
-    # El router ahora valida en boundary (`_validate_total_days` → 422), pero
-    # la corrección defensiva sigue aquí porque otros callers acceden al
-    # orquestador sin pasar por router (cron_tasks, proactive_agent, sync
-    # wrapper). Esos callers deben enviar valores válidos; si llegamos a
-    # corregir aquí, hay un bug upstream que vale la pena loguear.
-    _raw_days = actual_form_data.get("_days_to_generate")
+    # [P1-34] Try/finally que garantiza el reset de ContextVars al
+    # exit de la función (normal return o exception path).
     try:
-        requested_days = int(_raw_days) if _raw_days is not None else PLAN_CHUNK_SIZE
-    except (TypeError, ValueError):
-        logger.warning(
-            f"🟠 [P1-ORQ-8] _days_to_generate={_raw_days!r} (tipo "
-            f"{type(_raw_days).__name__}) no parseable a int. Defaulteando a "
-            f"{PLAN_CHUNK_SIZE}. Bug upstream: caller no-router (cron / "
-            f"proactive_agent / sync wrapper) envió tipo inválido. El router "
-            f"valida vía `_validate_total_days` → 422."
-        )
-        requested_days = PLAN_CHUNK_SIZE
-    if requested_days < 1:
-        logger.warning(
-            f"🟠 [P1-ORQ-8] _days_to_generate={_raw_days!r} → {requested_days} "
-            f"(< 1). Corrigiendo a {PLAN_CHUNK_SIZE}. Bug upstream: caller "
-            f"no-router envió valor cero/negativo. El router valida vía "
-            f"`_validate_total_days` → 422 para clientes oficiales."
-        )
-        requested_days = PLAN_CHUNK_SIZE
 
-    try:
-        # Ejecutar asíncronamente con un timeout global (sin saltos de hilo)
-        # P1-NEW-2: timeout configurable vía `MEALFIT_GLOBAL_PIPELINE_TIMEOUT_S`.
-        final_state = await asyncio.wait_for(run_graph(), timeout=GLOBAL_PIPELINE_TIMEOUT_S)
-    except Exception as e:
-        print(f"🚨 [EXTREME GRACEFUL DEGRADATION] Error crítico en pipeline ({type(e).__name__}): {e}")
-        final_state = latest_state[0] if latest_state else {}
-        plan_partial = final_state.get("plan_result")
-        # P0-1/P0-2: si no hay plan parcial usable, fallback total con la cantidad
-        # de días solicitada. Si hay plan parcial (aunque sea con días vacíos o
-        # incompletos), repararlo en lugar de descartar el trabajo del LLM.
-        if not isinstance(plan_partial, dict) or not plan_partial:
-            print(f"🛡️ [FALLBACK] Generando plan de emergencia matemático ({requested_days} días, by-pass de LLM)...")
-            # P1-9: `_get_extreme_fallback_plan` ya setea `_is_fallback=True` dentro
-            # del plan retornado. No duplicar en final_state — `arun_plan_pipeline`
-            # retorna `final_state["plan_result"]` al caller, así que el flag en
-            # final_state nunca se lee externamente y solo agregaba ambigüedad.
-            final_state["plan_result"] = _get_extreme_fallback_plan(
+        # [P1-ORQ-9] Cierre de schema drift: TODOS los campos declarados en
+        # `PlanState` (líneas ~1827-1885) deben aparecer en `initial_state` con
+        # un default explícito. Antes faltaban 9 campos opcionales; LangGraph en
+        # strict-schema mode (modo recomendado para producción) puede filtrar
+        # writes a keys no presentes en el initial_state, descartando silenciosamente
+        # actualizaciones de nodos downstream. La línea 1877-1885 del propio
+        # archivo documenta este riesgo: "Antes, sin esta declaración, LangGraph en
+        # strict-schema mode lo filtraba al pasar `state` entre nodos, perdiendo
+        # los buffers acumulados de forma silenciosa". El mismo riesgo existe para
+        # campos declarados pero no inicializados. Defaults:
+        #   - Optional[T] → None excepto donde el patrón existente requiere otro
+        #     valor (ver `_token_buffers` abajo).
+        #   - Todos los consumidores leen vía `state.get(...)` con fallback,
+        #     así que None es semánticamente equivalente a "key missing" para
+        #     ellos. Los nodos que ESCRIBEN estos campos (review, adversarial,
+        #     compress_history, etc.) ahora tienen su update garantizado a no
+        #     ser filtrado por LangGraph.
+        initial_state: PlanState = {
+            "request_id": req_id,
+            "form_data": actual_form_data,
+            "taste_profile": taste_profile,
+            "nutrition": nutrition,
+            "history_context": history_context,
+            # [P1-ORQ-9] reflection_directive: escrito por `retry_reflection_node`
+            # (línea ~6256) tras una review fallida. Consumer en `_build_planner_prompt`
+            # (línea ~2764) usa truthy check → None es safe. P1-ORQ-2 ya garantizaba
+            # reset en cada retry; este init asegura que LangGraph no filtre el write.
+            "reflection_directive": None,
+            # [P1-ORQ-9] compressed_context: escrito por nodos de compresión de
+            # historial (líneas 2613, 2646, 2671, 2674, 2678) cuando el chunk de
+            # historia es demasiado grande para inyectar crudo al prompt. Consumer
+            # en `_build_shared_context` (línea 2498) usa `state.get(...) or
+            # state.get("history_context", "")` — None pasa al fallback original.
+            "compressed_context": None,
+            "user_facts": full_rag_context,
+            "semantic_cache_hit": False,
+            "cached_plan_data": None,
+            "profile_embedding": query_emb,
+            "plan_result": None,
+            "plan_skeleton": None,
+            # [P1-ORQ-9] candidate_a/b + adversarial_rationale + _ab_temp_meta:
+            # escritos por el nodo adversarial self-play (línea 3467+). Consumers
+            # downstream (judge, assemble) usan `.get()` con fallback. None safe.
+            "candidate_a": None,
+            "candidate_b": None,
+            "adversarial_rationale": None,
+            "_ab_temp_meta": None,
+            "review_passed": False,
+            "review_feedback": "",
+            "attempt": 1,
+            "rejection_reasons": [],
+            # [P0-5] _rejection_severity: escrito por `review_node` cuando
+            # rechaza con clasificación crítica/high/minor. Consumer en
+            # `should_retry` lo lee y aborta retry si crítico/high.
+            # Default explícito "minor" en lugar de None: `dict.get(k, default)`
+            # devuelve `None` cuando la key existe con valor None (NO el
+            # default), por lo que el comentario antiguo afirmando equivalencia
+            # entre None y "minor" era falso ante cualquier refactor futuro
+            # que añadiera ramas (`severity in {...}`). Hardcodear "minor" desde
+            # el inicio elimina la trampa. `should_retry` además normaliza con
+            # `or "minor"` por si un nodo intermedio escribe None explícito.
+            "_rejection_severity": "minor",
+            # [P0-PIPE-1] Snapshot del best attempt (se llena por
+            # `review_plan_node` en cada iteración). Inicializado a None/
+            # vacíos: si la pipeline aborta antes de un solo review (e.g.
+            # cancellation, exception muy temprana), el swap helper detecta
+            # snapshot ausente y deja `plan_result` actual sin cambios.
+            "_best_attempt_plan": None,
+            "_best_attempt_severity": None,
+            "_best_attempt_reasons": [],
+            "_best_attempt_review_passed": False,
+            "_best_attempt_number": None,
+            # [P5-MARKER-APPROVED-1] Inicializa el flag de re-entrada del
+            # surgical regen post-approval. False permite que la 1ra pasada
+            # por `should_retry` con review aprobado + markers pendientes
+            # enrute a `surgical_marker_regen`. Reset a False también en
+            # `retry_reflection_node` para nuevos attempts.
+            "_marker_regen_attempted": False,
+            # P0-ORQ-3: declarado en PlanState (línea ~1872) y escrito por
+            # `review_node` (línea ~5794) para alimentar la corrección quirúrgica
+            # (`assemble_plan_node` línea ~5087, `_chunked_generation` línea ~2933).
+            # Sin este key en `initial_state`, LangGraph en strict-schema mode podía
+            # filtrar la escritura del nodo → set de días afectados queda vacío en
+            # el read → toda regeneración quirúrgica validaba TODOS los días contra
+            # el skeleton (no solo los regenerados) → falsos positivos de fidelidad
+            # rechazaban planes válidos. Inicializado a None = "sin surgical fix
+            # pendiente" (semántica equivalente a `state.get(...) or []`).
+            "_affected_days": None,
+            # [P1-ORQ-9] _cached_context: cacheo de los blocks de contexto del
+            # prompt para reducir latencia de retries (los blocks no cambian
+            # entre attempt 1 y 2). Escrito por `_build_shared_context` (línea
+            # 2909) la primera vez. Consumer en líneas 2491-2492 usa truthy check
+            # antes de retornar — None / {} ambos falsy → rebuild. Safe.
+            "_cached_context": None,
+            "progress_callback": progress_callback,
+            "background_tasks": background_tasks,
+            "pipeline_start": pipeline_start,
+            # [P1-ORQ-9] _token_buffers: dict mutado in-place vía
+            # `state.setdefault("_token_buffers", {})` desde `_emit_progress`
+            # (línea 2081). IMPORTANTE: inicializar a {} (no a None). Si fuera
+            # None, `state.setdefault("_token_buffers", {})` retornaría None
+            # (clave existe), y luego `None.setdefault(day_key, ...)` lanzaría
+            # AttributeError. Con {} preservamos el patrón existente: setdefault
+            # devuelve el dict existente y la mutación per-day funciona.
+            "_token_buffers": {},
+        }
+    
+        # 4. Ejecutar el grafo con Timeout Global y Graceful Degradation (Mejora 5)
+        latest_state = [initial_state]
+    
+        # [P6-CANCEL-PIPELINE-CHECK] Defense-in-depth: chequear cancel
+        # registry directo dentro del loop de LangGraph (cada nodo del
+        # grafo). Cubre el caso donde `asyncio.cancel()` del task externo
+        # es atrapado por `asyncio.shield` interno de LLM calls — el
+        # registry check es independiente de asyncio cancellation.
+        # Bug observable corrida 2026-05-06 00:31: cancel POST llega al
+        # backend, _pipeline_task.cancel() programa cancel asyncio, pero
+        # el pipeline sigue avanzando porque shields atrapan el
+        # CancelledError. Este check self-aborta el pipeline entre nodos.
+        _pipeline_session_id = actual_form_data.get("session_id")
+
+        async def run_graph():
+            # Usamos astream con stream_mode="values".
+            # P1-Q2: `_get_plan_graph()` construye el grafo lazy en la primera
+            # request por proceso. Si el build falla, propaga la excepción al
+            # `except` de afuera que dispara el fallback matemático (P0-1) en
+            # lugar de devolver 5xx al cliente.
+            plan_graph = _get_plan_graph()
+            # Import lazy para evitar circular import (routers.plans importa
+            # graph_orchestrator).
+            try:
+                from routers.plans import is_session_cancelled as _is_cancelled
+            except Exception:
+                _is_cancelled = lambda _sid: False
+            async for event in plan_graph.astream(initial_state, stream_mode="values"):
+                latest_state[0] = event
+                # [P6-CANCEL-PIPELINE-CHECK] Self-abort entre nodos
+                if _pipeline_session_id and _is_cancelled(_pipeline_session_id):
+                    logger.warning(
+                        f"🛑 [P6-CANCEL-PIPELINE-CHECK] Cancel detectado para "
+                        f"session={_pipeline_session_id} entre nodos LangGraph. "
+                        f"Abortando pipeline."
+                    )
+                    raise asyncio.CancelledError("user_cancelled_via_registry")
+            return latest_state[0]
+
+        # P0-1: cantidad de días que el caller solicitó. El plan final SIEMPRE debe
+        # tener este número de días, ya sea generado por la IA, fallback puro, o
+        # mezcla (parcial + relleno fallback). Antes el fallback hardcodeaba 3 y el
+        # frontend recibía planes truncados sin advertencia.
+        # P1-A5: helpers de fallback (`_build_fallback_day`, `_get_extreme_fallback_plan`,
+        # `_is_day_valid`, `_is_plan_complete`, `_repair_partial_plan`) ahora viven
+        # a nivel módulo. `nutrition` y `requested_days` se les pasan como kwargs.
+        #
+        # [P1-ORQ-8] Logging explícito cuando triggea la corrección defensiva.
+        # ANTES, el cómputo `int(... or PLAN_CHUNK_SIZE) or PLAN_CHUNK_SIZE`
+        # corregía silenciosamente strings no-numéricos (TypeError no atrapado),
+        # `"0"` (int(=0) → falsy → segundo or), y negativos (`if < 1`) sin avisar.
+        # El router ahora valida en boundary (`_validate_total_days` → 422), pero
+        # la corrección defensiva sigue aquí porque otros callers acceden al
+        # orquestador sin pasar por router (cron_tasks, proactive_agent, sync
+        # wrapper). Esos callers deben enviar valores válidos; si llegamos a
+        # corregir aquí, hay un bug upstream que vale la pena loguear.
+        _raw_days = actual_form_data.get("_days_to_generate")
+        try:
+            requested_days = int(_raw_days) if _raw_days is not None else PLAN_CHUNK_SIZE
+        except (TypeError, ValueError):
+            logger.warning(
+                f"🟠 [P1-ORQ-8] _days_to_generate={_raw_days!r} (tipo "
+                f"{type(_raw_days).__name__}) no parseable a int. Defaulteando a "
+                f"{PLAN_CHUNK_SIZE}. Bug upstream: caller no-router (cron / "
+                f"proactive_agent / sync wrapper) envió tipo inválido. El router "
+                f"valida vía `_validate_total_days` → 422."
+            )
+            requested_days = PLAN_CHUNK_SIZE
+        if requested_days < 1:
+            logger.warning(
+                f"🟠 [P1-ORQ-8] _days_to_generate={_raw_days!r} → {requested_days} "
+                f"(< 1). Corrigiendo a {PLAN_CHUNK_SIZE}. Bug upstream: caller "
+                f"no-router envió valor cero/negativo. El router valida vía "
+                f"`_validate_total_days` → 422 para clientes oficiales."
+            )
+            requested_days = PLAN_CHUNK_SIZE
+
+        try:
+            # Ejecutar asíncronamente con un timeout global (sin saltos de hilo)
+            # P1-NEW-2: timeout configurable vía `MEALFIT_GLOBAL_PIPELINE_TIMEOUT_S`.
+            final_state = await asyncio.wait_for(run_graph(), timeout=GLOBAL_PIPELINE_TIMEOUT_S)
+        except Exception as e:
+            print(f"🚨 [EXTREME GRACEFUL DEGRADATION] Error crítico en pipeline ({type(e).__name__}): {e}")
+            final_state = latest_state[0] if latest_state else {}
+            # [P1-26] Flush de TODOS los token buffers pendientes ANTES de
+            # entregar el fallback. Sin esto, tokens acumulados en buffers
+            # (especialmente `_default` para eventos no-day-keyed) se pierden
+            # cuando `asyncio.wait_for(GLOBAL_PIPELINE_TIMEOUT_S)` cancela el
+            # grafo a mitad de stream. La UI ya recibió un comienzo de
+            # respuesta vía SSE; sin este flush, ve texto truncado y debe
+            # esperar al evento de fallback completo. Best-effort: si el
+            # callback explota (cliente desconectó, queue lleno), se logea y
+            # seguimos al fallback — el flush no debe bloquear la entrega del
+            # plan.
+            try:
+                _p126_flushed = _flush_all_token_buffers(final_state)
+                if _p126_flushed:
+                    logger.info(
+                        f"[P1-26] Flush en degradación global: "
+                        f"{_p126_flushed} buffer(s) drenados antes del fallback."
+                    )
+            except Exception as _p126_err:
+                logger.debug(
+                    f"[P1-26] Flush en degradación global falló (best-effort): "
+                    f"{_p126_err!r}"
+                )
+            plan_partial = final_state.get("plan_result")
+            # P0-1/P0-2: si no hay plan parcial usable, fallback total con la cantidad
+            # de días solicitada. Si hay plan parcial (aunque sea con días vacíos o
+            # incompletos), repararlo en lugar de descartar el trabajo del LLM.
+            if not isinstance(plan_partial, dict) or not plan_partial:
+                print(f"🛡️ [FALLBACK] Generando plan de emergencia matemático ({requested_days} días, by-pass de LLM)...")
+                # P1-9: `_get_extreme_fallback_plan` ya setea `_is_fallback=True` dentro
+                # del plan retornado. No duplicar en final_state — `arun_plan_pipeline`
+                # retorna `final_state["plan_result"]` al caller, así que el flag en
+                # final_state nunca se lee externamente y solo agregaba ambigüedad.
+                final_state["plan_result"] = _get_extreme_fallback_plan(
+                    nutrition,
+                    actual_form_data.get("mainGoal", "Salud General"),
+                    num_days=requested_days,
+                )
+                final_state["attempt"] = 1
+                final_state["review_passed"] = True
+            else:
+                # P1-9: `_repair_partial_plan` ya setea `plan_partial["_is_fallback"]=True`
+                # cuando hace cualquier reparación. Nada más que hacer aquí.
+                _repair_partial_plan(plan_partial, nutrition=nutrition, requested_days=requested_days)
+    
+        pipeline_duration = round(time.time() - pipeline_start, 2)
+
+        # [P0-PIPE-1] Si el último intento empeoró respecto al mejor previo
+        # (e.g. retry pasó de `minor` a `high` por skeleton fidelity roto),
+        # restaurar el mejor antes de aplicar guardrails y antes del print
+        # final — para que el banner de "Aprobado:" refleje el plan que el
+        # usuario realmente recibirá.
+        try:
+            _swapped = _swap_to_best_attempt_if_better(final_state)
+            if _swapped:
+                logger.info(
+                    "🔄 [P0-PIPE-1] Plan final restaurado a snapshot del mejor "
+                    "intento previo (telemetría: `_best_attempt_swapped_from`)."
+                )
+        except Exception as _swap_err:
+            # Best-effort: si el helper revienta por estado corrupto, NO
+            # tumbamos el pipeline — preservamos comportamiento previo
+            # (entregar plan_result actual aunque sea peor) y logueamos.
+            logger.error(
+                f"⚠️ [P0-PIPE-1] _swap_to_best_attempt_if_better falló "
+                f"(best-effort): {type(_swap_err).__name__}: {_swap_err}. "
+                f"Continuando con plan_result actual sin swap."
+            )
+
+        print(f"\n{'🔗' * 30}")
+        print(f"🔗 [LANGGRAPH] Pipeline completado en {pipeline_duration}s")
+        print(f"🔗 Intentos: {final_state.get('attempt', 1)} | Aprobado: {final_state.get('review_passed', 'N/A')}")
+        print("🔗" * 30 + "\n")
+
+        # P0-1 / P1-8 / P1-A5: guardrail crítico de rechazo médico + transparencia
+        # de rechazo no-crítico. Lógica idéntica al bloque inline previo, ahora
+        # encapsulada en `_apply_critical_review_guardrails`.
+        _apply_critical_review_guardrails(
+            final_state,
+            nutrition=nutrition,
+            actual_form_data=actual_form_data,
+            requested_days=requested_days,
+        )
+
+        # P0-2 / MEJORA 2 / P0-A3 / P1-A5: defensa en profundidad final + active
+        # learning signals + cache schema version. Encapsula los tres bloques que
+        # cierran el pipeline antes del return.
+        _apply_final_defense_guardrails(
+            final_state,
+            nutrition=nutrition,
+            actual_form_data=actual_form_data,
+            requested_days=requested_days,
+        )
+
+        # GAP 4 / P1-A5 / [P1-1]: Score holístico + persistencia async.
+        # ANTES, esta llamada ocurría ANTES de los dos guardrails de arriba: si el
+        # plan original era reemplazado por fallback (rechazo médico crítico,
+        # `_schema_invalid`, plan vacío), `last_pipeline_score` se persistía con la
+        # confianza del plan REJECTED — `preflight_optimization_node` leía esa
+        # señal en la próxima request y elegía estrategia como si la IA hubiera
+        # tenido un happy path. AHORA corre DESPUÉS de los guardrails y detecta
+        # `_is_fallback=True` para clampear el score a 0.0; el `delivered_was_fallback`
+        # del metadata permite a Grafana distinguir score=0.0 por fallback vs por
+        # otras razones (cal_score colapsado, etc.).
+        _compute_pipeline_holistic_score_and_emit(
+            final_state,
+            nutrition=nutrition,
+            actual_form_data=actual_form_data,
+            initial_state=initial_state,
+            pipeline_duration=pipeline_duration,
+        )
+
+        # [P1-5] Última línea de defensa antes del return. ANTES,
+        # `return final_state["plan_result"]` con bracket access lanzaba KeyError
+        # opaco al caller (FastAPI → 500 sin contexto) si la key se perdía. Las
+        # defensas existentes la garantizan en condiciones normales:
+        #   - `initial_state` (P1-ORQ-9) la setea a None.
+        #   - `_apply_final_defense_guardrails` arriba reemplaza None/empty por
+        #     `_get_extreme_fallback_plan(...)` antes de llegar acá.
+        # PERO si llegamos aquí sin un dict válido (refactor futuro que mueva un
+        # guardrail dentro de un `if`, regresión de LangGraph que filtre keys
+        # tras el merge final, test directo del pipeline con state mutado), un
+        # crash silencioso degrada peor que un fallback marcado. CRITICAL log
+        # dispara alerting inmediato; el cliente recibe un plan en vez de 5xx.
+        plan_to_return = final_state.get("plan_result")
+        if not isinstance(plan_to_return, dict) or not plan_to_return:
+            logger.critical(
+                f"🚨 [P1-5] Pipeline terminó SIN plan_result válido pese a los "
+                f"dos guardrails arriba (tipo={type(plan_to_return).__name__}, "
+                f"truthy={bool(plan_to_return)}). Bug upstream en "
+                f"`_apply_critical_review_guardrails` o `_apply_final_defense_guardrails`. "
+                f"Generando último fallback de emergencia ({requested_days} días) "
+                f"para no devolver None / KeyError al cliente."
+            )
+            plan_to_return = _get_extreme_fallback_plan(
                 nutrition,
                 actual_form_data.get("mainGoal", "Salud General"),
                 num_days=requested_days,
             )
-            final_state["attempt"] = 1
-            final_state["review_passed"] = True
-        else:
-            # P1-9: `_repair_partial_plan` ya setea `plan_partial["_is_fallback"]=True`
-            # cuando hace cualquier reparación. Nada más que hacer aquí.
-            _repair_partial_plan(plan_partial, nutrition=nutrition, requested_days=requested_days)
-    
-    pipeline_duration = round(time.time() - pipeline_start, 2)
+            # Marcar para que el caller (router/cron) NO lo persista como plan
+            # real. `_is_fallback` ya lo setea `_get_extreme_fallback_plan`, pero
+            # añadimos una marca específica de este path para que Grafana pueda
+            # distinguir el origen del fallback en alerts.
+            plan_to_return["_p1_5_emergency_return"] = True
 
-    print(f"\n{'🔗' * 30}")
-    print(f"🔗 [LANGGRAPH] Pipeline completado en {pipeline_duration}s")
-    print(f"🔗 Intentos: {final_state.get('attempt', 1)} | Aprobado: {final_state.get('review_passed', 'N/A')}")
-    print("🔗" * 30 + "\n")
-
-    # P0-1 / P1-8 / P1-A5: guardrail crítico de rechazo médico + transparencia
-    # de rechazo no-crítico. Lógica idéntica al bloque inline previo, ahora
-    # encapsulada en `_apply_critical_review_guardrails`.
-    _apply_critical_review_guardrails(
-        final_state,
-        nutrition=nutrition,
-        actual_form_data=actual_form_data,
-        requested_days=requested_days,
-    )
-
-    # P0-2 / MEJORA 2 / P0-A3 / P1-A5: defensa en profundidad final + active
-    # learning signals + cache schema version. Encapsula los tres bloques que
-    # cierran el pipeline antes del return.
-    _apply_final_defense_guardrails(
-        final_state,
-        nutrition=nutrition,
-        actual_form_data=actual_form_data,
-        requested_days=requested_days,
-    )
-
-    # GAP 4 / P1-A5 / [P1-1]: Score holístico + persistencia async.
-    # ANTES, esta llamada ocurría ANTES de los dos guardrails de arriba: si el
-    # plan original era reemplazado por fallback (rechazo médico crítico,
-    # `_schema_invalid`, plan vacío), `last_pipeline_score` se persistía con la
-    # confianza del plan REJECTED — `preflight_optimization_node` leía esa
-    # señal en la próxima request y elegía estrategia como si la IA hubiera
-    # tenido un happy path. AHORA corre DESPUÉS de los guardrails y detecta
-    # `_is_fallback=True` para clampear el score a 0.0; el `delivered_was_fallback`
-    # del metadata permite a Grafana distinguir score=0.0 por fallback vs por
-    # otras razones (cal_score colapsado, etc.).
-    _compute_pipeline_holistic_score_and_emit(
-        final_state,
-        nutrition=nutrition,
-        actual_form_data=actual_form_data,
-        initial_state=initial_state,
-        pipeline_duration=pipeline_duration,
-    )
-
-    # [P1-5] Última línea de defensa antes del return. ANTES,
-    # `return final_state["plan_result"]` con bracket access lanzaba KeyError
-    # opaco al caller (FastAPI → 500 sin contexto) si la key se perdía. Las
-    # defensas existentes la garantizan en condiciones normales:
-    #   - `initial_state` (P1-ORQ-9) la setea a None.
-    #   - `_apply_final_defense_guardrails` arriba reemplaza None/empty por
-    #     `_get_extreme_fallback_plan(...)` antes de llegar acá.
-    # PERO si llegamos aquí sin un dict válido (refactor futuro que mueva un
-    # guardrail dentro de un `if`, regresión de LangGraph que filtre keys
-    # tras el merge final, test directo del pipeline con state mutado), un
-    # crash silencioso degrada peor que un fallback marcado. CRITICAL log
-    # dispara alerting inmediato; el cliente recibe un plan en vez de 5xx.
-    plan_to_return = final_state.get("plan_result")
-    if not isinstance(plan_to_return, dict) or not plan_to_return:
-        logger.critical(
-            f"🚨 [P1-5] Pipeline terminó SIN plan_result válido pese a los "
-            f"dos guardrails arriba (tipo={type(plan_to_return).__name__}, "
-            f"truthy={bool(plan_to_return)}). Bug upstream en "
-            f"`_apply_critical_review_guardrails` o `_apply_final_defense_guardrails`. "
-            f"Generando último fallback de emergencia ({requested_days} días) "
-            f"para no devolver None / KeyError al cliente."
-        )
-        plan_to_return = _get_extreme_fallback_plan(
-            nutrition,
-            actual_form_data.get("mainGoal", "Salud General"),
-            num_days=requested_days,
-        )
-        # Marcar para que el caller (router/cron) NO lo persista como plan
-        # real. `_is_fallback` ya lo setea `_get_extreme_fallback_plan`, pero
-        # añadimos una marca específica de este path para que Grafana pueda
-        # distinguir el origen del fallback en alerts.
-        plan_to_return["_p1_5_emergency_return"] = True
-
-    return plan_to_return
+        return plan_to_return
+    finally:
+        # [P1-34] Reset de ContextVars del pipeline para prevenir leakage
+        # entre invocaciones consecutivas en el mismo contexto. Sin estos
+        # `reset()`, los `set()` arriba persistían en el contexto del caller
+        # tras el return: el siguiente pipeline (mismo task / sync wrapper /
+        # test runner) heredaba el req_id, user_id y cb_stats del anterior,
+        # contaminando logs de tracing y métricas SSE. asyncio.Task aísla
+        # contextos en producción HTTP, pero los paths sync (cron / batch /
+        # tests) NO tienen esa garantía. Cubre normal return + exception
+        # path (try/finally garantiza el reset incluso si el pipeline falla).
+        # Cada reset envuelto en su propio try porque ContextVar.reset puede
+        # lanzar LookupError/ValueError si el token expiró por algún reason
+        # exótico (e.g. evento de cancelación que ya hizo cleanup parcial).
+        try:
+            _pipeline_cb_stats_var.reset(_p134_cb_token)
+        except (LookupError, ValueError):
+            pass
+        try:
+            user_id_var.reset(_p134_uid_token)
+        except (LookupError, ValueError):
+            pass
+        try:
+            request_id_var.reset(_p134_req_token)
+        except (LookupError, ValueError):
+            pass
 
 def _run_arun_in_isolated_loop(arun_kwargs: dict, ctx: contextvars.Context) -> dict:
     """P1-NEW-6: Helper ejecutado en `_SYNC_WRAPPER_EXECUTOR`.

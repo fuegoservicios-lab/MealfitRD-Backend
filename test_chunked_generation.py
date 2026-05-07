@@ -2277,9 +2277,15 @@ def test_release_chunk_reservations_frees_inventory():
     assert reservation_key not in call_args["reservation_details"]
 
 def test_partial_reservation_marks_chunk_and_defers_next():
-    """P0-5: mock Supabase to fail 4 of 5 reservations → reservation_status='partial'."""
-    from unittest.mock import patch, MagicMock, call
-    from cron_tasks import _reconcile_chunk_reservations
+    """P0-5: mock Supabase to fail 4 of 5 reservations → reservation_status='partial'.
+
+    [P1-CHUNKS-2] La función ahora levanta `ReservationReconciliationFailed`
+    en agotamiento (en vez de retornar False); el caller del worker tiene
+    try/except. Este test invoca el helper directamente, así que envuelve
+    el path de fallo con `pytest.raises`."""
+    from unittest.mock import patch
+    import pytest as _pytest
+    from cron_tasks import _reconcile_chunk_reservations, ReservationReconciliationFailed
 
     new_days = [{
         "day": 1,
@@ -2293,7 +2299,8 @@ def test_partial_reservation_marks_chunk_and_defers_next():
     with patch("cron_tasks.reserve_plan_ingredients", return_value=1) as mock_reserve, \
          patch("cron_tasks.execute_sql_write") as mock_write:
 
-        _reconcile_chunk_reservations("user_123", "chunk-42", new_days, max_retries=1)
+        with _pytest.raises(ReservationReconciliationFailed):
+            _reconcile_chunk_reservations("user_123", "chunk-42", new_days, max_retries=1)
 
         # Should have tried to reserve
         mock_reserve.assert_called_once_with("user_123", "chunk-42", new_days)
@@ -2306,7 +2313,8 @@ def test_partial_reservation_marks_chunk_and_defers_next():
     with patch("cron_tasks.reserve_plan_ingredients", return_value=5) as mock_reserve2, \
          patch("cron_tasks.execute_sql_write") as mock_write2:
 
-        _reconcile_chunk_reservations("user_123", "chunk-42", new_days, max_retries=1)
+        result = _reconcile_chunk_reservations("user_123", "chunk-42", new_days, max_retries=1)
+        assert result is True
 
         ok_calls2 = [c for c in mock_write2.call_args_list if "reservation_status = 'ok'" in str(c)]
         assert len(ok_calls2) == 1

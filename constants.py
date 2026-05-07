@@ -620,6 +620,43 @@ CHUNK_DEAD_LETTER_ALERT_COOLDOWN_HOURS = max(1, int(os.environ.get("CHUNK_DEAD_L
 #   disparar alerta. Default 1 (cualquier dead-letter es señal). Subir a 3-5 si la
 #   flota es grande y un dead-letter aislado es ruido aceptable.
 CHUNK_DEAD_LETTER_ALERT_MIN_COUNT = max(1, int(os.environ.get("CHUNK_DEAD_LETTER_ALERT_MIN_COUNT", "1")))
+# [P1-CHUNKS-3] Escalación de chunks pausados con `_pause_reason='missing_prior_lessons'`.
+# Antes este pause reason tenía TTL "indefinido" en el state-machine (ver doc-string de
+# `process_plan_chunk_queue` en cron_tasks.py:12750+): un chunk pausado por lecciones
+# previas perdidas (P1-1 auto-recovery agotado + P1-2 regeneración insuficiente)
+# quedaba esperando "revisión humana" sin alarma proactiva ni acción automática.
+# `_alert_new_dead_lettered_chunks` solo cubre chunks ya `dead_lettered_at`, NO los
+# que llevan días en `pending_user_action`. Resultado: usuario sin chunks nuevos +
+# SRE sin señal hasta ticket de soporte.
+#
+# Este cron corre cada CHUNK_INDEFINITE_PAUSE_INTERVAL_MINUTES y aplica dos fases:
+#   Fase 1 (>= ALERT_HOURS, < ESCALATE_HOURS): persiste alerta `system_alerts`
+#     (severity=warning, alert_key per-chunk) para que SRE detecte el patrón.
+#   Fase 2 (>= ESCALATE_HOURS): intenta unblock automático corriendo
+#     `_rebuild_recent_chunk_lessons_from_queue` + `_regenerate_recent_chunk_lessons_from_plan_days`
+#     una última vez. Si combined >= expected → flip status='pending'. Si insuficiente →
+#     dead-letter directo vía `_escalate_unrecoverable_chunk` con
+#     reason='missing_prior_lessons_unrecoverable' (ya hay copy específico
+#     y el usuario recibe push + banner).
+#
+# CHUNK_INDEFINITE_PAUSE_INTERVAL_MINUTES: cada cuánto corre el cron. 60 min alinea con
+#   `_alert_new_dead_lettered_chunks`: pausas indefinidas no son urgentes (el plan ya
+#   está bloqueado), correr sub-hora solo satura logs.
+CHUNK_INDEFINITE_PAUSE_INTERVAL_MINUTES = max(15, int(os.environ.get("CHUNK_INDEFINITE_PAUSE_INTERVAL_MINUTES", "60")))
+# CHUNK_INDEFINITE_PAUSE_ALERT_HOURS: edad mínima del pause antes de emitir alert.
+#   12h da margen razonable a operadores que estén investigando manualmente sin que
+#   el chunk lleve días invisible. Bajar reduce el TTFR (time to first response) pero
+#   sube el ruido si SRE ya está sobre el caso.
+CHUNK_INDEFINITE_PAUSE_ALERT_HOURS = max(1, int(os.environ.get("CHUNK_INDEFINITE_PAUSE_ALERT_HOURS", "12")))
+# CHUNK_INDEFINITE_PAUSE_ESCALATE_HOURS: edad mínima del pause para intentar unblock
+#   automático y, si falla, dead-letterar. 24h da MÁS margen al operador antes del
+#   auto-action (preferimos resolución manual cuando es posible). Subir si los
+#   operadores reportan que necesitan más tiempo; bajar si el TTL del usuario
+#   esperando un plan es prioridad.
+CHUNK_INDEFINITE_PAUSE_ESCALATE_HOURS = max(2, int(os.environ.get("CHUNK_INDEFINITE_PAUSE_ESCALATE_HOURS", "24")))
+# CHUNK_INDEFINITE_PAUSE_BATCH_LIMIT: cap por corrida. 50 cubre flota mediana sin
+#   bloquear el scheduler en una corrida larga si el backlog crece tras un incidente.
+CHUNK_INDEFINITE_PAUSE_BATCH_LIMIT = max(1, int(os.environ.get("CHUNK_INDEFINITE_PAUSE_BATCH_LIMIT", "50")))
 # [P0-A/ZOMBIE-PARTIAL] Cierre de planes que se quedan en `generation_status='partial'`
 # para siempre porque todos los chunks restantes terminaron en estados terminales
 # (cancelled / dead-lettered failed) sin que ninguno haya commiteado el merge final.
@@ -704,6 +741,25 @@ CHUNK_DEFERRALS_FLUSH_INTERVAL_MINUTES = max(
 CHUNK_DEFERRALS_BUFFER_MAX_RECORDS = max(
     100, int(os.environ.get("CHUNK_DEFERRALS_BUFFER_MAX_RECORDS", "10000"))
 )
+# [P0-10] Buffer paralelo para `chunk_lesson_telemetry` cuando la INSERT falla
+# durante un outage de DB. Asimétrico respecto a deferrals antes: el helper
+# `_record_chunk_lesson_telemetry` solo logueaba el fallo y perdía el evento
+# para siempre — eventos críticos para detectar degradación del aprendizaje
+# (`lesson_synthesized_low_confidence`, `recent_lessons_partial_synthesis`,
+# `synth_schema_invalid`, `indefinite_pause_unblocked`,
+# `lifetime_proxy_ratio_exceeded`) quedaban invisibles para SRE en el
+# rango horas-días posteriores al outage.
+# Mismo cap, mismo intervalo de flush que el buffer de deferrals; un cron
+# dedicado los reintenta cuando DB se recupera.
+CHUNK_LESSON_TELEMETRY_BUFFER_PATH = os.environ.get(
+    "CHUNK_LESSON_TELEMETRY_BUFFER_PATH", "lesson_telemetry_pending.jsonl"
+)
+CHUNK_LESSON_TELEMETRY_FLUSH_INTERVAL_MINUTES = max(
+    1, int(os.environ.get("CHUNK_LESSON_TELEMETRY_FLUSH_INTERVAL_MINUTES", "5"))
+)
+CHUNK_LESSON_TELEMETRY_BUFFER_MAX_RECORDS = max(
+    100, int(os.environ.get("CHUNK_LESSON_TELEMETRY_BUFFER_MAX_RECORDS", "10000"))
+)
 # [P1-5] Timeout (ms) para adquirir el SELECT FOR UPDATE en _persist_nightly_learning_signals.
 # Múltiples planes activos del mismo usuario pueden competir por el row de user_profiles;
 # sin timeout un chunk puede quedar bloqueado indefinidamente esperando a que el LLM retro
@@ -773,11 +829,30 @@ _embedding_model = None
 _embedding_cache = {}
 _pantry_embeddings_cache = {}
 
+# [2026-05-06] Modelo de embeddings TEXT-ONLY (configurable). Default a
+# `gemini-embedding-2` GA estable. Aunque el flujo es text-only, este modelo
+# supera a `gemini-embedding-001` en TODOS los benchmarks de texto:
+#   - MTEB Multilingual: 69.9 vs 68.4
+#   - MTEB Code:         84.0 vs 76.0   (+8 pts)
+# Y al ser el mismo modelo que el multimodal (vision_agent), unifica el
+# espacio vectorial — abre cross-modal search a futuro (ej. buscar
+# ingredientes del shopping list contra fotos del visual diary sin re-embeber).
+#
+# Mantenemos un knob SEPARADO del multimodal por flexibilidad: si en el
+# futuro Google saca un text-only mejor que multimodal-en-texto, o si la
+# cuota multimodal se agota crónicamente y queremos degradar solo este
+# path, podemos cambiarlo sin tocar vision_agent.
+GEMINI_EMBEDDING_TEXT_MODEL = os.environ.get(
+    "MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL",
+    "models/gemini-embedding-2",
+)
+
+
 def get_embedding(text: str) -> List[float]:
     global _embedding_model
     if not _embedding_model:
         _embedding_model = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-2-preview", 
+            model=GEMINI_EMBEDDING_TEXT_MODEL,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
     if text not in _embedding_cache:
@@ -811,9 +886,21 @@ PROTEIN_SYNONYMS = {
     "pollo": ["pollo", "pechuga", "muslo", "alitas", "chicharrón de pollo", "filete de pollo"],
     "cerdo": ["cerdo", "masita", "chicharrón de cerdo", "lomo", "pernil", "costilla"],
     "res": ["res", "carne molida", "bistec", "filete", "churrasco", "vaca", "picadillo", "carne de res"],
+    # [P2-COH-1] Lista expandida con peces comunes en RD/Caribe (merluza,
+    # róbalo, pargo, corvina, mahi-mahi, lubina, carite, jurel, lambí). Sin
+    # estos, el coherence check en `graph_orchestrator._run_assembly_validations`
+    # producía falsos positivos HIGH cuando recetas como "Merluza Estofada"
+    # mencionaban "el pescado" en su texto pero "merluza" no estaba registrada
+    # como sinónimo (incidente 2026-05-05 — plan rechazado y entregado roto).
+    # `mahi-mahi` y `mahi mahi` se incluyen ambos para tolerar la convención
+    # de hyphenation que el LLM elige inconsistentemente.
     "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "tilapia", "filete de pescado",
                 "bacalao", "bacalao desalado", "bacalao salado", "filete de bacalao",
-                "filete de mero", "filete de tilapia", "filete de chillo", "filete de dorado"],
+                "filete de mero", "filete de tilapia", "filete de chillo", "filete de dorado",
+                "merluza", "filete de merluza",
+                "róbalo", "robalo", "pargo", "corvina",
+                "mahi-mahi", "mahi mahi", "mahimahi",
+                "lubina", "carite", "jurel", "lambí", "lambi"],
     "atún": ["atún", "atun", "atun en agua", "atun en lata"],
     "sardina": ["sardina", "sardinas", "sardina en lata"],
     "huevos": ["huevos", "huevo", "tortilla", "revoltillo"],
@@ -1249,6 +1336,11 @@ RECIPE_INGREDIENT_STOPWORDS = frozenset({
 # lados Y `_SUPPLEMENT_ENUM` en `routers/plans.py`. El validador de boundary
 # rechaza con 422 cualquier valor fuera del set; el filtro defensivo de
 # `build_supplements_context` ignora con warning si el router se saltó.
+#
+# [P1-FORM-14] SSOT del frontend: `SUPPLEMENTS` en `frontend/src/config/formValidation.js`.
+# Las claves de este dict DEBEN coincidir EXACTAMENTE con ese array (y con
+# `_SUPPLEMENT_ENUM`). El test `backend/test_p1_form_14_supplements_sync.py`
+# parsea ambos lados y falla en CI si detecta drift.
 SUPPLEMENT_NAMES = {
     "whey_protein":  "Proteína Whey",
     "vegan_protein": "Proteína Vegana (guisante/arroz/cáñamo)",
@@ -1750,3 +1842,36 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         
     logger.debug(f"✅ [PANTRY GUARD] APROBADO (Cantidades & Confiabilidad validadas)")
     return True
+
+
+def compute_household_multiplier(source: dict | None) -> float:
+    """[P1-3] Multiplier efectivo del hogar para escalar cantidades.
+
+    Si `householdComposition: {adults, children}` está presente, devuelve
+    `adults + children × MEALFIT_CHILDREN_MULTIPLIER` (default 0.6, clamp [0.3, 1.0]).
+    Si no, fallback a `householdSize: int` legacy.
+
+    Mínimo siempre 1.0 (planner requiere ≥1 persona).
+
+    Acepta tanto `form_data` (assessment) como `health_profile` (DB) — ambos
+    usan las mismas keys.
+    """
+    if not isinstance(source, dict):
+        return 1.0
+
+    composition = source.get("householdComposition")
+    if isinstance(composition, dict):
+        try:
+            adults = max(0, int(composition.get("adults", 0) or 0))
+            children = max(0, int(composition.get("children", 0) or 0))
+            if adults + children > 0:
+                child_mult = float(os.environ.get("MEALFIT_CHILDREN_MULTIPLIER", "0.6"))
+                child_mult = max(0.3, min(child_mult, 1.0))
+                return max(1.0, float(adults) + float(children) * child_mult)
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        return max(1.0, float(source.get("householdSize") or source.get("household_size") or 1))
+    except (TypeError, ValueError):
+        return 1.0

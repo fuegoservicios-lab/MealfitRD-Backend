@@ -230,38 +230,52 @@ def api_log_progress(data: dict = Body(...), verified_user_id: str = Depends(get
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar progreso."}
             
-        profile = get_user_profile(user_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="Perfil no encontrado.")
-            
-        health_profile = profile.get("health_profile") or {}
-        weight_history = health_profile.get("weight_history", [])
-        
+        # [P1-2] Atomic write con FOR UPDATE. Antes, dos POSTs concurrentes a
+        # /api/diary/progress (raro pero posible: usuario tap rápido en app
+        # móvil + sync del wear device) leían el mismo `weight_history`,
+        # cada uno appendeaba un nuevo entry localmente (potentially en el
+        # mismo `now_date`), y el último UPDATE pisaba al primero.
+        # Resultado: 1 entry de peso perdido silenciosamente. Con el mutator
+        # bajo lock, ambos POSTs se serializan: el segundo VE la mutación
+        # del primero y aplica la suya encima (existing_entry update vs new
+        # append). El existence check del entry de hoy se hace DENTRO del
+        # mutator (bajo lock), garantizando idempotencia per-día aún con
+        # dobles taps.
         from datetime import datetime
         now_date = datetime.now().strftime("%Y-%m-%d")
-        
-        # Evitar múltiples registros en el mismo día (actualizar si ya existe)
-        existing_entry = next((e for e in weight_history if e.get("date") == now_date), None)
-        if existing_entry:
-            existing_entry["weight"] = weight
-            existing_entry["unit"] = unit
-        else:
-            weight_history.append({"date": now_date, "weight": weight, "unit": unit})
-            
-        # Ordenar cronológicamente y mantener solo los últimos 30 registros
-        weight_history = sorted(weight_history, key=lambda x: x["date"])[-30:]
-        
-        health_profile["weight_history"] = weight_history
-        # También actualizamos el peso estático actual para el UI
-        health_profile["weight"] = weight
-        health_profile["weightUnit"] = unit
-        
-        from db_profiles import update_user_health_profile
-        res = update_user_health_profile(user_id, health_profile)
-        if res is None:
-            raise Exception("Error guardando progreso en DB.")
-            
-        return {"success": True, "message": "Progreso guardado exitosamente.", "weight_history": weight_history}
+
+        result_box = {"weight_history": None}
+
+        def _weight_mutator(_hp):
+            _wh = list(_hp.get("weight_history", []) or [])
+            if not isinstance(_wh, list):
+                _wh = []
+            _existing = next((_e for _e in _wh if isinstance(_e, dict) and _e.get("date") == now_date), None)
+            if _existing:
+                _existing["weight"] = weight
+                _existing["unit"] = unit
+            else:
+                _wh.append({"date": now_date, "weight": weight, "unit": unit})
+            _wh = sorted(
+                [_e for _e in _wh if isinstance(_e, dict) and _e.get("date")],
+                key=lambda x: x["date"],
+            )[-30:]
+            _hp["weight_history"] = _wh
+            _hp["weight"] = weight
+            _hp["weightUnit"] = unit
+            result_box["weight_history"] = _wh
+            return None
+
+        from db_profiles import update_user_health_profile_atomic
+        new_hp = update_user_health_profile_atomic(user_id, _weight_mutator)
+        if new_hp is None:
+            raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+
+        return {
+            "success": True,
+            "message": "Progreso guardado exitosamente.",
+            "weight_history": result_box["weight_history"] or [],
+        }
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/progress POST: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

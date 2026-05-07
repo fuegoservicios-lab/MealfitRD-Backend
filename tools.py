@@ -13,8 +13,8 @@ from constants import normalize_ingredient_for_tracking, strip_accents, validate
 logger = logging.getLogger(__name__)
 
 from db import (
-    get_user_profile, update_user_health_profile, delete_user_facts_by_metadata,
-    get_user_likes, get_active_rejections, get_latest_meal_plan_with_id, 
+    get_user_profile, update_user_health_profile, update_user_health_profile_atomic, delete_user_facts_by_metadata,
+    get_user_likes, get_active_rejections, get_latest_meal_plan_with_id,
     update_meal_plan_data, search_deep_memory as db_search_deep_memory,
     log_consumed_meal as db_log_consumed_meal,
     save_new_meal_plan_robust, increment_ingredient_frequencies,
@@ -112,29 +112,40 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
             new_value = extracted.group()
             
     if user_id and user_id != "guest":
-        profile = get_user_profile(user_id)
-        if profile:
-            health_profile = profile.get("health_profile") or {}
-            if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
-                health_profile[field] = [item.strip() for item in str(new_value).split(",") if item.strip()]
-            else:
-                health_profile[field] = new_value
-            update_user_health_profile(user_id, health_profile)
-            
-            # --- NUEVA LÓGICA DE LIMPIEZA DE VECTORES ---
-            category_map = {
-                'allergies': 'alergia',
-                'medicalConditions': 'condicion_medica',
-                'dislikes': 'rechazo',
-                'dietType': 'dieta',
-                'mainGoal': 'objetivo'
-            }
-            if field in category_map:
-                cat = category_map[field]
-                logger.info(f"🧹 [CLEANUP] Borrando vectores de categoría '{cat}' para evitar conflictos con el formulario.")
-                delete_user_facts_by_metadata(user_id, {"category": cat})
-            # ---------------------------------------------
-            
+        # [P1-2] Mutator atómico. Antes era `get_user_profile + mutate +
+        # update_user_health_profile` no atómico: si el chat-agent y el
+        # wizard del frontend tocaban el mismo `user_id` en paralelo (raro
+        # pero observado: usuario chatea con el agente mientras la app
+        # autocompleta el form en background), el último UPDATE pisaba al
+        # otro y se perdía silenciosamente la edición de un field. El
+        # mutator solo escribe el field que estamos cambiando; los demás
+        # quedan intactos bajo FOR UPDATE.
+        if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
+            _new_field_value = [item.strip() for item in str(new_value).split(",") if item.strip()]
+        else:
+            _new_field_value = new_value
+
+        def _field_mutator(_hp):
+            _hp[field] = _new_field_value
+            return None
+
+        update_user_health_profile_atomic(user_id, _field_mutator)
+
+        # --- NUEVA LÓGICA DE LIMPIEZA DE VECTORES ---
+        category_map = {
+            'allergies': 'alergia',
+            'medicalConditions': 'condicion_medica',
+            'dislikes': 'rechazo',
+            'dietType': 'dieta',
+            'mainGoal': 'objetivo'
+        }
+        if field in category_map:
+            cat = category_map[field]
+            logger.info(f"🧹 [CLEANUP] Borrando vectores de categoría '{cat}' para evitar conflictos con el formulario.")
+            delete_user_facts_by_metadata(user_id, {"category": cat})
+        # ---------------------------------------------
+
+
     return f"¡Éxito! El campo '{field}' ha sido actualizado a '{new_value}'."
 
 # ============================================================
@@ -463,20 +474,47 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         try:
             grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
             
-            from shopping_calculator import get_shopping_list_delta
+            from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan
             household = max(1, int(form_data.get("householdSize", 1) or 1) if form_data else 1)
-            aggr_7 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=1.0 * household)
-            aggr_15 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=2.0 * household)
-            aggr_30 = get_shopping_list_delta(user_id, plan_data, structured=True, multiplier=4.0 * household)
+            # [P1-5] Snapshot atómico de inventario + consumidos para las 3
+            # multiplicidades. Sin esto, mutaciones concurrentes a
+            # `user_inventory` entre las 3 llamadas producían deltas
+            # inconsistentes según `groceryDuration`.
+            _inv_s, _cons_s = fetch_inventory_and_consumed_for_plan(user_id, plan_data, False)
+            aggr_7 = get_shopping_list_delta(
+                user_id, plan_data, structured=True, multiplier=1.0 * household,
+                inventory_override=_inv_s, consumed_override=_cons_s,
+            )
+            aggr_15 = get_shopping_list_delta(
+                user_id, plan_data, structured=True, multiplier=2.0 * household,
+                inventory_override=_inv_s, consumed_override=_cons_s,
+            )
+            aggr_30 = get_shopping_list_delta(
+                user_id, plan_data, structured=True, multiplier=4.0 * household,
+                inventory_override=_inv_s, consumed_override=_cons_s,
+            )
             
-            if grocery_duration == "biweekly": aggr_list = aggr_15
-            elif grocery_duration == "monthly": aggr_list = aggr_30
+            # [VISIÓN-C] Híbrido: staples=periodo, perishables=semanal.
+            # [RIESGO-1] Cycle lock 7d para perecederos.
+            try:
+                from shopping_calculator import _build_hybrid_shopping_list as _build_hybrid
+                _restocked_at = plan_data.get("restocked_at_iso") if plan_data.get("is_restocked") else None
+                _restocked_items = plan_data.get("restocked_items") if isinstance(plan_data.get("restocked_items"), dict) else None
+                aggr_15_hybrid = _build_hybrid(aggr_7, aggr_15, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if aggr_15 else aggr_15
+                aggr_30_hybrid = _build_hybrid(aggr_7, aggr_30, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if aggr_30 else aggr_30
+            except Exception as _hyb_e:
+                logger.warning(f"[TOOL] _build_hybrid fallo: {_hyb_e}. Usando lista extrapolada.")
+                aggr_15_hybrid = aggr_15
+                aggr_30_hybrid = aggr_30
+
+            if grocery_duration == "biweekly": aggr_list = aggr_15_hybrid
+            elif grocery_duration == "monthly": aggr_list = aggr_30_hybrid
             else: aggr_list = aggr_7
-                
+
             plan_data["aggregated_shopping_list"] = aggr_list
             plan_data["aggregated_shopping_list_weekly"] = aggr_7
-            plan_data["aggregated_shopping_list_biweekly"] = aggr_15
-            plan_data["aggregated_shopping_list_monthly"] = aggr_30
+            plan_data["aggregated_shopping_list_biweekly"] = aggr_15_hybrid
+            plan_data["aggregated_shopping_list_monthly"] = aggr_30_hybrid
             logger.info("✅ [TOOL] aggregated_shopping_list (7, 15, 30) recalculada post-modificación con Delta.")
         except Exception as e:
             logger.warning(f"⚠️ [TOOL] No se pudo recalcular aggregated_shopping_list Delta: {e}")

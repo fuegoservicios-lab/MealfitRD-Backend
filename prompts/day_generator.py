@@ -43,10 +43,12 @@ REGLAS ESTRICTAS:
 11. REGLA ZERO-WASTE: Si hay ingredientes de despensa, prioriza usarlos.
 12. SEGURIDAD ALIMENTARIA — CAPS OBLIGATORIOS (el revisor médico rechazará si los incumples):
    - Atún enlatado: MÁXIMO 150g EN ESTE DÍA. Si el pool no lo incluye explícitamente, NO lo uses como complemento.
-   - Embutidos (salami, longaniza, jamón, chorizo): MÁXIMO 50g si el planificador los asignó. Si no están en el pool, NO los agregues.
+   - Embutidos (salami, longaniza, jamón, chorizo, jamón de pavo, pavo en lonjas): MÁXIMO 50g si el planificador los asignó. Si no están en el pool, NO los agregues.
+   - JAMÓN DE PAVO / PAVO EN LONJAS cuenta como EMBUTIDO PROCESADO (alto en sodio y nitritos), NO como proteína fresca. Aunque "pavo" parezca saludable, las lonjas comerciales son ultraprocesadas — usa pechuga de pavo FRESCA si el pool dice "Pavo" sin más, NUNCA jamón de pavo en lonjas.
    - PROHIBIDO usar atún en más de 1 comida del mismo día (solo 1 vez: almuerzo O cena, no ambas).
    - PROHIBIDO combinar atún + embutidos en el mismo día.
    - Galletas de soda: máximo 1 porción (30g) en todo el día, solo como merienda.
+   - **HUEVOS — CAP DIARIO ESTRICTO**: MÁXIMO 3 unidades enteras EN ESTE DÍA. Si necesitas más proteína desde huevos (ej: omelette grande, revoltillo grueso), complementa con CLARAS (máximo 6 claras/día). El revisor médico flagea "carga excesiva de huevos" cuando el ciclo supera ~9 enteros en 3 días — superar este cap fuerza retry costoso (~210s) sin mejorar el plan. Repartición típica recomendada: desayuno ≤2 enteros + ≤2 claras, otra comida ≤1 entero. Para gain_muscle, las claras son tu aliado — tienen 100% del valor proteico sin la carga de colesterol que dispara el rechazo.
 13. HERRAMIENTA consultar_nutricion — LÍMITE ESTRICTO:
    Úsala SOLO para los 2-3 ingredientes principales del día (proteína principal y carbohidrato principal).
    MÁXIMO 3 llamadas en todo el día. NUNCA la uses para condimentos, especias, agua, aceite, sal,
@@ -102,12 +104,39 @@ REGLAS ESTRICTAS:
 
 # Proteínas restringidas que SOLO pueden usarse si el planner las asignó explícitamente.
 # Clave: término de búsqueda en el pool (lowercase). Valor: etiqueta para el LLM.
+#
+# [P3-PROTEIN-CAP] `jamón de pavo` y variantes procesadas añadidas tras el
+# patrón observado en producción 2026-05-05: el planner asignaba proteínas
+# distintas (Atún, Lentejas, Huevos) pero el day_generator ignoraba la
+# asignación e insertaba pechuga de pavo procesada / jamón de pavo en lonjas
+# en casi todas las comidas. Resultado: 41 lbs de jamón de pavo en lista
+# mensual + rechazo HIGH del revisor médico ("repetición excesiva, alto
+# sodio y nitritos") + plan entregado degradado.
+#
+# Mecanismo de defensa: el `prohibited_block` lista explícitamente al LLM
+# las proteínas restringidas que NO puede usar en el día (porque el planner
+# no las asignó). Substring match sobre `pool_lower` significa que si el
+# planner asigna "Pavo" (genérico → entendido como pechuga fresca), las
+# variantes procesadas siguen prohibidas (no contienen "pavo" como palabra
+# completa coincidente, sino como sustring en "jamón de pavo"); el check
+# `'jamón de pavo' not in pool_lower` solo permite la variante procesada
+# cuando el planner la asigna LITERALMENTE así.
+#
+# `pavo molido` también añadido (variante intermedia: fresca pero altamente
+# procesada en muchas marcas, vale la pena gating explícito).
 _RESTRICTED_PROTEIN_KEYS = {
-    'atún':      'Atún / atún enlatado',
-    'atun':      'Atún / atún enlatado',
-    'salami':    'Salami dominicano',
-    'longaniza': 'Longaniza',
-    'chorizo':   'Chorizo',
+    'atún':            'Atún / atún enlatado',
+    'atun':            'Atún / atún enlatado',
+    'salami':          'Salami dominicano',
+    'longaniza':       'Longaniza',
+    'chorizo':         'Chorizo',
+    # [P3-PROTEIN-CAP] Variantes de pavo procesado:
+    'jamón de pavo':   'Jamón de pavo / pavo en lonjas (procesado, alto en sodio)',
+    'jamon de pavo':   'Jamón de pavo / pavo en lonjas (procesado, alto en sodio)',
+    'pavo en lonjas':  'Jamón de pavo / pavo en lonjas (procesado, alto en sodio)',
+    'lonjas de pavo':  'Jamón de pavo / pavo en lonjas (procesado, alto en sodio)',
+    'pavo procesado':  'Jamón de pavo / pavo en lonjas (procesado, alto en sodio)',
+    'pavo molido':     'Pavo molido (usar SOLO si el planner lo asignó explícitamente)',
 }
 
 
@@ -116,13 +145,36 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     pool_str = ', '.join(skeleton_day.get('protein_pool', []))
     pool_lower = pool_str.lower()
 
-    # Calcular qué proteínas restringidas NO están en el pool de este día
+    # [P3-PROTEIN-CAP] Normalización ASCII para tolerar variantes de acento
+    # entre keys del set (`jamón`/`jamon`) y el pool del planner. Sin esto,
+    # si el planner asignó "Jamón de pavo" (con tilde), el key 'jamon de pavo'
+    # (sin tilde) reportaba el label como prohibido aunque la variante con
+    # tilde lo había marcado como allowed.
+    try:
+        from constants import strip_accents as _strip_acc
+    except Exception:
+        def _strip_acc(s):
+            return s
+    pool_lower_ascii = _strip_acc(pool_lower)
+
+    # Dos pasos: primero colectar labels EXPLÍCITAMENTE allowed (cualquier
+    # variante del key está en el pool), luego añadir prohibited solo si su
+    # label no está en allowed.
+    allowed_labels = set()
+    for key, label in _RESTRICTED_PROTEIN_KEYS.items():
+        key_ascii = _strip_acc(key)
+        if key_ascii in pool_lower_ascii or key in pool_lower:
+            allowed_labels.add(label)
+
     seen_labels = set()
     prohibited_labels = []
     for key, label in _RESTRICTED_PROTEIN_KEYS.items():
-        if key not in pool_lower and label not in seen_labels:
-            prohibited_labels.append(label)
-            seen_labels.add(label)
+        if label in allowed_labels:
+            continue
+        if label in seen_labels:
+            continue
+        prohibited_labels.append(label)
+        seen_labels.add(label)
 
     prohibited_block = ""
     if prohibited_labels:

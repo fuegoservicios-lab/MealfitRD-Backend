@@ -30,7 +30,7 @@ from constants import (
     FRUIT_SYNONYMS as fruit_synonyms,
     _get_fast_filtered_catalogs
 )
-from db import get_user_profile, update_user_health_profile, get_user_ingredient_frequencies
+from db import get_user_profile, update_user_health_profile, update_user_health_profile_atomic, get_user_ingredient_frequencies
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
 
 logger = logging.getLogger(__name__)
@@ -437,15 +437,32 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                     # Si es regeneración (< 2 días), mantener el start_date original
                     if grocery_cycle and "start_date" in grocery_cycle and not (days_elapsed >= grocery_days if 'days_elapsed' in locals() else True):
                         start_date_to_save = grocery_cycle["start_date"]
-                        
-                    hp["grocery_cycle"] = {
+
+                    # [P1-2] Write atómico vía advisory lock (FOR UPDATE). Antes,
+                    # `get_user_profile + mutate + update_user_health_profile`
+                    # eran 2 roundtrips no atómicos: bajo concurrencia del mismo
+                    # user_id (regenerar mismo plan en 2 tabs, cron paralelo),
+                    # dos writers leían el mismo snapshot de hp, cada uno
+                    # appendeaba/mutaba localmente, y el último UPDATE pisaba al
+                    # primero — perdiendo silenciosamente fields como
+                    # `frictions`, `weight_history`, `reflection_history`,
+                    # `lifetime_lessons_history` que otro path estuviera mutando
+                    # entre el read y el write. Ahora el mutator SOLO toca
+                    # `grocery_cycle`; los demás campos persisten intactos bajo
+                    # FOR UPDATE.
+                    new_grocery_cycle = {
                         "start_date": start_date_to_save,
                         "duration_days": grocery_days,
                         "base_proteins": unique_proteins,
                         "base_carbs": unique_carbs,
-                        "base_veggies": unique_veggies
+                        "base_veggies": unique_veggies,
                     }
-                    update_user_health_profile(user_id, hp)
+
+                    def _grocery_cycle_mutator(_hp):
+                        _hp["grocery_cycle"] = new_grocery_cycle
+                        return None
+
+                    update_user_health_profile_atomic(user_id, _grocery_cycle_mutator)
                     logger.info("💾 [GROCERY CYCLE] Guardados nuevos ingredientes base del ciclo.")
         except Exception as e:
             logger.error(f"Error procesando Grocery Cycle Lock: {e}")
@@ -664,25 +681,40 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         
         if meals_to_ban:
             try:
-                # Usar los métodos ya importados al inicio de ai_helpers.py
-                profile = get_user_profile(user_id)
-                if profile:
-                    hp = profile.get("health_profile") or {}
-                    if not isinstance(hp, dict): hp = {}
-                    
-                    rejected = hp.get("rejection_patterns", [])
-                    if not isinstance(rejected, list): rejected = []
-                    
-                    new_bans = []
-                    for m in meals_to_ban:
-                        if m and isinstance(m, str) and m not in rejected:
-                            new_bans.append(m)
-                            rejected.append(m)
-                    
-                    if new_bans:
-                        hp["rejection_patterns"] = rejected[-50:]  # Limitar para no saturar JSON
-                        update_user_health_profile(user_id, hp)
-                        logger.info(f"🧠 [GAP 1] Aprendizaje Continuo: Persistidos {len(new_bans)} platos en rejection_patterns por acciones 'dislike'/'skip'.")
+                # [P1-2] Mutator atómico. La lectura de `rejection_patterns`
+                # ocurre DENTRO del mutator (bajo FOR UPDATE), así que dos
+                # invocaciones concurrentes con el mismo user_id se serializan
+                # y NUNCA pierden bans entre sí. Antes, dos writers leían la
+                # misma lista, cada uno appendeaba localmente, y el último
+                # UPDATE pisaba al primero — un dislike/skip simultáneo del
+                # cron y del manual disparaba la regeneración con la lista de
+                # bans más reciente del último UPDATE, descartando los del
+                # otro. El sentinel mutable `bans_count_box` lleva el contador
+                # de nuevas adiciones afuera del mutator para el log.
+                bans_count_box = {"count": 0}
+
+                def _rejection_mutator(_hp):
+                    _rejected = list(_hp.get("rejection_patterns", []) or [])
+                    if not isinstance(_rejected, list):
+                        _rejected = []
+                    _new_bans = []
+                    for _m in meals_to_ban:
+                        if _m and isinstance(_m, str) and _m not in _rejected:
+                            _new_bans.append(_m)
+                            _rejected.append(_m)
+                    if not _new_bans:
+                        return False  # nada que persistir
+                    _hp["rejection_patterns"] = _rejected[-50:]  # cap anti-bloat
+                    bans_count_box["count"] = len(_new_bans)
+                    return None
+
+                update_user_health_profile_atomic(user_id, _rejection_mutator)
+                if bans_count_box["count"] > 0:
+                    logger.info(
+                        f"🧠 [GAP 1] Aprendizaje Continuo: Persistidos "
+                        f"{bans_count_box['count']} platos en rejection_patterns "
+                        f"por acciones 'dislike'/'skip'."
+                    )
             except Exception as e:
                 logger.error(f"❌ [GAP 1] Error persistiendo señales de dislike/skip: {e}")
     # ==============================================================

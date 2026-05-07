@@ -387,7 +387,8 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
 def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 0.5, limit: int = 5):
     """Busca fotos/entradas visuales similares usando la función RPC match_visual_diary."""
     if not supabase: return []
-    try:
+
+    def _do_search():
         res = supabase.rpc("match_visual_diary", {
             "query_embedding": query_embedding,
             "match_threshold": threshold,
@@ -395,8 +396,11 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
             "p_user_id": user_id
         }).execute()
         return res.data
+
+    try:
+        return _with_db_retry(_do_search, _label="search_visual_diary")
     except Exception as e:
-        logger.error(f"Error buscando visual_diary: {e}")
+        logger.error(f"Error buscando visual_diary (tras retries): {e}")
         return []
 
 def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None, meal_type: str = "snack", mark_inventory_synced: bool = False):

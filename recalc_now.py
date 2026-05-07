@@ -6,7 +6,7 @@ import sys, json, logging
 logging.basicConfig(level=logging.INFO)
 
 from db_core import supabase
-from shopping_calculator import get_shopping_list_delta, invalidate_master_cache
+from shopping_calculator import get_shopping_list_delta, invalidate_master_cache, _build_hybrid_shopping_list
 
 # Forzar recarga del caché de master_ingredients
 invalidate_master_cache()
@@ -38,11 +38,15 @@ for it in scaled_7[:10]:
     safestr = it.get('display_string', '?').encode('ascii', 'ignore').decode('ascii')
     print(f"  -> {safestr}")
 
+# [VISIÓN-C] Híbrido: staples=periodo, perishables=semanal.
+scaled_15_hybrid = _build_hybrid_shopping_list(scaled_7, scaled_15) if scaled_15 else scaled_15
+scaled_30_hybrid = _build_hybrid_shopping_list(scaled_7, scaled_30) if scaled_30 else scaled_30
+
 # Guardar en DB
 plan_data["aggregated_shopping_list"] = scaled_7
 plan_data["aggregated_shopping_list_weekly"] = scaled_7
-plan_data["aggregated_shopping_list_biweekly"] = scaled_15
-plan_data["aggregated_shopping_list_monthly"] = scaled_30
+plan_data["aggregated_shopping_list_biweekly"] = scaled_15_hybrid
+plan_data["aggregated_shopping_list_monthly"] = scaled_30_hybrid
 
 supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", plan_id).execute()
 print("Plan modificado y guardado en la Base de Datos :D")

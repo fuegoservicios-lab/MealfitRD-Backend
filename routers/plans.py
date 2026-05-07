@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from auth import get_verified_user_id, verify_api_quota
 from db import (
     supabase, get_user_likes, get_active_rejections, get_or_create_session, 
-    save_message, update_user_health_profile, log_api_usage, get_latest_meal_plan,
+    save_message, update_user_health_profile, update_user_health_profile_atomic, log_api_usage, get_latest_meal_plan,
     get_latest_meal_plan_with_id, update_meal_plan_data, insert_like
 )
 from memory_manager import build_memory_context, summarize_and_prune
@@ -55,6 +55,67 @@ logger = logging.getLogger(__name__)
 # los workers de un proceso compartan el contador (más estricto y eficiente
 # que crear uno por request).
 _PLAN_GEN_LIMITER = RateLimiter(max_calls=3, period_seconds=60)
+
+# [P1-16] Registry global de session_ids cancelados durante la generación.
+# Cuando el usuario clickea "Cancelar" en el frontend, el SSE se aborta
+# del lado cliente — pero ANTES de P1-16 el pipeline backend seguía
+# corriendo hasta terminar el día actual, persistía el plan en DB, y el
+# usuario veía el plan aparecer 30s después vía Realtime UPDATE de
+# `meal_plans`. UX confuso + cuota de LLM consumida innecesariamente.
+#
+# AHORA, `POST /api/plans/cancel` agrega el session_id a este set. Los
+# nodes del pipeline (especialmente los puntos de await dentro de
+# `generate_days_parallel_node` y los hedges) verifican cooperativamente
+# vía `is_session_cancelled(session_id)` y abortan con
+# `asyncio.CancelledError`.
+#
+# El set vive en memoria (in-process). Es aceptable porque:
+#   - Una request de cancelación llega al MISMO worker que está corriendo
+#     el pipeline (sticky por session_id en deployments con load balancer
+#     hash-by-cookie/header); para deployments sin sticky, el cancel es
+#     best-effort (peor caso: el otro worker sigue corriendo el pipeline,
+#     mismo comportamiento que pre-P1-16).
+#   - El set se limpia tras cada flush periódico para evitar leak.
+#
+# Thread-safety: las operaciones add/discard sobre Python set son atómicas
+# bajo GIL para el caso single-element. Para iteraciones complejas usar
+# el `_PLAN_CANCEL_LOCK`.
+import threading as _p116_threading
+_PLAN_CANCEL_REGISTRY: set = set()
+_PLAN_CANCEL_LOCK = _p116_threading.Lock()
+
+
+def _cancel_session(session_id: str) -> bool:
+    """Marca un session_id como cancelado. Idempotente: si ya estaba
+    marcado, retorna False (no hace nada)."""
+    if not session_id or not isinstance(session_id, str):
+        return False
+    with _PLAN_CANCEL_LOCK:
+        if session_id in _PLAN_CANCEL_REGISTRY:
+            return False
+        _PLAN_CANCEL_REGISTRY.add(session_id)
+        return True
+
+
+def is_session_cancelled(session_id) -> bool:
+    """Chequeo cooperativo. Llamar en puntos de await del pipeline para
+    abortar temprano si el frontend pidió cancelar. Retorna False para
+    session_id None/empty/inválido (defensa: no abortar pipelines que
+    el cliente no identificó)."""
+    if not session_id or not isinstance(session_id, str):
+        return False
+    return session_id in _PLAN_CANCEL_REGISTRY
+
+
+def _clear_cancelled_session(session_id: str) -> None:
+    """Limpia el flag tras abortar el pipeline o después de un timeout
+    razonable. Llamar desde el `finally` de `arun_plan_pipeline` para
+    evitar que el set crezca sin límite durante la vida del proceso."""
+    if not session_id:
+        return
+    with _PLAN_CANCEL_LOCK:
+        _PLAN_CANCEL_REGISTRY.discard(session_id)
+
 
 router = APIRouter(
     prefix="/api/plans",
@@ -209,6 +270,36 @@ _REQUIRED_FORM_FIELDS = (
     # (length=1 con sentinel reconocido downstream por `_SENTINEL_NONE_VALUES`
     # en `graph_orchestrator.py`).
     "allergies", "medicalConditions",
+    # [P0-FORM-6] Cierre de drift entre `REQUIRED_FORM_FIELDS` (frontend en
+    # `formValidation.js`) y este tuple. El frontend gateaba estos 7 como
+    # required (botón "Siguiente" bloqueado, asterisco rojo, chips), pero el
+    # backend los aceptaba como `None`/`""` sin error. Inconsistencia real:
+    # un cliente legacy / hidratación rota / scraper que omitiera el campo
+    # entraba al pipeline; uno que lo enviara con un valor bogus era rechazado
+    # por `_NON_CRITICAL_ENUM_VALIDATIONS` con 422 — "ausente pasa silencioso,
+    # presente-bogus rechaza". Cualquier path que evitara el wizard producía
+    # plan degradado (señales de timing/conducta vacías → LLM defaultea
+    # silenciosamente sin telemetría).
+    #
+    # `scheduleType`, `cookingTime`, `budget`, `sleepHours`, `stressLevel`:
+    #   tienen enum estricto en `_NON_CRITICAL_ENUM_VALIDATIONS` (presente
+    #   con valor inválido → 422 hoy). Subirlos a required-presence cierra el
+    #   hueco "ausente → silencioso".
+    #
+    # `dislikes`, `struggles`:
+    #   arrays multi-select con sentinel "Ninguno"/"Ninguna" (length=1 cuenta
+    #   como answer válida). NO los añadimos a `_REQUIRED_NONEMPTY_ARRAY_FIELDS`
+    #   porque downstream `[]` no es safety-crítico (a diferencia de allergies);
+    #   sí exigimos PRESENCIA (rechazamos None/"" pero `[]` pasa).
+    #
+    # `dietType`: deliberadamente OUT. `_DIET_TYPE_LEGACY_ACCEPTED` documenta
+    # variantes ES históricas en `health_profile.dietType` ("Omnívora",
+    # "vegetariana", etc.). Hacerlo required-presence rompería rehidratación
+    # de perfiles legacy sin beneficio de safety (downstream
+    # `_get_fast_filtered_catalogs` defaultea a balanced = catálogo completo,
+    # benigno).
+    "scheduleType", "cookingTime", "budget", "sleepHours", "stressLevel",
+    "dislikes", "struggles",
 )
 
 # [P1-2] Subset de `_REQUIRED_FORM_FIELDS` donde `[]` cuenta como ausente.
@@ -362,6 +453,18 @@ _NON_CRITICAL_ENUM_VALIDATIONS = (
 # de P1-Q8 (que detecta patrones tipo "ignore previous", no enums médicos).
 # Validación case-sensitive porque el wizard manda lower_case + snake_case
 # canónico; un valor con mayúsculas también se rechaza para forzar consistencia.
+#
+# [P1-FORM-14] CONTRATO MULTI-SITE:
+#   1. `frontend/src/config/formValidation.js` → `SUPPLEMENTS` (SSOT cliente).
+#   2. `frontend/src/components/assessment/questions/InteractiveQuestions.jsx`
+#      → `SUPPLEMENT_META` (mapping val→{label, emoji}; invariante dev-mode
+#      verifica metadata cubre 1:1 a SUPPLEMENTS).
+#   3. Este `_SUPPLEMENT_ENUM` (gate API boundary).
+#   4. `backend/constants.py` → `SUPPLEMENT_NAMES` (mapping val→nombre legible
+#      para el prompt del LLM).
+# El test `backend/test_p1_form_14_supplements_sync.py` parsea los 4 sites y
+# falla en CI si detecta drift entre cualquiera de ellos. Si añades un
+# suplemento nuevo (ej. "ashwagandha"), DEBE actualizarse en los 4 lugares.
 _SUPPLEMENT_ENUM = frozenset({
     "whey_protein", "vegan_protein", "creatine", "bcaa", "pre_workout",
     "fat_burner", "collagen", "multivitamin", "omega3", "magnesium",
@@ -596,6 +699,7 @@ def _validate_form_data_ranges(data: dict) -> tuple[bool, list[dict]]:
     # x999 → lista de compras absurda. El frontend ofrece chips 1..6, cap en
     # 12 cubre familias extendidas legítimas sin abrir vector de abuso.
     household_raw = data.get("householdSize")
+    household_validated = None
     if household_raw is not None and household_raw != "":
         household = _coerce_numeric(household_raw, kind="int")
         h_min, h_max = _BIO_RANGES["household"]
@@ -605,6 +709,40 @@ def _validate_form_data_ranges(data: dict) -> tuple[bool, list[dict]]:
                 "value": household_raw,
                 "accepted_range": [h_min, h_max],
                 "unit": "personas",
+            })
+        else:
+            household_validated = household
+
+    # --- [P1-15] Guard composicional householdSize × groceryDuration ---
+    # El frontend (`InteractiveQuestions.jsx → QHousehold`) expone chips
+    # 1..6 personas + 3 ciclos (weekly=7d / biweekly=15d / monthly=30d).
+    # Cap individual de householdSize es 12 (familias extendidas legítimas)
+    # pero un cliente legacy/scraper enviando `householdSize=12,
+    # groceryDuration='monthly'` produce escalado de hasta 12 × 4 ciclos
+    # de 7d ≈ 360× del plato base. Riesgos:
+    #   - Lista de compras absurda (cientos de libras de cada ingrediente).
+    #   - Posible OOM en `aggregate_and_deduct_shopping_list` con miles
+    #     de líneas a humanizar/clasificar.
+    #   - Chunk timeouts del LLM por tamaño desproporcionado del prompt.
+    # Hasta que el wizard exponga chips 7+ explícitamente con UX adecuada
+    # (warning sobre presupuesto, validación realista de almacenamiento),
+    # rechazamos la combinación con 422 accionable. El usuario puede
+    # mantener `householdSize=12` con `weekly`/`biweekly` o reducir a
+    # `householdSize ≤ 6` con `monthly`.
+    if household_validated is not None and household_validated > 6:
+        grocery_raw = data.get("groceryDuration")
+        if isinstance(grocery_raw, str) and grocery_raw.strip().lower() == "monthly":
+            errors.append({
+                "field": "householdSize",
+                "value": household_validated,
+                "accepted_range": [1, 6],
+                "unit": "personas con groceryDuration='monthly'",
+                "reason": (
+                    "P1-15: householdSize > 6 + groceryDuration='monthly' "
+                    "produce escalado de hasta ~360× que satura el shopping "
+                    "calculator. Reducir household a ≤ 6 o usar "
+                    "groceryDuration='weekly'/'biweekly'."
+                ),
             })
 
     # --- dietType (opcional, dos niveles: canónico vs legacy) ---
@@ -868,10 +1006,21 @@ def _run_pantry_validation_for_initial_chunk(
             result["_initial_chunk_pantry_violation"] = (
                 (_initial_audit.get("last_violation") or "")[:500]
             )
+            # [P0-A] Propagar missing_list desde el audit al result para que
+            # `save_partial_plan_get_id` (services.py:139, `{**plan_data, ...}`)
+            # lo persista a `meal_plans.plan_data._pantry_supplement_required`.
+            # `shopping_calculator.get_shopping_list_delta` lo lee desde plan_data
+            # y agrega la categoría "🚨 Compra Urgente" al PDF — sin esto, el
+            # primer chunk degradado entregaba un plan con flag de aviso pero la
+            # lista de compras visible al usuario no incluía los items urgentes.
+            _initial_missing = _initial_audit.get("missing_list") or []
+            if isinstance(_initial_missing, list) and _initial_missing:
+                result["_pantry_supplement_required"] = list(_initial_missing)
             logger.error(
                 f"❌ [{transport_label}] Primer chunk para user={_user_label} "
                 f"degradado tras {_initial_audit.get('attempts')} intento(s) "
-                f"(mode={_initial_audit.get('mode')}). Plan se entrega con flag de aviso."
+                f"(mode={_initial_audit.get('mode')}, missing={len(_initial_missing)} items). "
+                f"Plan se entrega con flag de aviso."
             )
         else:
             logger.info(
@@ -896,6 +1045,7 @@ def _seed_chunk1_learning(
     rejected_meal_names: list,
     *,
     context_label: str,
+    user_id: str,
 ) -> None:
     """[P0-α/P0-3] Seed `_last_chunk_learning` con métricas reales del chunk 1
     para que el chunk 2 arranque con datos accionables (anti-repetición de
@@ -950,6 +1100,7 @@ def _seed_chunk1_learning(
                     plan_id, week1_lesson,
                     recent_chunk_lessons=[week1_lesson],
                     context=context_label,
+                    user_id=user_id,  # [P0-9] ownership check
                 )
                 if not ok:
                     _seed_last_err = "persist_helper_returned_false"
@@ -1138,7 +1289,24 @@ def _postprocess_pipeline_result(
         hp_data["tz_offset_minutes"] = tz_offset_mins
         if hp_data:
             try:
-                update_user_health_profile(actual_user_id, hp_data)
+                # [P1-2] Atomic write con mutator que MERGEA `hp_data` ON TOP
+                # del estado actual bajo FOR UPDATE. Antes era un full-overwrite
+                # destructivo del JSONB column: pasar `hp_data` (= form payload
+                # + tz) al legacy `update_user_health_profile` reemplazaba el
+                # JSON ENTERO, wipeando `weight_history`, `frictions`,
+                # `reflection_history`, `lifetime_lessons_history`,
+                # `pipeline_score_history`, `grocery_cycle`, `rejection_patterns`,
+                # etc. cada vez que un usuario regeneraba un plan. Sumado al
+                # lost-update bajo concurrencia (2 tabs regenerando, cron
+                # rolling-refill paralelo), el meta-learning se erosionaba en
+                # cada generación. La migración a atomic + mutator-merge
+                # cierra AMBOS bugs: (1) preservación de campos que no son
+                # del form, (2) serialización de writers concurrentes.
+                def _post_pipeline_mutator(_hp):
+                    _hp.update(hp_data)
+                    return None
+
+                update_user_health_profile_atomic(actual_user_id, _post_pipeline_mutator)
                 logger.info(f"💾 health_profile guardado para user {actual_user_id}")
             except Exception as _hp_err:
                 logger.warning(f"⚠️ Error guardando health_profile: {_hp_err}")
@@ -1183,6 +1351,7 @@ def _postprocess_pipeline_result(
             _seed_chunk1_learning(
                 plan_id, result, rejected_meal_names,
                 context_label=f"seed_chunk1_{transport_label}",
+                user_id=actual_user_id,  # [P0-9] ownership check
             )
             _enqueue_remaining_chunks(
                 actual_user_id, plan_id, result,
@@ -1421,7 +1590,28 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                             # [P0-delta] Persistir TZ offset en health_profile silenciosamente
                             # SOLO cuando llegó del request (evitamos overwrite cuando
                             # estamos usando el valor que ya está en el perfil).
-                            update_user_health_profile(user_id, {"tz_offset_minutes": int(tz_offset), "tzOffset": int(tz_offset)})
+                            #
+                            # [P1-2] Atomic write con mutator que solo toca
+                            # `tz_offset_minutes`/`tzOffset`. El legacy
+                            # `update_user_health_profile({"tz_offset_minutes":..., "tzOffset":...})`
+                            # hacía full-overwrite del JSONB column —
+                            # pasarle ese dict de 2 keys WIPEABA TODO el resto
+                            # del health_profile (weight_history, frictions,
+                            # lifetime_lessons_history, etc.) cada vez que el
+                            # cliente disparaba /shift-plan con tzOffset.
+                            # El atomic helper preserva los demás campos bajo
+                            # lock y, post-commit, dispara
+                            # `_sync_chunk_queue_tz_offsets` automáticamente
+                            # cuando detecta cambio de TZ — equivalente al
+                            # side-effect del legacy sin la duplicación.
+                            _new_tz_int = int(tz_offset)
+
+                            def _tz_mutator(_hp):
+                                _hp["tz_offset_minutes"] = _new_tz_int
+                                _hp["tzOffset"] = _new_tz_int
+                                return None
+
+                            update_user_health_profile_atomic(user_id, _tz_mutator)
                         except Exception:
                             pass
                     if tz_offset:
@@ -1631,39 +1821,61 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                         except Exception as e:
                             logger.error(f"❌ [P0-1 RENEWAL] Error renovando plan semanal: {e}")
                     elif is_partial and needs_fill and total_planned_days > 7:
-                        # [VISUAL CONTINUITY] Plan mensual/quincenal en estado partial:
-                        # los chunks futuros ya están encolados, pero el usuario está viendo
-                        # un gap porque el día pasó y el siguiente chunk aún no fue disparado.
-                        # No re-encolamos (causaría días duplicados); aceleramos el siguiente
-                        # chunk pendiente para que execute_after = NOW() y el cron lo tome
-                        # en su próxima corrida (≤ 1 minuto).
-                        try:
-                            cursor.execute(
-                                """
-                                UPDATE plan_chunk_queue
-                                SET execute_after = NOW(),
-                                    updated_at = NOW()
-                                WHERE id = (
-                                    SELECT id FROM plan_chunk_queue
-                                    WHERE meal_plan_id = %s
-                                      AND status IN ('pending', 'stale')
-                                      AND execute_after > NOW()
-                                    ORDER BY week_number ASC
-                                    LIMIT 1
+                        # [VISUAL CONTINUITY] Plan mensual/quincenal en estado partial.
+                        #
+                        # ANTES: cualquier `gap visible` (ej. 2/3 días) disparaba aceleración
+                        # del siguiente chunk a NOW(). Esto VIOLABA `CHUNK_LEARNING_MODE=strict`
+                        # (default): el chunk N+1 se generaba con 0 días de adherencia real
+                        # del chunk N (el usuario ni siquiera había vivido el chunk actual).
+                        # Reportado por usuario 2026-05-06: plan creado ayer (3 días) → hoy
+                        # ve [Mié, Jue] (2 días); el sistema aceleraba chunk 2 inmediatamente
+                        # robando aprendizaje del chunk 1 que aún tenía Jueves vivo.
+                        #
+                        # AHORA: solo aceleramos cuando ya NO quedan días vivos
+                        # (`shifted_days == 0`). Mientras el chunk actual tenga al menos
+                        # 1 día por consumir, respetamos strict: el chunk siguiente espera
+                        # su `execute_after` natural (calculado en `_compute_chunk_delay_days`).
+                        # En `safety_margin` mode, mantenemos el comportamiento previo
+                        # (acelerar al menor gap) para conservar buffer ante fallos LLM.
+                        from constants import CHUNK_LEARNING_MODE as _CLM
+                        _vc_should_fire = (
+                            _CLM == "safety_margin"
+                            or len(shifted_days) == 0
+                        )
+                        if _vc_should_fire:
+                            try:
+                                cursor.execute(
+                                    """
+                                    UPDATE plan_chunk_queue
+                                    SET execute_after = NOW(),
+                                        updated_at = NOW()
+                                    WHERE id = (
+                                        SELECT id FROM plan_chunk_queue
+                                        WHERE meal_plan_id = %s
+                                          AND status IN ('pending', 'stale')
+                                          AND execute_after > NOW()
+                                        ORDER BY week_number ASC
+                                        LIMIT 1
+                                    )
+                                    RETURNING id, week_number
+                                    """,
+                                    (plan_id,)
                                 )
-                                RETURNING id, week_number
-                                """,
-                                (plan_id,)
+                                accelerated = cursor.fetchone()
+                                if accelerated:
+                                    logger.info(
+                                        f"⚡ [VISUAL CONTINUITY] Chunk {accelerated['week_number']} "
+                                        f"(id={accelerated['id']}) acelerado a NOW() para plan {plan_id} "
+                                        f"(gap visible: {len(shifted_days)}/{window_needed} días, mode={_CLM})"
+                                    )
+                            except Exception as e:
+                                logger.error(f"❌ [VISUAL CONTINUITY] Error acelerando chunk pendiente: {e}")
+                        else:
+                            logger.info(
+                                f"⏸️ [VISUAL CONTINUITY] Skip aceleración para plan {plan_id} "
+                                f"(visible={len(shifted_days)}/{window_needed}, mode=strict): "
+                                f"respetando que chunk previo aún tiene días vivos."
                             )
-                            accelerated = cursor.fetchone()
-                            if accelerated:
-                                logger.info(
-                                    f"⚡ [VISUAL CONTINUITY] Chunk {accelerated['week_number']} "
-                                    f"(id={accelerated['id']}) acelerado a NOW() para plan {plan_id} "
-                                    f"(gap visible: {len(shifted_days)}/{window_needed} días)"
-                                )
-                        except Exception as e:
-                            logger.error(f"❌ [VISUAL CONTINUITY] Error acelerando chunk pendiente: {e}")
                     elif not is_partial and needs_fill:
                         try:
                             from cron_tasks import _enqueue_plan_chunk
@@ -1882,6 +2094,12 @@ def api_analyze(
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
+
+        # [P1-16/CANCEL-RACE-FIX 2026-05-06] Mismo fix que en /analyze/stream:
+        # limpiar registry de cancels para este session_id antes de iniciar.
+        # Evita que un cancel obsoleto en vuelo aborte esta nueva pipeline.
+        if session_id:
+            _clear_cancelled_session(session_id)
 
         # [P1-5] Validación temprana de campos mínimos. Antes payloads incompletos
         # llegaban al pipeline y producían un plan basado en defaults genéricos
@@ -2152,6 +2370,25 @@ async def api_analyze_stream(
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
 
+        # [P1-16/CANCEL-RACE-FIX 2026-05-06] Limpiar cualquier cancel pendiente
+        # del registry para este session_id ANTES de iniciar la pipeline.
+        #
+        # Bug observado: el cancel del frontend usa `fetch(..., keepalive: true)`
+        # fire-and-forget. Si el usuario cancela una generación y de inmediato
+        # regenera, el POST cancel puede llegar al backend DESPUÉS del nuevo
+        # POST analyze/stream (race condition). Como el session_id es estable
+        # (= guest_session_id o user_id), el cancel viejo agrega el session_id
+        # al `_PLAN_CANCEL_REGISTRY` y la pipeline recién iniciada lo detecta
+        # vía `is_session_cancelled(session_id)` → se aborta inmediatamente.
+        # Resultado: usuario ve "no me dejó generar" tras cancelar.
+        #
+        # Fix: al iniciar nueva generación, limpiar el registry para garantizar
+        # que cancels obsoletos no afectan esta nueva pipeline. Si el frontend
+        # quiere cancelar ESTA generación, el cancel posterior (post analyze/stream)
+        # se procesa normalmente porque el set vuelve a llenarse cuando llegue.
+        if session_id:
+            _clear_cancelled_session(session_id)
+
         # [P1-5] Misma validación temprana que el endpoint sync. Lanzar 422 ANTES
         # de abrir el StreamingResponse: si el payload es inválido, el cliente
         # recibe un JSON estándar (no un stream SSE con un único evento de error
@@ -2332,12 +2569,62 @@ async def api_analyze_stream(
                 except Exception:
                     pass
 
-        asyncio.create_task(run_pipeline())
+        # [P1-16] Retener el handle del task del pipeline para poder cancelarlo
+        # cooperativamente si el frontend POST /api/plans/cancel llega antes
+        # de que el pipeline complete. Sin handle no podemos llamar `.cancel()`
+        # ni propagar `asyncio.CancelledError` al pipeline aún en vuelo.
+        _pipeline_task = asyncio.create_task(run_pipeline())
 
         async def event_generator():
             """Generador SSE que consume la cola de progreso."""
+            # [P6-CANCEL-PROPAGATION-FIX] Helper centralizado para chequear
+            # cancel + disconnect, llamado en CADA iteración (no solo en
+            # heartbeat timeout). Bug observable PDF 2026-05-06: el pipeline
+            # produce eventos constantemente (<5s) → asyncio.TimeoutError
+            # nunca fire → cancel check (que estaba SOLO en branch timeout)
+            # nunca corre → pipeline sigue hasta terminar pese al cancel
+            # cooperativo del frontend. Resultado: cuota LLM consumida +
+            # plan persistido en DB ~30s después aunque user canceló.
+            #
+            # [P6-CANCEL-PROPAGATION-FIX-2] Pre-fix esperaba `await _pipeline_task`
+            # que podía colgar 30-180s si el pipeline estaba mid-LLM call (la
+            # cancelación asyncio se programa pero no se materializa hasta el
+            # próximo await yield). Eso bloqueaba el SSE response → user veía
+            # el browser "cargando" pese a haber cancelado. Ahora: cancelamos
+            # el task pero NO esperamos — yield error inmediato + return. El
+            # task se cancela en background y libera resources eventualmente.
+            async def _should_stop():
+                """Devuelve True si debemos abortar el stream (disconnect o cancel)."""
+                if await request.is_disconnected():
+                    logger.info("🔌 [SSE] Cliente desconectado, abortando stream.")
+                    if not _pipeline_task.done():
+                        _pipeline_task.cancel()
+                    return True
+                if session_id and is_session_cancelled(session_id):
+                    logger.info(
+                        f"🛑 [P1-16] Cancel explícito recibido para session={session_id}. "
+                        f"Cancelando pipeline task (no espera)."
+                    )
+                    if not _pipeline_task.done():
+                        _pipeline_task.cancel()
+                    # NO esperamos `await _pipeline_task` — el task se cancela
+                    # en background. Si está mid-LLM, asyncio marca la cancel
+                    # y dispara CancelledError en el próximo await yield del
+                    # pipeline. El SSE responde inmediato al user.
+                    return True
+                return False
+
             try:
                 while True:
+                    # [P6-CANCEL-PROPAGATION-FIX] Chequeo PRE-evento: si user
+                    # canceló desde la iteración anterior, abortar antes de
+                    # procesar el siguiente evento. Esto cubre el caso donde
+                    # eventos llegan más rápido que 5s (heartbeat path nunca
+                    # dispara).
+                    if await _should_stop():
+                        yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'user_cancelled', 'message': 'Generación cancelada por el usuario.'}})}\n\n"
+                        return
+
                     # Esperar eventos con timeout para detectar desconexión del cliente
                     try:
                         event_data = await asyncio.wait_for(progress_queue.get(), timeout=5.0)
@@ -2345,9 +2632,10 @@ async def api_analyze_stream(
                         # Heartbeat para mantener la conexión viva
                         yield f"data: {_json.dumps({'event': 'heartbeat'})}\n\n"
 
-                        # Verificar si el cliente cerró la conexión
-                        if await request.is_disconnected():
-                            logger.info("🔌 [SSE] Cliente desconectado, abortando stream.")
+                        # [P6-CANCEL-PROPAGATION-FIX] Mismo chequeo via helper
+                        # — antes había código duplicado in-line aquí.
+                        if await _should_stop():
+                            yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'user_cancelled', 'message': 'Generación cancelada por el usuario.'}})}\n\n"
                             return
                         continue
 
@@ -2477,10 +2765,41 @@ async def api_analyze_stream(
                     yield f"data: {_json.dumps(event_data, ensure_ascii=False)}\n\n"
 
             except asyncio.CancelledError:
-                logger.info("🔌 [SSE] Stream cancelado por el cliente.")
+                # [P6-CANCEL-PROPAGATION-FIX-3] BUG OBSERVABLE corrida
+                # 2026-05-06 00:31: SSE cierra (Starlette dispara
+                # CancelledError en el generator) pero `_pipeline_task`
+                # sigue corriendo en background — solo loguéabamos sin
+                # cancelar el task. Resultado: pipeline completa, persiste
+                # plan en DB, consume cuota LLM, todo después de que el
+                # user cerró el SSE.
+                # Fix: cancelar `_pipeline_task` explícitamente cuando el
+                # generator es cancelado (cliente cierra SSE).
+                logger.info("🔌 [SSE] Stream cancelado por el cliente. Cancelando pipeline task.")
+                if not _pipeline_task.done():
+                    _pipeline_task.cancel()
+                # Re-raise para que asyncio sepa que respetamos el cancel
+                raise
             except Exception as e:
                 logger.error(f"❌ [SSE] Error en generador: {e}")
                 yield f"data: {_json.dumps({'event': 'error', 'data': {'message': str(e)}})}\n\n"
+            finally:
+                # [P6-CANCEL-PROPAGATION-FIX-3] Defense-in-depth: si el
+                # generator termina por cualquier motivo (completion, error,
+                # cancel) y el pipeline task aún está activo, cancelarlo.
+                # Cubre paths que no van por except CancelledError.
+                if not _pipeline_task.done():
+                    logger.warning(
+                        f"🛑 [P6-CANCEL] Generator terminó pero pipeline_task "
+                        f"sigue activo. Cancelando para evitar plan huérfano."
+                    )
+                    _pipeline_task.cancel()
+                # [P1-16] Limpieza del flag de cancelación al terminar el
+                # stream (por completion, error, cancel cooperativo, o
+                # disconnect). Sin esto, el set `_PLAN_CANCEL_REGISTRY`
+                # crecería sin límite durante la vida del proceso si los
+                # usuarios cancelan repetidamente.
+                if session_id:
+                    _clear_cancelled_session(session_id)
 
         return StreamingResponse(
             event_generator(),
@@ -2612,6 +2931,53 @@ def api_like(data: dict = Body(...), verified_user_id: Optional[str] = Depends(g
     except Exception as e:
         return {"error": str(e)}
 
+@router.post("/cancel")
+def api_cancel_plan_generation(data: dict = Body(...)):
+    """[P1-16] Cancela una generación en vuelo identificada por `session_id`.
+
+    [P6-CANCEL-LOG] Logging visible en terminal del backend para que el dev
+    pueda verificar que el POST llega del frontend (debugging común "user
+    clickeó cancel pero backend sigue generando" — necesitamos saber si el
+    POST llegó O si solo SSE se cerró localmente).
+
+    El frontend llama este endpoint desde `cancelGeneration()` en
+    `Plan.jsx` ANTES (o en paralelo a) abortar el SSE del lado cliente.
+    Sin este endpoint:
+      - El SSE se aborta en el cliente (el reader cierra).
+      - PERO el pipeline backend sigue corriendo hasta terminar el día
+        actual y persistir el plan en DB.
+      - El usuario ve el plan aparecer 30s después vía Realtime UPDATE
+        de `meal_plans` aunque ya había cancelado.
+      - Cuota de LLM consumida innecesariamente.
+
+    Diseño:
+      - Acepta cualquier session_id (no requiere auth) para reducir
+        latencia y porque el peor caso es DoS de bajo impacto: registrar
+        un cancel para un session_id que no existe es no-op cuando el
+        pipeline checkea cooperativamente.
+      - Retorna `{success: true, registered: bool}` — útil para tests.
+      - Idempotente: cancelar dos veces el mismo session no falla.
+    """
+    session_id = data.get("session_id") if isinstance(data, dict) else None
+    if not session_id or not isinstance(session_id, str):
+        logger.warning(
+            f"⚠️ [P6-CANCEL-LOG] POST /api/plans/cancel sin session_id válido. "
+            f"data={data!r}"
+        )
+        return {"success": False, "message": "session_id requerido"}
+    registered = _cancel_session(session_id)
+    logger.info(
+        f"🛑 [P6-CANCEL-LOG] POST /api/plans/cancel recibido para "
+        f"session_id={session_id} (registered_now={registered}). "
+        f"event_generator detectará en próxima iteración SSE."
+    )
+    return {
+        "success": True,
+        "registered": registered,
+        "session_id": session_id,
+    }
+
+
 @router.post("/restock")
 def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
     try:
@@ -2641,16 +3007,62 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                 if plan_res and plan_res.data and len(plan_res.data) > 0:
                     real_plan_id = plan_res.data[0].get("id")
                     plan_data = plan_res.data[0].get("plan_data", {})
-                    
-                    if plan_data.get("is_restocked") is True:
-                        logger.warning(f"⚠️ [RESTOCK] El plan {real_plan_id} ya fue registrado previamente. Ignorando petición duplicada.")
-                        return {"success": True, "message": "Las compras ya estaban registradas."}
             except Exception as check_err:
-                logger.warning(f"⚠️ Error verificando estado is_restocked: {check_err}")
+                logger.warning(f"⚠️ Error leyendo plan para restock: {check_err}")
+
+        # [P1-2] Idempotencia item-level: filtrar items ya registrados dentro del
+        # ciclo activo. Antes el endpoint rechazaba el request entero si
+        # `is_restocked=true`, bloqueando restocks parciales (usuario compra solo
+        # fresas el lunes y luego pollo el jueves dentro del mismo ciclo).
+        from constants import strip_accents
+        from datetime import datetime, timezone
+
+        _max_cap = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", "30"))
+        _max_cap = max(7, min(_max_cap, 90))
+        _cycle_days = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS", "7"))
+        _cycle_days = max(1, min(_cycle_days, _max_cap))
+        _now_utc = datetime.now(timezone.utc)
+        _existing_restocked = (plan_data or {}).get("restocked_items") or {}
+        if not isinstance(_existing_restocked, dict):
+            _existing_restocked = {}
+
+        def _name_of(it):
+            if isinstance(it, dict):
+                return str(it.get("name", "")).strip()
+            return str(it).strip()
+
+        def _in_cycle(iso_ts):
+            try:
+                ts = iso_ts.replace("Z", "+00:00") if iso_ts.endswith("Z") else iso_ts
+                dt = datetime.fromisoformat(ts)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return (_now_utc - dt).total_seconds() / 86400.0 < _cycle_days
+            except Exception:
+                return False
+
+        filtered_ingredients = []
+        skipped_dupes = []
+        for raw_item in ingredients:
+            name = _name_of(raw_item)
+            if not name:
+                continue
+            key = strip_accents(name.lower())
+            prev_ts = _existing_restocked.get(key)
+            if isinstance(prev_ts, str) and _in_cycle(prev_ts):
+                skipped_dupes.append(name)
+                continue
+            filtered_ingredients.append(raw_item)
+
+        if skipped_dupes:
+            logger.info(f"🔁 [RESTOCK] {len(skipped_dupes)} item(s) ya registrado(s) en ciclo ({_cycle_days}d), saltando duplicados: {skipped_dupes[:5]}")
+
+        if not filtered_ingredients:
+            return {"success": True, "message": "Todos los items ya estaban registrados en este ciclo."}
 
         # Validación MURO Omitida: Ahora confiamos en el Delta Shopping del frontend.
         # El frontend solo envía los ingredientes que no están en la Nevera.
-        success = restock_inventory(user_id, ingredients)
+        success = restock_inventory(user_id, filtered_ingredients)
         
         if success:
             log_api_usage(user_id, "restock_inventory")
@@ -2658,9 +3070,25 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             # Marcar el plan como "restocked" en BD para futuras peticiones
             if supabase and real_plan_id and plan_data is not None:
                 try:
+                    now_iso = _now_utc.isoformat()
                     plan_data["is_restocked"] = True
+                    # [RIESGO-1/3 FIX] Timestamp ISO-8601 (blanket legacy):
+                    #   1. Filtrar perecederos del delta mid-cycle (<7d) en hybrid.
+                    #   2. Cron diario detecta restocks ≥7d y reactiva la lista.
+                    plan_data["restocked_at_iso"] = now_iso
+
+                    # [P1-2] restocked_items: timestamp por item para supresión
+                    # granular en _build_hybrid_shopping_list. Crece con cada
+                    # restock parcial; el cron limpia entradas vencidas.
+                    if not isinstance(plan_data.get("restocked_items"), dict):
+                        plan_data["restocked_items"] = {}
+                    for raw_item in filtered_ingredients:
+                        nm = _name_of(raw_item)
+                        if nm:
+                            plan_data["restocked_items"][strip_accents(nm.lower())] = now_iso
+
                     supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", real_plan_id).execute()
-                    logger.info(f"✅ [RESTOCK] plan_data 'is_restocked' guardado en DB para plan ID {real_plan_id}")
+                    logger.info(f"✅ [RESTOCK] plan {real_plan_id}: {len(filtered_ingredients)} item(s) registrado(s), restocked_items={len(plan_data['restocked_items'])} entries")
                 except Exception as mark_err:
                     logger.warning(f"⚠️ No se pudo marcar plan como restocked: {mark_err}")
 
@@ -2711,31 +3139,63 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         household_size = max(1, int(data.get("householdSize", 1) or 1))
         grocery_duration = data.get("groceryDuration", "weekly")
         is_new_plan_flag = data.get("is_new_plan", False)
-        
+        # [P1-3] householdComposition opcional desde el body. Si está, sobrescribe
+        # el escalar legacy. Si no, fallback al int (comportamiento previo).
+        household_composition = data.get("householdComposition")
+
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Debes iniciar sesión."}
-            
+
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado.")
-        
+
         plan_record = get_latest_meal_plan_with_id(user_id)
         if not plan_record:
             return {"success": False, "message": "No hay plan activo."}
-        
+
         plan_id = plan_record["id"]
         plan_data = plan_record.get("plan_data", {})
-        
+
         if not plan_data:
             return {"success": False, "message": "Datos de plan inválidos."}
-            
-        from shopping_calculator import get_shopping_list_delta
+
+        from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan
         from db_plans import update_meal_plan_data
-        
+        from constants import compute_household_multiplier
+
+        # [P1-3] Multiplier efectivo: si hay householdComposition lo usa,
+        # si no cae a householdSize (legacy). Mismo helper en planner y cron.
+        _multiplier_source = {
+            "householdComposition": household_composition,
+            "householdSize": household_size,
+        }
+        household_multiplier = compute_household_multiplier(_multiplier_source)
+
         # Generar las 3 variantes escaladas dinámicamente según el householdSize
-        # usando el delta matemático para evitar duplicados si hay inventario (Gap 3)
-        scaled_7 = get_shopping_list_delta(user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True, multiplier=float(household_size))
-        scaled_15 = get_shopping_list_delta(user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True, multiplier=float(household_size) * 2.0)
-        scaled_30 = get_shopping_list_delta(user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True, multiplier=float(household_size) * 4.0)
+        # usando el delta matemático para evitar duplicados si hay inventario (Gap 3).
+        # [P1-5] Fetch inventario + consumidos UNA vez para que las 3 listas
+        # weekly/biweekly/monthly se calculen contra el MISMO snapshot.
+        # Sin esto, mutaciones concurrentes a `user_inventory` (Realtime
+        # channel, restock, cron) entre las 3 llamadas producían deltas
+        # inconsistentes según el `groceryDuration` que el usuario eligiera.
+        _inv_snap, _cons_snap = fetch_inventory_and_consumed_for_plan(
+            user_id, plan_data, is_new_plan_flag
+        )
+        scaled_7 = get_shopping_list_delta(
+            user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True,
+            multiplier=household_multiplier,
+            inventory_override=_inv_snap, consumed_override=_cons_snap,
+        )
+        scaled_15 = get_shopping_list_delta(
+            user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True,
+            multiplier=household_multiplier * 2.0,
+            inventory_override=_inv_snap, consumed_override=_cons_snap,
+        )
+        scaled_30 = get_shopping_list_delta(
+            user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True,
+            multiplier=household_multiplier * 4.0,
+            inventory_override=_inv_snap, consumed_override=_cons_snap,
+        )
         
         # Debug: Log DETAILED per-item comparison to diagnose scaling
         if scaled_7:
@@ -2752,31 +3212,56 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 if any(kw in name_lower for kw in debug_keywords):
                     logger.info(f"  📊 [{household_size}p] {it.get('name')}: display_qty={it.get('display_qty')} | market_qty={it.get('market_qty')} {it.get('market_unit')} | display_string={it.get('display_string')}")
         
+        # [VISIÓN-C] Híbrido: staples=periodo, perishables=semanal.
+        # [RIESGO-1] Pasamos restocked_at_iso para que mid-cycle no pida
+        # perecederos fraccionarios (cycle lock 7 días).
+        try:
+            from shopping_calculator import _build_hybrid_shopping_list as _build_hybrid
+            _restocked_at = plan_data.get("restocked_at_iso") if plan_data.get("is_restocked") else None
+            # [P1-2] Item-level: precedencia sobre el blanket legacy.
+            _restocked_items = plan_data.get("restocked_items") if isinstance(plan_data.get("restocked_items"), dict) else None
+            scaled_15_hybrid = _build_hybrid(scaled_7, scaled_15, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if scaled_15 else scaled_15
+            scaled_30_hybrid = _build_hybrid(scaled_7, scaled_30, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if scaled_30 else scaled_30
+        except Exception as _hyb_e:
+            logger.warning(f"[RECALC] _build_hybrid fallo: {_hyb_e}. Usando lista extrapolada.")
+            scaled_15_hybrid = scaled_15
+            scaled_30_hybrid = scaled_30
+
         # Seleccionar lista activa para el frontend legacy
         if grocery_duration == "biweekly":
-            active_list = scaled_15
+            active_list = scaled_15_hybrid
         elif grocery_duration == "monthly":
-            active_list = scaled_30
+            active_list = scaled_30_hybrid
         else:
             active_list = scaled_7
-        
+
         # Actualizar plan en BD
         plan_data["aggregated_shopping_list"] = active_list
         plan_data["aggregated_shopping_list_weekly"] = scaled_7
-        plan_data["aggregated_shopping_list_biweekly"] = scaled_15
-        plan_data["aggregated_shopping_list_monthly"] = scaled_30
+        plan_data["aggregated_shopping_list_biweekly"] = scaled_15_hybrid
+        plan_data["aggregated_shopping_list_monthly"] = scaled_30_hybrid
         
         # Solo limpiar `is_restocked` si los parámetros cambiaron realmente
         prev_hh = plan_data.get("calc_household_size")
         prev_dur = plan_data.get("calc_grocery_duration")
-        has_changed = (prev_hh != household_size) or (prev_dur != grocery_duration)
-        
+        prev_mult = plan_data.get("calc_household_multiplier")
+        has_changed = (
+            (prev_hh != household_size)
+            or (prev_dur != grocery_duration)
+            or (prev_mult is not None and abs(float(prev_mult) - household_multiplier) > 0.01)
+        )
+
         plan_data["calc_household_size"] = household_size
+        plan_data["calc_household_multiplier"] = household_multiplier
+        if isinstance(household_composition, dict):
+            plan_data["calc_household_composition"] = household_composition
         plan_data["calc_grocery_duration"] = grocery_duration
-        
+
         if has_changed and plan_data.get("is_restocked"):
             plan_data.pop("is_restocked", None)
-            logger.info(f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron de {prev_hh}p/{prev_dur} a {household_size}p/{grocery_duration}, requiere re-registro")
+            plan_data.pop("restocked_at_iso", None)
+            plan_data.pop("restocked_items", None)
+            logger.info(f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron de {prev_hh}p/{prev_dur} (mult={prev_mult}) a {household_size}p/{grocery_duration} (mult={household_multiplier:.2f}), requiere re-registro")
         
         # DEBUG fingerprint: allows frontend to verify it received fresh data
         import time
@@ -2861,6 +3346,21 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
         # aquí es donde puede actualizar el banner cuando llegan chunks degraded.
         _p02_summary = _attach_pantry_degraded_response_meta(response, plan_data)
 
+        # [P1-CHUNKS-1] Exponer `_user_action_required` cuando un chunk dead-letteró.
+        # Antes el flag se persistía en plan_data pero NUNCA se exponía al frontend
+        # → si el push fallaba (Firebase saturado, permisos removidos), el usuario no
+        # tenía forma de enterarse que su plan se atascó hasta que abriera la app y
+        # notara que no avanzaba. Ahora el frontend (Dashboard.jsx, Plan.jsx) puede
+        # leer este campo del polling de chunk-status y renderizar un banner con CTA
+        # ("Regenerar plan") incondicionalmente — el push deja de ser el único canal
+        # de notificación. El payload completo (title/body/cta/url/chunk_id/reason)
+        # viene preformateado desde `_escalate_unrecoverable_chunk` para que el
+        # frontend no necesite duplicar el mapping reason→copy.
+        user_action_required = plan_data.get("_user_action_required") if isinstance(plan_data, dict) else None
+        recovery_exhausted_chunks = (
+            plan_data.get("_recovery_exhausted_chunks") if isinstance(plan_data, dict) else None
+        )
+
         return {
             "status": status,
             "days_generated": days_generated,
@@ -2873,6 +3373,9 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             "quality_degraded_ratio": quality_degraded_ratio,
             "tier_breakdown": tier_summary,
             "_pantry_degraded_summary": _p02_summary,
+            # [P1-CHUNKS-1] Banner persistente para chunks dead-lettered.
+            "user_action_required": user_action_required,
+            "recovery_exhausted_chunks": recovery_exhausted_chunks,
         }
     except HTTPException:
         raise
@@ -3566,3 +4069,83 @@ def api_admin_escalate_chunk(chunk_id: str, request: Request):
     except Exception as e:
         logger.error(f"❌ [GAP A] Error en /admin/chunks/escalate: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/admin/guest-metrics")
+def api_admin_guest_metrics_status(request: Request):
+    """[P1-33] Inspección operacional del flag `_GUEST_METRICS_ENABLED`.
+
+    Antes este flag se decidía 1× al startup vía probe contra
+    `pipeline_metrics`; si fallaba, las métricas de guest se perdían
+    DURANTE TODA la vida del proceso sin que SRE lo viera (solo log
+    CRITICAL en startup, fácil de perder en restarts agitados).
+
+    Este endpoint permite:
+      - Ver el estado actual sin SSH al pod ni redeploy.
+      - Verificar el resultado del último probe + timestamp + error.
+      - Detectar drift entre estado y schema actual de la DB.
+
+    Requires Authorization: Bearer <CRON_SECRET>.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    from graph_orchestrator import get_guest_metrics_status
+    return get_guest_metrics_status()
+
+
+@router.post("/admin/guest-metrics/probe")
+def api_admin_guest_metrics_probe(request: Request):
+    """[P1-33] Re-ejecuta el probe de schema sin restart.
+
+    Caso de uso: SRE acaba de aplicar `ALTER TABLE pipeline_metrics ALTER
+    COLUMN user_id DROP NOT NULL;` manualmente sobre una DB que estaba
+    drifted. Sin este endpoint, había que reiniciar el worker para
+    re-evaluar el flag (perdiendo conexiones cacheadas + pipelines en
+    vuelo). Con este endpoint, el probe corre on-demand y el flag se
+    actualiza en memoria.
+
+    Devuelve el snapshot post-probe (mismo formato que GET).
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    from graph_orchestrator import (
+        verify_pipeline_metrics_guest_insert,
+        get_guest_metrics_status,
+    )
+    try:
+        result = verify_pipeline_metrics_guest_insert()
+        snapshot = get_guest_metrics_status()
+        snapshot["probe_executed"] = True
+        snapshot["probe_result"] = result
+        return snapshot
+    except Exception as e:
+        logger.error(f"❌ [P1-33] Error ejecutando probe on-demand: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/admin/guest-metrics/force")
+def api_admin_guest_metrics_force(request: Request, data: dict = Body(...)):
+    """[P1-33] Override manual del flag (sin re-probe).
+
+    Body: `{"enabled": bool, "reason": "string opcional"}`.
+
+    Casos de uso:
+      - SRE detecta inserts fallidos en logs y quiere desactivar
+        proactivamente antes de la próxima ventana de probe.
+      - SRE acaba de aplicar la migración manualmente y quiere habilitar
+        sin esperar al probe (que requiere INSERT/DELETE round-trip).
+      - Disable temporal durante incident response (DB stress, alertas
+        falsas) para silenciar telemetría sin migración de schema.
+
+    El override queda en memoria hasta el próximo probe (que puede
+    re-flippearlo si el schema sigue mal). El reason queda en
+    `last_reason` para auditoría.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    from graph_orchestrator import force_set_guest_metrics_enabled
+    enabled = data.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(
+            status_code=400,
+            detail="Body debe incluir 'enabled': true|false",
+        )
+    reason = data.get("reason") if isinstance(data.get("reason"), str) else None
+    return force_set_guest_metrics_enabled(enabled=enabled, reason=reason)

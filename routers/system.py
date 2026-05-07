@@ -101,6 +101,41 @@ def get_system_health():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/atomic-pool-health")
+def get_atomic_pool_health():
+    """[P1-4] Salud del `connection_pool` que sustenta
+    `update_user_health_profile_atomic`.
+
+    Retorna `{ pool_available, fallback_count, first_at, last_at, last_user_id,
+    strict_mode }`. En producción, alertear cuando:
+      - `pool_available=false`: el pool cayó (red, credenciales, pooler agotado).
+      - `fallback_count > 0` con `strict_mode=false`: la atomicidad está rota
+        para el subset de calls que ya degradaron — lost-update silencioso en
+        curso. Recomendación: bumpear `MEALFIT_REQUIRE_ATOMIC_POOL=1` en el
+        próximo deploy para forzar fail-fast.
+
+    Sin auth (read-only, no expone datos sensibles más allá del último
+    user_id afectado, útil para load balancers / k8s probes / Grafana).
+    """
+    try:
+        from db_profiles import get_atomic_pool_fallback_snapshot
+        snapshot = get_atomic_pool_fallback_snapshot()
+        # Status semantics:
+        #   - "ok": pool arriba, sin fallbacks acumulados.
+        #   - "degraded": pool arriba pero hubo ≥1 fallback histórico (transient).
+        #   - "broken": pool ausente AHORA (no atomicidad para nuevas requests).
+        if not snapshot["pool_available"]:
+            status = "broken"
+        elif snapshot["fallback_count"] > 0:
+            status = "degraded"
+        else:
+            status = "ok"
+        return {"success": True, "status": status, **snapshot}
+    except Exception as e:
+        logger.error(f"Error calculando atomic pool health: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/chunk-queue-health")
 def get_chunk_queue_health():
     """[P1-5] Visibilidad del worker de chunks: backlog, antigüedad, último run y

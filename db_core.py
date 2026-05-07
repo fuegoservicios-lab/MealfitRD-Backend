@@ -21,6 +21,39 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL")
 
+# Knobs MEALFIT_DB_POOL_* para sintonizar el psycopg ConnectionPool sin redeploy.
+# Existen porque bajo picos (RAG + cron chunk_queue + cache writes en paralelo)
+# se observó saturación con `couldn't get a connection after 30.00 sec`. Permite:
+#   - Subir MAX_SIZE para absorber concurrencia mayor.
+#   - Bajar TIMEOUT_S para fallar rápido y diagnosticar antes de que se acumule cola.
+#   - Ajustar MAX_IDLE_S por debajo del idle timeout de Supavisor si éste cambia.
+def _int_env(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(os.environ.get(name, str(default)))))
+    except (TypeError, ValueError):
+        return default
+
+def _float_env(name: str, default: float, lo: float, hi: float) -> float:
+    try:
+        return max(lo, min(hi, float(os.environ.get(name, str(default)))))
+    except (TypeError, ValueError):
+        return default
+
+# [P0-3] Defaults subidos tras incidente 2026-05-06 (`couldn't get a connection 30s` +
+# APScheduler skips bajo 2 pipelines paralelos). Trade-off:
+#   - MAX_SIZE 30→60: absorbe picos de RAG + cron chunk_queue + cache writes en paralelo.
+#     Supabase Transaction Pooler (6543) tolera muchas conexiones (multiplexa via pgBouncer).
+#   - TIMEOUT 30s→15s: fail-fast para diagnosticar saturación antes de que se acumule cola
+#     de waiters. APScheduler ya skipea jobs cuando este timeout vence; bajarlo evita que
+#     un solo waiter bloquee el slot del job 15s extra.
+#   - MIN_SIZE sin cambio (2): no consumir conexiones idle en entornos low-traffic.
+# Override cualquiera con `MEALFIT_DB_POOL_*` si el comportamiento previo era preferido
+# o si el pooler reporta saturación al alza.
+DB_POOL_MIN_SIZE = _int_env("MEALFIT_DB_POOL_MIN_SIZE", 2, 0, 50)
+DB_POOL_MAX_SIZE = _int_env("MEALFIT_DB_POOL_MAX_SIZE", 60, 1, 200)
+DB_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_POOL_TIMEOUT_S", 15.0, 1.0, 120.0)
+DB_POOL_MAX_IDLE_S = _float_env("MEALFIT_DB_POOL_MAX_IDLE_S", 300.0, 30.0, 1800.0)
+
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
@@ -61,29 +94,36 @@ if SUPABASE_DB_URL:
             conn.prepare_threshold = None
 
         connection_pool = ConnectionPool(
-            conninfo=clean_url, 
-            min_size=2,
-            max_size=30, 
-            max_idle=300,  # Kill idle connections after 5 minutes
+            conninfo=clean_url,
+            min_size=DB_POOL_MIN_SIZE,
+            max_size=DB_POOL_MAX_SIZE,
+            timeout=DB_POOL_TIMEOUT_S,
+            max_idle=DB_POOL_MAX_IDLE_S,
             reconnect_timeout=5,  # Wait up to 5s for reconnection
             kwargs=get_client_kwargs(),
             configure=configure_sync_conn,
             check=ConnectionPool.check_connection,  # Health check on each checkout
             open=False
         )
-        
+
         async_connection_pool = AsyncConnectionPool(
-            conninfo=clean_url, 
-            min_size=2,
-            max_size=30, 
-            max_idle=300,
+            conninfo=clean_url,
+            min_size=DB_POOL_MIN_SIZE,
+            max_size=DB_POOL_MAX_SIZE,
+            timeout=DB_POOL_TIMEOUT_S,
+            max_idle=DB_POOL_MAX_IDLE_S,
             reconnect_timeout=5,
             kwargs=get_client_kwargs(),
             configure=configure_async_conn,
             check=AsyncConnectionPool.check_connection,
             open=False
         )
-        logger.info("🔌 [psycopg] ConnectionPool (Sync y Async) de Postgres configurado con autocommit=True, keepalives + health checks.")
+        logger.info(
+            "🔌 [psycopg] ConnectionPool (Sync y Async) configurado: "
+            f"min={DB_POOL_MIN_SIZE}, max={DB_POOL_MAX_SIZE}, "
+            f"timeout={DB_POOL_TIMEOUT_S}s, max_idle={DB_POOL_MAX_IDLE_S}s "
+            "(autocommit=True, keepalives + health checks)."
+        )
     except Exception as pool_err:
         logger.error(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")
 

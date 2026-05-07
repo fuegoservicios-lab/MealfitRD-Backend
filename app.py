@@ -35,7 +35,7 @@ from db import (
     connection_pool, async_connection_pool, supabase,
     get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes,
     insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile,
-    update_user_health_profile, get_all_user_facts, delete_user_fact,
+    update_user_health_profile, update_user_health_profile_atomic, get_all_user_facts, delete_user_fact,
     save_new_meal_plan_robust,
     log_consumed_meal, get_consumed_meals_today, save_visual_entry, get_session_messages,
     get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
@@ -516,6 +516,59 @@ async def lifespan(app: FastAPI):
     except Exception as _stale_err:
         logger.warning(f"⚠️ [P1-ORQ-5] Probe de stale cache schema falló: {_stale_err}")
 
+    # [P1-4] Health-check del connection_pool requerido por
+    # `update_user_health_profile_atomic`. El atomic helper degrada
+    # silenciosamente a non-atómico si el pool no está; en producción eso
+    # significa lost-update bajo concurrencia (signals erosionados de
+    # `frictions`, `weight_history`, `reflection_history`,
+    # `lifetime_lessons_history`, etc.) que pueden vivir días sin detección.
+    #
+    # Comportamiento:
+    #   - Pool OK → log INFO informativo, continúa.
+    #   - Pool NO disponible + `MEALFIT_REQUIRE_ATOMIC_POOL=1` → loguea
+    #     CRITICAL y RAISE para que el orquestador (uvicorn/gunicorn/k8s)
+    #     reinicie el worker. Producción debe fijar este env var.
+    #   - Pool NO disponible + strict OFF (default) → CRITICAL log con
+    #     remediation, pero el servidor sigue arriba (preserva dev/scripts
+    #     locales sin DATABASE_URL). El counter de
+    #     `get_atomic_pool_fallback_snapshot()` empieza a llenarse y el
+    #     endpoint `/api/system/atomic-pool-health` queda como fuente de
+    #     verdad para alerting.
+    try:
+        from db_profiles import REQUIRE_ATOMIC_POOL
+        from db_core import connection_pool as _pool_check
+        if _pool_check is None:
+            _msg = (
+                "[P1-4/STARTUP] connection_pool=None — "
+                "update_user_health_profile_atomic degradará a non-atómico. "
+                "Lost-update bajo concurrencia es posible. Verificar "
+                "DATABASE_URL/SUPABASE_DB_URL y conectividad al pooler:6543."
+            )
+            if REQUIRE_ATOMIC_POOL:
+                logger.critical(
+                    f"🚨 {_msg} MEALFIT_REQUIRE_ATOMIC_POOL=1 → abortando startup."
+                )
+                raise RuntimeError(_msg)
+            logger.critical(
+                f"🚨 {_msg} Continuando porque MEALFIT_REQUIRE_ATOMIC_POOL≠1; "
+                f"export=1 en producción para fail-fast."
+            )
+        else:
+            logger.info(
+                f"✅ [STARTUP] connection_pool inicializado — "
+                f"update_user_health_profile_atomic operará en modo atómico real "
+                f"(strict={REQUIRE_ATOMIC_POOL})."
+            )
+    except RuntimeError:
+        raise  # propagar para que el process manager reinicie
+    except Exception as _pool_probe_err:
+        # Probe no debería fallar; si lo hace, NO bloqueamos startup —
+        # observabilidad pura. El endpoint /api/system/atomic-pool-health
+        # captura el estado real cuando lo consulten.
+        logger.warning(
+            f"⚠️ [P1-4] Probe de pool falló (no fatal): {_pool_probe_err}"
+        )
+
     logger.info("🚀 [FastAPI] Servidor de MealfitRD IA iniciado con éxito en el puerto 3001.")
     yield
     
@@ -811,7 +864,21 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
                 profile = get_user_profile(new_user_id)
                 # Si el usuario es nuevo, puede no existir su perfil
                 if profile:
-                    update_user_health_profile(new_user_id, health_profile)
+                    # [P1-2] Atomic write con mutator que MERGEA el payload
+                    # del frontend ON TOP del estado existente bajo FOR UPDATE.
+                    # Antes era full-overwrite del JSONB column (legacy
+                    # `update_user_health_profile`): si entre el `migrate_guest_data`
+                    # de arriba y este write, otro path (cron, request paralelo)
+                    # poblaba campos derivados del usuario recién migrado, ese
+                    # estado se perdía. La migración guest→registered es
+                    # típicamente one-shot, pero el doble-click en signup
+                    # puede disparar dos llamadas concurrentes a este endpoint;
+                    # el atomic helper las serializa.
+                    def _migrate_mutator(_hp):
+                        _hp.update(health_profile)
+                        return None
+
+                    update_user_health_profile_atomic(new_user_id, _migrate_mutator)
                 else:
                     upsert_user_profile(new_user_id, health_profile)
             except Exception as e:

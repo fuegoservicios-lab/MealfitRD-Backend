@@ -7,6 +7,14 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+test_venv/
 .idea/
 .vscode/
 uploads/
+
+# Logs y outputs transitorios
+*.log
+pytest_output.txt
+title_debug.log
+*.bak
+*.jsonl.bak

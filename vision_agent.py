@@ -62,6 +62,22 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
         print(f"⚠️ Error procesando imagen con Gemini Vision: {e}")
         return {"description": "Error analizando imagen.", "is_food": False, "calories": 0}
 
+# [2026-05-06] Modelo de embeddings MULTIMODAL para visual diary y chat agent.
+# Configurable vía env. Default `gemini-embedding-2` (GA estable, multimodal —
+# texto + imágenes). Mismo benchmark que la variante preview (MTEB Multilingual
+# 69.9, TextCaps 89.6, Docci 93.4) pero sin las restricciones de cuota del
+# preview ni cambios disruptivos en futuras revisiones.
+#
+# Si Google saca un nuevo modelo multimodal mejor (ej. gemini-embedding-3),
+# cambias el knob sin tocar código. Si la cuota se agota crónicamente, puedes
+# temporalmente apuntar al text-only y aceptar perder multimodalidad hasta el
+# reset diario.
+GEMINI_EMBEDDING_MULTIMODAL_MODEL = os.environ.get(
+    "MEALFIT_GEMINI_EMBEDDING_MULTIMODAL_MODEL",
+    "models/gemini-embedding-2",
+)
+
+
 def get_multimodal_embedding(text: str) -> list:
     """
     Genera un embedding de la descripción usando Gemini.
@@ -75,7 +91,7 @@ def _cached_multimodal_embedding(text: str):
     """Wrapper cacheado para embeddings multimodales (Redis o local OrderedDict)."""
     try:
         embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-2-preview",
+            model=GEMINI_EMBEDDING_MULTIMODAL_MODEL,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
         emb = embeddings.embed_query(text)

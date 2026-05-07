@@ -11,6 +11,95 @@ from constants import normalize_ingredient_for_tracking
 logger = logging.getLogger(__name__)
 _RESERVATION_MEAL_TOKEN_RE = re.compile(r":meal:(.+)$")
 
+def _compute_dynamic_consumption_rates(user_id: str) -> Dict[str, float]:
+    """[P2-2] Deriva la tasa de consumo (g/día) por ingrediente desde el plan activo.
+
+    Antes la predicción "se agotará en X días" usaba rates hardcoded por
+    categoría (proteína=150g/día, etc.). Si el plan del usuario tiene
+    yogurt en 4 desayunos por semana, el rate fijo no captura el consumo
+    real (200g/día independiente de cuán denso sea el plan).
+
+    Este helper escanea `aggregated_shopping_list_weekly` (ya escalada por
+    household y descontada del inventario) del plan activo más reciente y
+    calcula `cantidad_g / 7` para cada ingrediente. La lista weekly es la
+    canónica para tasas porque cubre exactamente 7 días.
+
+    Returns: dict `{nombre_normalizado: gramos/día}`. Vacío si no hay plan
+    activo o falla la query (caller cae al rate por categoría).
+    """
+    if not supabase or not user_id:
+        return {}
+    try:
+        res = (
+            supabase.table("meal_plans")
+            .select("plan_data")
+            .eq("user_id", user_id)
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not res.data:
+            return {}
+        plan_data = res.data[0].get("plan_data") or {}
+        if isinstance(plan_data, str):
+            plan_data = json.loads(plan_data)
+        weekly = plan_data.get("aggregated_shopping_list_weekly") or []
+        if not isinstance(weekly, list):
+            return {}
+    except Exception as e:
+        logger.debug(f"[P2-2] No se pudo cargar plan activo para rates dinámicos: {e}")
+        return {}
+
+    rates: Dict[str, float] = {}
+    for it in weekly:
+        if not isinstance(it, dict):
+            continue
+        name = (it.get("name") or "").strip()
+        if not name:
+            continue
+        # `market_qty` y `market_unit` son los más confiables (post-escalado).
+        # Fallback a `quantity` + `unit` (raw).
+        try:
+            qty = float(it.get("market_qty") or it.get("quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        unit = (it.get("market_unit") or it.get("unit") or "").lower()
+        if qty <= 0:
+            continue
+
+        qty_g = qty
+        if unit in ("lb", "lbs", "libra", "libras"):
+            qty_g = qty * 453.592
+        elif unit in ("kg", "kilos", "kilo"):
+            qty_g = qty * 1000.0
+        elif unit in ("oz", "onzas", "onza"):
+            qty_g = qty * 28.3495
+        elif unit in ("g", "gr", "gramo", "gramos"):
+            qty_g = qty
+        elif unit in ("ml", "l", "litro", "litros"):
+            qty_g = qty if unit == "ml" else qty * 1000.0
+        else:
+            # Unidades discretas (huevo, manzana, etc.): qty es ya el conteo.
+            # Asumir ~80g/unidad como estimación genérica para predicción.
+            qty_g = qty * 80.0
+
+        if qty_g <= 0:
+            continue
+
+        key = normalize_ingredient_for_tracking(name)
+        if not key:
+            continue
+        # Si ya hay un rate para este nombre (item-as-master fallback puede
+        # producir duplicados con sufijos), nos quedamos con el mayor — la
+        # predicción "se agotará pronto" debe ser conservadora hacia agotamiento.
+        rate = qty_g / 7.0
+        if rate > rates.get(key, 0.0):
+            rates[key] = rate
+
+    return rates
+
+
 _CANONICAL_UNIT_MAP = {
     'ud': 'unidad', 'uds': 'unidad', 'unidades': 'unidad',
     'lbs': 'lb', 'libra': 'lb', 'libras': 'lb',
@@ -169,11 +258,13 @@ def _infer_shelf_life_days(name: str, category: str) -> int:
     return 14
 
 
-def get_user_inventory(user_id: str, household_size: int = None) -> List[str]:
+def get_user_inventory(user_id: str, household_size: float | int | None = None) -> List[str]:
     """Obtiene la despensa del usuario formateada como lista de strings (ej: '2 unidades de Manzana').
 
     Si household_size no se pasa, se lee del health_profile del usuario para escalar la
     predicción de agotamiento (P0-3). Callers que ya lo tienen pueden pasarlo directamente.
+
+    [P1-3] Acepta float para soportar `householdComposition` (adults+children×0.6).
     """
     raw_items = get_raw_user_inventory(user_id)
     formatted = []
@@ -183,10 +274,18 @@ def get_user_inventory(user_id: str, household_size: int = None) -> List[str]:
             res = supabase.table("user_profiles").select("health_profile").eq("id", user_id).limit(1).execute()
             if res.data:
                 hp = res.data[0].get("health_profile") or {}
-                household_size = hp.get("householdSize") or hp.get("household_size") or 1
+                # [P1-3] Si el perfil tiene `householdComposition` lo usamos
+                # como multiplier efectivo; si no, fallback al escalar legacy.
+                from constants import compute_household_multiplier
+                _eff = compute_household_multiplier(hp)
+                household_size = _eff if _eff > 1.0 else (hp.get("householdSize") or hp.get("household_size") or 1)
         except Exception:
             household_size = 1
-    household_size = max(1, int(household_size or 1))
+    # Aceptar float (P1-3): adults=2 + children=2×0.6 = 3.2 personas equivalentes.
+    try:
+        household_size = max(1.0, float(household_size or 1))
+    except (TypeError, ValueError):
+        household_size = 1.0
 
     PANTRY_STAPLES = {
         'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco',
@@ -196,7 +295,12 @@ def get_user_inventory(user_id: str, household_size: int = None) -> List[str]:
 
     master_list = get_master_ingredients()
     master_map = {m["name"]: m for m in master_list}
-    
+
+    # [P2-2] Pre-cómputo de rates dinámicos desde el plan activo (g/día por
+    # ingrediente). Vacío si no hay plan o falla la query → caller cae al
+    # rate por categoría (legacy).
+    dynamic_rates = _compute_dynamic_consumption_rates(user_id)
+
     for item in raw_items:
         qty = float(item.get("quantity", 0) or 0)
         unit = item.get("unit", "unidad")
@@ -255,13 +359,21 @@ def get_user_inventory(user_id: str, household_size: int = None) -> List[str]:
                 consumption_rate = 80.0 # g/dia
             elif "fruta" in category:
                 consumption_rate = 1.0 # 1 unid/dia
-                if qty_g > 50: consumption_rate = 150.0 
+                if qty_g > 50: consumption_rate = 150.0
             elif "lácteo" in category or "leche" in category:
                 consumption_rate = 200.0 # ml o g/dia
-            
-            # [P0-3] Escalar consumo por household_size. Antes asumía 1 persona,
-            # lo que contradice el shopping list escalado × household y la adherencia / household.
-            effective_rate = consumption_rate * household_size
+
+            # [P2-2] Si el plan activo tiene una tasa real (g/día) para este
+            # ingrediente, sobrescribe el rate por categoría. La tasa dinámica
+            # YA refleja household × densidad del plan, así que NO se vuelve a
+            # multiplicar por household_size — bypass del escalado legacy.
+            _dynamic_rate = dynamic_rates.get(normalize_ingredient_for_tracking(name)) if dynamic_rates else None
+            if _dynamic_rate and _dynamic_rate > 0:
+                effective_rate = _dynamic_rate
+            else:
+                # [P0-3] Escalar consumo por household_size. Antes asumía 1 persona,
+                # lo que contradice el shopping list escalado × household y la adherencia / household.
+                effective_rate = consumption_rate * household_size
             if effective_rate > 0 and qty_g > 0:
                 days_until_empty = qty_g / effective_rate
                 if days_until_empty <= 2.5 and days_left > 3:
@@ -272,8 +384,11 @@ def get_user_inventory(user_id: str, household_size: int = None) -> List[str]:
     formatted.sort()
     return formatted
 
-def get_user_inventory_net(user_id: str, household_size: int = None) -> List[str]:
-    """Obtiene la despensa del usuario descontando las reservas activas (Neto)."""
+def get_user_inventory_net(user_id: str, household_size: float | int | None = None) -> List[str]:
+    """Obtiene la despensa del usuario descontando las reservas activas (Neto).
+
+    [P1-3] Acepta float para soportar `householdComposition` (adults+children×0.6).
+    """
     raw_items = get_raw_user_inventory(user_id)
     formatted = []
 
@@ -282,10 +397,18 @@ def get_user_inventory_net(user_id: str, household_size: int = None) -> List[str
             res = supabase.table("user_profiles").select("health_profile").eq("id", user_id).limit(1).execute()
             if res.data:
                 hp = res.data[0].get("health_profile") or {}
-                household_size = hp.get("householdSize") or hp.get("household_size") or 1
+                # [P1-3] Si el perfil tiene `householdComposition` lo usamos
+                # como multiplier efectivo; si no, fallback al escalar legacy.
+                from constants import compute_household_multiplier
+                _eff = compute_household_multiplier(hp)
+                household_size = _eff if _eff > 1.0 else (hp.get("householdSize") or hp.get("household_size") or 1)
         except Exception:
             household_size = 1
-    household_size = max(1, int(household_size or 1))
+    # Aceptar float (P1-3): adults=2 + children=2×0.6 = 3.2 personas equivalentes.
+    try:
+        household_size = max(1.0, float(household_size or 1))
+    except (TypeError, ValueError):
+        household_size = 1.0
 
     PANTRY_STAPLES = {
         'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco',
@@ -295,7 +418,12 @@ def get_user_inventory_net(user_id: str, household_size: int = None) -> List[str
 
     master_list = get_master_ingredients()
     master_map = {m["name"]: m for m in master_list}
-    
+
+    # [P2-2] Pre-cómputo de rates dinámicos desde el plan activo (g/día por
+    # ingrediente). Vacío si no hay plan o falla la query → caller cae al
+    # rate por categoría (legacy).
+    dynamic_rates = _compute_dynamic_consumption_rates(user_id)
+
     for item in raw_items:
         qty = float(item.get("available_quantity", item.get("quantity", 0)) or 0)
         unit = item.get("unit", "unidad")
@@ -354,13 +482,21 @@ def get_user_inventory_net(user_id: str, household_size: int = None) -> List[str
                 consumption_rate = 80.0 # g/dia
             elif "fruta" in category:
                 consumption_rate = 1.0 # 1 unid/dia
-                if qty_g > 50: consumption_rate = 150.0 
+                if qty_g > 50: consumption_rate = 150.0
             elif "lácteo" in category or "leche" in category:
                 consumption_rate = 200.0 # ml o g/dia
-            
-            # [P0-3] Escalar consumo por household_size. Antes asumía 1 persona,
-            # lo que contradice el shopping list escalado × household y la adherencia / household.
-            effective_rate = consumption_rate * household_size
+
+            # [P2-2] Si el plan activo tiene una tasa real (g/día) para este
+            # ingrediente, sobrescribe el rate por categoría. La tasa dinámica
+            # YA refleja household × densidad del plan, así que NO se vuelve a
+            # multiplicar por household_size — bypass del escalado legacy.
+            _dynamic_rate = dynamic_rates.get(normalize_ingredient_for_tracking(name)) if dynamic_rates else None
+            if _dynamic_rate and _dynamic_rate > 0:
+                effective_rate = _dynamic_rate
+            else:
+                # [P0-3] Escalar consumo por household_size. Antes asumía 1 persona,
+                # lo que contradice el shopping list escalado × household y la adherencia / household.
+                effective_rate = consumption_rate * household_size
             if effective_rate > 0 and qty_g > 0:
                 days_until_empty = qty_g / effective_rate
                 if days_until_empty <= 2.5 and days_left > 3:

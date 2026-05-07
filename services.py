@@ -19,6 +19,7 @@ from db import (
     insert_rejection,
     track_meal_friction,
     update_user_health_profile,
+    update_user_health_profile_atomic,
     upsert_user_profile
 )
 from db_plans import save_new_meal_plan_atomic
@@ -75,7 +76,23 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
                 merged = existing_hp
             if form_data and not existing_hp:
                 logger.debug(f"🔄 [SYNC] health_profile vacío, sincronizando desde formData del frontend...")
-                update_user_health_profile(user_id, merged)
+                # [P1-2] Migración a atomic helper. El check `not existing_hp`
+                # se hizo PRE-LOCK; entre ese check y este write, otro caller
+                # del mismo user_id puede haber poblado hp (race con cron de
+                # facts/learning, otro tab del usuario en proceso de
+                # registro). Sin atomic, sobrescribiríamos la población
+                # concurrente. El mutator hace `hp.update(form_only)` ON TOP
+                # del estado fresco bajo FOR UPDATE: si está vacío, equivale a
+                # un set; si no, mergea form fields preservando los demás.
+                _form_only = {k: v for k, v in (form_data or {}).items() if v not in [None, "", [], {}]}
+
+                def _init_mutator(_hp):
+                    if not _form_only:
+                        return False  # nada que persistir
+                    _hp.update(_form_only)
+                    return None
+
+                update_user_health_profile_atomic(user_id, _init_mutator)
         else:
             if form_data:
                 logger.warning(f"⚠️ [SYNC] No existe user_profile para {user_id}, intentando crear...")

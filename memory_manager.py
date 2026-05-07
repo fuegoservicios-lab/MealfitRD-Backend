@@ -8,8 +8,11 @@ el contexto del usuario vivo sin saturar la ventana de tokens de Gemini.
 import os
 import time
 import json
+import logging
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import RemoveMessage
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
 from typing import List
 from dotenv import load_dotenv
@@ -36,39 +39,192 @@ MAX_CHAR_THRESHOLD = 4000   # A partir de cuántos caracteres en total se dispar
 KEEP_RECENT = 10         # Cuántos mensajes recientes conservar sin resumir
 MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 
+# [P1-18] Modelo de Gemini usado por `summarize_and_prune` para generar
+# resúmenes y master summaries. ANTES estaba hardcodeado a
+# `"gemini-3.1-flash-lite-preview"` — un ID que NO corresponde a ningún
+# modelo público de Gemini conocido (la familia 3.x no existe; los
+# modelos públicos son 1.5/2.0/2.5). Si el SDK lo rechazaba con 404, el
+# resumen fallaba y el `except Exception` lo loggeaba como warning
+# silencioso → el historial de la conversación seguía creciendo sin
+# podarse, agotando la ventana de contexto del agente.
+#
+# Ahora:
+#   - Configurable vía env var con default a `gemini-2.5-flash` (modelo
+#     válido y económico para resúmenes).
+#   - Cualquier mismatch con la nomenclatura oficial se detecta vía el
+#     contador `_summarize_failures` y se promueve a `logger.error`
+#     (en lugar de warning silencioso) para que SRE alertee.
+MEMORY_SUMMARY_MODEL = os.environ.get(
+    "MEMORY_SUMMARY_MODEL", "gemini-2.5-flash"
+).strip() or "gemini-2.5-flash"
+
+# [P1-18] Contador in-memory de fallos del resumen. Se incrementa en cada
+# excepción de `summarize_and_prune` y se loggea a nivel `error` el primer
+# fallo + cada N para detectar degradación sistémica sin spamear logs.
+# Reset al primer éxito (auto-recovery sin restart del proceso).
+_summarize_failures: dict = {"count": 0, "last_error": None}
+
+# [P1-19] Threshold de fallos consecutivos a partir del cual persistimos
+# una row en `system_alerts` (además del log error). Esto permite que SRE
+# alerte en dashboard sin tener que parsear logs. Dedupe por alert_key
+# para que la primera y subsiguientes alertas reescriban el mismo row
+# en lugar de crecer sin límite. Defensa contra una racha sostenida
+# (modelo inválido, API key rotada, tabla missing, cuota agotada) que
+# pasaría inadvertida si solo confiamos en logs durante outages.
+_SUMMARY_FAILURE_ALERT_THRESHOLD = 5
+_SUMMARY_FAILURE_ALERT_REPEAT_EVERY = 50  # re-persistir cada N adicionales
+
+
+def _persist_summary_failure_alert(session_id: str, error_str: str, count: int) -> None:
+    """[P1-19] Persiste / refresca alerta en `system_alerts` cuando el
+    contador de fallos consecutivos cruza el threshold. Best-effort: si la
+    DB también está caída, fallamos silenciosamente (el log error ya
+    capturó la señal arriba). Defensa: no levantamos nunca para no
+    duplicar el except del caller."""
+    try:
+        from db_core import execute_sql_write
+        alert_key = "memory_summary_failures"
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata)
+            VALUES (%s, 'memory_summary_failure', 'warning', %s, %s, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                f"summarize_and_prune fallando ({count} consecutivos)",
+                (
+                    f"`memory_manager.summarize_and_prune` lleva {count} fallos "
+                    f"consecutivos. Posible modelo inválido "
+                    f"(MEMORY_SUMMARY_MODEL={MEMORY_SUMMARY_MODEL!r}), API key "
+                    f"rotada, cuota agotada o DB blip. La memoria del agente "
+                    f"NO se está podando — riesgo de explosión de tokens y "
+                    f"costos disparados."
+                ),
+                json.dumps({
+                    "consecutive_failures": count,
+                    "last_error": error_str[:500],
+                    "last_session_id": session_id,
+                    "model": MEMORY_SUMMARY_MODEL,
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception as alert_err:
+        # No re-lanzar: el log error del caller ya capturó la señal.
+        # Pero loggeamos a debug para que en dev podamos detectar si la
+        # tabla está missing o el schema cambió.
+        logger.debug(
+            f"[MEMORY MANAGER/P1-19] No se pudo persistir alerta a system_alerts: {alert_err}"
+        )
+
 
 # ============================================================
 # SINCRONIZACIÓN: Purgar Checkpoint de LangGraph
 # ============================================================
-def purge_langgraph_checkpoint(session_id: str, keep_recent: int = KEEP_RECENT):
-    """
-    Purga los mensajes antiguos del checkpoint de LangGraph (PostgresSaver)
-    para mantenerlo sincronizado con la tabla agent_messages de Supabase.
-    
-    Sin esta función, LangGraph acumula TODOS los mensajes históricos en su
-    propio estado inmutable y los re-inyecta silenciosamente al modelo en cada
-    turno, causando explosión de tokens y costos disparados.
-    
-    Usa la API RemoveMessage de LangChain para eliminar mensajes del state.
-    """
+
+# [P1-17] Cache lazy-singleton del grafo dummy usado para manipular el state
+# del PostgresSaver sin importar agent.py. ANTES, cada llamada a
+# `purge_langgraph_checkpoint` (disparada por `summarize_and_prune`)
+# instanciaba un nuevo `StateGraph` + `PostgresSaver` + `compile`. En
+# producción con N sesiones activas y resúmenes frecuentes, esto era
+# CPU/memoria desperdiciados (objetos pesados de LangGraph) + potencial
+# leak de los compiled graphs.
+#
+# AHORA cacheamos el grafo a nivel módulo. Invalidación por `id(pool)`
+# para tests donde `connection_pool` se mockea/reemplaza — en producción
+# el pool nunca cambia tras el startup, así que el cache se carga UNA
+# vez por proceso.
+import threading as _p117_threading
+
+_DUMMY_PURGE_GRAPH_CACHE: dict = {"graph": None, "pool_id": None}
+_DUMMY_PURGE_GRAPH_LOCK = _p117_threading.Lock()
+
+
+def _get_dummy_purge_graph():
+    """[P1-17] Devuelve el grafo dummy cacheado para `purge_langgraph_checkpoint`.
+
+    Reusa la misma instancia entre llamadas si el `connection_pool` no
+    cambió. Thread-safe vía double-checked locking. Retorna `None` si
+    no hay pool disponible (caller hace early-return)."""
     if not connection_pool:
-        print("⚠️ [MEMORY MANAGER] No hay connection_pool, no se puede purgar checkpoint de LangGraph.")
-        return
-    
-    try:
+        return None
+    pool_id = id(connection_pool)
+
+    cached = _DUMMY_PURGE_GRAPH_CACHE
+    if cached["graph"] is not None and cached["pool_id"] == pool_id:
+        return cached["graph"]
+
+    with _DUMMY_PURGE_GRAPH_LOCK:
+        # Double-check: otro thread pudo haber inicializado mientras
+        # esperábamos el lock.
+        cached = _DUMMY_PURGE_GRAPH_CACHE
+        if cached["graph"] is not None and cached["pool_id"] == pool_id:
+            return cached["graph"]
+
         from langgraph.checkpoint.postgres import PostgresSaver
         from langgraph.graph import StateGraph, START
         from langgraph.graph.message import MessagesState
-        from langchain_core.messages import RemoveMessage
-        
-        # Grafo ligero (dummy) para manipular el estado sin importar agent.py
+
         builder = StateGraph(MessagesState)
         builder.add_node("dummy", lambda state: state)
         builder.add_edge(START, "dummy")
-        
         checkpointer = PostgresSaver(connection_pool)
         graph = builder.compile(checkpointer=checkpointer)
-        
+
+        _DUMMY_PURGE_GRAPH_CACHE["graph"] = graph
+        _DUMMY_PURGE_GRAPH_CACHE["pool_id"] = pool_id
+        return graph
+
+
+def purge_langgraph_checkpoint(
+    session_id: str,
+    keep_recent: int = KEEP_RECENT,
+    *,
+    raise_on_failure: bool = False,
+):
+    """
+    Purga los mensajes antiguos del checkpoint de LangGraph (PostgresSaver)
+    para mantenerlo sincronizado con la tabla agent_messages de Supabase.
+
+    Sin esta función, LangGraph acumula TODOS los mensajes históricos en su
+    propio estado inmutable y los re-inyecta silenciosamente al modelo en cada
+    turno, causando explosión de tokens y costos disparados.
+
+    Usa la API RemoveMessage de LangChain para eliminar mensajes del state.
+
+    [P1-17] El grafo dummy se cachea a nivel módulo (lazy singleton). Antes
+    se instanciaba `StateGraph + PostgresSaver + compile` en cada llamada,
+    desperdiciando CPU/memoria con potencial leak.
+
+    [P1-20] `raise_on_failure` (kw-only, default False) controla si una
+    excepción del SDK de LangGraph propaga al caller. Default False
+    preserva el contrato histórico (best-effort, log warning silencioso).
+    `summarize_and_prune` lo invoca con `True` para que un fallo del purge
+    aborte la subsiguiente `delete_old_messages` y mantenga consistencia
+    entre Supabase ↔ LangGraph (sin esto, A commiteaba el delete y B fallaba
+    silenciosamente → mensajes borrados de Supabase pero LangGraph aún los
+    retenía → re-inyección al LLM en el siguiente turno).
+    """
+    if not connection_pool:
+        print("⚠️ [MEMORY MANAGER] No hay connection_pool, no se puede purgar checkpoint de LangGraph.")
+        if raise_on_failure:
+            raise RuntimeError(
+                "[P1-20] purge_langgraph_checkpoint requirido pero connection_pool no disponible"
+            )
+        return
+
+    try:
+        from langchain_core.messages import RemoveMessage
+
+        graph = _get_dummy_purge_graph()
+        if graph is None:
+            print("⚠️ [MEMORY MANAGER] _get_dummy_purge_graph retornó None. Skip.")
+            return
+
         config = {"configurable": {"thread_id": session_id}}
         state = graph.get_state(config)
         
@@ -111,8 +267,12 @@ def purge_langgraph_checkpoint(session_id: str, keep_recent: int = KEEP_RECENT):
             raise update_err
             
     except Exception as e:
-        # Nunca bloquear al usuario por un error de sincronización
+        # Nunca bloquear al usuario por un error de sincronización (default).
         print(f"⚠️ [MEMORY MANAGER] Error no-crítico purgando checkpoint de LangGraph: {e}")
+        # [P1-20] Si el caller exigió fail-fast (e.g., `summarize_and_prune`
+        # para preservar consistencia con `delete_old_messages`), propagar.
+        if raise_on_failure:
+            raise
 
 
 # ============================================================
@@ -197,9 +357,13 @@ def summarize_and_prune(session_id: str):
         messages_end = messages_to_summarize[-1].get("created_at")
         message_count = len(messages_to_summarize)
         
-        # Invocar Gemini para generar el resumen
+        # Invocar Gemini para generar el resumen.
+        # [P1-18] Modelo configurable vía `MEMORY_SUMMARY_MODEL` env var
+        # con default `gemini-2.5-flash` (válido y económico). ANTES
+        # hardcoded a `gemini-3.1-flash-lite-preview` — ID inválido que
+        # rechaza el SDK con 404, fallando el resumen silenciosamente.
         summary_llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview",  # Modelo rápido y económico para resúmenes
+            model=MEMORY_SUMMARY_MODEL,
             temperature=0.1,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
@@ -208,7 +372,33 @@ def summarize_and_prune(session_id: str):
         response = summary_llm.invoke(prompt)
         summary_text = response.content
         
-        # Guardar el resumen en la base de datos
+        # [P1-20] Orden crítico Supabase ↔ LangGraph para evitar carrera
+        # de rollback parcial inconsistente.
+        #
+        # ANTES el flujo era:
+        #   1. save_summary (Supabase)          → COMMIT A
+        #   2. delete_old_messages (Supabase)   → COMMIT A'
+        #   3. purge_langgraph_checkpoint       → COMMIT B (otro pool)
+        # Si A/A' commiteaban pero B fallaba (DB blip, schema mismatch,
+        # SDK rejection), los mensajes estaban borrados de Supabase
+        # PERO LangGraph aún los retenía → re-inyección al LLM en el
+        # siguiente turno de la conversación, fugando contexto privado
+        # ya supuestamente resumido.
+        #
+        # AHORA:
+        #   1. save_summary (idempotente sobre messages_end timestamp)
+        #   2. purge_langgraph_checkpoint(raise_on_failure=True) ANTES del
+        #      delete_old_messages. Si LangGraph falla, propaga al except,
+        #      `delete_old_messages` NUNCA se ejecuta → Supabase conserva
+        #      los mensajes (estado consistente: ambos lados los retienen,
+        #      next cron tick lo retoma desde el principio).
+        #   3. delete_old_messages SOLO si la purga ya tuvo éxito.
+        #
+        # Peor caso: paso 2 falla → redundancia (summary persistido +
+        # mensajes en Supabase + LangGraph) pero NO inconsistencia de
+        # safety/contexto.
+
+        # 1. Guardar el resumen en la base de datos.
         save_summary(
             session_id=session_id,
             summary=summary_text,
@@ -216,13 +406,20 @@ def summarize_and_prune(session_id: str):
             messages_end=messages_end,
             message_count=message_count
         )
-        
-        # Eliminar los mensajes ya resumidos de Supabase
+
+        # 2. 🔗 SINCRONIZACIÓN CRÍTICA: Purgar checkpoint de LangGraph
+        # ANTES de borrar de Supabase (P1-20). Si el purge falla, el
+        # `raise_on_failure=True` propaga la excepción al except global
+        # del summarize_and_prune, ABORTAMOS el delete_old_messages, y
+        # la racha cuenta como fallo (P1-18 logger + P1-19 alert si N).
+        purge_langgraph_checkpoint(
+            session_id, keep_recent=KEEP_RECENT, raise_on_failure=True
+        )
+
+        # 3. Eliminar los mensajes ya resumidos de Supabase. Solo se
+        # ejecuta si la purga de LangGraph tuvo éxito → consistencia
+        # garantizada.
         delete_old_messages(session_id, before_timestamp=messages_end)
-        
-        # 🔗 SINCRONIZACIÓN CRÍTICA: Purgar también el checkpoint de LangGraph
-        # Sin esto, LangGraph re-inyecta silenciosamente los mensajes borrados
-        purge_langgraph_checkpoint(session_id, keep_recent=KEEP_RECENT)
         
         # === LÓGICA DE RESUMEN JERÁRQUICO (MASTER SUMMARY → JSON EVOLUTIVO) ===
         summaries = get_summaries(session_id)
@@ -259,9 +456,10 @@ def summarize_and_prune(session_id: str):
                 prior_state_instruction=prior_instruction
             )
             
-            # Usar .with_structured_output() para garantizar JSON perfecto (0% fallos de parseo)
+            # Usar .with_structured_output() para garantizar JSON perfecto (0% fallos de parseo).
+            # [P1-18] Mismo modelo configurable que el summary_llm de arriba.
             structured_summary_llm = ChatGoogleGenerativeAI(
-                model="gemini-3.1-flash-lite-preview",
+                model=MEMORY_SUMMARY_MODEL,
                 temperature=0.1,
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             ).with_structured_output(EvolutionaryState)
@@ -310,10 +508,67 @@ def summarize_and_prune(session_id: str):
         print(f"{'='*60}\n")
         
     except Exception as e:
-        # Nunca bloquear al usuario por un error de resumen
+        # [P1-18] Nunca bloquear al usuario por un error de resumen, PERO
+        # promovemos a logger.error con contador in-memory para que SRE
+        # detecte degradación sistémica (modelo inválido, API key rotada,
+        # cuota agotada, tabla missing). El primer fallo + cada 10
+        # subsiguientes salen a `error`; los intermedios a `warning` para
+        # no spamear pero mantener visibilidad.
         error_str = str(e)
         if "Server disconnected" not in error_str:
-            print(f"⚠️  [MEMORY MANAGER] Error no-crítico durante resumen: {error_str}")
+            _summarize_failures["count"] += 1
+            _summarize_failures["last_error"] = repr(e)
+            n = _summarize_failures["count"]
+            if n == 1 or n % 10 == 0:
+                logger.error(
+                    f"[MEMORY MANAGER/P1-18] summarize_and_prune falló (#{n}) — "
+                    f"posible modelo inválido (`MEMORY_SUMMARY_MODEL={MEMORY_SUMMARY_MODEL!r}`), "
+                    f"API key rotada, cuota agotada, o DB blip. "
+                    f"session_id={session_id} error={error_str}"
+                )
+            else:
+                logger.warning(
+                    f"[MEMORY MANAGER/P1-18] summarize failure #{n}: {error_str}"
+                )
+
+            # [P1-19] Persistir alerta en `system_alerts` cuando se cruza
+            # el threshold de fallos consecutivos. Re-disparada cada
+            # `_SUMMARY_FAILURE_ALERT_REPEAT_EVERY` para que SRE vea que
+            # la situación persiste si ya cerró la alerta inicial.
+            if (
+                n == _SUMMARY_FAILURE_ALERT_THRESHOLD
+                or (n > _SUMMARY_FAILURE_ALERT_THRESHOLD
+                    and (n - _SUMMARY_FAILURE_ALERT_THRESHOLD) % _SUMMARY_FAILURE_ALERT_REPEAT_EVERY == 0)
+            ):
+                _persist_summary_failure_alert(session_id, error_str, n)
+    else:
+        # [P1-18] Reset del contador en path de éxito (auto-recovery sin
+        # restart del proceso). Si el resumen funcionó tras una racha de
+        # fallos, lo loggeamos a info para que SRE vea la recuperación.
+        global _summarize_failures
+        if _summarize_failures["count"] > 0:
+            prior_count = _summarize_failures["count"]
+            logger.info(
+                f"[MEMORY MANAGER/P1-18] Resumen recuperado tras "
+                f"{prior_count} fallo(s). "
+                f"Último error: {_summarize_failures['last_error']!r}"
+            )
+            _summarize_failures = {"count": 0, "last_error": None}
+            # [P1-19] Marcar la alerta como resuelta en system_alerts si
+            # la habíamos persistido (cruzó el threshold). Best-effort:
+            # mismo patrón defensivo que `_persist_summary_failure_alert`.
+            if prior_count >= _SUMMARY_FAILURE_ALERT_THRESHOLD:
+                try:
+                    from db_core import execute_sql_write
+                    execute_sql_write(
+                        "UPDATE system_alerts SET resolved_at = NOW() "
+                        "WHERE alert_key = %s AND resolved_at IS NULL",
+                        ("memory_summary_failures",),
+                    )
+                except Exception as _resolve_err:
+                    logger.debug(
+                        f"[MEMORY MANAGER/P1-19] No se pudo resolver alerta: {_resolve_err}"
+                    )
     finally:
         release_summarizing_lock(session_id)
 

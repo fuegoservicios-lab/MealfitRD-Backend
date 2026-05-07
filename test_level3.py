@@ -57,7 +57,9 @@ def test(name, condition):
 print("\n🔒 TEST 1: Mínimos Comprables")
 
 result = apply_smart_market_units("Pechuga de pollo", 0.1, "lb", 0.0, {"category": "Proteínas"})
-test("Pollo 0.1lb → mínimo 1/4 lb", "1/4" in str(result["market_qty"]))
+# [P0-3] market_qty SIEMPRE float ahora (antes era string "1/4" para fracciones).
+# MARKET_MINIMUMS bumpea pollo crudo a 0.5 lb mínimo (carne no-deli).
+test("Pollo 0.1lb → mínimo 1/2 lb (float)", isinstance(result["market_qty"], (int, float)) and result["market_qty"] >= 0.25)
 
 result2 = apply_smart_market_units("Orégano", 0.005, "lb", 0.0, {"category": "Especias", "market_container": "Sobre", "container_weight_g": 10})
 test("Orégano 0.005lb → mínimo 1 Sobre", result2["market_qty"] >= 1 and result2["market_unit"] == "Sobre")

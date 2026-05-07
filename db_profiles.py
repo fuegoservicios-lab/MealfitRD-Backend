@@ -1,12 +1,95 @@
 from functools import lru_cache as _lru_cache
 import json
+import threading
 import uuid
 import unicodedata as _uc
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Tuple, Union
 import os
 import logging
 logger = logging.getLogger(__name__)
 from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
+
+
+# ============================================================
+# [P1-4] Strict mode + observabilidad del fallback de pool
+# ------------------------------------------------------------
+# `update_user_health_profile_atomic` (P1-ORQ-1, P1-2) provee atomicidad real
+# vía `SELECT ... FOR UPDATE` sobre el `connection_pool`. Si el pool no está
+# inicializado (env mal configurado, deploy parcial, error temprano de
+# psycopg al startup), el helper SOBREVIVE silenciosamente degradando al
+# patrón legacy non-atómico — preservando funcionalidad pero perdiendo
+# protección contra lost-update.
+#
+# Antes de P1-4, este fallback solo emitía un `logger.warning(...)` por cada
+# llamada. En producción nadie miraba ese log hasta que el meta-learning
+# empezaba a dar señales raras (history truncado, friction strikes
+# desaparecidos, weight_history con gaps). El bug podía vivir días sin
+# detección.
+#
+# Ahora:
+#   1. Cada fallback incrementa `_POOL_FALLBACK_STATE` (snapshot expuesto vía
+#      /api/system/atomic-pool-health) — operadores pueden alertar en >0.
+#   2. `MEALFIT_REQUIRE_ATOMIC_POOL=1` (default 0) hace que la primera
+#      llamada con pool ausente lance `RuntimeError` en lugar de degradar.
+#      Útil en producción: un misconfig se detecta en la PRIMERA request,
+#      no tras horas de lost-updates silenciosos.
+#   3. El log estructurado (`[P1-4/POOL-FALLBACK] ...`) es agregable por
+#      Loki/Grafana.
+# ============================================================
+_POOL_FALLBACK_STATE_LOCK = threading.Lock()
+_POOL_FALLBACK_STATE: Dict[str, Any] = {
+    "fallback_count": 0,
+    "first_at": None,
+    "last_at": None,
+    "last_user_id": None,
+}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parser laxo de booleanos. Mismo contrato que `graph_orchestrator._env_bool`
+    (1/true/yes/on case-insensitive). Default aplica a env var ausente o vacía.
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Si está activo, `update_user_health_profile_atomic` lanza `RuntimeError` cuando
+# `connection_pool is None` en lugar de degradar al fallback non-atómico.
+# Usar SOLO en producción; en dev / scripts locales típicamente no hay pool y
+# el fallback es la degradación correcta. Default `False` preserva el
+# comportamiento histórico.
+REQUIRE_ATOMIC_POOL = _env_bool("MEALFIT_REQUIRE_ATOMIC_POOL", False)
+
+
+def _record_pool_fallback(user_id: str) -> None:
+    """[P1-4] Registra una llamada degradada al path non-atómico. Thread-safe
+    (puede invocarse desde múltiples workers/threads concurrentes).
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _POOL_FALLBACK_STATE_LOCK:
+        _POOL_FALLBACK_STATE["fallback_count"] += 1
+        if _POOL_FALLBACK_STATE["first_at"] is None:
+            _POOL_FALLBACK_STATE["first_at"] = now_iso
+        _POOL_FALLBACK_STATE["last_at"] = now_iso
+        _POOL_FALLBACK_STATE["last_user_id"] = str(user_id) if user_id else None
+
+
+def get_atomic_pool_fallback_snapshot() -> Dict[str, Any]:
+    """[P1-4] Snapshot inmutable del contador de fallback. Consumido por el
+    endpoint `/api/system/atomic-pool-health` y por el health-check al startup.
+    """
+    with _POOL_FALLBACK_STATE_LOCK:
+        return {
+            "fallback_count": _POOL_FALLBACK_STATE["fallback_count"],
+            "first_at": _POOL_FALLBACK_STATE["first_at"],
+            "last_at": _POOL_FALLBACK_STATE["last_at"],
+            "last_user_id": _POOL_FALLBACK_STATE["last_user_id"],
+            "pool_available": connection_pool is not None,
+            "strict_mode": REQUIRE_ATOMIC_POOL,
+        }
 
 def upsert_user_profile(user_id: str, health_profile: dict) -> bool:
     """Hace upsert del perfil de usuario y health_profile en user_profiles."""
@@ -131,18 +214,45 @@ def update_user_health_profile_atomic(user_id: str, mutator):
       `_invalidate_stale_chunks` / `_sync_chunk_queue_tz_offsets` que abren sus
       propias conexiones.
 
-    Fallback:
-        Si `connection_pool` no está disponible (entornos dev sin psycopg pool,
-        Supabase REST puro), degrada al patrón legacy get+update (no atómico).
-        Loguea WARNING. Esto preserva funcionalidad en dev pero deja el bug
-        latente — usar pool en producción.
+    Fallback (degradación graceful — controlado por `MEALFIT_REQUIRE_ATOMIC_POOL`):
+        Si `connection_pool` no está disponible (entornos dev sin psycopg
+        pool, Supabase REST puro), por default degrada al patrón legacy
+        get+update (no atómico): preserva funcionalidad en dev/scripts pero
+        deja el bug de lost-update latente.
+
+        [P1-4] En producción, exportar `MEALFIT_REQUIRE_ATOMIC_POOL=1` hace
+        que el helper lance `RuntimeError` en la primera llamada con pool
+        ausente — fail-fast que evita corrupción silenciosa por misconfig.
+        Cada fallback (en modo non-strict) incrementa el counter de
+        `get_atomic_pool_fallback_snapshot()` para alerting (Grafana,
+        `/api/system/atomic-pool-health`).
     """
     if not connection_pool:
-        # Fallback degradado: comportamiento legacy non-atómico.
+        # [P1-4] Fail-fast en producción: si el operador opt-ó in al
+        # strict mode, una request con pool ausente debe romper EN VOZ ALTA
+        # antes de que silently corra non-atomic durante horas.
+        if REQUIRE_ATOMIC_POOL:
+            _record_pool_fallback(user_id)  # contar también para visibility
+            raise RuntimeError(
+                f"[P1-4/STRICT] connection_pool no disponible y "
+                f"MEALFIT_REQUIRE_ATOMIC_POOL=1 — abortando "
+                f"update_user_health_profile_atomic({user_id}) en lugar de "
+                f"degradar a non-atómico. Verificar inicialización del pool "
+                f"en db_core (variables de entorno DATABASE_URL / "
+                f"SUPABASE_DB_URL, conectividad a Supabase Pooler:6543)."
+            )
+
+        # Modo non-strict (default, dev): registramos + log estructurado +
+        # degradamos. Mantiene el contrato pre-P1-4 para no romper scripts y
+        # tests locales sin pool.
+        _record_pool_fallback(user_id)
+        _snapshot = get_atomic_pool_fallback_snapshot()
         logger.warning(
-            f"[P1-ORQ-1] connection_pool no disponible — "
-            f"update_user_health_profile_atomic({user_id}) degradado a non-atómico. "
-            f"Lost-update bajo concurrencia es posible en este entorno."
+            f"[P1-4/POOL-FALLBACK] connection_pool=None "
+            f"user_id={user_id} fallback_count={_snapshot['fallback_count']} "
+            f"first_at={_snapshot['first_at']}. Degradando a non-atómico — "
+            f"lost-update posible bajo concurrencia. Para fail-fast en prod, "
+            f"export MEALFIT_REQUIRE_ATOMIC_POOL=1."
         )
         profile = get_user_profile(user_id)
         if not profile:

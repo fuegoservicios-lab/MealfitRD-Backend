@@ -206,10 +206,16 @@ CACHE_TTL_PERMANENT = 3153600000  # ~100 years — embeddings are deterministic 
 
 @centralized_cache(ttl_seconds=CACHE_TTL_PERMANENT, maxsize=10000)
 def get_embedding(text: str) -> list:
-    """Genera un vector embedding usando Gemini embedding (Caché Distribuido)."""
+    """Genera un vector embedding usando Gemini embedding (Caché Distribuido).
+
+    Modelo TEXT-ONLY configurable vía `constants.GEMINI_EMBEDDING_TEXT_MODEL`
+    (knob `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL`). Default `gemini-embedding-001`
+    estable. Caso de uso: knowledge graph de facts del usuario — todo texto.
+    """
     try:
+        from constants import GEMINI_EMBEDDING_TEXT_MODEL
         embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/gemini-embedding-2-preview",
+            model=GEMINI_EMBEDDING_TEXT_MODEL,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
         emb = embeddings.embed_query(text)

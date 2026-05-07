@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
 from constants import strip_accents, GLOBAL_REVERSE_MAP
 from db_chat import insert_rejection, save_message
-from db_profiles import get_user_profile, update_user_health_profile
+from db_profiles import get_user_profile, update_user_health_profile, update_user_health_profile_atomic
 
 def check_recent_meal_plan_exists(user_id: str, max_seconds: int = 30) -> bool:
     """Verifica si ya se ha guardado un plan para este usuario recientemente."""
@@ -209,10 +209,18 @@ def _ensure_grocery_start_date(plan_data: dict) -> dict:
     if existing:
         return plan_data
     from datetime import datetime, timezone
-    plan_data["grocery_start_date"] = datetime.now(timezone.utc).date().isoformat()
+    # [GROCERY-START-DATE-TIMESTAMP-FIX 2026-05-06] Persistir timestamp ISO
+    # completo (no solo date). Antes guardábamos `datetime.now(utc).date().isoformat()`
+    # = "2026-05-06" sin TZ. JavaScript `new Date("2026-05-06")` interpreta eso
+    # como UTC midnight, convertido a TZ del usuario produce un día ANTES
+    # (en TZ negativas como UTC-4): local 5-may 20:00 → setHours = 5-may 00:00 →
+    # `daysSinceCreation = 1` → shift dispara → recorta día 1 del plan recién
+    # generado, dejándolo con N-1 días. Persistir el timestamp completo deja
+    # que el frontend convierta a local correctamente sin off-by-one.
+    plan_data["grocery_start_date"] = datetime.now(timezone.utc).isoformat()
     logger.info(
         "[P0-1-RECOVERY/C] grocery_start_date ausente al insertar meal_plan; "
-        f"persistido fallback={plan_data['grocery_start_date']}."
+        f"persistido fallback={plan_data['grocery_start_date']} (timestamp ISO completo)."
     )
     return plan_data
 
@@ -884,40 +892,56 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
         else:
             logger.error(f"⚠️ [FRICCIÓN] Error en RPC atómico, usando fallback: {rpc_e}")
     
-    # --- FALLBACK CLÁSICO (read-modify-write, vulnerable a race condition) ---
-    # ⚠️ En producción, desplegar rpc_increment_friction.sql en Supabase para eliminar esto.
-    profile = get_user_profile(user_id)
-    if not profile: return False
-    
-    hp = profile.get("health_profile") or {}
-    frictions = hp.get("frictions", {})
-    
-    current_count = frictions.get(base_ingredient, 0) + 1
-    
-    if current_count >= 3:
-        logger.info(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente (fallback).")
-        
+    # --- FALLBACK ATÓMICO (P1-2): si el RPC no está disponible, usamos el
+    # advisory lock + FOR UPDATE de `update_user_health_profile_atomic` para
+    # garantizar que el contador de friction se incrementa SIEMPRE bajo lock.
+    # Antes era un read-modify-write desnudo: dos clicks de "swap" simultáneos
+    # del mismo user_id leían el mismo counter, ambos lo subían a (n+1)
+    # localmente, y el último UPDATE pisaba al primero — perdiendo 1 strike.
+    # Con 3 strikes para auto-bloquear, perder strikes silenciosamente
+    # significa que el ingrediente NUNCA se bloquea aunque el usuario lo
+    # rechace 3+ veces. El RPC nativo de Supabase sigue siendo el camino
+    # preferido (sin overhead del lock app-level), pero este fallback ya no
+    # es vulnerable a la race condition.
+    decision_box = {"reset": False, "current_count": 0}
+
+    def _friction_mutator(_hp):
+        _frictions = dict(_hp.get("frictions", {}) or {})
+        _new_count = _frictions.get(base_ingredient, 0) + 1
+        decision_box["current_count"] = _new_count
+        if _new_count >= 3:
+            decision_box["reset"] = True
+            _frictions[base_ingredient] = 0
+        else:
+            _frictions[base_ingredient] = _new_count
+        _hp["frictions"] = _frictions
+        return None
+
+    new_hp = update_user_health_profile_atomic(user_id, _friction_mutator)
+    if new_hp is None:
+        # Pool no disponible o user no existe; el atomic helper degradó al
+        # legacy non-atómico (loguea su propio warning) — preservamos el
+        # contrato de retorno False y no insertamos rejection.
+        return False
+
+    if decision_box["reset"]:
+        logger.info(
+            f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. "
+            f"Auto-bloqueando ingrediente (fallback atómico)."
+        )
         rejection_record = {
             "meal_name": base_ingredient,
             "meal_type": "Ingrediente Fricción",
             "user_id": user_id,
-            "session_id": session_id if session_id else None
+            "session_id": session_id if session_id else None,
         }
         insert_rejection(rejection_record)
-        
-        frictions[base_ingredient] = 0
-        hp["frictions"] = frictions
-        update_user_health_profile(user_id, hp)
-        
         if session_id:
             msg = f"He notado que últimamente has estado evitando opciones con **{base_ingredient}**, así que lo he sacado de tu radar y guardado en tus rechazos temporales por unas semanas para asegurar variedad. 🤖"
             save_message(session_id, "model", msg)
         return True
-    else:
-        frictions[base_ingredient] = current_count
-        hp["frictions"] = frictions
-        update_user_health_profile(user_id, hp)
-        return False
+
+    return False
 
 def log_unknown_ingredients(user_id: str, unknown_ings: list, raw_map: dict = None):
     """Loguea ingredientes que el LLM genera pero que el sistema de sinónimos no reconoce.

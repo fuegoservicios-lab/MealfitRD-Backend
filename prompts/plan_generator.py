@@ -100,6 +100,39 @@ macros DEBEN ser: protein='{nutrition['macros']['protein_str']}', carbs='{nutrit
     return ctx
 
 
+def build_minimal_correction_context(nutrition: dict) -> str:
+    """[P5-PROMPT-D] Versión mínima del contexto nutricional para el
+    corrector LLM (self_critique correction y surgical_marker_regen).
+
+    Diferencia vs `build_nutrition_context`: omite los bloques de cinética
+    metabólica (velocity / acceleration / body_fat_trend) y de adaptación
+    evolutiva, que son señales para el PLANIFICADOR (decide narrativa y
+    estrategia) y para el GENERADOR de día (modula tono y advertencias).
+    El corrector solo necesita los targets duros (calorías + macros) para
+    no romper el balance al re-emitir un día — todo lo demás es ruido que
+    aumenta tokens sin mejorar la corrección.
+
+    Reducción típica: 60-75% del bloque (mayor cuando el usuario tiene
+    historial de peso poblado, donde kinematics aporta ~10-15 líneas).
+    Resultado observado: ~20-30s menos por corrección Gemini en el peor
+    caso, sin pérdida de calidad estructural (los targets son los mismos).
+
+    Caso real: corrida 2026-05-05 04:14, Día 3 corrigió en 143s con full
+    context — peligrosamente cerca del cap de 150s. Con prompt mínimo
+    debería bajar a ~110-120s, dando margen ante 504s del provider.
+    """
+    return f"""--- TARGETS NUTRICIONALES (NO LOS RECALCULES) ---
+🎯 CALORÍAS OBJETIVO: {nutrition['target_calories']} kcal
+• Proteína: {nutrition['macros']['protein_g']}g
+• Carbos: {nutrition['macros']['carbs_g']}g
+• Grasas: {nutrition['macros']['fats_g']}g
+
+IMPORTANTE: calories DEBE ser {nutrition['target_calories']}.
+macros DEBEN ser: protein='{nutrition['macros']['protein_str']}', carbs='{nutrition['macros']['carbs_str']}', fats='{nutrition['macros']['fats_str']}'.
+-------------------------------------------------------------------
+"""
+
+
 def build_correction_context(review_feedback: str) -> str:
     """Genera el bloque de corrección urgente cuando el revisor médico rechazó el plan."""
     if not review_feedback:
@@ -865,12 +898,41 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
 
     chunk_num = chunk_lessons.get("chunk_number", "anterior")
     is_lifetime = chunk_lessons.get("is_lifetime_aggregated", False)
-    
+
     header = f"--- 📋 LECCIONES DEL CHUNK {chunk_num} (APLICA OBLIGATORIAMENTE) ---"
     if is_lifetime:
         header = f"--- 🧠 PATRONES CRÍTICOS Y LECCIONES ACUMULADAS (TODA LA VIDA DEL PLAN) ---"
-    
+
+    # [P0-CHUNKS-1] Disclaimer cuando el agregado mezcla lecciones reales con
+    # sintéticas (chunk previo crasheó pre-pipeline → señal derivada del plan,
+    # no de logs observados). Aunque el agregador ya excluye `repeated_bases` y
+    # `repeated_meal_names` de las fuentes sintéticas (ver cron_tasks.py:15173+),
+    # las métricas (rej_viol/alg_viol/repeat_pct=0 por construcción) y el flag
+    # weak_signal sí pasan al dict. El disclaimer pide al LLM ponderar con menos
+    # peso en caso de duda. Cubre también el caso "lección sintética suelta sin
+    # pasar por agregador" (synthesized_from_plan_days al top-level).
+    has_synth = bool(
+        chunk_lessons.get("has_synthesized_sources")
+        or chunk_lessons.get("synthesized_from_plan_days")
+    )
+    synth_count = int(chunk_lessons.get("synthesized_source_count") or 0)
+
     ctx = f"\n{header}\n"
+    if has_synth:
+        if synth_count > 0:
+            ctx += (
+                f"⚠️ AVISO: {synth_count} lección(es) de este bloque fueron "
+                f"DERIVADAS del plan previo (no de adherencia observada). "
+                f"Los % y conteos reportados pueden subestimar la señal real. "
+                f"Pondera estas señales con MENOS peso que reglas de alergia o "
+                f"rechazos confirmados.\n"
+            )
+        else:
+            ctx += (
+                f"⚠️ AVISO: este bloque fue DERIVADO del plan previo "
+                f"(no de adherencia observada). Pondera con MENOS peso que "
+                f"reglas de alergia o rechazos confirmados.\n"
+            )
     ctx += "\n".join(lines) + "\n"
     ctx += "------------------------------------------------------------\n"
     return ctx

@@ -10,6 +10,19 @@ from db_core import supabase, connection_pool, execute_sql_query
 import time as _time
 
 
+# [CABEZA-GUARD] Vegetales que se venden por peso/unidad pero NUNCA por "cabeza".
+# Lista positiva (no incluye lechuga/coliflor/repollo/brócoli/ajo, que sí son
+# nativamente "cabeza"). El guard al final de `apply_smart_market_units` la usa
+# para detectar cualquier path interno que asignó erróneamente "Cabezas" a estos
+# items y reconstruir el display_qty como peso (lbs) + sub-conteo en unidades.
+_NON_CABEZA_NAMES_RE = re.compile(
+    r'\b(zanahorias?|tomates?|pimientos?|aj[ií]es?|cebollas?|chiles?|berenjenas?|'
+    r'papas?|yucas?|batatas?|tayotas?|remolachas?|calabac[ií]nes?|calabac[ií]n|'
+    r'auyamas?|[ñn]ames?|yaut[ií]as?|vegetales)\b',
+    re.IGNORECASE,
+)
+
+
 # [P1.4] Backoff exponencial con jitter para 429 / RESOURCE_EXHAUSTED de Gemini.
 # Sin esto, una ráfaga puntual de quota tira el cache semántico (embed_documents)
 # o pierde matches por ingrediente (embed_query), degradando la lista de compras
@@ -70,8 +83,241 @@ _semantic_cache = None
 # disparaba otros 3 reintentos × ~10s de backoff y spammeaba 3 logs ERROR.
 # El sistema downstream tiene Regex Fast-Path como fallback, así que devolver
 # None rápidamente es preferible a bloquear.
-_SEMANTIC_INIT_FAIL_COOLDOWN_S = 300  # 5 min: suficiente para que el quota minute-window de Gemini se renueve
+#
+# Knob `MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S` (default 600s):
+# - 300s era optimista para cuotas diarias de Gemini Free Tier; al agotarse el
+#   límite diario de embeddings, esperar 5 min y reintentar solo gasta más
+#   tokens en 429s sin recuperarse hasta el reset 24h después.
+# - 600s reduce a la mitad las re-tentativas malgastadas durante un día con
+#   cuota agotada, sin penalizar la recuperación tras un flap minute-window
+#   (que en la práctica ya se libera entre reintentos del mismo pipeline).
+# - Si la cuenta sube a paid tier, bajar el knob a 180s.
+def _env_int_local(name: str, default: int) -> int:
+    import os
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        v = int(raw)
+        return v if v > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float_local(name: str, default: float) -> float:
+    import os
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        v = float(raw)
+        return v if v >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+_SEMANTIC_INIT_FAIL_COOLDOWN_S = _env_int_local("MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S", 600)
+
+# Batching del cache init de embeddings para no saturar RPM del modelo. Modelos
+# *-preview (ej. gemini-embedding-2-preview) tienen cuotas Tier 1 conservadoras
+# (~30-100 RPM). master_ingredients tiene 50-100+ ítems; mandarlos en una sola
+# ráfaga vía `embed_documents([...])` cuenta como N requests en milisegundos y
+# pulveriza el RPM. Particionar en batches de 10 + delay 0.5s mantiene RPM
+# < 60 con master_list de 100, y elimina el 429 sin cambiar de modelo.
+# Trade-off: +5-10s en la primera inicialización; después está cacheado en
+# Redis y cero costo. Knobs:
+#   MEALFIT_EMBED_INIT_BATCH_SIZE   (default 10): ítems por llamada.
+#   MEALFIT_EMBED_INIT_BATCH_DELAY_S (default 0.5): pausa entre batches.
+# Si subes a un modelo estable con RPM alto, puedes poner BATCH_SIZE=999 y
+# DELAY=0 para volver al comportamiento de ráfaga única (más rápido).
+EMBED_INIT_BATCH_SIZE     = _env_int_local  ("MEALFIT_EMBED_INIT_BATCH_SIZE",      10)
+EMBED_INIT_BATCH_DELAY_S  = _env_float_local("MEALFIT_EMBED_INIT_BATCH_DELAY_S",   0.5)
+
+
+def _batched_embed_documents(client, all_texts, batch_size, delay_s, retry_label):
+    """Particiona `embed_documents` en batches para no saturar RPM del modelo.
+
+    Cada batch va envuelto en `_gemini_call_with_retry`, así un 429 transitorio
+    en el batch K solo reintenta ese batch (los anteriores ya están en `out` y
+    no se pierden). Si todos los textos caben en un batch, comportamiento
+    idéntico al pre-fix (sin overhead).
+    """
+    if len(all_texts) <= batch_size:
+        return _gemini_call_with_retry(
+            client.embed_documents, all_texts, _label=retry_label
+        )
+    out = []
+    n_batches = (len(all_texts) + batch_size - 1) // batch_size
+    logging.info(
+        f"🧠 [P6-EMBED-BATCH] Cache init particionado en {n_batches} batches "
+        f"de hasta {batch_size} ítems con delay {delay_s:.2f}s entre batches."
+    )
+    for i in range(0, len(all_texts), batch_size):
+        chunk = all_texts[i:i + batch_size]
+        chunk_idx = (i // batch_size) + 1
+        chunk_vectors = _gemini_call_with_retry(
+            client.embed_documents, chunk,
+            _label=f"{retry_label} batch {chunk_idx}/{n_batches}",
+        )
+        out.extend(chunk_vectors)
+        if i + batch_size < len(all_texts) and delay_s > 0:
+            _time.sleep(delay_s)
+    return out
 _semantic_cache_failed_until = 0.0
+
+
+# ============================================================
+# [P6-SEMANTIC-SKIP] Kill-switch para el caché semántico
+# ------------------------------------------------------------
+# Cuando el quota de embed_documents está permanentemente exhausto
+# (caso real corrida 2026-05-05: cada pipeline desperdicia ~14s en
+# 3×retries+backoff de 429s sin éxito porque Redis nunca se logra
+# poblar — chicken-and-egg: persist solo corre tras Gemini exitoso).
+#
+# Activar este knob (`MEALFIT_DISABLE_SEMANTIC_CACHE=true`) hace que
+# `get_semantic_cache` retorne None instantáneamente, saltando TODOS
+# los intentos a Gemini. El sistema cae al Regex Fast-Path que ya
+# cubre el ~95% de casos comunes de matching de ingredientes.
+#
+# Trade-off:
+#   - PRO: ahorra ~14s/pipeline cuando quota está exhausto.
+#   - CON: pierdes matching semántico fuzzy (ej. "cebollín verde fresco"
+#     no matchea con master "Cebollín" si el regex no lo cubre).
+# Para el operador en quota tight, el PRO domina. Default False para
+# preservar comportamiento histórico (intentar semantic primero).
+#
+# Lectura inline (no en module-init): tests pueden cambiar el env via
+# monkeypatch sin reload. Costo: 1 lookup string por llamada — trivial.
+# ============================================================
+def _semantic_cache_disabled() -> bool:
+    """True si el operador desactivó el semantic cache via env var.
+    Acepta '1', 'true', 'yes', 'on' (case-insensitive)."""
+    val = os.environ.get("MEALFIT_DISABLE_SEMANTIC_CACHE", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+# ============================================================
+# [P5-EMBED-CACHE-E] Persistencia de vectores en Redis
+# ------------------------------------------------------------
+# El caché semántico es in-process: cada worker (Gunicorn fork, container
+# restart, deploy) re-fetcha embeddings desde Gemini. Como master_ingredients
+# tiene ~50 items y cada embedding cuesta una llamada API, la inicialización
+# pega contra el quota minute-window y dispara 429 (visible en cada corrida
+# como "embed_documents agotó 3 intentos por 429"). El sistema cae al Regex
+# Fast-Path graciosamente, pero se desperdicia ~14s por pipeline en backoffs
+# y se aumenta presión sobre el quota compartido.
+#
+# Solución: cachear los vectores en Redis con key = hash estable de la
+# master_list. Si master_ingredients no cambia (caso típico — items se
+# añaden manualmente, ritmo semanal a lo más), Redis sirve los vectores
+# instantáneamente y el primer worker que arranca no necesita Gemini.
+# Cuando la lista cambia, el hash cambia → cache miss → re-fetch (una vez)
+# → re-persist. TTL 7 días para que cualquier ingrediente nuevo se refleje
+# en una semana incluso sin invalidación explícita.
+#
+# Tamaño: ~50 vectores × 768 floats × ~10 chars JSON c/u ≈ 384 KB por entry.
+# Trivial para Redis. Versionamos la key con `v1` para invalidaciones futuras
+# (cambio de modelo de embedding, nueva normalización de texto, etc.).
+# ============================================================
+_REDIS_EMBED_CACHE_KEY_PREFIX = "embed:master_ingredients:v1"
+_REDIS_EMBED_CACHE_TTL_S = 7 * 24 * 3600  # 7 días
+
+
+def _master_list_hash(master_list: list) -> str:
+    """Hash estable de la lista para invalidación cuando cambia el contenido.
+
+    Considera `name` + `aliases` + `category` — los campos que afectan el
+    texto que se embebe (ver `texts = [f"{m['name']} - Categoría: ..."]`
+    en `get_semantic_cache`). Si cualquiera de estos cambia, el embedding
+    debe regenerarse para mantener la semántica del vector.
+
+    Sortea los items por nombre para que el hash sea independiente del
+    orden de devolución de Postgres (el SELECT no garantiza orden estable
+    sin ORDER BY)."""
+    import hashlib
+    parts = []
+    for m in sorted(master_list, key=lambda x: x.get("name", "")):
+        name = m.get("name", "")
+        category = m.get("category", "") or ""
+        aliases = "|".join(sorted(m.get("aliases") or []))
+        parts.append(f"{name}::{category}::{aliases}")
+    blob = "\n".join(parts).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def _model_hash(model_name: str) -> str:
+    """Hash corto del nombre de modelo para inyectar en la Redis key.
+
+    [2026-05-06] Asegura que vectores cacheados con un modelo no se
+    confundan con vectores de otro modelo (espacios vectoriales distintos).
+    Si cambias `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL`, las entradas Redis
+    viejas quedan ignoradas (no se intenta descifrarlas con cosine contra
+    embeddings del nuevo modelo) y se regeneran automáticamente.
+    """
+    import hashlib
+    return hashlib.sha256(model_name.encode("utf-8")).hexdigest()[:8]
+
+
+def _redis_embed_cache_key(master_list: list) -> str:
+    from constants import GEMINI_EMBEDDING_TEXT_MODEL
+    return (
+        f"{_REDIS_EMBED_CACHE_KEY_PREFIX}:"
+        f"{_model_hash(GEMINI_EMBEDDING_TEXT_MODEL)}:"
+        f"{_master_list_hash(master_list)}"
+    )
+
+
+def _try_load_embed_vectors_from_redis(master_list: list):
+    """Intenta cargar los vectores cacheados de Redis. Retorna None si:
+       - Redis no está disponible
+       - No hay entry para este hash
+       - El JSON está corrupto o el shape no matchea
+    Defensivo: nunca lanza, los errores degradan a None y el caller
+    procede al fast-fetch desde Gemini."""
+    try:
+        from cache_manager import redis_client
+        if not redis_client:
+            return None
+        key = _redis_embed_cache_key(master_list)
+        raw = redis_client.get(key)
+        if not raw:
+            return None
+        import json as _json
+        vectors = _json.loads(raw)
+        # Validar shape: lista de listas de floats, mismo length que master_list.
+        if not isinstance(vectors, list):
+            return None
+        if len(vectors) != len(master_list):
+            logging.info(
+                f"🟡 [P5-EMBED-CACHE-E] Redis vectors length mismatch "
+                f"({len(vectors)} vs {len(master_list)}); ignorando entry."
+            )
+            return None
+        return vectors
+    except Exception as exc:
+        logging.info(
+            f"🟡 [P5-EMBED-CACHE-E] Redis read fallo "
+            f"({type(exc).__name__}); cae a Gemini fetch."
+        )
+        return None
+
+
+def _persist_embed_vectors_to_redis(master_list: list, vectors: list) -> bool:
+    """Persiste los vectores en Redis. Retorna True si OK, False si falló
+    (Redis down, vectors no serializable, etc.). Nunca lanza."""
+    try:
+        from cache_manager import redis_client
+        if not redis_client:
+            return False
+        key = _redis_embed_cache_key(master_list)
+        import json as _json
+        redis_client.setex(key, _REDIS_EMBED_CACHE_TTL_S, _json.dumps(vectors))
+        return True
+    except Exception as exc:
+        logging.info(
+            f"🟡 [P5-EMBED-CACHE-E] Redis write fallo "
+            f"({type(exc).__name__}); siguiendo sin persistir."
+        )
+        return False
 
 # Lock para serializar inicializaciones concurrentes. Sin esto, cuando el shopping
 # list se calcula 3 veces en paralelo (mult ×2/×4/×8), las 3 disparan el fetch
@@ -89,34 +335,90 @@ def invalidate_master_cache():
     _semantic_cache_failed_until = 0.0
 
 def get_semantic_cache():
+    """Devuelve el caché semántico (master_list + vectors + embeddings_client).
+
+    Orden de resolución (importante por interacción cooldown ↔ Redis):
+      1. In-process cache hit → fast return.
+      2. Lock + re-check.
+      3. **Redis read FIRST** (no cuesta quota Gemini, vector data es válido
+         incluso bajo cooldown). Si hit, retornamos sin tocar Gemini.
+      4. Redis miss → AHORA chequear cooldown. Si activo, return None.
+      5. Cooldown OK → llamar Gemini, persistir a Redis, retornar.
+
+    [P6-EMBED-CACHE-FIX] Pre-fix: el cooldown check estaba ANTES del Redis
+    read, así que cualquier 429 reciente bloqueaba Redis lookup por 300s.
+    Caso real corrida 2026-05-05 14:01: 429 a las 14:01:02, cooldown hasta
+    14:06:02 — pero Redis tenía vectores válidos persistidos en la corrida
+    13:33. La cache nunca se servía aunque existiera.
+
+    [P6-SEMANTIC-SKIP] Kill-switch: si `MEALFIT_DISABLE_SEMANTIC_CACHE` está
+    on, retornamos None inmediatamente. Para entornos con quota Gemini
+    permanentemente exhausto donde el Regex Fast-Path basta. Ahorra ~14s
+    por pipeline en esa configuración.
+    """
+    # [P6-SEMANTIC-SKIP] Kill-switch antes de TODO: ni siquiera intentar
+    # cache lookup ni Gemini call. Operador desactivó vía env.
+    if _semantic_cache_disabled():
+        return None
+
     global _semantic_cache, _semantic_cache_failed_until
     if _semantic_cache is not None:
         return _semantic_cache
 
-    # Fast-fail si fallamos recientemente (evita 3×retries+backoff redundantes)
-    if _time.time() < _semantic_cache_failed_until:
-        return None
-
     with _semantic_cache_lock:
-        # Re-check tras adquirir el lock (otro thread pudo haber inicializado o fallado)
+        # Re-check tras adquirir el lock (otro thread pudo haber inicializado).
         if _semantic_cache is not None:
             return _semantic_cache
-        if _time.time() < _semantic_cache_failed_until:
-            return None
 
         master_list = get_master_ingredients()
         if not master_list:
             return None
 
+        # Cliente embeddings: barato instanciar (sin quota cost), necesario
+        # tanto para Redis-hit (downstream `embed_query` runtime) como para
+        # Gemini-fetch (init de `embed_documents`).
         try:
             from langchain_google_genai import GoogleGenerativeAIEmbeddings
+            from constants import GEMINI_EMBEDDING_TEXT_MODEL
             api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-2-preview", google_api_key=api_key)
+            embeddings = GoogleGenerativeAIEmbeddings(
+                model=GEMINI_EMBEDDING_TEXT_MODEL, google_api_key=api_key
+            )
+        except Exception as exc:
+            logging.info(
+                f"🟡 [P6-EMBED-CACHE-FIX] No se pudo instanciar embeddings client "
+                f"({type(exc).__name__}); fast-path Regex será usado."
+            )
+            return None
 
+        # [P6-EMBED-CACHE-FIX] PASO 1 — Try Redis FIRST. Vector data
+        # cacheada es válida incluso si Gemini está en cooldown por 429
+        # — son sistemas independientes.
+        vectors = _try_load_embed_vectors_from_redis(master_list)
+        if vectors is not None:
+            _semantic_cache = {
+                "master_list": master_list,
+                "vectors": vectors,
+                "embeddings_client": embeddings,
+            }
+            logging.info(
+                f"🧠 [P5-EMBED-CACHE-E] Caché semántico cargado desde Redis "
+                f"({len(vectors)} vectores, hash={_master_list_hash(master_list)[:8]}) "
+                f"— Gemini embed_documents evitado."
+            )
+            return _semantic_cache
+
+        # [P6-EMBED-CACHE-FIX] PASO 2 — Redis miss. AHORA sí chequear el
+        # cooldown de Gemini (movido aquí para que Redis tenga su chance).
+        if _time.time() < _semantic_cache_failed_until:
+            return None
+
+        try:
             texts = [f"{m['name']} - Categoría: {m.get('category','')}. Alias: {', '.join(m.get('aliases') or [])}" for m in master_list]
-            vectors = _gemini_call_with_retry(
-                embeddings.embed_documents, texts,
-                _label="embed_documents (master_ingredients cache init)",
+            vectors = _batched_embed_documents(
+                embeddings, texts,
+                EMBED_INIT_BATCH_SIZE, EMBED_INIT_BATCH_DELAY_S,
+                retry_label="embed_documents (master_ingredients cache init)",
             )
 
             _semantic_cache = {
@@ -124,6 +426,8 @@ def get_semantic_cache():
                 "vectors": vectors,
                 "embeddings_client": embeddings
             }
+            # Persistir para los próximos workers/restarts.
+            _persist_embed_vectors_to_redis(master_list, vectors)
             logging.info("🧠 Caché semántico local inicializado con éxito por primera vez.")
             return _semantic_cache
         except Exception as e:
@@ -165,6 +469,350 @@ def get_master_ingredients():
 
 DEFAULT_G_PER_TAZA = 150
 
+# ============================================================
+# [P1-3] Aliases de unidades de contenedor + fallback de peso por categoría.
+# ------------------------------------------------------------
+# El aggregator de la lista de compras necesita normalizar unidades híbridas
+# tipo "1 paquete de arroz" a gramos para deducir contra el inventario que
+# está en peso (g/lb). El bloque normalizador requiere DOS condiciones:
+#   1. La unidad textual está en el set `_CONTAINER_UNIT_ALIASES`.
+#   2. El item tiene `container_weight_g > 0` en master_ingredients (poblado
+#      manualmente por el operador para SKUs estandarizados como
+#      "Arroz Marca X 1 lb / 453g").
+#
+# ANTES, ambas condiciones eran AND estricto. Si master no tenía
+# `container_weight_g` (común para SKUs sin curar) o el usuario tipeaba un
+# alias no contemplado (ej. "1 caja de leche"), la unidad quedaba sin
+# convertir → el inventario seguía como `units['paquete']=1` mientras el
+# plan acumulaba `units['g']=500`. Resultado: el item APARECÍA en la lista
+# de compras dos veces (uno por peso, otro por paquete) y el delta no se
+# calculaba — el usuario compraba duplicado.
+#
+# AHORA:
+#   - El set de aliases se amplía para cubrir 'caja', 'cajas', 'tetra',
+#     'tetrapak', 'galón', 'galones', 'jarra', 'jarras', 'bolsa', 'bolsas'.
+#     Estos son envases reales del mercado dominicano que el LLM o el
+#     usuario pueden usar.
+#   - Si `container_weight_g` no está en master, el helper
+#     `_fallback_container_weight_g(category)` retorna un peso estimado
+#     conservador por categoría (mejor estimar que dejar el item sin
+#     normalizar).
+# ============================================================
+_CONTAINER_UNIT_ALIASES = frozenset({
+    'paquete', 'paquetes', 'pqte', 'pqtes',
+    'pote', 'potes', 'tarro', 'tarros',
+    'lata', 'latas',
+    'cartón', 'carton', 'cartones', 'cartones.', 'cartón.',
+    'envase', 'envases',
+    'botella', 'botellas', 'botellita', 'botellitas',
+    'frasco', 'frascos',
+    'funda', 'fundas', 'fundita', 'funditas',
+    'caja', 'cajas',
+    'tetra', 'tetrapak', 'tetra-pak',
+    'galón', 'galon', 'galones',
+    'jarra', 'jarras',
+    'bolsa', 'bolsas', 'bolsita', 'bolsitas',
+    'sobre', 'sobres', 'sobrecito', 'sobrecitos',
+})
+
+# Pesos default por categoría cuando master_ingredients NO tiene
+# `container_weight_g` poblado. Defaults conservadores que reflejan tamaños
+# típicos del mercado dominicano (cartón de leche 1L, paquete de arroz 1lb,
+# pote de mantequilla 250g, etc.). Mejor under-estimate que dejar el item
+# sin normalizar (lo que produciría duplicación en el delta).
+_FALLBACK_CONTAINER_WEIGHT_G_BY_CATEGORY = {
+    "lácteos":         1000.0,  # cartón leche 1L, yogur grande
+    "lacteos":         1000.0,
+    "bebidas":         1000.0,  # tetra jugo 1L
+    "despensa":         450.0,  # paquete arroz / pasta 1lb
+    "despensa y granos": 450.0,
+    "víveres":          450.0,
+    "viveres":          450.0,
+    "granos":           450.0,
+    "aceites":          950.0,  # botella aceite 1L
+    "salsas":           250.0,  # frasco salsa mediano
+    "especias":          50.0,  # sobre/frasquito condimento
+    "proteínas":        500.0,  # paquete embutido
+    "proteinas":        500.0,
+    "frutas":           500.0,
+    "vegetales":        500.0,
+    "suplementos":      500.0,
+}
+_DEFAULT_FALLBACK_CONTAINER_WEIGHT_G = 500.0  # genérico cuando categoría no matchea
+
+
+def _fallback_container_weight_g(category: str | None) -> float:
+    """[P1-3] Estima el peso por contenedor por categoría cuando
+    master_ingredients no tiene el dato curado. Defensivo: nunca lanza."""
+    if not category:
+        return _DEFAULT_FALLBACK_CONTAINER_WEIGHT_G
+    cat_norm = str(category).strip().lower()
+    return _FALLBACK_CONTAINER_WEIGHT_G_BY_CATEGORY.get(
+        cat_norm, _DEFAULT_FALLBACK_CONTAINER_WEIGHT_G
+    )
+
+
+# ============================================================
+# [VISIÓN-C / HYBRID-SHOPPING-LIST] Clasificación de items en
+# 'staple' (despensa, compras mensuales) vs 'perishable' (compras
+# semanales por shelf-life corto).
+# ------------------------------------------------------------
+# Ver discusión 2026-05-06: la lista mensual extrapolaba ×9.33 todos
+# los items del chunk 1, produciendo cantidades absurdas en perecederos
+# (9 lbs fresas, 6 lbs yogurt) y faltantes de chunks 2-8 con menús
+# distintos. La solución Visión-C combina:
+#   - Staples (paleta base reutilizada por GROCERY-CYCLE-LOCK) →
+#     extrapolación mensual completa (multiplier × cycle_weeks).
+#   - Perishables → multiplier de 1 semana (rotan según chunk vigente).
+#
+# Heurística de clasificación:
+#   1. category in {'Despensa'} → staple (granos, aceites, especias,
+#      conservas, harinas — shelf > 30 días típicamente).
+#   2. category in {'Frutas','Vegetales'} → perishable (3-14 días).
+#   3. category in {'Lácteos'}: depende. Yogurt/queso fresco → perishable;
+#      leche UHT/queso curado → staple. Decidir por shelf_life_days.
+#   4. category in {'Proteínas','Víveres'}: idem mixto. Carnes/pescados
+#      frescos → perishable; tubérculos enteros → staple si shelf >= 21.
+#   5. shelf_life_days >= STAPLE_SHELF_THRESHOLD_DAYS → staple.
+#   6. shelf_life_days < STAPLE_SHELF_THRESHOLD_DAYS → perishable.
+#
+# Conservador: si dudas, perishable (mejor sub-comprar y rotar que
+# sobre-comprar y desperdiciar).
+# ============================================================
+STAPLE_SHELF_THRESHOLD_DAYS = max(7, int(os.environ.get(
+    "MEALFIT_STAPLE_SHELF_THRESHOLD_DAYS", "21"
+)))
+
+_STAPLE_CATEGORIES = {
+    'despensa', 'granos', 'cereales', 'conservas', 'enlatados',
+    'aceites', 'salsas', 'especias', 'condimentos',
+}
+_PERISHABLE_CATEGORIES = {
+    'frutas', 'vegetales', 'hierbas', 'verduras',
+}
+
+# Heurística por nombre cuando category es ambigua (Lácteos/Víveres/Proteínas).
+_PERISHABLE_NAME_HINTS = (
+    'fresc', 'crud', 'congelad',  # 'fresca', 'fresco', 'cruda', 'congelado'
+    'yogurt', 'yogur', 'queso fresco', 'queso de hoja', 'queso de freir',
+    'queso de freír', 'queso blanco',
+    'leche fresca', 'crema', 'mantequilla',
+    'pollo', 'pechuga', 'pavo', 'res', 'carne', 'cerdo', 'chuleta',
+    'pescado', 'tilapia', 'mero', 'salmon', 'salmón', 'camaron', 'camarón',
+    'mariscos', 'atun fresco',
+)
+_STAPLE_NAME_HINTS = (
+    'leche uht', 'leche en polvo', 'leche evaporada',
+    'queso parmesano', 'queso curado',
+    'atun en lata', 'atún en lata', 'atun enlatado', 'atún enlatado',
+    'sardinas', 'salmon en lata', 'salmón en lata',
+    'arroz', 'pasta', 'lenteja', 'garbanzo', 'frijol', 'habichuela',
+    'gandules', 'avena', 'harina',
+    'aceite', 'vinagre', 'sal', 'azucar', 'azúcar', 'estevia',
+    'salsa de tomate', 'pasta de tomate',
+    'canela', 'oregano', 'orégano', 'comino', 'pimienta', 'sazon', 'sazón',
+    'casabe', 'pan integral', 'galletas',
+    'mantequilla de mani', 'mantequilla de maní',
+    'almendras', 'nueces',
+)
+
+
+def _classify_perishability(name: str, master_item: dict | None = None) -> str:
+    """Clasifica un ingrediente como 'staple' o 'perishable'.
+
+    Usa (en orden):
+      1. shelf_life_days del master si existe (>= threshold → staple).
+      2. category exacta si está en _STAPLE_CATEGORIES o _PERISHABLE_CATEGORIES.
+      3. Heurística por nombre (substrings _PERISHABLE_NAME_HINTS / _STAPLE_NAME_HINTS).
+      4. Default: perishable (conservador — mejor comprar semanal que desperdiciar).
+    """
+    from constants import strip_accents
+    name_lower = (name or "").lower().strip()
+    name_norm = strip_accents(name_lower)
+    # [DESCRIPTOR-FIX] Eliminar descriptores negativos antes del match por
+    # palabra. "Yogurt sin azúcar" no es azúcar; "Leche bajo en grasa" no es
+    # grasa. Si dejamos esos modificadores en el string, hints como "azucar"
+    # / "sal" hacen match falso positivo y un yogurt termina como staple.
+    name_for_hints = re.sub(r'\bsin\s+\w+', '', name_norm)
+    name_for_hints = re.sub(r'\b(bajo|reducid[oa]|libre)\s+(de|en)\s+\w+', '', name_for_hints)
+    name_for_hints = name_for_hints.strip()
+
+    # 1. shelf_life_days es la fuente más confiable cuando está poblada.
+    if isinstance(master_item, dict):
+        shelf = master_item.get("shelf_life_days")
+        if shelf is not None:
+            try:
+                shelf_int = int(shelf)
+                if shelf_int >= STAPLE_SHELF_THRESHOLD_DAYS:
+                    return "staple"
+                else:
+                    return "perishable"
+            except (TypeError, ValueError):
+                pass
+
+    # 2. Category exacta (cuando es inequívoca).
+    cat = ""
+    if isinstance(master_item, dict):
+        cat = strip_accents(str(master_item.get("category", "") or "").lower().strip())
+    if cat in _STAPLE_CATEGORIES:
+        return "staple"
+    if cat in _PERISHABLE_CATEGORIES:
+        return "perishable"
+
+    # 3. Heurística por nombre (más específica primero).
+    # Staples más específicos: si el nombre contiene "atun en lata" / "leche uht"
+    # tiene precedencia sobre el match genérico de "atun" / "leche" perishable.
+    # Usamos `name_for_hints` (sin "sin X" / "bajo en X") para evitar falsos
+    # positivos como "yogurt sin azúcar" → staple por azúcar.
+    for hint in _STAPLE_NAME_HINTS:
+        if hint in name_for_hints:
+            return "staple"
+    for hint in _PERISHABLE_NAME_HINTS:
+        if hint in name_for_hints:
+            return "perishable"
+
+    # 4. Default conservador.
+    return "perishable"
+
+
+def _build_hybrid_shopping_list(
+    weekly_items: list,
+    period_items: list,
+    master_map: dict | None = None,
+    restocked_at_iso: str | None = None,
+    restocked_items: dict | None = None,
+) -> list:
+    """[VISIÓN-C] Combina lista semanal y lista del periodo (quincenal/mensual)
+    en una lista híbrida:
+      - Items 'staple' → cantidad del periodo completo (compra una vez).
+      - Items 'perishable' → cantidad semanal (compra recurrente).
+
+    Cada item en la salida lleva un campo `is_perishable: bool` (alineado con
+    el SSOT P1-PDF-2 que el frontend ya consume vía `item_ref.is_perishable`)
+    para que pueda renderizar 2 secciones separadas sin cambios.
+
+    Si un item está SOLO en uno de los dos sets, se incluye con su clasificación
+    (raro pero posible si caps cambian la composición entre multipliers).
+
+    [RIESGO-1 FIX] Si `restocked_at_iso` está presente y la última compra de
+    perecederos fue hace <`MEALFIT_PERISHABLE_CYCLE_DAYS` (default 7), los
+    perecederos se EXCLUYEN del output. Razón: los chunks merge cada 3 días
+    pero el usuario compra perecederos cada 7. Sin este filtro, las recalc
+    intermedias muestran "compra 0.43kg pollo" porque el delta inventario
+    refleja consumo parcial. Con el filtro, perecederos se mantienen ocultos
+    hasta que toque el próximo ciclo de compra.
+
+    [P1-2 FIX] `restocked_items: {ingredient_name_norm: iso_ts}` permite supresión
+    item-level. Si el usuario solo compró fresas el lunes, solo "fresas" se suprime
+    durante el ciclo; pollo/yogurt siguen visibles si no fueron comprados.
+    Precedencia: `restocked_items` (item-level) > `restocked_at_iso` (blanket legacy).
+    """
+    from constants import strip_accents
+    from datetime import datetime, timezone
+
+    # [P1-6] Knobs de cycle (compartidos entre rama blanket y rama item-level).
+    _max_cap = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", "30"))
+    _max_cap = max(7, min(_max_cap, 90))
+    cycle_days = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS", "7"))
+    cycle_days = max(1, min(cycle_days, _max_cap))
+    now_utc = datetime.now(timezone.utc)
+
+    def _ts_within_cycle(iso_ts: str) -> bool:
+        """True si `iso_ts` cae dentro del ciclo activo (suprimir el item)."""
+        if not iso_ts or not isinstance(iso_ts, str):
+            return False
+        try:
+            ts = iso_ts.replace("Z", "+00:00") if iso_ts.endswith("Z") else iso_ts
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age_days = (now_utc - dt).total_seconds() / 86400.0
+            return age_days < cycle_days
+        except (ValueError, TypeError):
+            return False
+
+    # [P1-2] Item-level: precedencia sobre restocked_at_iso.
+    suppress_by_item: dict[str, bool] = {}
+    if isinstance(restocked_items, dict) and restocked_items:
+        for raw_name, iso_ts in restocked_items.items():
+            if not isinstance(raw_name, str):
+                continue
+            key = strip_accents(raw_name.lower().strip())
+            if key and _ts_within_cycle(iso_ts):
+                suppress_by_item[key] = True
+
+    # [RIESGO-1] Blanket: aplica a TODOS los perecederos cuando no hay item-level.
+    # Si hay item-level, ignoramos el blanket — el usuario eligió granularidad.
+    suppress_perishables_blanket = (
+        not suppress_by_item
+        and bool(restocked_at_iso)
+        and _ts_within_cycle(restocked_at_iso)
+    )
+    if not isinstance(weekly_items, list):
+        weekly_items = []
+    if not isinstance(period_items, list):
+        period_items = []
+    master_map = master_map or {}
+
+    def _name_key(item):
+        if not isinstance(item, dict):
+            return ""
+        return strip_accents(str(item.get("name", "")).lower().strip())
+
+    weekly_by_name = {_name_key(i): i for i in weekly_items if isinstance(i, dict)}
+    period_by_name = {_name_key(i): i for i in period_items if isinstance(i, dict)}
+
+    all_names = set(weekly_by_name.keys()) | set(period_by_name.keys())
+    hybrid = []
+
+    for name_key in all_names:
+        weekly_item = weekly_by_name.get(name_key)
+        period_item = period_by_name.get(name_key)
+
+        # Tomar nombre canónico del item disponible (period_item primero por ser
+        # el contexto del usuario; weekly como fallback).
+        ref_item = period_item or weekly_item
+        name_canon = ref_item.get("name", "") if ref_item else ""
+        # [RIESGO-2 FIX] master_map normalmente está vacío en producción porque
+        # los call-sites no lo pasan. Pero P1-PDF-2 ya inyecta `shelf_life_days`,
+        # `category` e `is_perishable` directamente en el item. Por eso el item
+        # mismo es un master_item válido — usarlo como fallback evita que el
+        # clasificador caiga al default conservador "perishable" cuando hay
+        # data confiable en el propio item.
+        master_item = (
+            master_map.get(name_key)
+            or master_map.get(name_canon.lower())
+            or ref_item
+            or {}
+        )
+
+        perishability = _classify_perishability(name_canon, master_item)
+
+        if perishability == "perishable":
+            chosen = weekly_item or period_item  # weekly preferido
+        else:
+            chosen = period_item or weekly_item  # period (mensual) preferido
+
+        if not chosen:
+            continue
+        # [P1-2] Supresión item-level: si este nombre fue restocked dentro del
+        # ciclo, ocultarlo (independiente de su clasificación de perecedero —
+        # un staple que el usuario marcó como recién comprado tampoco debería
+        # aparecer hasta el próximo ciclo).
+        if suppress_by_item.get(name_key):
+            continue
+        # [RIESGO-1] Blanket legacy: si no hay item-level, suprimir todos los
+        # perecederos durante el ciclo.
+        if suppress_perishables_blanket and perishability == "perishable":
+            continue
+        # Marca para el frontend.
+        out_item = dict(chosen)  # copia superficial
+        out_item["is_perishable"] = (perishability == "perishable")
+        out_item["_perishability"] = perishability
+        hybrid.append(out_item)
+
+    return hybrid
+
 def parse_fraction(val: str) -> float:
     val = val.strip()
     try:
@@ -201,7 +849,46 @@ def normalize_name(orig_name: str) -> str:
     
     master_list = get_master_ingredients()
     from constants import strip_accents
-    
+
+    # [P3-PROTEIN-CAP-2] Guard pre-alias para distinguir productos de pavo:
+    # el alias lookup downstream puede mapear "pechuga de pavo" / "filete de
+    # pavo" a "Jamón de pavo" cuando master_list tiene esas frases listadas
+    # como alias del producto procesado (caso real en environments con master
+    # poblado desde constants.PROTEIN_SYNONYMS). Sin este guard, fresh y
+    # molido se conflatarían con deli procesado, costando al usuario
+    # ~$70 RD$/lb extra y nutrición peor (sodio 4× mayor en deli).
+    #
+    # Reglas, en orden de precedencia (alineadas con la canonicalización
+    # del aggregator):
+    #   1. fresh marker explícito + pechuga/filete → Pechuga de pavo
+    #   2. processed marker explícito (jamón de pavo, lonjas, procesado) →
+    #      Jamón de pavo
+    #   3. pavo molido / carne de pavo → Pavo molido
+    #   4. pechuga de pavo / filete de pavo (sin marker procesado) →
+    #      Pechuga de pavo (default seguro fresh)
+    #   5. else: cae al alias lookup (master decide)
+    _opl = str(orig_name).lower()
+    if re.search(r'\bpavo\b', _opl):
+        _has_fresh = bool(re.search(r'\bfresc[oa]s?\b|\bfresh\b', _opl))
+        _has_processed = bool(re.search(
+            r'jam[oó]n\s+de\s+pavo|pavo\s+en\s+lonjas?|lonjas?\s+de\s+pavo|'
+            r'pavo\s+procesado|pavo\s+en\s+rebanadas?',
+            _opl
+        ))
+        if _has_fresh and re.search(r'\b(pechuga|filete)\s+de\s+pavo\b', _opl):
+            return 'Pechuga de pavo'
+        if _has_processed:
+            return 'Jamón de pavo'
+        if re.search(r'\bpavo\s+molido\b|\bcarne\s+de\s+pavo\b', _opl):
+            return 'Pavo molido'
+        if re.search(r'\b(pechuga|filete)\s+de\s+pavo\b', _opl):
+            return 'Pechuga de pavo'
+        # Fallback: "pavo" sin más descriptores → canonical "Pavo" (no
+        # auto-canonicalizar a Jamón de pavo via alias lookup, que es la
+        # trampa que justamente queremos evitar). Default seguro: tratar
+        # como pavo genérico fresh.
+        return 'Pavo'
+
     n_stripped = strip_accents(n)
     clean_n_stripped = strip_accents(clean_n)
     
@@ -290,6 +977,18 @@ def _preprocess_nlp_quantities(s: str) -> str:
             s_lower = s_lower.replace(k, v + " ", 1)
             
     replacements = [
+        # [JUICE-PREFIX-FIX 2026-05-06] Strip de prefijos descriptivos que no
+        # son cantidades. El LLM emite "Zumo de 1 limón" / "Jugo de 1 limón" /
+        # "Ralladura de 1 limón" como ingredientes. El regex principal de
+        # `_parse_quantity` espera el string empezando con número, así que
+        # estos caían al fallback `(0.0, 'cantidad necesaria', ...)` y el
+        # aggregator los descartaba — el limón nunca aparecía en la lista
+        # de compras aunque la receta lo usara. Strippeando el prefijo deja
+        # "1 limón" → parser lo extrae correctamente.
+        (r'^zumo\s+de\s+', ''),
+        (r'^jugo\s+de\s+', ''),
+        (r'^ralladura\s+de\s+', ''),
+        (r'^c[aá]scara\s+de\s+', ''),
         (r'^un cuarto de\b', '1/4 de'),
         (r'^un cuarto\b', '1/4'),
         (r'^1 cuarto de\b', '1/4 de'),
@@ -334,27 +1033,99 @@ def _preprocess_nlp_quantities(s: str) -> str:
             
     return s.strip()
 
-def _calculate_yield_multiplier(raw_name: str) -> float:
+def _calculate_yield_multiplier(raw_name: str, *, only_legumbres_grains: bool = False) -> float:
+    """Devuelve el multiplicador de yield (cocido↔crudo) para `raw_name`.
+
+    Reglas (en orden):
+      1. Legumbres/granos cocidos → 0.35× (1 taza seca rinde ~3 tazas cocidas)
+      2. Proteínas cocidas        → 1.35× (peso cocido pierde ~25% a humedad)
+      3. Víveres pelados          → 1.30× (merma de cáscara)
+      4. Carnes sin hueso         → 1.40× (merma de hueso)
+      Default                     → 1.0×
+
+    [P2-PDF-1] `only_legumbres_grains` activa SOLO la regla #1, ignorando
+    el resto. Usado por el shopping aggregator vía `_parse_quantity` para
+    convertir "200g habichuelas cocidas" → 70g secas — el SKU comercial
+    de habichuelas/lentejas/arroz/pasta es SECO, así que sin esta
+    conversión el aggregator computaba en peso cocido (~3× sobre-estimado)
+    y producía conteos exagerados de paquetes (15 paquetes de habichuelas
+    cuando realmente se necesitan ~5 lbs secas).
+
+    Por qué SOLO esta regla: el aggregator pasa `apply_yield_multiplier=
+    False` por la asimetría P1-2 plan↔inventario (proteínas cocidas
+    descritas en plan vs. inventario en peso literal sin "cocido" sesgan
+    el delta hacia over-buy). Para PROTEÍNAS la asimetría es ~25%
+    (aceptable). Para LEGUMBRES/GRANOS es 3× (material) y los SKUs son
+    SECOS — la regla #1 cierra el gap sin reintroducir la asimetría #2.
+    """
     n = raw_name.lower()
     # 1. Pastas y Granos cocidos (Expanden, necesitas menos crudo)
-    if bool(re.search(r'\b(cocid[oa]|hervid[oa])\b', n)) and bool(re.search(r'\b(arroz|pasta|quinoa|lenteja|habichuela|frijol|guandul)\b', n)):
+    # [P2-PDF-1] Soporte de plural agregado: antes la regex `\bhabichuela\b`
+    # NO matcheaba "habichuelas" porque `\b` requiere boundary y `s` es word
+    # char → "habichuelas cocidas" salía con yield=1.0 silenciosamente. Para
+    # palabras cuyo plural agrega `s` simple (lenteja→lentejas, habichuela→
+    # habichuelas, pasta→pastas, quinoa→quinoas) usamos sufijo `s?`. Para
+    # los que pluralizan con `es` (frijol→frijoles, guandul→guandules) usamos
+    # `(?:es)?` para no match accidentes como "frijole". Para `arroz` añadimos
+    # `(?:es)?` defensivo (raramente plural).
+    #
+    # [P2-PDF-3] `garbanzo(s)?`, `soya`, `tofu` añadidos del PDF 2026-05-05:
+    # "250g garbanzos cocidos" se aggregaba sin yield → 11 paquetes (1 lb)
+    # en lugar de los ~5 lbs secas reales (over-buy 2×). `soya` y `tofu`
+    # incluidos por simetría — la soya texturizada y el tofu firme también
+    # se hidratan ~3× al cocinarse desde su forma comercial seca.
+    if bool(re.search(r'\b(cocid[oa]s?|hervid[oa]s?)\b', n)) and bool(re.search(r'\b(arroz(?:es)?|pastas?|quinoas?|lentejas?|habichuelas?|frijol(?:es)?|guandul(?:es)?|garbanzos?|soyas?|tofu)\b', n)):
         return 0.35
-    
+
+    if only_legumbres_grains:
+        # Modo aggregator: NO aplicar reglas #2-4 para preservar la simetría
+        # plan↔inventario establecida en P1-2.
+        return 1.0
+
     # 2. Proteínas cocidas (Se encogen por humedad, necesitas más crudo)
     if bool(re.search(r'\b(cocid[oa]|hervid[oa]|asad[oa]|hornead[oa]|desmenuzad[oa]|frit[oa])\b', n)) and bool(re.search(r'\b(pollo|carne|res|pescado|cerdo|camar|pavo|salm[oó]n|filete)\b', n)):
         return 1.35
-        
+
     # 3. Merma de Cáscara/Limpieza (Víveres y Mariscos pelados)
     if bool(re.search(r'\b(pelad[oa]|limpi[oa]|sin piel|sin c[aá]scara)\b', n)) and bool(re.search(r'\b(yuca|platano|pl[aá]tano|batata|papa|guineo|camar[oó]n|manzana|pera)\b', n)):
         return 1.30
-        
+
     # 4. Merma de Hueso (comprar sin hueso es más carne, pero si la receta pide carne magra y el ingrediente en lista es estándar)
     if bool(re.search(r'\b(sin hueso|deshuesad[oa])\b', n)) and bool(re.search(r'\b(pollo|muslo|carne|chuleta)\b', n)):
         return 1.40
-        
+
     return 1.0
 
-def _parse_quantity(s):
+def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_yield_only: bool = False):
+    """[P1-2] Parsea un string de ingrediente a (qty, unit, name).
+
+    `apply_yield_multiplier` controla si `_calculate_yield_multiplier` se
+    aplica al qty extraído (default True para preservar el comportamiento
+    de todos los call-sites históricos: tools.py, cron_tasks.py,
+    db_inventory.py, etc. que dependen de yield→peso-crudo).
+
+    El aggregator de la lista de compras (`aggregate_and_deduct_shopping_list`)
+    lo invoca con `apply_yield_multiplier=False` para evitar la asimetría
+    documentada en P1-2: el plan_ingredients del LLM frecuentemente describe
+    el plato cocido ("1 lb pollo cocido") y `_parse_quantity` aplicaría
+    yield 1.35 → 1.35 lb crudo. PERO el `physical_inventory` que el usuario
+    tipea en su Nevera está SIEMPRE en peso literal sin "cocido" → yield 1.0
+    → 1.0 lb. Esa asimetría textual sesgaba el delta plan-inventario hacia
+    OVER-BUYING. Operando en peso literal en ambos lados, el delta refleja
+    fielmente la diferencia descrita por LLM/usuario sin conversiones
+    asimétricas.
+
+    [P2-PDF-1] `apply_legumbres_yield_only` re-activa SOLO la regla
+    legumbres/granos cocidos→secos (factor 0.35×) en el path del aggregator.
+    Justificación: el SKU comercial de habichuelas/lentejas/arroz/pasta es
+    SECO; sin esta conversión, "200g habichuelas cocidas" → 200g se
+    aggregaba como si fuera 200g secas, sobreestimando 3× el conteo de
+    paquetes en la lista de compras. La asimetría plan↔inventario que
+    P1-2 cerró aplica a PROTEÍNAS (25% delta, simétrico aceptable);
+    para LEGUMBRES la asimetría es 3× y se cierra solo en este lado
+    porque el inventario también se canonicaliza al name seco antes de
+    deducir.
+    """
     if isinstance(s, dict):
         qty = float(s.get("quantity", 0))
         unit = s.get("unit", "unidad")
@@ -387,8 +1158,18 @@ def _parse_quantity(s):
     rest_str = match.group(3) or ""
     
     raw_qty = parse_fraction(qty_str)
-    
-    yield_mult = _calculate_yield_multiplier(rest_str)
+
+    # [P1-2] yield_mult solo se aplica si el caller lo pidió explícitamente.
+    # El aggregator pasa False para evitar la asimetría plan-vs-inventory
+    # cuando solo el plan describe productos cocidos.
+    # [P2-PDF-1] `apply_legumbres_yield_only` activa SELECTIVAMENTE la regla
+    # legumbres/granos (0.35×) sin reabrir la asimetría de proteínas (#2-4).
+    if apply_yield_multiplier:
+        yield_mult = _calculate_yield_multiplier(rest_str)
+    elif apply_legumbres_yield_only:
+        yield_mult = _calculate_yield_multiplier(rest_str, only_legumbres_grains=True)
+    else:
+        yield_mult = 1.0
     qty = raw_qty * yield_mult
     
     if unit_str:
@@ -405,13 +1186,32 @@ def _parse_quantity(s):
         elif u in ['diente', 'dientes']: unit_str = 'diente'
         elif u in ['lata', 'latas']: unit_str = 'lata'
         elif u in ['paquete', 'paquetes', 'paquetico', 'paqueticos', 'pqte', 'paq', 'funda', 'fundas']: unit_str = 'paquete'
+        # [P1-3] `caja`, `bolsa`, `tetra`, `galón`, `jarra` añadidos para que
+        # el aggregator pueda normalizarlos a gramos vía `_CONTAINER_UNIT_ALIASES`.
+        # ANTES caían al `else` final que los movía al name como texto, y la
+        # unidad quedaba como 'unidad' — la deducción de inventario no
+        # matcheaba el plan en gramos → item duplicado en el delta.
+        elif u in ['caja', 'cajas']: unit_str = 'caja'
+        elif u in ['bolsa', 'bolsas', 'bolsita', 'bolsitas']: unit_str = 'bolsa'
+        elif u in ['tetra', 'tetrapak']: unit_str = 'tetra'
+        elif u in ['galón', 'galon', 'galones']: unit_str = 'galón'
+        elif u in ['jarra', 'jarras']: unit_str = 'jarra'
         elif u in ['sobre', 'sobres', 'sobrecito', 'sobrecitos']: unit_str = 'sobre'
         elif u in ['chin', 'pizca', 'pizcas', 'toque', 'toques', 'chorrito', 'chorritos', 'puñado', 'puñados', 'ramita', 'ramitas', 'hojita', 'hojitas']: unit_str = 'pizca'
         elif u in ['pote', 'potes', 'tarro']: unit_str = 'pote'
-        elif u in ['botella', 'botellas', 'frasco']: unit_str = 'botella'
+        # [P5-OLIVE-CAP] Añadido 'frascos' (plural) — antes solo el
+        # singular se normalizaba; el LLM frecuentemente emite plural y
+        # caía al fallback 'unidad', lo que dejaba el cap por nombre
+        # sin chance de matchear (name quedaba como "Frascos de X").
+        elif u in ['botella', 'botellas', 'frasco', 'frascos']: unit_str = 'botella'
         elif u in ['cabeza', 'cabezas']: unit_str = 'cabeza'
         elif u in ['hoja', 'hojas']: unit_str = 'hoja'
         elif u in ['rebanada', 'rebanadas', 'lonja', 'lonjas']: unit_str = 'rebanada'
+        # [P3-HERB-CAP] `mazo`/`atado` reconocidos como unit canónico para
+        # hierbas frescas. Sin esto, "1 mazo de cilantro" caía al `else` y
+        # el name quedaba como "Mazo de cilantro" (incorrecto), evitando
+        # la canonicalización a "Cilantro" y por ende mi cap defensivo.
+        elif u in ['mazo', 'mazos', 'atado', 'atados', 'manojo', 'manojos']: unit_str = 'mazo'
         elif u in ['unidad', 'unidades', 'ud', 'uds', 'unid']: unit_str = 'unidad'
         else:
             rest_str = unit_str + (" " + rest_str if rest_str else "")
@@ -476,6 +1276,102 @@ DISPLAY_CATEGORY_MAP = {
     "Suplementos":      "SUPLEMENTOS",
 }
 
+# ============================================================
+# [P1-PDF-2] Clasificación canónica perecedero vs estable.
+# ------------------------------------------------------------
+# Antes, el PDF de la lista de compras tenía la heurística DUPLICADA:
+#   - Frontend (`Dashboard.jsx`):
+#     `cat.toLowerCase().includes('proteína'|'lácteo'|'vegetal'|'fruta')`
+#   - Backend: ninguna — el frontend tomaba la decisión sin SSOT.
+# Si `_get_display_category` devolvía una variante con typo o sin tilde
+# ("Proteinas" sin acento, "vegetales" plural), la heurística de substring
+# fallaba silenciosamente y items perecederos quedaban en la sección estable
+# del PDF — riesgo concreto para el usuario que compra carne para "más de
+# 7 días" porque el PDF la presentó como "+7 días almacén".
+#
+# Ahora el backend persiste `is_perishable: bool` por item en
+# `aggregated_shopping_list`. El frontend lee el flag directo; mantiene la
+# heurística como fallback defensivo solo para planes legacy persistidos
+# antes de este fix.
+#
+# Reglas (en orden de precedencia):
+#   1. `shelf_life_days` ≤ PERISHABLE_SHELF_LIFE_THRESHOLD_DAYS → perecedero
+#      (señal más confiable, viene de master_ingredients o `_infer_shelf_life_days`).
+#   2. Categoría (case-insensitive, accent-aware vía substring) coincide con
+#      uno de PERISHABLE_CATEGORY_PREFIXES → perecedero.
+#   3. Items urgentes (`category='🚨 Compra Urgente'`) → siempre perecedero
+#      (semántica del flag: "comprar pronto").
+#   4. Sino → estable (default conservador para "DESPENSA", "VÍVERES",
+#      "ESPECIAS", "SUPLEMENTOS").
+#
+# Mantenimiento: si se añade una categoría nueva (ej. "Embutidos"), evaluar
+# si entra en este set Y actualizar `_infer_shelf_life_days` en
+# `db_inventory.py` para coherencia con la regla 1.
+# ============================================================
+PERISHABLE_CATEGORY_PREFIXES = frozenset({
+    "proteína",
+    "lácteo",
+    "vegetal",
+    "fruta",
+})
+
+PERISHABLE_SHELF_LIFE_THRESHOLD_DAYS = 7
+
+
+def is_perishable_category(category: str | None, shelf_life_days=None) -> bool:
+    """[P1-PDF-2] Determina si un item de la lista de compras es perecedero.
+
+    Helper canónico que reemplaza la heurística de substring duplicada en
+    `Dashboard.jsx`. Devuelve `True` si el item debe agruparse en la sección
+    "COMPRA INMEDIATA" del PDF (perecederos 1-7 días).
+
+    Args:
+        category: categoría cruda (`master_ingredients.category` o
+            `display_category`). Tolerante a None, mayúsculas, acentos
+            y formato plural ("PROTEÍNAS" vs "Proteína").
+        shelf_life_days: días de shelf life del item (puede venir directo de
+            master_ingredients o calculado vía `_infer_shelf_life_days`).
+            None / no parseable → no se usa la regla 1, cae a la regla 2.
+
+    Returns:
+        True si el item es perecedero (≤7 días o categoría fresca);
+        False en caso contrario.
+
+    Precedencia (mismo orden que la heurística original del frontend que
+    reemplaza, para no introducir cambios de comportamiento sutiles):
+
+      Regla 1. `shelf_life_days` parseable → señal ABSOLUTA. shelf_life ≤ 7
+               devuelve True; shelf_life > 7 devuelve False y NO cae a la
+               regla 2 (la fuente de verdad numérica gana sobre el match
+               textual de categoría, que puede tener falsos positivos por
+               plural/acento).
+      Regla 2. `shelf_life_days` None o unparseable → fallback a categoría:
+               - Substring "urgente" → True (items 🚨 Compra Urgente).
+               - Cualquier prefix de PERISHABLE_CATEGORY_PREFIXES en
+                 lowercased category → True.
+               - Sino → False (default conservador para DESPENSA, VÍVERES,
+                 ESPECIAS, SUPLEMENTOS, OTROS, categoría desconocida).
+    """
+    # Regla 1: shelf_life_days es la señal MÁS FUERTE — gana sobre la categoría
+    # cuando está presente. Mismo orden que la heurística frontend original.
+    if shelf_life_days is not None:
+        try:
+            return int(shelf_life_days) <= PERISHABLE_SHELF_LIFE_THRESHOLD_DAYS
+        except (TypeError, ValueError):
+            pass  # unparseable → cae a regla 2
+
+    # Regla 2a: items urgentes son siempre perecederos cuando no hay shelf_life.
+    if category and "urgente" in str(category).lower():
+        return True
+
+    # Regla 2b: substring match contra prefijos canónicos. case-insensitive.
+    # Usamos `in` (substring) en vez de prefix para tolerar plurales
+    # ("VEGETALES" contiene "vegetal", "FRUTAS" contiene "fruta").
+    if not category:
+        return False
+    cat_lower = str(category).strip().lower()
+    return any(prefix in cat_lower for prefix in PERISHABLE_CATEGORY_PREFIXES)
+
 def _get_display_category(db_category: str, name: str = "") -> str:
     """Resuelve la categoría de display para el PDF. Server-side, elimina regex del frontend."""
     if db_category in DISPLAY_CATEGORY_MAP:
@@ -503,16 +1399,19 @@ def _get_display_category(db_category: str, name: str = "") -> str:
 # ═══════════════════════════════════════════════════════════════
 def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: float = 0.10):
     """Encuentra la combinación óptima de SKUs para minimizar desperdicio.
-    
+
     Estrategias (en orden de prioridad):
       1. Single-SKU: paquete más pequeño que cubre la necesidad (≤20% waste, ≤2x tamaño)
       2. Best-Fit Multi: prueba TODOS los tamaños, elige el que minimiza desperdicio
-    
+      3. Fallback bulk: si TODOS los sizes son << g_total (necesidad >> SKU más
+         grande, e.g. plan mensual × 2 personas con yogurt: 3733g vs SKU max
+         453g), usar el size MÁS GRANDE con `ceil(g_total / size)` count.
+
     Returns: (count, size_g) — cuántos paquetes de qué tamaño
     """
     import math
     sizes = sorted([float(s) for s in available_sizes_g])  # ascendente
-    
+
     # Estrategia 1: Un solo paquete que cubre la necesidad
     # Tolerancia muy ajustada (5%) para obligar escalar visualmente cuando aumentan personas.
     SINGLE_PKG_TOLERANCE = 0.05
@@ -521,19 +1420,19 @@ def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: floa
             waste_pct = (size - g_total) / size
             if waste_pct <= SINGLE_PKG_TOLERANCE:
                 return 1, size
-    
+
     # Estrategia 2: Prueba cada tamaño disponible, elige el mejor
     # Criterio: mínimo desperdicio con mínimo conteo de paquetes
     best_result = None
     best_waste = float('inf')
-    
+
     for size in sizes:
         if size < g_total * 0.15:  # Skip tamaños ridículamente pequeños
             continue
         raw_count = g_total / size
         floor_count = math.floor(raw_count)
         frac = raw_count - floor_count
-        
+
         # Anti-desperdicio: redondear abajo si sobra poco
         if frac <= anti_waste_pct and floor_count >= 1:
             count = floor_count
@@ -543,21 +1442,109 @@ def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: floa
             count = max(1, math.ceil(raw_count))
             total_g = count * size
             waste = total_g - g_total  # Over-buy waste
-        
+
         waste_score = waste / g_total if g_total > 0 else 0
         # Penalizar conteos altos exponencialmente: 1 paquete siempre > N paquetes
         # count^1.5: 1→0.04, 2→0.11, 3→0.21, 4→0.32, 5→0.45
         score = waste_score + (count ** 1.5 * 0.04)
-        
+
         if score < best_waste:
             best_waste = score
             best_result = (count, size)
-    
-    return best_result if best_result else (1, sizes[0])
+
+    if best_result is not None:
+        return best_result
+
+    # ── Estrategia 3: Fallback bulk ──
+    # Antes: `return (1, sizes[0])`. Catastrófico cuando ALL sizes quedaron
+    # filtrados por el guard `size < g_total * 0.15`: el usuario necesita
+    # mucho más que el SKU más grande, y devolver "1 paquete del MÁS
+    # PEQUEÑO" produce under-buy del 90-99%. Bug observable: yogurt griego
+    # `available_sizes=[150, 227, 453]` con g_total=3733g (mensual × 2
+    # personas) → el guard descartaba los 3 sizes (3733 × 0.15 = 560 > 453)
+    # → fallback retornaba (1, 150) → PDF mostraba "1 pote (150g)" cuando
+    # el usuario necesita ~25 potes (≈3.7 kg). Mismo modo de fallo aplica a
+    # habichuelas, queso blanco, y cualquier item cuyo SKU max < 6.67× la
+    # necesidad real. Ahora usamos el size MÁS GRANDE con `ceil(g_total /
+    # size)` — matemática correcta, ningún under-buy silencioso.
+    largest_size = sizes[-1]
+    fallback_count = max(1, math.ceil(g_total / largest_size))
+    return fallback_count, largest_size
 
 def to_unicode_fraction(frac_str: str) -> str:
     mapping = {"1/4": "¼", "1/2": "½", "3/4": "¾"}
     return mapping.get(frac_str, frac_str)
+
+
+# ============================================================
+# [P1-PDF-5] Sufijo parentizado SIN ambigüedad para `display_qty`.
+# ------------------------------------------------------------
+# Antes el formato era literal `f"({sku_label})"` para todos los casos.
+# Cuando count > 1, el usuario no podía distinguir si la cantidad en
+# paréntesis era el peso/tamaño TOTAL o POR EMPAQUE:
+#   - "16 paquetes (1 lb)"   ¿16 paquetes que SUMAN 1 lb? ¿O 16 paquetes
+#                             de 1 lb c/u = 16 lbs?
+#   - "13 sobres (14g)"      Físicamente imposible: 13 sobres no caben en
+#                             14g; el `14g` es POR sobre. Lectura errónea
+#                             llevaba al usuario a comprar de menos.
+#   - "9 potes (16 oz)"      Tras P1-PDF-4 fix: 9 potes de 16 oz c/u =
+#                             ~9 lbs; sin sufijo, ambiguo.
+#
+# Convención dominicana de supermercado: "c/u" = "cada uno" (etiquetas
+# de góndola). Convención simétrica para totales aproximados: prefijo
+# "~" + sufijo " total" — ya implícito por mega-frutas (lechosa,
+# aguacate) donde `~X lbs` representa el peso TOTAL agregado, no por
+# unidad.
+#
+# Reglas:
+#   - count <= 1 → `(label)` (no hay ambigüedad con 1 unidad)
+#   - count >  1 + label inicia con "~" → `(label total)` (mega-frutas:
+#                                          peso TOTAL aproximado)
+#   - count >  1 + label exacto         → `(label c/u)` (containers:
+#                                          tamaño POR EMPAQUE)
+# ============================================================
+def _format_pkg_suffix(count, label: str) -> str:
+    """Devuelve el sufijo parentizado con disambiguación per-package vs total.
+
+    Sin sufijo (`""`) si `label` está vacío. Acepta `count` numérico o string
+    convertible a float; degrada a `count_int=1` (sin "c/u") ante valores
+    no-parseables.
+    """
+    if not label:
+        return ""
+    try:
+        count_int = int(float(count))
+    except (TypeError, ValueError):
+        count_int = 1
+    if count_int <= 1:
+        return f"({label})"
+    if label.startswith("~"):
+        return f"({label} total)"
+    return f"({label} c/u)"
+
+
+def _has_pkg_suffix(display_qty: str, label: str) -> bool:
+    """True si `display_qty` ya contiene cualquier variante del sufijo
+    (legacy `(label)` o nuevas `(label c/u)` / `(label total)`).
+
+    Usado por el wrapper de cierre para no duplicar sufijos cuando un
+    bloque previo ya los añadió.
+    """
+    if not label or not display_qty:
+        return False
+    return any(v in display_qty for v in (
+        f"({label})", f"({label} c/u)", f"({label} total)"
+    ))
+
+
+# [P0-3] Decimal canónico para las únicas fracciones que el motor de
+# pesos dominicanos genera ("1/4", "1/2", "3/4"). Se usa para construir
+# `market_qty` SIEMPRE como float, dejando el string fraccional unicode
+# ("¼ lb", "1 ½ lbs") sólo en `display_qty`. Antes el campo era de
+# tipo mixto (a veces float, a veces string como "1/2"/"1 1/2"), lo
+# que rompía consumers numéricos (Restock que persiste a `user_inventory`,
+# pricing, agregadores, frontend con `parseFloat(market_qty)`).
+_FRACTION_DECIMAL = {"1/4": 0.25, "1/2": 0.5, "3/4": 0.75}
 
 
 def _sku_size_label(size_g: float, unit_hint: str = None) -> str:
@@ -575,6 +1562,20 @@ def _sku_size_label(size_g: float, unit_hint: str = None) -> str:
         for vol_g, label in VOLUME_LABELS.items():
             if abs(size_g - vol_g) < 10:
                 return label
+        # [BOTELLA-ML-FALLBACK] Si el contenedor es una botella/lata pero el peso
+        # no matchea ninguno de los tamaños canónicos (e.g. aceite de oliva 500g),
+        # NO debemos caer al fallback genérico que produciría "500g". Los líquidos
+        # de cocina (aceite, vinagre, salsas) tienen densidad ≈1 g/ml, así que
+        # mostrar el mismo número como "ml" es correcto y mucho más legible que
+        # "500g" en una botella de aceite (visto 2026-05-06).
+        if unit_hint.lower() in ['botella', 'ml', 'l', 'galón']:
+            if size_g >= 1000:
+                # Convertir a litros con un decimal cuando es ≥1L (1500g → "1.5L")
+                liters = size_g / 1000
+                if abs(liters - round(liters)) < 0.05:
+                    return f"{round(liters):d}L"
+                return f"{liters:.1f}L"
+            return f"{int(round(size_g))}ml"
             
     if unit_hint and unit_hint.lower() in ['pote', 'frasco']:
         # Mapeos típicos de onzas para potes (yogurt, queso crema, aceitunas)
@@ -686,7 +1687,12 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         if available_sizes and isinstance(available_sizes, list) and len(available_sizes) > 1:
             sku_count, sku_size_g = _find_best_sku(g_total, available_sizes, ANTI_WASTE_THRESHOLD)
             sku_label = _sku_size_label(sku_size_g, db_container)
-            display_qty = f"{sku_count} {get_plural_unit(sku_count, db_container)} ({sku_label})"
+            # [P1-PDF-5] Sufijo "c/u" cuando count > 1 para evitar lectura
+            # ambigua: "9 potes (16 oz)" → "9 potes (16 oz c/u)".
+            display_qty = (
+                f"{sku_count} {get_plural_unit(sku_count, db_container)} "
+                f"{_format_pkg_suffix(sku_count, sku_label)}"
+            ).rstrip()
             market_qty = sku_count
             market_unit = db_container
             was_unitarized = True
@@ -704,7 +1710,13 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                     units_needed = max(1, math.ceil(raw_units))
                 
                 sku_label = _sku_size_label(container_weight_g, db_container)
-                display_qty = f"{units_needed} {get_plural_unit(units_needed, db_container)} ({sku_label})"
+                # [P1-PDF-5] Sufijo "c/u" cuando units_needed > 1 — ver
+                # docstring de `_format_pkg_suffix`. Antes "13 sobres (14g)"
+                # leía como "14g totales", ahora "13 sobres (14g c/u)".
+                display_qty = (
+                    f"{units_needed} {get_plural_unit(units_needed, db_container)} "
+                    f"{_format_pkg_suffix(units_needed, sku_label)}"
+                ).rstrip()
                 market_qty = units_needed
                 market_unit = db_container
                 was_unitarized = True
@@ -775,19 +1787,24 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                         market_unit = "Ud."
                         sku_label = None
                     else:
-                        if whole > 0 and fraction_str: 
+                        # [P0-3] `market_qty` SIEMPRE float. El display
+                        # fraccional ("1 ½ lbs") vive en `display_qty`. Antes
+                        # se asignaba string ("1 1/2") creando tipo mixto que
+                        # rompía consumers numéricos.
+                        frac_decimal = _FRACTION_DECIMAL.get(fraction_str, 0.0)
+                        if whole > 0 and fraction_str:
                             weight_lbl = f"{whole} {to_unicode_fraction(fraction_str)} lbs"
-                            market_qty_str = f"{whole} {fraction_str}"
-                        elif whole > 0: 
+                            market_qty_val = float(whole) + frac_decimal
+                        elif whole > 0:
                             weight_lbl = f"{whole} {'lb' if whole == 1 else 'lbs'}"
-                            market_qty_str = whole
-                        else: 
+                            market_qty_val = float(whole)
+                        else:
                             weight_lbl = f"{to_unicode_fraction(fraction_str)} lb"
-                            market_qty_str = fraction_str
-                            
+                            market_qty_val = frac_decimal
+
                         # Limpiamos visualmente
                         display_qty = f"{weight_lbl} (~{units_count} {'Ud.' if units_count == 1 else 'Uds.'})"
-                        market_qty = market_qty_str
+                        market_qty = market_qty_val
                         market_unit = "lb" if whole <= 1 and not (whole==1 and fraction_str) else "lbs"
                         sku_label = None
                         
@@ -810,7 +1827,14 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                             sku_label = None
 
                     display_qty = f"{units_count} {unit_text}"
-                    if sku_label: display_qty += f" ({sku_label})"
+                    # [P1-PDF-5] Mega-frutas: el sku_label ya inicia con "~"
+                    # (peso TOTAL aproximado). Helper añade " total" cuando
+                    # count > 1 → "10 Uds. (~33.1 lbs total)" en vez del
+                    # ambiguo "(~33.1 lbs)".
+                    if sku_label:
+                        suffix = _format_pkg_suffix(units_count, sku_label)
+                        if suffix:
+                            display_qty += f" {suffix}"
 
                     market_qty = units_count
                     market_unit = "Ud." if "Cabeza" not in unit_text else "Cabeza"
@@ -826,37 +1850,43 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         if weight_in_lbs < 0.23:
             # Mínimo comprable en colmado dominicano: 1/4 lb
             display_qty = "¼ lb"
-            market_qty = "1/4"
+            # [P0-3] float (antes "1/4" string).
+            market_qty = 0.25
             market_unit = "lb"
             confidence = 0.75
         else:
             whole = math.floor(weight_in_lbs)
             frac = weight_in_lbs - whole
             fraction_str = ""
-            
+
             if frac < 0.15: fraction_str = ""
             elif frac <= 0.35: fraction_str = "1/4"
             elif frac <= 0.65: fraction_str = "1/2"
             elif frac <= 0.85: fraction_str = "3/4"
-            else: 
+            else:
                 fraction_str = ""
                 whole += 1
-                
+
+            # [P0-3] `market_qty` SIEMPRE float. El display fraccional Unicode
+            # vive en `display_qty`. Antes este bloque emitía strings tipo
+            # "1 1/2" / "3/4", causando tipo mixto que rompía consumers
+            # numéricos (Restock, pricing, agregadores).
+            frac_decimal = _FRACTION_DECIMAL.get(fraction_str, 0.0)
             if whole > 0 and fraction_str:
                 display_qty = f"{whole} {to_unicode_fraction(fraction_str)} lbs"
-                market_qty = f"{whole} {fraction_str}"
+                market_qty = float(whole) + frac_decimal
                 market_unit = "lbs"
             elif whole > 0:
                 display_qty = f"{whole} {'lb' if whole == 1 else 'lbs'}"
-                market_qty = whole
+                market_qty = float(whole)
                 market_unit = "lb" if whole == 1 else "lbs"
             elif fraction_str:
                 display_qty = f"{to_unicode_fraction(fraction_str)} lb"
-                market_qty = fraction_str
+                market_qty = frac_decimal
                 market_unit = "lb"
             else:
                 display_qty = "¼ lb"
-                market_qty = "1/4"
+                market_qty = 0.25
                 market_unit = "lb"
             confidence = 0.75
 
@@ -876,7 +1906,12 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                      display_qty = f"{q_rounded} {get_plural_unit(float(q_rounded) if '.' in q_rounded else int(q_rounded), db_container)}"
                      market_unit = db_container
                      sku_label = _sku_size_label(db_container_weight_g, db_container)
-                     if sku_label: display_qty += f" ({sku_label})"
+                     # [P1-PDF-5] Sufijo c/u para fallback. `q_rounded` es
+                     # str numérico — el helper coerce vía int(float()).
+                     if sku_label:
+                         suffix = _format_pkg_suffix(q_rounded, sku_label)
+                         if suffix:
+                             display_qty += f" {suffix}"
                 else:
                      display_qty = f"{q_rounded} {'Ud.' if str(q_rounded) == '1' else 'Uds.'}"
                      market_unit = "Ud."
@@ -889,6 +1924,62 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             market_qty = 0
             market_unit = "Al gusto"
 
+    # [CABEZA-GUARD] Items que NUNCA deben llevar "Cabeza" como unidad de mercado.
+    # Mi test directo de `apply_smart_market_units` para zanahoria/tomate/pimiento
+    # con density_g_per_unit poblado retorna "lbs" correctamente, pero en producción
+    # el PDF mostraba "X Cabezas (~Y Uds.)" para esos items. El path que dispara el
+    # bug es probablemente el Bloque 1 (Data-Driven) cuando master_item tiene
+    # `market_container='cabeza'` para un veg que no es nativo cabeza — o un cache
+    # de display de un build viejo. Guard defensivo case-insensitive: si llegamos
+    # al final con "cabeza/Cabezas/cabezas" en display_qty o market_unit y el name
+    # matchea la lista excluida, reconstruimos como peso (lbs) usando weight_in_lbs
+    # y density del master.
+    _has_cabeza = (
+        bool(re.search(r'\bcabezas?\b', display_qty, re.IGNORECASE))
+        or (isinstance(market_unit, str) and 'cabeza' in market_unit.lower())
+    )
+    if _has_cabeza and _NON_CABEZA_NAMES_RE.search(name):
+        logging.warning(
+            f"[CABEZA-GUARD] '{name}' tenía display_qty='{display_qty}' "
+            f"(Cabezas inválido para este vegetal). Reconstruyendo como peso."
+        )
+        _lbs = weight_in_lbs
+        _whole = math.floor(_lbs)
+        _frac = _lbs - _whole
+        _frac_str = ""
+        if _frac < 0.15: _frac_str = ""
+        elif _frac <= 0.35: _frac_str = "1/4"
+        elif _frac <= 0.65: _frac_str = "1/2"
+        elif _frac <= 0.85: _frac_str = "3/4"
+        else:
+            _frac_str = ""
+            _whole += 1
+        if _whole > 0 and _frac_str:
+            _weight_lbl = f"{_whole} {to_unicode_fraction(_frac_str)} lbs"
+            market_qty = float(_whole) + _FRACTION_DECIMAL.get(_frac_str, 0.0)
+        elif _whole > 0:
+            _weight_lbl = f"{_whole} {'lb' if _whole == 1 else 'lbs'}"
+            market_qty = float(_whole)
+        else:
+            _weight_lbl = f"{to_unicode_fraction(_frac_str or '1/4')} lb"
+            market_qty = _FRACTION_DECIMAL.get(_frac_str or '1/4', 0.25)
+        market_unit = "lbs" if market_qty > 1 else "lb"
+        # Subtítulo "(~N Uds.)" si tenemos density del master.
+        _density = (master_item or {}).get('density_g_per_unit')
+        try:
+            _density = float(_density) if _density else 0.0
+        except (TypeError, ValueError):
+            _density = 0.0
+        if _density > 0 and weight_in_lbs > 0:
+            _units_count = max(1, math.ceil(weight_in_lbs * 453.592 / _density))
+            display_qty = f"{_weight_lbl} (~{_units_count} {'Ud.' if _units_count == 1 else 'Uds.'})"
+        else:
+            display_qty = _weight_lbl
+        # Limpiar sku_label para que el bloque post-format no anexe sufijos del
+        # path corrupto (ej. "(150g c/u)" del market_container='cabeza' viejo).
+        sku_label = None
+        confidence = 0.80  # Bajamos confianza: hubo path bug detectado.
+
     # ═══ Formato Final ═══
     if "Al gusto" in display_qty or "Pizca" in display_qty:
         final_str = f"{display_qty} de {name}"
@@ -899,7 +1990,19 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
 
     final_str = final_str.replace(" de de ", " de ")
 
-    formatted_market_qty = str(market_qty) if isinstance(market_qty, str) else round(market_qty, 2) if isinstance(market_qty, (float, int)) else market_qty
+    # [P0-3] `market_qty` ahora SIEMPRE es numérico (BLOQUES 1-4 emiten int/float;
+    # los strings fraccionales se eliminaron). Antes este cast intentaba normalizar
+    # un tipo mixto. Ahora el `round(..., 2)` simplemente preserva precisión de
+    # display y se le asigna un valor float defensivo si por alguna razón llegara
+    # un tipo inesperado (LLM hallucinations, futuro consumer sub-clase, etc.).
+    if isinstance(market_qty, (int, float)):
+        formatted_market_qty = round(float(market_qty), 2)
+    else:
+        # Defensa: tipo inesperado → forzar a float vía parser; si falla → 0.0.
+        try:
+            formatted_market_qty = round(float(market_qty), 2)
+        except (TypeError, ValueError):
+            formatted_market_qty = 0.0
 
     def _parse_market_qty(mq):
         if isinstance(mq, (int, float)):
@@ -942,11 +2045,15 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                 elif whole_min > 0: display_qty = f"{whole_min} {'lb' if whole_min == 1 else 'lbs'}"
                 elif frac_str: display_qty = f"{to_unicode_fraction(frac_str)} lb"
                 else: display_qty = f"{min_qty} lb"
-                
-                # Resincronizar market_qty fraccionado si aplica
-                if whole_min == 0 and frac_str: formatted_market_qty = frac_str
-                elif whole_min > 0 and frac_str: formatted_market_qty = f"{whole_min} {frac_str}"
-                
+
+                # [P0-3] Antes este bloque "resincronizaba" `formatted_market_qty`
+                # a un string fraccional ("0 1/4" / "1 1/2") tras el bump de
+                # MARKET_MINIMUMS, contradiciendo el `formatted_market_qty = min_qty`
+                # de la línea 1048 (que dejaba float). Resultado: tipo mixto que
+                # rompía el frontend Restock al persistir a `user_inventory`.
+                # Ahora preservamos `min_qty` (float) — el display fraccional
+                # ya está cubierto por `display_qty` arriba.
+
             else:
                 display_qty = f"{int(min_qty)} {market_unit}"
                 
@@ -955,17 +2062,34 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             else:
                 final_str = f"{display_qty} de {name}"
 
-    # Preservar la cadena híbrida construida a la perfección (ej: "1/2 lb (~5 Uds.)") 
+    # Preservar la cadena híbrida construida a la perfección (ej: "1/2 lb (~5 Uds.)")
     # El código antiguo sobreescribía esta variable robando inteligencia.
     display_qty_final = display_qty
-        
+
     # Nivel de Producción: Si logramós extraer un sku_size_label útil (tamaño paquete o aprox peso), anexarlo
-    if sku_label and f"({sku_label})" not in display_qty_final:
-        display_qty_final = f"{display_qty_final} ({sku_label})"
+    # [P1-PDF-5] `_has_pkg_suffix` reconoce las 3 variantes (legacy `(label)`,
+    # nueva `(label c/u)`, y `(label total)`) → no duplica el sufijo si un
+    # bloque previo ya lo añadió. `market_qty` es la fuente de count para
+    # el path `MARKET_MINIMUMS-bumped` que cae acá sin haber añadido sufijo.
+    if sku_label and not _has_pkg_suffix(display_qty_final, sku_label):
+        suffix = _format_pkg_suffix(market_qty, sku_label)
+        if suffix:
+            display_qty_final = f"{display_qty_final} {suffix}"
+
+    # [P0-2] `market_qty` puede ser un string fraccional ("1 1/2", "3/4", "1/4")
+    # construido por los bloques 2/3 para preservar fidelidad al mercado dominicano,
+    # pero el frontend antes hacía `parseFloat(item.market_qty)` directamente:
+    # `parseFloat("1 1/2") → 1` y `parseFloat("1/2") → 0`, subdimensionando el
+    # delta lista↔nevera. Ahora SIEMPRE exponemos `market_qty_numeric: float`
+    # con el valor real (re-parseado tras MARKET_MINIMUMS, que muta
+    # `formatted_market_qty`). El frontend prefiere este campo; `market_qty`
+    # sigue siendo el string display-friendly para no romper consumers legacy.
+    market_qty_numeric_final = _parse_market_qty(formatted_market_qty)
 
     result = {
         "name": name,
         "market_qty": formatted_market_qty,
+        "market_qty_numeric": market_qty_numeric_final,
         "market_unit": market_unit,
         "display_qty": display_qty_final,
         "display_string": final_str,
@@ -979,14 +2103,78 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
 
 def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0):
     aggregated = defaultdict(lambda: defaultdict(float))
-    
+
     if consumed_ingredients is None:
         consumed_ingredients = []
+
+    # [P1-7] Guard contra `multiplier` patológico (NaN/Infinity/cero/negativo).
+    # Causas reales observables:
+    #   - `householdSize=0` por perfil corrupto → caller pasa `1.0 * 0 = 0`
+    #     → todo plan_ingredients se anula (lista vacía falsa).
+    #   - `num_days=0` en plan vacío persistido a medias → div-zero al
+    #     calcular `base_duration_scale = 7/num_days` (mitigado por
+    #     `num_days = max(1, ...)` en `get_shopping_list_delta`, pero
+    #     callers terceros pueden pasar effective_multiplier directo).
+    #   - Float overflow en multiplicaciones encadenadas → `inf` que
+    #     produce qty=`inf` en `aggregated` → cualquier cálculo posterior
+    #     (clampear, redondear, formatear) revienta o produce strings
+    #     "inf"/"nan" en el shopping list.
+    # Clampeamos a `[0.01, 50.0]`:
+    #   - Mín 0.01 evita anular el plan completo si llegó multiplier=0;
+    #     el valor real de la lista es proporcional (1% del plan), pero
+    #     el sistema sigue produciendo una lista renderizable y SRE
+    #     detecta el log warning para investigar.
+    #   - Max 50.0 cubre el peor caso legítimo (12 personas × 4 ciclos
+    #     mensuales × 1 = 48); cualquier valor mayor es bug del caller.
+    try:
+        _mult = float(multiplier)
+    except (TypeError, ValueError):
+        _mult = 1.0
+    if math.isnan(_mult) or math.isinf(_mult) or _mult <= 0:
+        logging.warning(
+            f"[P1-7/MULTIPLIER] multiplier={multiplier!r} inválido "
+            f"(NaN/Inf/<=0). Clampeando a 1.0 para preservar lista renderizable."
+        )
+        _mult = 1.0
+    elif _mult > 50.0:
+        logging.warning(
+            f"[P1-7/MULTIPLIER] multiplier={_mult} excede cap 50.0. "
+            f"Clampeando a 50.0; bug probable en el caller."
+        )
+        _mult = 50.0
+    multiplier = _mult
     
+    # [P1-2] Convención de simetría plan↔inventario:
+    #
+    # El aggregator opera en PESO LITERAL (la cantidad textual descrita por
+    # LLM/usuario) sin convertir cocido→crudo vía `_calculate_yield_multiplier`.
+    # ANTES, `_parse_quantity` aplicaba yield 1.35× a cualquier match de
+    # /\b(cocido|asado|hervido)\b\s+(pollo|carne|...)/  para convertir el
+    # peso final descrito a peso crudo necesario. PERO esta conversión solo
+    # disparaba cuando el TEXTO contenía el adjetivo:
+    #   - plan_ingredients del LLM frecuentemente: "1 lb pollo cocido" → 1.35 lb
+    #   - physical_inventory tipeado por user: "5 lb pollo" → 5.0 lb
+    # La asimetría textual sesgaba el delta hacia OVER-BUYING (plan inflado a
+    # peso crudo, inventario en peso literal sin compensación).
+    #
+    # AHORA ambos lados llaman `_parse_quantity` con `apply_yield_multiplier=False`
+    # → todos los textos se tratan en peso literal y son comparables. El
+    # multiplier por ciclo (semanal/quincenal/mensual) sigue aplicándose solo
+    # al plan (correcto: consumed/inventario son cantidades absolutas reales).
+    #
+    # [P2-PDF-1] EXCEPCIÓN: legumbres/granos (`apply_legumbres_yield_only=True`)
+    # mantienen su yield 0.35× (cocido→seco) porque su SKU comercial es SECO.
+    # Sin esta excepción, "200g habichuelas cocidas" se aggregaba como peso
+    # seco → producía 15 paquetes (1 lb c/u) cuando el usuario realmente
+    # necesita ~5 lbs secas. La asimetría plan↔inventario que P1-2 cerró
+    # NO se reabre: las proteínas cocidas (regla #2) siguen sin yield, y el
+    # inventario de habichuelas se almacena con name canónico "Habichuelas
+    # rojas" SIN "cocidas" → yield=1.0 → comparado simétricamente vs el
+    # plan ya convertido a peso seco.
     plan_names = set()
     for item in plan_ingredients:
         if not item or len(item) < 3: continue
-        qty, unit, name = _parse_quantity(item)
+        qty, unit, name = _parse_quantity(item, apply_yield_multiplier=False, apply_legumbres_yield_only=True)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
         aggregated[name][unit] += float(qty) * float(multiplier)
@@ -996,7 +2184,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
 
     for item in consumed_ingredients:
         if not item or len(item) < 3: continue
-        qty, unit, name = _parse_quantity(item)
+        # [P2-PDF-1] Mismo yield para consumed: si el plato consumido fue
+        # "200g habichuelas cocidas", la deducción del inventario debe ser
+        # 70g secas (mismo SKU físico que se sumó al plan).
+        qty, unit, name = _parse_quantity(item, apply_yield_multiplier=False, apply_legumbres_yield_only=True)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
         aggregated[name][unit] -= float(qty)
@@ -1039,9 +2230,62 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if (re.search(r'^ajo\b', _can_lower) or re.search(r'dientes?\s+de\s+ajo', _can_lower)) and 'polvo' not in _can_lower:
             canonical_name = 'Ajo'
 
-        # Consolidación: Pechuga de pavo variantes (en lonjas, picadita, etc.) → Jamón de pavo
-        if re.search(r'pavo', _can_lower) and re.search(r'(pechuga|lonjas?|rebanada|picadit[oa])', _can_lower):
-            canonical_name = 'Jamón de pavo'
+        # [P3-PROTEIN-CAP-2] Consolidación de pavo con distinción
+        # FRESH vs PROCESADO. Antes la regla colapsaba CUALQUIER
+        # "pavo + (pechuga|lonjas|rebanada|picadito)" a "Jamón de pavo",
+        # tratando pechuga FRESCA como deli procesado. Diferencia real
+        # crítica para el usuario:
+        #   - Pechuga fresca: ~$80 RD$/lb, sodio bajo, proteína magra clean.
+        #   - Jamón de pavo en lonjas: ~$150 RD$/lb, sodio 4× mayor,
+        #     contiene nitritos y conservantes.
+        # Caso real 2026-05-05 02:14: LLM pidió "pechuga de pavo fresca"
+        # → aggregator mostraba "27 lbs de Jamón de pavo" en la lista
+        # → usuario compraría producto equivocado, costo +90% y nutrición
+        # peor.
+        #
+        # Reglas, en orden de precedencia:
+        #   1. Marker EXPLÍCITO de fresh (`fresca`, `fresh`) → Pechuga de pavo
+        #      (gana sobre cualquier indicador de presentación)
+        #   2. Marker explícito de procesado (`jamón de pavo`, `pavo en
+        #      lonjas`, `pavo procesado`) sin fresh → Jamón de pavo
+        #   3. `pavo molido` o `carne de pavo` → Pavo molido (lean ground,
+        #      no procesado deli)
+        #   4. `pechuga de pavo` o `filete de pavo` (sin marker explícito de
+        #      procesado) → Pechuga de pavo (default seguro: en RD el
+        #      consumidor que dice "pechuga de pavo" usualmente quiere fresca)
+        #   5. Else: deja canonical_name del master_map sin tocar.
+        # Usar SOLO `name.lower()` (raw del parser) para el matching, NO
+        # `_can_lower` (post-master_map). Razón: master_map puede tener
+        # alias que canonicaliza "Pechuga de pavo" → "Jamón de pavo"
+        # (alias en PROTEIN_SYNONYMS / DB). Si hiciéramos matching sobre
+        # `_can_lower`, la regex `jam[oó]n de pavo` se autoactivaría aunque
+        # el LLM dijo "pechuga fresca", produciendo la conflación que
+        # justamente queremos evitar. El raw name preserva la intención
+        # original del LLM/usuario.
+        _orig_name_lower = name.lower()
+        if re.search(r'\bpavo\b', _orig_name_lower):
+            _has_fresh_marker = bool(re.search(r'\bfresc[oa]s?\b|\bfresh\b', _orig_name_lower))
+            _has_processed_marker = bool(re.search(
+                r'jam[oó]n\s+de\s+pavo|'
+                r'pavo\s+en\s+lonjas?|'
+                r'lonjas?\s+de\s+pavo|'
+                r'pavo\s+procesado|'
+                r'pavo\s+en\s+rebanadas?',
+                _orig_name_lower
+            ))
+            if _has_fresh_marker:
+                canonical_name = 'Pechuga de pavo'
+            elif _has_processed_marker:
+                canonical_name = 'Jamón de pavo'
+            elif re.search(r'pavo\s+molido|carne\s+de\s+pavo', _orig_name_lower):
+                canonical_name = 'Pavo molido'
+            elif re.search(r'pechuga\s+de\s+pavo|filete\s+de\s+pavo', _orig_name_lower):
+                # Default seguro: pechuga de pavo (sin marker procesado) → fresca
+                canonical_name = 'Pechuga de pavo'
+            elif _orig_name_lower.strip() == 'pavo':
+                # "Pavo" solo, sin descriptores → canonical genérico (no
+                # auto-conflate via master alias a Jamón de pavo).
+                canonical_name = 'Pavo'
 
         # Consolidación: Fresas variantes (congeladas, frescas) → Fresas
         if re.search(r'^fresas?\b', _can_lower):
@@ -1135,6 +2379,36 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             canonical_aggregated[target][u] += q
         del canonical_aggregated[source]
         logging.info(f"🔀 [PLURAL-MERGE] '{source}' → '{target}'")
+
+    # [P6-LACTEOS-MERGE] Mergear "Yogurt" genérico en variante específica
+    # ("Yogurt griego sin azúcar", "Yogurt natural", etc.). Bug observable
+    # PDF 2026-05-05 22:42: lista mostró "Yogurt griego: 13 potes" Y
+    # "Yogurt: 7 Uds" como items separados → suma real 20 potes (>>cap 12).
+    # Causa: master_map canonicaliza nombres distintos pero el shopping
+    # cap aplica por key independiente. Si hay variante específica, el
+    # genérico se folds dentro (más realista — el LLM emite "yogurt" como
+    # shorthand del item específico del plan).
+    from constants import strip_accents as _strip_accents_merge
+    _generic_yogurt_keys = [
+        k for k in canonical_aggregated
+        if _strip_accents_merge(k.lower()).strip() == 'yogurt'
+    ]
+    _specific_yogurt_keys = [
+        k for k in canonical_aggregated
+        if 'yogurt' in _strip_accents_merge(k.lower()) and _strip_accents_merge(k.lower()).strip() != 'yogurt'
+    ]
+    if _generic_yogurt_keys and _specific_yogurt_keys:
+        _target = _specific_yogurt_keys[0]
+        for _source in _generic_yogurt_keys:
+            if _source == _target:
+                continue
+            for u, q in canonical_aggregated[_source].items():
+                canonical_aggregated[_target][u] += q
+            del canonical_aggregated[_source]
+            logging.info(
+                f"🔀 [P6-LACTEOS-MERGE] '{_source}' → '{_target}' "
+                f"(yogurt genérico folds en variante específica)"
+            )
 
     aggregated = canonical_aggregated
 
@@ -1262,11 +2536,28 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 units['g'] = units.get('g', 0) + q * r_weight
                 mapped_to_g = True
                 
-            # 3. Contenedores Estándar (si sabemos cuánto pesa el contenedor)
+            # 3. Contenedores Estándar — normalizar a gramos.
+            # [P1-3] Antes esto requería `container_weight_g > 0` Y un alias
+            # del set hardcodeado. Si master no tenía el peso curado o el
+            # usuario tipeaba "1 caja de leche", la unidad NO se normalizaba
+            # y el item aparecía duplicado en el delta (uno por peso del
+            # plan, otro por paquete del inventario). AHORA:
+            #   - `_CONTAINER_UNIT_ALIASES` cubre todos los envases del
+            #     mercado dominicano (paquete, pote, lata, cartón, caja,
+            #     tetra, galón, jarra, bolsa, sobre, etc).
+            #   - Si master no tiene `container_weight_g`, usamos el
+            #     fallback por categoría (conservador, mejor under-estimate
+            #     que duplicar el item en el delta).
             else:
-                if container_weight_g > 0 and (u_lower == db_container or u_lower in ['paquete', 'paquetes', 'pote', 'potes', 'lata', 'latas', 'cartón', 'carton', 'cartones', 'envase', 'envases', 'botella', 'botellas', 'funda', 'fundas', 'fundita', 'funditas']):
-                    units['g'] = units.get('g', 0) + q * container_weight_g
-                    mapped_to_g = True
+                is_container_alias = (u_lower == db_container) or (u_lower in _CONTAINER_UNIT_ALIASES)
+                if is_container_alias:
+                    effective_g = (
+                        container_weight_g if container_weight_g > 0
+                        else _fallback_container_weight_g(master_item.get("category"))
+                    )
+                    if effective_g > 0:
+                        units['g'] = units.get('g', 0) + q * effective_g
+                        mapped_to_g = True
             
             # Borrar la unidad original si logramos migrarla a gramos
             if mapped_to_g:
@@ -1281,14 +2572,1270 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         'Aceite de sésamo o maní', 'Salsa de soya', 'Orégano', 
         'Canela', 'Pimienta', 'Sal', 'Vinagre', 'Ajo en polvo'
     }
-    IGNORE_SHOPPING = {'agua', 'hielo', 'agua potable', 'cubos de hielo'}
-    
+    # [P2-PDF-2] Items que NO van a la lista de compras: agua del grifo,
+    # hielo. Pre-fix era match LITERAL contra el set ('agua', 'hielo',
+    # 'agua potable', 'cubos de hielo'): variantes como "agua fría",
+    # "agua tibia", "agua caliente", "agua mineral", "agua filtrada" NO
+    # estaban listadas y entraban al PDF como items a comprar (caso real
+    # 2026-05-05: "Agua fría — 3 lbs" en la sección OTROS). Ahora el
+    # check es por palabra-prefix normalizada: nombre debe ser exactamente
+    # el prefix o empezar con prefix + espacio (boundary de palabra).
+    # Esto evita falso-skip de nombres como "aguaymanto" (fruta) que
+    # también empieza con "agua" pero no es agua.
+    #
+    # Excepción consciente: "agua de coco" se ignora aunque sea producto
+    # comprable. Si en algún plan futuro aparece como ingrediente real a
+    # comprar, mover a allowlist explícita.
+    from constants import strip_accents
+
+    _IGNORE_SHOPPING_PREFIXES = ('agua', 'hielo')
+    _IGNORE_SHOPPING_EXACT = {'cubos de hielo'}
+
+    def _should_ignore_shopping(name_str: str) -> bool:
+        n = strip_accents(name_str.lower()).strip()
+        if not n:
+            return True
+        if n in _IGNORE_SHOPPING_EXACT:
+            return True
+        for prefix in _IGNORE_SHOPPING_PREFIXES:
+            if n == prefix or n.startswith(prefix + " "):
+                return True
+        return False
+
+    # ============================================================
+    # [P3-HERB-CAP] Cap defensivo de hierbas frescas
+    # ------------------------------------------------------------
+    # Las hierbas frescas (cilantro, perejil, recao, menta, etc.) NO
+    # escalan linealmente con el ciclo del plan: 1 mazo dura 5-7 días
+    # refrigerado y >90% se descompone si compras 1 mes de golpe. PDF
+    # real (2026-05-05) mostró "Cilantro: 23 Mazos" para mensual × 2
+    # personas — culinariamente absurdo y caro (~$200 RD$ en hojas que
+    # se botan).
+    #
+    # Causa: BLOQUE 1.5 de `apply_smart_market_units` calcula
+    # `units_needed = max(1, ceil(raw_qty))` sobre el `raw_qty` ya
+    # multiplicado por el ciclo. Si el LLM dice "1 mazo cilantro" en
+    # 1 receta y el multiplier es 18.67, resulta en 19 mazos.
+    #
+    # Convención del cap: 1 mazo / persona / semana = uso realista
+    # (incluye margen de 1-2 cdas por comida × 3 comidas/día × 7 días).
+    # `multiplier × 3/7` deshace el `base_duration_scale = 7/days_generated`
+    # aplicado upstream → recuperamos `person_weeks` efectivos del ciclo:
+    #   - 2p mensual: 18.67 × 3/7 = 8.0 person-weeks → cap 8 mazos ✓
+    #   - 2p quincenal: 9.33 × 3/7 = 4.0 → cap 4 mazos ✓
+    #   - 2p semanal: 4.67 × 3/7 = 2.0 → cap 2 mazos ✓
+    #   - 1p semanal: 2.33 × 3/7 = 1.0 → cap max(2, 1) = 2 mazos ✓
+    #
+    # `max(2, ...)` evita cap=1 absurdo para usuarios solo (a veces
+    # comprar 1 mazo no es suficiente si la receta dice "1 mazo entero").
+    # ============================================================
+    _HERB_NAMES_FOR_CAP = {
+        'cilantro', 'cilantrico', 'culantro', 'puerro', 'perejil',
+        'menta', 'albahaca', 'romero', 'verdura', 'verdurita',
+        'recao', 'eneldo', 'tomillo', 'laurel',
+    }
+    _HERB_MAZO_GRAMS = 50.0  # 1 mazo de hierba ≈ 50g
+
+    _person_weeks = max(1.0, float(multiplier) * 3.0 / 7.0)
+    # `round()` (vs `ceil()`) absorbe ruido de floating point: para
+    # multiplier=18.67 (display rounded), person_weeks calc = 8.0014... →
+    # ceil = 9 (off-by-one). round = 8 ✓. En producción multiplier es
+    # `household × cycle × 7/days_generated` con valores exactos así que
+    # person_weeks suele caer en entero limpio (2, 4, 8) — `round`
+    # equivale al comportamiento esperado sin off-by-ones.
+    _herb_cap_mazos = max(2, int(round(_person_weeks)))
+    _herb_cap_g = _herb_cap_mazos * _HERB_MAZO_GRAMS
+
+    for _name, _units in list(aggregated.items()):
+        if strip_accents(_name.lower()).strip() not in _HERB_NAMES_FOR_CAP:
+            continue
+        # Cap unidad mazo: BLOQUE 1.5 de `apply_smart_market_units` lo
+        # convierte directamente a `units_needed` sin más conversión.
+        if 'mazo' in _units and _units['mazo'] > _herb_cap_mazos:
+            _old_mazos = _units['mazo']
+            _units['mazo'] = float(_herb_cap_mazos)
+            logging.warning(
+                f"[P3-HERB-CAP] '{_name}' mazo cap: {_old_mazos:.1f} → "
+                f"{_herb_cap_mazos} (person_weeks={_person_weeks:.1f}; "
+                f"hierbas frescas no se almacenan >1 semana)"
+            )
+        # Cap por gramos: BLOQUE 1.5 también convierte g_total → mazos
+        # vía `ceil(g_total / 50)`. Si LLM dijo "1 cda cilantro" eso ya
+        # se convirtió a g en el loop anterior; cap aquí evita 23 mazos
+        # equivalentes en peso.
+        if 'g' in _units and _units['g'] > _herb_cap_g:
+            _old_g = _units['g']
+            _units['g'] = float(_herb_cap_g)
+            logging.warning(
+                f"[P3-HERB-CAP] '{_name}' peso cap: {_old_g:.0f}g → "
+                f"{_herb_cap_g:.0f}g (equivalente a {_herb_cap_mazos} mazos)"
+            )
+
+    # ============================================================
+    # [P5-OLIVE-CAP] Cap defensivo de aceitunas
+    # ------------------------------------------------------------
+    # Las aceitunas se usan como guarnición/topping (~5-15g/serving):
+    # 1 frasco de 12 oz (340g) cubre ~25-60 servings → suficiente para
+    # uso casi diario de 2 personas durante un mes con margen de 2x.
+    #
+    # PDF real (2026-05-05): "Aceitunas: 75 frascos (12 oz c/u)" para
+    # 2p × mes = 25 kg de aceitunas, ~$15,000 RD$ gastados en algo que
+    # se descompondrá antes de consumir 5%. Causa probable: el LLM emite
+    # "1 frasco de aceitunas" o pequeños gramajes en varias comidas como
+    # garnish; el aggregator suma raw × multiplier 18.67 (mensual×2p) sin
+    # cap por categoría salsa/encurtido. Mismo modo de fallo que P3-HERB-CAP
+    # pero para encurtidos.
+    #
+    # Cap: 1 frasco / (3 person-weeks) — cubre uso intensivo (~daily)
+    # con margen. Ejemplos:
+    #   - 2p mensual (8 person_weeks) → cap 3 frascos
+    #   - 2p quincenal (4 pw) → cap 1 frasco (suficiente para 2 sem)
+    #   - 2p semanal (2 pw) → cap max(1, 0.67) = 1 frasco
+    # Aplica a unidades 'frasco'/'botella'/'pote' Y al peso 'g' (este
+    # último a través de un cap-equivalente en gramos de N × 340g).
+    # ============================================================
+    # [P6-OLIVE-CAP-FIX] Match por SUBSTRING en nombre Y unit, no literal exact.
+    # Bug observable PDF 2026-05-05 19:36 ([8b0f351d]): 187 frascos de aceitunas
+    # uncapped pese a P5-OLIVE-CAP existente. Causa: en producción master_map
+    # canonicaliza a variantes ("Aceitunas Manzanilla", "Aceitunas Verdes")
+    # que no estaban en el set literal `{'aceituna', 'aceitunas'}`. Y unit_key
+    # puede emitirse como 'frasco (12 oz)' tras formateo con sufijo.
+    # Mismo modo de fallo que el cap de huevos cartón con suffix (ver fix-2).
+    #
+    # [P6-OLIVE-CAP-FIX-3] (corrida 20:36 [265055c3]): pese a FIX-1, lista
+    # mostró "94 frascos". Causa: el cap solo cubre `'g'` y unit substring
+    # `'frasco'`/'botella'/'pote'. Pero LLM emite "12 oz aceitunas" → unit_key
+    # es `'oz'` → no matchea ninguna substring → cap silenciosamente skipped.
+    # Después loop de weight_in_lbs (línea 2888) suma 'oz'+'lb'+'kg'+'ml'+'l'
+    # y BLOQUE 1 de apply_smart_market_units divide por 340g/frasco → 94.
+    # Fix: sumar TODOS los units de peso a gramos equivalentes y capear el
+    # total. Si excede, vaciar weight units y setear 'g' al cap.
+    _OLIVE_SUBSTRINGS = ('aceituna', 'olive')
+    _OLIVE_UNIT_SUBSTRINGS = ('frasco', 'botella', 'pote')
+    _OLIVE_FRASCO_GRAMS = 340.194  # 12 oz frasco estándar dominicano
+    _WEIGHT_UNIT_TO_G = {
+        'g': 1.0, 'kg': 1000.0, 'oz': 28.3495,
+        'lb': 453.592, 'lbs': 453.592, 'ml': 1.0, 'l': 1000.0,
+    }
+
+    _olive_cap_frascos = max(1, int(round(_person_weeks / 3.0)))
+    _olive_cap_g = _olive_cap_frascos * _OLIVE_FRASCO_GRAMS
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if not any(s in _name_norm for s in _OLIVE_SUBSTRINGS):
+            continue
+        # Cap unit-based ('frasco', 'botella', 'pote' substring)
+        for _unit_key in list(_units.keys()):
+            if not isinstance(_unit_key, str):
+                continue
+            _unit_lower = _unit_key.lower()
+            if not any(u in _unit_lower for u in _OLIVE_UNIT_SUBSTRINGS):
+                continue
+            if _units[_unit_key] > _olive_cap_frascos:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_olive_cap_frascos)
+                logging.warning(
+                    f"[P5-OLIVE-CAP] '{_name}' {_unit_key!r} cap: {_old:.1f} → "
+                    f"{_olive_cap_frascos} (person_weeks={_person_weeks:.1f}; "
+                    f"olivas son guarnición, no main course)"
+                )
+        # [P6-OLIVE-CAP-FIX-3] Cap total de peso (sumando g/kg/oz/lb/ml/l).
+        # Captura el caso donde LLM emite "X oz aceitunas" → unit_key 'oz'
+        # no matchea substring 'frasco' pero igual produce 94 frascos en
+        # display vía conversión a peso → BLOQUE 1.
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _olive_cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
+            _units['g'] = float(_olive_cap_g)
+            logging.warning(
+                f"[P5-OLIVE-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
+                f"(de {_present_units}) → {_olive_cap_g:.0f}g "
+                f"(≈{_olive_cap_frascos} frascos 12oz; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+        # [P6-OLIVE-CAP-FIX-4] Cap por COUNT cuando LLM emite "X aceitunas"
+        # como conteo de unidades. Bug observable PDF 2026-05-05 21:34:
+        # 234 frascos uncapped pese a FIX-3. Causa: LLM emite "5 aceitunas
+        # verdes" → unit_key 'unidad'/'unidades' → no matchea substring
+        # 'frasco' Y no está en _WEIGHT_UNIT_TO_G → silenciosamente skipped.
+        # Después apply_smart_market_units BLOQUE 2 multiplica por density
+        # (~5g/aceituna) y BLOQUE 1 divide por container_weight_g (340g) →
+        # 234 frascos display.
+        # Cap_count = cap_g / density_per_olive (5g/unidad estándar).
+        _OLIVE_DENSITY_G_PER_UNIT = 5.0
+        _olive_cap_count = max(2, int(round(_olive_cap_g / _OLIVE_DENSITY_G_PER_UNIT)))
+        for _unit_key in ('unidad', 'unidades', 'ud', 'uds'):
+            if _unit_key in _units and _units[_unit_key] > _olive_cap_count:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_olive_cap_count)
+                logging.warning(
+                    f"[P5-OLIVE-CAP] '{_name}' {_unit_key} count cap: "
+                    f"{_old:.0f} → {_olive_cap_count} (≈{_olive_cap_frascos} "
+                    f"frascos × {int(_OLIVE_FRASCO_GRAMS/_OLIVE_DENSITY_G_PER_UNIT)} "
+                    f"olivas/frasco; person_weeks={_person_weeks:.1f})"
+                )
+
+    # ============================================================
+    # [P6-CITRUS-CAP] Cap defensivo para cítricos perecederos
+    # ------------------------------------------------------------
+    # PDF 2026-05-05 19:36 ([8b0f351d]): "Limón: 51 Uds." para 2p × mes
+    # = ~1 limón/día/persona. Excesivo para uso típico (sazón, aderezo,
+    # bebida): ½ limón/día/persona suficiente. Limón dura 2-3 semanas en
+    # nevera, así que el problema NO es waste por descomposición sino
+    # over-buying matemático: el LLM emite "jugo de 1/2 limón" en varias
+    # comidas → suma raw × 18.67 = 30-50 limones en lista final.
+    #
+    # Cap: 4/persona/sem = uso intensivo (pescado, ensaladas, agua
+    # citronizada). Para 2p × mes (8 person_weeks): cap 32 limones
+    # (vs 51 PDF; reducción 37%).
+    # Aplica a 'unidad'/'unidades' Y a 'g' (× 60g/limón promedio).
+    # ============================================================
+    # [P6-CITRUS-CAP-TIGHTEN 2026-05-06] Bajado 4→3 limones/persona/semana.
+    # PDF mostraba 20 limones para 2p×mes (~2.5/persona/sem) y el cap previo
+    # (4×8=32) no se activaba. 3/sem = 12/persona/mes = 24 para 2p — uso
+    # intensivo realista (jugos, marinados, ensaladas). Si un usuario hace
+    # mojo dominicano frecuente y necesita más, el cap se puede subir vía
+    # config de master_ingredients sin tocar este default.
+    _CITRUS_PER_WEEK_PER_PERSON = {
+        'limon':       (3, 60.0),
+        'limones':     (3, 60.0),
+        'lima':        (3, 60.0),
+        'limas':       (3, 60.0),
+        # Naranja para jugo: 3/persona/sem (~½ vaso jugo/día). Naranja
+        # entera de comer es categoría aparte (P6-FRUITS-LARGE-CAP),
+        # pero por safety capeamos también el unit count global.
+        'naranja':   (3, 200.0),
+        'naranjas':  (3, 200.0),
+    }
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if _name_norm not in _CITRUS_PER_WEEK_PER_PERSON:
+            continue
+        _per_week, _density = _CITRUS_PER_WEEK_PER_PERSON[_name_norm]
+        _citrus_cap_units = max(2, int(round(_per_week * _person_weeks)))
+        _citrus_cap_g = _citrus_cap_units * _density
+
+        for _unit_key in ('unidad', 'unidades'):
+            if _unit_key in _units and _units[_unit_key] > _citrus_cap_units:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_citrus_cap_units)
+                logging.warning(
+                    f"[P6-CITRUS-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
+                    f"{_citrus_cap_units} (person_weeks={_person_weeks:.1f}; "
+                    f"~{_per_week}/persona/semana es uso intensivo realista)"
+                )
+        if 'g' in _units and _units['g'] > _citrus_cap_g:
+            _old_g = _units['g']
+            _units['g'] = float(_citrus_cap_g)
+            logging.warning(
+                f"[P6-CITRUS-CAP] '{_name}' peso cap: {_old_g:.0f}g → "
+                f"{_citrus_cap_g:.0f}g (≈{_citrus_cap_units} unidades)"
+            )
+
+    # ============================================================
+    # [P5-VEG-CAP] Cap realista de vegetales perecederos sobre-asignados
+    # ------------------------------------------------------------
+    # Algunos vegetales (cebolla en particular) se acumulan en la lista
+    # mensual a niveles matemáticamente correctos pero realísticamente
+    # excesivos: el LLM puede pedir "1 cebolla picada" en cada comida →
+    # 1 cebolla × 4 comidas/día × 30 días × 2p ≈ 240 cebollas raw, que
+    # tras consolidación llegan a 70+ unidades. PDF 2026-05-05 mostró
+    # "Cebolla: 23 lbs (~70 Uds.)" — coherente con el plan generado pero
+    # 2-3× lo que se compraría realísticamente para almacenar (cebolla
+    # cruda dura 3-4 semanas en clima tropical).
+    #
+    # Cap por person-week con valores realistas de uso semanal por
+    # persona. Aplica al unit count si presente; si hay peso 'g',
+    # también se cap usando density_g_per_unit del master_item.
+    #
+    # Convención conservadora: solo capear ingredientes con consumo
+    # definido. Extender el dict cuando se observen otros casos en
+    # producción (NO un cap blanket por categoría — el riesgo de
+    # under-supply es alto si capeas algo que sí necesita uso intensivo).
+    # ============================================================
+    # Convención: tupla (units/persona/semana, density_g_default).
+    # `density_g_default` se usa cuando master_item no tiene
+    # `density_g_per_unit` (caso común en test sin DB; o ingredientes
+    # nuevos sin curar). Valores reflejan tamaño promedio dominicano.
+    #
+    # [P5-VEG-CAP] cebolla (corrida 2026-05-05 13:11)
+    # [P6-VEG-EXT] papa, plátano maduro, zanahoria, coliflor (PDF 13:33)
+    #   - Papa 44 Uds/mes para 2p → cap 40
+    #   - Plátano maduro 66 Uds/mes para 2p → cap 40 (storage realismo:
+    #     plátano se pasa en 4-7 días, comprar 66 garantiza waste)
+    #   - Zanahoria 35 Uds/mes para 2p → cap 32
+    #   - Coliflor 12 cabezas/mes para 2p → cap 8 (vendida por cabeza,
+    #     el cap loop chequea 'cabeza'/'cabezas' además de 'unidad')
+    # Variantes incluidas para cubrir AMBOS environments:
+    # - Producción: master_map canonicaliza ('Papa blanca' → 'Papa').
+    # - Test sin DB: normalize_name strippa stopwords pero conserva
+    #   forma plural ('Papas blancas' → 'Papas blancas'). El dict
+    #   incluye plurales y formas con adjetivos comunes para no requerir
+    #   master_map en pipelines de prueba.
+    # Densities alineadas con `constants.UNIT_WEIGHTS` (mantener en sync
+    # para que el cap_g produzca el cap_units correcto vía density del
+    # path BLOQUE 2 — divergencia produciría off-by-density-ratio).
+    _VEG_PER_WEEK_PER_PERSON = {
+        # cebolla: 4/persona/sem = sofrito diario + 2 ensaladas/sem.
+        # Para 2p × mes (8 person_weeks): cap 32 cebollas (vs 70 pre-cap).
+        'cebolla':  (4, 110.0),
+        'cebollas': (4, 110.0),
+        # papa: 5/persona/sem = uso intensivo (estofado, sopa, asada).
+        # Density 150g (UNIT_WEIGHTS["papa"]). Para 2p × mes: cap 40
+        # papas (vs 44 PDF; reducción modest pero realista).
+        'papa':           (5, 150.0),
+        'papas':          (5, 150.0),
+        'papa blanca':    (5, 150.0),
+        'papas blancas':  (5, 150.0),
+        # plátano maduro: 5/persona/sem = casi 1/día como acompañamiento.
+        # Density 280g (UNIT_WEIGHTS["platano maduro"]). Storage upper
+        # bound — más de eso garantiza waste por maduración.
+        # Para 2p × mes: cap 40 plátanos (vs 66 PDF; reducción 39%).
+        'platano':           (5, 280.0),
+        'platanos':          (5, 280.0),
+        'platano maduro':    (5, 280.0),
+        'platanos maduros':  (5, 280.0),
+        # zanahoria: 4/persona/sem = ensaladas + sofrito + jugos.
+        # Density 75g (UNIT_WEIGHTS["zanahoria"]). Para 2p × mes:
+        # cap 32 zanahorias (vs 35 PDF; reducción modest).
+        'zanahoria':  (4, 75.0),
+        'zanahorias': (4, 75.0),
+        # coliflor: 1/persona/sem (cabeza ~500g rinde 2 porciones).
+        # Density 500g (UNIT_WEIGHTS["coliflor"]). Para 2p × mes:
+        # cap 8 cabezas (vs 12 PDF; reducción 33%). Storage realismo:
+        # 1 cabeza dura 7-14 días refrigerada — comprar 12 a la vez
+        # garantiza que la mitad se pase antes de consumir.
+        'coliflor':   (1, 500.0),
+        'coliflores': (1, 500.0),
+        # [P6-VEG-EXT-2] auyama, plátano verde, berenjena
+        # PDF 2026-05-05 19:36 ([8b0f351d]):
+        #   - Auyama: 34¾ lbs (~31 Uds.) para 2p×mes = ~15 kg, absurdo
+        #   - Plátano verde: 28 Uds. para 2p×mes = ~3.5/sem/persona
+        #   - Berenjena: 12½ lbs (~19 Uds.) = ~3 berenjenas/sem/persona
+        # Auyama: 1/persona/sem (puré, sopa, ensalada — uso moderado).
+        # Density 1100g (típico DR squash pequeña). Para 2p × mes: cap 8
+        # unidades (~17.6 lbs, vs 31 Uds PDF; reducción 74%).
+        'auyama':  (1, 1100.0),
+        'auyamas': (1, 1100.0),
+        # Plátano verde: 3/persona/sem = mangú/tostones/mofongo 2-3×/sem.
+        # Density 280g (UNIT_WEIGHTS["platano"]). Para 2p × mes: cap 24
+        # plátanos (vs 28 PDF; reducción modest pero realista).
+        'platano verde':    (3, 280.0),
+        'platanos verdes':  (3, 280.0),
+        # Berenjena: 2/persona/sem = parrillada o salteado 2×/sem.
+        # Density 300g (berenjena dominicana mediana). Para 2p × mes:
+        # cap 16 berenjenas (vs 19 PDF; reducción modest).
+        'berenjena':  (2, 300.0),
+        'berenjenas': (2, 300.0),
+        # [P6-VEG-EXT-3] Batata (PDF 2026-05-05 21:12: 51 unidades para
+        # 2p × mes — absurdo). Batata es starchy, uso 2-3×/sem como carbo.
+        # 3/persona/sem = 24 max para 2p × mes (vs 51 PDF; reducción 53%).
+        # Density 200g (batata dominicana mediana, smaller than papa).
+        'batata':  (3, 200.0),
+        'batatas': (3, 200.0),
+        # [P6-VEG-EXT-4] Yuca (PDF 2026-05-05 21:34: 17 unidades para 2p × mes
+        # = ~7 kg de yuca, alto). Yuca es staple del DR como carbo, uso
+        # 2-3×/sem en almuerzo principal. 3/persona/sem = 24 max para
+        # 2p × mes. Density 400g (yuca dominicana mediana — más grande
+        # que papa/batata).
+        'yuca':  (3, 400.0),
+        'yucas': (3, 400.0),
+        # [P6-VEG-EXT-5] Guineo (PDF 2026-05-05 21:50: 56 unidades para
+        # 2p × mes — excesivo, ~7 guineos/sem/persona). Guineo (banana
+        # común DR) se usa típicamente en desayuno o merienda. Distinto a
+        # plátano maduro (cocinable) — guineo NO entra en su entry.
+        # 4/persona/sem = 32 max para 2p × mes (vs 56 PDF; reducción 43%).
+        # Density 120g (guineo DR mediano).
+        'guineo':  (4, 120.0),
+        'guineos': (4, 120.0),
+        # [P6-VEG-EXT-5-FIX] Guineo verde (PDF 2026-05-05 23:12: 168 Uds
+        # para 2p × mes — absurdo, ~21/sem/persona). 'Guineo verde' es
+        # un item distinto a 'Guineo' en master_map (guineo verde para
+        # mangú/sancocho, guineo común para postre/fruta). Sin esta
+        # entry el cap de 'guineo' no captura la variante 'verde' (exact
+        # match, no substring). Density 120g (similar a guineo común).
+        'guineo verde':  (4, 120.0),
+        'guineos verdes': (4, 120.0),
+        # [P6-TOFU-CAP] Tofu (PDF 2026-05-05 23:33: 31 lbs para 2p × mes
+        # = ~14 kg de tofu, absurdo). Tofu es proteína vegana de uso
+        # 2-3×/sem como sustituto de carne. 1 lb/persona/sem = 8 lbs
+        # max para 2p × mes. Density 454g (paquete típico 1 lb).
+        # NOTA: tofu por unidad común es paquete; cap aplica en lbs y g.
+        'tofu':         (1, 454.0),
+        'tofu firme':   (1, 454.0),
+        'tofu suave':   (1, 454.0),
+        # [P6-VEG-EXT-6] Tomate y ñame
+        # PDF 2026-05-05 21:50: Tomate 38 Uds, Ñame 12 Uds.
+        # Tomate: uso constante en sofrito + ensaladas. 5/persona/sem = 40
+        # max para 2p × mes (vs 38 PDF — está al límite, deja margen).
+        # Density 100g (tomate DR mediano).
+        'tomate':  (5, 100.0),
+        'tomates': (5, 100.0),
+        # Ñame: starchy similar a yuca. Uso 1-2×/sem como carbo. 2/persona/sem
+        # = 16 max para 2p × mes. Density 600g (ñame DR es grande, +/-
+        # similar a yuca pero más alargado).
+        'ñame':  (2, 600.0),
+        'ñames': (2, 600.0),
+        'name':  (2, 600.0),  # sin tilde (strip_accents)
+        'names': (2, 600.0),
+        # [P6-VEG-EXT-7] Brócoli (PDF 2026-05-05 22:42: 14 cabezas para
+        # 2p × mes — excesivo). Brócoli se usa 1-2×/sem como acompañante.
+        # 1/persona/sem = 8 cabezas max para 2p × mes. Density 500g
+        # (cabeza DR mediana, similar a coliflor).
+        'brocoli':   (1, 500.0),
+        'brocolis':  (1, 500.0),
+    }
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if _name_norm not in _VEG_PER_WEEK_PER_PERSON:
+            continue
+        _per_week, _default_density = _VEG_PER_WEEK_PER_PERSON[_name_norm]
+        _veg_cap_units = max(2, int(round(_per_week * _person_weeks)))
+
+        # [P6-VEG-EXT] Cap unit count para path BLOQUE 1/4. Incluye
+        # 'cabeza'/'cabezas' para coliflor/repollo/lechugas cuando el
+        # aggregator usa esas unidades nativas.
+        for _unit_key in ('unidad', 'unidades', 'cabeza', 'cabezas'):
+            if _unit_key in _units and _units[_unit_key] > _veg_cap_units:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_veg_cap_units)
+                logging.warning(
+                    f"[P5-VEG-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
+                    f"{_veg_cap_units} (person_weeks={_person_weeks:.1f}; "
+                    f"realismo de almacenamiento + uso semanal por persona)"
+                )
+
+        # Cap por gramos: aplica cuando el aggregator ya convirtió
+        # 'unidad' → 'g' usando density (caso típico en BLOQUE 2).
+        # Density preferida: master_item.density_g_per_unit; fallback al
+        # default del dict (no rompemos cap si DB no está disponible).
+        if 'g' in _units:
+            _master_item = (
+                master_map.get(_name)
+                or master_map.get(_name.lower())
+                or master_map.get(_name.title())
+            )
+            _density = _default_density
+            if _master_item:
+                _master_density = float(_master_item.get('density_g_per_unit') or 0)
+                if _master_density > 0:
+                    _density = _master_density
+            _veg_cap_g = _veg_cap_units * _density
+            if _units['g'] > _veg_cap_g:
+                _old_g = _units['g']
+                _units['g'] = float(_veg_cap_g)
+                logging.warning(
+                    f"[P5-VEG-CAP] '{_name}' peso cap: {_old_g:.0f}g → "
+                    f"{_veg_cap_g:.0f}g (≈{_veg_cap_units} unidades a "
+                    f"{_density:.0f}g c/u)"
+                )
+
+    # ============================================================
+    # [P6-SPICE-CAP] Cap defensivo para especias en sobres
+    # ------------------------------------------------------------
+    # Especias como pimienta y orégano son condimentos de uso CONSTANTE
+    # pero CANTIDAD MÍNIMA por dish (~0.5g). El LLM las menciona como
+    # "1 pizca de pimienta" o "1 sobre" en CADA comida del plan;
+    # aggregator suma raw × multiplier 18.67 (mensual×2p) → 38 sobres
+    # de pimienta. PDF real (2026-05-05 13:33).
+    #
+    # Realmente 1 sobre estándar de 28g de pimienta/orégano dura 2-6
+    # MESES para uso normal. Comprar 38 sobres = ~1 kg = más pimienta
+    # que toda la cocina dominicana junta usa en 6 meses.
+    #
+    # Cap: 1 sobre por cada 4 person-weeks. Conservador para no quedarse
+    # corto si el operador realmente cocina con especia intensiva:
+    #   - 2p mensual (8 pw) → cap 2 sobres (~56g, dura 2-4 meses)
+    #   - 2p quincenal (4 pw) → cap 1 sobre
+    #   - 4p mensual (16 pw) → cap 4 sobres
+    #
+    # Aplica a especias secas comunes en cocina dominicana. Especias que
+    # se usan crudas/frescas (cilantro, perejil) ya están cubiertas por
+    # P3-HERB-CAP en su unidad nativa (mazo).
+    # ============================================================
+    # [P6-SPICE-CAP-FIX-3] Renombrado de set→tuple substring (mismo patrón
+    # que P6-SAUCE-CAP-FIX). Bug observable PDF 2026-05-06 01:11-01:16:
+    # "Canela en polvo: 19 sobres (28g c/u) = 532g" pese a tener 'canela'
+    # y 'canela en polvo' en el set anterior. Causa: master_map / aggregator
+    # canonicaliza con modificadores no anticipados (e.g. "canela en polvo
+    # molida", "canela ceylán", "canela molida fina") → exact match `not in`
+    # falla silenciosamente. Mismo síntoma que "salsa de soya baja en sodio"
+    # documentado en P6-SAUCE-CAP-FIX. Solución: substring match con bases
+    # cortas. Para fresh vs polvo (ajo, cebolla, jengibre, laurel, nuez)
+    # mantenemos frase completa para evitar false-positive en frescos.
+    _SPICE_SUBSTRINGS = (
+        'pimienta',         # cubre negra/blanca/cayena/de jamaica/etc
+        'oregano',          # cubre dominicano/seco/orejón
+        'canela',           # cubre 'en polvo'/molida/ceylán/fina
+        'comino',           # cubre molido/en polvo/entero
+        'paprika',
+        'pimenton',         # `pimentón` normalizado por strip_accents
+        'curcuma',          # `cúrcuma` normalizado
+        'sazon',            # `sazón` normalizado
+        'nuez moscada',     # frase completa (NO 'nuez' → almendras/nueces)
+        'ajo en polvo',     # frase completa (NO 'ajo' → ajo fresco cabeza)
+        'cebolla en polvo', # frase completa (NO 'cebolla' → fresca)
+        'jengibre en polvo',# frase completa (NO 'jengibre' → fresco)
+        'laurel en polvo',  # frase completa (NO 'laurel' → hojas enteras)
+    )
+    _SPICE_SOBRE_GRAMS = 28.0  # sobre estándar dominicano
+
+    _spice_cap_sobres = max(1, int(round(_person_weeks / 4.0)))
+    _spice_cap_g = _spice_cap_sobres * _SPICE_SOBRE_GRAMS
+
+    # [P6-SPICE-CAP-FIX-2] Mismo bug que P6-OLIVE-CAP-FIX-3: el cap solo
+    # cubría `'g'` y substring sobre/s. Bug observable PDF 2026-05-05 21:12:
+    # "Canela en polvo: 19 sobres (28g c/u)" = 532g uncapped. Causa: LLM
+    # emite "1 oz canela" → unit_key 'oz' → no matchea 'sobre' ni 'g'.
+    # Fix: sumar TOTAL de peso (g/kg/oz/lb/ml/l) y capear el total.
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if not any(_s in _name_norm for _s in _SPICE_SUBSTRINGS):
+            continue
+        for _unit_key in ('sobre', 'sobres', 'sobrecito', 'sobrecitos'):
+            if _unit_key in _units and _units[_unit_key] > _spice_cap_sobres:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_spice_cap_sobres)
+                logging.warning(
+                    f"[P6-SPICE-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
+                    f"{_spice_cap_sobres} (person_weeks={_person_weeks:.1f}; "
+                    f"especia dura meses, condimento de cantidad mínima)"
+                )
+        # [P6-SPICE-CAP-FIX-2] Cap por peso TOTAL (cubre LLM emitting 'oz')
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _spice_cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
+            _units['g'] = float(_spice_cap_g)
+            logging.warning(
+                f"[P6-SPICE-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
+                f"(de {_present_units}) → {_spice_cap_g:.0f}g "
+                f"(≈{_spice_cap_sobres} sobres 28g; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+
+    # ============================================================
+    # [P6-SWEETENER-CAP] Cap defensivo para edulcorantes (estevia, sucralosa,
+    # eritritol, etc.)
+    # ------------------------------------------------------------
+    # Edulcorantes son condimentos de uso CONSTANTE pero CANTIDAD MÍNIMA por
+    # porción (~0.1-1g). Una caja de 50g de estevia dura 2-3 MESES en uso
+    # normal. PDF 2026-05-06 17:36 mostró "Estevia: 3 caja (50g c/u)" para
+    # 1 persona × 1 mes — equivale a 6-9 meses de stock.
+    #
+    # Cap: 1 caja de 50g por cada 8 person-weeks. Conservador para usuarios
+    # que realmente endulzan a diario. Trade-off: si alguien hornea con
+    # estevia industrialmente, queda corto — pero ese caso es raro y la
+    # subestimación se nota inmediatamente vs la sobre-compra invisible.
+    #   - 1p × mes (4 pw)        → cap 1 caja (50g, ~2-3 meses stock)
+    #   - 1p × quincenal (2 pw)  → cap 1 caja
+    #   - 2p × mes (8 pw)        → cap 1 caja
+    #   - 4p × mes (16 pw)       → cap 2 cajas
+    #
+    # Aplica a edulcorantes acalóricos comunes en cocina dominicana. Azúcar
+    # tradicional NO entra aquí (es ingrediente real, va en su propio cap).
+    # ============================================================
+    _SWEETENER_SUBSTRINGS = (
+        'estevia',          # `stevia` normalizado por strip_accents
+        'stevia',
+        'sucralosa',
+        'eritritol',
+        'monk fruit',
+        'edulcorante',
+        'splenda',          # marca común
+        'sweet n low',
+        'allulosa',
+    )
+    _SWEETENER_BOX_GRAMS = 50.0  # caja estándar dominicana
+
+    _sweetener_cap_boxes = max(1, int(round(_person_weeks / 8.0)))
+    _sweetener_cap_g = _sweetener_cap_boxes * _SWEETENER_BOX_GRAMS
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if not any(_s in _name_norm for _s in _SWEETENER_SUBSTRINGS):
+            continue
+        # Cap por unit-key (caja/cajas/cajita)
+        for _unit_key in ('caja', 'cajas', 'cajita', 'cajitas'):
+            if _unit_key in _units and _units[_unit_key] > _sweetener_cap_boxes:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_sweetener_cap_boxes)
+                logging.warning(
+                    f"[P6-SWEETENER-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
+                    f"{_sweetener_cap_boxes} (person_weeks={_person_weeks:.1f}; "
+                    f"edulcorante 50g dura meses, uso mínimo por porción)"
+                )
+        # Cap por peso TOTAL (cubre LLM emitting 'g'/'sobre'/'oz')
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _sweetener_cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
+            _units['g'] = float(_sweetener_cap_g)
+            logging.warning(
+                f"[P6-SWEETENER-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
+                f"(de {_present_units}) → {_sweetener_cap_g:.0f}g "
+                f"(≈{_sweetener_cap_boxes} cajas 50g; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+
+    # ============================================================
+    # [P6-SAUCE-CAP] Cap defensivo para salsas/condimentos en lata/frasco
+    # ------------------------------------------------------------
+    # PDF 2026-05-05 21:12: "Salsa de tomate: 11 latas (425g c/u)" = ~4.7 kg
+    # para 2p × mes. Salsa de tomate se usa ~30-50g/dish (sofrito, base
+    # cocina). LLM emite "1 lata salsa" en cada receta → suma raw × 18.67
+    # = 11+ latas. Realmente 1 lata 425g cubre 8-10 platos = >2 semanas.
+    #
+    # Cap: 1 lata por cada 4 person-weeks. Para 2p × mes (8 pw): cap 2 latas
+    # = ~850g (suficiente para uso intensivo ~2-3×/semana). Aplica también
+    # a salsas similares (mayonesa, mostaza, ketchup) que tienen mismo
+    # patrón: condimento de uso ocasional pero LLM las pide en cada plato.
+    # ============================================================
+    # [P6-SAUCE-CAP-FIX] Match por SUBSTRING: PDF 2026-05-05 23:33 mostró
+    # "Salsa de soya baja en sodio: 10 botellas" pese a tener 'salsa de soya'
+    # en el set. Causa: master_map preserva el modificador "baja en sodio"
+    # → exact match falla. Estrategia: si name contiene cualquier substring
+    # del set, capear. Patrón análogo a P6-OLIVE-CAP-FIX (substring).
+    _SAUCE_NAME_SUBSTRINGS = (
+        'salsa de tomate', 'pasta de tomate', 'pure de tomate',
+        'tomato sauce', 'tomato paste',
+        'mayonesa', 'mayonnaise',
+        'mostaza', 'mustard',
+        'ketchup',
+        'salsa inglesa', 'worcestershire',
+        'salsa de soya', 'soy sauce', 'salsa soya',
+    )
+    _SAUCE_LATA_GRAMS = 425.0  # lata estándar dominicana de tomate
+
+    _sauce_cap_latas = max(1, int(round(_person_weeks / 4.0)))
+    _sauce_cap_g = _sauce_cap_latas * _SAUCE_LATA_GRAMS
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if not any(s in _name_norm for s in _SAUCE_NAME_SUBSTRINGS):
+            continue
+        for _unit_key in ('lata', 'latas', 'frasco', 'frascos', 'botella', 'botellas'):
+            if _unit_key in _units and _units[_unit_key] > _sauce_cap_latas:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_sauce_cap_latas)
+                logging.warning(
+                    f"[P6-SAUCE-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
+                    f"{_sauce_cap_latas} (person_weeks={_person_weeks:.1f}; "
+                    f"salsas/condimentos de uso ocasional)"
+                )
+        # Cap por peso TOTAL (cubre 'g'/'oz'/'lb'/'kg'/'ml'/'l'). Mismo
+        # patrón que P6-OLIVE-CAP-FIX-3: LLM puede emitir "X oz salsa".
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _sauce_cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
+            _units['g'] = float(_sauce_cap_g)
+            logging.warning(
+                f"[P6-SAUCE-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
+                f"(de {_present_units}) → {_sauce_cap_g:.0f}g "
+                f"(≈{_sauce_cap_latas} latas 425g; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+
+    # ============================================================
+    # [P6-CARBS-CAP] Cap defensivo para carbos packageados (tortillas, pan)
+    # ------------------------------------------------------------
+    # PDF 2026-05-05 22:42: "Tortilla integral: 7 paquetes (288g c/u)" =
+    # ~2 kg tortillas para 2p × mes — excesivo. Tortillas se usan como
+    # vehículo (wrap, burrito) ~2-3×/sem como sustituto de pan.
+    # Pan integral típicamente 1 paquete dura ~1 sem para 2p (depende del
+    # tamaño). Cap: 1 paquete por 2 person-weeks = 4 paquetes para 2p × mes.
+    # ============================================================
+    _CARBS_PACKAGE_NAMES_FOR_CAP = {
+        'tortilla integral', 'tortillas integrales',
+        'tortilla de trigo', 'tortillas de trigo',
+        'tortilla de maiz', 'tortillas de maiz',  # strip_accents normalizado
+        'pan integral', 'pan de molde', 'pan multigrano',
+        'pan de centeno', 'pan blanco', 'pan',
+        'pan pita', 'pita integral',
+        # [P6-CARBS-CAP-CRACKERS 2026-05-06] Visto en PDF: 9¼ lbs galletas
+        # de soda para 2p × mes (~4 lbs/persona) — absurdo. Se usan como
+        # snack ligero, no como base. Mismo cap que pan.
+        'galletas', 'galletas de soda', 'galletas saladas',
+        'galletas integrales', 'crackers',
+    }
+    _CARBS_PACKAGE_GRAMS = 300.0  # paquete estándar (~10-12 piezas)
+
+    _carbs_cap_packages = max(1, int(round(_person_weeks / 2.0)))
+    _carbs_cap_g = _carbs_cap_packages * _CARBS_PACKAGE_GRAMS
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if _name_norm not in _CARBS_PACKAGE_NAMES_FOR_CAP:
+            continue
+        for _unit_key in ('paquete', 'paquetes', 'bolsa', 'bolsas'):
+            if _unit_key in _units and _units[_unit_key] > _carbs_cap_packages:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_carbs_cap_packages)
+                logging.warning(
+                    f"[P6-CARBS-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
+                    f"{_carbs_cap_packages} (person_weeks={_person_weeks:.1f}; "
+                    f"carbos packageados con shelf-life moderada)"
+                )
+        # Cap por peso TOTAL (cubre 'g'/'oz'/'lb'/'kg' del LLM).
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _carbs_cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
+            _units['g'] = float(_carbs_cap_g)
+            logging.warning(
+                f"[P6-CARBS-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
+                f"(de {_present_units}) → {_carbs_cap_g:.0f}g "
+                f"(≈{_carbs_cap_packages} paquetes 300g; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+
+    # ============================================================
+    # [P6-LEGUMES-DRY-CAP] Cap defensivo para legumbres secas (paquetes 1lb)
+    # ------------------------------------------------------------
+    # PDF 2026-05-06 03:14: "Habichuelas rojas: 6 paquetes (1 lb c/u)" para
+    # 2p × mes — 3 lbs/persona/mes es alto. Las legumbres secas no se
+    # arruinan (duran años en despensa) pero el LLM tiende a pedirlas como
+    # proteína vegetal en múltiples comidas → se acumulan al ×18.66 del
+    # eff_mult mensual sin cap.
+    #
+    # Uso típico: legumbres como base proteica 2-3×/semana (1 plato familiar
+    # rinde ~300-400g cocidos = ~120-150g secos por persona). Para 2p:
+    #   - 1 paquete 1lb (453g) rinde ~1.5kg cocidas → 4-5 platos para 2p.
+    #   - Cap razonable: 1 paquete por 2 person-weeks.
+    # Para 2p × mes (8 person-weeks): cap 4 paquetes (vs 6 PDF; reducción 33%).
+    # ============================================================
+    # Substrings (no equality) porque el LLM emite "habichuelas rojas secas",
+    # "frijoles negros cocidos", "lentejas rojas peladas", etc. Substring match
+    # es más robusto que equality contra cada combinación. Los modificadores
+    # ('secas','cocidas','peladas','rojas','negras', etc.) no cambian el cap:
+    # legumbres → 1 paquete/2p×sem indistintamente.
+    _LEGUMES_DRY_SUBSTRINGS_FOR_CAP = (
+        'habichuela',   # habichuelas rojas/blancas/negras/pintas
+        'frijol',       # frijoles rojos/negros/blancos
+        'gandules',
+        'lentejas',
+        'garbanzos',
+    )
+    _LEGUMES_PACKAGE_GRAMS = 453.592  # 1 lb estándar mercado dominicano
+
+    _legumes_cap_packages = max(1, int(round(_person_weeks / 2.0)))
+    _legumes_cap_g = _legumes_cap_packages * _LEGUMES_PACKAGE_GRAMS
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if not any(sub in _name_norm for sub in _LEGUMES_DRY_SUBSTRINGS_FOR_CAP):
+            continue
+        for _unit_key in ('paquete', 'paquetes', 'bolsa', 'bolsas', 'lata', 'latas'):
+            if _unit_key in _units and _units[_unit_key] > _legumes_cap_packages:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_legumes_cap_packages)
+                logging.warning(
+                    f"[P6-LEGUMES-DRY-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
+                    f"{_legumes_cap_packages} (person_weeks={_person_weeks:.1f}; "
+                    f"~1 paquete cocido rinde 4-5 platos para 2p)"
+                )
+        # Cap por peso TOTAL (cubre 'g'/'oz'/'lb'/'kg' del LLM).
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _legumes_cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
+            _units['g'] = float(_legumes_cap_g)
+            logging.warning(
+                f"[P6-LEGUMES-DRY-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
+                f"(de {_present_units}) → {_legumes_cap_g:.0f}g "
+                f"(≈{_legumes_cap_packages} paquetes 1lb; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+
+    # ============================================================
+    # [P6-CANNED-PROTEIN-CAP] Cap defensivo para proteínas en lata
+    # ------------------------------------------------------------
+    # PDF 2026-05-05 22:42: "Atún en agua: 19 latas (184g c/u)" = ~3.5 kg
+    # de atún para 2p × mes. Atún en lata se conserva mucho pero el LLM
+    # tiende a pedirlo en cada comida proteica como fallback fácil.
+    # 19 latas = ~3 latas/sem/persona — alto.
+    # Cap: 1 lata / persona / semana = 8 latas para 2p × mes.
+    # ============================================================
+    _CANNED_PROTEIN_NAMES_FOR_CAP = {
+        'atun', 'atun en agua', 'atun en aceite',  # strip_accents
+        'sardinas', 'sardina',
+        'salmon en lata', 'salmon enlatado',
+        'pollo en lata', 'pollo enlatado',
+    }
+    _CANNED_PROTEIN_GRAMS = 184.0  # lata estándar atún
+
+    _canned_cap_latas = max(2, int(round(_person_weeks)))
+    _canned_cap_g = _canned_cap_latas * _CANNED_PROTEIN_GRAMS
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if _name_norm not in _CANNED_PROTEIN_NAMES_FOR_CAP:
+            continue
+        for _unit_key in ('lata', 'latas'):
+            if _unit_key in _units and _units[_unit_key] > _canned_cap_latas:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_canned_cap_latas)
+                logging.warning(
+                    f"[P6-CANNED-PROTEIN-CAP] '{_name}' {_unit_key} cap: {_old:.0f} → "
+                    f"{_canned_cap_latas} (person_weeks={_person_weeks:.1f}; "
+                    f"~1 lata/persona/sem es uso intensivo realista)"
+                )
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _canned_cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
+            _units['g'] = float(_canned_cap_g)
+            logging.warning(
+                f"[P6-CANNED-PROTEIN-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
+                f"(de {_present_units}) → {_canned_cap_g:.0f}g "
+                f"(≈{_canned_cap_latas} latas 184g; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+
+    # ============================================================
+    # [P6-EGGS-AGGREGATE-CAP] Cap defensivo para huevos en lista de compras
+    # ------------------------------------------------------------
+    # P6-EGGS-CAP (en day_generator prompt) reduce las RECETAS a
+    # ~3 enteros + ~6 claras por día. El reviewer médico acepta esto
+    # porque mide RECETAS, no shopping list.
+    #
+    # PERO el aggregator suma claras + enteros como huevos comprables
+    # (1 clara = 1 huevo, hay que comprar el huevo entero para sacar la
+    # clara). Resultado real (PDF 2026-05-05 14:35): 5 enteros + 10.5
+    # claras = 15.5 huevos / 3 días × multiplier 18.67 → 290 huevos
+    # → 11 cartones para 2p × mes. ~5.5 huevos/persona/día = visualmente
+    # excesivo aunque las recetas estén dentro del cap del reviewer.
+    #
+    # Realismo de uso: la mayoría de usuarios NO descarta yemas — cuando
+    # compran 4 huevos para usar 4 claras, las 4 yemas se incorporan en
+    # otras comidas (revoltillo, mayonesa, repostería). Comprar 11
+    # cartones para usar 8 reales = ~$300 RD$ desperdiciados.
+    #
+    # Cap: derivado del knob `MEALFIT_EGGS_PER_PERSON_PER_DAY` (default 2).
+    # Antes el cap era `max(2, round(person_weeks))` cartones, fórmula que
+    # daba ~4 huevos/persona/día (2p mensual = 8 cartones = 240 huevos).
+    # Reportado por usuario 2026-05-06: para 1p × mes generaba 4 cartones
+    # (120 huevos = 4/día/persona) — alto aún para `gain_muscle`.
+    # Nuevo cap (default 2/día/persona):
+    #   - 1p mensual  (4 pw) → 2 × 4 × 7 = 56 huevos → 2 cartones
+    #   - 2p mensual  (8 pw) → 2 × 8 × 7 = 112 huevos → 4 cartones
+    #   - 2p semanal  (2 pw) → 2 × 2 × 7 = 28 huevos → 1 cartón (clamp a 2 mín)
+    # Si el caso de uso es body-builder pesado: `MEALFIT_EGGS_PER_PERSON_PER_DAY=4`
+    # restaura el comportamiento anterior. Knob facilita reversión sin redeploy.
+    # ============================================================
+    _EGGS_NAMES_FOR_CAP = {'huevo', 'huevos'}
+    _EGG_DENSITY_G = 50.0  # UNIT_WEIGHTS["huevo"]
+    _HUEVOS_PER_CARTON = 30
+    _EGGS_PER_PERSON_PER_DAY = max(0.5, float(os.environ.get(
+        "MEALFIT_EGGS_PER_PERSON_PER_DAY", "2.0"
+    )))
+
+    _eggs_cap_units = max(
+        _HUEVOS_PER_CARTON,  # mínimo 1 cartón aunque pw sea bajo
+        int(round(_EGGS_PER_PERSON_PER_DAY * _person_weeks * 7.0)),
+    )
+    _eggs_cap_cartones = max(2, math.ceil(_eggs_cap_units / _HUEVOS_PER_CARTON))
+    _eggs_cap_g = _eggs_cap_units * _EGG_DENSITY_G
+
+    for _name, _units in list(aggregated.items()):
+        if strip_accents(_name.lower()).strip() not in _EGGS_NAMES_FOR_CAP:
+            continue
+        # [P6-EGGS-AGGREGATE-CAP-FIX] Splits unidades vs cartones porque
+        # tienen DIFERENTES thresholds. Bug previo (PDF 2026-05-05 15:34
+        # mostró 22 cartones uncapped): el loop comparaba 'cartón' value
+        # contra el threshold-de-unidades (240). Para `units['cartón']=22`,
+        # el chequeo `22 > 240` era False → no cap. Resultado: 22 cartones
+        # × 30 = 660 huevos llegaban al usuario.
+        #
+        # Ahora 2 loops separados con threshold correcto en cada unidad.
+        for _unit_key in ('unidad', 'unidades'):
+            if _unit_key in _units and _units[_unit_key] > _eggs_cap_units:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_eggs_cap_units)
+                logging.warning(
+                    f"[P6-EGGS-AGGREGATE-CAP] '{_name}' {_unit_key} cap: "
+                    f"{_old:.0f} → {_eggs_cap_units} (≈{_eggs_cap_cartones} "
+                    f"cartones × {_HUEVOS_PER_CARTON} huevos; "
+                    f"person_weeks={_person_weeks:.1f}; cap previene "
+                    f"sobre-compra de claras + enteros sumados)"
+                )
+        # [P6-EGGS-AGGREGATE-CAP-FIX-2] Cartón keys con suffix de tamaño.
+        # El bloque huevo-específico (línea ~2021) crea keys con sufijo:
+        # 'cartón (30 uds.)', 'cartón (6 uds.)', 'medio cartón (15 uds.)'.
+        # Antes mi cap solo matched ('cartón','carton','cartones') exactos
+        # → no detectaba estos keys con suffix. Resultado: PDF mostraba
+        # 22 cartones uncapped en corrida 2026-05-05 15:34.
+        # Ahora detectamos cualquier key con 'cartón'/'carton' substring
+        # y parseamos el tamaño del suffix '(N uds.)' para calcular cap
+        # equivalente (8 cartones × 30 huevos = 240; pero 16 medios × 15
+        # huevos = 240 también).
+        for _unit_key in list(_units.keys()):
+            if not isinstance(_unit_key, str):
+                continue
+            k_lower = _unit_key.lower()
+            if 'cartón' not in k_lower and 'carton' not in k_lower:
+                continue
+            # Extract huevos-per-unit del suffix si está presente
+            _suffix_match = re.search(r'\((\d+)\s*uds?\.?\)', k_lower)
+            _huevos_per_unit = int(_suffix_match.group(1)) if _suffix_match else _HUEVOS_PER_CARTON
+            _cap_for_this_size = max(1, math.ceil(_eggs_cap_units / _huevos_per_unit))
+            if _units[_unit_key] > _cap_for_this_size:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_cap_for_this_size)
+                logging.warning(
+                    f"[P6-EGGS-AGGREGATE-CAP] '{_name}' {_unit_key!r} cap: "
+                    f"{_old:.0f} → {_cap_for_this_size} (≈{_eggs_cap_units} "
+                    f"huevos / {_huevos_per_unit} huevos por unit; "
+                    f"person_weeks={_person_weeks:.1f})"
+                )
+        # Cap por gramos: si el aggregator convirtió 'unidad' → 'g' via
+        # density (BLOQUE 2), también capear ahí. 50g/huevo es estándar.
+        if 'g' in _units and _units['g'] > _eggs_cap_g:
+            _old_g = _units['g']
+            _units['g'] = float(_eggs_cap_g)
+            logging.warning(
+                f"[P6-EGGS-AGGREGATE-CAP] '{_name}' peso cap: {_old_g:.0f}g "
+                f"→ {_eggs_cap_g:.0f}g (≈{_eggs_cap_cartones} cartones)"
+            )
+
+    # ============================================================
+    # [P6-FRUITS-LARGE-CAP] Cap defensivo para frutas grandes
+    # ------------------------------------------------------------
+    # Frutas grandes (melón, sandía, piña, lechosa, papaya) producen
+    # múltiples servings por unidad PERO no se almacenan más de
+    # 5-7 días refrigeradas enteras. PDF real (2026-05-05 15:09):
+    # 24 melones para 2p × mes = 35 kg de melón = ~80% se descompone
+    # antes de consumir.
+    #
+    # Causa: aggregator suma "1 taza de melón en cubos" × N comidas
+    # × multiplier 18.67 sin entender que cada melón rinde 6-8 tazas.
+    #
+    # Cap por persona-semana (calibrado por densidad/rendimiento típico):
+    #   - melón ~1.2kg → 6-8 servings → 1/persona/sem
+    #   - sandía ~3kg → 15-20 servings → 0.5/persona/sem (más rendimiento)
+    #   - piña ~1.5kg → 8-10 servings → 1/persona/sem
+    #   - lechosa/papaya ~800g → 4-5 servings → 1/persona/sem
+    #
+    # Para 2p × mes (8 person_weeks):
+    #   - melón: 8 unidades (vs 24 PDF; reducción 67%)
+    #   - sandía: 4 unidades
+    #   - piña/lechosa: 8 unidades
+    # ============================================================
+    _FRUITS_LARGE_PER_WEEK_PER_PERSON = {
+        # melón: 1/persona/sem. UNIT_WEIGHTS["melon"]=1200g.
+        'melon':   (1, 1200.0),
+        'melones': (1, 1200.0),
+        # sandía: 0.5/persona/sem (rinde 15-20 servings).
+        # UNIT_WEIGHTS["sandia"]=3000g.
+        'sandia':  (0.5, 3000.0),
+        'sandias': (0.5, 3000.0),
+        # piña: 1/persona/sem. UNIT_WEIGHTS["pina"]=1500g.
+        'pina':    (1, 1500.0),
+        'pinas':   (1, 1500.0),
+        # lechosa/papaya: 1/persona/sem. UNIT_WEIGHTS["lechosa"]=800g.
+        'lechosa': (1, 800.0),
+        'lechosas': (1, 800.0),
+        'papaya':  (1, 800.0),
+        'papayas': (1, 800.0),
+    }
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if _name_norm not in _FRUITS_LARGE_PER_WEEK_PER_PERSON:
+            continue
+        _per_week, _default_density = _FRUITS_LARGE_PER_WEEK_PER_PERSON[_name_norm]
+        _fruit_cap_units = max(2, int(round(_per_week * _person_weeks)))
+
+        # Cap unit count
+        for _unit_key in ('unidad', 'unidades'):
+            if _unit_key in _units and _units[_unit_key] > _fruit_cap_units:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_fruit_cap_units)
+                logging.warning(
+                    f"[P6-FRUITS-LARGE-CAP] '{_name}' {_unit_key} cap: "
+                    f"{_old:.1f} → {_fruit_cap_units} "
+                    f"(person_weeks={_person_weeks:.1f}; storage realismo: "
+                    f"frutas grandes duran 5-7 días refrigeradas enteras)"
+                )
+
+        # Cap por gramos: aplica si el aggregator convirtió 'unidad' → 'g'
+        if 'g' in _units:
+            _master_item = (
+                master_map.get(_name)
+                or master_map.get(_name.lower())
+                or master_map.get(_name.title())
+            )
+            _density = _default_density
+            if _master_item:
+                _master_density = float(_master_item.get('density_g_per_unit') or 0)
+                if _master_density > 0:
+                    _density = _master_density
+            _fruit_cap_g = _fruit_cap_units * _density
+            if _units['g'] > _fruit_cap_g:
+                _old_g = _units['g']
+                _units['g'] = float(_fruit_cap_g)
+                logging.warning(
+                    f"[P6-FRUITS-LARGE-CAP] '{_name}' peso cap: {_old_g:.0f}g "
+                    f"→ {_fruit_cap_g:.0f}g (≈{_fruit_cap_units} unidades a "
+                    f"{_density:.0f}g c/u)"
+                )
+
+    # ============================================================
+    # [P6-FRUITS-PERISHABLE-CAP] Cap defensivo para frutas perecederas
+    # vendidas por LIBRAS (fresas, arándanos, moras, frambuesas).
+    # ------------------------------------------------------------
+    # A diferencia de las frutas grandes (melón, sandía) que se compran
+    # por unidad, estas se compran por libras/paquetes y son extremadamente
+    # perecederas (3-5 días refrigeradas).
+    #
+    # PDF real (2026-05-05 15:34): "Fresas: 25 paquetes (1 lb c/u)" para
+    # 2p × mes = 25 lbs ≈ 11 kg. Comprar 11kg de fresa de una vez =
+    # ~80% se descompone antes de consumir. Mismo modo de fallo que melón
+    # pre-cap pero diferente unidad de compra.
+    #
+    # Cap por LIBRAS (no por unidades):
+    #   - fresa: 1 lb/persona/sem (ej. smoothie diario ~64g/persona)
+    #   - arándanos/moras/frambuesas: 0.5 lb/persona/sem (más caras, menor volumen)
+    #
+    # Para 2p × mes (8 person_weeks):
+    #   - fresa cap: 8 lbs (vs 25 PDF; reducción 68%)
+    #   - berries: 4 lbs
+    # ============================================================
+    _FRUITS_PERISHABLE_LBS_PER_WEEK_PER_PERSON = {
+        'fresa':  1.0,
+        'fresas': 1.0,
+        'arandano':  0.5,  # blueberries
+        'arandanos': 0.5,
+        'mora':  0.5,      # blackberries
+        'moras': 0.5,
+        'frambuesa':  0.5,  # raspberries
+        'frambuesas': 0.5,
+    }
+    _LB_TO_G = 453.592
+    _PAQUETE_LB_DEFAULT = 1.0  # 1 paquete estándar = 1 lb en RD
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if _name_norm not in _FRUITS_PERISHABLE_LBS_PER_WEEK_PER_PERSON:
+            continue
+        _per_week_lbs = _FRUITS_PERISHABLE_LBS_PER_WEEK_PER_PERSON[_name_norm]
+        _cap_lbs = max(1.0, float(round(_per_week_lbs * _person_weeks)))
+        _cap_g = _cap_lbs * _LB_TO_G
+
+        # Cap por gramos (path principal del aggregator después de
+        # convertir lbs/oz a g en el main loop downstream)
+        if 'g' in _units and _units['g'] > _cap_g:
+            _old_g = _units['g']
+            _units['g'] = float(_cap_g)
+            logging.warning(
+                f"[P6-FRUITS-PERISHABLE-CAP] '{_name}' peso cap: {_old_g:.0f}g "
+                f"→ {_cap_g:.0f}g (≈{_cap_lbs:.0f} lbs; "
+                f"person_weeks={_person_weeks:.1f}; storage realismo: "
+                f"frutas perecederas duran 3-5 días)"
+            )
+        # Cap por libras (si LLM emitió "X lb de fresas")
+        for _unit_key in ('lb', 'lbs', 'libra', 'libras'):
+            if _unit_key in _units and _units[_unit_key] > _cap_lbs:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_cap_lbs)
+                logging.warning(
+                    f"[P6-FRUITS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
+                    f"{_old:.1f} → {_cap_lbs:.0f} lbs"
+                )
+        # Cap por paquetes (1 paquete = 1 lb estándar dominicano)
+        for _unit_key in ('paquete', 'paquetes'):
+            if _unit_key in _units and _units[_unit_key] > _cap_lbs:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_cap_lbs)
+                logging.warning(
+                    f"[P6-FRUITS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
+                    f"{_old:.0f} → {_cap_lbs:.0f} paquetes (1 paq ≈ 1 lb)"
+                )
+
+    # ============================================================
+    # [P6-LACTEOS-PERISHABLE-CAP] Cap defensivo para lácteos perecederos
+    # ------------------------------------------------------------
+    # Yogurt y otros lácteos abiertos duran ~14 días refrigerados.
+    # PDF real (2026-05-05 18:33): "Yogurt griego sin azúcar: 21 potes
+    # (16 oz c/u)" para 2p × mes = 9.5 kg. Logísticamente:
+    #   - 21 potes no caben en una nevera promedio
+    #   - Los últimos potes se acercan al límite de caducidad (28+ días)
+    #   - Realistic shopping pattern: re-stock semanal o quincenal
+    #
+    # Cap: 1.5 lb/persona/sem (≈1 pote 16oz cada 5 días).
+    #   - 2p mensual (8 pw) → 12 lbs ≈ 12 potes (vs 21 PDF; reducción 43%)
+    #   - 2p quincenal (4 pw) → 6 lbs ≈ 6 potes
+    #   - 2p semanal (2 pw) → 3 lbs ≈ 3 potes
+    #
+    # Match por substring para cubrir variantes ('yogurt griego sin azúcar',
+    # 'yogur natural', 'yogurt griego', etc.) sin enumerar manualmente.
+    # ============================================================
+    _LACTEOS_PERISHABLE_LBS_PER_WEEK_PER_PERSON = {
+        'yogurt': 1.5,
+        'yogur': 1.5,  # variante sin 't' final
+        # [P6-LACTEOS-EXT] Queso ricotta (PDF 2026-05-05 21:50: 6 potes
+        # 425g c/u = 2.55 kg). Ricotta es lácteo perecedero similar a
+        # yogurt: dura 7-14 días refrigerado tras abrir. Uso típico
+        # ~50-100g por dish (relleno, postre, ensalada). 1 lb/persona/sem
+        # = uso intensivo (~daily). Para 2p × mes: cap 8 lbs ≈ 8 potes
+        # 16oz (vs 6 potes 425g = ~5.6 lbs PDF — está bajo cap, pero
+        # entry previene escalada en futuras corridas).
+        'ricotta': 1.0,
+        # Cottage cheese: similar a ricotta en uso/perishability.
+        'cottage': 1.0,
+        # [P6-LACTEOS-EXT-2] Queso mozzarella (PDF 2026-05-05 22:42:
+        # 5 paquetes 1lb = 5 lbs para 2p × mes). Mozzarella es lácteo
+        # perecedero similar a ricotta — abierto dura ~7-14 días.
+        # 0.5 lb/persona/sem = uso moderado. Para 2p × mes: cap 4 lbs.
+        'mozzarella': 0.5,
+        # [P6-LACTEOS-EXT-3] Queso blanco / queso fresco (PDF 2026-05-05
+        # 23:12: 9 paquetes 1lb = 9 lbs para 2p × mes — excesivo).
+        # Queso blanco (estilo cottage DR) se usa más que mozzarella
+        # como acompañante (con casabe, en desayuno, en arepa).
+        # 0.75 lb/persona/sem = uso intensivo. Para 2p × mes: cap 6 lbs.
+        'queso blanco': 0.75,
+        'queso fresco': 0.75,
+    }
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        _matched_key = next(
+            (k for k in _LACTEOS_PERISHABLE_LBS_PER_WEEK_PER_PERSON if k in _name_norm),
+            None,
+        )
+        if not _matched_key:
+            continue
+        _per_week_lbs = _LACTEOS_PERISHABLE_LBS_PER_WEEK_PER_PERSON[_matched_key]
+        _cap_lbs = max(1.0, float(round(_per_week_lbs * _person_weeks)))
+        _cap_g = _cap_lbs * 453.592
+
+        if 'g' in _units and _units['g'] > _cap_g:
+            _old_g = _units['g']
+            _units['g'] = float(_cap_g)
+            logging.warning(
+                f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' peso cap: {_old_g:.0f}g "
+                f"→ {_cap_g:.0f}g (≈{_cap_lbs:.0f} lbs / potes; "
+                f"person_weeks={_person_weeks:.1f}; storage realismo: "
+                f"yogurt dura ~14 días refrigerado)"
+            )
+        for _unit_key in ('lb', 'lbs', 'libra', 'libras'):
+            if _unit_key in _units and _units[_unit_key] > _cap_lbs:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_cap_lbs)
+                logging.warning(
+                    f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
+                    f"{_old:.1f} → {_cap_lbs:.0f} lbs"
+                )
+        for _unit_key in ('pote', 'potes'):
+            if _unit_key in _units and _units[_unit_key] > _cap_lbs:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_cap_lbs)
+                logging.warning(
+                    f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
+                    f"{_old:.0f} → {_cap_lbs:.0f} potes (1 pote ≈ 16oz/1 lb)"
+                )
+
+    # ============================================================
+    # [P6-BROTHS-CAP] Cap defensivo para caldos / stocks
+    # ------------------------------------------------------------
+    # Caldos se usan como saborizante (cubitos 8-10g, líquido 1L cartón).
+    # PDF real (2026-05-05 18:33): "Caldo de vegetales: 3 lbs" para 2p ×
+    # mes = ~45g/día = 5+ cubitos/día. Excesivo (1-2 cubitos/día/2p es
+    # uso normal). Format en libras también es weird (caldo es líquido o
+    # cubitos, no lbs literales).
+    #
+    # Causa: aggregator suma "1 cda de caldo" × N comidas × multiplier
+    # como peso seco. Realmente caldo concentrado: 1 cubito (10g) por
+    # receta; o líquido pre-hecho (1L cartón) usado en sopas/guisos.
+    #
+    # Cap: 0.125 lb/persona/sem (~57g/sem = 5-6 cubitos).
+    #   - 2p mensual (8 pw) → 1 lb ≈ 50 cubitos = 1.5 cubitos/día/2p
+    #   - 2p quincenal (4 pw) → 0.5 lb (mín)
+    #   - 2p semanal (2 pw) → 0.5 lb (mín)
+    # Match substring para caldos de vegetales/pollo/res/hueso/marisco.
+    # ============================================================
+    _BROTHS_LBS_PER_WEEK_PER_PERSON = {
+        'caldo': 0.125,
+    }
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        _matched_key = next(
+            (k for k in _BROTHS_LBS_PER_WEEK_PER_PERSON if k in _name_norm),
+            None,
+        )
+        if not _matched_key:
+            continue
+        _per_week_lbs = _BROTHS_LBS_PER_WEEK_PER_PERSON[_matched_key]
+        # Cap a 0.5 lb mínimo para que el operador siempre tenga al
+        # menos 1 cartón/sobre. Round to nearest 0.5 lb para shopping
+        # realismo (caldo se vende en aproximaciones medias).
+        _cap_lbs = max(0.5, float(round(_per_week_lbs * _person_weeks * 2) / 2))
+        _cap_g = _cap_lbs * 453.592
+
+        if 'g' in _units and _units['g'] > _cap_g:
+            _old_g = _units['g']
+            _units['g'] = float(_cap_g)
+            logging.warning(
+                f"[P6-BROTHS-CAP] '{_name}' peso cap: {_old_g:.0f}g → "
+                f"{_cap_g:.0f}g (≈{_cap_lbs:.1f} lbs ≈ "
+                f"{int(_cap_g / 10)} cubitos de 10g; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+        for _unit_key in ('lb', 'lbs', 'libra', 'libras'):
+            if _unit_key in _units and _units[_unit_key] > _cap_lbs:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_cap_lbs)
+                logging.warning(
+                    f"[P6-BROTHS-CAP] '{_name}' {_unit_key} cap: "
+                    f"{_old:.1f} → {_cap_lbs:.1f} lbs"
+                )
+
     for name, units in aggregated.items():
         master_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title()) or {}
-        
+
         # Evitar líquidos comunes/ilimitados en casa
-        from constants import strip_accents
-        if strip_accents(name.lower()) in IGNORE_SHOPPING:
+        if _should_ignore_shopping(name):
             continue
             
         weight_in_lbs = 0.0
@@ -1325,7 +3872,30 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             weight_in_lbs += (units['l'] * 1000) / 453.592
             has_weight = True
             del units['l']
-            
+
+        # [P0-11] Clamp defensivo: si `consumed > plan` en peso (todas las
+        # unidades de peso suman a un net negativo), `weight_in_lbs` queda
+        # negativo. La línea `if weight_in_lbs > 0.0001` más abajo evita que
+        # se agregue una entrada por peso (correcto), PERO el for sobre
+        # `units` que sigue puede agregar una entrada residual por unidad
+        # ("1 Ud.") aunque el peso planificado ya esté cubierto al 100%
+        # por el consumed. Resultado: "fantasma" en la lista de compras
+        # del usuario.
+        #
+        # Fix: clampear a 0 y vaciar `units`. La consumed cubrió todo el
+        # aporte planificado para este ingrediente — no hay nada que
+        # comprar. Si el LLM expresó el mismo aporte como peso + unidad
+        # (caso clásico: "1 cebolla mediana" + "200g cebolla"), ambas
+        # representaciones quedan suprimidas simétricamente.
+        if has_weight and weight_in_lbs < 0:
+            logging.info(
+                f"[P0-11/CLAMP] {name}: weight_in_lbs={weight_in_lbs:.4f} "
+                f"(consumed cubrió/excedió plan). Clamp a 0 + reset units "
+                f"residuales={list(units.keys())} para evitar entrada fantasma."
+            )
+            weight_in_lbs = 0.0
+            units = {}
+
         added = False
         
         # DEDUP: Si el ingrediente tiene cantidades reales (peso ó unidades concretas),
@@ -1358,12 +3928,18 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 market_obj["category"] = cat
                 market_obj["display_category"] = display_cat
                 market_obj["is_staple"] = False
+                # [P1-PDF-2] Cierra el drift de la heurística substring que vivía
+                # SOLO en frontend. Backend es ahora SSOT para perishable
+                # classification; el frontend lee este flag directo.
+                market_obj["is_perishable"] = is_perishable_category(
+                    cat, market_obj.get("shelf_life_days")
+                )
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
                 categorized_results[display_cat].append(item_val)
                 added = True
-                
+
         for u, q in list(units.items()):
             # Saltar entradas nominales
             if u in nominal_units:
@@ -1383,6 +3959,12 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 market_obj["category"] = cat
                 market_obj["display_category"] = display_cat
                 market_obj["is_staple"] = False
+                # [P1-PDF-2] Mismo flag que arriba — todo item entrando a
+                # `aggregated_shopping_list` debe tener `is_perishable` para que
+                # el frontend nunca caiga al fallback de substring matching.
+                market_obj["is_perishable"] = is_perishable_category(
+                    cat, market_obj.get("shelf_life_days")
+                )
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
@@ -1411,8 +3993,101 @@ def aggregate_shopping_list(ingredients_list: list[str]) -> list[str]:
 def get_aggregated_shopping_list_for_plan(plan_result: dict) -> list[str]:
     return get_realtime_pantry(plan_result, [])
 
-def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool = False, categorize: bool = False, structured: bool = False, multiplier: float = 1.0):
-    """Calcula el verdadero Delta: Ingredientes Totales del Plan - Inventario Físico Actual - (Opcional) Consumidos."""
+def fetch_inventory_and_consumed_for_plan(user_id: str, plan_result: dict, is_new_plan: bool = False) -> tuple:
+    """[P1-5] Fetch one-shot del inventario físico + consumidos para un plan.
+
+    Devuelve `(physical_inventory, consumed_ingredients)` listo para pasar
+    como overrides a `get_shopping_list_delta`. Cuando un caller necesita
+    invocar el delta con N multiplicidades distintas (1.0, 2.0, 4.0 para
+    weekly/biweekly/monthly), debe llamar este helper UNA vez y pasar el
+    resultado vía `inventory_override` + `consumed_override`. Esto evita
+    que las queries a `user_inventory` (Realtime channel) y
+    `consumed_meals` cambien entre las N llamadas y produzcan deltas
+    inconsistentes.
+
+    Para `user_id=None`/`"guest"`, retorna `([], [])`.
+    """
+    physical_inventory: list = []
+    consumed_ingredients: list = []
+
+    if not user_id or user_id == "guest":
+        return physical_inventory, consumed_ingredients
+
+    try:
+        from db_inventory import get_raw_user_inventory
+        from datetime import datetime
+        raw_inventory = get_raw_user_inventory(user_id)
+        if raw_inventory:
+            master_list = get_master_ingredients()
+            master_map = {m["name"]: m for m in master_list}
+            PANTRY_STAPLES = {
+                'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco',
+                'Aceite de sésamo o maní', 'Salsa de soya', 'Orégano',
+                'Canela', 'Pimienta', 'Sal', 'Vinagre', 'Ajo en polvo'
+            }
+            for item in raw_inventory:
+                qty = float(item.get("quantity", 0))
+                if qty <= 0:
+                    continue
+                name = item.get("ingredient_name", "")
+                is_expired = False
+                if name not in PANTRY_STAPLES:
+                    created_at_str = item.get("created_at")
+                    if created_at_str:
+                        try:
+                            item_date = datetime.strptime(created_at_str[:10], "%Y-%m-%d").date()
+                            days_old = (datetime.now().date() - item_date).days
+                            mi = master_map.get(name, {})
+                            shelf_life = mi.get("shelf_life_days")
+                            if shelf_life is None:
+                                from db_inventory import _infer_shelf_life_days
+                                shelf_life = _infer_shelf_life_days(name, mi.get("category", ""))
+                            if (shelf_life - days_old) < 0:
+                                is_expired = True
+                        except Exception:
+                            pass
+                if not is_expired:
+                    physical_inventory.append(item)
+
+        if not is_new_plan:
+            from db_plans import get_latest_meal_plan_with_id
+            from db_facts import get_consumed_meals_since
+            plan_record = get_latest_meal_plan_with_id(user_id)
+            if plan_record and plan_record.get("plan_data"):
+                plan_created_at = plan_record.get("created_at")
+                if plan_created_at:
+                    consumed_meals = get_consumed_meals_since(user_id, plan_created_at)
+                    for cm in consumed_meals:
+                        ings = cm.get("ingredients") or []
+                        if isinstance(ings, list):
+                            consumed_ingredients.extend(ings)
+    except Exception as e:
+        logging.error(f"[P1-5] Error en fetch_inventory_and_consumed_for_plan: {e}")
+
+    return physical_inventory, consumed_ingredients
+
+
+def get_shopping_list_delta(
+    user_id: str,
+    plan_result: dict,
+    is_new_plan: bool = False,
+    categorize: bool = False,
+    structured: bool = False,
+    multiplier: float = 1.0,
+    *,
+    inventory_override: list | None = None,
+    consumed_override: list | None = None,
+):
+    """Calcula el verdadero Delta: Ingredientes Totales del Plan - Inventario Físico Actual - (Opcional) Consumidos.
+
+    [P1-5] Si el caller necesita N multiplicidades del mismo plan (típico:
+    weekly/biweekly/monthly), debe llamar `fetch_inventory_and_consumed_for_plan`
+    UNA vez y pasar el resultado vía `inventory_override` + `consumed_override`.
+    Sin estos overrides, cada invocación re-consulta `user_inventory` (que
+    puede cambiar entre llamadas por Realtime channel, restock, cron) y
+    `consumed_meals_since` — produciendo deltas inconsistentes que el
+    frontend muestra al usuario al cambiar `groceryDuration`.
+    """
     all_ingredients = []
     days = plan_result.get("days", [])
     if not days and plan_result.get("meals"):
@@ -1423,9 +4098,27 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
     # Si hay 3 días generados, representan un ciclo rotativo. Promediamos por día y proyectamos a 7 días.
     num_days = max(1, len(days))
     base_duration_scale = 7.0 / num_days
-    
+
+    # [P1-7] Defensa numérica en cascada. Si `multiplier` llega como NaN/Inf
+    # (perfil corrupto, overflow en composiciones del caller),
+    # `aggregate_and_deduct_shopping_list` también lo clampa pero queremos
+    # detectar y loguear el caller upstream aquí, donde tenemos contexto
+    # (user_id, num_days). El clamp final a [0.01, 50.0] vive en el
+    # aggregator — aquí solo normalizamos NaN/Inf a un default seguro.
+    try:
+        _raw_mult = float(multiplier)
+    except (TypeError, ValueError):
+        _raw_mult = 1.0
+    if math.isnan(_raw_mult) or math.isinf(_raw_mult):
+        logging.warning(
+            f"[P1-7/DELTA-MULT] multiplier={multiplier!r} no-finito desde caller. "
+            f"Defaulteando a 1.0; bug upstream probable."
+        )
+        _raw_mult = 1.0
+    multiplier = _raw_mult
+
     effective_multiplier = multiplier * base_duration_scale
-    
+
     logging.info(f"🔄 [SHOPPING MATH] days_len={num_days} base_scale={base_duration_scale} raw_mult={multiplier} eff_mult={effective_multiplier}")
 
 
@@ -1435,7 +4128,15 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
             if "suplemento" in meal.get("meal", "").lower():
                 continue
             meal_count += 1
-            ingredients = meal.get("ingredients", [])
+            # [P1-4] Preferir `ingredients_raw` (pre-humanización) sobre
+            # `ingredients` (display-friendly). El humanize convierte
+            # "200g pechuga de pollo" → "1 pechuga de pollo (porción)" para
+            # la UI; al re-agregar el plan persistido, la versión humanizada
+            # pierde la unidad métrica y `_parse_quantity` cae a unit='unidad'
+            # con qty=1, perdiendo el peso real. `humanize_plan_ingredients`
+            # preserva el original en `ingredients_raw` desde P1-4.
+            # Fallback al humanizado solo si el plan es legacy (pre-P1-4).
+            ingredients = meal.get("ingredients_raw") or meal.get("ingredients", [])
             if not ingredients:
                 # Fallback: check if ingredients are inside a 'recipe' dict
                 recipe = meal.get("recipe")
@@ -1454,68 +4155,18 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
                         all_ingredients.append(n)
                     
     logging.info(f"🛒 [SHOPPING EXTRACT] {len(days)} days, {meal_count} meals, {len(all_ingredients)} raw ingredients")
-    physical_inventory = []
-    consumed_ingredients = []
-    
-    # JIT Rolling Windows: La lista de compras ahora SIEMPRE se calcula como un verdadero delta
-    # contra el inventario físico. En el modelo JIT, el usuario siempre tiene ingredientes remanentes
-    # de la ventana anterior, por lo que un plan nuevo debe descontar la despensa para evitar desperdicio.
-    if user_id and user_id != "guest":
-        try:
-            from db_inventory import get_raw_user_inventory
-            from datetime import datetime
-            raw_inventory = get_raw_user_inventory(user_id)
-            if raw_inventory:
-                master_list = get_master_ingredients()
-                master_map = {m["name"]: m for m in master_list}
-                PANTRY_STAPLES = {
-                    'Sal y ajo en polvo', 'Aceite de oliva', 'Aceite de coco', 
-                    'Aceite de sésamo o maní', 'Salsa de soya', 'Orégano', 
-                    'Canela', 'Pimienta', 'Sal', 'Vinagre', 'Ajo en polvo'
-                }
-                
-                for item in raw_inventory:
-                    qty = float(item.get("quantity", 0))
-                    if qty <= 0: continue
-                    name = item.get("ingredient_name", "")
-                    
-                    is_expired = False
-                    if name not in PANTRY_STAPLES:
-                        created_at_str = item.get("created_at")
-                        if created_at_str:
-                            try:
-                                item_date = datetime.strptime(created_at_str[:10], "%Y-%m-%d").date()
-                                days_old = (datetime.now().date() - item_date).days
-                                mi = master_map.get(name, {})
-                                shelf_life = mi.get("shelf_life_days")
-                                if shelf_life is None:
-                                    from db_inventory import _infer_shelf_life_days
-                                    shelf_life = _infer_shelf_life_days(name, mi.get("category", ""))
-                                if (shelf_life - days_old) < 0:
-                                    is_expired = True
-                            except Exception:
-                                pass
-                                
-                    if not is_expired:
-                        physical_inventory.append(item)
-                
-            # Solución 2: Excluir las comidas ya consumidas durante el período del plan (solo para planes en curso)
-            if not is_new_plan:
-                from db_plans import get_latest_meal_plan_with_id
-                from db_facts import get_consumed_meals_since
-                
-                plan_record = get_latest_meal_plan_with_id(user_id)
-                if plan_record and plan_record.get("plan_data"):
-                    plan_created_at = plan_record.get("created_at")
-                    if plan_created_at:
-                        consumed_meals = get_consumed_meals_since(user_id, plan_created_at)
-                        for cm in consumed_meals:
-                            ings = cm.get("ingredients") or []
-                            if isinstance(ings, list):
-                                consumed_ingredients.extend(ings)
-                            
-        except Exception as e:
-            logging.error(f"Error extrayendo inventario/consumidos en delta: {e}")
+
+    # [P1-5] Inventario + consumidos: si el caller pasó overrides (typical
+    # cuando invoca el delta con N multiplicidades), reutilizamos su snapshot
+    # para garantizar consistencia entre las N listas. Sin override, hacemos
+    # el fetch aquí (caso 1 invocación: agente, tools, recalc).
+    if inventory_override is not None or consumed_override is not None:
+        physical_inventory = list(inventory_override) if inventory_override is not None else []
+        consumed_ingredients = list(consumed_override) if consumed_override is not None else []
+    else:
+        physical_inventory, consumed_ingredients = fetch_inventory_and_consumed_for_plan(
+            user_id, plan_result, is_new_plan
+        )
             
     items_to_deduct = []
     if physical_inventory:
@@ -1535,12 +4186,21 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
                     res["🚨 Compra Urgente"].append({
                         "name": item,
                         "market_qty": 1,
+                        # [P0-2] Espejo numérico siempre presente para que el
+                        # frontend nunca tenga que parsear `market_qty` (que
+                        # en otros items puede venir como "1 1/2"/"1/2").
+                        "market_qty_numeric": 1.0,
                         "market_unit": "ud",
                         "display_qty": item,
                         "display_string": f"⚠️ {item}",
                         "category": "🚨 Compra Urgente",
                         "display_category": "🚨 Compra Urgente",
-                        "is_staple": False
+                        "is_staple": False,
+                        # [P1-PDF-2] Items urgentes son siempre perecederos
+                        # ("comprar pronto"). El helper también lo deriva por
+                        # substring "urgente" pero lo marcamos explícito para
+                        # robustez (independiente de cualquier renombre futuro).
+                        "is_perishable": True,
                     } if structured else f"⚠️ {item}")
         else:
             if isinstance(res, list):
@@ -1548,12 +4208,16 @@ def get_shopping_list_delta(user_id: str, plan_result: dict, is_new_plan: bool =
                     res.append({
                         "name": item,
                         "market_qty": 1,
+                        # [P0-2] Espejo numérico — ver comentario equivalente arriba.
+                        "market_qty_numeric": 1.0,
                         "market_unit": "ud",
                         "display_qty": item,
                         "display_string": f"⚠️ {item}",
                         "category": "🚨 Compra Urgente",
                         "display_category": "🚨 Compra Urgente",
-                        "is_staple": False
+                        "is_staple": False,
+                        # [P1-PDF-2] Ver comentario equivalente arriba.
+                        "is_perishable": True,
                     } if structured else f"⚠️ {item}")
     
     return res
