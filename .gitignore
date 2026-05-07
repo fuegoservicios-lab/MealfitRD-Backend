@@ -18,3 +18,7 @@ pytest_output.txt
 title_debug.log
 *.bak
 *.jsonl.bak
+
+# Helpers ad-hoc one-off (no deben commitearse al repo)
+append_*.py
+scratch_*.py
