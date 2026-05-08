@@ -139,14 +139,26 @@ def test_executor_respects_overridden_pool_size(monkeypatch):
 # 3. Visibilidad del knob en diagnostics.
 # ---------------------------------------------------------------------------
 def test_pool_size_in_concurrency_diagnostics_dict():
-    """El knob debe aparecer en el dict de `_log_active_knobs` (logs de
-    startup) para que SRE pueda verificar el valor activo sin inspeccionar
-    código. Verifica vía AST/source: la key `FACT_CHECK_POOL_SIZE` debe
-    figurar en el dict literal."""
-    log_src = inspect.getsource(graph_orchestrator._log_active_knobs)
-    assert '"FACT_CHECK_POOL_SIZE"' in log_src, (
-        "P1-31: FACT_CHECK_POOL_SIZE debe estar en el dict de "
-        "`_log_active_knobs` para visibilidad en logs de startup."
+    """El knob debe aparecer en el registry auto-poblado de `_log_active_knobs`
+    para que SRE pueda verificar el valor activo en logs de startup sin
+    inspeccionar código.
+
+    [P3-NEW-D · 2026-05-08] Antes este test verificaba que la key literal
+    `"FACT_CHECK_POOL_SIZE"` apareciera en el source del dict hardcoded.
+    Tras P3-NEW-D, el dict se reemplazó por iteración sobre `_KNOBS_REGISTRY`
+    (auto-poblado por `_env_int/_env_float/_env_bool`). El contrato sigue
+    siendo el mismo (knob visible en logs de startup), pero ahora se valida
+    via registry presence en lugar de source pattern del dict.
+    """
+    snap = graph_orchestrator.get_knobs_registry_snapshot()
+    assert "MEALFIT_FACT_CHECK_POOL_SIZE" in snap, (
+        "P1-31: MEALFIT_FACT_CHECK_POOL_SIZE debe registrarse en "
+        "_KNOBS_REGISTRY (auto-poblado por _env_int) para visibilidad en "
+        "logs de startup vía _log_active_knobs."
+    )
+    info = snap["MEALFIT_FACT_CHECK_POOL_SIZE"]
+    assert info["type"] == "int", (
+        "El knob debe ser de tipo int (resuelto vía _env_int)."
     )
 
 

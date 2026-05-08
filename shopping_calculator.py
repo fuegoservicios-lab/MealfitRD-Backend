@@ -6,6 +6,7 @@ from collections import defaultdict
 import logging
 from fractions import Fraction
 from db_core import supabase, connection_pool, execute_sql_query
+from canonical_units import canonicalize_unit  # [P1-shop-coh-1] SSOT de unidades
 
 import time as _time
 
@@ -604,7 +605,14 @@ _PERISHABLE_NAME_HINTS = (
 _STAPLE_NAME_HINTS = (
     'leche uht', 'leche en polvo', 'leche evaporada',
     'queso parmesano', 'queso curado',
+    # [2026-05-07] Variantes adicionales de enlatados. master_ingredients
+    # tiene 'Atún en agua' / 'Atún en aceite' como nombre canónico (no
+    # 'Atún en lata'), y los hints originales solo cubrían "en lata".
+    # Añadidas variantes "en agua" / "en aceite" para que el classifier
+    # las marque como staple en hybrid (path biweekly/monthly).
     'atun en lata', 'atún en lata', 'atun enlatado', 'atún enlatado',
+    'atun en agua', 'atún en agua', 'atun en aceite', 'atún en aceite',
+    'pollo en lata', 'pollo enlatado',
     'sardinas', 'salmon en lata', 'salmón en lata',
     'arroz', 'pasta', 'lenteja', 'garbanzo', 'frijol', 'habichuela',
     'gandules', 'avena', 'harina',
@@ -620,11 +628,24 @@ _STAPLE_NAME_HINTS = (
 def _classify_perishability(name: str, master_item: dict | None = None) -> str:
     """Clasifica un ingrediente como 'staple' o 'perishable'.
 
-    Usa (en orden):
-      1. shelf_life_days del master si existe (>= threshold → staple).
-      2. category exacta si está en _STAPLE_CATEGORIES o _PERISHABLE_CATEGORIES.
-      3. Heurística por nombre (substrings _PERISHABLE_NAME_HINTS / _STAPLE_NAME_HINTS).
-      4. Default: perishable (conservador — mejor comprar semanal que desperdiciar).
+    Orden de precedencia (alto → bajo):
+      1. Category exacta (alta confianza: 'Despensa', 'Frutas', etc.).
+      2. Heurística por nombre (substrings curados).
+      3. shelf_life_days del master (>= STAPLE_SHELF_THRESHOLD_DAYS → staple).
+      4. Default: perishable (conservador).
+
+    [2026-05-06 FIX] Antes shelf_life_days corría primero. master_ingredients
+    persiste shelf_life_days=14 como default genérico para casi todos los
+    items de Despensa (pan, aceite, miel, almendras, especias, granos…) —
+    valor incorrecto pero ampliamente desplegado. Con threshold=21, ese 14
+    devolvía "perishable" para staples obvios y `_build_hybrid_shopping_list`
+    los marcaba `is_perishable=True`, contaminando la sección "Compra esta
+    semana — Perecederos" del PDF con items que el usuario sabe que duran
+    meses (aceite, miel, especias). Mover category/name hints adelante deja
+    que la señal fuerte (cat='Despensa' del master, nombres canónicos como
+    'pan integral'/'arroz'/'aceite') gane sobre el dato shelf default.
+    shelf_life_days sigue siendo señal cuando NO hay categoría ni nombre
+    reconocible (cubre items raros del LLM no registrados en master).
     """
     from constants import strip_accents
     name_lower = (name or "").lower().strip()
@@ -637,7 +658,29 @@ def _classify_perishability(name: str, master_item: dict | None = None) -> str:
     name_for_hints = re.sub(r'\b(bajo|reducid[oa]|libre)\s+(de|en)\s+\w+', '', name_for_hints)
     name_for_hints = name_for_hints.strip()
 
-    # 1. shelf_life_days es la fuente más confiable cuando está poblada.
+    # 1. Category exacta (cuando es inequívoca). master_ingredients.category
+    # es producto de curación humana — gana sobre datos numéricos default.
+    cat = ""
+    if isinstance(master_item, dict):
+        cat = strip_accents(str(master_item.get("category", "") or "").lower().strip())
+    if cat in _STAPLE_CATEGORIES:
+        return "staple"
+    if cat in _PERISHABLE_CATEGORIES:
+        return "perishable"
+
+    # 2. Heurística por nombre (más específica primero).
+    # Staples más específicos: si el nombre contiene "atun en lata" / "leche uht"
+    # tiene precedencia sobre el match genérico de "atun" / "leche" perishable.
+    # Usamos `name_for_hints` (sin "sin X" / "bajo en X") para evitar falsos
+    # positivos como "yogurt sin azúcar" → staple por azúcar.
+    for hint in _STAPLE_NAME_HINTS:
+        if hint in name_for_hints:
+            return "staple"
+    for hint in _PERISHABLE_NAME_HINTS:
+        if hint in name_for_hints:
+            return "perishable"
+
+    # 3. shelf_life_days como fallback cuando ni cat ni nombre dieron señal.
     if isinstance(master_item, dict):
         shelf = master_item.get("shelf_life_days")
         if shelf is not None:
@@ -649,27 +692,6 @@ def _classify_perishability(name: str, master_item: dict | None = None) -> str:
                     return "perishable"
             except (TypeError, ValueError):
                 pass
-
-    # 2. Category exacta (cuando es inequívoca).
-    cat = ""
-    if isinstance(master_item, dict):
-        cat = strip_accents(str(master_item.get("category", "") or "").lower().strip())
-    if cat in _STAPLE_CATEGORIES:
-        return "staple"
-    if cat in _PERISHABLE_CATEGORIES:
-        return "perishable"
-
-    # 3. Heurística por nombre (más específica primero).
-    # Staples más específicos: si el nombre contiene "atun en lata" / "leche uht"
-    # tiene precedencia sobre el match genérico de "atun" / "leche" perishable.
-    # Usamos `name_for_hints` (sin "sin X" / "bajo en X") para evitar falsos
-    # positivos como "yogurt sin azúcar" → staple por azúcar.
-    for hint in _STAPLE_NAME_HINTS:
-        if hint in name_for_hints:
-            return "staple"
-    for hint in _PERISHABLE_NAME_HINTS:
-        if hint in name_for_hints:
-            return "perishable"
 
     # 4. Default conservador.
     return "perishable"
@@ -1172,48 +1194,22 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
         yield_mult = 1.0
     qty = raw_qty * yield_mult
     
+    # [P1-shop-coh-1 · 2026-05-07] Lookup contra SSOT en `canonical_units.py`.
+    # Antes era cadena if/elif duplicada con `db_inventory._CANONICAL_UNIT_MAP`;
+    # divergencia silenciosa entre los dos hacía que aliases nuevos sólo
+    # canonicalizaran de un lado, generando mismatches plan↔inventario.
+    # Histórico de aliases que vivieron aquí (preservados en el SSOT):
+    #   - cdas/cdtas plurales (P6-CDA-PLURAL-FIX 2026-05-07)
+    #   - frascos plural (P5-OLIVE-CAP)
+    #   - caja/bolsa/tetra/galón/jarra (P1-3 container aliases)
+    #   - mazo/atado/manojo (P3-HERB-CAP)
     if unit_str:
-        u = unit_str.lower()
-        if u in ['g', 'gr', 'gramos', 'gramo']: unit_str = 'g'
-        elif u in ['kg', 'kilo', 'kilos', 'kilogramos', 'kilogramo']: unit_str = 'kg'
-        elif u in ['lb', 'lbs', 'libra', 'libras']: unit_str = 'lb'
-        elif u in ['oz', 'onza', 'onzas']: unit_str = 'oz'
-        elif u in ['ml', 'mililitro', 'mililitros']: unit_str = 'ml'
-        elif u in ['l', 'litro', 'litros']: unit_str = 'l'
-        elif u in ['taza', 'tazas']: unit_str = 'taza'
-        elif u in ['cda', 'cucharada', 'cucharadas']: unit_str = 'cda'
-        elif u in ['cdta', 'cucharadita', 'cucharaditas', 'cdita']: unit_str = 'cdta'
-        elif u in ['diente', 'dientes']: unit_str = 'diente'
-        elif u in ['lata', 'latas']: unit_str = 'lata'
-        elif u in ['paquete', 'paquetes', 'paquetico', 'paqueticos', 'pqte', 'paq', 'funda', 'fundas']: unit_str = 'paquete'
-        # [P1-3] `caja`, `bolsa`, `tetra`, `galón`, `jarra` añadidos para que
-        # el aggregator pueda normalizarlos a gramos vía `_CONTAINER_UNIT_ALIASES`.
-        # ANTES caían al `else` final que los movía al name como texto, y la
-        # unidad quedaba como 'unidad' — la deducción de inventario no
-        # matcheaba el plan en gramos → item duplicado en el delta.
-        elif u in ['caja', 'cajas']: unit_str = 'caja'
-        elif u in ['bolsa', 'bolsas', 'bolsita', 'bolsitas']: unit_str = 'bolsa'
-        elif u in ['tetra', 'tetrapak']: unit_str = 'tetra'
-        elif u in ['galón', 'galon', 'galones']: unit_str = 'galón'
-        elif u in ['jarra', 'jarras']: unit_str = 'jarra'
-        elif u in ['sobre', 'sobres', 'sobrecito', 'sobrecitos']: unit_str = 'sobre'
-        elif u in ['chin', 'pizca', 'pizcas', 'toque', 'toques', 'chorrito', 'chorritos', 'puñado', 'puñados', 'ramita', 'ramitas', 'hojita', 'hojitas']: unit_str = 'pizca'
-        elif u in ['pote', 'potes', 'tarro']: unit_str = 'pote'
-        # [P5-OLIVE-CAP] Añadido 'frascos' (plural) — antes solo el
-        # singular se normalizaba; el LLM frecuentemente emite plural y
-        # caía al fallback 'unidad', lo que dejaba el cap por nombre
-        # sin chance de matchear (name quedaba como "Frascos de X").
-        elif u in ['botella', 'botellas', 'frasco', 'frascos']: unit_str = 'botella'
-        elif u in ['cabeza', 'cabezas']: unit_str = 'cabeza'
-        elif u in ['hoja', 'hojas']: unit_str = 'hoja'
-        elif u in ['rebanada', 'rebanadas', 'lonja', 'lonjas']: unit_str = 'rebanada'
-        # [P3-HERB-CAP] `mazo`/`atado` reconocidos como unit canónico para
-        # hierbas frescas. Sin esto, "1 mazo de cilantro" caía al `else` y
-        # el name quedaba como "Mazo de cilantro" (incorrecto), evitando
-        # la canonicalización a "Cilantro" y por ende mi cap defensivo.
-        elif u in ['mazo', 'mazos', 'atado', 'atados', 'manojo', 'manojos']: unit_str = 'mazo'
-        elif u in ['unidad', 'unidades', 'ud', 'uds', 'unid']: unit_str = 'unidad'
+        canonical = canonicalize_unit(unit_str)
+        if canonical is not None:
+            unit_str = canonical
         else:
+            # Alias desconocido: la regex extrajo como `unit_str` algo que
+            # en realidad pertenece al name. Rebobinar y caer a 'unidad'.
             rest_str = unit_str + (" " + rest_str if rest_str else "")
             unit_str = 'unidad'
     else:
@@ -1313,6 +1309,14 @@ PERISHABLE_CATEGORY_PREFIXES = frozenset({
     "lácteo",
     "vegetal",
     "fruta",
+    # [2026-05-06] Añadidos `víver` y `hierba` tras el bug de la lista
+    # weekly: tubérculos frescos (Batata, Yautía, Plátano verde) viven en
+    # cat='Víveres' en master, y hierbas frescas (Cilantro) en cat='Hierbas'.
+    # Ambos son perecederos (7-14 días en clima tropical) pero antes caían
+    # al fallback de shelf=14 → False (stable). Mismas categorías están en
+    # `_PERISHABLE_CATEGORIES` que usa `_classify_perishability`.
+    "víver",
+    "hierba",
 })
 
 PERISHABLE_SHELF_LIFE_THRESHOLD_DAYS = 7
@@ -1329,48 +1333,84 @@ def is_perishable_category(category: str | None, shelf_life_days=None) -> bool:
         category: categoría cruda (`master_ingredients.category` o
             `display_category`). Tolerante a None, mayúsculas, acentos
             y formato plural ("PROTEÍNAS" vs "Proteína").
-        shelf_life_days: días de shelf life del item (puede venir directo de
-            master_ingredients o calculado vía `_infer_shelf_life_days`).
-            None / no parseable → no se usa la regla 1, cae a la regla 2.
+        shelf_life_days: días de shelf life del item. None / no parseable →
+            cae a la regla de categoría.
 
-    Returns:
-        True si el item es perecedero (≤7 días o categoría fresca);
-        False en caso contrario.
+    [2026-05-06 FIX] Antes shelf_life_days corría primero. master_ingredients
+    persiste shelf_life_days=14 como default genérico para casi TODOS los
+    items frescos (cerdo, lechosa, mango, queso blanco, brócoli, tomate,
+    yautía, batata…) — valor incorrecto pero ampliamente desplegado.
+    Con threshold=7, ese 14 devolvía False (stable) y `aggregated_shopping_list_weekly`
+    (que NO pasa por `_build_hybrid_shopping_list`, va directo del aggregator)
+    contaminaba la sección "DESPENSA — ESTABLES" del PDF weekly con carnes,
+    frutas y vegetales que claramente son perecederos.
+    Ya alineamos `_classify_perishability` con esta misma precedencia
+    (cat → shelf → default); aquí replicamos para que el path weekly
+    quede consistente con biweekly/monthly.
 
-    Precedencia (mismo orden que la heurística original del frontend que
-    reemplaza, para no introducir cambios de comportamiento sutiles):
-
-      Regla 1. `shelf_life_days` parseable → señal ABSOLUTA. shelf_life ≤ 7
-               devuelve True; shelf_life > 7 devuelve False y NO cae a la
-               regla 2 (la fuente de verdad numérica gana sobre el match
-               textual de categoría, que puede tener falsos positivos por
-               plural/acento).
-      Regla 2. `shelf_life_days` None o unparseable → fallback a categoría:
-               - Substring "urgente" → True (items 🚨 Compra Urgente).
-               - Cualquier prefix de PERISHABLE_CATEGORY_PREFIXES en
-                 lowercased category → True.
-               - Sino → False (default conservador para DESPENSA, VÍVERES,
-                 ESPECIAS, SUPLEMENTOS, OTROS, categoría desconocida).
+    Precedencia (alta → baja):
+      1. Categoría stable explícita (`_STAPLE_CATEGORIES`: despensa, granos,
+         conservas, especias, etc.) → False. Cubre canned proteins / sauces /
+         spices que comparten cat raíz pero son estables.
+      2. Categoría perecedera explícita ("urgente" o substring de
+         `PERISHABLE_CATEGORY_PREFIXES`: proteína, lácteo, vegetal, fruta) → True.
+         master.category es señal humana curada — gana sobre datos numéricos
+         default-14.
+      3. shelf_life_days fallback (categoría desconocida, e.g., "Otros"):
+         shelf ≤ 7 → True, sino False.
+      4. Default → False (conservador).
     """
-    # Regla 1: shelf_life_days es la señal MÁS FUERTE — gana sobre la categoría
-    # cuando está presente. Mismo orden que la heurística frontend original.
+    from constants import strip_accents
+    cat_lower = str(category or "").strip().lower()
+    cat_norm = strip_accents(cat_lower)
+
+    # Pre-parse shelf_life para usar en múltiples reglas.
+    shelf_int = None
     if shelf_life_days is not None:
         try:
-            return int(shelf_life_days) <= PERISHABLE_SHELF_LIFE_THRESHOLD_DAYS
+            shelf_int = int(shelf_life_days)
         except (TypeError, ValueError):
-            pass  # unparseable → cae a regla 2
+            pass
 
-    # Regla 2a: items urgentes son siempre perecederos cuando no hay shelf_life.
-    if category and "urgente" in str(category).lower():
+    # Regla 1: categorías stable explícitas → siempre estable.
+    # Atún en lata / aceitunas / salsa de soya viven aquí (cat='Despensa' /
+    # 'Conservas') y NO en la categoría de su proteína fuente.
+    if cat_norm in _STAPLE_CATEGORIES:
+        return False
+
+    # Regla 2: shelf_life largo (≥30 días) override — cubre proteínas/lácteos
+    # enlatados o curados que viven en cat='Proteínas'/'Lácteos' por su origen
+    # alimentario pero realmente son estables en almacén.
+    # Ejemplos:
+    #   - Atún en agua (cat=Proteínas, shelf=730) → enlatado, durabilidad 2 años
+    #   - Leche UHT (cat=Lácteos, shelf=180) → tetra brik
+    #   - Queso parmesano (cat=Lácteos, shelf=120) → curado
+    # Sin esta regla, el match de categoría perishable (Regla 3) los enviaría
+    # incorrectamente a la sección "Compra cada 7 días" del PDF weekly.
+    # Threshold 30d filtra defaults dudosos (14d) sin afectar enlatados reales.
+    _STAPLE_BY_LONG_SHELF_DAYS = 30
+    if shelf_int is not None and shelf_int >= _STAPLE_BY_LONG_SHELF_DAYS:
+        return False
+
+    # Regla 3a: items urgentes siempre perecederos.
+    if "urgente" in cat_lower:
         return True
 
-    # Regla 2b: substring match contra prefijos canónicos. case-insensitive.
-    # Usamos `in` (substring) en vez de prefix para tolerar plurales
-    # ("VEGETALES" contiene "vegetal", "FRUTAS" contiene "fruta").
-    if not category:
-        return False
-    cat_lower = str(category).strip().lower()
-    return any(prefix in cat_lower for prefix in PERISHABLE_CATEGORY_PREFIXES)
+    # Regla 3b: categoría perecedera explícita (substring para tolerar
+    # plurales: "VEGETALES" contiene "vegetal", "FRUTAS" contiene "fruta").
+    # Con shelf_life_days=14 default en DB para casi todos los frescos,
+    # este match de categoría es la señal de verdad — la curación humana
+    # gana sobre el dato numérico genérico.
+    if any(prefix in cat_lower for prefix in PERISHABLE_CATEGORY_PREFIXES):
+        return True
+
+    # Regla 4: shelf_life_days como fallback cuando la categoría no da señal
+    # clara (ej. "Otros", "Suplementos", categoría nueva no listada).
+    if shelf_int is not None:
+        return shelf_int <= PERISHABLE_SHELF_LIFE_THRESHOLD_DAYS
+
+    # Regla 5: default conservador.
+    return False
 
 def _get_display_category(db_category: str, name: str = "") -> str:
     """Resuelve la categoría de display para el PDF. Server-side, elimina regex del frontend."""
@@ -1433,15 +1473,27 @@ def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: floa
         floor_count = math.floor(raw_count)
         frac = raw_count - floor_count
 
-        # Anti-desperdicio: redondear abajo si sobra poco
-        if frac <= anti_waste_pct and floor_count >= 1:
-            count = floor_count
-            total_g = count * size
-            waste = max(0, g_total - total_g)  # Under-buy waste (aceptable si <10%)
+        # [2026-05-06 SKU-OVERSHOOT-FIX] Mismo principio que el standard path
+        # en `apply_smart_market_units`: si el under-buy del floor es ABSOLUTAMENTE
+        # menor que el over-buy del ceil, preferir floor aunque exceda el
+        # `anti_waste_pct` umbral. Evita que items con `g_total ≈ container`
+        # (ej. Pan integral 600g vs container 567g) salten al doble por
+        # estrechez del threshold cuando el under-buy es marginal.
+        if floor_count >= 1:
+            under_buy = g_total - (floor_count * size)
+            over_buy = ((floor_count + 1) * size) - g_total
+            if frac <= anti_waste_pct or under_buy < over_buy:
+                count = floor_count
+                total_g = count * size
+                waste = max(0, g_total - total_g)
+            else:
+                count = floor_count + 1
+                total_g = count * size
+                waste = total_g - g_total
         else:
             count = max(1, math.ceil(raw_count))
             total_g = count * size
-            waste = total_g - g_total  # Over-buy waste
+            waste = total_g - g_total
 
         waste_score = waste / g_total if g_total > 0 else 0
         # Penalizar conteos altos exponencialmente: 1 paquete siempre > N paquetes
@@ -1704,8 +1756,25 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                 raw_units = g_total / container_weight_g
                 floor_units = math.floor(raw_units)
                 frac = raw_units - floor_units
-                if frac <= ANTI_WASTE_THRESHOLD and floor_units >= 1:
-                    units_needed = floor_units
+                # [2026-05-06 SKU-OVERSHOOT-FIX] Cuando container ≈ g_total
+                # (ej. Pan integral: g_total=600g cap monthly, container=567g),
+                # `frac=0.058` superaba `ANTI_WASTE_THRESHOLD=0.02` y forzaba
+                # ceil → 2 paquetes (1134g, 89% sobre el cap). El cap se
+                # respeta en gramos pero el SKU resolver inflaba al doble.
+                # Regla nueva: si comprar el floor (under-buy) deja una
+                # carencia ABSOLUTA menor que la que generaría comprar uno
+                # más (over-buy), preferir floor — el usuario queda más
+                # cerca del target real. La heurística <=2% sigue como
+                # gateway primario para preservar el comportamiento previo
+                # cuando ambas opciones son razonables (e.g., g_total=920,
+                # container=454 → floor=2 cubre 99%, ceil=3 sobra 36%).
+                if floor_units >= 1:
+                    under_buy_g = g_total - (floor_units * container_weight_g)
+                    over_buy_g = ((floor_units + 1) * container_weight_g) - g_total
+                    if frac <= ANTI_WASTE_THRESHOLD or under_buy_g < over_buy_g:
+                        units_needed = floor_units
+                    else:
+                        units_needed = floor_units + 1
                 else:
                     units_needed = max(1, math.ceil(raw_units))
                 
@@ -2016,7 +2085,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
                 else:
                     num, den = mq.strip().split('/')
                     return float(num)/float(den)
-            except:
+            except (ValueError, IndexError, ZeroDivisionError, TypeError):
                 return 0.0
         return 0.0
 
@@ -2099,6 +2168,640 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     if sku_label:
         result["sku_size_label"] = sku_label
     return result
+
+
+def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, multiplier: float = 1.0) -> dict:
+    """[P1-shop-coh-1 · 2026-05-07] Suma esperada de ingredientes desde el plan.
+
+    Recorre `plan_data["days"][*]["meals"][*]` aplicando el MISMO contrato de
+    parseo que `aggregate_and_deduct_shopping_list` (línea 2244):
+    `_parse_quantity(item, apply_yield_multiplier=apply_yield, apply_legumbres_yield_only=True)`,
+    misma corrección "ola"/"olas" → "Cebolla", mismo skip de comidas con
+    "suplemento" en el nombre, mismo fallback `ingredients_raw` → `ingredients`
+    → `recipe.ingredients`.
+
+    El propósito es exponer la suma teórica de las recetas para que un
+    consumidor (Paso 3 del plan P1-shop-coh-1) la contraste contra la lista
+    de compras agregada y detecte divergencias. NO aplica master_map ni la
+    canonicalización por nombre (huevos/ñame/miel/ajo/pavo) — esa capa vive
+    inline en el aggregator y debe aplicarse simétricamente a ambos lados
+    desde el comparador, no aquí.
+
+    Args:
+        plan_data: dict con shape `{"days": [{"meals": [...]}, ...]}`.
+        apply_yield: default False, espejo del aggregator (peso literal en
+            ambos lados → delta plan↔inventario simétrico, ver P1-2).
+        multiplier: [P1-C 2026-05-07] escala las cantidades crudas por el
+            household multiplier (`calc_household_multiplier` cacheado en
+            plan_data por P1-3). El aggregator escala internamente; sin esta
+            simetría, comparar magnitudes producía ratios espurios. Default
+            1.0 preserva el comportamiento v1 (presence/absence). Acepta
+            int|float; valores inválidos (NaN/inf/<=0) se clampan a 1.0.
+
+    Returns:
+        `{food_name: {canonical_unit: total_qty}}`. Vacío si no hay días.
+    """
+    if not isinstance(plan_data, dict):
+        return {}
+    days = plan_data.get("days")
+    if not days or not isinstance(days, list):
+        return {}
+
+    try:
+        _mult = float(multiplier)
+        if math.isnan(_mult) or math.isinf(_mult) or _mult <= 0:
+            _mult = 1.0
+    except (TypeError, ValueError):
+        _mult = 1.0
+
+    aggregated = defaultdict(lambda: defaultdict(float))
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        for meal in day.get("meals") or []:
+            if not isinstance(meal, dict):
+                continue
+            if "suplemento" in str(meal.get("meal", "")).lower():
+                continue
+            ingredients = meal.get("ingredients_raw") or meal.get("ingredients") or []
+            if not ingredients:
+                recipe = meal.get("recipe")
+                if isinstance(recipe, dict):
+                    ingredients = recipe.get("ingredients") or []
+            for ing in ingredients:
+                if isinstance(ing, str):
+                    raw = ing
+                elif isinstance(ing, dict):
+                    q = ing.get("quantity", 0)
+                    u = ing.get("unit", "unidad")
+                    n = ing.get("name") or ing.get("item_name") or ing.get("display_name") or "Desconocido"
+                    if q > 0 or u in ("pizca", "al gusto", "cantidad necesaria", "chin", "toque", "chorrito"):
+                        raw = f"{q} {u} de {n}"
+                    else:
+                        raw = n
+                else:
+                    continue
+                if not raw or len(str(raw)) < 3:
+                    continue
+                qty, unit, name = _parse_quantity(
+                    raw,
+                    apply_yield_multiplier=apply_yield,
+                    apply_legumbres_yield_only=True,
+                )
+                if not name:
+                    continue
+                if name.lower() in ("ola", "olas"):
+                    name = "Cebolla"
+                aggregated[name][unit] += float(qty) * _mult
+
+    return {name: dict(units) for name, units in aggregated.items()}
+
+
+def _classify_divergence_hypothesis(exp_qty: float, act_qty: float, exp_units: dict, act_units: dict) -> str:
+    """Heurístico de clasificación para `compare_expected_vs_aggregated`.
+
+    Las hipótesis son orientativas para el reviewer humano/operacional; no
+    sustituyen verificación. Orden de precedencia:
+      1. cap_swallowed_modifier > 2. unit_mismatch > 3. yield_uncovered
+      4. pantry_overdeduct > 5. unknown.
+    """
+    has_any_in_aggregated = any((q or 0) > 0 for q in act_units.values())
+
+    # 1. food existe en expected pero TOTALMENTE ausente en aggregated.
+    if exp_qty > 0 and not has_any_in_aggregated:
+        return "cap_swallowed_modifier"
+
+    # 2. la unit específica falta en aggregated pero el food sí aparece en
+    # otra unit (típico: expected en `cda`, aggregated convertido a `g`, o
+    # cap exact-match engulló el modificador — ver caps_asymmetry).
+    if exp_qty > 0 and act_qty == 0 and has_any_in_aggregated:
+        return "unit_mismatch"
+
+    # 3. yield no aplicado: ratio típico de proteína cocida (1.35×) o
+    # legumbre cocida (0.35×) que el aggregator no convirtió.
+    if exp_qty > 0 and act_qty > 0:
+        ratio = act_qty / exp_qty
+        if 1.30 <= ratio <= 1.40 or 0.30 <= ratio <= 0.40:
+            return "yield_uncovered"
+
+    # 4. nevera/consumed dedujo de más: actual < expected/2 sin caer en
+    # rangos de yield ni en zero (caso 2).
+    if exp_qty > 0 and 0 < act_qty < exp_qty * 0.5:
+        return "pantry_overdeduct"
+
+    return "unknown"
+
+
+def compare_expected_vs_aggregated(
+    expected: dict,
+    aggregated: dict,
+    *,
+    tolerance: float = 0.05,
+) -> list:
+    """[P1-shop-coh-1 · 2026-05-07] Detecta divergencias `Σrecetas` ↔ `lista`.
+
+    Compara dos dicts del mismo shape `{food: {unit: qty}}`. Una divergencia
+    se reporta si `|actual - expected| > expected * tolerance`. Si
+    `expected == 0` y `actual > 0`, siempre se reporta con `delta_pct = inf`
+    (fantasma en la lista de compras).
+
+    El caller es responsable de:
+      - construir `aggregated` ANTES de la conversión `apply_smart_market_units`
+        (para evitar falsos positivos por SKU mapping cda→g).
+      - canonicalizar nombres simétricos en ambos lados (la canonicalización
+        master_map del aggregator vive inline; este helper no la replica).
+
+    Returns:
+        list de dicts `{food, unit, expected_qty, actual_qty, delta_pct, hypothesis}`.
+        Ordenada por `delta_pct` descendente (inf primero, luego peor a mejor).
+        Vacía si no hay divergencias.
+
+    Hipótesis posibles (ver `_classify_divergence_hypothesis`):
+        unit_mismatch · yield_uncovered · cap_swallowed_modifier ·
+        pantry_overdeduct · unknown.
+    """
+    if not isinstance(expected, dict):
+        expected = {}
+    if not isinstance(aggregated, dict):
+        aggregated = {}
+
+    divergences = []
+    all_foods = set(expected.keys()) | set(aggregated.keys())
+
+    for food in all_foods:
+        exp_units = expected.get(food) or {}
+        act_units = aggregated.get(food) or {}
+        if not isinstance(exp_units, dict):
+            exp_units = {}
+        if not isinstance(act_units, dict):
+            act_units = {}
+        all_units = set(exp_units.keys()) | set(act_units.keys())
+
+        for unit in all_units:
+            try:
+                exp_qty = float(exp_units.get(unit) or 0)
+                act_qty = float(act_units.get(unit) or 0)
+            except (TypeError, ValueError):
+                continue
+
+            if exp_qty == 0 and act_qty == 0:
+                continue
+
+            if exp_qty == 0:
+                # Fantasma: aggregated tiene algo que las recetas no piden.
+                divergences.append({
+                    "food": food,
+                    "unit": unit,
+                    "expected_qty": 0.0,
+                    "actual_qty": act_qty,
+                    "delta_pct": float("inf"),
+                    "hypothesis": _classify_divergence_hypothesis(exp_qty, act_qty, exp_units, act_units),
+                })
+                continue
+
+            delta_pct = abs(act_qty - exp_qty) / exp_qty
+            if delta_pct > tolerance:
+                divergences.append({
+                    "food": food,
+                    "unit": unit,
+                    "expected_qty": exp_qty,
+                    "actual_qty": act_qty,
+                    "delta_pct": delta_pct,
+                    "hypothesis": _classify_divergence_hypothesis(exp_qty, act_qty, exp_units, act_units),
+                })
+
+    # `inf` es mayor que cualquier float → ordena primero con `-delta_pct`.
+    divergences.sort(key=lambda d: -d["delta_pct"])
+    return divergences
+
+
+def _get_coherence_guard_mode() -> str:
+    """[P1-shop-coh-1 · 2026-05-07] Lee `MEALFIT_SHOPPING_COHERENCE_GUARD`.
+
+    Valores válidos:
+      - "off"   → guard no se invoca (compatibilidad backward).
+      - "warn"  → invoca `compare_expected_vs_aggregated`, loggea divergencias
+                  y deja seguir el pipeline. Default operacional durante canary.
+      - "block" → si `max(delta_pct) > MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT`,
+                  aborta persistencia del plan (caller reintenta con Pro o
+                  degrada según política).
+
+    Cualquier valor distinto cae a "warn" con log de warning. Releído en
+    cada invocación por preferencia operacional (cambio sin redeploy).
+    """
+    raw = (os.environ.get("MEALFIT_SHOPPING_COHERENCE_GUARD") or "warn").strip().lower()
+    if raw not in ("off", "warn", "block"):
+        logging.warning(
+            f"[KNOBS] MEALFIT_SHOPPING_COHERENCE_GUARD={raw!r} no es válido "
+            f"(esperado: off/warn/block). Usando 'warn'."
+        )
+        return "warn"
+    return raw
+
+
+def _get_coherence_tolerance_pct() -> float:
+    """[P1-shop-coh-1 · 2026-05-07] Lee `MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT`.
+
+    Float en (0, 1). Default 0.10 (10%). Usado por el guard en modo `block`
+    como umbral por encima del cual se aborta persistencia. Modo `warn`
+    sigue usando la `tolerance` por defecto de `compare_expected_vs_aggregated`
+    (5%) — éste knob es estrictamente para el blocking threshold, más laxo
+    para evitar falsos abortos.
+    """
+    raw = os.environ.get("MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT", "0.10")
+    try:
+        v = float(raw)
+        if not (0.0 < v < 1.0):
+            raise ValueError("out of range (0, 1)")
+        return v
+    except (TypeError, ValueError) as e:
+        logging.warning(
+            f"[KNOBS] MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT={raw!r} inválido ({e}). "
+            f"Usando 0.10."
+        )
+        return 0.10
+
+
+def _extract_aggregated_food_dict(aggregated_list, *, exclude_pavo: bool = False) -> dict:
+    """[P1-C 2026-05-07] Extrae `{food: {unit: qty}}` desde aggregated_shopping_list.
+
+    Aplica los mismos filtros que `run_shopping_coherence_guard` v1 (skip
+    `is_staple=True` y `category` con "urgente"). Lee `market_qty_numeric` /
+    `market_unit` con fallback a `quantity` / `unit` cuando faltan.
+
+    Args:
+        aggregated_list: lista de items del shopping list. Cada item dict.
+        exclude_pavo: si True, omite items cuyo nombre matchea `^pavo`. La
+            regla fresh-vs-procesado del aggregator sobre pavo (50+ líneas)
+            no se replica aquí; comparar magnitudes sin replicar produciría
+            falsos positivos. Presence/absence sigue capturando pavo.
+
+    Returns:
+        dict `{name_strip: {unit_lower: qty}}`. Vacío si la lista no es válida.
+    """
+    out = defaultdict(lambda: defaultdict(float))
+    if not aggregated_list or not isinstance(aggregated_list, list):
+        return {}
+    for item in aggregated_list:
+        if not isinstance(item, dict):
+            continue
+        cat = str(item.get("category") or item.get("display_category") or "").lower()
+        if "urgente" in cat:
+            continue
+        if item.get("is_staple") is True:
+            continue
+        name = item.get("name") or item.get("display_name")
+        if not name:
+            continue
+        name_str = str(name).strip()
+        if exclude_pavo and re.match(r'^pavo\b', name_str.lower()):
+            continue
+        try:
+            qty = float(item.get("market_qty_numeric") or item.get("quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        if qty <= 0:
+            continue
+        unit = str(item.get("market_unit") or item.get("unit") or "").strip().lower()
+        if not unit:
+            unit = "unidad"
+        out[name_str][unit] += qty
+    return {n: dict(u) for n, u in out.items()}
+
+
+def _canonicalize_food_dict_for_coherence(food_dict: dict) -> dict:
+    """[P1-C 2026-05-07] Canonicaliza las keys de un dict `{food: {unit: qty}}`
+    aplicando la misma lógica que `_canonicalize_for_coherence` y sumando
+    units cuando 2 nombres originales mapean al mismo canónico (e.g.,
+    "huevo" y "claras de huevo" → ambos a "Huevo").
+    """
+    if not isinstance(food_dict, dict) or not food_dict:
+        return {}
+    raw_names = list(food_dict.keys())
+    canonical_set = _canonicalize_for_coherence(raw_names)
+    # Re-build mapping {raw → canonical} aplicando mismas reglas que el set.
+    # Truco: pasar uno por uno y leer el único elemento del set retornado.
+    out = defaultdict(lambda: defaultdict(float))
+    for raw in raw_names:
+        canon_set = _canonicalize_for_coherence([raw])
+        if not canon_set:
+            continue
+        canonical = next(iter(canon_set))
+        units = food_dict.get(raw) or {}
+        if not isinstance(units, dict):
+            continue
+        for unit, qty in units.items():
+            try:
+                out[canonical][unit] += float(qty or 0)
+            except (TypeError, ValueError):
+                continue
+    # Sanity check: garantiza que el set canónico calculado bulk coincide
+    # con las keys del dict construido item-by-item (defensivo, no bloqueante).
+    if set(out.keys()) != canonical_set:
+        logging.debug(
+            f"[COH-GUARD/v2] canonical drift: bulk={canonical_set} item={set(out.keys())}"
+        )
+    return {n: dict(u) for n, u in out.items()}
+
+
+def canonicalize_pavo(name) -> str | None:
+    """[P3-4 · 2026-05-07] Canonicaliza un nombre que referencia pavo a uno
+    de los cuatro canónicos del aggregator: 'Pechuga de pavo', 'Jamón de
+    pavo', 'Pavo molido', 'Pavo'. Devuelve None si el nombre no menciona
+    pavo o cae en un caso ambiguo (sin descriptor reconocido).
+
+    Mirror simétrico de la regla fresh-vs-procesado del aggregator
+    (`shopping_calculator.py:2865-2920`, [P3-PROTEIN-CAP-2]). El propósito
+    es que el guard recetas↔lista pueda comparar magnitudes de productos
+    de pavo sin caer en falsos positivos por divergencia entre el nombre
+    de la receta ("pechuga de pavo fresca") y el nombre canonicalizado
+    en la lista ("Pechuga de pavo").
+
+    Reglas, en orden de precedencia (idéntico al aggregator):
+      1. fresh marker (`fresca`/`fresh`) → 'Pechuga de pavo'
+      2. processed marker (`jamón de pavo`, `pavo en lonjas`, `pavo
+         procesado`, `pavo en rebanadas`) → 'Jamón de pavo'
+      3. `pavo molido` o `carne de pavo` → 'Pavo molido'
+      4. `pechuga de pavo` o `filete de pavo` (sin marker fresh/procesado)
+         → 'Pechuga de pavo' (default seguro fresh)
+      5. exact `'pavo'` (lower-stripped) → 'Pavo'
+      6. cualquier otro caso (ej. "pavo guisado") → None.
+
+    Nota: NO modifica el comportamiento del aggregator ni de
+    `normalize_name`. Es una réplica de su contrato para uso simétrico
+    desde el path de coherencia. Si el aggregator cambia su regla, este
+    helper debe actualizarse — el test
+    `test_p3_4_canonicalize_pavo_mirrors_aggregator` verifica el mirror.
+    """
+    if not name:
+        return None
+    n_low = str(name).strip().lower()
+    if not re.search(r'\bpavo\b', n_low):
+        return None
+    if re.search(r'\bfresc[oa]s?\b|\bfresh\b', n_low):
+        return 'Pechuga de pavo'
+    if re.search(
+        r'jam[oó]n\s+de\s+pavo|pavo\s+en\s+lonjas?|lonjas?\s+de\s+pavo|'
+        r'pavo\s+procesado|pavo\s+en\s+rebanadas?',
+        n_low,
+    ):
+        return 'Jamón de pavo'
+    if re.search(r'\bpavo\s+molido\b|\bcarne\s+de\s+pavo\b', n_low):
+        return 'Pavo molido'
+    if re.search(r'\b(pechuga|filete)\s+de\s+pavo\b', n_low):
+        return 'Pechuga de pavo'
+    if n_low == 'pavo':
+        return 'Pavo'
+    return None
+
+
+def _canonicalize_for_coherence(food_names) -> set:
+    """[P1-shop-coh-1 · 2026-05-07] Canonicaliza un set de food names usando
+    master_map + reglas inline simples del aggregator (huevo/ñame/miel/ajo).
+
+    [P3-4 · 2026-05-07] Ahora también aplica `canonicalize_pavo` para que
+    los productos de pavo sean simétricos entre expected (receta) y
+    aggregated (lista). Limitación v1/v2 (pavo como falso positivo)
+    cerrada.
+
+    Réplica subset de la canonicalización en `aggregate_and_deduct_shopping_list`
+    (línea ~2280) para que el guard compare nombres simétricos en ambos lados.
+    """
+    if not food_names:
+        return set()
+    try:
+        master_list = get_master_ingredients() or []
+    except Exception as e:
+        logging.debug(f"[COH-GUARD] master_map fetch falló: {e}")
+        master_list = []
+
+    alias_map = {}
+    for m in master_list:
+        canonical = m.get("name") or ""
+        if not canonical:
+            continue
+        alias_map[canonical.strip().lower()] = canonical
+        for alias in (m.get("aliases") or []):
+            if alias:
+                alias_map[str(alias).strip().lower()] = canonical
+
+    out = set()
+    for raw_name in food_names:
+        if not raw_name:
+            continue
+        n_low = str(raw_name).strip().lower()
+        canonical = alias_map.get(n_low, str(raw_name).strip())
+        c_low = canonical.lower()
+        if re.search(r'^(huevos?|claras?\s+de\s+huevo|yemas?\s+de\s+huevo)', c_low):
+            canonical = 'Huevo'
+        elif re.search(r'^[ñn]ame\b', c_low):
+            canonical = 'Ñame'
+        elif re.search(r'^miel\b', c_low):
+            canonical = 'Miel'
+        elif (re.search(r'^ajo\b', c_low) or re.search(r'dientes?\s+de\s+ajo', c_low)) and 'polvo' not in c_low:
+            canonical = 'Ajo'
+        else:
+            # [P3-4 · 2026-05-07] Pavo: aplicar mirror del aggregator. Aplica
+            # sobre raw_name (preserva intent del LLM) Y sobre canonical
+            # (cubre el caso en que master_map ya canonicalizó). Si alguno
+            # produce un canónico, ese gana; si ninguno → keep canonical.
+            pavo_from_raw = canonicalize_pavo(raw_name)
+            pavo_from_canon = canonicalize_pavo(canonical)
+            if pavo_from_raw is not None:
+                canonical = pavo_from_raw
+            elif pavo_from_canon is not None:
+                canonical = pavo_from_canon
+        out.add(canonical)
+    return out
+
+
+def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None, multiplier: float = None) -> list:
+    """[P1-shop-coh-1 · 2026-05-07 / P1-C 2026-05-07 v2] Guard recetas↔lista.
+    Honra `MEALFIT_SHOPPING_COHERENCE_GUARD` (off|warn|block).
+
+    v2 cubre dos capas:
+      A) **Presence/absence** (heredado de v1):
+         - food en recetas y ausente de la lista → `cap_swallowed_modifier`.
+         - food en la lista y ausente de las recetas → `unknown`.
+      B) **Magnitudes** (P1-C, requiere multiplier):
+         - escala expected por household multiplier antes de comparar.
+         - excluye pavo del lado aggregated para evitar falsos positivos
+           (regla fresh-vs-procesado de 50+ líneas no replicada).
+         - usa `compare_expected_vs_aggregated` con tolerance leído del knob
+           `MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT` (default 0.10) →
+           ejercita las hipótesis `yield_uncovered`, `pantry_overdeduct`,
+           `unit_mismatch` además de `cap_swallowed_modifier` (qty mitad).
+
+    Items con `is_staple=True` o categoría "Urgente" se filtran del lado
+    aggregated en ambas capas (no provienen de recetas, son ruido).
+
+    Args:
+        plan_result: dict con `days` y `aggregated_shopping_list`. Opcional
+            `calc_household_multiplier` (cacheado por P1-3).
+        mode_override: si se pasa, ignora el env var. Útil para el cron
+            (Paso 7) que re-evalúa planes ya persistidos en modo `warn` para
+            evitar mutar `_shopping_coherence_block` retroactivamente.
+        multiplier: [P1-C] override del household multiplier. Si None, lee de
+            `plan_result["calc_household_multiplier"]` con fallback 1.0.
+            Pasar `multiplier=1.0` desactiva la simetría de escala (útil para
+            tests v1 retro-compatibles).
+
+    Modos:
+      off:   no-op.
+      warn:  log estructurado de divergencias + Counter por hipótesis.
+      block: igual que warn + setea `plan_result["_shopping_coherence_block"]`
+             con el subset crítico:
+               - foods de receta AUSENTES en lista (presence), Y/O
+               - divergencias de magnitud con delta_pct > tolerance que
+                 NO sean fantasmas (delta=inf desde lado aggregated).
+             [P2-A · 2026-05-07] El flag es CONSUMIDO por `review_plan_node`
+             (graph_orchestrator) que rechaza el plan según
+             `MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION` (default `reject_minor`).
+             Antes de ese fix, mode=block era no-op silencioso (flag persistía
+             pero nada lo accionaba). Ver memoria
+             `project_p2_a_shopping_coherence_block_enforced`.
+
+    Returns:
+        Lista `[{food, side, hypothesis, ...}]`. Items presence/absence tienen
+        `magnitude=False`. Items v2 magnitud tienen `magnitude=True` + campos
+        `unit, expected_qty, actual_qty, delta_pct`. Vacía si guard `off` o
+        sin divergencias.
+    """
+    if mode_override is not None:
+        mode = str(mode_override).strip().lower()
+        if mode not in ("off", "warn", "block"):
+            mode = "warn"
+    else:
+        mode = _get_coherence_guard_mode()
+    if mode == "off":
+        return []
+
+    # [P1-C] Resolver multiplier: arg explícito > plan_result cacheado > 1.0.
+    if multiplier is None:
+        try:
+            mult = float(plan_result.get("calc_household_multiplier") or 1.0)
+        except (TypeError, ValueError):
+            mult = 1.0
+    else:
+        try:
+            mult = float(multiplier)
+        except (TypeError, ValueError):
+            mult = 1.0
+    if math.isnan(mult) or math.isinf(mult) or mult <= 0:
+        mult = 1.0
+
+    try:
+        expected_raw = expected_sum_from_recipes(plan_result, apply_yield=False, multiplier=mult)
+    except Exception as e:
+        logging.warning(f"[COH-GUARD] expected_sum_from_recipes falló: {e}")
+        return []
+
+    aggregated_list = plan_result.get("aggregated_shopping_list") or []
+    aggregated_names_raw = set()
+    for item in aggregated_list:
+        if not isinstance(item, dict):
+            continue
+        cat = str(item.get("category") or item.get("display_category") or "").lower()
+        if "urgente" in cat:
+            continue
+        if item.get("is_staple") is True:
+            continue
+        nm = item.get("name") or item.get("display_name")
+        if nm:
+            aggregated_names_raw.add(str(nm).strip())
+
+    expected_names = _canonicalize_for_coherence(set(expected_raw.keys()))
+    aggregated_names = _canonicalize_for_coherence(aggregated_names_raw)
+
+    missing_in_agg = expected_names - aggregated_names
+    extra_in_agg = aggregated_names - expected_names
+
+    divergences = []
+    for food in sorted(missing_in_agg):
+        divergences.append({
+            "food": food,
+            "side": "expected_only",
+            "hypothesis": "cap_swallowed_modifier",
+            "magnitude": False,
+        })
+    for food in sorted(extra_in_agg):
+        divergences.append({
+            "food": food,
+            "side": "aggregated_only",
+            "hypothesis": "unknown",
+            "magnitude": False,
+        })
+
+    # [P1-C] Capa B: magnitudes. Solo se ejercita si tenemos expected y la
+    # lista tiene items (early-out evita work inútil sobre planes vacíos).
+    magnitude_divs = []
+    if expected_raw and aggregated_list:
+        try:
+            tolerance_pct = _get_coherence_tolerance_pct()
+            # [P3-4 · 2026-05-07] exclude_pavo=False ahora que
+            # `canonicalize_pavo` (en `_canonicalize_for_coherence`) hace
+            # el mirror simétrico de la regla fresh-vs-procesado del
+            # aggregator. Antes se excluía pavo de ambos lados para
+            # evitar falsos positivos por divergencia de canónico.
+            agg_dict = _extract_aggregated_food_dict(aggregated_list, exclude_pavo=False)
+            expected_canonical = _canonicalize_food_dict_for_coherence(expected_raw)
+            aggregated_canonical = _canonicalize_food_dict_for_coherence(agg_dict)
+            raw_mags = compare_expected_vs_aggregated(
+                expected_canonical,
+                aggregated_canonical,
+                tolerance=tolerance_pct,
+            )
+            # Filtrar `cap_swallowed_modifier` con act_qty=0 ya capturados por
+            # presence/absence: evita doble-reporte del mismo food. Mantenemos
+            # los casos donde act_qty>0 (qty mitad u otra deficiencia parcial).
+            for d in raw_mags:
+                food = d["food"]
+                # Caso ya cubierto por capa A: food faltante completo.
+                if d["actual_qty"] == 0 and food in missing_in_agg:
+                    continue
+                # Caso ya cubierto por capa A: fantasma puro.
+                if d["expected_qty"] == 0 and food in extra_in_agg:
+                    continue
+                d2 = dict(d)
+                d2["side"] = "magnitude"
+                d2["magnitude"] = True
+                magnitude_divs.append(d2)
+        except Exception as e:
+            logging.warning(f"[COH-GUARD/v2] magnitudes falló (no aborta): {e}")
+
+    divergences.extend(magnitude_divs)
+
+    if divergences:
+        from collections import Counter
+        by_hyp = Counter(d["hypothesis"] for d in divergences)
+        sample = "; ".join(f"{d['food']} [{d['side']}]" for d in divergences[:6])
+        logging.warning(
+            f"🛒 [COH-GUARD/{mode}] {len(divergences)} divergencias "
+            f"(presence={len(missing_in_agg)+len(extra_in_agg)}, magnitude={len(magnitude_divs)}, "
+            f"multiplier={mult}). Hipótesis: {dict(by_hyp)}. Sample: {sample}"
+        )
+        if mode == "block":
+            critical = []
+            # Crítico A: foods de receta ausentes en lista (presence).
+            critical.extend(d for d in divergences if d["side"] == "expected_only")
+            # Crítico B: divergencias de magnitud con delta finito > tolerance
+            # (excluir fantasmas con delta=inf — pueden ser staples no marcados).
+            critical.extend(
+                d for d in magnitude_divs
+                if d.get("delta_pct") != float("inf") and d.get("expected_qty", 0) > 0
+            )
+            if critical:
+                plan_result["_shopping_coherence_block"] = critical
+                logging.error(
+                    f"🛒 [COH-GUARD/block] {len(critical)} divergencias críticas "
+                    f"(presence_missing + magnitude_delta) → marcado para review."
+                )
+    else:
+        logging.info(
+            f"🛒 [COH-GUARD/{mode}] OK: 0 divergencias (presence+magnitude, multiplier={mult})."
+        )
+
+    return divergences
 
 
 def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0):
@@ -2781,6 +3484,45 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"frascos × {int(_OLIVE_FRASCO_GRAMS/_OLIVE_DENSITY_G_PER_UNIT)} "
                     f"olivas/frasco; person_weeks={_person_weeks:.1f})"
                 )
+        # [P6-OLIVE-CAP-FIX-5 2026-05-07] Cap por unidades VOLUMÉTRICAS
+        # (taza/cda/cdta). Bug observable PDF 2026-05-07 00:49 (plan
+        # 4374fb17): "Aceitunas: 47 frascos (12 oz c/u)" = 16 kg para 1p×mes.
+        # Causa: LLM emitió "X taza/cda de aceitunas" en varias comidas →
+        # unit_key 'taza'/'cda'/'cdta' → NO matchea substring frasco/etc,
+        # NO está en _WEIGHT_UNIT_TO_G, NO está en unidad/unidades → escapa
+        # los 3 caps anteriores. Después apply_smart_market_units multiplica
+        # taza/cda por densidad volumétrica → frascos display.
+        # Convertir taza/cda/cdta a gramos equivalentes y capear si exceden.
+        _VOLUMETRIC_TO_G = {
+            'taza': 130.0,   # 1 taza ≈ 130g aceitunas drained
+            'tazas': 130.0,
+            'cda': 14.0,     # 1 cda ≈ 14g aceitunas
+            'cdas': 14.0,
+            'cucharada': 14.0,
+            'cucharadas': 14.0,
+            'cdta': 5.0,     # 1 cdta ≈ 5g aceitunas (~1 oliva)
+            'cdtas': 5.0,
+            'cucharadita': 5.0,
+            'cucharaditas': 5.0,
+        }
+        _vol_total_g = sum(
+            _units.get(u, 0) * _VOLUMETRIC_TO_G[u]
+            for u in _VOLUMETRIC_TO_G
+            if u in _units
+        )
+        if _vol_total_g > _olive_cap_g:
+            _vol_present = {u: _units[u] for u in _VOLUMETRIC_TO_G if u in _units}
+            for _vu in list(_vol_present.keys()):
+                del _units[_vu]
+            # Sumamos al peso 'g' existente (defensa: si ya hay 'g' del weight
+            # path, no perdemos; si no, creamos nuevo)
+            _units['g'] = _units.get('g', 0.0) + float(_olive_cap_g)
+            logging.warning(
+                f"[P5-OLIVE-CAP] '{_name}' volumétrico cap: {_vol_total_g:.0f}g "
+                f"(de {_vol_present}) → {_olive_cap_g:.0f}g "
+                f"(≈{_olive_cap_frascos} frascos 12oz; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
 
     # ============================================================
     # [P6-CITRUS-CAP] Cap defensivo para cítricos perecederos
@@ -2819,7 +3561,23 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         _name_norm = strip_accents(_name.lower()).strip()
         if _name_norm not in _CITRUS_PER_WEEK_PER_PERSON:
             continue
-        _per_week, _density = _CITRUS_PER_WEEK_PER_PERSON[_name_norm]
+        _per_week, _density_default = _CITRUS_PER_WEEK_PER_PERSON[_name_norm]
+        # Prefer master_ingredients.density_g_per_unit cuando esté poblado:
+        # Naranja master tiene 180 g/ud (no 200), Limón 50 g/ud (no 60). Usar
+        # el default hardcoded sin reconciliar producía cap_g = 3 × 200 = 600g
+        # pero apply_smart_market_units divide después por master.density (180)
+        # → ceil(600/180) = 4 unidades, off-by-1 vs el cap intencional de 3.
+        _master_for_density = (
+            master_map.get(_name)
+            or master_map.get(_name.lower())
+            or master_map.get(_name.title())
+            or {}
+        )
+        try:
+            _master_density = float(_master_for_density.get("density_g_per_unit") or 0)
+        except (TypeError, ValueError):
+            _master_density = 0.0
+        _density = _master_density if _master_density > 0 else _density_default
         _citrus_cap_units = max(2, int(round(_per_week * _person_weeks)))
         _citrus_cap_g = _citrus_cap_units * _density
 
@@ -3262,6 +4020,73 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             )
 
     # ============================================================
+    # [P6-OIL-CAP] Cap defensivo para aceites de cocina
+    # ------------------------------------------------------------
+    # PDF 2026-05-07 00:30 (plan d119b6b7): "Aceite vegetal: 14 botellas
+    # (946ml c/u)" = 13.2 LITROS para 1 persona × 1 mes — absurdo. Una
+    # familia de 4 usa ~500ml/mes en uso normal. El bug: P6-OLIVE-CAP
+    # cubre aceitunas (encurtidos), NO aceite. Aceite de oliva sale
+    # "1 botella (250ml)" naturalmente porque master tiene container_weight=250
+    # y el LLM emite poco (cdtas), pero "Aceite vegetal" tiene container 946ml
+    # y el LLM emite suficientemente más volumen → SKU resolver multiplica.
+    #
+    # Causa-raíz del LLM emitting más vegetal oil: lo usa para "freir" /
+    # "saltear" en pasos de cocina (~1-2 cdas por receta), mientras aceite
+    # de oliva se reserva para finishing/aderezos (~1 cdta).
+    #
+    # Cap: 1 botella (~946ml estándar dominicano) por cada 4 person-weeks.
+    # Equivale a ~1 botella por persona por mes — cubre uso normal con
+    # margen. Substring match para capturar todos los variantes:
+    #   aceite de oliva, aceite vegetal, aceite de canola, aceite de coco,
+    #   aceite de girasol, aceite de maíz, aceite de sésamo, etc.
+    # Excluye 'aceitunas' (que YA cubre P6-OLIVE-CAP) y 'aceite de hígado'
+    # (suplemento, no cocina) por exact match en exclusión.
+    # ============================================================
+    _OIL_NAME_SUBSTRINGS = ('aceite',)
+    _OIL_NAME_EXCLUDE = (
+        'aceitunas', 'aceituna',  # encurtidos — cubierto por P6-OLIVE-CAP
+        'aceite de higado', 'aceite de hígado',  # suplemento, no cocina
+    )
+    _OIL_BOTTLE_GRAMS = 946.0  # botella estándar 32 oz (~946ml) en colmado DR
+
+    _oil_cap_botellas = max(1, int(round(_person_weeks / 4.0)))
+    _oil_cap_g = _oil_cap_botellas * _OIL_BOTTLE_GRAMS
+
+    for _name, _units in list(aggregated.items()):
+        _name_norm = strip_accents(_name.lower()).strip()
+        if not any(s in _name_norm for s in _OIL_NAME_SUBSTRINGS):
+            continue
+        if any(excl in _name_norm for excl in _OIL_NAME_EXCLUDE):
+            continue
+        # Cap por unit count (botella/frasco)
+        for _unit_key in ('botella', 'botellas', 'frasco', 'frascos'):
+            if _unit_key in _units and _units[_unit_key] > _oil_cap_botellas:
+                _old = _units[_unit_key]
+                _units[_unit_key] = float(_oil_cap_botellas)
+                logging.warning(
+                    f"[P6-OIL-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
+                    f"{_oil_cap_botellas} (person_weeks={_person_weeks:.1f}; "
+                    f"aceite cocina dura ~1 mes/persona por botella 946ml)"
+                )
+        # Cap por peso TOTAL (cubre 'g'/'oz'/'lb'/'kg'/'ml'/'l').
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _oil_cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
+            _units['g'] = float(_oil_cap_g)
+            logging.warning(
+                f"[P6-OIL-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
+                f"(de {_present_units}) → {_oil_cap_g:.0f}g "
+                f"(≈{_oil_cap_botellas} botellas 946ml; "
+                f"person_weeks={_person_weeks:.1f})"
+            )
+
+    # ============================================================
     # [P6-CARBS-CAP] Cap defensivo para carbos packageados (tortillas, pan)
     # ------------------------------------------------------------
     # PDF 2026-05-05 22:42: "Tortilla integral: 7 paquetes (288g c/u)" =
@@ -3283,9 +4108,21 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         'galletas', 'galletas de soda', 'galletas saladas',
         'galletas integrales', 'crackers',
     }
-    _CARBS_PACKAGE_GRAMS = 300.0  # paquete estándar (~10-12 piezas)
+    # [CAP-RECALIBRATION 2026-05-07] Pan integral master tiene
+    # container_weight_g=567 (no 300 asumido). Cap viejo de 1 paq/2pw × 300g
+    # daba monthly=600g/persona = ~20g/día = ½ lonja/día (3× menos que el
+    # consumo realista de 2-3 lonjas/día = 60g/día = 1800g/mes).
+    # Nuevo: container 450g promedio (más cerca a real DR) y formula ×1pw
+    # (en vez de /2pw) → monthly = 4 × 450 = 1800g cap, que con SKU 567g
+    # se resuelve a 3 paq (1701g, ~57g/día = 2 lonjas, realista).
+    # Knob MEALFIT_CARBS_CAP_GRAMS_PER_PW: gramos por person-week. Default 450
+    # (real-world). Operador puede subir a 600 para usuarios pan-heavy o
+    # bajar a 300 para reducir desperdicio.
+    _CARBS_PACKAGE_GRAMS = max(150.0, float(os.environ.get(
+        "MEALFIT_CARBS_CAP_GRAMS_PER_PW", "450"
+    )))
 
-    _carbs_cap_packages = max(1, int(round(_person_weeks / 2.0)))
+    _carbs_cap_packages = max(1, int(round(_person_weeks)))
     _carbs_cap_g = _carbs_cap_packages * _CARBS_PACKAGE_GRAMS
 
     for _name, _units in list(aggregated.items()):
@@ -3315,7 +4152,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             logging.warning(
                 f"[P6-CARBS-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_carbs_cap_g:.0f}g "
-                f"(≈{_carbs_cap_packages} paquetes 300g; "
+                f"(≈{_carbs_cap_packages} paquetes {int(_CARBS_PACKAGE_GRAMS)}g; "
                 f"person_weeks={_person_weeks:.1f})"
             )
 
@@ -3348,7 +4185,20 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     )
     _LEGUMES_PACKAGE_GRAMS = 453.592  # 1 lb estándar mercado dominicano
 
-    _legumes_cap_packages = max(1, int(round(_person_weeks / 2.0)))
+    # [CAP-RECALIBRATION 2026-05-07] Cap viejo de 1 paq/2pw daba monthly =
+    # 2 paq (907g) para 1 persona = 30g/día raw → ~90g cocido/día. Realista
+    # para "legumbres ocasionales" pero corto si el planner las elige como
+    # proteína principal del día (caso real cuando el goal es gain_muscle
+    # plant-based o cuando habichuelas es uno de los 3 chosen_proteins).
+    # En ese caso, una persona come ~200g cocido/día (1 taza) = ~70g raw/día
+    # = ~1.96 kg/mes raw — bien sobre el cap viejo de 907g.
+    # Nuevo: 1 paq por person-week (en vez de /2pw). Monthly = 4 paq (1816g)
+    # = 60g/día raw → 180g cocido/día. Realistic para legume-heavy diet.
+    # Knob MEALFIT_LEGUMES_PACKS_PER_PW: paquetes por person-week (default 1.0).
+    _legumes_packs_per_pw = max(0.25, float(os.environ.get(
+        "MEALFIT_LEGUMES_PACKS_PER_PW", "1.0"
+    )))
+    _legumes_cap_packages = max(1, int(round(_person_weeks * _legumes_packs_per_pw)))
     _legumes_cap_g = _legumes_cap_packages * _LEGUMES_PACKAGE_GRAMS
 
     for _name, _units in list(aggregated.items()):
@@ -3735,6 +4585,19 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # 0.75 lb/persona/sem = uso intensivo. Para 2p × mes: cap 6 lbs.
         'queso blanco': 0.75,
         'queso fresco': 0.75,
+        # [P6-LACTEOS-EXT-4 2026-05-07] Leche (PDF 2026-05-07 plan 7ab9a552:
+        # 3 cartones 946ml = 2.8 LITROS para 1p × sem ≈ 400ml/día). Para
+        # alguien que toma leche en café/cereal/batido, ~250ml/día = 1.75
+        # L/sem es uso intensivo realista pero 2.8L es excesivo.
+        # Cap: 1.75 lb/persona/sem (≈800ml/sem ≈ 1 cartón pequeño 946ml).
+        # Para 1p × mes (4pw): 7 lbs ≈ 3.2 L = 3-4 cartones (vs los 12
+        # potenciales cartones que el LLM emitiría sin cap).
+        # IMPORTANT: 'leche' substring también matchea 'leche en polvo' /
+        # 'leche evaporada' / 'leche UHT' que son ESTABLES (long shelf).
+        # Pero el cap es ALL-CAUSE: si compras 3L de leche en cualquier
+        # forma, está bien. Lácteos son perishable post-apertura, así que
+        # cap por volumen total tiene sentido.
+        'leche': 1.75,
     }
 
     for _name, _units in list(aggregated.items()):
@@ -3749,14 +4612,27 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         _cap_lbs = max(1.0, float(round(_per_week_lbs * _person_weeks)))
         _cap_g = _cap_lbs * 453.592
 
-        if 'g' in _units and _units['g'] > _cap_g:
-            _old_g = _units['g']
+        # [LACTEOS-CAP-FIX 2026-05-07] Cap viejo solo chequeaba 'g' como unit
+        # de peso. Bug observable plan 7ab9a552: Leche 3 cartones (2.8L)
+        # weekly. La leche se emite en 'ml', que escapa el check de 'g'.
+        # Fix: sumar TODAS las unidades de peso/volumen (`_WEIGHT_UNIT_TO_G`
+        # ya cubre g/kg/oz/lb/lbs/ml/l) y capear el total — mismo patrón
+        # que P6-OIL-CAP / P6-SAUCE-CAP.
+        _total_weight_g = sum(
+            _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
+            for u in _WEIGHT_UNIT_TO_G
+            if u in _units
+        )
+        if _total_weight_g > _cap_g:
+            _present_units = {u: _units[u] for u in _WEIGHT_UNIT_TO_G if u in _units}
+            for _wu in list(_present_units.keys()):
+                del _units[_wu]
             _units['g'] = float(_cap_g)
             logging.warning(
-                f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' peso cap: {_old_g:.0f}g "
-                f"→ {_cap_g:.0f}g (≈{_cap_lbs:.0f} lbs / potes; "
-                f"person_weeks={_person_weeks:.1f}; storage realismo: "
-                f"yogurt dura ~14 días refrigerado)"
+                f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' peso total cap: "
+                f"{_total_weight_g:.0f}g (de {_present_units}) → {_cap_g:.0f}g "
+                f"(≈{_cap_lbs:.0f} lbs; person_weeks={_person_weeks:.1f}; "
+                f"storage realismo: lácteos abiertos duran ~14 días refrigerado)"
             )
         for _unit_key in ('lb', 'lbs', 'libra', 'libras'):
             if _unit_key in _units and _units[_unit_key] > _cap_lbs:
@@ -3766,13 +4642,16 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
                     f"{_old:.1f} → {_cap_lbs:.0f} lbs"
                 )
-        for _unit_key in ('pote', 'potes'):
+        # [LACTEOS-CAP-FIX 2026-05-07] Cap por count para potes/cartones —
+        # cubre el caso "X cartones de leche" emitido por el LLM como conteo.
+        # Conversión aproximada: 1 cartón ≈ 1 lb (16oz ~ 454g leche).
+        for _unit_key in ('pote', 'potes', 'carton', 'cartones', 'cartón'):
             if _unit_key in _units and _units[_unit_key] > _cap_lbs:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_cap_lbs)
                 logging.warning(
                     f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
-                    f"{_old:.0f} → {_cap_lbs:.0f} potes (1 pote ≈ 16oz/1 lb)"
+                    f"{_old:.0f} → {_cap_lbs:.0f} {_unit_key} (1 unidad ≈ 16oz/1 lb)"
                 )
 
     # ============================================================
@@ -3831,21 +4710,76 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"{_old:.1f} → {_cap_lbs:.1f} lbs"
                 )
 
+    # [2026-05-06 PROTEIN-UNIT-FALLBACK] Fallback portion para proteínas que
+    # llegan en unidades sueltas sin peso explícito.
+    # ------------------------------------------------------------
+    # PDF 2026-05-06 22:53: "Cerdo: 4 Uds." con ⚠ low-confidence.
+    # Causa: el LLM emitió "1 chuleta de cerdo" / "1 lonja de cerdo" /
+    # "1 unidad de cerdo" en alguna comida (sin peso). `_parse_quantity`
+    # no reconoce 'chuleta' como unit canónico → cae a 'unidad' y mueve
+    # 'chuleta' al name. master_map resuelve 'chuleta de cerdo' → 'Cerdo'
+    # vía alias, pero la unidad ya quedó como 'unidad'. master.Cerdo tiene
+    # `default_unit='lb'` y `density_g_per_unit=null` (idéntico para todas
+    # las proteínas: pollo, res, pescado, pavo) — no hay fallback en master
+    # para convertir unit→peso, así que el aggregator stored 'unidad' as-is.
+    # Resultado: "Cerdo: 4 Uds" — semánticamente vacío para el usuario,
+    # las proteínas se compran SIEMPRE por peso en supermercado dominicano.
+    #
+    # Fix: cuando el item es proteína (master.default_unit='lb',
+    # master.category='Proteínas') Y SOLO trae count-units sin peso ni
+    # densidad nativa, convertir cada unit count → gramos usando un
+    # tamaño de porción típico (200g = chuleta/lonja/filete promedio en RD).
+    # Knob: MEALFIT_PROTEIN_UNIT_FALLBACK_G.
+    # ============================================================
+    _PROTEIN_UNIT_FALLBACK_G = max(50, int(os.environ.get(
+        "MEALFIT_PROTEIN_UNIT_FALLBACK_G", "200"
+    )))
+    _COUNT_UNITS_FOR_PROTEIN = ('unidad', 'unidades', 'rebanada', 'rebanadas',
+                                 'paquete', 'paquetes', 'lonja', 'lonjas')
+    _WEIGHT_UNITS_FOR_PROTEIN = ('g', 'kg', 'oz', 'lb', 'lbs', 'libra', 'libras', 'ml', 'l')
+
     for name, units in aggregated.items():
         master_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title()) or {}
 
         # Evitar líquidos comunes/ilimitados en casa
         if _should_ignore_shopping(name):
             continue
-            
+
         weight_in_lbs = 0.0
         has_weight = False
         cat = master_item.get("category") or "Otros"
         display_cat = _get_display_category(cat, name)
-        
+
         price_per_lb = float(master_item.get("price_per_lb", 0) or 0)
         price_per_unit = float(master_item.get("price_per_unit", 0) or 0)
-        
+
+        # [PROTEIN-UNIT-FALLBACK] Aplica ANTES de la extracción de peso.
+        # Solo convierte si: (a) cat=Proteínas, (b) master.default_unit='lb',
+        # (c) NO hay density_g_per_unit nativo en master, (d) NO hay unidades
+        # de peso en `units` (no queremos doblar contar items que el LLM
+        # emitió en ambas formas), (e) hay al menos 1 count-unit relevante.
+        _is_protein = strip_accents(str(cat).lower()).strip() in ('proteinas', 'proteína', 'proteinas')
+        _master_default_unit = str(master_item.get("default_unit") or "").lower().strip()
+        _has_master_density = bool(master_item.get("density_g_per_unit"))
+        _has_weight_unit = any(_wu in units for _wu in _WEIGHT_UNITS_FOR_PROTEIN)
+        if (_is_protein and _master_default_unit == 'lb'
+                and not _has_master_density and not _has_weight_unit):
+            _converted_g = 0.0
+            _converted_from = []
+            for _cu in _COUNT_UNITS_FOR_PROTEIN:
+                if _cu in units and units[_cu] > 0.0001:
+                    _converted_g += units[_cu] * _PROTEIN_UNIT_FALLBACK_G
+                    _converted_from.append(f"{units[_cu]:.1f}{_cu}")
+                    del units[_cu]
+            if _converted_g > 0:
+                units['g'] = units.get('g', 0.0) + _converted_g
+                logging.info(
+                    f"[PROTEIN-UNIT-FALLBACK] '{name}': "
+                    f"{','.join(_converted_from)} → {_converted_g:.0f}g "
+                    f"(porción default={_PROTEIN_UNIT_FALLBACK_G}g/ud; "
+                    f"master.density vacía → no se podía convertir nativamente)"
+                )
+
         if 'g' in units:
             weight_in_lbs += units['g'] / 453.592
             has_weight = True
@@ -3931,8 +4865,17 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # [P1-PDF-2] Cierra el drift de la heurística substring que vivía
                 # SOLO en frontend. Backend es ahora SSOT para perishable
                 # classification; el frontend lee este flag directo.
+                # [PEPINO-FIX 2026-05-07] Cuando el item NO está en master
+                # (cat="Otros" por default), usar `display_cat` como fallback.
+                # `display_cat` viene de regex sobre el nombre y captura
+                # variantes que master no registra (ej: Pepino → "VEGETALES").
+                # Sin esto, items missing-from-master caían al default
+                # "estable" mientras hybrid los marcaba "perecedero" → list
+                # weekly mostraba Pepino en estables y biweekly/monthly en
+                # perecederos (inconsistencia visible).
+                _cat_for_perish = cat if (cat and cat.lower() != "otros") else display_cat
                 market_obj["is_perishable"] = is_perishable_category(
-                    cat, market_obj.get("shelf_life_days")
+                    _cat_for_perish, market_obj.get("shelf_life_days")
                 )
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
                 item_val = market_obj if structured else market_obj["display_string"]
@@ -3962,8 +4905,17 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # [P1-PDF-2] Mismo flag que arriba — todo item entrando a
                 # `aggregated_shopping_list` debe tener `is_perishable` para que
                 # el frontend nunca caiga al fallback de substring matching.
+                # [PEPINO-FIX 2026-05-07] Cuando el item NO está en master
+                # (cat="Otros" por default), usar `display_cat` como fallback.
+                # `display_cat` viene de regex sobre el nombre y captura
+                # variantes que master no registra (ej: Pepino → "VEGETALES").
+                # Sin esto, items missing-from-master caían al default
+                # "estable" mientras hybrid los marcaba "perecedero" → list
+                # weekly mostraba Pepino en estables y biweekly/monthly en
+                # perecederos (inconsistencia visible).
+                _cat_for_perish = cat if (cat and cat.lower() != "otros") else display_cat
                 market_obj["is_perishable"] = is_perishable_category(
-                    cat, market_obj.get("shelf_life_days")
+                    _cat_for_perish, market_obj.get("shelf_life_days")
                 )
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
                 item_val = market_obj if structured else market_obj["display_string"]

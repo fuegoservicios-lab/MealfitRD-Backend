@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
+from error_utils import safe_error_detail
 from typing import Optional
 import logging
 import traceback
@@ -54,7 +55,7 @@ def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verif
         return {"sessions": sessions}
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions GET: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.delete("/sessions/{user_id}")
@@ -67,7 +68,7 @@ def api_delete_chat_sessions(user_id: str, verified_user_id: Optional[str] = Dep
         return {"success": True}
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/sessions DELETE: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 from pydantic import BaseModel
@@ -86,7 +87,7 @@ def api_rename_chat_session(session_id: str, data: RenameSessionReq, verified_us
         return {"success": True}
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/session PUT: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/history/{session_id}")
@@ -107,7 +108,7 @@ def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depe
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/chat/history GET: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.delete("/session/{session_id}")
@@ -130,7 +131,7 @@ def api_delete_chat_session(session_id: str, verified_user_id: Optional[str] = D
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en DELETE chat: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/message")
@@ -323,7 +324,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 
@@ -397,5 +398,5 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 

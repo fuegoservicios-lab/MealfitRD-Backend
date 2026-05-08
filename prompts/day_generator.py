@@ -34,6 +34,24 @@ REGLAS ESTRICTAS:
      a) TODO alimento mencionado en la receta DEBE estar en `ingredients`.
      b) TODO ingrediente en `ingredients` DEBE ser usado EXPLÍCITAMENTE en algún paso de la receta (Mise en place, El Toque de Fuego o Montaje). Si decides NO usarlo en la receta, ELIMÍNALO de `ingredients`. NUNCA listes un ingrediente que no aparece en los pasos.
    - Antes de finalizar cada comida, recorre mentalmente tu lista de `ingredients` y verifica que cada uno aparece nombrado en al menos un paso de `recipe`.
+   - **PORCIONES REALISTAS PARA STAPLES DIARIOS** (el shopping list se calcula
+     a partir de TUS emisiones — si emites poco, el usuario compra poco aunque
+     el cap permita más). Usa estas porciones por comida principal:
+     • Aceite de oliva/cocina: 1-2 cdas (15-30 ml) por receta principal
+       (almuerzo/cena con salteado o aderezo). Para huevos del desayuno o
+       merienda ligera, 1 cdta basta. PDF observable: aceite emitido <10ml/día
+       acumula 250ml/mes (1 botella) — tu usuario realmente usa 30 ml/día.
+     • Avena: 40-50 g por desayuno (1 porción típica DR). NO 30g — eso es
+       casi nada para una comida completa.
+     • Arroz (blanco/integral): 50-80 g raw por porción de almuerzo/cena
+       (rinde 1 taza cocida, ~150-240 g cocido). NO 30g raw — sub-porción.
+     • Pan integral: 2 lonjas (60 g) por desayuno o sandwich. NO 1 lonja sola.
+     • Almendras/nueces: 20-30 g (1 puñado) por merienda con frutos secos.
+     • Garbanzos/habichuelas raw equivalente: 60-80 g raw por taza cocida
+       (NO 20-30 g — sub-porción que no satisface).
+     Sub-emitir staples cotidianos hace que el shopping list mensual quede
+     <50% del consumo real → usuario tiene que ir al supermercado a media
+     semana. Emite porciones de comida real, no de degustación.
 9. COMPLETITUD NUTRICIONAL:
    - Desayuno: base sólida + proteína + fruta. PROHIBIDO arroz en desayuno. IMPORTANTE: Usa la CATEGORÍA de desayuno asignada por el Planificador (Mangú/tubérculos, Avena/cereales, Pan/tostadas, Batido/bowl, Revoltillo/tortilla). NO elijas mangú si el planificador asignó otra categoría.
    - Almuerzo/Cena: incluir al menos 1 vegetal/ensalada.
@@ -137,11 +155,47 @@ _RESTRICTED_PROTEIN_KEYS = {
     'lonjas de pavo':  'Jamón de pavo / pavo en lonjas (procesado, alto en sodio)',
     'pavo procesado':  'Jamón de pavo / pavo en lonjas (procesado, alto en sodio)',
     'pavo molido':     'Pavo molido (usar SOLO si el planner lo asignó explícitamente)',
+    # [PROTEIN-RESPECT 2026-05-07] Carnes frescas mayores. Antes del fix, el
+    # LLM ignoraba la elección anti-mode-collapse del planner y metía cerdo/
+    # pollo/res en TODOS los días aunque el pool dijera otra cosa (Lentejas/
+    # Yogurt/Habichuelas). Ej. observado en plan e5274d48: planner eligió
+    # plant proteins, LLM emitió cerdo en los 3 días + res en 3 comidas
+    # del mismo día. Las claves de abajo entran al `prohibited_block`
+    # cuando NO están en el pool del día → el LLM ve "PROHIBIDO ABSOLUTO
+    # cerdo/pollo/res" y respeta la asignación del planner.
+    # Substring match con palabra-completa (boundary) para evitar falsos
+    # positivos como 'res' dentro de 'pescado fresco'.
+    'cerdo':           'Cerdo / lomo de cerdo / chuleta',
+    'pollo':           'Pollo / pechuga de pollo / muslo de pollo',
+    'pescado':         'Pescado / filete de pescado / tilapia / mero',
+    'res':             'Carne de res / bistec / res molida',
+    'pavo':            'Pavo (pechuga fresca / pavo guisado)',
+    # [PROTEIN-SYNONYMS 2026-05-07] El LLM evade 'res' usando 'bistec'
+    # como sinónimo (caso real plan 8601a2da: critique detectó 'res en
+    # 3 comidas' pero mi recipe-scan no disparó porque la palabra literal
+    # era 'bistec'). Cierro el gap para los sinónimos más comunes en RD:
+    'bistec':          'Bistec (corte de res)',
+    'carne molida':    'Carne molida (res / pavo / pollo molido)',
+    # 'lomo' standalone es ambiguo (lomo de cerdo legítimo cuando pool
+    # tiene cerdo, lomo de res cuando pool tiene res). Lo dejamos fuera
+    # del set para evitar falsos positivos — los caps específicos de
+    # 'cerdo'/'res' lo capturan vía substring de pool.
+    # 'filete' standalone también ambiguo (filete de pescado vs res).
+    # Ambos ya cubiertos por 'pescado' / 'res' substring.
+    # [CAMARONES-LEAK 2026-05-07] Plan 089e541c: pool elegido era
+    # [Queso Blanco, Gandules, Atún], pero la lista final incluyó
+    # "Camarones 1 lb". Causa: el LLM (probablemente en surgical regen
+    # post-aprobación) lo metió como complemento. 'camarones' no estaba
+    # en este set → no se prohibió en el prompt ni se removió del cleanup.
+    # Si el pool tiene 'camarones' explícitamente, el substring match lo
+    # libera correctamente.
+    'camarones':       'Camarones (mariscos)',
 }
 
 
 def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None) -> str:
     """Genera el bloque de contexto con la asignación del planificador para un día."""
+    import re as _re
     pool_str = ', '.join(skeleton_day.get('protein_pool', []))
     pool_lower = pool_str.lower()
 
@@ -157,13 +211,27 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             return s
     pool_lower_ascii = _strip_acc(pool_lower)
 
+    # [PROTEIN-RESPECT 2026-05-07] Match con WORD-BOUNDARY (`\b`) en vez de
+    # substring puro. Razón: añadimos keys cortos (cerdo/pollo/res/pescado/
+    # pavo) para gateing de carnes frescas; substring naive marcaba 'res'
+    # dentro de 'pescado fresco' como allowed (falso positivo) cuando el
+    # planner eligió 'Pescado fresco' en el pool. Word boundary garantiza
+    # que 'res' solo matchee como palabra independiente ('carne de res',
+    # 'res molida', 'res guisada') y NO embebida en otras palabras.
+    def _key_in_pool(key: str, pool: str) -> bool:
+        # Para keys multi-palabra (con espacios), substring funciona bien.
+        # Para keys de una palabra, usar word boundary.
+        if ' ' in key:
+            return key in pool
+        return bool(_re.search(rf'\b{_re.escape(key)}\b', pool))
+
     # Dos pasos: primero colectar labels EXPLÍCITAMENTE allowed (cualquier
     # variante del key está en el pool), luego añadir prohibited solo si su
     # label no está en allowed.
     allowed_labels = set()
     for key, label in _RESTRICTED_PROTEIN_KEYS.items():
         key_ascii = _strip_acc(key)
-        if key_ascii in pool_lower_ascii or key in pool_lower:
+        if _key_in_pool(key_ascii, pool_lower_ascii) or _key_in_pool(key, pool_lower):
             allowed_labels.add(label)
 
     seen_labels = set()
@@ -182,7 +250,13 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
             f"\n⛔ PROHIBIDO ABSOLUTO EN ESTE DÍA — estas proteínas NO están en tu pool y NO debes usarlas "
             f"en NINGUNA comida (ni meriendas, ni complementos, ni trazas):\n"
             f"   → {', '.join(prohibited_labels)}\n"
-            f"   El sistema las detectará y eliminará del plan si aparecen."
+            f"   ⚠️ El planificador eligió DELIBERADAMENTE las proteínas del pool para garantizar variedad "
+            f"entre los días del plan. Si añades una carne distinta como 'complemento' (ej: cerdo en una "
+            f"merienda cuando el pool dice Lentejas, o res en un desayuno cuando el pool dice Pollo), "
+            f"el self-critique lo flageará como repetición de proteína intra-día y forzará un retry "
+            f"costoso (~120s) que no mejora el plan. RESPETA el pool — usa SOLO esas proteínas como "
+            f"principal del día. Para diversificar desayuno/merienda usa: huevos, claras, queso fresco, "
+            f"yogurt, frutos secos, mantequilla de maní (estas son OK siempre, no cuentan como 'otra carne')."
         )
 
     day_name_block = f"\n• Día de la Semana: {day_name}\n  (💡 INSTRUCCIÓN: Adapta el estilo y practicidad de las recetas a este día según la cultura dominicana. Ej: Fines de semana permiten platos más tradicionales o relajados; días de semana requieren mayor practicidad)." if day_name else ""

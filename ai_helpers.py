@@ -593,9 +593,42 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     _base_veggies = list(unique_veggies)
     while len(unique_veggies) < 6:
         unique_veggies.append(_base_veggies[len(unique_veggies) % len(_base_veggies)])
+    # [CROSS-DAY-FRUIT-DIVERSITY 2026-05-07] Bug observable plan 55da8e9b:
+    # cuando el picker dejaba <3 frutas únicas, el padding usaba siempre
+    # `unique_fruits[0]` → fruta repetida en múltiples días (caso real:
+    # `['Melón', 'Naranja', 'Melón']`). El LLM luego metía Melón en
+    # 5 meals across Día 1 + Día 3, gatillando rechazo médico por
+    # "carotenemia (melón+auyama excesivo)".
+    #
+    # Fix: padding inteligente en 2 niveles:
+    #   1. Round-robin sobre _base_fruits si hay >=2 (paridad con
+    #      proteínas/carbos/veggies — line 588-595).
+    #   2. Si solo hay 1 fruta base, complementar desde un pool DR default
+    #      con frutas que NO estén ya presentes (garantiza 3 distintas).
     if unique_fruits:
+        _base_fruits = list(unique_fruits)
+        _DEFAULT_DR_FRUITS = (
+            'Limón', 'Lechosa', 'Mango', 'Piña', 'Guineo', 'Naranja',
+            'Fresas', 'Chinola', 'Melón', 'Manzana',
+        )
         while len(unique_fruits) < 3:
-            unique_fruits.append(unique_fruits[0])
+            existing = {f.lower() for f in unique_fruits}
+            # Prioridad 1: añadir una fruta DR default que NO esté ya presente.
+            # Garantiza variedad cross-day (cada día recibe fruta distinta).
+            _added = False
+            for _df in _DEFAULT_DR_FRUITS:
+                if _df.lower() not in existing:
+                    unique_fruits.append(_df)
+                    _added = True
+                    break
+            if _added:
+                continue
+            # Prioridad 2 (rara): todas las default ya presentes — round-robin
+            # del base como último recurso.
+            if _base_fruits:
+                unique_fruits.append(_base_fruits[len(unique_fruits) % len(_base_fruits)])
+            else:
+                break  # Salida segura
     
     chosen_proteins = unique_proteins[:3]
     chosen_carbs = unique_carbs[:3]

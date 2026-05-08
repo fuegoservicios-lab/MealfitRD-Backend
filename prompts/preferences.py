@@ -29,7 +29,18 @@ Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccio
 - 🔵 OPCIÓN B (Alternativa 2) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_1} + {carb_1} y como acompañante vegetal/grasa: {veggie_1}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_1b}. Fruta sugerida: {fruit_1}.
 - 🟢 OPCIÓN C (Alternativa 3) -> El Almuerzo o Cena principal DEBE incluir obligatoriamente: {protein_2} + {carb_2} y como acompañante vegetal/grasa: {veggie_2}. En las DEMÁS comidas del día (desayuno/merienda), usa: {veggie_2b}. Fruta sugerida: {fruit_2}.
 
-⚠️ REGLA DE VARIEDAD INTRA-DÍA: Intenta no usar la misma proteína principal ({protein_0}, {protein_1}, {protein_2}) en todas las comidas de su respectivo día. Usa ingredientes como Huevos, Quesos o Embutidos ligeros para diversificar el desayuno y las meriendas, SALVO QUE el usuario esté rotando una despensa limitada y no haya de otra.
+⛔ REGLA DE PROTEÍNA EXCLUSIVA POR DÍA (CRÍTICA — el day_generator la enforced):
+La proteína asignada a CADA día (Opción A→{protein_0}, B→{protein_1}, C→{protein_2}) es la ÚNICA carne/leguminosa principal permitida ese día. NO sustituyas ni complementes con otra carne distinta:
+   - Si la Opción A dice "{protein_0}", el día A NO puede tener cerdo, pollo, res ni pescado salvo que esa sea la proteína {protein_0}.
+   - El `protein_pool` que pases en el skeleton al day_generator es enforced: el sistema rechazará cualquier carne distinta que el LLM intente meter como "complemento".
+   - Para diversificar desayuno/merienda usa SIEMPRE estas opciones livianas (no cuentan como otra carne):
+     • Huevos enteros / claras de huevo
+     • Queso fresco / ricotta / queso de hoja
+     • Yogurt griego natural
+     • Frutos secos (almendras, nueces, maní)
+     • Mantequilla de maní o de almendras
+
+⚠️ REGLA DE VARIEDAD INTRA-DÍA: NO uses la misma proteína principal ({protein_0}/{protein_1}/{protein_2}) en TODAS las comidas de su día. La proteína principal va en almuerzo y/o cena; desayuno y merienda usan las opciones livianas listadas arriba. Si lo violas, el self-critique te forzará un retry costoso (~120s).
 
 {blocked_text}
 """

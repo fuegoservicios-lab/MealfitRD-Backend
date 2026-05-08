@@ -673,6 +673,123 @@ def _validate_chunk_pre_llm(task_id, meal_plan_id, user_id):
 # única de verdad.
 
 
+def _shopping_coherence_alert_job():
+    """[P1-shop-coh-1 · 2026-05-07] Re-evalúa coherencia recetas↔lista en
+    planes recientes y emite alerta si las hipótesis críticas superan umbral.
+
+    Estrategia: en vez de añadir tabla nueva de métricas, re-corre
+    `run_shopping_coherence_guard(mode_override='warn')` sobre los planes
+    activos creados en las últimas 24h. Reusa el log estructurado existente
+    `🛒 [COH-GUARD/...]` para análisis histórico (Loki/Grafana) y evita
+    proliferación de schemas.
+
+    Knobs (env vars):
+      MEALFIT_COH_ALERT_MIN_PLANS      (default 5)    — mínimo para evaluar.
+      MEALFIT_COH_ALERT_CAP_RATIO      (default 0.05) — alerta si
+        cap_swallowed_modifier_count / N_planes > X.
+      MEALFIT_COH_ALERT_PLAN_FRACTION  (default 0.10) — alerta si
+        planes_con_divergencia / N_planes > Y.
+
+    NO muta planes — `mode_override='warn'` previene mutación retroactiva
+    de `_shopping_coherence_block` sobre planes ya entregados al usuario.
+    """
+    from collections import Counter
+
+    min_plans = int(os.environ.get("MEALFIT_COH_ALERT_MIN_PLANS", "5"))
+    try:
+        cap_ratio_threshold = float(os.environ.get("MEALFIT_COH_ALERT_CAP_RATIO", "0.05"))
+    except (TypeError, ValueError):
+        cap_ratio_threshold = 0.05
+    try:
+        plan_fraction_threshold = float(os.environ.get("MEALFIT_COH_ALERT_PLAN_FRACTION", "0.10"))
+    except (TypeError, ValueError):
+        plan_fraction_threshold = 0.10
+
+    try:
+        from db_core import supabase
+    except Exception as e:
+        logger.warning(f"[COH-ALERT] db_core import falló: {e}")
+        return
+
+    if not supabase:
+        logger.warning("[COH-ALERT] supabase no inicializado — skip.")
+        return
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    try:
+        # [P1-B 2026-05-07] meal_plans no tiene columna `is_active`; el filtro
+        # `gte(created_at, cutoff)` ya restringe a planes recientes (24h).
+        res = (
+            supabase.table("meal_plans")
+            .select("id,plan_data")
+            .gte("created_at", cutoff)
+            .limit(500)
+            .execute()
+        )
+        plans = res.data or []
+    except Exception as e:
+        logger.warning(f"[COH-ALERT] fetch planes falló: {e}")
+        return
+
+    if len(plans) < min_plans:
+        logger.info(f"[COH-ALERT 24h] {len(plans)} planes (< {min_plans} mín) — skip.")
+        return
+
+    try:
+        from shopping_calculator import run_shopping_coherence_guard
+    except Exception as e:
+        logger.warning(f"[COH-ALERT] import guard falló: {e}")
+        return
+
+    plans_with_div = 0
+    by_hypothesis = Counter()
+    by_food = Counter()
+    eval_errors = 0
+
+    for plan_record in plans:
+        plan_data = plan_record.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            try:
+                plan_data = json.loads(plan_data)
+            except Exception:
+                eval_errors += 1
+                continue
+        if not isinstance(plan_data, dict):
+            eval_errors += 1
+            continue
+        try:
+            # [P1-C 2026-05-07] Propagar multiplier cacheado para que la capa
+            # magnitudes (v2) compare con el mismo escalado que el aggregator.
+            mult_cached = plan_data.get("calc_household_multiplier")
+            divs = run_shopping_coherence_guard(plan_data, mode_override="warn", multiplier=mult_cached)
+        except Exception as e:
+            logger.debug(f"[COH-ALERT] guard reventó en plan {plan_record.get('id')}: {e}")
+            eval_errors += 1
+            continue
+        if divs:
+            plans_with_div += 1
+            for d in divs:
+                by_hypothesis[d.get("hypothesis", "unknown")] += 1
+                by_food[d.get("food", "")] += 1
+
+    n = len(plans)
+    plan_fraction = plans_with_div / n if n else 0.0
+    cap_count = by_hypothesis.get("cap_swallowed_modifier", 0)
+    cap_ratio = cap_count / n if n else 0.0
+
+    summary = (
+        f"[COH-ALERT 24h] {n} planes evaluados ({eval_errors} errores parsing). "
+        f"{plans_with_div} con divergencias ({plan_fraction * 100:.1f}%). "
+        f"Hipótesis: {dict(by_hypothesis)}. "
+        f"Top foods: {dict(by_food.most_common(5))}"
+    )
+
+    if cap_ratio > cap_ratio_threshold or plan_fraction > plan_fraction_threshold:
+        logger.error(f"🚨 {summary} (cap_ratio={cap_ratio:.2%}, plan_fraction={plan_fraction:.2%})")
+    else:
+        logger.info(summary)
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -975,6 +1092,145 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             replace_existing=True,
         )
         logger.info("⏰ [P0-D] Cron _nightly_refresh_all_pending_snapshots registrado cada hora (target local 03:00).")
+
+    # [P1-β] Nudge proactivo a usuarios con TZ irresoluble. El primer push llega al
+    # enqueue, pero si el usuario nunca abre la app el cooldown 24h del helper deja
+    # de empujar y el chunk vive atascado. Este cron re-invoca el helper (que respeta
+    # su cooldown) para que el usuario reciba un aviso al día hasta resolver.
+    if not scheduler.get_job("nudge_users_with_unresolved_tz"):
+        from constants import CHUNK_TZ_NUDGE_INTERVAL_MINUTES as _P1B_TZ_INT
+        scheduler.add_job(
+            _nudge_users_with_unresolved_tz,
+            "interval",
+            minutes=_P1B_TZ_INT,
+            id="nudge_users_with_unresolved_tz",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P1-β] Cron _nudge_users_with_unresolved_tz registrado cada {_P1B_TZ_INT} min."
+        )
+
+    # [P0-α] Alerta SRE cuando hay chunks atascados con _pantry_pause_reason='tz_unresolved'
+    # más allá del threshold (default 6h). Cubre la ventana entre que el chunk se pausa por
+    # forced_8am_utc y el recovery cron escala a dead-letter (~90 min) — pero también captura
+    # el caso patológico donde el usuario nunca abre la app y el chunk vive en pause días.
+    if not scheduler.get_job("alert_chunks_stuck_in_tz_unresolved"):
+        from constants import CHUNK_TZ_UNRESOLVED_ALERT_INTERVAL_MINUTES as _P0A_TZ_INT
+        scheduler.add_job(
+            _alert_chunks_stuck_in_tz_unresolved,
+            "interval",
+            minutes=_P0A_TZ_INT,
+            id="alert_chunks_stuck_in_tz_unresolved",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P0-α] Cron _alert_chunks_stuck_in_tz_unresolved registrado cada {_P0A_TZ_INT} min."
+        )
+
+    # [P1-δ] Alerta de pantry snapshots stale acumulándose. Detecta zona intermedia entre
+    # TTL operacional (6h) y umbral de auto-flexible (24h) donde un patrón sistémico
+    # (live-fetch caído, refresh proactivo no corriendo) deja chunks con snapshot viejo.
+    if not scheduler.get_job("alert_chunk_pantry_snapshots_stale"):
+        from constants import CHUNK_PANTRY_STALENESS_ALERT_INTERVAL_MINUTES as _P1D_INT
+        scheduler.add_job(
+            _alert_chunk_pantry_snapshots_stale,
+            "interval",
+            minutes=_P1D_INT,
+            id="alert_chunk_pantry_snapshots_stale",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P1-δ] Cron _alert_chunk_pantry_snapshots_stale registrado cada {_P1D_INT} min."
+        )
+
+    # [P0-γ/LAG] Alerta de SLA degradado: pickup lag excesivo. Detecta cuando el scheduler
+    # toma chunks tarde respecto a su execute_after, señal de saturación o zombie rescue
+    # tardío.
+    if not scheduler.get_job("alert_chunk_lag_excessive"):
+        from constants import CHUNK_LAG_ALERT_INTERVAL_MINUTES as _P0G_LAG_INT
+        scheduler.add_job(
+            _alert_chunk_lag_excessive,
+            "interval",
+            minutes=_P0G_LAG_INT,
+            id="alert_chunk_lag_excessive",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P0-γ/LAG] Cron _alert_chunk_lag_excessive registrado cada {_P0G_LAG_INT} min."
+        )
+
+    # [P0-γ/DUAL] Alerta crítica: 2+ chunks en 'processing' del mismo meal_plan_id. Indica
+    # que el heartbeat thread del worker original murió, el zombie rescue triggered y un
+    # nuevo worker recogió el chunk mientras el original aún corre. Riesgo: doble reserva
+    # de inventario, doble merge a plan_data.
+    if not scheduler.get_job("alert_chunk_dual_processing"):
+        from constants import CHUNK_DUAL_PROCESSING_ALERT_INTERVAL_MINUTES as _P0G_DUAL_INT
+        scheduler.add_job(
+            _alert_chunk_dual_processing,
+            "interval",
+            minutes=_P0G_DUAL_INT,
+            id="alert_chunk_dual_processing",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P0-γ/DUAL] Cron _alert_chunk_dual_processing registrado cada {_P0G_DUAL_INT} min."
+        )
+
+    # [P1-shop-coh-1 · 2026-05-07] Cron de coherencia recetas↔lista. Re-evalúa
+    # planes activos de las últimas 24h con `run_shopping_coherence_guard` en
+    # modo `warn` (sin mutar) y emite alerta si cap_swallowed_modifier o la
+    # fracción de planes divergentes superan umbrales (knobs MEALFIT_COH_ALERT_*).
+    if not scheduler.get_job("shopping_coherence_alert"):
+        from apscheduler.triggers.cron import CronTrigger as _CronTrigger
+        scheduler.add_job(
+            _shopping_coherence_alert_job,
+            trigger=_CronTrigger(hour=4, minute=0, timezone=timezone.utc),
+            id="shopping_coherence_alert",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            "⏰ [P1-shop-coh-1] Cron _shopping_coherence_alert_job registrado diario 04:00 UTC."
+        )
+
+    # [P2-NEW-C · 2026-05-08] Rolling refill cron consolidado en el SSOT
+    # `register_plan_chunk_scheduler`. Antes vivía aislado en app.py (ver
+    # memoria P3-A 2026-05-07): el cron operacional sí existía pero ningún
+    # test de invariante chequeaba que estuviese registrado junto al resto del
+    # chunk system, así un refactor que deshabilitara este scheduler dejaría
+    # `background_rolling_refill` corriendo en otro proceso. Ahora todos los
+    # chunk-related crons viven aquí.
+    #
+    # [P2-δ] Frecuencia: detecta usuarios inactivos ≥3 días y dispara
+    # shift_plan en background para que sus chunks de rolling refill no
+    # esperen al próximo login. Default cada CHUNK_BG_ROLLING_REFILL_INTERVAL_HOURS
+    # (4h) → 6×/día; safe porque shift_plan es idempotente y el filtro
+    # "≥3 días sin sesión" evita re-procesar al mismo usuario en cada tick.
+    if not scheduler.get_job("background_rolling_refill"):
+        from constants import CHUNK_BG_ROLLING_REFILL_INTERVAL_HOURS as _BG_RR_HOURS
+        scheduler.add_job(
+            trigger_background_rolling_refill,
+            "interval",
+            hours=_BG_RR_HOURS,
+            id="background_rolling_refill",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-δ/BG-REFILL] Cron trigger_background_rolling_refill registrado cada {_BG_RR_HOURS}h."
+        )
 
 
 def _pantry_refresh_horizon_hours_for_plan(total_days_requested: int | None) -> int:
@@ -10257,12 +10513,10 @@ def _record_chunk_metric(
     real de edades de snapshot al momento del pickup. Sin este dato era imposible
     saber si los chunks de planes 30d estaban ejecutando con snapshots de 20+ días
     (escenario donde el LLM genera platos con ingredientes que ya no existen).
-    """
-    try:
-        execute_sql_write("ALTER TABLE plan_chunk_metrics ADD COLUMN IF NOT EXISTS is_rolling_refill BOOLEAN DEFAULT false")
-    except Exception:
-        pass
 
+    [P2-NEW-G 2026-05-08] El ALTER runtime que aseguraba `is_rolling_refill` fue
+    movido a `supabase/migrations/p2_new_g_consolidate_runtime_ddl_2.sql` (SSOT).
+    """
     try:
         repeat_pct = None
         rej_viol = 0
@@ -10330,6 +10584,16 @@ def _atomic_append_jsonl_record(path: str, record: dict, lock) -> bool:
     [P0-8] Usa modo "a" + flush + os.fsync. O(1) por append. Crashes
     corrompen como mucho la última línea (records previos son inmutables).
 
+    [P1-γ/STRUCTURED-LOG-FALLBACK] Si el filesystem falla (disk full, permisos,
+    o el proceso recibe SIGKILL antes del flush), el buffer en disco se pierde
+    y la telemetría queda invisible. Aquí escribimos el record COMPLETO a
+    logger.error con un marcador estructurado: cualquier ingesta de logs
+    (CloudWatch, GCP Cloud Logging, Loki) puede regrep el marcador
+    `[TELEMETRY-LOST-RECORD]` y reconstruir lo que se perdió. La línea es
+    parseable directamente: `json.loads` después del marcador da el dict
+    original. Mejor "logs duplicados ocasionales" que "telemetría
+    silenciosamente perdida".
+
     Returns True si la persistencia fue OK; False si filesystem falló.
     """
     try:
@@ -10345,7 +10609,17 @@ def _atomic_append_jsonl_record(path: str, record: dict, lock) -> bool:
                     pass
         return True
     except Exception as e:
-        logger.error(f"[BUFFER/{path}] No se pudo persistir buffer local: {e}")
+        # [P1-γ] Volcamos el record entero a stderr/stdout para que la ingesta
+        # externa de logs (CloudWatch/GCP/Loki) lo capture aunque el buffer
+        # local falle. Marker `[TELEMETRY-LOST-RECORD]` permite regrep.
+        try:
+            record_dump = json.dumps(record, ensure_ascii=False, default=str)
+        except Exception:
+            record_dump = repr(record)
+        logger.error(
+            f"[BUFFER/{path}] No se pudo persistir buffer local: {e}. "
+            f"[TELEMETRY-LOST-RECORD] path={path} record={record_dump}"
+        )
         return False
 
 
@@ -10761,6 +11035,43 @@ def _flush_pending_lesson_telemetry() -> dict:
             f"[P0-10/FLUSH] Buffer lesson_telemetry: flushed={stats['flushed']}, "
             f"remaining={stats['remaining']}, discarded={stats['discarded_invalid']}"
         )
+
+        # [P3-2 · 2026-05-07] Backlog metric + threshold alert.
+        # Si remaining ≥ threshold, log WARNING y emitir row a pipeline_metrics
+        # con confidence=0.0 (visual gate para dashboards). Si DB sigue caída
+        # (caso típico: buffer creció *porque* DB estaba abajo), el INSERT
+        # fallará — silenciado a debug, no se re-buffea (sería loop infinito).
+        from constants import MEALFIT_LESSON_BUFFER_BACKLOG_THRESHOLD as _LB_THR
+        if stats["remaining"] >= _LB_THR:
+            logger.warning(
+                f"[P3-2/BACKLOG-ALERT] lesson_telemetry buffer "
+                f"remaining={stats['remaining']} >= threshold={_LB_THR}; "
+                f"DB sigue degradada o flush stuck. flushed={stats['flushed']}, "
+                f"discarded={stats['discarded_invalid']}."
+            )
+        try:
+            execute_sql_write(
+                "INSERT INTO pipeline_metrics (user_id, session_id, node, "
+                "duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    None, "__cron__",
+                    "_flush_pending_lesson_telemetry",
+                    0, 0, 0,
+                    1.0 if stats["remaining"] < _LB_THR else 0.0,
+                    json.dumps({
+                        "flushed": stats["flushed"],
+                        "remaining": stats["remaining"],
+                        "discarded_invalid": stats["discarded_invalid"],
+                        "threshold": _LB_THR,
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as _metric_err:
+            logger.debug(
+                f"[P3-2/METRIC] No se pudo emitir métrica de backlog "
+                f"(DB degradada?): {_metric_err}"
+            )
     return stats
 
 
@@ -11594,6 +11905,571 @@ def _alert_new_dead_lettered_chunks() -> None:
         logger.error(f"[P1-2/DEAD-LETTER-ALERT] No se pudo persistir la alerta: {e}")
 
 
+def _nudge_users_with_unresolved_tz() -> None:
+    """[P1-β] Re-empuja a usuarios cuyo chunk está atascado en
+    `_pantry_pause_reason='tz_unresolved'` desde más de
+    CHUNK_TZ_NUDGE_THRESHOLD_HOURS. El push inicial llega al ENQUEUE
+    (`_maybe_notify_user_tz_unresolved` desde `_enqueue_plan_chunk`), pero si el
+    usuario nunca abre la app y deja pasar el cooldown 24h del helper, nadie le
+    re-recuerda hasta que el recovery escala a dead-letter.
+
+    Este cron compensa esa zona ciega: detecta usuarios stuck, invoca el helper
+    (que respeta su propio cooldown 24h vía
+    `user_profiles.health_profile._tz_unresolved_notified_at`) y deja que el
+    usuario reciba un nuevo aviso una vez al día hasta que abra la app o el
+    chunk se dead-lettere.
+
+    Idempotencia: el helper rechaza el push si está en cooldown, así que correr
+    este cron cada 60min con threshold 12h emite a lo sumo 1 push/día por
+    usuario afectado.
+    """
+    from constants import (
+        CHUNK_TZ_NUDGE_THRESHOLD_HOURS,
+        CHUNK_TZ_NUDGE_MAX_USERS,
+    )
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT DISTINCT q.user_id::text AS user_id,
+                   MIN(q.updated_at) AS oldest_pause
+            FROM plan_chunk_queue q
+            WHERE q.status = 'pending_user_action'
+              AND q.dead_lettered_at IS NULL
+              AND q.pipeline_snapshot->>'_pantry_pause_reason' = 'tz_unresolved'
+              AND q.updated_at < NOW() - make_interval(hours => %s)
+            GROUP BY q.user_id
+            ORDER BY oldest_pause ASC
+            LIMIT %s
+            """,
+            (int(CHUNK_TZ_NUDGE_THRESHOLD_HOURS), int(CHUNK_TZ_NUDGE_MAX_USERS)),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P1-β/TZ-NUDGE] No se pudo consultar plan_chunk_queue: {e}")
+        return
+
+    if not rows:
+        return
+
+    nudged = 0
+    skipped_cooldown = 0
+    for r in rows:
+        user_id = r.get("user_id")
+        if not user_id:
+            continue
+        try:
+            sent = _maybe_notify_user_tz_unresolved(str(user_id))
+            if sent:
+                nudged += 1
+            else:
+                skipped_cooldown += 1
+        except Exception as _push_err:
+            logger.debug(f"[P1-β/TZ-NUDGE] Falló nudge para {user_id}: {_push_err}")
+
+    logger.info(
+        f"[P1-β/TZ-NUDGE] candidates={len(rows)} pushed={nudged} cooldown={skipped_cooldown} "
+        f"threshold={int(CHUNK_TZ_NUDGE_THRESHOLD_HOURS)}h"
+    )
+
+
+def _alert_chunks_stuck_in_tz_unresolved() -> None:
+    """[P0-α] Detecta chunks atascados en `pending_user_action` con
+    `_pantry_pause_reason='tz_unresolved'` durante más de
+    CHUNK_TZ_UNRESOLVED_ALERT_HOURS sin progreso del recovery cron.
+
+    Caso típico: usuario hizo signup pero nunca abrió la app, así que su perfil
+    nunca persistió `tz_offset_minutes`. El cron `_sync_chunk_queue_tz_offsets`
+    re-resuelve cada tick y el chunk se libera al primer login. Pero si ese
+    login nunca ocurre, el chunk vive en pause hasta que
+    CHUNK_TZ_RECOVERY_MAX_ATTEMPTS (≈ 90 min) escala a dead-letter — y hasta
+    entonces nadie ve el problema. Esta alerta cierra esa ventana ciega
+    avisando a SRE en cuanto un chunk supera el umbral, mientras el recovery
+    sigue intentando en paralelo.
+
+    Idempotencia:
+      - alert_key='chunks_tz_unresolved_stuck' (agregada a nivel flota).
+      - ON CONFLICT DO UPDATE refresca triggered_at + lista de afectados.
+      - Cooldown CHUNK_TZ_UNRESOLVED_ALERT_COOLDOWN_HOURS evita spam.
+    """
+    from constants import (
+        CHUNK_TZ_UNRESOLVED_ALERT_HOURS,
+        CHUNK_TZ_UNRESOLVED_ALERT_COOLDOWN_HOURS,
+        CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT,
+    )
+    _ensure_quality_alert_schema()
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT
+                q.id::text AS task_id,
+                q.user_id::text AS user_id,
+                q.meal_plan_id::text AS meal_plan_id,
+                q.week_number,
+                q.updated_at,
+                EXTRACT(EPOCH FROM (NOW() - q.updated_at))::int AS pause_seconds
+            FROM plan_chunk_queue q
+            WHERE q.status = 'pending_user_action'
+              AND q.dead_lettered_at IS NULL
+              AND q.pipeline_snapshot->>'_pantry_pause_reason' = 'tz_unresolved'
+              AND q.updated_at < NOW() - make_interval(hours => %s)
+            ORDER BY q.updated_at ASC
+            LIMIT %s
+            """,
+            (int(CHUNK_TZ_UNRESOLVED_ALERT_HOURS), int(CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT)),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P0-α/TZ-STUCK-ALERT] No se pudo consultar plan_chunk_queue: {e}")
+        return
+
+    if not rows:
+        return
+
+    affected_user_ids = sorted({str(r.get("user_id")) for r in rows if r.get("user_id")})
+    pause_hours = [int(r.get("pause_seconds") or 0) / 3600.0 for r in rows]
+    max_pause_h = max(pause_hours) if pause_hours else 0.0
+    avg_pause_h = (sum(pause_hours) / len(pause_hours)) if pause_hours else 0.0
+
+    alert_key = "chunks_tz_unresolved_stuck"
+    try:
+        existing = execute_sql_query(
+            """
+            SELECT triggered_at FROM system_alerts
+            WHERE alert_key = %s
+              AND triggered_at > NOW() - make_interval(hours => %s)
+              AND resolved_at IS NULL
+            LIMIT 1
+            """,
+            (alert_key, int(CHUNK_TZ_UNRESOLVED_ALERT_COOLDOWN_HOURS)),
+            fetch_one=True,
+        )
+        if existing:
+            return
+    except Exception:
+        pass
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'chunks_tz_unresolved_stuck', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                affected_user_ids = EXCLUDED.affected_user_ids,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                "Chunks atascados con TZ irresoluble",
+                (
+                    f"{len(rows)} chunks llevan ≥{int(CHUNK_TZ_UNRESOLVED_ALERT_HOURS)}h "
+                    f"en pending_user_action con _pantry_pause_reason='tz_unresolved' "
+                    f"(max_pause={max_pause_h:.1f}h, avg={avg_pause_h:.1f}h, "
+                    f"users={len(affected_user_ids)}). Causa típica: usuarios sin "
+                    f"`tz_offset_minutes` en user_profiles que nunca abrieron la app "
+                    f"post-signup. Recovery seguirá intentando hasta "
+                    f"CHUNK_TZ_RECOVERY_MAX_ATTEMPTS antes de dead-letter."
+                ),
+                json.dumps({
+                    "stuck_chunks": len(rows),
+                    "affected_users": len(affected_user_ids),
+                    "max_pause_hours": round(max_pause_h, 2),
+                    "avg_pause_hours": round(avg_pause_h, 2),
+                    "threshold_hours": int(CHUNK_TZ_UNRESOLVED_ALERT_HOURS),
+                    "sample_chunk_ids": [r.get("task_id") for r in rows[:10]],
+                }),
+                json.dumps(affected_user_ids),
+            ),
+        )
+        logger.warning(
+            f"[P0-α/TZ-STUCK-ALERT] Alerta disparada: stuck={len(rows)} "
+            f"users={len(affected_user_ids)} max_pause={max_pause_h:.1f}h"
+        )
+    except Exception as e:
+        logger.error(f"[P0-α/TZ-STUCK-ALERT] No se pudo persistir la alerta: {e}")
+
+
+def _alert_chunk_pantry_snapshots_stale() -> None:
+    """[P1-δ] Alerta cuando hay chunks pending con snapshots de pantry stale.
+
+    Entre el TTL operacional (`CHUNK_PANTRY_SNAPSHOT_TTL_HOURS`=6h, donde el
+    worker hace live-retry adicional) y el umbral de auto-flexible
+    (`CHUNK_STALE_SNAPSHOT_FORCE_GENERATE_HOURS`=24h, donde se fuerza
+    flexible_mode para no bloquear) hay una zona intermedia donde el snapshot
+    es viejo. Si hay un patrón sistémico (live-fetch caído, refresh proactivo
+    no corriendo, alta latencia de Supabase), los snapshots acumulan edad
+    silenciosamente y los chunks degradan al pickup sin que SRE lo vea.
+
+    Esta alerta detecta esa zona intermedia: cuenta chunks pending cuyo
+    `_pantry_captured_at` excede CHUNK_PANTRY_STALENESS_ALERT_HOURS. Si el
+    conteo cruza CHUNK_PANTRY_STALENESS_ALERT_MIN_COUNT, persiste alerta
+    deduplicada con metadata para investigación (max edad observada, sample
+    de chunks afectados).
+
+    NO escala ni unblock: solo señala. Las acciones correctivas siguen siendo
+    el refresh proactivo (cron) y el live-retry (worker) — operadores deciden
+    si el patrón requiere intervención manual.
+    """
+    from constants import (
+        CHUNK_PANTRY_STALENESS_ALERT_HOURS,
+        CHUNK_PANTRY_STALENESS_ALERT_MIN_COUNT,
+        CHUNK_PANTRY_STALENESS_ALERT_COOLDOWN_HOURS,
+    )
+    _ensure_quality_alert_schema()
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT
+                q.id::text AS task_id,
+                q.user_id::text AS user_id,
+                q.meal_plan_id::text AS meal_plan_id,
+                q.week_number,
+                (q.pipeline_snapshot->'form_data'->>'_pantry_captured_at') AS captured_at,
+                EXTRACT(EPOCH FROM (
+                    NOW() - COALESCE(
+                        (q.pipeline_snapshot->'form_data'->>'_pantry_captured_at')::timestamptz,
+                        q.created_at
+                    )
+                ))::int AS snapshot_age_seconds
+            FROM plan_chunk_queue q
+            WHERE q.status = 'pending'
+              AND q.dead_lettered_at IS NULL
+              AND COALESCE(
+                    (q.pipeline_snapshot->'form_data'->>'_pantry_captured_at')::timestamptz,
+                    q.created_at
+                  ) < NOW() - make_interval(hours => %s)
+            ORDER BY snapshot_age_seconds DESC
+            LIMIT 100
+            """,
+            (int(CHUNK_PANTRY_STALENESS_ALERT_HOURS),),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P1-δ/PANTRY-STALE-ALERT] No se pudo consultar plan_chunk_queue: {e}")
+        return
+
+    if len(rows) < int(CHUNK_PANTRY_STALENESS_ALERT_MIN_COUNT):
+        return
+
+    ages = [int(r.get("snapshot_age_seconds") or 0) for r in rows]
+    max_age_h = max(ages) / 3600.0 if ages else 0.0
+    avg_age_h = (sum(ages) / len(ages)) / 3600.0 if ages else 0.0
+    affected_user_ids = sorted({str(r.get("user_id")) for r in rows if r.get("user_id")})
+
+    alert_key = "chunk_pantry_snapshots_stale"
+    try:
+        existing = execute_sql_query(
+            """
+            SELECT triggered_at FROM system_alerts
+            WHERE alert_key = %s
+              AND triggered_at > NOW() - make_interval(hours => %s)
+              AND resolved_at IS NULL
+            LIMIT 1
+            """,
+            (alert_key, int(CHUNK_PANTRY_STALENESS_ALERT_COOLDOWN_HOURS)),
+            fetch_one=True,
+        )
+        if existing:
+            return
+    except Exception:
+        pass
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'chunk_pantry_snapshots_stale', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                affected_user_ids = EXCLUDED.affected_user_ids,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                "Snapshots de pantry stale acumulándose",
+                (
+                    f"{len(rows)} chunks pending tienen snapshot de pantry con edad "
+                    f">{int(CHUNK_PANTRY_STALENESS_ALERT_HOURS)}h. "
+                    f"max={max_age_h:.1f}h avg={avg_age_h:.1f}h users={len(affected_user_ids)}. "
+                    f"Posible causa: refresh proactivo no corriendo, live-fetch sistémico "
+                    f"caído, o latencia alta de Supabase. Sin intervención los chunks "
+                    f"forzarán flexible_mode al cruzar 24h (UX degradada)."
+                ),
+                json.dumps({
+                    "stale_chunks": len(rows),
+                    "affected_users": len(affected_user_ids),
+                    "threshold_hours": int(CHUNK_PANTRY_STALENESS_ALERT_HOURS),
+                    "max_age_hours": round(max_age_h, 2),
+                    "avg_age_hours": round(avg_age_h, 2),
+                    "sample_chunk_ids": [r.get("task_id") for r in rows[:10]],
+                }),
+                json.dumps(affected_user_ids),
+            ),
+        )
+        logger.warning(
+            f"[P1-δ/PANTRY-STALE-ALERT] Alerta disparada: stale={len(rows)} "
+            f"max_age={max_age_h:.1f}h users={len(affected_user_ids)}"
+        )
+    except Exception as e:
+        logger.error(f"[P1-δ/PANTRY-STALE-ALERT] No se pudo persistir la alerta: {e}")
+
+
+def _alert_chunk_lag_excessive() -> None:
+    """[P0-γ] Detecta chunks que se levantaron con `effective_lag_seconds_at_pickup`
+    superior a CHUNK_LAG_ALERT_THRESHOLD_SECONDS dentro de la ventana
+    CHUNK_LAG_ALERT_WINDOW_HOURS.
+
+    Síntoma: el SLA del scheduler (tick=1min) está degradado. Causas típicas:
+    scheduler saturado (demasiados crons concurrentes), DB slow (lock contention
+    en plan_chunk_queue), o el worker anterior crasheó sin liberar el user_lock
+    y el zombie rescue tardó CHUNK_LOCK_STALE_MINUTES en intervenir. Sin esta
+    alerta, los usuarios reciben sus planes a horas inesperadas y nadie sabe
+    que el SLA se rompió.
+
+    La métrica se lee de `plan_chunk_queue.effective_lag_seconds_at_pickup` —
+    persistida atomicamente en el UPDATE de pickup (`process_plan_chunk_queue`).
+    Por eso esta alerta es retrospectiva: avisa después del lag, no en tiempo
+    real, pero captura el patrón de degradación cuando se acumula.
+    """
+    from constants import (
+        CHUNK_LAG_ALERT_THRESHOLD_SECONDS,
+        CHUNK_LAG_ALERT_WINDOW_HOURS,
+        CHUNK_LAG_ALERT_MIN_COUNT,
+        CHUNK_LAG_ALERT_COOLDOWN_HOURS,
+    )
+    _ensure_quality_alert_schema()
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT
+                q.id::text AS task_id,
+                q.user_id::text AS user_id,
+                q.meal_plan_id::text AS meal_plan_id,
+                q.week_number,
+                q.effective_lag_seconds_at_pickup AS lag_seconds,
+                q.updated_at
+            FROM plan_chunk_queue q
+            WHERE q.effective_lag_seconds_at_pickup IS NOT NULL
+              AND q.effective_lag_seconds_at_pickup > %s
+              AND q.updated_at > NOW() - make_interval(hours => %s)
+            ORDER BY q.effective_lag_seconds_at_pickup DESC
+            LIMIT 100
+            """,
+            (int(CHUNK_LAG_ALERT_THRESHOLD_SECONDS), int(CHUNK_LAG_ALERT_WINDOW_HOURS)),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P0-γ/LAG-ALERT] No se pudo consultar plan_chunk_queue: {e}")
+        return
+
+    if len(rows) < int(CHUNK_LAG_ALERT_MIN_COUNT):
+        return
+
+    lags = [int(r.get("lag_seconds") or 0) for r in rows]
+    max_lag_s = max(lags) if lags else 0
+    avg_lag_s = (sum(lags) / len(lags)) if lags else 0
+    affected_user_ids = sorted({str(r.get("user_id")) for r in rows if r.get("user_id")})
+
+    alert_key = "chunk_lag_excessive"
+    try:
+        existing = execute_sql_query(
+            """
+            SELECT triggered_at FROM system_alerts
+            WHERE alert_key = %s
+              AND triggered_at > NOW() - make_interval(hours => %s)
+              AND resolved_at IS NULL
+            LIMIT 1
+            """,
+            (alert_key, int(CHUNK_LAG_ALERT_COOLDOWN_HOURS)),
+            fetch_one=True,
+        )
+        if existing:
+            return
+    except Exception:
+        pass
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'chunk_lag_excessive', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                affected_user_ids = EXCLUDED.affected_user_ids,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                "SLA del scheduler degradado: pickup lag excesivo",
+                (
+                    f"En las últimas {int(CHUNK_LAG_ALERT_WINDOW_HOURS)}h, "
+                    f"{len(rows)} chunks superaron umbral de lag_seconds_at_pickup "
+                    f"(>{int(CHUNK_LAG_ALERT_THRESHOLD_SECONDS)}s). "
+                    f"max={max_lag_s/60.0:.1f}min, avg={avg_lag_s/60.0:.1f}min, "
+                    f"users={len(affected_user_ids)}. Causas típicas: scheduler "
+                    f"saturado, DB lock contention, zombie rescue tardío."
+                ),
+                json.dumps({
+                    "lagged_chunks": len(rows),
+                    "affected_users": len(affected_user_ids),
+                    "threshold_seconds": int(CHUNK_LAG_ALERT_THRESHOLD_SECONDS),
+                    "max_lag_seconds": int(max_lag_s),
+                    "avg_lag_seconds": round(avg_lag_s, 1),
+                    "window_hours": int(CHUNK_LAG_ALERT_WINDOW_HOURS),
+                    "sample_chunk_ids": [r.get("task_id") for r in rows[:10]],
+                }),
+                json.dumps(affected_user_ids),
+            ),
+        )
+        logger.warning(
+            f"[P0-γ/LAG-ALERT] Alerta disparada: n={len(rows)} max_lag={max_lag_s}s "
+            f"avg_lag={avg_lag_s:.0f}s threshold={int(CHUNK_LAG_ALERT_THRESHOLD_SECONDS)}s"
+        )
+    except Exception as e:
+        logger.error(f"[P0-γ/LAG-ALERT] No se pudo persistir la alerta: {e}")
+
+
+def _alert_chunk_dual_processing() -> None:
+    """[P0-γ] Detecta filas DUPLICADAS en `processing` para el mismo `meal_plan_id`.
+
+    Esto NO debería suceder nunca: el lock por `user_id` (chunk_user_locks)
+    serializa los chunks de un mismo usuario, y solo un worker activa cada
+    chunk a la vez. Si aparecen 2+ filas en processing del mismo plan,
+    significa:
+      - heartbeat thread del worker original murió,
+      - zombie rescue marcó el chunk como stale + nuevo pickup ocurrió,
+      - PERO el worker original sigue corriendo (LLM call no abortable).
+
+    Riesgo: doble reserva de inventario, doble merge a plan_data, tokens LLM
+    duplicados, y posible corrupción del estado del plan. La alerta es
+    severity='critical' y debe disparar página inmediatamente.
+
+    Ventana de gracia: durante un handoff legítimo puede haber 30-90s donde
+    dos filas coexistan antes de que el CAS del rescue gane el flip.
+    Filtramos por `updated_at < NOW() - CHUNK_DUAL_PROCESSING_GRACE_SECONDS`
+    para evitar falsos positivos en ese flap.
+    """
+    from constants import (
+        CHUNK_DUAL_PROCESSING_ALERT_COOLDOWN_HOURS,
+        CHUNK_DUAL_PROCESSING_GRACE_SECONDS,
+    )
+    _ensure_quality_alert_schema()
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT
+                q.meal_plan_id::text AS meal_plan_id,
+                COUNT(*)::int AS dup_count,
+                ARRAY_AGG(q.id::text ORDER BY q.updated_at) AS chunk_ids,
+                ARRAY_AGG(DISTINCT q.user_id::text) AS user_ids,
+                MIN(q.updated_at) AS oldest_update
+            FROM plan_chunk_queue q
+            WHERE q.status = 'processing'
+              AND q.updated_at < NOW() - make_interval(secs => %s)
+            GROUP BY q.meal_plan_id
+            HAVING COUNT(*) >= 2
+            ORDER BY dup_count DESC, oldest_update ASC
+            LIMIT 50
+            """,
+            (int(CHUNK_DUAL_PROCESSING_GRACE_SECONDS),),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P0-γ/DUAL-PROC-ALERT] No se pudo consultar plan_chunk_queue: {e}")
+        return
+
+    if not rows:
+        return
+
+    affected_plan_ids = [r.get("meal_plan_id") for r in rows if r.get("meal_plan_id")]
+    affected_user_ids: set = set()
+    for r in rows:
+        for uid in (r.get("user_ids") or []):
+            if uid:
+                affected_user_ids.add(str(uid))
+    total_dups = sum(int(r.get("dup_count") or 0) for r in rows)
+
+    alert_key = "chunk_dual_processing_detected"
+    try:
+        existing = execute_sql_query(
+            """
+            SELECT triggered_at FROM system_alerts
+            WHERE alert_key = %s
+              AND triggered_at > NOW() - make_interval(hours => %s)
+              AND resolved_at IS NULL
+            LIMIT 1
+            """,
+            (alert_key, int(CHUNK_DUAL_PROCESSING_ALERT_COOLDOWN_HOURS)),
+            fetch_one=True,
+        )
+        if existing:
+            return
+    except Exception:
+        pass
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'chunk_dual_processing_detected', 'critical', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                severity = EXCLUDED.severity,
+                metadata = EXCLUDED.metadata,
+                affected_user_ids = EXCLUDED.affected_user_ids,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                "🚨 Doble procesamiento de chunks detectado",
+                (
+                    f"{len(rows)} planes tienen 2+ chunks simultáneamente en "
+                    f"status='processing' (total filas duplicadas={total_dups}, "
+                    f"users={len(affected_user_ids)}). Riesgo crítico: doble "
+                    f"reserva de inventario y doble merge a plan_data. Causa "
+                    f"probable: heartbeat thread muerto + zombie rescue + worker "
+                    f"original aún corriendo. Acción inmediata: revisar logs de "
+                    f"chunks afectados, considerar killar workers vivos antes "
+                    f"de que terminen el merge."
+                ),
+                json.dumps({
+                    "duplicated_plans": len(rows),
+                    "total_duplicate_rows": total_dups,
+                    "affected_users": len(affected_user_ids),
+                    "grace_seconds": int(CHUNK_DUAL_PROCESSING_GRACE_SECONDS),
+                    "sample": [
+                        {
+                            "meal_plan_id": r.get("meal_plan_id"),
+                            "dup_count": int(r.get("dup_count") or 0),
+                            "chunk_ids": list(r.get("chunk_ids") or [])[:5],
+                        }
+                        for r in rows[:10]
+                    ],
+                }),
+                json.dumps(sorted(affected_user_ids)),
+            ),
+        )
+        logger.error(
+            f"[P0-γ/DUAL-PROC-ALERT] 🚨 ALERTA CRÍTICA: dual_processing detectado "
+            f"plans={len(rows)} dup_rows={total_dups} users={len(affected_user_ids)} "
+            f"sample_plan={affected_plan_ids[0] if affected_plan_ids else 'n/a'}"
+        )
+    except Exception as e:
+        logger.error(f"[P0-γ/DUAL-PROC-ALERT] No se pudo persistir la alerta crítica: {e}")
+
+
 def _alert_chunks_paused_indefinitely() -> None:
     """[P1-CHUNKS-3] Auto-escalación de chunks con pausa `missing_prior_lessons`.
 
@@ -12022,32 +12898,22 @@ def _alert_chunks_paused_indefinitely() -> None:
 
 
 def _ensure_quality_alert_schema():
-    """Crea el esquema mínimo para alertas persistentes si aún no existe."""
-    try:
-        execute_sql_write(
-            """
-            CREATE TABLE IF NOT EXISTS system_alerts (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                alert_key TEXT NOT NULL UNIQUE,
-                alert_type TEXT NOT NULL,
-                severity TEXT NOT NULL DEFAULT 'warning',
-                title TEXT NOT NULL,
-                message TEXT NOT NULL,
-                metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-                affected_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-                triggered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                resolved_at TIMESTAMP WITH TIME ZONE NULL
-            )
-            """
-        )
-        execute_sql_write(
-            """
-            ALTER TABLE user_profiles
-            ADD COLUMN IF NOT EXISTS quality_alert_at TIMESTAMP WITH TIME ZONE
-            """
-        )
-    except Exception as e:
-        logger.warning(f"[GAP G] Error asegurando esquema de quality alerts: {e}")
+    """No-op stub.
+
+    [P2-NEW-G 2026-05-08] El DDL que vivía aquí (CREATE system_alerts +
+    ALTER user_profiles ADD quality_alert_at) duplicaba el bloque ya consolidado
+    en `supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql` (líneas 25-36
+    y 64-65). Mantener ambos lados creaba riesgo de drift: un cambio del schema
+    vía SQL editor no era visible aquí y el siguiente edit del bloque Python
+    podía revertirlo.
+
+    La función se conserva (no se borra) para preservar los ~36 call sites en
+    cron_tasks.py y los `patch("cron_tasks._ensure_quality_alert_schema")` que
+    ya existen en los tests. La invariante semántica se mantiene: tras la
+    llamada, el schema está garantizado — ahora porque la migración SSOT lo
+    aplica en startup, no porque esta función ejecute DDL.
+    """
+    return
 
 
 def _persist_quality_degradation_alert(is_refill: bool, ratio: float, degraded: int, total: int):
@@ -14011,7 +14877,7 @@ def _reactivate_shopping_list_after_perishable_cycle() -> int:
     permanecía oculta hasta que el usuario cambiaba household/duration.
 
     Comportamiento:
-      1. SELECT meal_plans.is_active=true AND plan_data.is_restocked=true
+      1. SELECT meal_plans (recientes) AND plan_data.is_restocked=true
          AND restocked_at_iso < (now - MEALFIT_PERISHABLE_CYCLE_DAYS).
       2. Para cada plan: limpiar `is_restocked`, `restocked_at_iso` y
          `restocked_items` del JSONB.
@@ -15718,6 +16584,32 @@ def process_plan_chunk_queue(target_plan_id=None):
                         logger.warning(f"Error mandando push proxy exhausted: {e}")
                     return
 
+                # [P1-α/ZERO-LOG-AUTO-ESCALATE] Saltar la cascada de deferrals cuando
+                # el motivo es zero-log puro (sin inventory_proxy disponible). El path
+                # legacy hacía hasta CHUNK_LEARNING_READY_MAX_DEFERRALS reintentos de
+                # CHUNK_LEARNING_READY_DELAY_HOURS c/u (≈24h) antes de pausar — durante
+                # los cuales el usuario ve plan en blanco y solo el primer push.
+                # Con este knob, en el primer deferral el chunk salta directo al path
+                # de pausa con TTL=CHUNK_ZERO_LOG_RECOVERY_TTL_HOURS (4h), donde el
+                # banner del frontend ya explica el bloqueo y el usuario recupera el
+                # control 8-20h antes. Solo aplica al primer deferral (deferrals==0)
+                # para preservar el comportamiento legacy si el operador prefiere
+                # apagar el knob mid-run; los chunks ya en deferral siguen su curso.
+                from constants import CHUNK_ZERO_LOG_AUTO_ESCALATE as _ZL_AUTO_ESC
+                if (
+                    _ZL_AUTO_ESC
+                    and _is_zero_log
+                    and not learning_ready.get("inventory_proxy_used")
+                    and learning_ready_deferrals == 0
+                ):
+                    learning_ready_deferrals = CHUNK_LEARNING_READY_MAX_DEFERRALS
+                    logger.warning(
+                        f"[P1-α/ZERO-LOG-AUTO-ESCALATE] chunk {week_number} plan "
+                        f"{meal_plan_id}: zero-log detectado en primer deferral, "
+                        f"saltando cascada de {CHUNK_LEARNING_READY_MAX_DEFERRALS} reintentos "
+                        f"({CHUNK_LEARNING_READY_MAX_DEFERRALS * CHUNK_LEARNING_READY_DELAY_HOURS}h "
+                        f"de espera). Forzando path de pausa con TTL corto."
+                    )
                 if learning_ready_deferrals < CHUNK_LEARNING_READY_MAX_DEFERRALS:
                     deferred_snapshot = copy.deepcopy(snap)
                     deferred_snapshot["_learning_ready_deferrals"] = learning_ready_deferrals + 1

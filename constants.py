@@ -195,6 +195,50 @@ CHUNK_TZ_RECOVERY_MAX_ATTEMPTS = max(
     1,
     int(os.environ.get("CHUNK_TZ_RECOVERY_MAX_ATTEMPTS", "6")),
 )
+# [P0-α/TZ-UNRESOLVED-ALERT] Alerta SRE cuando chunks llevan >Nh pausados con
+# `_pantry_pause_reason='tz_unresolved'`. El recovery cron resuelve el caso
+# normal (el usuario abre la app y `tz_offset_minutes` se persiste) pero hay un
+# escenario degradado: el usuario nunca abre la app post-signup, o el flujo de
+# update_user_health_profile falla silenciosamente. En ese hueco el chunk queda
+# en pending_user_action sin que nadie lo vea hasta que el TTL del recovery
+# (CHUNK_TZ_RECOVERY_MAX_ATTEMPTS × CHUNK_TZ_SYNC_INTERVAL_MINUTES ≈ 90 min)
+# escala a dead-letter — pero ese fallback NO cubre la ventana intermedia donde
+# el chunk lleva horas pausado sin progreso. Esta alerta llena ese hueco.
+#
+# CHUNK_TZ_UNRESOLVED_ALERT_HOURS: edad mínima del pause antes de alertar. 6h
+#   alinea con la cadencia de `_detect_chronic_deferrals` y le da margen al
+#   recovery normal (el chunk se reanuda en cuanto el usuario abre la app).
+CHUNK_TZ_UNRESOLVED_ALERT_HOURS = max(1, int(os.environ.get("CHUNK_TZ_UNRESOLVED_ALERT_HOURS", "6")))
+# CHUNK_TZ_UNRESOLVED_ALERT_INTERVAL_MINUTES: frecuencia del cron. 30 min es el
+#   sweet spot entre detección rápida (operador no espera 6h tras crossing del
+#   threshold para enterarse) y costo del scan (query barata pero suma con la
+#   flota de crons existentes).
+CHUNK_TZ_UNRESOLVED_ALERT_INTERVAL_MINUTES = max(15, int(os.environ.get("CHUNK_TZ_UNRESOLVED_ALERT_INTERVAL_MINUTES", "30")))
+# CHUNK_TZ_UNRESOLVED_ALERT_COOLDOWN_HOURS: dedupe de la alerta agregada. 12h
+#   evita spam si el problema persiste; al expirar, si hay nuevos chunks o los
+#   antiguos siguen stuck, re-dispara.
+CHUNK_TZ_UNRESOLVED_ALERT_COOLDOWN_HOURS = max(1, int(os.environ.get("CHUNK_TZ_UNRESOLVED_ALERT_COOLDOWN_HOURS", "12")))
+# CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT: cap de chunks examinados por corrida.
+#   100 cubre flota mediana sin bloquear el scheduler.
+CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT = max(10, int(os.environ.get("CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT", "100")))
+# [P1-β/TZ-NUDGE] Re-push periódico a usuarios cuyo chunk lleva atascado en
+# `_pantry_pause_reason='tz_unresolved'`. El push inicial se manda al ENQUEUE vía
+# `_maybe_notify_user_tz_unresolved`, pero si el usuario nunca abre la app el
+# helper tiene cooldown 24h y nadie le re-recuerda hasta que el recovery
+# escala a dead-letter (~90min). Este cron busca usuarios stuck >Nh y re-invoca
+# el helper (que respeta su propio cooldown 24h, así que no spamea).
+#
+# CHUNK_TZ_NUDGE_THRESHOLD_HOURS: edad mínima del pause antes de re-empujar.
+#   12h = un día completo desde el primer push original sin que el usuario abriera
+#   la app. Suficientemente paciente para no agobiar; suficientemente proactivo
+#   para que el usuario no descubra el plan parado al tercer día.
+CHUNK_TZ_NUDGE_THRESHOLD_HOURS = max(1, int(os.environ.get("CHUNK_TZ_NUDGE_THRESHOLD_HOURS", "12")))
+# CHUNK_TZ_NUDGE_INTERVAL_MINUTES: frecuencia del cron. 60min porque el cooldown
+#   del helper (24h) ya rate-limitea per-usuario; correr más a menudo no aporta.
+CHUNK_TZ_NUDGE_INTERVAL_MINUTES = max(15, int(os.environ.get("CHUNK_TZ_NUDGE_INTERVAL_MINUTES", "60")))
+# CHUNK_TZ_NUDGE_MAX_USERS: cap por corrida para no saturar webpush si la flota
+#   crece. 50 cubre flotas medianas; el cron volverá a correr al siguiente tick.
+CHUNK_TZ_NUDGE_MAX_USERS = max(1, int(os.environ.get("CHUNK_TZ_NUDGE_MAX_USERS", "50")))
 # [P0-3] Detección PROACTIVA de zero-log al borde de chunk (cuando se enqueuea
 # chunk N+1). Antes el sistema solo detectaba zero-log REACTIVAMENTE: el worker
 # levantaba el chunk, computaba `learning_ready`, y si `zero_log` se confirmaba
@@ -216,6 +260,24 @@ CHUNK_TZ_RECOVERY_MAX_ATTEMPTS = max(
 # hay ventana previa que probar).
 CHUNK_ZERO_LOG_PROACTIVE_DETECTION = (
     os.environ.get("CHUNK_ZERO_LOG_PROACTIVE_DETECTION", "true").lower() == "true"
+)
+# [P1-α/ZERO-LOG-AUTO-ESCALATE] Cuando un chunk detecta zero-log REACTIVO (ya en
+# pickup), el flujo legacy hace hasta CHUNK_LEARNING_READY_MAX_DEFERRALS reintentos
+# de 12h c/u antes de pausar — eso son hasta 24h sin plan visible para el usuario.
+# El audit P1-α reportó esa cascada como degradación de UX inaceptable: el usuario
+# que no logueó comidas ve un plan en blanco durante 1+ día con apenas un push
+# inicial. Con knob activado (default true) saltamos directo al path de pausa con
+# TTL corto (CHUNK_ZERO_LOG_RECOVERY_TTL_HOURS=4h por defecto) en el primer
+# deferral cuando _is_zero_log=True y no hay inventory_proxy disponible: el
+# usuario se entera 8-20h antes y el chunk queda en pending_user_action listo
+# para resolver con cualquiera de las salidas existentes (logs, mutaciones de
+# inventario, o expiración → flexible_mode).
+#
+# El proactive (CHUNK_ZERO_LOG_PROACTIVE_DETECTION) ya cubre el caso ENQUEUE; este
+# knob cubre el caso REACTIVO donde el proactive no detectó el zero-log al
+# encolar (e.g., chunk inicial, fallo transitorio del proactive probe).
+CHUNK_ZERO_LOG_AUTO_ESCALATE = (
+    os.environ.get("CHUNK_ZERO_LOG_AUTO_ESCALATE", "true").lower() == "true"
 )
 # [P0-4] Guard PROACTIVO de inventario al enqueue de chunks no-iniciales. Antes
 # `_enqueue_plan_chunk` solo verificaba TZ (P0-2) y zero-log (P0-3); el chequeo
@@ -311,6 +373,49 @@ CHUNK_RECOVERY_BATCH_LIMIT = max(1, int(os.environ.get("CHUNK_RECOVERY_BATCH_LIM
 # [P0-4] Máxima edad permitida para el snapshot de pantry antes de intentar un live-retry adicional.
 # Pasado este TTL, si el live sigue fallando se marca como stale_snapshot en los logs.
 CHUNK_PANTRY_SNAPSHOT_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_SNAPSHOT_TTL_HOURS", "6")))
+# [P1-δ/PANTRY-STALENESS-ALERT] Alerta SRE cuando hay chunks pending cuyo snapshot
+# de pantry tiene edad >Nh — entre el TTL operacional (6h) y el umbral de
+# auto-flexible (24h) hay una zona donde el snapshot es viejo y el live-fetch
+# debe re-correr al pickup, pero si hay un patrón sistémico (live-fetch caído
+# para muchos usuarios, refresh proactivo no corriendo) los chunks acumulan
+# riesgo silenciosamente. 20h es el sweet spot: ya quedan ≥4h al umbral de
+# flexible_mode forzado, pero suficiente lead-time para investigar antes de
+# que muchos chunks degraden.
+CHUNK_PANTRY_STALENESS_ALERT_HOURS = max(
+    1,
+    int(os.environ.get("CHUNK_PANTRY_STALENESS_ALERT_HOURS", "20")),
+)
+# CHUNK_PANTRY_STALENESS_ALERT_INTERVAL_MINUTES: cada cuánto corre el cron.
+#   60 min alinea con la cadencia del refresh proactivo y evita ruido.
+CHUNK_PANTRY_STALENESS_ALERT_INTERVAL_MINUTES = max(
+    15,
+    int(os.environ.get("CHUNK_PANTRY_STALENESS_ALERT_INTERVAL_MINUTES", "60")),
+)
+# CHUNK_PANTRY_STALENESS_ALERT_MIN_COUNT: mínimo de chunks stale para disparar.
+#   3 evita ruido por chunks aislados (timing del refresh, usuario en pausa);
+#   sube señal real (degradación sistémica del live-fetch).
+CHUNK_PANTRY_STALENESS_ALERT_MIN_COUNT = max(
+    1,
+    int(os.environ.get("CHUNK_PANTRY_STALENESS_ALERT_MIN_COUNT", "3")),
+)
+# CHUNK_PANTRY_STALENESS_ALERT_COOLDOWN_HOURS: dedupe.
+CHUNK_PANTRY_STALENESS_ALERT_COOLDOWN_HOURS = max(
+    1,
+    int(os.environ.get("CHUNK_PANTRY_STALENESS_ALERT_COOLDOWN_HOURS", "6")),
+)
+# [P2-δ/BG-ROLLING-REFILL] Frecuencia del cron `trigger_background_rolling_refill`.
+# El cron detecta usuarios inactivos ≥3 días y dispara shift_plan en background
+# para que sus chunks de rolling refill no esperen al próximo login. Originalmente
+# corría 1 vez al día (1am UTC), lo que dejaba ventana de hasta 24h donde un
+# usuario que se vuelve inactivo a las 2am no era atendido hasta el día siguiente
+# y el chunk se quedaba hambriento de adherence-window. 4h es el sweet spot:
+# detecta inactividad pronto, no spamea (el filtro `≥3 días sin sesión` evita
+# re-procesar al mismo usuario rápidamente), y se alinea con la cadencia
+# operacional típica de turnos SRE.
+CHUNK_BG_ROLLING_REFILL_INTERVAL_HOURS = max(
+    1,
+    int(os.environ.get("CHUNK_BG_ROLLING_REFILL_INTERVAL_HOURS", "4")),
+)
 # [P0-2] Pasada esta edad (24h), si el live falla, forzamos generación con flexible_mode=True
 # para no bloquear el plan indefinidamente si el live fetch del usuario está roto.
 CHUNK_STALE_SNAPSHOT_FORCE_GENERATE_HOURS = max(6, int(os.environ.get("CHUNK_STALE_SNAPSHOT_FORCE_GENERATE_HOURS", "8")))
@@ -537,11 +642,16 @@ CHUNK_CHRONIC_DEFERRAL_CHECK_INTERVAL_MINUTES = int(os.environ.get("CHUNK_CHRONI
 # chunk N+1 no respondían realmente a las repeticiones del N.
 #
 # CHUNK_LESSON_SYNTH_RATIO_ALERT_THRESHOLD: porcentaje de chunks que pueden depender de
-#   síntesis low-confidence antes de disparar alerta. 0.20 = 20% es suficientemente alto
-#   para no disparar por casos puntuales (chunks recientes donde la cola aún no commiteó
-#   learning_metrics) y suficientemente bajo para detectar degradación sistémica (e.g.,
-#   bug que dejó la columna NULL para todos los chunks de un release).
-CHUNK_LESSON_SYNTH_RATIO_ALERT_THRESHOLD = float(os.environ.get("CHUNK_LESSON_SYNTH_RATIO_ALERT_THRESHOLD", "0.20"))
+#   síntesis low-confidence antes de disparar alerta. 0.15 (15%) baja desde el 0.20
+#   inicial tras el audit P0-β: el threshold previo permitía que 1 de cada 5 chunks
+#   usara learning sintético antes de avisar — lo suficiente para que un bug latente
+#   en el commit de learning_metrics afectara semanas de planes 7d antes de visibilizarse.
+#   15% sigue siendo permisivo respecto al ruido natural (chunks recientes con la cola
+#   aún sin commit, deferrals legítimos por zero-log) pero detecta degradación sistémica
+#   (release que rompe la persistencia, schema downgrade) con ~5 chunks afectados de 30,
+#   no 6. Per-user circuit breaker (CHUNK_SYNTH_PER_USER_RATIO_THRESHOLD) sigue en 0.30
+#   porque la varianza individual es naturalmente mayor.
+CHUNK_LESSON_SYNTH_RATIO_ALERT_THRESHOLD = float(os.environ.get("CHUNK_LESSON_SYNTH_RATIO_ALERT_THRESHOLD", "0.15"))
 # CHUNK_LESSON_SYNTH_MIN_SAMPLES: mínimo de chunks procesados en la ventana antes de
 #   evaluar el ratio. Evita falsos positivos en días de bajo tráfico (e.g., 1 chunk
 #   sintetizado de 2 totales = 50% pero no significa nada con n=2).
@@ -718,6 +828,51 @@ CHUNK_ZERO_LOG_NUDGE_MAX_USERS = max(1, int(os.environ.get("CHUNK_ZERO_LOG_NUDGE
 # lo que retenía locks huérfanos demasiado tiempo (worker crasheado bloqueaba al usuario).
 CHUNK_LOCK_HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("CHUNK_LOCK_HEARTBEAT_INTERVAL_SECONDS", "60"))
 CHUNK_LOCK_STALE_MINUTES = int(os.environ.get("CHUNK_LOCK_STALE_MINUTES", "3"))
+# [P0-γ/HEARTBEAT-ALERTS] Dos alertas que cubren el hueco donde el thread daemon
+# de heartbeat muere o el zombie rescue se dispara sin razón legítima:
+#
+#   (1) lag excesivo en pickup (`effective_lag_seconds_at_pickup` > umbral): un
+#       worker recogió un chunk muchos minutos tarde respecto a su execute_after.
+#       Causa típica: scheduler saturado, DB slow, o el worker anterior crasheó
+#       sin liberar el lock y el zombie rescue tardó. Sin esta alerta, los
+#       usuarios reciben planes a horas inesperadas y nadie sabe por qué.
+#
+#   (2) dual-processing del mismo meal_plan_id: 2+ chunks en status='processing'
+#       para el mismo plan. Esto no debería suceder nunca (el lock por user_id
+#       previene paralelismo intra-usuario, y solo hay un worker activo por plan
+#       en un momento dado). Si sucede, indica heartbeat thread muerto +
+#       zombie rescue triggered + worker original todavía corriendo. Riesgo:
+#       doble reserva de inventario, doble merge a plan_data.
+#
+# CHUNK_LAG_ALERT_THRESHOLD_SECONDS: umbral de lag (segundos) que dispara
+#   alerta. 600 (10min) cubre el caso documentado en P0-γ y alinea con la idea
+#   de que el SLA del scheduler es tick=1min: 10min tarde implica problema
+#   sistémico, no jitter normal.
+CHUNK_LAG_ALERT_THRESHOLD_SECONDS = max(60, int(os.environ.get("CHUNK_LAG_ALERT_THRESHOLD_SECONDS", "600")))
+# CHUNK_LAG_ALERT_INTERVAL_MINUTES: cada cuánto corre el cron. 15min permite
+#   detectar dentro del mismo turno de SRE sin saturar logs.
+CHUNK_LAG_ALERT_INTERVAL_MINUTES = max(5, int(os.environ.get("CHUNK_LAG_ALERT_INTERVAL_MINUTES", "15")))
+# CHUNK_LAG_ALERT_WINDOW_HOURS: cuánto hacia atrás escanea. 1h captura el
+#   último ciclo del cron con margen.
+CHUNK_LAG_ALERT_WINDOW_HOURS = max(1, int(os.environ.get("CHUNK_LAG_ALERT_WINDOW_HOURS", "1")))
+# CHUNK_LAG_ALERT_MIN_COUNT: cuántos chunks con lag>threshold disparan la alerta
+#   en la ventana. 1 = cualquier ocurrencia (lag 10+min es señal). Subir si la
+#   flota es grande y un caso aislado es ruido aceptable.
+CHUNK_LAG_ALERT_MIN_COUNT = max(1, int(os.environ.get("CHUNK_LAG_ALERT_MIN_COUNT", "1")))
+# CHUNK_LAG_ALERT_COOLDOWN_HOURS: dedupe del alert agregado.
+CHUNK_LAG_ALERT_COOLDOWN_HOURS = max(1, int(os.environ.get("CHUNK_LAG_ALERT_COOLDOWN_HOURS", "6")))
+# CHUNK_DUAL_PROCESSING_ALERT_INTERVAL_MINUTES: frecuencia del cron de
+#   dual-processing. 5min porque el costo de doble reserva es alto: cada
+#   minuto que esperamos para detectarlo agrava el daño potencial.
+CHUNK_DUAL_PROCESSING_ALERT_INTERVAL_MINUTES = max(1, int(os.environ.get("CHUNK_DUAL_PROCESSING_ALERT_INTERVAL_MINUTES", "5")))
+# CHUNK_DUAL_PROCESSING_ALERT_COOLDOWN_HOURS: dedupe corto. Si el problema se
+#   repite tras 1h, queremos saber.
+CHUNK_DUAL_PROCESSING_ALERT_COOLDOWN_HOURS = max(1, int(os.environ.get("CHUNK_DUAL_PROCESSING_ALERT_COOLDOWN_HOURS", "1")))
+# CHUNK_DUAL_PROCESSING_GRACE_SECONDS: ventana de gracia antes de alarmar.
+#   Durante un handoff legítimo (zombie rescue + pickup nuevo) puede haber un
+#   rango corto donde dos filas en `processing` coexistan antes de que el CAS
+#   del rescue gane. 90s cubre ese flap sin perder señal real.
+CHUNK_DUAL_PROCESSING_GRACE_SECONDS = max(30, int(os.environ.get("CHUNK_DUAL_PROCESSING_GRACE_SECONDS", "90")))
 # [P1-B/HEARTBEAT-START-FAIL] Si el thread daemon de heartbeat NO arranca (límite de
 # threads del proceso, OOM transient), el chunk queda sin protección y el zombie rescue
 # lo mataría tras CHUNK_LOCK_STALE_MINUTES en pleno LLM call — perdiendo tokens y
@@ -759,6 +914,14 @@ CHUNK_LESSON_TELEMETRY_FLUSH_INTERVAL_MINUTES = max(
 )
 CHUNK_LESSON_TELEMETRY_BUFFER_MAX_RECORDS = max(
     100, int(os.environ.get("CHUNK_LESSON_TELEMETRY_BUFFER_MAX_RECORDS", "10000"))
+)
+# [P3-2 · 2026-05-07] Threshold de alerta para el backlog de lesson_telemetry
+# buffered. Si tras un flush `remaining` >= threshold, se loggea WARNING y el
+# row a pipeline_metrics queda con confidence=0.0 (visual gate). Default 500
+# sobre cap de 10000 → alerta en torno al 5% de saturación del buffer, antes
+# de que el FIFO cap empiece a descartar señales.
+MEALFIT_LESSON_BUFFER_BACKLOG_THRESHOLD = max(
+    1, int(os.environ.get("MEALFIT_LESSON_BUFFER_BACKLOG_THRESHOLD", "500"))
 )
 # [P1-5] Timeout (ms) para adquirir el SELECT FOR UPDATE en _persist_nightly_learning_signals.
 # Múltiples planes activos del mismo usuario pueden competir por el row de user_profiles;

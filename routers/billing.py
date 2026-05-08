@@ -3,6 +3,7 @@ import json
 import logging
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from error_utils import safe_error_detail
 from typing import Optional
 
 # Imports relativos al backend
@@ -173,7 +174,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         raise
     except Exception as e:
         logger.error(f"❌ Error interno en /api/subscription/verify: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/cancel")
 async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
@@ -238,7 +239,7 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
         raise
     except Exception as e:
         logger.error(f"❌ Error en /api/subscription/cancel: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @webhooks_router.post("/paypal")
 async def api_webhook_paypal(request: Request):

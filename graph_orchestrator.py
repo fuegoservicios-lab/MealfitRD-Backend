@@ -38,29 +38,72 @@ from contextlib import contextmanager, asynccontextmanager
 # unidad en segundos. Tipos validados (int/float). Valor inválido → warning
 # y fallback al default. Los valores efectivos se loguean al startup.
 # ============================================================
+# [P3-NEW-D · 2026-05-08] Registry global de knobs auto-inventariados.
+# ------------------------------------------------------------
+# Antes, `_log_active_knobs()` mantenía un dict hardcoded de ~30 knobs
+# visibles. Con 50+ knobs activos en el módulo (algunos viviendo en helpers,
+# otros añadidos sin actualizar el dict), el log de startup era incompleto:
+# un override `MEALFIT_LLM_MAX_PER_USER=5` aparecía, pero
+# `MEALFIT_LLM_COMBINED_MAX_WAIT_S` podía no estar listado, y el operador
+# no podía confirmar que el override tomó efecto sin grep manual al
+# código fuente. Drift entre lo que el operador cree configurado y lo
+# realmente leído por el proceso.
+#
+# Ahora cada llamada a `_env_int/_env_float/_env_bool` registra el knob
+# con su default, valor crudo del env (o None) y valor parseado final.
+# `_log_active_knobs()` itera el registry completo en startup y emite
+# inventario ordenado con highlight de overrides activos.
+#
+# Observabilidad pura, cero cambio de comportamiento.
+# ============================================================
+_KNOBS_REGISTRY: dict = {}
+
+
+def _register_knob(name: str, type_label: str, default, raw, value, *, parse_failed: bool = False) -> None:
+    """Anota el knob en el registry. Idempotente — el último registro gana
+    si por alguna razón se llama dos veces (no debería pasar con consts
+    de módulo, pero defensivo contra reload patterns en tests)."""
+    _KNOBS_REGISTRY[name] = {
+        "type": type_label,
+        "default": default,
+        "raw": raw,
+        "value": value,
+        "is_override": raw is not None and raw != "" and not parse_failed,
+        "parse_failed": parse_failed,
+    }
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.environ.get(name)
     if raw is None or raw == "":
+        _register_knob(name, "int", default, raw, default)
         return default
     try:
-        return int(raw)
+        value = int(raw)
+        _register_knob(name, "int", default, raw, value)
+        return value
     except (TypeError, ValueError):
         logging.getLogger(__name__).warning(
             f"[KNOBS] env {name}={raw!r} no es int. Usando default={default}."
         )
+        _register_knob(name, "int", default, raw, default, parse_failed=True)
         return default
 
 
 def _env_float(name: str, default: float) -> float:
     raw = os.environ.get(name)
     if raw is None or raw == "":
+        _register_knob(name, "float", default, raw, default)
         return default
     try:
-        return float(raw)
+        value = float(raw)
+        _register_knob(name, "float", default, raw, value)
+        return value
     except (TypeError, ValueError):
         logging.getLogger(__name__).warning(
             f"[KNOBS] env {name}={raw!r} no es float. Usando default={default}."
         )
+        _register_knob(name, "float", default, raw, default, parse_failed=True)
         return default
 
 
@@ -70,8 +113,20 @@ def _env_bool(name: str, default: bool) -> bool:
     """
     raw = os.environ.get(name)
     if raw is None or raw == "":
+        _register_knob(name, "bool", default, raw, default)
         return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
+    value = raw.strip().lower() in ("1", "true", "yes", "on")
+    _register_knob(name, "bool", default, raw, value)
+    return value
+
+
+def get_knobs_registry_snapshot() -> dict:
+    """[P3-NEW-D] Snapshot read-only del registry de knobs. Útil para
+    endpoints de diagnóstico (`/api/system/knobs`) o para tests que
+    verifican que un knob fue resuelto al valor esperado.
+
+    Devuelve copia para que mutaciones del caller no afecten el registry."""
+    return {name: dict(info) for name, info in _KNOBS_REGISTRY.items()}
 
 
 # --- LLM backpressure / Semáforo distribuido ---
@@ -394,6 +449,17 @@ SYNC_WRAPPER_MAX_WORKERS    = _env_int  ("MEALFIT_SYNC_WRAPPER_MAX_WORKERS",    
 #   escape hatch operacional si aparece un caller legacy no documentado en
 #   producción y se necesita tiempo para migrarlo. Bajar vía env var:
 #       MEALFIT_SYNC_WRAPPER_STRICT_MODE=0
+#
+# [P3-1 2026-05-08] Procedimiento de restauración tras activar el escape hatch:
+#   1. `grep "[SYNC WRAPPER] P1-Q7:" en logs` para identificar al caller legacy
+#      (el log incluye stacktrace completo del frame que entró al wrapper sync).
+#   2. Migrar ese caller a `arun_plan_pipeline` (versión async nativa).
+#   3. Tras desplegar la migración y verificar que el log dejó de aparecer 24h,
+#      eliminar el override en env y reanudar `True`.
+# NO dejar `False` permanente: cada caller async que entra por el path sync
+# bloquea el event loop por la duración del pipeline (decenas de segundos),
+# degradando latencia de TODAS las requests concurrentes. El strict mode
+# `True` es la única defensa contra esa regresión silenciosa.
 SYNC_WRAPPER_STRICT_MODE    = _env_bool ("MEALFIT_SYNC_WRAPPER_STRICT_MODE",   True)
 
 # --- P1-NEW-3: Drain de métricas en shutdown ---
@@ -427,50 +493,54 @@ PROGRESS_CB_SHUTDOWN_DRAIN_S= _env_int  ("MEALFIT_PROGRESS_CB_SHUTDOWN_DRAIN_S",
 
 
 def _log_active_knobs():
-    """P1-NEW-2: Loguea una sola vez los knobs efectivos al import.
+    """[P3-NEW-D · 2026-05-08] Loguea inventario completo desde `_KNOBS_REGISTRY`.
 
-    Útil para confirmar overrides de producción (`MEALFIT_*` env vars) en los
-    logs de startup del worker. Si un knob fue sobre-escrito vía env var, el
-    valor efectivo aparecerá aquí — sin tener que SSH-ear al pod a leer env.
+    Antes esta función mantenía un dict hardcoded de ~30 knobs. Con 50+ knobs
+    activos en el módulo, drift silencioso era inevitable: un override
+    `MEALFIT_LLM_COMBINED_MAX_WAIT_S=60` en producción no aparecía en el log
+    si nadie había agregado la entrada al dict, y el operador no podía
+    confirmar que el override tomó efecto sin grep manual al código.
+
+    Ahora itera `_KNOBS_REGISTRY` (auto-poblado por `_env_int/_env_float/_env_bool`)
+    y emite tres líneas:
+      1. Resumen: total de knobs registrados + cuántos tienen override via env.
+      2. Highlight de overrides activos (lo que un operador investigando
+         producción quiere primero — qué cambió respecto al default).
+      3. Inventario completo (grep-able, single-line) para auditoría.
+
+    Si un knob nuevo se añade vía `_env_*`, aparece automáticamente. Cierre
+    del gap "drift silencioso" detectado en el audit 2026-05-07.
     """
-    knobs = {
-        "LLM_MAX_CONCURRENT": LLM_MAX_CONCURRENT,
-        "LLM_REDIS_LOCK_TIMEOUT_S": LLM_REDIS_LOCK_TIMEOUT_S,
-        "LLM_MAX_WAIT_S": LLM_MAX_WAIT_S,
-        "LLM_PER_USER_ENABLED": LLM_PER_USER_ENABLED,
-        "LLM_MAX_PER_USER": LLM_MAX_PER_USER,
-        "LLM_USER_LOCK_TIMEOUT_S": LLM_USER_LOCK_TIMEOUT_S,
-        "LLM_USER_MAX_WAIT_S": LLM_USER_MAX_WAIT_S,
-        "CB_FAILURE_THRESHOLD": CB_FAILURE_THRESHOLD,
-        "CB_RESET_TIMEOUT_S": CB_RESET_TIMEOUT_S,
-        "CB_LOCAL_HEALTH_TTL_S": CB_LOCAL_HEALTH_TTL_S,
-        "HEDGE_AFTER_BASE_S": HEDGE_AFTER_BASE_S,
-        "HARD_CEILING_S": HARD_CEILING_S,
-        "MAX_ATTEMPTS": MAX_ATTEMPTS,
-        "MIN_RETRY_BUDGET_S": MIN_RETRY_BUDGET_S,
-        "GLOBAL_PIPELINE_TIMEOUT_S": GLOBAL_PIPELINE_TIMEOUT_S,
-        "RETRY_SAFETY_MARGIN_S": RETRY_SAFETY_MARGIN_S,
-        "RETRY_HEDGE_BUDGET_DELTA_S": RETRY_HEDGE_BUDGET_DELTA_S,
-        "FACT_CHECK_TOOL_TIMEOUT_S": FACT_CHECK_TOOL_TIMEOUT_S,
-        "FACT_CHECK_POOL_SIZE": FACT_CHECK_POOL_SIZE,  # [P1-31]
-        "CRITIQUE_FIX_TIMEOUT_S": CRITIQUE_FIX_TIMEOUT_S,
-        "CRITIQUE_TIMEOUT_ABORT_THRESHOLD": CRITIQUE_TIMEOUT_ABORT_THRESHOLD,
-        "CRITIQUE_PRO_FALLBACK_ENABLED": CRITIQUE_PRO_FALLBACK_ENABLED,
-        "CRITIQUE_PRO_FALLBACK_TIMEOUT_S": CRITIQUE_PRO_FALLBACK_TIMEOUT_S,
-        "PROGRESS_CB_MAX_PENDING": PROGRESS_CB_MAX_PENDING,
-        "PROGRESS_CB_TIMEOUT_S": PROGRESS_CB_TIMEOUT_S,
-        "LLM_CACHE_TTL_S": LLM_CACHE_TTL_S,
-        "METRICS_SHUTDOWN_DRAIN_S": METRICS_SHUTDOWN_DRAIN_S,
-        "FACT_CHECK_SHUTDOWN_DRAIN_S": FACT_CHECK_SHUTDOWN_DRAIN_S,
-        "DB_SHUTDOWN_DRAIN_S": DB_SHUTDOWN_DRAIN_S,
-        "PROGRESS_CB_SHUTDOWN_DRAIN_S": PROGRESS_CB_SHUTDOWN_DRAIN_S,
-        "SYNC_WRAPPER_MAX_WORKERS": SYNC_WRAPPER_MAX_WORKERS,
-        "SYNC_WRAPPER_STRICT_MODE": SYNC_WRAPPER_STRICT_MODE,
-    }
-    logging.getLogger(__name__).info(
-        "[KNOBS] graph_orchestrator activos: "
-        + ", ".join(f"{k}={v}" for k, v in knobs.items())
+    log = logging.getLogger(__name__)
+    if not _KNOBS_REGISTRY:
+        log.info("[KNOBS] Registry vacío — ningún _env_* fue invocado.")
+        return
+
+    overrides = sorted(
+        ((n, i) for n, i in _KNOBS_REGISTRY.items() if i["is_override"]),
+        key=lambda kv: kv[0],
     )
+    parse_failures = sorted(
+        ((n, i) for n, i in _KNOBS_REGISTRY.items() if i.get("parse_failed")),
+        key=lambda kv: kv[0],
+    )
+    all_sorted = sorted(_KNOBS_REGISTRY.items())
+
+    log.info(
+        f"[KNOBS] graph_orchestrator activos: {len(all_sorted)} totales, "
+        f"{len(overrides)} overrides via env, {len(parse_failures)} parse-failures."
+    )
+    if overrides:
+        sample = ", ".join(f"{n}={i['value']}" for n, i in overrides)
+        log.info(f"[KNOBS/OVERRIDE] {sample}")
+    if parse_failures:
+        sample = ", ".join(
+            f"{n}=raw{i['raw']!r}→default{i['default']}" for n, i in parse_failures
+        )
+        log.warning(f"[KNOBS/PARSE-FAIL] {sample}")
+
+    full = ", ".join(f"{n}={i['value']}" for n, i in all_sorted)
+    log.info(f"[KNOBS/INVENTORY] {full}")
 
 
 _log_active_knobs()
@@ -3703,6 +3773,94 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     }
 
 
+def _apply_protein_pool_scrub(
+    day_result: dict,
+    skeleton_day: dict,
+    day_num: int,
+    context_label: str = "PARALLEL-GEN",
+) -> tuple[int, set[str]]:
+    """[PROTEIN-POOL-SCRUB 2026-05-07] Helper compartido — cleanup + scan.
+
+    Aplicado en 3 puntos del pipeline donde el LLM produce/corrige un día:
+      1. `generate_days_parallel_node` — generación inicial paralela.
+      2. `self_critique` correction — reescritura tras crítica.
+      3. `_marker_regen_node` (P5-MARKER-REGEN) — surgical post-aprobación.
+
+    Antes solo el path (1) tenía cleanup+scan. Bug observable plan 089e541c:
+    pool elegido `[Queso Blanco, Gandules, Atún]`, pero la lista final tenía
+    "Pechuga de pollo 1¼ lbs" porque el surgical regen (path 3) reintrodujo
+    pollo respondiendo al critique sin pasar por el cleanup. Centralizar la
+    lógica garantiza paridad entre los 3 paths.
+
+    Returns:
+        (violations_count, unauthorized_keys) — el caller usa keys para
+        construir el augmented prompt si decide forzar bounded regen
+        (solo PARALLEL-GEN lo hace; los otros paths lo descartan).
+    """
+    if not isinstance(day_result, dict):
+        return 0, set()
+    from prompts.day_generator import _RESTRICTED_PROTEIN_KEYS
+
+    pool_lower = ' '.join(skeleton_day.get('protein_pool', [])).lower() if skeleton_day else ''
+
+    def _key_in_text(key: str, text: str) -> bool:
+        # Word-boundary para keys de una palabra (evita 'res' en 'fresco');
+        # substring para keys multi-palabra ('jamón de pavo').
+        if ' ' in key:
+            return key in text
+        return bool(_re.search(rf'\b{_re.escape(key)}\b', text))
+
+    unauthorized_keys = {
+        k for k in _RESTRICTED_PROTEIN_KEYS
+        if not _key_in_text(k, pool_lower)
+    }
+    if not unauthorized_keys:
+        return 0, set()
+
+    for _meal in day_result.get('meals', []):
+        _original = _meal.get('ingredients', [])
+        _cleaned, _removed = [], []
+        for _ing in _original:
+            _ing_lower = _ing.lower()
+            if any(_key_in_text(_uk, _ing_lower) for _uk in unauthorized_keys):
+                _removed.append(_ing)
+            else:
+                _cleaned.append(_ing)
+        if _removed:
+            _meal['ingredients'] = _cleaned
+            print(
+                f"🚫 [{context_label}/DÍA {day_num}] Proteínas no autorizadas eliminadas de "
+                f"'{_meal.get('name')}': {_removed}"
+            )
+
+    _violations = []
+    _meals_scanned = 0
+    for _meal in day_result.get('meals', []):
+        _recipe_text = ' '.join(_meal.get('recipe', []) or []).lower()
+        _meal_name_lower = (_meal.get('name', '') or '').lower()
+        _full_text = f"{_meal_name_lower} {_recipe_text}"
+        _meals_scanned += 1
+        for _uk in unauthorized_keys:
+            if _key_in_text(_uk, _full_text):
+                _violations.append((_meal.get('name', '?'), _uk))
+                break
+
+    if _violations:
+        _summary = ', '.join(f"'{m}' menciona '{k}'" for m, k in _violations[:3])
+        print(
+            f"⚠️  [{context_label}/DÍA {day_num}] PROTEIN-RECIPE-VIOLATION detectada: "
+            f"{_summary}{'...' if len(_violations) > 3 else ''}"
+        )
+    else:
+        print(
+            f"🔍 [{context_label}/DÍA {day_num}] PROTEIN-POOL-SCRUB limpio — "
+            f"{_meals_scanned} meals × {len(unauthorized_keys)} keys, 0 violations. "
+            f"Pool: {skeleton_day.get('protein_pool', []) if skeleton_day else []}"
+        )
+
+    return len(_violations), unauthorized_keys
+
+
 # ============================================================
 # NODO 2: GENERADORES PARALELOS (Fase Reduce — 3 días simultáneos)
 # ============================================================
@@ -3947,28 +4105,81 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         day_result["day_name"] = day_name
 
         # ── Scrub determinista de proteínas restringidas no autorizadas ──
-        # Elimina de `ingredients` cualquier proteína restringida que el LLM
-        # haya añadido como complemento sin que el planner la asignara.
-        # No toca `recipe` para no crear nuevos errores de bidireccionalidad;
-        # el revisor médico actúa como red de seguridad si la recipe la menciona.
-        from prompts.day_generator import _RESTRICTED_PROTEIN_KEYS
-        _pool_lower = ' '.join(skeleton_day.get('protein_pool', [])).lower()
-        _unauthorized_keys = {k for k in _RESTRICTED_PROTEIN_KEYS if k not in _pool_lower}
+        # [PROTEIN-POOL-SCRUB 2026-05-07] Helper centralizado: limpia
+        # `ingredients` y escanea `recipe` text. Devuelve (violations_count,
+        # unauthorized_keys) — usamos el set de keys para construir el
+        # prompt augmentado del bounded regen abajo.
+        try:
+            _violations_count, _unauthorized_keys = _apply_protein_pool_scrub(
+                day_result, skeleton_day, day_num, context_label="PARALLEL-GEN",
+            )
+        except Exception as _scrub_err:
+            print(
+                f"⚠️ [PARALLEL-GEN/DÍA {day_num}] protein-scrub falló "
+                f"(best-effort): {_scrub_err}"
+            )
+            _violations_count, _unauthorized_keys = 0, set()
 
-        if _unauthorized_keys:
-            for _meal in day_result.get('meals', []):
-                _original = _meal.get('ingredients', [])
-                _cleaned, _removed = [], []
-                for _ing in _original:
-                    _ing_lower = _ing.lower()
-                    if any(_uk in _ing_lower for _uk in _unauthorized_keys):
-                        _removed.append(_ing)
-                    else:
-                        _cleaned.append(_ing)
-                if _removed:
-                    _meal['ingredients'] = _cleaned
-                    print(f"🚫 [DÍA {day_num}] Proteínas no autorizadas eliminadas de "
-                          f"'{_meal.get('name')}': {_removed}")
+        # [PROTEIN-RECIPE-SCAN 2026-05-07] Bounded regen forzado
+        # ----------------------------------------------------------------
+        # El helper limpió `ingredients` y detectó violaciones en `recipe`
+        # text (que cleanup no toca para no romper bidireccionalidad). Este
+        # path es ÚNICO de PARALLEL-GEN porque solo aquí tenemos `invoke_day`
+        # + `streaming_prompt` para re-llamar el LLM con prompt augmentado.
+        # Caso real plan 7ab9a552: critique sugirió "usa jamón de pavo" →
+        # LLM nombró el plato "Salteado de Plátano Maduro y Pavo" sin añadir
+        # pavo a ingredients → reviewer rechazó por bidireccionalidad rota.
+        if (
+            _violations_count > 0
+            and _unauthorized_keys
+            and not getattr(invoke_day, '_already_regen_for_pool', False)
+        ):
+            print(
+                f"⚠️  [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION → "
+                f"forzando regen del día (bounded: 1 retry max)"
+            )
+            invoke_day._already_regen_for_pool = True
+
+            _violated_in_recipe = sorted(_unauthorized_keys)
+            _augment = (
+                f"\n\n⛔ ALERTA CRÍTICA — REGEN FORZADO POR VIOLACIÓN DE POOL:\n"
+                f"Tu intento anterior mencionó proteínas prohibidas en los pasos de "
+                f"recetas (`recipe`) o nombre del plato. Esas proteínas NO ESTÁN en el pool del "
+                f"día y son PROHIBIDO ABSOLUTO: {_violated_in_recipe}. Re-genera el día COMPLETO "
+                f"eliminando cualquier mención de esas proteínas en TODAS las recetas (nombre, "
+                f"pasos, ingredientes, meal_type). Usa SOLO las proteínas del pool asignado: "
+                f"{', '.join(skeleton_day.get('protein_pool', []))}. Para diversificar desayuno/"
+                f"merienda usa huevos, claras, queso fresco, yogurt, frutos secos o mantequilla "
+                f"de maní (estas son OK siempre)."
+            )
+            _saved_prompt = streaming_prompt
+            try:
+                streaming_prompt = streaming_prompt + _augment
+                day_result = await invoke_day()
+                day_result["day"] = day_num
+                day_result["day_name"] = day_name
+
+                # Re-aplicar helper sobre el regen — re-cleanup ingredients
+                # y re-scan recipe; el log dirá si quedó limpio o no.
+                _violations_post, _ = _apply_protein_pool_scrub(
+                    day_result, skeleton_day, day_num,
+                    context_label="PARALLEL-GEN-REGEN",
+                )
+                if _violations_post > 0:
+                    print(
+                        f"⚠️  [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION persistió tras regen — "
+                        f"el LLM ignoró el warning. Aceptando para evitar loop; downstream "
+                        f"(critique/reviewer) lo manejará."
+                    )
+                else:
+                    print(f"✅ [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION resuelta tras regen forzado.")
+            except Exception as _regen_e:
+                print(
+                    f"⚠️  [DÍA {day_num}] Regen forzado falló ({_regen_e}); "
+                    f"manteniendo intento original."
+                )
+            finally:
+                streaming_prompt = _saved_prompt
 
         # ── Scrub de unidades prohibidas ("ramita", "pizca", "chorrito", etc.) ──
         # La regla 8 del day_generator las prohíbe, pero el LLM las incluye a veces.
@@ -5483,6 +5694,21 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                         corrected_day = corrected_result.model_dump()
                         corrected_day["day"] = day_num
                         print(f"✅ [SELF-CRITIQUE] Día {day_num} corregido exitosamente.")
+                        # [PROTEIN-POOL-SCRUB 2026-05-07] Aplicar cleanup +
+                        # scan tras corrección — el LLM puede reintroducir
+                        # proteínas fuera del pool al "resolver" el slot
+                        # collision sugerido por el critique. Mismo helper
+                        # que la generación inicial para paridad.
+                        try:
+                            _apply_protein_pool_scrub(
+                                corrected_day, skeleton_day, day_num,
+                                context_label="CRITIQUE-FIX",
+                            )
+                        except Exception as _scrub_err:
+                            print(
+                                f"⚠️ [CRITIQUE-FIX/DÍA {day_num}] protein-scrub falló "
+                                f"(best-effort): {_scrub_err}"
+                            )
                         # [P1-SURGICAL-1] Corrección exitosa → el day NUEVO
                         # (`corrected_day`) reemplaza al anterior en `days[i]`
                         # (line ~5054), así que cualquier marcador previo en
@@ -6625,6 +6851,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
         result["aggregated_shopping_list_weekly"] = aggr_list_7
         result["aggregated_shopping_list_biweekly"] = aggr_list_15_hybrid
         result["aggregated_shopping_list_monthly"] = aggr_list_30_hybrid
+        # [P1-C 2026-05-07] Persistir el multiplier para que el guard de coherencia
+        # (capa magnitudes) pueda escalar `expected_sum_from_recipes` simétricamente
+        # al aggregated. Espejo de la convención cron_tasks/routers/plans.
+        result["calc_household_multiplier"] = float(household)
     except Exception as e:
         import traceback
         print(f"⚠️ [SHOPPING MATH] Error agregando lista delta: {e}")
@@ -6661,6 +6891,72 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # a critical por `review_plan_node`.
     affected_days_set = set(state.get("_affected_days") or [])
     _run_assembly_validations(result, skeleton, affected_days_set)
+
+    # [P1-shop-coh-1 · 2026-05-07 / P1-C v2 · 2026-05-07] Guard recetas↔lista.
+    # v1: presence/absence (cap_swallowed_modifier, fantasmas).
+    # v2: magnitudes — escala expected por household multiplier y compara
+    # ratios con `MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT` (default 10%).
+    # Modo via env var MEALFIT_SHOPPING_COHERENCE_GUARD (off|warn|block, default warn).
+    # El guard lee el multiplier de result["calc_household_multiplier"]; pasamos
+    # también explícito como defensa contra dicts mutados antes del hook.
+    # Si el guard explota por bug interno NO debe abortar el assembly.
+    try:
+        from shopping_calculator import run_shopping_coherence_guard
+        coh_divergences = run_shopping_coherence_guard(
+            result, multiplier=result.get("calc_household_multiplier")
+        ) or []
+        # [P3-NEW-C · 2026-05-08] Telemetría histórica: una entrada por
+        # cada invocación del guard que detecte divergencias. Persiste en
+        # plan_data → meal_plans para análisis post-mortem ("¿qué % de
+        # planes tropezaron con coh-block antes de pasar review?, ¿qué
+        # hipótesis dominaron?, ¿cuántos retries tomó resolver?"). Cap a 20
+        # entries para evitar bloat. La acción tomada por review_plan_node
+        # (reject_minor/reject_high/degrade) se rellena más tarde en el
+        # campo `action_taken` de la última entry. Sin cambio de comportamiento.
+        if coh_divergences:
+            try:
+                from datetime import datetime as _coh_dt, timezone as _coh_tz
+                from collections import Counter as _coh_Counter
+                # Preservar history a través de retries leyendo del plan_result
+                # del attempt previo (LangGraph mantiene state entre nodos).
+                prior_result = state.get("plan_result") or {}
+                prior_history = prior_result.get("_shopping_coherence_block_history") or []
+                if not isinstance(prior_history, list):
+                    prior_history = []
+                attempt_n = state.get("attempt", 1)
+                try:
+                    attempt_n = int(attempt_n)
+                except (TypeError, ValueError):
+                    attempt_n = 1
+                hyp_counter = _coh_Counter(
+                    str(d.get("hypothesis") or "unknown") for d in coh_divergences
+                )
+                entry = {
+                    "ts": _coh_dt.now(_coh_tz.utc).isoformat(),
+                    "attempt": attempt_n,
+                    "divergence_count": len(coh_divergences),
+                    "presence_count": sum(
+                        1 for d in coh_divergences if not d.get("magnitude")
+                    ),
+                    "magnitude_count": sum(
+                        1 for d in coh_divergences if d.get("magnitude")
+                    ),
+                    "hypotheses": dict(hyp_counter),
+                    "block_set": bool(result.get("_shopping_coherence_block")),
+                    # action_taken se rellena en review_plan_node si el flag
+                    # `_shopping_coherence_block` está set (mode=block + crítico).
+                    "action_taken": None,
+                }
+                new_history = list(prior_history) + [entry]
+                if len(new_history) > 20:
+                    new_history = new_history[-20:]
+                result["_shopping_coherence_block_history"] = new_history
+            except Exception as _coh_hist_e:
+                logging.debug(
+                    f"[COH-GUARD/HISTORY] no-op (telemetría): {_coh_hist_e}"
+                )
+    except Exception as _coh_e:
+        logging.warning(f"[COH-GUARD] excepción inesperada (no aborta): {_coh_e}")
 
     duration = round(time.time() - start_time, 2)
     _emit_progress(state, "metric", {
@@ -6987,6 +7283,21 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                 # IMPORTANTE: NO copiar `_critique_unresolved` — la corrección
                 # es el evento que limpia el marker.
                 print(f"✅ [P5-MARKER-REGEN] Día {day_num} re-corregido exitosamente.")
+                # [PROTEIN-POOL-SCRUB 2026-05-07] Aplicar cleanup + scan tras
+                # surgical regen — caso plan 089e541c: surgical metió "Pechuga
+                # de pollo" aunque pool era [Queso Blanco, Gandules, Atún].
+                # El cleanup remueve pollo de ingredients; el scan loguea si
+                # quedó en recipe text para visibilidad downstream.
+                try:
+                    _apply_protein_pool_scrub(
+                        corrected_day, skeleton_day, day_num,
+                        context_label="SURGICAL-REGEN",
+                    )
+                except Exception as _scrub_err:
+                    print(
+                        f"⚠️ [SURGICAL-REGEN/DÍA {day_num}] protein-scrub falló "
+                        f"(best-effort): {_scrub_err}"
+                    )
                 return day_num, corrected_day
             print(
                 f"⚠️ [P5-MARKER-REGEN] Día {day_num}: corrector LLM retornó None. "
@@ -7231,6 +7542,81 @@ def _swap_to_best_attempt_if_better(final_state: dict) -> bool:
         final_state["plan_result"]["_best_attempt_swapped_from"] = current_attempt_n
         final_state["plan_result"]["_best_attempt_swapped_severity"] = current_severity
     return True
+
+
+async def _recompute_aggregates_after_swap(final_state: dict) -> None:
+    """[ROLLBACK-AGGREGATE-FIX 2026-05-07] Recomputa aggregated_shopping_list_*
+    desde los `days` del plan restaurado tras swap.
+
+    Llamado SOLO después de que `_swap_to_best_attempt_if_better` retornó True.
+    Reusa la misma lógica de `assemble_plan_node` (get_shopping_list_delta ×3
+    + _build_hybrid) para garantizar que weekly/biweekly/monthly reflejen el
+    mismo plan días, sin residuos de aggregates capturados en otro punto del
+    flow.
+
+    Best-effort: si falla, los aggregates del snapshot persisten (riesgo de
+    inconsistencia entre ciclos pero plan se entrega). El caller atrapa.
+    """
+    plan_result = final_state.get("plan_result") or {}
+    if not isinstance(plan_result, dict) or not plan_result.get("days"):
+        return  # Nada que aggregar
+
+    form_data = final_state.get("form_data") or {}
+    _uid = form_data.get("user_id")
+    if not _uid or _uid == "guest":
+        _uid = None
+
+    from shopping_calculator import (
+        get_shopping_list_delta,
+        fetch_inventory_and_consumed_for_plan,
+        _build_hybrid_shopping_list as _build_hybrid,
+    )
+    from constants import compute_household_multiplier
+
+    household = compute_household_multiplier(form_data)
+
+    if _uid:
+        inv_snapshot, consumed_snapshot = await _adb(
+            fetch_inventory_and_consumed_for_plan, _uid, plan_result, True
+        )
+        aggr_list_7, aggr_list_15, aggr_list_30 = await asyncio.gather(
+            _adb(get_shopping_list_delta, _uid, plan_result, True, False, True, 1.0 * household,
+                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+            _adb(get_shopping_list_delta, _uid, plan_result, True, False, True, 2.0 * household,
+                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+            _adb(get_shopping_list_delta, _uid, plan_result, True, False, True, 4.0 * household,
+                 inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
+        )
+    else:
+        aggr_list_7, aggr_list_15, aggr_list_30 = [], [], []
+
+    # Hybrid para biweekly/monthly (mismo patrón que assemble_plan_node)
+    try:
+        aggr_list_15_hybrid = _build_hybrid(aggr_list_7, aggr_list_15) if aggr_list_15 else aggr_list_15
+        aggr_list_30_hybrid = _build_hybrid(aggr_list_7, aggr_list_30) if aggr_list_30 else aggr_list_30
+    except Exception as e_hybrid:
+        logger.warning(f"[ROLLBACK-AGGREGATE-FIX] Hybrid construction falló: {e_hybrid}")
+        aggr_list_15_hybrid = aggr_list_15
+        aggr_list_30_hybrid = aggr_list_30
+
+    grocery_duration = form_data.get("groceryDuration", "weekly")
+    if grocery_duration == "biweekly":
+        aggr_list = aggr_list_15_hybrid
+    elif grocery_duration == "monthly":
+        aggr_list = aggr_list_30_hybrid
+    else:
+        aggr_list = aggr_list_7
+
+    plan_result["aggregated_shopping_list"] = aggr_list
+    plan_result["aggregated_shopping_list_weekly"] = aggr_list_7
+    plan_result["aggregated_shopping_list_biweekly"] = aggr_list_15_hybrid
+    plan_result["aggregated_shopping_list_monthly"] = aggr_list_30_hybrid
+
+    logger.info(
+        f"🔄 [ROLLBACK-AGGREGATE-FIX] Aggregates recomputadas tras swap: "
+        f"weekly={len(aggr_list_7)} items, biweekly={len(aggr_list_15_hybrid)}, "
+        f"monthly={len(aggr_list_30_hybrid)}. Coherencia entre ciclos garantizada."
+    )
 
 
 async def review_plan_node(state: PlanState) -> dict:
@@ -7512,6 +7898,77 @@ Responde ÚNICAMENTE con el JSON de revisión.
             f"Detalles: {schema_errors}"
         )
         severity = _severity_max(severity, "critical")
+
+    # [P2-A · 2026-05-07] Coherencia recetas↔lista en mode `block`.
+    # `assemble_plan_node` invoca `run_shopping_coherence_guard`; cuando
+    # `MEALFIT_SHOPPING_COHERENCE_GUARD=block` detecta divergencias críticas
+    # (foods de receta ausentes en la lista o magnitudes con delta > tolerance)
+    # setea `plan["_shopping_coherence_block"]` con la lista. Sin este consumer
+    # el contrato de "block" era no-op silencioso — el flag se persistía pero
+    # nada lo accionaba. Cierre del gap detectado en el re-audit 2026-05-07.
+    #
+    # Acción modulada por `MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION`
+    # (env var, default `reject_minor`). El knob es env-var por preferencia
+    # operacional (revertible sin redeploy):
+    #   - `reject_minor`  : rechaza como minor → `should_retry` permite retry
+    #                       si hay budget. Comportamiento default seguro:
+    #                       opera el "block" sin escalar agresivamente.
+    #   - `reject_high`   : rechaza como high (regenerable: ningún keyword
+    #                       de `_HIGH_SEVERITY_CONTEXTUAL_KEYWORDS` matchea
+    #                       "COHERENCIA RECETAS LISTA") → retry forzado por
+    #                       `_classify_high_severity`.
+    #   - `degrade`       : kill switch — limpia el flag, no-op. Util para
+    #                       rollback rápido si `reject_*` produce loops sobre
+    #                       planes de calidad límite. Restaura el comportamiento
+    #                       previo al fix.
+    # Cualquier otro valor → `reject_minor` + warning de knob inválido.
+    coherence_block = plan.get("_shopping_coherence_block") or []
+    if coherence_block:
+        _block_action = (
+            os.environ.get("MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION") or "reject_minor"
+        ).strip().lower()
+        if _block_action not in ("degrade", "reject_minor", "reject_high"):
+            logging.warning(
+                f"[KNOBS] MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION={_block_action!r} "
+                f"no es válido (esperado: degrade/reject_minor/reject_high). "
+                f"Usando 'reject_minor'."
+            )
+            _block_action = "reject_minor"
+
+        # [P3-NEW-C · 2026-05-08] Marcar la última entry de history con la
+        # acción que estamos tomando. assemble_plan_node ya creó la entry
+        # con `action_taken=None`; aquí la hidratamos con el knob resuelto
+        # (reject_minor/reject_high/degrade). Defensivo: si la lista está
+        # vacía o el último item no es dict, no fallamos.
+        try:
+            _coh_hist = plan.get("_shopping_coherence_block_history")
+            if isinstance(_coh_hist, list) and _coh_hist and isinstance(_coh_hist[-1], dict):
+                _coh_hist[-1]["action_taken"] = _block_action
+        except Exception as _coh_mark_e:
+            logging.debug(
+                f"[COH-BLOCK/HISTORY] no se pudo marcar action_taken: {_coh_mark_e}"
+            )
+
+        if _block_action == "degrade":
+            plan.pop("_shopping_coherence_block", None)
+            print(
+                f"🛒 [REVISOR/COH-BLOCK degrade] {len(coherence_block)} divergencia(s) "
+                f"toleradas por knob; flag limpiado, plan se entrega como-is."
+            )
+        else:
+            sample = ", ".join(str(d.get("food", "?")) for d in coherence_block[:5])
+            msg = (
+                f"COHERENCIA RECETAS LISTA: {len(coherence_block)} divergencia(s) "
+                f"críticas (foods: {sample}). action={_block_action}."
+            )
+            approved = False
+            issues.append(msg)
+            if _block_action == "reject_high":
+                severity = _severity_max(severity, "high")
+                print(f"🛒 [REVISOR/COH-BLOCK reject_high] {msg} → retry forzado.")
+            else:
+                severity = _severity_max(severity, "minor")
+                print(f"🛒 [REVISOR/COH-BLOCK reject_minor] {msg} → retry si budget permite.")
 
     # Brechas 1 y 4: Errores deterministas del ensamblador
     skeleton_fidelity_errors = plan.get("_skeleton_fidelity_errors", [])
@@ -11766,6 +12223,25 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     "🔄 [P0-PIPE-1] Plan final restaurado a snapshot del mejor "
                     "intento previo (telemetría: `_best_attempt_swapped_from`)."
                 )
+                # [ROLLBACK-AGGREGATE-FIX 2026-05-07] Tras swap, los
+                # `aggregated_shopping_list_*` del snapshot pueden estar
+                # desincronizados entre ciclos (capturados en distintos
+                # puntos del flow: pre-surgical, post-surgical pero
+                # pre-rollback, etc.). Caso real plan 7ab9a552: weekly+
+                # biweekly mostraban "Jamón de pavo" pero monthly no — el
+                # mismo plan, misma comida = inconsistencia visible al
+                # usuario al cambiar groceryDuration.
+                # Fix: recomputar las 3 aggregates desde los `days`
+                # restaurados para garantizar consistencia.
+                try:
+                    await _recompute_aggregates_after_swap(final_state)
+                except Exception as _agg_err:
+                    logger.warning(
+                        f"[ROLLBACK-AGGREGATE-FIX] Re-aggregation tras swap falló "
+                        f"(best-effort): {type(_agg_err).__name__}: {_agg_err}. "
+                        f"Manteniendo aggregates del snapshot (puede haber "
+                        f"inconsistencia entre ciclos)."
+                    )
         except Exception as _swap_err:
             # Best-effort: si el helper revienta por estado corrupto, NO
             # tumbamos el pipeline — preservamos comportamiento previo

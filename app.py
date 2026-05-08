@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, UploadFile, File, Form, Body, Header, Depends
+from error_utils import safe_error_detail
 import logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -57,15 +58,121 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from services import compute_plan_hash, merge_form_data_with_profile
 from vision_agent import process_image_with_vision, get_multimodal_embedding
 
+# [P2-NEW-D · 2026-05-08] Knobs de scheduler. Antes `BackgroundScheduler()` se
+# instanciaba sin args; default APScheduler = `ThreadPoolExecutor(max_workers=10)`
+# + `misfire_grace_time=1s`. Con ~23 cron jobs registrados (1 en app.py + 22 en
+# `register_plan_chunk_scheduler`), un burst en minuto 0 podía saturar el pool
+# de 10 threads, encolar el 11º+ y — si su próximo schedule llegaba antes del
+# drain — APScheduler hacía SKIP silencioso (logging.warning sin métrica). Riesgo
+# crítico para `process_plan_chunk_queue`, `_alert_chunk_dual_processing`, etc.
+# Defaults conservadores: 20 workers para absorber el burst sin sobre-provisionar;
+# 60s de gracia evita skips por GC/lock contention/DB blip transitorio.
+_SCHEDULER_MAX_WORKERS = int(os.environ.get("MEALFIT_SCHEDULER_MAX_WORKERS", "20"))
+_SCHEDULER_MISFIRE_GRACE_S = int(os.environ.get("MEALFIT_SCHEDULER_MISFIRE_GRACE_S", "60"))
+# [P2-NEW-F · 2026-05-08] Telemetría: emite a system_alerts cuando un job se
+# salta (MISSED) o falla (ERROR). Knob ON por default; `off`/`0`/`false` lo
+# desactiva. Se lee fresh en cada invocación del listener (`_is_scheduler_telemetry_enabled`)
+# para que el kill switch tome efecto sin restart del worker.
+def _is_scheduler_telemetry_enabled() -> bool:
+    return os.environ.get(
+        "MEALFIT_SCHEDULER_TELEMETRY_ENABLED", "on"
+    ).strip().lower() in ("1", "true", "yes", "on")
+
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.executors.pool import ThreadPoolExecutor as _APSThreadPoolExecutor
+    from apscheduler.events import EVENT_JOB_MISSED, EVENT_JOB_ERROR
     from proactive_agent import run_proactive_checks
-    scheduler = BackgroundScheduler()
+    scheduler = BackgroundScheduler(
+        executors={"default": _APSThreadPoolExecutor(_SCHEDULER_MAX_WORKERS)},
+        job_defaults={
+            "misfire_grace_time": _SCHEDULER_MISFIRE_GRACE_S,
+            "coalesce": True,
+            "max_instances": 1,
+        },
+    )
     HAS_SCHEDULER = True
 except ImportError as e:
     logger.error(f"⚠️ [APScheduler] Falta instalar apscheduler o dependencias: {e}. El agente proactivo está deshabilitado.")
     HAS_SCHEDULER = False
     scheduler = None
+    EVENT_JOB_MISSED = EVENT_JOB_ERROR = 0  # type: ignore[assignment]
+
+
+def _scheduler_alert_listener(event):
+    """[P2-NEW-F · 2026-05-08] Listener de eventos APScheduler.
+
+    Emite a `system_alerts` cuando un job se salta (MISSED) o lanza excepción
+    (ERROR). Cierra el gap de observabilidad detectado en el audit 2026-05-07:
+    23+ crons registrados sin métrica de misfire/error → un job crítico
+    (process_plan_chunk_queue, alert_chunk_dual_processing, etc.) podía
+    saltarse silenciosamente, dejando solo log warning sin alerta accionable.
+
+    Defensivo: cualquier error del listener se loguea sin crashear el scheduler
+    (un fallo en supabase no debe pausar el resto de los crons). Idempotente
+    vía UPSERT por `alert_key` único: cada nuevo evento del mismo job actualiza
+    la fila existente con el `triggered_at` más reciente.
+
+    Knob `MEALFIT_SCHEDULER_TELEMETRY_ENABLED` (default `on`): kill switch
+    operacional sin redeploy si la telemetría introduce overhead inesperado.
+    """
+    if not _is_scheduler_telemetry_enabled():
+        return
+    try:
+        from datetime import datetime, timezone as _tz
+        code = getattr(event, "code", None)
+        job_id = getattr(event, "job_id", "unknown")
+        scheduled_run_time = getattr(event, "scheduled_run_time", None)
+        if code == EVENT_JOB_MISSED:
+            event_type = "missed"
+            severity = "warning"
+            title = f"APScheduler job MISSED: {job_id}"
+            message = (
+                f"Job '{job_id}' skipped — scheduled at {scheduled_run_time}. "
+                f"Misfire grace de {_SCHEDULER_MISFIRE_GRACE_S}s superado. "
+                f"Posibles causas: thread pool saturado "
+                f"({_SCHEDULER_MAX_WORKERS} workers), GC pause, DB blip. "
+                f"Revisar pickup lag en logs."
+            )
+        elif code == EVENT_JOB_ERROR:
+            event_type = "error"
+            severity = "critical"
+            title = f"APScheduler job ERROR: {job_id}"
+            exc = getattr(event, "exception", None)
+            exc_summary = f"{type(exc).__name__}: {exc}" if exc else "unknown"
+            message = (
+                f"Job '{job_id}' raised exception during scheduled run at "
+                f"{scheduled_run_time}: {exc_summary}"
+            )
+        else:
+            return  # otros eventos (EXECUTED, etc.) no nos interesan acá
+
+        if supabase is None:
+            return
+        alert_key = f"scheduler_{event_type}_{job_id}"
+        now_iso = datetime.now(_tz.utc).isoformat()
+        sched_iso = scheduled_run_time.isoformat() if scheduled_run_time else None
+        supabase.table("system_alerts").upsert({
+            "alert_key": alert_key,
+            "alert_type": "scheduler",
+            "severity": severity,
+            "title": title,
+            "message": message,
+            "metadata": {
+                "job_id": job_id,
+                "scheduled_run_time": sched_iso,
+                "event_type": event_type,
+                "max_workers": _SCHEDULER_MAX_WORKERS,
+                "misfire_grace_s": _SCHEDULER_MISFIRE_GRACE_S,
+            },
+            "triggered_at": now_iso,
+            "resolved_at": None,
+        }, on_conflict="alert_key").execute()
+    except Exception as listener_err:
+        logger.warning(
+            f"[P2-NEW-F] Listener de scheduler falló para job="
+            f"{getattr(event, 'job_id', '?')}: {listener_err}"
+        )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -75,378 +182,59 @@ async def lifespan(app: FastAPI):
     if async_connection_pool:
         await async_connection_pool.open()
         
+    # [P2-NEW-E · 2026-05-07] El bloque DDL runtime (CREATE TABLE IF NOT EXISTS
+    # + ALTERs + UPDATEs de backfill + índices para 7 tablas) que vivía aquí se
+    # consolidó al SSOT `supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql`.
+    # Mismo patrón estructural que P1-NEW-A 2026-05-08 cerró para índices:
+    # cuando la DDL se recrea cada startup desde Python, un cambio de schema
+    # vía SQL editor o migration nueva queda invisible al código y el siguiente
+    # edit del bloque puede pisarlo en silencio.
+    #
+    # Lo único que sigue acá es `PostgresSaver(conn).setup()` — esa es API
+    # pública de LangGraph (no DDL nuestro), debe correr en cada startup para
+    # asegurar que el schema del checkpointer esté sincronizado con la
+    # versión instalada de la librería.
     if connection_pool:
         try:
             import psycopg
             db_uri = os.environ.get("SUPABASE_DB_URL")
-            # Setup requires a direct connection with autocommit=True because CREATE INDEX CONCURRENTLY cannot run inside a transaction
+            # autocommit=True requerido por LangGraph PostgresSaver (puede crear
+            # índices CONCURRENTLY internamente).
             with psycopg.connect(db_uri, autocommit=True) as conn:
                 PostgresSaver(conn).setup()
-                
-                # Crear tabla para Push Subscriptions
-                conn.execute("""
-                CREATE TABLE IF NOT EXISTS push_subscriptions (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
-                    subscription_data JSONB NOT NULL,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                );
-                """)
-
-                conn.execute("""
-                CREATE TABLE IF NOT EXISTS system_alerts (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    alert_key TEXT NOT NULL UNIQUE,
-                    alert_type TEXT NOT NULL,
-                    severity TEXT NOT NULL DEFAULT 'warning',
-                    title TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    affected_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    triggered_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-                    resolved_at TIMESTAMP WITH TIME ZONE NULL
-                );
-                """)
-
-                # P1-Q10: Schema canónico de `pipeline_metrics` (idempotente).
-                # ----------------------------------------------------------
-                # La tabla se introdujo originalmente fuera de migrations/ y
-                # quedó con schema potencialmente derivado (en algunos entornos
-                # `user_id` quedó como `NOT NULL`, lo que hacía que TODAS las
-                # métricas de guests fallaran silenciosamente — pérdida de señal
-                # de meta-learning para el segmento anónimo). Esta migración:
-                #   1. CREATE IF NOT EXISTS con `user_id NULL` (correcto para
-                #      pipelines de guests / cron sin tenant atribuible).
-                #   2. ALTER ... DROP NOT NULL idempotente, por si una versión
-                #      antigua del schema la había marcado obligatoria. Funciona
-                #      como no-op si ya está NULL-allowed.
-                #   3. Columna generada `is_guest` = (user_id IS NULL) para
-                #      filtrado eficiente en queries de Grafana / análisis.
-                conn.execute("""
-                CREATE TABLE IF NOT EXISTS pipeline_metrics (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    user_id UUID NULL,
-                    session_id TEXT,
-                    node TEXT NOT NULL,
-                    duration_ms INTEGER NOT NULL DEFAULT 0,
-                    retries INTEGER NOT NULL DEFAULT 0,
-                    tokens_estimated INTEGER NOT NULL DEFAULT 0,
-                    confidence NUMERIC(5,4) NOT NULL DEFAULT 0.0,
-                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-                );
-                """)
-                # Idempotente: drop NOT NULL si por alguna razón quedó marcado.
-                # NO falla si ya es nullable; ALTER es no-op en ese caso.
-                conn.execute("""
-                ALTER TABLE pipeline_metrics
-                ALTER COLUMN user_id DROP NOT NULL;
-                """)
-                # Columna generada para filtrado downstream. Idempotente vía
-                # IF NOT EXISTS. STORED es necesario en Postgres para columnas
-                # generadas (no admite VIRTUAL).
-                conn.execute("""
-                ALTER TABLE pipeline_metrics
-                ADD COLUMN IF NOT EXISTS is_guest BOOLEAN
-                    GENERATED ALWAYS AS (user_id IS NULL) STORED;
-                """)
-                # Índice por (node, created_at DESC) — el patrón de query más
-                # común es "métricas recientes por tipo de nodo" (A/B sampler,
-                # preflight analytics).
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_node_created
-                ON pipeline_metrics (node, created_at DESC);
-                """)
-                # Índice parcial para queries de guest analytics (cardinalidad
-                # típica baja vs total → índice parcial es más eficiente).
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_guest_node
-                ON pipeline_metrics (node, created_at DESC) WHERE is_guest = TRUE;
-                """)
-
-                conn.execute("""
-                ALTER TABLE user_profiles
-                ADD COLUMN IF NOT EXISTS quality_alert_at TIMESTAMP WITH TIME ZONE;
-                """)
-
-                # [P1-D] Tolerancia de cantidades de inventario por usuario.
-                # Antes la tolerancia para `validate_ingredients_against_pantry` venía hardcoded
-                # (1.30 default function-level, 1.05 vía CHUNK_PANTRY_QUANTITY_HYBRID_TOLERANCE)
-                # y era idéntica para todos. Para usuarios con macros médicos estrictos, 30%
-                # over-budget en proteína es excesivo (500g pollo vs 384g real); para usuarios
-                # casuales, una tolerancia más relajada reduce las pausas por validación.
-                # Permitimos override per-usuario en [1.00, 1.50]. NULL = usar default global.
-                conn.execute("""
-                ALTER TABLE user_profiles
-                ADD COLUMN IF NOT EXISTS pantry_tolerance NUMERIC(4,2);
-                """)
-                # CHECK constraint idempotente vía DO block para evitar errores en re-deploy.
-                conn.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint
-                        WHERE conname = 'pantry_tolerance_range_check'
-                    ) THEN
-                        ALTER TABLE user_profiles
-                        ADD CONSTRAINT pantry_tolerance_range_check
-                        CHECK (pantry_tolerance IS NULL OR (pantry_tolerance >= 1.00 AND pantry_tolerance <= 1.50));
-                    END IF;
-                END
-                $$;
-                """)
-
-                conn.execute("""
-                ALTER TABLE user_inventory
-                ADD COLUMN IF NOT EXISTS reserved_quantity NUMERIC(12,4) DEFAULT 0,
-                ADD COLUMN IF NOT EXISTS reservation_details JSONB DEFAULT '{}'::jsonb;
-                """)
-
-                conn.execute("""
-                UPDATE user_inventory
-                SET reserved_quantity = COALESCE(reserved_quantity, 0),
-                    reservation_details = COALESCE(reservation_details, '{}'::jsonb)
-                WHERE reserved_quantity IS NULL OR reservation_details IS NULL;
-                """)
-                
-                # Cola para generación de chunks en background (Background Chunking Just-in-Time)
-                conn.execute("""
-                CREATE TABLE IF NOT EXISTS plan_chunk_queue (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    user_id UUID REFERENCES user_profiles(id) ON DELETE CASCADE,
-                    meal_plan_id UUID NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
-                    week_number INT NOT NULL,
-                    chunk_kind VARCHAR(32) NOT NULL DEFAULT 'initial_plan',
-                    days_offset INT NOT NULL,
-                    days_count INT NOT NULL DEFAULT 3,
-                    pipeline_snapshot JSONB NOT NULL,
-                    status VARCHAR(50) DEFAULT 'pending',
-                    attempts INT DEFAULT 0,
-                    execute_after TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                );
-                """)
-
-                # Migración on-the-fly para la columna execute_after (tablas pre-existentes)
-                conn.execute("""
-                ALTER TABLE plan_chunk_queue
-                ADD COLUMN IF NOT EXISTS execute_after TIMESTAMP WITH TIME ZONE DEFAULT NOW();
-                """)
-
-                # Backfill: filas insertadas antes de la migración tienen execute_after=NULL
-                # y nunca serían procesadas por `execute_after <= NOW()`. Las marcamos como listas.
-                conn.execute("""
-                UPDATE plan_chunk_queue
-                SET execute_after = NOW()
-                WHERE execute_after IS NULL AND status = 'pending';
-                """)
-
-                # [GAP A] Métricas de SLA: tier de calidad y lag al hacer pickup
-                conn.execute("""
-                ALTER TABLE plan_chunk_queue
-                ADD COLUMN IF NOT EXISTS quality_tier VARCHAR(20),
-                ADD COLUMN IF NOT EXISTS lag_seconds_at_pickup INT,
-                ADD COLUMN IF NOT EXISTS expected_preemption_seconds INT DEFAULT 0,
-                ADD COLUMN IF NOT EXISTS effective_lag_seconds_at_pickup INT DEFAULT 0,
-                ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;
-                """)
-
-                # [GAP F] Métricas de aprendizaje inter-chunk (JSON estructurado)
-                conn.execute("""
-                ALTER TABLE plan_chunk_queue
-                ADD COLUMN IF NOT EXISTS learning_metrics JSONB;
-                """)
-
-                # [P0-2] Timestamp atómico que indica que la lección de este chunk se persistió
-                # dentro de la transacción FOR UPDATE de meal_plans (es decir, está garantizada
-                # en plan_data._last_chunk_learning y _recent_chunk_lessons). Sirve para detectar
-                # chunks "completed" cuya lección quedó desincronizada en crashes pre-P0-2.
-                conn.execute("""
-                ALTER TABLE plan_chunk_queue
-                ADD COLUMN IF NOT EXISTS learning_persisted_at TIMESTAMP WITH TIME ZONE;
-                """)
-
-                conn.execute("""
-                ALTER TABLE plan_chunk_queue
-                ADD COLUMN IF NOT EXISTS dead_lettered_at TIMESTAMP WITH TIME ZONE,
-                ADD COLUMN IF NOT EXISTS dead_letter_reason TEXT;
-                """)
-
-                # [P1-2] Tipo explícito de chunk para distinguir chunks iniciales vs rolling refill.
-                conn.execute("""
-                ALTER TABLE plan_chunk_queue
-                ADD COLUMN IF NOT EXISTS chunk_kind VARCHAR(32) DEFAULT 'initial_plan';
-                """)
-
-                conn.execute("""
-                UPDATE plan_chunk_queue
-                SET chunk_kind = CASE
-                    WHEN COALESCE((pipeline_snapshot->>'_is_rolling_refill')::boolean, false) THEN 'rolling_refill'
-                    ELSE 'initial_plan'
-                END
-                WHERE chunk_kind IS NULL OR chunk_kind = '';
-                """)
-
-                # [GAP E] Dedup previo de chunks duplicados (meal_plan_id, week_number) antes del UNIQUE
-                # Si hay duplicados históricos, conservamos el más reciente (updated_at DESC) y cancelamos
-                # los demás. Sin esto, el CREATE UNIQUE INDEX fallaría en tablas pre-existentes.
-                try:
-                    conn.execute("""
-                        UPDATE plan_chunk_queue
-                        SET status = 'cancelled', updated_at = NOW()
-                        WHERE id IN (
-                            SELECT id FROM (
-                                SELECT id,
-                                       ROW_NUMBER() OVER (
-                                           PARTITION BY meal_plan_id, week_number
-                                           ORDER BY updated_at DESC, created_at DESC
-                                       ) AS rn
-                                FROM plan_chunk_queue
-                                WHERE status IN ('pending', 'processing', 'stale')
-                            ) t
-                            WHERE t.rn > 1
-                        );
-                    """)
-                except Exception as _dedup_e:
-                    logger.warning(f"[GAP E] No se pudo dedupar chunks previos: {_dedup_e}")
-
-                # [GAP E] UNIQUE parcial: idempotencia a nivel DB. Solo aplica a chunks vivos.
-                # chunks 'completed' y 'cancelled' pueden tener duplicados históricos (archivos).
-                conn.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_plan_chunk_queue_live_week
-                ON plan_chunk_queue (meal_plan_id, week_number)
-                WHERE status IN ('pending', 'processing', 'stale', 'failed');
-                """)
-
-                # [GAP G] Tabla de métricas históricas del pipeline de chunks
-                conn.execute("""
-                CREATE TABLE IF NOT EXISTS plan_chunk_metrics (
-                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                    chunk_id UUID,
-                    meal_plan_id UUID,
-                    user_id UUID,
-                    week_number INT,
-                    days_count INT,
-                    duration_ms INT,
-                    quality_tier VARCHAR(20),
-                    was_degraded BOOLEAN DEFAULT FALSE,
-                    retries INT DEFAULT 0,
-                    lag_seconds INT,
-                    learning_repeat_pct NUMERIC(5,2),
-                    rejection_violations INT DEFAULT 0,
-                    allergy_violations INT DEFAULT 0,
-                    error_message TEXT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                );
-                """)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_plan_chunk_metrics_recent
-                ON plan_chunk_metrics (created_at DESC);
-                """)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_plan_chunk_metrics_plan
-                ON plan_chunk_metrics (meal_plan_id);
-                """)
-
-                # Índice parcial: acelera el polling del worker (status='pending' ordenado por execute_after)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_plan_chunk_queue_pending
-                ON plan_chunk_queue (execute_after, created_at)
-                WHERE status = 'pending';
-                """)
-
-                # Índice para el rescate de zombies (status='processing' con updated_at antiguo)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_plan_chunk_queue_processing
-                ON plan_chunk_queue (updated_at)
-                WHERE status = 'processing';
-                """)
-
-                # [GAP A] Índice para detección rápida de chunks atrasados (stuck)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_plan_chunk_queue_stuck
-                ON plan_chunk_queue (execute_after)
-                WHERE status IN ('pending', 'stale');
-                """)
-
-                # [P1-3] Tabla de telemetría de deferrals: cada vez que el learning gate
-                # rechaza un chunk porque el día previo aún no concluyó, registramos el
-                # evento aquí. Sin esta tabla, los deferrals se silenciaban con
-                # `logger.debug` y _detect_chronic_deferrals no podía detectar usuarios
-                # con TZ desalineada. La DDL está aquí para garantizar que el schema
-                # exista incluso en deploys nuevos sin migraciones manuales.
-                conn.execute("""
-                CREATE TABLE IF NOT EXISTS chunk_deferrals (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id UUID NOT NULL,
-                    meal_plan_id UUID,
-                    week_number INT NOT NULL,
-                    reason TEXT NOT NULL,
-                    days_until_prev_end INT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                );
-                """)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_chunk_deferrals_user_recent
-                ON chunk_deferrals (user_id, created_at DESC);
-                """)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_chunk_deferrals_plan_week
-                ON chunk_deferrals (meal_plan_id, week_number, created_at DESC);
-                """)
-
-                # [P0-A] Tabla de telemetría de resolución de lecciones por chunk.
-                # Cada vez que el sistema cae a la ruta de síntesis (low-confidence)
-                # porque `plan_chunk_queue.learning_metrics` está NULL, registramos
-                # el evento aquí. Sin esta tabla, no había visibilidad sobre qué
-                # porcentaje de chunks "aprenden" desde señales degradadas vs.
-                # métricas reales — el aprendizaje continuo podía estar roto en
-                # producción sin alarma. El cron `_alert_high_synthesized_lesson_ratio`
-                # consume esta tabla para disparar `system_alerts` si el ratio
-                # supera el umbral configurado.
-                conn.execute("""
-                CREATE TABLE IF NOT EXISTS chunk_lesson_telemetry (
-                    id BIGSERIAL PRIMARY KEY,
-                    user_id UUID NOT NULL,
-                    meal_plan_id UUID NOT NULL,
-                    week_number INT NOT NULL,
-                    event TEXT NOT NULL,
-                    synthesized_count INT NOT NULL DEFAULT 0,
-                    queue_count INT NOT NULL DEFAULT 0,
-                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                );
-                """)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_chunk_lesson_telemetry_event_recent
-                ON chunk_lesson_telemetry (event, created_at DESC);
-                """)
-                conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_chunk_lesson_telemetry_user_recent
-                ON chunk_lesson_telemetry (user_id, created_at DESC);
-                """)
-
-
-            logger.info("🚀 [Postgres] Tablas de LangGraph Checkpointer y Push Subscriptions verificadas/creadas.")
+            logger.info("🚀 [Postgres] LangGraph Checkpointer setup OK.")
         except Exception as e:
-            logger.error(f"⚠️ [Postgres] Error configurando DDL inicial: {e}")
+            logger.error(f"⚠️ [Postgres] Error en PostgresSaver(conn).setup(): {e}")
             
     if HAS_SCHEDULER and scheduler:
         scheduler.add_job(run_proactive_checks, "cron", minute=30)
-        from cron_tasks import register_plan_chunk_scheduler, trigger_background_rolling_refill
+        # [P2-NEW-C · 2026-05-08] `background_rolling_refill` se movió al SSOT
+        # `register_plan_chunk_scheduler` (cron_tasks.py) junto al resto del
+        # chunk system. Ya no se registra acá.
+        from cron_tasks import register_plan_chunk_scheduler
         register_plan_chunk_scheduler(scheduler)
-        # [P0-2] Rolling refill para usuarios que no abren la app (cada día a la 1:00 AM UTC)
-        scheduler.add_job(
-            trigger_background_rolling_refill,
-            "cron",
-            hour=1,
-            minute=0,
-            id="background_rolling_refill",
-            max_instances=1,
-            coalesce=True,
-            replace_existing=True,
-        )
+        # [P2-NEW-F · 2026-05-08] Registrar listener ANTES de start() para no
+        # perder los primeros eventos. Mask combinado MISSED|ERROR. Si la
+        # telemetría está desactivada por knob, el listener corto-circuita
+        # internamente (no skipeamos el add_listener para no requerir
+        # restart al togglear el knob — solo edita la env var y los próximos
+        # eventos se procesan según el flag actual).
+        try:
+            scheduler.add_listener(
+                _scheduler_alert_listener,
+                EVENT_JOB_MISSED | EVENT_JOB_ERROR,
+            )
+            logger.info(
+                f"📡 [P2-NEW-F] Listener APScheduler registrado "
+                f"(telemetry={'on' if _is_scheduler_telemetry_enabled() else 'off'}, "
+                f"workers={_SCHEDULER_MAX_WORKERS}, "
+                f"misfire_grace={_SCHEDULER_MISFIRE_GRACE_S}s)."
+            )
+        except Exception as _listener_err:
+            logger.error(
+                f"⚠️ [P2-NEW-F] No se pudo registrar listener APScheduler: "
+                f"{_listener_err}. Continuando sin telemetría."
+            )
         scheduler.start()
         logger.info("⏰ [APScheduler] Tareas proactivas, CRON jobs nocturnos y Background Chunking iniciados.")
             
@@ -648,24 +436,11 @@ def readiness_check():
     )
 
 @app.get("/api/admin/test-proactive")
-def api_test_proactive():
-    import traceback
-    with open("push_log.txt", "w", encoding="utf-8") as f:
-        try:
-            from test_push import trigger_manual_notification
-            import sys, io
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            trigger_manual_notification("Almuerzo", "1:30 PM")
-            f.write(sys.stdout.getvalue())
-            sys.stdout = old_stdout
-            return {"status": "success", "message": "Checked log"}
-        except Exception as e:
-            f.write(traceback.format_exc())
-            return {"status": "error", "message": str(e)}
-
-@app.get("/api/admin/test-proactive")
 def api_test_proactive(background_tasks: BackgroundTasks):
+    # [P2-1 2026-05-08] Antes existían dos handlers `@app.get("/api/admin/test-proactive")`
+    # consecutivos: uno síncrono y este async-via-background. FastAPI registra el
+    # último decorador, así que la versión síncrona quedaba sobrescrita y nunca se
+    # ejecutaba. Eliminada para que el lector no asuma que existen dos modos.
     import traceback
     def run_push():
         with open("push_log.txt", "w", encoding="utf-8") as f:
@@ -724,7 +499,7 @@ def api_get_user_credits(user_id: str, verified_user_id: Optional[str] = Depends
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/user/credits GET: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @app.get("/api/user-facts/{user_id}")
 def api_get_user_facts(user_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -742,7 +517,7 @@ def api_get_user_facts(user_id: str, verified_user_id: Optional[str] = Depends(g
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/user-facts GET: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @app.delete("/api/user-facts/{fact_id}")
 def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -760,7 +535,7 @@ def api_delete_user_fact(fact_id: str, verified_user_id: Optional[str] = Depends
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/user-facts DELETE: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @app.post("/api/account/reset-preferences")
 def api_reset_user_preferences(verified_user_id: str = Depends(get_verified_user_id)):
@@ -780,7 +555,7 @@ def api_reset_user_preferences(verified_user_id: str = Depends(get_verified_user
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/account/reset-preferences: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @app.post("/api/webhooks/process-pending-facts")
 def api_webhook_process_pending_facts(request: Request, data: dict = Body(...), authorization: Optional[str] = Header(None)):
@@ -825,7 +600,7 @@ def api_webhook_process_pending_facts(request: Request, data: dict = Body(...), 
         raise
     except Exception as e:
         logger.error(f"❌ [WEBHOOK ERROR]: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @app.post("/api/auth/migrate")
 def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
@@ -921,7 +696,7 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/auth/migrate: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=3001, reload=True)

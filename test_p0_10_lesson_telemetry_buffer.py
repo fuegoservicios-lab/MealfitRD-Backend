@@ -162,9 +162,12 @@ def test_flush_pending_lesson_telemetry_re_inserts_buffered_records(tmp_path, mo
 
     assert stats["flushed"] == 3
     assert stats["remaining"] == 0
-    assert len(insert_calls) == 3
+    # [P3-2 · 2026-05-07] Filtrar la INSERT a pipeline_metrics añadida por la
+    # métrica de backlog — sólo contamos las INSERTs a chunk_lesson_telemetry.
+    lesson_inserts = [c for c in insert_calls if "chunk_lesson_telemetry" in c[0]]
+    assert len(lesson_inserts) == 3
     # Cada INSERT debe contener event y metadata (jsonb).
-    for query, params in insert_calls:
+    for query, params in lesson_inserts:
         assert "INSERT INTO chunk_lesson_telemetry" in query
         assert "event" in query
     # Tras flush exitoso, el archivo debe haber sido eliminado.

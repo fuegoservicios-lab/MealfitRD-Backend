@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import unicodedata
 from datetime import datetime
@@ -11,7 +12,10 @@ from constants import normalize_ingredient_for_tracking
 logger = logging.getLogger(__name__)
 _RESERVATION_MEAL_TOKEN_RE = re.compile(r":meal:(.+)$")
 
-def _compute_dynamic_consumption_rates(user_id: str) -> Dict[str, float]:
+def _compute_dynamic_consumption_rates(
+    user_id: str,
+    current_household_multiplier: float | None = None,
+) -> Dict[str, float]:
     """[P2-2] Deriva la tasa de consumo (g/día) por ingrediente desde el plan activo.
 
     Antes la predicción "se agotará en X días" usaba rates hardcoded por
@@ -24,17 +28,30 @@ def _compute_dynamic_consumption_rates(user_id: str) -> Dict[str, float]:
     calcula `cantidad_g / 7` para cada ingrediente. La lista weekly es la
     canónica para tasas porque cubre exactamente 7 días.
 
+    [P2-4 2026-05-08] Guard de drift householdComposition. La lista weekly
+    se escaló con el multiplier persistido en `plan_data.calc_household_multiplier`
+    (M_cached). Si el usuario actualizó su `householdComposition` entre chunks
+    y el multiplier actual (M_now) diverge >threshold del cacheado, los rates
+    derivados sobreestiman/subestiman el consumo real. En ese caso retornamos
+    `{}` con WARNING para que el caller caiga al fallback hardcoded por categoría.
+
+    `current_household_multiplier` puede pasarse desde el caller para evitar
+    una segunda query a `user_profiles` cuando el caller ya lo computó.
+
+    Threshold knob: `MEALFIT_DYNAMIC_RATE_HOUSEHOLD_DRIFT_THRESHOLD` (default 0.20 = 20%).
+
     Returns: dict `{nombre_normalizado: gramos/día}`. Vacío si no hay plan
-    activo o falla la query (caller cae al rate por categoría).
+    activo, falla la query, o el drift de household excede el threshold.
     """
     if not supabase or not user_id:
         return {}
     try:
+        # [P1-B 2026-05-07] meal_plans no tiene columna `is_active`; el flag
+        # vive en plan_data JSONB. Plan "activo" = el más reciente del user.
         res = (
             supabase.table("meal_plans")
             .select("plan_data")
             .eq("user_id", user_id)
-            .eq("is_active", True)
             .order("created_at", desc=True)
             .limit(1)
             .execute()
@@ -50,6 +67,59 @@ def _compute_dynamic_consumption_rates(user_id: str) -> Dict[str, float]:
     except Exception as e:
         logger.debug(f"[P2-2] No se pudo cargar plan activo para rates dinámicos: {e}")
         return {}
+
+    # [P2-4 2026-05-08] Guard de drift householdComposition. Ver docstring.
+    try:
+        m_cached_raw = plan_data.get("calc_household_multiplier")
+        if m_cached_raw is None:
+            # Plan sin metadata: no podemos validar. Conservador → fallback hardcoded.
+            logger.warning(
+                "[P2-4] Plan activo sin `calc_household_multiplier`; no es posible "
+                "validar drift household. Cayendo al fallback hardcoded por categoría."
+            )
+            return {}
+        m_cached = max(1.0, float(m_cached_raw))
+
+        m_now = current_household_multiplier
+        if m_now is None:
+            try:
+                _hp_res = (
+                    supabase.table("user_profiles")
+                    .select("health_profile")
+                    .eq("id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                hp = (_hp_res.data[0].get("health_profile") or {}) if _hp_res.data else {}
+                from constants import compute_household_multiplier
+                m_now = compute_household_multiplier(hp)
+            except Exception as _e:
+                logger.debug(
+                    f"[P2-4] No se pudo cargar health_profile para validar drift: {_e}. "
+                    f"Asumiendo M_now=M_cached (no-op del guard)."
+                )
+                m_now = m_cached
+        m_now = max(1.0, float(m_now or 1.0))
+
+        # Knob lazy: registrarlo en `_KNOBS_REGISTRY` (P3-NEW-D) sin acoplar este
+        # módulo al import del orchestrator a nivel top.
+        try:
+            from graph_orchestrator import _env_float
+            threshold = _env_float("MEALFIT_DYNAMIC_RATE_HOUSEHOLD_DRIFT_THRESHOLD", 0.20)
+        except Exception:
+            threshold = 0.20
+
+        drift = abs(m_now - m_cached) / m_cached
+        if drift > threshold:
+            logger.warning(
+                f"[P2-4] Drift household excede threshold: M_cached={m_cached:.2f}, "
+                f"M_now={m_now:.2f}, drift={drift:.2%} > {threshold:.0%}. "
+                f"Cayendo al fallback hardcoded por categoría para evitar rates sesgados."
+            )
+            return {}
+    except Exception as _guard_e:
+        # Guard defensivo: nunca bloquear el flujo principal por fallar la validación.
+        logger.debug(f"[P2-4] Guard de drift falló silenciosamente: {_guard_e}.")
 
     rates: Dict[str, float] = {}
     for it in weekly:
@@ -100,22 +170,11 @@ def _compute_dynamic_consumption_rates(user_id: str) -> Dict[str, float]:
     return rates
 
 
-_CANONICAL_UNIT_MAP = {
-    'ud': 'unidad', 'uds': 'unidad', 'unidades': 'unidad',
-    'lbs': 'lb', 'libra': 'lb', 'libras': 'lb',
-    'paquetes': 'paquete', 'potes': 'pote', 'mazos': 'mazo',
-    'cabezas': 'cabeza', 'sobres': 'sobre', 'latas': 'lata',
-    'botellas': 'botella', 'hojas': 'hoja', 'rebanadas': 'rebanada',
-    'dientes': 'diente', 'gramos': 'g', 'gr': 'g',
-    'kilos': 'kg', 'kilogramo': 'kg', 'kilogramos': 'kg',
-    'onzas': 'oz', 'onza': 'oz',
-    'tazas': 'taza', 'cucharada': 'cda', 'cucharadas': 'cda',
-    'cucharadita': 'cdta', 'cucharaditas': 'cdta',
-    'al gusto': 'pizca',
-    'cartón': 'paquete', 'carton': 'paquete', 'cartones': 'paquete',
-    'fundita': 'paquete', 'funditas': 'paquete', 'funda': 'paquete', 'fundas': 'paquete',
-    'envase': 'pote', 'envases': 'pote',
-}
+# [P1-shop-coh-1 · 2026-05-07] Re-export del SSOT en `canonical_units.py`.
+# Antes este map vivía aquí en paralelo a la cadena if/elif de
+# shopping_calculator._parse_quantity. La divergencia silenciosa era riesgo P1
+# para la coherencia Σ(recetas) ↔ Σ(lista). Ambos ahora leen del mismo dict.
+from canonical_units import CANONICAL_UNIT_MAP as _CANONICAL_UNIT_MAP
 
 def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
     """Obtiene los registros crudos de la base de datos para la despensa del usuario."""
@@ -299,16 +358,21 @@ def get_user_inventory(user_id: str, household_size: float | int | None = None) 
     # [P2-2] Pre-cómputo de rates dinámicos desde el plan activo (g/día por
     # ingrediente). Vacío si no hay plan o falla la query → caller cae al
     # rate por categoría (legacy).
-    dynamic_rates = _compute_dynamic_consumption_rates(user_id)
+    # [P2-4 2026-05-08] Pasamos `household_size` (ya es el multiplier efectivo)
+    # para que el guard de drift en `_compute_dynamic_consumption_rates` no
+    # tenga que volver a consultar `user_profiles`.
+    dynamic_rates = _compute_dynamic_consumption_rates(
+        user_id, current_household_multiplier=household_size
+    )
 
     for item in raw_items:
         qty = float(item.get("quantity", 0) or 0)
         unit = item.get("unit", "unidad")
         name = item.get("ingredient_name", "")
-        
+
         if qty <= 0 and name not in PANTRY_STAPLES:
             continue
-            
+
         q_rounded = f"{qty:.2f}".rstrip('0').rstrip('.') if qty > 0 else "0"
         if q_rounded == "": q_rounded = "0"
         
@@ -422,7 +486,12 @@ def get_user_inventory_net(user_id: str, household_size: float | int | None = No
     # [P2-2] Pre-cómputo de rates dinámicos desde el plan activo (g/día por
     # ingrediente). Vacío si no hay plan o falla la query → caller cae al
     # rate por categoría (legacy).
-    dynamic_rates = _compute_dynamic_consumption_rates(user_id)
+    # [P2-4 2026-05-08] Pasamos `household_size` (ya es el multiplier efectivo)
+    # para que el guard de drift en `_compute_dynamic_consumption_rates` no
+    # tenga que volver a consultar `user_profiles`.
+    dynamic_rates = _compute_dynamic_consumption_rates(
+        user_id, current_household_multiplier=household_size
+    )
 
     for item in raw_items:
         qty = float(item.get("available_quantity", item.get("quantity", 0)) or 0)
@@ -1076,12 +1145,38 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
     `restock_inventory` (que sólo suma): aquí los shopping_list previos se
     descartan completamente porque la nueva lista los reemplaza por diseño.
 
+    [P3-D · 2026-05-07] Rollback de seguridad. ANTES, si DELETE tenía éxito
+    pero `restock_inventory` fallaba (network blip, DB error, partial insert),
+    el usuario quedaba sin lista de compras y sin recuperación posible. AHORA:
+      1. Antes del DELETE, snapshot completo de las filas `source='shopping_list'`.
+      2. DELETE.
+      3. INSERT vía `restock_inventory`.
+      4. Si el insert falla (False/excepción), se restauran las filas snapshotted.
+    No es atomicidad real (un crash entre DELETE e INSERT pierde datos), pero
+    elimina el principal modo de fallo: errores capturables en `restock_inventory`.
+    Trade-off aceptado: lograr atomicidad estricta requeriría una transacción
+    SQL directa via psycopg, bypaseando el patrón Supabase-REST que usa el
+    resto del módulo.
+
+    Knob `MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK` (default `on`):
+      - `on`   : restore-on-failure activado (comportamiento P3-D).
+      - `off`  : modo legacy (no rollback, comportamiento previo a P3-D).
+                 Kill switch operacional sin redeploy.
+
     Returns:
-        {"deleted_shopping_rows": N, "inserted_rows": M, "preserved_manual_rows": K}
+        {"deleted_shopping_rows": N, "inserted_rows": M, "preserved_manual_rows": K,
+         "rolled_back": bool}  # `rolled_back` añadido P3-D, true si se restauró snapshot.
     """
-    stats = {"deleted_shopping_rows": 0, "inserted_rows": 0, "preserved_manual_rows": 0}
+    stats = {"deleted_shopping_rows": 0, "inserted_rows": 0, "preserved_manual_rows": 0,
+             "rolled_back": False}
     if not supabase or not user_id:
         return stats
+
+    rollback_enabled = (
+        os.environ.get("MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK", "on").strip().lower() != "off"
+    )
+
+    snapshot_rows: List[Dict[str, Any]] = []
 
     try:
         preserved = (
@@ -1092,6 +1187,28 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
             .execute()
         )
         stats["preserved_manual_rows"] = int(getattr(preserved, "count", 0) or len(preserved.data or []))
+
+        # [P3-D] Snapshot full row data antes del DELETE para poder restaurar
+        # si el INSERT falla downstream. Necesitamos `*` (no solo `id`) porque
+        # la restauración re-inserta los valores originales.
+        if rollback_enabled:
+            try:
+                snapshot_res = (
+                    supabase.table("user_inventory")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .eq("source", "shopping_list")
+                    .execute()
+                )
+                snapshot_rows = list(snapshot_res.data or [])
+            except Exception as snap_err:
+                # Snapshot falló — degradar a modo legacy (sin rollback)
+                # en lugar de abortar. Loggear para que SRE detecte el patrón.
+                logger.warning(
+                    f"[P3-D] Snapshot pre-DELETE falló para {user_id}: {snap_err}. "
+                    f"Continuando en modo legacy (sin rollback) para no bloquear al usuario."
+                )
+                snapshot_rows = []
 
         deleted = (
             supabase.table("user_inventory")
@@ -1112,8 +1229,57 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
         return stats
 
     inserted_before = stats["inserted_rows"]
-    res = restock_inventory(user_id, ingredients_list)
-    if res:
+    insert_failed = False
+    try:
+        res = restock_inventory(user_id, ingredients_list)
+        if not res:
+            insert_failed = True
+            logger.warning(
+                f"[P3-D] restock_inventory retornó False para {user_id} "
+                f"({len(ingredients_list)} ingredientes intentados)."
+            )
+    except Exception as restock_err:
+        insert_failed = True
+        logger.error(
+            f"[P3-D] restock_inventory lanzó excepción para {user_id}: {restock_err}"
+        )
+
+    # [P3-D] ROLLBACK: si INSERT falló y tenemos snapshot, restaurar.
+    # Sin snapshot (rollback_enabled=False o snapshot falló), degradamos al
+    # comportamiento legacy: stats reflejan delete sin insert (UI verá lista
+    # vacía y disparará re-fetch).
+    if insert_failed and snapshot_rows:
+        restored = 0
+        # Limpiar columnas managed por DB del snapshot. `id`/`created_at` son
+        # inmutables generadas en INSERT; pasarlas reventaría con conflict.
+        # `updated_at` típicamente trigger-generated también.
+        managed_cols = {"id", "created_at", "updated_at"}
+        for row in snapshot_rows:
+            try:
+                clean_row = {k: v for k, v in row.items() if k not in managed_cols}
+                if not clean_row.get("user_id"):
+                    clean_row["user_id"] = user_id
+                if not clean_row.get("source"):
+                    clean_row["source"] = "shopping_list"
+                supabase.table("user_inventory").insert(clean_row).execute()
+                restored += 1
+            except Exception as restore_err:
+                # Continuar con las demás filas — best-effort. Si una falla,
+                # el resto puede aún restaurarse parcialmente.
+                logger.error(
+                    f"[P3-D/ROLLBACK] Error restaurando row para {user_id}: {restore_err}"
+                )
+        logger.warning(
+            f"[P3-D/ROLLBACK] Insert falló para {user_id} → restauradas "
+            f"{restored}/{len(snapshot_rows)} filas snapshotted. "
+            f"Stats refleja estado post-rollback."
+        )
+        stats["rolled_back"] = restored > 0
+        # Las filas restauradas no son "deleted" en el resultado neto.
+        stats["deleted_shopping_rows"] = max(0, stats["deleted_shopping_rows"] - restored)
+        return stats
+
+    if not insert_failed:
         try:
             count_res = (
                 supabase.table("user_inventory")

@@ -298,7 +298,281 @@ def test_replace_shopping_list_only_handles_empty_list_gracefully():
 
 def test_replace_shopping_list_only_noop_on_empty_user():
     stats = db_inventory.replace_shopping_list_only_items("", [{"name": "x"}])
-    assert stats == {"deleted_shopping_rows": 0, "inserted_rows": 0, "preserved_manual_rows": 0}
+    # [P3-D · 2026-05-07] Stats shape ahora incluye `rolled_back` (default False).
+    assert stats == {
+        "deleted_shopping_rows": 0,
+        "inserted_rows": 0,
+        "preserved_manual_rows": 0,
+        "rolled_back": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 5. [P3-D · 2026-05-07] Rollback de seguridad cuando restock_inventory falla.
+# ---------------------------------------------------------------------------
+# Antes del fix: si DELETE tenía éxito pero `restock_inventory` retornaba False
+# o lanzaba excepción, el usuario quedaba sin lista de compras sin posibilidad
+# de recovery. Después: snapshot pre-DELETE → restore-on-failure.
+#
+# Estos tests verifican el comportamiento bajo los modos de fallo que el fix
+# pretende cubrir y el knob de kill-switch operacional.
+# ---------------------------------------------------------------------------
+def _make_fake_supabase_with_snapshot(captured: _Captured, snapshot_rows: list):
+    """Variante de _make_fake_supabase que devuelve `snapshot_rows` cuando se
+    consulta SELECT * con filtros (user_id, source). Necesario para testar el
+    rollback path que requiere snapshot real, no `[]`."""
+    class _Chain:
+        def __init__(self, table):
+            self._table = table
+            self._op = None
+            self._filters = {}
+            self._neq_filters = {}
+            self._payload = None
+            self._count_mode = None
+
+        def select(self, *_cols, count=None):
+            self._op = "select"
+            self._count_mode = count
+            return self
+
+        def insert(self, payload):
+            self._op = "insert"
+            self._payload = payload
+            return self
+
+        def delete(self, count=None):
+            self._op = "delete"
+            self._count_mode = count
+            return self
+
+        def eq(self, col, val):
+            self._filters[col] = val
+            return self
+
+        def neq(self, col, val):
+            self._neq_filters[col] = val
+            return self
+
+        def execute(self):
+            res = MagicMock()
+            if self._op == "select":
+                if (
+                    self._table == "user_inventory"
+                    and self._filters.get("source") == "shopping_list"
+                ):
+                    captured.selects.append(
+                        (dict(self._filters), dict(self._neq_filters), self._count_mode)
+                    )
+                    res.data = list(snapshot_rows)
+                    res.count = len(snapshot_rows)
+                else:
+                    captured.selects.append(
+                        (dict(self._filters), dict(self._neq_filters), self._count_mode)
+                    )
+                    res.data = []
+                    res.count = 0
+            elif self._op == "insert":
+                captured.inserts.append(dict(self._payload))
+                res.data = [self._payload]
+            elif self._op == "delete":
+                captured.deletes.append((dict(self._filters), dict(self._neq_filters)))
+                res.data = []
+                res.count = len(snapshot_rows)
+            return res
+
+    fake = MagicMock()
+    fake.table = lambda t: _Chain(t)
+    return fake
+
+
+def test_rollback_restores_snapshot_when_restock_returns_false():
+    """`restock_inventory` retorna False → rollback restaura las filas
+    snapshotted vía INSERT."""
+    captured = _Captured()
+    snapshot = [
+        {"id": 1, "user_id": "u1", "ingredient_name": "Pollo", "quantity": 500.0,
+         "unit": "g", "source": "shopping_list", "created_at": "2026-05-01T00:00:00Z"},
+        {"id": 2, "user_id": "u1", "ingredient_name": "Arroz", "quantity": 1000.0,
+         "unit": "g", "source": "shopping_list", "created_at": "2026-05-01T00:00:00Z"},
+    ]
+    fake_sb = _make_fake_supabase_with_snapshot(captured, snapshot_rows=snapshot)
+
+    with patch.object(db_inventory, "supabase", fake_sb), \
+         patch.object(db_inventory, "restock_inventory", return_value=False):
+        stats = db_inventory.replace_shopping_list_only_items(
+            "u1", [{"name": "Tomate", "quantity": 2, "unit": "ud"}],
+        )
+
+    # Rollback se activó
+    assert stats["rolled_back"] is True
+    # Se intentó restaurar las 2 filas snapshotted (vía INSERT)
+    assert len(captured.inserts) == 2
+    # Y los inserts NO contienen las columnas managed-by-DB
+    for ins in captured.inserts:
+        assert "id" not in ins
+        assert "created_at" not in ins
+        assert ins["source"] == "shopping_list"
+        assert ins["user_id"] == "u1"
+
+
+def test_rollback_restores_snapshot_when_restock_raises():
+    """`restock_inventory` lanza excepción → rollback igual que cuando retorna False.
+    El error es capturado, no se propaga al caller."""
+    captured = _Captured()
+    snapshot = [
+        {"id": 99, "user_id": "u1", "ingredient_name": "Sal", "quantity": 1.0,
+         "unit": "kg", "source": "shopping_list"},
+    ]
+    fake_sb = _make_fake_supabase_with_snapshot(captured, snapshot_rows=snapshot)
+
+    def _raise(*_a, **_kw):
+        raise RuntimeError("simulated DB blip")
+
+    with patch.object(db_inventory, "supabase", fake_sb), \
+         patch.object(db_inventory, "restock_inventory", side_effect=_raise):
+        stats = db_inventory.replace_shopping_list_only_items(
+            "u1", [{"name": "Tomate", "quantity": 2, "unit": "ud"}],
+        )
+
+    assert stats["rolled_back"] is True
+    assert len(captured.inserts) == 1
+
+
+def test_no_rollback_when_restock_succeeds():
+    """`restock_inventory` exitoso → NO se intenta restore (filas snapshot no
+    se re-insertan, sólo el restock_inventory mockeado)."""
+    captured = _Captured()
+    snapshot = [
+        {"id": 1, "user_id": "u1", "ingredient_name": "Pollo", "quantity": 500.0,
+         "unit": "g", "source": "shopping_list"},
+    ]
+    fake_sb = _make_fake_supabase_with_snapshot(captured, snapshot_rows=snapshot)
+
+    with patch.object(db_inventory, "supabase", fake_sb), \
+         patch.object(db_inventory, "restock_inventory", return_value=True):
+        stats = db_inventory.replace_shopping_list_only_items(
+            "u1", [{"name": "Tomate", "quantity": 2, "unit": "ud"}],
+        )
+
+    assert stats["rolled_back"] is False
+    # Las únicas inserciones son las del restock mockeado (que no usa el fake_sb,
+    # devolvió True directamente). Por lo tanto captured.inserts debe estar vacío.
+    assert len(captured.inserts) == 0
+
+
+def test_knob_off_disables_snapshot_and_rollback(monkeypatch):
+    """`MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK=off` → no snapshot, no rollback
+    incluso si restock falla. Modo legacy preservado para kill switch operacional."""
+    monkeypatch.setenv("MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK", "off")
+    captured = _Captured()
+    snapshot = [
+        {"id": 1, "user_id": "u1", "ingredient_name": "Pollo", "quantity": 500.0,
+         "unit": "g", "source": "shopping_list"},
+    ]
+    fake_sb = _make_fake_supabase_with_snapshot(captured, snapshot_rows=snapshot)
+
+    with patch.object(db_inventory, "supabase", fake_sb), \
+         patch.object(db_inventory, "restock_inventory", return_value=False):
+        stats = db_inventory.replace_shopping_list_only_items(
+            "u1", [{"name": "Tomate", "quantity": 2, "unit": "ud"}],
+        )
+
+    # Sin rollback (knob off)
+    assert stats["rolled_back"] is False
+    # Sin re-inserción de snapshot
+    assert len(captured.inserts) == 0
+
+
+def test_knob_default_is_on():
+    """Sin env var seteada → comportamiento por default es rollback ON.
+    Garantiza que un deploy fresco hereda la safety automáticamente."""
+    captured = _Captured()
+    snapshot = [
+        {"id": 1, "user_id": "u1", "ingredient_name": "Pollo", "quantity": 500.0,
+         "unit": "g", "source": "shopping_list"},
+    ]
+    fake_sb = _make_fake_supabase_with_snapshot(captured, snapshot_rows=snapshot)
+
+    # Asegurar que la env var NO está seteada (defensive — no monkeypatch.setenv)
+    if "MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK" in os.environ:
+        old = os.environ.pop("MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK")
+    else:
+        old = None
+    try:
+        with patch.object(db_inventory, "supabase", fake_sb), \
+             patch.object(db_inventory, "restock_inventory", return_value=False):
+            stats = db_inventory.replace_shopping_list_only_items(
+                "u1", [{"name": "Tomate", "quantity": 2, "unit": "ud"}],
+            )
+        assert stats["rolled_back"] is True
+    finally:
+        if old is not None:
+            os.environ["MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK"] = old
+
+
+def test_snapshot_select_failure_degrades_to_legacy():
+    """Si el SELECT del snapshot falla (DB blip durante la lectura previa al
+    DELETE), el código degrada a modo legacy (sin rollback) en lugar de abortar.
+    Garantiza que un blip transient no bloquea al usuario."""
+    captured = _Captured()
+
+    def _fake_table(t):
+        chain = MagicMock()
+        chain._table = t
+        # SELECT con count="exact" (preserved manual rows) → ok
+        # SELECT con `*` (snapshot) → raise
+        # DELETE → ok
+        call_state = {"select_count": 0}
+
+        def _select(*_cols, count=None):
+            call_state["select_count"] += 1
+            chain._is_snapshot = (count is None)  # snapshot usa select("*") sin count
+            chain._count_mode = count
+            return chain
+
+        def _eq(col, val):
+            chain._last_filters = getattr(chain, "_last_filters", {})
+            chain._last_filters[col] = val
+            return chain
+
+        def _neq(col, val):
+            return chain
+
+        def _delete(count=None):
+            chain._op = "delete"
+            return chain
+
+        def _execute():
+            res = MagicMock()
+            if getattr(chain, "_op", None) == "delete":
+                res.data, res.count = [], 0
+                return res
+            if getattr(chain, "_is_snapshot", False):
+                raise RuntimeError("simulated snapshot fetch error")
+            res.data, res.count = [], 0
+            return res
+
+        chain.select = _select
+        chain.insert = lambda p: chain
+        chain.delete = _delete
+        chain.eq = _eq
+        chain.neq = _neq
+        chain.execute = _execute
+        return chain
+
+    fake_sb = MagicMock()
+    fake_sb.table = _fake_table
+
+    with patch.object(db_inventory, "supabase", fake_sb), \
+         patch.object(db_inventory, "restock_inventory", return_value=False):
+        # No debe levantar — snapshot falla, degrada legacy, restock falla
+        # también pero sin snapshot rollback.
+        stats = db_inventory.replace_shopping_list_only_items(
+            "u1", [{"name": "Tomate", "quantity": 2, "unit": "ud"}],
+        )
+
+    # Sin rollback (snapshot fue None)
+    assert stats["rolled_back"] is False
 
 
 if __name__ == "__main__":

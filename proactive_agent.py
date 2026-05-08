@@ -159,14 +159,7 @@ def handle_nudge_response(user_id: str, content: str):
                     (sentiment, meal_logged, nudge_id)
                 )
             except Exception as e:
-                if "column" in str(e).lower() or "42703" in str(e):
-                    try:
-                        execute_sql_write("ALTER TABLE nudge_outcomes ADD COLUMN response_sentiment VARCHAR(50)")
-                    except Exception: pass
-                    try:
-                        execute_sql_write("UPDATE nudge_outcomes SET responded = true, response_sentiment = %s, meal_logged = %s WHERE id = %s", (sentiment, meal_logged, nudge_id))
-                    except Exception:
-                        execute_sql_write("UPDATE nudge_outcomes SET responded = true WHERE id = %s", (nudge_id,))
+                logger.error(f"Error actualizando nudge_outcomes id={nudge_id}: {e}")
             
             logger.info(f"✅ Nudge {nudge_id} respondido por {user_id}. Sentiment: {sentiment}, Logged: {meal_logged}, Causal: {causal_reason}")
 

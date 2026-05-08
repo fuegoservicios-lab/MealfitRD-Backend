@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
+from error_utils import safe_error_detail
 from typing import Optional
 import logging
 import uuid
@@ -127,7 +128,7 @@ async def api_diary_upload(
         }
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/upload: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 def _save_visual_entry_background(user_id: str, image_url: str, description: str):
     """Background task: genera embedding y guarda en la tabla visual_diary."""
@@ -176,7 +177,7 @@ def api_log_consumed_meal(
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed POST: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/consumed/{user_id}")
@@ -211,7 +212,7 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         raise he
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/consumed GET: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/progress")
@@ -278,7 +279,7 @@ def api_log_progress(data: dict = Body(...), verified_user_id: str = Depends(get
         }
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/progress POST: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 # [P1-4] Endpoints de preferencia de logging.

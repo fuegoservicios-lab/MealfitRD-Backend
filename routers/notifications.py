@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
+from error_utils import safe_error_detail
 import logging
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
@@ -151,4 +152,4 @@ async def test_push_route(user_id: str):
 
     except Exception as e:
         logger.error(f"Error test push subscription: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))

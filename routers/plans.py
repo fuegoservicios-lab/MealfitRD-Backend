@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request, Response
 from fastapi.responses import StreamingResponse
+from error_utils import safe_error_detail
 from typing import Optional
 import logging
 import traceback
@@ -2077,7 +2078,7 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
 
     except Exception as e:
         logger.error(f"❌ [API SHIFT ERROR] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/analyze")
 def api_analyze(
@@ -2343,7 +2344,7 @@ def api_analyze(
     except Exception as e:
         traceback.print_exc()
         logger.error(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/analyze/stream")
 async def api_analyze_stream(
@@ -2816,7 +2817,7 @@ async def api_analyze_stream(
     except Exception as e:
         traceback.print_exc()
         logger.error(f"❌ [ERROR] Error en /api/analyze/stream: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/recipe/expand")
@@ -2858,7 +2859,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/recipe/expand: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
@@ -2916,7 +2917,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         return result
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/swap-meal: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/like")
 def api_like(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -3098,7 +3099,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/restock: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/inventory/consume")
 def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
@@ -3125,7 +3126,7 @@ def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str
             
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/inventory/consume: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/recalculate-shopping-list")
 def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -3286,7 +3287,7 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         logger.error(f"❌ [ERROR] Error en /api/recalculate-shopping-list: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.get("/{plan_id}/chunk-status")
 def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optional[str] = Depends(verify_api_quota)):
@@ -3381,7 +3382,7 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] en chunk-status: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.get("/{plan_id}/blocked_reasons")
 def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
@@ -3495,7 +3496,7 @@ def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] en blocked_reasons: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/{plan_id}/retry-chunk/{chunk_id}")
@@ -3534,7 +3535,7 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
 
     except Exception as e:
         logger.error(f"❌ [ERROR] en retry-chunk: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 # ============================================================
@@ -3615,7 +3616,7 @@ def api_admin_chunks_stuck(
         }
     except Exception as e:
         logger.error(f"❌ [GAP A] Error en /admin/chunks/stuck: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/admin/chunks/dead-lettered")
@@ -3696,7 +3697,7 @@ def api_admin_chunks_dead_lettered(
         }
     except Exception as e:
         logger.error(f"❌ [P1-2] Error en /admin/chunks/dead-lettered: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/admin/chunk_deferrals/{user_id}")
@@ -3754,7 +3755,166 @@ def api_admin_chunk_deferrals(
         }
     except Exception as e:
         logger.error(f"❌ [P1-3] Error en /admin/chunk_deferrals/{user_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/{plan_id}/chunks/{chunk_id}/regenerate-simplified")
+def api_regenerate_dead_lettered_simplified(
+    plan_id: str,
+    chunk_id: str,
+    verified_user_id: Optional[str] = Depends(verify_api_quota),
+):
+    """[P1-ζ] Permite al usuario re-encolar un chunk dead-lettered forzando
+    `flexible_mode + advisory_only` para que el siguiente intento NO falle por
+    los gates que lo dead-letearon (lecciones perdidas, anchor irresoluble,
+    pantry insuficiente).
+
+    Cubre el último escalón de la cascada de recovery: cuando el sistema agotó
+    sus reintentos automáticos y el chunk quedó marcado con `dead_lettered_at`,
+    el banner del frontend ofrece este endpoint como CTA. El endpoint NO
+    requiere admin token: el usuario es dueño del plan y puede decidir aceptar
+    una versión simplificada antes que esperar intervención manual.
+
+    Flujo:
+      1. Validar ownership del plan.
+      2. Validar que el chunk efectivamente está dead_lettered.
+      3. Limpiar `dead_lettered_at`, `dead_letter_reason`, attempts.
+      4. Inyectar `_pantry_flexible_mode=True`, `_pantry_advisory_only=True`,
+         `_learning_flexible_mode=True`, `_user_forced_simplified=True` en
+         pipeline_snapshot (y en form_data dentro del snapshot, donde el day-
+         tagging del merge los lee).
+      5. Marcar `_user_action_required=None` en plan_data para retirar el
+         banner.
+      6. Re-encolar status='pending' execute_after=NOW().
+    """
+    from db_core import execute_sql_query, execute_sql_write
+    import json
+    try:
+        plan_row = execute_sql_query(
+            "SELECT user_id, plan_data FROM meal_plans WHERE id = %s",
+            (plan_id,), fetch_one=True
+        )
+        if not plan_row:
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+        if verified_user_id and str(plan_row["user_id"]) != str(verified_user_id):
+            raise HTTPException(status_code=403, detail="No autorizado")
+
+        chunk_row = execute_sql_query(
+            """
+            SELECT id, status, dead_lettered_at, pipeline_snapshot, week_number
+            FROM plan_chunk_queue
+            WHERE id = %s AND meal_plan_id = %s
+            """,
+            (chunk_id, plan_id),
+            fetch_one=True,
+        )
+        if not chunk_row:
+            raise HTTPException(status_code=404, detail="Chunk no encontrado")
+        if not chunk_row.get("dead_lettered_at"):
+            raise HTTPException(
+                status_code=409,
+                detail="El chunk no está dead-lettered. Solo chunks dead-lettered pueden regenerarse en modo simplificado.",
+            )
+
+        snap = chunk_row["pipeline_snapshot"]
+        if isinstance(snap, str):
+            snap = json.loads(snap)
+        if not isinstance(snap, dict):
+            snap = {}
+
+        snap["_pantry_flexible_mode"] = True
+        snap["_pantry_advisory_only"] = True
+        snap["_learning_flexible_mode"] = True
+        snap["_user_forced_simplified"] = True
+        snap["_user_forced_simplified_at"] = datetime.now(timezone.utc).isoformat()
+        # Limpiar gates que dead-letearon el chunk para que no re-disparen.
+        snap.pop("_pantry_pause_reason", None)
+        snap.pop("_pantry_pause_started_at", None)
+        snap.pop("_pantry_pause_reminders", None)
+        snap.pop("_force_unblock_attempted_at", None)
+        snap["_learning_ready_deferrals"] = 0
+
+        fd = snap.get("form_data") or {}
+        if isinstance(fd, dict):
+            fd["_pantry_flexible_mode"] = True
+            fd["_pantry_advisory_only"] = True
+            fd["_pantry_degraded_reason"] = "user_forced_simplified"
+            snap["form_data"] = fd
+
+        execute_sql_write(
+            """
+            UPDATE plan_chunk_queue
+            SET status = 'pending',
+                dead_lettered_at = NULL,
+                dead_letter_reason = NULL,
+                attempts = 0,
+                escalated_at = NOW(),
+                execute_after = NOW(),
+                pipeline_snapshot = %s::jsonb,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (json.dumps(snap, ensure_ascii=False), chunk_id),
+        )
+
+        # Limpiar banner del frontend.
+        execute_sql_write(
+            """
+            UPDATE meal_plans
+            SET plan_data = jsonb_set(
+                    COALESCE(plan_data, '{}'::jsonb),
+                    '{_user_action_required}',
+                    'null'::jsonb,
+                    true
+                ),
+                plan_data = jsonb_set(
+                    COALESCE(plan_data, '{}'::jsonb),
+                    '{generation_status}',
+                    '"partial"'::jsonb,
+                    true
+                ),
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (plan_id,),
+        )
+
+        # Resolver alertas system_alerts asociadas a este chunk dead-lettered.
+        try:
+            execute_sql_write(
+                """
+                UPDATE system_alerts
+                SET resolved_at = NOW()
+                WHERE resolved_at IS NULL
+                  AND alert_key IN (
+                    'chunk_paused_indefinitely:' || %s || ':' || %s,
+                    'chunks_dead_lettered_recent'
+                  )
+                """,
+                (plan_id, str(chunk_row["week_number"])),
+            )
+        except Exception:
+            pass
+
+        logger.warning(
+            f"[P1-ζ/USER-FORCED-SIMPLIFIED] user={verified_user_id} plan={plan_id} "
+            f"chunk={chunk_id} week={chunk_row['week_number']} re-encolado en flexible_mode."
+        )
+
+        return {
+            "success": True,
+            "chunk_id": chunk_id,
+            "week_number": chunk_row["week_number"],
+            "message": (
+                "Chunk re-encolado en modo simplificado. Procesará en el próximo tick "
+                "del worker y los días generados se marcarán como advisory."
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [P1-ζ] Error en regenerate-simplified: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/{plan_id}/regen-degraded")
@@ -3835,7 +3995,7 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
         raise
     except Exception as e:
         logger.error(f"❌ [GAP C] Error en /regen-degraded: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/admin/metrics")
@@ -4038,7 +4198,7 @@ def api_admin_metrics(
         }
     except Exception as e:
         logger.error(f"❌ [GAP G] Error en /admin/metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/admin/chunks/{chunk_id}/escalate")
@@ -4068,7 +4228,7 @@ def api_admin_escalate_chunk(chunk_id: str, request: Request):
         raise
     except Exception as e:
         logger.error(f"❌ [GAP A] Error en /admin/chunks/escalate: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/admin/guest-metrics")
@@ -4118,7 +4278,7 @@ def api_admin_guest_metrics_probe(request: Request):
         return snapshot
     except Exception as e:
         logger.error(f"❌ [P1-33] Error ejecutando probe on-demand: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/admin/guest-metrics/force")

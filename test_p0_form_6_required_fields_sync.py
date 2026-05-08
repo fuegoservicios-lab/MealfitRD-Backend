@@ -21,7 +21,17 @@ Fix:
     `dislikes`, `struggles`.
   `dietType` permanece OUT del backend por compat con perfiles legacy
   (`_DIET_TYPE_LEGACY_ACCEPTED` en plans.py); decisión documentada.
+
+[P3-B · 2026-05-07] Extensión: además del set hardcoded canónico, este módulo
+ahora parsea `REQUIRED_FORM_FIELDS` directamente del archivo JS y verifica
+la simetría cross-language. El set hardcoded sigue actuando como guard contra
+removals accidentales del backend (forzando review del PR), pero el parser
+captura drift introducido SOLO en el frontend — el caso que el set hardcoded
+no veía. Mismo patrón que `test_p1_form_14_supplements_sync.py`.
 """
+import re
+from pathlib import Path
+
 import pytest
 
 from routers.plans import _REQUIRED_FORM_FIELDS, _validate_form_data_min
@@ -177,3 +187,163 @@ def test_escenario_bug_original_payload_sin_dislikes_se_rechaza():
     ok, missing = _validate_form_data_min(payload)
     assert ok is False
     assert "dislikes" in missing
+
+
+# ===========================================================================
+# [P3-B · 2026-05-07] Drift cross-language: parsea JS, compara contra backend
+# ---------------------------------------------------------------------------
+# El set `_BACKEND_EXPECTED_REQUIRED` arriba es un anchor hardcoded — captura
+# si el backend pierde un campo, pero NO ve si el frontend añade uno sin
+# sincronizar. Estos tests adicionales parsean `formValidation.js` con regex
+# (mismo patrón que test_p1_form_14_supplements_sync.py) y validan parity
+# real cross-language.
+#
+# Excepción documentada: `dietType` está en el array JS pero deliberadamente
+# fuera del backend (`_DIET_TYPE_LEGACY_ACCEPTED` cubre variantes ES legacy).
+# El test la trata explícitamente como exclusión esperada.
+# ===========================================================================
+
+_BACKEND_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _BACKEND_DIR.parent
+_FORM_VALIDATION_JS = _REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js"
+
+# Match: `export const REQUIRED_FORM_FIELDS = [ ... ];` (multi-línea, tolerando
+# whitespace y comentarios entre entries).
+_REQUIRED_FORM_FIELDS_BLOCK_PATTERN = re.compile(
+    r"export\s+const\s+REQUIRED_FORM_FIELDS\s*=\s*\[(?P<body>.*?)\]\s*;",
+    re.DOTALL,
+)
+_QUOTED_STRING = re.compile(r"'([^']+)'")
+
+# Campos del frontend SSOT cuya ausencia en backend es intencional y documentada.
+# Si en el futuro se decide subir alguno a required-presence backend, eliminar
+# del set Y eliminar el test específico que protege la decisión (ej.
+# `test_diet_type_NO_es_required_por_compat_legacy`).
+_FRONTEND_ONLY_BY_DESIGN = frozenset({"dietType"})
+
+
+def _read_form_validation_js() -> str:
+    if not _FORM_VALIDATION_JS.exists():
+        pytest.skip(f"formValidation.js no existe en {_FORM_VALIDATION_JS}")
+    return _FORM_VALIDATION_JS.read_text(encoding="utf-8")
+
+
+def _parse_frontend_required_fields(text: str) -> list[str]:
+    """Extrae la lista ordenada de strings dentro de
+    `export const REQUIRED_FORM_FIELDS = [...]`."""
+    block = _REQUIRED_FORM_FIELDS_BLOCK_PATTERN.search(text)
+    if not block:
+        raise AssertionError(
+            "No se encontró el bloque `export const REQUIRED_FORM_FIELDS = [...]` "
+            "en formValidation.js. Si el formato cambió (ej. migración a TS, "
+            "rename a `REQUIRED_FIELDS`), actualiza `_REQUIRED_FORM_FIELDS_BLOCK_PATTERN`."
+        )
+    body = block.group("body")
+    return _QUOTED_STRING.findall(body)
+
+
+def test_form_validation_js_exists():
+    """Sanity: el SSOT del frontend está donde lo apunta el comentario del
+    backend. Si el frontend mueve archivos, esta ruta debe ajustarse."""
+    assert _FORM_VALIDATION_JS.exists(), (
+        f"formValidation.js no existe en {_FORM_VALIDATION_JS}. "
+        f"Si la estructura del repo cambió, actualiza `_FORM_VALIDATION_JS`."
+    )
+
+
+def test_parser_extracts_minimum_count():
+    """Sanity del parser: extrae al menos los 19 campos canónicos.
+    Si el regex falla, este test falla antes de los de drift cross-language
+    para que el output diga claramente "el parser no funciona" en vez de
+    "drift detectado" sobre un set vacío."""
+    items = _parse_frontend_required_fields(_read_form_validation_js())
+    assert len(items) >= 19, (
+        f"Parser sólo extrajo {len(items)} entries (esperaba ≥19). "
+        f"Si el formato del archivo cambió, ajusta `_REQUIRED_FORM_FIELDS_BLOCK_PATTERN` "
+        f"o `_QUOTED_STRING`. Items vistos: {items!r}"
+    )
+
+
+def test_parser_detects_synthetic_drift():
+    """Sanity inverso: el parser captura entries añadidas en input sintético.
+    Si esto falla, el parser podría no detectar drift real (false negative)."""
+    fake_js = (
+        "export const REQUIRED_FORM_FIELDS = [\n"
+        "    'gender', 'age', 'syntheticNewField',\n"
+        "];\n"
+    )
+    items = _parse_frontend_required_fields(fake_js)
+    assert "syntheticNewField" in items, (
+        f"Parser falló al detectar entry sintética; vio {items!r}"
+    )
+
+
+def test_parser_raises_on_missing_block():
+    """Si el archivo perdió el bloque, el parser falla explícito (no devuelve
+    set vacío que pasaría tests de subset trivialmente)."""
+    with pytest.raises(AssertionError, match="No se encontró"):
+        _parse_frontend_required_fields("// archivo sin REQUIRED_FORM_FIELDS\n")
+
+
+def test_frontend_required_minus_design_exclusions_equals_backend():
+    """Drift cross-language: parsea JS, descuenta exclusiones documentadas
+    (`dietType` por legacy compat), y compara contra `_REQUIRED_FORM_FIELDS`
+    del backend. Asimétrico: cualquier desalineación falla con mensaje
+    accionable indicando qué lado tiene el surplus.
+
+    Casos cubiertos:
+      - PR añade campo SOLO al backend → `extra_in_backend` no vacío.
+      - PR añade campo SOLO al frontend → `missing_in_backend` no vacío.
+      - PR añade campo a AMBOS lados → ✅ pasa (ideal).
+      - PR añade `dietType` al backend → falla con "exclusión `dietType`
+        movida al backend; revisar test_diet_type_NO_es_required_por_compat_legacy
+        antes de mergear".
+    """
+    frontend_text = _read_form_validation_js()
+    frontend_set = frozenset(_parse_frontend_required_fields(frontend_text))
+    backend_set = frozenset(_REQUIRED_FORM_FIELDS)
+
+    # 1. Frontend ∖ exclusiones-de-diseño debe ser ⊆ backend.
+    frontend_minus_excl = frontend_set - _FRONTEND_ONLY_BY_DESIGN
+    missing_in_backend = frontend_minus_excl - backend_set
+    assert not missing_in_backend, (
+        f"Drift detectado: el frontend gateaba {sorted(missing_in_backend)} pero "
+        f"el backend NO los valida.\n"
+        f"Acciones:\n"
+        f"  1. Si el campo debe ser required: añadir a `_REQUIRED_FORM_FIELDS` "
+        f"     en `backend/routers/plans.py` Y al set `_BACKEND_EXPECTED_REQUIRED` "
+        f"     arriba en este test.\n"
+        f"  2. Si es exclusión intencional (compat legacy, downstream defaultea "
+        f"     benigno): añadir a `_FRONTEND_ONLY_BY_DESIGN` arriba con razón en\n"
+        f"     comentario."
+    )
+
+    # 2. Backend ⊆ frontend (todo campo backend debe estar en el wizard, sin
+    # excepciones — un campo backend-only sin entry en el frontend significa
+    # que el wizard no lo captura → 422 garantizado al primer submit).
+    extra_in_backend = backend_set - frontend_set
+    assert not extra_in_backend, (
+        f"Drift detectado: el backend exige {sorted(extra_in_backend)} pero el "
+        f"wizard frontend no los gateaba en `REQUIRED_FORM_FIELDS`.\n"
+        f"Resultado en producción: el wizard permite avanzar sin estos campos, "
+        f"el usuario llega al final, el POST falla con 422 — UX rota.\n"
+        f"Acciones:\n"
+        f"  1. Añadir el campo a `REQUIRED_FORM_FIELDS` en\n"
+        f"     `frontend/src/config/formValidation.js` Y a `FIELD_LABELS`.\n"
+        f"  2. Asegurar que algún step del wizard (`InteractiveAssessmentFlow.jsx`)\n"
+        f"     declare `fields: ['<field>']` para que la nav-a-faltante apunte al\n"
+        f"     step correcto."
+    )
+
+
+def test_diettype_es_la_unica_exclusion_intencional():
+    """Anchor: solo `dietType` debe estar en `_FRONTEND_ONLY_BY_DESIGN`. Si en
+    el futuro se decide excluir otro campo, este test falla intencionalmente
+    para forzar review del trade-off (silently default downstream vs 422 estricto).
+    """
+    assert _FRONTEND_ONLY_BY_DESIGN == frozenset({"dietType"}), (
+        f"Conjunto de exclusiones cambió: {sorted(_FRONTEND_ONLY_BY_DESIGN)}.\n"
+        f"Cada exclusión bypasses la red de safety cross-language. Documenta "
+        f"la razón en el comentario de `_FRONTEND_ONLY_BY_DESIGN` antes de "
+        f"actualizar este test (ej. compat legacy, downstream benigno, etc.)."
+    )

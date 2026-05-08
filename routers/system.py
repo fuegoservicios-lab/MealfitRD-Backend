@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, Request
+from error_utils import safe_error_detail
 import logging
 from db_core import execute_sql_query
 import json
@@ -98,7 +99,7 @@ def get_system_health():
 
     except Exception as e:
         logger.error(f"Error calculando system health: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/atomic-pool-health")
@@ -133,7 +134,7 @@ def get_atomic_pool_health():
         return {"success": True, "status": status, **snapshot}
     except Exception as e:
         logger.error(f"Error calculando atomic pool health: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/chunk-queue-health")
@@ -218,7 +219,7 @@ def get_chunk_queue_health():
 
     except Exception as e:
         logger.error(f"[P1-5] Error en /chunk-queue-health: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.get("/pantry-tolerance-health")
