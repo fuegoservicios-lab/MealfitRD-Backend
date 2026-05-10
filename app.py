@@ -29,7 +29,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P2-5-DB-POOL-CONTRACT · 2026-05-10"
+_LAST_KNOWN_PFIX = "P3-4-PLANSTATE-CONTRACT · 2026-05-10"
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
@@ -483,16 +483,72 @@ def health_version():
     Si no coincide → redeploy. Si coincide y aún ves DDL en logs Postgres,
     el origen es un cron externo invocando un script `migrate_*.py`.
 
+    [P3-2 · 2026-05-10] Extensiones añadidas para diagnóstico 1-segundo:
+      - `process_uptime_s`: segundos desde el arranque del worker.
+        Si <60s + cron MISSED en cascada → causa raíz es restart frecuente.
+      - `knobs_diff`: dict `{name: {default, value}}` solo para knobs
+        cuyo valor activo difiere del default. Huella operacional del deploy.
+      - `cron_missed_1h_total`: count de MISSED de scheduler en la última
+        hora. Para detalle por job, ver `/admin/cron-health`.
+
+    Para registry completo de knobs, ver `/admin/knobs` (P3-5).
+
     No requiere auth: información de diagnóstico no sensible.
     """
+    # [P3-2 · 2026-05-10] knobs_diff: cuáles knobs MEALFIT_* tienen value
+    # != default. Es la "huella operacional" del proceso — útil para
+    # responder "¿qué env vars están activas en este deploy?" sin shell.
+    knobs_diff: dict = {}
     try:
         from graph_orchestrator import get_knobs_registry_snapshot
         snap = get_knobs_registry_snapshot()
         knobs_count = len(snap)
         knobs_sample = sorted(snap.keys())[:8]
+        for name, info in snap.items():
+            try:
+                if info.get("value") != info.get("default"):
+                    knobs_diff[name] = {
+                        "default": info.get("default"),
+                        "value": info.get("value"),
+                    }
+            except Exception:
+                # Comparación de tipos exóticos (e.g., numpy floats); skip.
+                continue
     except Exception as e:
         knobs_count = -1
         knobs_sample = [f"error:{type(e).__name__}"]
+
+    # [P3-2 · 2026-05-10] process_uptime_s: segundos desde el arranque
+    # del worker actual. Si el cron P0-2 reporta MISSED en cascada y el
+    # uptime es <60s, la causa raíz es restart frecuente (cold-start
+    # procesa el queue de eventos missed), no saturación de pool.
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        start = _dt.fromisoformat(_PROCESS_START_ISO)
+        uptime_s = (_dt.now(_tz.utc) - start).total_seconds()
+        process_uptime_s = round(uptime_s, 1)
+    except Exception:
+        process_uptime_s = -1
+
+    # [P3-2 · 2026-05-10] cron_missed_1h_total: suma de MISSED en última
+    # hora desde system_alerts. Detalle por job en /admin/cron-health.
+    cron_missed_1h_total = 0
+    try:
+        if supabase is not None:
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            cutoff = _dt.now(_tz.utc) - _td(hours=1)
+            res = (
+                supabase.table("system_alerts")
+                .select("alert_key", count="exact")
+                .eq("alert_type", "scheduler")
+                .like("alert_key", "scheduler_missed_%")
+                .gte("triggered_at", cutoff.isoformat())
+                .limit(0)
+                .execute()
+            )
+            cron_missed_1h_total = res.count or 0
+    except Exception:
+        cron_missed_1h_total = -1
 
     git_sha = os.environ.get("GIT_SHA") or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "unknown"
     return {
@@ -500,10 +556,38 @@ def health_version():
         "git_short_sha": git_sha[:7] if git_sha != "unknown" else "unknown",
         "deploy_timestamp": os.environ.get("DEPLOY_TIMESTAMP", "unknown"),
         "process_started_at": _PROCESS_START_ISO,
+        "process_uptime_s": process_uptime_s,
         "last_known_pfix": _LAST_KNOWN_PFIX,
         "knobs_count": knobs_count,
         "knobs_sample": knobs_sample,
+        "knobs_diff": knobs_diff,
+        "cron_missed_1h_total": cron_missed_1h_total,
     }
+
+
+@app.get("/admin/knobs")
+def admin_knobs():
+    """[P3-5 · 2026-05-10] Registry completo de knobs `MEALFIT_*` activos.
+
+    Devuelve el snapshot completo del `_KNOBS_REGISTRY` para diagnóstico
+    operacional. Cada entrada: `{name: {type, default, raw, value, parse_failed}}`.
+
+    Útil para responder "¿qué valor real está usando el proceso?" sin
+    ejecutar scripts Python ni leer código. Complementa `/health/version`
+    que solo expone el `knobs_diff` (subset relevante).
+
+    No requiere auth: los valores no son secretos (todos vienen de env vars
+    `MEALFIT_*` que el operador conoce).
+    """
+    try:
+        from graph_orchestrator import get_knobs_registry_snapshot
+        snap = get_knobs_registry_snapshot()
+        return {
+            "count": len(snap),
+            "knobs": snap,
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 @app.get("/admin/cron-health")

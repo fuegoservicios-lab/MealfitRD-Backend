@@ -37,7 +37,10 @@ import pytest
 # ---------------------------------------------------------------------------
 # Locator de archivos
 # ---------------------------------------------------------------------------
-_BACKEND_DIR = Path(__file__).resolve().parent
+# [P3-3 · 2026-05-10] Tras migración tests root → tests/ (P3-CANDIDATE-B),
+# `__file__.parent` es `backend/tests/`. Necesitamos subir DOS niveles para
+# llegar al root del monorepo (`MealfitRD.IA/`) donde vive `frontend/` sibling.
+_BACKEND_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_DIR.parent
 _FORM_VALIDATION_JS = _REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js"
 _INTERACTIVE_QUESTIONS_JSX = (
