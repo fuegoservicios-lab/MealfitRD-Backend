@@ -219,8 +219,7 @@ def test_pause_helper_updates_plan_chunk_queue_status():
     writes, fake_write = _capture_writes()
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         result = cron_tasks._pause_chunk_for_synthesis_overload(
             task_id="task-1",
             snap={"form_data": {}, "totalDays": 7},
@@ -256,8 +255,7 @@ def test_pause_helper_inserts_system_alert_with_affected_user():
     writes, fake_write = _capture_writes()
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         cron_tasks._pause_chunk_for_synthesis_overload(
             task_id="task-1",
             snap={"form_data": {}},
@@ -298,7 +296,6 @@ def test_pause_helper_dispatches_push_notification():
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None), \
          patch.dict(sys.modules, {"utils_push": fake_utils_push}):
         cron_tasks._pause_chunk_for_synthesis_overload(
             task_id="task-1",
@@ -330,8 +327,7 @@ def test_pause_helper_cooldown_skips_repause():
     writes, fake_write = _capture_writes()
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         result = cron_tasks._pause_chunk_for_synthesis_overload(
             task_id="task-already-paused",
             snap={"form_data": {}},
@@ -360,8 +356,7 @@ def test_pause_helper_returns_false_when_pause_update_fails():
         return None
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         result = cron_tasks._pause_chunk_for_synthesis_overload(
             task_id="task-fail",
             snap={"form_data": {}},
@@ -391,8 +386,7 @@ def test_pause_helper_continues_when_alert_insert_fails():
         return None
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         result = cron_tasks._pause_chunk_for_synthesis_overload(
             task_id="task-1",
             snap={"form_data": {}},
@@ -415,8 +409,7 @@ def test_pause_helper_serializes_metadata_with_ratio():
     writes, fake_write = _capture_writes()
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         cron_tasks._pause_chunk_for_synthesis_overload(
             task_id="task-1",
             snap={"form_data": {}},

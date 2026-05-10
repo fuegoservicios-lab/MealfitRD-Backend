@@ -576,56 +576,189 @@ def get_user_inventory_net(user_id: str, household_size: float | int | None = No
     formatted.sort()
     return formatted
 
+def _resolve_cross_domain_density(master_item: dict) -> float | None:
+    """[P1-1] Resuelve densidad g/taza para conversión cruzada masa↔volumen.
+
+    Cadena de fallback:
+      1. `master_item["density_g_per_cup"]` (SSOT en master_ingredients).
+      2. Lookup en `VOLUMETRIC_DENSITIES` por nombre canonico (g/ml × 236.588).
+      3. None → caller decide según `MEALFIT_CROSS_UNIT_CONVERSION_STRICT`.
+
+    Devuelve g/taza (float) o None si no se pudo resolver.
+    """
+    raw = master_item.get("density_g_per_cup")
+    try:
+        if raw is not None and float(raw) > 0:
+            return float(raw)
+    except (TypeError, ValueError):
+        pass
+    name = (master_item.get("name") or master_item.get("slug") or "").strip().lower()
+    if not name:
+        return None
+    try:
+        from constants import VOLUMETRIC_DENSITIES, strip_accents
+        n_clean = strip_accents(name)
+        g_per_ml = VOLUMETRIC_DENSITIES.get(n_clean)
+        if g_per_ml is None:
+            for k, v in VOLUMETRIC_DENSITIES.items():
+                if k == n_clean or n_clean.startswith(k) or k.startswith(n_clean):
+                    g_per_ml = v
+                    break
+        if g_per_ml and float(g_per_ml) > 0:
+            return float(g_per_ml) * 236.588
+    except Exception as _e:
+        logger.debug(f"[P1-1] Fallback VOLUMETRIC_DENSITIES falló para {name!r}: {_e}")
+    return None
+
+
+def _resolve_unit_weight(master_item: dict) -> float | None:
+    """[P1-1] Resuelve gramos por unidad (count→mass) con fallback a UNIT_WEIGHTS."""
+    raw = master_item.get("density_g_per_unit")
+    try:
+        if raw is not None and float(raw) > 0:
+            return float(raw)
+    except (TypeError, ValueError):
+        pass
+    name = (master_item.get("name") or master_item.get("slug") or "").strip().lower()
+    if not name:
+        return None
+    try:
+        from constants import UNIT_WEIGHTS, strip_accents
+        n_clean = strip_accents(name)
+        g_per_u = UNIT_WEIGHTS.get(n_clean)
+        if g_per_u is None:
+            for k, v in UNIT_WEIGHTS.items():
+                if k == n_clean or n_clean.startswith(k) or k.startswith(n_clean):
+                    g_per_u = v
+                    break
+        if g_per_u and float(g_per_u) > 0:
+            return float(g_per_u)
+    except Exception as _e:
+        logger.debug(f"[P1-1] Fallback UNIT_WEIGHTS falló para {name!r}: {_e}")
+    return None
+
+
 def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) -> float:
-    """Intenta convertir matemáticamente una cantidad de una unidad a otra usando factores y densidades."""
+    """Intenta convertir matemáticamente una cantidad de una unidad a otra usando factores y densidades.
+
+    [P1-1 · 2026-05-08] Cuando se requiere conversión cruzada (masa↔volumen o
+    count↔masa/volumen) y la densidad no está en `master_item`, intentamos
+    resolver vía `VOLUMETRIC_DENSITIES`/`UNIT_WEIGHTS` de constants. Si tampoco
+    aparece, el comportamiento depende del knob:
+
+      - `MEALFIT_CROSS_UNIT_CONVERSION_STRICT=True` (default): retorna `None`
+        y loguea `WARNING` con el ingrediente. Los callers ya manejan `None`
+        (saltan la fila). Previene que aceite/miel/leche con densidad real
+        ~218-340 g/taza sean convertidos asumiendo `150 g/taza` (off ~30-50%).
+      - `MEALFIT_CROSS_UNIT_CONVERSION_STRICT=False`: cae a `150 g/taza`
+        legacy (escape hatch para no bloquear deducciones si el catálogo
+        está incompleto en producción).
+    """
     if from_unit == to_unit:
         return qty
-        
+
     from_unit_lower = from_unit.lower()
     to_unit_lower = to_unit.lower()
-    
+
     mass_to_g = {'g': 1.0, 'gr': 1.0, 'gramos': 1.0, 'gramo': 1.0, 'kg': 1000.0, 'kilo': 1000.0, 'kilos': 1000.0, 'lb': 453.592, 'lbs': 453.592, 'libra': 453.592, 'libras': 453.592, 'oz': 28.3495, 'onza': 28.3495, 'onzas': 28.3495}
     vol_to_ml = {'ml': 1.0, 'l': 1000.0, 'taza': 240.0, 'tazas': 240.0, 'cda': 15.0, 'cdas': 15.0, 'cucharada': 15.0, 'cucharadas': 15.0, 'cdta': 5.0, 'cdtas': 5.0, 'cdita': 5.0, 'cucharadita': 5.0, 'cucharaditas': 5.0}
     count_units = {'unidad', 'unidades', 'rebanada', 'rebanadas', 'diente', 'dientes'}
-    
+
     # 1. Mass to Mass
     if from_unit_lower in mass_to_g and to_unit_lower in mass_to_g:
         return qty * (mass_to_g[from_unit_lower] / mass_to_g[to_unit_lower])
-        
+
     # 2. Volume to Volume
     if from_unit_lower in vol_to_ml and to_unit_lower in vol_to_ml:
         return qty * (vol_to_ml[from_unit_lower] / vol_to_ml[to_unit_lower])
-        
-    # Cross domain conversions require density
-    density = float(master_item.get("density_g_per_cup") or 150.0)
-    
+
+    # Cross domain (mass↔volume) requires density. [P1-1] Cadena: master → VOLUMETRIC_DENSITIES → strict knob.
+    needs_density = (
+        (from_unit_lower in mass_to_g and to_unit_lower in vol_to_ml)
+        or (from_unit_lower in vol_to_ml and to_unit_lower in mass_to_g)
+    )
+    density: float | None = None
+    if needs_density:
+        density = _resolve_cross_domain_density(master_item or {})
+        if density is None:
+            try:
+                from graph_orchestrator import _env_bool
+                strict = _env_bool("MEALFIT_CROSS_UNIT_CONVERSION_STRICT", True)
+            except Exception:
+                strict = True
+            _name = (master_item or {}).get("name") or (master_item or {}).get("slug") or "<unknown>"
+            if strict:
+                logger.warning(
+                    f"[P1-1] convert_amount({qty} {from_unit}→{to_unit}, item={_name!r}) "
+                    f"sin density_g_per_cup en master ni en VOLUMETRIC_DENSITIES. "
+                    f"Strict=True → retornando None (caller debe saltar la fila). "
+                    f"Backfill master_ingredients.density_g_per_cup para evitar este caso."
+                )
+                return None
+            logger.warning(
+                f"[P1-1] convert_amount({qty} {from_unit}→{to_unit}, item={_name!r}) "
+                f"sin densidad — strict=False → cayendo a 150 g/taza legacy. "
+                f"Conversión puede tener error ~30-50% para grasas/líquidos densos."
+            )
+            density = 150.0
+
     # 3. Mass to Volume
     if from_unit_lower in mass_to_g and to_unit_lower in vol_to_ml:
         g = qty * mass_to_g[from_unit_lower]
         cups = g / density
         ml = cups * 240.0
         return ml / vol_to_ml[to_unit_lower]
-        
+
     # 4. Volume to Mass
     if from_unit_lower in vol_to_ml and to_unit_lower in mass_to_g:
         ml = qty * vol_to_ml[from_unit_lower]
         cups = ml / 240.0
         g = cups * density
         return g / mass_to_g[to_unit_lower]
-        
-    # 5. Count to Mass or Volume (Estimate)
+
+    # 5. Count to Mass or Volume (Estimate). [P1-1] Resolución análoga para g/unidad.
     if from_unit_lower in count_units and to_unit_lower in mass_to_g:
-        g_per_u = float(master_item.get("density_g_per_unit") or 100.0)
-        if 'rebanada' in from_unit_lower: g_per_u = 25.0
+        g_per_u = _resolve_unit_weight(master_item or {})
+        if 'rebanada' in from_unit_lower:
+            g_per_u = 25.0
+        if g_per_u is None:
+            try:
+                from graph_orchestrator import _env_bool
+                strict = _env_bool("MEALFIT_CROSS_UNIT_CONVERSION_STRICT", True)
+            except Exception:
+                strict = True
+            _name = (master_item or {}).get("name") or (master_item or {}).get("slug") or "<unknown>"
+            if strict:
+                logger.warning(
+                    f"[P1-1] convert_amount({qty} {from_unit}→{to_unit}, item={_name!r}) "
+                    f"sin density_g_per_unit ni UNIT_WEIGHTS. Strict=True → None."
+                )
+                return None
+            g_per_u = 100.0
         g = qty * g_per_u
         return g / mass_to_g[to_unit_lower]
-        
+
     if from_unit_lower in mass_to_g and to_unit_lower in count_units:
-        g_per_u = float(master_item.get("density_g_per_unit") or 100.0)
-        if 'rebanada' in to_unit_lower: g_per_u = 25.0
+        g_per_u = _resolve_unit_weight(master_item or {})
+        if 'rebanada' in to_unit_lower:
+            g_per_u = 25.0
+        if g_per_u is None:
+            try:
+                from graph_orchestrator import _env_bool
+                strict = _env_bool("MEALFIT_CROSS_UNIT_CONVERSION_STRICT", True)
+            except Exception:
+                strict = True
+            _name = (master_item or {}).get("name") or (master_item or {}).get("slug") or "<unknown>"
+            if strict:
+                logger.warning(
+                    f"[P1-1] convert_amount({qty} {from_unit}→{to_unit}, item={_name!r}) "
+                    f"sin density_g_per_unit ni UNIT_WEIGHTS. Strict=True → None."
+                )
+                return None
+            g_per_u = 100.0
         g = qty * mass_to_g[from_unit_lower]
         return g / g_per_u
-        
+
     # Incompatibles
     return None
 
@@ -1165,16 +1298,34 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
 
     Returns:
         {"deleted_shopping_rows": N, "inserted_rows": M, "preserved_manual_rows": K,
-         "rolled_back": bool}  # `rolled_back` añadido P3-D, true si se restauró snapshot.
+         "rolled_back": bool,                # P3-D: true si se restauró ≥1 row.
+         "rolled_back_count": int,           # P3-1: filas efectivamente restauradas.
+         "rolled_back_total": int,           # P3-1: filas en snapshot pre-DELETE.
+         "rolled_back_partial": bool}        # P3-1: true si 0 < count < total.
+
+    [P3-1 · 2026-05-08] Distinción `partial` vs `full` rollback. ANTES (P3-D):
+    si `restored > 0`, `rolled_back=True` independiente de si se restauraron
+    todas o solo algunas. Imposible distinguir "rollback exitoso completo" de
+    "queda inventario inconsistente" sin grep manual al log. AHORA: cuando el
+    rollback es parcial (restored < total), se emite `system_alerts` con
+    `severity='critical'` y metadata para SOP de recovery manual (ver alert).
     """
-    stats = {"deleted_shopping_rows": 0, "inserted_rows": 0, "preserved_manual_rows": 0,
-             "rolled_back": False}
+    stats: Dict[str, Any] = {
+        "deleted_shopping_rows": 0,
+        "inserted_rows": 0,
+        "preserved_manual_rows": 0,
+        "rolled_back": False,
+        "rolled_back_count": 0,
+        "rolled_back_total": 0,
+        "rolled_back_partial": False,
+    }
     if not supabase or not user_id:
         return stats
 
-    rollback_enabled = (
-        os.environ.get("MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK", "on").strip().lower() != "off"
-    )
+    # [P2-1 · 2026-05-08] `_env_str` registra en `_KNOBS_REGISTRY`.
+    # Semántica preservada: `off` desactiva el rollback; cualquier otro valor lo habilita.
+    from knobs import _env_str
+    rollback_enabled = _env_str("MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK", "on") != "off"
 
     snapshot_rows: List[Dict[str, Any]] = []
 
@@ -1250,6 +1401,7 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
     # vacía y disparará re-fetch).
     if insert_failed and snapshot_rows:
         restored = 0
+        failed_row_ids: List[str] = []  # [P3-1] para SOP recovery
         # Limpiar columnas managed por DB del snapshot. `id`/`created_at` son
         # inmutables generadas en INSERT; pasarlas reventaría con conflict.
         # `updated_at` típicamente trigger-generated también.
@@ -1269,14 +1421,86 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
                 logger.error(
                     f"[P3-D/ROLLBACK] Error restaurando row para {user_id}: {restore_err}"
                 )
+                # [P3-1] Capturar id + name para SOP de recovery manual.
+                failed_row_ids.append(str(row.get("id") or row.get("name") or "<unknown>"))
+        total = len(snapshot_rows)
+        is_partial = 0 < restored < total
         logger.warning(
             f"[P3-D/ROLLBACK] Insert falló para {user_id} → restauradas "
-            f"{restored}/{len(snapshot_rows)} filas snapshotted. "
-            f"Stats refleja estado post-rollback."
+            f"{restored}/{total} filas snapshotted. "
+            f"Stats refleja estado post-rollback. "
+            f"{'⚠️ PARCIAL — SOP requerido.' if is_partial else 'Completo.'}"
         )
         stats["rolled_back"] = restored > 0
+        stats["rolled_back_count"] = restored
+        stats["rolled_back_total"] = total
+        stats["rolled_back_partial"] = is_partial
         # Las filas restauradas no son "deleted" en el resultado neto.
         stats["deleted_shopping_rows"] = max(0, stats["deleted_shopping_rows"] - restored)
+
+        # [P3-1 · 2026-05-08] Escalar rollback parcial a system_alerts. La fila
+        # parcial deja inventario inconsistente: `restored` items recuperados
+        # + `total - restored` perdidos en el limbo (snapshot existe en logs
+        # pero no en DB). El SRE necesita señal proactiva para recovery manual.
+        if is_partial:
+            try:
+                from datetime import datetime as _p31_dt, timezone as _p31_tz
+                alert_key = f"shopping_list_replace_partial_rollback:{user_id}"
+                alert_metadata = {
+                    "user_id": str(user_id),
+                    "rows_restored": restored,
+                    "rows_in_snapshot": total,
+                    "rows_lost": total - restored,
+                    "failed_row_ids": failed_row_ids[:50],  # cap para evitar bloat
+                    "timestamp": _p31_dt.now(_p31_tz.utc).isoformat(),
+                    "ingredients_attempted": len(ingredients_list),
+                }
+                alert_message = (
+                    f"Rollback parcial al reemplazar shopping_list de user={user_id}. "
+                    f"Restauradas {restored}/{total} filas; {total - restored} "
+                    f"perdidas en el limbo (snapshot en logs, NO en DB). "
+                    f"\n\nSOP recovery manual:\n"
+                    f"  1. Buscar en logs líneas `[P3-D/ROLLBACK] Error restaurando "
+                    f"row para {user_id}` para ver qué filas fallaron.\n"
+                    f"  2. Buscar log previo `[P3-D/ROLLBACK] Insert falló` con el "
+                    f"snapshot completo (filas pre-DELETE).\n"
+                    f"  3. Re-INSERT manual a `user_inventory` con `source='shopping_list'` "
+                    f"para las filas faltantes (sin id/created_at/updated_at).\n"
+                    f"  4. Verificar consistencia: `SELECT COUNT(*) FROM user_inventory "
+                    f"WHERE user_id='{user_id}' AND source='shopping_list'`."
+                )
+                execute_sql_write(
+                    """
+                    INSERT INTO system_alerts
+                        (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                    VALUES (%s, 'shopping_list_partial_rollback', 'critical', %s, %s, %s::jsonb, %s::jsonb)
+                    ON CONFLICT (alert_key) DO UPDATE
+                        SET triggered_at = NOW(),
+                            message = EXCLUDED.message,
+                            metadata = EXCLUDED.metadata,
+                            affected_user_ids = EXCLUDED.affected_user_ids,
+                            resolved_at = NULL
+                    """,
+                    (
+                        alert_key,
+                        f"Shopping list rollback parcial: user {user_id}",
+                        alert_message,
+                        json.dumps(alert_metadata, ensure_ascii=False),
+                        json.dumps([str(user_id)]),
+                    ),
+                )
+                logger.error(
+                    f"[P3-1/PARTIAL-ROLLBACK-ALERT] Alert persistido: user={user_id} "
+                    f"restored={restored}/{total} failed_ids={failed_row_ids[:5]}..."
+                )
+            except Exception as alert_err:
+                # Best-effort: si el alert mismo falla, NO queremos abortar
+                # el flujo del usuario. El log warning de arriba ya capturó
+                # el incident; el alert solo era para escalación SRE.
+                logger.error(
+                    f"[P3-1/PARTIAL-ROLLBACK-ALERT] Falló persistir alert "
+                    f"para user={user_id}: {alert_err!r}"
+                )
         return stats
 
     if not insert_failed:

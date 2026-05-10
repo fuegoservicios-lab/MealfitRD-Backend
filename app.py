@@ -8,11 +8,28 @@ import os
 import uuid
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Optional
 import json
 import traceback
 import threading
 import sentry_sdk
+
+# [P1-A · 2026-05-08] Marker temporal del proceso. Expuesto vía
+# `/health/version` para diagnosticar deployments rezagados (logs Postgres
+# mostrando DDL runtime ya consolidado a SSOT migrations indica binary viejo).
+_PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
+# Marker textual del último P-fix mergeado en HEAD. Actualizar con cada
+# cierre de fix para que `/health/version` permita comparar contra el árbol.
+#
+# [P3-1 · 2026-05-08] Convención (CLAUDE.md "Convenciones del repo"):
+#   - Formato: `Pn-X · YYYY-MM-DD` o `Pn-NEW-X · YYYY-MM-DD`.
+#   - Bumpear con CADA cierre de P-fix mergeado a HEAD.
+#   - El test `test_p3_1_last_known_pfix_freshness` bloquea formato inválido
+#     y fechas anteriores al floor (último audit cerrado).
+#   - Si subes el floor del test, sube también el valor aquí — el commit
+#     que sube uno sin el otro debería fallar el test en CI.
+_LAST_KNOWN_PFIX = "P2-5-DB-POOL-CONTRACT · 2026-05-10"
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
@@ -57,6 +74,11 @@ from fact_extractor import async_extract_and_save_facts, process_pending_queue_s
 from langgraph.checkpoint.postgres import PostgresSaver
 from services import compute_plan_hash, merge_form_data_with_profile
 from vision_agent import process_image_with_vision, get_multimodal_embedding
+# [P2-1 · 2026-05-08] Helpers compartidos del registry de knobs (extraídos de
+# graph_orchestrator). Los 3 knobs `MEALFIT_SCHEDULER_*` de abajo eran raw
+# `os.environ.get` y no aparecían en `/health/version` ni en
+# `get_knobs_registry_snapshot()`. Migrados a `_env_int`/`_env_bool` aquí.
+from knobs import _env_int, _env_bool
 
 # [P2-NEW-D · 2026-05-08] Knobs de scheduler. Antes `BackgroundScheduler()` se
 # instanciaba sin args; default APScheduler = `ThreadPoolExecutor(max_workers=10)`
@@ -65,18 +87,23 @@ from vision_agent import process_image_with_vision, get_multimodal_embedding
 # de 10 threads, encolar el 11º+ y — si su próximo schedule llegaba antes del
 # drain — APScheduler hacía SKIP silencioso (logging.warning sin métrica). Riesgo
 # crítico para `process_plan_chunk_queue`, `_alert_chunk_dual_processing`, etc.
-# Defaults conservadores: 20 workers para absorber el burst sin sobre-provisionar;
-# 60s de gracia evita skips por GC/lock contention/DB blip transitorio.
-_SCHEDULER_MAX_WORKERS = int(os.environ.get("MEALFIT_SCHEDULER_MAX_WORKERS", "20"))
-_SCHEDULER_MISFIRE_GRACE_S = int(os.environ.get("MEALFIT_SCHEDULER_MISFIRE_GRACE_S", "60"))
+#
+# [P0-2 · 2026-05-10] Bump de defaults tras audit del 2026-05-10. system_alerts
+# registró 25+ `scheduler_missed_*` en últimas 24h con bursts simultáneos que
+# saturaban el pool de 20 threads — 23 jobs disparándose en la misma ventana
+# de minuto excedían el grace_time de 60s cuando algún job tardaba >1s en
+# tomar conexión DB. Subido a 32 workers + 180s de gracia para absorber el
+# pico sin requerir staggering por job (refactor más invasivo). Aún ajustable
+# vía env var para sobreprovisionar bajo carga inusual.
+_SCHEDULER_MAX_WORKERS = _env_int("MEALFIT_SCHEDULER_MAX_WORKERS", 32)
+_SCHEDULER_MISFIRE_GRACE_S = _env_int("MEALFIT_SCHEDULER_MISFIRE_GRACE_S", 180)
 # [P2-NEW-F · 2026-05-08] Telemetría: emite a system_alerts cuando un job se
 # salta (MISSED) o falla (ERROR). Knob ON por default; `off`/`0`/`false` lo
 # desactiva. Se lee fresh en cada invocación del listener (`_is_scheduler_telemetry_enabled`)
 # para que el kill switch tome efecto sin restart del worker.
 def _is_scheduler_telemetry_enabled() -> bool:
-    return os.environ.get(
-        "MEALFIT_SCHEDULER_TELEMETRY_ENABLED", "on"
-    ).strip().lower() in ("1", "true", "yes", "on")
+    # [P2-1 · 2026-05-08] `_env_bool` registra en `_KNOBS_REGISTRY`.
+    return _env_bool("MEALFIT_SCHEDULER_TELEMETRY_ENABLED", True)
 
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
@@ -434,6 +461,140 @@ def readiness_check():
             ),
         },
     )
+
+
+@app.get("/health/version")
+def health_version():
+    """[P1-A · 2026-05-08] Diagnóstico del binary desplegado.
+
+    Expone el commit hash, marker del último P-fix mergeado y un snapshot
+    del registry de knobs `MEALFIT_*`. Permite verificar si el deploy en
+    producción está rezagado respecto al árbol cuando los logs Postgres
+    muestran statements de runtime DDL ya consolidados a SSOT migrations
+    (CREATE TABLE system_alerts, ALTER user_profiles ADD quality_alert_at).
+
+    Comparación esperada:
+      - `last_known_pfix` debe coincidir con `_LAST_KNOWN_PFIX` en HEAD.
+      - `git_sha` (inyectado por Nixpacks/EasyPanel via env var) debe
+        coincidir con el SHA que el repo apunta como producción.
+      - `knobs_count` debe ser ≥ al número de knobs registrados localmente
+        (vía `python -c "from graph_orchestrator import get_knobs_registry_snapshot; print(len(get_knobs_registry_snapshot()))"`).
+
+    Si no coincide → redeploy. Si coincide y aún ves DDL en logs Postgres,
+    el origen es un cron externo invocando un script `migrate_*.py`.
+
+    No requiere auth: información de diagnóstico no sensible.
+    """
+    try:
+        from graph_orchestrator import get_knobs_registry_snapshot
+        snap = get_knobs_registry_snapshot()
+        knobs_count = len(snap)
+        knobs_sample = sorted(snap.keys())[:8]
+    except Exception as e:
+        knobs_count = -1
+        knobs_sample = [f"error:{type(e).__name__}"]
+
+    git_sha = os.environ.get("GIT_SHA") or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "unknown"
+    return {
+        "git_sha": git_sha,
+        "git_short_sha": git_sha[:7] if git_sha != "unknown" else "unknown",
+        "deploy_timestamp": os.environ.get("DEPLOY_TIMESTAMP", "unknown"),
+        "process_started_at": _PROCESS_START_ISO,
+        "last_known_pfix": _LAST_KNOWN_PFIX,
+        "knobs_count": knobs_count,
+        "knobs_sample": knobs_sample,
+    }
+
+
+@app.get("/admin/cron-health")
+def admin_cron_health():
+    """[P0-2 · 2026-05-10] Diagnóstico rápido del scheduler APScheduler.
+
+    Devuelve para operador (sin auth — info de diagnóstico no sensible):
+      - jobs_registered: count + lista de job_ids registrados ahora.
+      - missed_last_hour: dict {job_id: count} agregado de `system_alerts`
+        con `alert_type='scheduler' AND alert_key LIKE 'scheduler_missed_%'`
+        en la última hora. Vacío si no hubo MISSED.
+      - cascade_alert: snapshot de la fila `scheduler_cascade_missed` si existe.
+      - scheduler_config: defaults activos del pool (workers + misfire_grace).
+
+    Sirve para responder en 1 seg "¿el scheduler está sano?" sin entrar a
+    Supabase logs. Cierra el gap diagnóstico identificado en el audit
+    2026-05-10 (operador tenía que correr 3 queries SQL para entender
+    si era cascada, drift de deploy, o ambas).
+    """
+    try:
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        info: dict = {
+            "scheduler_registered": HAS_SCHEDULER and scheduler is not None,
+            "scheduler_config": {
+                "max_workers": _SCHEDULER_MAX_WORKERS,
+                "misfire_grace_s": _SCHEDULER_MISFIRE_GRACE_S,
+                "telemetry_enabled": _is_scheduler_telemetry_enabled(),
+            },
+            "jobs_registered": [],
+            "missed_last_hour": {},
+            "cascade_alert": None,
+        }
+        if HAS_SCHEDULER and scheduler is not None:
+            try:
+                info["jobs_registered"] = sorted(
+                    [j.id for j in scheduler.get_jobs()]
+                )
+            except Exception as e:
+                info["jobs_registered_error"] = f"{type(e).__name__}: {e}"
+
+        # MISSED last hour. Reusa el cliente Supabase global. Si no está
+        # disponible, devuelve dict vacío + flag explícito para diagnóstico.
+        if supabase is not None:
+            try:
+                cutoff = _dt.now(_tz.utc) - _td(hours=1)
+                res = (
+                    supabase.table("system_alerts")
+                    .select("alert_key,metadata,triggered_at")
+                    .eq("alert_type", "scheduler")
+                    .like("alert_key", "scheduler_missed_%")
+                    .gte("triggered_at", cutoff.isoformat())
+                    .limit(500)
+                    .execute()
+                )
+                missed_rows = res.data or []
+                counts: dict = {}
+                for row in missed_rows:
+                    meta = row.get("metadata")
+                    job_id = None
+                    if isinstance(meta, dict):
+                        job_id = meta.get("job_id")
+                    if not job_id:
+                        ak = row.get("alert_key", "")
+                        if ak.startswith("scheduler_missed_"):
+                            job_id = ak[len("scheduler_missed_"):]
+                    if job_id:
+                        counts[job_id] = counts.get(job_id, 0) + 1
+                info["missed_last_hour"] = counts
+            except Exception as e:
+                info["missed_last_hour_error"] = f"{type(e).__name__}: {e}"
+
+            # Última cascada (si existe).
+            try:
+                res = (
+                    supabase.table("system_alerts")
+                    .select("alert_key,severity,message,metadata,triggered_at,resolved_at")
+                    .eq("alert_key", "scheduler_cascade_missed")
+                    .limit(1)
+                    .execute()
+                )
+                rows = res.data or []
+                info["cascade_alert"] = rows[0] if rows else None
+            except Exception as e:
+                info["cascade_alert_error"] = f"{type(e).__name__}: {e}"
+        else:
+            info["supabase_unavailable"] = True
+
+        return info
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
 
 @app.get("/api/admin/test-proactive")
 def api_test_proactive(background_tasks: BackgroundTasks):

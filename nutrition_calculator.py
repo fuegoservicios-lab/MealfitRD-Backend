@@ -272,8 +272,7 @@ def get_nutrition_targets(form_data: dict) -> dict:
     gender = form_data.get("gender", "male")
     activity_level = form_data.get("activityLevel", "moderate")
     goal = form_data.get("mainGoal") or form_data.get("goal") or "maintenance"
-    skip_lunch = form_data.get("skipLunch", False)
-    
+
     # 1. BMR (Tasa Metabólica Basal)
     bmr = calculate_bmr(weight, height, age, gender, body_fat)
     
@@ -379,13 +378,6 @@ def get_nutrition_targets(form_data: dict) -> dict:
     original_target_calories = target_calories
     original_macros = calculate_macros(original_target_calories, goal)
 
-    # Ajuste por 'Almuerzo Familiar / Ya resuelto'
-    if skip_lunch:
-        # Reservar ~35% de las calorías para el almuerzo que el usuario comerá por su cuenta
-        reserved_cals = int(round(target_calories * 0.35 / 50) * 50)
-        target_calories = target_calories - reserved_cals
-        calculation_details_str += f" | ⚠️ skipLunch ACTIVO: Se reservaron {reserved_cals} kcal para el Almuerzo Familiar. Calorías restantes asignadas a la IA: {target_calories} kcal."
-    
     # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS para la IA
     macros = calculate_macros(target_calories, goal)
     

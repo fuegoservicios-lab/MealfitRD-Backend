@@ -299,11 +299,16 @@ def test_replace_shopping_list_only_handles_empty_list_gracefully():
 def test_replace_shopping_list_only_noop_on_empty_user():
     stats = db_inventory.replace_shopping_list_only_items("", [{"name": "x"}])
     # [P3-D · 2026-05-07] Stats shape ahora incluye `rolled_back` (default False).
+    # [P3-1 · 2026-05-08] Añadidos `rolled_back_count`, `rolled_back_total`,
+    # `rolled_back_partial` para distinguir rollback completo vs parcial.
     assert stats == {
         "deleted_shopping_rows": 0,
         "inserted_rows": 0,
         "preserved_manual_rows": 0,
         "rolled_back": False,
+        "rolled_back_count": 0,
+        "rolled_back_total": 0,
+        "rolled_back_partial": False,
     }
 
 

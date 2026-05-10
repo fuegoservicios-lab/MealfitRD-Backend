@@ -115,9 +115,8 @@ def test_no_push_below_threshold(
 @patch("cron_tasks.execute_sql_write")
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks._record_chunk_deferral")
-@patch("cron_tasks._ensure_quality_alert_schema")
 def test_push_fires_at_exactly_nth_consecutive_retry(
-    mock_schema, mock_deferral, mock_query, mock_write, mock_push, mock_now
+    mock_deferral, mock_query, mock_write, mock_push, mock_now
 ):
     """En la evaluación que produce `_p1c_next_retries == CHUNK_TEMPORAL_GATE_PUSH_AT_RETRY`,
     se dispara el push notification proactivo."""
@@ -147,9 +146,8 @@ def test_push_fires_at_exactly_nth_consecutive_retry(
 @patch("cron_tasks.execute_sql_write")
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks._record_chunk_deferral")
-@patch("cron_tasks._ensure_quality_alert_schema")
 def test_push_dedupes_via_system_alerts(
-    mock_schema, mock_deferral, mock_query, mock_write, mock_push, mock_now
+    mock_deferral, mock_query, mock_write, mock_push, mock_now
 ):
     """Si `system_alerts` ya tiene una entrada activa para este chunk dentro
     del cooldown, NO se envía push otra vez. Sin dedupe, cada evaluación entre
@@ -176,9 +174,8 @@ def test_push_dedupes_via_system_alerts(
 @patch("cron_tasks.execute_sql_write")
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks._record_chunk_deferral")
-@patch("cron_tasks._ensure_quality_alert_schema")
 def test_no_push_at_retries_above_threshold_post_dedupe(
-    mock_schema, mock_deferral, mock_query, mock_write, mock_push, mock_now
+    mock_deferral, mock_query, mock_write, mock_push, mock_now
 ):
     """En reintentos POSTERIORES al N-th (e.g. retries=N+1), no se dispara push
     porque el chequeo es `== N` (igualdad, no `>=`). Esto evita pushes
@@ -209,9 +206,8 @@ def test_no_push_at_retries_above_threshold_post_dedupe(
 @patch("cron_tasks.execute_sql_write")
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks._record_chunk_deferral")
-@patch("cron_tasks._ensure_quality_alert_schema")
 def test_push_failure_does_not_block_deferral(
-    mock_schema, mock_deferral, mock_query, mock_write, mock_push, mock_now
+    mock_deferral, mock_query, mock_write, mock_push, mock_now
 ):
     """Si `_dispatch_push_notification` falla (FCM down, schema error), el
     deferral debe completarse normalmente. Es best-effort: el cron

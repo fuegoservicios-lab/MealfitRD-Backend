@@ -739,8 +739,6 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     if current_plan:
         system_prompt += f"\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas activo:\n{json.dumps(current_plan)}\n\nUsa esta información para responder con exactitud preguntas sobre lo que le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado (como desayuno, almuerzo o cena)."
         
-        if form_data and form_data.get("skipLunch"):
-            system_prompt += "\n⚠️ IMPORTANTE SOBRE EL ALMUERZO: El plan actual NO tiene 'Almuerzo' NO porque se haya omitido y redistribuido, sino porque el usuario eligió 'Almuerzo Familiar / Ya resuelto'. Esto significa que EL USUARIO SÍ VA A ALMORZAR en su casa libremente. NUNCA digas que 'omitimos el almuerzo y redistribuimos las calorías' porque eso es falso. Dile que en realidad tiene un 'Cupo Vacío' en el plan porque reservamos las calorías para que almorzara libremente en su casa, y aliéntalo a que te cuente qué comerá para anotarlo en su registro."
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
             if selected_supps:
@@ -950,8 +948,6 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     if current_plan:
         system_prompt += f"\nCONTEXTO CRÍTICO: Plan activo:\n{json.dumps(current_plan)}\n"
         
-        if form_data and form_data.get("skipLunch"):
-            system_prompt += "⚠️ IMPORTANTE SOBRE EL ALMUERZO: El usuario escogió 'Almuerzo Familiar', EL USUARIO SÍ VA A ALMORZAR. NO digas que se omitió y redistribuyó. Dile que le dejaste un 'Cupo Vacío' y coméntale que te dicte qué almorzó para registrarlo.\n"
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
             if selected_supps:

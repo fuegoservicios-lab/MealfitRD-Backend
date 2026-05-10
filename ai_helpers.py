@@ -247,7 +247,6 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     #   - "max": 3 proteínas + 3 carbos → máxima variedad (1 distinto por día).
     #   Prioridad: form_data > health_profile en DB > "standard"
     #   Frontend: exponer como toggle en Settings del usuario con key "variety_level".
-    skip_lunch = form_data.get("skipLunch", False) if form_data else False
     variety_level = form_data.get("variety_level", "") if form_data else ""
     
     # Si no viene en form_data, intentar leer del perfil persistido en DB
@@ -279,12 +278,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             f"(más proteínas distintas = menos repetición almuerzo↔cena)."
         )
     
-    if skip_lunch:
-        num_proteins_to_pick = min(1, len(available_proteins))  # 1 proteína (solo Cena la necesita fuerte)
-        num_carbs_to_pick = min(2, len(available_carbs))         # 2 carbos (Desayuno y Cena)
-        num_veggies_to_pick = min(4, len(available_veggies))     # 4 vegetales (2 por día × 2 días con comida principal)
-        logger.info(f"⚡ [ANTI MODE-COLLAPSE] skipLunch=true → distribución reducida (1P/2C/2V)")
-    elif variety_level == "max":
+    if variety_level == "max":
         num_proteins_to_pick = min(3, len(available_proteins))   # 1 proteína distinta por día
         num_carbs_to_pick = min(3, len(available_carbs))         # 1 carb distinto por día
         num_veggies_to_pick = min(6, len(available_veggies))   # 2 vegetales distintos por día
@@ -346,7 +340,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # 🥗 GARANTÍA NUTRICIONAL: Asegurar al menos 1 leguminosa en la selección
     LEGUME_NAMES = {"habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos"}
     has_legume = any(p.lower() in LEGUME_NAMES for p in unique_proteins)
-    if not has_legume and not skip_lunch:
+    if not has_legume:
         available_legumes = [p for p in available_proteins if p.lower() in LEGUME_NAMES]
         if available_legumes:
             legume_pick = random.choice(available_legumes)
@@ -651,11 +645,6 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                          if item.lower() not in chosen_set]
         if blocked_items:
             blocked_text = f"⚠️ EVITA usar como base principal estos ingredientes sobreusados (el usuario ya los ha comido frecuentemente): {', '.join(blocked_items)}. Prioriza alternativas frescas."
-    
-    # Si skipLunch y solo 1 proteína base, agregar nota al blocked_text
-    # para que el LLM sepa que debe variar la PREPARACIÓN, no el ingrediente.
-    if skip_lunch and len(_base_proteins) == 1:
-        blocked_text += f"\n💡 NOTA: Solo hay 1 proteína base ({_base_proteins[0]}) para los 3 días porque el usuario omite Almuerzo. Varía la PREPARACIÓN y TÉCNICA de cocción cada día, no el ingrediente."
     
     # Nota de conservación de alimentos según frecuencia de compras
     grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"

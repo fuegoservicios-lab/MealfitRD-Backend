@@ -86,6 +86,48 @@ _MEAL_PLAN_LOCK_PURPOSES = {
 }
 
 
+# [P1-HIST-AUDIT-7 · 2026-05-09] Lock advisory PER-USER para serializar
+# mutators del Historial (restore/delete/rename). Diseño hermano de
+# `acquire_meal_plan_advisory_lock` pero con namespace de keys por
+# user_id, no por plan_id — los tres endpoints operan sobre LISTAS de
+# planes del mismo user (e.g., restore necesita resolver `target` =
+# fila más reciente, que cambia si dos restores corren a la vez).
+#
+# Bug original (audit historial 2026-05-08):
+#   Doble-click "Reactivar" desde dos tabs sobre planes distintos:
+#   ambos endpoints resolvían el MISMO `target` (latest), ambos
+#   sobreescribían — el último gana, el primero perdía silenciosamente.
+#   Mismo riesgo en restore vs delete vs rename simultáneo del mismo
+#   user (race en el SELECT inicial vs el UPDATE/DELETE final).
+#
+# Sin esto, los tres endpoints son no-op tras el primer SELECT pero
+# read-modify-write a nivel global del Historial NO es atómico.
+# `pg_advisory_xact_lock` per-user serializa los tres mutators a nivel
+# de toda la lista del Historial del usuario; otros users no se
+# bloquean entre sí.
+_USER_HISTORY_LOCK_PURPOSE = "history_mutator"
+
+
+def acquire_user_history_advisory_lock(cursor, user_id) -> None:
+    """[P1-HIST-AUDIT-7 · 2026-05-09] Adquiere lock advisory transaccional
+    PER-USER para serializar mutators del Historial.
+
+    `cursor` debe estar dentro de una transacción abierta; el lock se
+    libera al COMMIT/ROLLBACK. Si otro caller con el mismo user_id ya
+    posee el lock (otro restore/delete/rename del mismo Historial),
+    esta llamada bloquea hasta liberación.
+
+    Args:
+        cursor: psycopg cursor activo dentro de transacción.
+        user_id: UUID del user (str o UUID).
+    """
+    key = f"user:{_USER_HISTORY_LOCK_PURPOSE}:{user_id}"
+    cursor.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s::text, 0))",
+        (key,),
+    )
+
+
 def acquire_meal_plan_advisory_lock(cursor, meal_plan_id, purpose: str = "general") -> None:
     """[P1-5] Adquiere advisory lock transaccional por (meal_plan_id, purpose).
 
@@ -112,6 +154,62 @@ def acquire_meal_plan_advisory_lock(cursor, meal_plan_id, purpose: str = "genera
         "SELECT pg_advisory_xact_lock(hashtextextended(%s::text, 0))",
         (key,),
     )
+
+
+def set_meal_plan_for_update_timeouts(cursor) -> None:
+    """[P1-LOCK-1 · 2026-05-10] Setea SET LOCAL lock_timeout +
+    statement_timeout antes de un `SELECT … FOR UPDATE` sobre `meal_plans`.
+
+    Bug observado (auditoría 2026-05-10, logs Postgres prod):
+        Una transacción esperó 92.5s un `AccessExclusiveLock` sobre tuple
+        de `meal_plans` antes de ser cancelada por `statement_timeout`
+        de la sesión. Sin `lock_timeout` local explícito, el default
+        Postgres (lock_timeout=0 = infinito) deja al caller esperando
+        indefinidamente; el `statement_timeout` de Supavisor (60s+) es
+        la única red de seguridad y opera sobre la tx completa, no sobre
+        el lock specific. Resultado: spinner de UX colgado por minutos
+        cuando dos callers contienden por el mismo plan.
+
+    Patrón de uso:
+        with conn.cursor() as cur:
+            set_meal_plan_for_update_timeouts(cur)
+            cur.execute("SELECT … FROM meal_plans WHERE … FOR UPDATE", ...)
+            ...
+
+    Knobs (auto-registrados en `_KNOBS_REGISTRY` vía `_env_int`):
+        MEALFIT_PLAN_FOR_UPDATE_LOCK_TIMEOUT_MS  (default 5000)
+            Máximo tiempo esperando adquirir el row lock. Si excede, psycopg
+            propaga `LockNotAvailable` (SQLSTATE 55P03); el caller debe
+            decidir si re-intentar (idempotente) o fallar al usuario. 5s =
+            margen sobre worst-case T1 worker merge típico (~2s) y < umbral
+            de UX para spinner de `/shift-plan` (10s aceptable).
+        MEALFIT_PLAN_FOR_UPDATE_STMT_TIMEOUT_MS  (default 30000)
+            Máximo tiempo de toda la transacción. Último gate: si la tx
+            mantiene el lock más de 30s tras adquirirlo, hay I/O lento
+            (LLM/HTTP) DENTRO del bloque transaccional — síntoma a
+            investigar (follow-up pendiente: auditar que `/shift-plan` y
+            workers no hagan llamadas externas mientras sostienen el lock).
+
+    Best-effort: si `SET LOCAL` falla (Postgres viejo, permisos), log
+    debug y la transacción continúa sin timeouts locales. NO propaga la
+    excepción — el comportamiento previo (esperar indefinidamente) es
+    estrictamente menos seguro que cualquier timeout configurado, pero
+    debe ser indistinguible del fallo de configuración para no romper la
+    funcionalidad existente.
+    """
+    # Import lazy para evitar ciclo db_plans -> knobs -> ... durante module init.
+    from knobs import _env_int
+
+    lock_to_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_LOCK_TIMEOUT_MS", 5000)
+    stmt_to_ms = _env_int("MEALFIT_PLAN_FOR_UPDATE_STMT_TIMEOUT_MS", 30000)
+    try:
+        cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_to_ms)}ms'")
+        cursor.execute(f"SET LOCAL statement_timeout = '{int(stmt_to_ms)}ms'")
+    except Exception as e:
+        logger.debug(
+            f"[P1-LOCK-1] No se pudo setear lock_timeout/statement_timeout "
+            f"en meal_plans FOR UPDATE: {e}"
+        )
 
 
 def update_plan_data_atomic(

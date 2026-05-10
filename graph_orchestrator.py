@@ -55,78 +55,21 @@ from contextlib import contextmanager, asynccontextmanager
 # inventario ordenado con highlight de overrides activos.
 #
 # Observabilidad pura, cero cambio de comportamiento.
+#
+# [P2-1 · 2026-05-08] Helpers extraídos a `backend/knobs.py` para que módulos
+# importados POR este (notablemente `constants.py`) puedan registrar sus knobs
+# en el mismo registry sin generar import circular. Las re-exports de abajo
+# preservan los call sites históricos `from graph_orchestrator import _env_int`.
 # ============================================================
-_KNOBS_REGISTRY: dict = {}
-
-
-def _register_knob(name: str, type_label: str, default, raw, value, *, parse_failed: bool = False) -> None:
-    """Anota el knob en el registry. Idempotente — el último registro gana
-    si por alguna razón se llama dos veces (no debería pasar con consts
-    de módulo, pero defensivo contra reload patterns en tests)."""
-    _KNOBS_REGISTRY[name] = {
-        "type": type_label,
-        "default": default,
-        "raw": raw,
-        "value": value,
-        "is_override": raw is not None and raw != "" and not parse_failed,
-        "parse_failed": parse_failed,
-    }
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        _register_knob(name, "int", default, raw, default)
-        return default
-    try:
-        value = int(raw)
-        _register_knob(name, "int", default, raw, value)
-        return value
-    except (TypeError, ValueError):
-        logging.getLogger(__name__).warning(
-            f"[KNOBS] env {name}={raw!r} no es int. Usando default={default}."
-        )
-        _register_knob(name, "int", default, raw, default, parse_failed=True)
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        _register_knob(name, "float", default, raw, default)
-        return default
-    try:
-        value = float(raw)
-        _register_knob(name, "float", default, raw, value)
-        return value
-    except (TypeError, ValueError):
-        logging.getLogger(__name__).warning(
-            f"[KNOBS] env {name}={raw!r} no es float. Usando default={default}."
-        )
-        _register_knob(name, "float", default, raw, default, parse_failed=True)
-        return default
-
-
-def _env_bool(name: str, default: bool) -> bool:
-    """P1-NEW-1: parser laxo de booleanos. Acepta `1/true/yes/on` (case-insensitive)
-    como verdadero; cualquier otro valor no vacío como falso. Default si vacío.
-    """
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        _register_knob(name, "bool", default, raw, default)
-        return default
-    value = raw.strip().lower() in ("1", "true", "yes", "on")
-    _register_knob(name, "bool", default, raw, value)
-    return value
-
-
-def get_knobs_registry_snapshot() -> dict:
-    """[P3-NEW-D] Snapshot read-only del registry de knobs. Útil para
-    endpoints de diagnóstico (`/api/system/knobs`) o para tests que
-    verifican que un knob fue resuelto al valor esperado.
-
-    Devuelve copia para que mutaciones del caller no afecten el registry."""
-    return {name: dict(info) for name, info in _KNOBS_REGISTRY.items()}
+from knobs import (  # noqa: E402  (re-export bloque doc-arriba)
+    _KNOBS_REGISTRY,
+    _register_knob,
+    _env_int,
+    _env_float,
+    _env_bool,
+    _env_str,
+    get_knobs_registry_snapshot,
+)
 
 
 # --- LLM backpressure / Semáforo distribuido ---
@@ -2418,6 +2361,47 @@ class PlanState(TypedDict):
     # Reseteado en `retry_reflection_node` para que cada attempt nuevo tenga
     # su propia oportunidad de surgical regen.
     _marker_regen_attempted: bool
+
+    # ============================================================
+    # [P2-CANDIDATE-A · 2026-05-08] CONTRATO: claves que NO viven en PlanState.
+    # ------------------------------------------------------------
+    # Las siguientes claves persisten dentro de `plan_result` (el dict
+    # `Optional[dict]` declarado arriba), NO como campos top-level del state.
+    # LangGraph strict-schema NO las filtra porque viajan dentro del payload
+    # opaco de `plan_result`; pero un futuro refactor que las migrara al nivel
+    # del state sin declararlas aquí las perdería silenciosamente entre nodos.
+    # Si alguien necesita acceso state-level a cualquiera de estas keys, debe:
+    #   1. Añadir el campo a este TypedDict.
+    #   2. Inicializarlo en `arun_plan_pipeline` (igual que `_token_buffers`).
+    #   3. Migrar los call sites de `result["..."]`/`plan["..."]` a `state[...]`.
+    # No basta con escribir `state["nueva_key"] = ...` desde un nodo.
+    #
+    # Claves vivas en `plan_result` (no en state):
+    #   - `_shopping_coherence_block`         (lista crítica de divergencias;
+    #     escrita en `assemble_plan_node` ~6975, leída en `review_plan_node`
+    #     ~7972; persistida a DB vía `plan_data` cuando `BLOCK_ACTION=degrade`).
+    #   - `_shopping_coherence_block_history` (cap 20; escrita ~7000/8019/7752,
+    #     leída ~6964/7994/8026; análisis post-mortem P3-NEW-C).
+    #     Cada entry tiene `action_taken` ∈ {not_applicable, hydration_error,
+    #     degrade, reject_minor, reject_high, post_swap_revalidation};
+    #     `history[-1].action_taken` es la fuente única del último resultado
+    #     del consumer (NO existe key top-level espejo — drift documentado y
+    #     removido en P2-A 2026-05-08). El valor `post_swap_revalidation`
+    #     (P2-B 2026-05-08) marca entries emitidas por
+    #     `_recompute_aggregates_after_swap` con `swap=True` en modo warn —
+    #     telemetría pura post-review, NO indica error.
+    #   - `_pantry_supplement_required`       (categoría 🚨 Compra Urgente
+    #     — se escribe a `meal_plans.plan_data` directo en `cron_tasks.py`,
+    #     nunca pasa por el state del grafo).
+    #   - `_critique_unresolved`, `_merged_chunk_ids`, `_user_forced_simplified_weeks`
+    #     (markers per-day o per-plan persistidos en `days[*]` o `plan_data`
+    #     respectivamente; no son state-level).
+    #
+    # Si una migración futura (ej. mover coherence handling a un nodo dedicado
+    # `coherence_arbiter_node`) requiere visibilidad state-level, declarar el
+    # campo en este TypedDict ANTES de tocar el call site — el bug equivalente
+    # a P1-G (`_token_buffers` filtrado por strict-schema) se reproduciría.
+    # ============================================================
 
 
 
@@ -6931,6 +6915,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 hyp_counter = _coh_Counter(
                     str(d.get("hypothesis") or "unknown") for d in coh_divergences
                 )
+                _block_set = bool(result.get("_shopping_coherence_block"))
                 entry = {
                     "ts": _coh_dt.now(_coh_tz.utc).isoformat(),
                     "attempt": attempt_n,
@@ -6942,14 +6927,26 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         1 for d in coh_divergences if d.get("magnitude")
                     ),
                     "hypotheses": dict(hyp_counter),
-                    "block_set": bool(result.get("_shopping_coherence_block")),
-                    # action_taken se rellena en review_plan_node si el flag
-                    # `_shopping_coherence_block` está set (mode=block + crítico).
-                    "action_taken": None,
+                    "block_set": _block_set,
+                    # [P2-2 · 2026-05-08] Si `block_set=False`, NO entrará al
+                    # branch en review_plan_node → `action_taken` queda como
+                    # `not_applicable` para distinguir post-mortem el flujo
+                    # normal (warn-only) de un bug de hidratación. Si block
+                    # está set, se queda `None` y review_plan_node lo hidrata
+                    # con el knob resuelto. La combinación (block_set=True,
+                    # action_taken=None) es invariante reservado para errores.
+                    "action_taken": None if _block_set else "not_applicable",
                 }
-                new_history = list(prior_history) + [entry]
-                if len(new_history) > 20:
-                    new_history = new_history[-20:]
+                # [P2-HIST-AUDIT-4 · 2026-05-09] Cap aplicado vía
+                # helper SSOT con knob `MEALFIT_COHERENCE_BLOCK_HISTORY_CAP`
+                # (default 20). Antes era literal hardcoded en 2 sites
+                # — ahora cualquier flujo nuevo que apenda al history
+                # hereda la política sin coordinación.
+                new_history = _apply_coherence_history_cap(
+                    prior_history,
+                    entry,
+                    plan_id_hint=(result.get("id") or result.get("plan_id")),
+                )
                 result["_shopping_coherence_block_history"] = new_history
             except Exception as _coh_hist_e:
                 logging.debug(
@@ -7544,6 +7541,261 @@ def _swap_to_best_attempt_if_better(final_state: dict) -> bool:
     return True
 
 
+# [P2-HIST-AUDIT-4 · 2026-05-09] Helper SSOT para aplicar el cap del
+# `_shopping_coherence_block_history` con knob configurable y telemetría
+# al truncar.
+#
+# Bug original (audit historial 2026-05-08):
+#   El cap estaba hardcoded `if len(new_history) > 20` en DOS sites:
+#     - graph_orchestrator.py:6941 (assemble_plan_node, P3-NEW-C).
+#     - graph_orchestrator.py:7855 (_recompute_aggregates_after_swap,
+#       P2-B post-swap revalidation).
+#   Si un plan superaba 20 entries, las viejas se descartaban
+#   silenciosamente — el chip "X ajustes" en la card subnumeraba
+#   sin señal al operador. Trade-off documentado en P3-NEW-C, pero
+#   sin telemetría para detectar cuándo el cap empieza a doler.
+#
+# Fix:
+#   - Knob `MEALFIT_COHERENCE_BLOCK_HISTORY_CAP` (default 20)
+#     permite bumpear sin redeploy si el dato real lo justifica.
+#     Validator >= 1 evita cap=0 patológico (truncaría toda la lista).
+#   - Logger.warning cuando truncamos: incluye plan_id (si disponible)
+#     y `truncated_count` para que SRE pueda agregar via grep o cron.
+#   - SSOT: ambos call sites importan el helper; cualquier flujo
+#     futuro que apenda al history hereda la política sin coordinación.
+_COHERENCE_BLOCK_HISTORY_CAP_DEFAULT = 20
+
+
+def _coherence_block_history_cap() -> int:
+    """Resuelve el knob runtime con default 20 y guard >= 1.
+
+    Función dedicada (no constante module-level) para que el override
+    via env var aplique sin reiniciar el proceso — coherente con
+    `_env_int` que lee `os.environ` en cada llamada.
+
+    `_env_int` no soporta validator (solo `_env_float` lo hace post-P1-3
+    2026-05-08); aplicamos guard explícito acá. Cap < 1 sería patológico
+    (descartaría toda la lista en cada append) — fallback al default
+    para protegernos de un knob mal configurado en runtime.
+    """
+    cap = _env_int(
+        "MEALFIT_COHERENCE_BLOCK_HISTORY_CAP",
+        _COHERENCE_BLOCK_HISTORY_CAP_DEFAULT,
+    )
+    if cap < 1:
+        try:
+            logger.warning(
+                "[P2-HIST-AUDIT-4] MEALFIT_COHERENCE_BLOCK_HISTORY_CAP=%d "
+                "es inválido (debe ser >= 1). Fallback al default %d.",
+                cap, _COHERENCE_BLOCK_HISTORY_CAP_DEFAULT,
+            )
+        except Exception:
+            pass
+        return _COHERENCE_BLOCK_HISTORY_CAP_DEFAULT
+    return cap
+
+
+def _apply_coherence_history_cap(
+    prior_history,
+    new_entry,
+    *,
+    plan_id_hint=None,
+):
+    """Anexa `new_entry` a `prior_history` y aplica el cap configurable.
+
+    Returns:
+        list: nueva lista con `new_entry` al final, truncada al cap.
+        Si el truncamiento ocurrió, emite logger.warning con
+        `truncated_count` para diagnóstico SRE.
+
+    Args:
+        prior_history: lista actual (puede ser None / no-list → se
+            normaliza a []).
+        new_entry: dict de la nueva entrada a anexar.
+        plan_id_hint: opcional, plan_id para incluir en el log
+            cuando se trunca. Sin esto, el log sigue siendo útil pero
+            el operador necesita más grep para localizar el plan.
+    """
+    if not isinstance(prior_history, list):
+        prior_history = []
+    new_history = list(prior_history) + [new_entry]
+    cap = _coherence_block_history_cap()
+    if len(new_history) > cap:
+        truncated_count = len(new_history) - cap
+        new_history = new_history[-cap:]
+        try:
+            logger.warning(
+                "[P2-HIST-AUDIT-4/COH-HISTORY-TRUNCATED] plan=%s "
+                "truncated=%d cap=%d. Considera bumpear "
+                "MEALFIT_COHERENCE_BLOCK_HISTORY_CAP si el caso es "
+                "habitual.",
+                plan_id_hint or "unknown",
+                truncated_count,
+                cap,
+            )
+        except Exception:
+            # Logging es best-effort; no debe romper el append.
+            pass
+    return new_history
+
+
+def _emit_post_swap_coherence_alert(
+    *,
+    user_id,
+    plan_id,
+    divergences: list,
+    hyp_counter: dict,
+    critical_total: int,
+    household: float,
+) -> bool:
+    """[P2-2 · 2026-05-08] Emite a `system_alerts` cuando un swap deja
+    divergencias críticas tras `_recompute_aggregates_after_swap`.
+
+    Por qué existe:
+      P2-B (2026-05-08) cerró el gap de telemetría — toda divergencia
+      post-swap se persiste en `_shopping_coherence_block_history` con
+      `action_taken="post_swap_revalidation"`. Pero el cron P3-B trata
+      ese bucket como observabilidad pura (NO anomalous), así que un
+      plan entregado con `cap_swallowed_modifier` (receta dice X, lista
+      no lo tiene) o magnitudes >30% off no levantaba alerta.
+      Resultado: el usuario recibía un PDF de compras inconsistente con
+      sus recetas y operadores sólo lo veían en el log de info.
+
+    Este helper escala las divergencias *críticas* (no las benignas como
+    typos canónicos) a `system_alerts` con cooldown per-user, severity=
+    warning. Cooldown evita que un usuario con racha de planes problemáticos
+    inunde la tabla; el operador inspecciona `metadata.divergences_sample`
+    para diagnosticar.
+
+    Definición de "crítica":
+      - hypothesis="cap_swallowed_modifier" — el modo de fallo más
+        actionable (el aggregator perdió un ingrediente que SÍ está en
+        la receta).
+      - magnitude=True con `|delta_pct| > 0.30` — error de cantidad
+        severo (>30% off vs receta escalada por household).
+      Otras hipótesis (`yield_uncovered`, `pantry_overdeduct`, `unknown`,
+      `unit_mismatch` con delta <30%) son ruido benigno o ya capturadas
+      por otros guards y NO disparan alerta.
+
+    Knobs (registrados en `_KNOBS_REGISTRY`):
+      MEALFIT_POST_SWAP_DIVERGENCE_ALERT_ENABLED (bool, default True)
+        kill switch — si False, no emite (rollback rápido sin redeploy).
+      MEALFIT_POST_SWAP_DIVERGENCE_ALERT_THRESHOLD (int, default 3)
+        N divergencias críticas en un swap para escalar a alerta.
+      MEALFIT_POST_SWAP_ALERT_COOLDOWN_HOURS (int, default 6)
+        ventana de dedupe per-user.
+
+    Idempotente vía `ON CONFLICT (alert_key) DO UPDATE` — la misma
+    alert_key se re-trigger con `triggered_at=NOW()` si vuelve a
+    aparecer, en vez de duplicar fila.
+
+    Returns:
+        True si la alerta se emitió/upserted; False si saltó por
+        cooldown, kill switch off, threshold no alcanzado, o cualquier
+        error best-effort (no aborta el caller bajo ninguna circunstancia).
+    """
+    if not _env_bool("MEALFIT_POST_SWAP_DIVERGENCE_ALERT_ENABLED", True):
+        return False
+    threshold = _env_int("MEALFIT_POST_SWAP_DIVERGENCE_ALERT_THRESHOLD", 3)
+    if critical_total < threshold:
+        return False
+    cooldown_h = _env_int("MEALFIT_POST_SWAP_ALERT_COOLDOWN_HOURS", 6)
+
+    # Dedupe per-user: un usuario con racha mala no inunda la tabla.
+    # Si user_id es None (guest), usamos prefix del plan_id como discriminator;
+    # caso patológico (ambos None) cae a "unknown" y dedupe global por 6h.
+    key_id = user_id or (str(plan_id)[:8] if plan_id else None) or "unknown"
+    alert_key = f"post_swap_critical_divergence_{key_id}"
+
+    # Cooldown query: si ya hay alerta abierta dentro del window, skip.
+    # Si la query falla, mejor sobre-alertar que silenciar — no abortamos.
+    try:
+        existing = execute_sql_query(
+            """
+            SELECT 1 FROM system_alerts
+            WHERE alert_key = %s
+              AND resolved_at IS NULL
+              AND triggered_at > NOW() - make_interval(hours => %s)
+            LIMIT 1
+            """,
+            (alert_key, cooldown_h),
+            fetch_one=True,
+        )
+        if existing:
+            return False
+    except Exception:
+        pass
+
+    # Sample top 5 divergencias para diagnóstico operacional.
+    sample = []
+    for d in (divergences or [])[:5]:
+        if not isinstance(d, dict):
+            continue
+        sample.append({
+            "food": d.get("food"),
+            "side": d.get("side"),
+            "hypothesis": d.get("hypothesis"),
+            "magnitude": bool(d.get("magnitude")),
+            "delta_pct": d.get("delta_pct"),
+        })
+
+    metadata = {
+        "user_id": str(user_id) if user_id else None,
+        "plan_id": str(plan_id) if plan_id else None,
+        "divergence_count": len(divergences or []),
+        "critical_count": critical_total,
+        "hypotheses": dict(hyp_counter or {}),
+        "household_multiplier": float(household) if household else None,
+        "divergences_sample": sample,
+        "cooldown_hours": cooldown_h,
+        "threshold": threshold,
+    }
+    title = "Coherencia recetas↔lista degradada post-swap"
+    message = (
+        f"Tras swap a best_attempt, la re-validación detectó "
+        f"{critical_total} divergencia(s) crítica(s) "
+        f"(cap_swallowed_modifier o magnitud |Δ|>30%). "
+        f"Total divergencias: {len(divergences or [])}. "
+        f"Hipótesis: {dict(hyp_counter or {})}. user_id={user_id}. "
+        f"Investigar: ¿el best_attempt fue capturado con ingredientes "
+        f"que el aggregator no mapeó al ítem normalizado, o hubo drift "
+        f"de canonicalización? Ver `canonicalize_pavo` (P3-4) y "
+        f"`test_p2_2_post_swap_critical_divergence_alert`."
+    )
+    affected = [str(user_id)] if user_id else []
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message,
+                 metadata, affected_user_ids)
+            VALUES (%s, 'post_swap_coherence', 'warning', %s, %s,
+                    %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    severity = EXCLUDED.severity,
+                    title = EXCLUDED.title,
+                    message = EXCLUDED.message,
+                    metadata = EXCLUDED.metadata,
+                    affected_user_ids = EXCLUDED.affected_user_ids,
+                    resolved_at = NULL
+            """,
+            (
+                alert_key, title, message,
+                json.dumps(metadata, ensure_ascii=False),
+                json.dumps(affected, ensure_ascii=False),
+            ),
+        )
+        return True
+    except Exception as _ins_err:
+        logger.warning(
+            f"[P2-2/POST-SWAP-ALERT] INSERT system_alerts falló (best-effort): "
+            f"{type(_ins_err).__name__}: {_ins_err}"
+        )
+        return False
+
+
 async def _recompute_aggregates_after_swap(final_state: dict) -> None:
     """[ROLLBACK-AGGREGATE-FIX 2026-05-07] Recomputa aggregated_shopping_list_*
     desde los `days` del plan restaurado tras swap.
@@ -7617,6 +7869,110 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
         f"weekly={len(aggr_list_7)} items, biweekly={len(aggr_list_15_hybrid)}, "
         f"monthly={len(aggr_list_30_hybrid)}. Coherencia entre ciclos garantizada."
     )
+
+    # [P2-B · 2026-05-08] Re-validar coherencia recetas↔lista tras el swap.
+    # ------------------------------------------------------------------
+    # `assemble_plan_node` ya invocó `run_shopping_coherence_guard` para el
+    # plan_result actual (el "peor"); pero al hacer swap a `best_attempt` y
+    # RECOMPUTAR aggregates aquí, las divergencias del best_attempt original
+    # quedaron stale y las nuevas (sobre los aggregates frescos) jamás se
+    # registraron. Sin esta capa, el cron P3-B subestimaba la tasa real de
+    # divergencias en planes entregados (best_attempt podía tener un block
+    # silencioso que no figuraba en `_shopping_coherence_block_history`).
+    #
+    # Diseño:
+    #   - mode_override="warn" → telemetría pura, NO mutamos
+    #     `_shopping_coherence_block` (review ya pasó, no podemos rechazar).
+    #   - action_taken="post_swap_revalidation" → bucket dedicado en P3-B
+    #     cron, distingue divergencias detectadas post-review de las del
+    #     flujo normal. NO es anomalous: es observabilidad.
+    #   - swap=True flag → para queries SQL que necesiten filtrar.
+    #   - Best-effort: cualquier error → log warning, no aborta el caller.
+    try:
+        from shopping_calculator import run_shopping_coherence_guard
+        from datetime import datetime as _coh_dt, timezone as _coh_tz
+        from collections import Counter as _coh_Counter
+
+        coh_div = run_shopping_coherence_guard(
+            plan_result, mode_override="warn", multiplier=household
+        ) or []
+        if coh_div:
+            hyp_counter = _coh_Counter(
+                str(d.get("hypothesis") or "unknown") for d in coh_div
+            )
+            # [P2-2 · 2026-05-08] Critical-divergence count: subset accionable
+            # del ruido total. Define qué cuenta como "crítica" para escalar
+            # a `system_alerts` (ver `_emit_post_swap_coherence_alert` docstring).
+            #   - cap_swallowed_modifier: el aggregator perdió un ingrediente
+            #     que la receta SÍ menciona (modo de fallo más actionable).
+            #   - magnitude con |delta_pct| > 0.30: error de cantidad severo.
+            critical_cap = int(hyp_counter.get("cap_swallowed_modifier", 0))
+            critical_magnitudes = sum(
+                1 for d in coh_div
+                if d.get("magnitude")
+                and abs(float(d.get("delta_pct") or 0.0)) > 0.30
+            )
+            critical_total = critical_cap + critical_magnitudes
+
+            entry = {
+                "ts": _coh_dt.now(_coh_tz.utc).isoformat(),
+                "attempt": None,
+                "swap": True,
+                "divergence_count": len(coh_div),
+                "presence_count": sum(1 for d in coh_div if not d.get("magnitude")),
+                "magnitude_count": sum(1 for d in coh_div if d.get("magnitude")),
+                "hypotheses": dict(hyp_counter),
+                # [P2-2] Critical count separado de divergence_count para
+                # que el cron P3-B y dashboards puedan distinguir señal real
+                # de ruido benigno (typos canónicos, fantasmas leves).
+                "critical_count": critical_total,
+                # Telemetría pura: no mutamos el flag aunque mode_override
+                # fuera "block". Reflejamos el estado actual (que `assemble`
+                # pudo haber seteado pre-swap si el best_attempt lo traía).
+                "block_set": bool(plan_result.get("_shopping_coherence_block")),
+                "action_taken": "post_swap_revalidation",
+            }
+
+            # [P2-2 · 2026-05-08] Escalación inline a system_alerts cuando
+            # critical_total >= threshold. Best-effort: cualquier fallo
+            # del helper se loguea pero NO interrumpe el history append.
+            entry["alerted"] = False
+            try:
+                _alerted = _emit_post_swap_coherence_alert(
+                    user_id=_uid,
+                    plan_id=plan_result.get("id") or plan_result.get("plan_id"),
+                    divergences=coh_div,
+                    hyp_counter=dict(hyp_counter),
+                    critical_total=critical_total,
+                    household=household,
+                )
+                entry["alerted"] = bool(_alerted)
+            except Exception as _alert_err:
+                logger.warning(
+                    f"[P2-2/POST-SWAP-ALERT] no-op (best-effort): "
+                    f"{type(_alert_err).__name__}: {_alert_err}"
+                )
+
+            prior_history = plan_result.get("_shopping_coherence_block_history") or []
+            # [P2-HIST-AUDIT-4 · 2026-05-09] Helper SSOT (knob
+            # `MEALFIT_COHERENCE_BLOCK_HISTORY_CAP`) reemplaza el cap
+            # hardcoded del sitio espejo en assemble_plan_node.
+            new_history = _apply_coherence_history_cap(
+                prior_history,
+                entry,
+                plan_id_hint=(plan_result.get("id") or plan_result.get("plan_id")),
+            )
+            plan_result["_shopping_coherence_block_history"] = new_history
+            logger.info(
+                f"🔄 [ROLLBACK-COH-REVALIDATE] {len(coh_div)} divergencia(s) "
+                f"detectada(s) post-swap (critical={critical_total}, "
+                f"alerted={entry['alerted']}). history_len={len(new_history)}."
+            )
+    except Exception as _coh_err:
+        logger.warning(
+            f"[ROLLBACK-COH-REVALIDATE] no-op (best-effort): "
+            f"{type(_coh_err).__name__}: {_coh_err}"
+        )
 
 
 async def review_plan_node(state: PlanState) -> dict:
@@ -7924,30 +8280,64 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # Cualquier otro valor → `reject_minor` + warning de knob inválido.
     coherence_block = plan.get("_shopping_coherence_block") or []
     if coherence_block:
-        _block_action = (
-            os.environ.get("MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION") or "reject_minor"
-        ).strip().lower()
-        if _block_action not in ("degrade", "reject_minor", "reject_high"):
-            logging.warning(
-                f"[KNOBS] MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION={_block_action!r} "
-                f"no es válido (esperado: degrade/reject_minor/reject_high). "
-                f"Usando 'reject_minor'."
-            )
-            _block_action = "reject_minor"
+        # [P1-2 · 2026-05-08] Knob ahora pasa por `_env_str` para auto-registro
+        # en `_KNOBS_REGISTRY`. La validación de choices vive en el helper:
+        # un valor inválido → WARNING + fallback a `reject_minor`.
+        _block_action = _env_str(
+            "MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION",
+            "reject_minor",
+            choices={"degrade", "reject_minor", "reject_high"},
+        )
 
         # [P3-NEW-C · 2026-05-08] Marcar la última entry de history con la
         # acción que estamos tomando. assemble_plan_node ya creó la entry
         # con `action_taken=None`; aquí la hidratamos con el knob resuelto
         # (reject_minor/reject_high/degrade). Defensivo: si la lista está
         # vacía o el último item no es dict, no fallamos.
+        # [P2-2 · 2026-05-08] Si la hidratación falla por estado inesperado
+        # (history vacío, último item no-dict, excepción), seteamos
+        # `action_taken="hydration_error"` para que el post-mortem
+        # distinga bug de flujo normal. La invariante post-condición es:
+        # tras review_plan_node, ninguna entry tiene `action_taken=None`.
         try:
             _coh_hist = plan.get("_shopping_coherence_block_history")
             if isinstance(_coh_hist, list) and _coh_hist and isinstance(_coh_hist[-1], dict):
                 _coh_hist[-1]["action_taken"] = _block_action
+            else:
+                logging.warning(
+                    f"[COH-BLOCK/HISTORY] estado inesperado al hidratar action_taken: "
+                    f"history={type(_coh_hist).__name__} len="
+                    f"{len(_coh_hist) if isinstance(_coh_hist, list) else 'n/a'}. "
+                    f"block_action={_block_action!r} no se pudo registrar; "
+                    f"un nuevo entry de error se añade para preservar invariante."
+                )
+                # Crear/extender history con un entry de error sintético para
+                # mantener la invariante "siempre hay action_taken no-None
+                # cuando _shopping_coherence_block estuvo set".
+                if not isinstance(_coh_hist, list):
+                    _coh_hist = []
+                from datetime import datetime as _hydr_dt, timezone as _hydr_tz
+                _coh_hist.append({
+                    "ts": _hydr_dt.now(_hydr_tz.utc).isoformat(),
+                    "attempt": None,
+                    "divergence_count": len(coherence_block),
+                    "block_set": True,
+                    "action_taken": "hydration_error",
+                    "hydration_error_reason": "history_missing_or_corrupt",
+                })
+                plan["_shopping_coherence_block_history"] = _coh_hist[-20:]
         except Exception as _coh_mark_e:
-            logging.debug(
-                f"[COH-BLOCK/HISTORY] no se pudo marcar action_taken: {_coh_mark_e}"
+            logging.warning(
+                f"[COH-BLOCK/HISTORY] excepción al hidratar action_taken: {_coh_mark_e}. "
+                f"Marcando entry sintético con hydration_error."
             )
+            try:
+                _coh_hist = plan.get("_shopping_coherence_block_history") or []
+                if isinstance(_coh_hist, list) and _coh_hist and isinstance(_coh_hist[-1], dict):
+                    _coh_hist[-1]["action_taken"] = "hydration_error"
+                    _coh_hist[-1]["hydration_error_reason"] = str(_coh_mark_e)[:200]
+            except Exception:
+                pass
 
         if _block_action == "degrade":
             plan.pop("_shopping_coherence_block", None)

@@ -1,5 +1,7 @@
 import logging
+import math
 import os
+import re
 import traceback
 from datetime import datetime, timezone, timedelta
 import json
@@ -98,7 +100,14 @@ from constants import (
     get_embedding,
     cosine_similarity,
 )
-from graph_orchestrator import run_plan_pipeline
+# [P1-A · 2026-05-08] `_env_int`/`_env_float` importados aquí para que los
+# knobs `MEALFIT_*` consumidos por crons (perishable cycle, coherence alert,
+# reactivation interval, etc.) se auto-registren en `_KNOBS_REGISTRY` en lugar
+# de bypass-ear vía `os.environ.get(...)` raw. Sin esto, `/health/version` y
+# `_log_active_knobs()` no muestran overrides aplicados a estos crons → SRE
+# que cambia un knob en prod no puede confirmar que tomó efecto. Patrón
+# espejo de P1-3 (shopping_calculator) y P3-NEW-D (auto-registry).
+from graph_orchestrator import run_plan_pipeline, _env_int, _env_float
 from memory_manager import build_memory_context
 from services import _save_plan_and_track_background
 from agent import analyze_preferences_agent
@@ -695,15 +704,18 @@ def _shopping_coherence_alert_job():
     """
     from collections import Counter
 
-    min_plans = int(os.environ.get("MEALFIT_COH_ALERT_MIN_PLANS", "5"))
-    try:
-        cap_ratio_threshold = float(os.environ.get("MEALFIT_COH_ALERT_CAP_RATIO", "0.05"))
-    except (TypeError, ValueError):
-        cap_ratio_threshold = 0.05
-    try:
-        plan_fraction_threshold = float(os.environ.get("MEALFIT_COH_ALERT_PLAN_FRACTION", "0.10"))
-    except (TypeError, ValueError):
-        plan_fraction_threshold = 0.10
+    # [P1-A · 2026-05-08] `_env_int`/`_env_float` registran en `_KNOBS_REGISTRY`.
+    # `_env_float` con validator `0 < v < 1` cae al default si el operador setea
+    # un valor fuera de rango (e.g. "1.5" o "-0.1") en lugar de propagar valor
+    # absurdo a la lógica de alerta. `_env_int` ya maneja parse-failures
+    # internamente (loguea WARNING + cae al default + marca `parse_failed=True`).
+    min_plans = _env_int("MEALFIT_COH_ALERT_MIN_PLANS", 5)
+    cap_ratio_threshold = _env_float(
+        "MEALFIT_COH_ALERT_CAP_RATIO", 0.05, validator=lambda v: 0.0 < v < 1.0
+    )
+    plan_fraction_threshold = _env_float(
+        "MEALFIT_COH_ALERT_PLAN_FRACTION", 0.10, validator=lambda v: 0.0 < v < 1.0
+    )
 
     try:
         from db_core import supabase
@@ -790,6 +802,823 @@ def _shopping_coherence_alert_job():
         logger.info(summary)
 
 
+def _aggregate_coherence_block_history_metrics():
+    """[P3-B · 2026-05-08] Agrega `_shopping_coherence_block_history` (P3-NEW-C)
+    a `pipeline_metrics` cada hora.
+
+    Por qué existe:
+      P3-NEW-C ya persiste el historial de divergencias del coherence guard
+      (cap 20 entries por plan en `plan_data._shopping_coherence_block_history`),
+      pero hasta ahora ningún proceso lo agregaba a una tabla queryable. Sin
+      agregación, ver "% planes con `action_taken=reject_high` esta hora vs
+      ayer" requería scan completo de meal_plans + jq sobre cada jsonb,
+      inviable para alertas o dashboards. Este cron transpone la señal a
+      pipeline_metrics (mismo backend que `_chunk_heartbeat_lag` P3-3) para
+      que detección de drift del LLM (más rejects de lo normal post-deploy)
+      sea visible sin re-procesar planes.
+
+    Estrategia: lectura idempotente. Por cada plan en la ventana lookback
+    (default 1h), recorre history y cuenta `action_taken` por categoría:
+      - `not_applicable`: warn-only, plan OK (ruta normal P2-2 invariant).
+      - `degrade`        : rechazo suave, plan entregado con warning.
+      - `reject_minor`   : rechazo medio, regenerado.
+      - `reject_high`    : rechazo duro, escalado.
+      - `hydration_error`: fallback defensivo (P2-2 invariant: bug a vigilar).
+      - `null_block_set` : block_set=True pero action_taken=None — invariante
+                           VIOLADO (combinación reservada para errores).
+      - `none_other`     : action_taken=None y block_set=False — debería ser
+                           imposible post-P2-2; si aparece >0, regresión.
+
+    NO muta nada. Read-only sobre meal_plans → INSERT a pipeline_metrics con
+    `confidence=1.0` si todo normal, `0.0` si hubo `null_block_set` o
+    `hydration_error` (gates visuales en dashboards).
+
+    Knobs (env vars, registrados en _KNOBS_REGISTRY vía os.environ.get):
+      MEALFIT_COHERENCE_METRICS_LOOKBACK_H  (default 1) — ventana de lookback.
+      MEALFIT_COHERENCE_METRICS_INTERVAL_MIN (default 60) — frecuencia del cron
+                                                            (consumido por
+                                                            register_plan_chunk_scheduler).
+      MEALFIT_COHERENCE_METRICS_MAX_PLANS   (default 1000) — cap defensivo
+                                                             contra burst.
+    """
+    # [P1-A · 2026-05-08] `_env_float`/`_env_int` registran en `_KNOBS_REGISTRY`.
+    # Validator `v > 0 and isfinite(v)` cubre los guard-rails previos (NaN/Inf/<=0
+    # caen al default). Para max_plans usamos `_env_int` + clamp manual: `_env_int`
+    # no acepta validator (a diferencia de `_env_float`), pero el operador que
+    # setea "0" o "-1" verá `value=0`/`-1` en el registry y el clamp manual
+    # restaura el comportamiento previo (cae a 1000).
+    lookback_h = _env_float(
+        "MEALFIT_COHERENCE_METRICS_LOOKBACK_H",
+        1.0,
+        validator=lambda v: v > 0 and math.isfinite(v),
+    )
+    max_plans = _env_int("MEALFIT_COHERENCE_METRICS_MAX_PLANS", 1000)
+    if max_plans <= 0:
+        max_plans = 1000
+
+    try:
+        from db_core import supabase
+    except Exception as e:
+        logger.warning(f"[P3-B/COH-METRICS] db_core import falló: {e}")
+        return
+
+    if not supabase:
+        logger.warning("[P3-B/COH-METRICS] supabase no inicializado — skip.")
+        return
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_h)).isoformat()
+    try:
+        # [P0-OBS-1 · 2026-05-10] Filtrar por `created_at` — meal_plans NO tiene
+        # columna `updated_at` (verificado contra information_schema en prod).
+        # La versión previa pedía `updated_at` con la intención de capturar
+        # regeneraciones de planes viejos: PostgREST devolvía 400 cada hora
+        # desde el merge de P3-B (2026-05-08), así que el cron NUNCA emitió
+        # filas a `pipeline_metrics`. La columna no existe en el schema y
+        # añadirla sería un breaking change (migración + bumps en otros sites);
+        # se opta por el fix mínimo: filtrar por `created_at`, mismo patrón que
+        # `_shopping_coherence_alert_job` (línea 736).
+        #
+        # Trade-off conocido: si un plan creado hace >`lookback_h` horas se
+        # regenera y appendea history en este tick, ESTE cron lo perderá (la
+        # alerta diaria 04:00 UTC sobre 24h sí lo cubre). Si en el futuro la
+        # observabilidad exige perfecta fidelidad, opciones: (a) añadir columna
+        # `updated_at` + trigger; (b) ampliar el filtro a `created_at >= cutoff
+        # - history_window` y filtrar entries por `ts` post-fetch. Ambas son
+        # P3 separados — el fix actual desbloquea el flujo P0.
+        res = (
+            supabase.table("meal_plans")
+            .select("id,user_id,plan_data")
+            .gte("created_at", cutoff)
+            .limit(max_plans)
+            .execute()
+        )
+        plans = res.data or []
+    except Exception as e:
+        logger.warning(f"[P3-B/COH-METRICS] fetch planes falló: {e}")
+        return
+
+    counts = {
+        "not_applicable":  0,
+        "degrade":         0,
+        "reject_minor":    0,
+        "reject_high":     0,
+        "hydration_error": 0,
+        "null_block_set":  0,
+        "none_other":      0,
+        # [P2-B · 2026-05-08] Bucket dedicado para entries emitidas por
+        # `_recompute_aggregates_after_swap`. NO es anomalous — es
+        # observabilidad: cuenta planes donde el swap produjo divergencias
+        # detectadas en mode=warn post-review. Si este número es alto,
+        # investigar si el swap está degradando coherencia o si los
+        # best_attempts capturados upstream ya las tenían.
+        "post_swap_revalidation": 0,
+        # [P2-2 · 2026-05-08] Sub-bucket: post_swap_revalidation entries
+        # que sí escalaron a `system_alerts` (entry.alerted=True). Permite
+        # cross-check: el conteo aquí debe coincidir con filas
+        # alert_type='post_swap_coherence' triggered en la misma ventana.
+        # Si diverge, hay un bug en la cooldown lógica o en el INSERT.
+        "post_swap_critical_alerted": 0,
+    }
+    plans_with_history = 0
+    plans_examined = 0
+    total_entries = 0
+    parse_errors = 0
+
+    for plan_record in plans:
+        plans_examined += 1
+        plan_data = plan_record.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            try:
+                plan_data = json.loads(plan_data)
+            except Exception:
+                parse_errors += 1
+                continue
+        if not isinstance(plan_data, dict):
+            parse_errors += 1
+            continue
+
+        history = plan_data.get("_shopping_coherence_block_history")
+        if not history or not isinstance(history, list):
+            continue
+        plans_with_history += 1
+
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            total_entries += 1
+            action = entry.get("action_taken")
+            block_set = bool(entry.get("block_set"))
+            if action is None:
+                # P2-2 invariant: action_taken=None implies block_set=True
+                # AND review_plan_node didn't hidratar — bug a investigar.
+                # Si block_set=False y action=None, era pre-P2-2 (regresión).
+                if block_set:
+                    counts["null_block_set"] += 1
+                else:
+                    counts["none_other"] += 1
+            elif action in counts:
+                counts[action] += 1
+                # [P2-2 · 2026-05-08] Si la entry post_swap escaló alerta
+                # (entry.alerted=True), incrementa el sub-bucket. Defensivo
+                # ante missing key (entries pre-P2-2 no tienen el flag).
+                if action == "post_swap_revalidation" and entry.get("alerted"):
+                    counts["post_swap_critical_alerted"] += 1
+            else:
+                # action_taken con valor inesperado: log debug, no inflamos
+                # el dict (evita que un typo en review_plan_node infle stats).
+                logger.debug(
+                    f"[P3-B/COH-METRICS] action_taken inesperado: {action!r} "
+                    f"(plan_id={plan_record.get('id')})"
+                )
+
+    # Anomaly gate: si hay invariant violations, marcar el row con
+    # confidence=0.0 para que dashboards lo destaquen.
+    is_anomalous = (counts["null_block_set"] > 0
+                    or counts["hydration_error"] > 0
+                    or counts["none_other"] > 0)
+    confidence_val = 0.0 if is_anomalous else 1.0
+
+    summary = (
+        f"[P3-B/COH-METRICS lookback={lookback_h}h] "
+        f"plans_examined={plans_examined} with_history={plans_with_history} "
+        f"entries={total_entries} parse_errors={parse_errors} counts={counts}"
+    )
+    if is_anomalous:
+        logger.warning(f"🚨 {summary} (anomalous — see counts.null_block_set / hydration_error)")
+    else:
+        logger.info(summary)
+
+    # Best-effort INSERT a pipeline_metrics. Si DB cae, log + continue (el cron
+    # se ejecuta de nuevo en 60 min sin pérdida de funcionalidad — no estamos
+    # rastreando estado entre ticks, sólo agregando lo persistido).
+    try:
+        execute_sql_write(
+            "INSERT INTO pipeline_metrics (user_id, session_id, node, "
+            "duration_ms, retries, tokens_estimated, confidence, metadata) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+            (
+                None, "__cron__",
+                "_aggregate_coherence_block_history_metrics",
+                0, 0, 0,
+                confidence_val,
+                json.dumps({
+                    "lookback_h": lookback_h,
+                    "plans_examined": plans_examined,
+                    "plans_with_history": plans_with_history,
+                    "total_entries": total_entries,
+                    "parse_errors": parse_errors,
+                    "counts": counts,
+                    "anomalous": is_anomalous,
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception as _pm_err:
+        logger.debug(
+            f"[P3-B/COH-METRICS] pipeline_metrics INSERT falló (best-effort): {_pm_err!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# [P0-1-DEPLOY-LAG · 2026-05-10] Detector de deriva de despliegue.
+#
+# Problema observado en el audit 2026-05-10: el binario corriendo en EasyPanel
+# quedó rezagado vs HEAD. Síntomas: PostgreSQL emitió `column "updated_at"
+# does not exist` cada hora (cron del watchdog P3-B golpeando un schema que
+# HEAD ya había corregido en P0-OBS-1) y otros errores de columnas (`completed_at`,
+# `acquired_at`, `generation_status`) que sólo existen en código pre-P0-OBS-1.
+# Marker `_LAST_KNOWN_PFIX` y endpoint `/health/version` ya existían (P1-A
+# 2026-05-08), pero nadie los comparaba automáticamente — la verificación era
+# manual y se olvidaba. Este cron diario cierra el gap.
+# ---------------------------------------------------------------------------
+_DEPLOY_LAG_KV_KEY = "expected_last_known_pfix"
+_DEPLOY_LAG_MARKER_RE = re.compile(
+    r"^(?P<prefix>P\d+(?:-[A-Z0-9]+)+)\s+·\s+(?P<date>\d{4}-\d{2}-\d{2})$"
+)
+
+
+def _parse_pfix_marker(marker: str | None) -> tuple[str, datetime] | None:
+    """Devuelve `(prefix, date_utc_midnight)` o None si el marker no parsea.
+
+    Formato esperado: `Pn-X · YYYY-MM-DD` o `Pn-NEW-X · YYYY-MM-DD`.
+    Mismo regex que `tests/test_p3_1_last_known_pfix_freshness.py`. Si la
+    convención cambia, ambos sites deben actualizarse a la vez.
+    """
+    if not marker or not isinstance(marker, str):
+        return None
+    m = _DEPLOY_LAG_MARKER_RE.match(marker.strip())
+    if not m:
+        return None
+    try:
+        d = datetime.strptime(m.group("date"), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return (m.group("prefix"), d)
+
+
+def _alert_deploy_lag_marker_stale():
+    """[P0-1-DEPLOY-LAG · 2026-05-10] Cron diario: detecta deriva de despliegue.
+
+    Estrategia (dos señales independientes para maximizar cobertura):
+
+      Señal A — marker_stale (no depende del operador):
+        Lee `_LAST_KNOWN_PFIX` del proceso vivo (in-memory, refleja el binario
+        desplegado). Parsea su fecha. Si `now - fecha > MEALFIT_DEPLOY_LAG_ALERT_HOURS`
+        (default 168h = 7 días), emite `system_alerts` con tipo
+        `deploy_lag_marker_stale`. Atrapa "binario sin redeployar hace semanas"
+        sin requerir que nadie publique nada externamente.
+
+      Señal B — deploy_drift (cierre estricto del bug observado):
+        Lee `app_kv_store["expected_last_known_pfix"]`. Si existe y NO matchea
+        exactamente el `_LAST_KNOWN_PFIX` del proceso, emite `system_alerts`
+        con tipo `deploy_drift`. Esta señal requiere que el operador (o un
+        hook/CI futuro) publique el marker esperado tras `git push`. Mientras
+        nadie publique, esta rama queda silenciada — no hay falsos positivos.
+
+    Dedup: ON CONFLICT (alert_key) DO UPDATE refresca `triggered_at` + limpia
+    `resolved_at`. Mismo patrón que `_alert_high_synthesized_lesson_ratio`.
+
+    Knobs (env vars, registrados en _KNOBS_REGISTRY vía `_env_int`):
+      MEALFIT_DEPLOY_LAG_ALERT_HOURS         (default 168) — umbral señal A.
+      MEALFIT_DEPLOY_LAG_CHECK_INTERVAL_HOURS (default 24) — frecuencia del cron
+                                                              (consumido por
+                                                              register_plan_chunk_scheduler).
+
+    NO muta nada. NO depende de Supabase para la señal A — sigue funcionando
+    aunque DB esté caída (la señal B se salta best-effort si el SELECT falla).
+
+    Fuera de scope (P3 separado): comparación contra el SHA de GitHub. Eso
+    requeriría salida HTTP a github.com o un secreto adicional; el marker
+    es suficiente para el modo de fallo observado en producción.
+    """
+    threshold_h = _env_int("MEALFIT_DEPLOY_LAG_ALERT_HOURS", 168)
+    if threshold_h <= 0:
+        threshold_h = 168
+
+    # Lee el marker del proceso vivo. Importar `app` puede tener side effects
+    # (registra schedulers, abre pool DB), pero en este cron `app` ya está
+    # importado por el proceso huésped — el `import` aquí es un re-bind barato.
+    try:
+        from app import _LAST_KNOWN_PFIX as live_marker
+    except Exception as e:
+        logger.warning(f"[P0-1/DEPLOY-LAG] No se pudo leer _LAST_KNOWN_PFIX: {e}")
+        return
+
+    parsed = _parse_pfix_marker(live_marker)
+    if parsed is None:
+        # Marker malformado en HEAD: el test de freshness debería atrapar esto
+        # en CI, pero si llegó a producción, emitir alerta separada para que
+        # el operador lo arregle.
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                VALUES (%s, 'deploy_lag_marker_malformed', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    metadata = EXCLUDED.metadata,
+                    resolved_at = NULL
+                """,
+                (
+                    "deploy_lag_marker_malformed",
+                    "Marker `_LAST_KNOWN_PFIX` con formato inválido",
+                    f"Valor recibido: {live_marker!r}. Esperado `Pn-X · YYYY-MM-DD`.",
+                    json.dumps({"marker_raw": str(live_marker)}, ensure_ascii=False),
+                    json.dumps([]),
+                ),
+            )
+        except Exception as e:
+            logger.error(f"[P0-1/DEPLOY-LAG] No se pudo persistir alerta malformed: {e}")
+        return
+
+    _, marker_date = parsed
+    now_utc = datetime.now(timezone.utc)
+    age_hours = (now_utc - marker_date).total_seconds() / 3600.0
+
+    # ── Señal A: marker stale por antigüedad ────────────────────────────────
+    if age_hours > threshold_h:
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                VALUES (%s, 'deploy_lag_marker_stale', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    metadata = EXCLUDED.metadata,
+                    resolved_at = NULL
+                """,
+                (
+                    "deploy_lag_marker_stale",
+                    "Deploy rezagado: `_LAST_KNOWN_PFIX` antiguo",
+                    (
+                        f"El binario en producción reporta marker `{live_marker}`, "
+                        f"con fecha {marker_date.date().isoformat()} "
+                        f"({age_hours:.1f}h ≥ umbral {threshold_h}h). "
+                        f"Verificar que `git push` + redeploy en EasyPanel ocurrieron "
+                        f"tras el último cierre de P-fix."
+                    ),
+                    json.dumps({
+                        "live_marker": live_marker,
+                        "marker_date": marker_date.date().isoformat(),
+                        "age_hours": round(age_hours, 2),
+                        "threshold_hours": threshold_h,
+                    }, ensure_ascii=False),
+                    json.dumps([]),
+                ),
+            )
+            logger.warning(
+                f"[P0-1/DEPLOY-LAG] marker_stale: {live_marker!r} edad={age_hours:.1f}h "
+                f"umbral={threshold_h}h"
+            )
+        except Exception as e:
+            logger.error(f"[P0-1/DEPLOY-LAG] No se pudo persistir alerta stale: {e}")
+
+    # ── Señal B: deploy_drift contra valor publicado en app_kv_store ────────
+    # Si nadie publicó nunca el `expected_last_known_pfix`, este SELECT devuelve
+    # None y la rama queda silenciada (no falsos positivos). Cuando el operador
+    # publica el marker esperado tras un push, esta señal se activa.
+    expected_marker = None
+    try:
+        row = execute_sql_query(
+            "SELECT value FROM app_kv_store WHERE key = %s",
+            (_DEPLOY_LAG_KV_KEY,),
+            fetch_one=True,
+        )
+        if row:
+            raw = row.get("value") if isinstance(row, dict) else None
+            # `value` es jsonb. Soporta tanto string puro `"Pn-X · ..."` como
+            # objeto `{"marker": "Pn-X · ..."}` para flexibilidad de quien
+            # publica.
+            if isinstance(raw, str):
+                expected_marker = raw
+            elif isinstance(raw, dict):
+                cand = raw.get("marker")
+                if isinstance(cand, str):
+                    expected_marker = cand
+    except Exception as e:
+        logger.debug(f"[P0-1/DEPLOY-LAG] SELECT app_kv_store falló (best-effort): {e}")
+        return
+
+    if expected_marker and expected_marker.strip() != live_marker.strip():
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                VALUES (%s, 'deploy_drift', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    metadata = EXCLUDED.metadata,
+                    resolved_at = NULL
+                """,
+                (
+                    "deploy_lag_drift_vs_expected",
+                    "Deploy rezagado: marker no coincide con valor publicado",
+                    (
+                        f"Producción reporta `{live_marker}` pero "
+                        f"`app_kv_store.{_DEPLOY_LAG_KV_KEY}` publica `{expected_marker}`. "
+                        f"Forzar pull + restart en EasyPanel."
+                    ),
+                    json.dumps({
+                        "live_marker": live_marker,
+                        "expected_marker": expected_marker,
+                        "kv_key": _DEPLOY_LAG_KV_KEY,
+                    }, ensure_ascii=False),
+                    json.dumps([]),
+                ),
+            )
+            logger.error(
+                f"[P0-1/DEPLOY-LAG] deploy_drift: live={live_marker!r} "
+                f"expected={expected_marker!r}"
+            )
+        except Exception as e:
+            logger.error(f"[P0-1/DEPLOY-LAG] No se pudo persistir alerta drift: {e}")
+
+
+# ---------------------------------------------------------------------------
+# [P0-3-COHERENCE-WATCHDOG · 2026-05-10] Liveness check del watchdog horario
+# del invariante coherencia recetas↔lista.
+#
+# Problema observado (audit 2026-05-10): `pipeline_metrics` registró sólo
+# 1 fila de `_aggregate_coherence_block_history_metrics` en 7 días. El cron
+# se invocaba (estaba registrado en register_plan_chunk_scheduler), pero su
+# query interna golpeaba `meal_plans.updated_at` (columna inexistente) →
+# PostgREST devolvía 400 silenciosamente y la función retornaba sin INSERT.
+# El watchdog del invariante P2-2 (action_taken jamás None) llevaba 7 días
+# sin observar nada y nadie sabía. Cierre P0-OBS-1 arregló el filtro a
+# `created_at`; este nuevo cron detecta CUALQUIER causa futura que produzca
+# silencio prolongado del watchdog (errores nuevos en agregación, drift
+# de schema en pipeline_metrics, network blip que persista, etc.).
+#
+# Por qué un cron y no solo un test: los tests pasan en CI con DB stub.
+# El modo de fallo es runtime — sólo se detecta corriendo en prod contra
+# datos reales. El cron es la red de seguridad post-merge.
+# ---------------------------------------------------------------------------
+def _alert_coherence_watchdog_silent():
+    """[P0-3 · 2026-05-10] Verifica que el watchdog horario de coherencia
+    haya emitido al menos una fila a `pipeline_metrics` en la última ventana.
+
+    Si el silencio supera `MEALFIT_COHERENCE_WATCHDOG_SILENT_THRESHOLD_H`
+    (default 2h ≈ 2 ciclos perdidos), emite `system_alerts` con
+    `alert_type='coherence_watchdog_silent'` (severity=warning).
+    Idempotente vía UPSERT.
+
+    Knobs:
+      MEALFIT_COHERENCE_WATCHDOG_SILENT_THRESHOLD_H  (default 2)
+      MEALFIT_COHERENCE_WATCHDOG_LIVENESS_INTERVAL_MIN (default 60) —
+        frecuencia (consumido por register_plan_chunk_scheduler).
+
+    NO depende de Supabase REST: usa `execute_sql_query` (DB directa) para
+    que un blip transitorio en PostgREST no produzca falsa alerta.
+
+    Limitación intencional: si el scheduler entero está caído (P0-2
+    cascade), este cron tampoco corre. Cubre el modo "scheduler vivo,
+    cron específico mudo" — el caso del audit 2026-05-10.
+    """
+    threshold_h = _env_int("MEALFIT_COHERENCE_WATCHDOG_SILENT_THRESHOLD_H", 2)
+    if threshold_h < 1:
+        threshold_h = 2
+
+    try:
+        row = execute_sql_query(
+            """
+            SELECT 1
+              FROM pipeline_metrics
+             WHERE node = '_aggregate_coherence_block_history_metrics'
+               AND created_at > NOW() - make_interval(hours => %s)
+             LIMIT 1
+            """,
+            (int(threshold_h),),
+            fetch_one=True,
+        )
+    except Exception as e:
+        logger.warning(f"[P0-3/COH-LIVENESS] SELECT pipeline_metrics falló: {e}")
+        return
+
+    if row:
+        # Hubo al menos una emisión en la ventana — todo OK.
+        # Resolver alerta previa si existía (cierre del incidente).
+        try:
+            execute_sql_write(
+                """
+                UPDATE system_alerts
+                   SET resolved_at = NOW()
+                 WHERE alert_key = %s
+                   AND resolved_at IS NULL
+                """,
+                ("coherence_watchdog_silent",),
+            )
+        except Exception:
+            pass
+        return
+
+    # Sin emisiones en la ventana → alerta deduplicada.
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'coherence_watchdog_silent', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message,
+                resolved_at = NULL
+            """,
+            (
+                "coherence_watchdog_silent",
+                "Watchdog de coherencia recetas↔lista MUDO",
+                (
+                    f"`pipeline_metrics` no recibió ninguna fila de "
+                    f"`_aggregate_coherence_block_history_metrics` en las últimas "
+                    f"{threshold_h}h. Esperado: ≥1/h. Causas frecuentes: drift de "
+                    f"schema (e.g. columna renombrada en `meal_plans`), error nuevo "
+                    f"en la agregación, scheduler vivo pero job individual "
+                    f"crasheado en silencio. Verificar logs Postgres + "
+                    f"/admin/cron-health (P0-2)."
+                ),
+                json.dumps({
+                    "threshold_hours": threshold_h,
+                    "expected_node": "_aggregate_coherence_block_history_metrics",
+                }, ensure_ascii=False),
+                json.dumps([]),
+            ),
+        )
+        logger.warning(
+            f"[P0-3/COH-LIVENESS] watchdog mudo: 0 filas en últimas {threshold_h}h"
+        )
+    except Exception as e:
+        logger.error(f"[P0-3/COH-LIVENESS] No se pudo persistir alerta: {e}")
+
+
+# ---------------------------------------------------------------------------
+# [P0-2-SCHEDULER-CASCADE · 2026-05-10] Watchdog de saturación del scheduler.
+#
+# Problema observado (audit 2026-05-10): `system_alerts` registró 25+ filas
+# `scheduler_missed_*` en últimas 24h con bursts simultáneos. El listener
+# (`app._scheduler_alert_listener`) emite UN alert por job_id missed, pero
+# nadie escala cuando >N jobs distintos se pierden en una ventana corta —
+# exactamente la firma de "worker reiniciado / pool saturado / DB blip".
+#
+# Estrategia: cron periódico cuenta `alert_key` distintos comenzando con
+# `scheduler_missed_` cuyo `triggered_at` cae en la ventana lookback.
+# Si supera el umbral, emite UNA alerta crítica `scheduler_cascade_missed`
+# (severity=critical) que el operador puede pagear. Idempotente vía UPSERT.
+#
+# Limitación intencional: si el scheduler entero está caído, ESTE cron
+# tampoco corre. Se diseñó para detectar la cascada DESPUÉS de que el
+# scheduler vuelva a la vida (post-restart procesa los MISSED pendientes,
+# este cron los agrega y notifica). NO es un detector live del scheduler;
+# para eso existe el healthcheck externo del orquestador (uvicorn/k8s).
+# ---------------------------------------------------------------------------
+def _alert_scheduler_cascade_missed():
+    """[P0-2 · 2026-05-10] Detecta cascadas de MISSED en el scheduler.
+
+    Lee `system_alerts` últimas N horas (default 1h) y cuenta alert_keys
+    distintas que comienzan con `scheduler_missed_`. Si el conteo supera
+    el umbral (default 3 jobs distintos), emite alerta crítica.
+
+    Knobs:
+      MEALFIT_SCHEDULER_CASCADE_LOOKBACK_HOURS  (default 1)
+      MEALFIT_SCHEDULER_CASCADE_THRESHOLD       (default 3)
+      MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN    (default 30) — frecuencia.
+
+    NO depende del listener — lee la tabla persistida que el listener ya
+    escribe. Si el listener falla por algún motivo, este watchdog también
+    se queda mudo (acepta el trade-off; el listener es defensivo y
+    cualquier excepción suya queda en logs).
+    """
+    lookback_h = _env_int("MEALFIT_SCHEDULER_CASCADE_LOOKBACK_HOURS", 1)
+    if lookback_h < 1:
+        lookback_h = 1
+    threshold = _env_int("MEALFIT_SCHEDULER_CASCADE_THRESHOLD", 3)
+    if threshold < 2:
+        threshold = 2
+
+    # Query: alert_keys distintas con prefix `scheduler_missed_` en ventana.
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT alert_key, metadata, triggered_at
+              FROM system_alerts
+             WHERE alert_type = 'scheduler'
+               AND alert_key LIKE 'scheduler_missed_%%'
+               AND triggered_at > NOW() - make_interval(hours => %s)
+             ORDER BY triggered_at DESC
+             LIMIT 500
+            """,
+            (int(lookback_h),),
+            fetch_one=False,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P0-2/SCHED-CASCADE] SELECT system_alerts falló: {e}")
+        return
+
+    if not rows:
+        return
+
+    # Cada job_id distinto cuenta como un MISSED de cascada. Extraemos del
+    # `metadata.job_id` (preferido) o del propio `alert_key` (fallback).
+    distinct_jobs = set()
+    job_id_counts: dict[str, int] = {}
+    for row in rows:
+        meta = row.get("metadata") if isinstance(row, dict) else None
+        job_id = None
+        if isinstance(meta, dict):
+            job_id = meta.get("job_id")
+        if not job_id:
+            ak = row.get("alert_key") if isinstance(row, dict) else None
+            if isinstance(ak, str) and ak.startswith("scheduler_missed_"):
+                job_id = ak[len("scheduler_missed_"):] or None
+        if not job_id:
+            continue
+        distinct_jobs.add(job_id)
+        job_id_counts[job_id] = job_id_counts.get(job_id, 0) + 1
+
+    if len(distinct_jobs) < threshold:
+        return
+
+    # Cascada detectada: emite alerta crítica deduplicada.
+    top_jobs = sorted(job_id_counts.items(), key=lambda kv: -kv[1])[:10]
+    summary = (
+        f"{len(distinct_jobs)} jobs distintos MISSED en últimas {lookback_h}h "
+        f"(umbral={threshold}). Top: "
+        + ", ".join(f"{j}×{c}" for j, c in top_jobs)
+    )
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'scheduler_cascade', 'critical', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message,
+                resolved_at = NULL
+            """,
+            (
+                "scheduler_cascade_missed",
+                "Cascada de MISSED en APScheduler",
+                (
+                    f"Saturación del scheduler: {summary}. "
+                    f"Posibles causas: worker reiniciado (cold-start procesa MISSED "
+                    f"pendientes), pool DB saturado bloqueando jobs >grace_time, "
+                    f"o burst de jobs alineados en la misma ventana. Verificar "
+                    f"logs del orquestador (EasyPanel/k8s) para reinicios recientes."
+                ),
+                json.dumps({
+                    "lookback_hours": lookback_h,
+                    "threshold": threshold,
+                    "distinct_jobs_missed": len(distinct_jobs),
+                    "top_jobs_by_count": dict(top_jobs),
+                    "total_missed_events_in_window": sum(job_id_counts.values()),
+                }, ensure_ascii=False),
+                json.dumps([]),
+            ),
+        )
+        logger.error(
+            f"🚨 [P0-2/SCHED-CASCADE] {summary}"
+        )
+    except Exception as e:
+        logger.error(f"[P0-2/SCHED-CASCADE] No se pudo persistir alerta: {e}")
+
+
+def _gc_orphan_chunk_telemetry():
+    """[P2-HIST-5 · 2026-05-09] Garbage-collect rows huérfanas de
+    `chunk_lesson_telemetry` y `chunk_deferrals` con `meal_plan_id IS NULL`
+    más antiguas que la ventana de retención.
+
+    Por qué existe:
+      P0-HIST-3 añadió FK con `ON DELETE SET NULL` en estas dos tablas
+      (migración `p0_hist_3_telemetry_orphan_fk.sql`). Cuando el usuario
+      borra un plan via `DELETE /api/plans/{plan_id}`, las filas de
+      telemetría asociadas pierden su `meal_plan_id` (preservando el
+      contenido analítico) pero quedan acumulándose. A 365 días sin GC,
+      una instancia con 100 usuarios activos podría tener 50K+ rows
+      huérfanas que `_aggregate_coherence_block_history_metrics` y otros
+      consumers escanean innecesariamente. Este cron las purga en
+      ventanas controladas.
+
+    Política:
+      - Solo borra rows con `meal_plan_id IS NULL` (post-SET-NULL).
+        Rows con plan_id válido NO se tocan independiente de antigüedad
+        — son telemetría activa.
+      - Solo rows más viejas que `MEALFIT_ORPHAN_TELEMETRY_RETENTION_DAYS`
+        (default 90). Mantiene un buffer post-mortem por si el usuario
+        decide reactivar un plan cercanamente.
+      - Knob kill-switch `MEALFIT_ORPHAN_TELEMETRY_GC_ENABLED` (default
+        true). Si se desactiva, el cron no toca DB pero sigue
+        registrado (re-habilitación sin redeploy).
+      - Cap defensivo `MEALFIT_ORPHAN_TELEMETRY_GC_MAX_ROWS` (default
+        50000) para evitar lock contention si el cron corre por
+        primera vez tras meses sin ejecutar.
+
+    No usa SET NULL CASCADE adicional — eso es función del schema.
+    Este cron es complemento: el FK previene **propagación** del
+    delete, este cron limpia el **acumulado** post-eliminación.
+
+    Read-write idempotente: ejecutar dos veces seguidas no rompe nada.
+    """
+    from knobs import _env_bool
+
+    enabled = _env_bool("MEALFIT_ORPHAN_TELEMETRY_GC_ENABLED", True)
+    if not enabled:
+        logger.info(
+            "[P2-HIST-5/ORPHAN-GC] knob MEALFIT_ORPHAN_TELEMETRY_GC_ENABLED=false — skip."
+        )
+        return
+
+    retention_days = _env_int("MEALFIT_ORPHAN_TELEMETRY_RETENTION_DAYS", 90)
+    if retention_days <= 0:
+        # `retention_days <= 0` borraría TODO row huérfano sin buffer
+        # post-mortem. Tratar como bug del operador: log + skip (en
+        # lugar de hacer destrucción al toque).
+        logger.warning(
+            f"[P2-HIST-5/ORPHAN-GC] retention_days={retention_days} <= 0 — skip "
+            "(set MEALFIT_ORPHAN_TELEMETRY_RETENTION_DAYS >= 1 para activar)."
+        )
+        return
+
+    max_rows = _env_int("MEALFIT_ORPHAN_TELEMETRY_GC_MAX_ROWS", 50000)
+    if max_rows <= 0:
+        max_rows = 50000
+
+    try:
+        from db_core import execute_sql_write
+    except Exception as e:
+        logger.warning(f"[P2-HIST-5/ORPHAN-GC] db_core import falló: {e}")
+        return
+
+    counts = {"chunk_lesson_telemetry": 0, "chunk_deferrals": 0}
+    for table_name in counts.keys():
+        try:
+            # `id IN (SELECT id ... LIMIT %s)` cap en plain DELETE.
+            # Evita lock prolongado de toda la tabla si el primer run
+            # tiene >max_rows orphan candidates. Próximas iteraciones
+            # del cron limpian el resto.
+            sql = (
+                f"DELETE FROM {table_name} "
+                f"WHERE id IN ( "
+                f"  SELECT id FROM {table_name} "
+                f"  WHERE meal_plan_id IS NULL "
+                f"    AND created_at < NOW() - make_interval(days => %s) "
+                f"  LIMIT %s "
+                f") "
+                f"RETURNING id"
+            )
+            res = execute_sql_write(sql, (retention_days, max_rows), returning=True)
+            counts[table_name] = len(res or [])
+        except Exception as e:
+            logger.warning(
+                f"[P2-HIST-5/ORPHAN-GC] DELETE en {table_name} falló (best-effort): {e}"
+            )
+            # No abortar — la otra tabla puede sí limpiarse.
+            continue
+
+    total = counts["chunk_lesson_telemetry"] + counts["chunk_deferrals"]
+    if total > 0:
+        logger.info(
+            f"[P2-HIST-5/ORPHAN-GC] purgadas {total} filas huérfanas: "
+            f"chunk_lesson_telemetry={counts['chunk_lesson_telemetry']}, "
+            f"chunk_deferrals={counts['chunk_deferrals']} "
+            f"(retention={retention_days}d, cap={max_rows})."
+        )
+    else:
+        logger.info(
+            f"[P2-HIST-5/ORPHAN-GC] no hay orphans más viejos que {retention_days}d. Skip silencioso."
+        )
+
+    # Best-effort emit a pipeline_metrics (mismo patrón que P3-B):
+    # observabilidad sin bloquear el cron si la inserción falla.
+    try:
+        from db_core import execute_sql_write as _gc_write
+        import json as _gc_json
+        _gc_write(
+            "INSERT INTO pipeline_metrics (user_id, session_id, node, "
+            "duration_ms, retries, tokens_estimated, confidence, metadata) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+            (
+                None, "__cron__",
+                "_gc_orphan_chunk_telemetry",
+                0, 0, 0,
+                1.0,
+                _gc_json.dumps({
+                    "retention_days": retention_days,
+                    "max_rows_per_run": max_rows,
+                    "deleted_chunk_lesson_telemetry": counts["chunk_lesson_telemetry"],
+                    "deleted_chunk_deferrals": counts["chunk_deferrals"],
+                    "total_deleted": total,
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception as _pm_err:
+        logger.debug(
+            f"[P2-HIST-5/ORPHAN-GC] pipeline_metrics INSERT falló (best-effort): {_pm_err!r}"
+        )
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -835,9 +1664,12 @@ def register_plan_chunk_scheduler(scheduler) -> None:
     # la lista oculta indefinidamente y el usuario no recibe el recordatorio
     # semanal de re-comprar perecederos. La frecuencia (60 min) es suficiente
     # porque el evento "expiró el ciclo" no es time-sensitive al minuto.
-    _reactivate_interval_min = int(
-        os.environ.get("MEALFIT_REACTIVATE_SHOPPING_LIST_INTERVAL_MIN", "60")
-    )
+    # [P1-A · 2026-05-08] `_env_int` registra en `_KNOBS_REGISTRY`. Clamp [15, 1440]
+    # se mantiene en el consumer (registry guarda el valor parseado del env, el
+    # clamp es local al uso). Operador que setea "5" verá raw="5" + value=5 en
+    # registry pero el cron correrá cada 15 min — no hay engaño porque
+    # `_log_active_knobs` NO afirma que el valor de uso == registry value.
+    _reactivate_interval_min = _env_int("MEALFIT_REACTIVATE_SHOPPING_LIST_INTERVAL_MIN", 60)
     _reactivate_interval_min = max(15, min(_reactivate_interval_min, 1440))
     if not scheduler.get_job("reactivate_shopping_list_after_perishable_cycle"):
         scheduler.add_job(
@@ -849,10 +1681,15 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             coalesce=True,
             replace_existing=True,
         )
+        # [P1-A · 2026-05-08] El log de startup lee `_env_int` para que el
+        # mismo valor que termina en `_KNOBS_REGISTRY` se muestre aquí —
+        # antes la línea de log y el cron consumían valores potencialmente
+        # divergentes (env reload entre lecturas) sin forma de cruzar la
+        # información en `/health/version`.
         logger.info(
             f"⏰ [VISIÓN-C/RIESGO-3] Cron de reactivación de shopping list "
             f"registrado cada {_reactivate_interval_min} min "
-            f"(cycle_days={os.environ.get('MEALFIT_PERISHABLE_CYCLE_DAYS', '7')})."
+            f"(cycle_days={_env_int('MEALFIT_PERISHABLE_CYCLE_DAYS', 7)})."
         )
 
     # [P2-3] Job dedicado: limpieza de chunks huérfanos (meal_plan_id ya no existe).
@@ -977,6 +1814,27 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         )
         logger.info(
             f"⏰ [P0-A] Cron _alert_high_synthesized_lesson_ratio registrado cada {_P0A_INT} min."
+        )
+
+    # [P2-6 · 2026-05-08] Alerta proactiva sobre fallback no-atómico del pool.
+    # Cubre el hueco "fallback_count > 0 invisible hasta polling manual del
+    # endpoint /api/system/atomic-pool-health". Cron lee el snapshot in-memory
+    # de db_profiles cada N min y persiste alert dedupe en system_alerts si
+    # hay actividad reciente (last_at dentro de window). Self-healing sweep:
+    # si el último fallback es viejo, marca la alerta como resolved.
+    if not scheduler.get_job("alert_atomic_pool_fallback"):
+        from constants import POOL_FALLBACK_ALERT_INTERVAL_MINUTES as _P26_INT
+        scheduler.add_job(
+            _alert_atomic_pool_fallback,
+            "interval",
+            minutes=_P26_INT,
+            id="alert_atomic_pool_fallback",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-6/POOL-FALLBACK-ALERT] Cron _alert_atomic_pool_fallback registrado cada {_P26_INT} min."
         )
 
     # [P1-2/DEAD-LETTER-ALERT] Alerta proactiva sobre chunks dead-lettered acumulados.
@@ -1204,6 +2062,33 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             "⏰ [P1-shop-coh-1] Cron _shopping_coherence_alert_job registrado diario 04:00 UTC."
         )
 
+    # [P3-B · 2026-05-08] Cron horario que agrega `_shopping_coherence_block_history`
+    # (P3-NEW-C) a pipeline_metrics. Complementa `shopping_coherence_alert` (que
+    # re-evalúa coherencia) con visibilidad temporal de `action_taken` por
+    # categoría (degrade/reject_minor/reject_high/hydration_error). Ver docstring
+    # de `_aggregate_coherence_block_history_metrics` para detalles.
+    if not scheduler.get_job("aggregate_coherence_block_history_metrics"):
+        # [P1-A · 2026-05-08] `_env_int` registra + maneja parse-failures.
+        # Clamp `< 5` se mantiene local: APScheduler no acepta intervals
+        # menores a 1 min y un cron que corre cada 1-4 min sobre meal_plans
+        # generaría carga DB excesiva sin valor analítico.
+        _COH_METRICS_INT = _env_int("MEALFIT_COHERENCE_METRICS_INTERVAL_MIN", 60)
+        if _COH_METRICS_INT < 5:
+            _COH_METRICS_INT = 60
+        scheduler.add_job(
+            _aggregate_coherence_block_history_metrics,
+            "interval",
+            minutes=_COH_METRICS_INT,
+            id="aggregate_coherence_block_history_metrics",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P3-B/COH-METRICS] Cron _aggregate_coherence_block_history_metrics "
+            f"registrado cada {_COH_METRICS_INT} min."
+        )
+
     # [P2-NEW-C · 2026-05-08] Rolling refill cron consolidado en el SSOT
     # `register_plan_chunk_scheduler`. Antes vivía aislado en app.py (ver
     # memoria P3-A 2026-05-07): el cron operacional sí existía pero ningún
@@ -1230,6 +2115,104 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         )
         logger.info(
             f"⏰ [P2-δ/BG-REFILL] Cron trigger_background_rolling_refill registrado cada {_BG_RR_HOURS}h."
+        )
+
+    # [P2-HIST-5 · 2026-05-09] GC mensual de telemetría orphan
+    # post-P0-HIST-3. Default cada 720h (≈30 días) para no agregar
+    # carga DB significativa: la mayoría de instalaciones tendrán <1K
+    # rows orphan por mes. Knob `MEALFIT_ORPHAN_TELEMETRY_GC_INTERVAL_HOURS`
+    # permite acelerar (e.g., 168h=semanal) o desactivar combinado con
+    # MEALFIT_ORPHAN_TELEMETRY_GC_ENABLED=false.
+    if not scheduler.get_job("gc_orphan_chunk_telemetry"):
+        _ORPHAN_GC_INT = _env_int("MEALFIT_ORPHAN_TELEMETRY_GC_INTERVAL_HOURS", 720)
+        if _ORPHAN_GC_INT < 1:
+            # Clamp local: APScheduler no acepta intervals <1h aquí;
+            # 0 o negativo es bug del operador, fallback al default.
+            _ORPHAN_GC_INT = 720
+        scheduler.add_job(
+            _gc_orphan_chunk_telemetry,
+            "interval",
+            hours=_ORPHAN_GC_INT,
+            id="gc_orphan_chunk_telemetry",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-HIST-5/ORPHAN-GC] Cron _gc_orphan_chunk_telemetry "
+            f"registrado cada {_ORPHAN_GC_INT}h."
+        )
+
+    # [P0-3-COHERENCE-WATCHDOG · 2026-05-10] Liveness check del watchdog P3-B.
+    # Frecuencia 60 min: el watchdog horario debe emitir al menos 1 fila/h a
+    # pipeline_metrics. Si pasan 2h sin emisiones (default threshold), este
+    # cron alerta. Cubre el modo de fallo del audit 2026-05-10 (cron vivo
+    # pero query rota → 7 días sin observación del invariante P2-2).
+    if not scheduler.get_job("alert_coherence_watchdog_silent"):
+        _COH_LIVENESS_INT = _env_int("MEALFIT_COHERENCE_WATCHDOG_LIVENESS_INTERVAL_MIN", 60)
+        if _COH_LIVENESS_INT < 15:
+            _COH_LIVENESS_INT = 60
+        scheduler.add_job(
+            _alert_coherence_watchdog_silent,
+            "interval",
+            minutes=_COH_LIVENESS_INT,
+            id="alert_coherence_watchdog_silent",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P0-3/COH-LIVENESS] Cron _alert_coherence_watchdog_silent "
+            f"registrado cada {_COH_LIVENESS_INT} min "
+            f"(threshold={_env_int('MEALFIT_COHERENCE_WATCHDOG_SILENT_THRESHOLD_H', 2)}h)."
+        )
+
+    # [P0-2-SCHEDULER-CASCADE · 2026-05-10] Watchdog: detecta cascada de MISSED.
+    # Si >=N jobs distintos perdieron su slot en la última hora, emite alerta
+    # crítica deduplicada. Frecuencia 30 min (ajustable) — el evento "cascade"
+    # es raro, no necesita polling agresivo.
+    if not scheduler.get_job("alert_scheduler_cascade_missed"):
+        _SCHED_CASCADE_INT = _env_int("MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN", 30)
+        if _SCHED_CASCADE_INT < 5:
+            # Sub-5min agrava la propia cascada (otro job más en el burst).
+            _SCHED_CASCADE_INT = 30
+        scheduler.add_job(
+            _alert_scheduler_cascade_missed,
+            "interval",
+            minutes=_SCHED_CASCADE_INT,
+            id="alert_scheduler_cascade_missed",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P0-2/SCHED-CASCADE] Cron _alert_scheduler_cascade_missed "
+            f"registrado cada {_SCHED_CASCADE_INT} min "
+            f"(threshold={_env_int('MEALFIT_SCHEDULER_CASCADE_THRESHOLD', 3)}, "
+            f"lookback={_env_int('MEALFIT_SCHEDULER_CASCADE_LOOKBACK_HOURS', 1)}h)."
+        )
+
+    # [P0-1-DEPLOY-LAG · 2026-05-10] Cron diario: detecta deriva de despliegue.
+    # Cierra el bug observado en el audit 2026-05-10 (binario en EasyPanel rezagado
+    # vs HEAD, fixes mergeados sin ejecutar). Frecuencia mínima 1h para evitar burst
+    # contra app_kv_store; default 24h porque el evento "deploy" es raro.
+    if not scheduler.get_job("alert_deploy_lag_marker_stale"):
+        _DEPLOY_LAG_INT_H = _env_int("MEALFIT_DEPLOY_LAG_CHECK_INTERVAL_HOURS", 24)
+        if _DEPLOY_LAG_INT_H < 1:
+            _DEPLOY_LAG_INT_H = 24
+        scheduler.add_job(
+            _alert_deploy_lag_marker_stale,
+            "interval",
+            hours=_DEPLOY_LAG_INT_H,
+            id="alert_deploy_lag_marker_stale",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P0-1/DEPLOY-LAG] Cron _alert_deploy_lag_marker_stale registrado "
+            f"cada {_DEPLOY_LAG_INT_H}h "
+            f"(threshold={_env_int('MEALFIT_DEPLOY_LAG_ALERT_HOURS', 168)}h)."
         )
 
 
@@ -5580,8 +6563,28 @@ def _pause_chunk_for_stale_inventory(
             )
 
 
-def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list, reason: str = None):
-    """Pauses chunk generation when the live pantry is too empty to preserve the zero-waste promise."""
+def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_number: int, fresh_inventory: list, reason: str = "empty_pantry"):
+    """Pauses chunk generation when the live pantry is too empty to preserve the zero-waste promise.
+
+    [P0-DASH-CHIP-HONESTY · 2026-05-09] Tooltip-anchor:
+    P0-DASH-CHIP-HONESTY-PAUSE | test_p0_dash_chip_honesty
+
+    Cambio del default `reason=None` → `reason="empty_pantry"` y persistencia
+    incondicional del key `_pantry_pause_reason` en el snapshot. Antes, callers
+    que invocaban sin reason (e.g. `cron_tasks.py:17669` al detectar pantry
+    insuficiente en el worker pickup) dejaban el snapshot con
+    `_pantry_pause_*` keys (started_at, reminders, ttl, reminder_hours) pero
+    SIN `_pantry_pause_reason` → `/blocked_reasons` (plans.py:3713-3728)
+    caía a `_unknown` → el usuario veía "Bloqueo sin clasificar" o, peor,
+    el chip "en camino" del Dashboard porque el frontend solo leía
+    `plan_data.generation_status` sin consultar la queue. Reproducido en
+    producción 2026-05-09 con un chunk rolling_refill week=1 paused 14.5h
+    sin reason en el snapshot.
+
+    El default `"empty_pantry"` matchea exactamente el `reason_to_text`
+    canónico (plans.py:3580) — copy "Tu nevera está vacía" + CTA
+    "Actualizar nevera". Mejor copy honesto que `_unknown` genérico.
+    """
     pause_snapshot = execute_sql_query(
         "SELECT pipeline_snapshot FROM plan_chunk_queue WHERE id = %s",
         (task_id,),
@@ -5593,12 +6596,13 @@ def _pause_chunk_for_pantry_refresh(task_id: str | int, user_id: str, week_numbe
 
     pause_snapshot.setdefault("_pantry_pause_started_at", datetime.now(timezone.utc).isoformat())
     pause_snapshot.setdefault("_pantry_pause_reminders", 0)
-    if reason:
-        pause_snapshot["_pantry_pause_reason"] = reason
-        if reason == "persistent_drift":
-            pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_STALE_SNAPSHOT_PAUSE_TTL_HOURS
-        else:
-            pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_PANTRY_EMPTY_TTL_HOURS
+    # [P0-DASH-CHIP-HONESTY · 2026-05-09] Reason siempre presente. La
+    # rama `else` previa que omitía la key fue la causa del bug del
+    # snapshot vacío. El TTL diferencia `persistent_drift` (más largo)
+    # del resto.
+    pause_snapshot["_pantry_pause_reason"] = reason
+    if reason == "persistent_drift":
+        pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_STALE_SNAPSHOT_PAUSE_TTL_HOURS
     else:
         pause_snapshot["_pantry_pause_ttl_hours"] = CHUNK_PANTRY_EMPTY_TTL_HOURS
     pause_snapshot["_pantry_pause_reminder_hours"] = CHUNK_PANTRY_EMPTY_REMINDER_HOURS
@@ -6404,12 +7408,20 @@ def _recover_pantry_paused_chunks() -> None:
         # [P1-3] meal_plan_id incluido en el SELECT para que las activaciones de
         # flexible_mode puedan persistir el evento en plan_data._mode_history y el
         # frontend pueda mostrar el badge "Plan en modo flexible".
+        # [P1-AUDIT-HIST-5 · 2026-05-09] Excluimos rows con `meal_plan_id IS NULL`.
+        # `plan_chunk_queue.meal_plan_id` es ON DELETE CASCADE, así que en flujos
+        # normales nunca debería ser NULL — pero un INSERT manual mal formado o
+        # un row legacy sin la columna popula puede pasarse colado. Sin meal_plan_id
+        # no podemos rehidratar plan_data (`anchor_recovery`, `flexible_mode`
+        # persistence, mode_history), así que el row sería un consumidor de
+        # ciclos LLM sin output útil. Saltamos en el origen.
         paused_rows = execute_sql_query(
             """
             SELECT id, user_id, meal_plan_id, week_number, pipeline_snapshot,
                    EXTRACT(EPOCH FROM (NOW() - updated_at))::int AS paused_seconds
             FROM plan_chunk_queue
             WHERE status = 'pending_user_action'
+              AND meal_plan_id IS NOT NULL
             ORDER BY updated_at ASC
             LIMIT 50
             """,
@@ -11267,9 +12279,19 @@ def _detect_chronic_deferrals() -> None:
         CHUNK_CHRONIC_DEFERRAL_NOTIFY_COOLDOWN_HOURS,
         CHUNK_STALE_PANTRY_DEEPLINK,
     )
-    _ensure_quality_alert_schema()
 
     try:
+        # [P1-AUDIT-HIST-5 · 2026-05-09] `chunk_deferrals.meal_plan_id`
+        # es ON DELETE SET NULL (post P0-HIST-3). Cuando el plan padre
+        # se elimina, los deferrals históricos quedan con
+        # `meal_plan_id=NULL` por audit. Sin el filtro de abajo, el
+        # GROUP BY agruparía TODOS esos huérfanos bajo la tupla
+        # `(user_id, NULL, week_number)` y reportaría una alerta
+        # `chronic_deferrals` con `plan_id=None` en metadata, push
+        # confuso al usuario, y ciclo de notificación gastado sobre
+        # un plan que ya no existe. La elección de SET NULL (vs
+        # CASCADE) preserva audit trail; este filtro garantiza que
+        # ese audit no contamine el flujo operacional.
         rows = execute_sql_query(
             """
             SELECT user_id::text AS user_id,
@@ -11280,6 +12302,7 @@ def _detect_chronic_deferrals() -> None:
             FROM chunk_deferrals
             WHERE created_at > NOW() - make_interval(hours => %s)
               AND reason = 'temporal_gate'
+              AND meal_plan_id IS NOT NULL
             GROUP BY user_id, meal_plan_id, week_number
             HAVING COUNT(*) >= %s
             """,
@@ -11434,7 +12457,6 @@ def _alert_high_synthesized_lesson_ratio() -> None:
         CHUNK_LESSON_SYNTH_WINDOW_HOURS,
         CHUNK_LESSON_SYNTH_ALERT_COOLDOWN_HOURS,
     )
-    _ensure_quality_alert_schema()
 
     try:
         stats = execute_sql_query(
@@ -11678,7 +12700,6 @@ def _pause_chunk_for_synthesis_overload(
 
     # 3. system_alerts dedup por (user, plan, week) — complementa el alert agregado.
     try:
-        _ensure_quality_alert_schema()
         _alert_key = f"chunk_synthesis_overload:{user_id}:{meal_plan_id}:{int(week_number)}"
         execute_sql_write(
             """
@@ -11749,6 +12770,168 @@ def _pause_chunk_for_synthesis_overload(
     return True
 
 
+def _alert_atomic_pool_fallback() -> None:
+    """[P2-6 · 2026-05-08] Alerta proactiva cuando `update_user_health_profile_atomic`
+    está cayendo al path no-atómico (lost-update silencioso bajo concurrencia).
+
+    Contexto:
+      `db_profiles.update_user_health_profile_atomic` requiere `connection_pool`
+      para serializar reads/writes con SELECT...FOR UPDATE. Si el pool no está
+      inicializado (typical: misconfig de DATABASE_URL en deploy, conectividad
+      a Supabase Pooler:6543 caída, env-var truncada al copy/paste), por default
+      degrada al patrón legacy get+update (no atómico) y solo loguea WARNING +
+      incrementa el counter `_POOL_FALLBACK_STATE`. Hasta P2-6 ese counter solo
+      era inspectable via `/api/system/atomic-pool-health` (polling manual).
+
+      En prod sin alerta automática, una misconfig podía durar días enmascarada
+      (cada fallback emite WARNING pero esos no van a system_alerts). Este cron
+      escala el counter a una alerta deduplicada cuando hay actividad reciente.
+
+    Lógica:
+      1. Lee snapshot inmutable vía `get_atomic_pool_fallback_snapshot()`.
+      2. Si `fallback_count > 0` Y `last_at` está dentro de WINDOW_MINUTES,
+         persiste alert con severity=critical (lost-updates silenciosos).
+      3. Cooldown via `system_alerts.triggered_at` cubre ALERT_COOLDOWN_HOURS.
+      4. Self-healing: si `last_at` está fuera del window, marca la alerta
+         como `resolved_at=NOW()` (sweep en cada tick).
+
+    Observación:
+      `pool_available=True` + `strict_mode=True` no se valida aquí porque la
+      strict mode raisearía RuntimeError ANTES del fallback — si llegamos a
+      este cron con counter > 0 y strict ON, hay otro bug que merece su propia
+      alerta. Por ahora solo reportamos lo que vemos en el snapshot.
+    """
+    from constants import (
+        POOL_FALLBACK_ALERT_WINDOW_MINUTES,
+        POOL_FALLBACK_ALERT_COOLDOWN_HOURS,
+    )
+
+    try:
+        from db_profiles import get_atomic_pool_fallback_snapshot
+        snap = get_atomic_pool_fallback_snapshot()
+    except Exception as e:
+        logger.warning(
+            f"[P2-6/POOL-FALLBACK-ALERT] No se pudo leer snapshot de db_profiles: {e!r}. "
+            f"Saltando tick — sin alerting este ciclo."
+        )
+        return
+
+    fallback_count = int(snap.get("fallback_count") or 0)
+    last_at = snap.get("last_at")
+    last_user_id = snap.get("last_user_id")
+    pool_available = bool(snap.get("pool_available"))
+    strict_mode = bool(snap.get("strict_mode"))
+
+    alert_key = "atomic_pool_fallback_active"
+    window_min = int(POOL_FALLBACK_ALERT_WINDOW_MINUTES)
+
+    # Self-healing sweep: si la última actividad de fallback es vieja, cerramos.
+    is_recent = False
+    if last_at:
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            last_at_dt = _dt.fromisoformat(last_at.replace("Z", "+00:00")) if isinstance(last_at, str) else None
+            if last_at_dt is not None:
+                age_seconds = (_dt.now(_tz.utc) - last_at_dt).total_seconds()
+                is_recent = age_seconds <= window_min * 60
+        except Exception as _parse_err:
+            logger.debug(
+                f"[P2-6/POOL-FALLBACK-ALERT] last_at={last_at!r} no parseable: {_parse_err!r}"
+            )
+
+    if fallback_count == 0 or not is_recent:
+        # No hay fallback activo — auto-resuelve cualquier alerta abierta.
+        try:
+            execute_sql_write(
+                """
+                UPDATE system_alerts
+                SET resolved_at = NOW()
+                WHERE alert_key = %s AND resolved_at IS NULL
+                """,
+                (alert_key,),
+            )
+        except Exception as _resolve_err:
+            logger.debug(
+                f"[P2-6/POOL-FALLBACK-ALERT] sweep de auto-resolve falló: {_resolve_err!r}"
+            )
+        return
+
+    # Cooldown: no re-alertar dentro del window de cooldown.
+    try:
+        existing = execute_sql_query(
+            """
+            SELECT triggered_at FROM system_alerts
+            WHERE alert_key = %s
+              AND resolved_at IS NULL
+              AND triggered_at > NOW() - make_interval(hours => %s)
+            LIMIT 1
+            """,
+            (alert_key, int(POOL_FALLBACK_ALERT_COOLDOWN_HOURS)),
+            fetch_one=True,
+        )
+        if existing:
+            return
+    except Exception:
+        pass  # Si la query falla, mejor sobre-alertar que no alertar.
+
+    metadata = {
+        "fallback_count": fallback_count,
+        "first_at": snap.get("first_at"),
+        "last_at": last_at,
+        "last_user_id": last_user_id,
+        "pool_available": pool_available,
+        "strict_mode": strict_mode,
+        "window_minutes": window_min,
+    }
+    severity = "critical"
+    title = "Pool atómico degradado: lost-updates posibles"
+    message = (
+        f"`update_user_health_profile_atomic` cayó al path no-atómico "
+        f"{fallback_count} vez/veces (último: {last_at}, "
+        f"user={last_user_id}). pool_available={pool_available}, "
+        f"strict_mode={strict_mode}. Lost-updates silenciosos en "
+        f"`health_profile` posibles bajo concurrencia. "
+        f"Verificar inicialización del pool (DATABASE_URL / "
+        f"SUPABASE_DB_URL, Supabase Pooler:6543). En prod considerar "
+        f"`MEALFIT_REQUIRE_ATOMIC_POOL=1` para fail-fast."
+    )
+
+    affected_user_ids = [last_user_id] if last_user_id else []
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'atomic_pool_fallback', %s, %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    severity = EXCLUDED.severity,
+                    title = EXCLUDED.title,
+                    message = EXCLUDED.message,
+                    metadata = EXCLUDED.metadata,
+                    affected_user_ids = EXCLUDED.affected_user_ids,
+                    resolved_at = NULL
+            """,
+            (
+                alert_key,
+                severity,
+                title,
+                message,
+                json.dumps(metadata, ensure_ascii=False),
+                json.dumps(affected_user_ids),
+            ),
+        )
+        logger.error(
+            f"[P2-6/POOL-FALLBACK-ALERT] Alerta disparada: count={fallback_count} "
+            f"last_at={last_at} pool_available={pool_available} strict={strict_mode}."
+        )
+    except Exception as e:
+        logger.error(
+            f"[P2-6/POOL-FALLBACK-ALERT] No se pudo persistir la alerta: {e!r}"
+        )
+
+
 def _alert_new_dead_lettered_chunks() -> None:
     """[P1-2] Alerta proactiva sobre chunks dead-lettered acumulándose.
 
@@ -11773,7 +12956,6 @@ def _alert_new_dead_lettered_chunks() -> None:
         CHUNK_DEAD_LETTER_ALERT_COOLDOWN_HOURS,
         CHUNK_DEAD_LETTER_ALERT_MIN_COUNT,
     )
-    _ensure_quality_alert_schema()
 
     window_hours = int(CHUNK_DEAD_LETTER_ALERT_WINDOW_HOURS)
     try:
@@ -11839,7 +13021,9 @@ def _alert_new_dead_lettered_chunks() -> None:
             return
     except Exception:
         # Cooldown lookup falló (e.g., system_alerts no existe) — seguimos al
-        # INSERT que crea la tabla vía _ensure_quality_alert_schema y persiste igual.
+        # INSERT. La tabla `system_alerts` se crea ahora vía la migración SSOT
+        # `supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql` (P3-B
+        # 2026-05-08 removió `_ensure_quality_alert_schema` y sus 12 call sites).
         pass
 
     affected_user_ids: list = []
@@ -11997,7 +13181,6 @@ def _alert_chunks_stuck_in_tz_unresolved() -> None:
         CHUNK_TZ_UNRESOLVED_ALERT_COOLDOWN_HOURS,
         CHUNK_TZ_UNRESOLVED_ALERT_BATCH_LIMIT,
     )
-    _ensure_quality_alert_schema()
 
     try:
         rows = execute_sql_query(
@@ -12119,7 +13302,6 @@ def _alert_chunk_pantry_snapshots_stale() -> None:
         CHUNK_PANTRY_STALENESS_ALERT_MIN_COUNT,
         CHUNK_PANTRY_STALENESS_ALERT_COOLDOWN_HOURS,
     )
-    _ensure_quality_alert_schema()
 
     try:
         rows = execute_sql_query(
@@ -12244,7 +13426,6 @@ def _alert_chunk_lag_excessive() -> None:
         CHUNK_LAG_ALERT_MIN_COUNT,
         CHUNK_LAG_ALERT_COOLDOWN_HOURS,
     )
-    _ensure_quality_alert_schema()
 
     try:
         rows = execute_sql_query(
@@ -12363,7 +13544,6 @@ def _alert_chunk_dual_processing() -> None:
         CHUNK_DUAL_PROCESSING_ALERT_COOLDOWN_HOURS,
         CHUNK_DUAL_PROCESSING_GRACE_SECONDS,
     )
-    _ensure_quality_alert_schema()
 
     try:
         rows = execute_sql_query(
@@ -12513,7 +13693,6 @@ def _alert_chunks_paused_indefinitely() -> None:
         snapshot tras el primer intento, para que future runs no re-corran el
         synthesize en caso patológico (e.g., admin reseteó dead_lettered_at).
     """
-    _ensure_quality_alert_schema()
 
     # [P1-23] Self-healing sweep: resolver alertas warning huérfanas cuyo
     # chunk ya no está pausado por `missing_prior_lessons`. Pre-fix, solo
@@ -12559,6 +13738,12 @@ def _alert_chunks_paused_indefinitely() -> None:
     # `pipeline_snapshot->>'_pause_reason'` lee la convención P1-1 (ver línea
     # ~13766 donde se setea durante la pausa).
     try:
+        # [P2-5 · 2026-05-08] Incluimos `attempts` en el SELECT para forensics
+        # del path de escalación. `attempts` cuenta retries del pipeline normal;
+        # `pending_user_action` es un state ortogonal (stuck waiting), por lo
+        # que NO se compara para decidir escalación — solo se reporta en logs
+        # y alert metadata para que el SRE pueda diagnosticar si un chunk
+        # llegó "directo" (attempts=0) vs "después de retry parciales".
         candidates = execute_sql_query(
             """
             SELECT
@@ -12568,6 +13753,7 @@ def _alert_chunks_paused_indefinitely() -> None:
                 q.week_number,
                 q.days_offset,
                 q.days_count,
+                q.attempts,
                 q.pipeline_snapshot,
                 q.dead_lettered_at,
                 EXTRACT(EPOCH FROM (NOW() - q.updated_at))::bigint AS paused_seconds,
@@ -12576,6 +13762,7 @@ def _alert_chunks_paused_indefinitely() -> None:
             FROM plan_chunk_queue q
             LEFT JOIN meal_plans mp ON mp.id = q.meal_plan_id
             WHERE q.status = 'pending_user_action'
+              AND q.meal_plan_id IS NOT NULL
               AND q.pipeline_snapshot->>'_pause_reason' = 'missing_prior_lessons'
               AND q.dead_lettered_at IS NULL
               AND q.updated_at < (NOW() - make_interval(hours => %s))
@@ -12585,6 +13772,15 @@ def _alert_chunks_paused_indefinitely() -> None:
             (alert_age_hours, batch_limit),
             fetch_all=True,
         ) or []
+        # [P1-AUDIT-HIST-5 · 2026-05-09] Defensa contra chunks
+        # huérfanos. plan_chunk_queue.meal_plan_id es ON DELETE
+        # CASCADE así que la fila debería borrarse al eliminar el
+        # plan, pero defensivamente filtramos NULL por si un row
+        # corrupto se cuela: sin meal_plan_id, alert_key sería
+        # `chunk_paused_indefinitely:None:N`, el LEFT JOIN no
+        # encuentra plan_data, y el reintento de unblock (Fase 2)
+        # falla con ciclos LLM gastados sobre un chunk imposible
+        # de recuperar.
     except Exception as e:
         logger.warning(
             f"[P1-CHUNKS-3] No se pudo consultar chunks pausados indefinidamente: {e}"
@@ -12606,6 +13802,8 @@ def _alert_chunks_paused_indefinitely() -> None:
         paused_seconds = int(row.get("paused_seconds") or 0)
         paused_hours = paused_seconds / 3600.0
         total_days_requested = int(row.get("total_days_requested") or 0)
+        # [P2-5 · 2026-05-08] Solo para observabilidad — no se usa en gating.
+        chunk_attempts = int(row.get("attempts") or 0)
 
         snap = row.get("pipeline_snapshot") or {}
         if isinstance(snap, str):
@@ -12638,6 +13836,10 @@ def _alert_chunks_paused_indefinitely() -> None:
             "expected_lessons": int(snap.get("_p1_1_expected_lessons") or 0),
             "actual_lessons": int(snap.get("_p1_1_actual_lessons") or 0),
             "rebuilt_lessons": int(snap.get("_p1_1_rebuilt_lessons") or 0),
+            # [P2-5] `attempts` se incluye para forensics — útil al diferenciar
+            # un chunk que llegó directo a stuck (attempts=0) de uno que tuvo
+            # retries parciales antes (attempts > 0).
+            "attempts": chunk_attempts,
         }
         alert_message = (
             f"Chunk task_id={task_id} (plan={plan_id} week={week_number}) lleva "
@@ -12855,11 +14057,18 @@ def _alert_chunks_paused_indefinitely() -> None:
                     escalation_reason="missing_prior_lessons_unrecoverable",
                 )
                 escalated += 1
+                # [P2-5 · 2026-05-08] `attempts` añadido al log para forensics.
+                # Permite distinguir post-mortem entre chunks que llegaron a
+                # `pending_user_action` directamente (attempts=0, ruta P1-1
+                # detectó missing_prior_lessons sin retry previo) vs chunks
+                # con retries parciales del pipeline (attempts > 0, posible
+                # interacción con CHUNK_MAX_FAILURE_ATTEMPTS).
                 logger.error(
                     f"[P1-CHUNKS-3/ESCALATED] Chunk {task_id} (plan={plan_id} "
                     f"week={week_number}) dead-lettered tras {paused_hours:.1f}h "
                     f"sin auto-unblock posible "
-                    f"(combined={len(combined_lessons)}, synth={synth_count})."
+                    f"(attempts={chunk_attempts}, combined={len(combined_lessons)}, "
+                    f"synth={synth_count})."
                 )
                 # [P1-23] Resolver la warning Phase 1 ahora que el chunk pasa a
                 # dead_letter. El path success ya resolvía (línea ~11800), pero
@@ -12897,34 +14106,21 @@ def _alert_chunks_paused_indefinitely() -> None:
         )
 
 
-def _ensure_quality_alert_schema():
-    """No-op stub.
-
-    [P2-NEW-G 2026-05-08] El DDL que vivía aquí (CREATE system_alerts +
-    ALTER user_profiles ADD quality_alert_at) duplicaba el bloque ya consolidado
-    en `supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql` (líneas 25-36
-    y 64-65). Mantener ambos lados creaba riesgo de drift: un cambio del schema
-    vía SQL editor no era visible aquí y el siguiente edit del bloque Python
-    podía revertirlo.
-
-    La función se conserva (no se borra) para preservar los ~36 call sites en
-    cron_tasks.py y los `patch("cron_tasks._ensure_quality_alert_schema")` que
-    ya existen en los tests. La invariante semántica se mantiene: tras la
-    llamada, el schema está garantizado — ahora porque la migración SSOT lo
-    aplica en startup, no porque esta función ejecute DDL.
-    """
-    return
 
 
 def _persist_quality_degradation_alert(is_refill: bool, ratio: float, degraded: int, total: int):
     """Persiste una alerta deduplicada y marca perfiles afectados para mostrar banner en UI."""
-    _ensure_quality_alert_schema()
 
     tipo = "refill" if is_refill else "initial"
     label = "Refill" if is_refill else "Inicial"
     alert_key = f"degraded_rate_high:{tipo}"
 
     try:
+        # [P2-3 · 2026-05-08] `meal_plan_id IS NOT NULL` excluye filas
+        # huérfanas tras delete del meal_plan padre (FK SET NULL en
+        # plan_chunk_metrics). Un usuario cuyo único plan degradado fue
+        # eliminado no debe quedar marcado en `quality_alert_at` por
+        # telemetría stale.
         degraded_rows = execute_sql_query(
             """
             SELECT DISTINCT user_id
@@ -12933,6 +14129,7 @@ def _persist_quality_degradation_alert(is_refill: bool, ratio: float, degraded: 
               AND COALESCE(is_rolling_refill, false) = %s
               AND (was_degraded OR quality_tier IN ('shuffle', 'edge', 'emergency'))
               AND user_id IS NOT NULL
+              AND meal_plan_id IS NOT NULL
             """,
             (is_refill,),
             fetch_all=True,
@@ -12995,6 +14192,11 @@ def _persist_quality_degradation_alert(is_refill: bool, ratio: float, degraded: 
 def _alert_if_degraded_rate_high():
     """[GAP G] Escala degraded-rate alto a persistencia en DB y flag visible por la UI."""
     try:
+        # [P2-3 · 2026-05-08] Excluye filas huérfanas (meal_plan_id NULL)
+        # tras delete del meal_plan padre. Sin el filtro, el ratio global
+        # incluye chunks de planes ya inexistentes y distorsiona la métrica
+        # de calidad LIVE. La invariante operacional: este alert refleja
+        # solo planes activos.
         rows = execute_sql_query(
             """
             SELECT
@@ -13003,6 +14205,7 @@ def _alert_if_degraded_rate_high():
                 COUNT(*) FILTER (WHERE was_degraded OR quality_tier IN ('shuffle', 'edge', 'emergency')) AS degraded
             FROM plan_chunk_metrics
             WHERE created_at > NOW() - INTERVAL '24 hours'
+              AND meal_plan_id IS NOT NULL
             GROUP BY is_rolling_refill
             """,
             fetch_all=True,
@@ -14093,7 +15296,6 @@ def _check_chunk_learning_ready(user_id: str, meal_plan_id: str, week_number: in
         if _p1c_next_retries == int(CHUNK_TEMPORAL_GATE_PUSH_AT_RETRY):
             _p13_alert_key = f"temporal_gate_proactive:{user_id}:{meal_plan_id}:{int(week_number)}"
             try:
-                _ensure_quality_alert_schema()
                 _p13_existing = execute_sql_query(
                     """
                     SELECT triggered_at FROM system_alerts
@@ -14896,9 +16098,11 @@ def _reactivate_shopping_list_after_perishable_cycle() -> int:
     try:
         # [P1-6] Cap superior configurable. El default 30 preserva el comportamiento
         # previo. Subir cap permite ciclos más largos para usuarios con freezer grande.
-        _max_cap = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", "30"))
+        # [P1-A · 2026-05-08] `_env_int` registra en `_KNOBS_REGISTRY` (los clamps
+        # se mantienen local — registry expone el valor del env, no el clamped).
+        _max_cap = _env_int("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", 30)
         _max_cap = max(7, min(_max_cap, 90))
-        cycle_days = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS", "7"))
+        cycle_days = _env_int("MEALFIT_PERISHABLE_CYCLE_DAYS", 7)
         cycle_days = max(1, min(cycle_days, _max_cap))
 
         # [P1-FIX-1] Ventana de barrido del cron: planes con `created_at` en los
@@ -14906,7 +16110,7 @@ def _reactivate_shopping_list_after_perishable_cycle() -> int:
         # planes long-tenured (usuarios que mantienen el mismo plan mensual >3
         # meses) con `is_restocked=true` permanente — la lista nunca reaparecía.
         # Subido a 365d (clamp [30, 1825=5y]) vía knob `MEALFIT_REACTIVATE_LOOKBACK_DAYS`.
-        _lookback_days = int(os.environ.get("MEALFIT_REACTIVATE_LOOKBACK_DAYS", "365"))
+        _lookback_days = _env_int("MEALFIT_REACTIVATE_LOOKBACK_DAYS", 365)
         _lookback_days = max(30, min(_lookback_days, 1825))
 
         rows = execute_sql_query(
@@ -15524,6 +16728,16 @@ def process_plan_chunk_queue(target_plan_id=None):
                 "last_heartbeat_at": datetime.now(timezone.utc),  # INSERT puso heartbeat_at = NOW()
                 "consecutive_failures": 0,
                 "lock_chunk_id": task_id,
+                # [P3-3 · 2026-05-08] Tracking de lag del thread daemon.
+                # Si GC pausa Python entre `wait` y `_do_update`, el delta real
+                # supera _HB_INTERVAL silenciosamente. Antes solo se logueaba
+                # WARNING en fallos de UPDATE — un update LENTO pero exitoso
+                # era invisible. Ahora medimos el delta real cada tick y
+                # emitimos stats al cierre del chunk.
+                "max_lag_seconds": 0.0,
+                "total_updates": 0,
+                "lagged_updates": 0,  # ticks con delta > _HB_INTERVAL * 1.5
+                "started_at": datetime.now(timezone.utc),
             }
 
             def _heartbeat_loop(stop_event, state):
@@ -15542,12 +16756,34 @@ def process_plan_chunk_queue(target_plan_id=None):
                 lock_chunk_id = state["lock_chunk_id"]
 
                 def _do_update():
+                    # [P3-3] Medir lag entre updates: delta entre AHORA y el último
+                    # update OK. Si >1.5x interval, contamos como "lagged" — señal
+                    # de GC pause, contención de DB, o latencia de scheduler.
+                    _now_pre = datetime.now(timezone.utc)
+                    _last = state.get("last_heartbeat_at")
+                    if _last is not None:
+                        try:
+                            _delta_s = (_now_pre - _last).total_seconds()
+                            if _delta_s > state["max_lag_seconds"]:
+                                state["max_lag_seconds"] = _delta_s
+                            if _delta_s > _HB_INTERVAL * 1.5:
+                                state["lagged_updates"] += 1
+                                # WARNING solo en lag extremo (>2x) para no spamear.
+                                if _delta_s > _HB_INTERVAL * 2:
+                                    logger.warning(
+                                        f"[P3-3/HEARTBEAT-LAG] chunk={lock_chunk_id} "
+                                        f"delta={_delta_s:.1f}s >> interval={_HB_INTERVAL}s "
+                                        f"(GC pause, DB latency, o scheduler stall)."
+                                    )
+                        except Exception:
+                            pass  # tracking es best-effort; no debe afectar el update.
                     try:
                         execute_sql_write(
                             "UPDATE chunk_user_locks SET heartbeat_at = NOW() WHERE locked_by_chunk_id = %s",
                             (lock_chunk_id,)
                         )
                         state["last_heartbeat_at"] = datetime.now(timezone.utc)
+                        state["total_updates"] += 1
                         if state["consecutive_failures"] > 0:
                             logger.info(
                                 f"[P0-1/HEARTBEAT] Recovered tras {state['consecutive_failures']} "
@@ -15584,6 +16820,69 @@ def process_plan_chunk_queue(target_plan_id=None):
                         f"[P0-1/HEARTBEAT] Thread daemon murió inesperadamente para chunk "
                         f"{lock_chunk_id}: {type(_outer_err).__name__}: {_outer_err}"
                     )
+                finally:
+                    # [P3-3 · 2026-05-08] Stats finales del thread + emit a pipeline_metrics.
+                    # Ejecuta en TODOS los exits (graceful stop, exception, GC):
+                    #   - Log INFO con avg/max lag, total_updates, lagged.
+                    #   - Pipeline_metrics best-effort si la latencia fue anómala.
+                    try:
+                        _total = int(state.get("total_updates", 0) or 0)
+                        _lagged = int(state.get("lagged_updates", 0) or 0)
+                        _max_lag = float(state.get("max_lag_seconds", 0.0) or 0.0)
+                        _started = state.get("started_at")
+                        _runtime_s = (
+                            (datetime.now(timezone.utc) - _started).total_seconds()
+                            if _started else 0.0
+                        )
+                        # Avg lag aproximado: runtime / max(updates, 1) representa
+                        # el delta promedio efectivo. No es el "real" pero da señal.
+                        _avg_lag = (_runtime_s / max(_total, 1)) if _total > 0 else 0.0
+                        _is_anomalous = _lagged > 0 or _max_lag > _HB_INTERVAL * 2
+                        log_fn = logger.warning if _is_anomalous else logger.info
+                        log_fn(
+                            f"[P3-3/HEARTBEAT-STATS] chunk={lock_chunk_id} "
+                            f"total_updates={_total} lagged={_lagged} "
+                            f"max_lag={_max_lag:.1f}s avg_lag={_avg_lag:.1f}s "
+                            f"runtime={_runtime_s:.1f}s interval={_HB_INTERVAL}s"
+                        )
+                        # Best-effort emit a pipeline_metrics solo si hubo lag anómalo.
+                        # Confidence=0.0 marca el row como gate visual en dashboards.
+                        if _is_anomalous and _total > 0:
+                            try:
+                                execute_sql_write(
+                                    "INSERT INTO pipeline_metrics (user_id, session_id, node, "
+                                    "duration_ms, retries, tokens_estimated, confidence, metadata) "
+                                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                                    (
+                                        None, "__cron__",
+                                        "_chunk_heartbeat_lag",
+                                        int(_max_lag * 1000),
+                                        _lagged,
+                                        0,
+                                        0.0,
+                                        json.dumps({
+                                            "chunk_id": str(lock_chunk_id),
+                                            "total_updates": _total,
+                                            "lagged_updates": _lagged,
+                                            "max_lag_seconds": round(_max_lag, 2),
+                                            "avg_lag_seconds": round(_avg_lag, 2),
+                                            "runtime_seconds": round(_runtime_s, 2),
+                                            "hb_interval": _HB_INTERVAL,
+                                        }, ensure_ascii=False),
+                                    ),
+                                )
+                            except Exception as _pm_err:
+                                logger.debug(
+                                    f"[P3-3/HEARTBEAT-STATS] pipeline_metrics insert "
+                                    f"falló (best-effort): {_pm_err!r}"
+                                )
+                    except Exception as _stats_err:
+                        # Stats es secundario — un bug aquí no debe enmascarar
+                        # el motivo real del exit del thread.
+                        logger.debug(
+                            f"[P3-3/HEARTBEAT-STATS] no se pudo emitir stats finales "
+                            f"para chunk {lock_chunk_id}: {_stats_err!r}"
+                        )
 
             _heartbeat_thread = _threading.Thread(
                 target=_heartbeat_loop,
@@ -19040,6 +20339,13 @@ def process_plan_chunk_queue(target_plan_id=None):
             with connection_pool.connection() as conn:
                 with conn.transaction():
                     with conn.cursor(row_factory=dict_row) as cursor:
+                        # [P1-LOCK-1 · 2026-05-10] Bound lock + statement timeouts
+                        # ANTES de cualquier adquisición (advisory lock o FOR UPDATE).
+                        # Sin esto, el worker podía esperar indefinidamente si
+                        # `/shift-plan` mantenía el row lock; logs prod observaron
+                        # esperas >90s. Knobs: MEALFIT_PLAN_FOR_UPDATE_*_MS.
+                        from db_plans import set_meal_plan_for_update_timeouts
+                        set_meal_plan_for_update_timeouts(cursor)
                         # [P0-4] Advisory lock por meal_plan ANTES del FOR UPDATE para
                         # serializar contra `/shift-plan` y otros call sites que ya usan
                         # purpose='general' (ver db_plans.acquire_meal_plan_advisory_lock).
@@ -20509,6 +21815,13 @@ def process_plan_chunk_queue(target_plan_id=None):
                 with connection_pool.connection() as conn:
                     with conn.transaction():
                         with conn.cursor(row_factory=_p04_dict_row) as cursor:
+                            # [P1-LOCK-1 · 2026-05-10] Bound lock + statement timeouts
+                            # ANTES de cualquier adquisición. Sin esto, T2 podía
+                            # esperar indefinidamente si `/shift-plan` o el T1 worker
+                            # de otro chunk mantenían el row lock. Knobs:
+                            # MEALFIT_PLAN_FOR_UPDATE_*_MS (ver db_plans.py).
+                            from db_plans import set_meal_plan_for_update_timeouts
+                            set_meal_plan_for_update_timeouts(cursor)
                             # [P0-4] Advisory lock + FOR UPDATE para serializar contra
                             # /shift-plan y otros workers. Mismo purpose='general' que T1
                             # y /shift-plan: cualquier caller que tome el lock se serializa.
@@ -21051,28 +22364,50 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
         with connection_pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cursor:
+                    # [P1-LOCK-1 · 2026-05-10] Bound lock + statement timeouts
+                    # ANTES de cualquier adquisición. Este path background es el
+                    # equivalente cron de /shift-plan; sin esto, podía contender
+                    # con el endpoint HTTP o con el chunk worker indefinidamente.
+                    from db_plans import set_meal_plan_for_update_timeouts
+                    set_meal_plan_for_update_timeouts(cursor)
+
+                    # [P2-LOCK-2 · 2026-05-10] Resolver plan_id SIN row lock primero.
+                    # Pre-P2-LOCK-2, este SELECT incluía `FOR UPDATE` y la advisory
+                    # lock venía DESPUÉS — orden inverso al worker. Si bg-refill y
+                    # worker corrían sobre el mismo plan, Postgres podía detectar
+                    # deadlock. El nuevo orden (resolver id → advisory → FOR UPDATE)
+                    # unifica con T1/T2 worker y `/shift-plan` (también refactorizado).
                     cursor.execute(
-                        "SELECT id, plan_data FROM meal_plans "
-                        "WHERE user_id = %s ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+                        "SELECT id FROM meal_plans "
+                        "WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
                         (user_id,),
                     )
-                    plan_record = cursor.fetchone()
-                    if not plan_record:
+                    _id_row = cursor.fetchone()
+                    if not _id_row:
                         return False
-
-                    plan_id = plan_record["id"]
+                    plan_id = _id_row["id"]
 
                     # [P0-2/BG-LOCK] Advisory lock 'general' por meal_plan: este path
                     # background es funcionalmente un duplicado de /shift-plan HTTP
                     # (api_shift_plan en routers/plans.py:257) y debe seguir el mismo
                     # invariante: todo escritor de plan_data adquiere purpose='general'
-                    # antes de mutar. El FOR UPDATE de arriba serializa el row lock,
-                    # pero sin el advisory lock un futuro refactor que reemplace
-                    # FOR UPDATE por SELECT plano (e.g. para performance) reabriría
-                    # silenciosamente la race contra el worker T2, que SÍ adquiere
-                    # purpose='general'. Belt + suspenders.
+                    # antes de mutar. Sin el advisory lock un futuro refactor que
+                    # reemplace FOR UPDATE por SELECT plano (e.g. para performance)
+                    # reabriría silenciosamente la race contra el worker T2, que SÍ
+                    # adquiere purpose='general'. Belt + suspenders.
+                    # [P2-LOCK-2 · 2026-05-10] Movido ANTES del FOR UPDATE.
                     from db_plans import acquire_meal_plan_advisory_lock as _p02_acquire_lock
                     _p02_acquire_lock(cursor, plan_id, purpose="general")
+
+                    # Ahora SÍ tomar el row lock. Race rara: si plan eliminado entre
+                    # SELECT id y este FOR UPDATE, fila no existe → return False.
+                    cursor.execute(
+                        "SELECT plan_data FROM meal_plans WHERE id = %s FOR UPDATE",
+                        (plan_id,),
+                    )
+                    plan_record = cursor.fetchone()
+                    if not plan_record:
+                        return False
 
                     plan_data = plan_record.get("plan_data", {})
                     days = plan_data.get("days", [])

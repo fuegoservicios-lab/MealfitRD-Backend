@@ -272,8 +272,7 @@ def test_alert_does_not_fire_below_min_samples():
         return None
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         cron_tasks._alert_high_synthesized_lesson_ratio()
 
     inserts = [w for w in writes if "INSERT INTO system_alerts" in (w[0] or "")]
@@ -292,8 +291,7 @@ def test_alert_does_not_fire_below_threshold():
         return None
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         cron_tasks._alert_high_synthesized_lesson_ratio()
 
     inserts = [w for w in writes if "INSERT INTO system_alerts" in (w[0] or "")]
@@ -313,8 +311,7 @@ def test_alert_fires_above_threshold():
         return None
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         cron_tasks._alert_high_synthesized_lesson_ratio()
 
     inserts = [w for w in writes if "INSERT INTO system_alerts" in (w[0] or "")]
@@ -340,8 +337,7 @@ def test_alert_respects_cooldown():
         return None
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema", lambda: None):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         cron_tasks._alert_high_synthesized_lesson_ratio()
 
     inserts = [w for w in writes if "INSERT INTO system_alerts" in (w[0] or "")]

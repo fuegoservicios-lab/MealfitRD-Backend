@@ -10,8 +10,9 @@ Tests sobre el cron en aislamiento: mock de `execute_sql_query` y
 
 Las funciones colaboradoras (`_rebuild_recent_chunk_lessons_from_queue`,
 `_regenerate_recent_chunk_lessons_from_plan_days`, `_escalate_unrecoverable_chunk`,
-`_record_chunk_lesson_telemetry`, `_ensure_quality_alert_schema`) se mockean para
-aislar la lógica de escalación.
+`_record_chunk_lesson_telemetry`) se mockean para aislar la lógica de escalación.
+(`_ensure_quality_alert_schema` fue eliminada en P3-B 2026-05-08 — el schema
+ahora vive en `supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql`.)
 """
 import json
 from unittest.mock import patch, MagicMock
@@ -67,12 +68,13 @@ def test_no_candidates_no_op():
         writes.append((sql, params))
 
     with patch("cron_tasks.execute_sql_query", return_value=[]) as mock_q, \
-         patch("cron_tasks.execute_sql_write", side_effect=_capture) as _mw, \
-         patch("cron_tasks._ensure_quality_alert_schema") as mock_schema:
+         patch("cron_tasks.execute_sql_write", side_effect=_capture) as _mw:
         _alert_chunks_paused_indefinitely()
 
     assert mock_q.called
-    assert mock_schema.called  # Siempre garantiza el schema
+    # [P3-B 2026-05-08] removed `assert mock_schema.called` — la función
+    # `_ensure_quality_alert_schema` fue eliminada (P3-B). Schema garantizado
+    # por la migración SSOT, no por una llamada runtime.
     # Cualquier write debe ser la sweep P1-23 (UPDATE sobre alert_type =
     # 'chunk_paused_indefinitely' con NOT EXISTS subquery).
     non_sweep = [
@@ -101,7 +103,6 @@ def test_phase1_alert_only_for_chunk_in_12h_window():
 
     with patch("cron_tasks.execute_sql_query", return_value=[candidate]), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema"), \
          patch("cron_tasks._escalate_unrecoverable_chunk") as mock_escalate, \
          patch("cron_tasks._rebuild_recent_chunk_lessons_from_queue") as mock_rebuild, \
          patch("cron_tasks._regenerate_recent_chunk_lessons_from_plan_days") as mock_regen:
@@ -139,7 +140,6 @@ def test_phase2_unblock_succeeds_when_lessons_recoverable():
 
     with patch("cron_tasks.execute_sql_query", return_value=[candidate]), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema"), \
          patch("cron_tasks._escalate_unrecoverable_chunk") as mock_escalate, \
          patch("cron_tasks._rebuild_recent_chunk_lessons_from_queue", return_value=fake_combined), \
          patch("cron_tasks._regenerate_recent_chunk_lessons_from_plan_days", return_value=fake_combined), \
@@ -185,7 +185,6 @@ def test_phase2_escalates_when_unblock_insufficient():
     # rebuild devuelve 0 lecciones; regenerate también — caemos a escalate.
     with patch("cron_tasks.execute_sql_query", return_value=[candidate]), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema"), \
          patch("cron_tasks._escalate_unrecoverable_chunk") as mock_escalate, \
          patch("cron_tasks._rebuild_recent_chunk_lessons_from_queue", return_value=[]), \
          patch("cron_tasks._regenerate_recent_chunk_lessons_from_plan_days", return_value=[]):
@@ -232,7 +231,6 @@ def test_phase2_idempotent_when_already_attempted():
 
     with patch("cron_tasks.execute_sql_query", return_value=[candidate]), \
          patch("cron_tasks.execute_sql_write"), \
-         patch("cron_tasks._ensure_quality_alert_schema"), \
          patch("cron_tasks._escalate_unrecoverable_chunk") as mock_escalate, \
          patch("cron_tasks._rebuild_recent_chunk_lessons_from_queue") as mock_rebuild, \
          patch("cron_tasks._regenerate_recent_chunk_lessons_from_plan_days") as mock_regen:
@@ -268,8 +266,7 @@ def test_phase1_alert_metadata_includes_diagnostic_fields():
             captured_alert_params.append(params)
 
     with patch("cron_tasks.execute_sql_query", return_value=[candidate]), \
-         patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema"):
+         patch("cron_tasks.execute_sql_write", side_effect=fake_write):
         _alert_chunks_paused_indefinitely()
 
     assert len(captured_alert_params) == 1, (
@@ -300,8 +297,7 @@ def test_phase1_does_not_select_dead_lettered_chunks():
         return []
 
     with patch("cron_tasks.execute_sql_query", side_effect=fake_query), \
-         patch("cron_tasks.execute_sql_write"), \
-         patch("cron_tasks._ensure_quality_alert_schema"):
+         patch("cron_tasks.execute_sql_write"):
         _alert_chunks_paused_indefinitely()
 
     assert len(captured_select_sql) == 1
@@ -330,7 +326,6 @@ def test_phase2_unblock_resolves_alert():
 
     with patch("cron_tasks.execute_sql_query", return_value=[candidate]), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
-         patch("cron_tasks._ensure_quality_alert_schema"), \
          patch("cron_tasks._escalate_unrecoverable_chunk"), \
          patch("cron_tasks._rebuild_recent_chunk_lessons_from_queue", return_value=fake_combined), \
          patch("cron_tasks._regenerate_recent_chunk_lessons_from_plan_days", return_value=fake_combined), \
@@ -373,7 +368,6 @@ def test_phase2_escalation_uses_correct_recovery_attempts():
 
     with patch("cron_tasks.execute_sql_query", return_value=[candidate]), \
          patch("cron_tasks.execute_sql_write"), \
-         patch("cron_tasks._ensure_quality_alert_schema"), \
          patch("cron_tasks._escalate_unrecoverable_chunk") as mock_escalate, \
          patch("cron_tasks._rebuild_recent_chunk_lessons_from_queue", return_value=[]), \
          patch("cron_tasks._regenerate_recent_chunk_lessons_from_plan_days", return_value=[]):

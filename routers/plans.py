@@ -25,6 +25,10 @@ from graph_orchestrator import (
     arun_plan_pipeline,
     _strip_untrusted_internal_keys,
     _enforce_days_to_generate_cap,
+    # [P1-A · 2026-05-08] `_env_int` para que `MEALFIT_PERISHABLE_*` (consumido
+    # por el endpoint de restock per-item) se auto-registre en `_KNOBS_REGISTRY`
+    # en lugar de bypass-ear vía `os.environ.get(...)` raw.
+    _env_int,
     # [P1-FORM-6] Merge defensivo de `other*` text fields al router. El merge
     # también ocurre dentro de `arun_plan_pipeline` (línea ~8430); idempotente
     # (dedup case-insensitive). Hacerlo al router blinda contra futuros
@@ -541,12 +545,15 @@ _BIO_RANGES = {
     "weight_kg": (30.0, 300.0),   # kg post-conversión; el parser hace lb→kg
     "height_cm": (100, 250),      # cm; ~3'3" a 8'2", cubre extremos humanos
     "bodyFat":   (1.0, 60.0),     # %; cap para no romper Katch-McArdle (LBM>0)
-    # [P1-FORM-12] Tamaño del hogar para escalar lista de compras. Wizard
-    # ofrece chips 1..6 (`InteractiveQuestions.jsx:830`). Cap alto en 12 para
-    # cubrir familias extendidas / hogares múltiples sin bloquear casos
-    # legítimos. ANTES no se validaba: `householdSize=999` o `="abc"` pasaban
-    # al `shopping_calculator` que multiplicaba cantidades x999 → lista de
-    # compras absurda + posible OOM en agregación de items.
+    # [P1-FORM-12] Tamaño del hogar para escalar lista de compras. Cap alto
+    # en 12 para cubrir familias extendidas / hogares múltiples sin bloquear
+    # casos legítimos. ANTES no se validaba: `householdSize=999` o `="abc"`
+    # pasaban al `shopping_calculator` que multiplicaba cantidades x999 →
+    # lista de compras absurda + posible OOM en agregación de items.
+    # [P3-5 · 2026-05-08] Paridad con `frontend/src/config/formValidation.js
+    # BIO_RANGES.household` auditada por `test_p3_5_bio_ranges_parity.py`.
+    # Si se bumpea aquí, subir frontend simultáneamente o el form rechazará
+    # valores válidos.
     "household": (1, 12),         # personas; cap protege contra typos / payloads bogus
 }
 
@@ -1547,19 +1554,35 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
         # P0-2 FIX: Get latest plan using FOR UPDATE to prevent race conditions with chunk workers doing blind overwrites
         from db_core import connection_pool
         from psycopg.rows import dict_row
-        
+
         with connection_pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cursor:
+                    # [P1-LOCK-1 · 2026-05-10] Bound lock wait + statement timeout
+                    # ANTES de cualquier adquisición de lock. Sin esto, una
+                    # contención con el chunk worker (T1/T2 en cron_tasks) podía
+                    # dejar al caller esperando >90s por el row lock (observado en
+                    # logs Postgres prod). Helper lee knobs MEALFIT_PLAN_FOR_UPDATE_*.
+                    from db_plans import set_meal_plan_for_update_timeouts
+                    set_meal_plan_for_update_timeouts(cursor)
+
+                    # [P2-LOCK-2 · 2026-05-10] Resolver plan_id SIN row lock primero
+                    # (cheap idempotent read). Pre-P2-LOCK-2, este SELECT incluía
+                    # `FOR UPDATE` y la `acquire_meal_plan_advisory_lock` venía
+                    # DESPUÉS — orden inverso al worker (advisory primero, FOR UPDATE
+                    # después). Si /shift-plan y worker corrían simultáneos sobre
+                    # el mismo plan, cada uno sostenía un recurso esperando el otro
+                    # → Postgres detectaba deadlock dentro de `deadlock_timeout` (1s
+                    # default) y abortaba uno con `deadlock_detected`. El nuevo orden
+                    # (resolver id → advisory → FOR UPDATE) elimina la asimetría.
                     cursor.execute(
-                        "SELECT id, plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+                        "SELECT id FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
                         (user_id,)
                     )
-                    plan_record = cursor.fetchone()
-                    if not plan_record:
+                    _id_row = cursor.fetchone()
+                    if not _id_row:
                         return {"success": False, "message": "No hay plan activo."}
-
-                    plan_id = plan_record["id"]
+                    plan_id = _id_row["id"]
 
                     # [P0-4] Advisory lock 'general' por meal_plan: serializa este shift
                     # contra el merge del worker (cron_tasks._chunk_worker T1+T2) que
@@ -1568,8 +1591,21 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     # un dict en memoria) podía sobrescribir los cambios de /shift-plan
                     # ejecutados entre T1 y T2 — perdiendo el shift y la renumeración
                     # de days. El lock se libera al cerrar la transacción.
+                    # [P2-LOCK-2 · 2026-05-10] Movido ANTES del FOR UPDATE para
+                    # unificar orden con T1/T2/bg-refill (advisory → FOR UPDATE).
                     from db_plans import acquire_meal_plan_advisory_lock as _p04_acquire_lock
                     _p04_acquire_lock(cursor, plan_id, purpose="general")
+
+                    # Ahora SÍ tomar el row lock. Si el plan fue eliminado entre el
+                    # SELECT id de arriba y este FOR UPDATE (race extremadamente rara:
+                    # ~ms entre statements), la fila no existe y caemos al return.
+                    cursor.execute(
+                        "SELECT plan_data FROM meal_plans WHERE id = %s FOR UPDATE",
+                        (plan_id,)
+                    )
+                    plan_record = cursor.fetchone()
+                    if not plan_record:
+                        return {"success": False, "message": "El plan fue eliminado durante la operación. Reintentá."}
                     plan_data = plan_record.get("plan_data", {})
                     days = plan_data.get("days", [])
                     total_planned_days = max(3, int(plan_data.get("total_days_requested", len(days))))
@@ -2822,37 +2858,132 @@ async def api_analyze_stream(
 
 @router.post("/recipe/expand")
 def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+    """[P1-HIST-RECIPE-1 · 2026-05-10] Expande una receta con pasos de chef
+    y persiste el resultado en el plan correcto.
+
+    Bugs originales (audit Historial 2026-05-10):
+      1. **Wrong-plan persist**: el handler llamaba `get_latest_meal_plan(user_id)`
+         sin recibir `plan_id` del request. Si el usuario abría `Recipes`
+         desde un plan recién restaurado mientras un chunk worker insertaba
+         un plan nuevo (race), el `expanded_recipe` se persistía al plan
+         equivocado y el plan visible no se actualizaba.
+      2. **First-match-only**: match por `m.get("name") == data.get("name")`
+         con doble `break` → solo la PRIMERA ocurrencia se persistía. En
+         planes de 7d donde la misma receta se repite (común), las demás
+         seguían sin `recipe`/`isExpanded` y volvían a quemar cuota LLM
+         en cada cook-click silenciosamente.
+
+    Fix:
+      - Aceptamos `plan_id` opcional. Si está, SELECT explícito con
+        `WHERE id=%s AND user_id=%s` (ownership). Si miss → fallback a
+        `get_latest_meal_plan_with_id` para no romper clientes viejos.
+      - Aceptamos `day_index`/`meal_index` opcionales. Si están y son
+        consistentes con `name` → targeting preciso (una sola escritura).
+      - Sin índices, recorremos TODAS las ocurrencias con `name` igual
+        Y `recipe` original byte-equivalente (la expansión solo aplica
+        si la receta base es idéntica) → cierra el quemado de cuota.
+
+    Tooltip-anchor: P1-HIST-RECIPE-1-START | test_p1_hist_recipe_1_expand_targeting
+    """
     try:
         user_id = data.get("user_id")
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
-                
+
         if not data.get("recipe") or not data.get("name"):
             raise HTTPException(status_code=400, detail="Faltan datos de la receta para expandir.")
-            
+
+        # [P1-HIST-RECIPE-1] Identificadores opcionales del request.
+        # Validación con isinstance porque JSON puede traer null/str/int.
+        req_plan_id = data.get("plan_id") if isinstance(data.get("plan_id"), str) else None
+        req_day_index = data.get("day_index") if isinstance(data.get("day_index"), int) else None
+        req_meal_index = data.get("meal_index") if isinstance(data.get("meal_index"), int) else None
+        req_name = data.get("name")
+        req_recipe_original = data.get("recipe")
+
         if user_id and user_id != "guest":
             log_api_usage(user_id, "gemini_recipe_expand")
-            
+
         expanded_steps = expand_recipe_agent(data)
-        
+
         if user_id and user_id != "guest":
-            current_plan = get_latest_meal_plan(user_id)
-            if current_plan and "days" in current_plan:
-                updated = False
-                for day in current_plan.get("days", []):
-                    for m in day.get("meals", []):
-                        if m.get("name") == data.get("name"):
-                            m["recipe"] = expanded_steps
-                            m["isExpanded"] = True
+            # [P1-HIST-RECIPE-1] Resolver el plan target. Si el cliente
+            # envía `plan_id`, lo usamos con ownership check explícito.
+            # Sin esto un atacante podría persistir contra un plan ajeno
+            # (aunque user_id == verified_user_id arriba lo limita, el
+            # check por id evita confusión cross-plan del mismo usuario).
+            target_plan_id = None
+            target_plan_data = None
+            if req_plan_id:
+                from db_core import execute_sql_query as _exec_q
+                row = _exec_q(
+                    "SELECT id, plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+                    (req_plan_id, user_id),
+                    fetch_one=True,
+                )
+                if row:
+                    target_plan_id = row.get("id")
+                    target_plan_data = row.get("plan_data") or {}
+                else:
+                    # plan_id no resoluble (no existe o no le pertenece).
+                    # Fallback a latest pero loguear para detectar abuso.
+                    logger.warning(
+                        "[P1-HIST-RECIPE-1] plan_id=%s no resoluble para user=%s; fallback a latest",
+                        req_plan_id, user_id,
+                    )
+            if target_plan_data is None:
+                plan_with_id = get_latest_meal_plan_with_id(user_id)
+                if plan_with_id and "id" in plan_with_id:
+                    target_plan_id = plan_with_id.get("id")
+                    target_plan_data = plan_with_id.get("plan_data") or {}
+
+            updated = False
+            if target_plan_data and isinstance(target_plan_data.get("days"), list):
+                days_list = target_plan_data["days"]
+
+                # Camino 1: targeting preciso por (day_index, meal_index).
+                # Sólo se activa si los índices son consistentes con `name`
+                # — si el cliente envió índices stale (chunk worker reordenó
+                # días entre cook-click y request), caemos al match por
+                # contenido para no escribir en la posición equivocada.
+                if (
+                    req_day_index is not None
+                    and req_meal_index is not None
+                    and 0 <= req_day_index < len(days_list)
+                ):
+                    day = days_list[req_day_index]
+                    meals = day.get("meals", []) if isinstance(day, dict) else []
+                    if 0 <= req_meal_index < len(meals):
+                        target_meal = meals[req_meal_index]
+                        if isinstance(target_meal, dict) and target_meal.get("name") == req_name:
+                            target_meal["recipe"] = expanded_steps
+                            target_meal["isExpanded"] = True
                             updated = True
-                            break
-                    if updated: break
-                
-                if updated:
-                    plan_with_id = get_latest_meal_plan_with_id(user_id)
-                    if plan_with_id and "id" in plan_with_id:
-                        update_meal_plan_data(plan_with_id["id"], current_plan)
+
+                # Camino 2: si no targeteamos por índices, propagar a TODAS
+                # las ocurrencias de `name` cuya receta original sea bit-
+                # equivalente a la del request. La equivalencia evita pisar
+                # un meal con nombre igual pero contenido distinto (e.g.,
+                # "Pollo guisado" del lunes vs el del jueves cuando el
+                # corrector swapea ingredientes). Sin esta propagación,
+                # cada ocurrencia repetida vuelve a quemar cuota LLM.
+                if not updated:
+                    for day in days_list:
+                        if not isinstance(day, dict):
+                            continue
+                        for m in day.get("meals", []):
+                            if not isinstance(m, dict):
+                                continue
+                            if m.get("name") == req_name and m.get("recipe") == req_recipe_original:
+                                m["recipe"] = expanded_steps
+                                m["isExpanded"] = True
+                                updated = True
+                                # NO break: propagamos a todas las ocurrencias.
+
+                if updated and target_plan_id:
+                    update_meal_plan_data(target_plan_id, target_plan_data)
+        # P1-HIST-RECIPE-1-END
 
         return {"success": True, "expanded_recipe": expanded_steps}
     except HTTPException:
@@ -3018,9 +3149,11 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         from constants import strip_accents
         from datetime import datetime, timezone
 
-        _max_cap = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", "30"))
+        # [P1-A · 2026-05-08] `_env_int` registra en `_KNOBS_REGISTRY`. Los
+        # clamps preservan el comportamiento previo y son locales al consumer.
+        _max_cap = _env_int("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", 30)
         _max_cap = max(7, min(_max_cap, 90))
-        _cycle_days = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS", "7"))
+        _cycle_days = _env_int("MEALFIT_PERISHABLE_CYCLE_DAYS", 7)
         _cycle_days = max(1, min(_cycle_days, _max_cap))
         _now_utc = datetime.now(timezone.utc)
         _existing_restocked = (plan_data or {}).get("restocked_items") or {}
@@ -3290,14 +3423,56 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.get("/{plan_id}/chunk-status")
-def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+    """[P0-HIST-IDOR-2 · 2026-05-10] Estado de generación del plan + chunks pausados/fallidos.
+
+    Bug original (audit Historial 2026-05-10): el handler leía
+    `user_id` de `meal_plans` (línea 3334) pero NUNCA lo comparaba
+    contra `verified_user_id`. Cualquier user authenticated podía
+    leer info de planes ajenos:
+      - `last_learning_hint` con `quality_history[-1].score` del
+        `user_profiles.health_profile` del DUEÑO ajeno (línea 3476-3482).
+      - `failed_chunks` con `attempts` (telemetría operacional).
+      - `paused_chunks` con `reason_code` resuelto desde
+        `pipeline_snapshot._pause_reason`/`_pantry_pause_reason`/
+        `dead_letter_reason` (filtra estado de pantry/tz/learning).
+      - `tier_breakdown` (calidad de generación por tier).
+      - `_user_action_required` con CTA preformateado y
+        `_recovery_exhausted_chunks` (lista chunks dead-lettered).
+      - `_pantry_degraded_summary` (estado de inventario).
+
+    Polling-friendly endpoint: el frontend lo llama cada 2-5s
+    durante la generación → IDOR explotable a alta frecuencia.
+    Identificado como follow-up en P1-HIST-AUDIT-NEW-1.
+
+    Fix: tras el 404 por plan inexistente, comparar el `user_id`
+    leído con `verified_user_id`. Si mismatch → 404 (no 403, para
+    no leak la existencia del plan ajeno; mismo contrato que
+    DELETE /{plan_id}:4389 y P0-HIST-IDOR-1 retry-chunk).
+
+    Tooltip-anchor: P0-HIST-IDOR-2-START | test_p0_hist_idor_2_chunk_status_ownership
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+
     from db_core import execute_sql_query
     try:
         res = execute_sql_query("SELECT user_id, plan_data FROM meal_plans WHERE id = %s", (plan_id,), fetch_one=True)
         if not res:
             raise HTTPException(status_code=404, detail="Plan no encontrado")
-            
+
         user_id = res["user_id"]
+        # [P0-HIST-IDOR-2] Ownership check explícito. Sin esto, todo
+        # el payload de abajo (status/learning_hint/tier_breakdown/
+        # paused_chunks/_pantry_degraded_summary/_user_action_required)
+        # se serializa al cliente sin importar a quién pertenezca el
+        # plan. 404 (no 403) para no filtrar la existencia del plan
+        # ajeno — mismo contrato que DELETE /{plan_id} y retry-chunk.
+        if str(user_id) != str(verified_user_id):
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+        # P0-HIST-IDOR-2-END
         plan_data = res["plan_data"]
         status = plan_data.get("generation_status", "complete")
         days_generated = len(plan_data.get("days", []))
@@ -3321,6 +3496,118 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             (plan_id,), fetch_one=True
         )
         next_chunk_eta = eta_res["execute_after"].isoformat() if eta_res and eta_res.get("execute_after") else None
+
+        # [P0-DASH-CHIP-HONESTY · 2026-05-09] Tooltip-anchor:
+        # P0-DASH-CHIP-HONESTY-START | test_p0_dash_chip_honesty
+        #
+        # Counters operacionales del `plan_chunk_queue` para que el
+        # Dashboard pueda diferenciar 3 estados visuales en la
+        # ventana del plan ACTIVO (no solo en el listado del Historial,
+        # ya cubierto por P0-AUDIT-HIST-2 / P1-AUDIT-HIST-4):
+        #   - in_flight_count: chunks pending/processing/stale (algo
+        #     corriendo o programado para pickup).
+        #   - pending_user_action_count: chunks pausados esperando
+        #     intervención del usuario (nevera vacía, snapshot stale,
+        #     missing prior lessons, etc).
+        #   - paused_chunks: lista resumida (chunk_id, week, days_offset,
+        #     days_count, reason_code, execute_after) — el frontend la
+        #     usa para pintar slots faltantes con copy honesto en lugar
+        #     de "en camino" que ahora miente cuando los chunks están
+        #     pausados.
+        #
+        # Bug original (reportado en producción 2026-05-09):
+        #   Plan con first_chunk completed (Sáb-Dom) + rolling_refill
+        #   pending_user_action (Lun-Jue) por `empty_pantry_proactive`.
+        #   `plan_data.generation_status='generating_next'` y
+        #   `_user_action_required=NULL`. Dashboard.jsx:2744 calcula
+        #   `_isPending = _hasActionReq && !_isGenerating` → false →
+        #   pinta "Lunes - en camino" con shimmer + spinner. La queue
+        #   dice que Lunes está PAUSADO esperando que el usuario
+        #   actualice su nevera. UX miente.
+        #
+        # Fix: el endpoint ahora expone los chunks paused con reason
+        # resuelto (deriva de `_pause_reason` / `_pantry_pause_reason`
+        # / `dead_letter_reason` con la misma prioridad que
+        # `/blocked_reasons` P2-HIST-AUDIT-9). El frontend chequea
+        # `pending_user_action_count > 0` ANTES de la rama
+        # "_isGenerating" y muestra "Pausado: <reason>" con CTA.
+        paused_rows = execute_sql_query(
+            """
+            SELECT id::text AS chunk_id,
+                   week_number,
+                   days_offset,
+                   days_count,
+                   chunk_kind,
+                   pipeline_snapshot,
+                   dead_letter_reason,
+                   execute_after,
+                   updated_at,
+                   EXTRACT(EPOCH FROM (NOW() - updated_at))::int AS paused_seconds
+            FROM plan_chunk_queue
+            WHERE meal_plan_id = %s
+              AND status = 'pending_user_action'
+            ORDER BY week_number ASC NULLS LAST, days_offset ASC NULLS LAST
+            """,
+            (plan_id,),
+        ) or []
+
+        counters_row = execute_sql_query(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE status IN ('pending','processing','stale'))::int AS in_flight_count,
+                COUNT(*) FILTER (WHERE status = 'pending_user_action')::int AS pending_user_action_count,
+                COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count,
+                COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_count
+            FROM plan_chunk_queue
+            WHERE meal_plan_id = %s
+            """,
+            (plan_id,),
+            fetch_one=True,
+        ) or {}
+
+        # Resolver reason_code con el MISMO orden de prioridad que
+        # `/blocked_reasons` (plans.py:3686-3728): dead_letter_reason →
+        # _pause_reason → _pantry_pause_reason → reason → _learning_zero_logs
+        # → "_unknown". SSOT extraído sería ideal; por ahora duplicamos
+        # la lógica con cita explícita para que un futuro refactor las
+        # consolide (anchor: P0-DASH-CHIP-HONESTY).
+        import json as _json
+        paused_chunks = []
+        for r in paused_rows:
+            snap = r.get("pipeline_snapshot") or {}
+            if isinstance(snap, str):
+                try:
+                    snap = _json.loads(snap)
+                except Exception:
+                    snap = {}
+            dead_reason = r.get("dead_letter_reason")
+            if dead_reason:
+                reason_code = str(dead_reason)
+            elif snap.get("_pause_reason"):
+                reason_code = str(snap["_pause_reason"])
+            elif snap.get("_pantry_pause_reason"):
+                reason_code = str(snap["_pantry_pause_reason"])
+            elif snap.get("reason"):
+                reason_code = str(snap["reason"])
+            elif snap.get("_learning_zero_logs"):
+                reason_code = "learning_zero_logs"
+            else:
+                reason_code = "_unknown"
+
+            _exec_after = r.get("execute_after")
+            _updated = r.get("updated_at")
+            paused_chunks.append({
+                "chunk_id": r.get("chunk_id"),
+                "week_number": r.get("week_number"),
+                "days_offset": r.get("days_offset"),
+                "days_count": r.get("days_count"),
+                "chunk_kind": r.get("chunk_kind"),
+                "reason_code": reason_code,
+                "execute_after": (_exec_after.isoformat() if hasattr(_exec_after, "isoformat") else _exec_after),
+                "updated_at": (_updated.isoformat() if hasattr(_updated, "isoformat") else _updated),
+                "paused_seconds": int(r.get("paused_seconds") or 0),
+            })
+        # P0-DASH-CHIP-HONESTY-END
         
         last_learning_hint = "Analizando tus preferencias..."
         user_res = execute_sql_query("SELECT health_profile FROM user_profiles WHERE id = %s", (user_id,), fetch_one=True)
@@ -3377,6 +3664,17 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
             # [P1-CHUNKS-1] Banner persistente para chunks dead-lettered.
             "user_action_required": user_action_required,
             "recovery_exhausted_chunks": recovery_exhausted_chunks,
+            # [P0-DASH-CHIP-HONESTY · 2026-05-09] Counters operacionales
+            # del plan_chunk_queue + lista de chunks pausados con reason
+            # resuelto. Permite que el Dashboard distinga "en camino"
+            # (in_flight > 0) de "pausado" (pending_user_action > 0).
+            # Counters siempre presentes (COALESCE 0); paused_chunks
+            # vacío cuando no hay paused.
+            "in_flight_count": int(counters_row.get("in_flight_count") or 0),
+            "pending_user_action_count": int(counters_row.get("pending_user_action_count") or 0),
+            "failed_count": int(counters_row.get("failed_count") or 0),
+            "completed_count": int(counters_row.get("completed_count") or 0),
+            "paused_chunks": paused_chunks,
         }
     except HTTPException:
         raise
@@ -3384,8 +3682,42 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
         logger.error(f"❌ [ERROR] en chunk-status: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
+
+# [P2-HIST-AUDIT-A · 2026-05-09] Helper SSOT para aplicar
+# Cache-Control no-store + Pragma no-cache a las respuestas de los
+# endpoints derivados del Historial (los que el modal/listado consume
+# y son sensibles a mutaciones recientes: rename, delete, restore,
+# nueva generación, transición de status del cron).
+#
+# Bug original (audit Historial 2026-05-09):
+#   Solo `/history-list` setteaba `Cache-Control: no-store` (P1-HIST-
+#   AUDIT-4-FOLLOWUP). Los endpoints derivados (`/lessons-counts`,
+#   `/history-status-summary`, `/{id}/lessons`, `/{id}/coherence-
+#   history`, `/{id}/chunk-metrics`, `/{id}/lifetime-lessons`,
+#   `/{id}/blocked_reasons`) NO. Un browser agresivo con
+#   back-forward cache puede servir respuestas stale tras un restore/
+#   delete — el listado se refrescaba (no-store) pero el modal abría
+#   con datos viejos hasta que el TTL del singleton (P2-HIST-AUDIT-11)
+#   expirara.
+#
+# Aplicación: cada endpoint llama `_apply_no_store(response)` justo
+# después del auth check. NO usar middleware global — solo para los
+# endpoints del Historial donde la freshness es contractual.
+def _apply_no_store(response: Response) -> None:
+    """Aplica `Cache-Control: no-store, max-age=0` + `Pragma: no-cache`
+    a la respuesta. Para endpoints derivados del Historial."""
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+
+
 @router.get("/{plan_id}/blocked_reasons")
-def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_blocked_reasons(
+    plan_id: str,
+    response: Response,
+    include_failed: bool = False,
+    include_stuck: bool = False,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
     """[P1-2] Devuelve los motivos legibles por los que un plan está bloqueado.
 
     El frontend usa este endpoint para mostrar un banner persistente cuando un chunk
@@ -3393,8 +3725,51 @@ def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(
     obsoleto), evitando que el usuario crea que el plan "se estancó" sin razón visible.
 
     Antes solo se mandaban hasta 2 push notifications y luego silencio durante horas.
+
+    [P2-HIST-AUDIT-9 · 2026-05-09] Cobertura extendida:
+      - Nuevos `reason_codes`: `tz_unresolved`, `missing_prior_lessons`,
+        `missing_start_date_no_anchor`. Antes el endpoint solo conocía 4
+        codes (zero-log, stale_snapshot/live_unreachable, empty_pantry);
+        cualquier otro caía al fallback `empty_pantry`, mintiendo al
+        usuario sobre la causa real.
+      - `include_failed=true` (default False, retrocompat con Dashboard
+        del plan ACTIVO que solo quiere `pending_user_action`): añade
+        chunks en estado `failed` con `dead_letter_reason` poblado al
+        response. El modal del Historial usa esto para enumerar los
+        motivos de chunks dead-lettered (recovery_exhausted,
+        unrecoverable_missing_anchor, unrecoverable_corrupted_date,
+        missing_prior_lessons_unrecoverable) — antes esos eran
+        invisibles excepto via `_user_action_required` agregado.
+
+    [P1-HIST-BLOCKED-STUCK · 2026-05-09] Cobertura de chunks atascados:
+      - `include_stuck=true` (default False): añade chunks en estado
+        `processing` o `stale` con `execute_after < NOW() - lag_threshold`.
+        Threshold configurable vía `MEALFIT_BLOCKED_REASONS_STUCK_LAG_HOURS`
+        (default 3.0h, validator > 0). Cierra el gap del audit Historial
+        2026-05-09 (P1-3): los crons `_alert_high_chunk_lag` detectan
+        chunks atascados >1h pero el banner del modal solo veía
+        `pending_user_action` y `failed`. Un chunk en `processing`
+        con lag de 6h (worker zombi tras crash, lock heredado por advisory
+        no liberado, etc.) no tenía surface en UI — el plan parecía
+        "Generando 2/15" hasta que un cron lo escaló a `failed` o el
+        usuario regeneraba. Nuevos `reason_codes`: `stuck_processing`,
+        `stuck_stale` con copy informativo + CTA opcional.
     """
+    # [P2-HIST-AUDIT-A · 2026-05-09] Cache-Control no-store —
+    # extensión del patrón de /history-list. Sin esto, el browser BFCache
+    # puede servir reasons obsoletas tras restore/delete del plan.
+    _apply_no_store(response)
     from db_core import execute_sql_query
+    # [P1-HIST-BLOCKED-STUCK · 2026-05-09] Knob lazy-import (mismo
+    # patrón que `shopping_calculator.py:104` y otros call sites de
+    # `_env_float`). Lazy evita ciclo de import al cargar el módulo
+    # routers/plans antes de que el registry de knobs esté listo.
+    from knobs import _env_float as _knob_env_float
+    _stuck_lag_hours = _knob_env_float(
+        "MEALFIT_BLOCKED_REASONS_STUCK_LAG_HOURS",
+        3.0,
+        validator=lambda v: v > 0,
+    )
     try:
         plan = execute_sql_query(
             "SELECT user_id FROM meal_plans WHERE id = %s",
@@ -3406,15 +3781,54 @@ def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(
         if verified_user_id and str(plan["user_id"]) != str(verified_user_id):
             raise HTTPException(status_code=403, detail="No autorizado")
 
+        # [P2-HIST-AUDIT-9 · 2026-05-09] Cuando `include_failed=True`,
+        # extendemos el WHERE con `OR (status='failed' AND
+        # dead_letter_reason IS NOT NULL)`. Sin la guard `dead_letter_reason
+        # IS NOT NULL`, traeríamos chunks `failed` transitorios (recoverable)
+        # que el cron va a reprocesar — esos no merecen banner.
+        #
+        # [P1-HIST-BLOCKED-STUCK · 2026-05-09] Cuando `include_stuck=True`
+        # sumamos `OR (status IN ('processing','stale') AND execute_after
+        # < NOW() - interval N hours)`. La guard del lag evita mostrar
+        # chunks que apenas arrancaron procesamiento — solo los que
+        # llevan `>= _stuck_lag_hours` colgados sin transición. El
+        # threshold como parameter de query NO permite override (el
+        # cliente no puede bajarlo a 0 para DOSear el endpoint listando
+        # chunks healthy); el knob es la única vía operacional.
+        _filters = ["status = 'pending_user_action'"]
+        _params: list = [plan_id]
+        if include_failed:
+            _filters.append("(status = 'failed' AND dead_letter_reason IS NOT NULL)")
+        if include_stuck:
+            # [P0-HIST-FIX-1 · 2026-05-09] PostgreSQL
+            # `make_interval(hours => ...)` SOLO acepta int; pasarle
+            # un numeric/float (el knob `MEALFIT_BLOCKED_REASONS_STUCK_LAG_HOURS`
+            # default `3.0`) lanza `42883 function make_interval(hours
+            # => numeric) does not exist`. El endpoint devolvía 500 al
+            # frontend cada vez que el modal del Historial trataba de
+            # lazy-fetch reasons (siempre que hay chunks en queue),
+            # rompiendo el modal entero.
+            #
+            # Fix: usar multiplicación de interval — `interval '1 hour'
+            # * %s` acepta numeric sin cast. Preserva la precisión
+            # sub-hora del knob (3.5h = 3h 30min) que make_interval
+            # habría truncado a 3h.
+            _filters.append(
+                "(status IN ('processing', 'stale') "
+                "AND execute_after < NOW() - (interval '1 hour' * %s))"
+            )
+            _params.append(_stuck_lag_hours)
+        _status_filter = " OR ".join(_filters)
         rows = execute_sql_query(
-            """
-            SELECT id, week_number, pipeline_snapshot, status,
-                   EXTRACT(EPOCH FROM (NOW() - updated_at))::int AS paused_seconds
+            f"""
+            SELECT id, week_number, pipeline_snapshot, status, dead_letter_reason,
+                   EXTRACT(EPOCH FROM (NOW() - updated_at))::int AS paused_seconds,
+                   EXTRACT(EPOCH FROM (NOW() - execute_after))::int AS lag_seconds
             FROM plan_chunk_queue
-            WHERE meal_plan_id = %s AND status = 'pending_user_action'
+            WHERE meal_plan_id = %s AND ({_status_filter})
             ORDER BY week_number ASC
             """,
-            (plan_id,),
+            (plan_id, *(_params[1:])),
         ) or []
 
         # [P1-4] Lectura de logging_preference para enriquecer el motivo learning_zero_logs:
@@ -3471,6 +3885,96 @@ def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(
                 "cta": "Actualizar nevera",
                 "url": "/inventory",
             },
+            # [P2-HIST-AUDIT-9 · 2026-05-09] Reasons faltantes
+            # cubiertos. Antes caían al fallback `empty_pantry` (copy
+            # incorrecto). Cada uno deriva de un cron específico:
+            "tz_unresolved": {
+                "title": "Confirmando tu zona horaria",
+                "body": "Aún no pudimos resolver tu zona horaria para programar el siguiente bloque. Abre la app desde tu dispositivo principal.",
+                "cta": "Abrir Mealfit",
+                "url": "/dashboard",
+            },
+            "missing_prior_lessons": {
+                "title": "Reconstruyendo el aprendizaje del plan",
+                "body": "El sistema está intentando recuperar el aprendizaje de los días previos. Si persiste, regenera el plan.",
+                "cta": None,
+                "url": None,
+            },
+            "missing_start_date_no_anchor": {
+                "title": "Tu plan necesita una fecha de inicio",
+                "body": "No pudimos determinar cuándo comienza el plan. Reactívalo o regéneralo desde el Dashboard.",
+                "cta": "Ir al Dashboard",
+                "url": "/dashboard",
+            },
+            # [P2-HIST-AUDIT-9 · 2026-05-09] dead_letter_reasons (chunks
+            # `failed` con dead_lettered_at). Cubre el catálogo de
+            # `_escalate_unrecoverable_chunk` (cron_tasks.py:7984+).
+            "recovery_exhausted": {
+                "title": "Tu plan necesita atención",
+                "body": "No pudimos completar parte de tu plan automáticamente. Reactívalo o regéneralo para continuar.",
+                "cta": "Regenerar plan",
+                "url": "/dashboard?recovery_exhausted=1",
+            },
+            "unrecoverable_missing_anchor": {
+                "title": "Tu plan necesita regenerarse",
+                "body": "Detectamos un problema técnico con la fecha de inicio del plan. Tócalo para regenerarlo con tu nevera actual.",
+                "cta": "Regenerar plan",
+                "url": "/dashboard?action_required=missing_anchor",
+            },
+            "unrecoverable_corrupted_date": {
+                "title": "Tu plan necesita regenerarse",
+                "body": "Detectamos datos inválidos en la fecha de inicio. Regenera el plan con tu nevera actual.",
+                "cta": "Regenerar plan",
+                "url": "/dashboard?action_required=corrupted_date",
+            },
+            "missing_prior_lessons_unrecoverable": {
+                "title": "Tu plan necesita regenerarse",
+                "body": "No pudimos reconstruir el historial de aprendizaje de los días previos. Regenera el plan.",
+                "cta": "Regenerar plan",
+                "url": "/dashboard?action_required=missing_lessons",
+            },
+            "restore_overwrite": {
+                "title": "Chunk cancelado por restore",
+                "body": "Este chunk fue cancelado al reactivar otro plan archivado. No requiere acción.",
+                "cta": None,
+                "url": None,
+            },
+            "restore_source_archived": {
+                "title": "Chunk cancelado al archivar",
+                "body": "Este chunk fue cancelado cuando el plan se reactivó como archivado. No requiere acción.",
+                "cta": None,
+                "url": None,
+            },
+            # [P1-HIST-BLOCKED-STUCK · 2026-05-09] Reasons para chunks
+            # atascados en `processing` o `stale` con lag alto. NO
+            # implican que el plan esté roto — el cron `_alert_high_
+            # chunk_lag` ya los reporta al ops team. Para el usuario
+            # final son "se está demorando más de lo esperado". CTA
+            # neutro a Dashboard donde puede regenerar si la espera
+            # le incomoda; sin scare copy.
+            "stuck_processing": {
+                "title": "Tu plan está tardando más de lo habitual",
+                "body": "Un bloque del plan lleva tiempo procesándose. Suele resolverse solo, pero puedes regenerar el plan si prefieres no esperar.",
+                "cta": "Ir al Dashboard",
+                "url": "/dashboard",
+            },
+            "stuck_stale": {
+                "title": "Reanudando un bloque del plan",
+                "body": "Un bloque del plan quedó marcado para reanudar tras una interrupción del worker. El cron lo retomará automáticamente.",
+                "cta": None,
+                "url": None,
+            },
+        }
+
+        # [P2-HIST-AUDIT-9 · 2026-05-09] Fallback genérico para reason
+        # codes desconocidos. Antes el código caía a `empty_pantry`
+        # (mensaje específico que mentía si el reason real era otro).
+        # Este fallback genérico no especula la causa.
+        _UNKNOWN_REASON_TEMPLATE = {
+            "title": "Bloqueo sin clasificar",
+            "body": "El sistema marcó este chunk como bloqueado pero no logramos identificar la causa. Si persiste, contacta soporte.",
+            "cta": None,
+            "url": None,
         }
 
         import json as _json
@@ -3481,13 +3985,67 @@ def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(
                     snap = _json.loads(snap)
                 except Exception:
                     snap = {}
-            reason_code = str(snap.get("_pantry_pause_reason") or "empty_pantry")
-            template = reason_to_text.get(reason_code, reason_to_text["empty_pantry"])
+            # [P2-HIST-AUDIT-9 · 2026-05-09] Selección de reason_code
+            # con prioridad por especificidad:
+            #   1. Si chunk es 'failed' con dead_letter_reason → ese
+            #      es el reason canónico (más definitivo que el
+            #      pause_reason del snapshot, que pudo quedar stale).
+            #   2. `_pause_reason` (P1-CHUNKS-3 missing_prior_lessons,
+            #      seteado dentro del pipeline LangGraph).
+            #   3. `_pantry_pause_reason` (los crons de pause pantry/
+            #      tz/snapshot lo escriben).
+            #   4. `learning_zero_logs` por compat legacy (algunos
+            #      paths antiguos lo escriben directo en el snapshot).
+            #   5. Fallback genérico (NO `empty_pantry` que mentía).
+            row_status = row.get("status")
+            dead_reason = row.get("dead_letter_reason")
+            if row_status == "failed" and dead_reason:
+                reason_code = str(dead_reason)
+            elif row_status == "processing":
+                # [P1-HIST-BLOCKED-STUCK · 2026-05-09] El SELECT ya
+                # filtró por lag_seconds > _stuck_lag_hours; aquí solo
+                # asignamos el reason_code canónico. Si el chunk
+                # llegara con status='processing' por una rama futura
+                # que no aplique el filtro (e.g. include_stuck=False
+                # pero el WHERE evolucionó), la guard sigue siendo
+                # consistente: status define el reason_code.
+                reason_code = "stuck_processing"
+            elif row_status == "stale":
+                reason_code = "stuck_stale"
+            else:
+                reason_code = (
+                    str(snap.get("_pause_reason"))
+                    if snap.get("_pause_reason")
+                    else (
+                        str(snap.get("_pantry_pause_reason"))
+                        if snap.get("_pantry_pause_reason")
+                        else str(snap.get("reason") or "")
+                    )
+                )
+                if not reason_code:
+                    # Detectar zero-logs legacy desde el snapshot.
+                    if snap.get("_learning_zero_logs"):
+                        reason_code = "learning_zero_logs"
+                    else:
+                        reason_code = "_unknown"
+
+            template = reason_to_text.get(reason_code, _UNKNOWN_REASON_TEMPLATE)
             reasons.append({
                 "chunk_id": row.get("id"),
                 "week_number": row.get("week_number"),
                 "reason_code": reason_code,
+                "status": row_status,
+                "dead_letter_reason": dead_reason,
                 "paused_seconds": int(row.get("paused_seconds") or 0),
+                # [P1-HIST-BLOCKED-STUCK · 2026-05-09] `lag_seconds` =
+                # NOW - execute_after. Para chunks `processing`/`stale`
+                # del filtro stuck es la métrica diagnóstica clave (vs
+                # `paused_seconds` que es NOW - updated_at — puede
+                # estar fresco si el worker hizo heartbeat reciente
+                # sin avanzar). Para chunks pending_user_action/failed
+                # también se incluye por consistencia (puede ser útil
+                # para estimar "cuánto tiempo lleva bloqueado el plan").
+                "lag_seconds": int(row.get("lag_seconds") or 0),
                 **template,
             })
 
@@ -3501,41 +4059,2578 @@ def api_blocked_reasons(plan_id: str, verified_user_id: Optional[str] = Depends(
 
 @router.post("/{plan_id}/retry-chunk/{chunk_id}")
 def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str] = Depends(verify_api_quota)):
-    from db_core import execute_sql_write
+    """[P0-HIST-IDOR-1 · 2026-05-10] Reenvía un chunk fallido a la cola.
+
+    Bug original (audit 2026-05-10): los tres `UPDATE` filtraban solo por
+    `plan_id`/`chunk_id` sin chequear que el plan pertenezca al usuario
+    autenticado. Cualquier user con auth podía:
+      1. resetear `plan_chunk_queue` por `(chunk_id, plan_id)` en planes
+         ajenos → forzar re-ejecución de chunks de otros usuarios.
+      2. revivir todos los `cancelled` de un plan ajeno por `meal_plan_id`.
+      3. mutar `meal_plans.generation_status='partial'` con
+         `WHERE id = %s` puro → forzar polling sobre planes de víctimas.
+
+    Adicional: `verify_api_quota` cobra cuota al ATACANTE (no al dueño)
+    → DOS amplificable contra cualquier plan ajeno con el costo del
+    quota propio del atacante.
+
+    Fix: ownership check explícito (mismo patrón que `DELETE /{plan_id}`
+    en plans.py:4380-4389 y `/blocked_reasons` en plans.py:3637-3645) +
+    `AND user_id = %s` defense-in-depth en cada UPDATE para que un race
+    en el ownership check no permita la mutación parcial.
+
+    Tooltip-anchor: P0-HIST-IDOR-1-START | test_p0_hist_idor_1_retry_chunk_ownership
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+    if not chunk_id or not isinstance(chunk_id, str):
+        raise HTTPException(status_code=400, detail="chunk_id required")
+
+    from db_core import execute_sql_query, execute_sql_write
     try:
-        # Resetear el chunk fallido a 'pending'
+        # 1) Ownership check explícito. Sin esto, los UPDATE de abajo
+        #    podrían tocar filas de planes ajenos cuando el filtro
+        #    `AND user_id = %s` empareja una fila que originalmente
+        #    pertenece al usuario pero apunta vía PK a otra tabla
+        #    (defensa-en-profundidad: doble candado).
+        owner = execute_sql_query(
+            "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not owner:
+            # Devolvemos 404 (no 403) para no filtrar la existencia del
+            # plan ajeno. Mismo patrón que `DELETE /{plan_id}` línea 4389.
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+        # 2) Resetear el chunk fallido a 'pending'. Filtro por
+        #    meal_plan_id + (subquery user_id) defense-in-depth: si
+        #    una race-condition borra el plan entre el ownership check
+        #    y este UPDATE, el filtro por user_id evita que reseteemos
+        #    un chunk huérfano que ya no nos pertenece.
         execute_sql_write("""
             UPDATE plan_chunk_queue
             SET status = 'pending',
                 attempts = 0,
                 execute_after = NOW(),
                 updated_at = NOW()
-            WHERE id = %s AND meal_plan_id = %s AND status = 'failed'
-        """, (chunk_id, plan_id))
+            WHERE id = %s
+              AND meal_plan_id = %s
+              AND status = 'failed'
+              AND meal_plan_id IN (SELECT id FROM meal_plans WHERE user_id = %s)
+        """, (chunk_id, plan_id, verified_user_id))
 
-        # Revivir cualquier chunk que haya sido cancelado por culpa de este fallo
+        # 3) Revivir cualquier chunk que haya sido cancelado por culpa de este fallo
         execute_sql_write("""
             UPDATE plan_chunk_queue
             SET status = 'pending',
                 attempts = 0,
                 execute_after = NOW() + INTERVAL '1 minute',
                 updated_at = NOW()
-            WHERE meal_plan_id = %s AND status = 'cancelled'
-        """, (plan_id,))
+            WHERE meal_plan_id = %s
+              AND status = 'cancelled'
+              AND meal_plan_id IN (SELECT id FROM meal_plans WHERE user_id = %s)
+        """, (plan_id, verified_user_id))
 
-        # Volver a poner el plan en 'partial' para que el frontend retome el polling
+        # 4) Volver a poner el plan en 'partial' para que el frontend retome el polling
         execute_sql_write("""
             UPDATE meal_plans
             SET plan_data = jsonb_set(plan_data, '{generation_status}', '"partial"'),
                 updated_at = NOW()
-            WHERE id = %s
-        """, (plan_id,))
+            WHERE id = %s AND user_id = %s
+        """, (plan_id, verified_user_id))
 
         return {"success": True, "message": "Chunk reenviado a la cola"}
+        # P0-HIST-IDOR-1-END
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ [ERROR] en retry-chunk: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/restore")
+def api_restore_plan(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P0-HIST-1 · 2026-05-09] Restauración atómica de un plan archivado.
+
+    Reemplaza el patrón legacy frontend-only que solo hacía
+    ``UPDATE meal_plans SET plan_data = ? WHERE id = <latest>`` desde
+    `AssessmentContext.restorePlan`. Ese patrón dejaba chunks
+    pending/processing apuntando a la fila destino con
+    `pipeline_snapshot` del plan anterior y los workers seguían
+    mergeando días generados al estilo previo dentro del plan_data
+    recién sobrescrito → contaminación silenciosa del plan restaurado.
+    Adicionalmente NO actualizaba columnas top-level (name/calories/
+    macros/meal_names/ingredients/techniques) → drift entre `plan_data`
+    interno y el header del Dashboard que las lee directo.
+
+    Operación (todo dentro de una sola transacción Postgres):
+      1. Cancela chunks pending/processing del target con
+         `dead_letter_reason='restore_overwrite'` (preserva audit trail).
+      2. Libera `chunk_user_locks` asociados a chunks de ese target
+         (no toca locks de otros planes activos del usuario).
+      3. Sobrescribe `plan_data` Y las 6 columnas top-level con los
+         valores del source — cierre acoplado de P0-HIST-2.
+      4. Anota `_plan_modified_at` y `_restored_from_plan_id` en
+         plan_data (post-mortem y orden por actividad reciente).
+
+    Body:
+      ``{ "source_plan_id": "<uuid>" }`` — plan archivado a restaurar.
+    Target:
+      Fila más reciente del usuario por `created_at` (preserva la
+      semántica del frontend legacy). Si `target.id == source_plan_id`,
+      el endpoint es no-op idempotente.
+
+    Raises:
+      401 — sin auth.
+      400 — `source_plan_id` faltante o no string.
+      404 — source plan no existe o no pertenece al usuario.
+      409 — usuario sin planes activos (no hay target a sobrescribir).
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    source_plan_id = (data or {}).get("source_plan_id")
+    if not source_plan_id or not isinstance(source_plan_id, str):
+        raise HTTPException(status_code=400, detail="source_plan_id required")
+
+    from db_core import execute_sql_query, connection_pool
+    import psycopg
+    from psycopg.rows import dict_row
+
+    # 1) Source: leer plan_data + columnas top-level. La cláusula
+    #    `user_id = %s` es el ownership check (RLS-safe; no confiamos
+    #    en que el cliente nos pase un id de otro usuario).
+    src = execute_sql_query(
+        """
+        SELECT id, plan_data, name, calories, macros,
+               meal_names, ingredients, techniques
+        FROM meal_plans
+        WHERE id = %s AND user_id = %s
+        """,
+        (source_plan_id, verified_user_id),
+        fetch_one=True,
+    )
+    if not src:
+        raise HTTPException(status_code=404, detail="Source plan not found")
+
+    # 2) Enriquecer plan_data antes del UPDATE. `_plan_modified_at` es
+    #    consumido por crons que filtran "planes editados últimas 24h"
+    #    (P3-A re-evalúa coherencia). `_restored_from_plan_id` permite
+    #    correlacionar para post-mortem si un restore corrompió algo.
+    enriched_pd = dict(src.get("plan_data") or {})
+    enriched_pd["_plan_modified_at"] = datetime.now(timezone.utc).isoformat()
+    enriched_pd["_restored_from_plan_id"] = str(source_plan_id)
+
+    # [P1-HIST-AUDIT-3 · 2026-05-09] Limpiar flags de fallo del SOURCE.
+    # `_user_action_required` (banner CTA "regenera chunks fallados") y
+    # `_recovery_exhausted_chunks` (lista de chunks dead-lettered) son
+    # marcas del fallo histórico del SOURCE; arrastrarlas al target tras
+    # restore deja al usuario con un banner amarillo + chip "failed/action"
+    # en el plan recién reactivado, aunque la decisión explícita de
+    # reactivar implica que se acepta el plan tal-cual. Si la generación
+    # del target vuelve a fallar tras el restore, los crons re-setearán
+    # las flags con los chunks REALES del nuevo intento.
+    #
+    # Cobertura del consumidor:
+    #   - History.jsx::getStatusInfo (líneas 340-348) clasifica como
+    #     `failed` cuando `_recovery_exhausted_chunks` no está vacío;
+    #     `action_required` cuando `_user_action_required` está presente.
+    #   - History.jsx::actionBanner (línea 833+) renderiza banner si
+    #     `_user_action_required` o `_recovery_exhausted_chunks` no
+    #     vacío.
+    # Limpieza simétrica con esos consumidores: pop ambos en el origen.
+    enriched_pd.pop("_user_action_required", None)
+    enriched_pd.pop("_recovery_exhausted_chunks", None)
+
+    target_plan_id = None
+    cancelled_chunks = 0
+    cancelled_source_chunks = 0
+    released_locks = 0
+    is_noop = False
+    try:
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cur:
+                    # [P1-HIST-AUDIT-7 · 2026-05-09] Advisory lock
+                    # per-user PRIMERO en la transacción. Sin esto,
+                    # dos restores concurrentes leían el mismo
+                    # `target` (latest) y ambos sobrescribían — el
+                    # último gana, el primero se perdía silenciosa-
+                    # mente. Lock transaccional: se libera al
+                    # COMMIT/ROLLBACK; users distintos NO se bloquean
+                    # entre sí (key per-user, no global).
+                    from db_plans import acquire_user_history_advisory_lock
+                    acquire_user_history_advisory_lock(cur, verified_user_id)
+
+                    # 3) Target dentro del lock: el plan que el USUARIO
+                    #    ve como activo en su UI.
+                    #    [P1-HIST-AUDIT-1 · 2026-05-08] SSOT con frontend
+                    #    History.jsx::_effectiveModifiedAt → max(created_at,
+                    #    _plan_modified_at). Antes este SELECT ordenaba
+                    #    solo por created_at, lo que abría drift cuando
+                    #    el usuario ya había restaurado un plan archivado
+                    #    con created_at anterior. GREATEST(a, COALESCE(b,
+                    #    a)) replica el Math.max(b, a) del frontend con
+                    #    b posiblemente null. Tie-breaker secundario por
+                    #    created_at DESC mantiene determinismo entre ties.
+                    #
+                    #    Asunción: `_plan_modified_at`, cuando existe, es
+                    #    ISO timestamptz válido. Todos los call sites del
+                    #    backend lo sellan con datetime.isoformat() — si
+                    #    una fila corrupta lo rompe, el cast falla
+                    #    ruidosamente.
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM meal_plans
+                        WHERE user_id = %s
+                        ORDER BY GREATEST(
+                            created_at,
+                            COALESCE(
+                                (plan_data->>'_plan_modified_at')::timestamptz,
+                                created_at
+                            )
+                        ) DESC,
+                        created_at DESC
+                        LIMIT 1
+                        """,
+                        (verified_user_id,),
+                    )
+                    tgt_row = cur.fetchone()
+                    if not tgt_row:
+                        # Edge: usuario sin planes. Rechazamos para
+                        # evitar comportamiento sorpresa (clonar el
+                        # source crearía una fila adicional y rompería
+                        # el invariante "1 plan activo").
+                        raise HTTPException(
+                            status_code=409,
+                            detail="No active plan to overwrite. Generate a new plan first.",
+                        )
+
+                    target_plan_id = tgt_row["id"]
+                    if str(target_plan_id) == str(source_plan_id):
+                        # No-op idempotente: el plan archivado YA es
+                        # el más reciente. Salimos del bloque sin
+                        # tocar plan_chunk_queue/locks/meal_plans.
+                        # El COMMIT del with-transaction libera el
+                        # advisory lock automáticamente.
+                        is_noop = True
+                    else:
+                        # 3a) Cancelar TODOS los chunks "vivos" del target.
+                        #     [P0-AUDIT-HIST-1 · 2026-05-09] El filtro
+                        #     histórico era `('pending', 'processing')`,
+                        #     pero el SSOT del resto del backend
+                        #     (db_plans.py:573, services.py:222,
+                        #     routers/plans.py:2059) cubre 5 estados.
+                        #     Restar `stale`, `pending_user_action` y
+                        #     `failed` dejaba zombis: un chunk pausado
+                        #     por pantry/tz/missing-lessons o uno con
+                        #     heartbeat expirado podía despertarse tras
+                        #     el restore con `pipeline_snapshot` del
+                        #     plan PREVIO al target y escribir días al
+                        #     plan_data recién sobrescrito → exactamente
+                        #     la corrupción silenciosa que P0-HIST-1 fue
+                        #     diseñado a prevenir.
+                        #
+                        #     `failed` también se cancela porque tras
+                        #     restore su `pipeline_snapshot` ya no aplica
+                        #     al plan vivo; el recovery cron NO debe
+                        #     re-intentarlo contra `plan_data` restaurado.
+                        #
+                        #     `COALESCE(...)` preserva razones previas
+                        #     si un cron ya marcó la fila como
+                        #     cancelled por otro motivo (defensivo,
+                        #     raro pero posible).
+                        cur.execute(
+                            """
+                            UPDATE plan_chunk_queue
+                            SET status = 'cancelled',
+                                dead_letter_reason = COALESCE(
+                                    dead_letter_reason, %s
+                                ),
+                                dead_lettered_at = COALESCE(
+                                    dead_lettered_at, NOW()
+                                ),
+                                updated_at = NOW()
+                            WHERE meal_plan_id = %s
+                              AND status IN (
+                                  'pending', 'processing', 'stale',
+                                  'pending_user_action', 'failed'
+                              )
+                            """,
+                            ("restore_overwrite", target_plan_id),
+                        )
+                        cancelled_chunks = cur.rowcount or 0
+
+                        # 3a-bis) [P2-HIST-AUDIT-5 · 2026-05-09]
+                        #     Cancelar chunks vivos del SOURCE también.
+                        #     Antes el restore solo cancelaba chunks
+                        #     del target — workers vivos del source
+                        #     seguían corriendo y escribiendo al row
+                        #     source tras el copy a target → row source
+                        #     con plan_data modificado post-archivo
+                        #     (debería ser snapshot inmutable). UX
+                        #     confusa al hacer post-mortem y consumo
+                        #     desperdiciado de slots LLM. Razón
+                        #     distinta `restore_source_archived` separa
+                        #     el audit trail de los cancels del target.
+                        #
+                        #     [P0-AUDIT-HIST-1 · 2026-05-09] Mismo
+                        #     5-state SSOT que el cancel del target —
+                        #     un chunk del source en pending_user_action
+                        #     o stale, si nunca se cancela, puede
+                        #     resucitar tras el restore (e.g., el cron
+                        #     de unblock pantry refresh detecta el row
+                        #     source todavía "vivo") y escribir contra
+                        #     un plan_data que ya no es el activo.
+                        cur.execute(
+                            """
+                            UPDATE plan_chunk_queue
+                            SET status = 'cancelled',
+                                dead_letter_reason = COALESCE(
+                                    dead_letter_reason, %s
+                                ),
+                                dead_lettered_at = COALESCE(
+                                    dead_lettered_at, NOW()
+                                ),
+                                updated_at = NOW()
+                            WHERE meal_plan_id = %s
+                              AND status IN (
+                                  'pending', 'processing', 'stale',
+                                  'pending_user_action', 'failed'
+                              )
+                            """,
+                            ("restore_source_archived", source_plan_id),
+                        )
+                        cancelled_source_chunks = cur.rowcount or 0
+
+                        # 3b) Liberar locks asociados a chunks del
+                        #     target Y del source. `chunk_user_locks`
+                        #     es per-user (UNIQUE constraint sobre
+                        #     user_id) → puede haber a lo más UN
+                        #     lock vivo, pero si pertenece a un chunk
+                        #     del source que estaba corriendo, debe
+                        #     liberarse igual (sino el siguiente
+                        #     pickup del worker se queda colgado).
+                        #
+                        #     [P0-HIST-AUDIT-1 · 2026-05-09] La PK de
+                        #     plan_chunk_queue es `id` (uuid). Antes
+                        #     esta subquery referenciaba `chunk_id`,
+                        #     columna que NO existe → Postgres lanzaba
+                        #     `UndefinedColumn` → ROLLBACK del bloque
+                        #     entero → 500 silencioso desde Historial.
+                        #     `chunk_user_locks.locked_by_chunk_id` se
+                        #     popula con `plan_chunk_queue.id`.
+                        #     [P2-HIST-AUDIT-5 · 2026-05-09] Subquery
+                        #     extendida con `IN (target, source)` para
+                        #     cubrir locks de cualquiera de los dos
+                        #     planes afectados por el restore.
+                        cur.execute(
+                            """
+                            DELETE FROM chunk_user_locks
+                            WHERE user_id = %s
+                              AND locked_by_chunk_id IN (
+                                  SELECT id FROM plan_chunk_queue
+                                  WHERE meal_plan_id IN (%s, %s)
+                              )
+                            """,
+                            (verified_user_id, target_plan_id, source_plan_id),
+                        )
+                        released_locks = cur.rowcount or 0
+
+                        # 3c) Sobrescribir target con plan_data Y
+                        #     columnas top-level. La cláusula
+                        #     `user_id = %s` es redundante con el
+                        #     SELECT inicial pero no se debe omitir
+                        #     (defense-in-depth contra reuso accidental
+                        #     del id en otro contexto).
+                        cur.execute(
+                            """
+                            UPDATE meal_plans
+                            SET plan_data = %s::jsonb,
+                                name = %s,
+                                calories = %s,
+                                macros = %s::jsonb,
+                                meal_names = %s,
+                                ingredients = %s,
+                                techniques = %s
+                            WHERE id = %s AND user_id = %s
+                            """,
+                            (
+                                _json.dumps(enriched_pd),
+                                src.get("name"),
+                                src.get("calories"),
+                                _json.dumps(src.get("macros") or {}),
+                                list(src.get("meal_names") or []),
+                                list(src.get("ingredients") or []),
+                                list(src.get("techniques") or []),
+                                target_plan_id,
+                                verified_user_id,
+                            ),
+                        )
+        logger.info(
+            "[P0-HIST-1] restore plan: user=%s target=%s source=%s "
+            "cancelled_chunks=%d cancelled_source_chunks=%d "
+            "released_locks=%d noop=%s",
+            verified_user_id, target_plan_id, source_plan_id,
+            cancelled_chunks, cancelled_source_chunks,
+            released_locks, is_noop,
+        )
+        return {
+            "success": True,
+            "target_plan_id": str(target_plan_id),
+            "source_plan_id": str(source_plan_id),
+            "cancelled_chunks": cancelled_chunks,
+            # [P2-HIST-AUDIT-5 · 2026-05-09] cancelled_source_chunks
+            # expone separately el conteo de chunks del SOURCE que
+            # estaban pending al momento del restore — útil para
+            # diagnosticar UX confusa ("¿por qué mi plan archivado
+            # cambió tras restore?") y verificar que el cleanup
+            # cerró los workers correctamente.
+            "cancelled_source_chunks": cancelled_source_chunks,
+            "released_locks": released_locks,
+            "noop": is_noop,
+        }
+    except HTTPException:
+        raise
+    except psycopg.Error as e:
+        logger.error(f"❌ [P0-HIST-1] DB error en restore: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+    except Exception as e:
+        logger.error(f"❌ [P0-HIST-1] error en restore: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.delete("/{plan_id}")
+def api_delete_plan(
+    plan_id: str,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P0-HIST-3 · 2026-05-09] Eliminación atómica de un plan + cleanup
+    de locks de chunks asociados.
+
+    Reemplaza el patrón legacy del frontend (`History.jsx` hacía
+    ``supabase.from('meal_plans').delete().eq('id', plan_id)``
+    directo). Ese flujo dejaba dos clases de basura:
+
+      1. **Locks zombi**: `chunk_user_locks` no tiene FK a
+         `meal_plans` (sólo a `user_profiles`), así que un lock
+         con `locked_by_chunk_id` apuntando a un chunk del plan
+         eliminado seguía vivo hasta que el sweep cron lo expirara
+         por `heartbeat_at` stale (típicamente 5-15 min). Si el
+         plan eliminado era el activo, la siguiente generación
+         podía colisionar con ese lock zombi.
+      2. **Telemetría orphan**: `chunk_lesson_telemetry` y
+         `chunk_deferrals` tampoco tenían FK; sus filas con
+         `meal_plan_id` no resoluble crecían monotonas. La
+         migración SSOT `p0_hist_3_telemetry_orphan_fk.sql` añade
+         FK con `ON DELETE SET NULL` para resolver esta clase
+         desde la base de datos (defensa en profundidad).
+
+    El endpoint hace todo en una sola transacción Postgres:
+      1. Verifica ownership con `SELECT ... WHERE id=? AND user_id=?`.
+      2. `DELETE FROM chunk_user_locks` con subquery que filtra
+         locks asociados a chunks del plan (sin tocar locks de
+         otros planes activos del usuario).
+      3. `DELETE FROM meal_plans WHERE id=? AND user_id=?` —
+         CASCADE en `plan_chunk_queue` borra chunks pendientes,
+         SET NULL en `plan_chunk_metrics` preserva métricas
+         históricas, y (post-migración SSOT P0-HIST-3) SET NULL
+         en `chunk_lesson_telemetry`/`chunk_deferrals`.
+
+    Path param:
+      `plan_id` — uuid del plan a eliminar.
+    Returns:
+      ``{ "success": True, "released_locks": N, "deleted": True }``
+
+    Raises:
+      401 — sin auth.
+      404 — plan no existe o no pertenece al usuario.
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+
+    from db_core import execute_sql_query, connection_pool
+    import psycopg
+    from psycopg.rows import dict_row
+
+    # 1) Verificación de ownership. Sin esto, un usuario con auth
+    #    podría borrar planes de otros (RLS lo cubriría a nivel SQL,
+    #    pero el endpoint debe responder 404 explícito en vez de
+    #    "delete silenciosamente afectó 0 filas").
+    owner_check = execute_sql_query(
+        """
+        SELECT id FROM meal_plans
+        WHERE id = %s AND user_id = %s
+        """,
+        (plan_id, verified_user_id),
+        fetch_one=True,
+    )
+    if not owner_check:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    released_locks = 0
+    try:
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cur:
+                    # [P1-HIST-AUDIT-7 · 2026-05-09] Advisory lock
+                    # per-user para serializar mutators del Historial.
+                    # Sin esto, un delete concurrente con un
+                    # restore/rename del mismo user podía interleavearse
+                    # (e.g., delete corre entre el SELECT target y el
+                    # UPDATE del restore → restore termina escribiendo
+                    # en una fila que ya no existe, o el target del
+                    # restore cambia entre las dos lecturas).
+                    from db_plans import acquire_user_history_advisory_lock
+                    acquire_user_history_advisory_lock(cur, verified_user_id)
+
+                    # 2) Liberar chunk_user_locks asociados a chunks
+                    #    del plan. La subquery debe ejecutarse ANTES
+                    #    del DELETE en meal_plans, porque ON DELETE
+                    #    CASCADE de plan_chunk_queue borrará los rows
+                    #    cuyos ids necesitamos para filtrar.
+                    #
+                    #    [P0-HIST-AUDIT-1 · 2026-05-09] La PK de
+                    #    plan_chunk_queue es `id` (uuid); NO existe
+                    #    una columna `chunk_id`. Antes esta subquery
+                    #    la referenciaba → `UndefinedColumn` →
+                    #    ROLLBACK → DELETE silenciosamente abortaba.
+                    #    `chunk_user_locks.locked_by_chunk_id` se
+                    #    popula con `plan_chunk_queue.id`.
+                    cur.execute(
+                        """
+                        DELETE FROM chunk_user_locks
+                        WHERE user_id = %s
+                          AND locked_by_chunk_id IN (
+                              SELECT id FROM plan_chunk_queue
+                              WHERE meal_plan_id = %s
+                          )
+                        """,
+                        (verified_user_id, plan_id),
+                    )
+                    released_locks = cur.rowcount or 0
+
+                    # 3) DELETE meal_plans. CASCADE en
+                    #    plan_chunk_queue + SET NULL en
+                    #    plan_chunk_metrics + (post-migración)
+                    #    chunk_lesson_telemetry/chunk_deferrals.
+                    cur.execute(
+                        """
+                        DELETE FROM meal_plans
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (plan_id, verified_user_id),
+                    )
+                    deleted_count = cur.rowcount or 0
+                    if deleted_count == 0:
+                        # Race: alguien borró entre owner_check y este
+                        # DELETE. Tratar como 404 — la intención del
+                        # usuario ya se satisfizo (el plan no existe).
+                        raise HTTPException(
+                            status_code=404, detail="Plan not found"
+                        )
+        logger.info(
+            "[P0-HIST-3] delete plan: user=%s plan=%s released_locks=%d",
+            verified_user_id, plan_id, released_locks,
+        )
+        return {
+            "success": True,
+            "released_locks": released_locks,
+            "deleted": True,
+        }
+    except HTTPException:
+        raise
+    except psycopg.Error as e:
+        logger.error(f"❌ [P0-HIST-3] DB error en delete: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+    except Exception as e:
+        logger.error(f"❌ [P0-HIST-3] error en delete: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+# [P1-HIST-AUDIT-5 · 2026-05-09] Whitelist de events de
+# `chunk_lesson_telemetry` que son LECCIONES semánticas (cuentan para
+# el chip "X lecciones" del Historial), versus métricas mecánicas /
+# de salud (no son lecciones que el sistema "aprendió").
+#
+# [P1-AUDIT-HIST-7 · 2026-05-09] La fuente de verdad migró a
+# `constants.LESSON_COUNT_EVENT_WHITELIST` para que cualquier
+# consumidor (este endpoint, admin tools, monitoring) opere sobre la
+# misma tupla — drift cero por construcción. El alias privado
+# `_LESSON_COUNT_EVENT_WHITELIST` se preserva como módulo-attr para
+# retrocompatibilidad con tests existentes (P1-HIST-AUDIT-5,
+# P2-HIST-AUDIT-2) que leen el atributo via `getattr(plans_module, ...)`.
+# Catálogo + clasificación documentados en `constants.py`.
+from constants import LESSON_COUNT_EVENT_WHITELIST as _LESSON_COUNT_EVENT_WHITELIST
+
+
+@router.get("/lessons-counts")
+def api_plans_lessons_counts(
+    response: Response,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P1-HIST-3 · 2026-05-09] Conteo de lecciones (`chunk_lesson_telemetry`)
+    por plan del usuario, con whitelist de events semánticos
+    (P1-HIST-AUDIT-5).
+
+    Diseñado como SINGLE roundtrip para el listado del Historial: en
+    lugar de N queries (una por card visible) cuando el usuario abre
+    `/history`, devolvemos `{plan_id: count}` para todos sus planes.
+    El frontend cachea el resultado en state local mientras la página
+    está montada.
+
+    [P1-HIST-AUDIT-5 · 2026-05-09] El conteo filtra por
+    `_LESSON_COUNT_EVENT_WHITELIST`. Antes (P1-HIST-3 v1) contábamos
+    cualquier `event`, mezclando lecciones reales con métricas
+    mecánicas (`synth_schema_invalid`, `learning_rebuild_failed`,
+    etc.) — el chip "X lecciones" mentía cuando un plan tenía solo
+    descartes de síntesis. La whitelist explícita está documentada
+    arriba del endpoint con el catálogo completo.
+
+    Otros filtros:
+      - Excluye `meal_plan_id IS NULL` (orphans post-P0-HIST-3 SET
+        NULL) — esos rows pertenecen a planes ya eliminados y no
+        tienen card visible.
+      - Excluye implícitamente planes con count=0 vía `GROUP BY` —
+        el frontend trata "sin entrada" como cero (no agrega chip).
+
+    RLS: la tabla `chunk_lesson_telemetry` tiene RLS habilitado;
+    `WHERE user_id = %s` es defense-in-depth además del filtro RLS.
+
+    Returns:
+      ``{ "counts": { "<plan_id_str>": <count_int>, ... } }``
+
+    Raises:
+      401 — sin auth.
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    # [P2-HIST-AUDIT-A · 2026-05-09] no-store.
+    _apply_no_store(response)
+
+    from db_core import execute_sql_query
+    try:
+        # `event = ANY(%s)` con array de strings es la forma idiomática
+        # en psycopg para evitar generar SQL dinámico con N
+        # placeholders. Postgres usa el index sobre `event` si existe
+        # (`idx_chunk_lesson_telemetry_event_created_at` lo cubre).
+        #
+        # [P2-HIST-AUDIT-D · 2026-05-09] Agregamos `event` al SELECT +
+        # GROUP BY para poder splitear por tier en Python (high /
+        # partial / low). Sin esto, el chip del Historial era plano
+        # — un plan con 10 lecciones high se veía igual que uno con
+        # 10 low (en realidad ~10× más valioso). Mantenemos el campo
+        # `counts` agregado top-level para retrocompat (frontend
+        # legacy que lee body.counts directo).
+        rows = execute_sql_query(
+            """
+            SELECT meal_plan_id::text AS pid, event, COUNT(*)::int AS cnt
+            FROM chunk_lesson_telemetry
+            WHERE user_id = %s
+              AND meal_plan_id IS NOT NULL
+              AND event = ANY(%s)
+            GROUP BY meal_plan_id, event
+            """,
+            (verified_user_id, list(_LESSON_COUNT_EVENT_WHITELIST)),
+            fetch_all=True,
+        ) or []
+
+        # Split por tier según LESSON_QUALITY_TIERS (constants.py).
+        # Map event → tier para lookup O(1) por row.
+        from constants import LESSON_QUALITY_TIERS
+        _event_to_tier = {}
+        for tier, events in LESSON_QUALITY_TIERS.items():
+            for ev in events:
+                _event_to_tier[ev] = tier
+
+        counts: dict = {}
+        counts_by_quality: dict = {}
+        for r in rows:
+            pid = r.get("pid")
+            if not pid:
+                continue
+            cnt = int(r.get("cnt") or 0)
+            ev = r.get("event") or ""
+            tier = _event_to_tier.get(ev)
+            # Total agregado (retrocompat).
+            counts[pid] = counts.get(pid, 0) + cnt
+            # Split por tier — solo si el event está clasificado en
+            # alguna tier. Si LESSON_QUALITY_TIERS pierde sync con
+            # LESSON_COUNT_EVENT_WHITELIST, el event cae al fallback
+            # `unknown` (sin romper el response — el test de drift
+            # cross-archivo lo detecta).
+            if pid not in counts_by_quality:
+                counts_by_quality[pid] = {"high": 0, "partial": 0, "low": 0}
+            if tier in counts_by_quality[pid]:
+                counts_by_quality[pid][tier] += cnt
+        return {"counts": counts, "counts_by_quality": counts_by_quality}
+    except Exception as e:
+        logger.error(f"❌ [P1-HIST-3] error en lessons-counts: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.get("/history-status-summary")
+def api_plans_history_status_summary(
+    response: Response,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P0-AUDIT-HIST-2 · 2026-05-09] Resumen agregado de estados de
+    `plan_chunk_queue` por plan del usuario, para reconciliar con
+    `plan_data` flags en el Historial.
+
+    Bug original (audit Historial 2026-05-09):
+        El Historial deriva su bucket de status (`complete` /
+        `partial` / `failed` / `action_required` / `unknown`) 100% desde
+        `meal_plans.plan_data` (`generation_status`,
+        `_user_action_required`, `_recovery_exhausted_chunks`). Pero
+        ese jsonb solo se actualiza por `_escalate_unrecoverable_chunk`
+        (`cron_tasks.py:7928`). Las otras 6 rutas que setean
+        `status='pending_user_action'` (pausa pantry, snapshot stale,
+        TZ unresolved, missing prior lessons pre-escalation,
+        `cron_tasks.py:5977 / 6038 / 6114 / 10636 / 12091 / 16798`) NO
+        tocan plan_data.
+
+        Confirmado en producción al inspeccionar la DB de MealFitRD:
+        existe un chunk en `pending_user_action` cuyo plan_data dice
+        `generation_status='complete'` y `_user_action_required=null` →
+        el Historial muestra "Completo" (o como mucho "Parcial X/Y" si
+        `daysGenerated < total`) y el banner "Acción" jamás aparece.
+        El usuario nunca se entera de que hay un chunk bloqueado.
+
+    Diseño:
+        - Agregación con `FILTER (WHERE status = ...)` para devolver
+          un dict por plan con cinco contadores: pending_user_action,
+          failed, in_flight (pending/processing/stale), completed,
+          y `total` (suma defensiva).
+        - Cap defensivo de 200 planes (mismo que `/history-list`).
+        - Defense-in-depth: `WHERE user_id = %s` además del RLS de
+          `plan_chunk_queue` (RLS+FORCE confirmado, P0 RLS hardening).
+        - Excluye `meal_plan_id IS NULL` (orphans de SET NULL post
+          P0-HIST-3).
+
+    Frontend lo consume en `History.jsx::fetchHistory` como segundo
+    request (paralelo al de lessons-counts y al de history-list)
+    para que `getStatusInfo` pueda elevar el bucket a
+    `action_required` cuando el queue tiene
+    `pending_user_action_count > 0` o `failed_count > 0` aunque
+    `plan_data._user_action_required` esté null. La reconciliación
+    es client-side; este endpoint solo ofrece la fuente de verdad
+    operativa.
+
+    Returns:
+      ``{ "summary": {
+          "<plan_id_str>": {
+              "pending_user_action_count": <int>,
+              "failed_count": <int>,
+              "failed_unreplaced_count": <int>,
+              "in_flight_count": <int>,
+              "completed_count": <int>,
+              "total": <int>,
+              "tier_breakdown": {<tier>: <count>, ...} | null
+          },
+          ...
+        } }``
+
+    Raises:
+      401 — sin auth.
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    # [P2-HIST-AUDIT-A · 2026-05-09] no-store.
+    _apply_no_store(response)
+
+    from db_core import execute_sql_query
+    try:
+        # `FILTER (WHERE ...)` agrega counts en una sola pasada por
+        # row en lugar de N self-joins. Postgres lo planifica como
+        # parcial por status sobre el HashAggregate del GROUP BY.
+        # `user_id` se filtra antes de agrupar (Index Cond) — la
+        # cardinalidad por usuario es baja (≤200 planes), así que
+        # incluso sin índice compuesto el costo es lineal en su set.
+        #
+        # [P1-AUDIT-HIST-6 · 2026-05-09] tier_breakdown jsonb por
+        # plan: agregamos `quality_tier` con `jsonb_object_agg` en
+        # un GROUP BY anidado. Solo cuenta chunks `completed` con
+        # quality_tier no-NULL (los demás estados no tienen tier
+        # significativo). Resultado: `{tier: count}` o NULL si el
+        # plan no tiene completed-with-tier.
+        rows = execute_sql_query(
+            """
+            SELECT
+                outer_q.meal_plan_id::text AS pid,
+                outer_q.pending_user_action_count,
+                outer_q.failed_count,
+                outer_q.failed_unreplaced_count,
+                outer_q.in_flight_count,
+                outer_q.completed_count,
+                outer_q.total,
+                qtiers.tier_breakdown
+            FROM (
+                SELECT
+                    meal_plan_id,
+                    COUNT(*) FILTER (WHERE status = 'pending_user_action')::int AS pending_user_action_count,
+                    COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_count,
+                    -- [P0-HIST-NEW-1 · 2026-05-09] failed sin sibling completed
+                    -- para misma (plan, week). Espeja la subquery en
+                    -- /history-list (~línea 5763). Sirve al frontend para
+                    -- el fallback legacy cuando los counters embebidos del
+                    -- listado no están disponibles (deploy lag).
+                    COUNT(*) FILTER (
+                        WHERE status = 'failed'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM plan_chunk_queue sibling
+                              WHERE sibling.meal_plan_id = plan_chunk_queue.meal_plan_id
+                                AND sibling.week_number = plan_chunk_queue.week_number
+                                AND sibling.id != plan_chunk_queue.id
+                                AND sibling.status = 'completed'
+                          )
+                    )::int AS failed_unreplaced_count,
+                    COUNT(*) FILTER (WHERE status IN ('pending', 'processing', 'stale'))::int AS in_flight_count,
+                    COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_count,
+                    COUNT(*)::int AS total
+                FROM plan_chunk_queue
+                WHERE user_id = %s
+                  AND meal_plan_id IS NOT NULL
+                GROUP BY meal_plan_id
+            ) outer_q
+            LEFT JOIN LATERAL (
+                SELECT jsonb_object_agg(quality_tier, cnt) AS tier_breakdown
+                FROM (
+                    SELECT quality_tier, COUNT(*)::int AS cnt
+                    FROM plan_chunk_queue inner_q
+                    WHERE inner_q.meal_plan_id = outer_q.meal_plan_id
+                      AND inner_q.user_id = %s
+                      AND inner_q.status = 'completed'
+                      AND inner_q.quality_tier IS NOT NULL
+                    GROUP BY quality_tier
+                ) t
+            ) qtiers ON TRUE
+            LIMIT 200
+            """,
+            (verified_user_id, verified_user_id),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.error(f"❌ [P0-AUDIT-HIST-2] error en history-status-summary: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+    summary = {}
+    for r in rows:
+        pid = r.get("pid")
+        if not pid:
+            continue
+        summary[pid] = {
+            "pending_user_action_count": int(r.get("pending_user_action_count") or 0),
+            "failed_count": int(r.get("failed_count") or 0),
+            # [P0-HIST-NEW-1 · 2026-05-09] failed sin sibling completed.
+            "failed_unreplaced_count": int(r.get("failed_unreplaced_count") or 0),
+            "in_flight_count": int(r.get("in_flight_count") or 0),
+            "completed_count": int(r.get("completed_count") or 0),
+            "total": int(r.get("total") or 0),
+            # [P1-AUDIT-HIST-6 · 2026-05-09] Tier breakdown solo de
+            # chunks completed con quality_tier no-NULL. Misma
+            # convención que `chunk_tier_breakdown` en /history-list:
+            # None cuando no hay tier info (vs `{}` que confundiría
+            # al frontend).
+            "tier_breakdown": (
+                r.get("tier_breakdown")
+                if isinstance(r.get("tier_breakdown"), dict)
+                and r.get("tier_breakdown")
+                else None
+            ),
+        }
+
+    logger.info(
+        "[HISTORY-STATUS-SUMMARY] user=%s plans_with_chunks=%d",
+        verified_user_id, len(summary),
+    )
+    return {"summary": summary}
+
+
+@router.get("/{plan_id}/lessons")
+def api_plan_lessons_detail(
+    plan_id: str,
+    response: Response,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P2-HIST-AUDIT-2 · 2026-05-09] Detalle por-plan de lecciones del
+    aprendizaje continuo (`chunk_lesson_telemetry`).
+
+    Complementa `/lessons-counts` (que devuelve solo el conteo
+    agregado por plan_id): este endpoint expande las filas individuales
+    para que el modal del Historial las pueda mostrar como tab
+    "Lecciones".
+
+    Filtros (idénticos al conteo agregado para coherencia):
+      - `meal_plan_id = plan_id` y `user_id = verified_user_id`
+        (defense-in-depth + ownership check vía SELECT previo).
+      - `event = ANY(_LESSON_COUNT_EVENT_WHITELIST)` (P1-HIST-AUDIT-5):
+        4 events semánticos. Sin esta whitelist, el detalle mostraría
+        eventos mecánicos (synth_schema_invalid, etc.) que el conteo
+        oculta — drift entre vistas.
+
+    Order: `created_at DESC` (la más reciente primero).
+    Cap: LIMIT 200 (defensivo; un plan rara vez genera >50 lecciones).
+
+    Returns:
+      ``{ "plan_id": "<uuid>", "lessons": [
+            {
+              "id": "<uuid>", "event": "<str>",
+              "week_number": <int>,
+              "synthesized_count": <int>, "queue_count": <int>,
+              "metadata": <obj|null>,
+              "created_at": "<iso>"
+            },
+            ...
+        ] }``
+
+    Raises:
+      401 — sin auth.
+      400 — plan_id missing/invalid.
+      404 — plan no existe o no pertenece al usuario.
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+    # [P2-HIST-AUDIT-A · 2026-05-09] no-store.
+    _apply_no_store(response)
+
+    from db_core import execute_sql_query
+    try:
+        # 1) Ownership check explícito. Sin esto, el endpoint
+        #    devolvería 200 con `lessons: []` para un plan que NO
+        #    pertenece al user — confuso (200 vs 404). El SELECT
+        #    extra es barato (PK lookup).
+        owner = execute_sql_query(
+            "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not owner:
+            raise HTTPException(status_code=404, detail="Plan not found")
+
+        rows = execute_sql_query(
+            """
+            SELECT id::text AS id, event, week_number,
+                   synthesized_count, queue_count,
+                   metadata, created_at
+            FROM chunk_lesson_telemetry
+            WHERE meal_plan_id = %s
+              AND user_id = %s
+              AND event = ANY(%s)
+            ORDER BY created_at DESC
+            LIMIT 200
+            """,
+            (plan_id, verified_user_id, list(_LESSON_COUNT_EVENT_WHITELIST)),
+            fetch_all=True,
+        ) or []
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [P2-HIST-AUDIT-2] error en lessons detail: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+    lessons = []
+    for r in rows:
+        created_at = r.get("created_at")
+        if hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
+        # [P2-HIST-NEW-2 · 2026-05-09] Coerción defensiva del jsonb
+        # `metadata`. psycopg suele entregar dicts pero un row legacy
+        # con metadata=None o tipo no-dict (string raw, lista) caería
+        # al frontend y rompería el render del preview de keys. None
+        # explícito permite al frontend distinguir "sin metadata" de
+        # "metadata vacío" — el render se omite en ambos casos pero
+        # el contrato es claro.
+        _meta = r.get("metadata")
+        if not isinstance(_meta, dict):
+            _meta = None
+        lessons.append({
+            "id": r.get("id"),
+            "event": r.get("event"),
+            "week_number": r.get("week_number"),
+            "synthesized_count": r.get("synthesized_count"),
+            "queue_count": r.get("queue_count"),
+            "metadata": _meta,
+            "created_at": created_at,
+        })
+
+    return {"plan_id": plan_id, "lessons": lessons}
+
+
+@router.get("/{plan_id}/coherence-history")
+def api_plan_coherence_history(
+    plan_id: str,
+    response: Response,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P2-HIST-AUDIT-2 · 2026-05-09] Detalle por-plan del historial de
+    ajustes de coherencia recetas↔lista de compras.
+
+    Complementa el chip "X ajustes" de la card (que solo muestra el
+    conteo agregado de entries anomalous): este endpoint devuelve la
+    lista completa para el tab "Ajustes" del modal del Historial.
+
+    A diferencia de `/lessons` (que vive en `chunk_lesson_telemetry`),
+    `_shopping_coherence_block_history` vive embebido en
+    `meal_plans.plan_data` (jsonb append-only, cap 20 entries —
+    P3-NEW-C). Extraemos vía operador `->`.
+
+    Returns:
+      ``{ "plan_id": "<uuid>", "history": [<entry>, ...] }``
+
+    Cada entry tiene shape variable según `action_taken`:
+      - degrade/reject_minor/reject_high: criticos + magnitudes diff
+      - hydration_error: bug del consumer (block_set sin action)
+      - not_applicable: warn-only (block_set=False)
+      - post_swap_revalidation (P2-B): observability post-swap
+
+    El frontend filtra/ordena según necesidad; aquí devolvemos el raw
+    para que el shape backend↔frontend sea simple y el detalle sea
+    extensible sin coordinación.
+
+    Raises:
+      401 — sin auth.
+      400 — plan_id missing/invalid.
+      404 — plan no existe o no pertenece al usuario.
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+    # [P2-HIST-AUDIT-A · 2026-05-09] no-store.
+    _apply_no_store(response)
+
+    from db_core import execute_sql_query
+    try:
+        # JOIN ownership + extract en un solo SELECT. Si la fila no
+        # existe O pertenece a otro user, el SELECT devuelve None
+        # → 404 sin DOS-able discovery.
+        row = execute_sql_query(
+            """
+            SELECT plan_data->'_shopping_coherence_block_history' AS history
+            FROM meal_plans
+            WHERE id = %s AND user_id = %s
+            """,
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Plan not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [P2-HIST-AUDIT-2] error en coherence-history: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+    # `history` viene como list[dict] (jsonb cast a Python). Si está
+    # ausente o es de otro tipo (corrupción), tratamos como vacío:
+    # el frontend renderiza "Sin ajustes" en lugar de crash.
+    history = row.get("history")
+    if not isinstance(history, list):
+        history = []
+
+    return {"plan_id": plan_id, "history": history}
+
+
+# [P1-HIST-LIFETIME-LESSONS · 2026-05-09] Caps defensivos de items
+# devueltos por plan. El historial puede crecer mucho en planes 30-90d
+# con regen frecuente; el modal del Historial solo necesita los más
+# recientes para el surface (no audit completo). Si un operador quiere
+# audit total, lee directo el jsonb desde DB.
+_LIFETIME_HISTORY_CAP = 50
+_LIFETIME_CRITICAL_CAP = 50
+# Whitelist de keys del summary que el endpoint expone. Drift detection:
+# si el productor (`cron_tasks.py:~20720`) añade una key, este endpoint
+# la propaga vía `whitelisted_keys` SIN filtrar por nombre — la lista
+# es solo para documentar el shape público en este punto en el tiempo.
+_LIFETIME_SUMMARY_NUMERIC_KEYS = (
+    "total_rejection_violations",
+    "total_allergy_violations",
+    "_lifetime_window_days",
+    "_lifetime_proxy_ratio",
+    "_lifetime_user_logs_count",
+    "_lifetime_proxy_count",
+)
+_LIFETIME_SUMMARY_LIST_KEYS = (
+    "top_rejection_hits",
+    "top_repeated_bases",
+    "top_repeated_meal_names",
+    "permanent_meal_blocklist",
+)
+
+# [P0-HIST-LEARN-1 · 2026-05-09] Whitelist de keys de
+# `_last_chunk_learning` que el endpoint expone. Es el SSOT de qué
+# aprendió el chunk anterior y se inyecta al PRÓXIMO chunk como
+# semilla del prompt — sin esto, el modal del Historial no podía
+# explicar "qué pasó en el chunk N-1 que afectó al chunk N".
+#
+# Productor: cron_tasks.py (`_persist_last_chunk_learning` y los
+# rebuilders `_rebuild_recent_chunk_lessons_from_queue` /
+# `_regenerate_recent_chunk_lessons_from_plan_days`). Cada key tiene
+# semántica distinta — split por tipo para que el frontend pueda
+# colorear severity sin tipear cada caso:
+#
+#   numeric: chunk (week N), repeat_pct (0-1), ingredient_base_repeat_pct,
+#            allergy_violations, rejection_violations, fatigued_violations
+#   bool   : low_confidence, metrics_unavailable, rebuilt_from_queue,
+#            rebuilt_from_preflight, rebuilt_from_pipeline_failure
+#   str    : timestamp (ISO), rebuilt_source_status, learning_signal_strength
+#   list   : repeated_meal_names, repeated_bases, allergy_hits,
+#            rejected_meals_that_reappeared
+#
+# Coerción defensiva por tipo: si una key llega con tipo inesperado,
+# cae al default (None / []). El frontend renderiza solo lo que tiene
+# valor — un plan legacy sin esta key responde sin la sub-sección.
+_LAST_CHUNK_LEARNING_NUMERIC_KEYS = (
+    "chunk",
+    "repeat_pct",
+    "ingredient_base_repeat_pct",
+    "allergy_violations",
+    "rejection_violations",
+    "fatigued_violations",
+)
+_LAST_CHUNK_LEARNING_BOOL_KEYS = (
+    "low_confidence",
+    "metrics_unavailable",
+    "rebuilt_from_queue",
+    "rebuilt_from_preflight",
+    "rebuilt_from_pipeline_failure",
+)
+_LAST_CHUNK_LEARNING_STR_KEYS = (
+    "timestamp",
+    "rebuilt_source_status",
+    "learning_signal_strength",
+)
+_LAST_CHUNK_LEARNING_LIST_KEYS = (
+    "repeated_meal_names",
+    "repeated_bases",
+    "allergy_hits",
+    "rejected_meals_that_reappeared",
+)
+
+
+@router.get("/{plan_id}/lifetime-lessons")
+def api_plan_lifetime_lessons(
+    plan_id: str,
+    response: Response,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P1-HIST-LIFETIME-LESSONS · 2026-05-09] Surface del aprendizaje
+    continuo lifetime para un plan archivado.
+
+    Bug original (audit Historial 2026-05-09 · gap P1-1):
+        El tab "Lecciones" del modal del Historial solo lee
+        `chunk_lesson_telemetry` (P2-HIST-AUDIT-2 + whitelist
+        P1-AUDIT-HIST-7 de 4 events). Eso es **telemetría sobre el
+        aprendizaje** (señales mecánicas tipo "lesson_synthesized",
+        "synth_propagated_to_prompt"), no el aprendizaje en sí.
+
+        El aprendizaje real vive en `plan_data` con 3 estructuras:
+
+          1. ``_lifetime_lessons_summary`` (dict): agregación
+             (recomputed en cada merge de chunk en `cron_tasks.py:
+             ~20720`). Contiene `total_rejection_violations`,
+             `total_allergy_violations`, `top_rejection_hits`,
+             `top_repeated_bases`, `top_repeated_meal_names`,
+             `permanent_meal_blocklist` (cap 50 — meals con ≥2
+             chunks repetidos), `_lifetime_proxy_ratio` (señal de
+             salud: meals aprendidos via proxy vs logs reales).
+
+          2. ``_lifetime_lessons_history`` (list[dict]): registro
+             append-only por chunk. Cada entry tiene `chunk` (week
+             number), `rejection_violations`, `allergy_violations`,
+             `rejected_meals_that_reappeared`, `repeated_bases`,
+             `repeated_meal_names`. P1-22 filtra dead-lettered en el
+             read-path antes de recomputar el summary.
+
+          3. ``_critical_lessons_permanent`` (list[dict]): subset
+             inmortal — lecciones con `allergy_violations > 0` o
+             `rejection_violations >= IMMORTAL_REJ` (constants.py).
+             Sobreviven al rolling window (P0-7); se podan con LRU
+             priorizado (P0-6) cuando exceden el hard cap.
+
+        Para el usuario que abre un plan archivado, todo este
+        aprendizaje cross-plan era invisible. Surface en el modal
+        permite al usuario ver *qué aprendió Mealfit de él* en ese
+        plan — diferenciador de producto que estaba enterrado en
+        jsonb sin UI.
+
+    Diseño:
+        Single roundtrip que devuelve las 3 estructuras desde
+        `meal_plans.plan_data` con caps defensivos:
+
+          - history capeado a 50 entries más recientes (el array
+            puede crecer en planes largos con regen frecuente; UI
+            no necesita audit completo).
+          - critical_permanent capeado a 50 (consistente con el cap
+            del productor en `_prune_critical_lessons_with_priority`).
+          - summary se devuelve completo (es agregado, no array).
+
+        Tolerante a corrupción: cualquier key ausente o con tipo
+        incorrecto cae al default (`null` para summary, `[]` para
+        listas) — un plan legacy sin estas keys responde 200 con
+        valores vacíos, no 500.
+
+    Returns:
+      ``{
+          "plan_id": "<uuid>",
+          "summary": {
+              "total_rejection_violations": <int>,
+              "total_allergy_violations": <int>,
+              "top_rejection_hits": [<str>, ...],
+              "top_repeated_bases": [<str>, ...],
+              "top_repeated_meal_names": [<str>, ...],
+              "permanent_meal_blocklist": [<str>, ...],
+              "_lifetime_window_days": <int>,
+              "_lifetime_proxy_ratio": <float>,
+              "_lifetime_user_logs_count": <int>,
+              "_lifetime_proxy_count": <int>
+          } | null,
+          "history": [<entry>, ...],
+          "critical_permanent": [<entry>, ...],
+          "last_chunk_learning": {
+              "chunk": <int|null>,
+              "timestamp": "<iso|null>",
+              "repeat_pct": <float|null>,
+              "ingredient_base_repeat_pct": <float|null>,
+              "allergy_violations": <int|null>,
+              "rejection_violations": <int|null>,
+              "fatigued_violations": <int|null>,
+              "low_confidence": <bool|null>,
+              "metrics_unavailable": <bool|null>,
+              "rebuilt_from_queue": <bool|null>,
+              "rebuilt_from_preflight": <bool|null>,
+              "rebuilt_from_pipeline_failure": <bool|null>,
+              "rebuilt_source_status": "<str|null>",
+              "learning_signal_strength": "<str|null>",
+              "repeated_meal_names": [<str>, ...],
+              "repeated_bases": [<str>, ...],
+              "allergy_hits": [<str>, ...],
+              "rejected_meals_that_reappeared": [<str>, ...]
+          } | null,
+          "counts": {
+              "history_total": <int>,
+              "history_returned": <int>,
+              "critical_permanent_total": <int>,
+              "critical_permanent_returned": <int>
+          }
+        }``
+
+    [P0-HIST-LEARN-1 · 2026-05-09] `last_chunk_learning` es la semilla
+    literal que el cron inyecta al PRÓXIMO chunk como contexto de
+    aprendizaje (ver `_persist_last_chunk_learning` en cron_tasks.py).
+    Diagnóstico "por qué el chunk N+1 generó X" antes requería SQL al
+    jsonb — ahora visible en el modal.
+
+    [P0-HIST-LEARN-2 · 2026-05-09] `consecutive_zero_log_chunks` es el
+    counter que dispara push alarmante (≥3) + flip de generation_status
+    a 'degraded_pending_engagement'. Antes invisible al user: el sistema
+    aprendía sin feedback y la única señal era el push. `generation_status`
+    se devuelve junto para que el frontend pueda diferenciar
+    "degradado por engagement" del status canónico del plan.
+
+    Raises:
+      401 — sin auth.
+      400 — plan_id missing/invalid.
+      404 — plan no existe o no pertenece al usuario.
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+    # [P2-HIST-AUDIT-A · 2026-05-09] no-store.
+    _apply_no_store(response)
+
+    from db_core import execute_sql_query
+    try:
+        # JOIN ownership + extract en un solo SELECT (mismo patrón
+        # que `coherence-history` arriba). Si la fila no existe O
+        # pertenece a otro user, el SELECT devuelve None → 404 sin
+        # DOS-able discovery.
+        row = execute_sql_query(
+            """
+            SELECT
+                plan_data->'_lifetime_lessons_summary' AS summary,
+                plan_data->'_lifetime_lessons_history' AS history,
+                plan_data->'_critical_lessons_permanent' AS critical_permanent,
+                plan_data->'_last_chunk_learning' AS last_chunk_learning,
+                NULLIF(plan_data->>'_consecutive_zero_log_chunks', '')::int
+                    AS consecutive_zero_log_chunks,
+                plan_data->>'generation_status' AS generation_status
+            FROM meal_plans
+            WHERE id = %s AND user_id = %s
+            """,
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Plan not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [P1-HIST-LIFETIME-LESSONS] error en lifetime-lessons: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+    # Summary: dict whitelisted. Cualquier key con tipo inválido cae
+    # al default — el frontend renderiza "Sin datos" para esa key
+    # individual, no rompe el tab entero.
+    summary_raw = row.get("summary")
+    summary = None
+    if isinstance(summary_raw, dict):
+        summary = {}
+        for k in _LIFETIME_SUMMARY_NUMERIC_KEYS:
+            v = summary_raw.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                summary[k] = v
+            else:
+                summary[k] = None
+        for k in _LIFETIME_SUMMARY_LIST_KEYS:
+            v = summary_raw.get(k)
+            summary[k] = [str(x) for x in v if x is not None] if isinstance(v, list) else []
+
+    # History: list[dict] append-only. Devolvemos los más recientes
+    # del tail (el productor en `cron_tasks.py` añade al final).
+    # Cada entry pasa una sanitización mínima — strings/ints/listas
+    # se preservan; otros tipos quedan como llegan (jsonb_to_python).
+    history_raw = row.get("history") or []
+    if not isinstance(history_raw, list):
+        history_raw = []
+    history_total = len(history_raw)
+    history = history_raw[-_LIFETIME_HISTORY_CAP:] if history_total > 0 else []
+    # Reverse para que el más reciente quede primero (UX: lectura
+    # top-down con eventos nuevos arriba).
+    history = list(reversed(history))
+
+    # Critical permanent: list[dict] (lecciones inmortales). Cap
+    # defensivo simétrico con el productor.
+    critical_raw = row.get("critical_permanent") or []
+    if not isinstance(critical_raw, list):
+        critical_raw = []
+    critical_total = len(critical_raw)
+    critical_permanent = (
+        critical_raw[:_LIFETIME_CRITICAL_CAP]
+        if critical_total > 0 else []
+    )
+
+    counts = {
+        "history_total": history_total,
+        "history_returned": len(history),
+        "critical_permanent_total": critical_total,
+        "critical_permanent_returned": len(critical_permanent),
+    }
+
+    # [P0-HIST-LEARN-1 · 2026-05-09] Surface del `_last_chunk_learning`
+    # — la semilla literal que el cron inyecta al PRÓXIMO chunk. Antes
+    # invisible: el modal del Historial mostraba lifetime aggregates pero
+    # no "qué aprendió el último bloque y qué se transmite al siguiente".
+    # Sin esto, diagnosticar "el chunk N+1 repitió X" requería SQL al
+    # jsonb. Coerción por tipo (numeric/bool/str/list) protege contra
+    # corrupciones legacy: keys con tipo inesperado caen al default y
+    # NO rompen la sub-sección entera.
+    lcl_raw = row.get("last_chunk_learning")
+    last_chunk_learning = None
+    if isinstance(lcl_raw, dict):
+        last_chunk_learning = {}
+        for k in _LAST_CHUNK_LEARNING_NUMERIC_KEYS:
+            v = lcl_raw.get(k)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                last_chunk_learning[k] = v
+            else:
+                last_chunk_learning[k] = None
+        for k in _LAST_CHUNK_LEARNING_BOOL_KEYS:
+            v = lcl_raw.get(k)
+            last_chunk_learning[k] = v if isinstance(v, bool) else None
+        for k in _LAST_CHUNK_LEARNING_STR_KEYS:
+            v = lcl_raw.get(k)
+            last_chunk_learning[k] = v if isinstance(v, str) and v.strip() else None
+        for k in _LAST_CHUNK_LEARNING_LIST_KEYS:
+            v = lcl_raw.get(k)
+            last_chunk_learning[k] = (
+                [str(x) for x in v if x is not None]
+                if isinstance(v, list) else []
+            )
+
+    # [P0-HIST-LEARN-2 · 2026-05-09] Surface del counter
+    # `_consecutive_zero_log_chunks` — chunks consecutivos que el cron
+    # generó SIN logs reales del usuario (ni consumed_meals ni
+    # interacciones que cuenten como signal). Antes invisible: el counter
+    # vivía solo en plan_data, dispara push notification con copy
+    # alarmante a partir de ≥3 ("Tu plan se está generando sin tu
+    # feedback") + flip de `generation_status` a `degraded_pending_engagement`
+    # (cron_tasks.py:17487-17488) — y aún así el modal del Historial
+    # NO lo mostraba. Si todos los rolling_refills corrieron sin signal,
+    # el user no tenía forma de detectarlo desde la UI.
+    #
+    # Coerción defensiva: la key en plan_data puede ser int (camino
+    # canónico) o string (legacy). NULLIF + ::int en el SELECT cubre
+    # ambos. Si la conversión falla (string no-numérico), psycopg
+    # lanza — preferible explícito a silenciar bug del writer.
+    czl = row.get("consecutive_zero_log_chunks")
+    if not isinstance(czl, int):
+        czl = None
+    gen_status = row.get("generation_status")
+    if not isinstance(gen_status, str) or not gen_status.strip():
+        gen_status = None
+
+    return {
+        "plan_id": plan_id,
+        "summary": summary,
+        "history": history,
+        "critical_permanent": critical_permanent,
+        "last_chunk_learning": last_chunk_learning,
+        "consecutive_zero_log_chunks": czl,
+        "generation_status": gen_status,
+        "counts": counts,
+    }
+
+
+@router.get("/{plan_id}/chunk-metrics")
+def api_plan_chunk_metrics(
+    plan_id: str,
+    response: Response,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P2-HIST-AUDIT-10 · 2026-05-09] Detalle por-chunk de métricas
+    operacionales y `learning_metrics` para el modal del Historial.
+
+    Bug original (audit Historial 2026-05-09):
+        El Historial mostraba el bucket de status (P0/P1) y el
+        tier_breakdown agregado (P1-AUDIT-HIST-6) pero NO exponía
+        las métricas ricas por-chunk:
+          - `learning_metrics` (jsonb con synth_quality_score,
+            synthesized_count, queue_count, etc. — populated por
+            `_escalate_unrecoverable_chunk` y otros paths del
+            pipeline LangGraph).
+          - `lag_seconds_at_pickup` / `effective_lag_seconds_at_pickup`
+            (cuánto se atrasó el sistema en agarrar el chunk).
+          - `escalated_at` (timestamp de escalación si hubo).
+          - `learning_persisted_at` (cuándo se commiteó learning).
+          - Stats persistidas en `plan_chunk_metrics`:
+            `duration_ms`, `was_degraded`, `retries`, `lag_seconds`,
+            `learning_repeat_pct`, `rejection_violations`,
+            `allergy_violations`, `pantry_snapshot_age_hours`,
+            `error_message`.
+        Para un usuario que quería diagnosticar por qué su plan se
+        generó "raro", la única vista era la del Dashboard del plan
+        ACTIVO (chunk-status / admin endpoints). Para planes
+        archivados, el detalle era invisible.
+
+    Diseño:
+        LEFT JOIN entre `plan_chunk_queue` (estado operacional vivo)
+        y `plan_chunk_metrics` (snapshot de stats al completar). Ambas
+        tablas tienen RLS habilitado; el WHERE explícito por user_id
+        es defense-in-depth.
+
+        Cap LIMIT 50 (un plan típico tiene ≤30 chunks; cap defensivo).
+
+    Ownership check vía SELECT inicial — devuelve 404 si plan no
+    existe O no pertenece al usuario, sin DOS-able discovery.
+
+    Returns:
+      ``{ "plan_id": "<uuid>",
+          "chunks": [
+            {
+              "chunk_id": "<uuid>",
+              "week_number": <int>,
+              "days_offset": <int>,
+              "days_count": <int>,
+              "status": "<str>",
+              "quality_tier": "<str|null>",
+              "attempts": <int>,
+              "chunk_kind": "<str|null>",
+              "lag_seconds_at_pickup": <int|null>,
+              "effective_lag_seconds_at_pickup": <int|null>,
+              "escalated_at": "<iso|null>",
+              "learning_persisted_at": "<iso|null>",
+              "dead_letter_reason": "<str|null>",
+              "dead_lettered_at": "<iso|null>",
+              "created_at": "<iso>",
+              "updated_at": "<iso>",
+              "learning_metrics": <obj|null>,
+              "metrics": {
+                "duration_ms": <int|null>,
+                "was_degraded": <bool|null>,
+                "retries": <int|null>,
+                "lag_seconds": <int|null>,
+                "learning_repeat_pct": <float|null>,
+                "rejection_violations": <int|null>,
+                "allergy_violations": <int|null>,
+                "pantry_snapshot_age_hours": <float|null>,
+                "error_message": "<str|null>",
+                "metrics_created_at": "<iso|null>"
+              } | null,
+              "deferrals_count": <int>,
+              "deferral_reasons": [<str>, ...] | null
+            },
+            ...
+          ],
+          "total_count": <int>,
+          "limit": <int>
+        }``
+
+    [P1-HIST-NEW-4 · 2026-05-09] `total_count` (COUNT separado, sin
+    LIMIT) y `limit` (constante actual) permiten al frontend
+    renderizar "Mostrando X de N" cuando hay truncado. Antes el
+    response no comunicaba cuántos chunks reales tiene el plan.
+
+    [P1-HIST-NEW-6 · 2026-05-09] `deferrals_count` y `deferral_reasons`
+    surface telemetría de `chunk_deferrals` (cada vez que un gate del
+    pipeline LangGraph difirió este chunk: temporal_gate,
+    learning_zero_logs, missing_prior_lessons, etc.). Antes solo
+    visible vía endpoint admin.
+
+    Raises:
+      401 — sin auth.
+      400 — plan_id missing/invalid.
+      404 — plan no existe o no pertenece al usuario.
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+    # [P2-HIST-AUDIT-A · 2026-05-09] no-store.
+    _apply_no_store(response)
+
+    from db_core import execute_sql_query
+    try:
+        # Ownership check (PK lookup, barato).
+        owner = execute_sql_query(
+            "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not owner:
+            raise HTTPException(status_code=404, detail="Plan not found")
+
+        rows = execute_sql_query(
+            """
+            SELECT
+                q.id::text AS chunk_id,
+                q.week_number,
+                q.days_offset,
+                q.days_count,
+                q.status,
+                q.quality_tier,
+                q.attempts,
+                q.chunk_kind,
+                q.lag_seconds_at_pickup,
+                q.effective_lag_seconds_at_pickup,
+                q.escalated_at,
+                q.learning_persisted_at,
+                q.dead_letter_reason,
+                q.dead_lettered_at,
+                q.created_at AS chunk_created_at,
+                q.updated_at AS chunk_updated_at,
+                q.learning_metrics,
+                -- [P2-HIST-AUDIT-B · 2026-05-09] expected_preemption_seconds
+                -- es el SLA esperado al pickup (derivado de chunk_kind +
+                -- carga del worker pool). reservation_status indica si la
+                -- reserva del worker se confirmó o cayó en fallback (ok |
+                -- fallback). Útiles para diagnosticar contención: chunk
+                -- atascado con lag >> expected_preemption suele ser
+                -- worker pool sobrecargado o lock advisory heredado.
+                q.expected_preemption_seconds,
+                q.reservation_status,
+                m.duration_ms,
+                m.was_degraded,
+                m.retries,
+                m.lag_seconds AS metrics_lag_seconds,
+                m.learning_repeat_pct,
+                m.rejection_violations,
+                m.allergy_violations,
+                m.pantry_snapshot_age_hours,
+                m.error_message,
+                -- [P2-HIST-AUDIT-E · 2026-05-09] is_rolling_refill cross-
+                -- check con q.chunk_kind. El productor de plan_chunk_metrics
+                -- escribe el bool al completar (P2-NEW-G) — debe
+                -- coincidir con `chunk_kind = 'rolling_refill'`. Drift
+                -- entre los dos indicaría bug del writer (e.g. el chunk
+                -- transicionó de kind durante recovery).
+                m.is_rolling_refill,
+                m.created_at AS metrics_created_at,
+                -- [P2-HIST-AUDIT-F · 2026-05-09] Detección de lock
+                -- zombi del usuario. `chunk_user_locks` es PK por
+                -- user_id (un solo lock por usuario en cualquier
+                -- momento — invariante del worker pool). Si el lock
+                -- está adquirido por OTRO chunk_id (`locked_by_chunk_id
+                -- IS DISTINCT FROM q.id`) Y el heartbeat es fresco
+                -- (<5min), este chunk está esperando — útil para
+                -- diagnosticar contención cuando un chunk lleva
+                -- mucho rato en `pending` sin avanzar.
+                --
+                -- LEFT JOIN a chunk_user_locks por user_id. Si no hay
+                -- lock activo del usuario, columnas LATERAL llegan NULL
+                -- (sin lock zombi).
+                CASE
+                    WHEN ul.locked_by_chunk_id IS NOT NULL
+                      AND ul.locked_by_chunk_id != q.id
+                      AND ul.heartbeat_at > NOW() - INTERVAL '5 minutes'
+                    THEN ul.locked_by_chunk_id::text
+                    ELSE NULL
+                END AS blocking_lock_chunk_id,
+                CASE
+                    WHEN ul.locked_by_chunk_id IS NOT NULL
+                      AND ul.locked_by_chunk_id != q.id
+                      AND ul.heartbeat_at > NOW() - INTERVAL '5 minutes'
+                    THEN EXTRACT(EPOCH FROM (NOW() - ul.locked_at))::int
+                    ELSE NULL
+                END AS blocking_lock_age_seconds,
+                -- [P1-HIST-NEW-6 · 2026-05-09] Telemetría de
+                -- chunk_deferrals (cada vez que temporal_gate u otro
+                -- gate del pipeline LangGraph difirió este chunk).
+                -- chunk_deferrals NO tiene FK a plan_chunk_queue.id —
+                -- joineamos por (meal_plan_id, week_number), que es
+                -- estable porque el unique index parcial
+                -- ux_plan_chunk_queue_live_week garantiza ≤1 chunk
+                -- vivo por (plan, week). Para chunks completed el join
+                -- puede traer deferrals de un re-enqueue posterior con
+                -- mismo week_number — comportamiento aceptable: el
+                -- chip muestra "este slot semanal sufrió N deferrals
+                -- en su lifetime", incluso si distribuídos entre dos
+                -- intentos. La cap LIMIT 5 en reasons evita inflar el
+                -- payload cuando un cron loopea sobre el gate.
+                COALESCE(deferrals.deferrals_count, 0) AS deferrals_count,
+                deferrals.deferral_reasons AS deferral_reasons
+            FROM plan_chunk_queue q
+            LEFT JOIN plan_chunk_metrics m ON m.chunk_id = q.id
+            -- [P2-HIST-AUDIT-F · 2026-05-09] Lock activo del usuario.
+            -- chunk_user_locks tiene PK user_id (1:1) — el LEFT JOIN
+            -- es 1:0..1.
+            LEFT JOIN chunk_user_locks ul ON ul.user_id = q.user_id
+            -- [P1-HIST-NEW-6 · 2026-05-09] LATERAL count + reasons
+            -- DISTINCT — no JOIN directo porque queremos agregar
+            -- (count + array) y devolver una sola fila aún cuando no
+            -- hay deferrals (LEFT JOIN LATERAL preserva el chunk con
+            -- NULL en deferrals_count → COALESCE 0). El índice
+            -- `idx_chunk_deferrals_plan_week` (migrations) cubre el
+            -- WHERE; reasons se naturalizan a un set pequeño porque
+            -- el conjunto de reason codes está enumerado en el
+            -- código del temporal_gate (≤10 posibles).
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*)::int AS deferrals_count,
+                       array_agg(DISTINCT reason ORDER BY reason)
+                           FILTER (WHERE reason IS NOT NULL)
+                           AS deferral_reasons
+                FROM chunk_deferrals
+                WHERE meal_plan_id = q.meal_plan_id
+                  AND week_number = q.week_number
+                  AND user_id = q.user_id
+            ) deferrals ON TRUE
+            WHERE q.meal_plan_id = %s
+              AND q.user_id = %s
+            ORDER BY q.week_number ASC NULLS LAST,
+                     q.days_offset ASC NULLS LAST,
+                     q.created_at ASC
+            LIMIT 50
+            """,
+            (plan_id, verified_user_id),
+            fetch_all=True,
+        ) or []
+
+        # [P1-HIST-NEW-4 · 2026-05-09] COUNT total separado para que el
+        # frontend pueda señalizar truncado cuando supera el LIMIT 50.
+        # Antes el endpoint no comunicaba si había chunks ocultos —
+        # planes con 50+ rows (extreme: tier ultra 90d con swap-meal
+        # re-enqueues por week que dejan completed+failed coexistentes
+        # tras P0-HIST-NEW-1) renderizaban silently truncados. Ahora
+        # el response incluye `total_count` y el frontend muestra
+        # "Mostrando 50 de N" cuando hay diff.
+        #
+        # Consulta separada (no `COUNT(*) OVER ()` window function en
+        # el SELECT principal) porque la window agregaría el conteo
+        # AL row del LIMIT — para responses paginados eso multiplica
+        # I/O sin que las filas excluidas sean leídas. El count
+        # explícito sí escanea la partición pero solo con un `count(*)`
+        # — más barato que arrastrar el conteo en cada row del LEFT
+        # JOIN del SELECT principal.
+        count_row = execute_sql_query(
+            """
+            SELECT COUNT(*)::int AS total_count
+            FROM plan_chunk_queue
+            WHERE meal_plan_id = %s
+              AND user_id = %s
+            """,
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        # Defensivo: si el mock/driver devuelve algo distinto a dict
+        # (lista, None, etc.), caemos al len(rows) como fallback —
+        # peor caso, el frontend no muestra el notice de truncado pero
+        # el response no rompe. Un test que no mockee el COUNT
+        # explícitamente cae a esta rama.
+        if isinstance(count_row, dict):
+            total_count = int(count_row.get("total_count") or 0)
+        else:
+            total_count = len(rows)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [P2-HIST-AUDIT-10] error en chunk-metrics: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+    def _iso(value):
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return value
+
+    chunks = []
+    for r in rows:
+        # `metrics` se setea solo si plan_chunk_metrics tenía un row
+        # (chunk completed con stats commiteados). Si todos los campos
+        # de m.* son NULL (LEFT JOIN no encontró match), devolvemos
+        # `metrics: null` para que el frontend distinga "no commit"
+        # de "stats vacíos".
+        _has_metrics = any(
+            r.get(k) is not None for k in (
+                "duration_ms", "was_degraded", "retries",
+                "metrics_lag_seconds", "learning_repeat_pct",
+                "rejection_violations", "allergy_violations",
+                "pantry_snapshot_age_hours", "error_message",
+                # [P2-HIST-AUDIT-E · 2026-05-09] is_rolling_refill
+                # también cuenta como señal de "metrics commiteados".
+                "is_rolling_refill",
+                "metrics_created_at",
+            )
+        )
+        metrics_obj = None
+        if _has_metrics:
+            metrics_obj = {
+                "duration_ms": r.get("duration_ms"),
+                "was_degraded": r.get("was_degraded"),
+                "retries": r.get("retries"),
+                "lag_seconds": r.get("metrics_lag_seconds"),
+                "learning_repeat_pct": (
+                    float(r.get("learning_repeat_pct"))
+                    if r.get("learning_repeat_pct") is not None
+                    else None
+                ),
+                "rejection_violations": r.get("rejection_violations"),
+                "allergy_violations": r.get("allergy_violations"),
+                "pantry_snapshot_age_hours": (
+                    float(r.get("pantry_snapshot_age_hours"))
+                    if r.get("pantry_snapshot_age_hours") is not None
+                    else None
+                ),
+                "error_message": r.get("error_message"),
+                # [P2-HIST-AUDIT-E · 2026-05-09] is_rolling_refill
+                # del snapshot final de plan_chunk_metrics. Ver el
+                # cross-check más abajo en el dict del chunk.
+                "is_rolling_refill": r.get("is_rolling_refill"),
+                "metrics_created_at": _iso(r.get("metrics_created_at")),
+            }
+
+        # [P2-HIST-AUDIT-E · 2026-05-09] Cross-check de coherencia
+        # entre `q.chunk_kind = 'rolling_refill'` y
+        # `m.is_rolling_refill = TRUE`. Si ambas fuentes disienten,
+        # el chunk pasó por recovery o el writer del snapshot tuvo
+        # bug — el frontend lo señaliza como warn ("kind drift") en
+        # el render. None cuando no hay metrics commiteados (sin
+        # is_rolling_refill que comparar).
+        _kind_is_rolling = (r.get("chunk_kind") == "rolling_refill")
+        _metrics_is_rolling = r.get("is_rolling_refill")
+        _kind_drift = None
+        if _metrics_is_rolling is not None:
+            _kind_drift = (bool(_metrics_is_rolling) != _kind_is_rolling)
+
+        chunks.append({
+            "chunk_id": r.get("chunk_id"),
+            "week_number": r.get("week_number"),
+            "days_offset": r.get("days_offset"),
+            "days_count": r.get("days_count"),
+            "status": r.get("status"),
+            "quality_tier": r.get("quality_tier"),
+            "attempts": r.get("attempts"),
+            "chunk_kind": r.get("chunk_kind"),
+            "lag_seconds_at_pickup": r.get("lag_seconds_at_pickup"),
+            "effective_lag_seconds_at_pickup": r.get("effective_lag_seconds_at_pickup"),
+            # [P2-HIST-AUDIT-B · 2026-05-09] Expected preemption +
+            # reservation status. expected_preemption_seconds = SLA
+            # esperado al pickup (None para chunks sin reserva
+            # explícita). reservation_status canónico: 'ok' | 'fallback'.
+            "expected_preemption_seconds": r.get("expected_preemption_seconds"),
+            "reservation_status": r.get("reservation_status"),
+            "escalated_at": _iso(r.get("escalated_at")),
+            "learning_persisted_at": _iso(r.get("learning_persisted_at")),
+            "dead_letter_reason": r.get("dead_letter_reason"),
+            "dead_lettered_at": _iso(r.get("dead_lettered_at")),
+            "created_at": _iso(r.get("chunk_created_at")),
+            "updated_at": _iso(r.get("chunk_updated_at")),
+            # `learning_metrics` viene como dict (jsonb) o None.
+            "learning_metrics": (
+                r.get("learning_metrics")
+                if isinstance(r.get("learning_metrics"), dict)
+                else None
+            ),
+            "metrics": metrics_obj,
+            # [P2-HIST-AUDIT-E · 2026-05-09] Resultado del cross-check.
+            # `True` => drift entre chunk_kind (queue, vivo) y
+            # is_rolling_refill (metrics, snapshot al completar).
+            # `False` => coherente. `None` => sin métricas commiteadas.
+            "is_rolling_refill_drift": _kind_drift,
+            # [P2-HIST-AUDIT-F · 2026-05-09] Lock zombi del usuario.
+            # Si OTRO chunk_id tiene el lock con heartbeat <5min,
+            # este chunk está bloqueado por contención. None cuando
+            # no hay lock activo o el lock es del mismo chunk (path
+            # normal: el chunk procesando legítimamente).
+            "blocking_lock_chunk_id": r.get("blocking_lock_chunk_id"),
+            "blocking_lock_age_seconds": r.get("blocking_lock_age_seconds"),
+            # [P1-HIST-NEW-6 · 2026-05-09] Telemetría chunk_deferrals.
+            # `deferrals_count` siempre presente (COALESCE 0 en SELECT).
+            # `deferral_reasons` es lista DISTINCT del enum del gate
+            # (max ~10 códigos: temporal_gate, learning_zero_logs,
+            # missing_prior_lessons, etc.) o None cuando no hay
+            # deferrals — el frontend distingue None de [] como
+            # "sin info" vs "lista vacía explícita".
+            "deferrals_count": int(r.get("deferrals_count") or 0),
+            "deferral_reasons": (
+                [str(x) for x in r.get("deferral_reasons") if x]
+                if isinstance(r.get("deferral_reasons"), list)
+                and r.get("deferral_reasons")
+                else None
+            ),
+        })
+
+    # [P1-HIST-NEW-4 · 2026-05-09] `total_count` permite al frontend
+    # señalizar truncado. Invariante: total_count >= len(chunks). Si
+    # diverge (total_count < len(chunks)), bug del COUNT — mantenemos
+    # el response sin coercer porque es una situación que el dev debe
+    # diagnosticar, no un fallback silente.
+    return {
+        "plan_id": plan_id,
+        "chunks": chunks,
+        "total_count": total_count,
+        "limit": 50,
+    }
+
+
+@router.patch("/{plan_id}/name")
+def api_rename_plan(
+    plan_id: str,
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P1-HIST-5 · 2026-05-09] Renombrado atómico: actualiza la columna
+    top-level `name` Y el `plan_data->>name` (jsonb) en un solo UPDATE.
+
+    Reemplaza el patrón legacy `History.jsx::handleEditSave` que
+    hacía ``supabase.from('meal_plans').update({ name: trimmed })``
+    directo. Ese flujo dejaba `plan_data.name` con el valor viejo, y
+    cualquier flujo posterior que copiara `plan_data` (restore desde
+    Historial pre-P0-HIST-1, swap, shift_plan que serializa
+    plan_data) propagaba el nombre stale a otro contexto. P1-HIST-5
+    cierra ese drift en el origen: las dos representaciones del
+    nombre se mueven juntas o no se mueven.
+
+    El UPDATE usa `jsonb_set(plan_data, '{name}', to_jsonb(?::text), true)`
+    (cuarto arg `create_missing=true`) para que planes legacy sin la
+    key `name` en plan_data la ganen. `meal_plans.plan_data` es
+    `NOT NULL` (verificado en introspección), así que jsonb_set
+    nunca recibe NULL como input.
+
+    Body:
+      ``{ "name": "<string no-vacío>" }``
+    Returns:
+      ``{ "success": true, "name": "<trimmed>" }``
+
+    Raises:
+      401 — sin auth.
+      400 — name faltante o no-string o vacío post-trim.
+      404 — plan no existe o no pertenece al usuario.
+      500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+
+    new_name = (data or {}).get("name")
+    if not isinstance(new_name, str):
+        raise HTTPException(status_code=400, detail="name must be a string")
+    new_name = new_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="name must be non-empty")
+    # Cap defensivo. La columna `name` es text sin length limit en el
+    # schema, pero un nombre de 10K caracteres es síntoma de bug
+    # cliente, no caso legítimo. 200 cubre cualquier nombre razonable
+    # ("Plan Sintético 30 días para Juan Pérez con Restricciones X" ~80).
+    if len(new_name) > 200:
+        raise HTTPException(status_code=400, detail="name too long (max 200 chars)")
+
+    # [P2-HIST-AUDIT-6 · 2026-05-09] Rechazar control chars (0x00-0x1F
+    # + DEL 0x7F). Casos cubiertos:
+    #   - NUL byte (\x00): Postgres jsonb lanza
+    #     `unsupported Unicode escape sequence` al hacer
+    #     `to_jsonb('foo\x00bar'::text)` → ROLLBACK del UPDATE.
+    #   - CR/LF/TAB y otros 0x01-0x1F: rompen el render del UI
+    #     (la card del Historial corta el nombre a una línea, pero
+    #     la primera línea queda con el control char invisible —
+    #     copy/paste a otro contexto puede arrastrarlo).
+    #   - DEL (0x7F): legacy unicode artifact, no es printable.
+    # Permitimos espacios estándar (0x20+) y todos los unicodes
+    # printables (caracteres no-ASCII como ñ, á, emoji 🍳 son OK).
+    # Whitespace común al borde ya fue trimmed; control chars
+    # interiores son siempre input malicioso o bug cliente.
+    for ch in new_name:
+        codepoint = ord(ch)
+        if codepoint < 0x20 or codepoint == 0x7F:
+            raise HTTPException(
+                status_code=400,
+                detail="name contains invalid control characters",
+            )
+
+    # [P1-HIST-AUDIT-2 · 2026-05-09] Sello de `_plan_modified_at` para
+    # mantener SSOT con el sort del Historial. `History.jsx::_effectiveModifiedAt`
+    # ordena por max(created_at, _plan_modified_at); el SELECT target del
+    # restore (P1-HIST-AUDIT-1) hace lo mismo en SQL. Si rename NO sella
+    # `_plan_modified_at`, el plan recién renombrado NO sube en el listado
+    # (la card optimistic-updated visualmente vuelve abajo en el próximo
+    # fetchHistory). Sello aquí cierra el drift en el origen.
+    #
+    # Coherente con los otros ~6 paths del backend que sellan
+    # `_plan_modified_at` en cada mutación de plan_data:
+    #   - cron_tasks.py:284-377 (post-swap learning persist).
+    #   - cron_tasks.py:13337 (chunk merge).
+    #   - cron_tasks.py:16636, :16742 (rolling refill).
+    #   - cron_tasks.py:20278, :20759 (revisión simplified).
+    #   - routers/plans.py:3661 (api_restore_plan enriched_pd).
+    _modified_at_iso = datetime.now(timezone.utc).isoformat()
+
+    # [P1-HIST-AUDIT-7 · 2026-05-09] Transacción explícita + advisory
+    # lock per-user para serializar con restore/delete del mismo user.
+    # Antes este endpoint usaba `execute_sql_write` (transacción
+    # implícita single-statement). Reescribimos a `connection_pool +
+    # conn.transaction()` para tomar `pg_advisory_xact_lock` antes del
+    # UPDATE — coherente con los otros dos mutators.
+    from db_core import connection_pool
+    import psycopg
+    from psycopg.rows import dict_row
+    try:
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cur:
+                    from db_plans import acquire_user_history_advisory_lock
+                    acquire_user_history_advisory_lock(cur, verified_user_id)
+
+                    # Atomic rename + ownership check vía RETURNING.
+                    # Si la fila no existe O pertenece a otro user,
+                    # RETURNING devuelve [] y respondemos 404 sin
+                    # DOS-able discovery.
+                    #
+                    # `jsonb_set` anidado: la capa interior actualiza
+                    # `name`, la exterior actualiza `_plan_modified_at`.
+                    # Ambas con `create_missing=true` (4º arg) para que
+                    # planes legacy sin alguna de las keys la ganen.
+                    # `meal_plans.plan_data` es NOT NULL (verificado en
+                    # introspección) → jsonb_set nunca recibe NULL como
+                    # input base.
+                    cur.execute(
+                        """
+                        UPDATE meal_plans
+                        SET name = %s,
+                            plan_data = jsonb_set(
+                                jsonb_set(
+                                    plan_data, '{name}', to_jsonb(%s::text), true
+                                ),
+                                '{_plan_modified_at}', to_jsonb(%s::text), true
+                            )
+                        WHERE id = %s AND user_id = %s
+                        RETURNING id
+                        """,
+                        (new_name, new_name, _modified_at_iso, plan_id, verified_user_id),
+                    )
+                    result = cur.fetchall()
+                    if not result:
+                        raise HTTPException(status_code=404, detail="Plan not found")
+
+        logger.info(
+            "[P1-HIST-5] rename plan: user=%s plan=%s",
+            verified_user_id, plan_id,
+        )
+        return {"success": True, "name": new_name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [P1-HIST-5] error en rename: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.get("/history-list")
+def api_plans_history_list(
+    response: Response,
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P1-HIST-AUDIT-4 · 2026-05-09] Listado del Historial con projection
+    mínima — reemplaza el ``select('*')`` del frontend que arrastraba el
+    ``plan_data`` jsonb completo (típicamente 30-80KB por plan).
+
+    Bug original (audit historial 2026-05-08):
+        ``History.jsx::fetchHistory`` hacía
+        ``supabase.from('meal_plans').select('*')``. Para un usuario
+        tier ultra con 50+ planes archivados, eso descarga 2-5MB en
+        cada apertura del Historial — la mayoría como
+        ``plan_data._lifetime_lessons_history``,
+        ``plan_data._recent_chunk_lessons``, ``pipeline_snapshot`` y
+        otros internals que la card NO consume. El modal sí necesita
+        ``days/meals``, pero solo del plan que el usuario abra; no
+        upfront para todos.
+
+    Diseño:
+        - Projection vía operadores jsonb (``->``, ``->>``,
+          ``jsonb_array_length``) → Postgres extrae solo los keys que
+          la card del Historial consume; el blob ``plan_data`` no
+          viaja al backend Python ni al cliente.
+        - Sort SSOT con ``History.jsx::_effectiveModifiedAt`` y con
+          ``api_restore_plan`` (P1-HIST-AUDIT-1).
+        - Filter ``name IS NOT NULL`` espeja la convención post-
+          P2-HIST-1 del frontend (filas sin name son garbage no-
+          actionable).
+        - ``coherence_adjusts_count`` calculado server-side (anomalous
+          actions: degrade/reject_minor/reject_high/hydration_error)
+          espeja ``History.jsx::getCoherenceAdjustsCount`` para que el
+          chip aparezca con el mismo conteo.
+        - Cap defensivo de 200 filas — el tier ultra actual permite
+          ~100, así que 200 es 2× margen sin bandwidth ilimitado.
+
+    Lazy-load del modal:
+        Cuando el usuario abre una card, el frontend hace una
+        request adicional a Supabase RPC/select por ``id`` para traer
+        ``plan_data.days`` (necesario para el menú del modal). Eso
+        concentra el bandwidth pesado en el plan que sí se mira, no
+        en la lista upfront.
+
+    Returns:
+        ``{ "plans": [
+            {
+              "id": "<uuid>", "name": "...", "created_at": "<iso>",
+              "calories": <int|null>, "macros": <obj|null>,
+              "plan_modified_at": "<iso>|null",
+              "generation_status": "...|null",
+              "total_days_requested": <int|null>,
+              "days_generated": <int>,
+              "user_action_required": <obj|null>,
+              "recovery_exhausted_count": <int>,
+              "user_forced_simplified_weeks": <obj|null>,
+              "shift_days_accumulated": <int|null>,
+              "consecutive_zero_log_chunks": <int|null>,
+              "coherence_adjusts_count": <int>,
+              "coherence_last_hypotheses": [<str>, ...] (max 5),
+              "preview_meals": [{"name", "meal"}, ...] (max 4),
+              "goal": "<str|null>",
+              "diet_preference": "<str|null>",
+              "allergies": [<str>, ...],
+              "chunk_pending_user_action_count": <int>,
+              "chunk_failed_count": <int>,
+              "chunk_failed_unreplaced_count": <int>,
+              "chunk_in_flight_count": <int>,
+              "chunk_completed_count": <int>,
+              "chunk_tier_breakdown": {<tier>: <count>, ...} | null,
+              "chunk_pantry_degraded_count": <int>,
+              "chunk_pantry_degraded_reasons": [<str>, ...] | null,
+              "primary_action_reason": <str|null>
+            },
+            ...
+        ] }``
+
+    [P1-HIST-PANTRY-DEGRADED · 2026-05-09]
+        ``chunk_pantry_degraded_count`` cuenta chunks cuyo
+        ``learning_metrics->>'pantry_degraded_reason'`` está poblado
+        (typical values: ``stale_snapshot``, ``empty_pantry_proxy``,
+        ``inventory_unreachable``). Permite al frontend renderizar
+        un chip retroactivo "Pantry degradada" en la card del
+        Historial cuando el plan se generó con señal de pantry
+        comprometida — diferenciador de calidad enterrado en el
+        jsonb hasta ahora.
+
+        ``chunk_pantry_degraded_reasons`` es la lista DISTINCT de
+        reasons agregadas via ``array_agg(DISTINCT ...) FILTER``;
+        sirve para el tooltip del chip (lista las causas reales
+        sin duplicar). NULL si count = 0.
+
+    Raises:
+        401 — sin auth.
+        500 — error de DB.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # [P1-HIST-AUDIT-4-FOLLOWUP · 2026-05-09] Cache-Control no-store
+    # evita que el browser sirva una respuesta cacheada después de
+    # operaciones que mutan el set de planes (restore, delete, rename,
+    # nueva generación). Sin esto, un usuario que abrió /history antes
+    # de generar su primer plan veía empty state cacheado incluso
+    # después de generar — el plan estaba en DB pero el browser
+    # devolvía el response viejo de 0 planes.
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+
+    from db_core import execute_sql_query
+    try:
+        # Sort idéntico al SSOT de api_restore_plan:3623+ y al helper
+        # JS `_effectiveModifiedAt`. Tie-breaker secundario por
+        # created_at DESC para determinismo.
+        #
+        # [P1-AUDIT-HIST-4 · 2026-05-09] LEFT JOIN agregado a
+        # `plan_chunk_queue` para integrar los counters del queue
+        # (pending_user_action / failed / in_flight) en el mismo
+        # response. Antes el frontend hacía DOS roundtrips (este
+        # endpoint + `/history-status-summary` de P0-AUDIT-HIST-2)
+        # y reconciliaba client-side; con el JOIN, los counters
+        # llegan por plan en una sola request, eliminando:
+        #   - Roundtrip extra al cargar la página.
+        #   - Race condition entre los dos endpoints (un restore/
+        #     delete entre las 2 requests podía dejar el bucket
+        #     desincronizado entre el listado y el summary).
+        # El endpoint `/history-status-summary` se preserva para
+        # consumidores externos (admin tools, monitoring).
+        #
+        # Subquery pre-filtrada por `user_id = %s` y `meal_plan_id
+        # IS NOT NULL` para que la GROUP BY agregue solo chunks del
+        # usuario actual — Postgres usa el FK index sobre meal_plan_id
+        # más el filtro user_id (defense-in-depth + RLS). El
+        # `LEFT JOIN` garantiza que planes sin chunks aparecen con
+        # counters = 0 (`COALESCE` arriba).
+        rows = execute_sql_query(
+            """
+            SELECT
+                mp.id::text AS id,
+                mp.name,
+                mp.created_at,
+                mp.calories,
+                mp.macros,
+                mp.plan_data->>'_plan_modified_at' AS plan_modified_at,
+                mp.plan_data->>'generation_status' AS generation_status,
+                COALESCE(
+                    NULLIF(mp.plan_data->>'total_days_requested', '')::int,
+                    NULLIF(mp.plan_data->>'totalDays', '')::int
+                ) AS total_days_requested,
+                jsonb_array_length(
+                    COALESCE(mp.plan_data->'days', '[]'::jsonb)
+                ) AS days_generated,
+                mp.plan_data->'_user_action_required' AS user_action_required,
+                jsonb_array_length(
+                    COALESCE(mp.plan_data->'_recovery_exhausted_chunks', '[]'::jsonb)
+                ) AS recovery_exhausted_count,
+                mp.plan_data->'_user_forced_simplified_weeks' AS user_forced_simplified_weeks,
+                -- [P2-HIST-AUDIT-C · 2026-05-09] Días acumulados de shift_plan
+                -- (TZ resync, rollover por inventario, etc). Útil como tag
+                -- diagnóstico cuando un plan generado para semana X aparece
+                -- corrido N días — el usuario puede entender que NO es bug
+                -- visual, fue un ajuste deliberado del backend.
+                NULLIF(mp.plan_data->>'_shift_days_accumulated', '')::int
+                    AS shift_days_accumulated,
+                -- [P0-HIST-LEARN-2 · 2026-05-09] Counter de chunks
+                -- consecutivos generados sin feedback del usuario. ≥3
+                -- dispara push notification + flip de generation_status
+                -- a 'degraded_pending_engagement' (cron_tasks.py:17487).
+                -- Surface en card del listado para que el chip "Sin tu
+                -- feedback: N" aparezca SIN abrir el modal.
+                NULLIF(mp.plan_data->>'_consecutive_zero_log_chunks', '')::int
+                    AS consecutive_zero_log_chunks,
+                COALESCE(mp.plan_data->'_shopping_coherence_block_history', '[]'::jsonb) AS coherence_history,
+                mp.plan_data->'days'->0->'meals' AS preview_meals_raw,
+                mp.plan_data->>'goal' AS goal_root,
+                mp.plan_data->'assessment'->>'mainGoal' AS goal_assessment,
+                mp.plan_data->>'diet_preference' AS diet_root,
+                mp.plan_data->'assessment'->>'diet_preference' AS diet_assessment_snake,
+                mp.plan_data->'assessment'->>'dietPreference' AS diet_assessment_camel,
+                mp.plan_data->'assessment'->>'dietType' AS diet_assessment_type,
+                COALESCE(mp.plan_data->'allergies', mp.plan_data->'assessment'->'allergies', mp.plan_data->'assessment'->'intolerances') AS allergies,
+                COALESCE(qstats.pending_user_action_count, 0)::int AS chunk_pending_user_action_count,
+                COALESCE(qstats.failed_count, 0)::int AS chunk_failed_count,
+                COALESCE(qstats.failed_unreplaced_count, 0)::int AS chunk_failed_unreplaced_count,
+                COALESCE(qstats.in_flight_count, 0)::int AS chunk_in_flight_count,
+                COALESCE(qstats.completed_count, 0)::int AS chunk_completed_count,
+                COALESCE(qstats.pantry_degraded_count, 0)::int AS chunk_pantry_degraded_count,
+                qstats.pantry_degraded_reasons AS chunk_pantry_degraded_reasons,
+                qtiers.tier_breakdown AS chunk_tier_breakdown,
+                qaction.reason_code AS primary_action_reason_code
+            FROM meal_plans mp
+            LEFT JOIN (
+                SELECT
+                    meal_plan_id,
+                    COUNT(*) FILTER (WHERE status = 'pending_user_action') AS pending_user_action_count,
+                    COUNT(*) FILTER (WHERE status = 'failed') AS failed_count,
+                    -- [P0-HIST-NEW-1 · 2026-05-09] failed chunks SIN sibling
+                    -- completed para la misma (meal_plan_id, week_number).
+                    -- El índice parcial `ux_plan_chunk_queue_live_week`
+                    -- (migrations/p2_new_e:171) impide dos filas vivas
+                    -- (pending/processing/stale/failed) por (plan, week)
+                    -- pero PERMITE coexistencia `completed` + `failed` —
+                    -- típicamente cuando un chunk completó días, fue
+                    -- re-encolado (post-swap revalidation, manual retry) y
+                    -- el segundo intento dead-letteró. La fila vieja sigue
+                    -- contribuyendo a `failed_count` pero los días YA
+                    -- están en plan_data.days vía la fila completed
+                    -- hermana → bucket `complete`/`partial` no debería
+                    -- elevarse a `action_required` por estos residuos.
+                    --
+                    -- Se hace via correlated subquery en lugar de window
+                    -- function para mantener el GROUP BY plano y porque
+                    -- la cardinalidad esperada es baja (<100 chunks/plan).
+                    COUNT(*) FILTER (
+                        WHERE status = 'failed'
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM plan_chunk_queue sibling
+                              WHERE sibling.meal_plan_id = plan_chunk_queue.meal_plan_id
+                                AND sibling.week_number = plan_chunk_queue.week_number
+                                AND sibling.id != plan_chunk_queue.id
+                                AND sibling.status = 'completed'
+                          )
+                    ) AS failed_unreplaced_count,
+                    COUNT(*) FILTER (WHERE status IN ('pending', 'processing', 'stale')) AS in_flight_count,
+                    COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+                    -- [P1-HIST-PANTRY-DEGRADED · 2026-05-09] Conteo de
+                    -- chunks con `pantry_degraded_reason` no-NULL en
+                    -- learning_metrics jsonb. Cubre planes generados
+                    -- con señal de pantry comprometida (stale_snapshot,
+                    -- empty_pantry_proxy, inventory_unreachable, etc).
+                    -- El productor (cron_tasks.py:19631) escribe la
+                    -- key vía `learning_metrics["pantry_degraded_reason"]
+                    -- = form_data["_pantry_degraded_reason"]` cuando el
+                    -- pipeline detectó el flag al pickup del chunk.
+                    --
+                    -- DISTINCT array de reasons sirve al tooltip del
+                    -- chip — sin DISTINCT, planes con 5 chunks degraded
+                    -- por la misma razón mostrarían "stale_snapshot,
+                    -- stale_snapshot, ..." (5 veces). El FILTER excluye
+                    -- chunks healthy (NULL no es elemento del array).
+                    COUNT(*) FILTER (
+                        WHERE learning_metrics ? 'pantry_degraded_reason'
+                          AND learning_metrics->>'pantry_degraded_reason' IS NOT NULL
+                          AND learning_metrics->>'pantry_degraded_reason' <> ''
+                    ) AS pantry_degraded_count,
+                    array_agg(
+                        DISTINCT learning_metrics->>'pantry_degraded_reason'
+                    ) FILTER (
+                        WHERE learning_metrics ? 'pantry_degraded_reason'
+                          AND learning_metrics->>'pantry_degraded_reason' IS NOT NULL
+                          AND learning_metrics->>'pantry_degraded_reason' <> ''
+                    ) AS pantry_degraded_reasons
+                FROM plan_chunk_queue
+                WHERE user_id = %s
+                  AND meal_plan_id IS NOT NULL
+                GROUP BY meal_plan_id
+            ) qstats ON qstats.meal_plan_id = mp.id
+            -- [P1-AUDIT-HIST-6 · 2026-05-09] Tier breakdown por plan
+            -- vía LATERAL anidado: cada plan recibe su jsonb
+            -- {tier: count} solo de chunks `completed` con
+            -- quality_tier no-NULL. NULL si el plan no tiene chunks
+            -- completed (Postgres LATERAL deja qtiers.tier_breakdown
+            -- NULL si la subquery interna devuelve 0 rows). Tiers
+            -- canónicos: llm/shuffle/edge/emergency/failed/paused/error.
+            LEFT JOIN LATERAL (
+                SELECT jsonb_object_agg(quality_tier, cnt) AS tier_breakdown
+                FROM (
+                    SELECT quality_tier, COUNT(*)::int AS cnt
+                    FROM plan_chunk_queue inner_q
+                    WHERE inner_q.meal_plan_id = mp.id
+                      AND inner_q.user_id = %s
+                      AND inner_q.status = 'completed'
+                      AND inner_q.quality_tier IS NOT NULL
+                    GROUP BY quality_tier
+                ) t
+            ) qtiers ON TRUE
+            -- [P2-HIST-NEW-1 · 2026-05-09] Primary action reason del
+            -- chunk bloqueante más temprano. Permite al frontend
+            -- promover el chip "Acción" a "Acción: empty_pantry" en
+            -- la card del listado — antes el reason solo era visible
+            -- al abrir el modal (vía /blocked_reasons lazy fetch).
+            -- Inconsistencia con Dashboard que ya muestra el reason
+            -- en el slot del plan ACTIVO desde P0-DASH-CHIP-HONESTY.
+            --
+            -- Priority chain igual a /blocked_reasons (plans.py:3823+):
+            --   dead_letter_reason → _pause_reason → _pantry_pause_reason
+            --   → reason. SSOT extraído sería ideal; por ahora
+            --   duplicamos con cita explícita.
+            -- Order: week_number ASC para que el reason del chunk
+            -- bloqueante MÁS TEMPRANO domine — un plan con varios
+            -- chunks bloqueados típicamente solo necesita resolver el
+            -- primero (los demás se desbloquean en cascada).
+            LEFT JOIN LATERAL (
+                SELECT
+                    COALESCE(
+                        qa.dead_letter_reason,
+                        qa.pipeline_snapshot->>'_pause_reason',
+                        qa.pipeline_snapshot->>'_pantry_pause_reason',
+                        qa.pipeline_snapshot->>'reason'
+                    ) AS reason_code
+                FROM plan_chunk_queue qa
+                WHERE qa.meal_plan_id = mp.id
+                  AND qa.user_id = %s
+                  AND (
+                    qa.status = 'pending_user_action'
+                    OR (qa.status = 'failed' AND qa.dead_letter_reason IS NOT NULL)
+                  )
+                ORDER BY qa.week_number ASC NULLS LAST,
+                         qa.created_at ASC
+                LIMIT 1
+            ) qaction ON TRUE
+            WHERE mp.user_id = %s
+              AND mp.name IS NOT NULL
+            ORDER BY GREATEST(
+                mp.created_at,
+                COALESCE(
+                    (mp.plan_data->>'_plan_modified_at')::timestamptz,
+                    mp.created_at
+                )
+            ) DESC,
+            mp.created_at DESC
+            LIMIT 200
+            """,
+            (verified_user_id, verified_user_id, verified_user_id, verified_user_id),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.error(f"❌ [P1-HIST-AUDIT-4] error cargando history-list: {e}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+    # Anomalous coherence actions — coherente con
+    # `History.jsx::getCoherenceAdjustsCount`.
+    # [P2-HIST-AUDIT-13 · 2026-05-09] SSOT migró a
+    # `constants.COHERENCE_ANOMALOUS_ACTIONS` (mismo patrón que
+    # P1-AUDIT-HIST-7 lesson whitelist). El alias local
+    # `_ANOMALOUS_COHERENCE_ACTIONS` se preserva como variable local
+    # del bloque para retrocompat con tests inline. La conversión a
+    # `frozenset` permite el `in` lookup O(1) (la constante es tuple
+    # para que Python intern la deje como singleton estable).
+    from constants import COHERENCE_ANOMALOUS_ACTIONS as _COHERENCE_ANOMALOUS_ACTIONS_TUPLE
+    _ANOMALOUS_COHERENCE_ACTIONS = frozenset(_COHERENCE_ANOMALOUS_ACTIONS_TUPLE)
+
+    plans = []
+    for row in rows:
+        # `coherence_history` viene como list[dict] (jsonb cast por
+        # psycopg). Si parsea distinto, tratamos como vacío para no
+        # romper render del listado por una card corrupta.
+        history = row.get("coherence_history") or []
+        coherence_adjusts_count = 0
+        # [P1-4 · 2026-05-10] Extraer hipótesis de la ÚLTIMA entry anomalous
+        # del history. El frontend las usa para construir un tooltip rico en
+        # el chip "N ajustes" (humanizando vía `getCoherenceHypothesisLabel`).
+        # Recorrer al revés es O(N) en peor caso pero el cap del history es 20
+        # (P3-NEW-C/MEALFIT_COHERENCE_BLOCK_HISTORY_CAP), N pequeño.
+        # Cap 5 hipótesis distintas: los tooltips quedan legibles y el caso
+        # frecuente es 1-3 divergencias dominantes por entry.
+        coherence_last_hypotheses: list[str] = []
+        if isinstance(history, list):
+            for entry in history:
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("action_taken") in _ANOMALOUS_COHERENCE_ACTIONS:
+                    coherence_adjusts_count += 1
+            # Walk reverse para encontrar la última entry anomalous.
+            for entry in reversed(history):
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("action_taken") not in _ANOMALOUS_COHERENCE_ACTIONS:
+                    continue
+                divs = entry.get("divergences")
+                if not isinstance(divs, list):
+                    break
+                seen: set[str] = set()
+                for d in divs:
+                    if not isinstance(d, dict):
+                        continue
+                    h = d.get("hypothesis")
+                    if not isinstance(h, str) or not h or h in seen:
+                        continue
+                    seen.add(h)
+                    coherence_last_hypotheses.append(h)
+                    if len(coherence_last_hypotheses) >= 5:
+                        break
+                break
+
+        # Preview meals: solo (name, meal) por meal del primer día,
+        # cap 4. El frontend espera (string short + emoji) — los
+        # demás keys (cals, recipe, etc.) son ruido para preview.
+        # Filter ANTES de slice (espeja `activeMeals.slice(0, 3)` del
+        # JS legacy en `renderMealPreview`): el cap aplica a meals
+        # VÁLIDOS, ignorando entries corruptos en el array.
+        preview_meals_raw = row.get("preview_meals_raw") or []
+        preview_meals = []
+        if isinstance(preview_meals_raw, list):
+            for m in preview_meals_raw:
+                if not isinstance(m, dict) or not m.get("name"):
+                    continue
+                # [P2-HIST-AUDIT-12 · 2026-05-09] Filtrar meals con
+                # `isSkipped=true` ANTES del slice de 4. Sin esto, si
+                # los primeros 4 meals del primer día incluyen 3
+                # skipped, el response devolvía esos 4; el frontend
+                # (`renderMealPreview`) filtraba `!m.isSkipped` post-
+                # slice y terminaba renderizando solo 1 chip cuando
+                # debía mostrar 3 válidos del SIGUIENTE meal del día.
+                # El filter aquí garantiza que el cap 4 cuente meals
+                # VÁLIDOS, no posiciones del array. El frontend
+                # mantiene su filter como defense-in-depth (planes
+                # legacy o response cacheado pueden traer skipped).
+                if m.get("isSkipped"):
+                    continue
+                preview_meals.append({
+                    "name": m.get("name"),
+                    "meal": m.get("meal") or "",
+                })
+                if len(preview_meals) >= 4:
+                    break
+
+        # Goal/diet con fallback root → assessment (espeja
+        # `getSmartTags` JS líneas 426-437).
+        goal = row.get("goal_root") or row.get("goal_assessment")
+        diet = (
+            row.get("diet_root")
+            or row.get("diet_assessment_snake")
+            or row.get("diet_assessment_camel")
+            or row.get("diet_assessment_type")
+        )
+
+        # Allergies: si el jsonb era list[str] llega como list; si era
+        # objeto u otra cosa, tratamos como vacío.
+        allergies_raw = row.get("allergies")
+        allergies = allergies_raw if isinstance(allergies_raw, list) else []
+
+        # `created_at` es datetime → isoformat. `plan_modified_at`
+        # ya es text (extraído via ->>).
+        created_at = row.get("created_at")
+        if hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
+
+        plans.append({
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "created_at": created_at,
+            "calories": row.get("calories"),
+            "macros": row.get("macros"),
+            "plan_modified_at": row.get("plan_modified_at"),
+            "generation_status": row.get("generation_status"),
+            "total_days_requested": row.get("total_days_requested"),
+            "days_generated": row.get("days_generated") or 0,
+            "user_action_required": row.get("user_action_required"),
+            "recovery_exhausted_count": row.get("recovery_exhausted_count") or 0,
+            "user_forced_simplified_weeks": row.get("user_forced_simplified_weeks"),
+            # [P2-HIST-AUDIT-C · 2026-05-09] Shift días acumulados.
+            # int o None (None cuando el plan no sufrió shift_plan).
+            "shift_days_accumulated": (
+                int(row["shift_days_accumulated"])
+                if isinstance(row.get("shift_days_accumulated"), int)
+                else None
+            ),
+            # [P0-HIST-LEARN-2 · 2026-05-09] None si la key no existe
+            # (plan legacy pre-engagement-tracking) O el valor no es int.
+            "consecutive_zero_log_chunks": (
+                int(row["consecutive_zero_log_chunks"])
+                if isinstance(row.get("consecutive_zero_log_chunks"), int)
+                else None
+            ),
+            "coherence_adjusts_count": coherence_adjusts_count,
+            # [P1-4 · 2026-05-10] Hipótesis (max 5 distintas) de la última
+            # entry anomalous del history. Vacía si no hay anomalous o si
+            # las divergencias no traen `hypothesis` (cap_swallowed_modifier
+            # / unit_mismatch / yield_uncovered / pantry_overdeduct / unknown).
+            "coherence_last_hypotheses": coherence_last_hypotheses,
+            "preview_meals": preview_meals,
+            "goal": goal,
+            "diet_preference": diet,
+            "allergies": allergies,
+            # [P1-AUDIT-HIST-4 · 2026-05-09] Counters embebidos del
+            # `plan_chunk_queue` (vía LEFT JOIN). Mismo set que
+            # devuelve `/history-status-summary` (P0-AUDIT-HIST-2),
+            # ahora en el mismo response del listado para que el
+            # frontend reconcilie sin un segundo roundtrip y sin
+            # race condition. Counters siempre presentes (0 cuando
+            # el plan no tiene chunks — `COALESCE` en el SELECT).
+            "chunk_pending_user_action_count": int(row.get("chunk_pending_user_action_count") or 0),
+            "chunk_failed_count": int(row.get("chunk_failed_count") or 0),
+            # [P0-HIST-NEW-1 · 2026-05-09] failed sin sibling completed.
+            # `getStatusInfo` (frontend) usa este counter para la regla de
+            # reconciliación que eleva el bucket — `chunk_failed_count`
+            # incluye residuos post-recompletion (mismo (plan, week) tiene
+            # fila completed + fila failed) que NO ameritan banner de
+            # acción porque los días ya están en plan_data.
+            "chunk_failed_unreplaced_count": int(row.get("chunk_failed_unreplaced_count") or 0),
+            "chunk_in_flight_count": int(row.get("chunk_in_flight_count") or 0),
+            "chunk_completed_count": int(row.get("chunk_completed_count") or 0),
+            # [P1-AUDIT-HIST-6 · 2026-05-09] Tier breakdown — dict
+            # `{tier: count}` solo de chunks completed. Útil para
+            # que el modal del Historial muestre la distribución de
+            # calidad de un plan archivado (vs el chunk-status del
+            # plan activo que ya lo expone). `None` cuando el plan
+            # no tiene chunks completed o todos tienen quality_tier
+            # NULL — el frontend trata None como "no info" y omite
+            # el render. Si llega como dict vacío `{}` (LATERAL no
+            # encontró rows con tier no-NULL) lo coercemos a None
+            # para cero render del bloque.
+            "chunk_tier_breakdown": (
+                row.get("chunk_tier_breakdown")
+                if isinstance(row.get("chunk_tier_breakdown"), dict)
+                and row.get("chunk_tier_breakdown")
+                else None
+            ),
+            # [P1-HIST-PANTRY-DEGRADED · 2026-05-09] Surface
+            # retroactivo del flag `learning_metrics.pantry_degraded_reason`.
+            # Count > 0 => al menos un chunk del plan se generó con
+            # señal de pantry comprometida. El frontend usa esto para
+            # un chip ámbar "Pantry degradada" en la card del listado;
+            # el array de reasons distintas alimenta el tooltip.
+            # Count siempre presente (COALESCE 0 en SELECT); reasons
+            # NULL/array vacío se sanitizan a None para que el
+            # frontend distinga "sin info" de "lista vacía".
+            "chunk_pantry_degraded_count": int(row.get("chunk_pantry_degraded_count") or 0),
+            "chunk_pantry_degraded_reasons": (
+                [str(r) for r in row.get("chunk_pantry_degraded_reasons") if r]
+                if isinstance(row.get("chunk_pantry_degraded_reasons"), list)
+                and row.get("chunk_pantry_degraded_reasons")
+                else None
+            ),
+            # [P2-HIST-NEW-1 · 2026-05-09] Primary action reason — un
+            # solo string canónico extraído del chunk bloqueante más
+            # temprano. None cuando no hay chunks bloqueados (plan
+            # healthy o ya resuelto). Frontend usa esta key para
+            # promover el chip "Acción" a "Acción: empty_pantry".
+            "primary_action_reason": (
+                str(row.get("primary_action_reason_code")).strip()
+                if isinstance(row.get("primary_action_reason_code"), str)
+                and row.get("primary_action_reason_code").strip()
+                else None
+            ),
+        })
+
+    # [P1-HIST-AUDIT-4-FOLLOWUP · 2026-05-09] Logger de diagnóstico
+    # para debug del flujo Historial. Visible en logs del backend; el
+    # operador puede grep `[HISTORY-LIST]` para ver:
+    #   - Qué user_id resolvió el JWT (`verified_user_id`).
+    #   - Cuántos planes devolvió la query (`count`).
+    # Si count=0 pero el plan existe en DB, el `verified_user_id`
+    # NO matchea el `meal_plans.user_id` del plan → mismatch de
+    # cuentas (typical: 2 emails similares con typo en login).
+    logger.info(
+        "[HISTORY-LIST] user=%s count=%d",
+        verified_user_id, len(plans),
+    )
+    return {"plans": plans}
 
 
 # ============================================================
@@ -3857,26 +6952,38 @@ def api_regenerate_dead_lettered_simplified(
             (json.dumps(snap, ensure_ascii=False), chunk_id),
         )
 
-        # Limpiar banner del frontend.
+        # Limpiar banner del frontend + [P3-2] mirror del flag por semana.
+        # `_user_forced_simplified_weeks` es un dict {week_number: iso_ts}
+        # que el frontend lee desde plan_data (vía supabase direct) para
+        # mostrar un badge sutil en los días de esa semana. Sin este mirror,
+        # el flag solo vivía en plan_chunk_queue.pipeline_snapshot — que el
+        # frontend nunca consulta — y el toggle quedaba write-only desde la
+        # perspectiva UX.
+        _wn_str = str(int(chunk_row["week_number"])) if chunk_row.get("week_number") is not None else "0"
+        _ts_iso = datetime.now(timezone.utc).isoformat()
         execute_sql_write(
             """
             UPDATE meal_plans
             SET plan_data = jsonb_set(
-                    COALESCE(plan_data, '{}'::jsonb),
-                    '{_user_action_required}',
-                    'null'::jsonb,
-                    true
-                ),
-                plan_data = jsonb_set(
-                    COALESCE(plan_data, '{}'::jsonb),
-                    '{generation_status}',
-                    '"partial"'::jsonb,
+                    jsonb_set(
+                        jsonb_set(
+                            COALESCE(plan_data, '{}'::jsonb),
+                            '{_user_action_required}',
+                            'null'::jsonb,
+                            true
+                        ),
+                        '{generation_status}',
+                        '"partial"'::jsonb,
+                        true
+                    ),
+                    ARRAY['_user_forced_simplified_weeks', %s],
+                    to_jsonb(%s::text),
                     true
                 ),
                 updated_at = NOW()
             WHERE id = %s
             """,
-            (plan_id,),
+            (_wn_str, _ts_iso, plan_id),
         )
 
         # Resolver alertas system_alerts asociadas a este chunk dead-lettered.

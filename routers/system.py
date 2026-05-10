@@ -182,6 +182,10 @@ def get_chunk_queue_health():
         ) or {}
 
         # 3. Degraded rate desde plan_chunk_metrics
+        # [P2-3 · 2026-05-08] `meal_plan_id IS NOT NULL` excluye filas
+        # huérfanas tras delete del meal_plan padre (FK SET NULL). Health
+        # endpoint debe reportar calidad de planes activos, no incluir
+        # telemetría stale de planes ya eliminados.
         degraded_row = execute_sql_query(
             """
             SELECT
@@ -189,6 +193,7 @@ def get_chunk_queue_health():
                 COUNT(*) FILTER (WHERE was_degraded IS TRUE)::int AS degraded
             FROM plan_chunk_metrics
             WHERE created_at > NOW() - INTERVAL '24 hours'
+              AND meal_plan_id IS NOT NULL
             """,
             fetch_one=True,
         ) or {}

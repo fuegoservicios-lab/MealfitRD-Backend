@@ -186,6 +186,34 @@ def _invalidate_stale_chunks(user_id: str, reason: str):
 # (multi-worker Uvicorn) y cross-thread (mismo proceso). El lock se libera al
 # COMMIT de la transacción — ~5-10ms para una mutación típica de history list.
 # ============================================================
+def _resolve_mutator_result(result, hp: dict, *, user_id: str, path_label: str) -> dict:
+    """[P3-4 · 2026-05-08] SSOT del contrato `mutator(hp) -> dict | None | False`.
+
+    Interpretación:
+      - `dict`: el caller pasó un nuevo state explícito → se persiste tal cual.
+      - `None`: el caller mutó `hp` in-place → se persiste `hp`.
+      - cualquier otra cosa (str, int, list, True, etc.): probablemente bug del
+        caller. Logueamos WARNING claro y caemos al comportamiento "in-place"
+        (persistimos `hp`) para no romper el flujo. La invariante es:
+        un caller bien-formado nunca dispara este WARNING.
+
+    Note: `False` se filtra ANTES de llegar a este helper (caller decidió abort).
+    """
+    if isinstance(result, dict):
+        return result
+    if result is None:
+        return hp
+    logger.warning(
+        f"[P3-4/MUTATOR-CONTRACT] update_user_health_profile_atomic({user_id}, "
+        f"path={path_label}): mutator retornó tipo inesperado "
+        f"`{type(result).__name__}` (valor truncado: {repr(result)[:100]}). "
+        f"Contrato: dict → reemplaza, None → in-place, False → abort. "
+        f"Cualquier otro tipo se trata como in-place (preserva `hp` mutado). "
+        f"Investigar al caller — probable bug del mutator."
+    )
+    return hp
+
+
 def update_user_health_profile_atomic(user_id: str, mutator):
     """[P1-ORQ-1] Read-Modify-Write atómico del health_profile.
 
@@ -263,7 +291,8 @@ def update_user_health_profile_atomic(user_id: str, mutator):
         result = mutator(hp)
         if result is False:
             return hp
-        new_hp = result if isinstance(result, dict) else hp
+        # [P3-4] SSOT del contrato; loguea WARNING si tipo inesperado.
+        new_hp = _resolve_mutator_result(result, hp, user_id=user_id, path_label="fallback")
         update_user_health_profile(user_id, new_hp)
         return new_hp
 
@@ -298,7 +327,8 @@ def update_user_health_profile_atomic(user_id: str, mutator):
                 result = mutator(old_hp)
                 if result is False:
                     return old_hp
-                new_hp = result if isinstance(result, dict) else old_hp
+                # [P3-4] SSOT del contrato; loguea WARNING si tipo inesperado.
+                new_hp = _resolve_mutator_result(result, old_hp, user_id=user_id, path_label="atomic")
 
                 # Detectar invalidaciones críticas — mismo conjunto de checks que
                 # `update_user_health_profile` (mantener alineado si se añade uno).

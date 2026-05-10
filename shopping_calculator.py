@@ -93,31 +93,21 @@ _semantic_cache = None
 #   cuota agotada, sin penalizar la recuperación tras un flap minute-window
 #   (que en la práctica ya se libera entre reintentos del mismo pipeline).
 # - Si la cuenta sube a paid tier, bajar el knob a 180s.
-def _env_int_local(name: str, default: int) -> int:
-    import os
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        v = int(raw)
-        return v if v > 0 else default
-    except (TypeError, ValueError):
-        return default
+#
+# [P2-1 · 2026-05-08] Migrado de `_env_int_local`/`_env_float_local` (que NO
+# registraban en `_KNOBS_REGISTRY`) a los helpers compartidos de `knobs.py`.
+# Antes los 3 knobs SEMANTIC_INIT/EMBED_INIT eran invisibles en `/health/version`.
+# El import a top-level es seguro porque `knobs.py` no depende de este módulo
+# (cero ciclo: graph_orchestrator lazy-importa shopping_calculator dentro de
+# funciones, nunca a top-level).
+from knobs import (
+    _env_int as _knob_env_int,
+    _env_float as _knob_env_float,
+    _env_bool as _knob_env_bool,
+    _env_str as _knob_env_str,
+)
 
-
-def _env_float_local(name: str, default: float) -> float:
-    import os
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    try:
-        v = float(raw)
-        return v if v >= 0 else default
-    except (TypeError, ValueError):
-        return default
-
-
-_SEMANTIC_INIT_FAIL_COOLDOWN_S = _env_int_local("MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S", 600)
+_SEMANTIC_INIT_FAIL_COOLDOWN_S = max(0, _knob_env_int("MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S", 600))
 
 # Batching del cache init de embeddings para no saturar RPM del modelo. Modelos
 # *-preview (ej. gemini-embedding-2-preview) tienen cuotas Tier 1 conservadoras
@@ -131,8 +121,8 @@ _SEMANTIC_INIT_FAIL_COOLDOWN_S = _env_int_local("MEALFIT_SEMANTIC_INIT_FAIL_COOL
 #   MEALFIT_EMBED_INIT_BATCH_DELAY_S (default 0.5): pausa entre batches.
 # Si subes a un modelo estable con RPM alto, puedes poner BATCH_SIZE=999 y
 # DELAY=0 para volver al comportamiento de ráfaga única (más rápido).
-EMBED_INIT_BATCH_SIZE     = _env_int_local  ("MEALFIT_EMBED_INIT_BATCH_SIZE",      10)
-EMBED_INIT_BATCH_DELAY_S  = _env_float_local("MEALFIT_EMBED_INIT_BATCH_DELAY_S",   0.5)
+EMBED_INIT_BATCH_SIZE     = max(1, _knob_env_int  ("MEALFIT_EMBED_INIT_BATCH_SIZE",      10))
+EMBED_INIT_BATCH_DELAY_S  = max(0.0, _knob_env_float("MEALFIT_EMBED_INIT_BATCH_DELAY_S",   0.5))
 
 
 def _batched_embed_documents(client, all_texts, batch_size, delay_s, retry_label):
@@ -193,8 +183,8 @@ _semantic_cache_failed_until = 0.0
 def _semantic_cache_disabled() -> bool:
     """True si el operador desactivó el semantic cache via env var.
     Acepta '1', 'true', 'yes', 'on' (case-insensitive)."""
-    val = os.environ.get("MEALFIT_DISABLE_SEMANTIC_CACHE", "").strip().lower()
-    return val in ("1", "true", "yes", "on")
+    # [P2-1 · 2026-05-08] `_env_bool` registra en `_KNOBS_REGISTRY`.
+    return _knob_env_bool("MEALFIT_DISABLE_SEMANTIC_CACHE", False)
 
 # ============================================================
 # [P5-EMBED-CACHE-E] Persistencia de vectores en Redis
@@ -580,9 +570,8 @@ def _fallback_container_weight_g(category: str | None) -> float:
 # Conservador: si dudas, perishable (mejor sub-comprar y rotar que
 # sobre-comprar y desperdiciar).
 # ============================================================
-STAPLE_SHELF_THRESHOLD_DAYS = max(7, int(os.environ.get(
-    "MEALFIT_STAPLE_SHELF_THRESHOLD_DAYS", "21"
-)))
+# [P2-1 · 2026-05-08] `_knob_env_int` registra en `_KNOBS_REGISTRY`.
+STAPLE_SHELF_THRESHOLD_DAYS = max(7, _knob_env_int("MEALFIT_STAPLE_SHELF_THRESHOLD_DAYS", 21))
 
 _STAPLE_CATEGORIES = {
     'despensa', 'granos', 'cereales', 'conservas', 'enlatados',
@@ -733,10 +722,13 @@ def _build_hybrid_shopping_list(
     from datetime import datetime, timezone
 
     # [P1-6] Knobs de cycle (compartidos entre rama blanket y rama item-level).
-    _max_cap = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", "30"))
-    _max_cap = max(7, min(_max_cap, 90))
-    cycle_days = int(os.environ.get("MEALFIT_PERISHABLE_CYCLE_DAYS", "7"))
-    cycle_days = max(1, min(cycle_days, _max_cap))
+    # [P1-A · 2026-05-08] Lazy import de `_env_int` para auto-registrar en
+    # `_KNOBS_REGISTRY` (mismo patrón que `_get_coherence_tolerance_pct`/
+    # `_get_coherence_guard_mode` aquí mismo). Fallback defensivo a
+    # [P2-1 · 2026-05-08] Helpers `_knob_env_int` ya importados a top-level
+    # desde `knobs.py` (cero ciclo); no requiere lazy import / fallback.
+    _max_cap = max(7, min(_knob_env_int("MEALFIT_PERISHABLE_CYCLE_DAYS_MAX", 30), 90))
+    cycle_days = max(1, min(_knob_env_int("MEALFIT_PERISHABLE_CYCLE_DAYS", 7), _max_cap))
     now_utc = datetime.now(timezone.utc)
 
     def _ts_within_cycle(iso_ts: str) -> bool:
@@ -2170,6 +2162,58 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     return result
 
 
+_MEAL_AGG_EXCLUDED_KEYWORDS_CACHE: tuple[tuple[str, ...], str] | None = None
+
+
+def _meal_aggregation_excluded_keywords() -> tuple[str, ...]:
+    """[P2-4 · 2026-05-08] SSOT de keywords excluidos en agregación de comidas.
+
+    Devuelve la tupla normalizada (lowercase, stripped, sin vacíos) de
+    keywords que disparan `_should_skip_meal_for_aggregation`. Lee
+    `MEALFIT_COHERENCE_EXCLUDED_MEAL_KEYWORDS` (comma-separated) con default
+    `"suplemento"`. Cachea por valor crudo: si el env-var cambia entre
+    invocaciones (test isolation, reload), recomputa.
+
+    Histórico: hasta 2026-05-07, los 3 sitios (`expected_sum_from_recipes`,
+    `get_shopping_list_delta`, extractor de facts) duplicaban inline
+    `if "suplemento" in meal.get("meal", "").lower(): continue`. Si una
+    rama añadía un keyword nuevo (ej. `"infusión"` en el aggregator pero no
+    en el guard), capa B de coherencia reportaba divergencias falsas — el
+    mismo patrón que causó el bug de caps_asymmetry. SSOT lo previene.
+    """
+    global _MEAL_AGG_EXCLUDED_KEYWORDS_CACHE
+    # [P2-1 · 2026-05-08] `_knob_env_str` registra en `_KNOBS_REGISTRY` y devuelve
+    # ya normalizado (lower+strip). El cache local se queda para evitar el split
+    # de keywords en cada llamada hot-path; el registro al registry es idempotente.
+    raw = _knob_env_str("MEALFIT_COHERENCE_EXCLUDED_MEAL_KEYWORDS", "suplemento")
+    if _MEAL_AGG_EXCLUDED_KEYWORDS_CACHE is not None and _MEAL_AGG_EXCLUDED_KEYWORDS_CACHE[1] == raw:
+        return _MEAL_AGG_EXCLUDED_KEYWORDS_CACHE[0]
+    parts = tuple(
+        kw.strip()
+        for kw in raw.split(",")
+        if kw.strip()
+    )
+    if not parts:
+        parts = ("suplemento",)
+    _MEAL_AGG_EXCLUDED_KEYWORDS_CACHE = (parts, raw)
+    return parts
+
+
+def _should_skip_meal_for_aggregation(meal: dict) -> bool:
+    """[P2-4 · 2026-05-08] Único punto de decisión "saltar esta comida en
+    agregación de ingredientes". Llamado por `expected_sum_from_recipes`
+    (capa B coherence guard), `get_shopping_list_delta` (aggregator
+    principal) y el extractor de facts. Garantiza simetría entre el lado
+    "expected" y el lado "aggregated" del coherence guard."""
+    if not isinstance(meal, dict):
+        return True
+    name = str(meal.get("meal", "")).lower()
+    for kw in _meal_aggregation_excluded_keywords():
+        if kw in name:
+            return True
+    return False
+
+
 def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, multiplier: float = 1.0) -> dict:
     """[P1-shop-coh-1 · 2026-05-07] Suma esperada de ingredientes desde el plan.
 
@@ -2221,7 +2265,9 @@ def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, mul
         for meal in day.get("meals") or []:
             if not isinstance(meal, dict):
                 continue
-            if "suplemento" in str(meal.get("meal", "")).lower():
+            # [P2-4] SSOT: helper compartido con get_shopping_list_delta y
+            # el extractor de facts. Evita drift entre los 3 sitios.
+            if _should_skip_meal_for_aggregation(meal):
                 continue
             ingredients = meal.get("ingredients_raw") or meal.get("ingredients") or []
             if not ingredients:
@@ -2389,14 +2435,60 @@ def _get_coherence_guard_mode() -> str:
     Cualquier valor distinto cae a "warn" con log de warning. Releído en
     cada invocación por preferencia operacional (cambio sin redeploy).
     """
-    raw = (os.environ.get("MEALFIT_SHOPPING_COHERENCE_GUARD") or "warn").strip().lower()
-    if raw not in ("off", "warn", "block"):
-        logging.warning(
-            f"[KNOBS] MEALFIT_SHOPPING_COHERENCE_GUARD={raw!r} no es válido "
-            f"(esperado: off/warn/block). Usando 'warn'."
-        )
-        return "warn"
-    return raw
+    # [P2-1 · 2026-05-08] `_knob_env_str` ya importado a top-level desde `knobs.py`
+    # (cero deps, sin riesgo de circular). El fallback try/except dejó de hacer
+    # falta tras extraer los helpers a un módulo aislado.
+    return _knob_env_str(
+        "MEALFIT_SHOPPING_COHERENCE_GUARD",
+        "warn",
+        choices={"off", "warn", "block"},
+    )
+
+
+def _get_coherence_liquid_keywords() -> set[str]:
+    """[P1-1 · 2026-05-10] Lee `MEALFIT_COHERENCE_LIQUID_KEYWORDS` (CSV).
+
+    Items cuyo nombre canónico (lower) contenga alguna de estas keywords
+    reciben tolerancia ampliada en el chequeo de magnitudes — son
+    condimentos/líquidos donde el escalado por household_multiplier es
+    super-lineal en receta pero el usuario rara vez compra el equivalente
+    (un hogar de 4 no compra 4× aceite).
+
+    Default: keywords más comunes de condimento líquido es-DO. Knob CSV
+    permite añadir/sustituir sin redeploy.
+    """
+    raw = _knob_env_str(
+        "MEALFIT_COHERENCE_LIQUID_KEYWORDS",
+        "aceite,vinagre,salsa de soya,salsa soya,salsa picante",
+    )
+    out = set()
+    for kw in str(raw).split(","):
+        kw_clean = kw.strip().lower()
+        if kw_clean:
+            out.add(kw_clean)
+    return out
+
+
+def _get_coherence_liquid_tolerance_pct() -> float:
+    """[P1-1 · 2026-05-10] Lee `MEALFIT_COHERENCE_LIQUID_TOLERANCE_PCT`.
+
+    Tolerancia ampliada para items que matchean `_get_coherence_liquid_keywords`.
+    Default 0.50 (50%): cubre el caso "receta escala 4× pero hogar compra 1×".
+    Si está por debajo de la tolerancia base, se ignora (la base manda).
+    """
+    return _knob_env_float(
+        "MEALFIT_COHERENCE_LIQUID_TOLERANCE_PCT",
+        0.50,
+        validator=lambda v: 0.0 < v < 5.0,
+    )
+
+
+def _is_liquid_food(food_name: str, liquid_keywords: set[str]) -> bool:
+    """[P1-1 · 2026-05-10] True si el nombre canónico contiene alguna keyword."""
+    if not food_name or not liquid_keywords:
+        return False
+    n_low = str(food_name).strip().lower()
+    return any(kw in n_low for kw in liquid_keywords)
 
 
 def _get_coherence_tolerance_pct() -> float:
@@ -2408,18 +2500,13 @@ def _get_coherence_tolerance_pct() -> float:
     (5%) — éste knob es estrictamente para el blocking threshold, más laxo
     para evitar falsos abortos.
     """
-    raw = os.environ.get("MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT", "0.10")
-    try:
-        v = float(raw)
-        if not (0.0 < v < 1.0):
-            raise ValueError("out of range (0, 1)")
-        return v
-    except (TypeError, ValueError) as e:
-        logging.warning(
-            f"[KNOBS] MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT={raw!r} inválido ({e}). "
-            f"Usando 0.10."
-        )
-        return 0.10
+    # [P2-1 · 2026-05-08] `_knob_env_float` ya importado a top-level desde
+    # `knobs.py` (cero deps). El fallback try/except dejó de hacer falta.
+    return _knob_env_float(
+        "MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT",
+        0.10,
+        validator=lambda v: 0.0 < v < 1.0,
+    )
 
 
 def _extract_aggregated_food_dict(aggregated_list, *, exclude_pavo: bool = False) -> dict:
@@ -2555,6 +2642,116 @@ def canonicalize_pavo(name) -> str | None:
     return None
 
 
+# [P1-1-COHERENCE-EDGE · 2026-05-10] Plurales irregulares es-DO frecuentes en
+# nombres de comida. La regla heurística (strip `-s` cuando la previa es vocal)
+# falla para palabras cuyo plural es `-es` y singular termina en consonante.
+# Mapping explícito gana siempre.
+_IRREGULAR_PLURALS_ES = {
+    "limones": "limón",
+    "jamones": "jamón",
+    "frijoles": "frijol",
+    "camarones": "camarón",
+    "salmones": "salmón",
+    "panes": "pan",
+    "flores": "flor",
+    "mariscos": "marisco",   # sí cae en heurística, pero explícito por uso frecuente
+    "lácteos": "lácteo",
+    "huevos": "huevo",
+    "yogures": "yogur",
+}
+
+# [P1-1-COHERENCE-EDGE · 2026-05-10] Modificadores triviales que el master_map
+# no siempre cubre como aliases. Se strippean SOLO si aparecen como sufijo
+# trailing (último o penúltimo token) y solo si el resultado del strip queda
+# ≥3 caracteres (evita degenerar "pan integral" → "pan integ" si el match
+# fuera parcial, o nombres de 1-2 letras que serían ambiguos).
+#
+# Conservador por diseño: NO incluye "sin sal", "bajo en X", "light" — esos son
+# productos diferentes a efectos nutricionales. Solo cubre presentaciones
+# variantes del MISMO ingrediente shopping.
+_TRAILING_MODIFIERS_ES = frozenset({
+    # Presentación / preparación
+    "fresco", "fresca", "frescos", "frescas",
+    "congelado", "congelada", "congelados", "congeladas",
+    "enlatado", "enlatada", "enlatados", "enlatadas",
+    "natural", "naturales",
+    "orgánico", "orgánica", "orgánicos", "orgánicas",
+    # Color / cualidad cromática (variedades intercambiables a efectos shopping)
+    "blanco", "blanca", "blancos", "blancas",
+    "rojo", "roja", "rojos", "rojas",
+    "verde", "verdes",
+    "amarillo", "amarilla", "amarillos", "amarillas",
+    "negro", "negra", "negros", "negras",
+    # Procesamiento (lácteos)
+    "descremado", "descremada",
+    "semidescremado", "semidescremada",
+    "entero", "entera",
+    "deslactosado", "deslactosada",
+    # Refinamiento (granos)
+    "integral", "integrales",
+    "refinado", "refinada", "refinados", "refinadas",
+})
+
+
+def _singularize_food_es(name: str) -> str:
+    """[P1-1 · 2026-05-10] Singulariza un nombre de comida en español.
+
+    Estrategia:
+      1. Mapping explícito de plurales irregulares (`limones → limón`).
+      2. Heurística defensiva: si termina en `-s` Y el char previo es vocal
+         (a/e/i/o/u + acentuadas) Y el resultado queda ≥3 caracteres → strip
+         la `-s` final (preservando case original).
+      3. En cualquier otro caso, devolver el nombre intacto (case-preserved).
+
+    Es-DO conservador. Acepta el riesgo de no singularizar formas que la
+    heurística no cubre (`papas fritas` → no toca, `arroces` → no toca por no
+    estar en mapping; el guard caerá a presence/absence en ese caso).
+    """
+    if not name or not isinstance(name, str):
+        return name
+    stripped = name.strip()
+    if not stripped:
+        return name
+    n_low = stripped.lower()
+    # 1. Mapping explícito (devuelve canónico en lower — los plurales irregulares
+    #    siempre mapean al singular conocido en lowercase).
+    if n_low in _IRREGULAR_PLURALS_ES:
+        return _IRREGULAR_PLURALS_ES[n_low]
+    # 2. Heurística vowel-before-s sobre el string ORIGINAL (preserva case).
+    if len(stripped) >= 4 and stripped.endswith(("s", "S")):
+        prev = stripped[-2].lower()
+        if prev in "aeiouáéíóú":
+            return stripped[:-1]
+    # 3. Sin transformación → return case-preserved.
+    return stripped
+
+
+def _strip_trailing_modifier_es(name: str) -> str:
+    """[P1-1 · 2026-05-10] Quita modificador trivial al final del nombre.
+
+    Ej: `pollo orgánico` → `pollo`; `arroz integral` → `arroz`. Solo strippea
+    si el modificador está en `_TRAILING_MODIFIERS_ES` y el resultado queda
+    ≥3 caracteres. Si no hay modificador trailing reconocido, devuelve el
+    nombre sin tocar.
+
+    Aplica máximo UN strip por invocación (cubre el caso común "X color"
+    sin colapsar "X fresco orgánico" — formas más complejas son raras y
+    el riesgo de over-stripping las hace no rentables).
+    """
+    if not name or not isinstance(name, str):
+        return name
+    parts = name.strip().split()
+    if len(parts) < 2:
+        return name
+    last = parts[-1].lower()
+    if last not in _TRAILING_MODIFIERS_ES:
+        return name
+    remainder = " ".join(parts[:-1]).strip()
+    if len(remainder) < 3:
+        return name
+    return remainder
+
+
 def _canonicalize_for_coherence(food_names) -> set:
     """[P1-shop-coh-1 · 2026-05-07] Canonicaliza un set de food names usando
     master_map + reglas inline simples del aggregator (huevo/ñame/miel/ajo).
@@ -2563,6 +2760,12 @@ def _canonicalize_for_coherence(food_names) -> set:
     los productos de pavo sean simétricos entre expected (receta) y
     aggregated (lista). Limitación v1/v2 (pavo como falso positivo)
     cerrada.
+
+    [P1-1 · 2026-05-10] Tras el match con master_map y reglas pavo, aplica
+    fallback genérico: strip de modificador trivial trailing
+    (`pollo orgánico → pollo`) + singularización es-DO (`manzanas → manzana`).
+    Cierra dos modos de falso positivo `cap_swallowed_modifier` documentados:
+    plurales y modificadores no listados como aliases.
 
     Réplica subset de la canonicalización en `aggregate_and_deduct_shopping_list`
     (línea ~2280) para que el guard compare nombres simétricos en ambos lados.
@@ -2611,6 +2814,19 @@ def _canonicalize_for_coherence(food_names) -> set:
                 canonical = pavo_from_raw
             elif pavo_from_canon is not None:
                 canonical = pavo_from_canon
+            else:
+                # [P1-1 · 2026-05-10] Fallback genérico para los modos de
+                # falso positivo conocidos. Orden: strip modifier → singularizar.
+                # Si el master_map ya entregó un canónico distinto del raw
+                # (n_low != alias_map.get(n_low,...)), respetamos su veredicto
+                # y NO aplicamos fallback (master tiene contexto que la heurística
+                # no tiene). Solo cuando master no aportó (canonical == raw
+                # stripped) ejercitamos el fallback.
+                if alias_map.get(n_low) is None:
+                    stripped = _strip_trailing_modifier_es(canonical)
+                    if stripped != canonical:
+                        canonical = stripped
+                    canonical = _singularize_food_es(canonical)
         out.add(canonical)
     return out
 
@@ -2754,6 +2970,18 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
             # Filtrar `cap_swallowed_modifier` con act_qty=0 ya capturados por
             # presence/absence: evita doble-reporte del mismo food. Mantenemos
             # los casos donde act_qty>0 (qty mitad u otra deficiencia parcial).
+            #
+            # [P1-1 · 2026-05-10] Tolerancia ampliada para líquidos/condimentos.
+            # Items que matchean keywords (`aceite`, `vinagre`, etc.) reciben
+            # `MEALFIT_COHERENCE_LIQUID_TOLERANCE_PCT` (default 0.50) en lugar
+            # de la tolerancia base. Cierra falsos positivos del modo "receta
+            # escala lineal pero usuario compra ~constante".
+            try:
+                liquid_kws = _get_coherence_liquid_keywords()
+                liquid_tol = _get_coherence_liquid_tolerance_pct()
+            except Exception:
+                liquid_kws = set()
+                liquid_tol = 0.0
             for d in raw_mags:
                 food = d["food"]
                 # Caso ya cubierto por capa A: food faltante completo.
@@ -2761,6 +2989,18 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
                     continue
                 # Caso ya cubierto por capa A: fantasma puro.
                 if d["expected_qty"] == 0 and food in extra_in_agg:
+                    continue
+                # [P1-1] Líquidos: si el delta cae dentro de la tolerancia
+                # ampliada, no es divergencia accionable. Solo se aplica al
+                # caso magnitud-finita (no a fantasmas/missing).
+                if (
+                    liquid_kws
+                    and liquid_tol > tolerance_pct
+                    and _is_liquid_food(food, liquid_kws)
+                    and d.get("delta_pct") not in (float("inf"), None)
+                    and d.get("expected_qty", 0) > 0
+                    and float(d["delta_pct"]) <= liquid_tol
+                ):
                     continue
                 d2 = dict(d)
                 d2["side"] = "magnitude"
@@ -4118,9 +4358,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # Knob MEALFIT_CARBS_CAP_GRAMS_PER_PW: gramos por person-week. Default 450
     # (real-world). Operador puede subir a 600 para usuarios pan-heavy o
     # bajar a 300 para reducir desperdicio.
-    _CARBS_PACKAGE_GRAMS = max(150.0, float(os.environ.get(
-        "MEALFIT_CARBS_CAP_GRAMS_PER_PW", "450"
-    )))
+    # [P2-1 · 2026-05-08] `_knob_env_float` registra en `_KNOBS_REGISTRY`.
+    _CARBS_PACKAGE_GRAMS = max(150.0, _knob_env_float("MEALFIT_CARBS_CAP_GRAMS_PER_PW", 450.0))
 
     _carbs_cap_packages = max(1, int(round(_person_weeks)))
     _carbs_cap_g = _carbs_cap_packages * _CARBS_PACKAGE_GRAMS
@@ -4195,9 +4434,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # Nuevo: 1 paq por person-week (en vez de /2pw). Monthly = 4 paq (1816g)
     # = 60g/día raw → 180g cocido/día. Realistic para legume-heavy diet.
     # Knob MEALFIT_LEGUMES_PACKS_PER_PW: paquetes por person-week (default 1.0).
-    _legumes_packs_per_pw = max(0.25, float(os.environ.get(
-        "MEALFIT_LEGUMES_PACKS_PER_PW", "1.0"
-    )))
+    # [P2-1 · 2026-05-08] `_knob_env_float` registra en `_KNOBS_REGISTRY`.
+    _legumes_packs_per_pw = max(0.25, _knob_env_float("MEALFIT_LEGUMES_PACKS_PER_PW", 1.0))
     _legumes_cap_packages = max(1, int(round(_person_weeks * _legumes_packs_per_pw)))
     _legumes_cap_g = _legumes_cap_packages * _LEGUMES_PACKAGE_GRAMS
 
@@ -4316,9 +4554,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     _EGGS_NAMES_FOR_CAP = {'huevo', 'huevos'}
     _EGG_DENSITY_G = 50.0  # UNIT_WEIGHTS["huevo"]
     _HUEVOS_PER_CARTON = 30
-    _EGGS_PER_PERSON_PER_DAY = max(0.5, float(os.environ.get(
-        "MEALFIT_EGGS_PER_PERSON_PER_DAY", "2.0"
-    )))
+    # [P2-1 · 2026-05-08] `_knob_env_float` registra en `_KNOBS_REGISTRY`.
+    _EGGS_PER_PERSON_PER_DAY = max(0.5, _knob_env_float("MEALFIT_EGGS_PER_PERSON_PER_DAY", 2.0))
 
     _eggs_cap_units = max(
         _HUEVOS_PER_CARTON,  # mínimo 1 cartón aunque pw sea bajo
@@ -4731,9 +4968,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # tamaño de porción típico (200g = chuleta/lonja/filete promedio en RD).
     # Knob: MEALFIT_PROTEIN_UNIT_FALLBACK_G.
     # ============================================================
-    _PROTEIN_UNIT_FALLBACK_G = max(50, int(os.environ.get(
-        "MEALFIT_PROTEIN_UNIT_FALLBACK_G", "200"
-    )))
+    # [P2-1 · 2026-05-08] `_knob_env_int` registra en `_KNOBS_REGISTRY`.
+    _PROTEIN_UNIT_FALLBACK_G = max(50, _knob_env_int("MEALFIT_PROTEIN_UNIT_FALLBACK_G", 200))
     _COUNT_UNITS_FOR_PROTEIN = ('unidad', 'unidades', 'rebanada', 'rebanadas',
                                  'paquete', 'paquetes', 'lonja', 'lonjas')
     _WEIGHT_UNITS_FOR_PROTEIN = ('g', 'kg', 'oz', 'lb', 'lbs', 'libra', 'libras', 'ml', 'l')
@@ -5077,7 +5313,10 @@ def get_shopping_list_delta(
     meal_count = 0
     for day in days:
         for meal in day.get("meals", []):
-            if "suplemento" in meal.get("meal", "").lower():
+            # [P2-4] SSOT: helper compartido con expected_sum_from_recipes y
+            # el extractor de facts. Garantiza simetría capa-B del coherence
+            # guard (expected ≡ aggregated en cuanto a qué meals contribuyen).
+            if _should_skip_meal_for_aggregation(meal):
                 continue
             meal_count += 1
             # [P1-4] Preferir `ingredients_raw` (pre-humanización) sobre
@@ -5185,7 +5424,8 @@ def get_realtime_pantry(plan_result: dict, consumed_ingredients: list[str]) -> l
 
     for day in days:
         for meal in day.get("meals", []):
-            if "suplemento" in meal.get("meal", "").lower():
+            # [P2-4] SSOT: mismo helper que expected/delta para evitar drift.
+            if _should_skip_meal_for_aggregation(meal):
                 continue
             ingredients = meal.get("ingredients", [])
             for i in ingredients:

@@ -4,6 +4,13 @@ import math
 from typing import List
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
+# [P2-1 · 2026-05-08] Helpers compartidos del registry de knobs. Antes los 5
+# knobs `MEALFIT_*` de este módulo (POOL_FALLBACK_ALERT_*, LESSON_BUFFER_BACKLOG,
+# CHILDREN_MULTIPLIER) eran raw `os.environ.get` y no aparecían en
+# `/health/version` ni en `get_knobs_registry_snapshot()`. Importable a top-level
+# porque `knobs.py` no depende de constants ni de graph_orchestrator (cero ciclo).
+from knobs import _env_int, _env_float
+
 logger = logging.getLogger(__name__)
 
 PLAN_CHUNK_SIZE = 3  # Días generados por chunk en el pipeline de langgraph
@@ -682,9 +689,10 @@ CHUNK_LESSON_SYNTH_ALERT_COOLDOWN_HOURS = int(os.environ.get("CHUNK_LESSON_SYNTH
 #
 # CHUNK_SYNTH_PER_USER_RATIO_THRESHOLD: porcentaje de chunks sintetizados por usuario
 #   que dispara el circuit breaker. 0.30 (30%) es más permisivo que el threshold
-#   system-wide (0.20) porque per-user tiene varianza natural mayor: un usuario que
-#   no logueó comidas dos días seguidos puede legítimamente cruzar 25% sin que sea
-#   degradación sistémica.
+#   system-wide (CHUNK_LESSON_SYNTH_RATIO_ALERT_THRESHOLD=0.15, ver línea ~654 —
+#   bajado desde 0.20 inicial post audit P0-β) porque per-user tiene varianza
+#   natural mayor: un usuario que no logueó comidas dos días seguidos puede
+#   legítimamente cruzar 25% sin que sea degradación sistémica.
 CHUNK_SYNTH_PER_USER_RATIO_THRESHOLD = float(os.environ.get("CHUNK_SYNTH_PER_USER_RATIO_THRESHOLD", "0.30"))
 # CHUNK_SYNTH_PER_USER_MIN_SAMPLES: mínimo de chunks del usuario en la ventana antes
 #   de evaluar el ratio. 4 cubre los primeros 2 chunks de un plan 7d (3+4) y evita
@@ -730,6 +738,27 @@ CHUNK_DEAD_LETTER_ALERT_COOLDOWN_HOURS = max(1, int(os.environ.get("CHUNK_DEAD_L
 #   disparar alerta. Default 1 (cualquier dead-letter es señal). Subir a 3-5 si la
 #   flota es grande y un dead-letter aislado es ruido aceptable.
 CHUNK_DEAD_LETTER_ALERT_MIN_COUNT = max(1, int(os.environ.get("CHUNK_DEAD_LETTER_ALERT_MIN_COUNT", "1")))
+
+# [P2-6 · 2026-05-08] Alertas proactivas sobre fallback no-atómico del pool.
+# `update_user_health_profile_atomic` cae al path legacy (get + update) cuando
+# `connection_pool=None` y `MEALFIT_REQUIRE_ATOMIC_POOL≠1` (default). Ese
+# fallback puede producir lost-updates bajo concurrencia silenciosamente.
+# Hasta P2-6 el counter solo era visible vía `/api/system/atomic-pool-health`
+# (polling manual). Este cron lo escala a alerta automática.
+#
+# POOL_FALLBACK_ALERT_INTERVAL_MINUTES: frecuencia del cron. Default 30 min
+#   balanceando overhead (es solo lectura del snapshot in-memory + INSERT
+#   condicional) y latencia de detección (≤30 min para ver primer fallback).
+POOL_FALLBACK_ALERT_INTERVAL_MINUTES = max(5, _env_int("MEALFIT_POOL_FALLBACK_ALERT_INTERVAL_MINUTES", 30))
+# POOL_FALLBACK_ALERT_WINDOW_MINUTES: cuán reciente debe ser el último
+#   fallback (`last_at`) para considerar la situación "activa". 60 min cubre
+#   2 ticks del cron por defecto — si el pool se recuperó hace >1h sin nuevos
+#   fallbacks, la alerta se auto-resuelve via self-healing sweep.
+POOL_FALLBACK_ALERT_WINDOW_MINUTES = max(5, _env_int("MEALFIT_POOL_FALLBACK_ALERT_WINDOW_MINUTES", 60))
+# POOL_FALLBACK_ALERT_COOLDOWN_HOURS: dedupe entre re-emisiones. 1h porque la
+#   situación es accionable (operator debe verificar pool init en deploy);
+#   no queremos esperar 6h como con dead_letters.
+POOL_FALLBACK_ALERT_COOLDOWN_HOURS = max(1, _env_int("MEALFIT_POOL_FALLBACK_ALERT_COOLDOWN_HOURS", 1))
 # [P1-CHUNKS-3] Escalación de chunks pausados con `_pause_reason='missing_prior_lessons'`.
 # Antes este pause reason tenía TTL "indefinido" en el state-machine (ver doc-string de
 # `process_plan_chunk_queue` en cron_tasks.py:12750+): un chunk pausado por lecciones
@@ -921,7 +950,7 @@ CHUNK_LESSON_TELEMETRY_BUFFER_MAX_RECORDS = max(
 # sobre cap de 10000 → alerta en torno al 5% de saturación del buffer, antes
 # de que el FIFO cap empiece a descartar señales.
 MEALFIT_LESSON_BUFFER_BACKLOG_THRESHOLD = max(
-    1, int(os.environ.get("MEALFIT_LESSON_BUFFER_BACKLOG_THRESHOLD", "500"))
+    1, _env_int("MEALFIT_LESSON_BUFFER_BACKLOG_THRESHOLD", 500)
 )
 # [P1-5] Timeout (ms) para adquirir el SELECT FOR UPDATE en _persist_nightly_learning_signals.
 # Múltiples planes activos del mismo usuario pueden competir por el row de user_profiles;
@@ -1005,7 +1034,12 @@ _pantry_embeddings_cache = {}
 # futuro Google saca un text-only mejor que multimodal-en-texto, o si la
 # cuota multimodal se agota crónicamente y queremos degradar solo este
 # path, podemos cambiarlo sin tocar vision_agent.
-GEMINI_EMBEDDING_TEXT_MODEL = os.environ.get(
+# [P2-1 · 2026-05-08] `_env_str` registra en `_KNOBS_REGISTRY`. El helper
+# normaliza vía `.strip().lower()`; los nombres de modelos Gemini ya son
+# lowercase (`models/gemini-embedding-2`, `models/gemini-embedding-001`,
+# `models/text-embedding-004`), así que la normalización no altera el valor.
+from knobs import _env_str as _knob_env_str_constants
+GEMINI_EMBEDDING_TEXT_MODEL = _knob_env_str_constants(
     "MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL",
     "models/gemini-embedding-2",
 )
@@ -2028,7 +2062,8 @@ def compute_household_multiplier(source: dict | None) -> float:
             adults = max(0, int(composition.get("adults", 0) or 0))
             children = max(0, int(composition.get("children", 0) or 0))
             if adults + children > 0:
-                child_mult = float(os.environ.get("MEALFIT_CHILDREN_MULTIPLIER", "0.6"))
+                # [P2-1 · 2026-05-08] `_env_float` registra en `_KNOBS_REGISTRY`.
+                child_mult = _env_float("MEALFIT_CHILDREN_MULTIPLIER", 0.6)
                 child_mult = max(0.3, min(child_mult, 1.0))
                 return max(1.0, float(adults) + float(children) * child_mult)
         except (TypeError, ValueError):
@@ -2038,3 +2073,138 @@ def compute_household_multiplier(source: dict | None) -> float:
         return max(1.0, float(source.get("householdSize") or source.get("household_size") or 1))
     except (TypeError, ValueError):
         return 1.0
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# [P1-AUDIT-HIST-7 · 2026-05-09] SSOT del catálogo de events de
+# `chunk_lesson_telemetry` que cuentan como LECCIONES semánticas (vs
+# métricas mecánicas / de salud).
+#
+# Movido aquí desde `routers/plans.py:_LESSON_COUNT_EVENT_WHITELIST` para
+# eliminar el riesgo de divergencia entre call sites. Antes:
+#   - `routers/plans.py` definía la tupla in-place.
+#   - `cron_tasks.py` emitía events sin importar la constante.
+#   - El test `test_p1_hist_audit_5_lesson_event_whitelist.py` leía el
+#     literal del módulo plans para validar; cualquier consumidor adicional
+#     (admin tool, monitoring, dashboard) tendría que duplicar la lista.
+#
+# Ahora cualquier consumidor importa `LESSON_COUNT_EVENT_WHITELIST` desde
+# `constants` y opera sobre la misma tupla — drift cero por construcción.
+#
+# Catálogo emitido por `cron_tasks.py` (search por `event="..."` en call
+# sites de `_record_chunk_lesson_telemetry`):
+#
+#   LECCIONES (whitelist):
+#     - lesson_synthesized_low_confidence: el sistema generó una lección
+#       proxy desde plan_days porque el chunk no persistió learning_metrics.
+#       Es learning real (aunque baja confianza).
+#     - synth_propagated_to_prompt: lección sintetizada llegó al prompt del
+#       LLM del próximo chunk → influyó en la generación.
+#     - recent_lessons_partial_synthesis: síntesis parcial (algunos chunks
+#       tenían learning_metrics, otros no) — entry SÍ contribuyó al
+#       recent_lessons del LLM.
+#     - indefinite_pause_unblocked: chunk pausado se desbloqueó con N
+#       lecciones recuperadas del fallback de síntesis.
+#
+#   MÉTRICAS MECÁNICAS (excluidas — son señales de salud, no "aprendizaje"
+#   desde la perspectiva del usuario):
+#     - synth_schema_invalid / synth_schema_partial_invalid: descarte por
+#       validación; el sistema NO aprendió esas lecciones.
+#     - learning_rebuild_failed: fallo de la reconstrucción.
+#     - failed_chunk_skipped_for_learning: chunk failed que NO contribuyó
+#       al aprendizaje.
+#     - lifetime_proxy_ratio_exceeded: alerta de degradación (ratio).
+#
+# Drift detection: `tests/test_p1_hist_audit_5_lesson_event_whitelist.py`
+# parsea `cron_tasks.py` y verifica que cada event emitido está clasificado.
+# Si se añade un event nuevo sin clasificar, falla el test.
+# `tests/test_p1_audit_hist_7_lesson_whitelist_ssot.py` verifica que el
+# import desde constants está intacto en todos los consumidores.
+LESSON_COUNT_EVENT_WHITELIST = (
+    "lesson_synthesized_low_confidence",
+    "synth_propagated_to_prompt",
+    "recent_lessons_partial_synthesis",
+    "indefinite_pause_unblocked",
+)
+
+
+# [P2-HIST-AUDIT-D · 2026-05-09] Split por calidad de los events de
+# `LESSON_COUNT_EVENT_WHITELIST`. Cada event semántico cae en una
+# tier diferenciable para que el frontend pueda diferenciar el chip
+# "X lecciones" plano por sub-conteos:
+#
+#   - HIGH (alta calidad): la lección llegó al prompt del próximo
+#     chunk Y influenció la generación. Es el happy path completo.
+#   - PARTIAL (mixta): síntesis parcial — algunos chunks tenían
+#     learning_metrics y otros no. La entry SÍ contribuyó al
+#     recent_lessons del LLM, con menos confianza que HIGH pero más
+#     que LOW.
+#   - LOW (proxy degradado): la lección se generó desde plan_days
+#     porque el chunk no persistió learning_metrics (T2 fail u
+#     otra corrupción). Aprendizaje real pero baja confianza.
+#
+# Drift detection: el test `test_p2_hist_audit_d_lesson_quality_tiers.py`
+# valida que toda key de LESSON_COUNT_EVENT_WHITELIST está EXACTAMENTE
+# en una tier (sin overlap, sin gaps). Si añades un event nuevo a
+# la whitelist, DEBES decidir su tier — el test falla loud sino.
+LESSON_QUALITY_TIERS = {
+    "high": (
+        "synth_propagated_to_prompt",
+        "indefinite_pause_unblocked",
+    ),
+    "partial": (
+        "recent_lessons_partial_synthesis",
+    ),
+    "low": (
+        "lesson_synthesized_low_confidence",
+    ),
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# [P2-HIST-AUDIT-13 · 2026-05-09] SSOT del set de `action_taken` que cuentan
+# como AJUSTES anomalous del guard de coherencia recetas↔lista (chip "X
+# ajustes" del Historial).
+#
+# Movido aquí desde la definición inline en `routers/plans.py:_ANOMALOUS_COHERENCE_ACTIONS`
+# para alinearlo con el patrón establecido por P1-AUDIT-HIST-7 (lesson
+# whitelist). Antes:
+#   - `routers/plans.py` definía el set in-place.
+#   - `frontend/src/pages/History.jsx` replicaba 4 string literals inline.
+#   - Cuando `_aggregate_coherence_block_history_metrics` (P3-B) añadió
+#     `post_swap_revalidation` y otros buckets, ambos sites necesitaron
+#     actualización manual — drift latente en cualquier momento.
+#
+# Ahora consumidor backend importa `COHERENCE_ANOMALOUS_ACTIONS`; consumidor
+# frontend importa de `frontend/src/utils/coherenceActions.js`. Drift
+# detection cross-archivo (Python + JS) lo verifica con tests.
+#
+# Catálogo (decisión documentada del audit 2026-05-08 → P3-NEW-C):
+#
+#   ANOMALOUS (cuentan al chip — el sistema corrigió drift recetas↔lista):
+#     - degrade: el guard mode=block degradó el plan (kill switch knob
+#       MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION='degrade').
+#     - reject_minor / reject_high: el guard rechazó el plan; review
+#       node retorna severity minor/high según knob.
+#     - hydration_error: bug del consumer (block_set=True pero
+#       action_taken quedó None hasta que el fallback defensivo lo
+#       hidrató). Cuenta como anomalous porque indica un fallo del
+#       contrato P2-2 (action_taken jamás None tras review).
+#
+#   NO ANOMALOUS (NO cuentan al chip):
+#     - not_applicable: warn-only, block_set=False (info pura).
+#     - post_swap_revalidation (P2-B): observability tras swap; el cron
+#       P3-B lo trata como bucket dedicado, NO anomalous.
+#     - null: invariante violado (combinación reservada error — debería
+#       ser hydration_error ya).
+#
+# Si el cron P3-B añade un nuevo bucket (e.g. `recoverable_drift`), el
+# operador DEBE decidir si entra al SET aquí. El test
+# `test_p2_hist_audit_13_coherence_anomalous_ssot.py` falla loud cuando
+# alguien clasifica un action_taken sin actualizar la whitelist.
+COHERENCE_ANOMALOUS_ACTIONS = (
+    "degrade",
+    "reject_minor",
+    "reject_high",
+    "hydration_error",
+)

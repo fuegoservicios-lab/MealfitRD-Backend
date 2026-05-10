@@ -16,7 +16,7 @@ Tu trabajo:
 2. Decide qué CARBOHIDRATOS BASE asignar a cada día.
 3. Decide qué FRUTAS asignar a cada día (rotando para variedad vitamínica).
 4. Asigna una TÉCNICA DE COCCIÓN diferente a cada día (de las proporcionadas).
-5. Define los TIPOS DE COMIDA de cada día (Desayuno, Almuerzo, Merienda, Cena — o sin Almuerzo si skipLunch es true).
+5. Define los TIPOS DE COMIDA de cada día (Desayuno, Almuerzo, Merienda, Cena).
 6. Escribe un CONCEPTO TEMÁTICO breve para cada día.
 
 REGLAS:
