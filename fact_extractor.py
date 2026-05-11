@@ -1,9 +1,12 @@
 import os
 import json
+import logging
 from cache_manager import centralized_cache
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
+
+logger = logging.getLogger(__name__)
 
 from db import (
     save_user_fact, search_user_facts, delete_user_fact, search_user_facts_hybrid,
@@ -211,18 +214,47 @@ def get_embedding(text: str) -> list:
     Modelo TEXT-ONLY configurable vía `constants.GEMINI_EMBEDDING_TEXT_MODEL`
     (knob `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL`). Default `gemini-embedding-001`
     estable. Caso de uso: knowledge graph de facts del usuario — todo texto.
+
+    [P3-3 · 2026-05-10] Política de fallo: fail-fast con `return []`.
+    Decisión deliberada (no se implementa fallback a modelo alternativo):
+      1. **Modelo único**: el knob `GEMINI_EMBEDDING_TEXT_MODEL` define UN
+         modelo. Cambiar a fallback automático requeriría un segundo knob
+         + versionado del cache (las dimensiones del vector pueden diferir
+         entre modelos y romper similaridad search).
+      2. **Cache persistente**: `CACHE_TTL_PERMANENT = ~100 años` —
+         re-embedeos del mismo texto son raros. Una excepción transitoria
+         se ve solo una vez por texto único; el cache absorbe el rebound.
+      3. **Downstream tolera []**: los consumidores (`async_extract_and_save_facts`,
+         hybrid search en `agent.py`, `proactive_agent.py`) chequean
+         `if not emb: skip/degrade` y siguen el flujo sin propagar.
+
+    El error queda visible vía `logger.error` (P3-3 — antes era `print(...)`
+    invisible a Sentry / log aggregation). Si la frecuencia de error sube en
+    `pipeline_metrics` o en Sentry, abrir P-fix dedicado con la decisión
+    fallback explícita (ej. degradar a modelo legacy con dim conversion).
     """
+    _model_name = "<unknown>"
     try:
         from constants import GEMINI_EMBEDDING_TEXT_MODEL
+        _model_name = GEMINI_EMBEDDING_TEXT_MODEL
         embeddings = GoogleGenerativeAIEmbeddings(
             model=GEMINI_EMBEDDING_TEXT_MODEL,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
         emb = embeddings.embed_query(text)
-        print(f"🔑 [EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
+        logger.debug(f"[EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
         return list(emb[:768])
     except Exception as e:
-        print(f"⚠️ Error al generar embedding: {e}")
+        # [P3-3 · 2026-05-10] logger.error (no print) — feed Sentry/alerting.
+        # Si esto se ve con frecuencia, el knob fail-fast deja un trail
+        # diagnosticable sin sentry_sdk.capture explícito (sentry captura
+        # error-level logs por default). `_model_name` se bindea ANTES del
+        # import, así que aunque el import de constants falle, el log es
+        # informativo (model=<unknown>).
+        logger.error(
+            f"[EMBEDDING] Falló get_embedding (modelo={_model_name!r}, "
+            f"text_len={len(text)}): {type(e).__name__}: {e}"
+        )
         return []
 
 CRITICAL_CATEGORIES = {"condicion_medica", "alergia", "dieta", "objetivo"}

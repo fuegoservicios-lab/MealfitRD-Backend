@@ -220,6 +220,96 @@ nutricional.
 """
 
 
+def build_sleep_stress_context(form_data: dict) -> str:
+    """[P2-AUDIT-5 · 2026-05-10] Genera bloque con hints fisiológicos/emocionales
+    derivados de `sleepHours` y `stressLevel` del wizard.
+
+    Bug original (audit 2026-05-10): ambos campos vivían en `_REQUIRED_FORM_FIELDS`
+    (routers/plans.py:306) y se validaban con enum estricto, pero NINGÚN consumer
+    downstream los leía. El comment línea 417 afirmaba "solo hints textuales al
+    LLM" — claim que el grep cross-codebase desmintió (0 referencias en
+    graph_orchestrator/prompts/agent/ai_helpers). El usuario completaba dos
+    pasos del wizard (QSleep, QStress) creyendo que personalizaban el plan, y
+    no lo hacían. Promesa rota.
+
+    Diseño espejo de `build_motivation_context`: el bloque es señal de TONO y
+    SESGO dentro del catálogo permitido. NO altera macros, alergias, condiciones
+    médicas ni reglas nutricionales — esas son estrictas y vienen de otros
+    bloques. Emite el hint solo cuando el valor es accionable (skip de los
+    valores "estándar" como sueño 7-8h o estrés Bajo/Moderado para no
+    contaminar el prompt con low-signal).
+
+    Asume `form_data["sleepHours"]` / `form_data["stressLevel"]` ya saneados
+    por `_sanitize_form_data_recursive` (string seguro). Si ambos están vacíos
+    o son no-accionables, retorna string vacío (no-op).
+
+    Valores aceptados (sincronizados con `_SLEEP_HOURS_ENUM` y
+    `_STRESS_LEVEL_ENUM` en `routers/plans.py:436-437`):
+      - sleepHours: "< 6 horas" | "6-7 horas" | "7-8 horas" | "> 8 horas"
+      - stressLevel: "Bajo" | "Moderado" | "Alto" | "Muy Alto"
+    """
+    if not isinstance(form_data, dict):
+        return ""
+
+    sleep_raw = form_data.get("sleepHours")
+    stress_raw = form_data.get("stressLevel")
+    sleep = sleep_raw.strip() if isinstance(sleep_raw, str) else ""
+    stress = stress_raw.strip() if isinstance(stress_raw, str) else ""
+
+    # Hints per valor accionable. Sueño 7-8h y estrés Bajo/Moderado son
+    # rangos estándar — el LLM no necesita instrucción especial.
+    _SLEEP_HINTS = {
+        "< 6 horas": (
+            "fatiga probable. Prioriza recetas de baja fricción (<20 min de "
+            "prep) con alta saciedad por porción y combos proteína magra + "
+            "carbohidrato complejo que sostienen energía estable."
+        ),
+        "6-7 horas": (
+            "déficit leve. Mantén complejidad moderada y favorece desayunos "
+            "con proteína de absorción rápida."
+        ),
+        "> 8 horas": (
+            "ventana de recuperación amplia. Puedes incluir preparaciones "
+            "más elaboradas y meal prep si el contexto lo permite."
+        ),
+    }
+    _STRESS_HINTS = {
+        "Alto": (
+            "contexto de cortisol elevado. Sin alterar macros, sesga la "
+            "selección hacia alimentos ricos en magnesio (verdes de hoja, "
+            "semillas), omega-3 y menos ultra-procesados. Tono del coaching: "
+            "empático, no exigente."
+        ),
+        "Muy Alto": (
+            "carga de estrés crónico. Reduce decisión fatigue: prefiere "
+            "platos con lista de ingredientes corta y técnicas familiares. "
+            "Sesga hacia magnesio + omega-3 + carbohidrato complejo de bajo "
+            "índice glucémico. Tono empático y validante en los `desc`."
+        ),
+    }
+
+    sleep_hint = _SLEEP_HINTS.get(sleep)
+    stress_hint = _STRESS_HINTS.get(stress)
+    if not sleep_hint and not stress_hint:
+        return ""
+
+    lines = ["--- ESTADO FISIOLÓGICO/EMOCIONAL DEL USUARIO ---"]
+    if sleep_hint:
+        lines.append(f'😴 Sueño reportado: "{sleep}" → {sleep_hint}')
+    if stress_hint:
+        lines.append(f'🧠 Estrés reportado: "{stress}" → {stress_hint}')
+    lines.append("")
+    lines.append(
+        "INSTRUCCIÓN: Usa estas señales SOLO para ajustar TONO del coaching "
+        "(campos `desc` / `name` cuando sea natural) y SESGAR selección "
+        "dentro del catálogo ya permitido por otras reglas. NO alteres "
+        "restricciones médicas, alergias, macros, ni reglas nutricionales — "
+        "esas son estrictas y vienen de otros bloques."
+    )
+    lines.append("----------------------------------------")
+    return "\n" + "\n".join(lines) + "\n"
+
+
 def build_time_context() -> str:
     """Genera el bloque de contexto temporal dinámico (fecha, día, clima caribeño y cultura)."""
     now_local = datetime.now()

@@ -190,25 +190,68 @@ def execute_sql_query(query: str, params: tuple = None, fetch_one: bool = False,
                 pass
             return []
 
-def execute_sql_write(query: str, params: tuple = None, returning: bool = False):
-    """Ejecuta una transacción INSERT/UPDATE/DELETE."""
+def execute_sql_write(query: str, params: tuple = None, returning: bool = False, lock_timeout_ms: int = None):
+    """Ejecuta una transacción INSERT/UPDATE/DELETE.
+
+    [P1-3 · 2026-05-10] `lock_timeout_ms` opcional: cuando se provee, la
+    sentencia se ejecuta dentro de una transacción explícita con
+    `SET LOCAL lock_timeout = '<N>ms'` aplicado ANTES del cursor.execute
+    del query principal. Si el lock no se adquiere en ese tiempo,
+    psycopg propaga `psycopg.errors.LockNotAvailable` (SQLSTATE 55P03) y
+    el caller decide retry/skip — vs. el comportamiento default (sin
+    `lock_timeout` local) que espera indefinidamente hasta que el
+    `statement_timeout` de la sesión actúe.
+
+    Mismo helper SSOT que el heartbeat de chunks usa para no colgarse
+    si otro worker tiene la fila bloqueada. Sin esto, el thread daemon
+    del heartbeat podía esperar minutos por un row lock y morirse,
+    dejando el chunk como zombie hasta que el rescue lo matase tras
+    CHUNK_LOCK_STALE_MINUTES.
+
+    Backward-compatible: callers existentes que pasen `lock_timeout_ms=None`
+    obtienen exactamente el mismo comportamiento de antes (sin transacción
+    explícita, sin SET LOCAL). El nuevo path solo se activa cuando el
+    caller opta in.
+    """
     if not connection_pool:
         raise RuntimeError("db connection_pool is not available.")
-    
+
     import psycopg
     from psycopg.rows import dict_row
-    
+
     with connection_pool.connection() as conn:
-        with conn.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(query, params)
-            if returning:
-                return cursor.fetchall()
-            
-            try:
-                cursor.fetchall()
-            except psycopg.ProgrammingError:
-                pass
-            return True
+        if lock_timeout_ms is not None and int(lock_timeout_ms) > 0:
+            # [P1-3] Wrap explícito en transacción para que `SET LOCAL`
+            # tenga scope. Sin `conn.transaction()`, autocommit aplicaría
+            # el SET LOCAL inmediatamente y luego lo "perdería" en el
+            # siguiente comando.
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    try:
+                        cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")
+                    except Exception as set_err:
+                        # Best-effort: si el SET LOCAL falla, seguimos sin él
+                        # (comportamiento de antes — mejor que abortar el write).
+                        logger.debug(f"[P1-3] SET LOCAL lock_timeout falló: {set_err}")
+                    cursor.execute(query, params)
+                    if returning:
+                        return cursor.fetchall()
+                    try:
+                        cursor.fetchall()
+                    except psycopg.ProgrammingError:
+                        pass
+                    return True
+        else:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(query, params)
+                if returning:
+                    return cursor.fetchall()
+
+                try:
+                    cursor.fetchall()
+                except psycopg.ProgrammingError:
+                    pass
+                return True
 
 def execute_sql_transaction(queries_with_params: List[Tuple[str, tuple]]):
     """Ejecuta múltiples consultas SQL dentro de una única transacción (BEGIN ... COMMIT)."""

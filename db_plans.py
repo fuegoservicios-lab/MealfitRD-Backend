@@ -216,6 +216,8 @@ def update_plan_data_atomic(
     plan_id: str,
     mutator,
     lock_timeout_ms: int = None,
+    *,
+    user_id: Optional[str] = None,
 ) -> dict:
     """[P0-2] Read-Modify-Write atómico de meal_plans.plan_data.
 
@@ -236,10 +238,21 @@ def update_plan_data_atomic(
             CHUNK_LEARNING_LOCK_TIMEOUT_MS de constants. Si excede el timeout,
             la función propaga la excepción de psycopg para que el caller
             decida re-encolar / saltar.
+        user_id: [P2-OPEN-1 · 2026-05-11] Si presente, el SELECT y UPDATE
+            incluyen `AND user_id = %s`. Defense-in-depth contra invariante
+            I2 (CLAUDE.md): aunque todos los callers actuales resuelven
+            ownership upstream (plan_id viene de plan_chunk_queue claimeado,
+            que ya filtró user_id), un refactor futuro que reordene la
+            resolución puede abrir IDOR silente sin este filtro local.
+            Patrón espejo de `update_meal_plan_data` (P1-NEW-3). Si `None`,
+            la función emite `logger.warning("[I2-MISS] ...")` con el caller
+            inferido del stack para que SRE detecte callers no-migrados —
+            el UPDATE procede igual (back-compat con callers viejos).
 
     Returns:
-        El dict plan_data resultante tras la mutación. Si la fila no existe,
-        retorna {} y NO ejecuta UPDATE.
+        El dict plan_data resultante tras la mutación. Si la fila no existe
+        (o no pertenece al user_id si fue provisto), retorna {} y NO ejecuta
+        UPDATE.
     """
     if not connection_pool:
         raise RuntimeError("db connection_pool is not available for atomic plan_data update.")
@@ -247,6 +260,28 @@ def update_plan_data_atomic(
     if lock_timeout_ms is None:
         from constants import CHUNK_LEARNING_LOCK_TIMEOUT_MS
         lock_timeout_ms = int(CHUNK_LEARNING_LOCK_TIMEOUT_MS)
+
+    # [P2-OPEN-1 · 2026-05-11] Detección de callers no-migrados. Cuando un
+    # caller omite `user_id`, loggeamos a WARNING con el call frame inmediato
+    # (filename:lineno + nombre de la función) para que SRE vea la migración
+    # pendiente en logs sin tener que grep el código. NO bloqueamos el flujo
+    # — el UPDATE procede sin el filtro (back-compat). Test parser-based
+    # `test_p2_open_1_update_plan_data_atomic_user_id` enforza que TODOS los
+    # callers conocidos pasen `user_id`, así que en estado verde el log no
+    # debería aparecer en prod salvo callers nuevos no auditados.
+    if user_id is None:
+        try:
+            import inspect as _inspect_p2o1
+            _frame = _inspect_p2o1.stack()[1]
+            _caller_loc = f"{_frame.filename}:{_frame.lineno} ({_frame.function})"
+        except Exception:
+            _caller_loc = "<stack unavailable>"
+        logger.warning(
+            f"[I2-MISS] update_plan_data_atomic invocado sin `user_id` desde "
+            f"{_caller_loc}. Defense-in-depth I2 (CLAUDE.md) se omite — UPDATE "
+            f"procede sin filtro AND user_id = %s. Migrar el caller pasando "
+            f"`user_id=<owner>` (kwarg) cierra el gap. Plan_id={plan_id}."
+        )
 
     from psycopg.rows import dict_row
     from psycopg.types.json import Jsonb
@@ -259,15 +294,25 @@ def update_plan_data_atomic(
                 except Exception as set_err:
                     logger.debug(f"[P0-2] No se pudo setear lock_timeout en update_plan_data_atomic: {set_err}")
 
-                cursor.execute(
-                    "SELECT plan_data FROM meal_plans WHERE id = %s FOR UPDATE",
-                    (plan_id,),
-                )
+                # [P2-OPEN-1] SELECT con filtro user_id si presente. Bajo
+                # `FOR UPDATE` el row se locka; si user_id no matchea, no hay
+                # fila → caemos al early return abajo.
+                if user_id is not None:
+                    cursor.execute(
+                        "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s FOR UPDATE",
+                        (plan_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT plan_data FROM meal_plans WHERE id = %s FOR UPDATE",
+                        (plan_id,),
+                    )
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(
                         f"[P0-2] update_plan_data_atomic: meal_plan {plan_id} no existe "
-                        f"(probablemente cancelado por save_new_meal_plan_atomic). Skip."
+                        f"(probablemente cancelado por save_new_meal_plan_atomic, o "
+                        f"user_id={user_id!r} no coincide con el owner). Skip."
                     )
                     return {}
 
@@ -280,10 +325,21 @@ def update_plan_data_atomic(
                     return current
 
                 new_data = result if isinstance(result, dict) else current
-                cursor.execute(
-                    "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s",
-                    (Jsonb(new_data), plan_id),
-                )
+                # [P2-OPEN-1] UPDATE con `AND user_id = %s` defense-in-depth.
+                # Aunque ya verificamos ownership en el SELECT bajo FOR UPDATE
+                # (mismo lock que cubre el UPDATE), el filtro repetido ancla
+                # la invariante I2 para refactors futuros que separen el SELECT
+                # del UPDATE.
+                if user_id is not None:
+                    cursor.execute(
+                        "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s AND user_id = %s",
+                        (Jsonb(new_data), plan_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s",
+                        (Jsonb(new_data), plan_id),
+                    )
                 return new_data
 
 
@@ -898,16 +954,70 @@ def get_latest_meal_plan_with_id(user_id: str):
         logger.error(f"Error obteniendo plan con ID: {e}")
         return None
 
-def update_meal_plan_data(plan_id: str, new_plan_data: dict):
-    """Actualiza el plan_data JSONB de un plan existente por su ID."""
+def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: str = None):
+    """[P1-NEW-3 · 2026-05-10] Actualiza el plan_data JSONB de un plan
+    filtrando por `(id, user_id)` cuando se provee `user_id`.
+
+    Antes el helper hacía `UPDATE … WHERE id = %s` sin ownership check —
+    delegaba 100% al caller la responsabilidad de validar ownership. Un
+    callsite futuro que olvidara el check (como ocurrió originalmente en
+    `/restock`, cerrado en P0-NEW-1) reintroducía IDOR sobre meal_plans.
+
+    Contrato post-P1-NEW-3:
+      - `user_id` es OPCIONAL solo por compatibilidad mientras migramos
+        los 4 callsites históricos. Tests parser-based enforzan que cada
+        callsite producción lo pase.
+      - Si `user_id` se pasa: WHERE filtra por `(id, user_id)`. Si la
+        fila no existe o no pertenece, retorna `0`/`[]` (mismo retorno
+        que un plan_id inexistente — el caller decide cómo manejarlo).
+      - Si `user_id` es `None`: comportamiento legacy (solo `WHERE id`).
+        DEPRECATED — emite warning de log para forzar migración.
+
+    Retorna:
+      - `True` (path psycopg con connection_pool) o `list` no vacío
+        (path supabase-py) si el UPDATE afectó alguna fila.
+      - `False`/`[]`/`None` si la fila no existe, no pertenece al
+        usuario, o el cliente Supabase está caído.
+    """
     try:
+        if user_id is None:
+            logger.warning(
+                "[P1-NEW-3] update_meal_plan_data llamado sin user_id "
+                f"para plan_id={plan_id}. Defense-in-depth a DB-level "
+                f"degrada a legacy WHERE id. Migrar el callsite para "
+                f"pasar user_id."
+            )
+            if connection_pool:
+                from psycopg.types.json import Jsonb
+                execute_sql_write(
+                    "UPDATE meal_plans SET plan_data = %s WHERE id = %s",
+                    (Jsonb(new_plan_data), plan_id),
+                )
+                return True
+            else:
+                if not supabase:
+                    return None
+                res = supabase.table("meal_plans").update({"plan_data": new_plan_data}).eq("id", plan_id).execute()
+                return res.data
+        # Path nuevo con ownership a DB-level. Mismo patrón que
+        # P0-HIST-IDOR-1/2 cerraron con `AND user_id = %s` defense-in-depth.
         if connection_pool:
             from psycopg.types.json import Jsonb
-            execute_sql_write("UPDATE meal_plans SET plan_data = %s WHERE id = %s", (Jsonb(new_plan_data), plan_id))
+            execute_sql_write(
+                "UPDATE meal_plans SET plan_data = %s WHERE id = %s AND user_id = %s",
+                (Jsonb(new_plan_data), plan_id, user_id),
+            )
             return True
         else:
-            if not supabase: return None
-            res = supabase.table("meal_plans").update({"plan_data": new_plan_data}).eq("id", plan_id).execute()
+            if not supabase:
+                return None
+            res = (
+                supabase.table("meal_plans")
+                .update({"plan_data": new_plan_data})
+                .eq("id", plan_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
             return res.data
     except Exception as e:
         logger.error(f"Error actualizando plan_data: {e}")

@@ -12,6 +12,25 @@ from constants import normalize_ingredient_for_tracking
 logger = logging.getLogger(__name__)
 _RESERVATION_MEAL_TOKEN_RE = re.compile(r":meal:(.+)$")
 
+# [P2-NEW-2 · 2026-05-10] Pre-registrar `MEALFIT_INVENTORY_RPC_STRICT` en
+# `_KNOBS_REGISTRY` al import-time. Antes (P1-NEW-1) el knob se leía solo
+# dentro del except block del fallback RPC — eso significa que NUNCA
+# aparecía en `/admin/knobs` ni en `/health/version` hasta que el path
+# patológico ejecutara, dejando ciega la herramienta de diagnóstico justo
+# cuando más se necesita ("¿strict está on en prod?").
+#
+# Esta lectura es side-effect-only: el valor real se vuelve a consultar
+# dentro del except (vía `_env_bool` que retorna del registry tras el
+# primer hit, así que no hay doble-parse de env). El warning de drift
+# entre dos lecturas no aplica porque `_env_bool` es deterministic en el
+# mismo proceso.
+try:
+    from knobs import _env_bool as _knob_env_bool
+    _knob_env_bool("MEALFIT_INVENTORY_RPC_STRICT", False)
+except Exception:
+    # Si knobs no se puede importar (script standalone, etc.), no fail.
+    pass
+
 def _compute_dynamic_consumption_rates(
     user_id: str,
     current_household_multiplier: float | None = None,
@@ -1091,6 +1110,14 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
     shopping_list / unknown) y sólo se persiste en INSERT. En UPDATE NO se
     sobrescribe — first-writer-wins — para preservar la identidad de items
     manuales aun cuando un restock posterior sume cantidad sobre ellos.
+
+    [P0-4 · 2026-05-10] El path UPDATE/DELETE sobre filas existentes ahora
+    delega a la RPC `apply_inventory_delta` (SECURITY DEFINER, lock
+    FOR UPDATE + UPDATE/DELETE en misma TX). Antes el SELECT-MODIFY-WRITE
+    en app-layer podía perder updates bajo concurrencia (dos chunks
+    deduciendo en paralelo el mismo ingrediente, o usuario loggeando 2×
+    la misma comida). El INSERT de fila nueva sigue en app-layer porque
+    no hay race posible: la fila no existe hasta este INSERT.
     """
     if not supabase: return False
     try:
@@ -1114,21 +1141,119 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                 converted_qty = convert_amount(quantity, unit, current_unit, master_item)
 
                 if converted_qty is not None:
-                    # Logramos convertir y emparejar. Aplicar suma/resta.
-                    new_qty = round(current_qty + converted_qty, 4)  # Evitar floating point overflow
-
-                    if new_qty < 0.01:
-                        supabase.table("user_inventory").delete().eq("id", row_id).execute()
-                    else:
-                        # [P0.2] UPDATE NO toca `source` para preservar provenance
-                        # (first-writer-wins). Si la fila se creó como 'manual',
-                        # un restock posterior que sume aquí mantiene 'manual'.
-                        supabase.table("user_inventory").update({"quantity": new_qty, "master_ingredient_id": master_id, "last_mutation_type": mutation_type}).eq("id", row_id).execute()
-
-                    updated = True
+                    # [P0-4 · 2026-05-10] Atomic delta vía RPC. La RPC hace
+                    # `SELECT … FOR UPDATE` + UPDATE/DELETE en la misma
+                    # transacción, lo que serializa concurrent calls sobre
+                    # la MISMA fila y elimina la lost-update race del
+                    # path SELECT-MODIFY-WRITE legacy.
+                    #
+                    # Si la RPC retorna `status=not_found` (ownership
+                    # mismatch o fila eliminada entre el SELECT de
+                    # `existing` y este UPDATE), caemos al INSERT como
+                    # path de recuperación.
+                    try:
+                        rpc_resp = supabase.rpc(
+                            "apply_inventory_delta",
+                            {
+                                "p_user_id": user_id,
+                                "p_row_id": row_id,
+                                "p_delta": round(converted_qty, 4),
+                                "p_mutation_type": mutation_type,
+                                "p_master_id": master_id,
+                            },
+                        ).execute()
+                        rpc_data = rpc_resp.data if hasattr(rpc_resp, "data") else None
+                        if isinstance(rpc_data, dict) and rpc_data.get("status") == "not_found":
+                            # Race: fila desapareció entre nuestro SELECT y
+                            # el FOR UPDATE. Loguear sin retry — el INSERT
+                            # downstream re-creará la fila si la cantidad
+                            # neta es positiva.
+                            logger.warning(
+                                f"[P0-4] apply_inventory_delta returned not_found "
+                                f"for user={user_id} row_id={row_id} "
+                                f"ingredient={ingredient_name!r} — race-recovery "
+                                f"vía INSERT."
+                            )
+                            updated = False
+                        else:
+                            updated = True
+                    except Exception as rpc_err:
+                        # [P1-NEW-1 · 2026-05-10] Fallback al path legacy si la
+                        # RPC no está disponible (deploy lag, permisos). El
+                        # log original era observabilidad floja: sin entry en
+                        # `system_alerts`, producción podía operar bajo
+                        # lost-update race silenciosamente — el fix P0-4
+                        # quedaría desactivado sin que nadie lo notara.
+                        #
+                        # Cambios:
+                        #   1. `system_alerts.inventory_rpc_fallback` con
+                        #      `severity=critical` (la RPC NO debería fallar
+                        #      en producción; fallar implica regression).
+                        #   2. Knob `MEALFIT_INVENTORY_RPC_STRICT` (default
+                        #      False): si True, re-raise `rpc_err` para que
+                        #      el caller falle loud en vez de continuar bajo
+                        #      el path no-atómico. Recomendado para prod tras
+                        #      verificar que la RPC está estable.
+                        #   3. Solo entonces ejecutamos el fallback UPDATE
+                        #      legacy (sin race-control). El alert ya está
+                        #      emitido para que ops sepa que ocurrió.
+                        from knobs import _env_bool as _knob_env_bool
+                        _strict = _knob_env_bool("MEALFIT_INVENTORY_RPC_STRICT", False)
+                        try:
+                            from datetime import timezone as _tz
+                            _now_iso = datetime.now(_tz.utc).isoformat()
+                            supabase.table("system_alerts").upsert({
+                                "alert_key": "inventory_rpc_fallback",
+                                "alert_type": "inventory",
+                                "severity": "critical",
+                                "title": "apply_inventory_delta RPC falló — fallback no-atómico",
+                                "message": (
+                                    f"RPC apply_inventory_delta lanzó "
+                                    f"{type(rpc_err).__name__}: {str(rpc_err)[:200]}. "
+                                    f"Path de deducción cayó al UPDATE legacy "
+                                    f"(SELECT-MODIFY-WRITE en app-layer) que NO "
+                                    f"serializa concurrent calls — lost-update "
+                                    f"race re-introducido temporalmente. Revisar "
+                                    f"deploy lag (¿migración p0_4_apply_inventory_delta_rpc.sql "
+                                    f"aplicada?) y permisos service_role."
+                                ),
+                                "metadata": {
+                                    "user_id": user_id,
+                                    "row_id": row_id,
+                                    "ingredient": ingredient_name,
+                                    "exc_type": type(rpc_err).__name__,
+                                    "strict_mode": _strict,
+                                },
+                                "triggered_at": _now_iso,
+                                "resolved_at": None,
+                            }, on_conflict="alert_key").execute()
+                        except Exception as _alert_err:
+                            logger.warning(
+                                f"[P1-NEW-1] No se pudo emitir system_alert "
+                                f"para inventory_rpc_fallback: {_alert_err}"
+                            )
+                        logger.error(
+                            f"[P0-4] apply_inventory_delta RPC falló para "
+                            f"user={user_id} row_id={row_id}: {rpc_err}. "
+                            f"Fallback al UPDATE legacy (no-atomic). "
+                            f"strict_mode={_strict}."
+                        )
+                        if _strict:
+                            # Fail-loud: propagar la excepción para que el
+                            # caller (chunk worker, log_consumed_meal, etc.)
+                            # haga retry o registre el fallo en
+                            # `failed_inventory_deductions` (P0-5).
+                            raise
+                        new_qty = round(current_qty + converted_qty, 4)
+                        if new_qty < 0.01:
+                            supabase.table("user_inventory").delete().eq("id", row_id).execute()
+                        else:
+                            supabase.table("user_inventory").update({"quantity": new_qty, "master_ingredient_id": master_id, "last_mutation_type": mutation_type}).eq("id", row_id).execute()
+                        updated = True
                     break
 
-        # Si no se encontró un registro compatible o no existía, insertamos uno nuevo
+        # Si no se encontró un registro compatible o no existía, insertamos uno nuevo.
+        # El INSERT no tiene race (la fila no existe hasta este momento).
         if not updated:
             if quantity >= 0.01:
                 supabase.table("user_inventory").insert({
@@ -1186,23 +1311,96 @@ def get_inventory_activity_since(user_id: str, since_iso: str) -> Dict[str, Any]
         return {"mutations_count": 0, "last_mutation_at": None, "low_stock_items": 0, "consumption_mutations_count": 0, "manual_mutations_count": 0}
 
 
+def _persist_failed_inventory_deductions(user_id: str, failed_items: list) -> None:
+    """[P0-5 · 2026-05-10] Persiste items que fallaron al deducirse del inventario
+    en `failed_inventory_deductions` para observabilidad + retry posterior.
+
+    Antes de P0-5 la tabla existía con RLS forzado e índice KEEP (P2-PERF-1),
+    pero NADIE escribía a ella — los fallos quedaban solo en logs locales,
+    invisibles a alertas. Cron `_alert_failed_inventory_deductions_backlog`
+    (cron_tasks.py) lee esta tabla y emite `system_alerts` cuando el backlog
+    crece, cerrando el gap "write-only orphan".
+
+    El INSERT es best-effort: si falla, loguea warning y continúa — no
+    debemos bloquear la deducción principal por una falla de observabilidad
+    secundaria. La idempotencia no es necesaria (cada deducción que falla
+    es un evento único; duplicados sub-segundo son posibles pero no rompen
+    nada — el alert cron solo cuenta filas).
+
+    `failed_items` shape: lista de dicts con `{item, name?, qty?, unit?, reason}`.
+    Persistido como jsonb en columna `ingredients`. Schema: `attempts=0` inicial,
+    `created_at`/`updated_at` defaults a `now()`.
+    """
+    if not supabase or not user_id or not failed_items:
+        return
+    try:
+        supabase.table("failed_inventory_deductions").insert({
+            "user_id": user_id,
+            "ingredients": failed_items,
+            "attempts": 0,
+        }).execute()
+    except Exception as insert_err:
+        # Warning, no error: la deducción principal ya completó (o no);
+        # esto es solo telemetría.
+        logger.warning(
+            f"[P0-5] No se pudo persistir failed_inventory_deductions para "
+            f"user={user_id}: {insert_err}"
+        )
+
+
 def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str]):
     """
     Resta matemáticamente una lista de ingredientes crudos (los de una comida consumida)
     de la tabla de inventario físico.
+
+    [P0-5 · 2026-05-10] Items que fallan (parse error, exception, deducción
+    devuelve False) se acumulan en `failed_items` y se persisten al final
+    en `failed_inventory_deductions` para que el cron de alerta los detecte.
+    Item ausente en pantry NO es failure — el usuario puede haber consumido
+    algo que no tenía registrado (el deduct devuelve True silencioso si no
+    hay row compatible).
     """
     if not supabase or not ingredients_list: return
-    
+
+    failed_items = []
     for item in ingredients_list:
         if not item or len(item) < 3: continue
         try:
             qty, unit, name = _parse_quantity(item)
-            if name and qty > 0:
-                _consume_reserved_inventory(user_id, name, qty, unit)
-                # Actualizar restando
-                add_or_update_inventory_item(user_id, name, -qty, unit, mutation_type="consumption")
+            if not (name and qty > 0):
+                # Parse falló o resultado inválido — el item no es procesable.
+                failed_items.append({
+                    "item": str(item)[:200],
+                    "reason": "parse_failed_or_invalid_qty",
+                })
+                continue
+            _consume_reserved_inventory(user_id, name, qty, unit)
+            # Actualizar restando
+            ok = add_or_update_inventory_item(user_id, name, -qty, unit, mutation_type="consumption")
+            if ok is False:
+                # `add_or_update_inventory_item` devolvió False explícitamente
+                # (excepción interna capturada + logueada). Persistir como
+                # failure para que la alerta lo detecte.
+                failed_items.append({
+                    "item": str(item)[:200],
+                    "name": name,
+                    "qty": qty,
+                    "unit": unit,
+                    "reason": "deduction_returned_false",
+                })
         except Exception as e:
             logger.error(f"Error parseando y restando '{item}' de despensa física: {e}")
+            failed_items.append({
+                "item": str(item)[:200],
+                "reason": "exception",
+                "error": str(e)[:200],
+            })
+
+    # [P0-5 · 2026-05-10] Persistir TODOS los failures como un solo INSERT
+    # (la columna `ingredients` es jsonb array, mantenemos correlación entre
+    # los items del mismo log_consumed_meal). Si la lista está vacía, no
+    # hacemos round-trip a DB.
+    _persist_failed_inventory_deductions(user_id, failed_items)
 
 def restock_inventory(user_id: str, ingredients_list: list):
     """

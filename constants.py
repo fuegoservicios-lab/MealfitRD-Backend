@@ -543,6 +543,75 @@ CHUNK_MAX_CONSECUTIVE_PROXY_LEARNING = int(os.environ.get("CHUNK_MAX_CONSECUTIVE
 # de evaluar el ratio para no penalizar planes cortos.
 CHUNK_MAX_LIFETIME_PROXY_RATIO = float(os.environ.get("CHUNK_MAX_LIFETIME_PROXY_RATIO", "0.6"))
 CHUNK_LIFETIME_PROXY_MIN_TOTAL = int(os.environ.get("CHUNK_LIFETIME_PROXY_MIN_TOTAL", "4"))
+# ──────────────────────────────────────────────────────────────────────────────
+# [P3-1 · 2026-05-10] SSOT del catálogo de keys de "learning" del chunk system.
+#
+# Las 3 keys conviven en `meal_plans.plan_data` y se inyectan al prompt del LLM
+# en momentos distintos del pipeline. Antes de P3-1 no había un documento único
+# explicando la diferencia → riesgo de doble-inyección o fallback incorrecto
+# en recovery paths.
+#
+# ┌─────────────────────────────┬───────────────────────────────────────────────────┐
+# │ Key                         │ Semántica + retención + inyección                 │
+# ├─────────────────────────────┼───────────────────────────────────────────────────┤
+# │ `_last_chunk_learning`      │ Dict con la lección del chunk N−1 EXACTAMENTE     │
+# │                             │ (estructura `{chunk, lesson, ...}`). Sobrescrita  │
+# │                             │ en cada chunk que completa. Se inyecta como "lo   │
+# │                             │ que aprendí del último bloque" en el prompt del   │
+# │                             │ chunk N. Fuente principal: pipeline post-merge    │
+# │                             │ (`graph_orchestrator`). Fallback sintetizado:     │
+# │                             │ `_synthesize_last_chunk_learning_from_plan_days`  │
+# │                             │ cuando `learning_metrics` falta (chunk failed o   │
+# │                             │ schema corrupto). Tamaño: 1 entry. NO survive el  │
+# │                             │ siguiente chunk (sobrescrita).                    │
+# ├─────────────────────────────┼───────────────────────────────────────────────────┤
+# │ `_recent_chunk_lessons`     │ Rolling window de los últimos M chunks (M ≤       │
+# │                             │ CHUNK_RECENT_LESSONS_MAX, default 12 — ver        │
+# │                             │ definición abajo si existe, o derivado del flow   │
+# │                             │ de `_rebuild_recent_chunk_lessons_from_queue`).   │
+# │                             │ Lista append-cap. Se inyecta como "tendencias     │
+# │                             │ recientes" en el prompt — el LLM ve patrones      │
+# │                             │ multi-chunk vs solo el último.                    │
+# │                             │ Recovery: si la key se corrompe,                  │
+# │                             │ `_regenerate_recent_chunk_lessons_from_plan_days` │
+# │                             │ sintetiza desde plan_days (señal degradada,       │
+# │                             │ marcada como `synthesized=True` en cada entry).   │
+# ├─────────────────────────────┼───────────────────────────────────────────────────┤
+# │ `_lifetime_chunk_lessons`   │ Lecciones CRÍTICAS permanentes que sobreviven al  │
+# │ (también llamado            │ rolling window. Cubren alergias confirmadas,      │
+# │  `_critical_lessons_permanent`│ rechazos repetidos (≥                          │
+# │  en algunos call sites      │ `CHUNK_CRITICAL_REPEATED_REJECTION_IMMORTAL`,     │
+# │  legacy)                    │ default 3), fatiga extrema. Cap blando:           │
+# │                             │ `CHUNK_CRITICAL_LESSONS_MAX` (200). Cap duro      │
+# │                             │ inmortales: `CHUNK_CRITICAL_LESSONS_IMMORTAL_     │
+# │                             │ HARD_CAP` (≈ MAX-10). LRU sobre inmortales        │
+# │                             │ viejas SIN re-validación reciente                 │
+# │                             │ (`CHUNK_CRITICAL_LESSONS_REVALIDATION_DAYS`,      │
+# │                             │ default 60). Se inyectan SIEMPRE para planes      │
+# │                             │ largos (15d/30d) en TODOS los chunks.             │
+# └─────────────────────────────┴───────────────────────────────────────────────────┘
+#
+# Orden de inyección al prompt (mayor especificidad → menor):
+#   1. `_last_chunk_learning` (lo más fresco, el chunk inmediato anterior).
+#   2. `_recent_chunk_lessons` (las últimas M iteraciones).
+#   3. `_lifetime_chunk_lessons` (constantes inmortales — alergias/rechazos).
+# El LLM las ve concatenadas, pero el orden ayuda al weighting interno.
+#
+# Persistencia atómica: las 3 keys se modifican vía
+# `update_plan_data_atomic(mutator)` (db_plans.py:215) con `SELECT … FOR UPDATE`
+# para que dos chunks concurrentes no se sobrescriban entre sí. P1-LOCK-1
+# (2026-05-10) garantiza lock_timeout + statement_timeout para no colgarse.
+#
+# Tests de regresión cruzados que validan que las 3 conviven bien:
+#   - tests/test_p0_1_learning_atomicity.py — atomicidad de la mutación.
+#   - tests/test_p0_3_legacy_learning_atomicity.py — fallback path.
+#   - tests/test_p0_7_critical_lessons_cap.py — LRU + immortal cap.
+#   - tests/test_chunked_learning_propagation.py — inyección al prompt.
+#
+# Si añades una 4ª key de learning, documenta aquí su retención + inyección.
+# Drift no atrapado por tests si la lista se desactualiza silenciosamente.
+# ──────────────────────────────────────────────────────────────────────────────
+
 # [P0-7] Máximo de lecciones críticas permanentes (rechazos fuertes, alergias, fatiga extrema).
 # Estas lecciones sobreviven al rolling window de _recent_chunk_lessons y se inyectan siempre
 # al LLM para planes largos (15d/30d). Cap para evitar bloat infinito.
@@ -2125,6 +2194,89 @@ LESSON_COUNT_EVENT_WHITELIST = (
     "synth_propagated_to_prompt",
     "recent_lessons_partial_synthesis",
     "indefinite_pause_unblocked",
+)
+
+
+# [P2-NEW-2 · 2026-05-10] Whitelist completo de events VÁLIDOS escribibles
+# a `chunk_lesson_telemetry`. Aplicado at-write en `_record_chunk_lesson_telemetry`
+# (cron_tasks.py:~12224) como backstop a typos antes de tocar DB.
+#
+# Diferencia vs. `LESSON_COUNT_EVENT_WHITELIST` (línea 2192):
+#   - `LESSON_COUNT_EVENT_WHITELIST` es el subset que cuenta como LECCIONES
+#     semánticas en `/lessons-counts` (chip "X lecciones" del Historial).
+#   - `CHUNK_LESSON_TELEMETRY_VALID_EVENTS` es la UNIÓN de lecciones +
+#     métricas mecánicas (descartes, fallos de rebuild). Todos los events
+#     que el codebase emite legítimamente.
+#
+# Bug original (audit 2026-05-10):
+#   `_record_chunk_lesson_telemetry` aceptaba cualquier string en `event` y
+#   confiaba en la CHECK constraint runtime de DB (P1-5: regex de formato).
+#   Un typo (`leson_synthesized_low_confidence`) pasaría el regex de formato
+#   pero NO cuenta como lección (whitelist miss en read-path); resultado:
+#   row se persiste pero `/lessons-counts` lo ignora silenciosamente. El
+#   usuario ve "0 lecciones" cuando realmente debería ver una.
+#
+# Fix:
+#   Validar `event ∈ CHUNK_LESSON_TELEMETRY_VALID_EVENTS` ANTES de la INSERT.
+#   Si no matchea: log error con contexto + return False (mismo contrato que
+#   un INSERT fallido). El event inválido NO se persiste — el dev verá el log
+#   y corregirá el typo antes de polucionar la tabla.
+#
+# Drift detection: `test_p2_new_2_chunk_lesson_telemetry_write_whitelist.py`
+# parsea cron_tasks.py extrayendo todos los `event="..."` y verifica que
+# cada literal está en esta tupla.
+CHUNK_LESSON_TELEMETRY_VALID_EVENTS = (
+    # Lecciones semánticas (subset que cuenta hacia /lessons-counts):
+    "lesson_synthesized_low_confidence",
+    "synth_propagated_to_prompt",
+    "recent_lessons_partial_synthesis",
+    "indefinite_pause_unblocked",
+    # Métricas mecánicas (señales de salud, no lecciones):
+    "synth_schema_invalid",
+    "synth_schema_partial_invalid",
+    "learning_rebuild_failed",
+    "failed_chunk_skipped_for_learning",
+    "lifetime_proxy_ratio_exceeded",
+)
+
+
+# [P2-NEW-3 · 2026-05-10] Canonical reasons aceptados por
+# `_escalate_unrecoverable_chunk` (cron_tasks.py:~8622). Antes la función
+# aceptaba cualquier string en `escalation_reason` y propagaba a:
+#   - plan_chunk_queue.dead_letter_reason (persiste en DB).
+#   - learning_metrics.escalation_reason (jsonb).
+#   - meal_plans.plan_data._user_action_required.reason.
+#   - push notification copy + deeplink URL query string.
+#
+# Un typo (`recover_exhausted` vs `recovery_exhausted`) o un valor
+# arbitrario:
+#   - Persiste como dead_letter_reason inválido → `/blocked_reasons`
+#     reporta `_unknown` al frontend (línea ~3733 plans.py: "cualquier
+#     otro caía al fallback empty_pantry/_unknown, mintiendo al usuario").
+#   - El bloque if/elif del copy (cron_tasks.py:8678+) cae al else
+#     genérico → mensaje y deeplink incorrectos.
+#   - `_user_action_required.reason` desalineado con copy → frontend
+#     muestra banner ambiguo.
+#
+# Fix:
+#   Validar al entrar a `_escalate_unrecoverable_chunk` que
+#   `escalation_reason ∈ ESCALATION_REASONS`. Si no: log error + early
+#   return SIN persistir nada. El dev ve el log + corrige el callsite
+#   antes de polucionar DB con valores no clasificables.
+#
+# Catálogo extraído de los call sites de `_escalate_unrecoverable_chunk`
+# (`grep escalation_reason= cron_tasks.py`):
+ESCALATION_REASONS = (
+    # Default — chunk falló ≥CHUNK_MAX_RECOVERY_ATTEMPTS en pipeline LLM.
+    "recovery_exhausted",
+    # Plan sin fecha de inicio recuperable (anchor missing in 3 sources).
+    "unrecoverable_missing_anchor",
+    # Plan tiene anchors pero corruptos (safe_fromisoformat falla).
+    "unrecoverable_corrupted_date",
+    # Plan con tzOffset NULL + live TZ no resoluble tras N attempts.
+    "unrecoverable_tz_unresolved",
+    # Pausa indefinida `missing_prior_lessons`; unblock cron agotó vías.
+    "missing_prior_lessons_unrecoverable",
 )
 
 

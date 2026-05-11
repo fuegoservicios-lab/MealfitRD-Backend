@@ -2377,6 +2377,8 @@ class PlanState(TypedDict):
     # No basta con escribir `state["nueva_key"] = ...` desde un nodo.
     #
     # Claves vivas en `plan_result` (no en state):
+    #
+    # COHERENCE (recetas↔lista de compras):
     #   - `_shopping_coherence_block`         (lista crítica de divergencias;
     #     escrita en `assemble_plan_node` ~6975, leída en `review_plan_node`
     #     ~7972; persistida a DB vía `plan_data` cuando `BLOCK_ACTION=degrade`).
@@ -2390,17 +2392,65 @@ class PlanState(TypedDict):
     #     (P2-B 2026-05-08) marca entries emitidas por
     #     `_recompute_aggregates_after_swap` con `swap=True` en modo warn —
     #     telemetría pura post-review, NO indica error.
+    #   - `_recipe_coherence_errors`           (lista de errores de coherencia
+    #     intra-receta detectados durante validation; consumida por el flujo
+    #     de review para decidir severidad).
+    #
+    # PANTRY (nevera ↔ ingredientes):
     #   - `_pantry_supplement_required`       (categoría 🚨 Compra Urgente
     #     — se escribe a `meal_plans.plan_data` directo en `cron_tasks.py`,
     #     nunca pasa por el state del grafo).
+    #
+    # CHUNK / PLAN-LEVEL MARKERS:
     #   - `_critique_unresolved`, `_merged_chunk_ids`, `_user_forced_simplified_weeks`
     #     (markers per-day o per-plan persistidos en `days[*]` o `plan_data`
     #     respectivamente; no son state-level).
+    #
+    # [P1-NEW-1 · 2026-05-11] Sección añadida tras audit 2026-05-11:
+    # las siguientes keys ALSO viajan en `plan_result` y NO estaban
+    # documentadas — un refactor que las migre a state-level sin
+    # declararlas perdería su valor entre nodos (mismo bug class P1-G).
+    #
+    # RETRY / BEST-ATTEMPT FALLBACK (cuando un retry falla, se entrega
+    # el mejor attempt previo en lugar de un fallback matemático):
+    #   - `_best_attempt_number`              (índice del attempt elegido).
+    #   - `_best_attempt_plan`                (snapshot del plan ganador).
+    #   - `_best_attempt_reasons`             (motivos de rechazo registrados).
+    #   - `_best_attempt_review_passed`       (bool — review había pasado).
+    #   - `_best_attempt_severity`            (severidad del rechazo previo).
+    #
+    # REVIEW PATH (cuando el plan se entrega con flags al usuario):
+    #   - `_review_disclaimer`                (texto explicativo para UI).
+    #   - `_review_issues`                    (lista de issues del reviewer).
+    #   - `_review_severity`                  (severity ∈ minor/high/critical).
+    #   - `_is_fallback`                      (marca planes de fallback
+    #                                           matemático tras retries fallidos).
+    #
+    # SCHEMA VALIDATION:
+    #   - `_schema_errors`                    (lista de errores Pydantic).
+    #   - `_schema_invalid`                   (bool — fallo de validación).
+    #
+    # SKELETON (fidelidad estructural pre-day-generation):
+    #   - `_skeleton`                         (skeleton del plan, base de days).
+    #   - `_skeleton_fidelity_errors`         (lista de divergencias detectadas).
+    #
+    # MISC HELPERS:
+    #   - `_profile_embedding`                (embedding del usuario, usado
+    #                                           por semantic cache + RAG).
+    #   - `_selected_techniques`              (técnicas culinarias inyectadas
+    #                                           al prompt; preservar entre attempts).
     #
     # Si una migración futura (ej. mover coherence handling a un nodo dedicado
     # `coherence_arbiter_node`) requiere visibilidad state-level, declarar el
     # campo en este TypedDict ANTES de tocar el call site — el bug equivalente
     # a P1-G (`_token_buffers` filtrado por strict-schema) se reproduciría.
+    #
+    # Tests de drift:
+    #   - `test_p3_audit_7_plan_result_keys_contract.py` — productor+consumer
+    #     para CADA key listada.
+    #   - `test_p1_new_1_plan_result_contract_completeness.py` — inverso:
+    #     CADA key `_xxx` que aparezca en `plan_result["..."]`/`result["..."]`
+    #     del código de producción DEBE estar en este bloque CONTRATO.
     # ============================================================
 
 
@@ -2423,6 +2473,10 @@ from prompts.plan_generator import (
     build_rag_context,
     # [P0-FORM-3] Inyecta motivación personal del usuario al planner + day generator.
     build_motivation_context,
+    # [P2-AUDIT-5 · 2026-05-10] Hints fisiológicos/emocionales (sleepHours/stressLevel).
+    # Antes ambos campos vivían en _REQUIRED_FORM_FIELDS sin consumer downstream —
+    # promesa rota del wizard. Ahora se inyectan como hint de tono/sesgo al planner.
+    build_sleep_stress_context,
     build_time_context,
     build_technique_injection,
     build_supplements_context,
@@ -3196,6 +3250,10 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # si el campo está vacío/whitespace → no-op transparente para usuarios que
         # no completaron el step (aunque desde P0-FORM-3 es required en el backend).
         "motivation_context": build_motivation_context(form_data),
+        # [P2-AUDIT-5 · 2026-05-10] sleepHours/stressLevel inyectados como hints de
+        # tono/sesgo. Retorna "" si ambos valores son no-accionables (sleep 7-8h,
+        # stress Bajo/Moderado) — no contamina el prompt con low-signal data.
+        "sleep_stress_context": build_sleep_stress_context(form_data),
         "rag_context": "",
         "fatigue_context": build_fatigue_context(fatigued_ingredients),
         "liked_meals_context": build_liked_meals_context(liked_meals),
@@ -3602,7 +3660,8 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['prices_context']}\n"
         f"{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
         f"{ctx['temporal_adherence_context']}\n"
-        f"{ctx['motivation_context']}\n\n"
+        f"{ctx['motivation_context']}\n"
+        f"{ctx['sleep_stress_context']}\n\n"
         f"Técnicas de cocción asignadas (una por día):\n"
         f"{techniques_str}\n\n"
         f"{PLANNER_SYSTEM_PROMPT}"
@@ -3953,6 +4012,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             f"{ctx['pantry_context']}\n{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
             f"{ctx['temporal_adherence_context']}\n"
             f"{ctx['motivation_context']}\n"
+            f"{ctx['sleep_stress_context']}\n"
             f"{assignment_context}\n"
             f"{recycled_days_context}\n"
             f"{DAY_GENERATOR_SYSTEM_PROMPT}"
@@ -8662,6 +8722,100 @@ Responde ÚNICAMENTE con el JSON de revisión.
 # ============================================================
 # DECISIÓN CONDICIONAL: ¿Repetir o finalizar?
 # ============================================================
+def _emit_plan_quality_degraded_alert(
+    state: "PlanState",
+    exit_reason: str,
+    severity: Optional[str] = None,
+) -> None:
+    """[P1-NEW-3 · 2026-05-11] Emite `system_alerts.plan_quality_degraded`
+    cuando `should_retry` decide entregar un plan SIN `review_passed=True`.
+
+    Por qué existe (audit 2026-05-11):
+      Antes, cuando `should_retry` retornaba "end" con `review_passed=False`
+      (rechazo crítico, high-contextual, attempts agotados, budget agotado),
+      el plan se entregaba al usuario con disclaimer pero NO había señal
+      a SRE para detectar el patrón. El `_shopping_coherence_block_history`
+      registra el último `action_taken` (incluyendo `reject_minor`/
+      `reject_high`) pero solo dentro del plan_data — no escala como alert.
+
+      Resultado: usuarios podían recibir N planes degradados consecutivos
+      sin que nadie supiera, hasta que abrieran un ticket. Esta alert
+      cierra ese gap: cada plan degradado emite UN row idempotente
+      (upsert por alert_key=`plan_quality_degraded:<user_id>:<plan_id>`),
+      visible en dashboards SRE.
+
+    Conservador:
+      - Best-effort: cualquier fallo del emit NO debe abortar el routing
+        de `should_retry`. La alert es observacional, no crítica.
+      - Idempotente: ON CONFLICT (alert_key) bumpea `triggered_at` +
+        metadata sin duplicar rows.
+      - severity DB = 'warning' (no 'critical' — el plan se entrega,
+        solo degradado).
+      - Modelo de resolution: Auto (implicit) — re-emite si patrón
+        persiste; un plan regenerado exitosamente NO cierra la alert
+        automáticamente (el operador debe verificar manualmente).
+    """
+    try:
+        form_data = state.get("form_data") or {}
+        user_id = form_data.get("user_id") or form_data.get("session_id") or "unknown"
+        plan_result = state.get("plan_result") or {}
+        plan_id = (
+            plan_result.get("id")
+            or plan_result.get("plan_id")
+            or "no_plan_id"
+        )
+        alert_key = f"plan_quality_degraded:{user_id}:{plan_id}"
+        rejection_reasons = state.get("rejection_reasons") or []
+        attempts = state.get("attempt", 1)
+
+        metadata = {
+            "exit_reason": exit_reason,  # 'critical' | 'high_contextual' | 'max_attempts' | 'invalid_pipeline_start' | 'budget_exhausted'
+            "rejection_severity": severity,
+            "attempts": attempts,
+            "review_passed": bool(state.get("review_passed")),
+            "plan_id": plan_id,
+            "user_id": user_id,
+            "top_rejection_reasons": rejection_reasons[:5],
+        }
+        message = (
+            f"Plan entregado al usuario {user_id} con calidad degradada "
+            f"(exit_reason={exit_reason}, severity={severity}, "
+            f"attempts={attempts}). Revisar `rejection_reasons` en metadata "
+            f"para diagnosticar patrón."
+        )
+
+        from db_core import execute_sql_write
+        import json as _json
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'plan_quality', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                f"Plan degradado entregado: {exit_reason}",
+                message,
+                _json.dumps(metadata, ensure_ascii=False),
+                _json.dumps([str(user_id)] if user_id != "unknown" else []),
+            ),
+        )
+        logger.warning(
+            f"[P1-NEW-3] plan_quality_degraded alert emitida user={user_id} "
+            f"plan={plan_id} exit={exit_reason} severity={severity}"
+        )
+    except Exception as e:
+        # Best-effort: NO escalar fallo del alert al routing del pipeline.
+        logger.debug(
+            f"[P1-NEW-3] plan_quality_degraded alert emit falló (best-effort): {e}"
+        )
+
+
 def should_retry(state: PlanState) -> str:
     """Decide si regenerar el plan o enviarlo al usuario.
 
@@ -8745,6 +8899,7 @@ def should_retry(state: PlanState) -> str:
     # para entregar fallback matemático con disclaimer.
     if severity == "critical":
         print("🚨 [ORQUESTADOR] Rechazo CRÍTICO → No tiene sentido reintentar con el mismo contexto. Abortando temprano.")
+        _emit_plan_quality_degraded_alert(state, exit_reason="critical", severity=severity)
         return "end"
 
     # [P1-RETRY-CLASSIFY] Clasificación fina de HIGH:
@@ -8768,6 +8923,7 @@ def should_retry(state: PlanState) -> str:
                 f"plan marcado. Razones: "
                 f"{(state.get('rejection_reasons') or [])[:2]}"
             )
+            _emit_plan_quality_degraded_alert(state, exit_reason="high_contextual", severity=severity)
             return "end"
         # 'regenerable' → cae al check de attempts/budget para decidir retry.
         # Si pasa los gates, ejecutará el retry como cualquier minor.
@@ -8785,6 +8941,7 @@ def should_retry(state: PlanState) -> str:
     if state.get("attempt", 1) >= MAX_ATTEMPTS:
         if not state.get("review_passed", False):
             print(f"🚨 [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado y revisión NO aprobada → Tolerando y enviando mejor versión disponible.")
+            _emit_plan_quality_degraded_alert(state, exit_reason="max_attempts", severity=severity)
             return "end"
         print(f"⚠️  [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado → Enviando mejor versión disponible.")
         return "end"
@@ -8817,6 +8974,8 @@ def should_retry(state: PlanState) -> str:
             f"agotado para evitar bypass del guard de timeout. Preservando "
             f"mejor versión disponible."
         )
+        if not state.get("review_passed", False):
+            _emit_plan_quality_degraded_alert(state, exit_reason="invalid_pipeline_start", severity=severity)
         return "end"
 
     elapsed = time.time() - start
@@ -8830,6 +8989,8 @@ def should_retry(state: PlanState) -> str:
             f"margen post-retry + {HEDGE_DELTA:.0f}s cobertura hedging). "
             f"Preservando mejor versión disponible."
         )
+        if not state.get("review_passed", False):
+            _emit_plan_quality_degraded_alert(state, exit_reason="budget_exhausted", severity=severity)
         return "end"
 
     print("🔄 [ORQUESTADOR] Revisión fallida → Regenerando plan con correcciones...")

@@ -230,14 +230,17 @@ class TestCompareExpectedVsAggregated:
 # ---------------------------------------------------------------------------
 class TestCoherenceKnobs:
     @pytest.mark.parametrize("raw,expected", [
-        (None, "warn"),
+        # [P1-NEW-1 · 2026-05-10] Default + invalid fallback bumpeados a "block"
+        # (eran "warn"). Razón: producción debe rechazar listas incoherentes,
+        # no solo loguearlas. Rollback: env=warn.
+        (None, "block"),
         ("off", "off"),
         ("warn", "warn"),
         ("block", "block"),
         ("OFF", "off"),
         ("  Block  ", "block"),
-        ("", "warn"),
-        ("garbage", "warn"),
+        ("", "block"),
+        ("garbage", "block"),
     ])
     def test_guard_mode(self, monkeypatch, raw, expected):
         if raw is None:

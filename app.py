@@ -29,7 +29,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P3-4-PLANSTATE-CONTRACT · 2026-05-10"
+_LAST_KNOWN_PFIX = "P3-LIVE-2 · 2026-05-11"
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
@@ -108,7 +108,7 @@ def _is_scheduler_telemetry_enabled() -> bool:
 try:
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.executors.pool import ThreadPoolExecutor as _APSThreadPoolExecutor
-    from apscheduler.events import EVENT_JOB_MISSED, EVENT_JOB_ERROR
+    from apscheduler.events import EVENT_JOB_MISSED, EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
     from proactive_agent import run_proactive_checks
     scheduler = BackgroundScheduler(
         executors={"default": _APSThreadPoolExecutor(_SCHEDULER_MAX_WORKERS)},
@@ -123,7 +123,11 @@ except ImportError as e:
     logger.error(f"⚠️ [APScheduler] Falta instalar apscheduler o dependencias: {e}. El agente proactivo está deshabilitado.")
     HAS_SCHEDULER = False
     scheduler = None
-    EVENT_JOB_MISSED = EVENT_JOB_ERROR = 0  # type: ignore[assignment]
+    # [P1-NEW-2 · 2026-05-10] Stub para EVENT_JOB_EXECUTED si APScheduler
+    # no está instalado — el listener referencia la constante en
+    # `if code == EVENT_JOB_EXECUTED` y necesita un valor válido aunque
+    # el path nunca corra (HAS_SCHEDULER=False corto-circuita más arriba).
+    EVENT_JOB_MISSED = EVENT_JOB_ERROR = EVENT_JOB_EXECUTED = 0  # type: ignore[assignment]
 
 
 def _scheduler_alert_listener(event):
@@ -171,8 +175,46 @@ def _scheduler_alert_listener(event):
                 f"Job '{job_id}' raised exception during scheduled run at "
                 f"{scheduled_run_time}: {exc_summary}"
             )
+        elif code == EVENT_JOB_EXECUTED:
+            # [P1-NEW-2 · 2026-05-10] Auto-resolución de alertas
+            # `scheduler_missed_<job>` y `scheduler_error_<job>` cuando el
+            # mismo job ejecuta exitosamente después.
+            #
+            # Bug original (audit 2026-05-10):
+            #   Solo escuchábamos MISSED/ERROR. Las alerts insertadas vivían
+            #   con `resolved_at=NULL` hasta resolución manual. Producción
+            #   acumuló 25 `scheduler_missed_*` unresolved en últimas 24h —
+            #   imposible distinguir "job sigue fallando" vs "ya recuperó".
+            #
+            # Defensivo: solo UPDATE-ea filas con `resolved_at IS NULL` para
+            # no tocar alerts ya cerradas manualmente. Idempotente: si el
+            # job no tenía alert pendiente, el UPDATE es no-op (0 rows).
+            # No emitimos nueva alert ni log INFO por cada EXECUTED — sería
+            # ruidoso con 28+ jobs disparando varias veces por hora.
+            if supabase is None:
+                return
+            try:
+                _now_iso = datetime.now(_tz.utc).isoformat()
+                supabase.table("system_alerts").update({
+                    "resolved_at": _now_iso,
+                }).in_(
+                    "alert_key",
+                    [
+                        f"scheduler_missed_{job_id}",
+                        f"scheduler_error_{job_id}",
+                    ],
+                ).is_("resolved_at", "null").execute()
+            except Exception as _resolve_err:
+                # No emit warning para no spammear; un fallo de auto-resolve
+                # NO debe pausar el scheduler. La alerta original seguirá
+                # visible hasta resolución manual o próximo EXECUTED.
+                logger.debug(
+                    f"[P1-NEW-2] auto-resolve alert para job={job_id} "
+                    f"falló (best-effort): {_resolve_err}"
+                )
+            return
         else:
-            return  # otros eventos (EXECUTED, etc.) no nos interesan acá
+            return  # otros eventos no nos interesan
 
         if supabase is None:
             return
@@ -233,12 +275,40 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"⚠️ [Postgres] Error en PostgresSaver(conn).setup(): {e}")
             
+    # [P0-NEW-1-AUTOHEAL · 2026-05-11] Startup-time sweep de alerts
+    # `scheduler_missed_*`/`scheduler_error_*` huérfanas. Cierra el
+    # chicken-and-egg detectado en audit 2026-05-10: el cron periódico
+    # `_resolve_stale_scheduler_alerts` (P0-AUDIT-1) está DENTRO del
+    # scheduler que limpia — cuando el pool está saturado el sweep
+    # también está MISSED y no corre. Resultado observado en prod:
+    # alert `scheduler_missed_<uuid>` viva 31.75h pese a TTL=24h.
+    #
+    # Disparar aquí asegura UNA limpieza por deploy/restart antes de
+    # que el scheduler entre en su próximo ciclo de jobs. El cron
+    # periódico sigue corriendo como defense-in-depth (cuando NO está
+    # MISSED, mantiene la backlog vacía entre deploys).
+    #
+    # Best-effort: cualquier fallo aquí NO debe abortar el startup
+    # (sweep != startup-critical; las alerts solo afectan dashboards).
+    try:
+        from cron_tasks import _resolve_stale_scheduler_alerts
+        _resolve_stale_scheduler_alerts()
+        logger.info("🧹 [P0-NEW-1-AUTOHEAL] Startup sweep de scheduler alerts OK.")
+    except Exception as _sweep_err:
+        logger.warning(
+            f"[P0-NEW-1-AUTOHEAL] Startup sweep falló (best-effort): {_sweep_err}"
+        )
+
     if HAS_SCHEDULER and scheduler:
-        scheduler.add_job(run_proactive_checks, "cron", minute=30)
+        # [P0-NEW-2 · 2026-05-10] `run_proactive_checks` también pasa por el
+        # wrapper SSOT de jitter. Knob `MEALFIT_SCHEDULER_JITTER_S` controla
+        # el spread (default 45s). CronTrigger acepta `jitter` igual que
+        # IntervalTrigger.
+        from cron_tasks import _add_job_jittered, register_plan_chunk_scheduler
+        _add_job_jittered(scheduler, run_proactive_checks, "cron", minute=30)
         # [P2-NEW-C · 2026-05-08] `background_rolling_refill` se movió al SSOT
         # `register_plan_chunk_scheduler` (cron_tasks.py) junto al resto del
         # chunk system. Ya no se registra acá.
-        from cron_tasks import register_plan_chunk_scheduler
         register_plan_chunk_scheduler(scheduler)
         # [P2-NEW-F · 2026-05-08] Registrar listener ANTES de start() para no
         # perder los primeros eventos. Mask combinado MISSED|ERROR. Si la
@@ -246,10 +316,15 @@ async def lifespan(app: FastAPI):
         # internamente (no skipeamos el add_listener para no requerir
         # restart al togglear el knob — solo edita la env var y los próximos
         # eventos se procesan según el flag actual).
+        #
+        # [P1-NEW-2 · 2026-05-10] Mask extendido con EVENT_JOB_EXECUTED para
+        # auto-resolver `scheduler_missed_<job>` y `scheduler_error_<job>`
+        # cuando el mismo job ejecuta exitosamente después (handler interno
+        # en _scheduler_alert_listener).
         try:
             scheduler.add_listener(
                 _scheduler_alert_listener,
-                EVENT_JOB_MISSED | EVENT_JOB_ERROR,
+                EVENT_JOB_MISSED | EVENT_JOB_ERROR | EVENT_JOB_EXECUTED,
             )
             logger.info(
                 f"📡 [P2-NEW-F] Listener APScheduler registrado "

@@ -152,13 +152,19 @@ class TestCanonicalizeIntegration:
         assert "manzana" in out
 
     def test_modifier_collapses_when_master_silent(self):
-        """`pollo orgánico` y `pollo` colapsan en fallback."""
+        """`pollo orgánico` y `pollo` colapsan en fallback.
+
+        [P2-NEW-1 · 2026-05-10] Ahora `canonicalize_protein` colapsa AMBOS
+        a 'Pollo' (canónico capitalizado) antes del fallback de strip/
+        singularize. La aserción anterior esperaba lowercase 'pollo' —
+        actualizada al nuevo canónico.
+        """
         from shopping_calculator import _canonicalize_for_coherence
 
         with patch("shopping_calculator.get_master_ingredients", return_value=[]):
             out = _canonicalize_for_coherence(["pollo orgánico", "pollo"])
         assert len(out) == 1
-        assert "pollo" in out
+        assert "Pollo" in out
 
     def test_master_map_wins_over_fallback(self):
         """Si master_map tiene un alias explícito, NO aplicamos fallback."""

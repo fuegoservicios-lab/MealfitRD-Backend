@@ -461,7 +461,9 @@ def _trigger_week2_background_generation(user_id, plan_id, existing_plan_data):
                 d["day"] = start_idx + i
                 
             existing_plan_data["days"] = existing_days + new_days
-            update_meal_plan_data(plan_id, existing_plan_data)
+            # [P1-NEW-3 · 2026-05-10] Pasamos user_id para que el WHERE
+            # filtre por (id, user_id) — defense-in-depth a DB-level.
+            update_meal_plan_data(plan_id, existing_plan_data, user_id=user_id)
             logger.info(f"✅ [JIT BG TASK] Semana 2 añadida exitosamente al plan {plan_id} de {user_id}")
         except Exception as e:
             logger.error(f"❌ [JIT BG TASK] Error en generación de semana 2 para {user_id}: {e}")

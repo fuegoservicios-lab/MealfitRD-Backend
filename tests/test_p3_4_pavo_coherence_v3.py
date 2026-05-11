@@ -162,7 +162,10 @@ def test_canonicalize_for_coherence_pavo_does_not_break_other_foods(no_master_db
     assert "Ñame" in canon
     assert "Miel" in canon
     assert "Ajo" in canon
-    assert "pollo" in canon  # no master_map → keeps raw lowercased
+    # [P2-NEW-1 · 2026-05-10] `canonicalize_protein` colapsa 'pollo' a 'Pollo'
+    # antes que la heurística de fallback strip+singularize. Pre-P2-NEW-1 esto
+    # asertaba lowercase 'pollo' (raw passthrough); ahora el canónico es 'Pollo'.
+    assert "Pollo" in canon
     assert "Pavo molido" in canon
 
 

@@ -414,7 +414,13 @@ _MAIN_GOAL_ENUM = frozenset({
 #   - `groceryDuration` → en frontend rige `getTotalDaysByGroceryDuration`
 #      (defaultea a 'weekly' = 7 días); en backend afecta scaling de la lista
 #      de compras (defaultea a 'weekly').
-#   - `sleepHours`, `stressLevel` → solo hints textuales al LLM.
+#   - `sleepHours`, `stressLevel` → [P2-AUDIT-5 · 2026-05-10] hints textuales
+#      inyectados al planner + day generator vía `build_sleep_stress_context`
+#      (prompts/plan_generator.py). Bloque emitido SOLO si el valor es
+#      accionable (sueño 7-8h / estrés Bajo|Moderado son rangos estándar y
+#      no contaminan el prompt). Antes de P2-AUDIT-5 este comment afirmaba
+#      "solo hints textuales al LLM" pero NINGÚN consumer leía los campos —
+#      promesa rota del wizard cerrada al inyectar ahora como hint real.
 #
 # Por qué validar entonces:
 #   1. Defense-in-depth contra cliente legacy/no-oficial que envíe basura
@@ -2062,9 +2068,15 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                         # si el plan fue modificado externamente durante el LLM call.
                         shifted_data['_plan_modified_at'] = datetime.now(timezone.utc).isoformat()
 
+                        # [P2-NEXT-1 · 2026-05-11] Filtro `AND user_id = %s` para
+                        # cerrar drift defense-in-depth contra I2 (CLAUDE.md).
+                        # `plan_id` se resolvió arriba (línea ~1585) vía SELECT
+                        # filtrado por user_id, así que funcionalmente no cambia
+                        # nada hoy; pero ancla la invariante para que un refactor
+                        # que reordene la resolución upstream no abra IDOR silente.
                         cursor.execute(
-                            "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s",
-                            (json.dumps(shifted_data, ensure_ascii=False), plan_id)
+                            "UPDATE meal_plans SET plan_data = %s::jsonb WHERE id = %s AND user_id = %s",
+                            (json.dumps(shifted_data, ensure_ascii=False), plan_id, user_id)
                         )
 
                         # [P0-5 FIX] Sincronizar _plan_start_date en los snapshots de los chunks
@@ -2982,7 +2994,61 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                 # NO break: propagamos a todas las ocurrencias.
 
                 if updated and target_plan_id:
-                    update_meal_plan_data(target_plan_id, target_plan_data)
+                    # [P1-NEW-3 · 2026-05-10] DB-level ownership: el helper
+                    # filtra ahora por (id, user_id). Defense-in-depth ya que
+                    # el SELECT arriba ya hizo ownership check explícito.
+                    #
+                    # [P3-NEW-1 · 2026-05-10] DECISIÓN: NO bumpear
+                    # `plan_data._plan_modified_at` aquí.
+                    #
+                    # Argumento "Sí bumpear" (rechazado):
+                    #   La expansión de receta cambia el contenido visible
+                    #   al usuario (instructions pasan de placeholder genérico
+                    #   a pasos detallados de chef), así que la "última
+                    #   modificación del plan" semánticamente cambia.
+                    #
+                    # Argumento "No bumpear" (aplicado):
+                    #   1. La expansión es idempotente (`isExpanded=True`
+                    #      previene re-expansión sobre la misma receta).
+                    #   2. Cada cook-click del usuario sobre una receta
+                    #      genera una expansión. Si bumpeáramos
+                    #      `_plan_modified_at` en cada cook-click, el
+                    #      Historial (que ordena client-side por ese path)
+                    #      reordenaría el plan al tope cada vez que el
+                    #      usuario abre una receta — ruidoso y engañoso
+                    #      (no es una modificación del plan, es interacción
+                    #      con el plan).
+                    #   3. `meal_plans.updated_at` (columna física, trigger
+                    #      P0-2) SÍ se actualiza por el UPDATE — eso
+                    #      preserva la observabilidad operacional sin
+                    #      contaminar el sort semántico del Historial.
+                    #
+                    # Si en el futuro el Historial se migra a ordenar por
+                    # `updated_at` físico (vs el jsonb path actual), esta
+                    # decisión se debe revisitar. El test
+                    # `test_p3_new_1_recipe_expand_no_modified_at_bump`
+                    # enforza el contrato actual; si el sort migra,
+                    # actualizar AMBOS lados al mismo tiempo.
+                    #
+                    # [P1-NEW-7 · 2026-05-11] RESTAURADO. Audit 2026-05-11
+                    # detectó que esta llamada había sido borrada en el
+                    # refactor P3-NEW-1 (que solo pretendía remover el
+                    # bump del sort semántico documentado arriba — pero
+                    # también eliminó el call de persistencia, conflando
+                    # dos cambios). Síntoma operacional: cada cook-click
+                    # quemaba cuota Gemini en `expand_recipe_agent`
+                    # (línea 2920) pero `recipe`/`isExpanded` nunca
+                    # llegaban a DB → reload mostraba la receta sin
+                    # expandir → re-click → quema infinita. Comentarios
+                    # inline en este handler Y en Recipes.jsx afirmaban
+                    # que la persistencia ocurría — mentirosos respecto
+                    # al estado real del código tras P3-NEW-1. Test
+                    # parser-based en
+                    # `tests/test_p1_new_7_recipe_expand_persists.py`
+                    # codifica el contrato (existencia del call,
+                    # presencia dentro de este guard, kwarg user_id
+                    # para defense-in-depth a DB-level vía P1-NEW-3).
+                    update_meal_plan_data(target_plan_id, target_plan_data, user_id=user_id)
         # P1-HIST-RECIPE-1-END
 
         return {"success": True, "expanded_recipe": expanded_steps}
@@ -3049,6 +3115,492 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/swap-meal: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/{plan_id}/swap-meal/persist")
+def api_swap_meal_persist(
+    plan_id: str,
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P0-NEW-A · 2026-05-11] Persistencia atómica de un meal swap.
+
+    Reemplaza el patrón frontend-only en `AssessmentContext.jsx:1240-1243`
+    que hacía ``supabase.from('meal_plans').update({plan_data}).eq('id', planId)``
+    pisando el JSONB completo. Ese patrón producía lost-update:
+    si `_chunk_worker` finalizaba un chunk entre que el frontend leyó
+    `planData` y escribió, los `days[7-14]` recién persistidos por el
+    worker (y `_chunk_lessons`, `aggregated_shopping_list`, etc.) se
+    perdían porque el frontend reescribía el snapshot viejo del state
+    local.
+
+    Esta ruta hace `jsonb_set` quirúrgico solo sobre `days[i].meals[j]`,
+    bumpea `_plan_modified_at` y strippea los 4 `aggregated_shopping_list*`
+    para forzar recalc downstream (el frontend invoca
+    `/recalculate-shopping-list` inmediatamente después, igual que pre-fix).
+    Mismo patrón de defensa-en-profundidad que `/retry-chunk`
+    (P0-HIST-IDOR-1) y `/recipe/expand` (P1-HIST-RECIPE-1): ownership
+    check explícito + `AND user_id = %s` doble candado en el UPDATE.
+
+    Body:
+      - ``day_index`` (int 0..99): índice del día.
+      - ``meal_index`` (int 0..19): índice del meal dentro del día.
+      - ``new_meal`` (dict): meal completo a sustituir (incluye
+        ``name``/``desc``/``cals``/``prep_time``/``recipe``/``ingredients``
+        — el caller construye el merge igual que el frontend pre-fix).
+      - ``clear_is_restocked`` (bool, opcional): si ``true``, fuerza
+        ``plan_data.is_restocked = false`` en el mismo UPDATE. Lo usa
+        el frontend cuando detecta que el meal nuevo introduce
+        ingredientes uncovered post-restock (lógica P0-1 conservada
+        client-side; el backend solo aplica la decisión).
+
+    Returns:
+      ``{ "success": true }``
+
+    Raises:
+      401 — sin auth.
+      400 — parámetros faltantes/inválidos.
+      404 — plan no existe o no pertenece al usuario (no se filtra
+            existencia: mismo patrón que ``/retry-chunk``).
+
+    Tooltip-anchor: P0-NEW-A-START | test_p0_new_a_swap_persists_backend
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+
+    body = data or {}
+    day_index = body.get("day_index")
+    meal_index = body.get("meal_index")
+    new_meal = body.get("new_meal")
+    clear_is_restocked = bool(body.get("clear_is_restocked", False))
+
+    # Validación estricta de bounds. Los caps (100 días, 20 meals/día)
+    # cubren el peor caso legítimo (planes mensuales × 4 ciclos × 5
+    # meals = 20 max). Valores fuera son síntoma de bug cliente o
+    # intento de path-injection en el jsonb_set (los enteros validados
+    # se interpolan al path string sin escaping).
+    if not isinstance(day_index, int) or isinstance(day_index, bool) or day_index < 0 or day_index >= 100:
+        raise HTTPException(status_code=400, detail="day_index must be int in [0, 99]")
+    if not isinstance(meal_index, int) or isinstance(meal_index, bool) or meal_index < 0 or meal_index >= 20:
+        raise HTTPException(status_code=400, detail="meal_index must be int in [0, 19]")
+    if not isinstance(new_meal, dict):
+        raise HTTPException(status_code=400, detail="new_meal must be a dict")
+    new_meal_name = new_meal.get("name")
+    if not isinstance(new_meal_name, str) or not new_meal_name.strip():
+        raise HTTPException(status_code=400, detail="new_meal.name is required")
+
+    from db_core import execute_sql_query, execute_sql_write
+    try:
+        owner = execute_sql_query(
+            "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not owner:
+            # 404 (no 403) para no filtrar existencia del plan ajeno —
+            # patrón espejo de `DELETE /{plan_id}` y `/retry-chunk`.
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+        # Path construido con ints YA validados arriba; sin posibilidad
+        # de injection. Si bounds cambian a runtime values, mover a
+        # parametrización con `text[]` de psycopg.
+        meal_path = "{days," + str(day_index) + ",meals," + str(meal_index) + "}"
+
+        # SSOT del UPDATE atómico. Pasos del SET (de adentro hacia afuera):
+        #   1. `plan_data #- '{aggregated_shopping_list}' #- ...` — strip
+        #      las 4 listas pre-calculadas para forzar recalc (el frontend
+        #      invoca recalculate-shopping-list inmediatamente después).
+        #   2. `jsonb_set(..., meal_path, new_meal, true)` — escribir el
+        #      meal nuevo (create_missing=true cubre planes legacy).
+        #   3. `jsonb_set(..., '_plan_modified_at', NOW())` — sello CAS
+        #      semántico que el sort del Historial usa (P0-3).
+        #   4. (opcional) `jsonb_set(..., 'is_restocked', false)` cuando
+        #      el caller lo señala.
+        # `updated_at = NOW()` redundante con trigger P0-2 pero explícito
+        # para que un futuro refactor que asuma solo el trigger sea consciente.
+        if clear_is_restocked:
+            sql = """
+                UPDATE meal_plans
+                SET plan_data = jsonb_set(
+                        jsonb_set(
+                            jsonb_set(
+                                (((plan_data #- '{aggregated_shopping_list}')
+                                              #- '{aggregated_shopping_list_weekly}')
+                                              #- '{aggregated_shopping_list_biweekly}')
+                                              #- '{aggregated_shopping_list_monthly}',
+                                %s,
+                                %s::jsonb,
+                                true
+                            ),
+                            '{_plan_modified_at}',
+                            to_jsonb(NOW()::text),
+                            true
+                        ),
+                        '{is_restocked}',
+                        'false'::jsonb,
+                        true
+                    ),
+                    updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+            """
+        else:
+            sql = """
+                UPDATE meal_plans
+                SET plan_data = jsonb_set(
+                        jsonb_set(
+                            (((plan_data #- '{aggregated_shopping_list}')
+                                          #- '{aggregated_shopping_list_weekly}')
+                                          #- '{aggregated_shopping_list_biweekly}')
+                                          #- '{aggregated_shopping_list_monthly}',
+                            %s,
+                            %s::jsonb,
+                            true
+                        ),
+                        '{_plan_modified_at}',
+                        to_jsonb(NOW()::text),
+                        true
+                    ),
+                    updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+            """
+        execute_sql_write(
+            sql,
+            (meal_path, _json.dumps(new_meal, ensure_ascii=False), plan_id, verified_user_id),
+        )
+        return {"success": True}
+        # P0-NEW-A-END
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /swap-meal/persist: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/{plan_id}/grocery-start-date")
+def api_set_grocery_start_date(
+    plan_id: str,
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P0-NEW-B · 2026-05-11] Persistencia idempotente de
+    `grocery_start_date` y/o `cycle_start_date` para el plan activo.
+
+    Reemplaza el patrón frontend-only en `AssessmentContext.jsx:560`
+    que hacía ``supabase.from('meal_plans').update({plan_data: latestPlan}).eq('id', planId)``
+    pisando el JSONB completo al inyectar las fechas. Ese patrón
+    producía el MISMO lost-update que P0-NEW-A cerró en swap: si el
+    cron ``_resolve_grocery_start_date`` (cron_tasks.py:15327) o
+    ``_chunk_worker`` mutaba `plan_data` en paralelo (e.g.,
+    actualizando ``days[*]`` o ``_chunk_lessons``), el frontend pisaba
+    todo con el snapshot stale del state local.
+
+    Esta ruta hace `jsonb_set` quirúrgico solo sobre las dos keys de
+    fecha + idempotencia `WHERE (plan_data->>'<key>') IS NULL` (mismo
+    patrón del cron) + `AND user_id = %s` defense-in-depth + bump
+    `updated_at = NOW()`. Si las keys ya tienen valor, el UPDATE
+    afecta 0 filas y devolvemos 200 igual (idempotente, no-op).
+
+    Body:
+      - ``grocery_start_date`` (str ISO, opcional): fecha objetivo. Solo
+        se persiste si ``plan_data->>'grocery_start_date'`` es NULL.
+      - ``cycle_start_date`` (str ISO, opcional): fecha inmutable del
+        contador `daysLeft`. Misma condición de idempotencia.
+
+    Returns:
+      ``{ "success": true, "grocery_updated": bool, "cycle_updated": bool }``
+      donde los booleans reflejan si la fila fue tocada (0 rows = false).
+
+    Raises:
+      401 — sin auth.
+      400 — plan_id faltante o ambas fechas vacías.
+      404 — plan no existe o no pertenece al usuario.
+
+    Tooltip-anchor: P0-NEW-B-START | test_p0_new_b_grocery_date_persists_backend
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+
+    body = data or {}
+    grocery_iso = body.get("grocery_start_date")
+    cycle_iso = body.get("cycle_start_date")
+
+    # Validación de strings ISO. Aceptamos cualquier shape ISO razonable
+    # (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS...`) — el cron también pasa
+    # `created_at` formateado con `isoformat()`. Lo que NO aceptamos es
+    # int/None forzados a string sin sentido.
+    import re as _re  # import local: el resto de plans.py no usa re.
+    def _valid_iso(v) -> bool:
+        if not isinstance(v, str):
+            return False
+        s = v.strip()
+        # Floor mínimo: `YYYY-MM-DD` (10 chars). Cap razonable 64 chars.
+        if len(s) < 10 or len(s) > 64:
+            return False
+        # Prefijo de 10 chars debe matchear el patrón YYYY-MM-DD para
+        # rechazar strings arbitrarios. No parseamos con `datetime` para
+        # mantener el endpoint barato y porque el cron también acepta
+        # variants con timezone que `fromisoformat` no siempre tolera.
+        return bool(_re.match(r"^\d{4}-\d{2}-\d{2}", s))
+
+    grocery_valid = _valid_iso(grocery_iso)
+    cycle_valid = _valid_iso(cycle_iso)
+
+    if not grocery_valid and not cycle_valid:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "At least one of `grocery_start_date` or `cycle_start_date` "
+                "must be provided as ISO date string (YYYY-MM-DD...)"
+            ),
+        )
+
+    from db_core import execute_sql_query, execute_sql_write
+    try:
+        owner = execute_sql_query(
+            "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, verified_user_id),
+            fetch_one=True,
+        )
+        if not owner:
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+        # UPDATE por key separado. Ventajas vs. un UPDATE combinado con
+        # COALESCE:
+        #   - Cada UPDATE es idempotente independiente (si una key ya
+        #     tiene valor, su UPDATE afecta 0 filas y no toca el resto).
+        #   - Cambios futuros en la lista de keys no requieren reescribir
+        #     el SQL combinado.
+        # Coste: 2 round-trips a DB en lugar de 1, pero el endpoint corre
+        # solo en path de hidratación inicial del plan (no hot loop) —
+        # diferencia despreciable.
+        grocery_updated = False
+        cycle_updated = False
+
+        if grocery_valid:
+            execute_sql_write(
+                """
+                UPDATE meal_plans
+                SET plan_data = jsonb_set(
+                        COALESCE(plan_data, '{}'::jsonb),
+                        '{grocery_start_date}',
+                        to_jsonb(%s::text),
+                        true
+                    ),
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND user_id = %s
+                  AND (plan_data->>'grocery_start_date') IS NULL
+                """,
+                (grocery_iso, plan_id, verified_user_id),
+            )
+            # Re-check para reportar si la fila fue tocada. Idempotente
+            # ante runs paralelos (otro cron puede haber rellenado).
+            after = execute_sql_query(
+                "SELECT (plan_data->>'grocery_start_date') AS v "
+                "FROM meal_plans WHERE id = %s AND user_id = %s",
+                (plan_id, verified_user_id),
+                fetch_one=True,
+            )
+            grocery_updated = bool(after and after.get("v"))
+
+        if cycle_valid:
+            execute_sql_write(
+                """
+                UPDATE meal_plans
+                SET plan_data = jsonb_set(
+                        COALESCE(plan_data, '{}'::jsonb),
+                        '{cycle_start_date}',
+                        to_jsonb(%s::text),
+                        true
+                    ),
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND user_id = %s
+                  AND (plan_data->>'cycle_start_date') IS NULL
+                """,
+                (cycle_iso, plan_id, verified_user_id),
+            )
+            after = execute_sql_query(
+                "SELECT (plan_data->>'cycle_start_date') AS v "
+                "FROM meal_plans WHERE id = %s AND user_id = %s",
+                (plan_id, verified_user_id),
+                fetch_one=True,
+            )
+            cycle_updated = bool(after and after.get("v"))
+
+        return {
+            "success": True,
+            "grocery_updated": grocery_updated,
+            "cycle_updated": cycle_updated,
+        }
+        # P0-NEW-B-END
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /grocery-start-date: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/{plan_id}/restore-local")
+def api_restore_plan_local(
+    plan_id: str,
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P1-OPEN-1 · 2026-05-11] Restauración atómica de un snapshot local
+    (revertir un regen rechazado) reemplazando el último direct-write del
+    frontend a `meal_plans`.
+
+    Reemplaza el patrón legacy en `AssessmentContext.jsx:1514-1517` que hacía
+    ``supabase.from('meal_plans').update({plan_data, name, calories, macros})
+    .eq('id', planId)`` desde el cliente. Ese era el ÚNICO callsite cliente
+    que persistía full-overwrite a `meal_plans`. Modo de fallo:
+        - Lost-update vs `_chunk_worker` concurrente: si el worker
+          finalizaba un chunk (días 7-14, `_chunk_lessons`,
+          `aggregated_shopping_list`) entre que el cliente leyó el state
+          local y este UPDATE, los datos del worker se perdían bajo el
+          snapshot stale del cliente.
+        - Violaba invariante I6 (CLAUDE.md): "mutaciones a `plan_data` desde
+          el frontend prohibidas — solo via endpoint backend".
+        - Violaba I7 (CLAUDE.md): "todo full-overwrite a `plan_data` DEBE
+          tomar `acquire_meal_plan_advisory_lock(purpose='general')`".
+
+    Este handler:
+      1. Verifica ownership con `SELECT WHERE id = %s AND user_id = %s`
+         (404 si no resoluble — no leak de existencia cross-user, mismo
+         patrón que `/swap-meal/persist`, `/retry-chunk`, `/restock`).
+      2. Toma advisory lock 'general' (mismo `purpose` que T1/T2 del
+         chunk worker, `/shift-plan`, `_background_shift_plan_for_user`)
+         para serializar contra writers concurrentes.
+      3. Bumpea `_plan_modified_at` server-side en el snapshot (semántica:
+         la restauración ES un evento de modificación lógica del plan; el
+         Historial usa ese path para el sort).
+      4. Anota `_restored_from_local_at` para observabilidad de cuántas
+         veces el usuario revierte.
+      5. UPDATE atómico de `plan_data` + top-level columns derivadas
+         (`name`/`calories`/`macros`) si vienen en el body. Filtro
+         `AND user_id = %s` defense-in-depth (I2).
+      6. Bumpea `updated_at = NOW()` explícito (redundante con trigger
+         P0-2 pero anclado para refactors).
+
+    Body:
+      - ``plan_data`` (dict, requerido): snapshot completo del plan a
+        restaurar (el state local del cliente).
+      - ``name`` (str, opcional): si presente y no vacío, sobrescribe la
+        columna top-level.
+      - ``calories`` (number, opcional): si numérico finito, sobrescribe.
+      - ``macros`` (dict, opcional): si dict, sobrescribe la columna jsonb.
+
+    Returns:
+      ``{ "success": true }``
+
+    Raises:
+      401 — sin auth.
+      400 — `plan_data` faltante o no es dict.
+      404 — plan no existe o no pertenece al usuario.
+
+    Tooltip-anchor: P1-OPEN-1-START | test_p1_open_1_restore_local_endpoint
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if not plan_id or not isinstance(plan_id, str):
+        raise HTTPException(status_code=400, detail="plan_id required")
+
+    body = data or {}
+    past_plan_data = body.get("plan_data")
+    if not isinstance(past_plan_data, dict):
+        raise HTTPException(status_code=400, detail="plan_data must be a dict")
+
+    # Top-level derivados opcionales. Validación estricta para no aceptar
+    # bogus que `Dashboard.jsx` interprete como header inválido.
+    raw_name = body.get("name")
+    new_name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else None
+
+    raw_cals = body.get("calories")
+    new_calories = None
+    if isinstance(raw_cals, (int, float)) and not isinstance(raw_cals, bool):
+        import math as _math_p1o1
+        try:
+            _cf = float(raw_cals)
+            if _math_p1o1.isfinite(_cf):
+                new_calories = _cf
+        except Exception:
+            new_calories = None
+
+    raw_macros = body.get("macros")
+    new_macros = raw_macros if isinstance(raw_macros, dict) else None
+
+    # Server-side bump del CAS marker semántico + breadcrumb de restauración.
+    # Shallow copy: solo añadimos 2 keys al top-level del JSONB; los nested
+    # dicts (days, meals, ingredients...) se preservan por referencia.
+    from datetime import datetime as _dt_p1o1, timezone as _tz_p1o1
+    plan_data_to_write = dict(past_plan_data)
+    _now_iso = _dt_p1o1.now(_tz_p1o1.utc).isoformat()
+    plan_data_to_write["_plan_modified_at"] = _now_iso
+    plan_data_to_write["_restored_from_local_at"] = _now_iso
+
+    from db_core import connection_pool
+    from db_plans import acquire_meal_plan_advisory_lock, set_meal_plan_for_update_timeouts
+    from psycopg.rows import dict_row
+    try:
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    # [P1-LOCK-1] Bound lock wait + statement timeout antes
+                    # de adquirir locks (mismo patrón que `/shift-plan`).
+                    set_meal_plan_for_update_timeouts(cursor)
+
+                    # 1) Ownership check + existencia. 404 (no 403) para no
+                    #    filtrar existencia cross-user.
+                    cursor.execute(
+                        "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
+                        (plan_id, verified_user_id),
+                    )
+                    if not cursor.fetchone():
+                        raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+                    # 2) Advisory lock 'general' (I7): serializa contra T1/T2
+                    #    del chunk worker, /shift-plan, /restore. El lock se
+                    #    libera al cerrar la transacción (commit o rollback).
+                    acquire_meal_plan_advisory_lock(cursor, plan_id, purpose="general")
+
+                    # 3) UPDATE atómico. Columnas top-level se incluyen solo
+                    #    si el caller pasó valores válidos — espejo de la
+                    #    semántica legacy (no pisar header con None bogus).
+                    set_clauses = ["plan_data = %s::jsonb", "updated_at = NOW()"]
+                    params: list = [_json.dumps(plan_data_to_write, ensure_ascii=False)]
+                    if new_name is not None:
+                        set_clauses.append("name = %s")
+                        params.append(new_name)
+                    if new_calories is not None:
+                        set_clauses.append("calories = %s")
+                        params.append(new_calories)
+                    if new_macros is not None:
+                        set_clauses.append("macros = %s::jsonb")
+                        params.append(_json.dumps(new_macros, ensure_ascii=False))
+
+                    sql = (
+                        f"UPDATE meal_plans SET {', '.join(set_clauses)} "
+                        f"WHERE id = %s AND user_id = %s"
+                    )
+                    params.extend([plan_id, verified_user_id])
+                    cursor.execute(sql, tuple(params))
+
+        return {"success": True}
+        # P1-OPEN-1-END
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /restore-local: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
 
 @router.post("/like")
 def api_like(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -3126,19 +3678,47 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         if not ingredients or not isinstance(ingredients, list):
             return {"success": False, "message": "Lista de ingredientes inválida."}
 
-        # [P0-1] Validación de Idempotencia: Verificar si el plan ya fue registrado ANTES de insertar en DB
+        # [P0-NEW-1 · 2026-05-10] Ownership check sobre `plan_id` user-provided.
+        # Antes el SELECT en la rama `if plan_id` filtraba solo por `id` — un
+        # atacante autenticado podía pasar el `plan_id` de una víctima en el
+        # body y el endpoint:
+        #   1. Leía plan_data ajeno (SELECT línea original sin user_id).
+        #   2. Más abajo UPDATEea ese plan_data con is_restocked=True +
+        #      restocked_items {keys: NOW} arbitrarios → corrupción de la
+        #      lista de compras de la víctima (perecederos suprimidos por
+        #      hasta 7 días).
+        # Misma familia que P0-HIST-IDOR-1 (retry-chunk) y P0-HIST-IDOR-2
+        # (chunk-status); auditoría inicial no cubrió `/restock`.
+        #
+        # Fix: ambas ramas (`if plan_id` y fallback latest) ahora filtran por
+        # `user_id`. Si el caller pasa un plan_id no resoluble, 404 (mismo
+        # contrato que retry-chunk:4106 / chunk-status:3474) — no leak la
+        # existencia del plan ajeno ni fallback silencioso a latest (que
+        # podría re-introducir wrong-plan persist como en P1-HIST-RECIPE-1).
         real_plan_id = None
         plan_data = None
         if supabase:
             try:
                 if plan_id:
-                    plan_res = supabase.table("meal_plans").select("id, plan_data").eq("id", plan_id).execute()
+                    plan_res = (
+                        supabase.table("meal_plans")
+                        .select("id, plan_data")
+                        .eq("id", plan_id)
+                        .eq("user_id", user_id)
+                        .execute()
+                    )
+                    if not (plan_res and plan_res.data and len(plan_res.data) > 0):
+                        # plan_id no resoluble para este usuario. 404 sin
+                        # filtrar si existe para otro user.
+                        raise HTTPException(status_code=404, detail="Plan no encontrado")
                 else:
                     plan_res = supabase.table("meal_plans").select("id, plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-                
+
                 if plan_res and plan_res.data and len(plan_res.data) > 0:
                     real_plan_id = plan_res.data[0].get("id")
                     plan_data = plan_res.data[0].get("plan_data", {})
+            except HTTPException:
+                raise
             except Exception as check_err:
                 logger.warning(f"⚠️ Error leyendo plan para restock: {check_err}")
 
@@ -3221,7 +3801,13 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                         if nm:
                             plan_data["restocked_items"][strip_accents(nm.lower())] = now_iso
 
-                    supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", real_plan_id).execute()
+                    # [P0-NEW-1 · 2026-05-10] Defense-in-depth doble candado:
+                    # aunque el SELECT arriba ya cerró el IDOR, el UPDATE
+                    # filtra también por user_id por si un race entre check
+                    # y UPDATE permite que alguien rote la ownership del
+                    # plan_id (improbable pero patrón mirroring de
+                    # P0-HIST-IDOR-1 retry-chunk:4119-4123).
+                    supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", real_plan_id).eq("user_id", user_id).execute()
                     logger.info(f"✅ [RESTOCK] plan {real_plan_id}: {len(filtered_ingredients)} item(s) registrado(s), restocked_items={len(plan_data['restocked_items'])} entries")
                 except Exception as mark_err:
                     logger.warning(f"⚠️ No se pudo marcar plan como restocked: {mark_err}")
@@ -3229,7 +3815,12 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             return {"success": True, "message": "¡Despensa actualizada exitosamente!"}
         else:
             return {"success": False, "message": "Hubo un problema actualizando algunos ingredientes."}
-            
+
+    except HTTPException:
+        # [P0-NEW-1 · 2026-05-10] Propagar el 404 del ownership check
+        # tal cual; sin esto el `except Exception` lo re-wrappea a 500 y
+        # el test/cliente pierde la señal del IDOR.
+        raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/restock: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
@@ -3264,9 +3855,24 @@ def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str
 @router.post("/recalculate-shopping-list")
 def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     """
-    Recalcula la lista de compras escalando las recetas por el householdSize 
+    Recalcula la lista de compras escalando las recetas por el householdSize
     y LUEGO deduciendo el inventario físico (is_new_plan=False).
     Este acercamiento garantiza exactitud matemática.
+
+    [P2-NEW-B · 2026-05-11] Acepta `plan_id` opcional en el body. Si está,
+    el endpoint actúa sobre ESE plan específico (con ownership AND user_id
+    en el SELECT). Si no, fallback al plan más reciente (back-compat).
+
+    Bug pre-fix: bajo race condition con `_chunk_worker` creando un plan
+    nuevo, el endpoint operaba sobre el plan B (latest) cuando el usuario
+    acababa de hacer swap en plan A. Espejo del mismo bug que cerró
+    P1-HIST-RECIPE-1 en `/recipe/expand`.
+
+    Body adicional opcional:
+      - ``plan_id`` (str): si presente, SELECT explícito por id+user_id.
+        404 si no resoluble (no leak de existencia cross-user).
+
+    Tooltip-anchor: P2-NEW-B-START | test_p2_new_b_recalculate_accepts_plan_id
     """
     try:
         user_id = data.get("user_id")
@@ -3276,6 +3882,10 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         # [P1-3] householdComposition opcional desde el body. Si está, sobrescribe
         # el escalar legacy. Si no, fallback al int (comportamiento previo).
         household_composition = data.get("householdComposition")
+        # [P2-NEW-B · 2026-05-11] plan_id explícito opcional. Permite al
+        # caller fijar el target en lugar de depender de "el plan más
+        # reciente". Espejo del fix P1-HIST-RECIPE-1 sobre /recipe/expand.
+        req_plan_id = data.get("plan_id") if isinstance(data.get("plan_id"), str) else None
 
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Debes iniciar sesión."}
@@ -3283,9 +3893,32 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado.")
 
-        plan_record = get_latest_meal_plan_with_id(user_id)
-        if not plan_record:
-            return {"success": False, "message": "No hay plan activo."}
+        # [P2-NEW-B · 2026-05-11] Resolución del plan target:
+        #   - Si el caller pasó `plan_id`: SELECT explícito con ownership
+        #     (`WHERE id = %s AND user_id = %s`). 404 si no resoluble — no
+        #     leak de existencia cross-user (mismo patrón que retry-chunk
+        #     P0-HIST-IDOR-1 y restock P0-NEW-1).
+        #   - Si no: fallback a `get_latest_meal_plan_with_id` (back-compat
+        #     con callers viejos que no pasan plan_id).
+        plan_record = None
+        if req_plan_id:
+            from db_core import execute_sql_query
+            plan_row = execute_sql_query(
+                "SELECT id, plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+                (req_plan_id, user_id),
+                fetch_one=True,
+            )
+            if not plan_row:
+                # 404 (no 403) para no filtrar existencia del plan ajeno.
+                raise HTTPException(status_code=404, detail="Plan no encontrado")
+            plan_record = {
+                "id": plan_row["id"],
+                "plan_data": plan_row.get("plan_data") or {},
+            }
+        else:
+            plan_record = get_latest_meal_plan_with_id(user_id)
+            if not plan_record:
+                return {"success": False, "message": "No hay plan activo."}
 
         plan_id = plan_record["id"]
         plan_data = plan_record.get("plan_data", {})
@@ -3406,15 +4039,25 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             "sample_item": scaled_7[0].get("display_string", "?") if scaled_7 else "empty"
         }
         
-        update_meal_plan_data(plan_id, plan_data)
-        
+        # [P1-NEW-3 · 2026-05-10] user_id ya validado al inicio del handler
+        # (verified_user_id == user_id). plan_id viene de get_latest_meal_plan_with_id
+        # que ya filtra por user_id. Defense-in-depth doble candado.
+        update_meal_plan_data(plan_id, plan_data, user_id=user_id)
+
         logger.info(f"✅ [RECALC] Listas recalculadas exitosamente ×{household_size} personas")
         
         # Devolver el plan_data actualizado directamente para evitar race conditions
         # (el frontend no necesita re-fetch de Supabase)
         return {"success": True, "plan_data": plan_data}
-        
+
     except HTTPException:
+        # [P2-NEW-B · 2026-05-11] Propagar el 404 del ownership check
+        # del plan_id explícito sin envolverlo en 500. Mismo patrón que
+        # /restock (P0-NEW-1) y /retry-chunk (P0-HIST-IDOR-1).
+        # [P2-OPEN-2 · 2026-05-11] Cleanup: pre-fix había DOS bloques
+        # `except HTTPException: raise` consecutivos — el segundo era
+        # inalcanzable. Mantenemos un solo bloque con el comentario P2-NEW-B
+        # que documenta la intención original.
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/recalculate-shopping-list: {str(e)}")
@@ -4134,10 +4777,29 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
               AND meal_plan_id IN (SELECT id FROM meal_plans WHERE user_id = %s)
         """, (plan_id, verified_user_id))
 
-        # 4) Volver a poner el plan en 'partial' para que el frontend retome el polling
+        # 4) Volver a poner el plan en 'partial' para que el frontend retome el polling.
+        #
+        # [P0-3 · 2026-05-10] El UPDATE sella DOS timestamps:
+        #   - `updated_at` (columna física, cubierta por trigger P0-2 — la
+        #     línea `updated_at = NOW()` es explícita por defense-in-depth y
+        #     enforced por test_p0_2 para que un futuro refactor que la quite
+        #     asumiendo solo el trigger sea consciente).
+        #   - `plan_data._plan_modified_at` (SSOT semántico de "última edición
+        #     del contenido del plan"). Sin esto, el Historial (P1-HIST-4)
+        #     ordena al usuario que retry-cheó un chunk fallido por debajo
+        #     de planes intactos del mismo día, porque sort se hace por jsonb
+        #     path. Retry-chunk SÍ es una modificación visible (cambia
+        #     `generation_status` + dispara re-ejecución), así que merece
+        #     bumpear el sello semántico.
+        # Patrón espejo de cron_tasks.py:370-381 (legacy persist).
         execute_sql_write("""
             UPDATE meal_plans
-            SET plan_data = jsonb_set(plan_data, '{generation_status}', '"partial"'),
+            SET plan_data = jsonb_set(
+                    jsonb_set(plan_data, '{generation_status}', '"partial"'),
+                    '{_plan_modified_at}',
+                    to_jsonb(NOW()::text),
+                    true
+                ),
                 updated_at = NOW()
             WHERE id = %s AND user_id = %s
         """, (plan_id, verified_user_id))
@@ -4680,6 +5342,12 @@ from constants import LESSON_COUNT_EVENT_WHITELIST as _LESSON_COUNT_EVENT_WHITEL
 @router.get("/lessons-counts")
 def api_plans_lessons_counts(
     response: Response,
+    # [P1-AUDIT-3 · 2026-05-10] Uso `get_verified_user_id` (no
+    # `verify_api_quota`) intencionalmente. Es un GET de polling del
+    # Historial (read-only, sin costo LLM). Aplicar el paywall acá
+    # negaría al usuario ver SU PROPIO historial cuando alcanzó el cap
+    # mensual — UX inaceptable. Ver CLAUDE.md "Convenciones del repo"
+    # sección Historial-quota-exemption.
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
 ):
     """[P1-HIST-3 · 2026-05-09] Conteo de lecciones (`chunk_lesson_telemetry`)
@@ -4786,6 +5454,9 @@ def api_plans_lessons_counts(
 @router.get("/history-status-summary")
 def api_plans_history_status_summary(
     response: Response,
+    # [P1-AUDIT-3 · 2026-05-10] `get_verified_user_id` intencional — ver
+    # nota idéntica en `/lessons-counts` (L4779). GET polling read-only
+    # del Historial, exento del paywall mensual por convención.
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
 ):
     """[P0-AUDIT-HIST-2 · 2026-05-09] Resumen agregado de estados de
@@ -5348,6 +6019,58 @@ def api_plan_lifetime_lessons(
     aprendía sin feedback y la única señal era el push. `generation_status`
     se devuelve junto para que el frontend pueda diferenciar
     "degradado por engagement" del status canónico del plan.
+
+    [P3-NEW-2 · 2026-05-10] Contrato cron-dependiente — cuándo
+    `last_chunk_learning` y `consecutive_zero_log_chunks` están
+    populated:
+
+      Ambos campos son escritos por el worker chunk (`_chunk_worker` en
+      `cron_tasks.py`) al COMPLETAR un chunk (path T1 + T2). Específico:
+
+        - `last_chunk_learning`: persistido en `plan_data` por
+          `_persist_last_chunk_learning` invocado al final del merge T1.
+          Si T1 se completa pero T2 falla, el field puede quedar
+          desactualizado un cycle hasta que el siguiente chunk lo
+          recompute o el cron de rescate lo reconstruya desde
+          `plan_chunk_queue.learning_metrics` (ver P0-3
+          `_rebuild_last_chunk_learning_from_queue`).
+
+        - `consecutive_zero_log_chunks`: incrementado en cada chunk
+          completado cuando el counter de `user_logs` está en 0; reset
+          a 0 cuando hay logs. Vive solo en `plan_data` (no en columna
+          dedicada).
+
+      **Cuándo esperar `null` en estos campos** (operacional, no bug):
+
+        1. Plan nuevo sin chunks completados aún: ambos `null`.
+        2. Plan en estado `failed` o `dead_letter` antes del primer
+           merge T1: `last_chunk_learning` `null`; `consecutive_zero_log_chunks`
+           probablemente `0` o ausente.
+        3. Plan legacy pre-P0-3 (creado antes del rebuild cron):
+           `last_chunk_learning` puede ser `null` aunque el plan
+           tiene chunks completados — el frontend renderiza vacío.
+        4. Plan pausado indefinidamente con `_pause_reason`: el
+           counter no avanza hasta que el unblock del cron lo destapa.
+        5. [P3-AUDIT-1 · 2026-05-10] **Seed fallido sin rebuild
+           automático**: si `_seed_last_chunk_learning` agotó sus
+           `_seed_attempts=3` en T1 pre-merge (graph_orchestrator.py
+           ~L1139), el campo persiste `null` Y NO hay cron de retry
+           automático que lo reconstruya — `_rebuild_last_chunk_learning_from_queue`
+           solo dispara cuando hay `plan_chunk_queue.learning_metrics`
+           ya estampado, no para casos donde el seed nunca grabó.
+           UX consecuente: frontend renderiza "0 lecciones"
+           indefinidamente aunque el plan tenga chunks completados.
+           **Recuperación**: trigger manual vía `/regenerate-simplified`
+           sobre el chunk fallado, que re-ejecuta el seed dentro del
+           merge.
+
+      **Cuándo esperar `null` y SÍ ES BUG**: plan con N ≥1 chunks
+      completados sin pausa Y `last_chunk_learning` aún `null` Y
+      ningún chunk con `_seed_attempts >= 3` en logs → cron de merge
+      no corrió o crasheó. Síntoma a vigilar en `pipeline_metrics`
+      con `node='_chunk_worker_merge_failed'` o similar. Si se
+      observa drift sistemático, ampliar este endpoint con métrica
+      `_missing_last_chunk_learning_count`.
 
     Raises:
       401 — sin auth.
@@ -6082,6 +6805,9 @@ def api_rename_plan(
 @router.get("/history-list")
 def api_plans_history_list(
     response: Response,
+    # [P1-AUDIT-3 · 2026-05-10] `get_verified_user_id` intencional — ver
+    # nota idéntica en `/lessons-counts` (L4779). GET polling read-only
+    # del Historial, exento del paywall mensual por convención.
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
 ):
     """[P1-HIST-AUDIT-4 · 2026-05-09] Listado del Historial con projection
@@ -6178,15 +6904,20 @@ def api_plans_history_list(
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    # [P1-HIST-AUDIT-4-FOLLOWUP · 2026-05-09] Cache-Control no-store
-    # evita que el browser sirva una respuesta cacheada después de
-    # operaciones que mutan el set de planes (restore, delete, rename,
-    # nueva generación). Sin esto, un usuario que abrió /history antes
-    # de generar su primer plan veía empty state cacheado incluso
-    # después de generar — el plan estaba en DB pero el browser
-    # devolvía el response viejo de 0 planes.
-    response.headers["Cache-Control"] = "no-store, max-age=0"
-    response.headers["Pragma"] = "no-cache"
+    # [P1-HIST-AUDIT-4-FOLLOWUP · 2026-05-09 → P3-A · 2026-05-10]
+    # Cache-Control no-store evita que el browser sirva una respuesta
+    # cacheada después de operaciones que mutan el set de planes
+    # (restore, delete, rename, nueva generación). Sin esto, un usuario
+    # que abrió /history antes de generar su primer plan veía empty
+    # state cacheado incluso después de generar.
+    #
+    # P3-A · 2026-05-10: migrado al helper SSOT `_apply_no_store`
+    # (definido en este mismo módulo línea 3706, P2-HIST-AUDIT-A). Antes
+    # estos 2 headers vivían inline; con el helper, cualquier cambio
+    # futuro al contrato de "no-store del Historial" se aplica desde un
+    # único site. El test `test_p3_a_apply_no_store_helper_usage` previene
+    # que vuelvan headers inline a este endpoint o a sus pares derivados.
+    _apply_no_store(response)
 
     from db_core import execute_sql_query
     try:
@@ -6961,6 +7692,11 @@ def api_regenerate_dead_lettered_simplified(
         # perspectiva UX.
         _wn_str = str(int(chunk_row["week_number"])) if chunk_row.get("week_number") is not None else "0"
         _ts_iso = datetime.now(timezone.utc).isoformat()
+        # [P1-NEW-4 · 2026-05-10] Defense-in-depth: WHERE filtra también
+        # por user_id. El handler hace ownership check más arriba en el
+        # SELECT inicial, pero un futuro refactor que rompa ese check sin
+        # tocar este UPDATE re-introduce IDOR. Mismo patrón que cierra
+        # P0-HIST-IDOR-1 retry-chunk:4119-4123.
         execute_sql_write(
             """
             UPDATE meal_plans
@@ -6981,9 +7717,9 @@ def api_regenerate_dead_lettered_simplified(
                     true
                 ),
                 updated_at = NOW()
-            WHERE id = %s
+            WHERE id = %s AND user_id = %s
             """,
-            (_wn_str, _ts_iso, plan_id),
+            (_wn_str, _ts_iso, plan_id, verified_user_id),
         )
 
         # Resolver alertas system_alerts asociadas a este chunk dead-lettered.
@@ -7086,12 +7822,15 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
             regenerated += 1
 
         # 4. Marcar plan como partial para que el frontend retome polling
+        # [P1-NEW-4 · 2026-05-10] Defense-in-depth: WHERE filtra también
+        # por user_id (ownership check explícito ya ocurrió arriba en
+        # `plan_row` lookup; este es doble candado para futuros refactors).
         execute_sql_write("""
             UPDATE meal_plans
             SET plan_data = jsonb_set(plan_data, '{generation_status}', '"partial"'),
                 updated_at = NOW()
-            WHERE id = %s
-        """, (plan_id,))
+            WHERE id = %s AND user_id = %s
+        """, (plan_id, verified_user_id))
 
         return {
             "success": True,

@@ -62,7 +62,17 @@ MEMORY_SUMMARY_MODEL = os.environ.get(
 # excepción de `summarize_and_prune` y se loggea a nivel `error` el primer
 # fallo + cada N para detectar degradación sistémica sin spamear logs.
 # Reset al primer éxito (auto-recovery sin restart del proceso).
-_summarize_failures: dict = {"count": 0, "last_error": None}
+#
+# [P1-NEW-6 · 2026-05-11] Extendido con `last_attempt_at` para backoff
+# exponencial: cuando hay racha de fallos, las próximas invocaciones se
+# saltean hasta que pase la ventana de retry calculada. Sin esto, durante
+# outage de Gemini (cuota / API key rotada / modelo eliminado) el cron
+# invoca `summarize_and_prune` cada N min × M sesiones activas, quemando
+# API calls (cost), saturando el pool de threads (otros crons MISSED), y
+# llenando logs sin valor. El backoff cierra ese loop sin pausar
+# permanentemente — al primer éxito se resetea el estado y todo vuelve a
+# operación normal.
+_summarize_failures: dict = {"count": 0, "last_error": None, "last_attempt_at": 0.0}
 
 # [P1-19] Threshold de fallos consecutivos a partir del cual persistimos
 # una row en `system_alerts` (además del log error). Esto permite que SRE
@@ -73,6 +83,67 @@ _summarize_failures: dict = {"count": 0, "last_error": None}
 # pasaría inadvertida si solo confiamos en logs durante outages.
 _SUMMARY_FAILURE_ALERT_THRESHOLD = 5
 _SUMMARY_FAILURE_ALERT_REPEAT_EVERY = 50  # re-persistir cada N adicionales
+
+
+# [P1-NEW-6 · 2026-05-11] Tabla de backoff exponencial. Mapa `(min_count,
+# max_count) → wait_seconds`. Aplica una vez que el contador
+# `_summarize_failures["count"]` cruza el primer umbral.
+#   - count 1-4:   sin skip (try harder, fallos esporádicos).
+#   - count 5-9:   skip si < 10min desde last_attempt.
+#   - count 10-19: skip si < 30min.
+#   - count 20-39: skip si < 1h.
+#   - count >=40:  skip si < 4h (degradación sistémica clara — Sentry/SRE).
+# Cada entry es `(threshold_inclusive, wait_seconds)`.
+_SUMMARY_BACKOFF_TABLE: list[tuple[int, int]] = [
+    (5, 10 * 60),
+    (10, 30 * 60),
+    (20, 60 * 60),
+    (40, 4 * 60 * 60),
+]
+
+
+def _summary_backoff_should_skip() -> bool:
+    """[P1-NEW-6 · 2026-05-11] Decide si saltar la invocación actual de
+    `summarize_and_prune` por backoff exponencial.
+
+    Lee `_summarize_failures["count"]` y `_summarize_failures["last_attempt_at"]`.
+    Si NO hay fallos recientes (count == 0) retorna False (proceed).
+    Si los hay, busca la entry de _SUMMARY_BACKOFF_TABLE aplicable y
+    verifica si ha pasado el wait_seconds desde el último intento.
+
+    Knob kill-switch `MEALFIT_SUMMARY_BACKOFF_ENABLED` (default true).
+    Set a `false` durante debugging para forzar todas las invocaciones."""
+    try:
+        from knobs import _env_bool
+        if not _env_bool("MEALFIT_SUMMARY_BACKOFF_ENABLED", True):
+            return False
+    except Exception:
+        # Si el knob loader falla, default seguro: backoff activo.
+        pass
+
+    count = _summarize_failures.get("count", 0)
+    if count <= 0:
+        return False  # path feliz; no hay backoff.
+
+    last_at = _summarize_failures.get("last_attempt_at", 0.0)
+    if not isinstance(last_at, (int, float)) or last_at <= 0:
+        return False  # estado inconsistente; no podemos calcular wait.
+
+    # Encontrar el wait_seconds más alto cuyo threshold sea <= count.
+    # _SUMMARY_BACKOFF_TABLE está ordenada ascendente; iteramos en reverse
+    # para encontrar el umbral mayor aplicable.
+    wait_s: int = 0
+    for threshold, w in reversed(_SUMMARY_BACKOFF_TABLE):
+        if count >= threshold:
+            wait_s = w
+            break
+    if wait_s <= 0:
+        return False  # count < primer umbral; no skip todavía.
+
+    elapsed = time.time() - last_at
+    if elapsed < wait_s:
+        return True
+    return False
 
 
 def _persist_summary_failure_alert(session_id: str, error_str: str, count: int) -> None:
@@ -317,7 +388,33 @@ def summarize_and_prune(session_id: str):
     2. Resume el bloque de mensajes más antiguo con Gemini.
     3. Guarda el resumen en conversation_summaries.
     4. Elimina los mensajes ya resumidos de agent_messages.
+
+    [P1-NEW-6 · 2026-05-11] Guard de backoff exponencial: si hay racha
+    consecutiva de fallos del resumen (Gemini down, cuota, modelo
+    inválido), las próximas invocaciones se saltean hasta que pase la
+    ventana de wait calculada (10min/30min/1h/4h según severity).
     """
+    # [P1-NEW-6 · 2026-05-11] `global` declarado al inicio de la función
+    # — el reset del dict en el path de éxito (más abajo) requiere rebind,
+    # y Python 3.10+ exige que `global` preceda al primer uso de la
+    # variable en el scope. Sin esta línea aquí, `py_compile --strict`
+    # falla con `name '_summarize_failures' is used prior to global
+    # declaration`.
+    global _summarize_failures
+
+    # [P1-NEW-6 · 2026-05-11] Backoff exponencial — skip si racha activa.
+    if _summary_backoff_should_skip():
+        count = _summarize_failures.get("count", 0)
+        last_err = _summarize_failures.get("last_error")
+        print(
+            f"⏰ [MEMORY MANAGER/P1-NEW-6] Skip resumen sesión "
+            f"{str(session_id)[:8]}… — backoff activo ({count} fallos "
+            f"consecutivos, último error: {last_err!r}). Próximo intento "
+            f"tras ventana de espera. Set MEALFIT_SUMMARY_BACKOFF_ENABLED=false "
+            f"para forzar."
+        )
+        return
+
     if not acquire_summarizing_lock(session_id):
         print(f"⚠️ [MEMORY MANAGER] Resumen ya en progreso para sesión {session_id}. Mitigando Condición de Carrera.")
         return
@@ -518,6 +615,10 @@ def summarize_and_prune(session_id: str):
         if "Server disconnected" not in error_str:
             _summarize_failures["count"] += 1
             _summarize_failures["last_error"] = repr(e)
+            # [P1-NEW-6 · 2026-05-11] Timestamp para backoff exponencial.
+            # Persistido aquí (NO en el path feliz) — _summary_backoff_should_skip
+            # lo lee para calcular `elapsed > wait_seconds`.
+            _summarize_failures["last_attempt_at"] = time.time()
             n = _summarize_failures["count"]
             if n == 1 or n % 10 == 0:
                 logger.error(
@@ -545,7 +646,8 @@ def summarize_and_prune(session_id: str):
         # [P1-18] Reset del contador en path de éxito (auto-recovery sin
         # restart del proceso). Si el resumen funcionó tras una racha de
         # fallos, lo loggeamos a info para que SRE vea la recuperación.
-        global _summarize_failures
+        # (`global _summarize_failures` movido al inicio de la función
+        # por P1-NEW-6 — Python 3.10+ exige declararlo antes del primer uso.)
         if _summarize_failures["count"] > 0:
             prior_count = _summarize_failures["count"]
             logger.info(
@@ -553,7 +655,9 @@ def summarize_and_prune(session_id: str):
                 f"{prior_count} fallo(s). "
                 f"Último error: {_summarize_failures['last_error']!r}"
             )
-            _summarize_failures = {"count": 0, "last_error": None}
+            # [P1-NEW-6 · 2026-05-11] Reset incluye `last_attempt_at`
+            # para que el backoff arranque limpio si futura racha aparece.
+            _summarize_failures = {"count": 0, "last_error": None, "last_attempt_at": 0.0}
             # [P1-19] Marcar la alerta como resuelta en system_alerts si
             # la habíamos persistido (cruzó el threshold). Best-effort:
             # mismo patrón defensivo que `_persist_summary_failure_alert`.

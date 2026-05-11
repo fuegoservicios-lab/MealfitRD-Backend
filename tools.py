@@ -520,7 +520,11 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             logger.warning(f"⚠️ [TOOL] No se pudo recalcular aggregated_shopping_list Delta: {e}")
         
         # 5. Actualizar en Supabase
-        update_result = update_meal_plan_data(plan_id, plan_data)
+        # [P1-NEW-3 · 2026-05-10] plan_id resolved vía
+        # get_latest_meal_plan_with_id(user_id) más arriba; pasamos user_id
+        # para que el helper aplique el WHERE id=%s AND user_id=%s
+        # defense-in-depth a DB-level.
+        update_result = update_meal_plan_data(plan_id, plan_data, user_id=user_id)
         if update_result is not None:
             logger.info(f"✅ [TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
             return json.dumps({"modified_meal": new_meal_data, "day": day_number, "meal_index": target_meal_index})

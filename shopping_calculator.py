@@ -2303,13 +2303,25 @@ def expected_sum_from_recipes(plan_data: dict, *, apply_yield: bool = False, mul
     return {name: dict(units) for name, units in aggregated.items()}
 
 
-def _classify_divergence_hypothesis(exp_qty: float, act_qty: float, exp_units: dict, act_units: dict) -> str:
+def _classify_divergence_hypothesis(
+    exp_qty: float,
+    act_qty: float,
+    exp_units: dict,
+    act_units: dict,
+    food: str = "",
+) -> str:
     """Heurístico de clasificación para `compare_expected_vs_aggregated`.
 
     Las hipótesis son orientativas para el reviewer humano/operacional; no
     sustituyen verificación. Orden de precedencia:
       1. cap_swallowed_modifier > 2. unit_mismatch > 3. yield_uncovered
       4. pantry_overdeduct > 5. unknown.
+
+    [P2-AUDIT-1 · 2026-05-10] `food` opcional (default ''): cuando se provee
+    y resuelve a pescado/mariscos vía `canonicalize_fish_seafood`, se usan
+    bandas yield más estrechas (cooking loss menor que carnes rojas/blancas).
+    Backward-compat: callers que no pasen `food` siguen con las bandas
+    clásicas de carne/legumbre.
     """
     has_any_in_aggregated = any((q or 0) > 0 for q in act_units.values())
 
@@ -2325,14 +2337,67 @@ def _classify_divergence_hypothesis(exp_qty: float, act_qty: float, exp_units: d
 
     # 3. yield no aplicado: ratio típico de proteína cocida (1.35×) o
     # legumbre cocida (0.35×) que el aggregator no convirtió.
+    # [P2-AUDIT-1 · 2026-05-10] Pescados/mariscos pierden menos agua al
+    # cocinar que carnes (estimación literatura nutricional RD):
+    #   - Pescado fileteado (tilapia, salmón, mero): 15-25% pérdida → 1.15-1.30×.
+    #   - Mariscos (camarones, calamares, almejas): 5-20% pérdida → 1.05-1.20×.
+    # Sin bandas separadas, divergencias 1.10-1.30 caían a `unknown` →
+    # operador no veía la causa. Si `food` canonicaliza a fish/seafood,
+    # usamos esas bandas; caso contrario las clásicas.
     if exp_qty > 0 and act_qty > 0:
         ratio = act_qty / exp_qty
+        # Bandas clásicas (carne/legumbre).
         if 1.30 <= ratio <= 1.40 or 0.30 <= ratio <= 0.40:
             return "yield_uncovered"
+        # Bandas fish/seafood — solo cuando `food` resuelve.
+        if food:
+            try:
+                _fish_canon = canonicalize_fish_seafood(food)
+            except Exception:
+                _fish_canon = None
+            if _fish_canon is not None:
+                # Fish + seafood: rango combinado 1.05-1.30 (cooking loss
+                # 5-25%). Más estrecho que carne porque la pérdida de
+                # peso por cocción es menor en proteína acuática.
+                if 1.05 <= ratio <= 1.30:
+                    return "yield_uncovered"
 
     # 4. nevera/consumed dedujo de más: actual < expected/2 sin caer en
     # rangos de yield ni en zero (caso 2).
-    if exp_qty > 0 and 0 < act_qty < exp_qty * 0.5:
+    #
+    # [P3-NEW-5 · 2026-05-10] Threshold 0.5 (50%) es conservador por diseño
+    # (deferred, sin code change inmediato):
+    #
+    #   Caso real auditado: receta espera 3kg pollo + nevera promete 2kg →
+    #   ratio=0.67 > 0.5 → cae al `unknown` final, NO se reporta como
+    #   `pantry_overdeduct`. Una propuesta del audit 2026-05-10 era subir
+    #   el threshold a 0.75 para capturar también ese caso.
+    #
+    #   Razón para NO accionar sin evidencia: subir el threshold amplía
+    #   el bucket `pantry_overdeduct` a expensas del `unknown`. Sin datos
+    #   de cuántos `unknown` actuales son realmente overdeducts vs ruido
+    #   genuino, el cambio puede inflar falsos positivos del cron alert.
+    #
+    #   Trigger para actuar:
+    #     - SRE observa en pipeline_metrics WHERE node = '_shopping_coherence_alert'
+    #       que >25% de los `unknown` correlacionan con sobrededucción real
+    #       (verificar con user logs / consumed_meals).
+    #     - O: usuarios reportan que pantry "olvida" items pero el guard
+    #       no los flaggea como sobrededucción.
+    #
+    #   Si se observa: subir 0.5 → 0.75 sin redeploy via
+    #   `MEALFIT_PANTRY_OVERDEDUCT_RATIO_THRESHOLD`.
+    #
+    # [P3-AUDIT-2 · 2026-05-10] El knob ya está implementado (antes
+    # deferred). Default 0.5 preserva comportamiento histórico; subirlo
+    # a 0.75 amplía el bucket (ver trigger arriba). Clamp [0.0, 1.0]:
+    # valores fuera de ese rango caen al default + log warning.
+    overdeduct_threshold = _knob_env_float(
+        "MEALFIT_PANTRY_OVERDEDUCT_RATIO_THRESHOLD",
+        0.5,
+        validator=lambda v: 0.0 < v < 1.0,
+    )
+    if exp_qty > 0 and 0 < act_qty < exp_qty * overdeduct_threshold:
         return "pantry_overdeduct"
 
     return "unknown"
@@ -2401,7 +2466,7 @@ def compare_expected_vs_aggregated(
                     "expected_qty": 0.0,
                     "actual_qty": act_qty,
                     "delta_pct": float("inf"),
-                    "hypothesis": _classify_divergence_hypothesis(exp_qty, act_qty, exp_units, act_units),
+                    "hypothesis": _classify_divergence_hypothesis(exp_qty, act_qty, exp_units, act_units, food=food),
                 })
                 continue
 
@@ -2413,7 +2478,7 @@ def compare_expected_vs_aggregated(
                     "expected_qty": exp_qty,
                     "actual_qty": act_qty,
                     "delta_pct": delta_pct,
-                    "hypothesis": _classify_divergence_hypothesis(exp_qty, act_qty, exp_units, act_units),
+                    "hypothesis": _classify_divergence_hypothesis(exp_qty, act_qty, exp_units, act_units, food=food),
                 })
 
     # `inf` es mayor que cualquier float → ordena primero con `-delta_pct`.
@@ -2427,12 +2492,19 @@ def _get_coherence_guard_mode() -> str:
     Valores válidos:
       - "off"   → guard no se invoca (compatibilidad backward).
       - "warn"  → invoca `compare_expected_vs_aggregated`, loggea divergencias
-                  y deja seguir el pipeline. Default operacional durante canary.
+                  y deja seguir el pipeline. Modo canary / debugging local.
       - "block" → si `max(delta_pct) > MEALFIT_SHOPPING_COHERENCE_TOLERANCE_PCT`,
                   aborta persistencia del plan (caller reintenta con Pro o
-                  degrada según política).
+                  degrada según política). DEFAULT producción (P1-NEW-1).
 
-    Cualquier valor distinto cae a "warn" con log de warning. Releído en
+    [P1-NEW-1 · 2026-05-10] Default bumpeado de "warn" a "block". Razón: el
+    sistema producía listas incoherentes (cap_swallowed_modifier crítico —
+    pollo en receta ausente en lista — entre otros) y solo lo loggeaba en
+    `warn`. Ahora `review_plan_node` reintenta o degrada según
+    `MEALFIT_SHOPPING_COHERENCE_BLOCK_ACTION` (default reject_minor).
+    Rollback: `export MEALFIT_SHOPPING_COHERENCE_GUARD=warn` sin redeploy.
+
+    Cualquier valor distinto cae al default con log de warning. Releído en
     cada invocación por preferencia operacional (cambio sin redeploy).
     """
     # [P2-1 · 2026-05-08] `_knob_env_str` ya importado a top-level desde `knobs.py`
@@ -2440,7 +2512,7 @@ def _get_coherence_guard_mode() -> str:
     # falta tras extraer los helpers a un módulo aislado.
     return _knob_env_str(
         "MEALFIT_SHOPPING_COHERENCE_GUARD",
-        "warn",
+        "block",
         choices={"off", "warn", "block"},
     )
 
@@ -2456,6 +2528,27 @@ def _get_coherence_liquid_keywords() -> set[str]:
 
     Default: keywords más comunes de condimento líquido es-DO. Knob CSV
     permite añadir/sustituir sin redeploy.
+
+    [P3-NEW-4 · 2026-05-10] Anchor para review anual de keywords (deferred,
+    sin code change inmediato):
+
+      Cron `_shopping_coherence_alert_job` (cron_tasks.py:676) re-evalúa
+      planes activos en mode=warn. Si reporta consistentemente
+      `cap_swallowed_modifier` o `yield_uncovered` para items que SON
+      líquidos (aceite/vinagre/salsas/etc.) pero NO están en el default,
+      añadir el keyword al knob:
+
+        export MEALFIT_COHERENCE_LIQUID_KEYWORDS="aceite,vinagre,...,nuevo_keyword"
+
+      Candidatos a vigilar en es-DO (no añadidos por defecto hasta que
+      la telemetría justifique):
+        - "agrio" / "agrio de naranja" (marinada típica RD).
+        - "mojo" (preparación de aliño criollo).
+        - "miel" (jarabe — pero ya tiene canonical inline).
+        - "leche de coco" (super-lineal en sancocho/asopao).
+
+      Frecuencia sugerida de review: trimestral. Owner: el SRE que
+      mire pipeline_metrics WHERE node = '_shopping_coherence_alert'.
     """
     raw = _knob_env_str(
         "MEALFIT_COHERENCE_LIQUID_KEYWORDS",
@@ -2591,6 +2684,260 @@ def _canonicalize_food_dict_for_coherence(food_dict: dict) -> dict:
     return {n: dict(u) for n, u in out.items()}
 
 
+# [P2-NEW-1 · 2026-05-10] Canonical base names para los 3 proteínas centrales
+# es-DO. Mantenidos como constantes para que test parser-based + futuro refactor
+# tengan un anchor estable. El aggregator NO consolida estos como hace con pavo
+# (no hay fresh-vs-procesado distinction comercial relevante), pero el coherence
+# guard sí necesita simetría: "pechuga de pollo desmenuzada" en receta vs.
+# "Pollo" en lista debe matchear.
+_PROTEIN_CANONICAL_POLLO = 'Pollo'
+_PROTEIN_CANONICAL_CERDO = 'Cerdo'
+_PROTEIN_CANONICAL_RES = 'Res'
+
+
+def canonicalize_protein(name) -> str | None:
+    """[P2-NEW-1 · 2026-05-10] Canonicaliza nombres de pollo/cerdo/res a su
+    nombre base para uso simétrico en el coherence guard.
+
+    Cubre el modo de falso positivo no atrapado por pavo (que tiene su propio
+    helper) ni por el fallback genérico (que solo strippea modificadores
+    explícitos en `_TRAILING_MODIFIERS_ES`):
+      - "pechuga de pollo fresca" (receta) vs. "Pollo" (lista) → ambos a 'Pollo'.
+      - "muslo de pollo desmenuzado" vs. "Pollo" → ambos a 'Pollo'.
+      - "carne de res molida" vs. "Res" → ambos a 'Res' (preserved como caso
+        más conservador; el aggregator tampoco distingue "Res molida" como
+        canónico aparte salvo en master_map explícito).
+      - "chuleta de cerdo guisada" vs. "Cerdo" → ambos a 'Cerdo'.
+
+    Diferencias vs. `canonicalize_pavo`:
+      - NO hay distinción fresh-vs-procesado (no existe deli comercial
+        equivalente para pollo/cerdo/res en RD que justifique el split).
+      - NO preserva "molido" como canónico aparte (el aggregator a menudo
+        usa "Carne molida" o el master_map alias resuelve; aquí colapsamos
+        al genérico para que el guard compare magnitudes sumadas).
+      - NO mata el caso "X enlatado" (productos ya procesados industrial
+        deli) — el master_map debe canonicalizar eso por su lado.
+
+    Reglas, en orden de precedencia:
+      1. corte (`pechuga|muslo|filete|chuleta|pierna|lomo|costilla`) + de + X →
+         canonical(X). Cubre "pechuga de pollo", "chuleta de cerdo", etc.
+      2. X (`pollo|cerdo|res`) + cooking-state (`cocido|asado|hervido|
+         desmenuzado|guisado|frito|horneado|molido|asada|frita|...`) → canonical(X).
+      3. X + fresh/procesado markers (`fresco|fresca|orgánico|natural`) → canonical(X).
+      4. exact match `pollo|cerdo|res|carne de res` → canonical correspondiente.
+      5. Otros casos → None (no es el dominio de este helper).
+
+    Returns:
+      'Pollo' / 'Cerdo' / 'Res' / None.
+
+    Nota: el aggregator NO tiene reglas equivalentes (verificado contra
+    `shopping_calculator.py:3216-3238` donde solo pavo tiene canonicalización
+    explícita). Este helper unilateralmente canonicaliza para el guard, lo
+    que implica que el guard ahora trata "Pollo desmenuzado" en la lista y
+    "Pollo" en la receta como mismo food para magnitudes. Esto es el
+    comportamiento deseado (yield_uncovered / magnitudes se evalúan sobre
+    el total acumulado del protein), no un falso positivo.
+    """
+    if not name:
+        return None
+    n_low = str(name).strip().lower()
+
+    # Detectar cuál proteína está presente (mutuamente excluyentes — no
+    # esperamos "pollo de res").
+    has_pollo = bool(re.search(r'\bpollo\b', n_low))
+    has_cerdo = bool(re.search(r'\bcerdo\b', n_low))
+    has_res = bool(re.search(r'\b(res|carne\s+de\s+res)\b', n_low))
+
+    # Multi-match raro: si más de uno, no canonicalizamos (no es claro qué
+    # gana, ej. "pollo a la carne de res" — patológico).
+    if sum([has_pollo, has_cerdo, has_res]) != 1:
+        return None
+
+    # Excluir composiciones que NO son del dominio (caldos, picadillos
+    # mixtos, productos enlatados, embutidos derivados que tienen su
+    # propio canónico industrial).
+    if re.search(
+        r'caldo|consomé|picadillo\s+(mixto|de\s+\w+)|enlatad[oa]|salchich|'
+        r'longaniza|salami|jam[oó]n\b|tocineta|bacon|chorizo|nugget',
+        n_low,
+    ):
+        return None
+
+    if has_pollo:
+        return _PROTEIN_CANONICAL_POLLO
+    if has_cerdo:
+        return _PROTEIN_CANONICAL_CERDO
+    if has_res:
+        return _PROTEIN_CANONICAL_RES
+    return None
+
+
+# [P1-AUDIT-2 · 2026-05-10] Canonical mapping para pescados y mariscos es-DO.
+# Hardcoded por especie porque (a diferencia de pollo/cerdo/res, donde son 3
+# canonicales) aquí cada especie es su propio canonical. El aggregator NO
+# normaliza: "Filete de salmón" vs "Salmón" llegan distintos al guard sin
+# este helper → false positive `cap_swallowed_modifier`. Cubre tilde / sin
+# tilde + plural / singular de cada especie.
+_FISH_SEAFOOD_CANONICAL = {
+    # Fish — pescados de uso común RD
+    'pescado': 'Pescado',
+    'pescados': 'Pescado',
+    'tilapia': 'Tilapia',
+    'tilapias': 'Tilapia',
+    'salmón': 'Salmón',
+    'salmon': 'Salmón',
+    'salmones': 'Salmón',
+    'mero': 'Mero',
+    'meros': 'Mero',
+    'dorado': 'Dorado',
+    'dorados': 'Dorado',
+    'atún': 'Atún',
+    'atun': 'Atún',
+    'atunes': 'Atún',
+    'bacalao': 'Bacalao',
+    'bacalaos': 'Bacalao',
+    'sardina': 'Sardina',
+    'sardinas': 'Sardina',
+    'lisa': 'Lisa',
+    'lisas': 'Lisa',
+    'carite': 'Carite',
+    'carites': 'Carite',
+    'robalo': 'Robalo',
+    'robalos': 'Robalo',
+    # Seafood — mariscos de uso común RD
+    'camarón': 'Camarón',
+    'camaron': 'Camarón',
+    'camarones': 'Camarón',
+    'langosta': 'Langosta',
+    'langostas': 'Langosta',
+    'langostino': 'Langostino',
+    'langostinos': 'Langostino',
+    'calamar': 'Calamar',
+    'calamares': 'Calamar',
+    'pulpo': 'Pulpo',
+    'pulpos': 'Pulpo',
+    'almeja': 'Almeja',
+    'almejas': 'Almeja',
+    'cangrejo': 'Cangrejo',
+    'cangrejos': 'Cangrejo',
+    'jaiba': 'Jaiba',
+    'jaibas': 'Jaiba',
+    'mejillón': 'Mejillón',
+    'mejillon': 'Mejillón',
+    'mejillones': 'Mejillón',
+    'vieira': 'Vieira',
+    'vieiras': 'Vieira',
+}
+
+
+def _get_extra_fish_seafood_keywords() -> dict[str, str]:
+    """[P1-AUDIT-2 · 2026-05-10] Knob `MEALFIT_COHERENCE_FISH_KEYWORDS` para
+    extensibilidad runtime sin redeploy.
+
+    Formato: `kw1:Canonical1,kw2:Canonical2` (pares separados por coma).
+
+    Ejemplo:
+      export MEALFIT_COHERENCE_FISH_KEYWORDS="ostra:Ostra,ostras:Ostra,boquerón:Boquerón"
+
+    Releído en cada llamada para permitir ajustes en caliente. Items con
+    formato inválido (sin `:` o keys vacías) se ignoran silenciosamente —
+    no rompemos el coherence guard por un knob mal escrito.
+
+    Nota: bypassea `_knob_env_str` deliberadamente porque ese helper
+    normaliza el valor a lowercase, lo que rompería el canonical
+    case-sensitive (queremos 'Salmón', no 'salmón'). Registramos
+    manualmente en `_KNOBS_REGISTRY` vía `_register_knob` para que
+    el knob siga visible en `/admin/knobs`.
+    """
+    knob_name = "MEALFIT_COHERENCE_FISH_KEYWORDS"
+    raw = os.environ.get(knob_name, "")
+    try:
+        from knobs import _register_knob
+        _register_knob(knob_name, "str", "", raw, raw)
+    except Exception:
+        # Registro best-effort: si knobs.py cambió signature, no
+        # rompemos el coherence guard.
+        pass
+    if not raw:
+        return {}
+    out: dict[str, str] = {}
+    for pair in str(raw).split(","):
+        pair = pair.strip()
+        if ":" not in pair:
+            continue
+        kw, canon = pair.split(":", 1)
+        kw = kw.strip().lower()
+        canon = canon.strip()
+        if kw and canon:
+            out[kw] = canon
+    return out
+
+
+def canonicalize_fish_seafood(name) -> str | None:
+    """[P1-AUDIT-2 · 2026-05-10] Canonicaliza nombres de pescados y mariscos
+    a su nombre base para uso simétrico en el coherence guard.
+
+    Cubre el modo de falso positivo no atrapado por `canonicalize_protein`
+    (que solo cubre pollo/cerdo/res) ni por el fallback genérico:
+      - "filete de salmón guisado" (receta) vs. "Salmón" (lista) → ambos 'Salmón'.
+      - "camarones a la plancha" vs. "Camarones" → ambos 'Camarón'.
+      - "tilapia frita" vs. "Tilapia" → ambos 'Tilapia'.
+      - "langostinos al ajillo" vs. "Langostino" → ambos 'Langostino'.
+
+    Diferencias vs. `canonicalize_protein` y `canonicalize_pavo`:
+      - NO hay 3 canonicales fijos: cada especie tiene su propio canonical
+        (Salmón, Tilapia, Camarón, etc.). La diversidad zoológica del
+        dominio justifica el mapping per-species.
+      - SÍ singulariza: "camarones" → 'Camarón', "langostinos" → 'Langostino'
+        (a diferencia de canonicalize_pavo que preserva preparaciones como
+        canónicos aparte).
+      - NO distingue fresh-vs-procesado dentro del guard: enlatado /
+        ahumado deli / fingers / palitos / croquetas → None (productos
+        derivados que NO equivalen al pescado fresco, master_map los
+        canonicaliza por su lado si están definidos).
+
+    Reglas:
+      1. Buscar keywords del mapping en `name` (word-boundary regex).
+      2. Si NO match → None (no es del dominio).
+      3. Si TODOS los matches resuelven al MISMO canonical → ese canonical.
+      4. Si resuelven a CANONICALES DISTINTOS (ej. "mero con salmón" —
+         platillo mixto patológico) → None.
+      5. Si el nombre indica producto derivado (enlatado, fingers, etc.) →
+         None.
+
+    Returns:
+      Canonical string ('Salmón', 'Camarón', 'Tilapia', ...) o None.
+
+    Knob `MEALFIT_COHERENCE_FISH_KEYWORDS` permite añadir especies regional
+    o de marca sin redeploy (formato `kw:Canon,kw2:Canon2`).
+    """
+    if not name:
+        return None
+    n_low = str(name).strip().lower()
+
+    full_map = {**_FISH_SEAFOOD_CANONICAL, **_get_extra_fish_seafood_keywords()}
+
+    matched_canonicals: set[str] = set()
+    for kw, canonical in full_map.items():
+        if re.search(rf'\b{re.escape(kw)}\b', n_low):
+            matched_canonicals.add(canonical)
+
+    if len(matched_canonicals) != 1:
+        return None
+
+    # Excluir productos derivados — el master_map debe canonicalizar eso
+    # por su lado (ej. "Atún en lata" ≠ "Atún fresco" para coherence).
+    if re.search(
+        r'\benlatad[oa]s?\b|\ben\s+lata\b|\bfingers?\b|\bpalitos?\b|'
+        r'\bnuggets?\b|\bahumad[oa]s?\b|\bcroquetas?\b|\bbastones?\b|'
+        r'\bsurimi\b|\bsucedáneo\b|\bsucedaneo\b',
+        n_low,
+    ):
+        return None
+
+    return next(iter(matched_canonicals))
+
+
 def canonicalize_pavo(name) -> str | None:
     """[P3-4 · 2026-05-07] Canonicaliza un nombre que referencia pavo a uno
     de los cuatro canónicos del aggregator: 'Pechuga de pavo', 'Jamón de
@@ -2639,6 +2986,490 @@ def canonicalize_pavo(name) -> str | None:
         return 'Pechuga de pavo'
     if n_low == 'pavo':
         return 'Pavo'
+    return None
+
+
+# ============================================================
+# [P1-NEW-2 · 2026-05-11] Canonicalizers paralelos a `canonicalize_pavo`
+# para 4 categorías que el guard recetas↔lista trataba como falsos
+# positivos por equivalencia de presentaciones:
+#
+#   - canonicalize_huevo    (claras, yema, enteros → "Huevo")
+#   - canonicalize_lacteo   (entera/descremada/light → producto base)
+#   - canonicalize_grano    (integral/blanco/refinado → "Arroz"/"Avena")
+#   - canonicalize_legumino (rojas/negras/blancas/secas/cocidas → base)
+#
+# Mismo contrato: devuelve canónico si hay match claro; None si el nombre
+# NO menciona la categoría O cae en caso ambiguo. Defensivo by design:
+# el guard sigue funcionando como antes cuando el helper retorna None.
+#
+# Tests E2E paralelos a `test_p3_4_pavo_coherence_v3.py`.
+# ============================================================
+
+
+def canonicalize_huevo(name) -> str | None:
+    """[P1-NEW-2 · 2026-05-11] Canonicaliza nombres de huevo y derivados
+    (claras, yemas, huevos enteros) a un único canónico 'Huevo'.
+
+    Por qué existe:
+      Pre-fix: una receta podía pedir "Claras de huevo (200g)" y la lista
+      de compras agregar bajo "Huevos (3 unidades)" — el guard reportaba
+      "Huevo missing" o "unit_mismatch" cuando, semánticamente, son el
+      MISMO ingrediente shopping (el usuario compra huevos enteros, los
+      separa). Este helper colapsa la equivalencia para que el guard
+      compare cantidades sobre la misma key canónica.
+
+    Reglas (orden de precedencia):
+      1. Contiene `claras` (de huevo o solo) → 'Huevo' (claras vienen del
+         huevo entero; el shopping list pide huevos enteros).
+      2. Contiene `yema` (singular o plural) → 'Huevo' (idem).
+      3. Contiene `huevo` (singular/plural, con/sin "de gallina") → 'Huevo'.
+      4. Cualquier otro caso → None.
+
+    NO toca productos derivados con nombre propio (tortilla, omelette,
+    huevos endiablados) — esos son comidas, no ingredientes shopping.
+    """
+    if not name:
+        return None
+    n_low = str(name).strip().lower()
+    # Claras (lab/preparados): "claras de huevo", "claras pasteurizadas".
+    if re.search(r'\bclaras?\b', n_low):
+        return 'Huevo'
+    # Yemas: "yema de huevo", "yemas".
+    if re.search(r'\byemas?\b', n_low):
+        return 'Huevo'
+    # Huevo en sus formas básicas (excluye productos compuestos).
+    # Negativo: si menciona "tortilla", "omelette", "endiablado" → es plato.
+    if re.search(r'\b(tortilla|omelette|omelete|endiablad)', n_low):
+        return None
+    if re.search(r'\bhuevos?\b', n_low):
+        return 'Huevo'
+    return None
+
+
+def canonicalize_lacteo(name) -> str | None:
+    """[P1-NEW-2 · 2026-05-11] Canonicaliza nombres de lácteos a sus
+    canónicos shopping eliminando presentaciones equivalentes
+    (entera/descremada/light/deslactosada).
+
+    Devuelve uno de:
+      - 'Leche'  (cubre entera/descremada/semidescremada/deslactosada/light)
+      - 'Yogur'  (cubre natural/griego/light/sin azúcar)
+      - 'Queso fresco'  (default fresco si NO se identifica tipo madurado)
+      - None  para cualquier otro lácteo (mantequilla, crema, productos
+              compuestos como flan, helado — esos son shopping items
+              distintos con cantidades propias).
+
+    NO maneja marcas — eso lo cubre `_strip_dairy_brand` (P2-AUDIT-2).
+    Este helper opera sobre el nombre POST-brand-strip.
+
+    Conservador con quesos: si el nombre menciona un tipo concreto
+    (mozzarella, cheddar, parmesano, manchego), retorna ese tipo
+    capitalizado en lugar de colapsar a 'Queso fresco' — son shopping
+    items distintos en RD.
+    """
+    if not name:
+        return None
+    n_low = str(name).strip().lower()
+
+    # Leche: cualquier variante con descriptor entera/descremada/light.
+    # No matchear "leche de coco" / "leche evaporada" / "leche condensada"
+    # (productos distintos con cantidades propias).
+    if re.search(r'\bleche\s+de\s+(coco|almendra|soja|soya|avena)\b', n_low):
+        return None
+    if re.search(r'\bleche\s+(evaporada|condensada|en\s+polvo)\b', n_low):
+        return None
+    if re.search(r'\bleche\b', n_low):
+        return 'Leche'
+
+    # Yogur: variantes natural/griego/light.
+    # No matchear "yogur bebible saborizado" como mismo — generalmente
+    # van separados en pantry. Pero "yogur natural" y "yogur griego" sí
+    # comparten shopping key.
+    if re.search(r'\byogur\b|\byogurt\b', n_low):
+        return 'Yogur'
+
+    # Queso: tipos concretos primero (no colapsar).
+    queso_tipos = [
+        'mozzarella', 'cheddar', 'parmesano', 'manchego', 'feta',
+        'gouda', 'provolone', 'roquefort', 'brie', 'camembert',
+        'ricotta', 'mascarpone', 'azul', 'gorgonzola',
+    ]
+    for tipo in queso_tipos:
+        if re.search(rf'\b{tipo}\b', n_low):
+            return tipo.capitalize()
+    # Default: queso fresco / blanco / rallar — colapsar.
+    if re.search(r'\bqueso\b', n_low):
+        return 'Queso fresco'
+
+    return None
+
+
+def canonicalize_grano(name) -> str | None:
+    """[P1-NEW-2 · 2026-05-11] Canonicaliza granos (arroz, avena, quinoa)
+    a sus canónicos shopping eliminando presentaciones equivalentes
+    (blanco/integral/refinado).
+
+    Devuelve uno de:
+      - 'Arroz'   (blanco/integral/parboiled colapsados — el usuario
+                  compra el saco genérico y elige presentación).
+      - 'Avena'   (hojuelas/molida/instantánea colapsados).
+      - 'Quinoa'  (blanca/roja/tricolor colapsados).
+      - None      para otros (cebada, mijo, etc. — sin demanda histórica).
+
+    NO incluye trigo/pan/harina — esos son shopping items distintos
+    (harina_integral vs harina_blanca tienen masas distintas en planes
+    RD; el guard los trata como diferentes correctamente).
+    """
+    if not name:
+        return None
+    n_low = str(name).strip().lower()
+
+    # Arroz: cualquier variante de presentación.
+    if re.search(r'\barroz\b', n_low):
+        return 'Arroz'
+    # Avena: cualquier variante.
+    if re.search(r'\bavena\b', n_low):
+        return 'Avena'
+    # Quinoa: cualquier color.
+    if re.search(r'\bquinoa\b|\bquinua\b', n_low):
+        return 'Quinoa'
+    return None
+
+
+def canonicalize_legumino(name) -> str | None:
+    """[P1-NEW-2 · 2026-05-11] Canonicaliza legumbres (habichuelas,
+    frijoles, lentejas, garbanzos) a sus canónicos shopping eliminando
+    presentación (color/seco/cocido/enlatado).
+
+    Devuelve uno de:
+      - 'Habichuelas'  (rojas/negras/blancas/pintas → un solo canónico
+                       — el usuario compra el saco; las recetas RD
+                       intercambian colores libremente).
+      - 'Lentejas'     (cualquier color).
+      - 'Garbanzos'    (cualquier presentación).
+      - None           para otras leguminosas (gandules, judías verdes —
+                       en realidad gandules merece su propio canónico
+                       en RD; lo retornamos aparte si está presente).
+
+    NOTA es-DO: en RD "habichuelas" y "frijoles" son sinónimos
+    intercambiables. Ambos colapsan a 'Habichuelas' (el canónico más
+    frecuente en menús dominicanos).
+
+    Gandules (Cajanus cajan) NO son habichuelas en sentido estricto
+    — son leguminosa propia. Pre P1-NEW-2 el aggregator los listaba
+    aparte; mantenemos ese contrato emitiendo 'Gandules' canónico.
+    """
+    if not name:
+        return None
+    n_low = str(name).strip().lower()
+
+    # Gandules — propio canónico (no colapsar con habichuelas).
+    if re.search(r'\bgandules?\b', n_low):
+        return 'Gandules'
+
+    # Habichuelas / frijoles — sinónimos RD, colapsan al canónico mayoritario.
+    if re.search(r'\bhabichuelas?\b|\bfrijoles?\b|\bporotos?\b', n_low):
+        return 'Habichuelas'
+
+    # Lentejas — cualquier color/presentación.
+    if re.search(r'\blentejas?\b', n_low):
+        return 'Lentejas'
+
+    # Garbanzos — cualquier presentación.
+    if re.search(r'\bgarbanzos?\b', n_low):
+        return 'Garbanzos'
+
+    return None
+
+
+def canonicalize_viveres(name) -> str | None:
+    """[P3-NEW-6 · 2026-05-11] Canonicaliza víveres dominicanos
+    (tubérculos y raíces) a un canónico shopping fijo.
+
+    Bug original (audit 2026-05-11): recetas con preparaciones múltiples
+    de un mismo vívere ("Yuca hervida", "Yuca con mojo", "Yuca al
+    ajillo") generaban 3 líneas separadas en la lista de compras aunque
+    shopping-wise sean el mismo producto. Inflaba la lista y degradaba
+    la UX de compras (más líneas que productos reales).
+
+    Decisión: TODOS los yucas/yautías/batatas/papas/auyamas en
+    cualquier preparación colapsan a su canónico fijo.
+
+    Reglas (orden importa solo por early-return; prefijos son mutex):
+      - yuca / yucas → "Yuca"
+      - yautía / yautia / yautías / yautias → "Yautía"
+      - batata / batatas → "Batata"
+      - papa / papas → "Papa" (EXCEPTO si name contiene "papaya" —
+        fruta, no tubérculo; falsa coincidencia de prefijo)
+      - auyama / auyamas → "Auyama" (calabaza criolla RD, distinta
+        de calabacín — no colapsan entre sí)
+
+    NO incluye:
+      - Ñame: ya cubierto por `_consolidate_inline_canon` desde P2-NEW-8.
+      - Plátanos/guineos: musáceas, ver `canonicalize_musaceae`.
+      - Tayota/remolacha/zanahoria: vegetales con shopping behavior
+        distinto (rotación, presentación) — no víveres tradicionales
+        RD.
+
+    Args:
+        name: candidato (str o `None`). Case-insensitive.
+
+    Returns:
+        Canonical name fijo si matchea; `None` si no aplica → el caller
+        cae al siguiente canonicalizer o al fallback singularize/strip.
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    if re.search(r'\byucas?\b', n_low):
+        return 'Yuca'
+    if re.search(r'\byaut[ií]as?\b', n_low):
+        return 'Yautía'
+    if re.search(r'\bbatatas?\b', n_low):
+        return 'Batata'
+    if re.search(r'\bpapas?\b', n_low) and 'papaya' not in n_low:
+        return 'Papa'
+    if re.search(r'\bauyamas?\b', n_low):
+        return 'Auyama'
+    return None
+
+
+def canonicalize_musaceae(name) -> str | None:
+    """[P3-NEW-6 · 2026-05-11] Canonicaliza musáceas (plátano, guineo)
+    a un canónico shopping fijo.
+
+    Bug original (audit 2026-05-11): "Plátano verde para mangú",
+    "Plátano maduro frito" y "Plátano maduro en almíbar" generaban 3
+    líneas separadas en la lista de compras. El usuario compra los
+    MISMOS plátanos — la madurez es variable temporal del producto (un
+    plátano verde se convierte en maduro a los 5-7 días en cocina),
+    no producto distinto.
+
+    Decisión: TODOS los plátanos (cualquier estado o preparación)
+    colapsan a "Plátano". Análogo al patrón de `canonicalize_viveres`
+    (preparaciones múltiples → un canónico shopping).
+
+    Reglas:
+      - plátano / platano / plátanos / platanos → "Plátano"
+      - guineo / guineos → "Guineo" (banano criollo, distinto del
+        plátano — diferencia botánica + comercial real, no colapsa)
+
+    Args:
+        name: candidato (str o `None`). Case-insensitive. Acepta
+              tildes y versiones sin tilde (el LLM puede emitir
+              cualquier forma).
+
+    Returns:
+        Canonical name fijo si matchea; `None` si no aplica.
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    if re.search(r'\bpl[áa]tanos?\b', n_low):
+        return 'Plátano'
+    if re.search(r'\bguineos?\b', n_low):
+        return 'Guineo'
+    return None
+
+
+def canonicalize_frutas_tropicales(name) -> str | None:
+    """[P2-NEW-A · 2026-05-11] Canonicaliza frutas tropicales RD a un
+    canónico shopping fijo.
+
+    Bug observado en audit 2026-05-11: "Ensalada de mango con limón",
+    "Mango verde rallado" y "Mango maduro en almíbar" generaban 3
+    líneas separadas en la lista. Mismo modo de fallo que
+    `canonicalize_viveres`/`canonicalize_musaceae`: preparaciones
+    múltiples del MISMO producto inflan la lista de compras aunque
+    shopping-wise sean idénticas.
+
+    Reglas (orden por early-return; prefijos mutex):
+      - mango / mangos → "Mango" (también en preparaciones: verde,
+        maduro, en almíbar, etc.)
+      - piña / pina / piñas / pinas → "Piña" (acepta sin tilde)
+      - papaya / lechosa: AMBOS a "Lechosa" (canónico es-DO; en RD
+        "lechosa" es el nombre común — incluido "papaya" porque el
+        LLM puede emitir cualquiera). Solo matchea "lechosa/lechosas"
+        en femenino, NO "lechoso/lechosos" (adjetivo lácteo) para
+        evitar conflicto con `_strip_dairy_brand`.
+
+    NO incluye:
+      - Guineo/plátano: musáceas, ver `canonicalize_musaceae`.
+      - Coco: tiene shopping behavior distinto (entero vs. rallado vs.
+        leche de coco). NO colapsa.
+      - Aguacate: aunque es fruta tropical, su shopping unit (unidad)
+        difiere de las frutas que SÍ colapsan (lb). Mantenido separado.
+
+    Args:
+        name: candidato (str o `None`). Case-insensitive.
+
+    Returns:
+        Canonical name fijo si matchea; `None` si no aplica → el caller
+        cae al siguiente canonicalizer o al fallback singularize/strip.
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    if re.search(r'\bmangos?\b', n_low):
+        return 'Mango'
+    if re.search(r'\bpi[ñn]as?\b', n_low):
+        return 'Piña'
+    # `papaya`/`lechosa` (femenino solo) → "Lechosa". Match con singular
+    # opcional. `\b` evita matchear `lechosamente` o similares.
+    if re.search(r'\bpapayas?\b', n_low) or re.search(r'\blechosas?\b', n_low):
+        return 'Lechosa'
+    return None
+
+
+def canonicalize_verduras_hoja(name) -> str | None:
+    """[P2-NEW-A · 2026-05-11] Canonicaliza verduras de hoja verde a un
+    canónico shopping fijo.
+
+    Bug observado: variantes de lechuga ("lechuga romana", "lechuga
+    americana", "lechuga criolla") generaban 3 líneas en la lista,
+    pero el usuario compra UNA misma lechuga (o cualquiera que
+    encuentre). La variedad es preferencia del LLM, no requisito
+    del usuario; consolidar las 3 a "Lechuga" simplifica el shopping.
+
+    Reglas:
+      - lechuga / lechugas (cualquier variedad) → "Lechuga"
+      - espinaca / espinacas → "Espinaca"
+      - rúcula / rucula / rúculas / ruculas → "Rúcula"
+      - acelga / acelgas → "Acelga"
+      - berro / berros → "Berro"
+
+    NO incluye:
+      - Repollo: shopping unit (unidad) distinto de las hojas sueltas.
+      - Col rizada / kale: poca presencia en planes RD; añadir cuando
+        aparezca un caso real (orden de keywords está pensado para
+        extensión sin re-orden).
+
+    Args:
+        name: candidato. Case-insensitive, acepta tildes opcionales.
+
+    Returns:
+        Canonical name fijo si matchea; `None` si no aplica.
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    if re.search(r'\blechugas?\b', n_low):
+        return 'Lechuga'
+    if re.search(r'\bespinacas?\b', n_low):
+        return 'Espinaca'
+    if re.search(r'\br[úu]culas?\b', n_low):
+        return 'Rúcula'
+    if re.search(r'\bacelgas?\b', n_low):
+        return 'Acelga'
+    if re.search(r'\bberros?\b', n_low):
+        return 'Berro'
+    return None
+
+
+def canonicalize_aceites(name) -> str | None:
+    """[P2-NEW-A · 2026-05-11] Canonicaliza aceites a un canónico shopping
+    fijo (preserva tipo de aceite — son productos distintos, NO colapsan
+    entre sí).
+
+    Bug observado: "aceite de oliva extra virgen", "aceite oliva
+    prensado en frío", "AOVE" reportaban `cap_swallowed_modifier`
+    falso positivo en el guard recetas↔lista — el master_map no listaba
+    todas las variantes como aliases, y el aggregator tampoco las
+    consolidaba. Resultado: la lista mostraba 2-3 líneas de oliva con
+    cantidades fraccionadas en lugar de 1 línea sumada.
+
+    Reglas (cada tipo PRESERVADO, solo se eliminan variantes
+    cosméticas):
+      - "aceite de oliva" / "aceite oliva" / "AOVE" (en cualquier
+        forma: "extra virgen", "virgen", "prensado en frío",
+        "primera prensada") → "Aceite de oliva"
+      - "aceite de girasol" / "aceite girasol" → "Aceite de girasol"
+      - "aceite de coco" / "aceite coco" → "Aceite de coco"
+      - "aceite de aguacate" / "aceite aguacate" → "Aceite de aguacate"
+
+    NO se colapsa "aceite de oliva" con "aceite de girasol": son
+    productos distintos (precio, perfil graso, usos culinarios).
+
+    NO incluye:
+      - "aceite vegetal" genérico: ambiguo, no se canonicaliza para no
+        ocultar al usuario que el LLM no especificó el tipo.
+      - Mantequilla / margarina / ghee: shopping unit distinto (paquete),
+        no son aceites en sentido shopping.
+
+    Args:
+        name: candidato. Case-insensitive.
+
+    Returns:
+        Canonical name fijo si matchea; `None` si no aplica.
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    # Orden importa: "aceite de aguacate" antes que "aceite de" prefijos
+    # genéricos. Cada tipo es mutex con los demás.
+    if (
+        re.search(r'\baceite\s+(?:de\s+)?oliva\b', n_low)
+        or re.search(r'\baove\b', n_low)
+    ):
+        return 'Aceite de oliva'
+    if re.search(r'\baceite\s+(?:de\s+)?girasol\b', n_low):
+        return 'Aceite de girasol'
+    if re.search(r'\baceite\s+(?:de\s+)?coco\b', n_low):
+        return 'Aceite de coco'
+    if re.search(r'\baceite\s+(?:de\s+)?aguacate\b', n_low):
+        return 'Aceite de aguacate'
+    return None
+
+
+def _consolidate_inline_canon(name) -> str | None:
+    """[P2-NEW-8 · 2026-05-11] SSOT para 4 reglas inline de canonicalización
+    (Huevo / Ñame / Miel / Ajo) que antes vivían duplicadas en
+    `_canonicalize_for_coherence` (cuerpo del guard recetas↔lista) y en
+    `aggregate_and_deduct_shopping_list` (aggregator que produce el
+    output de la lista de compras).
+
+    Drift risk pre-P2-NEW-8: cuando una regla se actualizaba en un sitio
+    sin tocar el otro, el guard reportaba false positives ("Huevo missing")
+    porque expected_sum_from_recipes usaba la regla nueva y el aggregator
+    seguía con la vieja (o viceversa). Pavo ya tenía test
+    `test_p3_4_canonicalize_pavo_mirrors_aggregator` como espejo dedicado;
+    estos 4 no tenían cobertura análoga.
+
+    Reglas (orden importa por mutex de prefijos; no hay overlap pero
+    early-return acelera el path común):
+      1. Prefijo `huevo(s)?`, `clara(s) de huevo`, `yema(s) de huevo`
+         → "Huevo".
+      2. Prefijo `ñame` o `name` (palabra) → "Ñame".
+      3. Prefijo `miel` (palabra) → "Miel".
+      4. Prefijo `ajo` (palabra) o `diente(s) de ajo` → "Ajo", EXCEPTO
+         si el nombre contiene 'polvo' (`ajo en polvo` es categoría
+         distinta — se preserva como está).
+
+    Args:
+        name: nombre del alimento candidato. Aceptamos `str`, `None`,
+              o cualquier objeto stringificable (lo casteamos a str
+              internamente). Case-insensitive.
+
+    Returns:
+        Canonical name (string fijo: "Huevo" / "Ñame" / "Miel" / "Ajo")
+        si alguna regla matchea. `None` si ninguna aplica — el caller
+        mantiene el name original o cae a otros canonicalizers
+        (canonicalize_pavo, canonicalize_protein, etc.).
+
+    Tests: `tests/test_p2_new_8_inline_canon_ssot.py`.
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    if re.search(r'^(huevos?|claras?\s+de\s+huevo|yemas?\s+de\s+huevo)', n_low):
+        return 'Huevo'
+    if re.search(r'^[ñn]ame\b', n_low):
+        return 'Ñame'
+    if re.search(r'^miel\b', n_low):
+        return 'Miel'
+    if (re.search(r'^ajo\b', n_low) or re.search(r'dientes?\s+de\s+ajo', n_low)) and 'polvo' not in n_low:
+        return 'Ajo'
     return None
 
 
@@ -2752,6 +3583,114 @@ def _strip_trailing_modifier_es(name: str) -> str:
     return remainder
 
 
+# [P2-AUDIT-2 · 2026-05-10] Marcas comerciales de lácteos en RD que la
+# receta del LLM puede emitir como modificador del nombre del ingrediente
+# ("Leche Induvaca entera", "Yogurt Rica") pero el aggregator agrupa en el
+# canónico base ("Leche", "Yogurt"). Sin strip de marca, el guard ve
+# nombres distintos y reporta `cap_swallowed_modifier` falso positivo.
+#
+# Comprehensive es-DO (auditado contra catálogo de supermercados típicos
+# Nacional/Jumbo/PriceSmart). Extensiones runtime via
+# `MEALFIT_COHERENCE_DAIRY_BRANDS`.
+_DAIRY_BRANDS_ES_DO = frozenset({
+    "induvaca",
+    "rica",
+    "sosúa", "sosua",
+    "yoplait",
+    "parmalat",
+    "pasteurizadora rica",
+    "cofadel",
+    "río san juan", "rio san juan",
+    "santa clara",
+    "milky",
+    "lala",
+    "yogu",
+})
+
+# Productos lácteos: si el nombre menciona alguno de estos, intentamos
+# strip de marca. Si el nombre NO menciona lácteo, no tocamos (evita
+# falsos positivos: "rica salsa" donde "rica" es adjetivo, no marca).
+_DAIRY_PRODUCT_KEYWORDS = frozenset({
+    "leche", "yogurt", "yogur", "yoghurt",
+    "queso", "quesos", "mantequilla", "crema",
+    "natilla", "kéfir", "kefir", "requesón", "requeson",
+})
+
+
+def _get_extra_dairy_brands() -> set[str]:
+    """[P2-AUDIT-2 · 2026-05-10] Knob `MEALFIT_COHERENCE_DAIRY_BRANDS` (CSV)
+    para añadir marcas regionales/nuevas sin redeploy.
+
+    Formato: `marca1,marca2,marca con espacios`. Todo se lowercased.
+    Default vacío. Releído en cada llamada.
+
+    Nota: bypasea `_knob_env_str` porque ese helper aplica lowercase
+    normalization sobre TODO el string (incluyendo separadores). Aquí
+    necesitamos preservar comas como separadores, hacer trim + lower
+    item por item. Registro manual via `_register_knob`.
+    """
+    knob_name = "MEALFIT_COHERENCE_DAIRY_BRANDS"
+    raw = os.environ.get(knob_name, "")
+    try:
+        from knobs import _register_knob
+        _register_knob(knob_name, "str", "", raw, raw)
+    except Exception:
+        pass
+    if not raw:
+        return set()
+    out: set[str] = set()
+    for brand in str(raw).split(","):
+        b = brand.strip().lower()
+        if b:
+            out.add(b)
+    return out
+
+
+def _strip_dairy_brand(name: str) -> str:
+    """[P2-AUDIT-2 · 2026-05-10] Quita marca comercial de lácteo del nombre
+    si y solo si el nombre menciona un producto lácteo.
+
+    Por qué la condición doble:
+      Sin el gate de keyword lácteo, strippear `rica` de "rica salsa
+      picante" rompería el canonical de salsas (adjective vs brand).
+      Solo aplicamos strip cuando el contexto es lácteo (lowercased).
+
+    Ejemplo:
+      "Leche Induvaca entera"   → "Leche entera"
+      "Yogurt Rica griego"      → "Yogurt griego"
+      "Queso Sosúa rallado"     → "Queso rallado"
+      "Rica salsa picante"      → "Rica salsa picante"  (no lácteo → no toca)
+      "Mantequilla"             → "Mantequilla"  (sin marca → no toca)
+
+    Returns: nombre con marca strippeada (case-preserved del resto), o el
+    nombre original si no aplica.
+    """
+    if not name or not isinstance(name, str):
+        return name
+    n_low = name.lower()
+    # Gate: solo strippeamos si el nombre menciona producto lácteo.
+    has_dairy_keyword = any(
+        re.search(rf"\b{re.escape(kw)}\b", n_low)
+        for kw in _DAIRY_PRODUCT_KEYWORDS
+    )
+    if not has_dairy_keyword:
+        return name
+    # Set combinado: defaults + extensiones por knob.
+    all_brands = set(_DAIRY_BRANDS_ES_DO) | _get_extra_dairy_brands()
+    result = name
+    # Strip cada marca con word-boundary. Ordenar por longitud DESC para
+    # que "pasteurizadora rica" se intente antes que "rica" (evita
+    # strip parcial del primer match).
+    for brand in sorted(all_brands, key=len, reverse=True):
+        # Case-insensitive replace preservando el resto.
+        pattern = re.compile(rf"\b{re.escape(brand)}\b", re.IGNORECASE)
+        if pattern.search(result):
+            result = pattern.sub("", result)
+            # Colapsar dobles espacios + trim.
+            result = re.sub(r"\s+", " ", result).strip()
+    return result
+
+
 def _canonicalize_for_coherence(food_names) -> set:
     """[P1-shop-coh-1 · 2026-05-07] Canonicaliza un set de food names usando
     master_map + reglas inline simples del aggregator (huevo/ñame/miel/ajo).
@@ -2792,17 +3731,20 @@ def _canonicalize_for_coherence(food_names) -> set:
     for raw_name in food_names:
         if not raw_name:
             continue
+        # [P2-AUDIT-2 · 2026-05-10] Strip marca comercial de lácteos ANTES
+        # del lookup en master_map. "Leche Induvaca entera" → "Leche entera"
+        # → master_map alias → "Leche". Sin esto, master_map no encontraba
+        # match (no listamos todas las marcas como aliases — explota la
+        # cardinalidad) y el guard reportaba false positive.
+        raw_name = _strip_dairy_brand(str(raw_name))
         n_low = str(raw_name).strip().lower()
         canonical = alias_map.get(n_low, str(raw_name).strip())
-        c_low = canonical.lower()
-        if re.search(r'^(huevos?|claras?\s+de\s+huevo|yemas?\s+de\s+huevo)', c_low):
-            canonical = 'Huevo'
-        elif re.search(r'^[ñn]ame\b', c_low):
-            canonical = 'Ñame'
-        elif re.search(r'^miel\b', c_low):
-            canonical = 'Miel'
-        elif (re.search(r'^ajo\b', c_low) or re.search(r'dientes?\s+de\s+ajo', c_low)) and 'polvo' not in c_low:
-            canonical = 'Ajo'
+        # [P2-NEW-8 · 2026-05-11] SSOT: las 4 reglas inline Huevo/Ñame/Miel/Ajo
+        # ahora viven en `_consolidate_inline_canon` (sin esto, drift contra
+        # el aggregator. Pre-P2-NEW-8 vivían duplicadas aquí y allá).
+        _inline_canon = _consolidate_inline_canon(canonical)
+        if _inline_canon is not None:
+            canonical = _inline_canon
         else:
             # [P3-4 · 2026-05-07] Pavo: aplicar mirror del aggregator. Aplica
             # sobre raw_name (preserva intent del LLM) Y sobre canonical
@@ -2815,18 +3757,109 @@ def _canonicalize_for_coherence(food_names) -> set:
             elif pavo_from_canon is not None:
                 canonical = pavo_from_canon
             else:
-                # [P1-1 · 2026-05-10] Fallback genérico para los modos de
-                # falso positivo conocidos. Orden: strip modifier → singularizar.
-                # Si el master_map ya entregó un canónico distinto del raw
-                # (n_low != alias_map.get(n_low,...)), respetamos su veredicto
-                # y NO aplicamos fallback (master tiene contexto que la heurística
-                # no tiene). Solo cuando master no aportó (canonical == raw
-                # stripped) ejercitamos el fallback.
-                if alias_map.get(n_low) is None:
-                    stripped = _strip_trailing_modifier_es(canonical)
-                    if stripped != canonical:
-                        canonical = stripped
-                    canonical = _singularize_food_es(canonical)
+                # [P2-NEW-1 · 2026-05-10] Pollo/cerdo/res: canonicalización
+                # unilateral del coherence guard (el aggregator no consolida
+                # estos; pero el guard sí necesita simetría para magnitudes).
+                # "pechuga de pollo desmenuzada" en receta + "Pollo" en lista
+                # → ambos a 'Pollo' → magnitude check trabaja sobre el total.
+                protein_from_raw = canonicalize_protein(raw_name)
+                protein_from_canon = canonicalize_protein(canonical)
+                if protein_from_raw is not None:
+                    canonical = protein_from_raw
+                elif protein_from_canon is not None:
+                    canonical = protein_from_canon
+                else:
+                    # [P1-AUDIT-2 · 2026-05-10] Pescados/mariscos: mismo patrón
+                    # que pollo/cerdo/res pero per-species. "Filete de salmón
+                    # guisado" en receta + "Salmón" en lista → ambos a 'Salmón'.
+                    # Cierra el silent miss observado en audit (yield_uncovered
+                    # NO se disparaba porque presence ya divergía).
+                    fish_from_raw = canonicalize_fish_seafood(raw_name)
+                    fish_from_canon = canonicalize_fish_seafood(canonical)
+                    if fish_from_raw is not None:
+                        canonical = fish_from_raw
+                    elif fish_from_canon is not None:
+                        canonical = fish_from_canon
+                    # [P1-NEW-2 · 2026-05-11] 4 canonicalizers nuevos
+                    # (huevo, lacteo, grano, legumino) — paralelos al
+                    # pattern P2-NEW-1/P1-AUDIT-2. Try cada uno en orden
+                    # antes del fallback genérico singularize/strip.
+                    # Primer match gana — el orden refleja frecuencia en
+                    # planes RD.
+                    elif (
+                        (huevo := canonicalize_huevo(raw_name)) is not None
+                        or (huevo := canonicalize_huevo(canonical)) is not None
+                    ):
+                        canonical = huevo
+                    elif (
+                        (lact := canonicalize_lacteo(raw_name)) is not None
+                        or (lact := canonicalize_lacteo(canonical)) is not None
+                    ):
+                        canonical = lact
+                    elif (
+                        (gr := canonicalize_grano(raw_name)) is not None
+                        or (gr := canonicalize_grano(canonical)) is not None
+                    ):
+                        canonical = gr
+                    elif (
+                        (lg := canonicalize_legumino(raw_name)) is not None
+                        or (lg := canonicalize_legumino(canonical)) is not None
+                    ):
+                        canonical = lg
+                    # [P3-NEW-6 · 2026-05-11] Víveres y musáceas: paralelos a
+                    # canonicalize_grano / canonicalize_legumino pero para
+                    # tubérculos (yuca/yautía/batata/papa/auyama) y musáceas
+                    # (plátano/guineo). Sin estos, "Yuca hervida" + "Yuca con
+                    # mojo" se aggregaban como 2 líneas, inflando la lista
+                    # de compras. Bilateral con el aggregator (mirror).
+                    elif (
+                        (viv := canonicalize_viveres(raw_name)) is not None
+                        or (viv := canonicalize_viveres(canonical)) is not None
+                    ):
+                        canonical = viv
+                    elif (
+                        (mus := canonicalize_musaceae(raw_name)) is not None
+                        or (mus := canonicalize_musaceae(canonical)) is not None
+                    ):
+                        canonical = mus
+                    # [P2-NEW-A · 2026-05-11] Frutas tropicales / verduras de
+                    # hoja / aceites: tres familias adicionales paralelas a
+                    # viveres/musaceae. Sin estas:
+                    #   - "Mango verde" + "Mango maduro" → 2 líneas (deberían
+                    #     ser 1 línea "Mango").
+                    #   - "Lechuga romana" + "Lechuga americana" → 2 líneas
+                    #     ("Lechuga" canónica colapsa variedades).
+                    #   - "Aceite de oliva extra virgen" + "Aceite oliva" →
+                    #     2 líneas con qty fraccionada (Aceite de oliva en
+                    #     una sola línea sumada).
+                    # Bilateral con el aggregator (mirror).
+                    elif (
+                        (fr := canonicalize_frutas_tropicales(raw_name)) is not None
+                        or (fr := canonicalize_frutas_tropicales(canonical)) is not None
+                    ):
+                        canonical = fr
+                    elif (
+                        (vh := canonicalize_verduras_hoja(raw_name)) is not None
+                        or (vh := canonicalize_verduras_hoja(canonical)) is not None
+                    ):
+                        canonical = vh
+                    elif (
+                        (ac := canonicalize_aceites(raw_name)) is not None
+                        or (ac := canonicalize_aceites(canonical)) is not None
+                    ):
+                        canonical = ac
+                    # [P1-1 · 2026-05-10] Fallback genérico para los modos de
+                    # falso positivo conocidos. Orden: strip modifier → singularizar.
+                    # Si el master_map ya entregó un canónico distinto del raw
+                    # (n_low != alias_map.get(n_low,...)), respetamos su veredicto
+                    # y NO aplicamos fallback (master tiene contexto que la heurística
+                    # no tiene). Solo cuando master no aportó (canonical == raw
+                    # stripped) ejercitamos el fallback.
+                    elif alias_map.get(n_low) is None:
+                        stripped = _strip_trailing_modifier_es(canonical)
+                        if stripped != canonical:
+                            canonical = stripped
+                        canonical = _singularize_food_es(canonical)
         out.add(canonical)
     return out
 
@@ -3156,22 +4189,43 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         m_item = master_map.get(name) or master_map.get(name.lower()) or master_map.get(name.title())
         canonical_name = m_item["name"] if m_item else name
 
-        # Consolidación dura para huevos y sus derivados
-        _can_lower = canonical_name.lower()
-        if re.search(r'^(huevos?|claras?\s+de\s+huevo|yemas?\s+de\s+huevo)', _can_lower, re.IGNORECASE):
-            canonical_name = 'Huevo'
-
-        # Consolidación: Ñame variantes (blanco, amarillo, etc.) → Ñame
-        if re.search(r'^[ñn]ame\b', _can_lower):
-            canonical_name = 'Ñame'
-
-        # Consolidación: Miel variantes → Miel
-        if re.search(r'^miel\b', _can_lower):
-            canonical_name = 'Miel'
-
-        # Consolidación: Ajo con preparación (majado, triturado) o "diente de ajo" → Ajo (no ajo en polvo)
-        if (re.search(r'^ajo\b', _can_lower) or re.search(r'dientes?\s+de\s+ajo', _can_lower)) and 'polvo' not in _can_lower:
-            canonical_name = 'Ajo'
+        # [P2-NEW-8 · 2026-05-11] SSOT: las 4 reglas inline Huevo/Ñame/Miel/Ajo
+        # ahora viven en `_consolidate_inline_canon` (paralelo a la llamada en
+        # `_canonicalize_for_coherence`). Sin SSOT, un drift entre los dos
+        # sitios producía false positives del guard recetas↔lista.
+        _inline_canon = _consolidate_inline_canon(canonical_name)
+        if _inline_canon is not None:
+            canonical_name = _inline_canon
+        else:
+            # [P3-NEW-6 · 2026-05-11] Víveres y musáceas: consolidar variantes
+            # del mismo producto en una sola línea de shopping. "Yuca hervida"
+            # + "Yuca con mojo" → 1 línea "Yuca". "Plátano verde" + "Plátano
+            # maduro" → 1 línea "Plátano" (madurez es estado temporal, no
+            # producto distinto). Bilateral con el guard (mirror en
+            # `_canonicalize_for_coherence`).
+            _viv = canonicalize_viveres(canonical_name)
+            if _viv is not None:
+                canonical_name = _viv
+            else:
+                _mus = canonicalize_musaceae(canonical_name)
+                if _mus is not None:
+                    canonical_name = _mus
+                else:
+                    # [P2-NEW-A · 2026-05-11] Frutas tropicales / verduras de
+                    # hoja / aceites: tres familias más cuyas variantes inflan
+                    # la lista si no consolidamos. Mismo orden y patrón que el
+                    # guard (mirror): primer match gana, cada uno mutex.
+                    _fr = canonicalize_frutas_tropicales(canonical_name)
+                    if _fr is not None:
+                        canonical_name = _fr
+                    else:
+                        _vh = canonicalize_verduras_hoja(canonical_name)
+                        if _vh is not None:
+                            canonical_name = _vh
+                        else:
+                            _ac = canonicalize_aceites(canonical_name)
+                            if _ac is not None:
+                                canonical_name = _ac
 
         # [P3-PROTEIN-CAP-2] Consolidación de pavo con distinción
         # FRESH vs PROCESADO. Antes la regla colapsaba CUALQUIER

@@ -102,23 +102,28 @@ def test_env_float_no_validator_keeps_legacy_behavior():
 
 
 def test_coherence_guard_mode_registers_in_orchestrator_registry():
+    # [P1-NEW-1 · 2026-05-10] Default bumpeado a "block" (era "warn"). Razón:
+    # producción producía listas incoherentes solo logueadas en "warn"; ahora
+    # `review_plan_node` rechaza o degrada por knob `_BLOCK_ACTION`.
     _fresh_modules()
     import shopping_calculator as sc
     val = sc._get_coherence_guard_mode()
-    assert val == "warn"
+    assert val == "block"
     import graph_orchestrator as go
     snap = go.get_knobs_registry_snapshot()
     assert "MEALFIT_SHOPPING_COHERENCE_GUARD" in snap
     assert snap["MEALFIT_SHOPPING_COHERENCE_GUARD"]["type"] == "str"
-    assert snap["MEALFIT_SHOPPING_COHERENCE_GUARD"]["default"] == "warn"
+    assert snap["MEALFIT_SHOPPING_COHERENCE_GUARD"]["default"] == "block"
 
 
 def test_coherence_guard_mode_invalid_choice_falls_back():
+    # [P1-NEW-1 · 2026-05-10] Fallback ahora "block" (era "warn"); choices
+    # inválidos caen al default seguro.
     os.environ["MEALFIT_SHOPPING_COHERENCE_GUARD"] = "bogus"
     _fresh_modules()
     import shopping_calculator as sc
     val = sc._get_coherence_guard_mode()
-    assert val == "warn"
+    assert val == "block"
     import graph_orchestrator as go
     snap = go.get_knobs_registry_snapshot()
     assert snap["MEALFIT_SHOPPING_COHERENCE_GUARD"]["parse_failed"] is True

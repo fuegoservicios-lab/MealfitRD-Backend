@@ -34,6 +34,59 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
+# Helpers: separar calls a `system_alerts` del tick observable
+# `_scheduler_cascade_check_tick` (P2-B-OBS · 2026-05-11). Antes de P2-B,
+# `_alert_scheduler_cascade_missed` solo escribía cuando detectaba cascada.
+# Tras P2-B, escribe SIEMPRE el tick observable (para distinguir "cron
+# corrió sin cascada" de "cron MISSED"). Estos helpers preservan los
+# asserts originales (cascada emit / no emit) ignorando el tick.
+# ---------------------------------------------------------------------------
+def _system_alerts_calls(write_mock: MagicMock) -> list:
+    """Filtra calls a `execute_sql_write` que INSERTAN al alert de cascada
+    en `system_alerts`.
+
+    [P2-B-OBS · 2026-05-11] No basta con buscar "system_alerts" en el SQL:
+    tras el autohealer (P0-NEW-2-AUTOHEAL), el cascade detector también
+    invoca `_resolve_stale_scheduler_alerts()` que hace `UPDATE
+    system_alerts SET resolved_at = NOW() ... RETURNING alert_key`. Ese
+    UPDATE no es el alert de cascada — es el sweep posterior. Solo nos
+    interesa el INSERT del alert critical."""
+    matches = []
+    for c in write_mock.call_args_list:
+        if not c.args or not isinstance(c.args[0], str):
+            continue
+        sql = c.args[0]
+        # INSERT INTO system_alerts (el alert de cascada).
+        # Excluye UPDATE system_alerts del sweep.
+        if "INSERT INTO system_alerts" in sql or "INSERT INTO\n                system_alerts" in sql:
+            matches.append(c)
+            continue
+        # Variante con espacios/saltos de línea distintos: buscar la combinación
+        # `INSERT` ... `system_alerts` y descartar `UPDATE system_alerts`.
+        if "system_alerts" in sql and "UPDATE" not in sql.upper().split("WHERE")[0]:
+            if "INSERT" in sql.upper():
+                matches.append(c)
+    return matches
+
+
+def _pipeline_metrics_calls(write_mock: MagicMock, node_substring: str = "") -> list:
+    """Filtra calls a `execute_sql_write` que escriben a `pipeline_metrics`.
+    Opcional: filtra por substring del node (e.g. `_scheduler_cascade_check_tick`)."""
+    matches = []
+    for c in write_mock.call_args_list:
+        if not c.args or not isinstance(c.args[0], str):
+            continue
+        if "pipeline_metrics" not in c.args[0]:
+            continue
+        if node_substring:
+            params = c.args[1] if len(c.args) > 1 else None
+            if not params or node_substring not in str(params):
+                continue
+        matches.append(c)
+    return matches
+
+
+# ---------------------------------------------------------------------------
 # 1. Detección de cascada — happy path
 # ---------------------------------------------------------------------------
 class TestCascadeDetection:
@@ -56,8 +109,15 @@ class TestCascadeDetection:
             _alert_scheduler_cascade_missed()
 
         assert write_mock.called
-        sql = write_mock.call_args[0][0]
-        args = write_mock.call_args[0][1]
+        # [P2-B-OBS · 2026-05-11] Buscar el call específico a `system_alerts`
+        # (no `call_args` único, que ahora puede apuntar al tick observable
+        # `_scheduler_cascade_check_tick` o al autoheal pipeline_metrics).
+        alert_calls = _system_alerts_calls(write_mock)
+        assert len(alert_calls) == 1, (
+            f"Esperaba 1 call a system_alerts, recibidos {len(alert_calls)}"
+        )
+        sql = alert_calls[0].args[0]
+        args = alert_calls[0].args[1]
         assert "system_alerts" in sql
         assert args[0] == "scheduler_cascade_missed"
         # Severity literal en VALUES; mensaje incluye conteo.
@@ -65,7 +125,7 @@ class TestCascadeDetection:
         assert "3 jobs" in args[2]
 
     def test_below_threshold_no_alert(self, monkeypatch):
-        """2 jobs distintos con umbral=3 → no emite."""
+        """2 jobs distintos con umbral=3 → no emite alerta (pero sí tick)."""
         from cron_tasks import _alert_scheduler_cascade_missed
 
         monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_THRESHOLD", "3")
@@ -79,10 +139,13 @@ class TestCascadeDetection:
              patch("cron_tasks.execute_sql_write", write_mock):
             _alert_scheduler_cascade_missed()
 
-        assert not write_mock.called
+        # [P2-B-OBS] No emite `system_alerts` (espíritu original del test),
+        # pero SÍ emite el tick observable a pipeline_metrics.
+        assert _system_alerts_calls(write_mock) == []
+        assert len(_pipeline_metrics_calls(write_mock, "_scheduler_cascade_check_tick")) == 1
 
     def test_repeated_same_job_does_not_count_extra(self, monkeypatch):
-        """Mismo job_id repetido N veces cuenta como 1 distinct."""
+        """Mismo job_id repetido N veces cuenta como 1 distinct → no emite alerta."""
         from cron_tasks import _alert_scheduler_cascade_missed
 
         monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_THRESHOLD", "3")
@@ -97,10 +160,17 @@ class TestCascadeDetection:
              patch("cron_tasks.execute_sql_write", write_mock):
             _alert_scheduler_cascade_missed()
 
-        assert not write_mock.called
+        # [P2-B-OBS] No emite alerta de cascada (1 distinct < threshold=3)
+        # pero el tick observable se emite siempre.
+        assert _system_alerts_calls(write_mock) == []
 
     def test_no_rows_no_op(self):
-        """Sin MISSED en ventana → no-op silencioso."""
+        """Sin MISSED en ventana → early-return ANTES del tick (no escribe nada).
+
+        Caso degenerate: sin rows, ni siquiera el tick observable corre
+        — el early return ocurre antes de calcular `cascade_detected`.
+        Esto preserva el ahorro del cron en estado healthy total.
+        """
         from cron_tasks import _alert_scheduler_cascade_missed
 
         write_mock = MagicMock()
@@ -130,8 +200,11 @@ class TestJobIdExtraction:
             _alert_scheduler_cascade_missed()
 
         assert write_mock.called
-        # metadata.top_jobs_by_count debe tener los IDs reales (no los del alert_key).
-        meta_json = write_mock.call_args[0][1][3]
+        # [P2-B-OBS · 2026-05-11] Aislar el call a system_alerts (metadata
+        # del cascade alert vive en args[1][3], no en el tick observable).
+        alert_calls = _system_alerts_calls(write_mock)
+        assert len(alert_calls) == 1
+        meta_json = alert_calls[0].args[1][3]
         import json as _j
         meta = _j.loads(meta_json)
         assert "real_job_a" in meta["top_jobs_by_count"]
@@ -153,8 +226,11 @@ class TestJobIdExtraction:
             _alert_scheduler_cascade_missed()
 
         assert write_mock.called
+        # [P2-B-OBS] Aislar el call a system_alerts (no el tick observable).
+        alert_calls = _system_alerts_calls(write_mock)
+        assert len(alert_calls) == 1
         import json as _j
-        meta = _j.loads(write_mock.call_args[0][1][3])
+        meta = _j.loads(alert_calls[0].args[1][3])
         assert "jobA" in meta["top_jobs_by_count"]
         assert "jobB" in meta["top_jobs_by_count"]
 
@@ -192,7 +268,7 @@ class TestKnobsAndSQL:
         assert "scheduler_missed_" in sql
 
     def test_threshold_below_2_clamped(self, monkeypatch):
-        """Threshold negativo / 0 / 1 cae al mínimo de 2 (no emite con 1 job)."""
+        """Threshold negativo / 0 / 1 cae al mínimo de 2 (no emite alerta con 1 job)."""
         from cron_tasks import _alert_scheduler_cascade_missed
 
         monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_THRESHOLD", "0")
@@ -203,8 +279,9 @@ class TestKnobsAndSQL:
              patch("cron_tasks.execute_sql_write", write_mock):
             _alert_scheduler_cascade_missed()
 
-        # 1 job único < clamp(2) → no emite.
-        assert not write_mock.called
+        # [P2-B-OBS] 1 job único < clamp(2) → no emite alerta de cascada.
+        # Tick observable se emite siempre (path "cron corrió sin cascada").
+        assert _system_alerts_calls(write_mock) == []
 
 
 # ---------------------------------------------------------------------------
