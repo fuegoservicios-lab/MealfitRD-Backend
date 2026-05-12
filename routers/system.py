@@ -561,3 +561,178 @@ def admin_force_deploy_lag_check(request: Request):
             )
         ),
     }
+
+
+# [P1-OBS-1 · 2026-05-12] Anchor: P1-OBS-1-HEALTH-SNAPSHOT.
+# Nodos observables expuestos en `watchdog_ticks`. Si añades un watchdog nuevo
+# que emite tick en pipeline_metrics, agrega su node aquí Y al test parser-based
+# correspondiente — el endpoint es contrato con Grafana/operador.
+_HEALTH_SNAPSHOT_WATCHDOG_NODES = (
+    "_hardfloor_autoheal_tick",
+    "_hot_table_bloat_tick",
+    "_pipeline_metrics_silence_check_tick",
+)
+
+
+@router.get("/admin/health-snapshot")
+def admin_health_snapshot(request: Request):
+    """[P1-OBS-1 · 2026-05-12] Snapshot agregado de salud operacional en una
+    sola llamada. Reemplaza ~7 queries SQL manuales que SRE corría tras cada
+    deploy para validar prod (drift, alerts abiertos, watchdogs vivos, chunks
+    atascados, circuit breakers abiertos).
+
+    Auth: `Authorization: Bearer <CRON_SECRET>` (mismo patrón que el resto
+    de `/admin/*`). 503 si CRON_SECRET no está seteado.
+
+    Anchor: P1-OBS-1-HEALTH-SNAPSHOT.
+
+    Retorna (todas las keys siempre presentes — `None` si la sub-query falla):
+      - live_marker: `_LAST_KNOWN_PFIX` del binario corriendo.
+      - expected_marker: marker publicado en `app_kv_store.expected_last_known_pfix`.
+      - drift: bool — True si los markers difieren (igual que /deploy-lag/check).
+      - open_alerts: dict `{severity: count}` para `system_alerts.resolved_at IS NULL`.
+      - metrics_15min: filas en `pipeline_metrics` con `created_at > NOW() - 15min`.
+      - watchdog_ticks: dict `{node: last_created_at_iso}` para nodes observados.
+      - stuck_chunks: `plan_chunk_queue` pending/stale con execute_after viejo (>15min).
+      - dead_lettered_chunks: filas con `status='dead_lettered'`.
+      - open_circuit_breakers: lista de `app_kv_store.key` con `is_open=true`.
+
+    Cada sub-query es best-effort independiente: si una falla, su valor queda
+    en `None` (o `[]`/`{}`) y el resto se devuelve. Esto evita que un blip
+    transitorio en una tabla (ej. lock conflict) tumbe el endpoint entero.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+
+    # 1. Drift: reuso de lógica del endpoint /deploy-lag/check (SIN ejecutar
+    # el detector — solo lectura del KV + comparación contra _LAST_KNOWN_PFIX).
+    live_marker: Optional[str] = None
+    expected_marker: Optional[str] = None
+    try:
+        from app import _LAST_KNOWN_PFIX as _live
+        live_marker = _live
+    except Exception as e:
+        logger.debug(f"[P1-OBS-1] Lectura _LAST_KNOWN_PFIX falló: {e}")
+
+    try:
+        from cron_tasks import _DEPLOY_LAG_KV_KEY
+        row = execute_sql_query(
+            "SELECT value FROM app_kv_store WHERE key = %s",
+            (_DEPLOY_LAG_KV_KEY,),
+            fetch_one=True,
+        )
+        if row:
+            raw = row.get("value") if isinstance(row, dict) else None
+            if isinstance(raw, str):
+                expected_marker = raw
+            elif isinstance(raw, dict):
+                cand = raw.get("marker")
+                if isinstance(cand, str):
+                    expected_marker = cand
+    except Exception as e:
+        logger.debug(f"[P1-OBS-1] SELECT KV expected falló: {e}")
+
+    drift = bool(
+        expected_marker
+        and live_marker
+        and expected_marker.strip() != live_marker.strip()
+    )
+
+    # 2. Open alerts agrupados por severity.
+    open_alerts: dict = {}
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT COALESCE(severity, 'unknown') AS severity, COUNT(*)::int AS count
+              FROM system_alerts
+             WHERE resolved_at IS NULL
+             GROUP BY severity
+            """,
+            fetch_all=True,
+        ) or []
+        for r in rows:
+            open_alerts[str(r.get("severity") or "unknown")] = int(r.get("count") or 0)
+    except Exception as e:
+        logger.debug(f"[P1-OBS-1] SELECT system_alerts falló: {e}")
+
+    # 3. pipeline_metrics rate en últimos 15 min.
+    metrics_15min: Optional[int] = None
+    try:
+        row = execute_sql_query(
+            "SELECT COUNT(*)::int AS n FROM pipeline_metrics WHERE created_at > NOW() - INTERVAL '15 minutes'",
+            fetch_one=True,
+        ) or {}
+        metrics_15min = int(row.get("n") or 0)
+    except Exception as e:
+        logger.debug(f"[P1-OBS-1] SELECT pipeline_metrics count falló: {e}")
+
+    # 4. Watchdog ticks por node observado.
+    watchdog_ticks: dict = {node: None for node in _HEALTH_SNAPSHOT_WATCHDOG_NODES}
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT node, MAX(created_at) AS last_at
+              FROM pipeline_metrics
+             WHERE node = ANY(%s::text[])
+             GROUP BY node
+            """,
+            (list(_HEALTH_SNAPSHOT_WATCHDOG_NODES),),
+            fetch_all=True,
+        ) or []
+        for r in rows:
+            node = r.get("node")
+            last_at = r.get("last_at")
+            if node:
+                watchdog_ticks[str(node)] = last_at.isoformat() if last_at else None
+    except Exception as e:
+        logger.debug(f"[P1-OBS-1] SELECT watchdog ticks falló: {e}")
+
+    # 5. Stuck chunks (pending/stale con execute_after viejo) + dead-lettered.
+    stuck_chunks: Optional[int] = None
+    dead_lettered_chunks: Optional[int] = None
+    try:
+        row = execute_sql_query(
+            """
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE status IN ('pending', 'stale')
+                      AND execute_after < NOW() - INTERVAL '15 minutes'
+                )::int AS stuck,
+                COUNT(*) FILTER (WHERE status = 'dead_lettered')::int AS dead_lettered
+              FROM plan_chunk_queue
+            """,
+            fetch_one=True,
+        ) or {}
+        stuck_chunks = int(row.get("stuck") or 0)
+        dead_lettered_chunks = int(row.get("dead_lettered") or 0)
+    except Exception as e:
+        logger.debug(f"[P1-OBS-1] SELECT plan_chunk_queue falló: {e}")
+
+    # 6. Circuit breakers abiertos en app_kv_store.
+    open_circuit_breakers: list = []
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT key
+              FROM app_kv_store
+             WHERE key LIKE 'llm_circuit_breaker%%'
+               AND (value->>'is_open')::boolean IS TRUE
+             ORDER BY key
+            """,
+            fetch_all=True,
+        ) or []
+        open_circuit_breakers = [str(r.get("key")) for r in rows if r.get("key")]
+    except Exception as e:
+        logger.debug(f"[P1-OBS-1] SELECT circuit breakers falló: {e}")
+
+    return {
+        "success": True,
+        "live_marker": live_marker,
+        "expected_marker": expected_marker,
+        "drift": drift,
+        "open_alerts": open_alerts,
+        "metrics_15min": metrics_15min,
+        "watchdog_ticks": watchdog_ticks,
+        "stuck_chunks": stuck_chunks,
+        "dead_lettered_chunks": dead_lettered_chunks,
+        "open_circuit_breakers": open_circuit_breakers,
+    }
