@@ -7,6 +7,7 @@ import traceback
 import json
 
 from auth import get_verified_user_id, verify_api_quota
+from path_validators import assert_valid_uuid
 from rate_limiter import RateLimiter
 from db import (
     get_user_chat_sessions, get_guest_chat_sessions, get_session_owner, delete_user_agent_sessions,
@@ -31,6 +32,8 @@ router = APIRouter(
 @router.get("/sessions/{user_id}")
 def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     try:
+        # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
+        assert_valid_uuid(user_id, allow_guest=True)
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
@@ -61,6 +64,8 @@ def api_get_chat_sessions(user_id: str, session_ids: Optional[str] = None, verif
 @router.delete("/sessions/{user_id}")
 def api_delete_chat_sessions(user_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     try:
+        # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
+        assert_valid_uuid(user_id, allow_guest=True)
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=403, detail="Prohibido.")
@@ -79,6 +84,8 @@ class RenameSessionReq(BaseModel):
 @router.put("/session/{session_id}")
 def api_rename_chat_session(session_id: str, data: RenameSessionReq, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     try:
+        # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
+        assert_valid_uuid(session_id)
         session_owner = get_session_owner(session_id)
         if session_owner and session_owner != "guest":
             if not verified_user_id or verified_user_id != session_owner:
@@ -93,6 +100,8 @@ def api_rename_chat_session(session_id: str, data: RenameSessionReq, verified_us
 @router.get("/history/{session_id}")
 def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
     try:
+        # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
+        assert_valid_uuid(session_id)
         # 🛡️ Validación IDOR: Verificar que el session pertenece al usuario autenticado
         session_owner = get_session_owner(session_id)
         if session_owner and session_owner != "guest":
@@ -113,10 +122,12 @@ def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depe
 
 @router.delete("/session/{session_id}")
 def api_delete_chat_session(session_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
-    """Elimina una sesión de chat. Requiere autenticación pero sin validación IDOR 
+    """Elimina una sesión de chat. Requiere autenticación pero sin validación IDOR
     (RLS desactivado — la auth se maneja aquí)."""
     from db import delete_chat_session
     try:
+        # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
+        assert_valid_uuid(session_id)
         if not verified_user_id:
             raise HTTPException(status_code=401, detail="Token requerido para eliminar chats.")
         
@@ -157,28 +168,83 @@ import asyncio
 import os
 import httpx
 
+# [P1-CHAT-TTS-1 · 2026-05-11] Rate limiter para el TTS proxy. 60 calls/min
+# por user_id autenticado (IP fallback para anon — pero el endpoint rechaza
+# anons explícitamente abajo, así que el IP-bucket es defensa adicional contra
+# burst pre-auth). Voice mode genera chunks ~1/seg, 60/min cubre conversación
+# fluida sin pegarle al cap. Singleton módulo-level — mismo patrón que
+# `_PLAN_GEN_LIMITER` en routers/plans.py.
+_CHAT_TTS_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
+
+# [P1-CHAT-TTS-1 · 2026-05-11] Cap de longitud del texto enviado a
+# ElevenLabs. La API factura por carácter; sin cap, un user (o un atacante
+# autenticado) puede mandar 100kB y agotar el cupo del OWNER. Voice mode
+# del frontend produce chunks cortos (<300 chars típico, response completa
+# <1500). 1500 es safe upper bound; si en el futuro se requieren textos
+# más largos, considerar streaming chunked TTS.
+_CHAT_TTS_MAX_TEXT_CHARS = 1500
+
+
 @router.post("/tts")
-async def api_chat_tts(data: dict = Body(...)):
+async def api_chat_tts(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(_CHAT_TTS_LIMITER),
+):
+    """[P1-CHAT-TTS-1 · 2026-05-11] TTS proxy a ElevenLabs.
+
+    ANTES (pre-fix):
+      - Sin `Depends(...)`. Cualquiera con la URL podía POSTear texto
+        arbitrario; el servidor reenviaba a ElevenLabs con la API key
+        server-side. Vector: bot scraper + texto largo → cup del owner
+        consumido en horas.
+      - Sin cap de `len(text)`. Forwarding pasaba al request a ElevenLabs
+        tal cual.
+      - Sin `log_api_usage`. Cero accounting per-user de costo TTS.
+
+    DESPUÉS:
+      - `RateLimiter(max_calls=60, period_seconds=60)` requiere
+        Authorization Bearer válido (`get_verified_user_id` injerida por
+        el limiter). Rechazamos 401 si la cadena de auth no resolvió.
+      - `len(text) <= _CHAT_TTS_MAX_TEXT_CHARS` (1500). 413 si excede.
+      - `log_api_usage(verified_user_id, "elevenlabs_tts")` por call —
+        permite SRE auditar costo per-user, detectar bursts anómalos, y
+        es el path correcto para un futuro paywall TTS (hoy NO bypassea
+        `verify_api_quota` porque TTS es UX feature, NO genera plan; pero
+        el registro queda para reasoning).
+
+    Tooltip-anchor: P1-CHAT-TTS-1-AUTH
+    """
+    if not verified_user_id:
+        # `RateLimiter` resuelve el bucket por IP cuando no hay auth, pero
+        # NO rechaza la request. Para TTS necesitamos auth obligatoria
+        # (cost-bearing endpoint).
+        raise HTTPException(status_code=401, detail="Authentication required for TTS.")
+
     text = data.get("text")
-    if not text:
+    if not isinstance(text, str) or not text.strip():
         raise HTTPException(status_code=400, detail="Missing text")
-    
+    text = text.strip()
+    if len(text) > _CHAT_TTS_MAX_TEXT_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"TTS text exceeds {_CHAT_TTS_MAX_TEXT_CHARS} chars (got {len(text)}).",
+        )
+
     # Load and strip the API key to prevent whitespace or quotation errors
     api_key = os.getenv("ELEVENLABS_API_KEY", "").strip().strip('"').strip("'")
-    print(f"[DEBUG ELEVENLABS] Key starts with: '{api_key[:5]}', length: {len(api_key)}")
     if not api_key:
         raise HTTPException(status_code=500, detail="ElevenLabs API Key no configurada.")
-        
+
     # Voz "Rachel" predeterminada (fuerte en inglés/multilingüe) o equivalente
     voice_id = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL") # Bella
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    
+
     headers = {
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
         "xi-api-key": api_key
     }
-    
+
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
@@ -187,11 +253,17 @@ async def api_chat_tts(data: dict = Body(...)):
             "similarity_boost": 0.75
         }
     }
-    
+
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
+            # [P1-CHAT-TTS-1] Accounting post-success. Best-effort try/except
+            # para que un fallo de DB no rompa la response TTS al usuario.
+            try:
+                log_api_usage(verified_user_id, "elevenlabs_tts")
+            except Exception as _audit_err:
+                logger.warning(f"[P1-CHAT-TTS-1] log_api_usage tts falló: {_audit_err}")
             return Response(content=resp.content, media_type="audio/mpeg")
     except httpx.HTTPStatusError as e:
         logger.error(f"Error ElevenLabs {e.response.status_code}: {e.response.text}")
@@ -266,13 +338,39 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             daemon=True
         ).start()
         
+        # [P2-AUDIT-NEW-2 · 2026-05-12] Billing idempotente vía flag + finally.
+        # ANTES: `log_api_usage(user_id, "gemini_chat")` vivía DENTRO de
+        # `bg_tasks()` que solo se invocaba en path `type=="done"`. Si el
+        # SSE se abortaba a mitad (Ctrl+C, cerrar tab, AbortController,
+        # network drop) o lanzaba excepción mid-stream, el LLM YA había
+        # consumido tokens reales (chunks de texto emitidos) pero la
+        # quota mensual del usuario NO se decrementaba.
+        #
+        # Vector de explotación: usuario malicioso aborta cada SSE
+        # deliberadamente tras recibir el 80% útil del output → tokens
+        # gastados del owner sin cobrar al user. Mismo gap que P2-LIVE-7
+        # cerró para 5 endpoints pero `/chat/stream` quedó fuera.
+        #
+        # Fix:
+        #   - `_billed` flag dedupea (defensivo, finally corre una sola vez).
+        #   - `_chunk_observed` se activa cuando llega el primer chunk
+        #     `type=="chunk"` (texto del LLM principal). Eso evita facturar
+        #     si solo se enviaron `progress`/`sentiment` (preamble fast
+        #     antes del LLM principal; sentiment usa modelo separado de
+        #     costo marginal — no justifica cobrar quota completa).
+        #   - `finally` cobra una vez tras done OK, abort, o exception
+        #     mid-stream — todos paths donde el LLM ya consumió tokens.
+        _billed = False
+        _chunk_observed = False
+
         def event_generator():
+            nonlocal _billed, _chunk_observed
             try:
                 for chunk in chat_with_agent_stream(
-                    session_id=session_id, 
-                    prompt=prompt, 
-                    current_plan=current_plan, 
-                    user_id=user_id, 
+                    session_id=session_id,
+                    prompt=prompt,
+                    current_plan=current_plan,
+                    user_id=user_id,
                     form_data=form_data,
                     local_date=local_date,
                     tz_offset=tz_offset,
@@ -280,43 +378,90 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                     plan_tier=plan_tier
                 ):
                     yield chunk
-                    
+
                     # Interceptar el evento 'done' para lanzar background tasks
                     if chunk.startswith("data: "):
                         try:
                             data_obj = json.loads(chunk[len("data: "):].strip())
-                            if data_obj.get("type") == "done":
+                            _chunk_type = data_obj.get("type")
+
+                            # [P2-AUDIT-NEW-2] Marcar consumo de tokens. Solo
+                            # `type=="chunk"` (texto streaming del LLM principal)
+                            # cuenta como tokens reales. `progress`/`sentiment`/
+                            # `error` no justifican facturar la cuota.
+                            if _chunk_type == "chunk":
+                                _chunk_observed = True
+
+                            if _chunk_type == "done":
                                 response_text = data_obj.get("response", "")
                                 if response_text:
                                     save_message(session_id, "model", response_text)
-                                    
-                                # Lógica Background (resumir, uso de API, embeddings)
+                                    # `done` con response no-vacío también garantiza
+                                    # consumo de tokens incluso si por alguna razón
+                                    # los chunks intermedios no se observaron.
+                                    _chunk_observed = True
+
+                                # Lógica Background (resumir, embeddings).
+                                # [P2-AUDIT-NEW-2] log_api_usage SE MOVIÓ al finally
+                                # — no va aquí. bg_tasks ahora solo cubre summarization
+                                # + facts extraction.
                                 def bg_tasks():
-                                    if user_id and user_id != "guest" and user_id != session_id:
-                                        log_api_usage(user_id, "gemini_chat")
-                                        
                                     try:
                                         raw_history = get_session_messages(session_id)
                                         recent_history_str = ""
                                         if raw_history:
                                             recent_history_str = "\n".join([f"{m.get('role', 'unknown')}: {m.get('content', '')}" for m in raw_history[-6:]])
-                                        
+
                                         is_plus = plan_tier in ["basic", "plus", "admin", "ultra"]
-                                                
+
                                         if is_plus:
                                             async_extract_and_save_facts(user_id, prompt, recent_history_str)
-                                            
+
                                         summarize_and_prune(session_id)
                                     except Exception as inner_e:
                                         logger.error(f"Error en bg tasks: {inner_e}")
-                                
+
                                 threading.Thread(target=bg_tasks, daemon=True).start()
                         except Exception as e_json:
                             logger.error(f"Error parseando chunk de fin: {e_json}")
-                            
+
+            except GeneratorExit:
+                # [P2-AUDIT-NEW-2] Cliente cerró el SSE (AbortController,
+                # tab close, network drop). NO re-emite chunks (la conexión
+                # ya está muerta) pero el finally SÍ cobra si chunk_observed.
+                # `raise` propaga para que StreamingResponse cierre limpio.
+                logger.info(
+                    f"[P2-AUDIT-NEW-2] SSE abortado por cliente "
+                    f"session={session_id} chunk_observed={_chunk_observed}"
+                )
+                raise
             except Exception as e:
                 traceback.print_exc()
+                # `chunk_observed` puede ser True (excepción tras emitir chunks)
+                # o False (excepción pre-LLM). El finally factura solo si True.
                 yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            finally:
+                # [P2-AUDIT-NEW-2] Billing idempotente. Cubre TODOS los exits:
+                # done OK, GeneratorExit (abort), exception mid-stream.
+                # Solo factura si:
+                #   (a) Aún no se cobró (`_billed` flag, defensivo).
+                #   (b) El LLM emitió al menos un chunk de texto.
+                #   (c) Usuario autenticado (no guest, no session-only).
+                if (
+                    not _billed
+                    and _chunk_observed
+                    and user_id
+                    and user_id != "guest"
+                    and user_id != session_id
+                ):
+                    try:
+                        log_api_usage(user_id, "gemini_chat")
+                        _billed = True
+                    except Exception as _bill_err:
+                        logger.warning(
+                            f"[P2-AUDIT-NEW-2] log_api_usage falló "
+                            f"(best-effort): {_bill_err}"
+                        )
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 

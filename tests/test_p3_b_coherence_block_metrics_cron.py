@@ -190,6 +190,14 @@ class TestActionTakenCounts:
             # [P2-2 · 2026-05-08] sub-bucket de post_swap_revalidation con
             # entry.alerted=True (escaló a system_alerts).
             "post_swap_critical_alerted",
+            # [P3-NEXT-4 · 2026-05-11] Buckets per-surface auxiliar añadidos
+            # cuando P1-NEXT-2 wirearon el helper en T2 / recalc / agent /
+            # cron diario. Cada surface tiene su propio bucket para detectar
+            # drift por origen.
+            "warn_only_chunk_t2",
+            "warn_only_recalc",
+            "warn_only_agent_tool",
+            "warn_only_cron_daily",
         }
         # Solo "degrade" sumó.
         assert meta["counts"]["degrade"] == 1

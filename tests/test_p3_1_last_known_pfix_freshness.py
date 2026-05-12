@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 11)  # P3-NEW-5 también 2026-05-11
+_PFIX_DATE_FLOOR = date(2026, 5, 12)  # P0-PROD-1 audit production-readiness 2026-05-12
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

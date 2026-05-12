@@ -13,6 +13,7 @@ from typing import Optional
 import json
 import traceback
 import threading
+import time
 import sentry_sdk
 
 # [P1-A · 2026-05-08] Marker temporal del proceso. Expuesto vía
@@ -29,7 +30,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P3-LIVE-2 · 2026-05-11"
+_LAST_KNOWN_PFIX = "P3-LIVE-1 · 2026-05-12"
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
@@ -97,6 +98,30 @@ from knobs import _env_int, _env_bool
 # vía env var para sobreprovisionar bajo carga inusual.
 _SCHEDULER_MAX_WORKERS = _env_int("MEALFIT_SCHEDULER_MAX_WORKERS", 32)
 _SCHEDULER_MISFIRE_GRACE_S = _env_int("MEALFIT_SCHEDULER_MISFIRE_GRACE_S", 180)
+
+# [P2-AUDIT-NEW-3 · 2026-05-12] Ventana de gracia post-startup durante la
+# cual los eventos MISSED/ERROR del scheduler NO emiten alerts a
+# `system_alerts` (solo logs). Razón: en cada restart, APScheduler dispara
+# EVENT_JOB_MISSED para todos los jobs cuyo `next_run_time` ya pasó durante
+# el downtime — burst de 15-20 alerts triggered en <1s post-boot que solo
+# añaden ruido (los autoheals P0-LIVE-1 / P0-AUDIT-1 las cierran en <5min).
+#
+# `_APP_START_TIME` se setea en `lifespan()` cuando FastAPI levanta el app.
+# El listener compara `time.time() - _APP_START_TIME` contra el grace; si
+# está dentro, solo log.info — no UPSERT a system_alerts ni breadcrumb.
+#
+# Default 5 min (subido de 2 el [P1-D · 2026-05-12]): el audit 2026-05-12
+# observó un burst que cruzó la ventana de 2min (cascade abierto >35min
+# tras restart porque jobs encolados durante downtime expiraron POSTERIOR
+# al grace=2min). 5min cubre deploys rolling estándar de Easypanel y
+# Nixpacks sin ocultar MISSED genuinos (autoheals P0-LIVE-1 / P0-AUDIT-1
+# + EVENT_JOB_EXECUTED listener P1-NEW-2 siguen cerrando cualquier MISSED
+# real en <5min cuando el job re-ejecuta exitosamente, sin importar el
+# grace). Clamp [0, 15] — 0 desactiva totalmente la supresión (back-compat),
+# 15min es techo generoso para deploys lentos.
+_SCHEDULER_BOOT_GRACE_MIN = max(0, min(_env_int("MEALFIT_SCHEDULER_BOOT_GRACE_MIN", 5), 15))
+_SCHEDULER_BOOT_GRACE_S = _SCHEDULER_BOOT_GRACE_MIN * 60
+_APP_START_TIME: float = 0.0  # set en lifespan()
 # [P2-NEW-F · 2026-05-08] Telemetría: emite a system_alerts cuando un job se
 # salta (MISSED) o falla (ERROR). Knob ON por default; `off`/`0`/`false` lo
 # desactiva. Se lee fresh en cada invocación del listener (`_is_scheduler_telemetry_enabled`)
@@ -128,6 +153,95 @@ except ImportError as e:
     # `if code == EVENT_JOB_EXECUTED` y necesita un valor válido aunque
     # el path nunca corra (HAS_SCHEDULER=False corto-circuita más arriba).
     EVENT_JOB_MISSED = EVENT_JOB_ERROR = EVENT_JOB_EXECUTED = 0  # type: ignore[assignment]
+
+
+# [P1-PERF-1 · 2026-05-12] Cache in-memory de job_ids con alerts abiertas.
+#
+# Por qué existe (audit 2026-05-11):
+#   El listener `EVENT_JOB_EXECUTED` (P1-NEW-2) hacía un PATCH REST a
+#   `/rest/v1/system_alerts?alert_key=in.(scheduler_missed_<job>,scheduler_error_<job>)
+#   &resolved_at=is.null` por CADA job ejecutado, aunque NO existiera alert
+#   pendiente. Con 28+ jobs registrados y ejecuciones cada minuto a cada hora,
+#   eso significaba ~5000+ PATCH/h, la mayoría 200 OK con 0 rows afectadas.
+#   MCP API logs mostraron ~1-3 PATCH/seg sostenido. Desperdicio real:
+#   REST quota + DB CPU + RLS check + HTTP roundtrip.
+#
+# Diseño:
+#   - `_SCHEDULER_JOBS_WITH_OPEN_ALERTS`: set[str] de job_ids cuya alert está
+#     `resolved_at IS NULL`. Mantenido por el propio listener (add en MISSED/
+#     ERROR, discard en EXECUTED post-éxito).
+#   - Cold cache: en lifespan startup refrescamos el set con SELECT contra
+#     DB. Sin esto, primer ciclo post-boot saltaría PATCHes que SÍ deberían
+#     ocurrir (alerts persistentes de pre-restart).
+#   - TTL: si pasaron `_OPEN_ALERTS_CACHE_TTL_S` (default 60s) desde el
+#     último refresh, hacemos sync best-effort para captar mutaciones
+#     fuera del listener (resoluciones manuales, sweeps del cron). Bajo
+#     coste: 1 SELECT por minuto.
+#   - Race: usar `threading.Lock` porque BackgroundScheduler dispatcha en
+#     N threads. El listener es sync; el lock protege add/remove atómico.
+#
+# Trade-off consciente:
+#   El cache es local al proceso. Multi-worker (uvicorn --workers N>1)
+#   tendría N caches divergentes — pero la app usa BackgroundScheduler que
+#   asume 1 proceso (sino tendrías N copias de cada cron). Si en el futuro
+#   se migra a múltiples workers, el cache debería externalizarse a Redis
+#   o a app_kv_store.
+_SCHEDULER_JOBS_WITH_OPEN_ALERTS: set[str] = set()
+_SCHEDULER_OPEN_ALERTS_LOCK = threading.Lock()
+_SCHEDULER_OPEN_ALERTS_LAST_REFRESH: float = 0.0
+_OPEN_ALERTS_CACHE_TTL_S = int(os.environ.get(
+    "MEALFIT_SCHEDULER_OPEN_ALERTS_CACHE_TTL_S", "60"
+) or 60)
+if _OPEN_ALERTS_CACHE_TTL_S < 15:
+    _OPEN_ALERTS_CACHE_TTL_S = 15
+if _OPEN_ALERTS_CACHE_TTL_S > 300:
+    _OPEN_ALERTS_CACHE_TTL_S = 300
+
+
+def _refresh_scheduler_open_alerts_cache(force: bool = False) -> int:
+    """Sincroniza `_SCHEDULER_JOBS_WITH_OPEN_ALERTS` con la realidad de DB.
+
+    Idempotente. Best-effort: cualquier excepción se loguea sin propagar.
+    Retorna el count de jobs en el set post-sync (0 si supabase no
+    disponible o falló).
+    """
+    global _SCHEDULER_OPEN_ALERTS_LAST_REFRESH
+    if not force:
+        if time.time() - _SCHEDULER_OPEN_ALERTS_LAST_REFRESH < _OPEN_ALERTS_CACHE_TTL_S:
+            with _SCHEDULER_OPEN_ALERTS_LOCK:
+                return len(_SCHEDULER_JOBS_WITH_OPEN_ALERTS)
+    if supabase is None:
+        return 0
+    try:
+        # SELECT alerts abiertas; parsear job_id; reconstruir el set.
+        # No paginamos: típicamente <100 alerts abiertas.
+        res = (
+            supabase.table("system_alerts")
+            .select("alert_key")
+            .is_("resolved_at", "null")
+            .or_(
+                "alert_key.like.scheduler_missed_%,alert_key.like.scheduler_error_%"
+            )
+            .execute()
+        )
+        rows = res.data or []
+        new_set: set[str] = set()
+        for r in rows:
+            key = (r or {}).get("alert_key") or ""
+            if key == "scheduler_cascade_missed":
+                continue
+            if key.startswith("scheduler_missed_"):
+                new_set.add(key[len("scheduler_missed_"):])
+            elif key.startswith("scheduler_error_"):
+                new_set.add(key[len("scheduler_error_"):])
+        with _SCHEDULER_OPEN_ALERTS_LOCK:
+            _SCHEDULER_JOBS_WITH_OPEN_ALERTS.clear()
+            _SCHEDULER_JOBS_WITH_OPEN_ALERTS.update(new_set)
+        _SCHEDULER_OPEN_ALERTS_LAST_REFRESH = time.time()
+        return len(new_set)
+    except Exception as e:
+        logger.debug(f"[P1-PERF-1] refresh cache falló (best-effort): {e}")
+        return 0
 
 
 def _scheduler_alert_listener(event):
@@ -165,6 +279,23 @@ def _scheduler_alert_listener(event):
                 f"({_SCHEDULER_MAX_WORKERS} workers), GC pause, DB blip. "
                 f"Revisar pickup lag en logs."
             )
+            # [P2-AUDIT-NEW-3 · 2026-05-12] Suprimir MISSED durante boot grace.
+            # APScheduler dispara EVENT_JOB_MISSED para todos los jobs cuyo
+            # next_run_time pasó durante el downtime del restart — burst de
+            # 15-20 alerts en <1s post-boot que solo añaden ruido. Los
+            # autoheals (P0-LIVE-1 / P0-AUDIT-1 / EVENT_JOB_EXECUTED listener
+            # P1-NEW-2) cierran cualquier MISSED real en <5min cuando el job
+            # re-ejecuta. Log INFO sigue presente para auditoría.
+            if _APP_START_TIME > 0 and _SCHEDULER_BOOT_GRACE_S > 0:
+                _uptime_s = time.time() - _APP_START_TIME
+                if _uptime_s < _SCHEDULER_BOOT_GRACE_S:
+                    logger.info(
+                        f"⏳ [P2-AUDIT-NEW-3] Suprimiendo scheduler_missed_{job_id} "
+                        f"durante boot grace (uptime={_uptime_s:.1f}s < "
+                        f"grace={_SCHEDULER_BOOT_GRACE_S}s). Knob "
+                        f"MEALFIT_SCHEDULER_BOOT_GRACE_MIN={_SCHEDULER_BOOT_GRACE_MIN}."
+                    )
+                    return
         elif code == EVENT_JOB_ERROR:
             event_type = "error"
             severity = "critical"
@@ -175,24 +306,30 @@ def _scheduler_alert_listener(event):
                 f"Job '{job_id}' raised exception during scheduled run at "
                 f"{scheduled_run_time}: {exc_summary}"
             )
+            # [P2-AUDIT-NEW-3 · 2026-05-12] ERROR durante grace NO se suprime.
+            # MISSED post-boot es noise puro (job se reagenda y reintenta);
+            # ERROR es siempre una excepción real que merece visibilidad
+            # aunque ocurra temprano. Si pre-warming dispara ERROR es señal
+            # de que algo está roto del lado del job, NO del scheduler.
         elif code == EVENT_JOB_EXECUTED:
-            # [P1-NEW-2 · 2026-05-10] Auto-resolución de alertas
-            # `scheduler_missed_<job>` y `scheduler_error_<job>` cuando el
-            # mismo job ejecuta exitosamente después.
+            # [P1-NEW-2 · 2026-05-10 · optimizado P1-PERF-1 2026-05-12]
+            # Auto-resolución de alertas `scheduler_missed_<job>` y
+            # `scheduler_error_<job>` cuando el mismo job ejecuta exitosamente.
             #
-            # Bug original (audit 2026-05-10):
-            #   Solo escuchábamos MISSED/ERROR. Las alerts insertadas vivían
-            #   con `resolved_at=NULL` hasta resolución manual. Producción
-            #   acumuló 25 `scheduler_missed_*` unresolved en últimas 24h —
-            #   imposible distinguir "job sigue fallando" vs "ya recuperó".
-            #
-            # Defensivo: solo UPDATE-ea filas con `resolved_at IS NULL` para
-            # no tocar alerts ya cerradas manualmente. Idempotente: si el
-            # job no tenía alert pendiente, el UPDATE es no-op (0 rows).
-            # No emitimos nueva alert ni log INFO por cada EXECUTED — sería
-            # ruidoso con 28+ jobs disparando varias veces por hora.
+            # Pre P1-PERF-1: hacíamos PATCH REST por CADA EXECUTED (~5000+/h
+            # sostenido aunque el UPDATE fuera no-op por 0 rows). Ahora
+            # consultamos el cache in-memory; el PATCH solo ocurre cuando
+            # SÍ existe una alert pendiente para este job_id (cache hit).
+            # Refresh TTL=60s capta cambios out-of-band (resoluciones
+            # manuales, sweeps del cron).
             if supabase is None:
                 return
+            # Refresh perezoso si pasó el TTL — barato (~1 SELECT/min).
+            _refresh_scheduler_open_alerts_cache(force=False)
+            with _SCHEDULER_OPEN_ALERTS_LOCK:
+                needs_patch = job_id in _SCHEDULER_JOBS_WITH_OPEN_ALERTS
+            if not needs_patch:
+                return  # ← skip PATCH no-op
             try:
                 _now_iso = datetime.now(_tz.utc).isoformat()
                 supabase.table("system_alerts").update({
@@ -204,6 +341,10 @@ def _scheduler_alert_listener(event):
                         f"scheduler_error_{job_id}",
                     ],
                 ).is_("resolved_at", "null").execute()
+                # PATCH exitoso → remover del cache. Si el job vuelve a
+                # MISSED/ERROR, la rama de abajo lo re-añade.
+                with _SCHEDULER_OPEN_ALERTS_LOCK:
+                    _SCHEDULER_JOBS_WITH_OPEN_ALERTS.discard(job_id)
             except Exception as _resolve_err:
                 # No emit warning para no spammear; un fallo de auto-resolve
                 # NO debe pausar el scheduler. La alerta original seguirá
@@ -237,15 +378,130 @@ def _scheduler_alert_listener(event):
             "triggered_at": now_iso,
             "resolved_at": None,
         }, on_conflict="alert_key").execute()
+        # [P1-PERF-1] Mantener cache sincrónico: alert recién insertada →
+        # job_id en el set. Próximo EXECUTED disparará el PATCH.
+        with _SCHEDULER_OPEN_ALERTS_LOCK:
+            _SCHEDULER_JOBS_WITH_OPEN_ALERTS.add(job_id)
     except Exception as listener_err:
         logger.warning(
             f"[P2-NEW-F] Listener de scheduler falló para job="
             f"{getattr(event, 'job_id', '?')}: {listener_err}"
         )
 
+async def _hardfloor_autoheal_loop(interval_s: int):
+    """[P0-LIVE-1 · 2026-05-11] Loop asyncio independiente del APScheduler.
+
+    Invoca `_resolve_stale_scheduler_alerts` y `_sweep_stale_llm_circuit_breakers`
+    cada `interval_s` segundos directamente desde el event loop de FastAPI
+    (`asyncio.to_thread` para no bloquear). Garantiza que ambos sweeps corren
+    aunque APScheduler esté saturado — cierra el chicken-and-egg detectado
+    en el audit 2026-05-11:
+
+      - `scheduler_cascade_missed` (CRITICAL) abierto >35min en prod;
+        `_alert_scheduler_cascade_missed` (P0-NEW-2 autoheal) y
+        `_resolve_stale_scheduler_alerts` (P0-AUDIT-1, P2-LIVE-1) están AMBOS
+        dentro del scheduler. Cuando el pool está saturado el autoheal
+        también está MISSED.
+      - CB rows `is_open=true` por 4+ días (`gemini-3.1-pro-preview` desde
+        2026-05-07). `_sweep_stale_llm_circuit_breakers` (P2-NEW-D) está
+        registrado pero pipeline_metrics muestra 0 ticks en 48h.
+
+    Por qué asyncio (no thread):
+      - `BackgroundScheduler` corre en su propio ThreadPoolExecutor (32 workers).
+        El event loop de FastAPI/uvicorn es independiente.
+      - `asyncio.to_thread` despacha el sweep sync a un worker thread del
+        event loop default pool — no compite con el pool del scheduler.
+
+    Knobs:
+      MEALFIT_HARDFLOOR_AUTOHEAL_ENABLED (default True) — kill switch.
+      MEALFIT_HARDFLOOR_AUTOHEAL_INTERVAL_S (default 300, clamp [60, 1800]).
+
+    Tick observable (espejo P3-LIVE-1): emite `_hardfloor_autoheal_tick` a
+    pipeline_metrics en cada iteración para confirmar live que el loop
+    está vivo independiente del scheduler.
+
+    Tooltip-anchor: P0-LIVE-1-START | gap audit 2026-05-11
+    """
+    while True:
+        scheduler_swept = None
+        cb_reset = None
+        autoheal_failed = False
+        cb_failed = False
+        try:
+            from cron_tasks import _resolve_stale_scheduler_alerts
+            await asyncio.to_thread(_resolve_stale_scheduler_alerts)
+            scheduler_swept = "ok"
+        except Exception as _autoheal_err:
+            autoheal_failed = True
+            logger.warning(
+                f"[P0-LIVE-1] _resolve_stale_scheduler_alerts falló "
+                f"(best-effort): {_autoheal_err}"
+            )
+
+        try:
+            from cron_tasks import _sweep_stale_llm_circuit_breakers
+            cb_reset = await asyncio.to_thread(_sweep_stale_llm_circuit_breakers)
+            if cb_reset:
+                logger.info(
+                    f"[P0-LIVE-1] CB hard-floor sweep reset {cb_reset} stale rows."
+                )
+        except Exception as _cb_err:
+            cb_failed = True
+            logger.warning(
+                f"[P0-LIVE-1] _sweep_stale_llm_circuit_breakers falló "
+                f"(best-effort): {_cb_err}"
+            )
+
+        try:
+            from cron_tasks import execute_sql_write
+            await asyncio.to_thread(
+                execute_sql_write,
+                """
+                INSERT INTO pipeline_metrics
+                    (user_id, session_id, node, duration_ms, retries,
+                     tokens_estimated, confidence, metadata)
+                VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+                """,
+                (
+                    "_hardfloor_autoheal_tick",
+                    json.dumps({
+                        "interval_s": interval_s,
+                        "scheduler_swept": scheduler_swept,
+                        "cb_reset": cb_reset if isinstance(cb_reset, int) else None,
+                        "autoheal_failed": autoheal_failed,
+                        "cb_failed": cb_failed,
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as _tick_err:
+            logger.debug(
+                f"[P0-LIVE-1] hard-floor tick emit falló (best-effort): {_tick_err}"
+            )
+
+        try:
+            await asyncio.sleep(interval_s)
+        except asyncio.CancelledError:
+            logger.info("🛟 [P0-LIVE-1] Hard-floor autoheal loop cancelado (shutdown).")
+            raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    
+
+    # [P2-AUDIT-NEW-3 · 2026-05-12] Marca el momento en que el app entra
+    # en lifespan startup. El listener APScheduler usa este timestamp +
+    # _SCHEDULER_BOOT_GRACE_S para suprimir el burst de
+    # `scheduler_missed_*` que APScheduler dispara post-restart (jobs
+    # cuyo next_run_time pasó durante el downtime).
+    global _APP_START_TIME
+    _APP_START_TIME = time.time()
+    if _SCHEDULER_BOOT_GRACE_S > 0:
+        logger.info(
+            f"⏳ [P2-AUDIT-NEW-3] Boot grace activo: scheduler_missed_* "
+            f"suprimidos durante los próximos {_SCHEDULER_BOOT_GRACE_S}s "
+            f"(knob MEALFIT_SCHEDULER_BOOT_GRACE_MIN={_SCHEDULER_BOOT_GRACE_MIN})."
+        )
+
     if connection_pool:
         connection_pool.open()
     if async_connection_pool:
@@ -299,6 +555,48 @@ async def lifespan(app: FastAPI):
             f"[P0-NEW-1-AUTOHEAL] Startup sweep falló (best-effort): {_sweep_err}"
         )
 
+    # [P0-LIVE-2 · 2026-05-11] Startup-run del CB sweep (espejo P0-NEW-1-AUTOHEAL).
+    # Cierra el mismo chicken-and-egg para CB rows stale: el cron periódico
+    # `_sweep_stale_llm_circuit_breakers` (P2-NEW-D) está dentro del scheduler.
+    # Cuando el pool está saturado, las filas con `is_open=true` viven indefinidamente
+    # (audit 2026-05-11: `gemini-3.1-pro-preview` open=true por 4.4 días pese a
+    # sweep diseñado para 2h staleness). Disparar aquí garantiza UNA limpieza por
+    # deploy/restart ANTES de que APScheduler entre en su ciclo de jobs.
+    #
+    # El hard-floor asyncio (P0-LIVE-1, abajo) también invoca este sweep cada
+    # 5min de forma continua — defense-in-depth.
+    try:
+        from cron_tasks import _sweep_stale_llm_circuit_breakers
+        _cb_reset = _sweep_stale_llm_circuit_breakers()
+        logger.info(
+            f"🛡️ [P0-LIVE-2] Startup CB sweep OK (reset={_cb_reset} stale rows)."
+        )
+    except Exception as _cb_sweep_err:
+        logger.warning(
+            f"[P0-LIVE-2] Startup CB sweep falló (best-effort): {_cb_sweep_err}"
+        )
+
+    # [P0-LIVE-1 · 2026-05-11] Hard-floor autoheal asyncio task. Garantiza
+    # sweeps de scheduler alerts + CB rows incluso si APScheduler está
+    # saturado (corre en el event loop, no en el ThreadPoolExecutor del
+    # scheduler). Guardado en app.state para cancelarlo en shutdown.
+    if _env_bool("MEALFIT_HARDFLOOR_AUTOHEAL_ENABLED", True):
+        _hardfloor_interval = _env_int("MEALFIT_HARDFLOOR_AUTOHEAL_INTERVAL_S", 300)
+        _hardfloor_interval = max(60, min(_hardfloor_interval, 1800))
+        app.state.hardfloor_autoheal_task = asyncio.create_task(
+            _hardfloor_autoheal_loop(_hardfloor_interval)
+        )
+        logger.info(
+            f"🛟 [P0-LIVE-1] Hard-floor autoheal asyncio task iniciado "
+            f"(cada {_hardfloor_interval}s, independiente de APScheduler)."
+        )
+    else:
+        app.state.hardfloor_autoheal_task = None
+        logger.info(
+            "🛟 [P0-LIVE-1] Hard-floor autoheal DESACTIVADO via knob "
+            "MEALFIT_HARDFLOOR_AUTOHEAL_ENABLED."
+        )
+
     if HAS_SCHEDULER and scheduler:
         # [P0-NEW-2 · 2026-05-10] `run_proactive_checks` también pasa por el
         # wrapper SSOT de jitter. Knob `MEALFIT_SCHEDULER_JITTER_S` controla
@@ -339,6 +637,20 @@ async def lifespan(app: FastAPI):
             )
         scheduler.start()
         logger.info("⏰ [APScheduler] Tareas proactivas, CRON jobs nocturnos y Background Chunking iniciados.")
+
+        # [P1-PERF-1 · 2026-05-12] Cold-cache de alerts abiertas. Sin este
+        # refresh, el primer ciclo post-restart saltaría PATCHes EXECUTED
+        # que SÍ deberían ocurrir (alerts persistentes de antes del boot).
+        try:
+            n = _refresh_scheduler_open_alerts_cache(force=True)
+            logger.info(
+                f"📥 [P1-PERF-1] Cache `_SCHEDULER_JOBS_WITH_OPEN_ALERTS` "
+                f"populado con {n} entradas (cold start)."
+            )
+        except Exception as _cache_err:
+            logger.debug(
+                f"[P1-PERF-1] cold cache refresh falló (best-effort): {_cache_err}"
+            )
             
     # P1-Q2: warm-up del grafo LangGraph antes de empezar a aceptar tráfico.
     # Mueve la latencia de compile (~ms-cientos-ms) fuera del path de la
@@ -461,7 +773,23 @@ async def lifespan(app: FastAPI):
 
     logger.info("🚀 [FastAPI] Servidor de MealfitRD IA iniciado con éxito en el puerto 3001.")
     yield
-    
+
+    # [P0-LIVE-1 · 2026-05-11] Cancelar hard-floor autoheal task ANTES de
+    # cerrar pools/scheduler. Si `cancel()` deja el task con `await
+    # asyncio.sleep(...)`, propaga `CancelledError` y el `try/except` en
+    # el loop lo loguea limpio.
+    _hardfloor_task = getattr(app.state, "hardfloor_autoheal_task", None)
+    if _hardfloor_task is not None and not _hardfloor_task.done():
+        _hardfloor_task.cancel()
+        try:
+            await _hardfloor_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as _cancel_err:
+            logger.debug(
+                f"[P0-LIVE-1] Cancelación de hard-floor task lanzó: {_cancel_err}"
+            )
+
     if HAS_SCHEDULER and scheduler:
         scheduler.shutdown()
     
@@ -882,40 +1210,74 @@ def api_webhook_process_pending_facts(request: Request, data: dict = Body(...), 
     """
     Endpoint consumido por el Webhook de Supabase (Database Trigger AFTER INSERT en pending_facts_queue).
     Permite procesar asíncronamente y de manera segura la cola de extracción sin depender de demonios en memoria.
+
+    [P0-WEBHOOK-1 · 2026-05-12] Pre-fix: si `WEBHOOK_SECRET` no estaba seteada
+    (`if webhook_secret:` sin else), el check de auth se saltaba enteramente
+    → cualquier atacante podía invocar `process_pending_queue_sync(user_id_ajeno)`
+    con un UUID enumerado. Ahora: en producción, `WEBHOOK_SECRET` faltante
+    rechaza con 503; en cualquier ambiente, la comparación usa
+    `hmac.compare_digest` (constant-time) para no exponer timing side-channel.
+    Anchor: P0-WEBHOOK-1-FAIL-SECURE.
+
+    Nota P1-AUDIT-1 (2026-05-12): el DB trigger que llamaba este endpoint fue
+    eliminado y reemplazado por el cron `_drain_pending_facts_queue`. El
+    endpoint queda preservado por harm-zero pero podría deprecarse en futuro
+    si nadie externo lo consume.
     """
+    import hmac
     try:
-        # 1. Validación de seguridad robusta
+        # [P0-WEBHOOK-1] Validación fail-secure del secret.
         webhook_secret = os.environ.get("WEBHOOK_SECRET")
-        if webhook_secret:
+        is_production = os.environ.get("ENVIRONMENT") == "production"
+
+        if not webhook_secret:
+            if is_production:
+                logger.error(
+                    "❌ [P0-WEBHOOK-1] WEBHOOK_SECRET ausente en producción. "
+                    "Rechazando invocación (pre-fix saltaba el check entero)."
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Webhook secret not configured.",
+                )
+            logger.warning(
+                "⚠️ [DEV] WEBHOOK_SECRET ausente; permitido solo fuera de producción."
+            )
+        else:
             # Extraer token de múltiples fuentes posibles (Supabase custom headers)
-            token = None
+            token = ""
             if authorization and authorization.startswith("Bearer "):
-                token = authorization.split(" ")[1]
+                token = authorization.split(" ", 1)[1]
             elif authorization:
                 token = authorization
-                
-            custom_header_secret = request.headers.get("X-Webhook-Secret")
-            
-            if token != webhook_secret and custom_header_secret != webhook_secret:
+
+            custom_header_secret = request.headers.get("X-Webhook-Secret") or ""
+
+            # constant-time compare en ambos slots — evita timing oracle que
+            # pudiera distinguir secret válido (mismatch en byte N) de
+            # invalidísimo (mismatch en byte 0).
+            token_ok = hmac.compare_digest(token or "", webhook_secret)
+            header_ok = hmac.compare_digest(custom_header_secret, webhook_secret)
+            if not token_ok and not header_ok:
                 logger.warning("🔒 Intento no autorizado al Webhook de hechos (Secret inválido).")
                 raise HTTPException(status_code=401, detail="Unauthorized webhook invocation")
-        
+
         # 2. Extraer el Payload del trigger
         # Supabase webhooks mandan la fila en data["record"] cuando es un trigger INSERT
         record = data.get("record", {})
         user_id = record.get("user_id") or data.get("user_id")
-        
+
         if not user_id:
             logger.warning("⚠️ Webhook llamado sin parametro user_id.")
             return {"success": False, "message": "Falta user_id"}
-            
+
         logger.info(f"⚡ [WEBHOOK RECIBIDO] Procesando cola pendiente para user_id: {user_id}")
-        
+
         # 3. Procesamiento síncrono (garantiza que serverless espere a terminar)
         process_pending_queue_sync(user_id)
-        
+
         return {"success": True, "message": f"Cola procesada para {user_id}"}
-        
+
     except HTTPException:
         raise
     except Exception as e:

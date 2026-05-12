@@ -1,35 +1,30 @@
-"""[P0-HIST-NEW-2 · 2026-05-09] Regression guard: gap de invalidación
-entre `Plan.jsx::savePlanToHistory` y `History.jsx`.
+"""[P0-HIST-NEW-2 · 2026-05-09 · migrado P3-DOC-1 · 2026-05-11] Regression
+guard: handshake `mealfit_history_dirty_at` post-plan-save.
 
-Bug observado en el audit 2026-05-09:
-    `Plan.jsx::savePlanToHistory` (~línea 398) inserta directo a
-    `meal_plans` vía supabase.js (no pasa por el backend), pero NO
-    señalizaba a `History.jsx` que el listado quedó stale. El listener
-    de `visibilitychange` de `History.jsx` tiene un threshold de 60s
-    para evitar fetches espurios por alt-tabs cortos. Resultado: un
-    usuario que guarda un plan en /plan y vuelve a /history en otra
-    pestaña dentro de la ventana de 60s ve el listado pre-insert
-    (sin el plan recién guardado) hasta refresh manual o re-mount.
+Histórico:
+    Bug original (P0-HIST-NEW-2 · 2026-05-09): `Plan.jsx::savePlanToHistory`
+    insertaba directo a `meal_plans` y NO señalizaba a `History.jsx` que
+    el listado quedó stale. Threshold de 60s del listener
+    `visibilitychange` ocultaba el plan recién guardado a usuarios que
+    volvían a /history dentro de esa ventana. Fix original: setItem
+    `mealfit_history_dirty_at` post-insert + bypass del threshold cuando
+    `_dirty=true && ts > _lastFetchedAtRef.current`.
 
-Además: P1-HIST-NEW-7 (mismo audit) recreó el índice
-`idx_chunk_lesson_telemetry_plan_week` que estaba ausente en prod
-aunque la migración p1_3 lo declaraba — la nueva migración
-`p1_hist_new_7_recreate_chunk_lesson_telemetry_plan_week_idx.sql`
-es la SSOT del fix.
+    Migrado en P3-DOC-1 (2026-05-11): audit confirmó que
+    `Plan.jsx::savePlanToHistory` era DEAD CODE (0 callers cross-codebase).
+    El backend ya persiste vía `services._save_plan_and_track_background`
+    post-SSE-completion. La función se eliminó de Plan.jsx; el setItem se
+    movió al callsite real `AssessmentContext.jsx::saveGeneratedPlan`
+    (invocado cuando el usuario acepta el plan generado, justo tras la
+    persistencia backend). El handshake con `History.jsx` se preserva
+    intacto — sólo cambió quién emite la señal.
 
-Fix:
-    1. `Plan.jsx`: tras insert exitoso, escribe `mealfit_history_dirty_at`
-       en `localStorage` con `Date.now()`.
-    2. `History.jsx`: el listener `visibilitychange` lee la key y
-       si su valor supera `_lastFetchedAtRef.current`, fuerza
-       `fetchHistory` aunque `_stale < 60s`.
-    3. Migración FK index garantiza que `/lifetime-lessons` y el cron
-       `_record_chunk_lesson_telemetry` no degraden a seq-scan.
+    Además: P1-HIST-NEW-7 (mismo audit 2026-05-09) recreó el índice
+    `idx_chunk_lesson_telemetry_plan_week` — los tests de migración
+    siguen vivos al final de este archivo.
 
-Este test parsea los sources (mismo patrón que los meta-tests de
-formValidation) — drift detection cross-language frontend↔migrations.
-NO ejecuta browser; solo valida que los anchors textuales estén
-en su sitio.
+Este test parsea los sources (drift detection cross-language
+frontend↔migrations) — NO ejecuta browser; solo valida anchors textuales.
 """
 from __future__ import annotations
 
@@ -42,6 +37,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _PLAN_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Plan.jsx"
 _HISTORY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "History.jsx"
+_ASSESSMENT_CTX = _REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx"
 _MIGRATIONS_DIR = _REPO_ROOT / "supabase" / "migrations"
 _INDEX_MIGRATION = (
     _MIGRATIONS_DIR
@@ -52,79 +48,116 @@ _STORAGE_KEY = "mealfit_history_dirty_at"
 
 
 # ---------------------------------------------------------------------------
-# 1. Plan.jsx: señaliza inserción exitosa
+# 1. AssessmentContext.jsx::saveGeneratedPlan: emite la señal post-SSE-success
 # ---------------------------------------------------------------------------
-def test_plan_jsx_writes_localstorage_on_successful_insert():
-    """`Plan.jsx::savePlanToHistory` debe escribir
-    `mealfit_history_dirty_at` en `localStorage` tras un insert
-    exitoso. Sin esto, `History.jsx` no sabe que el listado está
-    stale y aplica su threshold de 60s ciegamente.
+def test_assessment_context_writes_localstorage_signal():
+    """`AssessmentContext.jsx::saveGeneratedPlan` debe escribir
+    `mealfit_history_dirty_at` en localStorage. Es el callsite real
+    post-SSE-completion (el backend ya persistió el plan en
+    `_save_plan_and_track_background`). Sin esto, `History.jsx` no
+    sabe que el listado está stale y aplica su threshold de 60s
+    ciegamente.
+
+    [P3-DOC-1 · 2026-05-11] Migrado desde Plan.jsx::savePlanToHistory
+    (eliminada por dead code, 0 callers).
     """
-    src = _PLAN_JSX.read_text(encoding="utf-8")
-    # La key debe aparecer textualmente.
+    src = _ASSESSMENT_CTX.read_text(encoding="utf-8")
     assert _STORAGE_KEY in src, (
-        f"`{_STORAGE_KEY}` no encontrado en Plan.jsx. El handshake con "
-        f"History.jsx se rompe — restaurar el `localStorage.setItem` en "
-        f"el bloque `else` de savePlanToHistory."
+        f"`{_STORAGE_KEY}` no encontrado en AssessmentContext.jsx. El "
+        f"handshake con History.jsx se rompe — restaurar el "
+        f"`localStorage.setItem` en `saveGeneratedPlan` post-comentario "
+        f"`NOTA: NO guardamos en Supabase aquí`."
     )
-    # Debe estar en una llamada `setItem`.
     pattern = re.compile(
         r"localStorage\s*\.\s*setItem\s*\(\s*['\"]" + re.escape(_STORAGE_KEY) + r"['\"]"
     )
     assert pattern.search(src), (
-        f"La key `{_STORAGE_KEY}` aparece en Plan.jsx pero no como "
-        f"argumento de `localStorage.setItem`. El handshake requiere un "
-        f"setItem explícito."
+        f"La key `{_STORAGE_KEY}` aparece en AssessmentContext.jsx pero "
+        f"no como argumento de `localStorage.setItem`. El handshake requiere "
+        f"un setItem explícito."
     )
 
 
-def test_plan_jsx_signal_lives_in_success_branch():
-    """El `setItem` debe vivir en el ELSE de `if (saveError)` — si
-    señaliza incluso ante error, History refetcha y vuelve a no ver
-    el plan (porque no se insertó), añadiendo ruido.
-    """
-    src = _PLAN_JSX.read_text(encoding="utf-8")
-    # Bloque desde `if (saveError)` hasta el cierre del catch (heurística:
-    # buscar el tramo que contiene la key y verificar que esté después
-    # de `} else {` y antes del próximo `} catch`).
-    block_match = re.search(
-        r"if\s*\(\s*saveError\s*\)\s*\{[^}]*\}\s*else\s*\{(?P<else_body>[\s\S]*?)\}\s*\}\s*catch",
-        src,
+def test_assessment_context_signal_lives_in_save_generated_plan():
+    """El `setItem` debe estar dentro de `saveGeneratedPlan` específicamente,
+    no en cualquier otro punto del context. saveGeneratedPlan es el callsite
+    invocado tras SSE-success; otros callers (e.g. restorePlan) no deben
+    emitir la señal."""
+    src = _ASSESSMENT_CTX.read_text(encoding="utf-8")
+    # Localizar saveGeneratedPlan body
+    fn_idx = src.find("const saveGeneratedPlan = async")
+    assert fn_idx > 0, (
+        "`const saveGeneratedPlan = async` no encontrado. Si renombraste "
+        "la función o cambiaste su declaración, actualizar este test."
     )
-    assert block_match is not None, (
-        "Estructura `if (saveError) {...} else {...} } catch` no encontrada "
-        "en Plan.jsx::savePlanToHistory. Posible refactor que rompió el "
-        "anchor — revisar y actualizar este test."
-    )
-    else_body = block_match.group("else_body")
-    assert _STORAGE_KEY in else_body, (
-        f"La key `{_STORAGE_KEY}` está en Plan.jsx pero NO en la rama "
-        f"`else` de saveError. Debe ejecutarse SOLO en éxito — un signal "
-        f"en error path causa fetches inútiles."
+    next_const = re.search(r"\n    const \w+\s*=", src[fn_idx + 20:])
+    end = fn_idx + 20 + (next_const.start() if next_const else len(src) - fn_idx - 20)
+    body = src[fn_idx: end]
+    assert _STORAGE_KEY in body, (
+        f"La key `{_STORAGE_KEY}` está en AssessmentContext.jsx pero NO "
+        f"dentro de `saveGeneratedPlan`. Debe vivir ahí — otros callsites "
+        f"emitirían la señal en momentos equivocados (e.g., restorePlan "
+        f"con plan ya viejo causaría refetch innecesario)."
     )
 
 
-def test_plan_jsx_signal_is_try_wrapped():
-    """El `setItem` debe estar en un try/catch: localStorage tira
-    `SecurityError` en modo private/incógnito de algunos browsers.
-    Sin try, el side-effect rompe el flujo de guardado del plan.
-    """
-    src = _PLAN_JSX.read_text(encoding="utf-8")
-    # Buscar el setItem y verificar que la línea/líneas anteriores
-    # contengan un `try {`.
+def test_assessment_context_signal_is_try_wrapped():
+    """El `setItem` debe estar en try/catch: localStorage tira
+    `SecurityError` en private/incógnito. Sin try, el side-effect rompe
+    el flujo de aceptación del plan."""
+    src = _ASSESSMENT_CTX.read_text(encoding="utf-8")
     setitem_pos = src.find(f"setItem('{_STORAGE_KEY}'")
     if setitem_pos < 0:
         setitem_pos = src.find(f'setItem("{_STORAGE_KEY}"')
     assert setitem_pos > 0, (
-        "setItem call no encontrado — test_plan_jsx_writes_localstorage_on_successful_insert "
+        "setItem call no encontrado — test_assessment_context_writes_localstorage_signal "
         "ya falló previamente con mejor mensaje."
     )
-    # Buscar el `try {` más cercano hacia atrás (dentro de ~500 chars).
     preceding = src[max(0, setitem_pos - 500): setitem_pos]
     assert "try {" in preceding, (
         "El `setItem` de la señal NO está envuelto en try/catch. "
         "localStorage puede tirar SecurityError en modo privado — "
         "envolver en try { ... } catch { /* silent */ }."
+    )
+
+
+def test_plan_jsx_save_plan_to_history_removed():
+    """[P3-DOC-1 · 2026-05-11] La función `savePlanToHistory` fue eliminada
+    de Plan.jsx (dead code, 0 callers). Anti-regression: si alguien la
+    re-introduce con un INSERT directo, este test falla.
+
+    Si genuinamente necesitas un fallback frontend-side de persist (e.g.,
+    backend persist falló silente), crear endpoint backend
+    `POST /api/plans/persist-from-stream` con auth + dedupe + INSERT
+    atómico bajo `acquire_meal_plan_advisory_lock(purpose='general')`.
+    NO restaurar el patrón directo `supabase.from('meal_plans').insert()`.
+    """
+    src = _PLAN_JSX.read_text(encoding="utf-8")
+    assert "const savePlanToHistory = async" not in src, (
+        "P3-DOC-1 regresión: la función `savePlanToHistory` reaparecio en "
+        "Plan.jsx. Era dead code (0 callers cross-codebase) + violaba I6 "
+        "(direct INSERT a meal_plans desde frontend). Si necesitas un "
+        "fallback, crear endpoint backend (ver tooltip-anchor "
+        "`P3-DOC-1-DEAD-CODE-REMOVED` en Plan.jsx)."
+    )
+    # Verificar que el INSERT directo no aparece en CÓDIGO ejecutable.
+    # Ignoramos líneas que comienzan con `//` (comentarios) o `*` (JSDoc),
+    # porque mi propio bloque de explicación en Plan.jsx menciona el pattern
+    # como warning anti-regresión. La invariante real es: el CÓDIGO no debe
+    # tener un INSERT directo. Test blanket P1-NEW-A
+    # (test_p1_new_a_frontend_no_direct_meal_plans_write.py) cubre este
+    # contrato a nivel global; acá solo hacemos sanity check específico.
+    code_lines = [
+        ln for ln in src.split("\n")
+        if "supabase.from('meal_plans').insert" in ln
+        and not ln.strip().startswith("//")
+        and not ln.strip().startswith("*")
+    ]
+    assert not code_lines, (
+        f"P3-DOC-1 regresión: encontradas {len(code_lines)} líneas con "
+        f"`supabase.from('meal_plans').insert(...)` que NO son comentarios "
+        f"en Plan.jsx. Violación de invariante I6. Líneas:\n  "
+        + "\n  ".join(code_lines)
     )
 
 

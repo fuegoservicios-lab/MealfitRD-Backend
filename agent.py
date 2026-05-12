@@ -344,6 +344,12 @@ class ChatState(MessagesState):
     updated_fields: dict
     new_plan: dict
     sys_prompt: str
+    # [P2-AUDIT-NEW-1 · 2026-05-12] Acumulador de `_coherence_warnings`
+    # extraídos de los tool_results JSON (hoy solo `modify_single_meal`,
+    # P2-COHERENCE-1). Se propaga al evento SSE `done` para que el
+    # frontend (AgentPage) emita toast no-bloqueante con `emitCoherenceToast`.
+    # Default: lista vacía (no warnings).
+    coherence_warnings: list
 
 def call_model(state: ChatState):
     logger.info(f"🧠 [LANGGRAPH NODE] call_model")
@@ -374,18 +380,63 @@ def execute_tools(state: ChatState):
     
     updated_fields = state.get("updated_fields", {})
     new_plan = state.get("new_plan", None)
-    
+    # [P2-AUDIT-NEW-1 · 2026-05-12] Acumulador de `_coherence_warnings` desde
+    # tool_results. Preserva entries previos del state (rare con un solo
+    # tool_call por turn, pero defensive si el LLM emite múltiples tool_calls
+    # que retornan warnings — extiende la lista en lugar de pisarla).
+    coherence_warnings = list(state.get("coherence_warnings") or [])
+
     tool_messages = []
     
+    # [P0-AGENT-1 · 2026-05-11] Trusted user_id resolution UNA VEZ por
+    # invocación del nodo. Lo usamos para force-override `tool_args["user_id"]`
+    # en CADA tool_call antes de invocar la tool. Patrón espejo de los 2
+    # branches que ya lo hacían inline (`generate_new_plan_from_chat`,
+    # `modify_single_meal`) extendido a TODAS las tools.
+    #
+    # Razón: `tool_args` viene del LLM y antes confiábamos en que la LLM
+    # reusara el `user_id` que el system prompt (`build_tools_instructions`)
+    # le indicaba. Eso es prompt-trustable, NO enforced. Una entrada
+    # adversaria del usuario o contenido inyectado vía recetas importadas /
+    # transcripts de imágenes (vision_agent → chat-context) puede inducir a
+    # la LLM a emitir tool_call con `user_id` ajeno → cross-user write/read
+    # sobre `user_inventory`, `consumed_meals`, `user_facts`, `health_profile`.
+    # Defensa simétrica a la sanitización P1-Q8/P0-A1 del pipeline de
+    # generación, pero aplicada al chat-agent layer.
+    _trusted_user_id = state.get("user_id")
+    _trusted_session_id = state.get("session_id")
+    _trusted_uid = (
+        _trusted_user_id
+        if _trusted_user_id and _trusted_user_id != "guest"
+        else _trusted_session_id
+    )
+
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         for tool_call in last_message.tool_calls:
             tool_name = tool_call["name"]
             tool_args = tool_call["args"]
             tool_id = tool_call["id"]
-            
+
+            # [P0-AGENT-1 · 2026-05-11] Force-override `user_id` en tool_args
+            # ANTES de cualquier branch. Si la LLM pasó un `user_id` distinto
+            # del autenticado (prompt injection o hallucinación), logueamos
+            # WARN para telemetría y lo reescribimos al trusted. Cubre TODAS
+            # las 9 tools de `agent_tools` (todas aceptan `user_id` en su
+            # signature). NO confiamos en que cada branch nuevo del if/elif
+            # se acuerde de hacer el override — se hace acá una sola vez.
+            if isinstance(tool_args, dict):
+                _llm_uid = tool_args.get("user_id")
+                if _llm_uid and _trusted_uid and _llm_uid != _trusted_uid:
+                    logger.warning(
+                        f"🛡️ [P0-AGENT-1] tool={tool_name} llm_user_id={_llm_uid!r} "
+                        f"!= trusted={_trusted_uid!r}. Override aplicado. Posible "
+                        f"prompt injection — verificar último mensaje del usuario."
+                    )
+                tool_args["user_id"] = _trusted_uid
+
             tool_result = ""
             logger.debug(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
-            
+
             if tool_name == "update_form_field":
                 field = tool_args.get("field")
                 new_value = tool_args.get("new_value", "")
@@ -441,6 +492,15 @@ def execute_tools(state: ChatState):
                         updated_plan_record = get_latest_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
                         if updated_plan_record and "plan_data" in updated_plan_record:
                             new_plan = updated_plan_record["plan_data"]
+                        # [P2-AUDIT-NEW-1 · 2026-05-12] Extraer
+                        # `_coherence_warnings` ANTES de pisar `tool_result`
+                        # con el friendly string. El tool `modify_single_meal`
+                        # los inyecta cuando el guard P2-COHERENCE-1 detectó
+                        # divergencia recetas↔lista post-modificación. Se
+                        # propagan al state → SSE `done` → frontend toast.
+                        _tool_warnings = parsed_mod.get("_coherence_warnings")
+                        if isinstance(_tool_warnings, list) and _tool_warnings:
+                            coherence_warnings.extend(_tool_warnings)
                         tool_result = f"La comida fue modificada exitosamente. La nueva comida es: {parsed_mod['modified_meal'].get('name', 'Comida actualizada')}. Dile al usuario que su plan ya fue actualizado."
                 except Exception:
                     pass
@@ -452,7 +512,16 @@ def execute_tools(state: ChatState):
                         
             tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
             
-    return {"messages": tool_messages, "updated_fields": updated_fields, "new_plan": new_plan}
+    return {
+        "messages": tool_messages,
+        "updated_fields": updated_fields,
+        "new_plan": new_plan,
+        # [P2-AUDIT-NEW-1 · 2026-05-12] Propagar warnings al state. El
+        # stream wrapper (`chat_with_agent_stream`) lo lee de
+        # `final_state_snapshot.values["coherence_warnings"]` y lo incluye
+        # en el SSE event `done` para que el frontend emita toast.
+        "coherence_warnings": coherence_warnings,
+    }
 
 def route_tools(state: ChatState):
     messages = state["messages"]
@@ -1087,10 +1156,16 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     final_content = ""
     updated_fields = {}
     new_plan = None
-    
+    # [P2-AUDIT-NEW-1 · 2026-05-12] Coherence warnings acumulados por el
+    # nodo `execute_tools` (P2-COHERENCE-1 emite desde `modify_single_meal`
+    # cuando el guard detecta drift recetas↔lista post-modificación).
+    # Default [] — sin warnings, frontend silencia el toast.
+    coherence_warnings = []
+
     if final_state_snapshot and final_state_snapshot.values:
         updated_fields = final_state_snapshot.values.get("updated_fields", {})
         new_plan = final_state_snapshot.values.get("new_plan", None)
+        coherence_warnings = final_state_snapshot.values.get("coherence_warnings") or []
         final_messages = final_state_snapshot.values.get("messages", [])
         if final_messages:
             last_msg = final_messages[-1]
@@ -1100,4 +1175,4 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             final_content = str(extracted_content)
 
     logger.info("✅ [CHAT STREAM] Finalizado con éxito.")
-    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan})}\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings})}\n\n"

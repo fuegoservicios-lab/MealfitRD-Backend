@@ -2277,6 +2277,15 @@ ESCALATION_REASONS = (
     "unrecoverable_tz_unresolved",
     # Pausa indefinida `missing_prior_lessons`; unblock cron agotó vías.
     "missing_prior_lessons_unrecoverable",
+    # [P1-NEW-D · 2026-05-11] Chunk `pending` con `execute_after` que cae
+    # MÁS ALLÁ del horizonte temporal del plan (plan_start +
+    # (total_days_requested + 7 días gracia) < execute_after). Indica que
+    # el chunk fue anclado a una fecha que el plan ya no cubrirá: o el
+    # plan se acortó (regeneración), o el cálculo de execute_after usó un
+    # snapshot stale del `total_days_requested`. El chunk nunca disparará
+    # útilmente — mejor escalarlo proactivamente que dejarlo "pending"
+    # hasta su `execute_after` distante (zombie de larga duración).
+    "execute_after_beyond_plan_window",
 )
 
 

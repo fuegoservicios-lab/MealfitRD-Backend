@@ -1453,62 +1453,32 @@ def _attach_pantry_degraded_response_meta(response: Optional[Response], plan_dat
     return summary
 
 
-# ─── TEMPORARY DEBUG ENDPOINT (REMOVE AFTER DIAGNOSIS) ───
-@router.get("/debug-scaling/{user_id}")
-def debug_scaling(user_id: str):
-    """Temporary: compare shopping list output for household sizes 1-6."""
-    from shopping_calculator import get_shopping_list_delta
-    from db_plans import get_latest_meal_plan_with_id as _get_plan
-    
-    plan_record = _get_plan(user_id)
-    
-    # Fallback: try to find ANY recent plan if user_id yields nothing
-    if not plan_record:
-        try:
-            from db_core import execute_sql_query
-            row = execute_sql_query(
-                "SELECT id, user_id, plan_data FROM meal_plans ORDER BY created_at DESC LIMIT 1",
-                fetch_one=True
-            )
-            if row:
-                plan_record = row
-                user_id = row.get("user_id", user_id)
-            else:
-                return {"error": f"No plans exist in database at all"}
-        except Exception as e:
-            return {"error": f"No plan found for {user_id} and fallback failed: {e}"}
-    
-    if not plan_record:
-        return {"error": f"No plan found for {user_id}"}
-    
-    plan_data = plan_record["plan_data"]
-    days = plan_data.get("days", [])
-    num_days = len(days)
-    
-    KEYWORDS = ['pechuga', 'pavo', 'yogurt', 'lechosa', 'aguacate', 'arroz', 'pollo', 'cebolla', 'tomate', 'melón', 'melon']
-    
-    comparison = {}
-    for h in [1, 2, 3, 4, 5, 6]:
-        scaled = get_shopping_list_delta(user_id, plan_data, is_new_plan=True, structured=True, multiplier=float(h))
-        row = {}
-        for item in scaled:
-            name = item.get("name", "")
-            if any(kw in name.lower() for kw in KEYWORDS):
-                row[name] = {
-                    "display_qty": item.get("display_qty"),
-                    "market_qty": item.get("market_qty"),
-                    "market_unit": item.get("market_unit"),
-                }
-        comparison[f"{h}_personas"] = row
-    
-    return {
-        "found_user_id": user_id,
-        "plan_id": plan_record.get("id"),
-        "num_days_in_plan": num_days,
-        "base_duration_scale": round(7.0 / max(1, num_days), 4),
-        "comparison": comparison
-    }
-# ─── END TEMPORARY DEBUG ENDPOINT ───
+# [P1-AUDIT-NEW-1 · 2026-05-12] `/debug-scaling/{user_id}` ELIMINADO.
+# ────────────────────────────────────────────────────────────────────────────
+# El endpoint vivía aquí marcado como "TEMPORARY DEBUG (REMOVE AFTER DIAGNOSIS)"
+# pero quedó vivo en producción. Tenía DOS defectos críticos:
+#
+#   1. Sin `Depends(get_verified_user_id)` ni `_verify_admin_token`. Cualquiera
+#      con la URL pública del backend podía leer el `plan_data` completo de
+#      cualquier `user_id` válido (UUIDs leak vía URLs/PDFs/screenshots).
+#
+#   2. Fallback IDOR: si el `user_id` solicitado no tenía plan, ejecutaba
+#      `SELECT id, user_id, plan_data FROM meal_plans ORDER BY created_at
+#      DESC LIMIT 1` y RETORNABA el plan más reciente de OTRO usuario,
+#      incluyendo `found_user_id` ajeno → enumerador trivial de UUIDs activos.
+#
+# Audit cross-codebase (`grep -r debug-scaling`) confirmó CERO callers: ni
+# frontend, ni tests, ni scripts internos. La utilidad ad-hoc se reemplazó
+# por el script local [backend/check_scaling.py](backend/check_scaling.py)
+# que SRE puede ejecutar contra una DB readonly sin exponer un endpoint HTTP.
+#
+# Si en el futuro se necesita un endpoint admin de inspección de scaling
+# (poco probable — la cobertura ya la dan los tests P3-A multiplier_e2e),
+# crear handler bajo `/admin/plans/scaling-inspect/{plan_id}` gateado con
+# `_verify_admin_token` (mismo patrón que `/admin/chunks/stuck`) y SIN
+# fallback cross-user.
+#
+# Tooltip-anchor: P1-AUDIT-NEW-1-DEBUG-ENDPOINT-REMOVED
 
 from constants import PLAN_CHUNK_SIZE, split_with_absorb
 
@@ -2117,6 +2087,18 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
 
         # [P0-2] Resumen de pantry-degraded + headers para la rama de shift exitoso.
         _p02_summary = _attach_pantry_degraded_response_meta(response, shifted_data)
+
+        # [P2-LIVE-7 · 2026-05-11] Audit api_usage. `verify_api_quota` solo LEE
+        # el contador mensual — no incrementa. Si no llamamos `log_api_usage`,
+        # el paywall no cuenta este shift contra el cap del usuario y un
+        # cliente abusivo podría disparar shifts infinitos para forzar
+        # regeneración de chunks.
+        if verified_user_id:
+            try:
+                log_api_usage(verified_user_id, "shift_plan")
+            except Exception as _audit_err:
+                logger.warning(f"[P2-LIVE-7] log_api_usage shift_plan falló: {_audit_err}")
+
         return {
             "success": True,
             "message": "Plan actualizado a la fecha.",
@@ -2850,6 +2832,20 @@ async def api_analyze_stream(
                 if session_id:
                     _clear_cancelled_session(session_id)
 
+                # [P2-LIVE-7 · 2026-05-11] Audit api_usage. `verify_api_quota`
+                # solo lee — sin log_api_usage, streaming pipelines no contaban
+                # contra el cap mensual del usuario. Log en `finally` para que
+                # se cargue independiente del path de salida (success / error
+                # / cancel): el `_pipeline_task` ya consumió compute LLM al
+                # arrancar, así que el usuario debe pagar.
+                if user_id and user_id != "guest" and user_id != session_id:
+                    try:
+                        log_api_usage(user_id, "gemini_analyze_stream")
+                    except Exception as _audit_err:
+                        logger.warning(
+                            f"[P2-LIVE-7] log_api_usage analyze_stream falló: {_audit_err}"
+                        )
+
         return StreamingResponse(
             event_generator(),
             media_type="text/event-stream",
@@ -2913,6 +2909,70 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         req_meal_index = data.get("meal_index") if isinstance(data.get("meal_index"), int) else None
         req_name = data.get("name")
         req_recipe_original = data.get("recipe")
+
+        # [P1-NEW-11 · 2026-05-11] Pre-LLM dedup check. Cierra el modo
+        # de fallo "quota burn por click duplicado":
+        #   1. Usuario clickea "Expandir receta" → request #1 en vuelo.
+        #   2. User clickea otra vez (impaciencia / doble click → 100-300ms).
+        #   3. Request #2 llega al backend. ANTES de P1-NEW-11, ambos
+        #      pasaban verify_api_quota, ambos llamaban log_api_usage,
+        #      ambos llamaban expand_recipe_agent → 2× tokens Gemini.
+        #
+        # Fix: pre-check del meal target. Si ya tiene `isExpanded=True`
+        # AND su `recipe` ya no es la original (es la expansion previa),
+        # retornar early con la recipe cached. NO grabar log_api_usage
+        # (cuota no consumida).
+        #
+        # Solo activo si tenemos plan_id+day_index+meal_index del cliente
+        # (cliente moderno post-P1-HIST-RECIPE-1 los manda). Si faltan,
+        # caemos al path legacy (mantiene compat con clientes viejos).
+        #
+        # NO cierra el 5% residual de requests CONCURRENTES exactos (ambos
+        # leen pre-fix antes de que el primero haga commit). Para ese
+        # caso: app_kv_store advisory lock similar a P3-NEW-9 — fuera
+        # del scope de este P-fix porque YAGNI bajo telemetría real.
+        if (
+            user_id and user_id != "guest"
+            and req_plan_id
+            and req_day_index is not None
+            and req_meal_index is not None
+        ):
+            try:
+                from db_core import execute_sql_query as _exec_q_dedup
+                pre_row = _exec_q_dedup(
+                    "SELECT plan_data->'days'->%s->'meals'->%s AS meal FROM meal_plans WHERE id = %s AND user_id = %s",
+                    (req_day_index, req_meal_index, req_plan_id, user_id),
+                    fetch_one=True,
+                )
+                if pre_row and isinstance(pre_row.get("meal"), dict):
+                    existing_meal = pre_row["meal"]
+                    already_expanded = (
+                        existing_meal.get("isExpanded") is True
+                        and existing_meal.get("name") == req_name
+                        and isinstance(existing_meal.get("recipe"), str)
+                        and existing_meal["recipe"] != req_recipe_original
+                    )
+                    if already_expanded:
+                        logger.info(
+                            f"[P1-NEW-11] recipe_expand dedup: meal "
+                            f"day={req_day_index} meal={req_meal_index} "
+                            f"plan={req_plan_id} ya tiene isExpanded=True. "
+                            f"Skip LLM call, return cached recipe."
+                        )
+                        return {
+                            "success": True,
+                            "expanded_recipe": existing_meal["recipe"],
+                            "skipped_llm": True,
+                            "skip_reason": "already_expanded",
+                        }
+            except Exception as _dedup_err:
+                # Best-effort: si el dedup falla por DB, caemos al path
+                # normal (mejor quemar quota una vez extra que abortar
+                # el endpoint entero).
+                logger.debug(
+                    f"[P1-NEW-11] dedup pre-check falló (best-effort): "
+                    f"{_dedup_err}"
+                )
 
         if user_id and user_id != "guest":
             log_api_usage(user_id, "gemini_recipe_expand")
@@ -4007,6 +4067,39 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         plan_data["aggregated_shopping_list_weekly"] = scaled_7
         plan_data["aggregated_shopping_list_biweekly"] = scaled_15_hybrid
         plan_data["aggregated_shopping_list_monthly"] = scaled_30_hybrid
+
+        # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
+        # escalada. Antes, /recalculate-shopping-list persistía
+        # aggregated_shopping_list* sin invocar run_shopping_coherence_guard —
+        # un recalc cliente (Pantry add/delete + Dashboard) podía dejar la
+        # lista divergente vs recetas sin retry ni telemetría. Cierre del
+        # gap del audit 2026-05-11.
+        #
+        # Modo: `warn` porque el caller es síncrono y bloquear con 400
+        # rompe UX cuando la divergencia viene de un edge case del
+        # multiplier escalado (P3-A ya cubre escala lineal). Si
+        # divergencias críticas aparecen sistémicamente, el cron diario
+        # las alertará; cliente sigue viendo lista usable.
+        # `action_taken="warn_only_recalc"` distingue origen post-mortem.
+        # [P2-COHERENCE-1 · 2026-05-11] Capturamos `divergences` para retornar
+        # `_coherence_warnings` en la response. El frontend puede renderear un
+        # toast no-bloqueante "lista revisada — algunos items pueden necesitar
+        # ajuste manual" cuando el guard reportó issues. NO escalamos a block
+        # acá (síncrono) porque rompería la UX del recalc; solo telemetría
+        # frontend complementaria al cron diario.
+        _recalc_divergences: list = []
+        try:
+            from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_recalc
+            _recalc_divergences, _ = _coh_recalc(
+                plan_data,
+                multiplier=household_multiplier,
+                mode_override="warn",
+                attempt=1,
+                action_taken="warn_only_recalc",
+                plan_id_hint=plan_id,
+            )
+        except Exception as _coh_recalc_e:
+            logger.warning(f"[RECALC] coherence guard helper falló (no aborta): {_coh_recalc_e}")
         
         # Solo limpiar `is_restocked` si los parámetros cambiaron realmente
         prev_hh = plan_data.get("calc_household_size")
@@ -4045,10 +4138,22 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         update_meal_plan_data(plan_id, plan_data, user_id=user_id)
 
         logger.info(f"✅ [RECALC] Listas recalculadas exitosamente ×{household_size} personas")
-        
+
+        # [P2-COHERENCE-1 · 2026-05-11] `_coherence_warnings` para que el
+        # frontend muestre toast no-bloqueante si el guard detectó drift
+        # recetas↔lista. Lista vacía cuando todo OK. Cap de 5 items vía
+        # `summarize_divergences_for_ui` evita payloads gigantes.
+        _coherence_warnings = []
+        if _recalc_divergences:
+            try:
+                from shopping_calculator import summarize_divergences_for_ui
+                _coherence_warnings = summarize_divergences_for_ui(_recalc_divergences, max_items=5)
+            except Exception as _sum_e:
+                logger.warning(f"[RECALC/P2-COH-1] summarize_divergences_for_ui falló: {_sum_e}")
+
         # Devolver el plan_data actualizado directamente para evitar race conditions
         # (el frontend no necesita re-fetch de Supabase)
-        return {"success": True, "plan_data": plan_data}
+        return {"success": True, "plan_data": plan_data, "_coherence_warnings": _coherence_warnings}
 
     except HTTPException:
         # [P2-NEW-B · 2026-05-11] Propagar el 404 del ownership check
@@ -4803,6 +4908,15 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
                 updated_at = NOW()
             WHERE id = %s AND user_id = %s
         """, (plan_id, verified_user_id))
+
+        # [P2-LIVE-7 · 2026-05-11] Audit api_usage (mismo motivo que /shift-plan:
+        # verify_api_quota solo lee). Sin esto, un atacante podría retry-chunkear
+        # ilimitadamente para forzar re-ejecución del worker LLM sin tocar su
+        # cap mensual.
+        try:
+            log_api_usage(verified_user_id, "retry_chunk")
+        except Exception as _audit_err:
+            logger.warning(f"[P2-LIVE-7] log_api_usage retry_chunk falló: {_audit_err}")
 
         return {"success": True, "message": "Chunk reenviado a la cola"}
         # P0-HIST-IDOR-1-END
@@ -7744,6 +7858,14 @@ def api_regenerate_dead_lettered_simplified(
             f"chunk={chunk_id} week={chunk_row['week_number']} re-encolado en flexible_mode."
         )
 
+        # [P2-LIVE-7 · 2026-05-11] Audit api_usage. Mismo razonamiento que
+        # /retry-chunk: el endpoint cobra cuota al validar pero no
+        # incrementaba el contador. Re-encolar chunk = futuro LLM call.
+        try:
+            log_api_usage(verified_user_id, "regenerate_simplified")
+        except Exception as _audit_err:
+            logger.warning(f"[P2-LIVE-7] log_api_usage regenerate_simplified falló: {_audit_err}")
+
         return {
             "success": True,
             "chunk_id": chunk_id,
@@ -7831,6 +7953,15 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
                 updated_at = NOW()
             WHERE id = %s AND user_id = %s
         """, (plan_id, verified_user_id))
+
+        # [P2-LIVE-7 · 2026-05-11] Audit api_usage. Cada chunk re-encolado
+        # consume un LLM call cuando el worker lo procese — debe contar
+        # contra el cap mensual.
+        if regenerated > 0 and verified_user_id:
+            try:
+                log_api_usage(verified_user_id, "regen_degraded")
+            except Exception as _audit_err:
+                logger.warning(f"[P2-LIVE-7] log_api_usage regen_degraded falló: {_audit_err}")
 
         return {
             "success": True,

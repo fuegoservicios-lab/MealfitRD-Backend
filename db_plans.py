@@ -958,6 +958,24 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: str = None
     """[P1-NEW-3 · 2026-05-10] Actualiza el plan_data JSONB de un plan
     filtrando por `(id, user_id)` cuando se provee `user_id`.
 
+    [P1-NEXT-1 · 2026-05-11] El UPDATE full-overwrite se ejecuta dentro
+    de una transacción que adquiere `acquire_meal_plan_advisory_lock(
+    cursor, plan_id, purpose='general')` ANTES del UPDATE. Mismo
+    `purpose='general'` que `_chunk_worker` T1/T2, `api_shift_plan` y
+    `_background_shift_plan_for_user` — garantiza serialización
+    inter-worker contra lost-update (invariante I7 de CLAUDE.md).
+
+    Antes de P1-NEXT-1, este helper hacía `execute_sql_write` plano
+    sin lock: los 4 callsites producción (`/recipe/expand`,
+    `/recalculate-shopping-list`, `proactive_agent` JIT week-2,
+    `tools.modify_single_meal`) entraban en race read-modify-write
+    con `_chunk_worker` T2 que también full-overwrite plan_data tras
+    cada chunk. Síntoma: una mutación bonafide se perdía silenciosamente
+    si el cron commiteaba después. El test P1-NEW-C no lo detectaba
+    porque scaneaba el patrón literal `UPDATE … SET plan_data = %s::jsonb`
+    en `routers/plans.py`, mientras el helper usa el adapter `Jsonb(...)`
+    en `db_plans.py` — fuera del scope del test.
+
     Antes el helper hacía `UPDATE … WHERE id = %s` sin ownership check —
     delegaba 100% al caller la responsabilidad de validar ownership. Un
     callsite futuro que olvidara el check (como ocurrió originalmente en
@@ -978,6 +996,8 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: str = None
         (path supabase-py) si el UPDATE afectó alguna fila.
       - `False`/`[]`/`None` si la fila no existe, no pertenece al
         usuario, o el cliente Supabase está caído.
+
+    Tooltip-anchor: P1-NEXT-1-LOCK-START | test_p1_next_1_update_meal_plan_data_holds_advisory_lock
     """
     try:
         if user_id is None:
@@ -987,30 +1007,39 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: str = None
                 f"degrada a legacy WHERE id. Migrar el callsite para "
                 f"pasar user_id."
             )
-            if connection_pool:
-                from psycopg.types.json import Jsonb
-                execute_sql_write(
-                    "UPDATE meal_plans SET plan_data = %s WHERE id = %s",
-                    (Jsonb(new_plan_data), plan_id),
-                )
-                return True
-            else:
-                if not supabase:
-                    return None
-                res = supabase.table("meal_plans").update({"plan_data": new_plan_data}).eq("id", plan_id).execute()
-                return res.data
-        # Path nuevo con ownership a DB-level. Mismo patrón que
-        # P0-HIST-IDOR-1/2 cerraron con `AND user_id = %s` defense-in-depth.
         if connection_pool:
             from psycopg.types.json import Jsonb
-            execute_sql_write(
-                "UPDATE meal_plans SET plan_data = %s WHERE id = %s AND user_id = %s",
-                (Jsonb(new_plan_data), plan_id, user_id),
-            )
+            # [P1-NEXT-1 · 2026-05-11] El lock + UPDATE viven en la MISMA
+            # transacción. `pg_advisory_xact_lock` (vía
+            # `acquire_meal_plan_advisory_lock`) se libera al commit/rollback.
+            # Mismo purpose='general' que _chunk_worker T1/T2 y api_shift_plan
+            # → todos los writers full-overwrite del mismo plan se serializan.
+            with connection_pool.connection() as conn:
+                with conn.transaction():
+                    with conn.cursor() as cursor:
+                        acquire_meal_plan_advisory_lock(cursor, plan_id, purpose="general")
+                        if user_id is None:
+                            cursor.execute(
+                                "UPDATE meal_plans SET plan_data = %s WHERE id = %s",
+                                (Jsonb(new_plan_data), plan_id),
+                            )
+                        else:
+                            # Path nuevo con ownership a DB-level. Mismo patrón
+                            # que P0-HIST-IDOR-1/2 cerraron con `AND user_id = %s`
+                            # defense-in-depth (invariante I2).
+                            cursor.execute(
+                                "UPDATE meal_plans SET plan_data = %s WHERE id = %s AND user_id = %s",
+                                (Jsonb(new_plan_data), plan_id, user_id),
+                            )
             return True
+        # Fallback supabase-py (dev/local sin connection_pool). No hay
+        # advisory locks via PostgREST → fallback documentado como
+        # back-compat dev-only. En prod connection_pool siempre presente.
+        if not supabase:
+            return None
+        if user_id is None:
+            res = supabase.table("meal_plans").update({"plan_data": new_plan_data}).eq("id", plan_id).execute()
         else:
-            if not supabase:
-                return None
             res = (
                 supabase.table("meal_plans")
                 .update({"plan_data": new_plan_data})
@@ -1018,7 +1047,7 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: str = None
                 .eq("user_id", user_id)
                 .execute()
             )
-            return res.data
+        return res.data
     except Exception as e:
         logger.error(f"Error actualizando plan_data: {e}")
         return None

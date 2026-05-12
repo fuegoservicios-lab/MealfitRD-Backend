@@ -158,8 +158,19 @@ class TestCompareExpectedVsAggregated:
         assert divs[0]["food"] == "Cilantro"
         assert divs[0]["hypothesis"] == "cap_swallowed_modifier"
 
-    def test_unit_mismatch(self):
-        """Food en ambos pero la unit de expected falta en aggregated."""
+    def test_unit_mismatch(self, monkeypatch):
+        """Food en ambos pero la unit de expected falta en aggregated.
+
+        [P2-UNIT-CONV-1 · 2026-05-11] El converter por default está True
+        post-flip. Con converter ON, `cda` (volumen) se normaliza a `ml`,
+        cambiando el `unit` reportado en la divergencia y rompiendo
+        `next(d for d in divs if d["unit"] == "cda")`. Forzamos converter
+        OFF para preservar la semántica original del test (validar que el
+        guard reporta `unit_mismatch` para una mezcla cda↔unidad sin
+        normalización). Si el caso normalizado debe testarse, añadir
+        sub-test separado con converter ON.
+        """
+        monkeypatch.setenv("MEALFIT_COHERENCE_UNIT_CONVERTER_ENABLED", "false")
         exp = {"Canela": {"cda": 3.0}}
         agg = {"Canela": {"unidad": 1.0}}  # cap exact-match en otra unit
         divs = compare_expected_vs_aggregated(exp, agg)

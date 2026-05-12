@@ -107,7 +107,7 @@ from constants import (
 # `_log_active_knobs()` no muestran overrides aplicados a estos crons → SRE
 # que cambia un knob en prod no puede confirmar que tomó efecto. Patrón
 # espejo de P1-3 (shopping_calculator) y P3-NEW-D (auto-registry).
-from graph_orchestrator import run_plan_pipeline, _env_int, _env_float
+from graph_orchestrator import run_plan_pipeline, _env_int, _env_float, _env_bool
 from memory_manager import build_memory_context
 from services import _save_plan_and_track_background
 from agent import analyze_preferences_agent
@@ -698,108 +698,222 @@ def _shopping_coherence_alert_job():
         cap_swallowed_modifier_count / N_planes > X.
       MEALFIT_COH_ALERT_PLAN_FRACTION  (default 0.10) — alerta si
         planes_con_divergencia / N_planes > Y.
+      MEALFIT_COHERENCE_CRON_PERSIST_HISTORY (default True, P2-NEXT-2) —
+        kill switch para append/persist de `_shopping_coherence_block_history`
+        con `action_taken="warn_only_cron_daily"`. Cierra el gap legacy
+        de planes pre-P1-NEXT-2 que nunca recibieron history; los nuevos
+        ya la reciben en write-time (T2/recalc/agent tool). Knob permite
+        rollback sin redeploy si el persist genera contención con write
+        paths.
 
-    NO muta planes — `mode_override='warn'` previene mutación retroactiva
-    de `_shopping_coherence_block` sobre planes ya entregados al usuario.
+    [P2-NEXT-2 · 2026-05-11] Persiste `_shopping_coherence_block_history`
+    via helper SSOT `run_shopping_coherence_guard_and_append_history` +
+    `update_meal_plan_data` (que adquiere advisory lock interno, P1-NEXT-1).
+    Antes de P2-NEXT-2 el cron era pure read-only: planes legacy quedaban
+    sin history aunque el guard detectara divergencias 24h después.
+    Mode='warn' preserva el contrato P1-shop-coh-1 (NO setea
+    `_shopping_coherence_block` retroactivamente sobre planes ya
+    entregados), solo populariza history para el cron P3-B y observability.
+
+    [P2-LIVE-9 · 2026-05-11] Tick observable patrón P3-LIVE-1 / P1-LIVE-4:
+    emite `_shopping_coherence_alert_job_tick` a `pipeline_metrics` SIEMPRE
+    (try/finally). Sin esto, el cron diario 04:00 UTC era invisible cuando
+    no había divergencias críticas — audit live 2026-05-11 no podía confirmar
+    si el job corrió ese día durante la cascada del scheduler. El tick
+    transmite los counters internos (n_plans, plans_with_div, cap_count,
+    persisted_count, persist_errors, eval_errors, alert_emitted, skip_reason)
+    para diagnóstico independiente del log INFO/ERROR del summary.
     """
-    from collections import Counter
-
-    # [P1-A · 2026-05-08] `_env_int`/`_env_float` registran en `_KNOBS_REGISTRY`.
-    # `_env_float` con validator `0 < v < 1` cae al default si el operador setea
-    # un valor fuera de rango (e.g. "1.5" o "-0.1") en lugar de propagar valor
-    # absurdo a la lógica de alerta. `_env_int` ya maneja parse-failures
-    # internamente (loguea WARNING + cae al default + marca `parse_failed=True`).
-    min_plans = _env_int("MEALFIT_COH_ALERT_MIN_PLANS", 5)
-    cap_ratio_threshold = _env_float(
-        "MEALFIT_COH_ALERT_CAP_RATIO", 0.05, validator=lambda v: 0.0 < v < 1.0
-    )
-    plan_fraction_threshold = _env_float(
-        "MEALFIT_COH_ALERT_PLAN_FRACTION", 0.10, validator=lambda v: 0.0 < v < 1.0
-    )
+    # [P2-LIVE-9 · 2026-05-11] Observability flags pre-inicializados para
+    # que el tick en `finally:` reporte estado consistente aunque haya
+    # early return (supabase no init, fetch falla, < min_plans, etc).
+    _tick_n_plans = 0
+    _tick_plans_with_div = 0
+    _tick_cap_count = 0
+    _tick_eval_errors = 0
+    _tick_persisted_count = 0
+    _tick_persist_errors = 0
+    _tick_alert_emitted = False
+    _tick_persist_history_enabled = None  # type: ignore[assignment]
+    _tick_skip_reason = None
 
     try:
-        from db_core import supabase
-    except Exception as e:
-        logger.warning(f"[COH-ALERT] db_core import falló: {e}")
-        return
+        from collections import Counter
 
-    if not supabase:
-        logger.warning("[COH-ALERT] supabase no inicializado — skip.")
-        return
-
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    try:
-        # [P1-B 2026-05-07] meal_plans no tiene columna `is_active`; el filtro
-        # `gte(created_at, cutoff)` ya restringe a planes recientes (24h).
-        res = (
-            supabase.table("meal_plans")
-            .select("id,plan_data")
-            .gte("created_at", cutoff)
-            .limit(500)
-            .execute()
+        # [P1-A · 2026-05-08] `_env_int`/`_env_float` registran en `_KNOBS_REGISTRY`.
+        # `_env_float` con validator `0 < v < 1` cae al default si el operador setea
+        # un valor fuera de rango (e.g. "1.5" o "-0.1") en lugar de propagar valor
+        # absurdo a la lógica de alerta. `_env_int` ya maneja parse-failures
+        # internamente (loguea WARNING + cae al default + marca `parse_failed=True`).
+        min_plans = _env_int("MEALFIT_COH_ALERT_MIN_PLANS", 5)
+        cap_ratio_threshold = _env_float(
+            "MEALFIT_COH_ALERT_CAP_RATIO", 0.05, validator=lambda v: 0.0 < v < 1.0
         )
-        plans = res.data or []
-    except Exception as e:
-        logger.warning(f"[COH-ALERT] fetch planes falló: {e}")
-        return
+        plan_fraction_threshold = _env_float(
+            "MEALFIT_COH_ALERT_PLAN_FRACTION", 0.10, validator=lambda v: 0.0 < v < 1.0
+        )
+        # [P2-NEXT-2 · 2026-05-11] Kill switch para el persist del history.
+        persist_history_enabled = _env_bool("MEALFIT_COHERENCE_CRON_PERSIST_HISTORY", True)
+        _tick_persist_history_enabled = persist_history_enabled
 
-    if len(plans) < min_plans:
-        logger.info(f"[COH-ALERT 24h] {len(plans)} planes (< {min_plans} mín) — skip.")
-        return
+        try:
+            from db_core import supabase
+        except Exception as e:
+            logger.warning(f"[COH-ALERT] db_core import falló: {e}")
+            _tick_skip_reason = "db_core_import_failed"
+            return
 
-    try:
-        from shopping_calculator import run_shopping_coherence_guard
-    except Exception as e:
-        logger.warning(f"[COH-ALERT] import guard falló: {e}")
-        return
+        if not supabase:
+            logger.warning("[COH-ALERT] supabase no inicializado — skip.")
+            _tick_skip_reason = "supabase_not_initialized"
+            return
 
-    plans_with_div = 0
-    by_hypothesis = Counter()
-    by_food = Counter()
-    eval_errors = 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        try:
+            res = (
+                supabase.table("meal_plans")
+                .select("id,user_id,plan_data")
+                .gte("created_at", cutoff)
+                .limit(500)
+                .execute()
+            )
+            plans = res.data or []
+        except Exception as e:
+            logger.warning(f"[COH-ALERT] fetch planes falló: {e}")
+            _tick_skip_reason = "fetch_plans_failed"
+            return
 
-    for plan_record in plans:
-        plan_data = plan_record.get("plan_data") or {}
-        if isinstance(plan_data, str):
-            try:
-                plan_data = json.loads(plan_data)
-            except Exception:
+        _tick_n_plans = len(plans)
+
+        if len(plans) < min_plans:
+            logger.info(f"[COH-ALERT 24h] {len(plans)} planes (< {min_plans} mín) — skip.")
+            _tick_skip_reason = "below_min_plans"
+            return
+
+        try:
+            from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_cron
+            from db_plans import update_meal_plan_data as _persist_plan_data
+        except Exception as e:
+            logger.warning(f"[COH-ALERT] import guard/persist falló: {e}")
+            _tick_skip_reason = "guard_persist_import_failed"
+            return
+
+        plans_with_div = 0
+        by_hypothesis = Counter()
+        by_food = Counter()
+        eval_errors = 0
+        persisted_count = 0
+        persist_errors = 0
+
+        for plan_record in plans:
+            plan_data = plan_record.get("plan_data") or {}
+            if isinstance(plan_data, str):
+                try:
+                    plan_data = json.loads(plan_data)
+                except Exception:
+                    eval_errors += 1
+                    continue
+            if not isinstance(plan_data, dict):
                 eval_errors += 1
                 continue
-        if not isinstance(plan_data, dict):
-            eval_errors += 1
-            continue
+            try:
+                mult_cached = plan_data.get("calc_household_multiplier")
+                divs, block_set = _coh_cron(
+                    plan_data,
+                    multiplier=mult_cached,
+                    mode_override="warn",
+                    attempt=1,
+                    action_taken="warn_only_cron_daily",
+                    plan_id_hint=plan_record.get("id"),
+                )
+            except Exception as e:
+                logger.debug(f"[COH-ALERT] guard reventó en plan {plan_record.get('id')}: {e}")
+                eval_errors += 1
+                continue
+            if divs:
+                plans_with_div += 1
+                for d in divs:
+                    by_hypothesis[d.get("hypothesis", "unknown")] += 1
+                    by_food[d.get("food", "")] += 1
+
+                if persist_history_enabled:
+                    plan_id = plan_record.get("id")
+                    user_id = plan_record.get("user_id")
+                    if plan_id and user_id:
+                        try:
+                            _persist_plan_data(plan_id, plan_data, user_id=user_id)
+                            persisted_count += 1
+                        except Exception as persist_e:
+                            persist_errors += 1
+                            logger.debug(
+                                f"[COH-ALERT/PERSIST] plan {plan_id} no persistido: {persist_e}"
+                            )
+                    else:
+                        persist_errors += 1
+                        logger.debug(
+                            f"[COH-ALERT/PERSIST] plan {plan_id} sin user_id en SELECT — skip persist."
+                        )
+
+        n = len(plans)
+        plan_fraction = plans_with_div / n if n else 0.0
+        cap_count = by_hypothesis.get("cap_swallowed_modifier", 0)
+        cap_ratio = cap_count / n if n else 0.0
+
+        # P2-LIVE-9: propagar a flags del tick
+        _tick_plans_with_div = plans_with_div
+        _tick_cap_count = cap_count
+        _tick_eval_errors = eval_errors
+        _tick_persisted_count = persisted_count
+        _tick_persist_errors = persist_errors
+
+        summary = (
+            f"[COH-ALERT 24h] {n} planes evaluados ({eval_errors} errores parsing). "
+            f"{plans_with_div} con divergencias ({plan_fraction * 100:.1f}%). "
+            f"Hipótesis: {dict(by_hypothesis)}. "
+            f"Top foods: {dict(by_food.most_common(5))}. "
+            f"Persisted history: {persisted_count} (errors: {persist_errors}, "
+            f"knob_enabled={persist_history_enabled})"
+        )
+
+        if cap_ratio > cap_ratio_threshold or plan_fraction > plan_fraction_threshold:
+            logger.error(f"🚨 {summary} (cap_ratio={cap_ratio:.2%}, plan_fraction={plan_fraction:.2%})")
+            _tick_alert_emitted = True
+        else:
+            logger.info(summary)
+    finally:
+        # [P2-LIVE-9 · 2026-05-11] Tick observable SIEMPRE (patrón P3-LIVE-1
+        # / P1-LIVE-4). Confirma que el cron diario 04:00 UTC corrió aunque
+        # NO emitiera alerta. `skip_reason` distingue 7 paths:
+        # ok / db_core_import_failed / supabase_not_initialized /
+        # fetch_plans_failed / below_min_plans / guard_persist_import_failed /
+        # (None = full run completado).
         try:
-            # [P1-C 2026-05-07] Propagar multiplier cacheado para que la capa
-            # magnitudes (v2) compare con el mismo escalado que el aggregator.
-            mult_cached = plan_data.get("calc_household_multiplier")
-            divs = run_shopping_coherence_guard(plan_data, mode_override="warn", multiplier=mult_cached)
-        except Exception as e:
-            logger.debug(f"[COH-ALERT] guard reventó en plan {plan_record.get('id')}: {e}")
-            eval_errors += 1
-            continue
-        if divs:
-            plans_with_div += 1
-            for d in divs:
-                by_hypothesis[d.get("hypothesis", "unknown")] += 1
-                by_food[d.get("food", "")] += 1
-
-    n = len(plans)
-    plan_fraction = plans_with_div / n if n else 0.0
-    cap_count = by_hypothesis.get("cap_swallowed_modifier", 0)
-    cap_ratio = cap_count / n if n else 0.0
-
-    summary = (
-        f"[COH-ALERT 24h] {n} planes evaluados ({eval_errors} errores parsing). "
-        f"{plans_with_div} con divergencias ({plan_fraction * 100:.1f}%). "
-        f"Hipótesis: {dict(by_hypothesis)}. "
-        f"Top foods: {dict(by_food.most_common(5))}"
-    )
-
-    if cap_ratio > cap_ratio_threshold or plan_fraction > plan_fraction_threshold:
-        logger.error(f"🚨 {summary} (cap_ratio={cap_ratio:.2%}, plan_fraction={plan_fraction:.2%})")
-    else:
-        logger.info(summary)
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics
+                    (user_id, session_id, node, duration_ms, retries,
+                     tokens_estimated, confidence, metadata)
+                VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+                """,
+                (
+                    "_shopping_coherence_alert_job_tick",
+                    json.dumps({
+                        "n_plans": _tick_n_plans,
+                        "plans_with_div": _tick_plans_with_div,
+                        "cap_count": _tick_cap_count,
+                        "eval_errors": _tick_eval_errors,
+                        "persisted_count": _tick_persisted_count,
+                        "persist_errors": _tick_persist_errors,
+                        "alert_emitted": _tick_alert_emitted,
+                        "persist_history_enabled": _tick_persist_history_enabled,
+                        "skip_reason": _tick_skip_reason,
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as _tick_err:
+            logger.debug(
+                f"[P2-LIVE-9/COH-ALERT] tick emit falló (best-effort): {_tick_err}"
+            )
 
 
 def _aggregate_coherence_block_history_metrics():
@@ -921,6 +1035,18 @@ def _aggregate_coherence_block_history_metrics():
         # alert_type='post_swap_coherence' triggered en la misma ventana.
         # Si diverge, hay un bug en la cooldown lógica o en el INSERT.
         "post_swap_critical_alerted": 0,
+        # [P3-NEXT-4 · 2026-05-11] Buckets para las 4 surfaces auxiliares
+        # cubiertas por P1-NEXT-2 + P2-NEXT-2 que invocan el helper SSOT
+        # con `action_taken="warn_only_<surface>"`. Antes de P3-NEXT-4
+        # estos valores caían al else-branch (debug log + ignore) — el
+        # cron horario reportaba subconteo silente. Ahora cada surface
+        # tiene su propio bucket para detectar drift (ej.: si
+        # `warn_only_chunk_t2` se dispara mucho más que `not_applicable`,
+        # los chunked plans están degradando coherencia vs assemble path).
+        "warn_only_chunk_t2":    0,  # _chunk_worker T2 (multi-week)
+        "warn_only_recalc":      0,  # /recalculate-shopping-list
+        "warn_only_agent_tool":  0,  # tools.modify_single_meal
+        "warn_only_cron_daily":  0,  # _shopping_coherence_alert_job 04:00 UTC
     }
     plans_with_history = 0
     plans_examined = 0
@@ -981,10 +1107,39 @@ def _aggregate_coherence_block_history_metrics():
                     or counts["none_other"] > 0)
     confidence_val = 0.0 if is_anomalous else 1.0
 
+    # [P3-NEXT-4 · 2026-05-11] Breakdown agregado por surface origen.
+    # Permite dashboards/alertas comparar volumen entre surfaces sin
+    # tener que sumar buckets individuales en cada query. Total =
+    # entries únicamente con action_taken poblada (excluye null buckets
+    # null_block_set/none_other que son invariant violations).
+    surface_breakdown = {
+        # Pipeline LangGraph completo (single-week, assemble_plan_node).
+        # `not_applicable` es el placeholder P2-2 para warn-mode ahí.
+        # degrade/reject_*/hydration_error solo provienen del path block del assemble.
+        "single_week_assemble": (
+            counts["not_applicable"]
+            + counts["degrade"]
+            + counts["reject_minor"]
+            + counts["reject_high"]
+            + counts["hydration_error"]
+        ),
+        # Multi-week (chunked) T2 — P1-NEXT-2.
+        "chunked_t2":     counts["warn_only_chunk_t2"],
+        # Pantry/Dashboard recalcs — P1-NEXT-2.
+        "recalc":         counts["warn_only_recalc"],
+        # Agent tool swaps — P1-NEXT-2.
+        "agent_tool":     counts["warn_only_agent_tool"],
+        # Cron diario 04:00 UTC (planes legacy pre-P1-NEXT-2) — P2-NEXT-2.
+        "cron_daily":     counts["warn_only_cron_daily"],
+        # Post-swap revalidation (assemble + swap path).
+        "post_swap":      counts["post_swap_revalidation"],
+    }
+
     summary = (
         f"[P3-B/COH-METRICS lookback={lookback_h}h] "
         f"plans_examined={plans_examined} with_history={plans_with_history} "
-        f"entries={total_entries} parse_errors={parse_errors} counts={counts}"
+        f"entries={total_entries} parse_errors={parse_errors} "
+        f"counts={counts} surface_breakdown={surface_breakdown}"
     )
     if is_anomalous:
         logger.warning(f"🚨 {summary} (anomalous — see counts.null_block_set / hydration_error)")
@@ -1011,6 +1166,12 @@ def _aggregate_coherence_block_history_metrics():
                     "total_entries": total_entries,
                     "parse_errors": parse_errors,
                     "counts": counts,
+                    # [P3-NEXT-4 · 2026-05-11] Breakdown por surface origen.
+                    # Cierre del gap del audit 2026-05-11: antes el cron solo
+                    # veía `not_applicable` (assemble) y los reject_* — los
+                    # buckets de T2/recalc/agent_tool/cron_daily caían en
+                    # else-branch y se perdían silentemente en el conteo.
+                    "surface_breakdown": surface_breakdown,
                     "anomalous": is_anomalous,
                 }, ensure_ascii=False),
             ),
@@ -1477,6 +1638,138 @@ def _alert_coherence_watchdog_silent():
 
 
 # ---------------------------------------------------------------------------
+# [P2-OBSERVABILITY-1 · 2026-05-12] Watchdog del tick observable
+# `_hardfloor_autoheal_tick` (P0-LIVE-1). El loop `_hardfloor_autoheal_loop`
+# emite ese tick cada `MEALFIT_HARDFLOOR_AUTOHEAL_INTERVAL_S` (default 300s).
+# Si falla en silencio (e.g., el cierre P0-PROD-1 quedó rezagado en prod y
+# los INSERT a pipeline_metrics crashean por columna `is_guest`), perdemos
+# la única señal "el binario está vivo y los autoheals corren". Audit
+# 2026-05-11 detectó exactamente eso: pipeline_metrics tenía 3 nodos en 2h
+# (5 ticks de aggregate + 1 scheduler-sweep + 1 cb-sweep) y CERO de
+# hardfloor — pero ningún alert avisaba.
+#
+# Diseño:
+#   SELECT 1 FROM pipeline_metrics WHERE node = '_hardfloor_autoheal_tick'
+#   AND created_at > NOW() - make_interval(mins => threshold_min) LIMIT 1.
+#   - Row encontrado → tick vivo. Auto-resolve la alert previa si existía.
+#   - Row vacío → silencio. UPSERT `pipeline_metrics_silence` (warning).
+#
+# Trade-off consciente:
+#   El watchdog mismo emite tick `_pipeline_metrics_silence_check_tick`
+#   cada vez que corre, para que si CRON ENTERO está caído este watchdog
+#   ALSO esté silencioso (acepta — el detector de cascade P0-2 cubre eso).
+#   El alert `pipeline_metrics_silence` específicamente captura "scheduler
+#   vivo + cron específico mudo" → modo no cubierto por cascade.
+# ---------------------------------------------------------------------------
+def _alert_pipeline_metrics_silence():
+    """[P2-OBSERVABILITY-1 · 2026-05-12] Alerta cuando el tick observable
+    `_hardfloor_autoheal_tick` no aparece en pipeline_metrics durante una
+    ventana — síntoma de deploy lag (P0-PROD-1) u otra causa silenciosa.
+
+    Knobs (registrados vía `_env_int`):
+      MEALFIT_PIPELINE_METRICS_SILENCE_NODE         (default `_hardfloor_autoheal_tick`)
+        Nodo a observar. String — leído directo de `os.environ`.
+      MEALFIT_PIPELINE_METRICS_SILENCE_ALERT_MIN    (default 30)
+        Ventana de silencio en min. Default = 6× interval default
+        (300s = 5min) — burst transitorios no disparan; deploy lag real sí.
+      MEALFIT_PIPELINE_METRICS_SILENCE_INTERVAL_MIN (default 10)
+        Frecuencia del cron, consumida por register_plan_chunk_scheduler.
+
+    NO depende de Supabase REST: usa `execute_sql_query` (DB directa).
+    """
+    threshold_min = _env_int("MEALFIT_PIPELINE_METRICS_SILENCE_ALERT_MIN", 30)
+    if threshold_min < 5:
+        threshold_min = 5
+    if threshold_min > 720:
+        threshold_min = 720  # 12h hard ceiling — si el operador setea más, está roto
+
+    observed_node = (
+        os.environ.get("MEALFIT_PIPELINE_METRICS_SILENCE_NODE", "")
+        or "_hardfloor_autoheal_tick"
+    ).strip()
+    if not observed_node:
+        observed_node = "_hardfloor_autoheal_tick"
+
+    try:
+        row = execute_sql_query(
+            """
+            SELECT 1
+              FROM pipeline_metrics
+             WHERE node = %s
+               AND created_at > NOW() - make_interval(mins => %s::int)
+             LIMIT 1
+            """,
+            (observed_node, int(threshold_min)),
+            fetch_one=True,
+        )
+    except Exception as e:
+        logger.warning(
+            f"[P2-OBSERVABILITY-1] SELECT pipeline_metrics falló: {e}"
+        )
+        return
+
+    if row:
+        # Tick vivo en la ventana — todo OK. Resolver alerta previa.
+        try:
+            execute_sql_write(
+                """
+                UPDATE system_alerts
+                   SET resolved_at = NOW()
+                 WHERE alert_key = %s
+                   AND resolved_at IS NULL
+                """,
+                ("pipeline_metrics_silence",),
+            )
+        except Exception:
+            pass
+        return
+
+    # Silencio prolongado → emitir alerta.
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'pipeline_metrics_silence', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message,
+                resolved_at = NULL
+            """,
+            (
+                "pipeline_metrics_silence",
+                f"Telemetría {observed_node} mudo >{threshold_min}min",
+                (
+                    f"`pipeline_metrics` no recibió ninguna fila con "
+                    f"`node={observed_node!r}` en los últimos "
+                    f"{threshold_min}min. Causas probables: "
+                    f"(1) deploy lag — binario en EasyPanel anterior al "
+                    f"cierre P0-PROD-1 sigue crasheando inserts con `is_guest`; "
+                    f"(2) `_hardfloor_autoheal_loop` cancelado en shutdown "
+                    f"y no re-arrancado; (3) drift de schema en pipeline_metrics. "
+                    f"Verificar `/api/system/admin/deploy-lag/check`, logs "
+                    f"Postgres y `/health/version`."
+                ),
+                json.dumps({
+                    "observed_node": observed_node,
+                    "threshold_min": threshold_min,
+                    "expected_interval_default_s": 300,
+                }, ensure_ascii=False),
+                json.dumps([]),
+            ),
+        )
+        logger.warning(
+            f"[P2-OBSERVABILITY-1] silencio detectado: "
+            f"node={observed_node!r} sin ticks en últimos {threshold_min}min"
+        )
+    except Exception as e:
+        logger.error(
+            f"[P2-OBSERVABILITY-1] No se pudo persistir alerta: {e}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # [P0-2-SCHEDULER-CASCADE · 2026-05-10] Watchdog de saturación del scheduler.
 #
 # Problema observado (audit 2026-05-10): `system_alerts` registró 25+ filas
@@ -1576,8 +1869,8 @@ def _alert_scheduler_cascade_missed():
             """
             INSERT INTO pipeline_metrics
                 (user_id, session_id, node, duration_ms, retries,
-                 tokens_estimated, confidence, metadata, is_guest)
-            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb, true)
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
             """,
             (
                 "_scheduler_cascade_check_tick",
@@ -1675,8 +1968,8 @@ def _alert_scheduler_cascade_missed():
             """
             INSERT INTO pipeline_metrics
                 (user_id, session_id, node, duration_ms, retries,
-                 tokens_estimated, confidence, metadata, is_guest)
-            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb, true)
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
             """,
             (
                 "_scheduler_cascade_autoheal",
@@ -1886,6 +2179,296 @@ def _resolve_stale_scheduler_alerts() -> None:
             f"[P2-LIVE-1/CASCADE-PARENT-SWEEP] sweep parent falló (best-effort): {e}"
         )
 
+    # [P2-NEW-E · 2026-05-11] Cuarto sweep: hard-cap del parent
+    # `scheduler_cascade_missed` por edad absoluta, INDEPENDIENTE de la
+    # condición de estabilización del 3er sweep (P2-LIVE-1).
+    #
+    # Por qué existe:
+    #   El 3er sweep cierra el parent SOLO cuando 0 children abiertos AND
+    #   0 nuevos MISSED en `MEALFIT_SCHEDULER_CASCADE_STABILIZATION_MIN`
+    #   (default 60min). Bajo churn sostenido (23+ crons disparándose en
+    #   bursts cada minuto-0, alguno cruzando el grace de 180s), cada
+    #   tick re-emite `scheduler_missed_<job>` antes de que la ventana
+    #   de 60min se cumpla → el 3er sweep NUNCA cierra el parent y el
+    #   alert critical queda visible indefinidamente (alert fatigue).
+    #   Observado live 2026-05-11 18:08 UTC: 9 children re-emitiéndose
+    #   cada hora durante 24h+.
+    #
+    # Diseño:
+    #   Si `triggered_at < NOW() - MEALFIT_SCHEDULER_CASCADE_HARD_CAP_HOURS`
+    #   (default 2h post-P2-AUDIT-3, bajado de 6h tras audit 2026-05-12),
+    #   forzar `resolved_at = NOW()` IGNORANDO el estado de los children.
+    #   Antes del UPDATE registrar un Sentry breadcrumb con el count de
+    #   children abiertos para que SRE pueda decidir si escalar capacidad
+    #   (jobs persistentemente saturados) o aceptar el churn (jobs no
+    #   time-sensitive con grace amplio).
+    #
+    # [P2-AUDIT-3 · 2026-05-12] Bump del default 6h→2h. Razón observacional:
+    #   el audit production-readiness 2026-05-12 observó cascade abierta
+    #   hace ~10min tras un burst de scheduler_missed transitorio. 6h era
+    #   generoso (cubría cascadas largas reales) pero también dejaba el
+    #   alert CRITICAL en dashboards 6h tras un burst post-restart trivial.
+    #   2h es el sweet-spot: si la cascada es real, el detector la re-emite
+    #   en 30min (MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN) — el alert NO se
+    #   pierde, solo su "edad" se resetea a una ventana <2h. Cambio se
+    #   puede revertir sin redeploy: `MEALFIT_SCHEDULER_CASCADE_HARD_CAP_HOURS=6`.
+    #   Clamp explícito [1, 6] añadido — operador que setea 99 ve clamp a 6.
+    #
+    # Trade-off consciente:
+    #   El hard-cap puede cerrar prematuramente un parent legítimamente
+    #   activo (cascada real >2h). Mitigación: el cron
+    #   `_alert_scheduler_cascade_missed` re-emite el parent en su próxima
+    #   evaluación (cada 30min default, `MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN`)
+    #   si la condición sigue activa. Resultado: el alert NO se pierde,
+    #   pero su "edad" se resetea a una ventana <=2h — observabilidad útil
+    #   sin alert fatigue.
+    #
+    # Idempotente: si parent ya cerrado o edad <2h, 0 rows actualizadas.
+    hard_cap_swept = 0
+    hard_cap_failed = False
+    hard_cap_children_open = 0
+    hard_cap_h = _env_int("MEALFIT_SCHEDULER_CASCADE_HARD_CAP_HOURS", 2)
+    # [P2-AUDIT-3 · 2026-05-12] Clamp explícito [1, 6]. Antes solo `< 1` saltaba
+    # a 1. Operador que setea 99 ahora ve 6 (alineado con el default histórico
+    # pre-audit, máximo aceptable para alert fatigue).
+    hard_cap_h = max(1, min(hard_cap_h, 6))
+    try:
+        # Snapshot del count de children abiertos AHORA — antes del UPDATE
+        # para que la metadata refleje el estado pre-cierre. Aceptamos
+        # un margen de ms entre este SELECT y el UPDATE: race con auto-
+        # resolve del listener es benigna (count de menos no cambia la
+        # decisión, solo el log).
+        try:
+            cnt_row = execute_sql_query(
+                """
+                SELECT COUNT(*) AS n
+                FROM system_alerts
+                WHERE resolved_at IS NULL
+                  AND (
+                        alert_key LIKE 'scheduler_missed_%%'
+                     OR alert_key LIKE 'scheduler_error_%%'
+                  )
+                """,
+                tuple(),
+                fetch_one=True,
+            ) or {}
+            hard_cap_children_open = int(cnt_row.get("n") or 0)
+        except Exception as cnt_err:
+            logger.debug(
+                f"[P2-NEW-E/HARD-CAP] count children pre-update falló: {cnt_err}"
+            )
+
+        resolved_hard_cap = execute_sql_write(
+            """
+            UPDATE system_alerts
+               SET resolved_at = NOW()
+             WHERE alert_key = 'scheduler_cascade_missed'
+               AND resolved_at IS NULL
+               AND triggered_at < NOW() - make_interval(hours => %s)
+             RETURNING alert_key, triggered_at
+            """,
+            (int(hard_cap_h),),
+            returning=True,
+        ) or []
+        hard_cap_swept = (
+            len(resolved_hard_cap) if isinstance(resolved_hard_cap, list) else 0
+        )
+        if hard_cap_swept:
+            logger.warning(
+                f"⏰ [P2-NEW-E/CASCADE-HARD-CAP] Cerré parent "
+                f"`scheduler_cascade_missed` por edad absoluta "
+                f">{hard_cap_h}h. children_open_at_close={hard_cap_children_open}. "
+                f"Si children_open > 0, el cluster está saturado — "
+                f"considerar escalar workers/grace_time."
+            )
+            # Breadcrumb a Sentry — señal para SRE de saturación
+            # persistente. Best-effort: la ausencia de Sentry NO afecta
+            # el resolve (que ya ocurrió). Import lazy paralelo al
+            # patrón de `_alert_scheduler_cascade_missed` (cron_tasks.py:1768).
+            try:
+                import sentry_sdk  # type: ignore[import-not-found]
+                sentry_sdk.capture_message(
+                    "[CASCADE_HARD_CAP_REACHED] scheduler_cascade_missed "
+                    f"force-resolved at age >{hard_cap_h}h "
+                    f"with children_open={hard_cap_children_open}",
+                    level="warning",
+                )
+            except Exception as sentry_err:
+                logger.debug(
+                    f"[P2-NEW-E/HARD-CAP] Sentry breadcrumb falló: {sentry_err}"
+                )
+    except Exception as e:
+        hard_cap_failed = True
+        logger.warning(
+            f"[P2-NEW-E/CASCADE-HARD-CAP] sweep hard-cap falló (best-effort): {e}"
+        )
+
+    # [P2-LIVE-8 · 2026-05-11] Quinto sweep: hard-cap por edad para alerts
+    # individuales `scheduler_missed_<job_id>` (NO scheduler_cascade_missed
+    # que tiene su propio hard-cap en sweep #4, NO scheduler_error_* que
+    # merecen TTL más largo para investigación).
+    #
+    # Por qué existe (audit live 2026-05-11):
+    #   Sweep #1 standard TTL=24h cierra estas alerts en general. PERO el
+    #   audit detectó casos donde un job recurring missed (ej.
+    #   `proactive_refresh_pantry_snapshots`) sigue sin ejecutarse 1.5h+
+    #   tras la cascada → la alert queda visible mientras el job NO
+    #   recupera (no dispara EVENT_JOB_EXECUTED → listener P1-NEW-2 no
+    #   resuelve). 24h es demasiado largo para señal accionable: cuando
+    #   la alert sigue abierta >12h, claramente el job está stuck y NO
+    #   va a recuperar via listener — mejor cerrarla y dejar que el
+    #   detector P0-2 re-emita en su próximo tick si el problema persiste
+    #   (mismo trade-off consciente que el cascade hard-cap P2-NEW-E).
+    #
+    # Diseño:
+    #   UPDATE rows con `alert_key LIKE 'scheduler_missed_%' AND alert_key
+    #   != 'scheduler_cascade_missed'` cuya `triggered_at` excede
+    #   `MEALFIT_SCHEDULER_MISSED_HARD_CAP_HOURS` (default 12, clamp [1,168]).
+    #   Idempotente; best-effort.
+    missed_hard_cap_swept = 0
+    missed_hard_cap_failed = False
+    missed_hard_cap_h = _env_int("MEALFIT_SCHEDULER_MISSED_HARD_CAP_HOURS", 12)
+    if missed_hard_cap_h < 1:
+        missed_hard_cap_h = 1
+    if missed_hard_cap_h > 168:
+        missed_hard_cap_h = 168
+    try:
+        resolved_missed_hard = execute_sql_write(
+            """
+            UPDATE system_alerts
+               SET resolved_at = NOW()
+             WHERE resolved_at IS NULL
+               AND alert_key LIKE 'scheduler_missed_%%'
+               AND alert_key <> 'scheduler_cascade_missed'
+               AND triggered_at < NOW() - make_interval(hours => %s)
+             RETURNING alert_key
+            """,
+            (int(missed_hard_cap_h),),
+            returning=True,
+        ) or []
+        missed_hard_cap_swept = (
+            len(resolved_missed_hard) if isinstance(resolved_missed_hard, list) else 0
+        )
+        if missed_hard_cap_swept:
+            sample = [
+                r.get("alert_key") for r in resolved_missed_hard[:5]
+                if isinstance(r, dict)
+            ]
+            logger.info(
+                f"⏰ [P2-LIVE-8/MISSED-HARD-CAP] Cerré {missed_hard_cap_swept} "
+                f"alerts scheduler_missed_<job> por edad >{missed_hard_cap_h}h. "
+                f"Sample: {sample}. Si el job sigue stuck, P0-2 detector "
+                f"re-emitirá en su próximo tick."
+            )
+    except Exception as e:
+        missed_hard_cap_failed = True
+        logger.warning(
+            f"[P2-LIVE-8/MISSED-HARD-CAP] sweep hard-cap missed falló (best-effort): {e}"
+        )
+
+    # [P1-SCHEDULER-1 · 2026-05-12] Sexto sweep: orphan job_id detection.
+    #
+    # Por qué existe (audit 2026-05-11):
+    #   Los sweeps #1-#5 cierran alerts por TTL (24h std, 12h missed hard-cap,
+    #   etc.) o por estabilización de cascade. Pero hay un caso intermedio
+    #   que ninguno cubre eficientemente: un job_id que YA NO EXISTE en el
+    #   scheduler vivo (renombrado entre deploys, removido de
+    #   register_plan_chunk_scheduler, one-off UUID one-off que terminó).
+    #   El listener EVENT_JOB_EXECUTED (P1-NEW-2) NUNCA disparará para esos
+    #   alerts → quedan abiertos hasta el TTL (12-24h) generando alert fatigue
+    #   en dashboards.
+    #
+    # Diseño:
+    #   1. Snapshot del set `active_job_ids` desde `scheduler.get_jobs()`.
+    #   2. SELECT alerts `scheduler_missed_*`/`scheduler_error_*` abiertas.
+    #   3. Parse `job_id` de cada alert_key (strip prefijo).
+    #   4. UPDATE las alerts cuyo job_id NO está en `active_job_ids`.
+    #   No depende de TTL: cierra inmediatamente al detectar el orphan.
+    #
+    # Defensa: si `app.scheduler` no se puede importar (test, boot temprano),
+    # el sweep se salta best-effort. NO marca como resuelto sin verificar
+    # contra el set vivo (evita falsos positivos cuando scheduler aún no
+    # arrancó). Knob `MEALFIT_SCHEDULER_ORPHAN_SWEEP_ENABLED` (default True)
+    # kill switch — flip a False si un futuro refactor del scheduler hace
+    # `get_jobs()` poco confiable.
+    orphan_swept = 0
+    orphan_failed = False
+    orphan_enabled = _env_bool("MEALFIT_SCHEDULER_ORPHAN_SWEEP_ENABLED", True)
+    if orphan_enabled:
+        try:
+            # Lazy import — el cron ya corre dentro del scheduler, así que
+            # app.scheduler existe en este punto. Aceptamos None en arranque
+            # muy temprano (lifespan aún populando).
+            try:
+                from app import scheduler as _live_scheduler
+            except Exception:
+                _live_scheduler = None
+            if _live_scheduler is None or not hasattr(_live_scheduler, "get_jobs"):
+                logger.debug(
+                    "[P1-SCHEDULER-1/ORPHAN-SWEEP] scheduler no disponible aún; "
+                    "skip best-effort."
+                )
+            else:
+                active_job_ids = {
+                    j.id for j in _live_scheduler.get_jobs() if getattr(j, "id", None)
+                }
+                # SELECT alerts abiertas con prefijo scheduler_missed_ o
+                # scheduler_error_ (excluyendo el parent cascade que es
+                # singleton, no per-job).
+                rows = execute_sql_query(
+                    """
+                    SELECT alert_key
+                    FROM system_alerts
+                    WHERE resolved_at IS NULL
+                      AND (
+                            alert_key LIKE 'scheduler_missed_%%'
+                         OR alert_key LIKE 'scheduler_error_%%'
+                      )
+                      AND alert_key <> 'scheduler_cascade_missed'
+                    """,
+                    tuple(),
+                    fetch_all=True,
+                ) or []
+                orphan_keys: list[str] = []
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    key = r.get("alert_key") or ""
+                    # Strip el prefijo conocido.
+                    if key.startswith("scheduler_missed_"):
+                        job_id = key[len("scheduler_missed_"):]
+                    elif key.startswith("scheduler_error_"):
+                        job_id = key[len("scheduler_error_"):]
+                    else:
+                        continue
+                    if job_id and job_id not in active_job_ids:
+                        orphan_keys.append(key)
+                if orphan_keys:
+                    # UPDATE bulk con ANY() para evitar N round-trips.
+                    execute_sql_write(
+                        """
+                        UPDATE system_alerts
+                           SET resolved_at = NOW()
+                         WHERE resolved_at IS NULL
+                           AND alert_key = ANY(%s::text[])
+                        """,
+                        (orphan_keys,),
+                    )
+                    orphan_swept = len(orphan_keys)
+                    sample_orphan = orphan_keys[:5]
+                    logger.info(
+                        f"⏰ [P1-SCHEDULER-1/ORPHAN-SWEEP] Cerré {orphan_swept} "
+                        f"alerts scheduler_* cuyos job_id ya NO están en el "
+                        f"scheduler vivo. Sample: {sample_orphan}. "
+                        f"Causa probable: job removido entre deploys, "
+                        f"one-off completado, o refactor."
+                    )
+        except Exception as e:
+            orphan_failed = True
+            logger.warning(
+                f"[P1-SCHEDULER-1/ORPHAN-SWEEP] sweep orphan falló (best-effort): {e}"
+            )
+
     # [P2-B-OBS · 2026-05-11] Tick observable SIEMPRE — sweep corrió y este
     # fue el resultado (count=0/N o failed). Antes de P2-B, el sweep solo
     # loggeaba a INFO cuando barría >=1 alert. Sin métrica persistente:
@@ -1900,27 +2483,40 @@ def _resolve_stale_scheduler_alerts() -> None:
     # [P3-CLEANUP · 2026-05-11] Metadata extendida con campos del sweep
     # one-off (swept_oneoff, ttl_oneoff_hours) para correlacionar ambos
     # paths en post-mortem (el total swept = standard + one-off).
+    # [P2-NEW-E · 2026-05-11] Metadata extendida con campos del hard-cap
+    # (swept_cascade_hard_cap, cascade_hard_cap_children_open) para
+    # post-mortem de cluster bajo saturación sostenida.
     try:
         execute_sql_write(
             """
             INSERT INTO pipeline_metrics
                 (user_id, session_id, node, duration_ms, retries,
-                 tokens_estimated, confidence, metadata, is_guest)
-            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb, true)
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
             """,
             (
                 "_scheduler_alerts_sweep_tick",
                 json.dumps({
-                    "swept_count": swept_count + oneoff_swept + cascade_swept,
+                    "swept_count": swept_count + oneoff_swept + cascade_swept + hard_cap_swept + missed_hard_cap_swept + orphan_swept,
                     "swept_standard": swept_count,
                     "swept_oneoff": oneoff_swept,
                     "swept_cascade_parent": cascade_swept,
+                    "swept_cascade_hard_cap": hard_cap_swept,
+                    "swept_missed_hard_cap": missed_hard_cap_swept,
+                    "swept_orphan_jobs": orphan_swept,
+                    "cascade_hard_cap_children_open": hard_cap_children_open,
                     "ttl_hours": ttl_h,
                     "ttl_oneoff_hours": ttl_oneoff_h,
                     "cascade_stabilization_min": stabilization_min,
+                    "cascade_hard_cap_h": hard_cap_h,
+                    "missed_hard_cap_h": missed_hard_cap_h,
                     "sweep_failed": sweep_failed,
                     "oneoff_sweep_failed": oneoff_failed,
                     "cascade_sweep_failed": cascade_failed,
+                    "hard_cap_sweep_failed": hard_cap_failed,
+                    "missed_hard_cap_sweep_failed": missed_hard_cap_failed,
+                    "orphan_sweep_failed": orphan_failed,
+                    "orphan_sweep_enabled": orphan_enabled,
                 }, ensure_ascii=False),
             ),
         )
@@ -1928,6 +2524,392 @@ def _resolve_stale_scheduler_alerts() -> None:
         logger.debug(
             f"[P2-B-OBS] sweep tick emit falló (best-effort): {_tick_err}"
         )
+
+
+def _resolve_stale_plan_quality_alerts() -> None:
+    """[P2-NEW-10 · 2026-05-11] Auto-resolve para alerts `plan_quality_degraded:*`
+    y `post_swap_critical_divergence_*` que quedaron huérfanas tras cesar
+    el patrón que las disparó.
+
+    Por qué existe (audit 2026-05-11):
+      Ambos alert_keys están documentados en CLAUDE.md como modelo
+      `Auto (implicit) + Manual cleanup`. El productor (should_retry o
+      post-swap helper) re-emite mientras el patrón persiste, pero un
+      usuario con 3 regen degradadas + 1 exitosa deja 3 alerts huérfanas
+      hasta que SRE inspeccione manualmente. Alert fatigue creciente.
+
+      `plan_quality_degraded:<user_id>:<plan_id>`:
+        Cerrar si existe un meal_plan posterior del MISMO user_id que NO
+        sea fallback NI tenga `_review_failed_but_delivered`. Eso indica
+        que el usuario regeneró exitosamente — la alert ya no es
+        accionable. NO cerrar por edad pura: un usuario que abandonó la
+        app tras la alert podría retomar meses después y queremos que
+        SRE pueda ver el historial. La condición `plan posterior limpio`
+        es semántica, no temporal.
+
+      `post_swap_critical_divergence_<key_id>`:
+        Cerrar por edad absoluta `MEALFIT_POST_SWAP_DIVERGENCE_AUTO_RESOLVE_HOURS`
+        (default 24h, mucho mayor que el cooldown de re-emisión de 6h).
+        Si el productor no re-emitió en 24h, la racha cesó. Idempotente.
+
+    Conservador:
+      - Kill switch via `MEALFIT_PLAN_QUALITY_AUTO_RESOLVE_ENABLED` (default
+        True). Flip a False si el auto-resolve causa pérdida de señal
+        legítima en SRE.
+      - Best-effort: cualquier excepción se loguea sin escalación.
+      - Idempotente: 0 rows resueltos si no hay matches.
+      - NO toca resoluciones manuales (`resolved_at IS NULL` en el WHERE).
+
+    Tick observable `_plan_quality_alerts_sweep_tick` (espejo P2-B-OBS)
+    para detectar "cron vivo + 0 hits" vs "cron caído".
+    """
+    enabled = _env_bool("MEALFIT_PLAN_QUALITY_AUTO_RESOLVE_ENABLED", True)
+    if not enabled:
+        # Kill switch activo — emit tick para visibilidad pero no actuar.
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics
+                    (user_id, session_id, node, duration_ms, retries,
+                     tokens_estimated, confidence, metadata)
+                VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+                """,
+                (
+                    "_plan_quality_alerts_sweep_tick",
+                    json.dumps({"enabled": False, "skip_reason": "kill_switch"}),
+                ),
+            )
+        except Exception:
+            pass
+        return
+
+    pq_swept = 0
+    pq_failed = False
+    post_swap_swept = 0
+    post_swap_failed = False
+    post_swap_h = _env_int("MEALFIT_POST_SWAP_DIVERGENCE_AUTO_RESOLVE_HOURS", 24)
+    if post_swap_h < 6:
+        # Hard floor: el cooldown del productor es 6h. Cerrar antes de eso
+        # produciría re-emisión inmediata en el siguiente tick del helper.
+        post_swap_h = 6
+    if post_swap_h > 168:
+        post_swap_h = 168
+
+    # Sweep #1: plan_quality_degraded:<user_id>:<plan_id> con plan posterior
+    # limpio del mismo user_id.
+    try:
+        # Extracción de user_id del alert_key via split_part. Posición 2
+        # porque el formato es `plan_quality_degraded:<user_id>:<plan_id>`
+        # (índices 1-based en SQL: 1=key prefix, 2=user_id, 3=plan_id).
+        # Plan "limpio" = generation_status='complete' AND NO marcas de
+        # degradación (`_is_fallback`/`_review_failed_but_delivered`).
+        resolved_pq = execute_sql_write(
+            """
+            UPDATE system_alerts AS a
+               SET resolved_at = NOW()
+             WHERE a.resolved_at IS NULL
+               AND a.alert_key LIKE 'plan_quality_degraded:%%'
+               AND EXISTS (
+                   SELECT 1 FROM meal_plans mp
+                    WHERE mp.user_id::text = split_part(a.alert_key, ':', 2)
+                      AND mp.created_at > a.triggered_at
+                      AND mp.plan_data->>'generation_status' = 'complete'
+                      AND COALESCE((mp.plan_data->>'_is_fallback')::bool, false) = false
+                      AND (mp.plan_data->>'_review_failed_but_delivered') IS NULL
+               )
+             RETURNING a.alert_key
+            """,
+            tuple(),
+            returning=True,
+        ) or []
+        pq_swept = len(resolved_pq) if isinstance(resolved_pq, list) else 0
+        if pq_swept:
+            sample = [r.get("alert_key") for r in resolved_pq[:5] if isinstance(r, dict)]
+            logger.info(
+                f"⏰ [P2-NEW-10/PLAN-QUALITY-SWEEP] Resueltas {pq_swept} alerts "
+                f"`plan_quality_degraded:*` con plan posterior limpio. "
+                f"Sample: {sample}."
+            )
+    except Exception as e:
+        pq_failed = True
+        logger.warning(
+            f"[P2-NEW-10/PLAN-QUALITY-SWEEP] sweep plan_quality falló (best-effort): {e}"
+        )
+
+    # Sweep #2: post_swap_critical_divergence_<key_id> por edad absoluta.
+    try:
+        resolved_post = execute_sql_write(
+            """
+            UPDATE system_alerts
+               SET resolved_at = NOW()
+             WHERE resolved_at IS NULL
+               AND alert_key LIKE 'post_swap_critical_divergence_%%'
+               AND triggered_at < NOW() - make_interval(hours => %s)
+             RETURNING alert_key
+            """,
+            (int(post_swap_h),),
+            returning=True,
+        ) or []
+        post_swap_swept = (
+            len(resolved_post) if isinstance(resolved_post, list) else 0
+        )
+        if post_swap_swept:
+            sample = [
+                r.get("alert_key") for r in resolved_post[:5] if isinstance(r, dict)
+            ]
+            logger.info(
+                f"⏰ [P2-NEW-10/POST-SWAP-SWEEP] Resueltas {post_swap_swept} alerts "
+                f"`post_swap_critical_divergence_*` por edad >{post_swap_h}h. "
+                f"Sample: {sample}."
+            )
+    except Exception as e:
+        post_swap_failed = True
+        logger.warning(
+            f"[P2-NEW-10/POST-SWAP-SWEEP] sweep post_swap falló (best-effort): {e}"
+        )
+
+    # Tick observable.
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                "_plan_quality_alerts_sweep_tick",
+                json.dumps({
+                    "enabled": True,
+                    "swept_plan_quality": pq_swept,
+                    "swept_post_swap": post_swap_swept,
+                    "post_swap_ttl_hours": post_swap_h,
+                    "plan_quality_failed": pq_failed,
+                    "post_swap_failed": post_swap_failed,
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception as _tick_err:
+        logger.debug(
+            f"[P2-NEW-10/TICK] sweep tick emit falló (best-effort): {_tick_err}"
+        )
+
+
+def _sweep_stale_llm_circuit_breakers() -> int:
+    """[P2-NEW-D · 2026-05-11] Limpia rows stale en `app_kv_store` con keys
+    `llm_circuit_breaker%` cuyo `last_failure` excede el knob de staleness.
+
+    Gap cerrado:
+      `LLMCircuitBreaker.can_proceed()` (graph_orchestrator.py:1354) ya
+      retorna True una vez `time.time() - last_failure > reset_timeout`
+      — runtime CORRECTO. Pero la fila en `app_kv_store` conserva
+      `is_open=true` y los contadores ínvariablemente hasta que algún
+      llamador exitoso invoque `record_success()` → `_atomic_reset_db()`.
+      Si tras el outage el modelo deja de ser usado (ej. `gemini-3.1-pro-preview`
+      durante semanas sin perfil clínico que lo route), nadie llama
+      success y la fila queda `is_open=true` indefinidamente.
+
+      Audit 2026-05-11 detectó row `llm_circuit_breaker:gemini-3.1-pro-preview`
+      con `is_open=true, failures=6, last_failure=2026-05-07` (4.4 días
+      atrás). Un SRE leyendo `app_kv_store` concluye "modelo caído"
+      cuando funcionalmente está disponible — alert fatigue pasivo.
+
+    Estrategia:
+      SELECT keys que comienzan con 'llm_circuit_breaker' (sin sufijo
+      legacy + `llm_circuit_breaker:<model>` per-model P1-Q3) cuyo
+      `last_failure` es más viejo que `MEALFIT_CB_KV_STALENESS_HOURS`.
+      Para cada hit: UPDATE al estado canónico de reset
+      `{"failures": 0, "last_failure": 0, "is_open": false}` (mismo
+      payload que `_atomic_reset_db`).
+
+    Por qué SQL puro (no importar LLMCircuitBreaker):
+      Construir instancias per-modelo requiere conocer la lista — pero
+      en producción la lista crece dinámicamente (cada nuevo modelo
+      añadido a `_route_model` aparece como nueva row). El sweep
+      basado en pattern matching es agnóstico y se mantiene solo.
+
+    Idempotencia:
+      - Reinvocaciones sobre rows ya en estado canónico → matches
+        `is_open IS DISTINCT FROM 'false'` falla, 0 rows actualizadas.
+      - Reinvocaciones rápidas no contestar con runtime activo:
+        si entre la primera invocación y la siguiente otro worker
+        registró `record_failure()`, la fila vuelve a `is_open=true`
+        con `last_failure` reciente — el sweep la verá como NO stale
+        y la dejará.
+
+    Knobs:
+      MEALFIT_CB_KV_STALENESS_HOURS  (default 2, clamp [1, 168]) — edad
+        mínima de `last_failure` para considerar la fila stale. 2h es
+        ~240x el default de `MEALFIT_CB_RESET_TIMEOUT_S=30s` — bien
+        por encima del reset_timeout para no interferir con CBs que
+        recién se abrieron.
+      MEALFIT_CB_KV_STALENESS_SWEEP_INTERVAL_MIN (default 60, clamp
+        [15, 1440]) — frecuencia del cron.
+
+    Returns:
+      Número de rows resetadas en este tick.
+
+    Tooltip-anchor: P2-NEW-D-START | gap audit 2026-05-11
+    """
+    staleness_h = _env_int("MEALFIT_CB_KV_STALENESS_HOURS", 2)
+    staleness_h = max(1, min(staleness_h, 168))
+
+    reset_count = 0
+    sweep_failed = False
+    try:
+        # Pattern: `llm_circuit_breaker` (legacy global) ó
+        # `llm_circuit_breaker:<model>` (P1-Q3). El LIKE captura ambos.
+        # Filtros adicionales:
+        #   - value->>'is_open' IS NOT NULL: solo rows con el shape
+        #     esperado (excluye keys que comparten el prefijo por
+        #     accidente — defense).
+        #   - is_open = 'true' (jsonb) OR failures > 0: NO resetear
+        #     rows que ya están en estado canónico cero (idempotencia
+        #     + no contar como swept).
+        #   - last_failure < epoch threshold: edad mínima.
+        threshold_epoch = (
+            "EXTRACT(EPOCH FROM NOW())::float - (%s::float * 3600.0)"
+        )
+        resolved = execute_sql_write(
+            f"""
+            UPDATE app_kv_store
+            SET value = '{{"failures": 0, "last_failure": 0, "is_open": false}}'::jsonb,
+                updated_at = NOW()
+            WHERE key LIKE 'llm_circuit_breaker%%'
+              AND value->>'is_open' IS NOT NULL
+              AND (
+                    value->>'is_open' = 'true'
+                 OR (value->>'failures')::int > 0
+              )
+              AND (value->>'last_failure')::float
+                  < ({threshold_epoch})
+            RETURNING key
+            """,
+            (staleness_h,),
+            returning=True,
+        ) or []
+        reset_count = len(resolved) if isinstance(resolved, list) else 0
+        if reset_count:
+            sample = [r.get("key") for r in resolved[:5] if isinstance(r, dict)]
+            logger.info(
+                f"[P2-NEW-D/CB-KV-SWEEP] Reset {reset_count} stale CB rows "
+                f"(staleness_h={staleness_h}). Sample: {sample}"
+            )
+    except Exception as e:
+        sweep_failed = True
+        logger.warning(
+            f"[P2-NEW-D/CB-KV-SWEEP] sweep falló (best-effort): {e}"
+        )
+
+    # Tick observable SIEMPRE (patrón espejo P2-B-OBS / P3-LIVE-1) para
+    # que el cron sea verificable en pipeline_metrics independiente del
+    # outcome (0 reset es información también).
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                "_sweep_stale_llm_circuit_breakers_tick",
+                json.dumps({
+                    "reset_count": reset_count,
+                    "staleness_h": staleness_h,
+                    "sweep_failed": sweep_failed,
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception as _tick_err:
+        logger.debug(
+            f"[P2-NEW-D/CB-KV-SWEEP] tick emit falló (best-effort): {_tick_err}"
+        )
+
+
+def _sweep_stale_emit_locks_kv() -> None:
+    """[P2-NEW-16 · 2026-05-11] GC para keys `plan_quality_emit_lock:*` del
+    `app_kv_store` introducidas por P3-NEW-9 (coalesce inter-thread).
+
+    Por qué existe (re-audit 2026-05-11):
+      P3-NEW-9 escribe una fila en `app_kv_store` por cada plan degradado
+      (key = `plan_quality_emit_lock:<user_id>:<plan_id>`). La fila se
+      reusa via UPSERT condicional, así que el set crece bounded por
+      (user × plan). PERO: planes eliminados (P0-HIST-1 restore) dejan
+      keys huérfanas en KV — el row del plan se borró pero el lock no.
+      Crecimiento lento bounded pero sin techo natural.
+
+    Estrategia:
+      DELETE rows con `key LIKE 'plan_quality_emit_lock:%'` cuyo
+      `updated_at` exceda `MEALFIT_PLAN_QUALITY_EMIT_LOCK_TTL_HOURS`
+      (default 24h, clamp [1, 168]). 24h es MUY superior a la ventana
+      de coalesce (60s) — solo borra keys que ya NO van a coalescer
+      ninguna emission posible.
+
+    Knobs:
+      MEALFIT_PLAN_QUALITY_EMIT_LOCK_TTL_HOURS  (default 24, clamp [1, 168])
+      MEALFIT_PLAN_QUALITY_EMIT_LOCK_SWEEP_INTERVAL_MIN  (default 360, clamp
+        [60, 1440]) — cada 6h por defecto. Cheap query (LIKE prefix + index).
+
+    Best-effort: cualquier excepción se loguea sin escalación.
+
+    Tick observable `_sweep_stale_emit_locks_kv_tick` (espejo P2-B-OBS).
+
+    Tooltip-anchor: P2-NEW-16-START
+    """
+    ttl_h = _env_int("MEALFIT_PLAN_QUALITY_EMIT_LOCK_TTL_HOURS", 24)
+    ttl_h = max(1, min(ttl_h, 168))
+
+    delete_count = 0
+    sweep_failed = False
+    try:
+        resolved = execute_sql_write(
+            """
+            DELETE FROM app_kv_store
+            WHERE key LIKE 'plan_quality_emit_lock:%%'
+              AND updated_at < NOW() - make_interval(hours => %s)
+            RETURNING key
+            """,
+            (int(ttl_h),),
+            returning=True,
+        ) or []
+        delete_count = len(resolved) if isinstance(resolved, list) else 0
+        if delete_count:
+            sample = [r.get("key") for r in resolved[:5] if isinstance(r, dict)]
+            logger.info(
+                f"[P2-NEW-16/EMIT-LOCK-SWEEP] DELETE {delete_count} stale "
+                f"`plan_quality_emit_lock:*` keys (ttl_h={ttl_h}). "
+                f"Sample: {sample}"
+            )
+    except Exception as e:
+        sweep_failed = True
+        logger.warning(
+            f"[P2-NEW-16/EMIT-LOCK-SWEEP] sweep falló (best-effort): {e}"
+        )
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                "_sweep_stale_emit_locks_kv_tick",
+                json.dumps({
+                    "delete_count": delete_count,
+                    "ttl_h": ttl_h,
+                    "sweep_failed": sweep_failed,
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception as _tick_err:
+        logger.debug(
+            f"[P2-NEW-16/EMIT-LOCK-SWEEP] tick emit falló (best-effort): {_tick_err}"
+        )
+
+    return reset_count
 
 
 def _gc_orphan_chunk_telemetry():
@@ -2216,6 +3198,279 @@ def _aggregator_misfire_grace_s() -> int:
     return _env_int("MEALFIT_AGGREGATOR_MISFIRE_GRACE_S", 300)
 
 
+def _emit_hot_table_bloat_tick() -> None:
+    """[P2-AUDIT-2 · 2026-05-12] Cron observable que reporta dead-tuple ratio
+    de las 7 tablas tuneadas en P1-B autovacuum.
+
+    Contexto:
+        P1-B (2026-05-12) aplicó `scale_factor=0.05 + threshold=25` a 7 tablas
+        chronic-UPDATE (`app_kv_store`, `plan_chunk_queue`, `meal_plans`,
+        `agent_sessions`, `plan_chunk_metrics`, `user_profiles`,
+        `system_alerts`). Sin observabilidad continua del bloat post-tuning,
+        un autovacuum que deje de disparar por bug de postgres o
+        configuración perdida pasaría desapercibido hasta dead_pct >90%.
+
+    Diseño:
+        Cada tick (default cada 6h):
+          1. Lee `pg_stat_user_tables` para las 7 tablas (snapshot único).
+          2. Emite 1 fila a `pipeline_metrics` por tabla (telemetría continua
+             — útil para dashboards y post-mortems).
+          3. Si `dead_pct > umbral` AND `hours_since_autovacuum > umbral`:
+             UPSERT alert `hot_table_bloat:<table>` (severity warning).
+             Si la tabla ya está sana en el siguiente tick: UPDATE
+             `resolved_at = NOW()` (Auto explicit resolver).
+
+    Knobs:
+        `MEALFIT_AUTOVACUUM_TICK_INTERVAL_MIN` default 360 (6h),
+            clamp [60, 1440] aplicado en `register_plan_chunk_scheduler`.
+        `MEALFIT_AUTOVACUUM_DEAD_PCT_ALERT` default 70.0 (float).
+        `MEALFIT_AUTOVACUUM_STALE_HOURS_ALERT` default 24.0 (float).
+
+    Best-effort: cualquier error se loguea sin pausar el scheduler. Patrón
+    SSOT del codebase (matchea `_alert_atomic_pool_fallback`, etc.).
+
+    Tooltip-anchor: P2-AUDIT-2-AUTOVACUUM-TICK.
+    """
+    _P1B_TABLES = (
+        "app_kv_store",
+        "plan_chunk_queue",
+        "meal_plans",
+        "agent_sessions",
+        "plan_chunk_metrics",
+        "user_profiles",
+        "system_alerts",
+    )
+
+    try:
+        dead_pct_threshold = float(_env_float("MEALFIT_AUTOVACUUM_DEAD_PCT_ALERT", 70.0))
+        stale_hours_threshold = float(_env_float("MEALFIT_AUTOVACUUM_STALE_HOURS_ALERT", 24.0))
+    except Exception:
+        dead_pct_threshold = 70.0
+        stale_hours_threshold = 24.0
+
+    try:
+        # [P0-LIVE-2 · 2026-05-12] Postgres 17 expone `relname` ambiguo en
+        # pg_stat_user_tables si el planner expande la vista contra pg_class
+        # (sucedió en prod: ERROR "column reference 'relname' is ambiguous"
+        # cada tick → telemetría P2-AUDIT-2 muerta desde 2026-05-12).
+        # Fix: alias `t` + prefix explícito en todas las columnas y filtros.
+        rows = execute_sql_query(
+            """
+            SELECT t.relname AS relname,
+                   t.n_live_tup AS n_live_tup,
+                   t.n_dead_tup AS n_dead_tup,
+                   CASE WHEN (t.n_live_tup + t.n_dead_tup) > 0
+                        THEN ROUND(100.0 * t.n_dead_tup / (t.n_live_tup + t.n_dead_tup), 1)
+                        ELSE 0
+                   END AS dead_pct,
+                   t.last_autovacuum AS last_autovacuum,
+                   EXTRACT(EPOCH FROM (NOW() - COALESCE(t.last_autovacuum, '1970-01-01'::timestamptz))) / 3600.0 AS hours_since_av
+            FROM pg_stat_user_tables t
+            WHERE t.schemaname = 'public'
+              AND t.relname = ANY(%s::text[])
+            """,
+            (list(_P1B_TABLES),),
+            fetch_all=True,
+        ) or []
+    except Exception as q_err:
+        logger.warning(
+            f"[P2-AUDIT-2] hot_table_bloat tick: query pg_stat_user_tables falló "
+            f"(best-effort): {q_err}"
+        )
+        return
+
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        relname = r.get("relname")
+        if not relname:
+            continue
+        try:
+            dead_pct = float(r.get("dead_pct") or 0)
+        except Exception:
+            dead_pct = 0.0
+        try:
+            hours_since_av = float(r.get("hours_since_av") or 0)
+        except Exception:
+            hours_since_av = 0.0
+
+        n_live = int(r.get("n_live_tup") or 0)
+        n_dead = int(r.get("n_dead_tup") or 0)
+
+        # 1) Tick observable a pipeline_metrics — siempre, no condicional.
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics
+                    (user_id, session_id, node, duration_ms, retries,
+                     tokens_estimated, confidence, metadata)
+                VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+                """,
+                (
+                    "_hot_table_bloat_tick",
+                    json.dumps({
+                        "table": relname,
+                        "dead_pct": dead_pct,
+                        "n_live": n_live,
+                        "n_dead": n_dead,
+                        "hours_since_autovacuum": round(hours_since_av, 2),
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as tick_err:
+            logger.debug(
+                f"[P2-AUDIT-2] tick emit para {relname} falló: {tick_err}"
+            )
+
+        # 2) Decisión alert / auto-resolve.
+        alert_key = f"hot_table_bloat:{relname}"
+        is_bloated = (dead_pct > dead_pct_threshold) and (hours_since_av > stale_hours_threshold)
+
+        if is_bloated:
+            try:
+                execute_sql_write(
+                    """
+                    INSERT INTO system_alerts
+                        (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                    VALUES (%s, 'hot_table_bloat', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                    ON CONFLICT (alert_key) DO UPDATE
+                    SET triggered_at = NOW(),
+                        metadata = EXCLUDED.metadata,
+                        resolved_at = NULL
+                    """,
+                    (
+                        alert_key,
+                        f"Autovacuum stale en `{relname}` (dead_pct={dead_pct}%)",
+                        (
+                            f"Tabla `{relname}` tiene dead_pct={dead_pct}% "
+                            f"(umbral {dead_pct_threshold}%) Y "
+                            f"último autovacuum hace {hours_since_av:.1f}h "
+                            f"(umbral {stale_hours_threshold}h). El tuning "
+                            f"P1-B (scale_factor=0.05, threshold=25) está "
+                            f"presente — investigar si autovacuum process "
+                            f"está saturado o si la tabla tiene contention "
+                            f"que bloquea VACUUM."
+                        ),
+                        json.dumps({
+                            "table": relname,
+                            "dead_pct": dead_pct,
+                            "n_live": n_live,
+                            "n_dead": n_dead,
+                            "hours_since_autovacuum": round(hours_since_av, 2),
+                            "dead_pct_threshold": dead_pct_threshold,
+                            "stale_hours_threshold": stale_hours_threshold,
+                        }, ensure_ascii=False),
+                        json.dumps([]),
+                    ),
+                )
+            except Exception as up_err:
+                logger.warning(
+                    f"[P2-AUDIT-2] UPSERT alert {alert_key} falló: {up_err}"
+                )
+        else:
+            # Auto-resolve si la tabla ya está sana.
+            try:
+                execute_sql_write(
+                    """
+                    UPDATE system_alerts
+                    SET resolved_at = NOW()
+                    WHERE alert_key = %s AND resolved_at IS NULL
+                    """,
+                    (alert_key,),
+                )
+            except Exception as rs_err:
+                logger.debug(
+                    f"[P2-AUDIT-2] auto-resolve {alert_key} falló: {rs_err}"
+                )
+
+
+def _drain_pending_facts_queue() -> None:
+    """[P1-AUDIT-1 · 2026-05-12] Drena `pending_facts_queue` agrupando por user_id.
+
+    Reemplaza el trigger `process_facts_on_insert` + función
+    `trigger_process_pending_facts_webhook` que vivían en pg_proc con URL y
+    secret **hardcoded** apuntando a `https://mealfit-rd.vercel.app/...`. Razones
+    para migrar de trigger DB → cron backend:
+
+      1. Secret en cleartext dentro del cuerpo de la función — visible a
+         cualquier rol con `SELECT` sobre `pg_proc`. Cero rotabilidad sin DDL.
+      2. URL apuntaba a Vercel; el backend ya se sirve desde Easypanel/Nixpacks
+         (per `backend/.env.example`). Si el host Vercel quedó stale, cada
+         INSERT disparaba un pg_net request a un endpoint muerto.
+      3. Dependencia obligatoria de la extensión `pg_net` — innecesaria si el
+         backend mismo polea la cola.
+      4. Latencia: 30-60s vs <1s del trigger. Aceptable: `enqueue_pending_fact`
+         es overflow-path (fact_extractor:439 sólo lo invoca cuando la
+         extracción inline tuvo error). Para esta latencia no time-critical
+         el cron es la opción correcta.
+
+    El procesador real es `process_pending_queue_sync(user_id)` en
+    `fact_extractor.py` — mismo que el webhook usaba — y ya maneja el
+    `acquire_fact_lock(user_id)` para serializar por usuario.
+
+    Best-effort: cualquier excepción se loguea sin pausar el scheduler.
+    `max_instances=1 + coalesce=True` (config global de APScheduler) garantiza
+    que dos ticks no se solapen si un drenaje tarda más que el intervalo.
+
+    Knob `MEALFIT_PENDING_FACTS_DRAIN_INTERVAL_MIN` (default 1, clamp [1, 30]).
+
+    Tooltip-anchor: P1-AUDIT-1-DRAIN | trigger DB eliminado 2026-05-12.
+    """
+    try:
+        from db_core import execute_sql_query
+    except Exception as imp_err:
+        logger.warning(
+            f"[P1-AUDIT-1] drain_pending_facts_queue: import db_core falló "
+            f"(best-effort skip): {imp_err}"
+        )
+        return
+
+    try:
+        rows = execute_sql_query(
+            "SELECT DISTINCT user_id FROM pending_facts_queue "
+            "WHERE user_id IS NOT NULL",
+            fetch_all=True,
+        ) or []
+    except Exception as q_err:
+        logger.warning(
+            f"[P1-AUDIT-1] drain_pending_facts_queue: query DISTINCT user_id "
+            f"falló: {q_err}"
+        )
+        return
+
+    if not rows:
+        return
+
+    try:
+        from fact_extractor import process_pending_queue_sync
+    except Exception as imp_err:
+        logger.warning(
+            f"[P1-AUDIT-1] drain_pending_facts_queue: import "
+            f"fact_extractor.process_pending_queue_sync falló: {imp_err}"
+        )
+        return
+
+    drained_users = 0
+    for row in rows:
+        uid = row.get("user_id") if isinstance(row, dict) else None
+        if not uid:
+            continue
+        try:
+            process_pending_queue_sync(uid)
+            drained_users += 1
+        except Exception as u_err:
+            logger.warning(
+                f"[P1-AUDIT-1] drain_pending_facts_queue: drenaje "
+                f"falló para user={uid}: {u_err}"
+            )
+
+    if drained_users:
+        logger.info(
+            f"🧹 [P1-AUDIT-1] drain_pending_facts_queue procesó "
+            f"{drained_users} usuario(s) con backlog de facts."
+        )
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -2234,6 +3489,54 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [CHUNK SCHEDULER] Worker plan_chunk_queue registrado cada "
             f"{CHUNK_SCHEDULER_INTERVAL_MINUTES} min."
+        )
+
+    # [P2-AUDIT-2 · 2026-05-12] Cron observable de bloat post-tuning P1-B.
+    # Cada 6h reporta dead_pct + hours_since_autovacuum de las 7 tablas
+    # chronic-UPDATE a pipeline_metrics + emite alert `hot_table_bloat:<table>`
+    # si autovacuum no corre y dead_pct sube. Knob clamp [60, 1440] min;
+    # default 360 (6h) — bloat es métrica de cambio lento, no necesita más.
+    _autovacuum_tick_interval = _env_int("MEALFIT_AUTOVACUUM_TICK_INTERVAL_MIN", 360)
+    _autovacuum_tick_interval = max(60, min(_autovacuum_tick_interval, 1440))
+    if not scheduler.get_job("hot_table_bloat_tick"):
+        _add_job_jittered(scheduler,
+            _emit_hot_table_bloat_tick,
+            "interval",
+            minutes=_autovacuum_tick_interval,
+            id="hot_table_bloat_tick",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-AUDIT-2] Cron hot_table_bloat_tick registrado cada "
+            f"{_autovacuum_tick_interval} min (observabilidad post-P1-B "
+            f"autovacuum tuning)."
+        )
+
+    # [P1-AUDIT-1 · 2026-05-12] Cron que drena `pending_facts_queue`.
+    # Reemplaza el trigger DB `process_facts_on_insert` + función
+    # `trigger_process_pending_facts_webhook` que tenían URL+secret hardcoded
+    # apuntando a Vercel. Ver docstring de `_drain_pending_facts_queue` para
+    # justificación completa. Knob clamp [1, 30] min; default 1 min es safe:
+    # el procesamiento por usuario tarda <2s típico y `enqueue_pending_fact`
+    # se invoca raramente (overflow path).
+    _facts_drain_interval = _env_int("MEALFIT_PENDING_FACTS_DRAIN_INTERVAL_MIN", 1)
+    _facts_drain_interval = max(1, min(_facts_drain_interval, 30))
+    if not scheduler.get_job("drain_pending_facts_queue"):
+        _add_job_jittered(scheduler,
+            _drain_pending_facts_queue,
+            "interval",
+            minutes=_facts_drain_interval,
+            id="drain_pending_facts_queue",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P1-AUDIT-1] Cron drain_pending_facts_queue registrado cada "
+            f"{_facts_drain_interval} min (reemplaza trigger DB + webhook Vercel "
+            f"con URL+secret hardcoded en pg_proc)."
         )
 
     # [P0-C] Job separado: refresh proactivo de snapshots de despensa en chunks pending/stale
@@ -2308,6 +3611,45 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"{CHUNK_ORPHAN_CLEANUP_INTERVAL_MINUTES} min."
         )
 
+    # [P2-NEXT-3 · 2026-05-11] Sweep semanal de planes huérfanos en
+    # `meal_plans` (status=in_progress/generating_next sin chunks vivos
+    # y antiguos). Hermano simétrico de cleanup_orphan_chunks pero en
+    # la otra dirección del FK. Domingo 03:30 UTC (off-peak, antes del
+    # cron diario de coherencia 04:00 UTC).
+    if not scheduler.get_job("sweep_meal_plans_without_chunks"):
+        _add_job_jittered(scheduler,
+            _sweep_meal_plans_without_chunks,
+            CronTrigger(day_of_week="sun", hour=3, minute=30, timezone="UTC"),
+            id="sweep_meal_plans_without_chunks",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            "⏰ [P2-NEXT-3] Cron de sweep de planes huérfanos registrado "
+            "(Dom 03:30 UTC, age>=MEALFIT_SWEEP_ORPHAN_PLANS_AGE_DAYS days)."
+        )
+
+    # [P1-LIVE-3 · 2026-05-11] Sweep diario de planes test-fixture
+    # (`Plan Sintético% — Test%`). Más agresivo que P2-NEXT-3: cancela
+    # chunks vivos antes de marcar abandoned. Diario 03:45 UTC (15min
+    # después de P2-NEXT-3, off-peak, fixtures se acumulan en QA).
+    if not scheduler.get_job("sweep_synthetic_test_plans"):
+        _add_job_jittered(scheduler,
+            _sweep_synthetic_test_plans,
+            CronTrigger(hour=3, minute=45, timezone="UTC"),
+            id="sweep_synthetic_test_plans",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            "⏰ [P1-LIVE-3] Cron de sweep de planes test-fixture registrado "
+            "(03:45 UTC diario, age>=MEALFIT_SWEEP_SYNTHETIC_PLANS_AGE_HOURS hours)."
+        )
+
     # [P0-5 · 2026-05-10] Alerta de backlog en `failed_inventory_deductions`.
     # Cierra el lado READ del gap: la tabla recibe inserts desde
     # `db_inventory.deduct_consumed_meal_from_inventory` (lado WRITE)
@@ -2351,6 +3693,31 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             "⏰ [P0-1-RECOVERY] Cron de recuperación de chunks failed registrado cada 15 min "
             f"(min_age={CHUNK_RECOVERY_MIN_AGE_MINUTES}m, max_recovery_attempts="
             f"{CHUNK_MAX_RECOVERY_ATTEMPTS}, batch_limit={CHUNK_RECOVERY_BATCH_LIMIT}, scope=plans>=7d)."
+        )
+
+    # [P1-NEW-D · 2026-05-11] Cron: detección de chunks `pending` con
+    # `execute_after` fuera del horizonte temporal del plan. Hermano
+    # complementario de `_recover_failed_chunks_for_long_plans` (P0-1-RECOVERY)
+    # — aquel cubre `status='failed'`, este cubre `status='pending'` con
+    # anchor distante. Cierra zombie de 5 meses detectado por audit
+    # 2026-05-11 (chunk `6e0756e5` plan `98d902e3`, execute_after=2026-10-24).
+    # Cada 60 min para no presionar el pool en bursts de minuto 0; el caso
+    # es raro y no time-sensitive (chunk ya espera N días).
+    if not scheduler.get_job("recover_future_scheduled_pending_chunks"):
+        _add_job_jittered(scheduler,
+            _recover_future_scheduled_pending_chunks,
+            "interval",
+            minutes=60,
+            id="recover_future_scheduled_pending_chunks",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            "⏰ [P1-NEW-D] Cron de recovery de pending chunks fuera del horizonte "
+            "registrado cada 60 min "
+            f"(horizon_days_knob=MEALFIT_CHUNK_FUTURE_HORIZON_DAYS default=14, "
+            f"batch_knob=MEALFIT_CHUNK_FUTURE_HORIZON_BATCH default=50)."
         )
 
     # [P1-2/ZERO-LOG-NUDGE] Cron: aviso PROACTIVO a usuarios con plan activo + 0 logs.
@@ -2456,6 +3823,29 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         )
         logger.info(
             f"⏰ [P2-6/POOL-FALLBACK-ALERT] Cron _alert_atomic_pool_fallback registrado cada {_P26_INT} min."
+        )
+
+    # [P2-NEW-10 · 2026-05-11] Auto-resolve para `plan_quality_degraded:*` y
+    # `post_swap_critical_divergence_*` que quedaron huérfanas tras cesar
+    # el patrón. Ver `_resolve_stale_plan_quality_alerts` docstring.
+    if not scheduler.get_job("resolve_stale_plan_quality_alerts"):
+        _PQ_INT = _env_int("MEALFIT_PLAN_QUALITY_AUTO_RESOLVE_INTERVAL_MIN", 60)
+        if _PQ_INT < 5:
+            _PQ_INT = 5
+        if _PQ_INT > 1440:
+            _PQ_INT = 1440
+        _add_job_jittered(scheduler,
+            _resolve_stale_plan_quality_alerts,
+            "interval",
+            minutes=_PQ_INT,
+            id="resolve_stale_plan_quality_alerts",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-NEW-10/PQ-AUTO-RESOLVE] Cron _resolve_stale_plan_quality_alerts "
+            f"registrado cada {_PQ_INT} min."
         )
 
     # [P1-2/DEAD-LETTER-ALERT] Alerta proactiva sobre chunks dead-lettered acumulados.
@@ -2658,6 +4048,59 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"misfire_grace={_aggregator_misfire_grace_s()}s P2-NEW-7)."
         )
 
+    # [P2-NEW-D · 2026-05-11] Cron: sweep de rows stale en
+    # `app_kv_store` con keys `llm_circuit_breaker%`. Cierra observability
+    # rot detectado en audit 2026-05-11: row
+    # `llm_circuit_breaker:gemini-3.1-pro-preview` con `is_open=true` durante
+    # 4+ días mientras runtime ya retornaba True via `can_proceed()` tras
+    # reset_timeout. Frecuencia conservadora (60min default) porque el
+    # caso es lento y no time-sensitive.
+    if not scheduler.get_job("sweep_stale_llm_circuit_breakers"):
+        _CB_SWEEP_INT = _env_int(
+            "MEALFIT_CB_KV_STALENESS_SWEEP_INTERVAL_MIN", 60
+        )
+        _CB_SWEEP_INT = max(15, min(_CB_SWEEP_INT, 1440))
+        _add_job_jittered(scheduler,
+            _sweep_stale_llm_circuit_breakers,
+            "interval",
+            minutes=_CB_SWEEP_INT,
+            id="sweep_stale_llm_circuit_breakers",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P2-NEW-D] Cron _sweep_stale_llm_circuit_breakers "
+            f"registrado cada {_CB_SWEEP_INT} min "
+            f"(staleness_h={_env_int('MEALFIT_CB_KV_STALENESS_HOURS', 2)}h)."
+        )
+
+    # [P2-NEW-16 · 2026-05-11] GC para keys `plan_quality_emit_lock:*`
+    # introducidas por P3-NEW-9. Bloat bounded por (user × plan) pero
+    # planes eliminados dejan keys huérfanas — TTL 24h evita crecimiento
+    # sin techo.
+    if not scheduler.get_job("sweep_stale_emit_locks_kv"):
+        _EMIT_LOCK_SWEEP_INT = _env_int(
+            "MEALFIT_PLAN_QUALITY_EMIT_LOCK_SWEEP_INTERVAL_MIN", 360
+        )
+        _EMIT_LOCK_SWEEP_INT = max(60, min(_EMIT_LOCK_SWEEP_INT, 1440))
+        _add_job_jittered(scheduler,
+            _sweep_stale_emit_locks_kv,
+            "interval",
+            minutes=_EMIT_LOCK_SWEEP_INT,
+            id="sweep_stale_emit_locks_kv",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P2-NEW-16] Cron _sweep_stale_emit_locks_kv registrado "
+            f"cada {_EMIT_LOCK_SWEEP_INT} min "
+            f"(ttl_h={_env_int('MEALFIT_PLAN_QUALITY_EMIT_LOCK_TTL_HOURS', 24)}h)."
+        )
+
     # [P0-γ/LAG] Alerta de SLA degradado: pickup lag excesivo. Detecta cuando el scheduler
     # toma chunks tarde respecto a su execute_after, señal de saturación o zombie rescue
     # tardío.
@@ -2848,6 +4291,32 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"(threshold={_env_int('MEALFIT_COHERENCE_WATCHDOG_SILENT_THRESHOLD_H', 2)}h)."
         )
 
+    # [P2-OBSERVABILITY-1 · 2026-05-12] Watchdog del tick `_hardfloor_autoheal_tick`.
+    # Detecta deploy lag (P0-PROD-1) y otras causas de silencio del loop
+    # hardfloor que crashea inserts silenciosos a pipeline_metrics.
+    if not scheduler.get_job("alert_pipeline_metrics_silence"):
+        _PIPE_SILENCE_INT = _env_int(
+            "MEALFIT_PIPELINE_METRICS_SILENCE_INTERVAL_MIN", 10
+        )
+        if _PIPE_SILENCE_INT < 5:
+            _PIPE_SILENCE_INT = 5
+        if _PIPE_SILENCE_INT > 120:
+            _PIPE_SILENCE_INT = 120
+        _add_job_jittered(scheduler,
+            _alert_pipeline_metrics_silence,
+            "interval",
+            minutes=_PIPE_SILENCE_INT,
+            id="alert_pipeline_metrics_silence",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-OBSERVABILITY-1] Cron _alert_pipeline_metrics_silence "
+            f"registrado cada {_PIPE_SILENCE_INT} min "
+            f"(threshold={_env_int('MEALFIT_PIPELINE_METRICS_SILENCE_ALERT_MIN', 30)}min)."
+        )
+
     # [P0-2-SCHEDULER-CASCADE · 2026-05-10] Watchdog: detecta cascada de MISSED.
     # Si >=N jobs distintos perdieron su slot en la última hora, emite alerta
     # crítica deduplicada. Frecuencia 30 min (ajustable) — el evento "cascade"
@@ -2873,13 +4342,18 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"lookback={_env_int('MEALFIT_SCHEDULER_CASCADE_LOOKBACK_HOURS', 1)}h)."
         )
 
-    # [P0-1-DEPLOY-LAG · 2026-05-10] Cron diario: detecta deriva de despliegue.
-    # Cierra el bug observado en el audit 2026-05-10 (binario en EasyPanel rezagado
-    # vs HEAD, fixes mergeados sin ejecutar). Frecuencia mínima 1h para evitar burst
-    # contra app_kv_store; default 24h porque el evento "deploy" es raro.
+    # [P0-1-DEPLOY-LAG · 2026-05-10 · ajustado P0-PROD-1-DEPLOY 2026-05-12]
+    # Cron de detección de deriva de despliegue. Antes default 24h, lo que
+    # significaba que tras `git push` el operador podía esperar hasta 24h
+    # para que la alert disparase — gap real observado en audit 2026-05-11
+    # donde el deploy quedó rezagado y los errores `is_guest` se acumularon
+    # silenciosamente. Default ahora 1h: cubre el modo de fallo "publiqué
+    # KV y olvidé redeployar" sin generar burst (1 SELECT + 0..2 INSERTs/h).
     if not scheduler.get_job("alert_deploy_lag_marker_stale"):
-        _DEPLOY_LAG_INT_H = _env_int("MEALFIT_DEPLOY_LAG_CHECK_INTERVAL_HOURS", 24)
+        _DEPLOY_LAG_INT_H = _env_int("MEALFIT_DEPLOY_LAG_CHECK_INTERVAL_HOURS", 1)
         if _DEPLOY_LAG_INT_H < 1:
+            _DEPLOY_LAG_INT_H = 1
+        if _DEPLOY_LAG_INT_H > 24:
             _DEPLOY_LAG_INT_H = 24
         _add_job_jittered(scheduler,
             _alert_deploy_lag_marker_stale,
@@ -3181,9 +4655,18 @@ def _proactive_refresh_pending_pantry_snapshots(now_utc: datetime | None = None)
     try:
         # Una fila por (user_id, meal_plan_id) con el chunk más urgente como ancla.
         # Filtramos por edad del snapshot dentro de SQL para no traer chunks ya frescos.
+        # [P0-LIVE-1 · 2026-05-12] DISTINCT ON debe matchear los prefixes
+        # iniciales del ORDER BY. Antes: `DISTINCT ON (user_id, meal_plan_id)`
+        # apuntaba a los aliases del SELECT (`q.user_id::text AS user_id`)
+        # mientras el ORDER BY usaba `q.user_id, q.meal_plan_id` → Postgres
+        # lanzaba "SELECT DISTINCT ON expressions must match initial ORDER BY
+        # expressions" en cada tick (P0-C/PROACTIVE pantry refresh roto, los
+        # snapshots de despensa de chunks vivos NUNCA se refrescaban
+        # proactivamente → divergencia receta↔lista). Fix: prefix `q.` en
+        # DISTINCT ON para alinear con ORDER BY.
         candidates = execute_sql_query(
             """
-            SELECT DISTINCT ON (user_id, meal_plan_id)
+            SELECT DISTINCT ON (q.user_id, q.meal_plan_id)
                 q.id AS task_id,
                 q.user_id::text AS user_id,
                 q.meal_plan_id::text AS meal_plan_id,
@@ -9164,6 +10647,296 @@ def _recover_failed_chunks_for_long_plans() -> None:
         logger.error(f"❌ [P0-1-RECOVERY] Error en cron de recuperación: {e}")
 
 
+def _recover_future_scheduled_pending_chunks() -> int:
+    """[P1-NEW-D · 2026-05-11] Detecta chunks `pending` con `execute_after`
+    distante en el futuro Y fuera del horizonte del plan, y los escala vía
+    `_escalate_unrecoverable_chunk(execute_after_beyond_plan_window)`.
+
+    Gap cerrado:
+      `_recover_failed_chunks_for_long_plans` recupera SOLO chunks
+      `status='failed'`. `_sweep_meal_plans_without_chunks` (P2-NEXT-3)
+      excluye planes con cualquier chunk `pending`. Por lo tanto, un chunk
+      `pending` con `execute_after = NOW() + N meses` (N grande) queda
+      inmune a ambos crons y mantiene al plan `in_progress/generating_next`
+      indefinidamente. Audit 2026-05-11 detectó chunk `6e0756e5...`
+      con `execute_after = 2026-10-24` (~5.5 meses) sobre plan creado
+      2026-05-08 → zombie 5 meses en cola sin disparar útilmente.
+
+    Estrategia (read-only candidates → escalate per-row):
+      1. SELECT chunks `status='pending'`, `attempts=0`,
+         `dead_lettered_at IS NULL`, `execute_after > NOW() + HORIZON_DAYS`.
+      2. Para cada candidato calcular `plan_window_end` como
+         `COALESCE(plan_data->>'grocery_start_date'::timestamptz,
+         meal_plans.created_at) + (total_days_requested + 7 días gracia) días`.
+         La gracia +7d es la MISMA que usa `_recover_failed_chunks_for_long_plans`
+         (cron_tasks.py:9209) para "plan-still-active" — mantenemos simetría.
+      3. Si `execute_after > plan_window_end`: el chunk apunta a una fecha
+         que el plan ya NO cubre → escalar a `execute_after_beyond_plan_window`.
+         Antes del call, flip `status='pending'` → `'failed'` para que
+         `_escalate_unrecoverable_chunk` (que opera asumiendo status terminal)
+         vea estado consistente. CAS guard en el UPDATE filtra carrera con
+         pickup (`status='pending' AND dead_lettered_at IS NULL`).
+      4. Si NO supera el horizonte del plan: el chunk legítimamente espera
+         por una fecha futura del plan (caso plan multi-mes). Skip silente
+         con log debug — la próxima ejecución del cron lo re-evaluará si
+         el plan se acorta posteriormente.
+
+    Idempotencia:
+      - La función puede correr concurrente con `process_plan_chunk_queue`
+        sin riesgo: el `WHERE status='pending' AND dead_lettered_at IS NULL`
+        de la transición a `'failed'` falla silente si el worker ya levantó
+        el chunk (status='processing').
+      - Reinvocaciones sobre un chunk ya escalado son no-op:
+        `_escalate_unrecoverable_chunk` ya es idempotente (P3-NEW-3 doc)
+        y nuestro SELECT excluye `dead_lettered_at IS NOT NULL`.
+
+    Knobs:
+      MEALFIT_CHUNK_FUTURE_HORIZON_DAYS  (default 14, clamp [3, 365]) —
+        ventana mínima en el futuro para considerar un chunk "demasiado
+        lejano". 14d es la "soft cap" del usuario activo + multi-week
+        chunked plans típicos. Aumentar si vendes planes ultra-largos
+        con anchors >14d legítimos.
+      MEALFIT_CHUNK_FUTURE_HORIZON_BATCH (default 50, clamp [1, 500]) —
+        batch size del scan.
+
+    Returns:
+      Número de chunks escalados en este tick.
+
+    Tooltip-anchor: P1-NEW-D-START | gap audit 2026-05-11
+
+    [P1-LIVE-4 · 2026-05-11] Tick observable patrón P3-LIVE-1: emite
+    `_recover_future_scheduled_pending_chunks_tick` a `pipeline_metrics`
+    SIEMPRE (try/finally), independiente del outcome. Sin esto no
+    distinguimos "cron registrado pero no firing" (síntoma scheduler
+    starvation) de "cron firing pero 0 candidatos" vs "cron firing y
+    escalando". Flags: `candidates_count`, `escalated`, `skipped`,
+    `errors`, `select_failed`. Knob `MEALFIT_RECOVER_FUTURE_TICK_EMIT`
+    (default True) como kill switch.
+
+    [P1-LIVE-5 · 2026-05-11] Fallback para planes legacy sin
+    `total_days_requested`. El filtro original `IS NOT NULL` excluía
+    planes legacy (sin el campo) — sus chunks pending futuros eran
+    zombies indetectables. Ahora `COALESCE(total_days_requested,
+    jsonb_array_length(days), 7)` cubre 3 niveles:
+      1. Campo explícito (lo que escribe el orchestrator nuevo).
+      2. Conteo real de días generados (planes pre-campo).
+      3. Default conservador 7 (planes vacíos o malformados — escala
+         si execute_after > created_at + 14d, comportamiento seguro).
+    """
+    horizon_days = _env_int("MEALFIT_CHUNK_FUTURE_HORIZON_DAYS", 14)
+    horizon_days = max(3, min(horizon_days, 365))
+    batch = _env_int("MEALFIT_CHUNK_FUTURE_HORIZON_BATCH", 50)
+    batch = max(1, min(batch, 500))
+
+    candidates = []
+    candidates_count = 0
+    escalated = 0
+    skipped = 0
+    errors = 0
+    select_failed = False
+
+    try:
+        try:
+            candidates = execute_sql_query(
+                """
+                SELECT
+                    q.id, q.user_id, q.meal_plan_id, q.week_number, q.execute_after,
+                    COALESCE(q.learning_metrics, '{}'::jsonb) AS learning_metrics,
+                    COALESCE(
+                        (p.plan_data->>'total_days_requested')::int,
+                        jsonb_array_length(p.plan_data->'days'),
+                        7
+                    ) AS total_days_requested,
+                    COALESCE(
+                        (p.plan_data->>'grocery_start_date')::timestamptz,
+                        p.created_at
+                    ) AS plan_start_effective
+                FROM plan_chunk_queue q
+                JOIN meal_plans p ON q.meal_plan_id = p.id
+                WHERE q.status = 'pending'
+                  AND q.attempts = 0
+                  AND q.dead_lettered_at IS NULL
+                  AND q.execute_after > NOW() + make_interval(days => %s)
+                ORDER BY q.execute_after DESC
+                LIMIT %s
+                """,
+                (horizon_days, batch),
+                fetch_all=True,
+            ) or []
+        except Exception as e:
+            select_failed = True
+            logger.warning(
+                f"[P1-NEW-D/FUTURE-PENDING] SELECT candidates falló: {e}"
+            )
+            return 0
+
+        candidates_count = len(candidates)
+        if not candidates:
+            logger.debug(
+                f"[P1-NEW-D/FUTURE-PENDING] 0 candidatos (horizon_days={horizon_days})."
+            )
+            return 0
+
+        for row in candidates:
+            task_id = row.get("id")
+            user_id = row.get("user_id")
+            plan_id = row.get("meal_plan_id")
+            week_number = row.get("week_number")
+            execute_after = row.get("execute_after")
+            plan_start_effective = row.get("plan_start_effective")
+            total_days_requested = row.get("total_days_requested")
+            lm = row.get("learning_metrics") or {}
+            if isinstance(lm, str):
+                try:
+                    lm = json.loads(lm)
+                except Exception:
+                    lm = {}
+            try:
+                prior_recovery_attempts = int(lm.get("recovery_attempts") or 0)
+            except (TypeError, ValueError):
+                prior_recovery_attempts = 0
+
+            # Cálculo del horizonte del plan: plan_start + (total_days_requested + 7) días.
+            # Mismo +7 que usa `_recover_failed_chunks_for_long_plans:9209` para
+            # "plan-still-active" — simetría intencional.
+            try:
+                grace_days = int(total_days_requested) + 7
+            except (TypeError, ValueError):
+                errors += 1
+                logger.warning(
+                    f"[P1-NEW-D/FUTURE-PENDING] chunk {task_id}: total_days_requested "
+                    f"no parseable ({total_days_requested!r}). Skip."
+                )
+                continue
+
+            # plan_start_effective y execute_after vienen como datetime aware desde
+            # psycopg. Ambos en UTC.
+            try:
+                plan_window_end = plan_start_effective + timedelta(days=grace_days)
+            except Exception as calc_err:
+                errors += 1
+                logger.warning(
+                    f"[P1-NEW-D/FUTURE-PENDING] chunk {task_id}: cálculo plan_window_end "
+                    f"falló (plan_start={plan_start_effective!r}, grace_days={grace_days}): "
+                    f"{calc_err}. Skip."
+                )
+                continue
+
+            if execute_after <= plan_window_end:
+                # Chunk cae dentro del rango del plan — legítimamente espera. Skip.
+                skipped += 1
+                logger.debug(
+                    f"[P1-NEW-D/FUTURE-PENDING] chunk {task_id} dentro de window "
+                    f"(execute_after={execute_after.isoformat()} <= "
+                    f"plan_window_end={plan_window_end.isoformat()}). Skip."
+                )
+                continue
+
+            # Chunk fuera del horizonte del plan: escalar.
+            # CAS guard: transicionar `pending`→`failed` ANTES de
+            # `_escalate_unrecoverable_chunk` para que el escalator opere sobre
+            # estado terminal consistente. El filtro `status='pending' AND
+            # dead_lettered_at IS NULL` cierra la race con pickup.
+            try:
+                updated_rows = execute_sql_write(
+                    """
+                    UPDATE plan_chunk_queue
+                    SET status = 'failed',
+                        updated_at = NOW()
+                    WHERE id = %s
+                      AND status = 'pending'
+                      AND dead_lettered_at IS NULL
+                    RETURNING id
+                    """,
+                    (task_id,),
+                    returning=True,
+                )
+            except Exception as cas_err:
+                errors += 1
+                logger.warning(
+                    f"[P1-NEW-D/FUTURE-PENDING] chunk {task_id}: CAS pending→failed "
+                    f"falló: {cas_err}. Skip."
+                )
+                continue
+
+            if not updated_rows:
+                # Race con worker: chunk ya tomado. Skip — la próxima iteración
+                # del cron lo re-evaluará si el worker lo deja pending nuevamente.
+                skipped += 1
+                logger.debug(
+                    f"[P1-NEW-D/FUTURE-PENDING] chunk {task_id} CAS no afectó "
+                    f"filas (race con worker). Skip."
+                )
+                continue
+
+            try:
+                _escalate_unrecoverable_chunk(
+                    task_id=task_id,
+                    user_id=str(user_id),
+                    plan_id=str(plan_id),
+                    week_number=week_number,
+                    recovery_attempts=prior_recovery_attempts,
+                    escalation_reason="execute_after_beyond_plan_window",
+                )
+                escalated += 1
+                logger.info(
+                    f"⏭️ [P1-NEW-D/FUTURE-PENDING] chunk {task_id} escalado "
+                    f"(plan={plan_id} week={week_number} "
+                    f"execute_after={execute_after.isoformat()} "
+                    f"plan_window_end={plan_window_end.isoformat()} "
+                    f"total_days_requested={total_days_requested})."
+                )
+            except Exception as esc_err:
+                errors += 1
+                logger.error(
+                    f"[P1-NEW-D/FUTURE-PENDING] _escalate_unrecoverable_chunk falló "
+                    f"sobre chunk {task_id}: {esc_err}"
+                )
+
+        if escalated or errors:
+            logger.info(
+                f"[P1-NEW-D/FUTURE-PENDING] tick completo: candidates="
+                f"{candidates_count}, escalated={escalated}, skipped={skipped}, "
+                f"errors={errors}, horizon_days={horizon_days}."
+            )
+        return escalated
+    finally:
+        # [P1-LIVE-4 · 2026-05-11] Tick observable patrón P3-LIVE-1: emite
+        # SIEMPRE (también cuando el SELECT falla o no hay candidatos),
+        # confirma live que el cron está vivo independiente del scheduler.
+        # Sin esto, audit 2026-05-11 no podía distinguir "cron registrado
+        # pero no firing" (scheduler starvation) de "cron firing pero 0
+        # candidatos vs escalando". Knob `MEALFIT_RECOVER_FUTURE_TICK_EMIT`
+        # (default True) como kill switch — flip si volumen problemático.
+        if _env_bool("MEALFIT_RECOVER_FUTURE_TICK_EMIT", True):
+            try:
+                execute_sql_write(
+                    """
+                    INSERT INTO pipeline_metrics
+                        (user_id, session_id, node, duration_ms, retries,
+                         tokens_estimated, confidence, metadata)
+                    VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+                    """,
+                    (
+                        "_recover_future_scheduled_pending_chunks_tick",
+                        json.dumps({
+                            "candidates_count": candidates_count,
+                            "escalated": escalated,
+                            "skipped": skipped,
+                            "errors": errors,
+                            "select_failed": select_failed,
+                            "horizon_days": horizon_days,
+                            "batch": batch,
+                        }, ensure_ascii=False),
+                    ),
+                )
+            except Exception as _tick_err:
+                logger.debug(
+                    f"[P1-LIVE-4/FUTURE-PENDING] tick emit falló (best-effort): "
+                    f"{_tick_err}"
+                )
+
+
 def _escalate_unrecoverable_chunk(
     task_id: str,
     user_id: str,
@@ -9341,6 +11114,21 @@ def _escalate_unrecoverable_chunk(
         )
         action_cta = "Regenerar plan"
         action_url = "/dashboard?action_required=tz_unresolved"
+    elif escalation_reason == "execute_after_beyond_plan_window":
+        # [P1-NEW-D · 2026-05-11] Chunk `pending` con `execute_after` más
+        # allá del horizonte cubierto por `total_days_requested` (más
+        # 7 días de gracia). Detectado por
+        # `_recover_future_scheduled_pending_chunks`. El usuario no
+        # necesita saber el detalle técnico; el copy enmarca el problema
+        # como "tu plan se acortó y un día programado quedó fuera",
+        # acción = regenerar.
+        action_title = "Tu plan necesita regenerarse"
+        action_body = (
+            "Un día programado de tu plan quedó fuera del rango actual. "
+            "Tócalo para regenerarlo con tu nevera actual."
+        )
+        action_cta = "Regenerar plan"
+        action_url = "/dashboard?action_required=execute_after_beyond_window"
     else:
         # default: recovery_exhausted (chunk falló >= CHUNK_MAX_RECOVERY_ATTEMPTS).
         action_title = "Tu plan necesita atención"
@@ -13272,6 +15060,20 @@ def _alert_high_synthesized_lesson_ratio() -> None:
     )
 
     try:
+        # [P2-NEW-9 · 2026-05-11] `total_chunks` excluye chunks cuyo meal_plan
+        # esté marcado `abandoned`/`cancelled` (sweep P1-LIVE-3 / P2-NEXT-3 /
+        # P0-HIST-1 restore). Pre-fix: planes abandoned con N chunks completed
+        # inflaban `total_chunks` SIN inflar `synthesized_events` (sus lessons
+        # nunca se observan porque el plan está abandoned) → ratio synth:real
+        # falso-negativo → alerta válida suprimida cuando learning realmente
+        # está roto.
+        #
+        # Operacionalmente: hoy producción tiene 3 abandoned (sweep recent),
+        # poca señal; pero bajo carga (N usuarios x churn de sintéticos +
+        # orphans del sweep), el ratio se diluye proporcionalmente al stock
+        # de abandoned. NOT EXISTS contra subquery es barato (índice
+        # `plan_chunk_queue.meal_plan_id` + filter on jsonb path) y la
+        # subquery scopea solo a planes recientes via JOIN implícito por FK.
         stats = execute_sql_query(
             """
             SELECT
@@ -13279,9 +15081,14 @@ def _alert_high_synthesized_lesson_ratio() -> None:
                  WHERE event IN ('lesson_synthesized_low_confidence',
                                  'recent_lessons_partial_synthesis')
                    AND created_at > NOW() - make_interval(hours => %s)) AS synthesized_events,
-                (SELECT COUNT(*)::int FROM plan_chunk_queue
-                 WHERE status IN ('completed', 'failed')
-                   AND updated_at > NOW() - make_interval(hours => %s)) AS total_chunks
+                (SELECT COUNT(*)::int FROM plan_chunk_queue pcq
+                 WHERE pcq.status IN ('completed', 'failed')
+                   AND pcq.updated_at > NOW() - make_interval(hours => %s)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM meal_plans mp
+                       WHERE mp.id = pcq.meal_plan_id
+                         AND mp.plan_data->>'generation_status' IN ('abandoned', 'cancelled')
+                   )) AS total_chunks
             """,
             (
                 int(CHUNK_LESSON_SYNTH_WINDOW_HOURS),
@@ -14320,8 +16127,8 @@ def _alert_chunk_pantry_snapshots_stale() -> None:
                     """
                     INSERT INTO pipeline_metrics
                         (user_id, session_id, node, duration_ms, retries,
-                         tokens_estimated, confidence, metadata, is_guest)
-                    VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb, true)
+                         tokens_estimated, confidence, metadata)
+                    VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
                     """,
                     (
                         "_alert_chunk_pantry_snapshots_stale_tick",
@@ -17199,6 +19006,336 @@ def _cleanup_orphan_chunks() -> int:
     except Exception as e:
         logger.warning(f"[P2-3/ORPHAN-CLEANUP] Error limpiando chunks huérfanos: {e}")
         return 0
+
+
+def _sweep_meal_plans_without_chunks() -> int:
+    """[P2-NEXT-3 · 2026-05-11] Marca planes huérfanos (`in_progress` /
+    `generating_next` sin chunks asociados y antiguos) como `abandoned`.
+
+    Hermano simétrico de `_cleanup_orphan_chunks` (P2-3) pero en la
+    dirección OPUESTA del FK:
+      - `_cleanup_orphan_chunks`: chunks vivos con meal_plan_id que ya
+        no existe en `meal_plans` → cancela los chunks.
+      - `_sweep_meal_plans_without_chunks`: planes en estado in-progress
+        sin ningún chunk vivo en `plan_chunk_queue` Y antiguos → marca
+        el plan como abandoned (no DELETE — preserva audit).
+
+    Caso real cerrado:
+      Audit 2026-05-11 detectó plan `75be68b8-…` (test fixture inyectado
+      por P2-LIVE-2 con 8 chunks sintéticos) que tras cleanup de chunks
+      quedó residual en `meal_plans` con `generation_status='in_progress'`
+      sin cron que lo limpiase. Patrón generalizable: cualquier flujo de
+      chunks cancelled o cleaned puede dejar planes huérfanos en estado
+      mid-generation que nunca completarán.
+
+    Estrategia:
+      - SELECT planes con `generation_status IN ('in_progress',
+        'generating_next')` AND `created_at < NOW() - 7 días` AND
+        `NOT EXISTS chunks vivos para meal_plan_id`.
+      - Para cada plan: UPDATE plan_data via `||` jsonb merge (atómico
+        a nivel de keys mutadas — exento de invariante I7 que requiere
+        advisory lock solo para full-overwrite). Marca:
+          - `generation_status = "abandoned"`
+          - `_abandoned_at = NOW().isoformat()`
+          - `_abandoned_reason = "orphan_chunks"`
+      - Best-effort por plan: error individual NO aborta el sweep
+        completo (mantenimiento).
+
+    Por qué `||` en lugar de `jsonb_set` triple-anidado:
+      Más legible + atómico. PostgreSQL `||` para jsonb hace merge
+      preservando todas las keys no mencionadas. La concurrencia con
+      otros writers full-overwrite (chunks workers) se evita por el
+      filtro `NOT EXISTS` — si llegó aquí es porque no hay chunks
+      vivos, por lo tanto T1/T2 no están operando sobre este plan_id.
+      Si un chunk se inserta entre el SELECT y el UPDATE (race
+      imposible bajo APScheduler con max_instances=1 + sweep semanal),
+      el peor caso es el plan queda marcado abandoned + chunk vivo
+      ejecutándose en paralelo — el chunk worker pisaría `generation_status`
+      al completar, lo cual es comportamiento aceptable (el plan vuelve
+      a estado consistente).
+
+    Knobs:
+      MEALFIT_SWEEP_ORPHAN_PLANS_AGE_DAYS  (default 7) — edad mínima.
+      MEALFIT_SWEEP_ORPHAN_PLANS_BATCH     (default 100) — batch size.
+
+    Returns:
+      Número de planes marcados como abandoned.
+
+    Tooltip-anchor: P2-NEXT-3-START | gap audit 2026-05-11
+    """
+    age_days = _env_int("MEALFIT_SWEEP_ORPHAN_PLANS_AGE_DAYS", 7)
+    age_days = max(1, min(age_days, 90))  # clamp [1, 90]
+    batch = _env_int("MEALFIT_SWEEP_ORPHAN_PLANS_BATCH", 100)
+    batch = max(1, min(batch, 1000))
+
+    try:
+        candidates = execute_sql_query(
+            f"""
+            SELECT id, user_id
+            FROM meal_plans m
+            WHERE plan_data->>'generation_status' IN ('in_progress', 'generating_next')
+              AND created_at < NOW() - INTERVAL '{int(age_days)} days'
+              AND NOT EXISTS (
+                SELECT 1 FROM plan_chunk_queue q
+                WHERE q.meal_plan_id = m.id
+                  AND q.status IN ('pending', 'stale', 'processing', 'completed')
+              )
+            ORDER BY created_at ASC
+            LIMIT %s
+            """,
+            (batch,),
+            fetch_all=True,
+        )
+    except Exception as e:
+        logger.warning(f"[P2-NEXT-3/SWEEP-ORPHAN-PLANS] SELECT candidates falló: {e}")
+        return 0
+
+    candidates_list = list(candidates or [])
+    if not candidates_list:
+        logger.debug("[P2-NEXT-3/SWEEP-ORPHAN-PLANS] 0 candidatos.")
+        return 0
+
+    swept = 0
+    errors = 0
+    for plan in candidates_list:
+        plan_id = str(plan.get("id"))
+        user_id = plan.get("user_id")
+        if not plan_id or not user_id:
+            errors += 1
+            continue
+        try:
+            # `||` merge atómico — preserva todas las otras keys de
+            # plan_data. Filtro AND user_id defense-in-depth I2.
+            execute_sql_write(
+                """
+                UPDATE meal_plans
+                SET plan_data = plan_data || jsonb_build_object(
+                        'generation_status', 'abandoned',
+                        '_abandoned_at', NOW()::text,
+                        '_abandoned_reason', 'orphan_chunks'
+                    ),
+                    updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+                  AND plan_data->>'generation_status' IN ('in_progress', 'generating_next')
+                """,
+                (plan_id, str(user_id)),
+            )
+            swept += 1
+        except Exception as upd_e:
+            errors += 1
+            logger.warning(
+                f"[P2-NEXT-3/SWEEP-ORPHAN-PLANS] UPDATE plan {plan_id} falló: {upd_e}"
+            )
+
+    if swept:
+        logger.info(
+            f"[P2-NEXT-3/SWEEP-ORPHAN-PLANS] Marcados {swept} planes como abandoned "
+            f"(candidatos={len(candidates_list)}, errors={errors}, age_days={age_days})."
+        )
+    else:
+        logger.debug(
+            f"[P2-NEXT-3/SWEEP-ORPHAN-PLANS] 0 marcados (candidatos={len(candidates_list)}, "
+            f"errors={errors})."
+        )
+    return swept
+
+
+def _sweep_synthetic_test_plans() -> int:
+    """[P1-LIVE-3 · 2026-05-11] Limpia planes test-fixture acumulados en prod.
+
+    Caso real cerrado:
+      Audit live 2026-05-11 detectó 3 planes del user `bf6f1383` (test
+      user del equipo), todos con nombre `Plan Sintético <N> días — Test
+      <Chunks|Historial|...>`:
+        - `75be68b8` (in_progress 38h+, 3 días, _plan_modified_at=null).
+        - `98d902e3` (generating_next 3.5d, chunk con execute_after=2026-11-08).
+        - 1 abandoned (cerrado por P2-NEXT-3).
+      Ayer P2-LIVE-2 limpió 8 chunks fixture del mismo user (oneshot,
+      sin code change). El patrón se está repitiendo → necesita defensa
+      de código periódica.
+
+    P2-NEXT-3 (sweep_meal_plans_without_chunks) NO los cubre porque:
+      - Plan `75be68b8` tiene 1 chunk `pending` (P2-NEXT-3 skipea planes
+        con cualquier chunk vivo, by design para evitar race con worker).
+      - Plan `98d902e3` tiene chunk pending con execute_after=2026-11-08
+        (cerrado parcialmente por P1-NEW-D, pero plan padre intacto).
+
+    Estrategia (más agresiva que P2-NEXT-3):
+      1. SELECT planes con `plan_data->>'name' ILIKE 'Plan Sintético% — Test%'`
+         AND `created_at < NOW() - 1 día`. El sufijo `— Test` filtra
+         falsos positivos (un usuario podría nombrar legítimamente un
+         plan `Plan Sintético Pro 2026`, pero no con `— Test` suffix).
+      2. Para cada plan: CANCELAR chunks vivos (`pending`/`processing`/
+         `stale`) — son fixtures, no work real. Diferencia clave con
+         P2-NEXT-3 que solo cubre planes ya sin chunks.
+      3. Marcar el plan `abandoned` via `||` jsonb merge con
+         `_abandoned_reason = 'synthetic_fixture'`. Atómico a nivel de
+         keys (exento de invariante I7).
+      4. Best-effort por plan: error individual NO aborta el sweep.
+
+    Knobs:
+      MEALFIT_SWEEP_SYNTHETIC_PLANS_ENABLED (default True) — kill switch.
+      MEALFIT_SWEEP_SYNTHETIC_PLANS_AGE_HOURS (default 24, clamp [1, 720])
+        — edad mínima. 24h es suficiente para distinguir fixture (vida
+        corta) de test legítimo en QA.
+      MEALFIT_SWEEP_SYNTHETIC_PLANS_BATCH (default 50, clamp [1, 500]).
+
+    Tick observable patrón P1-LIVE-4: emite `_sweep_synthetic_test_plans_tick`
+    SIEMPRE para confirmar live que el cron está vivo (no podemos
+    distinguir scheduler starvation de "0 fixtures hoy" sin esto).
+
+    Returns:
+      Número de planes marcados como abandoned en este tick.
+
+    Tooltip-anchor: P1-LIVE-3-START | gap audit 2026-05-11
+    """
+    if not _env_bool("MEALFIT_SWEEP_SYNTHETIC_PLANS_ENABLED", True):
+        logger.info(
+            "[P1-LIVE-3/SWEEP-SYNTHETIC] Desactivado via knob "
+            "MEALFIT_SWEEP_SYNTHETIC_PLANS_ENABLED."
+        )
+        return 0
+
+    age_hours = _env_int("MEALFIT_SWEEP_SYNTHETIC_PLANS_AGE_HOURS", 24)
+    age_hours = max(1, min(age_hours, 720))
+    batch = _env_int("MEALFIT_SWEEP_SYNTHETIC_PLANS_BATCH", 50)
+    batch = max(1, min(batch, 500))
+
+    candidates_count = 0
+    swept = 0
+    chunks_cancelled = 0
+    errors = 0
+    select_failed = False
+    try:
+        try:
+            candidates = execute_sql_query(
+                f"""
+                SELECT id, user_id, plan_data->>'name' AS name
+                FROM meal_plans
+                WHERE plan_data->>'name' ILIKE 'Plan Sintético%% — Test%%'
+                  AND created_at < NOW() - INTERVAL '{int(age_hours)} hours'
+                  AND plan_data->>'generation_status' IS DISTINCT FROM 'abandoned'
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                (batch,),
+                fetch_all=True,
+            ) or []
+        except Exception as e:
+            select_failed = True
+            logger.warning(
+                f"[P1-LIVE-3/SWEEP-SYNTHETIC] SELECT candidates falló: {e}"
+            )
+            return 0
+
+        candidates_count = len(candidates)
+        if not candidates:
+            logger.debug(
+                f"[P1-LIVE-3/SWEEP-SYNTHETIC] 0 candidatos (age_hours={age_hours})."
+            )
+            return 0
+
+        for plan in candidates:
+            plan_id = str(plan.get("id") or "")
+            user_id = str(plan.get("user_id") or "")
+            plan_name = plan.get("name") or "<unknown>"
+            if not plan_id or not user_id:
+                errors += 1
+                continue
+
+            # 1. Cancelar chunks vivos (pending/processing/stale).
+            try:
+                cancelled_rows = execute_sql_write(
+                    """
+                    UPDATE plan_chunk_queue
+                    SET status = 'cancelled',
+                        updated_at = NOW()
+                    WHERE meal_plan_id = %s
+                      AND user_id = %s
+                      AND status IN ('pending', 'processing', 'stale')
+                      AND dead_lettered_at IS NULL
+                    RETURNING id
+                    """,
+                    (plan_id, user_id),
+                    returning=True,
+                ) or []
+                n_cancelled = len(cancelled_rows) if isinstance(cancelled_rows, list) else 0
+                chunks_cancelled += n_cancelled
+            except Exception as cancel_err:
+                errors += 1
+                logger.warning(
+                    f"[P1-LIVE-3/SWEEP-SYNTHETIC] cancel chunks de plan {plan_id} "
+                    f"falló: {cancel_err}. Skip plan."
+                )
+                continue
+
+            # 2. Marcar plan abandoned via jsonb merge `||` (atómico, exento I7).
+            #    Filter AND user_id para defense-in-depth I2.
+            try:
+                execute_sql_write(
+                    """
+                    UPDATE meal_plans
+                    SET plan_data = plan_data || jsonb_build_object(
+                            'generation_status', 'abandoned',
+                            '_abandoned_at', NOW()::text,
+                            '_abandoned_reason', 'synthetic_fixture'
+                        ),
+                        updated_at = NOW()
+                    WHERE id = %s
+                      AND user_id = %s
+                      AND plan_data->>'name' ILIKE 'Plan Sintético%% — Test%%'
+                    """,
+                    (plan_id, user_id),
+                )
+                swept += 1
+                logger.info(
+                    f"🧹 [P1-LIVE-3/SWEEP-SYNTHETIC] plan {plan_id} "
+                    f"(name='{plan_name}') marcado abandoned "
+                    f"(chunks_cancelled={n_cancelled})."
+                )
+            except Exception as upd_err:
+                errors += 1
+                logger.warning(
+                    f"[P1-LIVE-3/SWEEP-SYNTHETIC] UPDATE plan {plan_id} falló: "
+                    f"{upd_err}"
+                )
+
+        if swept or errors:
+            logger.info(
+                f"[P1-LIVE-3/SWEEP-SYNTHETIC] tick completo: candidates="
+                f"{candidates_count}, swept={swept}, "
+                f"chunks_cancelled={chunks_cancelled}, errors={errors}, "
+                f"age_hours={age_hours}."
+            )
+        return swept
+    finally:
+        # Tick observable patrón P1-LIVE-4 / P3-LIVE-1.
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics
+                    (user_id, session_id, node, duration_ms, retries,
+                     tokens_estimated, confidence, metadata)
+                VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+                """,
+                (
+                    "_sweep_synthetic_test_plans_tick",
+                    json.dumps({
+                        "candidates_count": candidates_count,
+                        "swept": swept,
+                        "chunks_cancelled": chunks_cancelled,
+                        "errors": errors,
+                        "select_failed": select_failed,
+                        "age_hours": age_hours,
+                        "batch": batch,
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as _tick_err:
+            logger.debug(
+                f"[P1-LIVE-3/SWEEP-SYNTHETIC] tick emit falló (best-effort): "
+                f"{_tick_err}"
+            )
 
 
 @_with_worker_metrics
@@ -22676,6 +24813,58 @@ def process_plan_chunk_queue(target_plan_id=None):
                     full_plan_data['aggregated_shopping_list_biweekly'] = aggr_15_hybrid
                     full_plan_data['aggregated_shopping_list_monthly'] = aggr_30_hybrid
                     full_plan_data['aggregated_shopping_list'] = aggr_active
+
+                    # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista
+                    # recién construida. Antes, T2 persistía aggregated_shopping_list*
+                    # sin invocar run_shopping_coherence_guard — multi-week plans
+                    # podían shipear divergencias recetas↔lista sin retry ni
+                    # telemetría. Cierre del gap del audit 2026-05-11.
+                    #
+                    # Modo: mantenemos `warn` aquí (no `block`) porque T2 ya es
+                    # un retry loop con backoff; bloquear+retry crearía un ciclo
+                    # caro (`shopping_list_retry_exhausted` ya cubre fallos
+                    # transitorios del aggregator). El cron diario
+                    # `_shopping_coherence_alert_job` también opera en warn —
+                    # mantenemos paridad y solo poblamos history+métricas.
+                    # `action_taken="warn_only_chunk_t2"` distingue el origen
+                    # post-mortem (vs `not_applicable` del assemble normal).
+                    # [P2-COHERENCE-1 · 2026-05-11] Pasamos `block_severe_only=True`
+                    # para que el helper escale warn→block selectivo cuando hay
+                    # divergencias críticas (cap_swallowed_modifier o magnitudes
+                    # >50%). El knob `MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY`
+                    # (default True) controla el comportamiento. Si block_set
+                    # llega True, lanzamos para que el retry loop de T2
+                    # (`_shop_attempt`/_SHOP_MAX_RETRIES) reintente con backoff;
+                    # si tras los retries sigue divergente, se aborta vía
+                    # `shopping_list_retry_exhausted` (ya manejado abajo).
+                    _t2_block_set = False
+                    try:
+                        from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_t2
+                        _t2_divergences, _t2_block_set = _coh_t2(
+                            full_plan_data,
+                            multiplier=full_plan_data.get("calc_household_multiplier") or household,
+                            mode_override="warn",
+                            attempt=_shop_attempt,
+                            action_taken="warn_only_chunk_t2",
+                            plan_id_hint=meal_plan_id,
+                            block_severe_only=True,
+                        )
+                    except Exception as _coh_t2_e:
+                        logger.warning(f"[CHUNK/GAP2] coherence guard helper falló (no aborta): {_coh_t2_e}")
+
+                    if _t2_block_set:
+                        # Tratamos el block como un fallo transitorio del
+                        # aggregator: salta al except del retry loop, que
+                        # aplica backoff exponencial y reintenta. Si tras N
+                        # retries sigue block_set, el flag persiste en el
+                        # plan_data y `assemble_plan_node`/cron diario
+                        # capturan el estado para SRE.
+                        raise RuntimeError(
+                            f"[P2-COHERENCE-1] T2 coherence block_severe_only escaló warn→block "
+                            f"(plan={meal_plan_id}, week={week_number}, divergences={len(_t2_divergences or [])}); "
+                            f"retry vía _SHOP_MAX_RETRIES."
+                        )
+
                     shopping_list_ok = True
                     logger.info(f"[CHUNK/GAP2] Shopping list consolidada recalculada para {new_total} dias (intento {_shop_attempt}).")
                     break  # Exito, salir del retry loop

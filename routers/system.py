@@ -471,3 +471,93 @@ def admin_invalidate_plan_graph(request: Request, body: Optional[_InvalidatePlan
         f"(reason={reason!r}, total={status.get('invalidations_total')})."
     )
     return {"success": True, **status}
+
+
+@router.post("/admin/deploy-lag/check")
+def admin_force_deploy_lag_check(request: Request):
+    """[P0-PROD-1-DEPLOY · 2026-05-12] Fuerza la ejecución inmediata del
+    detector `_alert_deploy_lag_marker_stale` sin esperar al cron.
+
+    Razón: el cron corre cada `MEALFIT_DEPLOY_LAG_CHECK_INTERVAL_HOURS`
+    (default 1h). Cuando el operador acaba de publicar `expected_last_known_pfix`
+    en `app_kv_store` tras un `git push` y quiere confirmar que prod ya
+    tiene el binario actualizado, este endpoint da feedback inmediato:
+      - Si live == expected → ningún alert se inserta y la respuesta lo
+        confirma con `drift=False`.
+      - Si live ≠ expected → emite `deploy_lag_drift_vs_expected` igual que
+        el cron, retorna `drift=True` + ambos markers en la respuesta.
+
+    Auth: `Authorization: Bearer <CRON_SECRET>` (mismo patrón que el resto
+    de `/admin/*`). 503 si CRON_SECRET no está seteado.
+
+    Anchor: P0-PROD-1-DEPLOY-FORCE-CHECK.
+
+    Notas operacionales:
+      - Endpoint best-effort: si el detector lanza excepción inesperada,
+        retornamos 500 con el `type(e).__name__` (no leak del traceback al
+        cliente — usar logs server-side para el detalle completo).
+      - NO muta nada por sí mismo: solo invoca el detector, que sí puede
+        insertar alerts en `system_alerts`. Idempotente: ejecutarlo 2 veces
+        seguidas no duplica filas (ON CONFLICT (alert_key) DO UPDATE).
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    try:
+        from cron_tasks import _alert_deploy_lag_marker_stale, _DEPLOY_LAG_KV_KEY
+        from db_core import execute_sql_query
+        from app import _LAST_KNOWN_PFIX as live_marker
+    except Exception as e:
+        logger.error(f"[P0-PROD-1-DEPLOY] Import del detector falló: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Detector no disponible: {type(e).__name__}",
+        )
+
+    try:
+        _alert_deploy_lag_marker_stale()
+    except Exception as e:
+        logger.error(f"[P0-PROD-1-DEPLOY] _alert_deploy_lag_marker_stale falló: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Detector falló: {type(e).__name__}",
+        )
+
+    # Snapshot post-check para retornar al operador sin que tenga que
+    # hacer un segundo round-trip a `system_alerts`.
+    expected_marker = None
+    try:
+        row = execute_sql_query(
+            "SELECT value FROM app_kv_store WHERE key = %s",
+            (_DEPLOY_LAG_KV_KEY,),
+            fetch_one=True,
+        )
+        if row:
+            raw = row.get("value") if isinstance(row, dict) else None
+            if isinstance(raw, str):
+                expected_marker = raw
+            elif isinstance(raw, dict):
+                cand = raw.get("marker")
+                if isinstance(cand, str):
+                    expected_marker = cand
+    except Exception as e:
+        logger.debug(f"[P0-PROD-1-DEPLOY] SELECT KV expected (best-effort): {e}")
+
+    drift = bool(
+        expected_marker
+        and live_marker
+        and expected_marker.strip() != live_marker.strip()
+    )
+    return {
+        "success": True,
+        "live_marker": live_marker,
+        "expected_marker": expected_marker,
+        "drift": drift,
+        "message": (
+            "Drift detectado: forzar redeploy en EasyPanel." if drift
+            else (
+                "Sin drift: prod ejecuta la versión publicada en KV."
+                if expected_marker else
+                "Sin marker esperado publicado en app_kv_store — el detector "
+                "solo evaluó staleness por antigüedad."
+            )
+        ),
+    }

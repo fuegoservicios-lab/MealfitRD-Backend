@@ -94,10 +94,32 @@ async def unsubscribe_push(request: Request, user_id: str = Depends(get_verified
         raise HTTPException(status_code=500, detail="Error de BDD borrando suscripción")
 
 @router.get("/test")
-async def test_push_route(user_id: str):
+async def test_push_route(user_id: str, request: Request):
+    """[P1-NOTIF-TEST-1 · 2026-05-11] Ruta de depuración admin-only para
+    probar el envío forzado de notificaciones Push a todos los dispositivos
+    suscritos de un usuario.
+
+    ANTES (pre-fix):
+      Sin `Depends(...)`. Cualquiera con la URL pública del backend +
+      cualquier `user_id` válido (UUIDs leak fácilmente vía endpoints GET o
+      enumeración) podía spamear push notifications a los devices del
+      usuario. Sin frontend caller (verificado vía grep) — el endpoint era
+      pure debug pero estaba montado en el router de producción.
+
+    DESPUÉS:
+      `_verify_admin_token(authorization)` — mismo gate que
+      `/api/system/admin/plan-graph/invalidate` y `/api/plans/admin/...`.
+      Requiere `Authorization: Bearer <CRON_SECRET>`. Sin CRON_SECRET en
+      el ambiente, el endpoint responde 503 (fail-secure: admin endpoints
+      no se exponen sin secreto).
+
+    Tooltip-anchor: P1-NOTIF-TEST-1-AUTH
     """
-    Ruta de depuración para probar el envío forzado de notificaciones Push a todos los dispositivos suscritos de un usuario.
-    """
+    # Import lazy del helper admin (vive en routers.plans para evitar duplicar
+    # CRON_SECRET checking en 5 lugares). Mismo patrón que system.py.
+    from routers.plans import _verify_admin_token
+    _verify_admin_token(request.headers.get("authorization"))
+
     if not connection_pool:
         raise HTTPException(status_code=500, detail="Database connection pool unavailable")
     try:

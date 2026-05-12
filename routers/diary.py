@@ -7,6 +7,7 @@ import asyncio
 from db_core import supabase
 from db_profiles import get_user_profile, log_api_usage
 from auth import get_verified_user_id, verify_api_quota
+from path_validators import assert_valid_uuid
 from db import log_consumed_meal, get_consumed_meals_today, save_visual_entry
 from vision_agent import process_image_with_vision, get_multimodal_embedding
 
@@ -184,6 +185,8 @@ def api_log_consumed_meal(
 def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: Optional[int] = None, verified_user_id: str = Depends(get_verified_user_id)):
     """Obtiene las métricas agregadas de las comidas registradas en el día por la IA."""
     try:
+        # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
+        assert_valid_uuid(user_id, allow_guest=True)
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:

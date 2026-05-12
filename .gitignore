@@ -16,8 +16,23 @@ uploads/
 *.log
 pytest_output.txt
 title_debug.log
+push_log.txt
+pyright_results.json
 *.bak
 *.jsonl.bak
+
+# Runtime state — generados por la app, no son source-of-truth
+_force_regen.json
+chat_errors.json
+
+# DBs y artefactos locales
+*.sqlite3
+*.db
+test.mp3
+
+# Sub-scratch / helpers one-shot dentro de backend
+scratch/
+test_browser_console.js
 
 # Helpers ad-hoc one-off (no deben commitearse al repo)
 append_*.py

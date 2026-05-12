@@ -11,7 +11,6 @@ from db import (
     supabase,
     increment_ingredient_frequencies,
     check_recent_meal_plan_exists,
-    save_new_meal_plan_robust,
     log_unknown_ingredients,
     get_user_profile,
     get_or_create_session,
@@ -22,6 +21,12 @@ from db import (
     update_user_health_profile_atomic,
     upsert_user_profile
 )
+# [P2-PARTIAL-PLAN-1 · 2026-05-11] Removido `save_new_meal_plan_robust` del
+# top-level: el único usuario era el branch del CANCEL out-of-tx, ya
+# eliminado de `_save_plan_and_track_background`. `save_partial_plan_get_id`
+# (línea ~110) sigue importándolo lazy inside la función — el helper sigue
+# vivo en db_plans.py y otros callers (tools.py, app.py) lo usan sin race
+# porque pasan `additional_queries=None`.
 from db_plans import save_new_meal_plan_atomic
 
 from constants import normalize_ingredient_for_tracking, GLOBAL_REVERSE_MAP, IGNORED_TRACKING_TERMS
@@ -110,8 +115,11 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
 def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: list = None, total_days_requested: int = 7) -> str:
     """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
     Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
+
+    [P2-PARTIAL-PLAN-1 · 2026-05-11] Removido el lazy import de
+    `save_new_meal_plan_robust` — el body real usa `save_new_meal_plan_atomic`
+    (línea ~158). El import legacy nunca se referenciaba.
     """
-    from db_plans import save_new_meal_plan_robust
     try:
         # [GAP 3] Limpieza de días huérfanos al regenerar
         if "days" in plan_data and len(plan_data["days"]) > total_days_requested:
@@ -159,14 +167,31 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         return None
 
 
-def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None, additional_db_queries: list = None):
-    """Background task para guardar plan y actualizar frecuencias de ingredientes."""
+def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
+    """Background task para guardar plan y actualizar frecuencias de ingredientes.
+
+    [P2-PARTIAL-PLAN-1 · 2026-05-11] El parámetro `additional_db_queries`
+    fue REMOVIDO. Ningún caller en producción lo usaba (verificado vía grep
+    cross-codebase: el único caller en `routers/plans.py:1391` solo pasa
+    `actual_user_id, result, selected_techniques`). El branch que lo
+    consumía hacía `execute_sql_write(...)` para cancelar chunks FUERA de
+    la transacción del INSERT — admitido residual TOCTOU: si el chunk
+    worker capturaba lock entre el CANCEL y el INSERT, podía persistir
+    contra el plan viejo en lugar del nuevo.
+
+    Cierre: consolidar todo a `save_new_meal_plan_atomic` (P0-2/ATOMIC),
+    que cancela chunks + libera reservas + INSERT en una SOLA transacción.
+    Si en el futuro algún caller necesita queries adicionales atómicas con
+    el INSERT, extender `save_new_meal_plan_atomic` con un parámetro
+    `additional_queries` que ejecute dentro del mismo `conn.transaction()`,
+    NO restaurar el patrón pre-fix de CANCEL out-of-tx.
+    """
     try:
         # 1. Guardar Plan O(1) Arrays
         if supabase:
             calories = plan_data.get("calories", 0)
             macros = plan_data.get("macros", {})
-            
+
             meal_names = []
             ingredients = []
             raw_ingredients = []
@@ -177,10 +202,10 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                     if m.get("ingredients"):
                         ingredients.extend(m.get("ingredients"))
                         raw_ingredients.extend(m.get("ingredients"))
-                        
+
             # Nombre creativo generado por IA (Gemini Flash-Lite)
             plan_name = generate_plan_title(plan_data)
-                
+
             # Extraer _profile_embedding si fue inyectado por la caché semántica
             profile_embedding = plan_data.pop("_profile_embedding", None)
 
@@ -195,43 +220,23 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             }
             if profile_embedding:
                 insert_data["profile_embedding"] = profile_embedding
-            
+
             # Añadir técnicas de cocción si están disponibles
             if selected_techniques:
                 insert_data["techniques"] = selected_techniques
-            
+
 
             # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
             if check_recent_meal_plan_exists(user_id, max_seconds=30):
                 logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
                 return
-                
-            if additional_db_queries:
-                # Si hay queries adicionales, cancelar chunks primero y luego ejecutar
-                # todo en una transacción via save_new_meal_plan_robust con additional_queries.
-                # [P0-3] Cancelar chunks justo antes del INSERT (misma conexión, no la misma transacción
-                # porque execute_sql_transaction no soporta RETURNING). Riesgo residual es mínimo
-                # dado que el P0-1/TOCTOU guard en el worker actúa como red de seguridad.
-                # Cubre todos los estados que pueden re-disparar generación contra el plan nuevo
-                # (incl. failed/stale/pending_user_action que recovery crons podrían levantar).
-                try:
-                    from db_core import execute_sql_write
-                    cancelled = execute_sql_write(
-                        "UPDATE plan_chunk_queue SET status = 'cancelled', updated_at = NOW() "
-                        "WHERE user_id = %s "
-                        "AND status IN ('pending', 'processing', 'stale', 'pending_user_action', 'failed') "
-                        "RETURNING id",
-                        (user_id,), returning=True
-                    )
-                    n_cancelled = len(cancelled) if cancelled else 0
-                    if n_cancelled > 0:
-                        logger.info(f"✅ [P0-3] {n_cancelled} chunks cancelados (pre-additional_queries, incl. failed/stale) para {user_id}")
-                except Exception as ce:
-                    logger.warning(f"⚠️ [P0-3] Error cancelando chunks pre-additional_queries: {ce}")
-                save_new_meal_plan_robust(insert_data, additional_queries=additional_db_queries)
-            else:
-                # [P0-2/ATOMIC] Cancelar chunks + INSERT en una sola transacción.
-                save_new_meal_plan_atomic(user_id, insert_data, return_id=False)
+
+            # [P0-2/ATOMIC + P2-PARTIAL-PLAN-1] Cancelar chunks + liberar
+            # reservas + INSERT en una sola transacción. Único path —
+            # eliminado el branch pre-P2-PARTIAL-PLAN-1 que hacía CANCEL
+            # out-of-tx via execute_sql_write antes de
+            # save_new_meal_plan_robust.
+            save_new_meal_plan_atomic(user_id, insert_data, return_id=False)
             logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
             
         # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad)

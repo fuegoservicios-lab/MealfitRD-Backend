@@ -445,12 +445,24 @@ def _trigger_week2_background_generation(user_id, plan_id, existing_plan_data):
             health_profile = profile.get("health_profile", {})
             form_data = health_profile.copy()
             form_data["user_id"] = user_id
-            
+            # [P1-NEW-9 · 2026-05-11] Atribución del caller para que
+            # `_emit_plan_quality_degraded_alert` (graph_orchestrator
+            # should_retry, las 5 ramas "end") correlacione el alert
+            # al plan_id correcto. Sin estos kwargs, el alert antes
+            # quedaba con alert_key="plan_quality_degraded:<user>:no_plan_id"
+            # porque `plan_result` de la extensión week-2 no trae `id`
+            # (el meal_plan ya existe en DB, este pipeline NO inserta).
+            # Resultado pre-fix: SRE veía la alert pero NO sabía cuál
+            # plan se extendió degradado, y los alerts colapsaban con
+            # alert_key={user_id}:no_plan_id usados para /generate-plan.
+            form_data["_caller_target_plan_id"] = plan_id
+            form_data["_caller_context"] = "jit_week2"
+
             likes = get_user_likes(user_id)
             rejections = get_active_rejections(user_id)
             rej_names = [r["meal_name"] for r in rejections] if rejections else []
             taste_profile = analyze_preferences_agent(likes, [], active_rejections=rej_names)
-            
+
             result = run_plan_pipeline(form_data, [], taste_profile, memory_context="")
             
             new_days = result.get("days", [])

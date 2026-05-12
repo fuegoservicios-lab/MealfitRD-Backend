@@ -2451,7 +2451,82 @@ class PlanState(TypedDict):
     #   - `test_p1_new_1_plan_result_contract_completeness.py` — inverso:
     #     CADA key `_xxx` que aparezca en `plan_result["..."]`/`result["..."]`
     #     del código de producción DEBE estar en este bloque CONTRATO.
+    #   - `test_p3_new_8_plan_result_contract_runtime_validator.py` — valida
+    #     que `_ensure_plan_result_contract` está cableado al return final
+    #     del pipeline + chequea los rangos canónicos en runtime.
     # ============================================================
+
+
+def _ensure_plan_result_contract(plan_result, *, source: str = "unknown") -> None:
+    """[P3-NEW-8 · 2026-05-11] Validador defensivo runtime del contrato
+    del `plan_result` documentado en el bloque CONTRATO arriba.
+
+    Por qué existe:
+      El test parser-based `test_p1_new_1_plan_result_contract_completeness`
+      ya enforza el contrato a CI: cada key `_xxx` en producción DEBE
+      estar documentada en el bloque. Pero eso es post-hoc — un refactor
+      que mete drift de TIPO/RANGO (ej. `_review_severity="medium"` en
+      lugar de uno del set canónico, o `days=dict` en lugar de list) no
+      lo atrapa porque la KEY sigue documentada.
+
+      Este helper cierra ese gap: corre justo antes del `return` final
+      del pipeline (`arun_plan_pipeline`) y emite WARNING para cada
+      violación de rango. Log-only, NEVER raise — un guard runtime que
+      crashea el pipeline por type drift sería peor que el drift mismo.
+
+    Validaciones (subset deliberadamente pequeño — solo las keys con
+    valor enumerado o tipo estructural fijo. Las keys de string libre
+    `_review_disclaimer`/`_schema_errors` no se validan porque no hay
+    contrato de rango):
+
+      - `_review_severity` ∈ {"minor", "high", "critical", None}.
+      - `_is_fallback` ∈ {True, False, None}.
+      - `_review_failed_but_delivered` ∈ {True, False, None}.
+      - `days` is list (or None/absent).
+      - `_skeleton_fidelity_errors` is list (or None/absent).
+      - `_schema_errors` is list-or-str (or None/absent).
+
+    Args:
+        plan_result: el dict a validar (puede ser None — log y return).
+        source: hint para el log del callsite (e.g., "arun_plan_pipeline_return").
+
+    Returns: None — side-effect-only via logger.warning.
+
+    Idempotente, sin side-effects en `plan_result` (NO mutates).
+    """
+    if plan_result is None:
+        logger.warning(f"[P3-NEW-8/CONTRACT] plan_result=None (source={source})")
+        return
+    if not isinstance(plan_result, dict):
+        logger.warning(
+            f"[P3-NEW-8/CONTRACT] plan_result no es dict "
+            f"(source={source}, tipo={type(plan_result).__name__})"
+        )
+        return
+
+    _SEVERITY_SET = {"minor", "high", "critical"}
+    sev = plan_result.get("_review_severity")
+    if sev is not None and sev not in _SEVERITY_SET:
+        logger.warning(
+            f"[P3-NEW-8/CONTRACT] _review_severity={sev!r} fuera del set "
+            f"canónico {_SEVERITY_SET} (source={source})"
+        )
+
+    for bool_key in ("_is_fallback", "_review_failed_but_delivered"):
+        val = plan_result.get(bool_key)
+        if val is not None and not isinstance(val, bool):
+            logger.warning(
+                f"[P3-NEW-8/CONTRACT] {bool_key}={val!r} no es bool "
+                f"(source={source}, tipo={type(val).__name__})"
+            )
+
+    for list_key in ("days", "_skeleton_fidelity_errors", "_review_issues"):
+        val = plan_result.get(list_key)
+        if val is not None and not isinstance(val, list):
+            logger.warning(
+                f"[P3-NEW-8/CONTRACT] {list_key} no es lista "
+                f"(source={source}, tipo={type(val).__name__})"
+            )
 
 
 
@@ -8759,14 +8834,26 @@ def _emit_plan_quality_degraded_alert(
         form_data = state.get("form_data") or {}
         user_id = form_data.get("user_id") or form_data.get("session_id") or "unknown"
         plan_result = state.get("plan_result") or {}
+        # [P1-NEW-9 · 2026-05-11] Caller-injected fallback ANTES del sentinel
+        # final. Cuando el caller es JIT week-2 (proactive_agent) u otro
+        # flujo que opera sobre un meal_plan PRE-EXISTENTE (no inserta plan
+        # nuevo), plan_result no trae `id`/`plan_id` y antes el alert
+        # colapsaba al sentinel — útil solo para el path /generate-plan
+        # inicial, no para extensiones. Ahora el caller inyecta el plan_id
+        # real en form_data y SRE puede correlacionar al plan extendido.
         plan_id = (
             plan_result.get("id")
             or plan_result.get("plan_id")
+            or form_data.get("_caller_target_plan_id")
             or "no_plan_id"
         )
         alert_key = f"plan_quality_degraded:{user_id}:{plan_id}"
         rejection_reasons = state.get("rejection_reasons") or []
         attempts = state.get("attempt", 1)
+        # [P1-NEW-9] Caller context para que SRE filtre alerts por origen
+        # (initial generate vs jit_week2 vs futuros flows). Default
+        # 'initial_generate' preserva el contrato histórico.
+        caller_context = form_data.get("_caller_context") or "initial_generate"
 
         metadata = {
             "exit_reason": exit_reason,  # 'critical' | 'high_contextual' | 'max_attempts' | 'invalid_pipeline_start' | 'budget_exhausted'
@@ -8776,6 +8863,7 @@ def _emit_plan_quality_degraded_alert(
             "plan_id": plan_id,
             "user_id": user_id,
             "top_rejection_reasons": rejection_reasons[:5],
+            "caller_context": caller_context,  # P1-NEW-9
         }
         message = (
             f"Plan entregado al usuario {user_id} con calidad degradada "
@@ -8784,8 +8872,57 @@ def _emit_plan_quality_degraded_alert(
             f"para diagnosticar patrón."
         )
 
-        from db_core import execute_sql_write
+        from db_core import execute_sql_write, execute_sql_query
         import json as _json
+
+        # [P3-NEW-9 · 2026-05-11] Coalesce inter-thread vía advisory lock
+        # en `app_kv_store`. Pre-fix: dos requests concurrentes del MISMO
+        # user con ambas terminando en `should_retry "end"` en el mismo
+        # segundo emitían 2 INSERTs paralelos. La DB deduplicaba el row
+        # (ON CONFLICT) pero webhooks downstream (Sentry/Slack si configurados)
+        # podían disparar N veces — observability noise.
+        #
+        # Mecanismo: UPSERT condicional con WHERE updated_at < NOW() - 60s.
+        # Si la fila no existe → INSERT → RETURNING → procede.
+        # Si la fila existe y está stale (>60s) → UPDATE → RETURNING → procede.
+        # Si la fila existe y está fresh (<60s) → WHERE falla → no RETURNING → skip.
+        # 60s cubre el racing window de should_retry sin perder señal legítima
+        # de regeneraciones espaciadas. NO requiere cron de cleanup — el
+        # natural churn de keys (millones de plans, una key por evento) cabe
+        # en KV; un sweep separado puede añadirse si la tabla crece.
+        emit_lock_key = f"plan_quality_emit_lock:{user_id}:{plan_id}"
+        try:
+            lock_row = execute_sql_query(
+                """
+                INSERT INTO app_kv_store (key, value, updated_at)
+                VALUES (%s, '{}'::jsonb, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET updated_at = NOW(), value = EXCLUDED.value
+                WHERE app_kv_store.updated_at < NOW() - INTERVAL '60 seconds'
+                RETURNING key
+                """,
+                (emit_lock_key,),
+                fetch_one=True,
+            )
+        except Exception as _lock_err:
+            # Best-effort: si el KV falla (DB down), caemos al comportamiento
+            # pre-P3-NEW-9 (sin coalesce). Mejor emit duplicado que perder
+            # señal por bug del lock.
+            logger.debug(
+                f"[P3-NEW-9] dedup lock falló (best-effort, sigo emit): {_lock_err}"
+            )
+            lock_row = {"key": emit_lock_key}
+
+        if not lock_row:
+            # Otro thread ya emitió en los últimos 60s — skip silencioso.
+            # El emit duplicado a DB es idempotente (ON CONFLICT bumpea
+            # triggered_at), pero saltar evita webhooks downstream N-firing.
+            logger.debug(
+                f"[P3-NEW-9] plan_quality_degraded emit coalesced "
+                f"(lock fresh) user={user_id} plan={plan_id} exit={exit_reason}"
+            )
+            return
+
         execute_sql_write(
             """
             INSERT INTO system_alerts
@@ -10542,6 +10679,16 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
     "_creative_freedom",
     "_is_rotation_reroll",
     "_is_same_day_reroll",
+
+    # [P1-NEW-9 · 2026-05-11] Atribución del caller para el helper
+    # `_emit_plan_quality_degraded_alert`. Sin estos kwargs, el alert
+    # emitido por should_retry usa plan_id="no_plan_id" para flujos
+    # que NO insertan plan nuevo (ej. JIT week-2 extension del
+    # proactive_agent). El plan target ya existe en `meal_plans`; con
+    # estas keys el alert correlaciona al plan correcto y SRE puede
+    # filtrar por `metadata.caller_context`.
+    "_caller_target_plan_id",
+    "_caller_context",
 })
 
 
@@ -12878,6 +13025,16 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             # añadimos una marca específica de este path para que Grafana pueda
             # distinguir el origen del fallback en alerts.
             plan_to_return["_p1_5_emergency_return"] = True
+
+        # [P3-NEW-8 · 2026-05-11] Validador runtime de tipos/rangos del
+        # contrato. Best-effort log-only — NUNCA raise (el caller espera
+        # un dict, no una excepción).
+        try:
+            _ensure_plan_result_contract(plan_to_return, source="arun_plan_pipeline_return")
+        except Exception as _contract_err:
+            logger.debug(
+                f"[P3-NEW-8/CONTRACT] validador falló (best-effort): {_contract_err}"
+            )
 
         return plan_to_return
     finally:

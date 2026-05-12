@@ -6,7 +6,7 @@ from collections import defaultdict
 import logging
 from fractions import Fraction
 from db_core import supabase, connection_pool, execute_sql_query
-from canonical_units import canonicalize_unit  # [P1-shop-coh-1] SSOT de unidades
+from canonical_units import canonicalize_unit, to_base_amount as _to_base_amount  # [P1-shop-coh-1] SSOT de unidades; [P1-NEW-10] conversor base
 
 import time as _time
 
@@ -2436,6 +2436,31 @@ def compare_expected_vs_aggregated(
     if not isinstance(aggregated, dict):
         aggregated = {}
 
+    # [P1-NEW-10 · 2026-05-11] Pre-normalización a unidad base dentro del
+    # mismo sistema físico ANTES de iterar. Sin esto, `{Arroz: {kg: 1.0}}`
+    # vs `{Arroz: {g: 1000.0}}` se reportaban como dos divergencias
+    # (fantasma kg + fantasma g) en lugar de cero. La normalización es
+    # simétrica: si el knob está OFF (default canary), pasamos los dicts
+    # tal cual y el comportamiento es idéntico a v1 (preservar contrato
+    # bajo regresión accidental del knob).
+    if _get_coherence_unit_converter_enabled():
+        try:
+            expected = {
+                food: _normalize_food_units_to_base(u or {})
+                for food, u in expected.items()
+            }
+            aggregated = {
+                food: _normalize_food_units_to_base(u or {})
+                for food, u in aggregated.items()
+            }
+        except Exception as _norm_err:
+            # Best-effort: si normalización falla, caer al comportamiento
+            # v1 en vez de abortar el guard entero.
+            logging.warning(
+                f"[P1-NEW-10] unit_converter falló en pre-normalización: "
+                f"{_norm_err}. Cayendo a comparación raw."
+            )
+
     divergences = []
     all_foods = set(expected.keys()) | set(aggregated.keys())
 
@@ -2600,6 +2625,192 @@ def _get_coherence_tolerance_pct() -> float:
         0.10,
         validator=lambda v: 0.0 < v < 1.0,
     )
+
+
+def _get_coherence_t2_block_severe_only_knob() -> bool:
+    """[P2-COHERENCE-1 · 2026-05-11] Lee `MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY`.
+
+    Knob default True (opt-out). Cuando True, las surfaces auxiliares que
+    invocan el helper con `block_severe_only=True` (`_chunk_worker T2` por
+    ahora) ESCALAN mode warn → block selectivo si el guard reportó al menos
+    una divergencia "severa":
+      - `cap_swallowed_modifier` (presence absent: receta menciona alimento,
+        lista lo omite). Ejemplo: receta dice pollo, lista no tiene pollo.
+      - magnitud con `delta_pct > 0.50` (lista tiene la mitad o el doble
+        de lo que la receta requiere).
+
+    Para el resto de divergencias (unknown extras, magnitudes leves <50%,
+    pantry_overdeduct), el comportamiento sigue siendo warn-only.
+
+    Rollback rápido: setear `MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY=false`
+    sin redeploy. Restaura el comportamiento warn-only puro pre-P2-COHERENCE-1.
+
+    Tooltip-anchor: P2-COHERENCE-1-KNOB
+    """
+    return _knob_env_bool(
+        "MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY",
+        True,
+    )
+
+
+# [P2-COHERENCE-1 · 2026-05-11] Threshold para magnitudes "severas".
+# delta_pct > 0.50 = lista tiene la mitad / el doble / más de lo que la
+# receta requiere. <0.50 son drift menores que el cron diario captura
+# post-hoc sin necesidad de retry.
+_COHERENCE_SEVERE_MAGNITUDE_THRESHOLD = 0.50
+
+
+def _has_severe_divergence(divergences: list) -> bool:
+    """[P2-COHERENCE-1 · 2026-05-11] True si la lista contiene al menos
+    una divergencia "severa" según el contrato del knob T2_BLOCK_SEVERE_ONLY.
+
+    Severas:
+      - hypothesis == 'cap_swallowed_modifier' (food de receta ausente en
+        lista). Es la categoría más visible al usuario.
+      - magnitude=True AND delta_pct > _COHERENCE_SEVERE_MAGNITUDE_THRESHOLD.
+
+    NO severas (warn-only):
+      - hypothesis == 'unknown' (food de lista que no aparece en recetas —
+        normalmente staples o noise; bloquear retry sería ruidoso).
+      - hypothesis == 'pantry_overdeduct' (caso conocido del aggregator).
+      - hypothesis == 'unit_mismatch' / 'yield_uncovered' con delta menor.
+    """
+    if not divergences:
+        return False
+    for d in divergences:
+        if not isinstance(d, dict):
+            continue
+        if d.get("hypothesis") == "cap_swallowed_modifier":
+            return True
+        if d.get("magnitude") is True:
+            try:
+                delta = float(d.get("delta_pct") or 0)
+            except (TypeError, ValueError):
+                delta = 0.0
+            if abs(delta) > _COHERENCE_SEVERE_MAGNITUDE_THRESHOLD:
+                return True
+    return False
+
+
+def summarize_divergences_for_ui(divergences: list, max_items: int = 5) -> list:
+    """[P2-COHERENCE-1 · 2026-05-11] Compacta la lista de divergencias del
+    guard a un shape consumible por el frontend para renderear toasts.
+
+    Retorna los primeros `max_items` items con shape estable:
+      `{food, hypothesis, side, magnitude, delta_pct?}`
+    Skipea entries no-dict y campos ausentes (resilient a evolución
+    futura del guard sin romper UI).
+    """
+    if not divergences:
+        return []
+    out = []
+    for d in divergences:
+        if not isinstance(d, dict):
+            continue
+        item = {
+            "food": d.get("food") or d.get("name") or "",
+            "hypothesis": d.get("hypothesis") or "unknown",
+            "side": d.get("side") or "",
+            "magnitude": bool(d.get("magnitude")),
+        }
+        if d.get("magnitude"):
+            try:
+                item["delta_pct"] = round(float(d.get("delta_pct") or 0), 3)
+            except (TypeError, ValueError):
+                pass
+        out.append(item)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _get_coherence_unit_converter_enabled() -> bool:
+    """[P1-NEW-10 · 2026-05-11 · P2-UNIT-CONV-1 default flip · 2026-05-11]
+    Lee `MEALFIT_COHERENCE_UNIT_CONVERTER_ENABLED`.
+
+    Knob ACTIVE (default True post-P2-UNIT-CONV-1). Cuando True (default),
+    `compare_expected_vs_aggregated` pre-normaliza ambos dicts
+    (expected/aggregated) a unidad base dentro del mismo sistema físico
+    vía `canonical_units.to_base_amount` antes de comparar. Resuelve
+    falsos positivos del tipo:
+        receta: `{Arroz: {kg: 1.0}}`  vs  lista: `{Arroz: {g: 1000.0}}`
+        → ambos se normalizan a `{Arroz: {g: 1000.0}}` → no drift.
+
+    Histórico:
+      - P1-NEW-10 (2026-05-11): introducido como CANARY default False.
+        Razón: prod no observaba esta divergencia (cron diario reportaba 0%
+        `unit_mismatch` por aliasing kg↔g). Fix preventivo para drift
+        futuro de LLM/prompt.
+      - P2-UNIT-CONV-1 (2026-05-11): flip default a True. Audit prod via
+        MCP confirmó 0 entries en `_shopping_coherence_block_history` en
+        las últimas horas (3 planes total, todos abandoned). Sin datos
+        reales, la decisión se basa en el contrato del converter:
+          - Solo unifica unidades del MISMO sistema físico (peso↔g,
+            volumen↔ml). NO hace cross-system (kg↔ml requiere densidad).
+          - Tests `test_p1_new_10_*` cubren la matemática.
+          - El mecanismo de "drift" detectado pre-fix era PURAMENTE false
+            positive (ambas representaciones eran semánticamente correctas).
+        Knob queda como kill switch: setear
+        `MEALFIT_COHERENCE_UNIT_CONVERTER_ENABLED=false` revierte sin redeploy.
+
+    Tooltip-anchor: P2-UNIT-CONV-1-DEFAULT
+    """
+    return _knob_env_bool(
+        "MEALFIT_COHERENCE_UNIT_CONVERTER_ENABLED",
+        True,
+    )
+
+
+def _normalize_food_units_to_base(units_dict: dict) -> dict:
+    """[P1-NEW-10 · 2026-05-11] Convierte `{unit: qty}` a `{base_unit: qty}`
+    consolidando aliases del mismo sistema físico.
+
+    Ejemplos:
+      {kg: 1.0}              → {g: 1000.0}
+      {g: 100, kg: 0.5}      → {g: 600.0}             (merge mismo base)
+      {taza: 2, cda: 4}      → {ml: 540.0}            (2*240 + 4*15)
+      {kg: 0.5, ml: 200}     → {g: 500.0, ml: 200.0}  (sistemas distintos preservados)
+      {unidad: 3}            → {unidad: 3.0}          (no convertible, pass-through)
+      {kg: "bad"}            → {kg: "bad"}            (no numérico, pass-through)
+
+    Args:
+        units_dict: dict `{unit: qty}` (qty numérico o castable).
+
+    Returns:
+        Nuevo dict con las mismas semánticas pero con unidades convertidas
+        a base + entries de unidades no convertibles preservadas. SIEMPRE
+        devuelve dict nuevo (no mutates el input).
+    """
+    if not isinstance(units_dict, dict):
+        return {}
+    out = defaultdict(float)
+    preserved = {}
+    for unit, qty in units_dict.items():
+        try:
+            qty_f = float(qty)
+        except (TypeError, ValueError):
+            preserved[unit] = qty
+            continue
+        qty_base, base_unit = _to_base_amount(qty_f, unit)
+        # Si el helper devolvió la unidad ORIGINAL sin convertir (no
+        # convertible o desconocida), preservamos sin merge.
+        if base_unit not in _CONVERTIBLE_BASE_UNITS:
+            preserved[base_unit if base_unit else unit] = qty_base
+            continue
+        out[base_unit] += qty_base
+    # Combinar resultados convertidos + preservados. Las keys son disjuntas
+    # por construcción (preserved nunca contiene 'g' ni 'ml' base).
+    merged = dict(out)
+    for k, v in preserved.items():
+        # Edge case: si por algún motivo una unidad preservada colisiona
+        # con una base ('g' o 'ml'), priorizamos la del lado convertido.
+        if k in merged:
+            continue
+        merged[k] = v
+    return merged
+
+
+_CONVERTIBLE_BASE_UNITS = frozenset({"g", "ml"})  # P1-NEW-10
 
 
 def _extract_aggregated_food_dict(aggregated_list, *, exclude_pavo: bool = False) -> dict:
@@ -3422,6 +3633,247 @@ def canonicalize_aceites(name) -> str | None:
     return None
 
 
+def canonicalize_citricos(name) -> str | None:
+    """[P3-NEW-12 · 2026-05-11] Canonicaliza cítricos a canónicos shopping
+    fijos (preserva tipo — son productos distintos, NO colapsan entre sí).
+
+    Bug observado: "limón verde", "limón criollo", "limón persa" generaban
+    3 líneas separadas en la lista, pero el usuario compra UN limón
+    (cualquiera que encuentre). Variantes son preferencia del LLM, no
+    requisito del usuario.
+
+    Reglas (cada tipo PRESERVADO):
+      - limón / limones (cualquier variedad: criollo, persa, verde) → "Limón"
+      - lima / limas → "Lima"
+      - naranja / naranjas (cualquier variedad: agria, dulce, valencia) → "Naranja"
+      - mandarina / mandarinas → "Mandarina"
+      - toronja / toronjas / pomelo(s) / grapefruit → "Toronja"
+
+    NO colapsa cross-tipo: limón ≠ lima (precio + uso distintos).
+    NO incluye:
+      - Cidra / yuzu: poca presencia en RD; añadir cuando aparezca caso real.
+
+    Tooltip-anchor: P3-NEW-12-CITRICOS
+
+    Args:
+        name: candidato. Case-insensitive, acepta tildes opcionales.
+
+    Returns:
+        Canonical name fijo si matchea; `None` si no aplica.
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    if re.search(r'\blim[óo]n(?:es)?\b', n_low):
+        return 'Limón'
+    if re.search(r'\blimas?\b', n_low):
+        return 'Lima'
+    if re.search(r'\bnaranjas?\b', n_low):
+        return 'Naranja'
+    if re.search(r'\bmandarinas?\b', n_low):
+        return 'Mandarina'
+    if (
+        re.search(r'\btoronjas?\b', n_low)
+        or re.search(r'\bpomelos?\b', n_low)
+        or re.search(r'\bgrapefruit\b', n_low)
+    ):
+        return 'Toronja'
+    return None
+
+
+def canonicalize_tomate(name) -> str | None:
+    """[P3-NEW-12 · 2026-05-11] Canonicaliza variedades de tomate a "Tomate"
+    (colapsado — son intercambiables para shopping en RD).
+
+    Bug observado: "tomate perita", "tomate cherry", "tomate criollo",
+    "tomate maduro" generaban 4 líneas en la lista, pero el usuario
+    compra "tomate" en el supermercado/colmado sin pedir variedad
+    específica (excepto cherry que SÍ es producto distinto).
+
+    Reglas:
+      - tomate cherry / tomates cherry / tomate uva / tomates uva
+        → "Tomate cherry" (producto distinto, presentación pequeña)
+      - tomate / tomates (cualquier OTRA variedad: perita, criollo,
+        maduro, roma, ciruelo, manzano, italiano, plum) → "Tomate"
+
+    NO incluye:
+      - Tomate seco / sun-dried: producto procesado distinto.
+      - Pasta/salsa de tomate: ya canonicalizados en el master_map.
+
+    Tooltip-anchor: P3-NEW-12-TOMATE
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    # Cherry/uva PRIMERO (preserva como producto distinto).
+    if re.search(r'\btomates?\s+(?:cherry|uva)\b', n_low):
+        return 'Tomate cherry'
+    if re.search(r'\btomates?\b', n_low):
+        return 'Tomate'
+    return None
+
+
+def canonicalize_cebolla(name) -> str | None:
+    """[P3-NEW-12 · 2026-05-11] Canonicaliza variedades de cebolla a
+    "Cebolla" (colapsado — intercambiables para shopping RD).
+
+    Bug observado: "cebolla roja", "cebolla morada", "cebolla blanca",
+    "cebolla amarilla" generaban 4 líneas, pero el usuario compra
+    "cebolla" sin pedir color específico (RD: cebolla roja es lo común).
+
+    Reglas:
+      - cebollín / cebollin / cebolla verde / cebolla de verdeo
+        / cebolleta(s) → "Cebollín" (producto distinto — hierba aromática)
+      - cebolla / cebollas (cualquier color: roja/morada/blanca/amarilla)
+        → "Cebolla"
+
+    NO incluye:
+      - Ajo: ya canonicalizado en `_consolidate_inline_canon` (P2-NEW-8).
+      - Puerro / leek: producto distinto, baja presencia.
+
+    Tooltip-anchor: P3-NEW-12-CEBOLLA
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    # Cebollín/cebolla verde PRIMERO (preserva como producto distinto).
+    # Regex: alternación explícita porque `cebolli?nes?` falla con
+    # "cebollin" (i required + e required en es?) y con "cebollín"
+    # (tilde no en [i]). Mejor enumerar las variantes válidas.
+    if (
+        re.search(r'\b(?:cebollines|cebollínes|cebollín|cebollin)\b', n_low)
+        or re.search(r'\bcebolla\s+verde\b', n_low)
+        or re.search(r'\bcebolla\s+de\s+verdeo\b', n_low)
+        or re.search(r'\bcebolletas?\b', n_low)
+    ):
+        return 'Cebollín'
+    if re.search(r'\bcebollas?\b', n_low):
+        return 'Cebolla'
+    return None
+
+
+def canonicalize_quesos_blancos_rd(name) -> str | None:
+    """[P3-NEW-12 · 2026-05-11] Canonicaliza quesos blancos RD a un canónico
+    shopping (colapsado bajo "Queso blanco" — variantes locales
+    intercambiables).
+
+    Bug observado: "queso frescal", "queso de freír", "queso blanco",
+    "queso fresco" generaban 4 líneas, pero el usuario compra UN tipo
+    de queso blanco RD (depende del supermercado local). Variantes son
+    LLM-side, no shopping-side.
+
+    Reglas:
+      - queso de freír / queso frito → "Queso de freír" (producto
+        distinto — alto punto fusión, para freír específicamente)
+      - queso frescal / queso fresco / queso blanco → "Queso blanco"
+      - mozzarella / mozarela → "Mozzarella" (producto distinto)
+      - queso crema → "Queso crema" (producto distinto, untable)
+      - cheddar / queso cheddar → "Cheddar"
+      - parmesano / parmegiano / parmiggiano → "Parmesano"
+
+    NO incluye:
+      - "Queso" genérico sin modificador: ambiguo, no canonicaliza.
+      - Quesos artesanales locales (de hoja, de pinitos, etc.): baja
+        presencia, requieren caso real.
+
+    Tooltip-anchor: P3-NEW-12-QUESOS-BLANCOS-RD
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    # Orden importa: queso de freír antes que "queso blanco" genérico.
+    if (
+        re.search(r'\bqueso\s+(?:de\s+)?fre[íi]r\b', n_low)
+        or re.search(r'\bqueso\s+frito\b', n_low)
+    ):
+        return 'Queso de freír'
+    if re.search(r'\bqueso\s+crema\b', n_low):
+        return 'Queso crema'
+    if re.search(r'\bmozz?arell?a\b', n_low):
+        return 'Mozzarella'
+    if re.search(r'\bcheddar\b', n_low):
+        return 'Cheddar'
+    # Parmesano/parmegiano/parmigiano (incluye typos comunes con 'g').
+    if (
+        re.search(r'\bparmes(?:ano|iano)\b', n_low)
+        or re.search(r'\bparmeg(?:ano|iano)\b', n_low)
+        or re.search(r'\bparmigg?iano\b', n_low)
+    ):
+        return 'Parmesano'
+    if (
+        re.search(r'\bqueso\s+fresc?al\b', n_low)
+        or re.search(r'\bqueso\s+fresco\b', n_low)
+        or re.search(r'\bqueso\s+blanco\b', n_low)
+    ):
+        return 'Queso blanco'
+    return None
+
+
+def canonicalize_frutos_secos(name) -> str | None:
+    """[P3-NEW-12 · 2026-05-11] Canonicaliza frutos secos a canónicos
+    shopping fijos (preserva tipo — productos distintos, NO colapsan
+    entre sí, mismo patrón que `canonicalize_aceites`).
+
+    Bug observado: "almendra natural", "almendra tostada", "almendra
+    laminada" generaban 3 líneas para el mismo producto base. Las
+    preparaciones (tostado/laminado) son LLM detail; el shopping unit
+    es "almendras" sin distinción.
+
+    Reglas (cada tipo PRESERVADO):
+      - almendra(s) (cualquier preparación) → "Almendras"
+      - maní / mani / cacahuete(s) / cacahuate(s) → "Maní"
+      - nuez / nueces (incluye nuez de castilla, walnut) → "Nueces"
+      - avellana(s) → "Avellanas"
+      - pistacho(s) → "Pistachos"
+      - anacardo(s) / marañón(es) / cashew(s) → "Anacardos"
+      - pecana(s) / nuez pecan / pecan(s) → "Pecanas"
+
+    NO colapsa cross-tipo: almendra ≠ maní (precio + perfil graso
+    distintos, alérgenos distintos).
+    NO incluye:
+      - Semillas (chía, lino, calabaza, girasol): categoría distinta
+        (semillas, no nueces), requiere helper separado.
+      - Frutos secos deshidratados (pasas, dátiles, ciruelas pasas):
+        producto distinto (fruta deshidratada), no nuez.
+
+    Tooltip-anchor: P3-NEW-12-FRUTOS-SECOS
+    """
+    if not name:
+        return None
+    n_low = str(name).lower()
+    if re.search(r'\balmendras?\b', n_low):
+        return 'Almendras'
+    if (
+        re.search(r'\bman[íi]\b', n_low)
+        or re.search(r'\bcacahuetes?\b', n_low)
+        or re.search(r'\bcacahuates?\b', n_low)
+    ):
+        return 'Maní'
+    if (
+        re.search(r'\bpecanas?\b', n_low)
+        or re.search(r'\bnuez\s+pecan\b', n_low)
+        or re.search(r'\bpecans?\b', n_low)
+    ):
+        return 'Pecanas'
+    if (
+        re.search(r'\bnueces\b', n_low)
+        or re.search(r'\bnuez\b', n_low)
+        or re.search(r'\bwalnuts?\b', n_low)
+    ):
+        return 'Nueces'
+    if re.search(r'\bavellanas?\b', n_low):
+        return 'Avellanas'
+    if re.search(r'\bpistachos?\b', n_low):
+        return 'Pistachos'
+    if (
+        re.search(r'\banacardos?\b', n_low)
+        or re.search(r'\bmarañ[óo]n(?:es)?\b', n_low)
+        or re.search(r'\bcashews?\b', n_low)
+    ):
+        return 'Anacardos'
+    return None
+
+
 def _consolidate_inline_canon(name) -> str | None:
     """[P2-NEW-8 · 2026-05-11] SSOT para 4 reglas inline de canonicalización
     (Huevo / Ñame / Miel / Ajo) que antes vivían duplicadas en
@@ -3848,6 +4300,38 @@ def _canonicalize_for_coherence(food_names) -> set:
                         or (ac := canonicalize_aceites(canonical)) is not None
                     ):
                         canonical = ac
+                    # [P3-NEW-12 · 2026-05-11] 5 canonicalizers nuevos
+                    # (cítricos, tomate, cebolla, quesos blancos RD, frutos
+                    # secos). Paralelos al patrón P2-NEW-A. Cierran los
+                    # últimos 5 buckets `unknown` documentados en P3-OPEN-3.
+                    # Sin estos, "limón verde" + "limón persa" → 2 líneas;
+                    # "tomate perita" + "tomate criollo" → 2 líneas; etc.
+                    # Bilateral con el aggregator (mirror).
+                    elif (
+                        (cit := canonicalize_citricos(raw_name)) is not None
+                        or (cit := canonicalize_citricos(canonical)) is not None
+                    ):
+                        canonical = cit
+                    elif (
+                        (tom := canonicalize_tomate(raw_name)) is not None
+                        or (tom := canonicalize_tomate(canonical)) is not None
+                    ):
+                        canonical = tom
+                    elif (
+                        (ceb := canonicalize_cebolla(raw_name)) is not None
+                        or (ceb := canonicalize_cebolla(canonical)) is not None
+                    ):
+                        canonical = ceb
+                    elif (
+                        (qb := canonicalize_quesos_blancos_rd(raw_name)) is not None
+                        or (qb := canonicalize_quesos_blancos_rd(canonical)) is not None
+                    ):
+                        canonical = qb
+                    elif (
+                        (fs := canonicalize_frutos_secos(raw_name)) is not None
+                        or (fs := canonicalize_frutos_secos(canonical)) is not None
+                    ):
+                        canonical = fs
                     # [P1-1 · 2026-05-10] Fallback genérico para los modos de
                     # falso positivo conocidos. Orden: strip modifier → singularizar.
                     # Si el master_map ya entregó un canónico distinto del raw
@@ -4077,6 +4561,177 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     return divergences
 
 
+def run_shopping_coherence_guard_and_append_history(
+    plan_result: dict,
+    *,
+    multiplier: float = None,
+    mode_override: str = None,
+    attempt: int = 1,
+    action_taken: str = None,
+    plan_id_hint: str = None,
+    block_severe_only: bool = False,
+) -> tuple:
+    """[P1-NEXT-2 · 2026-05-11] SSOT que invoca `run_shopping_coherence_guard`
+    Y appendea entry a `plan_result["_shopping_coherence_block_history"]`
+    (cap configurable vía `MEALFIT_COHERENCE_BLOCK_HISTORY_CAP`).
+
+    Cierra el gap detectado en el audit 2026-05-11:
+        El guard solo se invocaba en `assemble_plan_node` (LangGraph
+        full-pipeline, planes ≤7d). Los siguientes surfaces construían
+        `aggregated_shopping_list*` sin invocar el guard:
+          - `_chunk_worker` T2 (cron_tasks.py, multi-week plans).
+          - `/recalculate-shopping-list` (routers/plans.py, recalc cliente
+            tras Pantry mutations).
+          - `tools.modify_single_meal` (agent tool).
+        Resultado: planes multi-week + recalcs podían shipearse con
+        divergencias recetas↔lista sin retry ni telemetría — solo
+        capturados (post-hoc, sin mutar) por el cron diario 04:00 UTC
+        `_shopping_coherence_alert_job` en mode=warn.
+
+    El helper centraliza el bloque que vivía inline en
+    `assemble_plan_node` (graph_orchestrator.py:6948-7016): invocar guard
+    → si divergencias → construir entry con hipótesis-counter + block_set
+    + attempt → appendear con cap. Idempotente respecto al estado: si la
+    invocación del guard explota o no encuentra divergencias, no muta
+    `plan_result` más allá de lo que ya hace `run_shopping_coherence_guard`
+    (que puede setear `_shopping_coherence_block` en mode=block).
+
+    Args:
+        plan_result: dict con `days` y `aggregated_shopping_list*`. Debe
+            contener `calc_household_multiplier` o pasarse explícito.
+        multiplier: override del household multiplier. Si None, lee
+            `plan_result["calc_household_multiplier"]`.
+        mode_override: 'off' | 'warn' | 'block'. Si None, lee env var
+            `MEALFIT_SHOPPING_COHERENCE_GUARD` (default 'block' post-P1-NEW-1).
+        attempt: contador de attempt LangGraph (para telemetría).
+            Surfaces fuera del pipeline (cron, recalc, agent) pasan 1.
+        action_taken: si el caller sabe qué acción se va a tomar (e.g.,
+            `"warn_only_chunked_plan"` para T2 / recalc / agent que NO
+            retry), lo persiste directo. Si None, se usa el placeholder
+            P2-2 (`"not_applicable"` cuando block_set=False, None cuando
+            block_set=True para que review_plan_node lo hidrate).
+        plan_id_hint: opcional, para el log de truncamiento.
+
+    Returns:
+        Tupla `(divergences, block_set)`:
+          - `divergences`: lista de divergencias retornadas por el guard.
+          - `block_set`: True si el guard seteó `_shopping_coherence_block`
+            (mode=block + critical present). El caller decide si abortar
+            la persistencia, re-encolar, devolver 400, etc.
+
+    Tooltip-anchor: P1-NEXT-2-HELPER-START | test_p1_next_2_guard_at_persist_sites
+    """
+    try:
+        divergences = run_shopping_coherence_guard(
+            plan_result,
+            mode_override=mode_override,
+            multiplier=multiplier,
+        ) or []
+    except Exception as e:
+        logging.warning(f"[COH-GUARD/HELPER] excepción en guard (no aborta): {e}")
+        return [], False
+
+    block_set = bool(plan_result.get("_shopping_coherence_block"))
+
+    # [P2-COHERENCE-1 · 2026-05-11] Escalación selectiva warn → block.
+    # Cuando el caller pasa `block_severe_only=True` (típicamente el
+    # `_chunk_worker T2` que ya tiene su propio retry loop con backoff),
+    # promovemos divergencias críticas (cap_swallowed_modifier o magnitudes
+    # >50%) a block para forzar retry. Se respeta el knob
+    # `MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY` (default True) como kill
+    # switch — flip a False sin redeploy revierte al comportamiento warn-only.
+    #
+    # Solo se escala cuando mode efectivo es "warn" (no machacamos un
+    # block que ya viene del guard original; tampoco escalamos si el
+    # caller declaró mode_override="off").
+    if (
+        block_severe_only
+        and not block_set
+        and divergences
+        and _get_coherence_t2_block_severe_only_knob()
+    ):
+        try:
+            effective_mode = (
+                str(mode_override).strip().lower() if mode_override is not None
+                else _get_coherence_guard_mode()
+            )
+        except Exception:
+            effective_mode = "warn"
+        if effective_mode == "warn" and _has_severe_divergence(divergences):
+            plan_result["_shopping_coherence_block"] = True
+            block_set = True
+            logging.warning(
+                f"[COH-GUARD/HELPER/P2-COH-1] block_severe_only escaló warn→block "
+                f"(plan_id_hint={plan_id_hint!r}, divergences={len(divergences)})."
+            )
+
+    if divergences:
+        try:
+            from datetime import datetime as _dt, timezone as _tz
+            from collections import Counter as _Counter
+
+            prior_history = plan_result.get("_shopping_coherence_block_history") or []
+            if not isinstance(prior_history, list):
+                prior_history = []
+
+            try:
+                attempt_n = int(attempt)
+            except (TypeError, ValueError):
+                attempt_n = 1
+
+            hyp_counter = _Counter(
+                str(d.get("hypothesis") or "unknown") for d in divergences
+            )
+
+            if action_taken is not None:
+                effective_action = str(action_taken)
+            else:
+                # Mismo placeholder P2-2 que assemble_plan_node usa:
+                # - block_set=True → None (review_plan_node lo hidrata)
+                # - block_set=False → "not_applicable" (no entrará al branch)
+                effective_action = None if block_set else "not_applicable"
+
+            entry = {
+                "ts": _dt.now(_tz.utc).isoformat(),
+                "attempt": attempt_n,
+                "divergence_count": len(divergences),
+                "presence_count": sum(
+                    1 for d in divergences if not d.get("magnitude")
+                ),
+                "magnitude_count": sum(
+                    1 for d in divergences if d.get("magnitude")
+                ),
+                "hypotheses": dict(hyp_counter),
+                "block_set": block_set,
+                "action_taken": effective_action,
+            }
+
+            # Lazy import para evitar ciclo: graph_orchestrator ya importa
+            # de shopping_calculator (módulo cargado primero), así que un
+            # import top-level acá rompe el orden. Lazy resuelve runtime.
+            try:
+                from graph_orchestrator import _apply_coherence_history_cap as _cap_helper
+                new_history = _cap_helper(
+                    prior_history,
+                    entry,
+                    plan_id_hint=plan_id_hint or plan_result.get("id") or plan_result.get("plan_id"),
+                )
+            except ImportError:
+                # Fallback inline si el helper se mueve/borra: cap=20 por
+                # default coincide con `_COHERENCE_BLOCK_HISTORY_CAP_DEFAULT`.
+                new_history = list(prior_history) + [entry]
+                if len(new_history) > 20:
+                    new_history = new_history[-20:]
+
+            plan_result["_shopping_coherence_block_history"] = new_history
+        except Exception as _hist_e:
+            logging.debug(
+                f"[COH-GUARD/HELPER/HISTORY] no-op (telemetría): {_hist_e}"
+            )
+
+    return divergences, block_set
+
+
 def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0):
     aggregated = defaultdict(lambda: defaultdict(float))
 
@@ -4147,13 +4802,44 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # inventario de habichuelas se almacena con name canónico "Habichuelas
     # rojas" SIN "cocidas" → yield=1.0 → comparado simétricamente vs el
     # plan ya convertido a peso seco.
+    # [P2-NEW-11 · 2026-05-11] CONTRATO DE ASIMETRÍA `multiplier` (NO TOCAR
+    # sin leer este bloque entero):
+    #
+    #   plan_ingredients:    qty * multiplier  (escalado)
+    #   consumed_ingredients: qty            (sin escalado)
+    #
+    # Esta asimetría es SEMÁNTICAMENTE CORRECTA, no un bug:
+    #
+    #   - `plan_ingredients` viene del plan generado por el LLM en
+    #     PORCIONES BASE (recetas para 1 persona/comida). El `multiplier`
+    #     (`calc_household_multiplier`) infla a la realidad familiar
+    #     (3 personas × 7 días = 21 porciones por receta original).
+    #
+    #   - `consumed_ingredients` viene de `user_inventory` (pantry físico)
+    #     o `recipe_consumed` (consumo registrado). YA son CANTIDADES
+    #     ABSOLUTAS REALES — el LLM no escaló nada aquí.
+    #
+    # Ejemplo concreto:
+    #   - Plan dice "100g arroz/porción", multiplier=21 → necesitamos 2100g.
+    #   - Pantry tiene "500g arroz" físicos.
+    #   - Lista correcta = 2100 - 500 = 1600g.
+    #   - Si por error aplicáramos `* multiplier` al consumed:
+    #     2100 - (500*21) = 2100 - 10500 = -8400 → "tienes excedente",
+    #     no agregar a lista. RESULTADO: el usuario nunca compra arroz.
+    #
+    # Si un futuro refactor cambia el contrato de pantry (ej. almacenar
+    # qty_per_person en lugar de cantidad real), AMBOS lados deben
+    # migrar simultáneamente. El test parser-based
+    # `test_p2_new_11_aggregate_multiplier_asymmetry_contract` ancla
+    # esta decisión: detecta si alguien añade `* multiplier` al consumed
+    # loop sin documentar la migración.
     plan_names = set()
     for item in plan_ingredients:
         if not item or len(item) < 3: continue
         qty, unit, name = _parse_quantity(item, apply_yield_multiplier=False, apply_legumbres_yield_only=True)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
-        aggregated[name][unit] += float(qty) * float(multiplier)
+        aggregated[name][unit] += float(qty) * float(multiplier)  # P2-NEW-11: escalado intencional
         plan_names.add(name)
 
     logging.info(f"🛒 [AGGREGATE] {len(plan_ingredients)} raw items → {len(plan_names)} unique names: {sorted(plan_names)[:30]}...")
@@ -4166,7 +4852,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         qty, unit, name = _parse_quantity(item, apply_yield_multiplier=False, apply_legumbres_yield_only=True)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
-        aggregated[name][unit] -= float(qty)
+        aggregated[name][unit] -= float(qty)  # P2-NEW-11: SIN multiplier (ver contrato arriba)
 
     # --- RESOLUCIÓN DE FRICCIÓN DE UNIDADES (Híbridas) ---
     master_list = get_master_ingredients()
@@ -4226,6 +4912,34 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                             _ac = canonicalize_aceites(canonical_name)
                             if _ac is not None:
                                 canonical_name = _ac
+                            else:
+                                # [P3-NEW-12 · 2026-05-11] 5 canonicalizers
+                                # adicionales (cítricos, tomate, cebolla,
+                                # quesos blancos RD, frutos secos). Mismo
+                                # patrón mirror que P2-NEW-A. Sin estos,
+                                # variantes triviales como "limón verde" vs
+                                # "limón persa" o "tomate criollo" vs
+                                # "tomate maduro" se quedan en líneas
+                                # separadas en la lista de compras.
+                                _cit = canonicalize_citricos(canonical_name)
+                                if _cit is not None:
+                                    canonical_name = _cit
+                                else:
+                                    _tom = canonicalize_tomate(canonical_name)
+                                    if _tom is not None:
+                                        canonical_name = _tom
+                                    else:
+                                        _ceb = canonicalize_cebolla(canonical_name)
+                                        if _ceb is not None:
+                                            canonical_name = _ceb
+                                        else:
+                                            _qb = canonicalize_quesos_blancos_rd(canonical_name)
+                                            if _qb is not None:
+                                                canonical_name = _qb
+                                            else:
+                                                _fs = canonicalize_frutos_secos(canonical_name)
+                                                if _fs is not None:
+                                                    canonical_name = _fs
 
         # [P3-PROTEIN-CAP-2] Consolidación de pavo con distinción
         # FRESH vs PROCESADO. Antes la regla colapsaba CUALQUIER

@@ -89,6 +89,26 @@ def update_form_field(user_id: str, field: str, new_value: str) -> str:
     - 'cookingTime': "none", "30min", "1hour", o "plenty"
     - 'allergies', 'medicalConditions', 'dislikes', 'struggles': Listas separadas por coma (Ej: "Lacteos, Gluten")
     """
+    # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
+    # ────────────────────────────────────────────────────────────────────────
+    # `user_id` viene de `tool_args` construido por la LLM. P0-AGENT-1 cerró
+    # el IDOR vía prompt injection: `agent.py:execute_tools` force-overridea
+    # `tool_args["user_id"] = state["user_id"]` (autenticado) ANTES de invocar
+    # esta tool. El path normal (chat-agent → execute_tools → invoke) está
+    # protegido. Para llamadores DIRECTOS (tests, scripts, futuros endpoints
+    # HTTP que importen esta tool sin pasar por execute_tools):
+    #
+    #   1. NUNCA confiar en `user_id` pasado por la LLM sin validar contra el
+    #      `verified_user_id` autenticado del request.
+    #   2. Si añades una mutación SQL nueva acá, filtrar `AND user_id = %s`
+    #      explícito (defense-in-depth). `update_user_health_profile_atomic`
+    #      ya filtra; `delete_user_facts_by_metadata` filtra por user_id en
+    #      su body. NO romper el contrato.
+    #   3. Si extiendes para mutar tablas adicionales (`api_usage`,
+    #      `consumed_meals`, etc.), aplicar el mismo filtro.
+    #
+    # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
+
     logger.debug(f"🔧 [TOOL EXECUTION] Actualizando form del usuario {user_id}: {field} -> {new_value}")
     
     # Auto-corrección de valores comunes al formato esperado por la UI
@@ -284,6 +304,24 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     Incluye carbohidratos y grasas saludables si están disponibles.
     NUEVO IMPORTANTE: Si sabes o puedes inferir los ingredientes exactos (ej. ["2 huevos", "1 pan", "100g queso"]), envíalos en la lista 'ingredients' para un registro más detallado.
     """
+    # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
+    # ────────────────────────────────────────────────────────────────────────
+    # `user_id` viene de `tool_args` construido por la LLM. P0-AGENT-1 cerró
+    # el IDOR: `agent.py:execute_tools` force-overridea `tool_args["user_id"]`
+    # al `state["user_id"]` autenticado ANTES de invocar. Path normal seguro.
+    # Para llamadores DIRECTOS (tests, scripts, endpoints HTTP futuros):
+    #
+    #   1. NUNCA confiar en `user_id` LLM-supplied sin validar contra el
+    #      `verified_user_id` autenticado del request.
+    #   2. `db_log_consumed_meal` y `deduct_consumed_meal_from_inventory`
+    #      DEBEN seguir filtrando por `user_id` en sus respectivas SQLs
+    #      (defense-in-depth). Si refactorizas estos helpers, NO eliminar
+    #      el filtro `WHERE user_id = %s`.
+    #   3. Si añades persistencia adicional (e.g., notificación push,
+    #      analítica), aplicar mismo filtro.
+    #
+    # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
+
     logger.debug(f"🔧 [TOOL EXECUTION] Registrando comida consumida para user {user_id}: {meal_name} ({calories} kcal, {protein}g proteina, {carbs}g carbos, {healthy_fats}g grasas). Ingredientes a deducir: {ingredients}")
     # [P0.1] Marcar inventory_synced_at en la fila de consumed_meals si vamos a deducir
     # acto seguido — así la reconciliación al cierre del chunk no vuelve a descontar.
@@ -515,6 +553,39 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             plan_data["aggregated_shopping_list_weekly"] = aggr_7
             plan_data["aggregated_shopping_list_biweekly"] = aggr_15_hybrid
             plan_data["aggregated_shopping_list_monthly"] = aggr_30_hybrid
+
+            # [P1-NEXT-2 · 2026-05-11] Coherence guard tras recompute por agent.
+            # Antes, tools.modify_single_meal persistía aggregated_shopping_list*
+            # sin invocar run_shopping_coherence_guard — el agente podía dejar
+            # la lista divergente vs recetas tras swap. Cierre del gap audit
+            # 2026-05-11.
+            #
+            # Modo: `warn` porque el agente ya entregó respuesta al usuario;
+            # bloquear obliga al agente a reintentar lo cual es costoso en
+            # tokens. Telemetría a `_shopping_coherence_block_history` permite
+            # post-mortem si el agente produce divergencias recurrentes.
+            # `action_taken="warn_only_agent_tool"` distingue origen.
+            # [P2-COHERENCE-1 · 2026-05-11] Capturamos `divergences` para
+            # incluir `_coherence_warnings` en el return JSON. El agente las
+            # propaga al chat; el frontend las renderea como toast cuando
+            # detecta el campo. Mode warn intencional acá porque el agente
+            # ya entregó respuesta al usuario; bloquear+retry es caro en
+            # tokens. Telemetría a `_shopping_coherence_block_history` para
+            # post-mortem si el agente produce drift recurrente.
+            _agent_divergences: list = []
+            try:
+                from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_agent
+                _agent_divergences, _ = _coh_agent(
+                    plan_data,
+                    multiplier=plan_data.get("calc_household_multiplier") or household,
+                    mode_override="warn",
+                    attempt=1,
+                    action_taken="warn_only_agent_tool",
+                    plan_id_hint=plan_id,
+                )
+            except Exception as _coh_agent_e:
+                logger.warning(f"⚠️ [TOOL] coherence guard helper falló (no aborta): {_coh_agent_e}")
+
             logger.info("✅ [TOOL] aggregated_shopping_list (7, 15, 30) recalculada post-modificación con Delta.")
         except Exception as e:
             logger.warning(f"⚠️ [TOOL] No se pudo recalcular aggregated_shopping_list Delta: {e}")
@@ -527,7 +598,18 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         update_result = update_meal_plan_data(plan_id, plan_data, user_id=user_id)
         if update_result is not None:
             logger.info(f"✅ [TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
-            return json.dumps({"modified_meal": new_meal_data, "day": day_number, "meal_index": target_meal_index})
+            # [P2-COHERENCE-1 · 2026-05-11] _coherence_warnings opcional —
+            # presente solo si el guard reportó divergencias post-modificación.
+            # El frontend (AgentPage) puede mostrar toast no-bloqueante.
+            _resp = {"modified_meal": new_meal_data, "day": day_number, "meal_index": target_meal_index}
+            try:
+                _agent_div_local = locals().get("_agent_divergences") or []
+                if _agent_div_local:
+                    from shopping_calculator import summarize_divergences_for_ui
+                    _resp["_coherence_warnings"] = summarize_divergences_for_ui(_agent_div_local, max_items=5)
+            except Exception as _sum_e:
+                logger.warning(f"[TOOL/P2-COH-1] summarize_divergences_for_ui falló: {_sum_e}")
+            return json.dumps(_resp)
         else:
             return "ERROR: Se generó la nueva comida pero no se pudo guardar en la base de datos."
     except Exception as e:
@@ -540,13 +622,41 @@ def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: s
     Modifica UNA comida específica del plan activo del usuario. No genera un plan nuevo, solo cambia la comida indicada.
     Usa esta herramienta cuando el usuario pida un cambio puntual a una comida de su plan.
     IMPORTANTE: Opción A = day_number 1, Opción B = day_number 2, Opción C = day_number 3.
-    
+
     Parámetros:
     - user_id: ID del usuario
     - day_number: número de la opción (1 para Opción A, 2 para Opción B, 3 para Opción C)
     - meal_type: momento exacto del día: 'Desayuno', 'Almuerzo', 'Merienda' o 'Cena'
     - changes: descripción en lenguaje natural del cambio solicitado por el usuario
     - allow_pantry_expansion: ponlo en True SOLO SI el usuario explícitamente autoriza comprar ingredientes nuevos, ir al súper, o salir de la regla de zero-waste para esta comida. Por defecto es False.
+
+    [P3-NEW-7 · 2026-05-11] CONTRATO DE OWNERSHIP — LEER ANTES DE IMPLEMENTAR.
+    ────────────────────────────────────────────────────────────────────────
+    Esta tool es DUMMY hoy (retorna `"DUMMY_CALL_ACTUALLY_INTERCEPTED"`).
+    El agente LLM la "llama", pero el handler real intercepta en una capa
+    superior (`agent.py` `analyze_query` → router). La signature
+    `user_id: str` viene del prompt del LLM, NO de un check autenticado.
+
+    RIESGO: si un PR futuro implementa el cuerpo real (ej. delegar al
+    endpoint `/swap-meal/persist` o ejecutar UPDATE inline), DEBE:
+
+      1. Validar `user_id == verified_user_id` del contexto autenticado
+         (NUNCA confiar en el `user_id` que el LLM le pasó — prompt
+         injection puede inyectar un user_id ajeno).
+      2. Filtrar `AND user_id = %s` en TODA mutación SQL sobre
+         `meal_plans` o `user_inventory` (invariante I2 de CLAUDE.md).
+      3. Aplicar `acquire_meal_plan_advisory_lock(purpose='general')` si
+         hace full-overwrite de `plan_data` (invariante I7).
+      4. NO bypassear `verify_api_quota` — los cambios cuestan tokens
+         LLM downstream.
+
+    Sin estos guards, la implementación abre IDOR + lost-update + quota
+    burn simultáneamente. El test parser-based
+    `test_p3_new_7_modify_single_meal_dummy_contract.py` ancla este
+    contrato: detecta si la línea `return "DUMMY_CALL_..."` se reemplaza
+    sin que el body nuevo contenga los tokens canónicos de ownership.
+
+    Tooltip-anchor: P3-NEW-7-DUMMY-CONTRACT
     """
     return "DUMMY_CALL_ACTUALLY_INTERCEPTED"
 
@@ -674,6 +784,25 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
     - items_to_add: Lista de strings con los ingredientes a sumar a la despensa.
     - items_to_remove: Lista de strings con los ingredientes a restar de la despensa.
     """
+    # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
+    # ────────────────────────────────────────────────────────────────────────
+    # `user_id` viene de `tool_args` construido por la LLM. P0-AGENT-1 cerró
+    # el IDOR: `agent.py:execute_tools` force-overridea `tool_args["user_id"]`
+    # al `state["user_id"]` autenticado ANTES de invocar. Path normal seguro.
+    # Para llamadores DIRECTOS (tests, scripts, endpoints HTTP futuros):
+    #
+    #   1. NUNCA confiar en `user_id` LLM-supplied sin validar contra el
+    #      `verified_user_id` autenticado del request.
+    #   2. `add_or_update_inventory_item` y `deduct_consumed_meal_from_inventory`
+    #      DEBEN filtrar `WHERE user_id = %s` (defense-in-depth). Tabla
+    #      `user_inventory` no tiene RLS forzada para el role `postgres`
+    #      (backend conecta como tal); el filtro app-level es la red de
+    #      seguridad real.
+    #   3. Si añades batch operations (bulk insert/update), conservar el
+    #      filtro per-user en cada query.
+    #
+    # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
+
     logger.info(f"🛒 [TOOL EXECUTION] Modificando despensa física manual para user {user_id}")
     try:
         from db_inventory import add_or_update_inventory_item, deduct_consumed_meal_from_inventory
@@ -706,6 +835,26 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
     - excluded_items (Opcional): Lista de nombres de ingredientes que el usuario explícitamente NO compró o no encontró (ej: ["Aguacate", "Atún"]).
     - modified_items (Opcional): Lista de ingredientes que compró con una CANTIDAD diferente a la esperada, o ingredientes EXTRA (ej: ["3 lbs de Pollo", "2 paquetes de Galletas"]).
     """
+    # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
+    # ────────────────────────────────────────────────────────────────────────
+    # `user_id` viene de `tool_args` construido por la LLM. P0-AGENT-1 cerró
+    # el IDOR: `agent.py:execute_tools` force-overridea `tool_args["user_id"]`
+    # al `state["user_id"]` autenticado ANTES de invocar. Path normal seguro.
+    # Para llamadores DIRECTOS (tests, scripts, endpoints HTTP futuros):
+    #
+    #   1. NUNCA confiar en `user_id` LLM-supplied sin validar contra el
+    #      `verified_user_id` autenticado del request.
+    #   2. `get_latest_meal_plan(user_id)` filtra por user_id en su query
+    #      (db_plans.py). `restock_inventory(user_id, ...)` filtra al
+    #      escribir `user_inventory`. Si refactorizas alguno, conservar
+    #      el filtro `WHERE user_id = %s`.
+    #   3. Esta tool LEE plan_data del usuario para construir `shop_list` —
+    #      cualquier cambio que sustituya `get_latest_meal_plan` por un
+    #      lookup global (e.g. `meal_plans WHERE id = %s` sin user_id)
+    #      abre IDOR de lectura cross-user. NO hacerlo.
+    #
+    # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
+
     logger.info(f"🛒 [TOOL EXECUTION] Registrando compra completa/parcial para user {user_id}")
     
     try:
