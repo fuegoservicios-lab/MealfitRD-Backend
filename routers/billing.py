@@ -21,6 +21,120 @@ logger = logging.getLogger(__name__)
 # P1-BILLING-3-DISCOUNT-RATELIMIT.
 _DISCOUNT_VALIDATE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
+# [P2-RATELIMIT-COVERAGE · 2026-05-12] Rate-limiter para `/api/webhooks/paypal`.
+# El webhook verifica firma criptográfica con PayPal (cierre del audit
+# original P0), pero el flow de verify es CARO: 1 OAuth POST + 1 verify POST
+# a `api-m.paypal.com` por cada request, ANTES de validar la firma. Un
+# atacante anónimo flooding `/api/webhooks/paypal` con bodies arbitrarios
+# consume ~2 round-trips httpx + tokens PayPal por cada request hasta que
+# la firma falla. 30 calls/min/IP es generoso para PayPal real (2-3 eventos
+# legítimos/min en peak) y bloquea floods costosos pre-signature-check.
+# Anchor: P2-RATELIMIT-COVERAGE-PAYPAL-WEBHOOK.
+_PAYPAL_WEBHOOK_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
+
+# ---------------------------------------------------------------------------
+# [P1-BILLING-UPGRADE-FAIL-LOUD + P1-BILLING-CANCEL-FAIL-LOUD · 2026-05-12]
+# Helpers para tratar respuestas de PayPal `/cancel` como idempotentes
+# cuando indican que la sub ya estaba cancelada/inexistente, y para
+# persistir alerts en `system_alerts` cuando el cancel real falla.
+#
+# Modo de fallo pre-fix (audit production-readiness 2026-05-12):
+#   1. `/verify` (upgrade path lines ~276-288): si la cancel de la sub
+#      vieja respondía != 204, solo `logger.warning` y seguía con el
+#      UPDATE de plan_tier. PayPal seguía cobrando la sub vieja en
+#      paralelo con la nueva → DOBLE COBRO silencioso al cliente hasta
+#      intervención manual.
+#   2. `/cancel` (lines ~370-371): si PayPal /cancel respondía != 204/200,
+#      solo `logger.error` y seguía con UPDATE de subscription_status =
+#      CANCELLED. Cliente veía "cancelado" en la UI pero PayPal seguía
+#      cobrando → estado divergente sin alert.
+#
+# Fix: fail-loud antes de mutar BD, con tratamiento idempotente del caso
+# "sub ya estaba cancelada" (404 o 422 con issue específico).
+# Anchors: P1-BILLING-UPGRADE-FAIL-LOUD, P1-BILLING-CANCEL-FAIL-LOUD.
+# ---------------------------------------------------------------------------
+
+# Issues que PayPal devuelve cuando la sub ya está cancelada/expirada/inactiva.
+# Tratarlos como idempotent success: el efecto deseado (no-billing futuro) ya
+# ocurrió, no es un error real.
+_PAYPAL_ALREADY_CANCELLED_ISSUES = (
+    "SUBSCRIPTION_STATUS_INVALID",
+    "INVALID_SUBSCRIPTION_STATUS",
+    "SUBSCRIPTION_ALREADY_CANCELLED",
+)
+
+
+def _is_paypal_cancel_idempotent_success(status_code: int, body_text: str) -> bool:
+    """True cuando PayPal indica que la sub ya estaba cancelada/inexistente.
+
+    Casos cubiertos:
+      - 200 / 204: cancel ejecutado ahora.
+      - 404: la sub no existe (ya fue purgada). Para nosotros, "no-billing
+        futuro" se cumple → idempotente.
+      - 422 con `details[].issue` ∈ `_PAYPAL_ALREADY_CANCELLED_ISSUES`: la
+        sub existe pero está en estado terminal (cancelled/expired/suspended).
+
+    Cualquier otro status (5xx, 401, 422 con otro issue) NO es idempotente
+    — el caller debe fail-loud para evitar estado divergente con PayPal.
+    """
+    if status_code in (200, 204):
+        return True
+    if status_code == 404:
+        return True
+    if status_code == 422:
+        try:
+            body = json.loads(body_text or "{}")
+            for d in (body.get("details") or []):
+                issue = (d.get("issue") or "").upper()
+                if issue in _PAYPAL_ALREADY_CANCELLED_ISSUES:
+                    return True
+        except Exception:
+            # Body no-JSON o malformado — NO asumir idempotencia.
+            return False
+    return False
+
+
+def _persist_billing_alert(
+    *,
+    alert_key: str,
+    severity: str,
+    title: str,
+    message: str,
+    metadata: dict | None = None,
+) -> None:
+    """Best-effort UPSERT a `system_alerts` con `alert_type='billing'`.
+
+    Idempotente vía `on_conflict='alert_key'`: alerts repetidos del mismo
+    `(user_id, sub_id)` actualizan `triggered_at` sin duplicar filas.
+    Cualquier excepción se loguea sin propagar — la alert es observabilidad
+    y NO debe romper el flujo del handler que ya está mid-failure.
+
+    Modelo de resolution: **Manual** (ver "Política de `system_alerts`
+    resolution" en CLAUDE.md). SRE debe verificar PayPal dashboard y
+    reconciliar BD manualmente; no hay auto-cierre.
+    """
+    if supabase is None:
+        return
+    try:
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).isoformat()
+        supabase.table("system_alerts").upsert({
+            "alert_key": alert_key,
+            "alert_type": "billing",
+            "severity": severity,
+            "title": title,
+            "message": message,
+            "metadata": metadata or {},
+            "triggered_at": now_iso,
+            "resolved_at": None,
+        }, on_conflict="alert_key").execute()
+    except Exception as e:
+        logger.error(
+            f"[P1-BILLING-FAIL-LOUD] No se pudo persistir alert "
+            f"{alert_key}: {type(e).__name__}: {e}"
+        )
+
 router = APIRouter(
     prefix="/api/subscription",
     tags=["billing"],
@@ -271,10 +385,56 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
                             headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
                             json={"reason": "Upgrade o cambio a una nueva suscripción."}
                         )
-                        if cancel_resp.status_code == 204:
-                            logger.info(f"✅ Suscripción antigua {old_sub_id} cancelada exitosamente en PayPal.")
+                        # [P1-BILLING-UPGRADE-FAIL-LOUD · 2026-05-12] Pre-fix
+                        # esta rama solo emitía `logger.warning` cuando la
+                        # cancel respondía != 204 y SEGUÍA al UPDATE de
+                        # plan_tier. La sub vieja quedaba ACTIVE en PayPal
+                        # cobrando recurrentemente, mientras la nueva también
+                        # cobraba → cliente paga 2× hasta intervención manual.
+                        # Ahora fail-loud: persistir alert + raise 409 antes
+                        # del UPDATE. Trata 404 / 422-already-cancelled como
+                        # éxito idempotente.
+                        if _is_paypal_cancel_idempotent_success(cancel_resp.status_code, cancel_resp.text):
+                            logger.info(
+                                f"✅ Suscripción antigua {old_sub_id} cancelada "
+                                f"(status={cancel_resp.status_code})."
+                            )
                         else:
-                            logger.warning(f"⚠️ Error intentando cancelar suscripción antigua {old_sub_id}: {cancel_resp.text}")
+                            _persist_billing_alert(
+                                alert_key=f"billing_old_sub_cancel_failed:{user_id}:{old_sub_id}",
+                                severity="critical",
+                                title="Upgrade: cancel de sub vieja falló — riesgo doble cobro",
+                                message=(
+                                    f"User {user_id} upgrade de sub {old_sub_id} a "
+                                    f"{subscription_id}. PayPal /cancel respondió "
+                                    f"status={cancel_resp.status_code}: "
+                                    f"{(cancel_resp.text or '')[:300]}. UPDATE de "
+                                    f"plan_tier ABORTADO para evitar estado divergente "
+                                    f"(BD nueva sub + PayPal cobrando ambas)."
+                                ),
+                                metadata={
+                                    "user_id": user_id,
+                                    "old_sub_id": old_sub_id,
+                                    "new_sub_id": subscription_id,
+                                    "paypal_status": cancel_resp.status_code,
+                                },
+                            )
+                            logger.error(
+                                f"❌ [P1-BILLING-UPGRADE-FAIL-LOUD] Cancel de sub "
+                                f"vieja {old_sub_id} falló (status="
+                                f"{cancel_resp.status_code}): "
+                                f"{(cancel_resp.text or '')[:200]}. Abortando "
+                                f"upgrade — el cliente debe reintentar para "
+                                f"evitar doble cobro."
+                            )
+                            raise HTTPException(
+                                status_code=409,
+                                detail=(
+                                    "No se pudo cancelar la suscripción anterior "
+                                    "en PayPal. Por favor reintenta en unos "
+                                    "minutos; si persiste, contacta soporte."
+                                ),
+                            )
 
         res = supabase.table("user_profiles").update({
             "plan_tier": tier_to_assign,
@@ -339,25 +499,105 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
                     auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
                     data={"grant_type": "client_credentials"}
                 )
-                if auth_resp.status_code == 200:
-                    access_token = auth_resp.json().get("access_token")
-                    
-                    sub_info_resp = await client.get(
-                        f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}",
-                        headers={"Authorization": f"Bearer {access_token}"}
+                # [P1-BILLING-CANCEL-FAIL-LOUD · 2026-05-12] Pre-fix: si la
+                # OAuth a PayPal fallaba (auth_resp != 200), el código
+                # SALTABA todo el bloque y procedía al UPDATE BD=CANCELLED
+                # sin haber notificado a PayPal — mismo modo de fallo que
+                # el cancel_resp legacy. Ahora fail-loud también en auth.
+                if auth_resp.status_code != 200:
+                    _persist_billing_alert(
+                        alert_key=f"billing_cancel_failed:{user_id}:{subscription_id}",
+                        severity="critical",
+                        title="Cancel: OAuth PayPal falló — cancel no notificado",
+                        message=(
+                            f"User {user_id} solicitó cancel de sub "
+                            f"{subscription_id}. PayPal OAuth /token respondió "
+                            f"status={auth_resp.status_code}: "
+                            f"{(auth_resp.text or '')[:300]}. UPDATE de "
+                            f"subscription_status ABORTADO — PayPal nunca "
+                            f"recibió la cancel request."
+                        ),
+                        metadata={
+                            "user_id": user_id,
+                            "sub_id": subscription_id,
+                            "paypal_oauth_status": auth_resp.status_code,
+                            "stage": "oauth",
+                        },
                     )
-                    if sub_info_resp.status_code == 200:
-                        billing_info = sub_info_resp.json().get("billing_info", {})
-                        end_date = billing_info.get("next_billing_time")
-                    
-                    cancel_resp = await client.post(
-                        f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}/cancel",
-                        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-                        json={"reason": "El usuario solicitó la cancelación desde la App"}
+                    logger.error(
+                        f"❌ [P1-BILLING-CANCEL-FAIL-LOUD] OAuth PayPal falló "
+                        f"para cancel de {subscription_id} (status="
+                        f"{auth_resp.status_code}). Abortando — BD mantiene "
+                        f"estado ACTIVE para reflejar realidad."
                     )
-                    
-                    if cancel_resp.status_code not in [204, 200]:
-                        logger.error(f"Error cancelando suscripcion con PayPal: {cancel_resp.text}")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            "No se pudo contactar el proveedor de pagos. "
+                            "Por favor reintenta en unos minutos; si "
+                            "persiste, contacta soporte."
+                        ),
+                    )
+
+                access_token = auth_resp.json().get("access_token")
+
+                sub_info_resp = await client.get(
+                    f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}",
+                    headers={"Authorization": f"Bearer {access_token}"}
+                )
+                if sub_info_resp.status_code == 200:
+                    billing_info = sub_info_resp.json().get("billing_info", {})
+                    end_date = billing_info.get("next_billing_time")
+
+                cancel_resp = await client.post(
+                    f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}/cancel",
+                    headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                    json={"reason": "El usuario solicitó la cancelación desde la App"}
+                )
+
+                # [P1-BILLING-CANCEL-FAIL-LOUD · 2026-05-12] Pre-fix esta
+                # rama solo emitía `logger.error` cuando cancel_resp era
+                # != 204/200 y SEGUÍA al UPDATE BD=CANCELLED. PayPal seguía
+                # cobrando mientras el cliente veía "cancelado" en la UI.
+                # Ahora fail-loud: 404 / 422-already-cancelled son
+                # idempotentes (la sub ya está terminal); cualquier otro
+                # status aborta con 502 + alert.
+                if not _is_paypal_cancel_idempotent_success(cancel_resp.status_code, cancel_resp.text):
+                    _persist_billing_alert(
+                        alert_key=f"billing_cancel_failed:{user_id}:{subscription_id}",
+                        severity="critical",
+                        title="Cancel: PayPal rechazó la cancelación — riesgo cobro post-cancel",
+                        message=(
+                            f"User {user_id} solicitó cancel de sub "
+                            f"{subscription_id}. PayPal /cancel respondió "
+                            f"status={cancel_resp.status_code}: "
+                            f"{(cancel_resp.text or '')[:300]}. UPDATE de "
+                            f"subscription_status ABORTADO para evitar "
+                            f"estado divergente (BD CANCELLED + PayPal "
+                            f"sigue cobrando)."
+                        ),
+                        metadata={
+                            "user_id": user_id,
+                            "sub_id": subscription_id,
+                            "paypal_status": cancel_resp.status_code,
+                            "stage": "cancel",
+                        },
+                    )
+                    logger.error(
+                        f"❌ [P1-BILLING-CANCEL-FAIL-LOUD] Cancel de sub "
+                        f"{subscription_id} falló (status="
+                        f"{cancel_resp.status_code}): "
+                        f"{(cancel_resp.text or '')[:200]}. Abortando — BD "
+                        f"mantiene estado ACTIVE para reflejar realidad."
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            "El proveedor de pagos rechazó la cancelación. "
+                            "Por favor reintenta en unos minutos; si "
+                            "persiste, contacta soporte."
+                        ),
+                    )
         
         logger.info(f"✅ Suscripción {subscription_id} de usuario {user_id} cancelada. Mantendrá acceso hasta {end_date or 'fin de ciclo'}.")
         
@@ -376,7 +616,10 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @webhooks_router.post("/paypal")
-async def api_webhook_paypal(request: Request):
+async def api_webhook_paypal(
+    request: Request,
+    _rl: Optional[str] = Depends(_PAYPAL_WEBHOOK_LIMITER),
+):
     try:
         PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
         PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
@@ -387,10 +630,43 @@ async def api_webhook_paypal(request: Request):
         body = await request.body()
         headers = request.headers
         
+        # [P2-WEBHOOK-FAIL-SECURE-ALWAYS · 2026-05-12] Pre-fix: si faltaba
+        # `PAYPAL_WEBHOOK_ID`/`PAYPAL_CLIENT_ID`/`PAYPAL_SECRET`, el handler
+        # SALTABA la verificación de firma y procesaba el evento igual EN
+        # SANDBOX (rama `if not is_sandbox: raise`). Si sandbox quedaba
+        # accidentalmente expuesto a tráfico real (DNS misroute, deploy con
+        # `.env` de prod marcado como sandbox), un atacante podía forge
+        # eventos `BILLING.SUBSCRIPTION.SUSPENDED` arbitrarios para downgrade
+        # de cualquier usuario via `paypal_subscription_id` enumerado.
+        #
+        # Ahora fail-secure SIEMPRE: 503 sin importar `is_sandbox`. Escape
+        # hatch explícito para dev local sin credenciales reales:
+        #   `MEALFIT_ALLOW_WEBHOOK_UNSIGNED=1` (default off).
+        # En `ENVIRONMENT=production` el knob NO se respeta — defensa de
+        # último recurso si alguien lo flippa por error.
         if not PAYPAL_WEBHOOK_ID or not PAYPAL_CLIENT_ID or not PAYPAL_SECRET:
-            logger.warning("⚠️ PAYPAL_WEBHOOK_ID o llaves no configuradas. Saltando verificación de firma en webhook.")
-            if not is_sandbox:
-                raise HTTPException(status_code=400, detail="Missing webhook config")
+            allow_unsigned = (
+                os.environ.get("MEALFIT_ALLOW_WEBHOOK_UNSIGNED", "").lower()
+                in ("1", "true", "yes", "on")
+            )
+            # En producción el knob se ignora (fail-secure absoluto).
+            if not is_sandbox or not allow_unsigned:
+                logger.error(
+                    "❌ [P2-WEBHOOK-FAIL-SECURE-ALWAYS] PAYPAL_WEBHOOK_ID/"
+                    "CLIENT_ID/SECRET ausentes. Rechazando webhook para "
+                    "evitar procesar eventos no firmados. Knob "
+                    "MEALFIT_ALLOW_WEBHOOK_UNSIGNED solo para dev local; "
+                    "ignorado en producción."
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Webhook provider misconfigured. Contact support.",
+                )
+            logger.warning(
+                "⚠️ [DEV-BYPASS] PAYPAL_WEBHOOK_ID/keys ausentes; "
+                "saltando verificación de firma porque "
+                "MEALFIT_ALLOW_WEBHOOK_UNSIGNED=1 + sandbox. NO en producción."
+            )
                 
         payload_dict = json.loads(body.decode('utf-8'))
         

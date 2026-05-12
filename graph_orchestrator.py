@@ -1135,6 +1135,13 @@ from db import get_recent_techniques, get_recent_meals_from_plans, check_meal_pl
 from nutrition_calculator import get_nutrition_targets
 
 # P1-10: `threading` ya importado al inicio del módulo (línea ~16); no reimportar.
+#
+# [P2-LOGGER-MIGRATION · 2026-05-12] Logger SSOT del módulo. Tras audit
+# 2026-05-12 los 250 `print()` directos se convirtieron a `logger.<level>(...)`
+# (info/warning/error según emoji prefix ⚠/❌/🚨). Pre-fix los prints
+# escapaban del LogRecord pipeline: no respetaban `LOG_LEVEL`, mezclados con
+# trazas del scheduler, sin timestamp consistente del logging framework.
+# Production-grade backend NO usa print(). Anchor: P2-LOGGER-MIGRATION.
 logger = logging.getLogger(__name__)
 
 from cache_manager import redis_client, redis_async_client
@@ -3227,9 +3234,9 @@ def _select_techniques(user_id: str | None, successful_techniques: list = None, 
                 decayed_weight = decay_factor ** days_elapsed
                 technique_freq[t] = technique_freq.get(t, 0) + decayed_weight
             if technique_freq:
-                print(f"🔍 [TÉCNICAS] Frecuencias con decaimiento temporal: { {k: round(v, 2) for k, v in technique_freq.items()} }")
+                logger.info(f"🔍 [TÉCNICAS] Frecuencias con decaimiento temporal: { {k: round(v, 2) for k, v in technique_freq.items()} }")
         except Exception as e:
-            print(f"⚠️ [TÉCNICAS] Error consultando DB, usando pesos uniformes: {e}")
+            logger.warning(f"⚠️ [TÉCNICAS] Error consultando DB, usando pesos uniformes: {e}")
 
     selected_techniques = []
     used_families = set()
@@ -3255,7 +3262,7 @@ def _select_techniques(user_id: str | None, successful_techniques: list = None, 
         used_families.add(TECH_TO_FAMILY.get(pick, ""))
         _pool_t = [(t, w) for t, w in _pool_t if t != pick]
 
-    print(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({TECH_TO_FAMILY.get(t)})' for t in selected_techniques]}")
+    logger.info(f"👨‍🍳 [TÉCNICAS] Seleccionadas (familias diversas): {[f'{t} ({TECH_TO_FAMILY.get(t)})' for t in selected_techniques]}")
     return selected_techniques
 
 
@@ -3415,13 +3422,13 @@ async def _attempt_pro_critique_correction(
         return None, "fallback_disabled"
     pro_cb = _get_circuit_breaker(_PRO_MODEL_NAME)
     if not await pro_cb.acan_proceed():
-        print(
+        logger.warning(
             f"⚠️ {log_prefix} CB OPEN para {_PRO_MODEL_NAME}. "
             f"Día {day_num} sin reintento Pro."
         )
         return None, "pro_cb_open"
     try:
-        print(
+        logger.info(
             f"🔄 {log_prefix} Día {day_num} reintentando con {_PRO_MODEL_NAME} "
             f"(timeout={CRITIQUE_PRO_FALLBACK_TIMEOUT_S:.0f}s)..."
         )
@@ -3441,18 +3448,18 @@ async def _attempt_pro_critique_correction(
             await pro_cb.arecord_success()
             corrected = result.model_dump()
             corrected["day"] = day_num
-            print(
+            logger.info(
                 f"✅ {log_prefix} Día {day_num} corregido con {_PRO_MODEL_NAME}."
             )
             return corrected, "pro_success"
         await pro_cb.arecord_failure()
-        print(
+        logger.warning(
             f"⚠️ {log_prefix} {_PRO_MODEL_NAME} retornó None para Día {day_num}. "
             f"Manteniendo original."
         )
         return None, "pro_returned_none"
     except asyncio.TimeoutError:
-        print(
+        logger.info(
             f"⏱️ {log_prefix} {_PRO_MODEL_NAME} también timeout para Día {day_num} "
             f"({CRITIQUE_PRO_FALLBACK_TIMEOUT_S:.0f}s)."
         )
@@ -3462,7 +3469,7 @@ async def _attempt_pro_critique_correction(
             await pro_cb.arecord_failure()
         except Exception:
             pass
-        print(
+        logger.warning(
             f"⚠️ {log_prefix} Error con {_PRO_MODEL_NAME} para Día {day_num}: "
             f"{type(e).__name__}: {e}"
         )
@@ -3532,7 +3539,7 @@ def _route_model_for_day_generator(
         return _route_model(form_data, attempt)
 
     if _is_skeleton_fidelity_rejection(prev_rejection_reasons):
-        print(
+        logger.info(
             f"🔀 [ROUTER P4] Day generator escalado a PRO ({_PRO_MODEL_NAME}) "
             f"en retry attempt={attempt} por skeleton fidelity violation previa. "
             f"Trade: ~+40s/día vs Flash, +25pts de adherencia esperada."
@@ -3576,10 +3583,10 @@ def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) ->
         is_complex = True
         
     if is_complex:
-        print("🔀 [ROUTER] Perfil CLÍNICO complejo detectado. Enrutando a modelo PRO (gemini-3.1-pro-preview).")
+        logger.info("🔀 [ROUTER] Perfil CLÍNICO complejo detectado. Enrutando a modelo PRO (gemini-3.1-pro-preview).")
         return "gemini-3.1-pro-preview"
     else:
-        print("🔀 [ROUTER] Perfil FÁCIL detectado. Enrutando a modelo FLASH (gemini-3-flash-preview).")
+        logger.info("🔀 [ROUTER] Perfil FÁCIL detectado. Enrutando a modelo FLASH (gemini-3-flash-preview).")
         return "gemini-3-flash-preview"
 
 
@@ -3592,7 +3599,7 @@ async def context_compression_node(state: PlanState) -> dict:
     if len(history_context) < 2000:
         return {"compressed_context": history_context}
         
-    print(f"🗜️ [COMPRESIÓN] Contexto masivo detectado ({len(history_context)} caracteres). Comprimiendo...")
+    logger.info(f"🗜️ [COMPRESIÓN] Contexto masivo detectado ({len(history_context)} caracteres). Comprimiendo...")
     
     from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -3622,7 +3629,7 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
 """
     try:
         if not await _cb.acan_proceed():  # P1-Q3: CB per-modelo
-            print("⚠️ [COMPRESIÓN] Circuit Breaker OPEN. Saltando compresión.")
+            logger.warning("⚠️ [COMPRESIÓN] Circuit Breaker OPEN. Saltando compresión.")
             return {"compressed_context": history_context}
 
         # P0-4: Hard timeout con cancelación graceful (cleanup de sockets HTTP)
@@ -3647,14 +3654,14 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
 
         # Sanity check: si la compresión devolvió algo absurdamente corto, usar el original
         if len(compressed_text) < 50:
-            print(f"⚠️ [COMPRESIÓN] Resultado sospechoso ({len(compressed_text)} chars). Usando contexto original.")
+            logger.warning(f"⚠️ [COMPRESIÓN] Resultado sospechoso ({len(compressed_text)} chars). Usando contexto original.")
             return {"compressed_context": history_context}
 
-        print(f"🗜️ [COMPRESIÓN] Contexto reducido a {len(compressed_text)} caracteres.")
+        logger.info(f"🗜️ [COMPRESIÓN] Contexto reducido a {len(compressed_text)} caracteres.")
         return {"compressed_context": compressed_text}
     except Exception as e:
         await _cb.arecord_failure()  # P1-Q3: CB per-modelo
-        print(f"⚠️ [COMPRESIÓN] Error comprimiendo contexto: {e}. Usando original.")
+        logger.warning(f"⚠️ [COMPRESIÓN] Error comprimiendo contexto: {e}. Usando original.")
         return {"compressed_context": history_context}
 
 # ============================================================
@@ -3665,9 +3672,9 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     form_data = state["form_data"]
     nutrition = state["nutrition"]
 
-    print(f"\n{'='*60}")
-    print(f"📋 [PLANIFICADOR] Diseñando estructura del plan (intento #{attempt})...")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"📋 [PLANIFICADOR] Diseñando estructura del plan (intento #{attempt})...")
+    logger.info(f"{'='*60}")
 
     _emit_progress(state, "phase", {"phase": "skeleton", "message": "Diseñando la estructura del plan..."})
     start_time = time.time()
@@ -3684,13 +3691,13 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         previous_skeleton = state.get("plan_skeleton") or {}
         previous_techniques = previous_skeleton.get("_selected_techniques", [])
         aban_techs = list(set(aban_techs + previous_techniques))
-        print(f"🔀 [RETRY MUTATION] Técnicas del intento anterior bloqueadas: {previous_techniques}")
+        logger.info(f"🔀 [RETRY MUTATION] Técnicas del intento anterior bloqueadas: {previous_techniques}")
         
     # [GAP 1 FIX] Bloquear la última técnica del chunk anterior si es continuación
     last_tech = form_data.get("_last_technique")
     if last_tech and attempt == 1:
         aban_techs = list(set(aban_techs + [last_tech]))
-        print(f"🔄 [CHUNK CONTINUATION] Técnica anterior bloqueada para este chunk: {last_tech}")
+        logger.info(f"🔄 [CHUNK CONTINUATION] Técnica anterior bloqueada para este chunk: {last_tech}")
 
     selected_techniques = _select_techniques(_uid, succ_techs, aban_techs)
 
@@ -3782,7 +3789,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     # demasiado lento — consumía budget y bloqueaba la generación paralela).
     planner_model = _route_model(form_data, attempt)
     if attempt > 1:
-        print(f"🔀 [RETRY MUTATION] Modelo '{planner_model}' + temp={base_temp} para intento {attempt}")
+        logger.info(f"🔀 [RETRY MUTATION] Modelo '{planner_model}' + temp={base_temp} para intento {attempt}")
 
     planner_llm = ChatGoogleGenerativeAI(
         model=planner_model,
@@ -3800,13 +3807,13 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
         reraise=True,
-        before_sleep=lambda retry_state: print(f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
+        before_sleep=lambda retry_state: logger.warning(f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
     )
     async def invoke_planner():
         if not await _planner_cb.acan_proceed():
             raise Exception(f"Circuit Breaker OPEN para {planner_model} - LLM cascade failure prevented")
         try:
-            print(f"⏳ [PLANIFICADOR] Generando esqueleto del plan...")
+            logger.info(f"⏳ [PLANIFICADOR] Generando esqueleto del plan...")
             # P0-4: Hard timeout con cancelación graceful. El constructor pone
             # timeout=45 pero el SDK no siempre lo respeta con sockets colgados.
             # tenacity hará 3 retries, con cap explícito de 50s/intento mantenemos
@@ -3821,7 +3828,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     response = await invoke_planner()
 
     duration = round(time.time() - start_time, 2)
-    print(f"✅ [PLANIFICADOR] Esqueleto generado en {duration}s")
+    logger.info(f"✅ [PLANIFICADOR] Esqueleto generado en {duration}s")
 
     if hasattr(response, "model_dump"):
         skeleton = response.model_dump()
@@ -3855,7 +3862,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
                 removed = [p for p in original if p not in filtered]
                 if removed:
                     skel_days[idx]['protein_pool'] = filtered
-                    print(f"🧹 [SKELETON SCRUB] Día {skel_days[idx].get('day')}: "
+                    logger.info(f"🧹 [SKELETON SCRUB] Día {skel_days[idx].get('day')}: "
                           f"eliminadas {removed} (cap '{restricted}' ya asignado al Día {skel_days[keep_idx].get('day')})")
 
     # 2. No combinar atún + embutido en el mismo día — remover embutidos si coexisten con atún
@@ -3866,14 +3873,14 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         embutidos_in_pool = [p for p in pool if any(emb in (p or '').lower() for emb in _EMBUTIDO_KEYS)]
         if has_atun and embutidos_in_pool:
             d['protein_pool'] = [p for p in pool if p not in embutidos_in_pool]
-            print(f"🧹 [SKELETON SCRUB] Día {d.get('day')}: eliminados embutidos "
+            logger.info(f"🧹 [SKELETON SCRUB] Día {d.get('day')}: eliminados embutidos "
                   f"{embutidos_in_pool} (conflicto con atún presente)")
 
     # 3. Fallback: si algún pool quedó vacío tras scrub, inyectar Lentejas como proteína segura
     for d in skel_days:
         if not d.get('protein_pool'):
             d['protein_pool'] = ['Lentejas']
-            print(f"⚠️ [SKELETON SCRUB] Día {d.get('day')}: protein_pool vacío tras scrub, "
+            logger.warning(f"⚠️ [SKELETON SCRUB] Día {d.get('day')}: protein_pool vacío tras scrub, "
                   f"inyectado 'Lentejas' como fallback")
 
     _emit_progress(state, "metric", {
@@ -3946,7 +3953,7 @@ def _apply_protein_pool_scrub(
                 _cleaned.append(_ing)
         if _removed:
             _meal['ingredients'] = _cleaned
-            print(
+            logger.info(
                 f"🚫 [{context_label}/DÍA {day_num}] Proteínas no autorizadas eliminadas de "
                 f"'{_meal.get('name')}': {_removed}"
             )
@@ -3965,12 +3972,12 @@ def _apply_protein_pool_scrub(
 
     if _violations:
         _summary = ', '.join(f"'{m}' menciona '{k}'" for m, k in _violations[:3])
-        print(
+        logger.warning(
             f"⚠️  [{context_label}/DÍA {day_num}] PROTEIN-RECIPE-VIOLATION detectada: "
             f"{_summary}{'...' if len(_violations) > 3 else ''}"
         )
     else:
-        print(
+        logger.info(
             f"🔍 [{context_label}/DÍA {day_num}] PROTEIN-POOL-SCRUB limpio — "
             f"{_meals_scanned} meals × {len(unauthorized_keys)} keys, 0 violations. "
             f"Pool: {skeleton_day.get('protein_pool', []) if skeleton_day else []}"
@@ -3988,9 +3995,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     form_data = state["form_data"]
     nutrition = state["nutrition"]
 
-    print(f"\n{'='*60}")
-    print(f"🚀 [GENERADORES PARALELOS] Lanzando 3 workers para generar las opciones...\n")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"🚀 [GENERADORES PARALELOS] Lanzando 3 workers para generar las opciones...\n")
+    logger.info(f"{'='*60}")
 
     _emit_progress(state, "phase", {"phase": "parallel_generation", "message": "Generando las 3 opciones en paralelo..."})
 
@@ -4024,7 +4031,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     recycled_days_cache = {} # day_num -> recycled_day
 
     if surgical_mode:
-        print(f"🔪 [SURGICAL FIX] Reciclando días válidos. Regenerando SOLO los días afectados: {affected_days}")
+        logger.info(f"🔪 [SURGICAL FIX] Reciclando días válidos. Regenerando SOLO los días afectados: {affected_days}")
         previous_days = state.get("plan_result", {}).get("days", [])
         for i, skel_day in enumerate(skeleton_days[:days_in_chunk]):
             day_num = i + 1
@@ -4128,7 +4135,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=1, min=2, max=8),
             reraise=True,
-            before_sleep=lambda rs: print(f"⚠️  [DÍA {day_num}] Reintento #{rs.attempt_number}...")
+            before_sleep=lambda rs: logger.warning(f"⚠️  [DÍA {day_num}] Reintento #{rs.attempt_number}...")
         )
         async def invoke_day():
             if not await _day_cb.acan_proceed():
@@ -4180,7 +4187,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                             tool_name = tool_call["name"]
                             tool_args = tool_call["args"]
                             if tool_name == "consultar_nutricion":
-                                print(f"🔧 [DÍA {day_num}] Tool Call: consultar_nutricion({tool_args})")
+                                logger.info(f"🔧 [DÍA {day_num}] Tool Call: consultar_nutricion({tool_args})")
                                 try:
                                     # P0-3: Despachar la tool sync a thread pool. Aunque la
                                     # tool actual es CPU-puro (lookup en dict), el agent loop
@@ -4233,7 +4240,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 day_result, skeleton_day, day_num, context_label="PARALLEL-GEN",
             )
         except Exception as _scrub_err:
-            print(
+            logger.warning(
                 f"⚠️ [PARALLEL-GEN/DÍA {day_num}] protein-scrub falló "
                 f"(best-effort): {_scrub_err}"
             )
@@ -4253,7 +4260,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             and _unauthorized_keys
             and not getattr(invoke_day, '_already_regen_for_pool', False)
         ):
-            print(
+            logger.warning(
                 f"⚠️  [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION → "
                 f"forzando regen del día (bounded: 1 retry max)"
             )
@@ -4285,15 +4292,15 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                     context_label="PARALLEL-GEN-REGEN",
                 )
                 if _violations_post > 0:
-                    print(
+                    logger.warning(
                         f"⚠️  [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION persistió tras regen — "
                         f"el LLM ignoró el warning. Aceptando para evitar loop; downstream "
                         f"(critique/reviewer) lo manejará."
                     )
                 else:
-                    print(f"✅ [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION resuelta tras regen forzado.")
+                    logger.info(f"✅ [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION resuelta tras regen forzado.")
             except Exception as _regen_e:
-                print(
+                logger.warning(
                     f"⚠️  [DÍA {day_num}] Regen forzado falló ({_regen_e}); "
                     f"manteniendo intento original."
                 )
@@ -4320,12 +4327,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 for _pattern, _repl in _UNIT_REPLACEMENTS:
                     _scrubbed = _re.sub(_pattern, _repl, _scrubbed, flags=_re.IGNORECASE)
                 if _scrubbed != _ing:
-                    print(f"🧹 [DÍA {day_num}] Unidad normalizada: '{_ing}' → '{_scrubbed}'")
+                    logger.info(f"🧹 [DÍA {day_num}] Unidad normalizada: '{_ing}' → '{_scrubbed}'")
                 _new_ings.append(_scrubbed)
             _meal['ingredients'] = _new_ings
 
         day_duration = round(time.time() - day_start, 2)
-        print(f"✅ [DÍA {day_num}] Generado en {day_duration}s")
+        logger.info(f"✅ [DÍA {day_num}] Generado en {day_duration}s")
         _emit_progress(state, "day_completed", {"day": day_num})
 
         _emit_progress(state, "metric", {
@@ -4386,7 +4393,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         # 2. P0-D: chequear cap de hedges concurrentes ANTES de lanzar.
         # asyncio es single-threaded por loop → check + increment es atómico.
         if hedge_in_flight[0] >= HEDGE_MAX_CONCURRENT:
-            print(f"⚠️ [HEDGE] Día {day_num} lleva >{elapsed}s pero "
+            logger.warning(f"⚠️ [HEDGE] Día {day_num} lleva >{elapsed}s pero "
                   f"hedge limiter saturado ({hedge_in_flight[0]}/{HEDGE_MAX_CONCURRENT} "
                   f"hedges en flight). Esperando solo primary hasta HARD_CEILING.")
             remaining = max(5.0, HARD_CEILING - (time.time() - day_start_time))
@@ -4422,7 +4429,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         # bajo GIL pero el contrato queda explícito).
         hedge_in_flight[0] += 1
         try:
-            print(f"🪁 [HEDGE] Día {day_num} lleva >{elapsed}s. Lanzando intento especulativo "
+            logger.info(f"🪁 [HEDGE] Día {day_num} lleva >{elapsed}s. Lanzando intento especulativo "
                   f"({hedge_in_flight[0]}/{HEDGE_MAX_CONCURRENT} hedges activos).")
             hedge = asyncio.create_task(generate_single_day(skel_day, day_num, temp_override))
 
@@ -4450,12 +4457,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                         for pt in pending:
                             pt.cancel()
                         winner = "primary" if t is primary else "hedge"
-                        print(f"🏁 [HEDGE] Día {day_num} ganador: {winner}")
+                        logger.info(f"🏁 [HEDGE] Día {day_num} ganador: {winner}")
                         return result
                     except Exception as e:
                         last_exc = e
                         name = "primary" if t is primary else "hedge"
-                        print(f"⚠️ [HEDGE] Día {day_num}: {name} falló ({type(e).__name__}). Esperando al otro.")
+                        logger.warning(f"⚠️ [HEDGE] Día {day_num}: {name} falló ({type(e).__name__}). Esperando al otro.")
                 racing = pending
 
             raise last_exc or RuntimeError(f"Día {day_num}: ambos intentos fallaron sin excepción")
@@ -4525,13 +4532,13 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
 
         if _auto_reasons:
             use_adversarial = True
-            print(f"⚔️ [ADVERSARIAL AUTO-ACTIVATE] Activado autónomamente por: {', '.join(_auto_reasons)}")
+            logger.info(f"⚔️ [ADVERSARIAL AUTO-ACTIVATE] Activado autónomamente por: {', '.join(_auto_reasons)}")
 
     # --- GAP 2: Desactivar adversarial si la calibración es mala ---
     health_profile = form_data.get("health_profile", {})
     judge_calib = health_profile.get("judge_calibration", {})
     if judge_calib.get("total", 0) >= 5 and judge_calib.get("score", 1.0) < 0.5:
-        print("🛑 [ADVERSARIAL JUDGE] Desactivado automáticamente. Score de calibración muy bajo (< 0.5).")
+        logger.error("🛑 [ADVERSARIAL JUDGE] Desactivado automáticamente. Score de calibración muy bajo (< 0.5).")
         use_adversarial = False
 
     # Si es el intento 2 (retry tras revisión médica), desactivar adversarial por tiempo.
@@ -4549,11 +4556,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 if recycled_day:
                     generated_days.append(recycled_day)
                     if temp_override is None or temp_override == 0.7:
-                        print(f"♻️ [SURGICAL FIX] Día {day_num} reciclado con éxito.")
+                        logger.info(f"♻️ [SURGICAL FIX] Día {day_num} reciclado con éxito.")
                     continue
                 else:
                     if temp_override is None or temp_override == 0.7:
-                        print(f"⚠️ [SURGICAL FIX] No se encontró el Día {day_num} para reciclar, forzando regeneración.")
+                        logger.warning(f"⚠️ [SURGICAL FIX] No se encontró el Día {day_num} para reciclar, forzando regeneración.")
 
             day_coros.append(_safe_gen(skel_day, day_num, temp_override))
 
@@ -4569,7 +4576,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                     generated_days.append(result)
                 else:
                     err_name = type(err).__name__ if err else "unknown"
-                    print(f"❌ [DÍA {day_num}] Falló definitivamente tras hedging: {err_name}")
+                    logger.error(f"❌ [DÍA {day_num}] Falló definitivamente tras hedging: {err_name}")
                     failed_days.append(day_num)
 
         if failed_days and generated_days:
@@ -4579,7 +4586,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 cloned = copy.deepcopy(valid_day_template)
                 cloned["day"] = f_day
                 generated_days.append(cloned)
-                print(f"⚠️ [FALLBACK EXTREMO] Día {f_day} clonado a partir del Día {valid_day_template.get('day', 1)}")
+                logger.warning(f"⚠️ [FALLBACK EXTREMO] Día {f_day} clonado a partir del Día {valid_day_template.get('day', 1)}")
         elif failed_days and not generated_days:
             # P0-2: Evitar propagar días vacíos si todos los workers fallan
             raise RuntimeError("Todos los workers de generación de días fallaron. Forzando fallback matemático global.")
@@ -4599,7 +4606,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         _ab_pair_selected = await _aselect_ab_temp_pair(_ab_user_id) if _ab_user_id != "guest" else _AB_TEMP_PAIRS[1]
         _ab_temp_a = _ab_pair_selected["temp_a"]
         _ab_temp_b = _ab_pair_selected["temp_b"]
-        print(f"⚔️ [ADVERSARIAL SELF-PLAY] Activado. Par '{_ab_pair_selected['label']}': A={_ab_temp_a} / B={_ab_temp_b}")
+        logger.info(f"⚔️ [ADVERSARIAL SELF-PLAY] Activado. Par '{_ab_pair_selected['label']}': A={_ab_temp_a} / B={_ab_temp_b}")
         cand_a_coro = _generate_candidate(temp_override=_ab_temp_a)
         cand_b_coro = _generate_candidate(temp_override=_ab_temp_b)
         # P1-2: return_exceptions=True para que un fallo en uno no aborte el otro.
@@ -4611,24 +4618,24 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         a_failed = isinstance(candidate_a, BaseException)
         b_failed = isinstance(candidate_b, BaseException)
         if a_failed and b_failed:
-            print(f"❌ [ADVERSARIAL] Ambos candidatos fallaron. "
+            logger.error(f"❌ [ADVERSARIAL] Ambos candidatos fallaron. "
                   f"A={type(candidate_a).__name__}, B={type(candidate_b).__name__}. "
                   "Re-raise para activar fallback global.")
             raise candidate_a  # consistente con _generate_candidate cuando todo falla
         if a_failed:
-            print(f"⚠️ [ADVERSARIAL] Candidato A falló ({type(candidate_a).__name__}); "
+            logger.warning(f"⚠️ [ADVERSARIAL] Candidato A falló ({type(candidate_a).__name__}); "
                   "promoviendo Candidato B como único.")
             candidate_a = candidate_b
             candidate_b = None
         elif b_failed:
-            print(f"⚠️ [ADVERSARIAL] Candidato B falló ({type(candidate_b).__name__}); "
+            logger.warning(f"⚠️ [ADVERSARIAL] Candidato B falló ({type(candidate_b).__name__}); "
                   "continuando solo con Candidato A.")
             candidate_b = None
     else:
         candidate_a = await _generate_candidate(temp_override=None)
 
     parallel_duration = round(time.time() - parallel_start, 2)
-    print(f"✅ [PARALELO] Días generados en {parallel_duration}s")
+    logger.info(f"✅ [PARALELO] Días generados en {parallel_duration}s")
 
     return {
         "candidate_a": {
@@ -4736,7 +4743,7 @@ def _compute_ab_temp_pair_from_rows(rows: list) -> dict:
     if min_total_raw < _AB_MIN_SAMPLES_PER_PAIR:
         under_explored = [p for p in _AB_TEMP_PAIRS if totals_raw[p["label"]] == min_total_raw]
         selected = random.choice(under_explored)
-        print(f"🔬 [AB-TEMP] Exploración: par '{selected['label']}' ({totals_raw[selected['label']]}/{_AB_MIN_SAMPLES_PER_PAIR} muestras)")
+        logger.info(f"🔬 [AB-TEMP] Exploración: par '{selected['label']}' ({totals_raw[selected['label']]}/{_AB_MIN_SAMPLES_PER_PAIR} muestras)")
         return selected
 
     # Explotación: inferir preferencia conservador/creativo del usuario usando
@@ -4768,7 +4775,7 @@ def _compute_ab_temp_pair_from_rows(rows: list) -> dict:
 
     best_label = max(samples, key=lambda k: samples[k])
     selected = next(p for p in _AB_TEMP_PAIRS if p["label"] == best_label)
-    print(f"🎯 [AB-TEMP] Explotación: par '{selected['label']}' "
+    logger.info(f"🎯 [AB-TEMP] Explotación: par '{selected['label']}' "
           f"(ratio_conservador={conservative_ratio:.2f}, "
           f"wins_weighted_total={total_all:.1f} sobre {sum(totals_raw.values())} muestras raw)")
     return selected
@@ -4781,7 +4788,7 @@ def _select_ab_temp_pair(user_id: str) -> dict:
     try:
         rows = execute_sql_query(_AB_TEMP_QUERY, (user_id,), fetch_all=True) or []
     except Exception as e:
-        print(f"⚠️ [AB-TEMP] Error leyendo historial: {e}")
+        logger.warning(f"⚠️ [AB-TEMP] Error leyendo historial: {e}")
         rows = []
     return _compute_ab_temp_pair_from_rows(rows)
 
@@ -4797,7 +4804,7 @@ async def _aselect_ab_temp_pair(user_id: str) -> dict:
     try:
         rows = await aexecute_sql_query(_AB_TEMP_QUERY, (user_id,), fetch_all=True) or []
     except Exception as e:
-        print(f"⚠️ [AB-TEMP] Error leyendo historial: {e}")
+        logger.warning(f"⚠️ [AB-TEMP] Error leyendo historial: {e}")
         rows = []
     return _compute_ab_temp_pair_from_rows(rows)
 
@@ -4963,7 +4970,7 @@ async def adversarial_judge_node(state: PlanState) -> dict:
     b_valid = _is_candidate_valid(candidate_b)
     if not (a_valid and b_valid):
         if a_valid and not b_valid:
-            print("⚠️ [ADVERSARIAL JUDGE] Candidato B inválido (sin días/meals). "
+            logger.warning("⚠️ [ADVERSARIAL JUDGE] Candidato B inválido (sin días/meals). "
                   "Promoviendo Candidato A sin invocar al juez.")
             # P1-F: registrar la observación. Que B haya salido corrupto es
             # señal AB legítima — penaliza al par con la temperatura más alta
@@ -4980,7 +4987,7 @@ async def adversarial_judge_node(state: PlanState) -> dict:
                 "adversarial_rationale": "Candidato B descartado por estructura inválida.",
             }
         if b_valid and not a_valid:
-            print("⚠️ [ADVERSARIAL JUDGE] Candidato A inválido (sin días/meals). "
+            logger.warning("⚠️ [ADVERSARIAL JUDGE] Candidato A inválido (sin días/meals). "
                   "Promoviendo Candidato B sin invocar al juez.")
             _log_adversarial_metric(
                 state, form_data,
@@ -4995,7 +5002,7 @@ async def adversarial_judge_node(state: PlanState) -> dict:
             }
         # Ambos corruptos: devolvemos A; los guardrails P0-1/P0-2 downstream
         # (review_plan_node + arun_plan_pipeline) repararán o forzarán fallback.
-        print("⚠️ [ADVERSARIAL JUDGE] Ambos candidatos inválidos. Devolviendo A; "
+        logger.warning("⚠️ [ADVERSARIAL JUDGE] Ambos candidatos inválidos. Devolviendo A; "
               "P0-2 guardrail lo reparará downstream.")
         # P1-F: registrar SIN pair_label para que el sampler lo ignore — el
         # winner aquí es arbitrario y no aporta señal AB real (ambos lados
@@ -5014,9 +5021,9 @@ async def adversarial_judge_node(state: PlanState) -> dict:
             "adversarial_rationale": "Ambos candidatos corruptos; reparación delegada a P0-2.",
         }
 
-    print(f"\n{'='*60}")
-    print(f"⚖️ [ADVERSARIAL JUDGE] Evaluando Candidato A vs Candidato B...")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"⚖️ [ADVERSARIAL JUDGE] Evaluando Candidato A vs Candidato B...")
+    logger.info(f"{'='*60}")
 
     _emit_progress(state, "phase", {"phase": "adversarial_judging", "message": "Seleccionando el mejor plan candidato..."})
     start_time = time.time()
@@ -5129,7 +5136,7 @@ mencionando explícitamente cuál criterio (1-4) fue decisivo.
 
     # Pass 2: si excedimos el budget, recomprimir agresivo (3 ing, 60 chars).
     if len(prompt) > _ADVERSARIAL_PROMPT_CHAR_BUDGET:
-        print(f"⚠️ [ADVERSARIAL JUDGE] P1-X6: prompt {len(prompt)}c > budget "
+        logger.warning(f"⚠️ [ADVERSARIAL JUDGE] P1-X6: prompt {len(prompt)}c > budget "
               f"{_ADVERSARIAL_PROMPT_CHAR_BUDGET}c. Aplicando trim agresivo "
               f"(ing_cap=3, recipe_cap=60).")
         summary_a = _compress_candidate(candidate_a, ing_cap=3, recipe_cap=60)
@@ -5139,7 +5146,7 @@ mencionando explícitamente cuál criterio (1-4) fue decisivo.
     # Skip: si tras trim agresivo aún excede, no invocar al juez. Promover A
     # como default arbitrario (sin señal AB → `include_pair=False`).
     if len(prompt) > _ADVERSARIAL_PROMPT_CHAR_BUDGET:
-        print(f"🛑 [ADVERSARIAL JUDGE] P1-X6: prompt aún excede budget tras trim "
+        logger.error(f"🛑 [ADVERSARIAL JUDGE] P1-X6: prompt aún excede budget tras trim "
               f"({len(prompt)}c > {_ADVERSARIAL_PROMPT_CHAR_BUDGET}c). "
               f"Saltando juez y promoviendo Candidato A.")
         _log_adversarial_metric(
@@ -5176,7 +5183,7 @@ mencionando explícitamente cuál criterio (1-4) fue decisivo.
         
         winner_key = result.winner
         rationale = result.rationale
-        print(f"🏆 [ADVERSARIAL JUDGE] Ganador: {winner_key}. Razón: {rationale}")
+        logger.info(f"🏆 [ADVERSARIAL JUDGE] Ganador: {winner_key}. Razón: {rationale}")
         
         # P0-NEW-1.g: persistir el resultado vía `_log_adversarial_metric`
         # (despachado a `_METRICS_EXECUTOR`, no bloquea el event loop). Antes
@@ -5210,7 +5217,7 @@ mencionando explícitamente cuál criterio (1-4) fue decisivo.
         
     except Exception as e:
         await _judge_cb.arecord_failure()  # P1-Q3
-        print(f"⚠️ [ADVERSARIAL JUDGE] Falló la evaluación: {e}. Defaulting to Candidate A.")
+        logger.warning(f"⚠️ [ADVERSARIAL JUDGE] Falló la evaluación: {e}. Defaulting to Candidate A.")
         # P1-F: registrar el fallo del juez como observación AB. El default a A
         # es arbitrario (no LLM-decided), así que `include_pair=False` excluye
         # del Thompson Sampling para no contaminar las stats del par usado.
@@ -5518,12 +5525,12 @@ async def self_critique_node(state: PlanState) -> dict:
     # evaluación+corrección. El revisor médico es el gatekeeper que importa; el
     # self-critique es quality-of-life y solo debe correr en el primer intento.
     if state.get("attempt", 1) > 1:
-        print(f"⏭️ [SELF-CRITIQUE] Saltado en intento {state.get('attempt')} (budget-aware).")
+        logger.info(f"⏭️ [SELF-CRITIQUE] Saltado en intento {state.get('attempt')} (budget-aware).")
         return {}
 
-    print(f"\n{'='*60}")
-    print(f"🧐 [SELF-CRITIQUE] Evaluando calidad post-generación...")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"🧐 [SELF-CRITIQUE] Evaluando calidad post-generación...")
+    logger.info(f"{'='*60}")
     
     _emit_progress(state, "phase", {"phase": "critique", "message": "Evaluando atractivo y coherencia del plan..."})
     start_time = time.time()
@@ -5534,7 +5541,7 @@ async def self_critique_node(state: PlanState) -> dict:
     # en Flash — solo escalamos el "juez", no los "ejecutores".
     if EVALUATOR_USE_PRO:
         _evaluator_model = _PRO_MODEL_NAME
-        print(f"🎓 [SELF-CRITIQUE] Evaluator escalado a PRO ({_PRO_MODEL_NAME}) "
+        logger.info(f"🎓 [SELF-CRITIQUE] Evaluator escalado a PRO ({_PRO_MODEL_NAME}) "
               f"vía MEALFIT_EVALUATOR_USE_PRO=1 (mejor cobertura de incoherencias).")
     else:
         _evaluator_model = _route_model(state.get("form_data", {}), force_fast=True)
@@ -5576,7 +5583,7 @@ async def self_critique_node(state: PlanState) -> dict:
     suggested_day_hint = ""
     if staple_repetitions:
         items_str = ", ".join([f"'{k}' en {v} días" for k, v in staple_repetitions.items()])
-        print(f"🔁 [SELF-CRITIQUE] Staples repetidos detectados: {items_str}")
+        logger.info(f"🔁 [SELF-CRITIQUE] Staples repetidos detectados: {items_str}")
         staples_block = (
             f"\n⚠️ STAPLES REPETIDOS DETECTADOS (conteo determinístico, no opinable): {items_str}\n"
             f"   Por cada staple en >=2 días, BAJA diversity_score a 4 o menos y especifica en suggestions "
@@ -5595,7 +5602,7 @@ async def self_critique_node(state: PlanState) -> dict:
     slot_issues = _detect_slot_incoherence(days)
     if slot_issues:
         joined = "\n   - " + "\n   - ".join(slot_issues)
-        print(f"🍽️ [SELF-CRITIQUE] Incoherencias de slot detectadas:{joined}")
+        logger.info(f"🍽️ [SELF-CRITIQUE] Incoherencias de slot detectadas:{joined}")
         slot_block = (
             f"\n⚠️ INCOHERENCIAS POR SLOT DETECTADAS (conteo determinístico, no opinable):{joined}\n"
             f"   Por CADA incoherencia listada arriba, BAJA slot_coherence_score a 4 o menos, "
@@ -5659,10 +5666,10 @@ async def self_critique_node(state: PlanState) -> dict:
         except Exception as e:
             await _evaluator_cb.arecord_failure()  # P1-Q3
             raise e
-        print(f"📊 [SELF-CRITIQUE] Scores -> Visual: {critique.visual_score}, Diversidad: {critique.diversity_score}, Cultural: {critique.cultural_score}, Temp: {critique.temperature_score}, Slot: {critique.slot_coherence_score}")
+        logger.info(f"📊 [SELF-CRITIQUE] Scores -> Visual: {critique.visual_score}, Diversidad: {critique.diversity_score}, Cultural: {critique.cultural_score}, Temp: {critique.temperature_score}, Slot: {critique.slot_coherence_score}")
         
         if critique.needs_correction:
-            print(f"⚠️ [SELF-CRITIQUE] Problemas detectados. Sugerencias: {critique.suggestions}")
+            logger.warning(f"⚠️ [SELF-CRITIQUE] Problemas detectados. Sugerencias: {critique.suggestions}")
 
             # Parsear qué días necesitan corrección desde el texto de sugerencias.
             # P1-1: regex \d+ (no \d) — antes "Día 10" se parseaba como "Día 1".
@@ -5683,13 +5690,13 @@ async def self_critique_node(state: PlanState) -> dict:
             if deterministic_days:
                 missing = [d for d in deterministic_days if d not in mentioned]
                 if missing:
-                    print(f"🛟 [SELF-CRITIQUE] Días con incoherencia determinística no mencionados "
+                    logger.info(f"🛟 [SELF-CRITIQUE] Días con incoherencia determinística no mencionados "
                           f"por el LLM: {missing} → añadidos al floor de corrección.")
                     mentioned = list(dict.fromkeys(mentioned + missing))
             if not mentioned:
                 mentioned = [1]  # Default: corregir día 1 si no se menciona ninguno
             critique_max_days = _compute_self_critique_max_days(state)
-            print(f"🔧 [SELF-CRITIQUE] Corrigiendo días afectados: {mentioned[:critique_max_days]} "
+            logger.info(f"🔧 [SELF-CRITIQUE] Corrigiendo días afectados: {mentioned[:critique_max_days]} "
                   f"(cap dinámico={critique_max_days})")
 
             # P1-Q3: capturar modelo del corrector para CB per-modelo
@@ -5741,11 +5748,11 @@ async def self_critique_node(state: PlanState) -> dict:
                 if not target_day:
                     return day_num, None, "no_target"
                 if not await _corrector_cb.acan_proceed():  # P1-Q3
-                    print(f"⚠️ [SELF-CRITIQUE] Circuit Breaker OPEN ({_corrector_model}). Saltando corrección Día {day_num}.")
+                    logger.warning(f"⚠️ [SELF-CRITIQUE] Circuit Breaker OPEN ({_corrector_model}). Saltando corrección Día {day_num}.")
                     _mark_critique_unresolved(target_day, "cb_open", critique.suggestions or "")
                     return day_num, None, "cb_open"
                 try:
-                    print(f"🔧 [SELF-CRITIQUE] Corrigiendo Día {day_num}...")
+                    logger.info(f"🔧 [SELF-CRITIQUE] Corrigiendo Día {day_num}...")
 
                     # Incluir asignación del skeleton para que el corrector respete proteínas/carbos
                     skeleton_day = next((d for d in _skeleton_days if d.get("day") == day_num), {})
@@ -5812,7 +5819,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     if corrected_result:
                         corrected_day = corrected_result.model_dump()
                         corrected_day["day"] = day_num
-                        print(f"✅ [SELF-CRITIQUE] Día {day_num} corregido exitosamente.")
+                        logger.info(f"✅ [SELF-CRITIQUE] Día {day_num} corregido exitosamente.")
                         # [PROTEIN-POOL-SCRUB 2026-05-07] Aplicar cleanup +
                         # scan tras corrección — el LLM puede reintroducir
                         # proteínas fuera del pool al "resolver" el slot
@@ -5824,7 +5831,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                                 context_label="CRITIQUE-FIX",
                             )
                         except Exception as _scrub_err:
-                            print(
+                            logger.warning(
                                 f"⚠️ [CRITIQUE-FIX/DÍA {day_num}] protein-scrub falló "
                                 f"(best-effort): {_scrub_err}"
                             )
@@ -5836,7 +5843,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     # `corrected_result` None: LLM retornó respuesta no-parseable
                     # tras `_safe_ainvoke`. No es timeout ni excepción, pero el
                     # día sigue sin corrección — mismo modo de fallo.
-                    print(f"⚠️ [SELF-CRITIQUE] Día {day_num}: corrector LLM retornó None. Manteniendo original.")
+                    logger.warning(f"⚠️ [SELF-CRITIQUE] Día {day_num}: corrector LLM retornó None. Manteniendo original.")
                     _mark_critique_unresolved(target_day, "llm_returned_none", critique.suggestions or "")
                     return day_num, None, "llm_returned_none"
                 except asyncio.TimeoutError:
@@ -5851,11 +5858,11 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     _ingredients_count = sum(
                         len(m.get("ingredients", [])) for m in target_day.get("meals", [])
                     )
-                    print(
+                    logger.info(
                         f"⏱️ [SELF-CRITIQUE] Timeout corrigiendo Día {day_num} "
                         f"({CRITIQUE_FIX_TIMEOUT_S:.0f}s) con {_corrector_model}."
                     )
-                    print(
+                    logger.info(
                         f"📐 [P6-TIMEOUT-DIAG] Día {day_num} sizes: "
                         f"prompt={_prompt_chars}c, target_day={_target_chars}c, "
                         f"suggestion={_suggestion_chars}c, "
@@ -5873,7 +5880,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     return day_num, None, "timeout"
                 except Exception as e:
                     await _corrector_cb.arecord_failure()  # P1-Q3
-                    print(f"⚠️ [SELF-CRITIQUE] Error corrigiendo Día {day_num}: {e}. Manteniendo original.")
+                    logger.warning(f"⚠️ [SELF-CRITIQUE] Error corrigiendo Día {day_num}: {e}. Manteniendo original.")
                     _mark_critique_unresolved(target_day, f"error:{type(e).__name__}", critique.suggestions or "")
                     return day_num, None, f"error:{type(e).__name__}"
 
@@ -5921,7 +5928,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                         # devuelve tuple. Si por bug futuro escapa una excepción,
                         # la tratamos como fallo del día asociado.
                         day_num = tasks_by_day[finished]
-                        print(f"⚠️ [SELF-CRITIQUE] Excepción no esperada en task del Día {day_num}: {e}")
+                        logger.warning(f"⚠️ [SELF-CRITIQUE] Excepción no esperada en task del Día {day_num}: {e}")
                         result = (day_num, None, f"unhandled:{type(e).__name__}")
                     correction_results.append(result)
                     _, _, fail_reason = result
@@ -5934,7 +5941,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     and not aborted_pending
                 ):
                     aborted_count = len(pending)
-                    print(
+                    logger.info(
                         f"⚡ [SELF-CRITIQUE/CB] {timeout_count} timeouts detectados "
                         f"(threshold={CRITIQUE_TIMEOUT_ABORT_THRESHOLD}) → abortando "
                         f"{aborted_count} task(s) pendiente(s) (provider overload pattern)."
@@ -5973,14 +5980,14 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             if corrected_any:
                 partial["days"] = days
         else:
-            print("✅ [SELF-CRITIQUE] El plan pasó la evaluación visual y de coherencia.")
+            logger.info("✅ [SELF-CRITIQUE] El plan pasó la evaluación visual y de coherencia.")
             
     except Exception as e:
-        print(f"⚠️ [SELF-CRITIQUE] Error crítico durante la evaluación/corrección: {e}")
+        logger.warning(f"⚠️ [SELF-CRITIQUE] Error crítico durante la evaluación/corrección: {e}")
         raise e  # Bubble up to trigger graph fallback
         
     duration = round(time.time() - start_time, 2)
-    print(f"⏱️ [SELF-CRITIQUE] Completado en {duration}s")
+    logger.info(f"⏱️ [SELF-CRITIQUE] Completado en {duration}s")
     
     _emit_progress(state, "metric", {
         "node": "self_critique",
@@ -6060,7 +6067,7 @@ def _run_assembly_validations(
         missing_proteins = [p for p in assigned_proteins if p not in day_ingredients_text]
         if len(missing_proteins) >= 2:
             msg = f"Día {day_num} omitió múltiples proteínas clave asignadas: {missing_proteins}"
-            print(f"⚠️ [SKELETON FIDELITY] {msg}")
+            logger.warning(f"⚠️ [SKELETON FIDELITY] {msg}")
             skeleton_fidelity_errors.append(msg)
     if skeleton_fidelity_errors:
         result["_skeleton_fidelity_errors"] = skeleton_fidelity_errors
@@ -6220,7 +6227,7 @@ def _run_assembly_validations(
         PlanModel(**result)
     except Exception as e:
         err_msg = str(e)[:500]
-        print(f"🚨 [ASSEMBLY VALIDATION] Plan corrupto post-assembly detectado: {err_msg}")
+        logger.error(f"🚨 [ASSEMBLY VALIDATION] Plan corrupto post-assembly detectado: {err_msg}")
         result["_schema_invalid"] = True
         result["_schema_errors"] = err_msg
 
@@ -6230,9 +6237,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
     nutrition = state["nutrition"]
     form_data = state["form_data"]
 
-    print(f"\n{'='*60}")
-    print(f"🔧 [ENSAMBLADOR] Combinando plan final...")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"🔧 [ENSAMBLADOR] Combinando plan final...")
+    logger.info(f"{'='*60}")
 
     _emit_progress(state, "phase", {"phase": "assembly", "message": "Ensamblando tu plan final..."})
     start_time = time.time()
@@ -6261,7 +6268,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     if use_cache_assembly:
         raw_cached = state.get("cached_plan_data")
         if not isinstance(raw_cached, dict):
-            print(
+            logger.error(
                 f"🚨 [P1-ORQ-3] semantic_cache_hit=True pero "
                 f"cached_plan_data={type(raw_cached).__name__} (esperado dict). "
                 f"Bypass cache → degradando a plan_result fallback."
@@ -6283,7 +6290,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             {"day": 3, **p_obj.get("day_3", {})}
                         ]
             if not days:
-                print(
+                logger.error(
                     f"🚨 [P1-ORQ-3] semantic_cache_hit=True pero el cache no "
                     f"tiene días extraíbles (keys={list(cached_plan.keys())}). "
                     f"Bypass cache → degradando a plan_result fallback."
@@ -6340,7 +6347,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     _filtered.append(_ing)
                 _m["ingredients"] = _filtered
         if _stripped_supps or _stripped_ings:
-            print(
+            logger.info(
                 f"💊 [SUPPLEMENTS] Eliminados {_stripped_supps} en campo supplements + "
                 f"{_stripped_ings} colados en ingredients (includeSupplements=false)."
             )
@@ -6406,7 +6413,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
         for _m in _d.get("meals") or []:
             _m["ingredients"] = [i for i in (_m.get("ingredients") or []) if str(i).strip()]
     if _capped_per_meal or _capped_per_day:
-        print(
+        logger.info(
             f"🥚 [EGG-WHITE-CAP] {_capped_per_meal} meal(s) con >{MAX_EGG_WHITES_PER_MEAL} "
             f"claras recortado(s); {_capped_per_day} ajuste(s) por cap diario "
             f"({MAX_EGG_WHITES_PER_DAY}/día)."
@@ -6458,7 +6465,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
         day["day_name"] = dias_es[target_date.weekday()]
     
     injected_names = [d.get("day_name") for d in result.get("days", [])]
-    print(f"📅 [DAY NAMES] Inyectados: {injected_names} (start={start_dt.isoformat()}, tzOffset={tz_offset_minutes})")
+    logger.info(f"📅 [DAY NAMES] Inyectados: {injected_names} (start={start_dt.isoformat()}, tzOffset={tz_offset_minutes})")
 
     # Post-proceso: forzar valores exactos del calculador
     result["calories"] = nutrition.get("total_daily_calories", nutrition["target_calories"])
@@ -6571,7 +6578,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if "Nota del Nutricionista AI" not in recipe_text:
                 largest_meal["recipe"] = recipe_text + disclaimer
                 
-            print(f"⚖️ [MACRO BALANCING] Día {day.get('day')}: Desviación {diff}kcal -> Ajustado {adjustment}kcal en '{largest_meal.get('meal')}'")
+            logger.info(f"⚖️ [MACRO BALANCING] Día {day.get('day')}: Desviación {diff}kcal -> Ajustado {adjustment}kcal en '{largest_meal.get('meal')}'")
 
     # 1.5 GAP 1: Guardrail Nutricional Estricto (Redistribución Proporcional Forzada)
     # Si después del soft-balancing la desviación sigue siendo >10%, forzar redistribución matemática.
@@ -6607,7 +6614,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         meal["recipe"] = recipe_text + disclaimer
                         
             new_total = sum(m.get("cals", 0) for m in day_meals)
-            print(f"🔒 [STRICT NUTRITION] Día {day.get('day')}: Redistribución forzada ({deviation_pct*100:.0f}% desviación, {day_cals}→{new_total} kcal)")
+            logger.info(f"🔒 [STRICT NUTRITION] Día {day.get('day')}: Redistribución forzada ({deviation_pct*100:.0f}% desviación, {day_cals}→{new_total} kcal)")
 
     # 1.6 GAP A: Guardrail de Coherencia Macro por Comida Individual
     # Asegura que cada comida individual tenga macros y calorías lógicas para su momento del día.
@@ -6657,7 +6664,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         # fases previas), el resultado podía quedar negativo.
                         largest_meal["cals"] = max(0, largest_meal.get("cals", 0) - transfer)
                         meal["cals"] = max(0, meal.get("cals", 0) + transfer)
-                        print(f"⚖️ [MEAL COHERENCE] Día {day.get('day')}: '{meal.get('meal')}' muy bajo ({current_cals}kcal). Transferidos {transfer}kcal desde '{largest_meal.get('meal')}'")
+                        logger.info(f"⚖️ [MEAL COHERENCE] Día {day.get('day')}: '{meal.get('meal')}' muy bajo ({current_cals}kcal). Transferidos {transfer}kcal desde '{largest_meal.get('meal')}'")
 
                         scale_up = meal["cals"] / max(current_cals, 1)
                         meal["protein"] = max(0, int(meal.get("protein", 0) * scale_up))
@@ -6682,7 +6689,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     # negativo de antes, el clamp lo previene.
                     meal["cals"] = max(0, meal.get("cals", 0) - excess)
                     smallest_meal["cals"] = max(0, smallest_meal.get("cals", 0) + excess)
-                    print(f"⚖️ [MEAL COHERENCE] Día {day.get('day')}: '{meal.get('meal')}' muy alto ({current_cals}kcal). Transferidos {excess}kcal hacia '{smallest_meal.get('meal')}'")
+                    logger.info(f"⚖️ [MEAL COHERENCE] Día {day.get('day')}: '{meal.get('meal')}' muy alto ({current_cals}kcal). Transferidos {excess}kcal hacia '{smallest_meal.get('meal')}'")
 
                     scale_down = meal["cals"] / max(current_cals, 1)
                     meal["protein"] = max(0, int(meal.get("protein", 0) * scale_down))
@@ -6758,7 +6765,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     meal["cals"] = macro_kcal
                     _p130_recomputed += 1
         if _p130_recomputed > 0:
-            print(
+            logger.info(
                 f"⚖️ [P1-30] Macro coherence: {_p130_recomputed} meal(s) "
                 f"recomputaron cals desde 4P+4C+9F (deriva > 5% post-balancing)."
             )
@@ -6782,7 +6789,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     
     parsed_dict = {}
     if all_raw_ingredients:
-        print(f"📦 [CONSOLIDATION] Parseando {len(all_raw_ingredients)} ingredientes únicos (Regex Fast-Path)...")
+        logger.info(f"📦 [CONSOLIDATION] Parseando {len(all_raw_ingredients)} ingredientes únicos (Regex Fast-Path)...")
         parse_start = time.time()
         
         import re
@@ -6891,7 +6898,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         new_ing = f"{standard_qty_str} {o['unit']} de {o['original_name']}"
                         
                     days[o["d_idx"]]["meals"][o["m_idx"]]["ingredients"][o["i_idx"]] = new_ing
-                    print(f"📦 [CONSOLIDATION] Unificado '{old_ing}' -> '{new_ing}'")
+                    logger.info(f"📦 [CONSOLIDATION] Unificado '{old_ing}' -> '{new_ing}'")
     # =========================================================
 
     # Calcular shopping lists
@@ -6911,7 +6918,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 if isinstance(_hc, dict) and (_hc.get("adults") or _hc.get("children"))
                 else f"×{household:.2f}"
             )
-            print(f"👨‍👩‍👧‍👦 [HOUSEHOLD] Escalando lista de compras {_label}")
+            logger.info(f"👨‍👩‍👧‍👦 [HOUSEHOLD] Escalando lista de compras {_label}")
 
         # P0-NEW-1.b: paralelizar las 3 multiplicidades en `_DB_EXECUTOR`. Antes
         # corrían secuenciales bloqueando el event loop ~150-600ms total
@@ -6955,7 +6962,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
             aggr_list_15_hybrid = _build_hybrid(aggr_list_7, aggr_list_15) if aggr_list_15 else aggr_list_15
             aggr_list_30_hybrid = _build_hybrid(aggr_list_7, aggr_list_30) if aggr_list_30 else aggr_list_30
         except Exception as e_hybrid:
-            print(f"⚠️ [HYBRID-SHOPPING-LIST] Error construyendo híbrida: {e_hybrid}")
+            logger.warning(f"⚠️ [HYBRID-SHOPPING-LIST] Error construyendo híbrida: {e_hybrid}")
             aggr_list_15_hybrid = aggr_list_15
             aggr_list_30_hybrid = aggr_list_30
 
@@ -6976,7 +6983,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
         result["calc_household_multiplier"] = float(household)
     except Exception as e:
         import traceback
-        print(f"⚠️ [SHOPPING MATH] Error agregando lista delta: {e}")
+        logger.warning(f"⚠️ [SHOPPING MATH] Error agregando lista delta: {e}")
         traceback.print_exc()
         result["aggregated_shopping_list"] = []
         result["aggregated_shopping_list_weekly"] = []
@@ -6991,12 +6998,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
         from humanize_ingredients import humanize_plan_ingredients
         result = await _adb(humanize_plan_ingredients, result)
     except Exception as e:
-        print(f"⚠️ [HUMANIZE] Error al humanizar ingredientes: {e}")
+        logger.warning(f"⚠️ [HUMANIZE] Error al humanizar ingredientes: {e}")
 
     # Guardar técnicas seleccionadas para persistencia en DB
     result["_selected_techniques"] = skeleton.get("_selected_techniques", [])
 
-    print(f"✅ [ENSAMBLADOR] Plan final ensamblado")
+    logger.info(f"✅ [ENSAMBLADOR] Plan final ensamblado")
 
     # [P0-6] Validaciones críticas post-assembly extraídas a un helper compartido.
     # Antes estas tres validaciones (Skeleton Fidelity, Recipe Coherence, Schema
@@ -7335,7 +7342,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     skeleton = plan_result.get("_skeleton") or {}
     skeleton_days = skeleton.get("days", []) if isinstance(skeleton, dict) else []
 
-    print(
+    logger.info(
         f"🩹 [P5-MARKER-REGEN] Re-corrigiendo {len(marker_day_nums)} día(s) "
         f"con `_critique_unresolved` tras approved: {marker_day_nums}"
     )
@@ -7362,7 +7369,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         original_issue = marker.get("issue") or ""
 
         if not await _corrector_cb.acan_proceed():
-            print(
+            logger.warning(
                 f"⚠️ [P5-MARKER-REGEN] CB OPEN ({_corrector_model}). "
                 f"Saltando Día {day_num}, marker preservado."
             )
@@ -7404,7 +7411,7 @@ Día {day_num} actual (JSON):
 Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y los mismos targets calóricos."""
 
         try:
-            print(f"🩹 [P5-MARKER-REGEN] Re-corrigiendo Día {day_num}...")
+            logger.info(f"🩹 [P5-MARKER-REGEN] Re-corrigiendo Día {day_num}...")
             corrected_result: SingleDayPlanModel = await _safe_ainvoke(
                 corrector_llm, correction_prompt, timeout=CRITIQUE_FIX_TIMEOUT_S
             )
@@ -7414,7 +7421,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                 corrected_day["day"] = day_num
                 # IMPORTANTE: NO copiar `_critique_unresolved` — la corrección
                 # es el evento que limpia el marker.
-                print(f"✅ [P5-MARKER-REGEN] Día {day_num} re-corregido exitosamente.")
+                logger.info(f"✅ [P5-MARKER-REGEN] Día {day_num} re-corregido exitosamente.")
                 # [PROTEIN-POOL-SCRUB 2026-05-07] Aplicar cleanup + scan tras
                 # surgical regen — caso plan 089e541c: surgical metió "Pechuga
                 # de pollo" aunque pool era [Queso Blanco, Gandules, Atún].
@@ -7426,12 +7433,12 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                         context_label="SURGICAL-REGEN",
                     )
                 except Exception as _scrub_err:
-                    print(
+                    logger.warning(
                         f"⚠️ [SURGICAL-REGEN/DÍA {day_num}] protein-scrub falló "
                         f"(best-effort): {_scrub_err}"
                     )
                 return day_num, corrected_day
-            print(
+            logger.warning(
                 f"⚠️ [P5-MARKER-REGEN] Día {day_num}: corrector LLM retornó None. "
                 f"Marker preservado, plan sigue al usuario sin la corrección."
             )
@@ -7444,11 +7451,11 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             _ingredients_count = sum(
                 len(m.get("ingredients", [])) for m in (target_day or {}).get("meals", [])
             )
-            print(
+            logger.info(
                 f"⏱️ [P5-MARKER-REGEN] Día {day_num} timeout otra vez "
                 f"({CRITIQUE_FIX_TIMEOUT_S:.0f}s) con {_corrector_model}."
             )
-            print(
+            logger.info(
                 f"📐 [P6-TIMEOUT-DIAG] Día {day_num} (regen) sizes: "
                 f"prompt={_prompt_chars}c, target_day={_target_chars}c, "
                 f"ingredients={_ingredients_count}"
@@ -7461,7 +7468,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                 return day_num, pro_corrected
         except Exception as e:
             await _corrector_cb.arecord_failure()
-            print(
+            logger.warning(
                 f"⚠️ [P5-MARKER-REGEN] Error re-corrigiendo Día {day_num}: {e}. "
                 f"Marker preservado."
             )
@@ -7481,7 +7488,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             fixed_count += 1
 
     duration = round(time.time() - start_time, 2)
-    print(
+    logger.info(
         f"🩹 [P5-MARKER-REGEN] Completado en {duration}s — "
         f"{fixed_count}/{len(marker_day_nums)} días re-corregidos."
     )
@@ -7525,7 +7532,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
         state_update["_best_attempt_reasons"] = []
         state_update["_best_attempt_review_passed"] = True
         state_update["_best_attempt_number"] = state.get("attempt", 1)
-        print(
+        logger.info(
             f"📌 [P6-SURGICAL-PROMOTE] Promoviendo plan post-surgical "
             f"({fixed_count}/{len(marker_day_nums)} markers resueltos) a "
             f"best_attempt — protege contra rollback si re-review demote "
@@ -8117,9 +8124,9 @@ async def review_plan_node(state: PlanState) -> dict:
     taste_profile = state.get("taste_profile", "")
     attempt = state.get("attempt", 1)
     
-    print(f"\n{'='*60}")
-    print(f"🩺 [AGENTE REVISOR MÉDICO] Verificando plan (intento #{attempt})...")
-    print(f"{'='*60}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"🩺 [AGENTE REVISOR MÉDICO] Verificando plan (intento #{attempt})...")
+    logger.info(f"{'='*60}")
     
     _emit_progress(state, "phase", {"phase": "review", "message": "Verificación médica en curso..."})
     
@@ -8152,7 +8159,7 @@ async def review_plan_node(state: PlanState) -> dict:
     
     # Si no hay restricciones, aprobar el chequeo médico automáticamente (bypasseando el LLM)
     if not allergies and not medical_conditions and diet_type == "balanced" and not dislikes and not taste_profile:
-        print("✅ [REVISOR] Sin restricciones declaradas → Bypassing LLM Reviewer, procediendo a validaciones deterministas.")
+        logger.info("✅ [REVISOR] Sin restricciones declaradas → Bypassing LLM Reviewer, procediendo a validaciones deterministas.")
         approved = True
         issues = []
         severity = "none"
@@ -8166,7 +8173,7 @@ async def review_plan_node(state: PlanState) -> dict:
             from tools_medical import consultar_base_datos_medica
             # P1-10: SystemMessage/HumanMessage/ToolMessage a nivel módulo
 
-            print("🔬 [FACT-CHECKING] Iniciando investigación de alergias/condiciones...")
+            logger.info("🔬 [FACT-CHECKING] Iniciando investigación de alergias/condiciones...")
             # P1-Q3: capturar modelo del fact-checker para CB per-modelo
             _fact_checker_model = _route_model(form_data, force_fast=True)
             _fact_checker_cb = _get_circuit_breaker(_fact_checker_model)
@@ -8214,7 +8221,7 @@ async def review_plan_node(state: PlanState) -> dict:
                             normalized = str(raw_content).strip() if raw_content is not None else ""
 
                         if len(normalized) < 30:
-                            print(f"⚠️ [FACT-CHECK] Reporte sospechosamente corto "
+                            logger.warning(f"⚠️ [FACT-CHECK] Reporte sospechosamente corto "
                                   f"({len(normalized)} chars). Usando fallback precautorio.")
                             fact_check_report = (
                                 "Sin hallazgos clínicos verificables. "
@@ -8255,7 +8262,7 @@ async def review_plan_node(state: PlanState) -> dict:
                                 tool_res = await _run_fact_check_tool(
                                     consultar_base_datos_medica, tool_call["args"]
                                 )
-                                print(f"🔍 [FACT-CHECK] Consulta DB: {tool_call['args']} -> {str(tool_res)[:80]}...")
+                                logger.info(f"🔍 [FACT-CHECK] Consulta DB: {tool_call['args']} -> {str(tool_res)[:80]}...")
                             except asyncio.TimeoutError:
                                 # P1-Q3: el timeout es de la TOOL clínica (que internamente
                                 # invoca a `clinical_llm`), no del fact_checker_llm
@@ -8268,7 +8275,7 @@ async def review_plan_node(state: PlanState) -> dict:
                                     "interacciones. Asumir PRECAUCIÓN MÁXIMA: tratar como riesgo "
                                     "no descartado y restringir uso del ingrediente/condición."
                                 )
-                                print(f"⏱️ [FACT-CHECK] Tool timeout (>{_FACT_CHECK_TOOL_TIMEOUT:.0f}s) "
+                                logger.info(f"⏱️ [FACT-CHECK] Tool timeout (>{_FACT_CHECK_TOOL_TIMEOUT:.0f}s) "
                                       f"en {tool_call['args']}. Inyectando reporte precautorio.")
                             fc_messages.append(ToolMessage(
                                 tool_call_id=tool_call["id"],
@@ -8285,14 +8292,14 @@ async def review_plan_node(state: PlanState) -> dict:
                     # Symmetric con cómo `invoke_planner`/`invoke_day`/`invoke_with_retry`
                     # registran failure en su except handler.
                     await _fact_checker_cb.arecord_failure()
-                    print(f"⚠️ [FACT-CHECK] Error durante la investigación: {fc_e}")
+                    logger.warning(f"⚠️ [FACT-CHECK] Error durante la investigación: {fc_e}")
                     fact_check_report = f"Error en la investigación: {str(fc_e)}. Asumir precaución máxima."
                     break
             else:
                 # P1-7: El loop terminó sin break — el fact-checker no convergió en
                 # 4 iteraciones (siguió pidiendo tool calls). Mantenemos el reporte
                 # inicial pero lo logueamos para detectar bucles patológicos.
-                print(f"⚠️ [FACT-CHECK] No convergió en 4 iteraciones (loop de tool calls). "
+                logger.warning(f"⚠️ [FACT-CHECK] No convergió en 4 iteraciones (loop de tool calls). "
                       f"Usando reporte conservador inicial.")
 
         # ============================================================
@@ -8341,7 +8348,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=1, min=2, max=8),
             reraise=True,
-            before_sleep=lambda retry_state: print(f"⚠️  [REVISOR] Reintento #{retry_state.attempt_number}...")
+            before_sleep=lambda retry_state: logger.warning(f"⚠️  [REVISOR] Reintento #{retry_state.attempt_number}...")
         )
         async def invoke_with_retry():
             if not await _reviewer_cb.acan_proceed():  # P1-Q3
@@ -8368,7 +8375,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             severity = result.severity
             llm_affected_days = result.affected_days
         except Exception as e:
-            print(f"⚠️  [REVISOR] Error en structured output, RECHAZANDO por defecto (Fail-Closed): {e}")
+            logger.warning(f"⚠️  [REVISOR] Error en structured output, RECHAZANDO por defecto (Fail-Closed): {e}")
             approved = False
             issues = ["Error en la estructura del revisor médico. Forzando regeneración por seguridad clínica."]
             severity = "critical"
@@ -8382,7 +8389,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # el fallback matemático con disclaimer en lugar de propagar basura.
     if plan.get("_schema_invalid"):
         schema_errors = plan.get("_schema_errors", "Plan no cumple el schema canónico")
-        print(f"🚨 [REVISOR] Schema inválido detectado por assemble_plan: {schema_errors}")
+        logger.error(f"🚨 [REVISOR] Schema inválido detectado por assemble_plan: {schema_errors}")
         approved = False
         issues.append(
             f"SCHEMA INVÁLIDO: el plan no cumple la estructura esperada y no es renderizable. "
@@ -8476,7 +8483,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
 
         if _block_action == "degrade":
             plan.pop("_shopping_coherence_block", None)
-            print(
+            logger.info(
                 f"🛒 [REVISOR/COH-BLOCK degrade] {len(coherence_block)} divergencia(s) "
                 f"toleradas por knob; flag limpiado, plan se entrega como-is."
             )
@@ -8490,10 +8497,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
             issues.append(msg)
             if _block_action == "reject_high":
                 severity = _severity_max(severity, "high")
-                print(f"🛒 [REVISOR/COH-BLOCK reject_high] {msg} → retry forzado.")
+                logger.info(f"🛒 [REVISOR/COH-BLOCK reject_high] {msg} → retry forzado.")
             else:
                 severity = _severity_max(severity, "minor")
-                print(f"🛒 [REVISOR/COH-BLOCK reject_minor] {msg} → retry si budget permite.")
+                logger.info(f"🛒 [REVISOR/COH-BLOCK reject_minor] {msg} → retry si budget permite.")
 
     # Brechas 1 y 4: Errores deterministas del ensamblador
     skeleton_fidelity_errors = plan.get("_skeleton_fidelity_errors", [])
@@ -8507,11 +8514,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
 
     if patchable_errors:
         n_patched = _auto_patch_ingredient_coherence(plan, patchable_errors)
-        print(f"🩹 [AUTO-PATCH] {n_patched}/{len(patchable_errors)} ingredientes huérfanos eliminados de listas (no aparecían en instrucciones).")
+        logger.info(f"🩹 [AUTO-PATCH] {n_patched}/{len(patchable_errors)} ingredientes huérfanos eliminados de listas (no aparecían en instrucciones).")
 
     assembly_errors = skeleton_fidelity_errors + structural_coherence_errors
     if assembly_errors:
-        print(f"❌ [REVISOR] Errores deterministas de ensamblaje detectados: {assembly_errors}")
+        logger.error(f"❌ [REVISOR] Errores deterministas de ensamblaje detectados: {assembly_errors}")
         approved = False
         issues.extend(assembly_errors)
         # P1-6: severidad diferenciada por TIPO de error.
@@ -8575,7 +8582,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 # Auto-marcar la intención para downstream (logging, métricas, decisiones
                 # de severity en should_retry). No mutamos form_data original; solo state.
                 if not is_rotation and not is_strict_required:
-                    print(f"🔄 [PANTRY GUARD] Rotación implícita detectada (pantry + previous_meals). Validando estricto.")
+                    logger.info(f"🔄 [PANTRY GUARD] Rotación implícita detectada (pantry + previous_meals). Validando estricto.")
 
                 val_result = validate_ingredients_against_pantry(all_ingredients, clean_pantry, strict_quantities=False)
                 if val_result is not True:
@@ -8583,9 +8590,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     issues.append(val_result)  # val_result es el string de error generado por constants.py
                     # P1-6: max — preservar critical si ya estaba marcado
                     severity = _severity_max(severity, "high")
-                    print(f"🚨 [PANTRY GUARD] Validación fallida en Revisor Médico.")
+                    logger.error(f"🚨 [PANTRY GUARD] Validación fallida en Revisor Médico.")
                 else:
-                    print(f"✅ [PANTRY GUARD] Todos los ingredientes cumplen con la despensa.")
+                    logger.info(f"✅ [PANTRY GUARD] Todos los ingredientes cumplen con la despensa.")
 
     # 2. Validación Anti-Repetición
     if approved:
@@ -8612,9 +8619,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         )
                         # P1-6: max — preservar critical/high si ya estaba marcado
                         severity = _severity_max(severity, "minor")
-                        print(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados: {repeated_meals}")
+                        logger.info(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados: {repeated_meals}")
                     else:
-                        print(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_meal_names)} platos recientes.")
+                        logger.info(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_meal_names)} platos recientes.")
             else:
                 # Fallback para guests: validar contra el history_context in-memory
                 history_ctx = state.get("history_context", "") if isinstance(state, dict) else ""
@@ -8652,9 +8659,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
                             )
                             # P1-6: max — preservar critical/high si ya estaba marcado
                             severity = _severity_max(severity, "minor")
-                            print(f"🔄 [ANTI-REPETICIÓN GUEST] {len(filtered_guest_repeated)} platos repetidos detectados")
+                            logger.info(f"🔄 [ANTI-REPETICIÓN GUEST] {len(filtered_guest_repeated)} platos repetidos detectados")
         except Exception as e:
-            print(f"⚠️ [ANTI-REPETICIÓN] Error en validación (no bloqueante): {e}")
+            logger.warning(f"⚠️ [ANTI-REPETICIÓN] Error en validación (no bloqueante): {e}")
             
     # 3. Validación de Complejidad (Feedback Loop Enforcement)
     if approved:
@@ -8662,7 +8669,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
             adherence_hint = form_data.get("_adherence_hint", "")
             if adherence_hint == "low":
                 complexity_score = _calculate_complexity_score(plan)
-                print(f"📉 [COMPLEXITY GUARD] Adherencia baja. Score de complejidad del plan generado: {complexity_score}/10")
+                logger.info(f"📉 [COMPLEXITY GUARD] Adherencia baja. Score de complejidad del plan generado: {complexity_score}/10")
                 if complexity_score > 4.5:
                     approved = False
                     issues.append(
@@ -8670,11 +8677,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     )
                     # P1-6: max — preservar critical/high si ya estaba marcado
                     severity = _severity_max(severity, "minor")
-                    print(f"🚨 [COMPLEXITY GUARD] Plan rechazado por ser muy complejo para el nivel actual del usuario.")
+                    logger.error(f"🚨 [COMPLEXITY GUARD] Plan rechazado por ser muy complejo para el nivel actual del usuario.")
                 else:
-                    print(f"✅ [COMPLEXITY GUARD] Plan validado. Score: {complexity_score}/10 (Adecuado para baja adherencia).")
+                    logger.info(f"✅ [COMPLEXITY GUARD] Plan validado. Score: {complexity_score}/10 (Adecuado para baja adherencia).")
         except Exception as e:
-            print(f"⚠️ [COMPLEXITY GUARD] Error en validación (no bloqueante): {e}")
+            logger.warning(f"⚠️ [COMPLEXITY GUARD] Error en validación (no bloqueante): {e}")
 
     _emit_progress(state, "metric", {
         "node": "review_plan",
@@ -8686,7 +8693,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     })
     
     if approved:
-        print(f"✅ [REVISOR MÉDICO] Plan APROBADO en {duration}s ✅")
+        logger.info(f"✅ [REVISOR MÉDICO] Plan APROBADO en {duration}s ✅")
         # [P0-PIPE-1] Approved siempre es el mejor posible (rank 0). Snapshot
         # incondicional. `copy.deepcopy` ya importado a nivel módulo.
         _approved_attempt = state.get("attempt", 1)
@@ -8706,10 +8713,10 @@ Responde ÚNICAMENTE con el JSON de revisión.
         }
     else:
         feedback = "\n".join([f"• {issue}" for issue in issues])
-        print(f"❌ [REVISOR MÉDICO] Plan RECHAZADO en {duration}s (Severidad: {severity})")
-        print(f"   Problemas encontrados:")
+        logger.error(f"❌ [REVISOR MÉDICO] Plan RECHAZADO en {duration}s (Severidad: {severity})")
+        logger.info(f"   Problemas encontrados:")
         for issue in issues:
-            print(f"   ❌ {issue}")
+            logger.error(f"   ❌ {issue}")
             
         # Persistir patrones de rechazo en la base de datos para aprendizaje continuo (GAP 1)
         # [P1-ORQ-1] Read-modify-write atómico vía advisory lock. Antes, el patrón
@@ -8735,9 +8742,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
 
                 new_hp = await _adb(update_user_health_profile_atomic, user_id, _rejection_mutator)
                 if new_hp is not None:
-                    print(f"💾 [META-LEARNING] Patrones de rechazo persistidos en DB.")
+                    logger.info(f"💾 [META-LEARNING] Patrones de rechazo persistidos en DB.")
             except Exception as e:
-                print(f"⚠️ [META-LEARNING] Error persistiendo patrones de rechazo: {e}")
+                logger.warning(f"⚠️ [META-LEARNING] Error persistiendo patrones de rechazo: {e}")
                 
         # Brecha 2: Determinar días afectados para Surgical Fix
         days_in_chunk = int(form_data.get("_days_to_generate", 3))
@@ -9000,13 +9007,13 @@ def should_retry(state: PlanState) -> str:
         if not state.get("_marker_regen_attempted", False):
             marker_days = _collect_unresolved_marker_days(state.get("plan_result"))
             if marker_days:
-                print(
+                logger.info(
                     f"🩹 [ORQUESTADOR] Revisión aprobada PERO {len(marker_days)} "
                     f"día(s) con `_critique_unresolved` (días {marker_days}) → "
                     f"surgical regen antes de enviar al usuario."
                 )
                 return "marker_regen"
-        print("✅ [ORQUESTADOR] Revisión aprobada → Enviando al usuario.")
+        logger.info("✅ [ORQUESTADOR] Revisión aprobada → Enviando al usuario.")
         return "end"
 
     # [P0-5] `dict.get(k, default)` devuelve `None` cuando la key existe con
@@ -9035,7 +9042,7 @@ def should_retry(state: PlanState) -> str:
     # 'critical' = peligro médico (alergia/condición). Abortar y delegar a P0-1 guardrail
     # para entregar fallback matemático con disclaimer.
     if severity == "critical":
-        print("🚨 [ORQUESTADOR] Rechazo CRÍTICO → No tiene sentido reintentar con el mismo contexto. Abortando temprano.")
+        logger.error("🚨 [ORQUESTADOR] Rechazo CRÍTICO → No tiene sentido reintentar con el mismo contexto. Abortando temprano.")
         _emit_plan_quality_degraded_alert(state, exit_reason="critical", severity=severity)
         return "end"
 
@@ -9054,7 +9061,7 @@ def should_retry(state: PlanState) -> str:
     if severity == "high":
         _retry_class = _classify_high_severity(state.get("rejection_reasons") or [])
         if _retry_class == "contextual":
-            print(
+            logger.error(
                 f"🛑 [ORQUESTADOR] Rechazo HIGH (contextual: despensa/alergia/"
                 f"condición — no-recuperable por retry) → Abortando y entregando "
                 f"plan marcado. Razones: "
@@ -9064,7 +9071,7 @@ def should_retry(state: PlanState) -> str:
             return "end"
         # 'regenerable' → cae al check de attempts/budget para decidir retry.
         # Si pasa los gates, ejecutará el retry como cualquier minor.
-        print(
+        logger.info(
             f"🔁 [ORQUESTADOR] Rechazo HIGH (regenerable: fallo de calidad del LLM, "
             f"no contextual) → Evaluando retry. Razones: "
             f"{(state.get('rejection_reasons') or [])[:2]}"
@@ -9077,10 +9084,10 @@ def should_retry(state: PlanState) -> str:
     # directos del nodo con state vacío y refactors futuros).
     if state.get("attempt", 1) >= MAX_ATTEMPTS:
         if not state.get("review_passed", False):
-            print(f"🚨 [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado y revisión NO aprobada → Tolerando y enviando mejor versión disponible.")
+            logger.error(f"🚨 [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado y revisión NO aprobada → Tolerando y enviando mejor versión disponible.")
             _emit_plan_quality_degraded_alert(state, exit_reason="max_attempts", severity=severity)
             return "end"
-        print(f"⚠️  [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado → Enviando mejor versión disponible.")
+        logger.warning(f"⚠️  [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado → Enviando mejor versión disponible.")
         return "end"
 
     # P1-NEW-5: Guard de presupuesto SIMÉTRICO. Cubre el retry completo
@@ -9105,7 +9112,7 @@ def should_retry(state: PlanState) -> str:
     # que vale la pena loguear.
     start = state.get("pipeline_start")
     if not isinstance(start, (int, float)) or start <= 0:
-        print(
+        logger.warning(
             f"⚠️  [ORQUESTADOR] pipeline_start={start!r} (tipo {type(start).__name__}) "
             f"inválido — no puedo calcular budget de retry. Tratando como "
             f"agotado para evitar bypass del guard de timeout. Preservando "
@@ -9119,7 +9126,7 @@ def should_retry(state: PlanState) -> str:
     remaining = GLOBAL_TIMEOUT - elapsed
     budget_threshold = MIN_RETRY_BUDGET_SECONDS + SAFETY_MARGIN + HEDGE_DELTA
     if remaining < budget_threshold:
-        print(
+        logger.info(
             f"⏰ [ORQUESTADOR] Sin presupuesto para retry "
             f"({remaining:.0f}s restantes < {budget_threshold:.0f}s mínimo: "
             f"{MIN_RETRY_BUDGET_SECONDS}s generación + {SAFETY_MARGIN}s "
@@ -9130,7 +9137,7 @@ def should_retry(state: PlanState) -> str:
             _emit_plan_quality_degraded_alert(state, exit_reason="budget_exhausted", severity=severity)
         return "end"
 
-    print("🔄 [ORQUESTADOR] Revisión fallida → Regenerando plan con correcciones...")
+    logger.info("🔄 [ORQUESTADOR] Revisión fallida → Regenerando plan con correcciones...")
     return "retry"
 
 
@@ -9167,10 +9174,10 @@ async def reflection_node(state: PlanState) -> dict:
     cache_key = f"reflection_{user_id}_{quality_score}_{behavior_hash}"
     cached_val = await _LLM_CACHE.aget(cache_key)
     if cached_val is not None:
-        print(f"⚡ [CACHE HIT] Reutilizando reflexión anterior para el score ({quality_score}).")
+        logger.info(f"⚡ [CACHE HIT] Reutilizando reflexión anterior para el score ({quality_score}).")
         return cached_val
 
-    print(f"🤔 [META-LEARNING] Reflexionando sobre el plan anterior (Quality: {quality_score})...")
+    logger.info(f"🤔 [META-LEARNING] Reflexionando sobre el plan anterior (Quality: {quality_score})...")
     start_time = time.time()
     
     try:
@@ -9208,7 +9215,7 @@ async def reflection_node(state: PlanState) -> dict:
             await _reflector_cb.arecord_failure()  # P1-Q3
             raise e
         reflection_text = result.reflection
-        print(f"💡 [META-LEARNING] Diagnóstico: {reflection_text}")
+        logger.info(f"💡 [META-LEARNING] Diagnóstico: {reflection_text}")
         
         # --- PERSISTENCIA Y CARGA HISTÓRICA (GAP 1) ---
         user_id = form_data.get("user_id") or form_data.get("session_id")
@@ -9254,7 +9261,7 @@ async def reflection_node(state: PlanState) -> dict:
 
             new_hp = await _adb(update_user_health_profile_atomic, user_id, _reflection_mutator)
             if new_hp is not None:
-                print(f"💾 [META-LEARNING] Reflexión guardada en el perfil de {user_id}")
+                logger.info(f"💾 [META-LEARNING] Reflexión guardada en el perfil de {user_id}")
         
         new_context = state.get("history_context", "") + historical_reflections_text + f"\n\n--- 🧠 REFLEXIÓN META-LEARNING (CICLO ACTUAL) ---\nEl agente ha diagnosticado el resultado del ciclo anterior:\n{reflection_text}\nINSTRUCCIÓN: Usa este diagnóstico para ajustar el diseño de este nuevo plan.\n----------------------------------------------------------------------\n"
         
@@ -9276,7 +9283,7 @@ async def reflection_node(state: PlanState) -> dict:
         await _LLM_CACHE.aset(cache_key, result_dict)
         return result_dict
     except Exception as e:
-        print(f"⚠️ [META-LEARNING] Error en nodo de reflexión: {e}")
+        logger.warning(f"⚠️ [META-LEARNING] Error en nodo de reflexión: {e}")
         return {}
 
 # ============================================================
@@ -9373,7 +9380,7 @@ async def preflight_optimization_node(state: PlanState) -> dict:
                 score_source = f"history reciente ({len(recent_scores)} entradas en últimos {PIPELINE_SCORE_FRESHNESS_DAYS}d)"
             elif score_history:
                 # Hay history pero todos los scores son obsoletos → no auto-ajustar
-                print(f"🧊 [PREFLIGHT] {len(score_history)} entradas en pipeline_score_history "
+                logger.info(f"🧊 [PREFLIGHT] {len(score_history)} entradas en pipeline_score_history "
                       f"pero todas con antigüedad >{PIPELINE_SCORE_FRESHNESS_DAYS}d. Ignorando para auto-ajuste.")
             else:
                 last_score = hp.get("last_pipeline_score")  # legacy
@@ -9381,14 +9388,14 @@ async def preflight_optimization_node(state: PlanState) -> dict:
                     score_source = "last_pipeline_score (legacy, sin timestamp)"
 
             if last_score is not None:
-                print(f"🧠 [META-LEARNING] score detectado: {last_score} (fuente: {score_source})")
+                logger.info(f"🧠 [META-LEARNING] score detectado: {last_score} (fuente: {score_source})")
                 if last_score < 0.65:
-                    print(f"🔧 [PREFLIGHT] Score histórico bajo ({last_score}). Activando auto_simplify y drift_alert para maximizar estabilidad.")
+                    logger.info(f"🔧 [PREFLIGHT] Score histórico bajo ({last_score}). Activando auto_simplify y drift_alert para maximizar estabilidad.")
                     new_form_data["_auto_simplify"] = True
                     new_form_data["_pipeline_drift_alert"] = True
                     auto_adjusted = True
                 elif last_score > 0.90:
-                    print(f"✨ [PREFLIGHT] Score histórico alto ({last_score}). Permitiendo mayor libertad creativa.")
+                    logger.info(f"✨ [PREFLIGHT] Score histórico alto ({last_score}). Permitiendo mayor libertad creativa.")
                     new_form_data["_creative_freedom"] = True
                     auto_adjusted = True
 
@@ -9433,14 +9440,14 @@ async def preflight_optimization_node(state: PlanState) -> dict:
                     avg_rejections = sum(1 for m in review_metrics if float(m.get("confidence", 1.0)) == 0.0) / len(review_metrics)
                     
                     if avg_critique_corrections > 0.5 or avg_rejections > 0.6:
-                        print(f"📈 [PREFLIGHT] Auto-ajuste por métricas: {int(avg_rejections*100)}% rechazos, {int(avg_critique_corrections*100)}% correcciones.")
+                        logger.info(f"📈 [PREFLIGHT] Auto-ajuste por métricas: {int(avg_rejections*100)}% rechazos, {int(avg_critique_corrections*100)}% correcciones.")
                         new_form_data["_pipeline_drift_alert"] = True
                         if avg_rejections > 0.6:
                             new_form_data["_auto_simplify"] = True
                         auto_adjusted = True
 
     except Exception as e:
-        print(f"⚠️ [PREFLIGHT] Error leyendo métricas de meta-learning: {e}")
+        logger.warning(f"⚠️ [PREFLIGHT] Error leyendo métricas de meta-learning: {e}")
         
     return {"form_data": new_form_data} if auto_adjusted else {}
 
@@ -9490,7 +9497,7 @@ async def retry_reflection_node(state: PlanState) -> dict:
     }
     if reasons:
         directive = f"El plan anterior fue RECHAZADO por: {'; '.join(reasons)}. MUTA DRÁSTICAMENTE la estrategia."
-        print(f"🔄 [RETRY REFLECTION] Intento {attempt}. Directiva inyectada: {directive}")
+        logger.info(f"🔄 [RETRY REFLECTION] Intento {attempt}. Directiva inyectada: {directive}")
         update_data["reflection_directive"] = directive
     return update_data
 
@@ -9710,7 +9717,7 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                 # en candidatos que serán rechazados de todas formas.
                 if not _is_cached_plan_schema_compatible(cand_data):
                     _cached_v = cand_data.get("_cache_schema_version") or _LEGACY_CACHE_SCHEMA_VERSION
-                    print(f"🗑️ [SEMANTIC CACHE] P0-A3: plan descartado por schema incompatible "
+                    logger.info(f"🗑️ [SEMANTIC CACHE] P0-A3: plan descartado por schema incompatible "
                           f"(cached={_cached_v!r} ≠ current={CACHE_SCHEMA_VERSION!r}). "
                           f"Probable cambio de contrato post-deploy.")
                     continue
@@ -9739,7 +9746,7 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
 
                 cached_days_count = len(cand_data.get("days", []) or [])
                 if cached_days_count != expected_days:
-                    print(f"🗑️ [SEMANTIC CACHE] Plan descartado por tamaño de chunk "
+                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por tamaño de chunk "
                           f"({cached_days_count}d ≠ {expected_days}d esperado).")
                     continue
 
@@ -9750,7 +9757,7 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                 except (TypeError, ValueError):
                     cached_offset = 0
                 if cached_offset != expected_offset:
-                    print(f"🗑️ [SEMANTIC CACHE] Plan descartado por offset "
+                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por offset "
                           f"({cached_offset} ≠ {expected_offset} esperado).")
                     continue
 
@@ -9763,7 +9770,7 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                             created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
                         days_old = (now_utc - created_at_dt).days
                         if days_old > 30:
-                            print(f"🗑️ [SEMANTIC CACHE] Plan descartado por antigüedad ({days_old} días > 30).")
+                            logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por antigüedad ({days_old} días > 30).")
                             continue
                     except Exception:
                         pass
@@ -9802,7 +9809,7 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                 if current_target_cal > 0 and cached_target_cal > 0:
                     cal_diff_pct = abs(current_target_cal - cached_target_cal) / current_target_cal
                     if cal_diff_pct > 0.05:
-                        print(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de target "
+                        logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de target "
                               f"calórico (cached={cached_target_cal}kcal, "
                               f"current={current_target_cal}kcal, "
                               f"diff={cal_diff_pct*100:.1f}% > 5%). "
@@ -9849,7 +9856,7 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                                     f"current={cur_g}g, diff={macro_diff*100:.1f}%)"
                                 )
                     if macro_drift:
-                        print(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de "
+                        logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de "
                               f"distribución de macros: {', '.join(macro_drift)}. "
                               f"Probable cambio de goal o estrategia nutricional.")
                         continue
@@ -9864,7 +9871,7 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                 # el plan en lugar de aceptarlo a ciegas.
                 cached_form = cand_data.get("form_data") or cand_data.get("metadata", {}).get("form_data")
                 if not isinstance(cached_form, dict) or not cached_form:
-                    print(f"🗑️ [SEMANTIC CACHE] Plan descartado por form_data ausente o inválido "
+                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por form_data ausente o inválido "
                           f"(no se puede verificar compatibilidad médica — fail-safe P1-4).")
                     continue
 
@@ -9912,25 +9919,25 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                 cache_budget = _normalize(cached_form.get("budget"))
 
                 if curr_allergies != cache_allergies:
-                    print(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de alergias post-hoc.")
+                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de alergias post-hoc.")
                     continue
                 if curr_medical != cache_medical:
-                    print(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de condiciones médicas post-hoc.")
+                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de condiciones médicas post-hoc.")
                     continue
                 if curr_diet != cache_diet:
-                    print(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de tipo de dieta.")
+                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de tipo de dieta.")
                     continue
                 if curr_dislikes != cache_dislikes:
-                    print(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de rechazos/dislikes.")
+                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por cambio de rechazos/dislikes.")
                     continue
                 if curr_cooking != cache_cooking:
-                    print(f"🗑️ [SEMANTIC CACHE] P1-ORQ-7: Plan descartado por "
+                    logger.info(f"🗑️ [SEMANTIC CACHE] P1-ORQ-7: Plan descartado por "
                           f"cambio de cookingTime (cached={cache_cooking!r}, "
                           f"current={curr_cooking!r}). Recetas en caché "
                           f"probablemente no encajan con la nueva capacidad de cocina.")
                     continue
                 if curr_budget != cache_budget:
-                    print(f"🗑️ [SEMANTIC CACHE] P1-ORQ-7: Plan descartado por "
+                    logger.info(f"🗑️ [SEMANTIC CACHE] P1-ORQ-7: Plan descartado por "
                           f"cambio de budget (cached={cache_budget!r}, "
                           f"current={curr_budget!r}). Catálogo de ingredientes "
                           f"en caché incompatible con el nuevo presupuesto.")
@@ -9944,7 +9951,7 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                 # completa está en `_pantry_cache_discard_reason` (módulo).
                 _pantry_discard = _pantry_cache_discard_reason(actual_form_data, cached_form)
                 if _pantry_discard:
-                    print(f"🗑️ [SEMANTIC CACHE] Plan descartado por {_pantry_discard} "
+                    logger.info(f"🗑️ [SEMANTIC CACHE] Plan descartado por {_pantry_discard} "
                           f"(P1-ORQ-2). Regenerar producirá plan pantry-aware.")
                     continue
 
@@ -9984,12 +9991,12 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                         
                         # Si más de la mitad de los platos están repetidos, descartar el caché
                         if len(filtered_repeated) > 0 and len(filtered_repeated) >= len(cached_meal_names) / 2:
-                            print(f"⚠️ [SEMANTIC CACHE] Plan rechazado por anti-repetición ({len(filtered_repeated)}/{len(cached_meal_names)} platos repetidos). Forzando IA.")
+                            logger.warning(f"⚠️ [SEMANTIC CACHE] Plan rechazado por anti-repetición ({len(filtered_repeated)}/{len(cached_meal_names)} platos repetidos). Forzando IA.")
                             return {"semantic_cache_hit": False, "cached_plan_data": None}
                 except Exception as e:
-                    print(f"⚠️ [SEMANTIC CACHE] Error validando anti-repetición del caché: {e}")
+                    logger.warning(f"⚠️ [SEMANTIC CACHE] Error validando anti-repetición del caché: {e}")
 
-            print(f"🚀 [SEMANTIC CACHE HIT] Plan idéntico encontrado (Similitud: {similar_plan.get('similarity', 0):.3f}). Saltando LLM.")
+            logger.info(f"🚀 [SEMANTIC CACHE HIT] Plan idéntico encontrado (Similitud: {similar_plan.get('similarity', 0):.3f}). Saltando LLM.")
             return {
                 "semantic_cache_hit": True,
                 "cached_plan_data": plan_data
@@ -10108,6 +10115,17 @@ _PLAN_GRAPH_INVALIDATIONS_TOTAL = 0
 _PLAN_GRAPH_LAST_INVALIDATION_TS: float | None = None
 _PLAN_GRAPH_LAST_INVALIDATION_REASON: str | None = None
 
+# [P3-READY-REASON · 2026-05-12] Snapshot del último error de build del grafo,
+# expuesto via `is_plan_graph_ready_with_reason()` → `/ready`.
+# Pre-fix `/ready` retornaba `not_ready` sin razón; orquestadores (EasyPanel,
+# k8s, load balancer) sólo veían "503 not_ready" sin pista de QUÉ falló.
+# Ahora si el build crashea por timeout DB / missing API key / langgraph
+# version mismatch, el operador ve el tipo de excepción + mensaje truncado
+# en el body del 503 sin necesitar acceso a logs.
+# Formato: dict con type/message/timestamp; None si nunca falló o si tras un
+# fallo ya hubo build exitoso (reset al éxito).
+_PLAN_GRAPH_LAST_BUILD_ERROR: dict | None = None
+
 
 def _get_plan_graph():
     """P1-Q2: devuelve el grafo compilado, construyéndolo lazy + thread-safe.
@@ -10123,7 +10141,7 @@ def _get_plan_graph():
     automáticamente. El counter `_PLAN_GRAPH_BUILD_FAILURES` permite alertar
     sobre fallos sostenidos vs un blip transitorio.
     """
-    global _PLAN_GRAPH, _PLAN_GRAPH_BUILD_FAILURES
+    global _PLAN_GRAPH, _PLAN_GRAPH_BUILD_FAILURES, _PLAN_GRAPH_LAST_BUILD_ERROR
     if _PLAN_GRAPH is not None:
         return _PLAN_GRAPH
     with _PLAN_GRAPH_LOCK:
@@ -10133,6 +10151,15 @@ def _get_plan_graph():
             graph = build_plan_graph()
         except Exception as e:
             _PLAN_GRAPH_BUILD_FAILURES += 1
+            # [P3-READY-REASON · 2026-05-12] Snapshot del error para /ready.
+            # message truncado a 240 chars para evitar leak de paths / SQL
+            # / stack traces en body del 503 que orquestadores pueden loguear.
+            _PLAN_GRAPH_LAST_BUILD_ERROR = {
+                "type": type(e).__name__,
+                "message": str(e)[:240],
+                "timestamp": time.time(),
+                "failures_total": _PLAN_GRAPH_BUILD_FAILURES,
+            }
             logger.critical(
                 f"[STARTUP] P1-Q2: build_plan_graph() falló "
                 f"(intento #{_PLAN_GRAPH_BUILD_FAILURES}): "
@@ -10143,6 +10170,10 @@ def _get_plan_graph():
             )
             raise
         _PLAN_GRAPH = graph
+        # [P3-READY-REASON · 2026-05-12] Reset el snapshot del último error
+        # tras un build exitoso: el operador no debe ver "ready=true + reason
+        # apunta a un error viejo ya resuelto".
+        _PLAN_GRAPH_LAST_BUILD_ERROR = None
         logger.info(
             "[STARTUP] P1-Q2: LangGraph plan_graph compilado exitosamente "
             f"(failures previos: {_PLAN_GRAPH_BUILD_FAILURES})."
@@ -10157,8 +10188,45 @@ def is_plan_graph_ready() -> bool:
     gating de readiness: el orquestador puede llamar `warm_plan_graph()` al
     startup para forzar la construcción y luego usar este helper en el
     `/ready` endpoint para no enrutar tráfico hasta que el grafo esté listo.
+
+    [P3-READY-REASON · 2026-05-12] Wrapper compat con call-sites legacy. La
+    versión con razón vive en `is_plan_graph_ready_with_reason()`.
     """
     return _PLAN_GRAPH is not None
+
+
+def is_plan_graph_ready_with_reason() -> tuple[bool, str | None]:
+    """[P3-READY-REASON · 2026-05-12] Variante del readiness probe que
+    devuelve `(ready, reason)`.
+
+    Pre-fix: `/ready` retornaba solo `{status: not_ready}` cuando el grafo
+    no estaba compilado, sin pista de QUÉ falló — el operador debía abrir
+    logs separadamente. Ahora `reason` indica el último modo de fallo
+    conocido: tipo de excepción + mensaje truncado + count de intentos.
+
+    Estados posibles:
+      - `(True, None)`: grafo compilado y operativo.
+      - `(False, "uninitialized")`: nunca se intentó (raro — `warm_plan_graph`
+        debería correrse en `lifespan` al startup).
+      - `(False, "build_failed:<ExcType>:<msg>:<n>")`: build crasheó.
+        ExcType = `TimeoutError` / `ImportError` / `KeyError` / etc.
+        msg = primeros 240 chars del str(exception).
+        n = `_PLAN_GRAPH_BUILD_FAILURES` actual.
+
+    El formato es estructurado pero parseable a ojo en el body del 503.
+    Si en el futuro un orquestador quiere dispatchear por tipo de error,
+    puede splitear por `:` (los primeros 2 segmentos son fijos).
+    """
+    if _PLAN_GRAPH is not None:
+        return (True, None)
+    err = _PLAN_GRAPH_LAST_BUILD_ERROR
+    if err is None:
+        return (False, "uninitialized")
+    return (
+        False,
+        f"build_failed:{err.get('type','Unknown')}:"
+        f"{err.get('message','')}:{err.get('failures_total',0)}",
+    )
 
 
 def warm_plan_graph() -> bool:
@@ -10520,10 +10588,10 @@ def _persist_holistic_score_sync(user_id: str, holistic_score: float,
         new_hp = update_user_health_profile_atomic(user_id, _holistic_mutator)
         if new_hp is None:
             return
-        print(f"💾 [HOLISTIC SCORE] Guardado en health_profile "
+        logger.info(f"💾 [HOLISTIC SCORE] Guardado en health_profile "
               f"(historial: {len(new_hp.get('pipeline_score_history', []))} entradas).")
     except Exception as db_err:
-        print(f"⚠️ [HOLISTIC SCORE] Error guardando en DB: {db_err}")
+        logger.warning(f"⚠️ [HOLISTIC SCORE] Error guardando en DB: {db_err}")
 
 
 # ============================================================
@@ -11363,7 +11431,7 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int) ->
             "fats": f"{macros_dict.get('fats_g', 60)}g",
         }
         repaired = True
-        print("🛡️ [P0-2] Macros agregados faltantes inyectados.")
+        logger.warning("🛡️ [P0-2] Macros agregados faltantes inyectados.")
 
     # 2) Días: reemplazar inválidos + rellenar faltantes
     existing = plan.get("days")
@@ -11394,7 +11462,7 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int) ->
     plan["days"] = new_days
 
     if replaced_count or filled_count:
-        print(f"🛡️ [P0-2] Días reparados: {replaced_count} reemplazados (vacíos/inválidos), "
+        logger.warning(f"🛡️ [P0-2] Días reparados: {replaced_count} reemplazados (vacíos/inválidos), "
               f"{filled_count} rellenados (faltantes). Total: {len(new_days)}/{requested_days}.")
 
     # 3) P0-C: Asegurar shopping lists para no romper el contrato con el frontend.
@@ -11415,7 +11483,7 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int) ->
             shopping_repaired += 1
     if shopping_repaired:
         repaired = True
-        print(f"🛡️ [P0-C] Shopping lists normalizadas: {shopping_repaired}/4 claves "
+        logger.warning(f"🛡️ [P0-C] Shopping lists normalizadas: {shopping_repaired}/4 claves "
               f"ausentes o no-list reparadas a `[]`.")
 
     if repaired:
@@ -11544,7 +11612,7 @@ def _compute_pipeline_holistic_score_and_emit(
                     "raw_holistic_pre_clamp": raw_holistic_pre_clamp,
                 }
             })
-            print(
+            logger.info(
                 f"📊 [HOLISTIC SCORE] Pipeline Quality: {holistic_score:.3f} "
                 f"(retry={retry_penalty:.2f}, review={review_bonus:.2f}, "
                 f"cal={cal_score:.2f}, zero_cal_days={days_with_zero_cals}, "
@@ -11573,7 +11641,7 @@ def _compute_pipeline_holistic_score_and_emit(
                         "confidence": 0.0 if snapshot.get("dropped_cap", 0) > 0 else 0.5,
                         "metadata": {**snapshot, "total_loss": total_loss},
                     })
-                    print(
+                    logger.warning(
                         f"⚠️ [PROGRESS CB STATS] Pérdidas SSE en este pipeline: "
                         f"dropped_cap={snapshot.get('dropped_cap', 0)}, "
                         f"timed_out={snapshot.get('timed_out', 0)}, "
@@ -11615,7 +11683,7 @@ def _compute_pipeline_holistic_score_and_emit(
                 )
 
     except Exception as e:
-        print(f"⚠️ [HOLISTIC SCORE] Error calculando score: {e}")
+        logger.warning(f"⚠️ [HOLISTIC SCORE] Error calculando score: {e}")
 
 
 def _apply_critical_review_guardrails(
@@ -11701,7 +11769,7 @@ def _apply_critical_review_guardrails(
             "SCHEMA INVÁLIDO (plan no renderizable por el frontend)"
             if schema_invalid else "rechazo médico CRÍTICO"
         )
-        print(f"🚨 [P0-1/P1-8 GUARDRAIL] Fallback forzado por: {cause}. "
+        logger.error(f"🚨 [P0-1/P1-8 GUARDRAIL] Fallback forzado por: {cause}. "
               f"Generando plan matemático ({requested_days} días). "
               f"review_passed={review_passed}, severity={rejection_severity}, "
               f"razones={rejection_reasons}")
@@ -11734,7 +11802,7 @@ def _apply_critical_review_guardrails(
             fallback_plan["_profile_embedding"] = plan_result["_profile_embedding"]
         final_state["plan_result"] = fallback_plan
     elif not review_passed and isinstance(plan_result, dict) and not already_fallback:
-        print(f"⚠️ [P0-1 TRANSPARENCY] Plan entregado tras rechazo no-crítico. "
+        logger.warning(f"⚠️ [P0-1 TRANSPARENCY] Plan entregado tras rechazo no-crítico. "
               f"Marcando para visibilidad en cliente. Severidad: {rejection_severity}")
         plan_result["_review_failed_but_delivered"] = True
         plan_result["_review_issues"] = rejection_reasons
@@ -11771,7 +11839,7 @@ def _apply_final_defense_guardrails(
     """
     plan_final = final_state.get("plan_result")
     if not isinstance(plan_final, dict) or not plan_final:
-        print(f"🛡️ [P0-2 GUARDRAIL] Plan ausente tras pipeline exitoso. "
+        logger.warning(f"🛡️ [P0-2 GUARDRAIL] Plan ausente tras pipeline exitoso. "
               f"Generando fallback completo ({requested_days} días).")
         # P1-9: `_get_extreme_fallback_plan` ya setea `_is_fallback=True` en el plan.
         final_state["plan_result"] = _get_extreme_fallback_plan(
@@ -11782,7 +11850,7 @@ def _apply_final_defense_guardrails(
     elif not _is_plan_complete(plan_final, requested_days):
         days_count = len(plan_final.get("days") or [])
         invalid_count = sum(1 for d in (plan_final.get("days") or []) if not _is_day_valid(d))
-        print(f"🛡️ [P0-2 GUARDRAIL] Plan terminó incompleto pese a graph success. "
+        logger.warning(f"🛡️ [P0-2 GUARDRAIL] Plan terminó incompleto pese a graph success. "
               f"Días: {days_count}/{requested_days}, inválidos: {invalid_count}. Reparando.")
         # P1-9: `_repair_partial_plan` ya setea el flag en plan_final si repara.
         _repair_partial_plan(plan_final, nutrition=nutrition, requested_days=requested_days)
@@ -11840,9 +11908,9 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
     Args:
         progress_callback: Función opcional que recibe dicts de progreso para streaming SSE.
     """
-    print("\n" + "🔗" * 30)
-    print("🔗 [LANGGRAPH] Iniciando Pipeline Multi-Agente")
-    print("🔗" * 30)
+    logger.info("\n" + "🔗" * 30)
+    logger.info("🔗 [LANGGRAPH] Iniciando Pipeline Multi-Agente")
+    logger.info("🔗" * 30)
     
     pipeline_start = time.time()
 
@@ -12011,7 +12079,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     "----------------------------------------------------------------------"
                 )
         except Exception as e:
-            print(f"⚠️ Error recuperando comidas recientes desde db: {e}")
+            logger.warning(f"⚠️ Error recuperando comidas recientes desde db: {e}")
             
         try:
             from db_facts import get_consumed_meals_since
@@ -12041,7 +12109,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     "----------------------------------------------------------------------\n"
                 )
         except Exception as e:
-            print(f"⚠️ Error recuperando feedback evolutivo de 7 días: {e}")
+            logger.warning(f"⚠️ Error recuperando feedback evolutivo de 7 días: {e}")
             
     # 2.14 --- MEJORA 1: FEEDBACK DE CALIDAD CON CONSECUENCIAS ---
     quality_hint = actual_form_data.get("_quality_hint")
@@ -12095,7 +12163,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     "Si no se pueden simplificar, redistribuye sus macros al resto del día.\n"
                 )
             history_context += "----------------------------------------------------------------------\n"
-            print(f"✅ [GAP 1] Señal 1: Adherencia EMA granular inyectada → {_meal_level_adherence}")
+            logger.info(f"✅ [GAP 1] Señal 1: Adherencia EMA granular inyectada → {_meal_level_adherence}")
 
     # Señal 1b: EMA largo plazo — tendencia estacional (~30 días)
     _meal_level_adherence_long = actual_form_data.get("_meal_level_adherence_long", {})
@@ -12119,7 +12187,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 )
             long_block += "----------------------------------------------------------------------\n"
             history_context += long_block
-            print(f"✅ [GAP 1] Señal 1b: EMA largo plazo inyectado → low={list(low_long)}, high={list(high_long)}")
+            logger.info(f"✅ [GAP 1] Señal 1b: EMA largo plazo inyectado → low={list(low_long)}, high={list(high_long)}")
 
     # Señal 2: Razones causales de abandono de comidas
     _abandoned_reasons = actual_form_data.get("_abandoned_reasons", {})
@@ -12139,7 +12207,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             + "\nINSTRUCCIÓN: Aplica cada ajuste específico indicado para esa comida. No ignorar.\n"
             "----------------------------------------------------------------------\n"
         )
-        print(f"✅ [GAP 1] Señal 2: Razones de abandono inyectadas → {_abandoned_reasons}")
+        logger.info(f"✅ [GAP 1] Señal 2: Razones de abandono inyectadas → {_abandoned_reasons}")
 
     # Señal 3: Estado emocional detectado por nudge_outcomes
     _emotional_state = actual_form_data.get("_emotional_state")
@@ -12151,7 +12219,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             "La comida debe sentirse como un abrazo, no como una dieta estricta. Evita ensaladas frías o comidas aburridas.\n"
             "----------------------------------------------------------------------\n"
         )
-        print("✅ [GAP 1] Señal 3: Estado emocional 'needs_comfort' inyectado")
+        logger.info("✅ [GAP 1] Señal 3: Estado emocional 'needs_comfort' inyectado")
     elif _emotional_state == 'ready_for_challenge':
         history_context += (
             "\n\n--- 🔥 [CRON] ESTADO EMOCIONAL: USUARIO MOTIVADO Y LISTO PARA RETOS ---\n"
@@ -12160,7 +12228,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             "Diseña comidas enfocadas en máximo rendimiento y variedad para mantener el impulso.\n"
             "----------------------------------------------------------------------\n"
         )
-        print("✅ [GAP 1] Señal 3: Estado emocional 'ready_for_challenge' inyectado")
+        logger.info("✅ [GAP 1] Señal 3: Estado emocional 'ready_for_challenge' inyectado")
 
     # Señal 4: Tipos de comida cuyos nudges son sistemáticamente ignorados
     _ignored_meal_types = actual_form_data.get("_ignored_meal_types", [])
@@ -12173,7 +12241,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             "Si no es posible hacerlas instantáneas, elimínalas del plan y redistribuye sus macros.\n"
             "----------------------------------------------------------------------\n"
         )
-        print(f"✅ [GAP 1] Señal 4: Tipos de comida ignorados inyectados → {_ignored_meal_types}")
+        logger.info(f"✅ [GAP 1] Señal 4: Tipos de comida ignorados inyectados → {_ignored_meal_types}")
 
     # Señal 5: Patrón de adherencia por día de la semana
     _day_of_week_adherence = actual_form_data.get("day_of_week_adherence", {})
@@ -12188,7 +12256,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 "(hamburguesas fit, wraps rápidos, bowl express). Tiempo de preparación <10 minutos, sin recetas complejas.\n"
                 "----------------------------------------------------------------------\n"
             )
-            print(f"✅ [GAP 1] Señal 5: Días de baja adherencia inyectados → {low_days}")
+            logger.info(f"✅ [GAP 1] Señal 5: Días de baja adherencia inyectados → {low_days}")
 
     # Señal 6: Técnicas de cocción exitosas y abandonadas (basado en consumo real)
     _succ_techs = actual_form_data.get("successful_techniques", [])
@@ -12203,7 +12271,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             tech_block += "   → EVITA estas técnicas en este ciclo. Causaron fricción y reducen la adherencia.\n"
         tech_block += "----------------------------------------------------------------------\n"
         history_context += tech_block
-        print(f"✅ [GAP 1] Señal 6: Técnicas éxito/abandono inyectadas → succ={_succ_techs}, aban={_aban_techs}")
+        logger.info(f"✅ [GAP 1] Señal 6: Técnicas éxito/abandono inyectadas → succ={_succ_techs}, aban={_aban_techs}")
 
     # Señal 7: Snapshot de calidad global — adherencia escalar + score previo + tendencia
     # (_adherence_hint ya se usa en complexity_guard pero no se narraba aqui;
@@ -12259,7 +12327,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             q_block += _ema_hint_instructions[_adherence_ema_hint]
         q_block += "----------------------------------------------------------------------\n"
         history_context += q_block
-        print(f"✅ [GAP 1] Señal 7: Snapshot calidad/adherencia inyectado (hint={_adherence_hint}, ema_hint={_adherence_ema_hint}, prev={_prev_quality})")
+        logger.info(f"✅ [GAP 1] Señal 7: Snapshot calidad/adherencia inyectado (hint={_adherence_hint}, ema_hint={_adherence_ema_hint}, prev={_prev_quality})")
 
     # Señal 8: Platos recurrentes de alta adherencia (variaciones bienvenidas)
     _frequent_meals = actual_form_data.get("frequent_meals", [])
@@ -12272,7 +12340,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             "Son anclas de adherencia probadas; respetar su estructura base reduce el riesgo de abandono.\n"
             "----------------------------------------------------------------------\n"
         )
-        print(f"✅ [GAP 1] Señal 8: Platos recurrentes inyectados → {_frequent_meals[:5]}")
+        logger.info(f"✅ [GAP 1] Señal 8: Platos recurrentes inyectados → {_frequent_meals[:5]}")
 
     # Señal 9: Tipos de comida que generan frustración emocional (más fuerte que "ignorados")
     _frustrated = actual_form_data.get("_frustrated_meal_types", [])
@@ -12285,7 +12353,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             "Evita presentaciones 'fit/dieta tradicional'. Si no logras reencantarlas, elimínalas del plan.\n"
             "----------------------------------------------------------------------\n"
         )
-        print(f"✅ [GAP 1] Señal 9: Comidas frustrantes inyectadas → {_frustrated}")
+        logger.info(f"✅ [GAP 1] Señal 9: Comidas frustrantes inyectadas → {_frustrated}")
 
 
 
@@ -12316,7 +12384,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             # P0-NEW-1.h: DB sync. Despachado al executor.
             if await _adb(check_meal_plan_generated_today, user_id):
                 if is_rotation:
-                    print("🔄 [ROTACIÓN DE PLATOS] Generando nuevas recetas ESTRICTAMENTE con la misma despensa.")
+                    logger.info("🔄 [ROTACIÓN DE PLATOS] Generando nuevas recetas ESTRICTAMENTE con la misma despensa.")
                     
                     current_pantry = actual_form_data.get("current_pantry_ingredients") or actual_form_data.get("current_shopping_list", [])
                     pantry_list_str = ", ".join(current_pantry) if current_pantry else "Ninguno detectado."
@@ -12330,7 +12398,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     )
                     actual_form_data["_is_rotation_reroll"] = True
                 else:
-                    print("🔄 [REGENERACIÓN] Usuario solicitó 'Generar Nueva Opción' el mismo día = RECHAZO del menú actual.")
+                    logger.info("🔄 [REGENERACIÓN] Usuario solicitó 'Generar Nueva Opción' el mismo día = RECHAZO del menú actual.")
                     
                     history_context += (
                         f"\n\n🚨 INSTRUCCIÓN DE VARIEDAD (RE-ROLL) 🚨\n"
@@ -12340,9 +12408,9 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     )
                     actual_form_data["_is_same_day_reroll"] = True
             else:
-                print("🌅 [NUEVO DÍA] Generación para un nuevo día iniciada.")
+                logger.info("🌅 [NUEVO DÍA] Generación para un nuevo día iniciada.")
         except Exception as e:
-            print(f"⚠️ Error validando regeneración del mismo día: {e}")
+            logger.warning(f"⚠️ Error validando regeneración del mismo día: {e}")
 
 
     # 2.5 Buscar Hechos y Diario Visual en Memoria Vectorial (RAG multimodal)
@@ -12444,7 +12512,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 dynamic_parts.append(f"Obstáculos: {', '.join(struggles)}")
             
             dynamic_query = ". ".join(dynamic_parts) if dynamic_parts else "Preferencias de comida, restricciones médicas, gustos y síntomas digestivos del usuario"
-            print(f"🔍 [RAG] Query dinámica: {dynamic_query}")
+            logger.info(f"🔍 [RAG] Query dinámica: {dynamic_query}")
             
             # Brecha 5: Validación de Caché RAG
             # P1-3: aget (no get) — el call site está dentro de arun_plan_pipeline
@@ -12453,7 +12521,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             rag_cache_key = f"rag_{user_id}_{dynamic_query}"
             cached_rag = await _LLM_CACHE.aget(rag_cache_key)
             if cached_rag is not None:
-                print(f"⚡ [CACHE HIT] Reutilizando contexto RAG para la misma query dinámica.")
+                logger.info(f"⚡ [CACHE HIT] Reutilizando contexto RAG para la misma query dinámica.")
                 if len(cached_rag) == 3:
                     facts_data_sorted, visual_list, query_emb = cached_rag
                 else:
@@ -12505,11 +12573,11 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 if facts_data:
                     # === PRIORIZACIÓN POR CATEGORÍA (Anti-Poda Bruta) ===
                     facts_data_sorted = sorted(facts_data, key=get_fact_weight)
-                    print(f"🧠 [RAG] Hechos textuales recuperados: {len(facts_data)} (ordenados por prioridad de categoría)")
+                    logger.info(f"🧠 [RAG] Hechos textuales recuperados: {len(facts_data)} (ordenados por prioridad de categoría)")
 
                 if visual_data:
                     visual_list = [f"• {item['description']}" for item in visual_data]
-                    print(f"📸 [VISUAL RAG] Entradas visuales recuperadas: {len(visual_data)}")
+                    logger.info(f"📸 [VISUAL RAG] Entradas visuales recuperadas: {len(visual_data)}")
 
                 # P1-3: aset (no __setitem__) — async-safe. La tupla se serializa
                 # como lista vía json.dumps; el destructuring upstream funciona igual.
@@ -12552,7 +12620,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 visual_list = cleaned_visual
 
         except Exception as e:
-            print(f"⚠️ [RAG] Error recuperando memoria: {e}")
+            logger.warning(f"⚠️ [RAG] Error recuperando memoria: {e}")
             
     # === PRUNING FACT-BY-FACT (Basado en Tokens) ===
     # Estrategia: Los hechos estrictos (alergias, condiciones, rechazos) son NON-NEGOTIABLE.
@@ -12592,7 +12660,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             full_rag_context += general_section
             remaining_tokens -= current_section_tokens
             if skipped_count > 0:
-                print(f"✂️ [PRUNING] {skipped_count} hechos de baja prioridad descartados completos (límite tokens)")
+                logger.info(f"✂️ [PRUNING] {skipped_count} hechos de baja prioridad descartados completos (límite tokens)")
     
     # 3. Agregar hechos visuales con el presupuesto restante
     if remaining_tokens > 25 and visual_list:  # ~100 chars
@@ -12613,7 +12681,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             full_rag_context += visual_section
     
     if full_rag_context.strip():
-        print(f"✅ [PRUNING] Contexto final: {estimate_tokens(full_rag_context)} tokens aprox (fact-by-fact, sin cortes)")
+        logger.info(f"✅ [PRUNING] Contexto final: {estimate_tokens(full_rag_context)} tokens aprox (fact-by-fact, sin cortes)")
     # ====================================================
 
     # P0-A1: persistir métrica agregada de hits externos (memory_context +
@@ -12861,7 +12929,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             # P1-NEW-2: timeout configurable vía `MEALFIT_GLOBAL_PIPELINE_TIMEOUT_S`.
             final_state = await asyncio.wait_for(run_graph(), timeout=GLOBAL_PIPELINE_TIMEOUT_S)
         except Exception as e:
-            print(f"🚨 [EXTREME GRACEFUL DEGRADATION] Error crítico en pipeline ({type(e).__name__}): {e}")
+            logger.error(f"🚨 [EXTREME GRACEFUL DEGRADATION] Error crítico en pipeline ({type(e).__name__}): {e}")
             final_state = latest_state[0] if latest_state else {}
             # [P1-26] Flush de TODOS los token buffers pendientes ANTES de
             # entregar el fallback. Sin esto, tokens acumulados en buffers
@@ -12890,7 +12958,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             # de días solicitada. Si hay plan parcial (aunque sea con días vacíos o
             # incompletos), repararlo en lugar de descartar el trabajo del LLM.
             if not isinstance(plan_partial, dict) or not plan_partial:
-                print(f"🛡️ [FALLBACK] Generando plan de emergencia matemático ({requested_days} días, by-pass de LLM)...")
+                logger.warning(f"🛡️ [FALLBACK] Generando plan de emergencia matemático ({requested_days} días, by-pass de LLM)...")
                 # P1-9: `_get_extreme_fallback_plan` ya setea `_is_fallback=True` dentro
                 # del plan retornado. No duplicar en final_state — `arun_plan_pipeline`
                 # retorna `final_state["plan_result"]` al caller, así que el flag en
@@ -12950,10 +13018,10 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 f"Continuando con plan_result actual sin swap."
             )
 
-        print(f"\n{'🔗' * 30}")
-        print(f"🔗 [LANGGRAPH] Pipeline completado en {pipeline_duration}s")
-        print(f"🔗 Intentos: {final_state.get('attempt', 1)} | Aprobado: {final_state.get('review_passed', 'N/A')}")
-        print("🔗" * 30 + "\n")
+        logger.info(f"\n{'🔗' * 30}")
+        logger.info(f"🔗 [LANGGRAPH] Pipeline completado en {pipeline_duration}s")
+        logger.info(f"🔗 Intentos: {final_state.get('attempt', 1)} | Aprobado: {final_state.get('review_passed', 'N/A')}")
+        logger.info("🔗" * 30 + "\n")
 
         # P0-1 / P1-8 / P1-A5: guardrail crítico de rechazo médico + transparencia
         # de rechazo no-crítico. Lógica idéntica al bloque inline previo, ahora

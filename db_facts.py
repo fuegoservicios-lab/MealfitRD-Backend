@@ -352,7 +352,7 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
                 existing = similar.data[0]
                 existing_id = existing.get("id")
                 old_freq = existing.get("frequency", 1) or 1
-                print(f"🔄 [DEDUP VISUAL] Entrada similar detectada (sim>{0.95}). "
+                logger.info(f"🔄 [DEDUP VISUAL] Entrada similar detectada (sim>{0.95}). "
                       f"Actualizando frequency {old_freq} → {old_freq + 1} en lugar de insertar duplicado.")
                 
                 from datetime import datetime, timezone

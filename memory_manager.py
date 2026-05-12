@@ -281,7 +281,7 @@ def purge_langgraph_checkpoint(
     retenía → re-inyección al LLM en el siguiente turno).
     """
     if not connection_pool:
-        print("⚠️ [MEMORY MANAGER] No hay connection_pool, no se puede purgar checkpoint de LangGraph.")
+        logger.warning("⚠️ [MEMORY MANAGER] No hay connection_pool, no se puede purgar checkpoint de LangGraph.")
         if raise_on_failure:
             raise RuntimeError(
                 "[P1-20] purge_langgraph_checkpoint requirido pero connection_pool no disponible"
@@ -293,20 +293,20 @@ def purge_langgraph_checkpoint(
 
         graph = _get_dummy_purge_graph()
         if graph is None:
-            print("⚠️ [MEMORY MANAGER] _get_dummy_purge_graph retornó None. Skip.")
+            logger.warning("⚠️ [MEMORY MANAGER] _get_dummy_purge_graph retornó None. Skip.")
             return
 
         config = {"configurable": {"thread_id": session_id}}
         state = graph.get_state(config)
         
         if not state or not state.values:
-            print("➡️ [MEMORY MANAGER] No hay estado de LangGraph para esta sesión. Nada que purgar.")
+            logger.info("➡️ [MEMORY MANAGER] No hay estado de LangGraph para esta sesión. Nada que purgar.")
             return
         
         messages = state.values.get("messages", [])
         
         if len(messages) <= keep_recent:
-            print(f"➡️ [MEMORY MANAGER] Solo {len(messages)} mensajes en checkpoint, no se necesita purga.")
+            logger.info(f"➡️ [MEMORY MANAGER] Solo {len(messages)} mensajes en checkpoint, no se necesita purga.")
             return
         
         # Calcular qué mensajes eliminar (todos excepto los keep_recent más recientes)
@@ -316,10 +316,10 @@ def purge_langgraph_checkpoint(
         remove_messages = [RemoveMessage(id=m.id) for m in messages_to_remove if hasattr(m, 'id') and m.id]
         
         if not remove_messages:
-            print("➡️ [MEMORY MANAGER] No se encontraron IDs de mensajes para purgar.")
+            logger.info("➡️ [MEMORY MANAGER] No se encontraron IDs de mensajes para purgar.")
             return
         
-        print(f"🔄 [MEMORY MANAGER] Purgando {len(remove_messages)} mensajes del checkpoint de LangGraph...")
+        logger.info(f"🔄 [MEMORY MANAGER] Purgando {len(remove_messages)} mensajes del checkpoint de LangGraph...")
         
         # Snapshot de seguridad antes de modificar
         pre_update_snapshot = graph.get_state(config)
@@ -327,19 +327,19 @@ def purge_langgraph_checkpoint(
         try:
             # Usar update_state para aplicar las eliminaciones
             graph.update_state(config, {"messages": remove_messages})
-            print(f"✅ [MEMORY MANAGER] {len(remove_messages)} mensajes eliminados del checkpoint de LangGraph. State sincronizado.")
+            logger.info(f"✅ [MEMORY MANAGER] {len(remove_messages)} mensajes eliminados del checkpoint de LangGraph. State sincronizado.")
         except Exception as update_err:
-            print(f"🚨 [MEMORY MANAGER] Fallo parcial en update_state: {update_err}. Restaurando snapshot...")
+            logger.error(f"🚨 [MEMORY MANAGER] Fallo parcial en update_state: {update_err}. Restaurando snapshot...")
             if pre_update_snapshot and hasattr(pre_update_snapshot, 'values'):
                 # Forzar la re-escritura del estado original
                 graph.update_state(config, pre_update_snapshot.values)
-                print("♻️ [MEMORY MANAGER] Snapshot restaurado tras fallo.")
+                logger.info("♻️ [MEMORY MANAGER] Snapshot restaurado tras fallo.")
             # Propagar para que el except global lo capture
             raise update_err
             
     except Exception as e:
         # Nunca bloquear al usuario por un error de sincronización (default).
-        print(f"⚠️ [MEMORY MANAGER] Error no-crítico purgando checkpoint de LangGraph: {e}")
+        logger.warning(f"⚠️ [MEMORY MANAGER] Error no-crítico purgando checkpoint de LangGraph: {e}")
         # [P1-20] Si el caller exigió fail-fast (e.g., `summarize_and_prune`
         # para preservar consistencia con `delete_old_messages`), propagar.
         if raise_on_failure:
@@ -406,7 +406,7 @@ def summarize_and_prune(session_id: str):
     if _summary_backoff_should_skip():
         count = _summarize_failures.get("count", 0)
         last_err = _summarize_failures.get("last_error")
-        print(
+        logger.info(
             f"⏰ [MEMORY MANAGER/P1-NEW-6] Skip resumen sesión "
             f"{str(session_id)[:8]}… — backoff activo ({count} fallos "
             f"consecutivos, último error: {last_err!r}). Próximo intento "
@@ -416,7 +416,7 @@ def summarize_and_prune(session_id: str):
         return
 
     if not acquire_summarizing_lock(session_id):
-        print(f"⚠️ [MEMORY MANAGER] Resumen ya en progreso para sesión {session_id}. Mitigando Condición de Carrera.")
+        logger.warning(f"⚠️ [MEMORY MANAGER] Resumen ya en progreso para sesión {session_id}. Mitigando Condición de Carrera.")
         return
 
     try:
@@ -430,9 +430,9 @@ def summarize_and_prune(session_id: str):
         if total_chars <= MAX_CHAR_THRESHOLD:
             return  # No hay suficientes caracteres para detonar el resumen
         
-        print(f"\n{'='*60}")
-        print(f"🧠 [MEMORY MANAGER] Sesión {str(session_id)[:8]}... tiene {len(all_messages)} mensajes. Iniciando resumen...")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"🧠 [MEMORY MANAGER] Sesión {str(session_id)[:8]}... tiene {len(all_messages)} mensajes. Iniciando resumen...")
+        logger.info(f"{'='*60}")
         
         start_time = time.time()
         
@@ -440,7 +440,7 @@ def summarize_and_prune(session_id: str):
         messages_to_summarize = all_messages[:-KEEP_RECENT]
         
         if len(messages_to_summarize) == 0:
-            print("➡️  No hay mensajes suficientes para resumir después de reservar los recientes.")
+            logger.info("➡️  No hay mensajes suficientes para resumir después de reservar los recientes.")
             return
         
         # Formatear el bloque de conversación para el prompt
@@ -521,7 +521,7 @@ def summarize_and_prune(session_id: str):
         # === LÓGICA DE RESUMEN JERÁRQUICO (MASTER SUMMARY → JSON EVOLUTIVO) ===
         summaries = get_summaries(session_id)
         if summaries and len(summaries) >= MAX_SUMMARIES:
-            print(f"🔄 [MEMORY MANAGER] Condensando {len(summaries)} resúmenes en un Estado Evolutivo JSON...")
+            logger.info(f"🔄 [MEMORY MANAGER] Condensando {len(summaries)} resúmenes en un Estado Evolutivo JSON...")
             
             # Detectar si ya existe un Master Summary JSON previo entre los summaries
             prior_state = None
@@ -531,7 +531,7 @@ def summarize_and_prune(session_id: str):
                 if summary_text.startswith('{'):
                     try:
                         prior_state = json.loads(summary_text)
-                        print("📋 [MEMORY MANAGER] Estado Evolutivo anterior detectado. Se actualizará incrementalmente.")
+                        logger.info("📋 [MEMORY MANAGER] Estado Evolutivo anterior detectado. Se actualizará incrementalmente.")
                     except json.JSONDecodeError:
                         narrative_summaries.append(s)
                 else:
@@ -570,7 +570,7 @@ def summarize_and_prune(session_id: str):
                 master_dict = master_response.dict()
             
             master_summary_text = json.dumps(master_dict, ensure_ascii=False, indent=2)
-            print("✅ [MEMORY MANAGER] Estado Evolutivo generado con Structured Output (Pydantic). 0% riesgo de parseo.")
+            logger.info("✅ [MEMORY MANAGER] Estado Evolutivo generado con Structured Output (Pydantic). 0% riesgo de parseo.")
             
             # Las fechas del Master Summary cubren desde el primero hasta el último
             master_start = summaries[0].get("messages_start")
@@ -581,7 +581,7 @@ def summarize_and_prune(session_id: str):
             if summary_ids:
                 # 1. Archivar los resúmenes originales en cold storage para no perder detalles finos
                 archive_summaries(summaries)
-                print(f"📦 [MEMORY MANAGER] {len(summaries)} resúmenes originales enviados a cold storage.")
+                logger.info(f"📦 [MEMORY MANAGER] {len(summaries)} resúmenes originales enviados a cold storage.")
                 
                 # 2. Borrarlos de la tabla activa de memoria de trabajo
                 delete_summaries(summary_ids)
@@ -593,16 +593,16 @@ def summarize_and_prune(session_id: str):
                 messages_end=master_end,
                 message_count=master_count
             )
-            print("✅ [MEMORY MANAGER] Estado Evolutivo JSON guardado exitosamente.")
+            logger.info("✅ [MEMORY MANAGER] Estado Evolutivo JSON guardado exitosamente.")
         # =======================================================
         
         duration = round(time.time() - start_time, 2)
         
-        print(f"✅ [MEMORY MANAGER] Resumen completado en {duration}s")
-        print(f"   📝 {message_count} mensajes resumidos y eliminados")
-        print(f"   💾 {KEEP_RECENT} mensajes recientes conservados")
-        print(f"   📋 Resumen: {summary_text[:150]}...")
-        print(f"{'='*60}\n")
+        logger.info(f"✅ [MEMORY MANAGER] Resumen completado en {duration}s")
+        logger.info(f"   📝 {message_count} mensajes resumidos y eliminados")
+        logger.info(f"   💾 {KEEP_RECENT} mensajes recientes conservados")
+        logger.info(f"   📋 Resumen: {summary_text[:150]}...")
+        logger.info(f"{'='*60}\n")
         
     except Exception as e:
         # [P1-18] Nunca bloquear al usuario por un error de resumen, PERO

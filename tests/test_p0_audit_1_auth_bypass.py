@@ -54,6 +54,7 @@ un refactor cosmético no borre la convención sin pasar por este test.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import re
@@ -62,6 +63,15 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
+
+def _run_async(coro):
+    """[P2-AUTH-ASYNC-SLEEP · 2026-05-12] `get_verified_user_id` se
+    convirtió a `async def`. Tests funcionales que la invocan deben
+    ejecutar el coroutine. Usamos `asyncio.run` per-call para no
+    contaminar event loops entre tests.
+    """
+    return asyncio.run(coro)
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -211,7 +221,7 @@ def test_e_forged_jwt_does_not_return_unverified_sub(monkeypatch):
     raised: HTTPException | None = None
     result: str | None = None
     try:
-        result = _auth.get_verified_user_id(f"Bearer {forged_token}")
+        result = _run_async(_auth.get_verified_user_id(f"Bearer {forged_token}"))
     except HTTPException as e:
         raised = e
 
@@ -249,11 +259,11 @@ def test_f_missing_authorization_returns_none(monkeypatch):
     import auth as _auth  # type: ignore
     monkeypatch.setattr(_auth, "supabase", fake_supabase, raising=False)
 
-    assert _auth.get_verified_user_id(None) is None
-    assert _auth.get_verified_user_id("") is None
-    assert _auth.get_verified_user_id("NotBearer abc.def.ghi") is None
+    assert _run_async(_auth.get_verified_user_id(None)) is None
+    assert _run_async(_auth.get_verified_user_id("")) is None
+    assert _run_async(_auth.get_verified_user_id("NotBearer abc.def.ghi")) is None
     # Bearer sin token tampoco debe crashear.
-    assert _auth.get_verified_user_id("Bearer ") is None
+    assert _run_async(_auth.get_verified_user_id("Bearer ")) is None
 
 
 def test_g_valid_token_returns_user_id(monkeypatch):
@@ -276,5 +286,5 @@ def test_g_valid_token_returns_user_id(monkeypatch):
     import auth as _auth  # type: ignore
     monkeypatch.setattr(_auth, "supabase", fake_supabase, raising=False)
 
-    result = _auth.get_verified_user_id("Bearer valid.token.signature")
+    result = _run_async(_auth.get_verified_user_id("Bearer valid.token.signature"))
     assert result == "11111111-2222-3333-4444-555555555555"

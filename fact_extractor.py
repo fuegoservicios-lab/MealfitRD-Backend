@@ -89,20 +89,20 @@ def should_extract_facts(user_message: str) -> bool:
         if not res:
             return False
             
-        print(f"🚦 [ROUTER LITE] has_info: {res.has_relevant_info} | confidence: {res.confidence_score}/10")
+        logger.info(f"🚦 [ROUTER LITE] has_info: {res.has_relevant_info} | confidence: {res.confidence_score}/10")
         
         # Fallback de confianza: Si tiene info, lo pasamos. 
         # Si dice que NO tiene info, pero está inseguro (< 8), forzamos pasarlo al extractor pesado por seguridad.
         if res.has_relevant_info:
             return True
         elif res.confidence_score < 8:
-            print(f"⚠️ [ROUTER FALLBACK] Score bajo ({res.confidence_score}/10). Enviando a extractor pesado por si acaso.")
+            logger.warning(f"⚠️ [ROUTER FALLBACK] Score bajo ({res.confidence_score}/10). Enviando a extractor pesado por si acaso.")
             return True
         else:
             return False
             
     except Exception as e:
-        print(f"⚠️ [ROUTER FALLBACK] Error analizando: {e}")
+        logger.warning(f"⚠️ [ROUTER FALLBACK] Error analizando: {e}")
         return True # Fallback seguro: ante la duda, extraemos
 
 
@@ -152,8 +152,8 @@ def extract_facts(user_message: str, recent_history: str = ""):
     if not user_message or len(user_message.strip()) < 5:
         return []
 
-    print("\n-------------------------------------------------------------")
-    print("🔍 [EXTRACTOR DE HECHOS] Analizando mensaje para vectorizar y etiquetar...")
+    logger.info("\n-------------------------------------------------------------")
+    logger.info("🔍 [EXTRACTOR DE HECHOS] Analizando mensaje para vectorizar y etiquetar...")
     
     history_context = f"\n    Contexto reciente (últimos mensajes):\n    {recent_history}\n" if recent_history else ""
 
@@ -197,12 +197,12 @@ def extract_facts(user_message: str, recent_history: str = ""):
         response = llm.invoke(prompt)
         facts = response.facts if response and hasattr(response, 'facts') else []
         if facts:
-            print(f"✅ Se encontraron {len(facts)} hechos estructurados.")
+            logger.info(f"✅ Se encontraron {len(facts)} hechos estructurados.")
         else:
-            print("➡️ No se encontraron hechos relevantes.")
+            logger.info("➡️ No se encontraron hechos relevantes.")
         return facts
     except Exception as e:
-        print(f"⚠️ Error al extraer hechos: {e}")
+        logger.warning(f"⚠️ Error al extraer hechos: {e}")
         return []
 
 CACHE_TTL_PERMANENT = 3153600000  # ~100 years — embeddings are deterministic for the same input
@@ -289,7 +289,7 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
         similar_facts = search_user_facts_hybrid(user_id, emb, filter_metadata=filter_meta, threshold=0.6, limit=5)
         
         if filter_meta and similar_facts:
-            print(f"{log_prefix}🔎 [HIBRID SEARCH] Búsqueda optimizada por categoría crítica '{category}'. Recuperados: {len(similar_facts)}")
+            logger.info(f"{log_prefix}🔎 [HIBRID SEARCH] Búsqueda optimizada por categoría crítica '{category}'. Recuperados: {len(similar_facts)}")
         
         prepared_facts.append({
             "item": item,
@@ -310,7 +310,7 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
     skipped_new_facts = set()
 
     if facts_with_similar:
-        print(f"{log_prefix}🔄 [BATCH] Verificando contradicciones para {len(facts_with_similar)} hechos...")
+        logger.info(f"{log_prefix}🔄 [BATCH] Verificando contradicciones para {len(facts_with_similar)} hechos...")
         
         sections = []
         for idx, pf in enumerate(facts_with_similar, 1):
@@ -359,13 +359,13 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
             if response and response.contradictions:
                 for contradiction in response.contradictions:
                     if contradiction.ids_to_delete:
-                        print(f"{log_prefix}⚠️ [CONTRADICCIÓN] \"{contradiction.new_fact}\" → Borrar IDs: {contradiction.ids_to_delete}")
+                        logger.warning(f"{log_prefix}⚠️ [CONTRADICCIÓN] \"{contradiction.new_fact}\" → Borrar IDs: {contradiction.ids_to_delete}")
                         ids_to_delete_all.update(contradiction.ids_to_delete)
         
             if response and response.merges:
                 for merge in response.merges:
                     if merge.ids_to_delete and merge.merged_fact:
-                        print(f"{log_prefix}🔀 [FUSIÓN] \"{merge.merged_fact}\" ← Absorbe IDs: {merge.ids_to_delete}")
+                        logger.info(f"{log_prefix}🔀 [FUSIÓN] \"{merge.merged_fact}\" ← Absorbe IDs: {merge.ids_to_delete}")
                         ids_to_delete_all.update(merge.ids_to_delete)
                         skipped_new_facts.add(merge.skip_new_fact)
                     
@@ -381,21 +381,21 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
                         })
                     
         except Exception as e:
-            print(f"{log_prefix}⚠️ [Error en validación batch de contradicciones/fusiones]: {e}")
+            logger.warning(f"{log_prefix}⚠️ [Error en validación batch de contradicciones/fusiones]: {e}")
 
     # FASE 3: Borrar contradictorios/redundantes y guardar hechos
     if ids_to_delete_all:
-        print(f"{log_prefix}🗑️ [BATCH] Borrando {len(ids_to_delete_all)} hechos (contradictorios + redundantes)...")
+        logger.info(f"{log_prefix}🗑️ [BATCH] Borrando {len(ids_to_delete_all)} hechos (contradictorios + redundantes)...")
         for f_id in ids_to_delete_all:
             delete_user_fact(f_id)
 
     saved_count = 0
     for pf in prepared_facts:
         if pf["fact_text"] in skipped_new_facts:
-            print(f"{log_prefix}⏭️ Hecho absorbido en fusión: '{pf['fact_text']}'")
+            logger.info(f"{log_prefix}⏭️ Hecho absorbido en fusión: '{pf['fact_text']}'")
             continue
         save_user_fact(user_id, pf["fact_text"], pf["emb"], metadata=pf["metadata"])
-        print(f"{log_prefix}📦 Nuevo hecho guardado: '{pf['fact_text']}' | Metadatos: {pf['metadata']}")
+        logger.info(f"{log_prefix}📦 Nuevo hecho guardado: '{pf['fact_text']}' | Metadatos: {pf['metadata']}")
         saved_count += 1
     
     merge_count = 0
@@ -403,11 +403,11 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
         merged_emb = get_embedding(mf["fact_text"])
         if merged_emb:
             save_user_fact(user_id, mf["fact_text"], merged_emb, metadata=mf["metadata"])
-            print(f"{log_prefix}🔀 Hecho fusionado guardado: '{mf['fact_text']}' | Metadatos: {mf['metadata']}")
+            logger.info(f"{log_prefix}🔀 Hecho fusionado guardado: '{mf['fact_text']}' | Metadatos: {mf['metadata']}")
             merge_count += 1
     
     total_deleted = len(ids_to_delete_all)
-    print(f"{log_prefix}✅ [BATCH COMPLETO] {saved_count} nuevos + {merge_count} fusionados, {total_deleted} eliminados.")
+    logger.info(f"{log_prefix}✅ [BATCH COMPLETO] {saved_count} nuevos + {merge_count} fusionados, {total_deleted} eliminados.")
 
 
 def async_extract_and_save_facts(user_id: str, message: str, recent_history: str = ""):
@@ -419,7 +419,7 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
     """
     try:
         if not should_extract_facts(message):
-            print("⏭️ [ROUTER] Mensaje ignorado. No contiene hechos relevantes para el perfil.")
+            logger.info("⏭️ [ROUTER] Mensaje ignorado. No contiene hechos relevantes para el perfil.")
             return
 
         import time
@@ -431,13 +431,13 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
             if acquire_fact_lock(user_id):
                 lock_acquired = True
                 break
-            print(f"⚠️ [FACT EXTRACTOR] Extracción en progreso para el usuario {user_id}. Esperando {retry_delay}s ({attempt+1}/{max_retries})...")
+            logger.warning(f"⚠️ [FACT EXTRACTOR] Extracción en progreso para el usuario {user_id}. Esperando {retry_delay}s ({attempt+1}/{max_retries})...")
             time.sleep(retry_delay)
             
         if not lock_acquired:
             # ====== COLA PERSISTENTE: Nunca perder datos clínicos ======
             enqueue_pending_fact(user_id, message, recent_history)
-            print(f"📋 [FACT EXTRACTOR] Mensaje encolado en Supabase para procesamiento posterior.")
+            logger.info(f"📋 [FACT EXTRACTOR] Mensaje encolado en Supabase para procesamiento posterior.")
             return
             
         fact_items = extract_facts(message, recent_history)
@@ -449,9 +449,9 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
 
     except Exception as e:
         import traceback
-        print(f"❌ [CRÍTICO] Fallo general en orquestación de hechos: {e}")
+        logger.error(f"❌ [CRÍTICO] Fallo general en orquestación de hechos: {e}")
         track = traceback.format_exc()
-        print(f"Trazabilidad extendida de error: {track}")
+        logger.info(f"Trazabilidad extendida de error: {track}")
     finally:
         # Liberar el lock de BD para que la respuesta de FastAPI/UI no se bloquee ni devuelva timeout
         release_fact_lock(user_id)
@@ -460,38 +460,38 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
         # El hilo asíncrono daemonizado (Fire-and-Forget local) fue removido debido a inestabilidad 
         # en entornos serverless/PaaS donde el proceso muere tras devolver la respuesta HTTP.
         # Ahora, un TRIGGER AFTER INSERT en Supabase llamará de forma robusta a nuestro endpoint especial.
-        print(f"✅ Extracción en línea terminada. Webhook externo procesará la cola si quedaron pendientes.")
+        logger.info(f"✅ Extracción en línea terminada. Webhook externo procesará la cola si quedaron pendientes.")
 
 
 def process_pending_queue_sync(user_id: str):
     """Worker síncrono para drenar la cola de pendientes. Llamado por el Webhook de Supabase de manera robusta."""
     
     if not acquire_fact_lock(user_id):
-        print(f"⚠️ [WEBHOOK QUEUE] Lock ocupado para {user_id}. Se procesará luego.")
+        logger.warning(f"⚠️ [WEBHOOK QUEUE] Lock ocupado para {user_id}. Se procesará luego.")
         return
         
     try:
         pending_items = dequeue_pending_facts(user_id)
         if not pending_items:
-            print("➡️ [WEBHOOK QUEUE] No hay hechos pendientes en cola.")
+            logger.info("➡️ [WEBHOOK QUEUE] No hay hechos pendientes en cola.")
             return
             
-        print(f"\n📋 [FACT EXTRACTOR WEBHOOK] Iniciando drenaje estructurado para {len(pending_items)} mensajes pendientes...")
+        logger.info(f"\n📋 [FACT EXTRACTOR WEBHOOK] Iniciando drenaje estructurado para {len(pending_items)} mensajes pendientes...")
         processed_ids = []
         for idx, pending in enumerate(pending_items, 1):
             try:
-                print(f"   📋 [{idx}/{len(pending_items)}] Procesando: '{pending['message'][:50]}...'")
+                logger.info(f"   📋 [{idx}/{len(pending_items)}] Procesando: '{pending['message'][:50]}...'")
                 _process_single_extraction(user_id, pending["message"], pending.get("recent_history", ""))
                 processed_ids.append(pending["id"])
             except Exception as pe:
-                print(f"   ⚠️ Error procesando pendiente #{idx}: {pe}")
+                logger.warning(f"   ⚠️ Error procesando pendiente #{idx}: {pe}")
                 processed_ids.append(pending["id"]) # Evitar loop infinito fallido
         
         if processed_ids:
             delete_pending_facts(processed_ids)
-        print(f"✅ [FACT EXTRACTOR] Cola pendiente finalizada en Hilo Secundario.")
+        logger.info(f"✅ [FACT EXTRACTOR] Cola pendiente finalizada en Hilo Secundario.")
     except Exception as qe:
-        print(f"⚠️ Error general en hilo secundario de cola: {qe}")
+        logger.warning(f"⚠️ Error general en hilo secundario de cola: {qe}")
     finally:
         release_fact_lock(user_id)
 

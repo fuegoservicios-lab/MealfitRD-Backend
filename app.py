@@ -15,6 +15,7 @@ import traceback
 import threading
 import time
 import sentry_sdk
+from knobs import _env_float as _knob_env_float
 
 # [P1-A · 2026-05-08] Marker temporal del proceso. Expuesto vía
 # `/health/version` para diagnosticar deployments rezagados (logs Postgres
@@ -30,12 +31,30 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P3-RUNBOOK-CONSOLIDATION · 2026-05-12"
+_LAST_KNOWN_PFIX = "P3-PROD-AUDIT-6 · 2026-05-12"
+
+# [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
+# con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
+# `profiles_sample_rate=1.0` → 100% de transacciones + profiling continuo,
+# costoso a escala y arriesga throttle de la cuota Sentry (dropping justo
+# los errores que necesitas). Validator clamp [0.0, 1.0]; valores fuera de
+# rango caen al default. Auto-registrado en `_KNOBS_REGISTRY` → visible en
+# `/health/version`. Tooltip-anchor: P1-SENTRY-SAMPLE-COST.
+_SENTRY_TRACES_SAMPLE_RATE = _knob_env_float(
+    "MEALFIT_SENTRY_TRACES_SAMPLE_RATE",
+    0.1,
+    validator=lambda v: 0.0 <= v <= 1.0,
+)
+_SENTRY_PROFILES_SAMPLE_RATE = _knob_env_float(
+    "MEALFIT_SENTRY_PROFILES_SAMPLE_RATE",
+    0.1,
+    validator=lambda v: 0.0 <= v <= 1.0,
+)
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
-    traces_sample_rate=1.0,
-    profiles_sample_rate=1.0,
+    traces_sample_rate=_SENTRY_TRACES_SAMPLE_RATE,
+    profiles_sample_rate=_SENTRY_PROFILES_SAMPLE_RATE,
 )
 
 # Configuración centralizada de logging para todo el backend
@@ -68,6 +87,7 @@ from agent import (
 from ai_helpers import generate_plan_title, expand_recipe_agent
 from graph_orchestrator import (
     run_plan_pipeline, warm_plan_graph, is_plan_graph_ready,
+    is_plan_graph_ready_with_reason,
     verify_pipeline_metrics_guest_insert,
 )
 from memory_manager import summarize_and_prune, build_memory_context
@@ -849,18 +869,32 @@ def readiness_check():
       - `/ready`  (readiness): el servicio puede servir requests útiles. Si
                                 falla, K8s deja el pod corriendo pero quita
                                 del load balancer hasta que se recupere.
+
+    [P3-READY-REASON · 2026-05-12] El 503 ahora incluye `reason` granular
+    con el tipo de excepción + mensaje (truncado a 240 chars) + count de
+    intentos. Pre-fix devolvía solo `not_compiled` sin pista; el operador
+    debía abrir logs separadamente. Formato del reason:
+      - `uninitialized`: nunca se intentó (raro — warm_plan_graph debió
+        correr en lifespan).
+      - `build_failed:<ExcType>:<msg>:<n>`: build crasheó N veces; el
+        operador ve inmediato si es TimeoutError (problema DB / red),
+        ImportError (deploy roto / dep faltante), KeyError (config), etc.
+    Tooltip-anchor: P3-READY-REASON.
     """
-    if is_plan_graph_ready():
+    ready, reason = is_plan_graph_ready_with_reason()
+    if ready:
         return {"status": "ready", "plan_graph": "compiled"}
     raise HTTPException(
         status_code=503,
         detail={
             "status": "not_ready",
             "plan_graph": "not_compiled",
+            "reason": reason,
             "message": (
                 "LangGraph plan_graph no está compilado. Las requests al "
                 "pipeline de generación caerán al fallback matemático. "
-                "Revisa los logs CRITICAL del worker para el traceback."
+                "Revisa los logs CRITICAL del worker para el traceback "
+                "(o el campo `reason` para el último error de build)."
             ),
         },
     )
@@ -895,6 +929,28 @@ def health_version():
         hora. Para detalle por job, ver `/admin/cron-health`.
 
     Para registry completo de knobs, ver `/admin/knobs` (P3-5).
+
+    [P2-HEALTHZ-DEEP · 2026-05-12] 5 keys adicionales para blackbox monitor
+    (UptimeRobot/cronitor) que no tiene CRON_SECRET — cierra el modo de
+    fallo "binary pre-watchdog corriendo + watchdog interno dormido"
+    detectado en audit production-readiness 2026-05-12:
+      - `expected_marker`: marker publicado en `app_kv_store.expected_last_known_pfix`.
+      - `drift`: bool `(expected_marker != _LAST_KNOWN_PFIX)`. None si KV unreachable.
+      - `last_pipeline_metrics_tick_at`: ISO timestamp del último tick de
+         `_hardfloor_autoheal_tick` (P0-LIVE-1). Heartbeat del binary.
+      - `has_p0_prod_1_gate`: bool — `_is_guest_metrics_enabled` importable
+         desde graph_orchestrator. Si False → binary PRE-P0-PROD-1 (errores
+         `is_guest` siguen lloviendo).
+      - `has_p1_perf_1_cache`: bool — `_SCHEDULER_JOBS_WITH_OPEN_ALERTS` en
+         globals de app.py. Si False → binary PRE-P1-PERF-1 (PATCH spam).
+
+    SOP UptimeRobot:
+      - URL: `https://<base>/health/version`
+      - Method: GET
+      - Assertion: `drift = false AND last_pipeline_metrics_tick_at <
+        NOW() - 30min` (cron `_hardfloor_autoheal_loop` tickea cada 5 min;
+        30 min ventana cubre 6 ticks perdidos antes de alertar).
+      - Frecuencia: 5 min (alineado con loop interval).
 
     No requiere auth: información de diagnóstico no sensible.
     """
@@ -953,6 +1009,75 @@ def health_version():
     except Exception:
         cron_missed_1h_total = -1
 
+    # [P2-HEALTHZ-DEEP · 2026-05-12] 5 keys adicionales para blackbox monitor
+    # externo (UptimeRobot/StatusCake/cronitor). Permite assertion remota
+    # SIN auth/CRON_SECRET — cierra el modo de fallo "binary pre-watchdog
+    # corriendo + watchdog interno dormido" (audit production-readiness
+    # 2026-05-12, sección P2-HEALTHZ-DEEP). Cada lectura es best-effort:
+    # cualquier excepción → la key respectiva queda en None/False sin
+    # fallar el endpoint completo (debe seguir respondiendo 200 para que
+    # los pollers externos distingan "binary alive" de "binary down").
+    expected_marker: Optional[str] = None
+    drift: Optional[bool] = None
+    try:
+        if supabase is not None:
+            kv_res = (
+                supabase.table("app_kv_store")
+                .select("value")
+                .eq("key", "expected_last_known_pfix")
+                .limit(1)
+                .execute()
+            )
+            rows = kv_res.data or []
+            if rows:
+                raw = rows[0].get("value")
+                # value es jsonb; psycopg deserializa a str/list/dict.
+                # Aceptamos str directo o str dentro de jsonb-string ("...").
+                expected_marker = raw if isinstance(raw, str) else None
+                if expected_marker is not None:
+                    drift = (expected_marker != _LAST_KNOWN_PFIX)
+    except Exception:
+        # Best-effort: dejar expected_marker=None / drift=None.
+        # El poller externo debería tratar drift=None como "unknown" (no
+        # disparar alert), igual que drift=true (alert).
+        pass
+
+    last_pipeline_metrics_tick_at: Optional[str] = None
+    try:
+        if supabase is not None:
+            tick_res = (
+                supabase.table("pipeline_metrics")
+                .select("created_at")
+                .eq("node", "_hardfloor_autoheal_tick")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            tick_rows = tick_res.data or []
+            if tick_rows:
+                last_pipeline_metrics_tick_at = tick_rows[0].get("created_at")
+    except Exception:
+        pass
+
+    # has_p0_prod_1_gate: el gate _is_guest_metrics_enabled
+    # (graph_orchestrator.py:10324, P1-Q10/P0-PROD-1) DEBE existir en el
+    # binary corriendo. Si False → binary es PRE-P0-PROD-1 → INSERT a
+    # pipeline_metrics seguirán crasheando con `is_guest` errors.
+    has_p0_prod_1_gate: bool = False
+    try:
+        from graph_orchestrator import _is_guest_metrics_enabled  # noqa: F401
+        has_p0_prod_1_gate = True
+    except Exception:
+        has_p0_prod_1_gate = False
+
+    # has_p1_perf_1_cache: el cache _SCHEDULER_JOBS_WITH_OPEN_ALERTS
+    # (app.py:189, P1-PERF-1) DEBE existir en el módulo cargado. Si
+    # False → binary PRE-P1-PERF-1 → spam PATCH /system_alerts cada
+    # job EXECUTED.
+    has_p1_perf_1_cache: bool = (
+        "_SCHEDULER_JOBS_WITH_OPEN_ALERTS" in globals()
+    )
+
     git_sha = os.environ.get("GIT_SHA") or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "unknown"
     return {
         "git_sha": git_sha,
@@ -965,6 +1090,12 @@ def health_version():
         "knobs_sample": knobs_sample,
         "knobs_diff": knobs_diff,
         "cron_missed_1h_total": cron_missed_1h_total,
+        # [P2-HEALTHZ-DEEP · 2026-05-12] 5 keys nuevas para blackbox monitor.
+        "expected_marker": expected_marker,
+        "drift": drift,
+        "last_pipeline_metrics_tick_at": last_pipeline_metrics_tick_at,
+        "has_p0_prod_1_gate": has_p0_prod_1_gate,
+        "has_p1_perf_1_cache": has_p1_perf_1_cache,
     }
 
 
@@ -1110,20 +1241,68 @@ from auth import get_verified_user_id, verify_api_quota
 from rate_limiter import RateLimiter
 from services import _save_plan_and_track_background, _process_swap_rejection_background
 
-# Setup CORS para el frontend React local
+# [P2-RATELIMIT-COVERAGE · 2026-05-12] Rate limiters defensivos para endpoints
+# que NO van por el paywall (`verify_api_quota`) y NO son admin-only:
+#
+#  - `_WEBHOOK_FACTS_LIMITER` (10/min/IP): el webhook
+#    `/api/webhooks/process-pending-facts` se invoca raras veces (legítimamente
+#    1-3/min por DB trigger). Bursts ≥10/min = signal de abuse — atacante
+#    intentando flood el HMAC check con UUIDs enumerados antes que el
+#    `compare_digest` rechace. Defensa-en-profundidad sobre P0-WEBHOOK-1.
+#
+#  - `_AUTH_MIGRATE_LIMITER` (5/5min/IP): el migrate guest→user es one-shot
+#    en el flujo del usuario (1 vez en su vida). 5 calls cada 5min cubre
+#    re-tries legítimos de error transitorio sin permitir brute-force con
+#    UUIDs enumerados (vector real: atacante enumera user_id reales y
+#    fuerza migrate calls esperando race-conditions con guest sessions).
+#
+# Defaults conservadores: bloquean abuse sin afectar UX legítima. Pueden
+# ser sobrescritos vía env vars MEALFIT_RATELIMIT_WEBHOOK_FACTS_*/MIGRATE_*
+# si producción muestra throttle en usuarios reales (improbable).
+# Anchor: P2-RATELIMIT-COVERAGE-WEBHOOKS.
+_WEBHOOK_FACTS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+_AUTH_MIGRATE_LIMITER = RateLimiter(max_calls=5, period_seconds=300)
+
+# [P2-CORS-NARROW · 2026-05-12] Setup CORS para el frontend React.
+#
+# Pre-fix: `allow_methods=["*"]` y `allow_headers=["*"]` con
+# `allow_credentials=True` y 6 origins constraint. Defense-in-depth gap:
+# si una futura ruta backend acepta verbos exóticos (CONNECT, TRACE, etc.)
+# o si un script third-party intenta usar headers personalizados para
+# exfiltrar via fetch + credentials, el wildcard `*` los habilita.
+#
+# Lista explícita derivada del grep cross-codebase 2026-05-12:
+#   - Métodos: solo los 5 verbos REST que el backend define + OPTIONS
+#     (preflight). No usamos HEAD/TRACE/CONNECT.
+#   - Headers: solo los que el frontend manda en `fetch(...)`:
+#     Authorization (JWT), Content-Type (application/json), Accept,
+#     X-Requested-With (algunos SDKs lo inyectan automático). NO custom
+#     `X-*` headers — si en el futuro se añade alguno, hay que extender
+#     esta lista explícitamente.
+#
+# Si CI falla por CORS preflight rechazado tras añadir un header nuevo,
+# es una señal explícita para revisar el threat model antes de añadirlo
+# al whitelist (no auto-whitelist via `*`).
+#
+# Tooltip-anchor: P2-CORS-NARROW.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173", 
+        "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "http://localhost:5174", 
+        "http://localhost:5174",
         "http://127.0.0.1:5174",
         "https://mealfitrd.com",
         "https://www.mealfitrd.com"
     ], # Añadida la URL de producción de Vercel
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "X-Requested-With",
+    ],
 )
 
 
@@ -1206,7 +1385,12 @@ def api_reset_user_preferences(verified_user_id: str = Depends(get_verified_user
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @app.post("/api/webhooks/process-pending-facts")
-def api_webhook_process_pending_facts(request: Request, data: dict = Body(...), authorization: Optional[str] = Header(None)):
+def api_webhook_process_pending_facts(
+    request: Request,
+    data: dict = Body(...),
+    authorization: Optional[str] = Header(None),
+    _rl: Optional[str] = Depends(_WEBHOOK_FACTS_LIMITER),
+):
     """
     Endpoint consumido por el Webhook de Supabase (Database Trigger AFTER INSERT en pending_facts_queue).
     Permite procesar asíncronamente y de manera segura la cola de extracción sin depender de demonios en memoria.
@@ -1285,7 +1469,11 @@ def api_webhook_process_pending_facts(request: Request, data: dict = Body(...), 
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @app.post("/api/auth/migrate")
-def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
+def api_migrate_guest(
+    data: dict = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+    _rl: Optional[str] = Depends(_AUTH_MIGRATE_LIMITER),
+):
     """
     Endpoint invocado post-registro para migrar la metadata acumulada por un 'guest' a su nuevo UUID.
     """
@@ -1381,4 +1569,12 @@ def api_migrate_guest(data: dict = Body(...), verified_user_id: str = Depends(ge
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=3001, reload=True)
+    # [P2-UVICORN-RELOAD-ENV · 2026-05-12] `reload` controlado por env var.
+    # Pre-fix tenía `reload=True` hardcoded. En EasyPanel actualmente se
+    # arranca via Nixpacks (no `python app.py`), pero un futuro script change
+    # podría re-introducir este entry point en producción con el flag activo
+    # — auto-reload en prod re-importa módulos cada cambio de archivo y
+    # rompe cualquier estado in-process (cache de knobs, _SCHEDULER_*, pools).
+    # Default `0` (off); setear `UVICORN_RELOAD=1` solo en dev local.
+    _reload_flag = os.environ.get("UVICORN_RELOAD", "0").strip().lower() in ("1", "true", "yes", "on")
+    uvicorn.run("app:app", host="0.0.0.0", port=3001, reload=_reload_flag)

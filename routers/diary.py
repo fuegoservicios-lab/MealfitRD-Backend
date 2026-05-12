@@ -85,9 +85,13 @@ async def api_diary_upload(
             
             # --- EVALUACIÓN DETERMINISTA DE CRONONUTRICIÓN (PYTHON) ---
             if calories > 500:
-                from datetime import datetime, timedelta
-                # Calcular la hora exacta del usuario usando el offset proporcionado por el frontend
-                local_time = datetime.utcnow() - timedelta(minutes=tz_offset_mins)
+                from datetime import datetime, timedelta, timezone
+                # [P3-DEPRECATED-UTCNOW · 2026-05-12] Migrado del sync naive
+                # API legacy a `datetime.now(timezone.utc)` (tz-aware) tras
+                # DeprecationWarning de Python 3.12+. Restamos `tz_offset_mins`
+                # para obtener la hora local del usuario; `.hour` funciona
+                # idéntico sobre el delta resultante.
+                local_time = datetime.now(timezone.utc) - timedelta(minutes=tz_offset_mins)
                 local_hour = local_time.hour
                 
                 # Obtener el perfil para ver el tipo de turno

@@ -12,6 +12,33 @@ logger = logging.getLogger(__name__)
 
 from prompts.proactive import PROACTIVE_PROMPT
 
+
+# [P3-PREVIEW-MODEL-KNOB · 2026-05-12] Knob para overridear el modelo
+# Gemini usado por las 2 callsites del proactive agent sin redeploy:
+#   - `classify_nudge_sentiment` (analiza respuestas del usuario al nudge).
+#   - `_compose_proactive_message` (genera el texto del nudge).
+#
+# Por qué un knob (no hardcode):
+#   El stack actual usa `gemini-3.1-flash-lite-preview` consistentemente
+#   (graph_orchestrator `_PRO_MODEL_NAME`, fact_extractor, agent, etc.).
+#   Cambiar el default acá rompería la consistencia del stack. Pero los
+#   modelos `*-preview` de Google pueden deprecarse/retirarse sin aviso
+#   prolongado — el audit 2026-05-11 documentó CB rows stale por el
+#   modelo `gemini-3.1-pro-preview` 4.4 días seguidos. Si Google retira
+#   el flash-lite-preview, el cron de nudges deja de clasificar
+#   sentiment + no envía mensajes hasta el próximo deploy. Knob permite
+#   swap inmediato sin redeploy: setear
+#   `MEALFIT_PROACTIVE_SENTIMENT_MODEL=gemini-3.1-flash` (stable, sin
+#   `-preview`) y reiniciar el worker — el cron retomará operación.
+#
+# Default = current production model. Cambiar en env vars cuando
+# Google publique notice de deprecation.
+def _proactive_model_name() -> str:
+    return os.environ.get(
+        "MEALFIT_PROACTIVE_SENTIMENT_MODEL",
+        "gemini-3.1-flash-lite-preview",
+    )
+
 def get_active_users_for_proactive() -> list:
     """Busca session_ids que pertenezcan a usuarios registrados con actividad reciente."""
     try:
@@ -118,7 +145,7 @@ Devuelve ÚNICAMENTE un JSON válido con las claves "sentiment", "meal_logged" y
 
     try:
         chat_llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview", 
+            model=_proactive_model_name(),
             temperature=0.1,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
@@ -392,7 +419,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 )
                 
             chat_llm = ChatGoogleGenerativeAI(
-                model="gemini-3.1-flash-lite-preview", 
+                model=_proactive_model_name(),
                 temperature=0.8,
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             )

@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException, Request
 from error_utils import safe_error_detail
+import hashlib
 import logging
+import os
 from db_core import execute_sql_query
 import json
 from typing import Optional
@@ -13,21 +15,69 @@ router = APIRouter(
     tags=["system"]
 )
 
+
+# ---------------------------------------------------------------------------
+# [P2-HEALTH-UID-STRIP · 2026-05-12] Helpers para hashear UUIDs antes de
+# devolverlos en endpoints health públicos.
+#
+# Modo de fallo pre-fix (audit production-readiness 2026-05-12):
+#   `/atomic-pool-health` retornaba `last_user_id` (UUID literal) y
+#   `/tz-fallback-health` retornaba `top_plans_24h: [{"plan_id": <UUID>,
+#   "count": N}, ...]`. Ambos endpoints son públicos (sin auth, sin gate)
+#   "útiles para Grafana/k8s probes" según docstring legacy — pero exponen
+#   UUIDs enumerables que un atacante o competidor puede recolectar
+#   polleando regularmente. UUIDs de usuario/plan no son secretos pero
+#   son auth-spray fodder + correlation across sessions.
+#
+# Mismo gap clase-cerrado por P1-SYSTEM-HEALTH-ADMIN-GATE en
+# `/api/system/health`, pero los 5 endpoints siblings quedaron sin gate.
+# La fix mínima preserva la utilidad operacional (correlation visual en
+# dashboards: "el mismo usuario/plan repite el fallback") sin enumeración:
+# SHA-256(uuid)[:12] da 48-bit space — suficiente para detectar patterns
+# repetidos, no reversible al UUID original.
+#
+# Tooltip-anchor: P2-HEALTH-UID-STRIP.
+# ---------------------------------------------------------------------------
+
+def _hash_uuid_for_public(value: Optional[str]) -> Optional[str]:
+    """Devuelve SHA-256(value)[:12] o None si el input es falsy.
+
+    Determinístico: el mismo UUID siempre hashea al mismo digest, así que
+    dashboards pueden contar "user X hit fallback Y veces" sin conocer X.
+    """
+    if not value:
+        return None
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12]
+
 # P1-A4: reuso del helper Bearer-token de routers/plans.py para mantener una
 # sola implementación de auth admin (CRON_SECRET). Importar desde el sibling
 # router no genera ciclo: plans.py no importa system.py.
 from routers.plans import _verify_admin_token  # noqa: E402
 
 @router.get("/health")
-def get_system_health():
+def get_system_health(request: Request):
     """
-    Meta-Dashboard (Gap 5): Retorna el "Health Status" de la Inteligencia Autónoma.
-    Calcula al vuelo las métricas de:
-    - Quality Score global
-    - Efectividad de Nudges
-    - Distribución de abandono causal (Gap 2)
-    - Distribución emocional (Gap 4)
+    [P1-SYSTEM-HEALTH-ADMIN-GATE · 2026-05-12] Meta-Dashboard de la
+    Inteligencia Autónoma — agregados sobre toda la flota:
+      - Nudge response rate global.
+      - Distribución de razones de abandono (negocio).
+      - Distribución emocional de respuestas (sentiment).
+      - Quality score promedio.
+
+    Pre-fix este endpoint era público. No expone PII, pero SÍ expone
+    business-intel agregada (engagement, churn signals, sentiment, calidad
+    percibida) — un competidor midiendo `/api/system/health` cada minuto
+    obtiene un dashboard gratuito de la salud comercial del producto.
+
+    Defensa: gate Bearer `CRON_SECRET` igual que el resto de endpoints
+    operacionales (`/admin/chunks/stuck`, `/admin/deploy-lag/check`, etc.).
+    Si necesitas un probe público de liveness, usar `/health` (raíz) o
+    `/ready` en `app.py` — esos retornan solo `{status: ok}` sin agregados.
+
+    Tooltip-anchor: P1-SYSTEM-HEALTH-ADMIN-GATE.
+    Test parser-based: `tests/test_p1_system_health_admin_gate.py`.
     """
+    _verify_admin_token(request.headers.get("authorization"))
     metrics = {
         "nudge_effectiveness": {},
         "abandonment_reasons": {},
@@ -35,11 +85,40 @@ def get_system_health():
         "average_quality_score": 0.0,
         "users_evaluated": 0
     }
-    
+
+    # [P3-FULL-TABLE-SCAN-HEALTH · 2026-05-12] Pre-fix las 4 queries
+    # debajo escaneaban tablas completas sin LIMIT — admisible mientras
+    # la app era pequeña, pero a escala (100k+ user_profiles, millones
+    # de nudge_outcomes) cada hit al endpoint consumía DB CPU significativa.
+    # Aunque ahora es admin-only (P1-SYSTEM-HEALTH-ADMIN-GATE), un
+    # dashboard polleando cada 30s puede saturar el pool. Knobs:
+    #   MEALFIT_SYSTEM_HEALTH_NUDGE_DAYS (default 30): ventana lookback
+    #     para nudge_outcomes (no afecta el sentido del agregado — solo
+    #     limita ruido histórico estancado).
+    #   MEALFIT_SYSTEM_HEALTH_PROFILE_LIMIT (default 10000): tope de
+    #     perfiles muestreados para `average_quality_score`. Order BY
+    #     `updated_at DESC` para que el muestreo refleje actividad
+    #     reciente (perfiles dormidos no distorsionan la métrica).
     try:
-        # 1. Nudge Response Rate Global
+        nudge_lookback_days = int(os.environ.get("MEALFIT_SYSTEM_HEALTH_NUDGE_DAYS", "30") or 30)
+        if nudge_lookback_days < 1:
+            nudge_lookback_days = 30
+        if nudge_lookback_days > 365:
+            nudge_lookback_days = 365
+        profile_sample_limit = int(os.environ.get("MEALFIT_SYSTEM_HEALTH_PROFILE_LIMIT", "10000") or 10000)
+        if profile_sample_limit < 100:
+            profile_sample_limit = 100
+        if profile_sample_limit > 100000:
+            profile_sample_limit = 100000
+
+        # 1. Nudge Response Rate Global (ventana rolling, no all-time)
         nudge_stats = execute_sql_query(
-            "SELECT COUNT(*) as total, SUM(CASE WHEN responded THEN 1 ELSE 0 END) as responded_count FROM nudge_outcomes",
+            f"""
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN responded THEN 1 ELSE 0 END) as responded_count
+            FROM nudge_outcomes
+            WHERE sent_at > NOW() - INTERVAL '{nudge_lookback_days} days'
+            """,
             fetch_one=True
         )
         if nudge_stats and nudge_stats.get("total", 0) > 0:
@@ -48,28 +127,46 @@ def get_system_health():
             metrics["nudge_effectiveness"] = {
                 "total_sent": total,
                 "total_responded": responded,
-                "response_rate_percent": round((responded / total) * 100, 2)
+                "response_rate_percent": round((responded / total) * 100, 2),
+                "window_days": nudge_lookback_days,
             }
-            
-        # 2. Abandonment Reasons (Gap 2)
+
+        # 2. Abandonment Reasons (Gap 2) — mismo lookback rolling.
         reasons = execute_sql_query(
-            "SELECT reason, COUNT(*) as count FROM abandoned_meal_reasons GROUP BY reason ORDER BY count DESC",
+            f"""
+            SELECT reason, COUNT(*) as count
+            FROM abandoned_meal_reasons
+            WHERE created_at > NOW() - INTERVAL '{nudge_lookback_days} days'
+            GROUP BY reason ORDER BY count DESC LIMIT 50
+            """,
             fetch_all=True
         )
         if reasons:
             metrics["abandonment_reasons"] = {row['reason']: row['count'] for row in reasons}
-            
+
         # 3. Emotional State Distribution (Gap 4)
         emotions = execute_sql_query(
-            "SELECT response_sentiment, COUNT(*) as count FROM nudge_outcomes WHERE response_sentiment IS NOT NULL GROUP BY response_sentiment ORDER BY count DESC",
+            f"""
+            SELECT response_sentiment, COUNT(*) as count
+            FROM nudge_outcomes
+            WHERE response_sentiment IS NOT NULL
+              AND sent_at > NOW() - INTERVAL '{nudge_lookback_days} days'
+            GROUP BY response_sentiment ORDER BY count DESC LIMIT 20
+            """,
             fetch_all=True
         )
         if emotions:
             metrics["emotional_distribution"] = {row['response_sentiment']: row['count'] for row in emotions}
-            
-        # 4. Average Quality Score de todos los perfiles
+
+        # 4. Average Quality Score (muestreo por perfiles más recientes).
         profiles = execute_sql_query(
-            "SELECT health_profile->>'quality_history' as qh FROM user_profiles WHERE health_profile->>'quality_history' IS NOT NULL",
+            f"""
+            SELECT health_profile->>'quality_history' as qh
+            FROM user_profiles
+            WHERE health_profile->>'quality_history' IS NOT NULL
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT {profile_sample_limit}
+            """,
             fetch_all=True
         )
         if profiles:
@@ -107,20 +204,30 @@ def get_atomic_pool_health():
     """[P1-4] Salud del `connection_pool` que sustenta
     `update_user_health_profile_atomic`.
 
-    Retorna `{ pool_available, fallback_count, first_at, last_at, last_user_id,
-    strict_mode }`. En producción, alertear cuando:
+    Retorna `{ pool_available, fallback_count, first_at, last_at,
+    last_user_hash, strict_mode }`. En producción, alertear cuando:
       - `pool_available=false`: el pool cayó (red, credenciales, pooler agotado).
       - `fallback_count > 0` con `strict_mode=false`: la atomicidad está rota
         para el subset de calls que ya degradaron — lost-update silencioso en
         curso. Recomendación: bumpear `MEALFIT_REQUIRE_ATOMIC_POOL=1` en el
         próximo deploy para forzar fail-fast.
 
-    Sin auth (read-only, no expone datos sensibles más allá del último
-    user_id afectado, útil para load balancers / k8s probes / Grafana).
+    Sin auth (read-only, útil para load balancers / k8s probes / Grafana).
+
+    [P2-HEALTH-UID-STRIP · 2026-05-12] `last_user_hash` reemplaza el campo
+    legacy `last_user_id`: SHA-256(uuid)[:12]. Pre-fix exponía el UUID
+    literal del último user que disparó fallback — enumerable polleando
+    desde cualquier IP. El hash preserva la utilidad de correlation visual
+    (mismo digest = mismo usuario repetido) sin permitir enumeración.
     """
     try:
         from db_profiles import get_atomic_pool_fallback_snapshot
         snapshot = get_atomic_pool_fallback_snapshot()
+        # [P2-HEALTH-UID-STRIP] Reemplazar el UUID con su hash truncado
+        # ANTES del spread `**snapshot`. La fuente in-memory mantiene el
+        # UUID raw para logs locales / debugging server-side.
+        raw_uid = snapshot.pop("last_user_id", None)
+        snapshot["last_user_hash"] = _hash_uuid_for_public(raw_uid)
         # Status semantics:
         #   - "ok": pool arriba, sin fallbacks acumulados.
         #   - "degraded": pool arriba pero hubo ≥1 fallback histórico (transient).
@@ -348,11 +455,20 @@ def get_tz_fallback_health():
             oldest_ts = ts
 
     top_plans = sorted(by_plan.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    # [P2-HEALTH-UID-STRIP · 2026-05-12] El endpoint es público (sin auth).
+    # `top_plans_24h` originalmente devolvía `plan_id` UUIDs literales —
+    # enumerable polleando. Reemplazamos por `plan_hash` (SHA-256[:12])
+    # que preserva correlation visual sin enumeración. SRE que necesite
+    # el UUID original puede consultar el buffer in-memory desde un shell
+    # del backend (no expuesto vía API pública).
     return {
         "success": True,
         "total_24h": len(in_window),
         "by_reason": by_reason,
-        "top_plans_24h": [{"plan_id": pid, "count": c} for pid, c in top_plans],
+        "top_plans_24h": [
+            {"plan_hash": _hash_uuid_for_public(pid), "count": c}
+            for pid, c in top_plans
+        ],
         "unique_plans_24h": len(plans),
         "unique_users_24h": len(users),
         "oldest_event_age_seconds": int(now - oldest_ts) if oldest_ts else None,

@@ -363,7 +363,7 @@ def get_nutrition_targets(form_data: dict) -> dict:
                     target_calories = target_calories + (tdee * dynamic_deficit_bonus)
                     target_calories = int(round(target_calories / 50) * 50)
         except Exception as e:
-            print(f"Error en metabolismo evolutivo: {e}")
+            logger.info(f"Error en metabolismo evolutivo: {e}")
     # -------------------------------------------------------------------
 
     calculation_details_str = (
@@ -401,10 +401,10 @@ def get_nutrition_targets(form_data: dict) -> dict:
         "kinematics": velocity_data if 'velocity_data' in locals() else None
     }
     
-    print(f"\n🔢 [CALCULADORA NUTRICIONAL] Resultados exactos:")
-    print(f"   📊 BMR: {bmr} kcal (Peso: {weight_display}, Altura: {height}cm, Edad: {age}, Género: {gender})")
-    print(f"   🏃 TDEE: {tdee} kcal (Actividad: {activity_level})")
-    print(f"   🎯 Calorías Objetivo: {target_calories} kcal ({goal_labels.get(goal, goal)})")
-    print(f"   🥩 Proteína: {macros['protein_g']}g | 🍚 Carbos: {macros['carbs_g']}g | 🥑 Grasas: {macros['fats_g']}g")
+    logger.info(f"\n🔢 [CALCULADORA NUTRICIONAL] Resultados exactos:")
+    logger.info(f"   📊 BMR: {bmr} kcal (Peso: {weight_display}, Altura: {height}cm, Edad: {age}, Género: {gender})")
+    logger.info(f"   🏃 TDEE: {tdee} kcal (Actividad: {activity_level})")
+    logger.info(f"   🎯 Calorías Objetivo: {target_calories} kcal ({goal_labels.get(goal, goal)})")
+    logger.info(f"   🥩 Proteína: {macros['protein_g']}g | 🍚 Carbos: {macros['carbs_g']}g | 🥑 Grasas: {macros['fats_g']}g")
     
     return result

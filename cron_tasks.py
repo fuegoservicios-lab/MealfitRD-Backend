@@ -1837,8 +1837,17 @@ def _alert_scheduler_cascade_missed():
 
     # Cada job_id distinto cuenta como un MISSED de cascada. Extraemos del
     # `metadata.job_id` (preferido) o del propio `alert_key` (fallback).
+    #
+    # [P3-CASCADE-METADATA · 2026-05-12] También trackea `last_missed_at_per_job`
+    # (el `triggered_at` MÁS RECIENTE por job_id). Como la query viene
+    # `ORDER BY triggered_at DESC`, el PRIMER occurrence de cada job_id en
+    # el loop es su missed más reciente — solo registramos si el job_id no
+    # estaba ya en el dict. Sirve para que SRE pueda priorizar root cause
+    # sin abrir logs separados ("¿qué job está peor RIGHT NOW vs hace 50min?").
+    # Anchor: P3-CASCADE-METADATA-TIMESTAMPS.
     distinct_jobs = set()
     job_id_counts: dict[str, int] = {}
+    last_missed_at_per_job: dict[str, str] = {}
     for row in rows:
         meta = row.get("metadata") if isinstance(row, dict) else None
         job_id = None
@@ -1852,6 +1861,18 @@ def _alert_scheduler_cascade_missed():
             continue
         distinct_jobs.add(job_id)
         job_id_counts[job_id] = job_id_counts.get(job_id, 0) + 1
+        # [P3-CASCADE-METADATA] Solo registrar el MÁS RECIENTE por job_id.
+        # Como rows viene ORDER BY triggered_at DESC, el primer match wins.
+        if job_id not in last_missed_at_per_job:
+            triggered_at = row.get("triggered_at") if isinstance(row, dict) else None
+            if triggered_at is not None:
+                # `triggered_at` puede venir como datetime o string según el
+                # driver. Normalizamos a ISO 8601 para que el JSON sea
+                # determinista y comparable side-by-side por SRE.
+                if hasattr(triggered_at, "isoformat"):
+                    last_missed_at_per_job[job_id] = triggered_at.isoformat()
+                else:
+                    last_missed_at_per_job[job_id] = str(triggered_at)
 
     cascade_detected = len(distinct_jobs) >= threshold
 
@@ -1925,6 +1946,16 @@ def _alert_scheduler_cascade_missed():
                     "distinct_jobs_missed": len(distinct_jobs),
                     "top_jobs_by_count": dict(top_jobs),
                     "total_missed_events_in_window": sum(job_id_counts.values()),
+                    # [P3-CASCADE-METADATA · 2026-05-12] Timestamps per-job
+                    # del MISSED más reciente. Permite a SRE priorizar root
+                    # cause: si `flush_pending_deferrals` last_seen=NOW()-2min
+                    # y `nudge_users` last_seen=NOW()-58min, el primero está
+                    # fallando ACTIVAMENTE; el segundo es residuo de la
+                    # ventana lookback. Sin esta key, el dashboard solo
+                    # mostraba `top_jobs_by_count` (counts agregados sin
+                    # eje temporal) — SRE tenía que correlacionar contra
+                    # logs separados.
+                    "last_missed_at_per_job": last_missed_at_per_job,
                 }, ensure_ascii=False),
                 json.dumps([]),
             ),
@@ -1978,6 +2009,11 @@ def _alert_scheduler_cascade_missed():
                     "top_jobs_by_count": dict(top_jobs),
                     "lookback_hours": lookback_h,
                     "threshold": threshold,
+                    # [P3-CASCADE-METADATA · 2026-05-12] Mismo dict que el
+                    # alert UPSERT — permite que post-mortem en
+                    # pipeline_metrics correlacione "qué jobs estaban
+                    # disparando RIGHT NOW vs cuáles eran residuo del lookback".
+                    "last_missed_at_per_job": last_missed_at_per_job,
                 }, ensure_ascii=False),
             ),
         )
@@ -2469,6 +2505,104 @@ def _resolve_stale_scheduler_alerts() -> None:
                 f"[P1-SCHEDULER-1/ORPHAN-SWEEP] sweep orphan falló (best-effort): {e}"
             )
 
+    # [P1-CASCADE-FAST · 2026-05-12] Séptimo sweep: cierre rápido del parent
+    # `scheduler_cascade_missed` cuando la cascada estabilizó en ventana corta.
+    #
+    # Por qué existe (audit live 2026-05-12 06:13 UTC):
+    #   El sweep #3 (P2-LIVE-1) cierra el parent SOLO cuando han pasado
+    #   `MEALFIT_SCHEDULER_CASCADE_STABILIZATION_MIN` (default 60min) DESDE
+    #   EL ÚLTIMO MISSED triggered. En el caso real observado:
+    #     - 05:41:33 UTC — 3 children scheduler_missed_* triggered (post-deploy
+    #       burst, lag transitorio).
+    #     - 05:43:48 UTC — los 3 children resueltos via listener P1-NEW-2
+    #       (jobs ejecutaron exitosamente apenas 2min después).
+    #     - 05:53:07 UTC — detector cron tick crea parent
+    #       `scheduler_cascade_missed` (vio los 3 children dentro del lookback).
+    #     - 06:13:29 UTC — parent cerrado MANUALMENTE (~20min total).
+    #   El sweep #3 hubiera esperado hasta 06:41:33 UTC (60min desde
+    #   triggered) para cerrar — 50min de alert critical visible pese a
+    #   que la cascada estaba CLARAMENTE estabilizada a las 05:43:48.
+    #
+    # Diseño:
+    #   Cierra parent INMEDIATAMENTE si las 3 condiciones se cumplen:
+    #     (1) `scheduler_cascade_missed` abierto.
+    #     (2) 0 children abiertos (`scheduler_missed_%`/`scheduler_error_%`
+    #         con `resolved_at IS NULL`).
+    #     (3) 0 children TRIGGERED en últimos
+    #         `MEALFIT_SCHEDULER_CASCADE_FAST_RESOLVE_MIN` (default 10min,
+    #         clamp [5, 30]). Más conservador que stabilization (60min)
+    #         pero suficiente para confirmar "no hay nueva cascada activa".
+    #     (4) Parent triggered hace ≥
+    #         `MEALFIT_SCHEDULER_CASCADE_FAST_RESOLVE_MIN_AGE_MIN`
+    #         (default 5min, clamp [1, 30]). Grace mínimo: previene race
+    #         con el detector que justo emitió el parent.
+    #
+    # Diferencia con sweep #3 (estabilización 60min):
+    #   #3 es para cascadas LARGAS donde la última señal de churn fue
+    #   hace mucho — confianza alta de estabilización.
+    #   #7 es para cascadas CORTAS (post-deploy burst, hiccup transitorio)
+    #   donde los children se auto-resolvieron rápido y el parent es
+    #   residuo del detector lag.
+    #
+    # Idempotente: si parent ya cerrado o las 4 condiciones no se cumplen,
+    # 0 rows. Best-effort: cualquier excepción se loguea sin abortar
+    # los demás sweeps.
+    fast_resolve_swept = 0
+    fast_resolve_failed = False
+    fast_resolve_min = _env_int(
+        "MEALFIT_SCHEDULER_CASCADE_FAST_RESOLVE_MIN", 10
+    )
+    fast_resolve_min = max(5, min(fast_resolve_min, 30))
+    fast_resolve_min_age = _env_int(
+        "MEALFIT_SCHEDULER_CASCADE_FAST_RESOLVE_MIN_AGE_MIN", 5
+    )
+    fast_resolve_min_age = max(1, min(fast_resolve_min_age, 30))
+    try:
+        resolved_fast = execute_sql_write(
+            """
+            UPDATE system_alerts AS p
+               SET resolved_at = NOW()
+             WHERE p.alert_key = 'scheduler_cascade_missed'
+               AND p.resolved_at IS NULL
+               AND p.triggered_at < NOW() - make_interval(mins => %s)
+               AND NOT EXISTS (
+                   SELECT 1 FROM system_alerts c
+                    WHERE c.resolved_at IS NULL
+                      AND (
+                            c.alert_key LIKE 'scheduler_missed_%%'
+                         OR c.alert_key LIKE 'scheduler_error_%%'
+                      )
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM system_alerts r
+                    WHERE (
+                            r.alert_key LIKE 'scheduler_missed_%%'
+                         OR r.alert_key LIKE 'scheduler_error_%%'
+                      )
+                      AND r.alert_key <> 'scheduler_cascade_missed'
+                      AND r.triggered_at > NOW() - make_interval(mins => %s)
+               )
+             RETURNING p.alert_key, p.triggered_at
+            """,
+            (int(fast_resolve_min_age), int(fast_resolve_min)),
+            returning=True,
+        ) or []
+        fast_resolve_swept = (
+            len(resolved_fast) if isinstance(resolved_fast, list) else 0
+        )
+        if fast_resolve_swept:
+            logger.info(
+                f"⚡ [P1-CASCADE-FAST/SWEEP] Cerré parent "
+                f"`scheduler_cascade_missed` por fast-resolve: 0 children "
+                f"abiertos AND 0 nuevos missed en últimos "
+                f"{fast_resolve_min}min, parent edad ≥{fast_resolve_min_age}min."
+            )
+    except Exception as e:
+        fast_resolve_failed = True
+        logger.warning(
+            f"[P1-CASCADE-FAST/SWEEP] sweep fast-resolve falló (best-effort): {e}"
+        )
+
     # [P2-B-OBS · 2026-05-11] Tick observable SIEMPRE — sweep corrió y este
     # fue el resultado (count=0/N o failed). Antes de P2-B, el sweep solo
     # loggeaba a INFO cuando barría >=1 alert. Sin métrica persistente:
@@ -2497,18 +2631,21 @@ def _resolve_stale_scheduler_alerts() -> None:
             (
                 "_scheduler_alerts_sweep_tick",
                 json.dumps({
-                    "swept_count": swept_count + oneoff_swept + cascade_swept + hard_cap_swept + missed_hard_cap_swept + orphan_swept,
+                    "swept_count": swept_count + oneoff_swept + cascade_swept + hard_cap_swept + missed_hard_cap_swept + orphan_swept + fast_resolve_swept,
                     "swept_standard": swept_count,
                     "swept_oneoff": oneoff_swept,
                     "swept_cascade_parent": cascade_swept,
                     "swept_cascade_hard_cap": hard_cap_swept,
                     "swept_missed_hard_cap": missed_hard_cap_swept,
                     "swept_orphan_jobs": orphan_swept,
+                    "swept_cascade_fast_resolve": fast_resolve_swept,
                     "cascade_hard_cap_children_open": hard_cap_children_open,
                     "ttl_hours": ttl_h,
                     "ttl_oneoff_hours": ttl_oneoff_h,
                     "cascade_stabilization_min": stabilization_min,
                     "cascade_hard_cap_h": hard_cap_h,
+                    "cascade_fast_resolve_min": fast_resolve_min,
+                    "cascade_fast_resolve_min_age_min": fast_resolve_min_age,
                     "missed_hard_cap_h": missed_hard_cap_h,
                     "sweep_failed": sweep_failed,
                     "oneoff_sweep_failed": oneoff_failed,
@@ -2517,6 +2654,7 @@ def _resolve_stale_scheduler_alerts() -> None:
                     "missed_hard_cap_sweep_failed": missed_hard_cap_failed,
                     "orphan_sweep_failed": orphan_failed,
                     "orphan_sweep_enabled": orphan_enabled,
+                    "fast_resolve_sweep_failed": fast_resolve_failed,
                 }, ensure_ascii=False),
             ),
         )

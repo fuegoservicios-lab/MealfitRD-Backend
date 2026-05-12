@@ -51,6 +51,10 @@ _EMITTER_FILES = (
     _BACKEND / "memory_manager.py",
     _BACKEND / "app.py",
     _BACKEND / "graph_orchestrator.py",
+    # [P1-BILLING-FAIL-LOUD · 2026-05-12] Añadido tras introducir
+    # `_persist_billing_alert` en billing.py que emite
+    # `billing_old_sub_cancel_failed:<>:<>` y `billing_cancel_failed:<>:<>`.
+    _BACKEND / "routers" / "billing.py",
 )
 
 # Whitelist de patterns emitidos pero sin row (excepción documentada).

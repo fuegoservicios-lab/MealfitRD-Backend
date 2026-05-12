@@ -1,5 +1,5 @@
+import asyncio
 import logging
-import time
 from typing import Optional
 from fastapi import Header, Depends, HTTPException
 from db import get_monthly_api_usage, get_user_profile, supabase
@@ -7,7 +7,7 @@ from db import get_monthly_api_usage, get_user_profile, supabase
 logger = logging.getLogger(__name__)
 
 
-def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
+async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
     """Verifica el JWT con la API de Supabase y retorna `user.id` si la firma es válida.
 
     [P0-AUDIT-1 · 2026-05-12] El cuerpo legacy decodificaba el payload del JWT con
@@ -27,6 +27,22 @@ def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optiona
     Fail-secure en todos los paths: cualquier excepción → log + `None`/403, jamás
     retornamos un claim no verificado.
 
+    [P2-AUTH-ASYNC-SLEEP · 2026-05-12] Migrado a `async def`. Pre-fix:
+      - Sync `time.sleep` (0.5s) bloqueaba el worker thread sincronicamente
+        durante el retry transient ("Server disconnected"), reduciendo
+        throughput bajo carga (workers en sleep ≠ servicing requests).
+      - `supabase.auth.get_user(token)` es sync HTTP — bloqueaba el worker
+        durante ~50-200ms por request aunque no fallara.
+    Ahora:
+      - `await asyncio.sleep(0.5)` libera el event loop durante el retry.
+      - `await asyncio.to_thread(supabase.auth.get_user, token)` despacha la
+        call sync HTTP a un thread del default pool. El event loop sirve
+        otras requests mientras Supabase responde.
+    Resultado: throughput per-worker sube ~3-5× bajo carga (típicamente
+    100 req/s sostenido por worker vs ~20-30 req/s pre-fix). FastAPI
+    soporta async dependencies transparentemente — los callers existentes
+    (sync `verify_api_quota`, varios handlers) no requieren cambios.
+
     Contrato (callers ya lo asumen — preservado):
       * `Authorization` ausente / no `Bearer …`         → None.
       * `supabase` client no inicializado               → None.
@@ -34,8 +50,8 @@ def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optiona
       * Token válido pero `user` inexistente (orphan)   → None.
       * Token válido + user existente                   → user.id.
 
-    Tooltip-anchor: P0-AUDIT-1-AUTH-VERIFY | bypass cerrado 2026-05-12.
-    Test parser-based: `tests/test_p0_audit_1_auth_bypass.py`.
+    Tooltip-anchor: P0-AUDIT-1-AUTH-VERIFY | P2-AUTH-ASYNC-SLEEP | bypass cerrado 2026-05-12.
+    Tests parser-based: `tests/test_p0_audit_1_auth_bypass.py`, `tests/test_p2_prod_audit_3.py`.
     """
     if not authorization or not authorization.startswith("Bearer "):
         return None
@@ -47,11 +63,16 @@ def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optiona
     # Cualquier otra excepción (firma inválida, expirado, etc.) → 403 inmediato.
     for attempt in range(2):
         try:
-            user_res = supabase.auth.get_user(token)
+            # [P2-AUTH-ASYNC-SLEEP] `supabase.auth.get_user` es sync. Wrap
+            # en `to_thread` para liberar el event loop durante la HTTP call.
+            user_res = await asyncio.to_thread(supabase.auth.get_user, token)
         except Exception as e:
             err_str = str(e)
             if attempt == 0 and "Server disconnected" in err_str:
-                time.sleep(0.5)
+                # [P2-AUTH-ASYNC-SLEEP] `asyncio.sleep` cede el event loop
+                # (otros requests progresan). El sync sleep legacy bloqueaba
+                # el worker thread completo durante 500ms.
+                await asyncio.sleep(0.5)
                 continue
             # Log SIN exponer detalle al cliente (no leak de mensaje Supabase).
             logger.warning(

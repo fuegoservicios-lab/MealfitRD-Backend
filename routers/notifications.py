@@ -6,10 +6,33 @@ from typing import Dict, Any, Optional
 
 from auth import get_verified_user_id
 from db_core import connection_pool
+from rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
+
+
+# [P3-NOTIFICATIONS-RATE-LIMIT · 2026-05-12] Rate-limiters para `/subscribe`
+# y `/unsubscribe`. Pre-fix ambos endpoints estaban gated solo por
+# `Depends(get_verified_user_id)` — atacante autenticado podía llenar
+# `push_subscriptions` con subscription objects falsos (endpoints URLs
+# inválidos, keys arbitrarias). A 1000 POST/seg sostenido por 1 hora:
+# 3.6M filas de spam en la tabla.
+#
+# Limits balanceados para UX legítima:
+#   - subscribe: 10/min/user — un usuario re-registrando push tras
+#     reinstalar la app o cambiar de device tap rara vez excede 2-3.
+#   - unsubscribe: 20/min/user — más permisivo porque algunos clientes
+#     desuscriben en bulk al cerrar sesión (multi-device).
+#
+# El limiter inyecta el `verified_user_id` resuelto, así que callers
+# downstream NO requieren `Depends(get_verified_user_id)` adicional —
+# el RateLimiter ya lo hace internamente.
+# Anchor: P3-NOTIFICATIONS-RATE-LIMIT.
+_PUSH_SUBSCRIBE_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+_PUSH_UNSUBSCRIBE_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+
 
 class PushSubscriptionItem(BaseModel):
     endpoint: str
@@ -17,7 +40,7 @@ class PushSubscriptionItem(BaseModel):
     keys: Dict[str, str]
 
 @router.post("/subscribe")
-async def subscribe_push(sub: PushSubscriptionItem, user_id: str = Depends(get_verified_user_id)):
+async def subscribe_push(sub: PushSubscriptionItem, user_id: str = Depends(_PUSH_SUBSCRIBE_LIMITER)):
     """
     Guarda o actualiza la suscripción de un dispositivo para enviar notificaciones Push.
     """
@@ -63,7 +86,7 @@ async def subscribe_push(sub: PushSubscriptionItem, user_id: str = Depends(get_v
         raise HTTPException(status_code=500, detail="Error en servidor guardando suscripción")
 
 @router.delete("/unsubscribe")
-async def unsubscribe_push(request: Request, user_id: str = Depends(get_verified_user_id)):
+async def unsubscribe_push(request: Request, user_id: str = Depends(_PUSH_UNSUBSCRIBE_LIMITER)):
     """
     Elimina una suscripción de dispositivo. Recibe el endpoint de la suscripción para borrar la fila exacta.
     """

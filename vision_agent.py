@@ -7,6 +7,9 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from db import save_visual_entry
+import logging
+
+logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
 
 # Definimos el modelo de salida estructurada para capturar la descripción
 class ImageDescription(BaseModel):
@@ -59,7 +62,7 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
         }
 
     except Exception as e:
-        print(f"⚠️ Error procesando imagen con Gemini Vision: {e}")
+        logger.warning(f"⚠️ Error procesando imagen con Gemini Vision: {e}")
         return {"description": "Error analizando imagen.", "is_food": False, "calories": 0}
 
 # [2026-05-06] Modelo de embeddings MULTIMODAL para visual diary y chat agent.
@@ -95,10 +98,10 @@ def _cached_multimodal_embedding(text: str):
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
         emb = embeddings.embed_query(text)
-        print(f"🔑 [VISUAL EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
+        logger.info(f"🔑 [VISUAL EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
         return list(emb[:768])
     except Exception as e:
-        print(f"⚠️ Error al generar embedding multimodal: {e}")
+        logger.warning(f"⚠️ Error al generar embedding multimodal: {e}")
         return None
 
 async def async_process_and_save_visual_entry(user_id: str, file_bytes: bytes, image_url: str, user_message: str = ""):
@@ -111,42 +114,42 @@ async def async_process_and_save_visual_entry(user_id: str, file_bytes: bytes, i
     """
     from fact_extractor import async_extract_and_save_facts
 
-    print("\n-------------------------------------------------------------")
-    print("📸 [VISION AGENT] Procesando nueva imagen subida...")
+    logger.info("\n-------------------------------------------------------------")
+    logger.info("📸 [VISION AGENT] Procesando nueva imagen subida...")
     
     # Paso 1: Visión
     vision_result = await process_image_with_vision(file_bytes)
     
     if not vision_result.get("is_food"):
-        print("➡️ La imagen fue ignorada porque no se detectaron alimentos.")
+        logger.info("➡️ La imagen fue ignorada porque no se detectaron alimentos.")
         return
 
     description = vision_result.get("description", "")
-    print(f"✅ Descripción generada: '{description}'")
+    logger.info(f"✅ Descripción generada: '{description}'")
     
     # Paso 2: Embedding
     embedding = get_multimodal_embedding(description)
     
     if not embedding:
-        print("⚠️ No se pudo vectorizar la imagen. Abortando guardado.")
+        logger.warning("⚠️ No se pudo vectorizar la imagen. Abortando guardado.")
         return
         
     # Paso 3: Base de Datos Visual Diary
-    print(f"📦 Guardando entrada visual en la DB (Vector 768d)...")
+    logger.info(f"📦 Guardando entrada visual en la DB (Vector 768d)...")
     save_visual_entry(
         user_id=user_id,
         image_url=image_url,
         description=description,
         embedding=embedding
     )
-    print("✅ ¡Imagen registrada en el Diario Visual con éxito!")
+    logger.info("✅ ¡Imagen registrada en el Diario Visual con éxito!")
 
     # Paso 4: Cruce de Silos Multimodal (Diario Visual -> Hechos de Usuario)
     # Combinamos lo que dijo el usuario con lo que la IA vio en la foto
     # Ej: "Me cayó pesado esto" + "Plato de mangú con salami, queso frito y cebolla verde"
     combined_context = f"Comentario del usuario sobre su comida actual: '{user_message}'. Lo que estaba comiendo (según análisis de imagen): '{description}'"
     
-    print("🔄 [VISION AGENT] Enviando contexto combinado al Extractor de Hechos...")
+    logger.info("🔄 [VISION AGENT] Enviando contexto combinado al Extractor de Hechos...")
     # async_extract_and_save_facts es síncrona — usamos asyncio.to_thread para no bloquear el event loop
     import asyncio
     await asyncio.to_thread(async_extract_and_save_facts, user_id, combined_context)
