@@ -3382,9 +3382,22 @@ def _emit_hot_table_bloat_tick() -> None:
     try:
         dead_pct_threshold = float(_env_float("MEALFIT_AUTOVACUUM_DEAD_PCT_ALERT", 70.0))
         stale_hours_threshold = float(_env_float("MEALFIT_AUTOVACUUM_STALE_HOURS_ALERT", 24.0))
+        # [P1-HOT-BLOAT-MIN-TUPLES · 2026-05-13] Autovacuum de Postgres NO
+        # corre sobre tablas tiny: threshold = 50 + (0.20 × n_live) — para
+        # 3 filas vivas requiere ≥51 dead tuples antes de disparar. Eso hace
+        # que el check dead_pct>70 sea un false positive permanente sobre
+        # `meal_plans` / `agent_sessions` / etc. cuando viven con <20 filas
+        # totales. Audit 2026-05-12 detectó 2 alerts vivas (meal_plans 3+17
+        # y agent_sessions 3+14, dead_pct 85%/82%) que jamás auto-resolvían
+        # porque autovacuum nunca corría → alert fatigue. Knob clamp
+        # [10, 10000], default 100. Tablas con menos tuplas totales saltan
+        # el check (y auto-resuelven cualquier alert previa).
+        _min_total_raw = _env_int("MEALFIT_AUTOVACUUM_MIN_TOTAL_TUPLES", 100)
+        min_total_tuples = max(10, min(int(_min_total_raw), 10000))
     except Exception:
         dead_pct_threshold = 70.0
         stale_hours_threshold = 24.0
+        min_total_tuples = 100
 
     try:
         # [P0-LIVE-2 · 2026-05-12] Postgres 17 expone `relname` ambiguo en
@@ -3460,8 +3473,54 @@ def _emit_hot_table_bloat_tick() -> None:
                 f"[P2-AUDIT-2] tick emit para {relname} falló: {tick_err}"
             )
 
-        # 2) Decisión alert / auto-resolve.
+        # 2) [P1-HOT-BLOAT-MIN-TUPLES · 2026-05-13] Skip tablas low-volume:
+        # autovacuum no corre con <50 dead tuples aprox (threshold=50 +
+        # 0.20*n_live). Sin esto el alert dead_pct>70 se autoperpetúa en
+        # tablas tiny y genera fatiga. Auto-resuelve cualquier alerta
+        # previa para que el deploy cierre las vivas sin MCP manual.
         alert_key = f"hot_table_bloat:{relname}"
+        total_tuples = n_live + n_dead
+        if total_tuples < min_total_tuples:
+            try:
+                execute_sql_write(
+                    """
+                    INSERT INTO pipeline_metrics
+                        (user_id, session_id, node, duration_ms, retries,
+                         tokens_estimated, confidence, metadata)
+                    VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+                    """,
+                    (
+                        "_hot_table_bloat_skipped_low_volume",
+                        json.dumps({
+                            "table": relname,
+                            "n_live": n_live,
+                            "n_dead": n_dead,
+                            "total_tuples": total_tuples,
+                            "min_total_tuples": min_total_tuples,
+                            "dead_pct": dead_pct,
+                        }, ensure_ascii=False),
+                    ),
+                )
+            except Exception as skip_err:
+                logger.debug(
+                    f"[P1-HOT-BLOAT-MIN-TUPLES] skip emit para {relname} falló: {skip_err}"
+                )
+            try:
+                execute_sql_write(
+                    """
+                    UPDATE system_alerts
+                    SET resolved_at = NOW()
+                    WHERE alert_key = %s AND resolved_at IS NULL
+                    """,
+                    (alert_key,),
+                )
+            except Exception as rs_err:
+                logger.debug(
+                    f"[P1-HOT-BLOAT-MIN-TUPLES] auto-resolve previo {alert_key} falló: {rs_err}"
+                )
+            continue
+
+        # 3) Decisión alert / auto-resolve para tablas con volumen suficiente.
         is_bloated = (dead_pct > dead_pct_threshold) and (hours_since_av > stale_hours_threshold)
 
         if is_bloated:

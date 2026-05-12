@@ -235,8 +235,18 @@ def swap_meal(form_data: dict):
         if suggestions:
             context_extras += f"\n    - 💡 SUGERENCIA DE VARIEDAD: Para este swap, intenta usar {', '.join(suggestions)} (o ingredientes radicalmente diferentes al rechazado)."
             logger.debug(f"🎲 [SWAP ANTI MODE-COLLAPSE] Sugerencias: {suggestions}")
-    except Exception:
-        pass  # No bloquear el swap si falla la sugerencia
+    except Exception as _swap_exc:
+        # [P2-SILENT-DEGRADATION · 2026-05-13] El swap continúa sin sugerencia
+        # anti mode-collapse (correctness preservada). Sin log, fallos
+        # sistemáticos del helper de variedad pasan invisibles → cliente nota
+        # "los swaps repiten siempre las mismas opciones" pero SRE no
+        # correlaciona. Mantener fallback (no bloquear el swap).
+        logger.debug(
+            "[P2-SILENT-DEGRADATION] anti mode-collapse suggestion falló: "
+            "%s: %s",
+            type(_swap_exc).__name__,
+            str(_swap_exc)[:160],
+        )
 
     logger.info("\n-------------------------------------------------------------")
     logger.info("⏳ [AGENTE DE SUSTITUCIÓN INTERPRETATIVO] Analizando rechazo...")
@@ -470,9 +480,20 @@ def execute_tools(state: ChatState):
                     if isinstance(parsed_plan, dict) and ("days" in parsed_plan or "meals" in parsed_plan):
                         new_plan = parsed_plan
                         tool_result = "El plan de comidas de 7 días fue generado exitosamente. Dile al usuario que lo revise en su dashboard."
-                except Exception:
-                    pass
-                    
+                except Exception as _parse_exc:
+                    # [P2-SILENT-DEGRADATION · 2026-05-13] JSON malformado /
+                    # tool_result no parseable: el agente NO hidrata el plan
+                    # en state pero conserva el raw tool_result (texto al LLM).
+                    # Sin log, un cambio de schema del tool o tool_result vacío
+                    # significa "el agente respondió pero el dashboard no
+                    # refrescó" sin telemetría. Mantener fallback.
+                    logger.debug(
+                        "[P2-SILENT-DEGRADATION] generate_new_plan parse "
+                        "falló: %s: %s",
+                        type(_parse_exc).__name__,
+                        str(_parse_exc)[:160],
+                    )
+
             elif tool_name == "modify_single_meal":
                 user_id = state.get("user_id")
                 session_id = state.get("session_id")
@@ -502,8 +523,20 @@ def execute_tools(state: ChatState):
                         if isinstance(_tool_warnings, list) and _tool_warnings:
                             coherence_warnings.extend(_tool_warnings)
                         tool_result = f"La comida fue modificada exitosamente. La nueva comida es: {parsed_mod['modified_meal'].get('name', 'Comida actualizada')}. Dile al usuario que su plan ya fue actualizado."
-                except Exception:
-                    pass
+                except Exception as _mod_exc:
+                    # [P2-SILENT-DEGRADATION · 2026-05-13] JSON malformado /
+                    # `modified_meal` ausente: el agente NO hidrata el plan
+                    # actualizado en state ni extrae warnings de coherencia.
+                    # El plan en DB SÍ se modificó (modify_single_meal
+                    # persiste antes de retornar) pero el frontend no
+                    # refresca hasta el siguiente fetch. Sin log, fallos
+                    # sistemáticos del parser quedan invisibles.
+                    logger.debug(
+                        "[P2-SILENT-DEGRADATION] modify_single_meal parse "
+                        "falló: %s: %s",
+                        type(_mod_exc).__name__,
+                        str(_mod_exc)[:160],
+                    )
             else:
                 for t in agent_tools:
                     if t.name == tool_name:

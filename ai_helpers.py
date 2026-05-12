@@ -148,8 +148,20 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                         expiry_dt = expiry_dt.replace(tzinfo=timezone.utc)
                     if now < expiry_dt:
                         dislikes_list.append(item.lower())
-                except Exception:
-                    pass
+                except Exception as _dislike_exc:
+                    # [P2-SILENT-DEGRADATION · 2026-05-13] ISO mal-formado / item
+                    # corrupto: el dislike temporal se ignora y el item podría
+                    # volver al plan. Sin log, un cambio de formato del campo
+                    # `temporary_dislikes` o un blip de DB se traduce en "el
+                    # usuario marcó X como no-quiero-hoy y reaparece" sin
+                    # telemetría. Mantener fallback (no re-raise).
+                    logger.debug(
+                        "[P2-SILENT-DEGRADATION] temp_dislikes parse falló "
+                        "(item=%s): %s: %s",
+                        str(item)[:60],
+                        type(_dislike_exc).__name__,
+                        str(_dislike_exc)[:160],
+                    )
         dislikes = tuple(dislikes_list)
         
         diet = form_data.get("diet", form_data.get("dietType", "")).lower()
@@ -256,8 +268,19 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             if profile:
                 hp = profile.get("health_profile") or {}
                 variety_level = hp.get("variety_level", "standard")
-        except Exception:
-            pass
+        except Exception as _var_exc:
+            # [P2-SILENT-DEGRADATION · 2026-05-13] DB blip / pool exhaustion:
+            # variety_level cae al default "standard" sin que SRE vea correlate
+            # entre planes con variedad baja y degradación operacional. Log
+            # debug permite grep `[P2-SILENT-DEGRADATION] variety_level` para
+            # contar incidentes. Fallback intacto (no re-raise).
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] variety_level profile fetch falló "
+                "(user_id=%s): %s: %s",
+                str(user_id)[:36],
+                type(_var_exc).__name__,
+                str(_var_exc)[:160],
+            )
     variety_level = variety_level or "standard"
     if force_variety:
         variety_level = "max"
@@ -671,8 +694,20 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                     blocked_text += "\n\n🧠 [MEMORIA DEL REVISOR MÉDICO - EVITA ESTOS ERRORES HISTÓRICOS]:"
                     for r in persisted_rejections[-5:]: # Solo los últimos 5 para no sobrecargar el prompt
                         blocked_text += f"\n - {r}"
-        except Exception:
-            pass
+        except Exception as _rej_exc:
+            # [P2-SILENT-DEGRADATION · 2026-05-13] DB blip / pool exhaustion:
+            # el agente pierde memoria histórica de rechazos del Revisor Médico
+            # → puede repetir errores ya corregidos en planes anteriores.
+            # Impacto mayor que los otros 2 silent-paths: la cadena
+            # rejection→retry→aprendizaje se rompe. Log debug permite
+            # detectar burst de fallos durante incidentes de DB.
+            logger.debug(
+                "[P2-SILENT-DEGRADATION] rejection_patterns fetch falló "
+                "(user_id=%s): %s: %s",
+                str(user_id)[:36],
+                type(_rej_exc).__name__,
+                str(_rej_exc)[:160],
+            )
 
     # Inyectar razones de rechazo del intento anterior (Mutación de Retry - GAP 1)
     if rejection_reasons:
