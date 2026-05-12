@@ -55,8 +55,10 @@ KNOWN_PRINT_EXEMPT_PATHS = {
     "backend/refactor_plans.py",
     "backend/modify_cron.py",
     "backend/recalc_now.py",
-    "backend/scratch_get_tables.py",
-    "backend/scratch_create_user.py",
+    # [P3-SCRATCH-CLEANUP · 2026-05-13] backend/scratch_create_user.py +
+    # backend/scratch_get_tables.py eliminados (dev scripts ad-hoc, cero
+    # callers en código de producción). Si reaparecen en el árbol, añadir
+    # marker `# [P2-LOGGER-EXEMPT: ...]` inline en lugar de re-añadir aquí.
 }
 
 
