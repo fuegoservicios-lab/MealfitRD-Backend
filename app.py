@@ -30,7 +30,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-OBS-1 · 2026-05-12"
+_LAST_KNOWN_PFIX = "P2-WHITELIST-AUDIT · 2026-05-12"
 
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
