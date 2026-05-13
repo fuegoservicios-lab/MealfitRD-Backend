@@ -1661,112 +1661,176 @@ def _alert_coherence_watchdog_silent():
 #   El alert `pipeline_metrics_silence` específicamente captura "scheduler
 #   vivo + cron específico mudo" → modo no cubierto por cascade.
 # ---------------------------------------------------------------------------
+def _parse_silence_observed_nodes(raw: str) -> list:
+    """[P2-PIPELINE-SILENCE-MULTI-NODE · 2026-05-13] Parsea el knob
+    `MEALFIT_PIPELINE_METRICS_SILENCE_NODE` como CSV opcional. Cada entry:
+      - `node_name`             → usa threshold global
+      - `node_name:240`         → override threshold per-node a 240min
+    Strip whitespace, ignora entries vacías. Retorna [] si raw vacío
+    (caller cae al default `_hardfloor_autoheal_tick`).
+
+    Why: pre-fix solo se observaba un nodo. SRE no podía pedir alert
+    adicional sobre, p.ej., `pipeline_holistic` (signal de pipeline real
+    ejecutándose) sin perder el watchdog sobre `_hardfloor_autoheal_tick`.
+    Ahora el operador setea
+    `MEALFIT_PIPELINE_METRICS_SILENCE_NODE=_hardfloor_autoheal_tick,pipeline_holistic:1440`
+    y cada nodo se observa contra su threshold.
+    """
+    if not raw:
+        return []
+    out = []
+    for chunk in raw.split(","):
+        s = chunk.strip()
+        if not s:
+            continue
+        if ":" in s:
+            name, _, thr_raw = s.partition(":")
+            name = name.strip()
+            thr = None
+            try:
+                thr = int(thr_raw.strip())
+                if thr < 5:
+                    thr = 5
+                if thr > 1440:
+                    thr = 1440
+            except (ValueError, TypeError):
+                thr = None
+            if name:
+                out.append((name, thr))
+        else:
+            out.append((s, None))
+    return out
+
+
 def _alert_pipeline_metrics_silence():
-    """[P2-OBSERVABILITY-1 · 2026-05-12] Alerta cuando el tick observable
-    `_hardfloor_autoheal_tick` no aparece en pipeline_metrics durante una
-    ventana — síntoma de deploy lag (P0-PROD-1) u otra causa silenciosa.
+    """[P2-OBSERVABILITY-1 · 2026-05-12 · extendido P2-PIPELINE-SILENCE-MULTI-NODE 2026-05-13]
+    Alerta cuando uno o más nodos observables no aparecen en
+    `pipeline_metrics` durante una ventana — síntoma de deploy lag
+    (P0-PROD-1), loop cancelado, o ausencia de tráfico productivo.
 
     Knobs (registrados vía `_env_int`):
       MEALFIT_PIPELINE_METRICS_SILENCE_NODE         (default `_hardfloor_autoheal_tick`)
-        Nodo a observar. String — leído directo de `os.environ`.
+        String. Acepta nodo único O CSV multi-node con threshold opcional
+        por-nodo: `node1,node2:240,node3:1440`. Threshold per-node se clampea
+        a [5, 1440] min. Sin `:` usa el threshold global.
       MEALFIT_PIPELINE_METRICS_SILENCE_ALERT_MIN    (default 30)
-        Ventana de silencio en min. Default = 6× interval default
-        (300s = 5min) — burst transitorios no disparan; deploy lag real sí.
+        Ventana de silencio en min — fallback global cuando un nodo CSV
+        no especifica override. Clamp [5, 720].
       MEALFIT_PIPELINE_METRICS_SILENCE_INTERVAL_MIN (default 10)
         Frecuencia del cron, consumida por register_plan_chunk_scheduler.
 
+    Backward-compat: si CSV resulta en exactamente 1 nodo (o knob vacío),
+    el alert_key es el legacy `pipeline_metrics_silence`. Si hay >1 nodo,
+    cada alert_key es `pipeline_metrics_silence:<node>`. Esto preserva el
+    contrato documentado en CLAUDE.md (tabla de system_alerts policy) y
+    los tests P2-OBSERVABILITY-1 originales.
+
     NO depende de Supabase REST: usa `execute_sql_query` (DB directa).
     """
-    threshold_min = _env_int("MEALFIT_PIPELINE_METRICS_SILENCE_ALERT_MIN", 30)
-    if threshold_min < 5:
-        threshold_min = 5
-    if threshold_min > 720:
-        threshold_min = 720  # 12h hard ceiling — si el operador setea más, está roto
+    global_threshold_min = _env_int("MEALFIT_PIPELINE_METRICS_SILENCE_ALERT_MIN", 30)
+    if global_threshold_min < 5:
+        global_threshold_min = 5
+    if global_threshold_min > 720:
+        global_threshold_min = 720  # 12h hard ceiling — si el operador setea más, está roto
 
-    observed_node = (
-        os.environ.get("MEALFIT_PIPELINE_METRICS_SILENCE_NODE", "")
-        or "_hardfloor_autoheal_tick"
-    ).strip()
-    if not observed_node:
-        observed_node = "_hardfloor_autoheal_tick"
+    raw_nodes = os.environ.get("MEALFIT_PIPELINE_METRICS_SILENCE_NODE", "") or ""
+    parsed = _parse_silence_observed_nodes(raw_nodes)
+    if not parsed:
+        parsed = [("_hardfloor_autoheal_tick", None)]
 
-    try:
-        row = execute_sql_query(
-            """
-            SELECT 1
-              FROM pipeline_metrics
-             WHERE node = %s
-               AND created_at > NOW() - make_interval(mins => %s::int)
-             LIMIT 1
-            """,
-            (observed_node, int(threshold_min)),
-            fetch_one=True,
+    use_suffix = len(parsed) > 1
+
+    for observed_node, per_node_threshold in parsed:
+        threshold_min = (
+            per_node_threshold if per_node_threshold is not None else global_threshold_min
         )
-    except Exception as e:
-        logger.warning(
-            f"[P2-OBSERVABILITY-1] SELECT pipeline_metrics falló: {e}"
+        alert_key = (
+            f"pipeline_metrics_silence:{observed_node}"
+            if use_suffix
+            else "pipeline_metrics_silence"
         )
-        return
 
-    if row:
-        # Tick vivo en la ventana — todo OK. Resolver alerta previa.
+        try:
+            row = execute_sql_query(
+                """
+                SELECT 1
+                  FROM pipeline_metrics
+                 WHERE node = %s
+                   AND created_at > NOW() - make_interval(mins => %s::int)
+                 LIMIT 1
+                """,
+                (observed_node, int(threshold_min)),
+                fetch_one=True,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[P2-OBSERVABILITY-1] SELECT pipeline_metrics falló "
+                f"(node={observed_node!r}): {e}"
+            )
+            continue
+
+        if row:
+            try:
+                execute_sql_write(
+                    """
+                    UPDATE system_alerts
+                       SET resolved_at = NOW()
+                     WHERE alert_key = %s
+                       AND resolved_at IS NULL
+                    """,
+                    (alert_key,),
+                )
+            except Exception:
+                pass
+            continue
+
         try:
             execute_sql_write(
                 """
-                UPDATE system_alerts
-                   SET resolved_at = NOW()
-                 WHERE alert_key = %s
-                   AND resolved_at IS NULL
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                VALUES (%s, 'pipeline_metrics_silence', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    metadata = EXCLUDED.metadata,
+                    message = EXCLUDED.message,
+                    resolved_at = NULL
                 """,
-                ("pipeline_metrics_silence",),
-            )
-        except Exception:
-            pass
-        return
-
-    # Silencio prolongado → emitir alerta.
-    try:
-        execute_sql_write(
-            """
-            INSERT INTO system_alerts
-                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
-            VALUES (%s, 'pipeline_metrics_silence', 'warning', %s, %s, %s::jsonb, %s::jsonb)
-            ON CONFLICT (alert_key) DO UPDATE
-            SET triggered_at = NOW(),
-                metadata = EXCLUDED.metadata,
-                message = EXCLUDED.message,
-                resolved_at = NULL
-            """,
-            (
-                "pipeline_metrics_silence",
-                f"Telemetría {observed_node} mudo >{threshold_min}min",
                 (
-                    f"`pipeline_metrics` no recibió ninguna fila con "
-                    f"`node={observed_node!r}` en los últimos "
-                    f"{threshold_min}min. Causas probables: "
-                    f"(1) deploy lag — binario en EasyPanel anterior al "
-                    f"cierre P0-PROD-1 sigue crasheando inserts con `is_guest`; "
-                    f"(2) `_hardfloor_autoheal_loop` cancelado en shutdown "
-                    f"y no re-arrancado; (3) drift de schema en pipeline_metrics. "
-                    f"Verificar `/api/system/admin/deploy-lag/check`, logs "
-                    f"Postgres y `/health/version`."
+                    alert_key,
+                    f"Telemetría {observed_node} mudo >{threshold_min}min",
+                    (
+                        f"`pipeline_metrics` no recibió ninguna fila con "
+                        f"`node={observed_node!r}` en los últimos "
+                        f"{threshold_min}min. Causas probables: "
+                        f"(1) deploy lag — binario en EasyPanel anterior al "
+                        f"cierre P0-PROD-1 sigue crasheando inserts con `is_guest`; "
+                        f"(2) `_hardfloor_autoheal_loop` cancelado en shutdown "
+                        f"y no re-arrancado; (3) drift de schema en pipeline_metrics; "
+                        f"(4) si el nodo es de pipeline real (e.g., `pipeline_holistic`), "
+                        f"posible ausencia de tráfico productivo o pipeline roto pre-emit. "
+                        f"Verificar `/api/system/admin/deploy-lag/check`, logs "
+                        f"Postgres y `/health/version`."
+                    ),
+                    json.dumps({
+                        "observed_node": observed_node,
+                        "threshold_min": threshold_min,
+                        "expected_interval_default_s": 300,
+                        "multi_node_mode": use_suffix,
+                    }, ensure_ascii=False),
+                    json.dumps([]),
                 ),
-                json.dumps({
-                    "observed_node": observed_node,
-                    "threshold_min": threshold_min,
-                    "expected_interval_default_s": 300,
-                }, ensure_ascii=False),
-                json.dumps([]),
-            ),
-        )
-        logger.warning(
-            f"[P2-OBSERVABILITY-1] silencio detectado: "
-            f"node={observed_node!r} sin ticks en últimos {threshold_min}min"
-        )
-    except Exception as e:
-        logger.error(
-            f"[P2-OBSERVABILITY-1] No se pudo persistir alerta: {e}"
-        )
+            )
+            logger.warning(
+                f"[P2-OBSERVABILITY-1] silencio detectado: "
+                f"node={observed_node!r} sin ticks en últimos {threshold_min}min "
+                f"(alert_key={alert_key!r})"
+            )
+        except Exception as e:
+            logger.error(
+                f"[P2-OBSERVABILITY-1] No se pudo persistir alerta "
+                f"(node={observed_node!r}): {e}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -3046,8 +3110,6 @@ def _sweep_stale_emit_locks_kv() -> None:
         logger.debug(
             f"[P2-NEW-16/EMIT-LOCK-SWEEP] tick emit falló (best-effort): {_tick_err}"
         )
-
-    return reset_count
 
 
 def _gc_orphan_chunk_telemetry():
