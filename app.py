@@ -843,6 +843,11 @@ from routers.diary import router as diary_router
 app.include_router(diary_router)
 from routers.system import router as system_router
 app.include_router(system_router)
+# [LONG-TERM-MEMORY-TOGGLE · 2026-05-13] Endpoints para el toggle de memoria
+# a largo plazo (Settings del Dashboard). Migración SSOT:
+# supabase/migrations/add_long_term_memory_enabled_2026_05_13.sql
+from routers.preferences import router as preferences_router
+app.include_router(preferences_router)
 
 @app.get("/")
 @app.get("/health")

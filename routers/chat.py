@@ -414,7 +414,19 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
                                         is_plus = plan_tier in ["basic", "plus", "admin", "ultra"]
 
-                                        if is_plus:
+                                        # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13]
+                                        # Además del gate de tier, respetar el flag user-controlled.
+                                        # Default TRUE si el perfil no expone el campo (legacy).
+                                        ltm_enabled = True
+                                        if is_plus and user_id and user_id != "guest":
+                                            try:
+                                                _p = get_user_profile(user_id)
+                                                if _p and "long_term_memory_enabled" in _p:
+                                                    ltm_enabled = bool(_p.get("long_term_memory_enabled", True))
+                                            except Exception:
+                                                ltm_enabled = True
+
+                                        if is_plus and ltm_enabled:
                                             async_extract_and_save_facts(user_id, prompt, recent_history_str)
 
                                         summarize_and_prune(session_id)
@@ -521,15 +533,23 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         
         # Verificar tier para usar la Memoria a Largo Plazo
         is_plus = False
+        # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13] Además del tier, respetar el flag
+        # `long_term_memory_enabled` controlado por el usuario desde Settings.
+        # Default TRUE si el campo no existe (perfil legacy pre-migración).
+        ltm_enabled = True
         if user_id and user_id != "guest":
             profile = get_user_profile(user_id)
             if profile:
                 plan_tier = profile.get("plan_tier", "gratis")
                 is_plus = plan_tier in ["basic", "plus", "admin", "ultra"]
-        
-        if is_plus:
+                if "long_term_memory_enabled" in profile:
+                    ltm_enabled = bool(profile.get("long_term_memory_enabled", True))
+
+        if is_plus and ltm_enabled:
             # 🧠 Background: Extraer hechos y vectorizarlos
             background_tasks.add_task(async_extract_and_save_facts, user_id, prompt, recent_history_str)
+        elif is_plus and not ltm_enabled:
+            logger.info(f"[LONG-TERM-MEMORY-TOGGLE] Captura pausada por user toggle (user={user_id}).")
         else:
             logger.info("INFO: Memoria a Largo Plazo deshabilitada para usuario Gratis.")
         

@@ -594,3 +594,24 @@ def reset_user_account_preferences(user_id: str) -> bool:
     except Exception as e:
         logger.error(f"❌ Error reseteando preferencias para {user_id}: {e}")
         return False
+
+
+# [LONG-TERM-MEMORY-TOGGLE · 2026-05-13]
+# Helper para el toggle de memoria a largo plazo desde Settings.
+# Migración SSOT: supabase/migrations/add_long_term_memory_enabled_2026_05_13.sql
+def update_long_term_memory_enabled(user_id: str, enabled: bool) -> bool:
+    """Actualiza el flag `long_term_memory_enabled` en user_profiles.
+
+    Devuelve True si el UPDATE afectó una fila. Filtrado por user_id
+    (invariante I2: toda mutación a user_profiles requiere user_id explícito).
+    """
+    if not supabase:
+        return False
+    try:
+        res = supabase.table("user_profiles").update(
+            {"long_term_memory_enabled": bool(enabled)}
+        ).eq("id", user_id).execute()
+        return bool(res.data)
+    except Exception as e:
+        logger.error(f"❌ Error update_long_term_memory_enabled({user_id}, {enabled}): {e}")
+        return False

@@ -680,7 +680,20 @@ def search_deep_memory(user_id: str, query: str) -> str:
     - query: palabra clave o frase corta para buscar en los archivos históricos (ej: 'adherencia', 'estrés', 'primera semana')
     """
     logger.info(f"🔍 [TOOL EXECUTION] Buscando en memoria profunda para user {user_id}: '{query}'")
-    
+
+    # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13] Respetar el toggle del usuario.
+    # Si está OFF, la tool NO consulta user_facts (lectura pausada). Los datos
+    # quedan en BD, intactos, listos para ser usados de nuevo cuando reactive.
+    # Defensive: si el perfil no tiene el campo (legacy), default TRUE.
+    try:
+        _profile = get_user_profile(user_id)
+        if _profile and "long_term_memory_enabled" in _profile:
+            if not bool(_profile.get("long_term_memory_enabled", True)):
+                logger.info(f"[LONG-TERM-MEMORY-TOGGLE] search_deep_memory pausado por user toggle (user={user_id}).")
+                return "La memoria a largo plazo está desactivada en tus ajustes. Actívala desde Settings para acceder a tus recuerdos históricos."
+    except Exception:
+        pass  # fail-open: si el lookup falla, comportamiento legacy
+
     results = db_search_deep_memory(user_id, query, limit=5)
     
     if not results:
