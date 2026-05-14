@@ -4123,14 +4123,27 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             plan_data.pop("restocked_items", None)
             logger.info(f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron de {prev_hh}p/{prev_dur} (mult={prev_mult}) a {household_size}p/{grocery_duration} (mult={household_multiplier:.2f}), requiere re-registro")
         
-        # DEBUG fingerprint: allows frontend to verify it received fresh data
-        import time
-        plan_data["_debug_recalc"] = {
-            "household_size": household_size,
-            "timestamp": time.time(),
-            "weekly_items_count": len(scaled_7),
-            "sample_item": scaled_7[0].get("display_string", "?") if scaled_7 else "empty"
-        }
+        # [P3-SHOPPING-2 · 2026-05-14] Fingerprint de debug solo en non-prod.
+        # Antes esto se persistía SIEMPRE a `plan_data._debug_recalc` —
+        # útil para diagnóstico en dev pero ensucia jsonb en producción
+        # sin valor operacional (timestamp/sample_item no son auditables
+        # cross-tenant, y `household_size`/`weekly_items_count` ya están
+        # en `calc_household_*` keys persistidas arriba).
+        # Knob `MEALFIT_PERSIST_DEBUG_RECALC` permite re-habilitar en
+        # producción si SRE necesita instrumentar un incidente puntual
+        # (default False = stripped en prod, escape hatch sin redeploy).
+        _persist_debug = (
+            os.environ.get("ENVIRONMENT", "").lower() != "production"
+            or os.environ.get("MEALFIT_PERSIST_DEBUG_RECALC", "").lower() in ("1", "true", "yes", "on")
+        )
+        if _persist_debug:
+            import time
+            plan_data["_debug_recalc"] = {
+                "household_size": household_size,
+                "timestamp": time.time(),
+                "weekly_items_count": len(scaled_7),
+                "sample_item": scaled_7[0].get("display_string", "?") if scaled_7 else "empty"
+            }
         
         # [P1-NEW-3 · 2026-05-10] user_id ya validado al inicio del handler
         # (verified_user_id == user_id). plan_id viene de get_latest_meal_plan_with_id
@@ -4169,6 +4182,86 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.post("/telemetry/pdf-stale-fallback")
+def api_pdf_stale_fallback_telemetry(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P2-SHOPPING-3 · 2026-05-14] Sink backend para el evento
+    `pdf_stale_inventory_fallback` emitido por el frontend cuando el fetch
+    de inventario fresco falla/timeoutea y el PDF se genera con
+    `liveInventory` cacheado (P1-PDF-1).
+
+    Antes (audit 2026-05-13):
+        El frontend hacía `trackEvent('pdf_stale_inventory_fallback', ...)`
+        que solo enviaba a Sentry/PostHog/GA/GTM (canales externos). El
+        backend NO observaba la frecuencia → imposible escalar a
+        `system_alerts` cuando un blip de Supabase mantiene a TODA la flota
+        en stale fallback durante horas. Operador dependía de mirar Sentry
+        manualmente.
+
+    Fix:
+        Endpoint best-effort que persiste a `pipeline_metrics` con
+        `node='pdf_stale_inventory_fallback'`. El cron
+        `_alert_pdf_stale_inventory_fallback_burst` lee la tabla cada
+        N min y emite `system_alerts.pdf_stale_inventory_fallback_burst`
+        si el count supera umbral.
+
+    NO usa `verify_api_quota` (paywall sería absurdo para telemetría).
+    Solo `get_verified_user_id` — usuario autenticado al descargar PDF.
+
+    Body esperado (defensive parse):
+      - `reason`: str ∈ {timeout, error, empty_response} (cap a 64 chars).
+      - `fallback_inventory_size`: int >= 0 (size del cache usado).
+
+    Cualquier campo malformado se sustituye por default conservador —
+    el endpoint NUNCA falla por payload inválido (fire-and-forget desde
+    frontend; un 4xx haría que el caller catch+log y posiblemente abortar
+    el PDF, lo que es peor que telemetría perdida).
+
+    Tooltip-anchor: P2-SHOPPING-3.
+    """
+    try:
+        if not verified_user_id:
+            raise HTTPException(status_code=401, detail="No autorizado.")
+
+        reason = data.get("reason") if isinstance(data, dict) else None
+        if not isinstance(reason, str) or len(reason) == 0 or len(reason) > 64:
+            reason = "unknown"
+
+        fallback_size = data.get("fallback_inventory_size") if isinstance(data, dict) else None
+        if isinstance(fallback_size, bool) or not isinstance(fallback_size, int) or fallback_size < 0:
+            fallback_size = None
+
+        from db_core import execute_sql_write
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (%s, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                verified_user_id,
+                "pdf_stale_inventory_fallback",
+                _json.dumps({
+                    "reason": reason,
+                    "fallback_inventory_size": fallback_size,
+                }, ensure_ascii=False),
+            ),
+        )
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Best-effort: NUNCA 5xx — telemetría perdida es preferible a un
+        # toast.error en el cliente confundiendo al usuario que sí ya
+        # descargó el PDF.
+        logger.warning(f"[P2-SHOPPING-3] telemetry insert falló (best-effort): {e}")
+        return {"success": False, "error": "telemetry_insert_failed"}
+
 
 @router.get("/{plan_id}/chunk-status")
 def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optional[str] = Depends(get_verified_user_id)):

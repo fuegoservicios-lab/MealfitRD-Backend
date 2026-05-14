@@ -1521,6 +1521,133 @@ def _alert_failed_inventory_deductions_backlog() -> None:
         logger.error(f"[P0-5/FAILED-DEDUCT] No se pudo persistir alerta: {e}")
 
 
+def _alert_pdf_stale_inventory_fallback_burst() -> None:
+    """[P2-SHOPPING-3 · 2026-05-14] Detecta bursts del evento
+    `pdf_stale_inventory_fallback` (fetch fresh inventory falló/timeoutó
+    durante PDF download; ver P1-PDF-1) y emite `system_alerts` cuando
+    el ratio supera umbral.
+
+    Antes (audit 2026-05-13):
+        El frontend solo emite `trackEvent` que va a Sentry/PostHog/GA/GTM.
+        El backend NO observaba frecuencia → un blip prolongado de
+        Supabase que mantenía a la flota en stale fallback (cada PDF
+        usando inventory cacheado) pasaba sin alert hasta que alguien
+        miraba Sentry manualmente.
+
+    Fix:
+        Endpoint `/api/plans/telemetry/pdf-stale-fallback` persiste cada
+        evento en `pipeline_metrics` (`node='pdf_stale_inventory_fallback'`).
+        Este cron lee la tabla cada N min y emite alert si el count en
+        la ventana lookback supera el umbral.
+
+    Modelo de resolution: **Auto (explicit)**. Si el ratio cae bajo
+    umbral en el siguiente tick, el cron `UPDATE system_alerts SET
+    resolved_at = NOW() WHERE alert_key = 'pdf_stale_inventory_fallback_burst'
+    AND resolved_at IS NULL`. Diferencia con `failed_inventory_deductions_backlog`
+    (Manual): el evento PDF stale es transient por naturaleza (network
+    blip), no implica corrupción persistente — el auto-resolve cierra
+    la alert sin SRE intervention cuando Supabase vuelve a responder.
+
+    Knobs (registrados en `_KNOBS_REGISTRY` vía `_env_int`):
+      MEALFIT_PDF_STALE_FALLBACK_ALERT_THRESHOLD (default 10)
+        — eventos en la ventana lookback que disparan la alerta.
+      MEALFIT_PDF_STALE_FALLBACK_ALERT_LOOKBACK_MIN (default 60)
+        — ventana de tiempo a contar (min).
+      MEALFIT_PDF_STALE_FALLBACK_ALERT_INTERVAL_MIN (default 15)
+        — frecuencia del cron (consumido por register_plan_chunk_scheduler).
+
+    No falla si supabase no está disponible (skip silencioso).
+    """
+    threshold = _env_int("MEALFIT_PDF_STALE_FALLBACK_ALERT_THRESHOLD", 10)
+    lookback_min = _env_int("MEALFIT_PDF_STALE_FALLBACK_ALERT_LOOKBACK_MIN", 60)
+    if threshold <= 0 or lookback_min <= 0:
+        return
+
+    try:
+        row = execute_sql_query(
+            """
+            SELECT COUNT(*) AS n,
+                   COUNT(DISTINCT user_id) AS distinct_users,
+                   MAX(created_at) AS most_recent
+              FROM pipeline_metrics
+             WHERE node = 'pdf_stale_inventory_fallback'
+               AND created_at > NOW() - make_interval(mins => %s::int)
+            """,
+            (int(lookback_min),),
+            fetch_one=True,
+        )
+    except Exception as e:
+        logger.warning(f"[P2-SHOPPING-3] SELECT pipeline_metrics falló: {e}")
+        return
+
+    if not row:
+        return
+    n = int(row.get("n") or 0)
+    distinct_users = int(row.get("distinct_users") or 0)
+    most_recent = row.get("most_recent")
+
+    if n < threshold:
+        # Auto-resolve: si la alerta estaba abierta y el ratio cayó bajo
+        # umbral, marcarla resuelta. Eventos transient (network blip,
+        # supabase pool exhausted) deben recuperarse sin SRE intervention.
+        try:
+            execute_sql_write(
+                """
+                UPDATE system_alerts
+                   SET resolved_at = NOW()
+                 WHERE alert_key = 'pdf_stale_inventory_fallback_burst'
+                   AND resolved_at IS NULL
+                """,
+                (),
+            )
+        except Exception as _resolve_err:
+            logger.debug(f"[P2-SHOPPING-3] auto-resolve falló (no-op): {_resolve_err}")
+        return
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'shopping', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                message = EXCLUDED.message,
+                resolved_at = NULL
+            """,
+            (
+                "pdf_stale_inventory_fallback_burst",
+                "Lista de compras (PDF): fallbacks por inventario stale elevados",
+                (
+                    f"En los últimos {lookback_min}min se registraron {n} eventos "
+                    f"`pdf_stale_inventory_fallback` (umbral={threshold}, usuarios "
+                    f"afectados={distinct_users}). El fetch fresh de `user_inventory` "
+                    f"está fallando o timeouteando — usuarios descargan PDFs con "
+                    f"inventory cacheado y pueden comprar duplicados. Posibles "
+                    f"causas: pool de Supabase exhausted, latencia tail de Postgres, "
+                    f"regresión en `fetchFreshInventoryWithTimeout` (frontend), o "
+                    f"timeout 2000ms insuficiente bajo carga. Auto-resuelve cuando "
+                    f"el ratio caiga bajo umbral."
+                ),
+                json.dumps({
+                    "events_in_window": n,
+                    "distinct_users": distinct_users,
+                    "most_recent": str(most_recent) if most_recent else None,
+                    "threshold": threshold,
+                    "lookback_minutes": lookback_min,
+                }, ensure_ascii=False),
+                json.dumps([]),
+            ),
+        )
+        logger.warning(
+            f"[P2-SHOPPING-3] burst={n} (umbral={threshold}, "
+            f"users={distinct_users}, ventana={lookback_min}min)"
+        )
+    except Exception as e:
+        logger.error(f"[P2-SHOPPING-3] No se pudo persistir alerta: {e}")
+
+
 # ---------------------------------------------------------------------------
 # [P0-3-COHERENCE-WATCHDOG · 2026-05-10] Liveness check del watchdog horario
 # del invariante coherencia recetas↔lista.
@@ -3931,6 +4058,30 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"registrado cada {_failed_deduct_interval_min} min "
             f"(threshold={_env_int('MEALFIT_FAILED_DEDUCTIONS_ALERT_THRESHOLD', 25)}, "
             f"lookback={_env_int('MEALFIT_FAILED_DEDUCTIONS_ALERT_LOOKBACK_H', 24)}h)."
+        )
+
+    # [P2-SHOPPING-3 · 2026-05-14] Cron burst-detector del evento
+    # `pdf_stale_inventory_fallback`. Lee `pipeline_metrics` (donde el
+    # endpoint `/api/plans/telemetry/pdf-stale-fallback` persiste cada
+    # evento) y emite/auto-resuelve `system_alerts.pdf_stale_inventory_fallback_burst`
+    # según el count en la ventana lookback.
+    _pdf_stale_interval_min = _env_int("MEALFIT_PDF_STALE_FALLBACK_ALERT_INTERVAL_MIN", 15)
+    _pdf_stale_interval_min = max(5, min(_pdf_stale_interval_min, 1440))
+    if not scheduler.get_job("alert_pdf_stale_inventory_fallback_burst"):
+        _add_job_jittered(scheduler,
+            _alert_pdf_stale_inventory_fallback_burst,
+            "interval",
+            minutes=_pdf_stale_interval_min,
+            id="alert_pdf_stale_inventory_fallback_burst",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-SHOPPING-3] Cron alert_pdf_stale_inventory_fallback_burst "
+            f"registrado cada {_pdf_stale_interval_min} min "
+            f"(threshold={_env_int('MEALFIT_PDF_STALE_FALLBACK_ALERT_THRESHOLD', 10)}, "
+            f"lookback={_env_int('MEALFIT_PDF_STALE_FALLBACK_ALERT_LOOKBACK_MIN', 60)}min)."
         )
 
     # [P0-1-RECOVERY] Job separado: recuperación de chunks failed en CUALQUIER plan (7d+).
@@ -14289,8 +14440,17 @@ def _process_pending_shopping_lists():
                 total_requested = plan_data.get('total_days_requested', 7)
                 new_status = "complete" if total_generated >= int(total_requested) else "partial"
                 
+                # [P1-SHOPPING-1 · 2026-05-13] Defense-en-profundidad I2: el
+                # cron `_process_pending_shopping_lists` itera planes
+                # `partial_no_shopping` system-wide (sin user input) y el FK del
+                # row ya tiene `user_id` confiable. Pero el contrato I2 de
+                # CLAUDE.md exige `AND user_id = %s` en TODA mutación de
+                # `meal_plans` — defense-in-depth contra race conditions y
+                # contra el riesgo de reusar este UPDATE como template para
+                # un endpoint user-facing futuro (donde la omisión sí abriría
+                # IDOR). El `user_id` ya viene del SELECT inicial (línea ~14218).
                 execute_sql_write("""
-                    UPDATE meal_plans 
+                    UPDATE meal_plans
                     SET plan_data = jsonb_set(
                         jsonb_set(
                             jsonb_set(
@@ -14304,14 +14464,15 @@ def _process_pending_shopping_lists():
                         ),
                         '{generation_status}', %s::jsonb
                     )
-                    WHERE id = %s
+                    WHERE id = %s AND user_id = %s
                 """, (
                     json.dumps(aggr_7, ensure_ascii=False),
                     json.dumps(aggr_15_hybrid, ensure_ascii=False),
                     json.dumps(aggr_30_hybrid, ensure_ascii=False),
                     json.dumps(aggr_active, ensure_ascii=False),
                     json.dumps(new_status),
-                    meal_plan_id
+                    meal_plan_id,
+                    user_id,
                 ))
                 logger.info(f" [GAP F] Shopping list recuperada para plan {meal_plan_id}.")
             except Exception as e:
