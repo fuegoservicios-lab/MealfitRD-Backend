@@ -259,6 +259,13 @@ _KNOWN_CALLERS_BY_FILE: set[str] = {
     #   - _chunk_worker → _p13_strong_mutator                 (P1-3 strong branch)
     #   - _chunk_worker → _bump_zero_log                      (P0-2/ZERO-LOG)
     "backend/cron_tasks.py",
+    # routers/plans.py 1 sitio documentado:
+    #   - api_recalculate_shopping_list → _apply_recalc       (P1-RECALC-LOSTUPDATE)
+    # Resuelve ownership upstream con `verified_user_id == user_id` check
+    # al inicio del handler + SELECT explícito con `AND user_id = %s` en
+    # el branch req_plan_id (P2-NEW-B) o `get_latest_meal_plan_with_id(user_id)`
+    # en el fallback. Pasa `user_id=user_id` al helper.
+    "backend/routers/plans.py",
 }
 
 

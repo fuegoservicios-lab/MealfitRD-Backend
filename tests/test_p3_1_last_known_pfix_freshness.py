@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 14)  # P3-SHOPPING-4 polish bundle PDF (filename + _debug_recalc gate + telemetry success/failed)
+_PFIX_DATE_FLOOR = date(2026, 5, 14)  # P3-PDF-OBS-FU bundle (coherence_block_leak trackEvent + clamp telemetry size + cron hysteresis — follow-up del re-audit P2-PDF-OBS)
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

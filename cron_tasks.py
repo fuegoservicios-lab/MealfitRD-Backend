@@ -1560,6 +1560,22 @@ def _alert_pdf_stale_inventory_fallback_burst() -> None:
     """
     threshold = _env_int("MEALFIT_PDF_STALE_FALLBACK_ALERT_THRESHOLD", 10)
     lookback_min = _env_int("MEALFIT_PDF_STALE_FALLBACK_ALERT_LOOKBACK_MIN", 60)
+    # [P3-PDF-OBS-FU-C · 2026-05-14] Hysteresis del auto-resolve. Pre-fix:
+    # alert se resolvía a `count < threshold` y re-emitía a `count >=
+    # threshold` — bajo bursts oscilatorios (count oscila +/- 1 alrededor
+    # del umbral cada ~tick) la alert podía dispararse y resolverse cada
+    # 15min, fatigando al SRE sin estado estable. Knob ratio agrega banda
+    # muerta entre `threshold * ratio` y `threshold`: la alert NO se
+    # resuelve mientras el count siga sobre el ratio del umbral. Default
+    # 0.5 (count debe caer a la mitad para liberarse). Clamp [0.1, 0.95]:
+    # 0.1 sería ratio absurdo (alert quedaría abierta indefinida),
+    # 0.95 anula el efecto del hysteresis.
+    auto_resolve_ratio = _env_float(
+        "MEALFIT_PDF_STALE_FALLBACK_AUTO_RESOLVE_RATIO",
+        0.5,
+        validator=lambda v: 0.1 <= v <= 0.95,
+    )
+    auto_resolve_threshold = max(1, int(threshold * auto_resolve_ratio))
     if threshold <= 0 or lookback_min <= 0:
         return
 
@@ -1586,10 +1602,12 @@ def _alert_pdf_stale_inventory_fallback_burst() -> None:
     distinct_users = int(row.get("distinct_users") or 0)
     most_recent = row.get("most_recent")
 
-    if n < threshold:
-        # Auto-resolve: si la alerta estaba abierta y el ratio cayó bajo
-        # umbral, marcarla resuelta. Eventos transient (network blip,
-        # supabase pool exhausted) deben recuperarse sin SRE intervention.
+    if n < auto_resolve_threshold:
+        # Auto-resolve: alert estaba abierta y el ratio cayó BAJO la banda
+        # de hysteresis (ratio * threshold). Eventos transient (network
+        # blip, supabase pool exhausted) deben recuperarse sin SRE
+        # intervention. P3-PDF-OBS-FU-C añadió hysteresis: pre-fix esta
+        # rama era `n < threshold` (sin banda muerta).
         try:
             execute_sql_write(
                 """
@@ -1602,6 +1620,13 @@ def _alert_pdf_stale_inventory_fallback_burst() -> None:
             )
         except Exception as _resolve_err:
             logger.debug(f"[P2-SHOPPING-3] auto-resolve falló (no-op): {_resolve_err}")
+        return
+    if n < threshold:
+        # [P3-PDF-OBS-FU-C · 2026-05-14] Banda muerta del hysteresis:
+        # `auto_resolve_threshold <= n < threshold`. Preserva el estado
+        # actual del alert (no emite, no resuelve). Si alert estaba
+        # abierta queda abierta; si estaba cerrada queda cerrada.
+        # Evita oscilación entre emit/resolve bajo bursts borderline.
         return
 
     try:

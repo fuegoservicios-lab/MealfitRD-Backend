@@ -127,17 +127,15 @@ def test_no_unwhitelisted_innerhtml_assignment():
             rel = fp.relative_to(_REPO_ROOT).as_posix()
             violations.append(f"{rel}:{idx + 1}: {line.strip()[:120]}")
 
-    # Dashboard.jsx:1478 ES un callsite real sin marker porque el rationale
-    # está documentado en P1-1 escapeHtml + el bloque entero (1248-1499)
-    # es la auditoría. Aceptamos esta única excepción enumerada por path:
-    # si en el futuro alguien refactoriza el PDF builder, debe añadir
-    # marker al nuevo callsite.
-    KNOWN_AUDITED_PATHS = {
-        "frontend/src/pages/Dashboard.jsx:1478",
-    }
-    real_violations = [v for v in violations if not any(
-        v.startswith(p) for p in KNOWN_AUDITED_PATHS
-    )]
+    # [P3-PDF-POLISH-4 · 2026-05-14] Pre-fix había whitelist brittle por
+    # path:line (Dashboard.jsx:1478) que driftaba cada vez que se añadía
+    # contenido arriba del callsite. Solución sostenible: el callsite
+    # ahora tiene marker `[P1-PDF-XSS-AUDITED: ...]` inline en las 5
+    # líneas previas (auto-detectado por `_has_whitelist_marker_nearby`).
+    # Si alguien refactoriza el PDF builder, debe preservar (o añadir)
+    # el marker al nuevo callsite — no hay whitelist hardcoded que
+    # mantener.
+    real_violations = list(violations)
 
     assert not real_violations, (
         "P1-PDF-XSS-BLANKET violation: nuevos `innerHTML =` sin marker "

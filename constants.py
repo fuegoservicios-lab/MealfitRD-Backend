@@ -2119,9 +2119,23 @@ def compute_household_multiplier(source: dict | None) -> float:
 
     Mínimo siempre 1.0 (planner requiere ≥1 persona).
 
+    [P3-PDF-POLISH-4 · 2026-05-14] Cap superior vía knob
+    `MEALFIT_MAX_HOUSEHOLD_SIZE` (default 20, clamp [1, 100]). Pre-fix no
+    había límite: un POST adversarial con `householdSize=999999` producía
+    listas absurdas + DB write bloated + 3× compute heavy en
+    `/api/plans/recalculate-shopping-list`. El cap se aplica al resultado
+    final (post-composition o post-householdSize) para que el clamp valga
+    igual cuando viene de `{adults, children}` que del int legacy.
+    Tooltip-anchor: P3-PDF-POLISH-4-B-MULTIPLIER.
+
     Acepta tanto `form_data` (assessment) como `health_profile` (DB) — ambos
     usan las mismas keys.
     """
+    # [P3-PDF-POLISH-4-B-MULTIPLIER · 2026-05-14] Cap superior shared para
+    # todos los callsites (recalc + planner + cron). Auto-registra knob.
+    _max_household = _env_int("MEALFIT_MAX_HOUSEHOLD_SIZE", 20)
+    _max_household = max(1, min(_max_household, 100))
+
     if not isinstance(source, dict):
         return 1.0
 
@@ -2134,12 +2148,14 @@ def compute_household_multiplier(source: dict | None) -> float:
                 # [P2-1 · 2026-05-08] `_env_float` registra en `_KNOBS_REGISTRY`.
                 child_mult = _env_float("MEALFIT_CHILDREN_MULTIPLIER", 0.6)
                 child_mult = max(0.3, min(child_mult, 1.0))
-                return max(1.0, float(adults) + float(children) * child_mult)
+                raw = float(adults) + float(children) * child_mult
+                return max(1.0, min(raw, float(_max_household)))
         except (TypeError, ValueError):
             pass
 
     try:
-        return max(1.0, float(source.get("householdSize") or source.get("household_size") or 1))
+        raw = float(source.get("householdSize") or source.get("household_size") or 1)
+        return max(1.0, min(raw, float(_max_household)))
     except (TypeError, ValueError):
         return 1.0
 

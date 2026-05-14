@@ -38,6 +38,11 @@ _PLANS_PY = _REPO_ROOT / "backend" / "routers" / "plans.py"
 _CRON_PY = _REPO_ROOT / "backend" / "cron_tasks.py"
 _DASH_FP = _REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx"
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
+# [P3-PDF-POLISH-4 · 2026-05-14] La tabla `system_alerts` se movió de
+# CLAUDE.md a `backend/docs/system_alerts_resolution_table.md` en
+# P3-CLAUDEMD-CAP (presión de tamaño). Drift pre-existente corregido
+# como colateral del bundle P3-PDF-POLISH-4.
+_SYSTEM_ALERTS_TABLE = _REPO_ROOT / "backend" / "docs" / "system_alerts_resolution_table.md"
 
 
 @pytest.fixture(scope="module")
@@ -312,14 +317,21 @@ def test_frontend_anchor_marker_present(dash_src: str):
 # 5. CLAUDE.md system_alerts row documentado
 # ---------------------------------------------------------------------------
 
-def test_alert_documented_in_claude_md(claude_md: str):
-    """La tabla `system_alerts` de CLAUDE.md tiene una row para
+def test_alert_documented_in_canonical_table():
+    """La tabla canónica `system_alerts` tiene una row para
     `pdf_stale_inventory_fallback_burst`. Test `test_p2_audit_4_alert_keys_documented`
     bloquea si falta.
+
+    [P3-PDF-POLISH-4 · 2026-05-14] La tabla vive ahora en
+    `backend/docs/system_alerts_resolution_table.md` (movida de CLAUDE.md
+    en P3-CLAUDEMD-CAP por presión de tamaño). Pre-fix este test leía de
+    CLAUDE.md → drift silencioso. Fix colateral del bundle P3-PDF-POLISH-4.
     """
-    assert "pdf_stale_inventory_fallback_burst" in claude_md, (
+    table_src = _SYSTEM_ALERTS_TABLE.read_text(encoding="utf-8")
+    assert "pdf_stale_inventory_fallback_burst" in table_src, (
         "P2-SHOPPING-3 regresión: la alert_key no está documentada en la "
-        "tabla `system_alerts` de CLAUDE.md. Sin doc, futuros operadores "
-        "no sabrán qué significa cuando aparezca en el dashboard. "
-        "test_p2_audit_4_alert_keys_documented también fallará."
+        f"tabla canónica `{_SYSTEM_ALERTS_TABLE.relative_to(_REPO_ROOT)}`. "
+        "Sin doc, futuros operadores no sabrán qué significa cuando "
+        "aparezca en el dashboard. test_p2_audit_4_alert_keys_documented "
+        "también fallará."
     )

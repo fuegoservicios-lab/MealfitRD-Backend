@@ -61,6 +61,27 @@ logger = logging.getLogger(__name__)
 # que crear uno por request).
 _PLAN_GEN_LIMITER = RateLimiter(max_calls=3, period_seconds=60)
 
+# [P3-PDF-POLISH-4-A · 2026-05-14] Rate limit per-endpoint para los dos
+# endpoints del flujo PDF lista-de-compras que NO usan `verify_api_quota`:
+#
+#   1. `/recalculate-shopping-list`: muta `plan_data` (UPDATE jsonb bajo
+#      advisory lock) + 3× `get_shopping_list_delta` (compute heavy) +
+#      coherence guard. Ningún costo LLM, por lo que paywall no aplica;
+#      pero un cliente autenticado podía spammear POSTs y exhaustar la
+#      DB pool del mismo usuario (lost-update está cubierto por el
+#      advisory lock, pero el work seguía consumiendo workers).
+#
+#   2. `/telemetry/pdf-stale-fallback`: INSERT a `pipeline_metrics`
+#      fire-and-forget desde el frontend. Sin tope un atacante autenticado
+#      podía bloat la tabla — el burst-alert cron P2-SHOPPING-3 lo
+#      detecta, pero defense-in-depth previene el bloat en primer lugar.
+#
+# Buckets independientes (singletons a nivel módulo). Mismo bucket-key
+# strategy que `_PLAN_GEN_LIMITER`: prefer `verified_user_id`, fall back a
+# `ip:<host>` para anon (vía RateLimiter P1-6).
+_RECALC_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+_PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
 # [P1-16] Registry global de session_ids cancelados durante la generación.
 # Cuando el usuario clickea "Cancelar" en el frontend, el SSE se aborta
 # del lado cliente — pero ANTES de P1-16 el pipeline backend seguía
@@ -3913,7 +3934,7 @@ def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/recalculate-shopping-list")
-def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
+def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_RECALC_LIMITER)):
     """
     Recalcula la lista de compras escalando las recetas por el householdSize
     y LUEGO deduciendo el inventario físico (is_new_plan=False).
@@ -3936,7 +3957,18 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
     """
     try:
         user_id = data.get("user_id")
-        household_size = max(1, int(data.get("householdSize", 1) or 1))
+        # [P3-PDF-POLISH-4-B-RECALC · 2026-05-14] Clamp upper bound antes de
+        # llegar a `compute_household_multiplier`. SSOT del clamp vive en el
+        # helper (constants.py), pero aplicarlo también aquí garantiza que
+        # `calc_household_size` persistido en plan_data nunca pase el cap
+        # — un POST con `householdSize=999999` se persiste como 20, no como
+        # 999999. Defense-in-depth idéntica al pattern de child_mult clamp.
+        try:
+            _max_household = _env_int("MEALFIT_MAX_HOUSEHOLD_SIZE", 20)
+        except Exception:
+            _max_household = 20
+        _max_household = max(1, min(_max_household, 100))
+        household_size = max(1, min(int(data.get("householdSize", 1) or 1), _max_household))
         grocery_duration = data.get("groceryDuration", "weekly")
         is_new_plan_flag = data.get("is_new_plan", False)
         # [P1-3] householdComposition opcional desde el body. Si está, sobrescribe
@@ -3987,7 +4019,14 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             return {"success": False, "message": "Datos de plan inválidos."}
 
         from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan
-        from db_plans import update_meal_plan_data
+        # [P1-RECALC-LOSTUPDATE · 2026-05-14] Migración del helper:
+        # `update_meal_plan_data` → `update_plan_data_atomic`. Ver justificación
+        # detallada en el bloque P1-RECALC-LOSTUPDATE más abajo, junto al
+        # callsite. El helper toma FOR UPDATE row lock + re-SELECT fresh +
+        # callback + UPDATE en la misma transacción (P0-2), cerrando la
+        # ventana lost-update entre el SELECT inicial del handler y la
+        # persistencia full-overwrite.
+        from db_plans import update_plan_data_atomic
         from constants import compute_household_multiplier
 
         # [P1-3] Multiplier efectivo: si hay householdComposition lo usa,
@@ -4062,93 +4101,162 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         else:
             active_list = scaled_7
 
-        # Actualizar plan en BD
-        plan_data["aggregated_shopping_list"] = active_list
-        plan_data["aggregated_shopping_list_weekly"] = scaled_7
-        plan_data["aggregated_shopping_list_biweekly"] = scaled_15_hybrid
-        plan_data["aggregated_shopping_list_monthly"] = scaled_30_hybrid
-
-        # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
-        # escalada. Antes, /recalculate-shopping-list persistía
-        # aggregated_shopping_list* sin invocar run_shopping_coherence_guard —
-        # un recalc cliente (Pantry add/delete + Dashboard) podía dejar la
-        # lista divergente vs recetas sin retry ni telemetría. Cierre del
-        # gap del audit 2026-05-11.
+        # [P1-RECALC-LOSTUPDATE · 2026-05-14] Mutación + persistencia atómica
+        # bajo FOR UPDATE row lock (vía `update_plan_data_atomic`).
         #
-        # Modo: `warn` porque el caller es síncrono y bloquear con 400
-        # rompe UX cuando la divergencia viene de un edge case del
-        # multiplier escalado (P3-A ya cubre escala lineal). Si
-        # divergencias críticas aparecen sistémicamente, el cron diario
-        # las alertará; cliente sigue viendo lista usable.
-        # `action_taken="warn_only_recalc"` distingue origen post-mortem.
-        # [P2-COHERENCE-1 · 2026-05-11] Capturamos `divergences` para retornar
-        # `_coherence_warnings` en la response. El frontend puede renderear un
-        # toast no-bloqueante "lista revisada — algunos items pueden necesitar
-        # ajuste manual" cuando el guard reportó issues. NO escalamos a block
-        # acá (síncrono) porque rompería la UX del recalc; solo telemetría
-        # frontend complementaria al cron diario.
-        _recalc_divergences: list = []
-        try:
-            from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_recalc
-            _recalc_divergences, _ = _coh_recalc(
-                plan_data,
-                multiplier=household_multiplier,
-                mode_override="warn",
-                attempt=1,
-                action_taken="warn_only_recalc",
-                plan_id_hint=plan_id,
+        # Pre-fix (audit 2026-05-14): el handler hacía SELECT inicial (línea
+        # ~4011 fallback latest, o ~3999 branch req_plan_id) FUERA de cualquier
+        # lock, mutaba `plan_data` in-memory con aggregated_shopping_list*,
+        # calc_*, _shopping_coherence_block*, etc., y persistía con
+        # `update_meal_plan_data` full-overwrite. El helper P1-NEXT-1 adquiría
+        # advisory lock (purpose='general') para serializar contra `_chunk_worker
+        # T1/T2` y `api_shift_plan`, pero esa serialización NO cerraba el
+        # window read-modify-write contra endpoints hermanos que mutan
+        # `plan_data` con `jsonb_set` quirúrgico (`/swap-meal/persist`,
+        # `/grocery-start-date`, `/{plan_id}/name`, `/recipe/expand`): el
+        # SELECT inicial leía a t=0 sin lock; un hermano podía escribir
+        # quirúrgico a t=1 con su propio lock; recalc tomaba el lock y
+        # UPDATEaba full-overwrite a t=2 con la copia stale → la mutación
+        # quirúrgica del hermano se perdía silenciosamente.
+        #
+        # Fix: `update_plan_data_atomic` toma `SELECT … FOR UPDATE` row lock
+        # + re-SELECTea plan_data FRESH dentro del lock + invoca el callback +
+        # UPDATEa, todo en la misma transacción. El FOR UPDATE row lock
+        # conflicta con el UPDATE implícito de cualquier hermano: las
+        # mutaciones quirúrgicas concurrentes completan ANTES del lock o
+        # esperan DETRÁS del UPDATE. Así el callback opera sobre la copia
+        # post-merge y solo toca las keys que recalc semánticamente posee
+        # (aggregated_shopping_list*, calc_*, restock_*, _shopping_coherence_*,
+        # _debug_recalc) — todo lo demás (days, name, plan_expires_at,
+        # grocery_start_date, cycle_start_date, expanded_recipe) se preserva
+        # tal cual del fresh.
+        #
+        # Trade-off conocido: scaled_7/15/30 + active_list se computan FUERA
+        # del lock con la copia inicial de `days`. Si un swap-meal modificó
+        # `days[i].meals[j]` entre el SELECT inicial y el lock, las listas
+        # reflejan la versión pre-swap. Es divergencia acotada (1 ingrediente
+        # añadido/removido) — el swap del usuario SE PRESERVA (no se
+        # sobreescribe); el usuario puede recalcular de nuevo para sincronizar
+        # listas con días si nota la discrepancia. La alternativa (recomputar
+        # listas DENTRO del lock) extendería el tiempo bajo lock a
+        # ~100-500ms por recalc, contendiendo con chunk_worker / shift-plan /
+        # otros recalcs sobre el mismo plan.
+        #
+        # Tooltip-anchor: P1-RECALC-LOSTUPDATE-START | test_p1_recalc_lostupdate
+        _captured_divergences: list = []
+
+        def _apply_recalc(plan_data_fresh: dict) -> dict:
+            """Callback ejecutado DENTRO del FOR UPDATE row lock con
+            `plan_data_fresh` re-SELECTado bajo lock. Solo muta las keys
+            que recalc posee semánticamente; cualquier mutación quirúrgica
+            que un endpoint hermano haya hecho antes del lock está
+            preservada en `plan_data_fresh`.
+            """
+            # Aggregated lists (overwrite — recalc es source-of-truth de
+            # estas keys cuando se invoca explícitamente).
+            plan_data_fresh["aggregated_shopping_list"] = active_list
+            plan_data_fresh["aggregated_shopping_list_weekly"] = scaled_7
+            plan_data_fresh["aggregated_shopping_list_biweekly"] = scaled_15_hybrid
+            plan_data_fresh["aggregated_shopping_list_monthly"] = scaled_30_hybrid
+
+            # Comparar contra calc_* del FRESH (no del initial). Un recalc
+            # concurrente del mismo user pudo haber dejado is_restocked
+            # consistente con los nuevos params — en ese caso has_changed
+            # es False y el pop no aplica.
+            prev_hh = plan_data_fresh.get("calc_household_size")
+            prev_dur = plan_data_fresh.get("calc_grocery_duration")
+            prev_mult = plan_data_fresh.get("calc_household_multiplier")
+            has_changed = (
+                (prev_hh != household_size)
+                or (prev_dur != grocery_duration)
+                or (prev_mult is not None and abs(float(prev_mult) - household_multiplier) > 0.01)
             )
-        except Exception as _coh_recalc_e:
-            logger.warning(f"[RECALC] coherence guard helper falló (no aborta): {_coh_recalc_e}")
-        
-        # Solo limpiar `is_restocked` si los parámetros cambiaron realmente
-        prev_hh = plan_data.get("calc_household_size")
-        prev_dur = plan_data.get("calc_grocery_duration")
-        prev_mult = plan_data.get("calc_household_multiplier")
-        has_changed = (
-            (prev_hh != household_size)
-            or (prev_dur != grocery_duration)
-            or (prev_mult is not None and abs(float(prev_mult) - household_multiplier) > 0.01)
-        )
 
-        plan_data["calc_household_size"] = household_size
-        plan_data["calc_household_multiplier"] = household_multiplier
-        if isinstance(household_composition, dict):
-            plan_data["calc_household_composition"] = household_composition
-        plan_data["calc_grocery_duration"] = grocery_duration
+            plan_data_fresh["calc_household_size"] = household_size
+            plan_data_fresh["calc_household_multiplier"] = household_multiplier
+            if isinstance(household_composition, dict):
+                plan_data_fresh["calc_household_composition"] = household_composition
+            plan_data_fresh["calc_grocery_duration"] = grocery_duration
 
-        if has_changed and plan_data.get("is_restocked"):
-            plan_data.pop("is_restocked", None)
-            plan_data.pop("restocked_at_iso", None)
-            plan_data.pop("restocked_items", None)
-            logger.info(f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron de {prev_hh}p/{prev_dur} (mult={prev_mult}) a {household_size}p/{grocery_duration} (mult={household_multiplier:.2f}), requiere re-registro")
-        
-        # [P3-SHOPPING-2 · 2026-05-14] Fingerprint de debug solo en non-prod.
-        # Antes esto se persistía SIEMPRE a `plan_data._debug_recalc` —
-        # útil para diagnóstico en dev pero ensucia jsonb en producción
-        # sin valor operacional (timestamp/sample_item no son auditables
-        # cross-tenant, y `household_size`/`weekly_items_count` ya están
-        # en `calc_household_*` keys persistidas arriba).
-        # Knob `MEALFIT_PERSIST_DEBUG_RECALC` permite re-habilitar en
-        # producción si SRE necesita instrumentar un incidente puntual
-        # (default False = stripped en prod, escape hatch sin redeploy).
-        _persist_debug = (
-            os.environ.get("ENVIRONMENT", "").lower() != "production"
-            or os.environ.get("MEALFIT_PERSIST_DEBUG_RECALC", "").lower() in ("1", "true", "yes", "on")
-        )
-        if _persist_debug:
-            import time
-            plan_data["_debug_recalc"] = {
-                "household_size": household_size,
-                "timestamp": time.time(),
-                "weekly_items_count": len(scaled_7),
-                "sample_item": scaled_7[0].get("display_string", "?") if scaled_7 else "empty"
-            }
-        
+            if has_changed and plan_data_fresh.get("is_restocked"):
+                plan_data_fresh.pop("is_restocked", None)
+                plan_data_fresh.pop("restocked_at_iso", None)
+                plan_data_fresh.pop("restocked_items", None)
+                logger.info(
+                    f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron "
+                    f"de {prev_hh}p/{prev_dur} (mult={prev_mult}) a "
+                    f"{household_size}p/{grocery_duration} "
+                    f"(mult={household_multiplier:.2f}), requiere re-registro"
+                )
+
+            # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
+            # escalada. Antes, /recalculate-shopping-list persistía
+            # aggregated_shopping_list* sin invocar run_shopping_coherence_guard —
+            # un recalc cliente (Pantry add/delete + Dashboard) podía dejar la
+            # lista divergente vs recetas sin retry ni telemetría.
+            #
+            # Modo: `warn` porque el caller es síncrono y bloquear con 400
+            # rompe UX cuando la divergencia viene de un edge case del
+            # multiplier escalado (P3-A ya cubre escala lineal). Si
+            # divergencias críticas aparecen sistémicamente, el cron diario
+            # las alertará; cliente sigue viendo lista usable.
+            # `action_taken="warn_only_recalc"` distingue origen post-mortem.
+            # [P2-COHERENCE-1 · 2026-05-11] Capturamos `divergences` vía
+            # closure list (`_captured_divergences`) para retornar
+            # `_coherence_warnings` en la response.
+            try:
+                from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_recalc
+                divs, _ = _coh_recalc(
+                    plan_data_fresh,
+                    multiplier=household_multiplier,
+                    mode_override="warn",
+                    attempt=1,
+                    action_taken="warn_only_recalc",
+                    plan_id_hint=plan_id,
+                )
+                _captured_divergences.extend(divs or [])
+            except Exception as _coh_recalc_e:
+                logger.warning(f"[RECALC] coherence guard helper falló (no aborta): {_coh_recalc_e}")
+
+            # [P3-SHOPPING-2 · 2026-05-14] Fingerprint de debug solo en non-prod.
+            # Antes esto se persistía SIEMPRE a `plan_data._debug_recalc` —
+            # útil para diagnóstico en dev pero ensucia jsonb en producción
+            # sin valor operacional. Knob `MEALFIT_PERSIST_DEBUG_RECALC`
+            # permite re-habilitar en prod si SRE necesita instrumentar un
+            # incidente puntual (default False = stripped en prod, escape
+            # hatch sin redeploy).
+            _persist_debug = (
+                os.environ.get("ENVIRONMENT", "").lower() != "production"
+                or os.environ.get("MEALFIT_PERSIST_DEBUG_RECALC", "").lower() in ("1", "true", "yes", "on")
+            )
+            if _persist_debug:
+                import time
+                plan_data_fresh["_debug_recalc"] = {
+                    "household_size": household_size,
+                    "timestamp": time.time(),
+                    "weekly_items_count": len(scaled_7),
+                    "sample_item": scaled_7[0].get("display_string", "?") if scaled_7 else "empty"
+                }
+
+            return plan_data_fresh
+
+        # [P1-RECALC-LOSTUPDATE · 2026-05-14] `update_plan_data_atomic`
+        # adquiere FOR UPDATE row lock, re-SELECTea plan_data con
+        # `WHERE id = %s AND user_id = %s`, invoca el callback y persiste
+        # el resultado — todo en la misma transacción (P0-2). Si la fila
+        # no existe o no pertenece al user_id → retorna `{}` → 404 explícito.
         # [P1-NEW-3 · 2026-05-10] user_id ya validado al inicio del handler
-        # (verified_user_id == user_id). plan_id viene de get_latest_meal_plan_with_id
-        # que ya filtra por user_id. Defense-in-depth doble candado.
-        update_meal_plan_data(plan_id, plan_data, user_id=user_id)
+        # (verified_user_id == user_id). plan_id viene del SELECT explícito
+        # o de get_latest_meal_plan_with_id (ambos filtran por user_id).
+        # Defense-in-depth doble candado al pasar user_id al helper.
+        merged_plan_data = update_plan_data_atomic(
+            plan_id, _apply_recalc, user_id=user_id
+        )
+        if not merged_plan_data:
+            # Plan desapareció entre el SELECT inicial y el lock (cancelado
+            # por save_new_meal_plan_atomic, o filtro user_id no matched).
+            # 404 explícito en lugar de retornar success con plan_data stale.
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
 
         logger.info(f"✅ [RECALC] Listas recalculadas exitosamente ×{household_size} personas")
 
@@ -4156,17 +4264,18 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         # frontend muestre toast no-bloqueante si el guard detectó drift
         # recetas↔lista. Lista vacía cuando todo OK. Cap de 5 items vía
         # `summarize_divergences_for_ui` evita payloads gigantes.
-        _coherence_warnings = []
-        if _recalc_divergences:
+        _coherence_warnings: list = []
+        if _captured_divergences:
             try:
                 from shopping_calculator import summarize_divergences_for_ui
-                _coherence_warnings = summarize_divergences_for_ui(_recalc_divergences, max_items=5)
+                _coherence_warnings = summarize_divergences_for_ui(_captured_divergences, max_items=5)
             except Exception as _sum_e:
                 logger.warning(f"[RECALC/P2-COH-1] summarize_divergences_for_ui falló: {_sum_e}")
 
-        # Devolver el plan_data actualizado directamente para evitar race conditions
-        # (el frontend no necesita re-fetch de Supabase)
-        return {"success": True, "plan_data": plan_data, "_coherence_warnings": _coherence_warnings}
+        # Devolver el plan_data merged directamente para evitar race conditions
+        # (el frontend no necesita re-fetch de Supabase). Es exactamente lo
+        # que persistimos bajo el lock — sin sorpresas downstream.
+        return {"success": True, "plan_data": merged_plan_data, "_coherence_warnings": _coherence_warnings}
 
     except HTTPException:
         # [P2-NEW-B · 2026-05-11] Propagar el 404 del ownership check
@@ -4178,16 +4287,20 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         # que documenta la intención original.
         raise
     except Exception as e:
-        logger.error(f"❌ [ERROR] Error en /api/recalculate-shopping-list: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        # [P3-PDF-POLISH-4-D · 2026-05-14] `logger.exception` captura el
+        # traceback estructurado en el mismo emit. Pre-fix duplicaba el
+        # error (logger.error + dump del traceback a stderr puro) y este
+        # último escapaba al pattern P2-LOGGER-MIGRATION (no era `print()`
+        # bare, pero funcionalmente equivalente al stdout/stderr write
+        # fuera del logger handler). Tooltip-anchor: P3-PDF-POLISH-4-D.
+        logger.exception("❌ [RECALC] Error en /api/recalculate-shopping-list")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/telemetry/pdf-stale-fallback")
 def api_pdf_stale_fallback_telemetry(
     data: dict = Body(...),
-    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+    verified_user_id: Optional[str] = Depends(_PDF_TELEMETRY_LIMITER),
 ):
     """[P2-SHOPPING-3 · 2026-05-14] Sink backend para el evento
     `pdf_stale_inventory_fallback` emitido por el frontend cuando el fetch
@@ -4234,6 +4347,15 @@ def api_pdf_stale_fallback_telemetry(
         fallback_size = data.get("fallback_inventory_size") if isinstance(data, dict) else None
         if isinstance(fallback_size, bool) or not isinstance(fallback_size, int) or fallback_size < 0:
             fallback_size = None
+        # [P3-PDF-OBS-FU-B · 2026-05-14] Clamp superior defensivo. Sin cap,
+        # un POST con `fallback_inventory_size=999999999` se persistía tal
+        # cual en `pipeline_metrics.metadata` jsonb — pollution menor sin
+        # impacto operacional pero un cliente adversarial podía inflar
+        # rows con payloads grandes. 100000 es ~3 órdenes de magnitud
+        # sobre el realista (inventarios típicos: 10-200 items); valor
+        # mayor sugiere bug o ataque, descartar al cap.
+        elif fallback_size is not None and fallback_size > 100000:
+            fallback_size = 100000
 
         from db_core import execute_sql_write
         execute_sql_write(
