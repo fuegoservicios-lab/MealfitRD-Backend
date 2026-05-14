@@ -3969,7 +3969,33 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             _max_household = 20
         _max_household = max(1, min(_max_household, 100))
         household_size = max(1, min(int(data.get("householdSize", 1) or 1), _max_household))
+        # [P2-RECALC-GROCERY-DURATION-ENUM · 2026-05-14] Clamp del enum
+        # `groceryDuration` a los 3 valores válidos. Pre-fix aceptaba
+        # cualquier string del body (`data.get("groceryDuration", "weekly")`)
+        # sin validar. Un POST con `groceryDuration="forever"` o un typo
+        # (`"weely"`, `"month"`) caía silenciosamente al else-weekly del
+        # branch en línea ~4099, pero el valor inválido se persistía a
+        # `plan_data.calc_grocery_duration` (línea ~4179) → un cliente
+        # downstream que leyera la key persistida observaría un valor
+        # nunca generado por el flujo legítimo del frontend, abriendo
+        # rama de UX incoherente (banner "ciclo desconocido", export PDF
+        # con label vacío, etc).
+        #
+        # Defense-in-depth análogo al clamp `_max_household` (P3-PDF-POLISH-4-B-RECALC)
+        # arriba. Si el frontend envía un valor inválido (bug del cliente,
+        # o request adversarial), normalizamos al default y loggeamos para
+        # captar el caller patológico — no aborta el flujo. El test
+        # parser-based ancla el enum + clamp + fallback. Tooltip-anchor:
+        # P2-RECALC-GROCERY-DURATION-ENUM-START | test_p2_recalc_grocery_duration_enum
+        _ALLOWED_GROCERY_DURATIONS = ("weekly", "biweekly", "monthly")
         grocery_duration = data.get("groceryDuration", "weekly")
+        if grocery_duration not in _ALLOWED_GROCERY_DURATIONS:
+            logger.warning(
+                f"[P2-RECALC-GROCERY-DURATION-ENUM] user_id={data.get('user_id')!r} "
+                f"envió groceryDuration={grocery_duration!r} (no en "
+                f"{_ALLOWED_GROCERY_DURATIONS}). Normalizado a 'weekly'."
+            )
+            grocery_duration = "weekly"
         is_new_plan_flag = data.get("is_new_plan", False)
         # [P1-3] householdComposition opcional desde el body. Si está, sobrescribe
         # el escalar legacy. Si no, fallback al int (comportamiento previo).
