@@ -31,8 +31,16 @@ import pytest
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 _BACKEND = _REPO_ROOT / "backend"
+# [Fase 5 trim · 2026-05-14] La tabla canónica de surfaces fue movida de
+# CLAUDE.md a backend/docs/coherence_surfaces_table.md por presión de
+# tamaño en CLAUDE.md (carga en cada turn). El test sigue parseando
+# exactamente el mismo contenido (header + marker + tabla con action_taken
+# values + `Bloquea retry?` column + **Sí**/**No** matches) — solo cambió
+# la ubicación física. Va en backend/docs/ (no outer/docs/) para que viva
+# en el repo de backend y CI lo encuentre. CLAUDE.md mantiene un resumen
+# 1-line con los 6 action_taken values + mención `Bloquea retry?`.
+_CLAUDE_MD = _BACKEND / "docs" / "coherence_surfaces_table.md"
 
 # action_taken values esperados que el código DEBE emitir y la tabla
 # DEBE mencionar. Estos son los 6 valores canónicos post-P2-NEXT-2.

@@ -1,0 +1,48 @@
+# Tabla canónica `system_alerts` resolution
+
+> Tabla movida de CLAUDE.md (P2-AUDIT-4 · 2026-05-10) por presión de tamaño en CLAUDE.md (carga en cada turn). El test parser-based [`test_p2_audit_4_alert_keys_documented.py`](../backend/tests/test_p2_audit_4_alert_keys_documented.py) parsea este archivo directamente para drift detection bidireccional con los call sites en `cron_tasks.py`/`db_inventory.py`/`memory_manager.py`/`app.py`/`graph_orchestrator.py`/`routers/billing.py`.
+
+## Política de `system_alerts` resolution
+
+[P2-NEW-3 · 2026-05-10 · reconciliada P2-AUDIT-4 · 2026-05-10] Modelo: **upsert por `alert_key` + `resolved_at` mutable** (alert "vive" mientras `resolved_at IS NULL`). 4 modelos de resolution: **Auto (explicit)** productor emite UPDATE resolved_at; **Auto (implicit)** productor solo re-emite mientras condición existe, operador depende del staleness; **Handler-driven** endpoint del usuario cierra; **Manual** SRE (SOPs detallados en [`runbook_system_alerts_sops_2026_05_11.md`](../../.claude/projects/C--Users-angel-OneDrive-Escritorio-MealfitRD-IA/memory/runbook_system_alerts_sops_2026_05_11.md)).
+
+| `alert_key` (pattern) | Productor | Resolver | Modelo |
+|---|---|---|---|
+| `scheduler_missed_<job_id>` | `_scheduler_alert_listener` (app.py) `EVENT_JOB_MISSED` | listener `EVENT_JOB_EXECUTED` (P1-NEW-2) + sweep `_resolve_stale_scheduler_alerts` TTL 24h (P0-AUDIT-1) + startup-run en `lifespan` (P0-NEW-1-AUTOHEAL) | Auto (explicit) |
+| `scheduler_error_<job_id>` | mismo listener, `EVENT_JOB_ERROR` | mismo path que `scheduler_missed_*` | Auto (explicit) |
+| `scheduler_cascade_missed` | cron `_alert_scheduler_cascade_missed` (alert_type=`scheduler_cascade`) + autohealer P0-NEW-2 (Sentry + `_resolve_stale_scheduler_alerts`) | estabilización P2-LIVE-1 (0 children, `MEALFIT_SCHEDULER_CASCADE_STABILIZATION_MIN` default 60min) OR hard-cap P2-NEW-E edad absoluta `MEALFIT_SCHEDULER_CASCADE_HARD_CAP_HOURS` default 6h | Auto (explicit) |
+| `coherence_watchdog_silent` | cron `_alert_coherence_watchdog_silent` (P0-3 liveness) | cron re-eval | Auto (implicit) |
+| `deploy_lag_marker_malformed` | cron `_alert_deploy_lag_marker_stale` cuando `_LAST_KNOWN_PFIX` no matchea regex `Pn-X · YYYY-MM-DD` | cron re-eval tras fix | Auto (implicit) |
+| `deploy_lag_marker_stale` | mismo cron cuando `_LAST_KNOWN_PFIX` < floor de fecha | cron re-eval tras bump | Auto (implicit) |
+| `deploy_lag_drift_vs_expected` | mismo cron cuando live ≠ `expected_last_known_pfix` (alert_type=`deploy_drift`); SOP en runbook | cron re-eval tras deploy o update KV | Auto (implicit) |
+| `failed_inventory_deductions_backlog` | cron `_alert_failed_inventory_deductions_backlog` > knob default 25 (24h lookback) | manual tras drenar backlog | Manual |
+| `plan_data_corrupted:<plan_id>:<field_name>` | mutators que detectan plan_data inválido (cron_tasks.py); SOP en runbook | manual (rollback vs hotfix) | Manual |
+| `reservation_reconciliation_exhausted:<plan_id>:<week>` | reconciliador de reservas tras N retries fallidos | manual: recuperar chunk + liberar reservas | Manual |
+| `dead_lettered_chunk:<plan_id>:<week>` | `_escalate_unrecoverable_chunk` (P2-A sealing) | `regenerate-simplified` re-encola | Handler-driven |
+| `chronic_deferrals:<user_id>` | cron `_detect_chronic_deferrals` cuando deferrals TZ ≥ umbral | cron re-eval | Auto (implicit) |
+| `chunk_lesson_synth_ratio_high` | cron `_alert_high_synthesized_lesson_ratio` synth:real > umbral 24h | cron re-eval | Auto (implicit) |
+| `chunk_synthesis_overload:<user_id>:<plan_id>:<week>` | helper P0-B circuit breaker (alert_type=`chunk_synthesis_overload_per_user`) | cron re-eval (drop si breaker cerrado) | Auto (implicit) |
+| `atomic_pool_fallback_active` | cron `_alert_atomic_pool_fallback` (P2-6) | cron sweep marca resolved si `last_at` excede window | Auto (explicit) |
+| `dead_lettered_chunks_recent` | cron `_alert_new_dead_lettered_chunks` (agregado flota) | `regenerate-simplified` re-encola último | Handler-driven |
+| `chunks_tz_unresolved_stuck` | cron `_alert_chunks_stuck_in_tz_unresolved` | cron re-eval | Auto (implicit) |
+| `chunk_pantry_snapshots_stale` | cron `_alert_chunk_pantry_snapshots_stale` (chunks pending con `_pantry_captured_at`, P1-LIVE-1) | P0-AUDIT-2: early-return UPDATE resolved_at cuando `len(rows) < min_count` | Auto (explicit) |
+| `chunk_lag_excessive` | cron `_alert_chunk_lag_excessive` (agregado flota) | cron re-eval | Auto (implicit) |
+| `chunk_dual_processing_detected` | cron `_alert_chunk_dual_processing` (severity critical) | Manual: investigar race entre instances | Manual |
+| `chunk_paused_indefinitely:<plan_id>:<week>` | cron `_alert_chunks_paused_indefinitely` | `regenerate-simplified` + cron re-eval | Handler-driven |
+| `degraded_rate_high:<tipo>` | `_persist_quality_degradation_alert`; tipo ∈ `{refill, initial}` | cron re-eval (drop si ratio cae bajo umbral) | Auto (implicit) |
+| `temporal_gate_proactive:<user_id>:<plan_id>:<week>` | hook P1-3 (severity info, no failure) | cron re-eval next pass | Auto (implicit) |
+| `inventory_rpc_fallback` | `apply_inventory_delta` except path (P1-NEW-1) | manual tras verificar RPC operativa | Manual |
+| `chunk_learning_stub_overload:<plan_id>` | `_chunk_worker` cuando `_chunk_learning_stub_count ≥ 2` (P1-AUDIT-1) | manual: investigar logs | Manual |
+| `shopping_list_replace_partial_rollback:<user_id>` | `replace_user_inventory_with_shopping_list` DELETE-then-INSERT falló parcialmente (P3-1) | Manual: logs `[P3-D/ROLLBACK]` + re-INSERT manual | Manual |
+| `memory_summary_failures` | `_persist_summary_failure_alert` cuando `summarize_and_prune` falla N veces (P1-19) | manual tras fix modelo/API-key/cuota | Manual |
+| `plan_quality_degraded:<user_id>:<plan_id>` | `_emit_plan_quality_degraded_alert` (graph_orchestrator, P1-NEW-3) en 5 ramas "end" de `should_retry`; `metadata.caller_context` (P1-NEW-9) distingue `initial_generate` vs `jit_week2` | cron `_resolve_stale_plan_quality_alerts` (P2-NEW-10, default 60min) cierra si existe meal_plan posterior `complete` AND sin `_is_fallback`/`_review_failed_but_delivered`. Knob `MEALFIT_PLAN_QUALITY_AUTO_RESOLVE_ENABLED` | Auto (explicit, plan-posterior-limpio) |
+| `post_swap_critical_divergence_<key_id>` | `_emit_post_swap_coherence_alert` (graph_orchestrator) swap deja N≥knob (default 3) divergencias críticas; cooldown per-user 6h, severity=warning | mismo cron P2-NEW-10 por edad `MEALFIT_POST_SWAP_DIVERGENCE_AUTO_RESOLVE_HOURS` default 24h (hard-floor 6h) | Auto (explicit, edad post-cooldown) |
+| `hot_table_bloat:<table>` | cron `_emit_hot_table_bloat_tick` (P2-AUDIT-2, cada 6h default, knob `MEALFIT_AUTOVACUUM_TICK_INTERVAL_MIN`) cuando `dead_pct>70 AND hours_since_av>24` sobre 7 tablas P1-B; **P1-HOT-BLOAT-MIN-TUPLES** skip si total_tuples < `MEALFIT_AUTOVACUUM_MIN_TOTAL_TUPLES` (default 100) → emite `_hot_table_bloat_skipped_low_volume` + auto-resuelve. severity=warning | mismo cron: tabla sana (dead_pct ≤ umbral O hours_since_av ≤ umbral) O total_tuples bajo umbral → UPDATE resolved_at | Auto (explicit, mismo cron) |
+| `pipeline_metrics_silence` (1 nodo) / `pipeline_metrics_silence:<node>` (multi-nodo) | cron `_alert_pipeline_metrics_silence` (P2-OBSERVABILITY-1 + P2-PIPELINE-SILENCE-MULTI-NODE) cada `MEALFIT_PIPELINE_METRICS_SILENCE_INTERVAL_MIN` default 10min; `MEALFIT_PIPELINE_METRICS_SILENCE_NODE` acepta CSV `<node>:<threshold_min>` per-entry; captura deploy-lag/hardfloor cancelado/drift schema. severity=warning | mismo cron: tick vuelve → UPDATE resolved_at per-`alert_key` (per-nodo en multi-nodo) | Auto (explicit, mismo cron) |
+| `billing_old_sub_cancel_failed:<user_id>:<old_sub_id>` | `_persist_billing_alert` en `/api/subscription/verify` upgrade-path (P1-BILLING-UPGRADE-FAIL-LOUD, routers/billing.py) cuando PayPal `/cancel` non-idempotent-failure; handler aborta HTTP 409 ANTES del UPDATE plan_tier (previene doble cobro). severity=critical | Manual: verificar PayPal dashboard, cancelar manual sub vieja si ACTIVE, UPDATE resolved_at | Manual |
+| `billing_cancel_failed:<user_id>:<sub_id>` | `_persist_billing_alert` en `/api/subscription/cancel` (P1-BILLING-CANCEL-FAIL-LOUD) cuando OAuth o `/cancel` non-idempotent; handler aborta HTTP 502 ANTES del UPDATE subscription_status; `metadata.stage` ∈ {oauth, cancel}. severity=critical | Manual: verificar PayPal, cancelar manual, marcar BD CANCELLED + cerrar alert | Manual |
+| `pdf_stale_inventory_fallback_burst` | cron `_alert_pdf_stale_inventory_fallback_burst` (P2-SHOPPING-3) cuando count `pdf_stale_inventory_fallback` ≥ `MEALFIT_PDF_STALE_FALLBACK_ALERT_THRESHOLD` default 10/60min; eventos via `/api/plans/telemetry/pdf-stale-fallback` (fire-and-forget desde `Dashboard.jsx::handleDownloadShoppingList` cuando `fetchFreshInventoryWithTimeout` stale=true). severity=warning | mismo cron: count cae bajo umbral → UPDATE resolved_at (evento transient: network blip / pool exhausted) | Auto (explicit, mismo cron) |
+
+## Cómo añadir un nuevo `alert_key`
+
+(1) decidir modelo de resolution; (2) añadir fila a la tabla de arriba con productor/resolver/modelo (el test `test_p2_audit_4_alert_keys_documented.py` falla en CI si emisor sin row o ghost row); (3) si Auto (explicit), añadir `UPDATE system_alerts SET resolved_at = NOW() WHERE alert_key = '...' AND resolved_at IS NULL` al callsite que resuelve; (4) test de regresión idempotencia del resolver. SOPs detallados (alerts Manual + limpieza one-shot de huérfanas): runbook arriba.

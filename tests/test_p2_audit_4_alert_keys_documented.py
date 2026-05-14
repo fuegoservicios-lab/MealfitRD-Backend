@@ -35,8 +35,13 @@ from pathlib import Path
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 _BACKEND = _REPO_ROOT / "backend"
+# [Fase 5 trim · 2026-05-14] La tabla canónica de system_alerts resolution
+# fue movida de CLAUDE.md a backend/docs/ por presión de tamaño (CLAUDE.md
+# carga en cada turn). El test sigue parseando exactamente el mismo formato
+# — solo cambió la ubicación física. Va en backend/docs/ (no outer/docs/)
+# para que viva en el repo de backend y CI lo encuentre.
+_CLAUDE_MD = _BACKEND / "docs" / "system_alerts_resolution_table.md"
 
 # Archivos donde viven los emisores de `alert_key`. Si se añade un nuevo
 # emisor en otro archivo, agregarlo aquí.
