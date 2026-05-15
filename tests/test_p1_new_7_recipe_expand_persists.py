@@ -1,7 +1,16 @@
 """[P1-NEW-7 · 2026-05-11] Test parser-based: el handler
-`/api/plans/recipe/expand` DEBE invocar `update_meal_plan_data(
-target_plan_id, target_plan_data, user_id=user_id)` tras mutar
-`target_plan_data` en memoria.
+`/api/plans/recipe/expand` DEBE persistir la mutación de recipe/isExpanded
+vía un helper de DB con kwarg `user_id=user_id`.
+
+[P1-AUDIT-1 · 2026-05-15] Actualizado: el helper cambió de
+`update_meal_plan_data(target_plan_id, target_plan_data, ...)` (patrón
+pre-fix, read-modify-write con copia stale) a
+`update_plan_data_atomic(target_plan_id, _apply_recipe_expansion,
+user_id=user_id)` (FOR UPDATE row lock + callback fresh). El INTENT del
+P1-NEW-7 se preserva — verificar que la persistencia ocurra y filtre por
+user_id — pero el mecanismo cambió. Los asserts aceptan AMBOS helpers
+para no romper si futuro refactor revierte parcialmente (siempre que el
+contrato semántico se cumpla).
 
 Bug original (gap P0 detectado audit 2026-05-11, este test lo enforza):
     El handler `api_expand_recipe` ([routers/plans.py:2871-3040]) mutaba
@@ -98,25 +107,34 @@ def expand_body() -> str:
 # 1. Existe la llamada a update_meal_plan_data
 # ---------------------------------------------------------------------------
 def test_handler_invokes_update_meal_plan_data(expand_body: str):
-    """Existe `update_meal_plan_data(target_plan_id, target_plan_data,
-    ...)` en el body del handler. Sin esta llamada las mutaciones a
-    recipe/isExpanded sobre el dict Python viven SOLO en memoria del
-    request y se pierden al `return` → cada cook-click quema cuota
-    Gemini sin persistir.
+    """Existe un call de persistencia en el body del handler — sea
+    `update_meal_plan_data(target_plan_id, target_plan_data, ...)`
+    (patrón pre P1-AUDIT-1) o `update_plan_data_atomic(target_plan_id,
+    _apply_recipe_expansion, ...)` (patrón post P1-AUDIT-1 con FOR UPDATE
+    row lock + callback fresh). Sin ninguna de las dos formas, las
+    mutaciones de recipe/isExpanded viven SOLO en memoria del request y
+    se pierden al return → cada cook-click quema cuota Gemini sin
+    persistir (gap P0 original audit 2026-05-11).
     """
-    call_pattern = re.compile(
+    legacy_re = re.compile(
         r"update_meal_plan_data\s*\(\s*target_plan_id\s*,\s*target_plan_data",
         re.DOTALL,
     )
-    assert call_pattern.search(expand_body), (
-        "P1-NEW-7 regresión: el handler `api_expand_recipe` NO llama "
-        "`update_meal_plan_data(target_plan_id, target_plan_data, ...)`. "
-        "Sin esta llamada, las mutaciones de recipe/isExpanded sobre "
-        "target_plan_data viven solo en el dict Python del request y "
-        "se pierden al return → cada cook-click quema cuota Gemini sin "
-        "persistir (gap P0 audit 2026-05-11). Restaurar la llamada "
-        "DENTRO del bloque `if updated and target_plan_id:` antes del "
-        "`# P1-HIST-RECIPE-1-END`."
+    atomic_re = re.compile(
+        r"(?:update_plan_data_atomic|_update_plan_data_atomic_\w+)"
+        r"\s*\(\s*target_plan_id\s*,",
+        re.DOTALL,
+    )
+    assert legacy_re.search(expand_body) or atomic_re.search(expand_body), (
+        "P1-NEW-7 regresión: el handler `api_expand_recipe` NO invoca un "
+        "helper de persistencia. Esperado uno de: "
+        "`update_meal_plan_data(target_plan_id, target_plan_data, ...)` "
+        "(legacy) o `update_plan_data_atomic(target_plan_id, "
+        "_apply_recipe_expansion, ...)` (post P1-AUDIT-1, recomendado: "
+        "FOR UPDATE row lock + callback fresh cierra la ventana lost-update). "
+        "Sin ningún call, las mutaciones de recipe/isExpanded viven solo "
+        "en memoria y se pierden al return → cada cook-click quema cuota "
+        "Gemini sin persistir (gap P0 audit 2026-05-11)."
     )
 
 
@@ -124,36 +142,50 @@ def test_handler_invokes_update_meal_plan_data(expand_body: str):
 # 2. La llamada está dentro del guard `if updated and target_plan_id:`
 # ---------------------------------------------------------------------------
 def test_persist_call_is_inside_updated_block(expand_body: str):
-    """El call a `update_meal_plan_data` debe aparecer DESPUÉS del
-    `if updated and target_plan_id:`. Si se mueve fuera del guard:
-      - Se ejecuta también cuando no hubo cambios → no-op write.
-      - Si `target_plan_id is None` (fallback path donde el helper
-        get_latest_meal_plan_with_id no resolvió) → AttributeError.
+    """El call de persistencia debe aparecer DESPUÉS de un guard que
+    asegure `target_plan_id` no es None. Pre P1-AUDIT-1 el guard era
+    `if updated and target_plan_id:` (variable `updated` gestionada
+    fuera del callback). Post P1-AUDIT-1 el guard es `if target_plan_data
+    and isinstance(target_plan_data.get("days"), list) and target_plan_id:`
+    (la lógica de `updated` se movió DENTRO del callback, donde retornar
+    `False` aborta el UPDATE — equivalente semántico al guard `updated`
+    pre-fix). Ambas formas son aceptables.
+
+    Si el call se mueve FUERA de cualquier guard que cheque target_plan_id,
+    crashea cuando es None (fallback path donde get_latest_meal_plan_with_id
+    no resolvió).
     """
-    if_match = re.search(
-        r"if\s+updated\s+and\s+target_plan_id\s*:",
-        expand_body,
+    # Aceptamos ambos guards: pre P1-AUDIT-1 y post P1-AUDIT-1.
+    # Non-greedy `.*?` para parar en la primera ocurrencia de `target_plan_id`;
+    # de lo contrario greedy `.*` se extiende hasta menciones del nombre en
+    # comentarios narrativos al final del handler, dejando `guard_end` después
+    # del callsite y el `after_guard` vacío.
+    guard_pre_re = re.compile(r"if\s+updated\s+and\s+target_plan_id\s*:")
+    guard_post_re = re.compile(
+        r"if\s+target_plan_data\s+and\s+.*?target_plan_id\s*:",
     )
-    assert if_match, (
-        "P1-NEW-7 regresión: no se encontró el bloque `if updated and "
-        "target_plan_id:` en el handler. ¿Fue refactorizado? Si la "
-        "estructura cambió, actualizar este test SIN perder la "
-        "condición: la persistencia debe ejecutarse SOLO cuando hubo "
-        "mutaciones que guardar (`updated`) y plan resuelto "
-        "(`target_plan_id`)."
+    pre_m = guard_pre_re.search(expand_body)
+    post_m = guard_post_re.search(expand_body)
+    assert pre_m or post_m, (
+        "P1-NEW-7 regresión: no se encontró un guard que cheque "
+        "`target_plan_id` (acepta `if updated and target_plan_id:` o "
+        "`if target_plan_data and ... target_plan_id:`). ¿Refactor "
+        "estructural? Sin guard, el call a persistencia crashea cuando "
+        "target_plan_id es None (fallback path)."
     )
-    after_if = expand_body[if_match.end():]
-    call_pattern = re.compile(
-        r"update_meal_plan_data\s*\(\s*target_plan_id",
+    # El call debe aparecer DESPUÉS del primer guard que matchee.
+    guard_end = (pre_m or post_m).end()
+    after_guard = expand_body[guard_end:]
+    call_re = re.compile(
+        r"(?:update_meal_plan_data|update_plan_data_atomic|_update_plan_data_atomic_\w+)"
+        r"\s*\(\s*target_plan_id",
         re.DOTALL,
     )
-    assert call_pattern.search(after_if), (
-        "P1-NEW-7 regresión: el call a `update_meal_plan_data` no "
-        "aparece DESPUÉS del `if updated and target_plan_id:` en el "
-        "handler. Si se movió fuera del guard, el call ejecuta no-op "
-        "writes cuando no hubo cambios, o crashea cuando "
-        "target_plan_id es None (fallback path). Restaurar dentro del "
-        "bloque."
+    assert call_re.search(after_guard), (
+        "P1-NEW-7 regresión: el call de persistencia no aparece DESPUÉS "
+        "del guard de `target_plan_id`. Si se movió fuera, el call puede "
+        "crashear cuando target_plan_id es None. Restaurar dentro del "
+        "bloque guardado."
     )
 
 
@@ -161,23 +193,25 @@ def test_persist_call_is_inside_updated_block(expand_body: str):
 # 3. Defense-in-depth P1-NEW-3: pasar user_id como kwarg
 # ---------------------------------------------------------------------------
 def test_persist_call_passes_user_id_kwarg(expand_body: str):
-    """El call debe pasar `user_id=user_id` para que el helper P1-NEW-3
-    filtre `AND user_id = %s` a nivel DB. Sin el kwarg, el helper
-    degrada a la rama legacy `WHERE id = %s` (documentado como
-    DEPRECATED en db_plans.py:927 + warning de log).
+    """El call de persistencia debe pasar `user_id=user_id` para que el
+    helper filtre `AND user_id = %s` a nivel DB. Aplica a ambos helpers:
+      - Legacy `update_meal_plan_data` (P1-NEW-3): sin kwarg degrada a
+        `WHERE id = %s` (DEPRECATED).
+      - Post P1-AUDIT-1 `update_plan_data_atomic` (P2-OPEN-1): sin kwarg
+        emite warning `[I2-MISS]` y degrada al SELECT/UPDATE sin filtro.
+    Defense-in-depth en TODA mutación de meal_plans (convención repo).
     """
     pattern = re.compile(
-        r"update_meal_plan_data\s*\([^)]*user_id\s*=\s*user_id[^)]*\)",
+        r"(?:update_meal_plan_data|update_plan_data_atomic|_update_plan_data_atomic_\w+)"
+        r"\s*\([^)]*user_id\s*=\s*user_id",
         re.DOTALL,
     )
     assert pattern.search(expand_body), (
-        "P1-NEW-7 regresión: el call a `update_meal_plan_data` no pasa "
-        "`user_id=user_id` como kwarg. Sin esto el helper degrada a la "
-        "rama legacy `WHERE id = %s` sin ownership filter a nivel DB "
-        "(documentado DEPRECATED en db_plans.py:927). El SELECT "
-        "upstream con `AND user_id = %s` ya validó ownership, pero la "
-        "convención del repo (P1-NEW-3) es defense-in-depth a DB-level "
-        "en TODA mutación de meal_plans."
+        "P1-NEW-7 regresión: el call de persistencia no pasa "
+        "`user_id=user_id` como kwarg. Esto degrada el helper a la rama "
+        "legacy sin ownership filter a nivel DB. El SELECT upstream con "
+        "`AND user_id = %s` ya validó ownership, pero la convención del "
+        "repo es defense-in-depth a DB-level en TODA mutación de meal_plans."
     )
 
 

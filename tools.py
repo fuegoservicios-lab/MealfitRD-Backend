@@ -507,13 +507,26 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         new_meal_data["time"] = target_meal.get("time")
         
         target_day["meals"][target_meal_index] = new_meal_data
-        
+
+        # [P1-AUDIT-1 · 2026-05-15] Inicialización a None para que el callback
+        # `_apply_meal_modification` pueda preservar las keys del fresh si la
+        # recomputación falla. Si el try-block recompute completa, sobrescribe;
+        # si lanza excepción antes de asignarlas, el callback ve None y omite
+        # la escritura de aggregated_shopping_list* (preserva fresh).
+        aggr_7 = None
+        aggr_15_hybrid = None
+        aggr_30_hybrid = None
+        aggr_list = None
+        household = max(1, int(form_data.get("householdSize", 1) or 1) if form_data else 1)
+
         # 4.5 Recalcular la lista de compras consolidada para mantener coherencia
         try:
             grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
             
             from shopping_calculator import get_shopping_list_delta, fetch_inventory_and_consumed_for_plan
-            household = max(1, int(form_data.get("householdSize", 1) or 1) if form_data else 1)
+            # [P1-AUDIT-1 · 2026-05-15] `household` ya inicializado arriba del
+            # try-block para garantizar que el callback lo vea por closure
+            # incluso si el try-block lanza antes de la recomputación.
             # [P1-5] Snapshot atómico de inventario + consumidos para las 3
             # multiplicidades. Sin esto, mutaciones concurrentes a
             # `user_inventory` entre las 3 llamadas producían deltas
@@ -549,64 +562,169 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             elif grocery_duration == "monthly": aggr_list = aggr_30_hybrid
             else: aggr_list = aggr_7
 
-            plan_data["aggregated_shopping_list"] = aggr_list
-            plan_data["aggregated_shopping_list_weekly"] = aggr_7
-            plan_data["aggregated_shopping_list_biweekly"] = aggr_15_hybrid
-            plan_data["aggregated_shopping_list_monthly"] = aggr_30_hybrid
+            # [P1-AUDIT-1 · 2026-05-15] Asignaciones `plan_data["aggregated_
+            # shopping_list*"] = ...` movidas al callback `_apply_meal_modification`
+            # más abajo. La copia local `plan_data` ya NO se persiste tal cual
+            # — `update_plan_data_atomic` re-SELECTea plan_data FRESH bajo
+            # FOR UPDATE row lock y aplica las 4 keys + meals[idx]=new_meal_data
+            # sobre la copia post-merge. Recompute de aggregated_shopping_list*
+            # se queda FUERA del lock (mismo trade-off que recalc): si un swap
+            # concurrente modificó OTRO día entre el SELECT inicial y el lock,
+            # las listas reflejan la versión pre-swap-de-otro-día. Las
+            # variables `aggr_7`, `aggr_15_hybrid`, `aggr_30_hybrid`, `aggr_list`
+            # quedan accesibles via closure desde el callback.
+            logger.info("✅ [TOOL] aggregated_shopping_list (7, 15, 30) recalculada post-modificación con Delta.")
+        except Exception as e:
+            logger.warning(f"⚠️ [TOOL] No se pudo recalcular aggregated_shopping_list Delta: {e}")
+        
+        # 5. Actualizar en Supabase atómicamente bajo FOR UPDATE row lock.
+        #
+        # [P1-AUDIT-1 · 2026-05-15] Migración del helper:
+        # `update_meal_plan_data` → `update_plan_data_atomic`. Cierre del
+        # follow-up natural documentado en P1-RECALC-LOSTUPDATE (2026-05-14):
+        #
+        # Pre-fix flow:
+        #   t=0  `get_latest_meal_plan_with_id(user_id)` (línea ~352) lee
+        #        plan_data sin lock.
+        #   t=1  LLM genera new_meal_data (puede tomar 5-30s con retry hasta 3
+        #        veces vía `invoke_with_retry`).
+        #   t=2  Mutación local: `target_day["meals"][target_meal_index] =
+        #        new_meal_data` + recompute aggregated_shopping_list (~100-500ms).
+        #   t=3  acquire advisory lock + UPDATE full-overwrite via
+        #        `update_meal_plan_data` (P1-NEXT-1).
+        #
+        # Ventana lost-update entre t=0 y t=3 (puede ser DECENAS DE SEGUNDOS
+        # por la llamada LLM en t=1): si un endpoint hermano muta `plan_data`
+        # quirúrgico entre nuestro SELECT y nuestro UPDATE, esa mutación se
+        # pierde silenciosamente. Es la ventana más larga del sistema junto
+        # con JIT week-2 (`proactive_agent`).
+        #
+        # Fix: `update_plan_data_atomic` re-SELECTea plan_data FRESH bajo
+        # FOR UPDATE row lock y aplica el callback. Re-localizamos
+        # `target_day` por `day_number` y el meal por `meal_type` dentro del
+        # callback contra `plan_data_fresh.days`, así otras mutaciones del
+        # mismo `plan_data` (otros días, otras keys top-level) sobreviven.
+        #
+        # Trade-off: aggregated_shopping_list* se computan FUERA del lock con
+        # la copia local de `days` ya con new_meal_data aplicado. Si un swap
+        # concurrente mutó OTRO day entre t=0 y el lock, las listas reflejan
+        # la versión pre-swap-de-otro-día. Mismo trade-off documentado en
+        # P1-RECALC-LOSTUPDATE (recompute dentro del lock extendería ~500ms
+        # bajo lock, contendiendo con chunk_worker).
+        #
+        # Tooltip-anchor: P1-AUDIT-1-MODIFY-MEAL-START |
+        # test_p1_audit_1_modify_single_meal_lostupdate
+        from db_plans import update_plan_data_atomic
+
+        # [P2-COHERENCE-1 · 2026-05-11] `_agent_divergences` capturadas via
+        # closure desde el callback para incluir `_coherence_warnings` en el
+        # return JSON. El agente las propaga al chat; el frontend las
+        # renderea como toast cuando detecta el campo. Mode warn intencional
+        # — el agente ya entregó respuesta al usuario; bloquear+retry es caro
+        # en tokens.
+        _agent_divergences: list = []
+
+        def _apply_meal_modification(plan_data_fresh: dict):
+            """Aplica la mutación del meal y las aggregated_shopping_list*
+            sobre `plan_data_fresh` (copia fresh re-SELECTada bajo FOR UPDATE
+            row lock). Re-localiza `target_day` por `day_number` y el meal
+            por `meal_type` (case-insensitive). Si no se encuentran, aborta
+            UPDATE retornando `False` (P0-2 contract).
+            """
+            if not isinstance(plan_data_fresh, dict):
+                return False
+            days_fresh = plan_data_fresh.get("days") or []
+            if not isinstance(days_fresh, list):
+                return False
+
+            target_day_fresh = None
+            for d in days_fresh:
+                if isinstance(d, dict) and d.get("day") == day_number:
+                    target_day_fresh = d
+                    break
+            if not target_day_fresh:
+                logger.warning(
+                    f"[P1-AUDIT-1/TOOL] day_number={day_number} no encontrado "
+                    f"en plan_data_fresh.days tras lock. Plan mutado por "
+                    f"hermano: aborta UPDATE."
+                )
+                return False
+
+            meals_fresh = target_day_fresh.get("meals") or []
+            if not isinstance(meals_fresh, list):
+                return False
+
+            # Re-localizar el meal por meal_type (case-insensitive). El
+            # target_meal_index original puede estar stale si un hermano
+            # reordenó meals dentro del día.
+            target_idx_fresh = None
+            for idx, m in enumerate(meals_fresh):
+                if isinstance(m, dict) and m.get("meal", "").lower().strip() == meal_type.lower().strip():
+                    target_idx_fresh = idx
+                    break
+            if target_idx_fresh is None:
+                logger.warning(
+                    f"[P1-AUDIT-1/TOOL] meal_type={meal_type!r} no encontrado "
+                    f"en day {day_number} tras lock. Aborta UPDATE."
+                )
+                return False
+
+            meals_fresh[target_idx_fresh] = new_meal_data
+
+            # Aggregated lists (overwrite — el agent_tool es source-of-truth
+            # de estas keys tras una modificación). Solo escribimos si la
+            # recomputación FUERA del lock tuvo éxito; si falló (variables
+            # quedaron en None por el except), preservamos las del fresh.
+            if aggr_list is not None:
+                plan_data_fresh["aggregated_shopping_list"] = aggr_list
+            if aggr_7 is not None:
+                plan_data_fresh["aggregated_shopping_list_weekly"] = aggr_7
+            if aggr_15_hybrid is not None:
+                plan_data_fresh["aggregated_shopping_list_biweekly"] = aggr_15_hybrid
+            if aggr_30_hybrid is not None:
+                plan_data_fresh["aggregated_shopping_list_monthly"] = aggr_30_hybrid
 
             # [P1-NEXT-2 · 2026-05-11] Coherence guard tras recompute por agent.
-            # Antes, tools.modify_single_meal persistía aggregated_shopping_list*
-            # sin invocar run_shopping_coherence_guard — el agente podía dejar
-            # la lista divergente vs recetas tras swap. Cierre del gap audit
-            # 2026-05-11.
-            #
-            # Modo: `warn` porque el agente ya entregó respuesta al usuario;
-            # bloquear obliga al agente a reintentar lo cual es costoso en
-            # tokens. Telemetría a `_shopping_coherence_block_history` permite
-            # post-mortem si el agente produce divergencias recurrentes.
-            # `action_taken="warn_only_agent_tool"` distingue origen.
-            # [P2-COHERENCE-1 · 2026-05-11] Capturamos `divergences` para
-            # incluir `_coherence_warnings` en el return JSON. El agente las
-            # propaga al chat; el frontend las renderea como toast cuando
-            # detecta el campo. Mode warn intencional acá porque el agente
-            # ya entregó respuesta al usuario; bloquear+retry es caro en
-            # tokens. Telemetría a `_shopping_coherence_block_history` para
-            # post-mortem si el agente produce drift recurrente.
-            _agent_divergences: list = []
+            # `action_taken="warn_only_agent_tool"` distingue origen post-mortem.
+            # Mode warn intencional — el agente ya entregó respuesta al usuario.
+            # Telemetría a `_shopping_coherence_block_history` (mutado in-place
+            # por el helper sobre plan_data_fresh) permite post-mortem si el
+            # agente produce drift recurrente.
             try:
                 from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_agent
-                _agent_divergences, _ = _coh_agent(
-                    plan_data,
-                    multiplier=plan_data.get("calc_household_multiplier") or household,
+                _divs, _ = _coh_agent(
+                    plan_data_fresh,
+                    multiplier=plan_data_fresh.get("calc_household_multiplier") or household,
                     mode_override="warn",
                     attempt=1,
                     action_taken="warn_only_agent_tool",
                     plan_id_hint=plan_id,
                 )
+                _agent_divergences.extend(_divs or [])
             except Exception as _coh_agent_e:
-                logger.warning(f"⚠️ [TOOL] coherence guard helper falló (no aborta): {_coh_agent_e}")
+                logger.warning(f"[TOOL] coherence guard helper fallo (no aborta): {_coh_agent_e}")
 
-            logger.info("✅ [TOOL] aggregated_shopping_list (7, 15, 30) recalculada post-modificación con Delta.")
-        except Exception as e:
-            logger.warning(f"⚠️ [TOOL] No se pudo recalcular aggregated_shopping_list Delta: {e}")
-        
-        # 5. Actualizar en Supabase
-        # [P1-NEW-3 · 2026-05-10] plan_id resolved vía
-        # get_latest_meal_plan_with_id(user_id) más arriba; pasamos user_id
-        # para que el helper aplique el WHERE id=%s AND user_id=%s
-        # defense-in-depth a DB-level.
-        update_result = update_meal_plan_data(plan_id, plan_data, user_id=user_id)
-        if update_result is not None:
-            logger.info(f"✅ [TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
+            return plan_data_fresh
+
+        # [P0-AGENT-1] user_id ya force-overrideado upstream por
+        # `execute_tools` con `_trusted_uid` (defense-in-depth contra prompt
+        # injection que emite user_id ajeno).
+        # [P2-OPEN-1] plan_id resolved vía `get_latest_meal_plan_with_id(
+        # user_id)` que filtra por user_id. Pasamos user_id al helper para
+        # SELECT/UPDATE con `AND user_id = %s` defense-in-depth.
+        merged_plan_data = update_plan_data_atomic(
+            plan_id, _apply_meal_modification, user_id=user_id
+        )
+        if merged_plan_data:
+            logger.info(f"[TOOL] Comida modificada exitosamente: '{new_meal_data.get('name')}'")
             # [P2-COHERENCE-1 · 2026-05-11] _coherence_warnings opcional —
             # presente solo si el guard reportó divergencias post-modificación.
             # El frontend (AgentPage) puede mostrar toast no-bloqueante.
             _resp = {"modified_meal": new_meal_data, "day": day_number, "meal_index": target_meal_index}
             try:
-                _agent_div_local = locals().get("_agent_divergences") or []
-                if _agent_div_local:
+                if _agent_divergences:
                     from shopping_calculator import summarize_divergences_for_ui
-                    _resp["_coherence_warnings"] = summarize_divergences_for_ui(_agent_div_local, max_items=5)
+                    _resp["_coherence_warnings"] = summarize_divergences_for_ui(_agent_divergences, max_items=5)
             except Exception as _sum_e:
                 logger.warning(f"[TOOL/P2-COH-1] summarize_divergences_for_ui falló: {_sum_e}")
             return json.dumps(_resp)

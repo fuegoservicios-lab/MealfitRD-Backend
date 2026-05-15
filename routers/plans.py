@@ -3031,105 +3031,128 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                     target_plan_id = plan_with_id.get("id")
                     target_plan_data = plan_with_id.get("plan_data") or {}
 
-            updated = False
-            if target_plan_data and isinstance(target_plan_data.get("days"), list):
-                days_list = target_plan_data["days"]
+            if target_plan_data and isinstance(target_plan_data.get("days"), list) and target_plan_id:
+                # [P1-AUDIT-1 · 2026-05-15] Mutación + persistencia atómica
+                # bajo FOR UPDATE row lock (vía `update_plan_data_atomic`).
+                # Cierre del follow-up natural documentado en
+                # P1-RECALC-LOSTUPDATE (2026-05-14):
+                #
+                # Pre-fix flow:
+                #   t=0  SELECT plan_data (línea ~3013, fuera de cualquier lock).
+                #   t=1  Muta `target_plan_data["days"][...]["meals"][...]`
+                #        in-memory marcando `recipe`/`isExpanded` por uno o
+                #        múltiples meals (Camino 1 índices o Camino 2
+                #        propagación).
+                #   t=2  acquire advisory lock + UPDATE full-overwrite via
+                #        `update_meal_plan_data` (P1-NEXT-1).
+                #
+                # Ventana lost-update entre t=0 y t=2: si un endpoint hermano
+                # (`/swap-meal/persist`, `/grocery-start-date`, `/{plan_id}/name`,
+                # `/recalculate-shopping-list`, `_chunk_worker` T2) mutaba
+                # `plan_data` quirúrgico con su propio lock entre t=0 y t=2,
+                # recipe-expand UPDATEaba full-overwrite con la copia stale →
+                # la mutación del hermano se perdía silenciosamente.
+                #
+                # Fix: `update_plan_data_atomic` (P0-2, db_plans.py) toma
+                # `SELECT … FOR UPDATE` row lock + re-SELECT fresh + callback +
+                # UPDATE, todo en la misma transacción. El callback opera
+                # sobre la copia POST-merge y solo toca los meals que la
+                # expansión semánticamente posee — todo lo demás (días no
+                # afectados, otras keys del plan_data) se preserva del fresh.
+                #
+                # Decisiones de producto preservadas (NO modificadas en esta
+                # migración, solo movidas al callback):
+                #
+                # [P3-NEW-1 · 2026-05-10] DECISIÓN: NO bumpear
+                # `plan_data._plan_modified_at` aquí. Argumento aplicado:
+                #   1. La expansión es idempotente (`isExpanded=True` previene
+                #      re-expansión sobre la misma receta).
+                #   2. Cada cook-click genera una expansión. Bumpear el path
+                #      reordenaría el plan al tope del Historial en cada
+                #      cook-click — ruidoso y engañoso (interacción ≠ modif).
+                #   3. `meal_plans.updated_at` (columna física, trigger P0-2)
+                #      sí se actualiza por el UPDATE.
+                #
+                # [P1-NEW-7 · 2026-05-11] RESTAURADO. La persistencia se borró
+                # accidentalmente en P3-NEW-1; tras restaurarla, los tests
+                # `test_p1_new_7_recipe_expand_persists.py` codifican el
+                # contrato (existencia del call + kwarg user_id).
+                #
+                # Tooltip-anchor: P1-AUDIT-1-RECIPE-EXPAND-START |
+                # test_p1_audit_1_recipe_expand_lostupdate
+                from db_plans import update_plan_data_atomic
 
-                # Camino 1: targeting preciso por (day_index, meal_index).
-                # Sólo se activa si los índices son consistentes con `name`
-                # — si el cliente envió índices stale (chunk worker reordenó
-                # días entre cook-click y request), caemos al match por
-                # contenido para no escribir en la posición equivocada.
-                if (
-                    req_day_index is not None
-                    and req_meal_index is not None
-                    and 0 <= req_day_index < len(days_list)
-                ):
-                    day = days_list[req_day_index]
-                    meals = day.get("meals", []) if isinstance(day, dict) else []
-                    if 0 <= req_meal_index < len(meals):
-                        target_meal = meals[req_meal_index]
-                        if isinstance(target_meal, dict) and target_meal.get("name") == req_name:
-                            target_meal["recipe"] = expanded_steps
-                            target_meal["isExpanded"] = True
-                            updated = True
+                def _apply_recipe_expansion(plan_data_fresh: dict) -> dict | bool:
+                    """Aplica la expansión sobre `plan_data_fresh` (copia fresh
+                    re-SELECTada bajo FOR UPDATE row lock). Re-evalúa ambos
+                    caminos (índices vs propagación por contenido) contra
+                    `plan_data_fresh.days`, NO contra la copia leída fuera del
+                    lock. Si nada se mutó (e.g. swap concurrente reemplazó la
+                    receta), retorna `False` para abortar el UPDATE sin
+                    persistir.
+                    """
+                    days_fresh = plan_data_fresh.get("days") if isinstance(plan_data_fresh, dict) else None
+                    if not isinstance(days_fresh, list):
+                        return False
 
-                # Camino 2: si no targeteamos por índices, propagar a TODAS
-                # las ocurrencias de `name` cuya receta original sea bit-
-                # equivalente a la del request. La equivalencia evita pisar
-                # un meal con nombre igual pero contenido distinto (e.g.,
-                # "Pollo guisado" del lunes vs el del jueves cuando el
-                # corrector swapea ingredientes). Sin esta propagación,
-                # cada ocurrencia repetida vuelve a quemar cuota LLM.
-                if not updated:
-                    for day in days_list:
-                        if not isinstance(day, dict):
-                            continue
-                        for m in day.get("meals", []):
-                            if not isinstance(m, dict):
+                    updated_in_callback = False
+
+                    # Camino 1: targeting preciso por (day_index, meal_index).
+                    # Sólo se activa si los índices son consistentes con `name`
+                    # — si el cliente envió índices stale (chunk worker reordenó
+                    # días entre cook-click y request), caemos al match por
+                    # contenido para no escribir en la posición equivocada.
+                    if (
+                        req_day_index is not None
+                        and req_meal_index is not None
+                        and 0 <= req_day_index < len(days_fresh)
+                    ):
+                        day = days_fresh[req_day_index]
+                        meals = day.get("meals", []) if isinstance(day, dict) else []
+                        if 0 <= req_meal_index < len(meals):
+                            target_meal_fresh = meals[req_meal_index]
+                            if isinstance(target_meal_fresh, dict) and target_meal_fresh.get("name") == req_name:
+                                target_meal_fresh["recipe"] = expanded_steps
+                                target_meal_fresh["isExpanded"] = True
+                                updated_in_callback = True
+
+                    # Camino 2: si no targeteamos por índices, propagar a TODAS
+                    # las ocurrencias de `name` cuya receta original sea bit-
+                    # equivalente a la del request. La equivalencia evita pisar
+                    # un meal con nombre igual pero contenido distinto (e.g.,
+                    # "Pollo guisado" del lunes vs el del jueves cuando el
+                    # corrector swapea ingredientes). Sin esta propagación,
+                    # cada ocurrencia repetida vuelve a quemar cuota LLM.
+                    if not updated_in_callback:
+                        for day in days_fresh:
+                            if not isinstance(day, dict):
                                 continue
-                            if m.get("name") == req_name and m.get("recipe") == req_recipe_original:
-                                m["recipe"] = expanded_steps
-                                m["isExpanded"] = True
-                                updated = True
-                                # NO break: propagamos a todas las ocurrencias.
+                            for m in day.get("meals", []):
+                                if not isinstance(m, dict):
+                                    continue
+                                if m.get("name") == req_name and m.get("recipe") == req_recipe_original:
+                                    m["recipe"] = expanded_steps
+                                    m["isExpanded"] = True
+                                    updated_in_callback = True
+                                    # NO break: propagamos a todas las ocurrencias.
 
-                if updated and target_plan_id:
-                    # [P1-NEW-3 · 2026-05-10] DB-level ownership: el helper
-                    # filtra ahora por (id, user_id). Defense-in-depth ya que
-                    # el SELECT arriba ya hizo ownership check explícito.
-                    #
-                    # [P3-NEW-1 · 2026-05-10] DECISIÓN: NO bumpear
-                    # `plan_data._plan_modified_at` aquí.
-                    #
-                    # Argumento "Sí bumpear" (rechazado):
-                    #   La expansión de receta cambia el contenido visible
-                    #   al usuario (instructions pasan de placeholder genérico
-                    #   a pasos detallados de chef), así que la "última
-                    #   modificación del plan" semánticamente cambia.
-                    #
-                    # Argumento "No bumpear" (aplicado):
-                    #   1. La expansión es idempotente (`isExpanded=True`
-                    #      previene re-expansión sobre la misma receta).
-                    #   2. Cada cook-click del usuario sobre una receta
-                    #      genera una expansión. Si bumpeáramos
-                    #      `_plan_modified_at` en cada cook-click, el
-                    #      Historial (que ordena client-side por ese path)
-                    #      reordenaría el plan al tope cada vez que el
-                    #      usuario abre una receta — ruidoso y engañoso
-                    #      (no es una modificación del plan, es interacción
-                    #      con el plan).
-                    #   3. `meal_plans.updated_at` (columna física, trigger
-                    #      P0-2) SÍ se actualiza por el UPDATE — eso
-                    #      preserva la observabilidad operacional sin
-                    #      contaminar el sort semántico del Historial.
-                    #
-                    # Si en el futuro el Historial se migra a ordenar por
-                    # `updated_at` físico (vs el jsonb path actual), esta
-                    # decisión se debe revisitar. El test
-                    # `test_p3_new_1_recipe_expand_no_modified_at_bump`
-                    # enforza el contrato actual; si el sort migra,
-                    # actualizar AMBOS lados al mismo tiempo.
-                    #
-                    # [P1-NEW-7 · 2026-05-11] RESTAURADO. Audit 2026-05-11
-                    # detectó que esta llamada había sido borrada en el
-                    # refactor P3-NEW-1 (que solo pretendía remover el
-                    # bump del sort semántico documentado arriba — pero
-                    # también eliminó el call de persistencia, conflando
-                    # dos cambios). Síntoma operacional: cada cook-click
-                    # quemaba cuota Gemini en `expand_recipe_agent`
-                    # (línea 2920) pero `recipe`/`isExpanded` nunca
-                    # llegaban a DB → reload mostraba la receta sin
-                    # expandir → re-click → quema infinita. Comentarios
-                    # inline en este handler Y en Recipes.jsx afirmaban
-                    # que la persistencia ocurría — mentirosos respecto
-                    # al estado real del código tras P3-NEW-1. Test
-                    # parser-based en
-                    # `tests/test_p1_new_7_recipe_expand_persists.py`
-                    # codifica el contrato (existencia del call,
-                    # presencia dentro de este guard, kwarg user_id
-                    # para defense-in-depth a DB-level vía P1-NEW-3).
-                    update_meal_plan_data(target_plan_id, target_plan_data, user_id=user_id)
+                    if not updated_in_callback:
+                        # Nada que persistir — abortar UPDATE (P0-2 contract:
+                        # `return False` cancela el UPDATE; caller ve `current`
+                        # sin escribir).
+                        return False
+
+                    return plan_data_fresh
+
+                # [P2-OPEN-1] user_id ya validado al inicio del handler
+                # (verified_user_id == user_id). target_plan_id viene del
+                # SELECT explícito con `AND user_id = %s` (línea ~3014) o de
+                # `get_latest_meal_plan_with_id(user_id)` (línea ~3029) —
+                # ambos filtran por user_id. Defense-in-depth doble candado
+                # al pasar user_id al helper.
+                update_plan_data_atomic(
+                    target_plan_id, _apply_recipe_expansion, user_id=user_id
+                )
         # P1-HIST-RECIPE-1-END
 
         return {"success": True, "expanded_recipe": expanded_steps}

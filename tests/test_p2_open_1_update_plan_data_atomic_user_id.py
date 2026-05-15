@@ -259,13 +259,30 @@ _KNOWN_CALLERS_BY_FILE: set[str] = {
     #   - _chunk_worker → _p13_strong_mutator                 (P1-3 strong branch)
     #   - _chunk_worker → _bump_zero_log                      (P0-2/ZERO-LOG)
     "backend/cron_tasks.py",
-    # routers/plans.py 1 sitio documentado:
-    #   - api_recalculate_shopping_list → _apply_recalc       (P1-RECALC-LOSTUPDATE)
+    # routers/plans.py 2 sitios documentados:
+    #   - api_recalculate_shopping_list → _apply_recalc           (P1-RECALC-LOSTUPDATE · 2026-05-14)
+    #   - api_expand_recipe → _apply_recipe_expansion             (P1-AUDIT-1 · 2026-05-15)
     # Resuelve ownership upstream con `verified_user_id == user_id` check
     # al inicio del handler + SELECT explícito con `AND user_id = %s` en
     # el branch req_plan_id (P2-NEW-B) o `get_latest_meal_plan_with_id(user_id)`
     # en el fallback. Pasa `user_id=user_id` al helper.
     "backend/routers/plans.py",
+    # proactive_agent.py 1 sitio documentado:
+    #   - _trigger_week2_background_generation → _apply_week2_append (P1-AUDIT-1 · 2026-05-15)
+    # Resuelve ownership upstream: `plan_id` viene del cron
+    # `check_and_trigger_jit_rolling_windows` que hace
+    # `SELECT id, user_id, plan_data FROM meal_plans WHERE created_at >= NOW() - 6 days`
+    # — `user_id` recuperado del mismo row, así la pareja (plan_id, user_id) es
+    # consistent-by-construction. Pasa `user_id=user_id` al helper.
+    "backend/proactive_agent.py",
+    # tools.py 1 sitio documentado:
+    #   - execute_modify_single_meal → _apply_meal_modification   (P1-AUDIT-1 · 2026-05-15)
+    # Resuelve ownership upstream: el `@tool modify_single_meal` recibe
+    # `user_id` force-overrideado por `execute_tools` con `_trusted_uid`
+    # (P0-AGENT-1, defense contra prompt injection que emite user_id ajeno);
+    # plan_id viene de `get_latest_meal_plan_with_id(user_id)` que filtra
+    # por user_id. Pasa `user_id=user_id` al helper.
+    "backend/tools.py",
 }
 
 

@@ -148,7 +148,13 @@ def test_csp_whitelists_critical_hosts():
     - paypal.com   → billing → upgrades de tier rotos.
     - googletagmanager.com / google-analytics.com → marketing analytics.
     - posthog.com  → product analytics.
-    - fonts.googleapis.com / fonts.gstatic.com → tipografía (visual).
+
+    [P2-AUDIT-4 · 2026-05-15] `fonts.googleapis.com` y `fonts.gstatic.com`
+    REMOVIDOS de esta lista. Convención P3-SELF-HOST-FONTS: el E2E test
+    rechaza requests a esos hosts (fonts deben venir self-hosted desde el
+    bundle). Tener los hosts en CSP era incoherencia documental: permitir
+    un request que el E2E test luego rechaza. Si la app vuelve a necesitar
+    tipografía remota, restaurar los hosts aquí + eliminar el guard E2E.
     """
     h = _headers_for_path(_load_vercel(), "/(.*)")
     csp = h["Content-Security-Policy-Report-Only"]
@@ -158,13 +164,11 @@ def test_csp_whitelists_critical_hosts():
         "*.paypal.com",
         "googletagmanager.com",
         "google-analytics.com",
-        "fonts.googleapis.com",
-        "fonts.gstatic.com",
     ]
     missing = [host for host in critical_hosts if host not in csp]
     assert not missing, (
         f"CSP whitelist faltan hosts críticos: {missing}. "
-        "Sin ellos los flows respectivos (DB/observabilidad/billing/marketing/fonts) "
+        "Sin ellos los flows respectivos (DB/observabilidad/billing/marketing) "
         "harían silent-fail tras promover a enforced."
     )
 

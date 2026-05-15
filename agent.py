@@ -74,8 +74,51 @@ _safety_settings = {
     HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
 }
 
+# [P2-AUDIT-1 · 2026-05-15] Knobs para overridear los modelos Gemini usados
+# por las 5 callsites de `ChatGoogleGenerativeAI(...)` en este módulo:
+#   - `llm` (módulo-level, swap/chat default)            → MEALFIT_CHAT_AGENT_MODEL
+#   - `swap_llm` dentro de `swap_meal`                   → MEALFIT_CHAT_AGENT_SWAP_MODEL
+#   - `chat_llm` dentro de `call_model` (LangGraph node) → MEALFIT_CHAT_AGENT_MODEL (reusa)
+#   - `title_llm` dentro de `generate_session_title`     → MEALFIT_CHAT_TITLE_MODEL
+#   - `router_llm` dentro de `rag_query_router`          → MEALFIT_CHAT_ROUTER_MODEL
+#
+# Por qué un knob (no hardcode): convención del repo `P3-PREVIEW-MODEL-KNOB
+# · 2026-05-12` (CLAUDE.md). Los modelos `*-preview` de Google pueden
+# deprecarse/retirarse sin aviso prolongado — incidente real 2026-05-11
+# documentó CB rows stale por el modelo `gemini-3.1-pro-preview` 4.4 días
+# seguidos. Sin knob, swap del modelo requiere redeploy. Knob permite swap
+# inmediato sin redeploy: setear `MEALFIT_CHAT_AGENT_MODEL=gemini-3.1-flash`
+# (stable, sin `-preview`) y reiniciar el worker.
+#
+# Defaults = current production models. Cambiar en env vars cuando Google
+# publique notice de deprecation o cuando se quiera A/B test un modelo nuevo.
+# Precedente en `proactive_agent.py:36` (`_proactive_model_name`).
+def _chat_agent_model_name() -> str:
+    return os.environ.get(
+        "MEALFIT_CHAT_AGENT_MODEL",
+        "gemini-3.1-pro-preview",
+    )
+
+def _chat_agent_swap_model_name() -> str:
+    return os.environ.get(
+        "MEALFIT_CHAT_AGENT_SWAP_MODEL",
+        "gemini-3.1-pro-preview",
+    )
+
+def _chat_title_model_name() -> str:
+    return os.environ.get(
+        "MEALFIT_CHAT_TITLE_MODEL",
+        "gemini-3.1-flash-lite-preview",
+    )
+
+def _chat_router_model_name() -> str:
+    return os.environ.get(
+        "MEALFIT_CHAT_ROUTER_MODEL",
+        "gemini-3.1-flash-lite-preview",
+    )
+
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.1-pro-preview",
+    model=_chat_agent_model_name(),
     temperature=0.2,
     google_api_key=os.environ.get("GEMINI_API_KEY"),
     safety_settings=_safety_settings
@@ -264,8 +307,8 @@ def swap_meal(form_data: dict):
     
     temp = 0.3
     swap_llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
-        temperature=temp, 
+        model=_chat_agent_swap_model_name(),
+        temperature=temp,
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(MealModel)
     
@@ -375,7 +418,7 @@ def call_model(state: ChatState):
             llm_messages.append(m)
             
     chat_llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
+        model=_chat_agent_model_name(),
         temperature=0.7,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         safety_settings=_safety_settings
@@ -641,7 +684,7 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         except Exception as e:
             logger.error(f"Error fetching recent titles for anti-duplication: {e}")
             
-        title_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"))
+        title_llm = ChatGoogleGenerativeAI(model=_chat_title_model_name(), temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"))
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str)
         dlog("Calling LLM API")
         response = title_llm.invoke(prompt)
@@ -709,7 +752,7 @@ def rag_query_router(prompt: str) -> dict:
     # Paso 3: Para mensajes sustanciales, usar Flash-Lite para reescribir la query
     try:
         router_llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview",
+            model=_chat_router_model_name(),
             temperature=0.0,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )

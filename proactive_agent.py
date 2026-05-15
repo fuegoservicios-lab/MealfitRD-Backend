@@ -460,11 +460,11 @@ def _trigger_week2_background_generation(user_id, plan_id, existing_plan_data):
     """Generates the next 7 days in the background and appends to the existing plan."""
     from graph_orchestrator import run_plan_pipeline
     from db_profiles import get_user_profile
-    from db_plans import update_meal_plan_data
+    from db_plans import update_plan_data_atomic
     from db import get_user_likes, get_active_rejections
     from agent import analyze_preferences_agent
     import threading
-    
+
     def _bg_task():
         try:
             logger.info(f"🔄 [JIT BG TASK] Arrancando generación asíncrona de Semana 2 para {user_id}...")
@@ -491,18 +491,77 @@ def _trigger_week2_background_generation(user_id, plan_id, existing_plan_data):
             taste_profile = analyze_preferences_agent(likes, [], active_rejections=rej_names)
 
             result = run_plan_pipeline(form_data, [], taste_profile, memory_context="")
-            
+
             new_days = result.get("days", [])
-            existing_days = existing_plan_data.get("days", [])
-            
-            start_idx = len(existing_days) + 1
-            for i, d in enumerate(new_days):
-                d["day"] = start_idx + i
-                
-            existing_plan_data["days"] = existing_days + new_days
-            # [P1-NEW-3 · 2026-05-10] Pasamos user_id para que el WHERE
-            # filtre por (id, user_id) — defense-in-depth a DB-level.
-            update_meal_plan_data(plan_id, existing_plan_data, user_id=user_id)
+            if not new_days:
+                logger.warning(
+                    f"[JIT BG TASK] run_plan_pipeline retornó 0 días para "
+                    f"user={user_id} plan={plan_id}. Skip persistencia."
+                )
+                return
+
+            # [P1-AUDIT-1 · 2026-05-15] Append + persistencia atómica bajo
+            # FOR UPDATE row lock (vía `update_plan_data_atomic`). Cierre del
+            # follow-up natural documentado en P1-RECALC-LOSTUPDATE
+            # (2026-05-14):
+            #
+            # Pre-fix flow:
+            #   t=0  El handler `proactive_agent` recibe `existing_plan_data`
+            #        leído por el cron `check_and_trigger_jit_rolling_windows`
+            #        (línea ~524, SELECT plano sin lock).
+            #   t=1  Mutación in-memory: `existing_plan_data["days"] = existing
+            #        _days + new_days` con re-numeración de `day`.
+            #   t=2  acquire advisory lock + UPDATE full-overwrite via
+            #        `update_meal_plan_data` (P1-NEXT-1).
+            #
+            # Ventana lost-update entre t=0 y t=2 (puede ser HORAS si
+            # `run_plan_pipeline` es lento — la generación LLM puede tomar
+            # 30-180s, multiplicando el tamaño de la ventana): si un endpoint
+            # hermano muta `plan_data` quirúrgico entre el cron read y
+            # nuestro UPDATE, esa mutación se pierde. JIT week-2 es el caso
+            # con la ventana MÁS LARGA del sistema (chunk_worker, swap-meal,
+            # /recipe/expand son sub-segundo).
+            #
+            # Fix: `update_plan_data_atomic` re-SELECTea plan_data FRESH bajo
+            # FOR UPDATE row lock al momento de persistir, así el callback
+            # appendea los new_days a `plan_data_fresh.days` (post-merge de
+            # cualquier mutación que ocurrió en la ventana de 30-180s) — el
+            # número de días base puede haber cambiado, el re-numerado se
+            # hace contra el fresh.
+            #
+            # Tooltip-anchor: P1-AUDIT-1-JIT-WEEK2-START |
+            # test_p1_audit_1_proactive_week2_lostupdate
+            def _apply_week2_append(plan_data_fresh: dict) -> dict | bool:
+                """Appendea `new_days` a `plan_data_fresh.days` re-numerando
+                contra la longitud fresh. Si days no es lista, retorna False
+                para abortar UPDATE.
+                """
+                if not isinstance(plan_data_fresh, dict):
+                    return False
+                existing_days_fresh = plan_data_fresh.get("days") or []
+                if not isinstance(existing_days_fresh, list):
+                    existing_days_fresh = []
+                start_idx = len(existing_days_fresh) + 1
+                for i, d in enumerate(new_days):
+                    if isinstance(d, dict):
+                        d["day"] = start_idx + i
+                plan_data_fresh["days"] = existing_days_fresh + new_days
+                return plan_data_fresh
+
+            # [P2-OPEN-1] user_id pasado al helper para que el SELECT/UPDATE
+            # filtren `AND user_id = %s` defense-in-depth. plan_id viene del
+            # cron `check_and_trigger_jit_rolling_windows` que ya tiene
+            # ownership (SELECT con user_id en el row).
+            merged = update_plan_data_atomic(
+                plan_id, _apply_week2_append, user_id=user_id
+            )
+            if not merged:
+                logger.warning(
+                    f"⚠️ [JIT BG TASK] update_plan_data_atomic retornó vacío "
+                    f"para plan={plan_id} user={user_id}: el plan desapareció "
+                    f"o el filtro user_id no matchea. Week-2 NO persistida."
+                )
+                return
             logger.info(f"✅ [JIT BG TASK] Semana 2 añadida exitosamente al plan {plan_id} de {user_id}")
         except Exception as e:
             logger.error(f"❌ [JIT BG TASK] Error en generación de semana 2 para {user_id}: {e}")

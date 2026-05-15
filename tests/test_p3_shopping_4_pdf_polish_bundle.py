@@ -146,11 +146,21 @@ def test_p3_shopping_2_debug_recalc_gated_by_environment(plans_src: str):
     fn_idx = plans_src.find("def api_recalculate_shopping_list")
     assert fn_idx > 0
     body = plans_src[fn_idx:fn_idx + 30000]
-    debug_idx = body.find('plan_data["_debug_recalc"]')
+    # Aceptar tanto `plan_data["_debug_recalc"]` (pre P1-RECALC-LOSTUPDATE)
+    # como `plan_data_fresh["_debug_recalc"]` (post 2026-05-14 — el callback
+    # `_apply_recalc` muta la copia fresh re-SELECTada bajo FOR UPDATE row
+    # lock). Cualquier variable cuyo nombre empiece con `plan_data` califica.
+    debug_idx = -1
+    for candidate in ('plan_data["_debug_recalc"]', 'plan_data_fresh["_debug_recalc"]'):
+        idx = body.find(candidate)
+        if idx > 0:
+            debug_idx = idx
+            break
     assert debug_idx > 0, (
         "P3-SHOPPING-2 regresión: `plan_data[\"_debug_recalc\"] = {...}` "
-        "ya no aparece en `api_recalculate_shopping_list`. Si fue "
-        "eliminado completamente, eliminar este test."
+        "(o `plan_data_fresh[\"_debug_recalc\"] = {...}` post P1-RECALC-"
+        "LOSTUPDATE) ya no aparece en `api_recalculate_shopping_list`. "
+        "Si fue eliminado completamente, eliminar este test."
     )
     # Window backward: 1200 chars antes del bloque cubren el gate +
     # comentarios explicativos. La asignación está dentro de `if
