@@ -1,0 +1,154 @@
+# [P1-LIVE-2 · 2026-05-12] CI gate para MealfitRD.IA.
+#
+# Hasta que este workflow exista, el repo no tenía ejecución automática de
+# tests pre-merge. Toda la red de seguridad (~120+ tests parser-based +
+# Vitest frontend) dependía de que el desarrollador invoque pytest/vitest
+# manualmente — modo de fallo: refactor lateral (e.g. P1-SCHEDULER-1 quebró
+# 5 tests SOP por una línea reformateada) no se detectaba hasta el siguiente
+# audit manual.
+#
+# Este workflow corre 3 jobs en paralelo cuando el repo se conecte a GitHub:
+#   1. backend-tests : pytest del bundle parser-based + funcionales.
+#   2. frontend-tests: vitest unit + integration.
+#   3. frontend-build: vite build production (catch errores de bundle).
+#
+# Trigger:
+#   - push a cualquier branch (gate de regresión continua).
+#   - pull_request a main (gate pre-merge).
+#
+# Política:
+#   - main protegido: PR requiere los 3 jobs verde antes de mergear
+#     (configurar branch protection rule en GitHub UI tras primer push).
+#   - cualquier job rojo bloquea el merge — NO usar "merge anyway" salvo
+#     hotfix P0 documentado en PR description con plan de fix-forward.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, master]
+
+# Cancelar runs viejos del mismo branch para no agotar minutos.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    name: Backend pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Run pytest (parser-based + functional)
+        working-directory: backend
+        env:
+          # Las suites parser-based no requieren DB real. Las E2E sí, pero
+          # se marcan con @pytest.mark.e2e y se pueden filtrar en CI sin DB.
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          pytest tests/ -v --tb=short -m "not e2e" -x
+
+  frontend-tests:
+    name: Frontend Vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run Vitest
+        working-directory: frontend
+        run: npm test
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Vite production build
+        working-directory: frontend
+        # Vite build valida tree-shaking + import resolution + bundle size.
+        # Falla si hay imports rotos, dependencias missing, o errores de
+        # transformación que pasan vitest pero rompen prod.
+        run: npm run build
+
+  # [P2-LIVE-1 · 2026-05-12] Lint job no-bloqueante.
+  #
+  # Estado al introducir el gate: 245 errores eslint + 13 warnings pre-existentes
+  # (deuda técnica acumulada — no-useless-escape regex, no-unused-vars, no-undef
+  # `process` en utils/analytics.js). Bloquear merges sobre esa baseline
+  # paralizaría todo. Por eso `continue-on-error: true`: el job EJECUTA y reporta
+  # status visible en GitHub UI, pero NO bloquea el merge.
+  #
+  # Roadmap: tras cleanup incremental que reduzca el count a 0, flippear a
+  # `continue-on-error: false` para convertirlo en gate bloqueante real. Hasta
+  # entonces este job sirve como telemetría: si un PR introduce errores nuevos,
+  # se ven en el status check aunque no bloquee.
+  frontend-lint:
+    name: Frontend lint (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run eslint
+        working-directory: frontend
+        run: npm run lint
