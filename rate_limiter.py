@@ -103,6 +103,30 @@ class RateLimiter:
             for k in expired_keys:
                 del self._hits[k]
 
+            # [P2-RATELIMITER-BUCKET-METRICS · 2026-05-15] Emit cardinalidad
+            # + alert sobre saturación de buckets. ANTES, el cleanup no
+            # emitía métricas — si un bug (hash collision en user_id,
+            # botnet generando IPs distintas) inflaba `self._hits` sin
+            # límite, memoria leak silente hasta OOM. Best-effort:
+            # cualquier fallo de DB se silencia para no afectar el
+            # request en curso.
+            try:
+                _bucket_count = len(self._hits)
+                _expired_count = len(expired_keys)
+                _bucket_limit_warn = _env_int_safe(
+                    "MEALFIT_RATE_LIMITER_BUCKET_LIMIT_WARN", 100000
+                )
+                _emit_rl_cleanup_metric(_bucket_count, _expired_count)
+                if _bucket_limit_warn > 0 and _bucket_count > _bucket_limit_warn:
+                    _emit_rl_saturation_alert(_bucket_count, _bucket_limit_warn)
+            except Exception as _metric_err:
+                try:
+                    logger.debug(
+                        f"[P2-RATELIMITER-BUCKET-METRICS] tick falló (best-effort): {_metric_err}"
+                    )
+                except Exception:
+                    pass
+
         # Purga timestamps viejos (fuera de la ventana)
         self._hits[uid] = [t for t in self._hits[uid] if now_mono - t < self.period]
         if len(self._hits[uid]) >= self.max_calls:
@@ -122,3 +146,92 @@ class RateLimiter:
         return verified_user_id
 
 
+# ---------------------------------------------------------------------------
+# [P2-RATELIMITER-BUCKET-METRICS · 2026-05-15] Helpers para observabilidad
+# del cleanup del rate limiter local (in-memory).
+#
+# Por qué módulo-level (no método de la clase):
+#   El cleanup corre raramente (1% de requests). Mantener los helpers
+#   fuera de la hot path del __call__ evita imports/binding overhead. El
+#   tick es best-effort — un fallo de DB NO debe afectar el rate-limit
+#   decision (que YA se tomó antes del bloque cleanup).
+# ---------------------------------------------------------------------------
+def _env_int_safe(name: str, default: int) -> int:
+    """Lectura defensiva de env var entero. No registra en
+    `_KNOBS_REGISTRY` para evitar circular import con graph_orchestrator
+    (rate_limiter es upstream); el knob se documenta en CLAUDE.md /
+    memoria del bundle."""
+    import os
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _emit_rl_cleanup_metric(bucket_count: int, expired_count: int) -> None:
+    """Best-effort INSERT a `pipeline_metrics` con cardinalidad del
+    rate limiter. Lazy import de `db_core.execute_sql_write` para evitar
+    circular import en module load (db_core importa rate_limiter? no, pero
+    defensivo)."""
+    try:
+        from db_core import execute_sql_write
+        import json as _json
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, %s, 0, %s::jsonb)
+            """,
+            (
+                "rate_limiter_cleanup",
+                int(bucket_count),
+                _json.dumps({
+                    "expired_buckets_removed": int(expired_count),
+                    "remaining_bucket_count": int(bucket_count),
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception:
+        # Silent — el cleanup no debe afectar requests legítimos.
+        pass
+
+
+def _emit_rl_saturation_alert(bucket_count: int, threshold: int) -> None:
+    """Best-effort UPSERT a `system_alerts` cuando bucket_count > threshold."""
+    try:
+        from db_core import execute_sql_write
+        import json as _json
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'rate_limiter_bucket_saturation', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                resolved_at = NULL
+            """,
+            (
+                "rate_limiter_bucket_saturation",
+                "RateLimiter local: cardinalidad de buckets sobre umbral",
+                (
+                    f"In-memory `_hits` dict acumuló {bucket_count} buckets "
+                    f"(umbral knob `MEALFIT_RATE_LIMITER_BUCKET_LIMIT_WARN`="
+                    f"{threshold}). Posible memory leak (hash collision en "
+                    f"user_id, botnet con muchas IPs distintas). "
+                    f"Investigar antes de OOM. Bumpear knob solo si la "
+                    f"causa raíz es legítima volumen orgánico."
+                ),
+                _json.dumps({
+                    "bucket_count": int(bucket_count),
+                    "threshold": int(threshold),
+                }, ensure_ascii=False),
+                _json.dumps([]),
+            ),
+        )
+    except Exception:
+        pass

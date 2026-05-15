@@ -4,7 +4,7 @@ import os
 import re
 import unicodedata
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from db_core import supabase, execute_sql_write
 from shopping_calculator import _parse_quantity, get_plural_unit, get_master_ingredients
 from constants import normalize_ingredient_for_tracking
@@ -782,6 +782,21 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
     return None
 
 
+def _env_int_safe_inventory(name: str, default: int) -> int:
+    """[P2-INVENTORY-STATEMENT-TIMEOUT · 2026-05-15] Lectura defensiva de env
+    int. Local al módulo para evitar circular import con
+    `graph_orchestrator._env_int` (que es upstream de db_inventory en algunos
+    paths). Knob `MEALFIT_INVENTORY_UPDATE_STMT_TIMEOUT_MS` documentado en
+    memoria del bundle Phase 2."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _apply_reservation_delta(
     user_id: str,
     ingredient_name: str,
@@ -791,23 +806,28 @@ def _apply_reservation_delta(
     *,
     release_only: bool = False,
     max_retries: int = 4,
+    prefetched_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """[P0-4] Reserva atómica vía CAS-with-retry.
 
     Antes el flujo era: SELECT row → modificar en Python → UPDATE WHERE id=X. La
     ventana entre SELECT y UPDATE permitía lost-update si dos writers concurrentes
     leían el mismo `reserved_quantity` y ambos sumaban su delta — el segundo
-    sobreescribía al primero, perdiendo una reserva sin rastro. En la práctica
-    esto generaba `reserved_quantity` que no sumaba con sus `reservation_details`,
-    e ingredientes "consumidos" que el sistema seguía considerando disponibles.
+    sobreescribía al primero, perdiendo una reserva sin rastro.
 
     Ahora el UPDATE incluye `eq("reserved_quantity", expected_old)` como CAS token.
     Si entre nuestro SELECT y nuestro UPDATE alguien más modificó la fila, el
     UPDATE matchea 0 rows y reintentamos el ciclo completo desde el SELECT.
 
     El loop reintenta hasta `max_retries` veces con backoff exponencial corto.
-    Si tras todos los intentos sigue habiendo conflicto, devolvemos False y
-    logueamos para que el caller reaccione (típicamente reintentar el chunk).
+
+    [P1-N1-RESERVATION-DELTA · 2026-05-15] `prefetched_rows` permite al caller
+    (`reserve_plan_ingredients`) suministrar las filas matching en el PRIMER
+    attempt para evitar 30+ SELECTs por plan (uno por ingrediente). Si el
+    primer CAS UPDATE tiene conflicto, los attempts >=1 re-SELECT como antes
+    para ver estado fresh. En el happy path (sin contención) ahorramos N-1
+    roundtrips. Filas suministradas deben tener mismo schema que SELECT
+    interno (id, quantity, unit, reserved_quantity, reservation_details).
     """
     import time
 
@@ -816,11 +836,17 @@ def _apply_reservation_delta(
 
     last_compatible_row_id: str | None = None
     for attempt in range(max_retries):
-        existing = supabase.table("user_inventory").select(
-            "id, quantity, unit, reserved_quantity, reservation_details"
-        ).eq("user_id", user_id).eq("ingredient_name", ingredient_name).execute()
+        # [P1-N1-RESERVATION-DELTA · 2026-05-15] Primer attempt usa
+        # prefetched_rows si está disponible; retries siempre re-SELECT
+        # para ver state fresh post-conflicto CAS.
+        if attempt == 0 and prefetched_rows is not None:
+            rows = prefetched_rows
+        else:
+            existing = supabase.table("user_inventory").select(
+                "id, quantity, unit, reserved_quantity, reservation_details"
+            ).eq("user_id", user_id).eq("ingredient_name", ingredient_name).execute()
+            rows = getattr(existing, "data", None) or []
 
-        rows = getattr(existing, "data", None) or []
         if not rows:
             return False
 
@@ -898,9 +924,40 @@ def _apply_reservation_delta(
 
 
 def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, Any]]) -> int:
-    """Reserva ingredientes de un chunk confirmado para que el siguiente vea stock disponible real."""
+    """Reserva ingredientes de un chunk confirmado para que el siguiente vea stock disponible real.
+
+    [P1-N1-RESERVATION-DELTA · 2026-05-15] Batch-fetch del inventory del
+    usuario UNA VEZ al inicio, indexado por `ingredient_name`. Cada call a
+    `_apply_reservation_delta` recibe `prefetched_rows=` para evitar el
+    SELECT-per-ingredient. Plan de 30 ingredientes pre-fix = 30 roundtrips a
+    Supabase; post-fix = 1 roundtrip en el happy path (sin contención CAS).
+    Cuando CAS conflicta, retry attempts re-SELECT como antes (fresh state
+    obligatorio post-conflict).
+    """
     if not supabase or not days:
         return 0
+
+    # [P1-N1-RESERVATION-DELTA · 2026-05-15] Batch fetch del inventory completo
+    # del usuario. Best-effort: si falla, fallback al patrón legacy (None →
+    # cada `_apply_reservation_delta` hace su propio SELECT).
+    rows_by_name: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    try:
+        _batch = supabase.table("user_inventory").select(
+            "id, ingredient_name, quantity, unit, reserved_quantity, reservation_details"
+        ).eq("user_id", user_id).execute()
+        _batch_rows = getattr(_batch, "data", None) or []
+        rows_by_name = {}
+        for _r in _batch_rows:
+            _nm = _r.get("ingredient_name")
+            if not _nm:
+                continue
+            rows_by_name.setdefault(_nm, []).append(_r)
+    except Exception as _batch_err:
+        logger.debug(
+            f"[P1-N1-RESERVATION-DELTA] batch-fetch falló (best-effort, "
+            f"fallback a SELECT per-ingredient): {_batch_err}"
+        )
+        rows_by_name = None
 
     reserved_items = 0
     for day in days:
@@ -911,8 +968,13 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
                     continue
                 try:
                     qty, unit, name = _parse_quantity(str(item))
-                    if name and qty > 0 and _apply_reservation_delta(user_id, name, qty, unit, reservation_key):
-                        reserved_items += 1
+                    if name and qty > 0:
+                        _prefetched = rows_by_name.get(name) if rows_by_name is not None else None
+                        if _apply_reservation_delta(
+                            user_id, name, qty, unit, reservation_key,
+                            prefetched_rows=_prefetched,
+                        ):
+                            reserved_items += 1
                 except Exception as e:
                     logger.error(f"Error reservando '{item}' para {user_id}: {e}")
     return reserved_items
@@ -1026,13 +1088,33 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
 
     if connection_pool is not None and execute_sql_transaction is not None:
         from psycopg.types.json import Jsonb
+        # [P2-INVENTORY-STATEMENT-TIMEOUT · 2026-05-15] `SET LOCAL statement_timeout`
+        # como primer statement de la transacción. ANTES, los UPDATE de
+        # liberación de reservas dependían del timeout global del pool
+        # Supavisor (~60s) — bajo contención alta (lock fight con
+        # `_chunk_worker` activo), un UPDATE bloqueado 60s monopolizaba un
+        # slot del pool con repercusión a otras requests.
+        #
+        # Knob: `MEALFIT_INVENTORY_UPDATE_STMT_TIMEOUT_MS` (default 5000).
+        # `execute_sql_transaction` ejecuta queries en orden DENTRO de una
+        # misma tx (BEGIN ... COMMIT/ROLLBACK), por lo que `SET LOCAL`
+        # surte efecto sobre los UPDATE subsecuentes y se descarta al
+        # COMMIT/ROLLBACK (sin contaminar otras conexiones del pool).
+        _stmt_timeout_ms = _env_int_safe_inventory(
+            "MEALFIT_INVENTORY_UPDATE_STMT_TIMEOUT_MS", 5000
+        )
+        if _stmt_timeout_ms < 100:
+            _stmt_timeout_ms = 5000  # defensa contra valores absurdos
         queries = [
+            (f"SET LOCAL statement_timeout = {int(_stmt_timeout_ms)}", ()),
+        ]
+        queries.extend(
             (
                 "UPDATE user_inventory SET reserved_quantity = %s, reservation_details = %s WHERE id = %s",
                 (spec["new_reserved"], Jsonb(spec["new_details"]), spec["row_id"]),
             )
             for spec in update_specs
-        ]
+        )
         try:
             execute_sql_transaction(queries)
         except Exception as e:

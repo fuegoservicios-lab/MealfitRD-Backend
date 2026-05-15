@@ -52,7 +52,7 @@ def _hash_uuid_for_public(value: Optional[str]) -> Optional[str]:
 # P1-A4: reuso del helper Bearer-token de routers/plans.py para mantener una
 # sola implementación de auth admin (CRON_SECRET). Importar desde el sibling
 # router no genera ciclo: plans.py no importa system.py.
-from routers.plans import _verify_admin_token  # noqa: E402
+from routers.plans import _verify_admin_token, _check_admin_rate_limit  # noqa: E402
 
 @router.get("/health")
 def get_system_health(request: Request):
@@ -78,6 +78,7 @@ def get_system_health(request: Request):
     Test parser-based: `tests/test_p1_system_health_admin_gate.py`.
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     metrics = {
         "nudge_effectiveness": {},
         "abandonment_reasons": {},
@@ -197,6 +198,40 @@ def get_system_health(request: Request):
     except Exception as e:
         logger.error(f"Error calculando system health: {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+# ---------------------------------------------------------------------------
+# [P3-HEALTH-AGGREGATES-DISCLOSURE-DEFERRED · 2026-05-15] Decisión de producto:
+#
+# Los 5 endpoints públicos siguientes (`/atomic-pool-health`,
+# `/chunk-queue-health`, `/pantry-tolerance-health`, `/tz-fallback-health`,
+# `/health/plan-graph`) exponen agregados operacionales SIN auth — fallback
+# count, pool availability, backlog del worker, degraded rate. UUIDs ya
+# hasheados via `_hash_uuid_for_public` (P2-HEALTH-UID-STRIP), pero los
+# números agregados sí son visibles a cualquier IP.
+#
+# El audit production-readiness 2026-05-15 flageó esto como gap potencial
+# (business-intel leak: un competidor polleando cada 5min obtiene la curva
+# de salud del sistema). La decisión tomada es **mantenerlos públicos**:
+#
+#   - Útiles para Grafana / k8s probes / load balancers / UptimeRobot
+#     externos que no tienen acceso a `CRON_SECRET`.
+#   - Lo que se filtra son métricas operacionales agregadas — NO PII,
+#     NO datos de usuario, NO secretos.
+#   - El probe público canónico `/health/version` (P2-HEALTHZ-DEEP) ya
+#     expone el `drift` y el último heartbeat — coherente con esta política.
+#   - Si se necesita reservar la visibilidad granular, gatear con
+#     `_verify_admin_token(...)` + ofrecer un endpoint público sintético
+#     `/health/lite` con solo `{status: "ok"|"degraded"|"broken"}`. Eso
+#     es un follow-up que requiere consenso explícito del equipo.
+#
+# Análogo al pattern `P3-I18N-DEFERRED`: lo que un auditor confunde con
+# deuda es una decisión de producto. Si querés revertir, leé primero
+# `~/.claude/projects/.../memory/project_p3_health_aggregates_disclosure_deferred_2026_05_15.md`.
+#
+# Test ancla: `tests/test_p3_health_aggregates_disclosure_deferred.py`.
+# Tooltip-anchor: P3-HEALTH-AGGREGATES-DISCLOSURE-DEFERRED.
+# ---------------------------------------------------------------------------
 
 
 @router.get("/atomic-pool-health")
@@ -571,6 +606,7 @@ def admin_invalidate_plan_graph(request: Request, body: Optional[_InvalidatePlan
         no falla aunque el grafo ya estuviera en None.
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     try:
         from graph_orchestrator import invalidate_plan_graph
     except Exception as e:
@@ -617,6 +653,7 @@ def admin_force_deploy_lag_check(request: Request):
         seguidas no duplica filas (ON CONFLICT (alert_key) DO UPDATE).
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     try:
         from cron_tasks import _alert_deploy_lag_marker_stale, _DEPLOY_LAG_KV_KEY
         from db_core import execute_sql_query
@@ -718,6 +755,7 @@ def admin_health_snapshot(request: Request):
     transitorio en una tabla (ej. lock conflict) tumbe el endpoint entero.
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
 
     # 1. Drift: reuso de lógica del endpoint /deploy-lag/check (SIN ejecutar
     # el detector — solo lectura del KV + comparación contra _LAST_KNOWN_PFIX).
@@ -851,4 +889,84 @@ def admin_health_snapshot(request: Request):
         "stuck_chunks": stuck_chunks,
         "dead_lettered_chunks": dead_lettered_chunks,
         "open_circuit_breakers": open_circuit_breakers,
+    }
+
+
+@router.get("/admin/crons-status")
+def admin_crons_status(request: Request):
+    """[P3-CRONS-STATUS-ADMIN · 2026-05-15] Snapshot del estado de crons +
+    knobs de kill-switch.
+
+    ANTES: ~25+ crons registrados en `register_plan_chunk_scheduler` cada
+    uno con su knob `MEALFIT_<NAME>_ENABLED` (P1-SCHEDULER-1, P2-NEXT-3,
+    P3-NEW-D). Si un cron nuevo se añadía sin registrar su knob, no había
+    tooling que lo detectara — SRE descubría el gap solo al intentar
+    apagar el cron durante un incidente y notar que el env var no
+    surtía efecto. Este endpoint enumera los jobs vivos del scheduler +
+    sus knobs registrados para que SRE pueda comparar contra el catálogo
+    esperado sin grep cross-archivo.
+
+    Auth: `Authorization: Bearer <CRON_SECRET>` (consistente con resto de
+    `/admin/*`). 503 si CRON_SECRET no está seteado.
+
+    Retorna:
+      - jobs: lista de `{job_id, next_run_time_iso, trigger, coalesce,
+        max_instances}` extraídos de `scheduler.get_jobs()`. Vacío si el
+        scheduler no está inicializado (HAS_SCHEDULER=False).
+      - knobs_registry: snapshot de `_KNOBS_REGISTRY` filtrado a knobs
+        cuyo nombre contiene `ENABLED` (kill switches) — permite verificar
+        qué crons están apagados sin redeploy.
+      - knobs_count_total: cardinalidad total del registry (incluye no-kill).
+      - has_scheduler: bool — False indica APScheduler no instalado o
+        deshabilitado por env.
+
+    Anchor: P3-CRONS-STATUS-ADMIN.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)
+
+    jobs_list: list[dict] = []
+    has_scheduler = False
+    try:
+        from app import scheduler, HAS_SCHEDULER
+        has_scheduler = bool(HAS_SCHEDULER)
+        if scheduler is not None:
+            for j in scheduler.get_jobs():
+                try:
+                    jobs_list.append({
+                        "job_id": str(getattr(j, "id", "?")),
+                        "next_run_time_iso": (
+                            j.next_run_time.isoformat()
+                            if getattr(j, "next_run_time", None) else None
+                        ),
+                        "trigger": str(getattr(j, "trigger", "?")),
+                        "coalesce": bool(getattr(j, "coalesce", False)),
+                        "max_instances": int(getattr(j, "max_instances", 1)),
+                    })
+                except Exception as _job_err:
+                    logger.debug(
+                        f"[P3-CRONS-STATUS-ADMIN] skip job (extract err): {_job_err}"
+                    )
+    except Exception as e:
+        logger.debug(f"[P3-CRONS-STATUS-ADMIN] scheduler import/iterate falló: {e}")
+
+    knobs_kill_switches: dict[str, object] = {}
+    knobs_count_total: int = 0
+    try:
+        from graph_orchestrator import get_knobs_registry_snapshot
+        _snap = get_knobs_registry_snapshot() or {}
+        knobs_count_total = len(_snap)
+        for k, v in _snap.items():
+            if "ENABLED" in str(k):
+                knobs_kill_switches[str(k)] = v
+    except Exception as e:
+        logger.debug(f"[P3-CRONS-STATUS-ADMIN] knobs snapshot falló: {e}")
+
+    return {
+        "success": True,
+        "has_scheduler": has_scheduler,
+        "jobs": jobs_list,
+        "jobs_count": len(jobs_list),
+        "knobs_kill_switches": knobs_kill_switches,
+        "knobs_count_total": knobs_count_total,
     }

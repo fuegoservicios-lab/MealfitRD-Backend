@@ -2,14 +2,22 @@ from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, F
 from error_utils import safe_error_detail
 from typing import Optional
 import logging
+import math
 import uuid
 import asyncio
+from pydantic import BaseModel, Field, field_validator
 from db_core import supabase
 from db_profiles import get_user_profile, log_api_usage
 from auth import get_verified_user_id, verify_api_quota
 from path_validators import assert_valid_uuid
+from rate_limiter import RateLimiter
 from db import log_consumed_meal, get_consumed_meals_today, save_visual_entry
 from vision_agent import process_image_with_vision, get_multimodal_embedding
+# [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top — verificado que
+# `cron_tasks` NO importa `routers.diary` (no circular). El late import dentro
+# del handler era frágil: un refactor que renombrara `trigger_incremental_learning`
+# crashearía 500 en runtime en cada POST a `/api/diary/consumed`, no en import-time.
+from cron_tasks import trigger_incremental_learning
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +25,71 @@ router = APIRouter(
     prefix="/api/diary",
     tags=["diary"],
 )
+
+
+# ---------------------------------------------------------------------------
+# [P2-DIARY-NO-PYDANTIC · 2026-05-15] Pydantic models para validación de input.
+#
+# ANTES: los endpoints aceptaban `data: dict = Body(...)` sin schema. Inputs
+# adversariales (NaN / Infinity / strings en campos numéricos / arrays
+# enormes) caían a `int()` / `float()` con fallos silenciosos o 500s sin
+# discriminación. Sin schema, OpenAPI también quedaba pobre — clientes no
+# sabían qué shape esperar.
+#
+# DESPUÉS: cada endpoint define su Pydantic model. FastAPI valida antes
+# de invocar el handler y devuelve 422 con detalle estructurado en error.
+# `model_config = {"extra": "ignore"}` mantiene compat con clientes legacy
+# que envíen campos extra (no romper rollouts).
+# ---------------------------------------------------------------------------
+
+class ConsumedMealRequest(BaseModel):
+    """Payload para `POST /api/diary/consumed`. Campos numéricos clamp a
+    rangos sanos para evitar NaN/Infinity contamination en agregados."""
+    user_id: Optional[str] = None
+    meal_name: str = Field(..., min_length=1, max_length=200)
+    meal_type: str = Field(default="snack", max_length=32)
+    calories: float = Field(default=0.0, ge=0.0, le=10000.0)
+    protein: float = Field(default=0.0, ge=0.0, le=1000.0)
+    carbs: float = Field(default=0.0, ge=0.0, le=2000.0)
+    healthy_fats: float = Field(default=0.0, ge=0.0, le=1000.0)
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("calories", "protein", "carbs", "healthy_fats")
+    @classmethod
+    def _reject_non_finite(cls, v: float) -> float:
+        # [P2-DIARY-NO-PYDANTIC] NaN/Infinity bypassean `ge=0` de Pydantic
+        # en algunas versiones (Pydantic v2 los acepta como float válidos).
+        # Validator explícito.
+        if not math.isfinite(v):
+            raise ValueError("Macros deben ser números finitos.")
+        return v
+
+
+class ProgressRequest(BaseModel):
+    """Payload para `POST /api/diary/progress` (weight tracking)."""
+    user_id: Optional[str] = None
+    weight: float = Field(..., gt=0.0, le=2000.0)
+    unit: str = Field(default="lb", max_length=8)
+
+    model_config = {"extra": "ignore"}
+
+    @field_validator("weight")
+    @classmethod
+    def _reject_non_finite_weight(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("weight debe ser número finito.")
+        return v
+
+
+# [P2-DIARY-PROGRESS-RATELIMIT · 2026-05-15] Rate limiter para `/progress`.
+# ANTES: POST autenticado sin throttling — un user (o bug en mobile que
+# tap-spammee el guardar peso) podía inflar `weight_history` JSONB.
+# La lista se cappea a últimos 30 (línea ~270) pero la mutación bajo
+# advisory lock + roundtrip a Supabase tiene costo. 10/60s es generoso
+# (UI espera click manual) y restringe spam claro. Mismo patrón que
+# `_RECALC_LIMITER` y `_PDF_TELEMETRY_LIMITER` en routers/plans.py.
+_PROGRESS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
 @router.post("/upload")
 async def api_diary_upload(
@@ -80,56 +153,108 @@ async def api_diary_upload(
         is_food = vision_result.get("is_food", False)
         calories = vision_result.get("calories", 0)
         
+        # [P1-DIARY-PROMPT-INJECTION · 2026-05-15] Antes el endpoint concatenaba
+        # un string instructivo ("poison_pill") al `description` cuando la regla
+        # determinista detectaba calorías altas en horas críticas. Eso resolvía
+        # un caso de uso (forzar al chat agent a emitir reprimenda) pero abría
+        # un vector de prompt-injection: `calories` proviene de `vision_agent`
+        # → LLM derivado de la imagen subida por el usuario → controlable.
+        # `tz_offset_mins` viene del body del cliente → controlable.
+        # Un atacante podía construir un payload que disparase la regla y
+        # quedaba un string instructivo persistido en `visual_diary.description`
+        # + embebido en futuros contextos del chat agent.
+        #
+        # Fix: la decisión chrono-nutrición sigue calculándose (regla
+        # determinista, no LLM-dependiente), pero NO se concatena texto a
+        # `description`. Se persiste a `pipeline_metrics` como signal
+        # estructurada (`node='chrono_nutrition_red_alert'`) para que SRE/
+        # dashboards la observen, y se devuelve `red_alert` boolean al
+        # cliente para que la UX muestre la advertencia sin que la LLM
+        # sea instruida por texto poisoned.
+        chrono_red_alert = False
+        chrono_local_hour: Optional[int] = None
+        chrono_schedule_type: Optional[str] = None
+
         if is_food:
             logger.info(f"✅ Descripción generada: '{description}' (Calorías: {calories})")
-            
+
             # --- EVALUACIÓN DETERMINISTA DE CRONONUTRICIÓN (PYTHON) ---
             if calories > 500:
                 from datetime import datetime, timedelta, timezone
-                # [P3-DEPRECATED-UTCNOW · 2026-05-12] Migrado del sync naive
-                # API legacy a `datetime.now(timezone.utc)` (tz-aware) tras
-                # DeprecationWarning de Python 3.12+. Restamos `tz_offset_mins`
-                # para obtener la hora local del usuario; `.hour` funciona
-                # idéntico sobre el delta resultante.
+                # [P3-DEPRECATED-UTCNOW · 2026-05-12] tz-aware: ver memoria.
                 local_time = datetime.now(timezone.utc) - timedelta(minutes=tz_offset_mins)
-                local_hour = local_time.hour
-                
-                # Obtener el perfil para ver el tipo de turno
-                schedule_type = "standard"
+                chrono_local_hour = local_time.hour
+
+                chrono_schedule_type = "standard"
                 if user_id != "guest":
                     profile = get_user_profile(user_id)
                     if profile and profile.get("health_profile"):
-                        schedule_type = profile["health_profile"].get("scheduleType", "standard")
-                
-                # Reglas matemáticas duras e inquebrantables
-                is_red_alert = False
-                if schedule_type == "standard" and (0 <= local_hour < 6):
-                    is_red_alert = True
-                elif schedule_type == "night_shift" and (14 <= local_hour < 20):  # Ej: 2 PM a 8 PM
-                    is_red_alert = True
-                
-                if is_red_alert:
-                    poison_pill = " [⚠️ INSTRUCCIÓN CLÍNICA PRIORITARIA DE SISTEMA: El análisis de esta imagen indica que el usuario está a punto de consumir más de 500 kcal en una hora sumamente crítica para su reloj biológico (madrugada o contra-turno). TIENES LA ORDEN DIRECTA Y OBLIGATORIA de cambiar tu tono y emitir inmediatamente una advertencia y reprimenda constructiva sobre el grave impacto digestivo de comer así a esta hora.]"
-                    description += poison_pill
-                    logger.warning(f"🚨 [RULE POISONING] Inyectando alerta roja determinista. Hora local: {local_hour}, Calorías: {calories}, Turno: {schedule_type}")
+                        chrono_schedule_type = profile["health_profile"].get("scheduleType", "standard")
+
+                if chrono_schedule_type == "standard" and (0 <= chrono_local_hour < 6):
+                    chrono_red_alert = True
+                elif chrono_schedule_type == "night_shift" and (14 <= chrono_local_hour < 20):
+                    chrono_red_alert = True
+
+                if chrono_red_alert:
+                    # [P1-DIARY-PROMPT-INJECTION · 2026-05-15] Signal estructurada
+                    # a pipeline_metrics (best-effort) en lugar de poison_pill
+                    # concatenado a description. Frontend lee `red_alert` y
+                    # decide UX; chat agent NO recibe texto instruccional.
+                    try:
+                        from db_core import execute_sql_write
+                        import json as _json_chrono
+                        execute_sql_write(
+                            """
+                            INSERT INTO pipeline_metrics
+                                (user_id, session_id, node, duration_ms, retries,
+                                 tokens_estimated, confidence, metadata)
+                            VALUES (%s, %s, %s, 0, 0, 0, 0, %s::jsonb)
+                            """,
+                            (
+                                actual_user_id if actual_user_id and actual_user_id != session_id else None,
+                                session_id,
+                                "chrono_nutrition_red_alert",
+                                _json_chrono.dumps({
+                                    "local_hour": chrono_local_hour,
+                                    "calories": int(calories) if calories is not None else None,
+                                    "schedule_type": chrono_schedule_type,
+                                }, ensure_ascii=False),
+                            ),
+                        )
+                    except Exception as _chrono_err:
+                        logger.debug(f"[P1-DIARY-PROMPT-INJECTION] tick chrono falló (best-effort): {_chrono_err}")
+                    logger.warning(
+                        f"🚨 [CHRONO-NUTRITION] Red alert determinista (sin text poisoning). "
+                        f"local_hour={chrono_local_hour}, calorías={calories}, turno={chrono_schedule_type}"
+                    )
             # ------------------------------------------------------------
-            
+
             if actual_user_id and actual_user_id != session_id:
                 log_api_usage(actual_user_id, "gemini_vision")
-                
-            # 4. Guardar en DB en segundo plano (embedding + insert)
+
+            # 4. Guardar en DB en segundo plano (embedding + insert).
+            # `description` se persiste limpio (sin poison_pill) — la
+            # signal chrono se canaliza por `pipeline_metrics`.
             background_tasks.add_task(
                 _save_visual_entry_background,
                 actual_user_id, image_url, description
             )
         else:
             logger.info("➡️ La imagen fue ignorada porque no se detectaron alimentos.")
-        
+
         return {
-            "success": True, 
+            "success": True,
             "is_food": is_food,
             "description": description,
-            "image_url": image_url
+            "image_url": image_url,
+            # [P1-DIARY-PROMPT-INJECTION · 2026-05-15] flag estructurado para
+            # frontend; reemplaza la inyección de texto en `description`.
+            "red_alert": chrono_red_alert,
+            "red_alert_meta": {
+                "local_hour": chrono_local_hour,
+                "schedule_type": chrono_schedule_type,
+            } if chrono_red_alert else None,
         }
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/diary/upload: {str(e)}")
@@ -149,34 +274,40 @@ def _save_visual_entry_background(user_id: str, image_url: str, description: str
 
 @router.post("/consumed")
 def api_log_consumed_meal(
-    data: dict = Body(...), 
+    payload: ConsumedMealRequest,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     verified_user_id: str = Depends(get_verified_user_id)
 ):
-    """Registra una comida consumida manualmente desde el frontend."""
+    """Registra una comida consumida manualmente desde el frontend.
+
+    [P2-DIARY-NO-PYDANTIC · 2026-05-15] Migrado de `data: dict = Body(...)`
+    a `ConsumedMealRequest`. Pydantic valida tipos + rangos + NaN/Infinity
+    antes del handler (422 con detalle estructurado en lugar de 500
+    silencioso).
+    """
     try:
-        user_id = data.get("user_id")
-        meal_name = data.get("meal_name")
-        meal_type = data.get("meal_type", "snack")
-        calories = data.get("calories", 0)
-        protein = data.get("protein", 0)
-        carbs = data.get("carbs", 0)
-        healthy_fats = data.get("healthy_fats", 0)
-        
+        user_id = payload.user_id
+        meal_name = payload.meal_name
+        meal_type = payload.meal_type
+        calories = payload.calories
+        protein = payload.protein
+        carbs = payload.carbs
+        healthy_fats = payload.healthy_fats
+
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=403, detail="Prohibido.")
-                
+
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar comidas."}
-            
+
         log_consumed_meal(user_id, meal_name, int(calories), int(protein), int(carbs), int(healthy_fats), meal_type=meal_type)
-        
-        # [GAP 4] Latencia de 18+ horas: Recalcular adherencia intradía en background
-        from cron_tasks import trigger_incremental_learning
+
+        # [GAP 4] Latencia de 18+ horas: Recalcular adherencia intradía en background.
+        # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top del archivo.
         background_tasks.add_task(trigger_incremental_learning, user_id)
-        
+
         return {"success": True, "message": "Comida registrada exitosamente."}
     except HTTPException as he:
         raise he
@@ -223,12 +354,22 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
 
 
 @router.post("/progress")
-def api_log_progress(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
-    """Registra el peso actual en el historial de progreso (Progress Tracker)."""
+def api_log_progress(
+    payload: ProgressRequest,
+    verified_user_id: Optional[str] = Depends(_PROGRESS_LIMITER),
+):
+    """Registra el peso actual en el historial de progreso (Progress Tracker).
+
+    [P2-DIARY-NO-PYDANTIC + P2-DIARY-PROGRESS-RATELIMIT · 2026-05-15]
+    - Pydantic `ProgressRequest` valida weight finito + rango (0, 2000].
+    - `_PROGRESS_LIMITER` (10/60s per user/IP) bloquea spam de POSTs que
+      inflarían `weight_history` JSONB. El limiter inyecta
+      `verified_user_id` (mismo patrón que `_CHAT_TTS_LIMITER`).
+    """
     try:
-        user_id = data.get("user_id")
-        weight = float(data.get("weight"))
-        unit = data.get("unit", "lb")
+        user_id = payload.user_id
+        weight = payload.weight
+        unit = payload.unit
         
         # Validación de seguridad IDOR
         if user_id and user_id != "guest":

@@ -4400,6 +4400,20 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         `unit, expected_qty, actual_qty, delta_pct`. Vacía si guard `off` o
         sin divergencias.
     """
+    # [P2-COHERENCE-GUARD-PERF · 2026-05-15] Wrap timing.
+    # ANTES, no había métrica `duration_ms` persistida por call. Un refactor
+    # accidental que volviese O(n²) (e.g. doble loop sobre ingredientes
+    # canonicalizados) pasaba inadvertido hasta que la latencia del
+    # `assemble_plan_node` saltase user-facing. Ahora cada call emite a
+    # `pipeline_metrics(node='coherence_guard_validation')` con duration_ms
+    # + recipe_count + ingredient_count + divergence_count.
+    import time as _time_coh
+    _coh_started_at = _time_coh.time()
+    _coh_recipe_count = 0
+    _coh_ingredient_count = 0
+    _coh_divergence_count = 0
+    _coh_emit_node = "coherence_guard_validation"
+
     if mode_override is not None:
         mode = str(mode_override).strip().lower()
         if mode not in ("off", "warn", "block"):
@@ -4407,6 +4421,15 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     else:
         mode = _get_coherence_guard_mode()
     if mode == "off":
+        # Emit metric even for off-mode (visibilidad: ver cuántas calls llegan
+        # con el guard desactivado por knob).
+        _emit_coherence_guard_metric(
+            duration_ms=int((_time_coh.time() - _coh_started_at) * 1000),
+            mode=mode,
+            recipe_count=0,
+            ingredient_count=0,
+            divergence_count=0,
+        )
         return []
 
     # [P1-C] Resolver multiplier: arg explícito > plan_result cacheado > 1.0.
@@ -4558,7 +4581,74 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
             f"🛒 [COH-GUARD/{mode}] OK: 0 divergencias (presence+magnitude, multiplier={mult})."
         )
 
+    # [P2-COHERENCE-GUARD-PERF · 2026-05-15] Emit duration + cardinality
+    # antes del return (cubre todos los paths exit normales del guard).
+    _coh_recipe_count = len(expected_raw) if expected_raw else 0
+    _coh_ingredient_count = len(aggregated_list) if aggregated_list else 0
+    _coh_divergence_count = len(divergences)
+    _emit_coherence_guard_metric(
+        duration_ms=int((_time_coh.time() - _coh_started_at) * 1000),
+        mode=mode,
+        recipe_count=_coh_recipe_count,
+        ingredient_count=_coh_ingredient_count,
+        divergence_count=_coh_divergence_count,
+    )
+
     return divergences
+
+
+def _emit_coherence_guard_metric(
+    *,
+    duration_ms: int,
+    mode: str,
+    recipe_count: int,
+    ingredient_count: int,
+    divergence_count: int,
+) -> None:
+    """[P2-COHERENCE-GUARD-PERF · 2026-05-15] Best-effort INSERT a
+    `pipeline_metrics` con perf del coherence guard. Knob umbral:
+    `MEALFIT_COHERENCE_GUARD_SLOW_MS` (default 1000) — log warning si
+    excede para que un refactor accidental O(n²) sea detectable sin
+    esperar a tail-latency en user-facing.
+    """
+    try:
+        import os as _os_coh
+        try:
+            _slow_threshold_ms = int(_os_coh.environ.get("MEALFIT_COHERENCE_GUARD_SLOW_MS", "1000"))
+        except (TypeError, ValueError):
+            _slow_threshold_ms = 1000
+
+        if duration_ms > _slow_threshold_ms:
+            logging.warning(
+                f"[P2-COHERENCE-GUARD-PERF] guard tardó {duration_ms}ms "
+                f"(umbral {_slow_threshold_ms}ms). recipes={recipe_count} "
+                f"ingredients={ingredient_count} divergences={divergence_count} "
+                f"mode={mode}. Posible regresión perf — investigar."
+            )
+
+        from db_core import execute_sql_write
+        import json as _json_coh
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, %s, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                "coherence_guard_validation",
+                int(duration_ms),
+                _json_coh.dumps({
+                    "mode": mode,
+                    "recipe_count": int(recipe_count),
+                    "ingredient_count": int(ingredient_count),
+                    "divergence_count": int(divergence_count),
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception:
+        # Silent — el guard NO debe fallar por una métrica de telemetry.
+        pass
 
 
 def run_shopping_coherence_guard_and_append_history(

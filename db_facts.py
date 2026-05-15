@@ -472,14 +472,27 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
                 start_str = f"{today_date}T00:00:00Z"
                 end_str = f"{today_date}T23:59:59Z"
             
+            # [P2-SELECT-STAR-CONSUMED-MEALS · 2026-05-15] Columnas explícitas
+            # (era `SELECT *`). Caller (`/api/diary/consumed/{user_id}` y
+            # `agent.py:904`) solo necesita meal_name, calories, protein,
+            # carbs, healthy_fats, consumed_at, meal_type. Trim de I/O +
+            # JSON parse + payload size; cierra convención post-P1-NEW-3
+            # (explicit columns).
+            _COLUMNS = (
+                "meal_name, calories, protein, carbs, healthy_fats, "
+                "consumed_at, meal_type"
+            )
             if connection_pool:
-                query = "SELECT * FROM consumed_meals WHERE user_id = %s AND consumed_at >= %s AND consumed_at < %s"
+                query = (
+                    f"SELECT {_COLUMNS} FROM consumed_meals "
+                    "WHERE user_id = %s AND consumed_at >= %s AND consumed_at < %s"
+                )
                 res = execute_sql_query(query, (user_id, start_str, end_str), fetch_all=True)
                 return res
             else:
                 if not supabase: return []
                 res = supabase.table("consumed_meals")\
-                    .select("*")\
+                    .select(_COLUMNS)\
                     .eq("user_id", user_id)\
                     .gte("consumed_at", start_str)\
                     .lt("consumed_at", end_str)\
@@ -495,15 +508,26 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
 
 def get_consumed_meals_since(user_id: str, since_iso_date: str):
     """Obtiene todas las comidas consumidas por el usuario desde una fecha específica."""
+    # [P2-SELECT-STAR-CONSUMED-MEALS · 2026-05-15] Columnas explícitas — caller
+    # (`agent.py::log_consumed_meal` y stats agregadas) solo necesita los
+    # campos básicos. Reduce I/O sobre tabla append-only que puede acumular
+    # miles de filas por usuario.
+    _COLUMNS = (
+        "meal_name, calories, protein, carbs, healthy_fats, "
+        "consumed_at, meal_type"
+    )
     try:
         if connection_pool:
-            query = "SELECT * FROM consumed_meals WHERE user_id = %s AND consumed_at >= %s"
+            query = (
+                f"SELECT {_COLUMNS} FROM consumed_meals "
+                "WHERE user_id = %s AND consumed_at >= %s"
+            )
             res = execute_sql_query(query, (user_id, since_iso_date), fetch_all=True)
             return res
         else:
             if not supabase: return []
             res = supabase.table("consumed_meals")\
-                .select("*")\
+                .select(_COLUMNS)\
                 .eq("user_id", user_id)\
                 .gte("consumed_at", since_iso_date)\
                 .execute()

@@ -133,16 +133,23 @@ def test_surface_breakdown_references_bucket(cron_body: str, surface_key: str, b
 def test_pipeline_metrics_metadata_has_surface_breakdown(cron_body: str):
     """El INSERT a `pipeline_metrics` debe persistir `surface_breakdown`
     en metadata (no solo en logs). Sin esto, dashboards históricos no
-    pueden hacer query SQL al breakdown."""
-    # Buscar "surface_breakdown": surface_breakdown dentro del INSERT block.
+    pueden hacer query SQL al breakdown.
+
+    [P1-CRON-TOP-LEVEL-TRY · 2026-05-15] tras el refactor que envolvió la
+    función en try/finally, la variable local `surface_breakdown` se
+    propaga a `_agg_tick_surface_breakdown` antes del finally — el INSERT
+    en finally pasa esa flag. Aceptamos ambos nombres para que un
+    refactor que elimine el wrapper top-level no rompa este test.
+    """
     pattern = re.compile(
-        r"['\"]surface_breakdown['\"]\s*:\s*surface_breakdown",
+        r"['\"]surface_breakdown['\"]\s*:\s*(?:_agg_tick_)?surface_breakdown",
     )
     assert pattern.search(cron_body), (
         "P3-NEXT-4 violation: `surface_breakdown` NO se persiste en "
         "`pipeline_metrics.metadata`. Aunque el cron logguea el dict, "
         "queries SQL históricas (Grafana, post-mortem) no pueden "
         "acceder. Fix: añadir `\"surface_breakdown\": surface_breakdown` "
+        "(o `_agg_tick_surface_breakdown` post-P1-CRON-TOP-LEVEL-TRY) "
         "al dict metadata del INSERT a pipeline_metrics."
     )
 

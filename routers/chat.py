@@ -20,7 +20,10 @@ from services import merge_form_data_with_profile
 from db_profiles import get_user_profile
 from db_plans import get_latest_meal_plan
 from fact_extractor import async_extract_and_save_facts
-import threading
+# [P1-BG-THREAD-TIMEOUT · 2026-05-15] SSOT para fire-and-forget con timeout
+# duro + alert. Reemplaza los `threading.Thread(target=..., daemon=True).start()`
+# que vivían inline en este router. Ver `backend/bg_executor.py`.
+from bg_executor import submit_bg_task
 
 logger = logging.getLogger(__name__)
 
@@ -254,23 +257,80 @@ async def api_chat_tts(
         }
     }
 
+    # [P1-TTS-FINALLY-LOG · 2026-05-15] Billing idempotente vía finally — mismo
+    # patrón que P2-AUDIT-NEW-2 cerró para `/chat/stream`.
+    #
+    # ANTES (P1-CHAT-TTS-1 original):
+    #   `log_api_usage` vivía DENTRO del `async with httpx.AsyncClient` solo en
+    #   path de éxito. Si la request a ElevenLabs lanzaba `TimeoutError`,
+    #   `httpx.HTTPStatusError`, `httpx.ConnectError`, etc, el accounting NO
+    #   se ejecutaba. ElevenLabs factura POR CARÁCTER SUBMITIDO (no por
+    #   response devuelto): si la request llegó al servidor antes del timeout,
+    #   ellos cobraron al owner y el usuario quedó sin charge en su cuota
+    #   mensual. Vector: usuario malicioso provoca timeouts deliberados (URL
+    #   bloqueada en cliente / network throttling) → tokens TTS gastados sin
+    #   cobrar a cuota.
+    #
+    # FIX:
+    #   - `_billed` flag dedupea (defensivo, finally corre una sola vez).
+    #   - `_request_started` activa cuando entramos al `async with` httpx
+    #     (api_key validado, url construida). Si fallamos ANTES de eso
+    #     (auth, missing api_key), finally NO factura — esos errores no
+    #     consumieron crédito en ElevenLabs.
+    #   - Timeout-specific catch emite `pipeline_metrics` con
+    #     `node='tts_timeout'` para que SRE pueda graficar la incidencia.
+    _tts_billed = False
+    _tts_request_started = False
+
     try:
+        _tts_request_started = True
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
-            # [P1-CHAT-TTS-1] Accounting post-success. Best-effort try/except
-            # para que un fallo de DB no rompa la response TTS al usuario.
-            try:
-                log_api_usage(verified_user_id, "elevenlabs_tts")
-            except Exception as _audit_err:
-                logger.warning(f"[P1-CHAT-TTS-1] log_api_usage tts falló: {_audit_err}")
             return Response(content=resp.content, media_type="audio/mpeg")
     except httpx.HTTPStatusError as e:
         logger.error(f"Error ElevenLabs {e.response.status_code}: {e.response.text}")
         raise HTTPException(status_code=500, detail="Error en generación TTS")
+    except (httpx.TimeoutException, asyncio.TimeoutError) as _e_timeout:
+        logger.error(f"[P1-TTS-FINALLY-LOG] Timeout ElevenLabs ({_e_timeout!r})")
+        try:
+            from db_core import execute_sql_write
+            import json as _json_tts
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics
+                    (user_id, session_id, node, duration_ms, retries,
+                     tokens_estimated, confidence, metadata)
+                VALUES (%s, NULL, %s, 0, 0, %s, 0, %s::jsonb)
+                """,
+                (
+                    verified_user_id,
+                    "tts_timeout",
+                    len(text),
+                    _json_tts.dumps({
+                        "provider": "elevenlabs",
+                        "timeout_threshold_s": 15.0,
+                        "char_count": len(text),
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as _tick_err:
+            logger.debug(f"[P1-TTS-FINALLY-LOG] tick timeout falló: {_tick_err}")
+        raise HTTPException(status_code=504, detail="Timeout en generación TTS")
     except Exception as e:
         logger.error(f"Error general llamando a ElevenLabs: {str(e)}")
         raise HTTPException(status_code=500, detail="Error en generación TTS")
+    finally:
+        # [P1-TTS-FINALLY-LOG · 2026-05-15] Cobrar accounting siempre que
+        # se haya iniciado la request a ElevenLabs, sin importar success/
+        # error/timeout. Best-effort try/except: un fallo de DB no debe
+        # tumbar la response del usuario.
+        if _tts_request_started and not _tts_billed and verified_user_id:
+            try:
+                log_api_usage(verified_user_id, "elevenlabs_tts")
+                _tts_billed = True
+            except Exception as _audit_err:
+                logger.warning(f"[P1-TTS-FINALLY-LOG] log_api_usage tts falló: {_audit_err}")
 
 @router.post("/feedback")
 async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[str] = Depends(get_verified_user_id)):
@@ -332,11 +392,13 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
             
         
         # Iniciar generación del título de inmediato en paralelo
-        threading.Thread(
-            target=generate_chat_title_background,
-            args=(user_id, session_id, prompt),
-            daemon=True
-        ).start()
+        # [P1-BG-THREAD-TIMEOUT · 2026-05-15] submit al pool compartido con
+        # timeout + alert si excede (Gemini cuelga, etc.). Ver bg_executor.py.
+        submit_bg_task(
+            generate_chat_title_background,
+            user_id, session_id, prompt,
+            task_name="chat_title_generation",
+        )
         
         # [P2-AUDIT-NEW-2 · 2026-05-12] Billing idempotente vía flag + finally.
         # ANTES: `log_api_usage(user_id, "gemini_chat")` vivía DENTRO de
@@ -433,7 +495,9 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                                     except Exception as inner_e:
                                         logger.error(f"Error en bg tasks: {inner_e}")
 
-                                threading.Thread(target=bg_tasks, daemon=True).start()
+                                # [P1-BG-THREAD-TIMEOUT · 2026-05-15] submit
+                                # al pool compartido con timeout + alert.
+                                submit_bg_task(bg_tasks, task_name="chat_sse_bg_tasks")
                         except Exception as e_json:
                             logger.error(f"Error parseando chunk de fin: {e_json}")
 
@@ -448,7 +512,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 )
                 raise
             except Exception as e:
-                traceback.print_exc()
+                # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
+                logger.exception(f"[CHAT STREAM] Error mid-stream: {e}")
                 # `chunk_observed` puede ser True (excepción tras emitir chunks)
                 # o False (excepción pre-LLM). El finally factura solo si True.
                 yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -480,7 +545,8 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
+        # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
+        logger.exception(f"[CHAT STREAM] Error en api_chat_stream: {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
@@ -561,7 +627,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
             result["new_plan"] = new_plan
         return result
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
+        logger.exception(f"[CHAT] Error en api_chat: {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 

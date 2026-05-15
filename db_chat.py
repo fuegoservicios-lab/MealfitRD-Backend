@@ -49,17 +49,26 @@ def get_or_create_session(session_id: str, user_id: str = None):
     if not connection_pool: 
         logger.error(f"🚨 [SESSION] connection_pool es None! No se puede crear sesión {session_id}")
         return None
+    # [P3-SELECT-STAR-AGENT-SESSIONS · 2026-05-15] Columnas explícitas en lugar
+    # de `SELECT *` / `RETURNING *`. Callers de `get_or_create_session` solo
+    # consumen los 4 campos básicos del session (id, user_id, locked_at,
+    # created_at). Convención post-P1-NEW-3 (explicit columns) cierra el
+    # gap inconsistente entre módulos.
+    _AGENT_SESSION_COLS = "id, user_id, locked_at, created_at"
     try:
         logger.info(f"📋 [SESSION] get_or_create_session(id={session_id}, user_id={user_id})")
-        query = "SELECT * FROM agent_sessions WHERE id = %s"
+        query = f"SELECT {_AGENT_SESSION_COLS} FROM agent_sessions WHERE id = %s"
         res = execute_sql_query(query, (session_id,), fetch_one=True)
-        
+
         if res:
             existing_session = res
             logger.info(f"📋 [SESSION] Sesión {session_id} ya existe. user_id en DB: {existing_session.get('user_id')}")
             if not existing_session.get("user_id") and user_id:
                 try:
-                    update_q = "UPDATE agent_sessions SET user_id = %s WHERE id = %s RETURNING *"
+                    update_q = (
+                        f"UPDATE agent_sessions SET user_id = %s WHERE id = %s "
+                        f"RETURNING {_AGENT_SESSION_COLS}"
+                    )
                     update_res = execute_sql_write(update_q, (user_id, session_id), returning=True)
                     if update_res:
                         logger.info(f"✅ [SESSION] user_id actualizado a {user_id} para sesión {session_id}")
@@ -67,21 +76,30 @@ def get_or_create_session(session_id: str, user_id: str = None):
                 except Exception as update_e:
                     logger.error(f"Error actualizando user_id en sesión: {update_e}")
             return existing_session
-        
+
         logger.info(f"📋 [SESSION] Sesión {session_id} NO existe. Creando nueva...")
         if user_id:
-            insert_q = "INSERT INTO agent_sessions (id, user_id, locked_at) VALUES (%s, %s, %s) RETURNING *"
+            insert_q = (
+                f"INSERT INTO agent_sessions (id, user_id, locked_at) VALUES (%s, %s, %s) "
+                f"RETURNING {_AGENT_SESSION_COLS}"
+            )
             new_res = execute_sql_write(insert_q, (session_id, user_id, None), returning=True)
         else:
-            insert_q = "INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) RETURNING *"
+            insert_q = (
+                f"INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) "
+                f"RETURNING {_AGENT_SESSION_COLS}"
+            )
             new_res = execute_sql_write(insert_q, (session_id, None), returning=True)
-        
+
         logger.info(f"✅ [SESSION] Sesión creada: {new_res}")
         return new_res[0] if new_res else None
     except Exception as e:
         logger.info(f"Fallback creando sesión: {e}")
         try:
-            insert_q = "INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) RETURNING *"
+            insert_q = (
+                f"INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) "
+                f"RETURNING {_AGENT_SESSION_COLS}"
+            )
             new_res_fallback = execute_sql_write(insert_q, (session_id, None), returning=True)
             if new_res_fallback:
                 return new_res_fallback[0]

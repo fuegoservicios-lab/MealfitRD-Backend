@@ -883,10 +883,7 @@ def _shopping_coherence_alert_job():
     finally:
         # [P2-LIVE-9 · 2026-05-11] Tick observable SIEMPRE (patrón P3-LIVE-1
         # / P1-LIVE-4). Confirma que el cron diario 04:00 UTC corrió aunque
-        # NO emitiera alerta. `skip_reason` distingue 7 paths:
-        # ok / db_core_import_failed / supabase_not_initialized /
-        # fetch_plans_failed / below_min_plans / guard_persist_import_failed /
-        # (None = full run completado).
+        # NO emitiera alerta. `skip_reason` distingue 7 paths.
         try:
             execute_sql_write(
                 """
@@ -913,6 +910,116 @@ def _shopping_coherence_alert_job():
         except Exception as _tick_err:
             logger.debug(
                 f"[P2-LIVE-9/COH-ALERT] tick emit falló (best-effort): {_tick_err}"
+            )
+
+        # [P1-COH-CRON-CONSECUTIVE-FAIL · 2026-05-15] Contador de fallos
+        # consecutivos. ANTES, el tick (P2-LIVE-9) reportaba estado per-run
+        # pero no había un mecanismo que dijese "este cron lleva 3 corridas
+        # con skip_reason != None". Sin alerta automática, SRE solo lo
+        # descubriría revisando dashboards manualmente.
+        #
+        # Estrategia: clave en `app_kv_store` `coh_alert_job_failures_count`
+        # con payload `{count: N, last_failure_at: ISO, last_skip_reason: str}`.
+        # - skip_reason!=None OR eval_errors>0 OR persist_errors>0 → INCR.
+        # - run OK (skip_reason=None AND eval_errors=0 AND persist_errors=0)
+        #   → RESET a 0.
+        # - count >= threshold → emit `system_alerts` (auto-resolve cuando
+        #   un siguiente run OK lo limpia).
+        try:
+            from db_core import execute_sql_query
+            _is_failure = (
+                _tick_skip_reason is not None
+                or _tick_eval_errors > 0
+                or _tick_persist_errors > 0
+            )
+            _coh_fail_threshold = _env_int("MEALFIT_COH_ALERT_CONSECUTIVE_FAIL_THRESHOLD", 2)
+            if _coh_fail_threshold < 1:
+                _coh_fail_threshold = 2
+
+            _kv_key_coh_fail = "coh_alert_job_failures_count"
+            _row_fail = execute_sql_query(
+                "SELECT value FROM app_kv_store WHERE key = %s",
+                (_kv_key_coh_fail,),
+                fetch_one=True,
+            )
+            _prev_count = 0
+            if _row_fail and isinstance(_row_fail, dict):
+                _raw = _row_fail.get("value")
+                if isinstance(_raw, dict):
+                    _prev_count = int(_raw.get("count", 0) or 0)
+
+            if _is_failure:
+                _new_count = _prev_count + 1
+                _payload = json.dumps({
+                    "count": _new_count,
+                    "last_failure_at": datetime.now(timezone.utc).isoformat(),
+                    "last_skip_reason": _tick_skip_reason,
+                    "last_eval_errors": _tick_eval_errors,
+                    "last_persist_errors": _tick_persist_errors,
+                }, ensure_ascii=False)
+                execute_sql_write(
+                    """
+                    INSERT INTO app_kv_store (key, value, updated_at)
+                    VALUES (%s, %s::jsonb, NOW())
+                    ON CONFLICT (key) DO UPDATE
+                    SET value = EXCLUDED.value, updated_at = NOW()
+                    """,
+                    (_kv_key_coh_fail, _payload),
+                )
+                if _new_count >= _coh_fail_threshold:
+                    execute_sql_write(
+                        """
+                        INSERT INTO system_alerts
+                            (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                        VALUES (%s, 'shopping_coherence_alert_job_failures_burst',
+                                'warning', %s, %s, %s::jsonb, %s::jsonb)
+                        ON CONFLICT (alert_key) DO UPDATE
+                        SET triggered_at = NOW(),
+                            metadata = EXCLUDED.metadata,
+                            resolved_at = NULL
+                        """,
+                        (
+                            "shopping_coherence_alert_job_failures_burst",
+                            "Cron coherence con fallos consecutivos",
+                            (
+                                f"`_shopping_coherence_alert_job` acumuló {_new_count} "
+                                f"fallos consecutivos (umbral={_coh_fail_threshold}). "
+                                f"Último skip_reason={_tick_skip_reason!r}, "
+                                f"eval_errors={_tick_eval_errors}, "
+                                f"persist_errors={_tick_persist_errors}."
+                            ),
+                            _payload,
+                            json.dumps([]),
+                        ),
+                    )
+            else:
+                # Run sin fallos → reset counter (auto-resolve la alert).
+                if _prev_count > 0:
+                    execute_sql_write(
+                        """
+                        INSERT INTO app_kv_store (key, value, updated_at)
+                        VALUES (%s, %s::jsonb, NOW())
+                        ON CONFLICT (key) DO UPDATE
+                        SET value = EXCLUDED.value, updated_at = NOW()
+                        """,
+                        (
+                            _kv_key_coh_fail,
+                            json.dumps({"count": 0, "last_reset_at": datetime.now(timezone.utc).isoformat()},
+                                       ensure_ascii=False),
+                        ),
+                    )
+                    # Resolver la alert si existía.
+                    try:
+                        execute_sql_write(
+                            "UPDATE system_alerts SET resolved_at = NOW() "
+                            "WHERE alert_key = %s AND resolved_at IS NULL",
+                            ("shopping_coherence_alert_job_failures_burst",),
+                        )
+                    except Exception:
+                        pass
+        except Exception as _consec_err:
+            logger.debug(
+                f"[P1-COH-CRON-CONSECUTIVE-FAIL] counter falló (best-effort): {_consec_err}"
             )
 
 
@@ -955,231 +1062,211 @@ def _aggregate_coherence_block_history_metrics():
       MEALFIT_COHERENCE_METRICS_MAX_PLANS   (default 1000) — cap defensivo
                                                              contra burst.
     """
-    # [P1-A · 2026-05-08] `_env_float`/`_env_int` registran en `_KNOBS_REGISTRY`.
-    # Validator `v > 0 and isfinite(v)` cubre los guard-rails previos (NaN/Inf/<=0
-    # caen al default). Para max_plans usamos `_env_int` + clamp manual: `_env_int`
-    # no acepta validator (a diferencia de `_env_float`), pero el operador que
-    # setea "0" o "-1" verá `value=0`/`-1` en el registry y el clamp manual
-    # restaura el comportamiento previo (cae a 1000).
-    lookback_h = _env_float(
-        "MEALFIT_COHERENCE_METRICS_LOOKBACK_H",
-        1.0,
-        validator=lambda v: v > 0 and math.isfinite(v),
-    )
-    max_plans = _env_int("MEALFIT_COHERENCE_METRICS_MAX_PLANS", 1000)
-    if max_plans <= 0:
-        max_plans = 1000
+    # [P1-CRON-TOP-LEVEL-TRY · 2026-05-15] Top-level try/finally + tick
+    # observable. ANTES, los `return` tempranos (db_core import fail,
+    # supabase=None, fetch falla) salían silenciosamente sin emitir nada
+    # a pipeline_metrics. El watchdog `_alert_pipeline_metrics_silence`
+    # observa el heartbeat `_chunk_heartbeat_baseline` (que está OK), pero
+    # NO observa este cron específico — un fallo de 3h consecutivas era
+    # invisible para SRE. Patrón equivalente a `_shopping_coherence_alert_job`
+    # post-P2-LIVE-9.
+    _agg_tick_skip_reason: str | None = None
+    _agg_tick_plans_examined = 0
+    _agg_tick_plans_with_history = 0
+    _agg_tick_total_entries = 0
+    _agg_tick_parse_errors = 0
+    _agg_tick_anomalous = False
+    _agg_tick_confidence_val: float = 1.0
+    _agg_tick_lookback_h: float = 1.0
+    _agg_tick_counts: dict[str, int] = {}
+    _agg_tick_surface_breakdown: dict[str, int] = {}
 
     try:
-        from db_core import supabase
-    except Exception as e:
-        logger.warning(f"[P3-B/COH-METRICS] db_core import falló: {e}")
-        return
-
-    if not supabase:
-        logger.warning("[P3-B/COH-METRICS] supabase no inicializado — skip.")
-        return
-
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_h)).isoformat()
-    try:
-        # [P1-A · 2026-05-10] Filtrar por `updated_at` (añadido por migración
-        # P0-2 — `supabase/migrations/p0_2_meal_plans_updated_at.sql`). Esto
-        # cierra el trade-off documentado en P0-OBS-1: con `created_at` el cron
-        # perdía regeneraciones de planes viejos (un plan creado hace 7d que
-        # appendeó history hoy quedaba fuera de la ventana). El trigger
-        # `trg_meal_plans_set_updated_at` (BEFORE UPDATE FOR EACH ROW) garantiza
-        # que cualquier mutación al plan (incluso cuando el caller olvida
-        # `SET updated_at = NOW()`) bumpee la columna, así que cualquier append
-        # al `_shopping_coherence_block_history` (vía `_recompute_aggregates_after_swap`,
-        # `assemble_plan_node`, retry-chunk, etc.) cae dentro del lookback en
-        # el siguiente tick.
-        #
-        # El índice `idx_meal_plans_user_updated_at` (creado por la misma
-        # migración) cubre esta query exacta — sin él, este filtro produciría
-        # seq-scan sobre toda la tabla.
-        #
-        # Historial: la versión previa de P3-B usaba `updated_at` directo, pero
-        # crasheaba con 400 (columna inexistente pre-P0-2). P0-OBS-1 cambió a
-        # `created_at` como workaround; P0-2 añadió la columna; este P1-A
-        # restaura la intención original ahora que el schema lo soporta.
-        res = (
-            supabase.table("meal_plans")
-            .select("id,user_id,plan_data")
-            .gte("updated_at", cutoff)
-            .limit(max_plans)
-            .execute()
+        # [P1-A · 2026-05-08] `_env_float`/`_env_int` registran en `_KNOBS_REGISTRY`.
+        lookback_h = _env_float(
+            "MEALFIT_COHERENCE_METRICS_LOOKBACK_H",
+            1.0,
+            validator=lambda v: v > 0 and math.isfinite(v),
         )
-        plans = res.data or []
-    except Exception as e:
-        logger.warning(f"[P3-B/COH-METRICS] fetch planes falló: {e}")
-        return
+        _agg_tick_lookback_h = lookback_h
+        max_plans = _env_int("MEALFIT_COHERENCE_METRICS_MAX_PLANS", 1000)
+        if max_plans <= 0:
+            max_plans = 1000
 
-    counts = {
-        "not_applicable":  0,
-        "degrade":         0,
-        "reject_minor":    0,
-        "reject_high":     0,
-        "hydration_error": 0,
-        "null_block_set":  0,
-        "none_other":      0,
-        # [P2-B · 2026-05-08] Bucket dedicado para entries emitidas por
-        # `_recompute_aggregates_after_swap`. NO es anomalous — es
-        # observabilidad: cuenta planes donde el swap produjo divergencias
-        # detectadas en mode=warn post-review. Si este número es alto,
-        # investigar si el swap está degradando coherencia o si los
-        # best_attempts capturados upstream ya las tenían.
-        "post_swap_revalidation": 0,
-        # [P2-2 · 2026-05-08] Sub-bucket: post_swap_revalidation entries
-        # que sí escalaron a `system_alerts` (entry.alerted=True). Permite
-        # cross-check: el conteo aquí debe coincidir con filas
-        # alert_type='post_swap_coherence' triggered en la misma ventana.
-        # Si diverge, hay un bug en la cooldown lógica o en el INSERT.
-        "post_swap_critical_alerted": 0,
-        # [P3-NEXT-4 · 2026-05-11] Buckets para las 4 surfaces auxiliares
-        # cubiertas por P1-NEXT-2 + P2-NEXT-2 que invocan el helper SSOT
-        # con `action_taken="warn_only_<surface>"`. Antes de P3-NEXT-4
-        # estos valores caían al else-branch (debug log + ignore) — el
-        # cron horario reportaba subconteo silente. Ahora cada surface
-        # tiene su propio bucket para detectar drift (ej.: si
-        # `warn_only_chunk_t2` se dispara mucho más que `not_applicable`,
-        # los chunked plans están degradando coherencia vs assemble path).
-        "warn_only_chunk_t2":    0,  # _chunk_worker T2 (multi-week)
-        "warn_only_recalc":      0,  # /recalculate-shopping-list
-        "warn_only_agent_tool":  0,  # tools.modify_single_meal
-        "warn_only_cron_daily":  0,  # _shopping_coherence_alert_job 04:00 UTC
-    }
-    plans_with_history = 0
-    plans_examined = 0
-    total_entries = 0
-    parse_errors = 0
+        try:
+            from db_core import supabase
+        except Exception as e:
+            logger.warning(f"[P3-B/COH-METRICS] db_core import falló: {e}")
+            _agg_tick_skip_reason = "db_core_import_failed"
+            return
 
-    for plan_record in plans:
-        plans_examined += 1
-        plan_data = plan_record.get("plan_data") or {}
-        if isinstance(plan_data, str):
-            try:
-                plan_data = json.loads(plan_data)
-            except Exception:
+        if not supabase:
+            logger.warning("[P3-B/COH-METRICS] supabase no inicializado — skip.")
+            _agg_tick_skip_reason = "supabase_not_initialized"
+            return
+
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_h)).isoformat()
+        try:
+            # [P1-A · 2026-05-10] Filtrar por `updated_at` (P0-2 migration);
+            # el índice `idx_meal_plans_user_updated_at` cubre el filtro.
+            res = (
+                supabase.table("meal_plans")
+                .select("id,user_id,plan_data")
+                .gte("updated_at", cutoff)
+                .limit(max_plans)
+                .execute()
+            )
+            plans = res.data or []
+        except Exception as e:
+            logger.warning(f"[P3-B/COH-METRICS] fetch planes falló: {e}")
+            _agg_tick_skip_reason = "fetch_plans_failed"
+            return
+
+        counts = {
+            "not_applicable":  0,
+            "degrade":         0,
+            "reject_minor":    0,
+            "reject_high":     0,
+            "hydration_error": 0,
+            "null_block_set":  0,
+            "none_other":      0,
+            # [P2-B · 2026-05-08] Bucket post_swap_revalidation.
+            "post_swap_revalidation": 0,
+            # [P2-2 · 2026-05-08] Sub-bucket alerted=True.
+            "post_swap_critical_alerted": 0,
+            # [P3-NEXT-4 · 2026-05-11] Buckets surfaces auxiliares.
+            "warn_only_chunk_t2":    0,
+            "warn_only_recalc":      0,
+            "warn_only_agent_tool":  0,
+            "warn_only_cron_daily":  0,
+        }
+        plans_with_history = 0
+        plans_examined = 0
+        total_entries = 0
+        parse_errors = 0
+
+        for plan_record in plans:
+            plans_examined += 1
+            plan_data = plan_record.get("plan_data") or {}
+            if isinstance(plan_data, str):
+                try:
+                    plan_data = json.loads(plan_data)
+                except Exception:
+                    parse_errors += 1
+                    continue
+            if not isinstance(plan_data, dict):
                 parse_errors += 1
                 continue
-        if not isinstance(plan_data, dict):
-            parse_errors += 1
-            continue
 
-        history = plan_data.get("_shopping_coherence_block_history")
-        if not history or not isinstance(history, list):
-            continue
-        plans_with_history += 1
-
-        for entry in history:
-            if not isinstance(entry, dict):
+            history = plan_data.get("_shopping_coherence_block_history")
+            if not history or not isinstance(history, list):
                 continue
-            total_entries += 1
-            action = entry.get("action_taken")
-            block_set = bool(entry.get("block_set"))
-            if action is None:
-                # P2-2 invariant: action_taken=None implies block_set=True
-                # AND review_plan_node didn't hidratar — bug a investigar.
-                # Si block_set=False y action=None, era pre-P2-2 (regresión).
-                if block_set:
-                    counts["null_block_set"] += 1
+            plans_with_history += 1
+
+            for entry in history:
+                if not isinstance(entry, dict):
+                    continue
+                total_entries += 1
+                action = entry.get("action_taken")
+                block_set = bool(entry.get("block_set"))
+                if action is None:
+                    if block_set:
+                        counts["null_block_set"] += 1
+                    else:
+                        counts["none_other"] += 1
+                elif action in counts:
+                    counts[action] += 1
+                    if action == "post_swap_revalidation" and entry.get("alerted"):
+                        counts["post_swap_critical_alerted"] += 1
                 else:
-                    counts["none_other"] += 1
-            elif action in counts:
-                counts[action] += 1
-                # [P2-2 · 2026-05-08] Si la entry post_swap escaló alerta
-                # (entry.alerted=True), incrementa el sub-bucket. Defensivo
-                # ante missing key (entries pre-P2-2 no tienen el flag).
-                if action == "post_swap_revalidation" and entry.get("alerted"):
-                    counts["post_swap_critical_alerted"] += 1
-            else:
-                # action_taken con valor inesperado: log debug, no inflamos
-                # el dict (evita que un typo en review_plan_node infle stats).
-                logger.debug(
-                    f"[P3-B/COH-METRICS] action_taken inesperado: {action!r} "
-                    f"(plan_id={plan_record.get('id')})"
-                )
+                    logger.debug(
+                        f"[P3-B/COH-METRICS] action_taken inesperado: {action!r} "
+                        f"(plan_id={plan_record.get('id')})"
+                    )
 
-    # Anomaly gate: si hay invariant violations, marcar el row con
-    # confidence=0.0 para que dashboards lo destaquen.
-    is_anomalous = (counts["null_block_set"] > 0
-                    or counts["hydration_error"] > 0
-                    or counts["none_other"] > 0)
-    confidence_val = 0.0 if is_anomalous else 1.0
+        is_anomalous = (counts["null_block_set"] > 0
+                        or counts["hydration_error"] > 0
+                        or counts["none_other"] > 0)
+        confidence_val = 0.0 if is_anomalous else 1.0
 
-    # [P3-NEXT-4 · 2026-05-11] Breakdown agregado por surface origen.
-    # Permite dashboards/alertas comparar volumen entre surfaces sin
-    # tener que sumar buckets individuales en cada query. Total =
-    # entries únicamente con action_taken poblada (excluye null buckets
-    # null_block_set/none_other que son invariant violations).
-    surface_breakdown = {
-        # Pipeline LangGraph completo (single-week, assemble_plan_node).
-        # `not_applicable` es el placeholder P2-2 para warn-mode ahí.
-        # degrade/reject_*/hydration_error solo provienen del path block del assemble.
-        "single_week_assemble": (
-            counts["not_applicable"]
-            + counts["degrade"]
-            + counts["reject_minor"]
-            + counts["reject_high"]
-            + counts["hydration_error"]
-        ),
-        # Multi-week (chunked) T2 — P1-NEXT-2.
-        "chunked_t2":     counts["warn_only_chunk_t2"],
-        # Pantry/Dashboard recalcs — P1-NEXT-2.
-        "recalc":         counts["warn_only_recalc"],
-        # Agent tool swaps — P1-NEXT-2.
-        "agent_tool":     counts["warn_only_agent_tool"],
-        # Cron diario 04:00 UTC (planes legacy pre-P1-NEXT-2) — P2-NEXT-2.
-        "cron_daily":     counts["warn_only_cron_daily"],
-        # Post-swap revalidation (assemble + swap path).
-        "post_swap":      counts["post_swap_revalidation"],
-    }
-
-    summary = (
-        f"[P3-B/COH-METRICS lookback={lookback_h}h] "
-        f"plans_examined={plans_examined} with_history={plans_with_history} "
-        f"entries={total_entries} parse_errors={parse_errors} "
-        f"counts={counts} surface_breakdown={surface_breakdown}"
-    )
-    if is_anomalous:
-        logger.warning(f"🚨 {summary} (anomalous — see counts.null_block_set / hydration_error)")
-    else:
-        logger.info(summary)
-
-    # Best-effort INSERT a pipeline_metrics. Si DB cae, log + continue (el cron
-    # se ejecuta de nuevo en 60 min sin pérdida de funcionalidad — no estamos
-    # rastreando estado entre ticks, sólo agregando lo persistido).
-    try:
-        execute_sql_write(
-            "INSERT INTO pipeline_metrics (user_id, session_id, node, "
-            "duration_ms, retries, tokens_estimated, confidence, metadata) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
-            (
-                None, "__cron__",
-                "_aggregate_coherence_block_history_metrics",
-                0, 0, 0,
-                confidence_val,
-                json.dumps({
-                    "lookback_h": lookback_h,
-                    "plans_examined": plans_examined,
-                    "plans_with_history": plans_with_history,
-                    "total_entries": total_entries,
-                    "parse_errors": parse_errors,
-                    "counts": counts,
-                    # [P3-NEXT-4 · 2026-05-11] Breakdown por surface origen.
-                    # Cierre del gap del audit 2026-05-11: antes el cron solo
-                    # veía `not_applicable` (assemble) y los reject_* — los
-                    # buckets de T2/recalc/agent_tool/cron_daily caían en
-                    # else-branch y se perdían silentemente en el conteo.
-                    "surface_breakdown": surface_breakdown,
-                    "anomalous": is_anomalous,
-                }, ensure_ascii=False),
+        surface_breakdown = {
+            "single_week_assemble": (
+                counts["not_applicable"]
+                + counts["degrade"]
+                + counts["reject_minor"]
+                + counts["reject_high"]
+                + counts["hydration_error"]
             ),
+            "chunked_t2":     counts["warn_only_chunk_t2"],
+            "recalc":         counts["warn_only_recalc"],
+            "agent_tool":     counts["warn_only_agent_tool"],
+            "cron_daily":     counts["warn_only_cron_daily"],
+            "post_swap":      counts["post_swap_revalidation"],
+        }
+
+        # P1-CRON-TOP-LEVEL-TRY: propagar a flags del tick para que el
+        # finally vea el estado final del run.
+        _agg_tick_plans_examined = plans_examined
+        _agg_tick_plans_with_history = plans_with_history
+        _agg_tick_total_entries = total_entries
+        _agg_tick_parse_errors = parse_errors
+        _agg_tick_anomalous = is_anomalous
+        _agg_tick_confidence_val = confidence_val
+        _agg_tick_counts = counts
+        _agg_tick_surface_breakdown = surface_breakdown
+
+        summary = (
+            f"[P3-B/COH-METRICS lookback={lookback_h}h] "
+            f"plans_examined={plans_examined} with_history={plans_with_history} "
+            f"entries={total_entries} parse_errors={parse_errors} "
+            f"counts={counts} surface_breakdown={surface_breakdown}"
         )
-    except Exception as _pm_err:
-        logger.debug(
-            f"[P3-B/COH-METRICS] pipeline_metrics INSERT falló (best-effort): {_pm_err!r}"
+        if is_anomalous:
+            logger.warning(f"🚨 {summary} (anomalous — see counts.null_block_set / hydration_error)")
+        else:
+            logger.info(summary)
+    except Exception as _outer_err:
+        # [P1-CRON-TOP-LEVEL-TRY · 2026-05-15] catch defensivo. Antes una
+        # excepción no-interior (e.g. ImportError de `math`, AttributeError
+        # tras refactor) salía silente del scheduler queue y el watchdog
+        # de pipeline_metrics no la detectaba porque NO había tick.
+        logger.error(
+            f"[P3-B/COH-METRICS] excepción no atrapada: {_outer_err!r}",
+            exc_info=True,
         )
+        _agg_tick_skip_reason = _agg_tick_skip_reason or "unhandled_exception"
+    finally:
+        # [P1-CRON-TOP-LEVEL-TRY · 2026-05-15] Tick observable SIEMPRE
+        # (patrón P2-LIVE-9 de `_shopping_coherence_alert_job`). `skip_reason`
+        # distingue 5+ paths: ok=None / db_core_import_failed /
+        # supabase_not_initialized / fetch_plans_failed / unhandled_exception.
+        try:
+            execute_sql_write(
+                "INSERT INTO pipeline_metrics (user_id, session_id, node, "
+                "duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                (
+                    None, "__cron__",
+                    "_aggregate_coherence_block_history_metrics",
+                    0, 0, 0,
+                    _agg_tick_confidence_val,
+                    json.dumps({
+                        "lookback_h": _agg_tick_lookback_h,
+                        "plans_examined": _agg_tick_plans_examined,
+                        "plans_with_history": _agg_tick_plans_with_history,
+                        "total_entries": _agg_tick_total_entries,
+                        "parse_errors": _agg_tick_parse_errors,
+                        "counts": _agg_tick_counts,
+                        "surface_breakdown": _agg_tick_surface_breakdown,
+                        "anomalous": _agg_tick_anomalous,
+                        "skip_reason": _agg_tick_skip_reason,
+                    }, ensure_ascii=False),
+                ),
+            )
+        except Exception as _pm_err:
+            logger.debug(
+                f"[P3-B/COH-METRICS] pipeline_metrics INSERT falló (best-effort): {_pm_err!r}"
+            )
 
 
 # ---------------------------------------------------------------------------

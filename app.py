@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P3-NEW-STAR-IMPORTS-AUDIT · 2026-05-15"
+_LAST_KNOWN_PFIX = "P3-SELECT-STAR-AGENT-SESSIONS · 2026-05-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -317,6 +317,14 @@ except ImportError as e:
 _SCHEDULER_JOBS_WITH_OPEN_ALERTS: set[str] = set()
 _SCHEDULER_OPEN_ALERTS_LOCK = threading.Lock()
 _SCHEDULER_OPEN_ALERTS_LAST_REFRESH: float = 0.0
+
+# [P3-SCHEDULER-ALERT-DEDUP · 2026-05-15] Cache TTL 5s para evitar UPSERT
+# duplicados desde APScheduler bajo network blip. Key = `alert_key`
+# canónico (`scheduler_<event_type>_<job_id>`), value = monotonic time
+# del último emit. Lazy: el dict crece sin bound formal — en práctica
+# capped por `len(jobs) * 2 event_types`, ~50 entries para 25 jobs.
+_SCHEDULER_ALERT_LAST_EMIT: dict[str, float] = {}
+_SCHEDULER_ALERT_DEDUP_TTL_S: float = 5.0
 _OPEN_ALERTS_CACHE_TTL_S = int(os.environ.get(
     "MEALFIT_SCHEDULER_OPEN_ALERTS_CACHE_TTL_S", "60"
 ) or 60)
@@ -488,6 +496,27 @@ def _scheduler_alert_listener(event):
         if supabase is None:
             return
         alert_key = f"scheduler_{event_type}_{job_id}"
+
+        # [P3-SCHEDULER-ALERT-DEDUP · 2026-05-15] Dedup TTL 5s. ANTES,
+        # APScheduler bajo network blip podía emitir el mismo
+        # MISSED/ERROR dos veces en <1s (race interna del scheduler);
+        # cada uno disparaba un UPSERT contra system_alerts. Aunque
+        # idempotente por `alert_key`, son 2 roundtrips REST + 2 UPDATE
+        # ON CONFLICT por evento — spam minor pero observable en MCP
+        # API logs como `PATCH /rest/v1/system_alerts` duplicado.
+        # Ahora cache local con TTL 5s skipea el segundo emit dentro
+        # de la ventana.
+        _now_mono = time.monotonic()
+        _last_emit = _SCHEDULER_ALERT_LAST_EMIT.get(alert_key, 0.0)
+        if _now_mono - _last_emit < _SCHEDULER_ALERT_DEDUP_TTL_S:
+            logger.debug(
+                f"[P3-SCHEDULER-ALERT-DEDUP] skip duplicate emit "
+                f"alert_key={alert_key} delta={_now_mono - _last_emit:.2f}s "
+                f"< ttl={_SCHEDULER_ALERT_DEDUP_TTL_S}s"
+            )
+            return
+        _SCHEDULER_ALERT_LAST_EMIT[alert_key] = _now_mono
+
         now_iso = datetime.now(_tz.utc).isoformat()
         sched_iso = scheduled_run_time.isoformat() if scheduled_run_time else None
         supabase.table("system_alerts").upsert({
@@ -997,17 +1026,36 @@ def readiness_check():
     ready, reason = is_plan_graph_ready_with_reason()
     if ready:
         return {"status": "ready", "plan_graph": "compiled"}
+
+    # [P3-READY-REASON-HASH · 2026-05-15] Hash determinístico de los primeros
+    # 8 chars de SHA-256(reason) para correlación cross-fleet. ANTES, dos
+    # workers/regiones reportando el mismo `reason` truncado a 240 chars
+    # eran indistinguibles en agregados sin SSH a logs. Con el hash, un
+    # operador puede grep "reason_hash=abc123de" en su consola unificada y
+    # encontrar todos los incidents idénticos. Hash sobre el reason TAL
+    # CUAL se reporta (post-trunc); operadores que vean reasons distintos
+    # pero hashes iguales aún pueden cross-correlate.
+    import hashlib as _hashlib_ready
+    reason_hash = None
+    if reason:
+        try:
+            reason_hash = _hashlib_ready.sha256(reason.encode("utf-8")).hexdigest()[:8]
+        except Exception:
+            reason_hash = None
+
     raise HTTPException(
         status_code=503,
         detail={
             "status": "not_ready",
             "plan_graph": "not_compiled",
             "reason": reason,
+            "reason_hash": reason_hash,
             "message": (
                 "LangGraph plan_graph no está compilado. Las requests al "
                 "pipeline de generación caerán al fallback matemático. "
                 "Revisa los logs CRITICAL del worker para el traceback "
-                "(o el campo `reason` para el último error de build)."
+                "(o el campo `reason` para el último error de build). "
+                "`reason_hash` permite correlación cross-fleet."
             ),
         },
     )

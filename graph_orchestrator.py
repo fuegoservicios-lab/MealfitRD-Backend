@@ -2145,6 +2145,7 @@ async def _safe_ainvoke(llm, payload, *, timeout: float):
     `Exception` y un `except Exception` la dejaría escapar sin cleanup.
     """
     task = asyncio.create_task(llm.ainvoke(payload))
+    _safe_ainvoke_started_at = time.time()
     try:
         return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
     except asyncio.TimeoutError:
@@ -2152,6 +2153,19 @@ async def _safe_ainvoke(llm, payload, *, timeout: float):
         # el socket antes de propagar al caller.
         task.cancel()
         await _swallow_cancelled_task(task)
+        # [P1-LLM-TIMEOUT-METRICS · 2026-05-15] Emit signal estructurada
+        # a `pipeline_metrics`. ANTES, los timeouts del LLM (que afectan
+        # ~30%+ de planes fallidos en incidentes de cuota Gemini) solo
+        # quedaban en logs. Los logs rotan; sin métrica persistente, post-
+        # hoc no se puede graficar "cuántos planes timeoutearon hoy por
+        # modelo X". El emit es best-effort (try/except silencioso) — un
+        # fallo de DB no debe enmascarar el TimeoutError original al caller.
+        _emit_llm_timeout_metric(
+            node="_safe_ainvoke_timeout",
+            timeout_threshold_s=timeout,
+            actual_wait_s=time.time() - _safe_ainvoke_started_at,
+            llm=llm,
+        )
         raise
     except BaseException:
         # P1-NEW-7: cancelación externa (CancelledError) o cualquier otra
@@ -2162,6 +2176,57 @@ async def _safe_ainvoke(llm, payload, *, timeout: float):
         task.cancel()
         await _swallow_cancelled_task(task)
         raise
+
+
+def _emit_llm_timeout_metric(
+    *,
+    node: str,
+    timeout_threshold_s: float,
+    actual_wait_s: float,
+    llm=None,
+    extra_metadata: dict | None = None,
+) -> None:
+    """[P1-LLM-TIMEOUT-METRICS · 2026-05-15] Helper SSOT para emitir tick a
+    `pipeline_metrics` en TimeoutError catches del LLM.
+
+    Best-effort: cualquier fallo de DB se silencia para no enmascarar el
+    TimeoutError original al caller. Extrae model name del llm (si tiene
+    `.model` attr — ChatGoogleGenerativeAI lo expone) sin lanzar.
+    """
+    try:
+        model_name = None
+        if llm is not None:
+            for attr in ("model", "model_name", "_model"):
+                try:
+                    cand = getattr(llm, attr, None)
+                    if isinstance(cand, str) and cand:
+                        model_name = cand
+                        break
+                except Exception:
+                    continue
+        meta = {
+            "timeout_threshold_s": float(timeout_threshold_s),
+            "actual_wait_s": float(actual_wait_s),
+            "model": model_name,
+        }
+        if extra_metadata:
+            meta.update(extra_metadata)
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, %s, 0, 0, 0, %s::jsonb)
+            """,
+            (node, int(actual_wait_s * 1000), json.dumps(meta, ensure_ascii=False)),
+        )
+    except Exception as _e_metric:
+        try:
+            logger.debug(
+                f"[P1-LLM-TIMEOUT-METRICS] emit falló (best-effort): {_e_metric!r}"
+            )
+        except Exception:
+            pass
 
 class PersistentLLMCache:
     """Implementa un diccionario persistente para reemplazar la caché en memoria"""
@@ -5868,6 +5933,26 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                         f"suggestion={_suggestion_chars}c, "
                         f"ingredients={_ingredients_count}"
                     )
+                    # [P2-LLM-TIMEOUT-PIPELINE-METRICS · 2026-05-15] Tick a
+                    # `pipeline_metrics(node='self_critique_correction_timeout')`
+                    # con día + model + dimensiones del prompt para
+                    # correlación post-hoc. Best-effort (helper silencia
+                    # excepciones internas — un fallo de DB NO bloquea el
+                    # PRO fallback que sigue).
+                    _emit_llm_timeout_metric(
+                        node="self_critique_correction_timeout",
+                        timeout_threshold_s=float(CRITIQUE_FIX_TIMEOUT_S),
+                        actual_wait_s=float(CRITIQUE_FIX_TIMEOUT_S),
+                        llm=corrector_llm,
+                        extra_metadata={
+                            "day_num": int(day_num),
+                            "prompt_chars": int(_prompt_chars),
+                            "target_chars": int(_target_chars),
+                            "suggestion_chars": int(_suggestion_chars),
+                            "ingredients_count": int(_ingredients_count),
+                            "model_label": _corrector_model,
+                        },
+                    )
                     pro_corrected, pro_reason = await _attempt_pro_critique_correction(
                         correction_prompt, day_num,
                         log_prefix="[SELF-CRITIQUE/PRO-FALLBACK]",
@@ -6982,9 +7067,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
         # al aggregated. Espejo de la convención cron_tasks/routers/plans.
         result["calc_household_multiplier"] = float(household)
     except Exception as e:
-        import traceback
-        logger.warning(f"⚠️ [SHOPPING MATH] Error agregando lista delta: {e}")
-        traceback.print_exc()
+        # [P3-TRACEBACK-PRINT-EXC · 2026-05-15] Mantenemos `WARNING` (no
+        # `ERROR`) porque el bloque siguiente degrada graceful con listas
+        # vacías — el plan continúa. `exc_info=True` adjunta el stack al
+        # mismo record sin elevarlo a ERROR.
+        logger.warning(f"⚠️ [SHOPPING MATH] Error agregando lista delta: {e}", exc_info=True)
         result["aggregated_shopping_list"] = []
         result["aggregated_shopping_list_weekly"] = []
         result["aggregated_shopping_list_biweekly"] = []
@@ -7459,6 +7546,25 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                 f"📐 [P6-TIMEOUT-DIAG] Día {day_num} (regen) sizes: "
                 f"prompt={_prompt_chars}c, target_day={_target_chars}c, "
                 f"ingredients={_ingredients_count}"
+            )
+            # [P2-LLM-TIMEOUT-PIPELINE-METRICS · 2026-05-15] Tick distinto
+            # del self_critique_correction_timeout — surgical-regen ya es
+            # un retry del corrector tras un primer timeout, importante
+            # discriminar en dashboards. `attempt=2` indica que estamos
+            # en la segunda pasada del corrector sobre el mismo día.
+            _emit_llm_timeout_metric(
+                node="surgical_regen_timeout",
+                timeout_threshold_s=float(CRITIQUE_FIX_TIMEOUT_S),
+                actual_wait_s=float(CRITIQUE_FIX_TIMEOUT_S),
+                llm=corrector_llm,
+                extra_metadata={
+                    "day_num": int(day_num),
+                    "prompt_chars": int(_prompt_chars),
+                    "target_chars": int(_target_chars),
+                    "ingredients_count": int(_ingredients_count),
+                    "model_label": _corrector_model,
+                    "attempt": 2,
+                },
             )
             pro_corrected, _pro_reason = await _attempt_pro_critique_correction(
                 correction_prompt, day_num,

@@ -249,16 +249,33 @@ class TestResilience:
 # 3. Skip cuando supabase no está disponible
 # ---------------------------------------------------------------------------
 class TestSupabaseUnavailable:
-    def test_supabase_none_skips_silently(self, monkeypatch, captured_inserts):
-        """Si supabase es None (caso CI/local sin DB), el cron logea y skipea
-        sin crashear el scheduler ni intentar INSERT a pipeline_metrics."""
+    def test_supabase_none_emits_tick_with_skip_reason(self, monkeypatch, captured_inserts):
+        """[P1-CRON-TOP-LEVEL-TRY · 2026-05-15] Si supabase es None, el cron
+        DEBE emitir tick observable a pipeline_metrics con
+        `skip_reason='supabase_not_initialized'`. Pre-fix, hacía silent skip
+        — el watchdog no podía distinguir "cron OK sin anomalías" de
+        "cron silenciosamente abortando por supabase=None 3h seguidas".
+
+        Post-fix, el tick siempre se emite (via finally), con skip_reason
+        que discrimina los 5 paths canónicos.
+        """
         import db_core
         monkeypatch.setattr(db_core, "supabase", None)
         from cron_tasks import _aggregate_coherence_block_history_metrics
         # No debe lanzar.
         _aggregate_coherence_block_history_metrics()
-        # Y NO debe intentar el INSERT (no llegamos a esa rama).
-        assert captured_inserts == []
+        # Tras P1-CRON-TOP-LEVEL-TRY: el INSERT SÍ debe emitirse, con
+        # skip_reason='supabase_not_initialized' en metadata.
+        assert len(captured_inserts) == 1, (
+            f"P1-CRON-TOP-LEVEL-TRY: el tick observable debe emitirse aunque "
+            f"supabase=None. captured_inserts={captured_inserts!r}"
+        )
+        meta = _parse_metadata(captured_inserts[0])
+        assert meta.get("skip_reason") == "supabase_not_initialized", (
+            f"P1-CRON-TOP-LEVEL-TRY: skip_reason debe ser "
+            f"'supabase_not_initialized' cuando supabase=None. "
+            f"Got: {meta.get('skip_reason')!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
