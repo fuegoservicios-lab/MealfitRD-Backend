@@ -39,24 +39,32 @@ MAX_CHAR_THRESHOLD = 4000   # A partir de cuántos caracteres en total se dispar
 KEEP_RECENT = 10         # Cuántos mensajes recientes conservar sin resumir
 MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 
-# [P1-18] Modelo de Gemini usado por `summarize_and_prune` para generar
-# resúmenes y master summaries. ANTES estaba hardcodeado a
-# `"gemini-3.1-flash-lite-preview"` — un ID que NO corresponde a ningún
-# modelo público de Gemini conocido (la familia 3.x no existe; los
-# modelos públicos son 1.5/2.0/2.5). Si el SDK lo rechazaba con 404, el
-# resumen fallaba y el `except Exception` lo loggeaba como warning
-# silencioso → el historial de la conversación seguía creciendo sin
-# podarse, agotando la ventana de contexto del agente.
+# [P1-18 + UNIFICATION 2026-05-14] Modelo de Gemini usado por
+# `summarize_and_prune` para generar resúmenes y master summaries.
+# Cronología:
+#   - Pre-P1-18: hardcoded a `"gemini-3.1-flash-lite-preview"`. En ese
+#     momento la familia 3.x aún no estaba publicada (los modelos
+#     válidos eran 1.5/2.0/2.5) y el SDK lo rechazaba con 404
+#     silenciosamente — el resumen fallaba y el historial seguía
+#     creciendo sin podarse, agotando la ventana del agente.
+#   - P1-18: default movido a `"gemini-2.5-flash"` (stable, no-preview)
+#     + env var override + logger.error en el except + contador de
+#     fallos (`_summarize_failures`).
+#   - 2026-05-14: la familia 3.x ya está publicada y el resto del stack
+#     (chat_llm en agent.py, fact_extractor, sentiment_classifier,
+#     ai_helpers, proactive_agent) usa `gemini-3.1-flash-lite-preview`
+#     con éxito. Para unificar footprint operacional el default vuelve
+#     a ese ID. El knob `MEMORY_SUMMARY_MODEL` permite rollback inmediato
+#     a un modelo stable (`MEMORY_SUMMARY_MODEL=gemini-2.5-flash`) sin
+#     redeploy si Google deprecara el preview — alineado con el patrón
+#     `[P3-PREVIEW-MODEL-KNOB]` del repo.
 #
-# Ahora:
-#   - Configurable vía env var con default a `gemini-2.5-flash` (modelo
-#     válido y económico para resúmenes).
-#   - Cualquier mismatch con la nomenclatura oficial se detecta vía el
-#     contador `_summarize_failures` y se promueve a `logger.error`
-#     (en lugar de warning silencioso) para que SRE alertee.
+# Cualquier mismatch con la nomenclatura oficial se sigue detectando
+# vía `_summarize_failures` y se promueve a `logger.error` para que
+# SRE alertee (en lugar del warning silencioso original).
 MEMORY_SUMMARY_MODEL = os.environ.get(
-    "MEMORY_SUMMARY_MODEL", "gemini-2.5-flash"
-).strip() or "gemini-2.5-flash"
+    "MEMORY_SUMMARY_MODEL", "gemini-3.1-flash-lite-preview"
+).strip() or "gemini-3.1-flash-lite-preview"
 
 # [P1-18] Contador in-memory de fallos del resumen. Se incrementa en cada
 # excepción de `summarize_and_prune` y se loggea a nivel `error` el primer
@@ -455,10 +463,12 @@ def summarize_and_prune(session_id: str):
         message_count = len(messages_to_summarize)
         
         # Invocar Gemini para generar el resumen.
-        # [P1-18] Modelo configurable vía `MEMORY_SUMMARY_MODEL` env var
-        # con default `gemini-2.5-flash` (válido y económico). ANTES
-        # hardcoded a `gemini-3.1-flash-lite-preview` — ID inválido que
-        # rechaza el SDK con 404, fallando el resumen silenciosamente.
+        # [P1-18 + UNIFICATION 2026-05-14] Modelo configurable vía
+        # `MEMORY_SUMMARY_MODEL` env var con default
+        # `gemini-3.1-flash-lite-preview` (unificado con el resto del
+        # stack; rollback a `gemini-2.5-flash` stable sin redeploy
+        # disponible via env var). Ver narrativa completa en el comment
+        # block de la constante a nivel módulo.
         summary_llm = ChatGoogleGenerativeAI(
             model=MEMORY_SUMMARY_MODEL,
             temperature=0.1,

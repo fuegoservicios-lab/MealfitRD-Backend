@@ -1,34 +1,35 @@
-"""[P1-18] Tests para que `MEMORY_SUMMARY_MODEL` sea configurable y tenga
-default a un modelo válido de Gemini.
+"""[P1-18 + UNIFICATION 2026-05-14] Tests para que `MEMORY_SUMMARY_MODEL`
+sea configurable y tenga default a un modelo válido de Gemini.
 
-Bug original (audit P1-18):
-  `memory_manager.summarize_and_prune` instanciaba `ChatGoogleGenerativeAI`
-  con `model="gemini-3.1-flash-lite-preview"` (hardcoded en 2 sitios).
-  Ese ID NO corresponde a ningún modelo público conocido de Gemini (la
-  familia 3.x no existe; los modelos públicos son 1.5/2.0/2.5). Si el
-  SDK lo rechazaba con 404:
-    - El `with_structured_output(EvolutionaryState)` fallaba.
-    - El `except Exception` lo loggeaba como `print warning silencioso`
-      filtrando solo "Server disconnected" — el resto se descartaba.
-    - El historial seguía creciendo sin podarse → ventana de tokens
-      saturada → costos disparados → degradación silenciosa de la
-      memoria del agente.
-
-Fix:
-  1. `MEMORY_SUMMARY_MODEL = os.environ.get('MEMORY_SUMMARY_MODEL', 'gemini-2.5-flash')`
-     (modelo válido y económico, configurable vía env var).
-  2. Las 2 instancias hardcodeadas usan la constante.
-  3. `_summarize_failures = {count, last_error}` contador in-memory.
-  4. `except` promovido a `logger.error` (el primer fallo + cada 10) +
-     `logger.warning` (intermedios). Reset al primer éxito.
+Cronología:
+  - Pre-P1-18: `memory_manager.summarize_and_prune` instanciaba
+    `ChatGoogleGenerativeAI` con `model="gemini-3.1-flash-lite-preview"`
+    (hardcoded en 2 sitios). En ese momento la familia 3.x NO estaba
+    publicada (los IDs válidos eran 1.5/2.0/2.5) y el SDK lo rechazaba
+    con 404. El except lo loggeaba como print warning silencioso →
+    historial sin podar → ventana saturada → degradación silenciosa.
+  - P1-18: default cambiado a `'gemini-2.5-flash'` (stable, no-preview),
+    configurable vía env var `MEMORY_SUMMARY_MODEL`, las 2 instancias
+    hardcoded usan la constante, except promovido a `logger.error`,
+    contador `_summarize_failures` para SRE alerting.
+  - 2026-05-14: la familia 3.x ya está publicada y el resto del stack
+    (chat_llm, fact_extractor, sentiment_classifier, ai_helpers,
+    proactive_agent) usa `gemini-3.1-flash-lite-preview` con éxito.
+    Default unificado a ese ID; el knob sigue habilitando rollback a
+    `gemini-2.5-flash` (stable) sin redeploy si Google deprecara el
+    preview.
 
 Cobertura:
   - test_summary_model_default_is_valid_gemini_id
   - test_summary_model_overridable_via_env_var
+  - test_summary_model_strips_whitespace
+  - test_summary_model_falls_back_when_env_var_empty
   - test_summarize_failures_counter_initialized
   - test_summary_model_constant_used_in_summarize_and_prune
-  - test_no_hardcoded_invalid_gemini_id_in_source
+  - test_no_inline_model_literal_in_summarize_and_prune
+  - test_summary_model_constant_is_at_module_level
   - test_logger_used_instead_of_print_for_errors
+  - test_failures_counter_incremented_on_exception
   - test_documentation_p1_18_present
 """
 import importlib
@@ -44,12 +45,12 @@ import memory_manager
 # 1. Default y override via env var.
 # ---------------------------------------------------------------------------
 def test_summary_model_default_is_valid_gemini_id():
-    """Default sin env var → un ID que pertenece a la familia válida
-    (1.5/2.0/2.5). Por especificación P1-18 el default es `gemini-2.5-flash`."""
+    """Default sin env var → el ID unificado del stack
+    (`gemini-3.1-flash-lite-preview`, 2026-05-14)."""
     # Limpiamos cualquier override del entorno actual.
     if os.environ.get("MEMORY_SUMMARY_MODEL"):
         pytest.skip("MEMORY_SUMMARY_MODEL ya está seteado, no podemos verificar default")
-    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-2.5-flash"
+    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-3.1-flash-lite-preview"
 
 
 def test_summary_model_overridable_via_env_var(monkeypatch):
@@ -76,9 +77,9 @@ def test_summary_model_falls_back_when_env_var_empty(monkeypatch):
     """Env var = '' (vacío después de strip) → fallback al default."""
     monkeypatch.setenv("MEMORY_SUMMARY_MODEL", "")
     importlib.reload(memory_manager)
-    # `"" or "gemini-2.5-flash"` → `"gemini-2.5-flash"` por la cláusula
+    # `"" or "gemini-3.1-flash-lite-preview"` → default por la cláusula
     # `or` defensiva en el módulo.
-    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-2.5-flash"
+    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-3.1-flash-lite-preview"
     monkeypatch.delenv("MEMORY_SUMMARY_MODEL", raising=False)
     importlib.reload(memory_manager)
 
@@ -108,16 +109,22 @@ def test_summary_model_constant_used_in_summarize_and_prune():
     )
 
 
-def test_no_hardcoded_invalid_gemini_id_in_source():
-    """El ID inválido `gemini-3.1-flash-lite-preview` NO debe aparecer en
-    código activo. Permitimos su mención en comentarios (documentando
-    el bug histórico)."""
-    src = inspect.getsource(memory_manager)
-    # Filtramos líneas-comentario.
-    code_lines = [ln for ln in src.split('\n') if not ln.strip().startswith('#')]
-    code_only = '\n'.join(code_lines)
-    assert "gemini-3.1-flash-lite-preview" not in code_only, (
-        "P1-18 regression: el ID inválido reapareció en código activo"
+def test_no_inline_model_literal_in_summarize_and_prune():
+    """Ninguna instancia de `model="gemini-..."` literal dentro de
+    `summarize_and_prune`. Toda llamada a `ChatGoogleGenerativeAI` debe
+    consumir la constante `MEMORY_SUMMARY_MODEL` para mantener el knob
+    operativo (rollback sin redeploy). El positivo lo cubre
+    `test_summary_model_constant_used_in_summarize_and_prune`; este es
+    el negativo equivalente — regression guard contra reintroducir
+    hardcode inline tras unificación 2026-05-14."""
+    import re
+    src = inspect.getsource(memory_manager.summarize_and_prune)
+    # Buscamos `model="gemini-..."` o `model='gemini-...'` literal.
+    hardcoded = re.findall(r'model\s*=\s*[\'"]gemini-[\w\.\-]+[\'"]', src)
+    assert not hardcoded, (
+        "Regression: `summarize_and_prune` reintrodujo un model="
+        f"\"gemini-...\" hardcoded en lugar de MEMORY_SUMMARY_MODEL. "
+        f"Matches: {hardcoded}"
     )
 
 
