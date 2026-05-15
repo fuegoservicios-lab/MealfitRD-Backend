@@ -56,6 +56,41 @@ _FACT_SHADOW_SAMPLE_RATE = _env_float(
     validator=lambda v: 0.0 <= v <= 1.0,
 )
 
+# ============================================================
+# [P2-NEW-FACTEX-PRIMARY-MODEL-KNOB · 2026-05-15] Knobs para los modelos
+# PRIMARY (truth-path PRO) y ROUTER (gate flash-lite). Pre-fix los 3
+# callsites tenían el modelo hardcoded inline (extract_facts, batch
+# contradiction de _run_fact_pipeline, y el router should_extract_facts).
+# El SHADOW ya tenía knob (P3-FACT-EXTRACTOR-SHADOW-AB · 2026-05-14), pero
+# el path productivo PRIMARY no — convención `P3-PREVIEW-MODEL-KNOB ·
+# 2026-05-12` exige knob para TODOS los modelos preview de Google ("CB row
+# stale por preview model durante 4.4 días" en audit 2026-05-11). Sin
+# estos knobs, una deprecation de Google tira la extracción de hechos
+# hasta redeploy (45min Easypanel cold start). Tooltip-anchor:
+# P2-NEW-FACTEX-PRIMARY-MODEL-KNOB.
+_FACT_EXTRACTOR_PRIMARY_MODEL = _env_str(
+    "MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL",
+    "gemini-3.1-pro-preview",
+)
+_FACT_EXTRACTOR_ROUTER_MODEL = _env_str(
+    "MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL",
+    "gemini-3.1-flash-lite-preview",
+)
+
+
+def _fact_extractor_primary_model_name() -> str:
+    """[P2-NEW-FACTEX-PRIMARY-MODEL-KNOB] Helper SSOT — devuelve el modelo
+    PRO usado en `extract_facts` y `_run_fact_pipeline` (batch contradicción).
+    Centralizar en helper permite a tests parser-based escanear el callsite
+    y validar que NO hay literal hardcoded fuera de este módulo."""
+    return _FACT_EXTRACTOR_PRIMARY_MODEL
+
+
+def _fact_extractor_router_model_name() -> str:
+    """[P2-NEW-FACTEX-PRIMARY-MODEL-KNOB] Helper SSOT — modelo flash-lite
+    del router `should_extract_facts` (gate cheap-first antes del PRO call)."""
+    return _FACT_EXTRACTOR_ROUTER_MODEL
+
 
 def _should_run_shadow(user_id: Optional[str]) -> bool:
     """Decide determinísticamente si correr el shadow para `user_id`.
@@ -286,7 +321,7 @@ def should_extract_facts(user_message: str) -> bool:
     """
     
     llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
+        model=_fact_extractor_router_model_name(),
         temperature=0.0,
         google_api_key=os.environ.get("GEMINI_API_KEY")
     ).with_structured_output(RouterResult)
@@ -406,7 +441,7 @@ def extract_facts(user_message: str, recent_history: str = "", user_id: Optional
         response = _invoke_with_shadow(
             prompt=prompt,
             output_schema=FactsModel,
-            pro_model="gemini-3.1-pro-preview",
+            pro_model=_fact_extractor_primary_model_name(),
             pro_temperature=0.1,
             callsite_tag="extract_facts",
             user_id=user_id,
@@ -571,7 +606,7 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
             response = _invoke_with_shadow(
                 prompt=batch_prompt,
                 output_schema=BatchContradictionResult,
-                pro_model="gemini-3.1-pro-preview",
+                pro_model=_fact_extractor_primary_model_name(),
                 pro_temperature=0.0,
                 callsite_tag="contradiction_merge",
                 user_id=user_id,

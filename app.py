@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P3-AUDIT-4 · 2026-05-15"
+_LAST_KNOWN_PFIX = "P3-NEW-STAR-IMPORTS-AUDIT · 2026-05-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -51,10 +51,118 @@ _SENTRY_PROFILES_SAMPLE_RATE = _knob_env_float(
     validator=lambda v: 0.0 <= v <= 1.0,
 )
 
+# [P1-SENTRY-PII-SCRUBBING-BACKEND · 2026-05-15] `before_send` +
+# `before_breadcrumb` que redactan PII (email, health_profile, plan_data,
+# tokens, headers Authorization/Cookie) antes de enviar el event a Sentry.
+#
+# Pre-fix `sentry_sdk.init` corría sin estos callbacks. Cualquier excepción
+# levantada dentro de un endpoint capturaba request body, headers, cookies,
+# query string, y locals de la frame automáticamente — incluyendo
+# `health_profile` (peso, altura, condiciones médicas), tokens PayPal en
+# `/api/subscription/verify`, body completo del chat con prompts del usuario,
+# y headers `Authorization` con JWTs. GDPR/HIPAA-relevant para datos de salud
+# y risk de leak de credenciales si Sentry se ve comprometido o accedido por
+# staff inquieto.
+#
+# Diseño defensivo:
+#   - Cualquier excepción dentro del filtro NO dropea el event (mejor enviar
+#     con PII y arreglar el filtro que perder un error genuino).
+#   - Match por substring case-insensitive sobre keys (no exact match) para
+#     atrapar variantes como `Authorization`, `authorization-bearer`,
+#     `x-api-key`.
+#   - Redacción a 3 niveles de profundidad (suficiente para `extra`, `contexts`,
+#     `request.data` típicos).
+#
+# Tooltip-anchor: P1-SENTRY-PII-SCRUBBING-BACKEND.
+# Test parser-based + funcional: `tests/test_p1_sentry_pii_scrubbing_backend.py`.
+
+_SENSITIVE_KEY_SUBSTRINGS = (
+    "password", "secret", "token", "authorization", "cookie",
+    "email", "phone", "health_profile", "plan_data", "access_key",
+    "api_key", "refresh_token", "credit_card", "card_number",
+)
+
+
+def _is_sensitive_key(key: str) -> bool:
+    k = (key or "").lower()
+    return any(s in k for s in _SENSITIVE_KEY_SUBSTRINGS)
+
+
+def _redact_dict_in_place(obj, depth: int = 0) -> None:
+    """Reemplaza valor por `[Filtered]` en keys sensibles. Recursivo hasta
+    depth=3 para evitar cycles / nested infinito en payloads patológicos."""
+    if depth > 3 or not isinstance(obj, dict):
+        return
+    for k in list(obj.keys()):
+        v = obj[k]
+        if _is_sensitive_key(k):
+            obj[k] = "[Filtered]"
+        elif isinstance(v, dict):
+            _redact_dict_in_place(v, depth + 1)
+        elif isinstance(v, list):
+            for item in v:
+                if isinstance(item, dict):
+                    _redact_dict_in_place(item, depth + 1)
+
+
+def _sentry_redact_pii(event, hint):  # type: ignore[no-untyped-def]
+    """`before_send` callback de Sentry. Muta + retorna event; nunca dropea."""
+    try:
+        if not isinstance(event, dict):
+            return event
+        req = event.get("request")
+        if isinstance(req, dict):
+            for sub_key in ("data", "headers", "cookies"):
+                sub = req.get(sub_key)
+                if isinstance(sub, dict):
+                    _redact_dict_in_place(sub)
+            qs = req.get("query_string")
+            if isinstance(qs, str) and any(
+                s in qs.lower() for s in ("token=", "secret=", "password=", "key=")
+            ):
+                req["query_string"] = "[Filtered]"
+        extra = event.get("extra")
+        if isinstance(extra, dict):
+            _redact_dict_in_place(extra)
+        ctxs = event.get("contexts")
+        if isinstance(ctxs, dict):
+            _redact_dict_in_place(ctxs)
+        user = event.get("user")
+        if isinstance(user, dict):
+            for k in ("email", "username", "ip_address"):
+                if k in user:
+                    user[k] = "[Filtered]"
+    except Exception:
+        # NUNCA dropear por error del filtro — mejor enviar con PII que
+        # perder el error genuino.
+        pass
+    return event
+
+
+def _sentry_redact_breadcrumb(crumb, hint):  # type: ignore[no-untyped-def]
+    """`before_breadcrumb` callback. Strip tokens/secrets en URLs + data."""
+    try:
+        if not isinstance(crumb, dict):
+            return crumb
+        data = crumb.get("data")
+        if isinstance(data, dict):
+            _redact_dict_in_place(data)
+        msg = crumb.get("message")
+        if isinstance(msg, str) and "?" in msg:
+            q_lower = msg.lower()
+            if any(s in q_lower for s in ("token=", "secret=", "password=", "key=")):
+                crumb["message"] = msg.split("?", 1)[0] + "?[Filtered]"
+    except Exception:
+        pass
+    return crumb
+
+
 sentry_sdk.init(
     dsn=os.environ.get("SENTRY_DSN"),
     traces_sample_rate=_SENTRY_TRACES_SAMPLE_RATE,
     profiles_sample_rate=_SENTRY_PROFILES_SAMPLE_RATE,
+    before_send=_sentry_redact_pii,
+    before_breadcrumb=_sentry_redact_breadcrumb,
 )
 
 # Configuración centralizada de logging para todo el backend

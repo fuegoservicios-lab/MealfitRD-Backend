@@ -9,9 +9,29 @@ from typing import Optional
 # Imports relativos al backend
 from auth import get_verified_user_id
 from db import supabase
+from knobs import _env_float
 from rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+# [P1-NEW-HTTPX-TIMEOUT · 2026-05-15] Timeout obligatorio para los 4 callsites
+# httpx a PayPal API (OAuth + subscription get + cancel + webhook verify).
+# Pre-fix instanciaba el AsyncClient sin parámetro `timeout=` explícito;
+# httpx default es Timeout(timeout=5.0) SOLO para el connect — el pool default
+# tiene `read=None` en versiones antiguas, dejando reads colgados
+# indefinidamente. Bajo tail-latency PayPal
+# (incidente regional en `api-m.paypal.com`, 2026-04 observado externamente),
+# `await client.post(...)` cuelga el worker FastAPI → pool exhausted → cascada
+# 503. El knob permite a SRE bumpear/recortar sin redeploy si PayPal entra en
+# degradación sostenida. Default 15s = mismo que `chat.py:261` (patrón
+# pre-existente). Clamp [5, 60]: 5s mínimo para no fallar requests legítimos
+# en latencia normal, 60s máximo para no permitir overrides absurdos que
+# anulen la defensa. Tooltip-anchor: P1-NEW-HTTPX-TIMEOUT.
+_HTTPX_TIMEOUT_S = _env_float(
+    "MEALFIT_HTTPX_TIMEOUT_S",
+    15.0,
+    validator=lambda v: 5.0 <= v <= 60.0,
+)
 
 # [P1-BILLING-3 · 2026-05-12] Rate-limiter para /api/discount/validate.
 # Pre-fix: endpoint público sin auth ni throttle → atacante brute-force
@@ -299,7 +319,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         verified_plan_id = None
 
         if env_ready:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as client:
                 auth_resp = await client.post(
                     f"{PAYPAL_API_BASE}/v1/oauth2/token",
                     auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
@@ -379,7 +399,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
             if old_sub_id and old_sub_id != subscription_id and old_status != "INACTIVE":
                 logger.info(f"🔄 Detectado Upgrade/Cambio. Cancelando suscripción antigua {old_sub_id} en PayPal...")
                 if access_token:
-                    async with httpx.AsyncClient() as cancel_client:
+                    async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as cancel_client:
                         cancel_resp = await cancel_client.post(
                             f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{old_sub_id}/cancel",
                             headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
@@ -493,7 +513,7 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
         end_date = None
 
         if env_ready:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as client:
                 auth_resp = await client.post(
                     f"{PAYPAL_API_BASE}/v1/oauth2/token",
                     auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
@@ -671,7 +691,7 @@ async def api_webhook_paypal(
         payload_dict = json.loads(body.decode('utf-8'))
         
         if PAYPAL_CLIENT_ID and PAYPAL_SECRET and PAYPAL_WEBHOOK_ID:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as client:
                 auth_resp = await client.post(
                     f"{PAYPAL_API_BASE}/v1/oauth2/token",
                     auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
