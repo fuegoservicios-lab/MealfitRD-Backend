@@ -1,10 +1,16 @@
 import os
 import json
 import logging
+import hashlib
+import threading
+import time as _time_module
+from typing import Any, Callable
 from cache_manager import centralized_cache
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
+
+from knobs import _env_str, _env_float
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +19,207 @@ from db import (
     get_user_facts_by_metadata, acquire_fact_lock, release_fact_lock,
     enqueue_pending_fact, dequeue_pending_facts, delete_pending_facts
 )
+
+# ============================================================
+# [P3-FACT-SHADOW-AB · 2026-05-14] Shadow A/B PRO → FLASH
+# ============================================================
+# Los 2 callsites de structured extraction de este módulo
+# (extract_facts + _run_fact_pipeline batch contradiction) están
+# hardcoded a `gemini-3.1-pro-preview`. Histórico el costo de
+# correr PRO en cada mensaje del chat es la fuente más cara del
+# bill LLM tras la generación del plan. Structured extraction
+# (con `.with_structured_output()`) es el sweet spot histórico
+# donde FLASH suele igualar PRO porque el schema constrains el
+# output — pero migrar a ciegas arriesga regresiones silenciosas
+# en personalización (omisión de facts, canonicalización mala,
+# merges incorrectos que corrompen datos del usuario).
+#
+# Mecánica: `_invoke_with_shadow` corre PRO sync (UX truth) y, si
+# el knob está activado y el user pasa el sampling hash-based,
+# dispara FLASH en daemon thread. Compara outputs estructuralmente
+# y persiste a `pipeline_metrics` con node='fact_extractor_shadow_diff'.
+# Cero impacto UX (siempre retorna PRO). Tras 1 semana de data:
+#   - exact match ≥95% → migrar default a FLASH con confianza.
+#   - 80-95% → analizar field_diffs, ajustar prompt si patrón sistémico.
+#   - <80% → mantener PRO, descartar opción.
+#
+# Knobs:
+#   - MEALFIT_FACT_EXTRACTOR_SHADOW_MODEL (str, default '' = off)
+#       Setear a 'gemini-3-flash-preview' (o 'gemini-3.1-flash-lite-preview'
+#       para test más agresivo) para activar.
+#   - MEALFIT_FACT_EXTRACTOR_SHADOW_SAMPLE_RATE (float, default 0.1)
+#       Fracción de users que ejecutan el shadow (estable por hash(user_id)).
+_FACT_SHADOW_MODEL = _env_str("MEALFIT_FACT_EXTRACTOR_SHADOW_MODEL", "")
+_FACT_SHADOW_SAMPLE_RATE = _env_float(
+    "MEALFIT_FACT_EXTRACTOR_SHADOW_SAMPLE_RATE",
+    0.1,
+    validator=lambda v: 0.0 <= v <= 1.0,
+)
+
+
+def _should_run_shadow(user_id: Optional[str]) -> bool:
+    """Decide determinísticamente si correr el shadow para `user_id`.
+
+    - Knob `MEALFIT_FACT_EXTRACTOR_SHADOW_MODEL` debe estar set y non-empty.
+    - `user_id` debe ser truthy (sin user_id no podemos samplear estable).
+    - Bucket determinístico vía SHA-256: mismo user_id siempre cae en el
+      mismo bucket (evita ruido por sesión, A/B reproducible).
+    """
+    if not _FACT_SHADOW_MODEL or not user_id:
+        return False
+    if _FACT_SHADOW_SAMPLE_RATE <= 0.0:
+        return False
+    if _FACT_SHADOW_SAMPLE_RATE >= 1.0:
+        return True
+    h = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()
+    bucket = int(h[:8], 16) % 100
+    return bucket < int(_FACT_SHADOW_SAMPLE_RATE * 100)
+
+
+def _persist_shadow_diff(user_id: Optional[str], payload: dict) -> None:
+    """Best-effort insert a `pipeline_metrics`. Silencia excepciones —
+    el shadow NO debe romper el path productivo."""
+    try:
+        from db_core import execute_sql_write
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (%s, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                user_id,
+                "fact_extractor_shadow_diff",
+                json.dumps(payload, ensure_ascii=False, default=str),
+            ),
+        )
+    except Exception as e:
+        logger.debug(f"[FACT-SHADOW] persist fallo (no fatal): {e}")
+
+
+def _diff_facts_model(pro_result: Any, flash_result: Any) -> dict:
+    """Compara outputs de `FactsModel` por las dimensiones load-bearing
+    downstream: cantidad de facts + set de (category, ingrediente_canonico).
+    Esas son las claves que afectan filtering crítico (alergia/condicion_medica)."""
+    pro_facts = (pro_result.facts if pro_result and hasattr(pro_result, "facts") else []) or []
+    flash_facts = (flash_result.facts if flash_result and hasattr(flash_result, "facts") else []) or []
+
+    def _tuples(facts):
+        out = set()
+        for f in facts:
+            md = getattr(f, "metadata", None)
+            if md is None:
+                continue
+            cat = getattr(md, "category", "")
+            canon = (getattr(md, "ingrediente_canonico", None) or "").lower()
+            out.add((cat, canon))
+        return out
+
+    pro_set = _tuples(pro_facts)
+    flash_set = _tuples(flash_facts)
+
+    return {
+        "pro_count": len(pro_facts),
+        "flash_count": len(flash_facts),
+        "count_match": len(pro_facts) == len(flash_facts),
+        "category_canonico_set_match": pro_set == flash_set,
+        "only_in_pro": [list(t) for t in sorted(pro_set - flash_set)],
+        "only_in_flash": [list(t) for t in sorted(flash_set - pro_set)],
+    }
+
+
+def _diff_contradiction_result(pro_result: Any, flash_result: Any) -> dict:
+    """Compara outputs de `BatchContradictionResult`. Las claves
+    load-bearing son `ids_to_delete` (esto borra datos del user) y la
+    cantidad de contradicciones/merges (sobre/sub-detección)."""
+    def _extract(r):
+        if r is None:
+            return [], [], set()
+        contradictions = getattr(r, "contradictions", None) or []
+        merges = getattr(r, "merges", None) or []
+        ids_to_delete = set()
+        for c in contradictions:
+            for _id in (getattr(c, "ids_to_delete", None) or []):
+                ids_to_delete.add(str(_id))
+        for m in merges:
+            for _id in (getattr(m, "ids_to_delete", None) or []):
+                ids_to_delete.add(str(_id))
+        return contradictions, merges, ids_to_delete
+
+    pro_c, pro_m, pro_ids = _extract(pro_result)
+    flash_c, flash_m, flash_ids = _extract(flash_result)
+
+    return {
+        "pro_contradictions_count": len(pro_c),
+        "pro_merges_count": len(pro_m),
+        "flash_contradictions_count": len(flash_c),
+        "flash_merges_count": len(flash_m),
+        "ids_to_delete_set_match": pro_ids == flash_ids,
+        "only_in_pro_ids": sorted(pro_ids - flash_ids),
+        "only_in_flash_ids": sorted(flash_ids - pro_ids),
+    }
+
+
+def _invoke_with_shadow(
+    *,
+    prompt: str,
+    output_schema: Any,
+    pro_model: str,
+    pro_temperature: float,
+    callsite_tag: str,
+    user_id: Optional[str],
+    differ: Callable[[Any, Any], dict],
+) -> Any:
+    """[P3-FACT-SHADOW-AB] Invoca PRO sync (UX truth path) y, si el shadow
+    está habilitado y el user pasa el sampling, dispara el modelo shadow
+    en daemon thread para A/B. Retorna SIEMPRE el resultado de PRO.
+
+    El thread shadow nunca bloquea — best-effort, exception → log debug
+    + skip. Cero impacto sobre la respuesta del endpoint.
+    """
+    pro_t0 = _time_module.monotonic()
+    pro_llm = ChatGoogleGenerativeAI(
+        model=pro_model,
+        temperature=pro_temperature,
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+    ).with_structured_output(output_schema)
+    pro_result = pro_llm.invoke(prompt)
+    pro_duration_ms = int((_time_module.monotonic() - pro_t0) * 1000)
+
+    if not _should_run_shadow(user_id):
+        return pro_result
+
+    user_id_hash = hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:12] if user_id else None
+
+    def _shadow_worker(pro_res=pro_result, pro_ms=pro_duration_ms):
+        try:
+            flash_t0 = _time_module.monotonic()
+            flash_llm = ChatGoogleGenerativeAI(
+                model=_FACT_SHADOW_MODEL,
+                temperature=pro_temperature,
+                google_api_key=os.environ.get("GEMINI_API_KEY"),
+            ).with_structured_output(output_schema)
+            flash_res = flash_llm.invoke(prompt)
+            flash_ms = int((_time_module.monotonic() - flash_t0) * 1000)
+            diff = differ(pro_res, flash_res)
+            payload = {
+                "callsite": callsite_tag,
+                "pro_model": pro_model,
+                "flash_model": _FACT_SHADOW_MODEL,
+                "duration_ms_pro": pro_ms,
+                "duration_ms_flash": flash_ms,
+                "user_id_hash": user_id_hash,
+                **diff,
+            }
+            _persist_shadow_diff(user_id, payload)
+        except Exception as e:
+            logger.warning(f"[FACT-SHADOW] worker fallo (no fatal): {e}")
+
+    t = threading.Thread(target=_shadow_worker, daemon=True, name="fact-shadow")
+    t.start()
+    return pro_result
+# ============================================================
 
 # Categorías canónicas alineadas con extract_facts() prompt y graph_orchestrator.py CATEGORY_PRIORITY_WEIGHTS
 FactCategoryLiteral = Literal[
@@ -143,11 +350,16 @@ def _build_ingredient_catalog() -> str:
 
 DOMINICAN_INGREDIENT_CATALOG = _build_ingredient_catalog()
 
-def extract_facts(user_message: str, recent_history: str = ""):
+def extract_facts(user_message: str, recent_history: str = "", user_id: Optional[str] = None):
     """
     Analiza el mensaje del usuario y extrae "hechos" (facts) permanentes
     junto con sus metadatos estructurados (JSON) sobre sus preferencias,
     salud, alergias u objetivos.
+
+    [P3-FACT-SHADOW-AB · 2026-05-14] `user_id` (opcional) habilita el
+    shadow A/B PRO→FLASH determinístico. Sin user_id el shadow se salta
+    (no podemos samplear estable); con user_id, el bucket se decide vía
+    `_should_run_shadow`. Cero impacto UX — siempre retorna el output de PRO.
     """
     if not user_message or len(user_message.strip()) < 5:
         return []
@@ -187,14 +399,19 @@ def extract_facts(user_message: str, recent_history: str = ""):
     Asegúrate de incluir los metadatos de categoría, intensidad, e 'ingrediente' si aplica (y el 'ingrediente_canonico' rigurosamente guiado por el catálogo).
     """
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
-        temperature=0.1,
-        google_api_key=os.environ.get("GEMINI_API_KEY")
-    ).with_structured_output(FactsModel)
-
     try:
-        response = llm.invoke(prompt)
+        # [P3-FACT-SHADOW-AB · 2026-05-14] Pasamos por el helper que corre
+        # PRO sync (truth) y opcionalmente FLASH en daemon thread si el
+        # knob está activo. Helper devuelve siempre el resultado de PRO.
+        response = _invoke_with_shadow(
+            prompt=prompt,
+            output_schema=FactsModel,
+            pro_model="gemini-3.1-pro-preview",
+            pro_temperature=0.1,
+            callsite_tag="extract_facts",
+            user_id=user_id,
+            differ=_diff_facts_model,
+        )
         facts = response.facts if response and hasattr(response, 'facts') else []
         if facts:
             logger.info(f"✅ Se encontraron {len(facts)} hechos estructurados.")
@@ -347,14 +564,19 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
         {all_sections}
         """
         
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-pro-preview",
-            temperature=0.0,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
-        ).with_structured_output(BatchContradictionResult)
-        
         try:
-            response = llm.invoke(batch_prompt)
+            # [P3-FACT-SHADOW-AB · 2026-05-14] Helper que corre PRO sync
+            # y opcionalmente shadow FLASH en daemon thread. El user_id
+            # del scope superior se usa para el sampling determinístico.
+            response = _invoke_with_shadow(
+                prompt=batch_prompt,
+                output_schema=BatchContradictionResult,
+                pro_model="gemini-3.1-pro-preview",
+                pro_temperature=0.0,
+                callsite_tag="contradiction_merge",
+                user_id=user_id,
+                differ=_diff_contradiction_result,
+            )
         
             if response and response.contradictions:
                 for contradiction in response.contradictions:
@@ -440,7 +662,7 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
             logger.info(f"📋 [FACT EXTRACTOR] Mensaje encolado en Supabase para procesamiento posterior.")
             return
             
-        fact_items = extract_facts(message, recent_history)
+        fact_items = extract_facts(message, recent_history, user_id=user_id)
         if not fact_items:
             release_fact_lock(user_id)
             return
@@ -505,8 +727,8 @@ def _process_single_extraction(user_id: str, message: str, recent_history: str =
     if not should_extract_facts(message):
         return
     
-    fact_items = extract_facts(message, recent_history)
+    fact_items = extract_facts(message, recent_history, user_id=user_id)
     if not fact_items:
         return
-    
+
     _run_fact_pipeline(user_id, fact_items, log_prefix="   ")
