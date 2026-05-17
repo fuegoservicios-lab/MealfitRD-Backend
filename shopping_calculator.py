@@ -42,22 +42,86 @@ def _is_gemini_quota_error(exc: Exception) -> bool:
     )
 
 
+def _is_gemini_spending_cap_error(exc: Exception) -> bool:
+    """[P0-EMBED-SPENDING-CAP · 2026-05-16] Detecta el 429 específico de
+    "spending cap" — la cuenta de AI Studio agotó su cap mensual. A diferencia
+    del rate-limit transitorio (que se libera en segundos), el spending cap
+    queda activo hasta que el operador suba el cap O hasta que ruede el
+    ciclo de billing (hasta 30 días). Reintentar es desperdicio puro.
+
+    El mensaje canónico de Google:
+      "Your project has exceeded its monthly spending cap. Please go to AI
+       Studio at https://ai.studio/spend to manage your project spend cap."
+    """
+    msg = str(exc).lower()
+    return (
+        "spending cap" in msg
+        or "monthly spending" in msg
+        or "ai.studio/spend" in msg
+    )
+
+
+# [P0-EMBED-SPENDING-CAP · 2026-05-16] Backoff GLOBAL en memoria para evitar
+# que cada caller de embeddings reintente 3 veces durante el cap activo.
+# Cuando se detecta el primer spending-cap, marcamos hasta `_BACKOFF_S` segundos
+# adelante; durante ese window cualquier llamada a `_gemini_call_with_retry`
+# salta los 3 intentos + 10s de backoff y raise inmediatamente.
+#
+# Trade-off: si el operador resuelve el cap durante el window, el sistema
+# seguirá saltando hasta que expire. Mitigación: el reset es módulo-level
+# (un restart del backend lo limpia) + el window default es corto (1800s).
+_GEMINI_SPENDING_CAP_BACKOFF_S = 1800  # 30 min
+_gemini_spending_cap_backoff_until: float = 0.0
+
+
 def _gemini_call_with_retry(fn, *args, _label: str = "gemini_call", **kwargs):
     """Llama `fn(*args, **kwargs)` reintentando 429 con backoff + jitter.
 
     3 intentos máximo. Delays base 2s y 8s, cada uno con jitter ±25%. Errores
     no relacionados con quota se propagan inmediatamente.
 
+    [P0-EMBED-SPENDING-CAP · 2026-05-16] Dos optimizaciones:
+      1. Backoff global activo → raise inmediato (sin intentar). Cuando el
+         project tiene `spending cap` activo, todas las llamadas fallarán
+         igual; reintentar gasta wall-clock sin ganar nada.
+      2. Si la primera respuesta es `spending cap` (no rate-limit), set
+         backoff global + raise inmediato (no esperar a intento 2/3).
+
     Logs en INFO (no WARNING/ERROR): el caller maneja el fallo cayendo a un
     fast-path determinista; no es una condición crítica. Los warnings/errors
     quedaban señalando como roto algo que el sistema ya degrada graciosamente.
     """
+    global _gemini_spending_cap_backoff_until
+
+    # (1) Fast-fail si estamos en backoff por spending cap detectado antes.
+    if _gemini_spending_cap_backoff_until > _time.time():
+        remaining = int(_gemini_spending_cap_backoff_until - _time.time())
+        # Logging suave — el caller ya sabe que cae a fast-path.
+        logging.info(
+            f"[GEMINI/QUOTA] {_label} skipped: spending cap activo "
+            f"(~{remaining}s restantes hasta retry). Fast-fail to fast-path."
+        )
+        raise RuntimeError(
+            f"Gemini spending cap active; fast-fail in {_label} (no retries)."
+        )
+
     delays = (2.0, 8.0)
     for attempt in range(3):
         try:
             return fn(*args, **kwargs)
         except Exception as exc:
             if not _is_gemini_quota_error(exc):
+                raise
+            # (2) Spending cap detectado → set backoff global + raise inmediato.
+            if _is_gemini_spending_cap_error(exc):
+                _gemini_spending_cap_backoff_until = (
+                    _time.time() + _GEMINI_SPENDING_CAP_BACKOFF_S
+                )
+                logging.warning(
+                    f"[GEMINI/QUOTA] {_label}: spending cap detectado. "
+                    f"Activando fast-fail global por {_GEMINI_SPENDING_CAP_BACKOFF_S}s. "
+                    f"Resolver en https://ai.studio/spend o esperar ciclo billing."
+                )
                 raise
             if attempt == 2:
                 logging.info(
@@ -356,7 +420,25 @@ def get_semantic_cache():
     if _semantic_cache is not None:
         return _semantic_cache
 
-    with _semantic_cache_lock:
+    # [P3-EMBED-CACHE-STARTUP-WARM · 2026-05-16] Non-blocking lock acquire para
+    # synchronous user-facing paths. Pre-fix: si el startup warmer (background
+    # thread, ~100s en cold init) tenía el lock, una request del usuario
+    # esperaba bloqueando hasta que el warmer terminara. Resultado: misma
+    # latencia ~100s que sin warmer → recalc-shopping-list timeout 500/CORS.
+    # Post-fix: si el lock está ocupado, asumimos que OTRO thread está
+    # inicializando y caemos al regex fast-path (P6-SEMANTIC-SKIP) en lugar
+    # de bloquear. La próxima call (post-init) leerá el cache instantáneo.
+    # Timeout 0.05s (50ms) cubre la ventana de race entre 2 threads ambos
+    # intentando inicializar legítimamente; en práctica el lock se libera
+    # casi inmediato si nadie lo tiene.
+    acquired = _semantic_cache_lock.acquire(timeout=0.05)
+    if not acquired:
+        logging.info(
+            "🟡 [P3-EMBED-CACHE-STARTUP-WARM] Lock ocupado (otro thread inicializando "
+            "semantic cache). Fast-path Regex será usado para esta query."
+        )
+        return None
+    try:
         # Re-check tras adquirir el lock (otro thread pudo haber inicializado).
         if _semantic_cache is not None:
             return _semantic_cache
@@ -431,6 +513,13 @@ def get_semantic_cache():
                 f"usando Regex Fast-Path. Reintentos pausados {_SEMANTIC_INIT_FAIL_COOLDOWN_S}s."
             )
             return None
+    finally:
+        # [P3-EMBED-CACHE-STARTUP-WARM · 2026-05-16] Release explícito: el
+        # `with _semantic_cache_lock:` original liberaba automáticamente al
+        # salir del bloque, pero el non-blocking acquire (timeout=0.05s) de
+        # arriba requiere release explícito para evitar deadlock permanente.
+        _semantic_cache_lock.release()
+
 
 def cosine_similarity(v1, v2):
     dot = sum(a*b for a,b in zip(v1, v2))
@@ -581,6 +670,35 @@ _PERISHABLE_CATEGORIES = {
     'frutas', 'vegetales', 'hierbas', 'verduras',
 }
 
+# [P1-PAN-PERECEDERO · 2026-05-16] Excepciones a `_STAPLE_CATEGORIES`:
+# items con `category="Despensa"` que SON realmente perecederos en RD.
+#
+# Bug observado en lista de compras del plan aeb25e1c: "Pan integral 1 paquete
+# (1.3 lbs)" aparecía en sección "DESPENSA — ESTABLES +7 DÍAS" junto a aceite,
+# arroz, sal. Pero pan integral fresco dura 5-7 días en cocina (~10d refrigerado).
+# El usuario podía pensar "tengo 14+ días para usarlo" y se le mohecía.
+#
+# Causa: master_ingredients tiene Pan integral con category="Despensa" +
+# shelf_life_days=14 (default genérico — NO refleja realidad de panes frescos).
+# El matcher de `_classify_perishability` retorna "staple" al matchear cat
+# en `_STAPLE_CATEGORIES`, ANTES de evaluar el shelf_life_days real.
+#
+# Solución: substring match contra el nombre (post strip_accents + lowercase)
+# DENTRO de la rama _STAPLE_CATEGORIES. Items canónicamente catalogados como
+# Despensa pero con shelf_life real ≤7d se rerutean a "perishable".
+#
+# Casabe (cracker totalmente deshidratado) SÍ es staple verdadero — dura meses.
+# Galletas de soda 90d, galletas de arroz 30d → también staple. Solo los panes
+# blandos frescos (sin proceso de horneado prolongado + bajo contenido de
+# humedad) caen en esta excepción.
+_DESPENSA_PERISHABLE_EXCEPTIONS = frozenset({
+    'pan integral',
+    'pan de agua',
+    'pan blanco',
+    'pan dulce',
+    # NO incluir: casabe (deshidratado), galletas (selladas, secas), pan tostado.
+})
+
 # Heurística por nombre cuando category es ambigua (Lácteos/Víveres/Proteínas).
 _PERISHABLE_NAME_HINTS = (
     'fresc', 'crud', 'congelad',  # 'fresca', 'fresco', 'cruda', 'congelado'
@@ -608,7 +726,11 @@ _STAPLE_NAME_HINTS = (
     'aceite', 'vinagre', 'sal', 'azucar', 'azúcar', 'estevia',
     'salsa de tomate', 'pasta de tomate',
     'canela', 'oregano', 'orégano', 'comino', 'pimienta', 'sazon', 'sazón',
-    'casabe', 'pan integral', 'galletas',
+    # [P1-PAN-PERECEDERO · 2026-05-16] 'pan integral' REMOVIDO. Panes
+    # frescos cubiertos por `_DESPENSA_PERISHABLE_EXCEPTIONS` (rerutea a
+    # perishable aunque category=Despensa). Casabe (cracker deshidratado)
+    # y galletas (selladas, secas) siguen siendo staples reales.
+    'casabe', 'galletas',
     'mantequilla de mani', 'mantequilla de maní',
     'almendras', 'nueces',
 )
@@ -653,6 +775,12 @@ def _classify_perishability(name: str, master_item: dict | None = None) -> str:
     if isinstance(master_item, dict):
         cat = strip_accents(str(master_item.get("category", "") or "").lower().strip())
     if cat in _STAPLE_CATEGORIES:
+        # [P1-PAN-PERECEDERO · 2026-05-16] Excepciones: items catalogados como
+        # Despensa pero perecederos en realidad (panes frescos). Sin esta
+        # excepción, pan integral terminaba en "Despensa estables +7 días"
+        # cuando debe estar en "Perecederos esta semana".
+        if any(exc in name_norm for exc in _DESPENSA_PERISHABLE_EXCEPTIONS):
+            return "perishable"
         return "staple"
     if cat in _PERISHABLE_CATEGORIES:
         return "perishable"
@@ -1964,15 +2092,70 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             
             if unit_str == 'unidad' or unit_str == 'unidades':
                 if db_container:
-                     display_qty = f"{q_rounded} {get_plural_unit(float(q_rounded) if '.' in q_rounded else int(q_rounded), db_container)}"
-                     market_unit = db_container
-                     sku_label = _sku_size_label(db_container_weight_g, db_container)
-                     # [P1-PDF-5] Sufijo c/u para fallback. `q_rounded` es
-                     # str numérico — el helper coerce vía int(float()).
-                     if sku_label:
-                         suffix = _format_pkg_suffix(q_rounded, sku_label)
-                         if suffix:
-                             display_qty += f" {suffix}"
+                     # [P3-OLIVE-RENDER-FIX · 2026-05-16] Detectar "X items
+                     # pequeños que caben en N envases" (aceitunas 5g/oliva en
+                     # frasco 340g; almendras 1.2g/almendra en bolsa 113g; etc).
+                     # Sin esto, el LLM emite "X aceitunas" (unidades
+                     # individuales) y BLOQUE 4 lo renderiza como "X frascos"
+                     # asumiendo 1 unidad = 1 envase. Bug observable PDF
+                     # 2026-05-16 plan 4cc91584: "Aceitunas: 24/47/68 frascos
+                     # (12 oz c/u)" para ciclos 7d/15d/30d × 1 persona = 18
+                     # a 51 lbs de aceitunas. Realidad: 1 frasco basta.
+                     #
+                     # Heurística: density_g_per_unit < 50g (unit individual
+                     # ligero) Y container_weight_g >= density × 5 (container
+                     # contiene >=5 unidades). Convertir a gramos totales y
+                     # dividir por container para obtener N envases reales.
+                     # Items afectados (positivamente): aceitunas, almendras,
+                     # nueces, semillas, pasas. Items NO afectados (siguen
+                     # comportamiento legacy): yogurt (density por pote),
+                     # leche (density por cartón), huevos (density por carton
+                     # o por huevo individual donde container_weight ya está
+                     # alineado), etc.
+                     _small_unit_in_big_container = (
+                         density_per_u and density_per_u < 50.0
+                         and db_container_weight_g
+                         and db_container_weight_g >= density_per_u * 5.0
+                     )
+                     if _small_unit_in_big_container:
+                         try:
+                             _raw_qty_num = float(q_rounded) if '.' in q_rounded else int(q_rounded)
+                             _total_g = _raw_qty_num * float(density_per_u)
+                             _container_count = max(1, math.ceil(_total_g / float(db_container_weight_g)))
+                             # CRÍTICO: reescribir q_rounded para que line ~2110
+                             # `market_qty = float(q_rounded)` recoja el container
+                             # count (1), no el raw count (68). Sin esto, el
+                             # fallthrough abajo OVERRIDE market_qty con el valor
+                             # crudo en unidades y rompe el escalamiento
+                             # downstream (cost calc, restock, etc.).
+                             q_rounded = str(_container_count)
+                             display_qty = (
+                                 f"{_container_count} "
+                                 f"{get_plural_unit(_container_count, db_container)}"
+                             )
+                             market_qty = float(_container_count)
+                             market_unit = db_container
+                             sku_label = _sku_size_label(db_container_weight_g, db_container)
+                             if sku_label:
+                                 suffix = _format_pkg_suffix(_container_count, sku_label)
+                                 if suffix:
+                                     display_qty += f" {suffix}"
+                             was_unitarized = True
+                             confidence = 0.95
+                         except (TypeError, ValueError):
+                             # Fallback al comportamiento legacy si algo
+                             # falla (ej. q_rounded no parsea).
+                             _small_unit_in_big_container = False
+                     if not _small_unit_in_big_container:
+                         display_qty = f"{q_rounded} {get_plural_unit(float(q_rounded) if '.' in q_rounded else int(q_rounded), db_container)}"
+                         market_unit = db_container
+                         sku_label = _sku_size_label(db_container_weight_g, db_container)
+                         # [P1-PDF-5] Sufijo c/u para fallback. `q_rounded` es
+                         # str numérico — el helper coerce vía int(float()).
+                         if sku_label:
+                             suffix = _format_pkg_suffix(q_rounded, sku_label)
+                             if suffix:
+                                 display_qty += f" {suffix}"
                 else:
                      display_qty = f"{q_rounded} {'Ud.' if str(q_rounded) == '1' else 'Uds.'}"
                      market_unit = "Ud."
@@ -4143,6 +4326,109 @@ def _strip_dairy_brand(name: str) -> str:
     return result
 
 
+# [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Tracker module-level de los caps
+# aplicados durante el último run de `aggregate_and_deduct_shopping_list`.
+#
+# Motivación: los caps (P3-HERB-CAP, P5-VEG-CAP, P6-LEGUMES-DRY-CAP, P6-EGGS-AGGREGATE-CAP,
+# P6-LACTEOS-PERISHABLE-CAP, P6-SPICE-CAP, etc.) recortan magnitudes
+# INTENCIONALMENTE por storage realism (cilantro 933g→100g porque no se
+# almacena >1 semana; gandules 2333g→907g porque 1 paquete 1lb es suficiente
+# para 1 person-week). Pre-fix, el coherence guard comparaba
+# `expected_sum_from_recipes` (sin caps) vs `aggregated_shopping_list` (con
+# caps) → las magnitudes divergían → guard reportaba "61 divergencias críticas"
+# como falsos positivos legítimos → UI mostraba "Verificación médica con
+# observaciones" en planes válidos.
+#
+# Fix: cada cap registra metadata aquí. El guard consulta la lista y filtra
+# divergencias `magnitude` cuyo food matchea un cap aplicado (canonicalmente).
+# Knob kill switch `MEALFIT_COHERENCE_CAP_AWARE` (default True).
+#
+# Limitación: solo 5 caps de los ~15 totales están instrumentados (los que
+# producen los falsos positivos más frecuentes). Los demás siguen reportándose
+# como divergencias; si producen FP suficientes, hookearlos análogamente.
+_CAPS_APPLIED_LAST_RUN: list = []
+
+
+def reset_caps_applied_last_run() -> None:
+    """[P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Limpia el tracker antes de
+    cada nuevo run de `aggregate_and_deduct_shopping_list`. Sin esto, runs
+    consecutivos acumulan caps de ejecuciones previas → el guard ve "caps
+    fantasmas" que no aplicaron a este plan."""
+    _CAPS_APPLIED_LAST_RUN.clear()
+
+
+def _record_cap_applied(name: str, pre_value: float, post_value: float, reason: str) -> None:
+    """[P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Registra metadata de un cap
+    aplicado por el aggregator. Best-effort: excepciones se silencian para
+    no romper la cadena del aggregator si la metadata es inválida."""
+    try:
+        _CAPS_APPLIED_LAST_RUN.append({
+            "food": str(name).strip(),
+            "food_lower": str(name).strip().lower(),
+            "pre_value": float(pre_value),
+            "post_value": float(post_value),
+            "reason": str(reason),
+        })
+    except Exception:
+        pass
+
+
+def get_caps_applied_last_run() -> list:
+    """Retorna copia de la lista de caps del último run. El coherence guard
+    consume esto para filtrar divergencias de magnitud que son legítimas."""
+    return list(_CAPS_APPLIED_LAST_RUN)
+
+
+# [P2-COHERENCE-GUARD-PERF · 2026-05-16] Cache del alias_map construido desde
+# `get_master_ingredients()`. Pre-fix el coherence guard reconstruía este map
+# en cada call a `_canonicalize_for_coherence`, y `_canonicalize_food_dict_for_coherence`
+# llamaba a esta función N+1 veces (una bulk para el set + una per-item para
+# deducir el mapping inverso raw→canonical). Para 33 items × 35 recipes el
+# guard tardaba 3323ms (umbral 1000ms emitido por `_emit_coherence_guard_metric`).
+# Con cache TTL=300s las invocaciones subsecuentes son O(1) lookup + O(N)
+# iteración sobre food_names. master_ingredients rara vez cambia en runtime
+# (dataset estático del repo) por lo que TTL alto es seguro; el restart natural
+# del backend lo invalida.
+_COHERENCE_ALIAS_MAP_CACHE: dict | None = None
+_COHERENCE_ALIAS_MAP_CACHE_AT: float = 0.0
+_COHERENCE_ALIAS_MAP_CACHE_SIZE: int = 0
+_COHERENCE_ALIAS_MAP_TTL_S = 300.0
+
+
+def _get_coherence_alias_map_cached() -> dict:
+    """Retorna el alias_map (alias_lower → canonical) construido desde
+    `get_master_ingredients()`, cacheado con TTL=300s. Ver bloque de docstring
+    arriba. Excepciones devuelven dict vacío (fail-soft: el guard sigue
+    funcionando con canonicalización inline pavo/protein/fish).
+    """
+    global _COHERENCE_ALIAS_MAP_CACHE, _COHERENCE_ALIAS_MAP_CACHE_AT, _COHERENCE_ALIAS_MAP_CACHE_SIZE
+    import time as _time_alias
+    now = _time_alias.time()
+    if (
+        _COHERENCE_ALIAS_MAP_CACHE is not None
+        and (now - _COHERENCE_ALIAS_MAP_CACHE_AT) < _COHERENCE_ALIAS_MAP_TTL_S
+    ):
+        return _COHERENCE_ALIAS_MAP_CACHE
+    try:
+        master_list = get_master_ingredients() or []
+    except Exception as e:
+        logging.debug(f"[COH-GUARD] master_map fetch falló: {e}")
+        master_list = []
+    alias_map: dict = {}
+    for m in master_list:
+        canonical = m.get("name") or ""
+        if not canonical:
+            continue
+        alias_map[canonical.strip().lower()] = canonical
+        for alias in (m.get("aliases") or []):
+            if alias:
+                alias_map[str(alias).strip().lower()] = canonical
+    _COHERENCE_ALIAS_MAP_CACHE = alias_map
+    _COHERENCE_ALIAS_MAP_CACHE_AT = now
+    _COHERENCE_ALIAS_MAP_CACHE_SIZE = len(alias_map)
+    return alias_map
+
+
 def _canonicalize_for_coherence(food_names) -> set:
     """[P1-shop-coh-1 · 2026-05-07] Canonicaliza un set de food names usando
     master_map + reglas inline simples del aggregator (huevo/ñame/miel/ajo).
@@ -4163,21 +4449,14 @@ def _canonicalize_for_coherence(food_names) -> set:
     """
     if not food_names:
         return set()
-    try:
-        master_list = get_master_ingredients() or []
-    except Exception as e:
-        logging.debug(f"[COH-GUARD] master_map fetch falló: {e}")
-        master_list = []
-
-    alias_map = {}
-    for m in master_list:
-        canonical = m.get("name") or ""
-        if not canonical:
-            continue
-        alias_map[canonical.strip().lower()] = canonical
-        for alias in (m.get("aliases") or []):
-            if alias:
-                alias_map[str(alias).strip().lower()] = canonical
+    # [P2-COHERENCE-GUARD-PERF · 2026-05-16] alias_map cacheado (ver helper
+    # `_get_coherence_alias_map_cached`). Pre-fix esta función reconstruía el
+    # alias_map en CADA call iterando ~100-200 items del master_list +
+    # aliases. Y `_canonicalize_food_dict_for_coherence` la llamaba N+1 veces
+    # (una bulk + una per-item para deducir el mapping inverso) → el guard
+    # tardaba 3323ms para 33 items × 35 recetas. Con cache TTL=300s, todas
+    # las invocaciones subsecuentes son O(N) lookups.
+    alias_map = _get_coherence_alias_map_cached()
 
     out = set()
     for raw_name in food_names:
@@ -4549,6 +4828,46 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         except Exception as e:
             logging.warning(f"[COH-GUARD/v2] magnitudes falló (no aborta): {e}")
 
+    # [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Filtrar magnitude divs cuyo
+    # food matchea un cap aplicado durante este run del aggregator. Los caps
+    # recortan magnitudes intencionalmente por storage realism (cilantro
+    # 933g→100g, gandules 2333g→907g, yogurt 5717g→2722g) y el guard NO
+    # debe reportarlas como divergencias críticas — son por diseño.
+    #
+    # Matching canónico: el cap registra el food name pre-canonicalización
+    # (e.g. "Cilantro"), pero el guard ya canonicalizó al food del divergence
+    # (vía `_canonicalize_for_coherence`). Comparamos canónicos a ambos lados
+    # para evitar drift por aliasing del master_map.
+    try:
+        import os as _os_cap_aware
+        _cap_aware_env = _os_cap_aware.environ.get("MEALFIT_COHERENCE_CAP_AWARE", "true").strip().lower()
+        _cap_aware_enabled = _cap_aware_env not in ("false", "0", "off", "no")
+    except Exception:
+        _cap_aware_enabled = True
+    if _cap_aware_enabled and magnitude_divs:
+        try:
+            _caps_applied = get_caps_applied_last_run()
+            if _caps_applied:
+                _capped_foods_canonical = set()
+                _capped_food_raw_names = [c["food"] for c in _caps_applied if c.get("food")]
+                if _capped_food_raw_names:
+                    _capped_foods_canonical = _canonicalize_for_coherence(_capped_food_raw_names)
+                if _capped_foods_canonical:
+                    _pre_filter = len(magnitude_divs)
+                    magnitude_divs = [
+                        d for d in magnitude_divs
+                        if d.get("food") not in _capped_foods_canonical
+                    ]
+                    _filtered = _pre_filter - len(magnitude_divs)
+                    if _filtered > 0:
+                        logging.info(
+                            f"🛒 [COH-GUARD/cap-aware] Filtradas {_filtered} divergencias "
+                            f"magnitud por caps intencionales (P1-CAPS-COHERENCE-RECONCILE). "
+                            f"Caps aplicados: {[c['reason'] for c in _caps_applied]}"
+                        )
+        except Exception as e:
+            logging.warning(f"[COH-GUARD/cap-aware] filter falló (no aborta): {e}")
+
     divergences.extend(magnitude_divs)
 
     if divergences:
@@ -4823,6 +5142,14 @@ def run_shopping_coherence_guard_and_append_history(
 
 
 def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0):
+    # [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Reset del tracker de caps al
+    # inicio de cada run del aggregator. Los caps que se apliquen durante
+    # este run (P3-HERB-CAP, P5-VEG-CAP, P6-LEGUMES-DRY-CAP, P6-EGGS-AGGREGATE-CAP,
+    # P6-LACTEOS-PERISHABLE-CAP, P6-SPICE-CAP) se acumulan en `_CAPS_APPLIED_LAST_RUN`
+    # via `_record_cap_applied`. El coherence guard consulta esa lista para
+    # ignorar divergencias de magnitud que corresponden a un cap intencional
+    # (storage realism), no a un bug de generación del LLM.
+    reset_caps_applied_last_run()
     aggregated = defaultdict(lambda: defaultdict(float))
 
     if consumed_ingredients is None:
@@ -5087,6 +5414,22 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 # "Pavo" solo, sin descriptores → canonical genérico (no
                 # auto-conflate via master alias a Jamón de pavo).
                 canonical_name = 'Pavo'
+
+        # [P0-SHOPPING-CALC-NAMEERROR · 2026-05-15] `_can_lower` se usa en
+        # las 13 regex de consolidación de abajo (Fresas, Almendras, Orégano,
+        # Tortilla, Tomate, Cebolla, Espinacas, Zanahoria, Vainitas,
+        # Habichuelas, Tofu, Perejil). Pre-fix la variable nunca se asignaba
+        # en este scope → `NameError: name '_can_lower' is not defined` en
+        # cada plan generado, lo que tumbaba toda la agregación
+        # (`aggregate_and_deduct_shopping_list` lanzaba) y dejaba la lista
+        # de compras vacía/incompleta. Síntoma user-facing: coherence guard
+        # reportaba 35 "divergencias críticas" (todos los ingredientes de
+        # las recetas marcados como `presence=expected_only`) y el plan
+        # llegaba con `_shopping_coherence_block` no resuelto.
+        # IMPORTANTE: se calcula DESPUÉS del bloque pavo porque el pavo
+        # puede mutar canonical_name; las 13 regex de abajo necesitan ver
+        # el canonical_name post-pavo.
+        _can_lower = canonical_name.lower()
 
         # Consolidación: Fresas variantes (congeladas, frescas) → Fresas
         if re.search(r'^fresas?\b', _can_lower):
@@ -5444,7 +5787,19 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
     # `household × cycle × 7/days_generated` con valores exactos así que
     # person_weeks suele caer en entero limpio (2, 4, 8) — `round`
     # equivale al comportamiento esperado sin off-by-ones.
-    _herb_cap_mazos = max(2, int(round(_person_weeks)))
+    #
+    # [P3-HERB-CAP-FLOOR · 2026-05-16] Floor configurable. Default 1 (era
+    # hardcoded 2). Razón: para 1 persona × 7 días, 2 mazos (≈100g, ¼ lb)
+    # de cilantro/perejil/etc. son excesivos — 1 mazo (≈50g) basta para
+    # uso casual durante una semana. El floor=2 original venía de "evitar
+    # cap=1 absurdo si receta dice mazo entero", pero raramente las recetas
+    # consumen un mazo COMPLETO; típicamente 1-2 cdas por comida. Para
+    # planes 2p+ o cycles >1 semana, person_weeks >= 2 ya elige max(1, 2)=2,
+    # así que bajar floor 2→1 solo afecta el caso 1p × 7d (que es donde
+    # el usuario reportó "¼ lb es alto"). Operador con plan vegetariano
+    # heavy puede bumpear a 2 sin redeploy.
+    _HERB_MAZO_CAP_FLOOR = max(1, _knob_env_int("MEALFIT_HERB_MAZO_CAP_FLOOR", 1))
+    _herb_cap_mazos = max(_HERB_MAZO_CAP_FLOOR, int(round(_person_weeks)))
     _herb_cap_g = _herb_cap_mazos * _HERB_MAZO_GRAMS
 
     for _name, _units in list(aggregated.items()):
@@ -5471,6 +5826,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 f"[P3-HERB-CAP] '{_name}' peso cap: {_old_g:.0f}g → "
                 f"{_herb_cap_g:.0f}g (equivalente a {_herb_cap_mazos} mazos)"
             )
+            _record_cap_applied(_name, _old_g, _units['g'], "P3-HERB-CAP")
 
     # ============================================================
     # [P5-OLIVE-CAP] Cap defensivo de aceitunas
@@ -5894,6 +6250,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"{_veg_cap_g:.0f}g (≈{_veg_cap_units} unidades a "
                     f"{_density:.0f}g c/u)"
                 )
+                _record_cap_applied(_name, _old_g, _units['g'], "P5-VEG-CAP")
 
     # ============================================================
     # [P6-SPICE-CAP] Cap defensivo para especias en sobres
@@ -5977,6 +6334,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             for _wu in list(_present_units.keys()):
                 del _units[_wu]
             _units['g'] = float(_spice_cap_g)
+            _record_cap_applied(_name, _total_weight_g, _spice_cap_g, "P6-SPICE-CAP")
             logging.warning(
                 f"[P6-SPICE-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_spice_cap_g:.0f}g "
@@ -6327,6 +6685,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 f"(≈{_legumes_cap_packages} paquetes 1lb; "
                 f"person_weeks={_person_weeks:.1f})"
             )
+            _record_cap_applied(_name, _total_weight_g, _legumes_cap_g, "P6-LEGUMES-DRY-CAP")
 
     # ============================================================
     # [P6-CANNED-PROTEIN-CAP] Cap defensivo para proteínas en lata
@@ -6473,6 +6832,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"huevos / {_huevos_per_unit} huevos por unit; "
                     f"person_weeks={_person_weeks:.1f})"
                 )
+                _record_cap_applied(_name, float(_old), float(_cap_for_this_size), "P6-EGGS-AGGREGATE-CAP")
         # Cap por gramos: si el aggregator convirtió 'unidad' → 'g' via
         # density (BLOQUE 2), también capear ahí. 50g/huevo es estándar.
         if 'g' in _units and _units['g'] > _eggs_cap_g:
@@ -6482,6 +6842,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 f"[P6-EGGS-AGGREGATE-CAP] '{_name}' peso cap: {_old_g:.0f}g "
                 f"→ {_eggs_cap_g:.0f}g (≈{_eggs_cap_cartones} cartones)"
             )
+            _record_cap_applied(_name, _old_g, _units['g'], "P6-EGGS-AGGREGATE-CAP")
 
     # ============================================================
     # [P6-FRUITS-LARGE-CAP] Cap defensivo para frutas grandes
@@ -6723,6 +7084,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             for _wu in list(_present_units.keys()):
                 del _units[_wu]
             _units['g'] = float(_cap_g)
+            _record_cap_applied(_name, _total_weight_g, _cap_g, "P6-LACTEOS-PERISHABLE-CAP")
             logging.warning(
                 f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' peso total cap: "
                 f"{_total_weight_g:.0f}g (de {_present_units}) → {_cap_g:.0f}g "
@@ -6943,6 +7305,25 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # No aporta a una lista de compras real
         remaining_real = any(u not in nominal_units for u in units) or has_weight
         if not remaining_real:
+            # [P2-AGGREGATE-DROP-DIAG · 2026-05-16] Diagnostic logging.
+            # Cuando un ingrediente aparece en `aggregated` (visible en log
+            # `🛒 [AGGREGATE]`) pero NO en `aggregated_shopping_list` final
+            # (log `🛒 [AGGREGATE FINAL]`), el coherence guard lo reporta
+            # como `expected_only` divergence. Sin este log, debugging
+            # requiere agregar instrumentación cada vez. Caso observado
+            # 2026-05-16 plan 4cc91584: Avena emitida por receta pero
+            # dropeada porque sus únicas unidades eran nominales (pizca/
+            # al gusto). Este log captura el modo de fallo para que el
+            # próximo incidente sea diagnosticable from log only.
+            logging.info(
+                f"🛒 [AGGREGATE-DROP] '{name}' dropeado: sin peso "
+                f"(weight_in_lbs={weight_in_lbs:.4f}) y todas las unidades "
+                f"eran nominales (pizca/al gusto/etc). Units pre-dedup: "
+                f"{list(units.keys()) if units else '(vacío)'}. Si esperabas "
+                f"que el item apareciera en la lista, revisar la receta "
+                f"upstream: probablemente el LLM emitió cantidad nominal "
+                f"sin peso/unidad concreta."
+            )
             continue
             
         if has_weight:

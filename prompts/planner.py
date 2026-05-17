@@ -51,4 +51,20 @@ Los 3 días DEBEN tener BASES DE DESAYUNO DE CATEGORÍAS DISTINTAS. NUNCA repita
   - Categoría E "Revoltillo/Tortilla": Tortilla española, revoltillo dominicano, huevos al sartén con vegetales.
 Ejemplo CORRECTO: Día 1=Mangú (A), Día 2=Avena con frutas (B), Día 3=Tostadas con huevo (C).
 Ejemplo INCORRECTO: Día 1=Mangú de plátano (A), Día 2=Mangú de ñame (A), Día 3=Mangú de batata (A) ← MISMO CONCEPTO, PROHIBIDO.
+
+DIVERSIDAD OBLIGATORIA DE STAPLES CROSS-DAY (P2-STAPLE-DIVERSITY · 2026-05-16):
+Los siguientes staples NO pueden aparecer como BASE PROTEICA/CARBOHIDRATO en más de 2 días del plan
+(el reviewer médico rechaza por "frecuencia repetitiva de [staple] en múltiples días"):
+  - Yogurt griego (con frutas/granola/nueces): MÁXIMO 2 días.
+  - Avena (porridge, overnight, pancakes): MÁXIMO 2 días.
+  - Claras de huevo como proteína base de comida: MÁXIMO 2 días.
+  - Casabe con queso: MÁXIMO 2 días.
+  - Frutos secos solos (almendras/nueces/maní) como proteína de merienda: MÁXIMO 2 días.
+  - Queso fresco/blanco/ricotta como proteína base: MÁXIMO 2 días.
+Si el plan tiene yogurt griego en Día 1 y Día 2 (merienda o desayuno), el Día 3 DEBE usar OTRA base
+(batido proteico sin yogurt, casabe+queso, fruta+nueces, sándwich con proteína, etc.).
+Ejemplo CORRECTO: Día 1 merienda=Yogurt+granola, Día 2 merienda=Casabe+queso, Día 3 merienda=Batido proteico.
+Ejemplo INCORRECTO: Día 1=Yogurt+fresa, Día 2=Yogurt+granola, Día 3=Yogurt+nueces ← Yogurt en 3 días, PROHIBIDO.
+Bug observado plan_id=fbd014b2 2026-05-16: "Staples repetidos detectados: avena en 2 días, claras de huevo
+en 3 días, yogurt griego en 2 días" → reviewer médico señaló "frecuencia excesiva".
 """

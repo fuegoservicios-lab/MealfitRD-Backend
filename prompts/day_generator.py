@@ -117,6 +117,24 @@ REGLAS ESTRICTAS:
        • Wrap/pita con proteína + vegetales
        • Bowl de proteína magra + vegetales asados + 1 carbo
        Evita frituras pesadas, locrios densos y guisos calóricos en la noche.
+
+    e) INGREDIENTES-SNACK PROHIBIDOS COMO COMPONENTE PRINCIPAL (P2-SNACK-AS-MAIN-BLACKLIST · 2026-05-16):
+       Estos NUNCA pueden ser la base por peso de un desayuno/almuerzo/cena.
+       Solo se permiten como acompañamiento (≤30g por meal) o como snack
+       ocasional en merienda (rango ≤80g, una sola vez por semana).
+         • Galletas de soda / galletas saladas / galletas tipo Ritz
+         • Plátano chips / yuca chips / mariquitas / tostones empacados industriales
+         • Palitos de pan, pretzels, palomitas industriales
+         • Cereales tipo Corn Flakes/Frosted Flakes (basados en azúcar refinado)
+       Si necesitas crujiente o carbohidrato seco en una cena/almuerzo, usa:
+         • Casabe (componente principal aceptado en cenas dominicanas)
+         • Pan integral tostado (≤2 rebanadas como acompañamiento)
+         • Tostones caseros (plátano verde fresco) — distintos de chips industriales
+         • Totopos de yuca asada / casabe troceado
+       Bug observado plan_id=fbd014b2 2026-05-16: cena Día 3 basada en 105g
+       galletas de soda → revisor médico rechazó por "calidad nutricional
+       cuestionable, basándose excesivamente en galletas de soda como
+       componente principal".
 """
 
 
@@ -190,6 +208,50 @@ _RESTRICTED_PROTEIN_KEYS = {
     # Si el pool tiene 'camarones' explícitamente, el substring match lo
     # libera correctamente.
     'camarones':       'Camarones (mariscos)',
+}
+
+
+# [P0-PROTEIN-POOL-IMPLICATIONS · 2026-05-16] Mapping de "expansión natural"
+# del LLM: cuando una key específica está en el pool autorizado, las keys
+# del MISMO grupo proteico deben auto-autorizarse para que el matcher no
+# las penalice como sub-palabras.
+#
+# Bug original (plan aeb25e1c, día 2):
+#   Pool = ['Chuleta', 'Claras de Huevo', 'Queso Blanco Fresco']
+#   LLM elabora ingrediente: "300 g de chuleta de cerdo (lomo, sin grasa visible)"
+#   Scrub remueve porque "cerdo" no está en pool → receta queda sin proteína →
+#   lista de compras NO incluye chuleta → usuario percibe app rota.
+#
+# Causa: "chuleta" en RD implica casi siempre "chuleta de cerdo". El propio
+# label de la key 'cerdo' lo dice: "Cerdo / lomo de cerdo / chuleta". Eran
+# tratadas como independientes en el matcher.
+#
+# Mapping: pool_key (lowercase substring) → set de restricted_keys que
+# quedan auto-autorizadas cuando esa pool_key aparece.
+_POOL_IMPLICATIONS = {
+    # Cortes de cerdo (chuleta, lomo) implican que 'cerdo' es legítimo en la receta.
+    'chuleta':         {'cerdo'},
+    'lomo de cerdo':   {'cerdo'},
+    'tocineta':        {'cerdo'},
+    # Cortes de pollo. 'pollo' está en restricted, pero pool puede traer
+    # 'Pechuga de pollo' o 'Muslo de pollo' del planner, que naturalmente
+    # se expanden a "pechuga de pollo a la plancha".
+    'pechuga de pollo': {'pollo'},
+    'muslo de pollo':  {'pollo'},
+    # Cortes de res. 'bistec' es restricted en sí mismo PERO si pool tiene
+    # 'Bistec' explícitamente, el LLM puede escribir "bistec de res" y se
+    # auto-penalizaría con 'res'.
+    'bistec':          {'res'},
+    'lomo de res':     {'res'},
+    'res molida':      {'res'},
+    'carne molida':    {'res'},  # ambiguo en general, autoritativo si pool lo trae
+    # Pescados específicos implican 'pescado' (categoría general).
+    'tilapia':         {'pescado'},
+    'mero':            {'pescado'},
+    'salmón':          {'pescado'},
+    'salmon':          {'pescado'},
+    'sardinas':        {'pescado'},
+    'pescado fresco':  {'pescado'},
 }
 
 

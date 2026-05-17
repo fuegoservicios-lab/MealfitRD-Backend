@@ -160,8 +160,10 @@ def test_frontend_callsite_sends_plan_id(rel_path: str):
 
     # Encontrar cada llamada a recalculate-shopping-list y verificar que
     # el body adyacente contiene `plan_id:`. Heurística: capturar 1500
-    # chars después del nombre del endpoint (suficiente para el body del
-    # fetch).
+    # chars después del endpoint Y 1500 chars antes (para el caso
+    # P3-RECALC-503-CLASSIFICATION · 2026-05-16 donde el body se declara
+    # como `const recalcBody = JSON.stringify({...plan_id...})` ANTES de
+    # la línea del `fetchWithAuth(...recalculate-shopping-list...)`).
     matches = list(re.finditer(r"recalculate-shopping-list", no_comments))
     assert matches, (
         f"P2-NEW-B sanity: {rel_path} no contiene `recalculate-shopping-list` "
@@ -169,7 +171,9 @@ def test_frontend_callsite_sends_plan_id(rel_path: str):
     )
     missing: list[int] = []
     for m in matches:
-        block = no_comments[m.start() : m.start() + 1500]
+        start = max(0, m.start() - 1500)
+        end = min(len(no_comments), m.start() + 1500)
+        block = no_comments[start:end]
         if not re.search(r"plan_id\s*:\s*planData?\?", block) and "plan_id:" not in block and 'plan_id"' not in block:
             line_no = no_comments.count("\n", 0, m.start()) + 1
             missing.append(line_no)

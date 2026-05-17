@@ -958,6 +958,177 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
         logger.error(f"❌ [TOOL] Error modificando despensa manualmente: {e}")
         return f"Error al modificar el inventario físico: {str(e)}"
 
+# ============================================================
+# [P3-WATER-TRACKER · 2026-05-16] TOOLS DE HIDRATACION
+# ============================================================
+# Conectan el card de Hidratacion del Dashboard con el chat agent.
+# Antes: tracker aislado, el agente no sabia nada de vasos.
+# Despues: el agente puede leer (`check_hydration_today`) y mutar
+# (`log_water_glass`) el conteo diario.
+#
+# Security: ambas tools aceptan `user_id` como primer arg. P0-AGENT-1
+# force-overridea ese arg al `_trusted_uid` autenticado en
+# `agent.py:execute_tools` ANTES de invocar. Sin esa proteccion seria
+# IDOR cross-user (mismo vector que las otras 9 tools).
+# ============================================================
+
+def _local_date_str_for_user() -> str:
+    """Fecha LOCAL del servidor en formato YYYY-MM-DD. NOTA: el chat agent
+    corre server-side; idealmente el cliente pasaria su fecha local, pero
+    para v1 usamos la fecha del servidor (Easypanel/DO ambos en UTC-4 o
+    similar). Si en el futuro el agente necesita la fecha exacta del
+    cliente, parametrizar via state."""
+    from datetime import datetime, timezone, timedelta
+    # DO es UTC-4. Para no depender del TZ del servidor, calculamos
+    # explicitamente la fecha en UTC-4 (Atlantic Standard Time).
+    do_now = datetime.now(timezone.utc) - timedelta(hours=4)
+    return do_now.date().isoformat()
+
+
+@tool
+def check_hydration_today(user_id: str) -> str:
+    """Consulta cuantos vasos de agua ha registrado el usuario HOY y cual es
+    su meta diaria personalizada (calculada segun su peso + actividad).
+
+    Usa esta herramienta SIEMPRE que el usuario pregunte sobre su hidratacion
+    actual: '¿cuanta agua llevo?', '¿cumpli mi meta?', '¿voy bien con el agua?',
+    o cuando necesites contexto para decidir si recordarle tomar agua.
+
+    Devuelve un string con: vasos consumidos hoy, meta diaria, porcentaje
+    cumplido, y si la meta esta personalizada (peso del usuario) o es default.
+    """
+    logger.info(f"💧 [TOOL EXECUTION] check_hydration_today para user {user_id}")
+    try:
+        from db import supabase
+        if not supabase:
+            return "No puedo consultar la hidratacion ahora mismo, la base de datos no esta disponible."
+
+        log_date = _local_date_str_for_user()
+
+        # Lee el conteo del dia.
+        res = (
+            supabase.table("water_intake_log")
+            .select("glasses, log_date")
+            .eq("user_id", user_id)
+            .eq("log_date", log_date)
+            .limit(1)
+            .execute()
+        )
+        glasses = 0
+        if res and res.data and len(res.data) > 0:
+            glasses = int(res.data[0].get("glasses") or 0)
+
+        # Reusa la formula personalizada del endpoint /water-intake.
+        # Import lazy para evitar circular (routers/plans.py importa de aqui en futuro).
+        from routers.plans import _compute_water_goal
+        meta = _compute_water_goal(user_id)
+        goal = meta["goal"]
+        weight_kg = meta.get("weight_kg")
+        is_personalized = not meta.get("default", True) and weight_kg is not None
+
+        pct = round((glasses / goal) * 100) if goal else 0
+        remaining = max(0, goal - glasses)
+
+        msg_parts = [f"Hidratacion HOY ({log_date}): {glasses} de {goal} vasos ({pct}%)."]
+        if remaining > 0:
+            msg_parts.append(f"Le faltan {remaining} para cumplir su meta.")
+        else:
+            msg_parts.append(f"Ya cumplio su meta del dia.")
+        if is_personalized:
+            w_str = str(int(weight_kg)) if float(weight_kg).is_integer() else f"{weight_kg:.1f}"
+            msg_parts.append(f"Meta personalizada (basada en su peso de {w_str} kg).")
+        else:
+            msg_parts.append("Meta default (el usuario no tiene peso registrado o el sistema usa fallback).")
+        return " ".join(msg_parts)
+    except Exception as e:
+        logger.error(f"❌ [TOOL] check_hydration_today error: {e}")
+        return f"Error consultando hidratacion: {str(e)}"
+
+
+@tool
+def log_water_glass(user_id: str, count_delta: int = 1) -> str:
+    """Suma o resta vasos de agua al registro de hidratacion del usuario para HOY.
+
+    Usa esta herramienta cuando el usuario diga que se tomo agua o que se equivoco:
+    - 'me tome un vaso' / 'marca uno mas' → count_delta=1 (default)
+    - 'me tome 3 vasos seguidos' → count_delta=3
+    - 'borra el ultimo / me equivoque' → count_delta=-1
+    - 'resetea el dia' → primero check_hydration_today para saber el conteo
+      actual N, luego log_water_glass(count_delta=-N).
+
+    Para SETEAR un valor absoluto (ej: el usuario dice 'llevo 5 vasos'),
+    primero usa `check_hydration_today` para saber el conteo actual, calcula
+    el delta y pasa ese valor (5 - actual).
+
+    El conteo total queda clamped a [0, 50] (cap defensivo de la tabla).
+    Tras la mutacion, incluye SIEMPRE la etiqueta `[UI_ACTION: REFRESH_HYDRATION]`
+    en tu respuesta para que el Dashboard recargue el card de Hidratacion.
+    """
+    logger.info(f"💧 [TOOL EXECUTION] log_water_glass user={user_id} delta={count_delta}")
+    if not isinstance(count_delta, int) or isinstance(count_delta, bool):
+        return "Error: el delta de vasos debe ser un entero (positivo para sumar, negativo para restar)."
+    if count_delta == 0:
+        return "El delta fue 0 — no se modifico nada."
+    try:
+        from db import supabase
+        from datetime import datetime, timezone
+        if not supabase:
+            return "No puedo modificar la hidratacion ahora mismo, la base de datos no esta disponible."
+
+        log_date = _local_date_str_for_user()
+
+        # Lee el conteo actual.
+        res = (
+            supabase.table("water_intake_log")
+            .select("glasses")
+            .eq("user_id", user_id)
+            .eq("log_date", log_date)
+            .limit(1)
+            .execute()
+        )
+        current = 0
+        if res and res.data and len(res.data) > 0:
+            current = int(res.data[0].get("glasses") or 0)
+
+        new_count = max(0, min(50, current + count_delta))
+        actual_delta = new_count - current
+        if actual_delta == 0 and count_delta != 0:
+            # Se intentó sumar/restar pero el clamp absorbió el cambio.
+            if count_delta > 0:
+                return f"El usuario ya esta en el maximo de 50 vasos para hoy (cap defensivo). No se sumo nada."
+            else:
+                return f"El usuario ya esta en 0 vasos para hoy. No se puede restar mas."
+
+        payload = {
+            "user_id": user_id,
+            "log_date": log_date,
+            "glasses": new_count,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        (
+            supabase.table("water_intake_log")
+            .upsert(payload, on_conflict="user_id,log_date")
+            .execute()
+        )
+
+        # Reusa la meta personalizada para el mensaje de confirmacion.
+        try:
+            from routers.plans import _compute_water_goal
+            goal = _compute_water_goal(user_id).get("goal", 8)
+        except Exception:
+            goal = 8
+
+        verb = "sumaron" if actual_delta > 0 else "restaron"
+        reached = " ¡Cumplio su meta del dia!" if new_count >= goal and current < goal else ""
+        return (
+            f"Listo: se {verb} {abs(actual_delta)} vaso(s). "
+            f"El usuario ahora lleva {new_count} de {goal} vasos hoy.{reached}"
+        )
+    except Exception as e:
+        logger.error(f"❌ [TOOL] log_water_glass error: {e}")
+        return f"Error registrando vaso de agua: {str(e)}"
+
+
 @tool
 def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None, modified_items: list[str] = None) -> str:
     """
@@ -1051,4 +1222,4 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
         return f"Error interno al realizar el registro de la compra: {str(e)}"
 
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased]
+agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass]

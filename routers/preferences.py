@@ -20,7 +20,12 @@ from pydantic import BaseModel
 import logging
 
 from auth import get_verified_user_id
-from db_profiles import get_user_profile, update_long_term_memory_enabled
+from db_profiles import (
+    get_user_profile,
+    update_long_term_memory_enabled,
+    update_water_tracker_enabled,
+    get_water_tracker_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +86,47 @@ async def api_get_long_term_memory(
         enabled = bool(profile.get("long_term_memory_enabled", True))
 
     return {"long_term_memory_enabled": enabled}
+
+
+# [P3-WATER-TRACKER · 2026-05-16] Toggle del card de hidratacion del Dashboard.
+# Sin gate de tier: disponible para todos los usuarios autenticados (free incluidos).
+# Default TRUE: el card aparece a menos que el usuario explicitamente lo apague.
+
+
+class WaterTrackerPreferenceBody(BaseModel):
+    water_tracker_enabled: bool
+
+
+@router.patch("/water-tracker")
+async def api_set_water_tracker_enabled(
+    body: WaterTrackerPreferenceBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Actualiza el toggle del water tracker del usuario autenticado."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
+
+    ok = update_water_tracker_enabled(verified_user_id, body.water_tracker_enabled)
+    if not ok:
+        logger.warning(
+            f"[P3-WATER-TRACKER] update fallo para user={verified_user_id} "
+            f"enabled={body.water_tracker_enabled} (sin fila afectada)"
+        )
+        raise HTTPException(status_code=500, detail="No se pudo actualizar la preferencia.")
+
+    logger.info(
+        f"[P3-WATER-TRACKER] user={verified_user_id} "
+        f"water_tracker_enabled={body.water_tracker_enabled}"
+    )
+    return {"water_tracker_enabled": body.water_tracker_enabled}
+
+
+@router.get("/water-tracker")
+async def api_get_water_tracker_enabled(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Devuelve el valor actual del flag. Default TRUE si perfil ausente
+    o campo NULL (defensa contra perfiles legacy pre-migracion)."""
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autenticado.")
+    return {"water_tracker_enabled": get_water_tracker_enabled(verified_user_id)}

@@ -10,6 +10,172 @@ from constants import strip_accents, GLOBAL_REVERSE_MAP
 from db_chat import insert_rejection, save_message
 from db_profiles import get_user_profile, update_user_health_profile, update_user_health_profile_atomic
 
+# ============================================================
+# [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Tracking de pipelines en curso
+# en `app_kv_store` para soportar "deep search style":
+#   - El pipeline NO se cancela si el cliente cierra el SSE/pestaña.
+#   - El usuario puede volver a la app y ver el plan listo (toast +
+#     redirect al dashboard) sin que se haya perdido la generación.
+#
+# Storage layer: `app_kv_store` (sobrevive restarts del backend, no toca
+# `meal_plans` schema). Key = `pending_pipeline:<user_id>` (per-user,
+# guardrail "1 pipeline activo por user a la vez"). Value JSON:
+#   { started_at, status, plan_id_final, error }
+# Status: 'generating' | 'complete' | 'failed' | 'abandoned'.
+#
+# Guardrail: si el usuario inicia un nuevo plan mientras hay uno
+# `generating` < 15 min de edad, el endpoint rechaza con 409 + plan_id
+# para que el frontend se conecte al pipeline existente en lugar de
+# disparar uno nuevo (evita pagar 2× Gemini por el mismo user).
+#
+# Limpieza: cron `_finalize_zombie_partial_plans` (cron_tasks.py) limpia
+# rows `generating` > 1h con `status='abandoned'`. Ver follow-up.
+# ============================================================
+_PENDING_PIPELINE_KV_PREFIX = "pending_pipeline:"
+
+
+def _pending_pipeline_kv_key(user_id: str) -> str:
+    return f"{_PENDING_PIPELINE_KV_PREFIX}{user_id}"
+
+
+def upsert_pending_pipeline(user_id: str, status: str = "generating",
+                             plan_id_final: Optional[str] = None,
+                             error: Optional[str] = None) -> bool:
+    """[P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Upserta el estado del pipeline
+    pendiente para `user_id`. Status: generating|complete|failed.
+
+    Best-effort: fallo silencioso. Si la KV no está disponible, el sistema
+    sigue funcionando — solo se pierde la capacidad de recovery cross-restart.
+    """
+    if not user_id:
+        return False
+    try:
+        from datetime import datetime, timezone
+        import json as _json
+        now_iso = datetime.now(timezone.utc).isoformat()
+        payload = {
+            "status": status,
+            "started_at": now_iso if status == "generating" else None,
+            "updated_at": now_iso,
+            "plan_id_final": plan_id_final,
+            "error": error,
+        }
+        # Para status != 'generating', preservar `started_at` del row previo si existe.
+        if status != "generating":
+            try:
+                prev = get_pending_pipeline(user_id)
+                if prev and prev.get("started_at"):
+                    payload["started_at"] = prev["started_at"]
+            except Exception:
+                pass
+
+        key = _pending_pipeline_kv_key(user_id)
+        if connection_pool:
+            execute_sql_write(
+                """
+                INSERT INTO app_kv_store (key, value, updated_at)
+                VALUES (%s, %s::jsonb, NOW())
+                ON CONFLICT (key) DO UPDATE
+                  SET value = EXCLUDED.value, updated_at = NOW()
+                """,
+                (key, _json.dumps(payload)),
+            )
+        elif supabase:
+            supabase.table("app_kv_store").upsert({
+                "key": key, "value": payload,
+            }).execute()
+        return True
+    except Exception as e:
+        # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Elevado de debug→warning para
+        # diagnosticar por qué el KV pending_pipeline no se popula bajo carga.
+        # Si el log se vuelve ruidoso post-diagnóstico, bajar a info.
+        logger.warning(
+            f"[P1-DEEP-SEARCH-PIPELINE] upsert_pending_pipeline FAILED "
+            f"user_id={user_id} status={status} plan_id_final={plan_id_final} "
+            f"error={e!r}"
+        )
+        return False
+
+
+def get_pending_pipeline(user_id: str) -> Optional[Dict[str, Any]]:
+    """Lee el estado actual del pipeline pendiente del user. None si no existe."""
+    if not user_id:
+        return None
+    try:
+        key = _pending_pipeline_kv_key(user_id)
+        if connection_pool:
+            row = execute_sql_query(
+                "SELECT value, updated_at FROM app_kv_store WHERE key = %s",
+                (key,), fetch_one=True
+            )
+            if not row:
+                return None
+            return row.get("value") or None
+        elif supabase:
+            res = supabase.table("app_kv_store").select("value, updated_at").eq("key", key).limit(1).execute()
+            if res.data and len(res.data) > 0:
+                return res.data[0].get("value")
+            return None
+    except Exception as e:
+        # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Elevado de debug→warning.
+        logger.warning(
+            f"[P1-DEEP-SEARCH-PIPELINE] get_pending_pipeline FAILED "
+            f"user_id={user_id} error={e!r}"
+        )
+        return None
+
+
+def check_user_has_active_pipeline(user_id: str, max_age_min: int = 15) -> Optional[Dict[str, Any]]:
+    """[P1-DEEP-SEARCH-PIPELINE GUARDRAIL] Retorna el payload si el user tiene
+    un pipeline `status='generating'` con `started_at` < `max_age_min` ago.
+    None si no hay activo (o está stale, en cuyo caso un nuevo plan es OK).
+
+    Stale entries son ignoradas (el cron de limpieza eventualmente los marca
+    abandoned; pero un user que vuelve no debe ser bloqueado por uno stale).
+    """
+    payload = get_pending_pipeline(user_id)
+    if not payload or payload.get("status") != "generating":
+        return None
+    try:
+        from datetime import datetime, timezone, timedelta
+        started_at_str = payload.get("started_at")
+        if not started_at_str:
+            return None
+        started_at = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
+        age = datetime.now(timezone.utc) - started_at
+        if age > timedelta(minutes=max_age_min):
+            return None  # stale, ignorar (cron limpiará)
+        return payload
+    except Exception as e:
+        # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Elevado de debug→warning.
+        logger.warning(
+            f"[P1-DEEP-SEARCH-PIPELINE] check_user_has_active_pipeline parse error "
+            f"user_id={user_id} error={e!r}"
+        )
+        return None
+
+
+def clear_pending_pipeline(user_id: str) -> bool:
+    """Borra el row de pending pipeline. Usado tras frontend acknowledge
+    la finalización (i.e. el usuario aceptó el plan o vio el error)."""
+    if not user_id:
+        return False
+    try:
+        key = _pending_pipeline_kv_key(user_id)
+        if connection_pool:
+            execute_sql_write("DELETE FROM app_kv_store WHERE key = %s", (key,))
+        elif supabase:
+            supabase.table("app_kv_store").delete().eq("key", key).execute()
+        return True
+    except Exception as e:
+        # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Elevado de debug→warning.
+        logger.warning(
+            f"[P1-DEEP-SEARCH-PIPELINE] clear_pending_pipeline FAILED "
+            f"user_id={user_id} error={e!r}"
+        )
+        return False
+
+
 def check_recent_meal_plan_exists(user_id: str, max_seconds: int = 30) -> bool:
     """Verifica si ya se ha guardado un plan para este usuario recientemente."""
     if not connection_pool: return False

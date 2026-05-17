@@ -23,6 +23,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 from db import get_user_profile, update_user_health_profile
+from knobs import _env_str  # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] auto-registry de los 4 chat-model knobs
 import concurrent.futures
 import traceback
 from datetime import datetime, timezone
@@ -93,26 +94,33 @@ _safety_settings = {
 # Defaults = current production models. Cambiar en env vars cuando Google
 # publique notice de deprecation o cuando se quiera A/B test un modelo nuevo.
 # Precedente en `proactive_agent.py:36` (`_proactive_model_name`).
+#
+# [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] Los 4 helpers leen via
+# `_env_str(...)` (NO `os.environ.get`) para auto-registrarse en
+# `_KNOBS_REGISTRY` (convención P3-NEW-D). Beneficio operacional: tras un
+# `MEALFIT_CHAT_AGENT_MODEL=gemini-3.1-flash` en EasyPanel, el SRE puede
+# verificar el cambio via `GET /api/system/admin/knobs` sin releer source.
+# Test parser-based: `tests/test_p3_chat_model_knobs_registry.py`.
 def _chat_agent_model_name() -> str:
-    return os.environ.get(
+    return _env_str(
         "MEALFIT_CHAT_AGENT_MODEL",
         "gemini-3.1-pro-preview",
     )
 
 def _chat_agent_swap_model_name() -> str:
-    return os.environ.get(
+    return _env_str(
         "MEALFIT_CHAT_AGENT_SWAP_MODEL",
         "gemini-3.1-pro-preview",
     )
 
 def _chat_title_model_name() -> str:
-    return os.environ.get(
+    return _env_str(
         "MEALFIT_CHAT_TITLE_MODEL",
         "gemini-3.1-flash-lite-preview",
     )
 
 def _chat_router_model_name() -> str:
-    return os.environ.get(
+    return _env_str(
         "MEALFIT_CHAT_ROUTER_MODEL",
         "gemini-3.1-flash-lite-preview",
     )
@@ -1218,8 +1226,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                     yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('buscando_memoria')})}\n\n"
                                     
     except Exception as e:
-        logger.error(f"❌ [CHAT STREAM] Error en astream nativo: {e}")
-        traceback.print_exc()
+        # [P3-TRACEBACK-PRINT-EXC · 2026-05-15] `logger.exception` emite
+        # mensaje + stack como un solo log record que respeta `LOG_LEVEL`
+        # y Sentry sampling. Reemplaza el legacy `logger.error + traceback.print_exc()`
+        # que duplicaba la entrada + bypaseaba el sink configurado.
+        logger.exception(f"❌ [CHAT STREAM] Error en astream nativo: {e}")
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         return
         

@@ -474,6 +474,173 @@ def log_api_usage(user_id: str, endpoint: str = "gemini"):
         logger.error(f"Error registrando api_usage: {e}")
         return None
 
+
+# ============================================================
+# [P1-COST-INSTRUMENTATION · 2026-05-15] Financial accounting per-LLM-call.
+# ------------------------------------------------------------
+# `api_usage` (arriba) es count-based para el paywall mensual (gratis=15 /
+# basic=50 / plus=200). NO captura tokens, model, ni costo monetario.
+# Audit 2026-05-15 estimó ~$0.06-$0.15/plan pero sin observabilidad real.
+#
+# `llm_usage_events` (migración p1_cost_instrumentation_2026_05_15.sql) y
+# las dos funciones de abajo cierran ese gap:
+#   - `compute_gemini_cost_micros(model, in, out, cached)` → USD * 1e6.
+#   - `log_llm_usage_event(...)` → INSERT best-effort post-LLM-success.
+#
+# Persistencia best-effort: cualquier fallo se silencia (no rompe la
+# llamada LLM). Mismo patrón que `_emit_llm_timeout_metric` en
+# graph_orchestrator.py.
+# ============================================================
+
+# Pricing default (USD por 1M tokens, expresado en MICROS para evitar
+# floats). Basado en Gemini 3.x preview pricing público a 2026-05.
+# Override sin redeploy via knob `MEALFIT_GEMINI_PRICING_JSON` (JSON string
+# `{"<model_prefix>": {"input": <micros_per_M>, "output": <micros_per_M>,
+# "cached": <micros_per_M>}}`).
+#
+# Match es por prefix-de-modelo (longest-prefix wins) — tolerante a sufijos
+# tipo `gemini-3.1-pro-preview-0514`. Si el modelo es desconocido se retorna
+# None y el evento se persiste sin costo (operador puede backfillar luego
+# ejecutando SQL con tokens × pricing nuevo).
+_DEFAULT_GEMINI_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
+    "gemini-3.1-pro-preview":        {"input": 1_250_000, "output": 10_000_000, "cached": 312_500},
+    "gemini-3.1-flash-preview":      {"input":   300_000, "output":  2_500_000, "cached":  75_000},
+    "gemini-3.1-flash-lite-preview": {"input":   100_000, "output":    400_000, "cached":  25_000},
+    "gemini-3-flash-preview":        {"input":   300_000, "output":  2_500_000, "cached":  75_000},
+}
+
+
+def _resolve_pricing_table() -> Dict[str, Dict[str, int]]:
+    """Combina defaults + override del knob `MEALFIT_GEMINI_PRICING_JSON`.
+
+    Knob es opcional; si falla parsear, log debug y se usa solo defaults
+    (fail-safe: no rompe la instrumentación si alguien typea mal el JSON
+    en EasyPanel).
+    """
+    table = dict(_DEFAULT_GEMINI_PRICING_MICROS_PER_M)
+    raw = os.environ.get("MEALFIT_GEMINI_PRICING_JSON", "").strip()
+    if not raw:
+        return table
+    try:
+        override = json.loads(raw)
+        if isinstance(override, dict):
+            for k, v in override.items():
+                if isinstance(v, dict) and "input" in v and "output" in v:
+                    table[k] = {
+                        "input": int(v["input"]),
+                        "output": int(v["output"]),
+                        "cached": int(v.get("cached", int(v["input"]) // 4)),
+                    }
+    except Exception as e:
+        logger.debug(f"[P1-COST-INSTRUMENTATION] pricing override parse failed: {e!r}")
+    return table
+
+
+def compute_gemini_cost_micros(
+    model: Optional[str],
+    input_tokens: Optional[int],
+    output_tokens: Optional[int],
+    cached_tokens: Optional[int] = 0,
+) -> Optional[int]:
+    """Calcula costo en USD*1e6 (micros) para una llamada LLM.
+
+    Match por longest-prefix sobre `model`. Cached tokens se descuentan del
+    input (input_billed = input - cached) + cached × cached_rate.
+    Retorna None si modelo desconocido o tokens inválidos — la fila se
+    persiste igual, operador puede backfillar.
+    """
+    if not model or input_tokens is None or output_tokens is None:
+        return None
+    try:
+        in_t = max(0, int(input_tokens))
+        out_t = max(0, int(output_tokens))
+        cached_t = max(0, int(cached_tokens or 0))
+    except (TypeError, ValueError):
+        return None
+
+    table = _resolve_pricing_table()
+    matched_key = None
+    for key in table:
+        if model.startswith(key):
+            if matched_key is None or len(key) > len(matched_key):
+                matched_key = key
+    if matched_key is None:
+        return None
+
+    rates = table[matched_key]
+    billable_input = max(0, in_t - cached_t)
+    cost = (
+        billable_input * rates["input"]
+        + cached_t * rates["cached"]
+        + out_t * rates["output"]
+    )
+    return int(cost // 1_000_000)
+
+
+def log_llm_usage_event(
+    *,
+    user_id: Optional[str] = None,
+    plan_id: Optional[str] = None,
+    model: str,
+    node: Optional[str] = None,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    cached_tokens: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """[P1-COST-INSTRUMENTATION · 2026-05-15] INSERT best-effort a
+    `llm_usage_events` con tokens + cost calculado.
+
+    Kill switch: `MEALFIT_LLM_COST_TRACKING_ENABLED=0` desactiva sin
+    redeploy. Cualquier excepción se silencia (no enmascara errores del
+    LLM upstream). `user_id`/`plan_id` pueden quedar NULL en esta fase
+    inicial — phase 2 los inyectará via contextvar desde el orquestador.
+    """
+    if not _env_bool("MEALFIT_LLM_COST_TRACKING_ENABLED", True):
+        return
+    if not model:
+        return
+    try:
+        cost_micros = compute_gemini_cost_micros(
+            model, input_tokens, output_tokens, cached_tokens or 0
+        )
+        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+        from db_core import connection_pool
+        if connection_pool:
+            execute_sql_write(
+                """
+                INSERT INTO llm_usage_events
+                    (user_id, plan_id, model, node, input_tokens,
+                     output_tokens, cached_tokens, cost_usd_micros, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                """,
+                (
+                    user_id, plan_id, model, node,
+                    input_tokens, output_tokens, cached_tokens,
+                    cost_micros, meta_json,
+                ),
+            )
+        elif supabase:
+            supabase.table("llm_usage_events").insert({
+                "user_id": user_id,
+                "plan_id": plan_id,
+                "model": model,
+                "node": node,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cached_tokens": cached_tokens,
+                "cost_usd_micros": cost_micros,
+                "metadata": metadata or {},
+            }).execute()
+    except Exception as e:
+        try:
+            logger.debug(
+                f"[P1-COST-INSTRUMENTATION] log_llm_usage_event falló "
+                f"(best-effort): {e!r}"
+            )
+        except Exception:
+            pass
+
 def get_monthly_api_usage(user_id: str) -> int:
     """Cuenta cuántas llamadas a la API ha hecho el usuario este mes."""
     if not user_id or user_id == "guest": return 0
@@ -568,27 +735,55 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
         return False
 
 def reset_user_account_preferences(user_id: str) -> bool:
-    """Borra preferencias, rechazos, inventario, planes históricos y limpia el health_profile para un verdadero inicio desde cero."""
-    if not supabase or not user_id or user_id == "guest": 
+    """Borra preferencias, rechazos, inventario, planes históricos y limpia el health_profile para un verdadero inicio desde cero.
+
+    [P3-RESET-SINGLE-TXN · 2026-05-16] Pre-fix: 7 llamadas secuenciales a
+    `execute_sql_write`, cada una hacía `with connection_pool.connection()`
+    → 7 connection acquires del pool. En free tier saturado (pool cap ~25,
+    visible en logs `couldn't get a connection after 8.00 sec`), cada
+    acquire podía tomar hasta 8s → wall-clock 0.4-56s para el reset
+    completo → usuario veía el botón "Sí, empezar desde cero" sin reaccionar
+    varios segundos.
+
+    Post-fix: TODAS las operaciones bajo UNA conexión + UNA transacción.
+    1 acquire del pool, 7 statements, 1 commit. Reducción wall-clock 7x
+    en best case, mucho más en pool saturado.
+
+    Atomicidad bonus: si cualquier statement falla, ROLLBACK preserva la
+    cuenta consistente. Pre-fix, un fallo en el statement #5 (después de
+    borrar #1-4) dejaba la cuenta en estado parcial.
+    """
+    if not supabase or not user_id or user_id == "guest":
         return False
-        
+
+    if not connection_pool:
+        logger.error("❌ reset_user_account_preferences: connection_pool no disponible.")
+        return False
+
     try:
-        from db_core import execute_sql_write
-        # 1. Borrar likes
-        execute_sql_write("DELETE FROM meal_likes WHERE user_id = %s", (user_id,))
-        # 2. Borrar rejections
-        execute_sql_write("DELETE FROM meal_rejections WHERE user_id = %s", (user_id,))
-        # 3. Borrar inventario
-        execute_sql_write("DELETE FROM user_inventory WHERE user_id = %s", (user_id,))
-        # 4. Borrar knowledge graph/facts (preferencias aprendidas)
-        execute_sql_write("DELETE FROM user_facts WHERE user_id = %s", (user_id,))
-        # 5. Borrar frecuencias de ingredientes (para que no rote basado en el pasado)
-        execute_sql_write("DELETE FROM ingredient_frequencies WHERE user_id = %s", (user_id,))
-        # 6. Borrar planes históricos (esto borra en cascada la plan_chunk_queue)
-        execute_sql_write("DELETE FROM meal_plans WHERE user_id = %s", (user_id,))
-        # 7. Limpiar health_profile en user_profiles (dejándolo vacío)
-        execute_sql_write("UPDATE user_profiles SET health_profile = '{}'::jsonb WHERE id = %s", (user_id,))
-        
+        # [P3-RESET-SINGLE-TXN] Una conexión + una transacción.
+        # `with conn.transaction()` garantiza COMMIT en success y
+        # ROLLBACK automático en cualquier excepción.
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor() as cursor:
+                    # 1. Likes
+                    cursor.execute("DELETE FROM meal_likes WHERE user_id = %s", (user_id,))
+                    # 2. Rejections
+                    cursor.execute("DELETE FROM meal_rejections WHERE user_id = %s", (user_id,))
+                    # 3. Inventario
+                    cursor.execute("DELETE FROM user_inventory WHERE user_id = %s", (user_id,))
+                    # 4. Knowledge graph / facts aprendidos
+                    cursor.execute("DELETE FROM user_facts WHERE user_id = %s", (user_id,))
+                    # 5. Frecuencias de ingredientes
+                    cursor.execute("DELETE FROM ingredient_frequencies WHERE user_id = %s", (user_id,))
+                    # 6. Planes históricos (CASCADE plan_chunk_queue)
+                    cursor.execute("DELETE FROM meal_plans WHERE user_id = %s", (user_id,))
+                    # 7. Limpiar health_profile
+                    cursor.execute(
+                        "UPDATE user_profiles SET health_profile = '{}'::jsonb WHERE id = %s",
+                        (user_id,),
+                    )
         logger.info(f"♻️ Preferencias y planes reseteados DESDE CERO con éxito para UUID {user_id}")
         return True
     except Exception as e:
@@ -615,3 +810,49 @@ def update_long_term_memory_enabled(user_id: str, enabled: bool) -> bool:
     except Exception as e:
         logger.error(f"❌ Error update_long_term_memory_enabled({user_id}, {enabled}): {e}")
         return False
+
+
+# [P3-WATER-TRACKER · 2026-05-16] Helper para el toggle del tracker de
+# hidratación. Migración SSOT: supabase/migrations/add_water_tracker_enabled_2026_05_16.sql
+def update_water_tracker_enabled(user_id: str, enabled: bool) -> bool:
+    """Actualiza el flag `water_tracker_enabled` en user_profiles.
+
+    Devuelve True si el UPDATE afectó una fila. Filtrado por user_id
+    (invariante I2). Default TRUE — el toggle se apaga explícitamente
+    por el usuario desde Preferencias.
+    """
+    if not supabase:
+        return False
+    try:
+        res = supabase.table("user_profiles").update(
+            {"water_tracker_enabled": bool(enabled)}
+        ).eq("id", user_id).execute()
+        return bool(res.data)
+    except Exception as e:
+        logger.error(f"❌ Error update_water_tracker_enabled({user_id}, {enabled}): {e}")
+        return False
+
+
+def get_water_tracker_enabled(user_id: str) -> bool:
+    """Lee el flag `water_tracker_enabled` para `user_id`. Fail-secure:
+    cualquier excepción / fila inexistente → True (default, mismo que la
+    columna DB)."""
+    if not supabase or not user_id:
+        return True
+    try:
+        res = (
+            supabase.table("user_profiles")
+            .select("water_tracker_enabled")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if res and res.data and len(res.data) > 0:
+            val = res.data[0].get("water_tracker_enabled")
+            if val is None:
+                return True
+            return bool(val)
+        return True
+    except Exception as e:
+        logger.warning(f"[P3-WATER-TRACKER] get_water_tracker_enabled({user_id}) error: {e}")
+        return True

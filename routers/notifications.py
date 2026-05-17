@@ -140,8 +140,9 @@ async def test_push_route(user_id: str, request: Request):
     """
     # Import lazy del helper admin (vive en routers.plans para evitar duplicar
     # CRON_SECRET checking en 5 lugares). Mismo patrón que system.py.
-    from routers.plans import _verify_admin_token
+    from routers.plans import _verify_admin_token, _check_admin_rate_limit
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
 
     if not connection_pool:
         raise HTTPException(status_code=500, detail="Database connection pool unavailable")

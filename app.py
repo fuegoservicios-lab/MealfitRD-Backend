@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P3-SELECT-STAR-AGENT-SESSIONS · 2026-05-15"
+_LAST_KNOWN_PFIX = "P3-UPDATE-PLATOS-REQUIRES-PANTRY · 2026-05-17"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -731,6 +731,104 @@ async def lifespan(app: FastAPI):
     except Exception as _cb_sweep_err:
         logger.warning(
             f"[P0-LIVE-2] Startup CB sweep falló (best-effort): {_cb_sweep_err}"
+        )
+
+    # [P0-PENDING-PIPELINE-STARTUP-SWEEP · 2026-05-16] Startup sweep de rows
+    # `pending_pipeline:*` con `status='generating'`. Razón: cuando el backend
+    # se reinicia (kill, crash, deploy), los pipelines en memoria mueren PERO
+    # los rows del KV `app_kv_store` sobreviven. Eso deja rows ZOMBI que el
+    # guardrail `check_user_has_active_pipeline` (max_age=15min) sigue
+    # tratando como activos → bloquea al user con 409 `pipeline_already_running`
+    # cuando intenta disparar otro plan.
+    #
+    # Escenario observado 2026-05-16: user inició plan A → apagó backend
+    # mid-pipeline → levantó backend → disparó plan B → 409 (porque el row de
+    # A seguía vivo en KV). El cron `_finalize_zombie_partial_plans` corre
+    # cada 60min pero con `min_age=24h` — demasiado tarde para este caso.
+    #
+    # Fix: al startup, DELETE todos los rows `pending_pipeline:%` con
+    # `status='generating'`. Cualquiera de esos rows es zombi por definición
+    # (el proceso nuevo no tiene esos pipelines en memoria). Si un frontend
+    # tenía un poll en flight, recibirá `status='none'` y limpiará su flag
+    # local silenciosamente (no doble toast).
+    try:
+        # [P0-PENDING-PIPELINE-STARTUP-SWEEP fix · 2026-05-16] NO importar
+        # `connection_pool` dentro de la función — Python lo trataría como
+        # variable local y rompería el `if connection_pool:` de arriba con
+        # UnboundLocalError. Reusamos el `connection_pool` ya importado al
+        # tope del módulo (línea 181). Solo importamos `execute_sql_write`
+        # local (no colisiona con nada).
+        from db_core import execute_sql_write as _sweep_execute
+        if connection_pool:
+            # Pattern como param para evitar interpretación de `%` por psycopg.
+            rows = _sweep_execute(
+                "DELETE FROM app_kv_store WHERE key LIKE %s "
+                "AND value->>'status' = 'generating' RETURNING key",
+                ('pending_pipeline:%',),
+                returning=True,
+            )
+            _swept = len(rows) if rows else 0
+            logger.info(
+                f"🧹 [P0-PENDING-PIPELINE-STARTUP-SWEEP] Sweep OK "
+                f"(deleted={_swept} zombie rows from previous instance)."
+            )
+        else:
+            logger.info(
+                "[P0-PENDING-PIPELINE-STARTUP-SWEEP] connection_pool no disponible, sweep skipped."
+            )
+    except Exception as _pp_sweep_err:
+        logger.warning(
+            f"[P0-PENDING-PIPELINE-STARTUP-SWEEP] Sweep falló (best-effort): {_pp_sweep_err}"
+        )
+
+    # [P3-EMBED-CACHE-STARTUP-WARM · 2026-05-16] Pre-warm el semantic cache de
+    # master_ingredients en background al startup. Razón: `get_semantic_cache()`
+    # (shopping_calculator.py) hace LAZY init en el primer call dentro de
+    # `get_shopping_list_delta`. Si Redis está frío (deploy nuevo / TTL expirado /
+    # redis ausente), el primer call recalc-shopping-list bloquea ~35 batches ×
+    # 3s delay = ~105s + 429s de Gemini → browser fetch timeout → 500 + CORS
+    # error al usuario.
+    #
+    # Escenario observado 2026-05-16 plan 4cc91584: user hizo click en duration
+    # → embed cache init disparó en el endpoint, blockeó >100s, frontend timeout.
+    #
+    # Fix: warming en background thread (NO awaitar para no bloquear lifespan).
+    # Si Redis tiene los vectores cacheados → load instantáneo, thread termina
+    # en ms. Si Redis vacío → Gemini call demora hasta ~100s pero NO bloquea
+    # requests del usuario. La primera request de recalc puede caer al regex
+    # fast-path mientras el cache se calienta — degradación graceful documentada
+    # por P6-SEMANTIC-SKIP.
+    #
+    # Best-effort: si la init falla (Gemini quota / red), `_semantic_cache_failed_until`
+    # entra en cooldown y los requests caen al fast-path sin error.
+    try:
+        import threading
+        def _warm_semantic_cache_bg():
+            try:
+                from shopping_calculator import get_semantic_cache
+                _cache = get_semantic_cache()
+                if _cache is not None:
+                    logger.info(
+                        "🔥 [P3-EMBED-CACHE-STARTUP-WARM] Semantic cache warmed "
+                        f"({len(_cache.get('vectors', []))} vectors) — recalc endpoints unblocked."
+                    )
+                else:
+                    logger.info(
+                        "🟡 [P3-EMBED-CACHE-STARTUP-WARM] Semantic cache no-op "
+                        "(disabled o cooldown). Recalc usará regex fast-path."
+                    )
+            except Exception as _warm_err:
+                logger.warning(
+                    f"[P3-EMBED-CACHE-STARTUP-WARM] Warmer falló (best-effort, "
+                    f"recalc fallback al regex): {type(_warm_err).__name__}: {_warm_err}"
+                )
+        _t = threading.Thread(target=_warm_semantic_cache_bg, name="embed-cache-warmer", daemon=True)
+        _t.start()
+        logger.info("🔥 [P3-EMBED-CACHE-STARTUP-WARM] Background warmer launched (daemon thread).")
+    except Exception as _spawn_err:
+        logger.warning(
+            f"[P3-EMBED-CACHE-STARTUP-WARM] No se pudo lanzar el warmer "
+            f"(best-effort): {_spawn_err}"
         )
 
     # [P0-LIVE-1 · 2026-05-11] Hard-floor autoheal asyncio task. Garantiza

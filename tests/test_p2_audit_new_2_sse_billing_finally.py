@@ -78,21 +78,16 @@ def chat_src() -> str:
 
 def _extract_api_chat_stream_body(src: str) -> str:
     """Extrae el cuerpo del handler `api_chat_stream` (función decorada
-    con `@router.post("/stream")`)."""
-    # Buscar el decorador + def
-    decorator_match = re.search(
-        r"@router\.post\(\s*[\"']\/stream[\"']\s*\)\s*\n",
-        src,
-    )
-    assert decorator_match, "No se encontró `@router.post('/stream')` en chat.py."
-    def_match = re.search(
-        r"\n(?:async\s+)?def\s+(\w+)\(",
-        src[decorator_match.end():],
-    )
-    assert def_match, "No se encontró `def ... (` tras `@router.post('/stream')`."
+    con `@router.post("/stream")`).
 
-    body_start = decorator_match.end() + def_match.end()
-
+    Buscamos directamente `def api_chat_stream(` (más robusto que matchear
+    el decorador y luego saltar al `def` siguiente — esto último fallaba
+    cuando el `def` viene inmediatamente después del decorador sin newline
+    extra, y antes acertaba por accidente con `def api_chat` aguas abajo).
+    """
+    fn_match = re.search(r"(?:async\s+)?def\s+api_chat_stream\s*\(", src)
+    assert fn_match, "No se encontró `def api_chat_stream(` en chat.py."
+    body_start = fn_match.end()
     # Cortar al próximo `@router.` o EOF.
     next_decorator = re.search(r"\n@router\.", src[body_start:])
     body_end = (
@@ -279,14 +274,20 @@ def test_bg_tasks_no_longer_bills(chat_src: str) -> None:
     bg_match = re.search(r"def\s+bg_tasks\s*\(\s*\)\s*:", gen_body)
     assert bg_match, "No se encontró `def bg_tasks():` dentro del generator."
 
-    # Cortar el cuerpo: del def bg_tasks hasta el siguiente `threading.Thread`
-    # o cierre de scope.
+    # Cortar el cuerpo: del def bg_tasks hasta el siguiente boundary anchor
+    # (call que lanza bg_tasks como fire-and-forget). Acepta tanto el patrón
+    # legacy `threading.Thread(target=bg_tasks` como el patrón canónico
+    # P1-BG-THREAD-TIMEOUT `submit_bg_task(bg_tasks`.
     bg_body_start = bg_match.end()
     next_anchor = re.search(
-        r"threading\.Thread\(target=bg_tasks",
+        r"threading\.Thread\(target=bg_tasks|submit_bg_task\(\s*bg_tasks",
         gen_body[bg_body_start:],
     )
-    assert next_anchor, "No se encontró `threading.Thread(target=bg_tasks` post bg_tasks def."
+    assert next_anchor, (
+        "No se encontró boundary anchor post `def bg_tasks():` — esperaba "
+        "`threading.Thread(target=bg_tasks` (legacy) o `submit_bg_task(bg_tasks` "
+        "(P1-BG-THREAD-TIMEOUT)."
+    )
     bg_body = gen_body[bg_body_start: bg_body_start + next_anchor.start()]
 
     assert "gemini_chat" not in bg_body, (

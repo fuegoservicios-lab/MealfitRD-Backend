@@ -8,6 +8,7 @@ import os
 import threading
 import asyncio
 import json as _json
+import math as _math
 import time as _time
 from datetime import datetime, timezone, timedelta
 
@@ -2393,8 +2394,8 @@ def api_analyze(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
-        logger.error(f"❌ [ERROR] Error en /api/analyze: {str(e)}")
+        # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
+        logger.exception(f"❌ [ERROR] Error en /api/analyze: {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/analyze/stream")
@@ -2567,6 +2568,57 @@ async def api_analyze_stream(
         # [P0-A2] Cap defensivo de `_days_to_generate` (invariante explícito).
         _enforce_days_to_generate_cap(pipeline_data, log_prefix="ROUTER /analyze/stream")
 
+        # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Guardrail + tracking del
+        # pipeline pendiente. Permite que el pipeline continúe corriendo
+        # incluso si el cliente cierra el SSE (asyncio.shield más abajo);
+        # el frontend puede volver al sitio y ver el plan listo.
+        #
+        # Guardrail: si el user tiene un pipeline activo < 15 min, rechazar
+        # la nueva request → el frontend redirige al polling del existente.
+        # Sin esto, un user que recarga durante generación dispararía un
+        # 2do pipeline, pagando $0.20-$0.40 extra a Gemini.
+        _deep_search_user_id = actual_user_id  # NO incluir session_id (guests no soportados aún)
+        if _deep_search_user_id:
+            from db_plans import check_user_has_active_pipeline, upsert_pending_pipeline
+            try:
+                _active = check_user_has_active_pipeline(_deep_search_user_id, max_age_min=15)
+                if _active:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "pipeline_already_running",
+                            "started_at": _active.get("started_at"),
+                            "message": (
+                                "Ya tienes un plan generándose. Espera a que termine "
+                                "(o vuelve al dashboard, te avisaremos cuando esté listo)."
+                            ),
+                        },
+                    )
+                # Reservar slot para este user. Si falla la KV, log + continuar
+                # (deep-search recovery se pierde pero la generación procede).
+                # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Capturar el bool de retorno
+                # para que el log refleje el resultado REAL del upsert. Pre-fix
+                # el log decía "registrado" aunque el upsert hubiera retornado
+                # False silentemente — engañoso para diagnóstico.
+                _kv_ok = upsert_pending_pipeline(_deep_search_user_id, status="generating")
+                if _kv_ok:
+                    logger.info(
+                        f"📌 [P1-DEEP-SEARCH-PIPELINE] Pipeline registrado en KV para "
+                        f"user={_deep_search_user_id[:8]} (status=generating)."
+                    )
+                else:
+                    logger.warning(
+                        f"⚠️ [P1-DEEP-SEARCH-PIPELINE] Pipeline NO se pudo registrar en KV "
+                        f"para user={_deep_search_user_id[:8]} — el feature de recovery "
+                        f"deep-search NO funcionará para este plan. La generación sigue."
+                    )
+            except HTTPException:
+                raise
+            except Exception as _track_err:
+                logger.warning(
+                    f"[P1-DEEP-SEARCH-PIPELINE] Track setup falló (best-effort): {_track_err!r}"
+                )
+
         # [P0 FIX GAP 1] Persistir update_reason global como señal de aprendizaje
         update_reason = data.get("update_reason")
         if actual_user_id and update_reason and update_reason != "dislike":
@@ -2612,8 +2664,20 @@ async def api_analyze_stream(
                 pipeline_result["result"] = result
             except Exception as e:
                 pipeline_result["error"] = str(e)
-                logger.error(f"❌ [SSE PIPELINE ERROR]: {e}")
-                traceback.print_exc()
+                # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
+                logger.exception(f"❌ [SSE PIPELINE ERROR]: {e}")
+                # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Marcar pipeline como
+                # failed en la KV para que el frontend que vuelve vea el error
+                # en lugar de un loading infinito.
+                if _deep_search_user_id:
+                    try:
+                        from db_plans import upsert_pending_pipeline
+                        upsert_pending_pipeline(
+                            _deep_search_user_id, status="failed",
+                            error=str(e)[:200],
+                        )
+                    except Exception:
+                        pass
             finally:
                 # Señal de fin para que el generador SSE cierre
                 try:
@@ -2626,6 +2690,197 @@ async def api_analyze_stream(
         # de que el pipeline complete. Sin handle no podemos llamar `.cancel()`
         # ni propagar `asyncio.CancelledError` al pipeline aún en vuelo.
         _pipeline_task = asyncio.create_task(run_pipeline())
+
+        # [P2-PIPELINE-TASK-DONE-CALLBACK · 2026-05-16] Bug observado 2026-05-16
+        # 02:39-02:53 (plan_id=ninguno): user inició plan, cerró pestaña a los
+        # 11min, SSE generator terminó, `_pipeline_task` siguió corriendo en
+        # background con `asyncio.shield`, eventualmente timed-out o falló, y
+        # el row `pending_pipeline:bf6f1383` quedó con status='generating'
+        # FOREVER. Causa raíz: el upsert KV-complete vive DENTRO del SSE
+        # generator (se ejecuta cuando llega el event 'complete'). Si el
+        # generator terminó antes que el pipeline, ese path nunca corre.
+        # El except interno marca 'failed' SOLO si la excepción se captura
+        # dentro de `_run_pipeline_blocking` — un TimeoutError de asyncio o
+        # CancelledError NO se captura ahí (CancelledError subclass BaseException
+        # en Py3.8+, no Exception).
+        #
+        # Fix: add_done_callback que SIEMPRE marca el KV final-state cuando el
+        # task termina, independiente de quién esté escuchando. Si OK → no-op
+        # (el SSE generator ya marcó complete si llegó). Si fallido/cancelled
+        # → marca failed para que el recovery limpie. Idempotente: si ya está
+        # complete/failed, el upsert sobrescribe con el mismo status.
+        # [P2-PIPELINE-TASK-DONE-COMPLETE · 2026-05-16] Bug observado 2026-05-16
+        # 03:01-03:12 (Pipeline Quality=0.995, Aprobado=True): user cerró SSE
+        # a las 03:12:42 (segundos ANTES de que el revisor médico terminara a
+        # 03:12:50). Pipeline completó exitosamente PERO:
+        #   - El `_postprocess_pipeline_result` (persist meal_plan + seed
+        #     learning + schedule chunk 2)
+        #   - El KV mark complete
+        #   - El emit `complete` event
+        # ...todo eso vive DENTRO del SSE generator. Como cerró antes, NINGUNO
+        # corre → plan_id nunca persiste a `meal_plans` + KV queda `generating`.
+        #
+        # Fix: el done_callback ahora cubre 3 casos:
+        #   (a) Task cancelled / exception → marca KV failed (anti-zombi).
+        #   (b) Task OK + result poblado + SSE generator vivo → no-op (generator
+        #       hace su trabajo).
+        #   (c) Task OK + result poblado + SSE generator ya cerró → programa
+        #       postprocess + persist + KV mark complete vía asyncio.create_task
+        #       en el event loop, usando los kwargs del closure.
+        # Sentinel _sse_completed_naturally se setea True dentro del SSE
+        # generator JUSTO ANTES de hacer el upsert KV complete; si está False
+        # cuando el callback corre, sabemos que el generator murió pre-postprocess.
+        _sse_completed_naturally = {"flag": False}
+
+        def _on_pipeline_task_done(_task):
+            try:
+                if _task.cancelled():
+                    _err_msg = "Pipeline cancelled (timeout o cancel cooperativo)"
+                    _final_status = "failed"
+                    _need_fallback_postprocess = False
+                else:
+                    _exc = _task.exception()
+                    if _exc is None:
+                        # OK: chequear si el SSE generator alcanzó a hacer el
+                        # postprocess. Si sí → no-op. Si NO → fallback.
+                        if _sse_completed_naturally["flag"]:
+                            return
+                        # SSE generator cerró antes — necesitamos fallback.
+                        if not pipeline_result.get("result"):
+                            # Sin result: el task terminó pero no produjo plan.
+                            # Marcar como failed (algo raro).
+                            _err_msg = "Pipeline OK pero sin result populated"
+                            _final_status = "failed"
+                            _need_fallback_postprocess = False
+                        else:
+                            _need_fallback_postprocess = True
+                            _err_msg = None
+                            _final_status = "complete"
+                    else:
+                        _err_msg = str(_exc)[:200]
+                        _final_status = "failed"
+                        _need_fallback_postprocess = False
+
+                if _need_fallback_postprocess and _deep_search_user_id:
+                    # Programar el fallback postprocess en el event loop.
+                    # `loop.call_soon_threadsafe` es seguro desde el callback.
+                    logger.warning(
+                        f"🔧 [P2-PIPELINE-TASK-DONE-COMPLETE] Pipeline OK pero SSE "
+                        f"generator murió pre-postprocess. Ejecutando fallback "
+                        f"persist + KV mark complete para user={_deep_search_user_id[:8]}."
+                    )
+                    async def _fallback_postprocess():
+                        try:
+                            # [P2-PIPELINE-TASK-DONE-RACE-FIX · 2026-05-16] Bug
+                            # observado plan_id=0844a613+5f5e5aa6 (2026-05-16 03:51):
+                            # el callback dispara INMEDIATAMENTE al pipeline_task done,
+                            # pero el SSE generator todavía no ha procesado el `_done`
+                            # event de la queue (está en próximo tick del while loop).
+                            # Cuando el callback chequea el sentinel, es False → fallback
+                            # dispara. Microsegundos después, el SSE generator procesa
+                            # `_done`, setea sentinel=True, y hace su propio postprocess.
+                            # Resultado: AMBOS persisten → 2 planes duplicados.
+                            #
+                            # Fix: sleep ~3s para dar chance al SSE generator de marcar
+                            # el sentinel. Re-chequear sentinel post-sleep. Si SSE
+                            # generator está vivo, sentinel=True → skip fallback.
+                            # Si SSE generator está realmente muerto, sentinel sigue
+                            # False → fallback procede. 3s es generoso pero seguro:
+                            # el postprocess full toma ~5-10s, no perdemos mucho.
+                            await asyncio.sleep(3)
+                            if _sse_completed_naturally["flag"]:
+                                logger.info(
+                                    f"✓ [P2-PIPELINE-TASK-DONE-RACE-FIX] SSE generator "
+                                    f"se encargó del postprocess (sentinel=True tras sleep 3s). "
+                                    f"Fallback skipping para user={_deep_search_user_id[:8]}."
+                                )
+                                return
+                            _result = pipeline_result.get("result")
+                            if not _result:
+                                return
+                            # Recomputar memory_ctx desde scope del endpoint
+                            # (mismo cálculo que el SSE generator hace antes
+                            # del postprocess original).
+                            _fb_memory_ctx = (
+                                memory.get("full_context_str", "") if session_id else ""
+                            )
+                            _result = await asyncio.to_thread(
+                                _postprocess_pipeline_result,
+                                result=_result,
+                                actual_user_id=actual_user_id,
+                                session_id=session_id,
+                                data=data,
+                                taste_profile=taste_profile,
+                                memory_ctx=_fb_memory_ctx,
+                                rejected_meal_names=rejected_meal_names,
+                                total_days_requested=total_days_requested,
+                                use_chunking=use_chunking,
+                                background_tasks=background_tasks,
+                                plan_start_date=start_date_iso,
+                                tz_offset_mins=tz_offset_mins,
+                                # [P2-PIPELINE-TASK-DONE-RACE-FIX · 2026-05-16]
+                                # Usar "sse" (no "sse_fallback_postprocess") para
+                                # que P0_3_LEGACY_LEARNING_CONTEXTS lo acepte.
+                                # El context name custom rompía el seed del
+                                # _last_chunk_learning. Observability se mantiene
+                                # via el log "🔧 [P2-PIPELINE-TASK-DONE-COMPLETE]
+                                # Ejecutando fallback..." que es único al fallback path.
+                                transport_label="sse",
+                            )
+                            _plan_id_final = (
+                                _result.get("id") or _result.get("plan_id")
+                                if isinstance(_result, dict) else None
+                            )
+                            from db_plans import upsert_pending_pipeline
+                            upsert_pending_pipeline(
+                                _deep_search_user_id,
+                                status="complete",
+                                plan_id_final=_plan_id_final,
+                            )
+                            logger.info(
+                                f"✅ [P2-PIPELINE-TASK-DONE-COMPLETE] Fallback postprocess "
+                                f"OK user={_deep_search_user_id[:8]} plan_id={(_plan_id_final or '')[:8]}"
+                            )
+                        except Exception as _fb_err:
+                            logger.exception(
+                                f"❌ [P2-PIPELINE-TASK-DONE-COMPLETE] Fallback postprocess "
+                                f"falló: {_fb_err!r}"
+                            )
+                            try:
+                                from db_plans import upsert_pending_pipeline
+                                upsert_pending_pipeline(
+                                    _deep_search_user_id,
+                                    status="failed",
+                                    error=f"Fallback postprocess error: {str(_fb_err)[:150]}",
+                                )
+                            except Exception:
+                                pass
+                    try:
+                        loop.call_soon_threadsafe(
+                            lambda: asyncio.create_task(_fallback_postprocess())
+                        )
+                    except Exception as _sched_err:
+                        logger.warning(
+                            f"[P2-PIPELINE-TASK-DONE-COMPLETE] No se pudo programar "
+                            f"fallback postprocess: {_sched_err!r}"
+                        )
+                elif _final_status == "failed" and _deep_search_user_id:
+                    from db_plans import upsert_pending_pipeline
+                    upsert_pending_pipeline(
+                        _deep_search_user_id, status=_final_status, error=_err_msg,
+                    )
+                    logger.warning(
+                        f"⚠️ [P2-PIPELINE-TASK-DONE-COMPLETE] Pipeline task terminó "
+                        f"failed; KV marcado failed para "
+                        f"user={_deep_search_user_id[:8]}. Error: {_err_msg}"
+                    )
+            except Exception as _cb_err:
+                # Best-effort: NUNCA lanzar excepción desde un done_callback
+                # (Python las trata como unhandled y las loguea a stderr).
+                logger.warning(
+                    f"[P2-PIPELINE-TASK-DONE-COMPLETE] callback falló: {_cb_err!r}"
+                )
+        _pipeline_task.add_done_callback(_on_pipeline_task_done)
 
         async def event_generator():
             """Generador SSE que consume la cola de progreso."""
@@ -2646,23 +2901,33 @@ async def api_analyze_stream(
             # el task pero NO esperamos — yield error inmediato + return. El
             # task se cancela en background y libera resources eventualmente.
             async def _should_stop():
-                """Devuelve True si debemos abortar el stream (disconnect o cancel)."""
-                if await request.is_disconnected():
-                    logger.info("🔌 [SSE] Cliente desconectado, abortando stream.")
-                    if not _pipeline_task.done():
-                        _pipeline_task.cancel()
-                    return True
+                """Devuelve True SOLO si hay cancel EXPLÍCITO del usuario.
+
+                [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Disconnect NO termina
+                el generator. El generator sigue corriendo hasta procesar
+                el evento `_done`, persistir el plan, y retornar. Los `yield`
+                a un socket cerrado son no-ops (Starlette los maneja).
+                Esto es lo que habilita el "deep-search style": aunque el
+                user cierre la pestaña, el plan se persiste y queda accesible
+                via `/api/plans/pending-status`.
+
+                Solo el cancel EXPLÍCITO vía `/api/plans/cancel` aborta:
+                el usuario clickeó "Cancelar Generación", quiere que pare.
+                """
                 if session_id and is_session_cancelled(session_id):
                     logger.info(
                         f"🛑 [P1-16] Cancel explícito recibido para session={session_id}. "
-                        f"Cancelando pipeline task (no espera)."
+                        f"Cancelando pipeline task + limpiando KV tracker."
                     )
                     if not _pipeline_task.done():
                         _pipeline_task.cancel()
-                    # NO esperamos `await _pipeline_task` — el task se cancela
-                    # en background. Si está mid-LLM, asyncio marca la cancel
-                    # y dispara CancelledError en el próximo await yield del
-                    # pipeline. El SSE responde inmediato al user.
+                    # Limpiar KV para que el user no vea "pending" stale.
+                    if _deep_search_user_id:
+                        try:
+                            from db_plans import clear_pending_pipeline
+                            clear_pending_pipeline(_deep_search_user_id)
+                        except Exception:
+                            pass
                     return True
                 return False
 
@@ -2693,6 +2958,18 @@ async def api_analyze_stream(
 
                     # Señal de fin del pipeline
                     if event_data.get("event") == "_done":
+                        # [P2-PIPELINE-TASK-DONE-COMPLETE · 2026-05-16] CRÍTICO:
+                        # setear sentinel ANTES de empezar el postprocess. El
+                        # `_pipeline_task` ya está done en este punto (por eso
+                        # llegó el `_done` event); mi `add_done_callback` corre
+                        # casi-síncronamente al done. Si NO marco el sentinel
+                        # ahora, el callback ve `flag=False` y dispara fallback
+                        # postprocess en paralelo con el SSE generator → DOBLE
+                        # persist (bug observado plan_id=e910ad31+c592f7ac 2026-05-16
+                        # 03:32). Setearlo aquí garantiza que el callback haga
+                        # no-op cuando llegue (SSE generator está vivo y va a
+                        # hacer postprocess).
+                        _sse_completed_naturally["flag"] = True
                         # Enviar resultado final o error
                         if pipeline_result["error"]:
                             yield f"data: {_json.dumps({'event': 'error', 'data': {'message': pipeline_result['error']}})}\n\n"
@@ -2712,18 +2989,19 @@ async def api_analyze_stream(
                                 yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'llm_unavailable', 'message': 'La IA está temporalmente saturada y no pudimos generar tu plan. Por favor intenta de nuevo en 1-2 minutos.'}})}\n\n"
                                 break
 
-                            # [P0-3] Pre-check de desconexión ANTES de la validación pantry.
-                            # La validación P0-2 puede tardar 30–60s por reintento y la
-                            # persistencia que viene después es bloqueante. Si el cliente colgó
-                            # (timeout, abort, navegación), cortar aquí evita persistir un plan
-                            # huérfano que aparecería como "duplicado" en la próxima sesión.
+                            # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Comportamiento INVERTIDO
+                            # respecto a P0-3 pre-fix. Pre-fix cortaba aquí si el cliente
+                            # desconectaba para evitar "plan huérfano". Ahora el plan huérfano
+                            # es feature: el `_save_plan_and_track_background` persiste, el
+                            # KV tracker `pending_pipeline:<user_id>` marca status='complete',
+                            # y el frontend lo recupera al volver via `/pending-status`.
+                            # Solo loguear para observabilidad.
                             if await request.is_disconnected():
-                                logger.warning(
-                                    f"🔌 [P0-3 SSE] Cliente desconectado tras pipeline (antes de "
-                                    f"validación pantry). NO se persiste plan para evitar "
-                                    f"duplicación silenciosa. user={actual_user_id or 'guest'}"
+                                logger.info(
+                                    f"🔌 [P1-DEEP-SEARCH-PIPELINE] Cliente desconectado tras "
+                                    f"pipeline. CONTINUANDO persistencia — usuario recuperará "
+                                    f"el plan via /pending-status. user={actual_user_id or 'guest'}"
                                 )
-                                break
 
                             # [P0-2/P1-1] Validación post-LLM contra nevera centralizada.
                             # Antes este bloque (~50 líneas) duplicaba la lógica del sync con
@@ -2746,8 +3024,8 @@ async def api_analyze_stream(
                                 transport_label="P0-2 SSE",
                             )
 
-                            # [P0-3] Re-check de desconexión DESPUÉS de la validación pantry
-                            # (puede haber tardado decenas de segundos en peor caso).
+                            # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Pre-fix tenía re-check
+                            # de disconnect aquí. Ahora ya NO cortamos persistencia.
                             if await request.is_disconnected():
                                 logger.warning(
                                     f"🔌 [P0-3 SSE] Cliente desconectado durante validación pantry. "
@@ -2791,6 +3069,47 @@ async def api_analyze_stream(
                                 None, result,
                             )
 
+                            # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Actualizar KV
+                            # tracker con `plan_id_final` para que el endpoint
+                            # `/api/plans/pending-status` pueda servir al user
+                            # que vuelve. Best-effort: si falla, el user todavía
+                            # puede recuperar el plan via /history (es solo el
+                            # auto-redirect lo que se pierde).
+                            if _deep_search_user_id:
+                                try:
+                                    _plan_id_final = (
+                                        result.get("id") or result.get("plan_id")
+                                        if isinstance(result, dict) else None
+                                    )
+                                    # [P2-PIPELINE-TASK-DONE-COMPLETE · 2026-05-16]
+                                    # Marcar el sentinel ANTES del upsert para que
+                                    # el done_callback NO ejecute fallback redundante.
+                                    # Si el SSE generator llegó aquí, el work está hecho.
+                                    _sse_completed_naturally["flag"] = True
+                                    from db_plans import upsert_pending_pipeline
+                                    # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] log
+                                    # condicional al return — antes era ciego.
+                                    _kv_complete_ok = upsert_pending_pipeline(
+                                        _deep_search_user_id,
+                                        status="complete",
+                                        plan_id_final=_plan_id_final,
+                                    )
+                                    if _kv_complete_ok:
+                                        logger.info(
+                                            f"✅ [P1-DEEP-SEARCH-PIPELINE] KV marcado complete "
+                                            f"user={_deep_search_user_id[:8]} plan_id={(_plan_id_final or '')[:8]}"
+                                        )
+                                    else:
+                                        logger.warning(
+                                            f"⚠️ [P1-DEEP-SEARCH-PIPELINE] KV complete update FAILED "
+                                            f"user={_deep_search_user_id[:8]} plan_id={(_plan_id_final or '')[:8]} "
+                                            f"— el user no recibirá auto-redirect aunque el plan SÍ se persistió."
+                                        )
+                                except Exception as _kv_err:
+                                    logger.warning(
+                                        f"[P1-DEEP-SEARCH-PIPELINE] KV update tras complete falló: {_kv_err!r}"
+                                    )
+
                             yield f"data: {_json.dumps({'event': 'complete', 'data': result}, ensure_ascii=False, default=str)}\n\n"
                         return
 
@@ -2817,34 +3136,37 @@ async def api_analyze_stream(
                     yield f"data: {_json.dumps(event_data, ensure_ascii=False)}\n\n"
 
             except asyncio.CancelledError:
-                # [P6-CANCEL-PROPAGATION-FIX-3] BUG OBSERVABLE corrida
-                # 2026-05-06 00:31: SSE cierra (Starlette dispara
-                # CancelledError en el generator) pero `_pipeline_task`
-                # sigue corriendo en background — solo loguéabamos sin
-                # cancelar el task. Resultado: pipeline completa, persiste
-                # plan en DB, consume cuota LLM, todo después de que el
-                # user cerró el SSE.
-                # Fix: cancelar `_pipeline_task` explícitamente cuando el
-                # generator es cancelado (cliente cierra SSE).
-                logger.info("🔌 [SSE] Stream cancelado por el cliente. Cancelando pipeline task.")
-                if not _pipeline_task.done():
-                    _pipeline_task.cancel()
-                # Re-raise para que asyncio sepa que respetamos el cancel
+                # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Comportamiento INVERTIDO
+                # respecto a P6-CANCEL-PROPAGATION-FIX-3. Pre-fix cancelaba
+                # `_pipeline_task` para evitar "plan huérfano". Ahora el plan
+                # huérfano DEJA DE SERLO: el `upsert_pending_pipeline` KV +
+                # el `services._save_plan_and_track_background` al final
+                # persisten el plan. El usuario lo recupera al volver via
+                # `/api/plans/pending-status`.
+                #
+                # El pipeline corre con `asyncio.shield` para sobrevivir al
+                # cancel del generator. NO lo cancelamos aquí.
+                logger.info(
+                    "🔌 [SSE] Stream cancelado por cliente. Pipeline sigue "
+                    "corriendo (deep-search mode); el usuario lo recuperará al volver."
+                )
+                # Re-raise para que asyncio cierre el generator correctamente.
                 raise
             except Exception as e:
                 logger.error(f"❌ [SSE] Error en generador: {e}")
                 yield f"data: {_json.dumps({'event': 'error', 'data': {'message': str(e)}})}\n\n"
             finally:
-                # [P6-CANCEL-PROPAGATION-FIX-3] Defense-in-depth: si el
-                # generator termina por cualquier motivo (completion, error,
-                # cancel) y el pipeline task aún está activo, cancelarlo.
-                # Cubre paths que no van por except CancelledError.
+                # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] NO cancelamos
+                # `_pipeline_task` en el finally. Pre-fix lo cancelaba como
+                # "defense-in-depth contra plan huérfano". Ahora el plan
+                # huérfano es feature, no bug. Si el pipeline aún corre,
+                # déjalo terminar — el KV tracker maneja el lifecycle.
                 if not _pipeline_task.done():
-                    logger.warning(
-                        f"🛑 [P6-CANCEL] Generator terminó pero pipeline_task "
-                        f"sigue activo. Cancelando para evitar plan huérfano."
+                    logger.info(
+                        "📌 [P1-DEEP-SEARCH-PIPELINE] Generator terminó pero "
+                        "pipeline_task sigue activo. NO se cancela — el plan "
+                        "se persistirá y será recuperable via /pending-status."
                     )
-                    _pipeline_task.cancel()
                 # [P1-16] Limpieza del flag de cancelación al terminar el
                 # stream (por completion, error, cancel cooperativo, o
                 # disconnect). Sin esto, el set `_PLAN_CANCEL_REGISTRY`
@@ -2880,9 +3202,73 @@ async def api_analyze_stream(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
-        logger.error(f"❌ [ERROR] Error en /api/analyze/stream: {str(e)}")
+        # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
+        logger.exception(f"❌ [ERROR] Error en /api/analyze/stream: {e}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+# [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Endpoint para que el frontend al
+# arrancar (boot hook) detecte si hay un plan generándose o ya completado
+# y redirija al usuario al loading screen / dashboard automáticamente.
+#
+# Auth: requiere `verified_user_id` (JWT). NO usa `verify_api_quota`
+# porque es polling read-only (cero costo LLM) — análogo al patrón de
+# `/history-list` etc.
+@router.get("/pending-status")
+async def api_pending_pipeline_status(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Retorna el estado del pipeline
+    pendiente para el user autenticado.
+
+    Response shapes:
+      - `{"status": "none"}` — no hay pipeline activo, frontend limpia localStorage.
+      - `{"status": "generating", "started_at": "<iso>"}` — pipeline corriendo;
+        frontend muestra loading screen con polling cada 5-10s.
+      - `{"status": "complete", "plan_id_final": "<uuid>"}` — plan listo;
+        frontend muestra toast "Tu plan está listo" + redirige a /dashboard.
+      - `{"status": "failed", "error": "<msg>"}` — pipeline falló; frontend
+        muestra toast de error + opción de regenerar.
+    """
+    if not verified_user_id or verified_user_id == "guest":
+        return {"status": "none"}
+    try:
+        from db_plans import get_pending_pipeline
+        payload = get_pending_pipeline(verified_user_id)
+        if not payload:
+            return {"status": "none"}
+        # Filtrar a campos públicos (no leak `updated_at` interno innecesario).
+        return {
+            "status": payload.get("status") or "none",
+            "started_at": payload.get("started_at"),
+            "plan_id_final": payload.get("plan_id_final"),
+            "error": payload.get("error"),
+        }
+    except Exception as e:
+        logger.warning(f"[P1-DEEP-SEARCH-PIPELINE] /pending-status error: {e!r}")
+        return {"status": "none"}
+
+
+@router.post("/pending-status/ack")
+async def api_pending_pipeline_ack(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Limpia el row de pending
+    pipeline tras el frontend acknowledge la finalización. Idempotente.
+
+    Frontend debe llamar este endpoint después de mostrar el toast +
+    redirigir a /dashboard (o tras mostrar el error de failed). Sin esto,
+    el next mount detectaría el row stale y entraría en loop de redirect.
+    """
+    if not verified_user_id or verified_user_id == "guest":
+        return {"ok": True}
+    try:
+        from db_plans import clear_pending_pipeline
+        clear_pending_pipeline(verified_user_id)
+        return {"ok": True}
+    except Exception as e:
+        logger.warning(f"[P1-DEEP-SEARCH-PIPELINE] /pending-status/ack error: {e!r}")
+        return {"ok": False, "error": str(e)[:200]}
 
 
 @router.post("/recipe/expand")
@@ -3759,6 +4145,28 @@ def api_cancel_plan_generation(data: dict = Body(...)):
         f"session_id={session_id} (registered_now={registered}). "
         f"event_generator detectará en próxima iteración SSE."
     )
+    # [P3-CANCEL-CLEAR-KV · 2026-05-16] Limpiar el row del KV
+    # `pending_pipeline:<session_id>` para que el guardrail
+    # `check_user_has_active_pipeline` NO bloquee el siguiente intento del
+    # mismo user. Pre-fix: el endpoint solo registraba el cancel en memoria
+    # (in-process set), pero el row del KV seguía con status='generating'
+    # hasta que `MAX_AGE_MIN=15min` lo dejaba pasar — el user que cancelaba y
+    # disparaba otro plan inmediatamente recibía 409 `pipeline_already_running`.
+    # Best-effort: si la clave no existe (session_id != user_id), no-op
+    # silencioso.
+    try:
+        from db_plans import clear_pending_pipeline
+        _cleared = clear_pending_pipeline(session_id)
+        if _cleared:
+            logger.info(
+                f"🧹 [P3-CANCEL-CLEAR-KV] pending_pipeline row limpiado "
+                f"para session_id={session_id[:8]} tras cancel explícito."
+            )
+    except Exception as _clear_err:
+        logger.info(
+            f"[P3-CANCEL-CLEAR-KV] clear best-effort skipped "
+            f"session_id={session_id[:8]}: {_clear_err}"
+        )
     return {
         "success": True,
         "registered": registered,
@@ -3955,6 +4363,350 @@ def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/inventory/consume: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+# [P3-WATER-TRACKER · 2026-05-16] Tracker diario de hidratacion. Reemplaza el
+# card "Mi Nevera" del Dashboard que duplicaba la pagina Pantry. Cero costo
+# LLM → usa `get_verified_user_id` (NO `verify_api_quota`), siguiendo el
+# patron Historial-quota-exemption (CLAUDE.md). Rate limiter dedicado contra
+# click-spam (60 req/min = 1/s sostenido; un usuario clickeando los 8 vasos
+# en burst entra holgado, un bot/loop infinito se topa).
+_WATER_TRACKER_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
+_WATER_DEFAULT_GOAL = 8  # P3-WATER-TRACKER: fallback cuando peso no esta disponible.
+_WATER_MAX_GLASSES = 50  # mirror del CHECK de la tabla. Cap defensivo.
+
+
+# [P3-NAN-INF-SANITIZE · 2026-05-16] Defensa contra `ValueError: Out of range
+# float values are not JSON compliant` en `/recalculate-shopping-list`.
+#
+# Síntoma observado 2026-05-16 plan 4cc91584: el recalc completaba
+# exitosamente (`✅ Listas recalculadas exitosamente ×1 personas`) pero al
+# serializar la response, Python json.dumps rechazaba un NaN o Inf en
+# `plan_data` (probablemente en una división por zero del aggregator de
+# shopping calc — sample: ítems con `display_qty` formateado vs market_qty
+# float). Resultado: 500 Internal Server Error + CORS error secundario.
+#
+# Este sanitizer reemplaza NaN/Inf con `None` (JSON-compliant + frontend
+# lo trata como ausente, igual que un valor faltante). NO es el fix raíz
+# (alguna fórmula divide por cero) pero impide que un NaN downstream
+# crashe la API.
+#
+# Tooltip-anchor: P3-NAN-INF-SANITIZE-START | test_p3_nan_inf_sanitize
+def _sanitize_floats_for_json(obj):
+    """Reemplaza NaN/Inf con None recursivamente en dicts/lists/floats.
+    Otros tipos pasan tal cual. Idempotente: aplicar dos veces == aplicar
+    una vez (None se preserva como None).
+    """
+    if isinstance(obj, float):
+        if _math.isnan(obj) or _math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats_for_json(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_sanitize_floats_for_json(v) for v in obj)
+    return obj
+
+# [P3-SUPABASE-TRANSIENT-RETRY · 2026-05-16] El endpoint /water-intake se
+# dispara con frecuencia desde el listener visibilitychange del WaterTracker
+# (cada vez que el usuario vuelve al tab). Cuando el tab estuvo en background,
+# las conexiones HTTPS idle backend→Supabase pueden estar muertas: el primer
+# uso descubre el problema y httpx levanta `RemoteProtocolError` / `ReadError`
+# / `ConnectError` → pre-fix devolvíamos 500 al cliente, contaminando logs y
+# disparando toast de error. Reintento 1 vez con backoff 350ms cubre 99% de
+# los blips (la conexión muerta se reemplaza en el reintento). Si ambos
+# fallan → 503 (transient, retry) en lugar de 500 (sugiere bug).
+_WATER_RETRY_BACKOFF_S = 0.35
+_WATER_RETRY_ATTEMPTS = 2
+
+
+def _water_supabase_with_retry(builder_factory, op_label: str):
+    """Ejecuta una query supabase-py con 1 reintento. `builder_factory` es
+    una lambda/callable que CONSTRUYE el builder cada vez (los builders son
+    stateful — no se pueden reusar tras un `.execute()` parcial).
+    """
+    import time as _time
+    last_exc = None
+    for attempt in range(_WATER_RETRY_ATTEMPTS):
+        try:
+            return builder_factory().execute()
+        except Exception as e:
+            last_exc = e
+            if attempt + 1 < _WATER_RETRY_ATTEMPTS:
+                logger.warning(
+                    f"⚠️ [P3-WATER-TRACKER] {op_label} transient en intento "
+                    f"{attempt + 1}/{_WATER_RETRY_ATTEMPTS}: {type(e).__name__}: "
+                    f"{(str(e) or '')[:120]}. Reintentando en {_WATER_RETRY_BACKOFF_S}s."
+                )
+                _time.sleep(_WATER_RETRY_BACKOFF_S)
+    raise last_exc
+
+# [P3-WATER-TRACKER · 2026-05-16] Personalizacion de la meta diaria.
+# Formula: 35ml/kg de peso corporal + bonus por actividad fisica.
+# - Base: 35 ml × kg (estandar nutricional, ref. Institute of Medicine).
+# - Bonus actividad: 0/250/500/750 ml para sedentary/moderate/active/very_active.
+# - Cada vaso = 240 ml (vaso estandar US-style, alineado con la UI de 8 vasos
+#   default = 1920 ml ≈ 2 L del benchmark clasico de "8 glasses a day").
+# - Clamp [6, 14] vasos: cubre 40kg (=6 vasos) a ~100kg+activo (=14 vasos)
+#   sin romper la UI (la grilla wrappea a 2 filas cuando goal > 8).
+_WATER_ML_PER_GLASS = 240
+_WATER_GOAL_MIN = 6
+_WATER_GOAL_MAX = 14
+_WATER_ML_PER_KG = 35
+_WATER_ACTIVITY_BONUS_ML = {
+    "sedentary": 0,
+    "low": 0,
+    "light": 0,
+    "moderate": 250,
+    "mod": 250,
+    "active": 500,
+    "high": 500,
+    "very_active": 750,
+    "very_high": 750,
+    "athlete": 750,
+}
+
+
+def _compute_water_goal(user_id: str) -> dict:
+    """Calcula la meta diaria de vasos para `user_id`, derivada de
+    `user_profiles.health_profile` (weight + weightUnit + activityLevel).
+
+    Returns:
+      dict con `goal` (int, [6,14]), `weight_kg` (float|None),
+      `activity_level` (str|None), `computed_ml` (int|None) y `default`
+      (bool — True si fallback a 8 vasos por peso ausente o invalido).
+
+    Fail-secure: cualquier excepcion DB / parse → fallback a 8 vasos. El
+    tracker debe seguir funcionando aunque el perfil este corrupto.
+    """
+    default = {
+        "goal": _WATER_DEFAULT_GOAL,
+        "weight_kg": None,
+        "activity_level": None,
+        "computed_ml": None,
+        "default": True,
+    }
+    if not supabase or not user_id:
+        return default
+    try:
+        res = (
+            supabase.table("user_profiles")
+            .select("health_profile")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if not res or not res.data:
+            return default
+        hp = res.data[0].get("health_profile") or {}
+
+        weight_raw = hp.get("weight")
+        if weight_raw is None or weight_raw == "":
+            return default
+        try:
+            weight_raw = float(weight_raw)
+        except (ValueError, TypeError):
+            return default
+        if weight_raw <= 0:
+            return default
+
+        # Unit normalization — mismo patron que nutrition_calculator.py L242-265
+        # (P0-FORM-4): defaultea a 'lb' por compatibilidad con perfiles legacy.
+        weight_unit = str(hp.get("weightUnit") or "lb").lower().strip()
+        if weight_unit not in ("lb", "kg"):
+            weight_unit = "lb"
+        weight_kg = weight_raw if weight_unit == "kg" else round(weight_raw / 2.20462, 1)
+
+        # Sanity bounds: 25kg (preteen pequeño) a 250kg (extremo). Fuera de
+        # este rango sospechamos data corrupta — fallback a default.
+        if weight_kg < 25 or weight_kg > 250:
+            return default
+
+        activity_level = str(hp.get("activityLevel") or "moderate").lower().strip()
+        bonus_ml = _WATER_ACTIVITY_BONUS_ML.get(activity_level, 250)  # default moderate
+
+        computed_ml = int(round(weight_kg * _WATER_ML_PER_KG)) + bonus_ml
+        glasses = round(computed_ml / _WATER_ML_PER_GLASS)
+        glasses = max(_WATER_GOAL_MIN, min(_WATER_GOAL_MAX, glasses))
+
+        return {
+            "goal": int(glasses),
+            "weight_kg": weight_kg,
+            "activity_level": activity_level,
+            "computed_ml": computed_ml,
+            "default": False,
+        }
+    except Exception as e:
+        logger.warning(f"[P3-WATER-TRACKER] _compute_water_goal error: {e}")
+        return default
+
+
+def _validate_water_date(date_str: str) -> str:
+    """Acepta solo YYYY-MM-DD. Rechaza inyecciones de strings raras."""
+    try:
+        # `datetime.fromisoformat` acepta `YYYY-MM-DD` y formatos con hora;
+        # forzamos a solo-date con un parse explicito.
+        parsed = datetime.strptime(date_str, "%Y-%m-%d").date()
+        # Cap razonable: no aceptar fechas >7d en el futuro (clock skew) ni
+        # >365d en el pasado (un cliente con bug podria spammear fechas viejas).
+        today_utc = datetime.now(timezone.utc).date()
+        if parsed > today_utc + timedelta(days=7):
+            raise HTTPException(status_code=400, detail="Fecha fuera de rango (futuro).")
+        if parsed < today_utc - timedelta(days=365):
+            raise HTTPException(status_code=400, detail="Fecha fuera de rango (pasado).")
+        return parsed.isoformat()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Formato de fecha invalido. Usa YYYY-MM-DD.")
+
+
+@router.get("/water-intake")
+def api_get_water_intake(
+    date: str,
+    verified_user_id: Optional[str] = Depends(_WATER_TRACKER_LIMITER),
+):
+    """[P3-WATER-TRACKER · 2026-05-16] Lee el conteo de vasos para `date`
+    (fecha LOCAL del cliente, YYYY-MM-DD). Devuelve 0 si no hay row.
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autorizado.")
+    log_date = _validate_water_date(date)
+
+    if not supabase:
+        # Fail-secure: si la DB no esta disponible, no inventamos un default
+        # que el cliente confunda con "ya marcaste vasos hoy".
+        raise HTTPException(status_code=503, detail="DB no disponible.")
+
+    try:
+        res = _water_supabase_with_retry(
+            lambda: (
+                supabase.table("water_intake_log")
+                .select("glasses, log_date, updated_at")
+                .eq("user_id", verified_user_id)
+                .eq("log_date", log_date)
+                .limit(1)
+            ),
+            op_label="GET water-intake",
+        )
+        glasses = 0
+        updated_at = None
+        if res and res.data and len(res.data) > 0:
+            glasses = int(res.data[0].get("glasses") or 0)
+            updated_at = res.data[0].get("updated_at")
+        goal_meta = _compute_water_goal(verified_user_id)
+        # [P3-WATER-TRACKER · 2026-05-16] `enabled` se incluye aqui para que
+        # el frontend NO requiera un fetch separado a /api/user/preferences/
+        # water-tracker en el mount (reduce roundtrips y elimina race entre
+        # los dos fetches).
+        from db_profiles import get_water_tracker_enabled
+        return {
+            "success": True,
+            "date": log_date,
+            "glasses": glasses,
+            "goal": goal_meta["goal"],
+            "goal_basis": {
+                "weight_kg": goal_meta["weight_kg"],
+                "activity_level": goal_meta["activity_level"],
+                "computed_ml": goal_meta["computed_ml"],
+                "default": goal_meta["default"],
+            },
+            "enabled": get_water_tracker_enabled(verified_user_id),
+            "updated_at": updated_at,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        # [P3-SUPABASE-TRANSIENT-RETRY · 2026-05-16] Si llegamos aqui es porque
+        # AMBOS intentos fallaron. Devolvemos 503 (transient) en lugar de 500
+        # (que sugiere bug del endpoint). El cliente puede decidir reintentar.
+        logger.error(
+            f"❌ [P3-WATER-TRACKER] GET water-intake fallo tras {_WATER_RETRY_ATTEMPTS} "
+            f"intentos: {type(e).__name__}: {(str(e) or '')[:200]}",
+            exc_info=(type(e), e, e.__traceback__),
+        )
+        raise HTTPException(status_code=503, detail="DB temporalmente no disponible. Reintenta.")
+
+
+@router.post("/water-intake")
+def api_set_water_intake(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(_WATER_TRACKER_LIMITER),
+):
+    """[P3-WATER-TRACKER · 2026-05-16] Upsert del conteo para una fecha local.
+    Body: `{date: "YYYY-MM-DD", glasses: int}`. Idempotente — PK
+    `(user_id, log_date)` permite enviar el mismo conteo varias veces sin
+    duplicar rows (no contamos eventos, contamos estado actual del dia).
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="No autorizado.")
+
+    date_str = data.get("date")
+    if not isinstance(date_str, str) or not date_str:
+        raise HTTPException(status_code=400, detail="Falta campo `date`.")
+    log_date = _validate_water_date(date_str)
+
+    raw_glasses = data.get("glasses")
+    if not isinstance(raw_glasses, int) or isinstance(raw_glasses, bool):
+        raise HTTPException(status_code=400, detail="Campo `glasses` debe ser entero.")
+    if raw_glasses < 0 or raw_glasses > _WATER_MAX_GLASSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"`glasses` fuera de rango [0, {_WATER_MAX_GLASSES}].",
+        )
+
+    if not supabase:
+        raise HTTPException(status_code=503, detail="DB no disponible.")
+
+    try:
+        # Upsert via on_conflict en PK compuesta. `updated_at = NOW()` se
+        # toca explicitamente para que el cliente pueda distinguir "ya
+        # actualice hoy" del default seed.
+        payload = {
+            "user_id": verified_user_id,
+            "log_date": log_date,
+            "glasses": int(raw_glasses),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _water_supabase_with_retry(
+            lambda: (
+                supabase.table("water_intake_log")
+                .upsert(payload, on_conflict="user_id,log_date")
+            ),
+            op_label="POST water-intake",
+        )
+        # `goal` se recomputa para que el cliente pueda detectar si el usuario
+        # actualizo su peso entre GET y POST (ej: edito el perfil en otra tab).
+        # El roundtrip a DB para leer `health_profile` no es critico — el POST
+        # ya hizo upsert, y el rate limiter (60/60s) absorbe el costo.
+        goal_meta = _compute_water_goal(verified_user_id)
+        return {
+            "success": True,
+            "date": log_date,
+            "glasses": int(raw_glasses),
+            "goal": goal_meta["goal"],
+            "goal_basis": {
+                "weight_kg": goal_meta["weight_kg"],
+                "activity_level": goal_meta["activity_level"],
+                "computed_ml": goal_meta["computed_ml"],
+                "default": goal_meta["default"],
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        # [P3-SUPABASE-TRANSIENT-RETRY · 2026-05-16] Tras 2 intentos del upsert
+        # → 503. POST es idempotente (PK + on_conflict), el cliente puede
+        # reintentar sin riesgo de doble escritura.
+        logger.error(
+            f"❌ [P3-WATER-TRACKER] POST water-intake fallo tras {_WATER_RETRY_ATTEMPTS} "
+            f"intentos: {type(e).__name__}: {(str(e) or '')[:200]}",
+            exc_info=(type(e), e, e.__traceback__),
+        )
+        raise HTTPException(status_code=503, detail="DB temporalmente no disponible. Reintenta.")
+
 
 @router.post("/recalculate-shopping-list")
 def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_RECALC_LIMITER)):
@@ -4324,7 +5076,19 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         # Devolver el plan_data merged directamente para evitar race conditions
         # (el frontend no necesita re-fetch de Supabase). Es exactamente lo
         # que persistimos bajo el lock — sin sorpresas downstream.
-        return {"success": True, "plan_data": merged_plan_data, "_coherence_warnings": _coherence_warnings}
+        # [P3-NAN-INF-SANITIZE · 2026-05-16] Sanitize antes de retornar:
+        # algún cálculo downstream del aggregator produce NaN/Inf esporádicos
+        # (ej: división por zero cuando un ingrediente tiene `package_size=0`
+        # en master_ingredients). El stdlib json.dumps rechaza estos →
+        # 500 Internal Server Error visible al cliente. Sanitize reemplaza
+        # con None (JSON-compliant, frontend graceful). El bug raíz (de
+        # dónde viene el NaN) queda como follow-up para identificar +
+        # arreglar en la fórmula upstream.
+        return {
+            "success": True,
+            "plan_data": _sanitize_floats_for_json(merged_plan_data),
+            "_coherence_warnings": _sanitize_floats_for_json(_coherence_warnings),
+        }
 
     except HTTPException:
         # [P2-NEW-B · 2026-05-11] Propagar el 404 del ownership check
@@ -4343,6 +5107,19 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         # bare, pero funcionalmente equivalente al stdout/stderr write
         # fuera del logger handler). Tooltip-anchor: P3-PDF-POLISH-4-D.
         logger.exception("❌ [RECALC] Error en /api/recalculate-shopping-list")
+        # [P3-RECALC-503-CLASSIFICATION · 2026-05-16] Si la excepción es de
+        # pool/red transitoria (free tier `couldn't get a connection`, supabase
+        # `RemoteProtocolError`, etc.) escalamos a 503 "transient, retry" en
+        # lugar de 500 "bug del endpoint". El cliente (Dashboard.jsx) reintenta
+        # 1× tras 500ms y la mayoría de los blips se resuelven sin toast de
+        # error. Bugs reales (KeyError, ValueError sobre plan_data mal formado)
+        # siguen devolviendo 500 — son determinísticos y reintentar es ruido.
+        from db_facts import _is_transient_db_error
+        if _is_transient_db_error(e):
+            raise HTTPException(
+                status_code=503,
+                detail="DB temporalmente saturada. Reintenta en unos segundos.",
+            )
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
@@ -7759,6 +8536,60 @@ def _verify_admin_token(authorization: Optional[str]):
         raise HTTPException(status_code=403, detail="Invalid admin token")
 
 
+# ---------------------------------------------------------------------------
+# [P2-ADMIN-RATE-LIMIT · 2026-05-15] Rate limiter compartido para todos los
+# endpoints `/admin/*`.
+#
+# Pre-fix: los ~12 endpoints `/admin/*` (8 en plans.py + 3 en system.py)
+# estaban auth-gated por `CRON_SECRET` pero sin rate limiter. Un operador
+# descuidado con un script en loop (mala `crontab` `* * * * *` en vez de
+# `*/30 * * * *`) o un atacante que obtuvo el CRON_SECRET vía leak puede
+# saturar el pool DB — `/admin/health-snapshot` hace 6 queries paralelas.
+#
+# Diseño: instancia única de `RateLimiter` con key por IP (admin endpoints
+# no usan `verified_user_id` — se autentican con CRON_SECRET, no JWT). La
+# `RateLimiter.__call__` retorna 429 con header `Retry-After: <N>` cuando
+# se excede; el helper la invoca con `verified_user_id=None` para forzar
+# el fallback a `ip:<client_ip>`.
+#
+# Defaults conservadores: 60 req / 60s por IP. Un dashboard SRE pollando
+# 1 req/s queda bajo el cap; un script roto en loop 100x/s se cae rápido.
+# Knobs `MEALFIT_ADMIN_RATE_LIMIT_PER_MIN` y `MEALFIT_ADMIN_RATE_LIMIT_PERIOD_S`
+# permiten override sin redeploy.
+#
+# Tooltip-anchor: P2-ADMIN-RATE-LIMIT.
+# Test: `tests/test_p2_admin_rate_limit.py`.
+# ---------------------------------------------------------------------------
+from rate_limiter import RateLimiter as _AdminRateLimiterCls
+from knobs import _env_int as _admin_env_int
+
+
+def _clamp_int(v: int, lo: int, hi: int) -> int:
+    return max(lo, min(v, hi))
+
+
+_ADMIN_RATE_LIMIT_MAX_CALLS = _clamp_int(
+    _admin_env_int("MEALFIT_ADMIN_RATE_LIMIT_PER_MIN", 60), 10, 600
+)
+_ADMIN_RATE_LIMIT_PERIOD_S = _clamp_int(
+    _admin_env_int("MEALFIT_ADMIN_RATE_LIMIT_PERIOD_S", 60), 10, 3600
+)
+_ADMIN_RATE_LIMITER = _AdminRateLimiterCls(
+    max_calls=_ADMIN_RATE_LIMIT_MAX_CALLS,
+    period_seconds=_ADMIN_RATE_LIMIT_PERIOD_S,
+)
+
+
+def _check_admin_rate_limit(request: Request) -> None:
+    """Aplica rate limiting global a un admin endpoint. Llama justo después
+    de `_verify_admin_token(...)`. Key por IP (`verified_user_id=None`
+    fuerza el fallback IP del RateLimiter).
+
+    Levanta `HTTPException(429)` con header `Retry-After` cuando se excede.
+    """
+    _ADMIN_RATE_LIMITER(request, verified_user_id=None)
+
+
 @router.get("/admin/chunks/stuck")
 def api_admin_chunks_stuck(
     request: Request,
@@ -7771,6 +8602,7 @@ def api_admin_chunks_stuck(
     Requiere Authorization: Bearer <CRON_SECRET>.
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from db_core import execute_sql_query
     try:
         rows = execute_sql_query(
@@ -7847,6 +8679,7 @@ def api_admin_chunks_dead_lettered(
     Requiere `Authorization: Bearer <CRON_SECRET>`.
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from db_core import execute_sql_query
     try:
         params: list = []
@@ -7925,6 +8758,7 @@ def api_admin_chunk_deferrals(
     Requiere Authorization: Bearer <CRON_SECRET>.
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from db_core import execute_sql_query
     try:
         rows = execute_sql_query(
@@ -8254,6 +9088,7 @@ def api_admin_metrics(
       - top error messages (rate)
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from db_core import execute_sql_query
     try:
         interval_str = f"{int(days)} days"
@@ -8446,6 +9281,7 @@ def api_admin_metrics(
 def api_admin_escalate_chunk(chunk_id: str, request: Request):
     """[GAP A] Forzar escalado/pickup inmediato de un chunk concreto."""
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from db_core import execute_sql_write
     try:
         res = execute_sql_write(
@@ -8489,6 +9325,7 @@ def api_admin_guest_metrics_status(request: Request):
     Requires Authorization: Bearer <CRON_SECRET>.
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from graph_orchestrator import get_guest_metrics_status
     return get_guest_metrics_status()
 
@@ -8507,6 +9344,7 @@ def api_admin_guest_metrics_probe(request: Request):
     Devuelve el snapshot post-probe (mismo formato que GET).
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from graph_orchestrator import (
         verify_pipeline_metrics_guest_insert,
         get_guest_metrics_status,
@@ -8541,6 +9379,7 @@ def api_admin_guest_metrics_force(request: Request, data: dict = Body(...)):
     `last_reason` para auditoría.
     """
     _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
     from graph_orchestrator import force_set_guest_metrics_enabled
     enabled = data.get("enabled")
     if not isinstance(enabled, bool):

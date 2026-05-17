@@ -21,7 +21,70 @@ from db_plans import search_similar_plan
 import uuid
 import asyncio
 import weakref
+import contextvars
+import functools
 from contextlib import contextmanager, asynccontextmanager
+
+
+# ============================================================
+# [P1-COST-INSTRUMENTATION-PHASE2 · 2026-05-16] ContextVar para etiquetar
+# llamadas LLM con el NODO del pipeline donde se originan. Phase 1 dejó la
+# columna `llm_usage_events.node` 100% NULL ("unknown") porque la signature
+# de `_safe_ainvoke` no incluía el caller — modificar 30+ callsites era
+# invasivo. Phase 2 usa contextvar: cada nodo de LangGraph setea su nombre
+# al entrar (via decorator `@_node_label("nombre")`), y propaga
+# automáticamente a CUALQUIER `_safe_ainvoke` invocada en su scope
+# (incluso a través de `asyncio.create_task` por la semántica de
+# Python 3.7+ que copia el contexto a tasks hijas).
+#
+# El `_emit_llm_usage_event_best_effort` lee el var y lo pasa a
+# `db_profiles.log_llm_usage_event(node=...)`. Si una llamada LLM ocurre
+# FUERA del pipeline (e.g. chat agent tools), el var queda en None → la
+# fila persiste con `node=NULL` (mismo comportamiento que phase 1 — no
+# regresión).
+#
+# Tooltip-anchor: P1-COST-INSTRUMENTATION-PHASE2-CONTEXTVAR
+_current_node_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "mealfit_current_node", default=None
+)
+
+
+def _node_label(name: str):
+    """Decorator para nodos async del orquestador. Setea el contextvar al
+    entrar, lo resetea al salir — incluso si la función levanta excepción.
+
+    Uso:
+        @_node_label("planner")
+        async def plan_skeleton_node(state): ...
+
+    El ContextVar propaga a:
+      - Llamadas async dentro del cuerpo del nodo.
+      - Tasks lanzadas via `asyncio.create_task` o `asyncio.gather`
+        (Python 3.7+ copia el contexto).
+      - Llamadas síncronas vía `asyncio.to_thread` (también copian contexto).
+
+    Si el nodo no es async, devolver una versión sync del decorator.
+    """
+    def decorator(fn):
+        if asyncio.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def async_wrapper(*args, **kwargs):
+                token = _current_node_var.set(name)
+                try:
+                    return await fn(*args, **kwargs)
+                finally:
+                    _current_node_var.reset(token)
+            return async_wrapper
+        else:
+            @functools.wraps(fn)
+            def sync_wrapper(*args, **kwargs):
+                token = _current_node_var.set(name)
+                try:
+                    return fn(*args, **kwargs)
+                finally:
+                    _current_node_var.reset(token)
+            return sync_wrapper
+    return decorator
 
 
 # ============================================================
@@ -125,6 +188,14 @@ CB_LOCAL_HEALTH_TTL_S       = _env_float("MEALFIT_CB_LOCAL_HEALTH_TTL_S",       
 # `HARD_CEILING_S`: tiempo duro tras el cual cancelamos primary+hedge y damos error.
 HEDGE_AFTER_BASE_S          = _env_float("MEALFIT_HEDGE_AFTER_BASE_S",          45.0)
 HARD_CEILING_S              = _env_float("MEALFIT_HARD_CEILING_S",              170.0)
+# [P2-HEDGE-LIMITER-RAISE · 2026-05-16] Cap absoluto de hedges concurrentes por
+# pipeline. Default subido 2 → 3 para que los 3 day_generators paralelos del
+# chunk inicial (cycle_start, 3 días) tengan protección simétrica. Pre-fix:
+# `max(1, LLM_SEMAPHORE.max_concurrent // 2) = 2` → cuando 3 días están en
+# flight, el último que dispara hedge queda sin slot (incidente plan bf6f1383
+# 2026-05-16: Día 1 sin hedge → falló → CB OPEN → self_critique bloqueado).
+# Clamp [1, max(1, LLM_MAX_CONCURRENT-1)] preserva headroom para primaries.
+HEDGE_MAX_CONCURRENT_KNOB   = _env_int  ("MEALFIT_HEDGE_MAX_CONCURRENT",        3)
 
 # --- Retry policy + timeout global del pipeline ---
 MAX_ATTEMPTS                = _env_int  ("MEALFIT_MAX_ATTEMPTS",                2)
@@ -318,6 +389,18 @@ LLM_CACHE_TTL_S             = _env_int  ("MEALFIT_LLM_CACHE_TTL_S",             
 #   - 12 claras/día ≈ 42g (cubre 2 comidas con claras como proteína principal).
 MAX_EGG_WHITES_PER_MEAL = _env_int("MEALFIT_MAX_EGG_WHITES_PER_MEAL", 6)
 MAX_EGG_WHITES_PER_DAY  = _env_int("MEALFIT_MAX_EGG_WHITES_PER_DAY",  12)
+# [P2-EGG-WHITE-MEALS-CAP · 2026-05-16] Tercer cap: limitar el NÚMERO de
+# meals/día que usan claras de huevo como PROTEÍNA BASE. Pre-fix los caps
+# anteriores (PER_MEAL=6, PER_DAY=12) limitaban cantidad pero NO frecuencia
+# → el planner ponía claras en 3-4 meals/día (desayuno + almuerzo aglutinante
+# + merienda batido + cena revoltillo) → reviewer médico rechazaba por
+# "frecuencia de consumo de claras de huevo es excesivamente alta en
+# múltiples comidas" (plan_id=fbd014b2 2026-05-16).
+# Cap default 2 meals/día: típicamente desayuno + 1 más. Los meals en
+# exceso (el 3ro+ con claras) ven sus claras recortadas a 1 (simbólico,
+# como aglutinante de receta) — no se elimina el ingrediente para no
+# romper la coherencia de la receta downstream.
+MAX_MEALS_WITH_EGG_WHITES = _env_int("MEALFIT_MAX_MEALS_WITH_EGG_WHITES", 2)
 
 # ============================================================
 # P0-A3: Versionado del schema del plan cacheado.
@@ -486,7 +569,20 @@ def _log_active_knobs():
     log.info(f"[KNOBS/INVENTORY] {full}")
 
 
-_log_active_knobs()
+# [P3-KNOBS-INVENTORY-LATE-EMIT · 2026-05-15] La invocación de
+# `_log_active_knobs()` se movió al FINAL del módulo (post todas las
+# asignaciones module-level de knobs vía `_env_*`). Pre-fix la llamada
+# vivía aquí, en línea ~489, ANTES de unos 25-30 knobs declarados
+# downstream (e.g. `DAY_GEN_RETRY_USE_PRO` línea ~3527,
+# `PROMPT_CACHE_SYSTEM_MESSAGE` línea ~3554, `PROMPT_TRIM_FORM_DATA`
+# línea ~3639). Esos knobs SÍ se registraban en `_KNOBS_REGISTRY` al
+# completar el import, pero `[KNOBS/INVENTORY]` ya había emitido sin
+# verlos → operador post-deploy revisaba el log y aparentaba que sus
+# fixes no estaban activos (falsa sensación). El comportamiento en
+# runtime NO cambiaba; solo era un gap de observabilidad del startup.
+#
+# El último statement ejecutable del módulo invoca `_log_active_knobs()`
+# para que el snapshot capture el estado FINAL del registry.
 
 
 class DistributedLLMSemaphore:
@@ -1028,16 +1124,71 @@ class ChatGoogleGenerativeAI(_ChatGoogleGenerativeAI):
 
     async def ainvoke(self, *args, **kwargs):
         async with aacquire_user_and_global(user_id_var.get()):
-            return await super().ainvoke(*args, **kwargs)
+            _ainvoke_start = time.time()
+            result = await super().ainvoke(*args, **kwargs)
+            # [P1-COST-INSTRUMENTATION-FIX · 2026-05-15] Captura usage_metadata
+            # AQUÍ (en el override del LLM raw) cobre TODOS los paths:
+            # `.ainvoke()` directo, `.with_structured_output(...).ainvoke()` (que
+            # internamente llama a este override antes del OutputParser),
+            # `.bind_tools(...).ainvoke()`, etc. El fallback en `_safe_ainvoke`
+            # solo captura cuando el result es AIMessage; aquí captura SIEMPRE
+            # antes de cualquier wrapping.
+            try:
+                _emit_llm_usage_event_best_effort(
+                    llm=self,
+                    result=result,
+                    duration_s=time.time() - _ainvoke_start,
+                )
+            except Exception:
+                pass
+            return result
 
     async def astream(self, *args, **kwargs):
         async with aacquire_user_and_global(user_id_var.get()):
+            # [P1-COST-INSTRUMENTATION-FIX · 2026-05-15] Acumula chunks para
+            # extraer usage_metadata del mensaje final. Sin esto, day_generator
+            # (que usa `.astream()` directamente) no se contabiliza en
+            # `llm_usage_events` — perdiendo el nodo MÁS costoso del pipeline.
+            _astream_start = time.time()
+            _accumulated = None
             async for chunk in super().astream(*args, **kwargs):
+                if _accumulated is None:
+                    _accumulated = chunk
+                else:
+                    try:
+                        _accumulated = _accumulated + chunk
+                    except Exception:
+                        pass
                 yield chunk
+            if _accumulated is not None:
+                try:
+                    _emit_llm_usage_event_best_effort(
+                        llm=self,
+                        result=_accumulated,
+                        duration_s=time.time() - _astream_start,
+                    )
+                except Exception:
+                    pass
 
     async def agenerate(self, *args, **kwargs):
         async with aacquire_user_and_global(user_id_var.get()):
-            return await super().agenerate(*args, **kwargs)
+            _agen_start = time.time()
+            result = await super().agenerate(*args, **kwargs)
+            # `agenerate` retorna LLMResult con `generations` — extraer del
+            # primer generation el AIMessage que sí tiene usage_metadata.
+            try:
+                gens = getattr(result, "generations", None) or []
+                if gens and gens[0]:
+                    msg = getattr(gens[0][0], "message", None)
+                    if msg is not None:
+                        _emit_llm_usage_event_best_effort(
+                            llm=self,
+                            result=msg,
+                            duration_s=time.time() - _agen_start,
+                        )
+            except Exception:
+                pass
+            return result
 
 # P1-10: Imports de stdlib y third-party subidos a nivel módulo para evitar
 # reimport repetido en hot paths (workers paralelos, retries, loops por meal).
@@ -1491,7 +1642,13 @@ class LLMCircuitBreaker:
                     self._local_healthy = True
                     self._last_db_check = time.time()
             except Exception as e:
-                logger.warning(f"DB async CB reset error: {e}")
+                # [P3-LOG-CLARITY · 2026-05-16] Bajado de warning→info y wording
+                # ajustado: el CB reset es BEST-EFFORT (idempotente, el próximo
+                # success reintentará). Pre-fix decía "error" + nivel WARNING →
+                # el operador (y el user mirando logs) creía que el plan estaba
+                # fallando cuando en realidad solo se perdió 1 escritura de
+                # observabilidad. La generación procede sin issue.
+                logger.info(f"[CB-RESET] DB async no disponible (best-effort, no afecta plan): {e}")
 
     async def acan_proceed(self) -> bool:
         with self._local_state_lock:
@@ -2147,7 +2304,18 @@ async def _safe_ainvoke(llm, payload, *, timeout: float):
     task = asyncio.create_task(llm.ainvoke(payload))
     _safe_ainvoke_started_at = time.time()
     try:
-        return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        # [P1-COST-INSTRUMENTATION · 2026-05-15] Emit financial accounting
+        # tick a `llm_usage_events`. Best-effort: cualquier fallo se silencia
+        # para no enmascarar el response exitoso al caller. Sin esto, el
+        # sistema queda ciego al costo real por modelo/nodo y no se pueden
+        # tomar decisiones de optimización (context caching, retry budgets).
+        _emit_llm_usage_event_best_effort(
+            llm=llm,
+            result=result,
+            duration_s=time.time() - _safe_ainvoke_started_at,
+        )
+        return result
     except asyncio.TimeoutError:
         # P0-4: timeout duro. Cancelar la task interna y esperar a que libere
         # el socket antes de propagar al caller.
@@ -2228,6 +2396,86 @@ def _emit_llm_timeout_metric(
         except Exception:
             pass
 
+
+def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float) -> None:
+    """[P1-COST-INSTRUMENTATION · 2026-05-15] Extrae model + usage_metadata
+    de un response exitoso de LangChain ChatGoogleGenerativeAI y persiste
+    a `llm_usage_events` via `db_profiles.log_llm_usage_event`.
+
+    Best-effort wrapper: cualquier fallo (parse, DB) se silencia. No
+    enmascara el response exitoso al caller.
+
+    Acceso a usage_metadata es defensivo — LangChain expone:
+      - `result.usage_metadata` (dict con input_tokens/output_tokens/total_tokens)
+      - `result.response_metadata.usage_metadata` (fallback path en algunas
+        versiones del SDK).
+    Cached tokens vienen como `cached_content_token_count` (Gemini) o
+    `input_token_details.cache_read` (LangChain canonical).
+    """
+    try:
+        model_name = None
+        for attr in ("model", "model_name", "_model"):
+            try:
+                cand = getattr(llm, attr, None)
+                if isinstance(cand, str) and cand:
+                    model_name = cand
+                    break
+            except Exception:
+                continue
+        if not model_name:
+            return
+
+        usage = None
+        try:
+            usage = getattr(result, "usage_metadata", None)
+        except Exception:
+            usage = None
+        if not usage:
+            try:
+                resp_meta = getattr(result, "response_metadata", None) or {}
+                usage = resp_meta.get("usage_metadata") if isinstance(resp_meta, dict) else None
+            except Exception:
+                usage = None
+        if not usage or not isinstance(usage, dict):
+            return
+
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        cached_tokens = 0
+        details = usage.get("input_token_details")
+        if isinstance(details, dict):
+            cached_tokens = details.get("cache_read") or details.get("cached") or 0
+        if not cached_tokens:
+            cached_tokens = usage.get("cached_content_token_count", 0) or 0
+
+        # [P1-COST-INSTRUMENTATION-PHASE2 · 2026-05-16] Inyecta el nombre
+        # del nodo desde el ContextVar `_current_node_var`. Si la llamada
+        # ocurrió fuera de un nodo etiquetado (e.g. agent tools, scripts
+        # admin), `node` queda None → fila DB con `node=NULL` (legacy phase 1).
+        try:
+            current_node = _current_node_var.get()
+        except Exception:
+            current_node = None
+
+        from db_profiles import log_llm_usage_event
+        log_llm_usage_event(
+            model=model_name,
+            node=current_node,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_tokens=int(cached_tokens) if cached_tokens else 0,
+            metadata={"duration_s": round(float(duration_s), 3)},
+        )
+    except Exception as _e_emit:
+        try:
+            logger.debug(
+                f"[P1-COST-INSTRUMENTATION] emit usage event falló "
+                f"(best-effort): {_e_emit!r}"
+            )
+        except Exception:
+            pass
+
+
 class PersistentLLMCache:
     """Implementa un diccionario persistente para reemplazar la caché en memoria"""
     def __init__(self, ttl_seconds=300):
@@ -2280,7 +2528,11 @@ class PersistentLLMCache:
             if res:
                 return res["value"] if isinstance(res["value"], list) or isinstance(res["value"], dict) else json.loads(res["value"])
         except Exception as e:
-            logger.warning(f"DB async cache read error: {e}")
+            # [P3-LOG-CLARITY · 2026-05-16] Bajado de warning→info: cache MISS
+            # por pool saturado es BEST-EFFORT (el LLM call procede normal sin
+            # cache hit; solo perdemos la optimización de evitar 1 prompt
+            # duplicado). El plan NO falla por esto.
+            logger.info(f"[LLM-CACHE] DB async miss (best-effort, LLM call procede): {e}")
         return default
 
     def __getitem__(self, key):
@@ -2315,7 +2567,10 @@ class PersistentLLMCache:
                 (key, json.dumps(value))
             )
         except Exception as e:
-            logger.warning(f"DB async cache write error: {e}")
+            # [P3-LOG-CLARITY · 2026-05-16] Bajado de warning→info: cache SET
+            # fallido es BEST-EFFORT (perdemos opt de cachear este prompt
+            # para próximas calls; no afecta el plan actual).
+            logger.info(f"[LLM-CACHE] DB async set skipped (best-effort, no afecta plan): {e}")
 
 # Brecha 1 Fix: Estado Persistente (Redis / Supabase)
 # P1-NEW-2: TTL configurable vía `MEALFIT_LLM_CACHE_TTL_S`. Default 300s.
@@ -3444,6 +3699,181 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
 #   Pipeline budget 720s, intento #1 típicamente 230-300s, deja
 #   ~420-490s. Pro retry consume ~370s → margen de 50-120s. Tight pero OK.
 DAY_GEN_RETRY_USE_PRO = _env_bool("MEALFIT_DAY_GEN_RETRY_USE_PRO", True)
+
+# [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] Habilita el switch idiomático a
+# `SystemMessage` + `HumanMessage` para `plan_skeleton` y `generate_single_day`.
+# Gemini procesa `SystemMessage` como `system_instruction` separado del user
+# content — es el target canónico del implicit prompt caching (Gemini reutiliza
+# tokens del system_instruction entre requests consecutivos dentro del TTL,
+# cobrando ~25% del input price normal).
+#
+# Pre-fix: tanto `PLANNER_SYSTEM_PROMPT` (~960 tok) como
+# `DAY_GENERATOR_SYSTEM_PROMPT` (~4900 tok) + schema JSON estaban concatenados
+# AL FINAL de un único `HumanMessage`. Sin SystemMessage separado, Gemini no
+# puede identificar la región estática del prompt → cache hit rate ≈ 0% →
+# se paga full input price en cada llamada.
+#
+# Riesgo: algunos prompts están escritos asumiendo que el modelo lee
+# instrucciones al FINAL del payload. Switch a SystemMessage cambia la
+# disposición — riesgo de regresión en calidad. Mitigación:
+#   - Knob default True pero flippable a False sin redeploy si plan_quality_degraded
+#     alerts (invariante I5) suben tras deploy.
+#   - SOP post-deploy: generar 2-3 planes consecutivos, query
+#     `SELECT model, input_tokens, cached_tokens FROM llm_usage_events
+#      ORDER BY created_at DESC LIMIT 10` — `cached_tokens > 0` en runs
+#     2+ confirma que el caching está hitando.
+#
+# ROI esperado: -40-60% del input cost en planes consecutivos (warm cache).
+# Si solo 1 plan generándose, no hay hit (cold cache, primer request).
+PROMPT_CACHE_SYSTEM_MESSAGE = _env_bool("MEALFIT_PROMPT_CACHE_SYSTEM_MESSAGE", True)
+
+# [P1-PROMPT-CACHE-STAGGER · 2026-05-16] Audit 2026-05-16 reveló cache hit
+# de solo 16% en Flash regular (vs. 50%+ esperado de P1-PROMPT-CACHE-SYSTEMMSG).
+# Root cause: las 3 day_gen llamadas paralelas arrancan SIMULTÁNEAMENTE → todas
+# son "primer request" para el cache server-side → ninguna se beneficia del cache
+# de las otras. La 1ra puebla el cache pero las 2da y 3ra ya están mid-flight.
+#
+# Fix opt-in: stagger los días 2+3 por N ms tras lanzar día 1. Trade-off:
+#   - Stagger=0 (default actual): comportamiento legacy, paralelismo puro,
+#     cache hit ~16% (solo retries dentro de TTL).
+#   - Stagger=2000 (recomendado para activar): día 1 fire t=0; día 2 fire
+#     t=2000ms (cache populado); día 3 fire t=4000ms. Latencia plan +~4s,
+#     cache hit esperado ~50-60% en days 2+3 = $0.20-0.30/plan ahorrado.
+#
+# Default 0 (conservador). Operador activa con MEALFIT_DAY_GEN_CACHE_STAGGER_MS=2000
+# y mide via `SELECT pct_cached FROM llm_usage_events` antes/después.
+DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",     0)
+
+
+# [P1-PROMPT-CACHE-STAGGER · 2026-05-16] Pre-computar el SystemMessage del
+# day_generator UNA vez al import. ANTES, `schema_dict = SingleDayPlanModel.
+# model_json_schema()` se invocaba en cada call de `generate_single_day`
+# (línea ~4644) y se concatenaba a `_schema_instruction` para construir
+# `day_system_instruction`. Esto introducía dos riesgos:
+#   1. Re-computación innecesaria por call (~2-3ms × N días/plan).
+#   2. Cualquier variance de Pydantic en el orden de keys entre llamadas
+#      rompía la byte-equivalence del SystemMessage → cache miss garantizado.
+#
+# El sort_keys=True elimina la 2da fuente de variance (orden de keys no-
+# determinístico es un edge case de Pydantic raro pero documentado).
+# El pre-cómputo al import elimina la 1ra fuente.
+#
+# Tooltip-anchor: P1-PROMPT-CACHE-STAGGER-MODULE-CONSTANTS
+def _build_day_schema_instruction() -> str:
+    """Construye la sección del prompt que declara el JSON schema del día.
+    sort_keys=True garantiza byte-equivalence entre invocaciones."""
+    schema_dict = SingleDayPlanModel.model_json_schema()
+    return (
+        "\n\nDEBES DEVOLVER ESTRICTAMENTE UN JSON VÁLIDO QUE CUMPLA CON "
+        "ESTE ESQUEMA (NO incluyas bloques de markdown como ```json):\n"
+        + json.dumps(schema_dict, sort_keys=True)
+    )
+
+
+_DAY_SCHEMA_INSTRUCTION = _build_day_schema_instruction()
+_DAY_SYSTEM_INSTRUCTION_CACHED = DAY_GENERATOR_SYSTEM_PROMPT + _DAY_SCHEMA_INSTRUCTION
+
+
+# [P1-FLASH-LITE-AUX-NODES · 2026-05-15] Modelos auxiliares de pipeline
+# (judge / fact_checker / reviewer) hacen tareas binarias bajo schema strict.
+# Gemini Flash-Lite Preview ($0.10/M in, $0.40/M out) rinde igual que Flash
+# regular ($0.30/M in, $2.50/M out) en `with_structured_output(...)` cuando
+# el output es boolean/enum/schema fijo (vs. generación creativa de planes
+# que sí requiere Flash o Pro).
+#
+# Pre-fix:
+#   - judge_llm: usa `_route_model(form_data, force_fast=False)` → ESCALA A
+#     PRO en perfiles clínicos complejos (medical conditions, alergias >1).
+#     Costoso (~$0.030/judge invocation cuando hay perfil complejo).
+#   - fact_checker_llm: ya usa `_route_model(force_fast=True)` → siempre
+#     `gemini-3-flash-preview`. Margen de bajar a Lite.
+#   - reviewer_llm: `_route_model(form_data, attempt=1)` → mismo escalado a
+#     Pro que judge.
+#
+# Trade-off documentado: este P-fix REMUEVE el escalado automático a Pro
+# para estos 3 nodos. Mitigación: cada nodo tiene su propio knob de
+# override — si la calidad regresiona en un perfil clínico, el SRE pone
+# `MEALFIT_<NODE>_MODEL=gemini-3.1-pro-preview` en EasyPanel sin redeploy.
+#
+# Sigue convención P3-PREVIEW-MODEL-KNOB (CLAUDE.md): callsites en
+# crons/loops productivos leen model ID desde knob — modelos preview pueden
+# deprecarse sin aviso (audit 2026-05-11: `gemini-3.1-pro-preview` open=true
+# 4.4 días). Knob permite swap sin redeploy.
+_FLASH_LITE_DEFAULT = "gemini-3.1-flash-lite-preview"
+
+
+def _judge_model_name() -> str:
+    """[P1-FLASH-LITE-AUX-NODES] Modelo del adversarial judge.
+    Default Flash-Lite (tarea binaria con `AdversarialJudgeResult` schema).
+    Override knob: `MEALFIT_JUDGE_MODEL` (sin redeploy si calidad degrada)."""
+    return _env_str("MEALFIT_JUDGE_MODEL", _FLASH_LITE_DEFAULT) or _FLASH_LITE_DEFAULT
+
+
+def _fact_checker_model_name() -> str:
+    """[P1-FLASH-LITE-AUX-NODES] Modelo del fact-checker clínico.
+    Default Flash-Lite (investigación con tools + reporte conciso, schema-light).
+    Override knob: `MEALFIT_FACT_CHECKER_MODEL`."""
+    return _env_str("MEALFIT_FACT_CHECKER_MODEL", _FLASH_LITE_DEFAULT) or _FLASH_LITE_DEFAULT
+
+
+def _reviewer_model_name() -> str:
+    """[P1-FLASH-LITE-AUX-NODES] Modelo del reviewer (pipeline_holistic).
+    Default Flash-Lite (`ReviewResult` schema strict, temp=0.1).
+    Override knob: `MEALFIT_REVIEWER_MODEL`."""
+    return _env_str("MEALFIT_REVIEWER_MODEL", _FLASH_LITE_DEFAULT) or _FLASH_LITE_DEFAULT
+
+
+# [P1-PROMPT-TRIM-FORM-DATA · 2026-05-15] Reduce el dump de `form_data`
+# inyectado al prompt de `plan_skeleton_node` y `generate_single_day`.
+#
+# Pre-fix: el callsite hacía `json.dumps(form_data, indent=2)` que volcaba
+# TODAS las claves del form_data — incluyendo metadata pipeline-internal
+# con prefijo `_` (e.g. `_chunk_lessons`, `_adherence_hint`, `_emotional_state`,
+# `_chunk_prior_meals`, `_pipeline_drift_alert`, `_days_offset`,
+# `_plan_start_date`, `_drastic_change_strategy`, `_quality_hint`, ~25
+# claves más). Estas claves:
+#   1. NO son información que el LLM generador necesite leer directamente.
+#   2. YA están "absorbidas" en los `ctx[...]` que se inyectan separadamente
+#      (e.g. `ctx['chunk_lessons_context']` viene de `_chunk_lessons`,
+#      `ctx['quality_hint_context']` viene de `_adherence_hint`, etc.).
+#   3. Las que SÍ son user-facing (chunk_prior_meals, pipeline_drift_alert,
+#      auto_simplify) ya se inyectan como instrucciones explícitas en el
+#      prompt en sus respectivas ramas (líneas 4003, 3995, 3998).
+#
+# Resultado pre-fix: ~30-50% del dump JSON eran claves `_*` redundantes.
+# Para un form_data típico el dump pesa ~2-3K tokens; ~1-1.5K son ruido.
+#
+# Estimación de ahorro: planner ~1K tokens × 1 invocación + day_gen ~1K
+# tokens × 3 invocaciones paralelas = ~4K input tokens menos por plan. A
+# Pro pricing ($1.25/M) = ~$0.005/plan. A Flash ($0.30/M) en day_gen =
+# ~$0.001/plan. Sumado en escala: significativo.
+#
+# Trade-off: si el LLM resulta usar alguna `_*` clave en su "razonamiento
+# implícito" (e.g. inferir de `_emotional_state` un tono más cálido sin
+# necesitar el `motivation_context` explícito), calidad puede degradar
+# sutilmente. Kill switch: `MEALFIT_PROMPT_TRIM_FORM_DATA=False`.
+#
+# IMPORTANTE: este helper solo afecta el dump al PROMPT. El código backend
+# sigue leyendo todas las claves de `form_data` (line 4003 chunk_prior_meals,
+# etc.). No es una mutación del state.
+PROMPT_TRIM_FORM_DATA = _env_bool("MEALFIT_PROMPT_TRIM_FORM_DATA", True)
+
+
+def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
+    """[P1-PROMPT-TRIM-FORM-DATA · 2026-05-15] Retorna una copia de
+    `form_data` SIN las claves pipeline-internal con prefijo `_`.
+
+    Si `PROMPT_TRIM_FORM_DATA=False` (kill switch), retorna `form_data`
+    sin cambios (legacy behavior).
+
+    No muta el original. El código backend que consume `form_data["_xxx"]`
+    debe seguir leyendo del state, NO del retorno de este helper.
+    """
+    if not isinstance(form_data, dict):
+        return form_data
+    if not PROMPT_TRIM_FORM_DATA:
+        return form_data
+    return {k: v for k, v in form_data.items() if not (isinstance(k, str) and k.startswith("_"))}
 _PRO_MODEL_NAME = "gemini-3.1-pro-preview"
 _FLASH_MODEL_NAME = "gemini-3-flash-preview"
 
@@ -3656,6 +4086,7 @@ def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) ->
 
 
 # ============================================================
+@_node_label("compressor")
 async def context_compression_node(state: PlanState) -> dict:
     """Mejora 4: Comprime el exceso de contexto para evitar Lost in the Middle."""
     history_context = state.get("history_context", "")
@@ -3732,6 +4163,7 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
 # ============================================================
 # NODO 1: PLANIFICADOR (Fase Map — esqueleto liviano)
 # ============================================================
+@_node_label("planner")
 async def plan_skeleton_node(state: PlanState) -> dict:
     attempt = state.get("attempt", 1)
     form_data = state["form_data"]
@@ -3798,10 +4230,18 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         
     techniques_str = "\n".join(techniques_lines)
 
-    prompt_text = (
+    # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] El prompt se compone en dos
+    # tramos. Cuando `PROMPT_CACHE_SYSTEM_MESSAGE=True` (default), el tramo
+    # ESTÁTICO (`PLANNER_SYSTEM_PROMPT`) viaja en un `SystemMessage` separado
+    # — Gemini lo trata como `system_instruction`, primer target del implicit
+    # caching. El tramo DINÁMICO (info usuario + ctx + técnicas) va en el
+    # `HumanMessage` que cambia cada llamada y no es cacheable.
+    # Cuando el knob está False, ambos se concatenan en un solo string como
+    # antes (legacy path, kill switch sin redeploy).
+    dynamic_prompt_text = (
         f"Analiza la siguiente información del usuario y diseña el ESQUELETO de un plan de {days_in_chunk} alternativas/días.\n"
         f"Semilla de generación aleatoria: {random_seed}\n\n"
-        f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
+        f"Información del Usuario:\n{json.dumps(_sanitize_form_data_for_prompt(form_data), indent=2)}\n"
         f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n{ctx['prev_chunk_adherence_context']}\n{ctx['weight_history_context']}\n{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
         f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n{ctx['history_context']}\n"
         f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['prices_context']}\n"
@@ -3811,8 +4251,11 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"{ctx['sleep_stress_context']}\n\n"
         f"Técnicas de cocción asignadas (una por día):\n"
         f"{techniques_str}\n\n"
-        f"{PLANNER_SYSTEM_PROMPT}"
     )
+    if PROMPT_CACHE_SYSTEM_MESSAGE:
+        prompt_text = dynamic_prompt_text
+    else:
+        prompt_text = dynamic_prompt_text + PLANNER_SYSTEM_PROMPT
 
     if state.get("reflection_directive"):
         prompt_text = f"🧠 DIRECTIVA META-LEARNING (PRIORIDAD MÁXIMA):\n{state['reflection_directive']}\n\n" + prompt_text
@@ -3883,7 +4326,18 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             # timeout=45 pero el SDK no siempre lo respeta con sockets colgados.
             # tenacity hará 3 retries, con cap explícito de 50s/intento mantenemos
             # el peor caso ~150s. _safe_ainvoke garantiza cleanup del socket.
-            res = await _safe_ainvoke(planner_llm, prompt_text, timeout=50.0)
+            # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] Cuando el knob está
+            # habilitado, enviar SystemMessage + HumanMessage para que Gemini
+            # reciba el system prompt como `system_instruction` separado
+            # (target canónico del implicit caching).
+            if PROMPT_CACHE_SYSTEM_MESSAGE:
+                planner_payload = [
+                    SystemMessage(content=PLANNER_SYSTEM_PROMPT),
+                    HumanMessage(content=prompt_text),
+                ]
+            else:
+                planner_payload = prompt_text
+            res = await _safe_ainvoke(planner_llm, planner_payload, timeout=50.0)
             await _planner_cb.arecord_success()
             return res
         except Exception as e:
@@ -3963,6 +4417,115 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     }
 
 
+def _sanitize_unauthorized_protein_text(
+    day_result: dict,
+    unauthorized_keys: set,
+    day_num: int,
+) -> int:
+    """[P2-PROTEIN-VIOLATION-SANITIZE · 2026-05-16] Sanitización defensiva
+    del `name` y `recipe` text de meals cuando el bounded regen NO logra
+    eliminar las menciones de proteínas prohibidas.
+
+    Bug observado plan_id=fbd014b2 2026-05-16: el LLM persistió en proponer
+    "Chuleta al Airfryer con Tostones" después del regen forzado. Sin esta
+    sanitización, el meal final tenía name="Chuleta..." + ingredients SIN
+    chuleta → reviewer médico rechazaba por "almuerzo sin proteína adecuada".
+
+    Estrategia:
+      - Para cada meal con violation: scrub el name reemplazando la palabra
+        prohibida por placeholder genérico ("Plato del Almuerzo", "Cena del
+        Día"). Si el name queda vacío tras strip, usar fallback por meal_type.
+      - Para cada step del recipe array: reemplazar la palabra prohibida por
+        "ingrediente alternativo". El usuario verá texto consistente con
+        ingredients (que ya está strippeado).
+      - Marcar el meal con `_protein_violation_sanitized: list[str]` para
+        audit downstream.
+
+    Returns:
+        Número de text replacements realizados (suma de name + recipe steps).
+    """
+    if not isinstance(day_result, dict) or not unauthorized_keys:
+        return 0
+
+    _MEAL_TYPE_FALLBACK_NAMES = {
+        "desayuno": "Desayuno del Día",
+        "almuerzo": "Plato del Almuerzo",
+        "merienda": "Merienda del Día",
+        "cena": "Cena del Día",
+    }
+    _total_replacements = 0
+    for _meal in day_result.get('meals', []):
+        if not isinstance(_meal, dict):
+            continue
+        _meal_violations_sanitized = []
+        # 1. Sanitizar name.
+        _name = _meal.get('name', '') or ''
+        _name_lower = _name.lower()
+        _name_was_modified = False
+        for _uk in unauthorized_keys:
+            if ' ' in _uk:
+                # Multi-palabra: substring replace case-insensitive.
+                if _uk in _name_lower:
+                    _pattern = _re.compile(_re.escape(_uk), _re.IGNORECASE)
+                    _name = _pattern.sub('', _name).strip()
+                    _name_lower = _name.lower()
+                    _name_was_modified = True
+                    _meal_violations_sanitized.append(_uk)
+                    _total_replacements += 1
+            else:
+                # Single word: word boundary.
+                _pattern = _re.compile(rf'\b{_re.escape(_uk)}\b', _re.IGNORECASE)
+                if _pattern.search(_name):
+                    _name = _pattern.sub('', _name).strip()
+                    _name_lower = _name.lower()
+                    _name_was_modified = True
+                    _meal_violations_sanitized.append(_uk)
+                    _total_replacements += 1
+        # Cleanup: colapsar dobles espacios, strip puntuación huérfana al inicio/fin.
+        if _name_was_modified:
+            _name = _re.sub(r'\s+', ' ', _name).strip(' .,:;-')
+            # Si el name queda muy corto o vacío, usar fallback por meal_type.
+            if len(_name) < 4:
+                _meal_type = (_meal.get('meal_type') or '').lower().strip()
+                _name = _MEAL_TYPE_FALLBACK_NAMES.get(_meal_type, "Plato del Día")
+            _meal['name'] = _name
+
+        # 2. Sanitizar recipe steps.
+        _recipe = _meal.get('recipe', []) or []
+        if isinstance(_recipe, list):
+            _new_recipe = []
+            for _step in _recipe:
+                if not isinstance(_step, str):
+                    _new_recipe.append(_step)
+                    continue
+                _step_modified = False
+                for _uk in unauthorized_keys:
+                    if ' ' in _uk:
+                        if _uk in _step.lower():
+                            _pattern = _re.compile(_re.escape(_uk), _re.IGNORECASE)
+                            _step = _pattern.sub('ingrediente alternativo', _step)
+                            _step_modified = True
+                    else:
+                        _pattern = _re.compile(rf'\b{_re.escape(_uk)}\b', _re.IGNORECASE)
+                        if _pattern.search(_step):
+                            _step = _pattern.sub('ingrediente alternativo', _step)
+                            _step_modified = True
+                if _step_modified:
+                    _total_replacements += 1
+                _new_recipe.append(_step)
+            _meal['recipe'] = _new_recipe
+
+        # 3. Marcar audit trail.
+        if _meal_violations_sanitized:
+            _meal['_protein_violation_sanitized'] = _meal_violations_sanitized
+            logger.info(
+                f"🩹 [DÍA {day_num}] Meal '{_meal.get('name')}' sanitizado: "
+                f"removidas palabras {_meal_violations_sanitized} de name/recipe."
+            )
+
+    return _total_replacements
+
+
 def _apply_protein_pool_scrub(
     day_result: dict,
     skeleton_day: dict,
@@ -3989,7 +4552,7 @@ def _apply_protein_pool_scrub(
     """
     if not isinstance(day_result, dict):
         return 0, set()
-    from prompts.day_generator import _RESTRICTED_PROTEIN_KEYS
+    from prompts.day_generator import _RESTRICTED_PROTEIN_KEYS, _POOL_IMPLICATIONS
 
     pool_lower = ' '.join(skeleton_day.get('protein_pool', [])).lower() if skeleton_day else ''
 
@@ -4000,9 +4563,20 @@ def _apply_protein_pool_scrub(
             return key in text
         return bool(_re.search(rf'\b{_re.escape(key)}\b', text))
 
+    # [P0-PROTEIN-POOL-IMPLICATIONS · 2026-05-16] Auto-autorizar keys del
+    # mismo grupo proteico cuando el pool las trae explícitamente.
+    # Ej: pool=['Chuleta'] → 'cerdo' queda auto-autorizado porque "chuleta
+    # de cerdo" es la expansión natural del LLM. Sin esto, el matcher
+    # eliminaba el ingrediente y la receta quedaba sin proteína (bug del
+    # plan aeb25e1c día 2).
+    implied_authorized: set[str] = set()
+    for pool_key, implied_set in _POOL_IMPLICATIONS.items():
+        if _key_in_text(pool_key, pool_lower):
+            implied_authorized.update(implied_set)
+
     unauthorized_keys = {
         k for k in _RESTRICTED_PROTEIN_KEYS
-        if not _key_in_text(k, pool_lower)
+        if not _key_in_text(k, pool_lower) and k not in implied_authorized
     }
     if not unauthorized_keys:
         return 0, set()
@@ -4054,6 +4628,7 @@ def _apply_protein_pool_scrub(
 # ============================================================
 # NODO 2: GENERADORES PARALELOS (Fase Reduce — 3 días simultáneos)
 # ============================================================
+@_node_label("day_generator")
 async def generate_days_parallel_node(state: PlanState) -> dict:
     """Genera los 7 días completos en PARALELO usando el esqueleto del planificador."""
     skeleton = state["plan_skeleton"]
@@ -4148,10 +4723,17 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
 
         random_seed = random.randint(10000, 99999)
 
-        prompt_text = (
+        # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] Mismo patrón que en
+        # plan_skeleton: tramo DINÁMICO en `prompt_text`; tramo ESTÁTICO
+        # (DAY_GENERATOR_SYSTEM_PROMPT + schema JSON) viaja en SystemMessage
+        # cuando el knob está habilitado. El schema_dict de Pydantic es
+        # determinístico — incluirlo en el SystemMessage lo hace cacheable
+        # también (~5K tokens adicionales que cobramos solo en el primer
+        # request del TTL bucket).
+        dynamic_day_prompt = (
             f"Genera las comidas completas para el DÍA {day_num} del plan.\n"
             f"Semilla de generación aleatoria: {random_seed}\n\n"
-            f"Información del Usuario:\n{json.dumps(form_data, indent=2)}\n"
+            f"Información del Usuario:\n{json.dumps(_sanitize_form_data_for_prompt(form_data), indent=2)}\n"
             f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n{ctx['prev_chunk_adherence_context']}\n"
             f"{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
             f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n"
@@ -4162,8 +4744,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             f"{ctx['sleep_stress_context']}\n"
             f"{assignment_context}\n"
             f"{recycled_days_context}\n"
-            f"{DAY_GENERATOR_SYSTEM_PROMPT}"
         )
+        if PROMPT_CACHE_SYSTEM_MESSAGE:
+            prompt_text = dynamic_day_prompt
+        else:
+            prompt_text = dynamic_day_prompt + DAY_GENERATOR_SYSTEM_PROMPT
 
         # [P4-MODEL-1] Usar router especializado del day generator que
         # escala a Pro en retry cuando el rechazo previo fue skeleton
@@ -4190,9 +4775,19 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         from tools_nutrition import NUTRITION_TOOLS, consultar_nutricion
         day_llm_with_tools = day_llm.bind_tools(NUTRITION_TOOLS)
 
-        # Inject the schema strictly so the model returns raw JSON
-        schema_dict = SingleDayPlanModel.model_json_schema()
-        streaming_prompt = prompt_text + f"\n\nDEBES DEVOLVER ESTRICTAMENTE UN JSON VÁLIDO QUE CUMPLA CON ESTE ESQUEMA (NO incluyas bloques de markdown como ```json):\n{json.dumps(schema_dict)}"
+        # [P1-PROMPT-CACHE-STAGGER · 2026-05-16] System instruction
+        # pre-computado a nivel módulo (`_DAY_SYSTEM_INSTRUCTION_CACHED` /
+        # `_DAY_SCHEMA_INSTRUCTION`). Eliminamos la generación per-call de
+        # `schema_dict` que (a) gastaba ~2-3ms x día y (b) podía romper
+        # byte-equivalence del SystemMessage si Pydantic reordenaba keys
+        # entre llamadas — cualquier variance = cache miss garantizado.
+        # `sort_keys=True` en el dumps módulo-level garantiza determinismo.
+        if PROMPT_CACHE_SYSTEM_MESSAGE:
+            streaming_prompt = prompt_text
+            day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED
+        else:
+            streaming_prompt = prompt_text + _DAY_SCHEMA_INSTRUCTION
+            day_system_instruction = None
 
         # P1-10: HumanMessage/AIMessage/ToolMessage están a nivel módulo
 
@@ -4206,7 +4801,16 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             if not await _day_cb.acan_proceed():
                 raise Exception(f"Circuit Breaker OPEN para {day_model} - LLM cascade failure prevented")
             try:
-                messages = [HumanMessage(content=streaming_prompt)]
+                # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] SystemMessage al
+                # inicio cuando el knob está habilitado — Gemini lo trata
+                # como system_instruction separado, target del implicit cache.
+                if day_system_instruction is not None:
+                    messages = [
+                        SystemMessage(content=day_system_instruction),
+                        HumanMessage(content=streaming_prompt),
+                    ]
+                else:
+                    messages = [HumanMessage(content=streaming_prompt)]
                 accumulated_json = ""
 
                 # Agent loop (hasta 4 interacciones de herramientas permitidas)
@@ -4357,10 +4961,25 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                     context_label="PARALLEL-GEN-REGEN",
                 )
                 if _violations_post > 0:
+                    # [P2-PROTEIN-VIOLATION-SANITIZE · 2026-05-16] Pre-fix:
+                    # se aceptaba el meal sin más → reviewer médico rechazaba
+                    # el plan porque el name decía "Chuleta..." pero ingredients
+                    # NO tenía chuleta → "deficiencia nutricional severa en el
+                    # almuerzo del Día 2, donde solo se incluyen tostones sin
+                    # una fuente de proteína adecuada" (plan_id=fbd014b2 2026-05-16).
+                    # Post-fix: sanitización defensiva del name y recipe text
+                    # del meal afectado, eliminando las palabras de la proteína
+                    # prohibida. El meal queda con name genérico ("Plato del
+                    # Almuerzo") + recipe sin referencias a la proteína prohibida,
+                    # consistente con el ingredients ya strippeado.
+                    _sanitized_count = _sanitize_unauthorized_protein_text(
+                        day_result, _unauthorized_keys, day_num,
+                    )
                     logger.warning(
-                        f"⚠️  [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION persistió tras regen — "
-                        f"el LLM ignoró el warning. Aceptando para evitar loop; downstream "
-                        f"(critique/reviewer) lo manejará."
+                        f"⚠️  [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION persistió tras regen "
+                        f"({_violations_post} meals afectados); sanitizando name/recipe "
+                        f"defensivamente ({_sanitized_count} text replacements) para "
+                        f"mantener consistencia con ingredients strippeado."
                     )
                 else:
                     logger.info(f"✅ [DÍA {day_num}] PROTEIN-RECIPE-VIOLATION resuelta tras regen forzado.")
@@ -4438,7 +5057,14 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
     HEDGE_AFTER_BASE = HEDGE_AFTER_BASE_S
     HARD_CEILING = HARD_CEILING_S
     hedge_after = HEDGE_AFTER_BASE + max(0, days_in_chunk - 4) * 10.0
-    HEDGE_MAX_CONCURRENT = max(1, LLM_SEMAPHORE.max_concurrent // 2)
+    # [P2-HEDGE-LIMITER-RAISE · 2026-05-16] Antes: hardcoded `max(1, max_concurrent // 2)`
+    # que daba 2 con LLM_MAX_CONCURRENT=4. Ahora knob explícito con default 3.
+    # Clamp superior preserva headroom para primaries (al menos 1 slot libre del
+    # semáforo global para que un primary nuevo pueda arrancar mientras hay
+    # hedges en flight). Floor 1 para que el limiter no quede en 0 si alguien
+    # setea el knob a un valor extremo.
+    _hedge_cap_ceiling = max(1, LLM_SEMAPHORE.max_concurrent - 1)
+    HEDGE_MAX_CONCURRENT = max(1, min(HEDGE_MAX_CONCURRENT_KNOB, _hedge_cap_ceiling))
     # Counter compartido entre todos los `_generate_day_hedged` del nodo.
     # Lista de un elemento para mutar desde el closure sin `nonlocal` (que
     # rompería si en futuro se mueve la fn fuera de generate_days_parallel_node).
@@ -4634,14 +5260,49 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             if len(day_coros) == 1:
                 results = [await day_coros[0]]
             else:
-                results = await asyncio.gather(*day_coros)
+                # [P1-PROMPT-CACHE-STAGGER · 2026-05-16] Stagger opt-in: si
+                # `DAY_GEN_CACHE_STAGGER_MS > 0`, retrasamos days 2..N para
+                # que el day 1 popule el implicit cache de Gemini ANTES de
+                # que los demás disparen. Resultado esperado: days 2..N
+                # hitan cache → cached_tokens > 0 → input cost -25% para
+                # esos N-1 días. Trade: latencia plan += (N-1) * stagger_ms.
+                # Default knob = 0 (sin cambio de comportamiento legacy).
+                stagger_ms = DAY_GEN_CACHE_STAGGER_MS
+                if stagger_ms > 0 and len(day_coros) > 1:
+                    async def _staggered(coro, delay_s):
+                        if delay_s > 0:
+                            await asyncio.sleep(delay_s)
+                        return await coro
+                    staggered_coros = [
+                        _staggered(c, (i * stagger_ms) / 1000.0)
+                        for i, c in enumerate(day_coros)
+                    ]
+                    results = await asyncio.gather(*staggered_coros)
+                else:
+                    results = await asyncio.gather(*day_coros)
                 
             for day_num, result, err in results:
                 if result is not None:
                     generated_days.append(result)
                 else:
-                    err_name = type(err).__name__ if err else "unknown"
-                    logger.error(f"❌ [DÍA {day_num}] Falló definitivamente tras hedging: {err_name}")
+                    # [P2-HEDGE-EXC-DETAIL · 2026-05-16] Logueamos tipo + mensaje +
+                    # traceback. Antes solo `type(err).__name__` ("Exception")
+                    # → imposible distinguir 503 Gemini vs rate-limit vs CB-OPEN
+                    # vs TimeoutError(ceiling). Incidente plan bf6f1383 perdió
+                    # 8 min de diagnóstico por esto.
+                    if err is not None:
+                        err_name = type(err).__name__
+                        err_msg = (str(err) or "(empty)")[:300]
+                        logger.error(
+                            f"❌ [DÍA {day_num}] Falló definitivamente tras hedging: "
+                            f"{err_name}: {err_msg}",
+                            exc_info=(type(err), err, err.__traceback__),
+                        )
+                    else:
+                        logger.error(
+                            f"❌ [DÍA {day_num}] Falló definitivamente tras hedging: "
+                            f"unknown (no exception object captured)"
+                        )
                     failed_days.append(day_num)
 
         if failed_days and generated_days:
@@ -5014,6 +5675,7 @@ def _log_adversarial_metric(state, form_data, *, winner, rationale, pair_meta,
 _ADVERSARIAL_PROMPT_CHAR_BUDGET = 18000
 
 
+@_node_label("judge")
 async def adversarial_judge_node(state: PlanState) -> dict:
     """Evalúa dos candidatos de plan y selecciona el que mejor se adapte al perfil conductual del usuario."""
     candidate_b = state.get("candidate_b")
@@ -5094,7 +5756,12 @@ async def adversarial_judge_node(state: PlanState) -> dict:
     start_time = time.time()
 
     # P1-Q3: capturar modelo del juez para CB per-modelo
-    _judge_model = _route_model(form_data, force_fast=False)  # Necesitamos buen razonamiento
+    # [P1-FLASH-LITE-AUX-NODES · 2026-05-15] Default Flash-Lite via knob
+    # `MEALFIT_JUDGE_MODEL` — tarea schema-strict (AdversarialJudgeResult).
+    # Pre-fix usaba `_route_model(force_fast=False)` que escalaba a Pro en
+    # perfiles clínicos; ahora unified Lite default + override por knob
+    # si calidad regresiona en un perfil específico.
+    _judge_model = _judge_model_name()
     _judge_cb = _get_circuit_breaker(_judge_model)
     judge_llm = ChatGoogleGenerativeAI(
         model=_judge_model,
@@ -5579,6 +6246,7 @@ def _detect_slot_incoherence(days: list) -> list:
     return issues
 
 
+@_node_label("self_critique")
 async def self_critique_node(state: PlanState) -> dict:
     """Evalúa los días generados y aplica correcciones in-place si hay deficiencias."""
     partial = state.get("plan_result", {})
@@ -5884,6 +6552,19 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     if corrected_result:
                         corrected_day = corrected_result.model_dump()
                         corrected_day["day"] = day_num
+                        # [P3-SKELETON-FIDELITY-CRITIQUE-AWARE · 2026-05-16]
+                        # Marca el día como modificado por self_critique. El
+                        # check de SKELETON FIDELITY en `_run_assembly_validations`
+                        # usa este marker para aplicar threshold más permisivo
+                        # (>=3 missing proteins en lugar de >=2): self_critique
+                        # puede legítimamente reemplazar 1-2 proteínas para
+                        # mejorar diversidad/slot coherence; solo si TODAS las
+                        # proteínas asignadas se removieron hay bug real.
+                        # Incidente 2026-05-16 plan post-reset: critique sugirió
+                        # "Cambiar las claras de la cena por queso" → LLM removió
+                        # Soya/Tofu Y Queso Mozzarella → SKELETON FIDELITY
+                        # rechazó fatal → plan crítico abortado.
+                        corrected_day["_critique_applied"] = True
                         logger.info(f"✅ [SELF-CRITIQUE] Día {day_num} corregido exitosamente.")
                         # [PROTEIN-POOL-SCRUB 2026-05-07] Aplicar cleanup +
                         # scan tras corrección — el LLM puede reintroducir
@@ -6150,9 +6831,28 @@ def _run_assembly_validations(
             for ing in meal.get("ingredients", [])
         )
         missing_proteins = [p for p in assigned_proteins if p not in day_ingredients_text]
-        if len(missing_proteins) >= 2:
+        # [P3-SKELETON-FIDELITY-CRITIQUE-AWARE · 2026-05-16] Threshold dinámico
+        # según si self_critique modificó el día. Pre-fix: threshold hardcoded
+        # >=2 missing → rechazo crítico cuando self_critique legítimamente
+        # reemplazaba 1-2 proteínas para mejorar diversidad/slot coherence.
+        # Incidente 2026-05-16 plan post-reset: skeleton asignó
+        # ['soya/tofu', 'queso mozzarella'] a Día 1; critique sugirió
+        # "Cambiar las claras de la cena por queso"; LLM removió ambas →
+        # fidelity check rechazó fatal → plan crítico abortado pese a que
+        # el día tenía proteínas válidas (solo no las DEL SKELETON ORIGINAL).
+        # Post-fix: días con `_critique_applied=True` toleran missing 2/3
+        # del pool (solo flagean si TODAS las proteínas asignadas se
+        # removieron). Días sin self_critique mantienen threshold estricto
+        # >=2 (preserva detección de bugs del day_generator que ignora
+        # skeleton — caso original que motivó la check).
+        _critique_applied_for_day = bool(day.get("_critique_applied"))
+        _missing_threshold = 3 if _critique_applied_for_day else 2
+        if len(missing_proteins) >= _missing_threshold:
             msg = f"Día {day_num} omitió múltiples proteínas clave asignadas: {missing_proteins}"
-            logger.warning(f"⚠️ [SKELETON FIDELITY] {msg}")
+            logger.warning(
+                f"⚠️ [SKELETON FIDELITY] {msg} "
+                f"(threshold={_missing_threshold}, critique_applied={_critique_applied_for_day})"
+            )
             skeleton_fidelity_errors.append(msg)
     if skeleton_fidelity_errors:
         result["_skeleton_fidelity_errors"] = skeleton_fidelity_errors
@@ -6317,6 +7017,7 @@ def _run_assembly_validations(
         result["_schema_errors"] = err_msg
 
 
+@_node_label("assembler")
 async def assemble_plan_node(state: PlanState) -> dict:
     """Ensambla el plan final combinando skeleton + días paralelos + datos del calculador, o re-ensambla un plan en caché."""
     nutrition = state["nutrition"]
@@ -6497,11 +7198,38 @@ async def assemble_plan_node(state: PlanState) -> dict:
         # Limpiar ingredients vacíos que pudimos haber dejado al recortar.
         for _m in _d.get("meals") or []:
             _m["ingredients"] = [i for i in (_m.get("ingredients") or []) if str(i).strip()]
-    if _capped_per_meal or _capped_per_day:
+
+    # [P2-EGG-WHITE-MEALS-CAP · 2026-05-16] Tercer pass: limitar # meals/día
+    # con claras como proteína base. Pre-fix los caps anteriores no limitaban
+    # FRECUENCIA → reviewer médico rechazaba por "claras en múltiples comidas".
+    _capped_per_meal_count = 0
+    for _d in result.get("days") or []:
+        # Encontrar los meals que tienen claras (cualquier cantidad).
+        _meals_with_eggw_list = []  # list of (meal, ing_idx, count, rest)
+        for _m in _d.get("meals") or []:
+            _ings = _m.get("ingredients") or []
+            for _idx, _ing in enumerate(_ings):
+                _count, _rest = _parse_eggw_count(_ing)
+                if _count is not None and _count > 0:
+                    _meals_with_eggw_list.append((_m, _idx, _count, _rest))
+                    break  # 1 entry de claras por meal es suficiente para contarlo
+        # Si el día tiene más de MAX_MEALS_WITH_EGG_WHITES meals con claras,
+        # los meals EN EXCESO (los últimos en orden) ven sus claras recortadas
+        # a 1 simbólica (como aglutinante, no como proteína base).
+        if len(_meals_with_eggw_list) > MAX_MEALS_WITH_EGG_WHITES:
+            _meals_excess = _meals_with_eggw_list[MAX_MEALS_WITH_EGG_WHITES:]
+            for (_m_ref, _ing_idx, _cur_count, _rest) in _meals_excess:
+                if _cur_count > 1:
+                    _m_ref["ingredients"][_ing_idx] = f"1 {_rest}"
+                    _capped_per_meal_count += 1
+
+    if _capped_per_meal or _capped_per_day or _capped_per_meal_count:
         logger.info(
             f"🥚 [EGG-WHITE-CAP] {_capped_per_meal} meal(s) con >{MAX_EGG_WHITES_PER_MEAL} "
             f"claras recortado(s); {_capped_per_day} ajuste(s) por cap diario "
-            f"({MAX_EGG_WHITES_PER_DAY}/día)."
+            f"({MAX_EGG_WHITES_PER_DAY}/día); {_capped_per_meal_count} meal(s) recortados "
+            f"a 1 clara simbólica por exceder cap de frecuencia "
+            f"({MAX_MEALS_WITH_EGG_WHITES} meals/día)."
         )
 
     # Renumerar días y asignar day_name obligatoriamente (para parchar planes del semantic_cache)
@@ -7388,6 +8116,7 @@ def _collect_unresolved_marker_days(plan_result) -> list[int]:
     return sorted(out)
 
 
+@_node_label("surgical_marker")
 async def surgical_marker_regen_node(state: PlanState) -> dict:
     """[P5-MARKER-APPROVED-1] Re-corrige días con `_critique_unresolved`
     después de que el reviewer médico aprobó.
@@ -8223,6 +8952,7 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
         )
 
 
+@_node_label("reviewer")
 async def review_plan_node(state: PlanState) -> dict:
     """Revisa el plan generado para verificar seguridad médica."""
     plan = state["plan_result"]
@@ -8281,7 +9011,10 @@ async def review_plan_node(state: PlanState) -> dict:
 
             logger.info("🔬 [FACT-CHECKING] Iniciando investigación de alergias/condiciones...")
             # P1-Q3: capturar modelo del fact-checker para CB per-modelo
-            _fact_checker_model = _route_model(form_data, force_fast=True)
+            # [P1-FLASH-LITE-AUX-NODES · 2026-05-15] Default Flash-Lite via knob
+            # `MEALFIT_FACT_CHECKER_MODEL`. Pre-fix: `_route_model(force_fast=True)`
+            # hardcodeaba `gemini-3-flash-preview` (Flash regular).
+            _fact_checker_model = _fact_checker_model_name()
             _fact_checker_cb = _get_circuit_breaker(_fact_checker_model)
             fact_checker_llm = ChatGoogleGenerativeAI(
                 model=_fact_checker_model,
@@ -8439,7 +9172,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
 """
         
         # P1-Q3: capturar modelo del reviewer para CB per-modelo
-        _reviewer_model = _route_model(state.get("form_data", {}), attempt=1)
+        # [P1-FLASH-LITE-AUX-NODES · 2026-05-15] Default Flash-Lite via knob
+        # `MEALFIT_REVIEWER_MODEL` — tarea schema-strict (ReviewResult) con
+        # temp=0.1. Pre-fix: `_route_model(form_data, attempt=1)` escalaba a
+        # Pro en perfiles clínicos. Override por knob si regresión.
+        _reviewer_model = _reviewer_model_name()
         _reviewer_cb = _get_circuit_breaker(_reviewer_model)
         reviewer_llm = ChatGoogleGenerativeAI(
             model=_reviewer_model,
@@ -9256,6 +9993,7 @@ def should_retry(state: PlanState) -> str:
 class ReflectionResult(BaseModel):
     reflection: str = Field(description="Diagnóstico de la causa raíz en una oración.")
 
+@_node_label("meta_learning")
 async def reflection_node(state: PlanState) -> dict:
     """Analiza POR QUÉ el ciclo anterior tuvo bajo rendimiento (o alto rendimiento)."""
     form_data = state["form_data"]
@@ -9395,6 +10133,7 @@ async def reflection_node(state: PlanState) -> dict:
 # ============================================================
 # NODO 0: PRE-FLIGHT OPTIMIZATION (GAP D)
 # ============================================================
+@_node_label("preflight")
 async def preflight_optimization_node(state: PlanState) -> dict:
     """Lee métricas históricas y el score holístico (Meta-Learning) para auto-ajustar parámetros del pipeline."""
     form_data = state["form_data"]
@@ -9553,13 +10292,19 @@ async def preflight_optimization_node(state: PlanState) -> dict:
                         auto_adjusted = True
 
     except Exception as e:
-        logger.warning(f"⚠️ [PREFLIGHT] Error leyendo métricas de meta-learning: {e}")
+        # [P3-LOG-CLARITY · 2026-05-16] Bajado de warning→info y wording
+        # ajustado: meta-learning preflight es BEST-EFFORT (si no se puede
+        # leer historial, el pipeline usa defaults seguros). Pre-fix el
+        # mensaje empezaba con "Error" lo cual confundía al user que veía
+        # los logs durante la generación pensando que el plan fallaba.
+        logger.info(f"[PREFLIGHT] meta-learning sin datos previos, usando defaults (best-effort): {e}")
         
     return {"form_data": new_form_data} if auto_adjusted else {}
 
 # ============================================================
 # CONSTRUCTOR DEL GRAFO
 # ============================================================
+@_node_label("retry_reflection")
 async def retry_reflection_node(state: PlanState) -> dict:
     """Inyecta contexto de rechazo como directiva para el retry (GAP 1).
 
@@ -9705,6 +10450,7 @@ def _pantry_cache_discard_reason(actual_form: dict, cached_form: dict) -> Option
     return None
 
 
+@_node_label("semantic_cache_check")
 async def semantic_cache_check_node(state: PlanState) -> dict:
     """Busca un plan similar en la base de datos usando similitud de coseno para saltar la generación LLM.
 
@@ -13339,3 +14085,11 @@ def run_plan_pipeline(form_data: dict, history: list = None, taste_profile: str 
     else:
         # Path "standalone": script CLI sin loop activo. Sin overhead del pool.
         return asyncio.run(arun_plan_pipeline(**arun_kwargs))
+
+
+# [P3-KNOBS-INVENTORY-LATE-EMIT · 2026-05-15] Emit del inventario AL FINAL
+# del módulo — captura TODOS los knobs declarados a nivel módulo vía
+# `_env_*`, incluyendo los que viven downstream del cuerpo principal
+# (e.g. `PROMPT_CACHE_SYSTEM_MESSAGE`, `PROMPT_TRIM_FORM_DATA`,
+# `DAY_GEN_RETRY_USE_PRO`). Ver comentario en línea ~489 para contexto.
+_log_active_knobs()

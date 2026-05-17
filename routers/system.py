@@ -970,3 +970,112 @@ def admin_crons_status(request: Request):
         "knobs_kill_switches": knobs_kill_switches,
         "knobs_count_total": knobs_count_total,
     }
+
+
+@router.get("/admin/cost-by-node")
+def admin_cost_by_node(request: Request, hours: int = 24):
+    """[P1-COST-BY-NODE-ENDPOINT · 2026-05-16] Leaderboard de costo LLM por
+    nodo del pipeline, agregando `llm_usage_events` en una ventana temporal.
+
+    Hace consumible la columna `node` populada por P1-COST-INSTRUMENTATION-PHASE2
+    sin tener que entrar al SQL Editor cada vez. SRE abre el endpoint tras
+    cualquier plan generado y ve qué nodo gasta cuánto en tiempo real.
+
+    Auth: `Authorization: Bearer <CRON_SECRET>` (mismo patrón que el resto
+    de `/admin/*`). Rate-limited por `_check_admin_rate_limit`.
+
+    Query params:
+      - `hours` (int, default 24, clamp [1, 720]): ventana hacia atrás
+        desde NOW(). 720h = 30 días, máximo permitido para evitar full
+        table scans no acotados.
+
+    Retorna:
+      - `success`: True
+      - `window_hours`: el clamp aplicado.
+      - `total_calls`, `total_usd`, `total_cached_pct`: agregados globales.
+      - `by_node`: lista ordenada por `total_usd` desc:
+          `{node, model, calls, total_usd, avg_usd, in_tok, out_tok, cached_tok, cached_pct}`
+      - `unattributed`: bool — True si hay calls con `node=NULL` (típicamente
+        agent tools, scripts admin, llamadas pre-P1-COST-INSTRUMENTATION-PHASE2).
+
+    Anchor: P1-COST-BY-NODE-ENDPOINT.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)
+
+    # Clamp del ventana — defensa contra full-scan accidental + spam.
+    window_h = max(1, min(720, int(hours) if hours else 24))
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT
+                COALESCE(node, '(unattributed)') AS node,
+                model,
+                COUNT(*)::int AS calls,
+                COALESCE(SUM(cost_usd_micros), 0) AS cost_micros_sum,
+                COALESCE(AVG(cost_usd_micros), 0) AS cost_micros_avg,
+                COALESCE(SUM(input_tokens), 0)::bigint AS in_tok,
+                COALESCE(SUM(output_tokens), 0)::bigint AS out_tok,
+                COALESCE(SUM(cached_tokens), 0)::bigint AS cached_tok
+            FROM public.llm_usage_events
+            WHERE created_at > NOW() - make_interval(hours => %s)
+            GROUP BY node, model
+            ORDER BY cost_micros_sum DESC
+            """,
+            (window_h,),
+        )
+    except Exception as e:
+        logger.warning(f"[P1-COST-BY-NODE-ENDPOINT] query falló: {e}")
+        raise HTTPException(status_code=503, detail="DB query falló (best-effort).")
+
+    by_node: list[dict] = []
+    total_calls = 0
+    total_micros = 0
+    total_in_tok = 0
+    total_cached_tok = 0
+    has_unattributed = False
+    for r in (rows or []):
+        try:
+            cost_sum = int(r.get("cost_micros_sum") or 0)
+            cost_avg = int(r.get("cost_micros_avg") or 0)
+            in_tok = int(r.get("in_tok") or 0)
+            out_tok = int(r.get("out_tok") or 0)
+            cached_tok = int(r.get("cached_tok") or 0)
+            calls = int(r.get("calls") or 0)
+            node_name = str(r.get("node") or "(unattributed)")
+            if node_name == "(unattributed)":
+                has_unattributed = True
+            total_calls += calls
+            total_micros += cost_sum
+            total_in_tok += in_tok
+            total_cached_tok += cached_tok
+            by_node.append({
+                "node": node_name,
+                "model": r.get("model"),
+                "calls": calls,
+                "total_usd": round(cost_sum / 1_000_000.0, 4),
+                "avg_usd": round(cost_avg / 1_000_000.0, 6),
+                "in_tok": in_tok,
+                "out_tok": out_tok,
+                "cached_tok": cached_tok,
+                "cached_pct": (
+                    round(100.0 * cached_tok / in_tok, 1) if in_tok else 0.0
+                ),
+            })
+        except Exception as _row_err:
+            logger.debug(f"[P1-COST-BY-NODE-ENDPOINT] skip row: {_row_err}")
+
+    total_cached_pct = (
+        round(100.0 * total_cached_tok / total_in_tok, 1) if total_in_tok else 0.0
+    )
+
+    return {
+        "success": True,
+        "window_hours": window_h,
+        "total_calls": total_calls,
+        "total_usd": round(total_micros / 1_000_000.0, 4),
+        "total_cached_pct": total_cached_pct,
+        "unattributed": has_unattributed,
+        "by_node": by_node,
+    }

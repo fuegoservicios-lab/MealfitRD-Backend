@@ -13,6 +13,11 @@ from cache_manager import redis_client
 
 # Errores transitorios típicos del pooler de Supabase / red. Reintentar con
 # backoff corto. Otros errores (sintaxis SQL, permisos) NO se reintentan.
+# [P3-RECALC-503-CLASSIFICATION · 2026-05-16] Añadido `couldn't get a connection`
+# — el error específico de pool exhaustion del psycopg connection pool cuando
+# se excede el cap pgBouncer del free tier. Aparece en logs con frecuencia
+# durante visibilitychange/recalc bursts; clasificarlo como transient permite
+# al caller escalar a 503 (cliente reintenta) en lugar de 500 (sugiere bug).
 _TRANSIENT_DB_ERROR_FRAGMENTS = (
     "server disconnected",
     "connection reset",
@@ -22,6 +27,8 @@ _TRANSIENT_DB_ERROR_FRAGMENTS = (
     "ssl connection has been closed",
     "broken pipe",
     "timeout",
+    "couldn't get a connection",  # psycopg_pool exhaustion (free tier cap)
+    "remoteprotocolerror",  # httpx upstream supabase-py (idle conn died)
 )
 
 

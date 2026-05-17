@@ -54,6 +54,33 @@ DB_POOL_MAX_SIZE = _int_env("MEALFIT_DB_POOL_MAX_SIZE", 60, 1, 200)
 DB_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_POOL_TIMEOUT_S", 15.0, 1.0, 120.0)
 DB_POOL_MAX_IDLE_S = _float_env("MEALFIT_DB_POOL_MAX_IDLE_S", 300.0, 30.0, 1800.0)
 
+# [P1-POOL-ASYNC-SPLIT · 2026-05-16] Pool ASYNC con knobs SEPARADOS del SYNC.
+# Pre-fix: sync y async compartían `MEALFIT_DB_POOL_MAX_SIZE` → cada uno reservaba
+# hasta `max_size` conexiones independientes → total real = 2× max contra el cap
+# de pgBouncer Transaction Mode (~15-30 client conns free tier). Con max=25
+# compartido eso eran 50 conexiones contra un cap de 15-30 → el async era
+# stretched-thin permanentemente y emitía "couldn't get a connection after Xs"
+# 5-15× por plan (cache async, CB resets, meta-learning preflight).
+#
+# Post-fix: SYNC sigue con `MEALFIT_DB_POOL_MAX_SIZE` (queries críticas: INSERTs
+# de planes, transacciones de inventario, etc.); ASYNC tiene su propio knob con
+# default más conservador (8). Total = 25 + 8 = 33, MUY cercano al cap pgBouncer
+# pero dejando headroom: el sync sigue siendo el path principal y el async solo
+# absorbe bursts de cache/CB-reset/observabilidad que toleran fail-best-effort.
+#
+# Si migras a Supabase Pro / dedicated, subir ambos: SYNC max=60, ASYNC max=20.
+DB_ASYNC_POOL_MIN_SIZE = _int_env("MEALFIT_DB_ASYNC_POOL_MIN_SIZE", 2, 0, 20)
+# [P1-POOL-ASYNC-SPLIT-TUNE · 2026-05-16] Subido 8→12 tras observar que post-split
+# inicial los warnings "couldn't get a connection after 20.00 sec" seguían ~12
+# por plan (espaciados, no en burst). Causa probable: con max=8, los crons
+# concurrent (drain_pending_facts, worker_metrics, etc.) + CB resets de 3 day_gen
+# paralelos no caben en 8 slots. Subir a 12 da margen sin acercar peligrosamente
+# al cap pgBouncer (sync 25 + async 12 = 37, todavía manejable con keepalive
+# recycling rápido). Si los warnings persisten >5/plan tras este tune, investigar
+# connection leak o subir clamp del knob.
+DB_ASYNC_POOL_MAX_SIZE = _int_env("MEALFIT_DB_ASYNC_POOL_MAX_SIZE", 12, 1, 100)
+DB_ASYNC_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_ASYNC_POOL_TIMEOUT_S", 20.0, 1.0, 120.0)
+
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
@@ -106,11 +133,13 @@ if SUPABASE_DB_URL:
             open=False
         )
 
+        # [P1-POOL-ASYNC-SPLIT · 2026-05-16] Pool ASYNC con knobs propios. Ver
+        # bloque de docstring arriba donde se definen los knobs DB_ASYNC_POOL_*.
         async_connection_pool = AsyncConnectionPool(
             conninfo=clean_url,
-            min_size=DB_POOL_MIN_SIZE,
-            max_size=DB_POOL_MAX_SIZE,
-            timeout=DB_POOL_TIMEOUT_S,
+            min_size=DB_ASYNC_POOL_MIN_SIZE,
+            max_size=DB_ASYNC_POOL_MAX_SIZE,
+            timeout=DB_ASYNC_POOL_TIMEOUT_S,
             max_idle=DB_POOL_MAX_IDLE_S,
             reconnect_timeout=5,
             kwargs=get_client_kwargs(),
@@ -119,10 +148,15 @@ if SUPABASE_DB_URL:
             open=False
         )
         logger.info(
-            "🔌 [psycopg] ConnectionPool (Sync y Async) configurado: "
+            "🔌 [psycopg] ConnectionPool SYNC configurado: "
             f"min={DB_POOL_MIN_SIZE}, max={DB_POOL_MAX_SIZE}, "
-            f"timeout={DB_POOL_TIMEOUT_S}s, max_idle={DB_POOL_MAX_IDLE_S}s "
-            "(autocommit=True, keepalives + health checks)."
+            f"timeout={DB_POOL_TIMEOUT_S}s, max_idle={DB_POOL_MAX_IDLE_S}s."
+        )
+        logger.info(
+            "🔌 [psycopg] ConnectionPool ASYNC configurado: "
+            f"min={DB_ASYNC_POOL_MIN_SIZE}, max={DB_ASYNC_POOL_MAX_SIZE}, "
+            f"timeout={DB_ASYNC_POOL_TIMEOUT_S}s "
+            "[P1-POOL-ASYNC-SPLIT: knobs separados del sync para no saturar pgBouncer]."
         )
     except Exception as pool_err:
         logger.error(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")

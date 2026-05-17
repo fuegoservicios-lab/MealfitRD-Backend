@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 15)  # P3-AUDIT-4 (audit production-readiness 2026-05-15 bundle P3 — 4 items: P3-AUDIT-1 Recipes.jsx PDF telemetría success/failure + filename con plan_id[:8] + YYYY-MM-DD discriminator, P3-AUDIT-2 alert() nativo → toast.error en AgentPage + PaymentModal, P3-AUDIT-3 manifest.json icons reducidos 6→2 entries 192/512 maskable, P3-AUDIT-4 SW pushsubscriptionchange handler + client listener postMessage + register en main.jsx — cierra audit 2026-05-15 12/12 ejecutables = 100% production-ready)
+_PFIX_DATE_FLOOR = date(2026, 5, 16)  # P3-WATER-TRACKER 2026-05-16: card "Mi Nevera" del Dashboard reemplazado por tracker de hidratacion (8 vasos, reset a medianoche local). Tabla water_intake_log (RLS) + endpoints GET/POST /api/plans/water-intake (sin costo LLM → get_verified_user_id + rate limiter 60/60s) + componente WaterTracker.jsx con persistencia optimistic UI. Misma fecha bundle: P2-STAPLE-DIVERSITY + 5 sibling fixes (quality push, ver memoria).
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

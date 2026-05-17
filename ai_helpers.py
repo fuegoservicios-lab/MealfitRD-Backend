@@ -334,6 +334,24 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     _GOALS_PENALIZE_PROCESSED = {
         "gain_muscle", "lose_weight", "health_improvement",
     }
+    # [P2-PROTEIN-PENALTY-FATTY-MEAT · 2026-05-16] Categoría adicional:
+    # carnes frescas grasas (NO procesadas) que para gain_muscle son
+    # subóptimas por su ratio proteína/grasa.
+    #   - Chuleta de cerdo: ~250kcal/100g, 20g grasa vs pechuga pollo
+    #     165kcal/100g, 3.6g grasa.
+    #   - Costilla, panceta, lechón, pernil: similar perfil graso.
+    # Bug observable (plan_id=fbd014b2 2026-05-16): planner eligió
+    # `Chuleta` en pool gain_muscle → receta Día 2 generada con cerdo →
+    # PROTEIN-RECIPE-VIOLATION strippeó chuleta → cena sin proteína →
+    # revisor médico rechazó.
+    # Penalty ×0.3 (menos agresivo que embutidos ×0.1) porque son fresh
+    # meat con valor nutricional legítimo en perfiles 'balanced'/cultural,
+    # solo subóptimas para gain_muscle específicamente.
+    _FATTY_FRESH_MEAT_KEYWORDS = (
+        "chuleta", "costilla", "panceta", "lechón", "lechon",
+        "pernil", "cerdo asado",
+    )
+    _GOALS_PENALIZE_FATTY_FRESH = {"gain_muscle"}
     _main_goal = (form_data.get("mainGoal") or "").strip().lower() if form_data else ""
     if _main_goal in _GOALS_PENALIZE_PROCESSED:
         _penalized_count = 0
@@ -346,6 +364,18 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             logger.info(
                 f"🥩 [GOAL PENALTY] Embutidos penalizados ×0.1 ({_penalized_count} items) "
                 f"por goal='{_main_goal}'."
+            )
+    if _main_goal in _GOALS_PENALIZE_FATTY_FRESH:
+        _fatty_penalized_count = 0
+        for i, p in enumerate(available_proteins):
+            p_norm = strip_accents(p.lower())
+            if any(kw in p_norm for kw in _FATTY_FRESH_MEAT_KEYWORDS):
+                protein_weights[i] *= 0.3
+                _fatty_penalized_count += 1
+        if _fatty_penalized_count:
+            logger.info(
+                f"🥩 [GOAL PENALTY-FATTY] Carnes grasas frescas (chuleta/costilla/panceta) "
+                f"penalizadas ×0.3 ({_fatty_penalized_count} items) por goal='{_main_goal}'."
             )
     
     fruit_weights = []

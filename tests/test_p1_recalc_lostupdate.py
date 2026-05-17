@@ -364,9 +364,16 @@ def test_handler_returns_merged_plan_data(recalc_body: str):
     inicial leído fuera del lock. Sin esto, el cliente vería una
     versión SUYA distinta a la persistida si un endpoint hermano
     mutó simultáneamente — confusión post-recalc.
+
+    [P3-NAN-INF-SANITIZE · 2026-05-16] El regex acepta wrapping function
+    sobre `merged_plan_data` (e.g. `_sanitize_floats_for_json(merged_plan_data)`)
+    para no romperse si el response pasa por sanitize defensivo. Lo
+    importante es que la fuente sea `merged_plan_data`, no `plan_data`.
     """
+    # Buscar `"plan_data":` seguido EVENTUALMENTE por `merged_plan_data`
+    # dentro del mismo statement (puede haber wraps de funciones).
     pattern = re.compile(
-        r'return\s*\{[^}]*"plan_data"\s*:\s*merged_plan_data',
+        r'return\s*\{[^}]*?"plan_data"\s*:\s*[^,}]*merged_plan_data',
         re.DOTALL,
     )
     assert pattern.search(recalc_body), (
@@ -375,7 +382,8 @@ def test_handler_returns_merged_plan_data(recalc_body: str):
         "`merged_plan_data` (el merge persistido bajo lock). El "
         "cliente debe ver exactamente lo que se persistió. Fix: "
         "cambiar `return {..., \"plan_data\": plan_data, ...}` "
-        "por `return {..., \"plan_data\": merged_plan_data, ...}`."
+        "por `return {..., \"plan_data\": merged_plan_data, ...}` "
+        "(opcionalmente envuelto en sanitize/transform helper)."
     )
 
 
