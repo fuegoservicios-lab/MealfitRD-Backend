@@ -8543,9 +8543,12 @@ def _persist_pantry_supplement_to_plan_data(
         )
         household_multiplier = max(1.0, household_multiplier)
         try:
-            aggr_7 = _gsld(user_id, plan_data, is_new_plan=False, structured=True, multiplier=household_multiplier)
-            aggr_15 = _gsld(user_id, plan_data, is_new_plan=False, structured=True, multiplier=household_multiplier * 2.0)
-            aggr_30 = _gsld(user_id, plan_data, is_new_plan=False, structured=True, multiplier=household_multiplier * 4.0)
+            # [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] is_new_plan=True para
+            # almacenar lista canónica (no delta). Ver justificación en
+            # routers/plans.py P3-CANONICAL-AGG-WEEKLY.
+            aggr_7 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier)
+            aggr_15 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * 2.0)
+            aggr_30 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * 4.0)
         except Exception as _calc_err:
             # Si el recálculo del shopping list falla, persistimos al menos
             # el flag — el siguiente recalc post-merge lo resolverá.
@@ -8685,9 +8688,10 @@ def _clear_pantry_supplement_from_plan_data(
                 or float(plan_data.get("calc_household_size") or 1)
             )
             household_multiplier = max(1.0, household_multiplier)
-            aggr_7 = _gsld(user_id, plan_data, is_new_plan=False, structured=True, multiplier=household_multiplier)
-            aggr_15 = _gsld(user_id, plan_data, is_new_plan=False, structured=True, multiplier=household_multiplier * 2.0)
-            aggr_30 = _gsld(user_id, plan_data, is_new_plan=False, structured=True, multiplier=household_multiplier * 4.0)
+            # [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] is_new_plan=True para canonical.
+            aggr_7 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier)
+            aggr_15 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * 2.0)
+            aggr_30 = _gsld(user_id, plan_data, is_new_plan=True, structured=True, multiplier=household_multiplier * 4.0)
             grocery_duration = (
                 plan_data.get("calc_grocery_duration")
                 or (plan_data.get("form_data") or {}).get("groceryDuration")
@@ -14509,18 +14513,23 @@ def _process_pending_shopping_lists():
                 # estado.
                 from shopping_calculator import fetch_inventory_and_consumed_for_plan as _fic
                 _inv_s, _cons_s = _fic(user_id, plan_data, False)
+                # [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] is_new_plan=True para
+                # almacenar lista canónica (no delta). El chunk worker T2
+                # persiste agg_weekly al final del plan; debe ser canonical
+                # para que recalcs futuros no observen estado inconsistente.
+                # Frontend deduce inventario at-render-time.
                 aggr_7 = get_shopping_list_delta(
-                    user_id, plan_data, is_new_plan=False, structured=True,
+                    user_id, plan_data, is_new_plan=True, structured=True,
                     multiplier=1.0 * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
                 )
                 aggr_15 = get_shopping_list_delta(
-                    user_id, plan_data, is_new_plan=False, structured=True,
+                    user_id, plan_data, is_new_plan=True, structured=True,
                     multiplier=2.0 * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
                 )
                 aggr_30 = get_shopping_list_delta(
-                    user_id, plan_data, is_new_plan=False, structured=True,
+                    user_id, plan_data, is_new_plan=True, structured=True,
                     multiplier=4.0 * household,
                     inventory_override=_inv_s, consumed_override=_cons_s,
                 )
@@ -25304,18 +25313,21 @@ def process_plan_chunk_queue(target_plan_id=None):
                     _inv_s, _cons_s = fetch_inventory_and_consumed_for_plan(
                         user_id, full_plan_data, False
                     )
+                    # [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] is_new_plan=True
+                    # para almacenar lista canónica. Chunk worker T2 persist
+                    # final del plan. Ver justificación SSOT en plans.py.
                     aggr_7 = get_shopping_list_delta(
-                        user_id, full_plan_data, is_new_plan=False, structured=True,
+                        user_id, full_plan_data, is_new_plan=True, structured=True,
                         multiplier=1.0 * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
                     )
                     aggr_15 = get_shopping_list_delta(
-                        user_id, full_plan_data, is_new_plan=False, structured=True,
+                        user_id, full_plan_data, is_new_plan=True, structured=True,
                         multiplier=2.0 * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
                     )
                     aggr_30 = get_shopping_list_delta(
-                        user_id, full_plan_data, is_new_plan=False, structured=True,
+                        user_id, full_plan_data, is_new_plan=True, structured=True,
                         multiplier=4.0 * household,
                         inventory_override=_inv_s, consumed_override=_cons_s,
                     )

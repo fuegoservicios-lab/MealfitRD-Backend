@@ -7590,7 +7590,19 @@ def get_shopping_list_delta(
     # cuando invoca el delta con N multiplicidades), reutilizamos su snapshot
     # para garantizar consistencia entre las N listas. Sin override, hacemos
     # el fetch aquí (caso 1 invocación: agente, tools, recalc).
-    if inventory_override is not None or consumed_override is not None:
+    #
+    # [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] Si `is_new_plan=True`, forzamos
+    # listas vacías ANTES del check del override. Esto cierra el bug del
+    # refactor canónico anterior: callers que querían canonical pasaban
+    # `is_new_plan=True` Y `inventory_override=_inv_snap` (porque _inv_snap
+    # se reusa downstream para self-heal). Antes, el override ganaba y se
+    # producía delta en vez de canonical. Ahora is_new_plan tiene precedencia
+    # explícita sobre el override (semánticamente: "this is canonical, don't
+    # deduct anything").
+    if is_new_plan:
+        physical_inventory = []
+        consumed_ingredients = []
+    elif inventory_override is not None or consumed_override is not None:
         physical_inventory = list(inventory_override) if inventory_override is not None else []
         consumed_ingredients = list(consumed_override) if consumed_override is not None else []
     else:

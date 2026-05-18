@@ -4252,6 +4252,80 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         if not isinstance(_existing_restocked, dict):
             _existing_restocked = {}
 
+        # [P3-RESTOCK-STALE-DEDUP · 2026-05-17] Self-heal del dedup `restocked_items`
+        # cuando `user_inventory` quedó vacío.
+        #
+        # Modo de fallo cerrado: el usuario borraba TODOS los items de la nevera
+        # (Pantry.jsx::confirmDeleteAll → `supabase.from('user_inventory').delete`)
+        # y luego clicaba "Agregar a la Nevera" otra vez esperando el comportamiento
+        # de la primera vez (re-popular toda la nevera). Pre-fix:
+        #   1. confirmDeleteAll llama `_recalcShoppingListAfterPantryChange({
+        #      clearRestockedFlag: true})` → frontend hace `delete
+        #      result.plan_data.is_restocked` SOLO en el objeto local; el helper
+        #      `/recalculate-shopping-list` solo limpia `is_restocked`+
+        #      `restocked_items` cuando `householdSize`/`groceryDuration` cambian
+        #      (línea 4982 `has_changed`). Como confirmDeleteAll NO cambia esos
+        #      params, los flags persisten en DB stale.
+        #   2. Segundo /restock: `_existing_restocked` se lee con 38 entries con
+        #      timestamps recientes (<7d). `_in_cycle(prev_ts)=True` para todas
+        #      → `skipped_dupes.append(name); continue` filtra 35 de 38 items.
+        #      Solo los 3 items añadidos a `restocked_items` POST-restock-original
+        #      (swaps + recipe expand) sobreviven el dedup → al usuario "le agrega
+        #      solo 3 alimentos" en lugar de los 36-38 esperados.
+        #   3. PDF render: `buildDeltaShoppingList` lee `planData?.is_restocked=true`
+        #      → suprime items via `itemsRemoved++` (Dashboard.jsx:841-843) → muestra
+        #      "Lista vacía, 36 ya están en nevera" pese a nevera real con 3 items.
+        #
+        # Defensa: si la nevera del usuario está vacía AL MOMENTO del /restock,
+        # cualquier dedup previo es obsoleto por definición — los items que se
+        # restockearon "antes" ya no están físicamente en el inventario. Reseteamos
+        # `restocked_items`, `is_restocked` y `restocked_at_iso` antes de procesar.
+        # El restock continúa normalmente y reescribe estos campos con los nuevos
+        # items (línea 4300+).
+        #
+        # Defense-in-depth: la Pantry helper YA intenta limpiar el flag local pero
+        # no persiste a DB; este self-heal cierra el gap independientemente de
+        # cómo se haya vaciado la nevera (UI, agente, RPC, SQL directo, FK CASCADE).
+        # Idempotente: si `restocked_items` ya estaba vacío, no-op silencioso.
+        #
+        # Tooltip-anchor: P3-RESTOCK-STALE-DEDUP-START | test_p3_restock_stale_dedup
+        if user_id and _existing_restocked:
+            try:
+                # SQL raw via execute_sql_query (helper canónico del repo) en
+                # vez de supabase-py `count="exact"`: más predecible (retorna
+                # int directo desde la fila result), evita edge cases del
+                # cliente (count=None bajo rate-limit/proxy) y consistente
+                # con el resto del repo (db_plans.py:215+, db_inventory.py).
+                from db_core import execute_sql_query
+                _inv_count_row = execute_sql_query(
+                    "SELECT COUNT(*) AS c FROM user_inventory WHERE user_id = %s",
+                    (user_id,),
+                    fetch_one=True,
+                )
+                _inv_count = int(_inv_count_row["c"]) if _inv_count_row and "c" in _inv_count_row else None
+                logger.info(
+                    f"🧹 [P3-RESTOCK-STALE-DEDUP] check: user={user_id[:8]}.. "
+                    f"plan={real_plan_id} inv_count={_inv_count} "
+                    f"restocked_items={len(_existing_restocked)}"
+                )
+                if isinstance(_inv_count, int) and _inv_count == 0:
+                    logger.info(
+                        f"🧹 [P3-RESTOCK-STALE-DEDUP] RESET: inventory vacío + "
+                        f"dedup stale → limpiando is_restocked + restocked_items + "
+                        f"restocked_at_iso de plan_data (in-memory, persist al UPDATE)"
+                    )
+                    _existing_restocked = {}
+                    if isinstance(plan_data, dict):
+                        plan_data.pop("is_restocked", None)
+                        plan_data.pop("restocked_items", None)
+                        plan_data.pop("restocked_at_iso", None)
+            except Exception as _heal_err:
+                logger.warning(
+                    f"⚠️ [P3-RESTOCK-STALE-DEDUP] inventario count check falló: "
+                    f"{_heal_err}. Procesando con dedup actual (posible undercount)."
+                )
+        # P3-RESTOCK-STALE-DEDUP-END
+
         def _name_of(it):
             if isinstance(it, dict):
                 return str(it.get("name", "")).strip()
@@ -4711,9 +4785,17 @@ def api_set_water_intake(
 @router.post("/recalculate-shopping-list")
 def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_RECALC_LIMITER)):
     """
-    Recalcula la lista de compras escalando las recetas por el householdSize
-    y LUEGO deduciendo el inventario físico (is_new_plan=False).
-    Este acercamiento garantiza exactitud matemática.
+    Recalcula la lista de compras CANÓNICA escalando las recetas por el
+    householdSize + grocery_duration.
+
+    [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] La lista persistida en
+    `aggregated_shopping_list_weekly` (+ biweekly/monthly) es la lista
+    completa (canonical, no delta). La deducción contra inventario actual
+    se hace at-render-time en el frontend vía
+    `Dashboard.buildDeltaShoppingList(canonical, freshInventory)`. Este
+    contrato cierra el bug "agotar/reponer rompe PDF": antes, recalcs
+    sucesivos mutaban agg_weekly con deltas intermedios que dejaban al PDF
+    leyendo del localStorage stale.
 
     [P2-NEW-B · 2026-05-11] Acepta `plan_id` opcional en el body. Si está,
     el endpoint actúa sobre ESE plan específico (con ownership AND user_id
@@ -4848,18 +4930,56 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         _inv_snap, _cons_snap = fetch_inventory_and_consumed_for_plan(
             user_id, plan_data, is_new_plan_flag
         )
+        # [P3-RESTOCK-STALE-RECALC-HEAL · 2026-05-18] Snapshot del tamaño de
+        # user_inventory para el self-heal de is_restocked dentro de
+        # _apply_recalc. Si la nevera está vacía AHORA, cualquier
+        # `is_restocked=true` + `restocked_items={...}` heredado del plan
+        # es stale por definición — no puede haber "ya está en nevera" si
+        # la nevera no existe. Mismo invariante que /restock línea 4311.
+        _inv_count_at_recalc = (
+            len(_inv_snap) if isinstance(_inv_snap, list) else None
+        )
+        # [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] REFACTOR del contrato semántico
+        # de `aggregated_shopping_list_weekly` (+ biweekly/monthly).
+        #
+        # PRE-FIX (bug causante de "agotar+reponer rompe PDF"):
+        #   El recalc computaba scaled_* con `is_new_plan=is_new_plan_flag`
+        #   (default False) → resultado = DELTA contra inventario actual.
+        #   Cada vez que el usuario tocaba la nevera (agotar, reponer,
+        #   Borrar Todos), el helper Pantry::_recalcShoppingListAfterPantryChange
+        #   disparaba este endpoint. Sucesión de recalcs mutaba agg_weekly:
+        #     - Pantry con 35 items → agg_weekly = [] (delta vacío).
+        #     - Pantry con 0 items → agg_weekly = [35 items].
+        #     - Pantry con 34 items → agg_weekly = [1 item].
+        #   El PDF leía agg_weekly del localStorage (posiblemente stale)
+        #   y mostraba la lista corta del recalc intermedio.
+        #
+        # POST-FIX (invariante semántico):
+        #   `aggregated_shopping_list_weekly` SIEMPRE representa la lista
+        #   CANÓNICA (full needs del plan escalado a household_size +
+        #   duration), sin deducir inventario. La deducción contra
+        #   inventario se hace at-render-time en el frontend vía
+        #   `buildDeltaShoppingList(canonical, freshInventory)` (Dashboard.jsx).
+        #   Esto cierra la clase entera de bugs:
+        #     - agotar/reponer no muta la lista en DB.
+        #     - PDF muestra el delta correcto contra inventario fresco.
+        #     - Restock envía el delta correcto al backend.
+        #
+        # is_new_plan=True le dice a get_shopping_list_delta que NO deduzca
+        # inventario — devuelve la lista canónica. inventory_override sigue
+        # pasándose para no romper la firma (queda ignorado downstream).
         scaled_7 = get_shopping_list_delta(
-            user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True,
+            user_id, plan_data, is_new_plan=True, structured=True,
             multiplier=household_multiplier,
             inventory_override=_inv_snap, consumed_override=_cons_snap,
         )
         scaled_15 = get_shopping_list_delta(
-            user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True,
+            user_id, plan_data, is_new_plan=True, structured=True,
             multiplier=household_multiplier * 2.0,
             inventory_override=_inv_snap, consumed_override=_cons_snap,
         )
         scaled_30 = get_shopping_list_delta(
-            user_id, plan_data, is_new_plan=is_new_plan_flag, structured=True,
+            user_id, plan_data, is_new_plan=True, structured=True,
             multiplier=household_multiplier * 4.0,
             inventory_override=_inv_snap, consumed_override=_cons_snap,
         )
@@ -4979,16 +5099,43 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 plan_data_fresh["calc_household_composition"] = household_composition
             plan_data_fresh["calc_grocery_duration"] = grocery_duration
 
-            if has_changed and plan_data_fresh.get("is_restocked"):
+            # [P3-PLAN-MODIFIED-AT-RECALC · 2026-05-18] Bumpear `_plan_modified_at`
+            # CADA recalc. La drift detection en Dashboard.handleDownloadShoppingList
+            # compara este campo entre local y DB para decidir si re-sincronizar.
+            # Sin este bump, recalcs sucesivos (agotar/reponer/Borrar Todos)
+            # actualizan agg_weekly en DB pero el frontend nunca lo nota — el PDF
+            # sigue leyendo el localStorage stale con la lista de un recalc
+            # intermedio (típicamente la lista corta post-Compré-todo).
+            from datetime import datetime as _dt, timezone as _tz
+            plan_data_fresh["_plan_modified_at"] = _dt.now(_tz.utc).isoformat()
+
+            # [P3-RESTOCK-STALE-RECALC-HEAL · 2026-05-18] Razón adicional para
+            # limpiar is_restocked: la nevera está vacía. Cuando el usuario
+            # hace Borrar Todos en Pantry, el helper invoca este endpoint
+            # vía `_recalcShoppingListAfterPantryChange`; el frontend ya
+            # nullifica `is_restocked` en su copia local, pero la DB queda
+            # stale a menos que algo más la limpie. Sin este self-heal, el
+            # siguiente PDF/restock veía `is_restocked=true` +
+            # `restocked_items={N entries}` + `user_inventory=[]` → dedup
+            # bogus de ~27 items contra fantasmas. Mismo invariante que
+            # /restock línea 4311: si inv vacío, dedup obsoleto.
+            _empty_pantry_heal = (
+                _inv_count_at_recalc == 0
+                and plan_data_fresh.get("is_restocked")
+            )
+            if (has_changed or _empty_pantry_heal) and plan_data_fresh.get("is_restocked"):
                 plan_data_fresh.pop("is_restocked", None)
                 plan_data_fresh.pop("restocked_at_iso", None)
                 plan_data_fresh.pop("restocked_items", None)
-                logger.info(
-                    f"🔄 [RECALC] is_restocked limpiado — cantidades cambiaron "
-                    f"de {prev_hh}p/{prev_dur} (mult={prev_mult}) a "
+                _reason = (
+                    "cantidades cambiaron"
+                    f" de {prev_hh}p/{prev_dur} (mult={prev_mult}) a "
                     f"{household_size}p/{grocery_duration} "
-                    f"(mult={household_multiplier:.2f}), requiere re-registro"
+                    f"(mult={household_multiplier:.2f})"
+                    if has_changed
+                    else "user_inventory vacío (flags previos stale)"
                 )
+                logger.info(f"🔄 [RECALC] is_restocked limpiado — {_reason}")
 
             # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
             # escalada. Antes, /recalculate-shopping-list persistía

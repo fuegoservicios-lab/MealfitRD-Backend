@@ -532,16 +532,22 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # `user_inventory` entre las 3 llamadas producían deltas
             # inconsistentes según `groceryDuration`.
             _inv_s, _cons_s = fetch_inventory_and_consumed_for_plan(user_id, plan_data, False)
+            # [P3-CANONICAL-AGG-WEEKLY · 2026-05-18] is_new_plan=True garantiza
+            # que agg_weekly almacene la lista canónica (full needs), no el
+            # delta contra inventario. La deducción se hace at-render-time en
+            # el frontend (Dashboard.buildDeltaShoppingList). Cierre del bug
+            # "agotar+reponer rompe PDF" — mismo invariante que en
+            # /recalculate-shopping-list (plans.py).
             aggr_7 = get_shopping_list_delta(
-                user_id, plan_data, structured=True, multiplier=1.0 * household,
+                user_id, plan_data, is_new_plan=True, structured=True, multiplier=1.0 * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
             )
             aggr_15 = get_shopping_list_delta(
-                user_id, plan_data, structured=True, multiplier=2.0 * household,
+                user_id, plan_data, is_new_plan=True, structured=True, multiplier=2.0 * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
             )
             aggr_30 = get_shopping_list_delta(
-                user_id, plan_data, structured=True, multiplier=4.0 * household,
+                user_id, plan_data, is_new_plan=True, structured=True, multiplier=4.0 * household,
                 inventory_override=_inv_s, consumed_override=_cons_s,
             )
             
