@@ -24,6 +24,12 @@ pyright_results.json
 # Runtime state — generados por la app, no son source-of-truth
 _force_regen.json
 chat_errors.json
+# Buffer local del cron _flush_pending_deferrals (CHUNK_DEFERRALS_BUFFER_PATH).
+# Cada instancia mantiene su propio archivo; contiene UUIDs de usuarios — nunca
+# se commitea. Default name viene de constants.py:CHUNK_DEFERRALS_BUFFER_PATH.
+deferrals_pending.jsonl
+# Análogo: buffer del cron _flush_pending_lesson_telemetry.
+lesson_telemetry_pending.jsonl
 
 # DBs y artefactos locales
 *.sqlite3
