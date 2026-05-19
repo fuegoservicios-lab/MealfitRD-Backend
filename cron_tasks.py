@@ -4388,6 +4388,25 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"⏰ [P1-2/DEAD-LETTER-ALERT] Cron _alert_new_dead_lettered_chunks registrado cada {_P12_DL_INT} min."
         )
 
+    # [P3-CHUNK-GC-DEADLETTER · 2026-05-18] GC de chunks dead-lettered >TTL días.
+    # Pareja de _alert_new_dead_lettered_chunks: ese ALERTA, este PURGA.
+    # Sin GC, `plan_chunk_queue` acumulaba filas terminales indefinidamente,
+    # inflando el index de pickup y degradando el worker tick.
+    if not scheduler.get_job("gc_dead_lettered_chunks"):
+        from constants import CHUNK_GC_DEAD_LETTER_INTERVAL_HOURS as _P3_GC_DL_INT
+        _add_job_jittered(scheduler,
+            _gc_dead_lettered_chunks,
+            "interval",
+            hours=_P3_GC_DL_INT,
+            id="gc_dead_lettered_chunks",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P3-CHUNK-GC-DEADLETTER] Cron _gc_dead_lettered_chunks registrado cada {_P3_GC_DL_INT}h."
+        )
+
     # [P1-CHUNKS-3] Auto-escalación de chunks pausados con `_pause_reason='missing_prior_lessons'`.
     # Cubre el caso "TTL=indefinido" del state-machine documentado en process_plan_chunk_queue:
     # un chunk pausado tras agotar P1-1 + P1-2 quedaba esperando "revisión humana" sin
@@ -14916,10 +14935,20 @@ def _flush_pending_deferrals() -> dict:
                 )
                 stats["flushed"] += 1
             except Exception as _flush_err:
-                # NOT NULL u otra violación de schema → descartar (no se recupera).
+                # [P3-CHUNK-DEFERRALS-FK-DISCARD · 2026-05-18] Anclar la clase de
+                # errores "permanentes" — incluido FK violation a meal_plans que
+                # ocurre cuando el parent plan fue borrado (e.g. reset cuenta vía
+                # P3-RESET-SINGLE-TXN). Sin descartar FK aquí, el record vivía en
+                # el buffer y cada flush (5 min) re-disparaba el ERROR — burst de
+                # ~4/s observado en logs Postgres 2026-05-19 02:46 UTC.
+                # NOT NULL/syntax/FK → descartar (no se recupera).
                 # Errores de conexión/timeout → mantener para retry.
                 _err_msg = str(_flush_err).lower()
-                if "violates not-null" in _err_msg or "invalid input syntax" in _err_msg:
+                if (
+                    "violates not-null" in _err_msg
+                    or "invalid input syntax" in _err_msg
+                    or "violates foreign key" in _err_msg
+                ):
                     stats["discarded_invalid"] += 1
                 else:
                     remaining_records.append(line.rstrip())
@@ -16164,6 +16193,29 @@ def _alert_new_dead_lettered_chunks() -> None:
     except Exception as _reason_err:
         logger.debug(f"[P1-2/DEAD-LETTER-ALERT] reason breakdown falló: {_reason_err}")
 
+    # [P3-CHUNK-KIND-TELEMETRY · 2026-05-18] Breakdown por `chunk_kind` (initial_plan
+    # vs rolling_refill vs catchup) además del breakdown por reason. Permite a SRE
+    # diagnosticar "los planes nuevos fallan pero los rolling están OK" o viceversa.
+    # Pre-fix, ambos chunk_kinds caían en el mismo bucket y la causa raíz quedaba
+    # invisible en dashboards.
+    by_chunk_kind: dict = {}
+    try:
+        kind_rows = execute_sql_query(
+            """
+            SELECT COALESCE(chunk_kind, 'unknown') AS chunk_kind,
+                   COUNT(*)::int AS cnt
+            FROM plan_chunk_queue
+            WHERE dead_lettered_at > NOW() - make_interval(hours => %s)
+            GROUP BY COALESCE(chunk_kind, 'unknown')
+            ORDER BY cnt DESC
+            """,
+            (window_hours,),
+            fetch_all=True,
+        ) or []
+        by_chunk_kind = {str(r.get("chunk_kind") or "unknown"): int(r.get("cnt") or 0) for r in kind_rows}
+    except Exception as _kind_err:
+        logger.debug(f"[P3-CHUNK-KIND-TELEMETRY] chunk_kind breakdown falló: {_kind_err}")
+
     alert_key = "dead_lettered_chunks_recent"
 
     # Cooldown: si ya alertamos en la ventana, no repetir.
@@ -16210,12 +16262,15 @@ def _alert_new_dead_lettered_chunks() -> None:
         "affected_users": affected_users,
         "affected_plans": affected_plans,
         "by_reason": by_reason,
+        "by_chunk_kind": by_chunk_kind,  # [P3-CHUNK-KIND-TELEMETRY · 2026-05-18]
     }
     reasons_str = ", ".join(f"{k}={v}" for k, v in by_reason.items()) or "n/a"
+    kinds_str = ", ".join(f"{k}={v}" for k, v in by_chunk_kind.items()) or "n/a"
     message = (
         f"En las últimas {window_hours}h se dead-letteraron {total} chunk(s) "
         f"de {affected_plans} plan(es) ({affected_users} usuario(s)). "
         f"Reasons: {reasons_str}. "
+        f"Chunk kinds: {kinds_str}. "
         f"Inspeccionar vía GET /api/plans/admin/chunks/dead-lettered "
         f"(Authorization: Bearer CRON_SECRET)."
     )
@@ -16248,6 +16303,135 @@ def _alert_new_dead_lettered_chunks() -> None:
         logger.warning(f"[P1-2/DEAD-LETTER-ALERT] Alerta disparada: {message}")
     except Exception as e:
         logger.error(f"[P1-2/DEAD-LETTER-ALERT] No se pudo persistir la alerta: {e}")
+
+
+def _gc_dead_lettered_chunks() -> None:
+    """[P3-CHUNK-GC-DEADLETTER · 2026-05-18] GC de chunks dead-lettered antiguos.
+
+    `_alert_new_dead_lettered_chunks` (cron_tasks.py:16096) ALERTA sobre rows
+    `dead_lettered_at IS NOT NULL` recientes pero NO purga las viejas. Sin GC,
+    `plan_chunk_queue` acumula filas terminales indefinidamente: index size
+    crece (impacta pickup `SELECT … WHERE status IN (…) FOR UPDATE SKIP LOCKED`)
+    y queries forensics se ralentizan.
+
+    Patrón espejo del "purge cancelled >48h" (cron_tasks.py:20039) pero con TTL
+    mayor (30d default, knob `CHUNK_GC_DEAD_LETTER_TTL_DAYS`). Razón del TTL
+    más largo: dead-lettered son forensic-interesantes (un SRE puede correlacionar
+    dead-letters de hace 1-2 semanas con incidentes recientes), mientras que
+    `cancelled` es estado opaco user-driven.
+
+    Filtro:
+      - `status = 'failed'` (estado canónico del state-machine P1-CHUNKS-4).
+      - `dead_lettered_at IS NOT NULL` (descarta failures transient en backoff).
+      - `dead_lettered_at < NOW() - INTERVAL '<TTL> days'`.
+      - LIMIT por batch (knob `CHUNK_GC_DEAD_LETTER_BATCH`, default 1000) para
+        evitar lock contention con worker pickups.
+
+    Emite `pipeline_metrics._gc_dead_lettered_chunks_tick` SIEMPRE (patrón
+    P2-LIVE-9 / P3-LIVE-1), incluyendo `purged_count`, `by_reason`, `by_chunk_kind`
+    (P3-CHUNK-KIND-TELEMETRY) y `ttl_days` para forensics agregado.
+
+    Tooltip-anchor: P3-CHUNK-GC-DEADLETTER.
+    """
+    from constants import (
+        CHUNK_GC_DEAD_LETTER_TTL_DAYS,
+        CHUNK_GC_DEAD_LETTER_BATCH,
+    )
+
+    ttl_days = int(CHUNK_GC_DEAD_LETTER_TTL_DAYS)
+    batch = int(CHUNK_GC_DEAD_LETTER_BATCH)
+    purged_count = 0
+    by_reason: dict = {}
+    by_chunk_kind: dict = {}
+    error_msg: str | None = None
+
+    # Pre-purge: contamos por reason y chunk_kind antes del DELETE para tener
+    # telemetría agregada (post-DELETE las filas no existen). Best-effort.
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT COALESCE(dead_letter_reason, 'unknown') AS reason,
+                   COALESCE(chunk_kind, 'unknown') AS chunk_kind,
+                   COUNT(*)::int AS cnt
+            FROM plan_chunk_queue
+            WHERE status = 'failed'
+              AND dead_lettered_at IS NOT NULL
+              AND dead_lettered_at < NOW() - make_interval(days => %s)
+            GROUP BY COALESCE(dead_letter_reason, 'unknown'),
+                     COALESCE(chunk_kind, 'unknown')
+            """,
+            (ttl_days,),
+            fetch_all=True,
+        ) or []
+        for r in rows:
+            reason = str(r.get("reason") or "unknown")
+            kind = str(r.get("chunk_kind") or "unknown")
+            cnt = int(r.get("cnt") or 0)
+            by_reason[reason] = by_reason.get(reason, 0) + cnt
+            by_chunk_kind[kind] = by_chunk_kind.get(kind, 0) + cnt
+    except Exception as _agg_err:
+        logger.debug(
+            f"[P3-CHUNK-GC-DEADLETTER] Pre-purge aggregation falló (best-effort): {_agg_err}"
+        )
+
+    # DELETE con LIMIT vía CTE — psycopg no soporta LIMIT en DELETE directo.
+    try:
+        result = execute_sql_query(
+            """
+            WITH victims AS (
+                SELECT id FROM plan_chunk_queue
+                WHERE status = 'failed'
+                  AND dead_lettered_at IS NOT NULL
+                  AND dead_lettered_at < NOW() - make_interval(days => %s)
+                ORDER BY dead_lettered_at ASC
+                LIMIT %s
+            )
+            DELETE FROM plan_chunk_queue
+            WHERE id IN (SELECT id FROM victims)
+            RETURNING id
+            """,
+            (ttl_days, batch),
+            fetch_all=True,
+        ) or []
+        purged_count = len(result)
+        if purged_count > 0:
+            logger.info(
+                f"[P3-CHUNK-GC-DEADLETTER] Purgados {purged_count} chunks dead-lettered "
+                f">{ttl_days}d. by_reason={by_reason}, by_chunk_kind={by_chunk_kind}"
+            )
+    except Exception as e:
+        error_msg = str(e)[:200]
+        logger.warning(f"[P3-CHUNK-GC-DEADLETTER] Error purgando: {e}")
+
+    # Tick observable SIEMPRE — patrón P2-LIVE-9. Permite a SRE confirmar que el
+    # cron corrió aunque purged_count=0 (escenario normal: flota sin dead-letters
+    # acumulados; sin tick, distinguir "cron OK + nada que purgar" de "cron caído"
+    # requiere abrir logs).
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, '__cron__', %s, 0, 0, 0, %s, %s::jsonb)
+            """,
+            (
+                "_gc_dead_lettered_chunks_tick",
+                1.0 if error_msg is None else 0.0,
+                json.dumps({
+                    "purged_count": purged_count,
+                    "ttl_days": ttl_days,
+                    "batch_limit": batch,
+                    "by_reason": by_reason,
+                    "by_chunk_kind": by_chunk_kind,
+                    "error": error_msg,
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception as _tick_err:
+        logger.debug(
+            f"[P3-CHUNK-GC-DEADLETTER] tick emit falló (best-effort): {_tick_err}"
+        )
 
 
 def _nudge_users_with_unresolved_tz() -> None:
@@ -20349,6 +20533,12 @@ def process_plan_chunk_queue(target_plan_id=None):
                 "last_heartbeat_at": datetime.now(timezone.utc),  # INSERT puso heartbeat_at = NOW()
                 "consecutive_failures": 0,
                 "lock_chunk_id": task_id,
+                # [P3-CHUNK-KIND-TELEMETRY · 2026-05-18] Propagar chunk_kind al thread
+                # daemon para incluirlo en el metadata de las metrics emitidas al cierre
+                # (_chunk_heartbeat_lag + _chunk_heartbeat_baseline). Sin esto, SRE no
+                # podía diferenciar lag heartbeat de chunks initial_plan vs rolling_refill
+                # en dashboards p50/p95.
+                "chunk_kind": chunk_kind,
                 # [P3-3 · 2026-05-08] Tracking de lag del thread daemon.
                 # Si GC pausa Python entre `wait` y `_do_update`, el delta real
                 # supera _HB_INTERVAL silenciosamente. Antes solo se logueaba
@@ -20457,6 +20647,10 @@ def process_plan_chunk_queue(target_plan_id=None):
                         _lagged = int(state.get("lagged_updates", 0) or 0)
                         _max_lag = float(state.get("max_lag_seconds", 0.0) or 0.0)
                         _started = state.get("started_at")
+                        # [P3-CHUNK-KIND-TELEMETRY · 2026-05-18] Leer chunk_kind del state
+                        # propagado al construir el thread. Fallback 'unknown' por defensa
+                        # (un state legacy sin la key no debe romper el emit de metrics).
+                        _chunk_kind_metric = str(state.get("chunk_kind") or "unknown")
                         _runtime_s = (
                             (datetime.now(timezone.utc) - _started).total_seconds()
                             if _started else 0.0
@@ -20489,6 +20683,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                         0.0,
                                         json.dumps({
                                             "chunk_id": str(lock_chunk_id),
+                                            "chunk_kind": _chunk_kind_metric,  # [P3-CHUNK-KIND-TELEMETRY]
                                             "total_updates": _total,
                                             "lagged_updates": _lagged,
                                             "max_lag_seconds": round(_max_lag, 2),
@@ -20539,6 +20734,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                                             1.0 if not _is_anomalous else 0.0,
                                             json.dumps({
                                                 "chunk_id": str(lock_chunk_id),
+                                                "chunk_kind": _chunk_kind_metric,  # [P3-CHUNK-KIND-TELEMETRY]
                                                 "is_anomalous": bool(_is_anomalous),
                                                 "total_updates": _total,
                                                 "lagged_updates": _lagged,
@@ -26257,13 +26453,38 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                         return False
 
                     try:
-                        start_dt = safe_fromisoformat(start_date_str)
-                        if start_dt.tzinfo is None:
-                            start_dt = start_dt.replace(tzinfo=timezone.utc)
+                        # [P3-SHIFT-DATEONLY-LOCAL · 2026-05-18] Espejo del fix
+                        # en `api_shift_plan` (routers/plans.py). El campo
+                        # `grocery_start_date` se persiste en 2 formatos
+                        # (date-only "YYYY-MM-DD" del backfill SQL p0_3 vs
+                        # timestamp ISO completo del fix 2026-05-06). Tratar
+                        # ambos por la rama timestamp aplica un -tz_offset que
+                        # retrocede el calendario en TZ negativas (Santo
+                        # Domingo UTC-4), inflando `days_since_creation` y
+                        # eliminando 1 día EXTRA del plan al cruzar la
+                        # medianoche local. Mantener SSOT con frontend
+                        # `_parseStartLocal` (Dashboard.jsx:603) y con el
+                        # endpoint HTTP /shift-plan. Tooltip-anchor:
+                        # P3-SHIFT-DATEONLY-LOCAL.
+                        import re as _re_p3_shift_bg
+                        _is_date_only_shift = (
+                            isinstance(start_date_str, str)
+                            and _re_p3_shift_bg.match(r'^\d{4}-\d{2}-\d{2}$', start_date_str.strip()) is not None
+                        )
+                        if _is_date_only_shift:
+                            _y_p3, _m_p3, _d_p3 = (int(x) for x in start_date_str.strip().split('-'))
+                            from datetime import date as _date_p3_bg
+                            start_date = _date_p3_bg(_y_p3, _m_p3, _d_p3)
+                            start_dt = datetime(_y_p3, _m_p3, _d_p3, tzinfo=timezone.utc) - timedelta(minutes=int(tz_offset))
                         else:
-                            start_dt = start_dt.astimezone(timezone.utc)
-                        start_dt = start_dt - timedelta(minutes=int(tz_offset))
-                        days_since_creation = (today.date() - start_dt.date()).days
+                            start_dt = safe_fromisoformat(start_date_str)
+                            if start_dt.tzinfo is None:
+                                start_dt = start_dt.replace(tzinfo=timezone.utc)
+                            else:
+                                start_dt = start_dt.astimezone(timezone.utc)
+                            start_dt = start_dt - timedelta(minutes=int(tz_offset))
+                            start_date = start_dt.date()
+                        days_since_creation = (today.date() - start_date).days
                     except Exception as e:
                         logger.warning(f"[BG-REFILL] Error parseando fecha plan {plan_id}: {e}")
                         return False
@@ -26588,8 +26809,15 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                         shifted_data["days"] = shifted_days
                         new_plan_start_iso = None
                         if needs_shift and not is_expired_renewable:
-                            new_start = start_dt + timedelta(days=days_since_creation)
-                            new_plan_start_iso = new_start.isoformat()
+                            # [P3-SHIFT-DATEONLY-LOCAL · 2026-05-18] Preservar
+                            # formato original del campo (date-only → date-only,
+                            # timestamp → timestamp). Espejo del fix en
+                            # api_shift_plan.
+                            if _is_date_only_shift:
+                                new_plan_start_iso = (start_date + timedelta(days=days_since_creation)).isoformat()
+                            else:
+                                new_start = start_dt + timedelta(days=days_since_creation)
+                                new_plan_start_iso = new_start.isoformat()
                             shifted_data["grocery_start_date"] = new_plan_start_iso
                         elif is_expired_renewable:
                             new_plan_start_iso = today.isoformat()

@@ -49,9 +49,9 @@ import re
 import pytest
 
 
-_BACKEND_PLANS = pathlib.Path(__file__).parent / "routers" / "plans.py"
+_BACKEND_PLANS = pathlib.Path(__file__).parent.parent / "routers" / "plans.py"
 _FRONTEND_FV = (
-    pathlib.Path(__file__).parent.parent
+    pathlib.Path(__file__).parent.parent.parent
     / "frontend" / "src" / "config" / "formValidation.js"
 )
 

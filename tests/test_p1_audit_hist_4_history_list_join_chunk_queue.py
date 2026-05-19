@@ -124,8 +124,10 @@ def test_sql_contains_left_join_to_chunk_queue():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -160,8 +162,10 @@ def test_sql_subquery_filters_by_user_id():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -195,8 +199,10 @@ def test_sql_subquery_excludes_orphan_meal_plan_id():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -229,8 +235,10 @@ def test_sql_subquery_includes_filter_per_status(required_filter):
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -253,8 +261,10 @@ def test_sql_subquery_includes_in_flight_filter():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -280,8 +290,10 @@ def test_sql_uses_coalesce_for_counters():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -315,8 +327,10 @@ def test_response_includes_chunk_counters_per_plan():
                   chunk_completed_count=4),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -353,8 +367,10 @@ def test_plan_without_chunks_has_zero_counters():
                   chunk_completed_count=0),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -381,8 +397,10 @@ def test_counters_coerced_to_int_even_if_driver_returns_str():
                   chunk_completed_count=0),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -404,8 +422,10 @@ def test_sql_preserves_limit_200():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -425,8 +445,10 @@ def test_sql_preserves_name_not_null_filter():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -450,8 +472,10 @@ def test_params_pass_user_id_for_each_subquery_and_main_where():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")

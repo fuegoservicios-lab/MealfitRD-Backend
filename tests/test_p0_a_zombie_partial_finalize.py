@@ -196,7 +196,7 @@ def test_plan_with_zero_days_marked_failed():
     writes = []
 
     with patch("cron_tasks.execute_sql_query", return_value=[candidate]), \
-         patch("cron_tasks.execute_sql_write", side_effect=lambda q, p=None: writes.append((q, p))):
+         patch("cron_tasks.execute_sql_write", side_effect=lambda q, p=None, **kw: writes.append((q, p))):
         finalized = cron_tasks._finalize_zombie_partial_plans()
 
     assert finalized == 1
@@ -231,7 +231,7 @@ def test_multiple_candidates_each_updated():
     writes = []
 
     with patch("cron_tasks.execute_sql_query", return_value=candidates), \
-         patch("cron_tasks.execute_sql_write", side_effect=lambda q, p=None: writes.append((q, p))):
+         patch("cron_tasks.execute_sql_write", side_effect=lambda q, p=None, **kw: writes.append((q, p))):
         finalized = cron_tasks._finalize_zombie_partial_plans()
 
     assert finalized == 3

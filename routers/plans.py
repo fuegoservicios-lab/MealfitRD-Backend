@@ -1008,6 +1008,7 @@ def _run_pantry_validation_for_initial_chunk(
     actual_user_id: Optional[str],
     pantry_ingredients: list,
     transport_label: str = "P0-1",
+    update_reason: Optional[str] = None,
 ) -> dict:
     """[P0-1/P0-2] Valida el primer chunk contra pantry y aplica los flags
     `_initial_chunk_pantry_*` cuando degrada.
@@ -1021,8 +1022,51 @@ def _run_pantry_validation_for_initial_chunk(
 
     Si `pantry_ingredients` está vacío, retorna `result` intacto (corto-
     circuito sano: sin pantry no hay nada contra qué validar).
+
+    [P1-PANTRY-GUARD-INITIAL-SKIP · 2026-05-18] El mismo corto-circuito aplica
+    cuando la nevera tiene MENOS de `PANTRY_GUARD_MIN_ITEMS` (default 10). Razón:
+    en generación inicial o regeneración manual, la lista de compras del plan
+    ES LA QUE DEFINE el inventario futuro — validar contra una nevera casi vacía
+    rechaza ingredientes legítimos del plan nuevo y dispara retries inútiles que
+    consumen LLM quota sin valor. El guard estricto solo es útil cuando ya existe
+    un ciclo de compras vivo (nevera poblada) y un swap/refill DEBE respetar lo
+    que el user compró. Tooltip-anchor: P1-PANTRY-GUARD-INITIAL-SKIP.
+
+    [P1-PANTRY-GUARD-REGEN-SKIP · 2026-05-18] Skip TOTAL cuando el request es una
+    regeneración explícita (`update_reason` set). Razón arquitectónica: el
+    threshold de PANTRY_GUARD_MIN_ITEMS es un proxy POOR de "intent de regen";
+    cuando el user clickea "Renovar Plan Actual" / "Actualizar plan" con nevera
+    llena (≥10 items), su intent es CAMBIAR la comida — validar contra la nevera
+    vieja rechaza el plan nuevo en sus propios méritos. Reasons que pueden venir
+    del frontend (`useRegeneratePlan.js` + Dashboard modal Actualizar): `variety`,
+    `time`, `budget`, `cravings`, `weekend`, `similar`, `dislike`, o cualquier
+    string truthy. La presencia del campo es la señal — el valor específico se
+    persiste por separado vía `_persist_global_update_reason` para learning.
+    El single-meal swap NO toca este path (va por `/swap-meal/persist`). El
+    rolling refill chunks 2-4 conserva su validación pantry-aware vía Smart
+    Shuffle (`_filter_days_by_fresh_pantry`) — esa SÍ es "update dishes" y
+    debe respetar lo comprado. Tooltip-anchor: P1-PANTRY-GUARD-REGEN-SKIP.
     """
+    if update_reason:
+        _user_label_regen = actual_user_id or "guest"
+        logger.info(
+            f"⏭️ [{transport_label}/SKIP-REGEN] Pantry guard skip user={_user_label_regen}: "
+            f"update_reason={update_reason!r} indica regen explícita (Renovar/Actualizar). "
+            f"Plan nuevo DEFINE la lista de compras, no la nevera previa. "
+            f"Plan se entrega sin retries pantry."
+        )
+        return result
     if not pantry_ingredients:
+        return result
+    from constants import PANTRY_GUARD_MIN_ITEMS as _PANTRY_MIN
+    if len(pantry_ingredients) < _PANTRY_MIN:
+        _user_label_skip = actual_user_id or "guest"
+        logger.info(
+            f"⏭️ [{transport_label}/SKIP] Pantry guard skip para user={_user_label_skip}: "
+            f"nevera tiene {len(pantry_ingredients)} items (<{_PANTRY_MIN} threshold). "
+            f"Plan inicial define lista de compras, no al revés. "
+            f"Plan se entrega sin retries pantry."
+        )
         return result
     try:
         from cron_tasks import _validate_and_retry_initial_chunk_against_pantry
@@ -1659,19 +1703,62 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     start_date_str = plan_data.get("grocery_start_date")
                     if not start_date_str:
                         return {"success": False, "message": "Falta fecha de inicio."}
-                        
+
                     from constants import safe_fromisoformat
+                    import re as _re_p3_shift
                     try:
-                        start_dt = safe_fromisoformat(start_date_str)
-                        if start_dt.tzinfo is None:
-                            start_dt = start_dt.replace(tzinfo=timezone.utc)
+                        # [P3-SHIFT-DATEONLY-LOCAL · 2026-05-18] `grocery_start_date`
+                        # se persiste en DOS formatos según el path de origen:
+                        #   1. "YYYY-MM-DD" date-only — backfill SQL (p0_3_backfill_plan_anchors)
+                        #      y plan_data inicial cuando el LLM emite el campo sin TZ.
+                        #   2. "YYYY-MM-DDTHH:MM:SS+TZ" timestamp ISO completo — fix
+                        #      [GROCERY-START-DATE-TIMESTAMP-FIX 2026-05-06] en
+                        #      `_ensure_grocery_start_date` (db_plans.py) cuando el
+                        #      LLM NO incluyó el campo.
+                        #
+                        # Bug pre-fix: ambos formatos pasaban por la rama timestamp.
+                        # Para date-only "2026-05-17" en TZ -4 (Santo Domingo,
+                        # tz_offset=240): `replace(tzinfo=utc)` lo marca como
+                        # 2026-05-17T00:00:00Z, luego `- timedelta(minutes=240)` da
+                        # 2026-05-16T20:00:00Z, y `.date()` = 2026-05-16 (¡día
+                        # anterior!). Eso infla `days_since_creation` en +1 → el
+                        # shift elimina 1 día EXTRA del plan al cruzar la medianoche
+                        # local (síntoma reportado 2026-05-18: plan [Dom,Lun,Mar]
+                        # quedó como [Lun] solo — eliminó Domingo Y Martes en vez de
+                        # solo Domingo).
+                        #
+                        # Fix: si el formato es date-only ("YYYY-MM-DD"), interpretar
+                        # como fecha LOCAL del usuario (sin TZ dance) — SSOT con el
+                        # `_parseStartLocal` del frontend (Dashboard.jsx:603, fix
+                        # análogo desde 2026-05-06 que el backend nunca espejó).
+                        # Si trae timestamp con/sin TZ, mantener la lógica legacy.
+                        # Tooltip-anchor: P3-SHIFT-DATEONLY-LOCAL.
+                        _is_date_only_shift = (
+                            isinstance(start_date_str, str)
+                            and _re_p3_shift.match(r'^\d{4}-\d{2}-\d{2}$', start_date_str.strip()) is not None
+                        )
+                        if _is_date_only_shift:
+                            _y_p3, _m_p3, _d_p3 = (int(x) for x in start_date_str.strip().split('-'))
+                            from datetime import date as _date_p3
+                            start_date = _date_p3(_y_p3, _m_p3, _d_p3)
+                            # `start_dt` se usa downstream para `new_start = start_dt +
+                            # timedelta(days=days_since_creation)` (línea ~2051).
+                            # Construirlo como aware datetime al local-midnight del user
+                            # expresado en UTC: equivale a "date local + 0:00" cuando
+                            # el caller hace `.isoformat()` — preserva semántica con
+                            # tz_offset ya aplicado.
+                            start_dt = datetime(_y_p3, _m_p3, _d_p3, tzinfo=timezone.utc) - timedelta(minutes=int(tz_offset))
                         else:
-                            start_dt = start_dt.astimezone(timezone.utc)
-                        start_dt = start_dt - timedelta(minutes=int(tz_offset))
-                        
+                            start_dt = safe_fromisoformat(start_date_str)
+                            if start_dt.tzinfo is None:
+                                start_dt = start_dt.replace(tzinfo=timezone.utc)
+                            else:
+                                start_dt = start_dt.astimezone(timezone.utc)
+                            start_dt = start_dt - timedelta(minutes=int(tz_offset))
+                            start_date = start_dt.date()
+
                         # Remove time component
                         today_date = today.date()
-                        start_date = start_dt.date()
                         days_since_creation = (today_date - start_date).days
                     except Exception as e:
                         return {"success": False, "message": f"Error parseando fecha: {e}"}
@@ -2048,10 +2135,19 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                         shifted_data['days'] = shifted_days
                         new_plan_start_iso = None
                         if needs_shift and start_date_str:
-                            new_start = start_dt + timedelta(days=days_since_creation)
-                            new_plan_start_iso = new_start.isoformat()
+                            # [P3-SHIFT-DATEONLY-LOCAL · 2026-05-18] Preservar el
+                            # formato original del campo. Si entró como date-only
+                            # ("YYYY-MM-DD"), persistir el shift también como
+                            # date-only en lugar de promoverlo a timestamp ISO
+                            # completo — evita drift entre escrituras y mantiene
+                            # SSOT con el backfill SQL p0_3.
+                            if _is_date_only_shift:
+                                new_plan_start_iso = (start_date + timedelta(days=days_since_creation)).isoformat()
+                            else:
+                                new_start = start_dt + timedelta(days=days_since_creation)
+                                new_plan_start_iso = new_start.isoformat()
                             shifted_data['grocery_start_date'] = new_plan_start_iso
-                            
+
                             # [P0-C] Accumulate shift days
                             current_accum = int(shifted_data.get("_shift_days_accumulated", 0))
                             shifted_data["_shift_days_accumulated"] = current_accum + days_since_creation
@@ -2362,6 +2458,10 @@ def api_analyze(
             actual_user_id=actual_user_id,
             pantry_ingredients=_resolve_live_pantry(actual_user_id, data),
             transport_label="P0-1",
+            # [P1-PANTRY-GUARD-REGEN-SKIP · 2026-05-18] Si el cliente envía
+            # update_reason (Renovar/Actualizar), saltar el guard — el plan
+            # nuevo define la nueva lista de compras.
+            update_reason=data.get("update_reason"),
         )
 
         # [P1-1] Post-procesamiento (perfil, mensajes, audit, persistencia,
@@ -3022,6 +3122,11 @@ async def api_analyze_stream(
                                 actual_user_id=actual_user_id,
                                 pantry_ingredients=_resolve_live_pantry(actual_user_id, data),
                                 transport_label="P0-2 SSE",
+                                # [P1-PANTRY-GUARD-REGEN-SKIP · 2026-05-18] Si el
+                                # cliente envía update_reason (Renovar/Actualizar),
+                                # saltar el guard — el plan nuevo define la nueva
+                                # lista de compras.
+                                update_reason=data.get("update_reason"),
                             )
 
                             # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Pre-fix tenía re-check
@@ -8165,6 +8270,8 @@ def api_plans_history_list(
               "user_forced_simplified_weeks": <obj|null>,
               "shift_days_accumulated": <int|null>,
               "consecutive_zero_log_chunks": <int|null>,
+              "grocery_start_date": "<iso|null>",
+              "cycle_start_date": "<iso|null>",
               "coherence_adjusts_count": <int>,
               "coherence_last_hypotheses": [<str>, ...] (max 5),
               "preview_meals": [{"name", "meal"}, ...] (max 4),
@@ -8175,6 +8282,8 @@ def api_plans_history_list(
               "chunk_failed_count": <int>,
               "chunk_failed_unreplaced_count": <int>,
               "chunk_in_flight_count": <int>,
+              "chunk_scheduled_count": <int>,
+              "chunk_running_now_count": <int>,
               "chunk_completed_count": <int>,
               "chunk_tier_breakdown": {<tier>: <count>, ...} | null,
               "chunk_pantry_degraded_count": <int>,
@@ -8285,6 +8394,16 @@ def api_plans_history_list(
                 NULLIF(mp.plan_data->>'_consecutive_zero_log_chunks', '')::int
                     AS consecutive_zero_log_chunks,
                 COALESCE(mp.plan_data->'_shopping_coherence_block_history', '[]'::jsonb) AS coherence_history,
+                -- [P3-HIST-ACTIVE-CHIP · 2026-05-18] Fechas de inicio del
+                -- plan para que el frontend pueda derivar el bucket
+                -- temporal (active / past / future) sin descargar todo
+                -- `plan_data`. `grocery_start_date` es la fecha real del
+                -- ciclo de compras del usuario (preferred); `cycle_start_date`
+                -- es la fecha inmutable del primer día del plan original
+                -- (fallback cuando `grocery_start_date` no se resolvió aún
+                -- en el cron `_resolve_grocery_start_date`).
+                mp.plan_data->>'grocery_start_date' AS grocery_start_date,
+                mp.plan_data->>'cycle_start_date' AS cycle_start_date,
                 mp.plan_data->'days'->0->'meals' AS preview_meals_raw,
                 mp.plan_data->>'goal' AS goal_root,
                 mp.plan_data->'assessment'->>'mainGoal' AS goal_assessment,
@@ -8297,6 +8416,13 @@ def api_plans_history_list(
                 COALESCE(qstats.failed_count, 0)::int AS chunk_failed_count,
                 COALESCE(qstats.failed_unreplaced_count, 0)::int AS chunk_failed_unreplaced_count,
                 COALESCE(qstats.in_flight_count, 0)::int AS chunk_in_flight_count,
+                -- [P3-HIST-CHUNK-SCHEDULED · 2026-05-18] Ver comentario
+                -- en el LATERAL `qstats` (líneas ~8460). Permite al
+                -- frontend distinguir "estos chunks se generarán cuando
+                -- llegue su momento" (scheduled) de "el worker los está
+                -- procesando ya" (running_now).
+                COALESCE(qstats.scheduled_count, 0)::int AS chunk_scheduled_count,
+                COALESCE(qstats.running_now_count, 0)::int AS chunk_running_now_count,
                 COALESCE(qstats.completed_count, 0)::int AS chunk_completed_count,
                 COALESCE(qstats.pantry_degraded_count, 0)::int AS chunk_pantry_degraded_count,
                 qstats.pantry_degraded_reasons AS chunk_pantry_degraded_reasons,
@@ -8337,6 +8463,43 @@ def api_plans_history_list(
                           )
                     ) AS failed_unreplaced_count,
                     COUNT(*) FILTER (WHERE status IN ('pending', 'processing', 'stale')) AS in_flight_count,
+                    -- [P3-HIST-CHUNK-SCHEDULED · 2026-05-18] Split del
+                    -- in_flight_count en 2 dimensiones según el reloj
+                    -- de scheduling (`execute_after`):
+                    --   - scheduled_count: chunks pending/stale con
+                    --     `execute_after > NOW()` → DORMIDOS esperando
+                    --     su turno. NO se están "generando ahora" — el
+                    --     worker filtra por `WHERE execute_after <= NOW()`
+                    --     antes del pickup (cron_tasks.py:20376). Para un
+                    --     plan de 7 días con `CHUNK_PROACTIVE_MARGIN_DAYS=0`,
+                    --     el chunk-2 (días 4-7) tiene execute_after =
+                    --     grocery_start_date + 3 días. Si hoy es día 1,
+                    --     ese chunk vive 3 días dormido.
+                    --   - running_now_count: chunks elegibles AHORA
+                    --     (`execute_after <= NOW()`). Cubre:
+                    --       · `status='processing'`: worker corriendo.
+                    --       · `status='pending'/'stale'` con execute_after
+                    --         vencido: en cola, será pickeado en el
+                    --         próximo tick del scheduler (≤1 min).
+                    --     El frontend usa este split para mostrar copy
+                    --     preciso: "se generarán cuando llegue su momento"
+                    --     vs "Mealfit los está generando ahora".
+                    --
+                    -- Edge case: si execute_after es NULL (chunk legacy
+                    -- pre-migration con DEFAULT NOW() en INSERT que cayó
+                    -- a NULL por bug), lo contamos como running_now —
+                    -- conservador: el worker lo pickearía si pasa el
+                    -- filtro (NULL <= NOW() es UNKNOWN ≈ false en
+                    -- WHERE, pero el worker tiene fallback explícito).
+                    COUNT(*) FILTER (
+                        WHERE status IN ('pending', 'stale')
+                          AND execute_after IS NOT NULL
+                          AND execute_after > NOW()
+                    ) AS scheduled_count,
+                    COUNT(*) FILTER (
+                        WHERE status IN ('pending', 'processing', 'stale')
+                          AND (execute_after IS NULL OR execute_after <= NOW())
+                    ) AS running_now_count,
                     COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
                     -- [P1-HIST-PANTRY-DEGRADED · 2026-05-09] Conteo de
                     -- chunks con `pantry_degraded_reason` no-NULL en
@@ -8578,6 +8741,25 @@ def api_plans_history_list(
                 if isinstance(row.get("consecutive_zero_log_chunks"), int)
                 else None
             ),
+            # [P3-HIST-ACTIVE-CHIP · 2026-05-18] Fechas de inicio para el
+            # chip temporal "Activo" del listado. Strings ISO (`YYYY-MM-DD`
+            # o `YYYY-MM-DDTHH:MM:SS+TZ`) ya que vienen del jsonb via `->>`;
+            # `None` si la key no existe en plan_data (plan legacy o
+            # generado antes de que el cron resuelva grocery_start_date).
+            # El frontend tiene fallback chain: grocery_start_date →
+            # cycle_start_date → plan.created_at.
+            "grocery_start_date": (
+                row.get("grocery_start_date")
+                if isinstance(row.get("grocery_start_date"), str)
+                and row.get("grocery_start_date").strip()
+                else None
+            ),
+            "cycle_start_date": (
+                row.get("cycle_start_date")
+                if isinstance(row.get("cycle_start_date"), str)
+                and row.get("cycle_start_date").strip()
+                else None
+            ),
             "coherence_adjusts_count": coherence_adjusts_count,
             # [P1-4 · 2026-05-10] Hipótesis (max 5 distintas) de la última
             # entry anomalous del history. Vacía si no hay anomalous o si
@@ -8605,6 +8787,15 @@ def api_plans_history_list(
             # acción porque los días ya están en plan_data.
             "chunk_failed_unreplaced_count": int(row.get("chunk_failed_unreplaced_count") or 0),
             "chunk_in_flight_count": int(row.get("chunk_in_flight_count") or 0),
+            # [P3-HIST-CHUNK-SCHEDULED · 2026-05-18] Split de chunk_in_flight_count
+            # en 2 dimensiones según el reloj de scheduling:
+            # - chunk_scheduled_count: dormidos esperando su execute_after.
+            # - chunk_running_now_count: elegibles AHORA (processing o pending
+            #   con execute_after <= NOW()). El frontend usa este split para
+            #   mostrar copy preciso vs el mensaje genérico previo que decía
+            #   "generando ahora" incluso para chunks que duermen 3-7 días.
+            "chunk_scheduled_count": int(row.get("chunk_scheduled_count") or 0),
+            "chunk_running_now_count": int(row.get("chunk_running_now_count") or 0),
             "chunk_completed_count": int(row.get("chunk_completed_count") or 0),
             # [P1-AUDIT-HIST-6 · 2026-05-09] Tier breakdown — dict
             # `{tier: count}` solo de chunks completed. Útil para

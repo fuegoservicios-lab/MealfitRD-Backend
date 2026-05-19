@@ -222,8 +222,10 @@ def test_response_includes_primary_action_reason():
         _base_row(_PLAN_A, primary_action_reason_code="empty_pantry"),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -248,8 +250,10 @@ def test_response_primary_action_reason_none_when_no_blocked_chunks():
                   chunk_failed_count=0),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -266,8 +270,10 @@ def test_response_sanitizes_empty_reason_to_none():
         _base_row(_PLAN_A, primary_action_reason_code="   "),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -286,8 +292,10 @@ def test_response_passes_through_dead_letter_reason():
                   chunk_failed_unreplaced_count=1),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")

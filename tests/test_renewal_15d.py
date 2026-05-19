@@ -46,9 +46,10 @@ def test_15d_renewal(mock_enqueue, mock_pool):
         {"max_week": 5}
     ]
     
+    from fastapi import Response
     data = {"user_id": "test_user"}
-    
-    res = api_shift_plan(data, verified_user_id="test_user")
+
+    res = api_shift_plan(Response(), data, verified_user_id="test_user")
     
     assert res.get("success") is True, f"Failed: {res.get('message')}"
     

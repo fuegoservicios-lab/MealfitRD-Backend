@@ -89,8 +89,10 @@ def test_default_filter_only_pending_user_action():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/blocked_reasons")
@@ -123,8 +125,10 @@ def test_include_failed_extends_filter():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(
@@ -170,8 +174,10 @@ def test_failed_chunk_uses_dead_letter_reason_as_reason_code():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(
@@ -212,8 +218,10 @@ def test_pending_chunk_uses_pause_reason_from_snapshot():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/blocked_reasons")
@@ -242,8 +250,10 @@ def test_pantry_pause_reason_fallback_when_no_pause_reason():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/blocked_reasons")
@@ -285,8 +295,10 @@ def test_dead_letter_reason_resolves_to_specific_template(dead_reason, expected_
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(
@@ -327,8 +339,10 @@ def test_unknown_reason_uses_generic_fallback_not_empty_pantry():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/blocked_reasons")
@@ -366,8 +380,10 @@ def test_response_includes_status_and_dead_letter_reason_raw():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/blocked_reasons")

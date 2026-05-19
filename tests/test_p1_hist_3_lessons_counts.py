@@ -44,8 +44,10 @@ _USER_A = "11111111-1111-1111-1111-111111111111"
 # ---------------------------------------------------------------------------
 def test_lessons_counts_requires_auth():
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: None
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: None
 
     r = client.get("/api/plans/lessons-counts")
     assert r.status_code == 401, r.text
@@ -57,8 +59,10 @@ def test_lessons_counts_requires_auth():
 def test_lessons_counts_returns_dict_shape():
     """Response shape: `{counts: {plan_id_str: int}}`."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     fake_rows = [
         {"pid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "cnt": 12},
@@ -76,23 +80,32 @@ def test_lessons_counts_returns_dict_shape():
 
 
 def test_lessons_counts_empty_when_no_telemetry():
-    """Usuario sin lecciones registradas → `{counts: {}}` (no 404)."""
+    """Usuario sin lecciones registradas → `counts` y `counts_by_quality` vacíos (no 404).
+    El endpoint expone dos agregados (total + breakdown por tier high/partial/low).
+    Ambos deben ser dicts vacíos cuando no hay rows."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=[]):
         r = client.get("/api/plans/lessons-counts")
     assert r.status_code == 200
-    assert r.json() == {"counts": {}}
+    body = r.json()
+    assert body.get("counts") == {}
+    # `counts_by_quality` puede no existir en deploys legacy; si existe debe ser dict vacío.
+    assert body.get("counts_by_quality", {}) == {}
 
 
 def test_lessons_counts_filters_by_user_and_excludes_orphans():
     """SQL debe filtrar por user_id (defense-in-depth) y excluir
     meal_plan_id IS NULL (orphans post-P0-HIST-3 SET NULL)."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     captured = {}
     def _spy(sql, params=None, **kw):
@@ -118,8 +131,10 @@ def test_lessons_counts_skips_rows_without_pid():
     """Defensivo: si una fila viene con pid=None (corner case del cast),
     el handler la ignora en lugar de crashear."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     fake_rows = [
         {"pid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "cnt": 5},

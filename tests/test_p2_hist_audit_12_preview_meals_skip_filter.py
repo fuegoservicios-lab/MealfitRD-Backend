@@ -87,8 +87,10 @@ def _row_with_preview(meals_list):
 
 def _client():
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
     return client
 
 

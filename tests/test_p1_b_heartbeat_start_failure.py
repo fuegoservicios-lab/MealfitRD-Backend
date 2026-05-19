@@ -199,7 +199,7 @@ def test_delete_chunk_user_locks_by_task_id():
     writes = []
 
     with patch("cron_tasks.release_chunk_reservations"), \
-         patch("cron_tasks.execute_sql_write", side_effect=lambda q, p=None: writes.append((q, p))):
+         patch("cron_tasks.execute_sql_write", side_effect=lambda q, p=None, **kw: writes.append((q, p))):
         cron_tasks._handle_heartbeat_start_failure("task-ddd", "user-4")
 
     delete_calls = [w for w in writes if "DELETE FROM chunk_user_locks" in w[0]]
@@ -221,7 +221,7 @@ def test_release_failure_does_not_abort_defer_or_unlock():
         raise RuntimeError("transient db blip")
 
     with patch("cron_tasks.release_chunk_reservations", side_effect=boom_release), \
-         patch("cron_tasks.execute_sql_write", side_effect=lambda q, p=None: writes.append((q, p))):
+         patch("cron_tasks.execute_sql_write", side_effect=lambda q, p=None, **kw: writes.append((q, p))):
         cron_tasks._handle_heartbeat_start_failure("task-eee", "user-5")
 
     # El UPDATE y DELETE deben haber corrido pese al fallo de release.

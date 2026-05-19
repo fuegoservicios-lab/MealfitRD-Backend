@@ -57,7 +57,7 @@ def _build_test_client():
 
 def _override_auth(monkeypatch, user_id):
     """Override `verify_api_quota` para devolver el user_id fijo."""
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     from routers.plans import router as plans_router
 
     def _fake(*args, **kwargs):
@@ -173,8 +173,10 @@ _SOURCE_ROW = {
 def test_restore_requires_auth():
     """Sin auth (verify_api_quota → None) → 401."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: None
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: None
 
     r = client.post("/api/plans/restore", json={"source_plan_id": _SOURCE_ID})
     assert r.status_code == 401, r.text
@@ -183,8 +185,10 @@ def test_restore_requires_auth():
 def test_restore_requires_source_plan_id():
     """Sin `source_plan_id` en body → 400."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     # Body vacío.
     r = client.post("/api/plans/restore", json={})
@@ -198,8 +202,10 @@ def test_restore_requires_source_plan_id():
 def test_restore_404_when_source_missing():
     """SELECT del source devuelve None → 404."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=None):
         r = client.post("/api/plans/restore", json={"source_plan_id": _SOURCE_ID})
@@ -214,8 +220,10 @@ def test_restore_409_when_no_target():
     None en fetchone → 409 raised, transacción rollback.
     """
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     # source viene de execute_sql_query (fuera de tx), target de cursor.fetchone().
     cursor = _CursorRecorder(rowcounts=[0, 0], fetchone_returns=[None])
@@ -235,8 +243,10 @@ def test_restore_noop_when_source_equals_target():
     NO se hace cancel/release/update.
     """
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     cursor = _CursorRecorder(rowcounts=[0, 0], fetchone_returns=[{"id": _SOURCE_ID}])
     pool_mock, conn_recorder = _build_pool_mock(cursor)
@@ -273,8 +283,10 @@ def test_restore_emits_six_statements_in_order():
     locks cubre AMBOS plans.
     """
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     # rowcounts: lock, target SELECT, cancel target=2, cancel source=3,
     # release locks=1, update=1.
@@ -352,8 +364,10 @@ def test_restore_top_level_columns_match_source():
     +release+update).
     """
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     cursor = _CursorRecorder(
         rowcounts=[0, 0, 0, 0, 0, 1],
@@ -406,8 +420,10 @@ def test_restore_opens_explicit_transaction():
     anteriores. [P1-HIST-AUDIT-7] el lock y el target SELECT también
     viven dentro de la transacción ahora."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     cursor = _CursorRecorder(
         rowcounts=[0, 0, 0, 0, 0, 1],
@@ -428,8 +444,10 @@ def test_restore_handles_empty_top_level_arrays():
     """Si el source tiene meal_names/ingredients/techniques NULL (filas
     legacy), el endpoint los normaliza a [] sin romper."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     src = dict(_SOURCE_ROW)
     src["meal_names"] = None

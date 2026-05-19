@@ -38,7 +38,11 @@ import pytest
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
+# [P3-CLAUDEMD-CAP] La tabla "Política system_alerts resolution" fue movida
+# de CLAUDE.md a `backend/docs/system_alerts_resolution_table.md` por el cap
+# de CLAUDE.md (P3-CLAUDEMD-CAP · 2026-05-14). El test ahora valida la
+# nueva ubicación canónica.
+_CLAUDE_MD = _REPO_ROOT / "backend" / "docs" / "system_alerts_resolution_table.md"
 _CRON_PY = _REPO_ROOT / "backend" / "cron_tasks.py"
 
 

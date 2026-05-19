@@ -3,7 +3,7 @@ import sys
 import db_core
 db_core.supabase = None
 db_core.connection_pool = None
-db_core.execute_sql_query = lambda q, p=None: []
+db_core.execute_sql_query = lambda q, p=None, **kw: []
 
 import shopping_calculator
 

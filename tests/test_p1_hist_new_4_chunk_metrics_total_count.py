@@ -185,8 +185,10 @@ def test_response_includes_total_count_and_limit():
         return [fake_row]
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -217,8 +219,10 @@ def test_response_total_count_zero_when_no_chunks():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -241,8 +245,10 @@ def test_response_total_count_handles_none_from_count_query():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -271,8 +277,10 @@ def test_invariant_total_count_at_least_len_chunks():
         return fake_rows
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -298,8 +306,10 @@ def test_ownership_check_returns_404_for_other_user_plan():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_B
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_B
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")

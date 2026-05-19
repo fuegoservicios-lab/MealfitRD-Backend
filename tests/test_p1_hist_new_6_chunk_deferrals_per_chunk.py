@@ -191,8 +191,10 @@ def test_response_includes_deferrals_count_and_reasons():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -227,8 +229,10 @@ def test_response_count_zero_when_no_deferrals():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -261,8 +265,10 @@ def test_response_handles_count_none_from_sql():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -295,8 +301,10 @@ def test_response_sanitizes_empty_reasons_list_to_none():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")

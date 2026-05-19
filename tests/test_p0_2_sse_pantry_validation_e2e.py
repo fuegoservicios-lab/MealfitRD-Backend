@@ -92,7 +92,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-PANTRY_OK = ["pollo 500g", "arroz 1000g", "tomate 300g", "cebolla 200g", "aceite 250ml"]
+# [P1-PANTRY-GUARD-INITIAL-SKIP · 2026-05-18] ≥10 items para activar guard.
+# Ver memoria del fix en `project_p1_pantry_guard_initial_skip_2026_05_18.md`.
+PANTRY_OK = [
+    "pollo 500g", "arroz 1000g", "tomate 300g", "cebolla 200g", "aceite 250ml",
+    "huevo 12 unidades", "leche 1L", "queso 250g", "pan integral 500g", "yogurt 500g",
+    "ajo 100g", "limón 200g",
+]
 
 # Replica de `_REQUIRED_FORM_FIELDS` en `routers/plans.py:_validate_form_data_min`.
 # Si en el futuro se relaja un requisito, ambos archivos se actualizan en un

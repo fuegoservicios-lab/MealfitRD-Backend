@@ -134,8 +134,10 @@ def test_response_includes_both_fields_as_int():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -165,8 +167,10 @@ def test_response_handles_zero_offset_first_chunk():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")
@@ -192,8 +196,10 @@ def test_response_single_day_chunk():
         return None
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/chunk-metrics")

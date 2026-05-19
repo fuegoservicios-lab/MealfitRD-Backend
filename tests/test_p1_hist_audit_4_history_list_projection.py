@@ -67,6 +67,7 @@ def _client():
     app.include_router(router)
     client = TestClient(app)
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER
+
     client.app.dependency_overrides[get_verified_user_id] = lambda: _USER
     return client
 
@@ -123,6 +124,8 @@ def test_history_list_requires_auth():
     app.include_router(router)
     client = TestClient(app)
     client.app.dependency_overrides[verify_api_quota] = lambda: None
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: None
 
     r = client.get("/api/plans/history-list")
     assert r.status_code == 401

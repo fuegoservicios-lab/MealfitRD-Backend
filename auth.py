@@ -59,8 +59,24 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
     if not token or not supabase:
         return None
 
-    # Reintento defensivo SOLO ante "Server disconnected" transient (httpx).
-    # Cualquier otra excepción (firma inválida, expirado, etc.) → 403 inmediato.
+    # Reintento defensivo ante errores de RED transient (httpx). Cualquier otra
+    # excepción (firma inválida, expirado, etc.) → 403 inmediato.
+    #
+    # [P3-AUTH-RETRY-EXPANDED · 2026-05-18] Pre-fix solo matcheaba el substring
+    # "Server disconnected". `RemoteProtocolError`, `ReadError`, `ConnectError`,
+    # `PoolTimeout`, `ReadTimeout` (todos transient de pool/keep-alive
+    # Supabase) NO retroyaban, devolviendo 403 espurio al frontend. El usuario
+    # veía picos de 403 que limpiaba con reintentos del cliente. Ahora cubrimos
+    # los 5 nombres canónicos de httpx + el legacy "Server disconnected"
+    # (mensaje viejo de versiones anteriores).
+    _TRANSIENT_NETWORK_ERRORS = (
+        "RemoteProtocolError",
+        "ReadError",
+        "ConnectError",
+        "PoolTimeout",
+        "ReadTimeout",
+        "Server disconnected",  # legacy httpx message
+    )
     for attempt in range(2):
         try:
             # [P2-AUTH-ASYNC-SLEEP] `supabase.auth.get_user` es sync. Wrap
@@ -68,7 +84,12 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
             user_res = await asyncio.to_thread(supabase.auth.get_user, token)
         except Exception as e:
             err_str = str(e)
-            if attempt == 0 and "Server disconnected" in err_str:
+            err_type = type(e).__name__
+            is_transient = (
+                err_type in _TRANSIENT_NETWORK_ERRORS
+                or any(name in err_str for name in _TRANSIENT_NETWORK_ERRORS)
+            )
+            if attempt == 0 and is_transient:
                 # [P2-AUTH-ASYNC-SLEEP] `asyncio.sleep` cede el event loop
                 # (otros requests progresan). El sync sleep legacy bloqueaba
                 # el worker thread completo durante 500ms.
@@ -76,7 +97,7 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
                 continue
             # Log SIN exponer detalle al cliente (no leak de mensaje Supabase).
             logger.warning(
-                f"[P0-AUDIT-1] Token validation falló: {type(e).__name__}"
+                f"[P0-AUDIT-1] Token validation falló: {err_type}"
             )
             raise HTTPException(status_code=403, detail="Token validation failed.")
         if user_res and getattr(user_res, "user", None):

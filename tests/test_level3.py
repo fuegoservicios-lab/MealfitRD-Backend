@@ -1,8 +1,30 @@
 """
 Test suite para Nivel 3: Motor Data-Driven, Mínimos Comprables, Categorías Server-Side
 Ejecutable sin dependencias externas (mock de imports)
+
+[P3-TEST-LEVEL3-NOPOLLUTE · 2026-05-18] Este script ejecuta module-level
+mocks de `sys.modules['constants']`, `sys.modules['db_core']` y otros sin
+restaurar al final. Cuando pytest lo collecta, contamina `sys.modules` para
+TODOS los tests posteriores que importan `constants` real (`from constants
+import X` falla con "cannot import name X from 'constants' (unknown
+location)" porque el mock no tiene X).
+
+Skip-at-collect cuando se ejecuta vía pytest. El archivo sigue siendo
+ejecutable directamente con `py -3.11 tests/test_level3.py` para auditoría
+manual. Si querés migrar este test a pytest real, refactorizar para usar
+`monkeypatch` con scope='function' que sí restaura el módulo al final.
 """
 import sys
+
+if "pytest" in sys.modules:
+    import pytest
+    pytest.skip(
+        "test_level3.py es un script standalone que mockea sys.modules a "
+        "nivel module y contamina el ambiente de pytest. Corre directo con "
+        "`py -3.11 tests/test_level3.py` si querés re-validar manualmente.",
+        allow_module_level=True,
+    )
+
 import types
 
 # Mock de imports para ejecutar sin Supabase/LangChain

@@ -2,6 +2,7 @@ import pytest
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
+from fastapi import Response
 from db_inventory import get_user_inventory, release_meal_reservation
 
 from cron_tasks import (
@@ -625,7 +626,7 @@ def test_shift_plan_blocks_rolling_refill_for_active_7_day_plan(mock_pool, mock_
         {"id": "plan_7d", "plan_data": plan_data},
     ]
 
-    response = api_shift_plan({"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
+    response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
 
     assert response["success"] is True
     assert len(response["plan_data"]["days"]) == 2
@@ -658,7 +659,7 @@ def test_shift_plan_skips_refill_when_target_week_chunk_already_exists(mock_pool
         {"id": "chunk-existing", "status": "stale", "chunk_kind": "initial_plan"},
     ]
 
-    response = api_shift_plan({"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
+    response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
 
     assert response["success"] is True
     mock_enqueue.assert_not_called()
@@ -689,7 +690,7 @@ def test_shift_plan_uses_max_non_cancelled_week_when_failed_chunk_exists(mock_po
         None,
     ]
 
-    response = api_shift_plan({"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
+    response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
 
     assert response["success"] is True
     mock_enqueue.assert_called_once()
@@ -2573,7 +2574,7 @@ def test_synchronous_week1_seeds_last_chunk_learning_for_chunk2(
     and _recent_chunk_lessons are seeded with REAL metrics from
     _calculate_learning_metrics (not a zeroed-out stub)."""
     from routers.plans import api_analyze
-    from fastapi import BackgroundTasks
+    from fastapi import BackgroundTasks, Response
 
     mock_has_profile.return_value = True
     mock_get_likes.return_value = []

@@ -181,7 +181,16 @@ import cron_tasks  # noqa: E402
 # Fixtures
 # ---------------------------------------------------------------------------
 
-PANTRY_OK = ["pollo 500g", "arroz 1000g", "tomate 300g", "cebolla 200g", "aceite 250ml"]
+# [P1-PANTRY-GUARD-INITIAL-SKIP · 2026-05-18] PANTRY_OK debe tener ≥10 items
+# para activar el guard estricto (knob `PANTRY_GUARD_MIN_ITEMS` default 10).
+# Pre-fix tenía 5 items pero el guard ahora skipea por debajo del threshold
+# (asumiendo plan inicial / nevera no poblada). Para validar el path estricto
+# necesitamos simular un usuario con ciclo de compras vivo.
+PANTRY_OK = [
+    "pollo 500g", "arroz 1000g", "tomate 300g", "cebolla 200g", "aceite 250ml",
+    "huevo 12 unidades", "leche 1L", "queso 250g", "pan integral 500g", "yogurt 500g",
+    "ajo 100g", "limón 200g",
+]
 
 # [P1-5] El endpoint valida campos mínimos del formulario antes de invocar al
 # pipeline. Antes los tests mandaban payloads minimalistas (solo `user_id`,

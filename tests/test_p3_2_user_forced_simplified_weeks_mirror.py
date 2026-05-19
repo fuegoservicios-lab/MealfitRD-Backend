@@ -36,7 +36,7 @@ import re
 import pytest
 
 
-_PLANS_PATH = pathlib.Path(__file__).parent / "routers" / "plans.py"
+_PLANS_PATH = pathlib.Path(__file__).parent.parent / "routers" / "plans.py"
 
 
 @pytest.fixture(scope="module")

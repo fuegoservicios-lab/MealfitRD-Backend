@@ -25,7 +25,7 @@
 | `atomic_pool_fallback_active` | cron `_alert_atomic_pool_fallback` (P2-6) | cron sweep marca resolved si `last_at` excede window | Auto (explicit) |
 | `dead_lettered_chunks_recent` | cron `_alert_new_dead_lettered_chunks` (agregado flota) | `regenerate-simplified` re-encola último | Handler-driven |
 | `chunks_tz_unresolved_stuck` | cron `_alert_chunks_stuck_in_tz_unresolved` | cron re-eval | Auto (implicit) |
-| `chunk_pantry_snapshots_stale` | cron `_alert_chunk_pantry_snapshots_stale` (chunks pending con `_pantry_captured_at`, P1-LIVE-1) | P0-AUDIT-2: early-return UPDATE resolved_at cuando `len(rows) < min_count` | Auto (explicit) |
+| `chunk_pantry_snapshots_stale` | cron `_alert_chunk_pantry_snapshots_stale` (chunks pending con `_pantry_captured_at IS NOT NULL`, P1-LIVE-1) | P0-AUDIT-2: early-return UPDATE resolved_at cuando `len(rows) < min_count` | Auto (explicit) |
 | `chunk_lag_excessive` | cron `_alert_chunk_lag_excessive` (agregado flota) | cron re-eval | Auto (implicit) |
 | `chunk_dual_processing_detected` | cron `_alert_chunk_dual_processing` (severity critical) | Manual: investigar race entre instances | Manual |
 | `chunk_paused_indefinitely:<plan_id>:<week>` | cron `_alert_chunks_paused_indefinitely` | `regenerate-simplified` + cron re-eval | Handler-driven |

@@ -77,8 +77,10 @@ def test_marker_in_endpoint():
 # ---------------------------------------------------------------------------
 def test_history_status_summary_requires_auth():
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: None
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: None
 
     r = client.get("/api/plans/history-status-summary")
     assert r.status_code == 401, r.text
@@ -91,8 +93,10 @@ def test_returns_dict_shape_with_per_plan_counters():
     """Response: `{summary: {plan_id: {pending_user_action_count,
     failed_count, in_flight_count, completed_count, total}}}`."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     fake_rows = [
         {
@@ -151,8 +155,10 @@ def test_sql_filters_by_user_id_defense_in_depth():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-status-summary")
@@ -177,8 +183,10 @@ def test_sql_excludes_orphan_meal_plan_id():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-status-summary")
@@ -205,8 +213,10 @@ def test_sql_includes_filter_for_each_required_status(required_filter):
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-status-summary")
@@ -233,8 +243,10 @@ def test_sql_groups_by_meal_plan_id():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-status-summary")
@@ -257,8 +269,10 @@ def test_sql_caps_at_200_plans():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-status-summary")
@@ -276,8 +290,10 @@ def test_empty_user_returns_empty_summary():
     """Usuario sin chunks → `{summary: {}}` (no 404). El frontend
     lo trata como "todos los planes confían en plan_data legacy"."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=[]):
         r = client.get("/api/plans/history-status-summary")
@@ -292,8 +308,10 @@ def test_row_with_missing_pid_is_skipped():
     extrema), el endpoint la ignora en vez de incluir una key vacía
     en el dict."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     fake_rows = [
         {
@@ -327,8 +345,10 @@ def test_counter_values_are_ints_not_strings():
     """Defense: psycopg podría devolver Decimal/str en agregaciones
     según versión. Verificamos que el response tiene ints."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     fake_rows = [
         {

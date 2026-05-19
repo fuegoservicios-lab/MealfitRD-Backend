@@ -808,6 +808,62 @@ CHUNK_DEAD_LETTER_ALERT_COOLDOWN_HOURS = max(1, int(os.environ.get("CHUNK_DEAD_L
 #   flota es grande y un dead-letter aislado es ruido aceptable.
 CHUNK_DEAD_LETTER_ALERT_MIN_COUNT = max(1, int(os.environ.get("CHUNK_DEAD_LETTER_ALERT_MIN_COUNT", "1")))
 
+# [P3-CHUNK-GC-DEADLETTER · 2026-05-18] GC de chunks dead-lettered antiguos.
+# `plan_chunk_queue` acumula filas `status='failed' AND dead_lettered_at IS NOT NULL`
+# indefinidamente — el cron `_alert_new_dead_lettered_chunks` solo alerta, NO purga.
+# Pre-fix, una flota con dead-letter rate sostenido (incidente de modelo LLM, racha
+# de planes con pantry vacía) acumulaba filas para siempre, inflando index size
+# (idx_plan_chunk_queue_status, idx_plan_chunk_queue_user_id) y degradando pickup
+# perf O(N) en cada tick del worker.
+#
+# Patrón espejo del existente "purge cancelled >48h" (cron_tasks.py:20039), pero con
+# TTL más conservador porque dead-lettered son forensic-interesantes (un SRE puede
+# querer correlacionar dead-letter de hace 1-2 semanas con incidentes recientes).
+# Default 30 días = 1 ciclo de plan mensual completo + margen.
+#
+# CHUNK_GC_DEAD_LETTER_TTL_DAYS: edad mínima antes de purgar. 30d = forensic window
+#   razonable. Cap [7, 365] para evitar valores agresivos (<7d perderían contexto
+#   post-mortem) o paranoicos (>365d ya no es GC, es archivado).
+CHUNK_GC_DEAD_LETTER_TTL_DAYS = max(7, min(365, int(os.environ.get("CHUNK_GC_DEAD_LETTER_TTL_DAYS", "30"))))
+# CHUNK_GC_DEAD_LETTER_INTERVAL_HOURS: frecuencia del cron. 24h es plenty — dead-letter
+#   GC no es hot-path; correr más seguido satura el log sin acelerar nada. Cap [1, 168]
+#   = [1h, 1 semana].
+CHUNK_GC_DEAD_LETTER_INTERVAL_HOURS = max(1, min(168, int(os.environ.get("CHUNK_GC_DEAD_LETTER_INTERVAL_HOURS", "24"))))
+# CHUNK_GC_DEAD_LETTER_BATCH: límite por corrida para evitar lock contention con
+#   pickups en `plan_chunk_queue`. 1000 es seguro (DELETE de 1000 filas terminales
+#   ~50ms en idx). Cap [10, 10000].
+CHUNK_GC_DEAD_LETTER_BATCH = max(10, min(10000, int(os.environ.get("CHUNK_GC_DEAD_LETTER_BATCH", "1000"))))
+
+# [P1-PANTRY-GUARD-INITIAL-SKIP · 2026-05-18] Umbral mínimo de items en la nevera
+# del usuario para activar el pantry guard estricto en la generación inicial del
+# plan (`/api/plans/analyze[/stream]`).
+#
+# Problema reportado por user 2026-05-18: el guard rechazaba planes recién
+# generados cuando la nevera tenía pocos items (3-9), forzando 2-3 retries del
+# pipeline LLM por plan (costo ~$0.30 + 5-10 min wall-clock). El usuario tampoco
+# puede "llenar la nevera" mientras está dándole "regenerar plan" — ese flujo no
+# tiene sentido porque la lista de compras del plan ES LA QUE DEFINE qué comprar.
+#
+# Comportamiento pre-fix:
+#   - Nevera con 0 items → SKIP guard (corto-circuito sano).
+#   - Nevera con 1-N items → APLICA guard estricto → rechaza ingredientes
+#     legítimos del plan inicial → retries innecesarios.
+#
+# Comportamiento post-fix:
+#   - Nevera con <PANTRY_GUARD_MIN_ITEMS → SKIP guard (mismo path que vacía).
+#   - Nevera con ≥PANTRY_GUARD_MIN_ITEMS → APLICA guard (típico: ciclo de compras
+#     vivo, swap/refill esperan compatibilidad).
+#
+# Default 10 = "nevera mínimamente poblada para un ciclo activo". Usuarios típicos
+# tras su primera compra tienen 15-30 items. Por debajo de 10, está en generación
+# inicial o nevera casi vacía → la lista de compras del plan define el inventario,
+# no al revés.
+#
+# Knob ajustable sin redeploy. Si quieres desactivar el guard entero para flujos
+# iniciales, sube a 100. Si quieres preservar comportamiento legacy estricto,
+# bájalo a 1.
+PANTRY_GUARD_MIN_ITEMS = max(0, min(500, int(os.environ.get("MEALFIT_PANTRY_GUARD_MIN_ITEMS", "10"))))
+
 # [P2-6 · 2026-05-08] Alertas proactivas sobre fallback no-atómico del pool.
 # `update_user_health_profile_atomic` cae al path legacy (get + update) cuando
 # `connection_pool=None` y `MEALFIT_REQUIRE_ATOMIC_POOL≠1` (default). Ese

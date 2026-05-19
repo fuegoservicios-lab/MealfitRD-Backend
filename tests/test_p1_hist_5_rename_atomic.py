@@ -98,8 +98,10 @@ def _build_pool_mock(cursor):
 # ---------------------------------------------------------------------------
 def test_rename_requires_auth():
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: None
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: None
 
     r = client.patch(f"/api/plans/{_PLAN_ID}/name", json={"name": "Nuevo"})
     assert r.status_code == 401, r.text
@@ -107,8 +109,10 @@ def test_rename_requires_auth():
 
 def test_rename_requires_name_field():
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     # Body vacío.
     r = client.patch(f"/api/plans/{_PLAN_ID}/name", json={})
@@ -117,8 +121,10 @@ def test_rename_requires_name_field():
 
 def test_rename_rejects_non_string_name():
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     for bad in [123, None, [], {"x": 1}, True]:
         r = client.patch(f"/api/plans/{_PLAN_ID}/name", json={"name": bad})
@@ -130,8 +136,10 @@ def test_rename_rejects_empty_post_trim():
     podría dejar el nombre como espacios y el frontend mostraría el
     campo vacío sin tooltip de ayuda."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     for empty in ["", "   ", "\t\n", "  \n  \t  "]:
         r = client.patch(f"/api/plans/{_PLAN_ID}/name", json={"name": empty})
@@ -142,8 +150,10 @@ def test_rename_caps_length():
     """Cap defensivo a 200 chars. Un nombre de 10K caracteres es bug
     cliente, no caso legítimo."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     too_long = "X" * 201
     r = client.patch(f"/api/plans/{_PLAN_ID}/name", json={"name": too_long})
@@ -156,8 +166,10 @@ def test_rename_caps_length():
 def test_rename_404_when_plan_missing_or_other_user():
     """RETURNING vacío → 404 (no leak de existencia)."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     cursor = _CursorRecorder(fetchall_returns=[[]])  # RETURNING vacío
     pool_mock = _build_pool_mock(cursor)
@@ -177,8 +189,10 @@ def test_rename_emits_atomic_update_with_jsonb_set():
     en transacción: lock advisory + UPDATE...RETURNING.
     """
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     cursor = _CursorRecorder(fetchall_returns=[[{"id": _PLAN_ID}]])
     pool_mock = _build_pool_mock(cursor)
@@ -233,8 +247,10 @@ def test_rename_trims_name_in_response():
     del state. Sin trim, el state local guardaría espacios y next read
     desde DB devolvería trimmed → drift en re-renders."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     cursor = _CursorRecorder(fetchall_returns=[[{"id": _PLAN_ID}]])
     pool_mock = _build_pool_mock(cursor)

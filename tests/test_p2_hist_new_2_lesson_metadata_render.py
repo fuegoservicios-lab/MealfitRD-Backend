@@ -114,8 +114,10 @@ def test_response_passes_through_dict_metadata():
         return [fake_row]
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/lessons")
@@ -137,8 +139,10 @@ def test_response_handles_none_metadata():
         return [fake_row]
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/lessons")
@@ -161,8 +165,10 @@ def test_response_coerces_string_metadata_to_none():
         return [fake_row]
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/lessons")
@@ -181,8 +187,10 @@ def test_response_coerces_list_metadata_to_none():
         return [fake_row]
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/lessons")
@@ -202,8 +210,10 @@ def test_response_preserves_empty_dict():
         return [fake_row]
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(f"/api/plans/{_PLAN_A}/lessons")

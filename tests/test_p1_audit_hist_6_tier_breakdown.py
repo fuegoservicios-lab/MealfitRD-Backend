@@ -113,8 +113,10 @@ def test_history_list_sql_uses_lateral_with_jsonb_object_agg():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -140,8 +142,10 @@ def test_history_list_tier_subquery_filters_status_completed_and_tier_not_null()
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -174,8 +178,10 @@ def test_history_list_response_includes_tier_breakdown_when_present():
                           }),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -193,8 +199,10 @@ def test_history_list_response_normalizes_empty_breakdown_to_none():
         _base_history_row(_PLAN_A, chunk_tier_breakdown={}),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -211,8 +219,10 @@ def test_history_list_response_passes_through_none():
         _base_history_row(_PLAN_A, chunk_tier_breakdown=None),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -234,8 +244,10 @@ def test_summary_sql_uses_lateral_with_jsonb_object_agg():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-status-summary")
@@ -260,8 +272,10 @@ def test_summary_response_includes_tier_breakdown():
         },
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-status-summary")
@@ -284,8 +298,10 @@ def test_summary_response_normalizes_empty_breakdown_to_none():
         },
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-status-summary")
@@ -304,8 +320,10 @@ def test_summary_params_pass_user_id_twice():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-status-summary")
@@ -337,8 +355,10 @@ def test_both_endpoints_filter_same_status_and_tier_constraints():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake_list):
         client.get("/api/plans/history-list")

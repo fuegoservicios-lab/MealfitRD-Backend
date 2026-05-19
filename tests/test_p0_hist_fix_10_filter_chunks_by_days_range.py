@@ -66,21 +66,37 @@ def test_history_jsx_preserves_week_number_fallback():
 
 def test_history_jsx_checks_typeof_for_days_range_filter():
     """Defensa contra payloads mal-formados: typeof === 'number'
-    para days_offset Y days_count antes de hacer la suma."""
+    para days_offset Y days_count antes de hacer la suma.
+
+    Buscamos dentro del bloque que arranca en el marker FIX-10 y termina al
+    cierre del callback `.filter(...)`. El comentario explicativo creció con
+    el tiempo (~23 líneas) y un window fijo de 3000 chars dejó de cubrir
+    el callback. Delimitamos por el primer `_rawList.filter(` después del
+    marker (anchor del bloque que el FIX introduce) hasta el `});` que cierra
+    el callback.
+    """
     text = _HISTORY_JSX.read_text(encoding="utf-8")
-    # Buscar dentro del bloque del filter (entre marker FIX-10 y
-    # el cierre del filter).
     fix10_idx = text.find("[P0-HIST-FIX-10")
-    assert fix10_idx > -1
-    block = text[fix10_idx:fix10_idx + 3000]
+    assert fix10_idx > -1, "Marker FIX-10 ausente — el test del anchor lo cubre arriba."
+
+    filter_start = text.find("_rawList.filter(", fix10_idx)
+    assert filter_start > -1, (
+        "Esperaba un `_rawList.filter(` dentro del bloque FIX-10. Si el filter "
+        "se renombró o extrajo a un helper, actualiza este anchor."
+    )
+    # Cierre del callback: primer `});` después del filter_start. Defensivo:
+    # tomar un window grande para tolerar refactors menores de indentación.
+    block_end = text.find("});", filter_start)
+    block = text[filter_start:block_end] if block_end > -1 else text[filter_start:filter_start + 5000]
+
     assert re.search(
         r"typeof\s+c\.days_offset\s*===\s*['\"]number['\"]",
         block,
-    )
+    ), "Defensa typeof para days_offset requerida dentro del filter callback."
     assert re.search(
         r"typeof\s+c\.days_count\s*===\s*['\"]number['\"]",
         block,
-    )
+    ), "Defensa typeof para days_count requerida dentro del filter callback."
 
 
 def test_chunk_metrics_endpoint_exposes_days_offset_and_days_count():

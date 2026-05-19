@@ -97,7 +97,16 @@ _install_stub(
 )
 _install_stub("pydantic", BaseModel=object, Field=lambda default=None, **_kwargs: default)
 _install_stub("schemas", HealthProfileSchema=object, ExpandedRecipeModel=object)
-_install_stub("graph_orchestrator", run_plan_pipeline=lambda *_args, **_kwargs: {})
+_install_stub(
+    "graph_orchestrator",
+    run_plan_pipeline=lambda *_args, **_kwargs: {},
+    # [test fix] cron_tasks.py:110 importa `_env_int/_env_float/_env_bool` desde
+    # graph_orchestrator. Sin estos en el stub, la importación de cron_tasks abajo
+    # falla con `ImportError: cannot import name '_env_int' from 'graph_orchestrator'`.
+    _env_int=lambda name, default, *_a, **_kw: int(default),
+    _env_float=lambda name, default, *_a, **_kw: float(default),
+    _env_bool=lambda name, default, *_a, **_kw: bool(default),
+)
 _install_stub("memory_manager", build_memory_context=lambda *_args, **_kwargs: "")
 _install_stub("services", _save_plan_and_track_background=lambda *_args, **_kwargs: None)
 _install_stub("agent", analyze_preferences_agent=lambda *_args, **_kwargs: {})
@@ -2132,44 +2141,34 @@ def test_p0_2_record_failure_returns_false_on_persist_error_to_avoid_blocking():
 
 
 def test_p0_2_notify_user_live_degraded_respects_24h_cooldown():
-    """No spamear: si ya notificamos en las últimas 24h, no notificar de nuevo."""
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    """No spamear: si ya notificamos en las últimas 24h, no notificar de nuevo.
 
-    recent_notif_iso = (_dt.now(_tz.utc) - _td(hours=2)).isoformat()
-
-    def fake_query(*_a, **_k):
-        return {"health_profile": {"_inventory_live_degraded_notified_at": recent_notif_iso}}
-
-    with patch.object(cron_tasks, "execute_sql_query", side_effect=fake_query), \
-         patch.object(cron_tasks, "execute_sql_write") as mock_write, \
+    [test fix · 2026-05-18] El test fue escrito cuando la función leía
+    `health_profile._inventory_live_degraded_notified_at` directo. Tras [P1-2 ·
+    2026-05-10] la función usa `_claim_push_cooldown_slot(...)` (CAS atómico
+    compartido). Mockear ese helper para simular cooldown activo."""
+    with patch.object(cron_tasks, "_claim_push_cooldown_slot", return_value=False), \
          patch.object(cron_tasks, "_dispatch_push_notification") as mock_push:
         sent = cron_tasks._maybe_notify_user_live_degraded("user_xyz")
 
     assert sent is False
     assert mock_push.call_count == 0
-    assert mock_write.call_count == 0
 
 
 def test_p0_2_notify_user_live_degraded_sends_push_after_cooldown():
-    """Si pasaron >= 24h desde la última notificación, notificar y persistir el
-    timestamp para reiniciar el cooldown."""
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    """Si pasaron >= 24h desde la última notificación, notificar.
 
-    old_notif_iso = (_dt.now(_tz.utc) - _td(hours=30)).isoformat()
-
-    def fake_query(*_a, **_k):
-        return {"health_profile": {"_inventory_live_degraded_notified_at": old_notif_iso}}
-
-    with patch.object(cron_tasks, "execute_sql_query", side_effect=fake_query), \
-         patch.object(cron_tasks, "execute_sql_write") as mock_write, \
+    [test fix · 2026-05-18] Tras [P1-2 · 2026-05-10] el SELECT-then-UPDATE
+    legacy fue reemplazado por `_claim_push_cooldown_slot(...)` CAS atómico.
+    El helper internamente maneja la persistencia del timestamp; el test
+    ahora valida solo el comportamiento observable: `_dispatch_push_notification`
+    se invoca y la función retorna True cuando el slot está libre."""
+    with patch.object(cron_tasks, "_claim_push_cooldown_slot", return_value=True), \
          patch.object(cron_tasks, "_dispatch_push_notification") as mock_push:
         sent = cron_tasks._maybe_notify_user_live_degraded("user_xyz")
 
     assert sent is True
     assert mock_push.call_count == 1
-    # Persistir el nuevo timestamp para el siguiente cooldown.
-    assert mock_write.call_count == 1
-    assert "_inventory_live_degraded_notified_at" in mock_write.call_args[0][0]
 
 
 def test_p0_2_record_failure_caps_log_size_to_avoid_unbounded_growth():
@@ -2518,8 +2517,8 @@ def test_p1_3_record_deferral_persists_via_execute_sql_write():
 
     with patch.object(cron_tasks, "execute_sql_write", side_effect=fake_write):
         ok = cron_tasks._record_chunk_deferral(
-            user_id="user-x",
-            meal_plan_id="plan-y",
+            user_id="11111111-1111-1111-1111-111111111111",
+            meal_plan_id="22222222-2222-2222-2222-222222222222",
             week_number=3,
             reason="temporal_gate",
             days_until_prev_end=2,
@@ -2529,7 +2528,7 @@ def test_p1_3_record_deferral_persists_via_execute_sql_write():
     assert len(captured) == 1
     sql, params = captured[0]
     assert "INSERT INTO chunk_deferrals" in sql
-    assert params == ("user-x", "plan-y", 3, "temporal_gate", 2)
+    assert params == ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222", 3, "temporal_gate", 2)
 
 
 def test_p1_3_record_deferral_handles_none_meal_plan_id_and_days():
@@ -2543,7 +2542,7 @@ def test_p1_3_record_deferral_handles_none_meal_plan_id_and_days():
 
     with patch.object(cron_tasks, "execute_sql_write", side_effect=fake_write):
         ok = cron_tasks._record_chunk_deferral(
-            user_id="user-x",
+            user_id="11111111-1111-1111-1111-111111111111",
             meal_plan_id=None,
             week_number=2,
             reason="zero_log_gate",
@@ -2567,8 +2566,8 @@ def test_p1_3_first_failure_logs_at_error_level_with_context(caplog):
     with patch.object(cron_tasks, "execute_sql_write", side_effect=boom):
         with caplog.at_level("ERROR", logger="cron_tasks"):
             ok = cron_tasks._record_chunk_deferral(
-                user_id="user-x",
-                meal_plan_id="plan-y",
+                user_id="11111111-1111-1111-1111-111111111111",
+                meal_plan_id="22222222-2222-2222-2222-222222222222",
                 week_number=2,
                 reason="temporal_gate",
                 days_until_prev_end=1,
@@ -2582,8 +2581,8 @@ def test_p1_3_first_failure_logs_at_error_level_with_context(caplog):
     assert len(error_records) == 1
     msg = error_records[0].message
     # Contexto requerido para diagnóstico:
-    assert "user-x" in msg
-    assert "plan-y" in msg
+    assert "11111111-1111-1111-1111-111111111111" in msg
+    assert "22222222-2222-2222-2222-222222222222" in msg
     assert "week=2" in msg
     assert "temporal_gate" in msg
     assert "relation chunk_deferrals does not exist" in msg
@@ -2601,7 +2600,7 @@ def test_p1_3_intermediate_failures_use_warning_to_avoid_log_spam(caplog):
         with caplog.at_level("WARNING", logger="cron_tasks"):
             for _ in range(5):
                 cron_tasks._record_chunk_deferral(
-                    user_id="user-x", meal_plan_id="plan-y",
+                    user_id="11111111-1111-1111-1111-111111111111", meal_plan_id="22222222-2222-2222-2222-222222222222",
                     week_number=2, reason="temporal_gate",
                 )
 
@@ -2626,7 +2625,7 @@ def test_p1_3_every_tenth_failure_escalates_to_error(caplog):
         with caplog.at_level("WARNING", logger="cron_tasks"):
             for _ in range(11):
                 cron_tasks._record_chunk_deferral(
-                    user_id="u", meal_plan_id=None,
+                    user_id="11111111-1111-1111-1111-111111111111", meal_plan_id=None,
                     week_number=2, reason="temporal_gate",
                 )
 
@@ -2652,11 +2651,11 @@ def test_p1_3_success_after_failures_resets_counter_and_logs_recovery(caplog):
         with caplog.at_level("INFO", logger="cron_tasks"):
             for _ in range(3):
                 cron_tasks._record_chunk_deferral(
-                    user_id="u", meal_plan_id=None, week_number=2, reason="x",
+                    user_id="11111111-1111-1111-1111-111111111111", meal_plan_id=None, week_number=2, reason="x",
                 )
             assert cron_tasks._chunk_deferral_telemetry_failures["count"] == 3
             ok = cron_tasks._record_chunk_deferral(
-                user_id="u", meal_plan_id=None, week_number=2, reason="x",
+                user_id="11111111-1111-1111-1111-111111111111", meal_plan_id=None, week_number=2, reason="x",
             )
 
     assert ok is True
@@ -2682,7 +2681,7 @@ def test_p1_3_helper_does_not_propagate_db_errors_to_caller():
     with patch.object(cron_tasks, "execute_sql_write", side_effect=explode):
         # No try/except aquí — si propaga, el test falla.
         result = cron_tasks._record_chunk_deferral(
-            user_id="u", meal_plan_id=None, week_number=1, reason="x",
+            user_id="11111111-1111-1111-1111-111111111111", meal_plan_id=None, week_number=1, reason="x",
         )
 
     assert result is False

@@ -140,8 +140,10 @@ def test_sql_contains_not_exists_sibling(endpoint):
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(endpoint)
@@ -179,8 +181,10 @@ def test_sql_sibling_matches_same_plan_and_week(endpoint):
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(endpoint)
@@ -212,8 +216,10 @@ def test_sql_sibling_excludes_self(endpoint):
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get(endpoint)
@@ -239,8 +245,10 @@ def test_history_list_coalesce_unreplaced():
         return []
 
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", side_effect=_fake):
         r = client.get("/api/plans/history-list")
@@ -269,8 +277,10 @@ def test_response_includes_unreplaced_counter():
                   chunk_completed_count=7),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -299,8 +309,10 @@ def test_response_unreplaced_defaults_to_zero():
                   chunk_failed_unreplaced_count=0),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -321,8 +333,10 @@ def test_response_unreplaced_handles_none_from_sql():
                   chunk_failed_unreplaced_count=None),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -353,8 +367,10 @@ def test_status_summary_response_includes_unreplaced():
         },
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-status-summary")
@@ -392,8 +408,10 @@ def test_unreplaced_distinct_from_failed_count():
                   chunk_pending_user_action_count=0),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")
@@ -426,8 +444,10 @@ def test_unreplaced_equal_to_failed_when_no_replacement():
                   chunk_pending_user_action_count=0),
     ]
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=fake_rows):
         r = client.get("/api/plans/history-list")

@@ -110,8 +110,10 @@ _PLAN_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 # ---------------------------------------------------------------------------
 def test_delete_requires_auth():
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: None
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: None
 
     r = client.delete(f"/api/plans/{_PLAN_ID}")
     assert r.status_code == 401, r.text
@@ -120,8 +122,10 @@ def test_delete_requires_auth():
 def test_delete_404_when_plan_missing():
     """SELECT de ownership devuelve None → 404."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     with patch("db_core.execute_sql_query", return_value=None):
         r = client.delete(f"/api/plans/{_PLAN_ID}")
@@ -132,8 +136,10 @@ def test_delete_404_when_plan_belongs_to_other_user():
     """ownership SELECT incluye user_id en WHERE — si no devuelve fila,
     el endpoint responde 404 (no 403, para no filtrar la existencia)."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     captured = {}
     def _spy(sql, params=None, **kw):
@@ -161,8 +167,10 @@ def test_delete_emits_lock_then_release_then_delete_plan_in_order():
     para serializar con restore/rename concurrentes del mismo user.
     """
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     # rowcounts: 0 (lock), 2 (release locks), 1 (delete plan).
     cursor = _CursorRecorder(rowcounts=[0, 2, 1])
@@ -207,8 +215,10 @@ def test_delete_404_on_race_zero_rows_affected():
     """ownership SELECT pasa pero el DELETE final afecta 0 filas
     (alguien borró entre las dos) → 404 (intent satisfecho, no 500)."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     # [P1-HIST-AUDIT-7] rowcounts: 0 (lock), 0 (release), 0 (delete).
     cursor = _CursorRecorder(rowcounts=[0, 0, 0])
@@ -224,8 +234,10 @@ def test_delete_handles_plan_with_no_locks():
     """Plan sin chunks (released=0) NO debe ser un error: el endpoint
     completa el DELETE igual."""
     client = _build_test_client()
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     client.app.dependency_overrides[verify_api_quota] = lambda: _USER_A
+
+    client.app.dependency_overrides[get_verified_user_id] = lambda: _USER_A
 
     # [P1-HIST-AUDIT-7] rowcounts: 0 (lock), 0 (release), 1 (delete).
     cursor = _CursorRecorder(rowcounts=[0, 0, 1])
