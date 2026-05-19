@@ -104,13 +104,13 @@ _safety_settings = {
 def _chat_agent_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_AGENT_MODEL",
-        "gemini-3.1-pro-preview",
+        "gemini-3.5-flash",
     )
 
 def _chat_agent_swap_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_AGENT_SWAP_MODEL",
-        "gemini-3.1-pro-preview",
+        "gemini-3.5-flash",
     )
 
 def _chat_title_model_name() -> str:

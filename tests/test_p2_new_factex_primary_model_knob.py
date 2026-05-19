@@ -20,6 +20,7 @@ cold start observado en incidente 2026-05-11 con `gemini-3.1-pro-preview`
 Defensas que el test enforza:
   1. Anchor `P2-NEW-FACTEX-PRIMARY-MODEL-KNOB` presente en `fact_extractor.py`.
   2. Knobs `MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL` (default
+     'gemini-3.5-flash' tras P3-MODEL-DEFAULT-FLASH35 · 2026-05-19, era
      'gemini-3.1-pro-preview') y `MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL`
      (default 'gemini-3.1-flash-lite-preview') resueltos via `_env_str`.
   3. Helpers `_fact_extractor_primary_model_name()` y
@@ -54,15 +55,19 @@ def test_anchor_present_in_fact_extractor():
 
 def test_primary_model_knob_registered():
     src = _read(_FACT_EX)
+    # [P3-MODEL-DEFAULT-FLASH35 · 2026-05-19] Default migrado de
+    # `gemini-3.1-pro-preview` (preview, riesgo deprecation) a
+    # `gemini-3.5-flash` (stable). Override sigue disponible via env var.
     pat = re.compile(
-        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL[\"\']\s*,\s*[\"\']gemini-3\.1-pro-preview[\"\']',
+        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL[\"\']\s*,\s*[\"\']gemini-3\.5-flash[\"\']',
         re.DOTALL,
     )
     assert pat.search(src), (
         "Knob `MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL` debe resolverse via "
-        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL\", \"gemini-3.1-pro-preview\")`. "
-        "Default preserva comportamiento pre-knob; override permite swap a "
-        "stable (`gemini-2.5-pro`) sin redeploy si Google depreca el preview."
+        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL\", \"gemini-3.5-flash\")`. "
+        "Default actual `gemini-3.5-flash` (P3-MODEL-DEFAULT-FLASH35 · 2026-05-19, "
+        "era `gemini-3.1-pro-preview`); override permite swap sin redeploy si "
+        "se requiere otro modelo."
     )
 
 
@@ -90,15 +95,19 @@ def test_helpers_defined():
 
 
 def test_zero_inline_primary_model_literal():
-    """Cero `pro_model="gemini-3.1-pro-preview"` con literal hardcoded en
-    callsites de `_invoke_with_shadow` — el helper debe ser quien lo provea."""
+    """Cero `pro_model="gemini-..."` con literal hardcoded en callsites de
+    `_invoke_with_shadow` — el helper debe ser quien lo provea.
+
+    [P3-MODEL-DEFAULT-FLASH35 · 2026-05-19] Bloquea ambos el default viejo
+    (`gemini-3.1-pro-preview`) y el nuevo (`gemini-3.5-flash`): cualquier
+    literal inline rompe el patrón knob."""
     src = _read(_FACT_EX)
     # Permitido: el default literal dentro del `_env_str(...)` (línea del knob)
     # NO debe contar como callsite. Acotamos la búsqueda a contextos
     # `pro_model=` (kwarg de invocación), NO al `_env_str(...)` del knob.
-    bad = re.findall(r'pro_model\s*=\s*[\"\']gemini-3\.1-pro-preview[\"\']', src)
+    bad = re.findall(r'pro_model\s*=\s*[\"\']gemini-[a-z0-9.-]+[\"\']', src)
     assert not bad, (
-        f"Encontrados {len(bad)} callsites con `pro_model=\"gemini-3.1-pro-preview\"` "
+        f"Encontrados {len(bad)} callsites con `pro_model=\"gemini-...\"` "
         f"hardcoded. Reemplazar por `pro_model=_fact_extractor_primary_model_name()`."
     )
 

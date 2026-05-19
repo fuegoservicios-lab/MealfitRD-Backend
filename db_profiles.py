@@ -503,6 +503,12 @@ def log_api_usage(user_id: str, endpoint: str = "gemini"):
 # None y el evento se persiste sin costo (operador puede backfillar luego
 # ejecutando SQL con tokens × pricing nuevo).
 _DEFAULT_GEMINI_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
+    # [P3-MODEL-DEFAULT-FLASH35 · 2026-05-19] Pricing tier Estándar (paid)
+    # tomado de la doc oficial de Google AI 2026-05-19: input $1.50/M, output
+    # $9.00/M (incluye reasoning tokens), context cache storage $0.15/M.
+    # Tier "Lote"/"Flexible"/"Prioridad" tienen pricing distinto — si la app
+    # migra a esos tiers, override via knob `MEALFIT_GEMINI_PRICING_JSON`.
+    "gemini-3.5-flash":              {"input": 1_500_000, "output":  9_000_000, "cached": 150_000},
     "gemini-3.1-pro-preview":        {"input": 1_250_000, "output": 10_000_000, "cached": 312_500},
     "gemini-3.1-flash-preview":      {"input":   300_000, "output":  2_500_000, "cached":  75_000},
     "gemini-3.1-flash-lite-preview": {"input":   100_000, "output":    400_000, "cached":  25_000},
