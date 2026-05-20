@@ -2,6 +2,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Re
 from fastapi.responses import StreamingResponse
 from error_utils import safe_error_detail
 from typing import Optional
+import hashlib
 import logging
 import traceback
 import json
@@ -15,7 +16,7 @@ from db import (
     save_message, save_message_feedback, log_api_usage
 )
 from memory_manager import build_memory_context, summarize_and_prune
-from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream
+from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError
 from services import merge_form_data_with_profile
 from db_profiles import get_user_profile
 from db_plans import get_latest_meal_plan
@@ -24,8 +25,147 @@ from fact_extractor import async_extract_and_save_facts
 # duro + alert. Reemplaza los `threading.Thread(target=..., daemon=True).start()`
 # que vivían inline en este router. Ver `backend/bg_executor.py`.
 from bg_executor import submit_bg_task
+# [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Helper SSOT del registry de knobs
+# `MEALFIT_*`. Cualquier env var leída aquí se auto-registra en
+# `_KNOBS_REGISTRY` y es visible en `/health/version`.
+from knobs import _env_int
 
 logger = logging.getLogger(__name__)
+
+
+# [P1-CHAT-LOG-CTX · 2026-05-19] Logger correlacionable por (session_id,
+# user_id) para incidentes reportados por usuarios. Pre-fix: cada log line
+# del chat-flow (router + stream + tools) usaba el logger crudo del módulo
+# sin contexto. Un user reporta "mi chat no funcionó hace 10min" → grep en
+# Sentry/CloudWatch revela `session_id` solo en algunos logs (los que el
+# autor del log decidió incluir manualmente). Reconstruir la cronología
+# requiere correlación visual + suerte. Con `LoggerAdapter`, cada record
+# carga `extra={'session_id': '...', 'user_id_hash': '...'}` y Sentry/
+# OpenSearch puede filtrar por esos atributos sin que cada log explicite.
+#
+# `user_id` se hashea (SHA-256[:12]) en endpoints públicos del chat —
+# mismo patrón canónico que `routers/system.py::_hash_uuid_for_public()`
+# (P2-HEALTH-UID-STRIP · 2026-05-12). El log queda grep-friendly sin
+# leakeo de UUIDs raw a sinks de retención larga (Sentry retención ~30d,
+# data residency cross-region).
+#
+# Tooltip-anchor: P1-CHAT-LOG-CTX.
+
+
+def _hash_user_id_for_log(user_id: Optional[str]) -> str:
+    """[P1-CHAT-LOG-CTX · 2026-05-19] Hash determinístico del user_id
+    para inyectar en log records. Devuelve `"guest"` para guests/None
+    (NO hasheamos esos casos — son legítimamente públicos)."""
+    if not user_id or user_id == "guest":
+        return "guest"
+    try:
+        return hashlib.sha256(str(user_id).encode("utf-8")).hexdigest()[:12]
+    except Exception:
+        return "unknown"
+
+
+def _chat_logger(session_id: Optional[str], user_id: Optional[str]) -> logging.LoggerAdapter:
+    """[P1-CHAT-LOG-CTX · 2026-05-19] LoggerAdapter con contexto
+    correlacionable. Uso: `clog = _chat_logger(session_id, user_id); clog.info(...)`.
+    Cualquier sink estructurado (Sentry, OpenSearch, Datadog) verá los
+    atributos en `record.__dict__` y los puede filtrar/agregar."""
+    return logging.LoggerAdapter(
+        logger,
+        extra={
+            "session_id": session_id or "unknown",
+            "user_id_hash": _hash_user_id_for_log(user_id),
+        },
+    )
+
+
+# [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Cap de longitud del texto que el
+# usuario envía al chat. Aplica a:
+#   - `/api/chat/stream` (campo `prompt`): texto que el LLM consumirá.
+#   - `/api/chat/message` (campo `content`): mensaje persistido en
+#     `agent_messages` (rol `user` o `model` desde el cliente).
+#
+# Pre-fix: ninguno de los dos endpoints validaba longitud. Vectores:
+#   (a) DoS económico — un autenticado envía 100KB → Gemini consume tokens
+#       del owner desproporcionados al payload útil; bajo abuso sostenido,
+#       cuota mensual del provider se agota.
+#   (b) Context window saturation — Gemini Flash 3.5 acepta ~1M tokens
+#       pero el LLM gasta tiempo+latencia procesando el blob; el endpoint
+#       puede colgar hasta el timeout total-graph (60s, P0-CHAT-LLM-TIMEOUT).
+#   (c) Storage abuse — `/message` permite insertar texto arbitrario en
+#       `agent_messages.content` (text, sin cap DB). Un user puede crecer
+#       la tabla sin facturar quota LLM.
+#
+# Defaults:
+#   - 8192 chars (~8KB) cubre el 99.9% de mensajes legítimos en chat
+#     conversacional español. Voice mode TTS está aún más acotado por su
+#     propio cap de 1500 chars (P1-CHAT-TTS-1). Mensajes que necesiten
+#     >8KB legítimamente son extremadamente raros (un copy-paste de receta
+#     full o de paper técnico cabe en 8KB).
+#   - Clamp [256, 65536]: el límite inferior evita env vars patológicas
+#     que rompan el chat completo (256 cubre saludo + pregunta corta);
+#     el superior bloquea caps absurdos (>64KB ya es archivo, no chat).
+#
+# Knob: `MEALFIT_CHAT_PROMPT_MAX_CHARS` (auto-registrado). HTTPException
+# 413 (PAYLOAD_TOO_LARGE) es el código semánticamente correcto.
+# Tooltip-anchor: P0-CHAT-PROMPT-MAXLEN.
+_CHAT_PROMPT_MAX_CHARS_DEFAULT = 8192
+_CHAT_PROMPT_MAX_CHARS_CLAMP_MIN = 256
+_CHAT_PROMPT_MAX_CHARS_CLAMP_MAX = 65536
+
+
+def _chat_prompt_max_chars() -> int:
+    """[P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Cap actual aplicado por
+    `_enforce_chat_prompt_cap`. Lee `MEALFIT_CHAT_PROMPT_MAX_CHARS` con
+    clamp defensivo. Tooltip-anchor: P0-CHAT-PROMPT-MAXLEN."""
+    raw = _env_int("MEALFIT_CHAT_PROMPT_MAX_CHARS", _CHAT_PROMPT_MAX_CHARS_DEFAULT)
+    if raw < _CHAT_PROMPT_MAX_CHARS_CLAMP_MIN:
+        return _CHAT_PROMPT_MAX_CHARS_CLAMP_MIN
+    if raw > _CHAT_PROMPT_MAX_CHARS_CLAMP_MAX:
+        return _CHAT_PROMPT_MAX_CHARS_CLAMP_MAX
+    return raw
+
+
+def _enforce_chat_prompt_cap(value, field_name: str = "prompt") -> None:
+    """[P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Levanta HTTP 413 si el texto
+    excede el cap configurado. `None`/`""` pasan sin error (validación
+    de "missing" pertenece al caller). Tooltip-anchor: P0-CHAT-PROMPT-MAXLEN."""
+    if not value:
+        return
+    if not isinstance(value, str):
+        return
+    n = len(value)
+    cap = _chat_prompt_max_chars()
+    if n > cap:
+        logger.warning(
+            f"[P0-CHAT-PROMPT-MAXLEN] rechazado field={field_name} len={n} cap={cap}"
+        )
+        raise HTTPException(
+            status_code=413,
+            detail=f"Mensaje demasiado largo ({n} caracteres). Máximo permitido: {cap} caracteres.",
+        )
+
+
+def _resolve_user_id_for_db(
+    user_id_input: Optional[str], session_id: Optional[str]
+) -> Optional[str]:
+    """[P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Normaliza el `user_id` que
+    persistimos en `agent_messages.user_id`:
+
+      - `None`, `""`, `"guest"` → `None` (guest legítimo).
+      - `user_id == session_id` → `None` (frontend default cuando no hay
+        auth — el endpoint usa `session_id` como placeholder de user_id).
+      - UUID real distinto → retorna tal cual.
+
+    NO valida que sea UUID válido (eso lo hace el FK a `auth.users` en
+    DB — si es UUID malformado, el INSERT falla con `invalid uuid` y el
+    retry tenacity captura el error). Tooltip-anchor: P1-CHAT-DB-USER-ID-RLS."""
+    if not user_id_input:
+        return None
+    if user_id_input == "guest":
+        return None
+    if session_id and user_id_input == session_id:
+        return None
+    return user_id_input
 
 router = APIRouter(
     prefix="/api/chat",
@@ -154,15 +294,27 @@ def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depend
     role = data.get("role")
     content = data.get("content")
     user_id = data.get("user_id", session_id)
-    
+
     # Validación de seguridad IDOR
     if user_id and user_id != "guest" and user_id != session_id:
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
-            
+
+    # [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Cap longitud antes de INSERT en
+    # `agent_messages`. Storage abuse: text column sin cap nativo → un
+    # autenticado podría inflar la tabla sin pasar por LLM. Ver helper.
+    _enforce_chat_prompt_cap(content, field_name="content")
+
     if session_id and role and content:
         get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
-        save_message(session_id, role, content)
+        # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Pasar user_id explícito al
+        # save_message (ya en scope post-IDOR check + cap). Helper normaliza
+        # guest/session_id/UUID. Evita el lookup defensivo via
+        # get_session_owner que save_message hace cuando user_id es None.
+        save_message(
+            session_id, role, content,
+            user_id=_resolve_user_id_for_db(user_id, session_id),
+        )
         return {"success": True}
     return {"success": False, "error": "Faltan parámetros"}
 
@@ -178,6 +330,60 @@ import httpx
 # fluida sin pegarle al cap. Singleton módulo-level — mismo patrón que
 # `_PLAN_GEN_LIMITER` en routers/plans.py.
 _CHAT_TTS_LIMITER = RateLimiter(max_calls=60, period_seconds=60)
+
+
+# [P1-CHAT-STREAM-RL · 2026-05-19] Rate limiter de los endpoints
+# `/api/chat/stream` (SSE LLM principal) y `/api/chat` (non-stream, mismo
+# path al LLM). Pre-fix: solo el paywall `verify_api_quota` filtraba
+# tráfico (gratis=15, basic=50, plus=200, ultra/admin=999999 por MES).
+# A escala mensual eso no protege contra bursts: un user `plus` (200/mes)
+# puede gastar todo su cupo en 30 segundos enviando 200 prompts seguidos,
+# (a) saturando el upstream Gemini, (b) elevando p95 para usuarios
+# legítimos, (c) abriendo el `LLMCircuitBreaker` y gatillando 503s.
+#
+# Per-minute limit es el complemento correcto del paywall mensual: el
+# paywall acota costo total, el rate limiter acota burst. Patrón canónico
+# del repo (P1-6, P1-CHAT-TTS-1, P1-CHAT-TTS-1-AUTH).
+#
+# Default 30 calls/60s:
+#   - Conversación humana típica: ~1-2 prompts/min. 30/min cubre con margen
+#     amplio para un user que itera fast (correcciones rápidas, "más",
+#     "no, otra cosa").
+#   - Voice mode (call_mode) genera ~1 chunk/seg pero cada chunk va al
+#     endpoint /tts (cap separado 60/min), NO al /stream. /stream solo
+#     recibe el prompt completo del user, una vez por turn.
+#   - Bots/scrapers: 30/min limita hard el daño en burst — incluso si un
+#     atacante autenticado intenta spam, 30 prompts × 30 segundos = 15
+#     respuestas LLM, no 200.
+#
+# Knob `MEALFIT_CHAT_STREAM_LIMITER_PER_MIN` (auto-registrado vía `_env_int`,
+# clamp [1, 600]). Floor 1: nunca dejes el limiter en 0 (chat queda roto);
+# techo 600 (= 10/seg) es el peor caso razonable antes de que el limiter
+# se vuelva no-protector. Tooltip-anchor: P1-CHAT-STREAM-RL.
+_CHAT_STREAM_LIMITER_PER_MIN_DEFAULT = 30
+_CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MIN = 1
+_CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MAX = 600
+
+
+def _chat_stream_limiter_per_min() -> int:
+    """[P1-CHAT-STREAM-RL · 2026-05-19] Lee el knob con clamp defensivo.
+    Llamado UNA vez al module-load (en la construcción del singleton).
+    Tooltip-anchor: P1-CHAT-STREAM-RL."""
+    raw = _env_int(
+        "MEALFIT_CHAT_STREAM_LIMITER_PER_MIN",
+        _CHAT_STREAM_LIMITER_PER_MIN_DEFAULT,
+    )
+    if raw < _CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MIN:
+        return _CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MIN
+    if raw > _CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MAX:
+        return _CHAT_STREAM_LIMITER_PER_MIN_CLAMP_MAX
+    return raw
+
+
+_CHAT_STREAM_LIMITER = RateLimiter(
+    max_calls=_chat_stream_limiter_per_min(),
+    period_seconds=60,
+)
 
 # [P1-CHAT-TTS-1 · 2026-05-11] Cap de longitud del texto enviado a
 # ElevenLabs. La API factura por carácter; sin cap, un user (o un atacante
@@ -352,7 +558,7 @@ async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[s
         raise HTTPException(status_code=500, detail="Error saving feedback")
 
 
-@router.post("/stream")
+@router.post("/stream", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
 def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id", "default_session")
@@ -368,12 +574,24 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         if user_id and user_id != "guest" and user_id != session_id:
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
-                
-        logger.info(f"🔍 [DEBUG API CHAT STREAM] session_id={session_id}, user_id={user_id}")
-        
+
+        # [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Cap longitud ANTES de
+        # `save_message` y ANTES de invocar el LLM. Vector cerrado: DoS
+        # económico vía prompts gigantes (quema tokens del owner +
+        # cuelga endpoint hasta timeout total-graph 60s). Ver helper.
+        _enforce_chat_prompt_cap(prompt, field_name="prompt")
+
+        # [P1-CHAT-LOG-CTX · 2026-05-19] LoggerAdapter con session_id +
+        # user_id_hash. Reemplaza logs crudos del módulo en este endpoint
+        # para que un incidente reportado por user sea grepable end-to-end.
+        clog = _chat_logger(session_id, user_id)
+        clog.info(f"🔍 [DEBUG API CHAT STREAM] session_id={session_id}, user_id={user_id}")
+
         # Operaciones síncronas directas (ya estamos en un threadpool worker)
         get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
-        save_message(session_id, "user", prompt)
+        # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Pasar user_id explícito.
+        _db_user_id = _resolve_user_id_for_db(user_id, session_id)
+        save_message(session_id, "user", prompt, user_id=_db_user_id)
         
         # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
         form_data = merge_form_data_with_profile(
@@ -457,7 +675,15 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                             if _chunk_type == "done":
                                 response_text = data_obj.get("response", "")
                                 if response_text:
-                                    save_message(session_id, "model", response_text)
+                                    # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19]
+                                    # `_db_user_id` resuelto arriba en
+                                    # closure scope. Persiste el ownership
+                                    # de la respuesta del modelo al user
+                                    # que envió el prompt.
+                                    save_message(
+                                        session_id, "model", response_text,
+                                        user_id=_db_user_id,
+                                    )
                                     # `done` con response no-vacío también garantiza
                                     # consumo de tokens incluso si por alguna razón
                                     # los chunks intermedios no se observaron.
@@ -501,19 +727,30 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                         except Exception as e_json:
                             logger.error(f"Error parseando chunk de fin: {e_json}")
 
-            except GeneratorExit:
-                # [P2-AUDIT-NEW-2] Cliente cerró el SSE (AbortController,
-                # tab close, network drop). NO re-emite chunks (la conexión
-                # ya está muerta) pero el finally SÍ cobra si chunk_observed.
-                # `raise` propaga para que StreamingResponse cierre limpio.
-                logger.info(
+            except (GeneratorExit, asyncio.CancelledError) as _cancel_exc:
+                # [P2-AUDIT-NEW-2 · 2026-05-12] Cliente cerró el SSE
+                # (AbortController, tab close, network drop).
+                # [P1-CHAT-CANCEL-ASYNC · 2026-05-19] Extendido a
+                # `asyncio.CancelledError` — los generators sync embebidos
+                # en `StreamingResponse` se ejecutan en threadpool, pero
+                # Starlette puede cancelar el wrapper async wrapper cuando
+                # el cliente desconecta. `CancelledError` hereda de
+                # `BaseException` (NO de `Exception`) en Python 3.8+ así
+                # que el `except Exception` debajo NO la atrapaba — el
+                # finally idempotente de billing corría, pero el log se
+                # perdía como "Error mid-stream" con stack confuso. Ahora
+                # ambas señales de aborto se loguean como `info`, no
+                # `exception`. NO re-emite chunks (conexión ya muerta);
+                # finally SÍ cobra si chunk_observed.
+                _cancel_kind = type(_cancel_exc).__name__
+                clog.info(
                     f"[P2-AUDIT-NEW-2] SSE abortado por cliente "
-                    f"session={session_id} chunk_observed={_chunk_observed}"
+                    f"kind={_cancel_kind} chunk_observed={_chunk_observed}"
                 )
                 raise
             except Exception as e:
                 # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
-                logger.exception(f"[CHAT STREAM] Error mid-stream: {e}")
+                clog.exception(f"[CHAT STREAM] Error mid-stream: {e}")
                 # `chunk_observed` puede ser True (excepción tras emitir chunks)
                 # o False (excepción pre-LLM). El finally factura solo si True.
                 yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -551,7 +788,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
 
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(_CHAT_STREAM_LIMITER)])
 def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: str = Depends(verify_api_quota)):
     try:
         session_id = data.get("session_id", "default_session")
@@ -559,29 +796,40 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         user_id = data.get("user_id", session_id)
         current_plan = data.get("current_plan", None)
         form_data = data.get("form_data", None)
-        
+
         # Validación de seguridad IDOR
         if user_id and user_id != "guest" and user_id != session_id:
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
-                
-        logger.info(f"🔍 [DEBUG API CHAT] session_id={session_id}, user_id={user_id}")
-        
+
+        # [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Cap longitud antes de invocar
+        # el LLM (`chat_with_agent`). Mismo vector que `/stream` pero sin
+        # streaming — un blob gigante cuelga el endpoint hasta el timeout
+        # total-graph y quema tokens del owner. Ver helper.
+        _enforce_chat_prompt_cap(prompt, field_name="prompt")
+
+        # [P1-CHAT-LOG-CTX · 2026-05-19] Logger correlacionable.
+        clog = _chat_logger(session_id, user_id)
+        clog.info(f"🔍 [DEBUG API CHAT] session_id={session_id}, user_id={user_id}")
+
         get_or_create_session(session_id, user_id=user_id if user_id != "guest" else None)
-        save_message(session_id, "user", prompt)
-        
+        # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Pasar user_id explícito —
+        # ya resuelto post-IDOR check. Mismo patrón que /stream.
+        _db_user_id = _resolve_user_id_for_db(user_id, session_id)
+        save_message(session_id, "user", prompt, user_id=_db_user_id)
+
         # Handle form_data: merge frontend data with DB health_profile (DRY — shared in services.py)
         form_data = merge_form_data_with_profile(
             user_id if user_id != "guest" and user_id != session_id else "",
             form_data
         )
-        
+
         if not current_plan and user_id and user_id != "guest":
             current_plan = get_latest_meal_plan(user_id)
-        
+
         response_text, updated_fields, new_plan = chat_with_agent(session_id, prompt, current_plan=current_plan, user_id=user_id, form_data=form_data)
-        
-        save_message(session_id, "model", response_text)
+
+        save_message(session_id, "model", response_text, user_id=_db_user_id)
         
         # 🧠 Background: Resumir y podar mensajes si el historial creció demasiado
         background_tasks.add_task(summarize_and_prune, session_id)
@@ -626,6 +874,45 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         if new_plan:
             result["new_plan"] = new_plan
         return result
+    except HTTPException:
+        raise
+    except LLMRateLimitedError as e:
+        # [P1-CHAT-LLM-429 · 2026-05-20] Gemini ResourceExhausted detectado en
+        # call_model. Distinto de CB abierto: el provider está vivo pero
+        # throttleando este API key (saturación temporal). HTTP 429 con
+        # Retry-After permite al cliente reintentar con backoff sin contaminar
+        # el conteo del CB. Frontend ya muestra banner contextual; el
+        # navegador respeta Retry-After si está set.
+        logger.warning(f"[CHAT][P1-CHAT-LLM-429] Gemini rate-limit: {e}")
+        raise HTTPException(
+            status_code=429,
+            detail="El asistente está procesando muchas peticiones. Intenta de nuevo en unos segundos.",
+            headers={"Retry-After": "5"},
+        )
+    except LLMCircuitBreakerOpen as e:
+        # [P1-CHAT-CB · 2026-05-19] Breaker per-modelo abierto: el provider
+        # acumuló N fallos consecutivos (default 3) dentro de la ventana
+        # MEALFIT_CB_RESET_TIMEOUT_S. Fail-fast con 503 SERVICE UNAVAILABLE
+        # — semánticamente "intenta de nuevo más tarde". El frontend muestra
+        # el banner sin reintentar automáticamente (evita amplificar la
+        # condición). El breaker auto-resetea tras la ventana; el siguiente
+        # request que pasa por can_proceed() probará el provider.
+        logger.warning(f"[CHAT][P1-CHAT-CB] Circuit breaker abierto: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="El asistente está temporalmente saturado. Intenta de nuevo en unos segundos.",
+        )
+    except TimeoutError as e:
+        # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] Total-graph timeout (default 60s) o
+        # LLM per-invoke timeout (default 15s) excedido. 504 GATEWAY TIMEOUT
+        # comunica al frontend que el LLM upstream no respondió a tiempo;
+        # AgentPage muestra el banner de error sin re-intentar automáticamente
+        # (evita amplificar el incidente). Sentry capture vía logger.exception.
+        logger.exception(f"[CHAT][P0-CHAT-LLM-TIMEOUT] Gemini timeout: {e}")
+        raise HTTPException(
+            status_code=504,
+            detail="El asistente tardó demasiado en responder. Intenta de nuevo en un momento.",
+        )
     except Exception as e:
         # [P3-TRACEBACK-PRINT-EXC · 2026-05-15]
         logger.exception(f"[CHAT] Error en api_chat: {e}")

@@ -23,7 +23,14 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 from db import get_user_profile, update_user_health_profile
-from knobs import _env_str  # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] auto-registry de los 4 chat-model knobs
+from knobs import _env_str, _env_float  # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] / [P0-CHAT-LLM-TIMEOUT · 2026-05-19] auto-registry
+# [P1-CHAT-CB · 2026-05-19] Breaker per-modelo del graph_orchestrator. NO
+# duplicamos la implementación — reusamos el singleton + knobs ya productivos
+# (`MEALFIT_CB_FAILURE_THRESHOLD=3`, `MEALFIT_CB_RESET_TIMEOUT_S=30`). Import
+# de un solo nivel: `graph_orchestrator` NO importa `agent` (verificado), no
+# hay ciclo. Si en el futuro la dirección de import cambia, mover el helper
+# a un módulo neutro.
+from graph_orchestrator import _get_circuit_breaker
 import concurrent.futures
 import traceback
 from datetime import datetime, timezone
@@ -36,6 +43,49 @@ from db import get_user_ingredient_frequencies, get_latest_meal_plan_with_id, ge
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad output server-side.
+# El frontend renderiza chat content via LazyMarkdown + rehype-sanitize
+# (P1-MARKDOWN-SANITIZE), que escapa tags peligrosos y event handlers en
+# el árbol de DOM. Acá añadimos una segunda capa SERVER-SIDE: si
+# rehype-sanitize falla por bug, regresión, dep maliciosa, o un caller
+# futuro renderiza el contenido con `dangerouslySetInnerHTML`, las
+# etiquetas más peligrosas siguen neutralizadas en el wire.
+#
+# Conservador: solo escapa tags que NUNCA deberían aparecer en respuestas
+# legítimas del LLM (script/iframe/object/embed/style/base/link/meta/
+# form/svg/math). NO usa `bleach` para evitar la dep y porque el LLM
+# legítimamente emite tags como <details>, <sup>, <sub> que un bleach
+# strict eliminaría rompiendo el formato markdown.
+#
+# También neutraliza event handlers `on*=...` y URIs `javascript:` —
+# vectores XSS clásicos. Los reemplazos (`data-stripped-*`) son texto
+# inocuo que NO ejecuta nada y deja un audit trail visible en el DOM si
+# alguna vez ocurre — facilita diagnosticar prompt injection attempts
+# en producción.
+_DANGEROUS_HTML_TAG_RE = re.compile(
+    r"<(?P<slash>/?)(?P<tag>script|iframe|object|embed|style|base|link|meta|form|svg|math)\b",
+    re.IGNORECASE,
+)
+_ON_HANDLER_RE = re.compile(r"\bon([A-Za-z]+)\s*=", re.IGNORECASE)
+_JS_URI_RE = re.compile(r"\b(href|src)\s*=\s*([\"']?)\s*javascript:", re.IGNORECASE)
+
+
+def _sanitize_chat_output_for_wire(text):
+    """Defensa-en-profundidad: neutraliza tags HTML peligrosas + event
+    handlers en output del chat antes de enviarlo al wire SSE. NO toca
+    markdown legítimo (headings, listas, blockquotes, code blocks).
+
+    Retorna el input intacto si no es str (None, dict, etc) — los callers
+    asumen que el helper es safe to wrap cualquier value.
+    """
+    if not text or not isinstance(text, str):
+        return text
+    text = _DANGEROUS_HTML_TAG_RE.sub(r"&lt;\g<slash>\g<tag>", text)
+    text = _ON_HANDLER_RE.sub(r"data-stripped-on\1=", text)
+    text = _JS_URI_RE.sub(r"\1=\2data-stripped:", text)
+    return text
+
 
 from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
 from prompts import (
@@ -125,11 +175,122 @@ def _chat_router_model_name() -> str:
         "gemini-3.1-flash-lite-preview",
     )
 
+# [P0-CHAT-LLM-TIMEOUT · 2026-05-19] Timeouts per-LLM-invoke y graph-total.
+# Pre-fix: las 5 callsites de `ChatGoogleGenerativeAI(...)` se construían SIN
+# `timeout=`. Resultado: si Gemini se colgaba (sobrecarga, red, quota silenciosa
+# del provider), `*.invoke(...)` bloqueaba indefinidamente el worker thread del
+# threadpool de FastAPI. Bajo concurrencia moderada → thread pool starvation.
+# Es exactamente el modo de fallo que el resto del repo defiende con knobs
+# `MEALFIT_CB_*` pero acá no se invocaba.
+#
+# Fix: el constructor de `ChatGoogleGenerativeAI` acepta `timeout=` (segundos)
+# que propaga al gRPC `request_options.timeout`. Cualquier .invoke() que
+# exceda raises (DeadlineExceeded/TimeoutError) — captura el catch de
+# Exception del SSE generator (línea 1228-1235) o el del wrap concurrent.futures
+# del `chat_graph_app.invoke` en `chat_with_agent` (non-streaming).
+#
+# Defaults eligen ventanas reales:
+#   - LLM principal (chat/call_model): 15s. Conversaciones típicas <5s, p95 <10s.
+#   - SWAP: 30s. Tiene retry tenacity 3x con wait_exponential(min=2,max=8) →
+#     budget per-call más holgado para no abortar antes de retry.
+#   - TITLE: 10s. Mensaje corto, una sola invocación.
+#   - ROUTER (RAG decision): 8s. Flash-Lite, una sola invocación, sin retry.
+#   - GRAPH TOTAL (non-streaming): 60s. Cubre call_model + execute_tools +
+#     call_model (formateo de respuesta) con margen para tool roundtrips
+#     legítimos (e.g. `generate_new_plan_from_chat` invoca pipeline completo).
+#
+# Knobs auto-registrados via `_env_float` (P3-NEW-D). Validator clamp (0, 120]
+# para evitar timeouts patológicos por env var corrupta.
+def _chat_agent_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_CHAT_AGENT_LLM_TIMEOUT_S",
+        15.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
+
+def _chat_swap_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_CHAT_SWAP_LLM_TIMEOUT_S",
+        30.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
+
+def _chat_title_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_CHAT_TITLE_LLM_TIMEOUT_S",
+        10.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
+
+def _chat_router_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_CHAT_ROUTER_LLM_TIMEOUT_S",
+        8.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
+
+def _chat_graph_total_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_CHAT_GRAPH_TOTAL_TIMEOUT_S",
+        60.0,
+        validator=lambda v: 0.0 < v <= 300.0,
+    )
+
+
+# [P1-CHAT-STREAM-BUDGET · 2026-05-20] Total budget para el stream SSE
+# (`chat_with_agent_stream`). Pre-fix: el wrapper non-stream tenía
+# `_chat_graph_total_timeout_s` (60s) pero el stream NO. Caso de fallo:
+# Gemini emite chunks ocasionales pero el turn total nunca termina por
+# loops del agente (call_model → execute_tools → call_model bouncing),
+# tool roundtrip que cuelga, o un stream genuinamente lento de plan-gen
+# desde el chat. Sin tope total, un solo turn puede comer tokens y
+# threadpool por minutos.
+#
+# Default 120s: el stream puede legítimamente exceder los 60s del
+# non-stream porque tools como `generate_new_plan_from_chat` invocan el
+# pipeline completo (puede tardar 30-60s solo). 120s da margen sin
+# permitir runaway. Clamp (0, 600] — 10min absoluto.
+#
+# Defensa-en-profundidad sobre los per-LLM timeouts (15s) que cubren el
+# caso "Gemini cuelga UNA invocación"; este cubre "agente entró en loop
+# de N invocaciones legítimas pero el turn total no termina".
+def _chat_stream_total_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_CHAT_STREAM_TOTAL_TIMEOUT_S",
+        120.0,
+        validator=lambda v: 0.0 < v <= 600.0,
+    )
+
+
+# [P1-CHAT-STREAM-INACTIVITY · 2026-05-20] Inactivity timeout entre eventos
+# emitidos por `chat_graph_app.stream(...)`. Si entre dos `next(stream_iter)`
+# pasan más de N segundos sin que llegue ningún evento (chunk del LLM,
+# tool_call, etc.), abortamos el stream. El per-LLM timeout (15s) ya cubre
+# el caso "Gemini bloquea una invocación", pero NO cubre stalls en el
+# middleware de LangGraph entre nodes ni cuelgues de checkpointer Postgres.
+#
+# Default 25s: holgura sobre el per-LLM timeout (15s) + buffer para
+# checkpoint write y route_tools. Si baja de eso se vuelve flaky bajo
+# carga normal. Clamp (0, 120].
+#
+# NOTA: implementado vía wall-clock check al tope del for-loop, NO via
+# thread-watchdog (eso doblaría el thread count por request). Si Gemini
+# emite UN chunk cada 26s seguidos, el check no dispara (porque hay
+# actividad). Es válido — el caso problemático es "0 chunks por N
+# segundos", no "chunks regulares pero lentos".
+def _chat_stream_inactivity_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_CHAT_STREAM_INACTIVITY_TIMEOUT_S",
+        25.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
+
 llm = ChatGoogleGenerativeAI(
     model=_chat_agent_model_name(),
     temperature=0.2,
     google_api_key=os.environ.get("GEMINI_API_KEY"),
-    safety_settings=_safety_settings
+    safety_settings=_safety_settings,
+    timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
 )
 
 
@@ -317,7 +478,8 @@ def swap_meal(form_data: dict):
     swap_llm = ChatGoogleGenerativeAI(
         model=_chat_agent_swap_model_name(),
         temperature=temp,
-        google_api_key=os.environ.get("GEMINI_API_KEY")
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        timeout=_chat_swap_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
     ).with_structured_output(MealModel)
     
     # Invocar LLM con reintentos automáticos (tenacity)
@@ -397,6 +559,150 @@ def swap_meal(form_data: dict):
 # ============================================================
 # ORQUESTACIÓN LANGGRAPH CHAT CON MEMORYSAVER
 # ============================================================
+
+# [P1-CHAT-CB · 2026-05-19] Excepción dedicada para "breaker abierto sobre
+# el chat_llm". Se raise dentro del nodo `call_model` cuando
+# `_get_circuit_breaker(model).can_proceed() == False` (failures >= threshold
+# Y dentro de la ventana reset_timeout). LangGraph la propaga al caller de
+# `chat_graph_app.invoke` / `.stream`; el router `/api/chat` la mapea a
+# `HTTP 503 Service Unavailable` (semánticamente: upstream LLM saturado,
+# reintentar en N segundos — donde N ≈ MEALFIT_CB_RESET_TIMEOUT_S).
+#
+# Defensa simétrica al P0-CHAT-LLM-TIMEOUT: timeout previene cuelgues
+# individuales; el CB previene avalanchas tras múltiples fallos consecutivos
+# (provider degradado, rate-limit del API key, modelo deprecado sin aviso).
+# Resto del repo (pipeline de plan-gen) ya usa este CB — el chat era el
+# único path productivo que invocaba Gemini sin breaker.
+class LLMCircuitBreakerOpen(RuntimeError):
+    """Raised by chat-agent LangGraph nodes when the LLM circuit breaker for
+    the target model is open. Caller (router) should map to HTTP 503."""
+    pass
+
+
+# [P1-CHAT-LLM-429 · 2026-05-20] Excepción específica para rate-limit del
+# provider (Gemini ResourceExhausted, HTTP 429). Pre-fix: cualquier fallo
+# del invoke (timeout, 429, 5xx, parse error) contaba como `_cb.record_failure()`
+# vía `except Exception` broad. Resultado: 3 bursts de 429 → CB abre 30s →
+# usuarios legítimos ven 503 falso-positivo durante saturación temporal de
+# Google. El CB está pensado para "provider degradado/down", no para
+# "throttling natural del API key bajo carga concurrente".
+#
+# Defensa:
+#   - Detección por type-name+message (Google api_core lo levanta como
+#     `google.api_core.exceptions.ResourceExhausted` o como `ChatGoogleGenerativeAI`
+#     wrapped error con "429" / "Resource has been exhausted" / "RATE_LIMIT" en
+#     el mensaje).
+#   - Cuando se detecta, NO `record_failure` (el CB queda intacto) — re-emit
+#     como `LLMRateLimitedError` que el router mapea a HTTP 429 (no 503).
+#     El cliente puede reintentar con Retry-After.
+#   - Emit `pipeline_metrics` con `node='chat_llm_rate_limited'` para
+#     telemetría: SRE puede graficar bursts de 429 sin contaminar el conteo
+#     de circuit-breaker-failures.
+#
+# Tooltip-anchor: P1-CHAT-LLM-429.
+class LLMRateLimitedError(RuntimeError):
+    """Raised when the upstream LLM provider returns a rate-limit error
+    (HTTP 429 / ResourceExhausted). Distinct from generic failures so the
+    circuit breaker is NOT triggered. Caller (router) should map to HTTP 429."""
+    pass
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """[P1-CHAT-LLM-429 · 2026-05-20] Heurística defensiva para detectar
+    rate-limit del provider. Cubre 3 envoltorios:
+      (a) `google.api_core.exceptions.ResourceExhausted` (raw gRPC).
+      (b) `google.genai.errors.ClientError` con `code=429`.
+      (c) `langchain_core.exceptions.OutputParserException` u otros wrappers
+          que preservan el mensaje "429" / "Resource has been exhausted" /
+          "RATE_LIMIT_EXCEEDED".
+
+    NO usa isinstance contra la clase `ResourceExhausted` directo porque
+    requeriría importar `google.api_core` a module-init (dep extra solo
+    para clasificación). Match string es robusto contra cambios de
+    wrappers de LangChain entre versiones.
+    """
+    try:
+        _type_name = type(exc).__name__
+        if _type_name in ("ResourceExhausted", "TooManyRequests", "RateLimitError"):
+            return True
+        _msg = str(exc).lower()
+        if "resource has been exhausted" in _msg:
+            return True
+        if "rate_limit_exceeded" in _msg or "rate limit" in _msg:
+            return True
+        # HTTP code embebido en el mensaje del wrapper.
+        if " 429 " in f" {_msg} " or "(429)" in _msg or "code: 429" in _msg or '"code":429' in _msg:
+            return True
+        # google.genai ClientError expone `.code` numérico.
+        _code = getattr(exc, "code", None)
+        if _code == 429:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _emit_chat_rate_limited_metric_best_effort(user_id, session_id, model_name):
+    """[P1-CHAT-LLM-429 · 2026-05-20] Persiste un row en `pipeline_metrics`
+    cuando detectamos 429 — separado del flujo del CB para que SRE pueda
+    graficar bursts del provider sin que el CB se ensucie. Best-effort: cualquier
+    fallo de DB no debe tumbar el response al caller."""
+    try:
+        from db_core import execute_sql_write
+        import json as _json_rl
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (%s, %s, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                user_id if user_id and user_id != "guest" else None,
+                session_id,
+                "chat_llm_rate_limited",
+                _json_rl.dumps({"model": model_name, "provider": "gemini"}, ensure_ascii=False),
+            ),
+        )
+    except Exception as _e_rl:
+        try:
+            logger.debug(f"[P1-CHAT-LLM-429] emit metric falló (best-effort): {_e_rl!r}")
+        except Exception:
+            pass
+
+
+def _emit_chat_stream_total_duration_best_effort(user_id, session_id, model_name, duration_ms, outcome):
+    """[P1-CHAT-STREAM-DURATION · 2026-05-20] Persiste `duration_ms` total del
+    stream chat (graph-total wall-clock) en `pipeline_metrics` con
+    `node='chat_stream_total_duration'`. Pre-fix: el chat-flow tenía duration
+    per-LLM-invoke (P2-CHAT-TOKEN-TELEMETRY emite a `llm_usage_events`)
+    pero NO graph-total — un turn con 3 invokes encadenados no era graphable
+    como P99 latencia E2E. Outcome: 'ok'/'timeout'/'error'/'cancelled'."""
+    try:
+        from db_core import execute_sql_write
+        import json as _json_dur
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (%s, %s, %s, %s, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                user_id if user_id and user_id != "guest" else None,
+                session_id,
+                "chat_stream_total_duration",
+                int(duration_ms),
+                _json_dur.dumps({"model": model_name, "outcome": outcome}, ensure_ascii=False),
+            ),
+        )
+    except Exception as _e_dur:
+        try:
+            logger.debug(f"[P1-CHAT-STREAM-DURATION] emit falló (best-effort): {_e_dur!r}")
+        except Exception:
+            pass
+
+
 class ChatState(MessagesState):
     user_id: str
     session_id: str
@@ -429,10 +735,101 @@ def call_model(state: ChatState):
         model=_chat_agent_model_name(),
         temperature=0.7,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
-        safety_settings=_safety_settings
+        safety_settings=_safety_settings,
+        timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
     )
     llm_with_tools = chat_llm.bind_tools(agent_tools)
-    response = llm_with_tools.invoke(llm_messages)
+
+    # [P1-CHAT-CB · 2026-05-19] Gate per-modelo. Si el breaker está abierto
+    # (failures >= MEALFIT_CB_FAILURE_THRESHOLD dentro de la ventana
+    # MEALFIT_CB_RESET_TIMEOUT_S), fail-fast SIN invocar Gemini — el provider
+    # ya está degradado y un nuevo intento solo agrava la condición + paga
+    # latencia + tokens. Se reabre automáticamente cuando expira la ventana.
+    # `record_success` / `record_failure` actualizan el estado para que el
+    # resto del repo (pipeline de plan-gen, swap, etc.) vea el mismo breaker.
+    #
+    # NOTA: `_chat_agent_model_name()` se llama 2x (callsite del CGGA arriba +
+    # aquí) en lugar de cachear en variable local — preserva el contrato del
+    # test P2-AUDIT-1 (regex busca `model=_chat_*_model_name()` literal en
+    # los args del CGGA). Costo trivial: el helper es un dict lookup en env
+    # con UPSERT idempotente al registry.
+    _cb_model = _chat_agent_model_name()
+    _cb = _get_circuit_breaker(_cb_model)
+    if not _cb.can_proceed():
+        logger.warning(
+            f"🛑 [P1-CHAT-CB] LLM circuit breaker abierto para model={_cb_model!r} "
+            f"— fail-fast sin invocar Gemini. Reintentar tras "
+            f"MEALFIT_CB_RESET_TIMEOUT_S segundos."
+        )
+        raise LLMCircuitBreakerOpen(
+            f"chat LLM circuit breaker open for model={_cb_model}"
+        )
+
+    # [P2-CHAT-TOKEN-TELEMETRY · 2026-05-19] Instrumentación de tokens
+    # del chat-agent. Pre-fix: el chat-flow NO se reportaba en
+    # `llm_usage_events` porque `chat_llm` se construye directo
+    # (`ChatGoogleGenerativeAI(...)`), sin pasar por el override
+    # `ainvoke/astream` de `graph_orchestrator.py` que dispara
+    # `_emit_llm_usage_event_best_effort` automáticamente. Resultado:
+    # SRE veía costos de plan-gen (P1-COST-INSTRUMENTATION 2026-05-15) pero
+    # 0 visibilidad de costos del agente conversacional. Bajo abuso (user
+    # plus enviando 200 prompts/mes), el cron de alerting NO podía
+    # detectar anomalías porque la fila no existía.
+    #
+    # Fix: medimos `duration_s` alrededor del `invoke` y emitimos el
+    # evento post-success (NO en failure path — un timeout no consumió
+    # tokens completos). El helper es best-effort: cualquier fallo de
+    # parse/DB se silencia y NO afecta el response al caller. Reutiliza
+    # el SSOT del repo (mismo helper que plan-gen, mismo schema
+    # `llm_usage_events`, mismo cost calculation `compute_gemini_cost_micros`).
+    # Tooltip-anchor: P2-CHAT-TOKEN-TELEMETRY.
+    import time as _time_chat
+    _chat_invoke_start = _time_chat.time()
+    try:
+        response = llm_with_tools.invoke(llm_messages)
+    except Exception as _invoke_exc:
+        # [P1-CHAT-LLM-429 · 2026-05-20] Diferenciar rate-limit del provider
+        # de fallos genuinos. 429 NO debe contar como CB-failure: el provider
+        # está vivo, solo está throttleando este API key (saturación temporal,
+        # NO degradación). Si contábamos 429 como failure, 3 bursts en ventana
+        # de 30s abrían el CB → 503 falso-positivo a usuarios legítimos.
+        # Ahora: 429 → metric + re-raise como `LLMRateLimitedError` (mapea a
+        # HTTP 429, router → Retry-After); resto → CB failure + re-raise.
+        if _is_rate_limit_error(_invoke_exc):
+            _emit_chat_rate_limited_metric_best_effort(
+                state.get("user_id"), state.get("session_id"), _cb_model,
+            )
+            logger.warning(
+                f"⚠️ [P1-CHAT-LLM-429] Gemini rate-limit detectado "
+                f"model={_cb_model!r} exc_type={type(_invoke_exc).__name__} — "
+                f"NO cuenta como CB failure."
+            )
+            raise LLMRateLimitedError(
+                f"chat LLM rate limited for model={_cb_model}: {_invoke_exc!r}"
+            ) from _invoke_exc
+        # Resto: timeout, DeadlineExceeded, 5xx, parse error. El repo usa
+        # broad-catch (graph_orchestrator.py:1423) — la excepción se
+        # re-raises para que LangGraph la propague al caller.
+        _cb.record_failure()
+        raise
+
+    _cb.record_success()
+
+    # [P2-CHAT-TOKEN-TELEMETRY · 2026-05-19] Best-effort post-invoke.
+    # Importa lazy para evitar acoplamiento module-init con graph_orchestrator
+    # (que ya importa este módulo en algunos paths). El helper acepta
+    # `response` (AIMessage con `usage_metadata`) y `llm` para resolver
+    # el model name. Cualquier fallo en el emit NO debe romper el chat.
+    try:
+        from graph_orchestrator import _emit_llm_usage_event_best_effort
+        _emit_llm_usage_event_best_effort(
+            llm=chat_llm,
+            result=response,
+            duration_s=_time_chat.time() - _chat_invoke_start,
+        )
+    except Exception:
+        pass
+
     return {"messages": [response]}
 
 def execute_tools(state: ChatState):
@@ -498,102 +895,142 @@ def execute_tools(state: ChatState):
             tool_result = ""
             logger.debug(f"🔧 [LANGGRAPH TOOL] Ejecutando {tool_name}")
 
-            if tool_name == "update_form_field":
-                field = tool_args.get("field")
-                new_value = tool_args.get("new_value", "")
-                
-                # Sanitize numeric values for the frontend response too
-                if field in ['weight', 'height', 'age']:
-                    extracted = re.sub(r'[^\d.]', '', str(new_value))
-                    if extracted:
-                        new_value = extracted
-                        
-                if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
-                    updated_fields[field] = [item.strip() for item in (new_value if isinstance(new_value, str) else "").split(",") if item.strip()]
-                else:
-                    updated_fields[field] = new_value
-                    
-                # Re-inject the sanitized new_value into tool_args so the tool itself gets the clean version if it uses it directly
-                # (Aunque ya limpiamos adentro del tool, es buena práctica pasarlo limpio)
-                tool_args["new_value"] = new_value
-                tool_result = update_form_field.invoke(tool_args)
-                
-            elif tool_name == "generate_new_plan_from_chat":
-                user_instructions = tool_args.get("instructions", "")
-                user_id = state.get("user_id")
-                session_id = state.get("session_id")
-                form_data = state.get("form_data", {})
-                
-                tool_result = execute_generate_new_plan(user_id if user_id and user_id != 'guest' else session_id, form_data, user_instructions)
-                
-                try:
-                    parsed_plan = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
-                    if isinstance(parsed_plan, dict) and ("days" in parsed_plan or "meals" in parsed_plan):
-                        new_plan = parsed_plan
-                        tool_result = "El plan de comidas de 7 días fue generado exitosamente. Dile al usuario que lo revise en su dashboard."
-                except Exception as _parse_exc:
-                    # [P2-SILENT-DEGRADATION · 2026-05-13] JSON malformado /
-                    # tool_result no parseable: el agente NO hidrata el plan
-                    # en state pero conserva el raw tool_result (texto al LLM).
-                    # Sin log, un cambio de schema del tool o tool_result vacío
-                    # significa "el agente respondió pero el dashboard no
-                    # refrescó" sin telemetría. Mantener fallback.
-                    logger.debug(
-                        "[P2-SILENT-DEGRADATION] generate_new_plan parse "
-                        "falló: %s: %s",
-                        type(_parse_exc).__name__,
-                        str(_parse_exc)[:160],
-                    )
+            # [P1-CHAT-TOOL-VALIDATE · 2026-05-20] Recuperación graceful si
+            # el LLM emite `tool_args` con tipos inválidos para el schema
+            # auto-generado de LangChain (`@tool` decorator usa Pydantic v2).
+            # Pre-fix: `ValidationError` bubbleaba al graph y rompía el turn
+            # entero — usuario veía HTTP 500 sin pista de qué pasó. Casos:
+            #   - `log_consumed_meal(calories="muchas")` (str vs int).
+            #   - `modify_pantry_inventory(items_to_add="leche")` (str vs list).
+            #   - `log_water_glass(count_delta=1.5)` (float vs int).
+            #
+            # Fix: catch específico → tool_result inyecta mensaje claro al
+            # LLM (que puede reintentar) + WARN para SRE. NO afecta el flujo
+            # mainstream (validación ok → tool corre normal). Cubre TODO el
+            # if/elif/else porque tanto el dispatch directo (`update_form_field.invoke(...)`)
+            # como el genérico (`t.invoke(tool_args)`) pueden lanzar ValidationError.
+            # Tooltip-anchor: P1-CHAT-TOOL-VALIDATE.
+            try:
+                _PydanticValidationError = __import__("pydantic", fromlist=["ValidationError"]).ValidationError
+            except Exception:
+                _PydanticValidationError = ValueError  # fallback inocuo
 
-            elif tool_name == "modify_single_meal":
-                user_id = state.get("user_id")
-                session_id = state.get("session_id")
-                form_data = state.get("form_data", {})
-                
-                tool_result = execute_modify_single_meal(
-                    user_id=user_id if user_id and user_id != 'guest' else session_id,
-                    day_number=tool_args.get("day_number", 1),
-                    meal_type=tool_args.get("meal_type", "Desayuno"),
-                    changes=tool_args.get("changes", ""),
-                    form_data=form_data,
-                    allow_pantry_expansion=tool_args.get("allow_pantry_expansion", False)
-                )
-                try:
-                    parsed_mod = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
-                    if isinstance(parsed_mod, dict) and "modified_meal" in parsed_mod:
-                        updated_plan_record = get_latest_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
-                        if updated_plan_record and "plan_data" in updated_plan_record:
-                            new_plan = updated_plan_record["plan_data"]
-                        # [P2-AUDIT-NEW-1 · 2026-05-12] Extraer
-                        # `_coherence_warnings` ANTES de pisar `tool_result`
-                        # con el friendly string. El tool `modify_single_meal`
-                        # los inyecta cuando el guard P2-COHERENCE-1 detectó
-                        # divergencia recetas↔lista post-modificación. Se
-                        # propagan al state → SSE `done` → frontend toast.
-                        _tool_warnings = parsed_mod.get("_coherence_warnings")
-                        if isinstance(_tool_warnings, list) and _tool_warnings:
-                            coherence_warnings.extend(_tool_warnings)
-                        tool_result = f"La comida fue modificada exitosamente. La nueva comida es: {parsed_mod['modified_meal'].get('name', 'Comida actualizada')}. Dile al usuario que su plan ya fue actualizado."
-                except Exception as _mod_exc:
-                    # [P2-SILENT-DEGRADATION · 2026-05-13] JSON malformado /
-                    # `modified_meal` ausente: el agente NO hidrata el plan
-                    # actualizado en state ni extrae warnings de coherencia.
-                    # El plan en DB SÍ se modificó (modify_single_meal
-                    # persiste antes de retornar) pero el frontend no
-                    # refresca hasta el siguiente fetch. Sin log, fallos
-                    # sistemáticos del parser quedan invisibles.
-                    logger.debug(
-                        "[P2-SILENT-DEGRADATION] modify_single_meal parse "
-                        "falló: %s: %s",
-                        type(_mod_exc).__name__,
-                        str(_mod_exc)[:160],
+            try:
+                if tool_name == "update_form_field":
+                    field = tool_args.get("field")
+                    new_value = tool_args.get("new_value", "")
+
+                    # Sanitize numeric values for the frontend response too
+                    if field in ['weight', 'height', 'age']:
+                        extracted = re.sub(r'[^\d.]', '', str(new_value))
+                        if extracted:
+                            new_value = extracted
+
+                    if field in ['allergies', 'medicalConditions', 'dislikes', 'struggles']:
+                        updated_fields[field] = [item.strip() for item in (new_value if isinstance(new_value, str) else "").split(",") if item.strip()]
+                    else:
+                        updated_fields[field] = new_value
+
+                    # Re-inject the sanitized new_value into tool_args so the tool itself gets the clean version if it uses it directly
+                    # (Aunque ya limpiamos adentro del tool, es buena práctica pasarlo limpio)
+                    tool_args["new_value"] = new_value
+                    tool_result = update_form_field.invoke(tool_args)
+
+                elif tool_name == "generate_new_plan_from_chat":
+                    user_instructions = tool_args.get("instructions", "")
+                    user_id = state.get("user_id")
+                    session_id = state.get("session_id")
+                    form_data = state.get("form_data", {})
+
+                    tool_result = execute_generate_new_plan(user_id if user_id and user_id != 'guest' else session_id, form_data, user_instructions)
+
+                    try:
+                        parsed_plan = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
+                        if isinstance(parsed_plan, dict) and ("days" in parsed_plan or "meals" in parsed_plan):
+                            new_plan = parsed_plan
+                            tool_result = "El plan de comidas de 7 días fue generado exitosamente. Dile al usuario que lo revise en su dashboard."
+                    except Exception as _parse_exc:
+                        # [P2-SILENT-DEGRADATION · 2026-05-13] JSON malformado /
+                        # tool_result no parseable: el agente NO hidrata el plan
+                        # en state pero conserva el raw tool_result (texto al LLM).
+                        # Sin log, un cambio de schema del tool o tool_result vacío
+                        # significa "el agente respondió pero el dashboard no
+                        # refrescó" sin telemetría. Mantener fallback.
+                        logger.debug(
+                            "[P2-SILENT-DEGRADATION] generate_new_plan parse "
+                            "falló: %s: %s",
+                            type(_parse_exc).__name__,
+                            str(_parse_exc)[:160],
+                        )
+
+                elif tool_name == "modify_single_meal":
+                    user_id = state.get("user_id")
+                    session_id = state.get("session_id")
+                    form_data = state.get("form_data", {})
+
+                    tool_result = execute_modify_single_meal(
+                        user_id=user_id if user_id and user_id != 'guest' else session_id,
+                        day_number=tool_args.get("day_number", 1),
+                        meal_type=tool_args.get("meal_type", "Desayuno"),
+                        changes=tool_args.get("changes", ""),
+                        form_data=form_data,
+                        allow_pantry_expansion=tool_args.get("allow_pantry_expansion", False)
                     )
-            else:
-                for t in agent_tools:
-                    if t.name == tool_name:
-                        tool_result = t.invoke(tool_args)
-                        break
-                        
+                    try:
+                        parsed_mod = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
+                        if isinstance(parsed_mod, dict) and "modified_meal" in parsed_mod:
+                            updated_plan_record = get_latest_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
+                            if updated_plan_record and "plan_data" in updated_plan_record:
+                                new_plan = updated_plan_record["plan_data"]
+                            # [P2-AUDIT-NEW-1 · 2026-05-12] Extraer
+                            # `_coherence_warnings` ANTES de pisar `tool_result`
+                            # con el friendly string. El tool `modify_single_meal`
+                            # los inyecta cuando el guard P2-COHERENCE-1 detectó
+                            # divergencia recetas↔lista post-modificación. Se
+                            # propagan al state → SSE `done` → frontend toast.
+                            _tool_warnings = parsed_mod.get("_coherence_warnings")
+                            if isinstance(_tool_warnings, list) and _tool_warnings:
+                                coherence_warnings.extend(_tool_warnings)
+                            tool_result = f"La comida fue modificada exitosamente. La nueva comida es: {parsed_mod['modified_meal'].get('name', 'Comida actualizada')}. Dile al usuario que su plan ya fue actualizado."
+                    except Exception as _mod_exc:
+                        # [P2-SILENT-DEGRADATION · 2026-05-13] JSON malformado /
+                        # `modified_meal` ausente: el agente NO hidrata el plan
+                        # actualizado en state ni extrae warnings de coherencia.
+                        # El plan en DB SÍ se modificó (modify_single_meal
+                        # persiste antes de retornar) pero el frontend no
+                        # refresca hasta el siguiente fetch. Sin log, fallos
+                        # sistemáticos del parser quedan invisibles.
+                        logger.debug(
+                            "[P2-SILENT-DEGRADATION] modify_single_meal parse "
+                            "falló: %s: %s",
+                            type(_mod_exc).__name__,
+                            str(_mod_exc)[:160],
+                        )
+                else:
+                    for t in agent_tools:
+                        if t.name == tool_name:
+                            tool_result = t.invoke(tool_args)
+                            break
+            except _PydanticValidationError as _val_err:
+                # [P1-CHAT-TOOL-VALIDATE · 2026-05-20] LLM emitió tool_args
+                # con tipos inválidos. Inyectamos un tool_result legible al
+                # LLM (que ve este string como "respuesta de la tool") para
+                # que pueda recuperarse en el siguiente turn (reintentar con
+                # tipos correctos o pedir aclaración al usuario). NO romper
+                # el graph: el chat sigue funcional.
+                _val_summary = str(_val_err)[:300]
+                logger.warning(
+                    f"⚠️ [P1-CHAT-TOOL-VALIDATE] ValidationError tool={tool_name} "
+                    f"args_keys={list(tool_args.keys()) if isinstance(tool_args, dict) else '?'} "
+                    f"summary={_val_summary!r}"
+                )
+                tool_result = (
+                    f"[VALIDATION_ERROR] No pude ejecutar '{tool_name}' porque los "
+                    f"argumentos enviados no cumplen el schema esperado. Detalle: "
+                    f"{_val_summary}. Reintenta con los tipos correctos o pide "
+                    f"aclaración al usuario antes de re-invocar la tool."
+                )
+
             tool_messages.append(ToolMessage(content=str(tool_result), tool_call_id=tool_id))
             
     return {
@@ -692,7 +1129,7 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         except Exception as e:
             logger.error(f"Error fetching recent titles for anti-duplication: {e}")
             
-        title_llm = ChatGoogleGenerativeAI(model=_chat_title_model_name(), temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"))
+        title_llm = ChatGoogleGenerativeAI(model=_chat_title_model_name(), temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"), timeout=_chat_title_llm_timeout_s())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str)
         dlog("Calling LLM API")
         response = title_llm.invoke(prompt)
@@ -762,7 +1199,8 @@ def rag_query_router(prompt: str) -> dict:
         router_llm = ChatGoogleGenerativeAI(
             model=_chat_router_model_name(),
             temperature=0.0,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            timeout=_chat_router_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
         )
         
         rewrite_prompt = RAG_ROUTER_PROMPT.format(prompt=prompt)
@@ -975,9 +1413,33 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     logger.info("\n-------------------------------------------------------------")
     logger.info("⏳ [CHAT] LangGraph ejecutando pipeline...")
     start_time = time.time()
-    
-    final_state = chat_graph_app.invoke(inputs, config=config)
-    
+
+    # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] Total-graph timeout. Defensa-en-profundidad
+    # sobre los per-LLM timeouts del constructor — cubre escenarios donde múltiples
+    # invokes acumulan (call_model + execute_tools + call_model) o donde un tool
+    # interno cuelga sin propagar timeout. Default 60s (knob
+    # `MEALFIT_CHAT_GRAPH_TOTAL_TIMEOUT_S`). Si excede:
+    #   - `concurrent.futures.TimeoutError` se propaga al caller (router).
+    #   - El thread del executor sigue corriendo hasta que el LLM internal timeout
+    #     lo abata — NO cancellable cooperativamente, pero el endpoint ya respondió.
+    #   - El thread pool externo de FastAPI queda libre inmediatamente.
+    _graph_timeout_s = _chat_graph_total_timeout_s()
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="chat_graph_invoke"
+    ) as _ex:
+        _fut = _ex.submit(chat_graph_app.invoke, inputs, config=config)
+        try:
+            final_state = _fut.result(timeout=_graph_timeout_s)
+        except concurrent.futures.TimeoutError as _to_exc:
+            logger.error(
+                f"⏱️ [P0-CHAT-LLM-TIMEOUT] chat_graph_app.invoke excedió "
+                f"{_graph_timeout_s}s para session={session_id} user={user_id!r}. "
+                f"Posible Gemini hang / network issue."
+            )
+            raise TimeoutError(
+                f"chat_graph exceeded {_graph_timeout_s}s timeout"
+            ) from _to_exc
+
     end_time = time.time()
     duration_secs = round(float(end_time - start_time), 2)
     logger.info(f"✅ [COMPLETADO] LangGraph finalizó en {duration_secs} segundos.")
@@ -989,8 +1451,10 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     
     if isinstance(content, list):
         content = "\n".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
-        
-    return str(content), final_state.get("updated_fields", {}), final_state.get("new_plan")
+
+    # [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad output non-stream.
+    sanitized_content = _sanitize_chat_output_for_wire(str(content))
+    return sanitized_content, final_state.get("updated_fields", {}), final_state.get("new_plan")
 
 from typing import Generator
 from sentiment_classifier import classify_sentiment
@@ -1193,11 +1657,71 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         yield f"data: {json.dumps({'type': 'sentiment', 'sentiment': sentiment_result.get('sentiment'), 'personality': sentiment_result.get('name'), 'emoji': sentiment_result.get('emoji')})}\n\n"
     
     logger.info(f"⏳ [CHAT STREAM] LangGraph iniciando astream nativo para {session_id}...")
-    
+
     final_state_snapshot = None
-    
+
+    # [P1-CHAT-CANCEL · 2026-05-19] Guardar referencia explícita al iterator
+    # interno de LangGraph para poder cerrarlo si el cliente aborta el SSE
+    # (tab-close, AbortController, network drop). FastAPI/Starlette dispara
+    # `gen.close()` cuando el response stream se rompe → `GeneratorExit` se
+    # inyecta en el yield activo de este generator. Antes del fix el
+    # `except Exception` outer NO atrapaba GeneratorExit (hereda de
+    # BaseException, no Exception) y el iterator de LangGraph seguía
+    # invocando LLM/tools en threads internos hasta completar el turn →
+    # costo LLM desperdiciado + posibles writes a BD que el user ya no
+    # verá. Cerrar el iterator explícitamente propaga el cancel a los
+    # workers y permite que el thread libere recursos.
+    stream_iter = chat_graph_app.stream(inputs, config=config, stream_mode="messages")
+
+    # [P1-CHAT-STREAM-BUDGET · 2026-05-20] Wall-clock total budget + inactivity
+    # check entre eventos. Defensa-en-profundidad sobre los per-LLM timeouts (15s):
+    #   - `_stream_started_at` (monotonic): tope total del turn entero. Si el
+    #     stream entra en loop legítimo (call_model → execute_tools → call_model
+    #     repetidos) y excede el budget, abortamos antes de gastar más tokens.
+    #   - `_last_event_at`: detecta stalls "0 chunks por N segundos". Si Gemini
+    #     emite chunks regulares pero todos lentos (3s cada uno), NO dispara —
+    #     hay actividad. El caso problemático es silencio prolongado.
+    # Outcome se reporta a `pipeline_metrics` en el finally (Fix #5 lite).
+    import time as _t_stream
+    _stream_started_at = _t_stream.monotonic()
+    _last_event_at = _stream_started_at
+    _stream_total_budget = _chat_stream_total_timeout_s()
+    _stream_inactivity_budget = _chat_stream_inactivity_timeout_s()
+    _stream_outcome = "ok"  # 'ok' / 'timeout_total' / 'timeout_inactivity' / 'error' / 'cancelled'
+
     try:
-        for event in chat_graph_app.stream(inputs, config=config, stream_mode="messages"):
+        for event in stream_iter:
+            # [P1-CHAT-STREAM-BUDGET · 2026-05-20] Wall-clock checks al tope
+            # del loop body — antes de procesar el evento. Si excedimos algún
+            # budget, cerramos el iterator (cancela threads internos LangGraph)
+            # y emitimos chunk SSE 'error' explicativo para que el frontend
+            # muestre banner contextual antes de raise.
+            _now = _t_stream.monotonic()
+            _total_elapsed = _now - _stream_started_at
+            _gap_since_last = _now - _last_event_at
+            if _total_elapsed > _stream_total_budget:
+                _stream_outcome = "timeout_total"
+                logger.error(
+                    f"⏱️ [P1-CHAT-STREAM-BUDGET] total budget excedido "
+                    f"{_total_elapsed:.1f}s > {_stream_total_budget}s "
+                    f"session={session_id} user={user_id!r}"
+                )
+                yield f"data: {json.dumps({'type': 'error', 'message': 'El asistente excedió el tiempo máximo del turno. Intenta de nuevo en unos segundos.'})}\n\n"
+                raise TimeoutError(
+                    f"chat_with_agent_stream exceeded {_stream_total_budget}s total budget"
+                )
+            if _gap_since_last > _stream_inactivity_budget:
+                _stream_outcome = "timeout_inactivity"
+                logger.error(
+                    f"⏱️ [P1-CHAT-STREAM-BUDGET] inactivity budget excedido "
+                    f"{_gap_since_last:.1f}s > {_stream_inactivity_budget}s "
+                    f"session={session_id} user={user_id!r}"
+                )
+                yield f"data: {json.dumps({'type': 'error', 'message': 'El asistente dejó de responder. Intenta de nuevo.'})}\n\n"
+                raise TimeoutError(
+                    f"chat_with_agent_stream inactivity {_gap_since_last:.1f}s > {_stream_inactivity_budget}s"
+                )
+            _last_event_at = _now
             # Identificar el contenido exacto del evento 'messages' (tupla mensaje, dict)
             if isinstance(event, tuple) and len(event) == 2:
                 msg_chunk, metadata = event
@@ -1207,6 +1731,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                         if isinstance(chunk_content, list):
                             chunk_content = "".join([str(c.get("text", "")) if isinstance(c, dict) else str(c) for c in chunk_content])
                         if chunk_content: # Evitar chunks vacíos
+                            # [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad
+                            # del wire SSE chunk.
+                            chunk_content = _sanitize_chat_output_for_wire(chunk_content)
                             yield f"data: {json.dumps({'type': 'chunk', 'text': chunk_content})}\n\n"
                     else:
                         for idx, tool_call in enumerate(msg_chunk.tool_calls):
@@ -1225,15 +1752,67 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                                 elif tool_name == "search_deep_memory":
                                     yield f"data: {json.dumps({'type': 'progress', 'message': get_progress_msg('buscando_memoria')})}\n\n"
                                     
+    except GeneratorExit:
+        # [P1-CHAT-CANCEL · 2026-05-19] Cliente cerró el SSE stream antes de
+        # que terminemos (tab-close, AbortController.abort, network drop).
+        # NO podemos suprimir GeneratorExit — Python lo requiere para
+        # cleanup del generator — pero SÍ podemos cerrar el iterator de
+        # LangGraph para que sus workers (ChatGoogleGenerativeAI invokes,
+        # tool executors) reciban la señal de cancelado y dejen de
+        # consumir tiempo LLM. NO emitir yields acá — la conexión está
+        # cerrada y el write fallaría con BrokenPipeError. Log a `warning`
+        # (NO error): es flujo legítimo del UX, no incidente. El cleanup
+        # final (stream_iter.close()) vive en el `finally` block.
+        _stream_outcome = "cancelled"
+        logger.warning(
+            f"[P1-CHAT-CANCEL] Cliente abortó SSE stream "
+            f"session={session_id} user={user_id}"
+        )
+        raise
     except Exception as e:
         # [P3-TRACEBACK-PRINT-EXC · 2026-05-15] `logger.exception` emite
         # mensaje + stack como un solo log record que respeta `LOG_LEVEL`
         # y Sentry sampling. Reemplaza el legacy `logger.error + traceback.print_exc()`
         # que duplicaba la entrada + bypaseaba el sink configurado.
+        # [P1-CHAT-STREAM-BUDGET · 2026-05-20] Si _stream_outcome ya fue
+        # marcado por el budget-check (timeout_total/timeout_inactivity),
+        # preservar — TimeoutError viene de allí. Si es "ok", marcar "error".
+        if _stream_outcome == "ok":
+            _stream_outcome = "error"
         logger.exception(f"❌ [CHAT STREAM] Error en astream nativo: {e}")
         yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         return
-        
+    finally:
+        # [P1-CHAT-STREAM-FINALLY-CLOSE · 2026-05-19] Cleanup defensivo
+        # del iterator de LangGraph en TODOS los exits (normal, exception,
+        # GeneratorExit). Garbage collection eventualmente lo cerraría
+        # (CPython refcount=0 dispara __del__), pero un `close()` explícito
+        # libera de inmediato los recursos atados al iterator: threads
+        # internos de astream, file descriptors del checkpointer Postgres
+        # si la conexión está pinned. Bajo concurrencia alta con muchos
+        # aborts (tab-close en mobile, mala red), confiar en GC produce
+        # un leak slow-burn de descriptors. `close()` es idempotente
+        # contra iterators ya cerrados; el try/except absorbe excepciones
+        # raras (re-entrancy, iterator agotado) que no deben afectar el
+        # exit del generator. Tooltip-anchor: P1-CHAT-STREAM-FINALLY-CLOSE.
+        try:
+            stream_iter.close()
+        except Exception:
+            pass
+        # [P1-CHAT-STREAM-DURATION · 2026-05-20] Persist graph-total
+        # wall-clock duration a `pipeline_metrics` con outcome. SRE puede
+        # graficar P99 latencia E2E del chat-stream y desglosar por
+        # outcome (ok/cancelled/timeout/error). Best-effort: el emit
+        # silencia excepciones DB para no romper el cleanup del generator.
+        try:
+            _total_dur_ms = int((_t_stream.monotonic() - _stream_started_at) * 1000)
+            _emit_chat_stream_total_duration_best_effort(
+                user_id, session_id, _chat_agent_model_name(),
+                _total_dur_ms, _stream_outcome,
+            )
+        except Exception:
+            pass
+
     # Obtener el estado final actualizado
     try:
         final_state_snapshot = chat_graph_app.get_state(config)
@@ -1262,4 +1841,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             final_content = str(extracted_content)
 
     logger.info("✅ [CHAT STREAM] Finalizado con éxito.")
+    # [P2-CHAT-SANITIZE · 2026-05-19] Defensa-en-profundidad del payload `done`.
+    # save_message en routers/chat.py persiste este `response` a DB — sanitizar
+    # acá significa que la versión persistida también queda neutralizada.
+    final_content = _sanitize_chat_output_for_wire(final_content)
     yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings})}\n\n"

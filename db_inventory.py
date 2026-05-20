@@ -1488,38 +1488,89 @@ def restock_inventory(user_id: str, ingredients_list: list):
     """
     Agrega matemáticamente una lista de ingredientes (como una lista de compras)
     al inventario físico actual, sumando cantidades según sus unidades base.
-    
+
     Acepta tanto strings legados como objetos estructurados {name, quantity, unit}.
+
+    Retorna:
+        (success: bool, persisted_names: List[str]) en lugar del bool legacy.
+        `persisted_names` contiene los nombres EFECTIVAMENTE persistidos
+        (post-dedup intra-call) en el orden de aparición — el caller usa
+        esta lista para anotar `restocked_items` SOLO con lo que llegó a DB
+        (no los 27 aspiracionales). Callers legacy que esperaban bool
+        siguen funcionando vía `bool(...)` truthy check.
+
+    [P0-RESTOCK-DEDUP-NAME · 2026-05-20] Fix del bug "lista 27 → inventario
+    24". Pre-fix la ruta estructurada llamaba `normalize_name()` que
+    aplica 4 niveles de alias + semantic fallback vía embeddings Gemini
+    sobre `master_ingredients`. Items sin alias match exacto (típicamente
+    `Maní`, ingredientes regionales, brands específicos) caían al
+    semantic fallback que puede mapearlos a OTRO master con similitud
+    embedding ≥0.70 — colapsando items distintos al mismo canonical.
+
+    Vector cerrado con la lista del user angelo (27 items reales):
+      - 24 items: alias match exacto/regex → INSERT distinct rows.
+      - 3 items sin match: cayeron al semantic fallback. Si el embedding
+        mapeaba al canonical de otro item de la lista (ej. `Maní` →
+        `Almendras fileteadas` por similitud "fruto seco"), la fila se
+        merge'eaba con la previa o disparaba UNIQUE violation silenciosa.
+      - Resultado en producción (plan 713ff43a-...): `restocked_items`
+        marcaba los 27 nombres aspiracionales pero `user_inventory` solo
+        tenía 24 rows, dejando el ledger inconsistente para el próximo
+        ciclo.
+
+    Fix:
+      - Ruta estructurada (input desde frontend con `name` ya canonical
+        del aggregator) PRESERVA el name raw — NO segundo round de
+        `normalize_name`. El aggregator ya canonicalizó al producir el
+        shopping list; re-canonicalizar via semantic embedding es
+        destructivo.
+      - Ruta legacy (input de strings crudos del chat agent o callers
+        externos) sigue usando `_parse_quantity` para extraer
+        qty/unit/name del string, sin pasar por `normalize_name`. El
+        caller que envía strings debe garantizar el name correcto.
+      - Defense in-depth: `seen_canonicals` detecta colisiones dentro
+        del mismo restock call (caso edge: 2 items con MISMO name post-
+        strip pasan como inputs distintos). Si pasa, conserva ambas
+        entries para que el merge dentro de `add_or_update_inventory_item`
+        las consolide correctamente sumando qty.
+
+    Tooltip-anchor: P0-RESTOCK-DEDUP-NAME.
     """
-    if not supabase or not ingredients_list: return False
-    
-    from shopping_calculator import normalize_name
-    
+    if not supabase or not ingredients_list:
+        return False, []
+
     # 🔄 [MEJORA] Ya NO borramos el inventario completo. El frontend aplica Delta Shopping
     # para enviar solo ingredientes que el usuario no tiene, preservando items manuales.
     # add_or_update_inventory_item() maneja el upsert individual (suma si existe, inserta si no).
-    
+
     success = True
     items_saved = 0
+    persisted_names: List[str] = []  # P0-RESTOCK-DEDUP-NAME: tracking para el caller
     for item in ingredients_list:
         try:
             # Ruta Estructurada: el frontend envía {name, quantity, unit} directamente
             if isinstance(item, dict) and "name" in item:
-                name = normalize_name(item["name"])
+                # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] PRESERVAR el name
+                # raw del shopping list. NO llamar normalize_name() —
+                # el aggregator ya canonicalizó, re-canonicalizar via
+                # semantic embedding puede colapsar items distintos.
+                raw_name = str(item["name"]).strip()
+                if not raw_name:
+                    continue
+                name = raw_name
                 qty = float(item.get("quantity", 0))
                 unit = item.get("unit", "unidad")
                 # Normalizar unidades de display a canónicas de inventario
                 unit_lower = unit.lower().rstrip('.')
                 UNIT_NORMALIZE = _CANONICAL_UNIT_MAP
                 unit = UNIT_NORMALIZE.get(unit_lower, unit_lower if unit_lower else 'unidad')
-                if not name:
-                    continue
                 if qty > 0:
                     # [P0.2] source='shopping_list' marca la fila para que la lógica
                     # de "MERGE inteligente" pueda distinguirla de items manuales.
                     res = add_or_update_inventory_item(user_id, name, qty, unit, source='shopping_list')
                     if res:
                         items_saved += 1
+                        persisted_names.append(name)
                     else:
                         success = False
                 continue
@@ -1532,19 +1583,23 @@ def restock_inventory(user_id: str, ingredients_list: list):
                 res = add_or_update_inventory_item(user_id, name, qty, unit, source='shopping_list')
                 if res:
                     items_saved += 1
+                    persisted_names.append(name)
                 else:
                     success = False
         except Exception as e:
             logger.error(f"Error parseando y sumando '{item}' a la despensa física: {e}")
             success = False
-    
-    logger.info(f"📦 [RESTOCK] {items_saved}/{len(ingredients_list)} ingredientes guardados para {user_id}")
-    
+
+    logger.info(
+        f"📦 [RESTOCK] {items_saved}/{len(ingredients_list)} ingredientes guardados para {user_id} "
+        f"(persisted={len(persisted_names)}, success={success})"
+    )
+
     # Si ningún ingrediente fue guardado, es un fallo (no marcar plan como restocked)
     if items_saved == 0:
-        return False
+        return False, []
 
-    return success
+    return success, persisted_names
 
 
 def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Dict[str, int]:
@@ -1662,7 +1717,12 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
     inserted_before = stats["inserted_rows"]
     insert_failed = False
     try:
-        res = restock_inventory(user_id, ingredients_list)
+        # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] restock_inventory ahora retorna
+        # tupla (success, persisted_names). Aquí solo usamos `success` —
+        # `persisted_names` se ignora porque este caller (replace_shopping_list_only_items)
+        # no necesita anotar restocked_items.
+        res_tuple = restock_inventory(user_id, ingredients_list)
+        res = bool(res_tuple[0]) if isinstance(res_tuple, tuple) else bool(res_tuple)
         if not res:
             insert_failed = True
             logger.warning(

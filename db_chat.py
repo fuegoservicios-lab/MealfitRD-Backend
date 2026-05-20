@@ -7,6 +7,16 @@ import os
 import logging
 logger = logging.getLogger(__name__)
 from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
+# [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] Tenacity para retry exponencial
+# en `save_message`. Ya es dep declarada (requirements.txt:11 — tenacity==9.1.4)
+# y usada en todo el repo para retries de DB y LLM transients.
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
 
 def delete_user_agent_sessions(user_id: str) -> bool:
     """Elimina todas las sesiones de agente para un usuario."""
@@ -311,23 +321,91 @@ def delete_chat_session(session_id: str) -> Tuple[bool, str]:
         logger.error(f"❌ [DB] Error eliminando la sesión {session_id}: {e}", exc_info=True)
         return False, str(e)
 
-def save_message(session_id: str, role: str, content: str):
-    if not supabase: return None
-    
-    if role == "user":
-        uid = get_session_owner(session_id)
-        if uid:
-            try:
-                from proactive_agent import handle_nudge_response
-                handle_nudge_response(uid, content)
-            except Exception as e:
-                logger.error(f"Error procesando respuesta al nudge en save_message: {e}")
+# [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] El INSERT a `agent_messages` ahora
+# va envuelto en tenacity retry exponencial (3 intentos, base 0.5s,
+# multiplier 2, max 4s). Vector cerrado: si Supabase tiene un blip
+# transient mid-stream (network jitter, momentary 5xx, connection pool
+# exhausto), pre-fix el `.execute()` levantaba la excepción → el caller
+# en routers/chat.py la atrapaba como `Error en bg tasks` (warning) y
+# el flujo seguía. El usuario veía la respuesta del agente RENDERIZADA
+# en su pantalla pero la respuesta NO existía en `agent_messages` →
+# mensaje fantasma. Al refrescar la sesión, el LLM perdía contexto del
+# turno anterior y respondía como si nada hubiera pasado.
+#
+# Retry específico para excepciones de Supabase/Postgrest: NO atrapamos
+# ValueError/KeyError (bug del caller, no transient). El `before_sleep_log`
+# emite WARNING a logs para que SRE pueda graficar la frecuencia.
+# Tooltip-anchor: P2-CHAT-SAVE-MSG-RETRY.
+#
+# [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] El helper ahora recibe `user_id`
+# (puede ser None para guests) y lo persiste en la columna nueva
+# `agent_messages.user_id`. Caller resuelve el user_id antes (explícito
+# en routers/chat.py donde está disponible, o vía lookup defensivo en
+# `save_message` para callsites legacy que no lo pasan).
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4.0),
+    retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError, Exception)),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def _save_message_insert_with_retry(
+    session_id: str, role: str, content: str, user_id: Optional[str]
+) -> None:
+    """[P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] Helper aislado del INSERT
+    para que tenacity sólo envuelva el roundtrip a Supabase. El side-effect
+    `handle_nudge_response` queda FUERA — su falla no debe disparar
+    re-INSERT (re-procesaría el nudge response múltiples veces).
 
+    [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] `user_id` se persiste en la
+    columna nueva (puede ser None para guests — legítimo). RLS policies
+    `authenticated_*_own_messages` enforzan `auth.uid() = user_id` para
+    callsites con anon/authenticated keys; service_role (que es lo que
+    usa el backend) bypassea RLS.
+
+    Tooltip-anchor: P2-CHAT-SAVE-MSG-RETRY + P1-CHAT-DB-USER-ID-RLS."""
     supabase.table("agent_messages").insert({
         "session_id": session_id,
         "role": role,
-        "content": content
+        "content": content,
+        "user_id": user_id,
     }).execute()
+
+
+def save_message(
+    session_id: str,
+    role: str,
+    content: str,
+    user_id: Optional[str] = None,
+):
+    """[P1-CHAT-DB-USER-ID-RLS · 2026-05-19] `user_id` opcional — los
+    callsites en routers/chat.py lo pasan explícitamente (ya está en
+    scope post-auth); callsites legacy (db_plans.py, proactive_agent.py,
+    services.py, etc.) no lo pasan y la función hace lookup vía
+    `get_session_owner` como fallback. Tooltip-anchor: P1-CHAT-DB-USER-ID-RLS."""
+    if not supabase: return None
+
+    # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Resolver user_id: prefer el
+    # explícito (passed by caller post-auth); fallback al lookup por
+    # session.owner para preserve backward compat. Guests legítimamente
+    # quedan con None.
+    if user_id is None:
+        user_id = get_session_owner(session_id)
+
+    if role == "user":
+        if user_id:
+            try:
+                from proactive_agent import handle_nudge_response
+                handle_nudge_response(user_id, content)
+            except Exception as e:
+                logger.error(f"Error procesando respuesta al nudge en save_message: {e}")
+
+    # [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] INSERT envuelto en retry.
+    # Si los 3 intentos fallan, la excepción se re-raises al caller — el
+    # finally idempotente del SSE billing (P2-AUDIT-NEW-2) corre igual,
+    # pero el caller decide cómo manejar el log. NO usamos `pass` silente:
+    # 3 fallos consecutivos a Supabase es un incidente real, no transient.
+    _save_message_insert_with_retry(session_id, role, content, user_id)
 
 def save_message_feedback(session_id: str, content: str, feedback: str):
     """Guarda o remueve la retroalimentación (up/down/null) para un mensaje del modelo."""

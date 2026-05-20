@@ -4617,6 +4617,33 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"(staleness_h={_env_int('MEALFIT_CB_KV_STALENESS_HOURS', 2)}h)."
         )
 
+    # [P1-CHAT-SESSION-TTL · 2026-05-20] Cron daily que purga sesiones de
+    # chat con cero actividad por N días (default 90). Cierra storage
+    # bloat slow-burn de `agent_sessions` + `agent_messages` (FK CASCADE).
+    # Frecuencia diaria (24h * 60 = 1440 min) — TTL es métrica de cambio
+    # lento, no time-sensitive. Knob clamp [60, 10080] min (1h a 7d) para
+    # casos diagnósticos donde queremos correrlo más rápido.
+    if not scheduler.get_job("sweep_stale_chat_sessions"):
+        _CHAT_TTL_INT = _env_int(
+            "MEALFIT_CHAT_SESSION_TTL_SWEEP_INTERVAL_MIN", 1440
+        )
+        _CHAT_TTL_INT = max(60, min(_CHAT_TTL_INT, 10080))
+        _add_job_jittered(scheduler,
+            _sweep_stale_chat_sessions,
+            "interval",
+            minutes=_CHAT_TTL_INT,
+            id="sweep_stale_chat_sessions",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P1-CHAT-SESSION-TTL] Cron _sweep_stale_chat_sessions "
+            f"registrado cada {_CHAT_TTL_INT} min "
+            f"(ttl_days={_env_int('MEALFIT_CHAT_SESSION_TTL_DAYS', 90)})."
+        )
+
     # [P2-NEW-16 · 2026-05-11] GC para keys `plan_quality_emit_lock:*`
     # introducidas por P3-NEW-9. Bloat bounded por (user × plan) pero
     # planes eliminados dejan keys huérfanas — TTL 24h evita crecimiento
@@ -26927,3 +26954,127 @@ def trigger_background_rolling_refill() -> None:
         )
     except Exception as e:
         logger.error(f"❌ [BG-REFILL] Error en trigger_background_rolling_refill: {e}")
+
+
+# ============================================================
+# [P1-CHAT-SESSION-TTL · 2026-05-20] Storage hygiene: purga sesiones de
+# chat con cero actividad por N días.
+#
+# Pre-fix: las tablas `agent_sessions` y `agent_messages` crecen sin
+# límite — un usuario puede acumular sesiones de varios meses sin que
+# nadie las borre. `summarize_and_prune` (memory_manager.py) ya recorta
+# mensajes DENTRO de una sesión activa (cap del historial inyectado al
+# LLM), pero NO toca sesiones inactivas. Resultado: bloat slow-burn de
+# DB + costo de storage Supabase + latencia creciente en queries
+# `/api/chat/sessions/{user_id}` que escanea todo `agent_sessions`
+# WHERE user_id = X ORDER BY last_activity DESC.
+#
+# Defensa:
+#   - Cron daily (1×24h) que DELETE agent_sessions WHERE last_activity
+#     < NOW() - INTERVAL N días. La FK `agent_messages.session_id` debe
+#     ser ON DELETE CASCADE — si no lo está, el sweep deja huérfanos
+#     en agent_messages que el SQL hace LIMIT batch.
+#   - Knob TTL default 90 días (3 meses sin abrir el chat). Clamp
+#     [7, 730] para evitar truncado agresivo accidental + bloquear
+#     "never expire".
+#   - Knob `enabled` para killswitch sin redeploy.
+#   - Tick observable patrón P1-LIVE-4: emite metric SIEMPRE para
+#     confirmar liveness incluso con 0 sesiones eliminadas.
+#
+# Tooltip-anchor: P1-CHAT-SESSION-TTL.
+def _sweep_stale_chat_sessions() -> int:
+    """[P1-CHAT-SESSION-TTL · 2026-05-20] DELETE `agent_sessions` con
+    `last_activity` (o `created_at` si NULL) más antiguo que
+    `MEALFIT_CHAT_SESSION_TTL_DAYS`. Cascading FK borra `agent_messages`
+    automáticamente. Best-effort: cualquier error log + retorna 0.
+
+    Returns: número de sesiones eliminadas en este tick.
+
+    Tooltip-anchor: P1-CHAT-SESSION-TTL.
+    """
+    if not _env_bool("MEALFIT_CHAT_SESSION_TTL_ENABLED", True):
+        logger.info(
+            "[P1-CHAT-SESSION-TTL] Desactivado via knob "
+            "MEALFIT_CHAT_SESSION_TTL_ENABLED."
+        )
+        return 0
+
+    ttl_days = _env_int("MEALFIT_CHAT_SESSION_TTL_DAYS", 90)
+    ttl_days = max(7, min(ttl_days, 730))
+    batch = _env_int("MEALFIT_CHAT_SESSION_TTL_BATCH", 500)
+    batch = max(1, min(batch, 5000))
+
+    deleted_count = 0
+    sweep_failed = False
+    try:
+        # Subquery + DELETE … WHERE id IN (...) — limita el batch en
+        # un solo round-trip + permite ORDER BY para borrar los más
+        # antiguos primero (estabilidad bajo concurrencia con un user
+        # que recién creó sesión nueva).
+        # COALESCE(last_activity, created_at): si la columna last_activity
+        # nunca fue actualizada (sesión sin segundo mensaje), fallback al
+        # created_at. NOT NULL en created_at por definición.
+        # Defensive: solo borrar si created_at > TTL para evitar que un
+        # bug del watcher de last_activity borre sesiones nuevas.
+        rows = execute_sql_write(
+            """
+            DELETE FROM agent_sessions
+            WHERE id IN (
+                SELECT id FROM agent_sessions
+                WHERE COALESCE(last_activity, created_at)
+                      < NOW() - (%s::int * INTERVAL '1 day')
+                  AND created_at < NOW() - (%s::int * INTERVAL '1 day')
+                ORDER BY COALESCE(last_activity, created_at) ASC
+                LIMIT %s
+            )
+            RETURNING id
+            """,
+            (ttl_days, ttl_days, batch),
+            returning=True,
+        )
+        if rows is not None:
+            try:
+                deleted_count = len(rows) if isinstance(rows, list) else 0
+            except Exception:
+                deleted_count = 0
+    except Exception as e:
+        sweep_failed = True
+        logger.error(
+            f"❌ [P1-CHAT-SESSION-TTL] DELETE falló: {e!r}"
+        )
+
+    # Tick observable patrón P1-LIVE-4: emit SIEMPRE para confirmar
+    # liveness (incluso con 0 deletions) — SRE puede graficar y
+    # detectar scheduler starvation.
+    try:
+        import json as _json_ttl
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, %s, 0, %s::jsonb)
+            """,
+            (
+                "_sweep_stale_chat_sessions_tick",
+                int(deleted_count),
+                _json_ttl.dumps(
+                    {
+                        "ttl_days": int(ttl_days),
+                        "batch": int(batch),
+                        "deleted": int(deleted_count),
+                        "sweep_failed": bool(sweep_failed),
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+    except Exception:
+        pass
+
+    if deleted_count:
+        logger.info(
+            f"🧹 [P1-CHAT-SESSION-TTL] Eliminadas {deleted_count} sesiones "
+            f"inactivas >{ttl_days}d (batch={batch})."
+        )
+    return deleted_count

@@ -73,11 +73,14 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
         "RemoteProtocolError",
         "ReadError",
         "ConnectError",
+        "ConnectTimeout",
         "PoolTimeout",
         "ReadTimeout",
+        "TimeoutException",
         "Server disconnected",  # legacy httpx message
     )
-    for attempt in range(2):
+    MAX_ATTEMPTS = 4
+    for attempt in range(MAX_ATTEMPTS):
         try:
             # [P2-AUTH-ASYNC-SLEEP] `supabase.auth.get_user` es sync. Wrap
             # en `to_thread` para liberar el event loop durante la HTTP call.
@@ -89,11 +92,16 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
                 err_type in _TRANSIENT_NETWORK_ERRORS
                 or any(name in err_str for name in _TRANSIENT_NETWORK_ERRORS)
             )
-            if attempt == 0 and is_transient:
+            if attempt < MAX_ATTEMPTS - 1 and is_transient:
                 # [P2-AUTH-ASYNC-SLEEP] `asyncio.sleep` cede el event loop
-                # (otros requests progresan). El sync sleep legacy bloqueaba
-                # el worker thread completo durante 500ms.
-                await asyncio.sleep(0.5)
+                # (otros requests progresan).
+                # Backoff exponencial suave: 0.25s, 0.5s, 1.0s.
+                sleep_time = 0.25 * (2 ** attempt)
+                logger.info(
+                    f"Token validation falló con error transitorio {err_type} (intento {attempt + 1}/{MAX_ATTEMPTS}). "
+                    f"Reintentando en {sleep_time}s..."
+                )
+                await asyncio.sleep(sleep_time)
                 continue
             # Log SIN exponer detalle al cliente (no leak de mensaje Supabase).
             logger.warning(

@@ -790,6 +790,121 @@ def modify_single_meal(user_id: str, day_number: int, meal_type: str, changes: s
 # TOOL: Buscar en Memoria Profunda (Cold Storage)
 # ============================================================
 
+# [P1-SEARCH-DEEP-MEMORY-CACHE · 2026-05-19] TTL cache in-process para
+# resultados de `search_deep_memory`. Pre-fix: cada invocación de la tool
+# (a) hace `get_user_profile(user_id)` para validar el toggle LTM, (b)
+# invoca `db_search_deep_memory(user_id, query, limit=5)` que ejecuta
+# embedding + cosine search sobre `user_facts` + summary lookup en
+# `conversation_summaries`.
+#
+# Multi-turn conversations donde el LLM invoca la tool repetidamente
+# (e.g., "¿qué comía al principio?" → "¿y al mes siguiente?" → "¿cuándo
+# bajé el carbo?") generan N queries casi idénticas en cuestión de
+# segundos. Sin cache: N × (~150-400ms) latencia + N × cost de embedding
+# + N × pgvector scan. p95 de la tool crece linealmente con N.
+#
+# Diseño:
+#   - Cache key = (user_id, query_normalized). `query_normalized` =
+#     `query.strip().lower()[:256]` — colapsa "Adherencia", "ADHERENCIA",
+#     "adherencia " a la misma key. Cap a 256 chars defensivo (queries
+#     legítimas son <50 chars; un cap >= 256 cubre 100% del uso real).
+#   - TTL = 300s (5 min). Suficiente para conversación típica (~5-15 min
+#     sesión activa) pero corto enough para que cambios en `user_facts`
+#     se reflejen en la siguiente sesión.
+#   - Maxsize = 1024 entries. Cada entry típicamente <5KB (5 summaries de
+#     ~1KB c/u) → 5MB máximo. Eviction LRU implícita via cleanup en hit:
+#     cuando un lookup encuentra entries expiradas, las descarta.
+#   - In-process: cada worker tiene su propio cache. Esto es OK (igual
+#     que `LLMCircuitBreaker._local_cache`); workers convergen rápido.
+#   - NO uso `functools.lru_cache` porque NO maneja TTL y NO permite
+#     invalidación selectiva (futuro: cron sweep / signal post-INSERT).
+#
+# Knob:
+#   - `MEALFIT_SEARCH_DEEP_MEMORY_CACHE_TTL_S` (default 300, clamp [0, 3600]).
+#     Setear a 0 desactiva el cache (sin redeploy). Auto-registrado vía
+#     `_env_int_safe_tools` (helper local, NO usamos `_env_int` del knobs
+#     module aquí porque tools.py es importado por graph_orchestrator y
+#     queremos evitar acoplamiento circular hasta haber audit completo
+#     del import graph — mismo razonamiento que `rate_limiter.py`).
+#
+# Tooltip-anchor: P1-SEARCH-DEEP-MEMORY-CACHE.
+_SEARCH_DEEP_MEMORY_CACHE: dict = {}
+_SEARCH_DEEP_MEMORY_CACHE_MAX_ENTRIES = 1024
+_SEARCH_DEEP_MEMORY_CACHE_TTL_S_DEFAULT = 300
+
+
+def _env_int_safe_tools(name: str, default: int) -> int:
+    """Lectura defensiva de env var entero. NO registra en `_KNOBS_REGISTRY`
+    para evitar ciclo con `graph_orchestrator`. Misma razón que
+    `rate_limiter._env_int_safe`. Tooltip-anchor: P1-SEARCH-DEEP-MEMORY-CACHE."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _search_deep_memory_cache_ttl_s() -> int:
+    """[P1-SEARCH-DEEP-MEMORY-CACHE · 2026-05-19] TTL actual con clamp
+    [0, 3600]. `0` desactiva el cache."""
+    raw = _env_int_safe_tools(
+        "MEALFIT_SEARCH_DEEP_MEMORY_CACHE_TTL_S",
+        _SEARCH_DEEP_MEMORY_CACHE_TTL_S_DEFAULT,
+    )
+    if raw < 0:
+        return 0
+    if raw > 3600:
+        return 3600
+    return raw
+
+
+def _search_deep_memory_cache_get(user_id: str, query_norm: str):
+    """[P1-SEARCH-DEEP-MEMORY-CACHE · 2026-05-19] Lookup con TTL check.
+    Retorna `(hit, value)`: `(True, str)` si hit fresco, `(False, None)`
+    si miss o expired (también purga la entry expirada del dict)."""
+    ttl = _search_deep_memory_cache_ttl_s()
+    if ttl <= 0:
+        return False, None
+    key = (user_id, query_norm)
+    entry = _SEARCH_DEEP_MEMORY_CACHE.get(key)
+    if entry is None:
+        return False, None
+    cached_at, value = entry
+    if (time.monotonic() - cached_at) >= ttl:
+        # Expired — purge.
+        _SEARCH_DEEP_MEMORY_CACHE.pop(key, None)
+        return False, None
+    return True, value
+
+
+def _search_deep_memory_cache_set(user_id: str, query_norm: str, value: str) -> None:
+    """[P1-SEARCH-DEEP-MEMORY-CACHE · 2026-05-19] Store con LRU defensivo:
+    si el cache excede `_MAX_ENTRIES`, purga ~10% de las más viejas. NO
+    es LRU estricto (no rastreamos uso) — es "MRU-keep" basado en
+    `cached_at`, equivalente práctico para nuestro workload (uso
+    transient en ventana corta)."""
+    ttl = _search_deep_memory_cache_ttl_s()
+    if ttl <= 0:
+        return
+    now = time.monotonic()
+    if len(_SEARCH_DEEP_MEMORY_CACHE) >= _SEARCH_DEEP_MEMORY_CACHE_MAX_ENTRIES:
+        # Eviction: drop ~10% más viejas. Sort by cached_at ascending.
+        try:
+            sorted_keys = sorted(
+                _SEARCH_DEEP_MEMORY_CACHE.items(),
+                key=lambda kv: kv[1][0],
+            )
+            to_drop = max(1, len(sorted_keys) // 10)
+            for k, _ in sorted_keys[:to_drop]:
+                _SEARCH_DEEP_MEMORY_CACHE.pop(k, None)
+        except Exception:
+            # Defensive: si el sort falla por race, no afectar la store.
+            pass
+    _SEARCH_DEEP_MEMORY_CACHE[(user_id, query_norm)] = (now, value)
+
+
 @tool
 def search_deep_memory(user_id: str, query: str) -> str:
     """
@@ -818,19 +933,36 @@ def search_deep_memory(user_id: str, query: str) -> str:
     except Exception:
         pass  # fail-open: si el lookup falla, comportamiento legacy
 
+    # [P1-SEARCH-DEEP-MEMORY-CACHE · 2026-05-19] Cache lookup. La key
+    # normaliza la query (strip + lower + cap 256) para colapsar
+    # variantes equivalentes ("Adherencia", "adherencia", etc) a la
+    # misma entry. Cache miss → query DB y store; hit → retorna directo.
+    _query_norm = (query or "").strip().lower()[:256]
+    _hit, _cached = _search_deep_memory_cache_get(user_id, _query_norm)
+    if _hit:
+        logger.info(f"[P1-SEARCH-DEEP-MEMORY-CACHE] hit user={user_id} q='{_query_norm[:40]}'")
+        return _cached
+
     results = db_search_deep_memory(user_id, query, limit=5)
-    
+
     if not results:
-        return "No se encontraron recuerdos históricos que coincidan con esa búsqueda. Es posible que aún no haya suficiente historial archivado."
-    
+        _empty = "No se encontraron recuerdos históricos que coincidan con esa búsqueda. Es posible que aún no haya suficiente historial archivado."
+        # Cachear también el resultado vacío — evita re-scanear pgvector
+        # cuando el LLM insiste con la misma query (caso común en
+        # debug/exploración).
+        _search_deep_memory_cache_set(user_id, _query_norm, _empty)
+        return _empty
+
     # Formatear los resultados para el agente
     formatted = []
     for idx, r in enumerate(results, 1):
         period = f"{r.get('messages_start', '?')} → {r.get('messages_end', '?')}"
         summary = r.get('summary', 'Sin contenido')
         formatted.append(f"📁 Recuerdo #{idx} (Período: {period}):\n{summary}")
-    
-    return "\n\n".join(formatted)
+
+    _result = "\n\n".join(formatted)
+    _search_deep_memory_cache_set(user_id, _query_norm, _result)
+    return _result
 
 # ============================================================
 # TOOL: Herramienta de Consulta Matemática del Carrito
@@ -1210,7 +1342,10 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
         if modified_items:
             final_shop_list.extend(modified_items)
             
-        success = restock_inventory(user_id, final_shop_list)
+        # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] restock_inventory ahora retorna
+        # (success, persisted_names). El agent tool solo necesita `success`.
+        _restock_res = restock_inventory(user_id, final_shop_list)
+        success = bool(_restock_res[0]) if isinstance(_restock_res, tuple) else bool(_restock_res)
         if success:
             msg = f"¡Felicidades! Se han agregado los {len(final_shop_list)} ingredientes a tu Nevera Virtual."
             if excluded_items:

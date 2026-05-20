@@ -4467,8 +4467,19 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
 
         # Validación MURO Omitida: Ahora confiamos en el Delta Shopping del frontend.
         # El frontend solo envía los ingredientes que no están en la Nevera.
-        success = restock_inventory(user_id, filtered_ingredients)
-        
+        # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] restock_inventory ahora retorna
+        # (success, persisted_names). Usamos persisted_names abajo para marcar
+        # `restocked_items` SOLO con lo que efectivamente entró a DB — antes
+        # marcábamos los inputs aspiracionales (filtered_ingredients) sin
+        # validar que el INSERT persistió. Resultado pre-fix: ledger drift
+        # (restocked_items contaba 27 keys cuando user_inventory tenía 24 rows).
+        _restock_res = restock_inventory(user_id, filtered_ingredients)
+        if isinstance(_restock_res, tuple):
+            success, persisted_names = _restock_res
+        else:
+            # Defensive: callers legacy esperaban bool — backward compat.
+            success, persisted_names = bool(_restock_res), []
+
         if success:
             log_api_usage(user_id, "restock_inventory")
 
@@ -4485,12 +4496,24 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                     # [P1-2] restocked_items: timestamp por item para supresión
                     # granular en _build_hybrid_shopping_list. Crece con cada
                     # restock parcial; el cron limpia entradas vencidas.
+                    # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] Anotar SOLO los
+                    # names que efectivamente persistieron a DB (persisted_names
+                    # del retorno de restock_inventory). Pre-fix iterábamos
+                    # filtered_ingredients (input aspiracional) lo que dejaba
+                    # entries stale cuando hubo colisión silenciosa via
+                    # semantic embedding match. Fallback a filtered_ingredients
+                    # si persisted_names viene vacío (caller legacy) — preserva
+                    # el comportamiento previo en ese path.
                     if not isinstance(plan_data.get("restocked_items"), dict):
                         plan_data["restocked_items"] = {}
-                    for raw_item in filtered_ingredients:
-                        nm = _name_of(raw_item)
+                    _names_to_mark = (
+                        persisted_names
+                        if persisted_names
+                        else [_name_of(it) for it in filtered_ingredients]
+                    )
+                    for nm in _names_to_mark:
                         if nm:
-                            plan_data["restocked_items"][strip_accents(nm.lower())] = now_iso
+                            plan_data["restocked_items"][strip_accents(str(nm).lower())] = now_iso
 
                     # [P0-NEW-1 · 2026-05-10] Defense-in-depth doble candado:
                     # aunque el SELECT arriba ya cerró el IDOR, el UPDATE
@@ -4499,11 +4522,19 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                     # plan_id (improbable pero patrón mirroring de
                     # P0-HIST-IDOR-1 retry-chunk:4119-4123).
                     supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", real_plan_id).eq("user_id", user_id).execute()
-                    logger.info(f"✅ [RESTOCK] plan {real_plan_id}: {len(filtered_ingredients)} item(s) registrado(s), restocked_items={len(plan_data['restocked_items'])} entries")
+                    logger.info(
+                        f"✅ [RESTOCK] plan {real_plan_id}: input={len(filtered_ingredients)} "
+                        f"persisted={len(persisted_names)} restocked_items={len(plan_data['restocked_items'])} entries"
+                    )
                 except Exception as mark_err:
                     logger.warning(f"⚠️ No se pudo marcar plan como restocked: {mark_err}")
 
-            return {"success": True, "message": "¡Despensa actualizada exitosamente!"}
+            return {
+                "success": True,
+                "message": "¡Despensa actualizada exitosamente!",
+                "persisted_count": len(persisted_names),
+                "requested_count": len(filtered_ingredients),
+            }
         else:
             return {"success": False, "message": "Hubo un problema actualizando algunos ingredientes."}
 

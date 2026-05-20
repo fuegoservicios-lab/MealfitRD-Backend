@@ -114,11 +114,11 @@ def test_match_is_bidirectional_type_name_or_substring():
 
 
 def test_retry_has_attempt_zero_guard():
-    """El retry debe estar bounded por `attempt == 0` — solo 1 reintento. Sin
+    """El retry debe estar bounded por `attempt < MAX_ATTEMPTS - 1` — solo reintentos finitos. Sin
     esto, un Supabase Auth permanentemente caído entraría en loop infinito."""
     src = _read_auth_source()
-    assert "if attempt == 0 and is_transient:" in src, (
-        "Guard `attempt == 0` ausente. Sin él, un Supabase Auth caído producía "
+    assert "attempt < MAX_ATTEMPTS - 1 and is_transient:" in src, (
+        "Guard `attempt < MAX_ATTEMPTS - 1` ausente. Sin él, un Supabase Auth caído producía "
         "loop infinito de retries."
     )
 
@@ -214,7 +214,7 @@ def test_transient_remote_protocol_error_triggers_retry():
     assert call_count["n"] == 2, (
         f"Esperado 2 intentos (1 fail + 1 retry), recibido {call_count['n']}."
     )
-    mock_sleep.assert_called_once_with(0.5)
+    mock_sleep.assert_called_once_with(0.25)
 
 
 def test_non_transient_error_fails_immediately_with_403():
@@ -274,7 +274,7 @@ def test_double_failure_returns_403_after_retry_exhausted():
             )
 
     assert exc_info.value.status_code == 403
-    assert call_count["n"] == 2, (
-        f"Esperado exactly 2 intentos (1 fail + 1 retry fail = 403). "
-        f"Recibido {call_count['n']}. Si >2 hay loop. Si 1, retry no se activó."
+    assert call_count["n"] == 4, (
+        f"Esperado exactamente 4 intentos (1 original + 3 reintentos = 403 tras agotarse). "
+        f"Recibido {call_count['n']}. Si >4 hay loop. Si <4, retry no se agotó."
     )

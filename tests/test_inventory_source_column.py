@@ -241,7 +241,11 @@ def test_restock_inventory_tags_new_rows_as_shopping_list():
     with patch.object(db_inventory, "supabase", fake_sb), \
          patch.object(db_inventory, "get_master_ingredients", return_value=[]), \
          patch("shopping_calculator.normalize_name", side_effect=_fake_normalize_name, create=True):
-        ok = db_inventory.restock_inventory("u1", [
+        # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] restock_inventory ahora retorna
+        # tupla (success, persisted_names). Test actualizado para validar
+        # ambos: la flag de éxito + la lista de names que efectivamente se
+        # persistieron (sin normalize_name aplicado en la ruta estructurada).
+        ok, persisted = db_inventory.restock_inventory("u1", [
             {"name": "Tomate", "quantity": 4, "unit": "ud"},
             {"name": "Cebolla", "quantity": 1, "unit": "kg"},
         ])
@@ -250,6 +254,8 @@ def test_restock_inventory_tags_new_rows_as_shopping_list():
     assert len(captured.inserts) == 2
     sources = [r["source"] for r in captured.inserts]
     assert sources == ["shopping_list", "shopping_list"]
+    # [P0-RESTOCK-DEDUP-NAME] persisted_names contiene los names en orden.
+    assert persisted == ["Tomate", "Cebolla"]
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +266,9 @@ def test_replace_shopping_list_only_deletes_only_shopping_rows():
     fake_sb = _make_fake_supabase(captured, existing_rows_by_name={})
 
     with patch.object(db_inventory, "supabase", fake_sb), \
-         patch.object(db_inventory, "restock_inventory", return_value=True) as rmock:
+         patch.object(db_inventory, "restock_inventory", return_value=(True, ["Tomate"])) as rmock:
+        # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] Mock retorna tupla matching
+        # la signature nueva.
         stats = db_inventory.replace_shopping_list_only_items(
             "u1", [{"name": "Tomate", "quantity": 2, "unit": "ud"}],
         )
