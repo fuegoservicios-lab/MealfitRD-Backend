@@ -26967,13 +26967,19 @@ def trigger_background_rolling_refill() -> None:
 # LLM), pero NO toca sesiones inactivas. Resultado: bloat slow-burn de
 # DB + costo de storage Supabase + latencia creciente en queries
 # `/api/chat/sessions/{user_id}` que escanea todo `agent_sessions`
-# WHERE user_id = X ORDER BY last_activity DESC.
+# WHERE user_id = X ORDER BY (sort se computa en Python sobre el
+# `last_activity` derivado de `agent_messages` — ver db_chat.py:240).
 #
 # Defensa:
-#   - Cron daily (1×24h) que DELETE agent_sessions WHERE last_activity
+#   - Cron daily (1×24h) que DELETE agent_sessions WHERE created_at
 #     < NOW() - INTERVAL N días. La FK `agent_messages.session_id` debe
 #     ser ON DELETE CASCADE — si no lo está, el sweep deja huérfanos
 #     en agent_messages que el SQL hace LIMIT batch.
+#   - [P1-CHAT-SESSION-TTL-SCHEMA · 2026-05-20] El P-fix original
+#     referenciaba `last_activity`, columna que NO existe en
+#     `agent_sessions` (verificado contra schema). El SQL del cron usa
+#     `created_at` puro; ver docstring de `_sweep_stale_chat_sessions`
+#     para trade-off documentado.
 #   - Knob TTL default 90 días (3 meses sin abrir el chat). Clamp
 #     [7, 730] para evitar truncado agresivo accidental + bloquear
 #     "never expire".
@@ -26984,9 +26990,13 @@ def trigger_background_rolling_refill() -> None:
 # Tooltip-anchor: P1-CHAT-SESSION-TTL.
 def _sweep_stale_chat_sessions() -> int:
     """[P1-CHAT-SESSION-TTL · 2026-05-20] DELETE `agent_sessions` con
-    `last_activity` (o `created_at` si NULL) más antiguo que
-    `MEALFIT_CHAT_SESSION_TTL_DAYS`. Cascading FK borra `agent_messages`
-    automáticamente. Best-effort: cualquier error log + retorna 0.
+    `created_at` más antiguo que `MEALFIT_CHAT_SESSION_TTL_DAYS`. Cascading
+    FK borra `agent_messages` automáticamente. Best-effort: cualquier error
+    log + retorna 0.
+
+    [P1-CHAT-SESSION-TTL-SCHEMA · 2026-05-20] La columna `last_activity` NO
+    existe en `agent_sessions` — sólo se computa derivada en Python para sort
+    UI (db_chat.py:240). TTL aplica sobre `created_at` puro.
 
     Returns: número de sesiones eliminadas en este tick.
 
@@ -27011,25 +27021,29 @@ def _sweep_stale_chat_sessions() -> int:
         # un solo round-trip + permite ORDER BY para borrar los más
         # antiguos primero (estabilidad bajo concurrencia con un user
         # que recién creó sesión nueva).
-        # COALESCE(last_activity, created_at): si la columna last_activity
-        # nunca fue actualizada (sesión sin segundo mensaje), fallback al
-        # created_at. NOT NULL en created_at por definición.
-        # Defensive: solo borrar si created_at > TTL para evitar que un
-        # bug del watcher de last_activity borre sesiones nuevas.
+        # [P1-CHAT-SESSION-TTL-SCHEMA · 2026-05-20] TTL medido sobre
+        # `created_at` puro. La intención original del P-fix era usar
+        # `last_activity`, pero esa columna NO existe en `agent_sessions`
+        # (verificado contra schema: solo `id, created_at, locked_at,
+        # user_id`). Trade-off documentado: el TTL pasa a ser "edad de
+        # creación" no "última actividad". Para >99% de sesiones es
+        # equivalente porque se crean junto con el primer mensaje. Caso
+        # edge: user reabre sesión vieja meses después — se borra a los
+        # 90d aunque haya tráfico fresco. Si esto se vuelve problemático,
+        # añadir migration que cree `last_activity TIMESTAMPTZ` + trigger
+        # AFTER INSERT ON agent_messages que UPDATE la sesión.
         rows = execute_sql_write(
             """
             DELETE FROM agent_sessions
             WHERE id IN (
                 SELECT id FROM agent_sessions
-                WHERE COALESCE(last_activity, created_at)
-                      < NOW() - (%s::int * INTERVAL '1 day')
-                  AND created_at < NOW() - (%s::int * INTERVAL '1 day')
-                ORDER BY COALESCE(last_activity, created_at) ASC
+                WHERE created_at < NOW() - (%s::int * INTERVAL '1 day')
+                ORDER BY created_at ASC
                 LIMIT %s
             )
             RETURNING id
             """,
-            (ttl_days, ttl_days, batch),
+            (ttl_days, batch),
             returning=True,
         )
         if rows is not None:

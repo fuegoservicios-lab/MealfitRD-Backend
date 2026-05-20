@@ -21,9 +21,15 @@ Hallazgos cerrados (de audit 2026-05-20 al stack agente):
                               auto-generado de LangChain. Pre-fix: HTTP 500
                               opaco; ahora `tool_result` legible al LLM.
   5. [P1-CHAT-SESSION-TTL]    Cron daily que purga `agent_sessions` con
-                              `last_activity` >N días (default 90).
+                              `created_at` >N días (default 90).
                               FK CASCADE en `agent_messages.session_id`
                               borra los mensajes automáticamente.
+                              [P1-CHAT-SESSION-TTL-SCHEMA · 2026-05-20]
+                              La intención original referenciaba
+                              `last_activity` pero esa columna NO existe
+                              en `agent_sessions` — el SQL usa
+                              `created_at` puro. Test anti-regresión
+                              abajo bloquea reintroducir el reference.
 
 NO cubre (intencional):
   - Token counting: ya cubierto por `P2-CHAT-TOKEN-TELEMETRY` (agent.py:595+)
@@ -299,6 +305,62 @@ def test_sweep_stale_chat_sessions_registered_in_scheduler():
         "Cron no registrado en register_plan_chunk_scheduler — no correrá en prod."
     )
     assert "MEALFIT_CHAT_SESSION_TTL_SWEEP_INTERVAL_MIN" in body
+
+
+def test_sweep_stale_chat_sessions_sql_does_not_reference_last_activity():
+    """[P1-CHAT-SESSION-TTL-SCHEMA · 2026-05-20] El cuerpo de
+    `_sweep_stale_chat_sessions` NO debe referenciar la columna
+    `last_activity` — esa columna NO existe en `agent_sessions`
+    (schema actual: id, created_at, locked_at, user_id). El SQL
+    debe operar sobre `created_at` puro.
+
+    Pre-fix: el SQL original era
+        WHERE COALESCE(last_activity, created_at) < NOW() - ...
+    que falla con `column "last_activity" does not exist` el primer
+    día que el cron daily dispara → alert
+    `scheduler_error_sweep_stale_chat_sessions` + TTL nunca se aplica
+    → bloat slow-burn de agent_sessions/agent_messages.
+
+    El test anchora a un anti-pattern textual: si alguien reintroduce
+    `last_activity` en el cuerpo del sweep (e.g. al copiar el original
+    del runbook o al re-escribir desde la memoria), este test falla
+    antes de mergear. Si en el futuro se añade la columna via
+    migration SSOT, este test debe actualizarse Y crearse un test
+    funcional contra el schema real (no parser-based).
+    """
+    src = _read(_CRON_TASKS_PY)
+    sweep_match = re.search(
+        r"def _sweep_stale_chat_sessions\(.*?\n(.*?)(?=\ndef |\Z)",
+        src,
+        re.DOTALL,
+    )
+    assert sweep_match, "_sweep_stale_chat_sessions no encontrada"
+    body = sweep_match.group(1)
+    # Comments narrativos y docstrings pueden mencionar `last_activity`
+    # legítimamente (documentar el trade-off vs la intención original).
+    # Lo que NO se permite es referencias en SQL real — detectamos
+    # filtrando triple-quote blocks que contienen DDL/DML keywords.
+    triple_blocks = re.findall(r'"""(.*?)"""', body, re.DOTALL)
+    sql_blocks = [
+        b for b in triple_blocks
+        if re.search(r"\b(DELETE FROM|SELECT |INSERT INTO|UPDATE )\b", b)
+    ]
+    assert sql_blocks, "No se encontraron bloques SQL en el sweep — refactor?"
+    for sql in sql_blocks:
+        assert "last_activity" not in sql, (
+            "SQL del cron NO debe referenciar `last_activity` — columna "
+            "inexistente en agent_sessions. Usar `created_at` puro. Ver "
+            "P1-CHAT-SESSION-TTL-SCHEMA · 2026-05-20."
+        )
+    # Sanity: el SQL DELETE debe filtrar por `created_at`.
+    delete_sql = next(
+        (b for b in sql_blocks if "DELETE FROM agent_sessions" in b),
+        None,
+    )
+    assert delete_sql, "DELETE FROM agent_sessions no encontrado"
+    assert "created_at <" in delete_sql, (
+        "SQL DELETE no filtra por `created_at <` — fix de schema no aplicado."
+    )
 
 
 # ============================================================
