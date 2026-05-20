@@ -422,10 +422,21 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         now = datetime.now(timezone.utc).isoformat()
         synced_at = now if mark_inventory_synced else None
         if connection_pool:
+            # [P1-CONSUMED-MEALS-JSONB · 2026-05-20] `consumed_meals.ingredients`
+            # es jsonb (verified via information_schema). psycopg3 type
+            # adaption convierte `list[str]` a Postgres ARRAY literal
+            # `{a,b,c}` por default, NO a JSON. Eso hace que el INSERT
+            # falle con `invalid input syntax for type json` ("Expected
+            # ':', but found ','" — Postgres trata de parsear `{...}`
+            # como JSON object). Pre-fix: el `Jsonb` se importaba pero
+            # NO se aplicaba al parámetro → bug silencioso desde la
+            # migración a connection_pool. `consumed_meals` quedó vacía
+            # en prod (0 rows) — el diario de comidas del agente
+            # nunca persistió nada. Tooltip-anchor: P1-CONSUMED-MEALS-JSONB.
             from psycopg.types.json import Jsonb
             execute_sql_write(
                 "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type, inventory_synced_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients if ingredients is not None else [], now, meal_type, synced_at)
+                (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at)
             )
             return True
         else:
