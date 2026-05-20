@@ -542,8 +542,58 @@ def delete_old_messages(session_id: str, before_timestamp: str):
     res = supabase.table("agent_messages").delete().eq("session_id", session_id).lte("created_at", before_timestamp).execute()
     return res.data
 
+# [P1-CHAT-SUPABASE-RETRY · 2026-05-20] Detector best-effort de errores
+# transient de HTTP/2 al hablar con PostgREST de Supabase. `supabase-py`
+# usa httpx con conexión HTTP/2 keep-alive a `*.supabase.co`. Kong/PostgREST
+# cierra esas conexiones idle agresivamente (~30-60s); la PRIMER request
+# post-idle suele lanzar `httpx.RemoteProtocolError: Server disconnected`,
+# la SEGUNDA funciona porque httpx detecta el socket muerto y abre uno
+# nuevo. La librería NO maneja este reconnect automáticamente.
+#
+# Detección por type-name + message para evitar importar httpx a este
+# módulo (httpx es transitive dep de supabase-py, no first-class import
+# aquí). Patrón análogo a `_is_rate_limit_error` en agent.py (P1-CHAT-LLM-429).
+# Tooltip-anchor: P1-CHAT-SUPABASE-RETRY.
+def _is_transient_supabase_http_error(exc: BaseException) -> bool:
+    try:
+        name = type(exc).__name__
+        if name in (
+            "RemoteProtocolError",
+            "ConnectError",
+            "ReadTimeout",
+            "PoolTimeout",
+            "ConnectTimeout",
+        ):
+            return True
+        msg = str(exc).lower()
+        if "server disconnected" in msg or "connection reset" in msg:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+@retry(
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=0.3, min=0.3, max=1.5),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+)
 def get_recent_messages(session_id: str, limit: int = 10):
-    """Obtiene solo los N mensajes más recientes de una sesión (los no resumidos)."""
+    """Obtiene solo los N mensajes más recientes de una sesión (los no resumidos).
+
+    [P1-CHAT-SUPABASE-RETRY · 2026-05-20] Retry 2 intentos con backoff 0.3-1.5s
+    para cubrir el caso `httpx.RemoteProtocolError: Server disconnected`
+    cuando Kong/PostgREST cierra la conexión HTTP/2 idle. La primera request
+    post-idle falla pero httpx abre socket nuevo para la segunda. Tenacity
+    re-raise tras agotar intentos para que callers (build_memory_context →
+    chat_with_agent_stream) puedan propagar la excepción si persiste.
+
+    Conservador: retry_if_exception_type=Exception es amplio pero stop=2
+    limita el blast radius (max 1 reintento). Si el error es genuino (parse,
+    schema mismatch), el segundo intento también falla y el caller lo sabe.
+    """
     if not supabase: return []
     res = supabase.table("agent_messages").select("*").eq("session_id", session_id).order("created_at", desc=True).limit(limit).execute()
     # Revertir el orden para que estén cronológicos (el query los trae desc)

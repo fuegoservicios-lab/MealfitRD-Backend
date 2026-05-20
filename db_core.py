@@ -86,15 +86,30 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     supabase = None
 
-# Configuración del ConnectionPool para psycopg (Usado por LangGraph PostgresSaver)
+# Configuración del ConnectionPool para psycopg
+# [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Hay DOS pools:
+#   - `connection_pool` (sync) + `async_connection_pool`: tráfico genérico de la
+#     app (queries del frontend, crons, RAG, embeddings). Usa **Transaction
+#     Pooler** (6543) para multiplexar conexiones via pgBouncer/Supavisor.
+#   - `chat_checkpoint_pool`: SOLO para `langgraph.checkpoint.postgres.PostgresSaver`.
+#     Usa el URL ORIGINAL (port 5432, session mode). Razón documentada en el
+#     bloque donde se construye.
 connection_pool = None
 async_connection_pool = None  # Siempre declarado a nivel de módulo para garantizar importabilidad
+chat_checkpoint_pool = None  # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20]
 if SUPABASE_DB_URL:
     try:
         from psycopg_pool import ConnectionPool, AsyncConnectionPool
         # Limpiar comillas basura por si acaso
         clean_url = SUPABASE_DB_URL.strip().strip("'").strip('"')
-        
+
+        # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Preservar el URL original
+        # (port 5432, session mode) ANTES del rewrite a 6543. Lo necesitamos
+        # para el `chat_checkpoint_pool` (ver más abajo). Si el .env ya viene
+        # con 6543, `original_session_url` será igual a `clean_url` post-rewrite
+        # y el split de pools no aporta nada — un WARN avisará al operador.
+        original_session_url = clean_url
+
         # MEJORA 3: Connection Pooling - Forzar el uso del Transaction Pooler de Supabase (6543)
         # Esto previene el agotamiento de conexiones directas (Connection Exhaustion) si el volumen crece.
         if ".supabase." in clean_url and ":5432" in clean_url:
@@ -158,6 +173,67 @@ if SUPABASE_DB_URL:
             f"timeout={DB_ASYNC_POOL_TIMEOUT_S}s "
             "[P1-POOL-ASYNC-SPLIT: knobs separados del sync para no saturar pgBouncer]."
         )
+
+        # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Pool separado para el
+        # `langgraph.checkpoint.postgres.PostgresSaver`. Bug observado el
+        # 2026-05-20: SSE chat completa response al user, pero al hacer
+        # `put_writes` final del checkpoint → SSL error "bad length"
+        # / "SSL SYSCALL error: EOF detected" → `outcome=error` + banner
+        # frontend "El asistente tuvo un problema" + pérdida del state del
+        # LangGraph para el siguiente turn.
+        #
+        # Root cause: el pool principal (`connection_pool`) usa Transaction
+        # Pooler (Supavisor port 6543), que mata conexiones idle agresivamente
+        # (~10-30s). Durante el chat flow, el PostgresSaver mantiene una
+        # connection abierta del pool ~5-15s mientras espera la LLM call;
+        # Supavisor la cierra mid-stream → al `put_writes` final, la conexión
+        # ya está muerta. Defensivamente psycopg keepalives no ayudan porque
+        # Supavisor corta a nivel aplicación, no TCP.
+        #
+        # Fix: el checkpointer usa `original_session_url` (sin rewrite a
+        # 6543) → conexión directa session-mode (5432). Session mode no
+        # mata conexiones idle de forma agresiva. Pool pequeño (1-4) porque
+        # el chat-flow es low-concurrency (1 stream por user activo).
+        #
+        # Fallback: si `original_session_url == clean_url` (env var ya
+        # venía con 6543 hardcoded), el split NO aporta — WARN al SRE
+        # para que ajuste el env var a la URL session-mode. El pool aun
+        # se crea (conectividad básica funciona) pero el bug podría
+        # persistir.
+        try:
+            if original_session_url == clean_url and ":6543" in clean_url:
+                logger.warning(
+                    "⚠️ [P1-CHECKPOINT-POOL-SPLIT] SUPABASE_DB_URL ya contiene "
+                    ":6543 — el chat_checkpoint_pool no podrá usar session "
+                    "mode. Considera cambiar el env var a la URL :5432 para "
+                    "que el split aplique el fix del SSL bad length."
+                )
+
+            chat_checkpoint_pool = ConnectionPool(
+                conninfo=original_session_url,
+                min_size=1,
+                max_size=4,
+                timeout=15.0,
+                max_idle=300.0,
+                reconnect_timeout=5,
+                kwargs=get_client_kwargs(),
+                configure=configure_sync_conn,
+                check=ConnectionPool.check_connection,
+                open=False,
+            )
+            logger.info(
+                "🔌 [psycopg] chat_checkpoint_pool configurado (session "
+                "mode, port 5432): min=1, max=4 "
+                "[P1-CHECKPOINT-POOL-SPLIT: evita SSL bad length por "
+                "Supavisor idle-kill durante LangGraph stream]."
+            )
+        except Exception as checkpoint_pool_err:
+            logger.error(
+                f"⚠️ [P1-CHECKPOINT-POOL-SPLIT] Error configurando "
+                f"chat_checkpoint_pool: {checkpoint_pool_err}. Caller usará "
+                f"connection_pool fallback (puede reaparecer SSL bad length)."
+            )
+            chat_checkpoint_pool = None
     except Exception as pool_err:
         logger.error(f"⚠️ [psycopg] Error configurando ConnectionPool: {pool_err}")
 
@@ -165,6 +241,11 @@ def close_connection_pool():
     if connection_pool:
         connection_pool.close()
         logger.info("Connection pool cerrado.")
+    # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Cerrar también el pool del
+    # LangGraph checkpointer en shutdown — same convention que connection_pool.
+    if chat_checkpoint_pool:
+        chat_checkpoint_pool.close()
+        logger.info("chat_checkpoint_pool cerrado.")
 
 async def aclose_connection_pool():
     if 'async_connection_pool' in globals() and async_connection_pool:

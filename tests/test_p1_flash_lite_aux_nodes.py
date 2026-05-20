@@ -1,5 +1,5 @@
 """[P1-FLASH-LITE-AUX-NODES · 2026-05-15] Regression guards para el switch
-a `gemini-3.1-flash-lite-preview` en los 3 nodos auxiliares de schema-strict
+a `gemini-3.1-flash-lite` en los 3 nodos auxiliares de schema-strict
 (adversarial judge / fact-checker clínico / reviewer holístico).
 
 Pre-fix: cada nodo invocaba `_route_model(...)` que en perfiles clínicos
@@ -8,7 +8,7 @@ Para tareas binarias bajo `with_structured_output(...)`, Pro no aporta
 diferencia medible vs Lite.
 
 Fix: 3 helpers (`_judge_model_name`, `_fact_checker_model_name`,
-`_reviewer_model_name`) con default `gemini-3.1-flash-lite-preview` y
+`_reviewer_model_name`) con default `gemini-3.1-flash-lite` y
 knob de override por nodo (`MEALFIT_JUDGE_MODEL` / `MEALFIT_FACT_CHECKER_MODEL` /
 `MEALFIT_REVIEWER_MODEL`) — patrón canónico P3-PREVIEW-MODEL-KNOB.
 
@@ -72,7 +72,7 @@ def test_default_flash_lite_constant_present():
         r'_FLASH_LITE_DEFAULT\s*=\s*"gemini-3\.1-flash-lite-preview"', text
     ), (
         "P1-FLASH-LITE-AUX-NODES: constante `_FLASH_LITE_DEFAULT` con valor "
-        "`'gemini-3.1-flash-lite-preview'` debe existir como SSOT del default."
+        "`'gemini-3.1-flash-lite'` debe existir como SSOT del default."
     )
 
 
@@ -137,14 +137,14 @@ def test_reviewer_callsite_uses_helper():
 
 def test_pricing_dict_includes_flash_lite():
     """Cross-link: el dict de pricing en db_profiles.py debe incluir
-    `gemini-3.1-flash-lite-preview` para que `compute_gemini_cost_micros`
+    `gemini-3.1-flash-lite` para que `compute_gemini_cost_micros`
     pueda calcular el costo. Sin esta entry, `llm_usage_events.cost_usd_micros`
     queda NULL y el ROI de este P-fix es invisible."""
     db_path = _BACKEND_ROOT / "db_profiles.py"
     text = db_path.read_text(encoding="utf-8")
-    assert '"gemini-3.1-flash-lite-preview"' in text, (
+    assert '"gemini-3.1-flash-lite"' in text, (
         "P1-COST-INSTRUMENTATION pricing dict debe incluir entry para "
-        "`gemini-3.1-flash-lite-preview`. Sin esta entry el costo no se calcula."
+        "`gemini-3.1-flash-lite`. Sin esta entry el costo no se calcula."
     )
     # Pricing esperado (en micros/M tokens): $0.10 / $0.40 / $0.025
     m = re.search(

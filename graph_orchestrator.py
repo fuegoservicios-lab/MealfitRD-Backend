@@ -2397,7 +2397,7 @@ def _emit_llm_timeout_metric(
             pass
 
 
-def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float) -> None:
+def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: str = None) -> None:
     """[P1-COST-INSTRUMENTATION · 2026-05-15] Extrae model + usage_metadata
     de un response exitoso de LangChain ChatGoogleGenerativeAI y persiste
     a `llm_usage_events` via `db_profiles.log_llm_usage_event`.
@@ -2411,6 +2411,14 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float) -> None
         versiones del SDK).
     Cached tokens vienen como `cached_content_token_count` (Gemini) o
     `input_token_details.cache_read` (LangChain canonical).
+
+    [P3-CHAT-NODE-EXPLICIT · 2026-05-20] `node` ahora aceptable como kwarg
+    explícito. Pre-fix: el helper solo resolvía desde `_current_node_var`
+    (ContextVar). El chat-flow NO setea ese var → todas sus filas iban
+    con `node=NULL` → SRE no podía filtrar costos chat vs plan-gen.
+    Caller del chat ahora pasa `node='chat_call_model'` explícito; el
+    ContextVar sigue siendo fallback para callsites del pipeline plan-gen
+    que ya lo gestionan.
     """
     try:
         model_name = None
@@ -2452,10 +2460,17 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float) -> None
         # del nodo desde el ContextVar `_current_node_var`. Si la llamada
         # ocurrió fuera de un nodo etiquetado (e.g. agent tools, scripts
         # admin), `node` queda None → fila DB con `node=NULL` (legacy phase 1).
-        try:
-            current_node = _current_node_var.get()
-        except Exception:
-            current_node = None
+        # [P3-CHAT-NODE-EXPLICIT · 2026-05-20] Si el caller pasó `node`
+        # explícito (kwarg), úsalo — tiene prioridad sobre el ContextVar.
+        # El chat-flow (agent.py:call_model) lo pasa como 'chat_call_model'
+        # porque ese flow NO setea el ContextVar.
+        if node:
+            current_node = node
+        else:
+            try:
+                current_node = _current_node_var.get()
+            except Exception:
+                current_node = None
 
         from db_profiles import log_llm_usage_event
         log_llm_usage_event(
@@ -3799,7 +3814,7 @@ _DAY_SYSTEM_INSTRUCTION_CACHED = DAY_GENERATOR_SYSTEM_PROMPT + _DAY_SCHEMA_INSTR
 # crons/loops productivos leen model ID desde knob — modelos preview pueden
 # deprecarse sin aviso (audit 2026-05-11: `gemini-3.1-pro-preview` open=true
 # 4.4 días). Knob permite swap sin redeploy.
-_FLASH_LITE_DEFAULT = "gemini-3.1-flash-lite-preview"
+_FLASH_LITE_DEFAULT = "gemini-3.1-flash-lite"
 
 
 def _judge_model_name() -> str:

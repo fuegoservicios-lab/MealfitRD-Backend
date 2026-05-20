@@ -79,7 +79,7 @@ Contexto:
 Responde SOLO con el título, nada más."""
         
         title_llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3.1-flash-lite",
             temperature=0.9,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
@@ -863,7 +863,7 @@ def expand_recipe_agent(meal_data: dict) -> list[str]:
     
     try:
         llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3.1-flash-lite",
             temperature=0.7,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         ).with_structured_output(ExpandedRecipeModel)
@@ -920,7 +920,7 @@ REGLAS DE SALIDA:
 - NO ofrezcas consejos futuros, SOLO hechos observados (ej: "El usuario respondió excelente a desayunos salados, pero rechazó todos los batidos dulces").
 """
         llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3.1-flash-lite",
             temperature=0.2,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
@@ -957,7 +957,7 @@ Ejemplos de características: "Prefiere desayunos salados con plátano", "Le gus
 """
         
         llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite-preview",
+            model="gemini-3.1-flash-lite",
             temperature=0.2,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         ).with_structured_output(FlavorProfiles)

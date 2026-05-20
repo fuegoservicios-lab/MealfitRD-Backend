@@ -19,7 +19,7 @@ from prompts.proactive import PROACTIVE_PROMPT
 #   - `_compose_proactive_message` (genera el texto del nudge).
 #
 # Por qué un knob (no hardcode):
-#   El stack actual usa `gemini-3.1-flash-lite-preview` consistentemente
+#   El stack actual usa `gemini-3.1-flash-lite` consistentemente
 #   (graph_orchestrator `_PRO_MODEL_NAME`, fact_extractor, agent, etc.).
 #   Cambiar el default acá rompería la consistencia del stack. Pero los
 #   modelos `*-preview` de Google pueden deprecarse/retirarse sin aviso
@@ -36,7 +36,7 @@ from prompts.proactive import PROACTIVE_PROMPT
 def _proactive_model_name() -> str:
     return os.environ.get(
         "MEALFIT_PROACTIVE_SENTIMENT_MODEL",
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite",
     )
 
 def get_active_users_for_proactive() -> list:

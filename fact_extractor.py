@@ -45,7 +45,7 @@ from db import (
 #
 # Knobs:
 #   - MEALFIT_FACT_EXTRACTOR_SHADOW_MODEL (str, default '' = off)
-#       Setear a 'gemini-3-flash-preview' (o 'gemini-3.1-flash-lite-preview'
+#       Setear a 'gemini-3-flash-preview' (o 'gemini-3.1-flash-lite'
 #       para test más agresivo) para activar.
 #   - MEALFIT_FACT_EXTRACTOR_SHADOW_SAMPLE_RATE (float, default 0.1)
 #       Fracción de users que ejecutan el shadow (estable por hash(user_id)).
@@ -74,7 +74,7 @@ _FACT_EXTRACTOR_PRIMARY_MODEL = _env_str(
 )
 _FACT_EXTRACTOR_ROUTER_MODEL = _env_str(
     "MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL",
-    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-flash-lite",
 )
 
 

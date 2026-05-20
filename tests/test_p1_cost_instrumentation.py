@@ -130,7 +130,7 @@ def test_compute_gemini_cost_micros_flash_lite_pricing():
     """Flash-Lite a 1M in + 1M out = $0.10 + $0.40 = $0.50 → 500_000."""
     from db_profiles import compute_gemini_cost_micros
     cost = compute_gemini_cost_micros(
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite",
         input_tokens=1_000_000,
         output_tokens=1_000_000,
         cached_tokens=0,

@@ -42,7 +42,7 @@ MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 # [P1-18 + UNIFICATION 2026-05-14] Modelo de Gemini usado por
 # `summarize_and_prune` para generar resúmenes y master summaries.
 # Cronología:
-#   - Pre-P1-18: hardcoded a `"gemini-3.1-flash-lite-preview"`. En ese
+#   - Pre-P1-18: hardcoded a `"gemini-3.1-flash-lite"`. En ese
 #     momento la familia 3.x aún no estaba publicada (los modelos
 #     válidos eran 1.5/2.0/2.5) y el SDK lo rechazaba con 404
 #     silenciosamente — el resumen fallaba y el historial seguía
@@ -52,7 +52,7 @@ MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 #     fallos (`_summarize_failures`).
 #   - 2026-05-14: la familia 3.x ya está publicada y el resto del stack
 #     (chat_llm en agent.py, fact_extractor, sentiment_classifier,
-#     ai_helpers, proactive_agent) usa `gemini-3.1-flash-lite-preview`
+#     ai_helpers, proactive_agent) usa `gemini-3.1-flash-lite`
 #     con éxito. Para unificar footprint operacional el default vuelve
 #     a ese ID. El knob `MEMORY_SUMMARY_MODEL` permite rollback inmediato
 #     a un modelo stable (`MEMORY_SUMMARY_MODEL=gemini-2.5-flash`) sin
@@ -63,8 +63,8 @@ MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 # vía `_summarize_failures` y se promueve a `logger.error` para que
 # SRE alertee (en lugar del warning silencioso original).
 MEMORY_SUMMARY_MODEL = os.environ.get(
-    "MEMORY_SUMMARY_MODEL", "gemini-3.1-flash-lite-preview"
-).strip() or "gemini-3.1-flash-lite-preview"
+    "MEMORY_SUMMARY_MODEL", "gemini-3.1-flash-lite"
+).strip() or "gemini-3.1-flash-lite"
 
 # [P1-18] Contador in-memory de fallos del resumen. Se incrementa en cada
 # excepción de `summarize_and_prune` y se loggea a nivel `error` el primer
@@ -465,7 +465,7 @@ def summarize_and_prune(session_id: str):
         # Invocar Gemini para generar el resumen.
         # [P1-18 + UNIFICATION 2026-05-14] Modelo configurable vía
         # `MEMORY_SUMMARY_MODEL` env var con default
-        # `gemini-3.1-flash-lite-preview` (unificado con el resto del
+        # `gemini-3.1-flash-lite` (unificado con el resto del
         # stack; rollback a `gemini-2.5-flash` stable sin redeploy
         # disponible via env var). Ver narrativa completa en el comment
         # block de la constante a nivel módulo.

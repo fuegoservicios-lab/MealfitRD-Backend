@@ -24,7 +24,7 @@ def _get_classifier_model():
     """Inicializa el modelo clasificador una sola vez (singleton)."""
     from langchain_google_genai import ChatGoogleGenerativeAI
     return ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite-preview",
+        model="gemini-3.1-flash-lite",
         temperature=0.0,
         max_output_tokens=10,
         google_api_key=os.environ.get("GEMINI_API_KEY")

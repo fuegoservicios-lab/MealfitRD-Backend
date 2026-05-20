@@ -7,7 +7,7 @@ Síntoma observado plan post-reset 2026-05-16 21:49-22:04:
     reducir la repetición de este staple"
   - LLM corrector removió Soya/Tofu Y Queso Mozzarella
   - SKELETON FIDELITY (threshold hardcoded >=2 missing) → rechazo fatal
-  - Reviewer CB OPEN para gemini-3.1-flash-lite-preview → fail-closed
+  - Reviewer CB OPEN para gemini-3.1-flash-lite → fail-closed
   - Plan crítico abortado, usuario sin plan utilizable
 
 Root cause: el check de fidelity NO distinguía entre:

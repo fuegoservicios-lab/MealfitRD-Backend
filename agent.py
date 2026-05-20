@@ -39,7 +39,7 @@ from memory_manager import build_memory_context
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
 from langgraph.checkpoint.postgres import PostgresSaver
-from db import get_user_ingredient_frequencies, get_latest_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, get_consumed_meals_today
+from db import get_user_ingredient_frequencies, get_latest_meal_plan_with_id, get_session_messages, save_message, search_user_facts, search_visual_diary, connection_pool, chat_checkpoint_pool, get_consumed_meals_today
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -85,6 +85,41 @@ def _sanitize_chat_output_for_wire(text):
     text = _ON_HANDLER_RE.sub(r"data-stripped-on\1=", text)
     text = _JS_URI_RE.sub(r"\1=\2data-stripped:", text)
     return text
+
+
+# [P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20] Helper para remover los tags
+# silentes `[UI_ACTION: <NAME>]` ANTES de persistir el response del agente
+# en `agent_messages.content`. Cubre REFRESH_PLAN, REFRESH_INVENTORY,
+# REFRESH_HYDRATION (y cualquier futuro UI_ACTION declarado en el system
+# prompt `prompts/chat_agent.py:126-130`).
+#
+# Por qué server-side:
+#   El frontend (AgentPage.jsx) ya hace strip + dispatch durante el SSE
+#   streaming Y en el evento `done`. Pero el backend persiste el
+#   `response_text` RAW en `agent_messages.content`. Cuando el frontend
+#   refetchea `GET /api/chat/history/<session_id>` (al recargar el chat
+#   o navegar de vuelta), trae el contenido con tag → re-renderiza
+#   visible. Bug reportado 2026-05-20: el user vio el tag desaparecer
+#   durante el streaming y reaparecer al final/refetch.
+#
+# Patrón regex: `\[UI_ACTION:\s*[A-Z_]+\]` cubre todos los actions
+# documentados sin tener que enumerarlos individualmente. case-insensitive
+# por defensa (el LLM podría variar mayúsculas).
+#
+# Tooltip-anchor: P1-CHAT-UI-ACTION-INVENTORY.
+_UI_ACTION_TAG_RE = re.compile(r"\[UI_ACTION:\s*[A-Z_]+\]", re.IGNORECASE)
+
+
+def strip_ui_action_tags_for_persist(text):
+    """[P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20] Remueve tags silentes
+    `[UI_ACTION: <NAME>]` del response del agente antes de persistirlo.
+    Idempotente; safe-to-wrap cualquier value (None/dict pasan intactos)."""
+    if not text or not isinstance(text, str):
+        return text
+    cleaned = _UI_ACTION_TAG_RE.sub("", text)
+    # Collapse blank lines surplus que pueden quedar tras strip.
+    cleaned = re.sub(r"\n\s*\n\s*\n+", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
@@ -166,13 +201,13 @@ def _chat_agent_swap_model_name() -> str:
 def _chat_title_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_TITLE_MODEL",
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite",
     )
 
 def _chat_router_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_ROUTER_MODEL",
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite",
     )
 
 # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] Timeouts per-LLM-invoke y graph-total.
@@ -223,10 +258,19 @@ def _chat_title_llm_timeout_s() -> float:
     )
 
 def _chat_router_llm_timeout_s() -> float:
+    # [P1-CHAT-EMPTY-RESPONSE · 2026-05-20] Default bumpeado 8.0 → 12.0.
+    # Pre-fix: Gemini API rechaza con HTTP 400 INVALID_ARGUMENT
+    # ("Manually set deadline 8s is too short. Minimum allowed deadline
+    # is 10s.") porque 8s < 10s mínimo del API. El RAG router caía al
+    # `except` cada vez y degradaba al prompt original sin reescribir —
+    # feature silenciosamente rota desde el deploy del bundle P0-CHAT-LLM-TIMEOUT.
+    # 12s = 10s mínimo + 2s margen para variabilidad del provider.
+    # Validator extendido para enforce el floor a 10s incluso si el
+    # operador setea el env var con valor inválido.
     return _env_float(
         "MEALFIT_CHAT_ROUTER_LLM_TIMEOUT_S",
-        8.0,
-        validator=lambda v: 0.0 < v <= 120.0,
+        12.0,
+        validator=lambda v: 10.0 <= v <= 120.0,
     )
 
 def _chat_graph_total_timeout_s() -> float:
@@ -815,6 +859,72 @@ def call_model(state: ChatState):
 
     _cb.record_success()
 
+    # [P1-CHAT-EMPTY-RESPONSE · 2026-05-20] Detección de response vacío
+    # post-invoke (Gemini safety filter). Modo de fallo observado en
+    # prod: Gemini emite WARNING "produced an empty response" con
+    # `Feedback: block_reason=PROHIBITED_CONTENT` y devuelve un
+    # AIMessage(content='') SIN tool_calls. El graph rutea por `route_tools`
+    # a END (no hay tool_calls), el SSE concluye con éxito, pero el
+    # frontend renderiza un mensaje VACÍO del agente — UX confusa
+    # (usuario asume bug del cliente). PROHIBITED_CONTENT es categoría
+    # server-side de Google NO controlable desde safety_settings del
+    # SDK (que solo cubre HATE/HARASSMENT/SEXUAL/DANGEROUS).
+    #
+    # Causa probable: system prompt del chat agent contiene frases
+    # imperativas ("CERO COMPLACENCIA", "TIENES LA ORDEN", "JAMÁS lo
+    # reprimas") que pueden activar el filtro de Google bajo combinación
+    # con ciertos mensajes user. NO siempre dispara — el primer chat de
+    # ese día funcionó OK con el mismo prompt + mensaje benigno.
+    #
+    # Fix: detectamos `(empty content) AND (no tool_calls)` post-invoke
+    # y reemplazamos el AIMessage por uno con copy fallback explícito
+    # que invita al user a reformular. Distingue del caso legítimo
+    # "Gemini emitió tool_calls + content vacío" (response a tool
+    # planeada): si hay tool_calls, NO sustituimos.
+    #
+    # Best-effort metric: emit `chat_llm_empty_response` para que SRE
+    # grafique falsos positivos del filtro server-side y decida si
+    # cambiar de modelo (gemini-3.5-pro es más permisivo que flash) o
+    # suavizar el system prompt. Tooltip-anchor: P1-CHAT-EMPTY-RESPONSE.
+    _resp_content_str = ""
+    try:
+        _resp_content_str = str(getattr(response, "content", "") or "").strip()
+    except Exception:
+        _resp_content_str = ""
+    _resp_tool_calls = getattr(response, "tool_calls", None) or []
+    if not _resp_content_str and not _resp_tool_calls:
+        logger.warning(
+            f"⚠️ [P1-CHAT-CHAT-EMPTY-RESPONSE] Gemini devolvió response vacío "
+            f"sin tool_calls (probable PROHIBITED_CONTENT filter del provider). "
+            f"model={_cb_model!r}. Sustituyendo por mensaje fallback."
+        )
+        try:
+            from db_core import execute_sql_write
+            import json as _json_empty
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics
+                    (user_id, session_id, node, duration_ms, retries,
+                     tokens_estimated, confidence, metadata)
+                VALUES (%s, %s, %s, 0, 0, 0, 0, %s::jsonb)
+                """,
+                (
+                    state.get("user_id") if state.get("user_id") and state.get("user_id") != "guest" else None,
+                    state.get("session_id"),
+                    "chat_llm_empty_response",
+                    _json_empty.dumps({"model": _cb_model, "provider": "gemini"}, ensure_ascii=False),
+                ),
+            )
+        except Exception:
+            pass
+        _fallback_copy = (
+            "No pude procesar esa solicitud por restricciones del modelo. "
+            "¿Puedes reformularla con otras palabras? Si lo que querías era "
+            "registrar una comida, intenta algo como: \"comí X gramos de Y "
+            "para el almuerzo\"."
+        )
+        response = AIMessage(content=_fallback_copy)
+
     # [P2-CHAT-TOKEN-TELEMETRY · 2026-05-19] Best-effort post-invoke.
     # Importa lazy para evitar acoplamiento module-init con graph_orchestrator
     # (que ya importa este módulo en algunos paths). El helper acepta
@@ -822,10 +932,16 @@ def call_model(state: ChatState):
     # el model name. Cualquier fallo en el emit NO debe romper el chat.
     try:
         from graph_orchestrator import _emit_llm_usage_event_best_effort
+        # [P3-CHAT-NODE-EXPLICIT · 2026-05-20] Pasamos `node='chat_call_model'`
+        # explícito porque el chat-flow NO setea el ContextVar `_current_node_var`
+        # que el helper consulta por default. Sin esto, todas las filas del
+        # chat en `llm_usage_events` quedan con `node=NULL` y SRE no puede
+        # filtrar costos chat vs plan-gen.
         _emit_llm_usage_event_best_effort(
             llm=chat_llm,
             result=response,
             duration_s=_time_chat.time() - _chat_invoke_start,
+            node='chat_call_model',
         )
     except Exception:
         pass
@@ -1374,18 +1490,22 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
             logger.error(f"⚠️ Error inyectando contexto de diario (non-stream): {e}")
         
     config = {"configurable": {"thread_id": session_id}}
-    
-    # Compilamos el grafo dinámicamente para usar la conexión compartida/pool en un entorno multi-worker
-    if connection_pool:
-        checkpointer = PostgresSaver(connection_pool)
+
+    # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Pool separado para PostgresSaver
+    # (session mode, port 5432) evita "SSL bad length / EOF" cuando Supavisor
+    # mata conexiones idle del Transaction Pooler durante el chat stream.
+    # Fallback defensivo a `connection_pool` si el split pool no se creó.
+    _checkpoint_pool = chat_checkpoint_pool or connection_pool
+    if _checkpoint_pool:
+        checkpointer = PostgresSaver(_checkpoint_pool)
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
     else:
         logger.warning("⚠️ [LangGraph] No pool de PostgreSQL, usando MemorySaver en RAM.")
         checkpointer = MemorySaver()
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
-        
+
     existing_state = chat_graph_app.get_state(config)
-    
+
     inputs = {
         "user_id": user_id or "guest",
         "session_id": session_id,
@@ -1608,10 +1728,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             logger.error(f"⚠️ Error inyectando contexto de diario: {e}")
             
     config = {"configurable": {"thread_id": session_id}}
-    
+
+    # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Mismo split que el callsite del
+    # non-stream chat. Sesión session-mode evita SSL EOF durante el SSE.
     # Compilamos usando PostgresSaver sincrónico porque astream_events nativo asíncrono tiene problemas en Windows
-    if connection_pool:
-        checkpointer = PostgresSaver(connection_pool)
+    _checkpoint_pool = chat_checkpoint_pool or connection_pool
+    if _checkpoint_pool:
+        checkpointer = PostgresSaver(_checkpoint_pool)
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
     else:
         chat_graph_app = chat_builder.compile(checkpointer=MemorySaver())

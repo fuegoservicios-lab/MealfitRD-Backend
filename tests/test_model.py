@@ -6,10 +6,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 def test():
-    print("Testing gemini-3.1-flash-lite-preview...")
+    print("Testing gemini-3.1-flash-lite...")
     try:
         start = time.time()
-        llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview", temperature=0.1)
+        llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", temperature=0.1)
         res = llm.invoke("Di 'hola'")
         end = time.time()
         print(f"Success in {end - start:.2f}s: {res.content}")

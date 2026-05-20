@@ -1396,6 +1396,7 @@ def _alert_deploy_lag_marker_stale():
                 VALUES (%s, 'deploy_lag_marker_stale', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                 SET triggered_at = NOW(),
+                    message = EXCLUDED.message,
                     metadata = EXCLUDED.metadata,
                     resolved_at = NULL
                 """,
@@ -1460,6 +1461,7 @@ def _alert_deploy_lag_marker_stale():
                 VALUES (%s, 'deploy_drift', 'warning', %s, %s, %s::jsonb, %s::jsonb)
                 ON CONFLICT (alert_key) DO UPDATE
                 SET triggered_at = NOW(),
+                    message = EXCLUDED.message,
                     metadata = EXCLUDED.metadata,
                     resolved_at = NULL
                 """,
@@ -22191,7 +22193,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                         if can_probe:
                             logger.info(f" [GAP 6] Iniciando Probe LLM para auto-recovery del chunk {week_number}...")
                             probe_llm = ChatGoogleGenerativeAI(
-                                model="gemini-3.1-flash-lite-preview",
+                                model="gemini-3.1-flash-lite",
                                 temperature=0.0,
                                 google_api_key=os.environ.get("GEMINI_API_KEY"),
                                 max_retries=0

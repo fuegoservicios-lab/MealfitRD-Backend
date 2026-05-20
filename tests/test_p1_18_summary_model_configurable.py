@@ -3,7 +3,7 @@ sea configurable y tenga default a un modelo válido de Gemini.
 
 Cronología:
   - Pre-P1-18: `memory_manager.summarize_and_prune` instanciaba
-    `ChatGoogleGenerativeAI` con `model="gemini-3.1-flash-lite-preview"`
+    `ChatGoogleGenerativeAI` con `model="gemini-3.1-flash-lite"`
     (hardcoded en 2 sitios). En ese momento la familia 3.x NO estaba
     publicada (los IDs válidos eran 1.5/2.0/2.5) y el SDK lo rechazaba
     con 404. El except lo loggeaba como print warning silencioso →
@@ -14,7 +14,7 @@ Cronología:
     contador `_summarize_failures` para SRE alerting.
   - 2026-05-14: la familia 3.x ya está publicada y el resto del stack
     (chat_llm, fact_extractor, sentiment_classifier, ai_helpers,
-    proactive_agent) usa `gemini-3.1-flash-lite-preview` con éxito.
+    proactive_agent) usa `gemini-3.1-flash-lite` con éxito.
     Default unificado a ese ID; el knob sigue habilitando rollback a
     `gemini-2.5-flash` (stable) sin redeploy si Google deprecara el
     preview.
@@ -46,11 +46,11 @@ import memory_manager
 # ---------------------------------------------------------------------------
 def test_summary_model_default_is_valid_gemini_id():
     """Default sin env var → el ID unificado del stack
-    (`gemini-3.1-flash-lite-preview`, 2026-05-14)."""
+    (`gemini-3.1-flash-lite`, 2026-05-14)."""
     # Limpiamos cualquier override del entorno actual.
     if os.environ.get("MEMORY_SUMMARY_MODEL"):
         pytest.skip("MEMORY_SUMMARY_MODEL ya está seteado, no podemos verificar default")
-    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-3.1-flash-lite-preview"
+    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-3.1-flash-lite"
 
 
 def test_summary_model_overridable_via_env_var(monkeypatch):
@@ -77,9 +77,9 @@ def test_summary_model_falls_back_when_env_var_empty(monkeypatch):
     """Env var = '' (vacío después de strip) → fallback al default."""
     monkeypatch.setenv("MEMORY_SUMMARY_MODEL", "")
     importlib.reload(memory_manager)
-    # `"" or "gemini-3.1-flash-lite-preview"` → default por la cláusula
+    # `"" or "gemini-3.1-flash-lite"` → default por la cláusula
     # `or` defensiva en el módulo.
-    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-3.1-flash-lite-preview"
+    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-3.1-flash-lite"
     monkeypatch.delenv("MEMORY_SUMMARY_MODEL", raising=False)
     importlib.reload(memory_manager)
 

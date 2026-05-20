@@ -16,7 +16,7 @@ from db import (
     save_message, save_message_feedback, log_api_usage
 )
 from memory_manager import build_memory_context, summarize_and_prune
-from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError
+from agent import generate_chat_title_background, chat_with_agent, chat_with_agent_stream, LLMCircuitBreakerOpen, LLMRateLimitedError, strip_ui_action_tags_for_persist
 from services import merge_form_data_with_profile
 from db_profiles import get_user_profile
 from db_plans import get_latest_meal_plan
@@ -675,6 +675,15 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                             if _chunk_type == "done":
                                 response_text = data_obj.get("response", "")
                                 if response_text:
+                                    # [P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20]
+                                    # Strip tags `[UI_ACTION: <NAME>]` ANTES de
+                                    # persistir. El frontend ya strip + dispatch
+                                    # en runtime (AgentPage.jsx), pero el refetch
+                                    # de `/api/chat/history/<session_id>` traía
+                                    # el tag RAW de DB y lo re-renderizaba —
+                                    # síntoma reportado: "desapareció y volvió a
+                                    # aparecer". Strip server-side cierra el ciclo.
+                                    response_text = strip_ui_action_tags_for_persist(response_text)
                                     # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19]
                                     # `_db_user_id` resuelto arriba en
                                     # closure scope. Persiste el ownership
@@ -829,6 +838,9 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
 
         response_text, updated_fields, new_plan = chat_with_agent(session_id, prompt, current_plan=current_plan, user_id=user_id, form_data=form_data)
 
+        # [P1-CHAT-UI-ACTION-INVENTORY · 2026-05-20] Mismo strip que el
+        # endpoint /stream — cierra el ciclo del tag visible al refetch.
+        response_text = strip_ui_action_tags_for_persist(response_text)
         save_message(session_id, "model", response_text, user_id=_db_user_id)
         
         # 🧠 Background: Resumir y podar mensajes si el historial creció demasiado

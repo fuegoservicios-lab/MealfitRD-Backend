@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-CHAT-PROD-AUDIT · 2026-05-20"
+_LAST_KNOWN_PFIX = "P3-PROFILE-WEIGHT-UNIT-AUTOCONVERT · 2026-05-20"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -178,7 +178,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from db import (
-    connection_pool, async_connection_pool, supabase,
+    connection_pool, async_connection_pool, chat_checkpoint_pool, supabase,
     get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes,
     insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile,
     update_user_health_profile, update_user_health_profile_atomic, get_all_user_facts, delete_user_fact,
@@ -663,6 +663,13 @@ async def lifespan(app: FastAPI):
         connection_pool.open()
     if async_connection_pool:
         await async_connection_pool.open()
+    # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Abrir el pool del LangGraph
+    # checkpointer en startup junto a los demás. Sin esto, los callsites
+    # de `PostgresSaver(chat_checkpoint_pool)` en agent.py fallan con
+    # `psycopg_pool.PoolClosed: the pool is not open yet` al primer
+    # `chat_graph_app.get_state(...)`.
+    if chat_checkpoint_pool:
+        chat_checkpoint_pool.open()
         
     # [P2-NEW-E · 2026-05-07] El bloque DDL runtime (CREATE TABLE IF NOT EXISTS
     # + ALTERs + UPDATEs de backfill + índices para 7 tablas) que vivía aquí se

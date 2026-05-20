@@ -6,7 +6,7 @@
   3. `_run_fact_pipeline` batch contradiction (PRO truth path)
 
 Pre-fix los modelos estaban hardcoded inline:
-  - `model="gemini-3.1-flash-lite-preview"` (router)
+  - `model="gemini-3.1-flash-lite"` (router)
   - `pro_model="gemini-3.1-pro-preview"` (extract + contradiction)
 
 El SHADOW path ya tenía knob (P3-FACT-EXTRACTOR-SHADOW-AB · 2026-05-14)
@@ -22,12 +22,12 @@ Defensas que el test enforza:
   2. Knobs `MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL` (default
      'gemini-3.5-flash' tras P3-MODEL-DEFAULT-FLASH35 · 2026-05-19, era
      'gemini-3.1-pro-preview') y `MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL`
-     (default 'gemini-3.1-flash-lite-preview') resueltos via `_env_str`.
+     (default 'gemini-3.1-flash-lite') resueltos via `_env_str`.
   3. Helpers `_fact_extractor_primary_model_name()` y
      `_fact_extractor_router_model_name()` definidos.
   4. Cero literales `pro_model="gemini-3.1-pro-preview"` en `_invoke_with_shadow`
      callsites — todos usan `_fact_extractor_primary_model_name()`.
-  5. Cero literal `model="gemini-3.1-flash-lite-preview"` en callsite del
+  5. Cero literal `model="gemini-3.1-flash-lite"` en callsite del
      router — usa `_fact_extractor_router_model_name()`.
   6. Anchor presente en este archivo (cross-link guard P2-HIST-AUDIT-14).
 """
@@ -79,7 +79,7 @@ def test_router_model_knob_registered():
     )
     assert pat.search(src), (
         "Knob `MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL` debe resolverse via "
-        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL\", \"gemini-3.1-flash-lite-preview\")`."
+        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL\", \"gemini-3.1-flash-lite\")`."
     )
 
 
@@ -113,12 +113,12 @@ def test_zero_inline_primary_model_literal():
 
 
 def test_zero_inline_router_model_literal():
-    """Cero `model="gemini-3.1-flash-lite-preview"` en callsites de
+    """Cero `model="gemini-3.1-flash-lite"` en callsites de
     ChatGoogleGenerativeAI dentro de fact_extractor.py."""
     src = _read(_FACT_EX)
     bad = re.findall(r'\bmodel\s*=\s*[\"\']gemini-3\.1-flash-lite-preview[\"\']', src)
     assert not bad, (
-        f"Encontrados {len(bad)} callsites con `model=\"gemini-3.1-flash-lite-preview\"` "
+        f"Encontrados {len(bad)} callsites con `model=\"gemini-3.1-flash-lite\"` "
         f"hardcoded. Reemplazar por `model=_fact_extractor_router_model_name()`."
     )
 
