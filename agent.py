@@ -525,7 +525,32 @@ def swap_meal(form_data: dict):
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_chat_swap_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
     ).with_structured_output(MealModel)
-    
+
+    # [P1-CHAT-CB-EXTEND · 2026-05-20] CB gate per-modelo del swap_llm.
+    # Espejo del gate en `call_model` (P1-CHAT-CB · 2026-05-19). Pre-fix:
+    # si Gemini estaba degradado, los swaps seguían golpeando el provider
+    # sin fail-fast — tenacity retry 3× AGRAVABA la condición (3 attempts
+    # × N concurrent swaps). Ahora: si breaker abierto raise
+    # `LLMCircuitBreakerOpen` ANTES del retry loop. Propaga al caller
+    # (router → HTTP 503, semánticamente "upstream saturado, reintentar
+    # tras MEALFIT_CB_RESET_TIMEOUT_S"). NO ejecutamos el fallback "Plato
+    # Seguro" en este caso — el fallback es para "validador rechazó 3
+    # attempts", no para "provider degradado". Mantener asimetría es
+    # explícito y defendible: 503 le dice al user "el sistema sabe que
+    # algo está mal", el plato fallback parecería decisión culinaria.
+    # Tooltip-anchor: P1-CHAT-CB-EXTEND.
+    _swap_cb_model = _chat_agent_swap_model_name()
+    _swap_cb = _get_circuit_breaker(_swap_cb_model)
+    if not _swap_cb.can_proceed():
+        logger.warning(
+            f"🛑 [P1-CHAT-CB-EXTEND] swap_meal CB abierto para "
+            f"model={_swap_cb_model!r} — fail-fast sin invocar Gemini. "
+            f"Reintentar tras MEALFIT_CB_RESET_TIMEOUT_S segundos."
+        )
+        raise LLMCircuitBreakerOpen(
+            f"swap_meal LLM circuit breaker open for model={_swap_cb_model}"
+        )
+
     # Invocar LLM con reintentos automáticos (tenacity)
     @retry(
         stop=stop_after_attempt(3),
@@ -538,7 +563,7 @@ def swap_meal(form_data: dict):
     )
     def invoke_with_retry():
         res = swap_llm.invoke(prompt_text)
-        
+
         # Validación post-generación (guardrail determinista)
         if hasattr(res, "ingredients"):
             ingreds = getattr(res, "ingredients")
@@ -546,19 +571,47 @@ def swap_meal(form_data: dict):
             ingreds = res["ingredients"]
         else:
             ingreds = []
-            
+
         # Solo aplicamos restricción estricta si hay una despensa base limpia extraída
         if clean_ingredients:
             val_result = validate_ingredients_against_pantry(ingreds, clean_ingredients)
             if val_result is not True:
                 logger.warning(val_result)
                 raise ValueError(val_result)
-                
+
         return res
-    
+
     try:
         response = invoke_with_retry()
+        # [P1-CHAT-CB-EXTEND · 2026-05-20] Marcar éxito en el CB tras
+        # invoke + validación OK (mismo punto que `record_success` en
+        # `call_model`). El reset_timeout window se renueva acá.
+        _swap_cb.record_success()
     except Exception as e:
+        # [P1-CHAT-CB-EXTEND · 2026-05-20] Discriminar antes de marcar
+        # failure: rate-limit del provider (429/ResourceExhausted) NO
+        # cuenta como CB failure — espejo del patrón en `call_model`
+        # (P1-CHAT-LLM-429 · 2026-05-20). Si fueran las 3 attempts de
+        # tenacity falladas por 429, propagamos como `LLMRateLimitedError`
+        # (router → HTTP 429 con Retry-After) y NO ejecutamos el fallback
+        # "Plato Seguro" — semánticamente distinto a "validador rechazó".
+        # Resto de errores (timeout, 5xx, ValidationError del guardrail):
+        # `record_failure` + mantener fallback existente como degradación
+        # graceful (UX preservada).
+        if _is_rate_limit_error(e):
+            _emit_chat_rate_limited_metric_best_effort(
+                form_data.get("user_id"),
+                form_data.get("session_id"),
+                _swap_cb_model,
+            )
+            logger.warning(
+                f"⚠️ [P1-CHAT-LLM-429] swap_meal Gemini rate-limit "
+                f"model={_swap_cb_model!r} — NO cuenta como CB failure."
+            )
+            raise LLMRateLimitedError(
+                f"swap_meal LLM rate limited for model={_swap_cb_model}: {e!r}"
+            ) from e
+        _swap_cb.record_failure()
         logger.error(f"❌ [SWAP_MEAL] Fallaron los intentos LLM y validador: {e}. Usando Plato Fallback.")
         fallback_ing = clean_ingredients[:4] if clean_ingredients else ["Pollo", "Arroz", "Aguacate"]
         response = {
@@ -711,6 +764,168 @@ def _emit_chat_rate_limited_metric_best_effort(user_id, session_id, model_name):
     except Exception as _e_rl:
         try:
             logger.debug(f"[P1-CHAT-LLM-429] emit metric falló (best-effort): {_e_rl!r}")
+        except Exception:
+            pass
+
+
+# [P3-CHAT-OBSERVABILITY · 2026-05-20] Cooldown in-process del alert
+# `chat_checkpoint_pool_split_missing`. Sin cooldown, cada request del
+# chat (potencialmente miles/min bajo carga) emitiría un UPSERT al mismo
+# row de `system_alerts` — contención inútil. Cooldown 1h = la alert
+# vive como "abierta" (resolved_at IS NULL) mientras la condición exista;
+# SRE la cierra manualmente tras reparar el pool. El lock garantiza
+# atomicidad del check-and-set bajo workers concurrentes del mismo proceso.
+# Tooltip-anchor: P3-CHAT-OBSERVABILITY.
+import threading as _threading_obs
+_POOL_SPLIT_ALERT_COOLDOWN_S = 3600.0
+_pool_split_alert_last_ts = 0.0
+_pool_split_alert_lock = _threading_obs.Lock()
+
+# [P3-CHAT-OBSERVABILITY · 2026-05-20] TTL del lock cross-worker para
+# `generate_chat_title_background`. Si un worker crashea sin cleanup,
+# la fila en `app_kv_store` queda huérfana — el TTL permite que el
+# siguiente claim la sobreescriba como stale. 5 min cubre el 99p del
+# title generation (típicamente <10s) con margen amplio para casos
+# patológicos (Gemini lento, retries, multi-stage).
+_TITLE_LOCK_TTL_S = 300
+
+
+def _try_claim_title_lock_cross_worker(session_id: str) -> bool:
+    """[P3-CHAT-OBSERVABILITY · 2026-05-20] Atomic claim del lock
+    cross-worker para `generate_chat_title_background`. Reemplaza el
+    `_generating_titles = set()` in-memory que sufría race bajo
+    gunicorn `-w N`: cada worker tenía su propio set → dedupe fallaba
+    con probabilidad ~(N-1)/N → tokens LLM duplicados + N rows
+    SYSTEM_TITLE concurrent que el último UPSERT pisaba.
+
+    Returns:
+        True  → este worker claimó el lock, debe proceder con la generación.
+        False → otra worker ya está procesando (lock activo, NO stale).
+
+    Estrategia: UPSERT con `WHERE existing.started_at < now - TTL`.
+    RETURNING devuelve la fila solo si el INSERT/UPDATE ocurrió:
+      - INSERT puro (fila nueva) → RETURNING emite ✓ claimed
+      - UPDATE porque WHERE matched (stale) → RETURNING emite ✓ claimed
+      - UPDATE skipped por WHERE False (lock activo) → RETURNING vacío ✗
+    Postgres serializa ON CONFLICT DO UPDATE por-fila → race-free.
+
+    Best-effort: si la DB no responde, retornamos True (fail-open) para
+    NO bloquear title generation en outage del KV. Trade-off aceptable:
+    title es cosmético, prefiero duplicarlo a perderlo.
+    """
+    try:
+        from db_core import execute_sql_query
+        import time as _t_claim
+        _now_ts = _t_claim.time()
+        _kv_key = f"title_gen_inflight:{session_id}"
+        result = execute_sql_query(
+            """
+            INSERT INTO app_kv_store (key, value)
+            VALUES (%s, jsonb_build_object('started_at', %s::float))
+            ON CONFLICT (key) DO UPDATE SET
+                value = jsonb_build_object('started_at', %s::float),
+                updated_at = NOW()
+            WHERE COALESCE((app_kv_store.value->>'started_at')::float, 0)
+                  < %s::float
+            RETURNING key
+            """,
+            (_kv_key, _now_ts, _now_ts, _now_ts - _TITLE_LOCK_TTL_S),
+        )
+        return bool(result)
+    except Exception as _e_claim:
+        logger.debug(
+            f"[P3-CHAT-OBSERVABILITY] title lock claim falló "
+            f"(fail-open) session={session_id}: {_e_claim!r}"
+        )
+        return True
+
+
+def _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, source):
+    """[P3-CHAT-OBSERVABILITY · 2026-05-20] Persiste a `pipeline_metrics`
+    cuando el RAG embedding falla (catch broad en los 2 callsites de
+    `chat_with_agent` / `chat_with_agent_stream`). Pre-fix: el chat
+    seguía gracefully sin RAG pero SRE NO podía graficar "% de chats
+    sin RAG" → regresión silenciosa del embedding service (Gemini
+    embeddings API caída, parse error del input, OOM en pgvector)
+    quedaba invisible hasta queja del user.
+
+    `source` ∈ {'chat_with_agent', 'chat_with_agent_stream'} para
+    diferenciar non-stream vs streaming en queries. Best-effort: cualquier
+    fallo de DB se silencia y NO afecta el chat-flow."""
+    try:
+        from db_core import execute_sql_write
+        import json as _json_rag
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (%s, %s, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                user_id if user_id and user_id != "guest" else None,
+                session_id,
+                "chat_rag_embedding_failed",
+                _json_rag.dumps({"source": source}, ensure_ascii=False),
+            ),
+        )
+    except Exception as _e_rag:
+        try:
+            logger.debug(f"[P3-CHAT-OBSERVABILITY] emit chat_rag_embedding_failed metric falló: {_e_rag!r}")
+        except Exception:
+            pass
+
+
+def _emit_checkpoint_pool_split_missing_alert_best_effort():
+    """[P3-CHAT-OBSERVABILITY · 2026-05-20] Emit `system_alerts` con
+    `alert_key='chat_checkpoint_pool_split_missing'` cuando
+    `chat_checkpoint_pool` no se creó al arranque y caemos al fallback
+    `connection_pool` (transaction pooler). Esto reabre el modo de fallo
+    que P1-CHECKPOINT-POOL-SPLIT · 2026-05-20 cerró (SSL bad length /
+    EOF cuando Supavisor mata conexiones idle del Transaction Pooler
+    durante el chat stream).
+
+    Cooldown 1h in-process: bajo carga alta (1000 req/s), sin cooldown
+    haríamos 1000 UPSERTs/s al mismo row de `system_alerts`. El UPSERT
+    canonical (P2-NEW-3) mantiene la alert como "abierta" (resolved_at
+    IS NULL) mientras la condición exista; SRE la cierra manualmente
+    tras reparar el pool.
+
+    Best-effort: cualquier fallo de DB se silencia."""
+    global _pool_split_alert_last_ts
+    import time as _t_alert
+    _now_ts = _t_alert.time()
+    with _pool_split_alert_lock:
+        if _now_ts - _pool_split_alert_last_ts < _POOL_SPLIT_ALERT_COOLDOWN_S:
+            return
+        _pool_split_alert_last_ts = _now_ts
+    try:
+        from db_core import execute_sql_write
+        import json as _json_alert
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'chat_checkpoint_pool_split_missing', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                message = EXCLUDED.message,
+                resolved_at = NULL
+            """,
+            (
+                "chat_checkpoint_pool_split_missing",
+                "Chat usa fallback `connection_pool` (Transaction Pooler)",
+                "El pool `chat_checkpoint_pool` (session-mode 5432) NO se creó al arranque — "
+                "el chat compila PostgresSaver contra el Transaction Pooler. Esto reabre "
+                "el modo de fallo SSL bad length / EOF (P1-CHECKPOINT-POOL-SPLIT · 2026-05-20). "
+                "Revisar logs de `db.py` por errores en la creación del split pool.",
+                _json_alert.dumps({"source": "agent.chat_with_agent_stream"}, ensure_ascii=False),
+                _json_alert.dumps([]),
+            ),
+        )
+    except Exception as _e_alert:
+        try:
+            logger.debug(f"[P3-CHAT-OBSERVABILITY] emit pool_split_missing alert falló: {_e_alert!r}")
         except Exception:
             pass
 
@@ -1188,22 +1403,40 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
     Se ejecuta en un thread separado. Llama a Gemini para generar el título
     y luego lo guarda en agent_messages con role='SYSTEM_TITLE'.
     """
-    t0 = time.time()
-    def dlog(msg):
-        with open("title_debug.log", "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.now().isoformat()}] [{session_id}] {time.time()-t0:.2f}s - {msg}\n")
-    dlog("Thread started")
+    # [P2-CHAT-CLEANUP · 2026-05-20] Migrado `dlog()` (escribía a
+    # `title_debug.log` en disco append-mode sin rotación) a `logger.debug`.
+    # Pre-fix: cada thread background abría el file en cada log line — disk
+    # I/O side-channel + crecimiento ilimitado en prod. Convención del repo
+    # (P2-LOGGER-MIGRATION) prohíbe escritura directa a archivo desde código
+    # productivo. Tooltip-anchor: P2-CHAT-CLEANUP.
+    _t0 = time.monotonic()
+    logger.debug(f"[chat_title bg] session={session_id} - Thread started")
+
+    # [P3-CHAT-OBSERVABILITY · 2026-05-20] Dedupe híbrido: fast-path
+    # in-memory (evita roundtrip DB cuando el mismo worker ya tiene el
+    # lock) + cross-worker via `app_kv_store` (cierra race bajo
+    # gunicorn `-w N`). Pre-fix: `_generating_titles = set()` por-proceso
+    # → dedupe fallaba con probabilidad ~(N-1)/N en multi-worker → N
+    # threads concurrent emitían N invokes Gemini + N rows SYSTEM_TITLE
+    # de los que el último UPSERT pisaba (tokens duplicados sin valor).
+    # Tooltip-anchor: P3-CHAT-OBSERVABILITY.
     if session_id in _generating_titles:
-        dlog("Already generating, returning")
+        logger.debug(f"[chat_title bg] session={session_id} - Already generating (in-process), returning")
+        return
+    if not _try_claim_title_lock_cross_worker(session_id):
+        logger.debug(
+            f"[chat_title bg] session={session_id} - claimed by another worker "
+            f"(cross-process lock active), returning"
+        )
         return
     try:
         _generating_titles.add(session_id)
-        
+
         # Check if a title already exists for this session
         res_data = get_session_messages(session_id)
         if res_data and any(str(m.get("content", "")).startswith("[SYSTEM_TITLE]") for m in res_data):
-            dlog("Title exists, returning")
-            return 
+            logger.debug(f"[chat_title bg] session={session_id} - Title exists, returning")
+            return
             
         first_message = ""
         # Garantizar que siempre se use el primer mensaje histórico real, no el prompt actual
@@ -1232,8 +1465,8 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         if not first_message:
             first_message = "El usuario acaba de subir una fotografía (probablemente de su comida o progreso físico) para ser analizada."
         
-        dlog("Initializing LLM client")
-        
+        logger.debug(f"[chat_title bg] session={session_id} - Initializing LLM client")
+
         # Obtener títulos recientes para evitar repetirlos
         used_titles_str = ""
         try:
@@ -1245,11 +1478,50 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
         except Exception as e:
             logger.error(f"Error fetching recent titles for anti-duplication: {e}")
             
+        # [P1-CHAT-CB-EXTEND · 2026-05-20] CB gate fire-and-forget. Si
+        # breaker abierto, skip silente (NO raise — esto corre en thread
+        # background y un raise solo se loguea sin afectar el chat-flow,
+        # pero igual desperdicia el thread del executor). El user verá
+        # "Nuevo chat" hasta que la próxima invocación legítima genere
+        # el título. Trade-off aceptable: NO bloqueamos al user por un
+        # title cosmético cuando el provider está degradado. Tooltip-
+        # anchor: P1-CHAT-CB-EXTEND.
+        _title_cb_model = _chat_title_model_name()
+        _title_cb = _get_circuit_breaker(_title_cb_model)
+        if not _title_cb.can_proceed():
+            logger.info(
+                f"[P1-CHAT-CB-EXTEND] title generation CB abierto "
+                f"model={_title_cb_model!r} session={session_id} — skip "
+                f"silente. Title quedará en 'Nuevo chat' hasta próximo turn."
+            )
+            return
+
         title_llm = ChatGoogleGenerativeAI(model=_chat_title_model_name(), temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"), timeout=_chat_title_llm_timeout_s())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str)
-        dlog("Calling LLM API")
-        response = title_llm.invoke(prompt)
-        dlog("LLM response received")
+        logger.debug(f"[chat_title bg] session={session_id} - Calling LLM API")
+        try:
+            response = title_llm.invoke(prompt)
+            # [P1-CHAT-CB-EXTEND · 2026-05-20] Marcar success post-invoke.
+            _title_cb.record_success()
+        except Exception as _title_invoke_exc:
+            # [P1-CHAT-CB-EXTEND · 2026-05-20] Discriminar rate-limit del
+            # provider (NO cuenta como CB failure) vs failure genuino.
+            # Espejo del patrón en `call_model`. En ambos casos re-raise
+            # al except outer que ya hace logger.error — preservar el
+            # log path existente.
+            if _is_rate_limit_error(_title_invoke_exc):
+                _emit_chat_rate_limited_metric_best_effort(
+                    user_id, session_id, _title_cb_model,
+                )
+                logger.warning(
+                    f"⚠️ [P1-CHAT-LLM-429] title generation rate-limit "
+                    f"model={_title_cb_model!r} session={session_id} — "
+                    f"NO cuenta como CB failure."
+                )
+            else:
+                _title_cb.record_failure()
+            raise
+        logger.debug(f"[chat_title bg] session={session_id} - LLM response received")
         content = response.content
         if isinstance(content, list):
             content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
@@ -1271,13 +1543,24 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             if " " in title:
                 title = title.rsplit(" ", 1)[0]
         
-        dlog("Inserting SYSTEM_TITLE msg into DB")
+        logger.debug(f"[chat_title bg] session={session_id} - Inserting SYSTEM_TITLE msg into DB")
         save_message(session_id, "model", f"[SYSTEM_TITLE] {title}")
-        dlog("Insert successful. Finished.")
-        logger.info(f"✅ Título generado para sesión {session_id}: {title}")
+        _elapsed_s = time.monotonic() - _t0
+        logger.info(f"✅ Título generado para sesión {session_id}: {title} (elapsed={_elapsed_s:.2f}s)")
     except Exception as e:
-        dlog(f"Exception caught: {e}")
-        logger.error(f"⚠️ Error generando título: {e}")
+        logger.error(f"⚠️ Error generando título session={session_id}: {e}")
+    finally:
+        # [P3-CHAT-OBSERVABILITY · 2026-05-20] Cleanup del in-memory set.
+        # Pre-fix: `_generating_titles.add(session_id)` se hacía en `try`
+        # pero NUNCA se removía → set crecía indefinidamente con cada
+        # generación (memory leak slow-burn). El cross-worker lock en
+        # `app_kv_store` se auto-expira via TTL (5 min), pero el in-memory
+        # set requería discard explícito. NO eliminamos el row del KV
+        # acá — el TTL natural cierra la ventana sin INSERT extra y
+        # mantiene defensa contra "mismo session_id re-claimed
+        # inmediatamente tras success" (raro pero posible si el frontend
+        # re-spawnea bg task).
+        _generating_titles.discard(session_id)
 
 
 def rag_query_router(prompt: str) -> dict:
@@ -1311,6 +1594,28 @@ def rag_query_router(prompt: str) -> dict:
         return {"skip": True}
     
     # Paso 3: Para mensajes sustanciales, usar Flash-Lite para reescribir la query
+
+    # [P1-CHAT-CB-EXTEND · 2026-05-20] CB gate hot-path del chat. El RAG
+    # router se invoca síncrono en CADA turn del chat (línea 1351, 1596) —
+    # si Gemini está degradado, cada chat paga `MEALFIT_CHAT_ROUTER_LLM_TIMEOUT_S`
+    # (default 12s) antes del fallback. Con breaker abierto, retornamos
+    # el fallback de inmediato (mismo behaviour que el except actual)
+    # para preservar el hot-path. NO raise: el rag_query_router es
+    # preprocessing y nunca debe abortar el chat upstream. La degradación
+    # es graceful: el chat sigue funcionando sin RAG hasta que el provider
+    # se recupere (cron `_sweep_stale_llm_circuit_breakers` cierra ventana).
+    # Tooltip-anchor: P1-CHAT-CB-EXTEND.
+    _router_cb_model = _chat_router_model_name()
+    _router_cb = _get_circuit_breaker(_router_cb_model)
+    if not _router_cb.can_proceed():
+        logger.warning(
+            f"🛑 [P1-CHAT-CB-EXTEND] rag_query_router CB abierto "
+            f"model={_router_cb_model!r} — fallback prompt original sin "
+            f"reescribir. Chat continúa sin RAG hasta que el provider "
+            f"se recupere."
+        )
+        return {"skip": False, "query": prompt}
+
     try:
         router_llm = ChatGoogleGenerativeAI(
             model=_chat_router_model_name(),
@@ -1318,28 +1623,57 @@ def rag_query_router(prompt: str) -> dict:
             google_api_key=os.environ.get("GEMINI_API_KEY"),
             timeout=_chat_router_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
         )
-        
+
         rewrite_prompt = RAG_ROUTER_PROMPT.format(prompt=prompt)
-        
+
         response = router_llm.invoke(rewrite_prompt)
+        # [P1-CHAT-CB-EXTEND · 2026-05-20] Marcar success post-invoke.
+        _router_cb.record_success()
         content = response.content
         if isinstance(content, list):
             content = "".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
         result = str(content).strip().strip('"').strip("'")
-        
+
         if result.upper() == "SKIP":
             logger.info(f"⏭️ [RAG ROUTER] Flash-Lite determinó que no necesita RAG: '{prompt[:30]}'")
             return {"skip": True}
-        
+
         logger.info(f"🎯 [RAG ROUTER] Query reescrita: '{prompt[:30]}...' → '{result}'")
         return {"skip": False, "query": result}
-        
+
     except Exception as e:
+        # [P1-CHAT-CB-EXTEND · 2026-05-20] Discriminar rate-limit del
+        # provider antes de marcar failure. Espejo del patrón en
+        # `call_model` (P1-CHAT-LLM-429). Para rate-limit, emit métrica
+        # pero NO `record_failure` — el provider está vivo, solo throttling.
+        # En ambos casos retornamos fallback (mismo behaviour que pre-fix);
+        # `rag_query_router` NO debe abortar el chat upstream.
+        if _is_rate_limit_error(e):
+            _emit_chat_rate_limited_metric_best_effort(
+                None, None, _router_cb_model,
+            )
+            logger.warning(
+                f"⚠️ [P1-CHAT-LLM-429] rag_query_router rate-limit "
+                f"model={_router_cb_model!r} — NO cuenta como CB failure."
+            )
+        else:
+            _router_cb.record_failure()
         logger.error(f"⚠️ [RAG ROUTER] Error en rewrite, usando prompt original: {e}")
         return {"skip": False, "query": prompt}
 
 def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None):
-    
+    # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Wall-clock total para el path
+    # non-stream del chat. Pre-fix: solo el stream emitía
+    # `chat_stream_total_duration` (P1-CHAT-STREAM-DURATION), el
+    # non-stream NO tenía métrica E2E — endpoint `/api/chat` (non-stream)
+    # quedaba sin P99 graphable. Emit en `finally` del try/finally puntual
+    # que envuelve `chat_graph_app.invoke` (más abajo) para cubrir todo
+    # path: success / timeout / exception. Outcome se mapea: 'ok' /
+    # 'timeout' / 'error'. Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
+    import time as _time_chat_total
+    _chat_total_started_at = _time_chat_total.monotonic()
+    _chat_total_outcome = "ok"
+
     # Obtener contexto de memoria inteligente (resúmenes + mensajes recientes)
     memory = build_memory_context(session_id)
     
@@ -1374,6 +1708,14 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                         visual_facts_text = "\n".join(visual_list)
                         logger.debug(f"📸 [CHAT RAG VISUAL] Entradas visuales recuperadas: {len(visual_data)}")
             except Exception as e:
+                # [P3-CHAT-OBSERVABILITY · 2026-05-20] emit metric para que
+                # SRE pueda graficar "% de chats sin RAG por failure" —
+                # pre-fix el chat degradaba silentemente sin RAG, una
+                # regresión del embedding service quedaba invisible hasta
+                # queja del user.
+                _emit_chat_rag_embedding_failed_metric_best_effort(
+                    user_id, session_id, "chat_with_agent",
+                )
                 logger.error(f"⚠️ [CHAT RAG] Error recuperando memoria: {e}")
             
     rag_context = ""
@@ -1496,6 +1838,11 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     # mata conexiones idle del Transaction Pooler durante el chat stream.
     # Fallback defensivo a `connection_pool` si el split pool no se creó.
     _checkpoint_pool = chat_checkpoint_pool or connection_pool
+    # [P3-CHAT-OBSERVABILITY · 2026-05-20] Alert si caímos al fallback del
+    # transaction pooler — reabre el modo de fallo SSL bad length/EOF.
+    # Cooldown 1h in-process previene contención bajo carga alta.
+    if chat_checkpoint_pool is None and connection_pool is not None:
+        _emit_checkpoint_pool_split_missing_alert_best_effort()
     if _checkpoint_pool:
         checkpointer = PostgresSaver(_checkpoint_pool)
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
@@ -1544,31 +1891,64 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     #     lo abata — NO cancellable cooperativamente, pero el endpoint ya respondió.
     #   - El thread pool externo de FastAPI queda libre inmediatamente.
     _graph_timeout_s = _chat_graph_total_timeout_s()
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=1, thread_name_prefix="chat_graph_invoke"
-    ) as _ex:
-        _fut = _ex.submit(chat_graph_app.invoke, inputs, config=config)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="chat_graph_invoke"
+        ) as _ex:
+            _fut = _ex.submit(chat_graph_app.invoke, inputs, config=config)
+            try:
+                final_state = _fut.result(timeout=_graph_timeout_s)
+            except concurrent.futures.TimeoutError as _to_exc:
+                _chat_total_outcome = "timeout"
+                logger.error(
+                    f"⏱️ [P0-CHAT-LLM-TIMEOUT] chat_graph_app.invoke excedió "
+                    f"{_graph_timeout_s}s para session={session_id} user={user_id!r}. "
+                    f"Posible Gemini hang / network issue."
+                )
+                raise TimeoutError(
+                    f"chat_graph exceeded {_graph_timeout_s}s timeout"
+                ) from _to_exc
+    except Exception:
+        # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Si _chat_total_outcome no
+        # fue marcado por el branch específico de timeout, marca 'error'
+        # genérico antes de re-raise. El emit en finally captura ambos.
+        if _chat_total_outcome == "ok":
+            _chat_total_outcome = "error"
+        # Best-effort emit antes de re-raise (el caller no recibirá la
+        # métrica si excepción rompe el flow).
         try:
-            final_state = _fut.result(timeout=_graph_timeout_s)
-        except concurrent.futures.TimeoutError as _to_exc:
-            logger.error(
-                f"⏱️ [P0-CHAT-LLM-TIMEOUT] chat_graph_app.invoke excedió "
-                f"{_graph_timeout_s}s para session={session_id} user={user_id!r}. "
-                f"Posible Gemini hang / network issue."
+            _total_dur_ms = int((_time_chat_total.monotonic() - _chat_total_started_at) * 1000)
+            _emit_chat_stream_total_duration_best_effort(
+                user_id, session_id, _chat_agent_model_name(),
+                _total_dur_ms, _chat_total_outcome,
             )
-            raise TimeoutError(
-                f"chat_graph exceeded {_graph_timeout_s}s timeout"
-            ) from _to_exc
+        except Exception:
+            pass
+        raise
 
     end_time = time.time()
     duration_secs = round(float(end_time - start_time), 2)
     logger.info(f"✅ [COMPLETADO] LangGraph finalizó en {duration_secs} segundos.")
     logger.info("-------------------------------------------------------------\n")
-    
+
+    # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Emit total-duration del path
+    # non-stream (outcome='ok'). Reusa el helper `_emit_chat_stream_total_duration_best_effort`
+    # (SSOT) que ya emite con `node='chat_stream_total_duration'`. Queries
+    # de SRE pueden diferenciar streams vs non-stream por `metadata.source`
+    # — pero como hoy no lo necesitamos para alerting, el mismo node basta.
+    try:
+        _total_dur_ms = int((_time_chat_total.monotonic() - _chat_total_started_at) * 1000)
+        _emit_chat_stream_total_duration_best_effort(
+            user_id, session_id, _chat_agent_model_name(),
+            _total_dur_ms, _chat_total_outcome,
+        )
+    except Exception:
+        pass
+
     final_messages = final_state["messages"]
     last_msg = final_messages[-1]
     content = last_msg.content
-    
+
     if isinstance(content, list):
         content = "\n".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
 
@@ -1614,6 +1994,11 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                         visual_list = [f"• {item['description']}" for item in visual_data]
                         visual_facts_text = "\n".join(visual_list)
             except Exception as e:
+                # [P3-CHAT-OBSERVABILITY · 2026-05-20] Espejo del callsite
+                # en `chat_with_agent` (non-stream).
+                _emit_chat_rag_embedding_failed_metric_best_effort(
+                    user_id, session_id, "chat_with_agent_stream",
+                )
                 logger.error(f"⚠️ [CHAT RAG] Error en stream: {e}")
             
     rag_context = ""
@@ -1733,6 +2118,10 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # non-stream chat. Sesión session-mode evita SSL EOF durante el SSE.
     # Compilamos usando PostgresSaver sincrónico porque astream_events nativo asíncrono tiene problemas en Windows
     _checkpoint_pool = chat_checkpoint_pool or connection_pool
+    # [P3-CHAT-OBSERVABILITY · 2026-05-20] Mismo alert que el callsite del
+    # non-stream chat — el cooldown 1h dedupea bajo carga concurrente.
+    if chat_checkpoint_pool is None and connection_pool is not None:
+        _emit_checkpoint_pool_split_missing_alert_best_effort()
     if _checkpoint_pool:
         checkpointer = PostgresSaver(_checkpoint_pool)
         chat_graph_app = chat_builder.compile(checkpointer=checkpointer)
@@ -1810,7 +2199,14 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     _last_event_at = _stream_started_at
     _stream_total_budget = _chat_stream_total_timeout_s()
     _stream_inactivity_budget = _chat_stream_inactivity_timeout_s()
-    _stream_outcome = "ok"  # 'ok' / 'timeout_total' / 'timeout_inactivity' / 'error' / 'cancelled'
+    _stream_outcome = "ok"  # 'ok' / 'timeout_total' / 'timeout_inactivity' / 'error' / 'cancelled' / 'checkpoint_lost'
+    # [P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20] Contador de chunks AI ya
+    # entregados al frontend. Si una excepción de checkpoint Postgres (SSL
+    # bad length / EOF detected) ocurre DESPUÉS de haber streamado contenido,
+    # la respuesta del LLM ya llegó al user — perder el checkpoint final NO
+    # justifica el banner rojo. Ver `except Exception` abajo para la lógica
+    # de degradación silenciosa. Tooltip-anchor: P1-CHAT-CHECKPOINT-DEGRADE.
+    _chunks_yielded = 0
 
     try:
         for event in stream_iter:
@@ -1858,6 +2254,8 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                             # del wire SSE chunk.
                             chunk_content = _sanitize_chat_output_for_wire(chunk_content)
                             yield f"data: {json.dumps({'type': 'chunk', 'text': chunk_content})}\n\n"
+                            # [P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20]
+                            _chunks_yielded += 1
                     else:
                         for idx, tool_call in enumerate(msg_chunk.tool_calls):
                             if idx == 0:  # Mostrar el mensaje 1 sola vez por llamada múltiple
@@ -1893,6 +2291,45 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         )
         raise
     except Exception as e:
+        # [P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20] Degradación silenciosa
+        # cuando el `PostgresSaver.put_writes` final muere por SSL bad length
+        # / EOF detected POST-streaming. Modo de fallo: Supavisor mata la
+        # conexión de `chat_checkpoint_pool` mientras LangGraph la mantiene
+        # checkout durante el LLM call (~10-30s). El for loop ya emitió todo
+        # el contenido al frontend; solo falla el `_checkpointer_put_after_previous`
+        # interno de LangGraph. Yieldar 'error' al user es engañoso — ya
+        # vio la respuesta completa, perder el checkpoint solo significa
+        # que el próximo turn recargará history desde db_chat (no-op visible).
+        #
+        # Heurística defensiva: clasificamos como "checkpoint_lost" SOLO si
+        # (a) la excepción menciona uno de los markers SSL del fallo + (b)
+        # ya entregamos ≥1 chunk al frontend. Si chunks_yielded=0, el LLM
+        # ni emitió tokens → el fallo es real (probablemente conn dead al
+        # primer get_state) y SÍ debemos mostrar el banner.
+        #
+        # Pool recycling agresivo (db_core.py: min_size=0, max_idle=30s)
+        # reduce frecuencia ~95%; el degrade silencioso cierra el residuo.
+        # Tooltip-anchor: P1-CHAT-CHECKPOINT-DEGRADE.
+        _err_str = str(e)
+        _is_checkpoint_ssl_death = any(
+            marker in _err_str
+            for marker in (
+                "SSL error: bad length",
+                "EOF detected",
+                "flush request failed",
+                "connection is lost",
+                "no connection to the server",
+            )
+        )
+        if _is_checkpoint_ssl_death and _chunks_yielded > 0:
+            _stream_outcome = "checkpoint_lost"
+            logger.warning(
+                f"⚠️ [P1-CHAT-CHECKPOINT-DEGRADE] Checkpoint conn died "
+                f"post-stream (SSL/EOF), pero {_chunks_yielded} chunks ya "
+                f"entregados al frontend → degradación silenciosa. "
+                f"session={session_id} user={user_id} err={_err_str[:120]}"
+            )
+            return
         # [P3-TRACEBACK-PRINT-EXC · 2026-05-15] `logger.exception` emite
         # mensaje + stack como un solo log record que respeta `LOG_LEVEL`
         # y Sentry sampling. Reemplaza el legacy `logger.error + traceback.print_exc()`

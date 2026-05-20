@@ -24,7 +24,89 @@ from schemas import MealModel
 from prompts import PREFERENCES_AGENT_PROMPT, MODIFY_MEAL_PROMPT_TEMPLATE
 from datetime import datetime
 import threading
-from graph_orchestrator import run_plan_pipeline
+# [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
+# graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
+# `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
+from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker
+# [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
+# callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
+# Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
+# + sin `timeout=` (puede colgar al worker indefinidamente) + sin CB gate
+# (avalancha si Gemini está degradado). El P1-CHAT-CB-EXTEND ya cubrió los
+# 4 callsites de `agent.py`; este fix cierra los 2 de `tools.py`.
+from knobs import _env_str, _env_float
+
+
+def _tools_pref_agent_model_name() -> str:
+    return _env_str(
+        "MEALFIT_TOOLS_PREF_AGENT_MODEL",
+        "gemini-3.1-pro-preview",
+    )
+
+
+def _tools_pref_agent_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_TOOLS_PREF_AGENT_LLM_TIMEOUT_S",
+        15.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
+
+
+def _tools_modify_meal_model_name() -> str:
+    return _env_str(
+        "MEALFIT_TOOLS_MODIFY_MEAL_MODEL",
+        "gemini-3.1-pro-preview",
+    )
+
+
+def _tools_modify_meal_llm_timeout_s() -> float:
+    # 30s default (espejo de `_chat_swap_llm_timeout_s` en agent.py): este
+    # callsite corre dentro de tenacity retry 3× — budget per-call holgado
+    # para no abortar antes del retry. El total wall-clock cap del chat
+    # graph (60s non-stream / 120s stream) cubre el peor caso encadenado.
+    return _env_float(
+        "MEALFIT_TOOLS_MODIFY_MEAL_LLM_TIMEOUT_S",
+        30.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
+
+
+def _tools_get_chat_safety_helpers():
+    """[P1-TOOLS-LLM-HARDENING · 2026-05-20] Lazy import de helpers
+    definidos en `agent.py` (rate-limit detector, exceptions canónicas,
+    metric emitter, llm-usage emitter). Importar al top-level crearía
+    ciclo: `agent` ya importa de `tools`. Al diferir hasta runtime,
+    `agent` ya está cargado completo. Cualquier import miss se silencia
+    (fail-open con None/dummy) — los callers tienen fallbacks defensivos.
+    Tooltip-anchor: P1-TOOLS-LLM-HARDENING-LAZY.
+    """
+    try:
+        from agent import (
+            _is_rate_limit_error,
+            LLMCircuitBreakerOpen,
+            LLMRateLimitedError,
+            _emit_chat_rate_limited_metric_best_effort,
+        )
+    except Exception:
+        # Defensivo: si el import falla en tests con mocks parciales,
+        # devolvemos stubs que NO consideran nada rate-limit y no rompen.
+        _is_rate_limit_error = lambda _exc: False
+        class LLMCircuitBreakerOpen(RuntimeError):
+            pass
+        class LLMRateLimitedError(RuntimeError):
+            pass
+        _emit_chat_rate_limited_metric_best_effort = lambda *_a, **_kw: None
+    try:
+        from graph_orchestrator import _emit_llm_usage_event_best_effort
+    except Exception:
+        _emit_llm_usage_event_best_effort = lambda **_kw: None
+    return (
+        _is_rate_limit_error,
+        LLMCircuitBreakerOpen,
+        LLMRateLimitedError,
+        _emit_chat_rate_limited_metric_best_effort,
+        _emit_llm_usage_event_best_effort,
+    )
 
 def analyze_preferences_agent(likes: list, history: list, active_rejections: Optional[list] = None):
     """
@@ -53,20 +135,68 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
         rejected_meals=json.dumps(rejected_meals)
     )
     
+    # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knob model + timeout + CB gate +
+    # rate-limit discrimination + token telemetry. Espejo exacto del patrón
+    # de `agent.py::call_model` (P1-CHAT-CB-EXTEND + P1-CHAT-LLM-429 +
+    # P2-CHAT-TOKEN-TELEMETRY). Cierra los 3 modos de fallo que el callsite
+    # tenía abiertos:
+    #   (a) hardcoded preview model → no rotable sin redeploy.
+    #   (b) sin timeout → worker thread starvation si Gemini cuelga.
+    #   (c) sin CB gate → avalancha bajo provider degradado.
+    # Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
+    _pref_model = _tools_pref_agent_model_name()
     pref_llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
+        model=_pref_model,
         temperature=0.3, # Baja temperatura para ser analítico
-        google_api_key=os.environ.get("GEMINI_API_KEY")
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        timeout=_tools_pref_agent_llm_timeout_s(),
     )
-    
+
+    (_is_rl_err, _CBOpen, _RLErr, _emit_rl_metric, _emit_usage_event) = _tools_get_chat_safety_helpers()
+    _pref_cb = _get_circuit_breaker(_pref_model)
+    if not _pref_cb.can_proceed():
+        logger.warning(
+            f"🛑 [P1-TOOLS-LLM-HARDENING] analyze_preferences_agent CB abierto "
+            f"model={_pref_model!r} — fail-fast sin invocar Gemini. "
+            f"Reintentar tras MEALFIT_CB_RESET_TIMEOUT_S segundos."
+        )
+        raise _CBOpen(
+            f"analyze_preferences_agent LLM circuit breaker open for model={_pref_model}"
+        )
+
     start_time = time.time()
-    response = pref_llm.invoke(prompt)
+    try:
+        response = pref_llm.invoke(prompt)
+        _pref_cb.record_success()
+    except Exception as _pref_invoke_exc:
+        if _is_rl_err(_pref_invoke_exc):
+            _emit_rl_metric(None, None, _pref_model)
+            logger.warning(
+                f"⚠️ [P1-CHAT-LLM-429] analyze_preferences_agent rate-limit "
+                f"model={_pref_model!r} — NO cuenta como CB failure."
+            )
+            raise _RLErr(
+                f"analyze_preferences_agent LLM rate limited for model={_pref_model}: {_pref_invoke_exc!r}"
+            ) from _pref_invoke_exc
+        _pref_cb.record_failure()
+        raise
+
+    try:
+        _emit_usage_event(
+            llm=pref_llm,
+            result=response,
+            duration_s=time.time() - start_time,
+            node='tool_analyze_preferences',
+        )
+    except Exception:
+        pass
+
     taste_profile = response.content
-    
+
     end_time = time.time()
     logger.info(f"✅ [PERFIL LISTO] Resuelto en {round(end_time - start_time, 2)}s: {taste_profile}")
     logger.info("-------------------------------------------------------------\n")
-    
+
     return f"\n\n--- PERFIL DE GUSTOS DEL USUARIO (OBLIGATORIO RESPETAR) ---\n{taste_profile}\n-----------------------------------------------------------"
 
 # ============================================================
@@ -443,13 +573,46 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         context_extras=context_extras
     )
     
+    # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knob model + timeout + CB gate +
+    # rate-limit discrimination + token telemetry. Espejo del patrón de
+    # `agent.py::swap_meal` (P1-CHAT-CB-EXTEND): el CB gatea ANTES del retry
+    # loop para que 3 attempts × N concurrentes no agraven la condición.
+    # En 429 NO se cuenta como CB failure; en otros errores sí. Token
+    # telemetry post-success rellena el blind-spot que tenía este callsite
+    # en `llm_usage_events`. Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
+    _modify_model = _tools_modify_meal_model_name()
     modify_llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
+        model=_modify_model,
         temperature=0.1,
-        google_api_key=os.environ.get("GEMINI_API_KEY")
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        timeout=_tools_modify_meal_llm_timeout_s(),
     ).with_structured_output(MealModel)
+    # `_modify_llm_for_usage` queda como referencia para telemetría: el
+    # objeto con `.model` (sin `.with_structured_output(...)`) es el que
+    # `_emit_llm_usage_event_best_effort` puede leer para resolver el
+    # model_name. Si fallara, el helper retorna sin emit (best-effort).
+    _modify_llm_for_usage = ChatGoogleGenerativeAI(
+        model=_modify_model,
+        temperature=0.1,
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        timeout=_tools_modify_meal_llm_timeout_s(),
+    )
+
+    (_is_rl_err, _CBOpen, _RLErr, _emit_rl_metric, _emit_usage_event) = _tools_get_chat_safety_helpers()
+    _modify_cb = _get_circuit_breaker(_modify_model)
+    if not _modify_cb.can_proceed():
+        logger.warning(
+            f"🛑 [P1-TOOLS-LLM-HARDENING] execute_modify_single_meal CB abierto "
+            f"model={_modify_model!r} — fail-fast sin invocar Gemini. "
+            f"Reintentar tras MEALFIT_CB_RESET_TIMEOUT_S segundos."
+        )
+        raise _CBOpen(
+            f"execute_modify_single_meal LLM circuit breaker open for model={_modify_model}"
+        )
+
     current_prompt = [modify_prompt]
-    
+    _modify_invoke_start = time.time()
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
@@ -461,7 +624,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     )
     def invoke_with_retry():
         res = modify_llm.invoke(current_prompt[0])
-        
+
         # Validación post-generación
         if hasattr(res, "ingredients"):
             ingreds = getattr(res, "ingredients")
@@ -469,7 +632,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             ingreds = res["ingredients"]
         else:
             ingreds = []
-            
+
         if clean_ingredients and not allow_pantry_expansion:
             val_result = validate_ingredients_against_pantry(ingreds, clean_ingredients)
             if val_result is not True:
@@ -477,16 +640,50 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 # Inyectar el feedback específico matematico al LLM para el próximo intento de @retry
                 current_prompt[0] = modify_prompt + f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{val_result}\nPor favor revisa el inventario y ajusta la receta para que cumpla estrictamente."
                 raise ValueError(val_result)
-                
+
         return res
-    
+
     try:
         try:
             new_meal_response = invoke_with_retry()
+            # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Success path del retry
+            # loop. Marca CB success + emit token telemetry post-éxito.
+            # El helper acepta `result` del `.with_structured_output(MealModel)`
+            # (sigue exponiendo `usage_metadata` proveniente del AIMessage
+            # subyacente vía LangChain).
+            _modify_cb.record_success()
+            try:
+                _emit_usage_event(
+                    llm=_modify_llm_for_usage,
+                    result=new_meal_response,
+                    duration_s=time.time() - _modify_invoke_start,
+                    node='tool_modify_single_meal',
+                )
+            except Exception:
+                pass
         except Exception as e:
+            # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Discriminar 429 vs
+            # failures genuinos ANTES de marcar CB failure. Si las 3
+            # attempts del tenacity fallan por 429, NO contamos como CB
+            # failure (el provider está vivo, solo throttling). Re-emit
+            # como `LLMRateLimitedError` que el caller (chat router via
+            # execute_tools → call_model exception path) puede mapear a
+            # HTTP 429. Resto (timeout, 5xx, ValidationError del guardrail)
+            # → CB failure + mantener fallback abortivo existente como
+            # degradación graceful (correctness preservada).
+            if _is_rl_err(e):
+                _emit_rl_metric(user_id, None, _modify_model)
+                logger.warning(
+                    f"⚠️ [P1-CHAT-LLM-429] execute_modify_single_meal rate-limit "
+                    f"model={_modify_model!r} — NO cuenta como CB failure."
+                )
+                raise _RLErr(
+                    f"execute_modify_single_meal LLM rate limited for model={_modify_model}: {e!r}"
+                ) from e
+            _modify_cb.record_failure()
             logger.error(f"❌ [TOOL] Fallaron los intentos: {e}. Aplicando Fallback de Seguridad Abortivo.")
-            
-            # En lugar de corromper la BD con ingredientes aleatorios, 
+
+            # En lugar de corromper la BD con ingredientes aleatorios,
             # abortamos limpiamente la transacción e informamos al Agente principal.
             return ("FALLO POR INVENTARIO INSUFICIENTE: Después de varios intentos, "
                     "no fue posible hacer este cambio respetando de forma estricta los ingredientes de la despensa. "

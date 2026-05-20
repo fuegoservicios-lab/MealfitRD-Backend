@@ -103,12 +103,33 @@ if SUPABASE_DB_URL:
         # Limpiar comillas basura por si acaso
         clean_url = SUPABASE_DB_URL.strip().strip("'").strip('"')
 
-        # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Preservar el URL original
-        # (port 5432, session mode) ANTES del rewrite a 6543. Lo necesitamos
-        # para el `chat_checkpoint_pool` (ver más abajo). Si el .env ya viene
-        # con 6543, `original_session_url` será igual a `clean_url` post-rewrite
-        # y el split de pools no aporta nada — un WARN avisará al operador.
-        original_session_url = clean_url
+        # [P1-CHAT-CHECKPOINT-FIX · 2026-05-20] `original_session_url` debe
+        # SIEMPRE apuntar al puerto session-mode (5432), independientemente
+        # de cómo viene el env var. Pre-fix: `original_session_url = clean_url`
+        # capturaba el URL crudo antes del rewrite — pero si el operator
+        # copió "Transaction pooler" del dashboard de Supabase (que viene
+        # con :6543 hardcoded), el "rescate" no aplicaba y el
+        # `chat_checkpoint_pool` terminaba apuntando también a Supavisor
+        # transaction mode. Resultado: el bug SSL bad length / EOF que
+        # P1-CHECKPOINT-POOL-SPLIT pretendía cerrar se perpetuaba, y SOLO
+        # se duplicaban los pools sin beneficio.
+        #
+        # Fix: forzar el rewrite a :5432 SIEMPRE para `original_session_url`,
+        # tanto si el env var viene con :5432 (no-op) como con :6543 (revert
+        # explícito). El pool principal `connection_pool` sigue rewriteando
+        # a :6543 (lógica existente, transaction mode para concurrencia).
+        # Tooltip-anchor: P1-CHAT-CHECKPOINT-FIX.
+        if ".supabase." in clean_url and ":6543" in clean_url:
+            original_session_url = clean_url.replace(":6543", ":5432")
+            logger.info(
+                "🔧 [P1-CHAT-CHECKPOINT-FIX] chat_checkpoint_pool URL forzada "
+                "a :5432 (session mode) — env var SUPABASE_DB_URL venía con "
+                ":6543. Sin este rewrite, chat_checkpoint_pool reusaría "
+                "Supavisor transaction mode → SSL bad length / EOF al "
+                "`put_writes` del checkpointer al final de cada chat stream."
+            )
+        else:
+            original_session_url = clean_url
 
         # MEJORA 3: Connection Pooling - Forzar el uso del Transaction Pooler de Supabase (6543)
         # Esto previene el agotamiento de conexiones directas (Connection Exhaustion) si el volumen crece.
@@ -195,26 +216,28 @@ if SUPABASE_DB_URL:
         # mata conexiones idle de forma agresiva. Pool pequeño (1-4) porque
         # el chat-flow es low-concurrency (1 stream por user activo).
         #
-        # Fallback: si `original_session_url == clean_url` (env var ya
-        # venía con 6543 hardcoded), el split NO aporta — WARN al SRE
-        # para que ajuste el env var a la URL session-mode. El pool aun
-        # se crea (conectividad básica funciona) pero el bug podría
-        # persistir.
+        # [P1-CHAT-CHECKPOINT-FIX · 2026-05-20] El WARN legacy
+        # "SUPABASE_DB_URL ya contiene :6543" fue removido — la nueva
+        # lógica de force-rewrite arriba garantiza que `original_session_url`
+        # SIEMPRE apunte a :5432 (session mode) cuando el host es Supabase,
+        # haciendo el WARN inalcanzable. Mantenemos el try/except por si
+        # `ConnectionPool(...)` falla por otras razones (DNS, auth, etc).
+        # [P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20] `min_size=0` + `max_idle=30`
+        # son recycling agresivo contra Supavisor session-pooler idle-kill.
+        # Pre-fix (`min_size=1, max_idle=300`): el pool pre-warmaba 1 conn al
+        # startup que envejecía ~44s antes del primer chat, y LangGraph la
+        # mantenía checkout durante el LLM call (10-30s). Al `put_writes`
+        # final, Supavisor ya la había matado → SSL bad length / EOF detected.
+        # `min_size=0` evita warming de conns viejas. `max_idle=30` recicla
+        # conns idle antes del kill threshold ~60-70s. Combinación: la conn
+        # siempre nace fresh y vive corto. Tooltip-anchor: P1-CHAT-CHECKPOINT-DEGRADE.
         try:
-            if original_session_url == clean_url and ":6543" in clean_url:
-                logger.warning(
-                    "⚠️ [P1-CHECKPOINT-POOL-SPLIT] SUPABASE_DB_URL ya contiene "
-                    ":6543 — el chat_checkpoint_pool no podrá usar session "
-                    "mode. Considera cambiar el env var a la URL :5432 para "
-                    "que el split aplique el fix del SSL bad length."
-                )
-
             chat_checkpoint_pool = ConnectionPool(
                 conninfo=original_session_url,
-                min_size=1,
+                min_size=0,
                 max_size=4,
                 timeout=15.0,
-                max_idle=300.0,
+                max_idle=30.0,
                 reconnect_timeout=5,
                 kwargs=get_client_kwargs(),
                 configure=configure_sync_conn,
@@ -223,9 +246,9 @@ if SUPABASE_DB_URL:
             )
             logger.info(
                 "🔌 [psycopg] chat_checkpoint_pool configurado (session "
-                "mode, port 5432): min=1, max=4 "
-                "[P1-CHECKPOINT-POOL-SPLIT: evita SSL bad length por "
-                "Supavisor idle-kill durante LangGraph stream]."
+                "mode, port 5432): min=0, max=4, max_idle=30s "
+                "[P1-CHAT-CHECKPOINT-DEGRADE: recycle agresivo evita conns "
+                "rancias que Supavisor mata mid-pipeline → SSL bad length]."
             )
         except Exception as checkpoint_pool_err:
             logger.error(

@@ -1,38 +1,44 @@
-"""[P2-5 · 2026-05-10] Anchor estático del contrato actual del pool DB.
+"""[P2-5 · 2026-05-10 · actualizado P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20]
+Anchor del contrato del pool DB.
 
 Estado verificado en el audit 2026-05-10:
-    NO hay pool DB separado para LangGraph PostgresSaver. Tanto el
-    backend (queries via `execute_sql_query` / `execute_sql_write`),
-    como el checkpointer LangGraph (`PostgresSaver(connection_pool)`
-    en `agent.py`), como los crons APScheduler, comparten el MISMO
-    `connection_pool` global de `db_core.py`. Default max=60.
+    Originalmente NO había pool DB separado para LangGraph PostgresSaver.
+    Tanto el backend, el checkpointer LangGraph, como los crons APScheduler
+    compartían el MISMO `connection_pool` global. Default max=60.
 
-    El plan P2-5 del audit pidió "verificar y, si no está implementado,
-    documentar como seguimiento". Este test es ese anchor: enforza el
-    invariante actual y obliga al operador a actualizar el test
-    explícitamente cuando decida separar los pools.
+Estado actualizado tras P1-CHECKPOINT-POOL-SPLIT (2026-05-20):
+    Se introdujo `chat_checkpoint_pool` SEPARADO para el LangGraph
+    `PostgresSaver` por un bug productivo: el Transaction Pooler de
+    Supabase (port 6543) mataba conns idle agresivamente (~30s) mientras
+    LangGraph mantenía la conn checkout durante el LLM call → SSL bad
+    length / EOF al `put_writes` final. El split (session mode 5432)
+    redujo el problema; los P-fixes posteriores del mismo día
+    (P1-CHAT-CHECKPOINT-FIX + P1-CHAT-CHECKPOINT-DEGRADE) cerraron el
+    residuo (force-rewrite + pool recycling agresivo + silent degrade
+    post-stream).
 
-Por qué importa:
-    Memoria `project_db_pool_saturation_2026_05_06`: bajo carga, el
-    chat agent (PostgresSaver) puede consumir conexiones a >50% del
-    pool, dejando al worker de chunks sin slots → "couldn't get a
-    connection 30s" → APScheduler MISSED en cascada (que P0-2 atrapa,
-    pero la causa raíz es esta).
+    Este test enforza el contrato POST-SPLIT:
+    1. `connection_pool` + `async_connection_pool` (globales, tráfico
+       genérico, port 6543 transaction mode).
+    2. `chat_checkpoint_pool` (LangGraph checkpointer ONLY, port 5432
+       session mode, min_size=0 + max_idle=30s).
+    3. `agent.py` callsites de PostgresSaver pasan `_checkpoint_pool`
+       con fallback `chat_checkpoint_pool or connection_pool` — NUNCA
+       `PostgresSaver(connection_pool)` literal directo.
 
-    Si en el futuro se decide separar pools, este test debe actualizarse
-    para reflejar la nueva arquitectura. La actualización debe
-    acompañar la separación — no ser opcional.
+Por qué el split importa:
+    Memoria `project_db_pool_saturation_2026_05_06`: bajo carga, el chat
+    agent puede consumir conexiones a >50% del pool, dejando al worker
+    de chunks sin slots → "couldn't get a connection 30s" → APScheduler
+    MISSED en cascada (que P0-2 atrapa). El split aísla el tráfico LangGraph
+    en su propio pool (max=4) sin afectar el pool del tráfico app general.
 
 Cobertura:
-    1. `db_core.py` declara `connection_pool` y `async_connection_pool`
-       como singletons globales con knobs `MEALFIT_DB_POOL_*`.
-    2. `agent.py` (chat) usa `PostgresSaver(connection_pool)` con el
-       pool global.
-    3. NO existe un pool secundario llamado `langgraph_pool` o
-       `chat_pool` (regression guard: si alguien lo añade sin actualizar
-       este test, falla).
-    4. Knobs `MEALFIT_DB_POOL_*` registrados con clamps documentados
-       (min/max/timeout).
+    1. `db_core.py` declara `connection_pool` + `async_connection_pool`
+       + `chat_checkpoint_pool` como singletons top-level.
+    2. `agent.py` callsites usan `_checkpoint_pool` con fallback —
+       NUNCA `PostgresSaver(connection_pool)` literal.
+    3. Knobs `MEALFIT_DB_POOL_*` registrados con clamps documentados.
 """
 from __future__ import annotations
 
@@ -90,49 +96,81 @@ def test_db_core_uses_transaction_pooler_port_6543():
 
 
 # ---------------------------------------------------------------------------
-# 2. agent.py usa el pool global para LangGraph PostgresSaver
+# 2. agent.py callsites de PostgresSaver post-split
 # ---------------------------------------------------------------------------
-def test_agent_postgres_saver_uses_global_pool():
-    """`PostgresSaver(connection_pool)` debe usar EL pool global.
+def test_agent_postgres_saver_uses_checkpoint_pool_fallback():
+    """[Actualizado P1-CHAT-CHECKPOINT-DEGRADE 2026-05-20]
+    Tras P1-CHECKPOINT-POOL-SPLIT, los callsites de `PostgresSaver(...)`
+    en agent.py NO pueden pasar `connection_pool` literal — deben usar
+    `_checkpoint_pool` (variable local que resuelve a
+    `chat_checkpoint_pool or connection_pool`).
 
-    Si esto cambia (e.g., a `PostgresSaver(langgraph_pool)`), actualizar
-    este test simultáneamente y crear el pool nuevo en db_core.py.
+    Si alguien introduce un nuevo callsite con `PostgresSaver(connection_pool)`,
+    el bug SSL bad length vuelve para ese path.
     """
     src = _read(_AGENT)
     matches = re.findall(r"PostgresSaver\(([^)]+)\)", src)
     assert matches, "No se encontraron call sites de `PostgresSaver(...)` en agent.py"
+    forbidden = "connection_pool"
+    allowed = {"_checkpoint_pool", "conn"}
     for arg in matches:
         arg_stripped = arg.strip()
-        assert arg_stripped == "connection_pool", (
-            f"`PostgresSaver({arg_stripped})` debe pasar el pool global "
-            f"`connection_pool`. Si separaste pools, actualiza este test "
-            f"y la memoria `project_p2_5_db_pool_contract_2026_05_10`."
+        assert arg_stripped != forbidden, (
+            f"`PostgresSaver({arg_stripped})` directo prohibido post-split. "
+            f"Usar `PostgresSaver(_checkpoint_pool)` con fallback "
+            f"`chat_checkpoint_pool or connection_pool` arriba. Ver "
+            f"P1-CHECKPOINT-POOL-SPLIT · 2026-05-20."
         )
+        # Sanity: arg debe ser uno de los permitidos (variable resuelta).
+        # `conn` se usa en app.py:PostgresSaver(conn).setup() de startup,
+        # pero también podría aparecer indirectamente acá si un setup
+        # callsite migrara. Documentar permitidos.
+        assert arg_stripped in allowed, (
+            f"`PostgresSaver({arg_stripped})` usa un argumento inesperado. "
+            f"Permitidos: {sorted(allowed)}. Si añadiste un patrón nuevo, "
+            f"actualiza este test + memoria."
+        )
+    # Sanity positiva: ≥2 callsites del fallback (chat_with_agent + stream).
+    fallback_pattern = re.findall(
+        r"chat_checkpoint_pool\s+or\s+connection_pool",
+        src,
+    )
+    assert len(fallback_pattern) >= 2, (
+        f"Esperaba ≥2 callsites con fallback `chat_checkpoint_pool or "
+        f"connection_pool`; encontrados: {len(fallback_pattern)}. Refactor "
+        f"incompleto del split."
+    )
 
 
 # ---------------------------------------------------------------------------
-# 3. No hay pools secundarios "fantasma"
+# 3. Inventario explícito de pools post-split
 # ---------------------------------------------------------------------------
-def test_no_secondary_pool_declared():
-    """Sanity check: si alguien declaró otro pool en db_core sin actualizar
-    este test, captura el cambio para que sea consciente."""
+def test_pool_inventory_post_split():
+    """[Actualizado P1-CHAT-CHECKPOINT-DEGRADE 2026-05-20]
+    Inventario explícito de pools sync/async en db_core.py:
+        - 1 `ConnectionPool` global (tráfico genérico, port 6543).
+        - 1 `ConnectionPool` `chat_checkpoint_pool` (LangGraph, port 5432).
+        - 1 `AsyncConnectionPool` (async tráfico, port 6543).
+
+    Si alguien declara un pool sync adicional sin actualizar este test
+    (e.g., otro split para crons), debe documentarlo + bumpear el conteo
+    esperado conscientemente.
+    """
     src = _read(_DB_CORE)
-    # Solo asignaciones top-level (`<var> = ConnectionPool(...)`). Esto evita
-    # falsos positivos por strings de log que mencionan "ConnectionPool (Sync y Async)".
     syncs = re.findall(
         r"^\s*\w+\s*=\s*ConnectionPool\s*\(", src, re.MULTILINE
     )
     asyncs = re.findall(
         r"^\s*\w+\s*=\s*AsyncConnectionPool\s*\(", src, re.MULTILINE
     )
-    # Esperamos exactamente 1 cada uno (el global). Si hay más, es un nuevo
-    # pool que requiere documentación + actualización del test.
-    assert len(syncs) == 1, (
-        f"Esperaba 1 ConnectionPool() instantiation, encontré {len(syncs)}. "
-        f"Si añadiste pool nuevo, documentar arquitectura + actualizar test."
+    assert len(syncs) == 2, (
+        f"Esperaba 2 ConnectionPool() instantiations (connection_pool + "
+        f"chat_checkpoint_pool), encontré {len(syncs)}. Si añadiste pool "
+        f"nuevo o removiste uno, documentar arquitectura + actualizar test."
     )
     assert len(asyncs) == 1, (
-        f"Esperaba 1 AsyncConnectionPool() instantiation, encontré {len(asyncs)}."
+        f"Esperaba 1 AsyncConnectionPool() instantiation (async_connection_pool), "
+        f"encontré {len(asyncs)}."
     )
 
 

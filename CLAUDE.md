@@ -147,6 +147,10 @@ Esta sección documenta decisiones de producto que un auditor técnico podría c
 
 **Cierre del gap del audit 2026-05-12:** el audit P3-1 flageó "100% español hardcoded" como deuda i18n. La decisión documentada acá cierra el gap como "decisión de producto, no técnico", análoga al patrón "Advisors aceptados" más abajo. Test parser-based [`test_p3_i18n_deferred.py`](backend/tests/test_p3_i18n_deferred.py) ancla la decisión: si alguien añade `react-i18next` / `i18next` a `package.json` sin actualizar esta sección, el test falla con copy explicativo.
 
+### `chat-agent safety_settings relajados`
+
+[P3-CHAT-SAFETY-OFF-DECISION · 2026-05-20] `DANGEROUS_CONTENT: OFF` + resto `BLOCK_ONLY_HIGH` ([agent.py](backend/agent.py)) — app nutricional (false-positives en déficit/ayuno). Detalle + test: [`project_p3_chat_safety_off_decision_2026_05_20.md`](~/.claude/projects/.../memory/project_p3_chat_safety_off_decision_2026_05_20.md).
+
 ---
 
 ## Advisors aceptados (no actuar)
@@ -275,33 +279,23 @@ Test relacionado: [`test_p1_new_a_frontend_no_direct_meal_plans_write.py`](backe
 
 Es la simétrica de las invariantes I2/I6 (filtros server-side `AND user_id = %s` en SQL + endpoints backend que no aceptan user_id arbitrario del cliente) aplicada al chat-agent layer. Defensa-en-profundidad junto con la sanitización P1-Q8/P0-A1 del pipeline de generación.
 
-### Las 9 tools cubiertas
+### Las 11 tools cubiertas
 
-Todas las tools de `agent_tools` ([backend/tools.py:827](backend/tools.py#L827)) aceptan `user_id` como primer argumento. El override se aplica una sola vez al tope del loop, **antes** de cualquier branch específico:
-
-| Tool | Mutación cross-user que el override impide |
-|---|---|
-| `update_form_field` | `update_user_health_profile_atomic` + `delete_user_facts_by_metadata` |
-| `generate_new_plan_from_chat` | pipeline completo + `save_new_meal_plan_robust` |
-| `log_consumed_meal` | `db_log_consumed_meal` + `deduct_consumed_meal_from_inventory` |
-| `modify_single_meal` | `update_meal_plan_data` (full plan_data overwrite) |
-| `search_deep_memory` | leak de summaries cross-user |
-| `check_shopping_list` | leak de pantry/plan cross-user |
-| `check_current_pantry` | leak de pantry cross-user |
-| `modify_pantry_inventory` | `add_or_update_inventory_item` + `deduct_consumed_meal_from_inventory` |
-| `mark_shopping_list_purchased` | `restock_inventory` |
+[P2-CHAT-CLEANUP · 2026-05-20] Tabla canónica completa de las 11 tools de `agent_tools` ([backend/tools.py](backend/tools.py)) cubiertas por el override + descripción de la mutación cross-user que cada una impediría sin el override: [`backend/docs/agent_tools_user_id_table.md`](backend/docs/agent_tools_user_id_table.md). El override es genérico al tope del loop `execute_tools` — cubre TODAS las tools que añadas a `agent_tools` automáticamente, NO requiere update por-tool del nodo.
 
 ### Cómo verificar
 
 ```bash
+# Override estructural + funcional (mockea tool_call con user_id ajeno):
 pytest backend/tests/test_p0_agent_1_user_id_override.py -v
+
+# Paridad bidireccional tabla doc ↔ tools.py::agent_tools:
+pytest backend/tests/test_p2_chat_cleanup.py -v
 ```
 
-Test parser-based: [`test_p0_agent_1_user_id_override.py`](backend/tests/test_p0_agent_1_user_id_override.py) escanea el cuerpo del loop `for tool_call in last_message.tool_calls:` y exige que el override `tool_args["user_id"] = _trusted_uid` aparezca **antes** de cualquier `if tool_name == "..."` branch o `t.invoke(tool_args)` callsite. Test funcional adicional: mockea un `tool_call` con `user_id` ajeno y valida que el invoker recibe el trusted, no el inyectado.
+[`test_p0_agent_1_user_id_override.py`](backend/tests/test_p0_agent_1_user_id_override.py) escanea el cuerpo del loop `for tool_call in last_message.tool_calls:` y exige que el override `tool_args["user_id"] = _trusted_uid` aparezca **antes** de cualquier `if tool_name == "..."` branch o `t.invoke(tool_args)` callsite. [`test_p2_chat_cleanup.py`](backend/tests/test_p2_chat_cleanup.py) enforza que cada tool en `agent_tools` tenga entry en el doc (y viceversa) — falla si añades una tool sin documentarla.
 
-### Telemetría + si añades tool nueva
-
-Override emite `WARN [P0-AGENT-1]` con `tool=/llm_user_id=/trusted=` para identificar prompt-injection attempts en logs (futura mejora: cron sweep + `agent_user_id_mismatch_burst`). Si añades tool nueva que acepta `user_id`, el override ya la cubre; si acepta otra identidad sensitiva (e.g. `session_id`), añadir override análogo + entry en tabla arriba + branch en test parser-based. Detalle: [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md).
+Override emite `WARN [P0-AGENT-1]` con `tool=/llm_user_id=/trusted=` para identificar prompt-injection attempts. Si una tool nueva acepta otra identidad sensitiva (e.g. `session_id`), añadir override análogo + branch en el test funcional. Detalle: [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md).
 
 ---
 
