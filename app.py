@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P3-TRACKING-OVER-NO-BADGE · 2026-05-20"
+_LAST_KNOWN_PFIX = "P1-RLS-INITPLAN · 2026-05-20"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -40,6 +40,20 @@ _LAST_KNOWN_PFIX = "P3-TRACKING-OVER-NO-BADGE · 2026-05-20"
 # los errores que necesitas). Validator clamp [0.0, 1.0]; valores fuera de
 # rango caen al default. Auto-registrado en `_KNOBS_REGISTRY` → visible en
 # `/health/version`. Tooltip-anchor: P1-SENTRY-SAMPLE-COST.
+#
+# [P3-SENTRY-COST-THRESHOLDS · 2026-05-20] Audit `docs/gaps-audit-2026-05.md`
+# C3: defaults actuales (0.1) son adecuados para <100 MAU. THRESHOLDS de
+# revisión cuando crucemos escala:
+#   - **>500 MAU**: bajar `replaysSessionSampleRate` (frontend, en
+#     `frontend/src/main.jsx`) de 0.1 → 0.02 — replays son el output Sentry
+#     más caro, satura cuota mensual gratis rápido a 1k+ users.
+#   - **>1k MAU**: revisar también traces. Si la cuota Sentry mensual >70%
+#     usada, bajar `MEALFIT_SENTRY_TRACES_SAMPLE_RATE` de 0.1 → 0.05.
+#   - **Errores genuinos dropeados**: si Sentry empieza a mostrar
+#     "events dropped due to throttling" en sus logs, bajar todos los
+#     sample rates inmediatamente — los `captureException` reales se
+#     pierden cuando la cuota está saturada, y eso es regresión visible.
+# Ningún cambio aquí — solo doc. Los 3 knobs ya son ajustables sin redeploy.
 _SENTRY_TRACES_SAMPLE_RATE = _knob_env_float(
     "MEALFIT_SENTRY_TRACES_SAMPLE_RATE",
     0.1,
@@ -165,13 +179,26 @@ sentry_sdk.init(
     before_breadcrumb=_sentry_redact_breadcrumb,
 )
 
-# Configuración centralizada de logging para todo el backend
+# Configuración centralizada de logging para todo el backend.
+# [H2 / P3-CORRELATION-ID · 2026-05-20] Format incluye `[corr=<8chars>]` —
+# permite grep de logs por request para reconstruir el flow completo
+# (request → handler → tools → db → bg_task) en un solo filtro.
+# Default `-` cuando no hay scope activo (init, cron, shutdown). Ver
+# `correlation.py` para diseño completo.
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    format="%(asctime)s [%(levelname)s] [corr=%(correlation_id)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+# [H2 / P3-CORRELATION-ID] Install filter sobre el root logger.
+# DEBE ir DESPUÉS de basicConfig (el handler raíz se crea ahí) y ANTES
+# del primer log emitido — los logs hasta este punto no tendrían el
+# atributo `correlation_id` y crashearían el format string.
+# El filter es idempotente, safe contra re-imports.
+from correlation import install_log_filter  # noqa: E402 — orden intencional
+install_log_filter()
 
 # Silenciar logs verbosos de httpx (Supabase client)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -1568,8 +1595,76 @@ app.add_middleware(
         "Content-Type",
         "Accept",
         "X-Requested-With",
+        # [H2 / P3-CORRELATION-ID · 2026-05-20] Permite al cliente propagar
+        # un correlation ID desde el browser tracing (Sentry browserTracing
+        # podría inyectarlo en futuro) o desde scripts SRE/curl manuales.
+        # Si el header llega → reusado server-side; si no → generamos uno.
+        "X-Correlation-ID",
     ],
+    # [H2 / P3-CORRELATION-ID · 2026-05-20] expose_headers permite que el
+    # browser JS lea `X-Correlation-ID` de la response — útil para que el
+    # frontend lo muestre en reportes de bug ("incluye este ID al reportar").
+    expose_headers=["X-Correlation-ID"],
 )
+
+
+# [H2 / P3-CORRELATION-ID · 2026-05-20] Middleware FastAPI que asigna un
+# correlation_id por request y lo propaga via ContextVar a TODO el flow
+# (handlers, async tasks, asyncio.to_thread, y bg_executor con
+# `contextvars.copy_context()`).
+#
+# Diseño:
+#   - Lee `X-Correlation-ID` del request header si el cliente lo provee
+#     (8 chars hex max — defensivo contra header injection larga).
+#   - Si no hay o es inválido, genera uno nuevo via `new_correlation_id()`.
+#   - Setea el contextvar con Token, ejecuta el handler, reset en finally.
+#   - Echo del ID en response header → cliente puede citarlo en bug reports.
+#   - Logs durante el request automáticamente incluyen `[corr=<id>]` via
+#     `CorrelationIdFilter` (ver correlation.py).
+#
+# Ubicación: `@app.middleware("http")` decora una función que envuelve
+# el flow request→response completo. Se registra ANTES de los endpoints
+# (este bloque está aquí intencionalmente arriba del primer @app.get).
+#
+# Tooltip-anchor: P3-CORRELATION-ID.
+from correlation import (  # noqa: E402 — orden intencional post-CORS
+    new_correlation_id as _new_corr_id,
+    set_correlation_id as _set_corr,
+    reset_correlation_id as _reset_corr,
+)
+import re as _re_corr
+
+# Header value sanitization: solo aceptar 1-64 chars de hex/dash/underscore.
+# Cualquier otro patrón → rechazar y generar nuevo. Defense contra
+# log injection (CRLF en el header), display attacks, y longitud abusiva.
+_CORR_ID_HEADER_RE = _re_corr.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+@app.middleware("http")
+async def _correlation_id_middleware(request, call_next):
+    incoming = request.headers.get("X-Correlation-ID") or request.headers.get("x-correlation-id")
+    if incoming and _CORR_ID_HEADER_RE.match(incoming):
+        cid = incoming
+    else:
+        cid = _new_corr_id()
+
+    token = _set_corr(cid)
+    try:
+        response = await call_next(request)
+    finally:
+        _reset_corr(token)
+
+    # Echo en response — siempre, incluso si el handler levantó excepción
+    # (FastAPI ya construyó la response de error en ese caso). El cliente
+    # lee este header para reportar bugs.
+    try:
+        response.headers["X-Correlation-ID"] = cid
+    except Exception:
+        # Si por alguna razón la response no permite mutar headers
+        # (StreamingResponse en estados específicos), ignorar — el log
+        # server-side sigue teniendo el ID.
+        pass
+    return response
 
 
 

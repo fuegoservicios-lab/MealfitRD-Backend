@@ -3889,8 +3889,48 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
     if not PROMPT_TRIM_FORM_DATA:
         return form_data
     return {k: v for k, v in form_data.items() if not (isinstance(k, str) and k.startswith("_"))}
-_PRO_MODEL_NAME = "gemini-3.1-pro-preview"
-_FLASH_MODEL_NAME = "gemini-3-flash-preview"
+# [P3-PLAN-MODEL-KNOBS · 2026-05-20] Modelos del plan-gen pipeline ahora
+# via knobs (no hardcoded). Cierre del gap C4 del audit
+# `docs/gaps-audit-2026-05.md`: pre-fix estos eran string literals
+# inmutables → swap requería redeploy + Nixpacks rebuild (~5min) + bumpear
+# `_LAST_KNOWN_PFIX`. Con knobs, SRE setea env var en EasyPanel + restart
+# worker = <1 min.
+#
+# Por qué importa para COSTOS:
+#   - `gemini-3-flash-preview` actual: 15% cache hit promedio en últimas 14d
+#     (medido via llm_usage_events 2026-05-20). $4.83 de costo del bucket.
+#   - `gemini-3.5-flash` (medido en chat_call_model): 34% cache hit con prompts
+#     más grandes. ~2x mejor cache → ahorro estimado ~30-50% en input tokens.
+#   - Modelos `*-preview` de Google pueden deprecarse sin aviso prolongado
+#     (mismo riesgo R2 que vision_agent — CB stale 4.4 días en 2026-05-11).
+#
+# SOP migración (validable sin redeploy):
+#   1. Setear `MEALFIT_FLASH_MODEL=gemini-3.5-flash` en EasyPanel.
+#   2. Restart worker.
+#   3. Esperar 4-6 horas para acumular eventos.
+#   4. Query `SELECT model, ROUND(100.0*SUM(cached_tokens)/SUM(input_tokens),2)
+#      AS cache_pct, SUM(cost_usd_micros)/1e6 AS usd FROM llm_usage_events
+#      WHERE created_at > NOW() - INTERVAL '6 hours' GROUP BY model`.
+#   5. Si cache_pct sube y/o usd baja → mantener. Si calidad de output baja
+#      (validable via plan_quality_degraded alerts) → rollback inmediato a
+#      `gemini-3-flash-preview`.
+#
+# Defaults preservan comportamiento actual. Tooltip-anchor: P3-PLAN-MODEL-KNOBS.
+def _plan_pro_model_name() -> str:
+    return _env_str("MEALFIT_PRO_MODEL", "gemini-3.1-pro-preview")
+
+
+def _plan_flash_model_name() -> str:
+    return _env_str("MEALFIT_FLASH_MODEL", "gemini-3-flash-preview")
+
+
+# Module-level constants preserved para compatibilidad con los 34 callsites
+# existentes que comparan strings literales (e.g. `if model == _FLASH_MODEL_NAME`).
+# Estos NO se re-leen en runtime — para cambiar el modelo se requiere restart
+# del worker (que re-importa el módulo). Aceptable trade-off: env var seteada
+# en EasyPanel + restart = <1min, vs PR + merge + Nixpacks rebuild = ~10min.
+_PRO_MODEL_NAME = _plan_pro_model_name()
+_FLASH_MODEL_NAME = _plan_flash_model_name()
 
 # [P6-EVALUATOR-USE-PRO] Knob para escalar EL EVALUATOR del self-critique a Pro,
 # manteniendo Flash en day_generators y corrector. El evaluator es UN solo call

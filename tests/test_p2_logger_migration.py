@@ -49,17 +49,16 @@ PRODUCTION_PATHS = [
 # Paths NO-PRODUCTION donde print() es legítimo (CLI tools, tests, scripts
 # de migración one-shot, scratch). Whitelist explícita > exclusion por glob
 # para que un futuro archivo nuevo no escape por casualidad.
-KNOWN_PRINT_EXEMPT_PATHS = {
-    "backend/test.py",
-    "backend/refactor.py",
-    "backend/refactor_plans.py",
-    "backend/modify_cron.py",
-    "backend/recalc_now.py",
-    # [P3-SCRATCH-CLEANUP · 2026-05-13] backend/scratch_create_user.py +
-    # backend/scratch_get_tables.py eliminados (dev scripts ad-hoc, cero
-    # callers en código de producción). Si reaparecen en el árbol, añadir
-    # marker `# [P2-LOGGER-EXEMPT: ...]` inline en lugar de re-añadir aquí.
-}
+#
+# [P3-DEBUG-TIME-CLEANUP · 2026-05-20] Vaciado tras mover `refactor.py`,
+# `refactor_plans.py`, `modify_cron.py`, `recalc_now.py` a `backend/scratch/
+# legacy_root_helpers/` + delete de `test.py` (UUID PII hardcoded). El audit
+# `docs/gaps-audit-2026-05.md` A1 los flageó como deuda obvia. La whitelist
+# queda vacía pero conserva el set + comentario para que un futuro archivo
+# one-shot tenga punto de aterrizaje obvio. Si reaparecen en el árbol,
+# preferir marker `# [P2-LOGGER-EXEMPT: ...]` inline en lugar de re-añadir
+# entries acá.
+KNOWN_PRINT_EXEMPT_PATHS: set[str] = set()
 
 
 def _read(rel: str) -> str:

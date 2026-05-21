@@ -102,6 +102,8 @@ Cinco regresiones históricas que este diseño protege (P1-G mode=block no-op, `
 - **`datetime.utcnow()` prohibido en producción**: [P3-DEPRECATED-UTCNOW · 2026-05-12] Python 3.12+ emite `DeprecationWarning`; usar `datetime.now(timezone.utc)`. Tests legacy exentos con comment `# naive a propósito`. Test: [`test_p3_prod_audit_6.py`](backend/tests/test_p3_prod_audit_6.py) sección 2.
 - **Modelos LLM via knob, no hardcoded**: [P3-PREVIEW-MODEL-KNOB · 2026-05-12] callsites en crons/loops productivos leen model ID desde `os.environ.get("MEALFIT_<FEATURE>_MODEL", "<default>")` via helper `_<feature>_model_name()`. Razón: modelos preview de Google pueden deprecarse sin aviso (CB row stale por `gemini-3.1-pro-preview` durante 4.4 días, audit 2026-05-11). Knob permite swap sin redeploy.
 - **DDL en runtime**: prohibido. Toda creación/alteración de tablas o índices vive en `supabase/migrations/` (P1-NEW-A índices, P2-NEW-E tablas). [P3-MIGRATION-IDEMPOTENCE-DOC · 2026-05-15] Idempotente obligatorio: `IF NOT EXISTS` en CREATE/ADD COLUMN, `DROP CONSTRAINT IF EXISTS` antes de ADD, `DO $$ RAISE EXCEPTION` sanity. Patrón: p2_next_4 + p3_multiplier_db_check.
+- **SSOT de migrations** [P3-MIGRATIONS-SSOT · 2026-05-20]: TODA migration vive en DOS directorios mantenidos sincronizados — `supabase/migrations/` (workspace-root, cross-repo) Y `backend/supabase/migrations/` (backend repo). Al añadir una nueva migration, copiarla a AMBOS dirs en el mismo commit/push de cada repo. Razón: el workspace-root usa el `.gitignore` que excluye `backend/`+`frontend/` (son repos hermanos con remotes propios), así que necesitas archivos físicos en cada dir para que cada `git push` lleve el cambio. Drift histórico (audit 2026-05-20): 4 files root-only + 1 file backend-only fueron sincronizados; estado actual = 37 archivos idénticos en ambos. Verificación rápida: `diff <(ls supabase/migrations) <(ls backend/supabase/migrations)` debe retornar vacío.
+- **Convención de imports DB** [P3-DB-IMPORTS-FACADE · 2026-05-20]: nuevos call sites de funciones DB deben usar la **fachada** `from db import <funcion>` (ver [`backend/db.py`](backend/db.py)) en lugar de los módulos internos (`from db_plans import ...`, `from db_inventory import ...`, etc.). Razón: `db.py` hace `from db_X import *` de los 6 sub-módulos (`db_core`, `db_profiles`, `db_chat`, `db_plans`, `db_facts`, `db_inventory`) y es el contrato público. Importar el sub-módulo directo (a) acopla el call site a la organización interna actual (si re-organizamos a `db/` paquete, hay que mover 59 imports), (b) eluda los `__all__` controlados, (c) duplica el sentinel de re-export protegido por `test_p3_new_star_imports_audit.py` (P3-NEW-STAR-IMPORTS-AUDIT). Migración: NO grep+replace masivo hoy (59 imports cross-codebase). Política "boy scout": cuando edites un archivo con `from db_<sub> import`, considera migrar ese mismo bloque a `from db import`. Los 5 sub-módulos seguirán siendo SSOT del código real — la fachada es API pública únicamente.
 - **Console output frontend** [P3-CONSOLE-DEV-GUARDS · 2026-05-15]: `error/trace/assert` preservados prod (Sentry los captura) — NO DEV-guard. `log/warn/debug/info` dropeados por esbuild `pure:[...]` (P3-FRONTEND-1).
 - **Crons**: registrados en `register_plan_chunk_scheduler` ([cron_tasks.py:793](backend/cron_tasks.py#L793)) — SSOT. Listener `_scheduler_alert_listener` ([app.py:102+](backend/app.py#L102)) escala MISSED/ERROR a `system_alerts`.
 - **Tests**: cuando un test parsea source-de-prod con regex, incluir tooltip-anchor en el código fuente para que un renombre falle el test antes de cambiar producción.
@@ -175,6 +177,9 @@ Esta sección documenta los advisors de Supabase que han sido auditados y declar
 | `unused_index` (`idx_meal_plans_audit_meal_plan_id`) | **INFO intencional** | Sirve lookup principal del SOP P3-AUDIT-6 (`SELECT plan_data_before WHERE meal_plan_id = ? ORDER BY created_at DESC`). Tabla operacional rara: advisor reporta 0 scans pero el índice es load-bearing en incidente. Misma lección P2-PERF-1. | [`project_p3_final_1_meal_plans_audit_advisors_2026_05_11.md`](~/.claude/projects/.../memory/project_p3_final_1_meal_plans_audit_advisors_2026_05_11.md) |
 | `unused_index` (`idx_meal_plans_audit_user_id`) | **INFO intencional** | Sirve queries forensics post-incidente filtrando por `user_id` (auditoría cross-plan de un usuario). Partial index `WHERE user_id IS NOT NULL` por eficiencia. Tabla operacional rara: misma lección P2-PERF-1. | [`project_p3_final_1_meal_plans_audit_advisors_2026_05_11.md`](~/.claude/projects/.../memory/project_p3_final_1_meal_plans_audit_advisors_2026_05_11.md) |
 | `unused_index` (`idx_meal_plans_audit_action_created`) | **INFO intencional** | Sirve analytics del SOP P3-AUDIT-6 paso 7 (post-mortem si incidentes se repiten >3 por semana sobre el mismo field): `SELECT action, COUNT(*) WHERE created_at > NOW() - INTERVAL ? GROUP BY action`. Misma lección P2-PERF-1. | [`project_p3_final_1_meal_plans_audit_advisors_2026_05_11.md`](~/.claude/projects/.../memory/project_p3_final_1_meal_plans_audit_advisors_2026_05_11.md) |
+| `unused_index` (`idx_agent_messages_user_id`) | **INFO intencional** | Partial index `WHERE user_id IS NOT NULL` cubre FK CASCADE a `auth.users(id)` + sirve queries cross-session del chat-agent. Advisor `unused_index` NO observa FK. | Migración SSOT `p2_unused_idx_advisor_anchors_2026_05_20.sql` (P2-UNUSED-IDX · 2026-05-20). Inicial en `db_p1_chat_user_id_rls_2026_05_19.sql`. |
+| `unused_index` (`idx_conversation_summaries_user_id`) | **INFO intencional** | Partial index `WHERE user_id IS NOT NULL` cubre FK CASCADE a `auth.users(id)` + sirve filtro de `search_deep_memory`. Misma lección. | Migración SSOT `p2_unused_idx_advisor_anchors_2026_05_20.sql` (P2-UNUSED-IDX · 2026-05-20). |
+| `unused_index` (`idx_llm_usage_events_model_created`) | **INFO intencional** | Sirve queries analytics admin-only de cost-by-model en `/api/admin/cost-by-node` ([`routers/system.py:1010+`](backend/routers/system.py#L1010)). Endpoint esporádico (incident diagnosis) → advisor reporta 0 scans. Mantener para diagnóstico de incidentes de costo. | Migración SSOT `p2_unused_idx_advisor_anchors_2026_05_20.sql` (P2-UNUSED-IDX · 2026-05-20). |
 
 ### Cómo verificar
 
@@ -313,24 +318,11 @@ Ejemplos de código prohibido completos + vector de ataque + contrato post-fix: 
 
 ## Anti-patrones de billing/paywall prohibidos
 
-[P0-BILLING-1 / P0-BILLING-2 · 2026-05-12] El endpoint `/api/subscription/verify` ([`backend/routers/billing.py`](backend/routers/billing.py)) es la **única** vía por la que el cliente fuerza un upgrade de tier (`gratis` → `basic` / `plus` / `ultra`). Tres invariantes; ejemplos completos de código prohibido + vectores de ataque en [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md).
+[P0-BILLING-1 / P0-BILLING-2 · 2026-05-12] `/api/subscription/verify` ([`backend/routers/billing.py`](backend/routers/billing.py)) es la **única** vía cliente→upgrade tier. Tres invariantes; ejemplos completos + vectores en [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md).
 
-### I-Billing-1: `tier` server-derived desde PayPal `plan_id` (NO del cliente)
-
-- **❌ NUNCA**: `tier = data.get("tier")` → `UPDATE plan_tier = tier`. Vector: sub real `basic` pasa `tier="ultra"` → upgrade gratuito.
-- **✓ Válido**: mapping `plan_id → tier` server-side desde env vars `PAYPAL_PLAN_{BASIC,PLUS,ULTRA}_ID`; extraer `verified_plan_id = sub_data.get("plan_id")` de PayPal. `data.get("tier")` queda solo como `client_hint_tier` para audit.
-
-### I-Billing-2: fail-secure cuando faltan env vars PayPal en producción
-
-- **❌ NUNCA**: `if not PAYPAL_CLIENT_ID or not PAYPAL_SECRET: success = True; continue`. Vector: Easypanel pierde env vars → cualquier `subscription_id` arbitrario hace upgrade.
-- **✓ Válido**: gate `if not env_ready and not is_sandbox and not allow_bypass: raise HTTPException(503)`. Knob `MEALFIT_ALLOW_PAYPAL_BYPASS` solo dev; en `ENVIRONMENT=production` el gate lo ignora. Mismo patrón en `/cancel`.
-
-### I-Billing-3: fail-loud cuando PayPal rechaza una cancel
-
-[P1-BILLING-UPGRADE-FAIL-LOUD + P1-BILLING-CANCEL-FAIL-LOUD · 2026-05-12]
-
-- **❌ NUNCA**: cuando `cancel_resp.status_code != 204` solo `logger.warning(...)` y seguir al UPDATE de BD. Resultado: doble cobro (sub vieja + nueva ACTIVE en PayPal) o BD CANCELLED mientras PayPal sigue cobrando.
-- **✓ Válido**: helper `_is_paypal_cancel_idempotent_success(status_code, body_text)` clasifica como success: `200`/`204` (ejecutado), `404` (purgada), `422` con `details[].issue ∈ {SUBSCRIPTION_STATUS_INVALID, INVALID_SUBSCRIPTION_STATUS, SUBSCRIPTION_ALREADY_CANCELLED}` (terminal). Cualquier otro status → fail-loud: `_persist_billing_alert` + `raise HTTPException(409)` (verify-upgrade) o `HTTPException(502)` (cancel directo). El UPDATE de BD NO se ejecuta. Alert `billing_old_sub_cancel_failed:<>:<>` o `billing_cancel_failed:<>:<>` con `severity=critical` para reconciliación SRE.
+- **I-Billing-1**: `tier` server-derived desde PayPal `plan_id` (mapping env vars `PAYPAL_PLAN_{BASIC,PLUS,ULTRA}_ID`), NO `data.get("tier")` del cliente.
+- **I-Billing-2**: fail-secure cuando faltan env vars PayPal en prod (`raise HTTPException(503)`, no `success=True`). Knob `MEALFIT_ALLOW_PAYPAL_BYPASS` solo dev.
+- **I-Billing-3** [P1-BILLING-{UPGRADE,CANCEL}-FAIL-LOUD]: PayPal cancel non-success → `_persist_billing_alert` + `HTTPException(409|502)`, NO `logger.warning` + UPDATE BD (evita doble cobro). Helper `_is_paypal_cancel_idempotent_success` clasifica 200/204/404/422-terminal como success.
 
 Tests: [`test_p0_billing_1_tier_server_side.py`](backend/tests/test_p0_billing_1_tier_server_side.py), [`test_p0_billing_2_fail_secure.py`](backend/tests/test_p0_billing_2_fail_secure.py), [`test_p1_billing_fail_loud.py`](backend/tests/test_p1_billing_fail_loud.py).
 
@@ -338,19 +330,12 @@ Tests: [`test_p0_billing_1_tier_server_side.py`](backend/tests/test_p0_billing_1
 
 ## Anti-patrones de webhook prohibidos
 
-[P0-WEBHOOK-1 · 2026-05-12] El endpoint `/api/webhooks/process-pending-facts` ([`backend/app.py`](backend/app.py)) procesa la cola `pending_facts_queue` para un `user_id` dado. Debe rechazar TODA invocación sin `WEBHOOK_SECRET` válido — atacante con UUID enumerado podría forzar `process_pending_queue_sync(victim_id)`.
+[P0-WEBHOOK-1 · 2026-05-12] `/api/webhooks/process-pending-facts` ([`backend/app.py`](backend/app.py)) rechaza TODA invocación sin `WEBHOOK_SECRET` válido (atacante con UUID enumerado podría forzar `process_pending_queue_sync(victim_id)`).
 
-- **❌ NUNCA**: gate auth bajo `if webhook_secret:` sin `else`. Si env var falta, el check entero se salta → procesa la request.
-- **✓ Válido**: `WEBHOOK_SECRET=None AND ENVIRONMENT=production → 503` (fail-secure). Si set, `hmac.compare_digest(token, webhook_secret)` (constant-time).
+- **I-Webhook-1**: `WEBHOOK_SECRET=None AND ENVIRONMENT=production → 503` fail-secure (NO `if webhook_secret:` sin `else`). Set → `hmac.compare_digest` constant-time.
+- **I-Webhook-2** [P2-WEBHOOK-FAIL-SECURE-ALWAYS]: PayPal webhook firma fail-secure SIEMPRE; sandbox NO salta verificación (vector: DNS misroute → forja `BILLING.SUBSCRIPTION.SUSPENDED`). Knob `MEALFIT_ALLOW_WEBHOOK_UNSIGNED` nunca respetado en `ENVIRONMENT=production`.
 
-### I-Webhook-2: PayPal webhook signature check fail-secure SIEMPRE (incluso sandbox)
-
-[P2-WEBHOOK-FAIL-SECURE-ALWAYS · 2026-05-12] El endpoint `/api/webhooks/paypal` ([`routers/billing.py`](backend/routers/billing.py)) verifica firma con `PAYPAL_WEBHOOK_ID` + `PAYPAL_CLIENT_ID` + `PAYPAL_SECRET`.
-
-- **❌ NUNCA**: `if not is_sandbox: raise HTTPException(400)` — sandbox saltaba verificación. Vector: sandbox expuesto a tráfico real (DNS misroute, `.env` prod marcado sandbox) → atacante forja `BILLING.SUBSCRIPTION.SUSPENDED` para downgrade arbitrario.
-- **✓ Válido**: `if not is_sandbox or not allow_unsigned: raise HTTPException(503)`. Knob `MEALFIT_ALLOW_WEBHOOK_UNSIGNED` (default `off`) solo se respeta cuando `ENVIRONMENT != production` AND env vars ausentes. En producción NUNCA se respeta.
-
-Ejemplos completos + vectores: [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md). Tests: [`test_p0_webhook_1_fail_secure.py`](backend/tests/test_p0_webhook_1_fail_secure.py), [`test_p2_prod_audit_3.py`](backend/tests/test_p2_prod_audit_3.py).
+Ejemplos + vectores: [`runbook_security_antipatterns.md`](~/.claude/projects/.../memory/runbook_security_antipatterns.md). Tests: [`test_p0_webhook_1_fail_secure.py`](backend/tests/test_p0_webhook_1_fail_secure.py), [`test_p2_prod_audit_3.py`](backend/tests/test_p2_prod_audit_3.py).
 
 ---
 
@@ -364,17 +349,7 @@ Endpoint admin [`POST /api/system/admin/deploy-lag/check`](backend/routers/syste
 
 ### Endpoint público para blackbox monitor externo
 
-[P2-HEALTHZ-DEEP · 2026-05-12] `GET /health/version` ([`backend/app.py:869`](backend/app.py#L869)) es público (sin auth) y expone, además del `last_known_pfix` original, 5 keys para que un poller externo (UptimeRobot/StatusCake/cronitor) detecte deploy lag sin `CRON_SECRET`:
-
-| Key | Tipo | Significado |
-|---|---|---|
-| `expected_marker` | `str \| null` | `app_kv_store.expected_last_known_pfix`. `null` si KV unreachable. |
-| `drift` | `bool \| null` | `expected_marker != _LAST_KNOWN_PFIX`. `null` si no se pudo leer expected. |
-| `last_pipeline_metrics_tick_at` | ISO `str \| null` | `MAX(created_at)` de `_hardfloor_autoheal_tick` (heartbeat binary). |
-| `has_p0_prod_1_gate` | `bool` | binary post-P0-PROD-1 (import `_is_guest_metrics_enabled` ok). |
-| `has_p1_perf_1_cache` | `bool` | binary post-P1-PERF-1 (`_SCHEDULER_JOBS_WITH_OPEN_ALERTS` existe). |
-
-Lecturas best-effort (exception → `None`/`False` sin fallar endpoint). Cierra la paradoja "binary roto se vigila a sí mismo": el watchdog interno `_alert_pipeline_metrics_silence` solo dispara si el binary tiene la lógica del watchdog; un poller externo detecta el caso sin depender del binary. SOP UptimeRobot (URL + assertions): URL `/health/version`, GET cada 5min, alert si `drift!=false` OR `last_pipeline_metrics_tick_at < NOW()-30min` OR `has_p0_prod_1_gate=false` OR `has_p1_perf_1_cache=false`. Test: [`test_p2_healthz_deep_extended.py`](backend/tests/test_p2_healthz_deep_extended.py).
+[P2-HEALTHZ-DEEP · 2026-05-12] `GET /health/version` ([`backend/app.py:869`](backend/app.py#L869)) público sin auth, expone 5 keys (`expected_marker`, `drift`, `last_pipeline_metrics_tick_at`, `has_p0_prod_1_gate`, `has_p1_perf_1_cache`) para poller externo. Cierra paradoja "binary roto se vigila a sí mismo". Tabla detallada + SOP UptimeRobot (URL + assertions): [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md) → "Endpoint público `/health/version`". Test: [`test_p2_healthz_deep_extended.py`](backend/tests/test_p2_healthz_deep_extended.py).
 
 ### SOP: resolver `deploy_lag_drift_vs_expected`
 

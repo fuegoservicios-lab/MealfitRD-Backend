@@ -2,6 +2,7 @@ import os
 import io
 import base64
 from cache_manager import centralized_cache
+from knobs import _env_str  # [P3-VISION-MODEL-KNOB · 2026-05-20]
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
@@ -10,6 +11,27 @@ from db import save_visual_entry
 import logging
 
 logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
+
+
+# [P3-VISION-MODEL-KNOB · 2026-05-20] Knob para overridear el modelo Gemini
+# Vision sin redeploy. Cierra el gap "hardcoded preview model" identificado
+# en `docs/gaps-audit-2026-05.md` (D3 / R2): el modelo
+# `gemini-3.1-pro-preview` ya causó CB stale 4.4 días en 2026-05-11 (CLAUDE.md
+# convención P3-PREVIEW-MODEL-KNOB). Si Google deprecia el preview sin aviso,
+# `vision_agent` rompe → la cadena entera de Diario Visual + cruce-de-silos
+# con `fact_extractor` queda silenciada hasta el próximo redeploy.
+#
+# Con el knob:
+#   - Default = current production model (cero cambio de comportamiento).
+#   - SRE puede setear `MEALFIT_VISION_MODEL=gemini-3.1-pro` (stable, sin
+#     `-preview`) en EasyPanel y reiniciar el worker — vision retoma operación.
+#
+# Auto-registry en `_KNOBS_REGISTRY` vía `_env_str` → visible en
+# `/health/version` (admin gated). Patrón espejo de `proactive_agent.py`
+# (P3-PREVIEW-MODEL-KNOB).
+# Tooltip-anchor: P3-VISION-MODEL-KNOB.
+def _vision_model_name() -> str:
+    return _env_str("MEALFIT_VISION_MODEL", "gemini-3.1-pro-preview")
 
 # Definimos el modelo de salida estructurada para capturar la descripción
 class ImageDescription(BaseModel):
@@ -26,9 +48,11 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
     y determina si contiene alimentos usando structured output.
     """
     try:
-        # Iniciamos el modelo Gemini 1.5 Pro (o Flash) que soporta visión nativa
+        # [P3-VISION-MODEL-KNOB · 2026-05-20] Modelo via knob (no hardcoded).
+        # Default preserva el modelo preview actual; SRE puede swap sin redeploy
+        # si Google deprecia. Tooltip-anchor: P3-VISION-MODEL-KNOB.
         llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-pro-preview",
+            model=_vision_model_name(),
             temperature=0.1,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         ).with_structured_output(ImageDescription)

@@ -38,10 +38,12 @@ _MIGRATED_PROD_FILES = [
 
 # Whitelist: archivos donde `traceback.print_exc()` se acepta intencionalmente.
 # Scripts one-shot, tests, refactor scratch.
-_WHITELIST_PATHS = {
-    _BACKEND_ROOT / "refactor.py",
-    _BACKEND_ROOT / "refactor_plans.py",
-}
+#
+# [P3-DEBUG-TIME-CLEANUP · 2026-05-20] `refactor.py` y `refactor_plans.py`
+# movidos a `backend/scratch/legacy_root_helpers/` (audit gaps-audit-2026-05
+# A1). El whitelist queda vacío pero preservamos el set como hook por si
+# reaparece un caso legítimo — preferir marker inline en lugar de re-añadir.
+_WHITELIST_PATHS: set = set()
 
 
 def _read(p: Path) -> str:

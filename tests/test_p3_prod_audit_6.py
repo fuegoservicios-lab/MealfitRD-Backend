@@ -128,8 +128,10 @@ def test_no_datetime_utcnow_in_production_paths():
             continue
         if f.name.startswith(("test_", "refactor", "scratch_")):
             continue
-        if f.name in ("recalc_now.py",):  # script CLI one-shot
-            continue
+        # [P3-DEBUG-TIME-CLEANUP · 2026-05-20] `recalc_now.py` movido a
+        # `backend/scratch/legacy_root_helpers/` — el filtro `scratch in parts`
+        # arriba ya lo excluye. Dejado este comentario por trazabilidad si
+        # alguien reintroduce un script one-shot CLI en raíz.
         try:
             for lineno, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
                 if "datetime.utcnow()" in line and not line.strip().startswith("#"):

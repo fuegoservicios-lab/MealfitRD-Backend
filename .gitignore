@@ -36,9 +36,18 @@ lesson_telemetry_pending.jsonl
 *.db
 test.mp3
 
+# [I6 / P3-COVERAGE-HEATMAP · 2026-05-20] Output del coverage local.
+# Regenerable via `./scripts/run_coverage.sh`.
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
 # Sub-scratch / helpers one-shot dentro de backend
 scratch/
-test_browser_console.js
+# [P3-DEBUG-TIME-CLEANUP · 2026-05-20] `test_browser_console.js` removed
+# from raíz; vive en scratch/legacy_root_helpers/ junto a refactor*.py.
+# Entry omitida — scratch/ ya cubre.
 
 # Helpers ad-hoc one-off (no deben commitearse al repo)
 append_*.py

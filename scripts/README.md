@@ -17,6 +17,7 @@ operador.
 | `publish_pfix_marker.py` | Helper para publicar `expected_last_known_pfix` en `app_kv_store` tras cierre de un P-fix (alternativa al MCP `execute_sql`). |
 | `test_medical_reviewer.py` | Smoke test manual del review LLM (NO automated — requiere GEMINI_API_KEY). |
 | `test_semantic_cache.py` | Smoke test del semantic cache (manual). |
+| `run_coverage.sh` / `run_coverage.ps1` | [I6 / P3-COVERAGE-HEATMAP · 2026-05-20] Genera coverage heatmap de los ~770 tests pytest. Auto-instala `pytest-cov` si falta. Output: `htmlcov/index.html` (gitignored) + summary terminal. Default filtro: `-m "not e2e"`. Uso: `./scripts/run_coverage.sh` o `--term` para skip HTML. |
 
 ## Convenciones
 

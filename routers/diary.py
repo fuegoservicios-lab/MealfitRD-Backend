@@ -91,6 +91,68 @@ class ProgressRequest(BaseModel):
 # `_RECALC_LIMITER` y `_PDF_TELEMETRY_LIMITER` en routers/plans.py.
 _PROGRESS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
+
+# [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
+# permitidos para `/upload`. Cierra el gap F3 del audit
+# `docs/gaps-audit-2026-05.md`: pre-fix el endpoint aceptaba el
+# `file.content_type` declarado por el cliente Y lo pasaba directo a
+# Supabase Storage + a `process_image_with_vision`. Vectores cerrados:
+#
+#   1. Cliente declara `content_type=application/octet-stream` (default
+#      browser para tipos desconocidos) → bypass del MIME-sniffing del
+#      bucket Storage. Si en el futuro un proxy/CDN sirve el content
+#      con un Content-Type confiando en el del bucket, podría servir
+#      ejecutables/HTML embebidos como "imagen" → XSS / drive-by.
+#   2. Cliente declara `image/svg+xml` → el bucket lo sirve y otros
+#      clientes que lo renderizan ejecutan JS embebido en el SVG (vector
+#      XSS clásico). Gemini Vision NO renderiza SVG y devuelve "imagen
+#      sin descripción" → bypass silencioso para almacenamiento.
+#   3. Magic-bytes check defense-in-depth: aunque content_type pase el
+#      check, los primeros bytes deben ser un signature legítimo de
+#      JPEG/PNG/WebP/HEIC. Catch atacantes que envían `Content-Type:
+#      image/jpeg` con un body de HTML/exe.
+#
+# Estrategia conservadora: rechazar lo que NO matchee con HTTP 415
+# (Unsupported Media Type). Lista cubre los formatos de cámaras móviles
+# modernas (iOS HEIC, Android JPEG/PNG/WebP).
+#
+# Tooltip-anchor: P3-VISION-UPLOAD-VALIDATION.
+_ALLOWED_VISION_CONTENT_TYPES = frozenset({
+    "image/jpeg",
+    "image/jpg",  # variante histórica, algunos clientes envían así
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+})
+
+# Magic bytes (signatures de los primeros bytes del archivo). Defensa
+# contra content-type spoofing: aunque el cliente declare `image/jpeg`,
+# si los primeros bytes no son `FF D8 FF`, rechazar.
+# - JPEG: FF D8 FF
+# - PNG:  89 50 4E 47 0D 0A 1A 0A
+# - WebP: RIFF....WEBP (4 bytes RIFF + 4 bytes size + WEBP)
+# - HEIC/HEIF: bytes 4-12 contienen `ftypheic`/`ftypheix`/`ftyphevc`/`ftypmif1`
+def _detect_image_mime_from_bytes(b: bytes) -> Optional[str]:
+    """Sniff magic bytes. Retorna mime detectado o None si no matchea
+    ninguno de los formatos permitidos. Defensa contra content-type
+    spoofing."""
+    if len(b) < 12:
+        return None
+    if b[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if b[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP":
+        return "image/webp"
+    # HEIC/HEIF: el "ftyp" box está en bytes 4-7, brand en 8-11
+    if b[4:8] == b"ftyp":
+        brand = b[8:12]
+        if brand in (b"heic", b"heix", b"hevc", b"heim", b"heis", b"hevx",
+                     b"mif1", b"msf1"):
+            return "image/heic"
+    return None
+
 @router.post("/upload")
 async def api_diary_upload(
     background_tasks: BackgroundTasks,
@@ -108,15 +170,57 @@ async def api_diary_upload(
                 
         actual_user_id = user_id if user_id != "guest" else session_id
 
-        
+        # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Validación de
+        # content_type ANTES de leer bytes. Rechaza con HTTP 415 si
+        # el cliente declara MIME no permitido. Defensa contra SVG/XML
+        # con JS embebido + sub-types raros. Si content_type es None
+        # o vacío (clientes raros), también rechaza — clientes legítimos
+        # siempre envían content_type.
+        declared_ct = (file.content_type or "").lower().strip()
+        if declared_ct not in _ALLOWED_VISION_CONTENT_TYPES:
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    f"Tipo de archivo no soportado: {declared_ct or 'desconocido'}. "
+                    f"Solo se permiten imágenes JPEG/PNG/WebP/HEIC."
+                ),
+            )
+
         MAX_FILE_SIZE = 20 * 1024 * 1024 # 20 MB
         file_bytes = b""
         while chunk := await file.read(1024 * 1024):
             file_bytes += chunk
             if len(file_bytes) > MAX_FILE_SIZE:
                 raise HTTPException(status_code=413, detail="La imagen es demasiado grande. Máximo 20MB permitidos.")
-        
-        file_ext = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
+
+        # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Magic-bytes check
+        # post-read. Defensa-en-profundidad contra content-type spoofing:
+        # aunque `declared_ct` pase el whitelist arriba, si los primeros
+        # bytes no son una signature válida de imagen, rechazar.
+        # Catches atacantes que declaran `image/jpeg` con un body de
+        # HTML/exe esperando que pase a Storage + downstream.
+        sniffed_ct = _detect_image_mime_from_bytes(file_bytes[:32])
+        if sniffed_ct is None:
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    "El archivo no parece una imagen válida (firma de bytes inválida). "
+                    "Verifica que sea un JPEG/PNG/WebP/HEIC real."
+                ),
+            )
+
+        # `filename` defensivo: si el cliente no envió filename (raro pero
+        # posible), default a la extensión derivada del sniffed_ct.
+        if file.filename and '.' in file.filename:
+            file_ext = file.filename.rsplit('.', 1)[-1].lower()
+        else:
+            file_ext = sniffed_ct.split('/')[-1]  # 'jpeg', 'png', etc.
+        # Sanitización defensiva del ext: solo a-z0-9 (3-5 chars) para
+        # construir el path en Storage. Evita inyectar `..` o caracteres
+        # raros en el filename del bucket.
+        import re as _re_ext
+        if not _re_ext.match(r'^[a-z0-9]{2,5}$', file_ext):
+            file_ext = sniffed_ct.split('/')[-1]
         unique_filename = f"{actual_user_id}/{uuid.uuid4().hex}.{file_ext}"
         
         image_url = ""

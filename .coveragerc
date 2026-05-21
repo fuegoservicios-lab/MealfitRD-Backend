@@ -1,0 +1,48 @@
+# [I6 / P3-COVERAGE-HEATMAP · 2026-05-20] Config de coverage.py.
+#
+# Diseño minimalista — solo lo que necesita el heatmap útil. Sin
+# fail_under / sin gates en CI todavía (decisión MVP <100 MAU).
+#
+# Cuando crucemos 500 MAU o agreguemos 2do dev:
+#   - Añadir `fail_under = 60` (baseline conservador tras primera medición).
+#   - Activar el job CI con `pytest --cov=. --cov-fail-under=60`.
+#   - Subir el threshold cada PR.
+
+[run]
+# Source: todo el backend Python (sin venv ni scratch).
+source = .
+omit =
+    venv/*
+    test_venv/*
+    scratch/*
+    scripts/*
+    tests/*
+    conftest.py
+    setup.py
+    */__pycache__/*
+    # [P3-DEBUG-TIME-CLEANUP · 2026-05-20] one-shot scripts movidos a
+    # scratch/legacy_root_helpers/ — el path glob ya los excluye, pero
+    # mantengo entries explícitas por si re-aparecen.
+    refactor*.py
+    recalc_now.py
+    modify_cron.py
+branch = True
+
+[report]
+# Ordenar por % de cobertura ascendente → archivos peor cubiertos arriba.
+sort = Cover
+# Skip 100% covered (reduce ruido visual).
+skip_covered = False
+# 2 decimals (más útil que el default 0).
+precision = 2
+# No incluir líneas excluidas con `# pragma: no cover` en el conteo.
+exclude_also =
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:
+    pass
+
+[html]
+directory = htmlcov
+# Title del index para distinguir si abres múltiples coverage reports.
+title = MealfitRD backend coverage

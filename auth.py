@@ -3,8 +3,38 @@ import logging
 from typing import Optional
 from fastapi import Header, Depends, HTTPException
 from db import get_monthly_api_usage, get_user_profile, supabase
+from knobs import _env_int  # [P3-TIER-LIMITS-ENV · 2026-05-20] auto-registry
 
 logger = logging.getLogger(__name__)
+
+
+# [P3-TIER-LIMITS-ENV · 2026-05-20] Tier limits via knobs (no hardcoded).
+# Pre-fix: `{"gratis": 15, "basic": 50, "plus": 200, "ultra": 999999, "admin": 999999}`
+# era dict literal dentro de `verify_api_quota`. Cualquier ajuste de pricing
+# (e.g. "subir basic de 50 a 75 esta semana para retención") requería:
+#   1. PR + review.
+#   2. Merge a main + redeploy EasyPanel.
+#   3. Esperar nixpacks build (~3-5min).
+#   4. Validar via /health/version que el deploy lag detector confirma.
+# Total: ~30 min para cambiar UN número. Con env vars: SRE/founder
+# setea `MEALFIT_TIER_LIMIT_BASIC=75` en EasyPanel + reinicia worker = <1 min.
+#
+# Defaults preservan pricing actual. Auto-registry en `_KNOBS_REGISTRY`
+# → visible en `/health/version` para audit del valor activo en cada
+# entorno. Audit-anchor: P3-TIER-LIMITS-ENV.
+#
+# Por qué module-level (no per-request lookup):
+#   `_env_int` se llama una vez en import time. Para cambiar el valor sin
+#   redeploy, basta con bumpear la env var + restart del worker (EasyPanel
+#   uvicorn). El cost de re-leer env var por cada request sería marginal
+#   pero innecesario — los tiers no cambian intra-request.
+_TIER_LIMITS = {
+    "gratis": _env_int("MEALFIT_TIER_LIMIT_GRATIS", 15),
+    "basic": _env_int("MEALFIT_TIER_LIMIT_BASIC", 50),
+    "plus": _env_int("MEALFIT_TIER_LIMIT_PLUS", 200),
+    "ultra": _env_int("MEALFIT_TIER_LIMIT_ULTRA", 999999),
+    "admin": _env_int("MEALFIT_TIER_LIMIT_ADMIN", 999999),
+}
 
 
 async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
@@ -127,8 +157,11 @@ def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user
         if profile:
             plan_tier = profile.get("plan_tier", "gratis")
 
-        tier_limits = {"gratis": 15, "basic": 50, "plus": 200, "ultra": 999999, "admin": 999999}
-        limit = tier_limits.get(plan_tier, 15)
+        # [P3-TIER-LIMITS-ENV · 2026-05-20] Dict literal reemplazado por
+        # `_TIER_LIMITS` module-level (knobs auto-registrados). Default
+        # gratis=15 cuando el tier es desconocido (defensive — usuario con
+        # `plan_tier` corrupto NO debe quedar con quota ilimitada).
+        limit = _TIER_LIMITS.get(plan_tier, _TIER_LIMITS["gratis"])
 
         if credits_used >= limit:
             raise HTTPException(status_code=402, detail=f"Límite de créditos alcanzado para tu plan {plan_tier} ({limit}/{limit}). Mejora tu plan para continuar.")

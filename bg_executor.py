@@ -35,6 +35,7 @@ Tooltip-anchor: P1-BG-THREAD-TIMEOUT.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import threading
@@ -135,7 +136,24 @@ def submit_bg_task(
         10,
         1800,
     )
-    future: Future = _executor.submit(fn, *args, **kwargs)
+
+    # [H2 / P3-CORRELATION-ID · 2026-05-20] Propagación del correlation_id
+    # (y cualquier otro ContextVar futuro) a worker threads del pool.
+    # `ThreadPoolExecutor` NO copia contextvars automáticamente (a diferencia
+    # de `asyncio.create_task` y `asyncio.to_thread`). Sin esto, los logs
+    # dentro del bg task aparecen con `corr=-` rompiendo la trazabilidad
+    # del request original.
+    #
+    # `copy_context()` snapshot del ContextVar state EN EL MOMENTO del
+    # submit (= dentro del handler request). El worker ejecuta `fn` via
+    # `ctx.run(...)` que restaura ese snapshot en su frame.
+    # Tooltip-anchor: P3-CORRELATION-ID-BG-PROPAGATION.
+    ctx = contextvars.copy_context()
+
+    def _run_with_ctx() -> Any:
+        return ctx.run(fn, *args, **kwargs)
+
+    future: Future = _executor.submit(_run_with_ctx)
 
     def _watch() -> None:
         try:
