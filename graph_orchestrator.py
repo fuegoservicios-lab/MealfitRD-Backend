@@ -186,7 +186,24 @@ CB_LOCAL_HEALTH_TTL_S       = _env_float("MEALFIT_CB_LOCAL_HEALTH_TTL_S",       
 # --- Hedging per-day (generate_days_parallel_node) ---
 # `HEDGE_AFTER_BASE_S`: tiempo soft antes de lanzar el intento especulativo.
 # `HARD_CEILING_S`: tiempo duro tras el cual cancelamos primary+hedge y damos error.
-HEDGE_AFTER_BASE_S          = _env_float("MEALFIT_HEDGE_AFTER_BASE_S",          45.0)
+#
+# [P1-HEDGE-THRESHOLD-RAISE · 2026-05-21] Default subido 45s → 90s. Razón:
+# observación 2026-05-21 chunk 713ff43a, intento #2 — los 3 day_generators
+# tardaron 74s, 89s, 104s (rangos normales para gemini-3-flash bajo throttling).
+# Con threshold=45s, los 3 días dispararon hedge → "3/3 hedges en flight" →
+# saturación del limiter (otros días esperaron sin hedge) Y +3 llamadas Gemini
+# innecesarias (los primaries terminaron <30s después del hedge fire).
+#
+# Con threshold=90s, en ese mismo chunk solo el día 3 (104s) habría disparado
+# hedge — ahorro estimado ~2 llamadas Gemini por chunk en condiciones normales.
+# Trade-off: si Gemini se atasca de verdad (>90s sin respuesta), el hedge llega
+# 45s más tarde. Pero esos chunks son raros y ya están cubiertos por
+# `HARD_CEILING_S=170s` que cancela cualquier intento congelado.
+#
+# Rollback sin redeploy: `MEALFIT_HEDGE_AFTER_BASE_S=45` revierte al
+# comportamiento pre-fix. Subir aún más (120-140s) si el monitor de costo
+# muestra hedges fired/chunk >0.5 sostenidamente.
+HEDGE_AFTER_BASE_S          = _env_float("MEALFIT_HEDGE_AFTER_BASE_S",          90.0)
 HARD_CEILING_S              = _env_float("MEALFIT_HARD_CEILING_S",              170.0)
 # [P2-HEDGE-LIMITER-RAISE · 2026-05-16] Cap absoluto de hedges concurrentes por
 # pipeline. Default subido 2 → 3 para que los 3 day_generators paralelos del
@@ -198,7 +215,29 @@ HARD_CEILING_S              = _env_float("MEALFIT_HARD_CEILING_S",              
 HEDGE_MAX_CONCURRENT_KNOB   = _env_int  ("MEALFIT_HEDGE_MAX_CONCURRENT",        3)
 
 # --- Retry policy + timeout global del pipeline ---
-MAX_ATTEMPTS                = _env_int  ("MEALFIT_MAX_ATTEMPTS",                2)
+# [P1-LOW-SIGNAL-FALLBACK · 2026-05-21] Default 2 → 3. Razón: usuarios con
+# señal baja (chunk 2 inicial sin historial denso) pueden necesitar más
+# intentos para que el LLM converja a un plan coherente. Combinado con la
+# notificación visible (`plan_data._quality_degraded` cuando se agotan los
+# 3 intentos), el usuario sabe explícitamente cuando el sistema "se rindió"
+# en lugar de recibir silenciosamente un plan degradado. Trade-off: +1
+# intento = ~50% más de latencia/costo en chunks que reach max_attempts,
+# pero esos son <5% del volumen total — los happy paths siguen igual.
+MAX_ATTEMPTS                = _env_int  ("MEALFIT_MAX_ATTEMPTS",                3)
+# [P1-LOW-SIGNAL-FALLBACK · 2026-05-21] Umbral mínimo de `previous_plan_quality`
+# para inyectar señales de preferencia históricas (Señales 7-10 en
+# `_inject_history_aware_signals`). Sin este gate, un usuario con Quality
+# acumulada baja recibía señales débiles inyectadas como verdades fuertes
+# ("Platos recurrentes inyectados" con base 0.33) → el LLM forzaba gustos
+# que no eran genuinos. Con el gate, si confidence < 0.40, esas señales se
+# OMITEN del prompt y el LLM genera solo en base a:
+#   - Macros calculados (BMR/TDEE/target — siempre presentes)
+#   - Pantry / shopping list (siempre presentes en chunk 2+)
+#   - Alergias / condiciones médicas (siempre presentes)
+# Resultado: plan coherente sin inventar preferencias que el usuario nunca
+# expresó. Las Señales 1-6 (EMA granular, abandonos, emocional, técnicas)
+# siguen self-gating: solo inyectan si su data subyacente existe.
+MIN_LEARNING_CONFIDENCE     = _env_float("MEALFIT_MIN_LEARNING_CONFIDENCE",    0.40)
 MIN_RETRY_BUDGET_S          = _env_int  ("MEALFIT_MIN_RETRY_BUDGET_S",          180)
 # [P1-FIX-BUDGET] Subido de 600s → 720s. Análisis del incidente real:
 # pipeline normal terminó en 230s con 370s remaining; threshold (180+80+125=385s)
@@ -8053,6 +8092,197 @@ def _auto_patch_ingredient_coherence(plan: dict, errors: list) -> int:
     return patched
 
 
+# [P1-AUTO-PATCH-FORWARD-SYNC-TOOLTIP · 2026-05-21] Sinónimos seguros para
+# substitución en `_auto_patch_recipe_forward_coherence`. Solo single-words o
+# multi-word inequívocos por categoría — sin "filete"/"lomo"/"carne" sueltos
+# que producirían false-replaces en dishes no-relacionados. Mantener en sync
+# con el `protein_synonyms` LOCAL del forward check (línea ~6942 en
+# `_run_assembly_and_validation`); si añades un pescado/corte nuevo allí Y
+# es inequívoco, replícalo aquí. Si NO es inequívoco (sólo distingue por
+# contexto), déjalo fuera de aquí para que el revisor fuerce retry en lugar
+# de que el patch produzca texto incoherente.
+_FORWARD_PATCH_SYNONYMS = {
+    "pescado": [
+        "pescado", "pescados",
+        "chillo", "dorado", "mero", "salmón", "salmon", "tilapia",
+        "bacalao", "atún", "atun", "sardina", "sardinas",
+        "merluza", "róbalo", "robalo", "pargo", "corvina",
+        "mahi-mahi", "mahi mahi", "mahimahi", "lubina",
+        "carite", "jurel", "lambí", "lambi",
+        "filete de pescado", "filete de mero", "filete de tilapia",
+        "filete de chillo", "filete de dorado", "filete de bacalao",
+        "filete de merluza", "filete de salmón", "filete de salmon",
+    ],
+    "pollo": [
+        "pollo", "pechuga de pollo", "muslo de pollo",
+        "pernil de pollo", "filete de pollo",
+        "chicharrón de pollo", "chicharron de pollo",
+    ],
+    "res": [
+        "res", "carne de res", "carne molida de res",
+        "ropa vieja", "bistec", "bisteck",
+    ],
+    "cerdo": [
+        "cerdo", "chuleta de cerdo", "pernil de cerdo",
+        "tocino", "chicharrón", "chicharron",
+    ],
+    "huevo": [
+        "huevo", "huevos", "clara", "claras", "yema", "yemas",
+        "tortilla", "revoltillo",
+    ],
+    "pavo": [
+        "pavo", "pechuga de pavo", "jamón de pavo", "jamon de pavo",
+        "pavo molido", "carne de pavo", "pavo asado", "pavo desmenuzado",
+    ],
+    "camarón": [
+        "camarón", "camarones", "camaron",
+        "gambas", "langostinos",
+    ],
+    # Proteínas vegetales / lácteas — solo aparecen como TARGET de substitución
+    # cuando el orphan es una proteína animal y los ingredientes son veggie.
+    "garbanzos": ["garbanzo", "garbanzos"],
+    "yogurt": ["yogurt", "yogur"],
+    "ricotta": ["ricotta"],
+    "almendras": ["almendra", "almendras"],
+}
+
+
+def _auto_patch_recipe_forward_coherence(plan: dict, errors: list) -> tuple[int, list]:
+    """[P1-AUTO-PATCH-FORWARD · 2026-05-21] Resuelve la dirección 'forward' de
+    la incoherencia receta↔ingrediente: la receta (o el nombre del plato)
+    menciona una proteína (e.g. 'pescado') que NO tiene sinónimo en
+    `meal.ingredients`. Antes este error escalaba a `structural_coherence_errors`
+    → severity='minor' → retry del plan completo (~10 llamadas LLM adicionales).
+
+    Estrategia quirúrgica (cero LLM):
+      1. Parsear `Día N, MEAL_NAME: La receta indica 'KEY' pero no hay ningún
+         ingrediente equivalente`.
+      2. Identificar la proteína REAL en `meal.ingredients` (qué categoría de
+         `_FORWARD_PATCH_SYNONYMS` matchea algún ingrediente, excluyendo el
+         propio orphan).
+      3. Reescribir `meal.name` y `meal.recipe` reemplazando el orphan KEY y
+         sus sinónimos seguros con la categoría real (case-preserving).
+      4. Si no podemos identificar una proteína real (ingredients = solo
+         vegetales/cereales) preservar el error en `unpatched_errors` y dejar
+         que el flujo legacy escale a retry — preferimos NO inventar.
+
+    Retorna: `(count_patched, unpatched_errors)`.
+
+    Asimetría histórica que esto cierra: `_auto_patch_ingredient_coherence`
+    (P6-AUTO-PATCH-1) cubría ya la dirección reverse (ingrediente en lista
+    pero no en receta). El forward quedó descubierto durante ~6 meses y forzó
+    retries innecesarios cada vez que el LLM nombraba un plato con proteína
+    no-listada (caso real chunk 713ff43a 2026-05-21 00:08).
+    """
+    if not errors:
+        return 0, []
+
+    unpatched = []
+    patched_count = 0
+
+    def _preserve_case_sub(match, target_word: str) -> str:
+        """Reemplaza preservando el case del primer carácter del match."""
+        orig = match.group(0)
+        if orig and orig[0].isupper():
+            return target_word[:1].upper() + target_word[1:]
+        return target_word
+
+    for error in errors:
+        m = _re.search(
+            r"D[ií]a (\d+), (.+?): La receta indica '(.+?)' pero no hay ning[úu]n ingrediente equivalente",
+            error,
+        )
+        if not m:
+            unpatched.append(error)
+            continue
+        day_num = int(m.group(1))
+        meal_name = m.group(2).strip()
+        orphan_key = m.group(3).strip().lower()
+
+        if orphan_key not in _FORWARD_PATCH_SYNONYMS:
+            # Orphan fuera del mapa de substitución seguro — no podemos
+            # garantizar reescritura limpia. Escalar a retry.
+            unpatched.append(error)
+            continue
+
+        # Localizar el meal exacto.
+        target_meal = None
+        for day in plan.get("days", []):
+            if day.get("day") != day_num:
+                continue
+            for meal in day.get("meals", []):
+                if meal.get("name", "").strip() == meal_name:
+                    target_meal = meal
+                    break
+            if target_meal:
+                break
+
+        if target_meal is None:
+            unpatched.append(error)
+            continue
+
+        ings_lower = [
+            (i.lower() if isinstance(i, str) else str(i).lower())
+            for i in target_meal.get("ingredients", [])
+        ]
+
+        # Buscar la proteína "actual" en ingredients (categoría != orphan_key).
+        actual_protein = None
+        for cat_key, cat_syns in _FORWARD_PATCH_SYNONYMS.items():
+            if cat_key == orphan_key:
+                continue
+            for syn in cat_syns:
+                pat = r'\b' + _re.escape(syn) + r'\b'
+                if any(_re.search(pat, ing) for ing in ings_lower):
+                    actual_protein = cat_key
+                    break
+            if actual_protein:
+                break
+
+        if not actual_protein:
+            # Solo vegetales/cereales en ingredients → reescribir sería inventar.
+            # Mejor que el retry intente proponer un plato vegetariano coherente.
+            unpatched.append(error)
+            continue
+
+        # Reescribir: longest-first para que multi-word ("filete de chillo")
+        # se substituya antes que single-word ("chillo") y no quede texto
+        # residual desincronizado tras la primera pasada.
+        syns_sorted = sorted(_FORWARD_PATCH_SYNONYMS[orphan_key], key=len, reverse=True)
+
+        def _apply_subs(text: str) -> str:
+            new = text
+            for syn in syns_sorted:
+                pat = r'\b' + _re.escape(syn) + r'\b'
+                new = _re.sub(
+                    pat,
+                    lambda mm, _ap=actual_protein: _preserve_case_sub(mm, _ap),
+                    new,
+                    flags=_re.IGNORECASE,
+                )
+            return new
+
+        orig_name = target_meal.get("name", "")
+        if isinstance(orig_name, str) and orig_name:
+            target_meal["name"] = _apply_subs(orig_name)
+
+        recipe = target_meal.get("recipe", "")
+        if isinstance(recipe, list):
+            target_meal["recipe"] = [
+                _apply_subs(step) if isinstance(step, str) else step for step in recipe
+            ]
+        elif isinstance(recipe, str) and recipe:
+            target_meal["recipe"] = _apply_subs(recipe)
+
+        # Marker para debug / evitar re-patch en doble pasada.
+        prev = target_meal.get("_forward_patched_proteins") or []
+        target_meal["_forward_patched_proteins"] = prev + [orphan_key]
+
+        patched_count += 1
+
+    return patched_count, unpatched
+
+
 class ReviewResult(BaseModel):
     approved: bool = Field(description="True si el plan es seguro médicamente")
     issues: list[str] = Field(default_factory=list, description="Lista de problemas encontrados")
@@ -9407,12 +9637,34 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # Separar errores cosméticos (ingrediente listado sin aparecer en instrucciones) de errores estructurales.
     # Los cosméticos se parchean en-place; los estructurales siguen requiriendo regeneración.
     COHERENCE_PATCHABLE_MARKER = "está listado pero no se menciona en las instrucciones"
+    # [P1-AUTO-PATCH-FORWARD · 2026-05-21] Marker de la dirección forward del
+    # bidirectional check: receta menciona una proteína KEY pero ningún
+    # ingrediente es sinónimo. Hasta P1-AUTO-PATCH-FORWARD escalaba a retry; ahora
+    # `_auto_patch_recipe_forward_coherence` lo resuelve quirúrgicamente cuando la
+    # proteína real está identificable en `ingredients` (cero LLM).
+    COHERENCE_FORWARD_PATCHABLE_MARKER = "pero no hay ningún ingrediente equivalente"
     patchable_errors = [e for e in coherence_errors if COHERENCE_PATCHABLE_MARKER in e]
-    structural_coherence_errors = [e for e in coherence_errors if COHERENCE_PATCHABLE_MARKER not in e]
+    forward_patchable_errors = [e for e in coherence_errors if COHERENCE_FORWARD_PATCHABLE_MARKER in e]
+    structural_coherence_errors = [
+        e for e in coherence_errors
+        if COHERENCE_PATCHABLE_MARKER not in e and COHERENCE_FORWARD_PATCHABLE_MARKER not in e
+    ]
 
     if patchable_errors:
         n_patched = _auto_patch_ingredient_coherence(plan, patchable_errors)
         logger.info(f"🩹 [AUTO-PATCH] {n_patched}/{len(patchable_errors)} ingredientes huérfanos eliminados de listas (no aparecían en instrucciones).")
+
+    if forward_patchable_errors:
+        n_fwd_patched, fwd_unpatched = _auto_patch_recipe_forward_coherence(plan, forward_patchable_errors)
+        logger.info(
+            f"🩹 [AUTO-PATCH-FORWARD] {n_fwd_patched}/{len(forward_patchable_errors)} "
+            f"proteínas huérfanas en receta reescritas a la proteína real de ingredients."
+        )
+        # Errores que no pudimos patchear (ingredients sin proteína identificable,
+        # orphan fuera de mapa seguro) deben seguir el flujo legacy: escalar a
+        # structural → severity='minor' → retry. Mejor retry que invención.
+        if fwd_unpatched:
+            structural_coherence_errors.extend(fwd_unpatched)
 
     assembly_errors = skeleton_fidelity_errors + structural_coherence_errors
     if assembly_errors:
@@ -9984,6 +10236,23 @@ def should_retry(state: PlanState) -> str:
         if not state.get("review_passed", False):
             logger.error(f"🚨 [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado y revisión NO aprobada → Tolerando y enviando mejor versión disponible.")
             _emit_plan_quality_degraded_alert(state, exit_reason="max_attempts", severity=severity)
+            # [P1-LOW-SIGNAL-FALLBACK · 2026-05-21] Flag user-visible para que el
+            # frontend muestre un banner explícito ("La IA no pudo generar un plan
+            # óptimo tras 3 intentos. Revisalo y, si algo no cuadra, usa Cambiar
+            # Plato"). Pre-fix: el alert sólo iba a `system_alerts` (SRE-visible)
+            # — el usuario recibía el plan degradado SIN saber que el sistema
+            # se había "rendido". Ahora `plan_data._quality_degraded=True` +
+            # `_quality_degraded_reason` viajan hasta el cliente vía SSE/REST.
+            try:
+                _pr = state.get("plan_result")
+                if isinstance(_pr, dict):
+                    _pr["_quality_degraded"] = True
+                    _pr["_quality_degraded_reason"] = "max_attempts"
+                    _pr["_quality_degraded_severity"] = severity or "minor"
+                    _pr["_quality_degraded_attempts"] = int(state.get("attempt", 1))
+            except Exception as _flag_e:
+                # Best-effort — un fallo aquí no debe abortar la entrega del plan.
+                logger.warning(f"[P1-LOW-SIGNAL-FALLBACK] No pude setear flag _quality_degraded en plan_result: {_flag_e}")
             return "end"
         logger.warning(f"⚠️  [ORQUESTADOR] Máximo de {MAX_ATTEMPTS} intentos alcanzado → Enviando mejor versión disponible.")
         return "end"
@@ -13180,13 +13449,65 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
         history_context += tech_block
         logger.info(f"✅ [GAP 1] Señal 6: Técnicas éxito/abandono inyectadas → succ={_succ_techs}, aban={_aban_techs}")
 
+    # [P1-LOW-SIGNAL-FALLBACK · 2026-05-21] Confidence gate para Señales 7-9.
+    # Razón (user request 2026-05-21): "no quiero que forze gustos que no
+    # existen — si el usuario no agregó suficiente información de preferencias,
+    # el chunk debe crear platos en base a macros + nevera/lista de compras".
+    #
+    # Las Señales 1-6 son self-gating (solo inyectan si data subyacente
+    # existe — EMA con N≥3 muestras, abandono con razones explícitas, etc.).
+    # Las Señales 7-9, sin embargo, inyectan basándose en `_previous_plan_quality`
+    # que se computa SIEMPRE (vía meta-learning reflection sobre consumo escaso).
+    # En usuarios nuevos / con baja adherencia, eso produce señales DÉBILES
+    # presentadas al LLM como instrucciones FUERTES → forzaba gustos que el
+    # usuario nunca expresó.
+    #
+    # Gate: si `_previous_plan_quality < MIN_LEARNING_CONFIDENCE` (default 0.40)
+    # → SKIP Señales 7-9. El LLM recibe sólo macros + pantry + alergias +
+    # diet/goal — fallback limpio sin invención.
+    #
+    # Rollback sin redeploy: `MEALFIT_MIN_LEARNING_CONFIDENCE=0.0` desactiva
+    # el gate (vuelta al comportamiento pre-fix).
+    _prev_quality = actual_form_data.get("_previous_plan_quality")
+    _quality_hist = actual_form_data.get("quality_history", [])
+    _adherence_hint = actual_form_data.get("_adherence_hint")
+    _adherence_ema_hint = actual_form_data.get("_adherence_ema_hint")
+
+    # Confidence inferida: prev_quality numérica O promedio del historial
+    # (si tiene ≥3 ciclos, el promedio es una estimación razonable).
+    _inferred_confidence = None
+    if isinstance(_prev_quality, (int, float)):
+        _inferred_confidence = float(_prev_quality)
+    elif isinstance(_quality_hist, list) and len(_quality_hist) >= 3:
+        try:
+            _inferred_confidence = float(sum(_quality_hist) / len(_quality_hist))
+        except (TypeError, ZeroDivisionError):
+            _inferred_confidence = None
+
+    _skip_pref_signals = (
+        _inferred_confidence is None or _inferred_confidence < MIN_LEARNING_CONFIDENCE
+    )
+
+    # Excepción: si la EMA hint es explícitamente "drastic_change"/"improving"
+    # o adherence_hint=high/low, esas son señales OBSERVADAS (no estimadas
+    # vía meta-learning) y SÍ se respetan independiente de confidence —
+    # significan que el usuario tiene patrón claro de adherencia que merece
+    # inyectarse incluso con prev_quality bajo.
+    _has_explicit_adherence_signal = bool(_adherence_hint) or bool(_adherence_ema_hint)
+
+    if _skip_pref_signals and not _has_explicit_adherence_signal:
+        logger.info(
+            f"🔧 [GAP 1 GATE/P1-LOW-SIGNAL] Confidence={_inferred_confidence} "
+            f"< MIN_LEARNING_CONFIDENCE={MIN_LEARNING_CONFIDENCE} y sin adherencia "
+            f"observada → SKIP Señales 7-9 (fallback macros+pantry+alergias)."
+        )
+
     # Señal 7: Snapshot de calidad global — adherencia escalar + score previo + tendencia
     # (_adherence_hint ya se usa en complexity_guard pero no se narraba aqui;
     #  _previous_plan_quality + quality_history solo iban al reflection_node lateral.)
-    _adherence_hint = actual_form_data.get("_adherence_hint")
-    _prev_quality = actual_form_data.get("_previous_plan_quality")
-    _quality_hist = actual_form_data.get("quality_history", [])
-    if _adherence_hint or isinstance(_prev_quality, (int, float)) or (isinstance(_quality_hist, list) and len(_quality_hist) >= 2):
+    if (not _skip_pref_signals or _has_explicit_adherence_signal) and (
+        _adherence_hint or isinstance(_prev_quality, (int, float)) or (isinstance(_quality_hist, list) and len(_quality_hist) >= 2)
+    ):
         q_block = "\n\n--- 📊 [CRON] SNAPSHOT DE CALIDAD Y ADHERENCIA GLOBAL ---\n"
         if isinstance(_prev_quality, (int, float)):
             q_block += f"Quality Score del ciclo anterior: {_prev_quality:.2f} / 1.00\n"
@@ -13237,8 +13558,12 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
         logger.info(f"✅ [GAP 1] Señal 7: Snapshot calidad/adherencia inyectado (hint={_adherence_hint}, ema_hint={_adherence_ema_hint}, prev={_prev_quality})")
 
     # Señal 8: Platos recurrentes de alta adherencia (variaciones bienvenidas)
+    # [P1-LOW-SIGNAL-FALLBACK] Gateada por confidence (ver Señal 7). Si el usuario
+    # no tiene historial robusto, los "platos recurrentes" son comidas episódicas
+    # (1-2 entradas) NO patrones reales de preferencia → forzarlos al LLM crea
+    # gustos artificiales.
     _frequent_meals = actual_form_data.get("frequent_meals", [])
-    if isinstance(_frequent_meals, list) and _frequent_meals:
+    if (not _skip_pref_signals) and isinstance(_frequent_meals, list) and _frequent_meals:
         freq_fmt = ", ".join(_frequent_meals[:5])
         history_context += (
             "\n\n--- 🔁 [CRON] PLATOS RECURRENTES DE ALTA ADHERENCIA ---\n"
@@ -13248,10 +13573,18 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             "----------------------------------------------------------------------\n"
         )
         logger.info(f"✅ [GAP 1] Señal 8: Platos recurrentes inyectados → {_frequent_meals[:5]}")
+    elif _skip_pref_signals and isinstance(_frequent_meals, list) and _frequent_meals:
+        logger.info(
+            f"⏭️ [GAP 1 GATE/P1-LOW-SIGNAL] Señal 8 skipped (confidence baja): "
+            f"{_frequent_meals[:5]} no inyectados como preferencia forzada."
+        )
 
     # Señal 9: Tipos de comida que generan frustración emocional (más fuerte que "ignorados")
+    # [P1-LOW-SIGNAL-FALLBACK] Gateada por confidence. Frustración emocional requiere
+    # señal observable (nudge_outcomes con `frustrated=True`) — si el sistema la
+    # inferió vía meta-learning sobre adherencia baja, no es señal genuina.
     _frustrated = actual_form_data.get("_frustrated_meal_types", [])
-    if isinstance(_frustrated, list) and _frustrated:
+    if (not _skip_pref_signals) and isinstance(_frustrated, list) and _frustrated:
         fru_fmt = ", ".join([m.capitalize() for m in _frustrated])
         history_context += (
             "\n\n--- 😤 [CRON] COMIDAS QUE GENERAN FRUSTRACIÓN ---\n"
