@@ -71,8 +71,7 @@ def test_pip_audit_targets_requirements_txt() -> None:
     """
     text = _read_ci_yml()
     assert "pip-audit -r requirements.txt" in text or \
-           "pip-audit --requirement requirements.txt" in text or \
-           "pip-audit -r backend/requirements.txt" in text, (
+           "pip-audit --requirement requirements.txt" in text, (
         "Step de pip-audit NO escanea requirements.txt. Probable que esté "
         "escaneando setup.py/pyproject.toml — este repo no los usa. "
         "Restaurar `pip-audit -r requirements.txt`."
