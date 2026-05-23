@@ -112,22 +112,23 @@ jobs:
   # validación regular contra el GitHub Advisory Database. Riesgo: RCE/DoS
   # silencioso si emerge un CVE en una dep que ya está en producción.
   #
-  # Estrategia: `pip-audit` con `continue-on-error: true` inicialmente.
-  # Razón: el primer run probablemente encuentra varios warnings históricos;
-  # bloquear el merge sobre baseline paraliza todo. Job ejecuta y reporta
-  # status visible en GitHub UI, pero NO bloquea merge.
-  #
-  # Roadmap: tras 1-2 sprints de cleanup (bump de deps afectadas o
-  # `--ignore-vuln <ID>` documentado per-CVE), flippear a `continue-on-error:
-  # false` para convertirlo en gate bloqueante real.
+  # [P0-PROD-AUDIT-1-FIX-1 · 2026-05-23] Baseline está LIMPIO (0 CVEs en
+  # primera ejecución real, ver corrección abajo). Eso permite arrancar
+  # como gate BLOQUEANTE desde el día 1 (sin pasar por "non-blocking
+  # inicial + flippear post-cleanup"). Si emerge un CVE legítimo bloqueando
+  # un PR no relacionado, opciones:
+  #   - Bump de la dep afectada en el mismo PR.
+  #   - `--ignore-vuln GHSA-xxxx-...` documentado en este step con razón +
+  #     fecha de revisión.
+  #   - Re-flippear temporal a `continue-on-error: true` mientras se
+  #     evalúa el fix.
   #
   # Knob de tuning si pip-audit es muy lento: `--cache-dir /tmp/pip-audit`.
   # Output JSON consumible por dashboards: `--format json -o audit.json`.
   backend-security-audit:
-    name: Backend pip-audit (non-blocking)
+    name: Backend pip-audit
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -145,14 +146,16 @@ jobs:
           pip install pip-audit
 
       - name: Run pip-audit
-        # `--disable-pip` evita que pip-audit haga `pip install` real
-        # (más rápido + más seguro en CI). Resuelve solo el árbol de deps
-        # declarado.
-        # `--strict` falla con código distinto a 0 si encuentra vulnerabilidad
-        # — el continue-on-error: true del job lo absorbe sin bloquear merge,
-        # pero el status check sigue visible en rojo.
+        # `--strict` hace que warnings cuenten como failure (no solo CVEs
+        # high-severity). Pre-FIX-1 incluía `--disable-pip` que requiere
+        # requirements.txt con hashes (`--require-hashes`); nuestro
+        # requirements.txt no los tiene → pip-audit erroreaba con "invalid
+        # requirements input" antes de auditar. Removido el flag.
+        # Follow-up `P1-DEPS-HASHES`: generar lock con hashes via
+        # `pip-compile --generate-hashes` y reactivar `--disable-pip` para
+        # cerrar supply-chain attack contra PyPI registry.
         run: |
-          pip-audit -r requirements.txt --disable-pip --strict
+          pip-audit -r requirements.txt --strict
 
   # [P0-PROD-AUDIT-1 · 2026-05-23] Validar que el `Dockerfile` builde.
   #

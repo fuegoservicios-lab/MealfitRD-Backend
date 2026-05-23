@@ -78,25 +78,35 @@ def test_pip_audit_targets_requirements_txt() -> None:
     )
 
 
-def test_pip_audit_job_is_initially_non_blocking() -> None:
-    """El job debe tener `continue-on-error: true` inicialmente (baseline
-    con N warnings históricos). Cuando flippeen a bloqueante (post-cleanup),
-    actualizar este test loud.
+def test_pip_audit_job_is_blocking() -> None:
+    """El job debe ser bloqueante (sin `continue-on-error: true`).
 
-    Documentar la decisión: si el test falla porque alguien lo flippeó,
-    actualizar el test floor a `continue-on-error: false` Y agregar
-    comentario justificando.
+    [P0-PROD-AUDIT-1-FIX-1 · 2026-05-23] Flippeado a bloqueante desde el
+    día 1 porque el baseline está limpio (`pip-audit -r requirements.txt
+    --strict` retorna "No known vulnerabilities found" + exit 0). Esto
+    cierra el gap B-P0-3 con enforcement real, no solo telemetría.
+
+    Si este test falla porque alguien re-añadió `continue-on-error: true`:
+      - Si fue para desbloquear un PR ante un CVE legítimo no relacionado,
+        documentar la decisión en el comentario del job + setear fecha de
+        re-revisión + actualizar este test loud.
+      - Si fue regresión accidental, restaurar el modo bloqueante (eliminar
+        la línea `continue-on-error: true`) — el contrato es que pip-audit
+        es gate hard.
     """
     text = _read_ci_yml()
-    # Buscar el bloque del job + 20 líneas alrededor para chequear el flag.
     idx = text.find("backend-security-audit:")
     assert idx != -1, "Job ausente — cubierto por test_pip_audit_job_present"
-    block = text[idx:idx + 2000]  # ventana suficiente para el job completo
-    assert "continue-on-error: true" in block, (
-        "Job `backend-security-audit` NO tiene `continue-on-error: true`. "
-        "Si decidiste flippear a bloqueante (gate hard), actualizar este "
-        "test + documentar la decisión + asegurar que requirements.txt está "
-        "limpio de CVEs conocidos."
+    # Ventana del bloque del job (hasta el siguiente job o EOF).
+    next_job_idx = text.find("\n  backend-docker-build:", idx)
+    block = text[idx:next_job_idx if next_job_idx != -1 else idx + 2000]
+    assert "continue-on-error: true" not in block, (
+        "Job `backend-security-audit` re-añadió `continue-on-error: true`. "
+        "El contrato post-FIX-1 (2026-05-23) es: gate bloqueante porque "
+        "el baseline es limpio. Si emergió un CVE legítimo bloqueando un "
+        "PR no relacionado, opciones documentadas en el comment del job: "
+        "bump dep, `--ignore-vuln`, o re-flippear con razón + fecha de "
+        "re-revisión + actualizar este test."
     )
 
 
