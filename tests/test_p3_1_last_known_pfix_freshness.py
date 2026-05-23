@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 16)  # P3-WATER-TRACKER 2026-05-16: card "Mi Nevera" del Dashboard reemplazado por tracker de hidratacion (8 vasos, reset a medianoche local). Tabla water_intake_log (RLS) + endpoints GET/POST /api/plans/water-intake (sin costo LLM → get_verified_user_id + rate limiter 60/60s) + componente WaterTracker.jsx con persistencia optimistic UI. Misma fecha bundle: P2-STAPLE-DIVERSITY + 5 sibling fixes (quality push, ver memoria).
+_PFIX_DATE_FLOOR = date(2026, 5, 23)  # P0-PROD-AUDIT-1 2026-05-23: cierre del bundle de 5 gaps B-P0 del audit production-readiness 2026-05-23. Añadidos: Dockerfile multistage + .dockerignore (B-P0-1), test blanket de auth coverage por endpoint con allowlists explícitas (B-P0-2), job pip-audit en CI non-blocking + job backend-docker-build (B-P0-3), runbook migration_rollback.md con SOP de 3 escenarios + pre-flight checklist (B-P0-4), script scripts/load_test_db_pool.py + runbook db_pool_load_test.md (B-P0-5). Tests: test_p0_prod_audit_{1..5}_*.py. Runbooks: docs/runbooks/{dockerfile_deployment,endpoint_auth_coverage,migration_rollback,db_pool_load_test}.md. Cierra el set de gaps P0 backend del audit 2026-05-23.
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

@@ -117,6 +117,105 @@ jobs:
         # transformación que pasan vitest pero rompen prod.
         run: npm run build
 
+  # [P0-PROD-AUDIT-1 · 2026-05-23] Audit de CVEs en `requirements.txt`.
+  #
+  # Pre-fix: ningún gate de CI ejecutaba `pip-audit` (o `safety check`,
+  # `osv-scanner`, etc.) contra el requirements.txt. La auditoría de
+  # producción 2026-05-23 flageó este gap como B-P0-3: deps de 2024
+  # (`langchain==1.2.18`, `langgraph==1.1.10`, `psycopg==3.3.4`) sin
+  # validación regular contra el GitHub Advisory Database. Riesgo: RCE/DoS
+  # silencioso si emerge un CVE en una dep que ya está en producción.
+  #
+  # Estrategia: `pip-audit` con `continue-on-error: true` inicialmente
+  # (mismo pattern que `frontend-lint`). Razón: el primer run probablemente
+  # encuentra varios warnings históricos; bloquear el merge sobre baseline
+  # paraliza todo. Job ejecuta y reporta status visible en GitHub UI,
+  # pero NO bloquea merge.
+  #
+  # Roadmap: tras 1-2 sprints de cleanup (bump de deps afectadas o
+  # `--ignore-vuln <ID>` documentado per-CVE), flippear a `continue-on-error:
+  # false` para convertirlo en gate bloqueante real.
+  #
+  # Knob de tuning si pip-audit es muy lento: `--cache-dir /tmp/pip-audit`.
+  # Output JSON consumible por dashboards: `--format json -o audit.json`.
+  backend-security-audit:
+    name: Backend pip-audit (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit
+
+      - name: Run pip-audit
+        working-directory: backend
+        # `--disable-pip` evita que pip-audit haga `pip install` real
+        # (más rápido + más seguro en CI). Resuelve solo el árbol de deps
+        # declarado.
+        # `--strict` falla con código distinto a 0 si encuentra vulnerabilidad
+        # — el continue-on-error: true del job lo absorbe sin bloquear merge,
+        # pero el status check sigue visible en rojo.
+        run: |
+          pip-audit -r requirements.txt --disable-pip --strict
+
+  # [P0-PROD-AUDIT-1 · 2026-05-23] Validar que el `Dockerfile` builde.
+  #
+  # Pre-fix: el Dockerfile podía regresionar (e.g. RUN pip install fallando
+  # por falta de libpq-dev tras un cambio en el builder stage) y el gap
+  # solo se detectaba en el deploy a EasyPanel. Costo: rollback manual +
+  # diagnóstico sin telemetría del build local.
+  #
+  # Estrategia: BuildKit cache + `--target builder` no se usa (queremos
+  # validar también el stage runtime). Tiempo esperado: ~90s en runner
+  # standard con cache calentado, ~180s cold.
+  #
+  # Gate bloqueante: si el Dockerfile NO buildea, NO se debería poder
+  # mergear — eso es un break de la convención reproducibility de
+  # P0-PROD-AUDIT-1.
+  backend-docker-build:
+    name: Backend Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build (multi-stage) and validate
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          push: false
+          load: true
+          tags: mealfit-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image metadata
+        # Sanity: la imagen final corre como non-root (uid 10001) + tiene
+        # HEALTHCHECK + entrypoint usa dumb-init. Si alguien borra estas
+        # invariantes del Dockerfile, este step falla loud.
+        run: |
+          docker inspect mealfit-backend:ci \
+            --format='User: {{.Config.User}}{{"\n"}}Entrypoint: {{.Config.Entrypoint}}{{"\n"}}Healthcheck: {{.Config.Healthcheck.Test}}'
+          docker inspect mealfit-backend:ci --format='{{.Config.User}}' | grep -q '^appuser$\|^10001$' || (echo "❌ Image NO corre como non-root user" && exit 1)
+          docker inspect mealfit-backend:ci --format='{{.Config.Healthcheck.Test}}' | grep -q 'health' || (echo "❌ HEALTHCHECK ausente o roto" && exit 1)
+
   # [P2-LIVE-1 · 2026-05-12] Lint job no-bloqueante.
   #
   # Estado al introducir el gate: 245 errores eslint + 13 warnings pre-existentes

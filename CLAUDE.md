@@ -363,3 +363,19 @@ Endpoint admin [`POST /api/system/admin/deploy-lag/check`](backend/routers/syste
 
 **Tabla canónica completa de ~32 `alert_key`** (productor / resolver / modelo) y SOP "Cómo añadir un nuevo alert_key": [`backend/docs/system_alerts_resolution_table.md`](backend/docs/system_alerts_resolution_table.md). SOPs detallados para alerts Manual (`plan_data_corrupted:*`, `deploy_lag_drift_vs_expected` + limpieza one-shot huérfanas) en [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md). Drift detection bidireccional via [`test_p2_audit_4_alert_keys_documented.py`](backend/tests/test_p2_audit_4_alert_keys_documented.py) (parsea `backend/docs/system_alerts_resolution_table.md` + call sites en `cron_tasks.py`/`db_inventory.py`/`memory_manager.py`/`app.py`/`graph_orchestrator.py`/`routers/billing.py`).
 
+---
+
+## Production-readiness audit P0 (2026-05-23)
+
+[P0-PROD-AUDIT-1 · 2026-05-23] Cierre del bundle de 5 gaps P0 del audit production-readiness. Cada gap tiene runbook operacional + test parser-based de regresión. Detalle completo: [`backend/docs/runbooks/README.md`](backend/docs/runbooks/README.md) tabla "Cuándo consultar".
+
+| Gap | Cierre | Runbook | Test |
+|---|---|---|---|
+| B-P0-1: deploy 100% dependiente de Nixpacks auto-detect | [`Dockerfile`](backend/Dockerfile) multistage + [`.dockerignore`](backend/.dockerignore) + CI job `backend-docker-build` valida non-root + HEALTHCHECK | [`dockerfile_deployment.md`](backend/docs/runbooks/dockerfile_deployment.md) | [`test_p0_prod_audit_3_dockerfile_runtime.py`](backend/tests/test_p0_prod_audit_3_dockerfile_runtime.py) |
+| B-P0-2: cobertura de auth por endpoint no auditable | Test blanket AST escanea `app.py`+`routers/*.py`, clasifica cada endpoint en `JWT_USER_SCOPED`/`ADMIN_TOKEN`/`WEBHOOK_HMAC`/`PUBLIC_INTENTIONAL`/`KNOWN_GAP`; falla loud si `UNCLASSIFIED`>0 | [`endpoint_auth_coverage.md`](backend/docs/runbooks/endpoint_auth_coverage.md) | [`test_p0_prod_audit_1_endpoint_auth_coverage.py`](backend/tests/test_p0_prod_audit_1_endpoint_auth_coverage.py) |
+| B-P0-3: sin audit CVE en `requirements.txt` | CI job `backend-security-audit` ejecuta `pip-audit --strict` (inicial non-blocking, mismo pattern que `frontend-lint`; flippear a blocking post-cleanup) | — | [`test_p0_prod_audit_4_pip_audit_ci_job.py`](backend/tests/test_p0_prod_audit_4_pip_audit_ci_job.py) |
+| B-P0-4: política "forward-only" sin SOP de rollback | Runbook con 3 escenarios canónicos (apply failure / regresión post-apply / data corruption) + pre-flight checklist + SOP de testing en branch Supabase | [`migration_rollback.md`](backend/docs/runbooks/migration_rollback.md) | [`test_p0_prod_audit_2_migration_rollback_runbook.py`](backend/tests/test_p0_prod_audit_2_migration_rollback_runbook.py) |
+| B-P0-5: 3 pools DB sin validación de saturación | Script `scripts/load_test_db_pool.py` (httpx async, p50/p95/p99 + verdict PASS/WARN/FAIL configurable via thresholds env) + runbook con SOP de tuning `MEALFIT_DB_POOL_MAX_SIZE` | [`db_pool_load_test.md`](backend/docs/runbooks/db_pool_load_test.md) | [`test_p0_prod_audit_5_load_test_script.py`](backend/tests/test_p0_prod_audit_5_load_test_script.py) |
+
+**Gaps conocidos (KNOWN-GAP- IDs)** trackeados explícitamente en [`endpoint_auth_coverage.md`](backend/docs/runbooks/endpoint_auth_coverage.md) → `KNOWN-GAP-001`: `GET /api/admin/test-proactive` sin `_verify_admin_token` (push spam, no IDOR; follow-up trivial).
+

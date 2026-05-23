@@ -18,6 +18,10 @@ la IA.
 | Limpieza one-shot de alerts huérfanas pre-deploy | [system_alerts_sops.md § Limpieza](system_alerts_sops.md#limpieza-one-shot-de-alerts-huérfanas) |
 | Circuit breaker LLM stale (fila `is_open=true` por >24h, modelo OFF) | [llm_circuit_breaker_kv_lifecycle.md](llm_circuit_breaker_kv_lifecycle.md) |
 | Reset manual de una fila `llm_circuit_breaker:<model>` | [llm_circuit_breaker_kv_lifecycle.md § SOP-2](llm_circuit_breaker_kv_lifecycle.md#sop-2-forzar-reset-manual-de-una-fila-cb) |
+| Migración Supabase falló durante apply / regresión post-apply / data corruption | [migration_rollback.md](migration_rollback.md) |
+| Validar pool DB bajo carga antes de lanzamiento / diagnosticar saturación | [db_pool_load_test.md](db_pool_load_test.md) |
+| Reproducir/migrar imagen productiva (EasyPanel → Fly.io / k8s / local) | [dockerfile_deployment.md](dockerfile_deployment.md) |
+| Auditar cobertura de auth por endpoint / añadir nuevo endpoint público | [endpoint_auth_coverage.md](endpoint_auth_coverage.md) |
 
 ## Convenciones
 
