@@ -99,7 +99,20 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
     # veía picos de 403 que limpiaba con reintentos del cliente. Ahora cubrimos
     # los 5 nombres canónicos de httpx + el legacy "Server disconnected"
     # (mensaje viejo de versiones anteriores).
-    _TRANSIENT_NETWORK_ERRORS = (
+    #
+    # [P1-PROD-AUDIT-1-AUTH-RETRY · 2026-05-23] Lista hardcoded brittle:
+    #   - Substring match contra `type(e).__name__` no captura tipos custom
+    #     que httpx/supabase introduzcan a futuro.
+    #   - Operador no puede añadir un transient error nuevo sin redeploy.
+    #
+    # Fix dual:
+    #   (a) Mantener la lista canónica de strings (para back-compat + fast path).
+    #   (b) Knob `MEALFIT_AUTH_EXTRA_TRANSIENT_ERRORS` (env var, comma-separated)
+    #       extiende la lista en runtime — operador puede añadir
+    #       `NewHttpxError` sin redeploy.
+    #   (c) Detección via `isinstance(e, BaseException)` + walk MRO con `__name__`
+    #       — robusto a re-exports / aliases / subclasses.
+    _CANONICAL_TRANSIENT_NETWORK_ERRORS = (
         "RemoteProtocolError",
         "ReadError",
         "ConnectError",
@@ -109,6 +122,15 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
         "TimeoutException",
         "Server disconnected",  # legacy httpx message
     )
+    _extra_raw = os.environ.get("MEALFIT_AUTH_EXTRA_TRANSIENT_ERRORS", "") if "os" in dir() else ""
+    # Defensive import — `os` no está en module scope de este archivo, lo
+    # leemos via env var directo. Si el env var no está, lista vacía.
+    import os as _os_auth
+    _extra_raw = _os_auth.environ.get("MEALFIT_AUTH_EXTRA_TRANSIENT_ERRORS", "")
+    _extra_transient = tuple(
+        s.strip() for s in _extra_raw.split(",") if s.strip()
+    )
+    _TRANSIENT_NETWORK_ERRORS = _CANONICAL_TRANSIENT_NETWORK_ERRORS + _extra_transient
     MAX_ATTEMPTS = 4
     for attempt in range(MAX_ATTEMPTS):
         try:
@@ -118,8 +140,14 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
         except Exception as e:
             err_str = str(e)
             err_type = type(e).__name__
+            # [P1-PROD-AUDIT-1-AUTH-RETRY · 2026-05-23] Walk MRO para captar
+            # subclases con nombre canónico (e.g. una versión futura de httpx
+            # que añada `httpx.RemoteProtocolError(ConnectError)` — detectado
+            # por el parent class name).
+            mro_names = {cls.__name__ for cls in type(e).__mro__}
             is_transient = (
                 err_type in _TRANSIENT_NETWORK_ERRORS
+                or bool(mro_names & set(_TRANSIENT_NETWORK_ERRORS))
                 or any(name in err_str for name in _TRANSIENT_NETWORK_ERRORS)
             )
             if attempt < MAX_ATTEMPTS - 1 and is_transient:

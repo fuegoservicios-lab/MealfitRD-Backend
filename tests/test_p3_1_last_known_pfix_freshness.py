@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 23)  # P0-PROD-AUDIT-1 2026-05-23: cierre del bundle de 5 gaps B-P0 del audit production-readiness 2026-05-23. Añadidos: Dockerfile multistage + .dockerignore (B-P0-1), test blanket de auth coverage por endpoint con allowlists explícitas (B-P0-2), job pip-audit en CI non-blocking + job backend-docker-build (B-P0-3), runbook migration_rollback.md con SOP de 3 escenarios + pre-flight checklist (B-P0-4), script scripts/load_test_db_pool.py + runbook db_pool_load_test.md (B-P0-5). Tests: test_p0_prod_audit_{1..5}_*.py. Runbooks: docs/runbooks/{dockerfile_deployment,endpoint_auth_coverage,migration_rollback,db_pool_load_test}.md. Cierra el set de gaps P0 backend del audit 2026-05-23.
+_PFIX_DATE_FLOOR = date(2026, 5, 23)  # P1-PROD-AUDIT-1 2026-05-23: cierre del bundle de 10 gaps B-P1 del audit production-readiness 2026-05-23. Implementaciones reales (4): Sentry PII camelCase scrub (B-P1-3), lock_timeout strict knob (B-P1-10), JWT retry knob + MRO walk (B-P1-9), cron correlation_id wrapping en _add_job_jittered (B-P1-2). Guardrails parser-based (4): monolith size cap (B-P1-1), bare-except observable signal en startup (B-P1-4), migrations idempotency (B-P1-8), telemetry buffer cleanup (B-P1-6). Decision-deferred docs (2): pipeline timeout 720s justification (B-P1-5), coverage gate deferred to >500 MAU (B-P1-7). Tests: test_p1_prod_audit_{1..10}_*.py. Sigue al cierre B-P0 del mismo día.
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

@@ -379,3 +379,30 @@ Endpoint admin [`POST /api/system/admin/deploy-lag/check`](backend/routers/syste
 
 **Gaps conocidos (KNOWN-GAP- IDs)** trackeados explícitamente en [`endpoint_auth_coverage.md`](backend/docs/runbooks/endpoint_auth_coverage.md) → `KNOWN-GAP-001`: `GET /api/admin/test-proactive` sin `_verify_admin_token` (push spam, no IDOR; follow-up trivial).
 
+### P1-PROD-AUDIT-1 (2026-05-23) — cierre 10 gaps B-P1
+
+Implementaciones reales (4):
+
+| Gap | Cierre | Test |
+|---|---|---|
+| B-P1-3 Sentry PII solo snake_case | `_normalize_key` + `_NORMALIZED_SUBSTRINGS` en [`app.py`](backend/app.py) atrapan `healthProfile`/`creditCard` (camelCase) + kebab-case | [`test_p1_prod_audit_1_sentry_pii_camelcase.py`](backend/tests/test_p1_prod_audit_1_sentry_pii_camelcase.py) |
+| B-P1-10 lock_timeout best-effort | Knob `MEALFIT_LOCK_TIMEOUT_SET_STRICT=true` default; raise RuntimeError si SET LOCAL falla en strict mode (sino logger.warning + continúa) | [`test_p1_prod_audit_3_lock_timeout_strict.py`](backend/tests/test_p1_prod_audit_3_lock_timeout_strict.py) |
+| B-P1-9 JWT retry list hardcoded | Knob `MEALFIT_AUTH_EXTRA_TRANSIENT_ERRORS` (comma-separated) extiende lista canónica; walk `type(e).__mro__` para captar subclases | [`test_p1_prod_audit_2_auth_retry.py`](backend/tests/test_p1_prod_audit_2_auth_retry.py) |
+| B-P1-2 Cron sin correlation_id | `_add_job_jittered` wrappea callable con `with_correlation_id(f"cron:{job_id}:{new_correlation_id()}")` — idempotente vía marker `_mealfit_corr_wrapped` | [`test_p1_prod_audit_4_cron_correlation.py`](backend/tests/test_p1_prod_audit_4_cron_correlation.py) |
+
+Guardrails parser-based (4) — capturan regresión, NO fixean monolito:
+
+| Gap | Guardrail | Test |
+|---|---|---|
+| B-P1-1 Monolitos gigantes | Size cap por archivo (snapshot 2026-05-23 +10% margen); falla loud si excede + propone extracción | [`test_p1_prod_audit_7_monolith_size_cap.py`](backend/tests/test_p1_prod_audit_7_monolith_size_cap.py) |
+| B-P1-4 Bare-except sin logging | AST scan `app.py`: cada `except Exception:` debe tener `logger.<level>` / `raise` / marker `# [BARE-EXCEPT-EXEMPT: ...]` | [`test_p1_prod_audit_8_startup_bare_except.py`](backend/tests/test_p1_prod_audit_8_startup_bare_except.py) |
+| B-P1-8 Migrations idempotency | Escaneo `supabase/migrations/*.sql`: `CREATE TABLE|INDEX|ADD COLUMN|CONSTRAINT` requieren `IF NOT EXISTS`/`DROP IF EXISTS` previo, o marker `-- IDEMPOTENT-EXEMPT: <razón>` | [`test_p1_prod_audit_6_migrations_idempotent.py`](backend/tests/test_p1_prod_audit_6_migrations_idempotent.py) |
+| B-P1-6 Telemetry local buffers | Validar referenciados en `cron_tasks.py` + gitignored + lógica cleanup presente (knob `MEALFIT_*_BUFFER_MAX_*` o tail-keep) | [`test_p1_prod_audit_9_telemetry_buffer.py`](backend/tests/test_p1_prod_audit_9_telemetry_buffer.py) |
+
+Decision-deferred docs (2) — el audit external malinterpretó decisiones operacionales documentadas:
+
+| Gap | Decisión | Test |
+|---|---|---|
+| B-P1-5 Pipeline timeout 720s | Bajar a 600s rompe retry budget (MIN_RETRY_BUDGET_S+RETRY_SAFETY_MARGIN_S+HEDGE=385s threshold). 720s es trade-off documentado en graph_orchestrator.py:244-255. CB cubre Gemini down. Knob para SLA <10min sin redeploy | [`test_p1_prod_audit_5_pipeline_timeout_decision.py`](backend/tests/test_p1_prod_audit_5_pipeline_timeout_decision.py) |
+| B-P1-7 Coverage `fail_under` | Decisión MVP <100 MAU documentada en `.coveragerc`. Activar a >500 MAU con baseline medido. Patrón análogo a `P3-I18N-DEFERRED` | [`test_p1_prod_audit_10_coverage_decision.py`](backend/tests/test_p1_prod_audit_10_coverage_decision.py) |
+

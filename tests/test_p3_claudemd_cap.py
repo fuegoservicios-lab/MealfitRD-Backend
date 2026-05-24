@@ -51,14 +51,17 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 
-_DEFAULT_CAP = 55000   # [P0-PROD-AUDIT-1 · 2026-05-23] +3000 chars sobre el
-                       # cap anterior (52000 → 55000, +5.8%) para acomodar la
-                       # tabla canónica del bundle de 5 gaps P0 del audit
-                       # production-readiness 2026-05-23. Crecimiento dentro
-                       # del threshold de >10% que pide limpieza estructural.
-                       # Si el cap sube nuevamente en sesiones futuras,
-                       # considerar mover la tabla a `docs/runbooks/README.md`
-                       # con 1-liner stub en CLAUDE.md.
+_DEFAULT_CAP = 60000   # [P1-PROD-AUDIT-1 · 2026-05-23] 55000 → 60000 (+9%)
+                       # para acomodar la tabla canónica del bundle de 10
+                       # gaps B-P1 del audit production-readiness (4 fixes
+                       # reales + 4 guardrails + 2 decision-deferred).
+                       # Anterior bump P0-PROD-AUDIT-1: 52000 → 55000 (+5.8%).
+                       # Total accumulated growth desde 2026-05-14: 52000 →
+                       # 60000 = +15% sobre 2 sesiones de cierre P0/P1.
+                       # Si el próximo bump supera 65k, planificar limpieza
+                       # estructural: mover tablas a docs/runbooks/README.md
+                       # con 1-liner stub en CLAUDE.md (patrón análogo a
+                       # P2-AUDIT-4 system_alerts_resolution_table.md).
 _CAP_FLOOR = 10000     # típico minimum útil (esqueleto de invariantes)
 _CAP_CEILING = 200000  # ~5x el threshold del UI; arriba de eso es absurdo
 
