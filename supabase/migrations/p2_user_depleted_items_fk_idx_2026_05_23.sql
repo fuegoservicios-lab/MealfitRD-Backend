@@ -23,14 +23,19 @@
 --   vuelve dominante en latencia de operaciones sobre `master_ingredients`.
 --
 -- ─────────────────────────────────────────────────────────────────────────
--- POR QUÉ NO VA EN LA TABLA DE "ADVISORS ACEPTADOS"
+-- CICLO DEL ADVISOR (pre-fix vs post-fix)
 -- ─────────────────────────────────────────────────────────────────────────
 --
--- Los otros 5 `unused_index` listados como aceptados en CLAUDE.md cubren
--- el caso INVERSO: índices existentes que el advisor cataloga como
--- "unused" porque no observa uso interno por FK CASCADE. Acá es lo
--- contrario: el advisor reporta `unindexed_foreign_keys` — el índice
--- legítimamente NO existe y debe crearse, no aceptarse.
+-- Pre-migración: advisor reporta `unindexed_foreign_keys` (vector arriba).
+-- Post-migración: el índice existe pero el advisor lo reporta como
+-- `unused_index` porque PostgreSQL aún no observa scans (tabla joven,
+-- ningún DELETE sobre master_ingredients todavía). Este es exactamente
+-- el mismo modo de fallo del advisor `unused_index` que afecta a los
+-- otros 5 índices documentados en CLAUDE.md "Advisors aceptados →
+-- Performance": el advisor NO observa uso interno por FK. Por eso, una
+-- vez aplicado, este índice TAMBIÉN se documenta en esa tabla — su lugar
+-- correcto post-apply es bajo el rationale "cubre FK, advisor ciego al
+-- uso interno". El COMMENT abajo refleja esta dualidad.
 --
 -- ─────────────────────────────────────────────────────────────────────────
 -- IDEMPOTENCIA
@@ -50,9 +55,11 @@ COMMENT ON INDEX public.idx_user_depleted_items_master_ingredient_id IS
     'user_depleted_items_master_ingredient_id_fkey (ON DELETE SET NULL '
     'desde master_ingredients). Partial WHERE master_ingredient_id IS NOT NULL '
     'porque las filas con master_id NULL (items manuales sin canonicalizar) '
-    'no participan del CASCADE. Cierra advisor unindexed_foreign_keys del '
-    'audit production-readiness 2026-05-23. NO confundir con los 5 '
-    'unused_index aceptados en CLAUDE.md — esos cubren el caso inverso.';
+    'no participan del CASCADE. Pre-fix cerraba advisor unindexed_foreign_keys; '
+    'post-fix aparece como unused_index (advisor ciego al uso interno por FK) '
+    '— mismo modo de fallo que los 5 unused_index aceptados en CLAUDE.md '
+    'sección "Advisors aceptados → Performance". Lección P2-PERF-1: '
+    'NO dropear basado solo en el advisor.';
 
 -- Sanity check post-apply.
 DO $$
