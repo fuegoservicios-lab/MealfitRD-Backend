@@ -502,7 +502,7 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
             )
             if connection_pool:
                 query = (
-                    f"SELECT {_COLUMNS} FROM consumed_meals "
+                    f"SELECT {_COLUMNS} FROM consumed_meals "  # noqa: S608 [P2-PROD-AUDIT-1] _COLUMNS es constante local
                     "WHERE user_id = %s AND consumed_at >= %s AND consumed_at < %s"
                 )
                 res = execute_sql_query(query, (user_id, start_str, end_str), fetch_all=True)
@@ -537,7 +537,7 @@ def get_consumed_meals_since(user_id: str, since_iso_date: str):
     try:
         if connection_pool:
             query = (
-                f"SELECT {_COLUMNS} FROM consumed_meals "
+                f"SELECT {_COLUMNS} FROM consumed_meals "  # noqa: S608 [P2-PROD-AUDIT-1] _COLUMNS es constante local
                 "WHERE user_id = %s AND consumed_at >= %s"
             )
             res = execute_sql_query(query, (user_id, since_iso_date), fetch_all=True)

@@ -250,6 +250,10 @@ def list_recent_audit_backups(
     params.append(limit)
 
     try:
+        # [P2-PROD-AUDIT-1-SQL-FSTRING-NOQA] `where` se construye desde
+        # lista `conditions` con fragments parametrizados (`"col = %s"`).
+        # UUIDs validados con `_uuid.UUID(...)` antes de append. params
+        # tuple separada → safe.
         rows = execute_sql_query(
             f"""
             SELECT id, meal_plan_id, user_id, action, actor, note, created_at
@@ -257,7 +261,7 @@ def list_recent_audit_backups(
               {where}
              ORDER BY created_at DESC
              LIMIT %s
-            """,
+            """,  # noqa: S608
             tuple(params),
             fetch_all=True,
         )

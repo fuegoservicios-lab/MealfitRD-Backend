@@ -22,6 +22,7 @@ la IA.
 | Validar pool DB bajo carga antes de lanzamiento / diagnosticar saturación | [db_pool_load_test.md](db_pool_load_test.md) |
 | Reproducir/migrar imagen productiva (EasyPanel → Fly.io / k8s / local) | [dockerfile_deployment.md](dockerfile_deployment.md) |
 | Auditar cobertura de auth por endpoint / añadir nuevo endpoint público | [endpoint_auth_coverage.md](endpoint_auth_coverage.md) |
+| Diagnosticar "cache devuelve stale" / SOP de invalidación manual Redis | [cache_invalidation_policy.md](cache_invalidation_policy.md) |
 
 ## Convenciones
 

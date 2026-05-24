@@ -812,7 +812,11 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
             vals.append(v)
     placeholders = ", ".join(["%s"] * len(cols))
     col_str = ", ".join(cols)
-    sql = f"INSERT INTO meal_plans ({col_str}) VALUES ({placeholders})"
+    # [P2-PROD-AUDIT-1-SQL-FSTRING-NOQA] cols viene de `data.keys()` con
+    # data construido server-side (NUNCA user-controlled — frontend tiene
+    # prohibido escribir directo a meal_plans por convención I6 + test
+    # blanket P1-NEW-A). placeholders son %s parametrizados. Safe.
+    sql = f"INSERT INTO meal_plans ({col_str}) VALUES ({placeholders})"  # noqa: S608
     if with_returning:
         sql += " RETURNING id"
     return sql, vals

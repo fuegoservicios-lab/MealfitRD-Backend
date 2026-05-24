@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 23)  # P1-PROD-AUDIT-1 2026-05-23: cierre del bundle de 10 gaps B-P1 del audit production-readiness 2026-05-23. Implementaciones reales (4): Sentry PII camelCase scrub (B-P1-3), lock_timeout strict knob (B-P1-10), JWT retry knob + MRO walk (B-P1-9), cron correlation_id wrapping en _add_job_jittered (B-P1-2). Guardrails parser-based (4): monolith size cap (B-P1-1), bare-except observable signal en startup (B-P1-4), migrations idempotency (B-P1-8), telemetry buffer cleanup (B-P1-6). Decision-deferred docs (2): pipeline timeout 720s justification (B-P1-5), coverage gate deferred to >500 MAU (B-P1-7). Tests: test_p1_prod_audit_{1..10}_*.py. Sigue al cierre B-P0 del mismo día.
+_PFIX_DATE_FLOOR = date(2026, 5, 23)  # P2-PROD-AUDIT-1 2026-05-23: cierre del bundle de 8 gaps B-P2 del audit production-readiness. Implementaciones reales (2): pyright 3.11→3.12 (B-P2-5), # noqa: S608 markers en 7 SQL f-strings + AST validator (B-P2-1). Helpers operacionales (2): scripts/bump_last_known_pfix.py + scripts/check_alert_keys_sync.py (B-P2-7, B-P2-8). Documentación (2): docs/runbooks/cache_invalidation_policy.md (B-P2-4) + decision-deferred db_chat grouping (B-P2-6). Tracker tests (2): db facade migration tracking (B-P2-2) + monolith cap ya cubre constants.py (B-P2-3). Tests: test_p2_prod_audit_{1..4}_*.py. Sigue al cierre P1-PROD-AUDIT-1 (2026-05-23).
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

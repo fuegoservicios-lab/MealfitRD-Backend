@@ -406,3 +406,18 @@ Decision-deferred docs (2) — el audit external malinterpretó decisiones opera
 | B-P1-5 Pipeline timeout 720s | Bajar a 600s rompe retry budget (MIN_RETRY_BUDGET_S+RETRY_SAFETY_MARGIN_S+HEDGE=385s threshold). 720s es trade-off documentado en graph_orchestrator.py:244-255. CB cubre Gemini down. Knob para SLA <10min sin redeploy | [`test_p1_prod_audit_5_pipeline_timeout_decision.py`](backend/tests/test_p1_prod_audit_5_pipeline_timeout_decision.py) |
 | B-P1-7 Coverage `fail_under` | Decisión MVP <100 MAU documentada en `.coveragerc`. Activar a >500 MAU con baseline medido. Patrón análogo a `P3-I18N-DEFERRED` | [`test_p1_prod_audit_10_coverage_decision.py`](backend/tests/test_p1_prod_audit_10_coverage_decision.py) |
 
+### P2-PROD-AUDIT-1 (2026-05-23) — cierre 8 gaps B-P2
+
+Mix de fixes pequeños + helpers operacionales + runbooks + audit-corrections.
+
+| Gap | Cierre | Test/Script |
+|---|---|---|
+| B-P2-5 pyrightconfig Python 3.11 | Bump a `pythonVersion: "3.12"` matching runtime | (n/a, 1 línea) |
+| B-P2-1 f-strings SQL false positives | `# noqa: S608` markers en 7 callsites (db_chat.py × 5, db_facts.py × 2) + AST validator que enforza que interpolación es `Name` referenciando constante local | [`test_p2_prod_audit_1_sql_fstring_constants.py`](backend/tests/test_p2_prod_audit_1_sql_fstring_constants.py) |
+| B-P2-7 marker bump manual | Helper script `scripts/bump_last_known_pfix.py` valida formato + slug cross-link + fecha forward-only + actualiza app.py + test_p3_1 atómicamente | `scripts/bump_last_known_pfix.py` |
+| B-P2-8 alert keys diff manual | Helper script `scripts/check_alert_keys_sync.py` produce diff legible doc ↔ código con callsites de cada emit | `scripts/check_alert_keys_sync.py` |
+| B-P2-2 db facade migration tracking | Snapshot del count de `from db_X import` directos; falla si crece arriba del cap; ayuda a tracking progress migración boy-scout | [`test_p2_prod_audit_2_db_facade_migration.py`](backend/tests/test_p2_prod_audit_2_db_facade_migration.py) |
+| B-P2-4 cache invalidation undocumented | Runbook `cache_invalidation_policy.md` con arquitectura + TTL vs event + SOP stale + 4 vías invalidación manual (DEL/KEYS/FLUSHDB/restart) | [`test_p2_prod_audit_3_cache_policy_documented.py`](backend/tests/test_p2_prod_audit_3_cache_policy_documented.py) |
+| B-P2-3 constants.py 147KB | Ya cubierto por monolith size cap (B-P1-1 snapshot). Migración a DB-backed table queda como follow-up P3 | (cubierto por `test_p1_prod_audit_7_monolith_size_cap.py`) |
+| B-P2-6 N+1 en db_chat | Audit external malinterpretó — código usa batch IN clause + Python grouping (1 query, no N+1). Test ancla el patrón correcto + detecta regresión a N+1 real | [`test_p2_prod_audit_4_db_chat_grouping_decision.py`](backend/tests/test_p2_prod_audit_4_db_chat_grouping_decision.py) |
+
