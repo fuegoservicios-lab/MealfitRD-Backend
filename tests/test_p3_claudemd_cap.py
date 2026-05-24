@@ -51,7 +51,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 
-_DEFAULT_CAP = 52000
+_DEFAULT_CAP = 53000  # [P1-HISTORY-ABORT · 2026-05-23] +1k para P2-USER-DEPLETED-ITEMS-FK-IDX row (~225 chars) + advisor entries. Bump 1.9%, bajo el threshold 10% que dispara limpieza estructural.
 _CAP_FLOOR = 10000     # típico minimum útil (esqueleto de invariantes)
 _CAP_CEILING = 200000  # ~5x el threshold del UI; arriba de eso es absurdo
 

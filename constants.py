@@ -1951,14 +1951,23 @@ def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base
     if req_unit == 'unidad' and dispo_unit == 'ml' and density and unit_weight: return (req_qty * unit_weight) / density
     return None
 
-def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30) -> bool | str:
+def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingredients: list, strict_quantities: bool = True, tolerance: float = 1.30, allow_external_count: int = 0) -> bool | str:
     """
     Función guardrail estricta y matemática. Comprueba:
     1. Que todos los ingredientes generados estén en la despensa.
     2. (Si strict_quantities=True) Que las CANTIDADES generadas no superen el Ledger de la despensa.
-    
-    En modo rotación (strict_quantities=False), solo se valida #1 (existencia), 
+
+    En modo rotación (strict_quantities=False), solo se valida #1 (existencia),
     ya que el LLM redistribuye las mismas macros con proporciones distintas.
+
+    [P2-SWAP-CONSISTENCY · 2026-05-22] `allow_external_count` (default 0):
+    permite hasta N ingredientes "unauthorized" (= no encontrados en pantry,
+    ni por substring ni por vector cosine match) sin abortar. Sirve para
+    swap_reason ∈ {cravings, weekend} donde el user quiere un antojo /
+    plato festivo y el sistema permite 1-2 compras externas pequeñas.
+    NO relaja `over_limit` (cantidades excedidas siguen forzando retry —
+    esas son problema cuantitativo distinto a "ingrediente nuevo").
+    Tooltip-anchor: P2-SWAP-CONSISTENCY-ALLOW-EXTERNAL.
     """
     if not pantry_ingredients:
         logger.debug("⚠️ [PANTRY GUARD] Lista de despensa vacía — guardrail desactivado.")
@@ -1973,12 +1982,45 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
     pantry_ledger = {}
     pantry_bases = set()
     
-    # Regex para extraer peso de contenedor embebido en el display string
-    # Ejemplos: "1 Paquete (500g)" → 500g, "1 Pote (16 oz)" → 16 oz, "1 Cartón (250ml)" → 250ml
+    # [P3-PANTRY-GUARD-UNICODE-FRACTIONS · 2026-05-23] Caso real verificado
+    # log 2026-05-23 00:58-01:01: el aggregator emite display strings con
+    # fracciones Unicode tipo "1 paquete (½ lb) de Queso blanco". El regex
+    # pre-fix solo capturaba `\d+` → `½` no matcheaba → cae al fallback
+    # UNIT_WEIGHTS que no tiene "Queso blanco" → conversion devuelve
+    # default conservador (~5g) → rechazo over_limit por 100g (incluso
+    # 65g) cuando el user tiene ½ lb = 227g.
+    #
+    # Fix: extender el regex para capturar fracciones Unicode + helper que
+    # las convierte a decimal.
     _container_weight_re = re.compile(
-        r'\((\d+(?:\.\d+)?)\s*(g|gr|kg|oz|ml|l|lb|lbs)\)',
+        r'\(([¼½¾⅓⅔⅛⅜⅝⅞⅙⅚]|\d+(?:\.\d+)?)\s*(g|gr|kg|oz|ml|l|lb|lbs)\)',
         re.IGNORECASE
     )
+    # Map de fracciones Unicode → decimal. NumeroSet del bloque Unicode
+    # "Number Forms" más comunes en es-DO (½, ¼, ¾, ⅓, ⅔ son los que el
+    # aggregator emite). Los menos comunes (eighths, sixths) los añadimos
+    # por completeness defensiva.
+    _UNICODE_FRACTION_MAP = {
+        "½": 0.5, "¼": 0.25, "¾": 0.75,
+        "⅓": 1/3, "⅔": 2/3,
+        "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875,
+        "⅙": 1/6, "⅚": 5/6,
+    }
+
+    def _parse_fraction_or_number(s: str) -> float:
+        """Parse un string que puede ser un Unicode fraction (`½`) O un
+        número decimal (`0.5` / `1.5`). Si es fraction, lookup en el map.
+        Si es número, ``float()``. Defensivo: si nada match, retorna 0.0
+        (caller hará fallback)."""
+        if not isinstance(s, str):
+            return 0.0
+        s_clean = s.strip()
+        if s_clean in _UNICODE_FRACTION_MAP:
+            return _UNICODE_FRACTION_MAP[s_clean]
+        try:
+            return float(s_clean)
+        except (ValueError, TypeError):
+            return 0.0
     
     for p in pantry_ingredients:
         norm = normalize_ingredient_for_tracking(p)
@@ -1995,10 +2037,12 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
         # Esto evita que "1 Paquete de Pan integral" se registre como 30g (1 rebanada)
         # cuando en realidad el paquete pesa 500g.
         container_match = _container_weight_re.search(p)
-        if container_match and unit in ['paquete', 'paquetes', 'pote', 'potes', 'cartón', 'carton', 
+        if container_match and unit in ['paquete', 'paquetes', 'pote', 'potes', 'cartón', 'carton',
                                          'funda', 'fundas', 'lata', 'latas', 'sobre', 'sobres',
                                          'fundita', 'funditas', 'botella', 'botellas']:
-            container_qty = float(container_match.group(1))
+            # [P3-PANTRY-GUARD-UNICODE-FRACTIONS · 2026-05-23] Acepta
+            # tanto decimales ("0.5") como fracciones Unicode ("½").
+            container_qty = _parse_fraction_or_number(container_match.group(1))
             container_unit = container_match.group(2).lower()
             # El peso total = cantidad de contenedores × peso por contenedor
             real_weight = qty * container_qty
@@ -2151,13 +2195,24 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                     if not converted:
                         logger.debug(f"⚠️ [PANTRY GUARD] Unidades asintóticas TOTALMENTE irresolubles para {gen_name} (req: {gen_base_unit}). Aprobación flexible.")
             
+    # [P2-SWAP-CONSISTENCY · 2026-05-22] Si el caller permite ingredientes
+    # externos (cravings/weekend), consume `unauthorized` hasta el cap;
+    # `over_limit` permanece intocado (cantidades excedidas siempre fallan).
+    if allow_external_count > 0 and unauthorized and len(unauthorized) <= allow_external_count:
+        logger.info(
+            f"📦 [PANTRY GUARD] {len(unauthorized)} ingredientes externos "
+            f"permitidos (allow_external_count={allow_external_count}): "
+            f"{unauthorized}. swap_reason probablemente cravings/weekend."
+        )
+        unauthorized = []
+
     if unauthorized or over_limit:
         error_msg = "ERRORES DE DESPENSA HALLADOS OBLIGANDO A CORREGIR:\n"
         if unauthorized:
             error_msg += f"- Ingredientes COMPLETAMENTE INEXISTENTES en inventario: {', '.join(unauthorized)}.\n"
         if over_limit:
             error_msg += f"- Excediste tus CANTIDADES (Tu inventario restringe esto matemáticamente): {', '.join(over_limit)}.\n"
-            
+
         error_msg += "Corrige tu respuesta bajando las porciones estrictamente numéricas al límite exacto, O eliminando/sustituyendo ingredientes."
         logger.warning(f"🚨 [PANTRY GUARD] RECHAZO | unauthorized={len(unauthorized)} | over_limit={len(over_limit)}")
         return error_msg

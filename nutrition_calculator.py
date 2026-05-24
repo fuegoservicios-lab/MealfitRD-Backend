@@ -113,11 +113,11 @@ def calculate_macros(target_calories: int, goal: str) -> dict:
     - Grasas: 9 cal/g
     """
     split = MACRO_SPLITS.get(goal, MACRO_SPLITS["maintenance"])
-    
+
     protein_cals = target_calories * split["protein_pct"]
     carbs_cals = target_calories * split["carbs_pct"]
     fats_cals = target_calories * split["fats_pct"]
-    
+
     return {
         "protein_g": round(protein_cals / 4),
         "carbs_g": round(carbs_cals / 4),
@@ -126,6 +126,566 @@ def calculate_macros(target_calories: int, goal: str) -> dict:
         "carbs_str": f"{round(carbs_cals / 4)}g",
         "fats_str": f"{round(fats_cals / 9)}g",
     }
+
+
+# ============================================================
+# [P1-SWAP-MACROS · 2026-05-22] Validador post-gen de macros del meal
+# generado por LLM en swap/modify vs los targets del slot original.
+# Cierra el gap del audit "Cambiar Plato": pre-fix el prompt solo inyectaba
+# `target_calories` como hint soft, sin re-validación → drift arbitrario
+# permitido (ej. target 350kcal/15g protein → LLM emite 450kcal/8g sin queja).
+# ============================================================
+
+def _meal_macros_tolerance_pct() -> float:
+    """Knob `MEALFIT_SWAP_MACROS_TOLERANCE_PCT` (default 0.15, clamp [0.05, 0.50]).
+    Tolerancia per-meal en swap/modify. 15% es sweet-spot empírico:
+    - Más estricto que plan-completo (que tiene compensación entre meals).
+    - Más laxo que zero-drift (LLMs varían naturalmente ±5-15% en estimaciones
+      cuando porcionan a ojo sin pesos exactos).
+    Tooltip-anchor: P1-SWAP-MACROS-TOLERANCE-KNOB.
+    """
+    import os
+    try:
+        v = float(os.environ.get("MEALFIT_SWAP_MACROS_TOLERANCE_PCT", "0.15"))
+    except (TypeError, ValueError):
+        return 0.15
+    return max(0.05, min(0.50, v))
+
+
+def _meal_macros_validate_enabled() -> bool:
+    """Kill switch `MEALFIT_SWAP_MACROS_VALIDATE` (default True). Si False, el
+    swap/modify retorna lo que el LLM emita sin validar macros (legacy pre-fix).
+    Flip a False sin redeploy si la validación introduce demasiados retries.
+    Tooltip-anchor: P1-SWAP-MACROS-KILL-SWITCH.
+    """
+    import os
+    return os.environ.get("MEALFIT_SWAP_MACROS_VALIDATE", "true").lower() != "false"
+
+
+def validate_meal_macros_against_targets(
+    meal_macros: dict,
+    target_macros: dict,
+    tolerance_pct: float | None = None,
+) -> tuple:
+    """[P1-SWAP-MACROS · 2026-05-22] Compara los macros del meal generado por
+    LLM contra los targets del slot original.
+
+    Llamado en `agent.py::swap_meal` y `tools.py::execute_modify_single_meal`
+    dentro del retry loop tenacity (idéntico patrón a
+    `validate_ingredients_against_pantry`): si falla, inyectamos el `summary`
+    al próximo prompt + raise ValueError para forzar tenacity retry.
+
+    Args:
+        meal_macros: salida del LLM (MealModel.model_dump()) con keys
+            ``cals``/``protein``/``carbs``/``fats``. Acepta aliases comunes
+            (``calories``/``protein_g``/``fat``/etc.).
+        target_macros: shape similar. Si una key falta o es 0 → SKIP enforce
+            sobre ese macro (no se puede validar drift sobre target indefinido).
+        tolerance_pct: 0..1; ``None`` → knob (default 0.15).
+
+    Returns:
+        ``(passed, drifts, summary)``:
+            * passed (bool): True si TODOS los macros con target válido están
+              dentro de la tolerancia.
+            * drifts (dict): ``{macro_key: {actual, target, delta_pct}}`` por
+              cada macro evaluado (incluso los que pasaron — útil para
+              telemetría).
+            * summary (str): mensaje legible para inyectar al retry prompt
+              del LLM (vacío string si passed=True).
+
+    Reglas:
+        - Target ``None``/``0`` → key se omite (no se puede validar drift sobre 0).
+        - Actual ``None`` → se trata como 0 (drift 100% del target).
+        - ``cals`` tiene tolerancia 1.5× la base (kcal varían más por side
+          dishes y porciones; protein/carbs/fats responden a ingredientes).
+
+    Tooltip-anchor: P1-SWAP-MACROS-VALIDATOR | test_p1_swap_macros_validate
+    """
+    if tolerance_pct is None:
+        tolerance_pct = _meal_macros_tolerance_pct()
+    try:
+        tolerance_pct = max(0.0, min(1.0, float(tolerance_pct or 0.0)))
+    except (TypeError, ValueError):
+        tolerance_pct = 0.15
+
+    def _get(d: dict, *keys, default=0):
+        if not isinstance(d, dict):
+            return default
+        for k in keys:
+            v = d.get(k)
+            if v is not None:
+                return v
+        return default
+
+    actual = {
+        "cals":    _get(meal_macros, "cals", "calories"),
+        "protein": _get(meal_macros, "protein", "protein_g"),
+        "carbs":   _get(meal_macros, "carbs", "carbs_g"),
+        "fats":    _get(meal_macros, "fats", "fat", "fats_g"),
+    }
+    target = {
+        "cals":    _get(target_macros, "cals", "calories", "target_calories"),
+        "protein": _get(target_macros, "protein", "protein_g", "target_protein"),
+        "carbs":   _get(target_macros, "carbs", "carbs_g", "target_carbs"),
+        "fats":    _get(target_macros, "fats", "fat", "fats_g", "target_fats"),
+    }
+
+    drifts: dict = {}
+    failures: list = []
+    cals_tolerance = min(1.0, tolerance_pct * 1.5)
+
+    for key in ("cals", "protein", "carbs", "fats"):
+        try:
+            t = float(target.get(key) or 0)
+            a = float(actual.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if t <= 0:
+            continue  # target indefinido → no se enforce
+        delta_pct = abs(a - t) / t
+        drifts[key] = {
+            "actual": round(a, 1),
+            "target": round(t, 1),
+            "delta_pct": round(delta_pct, 3),
+        }
+        tol_for_key = cals_tolerance if key == "cals" else tolerance_pct
+        if delta_pct > tol_for_key:
+            unit = "kcal" if key == "cals" else "g"
+            failures.append(
+                f"{key}={int(round(a))}{unit} (target ~{int(round(t))}{unit}, "
+                f"drift {int(round(delta_pct * 100))}% > {int(round(tol_for_key * 100))}%)"
+            )
+
+    if not failures:
+        return (True, drifts, "")
+    summary = (
+        "⚠️ MACROS FUERA DE OBJETIVO: " + " | ".join(failures) +
+        ". Reformula el plato preservando ingredientes pero ajusta porciones "
+        "para acercarte a los objetivos."
+    )
+    return (False, drifts, summary)
+
+
+# ============================================================
+# [P1-SWAP-RECIPE-COHERENCE · 2026-05-22] Mini-coherence check per-meal
+# sobre la salida LLM del swap/modify. Cierra el gap user-facing dejado
+# documentado en el bundle P1-SWAP-MACROS — la escalación coherence
+# inline (P1-SWAP-COHERENCE-ESCALATE) cubre el surface #2 (plan-gen
+# swap-to-best) PERO el "Cambiar Plato" del UI usa surface #4
+# (/recalculate-shopping-list) que es síncrono y NO bloquea. Este check
+# corre ANTES del retorno de swap_meal/execute_modify_single_meal, así
+# que un cap_swallowed_modifier severo (receta dice "el pollo" pero
+# ingredients=["pavo"]) gatea el retry tenacity sin que el plato roto
+# salga jamás del backend.
+# ============================================================
+
+def _swap_recipe_coherence_enabled() -> bool:
+    """Kill switch `MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE` (default True).
+    Mirror de `_meal_macros_validate_enabled`. Flip a False si introduce
+    demasiados retries en prod o falsos positivos por sinónimos no
+    canonicalizados. Tooltip-anchor: P1-SWAP-RECIPE-COHERENCE-KILL-SWITCH.
+    """
+    import os
+    return os.environ.get("MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE", "true").lower() != "false"
+
+
+# [P3-SWAP-COHERENCE-MULTI-CAT · 2026-05-22] Pre-fix el validator solo
+# cubría proteínas. Caso real verificado log 2026-05-22 23:04: el LLM
+# fallaba mencionando un alias proteína no listado. Pero el mismo modo
+# de fallo aplica a CARBS (recipe dice "papa" + ingredients=["arroz"])
+# y VEGGIES (recipe dice "aguacate" + ingredients=["lechuga"]). Frutas
+# se mantienen opt-in (default False) — su impacto user-facing es menor
+# y tienen mayor potencial de FP en recetas que las mencionan como
+# decoración o salsa sin querer convertirlas en compra obligatoria.
+def _recipe_coherence_active_categories() -> list:
+    """Devuelve lista de tuples ``(category_name_es, synonyms_dict)``
+    para las categorías habilitadas vía knobs. Si ``constants`` no es
+    importable, solo protein cae al fallback minimalista; las otras
+    categorías se skipean con WARN (no romper hot path por dep faltante).
+
+    Knobs (todos opt-out / opt-in independientes):
+      - ``MEALFIT_SWAP_RECIPE_COHERENCE_PROTEIN`` default True
+      - ``MEALFIT_SWAP_RECIPE_COHERENCE_CARB`` default True
+      - ``MEALFIT_SWAP_RECIPE_COHERENCE_VEGGIE`` default True
+      - ``MEALFIT_SWAP_RECIPE_COHERENCE_FRUIT`` default False (opt-in)
+
+    El master kill switch ``MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE`` se
+    sigue gateando arriba (en agent.py / tools.py callsites) — si OFF,
+    este helper no se invoca.
+    """
+    import os
+
+    def _enabled(env_key: str, default: str) -> bool:
+        return os.environ.get(env_key, default).lower() != "false"
+
+    categories: list = []
+
+    # --- Proteínas (legacy, default True) ---
+    if _enabled("MEALFIT_SWAP_RECIPE_COHERENCE_PROTEIN", "true"):
+        try:
+            from constants import PROTEIN_SYNONYMS
+            categories.append(("proteína", PROTEIN_SYNONYMS))
+        except Exception as _e:
+            logger.warning(
+                f"[P3-SWAP-COHERENCE-MULTI-CAT] constants.PROTEIN_SYNONYMS "
+                f"no disponible ({type(_e).__name__}); usando fallback "
+                f"minimalista. Si esto sucede en prod, revisar constants."
+            )
+            categories.append(("proteína", _FALLBACK_PROTEIN_SYNONYMS))
+
+    # --- Carbohidratos (NUEVO, default True) ---
+    if _enabled("MEALFIT_SWAP_RECIPE_COHERENCE_CARB", "true"):
+        try:
+            from constants import CARB_SYNONYMS
+            categories.append(("carbohidrato", CARB_SYNONYMS))
+        except Exception as _e:
+            logger.warning(
+                f"[P3-SWAP-COHERENCE-MULTI-CAT] constants.CARB_SYNONYMS no "
+                f"disponible ({type(_e).__name__}); categoría carb skip en "
+                f"este runtime. Set MEALFIT_SWAP_RECIPE_COHERENCE_CARB=false "
+                f"para silenciar este warning."
+            )
+
+    # --- Vegetales/grasas (NUEVO, default True) ---
+    if _enabled("MEALFIT_SWAP_RECIPE_COHERENCE_VEGGIE", "true"):
+        try:
+            from constants import VEGGIE_FAT_SYNONYMS
+            categories.append(("vegetal", VEGGIE_FAT_SYNONYMS))
+        except Exception as _e:
+            logger.warning(
+                f"[P3-SWAP-COHERENCE-MULTI-CAT] constants.VEGGIE_FAT_SYNONYMS "
+                f"no disponible ({type(_e).__name__}); categoría veggie skip."
+            )
+
+    # --- Frutas (NUEVO, default False — opt-in) ---
+    if _enabled("MEALFIT_SWAP_RECIPE_COHERENCE_FRUIT", "false"):
+        try:
+            from constants import FRUIT_SYNONYMS
+            categories.append(("fruta", FRUIT_SYNONYMS))
+        except Exception as _e:
+            logger.warning(
+                f"[P3-SWAP-COHERENCE-MULTI-CAT] constants.FRUIT_SYNONYMS "
+                f"no disponible ({type(_e).__name__}); categoría fruit skip."
+            )
+
+    return categories
+
+
+# [P1-SWAP-RECIPE-COHERENCE · 2026-05-22] Fallback minimalista para entornos
+# donde `constants.PROTEIN_SYNONYMS` no es importable (dep langchain no
+# instalada, tests aislados). Subset de las proteínas más comunes en planes
+# RD para que el validator siga teniendo SEÑAL aunque sea reducida.
+# Sincronizado a mano contra `constants.PROTEIN_SYNONYMS`; si los aliases
+# del module canónico crecen, esta lista NO se actualiza automáticamente
+# — el test `test_p1_swap_recipe_coherence_fallback_subset_of_canonical`
+# detecta drift cuando ambos son importables.
+_FALLBACK_PROTEIN_SYNONYMS = {
+    "pollo": ["pollo", "pechuga", "muslo", "alitas"],
+    "pavo": ["pavo", "pechuga de pavo"],
+    "res": ["res", "carne molida", "bistec", "filete de res"],
+    "cerdo": ["cerdo", "lomo", "pernil", "costilla", "chuleta"],
+    "pescado": ["pescado", "salmon", "tilapia", "mero", "chillo", "atun"],
+    "huevos": ["huevos", "huevo", "tortilla", "revoltillo"],
+    "camarones": ["camarones", "camaron"],
+    "queso": ["queso blanco", "queso de freir", "queso mozzarella", "ricotta", "queso fresco"],
+    "yogurt": ["yogurt", "yogur"],
+    "habichuelas": ["habichuelas", "habichuela", "frijoles"],
+    "lentejas": ["lentejas", "lenteja"],
+    "garbanzos": ["garbanzos", "garbanzo"],
+    "tofu": ["tofu", "soya"],
+}
+
+
+def _strip_accents_lower(s: str) -> str:
+    """Normaliza string para matching tolerante (acentos + case + espacios
+    múltiples). Inline para no requerir import de unicodedata en hot path
+    si el kill switch está OFF."""
+    if not isinstance(s, str):
+        return ""
+    import unicodedata
+    nfkd = unicodedata.normalize("NFKD", s)
+    out = "".join(c for c in nfkd if not unicodedata.combining(c)).lower()
+    return " ".join(out.split())
+
+
+def validate_meal_recipe_ingredients_coherence(meal: dict) -> tuple:
+    """[P1-SWAP-RECIPE-COHERENCE · 2026-05-22] Detecta el modo de fallo
+    `cap_swallowed_modifier` a nivel meal-output: la receta menciona una
+    proteína canónica (cualquier alias de `PROTEIN_SYNONYMS`) pero la lista
+    de ingredientes estructurados NO contiene ninguna versión de esa
+    proteína. Resultado pre-fix: el shopping aggregator construía lista de
+    compras sin la proteína mencionada → user veía receta con "el pollo"
+    pero su lista decía solo "200g pavo" → frustrado al cocinar.
+
+    Args:
+        meal: dict con keys `ingredients: List[str]` y `recipe: List[str]`.
+            Acepta `MealModel.model_dump()` directo.
+
+    Returns:
+        ``(passed, divergences, summary)``:
+            * passed (bool): True si NO hay divergencias críticas detectadas.
+            * divergences (dict): ``{canonical_protein: {mentioned_alias,
+              listed: False}}`` para cada proteína en receta sin alias en
+              ingredients. Vacío si passed.
+            * summary (str): mensaje para inyectar al retry prompt (vacío
+              si passed).
+
+    Scope V1:
+        - Solo PROTEÍNAS canónicas (subset de mayor impacto nutricional).
+          Carbs/veggies quedan para V2 si se observan recurrencias.
+        - Detección unidireccional: receta menciona → ingredientes no la
+          tienen. La dirección inversa (ingredients lista X pero recipe
+          no la usa) NO se valida acá — es ineficiencia menor (ingrediente
+          comprado sin usar) vs el cap-swallowed que es BUG funcional.
+        - Match por substring tras `_strip_accents_lower`. No usa stemming
+          ni lemmatización — suficiente para Spanish noun forms en recetas.
+
+    Tooltip-anchor: P1-SWAP-RECIPE-COHERENCE-VALIDATOR | test_p1_swap_recipe_coherence
+    """
+    if not isinstance(meal, dict):
+        return (True, {}, "")
+
+    ingredients = meal.get("ingredients") or []
+    recipe = meal.get("recipe") or []
+    if not ingredients or not recipe:
+        # Sin data suficiente para comparar — no falsos positivos.
+        return (True, {}, "")
+
+    # [P3-SWAP-COHERENCE-MULTI-CAT · 2026-05-22] Helper centralizado que
+    # importa lazy los 4 catálogos (PROTEIN/CARB/VEGGIE/FRUIT_SYNONYMS)
+    # gateados por sus respectivos knobs. Si no hay categorías activas
+    # (knobs todos OFF o constants no importable), retornamos passed.
+    categories = _recipe_coherence_active_categories()
+    if not categories:
+        return (True, {}, "")
+
+    recipe_text = _strip_accents_lower(" ".join(str(r) for r in recipe if r))
+    if not recipe_text:
+        return (True, {}, "")
+
+    ingredients_text = _strip_accents_lower(" | ".join(str(i) for i in ingredients if i))
+
+    divergences: dict = {}
+
+    for category_name, syn_dict in categories:
+        for canonical, aliases in syn_dict.items():
+            # Si otra categoría ya reportó este canónico (raro pero posible
+            # con catálogos solapados en futuro), respetamos el primer hit.
+            if canonical in divergences:
+                continue
+
+            # Normalizamos cada alias una sola vez; las claves del dict
+            # también pueden ser multi-palabra (e.g. "queso de freír",
+            # "plátano verde").
+            norm_aliases = [_strip_accents_lower(a) for a in aliases if a]
+            norm_aliases = [a for a in norm_aliases if len(a) >= 3]
+            if not norm_aliases:
+                continue
+
+            # ¿Algún alias aparece en la receta?
+            mentioned_alias = None
+            for a in norm_aliases:
+                # Boundary check ligero — evitamos match parcial como "res" en
+                # "estresante". Usamos espacios/puntuación a los costados.
+                if _alias_appears_as_word(a, recipe_text):
+                    mentioned_alias = a
+                    break
+            if not mentioned_alias:
+                continue
+
+            # ¿Algún alias aparece en los ingredientes estructurados?
+            listed = any(a in ingredients_text for a in norm_aliases)
+            if listed:
+                continue
+
+            divergences[canonical] = {
+                "mentioned_alias": mentioned_alias,
+                "listed": False,
+                # [P3-SWAP-COHERENCE-MULTI-CAT · 2026-05-22] Categoría
+                # añadida al sub-dict para observabilidad (log + métricas
+                # downstream). NO rompe back-compat: callers existentes
+                # (`agent.py`, `tools.py`) solo leen `mentioned_alias` y
+                # el summary. Test P3-SWAP-RETRY-COHERENCE-HINT verifica
+                # que mentioned_alias/listed sigan presentes.
+                "category": category_name,
+            }
+
+    if not divergences:
+        return (True, {}, "")
+
+    # [P3-SWAP-RETRY-COHERENCE-HINT · 2026-05-22] El summary debe incluir
+    # el ALIAS específico que el LLM mencionó en la receta (no solo el
+    # canónico). Pre-fix solo decía "la receta describe el uso de pescado"
+    # — pero el LLM había escrito "dorado", no "pescado", así que al buscar
+    # qué corregir, NO encontraba "pescado" en su receta y reintentaba con
+    # el mismo alias. Incidente verificado log 2026-05-22 23:04-23:05:
+    # 3 intentos consecutivos mencionando "dorado", todos fallidos.
+    # Post-fix: cita el alias verbatim + estructura "elige UNA opción" con
+    # rutas (a)/(b) explícitas para reducir ambigüedad.
+    # [P3-SWAP-COHERENCE-MULTI-CAT · 2026-05-22] Solo añadir el qualifier
+    # "(que cuenta como X)" cuando el alias ≠ canónico — evita ruido como
+    # "`papa` (que cuenta como papas)" donde el lector entiende que son lo
+    # mismo. El qualifier sigue load-bearing cuando alias es lejano
+    # (ej: "dorado" → "pescado").
+    def _mention_phrase(canonical: str, info: dict) -> str:
+        alias = info.get("mentioned_alias") or canonical
+        alias_norm = _strip_accents_lower(alias)
+        canon_norm = _strip_accents_lower(canonical)
+        if (
+            alias_norm == canon_norm
+            or alias_norm in canon_norm
+            or canon_norm in alias_norm
+        ):
+            return f"`{alias}`"
+        return f"`{alias}` (que cuenta como {canonical})"
+
+    mention_phrases = [
+        _mention_phrase(canonical, info)
+        for canonical, info in sorted(divergences.items())
+    ]
+    mentions_str = ", ".join(mention_phrases)
+    summary = (
+        f"⚠️ RECETA MENCIONA INGREDIENTES NO LISTADOS: en los pasos de la receta "
+        f"escribiste {mentions_str}, pero el array `ingredients` NO los contiene "
+        f"(el usuario no podrá comprarlos).\n"
+        f"CORRECCIÓN OBLIGATORIA — elige UNA opción:\n"
+        f"  (a) Añade al array `ingredients` cada alimento mencionado con cantidad "
+        f"medible (ej: '180g de pescado fresco').\n"
+        f"  (b) Reescribe los pasos de la receta SIN mencionar esos alimentos — usa "
+        f"ÚNICAMENTE los ingredientes que ya listaste."
+    )
+    return (False, divergences, summary)
+
+
+# ============================================================
+# [P2-SWAP-CONSISTENCY · 2026-05-22] Validador post-gen de prep_time del
+# meal generado por LLM cuando swap_reason='time' ("No tengo tiempo hoy").
+# Pre-fix: el prompt inyectaba el hint "< 20 min" pero NO había validador
+# que rechazara una receta de 40 min — el LLM podía ignorar el hint sin
+# consecuencias. Cierra el gap "soft-only" detectado en el audit del modal.
+# Espejo del patrón macros validator: validate → si falla, inyecta summary
+# al retry prompt + raise ValueError para que tenacity reintente.
+# ============================================================
+
+def _swap_prep_time_target_minutes() -> int:
+    """Knob `MEALFIT_SWAP_PREP_TIME_TARGET_MIN` (default 20, clamp [5, 120]).
+    Cuando swap_reason='time', el LLM debe emitir un meal con
+    ``prep_time <= N`` minutos. Si excede → tenacity retry con feedback.
+    Tooltip-anchor: P2-SWAP-PREP-TIME-TARGET-KNOB.
+    """
+    import os
+    try:
+        v = int(os.environ.get("MEALFIT_SWAP_PREP_TIME_TARGET_MIN", "20"))
+    except (TypeError, ValueError):
+        return 20
+    return max(5, min(120, v))
+
+
+def _swap_prep_time_validate_enabled() -> bool:
+    """Kill switch `MEALFIT_SWAP_PREP_TIME_VALIDATE` (default True). Flip a
+    False sin redeploy si introduce demasiados retries en prod o el parser
+    de prep_time falla en formatos inesperados. Tooltip-anchor:
+    P2-SWAP-PREP-TIME-KILL-SWITCH.
+    """
+    import os
+    return os.environ.get("MEALFIT_SWAP_PREP_TIME_VALIDATE", "true").lower() != "false"
+
+
+def _parse_prep_time_minutes(value) -> float | None:
+    """Extrae minutos del field ``prep_time`` (MealModel: str ~"15 min").
+    Acepta int/float directos (legacy). Retorna None si no se puede parsear
+    — el caller debe tratarlo como passthrough (no fallar el guard si no
+    podemos leer el valor, mejor permitir que abortar falso-positivo).
+    Tooltip-anchor: P2-SWAP-PREP-TIME-PARSE.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):  # bool antes que int (issubclass bool de int)
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if value >= 0 else None
+    try:
+        import re as _re
+        s = str(value).lower().strip()
+        # Match primer número entero o decimal. Casos: "15 min", "15-20 min",
+        # "aprox 30 minutos", "1 hora" (heurística: si dice "hora" multiplica).
+        if "hora" in s or "hr" in s or "hour" in s:
+            m = _re.search(r"(\d+(?:\.\d+)?)", s)
+            if m:
+                return float(m.group(1)) * 60.0
+        m = _re.search(r"(\d+)", s)
+        if m:
+            return float(m.group(1))
+    except Exception:
+        return None
+    return None
+
+
+def validate_meal_prep_time_against_target(
+    meal: dict,
+    target_minutes: int | None = None,
+) -> tuple:
+    """[P2-SWAP-CONSISTENCY · 2026-05-22] Compara ``meal.prep_time`` contra
+    el target (default knob 20 min). Solo se invoca cuando
+    ``swap_reason='time'``; los demás reasons NO consultan este validator.
+
+    Args:
+        meal: ``MealModel.model_dump()`` del LLM con key ``prep_time``
+            (str format "15 min" según schemas.py:14).
+        target_minutes: tope. None → knob.
+
+    Returns:
+        ``(passed, actual_min, summary)``:
+            * passed (bool): True si actual <= target, o si no se puede
+              parsear el valor (passthrough — preferimos un meal posiblemente
+              lento a un falso positivo que aborte el swap).
+            * actual_min (float | None): minutos parseados, o None.
+            * summary (str): mensaje para inyectar al retry prompt (vacío
+              si passed).
+
+    Tooltip-anchor: P2-SWAP-PREP-TIME-VALIDATOR | test_p2_swap_consistency_prep_time
+    """
+    if target_minutes is None:
+        target_minutes = _swap_prep_time_target_minutes()
+    raw = meal.get("prep_time") if isinstance(meal, dict) else None
+    actual = _parse_prep_time_minutes(raw)
+    if actual is None:
+        # Passthrough: si el LLM no emitió prep_time o el formato es exótico,
+        # NO abortamos el swap (legacy behavior). Solo enforce cuando podemos
+        # leer un número concreto.
+        return (True, None, "")
+    if actual <= float(target_minutes):
+        return (True, actual, "")
+    summary = (
+        f"⏱️ PREP_TIME FUERA DE OBJETIVO: la receta toma ~{int(round(actual))} min "
+        f"pero el usuario pidió ≤{target_minutes} min ('No tengo tiempo hoy'). "
+        f"Reformula con técnica más rápida (microondas, salteado directo, "
+        f"corte fino, sin marinar largo, ingredientes pre-cocidos)."
+    )
+    return (False, actual, summary)
+
+
+def _alias_appears_as_word(alias: str, text: str) -> bool:
+    """Substring con boundary check ligero — alias rodeado por non-letter
+    o inicio/fin de texto. Evita falsos positivos como "res" en
+    "estresante" o "ave" en "lavar". No usa regex \\b porque acentos
+    Unicode no cuentan como word-char en \\b clásico de Python."""
+    if not alias or not text:
+        return False
+    idx = 0
+    L = len(alias)
+    while True:
+        found = text.find(alias, idx)
+        if found < 0:
+            return False
+        # Verificar boundary izquierda
+        left_ok = found == 0 or not text[found - 1].isalpha()
+        # Verificar boundary derecha
+        right_idx = found + L
+        right_ok = right_idx >= len(text) or not text[right_idx].isalpha()
+        if left_ok and right_ok:
+            return True
+        idx = found + 1
 
 
 def _get_smoothed_weight_history(weight_history):

@@ -1610,6 +1610,203 @@ def _alert_failed_inventory_deductions_backlog() -> None:
         logger.error(f"[P0-5/FAILED-DEDUCT] No se pudo persistir alerta: {e}")
 
 
+# [P1-FAILED-DEDUCT-RETRY · 2026-05-22] Processor de la cola pendiente en
+# `failed_inventory_deductions`. Cierre del gap "tabla write-only" complementario
+# al cron `_alert_failed_inventory_deductions_backlog` (P0-5) que solo emitía
+# alerts pero nunca procesaba la cola — `attempts` se mantenía en 0 forever.
+#
+# Antes (verificado en BD prod 2026-05-22):
+#   3 rows acumuladas con `attempts=0`:
+#     id=1: ["mayonesa", "kétchup"]                    @ 2026-05-20 04:16
+#     id=2: ["Arroz blanco","Frijoles rojos",...]       @ 2026-05-20 22:52 (9 items)
+#     id=3: ["Avena","Semillas de chía","Mantequilla de maní"] @ 2026-05-22 06:38
+#   Todas con `reason=parse_failed_or_invalid_qty` — el chat agent emitía
+#   nombres sin cantidad y `_parse_quantity` retornaba qty=0.
+#
+# Fix #1 (P1-PANTRY-INFER en db_inventory.py) cierra el bug en el path en vivo:
+# `_infer_typical_portion` asigna porción típica antes de marcar como failed.
+# Pero las 3 rows ya acumuladas necesitan procesamiento explícito — fix #3 las
+# recupera reintentando con la misma lógica de inferencia.
+#
+# Trade-off: el processor llama `add_or_update_inventory_item` directamente
+# (NO `deduct_consumed_meal_from_inventory`) para evitar loop: si el deduct
+# función volviera a crear failed_items, generaríamos nuevas rows mientras
+# procesamos viejas → backlog inflado. Direct path corta esa cadena.
+#
+# Tooltip-anchor: P1-FAILED-DEDUCT-RETRY-PROCESSOR
+def _process_failed_inventory_deductions_queue() -> None:
+    """[P1-FAILED-DEDUCT-RETRY · 2026-05-22] Procesa filas pendientes en
+    `failed_inventory_deductions` reintentando la deducción con la
+    inferencia de porción típica (P1-PANTRY-INFER).
+
+    Knobs (registrados en `_KNOBS_REGISTRY` vía `_env_int`/`_env_bool`):
+      MEALFIT_FAILED_DEDUCTIONS_RETRY_ENABLED (default True)
+        — kill switch. Flip a False detiene el processor sin redeploy.
+      MEALFIT_FAILED_DEDUCTIONS_RETRY_INTERVAL_MIN (default 60)
+        — frecuencia del cron (clamp [15, 1440]).
+      MEALFIT_FAILED_DEDUCTIONS_RETRY_BATCH (default 50)
+        — máximo de rows por tick (clamp [1, 500]).
+      MEALFIT_FAILED_DEDUCTIONS_MAX_ATTEMPTS (default 3)
+        — tras N intentos fallidos sucesivos, DELETE como dead-letter
+          para no bloquear el cron forever.
+
+    Flow per row:
+      1. Decode `ingredients` jsonb (lista de `{item, reason, ...}`).
+      2. Para cada item con `item` string original: re-parse + invocar
+         `_infer_typical_portion` si qty=0.
+      3. Si infiere → `add_or_update_inventory_item` con `mutation_type=
+         consumption_replay` y `source=failed_deduct_retry` (marca distinta
+         del path en vivo para audits).
+      4. Si TODOS los items se procesaron OK → DELETE row.
+      5. Si alguno aún falla → UPDATE `attempts + 1`. Si attempts ≥ max →
+         DELETE como dead-letter (WARN log).
+
+    NO falla si supabase / imports no disponibles (skip silencioso).
+    """
+    enabled = _env_bool("MEALFIT_FAILED_DEDUCTIONS_RETRY_ENABLED", True)
+    if not enabled:
+        return
+
+    batch_size = _env_int("MEALFIT_FAILED_DEDUCTIONS_RETRY_BATCH", 50)
+    batch_size = max(1, min(batch_size, 500))
+    max_attempts = _env_int("MEALFIT_FAILED_DEDUCTIONS_MAX_ATTEMPTS", 3)
+    max_attempts = max(1, min(max_attempts, 20))
+
+    try:
+        from db_inventory import _infer_typical_portion, add_or_update_inventory_item
+        from shopping_calculator import _parse_quantity
+    except Exception as e:
+        logger.warning(f"[P1-FAILED-DEDUCT-RETRY] import falló (skip tick): {e!r}")
+        return
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT id, user_id, ingredients, attempts
+              FROM failed_inventory_deductions
+             WHERE attempts < %s
+             ORDER BY created_at ASC
+             LIMIT %s
+            """,
+            (int(max_attempts), int(batch_size)),
+            fetch_all=True,
+        )
+    except Exception as e:
+        logger.warning(f"[P1-FAILED-DEDUCT-RETRY] SELECT cola falló: {e}")
+        return
+
+    if not rows:
+        return
+
+    processed = 0
+    recovered = 0
+    still_failed = 0
+    dead_lettered = 0
+
+    for row in rows:
+        row_id = row.get("id")
+        user_id = row.get("user_id")
+        items_jsonb = row.get("ingredients") or []
+        current_attempts = int(row.get("attempts") or 0)
+        if not user_id or not items_jsonb:
+            # Row corrupto: incrementar attempts; eventualmente dead-letter.
+            try:
+                execute_sql_write(
+                    "UPDATE failed_inventory_deductions "
+                    "SET attempts = %s, updated_at = NOW() WHERE id = %s",
+                    (current_attempts + 1, row_id),
+                )
+            except Exception:
+                pass
+            continue
+
+        items_total = 0
+        items_succeeded = 0
+        for item_entry in items_jsonb:
+            if not isinstance(item_entry, dict):
+                continue
+            orig_item = item_entry.get("item")
+            if not orig_item or not isinstance(orig_item, str):
+                continue
+            items_total += 1
+            try:
+                qty, unit, name = _parse_quantity(orig_item)
+            except Exception:
+                continue
+            if not (name and qty > 0):
+                inferred = _infer_typical_portion(name) if name else None
+                if inferred is None:
+                    continue
+                qty, unit = inferred
+            try:
+                ok = add_or_update_inventory_item(
+                    user_id,
+                    name,
+                    -float(qty),
+                    unit,
+                    mutation_type="consumption_replay",
+                    source="failed_deduct_retry",
+                )
+                if ok is not False:
+                    items_succeeded += 1
+            except Exception:
+                # Item específico falló; otros del mismo row pueden suceder.
+                continue
+
+        processed += 1
+        all_recovered = items_total > 0 and items_succeeded == items_total
+
+        if all_recovered:
+            try:
+                execute_sql_write(
+                    "DELETE FROM failed_inventory_deductions WHERE id = %s",
+                    (row_id,),
+                )
+                recovered += 1
+            except Exception as e:
+                logger.warning(
+                    f"[P1-FAILED-DEDUCT-RETRY] DELETE row={row_id} falló: {e}"
+                )
+        else:
+            new_attempts = current_attempts + 1
+            if new_attempts >= max_attempts:
+                try:
+                    execute_sql_write(
+                        "DELETE FROM failed_inventory_deductions WHERE id = %s",
+                        (row_id,),
+                    )
+                    dead_lettered += 1
+                    logger.warning(
+                        f"[P1-FAILED-DEDUCT-RETRY] DEAD-LETTER row={row_id} "
+                        f"user={user_id} attempts={new_attempts} "
+                        f"items_recovered={items_succeeded}/{items_total}. "
+                        f"DELETE forzado para no bloquear el cron."
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"[P1-FAILED-DEDUCT-RETRY] DEAD-LETTER DELETE falló: {e}"
+                    )
+            else:
+                try:
+                    execute_sql_write(
+                        "UPDATE failed_inventory_deductions "
+                        "SET attempts = %s, updated_at = NOW() WHERE id = %s",
+                        (new_attempts, row_id),
+                    )
+                    still_failed += 1
+                except Exception as e:
+                    logger.warning(
+                        f"[P1-FAILED-DEDUCT-RETRY] UPDATE attempts row={row_id} falló: {e}"
+                    )
+
+    if processed > 0:
+        logger.info(
+            f"[P1-FAILED-DEDUCT-RETRY] tick_complete processed={processed} "
+            f"recovered={recovered} still_failed={still_failed} "
+            f"dead_lettered={dead_lettered}"
+        )
+
+
 def _alert_pdf_stale_inventory_fallback_burst() -> None:
     """[P2-SHOPPING-3 · 2026-05-14] Detecta bursts del evento
     `pdf_stale_inventory_fallback` (fetch fresh inventory falló/timeoutó
@@ -4172,6 +4369,32 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"registrado cada {_failed_deduct_interval_min} min "
             f"(threshold={_env_int('MEALFIT_FAILED_DEDUCTIONS_ALERT_THRESHOLD', 25)}, "
             f"lookback={_env_int('MEALFIT_FAILED_DEDUCTIONS_ALERT_LOOKBACK_H', 24)}h)."
+        )
+
+    # [P1-FAILED-DEDUCT-RETRY · 2026-05-22] Cron processor de la cola
+    # `failed_inventory_deductions`. Cierra el gap "tabla write-only"
+    # complementario al alert P0-5: ese solo emite warning, este reintenta
+    # la deducción con `_infer_typical_portion` (P1-PANTRY-INFER) y libera
+    # la cola. Recupera incidentes pasados además de cubrir nuevos failures.
+    _failed_deduct_retry_interval = _env_int(
+        "MEALFIT_FAILED_DEDUCTIONS_RETRY_INTERVAL_MIN", 60
+    )
+    _failed_deduct_retry_interval = max(15, min(_failed_deduct_retry_interval, 1440))
+    if not scheduler.get_job("process_failed_inventory_deductions_queue"):
+        _add_job_jittered(scheduler,
+            _process_failed_inventory_deductions_queue,
+            "interval",
+            minutes=_failed_deduct_retry_interval,
+            id="process_failed_inventory_deductions_queue",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P1-FAILED-DEDUCT-RETRY] Cron process_failed_inventory_deductions_queue "
+            f"registrado cada {_failed_deduct_retry_interval} min "
+            f"(batch={_env_int('MEALFIT_FAILED_DEDUCTIONS_RETRY_BATCH', 50)}, "
+            f"max_attempts={_env_int('MEALFIT_FAILED_DEDUCTIONS_MAX_ATTEMPTS', 3)})."
         )
 
     # [P2-SHOPPING-3 · 2026-05-14] Cron burst-detector del evento

@@ -199,8 +199,13 @@ def test_plan_model_constants_use_helpers():
 
 
 def test_plan_model_defaults_preserved():
-    """Defaults del helper deben preservar comportamiento actual:
-    Pro=gemini-3.1-pro-preview, Flash=gemini-3-flash-preview."""
+    """Defaults del helper:
+    Pro=gemini-3.1-pro-preview, Flash=gemini-3.5-flash (P1-FLASH-MODEL-GA · 2026-05-21).
+
+    [P1-FLASH-MODEL-GA] Flash default migrado de `gemini-3-flash-preview` (preview,
+    sujeto a cuota free-tier 20 RPD) a `gemini-3.5-flash` (GA, paid-tier directo).
+    Pro queda intacto porque no hay equivalente GA con la misma capacidad médica.
+    """
     src = _GO_PY.read_text(encoding="utf-8")
 
     pro_default = re.search(
@@ -214,13 +219,17 @@ def test_plan_model_defaults_preserved():
     assert pro_default is not None, "no _env_str call for MEALFIT_PRO_MODEL"
     assert flash_default is not None, "no _env_str call for MEALFIT_FLASH_MODEL"
 
-    assert pro_default.group(1) == "gemini-3.1-pro-preview", (
-        f"Default Pro model changed accidentally — got {pro_default.group(1)!r}, "
-        f"expected `gemini-3.1-pro-preview` para preservar comportamiento."
+    assert pro_default.group(1) == "gemini-3.5-flash", (
+        f"Default Pro model debe ser `gemini-3.5-flash` "
+        f"(P1-ALL-MODELS-GA · 2026-05-21) — got {pro_default.group(1)!r}. "
+        f"Decisión del owner: eliminar TODA dependencia de modelos `*-preview` "
+        f"(riesgo deprecation + free-tier caps). Rollback via env var: "
+        f"`MEALFIT_PRO_MODEL=gemini-3.1-pro-preview`."
     )
-    assert flash_default.group(1) == "gemini-3-flash-preview", (
-        f"Default Flash model changed accidentally — got {flash_default.group(1)!r}, "
-        f"expected `gemini-3-flash-preview` para preservar comportamiento."
+    assert flash_default.group(1) == "gemini-3.5-flash", (
+        f"Default Flash model debe ser `gemini-3.5-flash` (P1-FLASH-MODEL-GA · 2026-05-21) — "
+        f"got {flash_default.group(1)!r}. Si necesitas usar preview, set "
+        f"MEALFIT_FLASH_MODEL env var sin tocar el default."
     )
 
 

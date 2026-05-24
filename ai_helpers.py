@@ -32,8 +32,20 @@ from constants import (
 )
 from db import get_user_profile, update_user_health_profile, update_user_health_profile_atomic, get_user_ingredient_frequencies
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
+from knobs import _env_str  # [P3-FLASH-LITE-COST-CUT · 2026-05-21]
 
 logger = logging.getLogger(__name__)
+
+
+# [P3-FLASH-LITE-COST-CUT · 2026-05-21] Knob para overridear el modelo del
+# generador de títulos de plan sin redeploy. Pre-fix: `model="gemini-3.1-flash-lite"`
+# hardcoded en `generate_plan_title()` — viola la convención P3-PREVIEW-MODEL-KNOB
+# (todos los callsites Gemini productivos leen model ID via env var con default).
+# Default = `gemini-3.1-flash-lite` (cero cambio de comportamiento — sigue siendo lite).
+# Rollback si calidad degrada visiblemente: `MEALFIT_PLAN_TITLE_MODEL=gemini-3.5-flash`.
+# Tooltip-anchor: P3-FLASH-LITE-COST-CUT.
+def _plan_title_model_name() -> str:
+    return _env_str("MEALFIT_PLAN_TITLE_MODEL", "gemini-3.1-flash-lite")
 
 
 def generate_plan_title(plan_data: dict) -> str:
@@ -78,8 +90,9 @@ Contexto:
 
 Responde SOLO con el título, nada más."""
         
+        # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Model via knob (P3-PREVIEW-MODEL-KNOB).
         title_llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite",
+            model=_plan_title_model_name(),
             temperature=0.9,
             google_api_key=os.environ.get("GEMINI_API_KEY")
         )
@@ -814,8 +827,14 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         blocked_text += "\n\n⏱️ [INTENCIÓN DEL USUARIO]: El usuario NO TIENE TIEMPO HOY. Obligatorio: propón recetas extremadamente rápidas (menos de 20 min) y que requieran muy poca preparación."
     elif update_reason == 'similar':
         blocked_text += "\n\n🍽️ [INTENCIÓN DEL USUARIO]: El usuario ya comió algo similar recientemente. Ofrece un perfil de sabor o técnica de cocción COMPLETAMENTE DISTINTA a lo que normalmente sugiere."
-    elif update_reason == 'budget':
-        blocked_text += "\n\n💰 [INTENCIÓN DEL USUARIO]: El usuario busca opciones ECONÓMICAS. Prioriza ingredientes de muy bajo costo y alto rendimiento, evitando proteínas premium o ingredientes importados costosos."
+    # [P3-NEWPLAN-NO-BUDGET-MODAL · 2026-05-23] Branch `update_reason ==
+    # 'budget'` eliminado. La opción "Opciones económicas" del modal
+    # new-plan (Dashboard.jsx) se removió porque el comportamiento ya
+    # respeta la nevera + lista de compras por default (el frontend
+    # pasa `current_pantry_ingredients` a `/api/plans/generate`). El
+    # hint "ECONÓMICAS" era ortogonal a esa restricción real y sugería
+    # al usuario que los demás reasons NO usaban su nevera.
+    # `pantry_first` se preserva para back-compat con callers legacy.
     elif update_reason == 'pantry_first':
         if not cycle_locked:
             blocked_text += "\n\n📦 [INTENCIÓN DEL USUARIO]: El usuario quiere MAXIMIZAR EL USO DE SU INVENTARIO. Las recetas deben depender exclusivamente de ingredientes base comunes de despensa sin requerir compras exóticas."

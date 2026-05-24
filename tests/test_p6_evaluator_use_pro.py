@@ -123,9 +123,13 @@ def test_knob_registered_via_env_bool(reload_with_env):
 # 6. Constantes del módulo siguen presentes (no breaking change)
 # ===========================================================================
 def test_pro_and_flash_model_names_unchanged(reload_with_env):
+    """[P1-FLASH-MODEL-GA · 2026-05-21] Flash actualizado a `gemini-3.5-flash` (GA).
+    [P1-ALL-MODELS-GA · 2026-05-21] Pro también migrado a `gemini-3.5-flash`.
+    Decisión del owner: eliminar TODA dependencia de modelos `*-preview` por
+    riesgo deprecation + free-tier caps (incluso con billing activo)."""
     go = reload_with_env(None)
-    assert go._PRO_MODEL_NAME == "gemini-3.1-pro-preview"
-    assert go._FLASH_MODEL_NAME == "gemini-3-flash-preview"
+    assert go._PRO_MODEL_NAME == "gemini-3.5-flash"
+    assert go._FLASH_MODEL_NAME == "gemini-3.5-flash"
 
 
 # ===========================================================================

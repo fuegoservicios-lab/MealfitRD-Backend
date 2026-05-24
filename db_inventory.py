@@ -1430,6 +1430,226 @@ def _persist_failed_inventory_deductions(user_id: str, failed_items: list) -> No
         )
 
 
+# [P1-PANTRY-INFER · 2026-05-22] Tabla canónica de porciones típicas es-DO
+# por ingrediente. Cierra el gap "LLM extrae nombres del usuario sin cantidades
+# parseables" — cuando el chat agent registra una comida desde texto natural
+# ("me comí una taza de avena con chía y mantequilla de maní"), `_parse_quantity`
+# retorna `(0.0, 'cantidad necesaria', name)` para cada ingrediente porque no
+# hay dígitos al inicio del string. Pre-fix esto contaminaba
+# `failed_inventory_deductions` con `reason=parse_failed_or_invalid_qty` y la
+# nevera nunca se descontaba (3 incidentes verificados en BD prod a 2026-05-22:
+# avena/chía/maní, bandeja paisa 9 items, mayonesa/kétchup).
+#
+# Las cantidades aquí son porciones individuales adultas típicas en es-DO.
+# Items vendidos al peso se expresan en gramos crudos — `convert_amount` los
+# transforma a la unidad del row pantry (lb/paquete/lata) vía `master_item`.
+# Items unitarios (huevo, pan, manzana, plátano) usan `unidad`.
+#
+# Tooltip-anchor: P1-PANTRY-INFER-TYPICAL-PORTION-TABLE
+_TYPICAL_PORTION_BY_NAME: Dict[str, tuple] = {
+    # --- Granos / cereales (gramos crudos) ---
+    "avena": (40.0, "g"),
+    "arroz": (50.0, "g"),
+    "arroz blanco": (50.0, "g"),
+    "arroz integral": (50.0, "g"),
+    "habichuelas": (50.0, "g"),
+    "habichuelas negras": (50.0, "g"),
+    "habichuelas rojas": (50.0, "g"),
+    "habichuelas blancas": (50.0, "g"),
+    "frijoles": (50.0, "g"),
+    "frijoles rojos": (50.0, "g"),
+    "frijoles negros": (50.0, "g"),
+    "gandules": (50.0, "g"),
+    "lentejas": (50.0, "g"),
+    "garbanzos": (50.0, "g"),
+    "quinoa": (50.0, "g"),
+    "pasta": (75.0, "g"),
+    "espagueti": (75.0, "g"),
+    "macarrones": (75.0, "g"),
+    "crema de trigo": (30.0, "g"),
+    "granola": (30.0, "g"),
+    "cereal": (30.0, "g"),
+    "harina": (30.0, "g"),
+    "harina de avena": (30.0, "g"),
+    "harina de trigo": (30.0, "g"),
+    # --- Proteínas (gramos crudos) ---
+    "pollo": (120.0, "g"),
+    "pechuga de pollo": (120.0, "g"),
+    "muslo de pollo": (120.0, "g"),
+    "carne": (120.0, "g"),
+    "carne molida": (100.0, "g"),
+    "carne de res": (120.0, "g"),
+    "res": (120.0, "g"),
+    "pescado": (120.0, "g"),
+    "filete de pescado": (120.0, "g"),
+    "filete de pescado blanco": (120.0, "g"),
+    "chillo": (120.0, "g"),
+    "salmon": (120.0, "g"),
+    "tilapia": (120.0, "g"),
+    "atun": (60.0, "g"),
+    "atun en agua": (60.0, "g"),
+    "pavo": (100.0, "g"),
+    "cerdo": (120.0, "g"),
+    "chorizo": (50.0, "g"),
+    "chicharron": (40.0, "g"),
+    "salami": (40.0, "g"),
+    "jamon": (30.0, "g"),
+    "tocineta": (20.0, "g"),
+    "huevo": (2.0, "unidad"),
+    "huevos": (2.0, "unidad"),
+    "huevo frito": (2.0, "unidad"),
+    "claras de huevo": (3.0, "unidad"),
+    "tofu": (100.0, "g"),
+    "tempeh": (100.0, "g"),
+    # --- Semillas / nuts / mantequillas ---
+    "mani": (30.0, "g"),
+    "almendras": (30.0, "g"),
+    "almendras fileteadas": (15.0, "g"),
+    "nueces": (30.0, "g"),
+    "merey": (30.0, "g"),
+    "pasas": (20.0, "g"),
+    "chia": (15.0, "g"),
+    "semillas de chia": (15.0, "g"),
+    "linaza": (15.0, "g"),
+    "mantequilla de mani": (16.0, "g"),
+    "mantequilla": (10.0, "g"),
+    # --- Lácteos (gramos / unidad) ---
+    "queso": (40.0, "g"),
+    "queso blanco": (40.0, "g"),
+    "queso fresco": (40.0, "g"),
+    "queso cottage": (100.0, "g"),
+    "queso ricotta": (50.0, "g"),
+    "queso mozzarella": (40.0, "g"),
+    "yogurt": (170.0, "g"),
+    "yogurt griego": (170.0, "g"),
+    "yogurt griego sin azucar": (170.0, "g"),
+    "leche": (240.0, "g"),
+    "leche descremada": (240.0, "g"),
+    "leche entera": (240.0, "g"),
+    # --- Aceites / condimentos / dulces ---
+    "aceite": (14.0, "g"),
+    "aceite de oliva": (14.0, "g"),
+    "aceite de coco": (14.0, "g"),
+    "mayonesa": (15.0, "g"),
+    "ketchup": (15.0, "g"),
+    "mostaza": (15.0, "g"),
+    "salsa de tomate": (30.0, "g"),
+    "miel": (20.0, "g"),
+    "azucar": (12.0, "g"),
+    "sal": (3.0, "g"),
+    "extracto de vainilla": (2.0, "g"),
+    "hummus": (30.0, "g"),
+    # --- Verduras (mix unidad/gramos) ---
+    "tomate": (1.0, "unidad"),
+    "cebolla": (0.5, "unidad"),
+    "ajo": (2.0, "diente"),
+    "pimiento": (0.5, "unidad"),
+    "pimenton": (0.5, "unidad"),
+    "aguacate": (0.5, "unidad"),
+    "lechuga": (50.0, "g"),
+    "espinaca": (50.0, "g"),
+    "brocoli": (100.0, "g"),
+    "coliflor": (100.0, "g"),
+    "zanahoria": (1.0, "unidad"),
+    "auyama": (150.0, "g"),
+    "vainitas": (100.0, "g"),
+    "berenjena": (100.0, "g"),
+    "calabacin": (100.0, "g"),
+    "remolacha": (100.0, "g"),
+    "pepino": (0.5, "unidad"),
+    "cilantro": (10.0, "g"),
+    "perejil": (10.0, "g"),
+    "limon": (1.0, "unidad"),
+    "apio": (1.0, "unidad"),
+    # --- Frutas ---
+    "manzana": (1.0, "unidad"),
+    "guineo": (1.0, "unidad"),
+    "platano": (1.0, "unidad"),
+    "platano maduro": (1.0, "unidad"),
+    "platano verde": (1.0, "unidad"),
+    "mango": (1.0, "unidad"),
+    "pina": (150.0, "g"),
+    "papaya": (150.0, "g"),
+    "lechosa": (150.0, "g"),
+    "fresas": (100.0, "g"),
+    "fresas frescas": (100.0, "g"),
+    "uvas": (100.0, "g"),
+    "pera": (1.0, "unidad"),
+    "naranja": (1.0, "unidad"),
+    "mandarina": (1.0, "unidad"),
+    "melon": (150.0, "g"),
+    "sandia": (200.0, "g"),
+    "kiwi": (1.0, "unidad"),
+    # --- Tubérculos ---
+    "papa": (150.0, "g"),
+    "papas": (150.0, "g"),
+    "batata": (150.0, "g"),
+    "yuca": (150.0, "g"),
+    "yautia": (150.0, "g"),
+    # --- Panes / derivados ---
+    "pan": (2.0, "rebanada"),
+    "pan integral": (2.0, "rebanada"),
+    "pan de molde": (2.0, "rebanada"),
+    "casabe": (1.0, "unidad"),
+    "tortilla": (2.0, "unidad"),
+    "tortilla de maiz": (2.0, "unidad"),
+    "arepa": (1.0, "unidad"),
+    "galleta": (4.0, "unidad"),
+    "galletas": (4.0, "unidad"),
+    "crackers": (4.0, "unidad"),
+}
+
+# Sustantivos que un user típicamente cuenta "1 X" (no en gramos). El fallback
+# genérico cuando NO hay match en el dict canónico usa esta lista para decidir
+# entre `(1.0, 'unidad')` vs `(50.0, 'g')`.
+_UNITARY_NAME_HINTS = (
+    "manzana", "guineo", "platano", "mango", "pera", "naranja", "kiwi",
+    "aguacate", "limon", "mandarina", "tomate", "cebolla", "zanahoria",
+    "pepino", "pimiento", "pimenton", "apio", "huevo", "pan", "casabe",
+    "arepa", "galleta", "tortilla",
+)
+
+
+def _strip_accents_lower(s: str) -> str:
+    """Lowercase + diacritics stripped, para lookup contra _TYPICAL_PORTION_BY_NAME."""
+    nfd = unicodedata.normalize("NFD", str(s))
+    return "".join(c for c in nfd if unicodedata.category(c) != "Mn").lower().strip()
+
+
+def _infer_typical_portion(name: str) -> Optional[tuple]:
+    """[P1-PANTRY-INFER · 2026-05-22] Devuelve `(qty, unit)` inferida cuando
+    el `_parse_quantity` no extrajo cantidad pero hay un name limpio.
+
+    Pipeline:
+      1. Normalizar (lower + strip accents).
+      2. Match exacto contra `_TYPICAL_PORTION_BY_NAME`.
+      3. Match parcial: si el key del dict aparece como substring del name
+         normalizado (e.g. "mantequilla de mani natural sin azucar" → "mantequilla de mani").
+      4. Fallback heurístico: si contiene un `_UNITARY_NAME_HINTS` → (1.0, "unidad");
+         else (50.0, "g").
+
+    Tooltip-anchor: P1-PANTRY-INFER-INFER-FN
+    """
+    if not name or not str(name).strip():
+        return None
+    n = _strip_accents_lower(name)
+    if not n:
+        return None
+    # 1. Exact match
+    if n in _TYPICAL_PORTION_BY_NAME:
+        return _TYPICAL_PORTION_BY_NAME[n]
+    # 2. Longest substring match — preferir keys más específicos primero
+    candidates = [k for k in _TYPICAL_PORTION_BY_NAME if k in n]
+    if candidates:
+        best = max(candidates, key=len)
+        return _TYPICAL_PORTION_BY_NAME[best]
+    # 3. Fallback heurístico
+    for hint in _UNITARY_NAME_HINTS:
+        if hint in n:
+            return (1.0, "unidad")
+    return (50.0, "g")
+
+
 def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str]):
     """
     Resta matemáticamente una lista de ingredientes crudos (los de una comida consumida)
@@ -1441,21 +1661,62 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
     Item ausente en pantry NO es failure — el usuario puede haber consumido
     algo que no tenía registrado (el deduct devuelve True silencioso si no
     hay row compatible).
+
+    [P1-PANTRY-INFER · 2026-05-22] Cuando el chat agent registra una comida
+    desde texto natural ("me comí una taza de avena"), `_parse_quantity`
+    retorna `qty=0` con `name` poblado. Pre-fix esos items iban directo a
+    `failed_inventory_deductions` con `reason=parse_failed_or_invalid_qty`
+    y la nevera nunca se descontaba. Ahora se invoca `_infer_typical_portion`
+    para asignar una porción adulta típica antes de fallar. Knob
+    `MEALFIT_PANTRY_INFER_TYPICAL_PORTION` (default True) permite rollback
+    sin redeploy. Cuando una inferencia se aplica, se emite WARN
+    `[P1-PANTRY-INFER]` con el item original y la porción inferida — útil
+    para auditar qué items necesitan entry explícita en
+    `_TYPICAL_PORTION_BY_NAME`.
     """
     if not supabase or not ingredients_list: return
 
+    try:
+        from knobs import _env_bool as _knob_env_bool
+        _infer_enabled = _knob_env_bool("MEALFIT_PANTRY_INFER_TYPICAL_PORTION", True)
+    except Exception:
+        _infer_enabled = True
+
     failed_items = []
+    # [P1-AGENT-HINT · 2026-05-22] Trackers de los strings originales para que
+    # `log_consumed_meal` pueda construir el hint a la LLM cuando algún item
+    # no se pudo procesar (red de seguridad sobre #1: si la inferencia retornó
+    # None — caso raro: name vacío post-parse — la LLM puede reintentar pidiéndole
+    # al usuario que confirme la cantidad).
+    succeeded_strs: List[str] = []
+    inferred_strs: List[str] = []
+    failed_strs: List[str] = []
     for item in ingredients_list:
         if not item or len(item) < 3: continue
         try:
             qty, unit, name = _parse_quantity(item)
+            used_inference = False
             if not (name and qty > 0):
-                # Parse falló o resultado inválido — el item no es procesable.
-                failed_items.append({
-                    "item": str(item)[:200],
-                    "reason": "parse_failed_or_invalid_qty",
-                })
-                continue
+                # [P1-PANTRY-INFER] El parse no extrajo qty parseable pero
+                # puede haber name limpio (ej "Avena", "Mantequilla de maní"
+                # emitidos por la LLM sin cantidad). Intentar inferencia.
+                inferred = _infer_typical_portion(name) if (_infer_enabled and name) else None
+                if inferred is not None:
+                    qty, unit = inferred
+                    used_inference = True
+                    logger.warning(
+                        f"[P1-PANTRY-INFER] Inferida porción típica para "
+                        f"item={item!r} → name={name!r} qty={qty} unit={unit!r} "
+                        f"(user={user_id})"
+                    )
+                else:
+                    # Parse falló y no se pudo inferir — el item no es procesable.
+                    failed_items.append({
+                        "item": str(item)[:200],
+                        "reason": "parse_failed_or_invalid_qty",
+                    })
+                    failed_strs.append(str(item))
+                    continue
             _consume_reserved_inventory(user_id, name, qty, unit)
             # Actualizar restando
             ok = add_or_update_inventory_item(user_id, name, -qty, unit, mutation_type="consumption")
@@ -1470,6 +1731,12 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
                     "unit": unit,
                     "reason": "deduction_returned_false",
                 })
+                failed_strs.append(str(item))
+            else:
+                if used_inference:
+                    inferred_strs.append(str(item))
+                else:
+                    succeeded_strs.append(str(item))
         except Exception as e:
             logger.error(f"Error parseando y restando '{item}' de despensa física: {e}")
             failed_items.append({
@@ -1477,12 +1744,23 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
                 "reason": "exception",
                 "error": str(e)[:200],
             })
+            failed_strs.append(str(item))
 
     # [P0-5 · 2026-05-10] Persistir TODOS los failures como un solo INSERT
     # (la columna `ingredients` es jsonb array, mantenemos correlación entre
     # los items del mismo log_consumed_meal). Si la lista está vacía, no
     # hacemos round-trip a DB.
     _persist_failed_inventory_deductions(user_id, failed_items)
+
+    # [P1-AGENT-HINT · 2026-05-22] Retornar resumen para que el caller (típicamente
+    # `tools.log_consumed_meal`) pueda enriquecer el ToolMessage con un hint a la
+    # LLM cuando algún item quedó sin procesar. Callers legacy que ignoran el
+    # return value siguen funcionando — Python no enforza el tipo.
+    return {
+        "succeeded": succeeded_strs,
+        "inferred": inferred_strs,
+        "failed_to_deduct": failed_strs,
+    }
 
 def restock_inventory(user_id: str, ingredients_list: list):
     """
@@ -1982,4 +2260,187 @@ def sync_inventory_after_chunk_completion(
             continue
 
     return stats
+
+
+# ============================================================
+# [P3-DEPLETED-BD · 2026-05-22] Helpers de `user_depleted_items`.
+# ============================================================
+# Tabla nueva (migration `p3_user_depleted_items_2026_05_22.sql`) que persiste
+# el estado "agotado" del Pantry cross-device. Sustituye el localStorage
+# pre-existente. Tooltip-anchor: P3-DEPLETED-BD-HELPERS.
+
+def add_depleted_item(
+    user_id: str,
+    *,
+    ingredient_name: str,
+    quantity: float = 1.0,
+    unit: str = "unidad",
+    master_ingredient_id: Optional[str] = None,
+    category: Optional[str] = None,
+    shelf_life_days: Optional[int] = None,
+    depleted_at: Optional[str] = None,
+) -> bool:
+    """[P3-DEPLETED-BD · 2026-05-22] Upsert un item agotado en `user_depleted_items`.
+
+    Idempotente: usa los unique indexes partial sobre `(user_id,
+    master_ingredient_id)` cuando master no es NULL y `(user_id,
+    lower(trim(ingredient_name)))` cuando es NULL — re-agotar el mismo item
+    actualiza `depleted_at` y `quantity` snapshot.
+
+    Filtro `WHERE user_id = %s` defensa-en-profundidad (RLS owner-only ya
+    aplica, pero el backend conecta como `postgres` que bypassea RLS).
+
+    Returns:
+        True si la operación tuvo éxito, False si supabase no disponible o
+        excepción.
+    """
+    if not supabase or not user_id or not ingredient_name:
+        return False
+    try:
+        # ON CONFLICT con dos unique indexes partial — Postgres elige el
+        # que aplique según si master_ingredient_id es NULL o NOT NULL.
+        # Mantenemos dos branches para que el SQL sea explícito.
+        if master_ingredient_id:
+            query = """
+                INSERT INTO user_depleted_items (
+                    user_id, master_ingredient_id, ingredient_name,
+                    quantity, unit, category, shelf_life_days, depleted_at
+                )
+                VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, %s, COALESCE(%s::timestamptz, NOW()))
+                ON CONFLICT (user_id, master_ingredient_id)
+                WHERE master_ingredient_id IS NOT NULL
+                DO UPDATE SET
+                    ingredient_name = EXCLUDED.ingredient_name,
+                    quantity = EXCLUDED.quantity,
+                    unit = EXCLUDED.unit,
+                    category = COALESCE(EXCLUDED.category, user_depleted_items.category),
+                    shelf_life_days = COALESCE(EXCLUDED.shelf_life_days, user_depleted_items.shelf_life_days),
+                    depleted_at = EXCLUDED.depleted_at
+            """
+            execute_sql_write(query, (
+                user_id, master_ingredient_id, ingredient_name,
+                float(quantity), unit, category, shelf_life_days, depleted_at,
+            ))
+        else:
+            query = """
+                INSERT INTO user_depleted_items (
+                    user_id, ingredient_name,
+                    quantity, unit, category, shelf_life_days, depleted_at
+                )
+                VALUES (%s::uuid, %s, %s, %s, %s, %s, COALESCE(%s::timestamptz, NOW()))
+                ON CONFLICT (user_id, (lower(trim(ingredient_name))))
+                WHERE master_ingredient_id IS NULL
+                DO UPDATE SET
+                    quantity = EXCLUDED.quantity,
+                    unit = EXCLUDED.unit,
+                    category = COALESCE(EXCLUDED.category, user_depleted_items.category),
+                    shelf_life_days = COALESCE(EXCLUDED.shelf_life_days, user_depleted_items.shelf_life_days),
+                    depleted_at = EXCLUDED.depleted_at
+            """
+            execute_sql_write(query, (
+                user_id, ingredient_name,
+                float(quantity), unit, category, shelf_life_days, depleted_at,
+            ))
+        return True
+    except Exception as e:
+        logger.warning(
+            f"[P3-DEPLETED-BD] add_depleted_item falló user={user_id} "
+            f"name={ingredient_name!r}: {e}"
+        )
+        return False
+
+
+def list_depleted_items(user_id: str, limit: int = 200) -> List[Dict[str, Any]]:
+    """[P3-DEPLETED-BD · 2026-05-22] Lista los items agotados del usuario,
+    ordenados por `depleted_at DESC` (más reciente primero).
+
+    Returns:
+        Lista de dicts con `{id, master_ingredient_id, ingredient_name,
+        quantity, unit, category, shelf_life_days, depleted_at}`. Lista
+        vacía si supabase no disponible o el user no tiene agotados.
+    """
+    if not supabase or not user_id:
+        return []
+    limit = max(1, min(int(limit), 500))
+    try:
+        res = (
+            supabase.table("user_depleted_items")
+            .select(
+                "id, master_ingredient_id, ingredient_name, quantity, unit, "
+                "category, shelf_life_days, depleted_at"
+            )
+            .eq("user_id", user_id)
+            .order("depleted_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    except Exception as e:
+        logger.warning(f"[P3-DEPLETED-BD] list_depleted_items falló user={user_id}: {e}")
+        return []
+
+
+def delete_depleted_item(
+    user_id: str,
+    *,
+    item_id: Optional[int] = None,
+    master_ingredient_id: Optional[str] = None,
+    ingredient_name: Optional[str] = None,
+) -> bool:
+    """[P3-DEPLETED-BD · 2026-05-22] DELETE un item de `user_depleted_items`.
+
+    Una de las 3 keys debe ser provided (mutex). Filtro `user_id` defensa-en-
+    profundidad. Returns True si una row fue eliminada, False si nada
+    matched o excepción.
+    """
+    if not supabase or not user_id:
+        return False
+    if not (item_id or master_ingredient_id or ingredient_name):
+        logger.warning("[P3-DEPLETED-BD] delete_depleted_item: ningún criterio dado")
+        return False
+    try:
+        query = supabase.table("user_depleted_items").delete().eq("user_id", user_id)
+        if item_id is not None:
+            query = query.eq("id", int(item_id))
+        elif master_ingredient_id is not None:
+            query = query.eq("master_ingredient_id", master_ingredient_id)
+        else:
+            # Match case-insensitive sobre ingredient_name (ilike + trim).
+            query = query.ilike("ingredient_name", str(ingredient_name).strip())
+        res = query.execute()
+        return bool(res.data)
+    except Exception as e:
+        logger.warning(f"[P3-DEPLETED-BD] delete_depleted_item falló user={user_id}: {e}")
+        return False
+
+
+def bulk_upsert_depleted_items(user_id: str, items: List[Dict[str, Any]]) -> int:
+    """[P3-DEPLETED-BD · 2026-05-22] Upsert batch de items agotados — usado
+    por la migration one-shot del localStorage existente al BD (frontend
+    POST-ea su localStorage en el primer mount post-deploy).
+
+    Returns: count de items upserted exitosamente.
+    """
+    if not user_id or not items:
+        return 0
+    ok_count = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("ingredient_name") or item.get("name")
+        if not name:
+            continue
+        ok = add_depleted_item(
+            user_id,
+            ingredient_name=str(name),
+            quantity=float(item.get("quantity") or 1.0),
+            unit=str(item.get("unit") or "unidad"),
+            master_ingredient_id=item.get("master_ingredient_id"),
+            category=item.get("category"),
+            shelf_life_days=item.get("shelf_life_days"),
+            depleted_at=item.get("depleted_at"),
+        )
+        if ok:
+            ok_count += 1
+    return ok_count
 

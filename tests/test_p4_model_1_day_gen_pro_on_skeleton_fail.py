@@ -257,6 +257,11 @@ def test_repro_corrida_2026_05_05_02_49_cascading_failure():
 # ---------------------------------------------------------------------------
 def test_model_constants_match_production():
     """Las constantes de nombre de modelo deben coincidir con los IDs
-    reales que el resto del codebase usa (CB tracking, logs)."""
-    assert _FLASH_MODEL_NAME == "gemini-3-flash-preview"
-    assert _PRO_MODEL_NAME == "gemini-3.1-pro-preview"
+    reales que el resto del codebase usa (CB tracking, logs).
+
+    [P1-FLASH-MODEL-GA · 2026-05-21] Flash actualizado a `gemini-3.5-flash` (GA).
+    [P1-ALL-MODELS-GA · 2026-05-21] Pro también migrado a `gemini-3.5-flash`
+    (eliminación total de modelos `*-preview` por riesgo deprecation).
+    """
+    assert _FLASH_MODEL_NAME == "gemini-3.5-flash"
+    assert _PRO_MODEL_NAME == "gemini-3.5-flash"

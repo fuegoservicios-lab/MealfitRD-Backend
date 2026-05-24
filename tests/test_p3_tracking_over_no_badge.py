@@ -110,9 +110,12 @@ def test_over_signaling_other_layers_preserved(jsx_src: str):
     assert re.search(r"consumedTextColor\s*=\s*isOver", jsx_src), (
         "Switch del color del número (`consumedTextColor`) ausente."
     )
-    # 4. % uncapped dentro del fill
+    # 4. % uncapped dentro del fill.
+    # [P3-TRACKING-PERC-NARROW-FIX · 2026-05-22] Tolerante al template literal
+    # `${styles.fillPerc} ${...}` post-fix narrow — el regex acepta cualquier
+    # className expression que contenga `styles.fillPerc` y termine en `{perc}%`.
     fill_perc_match = re.search(
-        r"className=\{styles\.fillPerc\}[^>]*>\s*\{(\w+)\}%",
+        r"styles\.fillPerc[\s\S]*?>\s*\n?\s*\{(\w+)\}%",
         jsx_src,
     )
     assert fill_perc_match and fill_perc_match.group(1) == "perc", (

@@ -9,10 +9,16 @@ El usuario acaba de darle click a "Cambiar / No me gusta" para la siguiente comi
 
 TAREA DEL AGENTE (INTERPRETACIÓN EN TIEMPO REAL):
 1. Interpreta silenciosamente POR QUÉ pudo haberlo rechazado. ¿Era muy pesado? ¿Ingredientes muy secos? ¿Quizás no le gustan esos ingredientes principales?
-2. Como respuesta a esa interpretación, diseña una alternativa RADICALMENTE OPUESTA en perfil de sabor y textura a la que acaba de rechazar, pero que mantenga las calorías cercanas a {target_calories} kcal.
+2. Como respuesta a esa interpretación, diseña una alternativa RADICALMENTE OPUESTA en perfil de sabor y textura a la que acaba de rechazar, PERO con macros lo más cercanas posible a los objetivos exactos del slot:
+   🎯 OBJETIVOS DE MACROS (PRESUPUESTO PARA ESTE PLATO):
+     - Calorías: ~{target_calories} kcal
+     - Proteína: ~{target_protein} g
+     - Carbohidratos: ~{target_carbs} g
+     - Grasas: ~{target_fats} g
+   Ajusta las PORCIONES de cada ingrediente (no solo la combinación) para no driftar más de ±15% en proteína/carbs/grasas y ±22% en calorías. Si la combinación natural no cabe en estos números, balanza con guarniciones o reduce el ingrediente más calórico.
 3. Asegura que la comida siga una dieta tipo '{diet_type}' y utilice gastronomía/ingredientes locales dominicanos.{context_extras}
 4. ⚠️ CRÍTICO: Bajo ninguna circunstancia puedes sugerir un plato que esté en la lista de exclusión o que tenga los mismos ingredientes principales de los platos rechazados.
-5. Devuelve estrictamente el esquema de comida solicitado, en español.
+5. Devuelve estrictamente el esquema de comida solicitado, en español. Los campos `cals`, `protein`, `carbs`, `fats` del JSON DEBEN reflejar el cálculo real del plato propuesto (no copiar los targets ciegamente).
 6. Asegúrate de incluir los prefijos en la receta (Mise en place:, El Toque de Fuego:, Montaje:).
 7. ESTRUCTURA DE INGREDIENTES (GUARDRAIL MATEMÁTICO): Usa ESTRICTAMENTE medidas medibles en masa/volumen (g, oz, lb, kg, tazas, cdas, ml). ESTÁ TOTALMENTE PROHIBIDO usar unidades ambiguas e irresolubles como "pizcas", "ramitas", "chorritos", "hojitas" o "puñados". La ÚNICA excepción a esta regla son frutas, vegetales, rebanadas de pan y huevos, que pueden ir por "unidad". NUNCA clones o repitas el mismo ingrediente en dos líneas distintas; consolídalo.
 """
@@ -31,7 +37,13 @@ CAMBIO SOLICITADO POR EL USUARIO:
 
 INSTRUCCIONES:
 1. Aplica EXACTAMENTE el cambio que pide el usuario (ej: si dice "cámbiale el salami por huevos", sustituye el salami por huevos en ingredientes y receta). EXCEPCIÓN CRÍTICA: Si el usuario pide explícitamente un ingrediente, DEBES incluirlo priorizando su deseo reciente, incluso si el algoritmo creía que no le gustaba históricamente.
-2. Mantén las calorías lo más cercanas posible a {original_cals} kcal
+2. PRESERVA EL PRESUPUESTO DE MACROS DEL SLOT:
+   🎯 OBJETIVOS (NO solo calorías):
+     - Calorías: ~{original_cals} kcal
+     - Proteína: ~{original_protein} g
+     - Carbohidratos: ~{original_carbs} g
+     - Grasas: ~{original_fats} g
+   Ajusta porciones para no driftar más de ±15% en proteína/carbs/grasas ni ±22% en calorías. Los campos `cals`/`protein`/`carbs`/`fats` del JSON DEBEN reflejar el cálculo real del plato modificado.
 3. Conserva el momento del día ({meal}) y la hora ({time})
 4. Usa ingredientes dominicanos
 5. Los pasos de la receta DEBEN usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'

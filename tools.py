@@ -38,9 +38,16 @@ from knobs import _env_str, _env_float
 
 
 def _tools_pref_agent_model_name() -> str:
+    # [P1-ALL-MODELS-GA · 2026-05-21] Default migrado de `gemini-3.1-pro-preview`
+    # a `gemini-3.5-flash`. Rollback: `MEALFIT_TOOLS_PREF_AGENT_MODEL=gemini-3.1-pro-preview`.
+    # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Default re-migrado a `gemini-3.1-flash-lite`.
+    # El preference analyzer hace clasificación simple (rechazos/gustos) — output
+    # estructurado de baja complejidad, sin constraints duros. Lite cubre el caso
+    # y reduce costo ~50% vs flash. Si retry rate / quality scores degradan en
+    # `pipeline_metrics`, rollback inmediato: `MEALFIT_TOOLS_PREF_AGENT_MODEL=gemini-3.5-flash`.
     return _env_str(
         "MEALFIT_TOOLS_PREF_AGENT_MODEL",
-        "gemini-3.1-pro-preview",
+        "gemini-3.1-flash-lite",
     )
 
 
@@ -53,9 +60,11 @@ def _tools_pref_agent_llm_timeout_s() -> float:
 
 
 def _tools_modify_meal_model_name() -> str:
+    # [P1-ALL-MODELS-GA · 2026-05-21] Default migrado de `gemini-3.1-pro-preview`
+    # a `gemini-3.5-flash`. Rollback: `MEALFIT_TOOLS_MODIFY_MEAL_MODEL=gemini-3.1-pro-preview`.
     return _env_str(
         "MEALFIT_TOOLS_MODIFY_MEAL_MODEL",
-        "gemini-3.1-pro-preview",
+        "gemini-3.5-flash",
     )
 
 
@@ -461,11 +470,36 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         mark_inventory_synced=has_ingredients,
     )
     import db_inventory
+    deduct_summary = None
     if has_ingredients:
-        db_inventory.deduct_consumed_meal_from_inventory(user_id, ingredients)
-        
+        deduct_summary = db_inventory.deduct_consumed_meal_from_inventory(user_id, ingredients)
+
     if result is not None:
         msg = f"¡Éxito! Se ha registrado el consumo de '{meal_name}' ({calories} kcal, {protein}g proteína, {carbs}g carbohidratos, {healthy_fats}g grasas saludables) en tu diario."
+        # [P1-AGENT-HINT · 2026-05-22] Si la deducción tuvo items que la
+        # inferencia P1-PANTRY-INFER no pudo procesar, añadir hint visible
+        # para la LLM en el ToolMessage. La LLM puede entonces pedir al
+        # usuario cantidades aproximadas en su siguiente turno (red de
+        # seguridad sobre #1: caso raro donde `_infer_typical_portion`
+        # retorna None — name vacío post-parse — o donde
+        # `add_or_update_inventory_item` falla por master mismatch).
+        if isinstance(deduct_summary, dict):
+            failed = deduct_summary.get("failed_to_deduct") or []
+            if failed:
+                # Mostrar primeros 5 items para no inflar el ToolMessage.
+                preview = failed[:5]
+                more = len(failed) - len(preview)
+                items_str = ", ".join(f"'{x}'" for x in preview)
+                if more > 0:
+                    items_str += f" (+{more} más)"
+                msg += (
+                    f"\n\n⚠️ Aviso para el asistente: no pude descontar {len(failed)} "
+                    f"ingrediente(s) de la nevera por falta de cantidad parseable: "
+                    f"{items_str}. Si el usuario quiere precisión, pídele que confirme "
+                    f"cuánto consumió (ej. '1 taza', '100g', '2 cdas') y vuelve a "
+                    f"llamar log_consumed_meal con la cantidad incluida en el string "
+                    f"del ingrediente."
+                )
         return msg
     else:
         return "Hubo un error al intentar registrar la comida consumida. Por favor, intenta de nuevo."
@@ -515,7 +549,15 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     
     # 3. Regenerar solo esa comida con Gemini
     original_cals = target_meal.get("cals", 500)
-    
+    # [P1-SWAP-MACROS · 2026-05-22] Targets per-meal: usamos los macros del
+    # plato original como objetivo del modificado (preservación de presupuesto
+    # nutricional del slot). El validador post-gen rechaza drift >15% por
+    # macro (>22% en cals). Si el plato original no tiene esos campos
+    # (planes muy legacy), los valores caen a 0 y el validador skip per-key.
+    original_protein = target_meal.get("protein") or 0
+    original_carbs = target_meal.get("carbs") or 0
+    original_fats = target_meal.get("fats") or target_meal.get("fat") or 0
+
     # Extraer ingredientes de la despensa física + lista de compras (Mejora 1: Virtual Pantry Expandido)
     clean_ingredients = []
     try:
@@ -568,6 +610,9 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         meal=target_meal.get('meal'),
         time=target_meal.get('time'),
         original_cals=original_cals,
+        original_protein=int(round(float(original_protein or 0))),
+        original_carbs=int(round(float(original_carbs or 0))),
+        original_fats=int(round(float(original_fats or 0))),
         ingredients_json=json.dumps(target_meal.get('ingredients', [])),
         changes=changes,
         context_extras=context_extras
@@ -613,13 +658,28 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     current_prompt = [modify_prompt]
     _modify_invoke_start = time.time()
 
+    # [P1-SWAP-MACROS · 2026-05-22] Lazy import del validador de macros
+    # + recipe-coherence (mismo patrón que `agent.py::swap_meal`).
+    try:
+        from nutrition_calculator import (
+            validate_meal_macros_against_targets as _validate_macros,
+            _meal_macros_validate_enabled as _macros_validate_enabled,
+            validate_meal_recipe_ingredients_coherence as _validate_recipe_coh,
+            _swap_recipe_coherence_enabled as _recipe_coh_enabled,
+        )
+    except Exception:
+        _validate_macros = None
+        _macros_validate_enabled = lambda: False  # noqa: E731
+        _validate_recipe_coh = None
+        _recipe_coh_enabled = lambda: False  # noqa: E731
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
         reraise=True,
         before_sleep=lambda retry_state: logger.warning(
             f"🔁 [MODIFY_MEAL RETRY] attempt={retry_state.attempt_number} | "
-            f"reason=pantry_guardrail_rejection"
+            f"reason=guardrail_rejection"
         )
     )
     def invoke_with_retry():
@@ -640,6 +700,82 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 # Inyectar el feedback específico matematico al LLM para el próximo intento de @retry
                 current_prompt[0] = modify_prompt + f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{val_result}\nPor favor revisa el inventario y ajusta la receta para que cumpla estrictamente."
                 raise ValueError(val_result)
+
+        # [P1-SWAP-RECIPE-COHERENCE · 2026-05-22] Mini-coherence check
+        # per-meal sobre el output del LLM (mismo patrón que swap_meal).
+        # Detecta cap_swallowed_modifier al nivel del meal-output: receta
+        # menciona "el pollo" pero ingredients=["pavo"]. Gateamos retry
+        # tenacity. Knob `MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE=false`
+        # desactiva sin redeploy.
+        if _validate_recipe_coh is not None and _recipe_coh_enabled():
+            try:
+                meal_dump = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                coh_passed, coh_divs, coh_summary = _validate_recipe_coh(meal_dump)
+                if not coh_passed:
+                    logger.warning(
+                        f"⚠️ [P1-SWAP-RECIPE-COHERENCE] divergence in modify_meal | "
+                        f"meal_type={meal_type} | divs={coh_divs}"
+                    )
+                    # [P3-SWAP-RETRY-COHERENCE-HINT · 2026-05-22] Paridad
+                    # con `agent.py::swap_meal`: append self-check directive
+                    # al retry prompt para subir señal al LLM. Ver memoria
+                    # del P-fix para razón (3 intentos consecutivos con
+                    # mismo alias en log productivo 2026-05-22).
+                    current_prompt[0] = modify_prompt + (
+                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{coh_summary}"
+                        f"\n\n🔒 REGLA INVARIANTE: ANTES de devolver tu respuesta, recorre "
+                        f"cada paso del array `recipe` y verifica que TODO alimento "
+                        f"mencionado aparezca también (o un sinónimo razonable) en el "
+                        f"array `ingredients`. Si encuentras una discrepancia, corrígela "
+                        f"agregando el ingrediente faltante CON cantidad o reescribiendo "
+                        f"el paso sin mencionarlo. NO devuelvas la respuesta hasta verificar."
+                    )
+                    raise ValueError(coh_summary)
+            except ValueError:
+                raise
+            except Exception as _coh_exc:
+                logger.warning(
+                    f"[P1-SWAP-RECIPE-COHERENCE] validator helper falló (no aborta): "
+                    f"{type(_coh_exc).__name__}: {_coh_exc}"
+                )
+
+        # [P1-SWAP-MACROS · 2026-05-22] Validación post-gen de macros vs
+        # el plato original. Mismo patrón que `agent.py::swap_meal`:
+        # si drift > tolerancia → inyectamos summary al retry prompt y
+        # forzamos tenacity retry. Knob `MEALFIT_SWAP_MACROS_VALIDATE=false`
+        # desactiva sin redeploy.
+        if _validate_macros is not None and _macros_validate_enabled():
+            try:
+                meal_dump = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                passed, drifts, summary = _validate_macros(
+                    meal_dump,
+                    {
+                        "cals": original_cals,
+                        "protein": original_protein,
+                        "carbs": original_carbs,
+                        "fats": original_fats,
+                    },
+                )
+                if not passed:
+                    logger.warning(
+                        f"⚠️ [P1-SWAP-MACROS] Drift en modify_meal | "
+                        f"meal_type={meal_type} | drifts={drifts}"
+                    )
+                    current_prompt[0] = modify_prompt + (
+                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
+                    )
+                    raise ValueError(summary)
+            except ValueError:
+                raise
+            except Exception as _macros_exc:
+                logger.warning(
+                    f"[P1-SWAP-MACROS] validator helper falló (no aborta): "
+                    f"{type(_macros_exc).__name__}: {_macros_exc}"
+                )
 
         return res
 
@@ -1239,16 +1375,30 @@ def check_current_pantry(user_id: str) -> str:
         return f"Error consultando la base de datos de la despensa: {str(e)}"
 
 @tool
-def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_to_remove: list[str] = None) -> str:
+def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_to_remove: list[str] = None, items_to_deplete: list[str] = None) -> str:
     """
-    Agrega o elimina ingredientes específicos de la despensa física del usuario (user_inventory).
-    Usa esta herramienta cuando el usuario diga que compró algo extra (ej: 'añade 2 manzanas a mi nevera') 
-    o que botó/gastó algo (ej: 'se me dañó el arroz, quítalo').
-    Los ítems deben venir en formato string con cantidad, unidad e ingrediente (Ej: '2 unidades de Manzana', '500 g de Arroz').
-    
+    Modifica la despensa física del usuario (user_inventory). 3 paths:
+
+    - `items_to_add`: SUMA al inventario. Usa cuando el usuario diga
+      "compré X", "añade X a mi nevera". Formato: '2 unidades de Manzana',
+      '500 g de Arroz'.
+
+    - `items_to_deplete`: marca el ingrediente como AGOTADO (aparece en la
+      sección "Agotados" de la app, listo para re-comprar). Usa cuando el
+      usuario diga "se me acabó X", "ya no tengo X", "se terminó el X".
+      Formato: nombre del ingrediente — la cantidad se infiere del inventario
+      actual o se asume porción típica. Ejemplos: 'leche', 'arroz', 'queso'.
+      NO usar para items que el usuario "botó" o "se dañaron" (usa
+      items_to_remove para esos).
+
+    - `items_to_remove`: BORRA definitivamente del inventario sin marcarlo
+      como agotado. Usa solo cuando el usuario diga "bota X", "se me dañó
+      el X", "elimina X de mi nevera". Es destrucción real, no consumo.
+
     Parámetros:
-    - items_to_add: Lista de strings con los ingredientes a sumar a la despensa.
-    - items_to_remove: Lista de strings con los ingredientes a restar de la despensa.
+    - items_to_add: Lista de strings con cantidad+unidad+ingrediente a sumar.
+    - items_to_remove: Lista de strings a eliminar definitivamente (dañado/botado).
+    - items_to_deplete: Lista de strings (nombres) a marcar como agotados (se acabaron).
     """
     # [P3-DOC-2 · 2026-05-11] LIVE-TOOL CONTRACT — LEER ANTES DE MODIFICAR.
     # ────────────────────────────────────────────────────────────────────────
@@ -1268,27 +1418,149 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
     #      filtro per-user en cada query.
     #
     # Tooltip-anchor: P3-DOC-2-LIVE-TOOL-CONTRACT
+    #
+    # [P3-AGENT-DEPLETE · 2026-05-22] `items_to_deplete` snapshots la cantidad
+    # actual del inventario antes de eliminar la fila — el snapshot se inyecta
+    # en el ToolMessage via marker `<<PANTRY_DEPLETED_JSON: [...]>>` que
+    # `agent.py:execute_tools` extrae y propaga al state. AgentPage.jsx lo
+    # escribe a `localStorage.mealfit_depleted_items` para que Pantry.jsx
+    # lo muestre en la sección "Agotados". Tooltip-anchor: P3-AGENT-DEPLETE.
 
     logger.info(f"🛒 [TOOL EXECUTION] Modificando despensa física manual para user {user_id}")
     try:
-        from db_inventory import add_or_update_inventory_item, deduct_consumed_meal_from_inventory
+        import json as _json
+        import unicodedata as _ucd
+        from datetime import datetime as _dt, timezone as _tz
+        from db_inventory import (
+            add_or_update_inventory_item,
+            deduct_consumed_meal_from_inventory,
+            get_raw_user_inventory,
+        )
         from shopping_calculator import _parse_quantity
-        
+
         added_count = 0
         removed_count = 0
-        
+        depleted_count = 0
+        depleted_payload: list[dict] = []
+
         if items_to_add:
             for item in items_to_add:
                 qty, unit, name = _parse_quantity(item)
                 if name and qty > 0:
                     add_or_update_inventory_item(user_id, name, qty, unit)
                     added_count += 1
-                    
+
+        if items_to_deplete:
+            # [P3-AGENT-DEPLETE · 2026-05-22 · upgrade P3-DEPLETED-BD · 2026-05-22]
+            # Snapshot + delete inventory row + INSERT a `user_depleted_items` BD
+            # (cross-device sync). Pre-fix (P3-AGENT-DEPLETE) emitía marker JSON
+            # inline para que AgentPage.jsx hiciera merge a localStorage — eso
+            # limitaba el feature a un solo browser. Ahora la BD es la fuente
+            # de verdad, el localStorage es solo cache local del frontend.
+            from db_inventory import add_depleted_item as _bd_add_depleted
+            current_rows = get_raw_user_inventory(user_id)
+
+            def _strip_lower(s: str) -> str:
+                nfd = _ucd.normalize("NFD", str(s or ""))
+                return "".join(c for c in nfd if _ucd.category(c) != "Mn").lower().strip()
+
+            row_by_name: dict[str, dict] = {}
+            for r in current_rows:
+                key = _strip_lower(r.get("ingredient_name", ""))
+                if key:
+                    row_by_name[key] = r
+
+            now_iso = _dt.now(_tz.utc).isoformat()
+            for item in items_to_deplete:
+                try:
+                    _q, _u, parsed_name = _parse_quantity(item)
+                except Exception:
+                    parsed_name = item
+                lookup_key = _strip_lower(parsed_name) or _strip_lower(item)
+                row = row_by_name.get(lookup_key)
+                if not row:
+                    for key, candidate_row in row_by_name.items():
+                        if lookup_key and (lookup_key in key or key in lookup_key):
+                            row = candidate_row
+                            break
+                if not row:
+                    logger.info(
+                        f"🪫 [P3-AGENT-DEPLETE] '{item}' no encontrado en pantry — "
+                        f"skip (puede ya estar agotado o no haberse comprado)."
+                    )
+                    continue
+                qty_snapshot = float(row.get("quantity") or 0)
+                if qty_snapshot <= 0:
+                    qty_snapshot = 1.0
+                ingredient_name = row.get("ingredient_name")
+                master_id = row.get("master_ingredient_id")
+
+                # [P3-DEPLETED-BD] INSERT a user_depleted_items vía helper que
+                # hace upsert idempotente por (user_id, master_id) o (user_id,
+                # lower(name)). Si el item ya estaba agotado, actualiza la
+                # qty + depleted_at — escenario edge legítimo.
+                _bd_ok = _bd_add_depleted(
+                    user_id,
+                    ingredient_name=str(ingredient_name),
+                    quantity=qty_snapshot,
+                    unit=str(row.get("unit") or "unidad"),
+                    master_ingredient_id=master_id,
+                    category=None,
+                    shelf_life_days=None,
+                    depleted_at=now_iso,
+                )
+                if not _bd_ok:
+                    logger.warning(
+                        f"[P3-DEPLETED-BD] add_depleted_item falló para "
+                        f"name={ingredient_name!r} — skip BD insert pero "
+                        f"continuar con delete del inventory (best-effort)."
+                    )
+
+                depleted_payload.append({
+                    "master_ingredient_id": master_id,
+                    "ingredient_name": ingredient_name,
+                    "quantity": qty_snapshot,
+                    "unit": row.get("unit"),
+                    "category": None,
+                    "shelf_life_days": None,
+                    "depleted_at": now_iso,
+                })
+                try:
+                    from db_core import supabase as _sb
+                    if _sb:
+                        _sb.table("user_inventory").delete().eq("id", row.get("id")).eq("user_id", user_id).execute()
+                    depleted_count += 1
+                except Exception as _del_err:
+                    logger.warning(
+                        f"[P3-AGENT-DEPLETE] DELETE row id={row.get('id')} falló: {_del_err}"
+                    )
+
         if items_to_remove:
             deduct_consumed_meal_from_inventory(user_id, items_to_remove)
             removed_count += len(items_to_remove)
-            
-        return f"¡Despensa actualizada! Se agregaron {added_count} ítems y se redujeron/eliminaron {removed_count} ítems físicamente en la nevera digital."
+
+        # Construir mensaje human-friendly para la LLM.
+        parts = []
+        if added_count:
+            parts.append(f"se agregaron {added_count} ítem(s)")
+        if depleted_count:
+            parts.append(f"se marcaron {depleted_count} como agotado(s)")
+        if removed_count:
+            parts.append(f"se eliminaron {removed_count} ítem(s)")
+        if not parts:
+            msg = "No se modificó la despensa (nada coincidió con lo solicitado)."
+        else:
+            msg = "¡Despensa actualizada! " + ", ".join(parts) + "."
+
+        # [P3-AGENT-DEPLETE · 2026-05-22] Inyectar marker JSON inline al final
+        # del tool_result. `agent.py:execute_tools` lo extrae con regex,
+        # propaga al state field `pantry_depleted_items`, y lo strip-ea del
+        # ToolMessage antes de pasarlo al siguiente call_model — la LLM NO
+        # ve el JSON raw (sería ruido en su contexto).
+        if depleted_payload:
+            msg += f"\n\n<<PANTRY_DEPLETED_JSON: {_json.dumps(depleted_payload, ensure_ascii=False)}>>"
+
+        return msg
     except Exception as e:
         logger.error(f"❌ [TOOL] Error modificando despensa manualmente: {e}")
         return f"Error al modificar el inventario físico: {str(e)}"

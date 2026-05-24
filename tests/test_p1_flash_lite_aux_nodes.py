@@ -66,10 +66,17 @@ def test_helper_defined_and_reads_knob(func_name, knob_name):
 
 def test_default_flash_lite_constant_present():
     """Una sola constante `_FLASH_LITE_DEFAULT` que los 3 helpers reusan —
-    evita drift entre defaults si Google deprecara la versión preview."""
+    evita drift entre defaults si Google rename del modelo.
+
+    [P3-PRICING-DICT-REFRESH · 2026-05-21] Pre-fix la regex esperaba el sufijo
+    legacy `-preview` que dejó de existir cuando Google promovió el modelo a
+    GA (`gemini-3.1-flash-lite` sin sufijo). El test era stale y fallaba en
+    HEAD desde el rename — corregido aquí porque está en la misma área de
+    cleanup que el pricing dict.
+    """
     text = _read_graph()
     assert re.search(
-        r'_FLASH_LITE_DEFAULT\s*=\s*"gemini-3\.1-flash-lite-preview"', text
+        r'_FLASH_LITE_DEFAULT\s*=\s*"gemini-3\.1-flash-lite"', text
     ), (
         "P1-FLASH-LITE-AUX-NODES: constante `_FLASH_LITE_DEFAULT` con valor "
         "`'gemini-3.1-flash-lite'` debe existir como SSOT del default."
@@ -139,19 +146,31 @@ def test_pricing_dict_includes_flash_lite():
     """Cross-link: el dict de pricing en db_profiles.py debe incluir
     `gemini-3.1-flash-lite` para que `compute_gemini_cost_micros`
     pueda calcular el costo. Sin esta entry, `llm_usage_events.cost_usd_micros`
-    queda NULL y el ROI de este P-fix es invisible."""
+    queda NULL y el ROI de los swaps a lite es invisible.
+
+    [P3-PRICING-DICT-REFRESH · 2026-05-21] Pricing real Google AI 2026-05-21
+    tier Estándar (paid): $0.25 input / $1.50 output / $0.025 cached. Pre-fix
+    tenía valores stale 2.5× por debajo ($0.10/$0.40/$0.025) por error en el
+    P1-COST-INSTRUMENTATION original. Resultado: cost reporting sub-reportaba
+    significativamente el costo de flash-lite (que es el modelo activo de
+    self-critique evaluator + medical reviewer + judge + fact-checker tras
+    P1-FLASH-LITE-AUX-NODES, y ahora también del skeleton planner tras
+    P3-PLANNER-LITE-COST + plan title + pref-agent tras P3-FLASH-LITE-COST-CUT).
+    """
     db_path = _BACKEND_ROOT / "db_profiles.py"
     text = db_path.read_text(encoding="utf-8")
     assert '"gemini-3.1-flash-lite"' in text, (
         "P1-COST-INSTRUMENTATION pricing dict debe incluir entry para "
         "`gemini-3.1-flash-lite`. Sin esta entry el costo no se calcula."
     )
-    # Pricing esperado (en micros/M tokens): $0.10 / $0.40 / $0.025
+    # Pricing real (en micros/M tokens): $0.25 / $1.50 / $0.025
     m = re.search(
-        r'"gemini-3\.1-flash-lite-preview"\s*:\s*\{\s*"input"\s*:\s*100_000\s*,\s*"output"\s*:\s*400_000\s*,\s*"cached"\s*:\s*25_000\s*\}',
+        r'"gemini-3\.1-flash-lite"\s*:\s*\{\s*"input"\s*:\s*250_000\s*,\s*"output"\s*:\s*1_500_000\s*,\s*"cached"\s*:\s*25_000\s*\}',
         text,
     )
     assert m, (
-        "Pricing de Flash-Lite debe ser input=100_000 / output=400_000 / "
-        "cached=25_000 micros/M (= $0.10/$0.40/$0.025 per M tokens)."
+        "Pricing de Flash-Lite debe ser input=250_000 / output=1_500_000 / "
+        "cached=25_000 micros/M (= $0.25/$1.50/$0.025 per M tokens) per Google "
+        "AI doc 2026-05-21. Si Google cambia el pricing, actualizar AMBOS el "
+        "dict en db_profiles.py Y esta assertion."
     )

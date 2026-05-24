@@ -201,9 +201,21 @@ CB_LOCAL_HEALTH_TTL_S       = _env_float("MEALFIT_CB_LOCAL_HEALTH_TTL_S",       
 # `HARD_CEILING_S=170s` que cancela cualquier intento congelado.
 #
 # Rollback sin redeploy: `MEALFIT_HEDGE_AFTER_BASE_S=45` revierte al
-# comportamiento pre-fix. Subir aún más (120-140s) si el monitor de costo
-# muestra hedges fired/chunk >0.5 sostenidamente.
-HEDGE_AFTER_BASE_S          = _env_float("MEALFIT_HEDGE_AFTER_BASE_S",          90.0)
+# comportamiento pre-fix-original; `MEALFIT_HEDGE_AFTER_BASE_S=90` al pre-fix-V2.
+#
+# [P3-COST-CUT-V2 · 2026-05-21] Default subido 90s → 120s. Razón: análisis del
+# costo desperdiciado por hedges que fired pero perdieron. Cuando primary gana,
+# `pt.cancel()` solo schedula la cancelación — la task hedge sigue corriendo
+# hasta el próximo checkpoint async, completa el LLM call, genera ~1600 output
+# tokens × $9/M = ~$0.014 desperdiciados por hedge. Plan productivo 2026-05-21
+# disparó 2/3 hedges con primary ganador (Día 2 a 143s, Día 3 a 101s con
+# threshold=90) → ~$0.028 desperdiciado en ese plan. Con threshold=120s, solo
+# Día 2 dispararía hedge (Día 3 a 101s queda por debajo) — ahorro ~$0.014 por
+# plan en escenario típico.
+# Trade-off: si Gemini se atasca >120s, el hedge llega 30s más tarde que antes.
+# Worst case wall-clock peor, pero `HARD_CEILING_S=170s` sigue siendo el cap
+# de seguridad.
+HEDGE_AFTER_BASE_S          = _env_float("MEALFIT_HEDGE_AFTER_BASE_S",          120.0)
 HARD_CEILING_S              = _env_float("MEALFIT_HARD_CEILING_S",              170.0)
 # [P2-HEDGE-LIMITER-RAISE · 2026-05-16] Cap absoluto de hedges concurrentes por
 # pipeline. Default subido 2 → 3 para que los 3 day_generators paralelos del
@@ -1337,6 +1349,190 @@ logger = logging.getLogger(__name__)
 from cache_manager import redis_client, redis_async_client
 from db_core import execute_sql_query, execute_sql_write, aexecute_sql_query, aexecute_sql_write
 
+
+# ============================================================
+# [P1-BESTEFFORT-DB-CB · 2026-05-21] Circuit breaker LOCAL in-process
+# para escrituras DB "best-effort" (LLM-CACHE, CB-RESET, AB-TEMP).
+#
+# Motivación (incidente 2026-05-21 02:08-02:12):
+#   El async pool se saturaba bajo carga normal (3 day_generators + adversarial
+#   self-play + meta-learning paralelos) y cada best-effort write se quedaba
+#   esperando 8s al timeout del pool. Con 8 callsites consecutivos timeoutean
+#   → ~64s acumulados de latencia gastada en operaciones cosméticas.
+#
+#   Peor: el `LLMCircuitBreaker.arecord_success` también falla en su write a
+#   DB → el estado del CB principal queda "confundido" → se abre prematuramente
+#   → Días 1 y 2 fallan con `Circuit Breaker OPEN para gemini-3.5-flash` aunque
+#   el modelo en sí responde normal.
+#
+# Diseño:
+#   - In-process only (Redis/DB caen contigo, no podemos apoyarnos en ellos).
+#   - Per-callsite name (registry singleton).
+#   - Thread-safe (callers sync + async).
+#   - Auto half-open tras `OPEN_DURATION_S` (default 60s).
+#   - Solo cuenta "pool timeout" como failure — otros errores son TOLERADOS
+#     (puede ser un schema bug, no significa que el pool esté saturado).
+#
+# Patrón de uso:
+#   _cb = _get_be_db_cb("llm_cache_aget")
+#   if _cb.is_open():
+#       return default                  # fail-fast, no toca pool
+#   try:
+#       result = await aexecute_sql_query(...)
+#       _cb.record_success()
+#       return result
+#   except Exception as e:
+#       if _is_pool_timeout_error(e):
+#           _cb.record_pool_timeout()   # solo timeouts cuentan
+#       logger.info(f"...: {e}")
+#       return default
+#
+# Knobs: `MEALFIT_BE_DB_CB_FAILURE_THRESHOLD` (default 3),
+#        `MEALFIT_BE_DB_CB_OPEN_DURATION_S` (default 60).
+# ============================================================
+_BE_DB_CB_FAILURE_THRESHOLD = max(1, int(os.environ.get("MEALFIT_BE_DB_CB_FAILURE_THRESHOLD", "3") or "3"))
+_BE_DB_CB_OPEN_DURATION_S = max(5, int(os.environ.get("MEALFIT_BE_DB_CB_OPEN_DURATION_S", "60") or "60"))
+
+
+class _BestEffortDBCircuitBreaker:
+    """CB local para writes best-effort. Ver bloque P1-BESTEFFORT-DB-CB arriba."""
+
+    __slots__ = ("name", "_failure_threshold", "_open_duration_s", "_failures", "_opened_at", "_lock")
+
+    def __init__(self, name: str, failure_threshold: int | None = None, open_duration_s: int | None = None):
+        self.name = name
+        self._failure_threshold = failure_threshold if failure_threshold is not None else _BE_DB_CB_FAILURE_THRESHOLD
+        self._open_duration_s = open_duration_s if open_duration_s is not None else _BE_DB_CB_OPEN_DURATION_S
+        self._failures = 0
+        self._opened_at = 0.0
+        self._lock = threading.Lock()
+
+    def is_open(self) -> bool:
+        """Retorna True si el CB está OPEN y la cooldown aún no ha expirado."""
+        with self._lock:
+            if self._failures < self._failure_threshold:
+                return False
+            if (time.time() - self._opened_at) < self._open_duration_s:
+                return True
+            # Cooldown expiró → half-open: reset failures para reintentar.
+            self._failures = 0
+            self._opened_at = 0.0
+            return False
+
+    def record_success(self) -> None:
+        """Cualquier éxito limpia el contador de fallas."""
+        with self._lock:
+            self._failures = 0
+            self._opened_at = 0.0
+
+    def record_pool_timeout(self) -> None:
+        """Solo timeouts del pool cuentan. Otros errores no abren este CB."""
+        with self._lock:
+            self._failures += 1
+            if self._failures >= self._failure_threshold and self._opened_at == 0.0:
+                self._opened_at = time.time()
+                logger.info(
+                    f"🛑 [BE-DB-CB] {self.name!r} OPEN tras {self._failures} pool-timeouts. "
+                    f"Skipeando best-effort writes por {self._open_duration_s}s."
+                )
+
+    def snapshot(self) -> dict:
+        """Estado actual para diagnostics/tests."""
+        with self._lock:
+            return {
+                "name": self.name,
+                "failures": self._failures,
+                "is_open": (
+                    self._failures >= self._failure_threshold
+                    and (time.time() - self._opened_at) < self._open_duration_s
+                ),
+                "opened_at": self._opened_at,
+            }
+
+
+_BE_DB_CB_REGISTRY: dict[str, "_BestEffortDBCircuitBreaker"] = {}
+_BE_DB_CB_REGISTRY_LOCK = threading.Lock()
+
+
+def _get_be_db_cb(name: str) -> "_BestEffortDBCircuitBreaker":
+    """Singleton per name. Thread-safe (registry double-check)."""
+    cb = _BE_DB_CB_REGISTRY.get(name)
+    if cb is not None:
+        return cb
+    with _BE_DB_CB_REGISTRY_LOCK:
+        cb = _BE_DB_CB_REGISTRY.get(name)
+        if cb is None:
+            cb = _BestEffortDBCircuitBreaker(name)
+            _BE_DB_CB_REGISTRY[name] = cb
+        return cb
+
+
+def _is_pool_timeout_error(exc: Exception) -> bool:
+    """Detecta el error específico del pool psycopg cuando no hay conexión
+    disponible dentro del timeout configurado. Buscamos por el texto canónico
+    `couldn't get a connection after X.XX sec` que psycopg_pool emite.
+    """
+    msg = str(exc).lower() if exc else ""
+    return (
+        "couldn't get a connection" in msg
+        or "couldn’t get a connection" in msg  # apóstrofe curvo, por las dudas
+        or "pool is closed" in msg
+        or "pool exhausted" in msg
+    )
+
+
+def _is_transient_upstream_error(exc: BaseException) -> bool:
+    """[P1-LLM-TRANSIENT-5XX · 2026-05-21] Detecta errores 5xx transitorios
+    de Google que NO deben contar como failure en el LLMCircuitBreaker.
+
+    Bug observado 2026-05-21 02:58:37:
+      Google retornó `502 Bad Gateway` en la compresión + planner. El CB
+      contó esos 3 retries como fallas → abrió `gemini-3.5-flash` por 30s →
+      Días 1/2/3 cayeron con `Circuit Breaker OPEN` aunque el modelo
+      principal estaba sano (era infra de Google teniendo un hipo).
+
+    Distinto a `_is_rate_limit_error` (429): los 5xx son **del lado de
+    Google** (problemas internos suyos), no del usuario/proyecto. La
+    estrategia correcta: backoff + retry SIN contaminar el CB. Por eso
+    los excluimos del conteo de failures.
+
+    Cubre 502/503/504/INTERNAL/UNAVAILABLE — los códigos transitorios que
+    Google documenta como retryable. Match por string + por attributes
+    porque LangChain wrappea estos errores de formas inconsistentes entre
+    versiones.
+
+    Tooltip-anchor: P1-LLM-TRANSIENT-5XX.
+    """
+    try:
+        _type_name = type(exc).__name__
+        # Excepciones canónicas que documentan transient upstream
+        if _type_name in (
+            "ServiceUnavailable", "InternalServerError", "GatewayTimeout",
+            "DeadlineExceeded", "Aborted", "ServerError", "BadGateway",
+        ):
+            return True
+        _msg = str(exc).lower() if exc else ""
+        # HTTP code 502/503/504 en el mensaje (LangChain/genai wrappean así)
+        if any(code in f" {_msg} " for code in (" 502 ", " 503 ", " 504 ")):
+            return True
+        if any(s in _msg for s in ("(502)", "(503)", "(504)", '"code":502', '"code":503', '"code":504')):
+            return True
+        # gRPC / google.api_core status strings
+        if "bad gateway" in _msg or "gateway timeout" in _msg or "service unavailable" in _msg:
+            return True
+        if "internal" in _msg and ("server error" in _msg or "google" in _msg):
+            return True
+        if "unavailable" in _msg and ("backend" in _msg or "google" in _msg or "service" in _msg):
+            return True
+        # google.genai ClientError expone `.code` numérico
+        _code = getattr(exc, "code", None)
+        if _code in (502, 503, 504):
+            return True
+        return False
+    except Exception:
+        return False
+
+
 class LLMCircuitBreaker:
     """Circuit breaker distribuido usando Redis INCR atómico.
     Seguro para multi-worker (Gunicorn/uvicorn --workers N).
@@ -1649,12 +1845,23 @@ class LLMCircuitBreaker:
                 return
             except Exception as e:
                 logger.warning(f"Redis async CB write error: {e}")
+        # [P1-BESTEFFORT-DB-CB · 2026-05-21] Mismo gate que arecord_success.
+        # Si el pool está saturado, no perdamos otros 8-12s intentando registrar
+        # una falla cuando el LLMCircuitBreaker principal ya tiene el estado
+        # propagado in-memory via `_local_healthy=False`. La info se reescribirá
+        # cuando el pool vuelva a estar disponible.
+        _be_cb = _get_be_db_cb("llm_cb_failure_async")
+        if _be_cb.is_open():
+            return
         async with self._alock_acquire():
             try:
                 # [P1-27] Ver `record_failure` para rationale de atomicidad.
                 # Mismo patrón sync: SQL UPSERT con INCR server-side.
                 await self._aatomic_record_failure_db()
+                _be_cb.record_success()
             except Exception as e:
+                if _is_pool_timeout_error(e):
+                    _be_cb.record_pool_timeout()
                 logger.warning(f"DB async CB write error: {e}")
 
     async def arecord_success(self):
@@ -1673,14 +1880,30 @@ class LLMCircuitBreaker:
                 return
             except Exception as e:
                 logger.warning(f"Redis async CB reset error: {e}")
+        # [P1-BESTEFFORT-DB-CB · 2026-05-21] Gate: si los últimos 3 CB-RESETs
+        # timeoutearon en el pool, skipea por 60s. Los próximos record_success
+        # reintentarán automáticamente tras la cooldown. Cierre del root cause
+        # del incidente 2026-05-21 02:08-02:12 donde `DB async CB write error`
+        # bloqueaba 8s × N callsites consecutivos.
+        _be_cb = _get_be_db_cb("llm_cb_reset_async")
+        if _be_cb.is_open():
+            # Best-effort skipped silently; el local_healthy ya marca al CB
+            # principal como sano en memoria.
+            with self._local_state_lock:
+                self._local_healthy = True
+                self._last_db_check = time.time()
+            return
         async with self._alock_acquire():
             try:
                 # [P1-27] Reset atómico async (ver `record_success` sync).
                 await self._aatomic_reset_db()
+                _be_cb.record_success()
                 with self._local_state_lock:
                     self._local_healthy = True
                     self._last_db_check = time.time()
             except Exception as e:
+                if _is_pool_timeout_error(e):
+                    _be_cb.record_pool_timeout()
                 # [P3-LOG-CLARITY · 2026-05-16] Bajado de warning→info y wording
                 # ajustado: el CB reset es BEST-EFFORT (idempotente, el próximo
                 # success reintentará). Pre-fix decía "error" + nivel WARNING →
@@ -2572,6 +2795,12 @@ class PersistentLLMCache:
                     return json.loads(val)
             except Exception as e:
                 logger.warning(f"Redis async cache read error: {e}")
+        # [P1-BESTEFFORT-DB-CB · 2026-05-21] CB local: si el pool tuvo
+        # ≥3 timeouts seguidos, skipea esta call los próximos 60s en lugar
+        # de gastar 8-12s del pool timeout en una operación cosmética.
+        _be_cb = _get_be_db_cb("llm_cache_aget")
+        if _be_cb.is_open():
+            return default
         try:
             # [P0-4] Ver comentario equivalente en `get` arriba — mismo bug,
             # mismo fix vía `make_interval(secs => %s)`.
@@ -2579,9 +2808,12 @@ class PersistentLLMCache:
                 "SELECT value FROM app_kv_store WHERE key = %s AND updated_at > now() - make_interval(secs => %s)",
                 (key, self.ttl), fetch_one=True
             )
+            _be_cb.record_success()
             if res:
                 return res["value"] if isinstance(res["value"], list) or isinstance(res["value"], dict) else json.loads(res["value"])
         except Exception as e:
+            if _is_pool_timeout_error(e):
+                _be_cb.record_pool_timeout()
             # [P3-LOG-CLARITY · 2026-05-16] Bajado de warning→info: cache MISS
             # por pool saturado es BEST-EFFORT (el LLM call procede normal sin
             # cache hit; solo perdemos la optimización de evitar 1 prompt
@@ -2615,12 +2847,20 @@ class PersistentLLMCache:
                 await redis_async_client.setex(key, self.ttl, json.dumps(value))
             except Exception as e:
                 logger.warning(f"Redis async cache write error: {e}")
+        # [P1-BESTEFFORT-DB-CB · 2026-05-21] Mismo gate que aget: fail-fast
+        # cuando pool está saturado.
+        _be_cb = _get_be_db_cb("llm_cache_aset")
+        if _be_cb.is_open():
+            return
         try:
             await aexecute_sql_write(
                 "INSERT INTO app_kv_store (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
                 (key, json.dumps(value))
             )
+            _be_cb.record_success()
         except Exception as e:
+            if _is_pool_timeout_error(e):
+                _be_cb.record_pool_timeout()
             # [P3-LOG-CLARITY · 2026-05-16] Bajado de warning→info: cache SET
             # fallido es BEST-EFFORT (perdemos opt de cachear este prompt
             # para próximas calls; no afecta el plan actual).
@@ -3825,7 +4065,107 @@ def _build_day_schema_instruction() -> str:
 
 
 _DAY_SCHEMA_INSTRUCTION = _build_day_schema_instruction()
-_DAY_SYSTEM_INSTRUCTION_CACHED = DAY_GENERATOR_SYSTEM_PROMPT + _DAY_SCHEMA_INSTRUCTION
+
+
+# [P3-COST-CUT-V2 · 2026-05-21] Pre-computar tabla de nutrición e inyectarla
+# al SystemMessage cacheado del day_generator. ANTES: cada day_worker hacía
+# 3-4 `consultar_nutricion` tool_calls, cada uno un LLM roundtrip completo
+# (~$0.012/call con cache). Audit 2026-05-21 reveló que `tools_nutrition.py`
+# es un MOCK dict de 15 ingredientes y ~50% de las queries del LLM retornan
+# "No se encontró" (gandules, yuca, guineo, yogurt griego no están en el
+# dict) — el LLM estima igual, pero paga el roundtrip. Inyectando el dict
+# en el SystemMessage cacheado:
+#   - Cero coste marginal por llamada (cached input $0.15/M vs fresh $1.50/M)
+#   - LLM ve la tabla autoritativa sin necesitar tool_call para los 15 conocidos
+#   - Para ingredientes NO en tabla: LLM estima desde training knowledge
+#     (mismo comportamiento que hoy cuando el tool retorna "no encontrado")
+# Tool sigue disponible vía bind_tools — fallback explícito si el LLM lo
+# necesita para ingredientes específicos, pero la instrucción del prompt
+# desincentiva su uso para los 15 listados.
+# Tooltip-anchor: P3-COST-CUT-V2-NUTRITION-TABLE.
+def _build_nutrition_lookup_instruction() -> str:
+    """Construye la sección del SystemMessage cacheado con la tabla de
+    nutrición pre-computada. Llamado UNA vez al import — byte-equivalence
+    entre todas las llamadas (cache hit garantizado tras la primera)."""
+    from tools_nutrition import MOCK_NUTRITION_DB
+    lines = [
+        "\n\nTABLA DE NUTRICIÓN PRE-COMPUTADA (valores por 100g, fuente autoritativa):",
+        "Usa estos valores DIRECTAMENTE sin invocar `consultar_nutricion` para los",
+        "siguientes 15 ingredientes — el roundtrip de tool es innecesario:",
+    ]
+    for key in sorted(MOCK_NUTRITION_DB.keys()):
+        d = MOCK_NUTRITION_DB[key]
+        lines.append(
+            f"  - {key}: {d['calories']} kcal | "
+            f"P {d['protein']}g | C {d['carbs']}g | G {d['fats']}g"
+        )
+    lines.append(
+        "Para ingredientes NO listados arriba (ej. gandules, yuca, guineo, "
+        "yogurt griego, mango, ñame, casabe, salami, jamón, sardina): estima "
+        "macros usando tu conocimiento general SIN invocar `consultar_nutricion` "
+        "(el tool retorna 'no encontrado' para esos casos y desperdicia un "
+        "roundtrip). Reglas de orientación rápida:"
+    )
+    lines.append(
+        "  - Tubérculos (yuca, ñame, malanga): ~110-130 kcal/100g, alto en carbos."
+    )
+    lines.append(
+        "  - Legumbres secas cocidas (gandules, garbanzos, lentejas): ~120-130 kcal/100g, P~7-9g, C~22g."
+    )
+    lines.append(
+        "  - Yogurt griego sin azúcar: ~60 kcal/100g, P~10g, C~4g, G~0.4g."
+    )
+    lines.append(
+        "  - Guineo (banana): ~89 kcal/100g, C~23g."
+    )
+    lines.append(
+        "  - Mango: ~60 kcal/100g, C~15g."
+    )
+    return "\n".join(lines)
+
+
+_NUTRITION_LOOKUP_INSTRUCTION = _build_nutrition_lookup_instruction()
+_DAY_SYSTEM_INSTRUCTION_CACHED = (
+    DAY_GENERATOR_SYSTEM_PROMPT
+    + _DAY_SCHEMA_INSTRUCTION
+    + _NUTRITION_LOOKUP_INSTRUCTION
+)
+
+
+# [P3-COST-CUT-V2 · 2026-05-21] System instruction cacheable del SELF-CRITIQUE
+# EVALUATOR. ANTES: el prompt completo (rol + criterios + datos del plan) iba
+# como un solo string concatenado a `_safe_ainvoke(evaluator_llm, prompt, ...)`,
+# sin SystemMessage separado → NO cache eligible aunque `PROMPT_CACHE_SYSTEM_MESSAGE=True`.
+# Audit 2026-05-21 confirmó: planner + day_gen wirean cache OK; este evaluator
+# era el único bug de wiring restante. Splitting el prompt en
+# {SystemMessage(static), HumanMessage(per-plan data)} permite cache hit del
+# rol + criterios (la parte invariante) — ahorra ~$0.003/plan input cost +
+# ~10-15s latencia per critique cycle.
+# Tooltip-anchor: P3-COST-CUT-V2-EVALUATOR-CACHE.
+_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION = """
+Eres un Crítico Culinario Experto. Tu tarea es evaluar un plan de comidas (días generados) y emitir 5 scores numéricos del 1 al 10.
+
+CRITERIOS DE EVALUACIÓN:
+1. Atractivo visual (visual_score): ¿Se lee apetitoso o son combinaciones raras?
+
+2. Diversidad real de sabores (diversity_score). Penaliza con score <=4 si:
+   - Se repite la misma proteína o guarnición principal con nombres distintos.
+   - Un staple (avena, claras, pan, yogurt, queso, lechosa, guineo, plátano maduro, aguacate, tortilla)
+     aparece en 2+ días (ver bloque 'STAPLES REPETIDOS' en el HumanMessage si está presente).
+
+3. Coherencia cultural Dominicana (cultural_score): ¿El desayuno tiene sentido? ¿La cena es coherente?
+
+4. Balance de temperaturas (temperature_score): ¿Hay 3 días seguidos de ensaladas frías o todo es sopa?
+
+5. Coherencia comida↔horario (slot_coherence_score):
+   - MERIENDAS deben ser SNACKS LIGEROS (yogurt+fruta, batido, casabe+queso, sándwich pequeño, fruta+mani).
+     Si una merienda es "Salteado de…", "Locrio de…", "Pechuga al grill con puré", o cualquier mini-almuerzo, BAJA este score a ≤4.
+   - CENA NO debe repetir la PROTEÍNA PRINCIPAL ni el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día. Si los repite, BAJA este score a ≤4.
+   - Si el bloque 'INCOHERENCIAS POR SLOT' en el HumanMessage lista hallazgos, son hechos: BAJA slot_coherence_score a ≤4 obligatoriamente.
+
+REGLA DE DECISIÓN:
+Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=True y da instrucciones CLARAS Y CORTAS de qué cambiar, mencionando explícitamente el día afectado (ej. "Día 2").
+""".strip()
 
 
 # [P1-FLASH-LITE-AUX-NODES · 2026-05-15] Modelos auxiliares de pipeline
@@ -3956,11 +4296,121 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 #
 # Defaults preservan comportamiento actual. Tooltip-anchor: P3-PLAN-MODEL-KNOBS.
 def _plan_pro_model_name() -> str:
-    return _env_str("MEALFIT_PRO_MODEL", "gemini-3.1-pro-preview")
+    # [P1-ALL-MODELS-GA · 2026-05-21] Default migrado de `gemini-3.1-pro-preview`
+    # a `gemini-3.5-flash` por decisión del owner: eliminar TODA dependencia de
+    # modelos `*-preview` (riesgo deprecation sin SLA + cuotas free-tier separadas
+    # aunque haya billing). Esto significa que perfiles CLÍNICOS complejos ahora
+    # se enrutan a Flash en lugar de Pro — trade-off: menor capacidad de razonamiento
+    # médico vs estabilidad operacional garantizada.
+    # Rollback si calidad clínica degrada visiblemente: `MEALFIT_PRO_MODEL=gemini-3.1-pro-preview`.
+    return _env_str("MEALFIT_PRO_MODEL", "gemini-3.5-flash")
 
 
 def _plan_flash_model_name() -> str:
-    return _env_str("MEALFIT_FLASH_MODEL", "gemini-3-flash-preview")
+    # [P1-FLASH-MODEL-GA · 2026-05-21] Default `gemini-3.5-flash` (GA) en lugar
+    # de `gemini-3-flash-preview` (preview). Razones:
+    #   1. Modelos preview de Google pueden deprecarse sin aviso prolongado
+    #      (caso real: CB stale 4.4 días el 2026-05-11 con preview model).
+    #   2. `gemini-3-flash-preview` está sujeto a cuota free-tier de 20 RPD
+    #      (`generate_content_free_tier_requests`) → bloqueo crítico para
+    #      cuentas que aún no habilitaron billing en su proyecto Google Cloud
+    #      (observado en chunk 713ff43a, 2026-05-21).
+    #   3. `gemini-3.5-flash` es modelo GA estable, sujeto a quotas paid-tier
+    #      directas cuando hay billing activo (sin sufijo `-FreeTier` en el
+    #      `quotaId`).
+    # Rollback sin redeploy: `MEALFIT_FLASH_MODEL=gemini-3-flash-preview`.
+    return _env_str("MEALFIT_FLASH_MODEL", "gemini-3.5-flash")
+
+
+def _planner_model_name() -> str:
+    """[P3-PLANNER-LITE-COST · 2026-05-21] Override del modelo del SKELETON
+    PLANNER ÚNICAMENTE. El planner solo asigna nombres + slots (proteína por día,
+    carbo por día, vegetales, técnica de cocción) — clasificación-like, sin
+    constraints duros de macros (esos se aplican en day generators downstream).
+    Flash-lite cubre la tarea + reduce costo ~7% per-plan generation.
+
+    Si vacío (`""`), el callsite respeta el ruteo dinámico de `_route_model`
+    (PRO para perfiles clínicos complejos, FLASH para simples). Útil si la
+    calidad del skeleton degrada visiblemente — flip a `""` recupera ruteo
+    legacy sin redeploy.
+
+    Rollback sin redeploy: `MEALFIT_PLANNER_MODEL=""` (cadena vacía) restaura
+    el ruteo dinámico. O `MEALFIT_PLANNER_MODEL=gemini-3.5-flash` fuerza flash GA.
+    """
+    return _env_str("MEALFIT_PLANNER_MODEL", "gemini-3.1-flash-lite")
+
+
+def _self_critique_model_name() -> str:
+    """[P3-SELF-CRITIQUE-LITE-COST · 2026-05-22] Override del modelo del
+    EVALUATOR de self_critique únicamente. El evaluator solo emite 5 scores
+    (1-10) + un bool + un string corto de suggestions sobre un summary
+    comprimido del plan (NO el plan completo). Las señales críticas
+    (slot_issues + staple_repetitions) están pre-calculadas por código y van
+    al prompt — el LLM solo necesita leer + ponderar + emitir structured
+    output. Tarea adecuada para flash-lite.
+
+    Safety nets contra false-negatives:
+      1. `deterministic_days` FLOOR (línea ~6928): días con slot_incoherence
+         se inyectan al floor de corrección AUN si el LLM los omite.
+      2. `EVALUATOR_USE_PRO` knob override: si la calidad degrada visiblemente,
+         flip `MEALFIT_EVALUATOR_USE_PRO=1` para escalar a Pro (este knob
+         tiene precedencia sobre `MEALFIT_SELF_CRITIQUE_MODEL`).
+      3. El corrector (que regenera días) sigue usando Flash full vía
+         `_route_model(force_fast=True)` — NO se afecta por este knob.
+
+    Default: `_FLASH_MODEL_NAME` (preserva comportamiento pre-fix). Para
+    activar el A/B de ahorro: setear `MEALFIT_SELF_CRITIQUE_MODEL=gemini-3.1-flash-lite`
+    en EasyPanel/.env y restart del worker. Para revertir: cadena vacía o
+    el nombre del modelo Flash original.
+
+    Costo estimado en `self_critique` últimos 7 días (datos prod 2026-05-22):
+      - gemini-3.5-flash:           12 eventos, $0.68 → $0.11 con lite (84% off)
+      - gemini-3-flash-preview:    116 eventos, $1.96 → $1.20 con lite (39% off)
+      - TOTAL 7d: $2.64 → $1.31 → ahorro ~$1.33/7d = ~$5.70/mes.
+    (Si el pricing dict está inflado vs Google Cloud Billing real, ajustar
+    proporcionalmente — el % de ahorro relativo se mantiene.)
+    """
+    return _env_str("MEALFIT_SELF_CRITIQUE_MODEL", _plan_flash_model_name())
+
+
+def _compressor_model_name() -> str:
+    """[P3-COST-CUT-AUX · 2026-05-22] Modelo del `context_compression_node`.
+    Default `gemini-3.1-flash-lite`. La compresión es síntesis textual sobre
+    contexto de historial (>2000 chars) — el LLM recibe el texto + un system
+    prompt explícito que dice "no inventes nada, solo comprime + preserva
+    alergias/medical/restricciones". Lite cubre la tarea sin riesgo de perder
+    señal: el system prompt fuerza preservación literal de los facts críticos.
+
+    Safety nets ya activas: si CB OPEN o timeout → fallback `compressed_context =
+    history_context` (sin comprimir, pero no falla). El downstream funciona
+    con contexto completo.
+
+    Costo 14d prod: $0.017/14d (1 evento) → $0.003/14d con lite. Centavos
+    ahorro; el valor es estructural (limpia el hot-path de aux nodes).
+
+    Rollback sin redeploy: `MEALFIT_COMPRESSOR_MODEL=gemini-3.5-flash`.
+    """
+    return _env_str("MEALFIT_COMPRESSOR_MODEL", "gemini-3.1-flash-lite")
+
+
+def _meta_learning_model_name() -> str:
+    """[P3-COST-CUT-AUX · 2026-05-22] Modelo del `reflection_node` (meta-learning).
+    Default `gemini-3.1-flash-lite`. El reflector diagnostica el ciclo previo
+    en UNA oración con structured output `ReflectionResult`. Input: 4 strings
+    cortos (quality_score + meal_adherence + successful + abandoned + fatigued)
+    ~300 tokens. Output: 1 oración corta ~50-100 tokens. Tarea de pattern
+    matching simple, sin razonamiento clínico.
+
+    Safety nets: cache_key por hash conductual (TTL del PersistentLLMCache).
+    Si CB OPEN o timeout → exception capturada upstream, el `reflection_text`
+    queda vacío y el siguiente nodo opera sin él.
+
+    Costo 14d prod: $0.019/14d (4 eventos) → $0.003/14d con lite. Ahorro
+    marginal en absoluto pero ~84% relativo del node.
+
+    Rollback sin redeploy: `MEALFIT_META_LEARNING_MODEL=gemini-3.5-flash`.
+    """
+    return _env_str("MEALFIT_META_LEARNING_MODEL", "gemini-3.1-flash-lite")
 
 
 # Module-level constants preserved para compatibilidad con los 34 callsites
@@ -4139,9 +4589,15 @@ def _route_model_for_day_generator(
 
 
 def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) -> str:
-    """Mejora 1: Ruteo Dinámico de Modelos (Cost/Latency Routing)."""
+    """Mejora 1: Ruteo Dinámico de Modelos (Cost/Latency Routing).
+
+    [P1-FLASH-MODEL-GA · 2026-05-21] Usa `_FLASH_MODEL_NAME` (knob `MEALFIT_FLASH_MODEL`)
+    en lugar de hardcodear el modelo. Sin esto, el swap del default en `_plan_flash_model_name()`
+    no se reflejaba en estos paths (force_fast + FÁCIL routing) porque las strings
+    eran literales aquí.
+    """
     if force_fast:
-        return "gemini-3-flash-preview"
+        return _FLASH_MODEL_NAME
 
     # En reintentos, ya NO forzamos pro-preview: era demasiado lento (90s+ solo el planner)
     # y consumía el budget global antes de que los días pudieran terminar. Mantenemos el
@@ -4172,11 +4628,11 @@ def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) ->
         is_complex = True
         
     if is_complex:
-        logger.info("🔀 [ROUTER] Perfil CLÍNICO complejo detectado. Enrutando a modelo PRO (gemini-3.1-pro-preview).")
-        return "gemini-3.1-pro-preview"
+        logger.info(f"🔀 [ROUTER] Perfil CLÍNICO complejo detectado. Enrutando a modelo PRO ({_PRO_MODEL_NAME}).")
+        return _PRO_MODEL_NAME
     else:
-        logger.info("🔀 [ROUTER] Perfil FÁCIL detectado. Enrutando a modelo FLASH (gemini-3-flash-preview).")
-        return "gemini-3-flash-preview"
+        logger.info(f"🔀 [ROUTER] Perfil FÁCIL detectado. Enrutando a modelo FLASH ({_FLASH_MODEL_NAME}).")
+        return _FLASH_MODEL_NAME
 
 
 # ============================================================
@@ -4193,8 +4649,12 @@ async def context_compression_node(state: PlanState) -> dict:
     
     from langchain_google_genai import ChatGoogleGenerativeAI
 
-    # P1-Q3: capturar el modelo para usar el CB per-modelo
-    _compressor_model = _route_model(state.get("form_data", {}), force_fast=True)
+    # P1-Q3: capturar el modelo para usar el CB per-modelo.
+    # [P3-COST-CUT-AUX · 2026-05-22] Usar helper `_compressor_model_name()`
+    # (knob `MEALFIT_COMPRESSOR_MODEL`, default `gemini-3.1-flash-lite`) en
+    # lugar del ruteo dinámico — la compresión es síntesis textual literal,
+    # no requiere razonamiento Pro. Rollback: setear el knob a flash full.
+    _compressor_model = _compressor_model_name()
     _cb = _get_circuit_breaker(_compressor_model)
     compressor_llm = ChatGoogleGenerativeAI(
         model=_compressor_model,
@@ -4389,7 +4849,13 @@ async def plan_skeleton_node(state: PlanState) -> dict:
 
     # Ruteo dinámico por complejidad (antes se forzaba pro-preview en retry pero era
     # demasiado lento — consumía budget y bloqueaba la generación paralela).
-    planner_model = _route_model(form_data, attempt)
+    # [P3-PLANNER-LITE-COST · 2026-05-21] Override del planner a lite cuando
+    # `MEALFIT_PLANNER_MODEL` está set (default `gemini-3.1-flash-lite`). Si
+    # vacío (`""`), respeta el ruteo dinámico. El skeleton es classification-like
+    # (nombres + slots) — no requiere razonamiento Pro/Flash. Si calidad degrada:
+    # `MEALFIT_PLANNER_MODEL=""` restaura ruteo dinámico.
+    _planner_override = _planner_model_name()
+    planner_model = _planner_override if _planner_override else _route_model(form_data, attempt)
     if attempt > 1:
         logger.info(f"🔀 [RETRY MUTATION] Modelo '{planner_model}' + temp={base_temp} para intento {attempt}")
 
@@ -4435,7 +4901,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             await _planner_cb.arecord_success()
             return res
         except Exception as e:
-            await _planner_cb.arecord_failure()
+            # [P1-LLM-TRANSIENT-5XX · 2026-05-21] Ver day_cb. Excluimos 5xx
+            # transitorios de Google del conteo del CB.
+            if not _is_transient_upstream_error(e):
+                await _planner_cb.arecord_failure()
             raise e
 
     response = await invoke_planner()
@@ -4984,7 +5453,15 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 parsed_dict = json.loads(clean_json)
                 return SingleDayPlanModel(**parsed_dict).model_dump()
             except Exception as e:
-                await _day_cb.arecord_failure()  # P1-Q3
+                # [P1-LLM-TRANSIENT-5XX · 2026-05-21] No contamines el CB con
+                # errores 5xx transitorios de Google (502/503/504). Esos son
+                # infra de Google teniendo problemas, no fallas del modelo.
+                # Tenacity ya retry-ea el call; el CB solo debe abrir si el
+                # modelo en sí (o nuestra integración) está consistentemente
+                # roto. Pre-fix: 3 bursts de 502 abrían el CB → Días caían en
+                # cascada al fallback emergency. Ver incidente 2026-05-21 02:58.
+                if not _is_transient_upstream_error(e):
+                    await _day_cb.arecord_failure()  # P1-Q3
                 raise e
 
         day_result = await invoke_day()
@@ -5620,10 +6097,20 @@ async def _aselect_ab_temp_pair(user_id: str) -> dict:
     activo. La consulta se ejecuta sobre `pipeline_metrics` (~90 filas) y
     típicamente toma 30-150ms — sync bloqueaba ese tiempo todos los SSE
     callbacks y demás coroutines del worker.
+
+    [P1-BESTEFFORT-DB-CB · 2026-05-21] Si el pool está saturado, fail-fast con
+    rows vacíos en lugar de gastar 8-12s en timeout. El AB-TEMP funciona bien
+    con `rows=[]` (cae al fallback exploration uniforme).
     """
+    _be_cb = _get_be_db_cb("ab_temp_async")
+    if _be_cb.is_open():
+        return _compute_ab_temp_pair_from_rows([])
     try:
         rows = await aexecute_sql_query(_AB_TEMP_QUERY, (user_id,), fetch_all=True) or []
+        _be_cb.record_success()
     except Exception as e:
+        if _is_pool_timeout_error(e):
+            _be_cb.record_pool_timeout()
         logger.warning(f"⚠️ [AB-TEMP] Error leyendo historial: {e}")
         rows = []
     return _compute_ab_temp_pair_from_rows(rows)
@@ -6366,12 +6853,19 @@ async def self_critique_node(state: PlanState) -> dict:
     # [P6-EVALUATOR-USE-PRO] Si el knob está ON, el evaluator (decisor de qué
     # días corregir) usa Pro en vez de Flash. Day generators y corrector siguen
     # en Flash — solo escalamos el "juez", no los "ejecutores".
+    # [P3-SELF-CRITIQUE-LITE-COST · 2026-05-22] Si `EVALUATOR_USE_PRO` está
+    # OFF, el modelo del evaluator sale de `_self_critique_model_name()` (knob
+    # `MEALFIT_SELF_CRITIQUE_MODEL`), default `_FLASH_MODEL_NAME` para preservar
+    # comportamiento. Pre-fix usaba `_route_model(force_fast=True)` directo —
+    # equivalente porque `force_fast=True` resuelve a `_FLASH_MODEL_NAME` para
+    # los perfiles no-Pro. La diferencia: ahora el knob permite swap a
+    # `gemini-3.1-flash-lite` sin tocar `_route_model` (que afecta day_generators).
     if EVALUATOR_USE_PRO:
         _evaluator_model = _PRO_MODEL_NAME
         logger.info(f"🎓 [SELF-CRITIQUE] Evaluator escalado a PRO ({_PRO_MODEL_NAME}) "
               f"vía MEALFIT_EVALUATOR_USE_PRO=1 (mejor cobertura de incoherencias).")
     else:
-        _evaluator_model = _route_model(state.get("form_data", {}), force_fast=True)
+        _evaluator_model = _self_critique_model_name()
     _evaluator_cb = _get_circuit_breaker(_evaluator_model)
     evaluator_llm = ChatGoogleGenerativeAI(
         model=_evaluator_model,
@@ -6453,29 +6947,33 @@ async def self_critique_node(state: PlanState) -> dict:
     if emotional == "needs_comfort":
         user_context += "\nNOTA CRÍTICA: Este usuario reportó necesitar 'comfort food'. Platos calientes, densos y reconfortantes son POSITIVOS. NO los penalices por falta de frescura o ensaladas."
 
-    prompt = f"""
-    Eres un Crítico Culinario Experto. Evalúa el siguiente plan de comidas (días generados):
-    {days_summary_json}
-    {staples_block}{slot_block}{user_context}
+    # [P3-COST-CUT-V2 · 2026-05-21] Split del prompt para habilitar cache hit:
+    # parte estática (rol + criterios) en SystemMessage cacheable; parte
+    # per-plan (días + bloques determinísticos + contexto user) en HumanMessage.
+    # Pre-fix: todo iba concatenado como string a `_safe_ainvoke` → cache miss
+    # garantizado aunque `PROMPT_CACHE_SYSTEM_MESSAGE=True`.
+    pista_dia = (
+        f"Pista: empieza por {suggested_day_hint} si necesitas elegir cuál corregir primero."
+        if suggested_day_hint else ""
+    )
+    human_content = f"""
+PLAN A EVALUAR (días generados):
+{days_summary_json}
+{staples_block}{slot_block}{user_context}
+{pista_dia}
+""".strip()
 
-    Evalúa del 1 al 10:
-    1. Atractivo visual (¿Se lee apetitoso o son combinaciones raras?)
-    2. Diversidad real de sabores. Penaliza con score <=4 si:
-       - Se repite la misma proteína o guarnición principal con nombres distintos.
-       - Un staple (avena, claras, pan, yogurt, queso, lechosa, guineo, plátano maduro, aguacate, tortilla)
-         aparece en 2+ días (ver bloque 'STAPLES REPETIDOS' arriba si está presente).
-    3. Coherencia cultural Dominicana (¿El desayuno tiene sentido? ¿La cena es coherente?)
-    4. Balance de temperaturas (¿Hay 3 días seguidos de ensaladas frías o todo es sopa?)
-    5. Coherencia comida↔horario (slot_coherence_score):
-       - MERIENDAS deben ser SNACKS LIGEROS (yogurt+fruta, batido, casabe+queso, sándwich pequeño, fruta+mani).
-         Si una merienda es "Salteado de…", "Locrio de…", "Pechuga al grill con puré", o cualquier mini-almuerzo, BAJA este score a ≤4.
-       - CENA NO debe repetir la PROTEÍNA PRINCIPAL ni el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día. Si los repite, BAJA este score a ≤4.
-       - Si el bloque 'INCOHERENCIAS POR SLOT' arriba lista hallazgos, son hechos: BAJA slot_coherence_score a ≤4 obligatoriamente.
+    if PROMPT_CACHE_SYSTEM_MESSAGE:
+        evaluator_payload = [
+            SystemMessage(content=_CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION),
+            HumanMessage(content=human_content),
+        ]
+    else:
+        # Legacy path: concatenar todo en un string (sin cache eligible).
+        evaluator_payload = (
+            _CRITIQUE_EVALUATOR_SYSTEM_INSTRUCTION + "\n\n" + human_content
+        )
 
-    Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=True y da instrucciones CLARAS Y CORTAS de qué cambiar, mencionando explícitamente el día (ej. "Día 2").
-    {f"Pista: empieza por {suggested_day_hint} si necesitas elegir cuál corregir primero." if suggested_day_hint else ""}
-    """
-    
     try:
         if not await _evaluator_cb.acan_proceed():  # P1-Q3
             raise Exception(f"Circuit Breaker OPEN para {_evaluator_model} - LLM cascade failure prevented")
@@ -6487,7 +6985,7 @@ async def self_critique_node(state: PlanState) -> dict:
             # ON para no perder evaluaciones por timeout.
             _eval_timeout = 60.0 if EVALUATOR_USE_PRO else 30.0
             critique: CritiqueEvaluation = await _safe_ainvoke(
-                evaluator_llm, prompt, timeout=_eval_timeout
+                evaluator_llm, evaluator_payload, timeout=_eval_timeout
             )
             await _evaluator_cb.arecord_success()  # P1-Q3
         except Exception as e:
@@ -9195,6 +9693,58 @@ async def _recompute_aggregates_after_swap(final_state: dict) -> None:
                 "action_taken": "post_swap_revalidation",
             }
 
+            # [P1-SWAP-COHERENCE-ESCALATE · 2026-05-22] Cuando hay
+            # divergencias críticas Y el knob está activo (default True,
+            # mirror del patrón P2-COHERENCE-1 en chunk_worker T2),
+            # exponemos un campo legible para el frontend. Pre-fix la
+            # única vía de notificación era el cron diario P3-B que
+            # corre 04:00 UTC (delay 6-24h al user). Post-fix: el plan
+            # entregado lleva inline las warnings, el Dashboard las puede
+            # renderear como banner amber (mismo lenguaje visual que el
+            # banner `_quality_degraded` del P1-LOW-SIGNAL-FALLBACK).
+            #
+            # NO mutamos `_shopping_coherence_block` porque review ya
+            # pasó — bloquear la entrega del plan no es viable acá. Es
+            # señal user-visible (transparency), no kill-switch.
+            #
+            # Knob: MEALFIT_SWAP_COHERENCE_BLOCK_SEVERE_ONLY (bool,
+            # default True). Flip a False revierte al telemetry-only.
+            try:
+                _escalate_enabled = _env_bool(
+                    "MEALFIT_SWAP_COHERENCE_BLOCK_SEVERE_ONLY", True
+                )
+            except Exception:
+                _escalate_enabled = True
+            if _escalate_enabled and critical_total > 0:
+                # Resumen compacto para inyectar al plan_result (cap a 5
+                # divergencias para no inflar plan_data). Frontend lo
+                # renderea inline.
+                _severe_summary = []
+                for _d in coh_div[:5]:
+                    if (
+                        _d.get("hypothesis") == "cap_swallowed_modifier"
+                        or (_d.get("magnitude") and abs(float(_d.get("delta_pct") or 0.0)) > 0.30)
+                    ):
+                        _severe_summary.append({
+                            "ingredient": str(_d.get("ingredient") or _d.get("canonical_name") or "?")[:80],
+                            "hypothesis": str(_d.get("hypothesis") or "unknown"),
+                            "delta_pct": round(float(_d.get("delta_pct") or 0.0), 3),
+                        })
+                plan_result["_swap_coherence_warnings"] = {
+                    "critical_count": critical_total,
+                    "summary": _severe_summary,
+                    "detected_at": entry["ts"],
+                }
+                # Telemetría adicional para que el cron P3-B pueda
+                # distinguir escalaciones inline-user-visible de las
+                # warn-only históricas. NO altera contrato de buckets.
+                entry["escalated_user_visible"] = True
+                logger.warning(
+                    f"⚠️ [P1-SWAP-COHERENCE-ESCALATE] critical_total={critical_total} "
+                    f"→ _swap_coherence_warnings inyectado al plan (severe_n="
+                    f"{len(_severe_summary)})."
+                )
+
             # [P2-2 · 2026-05-08] Escalación inline a system_alerts cuando
             # critical_total >= threshold. Best-effort: cualquier fallo
             # del helper se loguea pero NO interrumpe el history append.
@@ -10349,8 +10899,12 @@ async def reflection_node(state: PlanState) -> dict:
     start_time = time.time()
     
     try:
-        # P1-Q3: capturar modelo del reflector para CB per-modelo
-        _reflector_model = _route_model(form_data, force_fast=True)  # Modelo rápido para reflexiones
+        # P1-Q3: capturar modelo del reflector para CB per-modelo.
+        # [P3-COST-CUT-AUX · 2026-05-22] Usar helper `_meta_learning_model_name()`
+        # (knob `MEALFIT_META_LEARNING_MODEL`, default `gemini-3.1-flash-lite`).
+        # El reflector emite UNA oración con structured output — tarea simple,
+        # lite cubre. Rollback: setear el knob a flash full.
+        _reflector_model = _meta_learning_model_name()
         _reflector_cb = _get_circuit_breaker(_reflector_model)
         reflector_llm = ChatGoogleGenerativeAI(
             model=_reflector_model,

@@ -72,13 +72,20 @@ def test_is_over_flag_present(jsx_src: str):
 
 
 def test_fill_width_capped_inside_bar(jsx_src: str):
-    """`fillWidth = Math.min(perc, 100)` debe existir — el ancho visual
-    se mantiene cap al 100% (sino el div se desbordaría) pero el % de
-    texto y el isOver flag usan el valor uncapped."""
-    assert re.search(r"fillWidth\s*=\s*Math\.min\s*\(\s*perc\s*,\s*100\s*\)", jsx_src), (
-        "P3-TRACKING-OVER-LIMIT regresión: `fillWidth = Math.min(perc, 100)` "
-        "ausente. Sin esto, una meta excedida al 150% haría el div fill "
-        "desbordarse del track. El cap debe vivir acá, NO en calcPerc."
+    """El cap superior al 100% debe existir. Pre-fix: `fillWidth = Math.min(perc, 100)`.
+    [P3-TRACKING-FILL-MIN-VISUAL · 2026-05-22] Ahora el cap vive en
+    `_percCapped = Math.min(perc, 100)` antes de aplicar el piso del
+    `_FILL_VISUAL_MIN`. Sin el cap, una meta excedida al 150% haría el
+    div fill desbordarse del track."""
+    assert re.search(
+        r"(_percCapped\s*=\s*Math\.min\(perc,\s*100\))|"
+        r"(fillWidth\s*=\s*Math\.min\s*\(\s*perc\s*,\s*100\s*\))",
+        jsx_src,
+    ), (
+        "P3-TRACKING-OVER-LIMIT regresión: cap superior al 100% ausente. "
+        "Buscado `_percCapped = Math.min(perc, 100)` (post-FILL-MIN-VISUAL) "
+        "o el legacy `fillWidth = Math.min(perc, 100)`. Sin ninguno, fill "
+        "se desborda cuando perc > 100."
     )
 
 
@@ -148,9 +155,12 @@ def test_glow_uses_red_when_over(jsx_src: str):
 
 def test_fill_perc_uses_uncapped_value(jsx_src: str):
     """`.fillPerc` debe mostrar `{perc}%` (no `{fillWidth}%`). El número
-    dentro de la barra es el % real — cuando over, debe leer 107% no 100%."""
+    dentro de la barra es el % real — cuando over, debe leer 107% no 100%.
+    [P3-TRACKING-PERC-NARROW-FIX · 2026-05-22] Tolerante al template literal
+    `${styles.fillPerc} ${...}` introducido por el fix narrow — el regex ahora
+    busca `styles.fillPerc` en cualquier expression del className."""
     fill_perc_match = re.search(
-        r"className=\{styles\.fillPerc\}[^>]*>\s*\{(\w+)\}%",
+        r"styles\.fillPerc[\s\S]*?>\s*\n?\s*\{(\w+)\}%",
         jsx_src,
     )
     assert fill_perc_match, "Span `.fillPerc` no encontrado."

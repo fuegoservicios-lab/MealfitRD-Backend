@@ -58,17 +58,35 @@ def test_marker_present_as_tooltip_anchor():
     )
 
 
-def test_fill_perc_span_rendered_inside_fill():
-    """[P3-TRACKING-PERC-DESKTOP] El <span .fillPerc> sigue dentro del
-    div .fill (estructura JSX intacta — el cambio fue solo CSS)."""
+def test_fill_perc_span_rendered_inside_track():
+    """[P3-TRACKING-PERC-DESKTOP · 2026-05-20] El <span .fillPerc> existe en JSX.
+    [P3-TRACKING-PERC-NARROW-FIX · 2026-05-22] Movido de child del `.fill` a
+    child del `.track` (con position: absolute + left: ${fillWidth}%) para
+    que pueda salir del fill cuando el % es bajo (proteína 7% caso real
+    reportado). Verificamos que sigue siendo descendiente del `.track`."""
     jsx = _read(_TRACKING_JSX)
-    fill_block = re.search(
-        r"className=\{styles\.fill\}[\s\S]*?</div>",
-        jsx,
+    # Buscar el bloque del `.track` y su cierre — `.fill` ahora es
+    # self-closing y `.fillPerc` es sibling, no child.
+    track_idx = jsx.find("className={styles.track}")
+    assert track_idx >= 0, "`.track` className no encontrado en JSX."
+    # Buscar el primer `</div>` que NO esté precedido por otro tag abierto
+    # sin cerrar — heurística simple: tomar el slice de 2500 chars y
+    # verificar que `styles.fillPerc` aparece dentro.
+    track_slice = jsx[track_idx:track_idx + 2500]
+    assert "styles.fillPerc" in track_slice, (
+        "`styles.fillPerc` no esta dentro del bloque `.track`. Post-fix narrow "
+        "debe vivir aquí (no en `.fill`) para poder salir del fill cuando "
+        "el % es bajo."
     )
-    assert fill_block, "Bloque `.fill` no encontrado en JSX."
-    assert "styles.fillPerc" in fill_block.group(0), (
-        "`styles.fillPerc` no esta dentro del div `.fill`."
+    # El `.fill` debe ser self-closing (no contener body).
+    fill_self_closing = re.search(
+        r"className=\{styles\.fill\}[^/]*?/>",
+        track_slice,
+    )
+    assert fill_self_closing, (
+        "`.fill` debe ser self-closing (`<div ... />`). Si re-aparece como "
+        "`<div ...>...</div>` con body, el bug narrow puede regresar si alguien "
+        "movió el span de vuelta dentro."
     )
 
 
@@ -91,12 +109,17 @@ def test_fill_perc_visible_in_base_css():
         "`.fillPerc` base no tiene `display: flex`. Pre-fix era `display: none` "
         "(oculto desktop) — el fix lo activa universalmente."
     )
-    assert re.search(r"color:\s*white", body), (
-        "`.fillPerc` base debe tener `color: white` para contraste sobre "
-        "los gradients vibrantes."
-    )
+    # [P3-TRACKING-PERC-NARROW-FIX · 2026-05-22] El `color: white` se movió a
+    # inline style del JSX porque ahora alterna entre white (inside fill) y
+    # el color del macro (outside fill, fill estrecho). El text-shadow sigue
+    # en base CSS pero la variante `.fillPercOutside` lo overridea a none.
     assert "text-shadow" in body, (
-        "`.fillPerc` base debe preservar `text-shadow` (legibilidad en bordes)."
+        "`.fillPerc` base debe preservar `text-shadow` (legibilidad sobre fill)."
+    )
+    # Estructura post-fix: position absolute + transform translateX(-100%).
+    assert "position: absolute" in body, (
+        "`.fillPerc` base debe tener `position: absolute` para posicionarse "
+        "al borde del fill via `left: ${fillWidth}%`."
     )
 
 

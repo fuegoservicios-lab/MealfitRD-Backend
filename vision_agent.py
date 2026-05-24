@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
 # (P3-PREVIEW-MODEL-KNOB).
 # Tooltip-anchor: P3-VISION-MODEL-KNOB.
 def _vision_model_name() -> str:
-    return _env_str("MEALFIT_VISION_MODEL", "gemini-3.1-pro-preview")
+    # [P1-ALL-MODELS-GA · 2026-05-21] Default migrado de `gemini-3.1-pro-preview`
+    # a `gemini-3.5-flash`. Vision pierde capacidad multimodal Pro pero gana
+    # GA stability + paid-tier directo. Rollback: `MEALFIT_VISION_MODEL=gemini-3.1-pro-preview`.
+    return _env_str("MEALFIT_VISION_MODEL", "gemini-3.5-flash")
 
 # Definimos el modelo de salida estructurada para capturar la descripción
 class ImageDescription(BaseModel):

@@ -124,53 +124,111 @@ def swap_persist_body(plans_src: str) -> str:
 # 1. Backend handler existe y aplica jsonb_set quirúrgico + filtro user_id
 # ---------------------------------------------------------------------------
 def test_handler_exists_with_jsonb_set_and_user_id_filter(swap_persist_body: str):
-    """El handler `api_swap_meal_persist` debe:
-      - Usar `jsonb_set(...)` sobre el path `{days,...,meals,...}` para
-        escritura quirúrgica (NO full overwrite del plan_data).
-      - Incluir `AND user_id = %s` en la cláusula WHERE del UPDATE para
-        defense-in-depth (espejo de retry-chunk y recipe/expand).
+    """El handler `api_swap_meal_persist` debe escribir el meal SIN
+    full-overwrite del plan_data. Dos patrones aceptados:
 
-    Sin jsonb_set quirúrgico, el handler reescribiría plan_data completo
-    y reabriría el mismo lost-update que el patrón frontend-only producía.
-    Sin `AND user_id = %s`, un futuro refactor que reordene el ownership
-    check podría abrir IDOR a DB-level.
+      1. **Legacy (P0-NEW-A · 2026-05-11):** `jsonb_set(...)` sobre el
+         path `{days,...,meals,...}` directo en SQL — quirúrgico, NO
+         requiere row lock porque jsonb_set serializa server-side a
+         nivel Postgres.
+      2. **Atómico (P1-SWAP-PERSIST-ATOMIC · 2026-05-22):**
+         `update_plan_data_atomic(plan_id, _mutator, user_id=...)` —
+         `SELECT … FOR UPDATE` + mutator callback que muta solo
+         `plan_data['days'][i]['meals'][j]`. Cierra estructuralmente
+         la ventana lost-update incluso si un futuro refactor del
+         mutator degrada a operaciones overlap con el worker.
+
+    Ambos preservan la garantía contra lost-update con `_chunk_worker`
+    en paralelo. Sin alguno de los dos, el handler reabriría el bug
+    original P0-NEW-A (UPDATE plan_data = <snapshot stale>).
+
+    Adicional: SELECT inicial de ownership DEBE incluir `AND user_id = %s`
+    para devolver 404 al user ajeno (defensa-en-depth).
     """
-    # `jsonb_set` debe aparecer al menos una vez (en realidad 2-3 veces:
-    # meal, _plan_modified_at, opcional is_restocked).
-    assert "jsonb_set" in swap_persist_body, (
-        "P0-NEW-A regresión: `api_swap_meal_persist` no usa `jsonb_set`. "
-        "Si el handler degradó a full overwrite (`UPDATE meal_plans SET "
-        "plan_data = %s::jsonb ...`), reabriría el lost-update que P0-NEW-A "
-        "cerró. Restaurar jsonb_set sobre el path `{days,<i>,meals,<j>}`."
+    # Distinguir uso ACTIVO (jsonb_set como call) vs menciones en docstring/
+    # comentarios que cuentan la historia del refactor P1-SWAP-PERSIST-ATOMIC.
+    # Solo `jsonb_set(` (open paren) en código ejecutable cuenta como "use".
+    # Strip de comentarios `# ...` y triple-quoted strings antes del match.
+    _body_no_comments = re.sub(r"#[^\n]*", "", swap_persist_body)
+    _body_no_docstrings = re.sub(r'"""[\s\S]*?"""', "", _body_no_comments)
+    has_jsonb_set = bool(re.search(r"jsonb_set\s*\(", _body_no_docstrings))
+    has_atomic_helper = "update_plan_data_atomic" in swap_persist_body
+
+    assert has_jsonb_set or has_atomic_helper, (
+        "P0-NEW-A / P1-SWAP-PERSIST-ATOMIC regresión: "
+        "`api_swap_meal_persist` no usa `jsonb_set` ni "
+        "`update_plan_data_atomic`. Si degradó a full overwrite "
+        "(`UPDATE meal_plans SET plan_data = %s::jsonb` directo sin "
+        "FOR UPDATE), reabriría el lost-update que P0-NEW-A cerró. "
+        "Restaurar alguno de los dos patrones."
     )
 
-    # Path del meal: validamos el shape `{days,<int>,meals,<int>}` que
-    # el handler construye dinámicamente con ints validados.
-    meal_path_pattern = re.compile(r"\{days,\s*\"?\s*\+\s*str\(day_index\)", re.DOTALL)
-    has_dynamic_path = bool(meal_path_pattern.search(swap_persist_body))
-    # Alternativa: ya construido como string literal en una variable.
-    has_meal_path_literal = (
-        '"{days," + str(day_index)' in swap_persist_body
-        or "'{days,' + str(day_index)" in swap_persist_body
-    )
-    assert has_dynamic_path or has_meal_path_literal, (
-        "P0-NEW-A regresión: el handler no construye el path "
-        "`{days,<day_index>,meals,<meal_index>}` para jsonb_set. Sin un "
-        "path dinámico, el handler escribiría sobre un meal hardcoded "
-        "(bug funcional) o sobre la raíz del plan_data (no-op write)."
-    )
+    if has_atomic_helper:
+        # P1-SWAP-PERSIST-ATOMIC · 2026-05-22: helper recibe el mutator
+        # como callback. El mutator debe operar sobre `days[day_index]`
+        # y `meals[meal_index]` directamente (NO sobre keys arbitrarios).
+        atomic_pattern = re.compile(
+            r"update_plan_data_atomic\s*\(\s*plan_id\s*,",
+            re.DOTALL,
+        )
+        assert atomic_pattern.search(swap_persist_body), (
+            "P1-SWAP-PERSIST-ATOMIC regresión: el handler invoca "
+            "`update_plan_data_atomic` pero NO pasa `plan_id` como "
+            "primer arg posicional. Verificar signature "
+            "(db_plans.py:381)."
+        )
+        # Defense-in-depth: `user_id=verified_user_id` debe propagarse
+        # al helper para que el SELECT FOR UPDATE incluya `AND user_id`
+        # (cierra I2 + previene logger.warning("[I2-MISS] ...")).
+        user_id_kwarg_pattern = re.compile(
+            r"update_plan_data_atomic[^)]*user_id\s*=\s*verified_user_id",
+            re.DOTALL,
+        )
+        assert user_id_kwarg_pattern.search(swap_persist_body), (
+            "P1-SWAP-PERSIST-ATOMIC regresión: el handler invoca "
+            "`update_plan_data_atomic` SIN `user_id=verified_user_id`. "
+            "Esto degrada a `[I2-MISS]` warning en logs y rompe la "
+            "defensa-en-depth I2 (el SELECT FOR UPDATE no filtra owner). "
+            "Restaurar el kwarg."
+        )
+        # El mutator debe tocar days[day_index] y meals[meal_index].
+        assert "days[day_index]" in swap_persist_body or \
+               "days[" in swap_persist_body, (
+            "P1-SWAP-PERSIST-ATOMIC regresión: el mutator no muta "
+            "`plan_data['days']` — probablemente cambió a una key "
+            "incorrecta. Verificar shape del plan."
+        )
 
-    # AND user_id = %s en el WHERE del UPDATE.
+    if has_jsonb_set:
+        # Legacy: validamos el shape `{days,<int>,meals,<int>}`
+        meal_path_pattern = re.compile(r"\{days,\s*\"?\s*\+\s*str\(day_index\)", re.DOTALL)
+        has_dynamic_path = bool(meal_path_pattern.search(swap_persist_body))
+        has_meal_path_literal = (
+            '"{days," + str(day_index)' in swap_persist_body
+            or "'{days,' + str(day_index)" in swap_persist_body
+        )
+        assert has_dynamic_path or has_meal_path_literal, (
+            "P0-NEW-A regresión: el handler usa `jsonb_set` pero no "
+            "construye el path `{days,<day_index>,meals,<meal_index>}`. "
+            "Sin path dinámico, el handler escribiría sobre un meal "
+            "hardcoded o sobre la raíz del plan_data (no-op write)."
+        )
+
+    # SELECT inicial de ownership: `AND user_id = %s` siempre presente
+    # (independiente del patrón de write — es la primera capa que cierra
+    # IDOR antes de invocar al write helper).
     where_pattern = re.compile(
         r"WHERE\s+id\s*=\s*%s\s+AND\s+user_id\s*=\s*%s",
         re.IGNORECASE | re.DOTALL,
     )
     assert where_pattern.search(swap_persist_body), (
-        "P0-NEW-A regresión: el UPDATE del handler no filtra "
-        "`AND user_id = %s`. Sin esto, un futuro refactor del ownership "
-        "check upstream (SELECT id FROM meal_plans WHERE id=%s AND "
-        "user_id=%s) podría abrir IDOR a DB-level. Restaurar el doble "
-        "candado (espejo de retry-chunk P0-HIST-IDOR-1)."
+        "P0-NEW-A regresión: el SELECT inicial de ownership no filtra "
+        "`AND user_id = %s`. Sin esto, un user ajeno recibiría 200 al "
+        "intentar swap-ear un plan que no le pertenece (el FOR UPDATE "
+        "del helper atómico devolvería `{}` y mapearíamos a 404 igual, "
+        "pero la primera capa debe rechazar antes del network round-trip "
+        "extra). Restaurar el doble candado (espejo de retry-chunk "
+        "P0-HIST-IDOR-1)."
     )
 
 

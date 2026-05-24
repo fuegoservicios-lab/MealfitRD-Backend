@@ -511,7 +511,14 @@ _DEFAULT_GEMINI_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
     "gemini-3.5-flash":              {"input": 1_500_000, "output":  9_000_000, "cached": 150_000},
     "gemini-3.1-pro-preview":        {"input": 1_250_000, "output": 10_000_000, "cached": 312_500},
     "gemini-3.1-flash-preview":      {"input":   300_000, "output":  2_500_000, "cached":  75_000},
-    "gemini-3.1-flash-lite": {"input":   100_000, "output":    400_000, "cached":  25_000},
+    # [P3-PRICING-DICT-REFRESH · 2026-05-21] Pricing real de Google AI 2026-05-21
+    # tier Estándar (paid): input $0.25/M (text), output $1.50/M, cached $0.025/M.
+    # Pre-fix (P1-COST-INSTRUMENTATION original) tenía valores stale 2.5× por
+    # debajo: $0.10/$0.40/$0.025 — `llm_usage_events.cost_usd_micros` sub-reportaba
+    # significativamente. Audio pricing ($0.50 input / $0.05 cached) NO incluido
+    # — la app no usa modalidad audio. Si Google diferencia más modalidades,
+    # override via knob `MEALFIT_GEMINI_PRICING_JSON`.
+    "gemini-3.1-flash-lite":         {"input":   250_000, "output":  1_500_000, "cached":  25_000},
     "gemini-3-flash-preview":        {"input":   300_000, "output":  2_500_000, "cached":  75_000},
 }
 

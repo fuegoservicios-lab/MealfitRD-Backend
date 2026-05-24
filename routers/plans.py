@@ -3707,6 +3707,66 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             
         result = swap_meal(data)
         return result
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        # [P3-SWAP-SOFT-FAIL-200 · 2026-05-23] Antes los swap failures
+        # (`SWAP_STRICT_PANTRY_NO_INVENTORY` y `SWAP_LLM_RETRIES_EXHAUSTED`)
+        # respondían HTTP 422. Eso es REST-correcto pero genera ruido
+        # cosmético en DevTools del browser (`Failed to load resource:
+        # 422 (Unprocessable Entity)` en rojo), confundiendo al developer
+        # cuando inspecciona el comportamiento normal del fallback.
+        #
+        # Soft-fail pattern: retornamos HTTP 200 con `swap_failed=true` +
+        # `error_code` canónico + `error_message`. Frontend checkea el
+        # flag ANTES de procesar como plato exitoso. Mismo UX final
+        # (toast + plato preservado) pero sin ruido visual en DevTools.
+        # Knob `MEALFIT_SWAP_HARD_FAIL_HTTP_422=true` revierte al
+        # comportamiento anterior si algún integrador externo dependía
+        # del status 4xx.
+        _msg = str(ve)
+        _hard_fail_422 = os.environ.get(
+            "MEALFIT_SWAP_HARD_FAIL_HTTP_422", "false"
+        ).lower() == "true"
+
+        if _msg.startswith("SWAP_STRICT_PANTRY_NO_INVENTORY"):
+            logger.warning(f"⚠️ [P1-SWAP-STRICT-PANTRY] soft-fail → {_msg}")
+            _payload = {
+                "swap_failed": True,
+                "error_code": "swap_strict_pantry_no_inventory",
+                "error_message": (
+                    "Tu nevera está vacía. Agrega alimentos a tu nevera "
+                    "o elige otra razón de cambio (por ejemplo, 'Quiero "
+                    "variedad') para que el chef pueda proponer un plato."
+                ),
+            }
+            if _hard_fail_422:
+                raise HTTPException(status_code=422, detail={
+                    "code": _payload["error_code"],
+                    "message": _payload["error_message"],
+                })
+            return _payload
+
+        if _msg.startswith("SWAP_LLM_RETRIES_EXHAUSTED"):
+            logger.warning(f"⚠️ [P3-SWAP-LLM-RETRIES] soft-fail → {_msg}")
+            _payload = {
+                "swap_failed": True,
+                "error_code": "swap_llm_retries_exhausted",
+                "error_message": (
+                    "El chef IA no pudo generar una alternativa coherente "
+                    "tras varios intentos. Reintenta o elige otra razón "
+                    "de cambio. Tu plato actual se mantiene sin cambios."
+                ),
+            }
+            if _hard_fail_422:
+                raise HTTPException(status_code=422, detail={
+                    "code": _payload["error_code"],
+                    "message": _payload["error_message"],
+                })
+            return _payload
+
+        logger.error(f"❌ [ERROR] Error en /api/swap-meal: {_msg}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(ve))
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/swap-meal: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
@@ -3718,7 +3778,8 @@ def api_swap_meal_persist(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(get_verified_user_id),
 ):
-    """[P0-NEW-A · 2026-05-11] Persistencia atómica de un meal swap.
+    """[P0-NEW-A · 2026-05-11 | P1-SWAP-PERSIST-ATOMIC · 2026-05-22]
+    Persistencia atómica de un meal swap.
 
     Reemplaza el patrón frontend-only en `AssessmentContext.jsx:1240-1243`
     que hacía ``supabase.from('meal_plans').update({plan_data}).eq('id', planId)``
@@ -3729,13 +3790,21 @@ def api_swap_meal_persist(
     perdían porque el frontend reescribía el snapshot viejo del state
     local.
 
-    Esta ruta hace `jsonb_set` quirúrgico solo sobre `days[i].meals[j]`,
-    bumpea `_plan_modified_at` y strippea los 4 `aggregated_shopping_list*`
+    Implementación actual (P1-SWAP-PERSIST-ATOMIC · 2026-05-22):
+    `update_plan_data_atomic(plan_id, _swap_mutator, user_id=...)` —
+    `SELECT … FOR UPDATE` + mutator callback que opera sobre plan_data
+    fresh post-worker. El mutator muta SOLO `days[i].meals[j]`, bumpea
+    `_plan_modified_at` y strippea los 4 `aggregated_shopping_list*`
     para forzar recalc downstream (el frontend invoca
     `/recalculate-shopping-list` inmediatamente después, igual que pre-fix).
-    Mismo patrón de defensa-en-profundidad que `/retry-chunk`
-    (P0-HIST-IDOR-1) y `/recipe/expand` (P1-HIST-RECIPE-1): ownership
-    check explícito + `AND user_id = %s` doble candado en el UPDATE.
+    Implementación pre-fix usaba `execute_sql_write` con jsonb_set chained
+    (sin row lock); ahora estructuralmente protegida por FOR UPDATE.
+
+    Defensa-en-profundidad doble: ownership check explícito antes del
+    helper atómico + el `update_plan_data_atomic` interno filtra
+    `AND user_id = %s` en el SELECT FOR UPDATE y en el UPDATE final
+    (espejo de `/retry-chunk` P0-HIST-IDOR-1 y `/recipe/expand`
+    P1-HIST-RECIPE-1).
 
     Body:
       - ``day_index`` (int 0..99): índice del día.
@@ -3786,7 +3855,8 @@ def api_swap_meal_persist(
     if not isinstance(new_meal_name, str) or not new_meal_name.strip():
         raise HTTPException(status_code=400, detail="new_meal.name is required")
 
-    from db_core import execute_sql_query, execute_sql_write
+    from db_core import execute_sql_query
+    from db_plans import update_plan_data_atomic
     try:
         owner = execute_sql_query(
             "SELECT id FROM meal_plans WHERE id = %s AND user_id = %s",
@@ -3798,77 +3868,107 @@ def api_swap_meal_persist(
             # patrón espejo de `DELETE /{plan_id}` y `/retry-chunk`.
             raise HTTPException(status_code=404, detail="Plan no encontrado")
 
-        # Path construido con ints YA validados arriba; sin posibilidad
-        # de injection. Si bounds cambian a runtime values, mover a
-        # parametrización con `text[]` de psycopg.
-        meal_path = "{days," + str(day_index) + ",meals," + str(meal_index) + "}"
+        # [P1-SWAP-PERSIST-ATOMIC · 2026-05-22] Migrado el UPDATE plano
+        # (`execute_sql_write` con `jsonb_set` chained) a
+        # `update_plan_data_atomic` (db_plans.py:381, P0-2 / P2-OPEN-1).
+        #
+        # Pre-fix: el SQL legacy usaba `jsonb_set` quirúrgico SIN tomar
+        # row lock. Si `_chunk_worker` finalizaba un chunk EN PARALELO
+        # mientras el cliente swap-eaba un meal del MISMO `days[i]`, la
+        # garantía era casi siempre OK (jsonb_set en server-side
+        # serializa transacciones por row a nivel Postgres) pero la
+        # ventana de write-after-read del lado server NO era
+        # estructuralmente protegida — viola I7 en espíritu para
+        # cualquier mutación que toque keys overlap (e.g., si el worker
+        # también escribiera `_plan_modified_at` o si un futuro refactor
+        # cambia a full-overwrite por error, sin advisory lock).
+        #
+        # `update_plan_data_atomic` serializa contra concurrentes vía
+        # `SELECT … FOR UPDATE` + mutator callback con `plan_data` fresh
+        # post-worker. El mutator muta SOLO `days[i].meals[j]` (espejo
+        # semántico del jsonb_set quirúrgico) + strip de las 4 listas
+        # aggregated_shopping_list* + bump de `_plan_modified_at` + flag
+        # `is_restocked` opcional. Defensa-en-profundidad: el UPDATE
+        # interno del helper también incluye `AND user_id = %s` (espejo
+        # del SELECT inicial). Tooltip-anchor: P1-SWAP-PERSIST-ATOMIC.
+        def _swap_mutator(plan_data: dict) -> dict:
+            # Sanity: el plan real DEBE tener `days[day_index].meals[meal_index]`.
+            # Si el plan está corrupted (días faltantes) levantamos
+            # IndexError/ValueError para que el handler mapee a 400.
+            days = plan_data.get("days")
+            if not isinstance(days, list):
+                raise ValueError(
+                    f"plan_data.days corrupted (type={type(days).__name__})"
+                )
+            if day_index >= len(days):
+                raise IndexError(
+                    f"day_index={day_index} fuera de rango (plan tiene "
+                    f"{len(days)} días)"
+                )
+            day = days[day_index]
+            if not isinstance(day, dict):
+                raise ValueError(
+                    f"plan_data.days[{day_index}] corrupted "
+                    f"(type={type(day).__name__})"
+                )
+            meals = day.get("meals")
+            if not isinstance(meals, list):
+                meals = []
+                day["meals"] = meals
+            # `create_missing` semantics del jsonb_set legacy: si
+            # meal_index apunta justo a `len(meals)` (o más), rellenar
+            # con `{}` hasta llegar. Mismo comportamiento que `jsonb_set`
+            # sobre array path con `create_missing=true`.
+            while len(meals) <= meal_index:
+                meals.append({})
+            meals[meal_index] = new_meal
 
-        # SSOT del UPDATE atómico. Pasos del SET (de adentro hacia afuera):
-        #   1. `plan_data #- '{aggregated_shopping_list}' #- ...` — strip
-        #      las 4 listas pre-calculadas para forzar recalc (el frontend
-        #      invoca recalculate-shopping-list inmediatamente después).
-        #   2. `jsonb_set(..., meal_path, new_meal, true)` — escribir el
-        #      meal nuevo (create_missing=true cubre planes legacy).
-        #   3. `jsonb_set(..., '_plan_modified_at', NOW())` — sello CAS
-        #      semántico que el sort del Historial usa (P0-3).
-        #   4. (opcional) `jsonb_set(..., 'is_restocked', false)` cuando
-        #      el caller lo señala.
-        # `updated_at = NOW()` redundante con trigger P0-2 pero explícito
-        # para que un futuro refactor que asuma solo el trigger sea consciente.
-        if clear_is_restocked:
-            sql = """
-                UPDATE meal_plans
-                SET plan_data = jsonb_set(
-                        jsonb_set(
-                            jsonb_set(
-                                (((plan_data #- '{aggregated_shopping_list}')
-                                              #- '{aggregated_shopping_list_weekly}')
-                                              #- '{aggregated_shopping_list_biweekly}')
-                                              #- '{aggregated_shopping_list_monthly}',
-                                %s,
-                                %s::jsonb,
-                                true
-                            ),
-                            '{_plan_modified_at}',
-                            to_jsonb(NOW()::text),
-                            true
-                        ),
-                        '{is_restocked}',
-                        'false'::jsonb,
-                        true
-                    ),
-                    updated_at = NOW()
-                WHERE id = %s AND user_id = %s
-            """
-        else:
-            sql = """
-                UPDATE meal_plans
-                SET plan_data = jsonb_set(
-                        jsonb_set(
-                            (((plan_data #- '{aggregated_shopping_list}')
-                                          #- '{aggregated_shopping_list_weekly}')
-                                          #- '{aggregated_shopping_list_biweekly}')
-                                          #- '{aggregated_shopping_list_monthly}',
-                            %s,
-                            %s::jsonb,
-                            true
-                        ),
-                        '{_plan_modified_at}',
-                        to_jsonb(NOW()::text),
-                        true
-                    ),
-                    updated_at = NOW()
-                WHERE id = %s AND user_id = %s
-            """
-        execute_sql_write(
-            sql,
-            (meal_path, _json.dumps(new_meal, ensure_ascii=False), plan_id, verified_user_id),
+            # Strip las 4 aggregated_shopping_list* para forzar recalc
+            # downstream (mismo contrato que el SQL legacy — el frontend
+            # invoca `/recalculate-shopping-list` inmediatamente después).
+            for _k in (
+                "aggregated_shopping_list",
+                "aggregated_shopping_list_weekly",
+                "aggregated_shopping_list_biweekly",
+                "aggregated_shopping_list_monthly",
+            ):
+                plan_data.pop(_k, None)
+
+            # Sello CAS semántico (P0-3) que el sort del Historial usa.
+            from datetime import datetime, timezone
+            plan_data["_plan_modified_at"] = datetime.now(
+                timezone.utc
+            ).isoformat()
+
+            if clear_is_restocked:
+                plan_data["is_restocked"] = False
+
+            return plan_data
+
+        result = update_plan_data_atomic(
+            plan_id,
+            _swap_mutator,
+            user_id=verified_user_id,
         )
+        if not result:
+            # Row desapareció entre el SELECT inicial y el FOR UPDATE
+            # (race contra `DELETE /{plan_id}`). Tratamos como 404.
+            raise HTTPException(
+                status_code=404, detail="Plan no encontrado"
+            )
         return {"success": True}
-        # P0-NEW-A-END
+        # P0-NEW-A-END / P1-SWAP-PERSIST-ATOMIC-END
 
     except HTTPException:
         raise
+    except (IndexError, ValueError) as e:
+        # day_index/meal_index fuera de rango del plan real (no del bound
+        # check inicial — eso es 400 más arriba con detail explícito) o
+        # plan_data corrupted. Mapeo 400 con copy específico.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Inconsistencia en plan_data: {e}",
+        )
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /swap-meal/persist: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
@@ -4277,6 +4377,98 @@ def api_cancel_plan_generation(data: dict = Body(...)):
         "registered": registered,
         "session_id": session_id,
     }
+
+
+# ============================================================
+# [P3-DEPLETED-BD · 2026-05-22] Endpoints para `user_depleted_items`.
+# ============================================================
+# Sustituye el localStorage.mealfit_depleted_items pre-existente que no
+# sincronizaba cross-device. Pantry.jsx + AgentPage.jsx leen/escriben acá.
+# Auth: `get_verified_user_id` (no `verify_api_quota` — cero costo LLM,
+# patrón P1-AUDIT-3 Historial-quota-exemption).
+
+
+@router.get("/depleted-items")
+async def api_list_depleted_items(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P3-DEPLETED-BD · 2026-05-22] Lista items agotados del usuario,
+    ordenados por `depleted_at DESC` (más reciente primero).
+
+    Response: `{"items": [...]}` con shape per item:
+    `{id, master_ingredient_id, ingredient_name, quantity, unit, category,
+    shelf_life_days, depleted_at}`. Lista vacía si no hay agotados.
+    """
+    if not verified_user_id or verified_user_id == "guest":
+        return {"items": []}
+    try:
+        from db_inventory import list_depleted_items
+        items = list_depleted_items(verified_user_id, limit=300)
+        return {"items": items}
+    except Exception as e:
+        logger.warning(f"[P3-DEPLETED-BD] GET /depleted-items error: {e!r}")
+        return {"items": []}
+
+
+@router.post("/depleted-items")
+async def api_upsert_depleted_items(
+    data: dict = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P3-DEPLETED-BD · 2026-05-22] Upsert items agotados. Acepta:
+
+      - `{"items": [{ingredient_name, quantity, unit, master_ingredient_id?,
+                     category?, shelf_life_days?, depleted_at?}, ...]}`
+
+    Idempotente: usa los unique indexes partial sobre `(user_id,
+    master_ingredient_id)` cuando master no es NULL y `(user_id,
+    lower(trim(ingredient_name)))` cuando es NULL.
+
+    Path principal:
+      1. Frontend Pantry.jsx llama acá cuando el user agota un item desde UI.
+      2. Migration one-shot: Pantry.jsx en su primer mount post-deploy
+         envía aquí TODO su `localStorage.mealfit_depleted_items` legacy.
+
+    Response: `{"success": true, "upserted": N}` o error.
+    """
+    if not verified_user_id or verified_user_id == "guest":
+        raise HTTPException(status_code=401, detail="Auth requerida.")
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="`items` debe ser lista no vacía.")
+    if len(items) > 500:
+        raise HTTPException(status_code=400, detail="Batch demasiado grande (>500).")
+    try:
+        from db_inventory import bulk_upsert_depleted_items
+        n = bulk_upsert_depleted_items(verified_user_id, items)
+        return {"success": True, "upserted": n}
+    except Exception as e:
+        logger.warning(f"[P3-DEPLETED-BD] POST /depleted-items error: {e!r}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@router.delete("/depleted-items/{item_id}")
+async def api_delete_depleted_item(
+    item_id: int,
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P3-DEPLETED-BD · 2026-05-22] DELETE un item de `user_depleted_items`.
+
+    Frontend lo llama cuando el user restockea (compró el item y desea
+    quitar el flag de agotado) o descarta el item del listado.
+
+    Filtro `WHERE user_id = %s` defensa-en-profundidad. Returns
+    `{"success": bool, "deleted": bool}`.
+    """
+    if not verified_user_id or verified_user_id == "guest":
+        raise HTTPException(status_code=401, detail="Auth requerida.")
+    try:
+        from db_inventory import delete_depleted_item
+        ok = delete_depleted_item(verified_user_id, item_id=item_id)
+        return {"success": True, "deleted": ok}
+    except Exception as e:
+        logger.warning(f"[P3-DEPLETED-BD] DELETE /depleted-items/{item_id} error: {e!r}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
 @router.post("/restock")

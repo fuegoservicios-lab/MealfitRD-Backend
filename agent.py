@@ -348,17 +348,82 @@ from constants import (
     FRUIT_SYNONYMS as fruit_synonyms,
     _get_fast_filtered_catalogs
 )
+# [P3-SWAP-FALLBACK-TITLE-STRIP · 2026-05-23] Helper que extrae el nombre
+# limpio de un display string tipo `'1 Cabeza (~500g) Brócoli'` → `'Brócoli'`.
+# Necesario porque `get_realtime_pantry()` (shopping_calculator) retorna el
+# output de `aggregate_and_deduct_shopping_list()`, que produce strings con
+# formato display (cantidad + unidad + paréntesis + opcional 'de' + nombre).
+# El P3-SWAP-FALLBACK-TITLE-COPY del día anterior solo cubría el caso DICT
+# del empty-pantry-fallback, pero el path productivo dominante (realtime
+# pantry NO vacío) emitía estos display strings al fallback title sin
+# limpieza — verificado en caso real 2026-05-23 00:09 donde el title fue
+# `"Cena con 1 Cabeza (~500g) Brócoli y 1 Mazo Cilantro"`.
+#
+# Estrategia:
+#   1. Si el string NO empieza con dígito/fracción → ya es nombre limpio,
+#      retorna as-is (idempotente para inputs ya limpios como "Pollo").
+#   2. Si hay "<algo> de <NOMBRE>" → split en el PRIMER " de " y toma la
+#      última parte ("1 botella (250ml) de Aceite de oliva" → "Aceite de oliva").
+#   3. Si no hay "de" connector → strip el prefijo [num][unit][optional paren]
+#      ("1 Cabeza (~500g) Brócoli" → "Brócoli").
+def _extract_clean_name_from_display_string(s: str) -> str:
+    import re as _re_extract
+    if not isinstance(s, str):
+        return ""
+    cleaned = s.strip()
+    if not cleaned:
+        return ""
+    # Si NO empieza con número/fracción, asumimos que ya es nombre limpio
+    # (idempotente para inputs como "Pollo", "Lechuga", "Aceite de oliva").
+    if not _re_extract.match(r"^[\d¼½¾⅓⅔.,]", cleaned):
+        return cleaned
+    # Split en el primer " de " (case-insensitive) si existe — los strings
+    # del agg suelen tener formato "<qty> <unit> (<paren>) de <NAME>".
+    parts = _re_extract.split(r"\s+de\s+", cleaned, maxsplit=1, flags=_re_extract.IGNORECASE)
+    if len(parts) == 2 and parts[1].strip():
+        return parts[1].strip()
+    # Sin " de " — strip prefijo qty + unit + optional parenthetical.
+    # Pattern: "1 Cabeza (~500g) Brócoli" → "Brócoli"
+    cleaned2 = _re_extract.sub(
+        r"^[\d¼½¾⅓⅔.,]+\s*"  # número o fracción
+        r"[\wáéíóúñÁÉÍÓÚÑ]+\.?\s*"  # palabra-unidad (Cabeza, Mazo, lb, Ud., ...)
+        r"(?:\([^)]*\)\s*)?",  # paréntesis opcional (~500g)
+        "",
+        cleaned,
+    )
+    return cleaned2.strip() or cleaned
+
+
 def swap_meal(form_data: dict):
     rejected_meal = form_data.get("rejected_meal", "")
     meal_type = form_data.get("meal_type", "Comida")
     target_calories = form_data.get("target_calories", 0)
     diet_type = form_data.get("diet_type", "balanced")
-    
+
+    # [P1-SWAP-MACROS · 2026-05-22] Targets per-meal: si el cliente envía
+    # target_protein/carbs/fats explícitos (pre-rejected meal's macros) los
+    # usamos. Fallback: derivar desde target_calories vía MACRO_SPLITS del
+    # goal (mismo cálculo que el plan principal en `calculate_macros`). Si
+    # ni target_calories existe (legacy clients) → todos 0 = validador
+    # skip-en-silencio per-key. Tooltip-anchor: P1-SWAP-MACROS-DERIVE.
+    target_protein = form_data.get("target_protein") or 0
+    target_carbs = form_data.get("target_carbs") or 0
+    target_fats = form_data.get("target_fats") or 0
+    if (not target_protein or not target_carbs or not target_fats) and target_calories:
+        try:
+            from nutrition_calculator import calculate_macros as _calc_macros
+            _split = _calc_macros(int(target_calories), form_data.get("goal", "maintenance"))
+            target_protein = target_protein or _split.get("protein_g", 0)
+            target_carbs = target_carbs or _split.get("carbs_g", 0)
+            target_fats = target_fats or _split.get("fats_g", 0)
+        except Exception as _macro_e:
+            logger.debug(f"[P1-SWAP-MACROS] No se derivaron targets desde calc_macros: {_macro_e}")
+
     allergies = form_data.get("allergies", [])
     dislikes = form_data.get("dislikes", [])
     liked_meals = form_data.get("liked_meals", [])
     disliked_meals = form_data.get("disliked_meals", [])
-    
+
     context_extras = ""
     if allergies: context_extras += f"\n    - ALERGIAS (PROHIBIDO INCLUIR): {', '.join(allergies)}"
     if dislikes: context_extras += f"\n    - DISGUSTOS (PROHIBIDO INCLUIR): {', '.join(dislikes)}"
@@ -379,18 +444,43 @@ def swap_meal(form_data: dict):
         context_extras += "\n    - 💡 INTENCIÓN: El usuario NO rechaza este plato, solo quiere VARIEDAD. Sugiere combinaciones creativas, diferentes técnicas de cocción o perfiles de sabor novedosos pero accesibles."
     elif swap_reason == 'time':
         context_extras += "\n    - ⏱️ INTENCIÓN: El usuario NO TIENE TIEMPO HOY. Propón una receta extremadamente rápida (< 20 min), preferiblemente sin cocción extensa o usando ingredientes fáciles de armar."
-    elif swap_reason == 'budget':
-        context_extras += "\n    - 💰 INTENCIÓN: El usuario busca opciones ECONÓMICAS. Prioriza ingredientes de muy bajo costo y alto rendimiento, evitando proteínas premium."
-    elif swap_reason == 'pantry_first':
-        context_extras += "\n    - 📦 INTENCIÓN: El usuario quiere MAXIMIZAR SU INVENTARIO. Limítate estrictamente a usar ingredientes base comunes de despensa. Cero compras nuevas o ingredientes exóticos."
+    # [P3-SWAP-PANTRY-DEFAULT · 2026-05-22] Branches 'budget' y 'pantry_first'
+    # eliminados del elif chain. Pre-fix 'budget' tenía un hint específico
+    # ("📦 APROVECHAR SU NEVERA / LISTA DE COMPRAS") expuesto al user via
+    # opción del modal — sugería que los demás reasons NO usaban la nevera,
+    # cuando la nevera SIEMPRE es la fuente única (excepto antojos/weekend).
+    # Decisión de producto: strict-pantry pasa a ser el DEFAULT para todos
+    # los reasons base (variety/time/similar/dislike) y se inyecta un hint
+    # genérico "RESPETA LA NEVERA" debajo del elif chain cuando swap_reason
+    # ∉ {cravings, weekend}. Backend acepta 'budget'/'pantry_first' como
+    # input por back-compat (legacy callers / clientes antiguos cached) —
+    # entran al mismo path genérico via el guard `if swap_reason not in (...)`.
     elif swap_reason == 'cravings':
         context_extras += "\n    - 🤤 INTENCIÓN: El usuario tiene un ANTOJO. Propón algo indulgente, comfort food o una versión saludable de comida rápida, pero manteniendo los macros."
     elif swap_reason == 'weekend':
         context_extras += "\n    - 🎉 INTENCIÓN: FIN DE SEMANA ESPECIAL. El usuario quiere un plato más elaborado, festivo o premium. Ideal para disfrutar con tiempo."
-    elif swap_reason == 'similar':
-        context_extras += "\n    - 🍽️ INTENCIÓN: El usuario YA COMIÓ ALGO SIMILAR. Ofrece un perfil de sabor o técnica de cocción COMPLETAMENTE DISTINTA a la opción rechazada."
+    # [P2-SWAP-CONSISTENCY · 2026-05-22] Branch 'similar' eliminado: el helper
+    # `_pick_by_inverse_freq` + el filtro `available_proteins/carbs/veggies =
+    # [x for x in filtered if x.lower() not in rejected_lower]` (más abajo en
+    # esta misma función) ya excluyen proteína/carb/veggie del meal rechazado
+    # deterministically y sesgan hacia ingredientes con baja frecuencia
+    # histórica — exactamente el efecto que el hint LLM duplicaba. El branch
+    # era eco innecesario que solo confundía al LLM con instrucción
+    # redundante. swap_reason='similar' sigue siendo válido en el modal y
+    # llega aquí como reason pasivo (sin context_extras extra).
 
-    
+    # [P3-SWAP-PANTRY-DEFAULT · 2026-05-22] Hint genérico de pantry para
+    # TODOS los reasons base (variety/time/similar/dislike + back-compat
+    # budget/pantry_first). Antes solo 'budget' tenía este hint, pero al
+    # convertir strict-pantry en default el LLM necesita la instrucción
+    # explícita para no producir externos que el validator post-gen
+    # rechazaría (retry overhead innecesario). cravings/weekend quedan
+    # opt-out del hint (su tolerancia externa está reflejada en el prompt
+    # via su propio context_extras + allow_external_count del validator).
+    if swap_reason not in ("cravings", "weekend"):
+        context_extras += "\n    - 📦 RESPETA LA NEVERA: Limítate a los ingredientes ya disponibles (la regla de reciclaje a continuación enumera la base exacta). Sin compras nuevas."
+
+
     # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES (ZERO-TRUST) ---
     clean_ingredients = []
     user_id = form_data.get("user_id")
@@ -423,7 +513,79 @@ def swap_meal(form_data: dict):
         if current_pantry_ingredients and isinstance(current_pantry_ingredients, list) and len(current_pantry_ingredients) > 0:
             from shopping_calculator import aggregate_shopping_list
             clean_ingredients = aggregate_shopping_list([item.strip() for item in current_pantry_ingredients if item and isinstance(item, str) and len(item) > 2])
-            
+
+    # [P1-SWAP-EMPTY-PANTRY-FALLBACK · 2026-05-22] Si el realtime pantry quedó
+    # vacío (todos los items del plan se consumieron) Y el frontend tampoco
+    # envió `current_pantry_ingredients`, leer la `aggregated_shopping_list`
+    # entera del plan_data como source-of-truth de ingredientes. Cierra el
+    # requisito explícito del owner verificado audit 2026-05-22:
+    # > "si la nevera está vacía debe tomar en cuenta la lista de compras
+    # > pdf para crear los platos personalizados"
+    # Pre-fix: `clean_ingredients` caía al hardcoded ["Pollo","Arroz",
+    # "Aguacate"] (línea ~769) ignorando la lista del PDF que el user ya
+    # comprometió como su nevera futura. Espejo del patrón ya implementado
+    # en `tools.py::execute_modify_single_meal:570-576`. Knob
+    # `MEALFIT_SWAP_EMPTY_PANTRY_FALLBACK_TO_SHOPPING_LIST=false` desactiva
+    # el fallback (vuelve al comportamiento legacy). Tooltip-anchor:
+    # P1-SWAP-EMPTY-PANTRY-FALLBACK.
+    if (
+        not clean_ingredients
+        and user_id
+        and user_id != "guest"
+        and os.environ.get(
+            "MEALFIT_SWAP_EMPTY_PANTRY_FALLBACK_TO_SHOPPING_LIST",
+            "true",
+        ).lower() != "false"
+    ):
+        try:
+            from db_plans import get_latest_meal_plan_with_id
+            _fallback_plan_record = get_latest_meal_plan_with_id(user_id)
+            if _fallback_plan_record and isinstance(
+                _fallback_plan_record.get("plan_data"), dict
+            ):
+                _shopping_raw = (
+                    _fallback_plan_record["plan_data"].get(
+                        "aggregated_shopping_list"
+                    )
+                    or []
+                )
+                if isinstance(_shopping_raw, list) and _shopping_raw:
+                    _shopping_fallback = []
+                    for _item in _shopping_raw:
+                        if isinstance(_item, dict):
+                            # [P3-SWAP-FALLBACK-TITLE-COPY · 2026-05-22]
+                            # Preferir `name` (limpio, ej "Lechuga") sobre
+                            # `display_string` (formateado, ej "1 Cabeza
+                            # (~400g) Lechuga"). El LLM no necesita las
+                            # cantidades user-específicas para generar una
+                            # receta nueva — feedearlas confundía y además
+                            # el fallback title las exponía crudas con
+                            # `.title()` mangling units ("(~400G)").
+                            _val = (
+                                _item.get("name")
+                                or _item.get("display_string")
+                                or ""
+                            )
+                        else:
+                            _val = str(_item)
+                        _val = _val.strip()
+                        if _val and _val not in _shopping_fallback:
+                            _shopping_fallback.append(_val)
+                    if _shopping_fallback:
+                        clean_ingredients = _shopping_fallback
+                        logger.info(
+                            f"📦 [P1-SWAP-EMPTY-PANTRY-FALLBACK] pantry vacío; "
+                            f"usando aggregated_shopping_list del plan "
+                            f"({len(clean_ingredients)} items) como nevera "
+                            f"virtual."
+                        )
+        except Exception as _shop_fallback_exc:
+            logger.debug(
+                f"[P1-SWAP-EMPTY-PANTRY-FALLBACK] fallback falló (no "
+                f"bloquea swap): {type(_shop_fallback_exc).__name__}: "
+                f"{_shop_fallback_exc}"
+            )
+
     if clean_ingredients:
         context_extras += f"\n    - ⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario quiere cambiar este plato pero DEBES utilizar ingredientes que ya estén en su lista actual. Ingredientes disponibles: {', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, sin agregar ingredientes foráneos."
     else:
@@ -514,6 +676,9 @@ def swap_meal(form_data: dict):
         rejected_meal=rejected_meal,
         meal_type=meal_type,
         target_calories=target_calories,
+        target_protein=int(round(float(target_protein or 0))),
+        target_carbs=int(round(float(target_carbs or 0))),
+        target_fats=int(round(float(target_fats or 0))),
         diet_type=diet_type,
         context_extras=context_extras
     )
@@ -551,6 +716,66 @@ def swap_meal(form_data: dict):
             f"swap_meal LLM circuit breaker open for model={_swap_cb_model}"
         )
 
+    # [P3-SWAP-PANTRY-DEFAULT · 2026-05-22] strict-pantry pasa a ser el
+    # DEFAULT del swap (decisión de producto 2026-05-22: el botón "Usar
+    # solo lo que tengo" se eliminó del modal porque ese comportamiento
+    # ES el contrato del swap-meal). Ahora solo `cravings`/`weekend`
+    # (indulgencia explícita) opt-out — pueden traer 1-2 ingredientes
+    # externos via `allow_external_count`. Resto (variety/time/similar/
+    # dislike + back-compat budget/pantry_first) → strict.
+    #
+    # [P1-SWAP-STRICT-PANTRY · 2026-05-22] Original: el guard de pantry
+    # se eleva de hint cosmético a hard constraint. El validador es el
+    # mismo (validate_ingredients_against_pantry); el fallback abortivo
+    # NO usa la lista hardcoded ["Pollo","Arroz","Aguacate"] sino que
+    # SOLO arma el plato con `clean_ingredients[:4]`. Si no hay
+    # clean_ingredients y strict_pantry está activo → el fallback raise
+    # explícito (router lo mapea a 422). Tooltip-anchor: P1-SWAP-STRICT-PANTRY.
+    strict_pantry = swap_reason not in ("cravings", "weekend")
+
+    # [P2-SWAP-CONSISTENCY · 2026-05-22] Tolerancia de ingredientes externos
+    # cuando el user pidió un antojo / plato festivo: hard-pantry colisionaba
+    # con "indulgente" / "premium" (modal opts "Tengo un antojo" / "Fin de
+    # semana especial"). Permitimos hasta N "unauthorized" sin abortar; el
+    # validador suma esto a su check estructural. Knob
+    # `MEALFIT_SWAP_EXTERNAL_INGREDIENTS_ALLOWED` (default 2, clamp [0, 5]).
+    # cravings/weekend: usa el knob. Resto: 0 (legacy strict). Tooltip-anchor:
+    # P2-SWAP-CONSISTENCY-EXTERNAL.
+    if swap_reason in ("cravings", "weekend"):
+        try:
+            _external_tolerance = int(os.environ.get("MEALFIT_SWAP_EXTERNAL_INGREDIENTS_ALLOWED", "2"))
+        except (TypeError, ValueError):
+            _external_tolerance = 2
+        _external_tolerance = max(0, min(5, _external_tolerance))
+    else:
+        _external_tolerance = 0
+
+    # [P1-SWAP-MACROS · 2026-05-22] Buffer mutable del prompt para inyectar
+    # feedback del validador (pantry + macros) en attempts 2 y 3. Mismo
+    # patrón que `execute_modify_single_meal` (tools.py:647).
+    _current_prompt = [prompt_text]
+
+    # [P1-SWAP-MACROS] Lazy import — el módulo nutrition_calculator es
+    # liviano pero tiene side-effects de logging que preferimos contained.
+    # [P2-SWAP-CONSISTENCY · 2026-05-22] añade prep_time validator (solo
+    # consultado si swap_reason='time').
+    try:
+        from nutrition_calculator import (
+            validate_meal_macros_against_targets as _validate_macros,
+            _meal_macros_validate_enabled as _macros_validate_enabled,
+            validate_meal_recipe_ingredients_coherence as _validate_recipe_coh,
+            _swap_recipe_coherence_enabled as _recipe_coh_enabled,
+            validate_meal_prep_time_against_target as _validate_prep_time,
+            _swap_prep_time_validate_enabled as _prep_time_validate_enabled,
+        )
+    except Exception:
+        _validate_macros = None
+        _macros_validate_enabled = lambda: False  # noqa: E731 — fallback no-op
+        _validate_recipe_coh = None
+        _recipe_coh_enabled = lambda: False  # noqa: E731
+        _validate_prep_time = None
+        _prep_time_validate_enabled = lambda: False  # noqa: E731
+
     # Invocar LLM con reintentos automáticos (tenacity)
     @retry(
         stop=stop_after_attempt(3),
@@ -558,11 +783,11 @@ def swap_meal(form_data: dict):
         reraise=True,
         before_sleep=lambda retry_state: logger.warning(
             f"🔁 [SWAP RETRY] attempt={retry_state.attempt_number} | "
-            f"reason=pantry_guardrail_rejection | meal_type={meal_type}"
+            f"reason=guardrail_rejection | meal_type={meal_type}"
         )
     )
     def invoke_with_retry():
-        res = swap_llm.invoke(prompt_text)
+        res = swap_llm.invoke(_current_prompt[0])
 
         # Validación post-generación (guardrail determinista)
         if hasattr(res, "ingredients"):
@@ -574,10 +799,144 @@ def swap_meal(form_data: dict):
 
         # Solo aplicamos restricción estricta si hay una despensa base limpia extraída
         if clean_ingredients:
-            val_result = validate_ingredients_against_pantry(ingreds, clean_ingredients)
+            # [P2-SWAP-CONSISTENCY · 2026-05-22] `_external_tolerance` calculado
+            # arriba según swap_reason. Default 0 (legacy strict); cravings/weekend
+            # permiten hasta MEALFIT_SWAP_EXTERNAL_INGREDIENTS_ALLOWED externos.
+            val_result = validate_ingredients_against_pantry(
+                ingreds,
+                clean_ingredients,
+                allow_external_count=_external_tolerance,
+            )
             if val_result is not True:
                 logger.warning(val_result)
+                _current_prompt[0] = prompt_text + (
+                    f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{val_result}"
+                    f"\nPor favor revisa el inventario y ajusta la receta para que cumpla estrictamente."
+                )
                 raise ValueError(val_result)
+
+        # [P1-SWAP-RECIPE-COHERENCE · 2026-05-22] Mini-coherence check
+        # per-meal sobre el output del LLM: si la receta menciona una
+        # proteína canónica que NO está en `ingredients`, gateamos retry
+        # (`cap_swallowed_modifier` a nivel meal-output). Cierra el gap
+        # user-facing dejado abierto en el bundle inicial — sin este
+        # check, un swap que entregue receta con "el pollo" cuando
+        # ingredients=["pavo"] llegaba al shopping aggregator y se
+        # propagaba al PDF del user. Knob
+        # `MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE=false` desactiva.
+        if _validate_recipe_coh is not None and _recipe_coh_enabled():
+            try:
+                meal_dump = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                coh_passed, coh_divs, coh_summary = _validate_recipe_coh(meal_dump)
+                if not coh_passed:
+                    logger.warning(
+                        f"⚠️ [P1-SWAP-RECIPE-COHERENCE] divergence detected | "
+                        f"meal_type={meal_type} | divs={coh_divs}"
+                    )
+                    # [P3-SWAP-RETRY-COHERENCE-HINT · 2026-05-22] Append
+                    # self-check directive al retry prompt. Pre-fix solo
+                    # inyectaba el coh_summary; el LLM podía repetir la
+                    # misma discrepancia (verificado: 3 intentos seguidos
+                    # con el alias "dorado"). El self-check explícito sube
+                    # la señal y obliga al LLM a verificar invariante antes
+                    # de outputtear.
+                    _current_prompt[0] = prompt_text + (
+                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{coh_summary}"
+                        f"\n\n🔒 REGLA INVARIANTE: ANTES de devolver tu respuesta, recorre "
+                        f"cada paso del array `recipe` y verifica que TODO alimento "
+                        f"mencionado aparezca también (o un sinónimo razonable) en el "
+                        f"array `ingredients`. Si encuentras una discrepancia, corrígela "
+                        f"agregando el ingrediente faltante CON cantidad o reescribiendo "
+                        f"el paso sin mencionarlo. NO devuelvas la respuesta hasta verificar."
+                    )
+                    raise ValueError(coh_summary)
+            except ValueError:
+                raise
+            except Exception as _coh_exc:
+                logger.warning(
+                    f"[P1-SWAP-RECIPE-COHERENCE] validator helper falló (no aborta): "
+                    f"{type(_coh_exc).__name__}: {_coh_exc}"
+                )
+
+        # [P2-SWAP-CONSISTENCY · 2026-05-22] Validador prep_time per-meal
+        # cuando swap_reason='time' ("No tengo tiempo hoy"). Pre-fix: el
+        # prompt inyectaba el hint "<20 min" pero NO había enforcement
+        # post-gen → el LLM podía emitir receta de 40 min sin retry.
+        # Cierra el gap "soft-only" detectado en el audit del modal
+        # "¿Por qué quieres cambiar?". Solo se ejecuta para reason='time';
+        # otros reasons skipean (la mayoría de meals legítimos sin tiempo
+        # crítico toman >20 min y no queremos forzarles retries). Knob
+        # `MEALFIT_SWAP_PREP_TIME_VALIDATE=false` desactiva sin redeploy.
+        if (
+            swap_reason == 'time'
+            and _validate_prep_time is not None
+            and _prep_time_validate_enabled()
+        ):
+            try:
+                meal_dump = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                pt_passed, pt_actual, pt_summary = _validate_prep_time(meal_dump)
+                if not pt_passed:
+                    logger.warning(
+                        f"⚠️ [P2-SWAP-PREP-TIME] PREP_TIME drift | "
+                        f"meal_type={meal_type} | actual={pt_actual} min"
+                    )
+                    _current_prompt[0] = prompt_text + (
+                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{pt_summary}"
+                    )
+                    raise ValueError(pt_summary)
+            except ValueError:
+                raise
+            except Exception as _pt_exc:
+                logger.warning(
+                    f"[P2-SWAP-PREP-TIME] validator helper falló (no aborta): "
+                    f"{type(_pt_exc).__name__}: {_pt_exc}"
+                )
+
+        # [P1-SWAP-MACROS · 2026-05-22] Validación post-gen de macros vs
+        # targets del slot. Pre-fix: prompt solo enviaba target_calories
+        # como hint soft → drift arbitrario permitido (caso real: target
+        # 350kcal/15g protein → LLM emitía 450kcal/8g protein sin queja,
+        # macros semanales driftaban +28% kcal -47% protein).
+        # Si la validación falla, inyectamos el summary al retry prompt
+        # (mismo patrón que pantry validator) y forzamos retry tenacity.
+        # Knob `MEALFIT_SWAP_MACROS_VALIDATE=false` desactiva si introduce
+        # demasiados retries en prod.
+        if _validate_macros is not None and _macros_validate_enabled():
+            try:
+                meal_dump = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                passed, drifts, summary = _validate_macros(
+                    meal_dump,
+                    {
+                        "cals": target_calories,
+                        "protein": target_protein,
+                        "carbs": target_carbs,
+                        "fats": target_fats,
+                    },
+                )
+                if not passed:
+                    logger.warning(
+                        f"⚠️ [P1-SWAP-MACROS] Drift detectado attempt-pending | "
+                        f"meal_type={meal_type} | drifts={drifts}"
+                    )
+                    _current_prompt[0] = prompt_text + (
+                        f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n{summary}"
+                    )
+                    raise ValueError(summary)
+            except ValueError:
+                raise
+            except Exception as _macros_exc:
+                # Best-effort: si el helper rompe (drift de schema, etc.)
+                # NO bloqueamos el swap — el LLM ya entregó algo válido.
+                logger.warning(
+                    f"[P1-SWAP-MACROS] validator helper falló (no aborta): "
+                    f"{type(_macros_exc).__name__}: {_macros_exc}"
+                )
 
         return res
 
@@ -613,10 +972,78 @@ def swap_meal(form_data: dict):
             ) from e
         _swap_cb.record_failure()
         logger.error(f"❌ [SWAP_MEAL] Fallaron los intentos LLM y validador: {e}. Usando Plato Fallback.")
+        # [P1-SWAP-STRICT-PANTRY · 2026-05-22] En modo strict (budget /
+        # pantry_first) sin clean_ingredients, NO podemos construir un
+        # fallback honesto: los hardcoded ["Pollo", "Arroz", "Aguacate"]
+        # pueden NO estar en nevera y violarían la promesa que hizo el
+        # modal al usuario ("Opciones económicas — Ingredientes de bajo
+        # costo / Maximiza tu inventario"). Mejor levantar y dejar que
+        # el router lo mapee a 422 con copy explícito al cliente.
+        if strict_pantry and not clean_ingredients:
+            logger.warning(
+                f"⛔ [P1-SWAP-STRICT-PANTRY] swap_reason={swap_reason!r} sin "
+                f"pantry detectada → 422 (no fallback honesto posible)."
+            )
+            raise ValueError(
+                "SWAP_STRICT_PANTRY_NO_INVENTORY: el usuario eligió una razón "
+                "que exige usar solo ingredientes de la nevera, pero no hay "
+                "inventario detectado para construir el plato. Pide al usuario "
+                "actualizar su nevera o cambiar a otra razón."
+            )
+        # [P3-SWAP-LLM-RETRIES-422 · 2026-05-23] Cuando el LLM agota retries
+        # y NO es strict-pantry-vacío, el comportamiento legacy era armar
+        # un "Plato Fallback" con clean_ingredients[:4] que el frontend
+        # mostraba como un plato real al usuario. Resultado: receta
+        # genérica de 3 pasos placeholder + título sin coherencia
+        # ("Merienda con Cilantro y Aceite de oliva"), pegado al plan del
+        # user como si fuera una alternativa válida. Verificado log
+        # productivo 2026-05-23 00:21-00:22: 3 retries fallidos con
+        # "/pedazos de queso" → fallback engañoso entregado como éxito.
+        #
+        # Default nuevo: raise ValueError → router 422 → frontend muestra
+        # toast "El chef IA no pudo generar una alternativa" + PRESERVA
+        # el plato original (mismo patrón que SWAP_STRICT_PANTRY_NO_INVENTORY).
+        # Knob `MEALFIT_SWAP_EMIT_FALLBACK_DISH=true` revierte al legacy.
+        _emit_fallback_dish = os.environ.get(
+            "MEALFIT_SWAP_EMIT_FALLBACK_DISH", "false"
+        ).lower() == "true"
+        if not _emit_fallback_dish:
+            logger.warning(
+                f"⛔ [P3-SWAP-LLM-RETRIES-422] swap_reason={swap_reason!r} "
+                f"meal_type={meal_type!r} agotó retries del LLM → 422 "
+                f"(plato original preservado en el cliente)."
+            )
+            raise ValueError(
+                "SWAP_LLM_RETRIES_EXHAUSTED: el chef IA no pudo generar una "
+                "alternativa coherente tras varios intentos. Pide al usuario "
+                "reintentar o elegir otra razón de cambio."
+            )
+        # Knob ON → mantenemos el fallback legacy (degradación graceful).
+        # En strict CON pantry, la lista solo se construye desde clean_ingredients
+        # (jamás cae al hardcoded). Sin pantry y NO-strict, el hardcoded
+        # se acepta como degradación legacy.
         fallback_ing = clean_ingredients[:4] if clean_ingredients else ["Pollo", "Arroz", "Aguacate"]
+        # [P1-SWAP-MACROS · 2026-05-22] Fallback ahora respeta los targets
+        # de macros derivados arriba (si target_protein/carbs/fats son 0
+        # los valores son los pesos por defecto del MACRO_SPLIT
+        # "maintenance" — 25/45/30 proporcional).
+        # [P3-SWAP-FALLBACK-TITLE-COPY · 2026-05-22 · revisado P3-SWAP-FALLBACK-TITLE-STRIP · 2026-05-23]
+        # Title friendly sin `.title()` (mangla unidades: g→G) y sin prefijo
+        # "Opción Segura" (jargon técnico). El revisión 2026-05-23 añade
+        # `_extract_clean_name_from_display_string()` al pipeline porque
+        # `clean_ingredients` puede contener display strings tipo
+        # "1 Cabeza (~500g) Brócoli" cuando proviene de
+        # `get_realtime_pantry()` (shopping_calculator.aggregate). El
+        # extractor es idempotente para inputs ya limpios.
+        _ing_title_tokens = []
+        for _raw in fallback_ing[:2]:
+            _clean = _extract_clean_name_from_display_string(str(_raw).strip())
+            if _clean:
+                _ing_title_tokens.append(_clean)
+        _title_ings = " y ".join(_ing_title_tokens) if _ing_title_tokens else "ingredientes de tu nevera"
         response = {
-            "name": f"Opción Segura: {' y '.join(fallback_ing[:2]).title()}",
-            "desc": "Este plato fue autogenerado como medida de seguridad para garantizar una opción con ingredientes que ya posees.",
+            "name": f"{meal_type} con {_title_ings}",
+            "desc": "Plato simple armado con ingredientes que tienes en casa. Ajusta la cocción a tu gusto.",
             "ingredients": fallback_ing,
             "recipe": [
                 "Mise en place: Prepara de manera básica los ingredientes de la nevera.",
@@ -624,9 +1051,9 @@ def swap_meal(form_data: dict):
                 "Montaje: Sirve porciones adecuadas según tu objetivo y disfruta."
             ],
             "cals": target_calories or 450,
-            "protein": round((target_calories or 450) * 0.3 / 4),
-            "carbs": round((target_calories or 450) * 0.4 / 4),
-            "fats": round((target_calories or 450) * 0.3 / 9)
+            "protein": int(round(float(target_protein))) or round((target_calories or 450) * 0.3 / 4),
+            "carbs": int(round(float(target_carbs))) or round((target_calories or 450) * 0.4 / 4),
+            "fats": int(round(float(target_fats))) or round((target_calories or 450) * 0.3 / 9)
         }
         # Fake retries for the logging metric below
         if not hasattr(invoke_with_retry, 'retry'):
@@ -976,6 +1403,25 @@ class ChatState(MessagesState):
     # frontend (AgentPage) emita toast no-bloqueante con `emitCoherenceToast`.
     # Default: lista vacía (no warnings).
     coherence_warnings: list
+    # [P3-PANTRY-INVALIDATE-FROM-CHAT · 2026-05-22] Timestamp epoch ms cuando
+    # `execute_tools` ejecutó una tool que muta `user_inventory`
+    # (`modify_pantry_inventory` o `log_consumed_meal` con `ingredients`).
+    # Se propaga al SSE `done`; el frontend (Agent.jsx) escribe la key
+    # localStorage `mealfit_pantry_dirty_at` para que Pantry.jsx invalide
+    # su cache TTL=30s y re-fetcheé al próximo mount. Defensa en profundidad
+    # sobre el canal Realtime (puede tener lag o estar cerrado si user
+    # navega entre tabs/components durante la conversación).
+    # Default: None — sin mutación de pantry, frontend silencia el flag.
+    pantry_modified_at: float | None
+    # [P3-AGENT-DEPLETE · 2026-05-22] Lista de items que el chat agent marcó
+    # como AGOTADOS via `modify_pantry_inventory(items_to_deplete=[...])`.
+    # Shape per item: {master_ingredient_id, ingredient_name, quantity,
+    # unit, category, shelf_life_days, depleted_at}. Se propaga al SSE
+    # `done`; AgentPage.jsx hace merge a `localStorage.mealfit_depleted_items`
+    # para que Pantry.jsx muestre los items en la sección "Agotados" (que
+    # también alimenta la lista de compras para re-stock).
+    # Default: None — sin items agotados en el turn.
+    pantry_depleted_items: list | None
 
 def call_model(state: ChatState):
     logger.info(f"🧠 [LANGGRAPH NODE] call_model")
@@ -1174,6 +1620,13 @@ def execute_tools(state: ChatState):
     # tool_call por turn, pero defensive si el LLM emite múltiples tool_calls
     # que retornan warnings — extiende la lista en lugar de pisarla).
     coherence_warnings = list(state.get("coherence_warnings") or [])
+    # [P3-PANTRY-INVALIDATE-FROM-CHAT · 2026-05-22] Preservar timestamp si
+    # un turn previo ya lo seteó (caso edge: LLM emite múltiples tool_calls
+    # incluyendo varias de inventory — quedamos con el más reciente).
+    pantry_modified_at = state.get("pantry_modified_at")
+    # [P3-AGENT-DEPLETE · 2026-05-22] Acumular items agotados de este turn
+    # (LLM puede emitir múltiples tool_calls; concatenamos).
+    pantry_depleted_items = list(state.get("pantry_depleted_items") or [])
 
     tool_messages = []
     
@@ -1341,6 +1794,66 @@ def execute_tools(state: ChatState):
                     for t in agent_tools:
                         if t.name == tool_name:
                             tool_result = t.invoke(tool_args)
+                            # [P3-AGENT-DEPLETE · 2026-05-22] Si la tool inyectó
+                            # marker `<<PANTRY_DEPLETED_JSON: [...]>>` en el
+                            # tool_result, extraerlo + acumular al state +
+                            # strip-earlo del str para que la LLM NO vea el
+                            # JSON raw (sería ruido en su contexto).
+                            if (
+                                isinstance(tool_result, str)
+                                and "<<PANTRY_DEPLETED_JSON:" in tool_result
+                            ):
+                                import json as _json_marker
+                                import re as _re_marker
+                                _marker_re = _re_marker.compile(
+                                    r"<<PANTRY_DEPLETED_JSON:\s*(\[[^\]]*\]|\[.*?\])>>",
+                                    _re_marker.DOTALL,
+                                )
+                                _m = _marker_re.search(tool_result)
+                                if _m:
+                                    try:
+                                        _parsed = _json_marker.loads(_m.group(1))
+                                        if isinstance(_parsed, list):
+                                            pantry_depleted_items.extend(_parsed)
+                                            logger.info(
+                                                f"🪫 [P3-AGENT-DEPLETE] tool={tool_name} "
+                                                f"marcó {len(_parsed)} item(s) como agotados "
+                                                f"(user={_trusted_uid})"
+                                            )
+                                    except Exception as _parse_err:
+                                        logger.warning(
+                                            f"[P3-AGENT-DEPLETE] parse marker falló: {_parse_err!r}"
+                                        )
+                                    # Strip del marker del tool_result.
+                                    tool_result = _marker_re.sub("", tool_result).strip()
+                            # [P3-PANTRY-INVALIDATE-FROM-CHAT · 2026-05-22]
+                            # Si la tool muta `user_inventory`, marcar el
+                            # state con un timestamp epoch (ms). El SSE
+                            # `done` lo propaga al frontend que lo escribe
+                            # a `localStorage.mealfit_pantry_dirty_at`;
+                            # Pantry.jsx lo lee al mount + storage event y
+                            # invalida su cache TTL=30s. Defensa en
+                            # profundidad sobre el canal Realtime (puede
+                            # tener lag si user navega entre tabs durante
+                            # la conversación). `log_consumed_meal` solo
+                            # cuenta como mutación si trae `ingredients` —
+                            # sin esa lista no toca pantry.
+                            _mutates_pantry = (
+                                tool_name == "modify_pantry_inventory"
+                                or (
+                                    tool_name == "log_consumed_meal"
+                                    and isinstance(tool_args, dict)
+                                    and bool(tool_args.get("ingredients"))
+                                )
+                            )
+                            if _mutates_pantry:
+                                import time as _time
+                                pantry_modified_at = _time.time() * 1000.0
+                                logger.info(
+                                    f"🥚 [P3-PANTRY-INVALIDATE-FROM-CHAT] "
+                                    f"tool={tool_name} marcó pantry_dirty "
+                                    f"at={pantry_modified_at:.0f} (user={_trusted_uid})"
+                                )
                             break
             except _PydanticValidationError as _val_err:
                 # [P1-CHAT-TOOL-VALIDATE · 2026-05-20] LLM emitió tool_args
@@ -1373,6 +1886,15 @@ def execute_tools(state: ChatState):
         # `final_state_snapshot.values["coherence_warnings"]` y lo incluye
         # en el SSE event `done` para que el frontend emita toast.
         "coherence_warnings": coherence_warnings,
+        # [P3-PANTRY-INVALIDATE-FROM-CHAT · 2026-05-22] Timestamp del último
+        # modify_pantry_inventory / log_consumed_meal (con ingredients) en
+        # este turn. None si no se mutó pantry. El stream wrapper lo emite
+        # en el SSE `done` para que Agent.jsx setee la key localStorage.
+        "pantry_modified_at": pantry_modified_at,
+        # [P3-AGENT-DEPLETE · 2026-05-22] Items que el agente marcó como
+        # agotados en este turn (de `modify_pantry_inventory(items_to_deplete)`).
+        # SSE `done` lo emite; AgentPage.jsx merge a localStorage.
+        "pantry_depleted_items": pantry_depleted_items if pantry_depleted_items else None,
     }
 
 def route_tools(state: ChatState):
@@ -2387,11 +2909,21 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # cuando el guard detecta drift recetas↔lista post-modificación).
     # Default [] — sin warnings, frontend silencia el toast.
     coherence_warnings = []
+    # [P3-PANTRY-INVALIDATE-FROM-CHAT · 2026-05-22] Timestamp epoch ms del
+    # turn donde una tool mutó `user_inventory`. None = no se tocó pantry
+    # en este stream; frontend silencia el flag de invalidación.
+    pantry_modified_at = None
+    # [P3-AGENT-DEPLETE · 2026-05-22] Items que el agente marcó como
+    # agotados (vía `modify_pantry_inventory(items_to_deplete)`).
+    # Default None — sin items agotados, frontend no toca localStorage.
+    pantry_depleted_items = None
 
     if final_state_snapshot and final_state_snapshot.values:
         updated_fields = final_state_snapshot.values.get("updated_fields", {})
         new_plan = final_state_snapshot.values.get("new_plan", None)
         coherence_warnings = final_state_snapshot.values.get("coherence_warnings") or []
+        pantry_modified_at = final_state_snapshot.values.get("pantry_modified_at")
+        pantry_depleted_items = final_state_snapshot.values.get("pantry_depleted_items")
         final_messages = final_state_snapshot.values.get("messages", [])
         if final_messages:
             last_msg = final_messages[-1]
@@ -2405,4 +2937,4 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     # save_message en routers/chat.py persiste este `response` a DB — sanitizar
     # acá significa que la versión persistida también queda neutralizada.
     final_content = _sanitize_chat_output_for_wire(final_content)
-    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings})}\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'response': final_content, 'updated_fields': updated_fields, 'new_plan': new_plan, 'coherence_warnings': coherence_warnings, 'pantry_modified_at': pantry_modified_at, 'pantry_depleted_items': pantry_depleted_items})}\n\n"

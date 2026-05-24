@@ -5141,6 +5141,90 @@ def run_shopping_coherence_guard_and_append_history(
     return divergences, block_set
 
 
+# [P3-AGG-CLEAN-LEADING-PUNCT · 2026-05-23] Caso real verificado log
+# 2026-05-23 00:33-00:35: el aggregator emitió `/pedazos de queso` con
+# `/` corrupto. El LLM ve ese item en la pantry list y trata de usarlo,
+# pero el pantry guard busca exact-match (`queso`) y no matchea
+# `/pedazos de queso` → unauthorized → retry. 3 retries seguidos
+# fallaron por este mismo modo → 422 (gracias al fix P3-SWAP-LLM-RETRIES-422).
+#
+# Cleanup defensivo: strip leading punctuation/bullets/símbolos al
+# inicio del name extraído por `_parse_quantity`. Esto cubre el caso
+# verificado + futuras corrupciones similares (caracteres como `-`,
+# `*`, `•`, `·`, `▪` que el LLM puede emitir como list-item markers).
+#
+# Emite log warning cuando aplica para visibilidad operacional —
+# permite detectar upstream bugs sin romper el flujo runtime.
+_LEADING_PUNCT_RE = re.compile(r"^[\s/\-\*•·▪▫◦‣⁃▸◾◽■□]+")
+
+
+def _clean_leading_punct_from_name(name: str) -> str:
+    """Strip leading punctuation/bullets de un ingredient name.
+
+    Idempotente: ``"queso"`` → ``"queso"`` (sin cambios).
+    Limpia: ``"/pedazos de queso"`` → ``"pedazos de queso"``,
+            ``"- arroz"`` → ``"arroz"``,
+            ``"• cebolla"`` → ``"cebolla"``.
+    """
+    if not isinstance(name, str) or not name:
+        return name
+    cleaned = _LEADING_PUNCT_RE.sub("", name)
+    if cleaned != name:
+        logging.warning(
+            f"[P3-AGG-CLEAN-LEADING-PUNCT] Name normalizado: {name!r} → "
+            f"{cleaned!r}. Upstream emitió punctuation/bullet inicial."
+        )
+    return cleaned
+
+
+# [P3-AGG-PRESENTATION-MODIFIERS · 2026-05-23] Caso real verificado log
+# 2026-05-23 00:45-00:47: tras limpiar el `/` corrupto, el LLM seguía
+# fallando con `"Pedazos de queso"` (sin slash) porque ese name NO está
+# en master_ingredients (canónico es "queso blanco" o "queso de freír"),
+# Y Vector Search caía con 429 RESOURCE_EXHAUSTED → fallback regex
+# exact-match → rechazo del pantry guard.
+#
+# Strip de presentation modifiers SEGUROS (no son aliases canónicos en
+# PROTEIN_SYNONYMS / CARB_SYNONYMS / VEGGIE_FAT_SYNONYMS):
+#
+#   pedazos/pedazo, trozos/trozo, rebanadas/rebanada, rodajas/rodaja,
+#   porciones/porción, tajadas/tajada, cubos/cubo, tiras/tira,
+#   dados/dado, lonjas/lonja.
+#
+# NO incluimos "filete de" / "lomo de" / "carne molida de" porque ESOS
+# SÍ son aliases canónicos en PROTEIN_SYNONYMS — stripearlos rompería
+# la canonicalización legítima.
+_PRESENTATION_MODIFIER_PREFIXES_RE = re.compile(
+    r"^(pedazos?|trozos?|rebanadas?|rodajas?|porci(?:ón|on|ones)|"
+    r"tajadas?|cubos?|tiras?|dados?|lonjas?)\s+de\s+",
+    re.IGNORECASE,
+)
+
+
+def _strip_presentation_modifier_prefix(name: str) -> str:
+    """Strip prefijos de presentación tipo "pedazos de X" → "X".
+
+    Mantiene names canónicos que CONTIENEN "de" como parte legítima del
+    canónico (ej. "queso de freír", "filete de pollo") porque su prefijo
+    no está en la lista controlada.
+
+    Idempotente: ``"queso"`` → ``"queso"`` (sin cambios).
+    Limpia: ``"pedazos de queso"`` → ``"queso"``,
+            ``"Rebanadas de pan"`` → ``"pan"``,
+            ``"trozos de pollo"`` → ``"pollo"``.
+    """
+    if not isinstance(name, str) or not name:
+        return name
+    cleaned = _PRESENTATION_MODIFIER_PREFIXES_RE.sub("", name, count=1)
+    if cleaned != name:
+        logging.warning(
+            f"[P3-AGG-PRESENTATION-MODIFIERS] Name normalizado: {name!r} → "
+            f"{cleaned!r}. Upstream emitió modifier de presentación "
+            f"(pedazos/trozos/etc) como parte del nombre canónico."
+        )
+    return cleaned
+
+
 def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0):
     # [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Reset del tracker de caps al
     # inicio de cada run del aggregator. Los caps que se apliquen durante
@@ -5255,6 +5339,16 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if not item or len(item) < 3: continue
         qty, unit, name = _parse_quantity(item, apply_yield_multiplier=False, apply_legumbres_yield_only=True)
         if not name: continue
+        # [P3-AGG-CLEAN-LEADING-PUNCT · 2026-05-23] Strip bullets/punct al
+        # inicio del name; cierra modo de fallo donde el LLM emite
+        # "/pedazos de queso" y el pantry guard nunca matchea.
+        name = _clean_leading_punct_from_name(name)
+        # [P3-AGG-PRESENTATION-MODIFIERS · 2026-05-23] Strip prefijos de
+        # presentación ("pedazos de queso" → "queso"). Aplicado DESPUÉS
+        # del punct cleanup para que "/pedazos de queso" → "pedazos de
+        # queso" → "queso" en cascada.
+        name = _strip_presentation_modifier_prefix(name)
+        if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
         aggregated[name][unit] += float(qty) * float(multiplier)  # P2-NEW-11: escalado intencional
         plan_names.add(name)
@@ -5267,6 +5361,15 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # "200g habichuelas cocidas", la deducción del inventario debe ser
         # 70g secas (mismo SKU físico que se sumó al plan).
         qty, unit, name = _parse_quantity(item, apply_yield_multiplier=False, apply_legumbres_yield_only=True)
+        if not name: continue
+        # [P3-AGG-CLEAN-LEADING-PUNCT · 2026-05-23] Mismo cleanup que el
+        # plan loop arriba — la asimetría plan/consumed (P2-NEW-11) NO
+        # se rompe: solo limpiamos punctuation, no escalamos.
+        name = _clean_leading_punct_from_name(name)
+        # [P3-AGG-PRESENTATION-MODIFIERS · 2026-05-23] Mismo strip de
+        # modifiers que el plan loop — la simetría plan↔consumed
+        # requiere identical normalization para que el delta funcione.
+        name = _strip_presentation_modifier_prefix(name)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
         aggregated[name][unit] -= float(qty)  # P2-NEW-11: SIN multiplier (ver contrato arriba)
