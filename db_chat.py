@@ -64,10 +64,18 @@ def get_or_create_session(session_id: str, user_id: str = None):
     # consumen los 4 campos básicos del session (id, user_id, locked_at,
     # created_at). Convención post-P1-NEW-3 (explicit columns) cierra el
     # gap inconsistente entre módulos.
+    #
+    # [P2-PROD-AUDIT-1-SQL-FSTRING-NOQA · 2026-05-23] Los f-strings SQL abajo
+    # interpolan `_AGENT_SESSION_COLS` (constante function-local string fija) —
+    # NO user input. SAST tools (bandit S608, ruff S608) flagean f-strings en
+    # SQL como posible injection — falso positivo aquí. Markers `# noqa: S608`
+    # silencian el escaneo + test
+    # `test_p2_prod_audit_1_sql_fstring_constants.py` enforza que el
+    # interpolated value sea un `Name` AST referenciando una constant local.
     _AGENT_SESSION_COLS = "id, user_id, locked_at, created_at"
     try:
         logger.info(f"📋 [SESSION] get_or_create_session(id={session_id}, user_id={user_id})")
-        query = f"SELECT {_AGENT_SESSION_COLS} FROM agent_sessions WHERE id = %s"
+        query = f"SELECT {_AGENT_SESSION_COLS} FROM agent_sessions WHERE id = %s"  # noqa: S608
         res = execute_sql_query(query, (session_id,), fetch_one=True)
 
         if res:
@@ -76,7 +84,7 @@ def get_or_create_session(session_id: str, user_id: str = None):
             if not existing_session.get("user_id") and user_id:
                 try:
                     update_q = (
-                        f"UPDATE agent_sessions SET user_id = %s WHERE id = %s "
+                        f"UPDATE agent_sessions SET user_id = %s WHERE id = %s "  # noqa: S608
                         f"RETURNING {_AGENT_SESSION_COLS}"
                     )
                     update_res = execute_sql_write(update_q, (user_id, session_id), returning=True)
@@ -90,13 +98,13 @@ def get_or_create_session(session_id: str, user_id: str = None):
         logger.info(f"📋 [SESSION] Sesión {session_id} NO existe. Creando nueva...")
         if user_id:
             insert_q = (
-                f"INSERT INTO agent_sessions (id, user_id, locked_at) VALUES (%s, %s, %s) "
+                f"INSERT INTO agent_sessions (id, user_id, locked_at) VALUES (%s, %s, %s) "  # noqa: S608
                 f"RETURNING {_AGENT_SESSION_COLS}"
             )
             new_res = execute_sql_write(insert_q, (session_id, user_id, None), returning=True)
         else:
             insert_q = (
-                f"INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) "
+                f"INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) "  # noqa: S608
                 f"RETURNING {_AGENT_SESSION_COLS}"
             )
             new_res = execute_sql_write(insert_q, (session_id, None), returning=True)
@@ -107,7 +115,7 @@ def get_or_create_session(session_id: str, user_id: str = None):
         logger.info(f"Fallback creando sesión: {e}")
         try:
             insert_q = (
-                f"INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) "
+                f"INSERT INTO agent_sessions (id, locked_at) VALUES (%s, %s) "  # noqa: S608
                 f"RETURNING {_AGENT_SESSION_COLS}"
             )
             new_res_fallback = execute_sql_write(insert_q, (session_id, None), returning=True)

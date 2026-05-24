@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-LOW-SIGNAL-FALLBACK · 2026-05-21"
+_LAST_KNOWN_PFIX = "P2-PROD-AUDIT-1 · 2026-05-23"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -97,9 +97,40 @@ _SENSITIVE_KEY_SUBSTRINGS = (
 )
 
 
+# [P1-PROD-AUDIT-1-SENTRY-CAMEL · 2026-05-23] Pre-fix `_is_sensitive_key`
+# solo matcheaba substrings tal cual aparecen en `_SENSITIVE_KEY_SUBSTRINGS`
+# tras `.lower()`. Eso atrapa `health_profile`, `Health_Profile`,
+# `HEALTH_PROFILE` (snake_case en cualquier capitalización), PERO NO
+# `healthProfile` (camelCase) ni `health-profile` (kebab-case).
+#
+# Modo de fallo concreto: el frontend serializa `health_profile` snake_case,
+# PERO la migración a TypeScript / cambios de convención podrían introducir
+# `healthProfile` en payloads via `JSON.stringify(obj)` donde JS usa camelCase
+# para keys nuevas. Si esa key llega a Sentry vía request body, queda sin
+# redactar.
+#
+# Fix: normalizar AMBOS lados (key del payload + substring del list)
+# removiendo separadores `_` y `-` antes del match. Así:
+#   - `healthProfile` → normalized=`healthprofile`
+#   - substring `health_profile` → normalized=`healthprofile`
+#   → match positivo.
+# Backward compatible: el match raw (con separadores) sigue funcionando para
+# kebab-case que NO normalizado (e.g. headers HTTP `X-Auth-Token`).
+def _normalize_key(s: str) -> str:
+    return s.replace("_", "").replace("-", "")
+
+
+_NORMALIZED_SUBSTRINGS = tuple(_normalize_key(s) for s in _SENSITIVE_KEY_SUBSTRINGS)
+
+
 def _is_sensitive_key(key: str) -> bool:
     k = (key or "").lower()
-    return any(s in k for s in _SENSITIVE_KEY_SUBSTRINGS)
+    # Raw match (preserva semántica pre-fix: e.g. `Authorization` header).
+    if any(s in k for s in _SENSITIVE_KEY_SUBSTRINGS):
+        return True
+    # Normalized match (cubre camelCase: `healthProfile`, `creditCard`).
+    k_norm = _normalize_key(k)
+    return any(s in k_norm for s in _NORMALIZED_SUBSTRINGS)
 
 
 def _redact_dict_in_place(obj, depth: int = 0) -> None:

@@ -3617,8 +3617,56 @@ def _add_job_jittered(scheduler, *args, **kwargs):
     `setdefault` permite override explícito por callsite (ej.: un job que
     quiera jitter=0 por motivo operacional puede pasarlo y este wrapper
     no lo pisa).
+
+    [P1-PROD-AUDIT-1-CRON-CORRELATION · 2026-05-23] Adicional: el callable
+    pasado como primer arg posicional se envuelve con `with_correlation_id`
+    para que cada run del cron tenga su propio correlation ID en logs
+    (`corr=cron:<job_id>:<short>`). Pre-fix los crons emitían `corr=-`
+    porque APScheduler los ejecuta en threads pre-existentes sin request
+    scope — debugging cross-cutting cron-internal era imposible.
+
+    Documentación de la limitación pre-fix vive en `correlation.py`:
+    "APScheduler crons corren en threads pre-existentes (background
+    scheduler) sin request scope → todos llevan `corr=-` también. Para
+    correlation cron-internal, futuro P-fix podría asignar
+    `corr=cron:<job_name>:<run_id>` al entry-point del cron." Este fix
+    cierra esa limitación.
+
+    Idempotente: si el callable ya está wrappeado (e.g. doble call accidental),
+    no re-wrappea. Si no es callable (caller pasó string para deferred
+    resolution), no toca el arg.
     """
     kwargs.setdefault("jitter", _SCHEDULER_JITTER_S)
+
+    if args and callable(args[0]):
+        original_callable = args[0]
+        # Marker de idempotencia — evita double wrapping si _add_job_jittered
+        # se invoca dos veces sobre el mismo callable (improbable pero
+        # defensivo).
+        if not getattr(original_callable, "_mealfit_corr_wrapped", False):
+            from correlation import with_correlation_id, new_correlation_id
+
+            job_id_for_corr = kwargs.get("id") or getattr(
+                original_callable, "__name__", "unknown_job"
+            )
+
+            def _wrapped_with_correlation(*a, **kw):
+                # Generar correlation ID PER-RUN del cron. Formato:
+                # `cron:<job_id>:<8chars>` — distinguible visualmente de
+                # request-scoped IDs (8 chars puros hex).
+                run_corr = f"cron:{job_id_for_corr}:{new_correlation_id()}"
+                with with_correlation_id(run_corr):
+                    return original_callable(*a, **kw)
+
+            # Preservar metadata útil para introspección y la idempotency check.
+            _wrapped_with_correlation.__name__ = getattr(
+                original_callable, "__name__", "_wrapped_cron"
+            )
+            _wrapped_with_correlation.__doc__ = getattr(original_callable, "__doc__", None)
+            _wrapped_with_correlation._mealfit_corr_wrapped = True
+            _wrapped_with_correlation._mealfit_corr_original = original_callable
+            args = (_wrapped_with_correlation,) + args[1:]
+
     return scheduler.add_job(*args, **kwargs)
 
 

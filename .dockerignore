@@ -1,0 +1,97 @@
+# [P0-PROD-AUDIT-1 · 2026-05-23] Excluir del contexto de build:
+# - secrets (.env*)
+# - venvs locales (impactan tamaño + reproducibilidad)
+# - tests (no se ejecutan en runtime — corren en CI)
+# - artefactos transitorios (logs, coverage, caches)
+# - scratch/ (helpers one-shot que no son source-of-truth)
+# - .git/ (no necesario en runtime — git_sha viene de env var inyectada por
+#   EasyPanel/CI; copiar .git inflaría la imagen +20 MB sin uso productivo)
+
+# Secrets — NUNCA copiar al contexto.
+.env
+.env.*
+!.env.example
+
+# Git / VCS metadata.
+.git
+.gitignore
+.github
+
+# Venvs y caches Python.
+venv/
+test_venv/
+.venv
+ENV/
+env.bak/
+venv.bak/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage outputs (regenerables via scripts/run_coverage.sh).
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Tests + fixtures (corren en CI, no en runtime productivo).
+tests/
+conftest.py
+pytest.ini
+
+# IDE / editor metadata.
+.idea/
+.vscode/
+
+# Runtime state generado por la app (NO source-of-truth).
+_force_regen.json
+chat_errors.json
+deferrals_pending.jsonl
+lesson_telemetry_pending.jsonl
+*.sqlite3
+*.db
+test.mp3
+push_log.txt
+chat_errors.json
+
+# Logs + outputs transitorios.
+*.log
+pytest_output.txt
+title_debug.log
+pyright_results.json
+*.bak
+*.jsonl.bak
+
+# Scratch / scripts one-off.
+scratch/
+append_*.py
+scratch_*.py
+
+# Build / dist (Python no debería tenerlos pero por si futuro setup.py).
+build/
+dist/
+*.egg-info/
+
+# Docs y runbooks (sirven solo en repo, no en runtime — uvicorn no los lee).
+docs/
+*.md
+!CLAUDE.md
+# CLAUDE.md mantenido por reflexión (algunos endpoints `/admin/*` lo referencian
+# para diagnóstico operacional; si en futuro se decide no incluirlo, validar
+# que esos endpoints sigan funcionando).
+
+# Frontend (NO existe en este repo — defensa contra workspace meta-root).
+frontend/
+
+# Uploads efímeros (debería ser bind-mount, no copiarse en imagen).
+uploads/
+
+# Scripts PowerShell (corren en CI Windows o local dev, no en runtime Linux).
+*.ps1
+
+# El Dockerfile + .dockerignore mismos.
+Dockerfile
+.dockerignore

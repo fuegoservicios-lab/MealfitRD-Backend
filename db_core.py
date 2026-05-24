@@ -365,12 +365,49 @@ def execute_sql_write(query: str, params: tuple = None, returning: bool = False,
             # siguiente comando.
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cursor:
+                    # [P1-PROD-AUDIT-1-LOCK-TIMEOUT-STRICT · 2026-05-23]
+                    # Pre-fix: SET LOCAL fallaba silenciosamente (`logger.debug`)
+                    # y la query corría sin lock_timeout — degrada a
+                    # comportamiento "esperar indefinido por el row lock".
+                    # Modo de fallo silencioso: usuario reporta "el guardado
+                    # se cuelga 5min" cuando realmente otro worker tenía la
+                    # fila locked + nuestro SET LOCAL falló al setear timeout.
+                    #
+                    # Fix: knob `MEALFIT_LOCK_TIMEOUT_SET_STRICT` (default True
+                    # post-audit) decide el comportamiento:
+                    #   - True (strict, default): si SET LOCAL falla, raise
+                    #     inmediatamente — el caller maneja como RuntimeError.
+                    #     Falla loud > deadlock silencioso.
+                    #   - False (best-effort, legacy): logger.warning + continúa
+                    #     sin lock_timeout. Para back-compat si emerge un caso
+                    #     real donde SET LOCAL no funciona pero la query SÍ
+                    #     debe correr (e.g. permisos restringidos en algún
+                    #     entorno raro de Supabase).
+                    #
+                    # Knob auto-registrado vía _env_bool. Toggle sin redeploy.
                     try:
                         cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")
                     except Exception as set_err:
-                        # Best-effort: si el SET LOCAL falla, seguimos sin él
-                        # (comportamiento de antes — mejor que abortar el write).
-                        logger.debug(f"[P1-3] SET LOCAL lock_timeout falló: {set_err}")
+                        _strict = os.environ.get(
+                            "MEALFIT_LOCK_TIMEOUT_SET_STRICT", "true"
+                        ).lower() in ("1", "true", "yes", "on")
+                        if _strict:
+                            logger.error(
+                                f"[P1-PROD-AUDIT-1-LOCK-TIMEOUT-STRICT] "
+                                f"SET LOCAL lock_timeout={lock_timeout_ms}ms "
+                                f"falló — abortando para evitar deadlock "
+                                f"silencioso. err={type(set_err).__name__}: "
+                                f"{set_err}. Override temporal: "
+                                f"MEALFIT_LOCK_TIMEOUT_SET_STRICT=false."
+                            )
+                            raise RuntimeError(
+                                f"SET LOCAL lock_timeout falló (strict mode): "
+                                f"{type(set_err).__name__}: {set_err}"
+                            ) from set_err
+                        logger.warning(
+                            f"[P1-3 best-effort] SET LOCAL lock_timeout "
+                            f"falló (continuando sin timeout): {set_err}"
+                        )
                     cursor.execute(query, params)
                     if returning:
                         return cursor.fetchall()

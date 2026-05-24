@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 16)  # P3-WATER-TRACKER 2026-05-16: card "Mi Nevera" del Dashboard reemplazado por tracker de hidratacion (8 vasos, reset a medianoche local). Tabla water_intake_log (RLS) + endpoints GET/POST /api/plans/water-intake (sin costo LLM → get_verified_user_id + rate limiter 60/60s) + componente WaterTracker.jsx con persistencia optimistic UI. Misma fecha bundle: P2-STAPLE-DIVERSITY + 5 sibling fixes (quality push, ver memoria).
+_PFIX_DATE_FLOOR = date(2026, 5, 23)  # P2-PROD-AUDIT-1 2026-05-23: cierre del bundle de 8 gaps B-P2 del audit production-readiness. Implementaciones reales (2): pyright 3.11→3.12 (B-P2-5), # noqa: S608 markers en 7 SQL f-strings + AST validator (B-P2-1). Helpers operacionales (2): scripts/bump_last_known_pfix.py + scripts/check_alert_keys_sync.py (B-P2-7, B-P2-8). Documentación (2): docs/runbooks/cache_invalidation_policy.md (B-P2-4) + decision-deferred db_chat grouping (B-P2-6). Tracker tests (2): db facade migration tracking (B-P2-2) + monolith cap ya cubre constants.py (B-P2-3). Tests: test_p2_prod_audit_{1..4}_*.py. Sigue al cierre P1-PROD-AUDIT-1 (2026-05-23).
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

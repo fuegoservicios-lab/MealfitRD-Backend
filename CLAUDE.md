@@ -363,3 +363,61 @@ Endpoint admin [`POST /api/system/admin/deploy-lag/check`](backend/routers/syste
 
 **Tabla canónica completa de ~32 `alert_key`** (productor / resolver / modelo) y SOP "Cómo añadir un nuevo alert_key": [`backend/docs/system_alerts_resolution_table.md`](backend/docs/system_alerts_resolution_table.md). SOPs detallados para alerts Manual (`plan_data_corrupted:*`, `deploy_lag_drift_vs_expected` + limpieza one-shot huérfanas) en [`runbook_system_alerts_sops_2026_05_11.md`](~/.claude/projects/.../memory/runbook_system_alerts_sops_2026_05_11.md). Drift detection bidireccional via [`test_p2_audit_4_alert_keys_documented.py`](backend/tests/test_p2_audit_4_alert_keys_documented.py) (parsea `backend/docs/system_alerts_resolution_table.md` + call sites en `cron_tasks.py`/`db_inventory.py`/`memory_manager.py`/`app.py`/`graph_orchestrator.py`/`routers/billing.py`).
 
+---
+
+## Production-readiness audit P0 (2026-05-23)
+
+[P0-PROD-AUDIT-1 · 2026-05-23] Cierre del bundle de 5 gaps P0 del audit production-readiness. Cada gap tiene runbook operacional + test parser-based de regresión. Detalle completo: [`backend/docs/runbooks/README.md`](backend/docs/runbooks/README.md) tabla "Cuándo consultar".
+
+| Gap | Cierre | Runbook | Test |
+|---|---|---|---|
+| B-P0-1: deploy 100% dependiente de Nixpacks auto-detect | [`Dockerfile`](backend/Dockerfile) multistage + [`.dockerignore`](backend/.dockerignore) + CI job `backend-docker-build` valida non-root + HEALTHCHECK | [`dockerfile_deployment.md`](backend/docs/runbooks/dockerfile_deployment.md) | [`test_p0_prod_audit_3_dockerfile_runtime.py`](backend/tests/test_p0_prod_audit_3_dockerfile_runtime.py) |
+| B-P0-2: cobertura de auth por endpoint no auditable | Test blanket AST escanea `app.py`+`routers/*.py`, clasifica cada endpoint en `JWT_USER_SCOPED`/`ADMIN_TOKEN`/`WEBHOOK_HMAC`/`PUBLIC_INTENTIONAL`/`KNOWN_GAP`; falla loud si `UNCLASSIFIED`>0 | [`endpoint_auth_coverage.md`](backend/docs/runbooks/endpoint_auth_coverage.md) | [`test_p0_prod_audit_1_endpoint_auth_coverage.py`](backend/tests/test_p0_prod_audit_1_endpoint_auth_coverage.py) |
+| B-P0-3: sin audit CVE en `requirements.txt` | CI job `backend-security-audit` ejecuta `pip-audit --strict` (inicial non-blocking, mismo pattern que `frontend-lint`; flippear a blocking post-cleanup) | — | [`test_p0_prod_audit_4_pip_audit_ci_job.py`](backend/tests/test_p0_prod_audit_4_pip_audit_ci_job.py) |
+| B-P0-4: política "forward-only" sin SOP de rollback | Runbook con 3 escenarios canónicos (apply failure / regresión post-apply / data corruption) + pre-flight checklist + SOP de testing en branch Supabase | [`migration_rollback.md`](backend/docs/runbooks/migration_rollback.md) | [`test_p0_prod_audit_2_migration_rollback_runbook.py`](backend/tests/test_p0_prod_audit_2_migration_rollback_runbook.py) |
+| B-P0-5: 3 pools DB sin validación de saturación | Script `scripts/load_test_db_pool.py` (httpx async, p50/p95/p99 + verdict PASS/WARN/FAIL configurable via thresholds env) + runbook con SOP de tuning `MEALFIT_DB_POOL_MAX_SIZE` | [`db_pool_load_test.md`](backend/docs/runbooks/db_pool_load_test.md) | [`test_p0_prod_audit_5_load_test_script.py`](backend/tests/test_p0_prod_audit_5_load_test_script.py) |
+
+**Gaps conocidos (KNOWN-GAP- IDs)** trackeados explícitamente en [`endpoint_auth_coverage.md`](backend/docs/runbooks/endpoint_auth_coverage.md) → `KNOWN-GAP-001`: `GET /api/admin/test-proactive` sin `_verify_admin_token` (push spam, no IDOR; follow-up trivial).
+
+### P1-PROD-AUDIT-1 (2026-05-23) — cierre 10 gaps B-P1
+
+Implementaciones reales (4):
+
+| Gap | Cierre | Test |
+|---|---|---|
+| B-P1-3 Sentry PII solo snake_case | `_normalize_key` + `_NORMALIZED_SUBSTRINGS` en [`app.py`](backend/app.py) atrapan `healthProfile`/`creditCard` (camelCase) + kebab-case | [`test_p1_prod_audit_1_sentry_pii_camelcase.py`](backend/tests/test_p1_prod_audit_1_sentry_pii_camelcase.py) |
+| B-P1-10 lock_timeout best-effort | Knob `MEALFIT_LOCK_TIMEOUT_SET_STRICT=true` default; raise RuntimeError si SET LOCAL falla en strict mode (sino logger.warning + continúa) | [`test_p1_prod_audit_3_lock_timeout_strict.py`](backend/tests/test_p1_prod_audit_3_lock_timeout_strict.py) |
+| B-P1-9 JWT retry list hardcoded | Knob `MEALFIT_AUTH_EXTRA_TRANSIENT_ERRORS` (comma-separated) extiende lista canónica; walk `type(e).__mro__` para captar subclases | [`test_p1_prod_audit_2_auth_retry.py`](backend/tests/test_p1_prod_audit_2_auth_retry.py) |
+| B-P1-2 Cron sin correlation_id | `_add_job_jittered` wrappea callable con `with_correlation_id(f"cron:{job_id}:{new_correlation_id()}")` — idempotente vía marker `_mealfit_corr_wrapped` | [`test_p1_prod_audit_4_cron_correlation.py`](backend/tests/test_p1_prod_audit_4_cron_correlation.py) |
+
+Guardrails parser-based (4) — capturan regresión, NO fixean monolito:
+
+| Gap | Guardrail | Test |
+|---|---|---|
+| B-P1-1 Monolitos gigantes | Size cap por archivo (snapshot 2026-05-23 +10% margen); falla loud si excede + propone extracción | [`test_p1_prod_audit_7_monolith_size_cap.py`](backend/tests/test_p1_prod_audit_7_monolith_size_cap.py) |
+| B-P1-4 Bare-except sin logging | AST scan `app.py`: cada `except Exception:` debe tener `logger.<level>` / `raise` / marker `# [BARE-EXCEPT-EXEMPT: ...]` | [`test_p1_prod_audit_8_startup_bare_except.py`](backend/tests/test_p1_prod_audit_8_startup_bare_except.py) |
+| B-P1-8 Migrations idempotency | Escaneo `supabase/migrations/*.sql`: `CREATE TABLE|INDEX|ADD COLUMN|CONSTRAINT` requieren `IF NOT EXISTS`/`DROP IF EXISTS` previo, o marker `-- IDEMPOTENT-EXEMPT: <razón>` | [`test_p1_prod_audit_6_migrations_idempotent.py`](backend/tests/test_p1_prod_audit_6_migrations_idempotent.py) |
+| B-P1-6 Telemetry local buffers | Validar referenciados en `cron_tasks.py` + gitignored + lógica cleanup presente (knob `MEALFIT_*_BUFFER_MAX_*` o tail-keep) | [`test_p1_prod_audit_9_telemetry_buffer.py`](backend/tests/test_p1_prod_audit_9_telemetry_buffer.py) |
+
+Decision-deferred docs (2) — el audit external malinterpretó decisiones operacionales documentadas:
+
+| Gap | Decisión | Test |
+|---|---|---|
+| B-P1-5 Pipeline timeout 720s | Bajar a 600s rompe retry budget (MIN_RETRY_BUDGET_S+RETRY_SAFETY_MARGIN_S+HEDGE=385s threshold). 720s es trade-off documentado en graph_orchestrator.py:244-255. CB cubre Gemini down. Knob para SLA <10min sin redeploy | [`test_p1_prod_audit_5_pipeline_timeout_decision.py`](backend/tests/test_p1_prod_audit_5_pipeline_timeout_decision.py) |
+| B-P1-7 Coverage `fail_under` | Decisión MVP <100 MAU documentada en `.coveragerc`. Activar a >500 MAU con baseline medido. Patrón análogo a `P3-I18N-DEFERRED` | [`test_p1_prod_audit_10_coverage_decision.py`](backend/tests/test_p1_prod_audit_10_coverage_decision.py) |
+
+### P2-PROD-AUDIT-1 (2026-05-23) — cierre 8 gaps B-P2
+
+Mix de fixes pequeños + helpers operacionales + runbooks + audit-corrections.
+
+| Gap | Cierre | Test/Script |
+|---|---|---|
+| B-P2-5 pyrightconfig Python 3.11 | Bump a `pythonVersion: "3.12"` matching runtime | (n/a, 1 línea) |
+| B-P2-1 f-strings SQL false positives | `# noqa: S608` markers en 7 callsites (db_chat.py × 5, db_facts.py × 2) + AST validator que enforza que interpolación es `Name` referenciando constante local | [`test_p2_prod_audit_1_sql_fstring_constants.py`](backend/tests/test_p2_prod_audit_1_sql_fstring_constants.py) |
+| B-P2-7 marker bump manual | Helper script `scripts/bump_last_known_pfix.py` valida formato + slug cross-link + fecha forward-only + actualiza app.py + test_p3_1 atómicamente | `scripts/bump_last_known_pfix.py` |
+| B-P2-8 alert keys diff manual | Helper script `scripts/check_alert_keys_sync.py` produce diff legible doc ↔ código con callsites de cada emit | `scripts/check_alert_keys_sync.py` |
+| B-P2-2 db facade migration tracking | Snapshot del count de `from db_X import` directos; falla si crece arriba del cap; ayuda a tracking progress migración boy-scout | [`test_p2_prod_audit_2_db_facade_migration.py`](backend/tests/test_p2_prod_audit_2_db_facade_migration.py) |
+| B-P2-4 cache invalidation undocumented | Runbook `cache_invalidation_policy.md` con arquitectura + TTL vs event + SOP stale + 4 vías invalidación manual (DEL/KEYS/FLUSHDB/restart) | [`test_p2_prod_audit_3_cache_policy_documented.py`](backend/tests/test_p2_prod_audit_3_cache_policy_documented.py) |
+| B-P2-3 constants.py 147KB | Ya cubierto por monolith size cap (B-P1-1 snapshot). Migración a DB-backed table queda como follow-up P3 | (cubierto por `test_p1_prod_audit_7_monolith_size_cap.py`) |
+| B-P2-6 N+1 en db_chat | Audit external malinterpretó — código usa batch IN clause + Python grouping (1 query, no N+1). Test ancla el patrón correcto + detecta regresión a N+1 real | [`test_p2_prod_audit_4_db_chat_grouping_decision.py`](backend/tests/test_p2_prod_audit_4_db_chat_grouping_decision.py) |
+
