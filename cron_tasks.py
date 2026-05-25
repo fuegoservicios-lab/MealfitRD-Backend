@@ -927,8 +927,20 @@ def _shopping_coherence_alert_job():
         #   un siguiente run OK lo limpia).
         try:
             from db_core import execute_sql_query
+            # [P1-COH-BENIGN-SKIP · 2026-05-25] `below_min_plans` es condición
+            # normal de baja actividad (menos planes nuevos en 24h que el
+            # umbral), NO un fallo del cron. Pre-fix se contaba como failure
+            # → alert `shopping_coherence_alert_job_failures_burst` ruidosa
+            # durante semanas pre-launch (count llegó a 14 en prod). Las otras
+            # 4 skip_reason (db_core_import_failed, supabase_not_initialized,
+            # fetch_plans_failed, guard_persist_import_failed) sí son fallos
+            # reales. Tooltip-anchor: P1-COH-BENIGN-SKIP.
+            _BENIGN_SKIP_REASONS = frozenset({"below_min_plans"})
             _is_failure = (
-                _tick_skip_reason is not None
+                (
+                    _tick_skip_reason is not None
+                    and _tick_skip_reason not in _BENIGN_SKIP_REASONS
+                )
                 or _tick_eval_errors > 0
                 or _tick_persist_errors > 0
             )

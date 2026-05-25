@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 24)  # P0-REGEN-BILLING 2026-05-24: /regen-degraded endpoint loggeaba log_api_usage 1 sola vez aunque N chunks se re-encolaban (revenue leak + quota bypass). Fix: loop `for _ in range(regenerated): log_api_usage(...)` antes del response. Test parser-based test_p0_regen_billing.py escanea source y valida que la llamada está dentro de un `for ... in range(regenerated)`. Detalle: project_p0_regen_billing_2026_05_24.md.
+_PFIX_DATE_FLOOR = date(2026, 5, 25)  # P1-COH-BENIGN-SKIP 2026-05-25: clasificador `_is_failure` del cron `_shopping_coherence_alert_job` contaba `skip_reason='below_min_plans'` (condición normal de baja actividad pre-launch) como fallo → alert `shopping_coherence_alert_job_failures_burst` espuria llegó a count=14 en prod. Fix: frozenset `_BENIGN_SKIP_REASONS={'below_min_plans'}` excluida del clasificador. Test parser-based test_p1_coh_benign_skip.py ancla el patrón. Detalle: project_p1_coh_benign_skip_2026_05_25.md.
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.
