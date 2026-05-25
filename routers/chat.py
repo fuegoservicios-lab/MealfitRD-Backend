@@ -28,7 +28,24 @@ from bg_executor import submit_bg_task
 # [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Helper SSOT del registry de knobs
 # `MEALFIT_*`. Cualquier env var leída aquí se auto-registra en
 # `_KNOBS_REGISTRY` y es visible en `/health/version`.
-from knobs import _env_int
+from knobs import _env_int, _env_float
+
+# [P1-CHAT-TTS-TIMEOUT-HARDCODED · 2026-05-24] Knob del timeout `httpx` para
+# ElevenLabs TTS. Pre-fix el `httpx.AsyncClient(timeout=15.0)` era literal
+# hardcoded — si ElevenLabs degradaba latencia (incident regional), no había
+# rollback sin redeploy. El test blanket `test_p1_new_httpx_timeout` cubría
+# `routers/billing.py`; `chat.py` quedó fuera del scope original y exhibía
+# el patrón prohibido. Default 15.0s = preserva comportamiento previo. Clamp
+# [1.0, 60.0]: el piso defiende contra `=0.001` accidental (rompe en
+# latencia normal), el techo contra `=120` que dejaría workers FastAPI
+# bloqueados más allá de la SLA del frontend (60s total-graph timeout).
+# Auto-registrado en `_KNOBS_REGISTRY` → visible en `/health/version`.
+# Tooltip-anchor: P1-CHAT-TTS-TIMEOUT-HARDCODED.
+_TTS_HTTPX_TIMEOUT_S = _env_float(
+    "MEALFIT_TTS_HTTPX_TIMEOUT_S",
+    15.0,
+    validator=lambda v: 1.0 <= v <= 60.0,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -490,7 +507,8 @@ async def api_chat_tts(
 
     try:
         _tts_request_started = True
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # [P1-CHAT-TTS-TIMEOUT-HARDCODED · 2026-05-24] timeout via knob, no literal.
+        async with httpx.AsyncClient(timeout=_TTS_HTTPX_TIMEOUT_S) as client:
             resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             return Response(content=resp.content, media_type="audio/mpeg")
@@ -515,7 +533,7 @@ async def api_chat_tts(
                     len(text),
                     _json_tts.dumps({
                         "provider": "elevenlabs",
-                        "timeout_threshold_s": 15.0,
+                        "timeout_threshold_s": _TTS_HTTPX_TIMEOUT_S,
                         "char_count": len(text),
                     }, ensure_ascii=False),
                 ),

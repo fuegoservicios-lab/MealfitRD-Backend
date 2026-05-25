@@ -179,8 +179,15 @@ LLM_COMBINED_MAX_WAIT_S     = _env_int  ("MEALFIT_LLM_COMBINED_MAX_WAIT_S",
                                           LLM_USER_MAX_WAIT_S + LLM_MAX_WAIT_S)
 
 # --- Circuit breaker LLM ---
-CB_FAILURE_THRESHOLD        = _env_int  ("MEALFIT_CB_FAILURE_THRESHOLD",        3)
-CB_RESET_TIMEOUT_S          = _env_int  ("MEALFIT_CB_RESET_TIMEOUT_S",          30)
+# [P2-KNOBS-ENV-INT-NO-VALIDATOR · 2026-05-24] Validators añaden defensa
+# contra override accidental: `=0` o negativo en FAILURE_THRESHOLD abre el
+# breaker eternamente; `=0` en RESET_TIMEOUT_S deja el breaker open sin
+# auto-recovery. Knobs críticos para el flujo LLM — ahora un WARNING al
+# load identifica el typo antes de runtime degradado.
+CB_FAILURE_THRESHOLD        = _env_int  ("MEALFIT_CB_FAILURE_THRESHOLD",        3,
+                                          validator=lambda v: 1 <= v <= 1000)
+CB_RESET_TIMEOUT_S          = _env_int  ("MEALFIT_CB_RESET_TIMEOUT_S",          30,
+                                          validator=lambda v: 1 <= v <= 86_400)
 CB_LOCAL_HEALTH_TTL_S       = _env_float("MEALFIT_CB_LOCAL_HEALTH_TTL_S",       1.0)
 
 # --- Hedging per-day (generate_days_parallel_node) ---

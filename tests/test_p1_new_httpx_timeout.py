@@ -36,6 +36,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BILLING = _REPO_ROOT / "backend" / "routers" / "billing.py"
+_CHAT = _REPO_ROOT / "backend" / "routers" / "chat.py"
 
 
 def _read(p: Path) -> str:
@@ -137,3 +138,99 @@ def test_anchor_present_in_test_file():
     `p1_new_httpx_timeout` (su nombre lo provee implícito)."""
     src = _read(Path(__file__))
     assert "P1-NEW-HTTPX-TIMEOUT" in src
+
+
+# ---------------------------------------------------------------------------
+# [P1-CHAT-TTS-TIMEOUT-HARDCODED · 2026-05-24] Extensión del blanket a chat.py.
+#
+# `routers/chat.py:493` exhibía el mismo patrón prohibido que cerró este test
+# para billing.py: `httpx.AsyncClient(timeout=15.0)` literal sin knob.
+# Sin rollback sin redeploy si ElevenLabs degrada latencia.
+# ---------------------------------------------------------------------------
+
+
+def test_chat_tts_anchor_present():
+    """Anchor `P1-CHAT-TTS-TIMEOUT-HARDCODED` presente en `chat.py`."""
+    src = _read(_CHAT)
+    assert "P1-CHAT-TTS-TIMEOUT-HARDCODED" in src, (
+        "Falta anchor `P1-CHAT-TTS-TIMEOUT-HARDCODED` en backend/routers/chat.py. "
+        "Sin anchor un futuro reader que vea `timeout=_TTS_HTTPX_TIMEOUT_S` no "
+        "sabrá el modo de fallo que cierra (no rollback sin redeploy si "
+        "ElevenLabs degrada latencia)."
+    )
+
+
+def test_chat_tts_knob_registered_with_default_and_validator():
+    """`_TTS_HTTPX_TIMEOUT_S` debe resolverse via
+    `_env_float("MEALFIT_TTS_HTTPX_TIMEOUT_S", 15.0, validator=lambda v: 1.0 <= v <= 60.0)`.
+    Default 15.0 preserva comportamiento previo. Clamp [1.0, 60.0]: piso
+    contra `=0.001` accidental, techo contra `=120` que excede SLA total-graph.
+    """
+    src = _read(_CHAT)
+    pat = re.compile(
+        r"_env_float\(\s*[\"']MEALFIT_TTS_HTTPX_TIMEOUT_S[\"']\s*,\s*15\.0\s*,",
+        re.DOTALL,
+    )
+    assert pat.search(src), (
+        "Knob `MEALFIT_TTS_HTTPX_TIMEOUT_S` debe resolverse via "
+        "`_env_float(\"MEALFIT_TTS_HTTPX_TIMEOUT_S\", 15.0, ...)`."
+    )
+    validator_pat = re.compile(
+        r"MEALFIT_TTS_HTTPX_TIMEOUT_S.*?validator\s*=\s*lambda\s+\w+\s*:\s*1\.0\s*<=\s*\w+\s*<=\s*60\.0",
+        re.DOTALL,
+    )
+    assert validator_pat.search(src), (
+        "Knob `MEALFIT_TTS_HTTPX_TIMEOUT_S` debe tener "
+        "`validator=lambda v: 1.0 <= v <= 60.0`."
+    )
+
+
+def test_chat_tts_zero_async_client_without_timeout():
+    """Cero `httpx.AsyncClient(...)` sin `timeout=` en `chat.py`. Guard
+    principal: cualquier nuevo callsite que olvide el parámetro reabre el
+    modo de fallo.
+    """
+    src = _read(_CHAT)
+    bad_callsites = []
+    for m in re.finditer(r"httpx\.AsyncClient\(([^)]*)\)", src):
+        args_blob = m.group(1)
+        if "timeout" not in args_blob:
+            line_no = src[: m.start()].count("\n") + 1
+            bad_callsites.append(f"línea {line_no}: httpx.AsyncClient({args_blob})")
+    assert not bad_callsites, (
+        "`chat.py` contiene callsites `httpx.AsyncClient(...)` sin parámetro "
+        "`timeout=`. Cada uno deja reads colgados indefinidamente bajo "
+        "tail-latency. Callsites:\n  " + "\n  ".join(bad_callsites)
+    )
+
+
+def test_chat_tts_callsite_uses_knob_variable():
+    """El callsite TTS de ElevenLabs debe usar `timeout=_TTS_HTTPX_TIMEOUT_S`,
+    NO literal numérico. Pasar la variable garantiza que el knob
+    `MEALFIT_TTS_HTTPX_TIMEOUT_S` aplique uniformemente."""
+    src = _read(_CHAT)
+    pat = re.compile(
+        r"httpx\.AsyncClient\(\s*timeout\s*=\s*_TTS_HTTPX_TIMEOUT_S\s*\)",
+    )
+    assert pat.search(src), (
+        "Esperado `httpx.AsyncClient(timeout=_TTS_HTTPX_TIMEOUT_S)` en chat.py. "
+        "Si añadiste un literal numérico, el knob se ignora silenciosamente."
+    )
+    # Defensa adicional: cero literales numéricos en `httpx.AsyncClient(timeout=N)`
+    # como CÓDIGO ejecutable (excluye matches dentro de comentarios/docstrings
+    # — el comment del knob menciona el patrón pre-fix como referencia narrativa).
+    bad_callsites = []
+    for line_no, line in enumerate(src.splitlines(), start=1):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue  # comentario inline
+        # Heurística: backtick `…` indica markdown en docstring/comment.
+        # El callsite real nunca está dentro de backticks.
+        m = re.search(r"httpx\.AsyncClient\(\s*timeout\s*=\s*[0-9]", line)
+        if m and "`" not in line:
+            bad_callsites.append(f"línea {line_no}: {line.strip()[:120]}")
+    assert not bad_callsites, (
+        "`chat.py` contiene callsite `httpx.AsyncClient(timeout=<literal>)` "
+        "fuera de comentarios. Usar `timeout=_TTS_HTTPX_TIMEOUT_S`. "
+        "Callsites:\n  " + "\n  ".join(bad_callsites)
+    )

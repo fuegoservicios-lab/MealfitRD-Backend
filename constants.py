@@ -1143,8 +1143,88 @@ def split_with_absorb(total_days: int, base: int = 3) -> list[int]:
     return [base] * n_base + [base + 1] * rem
 # --- VECTOR SEARCH CACHE ---
 _embedding_model = None
-_embedding_cache = {}
-_pantry_embeddings_cache = {}
+
+# [P1-EMBEDDING-CACHE-BOUNDED · 2026-05-24] Caches de embeddings con bound LRU.
+# Pre-fix `_embedding_cache = {}` + `_pantry_embeddings_cache = {}` crecían
+# monotónicamente: `get_embedding(text)` indexaba por string del ingrediente,
+# y `_pantry_embeddings_cache` se popula desde el matcher de pantry en el
+# pipeline de generación. Con miles de planes/mes y ~50-200 strings únicos
+# por plan, RAM del worker FastAPI subía ~1-5 MB/mes sin techo → OOM eventual
+# en contenedor EasyPanel sin alerta previa.
+#
+# Diseño: dict-like LRU bound por maxsize. Preserva la API in/out actual
+# (`text not in cache`, `cache[text] = emb`, `return cache[text]`) para no
+# tocar callsites. Eviction LRU vía OrderedDict.move_to_end + popitem(last=False).
+# Sin lock: la API del dict original tampoco era thread-safe; el GIL hace
+# atómicos cada operación individual; secuencias multi-op compiten pero el
+# failure mode es a-lo-sumo eviction stale, no data corruption.
+#
+# Knob `MEALFIT_EMBEDDING_CACHE_MAXSIZE` (default 5000, clamp [100, 100000])
+# auto-registrado en `_KNOBS_REGISTRY`. Visible en `/health/version`.
+#
+# Tooltip-anchor: P1-EMBEDDING-CACHE-BOUNDED.
+# Test: `test_p1_prod_final_3.py::test_embedding_caches_are_bounded`.
+from knobs import _env_int as _knob_env_int_constants
+# [P2-KNOBS-ENV-INT-NO-VALIDATOR · 2026-05-24] `_env_int` ahora acepta
+# `validator=`; clamp manual post-lectura reemplazado por validator en la
+# signature del helper. Si el operador setea MAXSIZE fuera de [100, 100k]
+# el helper loguea WARNING + cae al default 5000 (visible en _KNOBS_REGISTRY).
+_EMBEDDING_CACHE_MAXSIZE = _knob_env_int_constants(
+    "MEALFIT_EMBEDDING_CACHE_MAXSIZE",
+    5000,
+    validator=lambda v: 100 <= v <= 100_000,
+)
+
+
+class _BoundedEmbeddingCache:
+    """[P1-EMBEDDING-CACHE-BOUNDED] LRU cache dict-like, bound por maxsize.
+
+    API mínima compatible con `dict`: `__contains__`, `__getitem__`,
+    `__setitem__`, `__len__`, `clear`. `get(k, default)` + `keys()` para
+    inspección desde tests / observability.
+    """
+
+    __slots__ = ("_d", "_maxsize")
+
+    def __init__(self, maxsize: int):
+        from collections import OrderedDict
+        self._d = OrderedDict()
+        self._maxsize = max(int(maxsize), 1)
+
+    def __contains__(self, key) -> bool:
+        return key in self._d
+
+    def __getitem__(self, key):
+        value = self._d[key]
+        self._d.move_to_end(key)
+        return value
+
+    def __setitem__(self, key, value) -> None:
+        if key in self._d:
+            self._d.move_to_end(key)
+            self._d[key] = value
+            return
+        self._d[key] = value
+        while len(self._d) > self._maxsize:
+            self._d.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._d)
+
+    def get(self, key, default=None):
+        if key in self._d:
+            return self[key]
+        return default
+
+    def keys(self):
+        return self._d.keys()
+
+    def clear(self) -> None:
+        self._d.clear()
+
+
+_embedding_cache = _BoundedEmbeddingCache(_EMBEDDING_CACHE_MAXSIZE)
+_pantry_embeddings_cache = _BoundedEmbeddingCache(_EMBEDDING_CACHE_MAXSIZE)
 
 # [2026-05-06] Modelo de embeddings TEXT-ONLY (configurable). Default a
 # `gemini-embedding-2` GA estable. Aunque el flujo es text-only, este modelo

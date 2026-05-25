@@ -63,21 +63,52 @@ def _register_knob(
     }
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_int(
+    name: str,
+    default: int,
+    validator: Optional[Callable[[int], bool]] = None,
+) -> int:
+    """[P2-KNOBS-ENV-INT-NO-VALIDATOR · 2026-05-24] `validator` opcional:
+    callable `(int) -> bool`. Si retorna False, loguea WARNING + cae al
+    default + marca `parse_failed`. Útil para rangos (ej.
+    `lambda v: 1 <= v <= 100_000` para sizes/thresholds).
+
+    Pre-fix `_env_int` no aceptaba `validator=` (a diferencia de
+    `_env_float`). Resultado: knobs int críticos requerían `clamp` manual
+    post-lectura — `_EMBEDDING_CACHE_MAXSIZE` lo hacía con `max/min`,
+    pero `MEALFIT_CB_FAILURE_THRESHOLD=0` (o negativo) pasaba silencioso
+    y abría el breaker eternamente. Simetría con `_env_float` cierra el
+    gap. Tooltip-anchor: P2-KNOBS-ENV-INT-NO-VALIDATOR.
+    """
     raw = os.environ.get(name)
     if raw is None or raw == "":
         _register_knob(name, "int", default, raw, default)
         return default
     try:
         value = int(raw)
-        _register_knob(name, "int", default, raw, value)
-        return value
     except (TypeError, ValueError):
         logging.getLogger(__name__).warning(
             f"[KNOBS] env {name}={raw!r} no es int. Usando default={default}."
         )
         _register_knob(name, "int", default, raw, default, parse_failed=True)
         return default
+    if validator is not None:
+        try:
+            ok = bool(validator(value))
+        except Exception as _e:
+            logging.getLogger(__name__).warning(
+                f"[KNOBS] env {name}={value} validator falló ({_e}). Usando default={default}."
+            )
+            _register_knob(name, "int", default, raw, default, parse_failed=True)
+            return default
+        if not ok:
+            logging.getLogger(__name__).warning(
+                f"[KNOBS] env {name}={value} fuera de rango permitido. Usando default={default}."
+            )
+            _register_knob(name, "int", default, raw, default, parse_failed=True)
+            return default
+    _register_knob(name, "int", default, raw, value)
+    return value
 
 
 def _env_float(

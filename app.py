@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-HISTORY-ABORT · 2026-05-23"
+_LAST_KNOWN_PFIX = "P0-REGEN-BILLING · 2026-05-24"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1371,6 +1371,32 @@ def health_version():
         "_SCHEDULER_JOBS_WITH_OPEN_ALERTS" in globals()
     )
 
+    # [P2-EMBED-TELEMETRY · 2026-05-24] Gauge del tamaño actual de los
+    # embedding caches bounded (cierre del par natural de P1-EMBEDDING-CACHE-
+    # BOUNDED 2026-05-24). Sin estas keys, un operador no puede detectar
+    # saturación del cache antes de que el `popitem(last=False)` esté
+    # evicting entries útiles continuamente. Si `embedding_cache_size`
+    # se queda topado en `embedding_cache_maxsize` durante >24h, vale la
+    # pena subir `MEALFIT_EMBEDDING_CACHE_MAXSIZE` para reducir misses.
+    #
+    # Best-effort: cualquier excepción → keys con `-1` para no romper el
+    # endpoint completo (debe seguir respondiendo 200 al poller externo).
+    # Tooltip-anchor: P2-EMBED-TELEMETRY.
+    embedding_cache_size: int = -1
+    pantry_embeddings_cache_size: int = -1
+    embedding_cache_maxsize: int = -1
+    try:
+        from constants import (
+            _embedding_cache as _ec,
+            _pantry_embeddings_cache as _pec,
+            _EMBEDDING_CACHE_MAXSIZE as _ec_max,
+        )
+        embedding_cache_size = len(_ec)
+        pantry_embeddings_cache_size = len(_pec)
+        embedding_cache_maxsize = int(_ec_max)
+    except Exception:
+        pass
+
     git_sha = os.environ.get("GIT_SHA") or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "unknown"
     return {
         "git_sha": git_sha,
@@ -1389,6 +1415,10 @@ def health_version():
         "last_pipeline_metrics_tick_at": last_pipeline_metrics_tick_at,
         "has_p0_prod_1_gate": has_p0_prod_1_gate,
         "has_p1_perf_1_cache": has_p1_perf_1_cache,
+        # [P2-EMBED-TELEMETRY · 2026-05-24] gauges de los embedding caches.
+        "embedding_cache_size": embedding_cache_size,
+        "pantry_embeddings_cache_size": pantry_embeddings_cache_size,
+        "embedding_cache_maxsize": embedding_cache_maxsize,
     }
 
 

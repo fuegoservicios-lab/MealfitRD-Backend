@@ -74,21 +74,31 @@ _FRONTEND_TEST = (
 )
 
 
-def test_last_known_pfix_bumped_to_p1_history_abort():
-    """`_LAST_KNOWN_PFIX` en app.py refleja el P-fix más reciente.
-    Si alguien revierte el bump sin revertir el código del fix,
-    `/health/version` reportará un marker stale → operador no
-    puede confirmar que el AbortController está vivo en el binary
-    productivo."""
+def test_last_known_pfix_marker_date_post_p1_history_abort():
+    """`_LAST_KNOWN_PFIX` en app.py debe tener fecha >= 2026-05-23 (fecha
+    de P1-HISTORY-ABORT). El marker pudo haber sido superseded por un
+    P-fix posterior (válido); lo que NO puede ocurrir es que se revierta
+    a una fecha previa sin revertir también el código del AbortController.
+
+    [Relajado del exact-match `P1-HISTORY-ABORT` original 2026-05-23: el
+    docstring del test ya anticipaba que un bundle posterior superase el
+    marker. Las otras 4 assertions del archivo enforzan que el fix sigue
+    vivo (History.jsx + config/api.js mantienen sus anchors). P3-1
+    freshness ya cubre formato + floor genéricamente.]"""
+    from datetime import date, datetime
     text = _APP_PY.read_text(encoding="utf-8")
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*[\'"]([^\'"]+)[\'"]', text)
     assert m is not None, "_LAST_KNOWN_PFIX no encontrado en app.py"
     marker = m.group(1)
-    assert marker.startswith("P1-HISTORY-ABORT"), (
-        f"Marker esperado `P1-HISTORY-ABORT · 2026-05-23`, encontrado `{marker}`. "
-        "Si bumpeaste a un P-fix posterior, este test sigue siendo válido "
-        "como anchor histórico — moverlo a un nombre con sufijo de fecha "
-        "si necesitas que falle solo durante la ventana activa."
+    date_m = re.search(r"(\d{4}-\d{2}-\d{2})", marker)
+    assert date_m, f"Marker `{marker}` no contiene fecha ISO."
+    marker_date = datetime.strptime(date_m.group(1), "%Y-%m-%d").date()
+    p1_history_abort_floor = date(2026, 5, 23)
+    assert marker_date >= p1_history_abort_floor, (
+        f"Marker `{marker}` con fecha {marker_date} < floor "
+        f"{p1_history_abort_floor} (P1-HISTORY-ABORT). Si revertiste el "
+        f"marker debes también revertir AbortController en History.jsx + "
+        f"config/api.js (los otros 4 tests de este archivo te avisarán)."
     )
 
 

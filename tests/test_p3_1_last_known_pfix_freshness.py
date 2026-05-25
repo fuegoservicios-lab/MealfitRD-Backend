@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 16)  # P3-WATER-TRACKER 2026-05-16: card "Mi Nevera" del Dashboard reemplazado por tracker de hidratacion (8 vasos, reset a medianoche local). Tabla water_intake_log (RLS) + endpoints GET/POST /api/plans/water-intake (sin costo LLM → get_verified_user_id + rate limiter 60/60s) + componente WaterTracker.jsx con persistencia optimistic UI. Misma fecha bundle: P2-STAPLE-DIVERSITY + 5 sibling fixes (quality push, ver memoria).
+_PFIX_DATE_FLOOR = date(2026, 5, 24)  # P0-REGEN-BILLING 2026-05-24: /regen-degraded endpoint loggeaba log_api_usage 1 sola vez aunque N chunks se re-encolaban (revenue leak + quota bypass). Fix: loop `for _ in range(regenerated): log_api_usage(...)` antes del response. Test parser-based test_p0_regen_billing.py escanea source y valida que la llamada está dentro de un `for ... in range(regenerated)`. Detalle: project_p0_regen_billing_2026_05_24.md.
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

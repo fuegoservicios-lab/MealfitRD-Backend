@@ -30,6 +30,10 @@ from graph_orchestrator import (
     # por el endpoint de restock per-item) se auto-registre en `_KNOBS_REGISTRY`
     # en lugar de bypass-ear vía `os.environ.get(...)` raw.
     _env_int,
+    # [P2-WATER-RETRY-NO-JITTER · 2026-05-24] `_env_float` para los knobs
+    # `MEALFIT_WATER_RETRY_BACKOFF_BASE_S` / `MEALFIT_WATER_RETRY_JITTER_MAX_S`
+    # del helper `_water_supabase_with_retry` (auto-registro en KNOBS_REGISTRY).
+    _env_float,
     # [P1-FORM-6] Merge defensivo de `other*` text fields al router. El merge
     # también ocurre dentro de `arun_plan_pipeline` (línea ~8430); idempotente
     # (dedup case-insensitive). Hacerlo al router blinda contra futuros
@@ -3339,7 +3343,8 @@ async def api_pending_pipeline_status(
         return {"status": "none"}
     try:
         from db_plans import get_pending_pipeline
-        payload = get_pending_pipeline(verified_user_id)
+        # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] handler async + DB sync → to_thread.
+        payload = await asyncio.to_thread(get_pending_pipeline, verified_user_id)
         if not payload:
             return {"status": "none"}
         # Filtrar a campos públicos (no leak `updated_at` interno innecesario).
@@ -3369,7 +3374,8 @@ async def api_pending_pipeline_ack(
         return {"ok": True}
     try:
         from db_plans import clear_pending_pipeline
-        clear_pending_pipeline(verified_user_id)
+        # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] handler async + DB sync → to_thread.
+        await asyncio.to_thread(clear_pending_pipeline, verified_user_id)
         return {"ok": True}
     except Exception as e:
         logger.warning(f"[P1-DEEP-SEARCH-PIPELINE] /pending-status/ack error: {e!r}")
@@ -4403,7 +4409,8 @@ async def api_list_depleted_items(
         return {"items": []}
     try:
         from db_inventory import list_depleted_items
-        items = list_depleted_items(verified_user_id, limit=300)
+        # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] handler async + DB sync → to_thread.
+        items = await asyncio.to_thread(list_depleted_items, verified_user_id, 300)
         return {"items": items}
     except Exception as e:
         logger.warning(f"[P3-DEPLETED-BD] GET /depleted-items error: {e!r}")
@@ -4440,7 +4447,8 @@ async def api_upsert_depleted_items(
         raise HTTPException(status_code=400, detail="Batch demasiado grande (>500).")
     try:
         from db_inventory import bulk_upsert_depleted_items
-        n = bulk_upsert_depleted_items(verified_user_id, items)
+        # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] handler async + DB sync → to_thread.
+        n = await asyncio.to_thread(bulk_upsert_depleted_items, verified_user_id, items)
         return {"success": True, "upserted": n}
     except Exception as e:
         logger.warning(f"[P3-DEPLETED-BD] POST /depleted-items error: {e!r}")
@@ -4464,7 +4472,8 @@ async def api_delete_depleted_item(
         raise HTTPException(status_code=401, detail="Auth requerida.")
     try:
         from db_inventory import delete_depleted_item
-        ok = delete_depleted_item(verified_user_id, item_id=item_id)
+        # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] handler async + DB sync → to_thread.
+        ok = await asyncio.to_thread(delete_depleted_item, verified_user_id, item_id=item_id)
         return {"success": True, "deleted": ok}
     except Exception as e:
         logger.warning(f"[P3-DEPLETED-BD] DELETE /depleted-items/{item_id} error: {e!r}")
@@ -4817,10 +4826,29 @@ def _sanitize_floats_for_json(obj):
 # las conexiones HTTPS idle backend→Supabase pueden estar muertas: el primer
 # uso descubre el problema y httpx levanta `RemoteProtocolError` / `ReadError`
 # / `ConnectError` → pre-fix devolvíamos 500 al cliente, contaminando logs y
-# disparando toast de error. Reintento 1 vez con backoff 350ms cubre 99% de
-# los blips (la conexión muerta se reemplaza en el reintento). Si ambos
-# fallan → 503 (transient, retry) en lugar de 500 (sugiere bug).
-_WATER_RETRY_BACKOFF_S = 0.35
+# disparando toast de error. Reintento cubre 99% de los blips (la conexión
+# muerta se reemplaza en el reintento). Si todos fallan → 503 (transient,
+# retry) en lugar de 500 (sugiere bug).
+#
+# [P2-WATER-RETRY-NO-JITTER · 2026-05-24] Pre-fix backoff constante 350ms
+# sin jitter ni exponencial. En escenarios de mass-retry (Supabase regional
+# blip → 100s de clients reintentan al mismo offset +350ms) → thundering
+# herd. Otros retries del repo ya usan exponencial (`db_inventory.py:916`
+# usa `0.05 * (1 << attempt)`) o knob-controlled (`shopping_calculator.py`).
+# Ahora: `base * (2 ** attempt) + random.uniform(0, jitter_max)`. El jitter
+# absoluto (no proporcional) preserva backoff razonable incluso con base
+# muy chica. Knob `MEALFIT_WATER_RETRY_BACKOFF_BASE_S` permite ajustar
+# sin redeploy si latencia Supabase cambia. Tooltip-anchor: P2-WATER-RETRY-NO-JITTER.
+_WATER_RETRY_BACKOFF_BASE_S = _env_float(
+    "MEALFIT_WATER_RETRY_BACKOFF_BASE_S",
+    0.35,
+    validator=lambda v: 0.05 <= v <= 5.0,
+)
+_WATER_RETRY_JITTER_MAX_S = _env_float(
+    "MEALFIT_WATER_RETRY_JITTER_MAX_S",
+    0.1,
+    validator=lambda v: 0.0 <= v <= 1.0,
+)
 _WATER_RETRY_ATTEMPTS = 2
 
 
@@ -4828,8 +4856,14 @@ def _water_supabase_with_retry(builder_factory, op_label: str):
     """Ejecuta una query supabase-py con 1 reintento. `builder_factory` es
     una lambda/callable que CONSTRUYE el builder cada vez (los builders son
     stateful — no se pueden reusar tras un `.execute()` parcial).
+
+    [P2-WATER-RETRY-NO-JITTER · 2026-05-24] Backoff exponencial + jitter
+    absoluto. attempt=0 → base + U[0, jitter_max]; attempt=1 → base*2 +
+    U[0, jitter_max]; etc. Si subes `_WATER_RETRY_ATTEMPTS` no toques
+    `base` — el exponencial escala solo.
     """
     import time as _time
+    import random as _random
     last_exc = None
     for attempt in range(_WATER_RETRY_ATTEMPTS):
         try:
@@ -4837,12 +4871,16 @@ def _water_supabase_with_retry(builder_factory, op_label: str):
         except Exception as e:
             last_exc = e
             if attempt + 1 < _WATER_RETRY_ATTEMPTS:
+                sleep_s = (
+                    _WATER_RETRY_BACKOFF_BASE_S * (2 ** attempt)
+                    + _random.uniform(0.0, _WATER_RETRY_JITTER_MAX_S)
+                )
                 logger.warning(
                     f"⚠️ [P3-WATER-TRACKER] {op_label} transient en intento "
                     f"{attempt + 1}/{_WATER_RETRY_ATTEMPTS}: {type(e).__name__}: "
-                    f"{(str(e) or '')[:120]}. Reintentando en {_WATER_RETRY_BACKOFF_S}s."
+                    f"{(str(e) or '')[:120]}. Reintentando en {sleep_s:.3f}s."
                 )
-                _time.sleep(_WATER_RETRY_BACKOFF_S)
+                _time.sleep(sleep_s)
     raise last_exc
 
 # [P3-WATER-TRACKER · 2026-05-16] Personalizacion de la meta diaria.
@@ -9613,14 +9651,19 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
             WHERE id = %s AND user_id = %s
         """, (plan_id, verified_user_id))
 
-        # [P2-LIVE-7 · 2026-05-11] Audit api_usage. Cada chunk re-encolado
-        # consume un LLM call cuando el worker lo procese — debe contar
-        # contra el cap mensual.
+        # [P0-REGEN-BILLING · 2026-05-24] Audit api_usage 1×N (no 1×1).
+        # Cada chunk re-encolado consume un LLM call independiente cuando el
+        # worker lo procese; loggear 1 sola vez subcontaba billing y permitía
+        # quota bypass (user regeneraba N chunks pagando 1 cargo y consumiendo
+        # N LLM calls downstream). El loop emite N rows en api_usage para que
+        # el cap mensual (gratis=15/basic=50/plus=200) refleje el costo real.
+        # Ancla del test: `test_p0_regen_billing.py`.
         if regenerated > 0 and verified_user_id:
-            try:
-                log_api_usage(verified_user_id, "regen_degraded")
-            except Exception as _audit_err:
-                logger.warning(f"[P2-LIVE-7] log_api_usage regen_degraded falló: {_audit_err}")
+            for _ in range(regenerated):
+                try:
+                    log_api_usage(verified_user_id, "regen_degraded")
+                except Exception as _audit_err:
+                    logger.warning(f"[P0-REGEN-BILLING] log_api_usage regen_degraded falló: {_audit_err}")
 
         return {
             "success": True,

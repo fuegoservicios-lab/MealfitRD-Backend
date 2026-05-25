@@ -17,6 +17,7 @@ Auth: `get_verified_user_id` (sin `verify_api_quota` — no consume créditos).
 
 from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
+import asyncio
 import logging
 
 from auth import get_verified_user_id
@@ -26,6 +27,15 @@ from db_profiles import (
     update_water_tracker_enabled,
     get_water_tracker_enabled,
 )
+
+# [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] Los 4 handlers async de este router
+# llamaban funciones DB síncronas (`get_user_profile`, `update_*`) sin envolver
+# en `asyncio.to_thread`, bloqueando el event loop ~10-200ms por roundtrip
+# Supabase. Mismo modo de fallo que P2-AUTH-ASYNC-SLEEP cerró para `auth.py`:
+# bajo carga concurrente (≥50 req/s), throttling severo de TODOS los demás
+# handlers async (chat stream, webhook PayPal, diary upload). Ahora cada call
+# DB pasa por `await asyncio.to_thread(...)` — el event loop sirve otras
+# requests mientras Supabase responde. Tooltip-anchor: P1-ASYNC-SYNC-DB-BLOCKING.
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +62,9 @@ async def api_set_long_term_memory(
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="No autenticado.")
 
-    ok = update_long_term_memory_enabled(verified_user_id, body.long_term_memory_enabled)
+    ok = await asyncio.to_thread(
+        update_long_term_memory_enabled, verified_user_id, body.long_term_memory_enabled
+    )
     if not ok:
         logger.warning(
             f"[LONG-TERM-MEMORY-TOGGLE] update falló para user={verified_user_id} "
@@ -80,7 +92,7 @@ async def api_get_long_term_memory(
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="No autenticado.")
 
-    profile = get_user_profile(verified_user_id)
+    profile = await asyncio.to_thread(get_user_profile, verified_user_id)
     enabled = True
     if profile and "long_term_memory_enabled" in profile:
         enabled = bool(profile.get("long_term_memory_enabled", True))
@@ -106,7 +118,9 @@ async def api_set_water_tracker_enabled(
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="No autenticado.")
 
-    ok = update_water_tracker_enabled(verified_user_id, body.water_tracker_enabled)
+    ok = await asyncio.to_thread(
+        update_water_tracker_enabled, verified_user_id, body.water_tracker_enabled
+    )
     if not ok:
         logger.warning(
             f"[P3-WATER-TRACKER] update fallo para user={verified_user_id} "
@@ -129,4 +143,5 @@ async def api_get_water_tracker_enabled(
     o campo NULL (defensa contra perfiles legacy pre-migracion)."""
     if not verified_user_id:
         raise HTTPException(status_code=401, detail="No autenticado.")
-    return {"water_tracker_enabled": get_water_tracker_enabled(verified_user_id)}
+    enabled = await asyncio.to_thread(get_water_tracker_enabled, verified_user_id)
+    return {"water_tracker_enabled": enabled}

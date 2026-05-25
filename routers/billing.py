@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import logging
@@ -11,6 +12,19 @@ from auth import get_verified_user_id
 from db import supabase
 from knobs import _env_float
 from rate_limiter import RateLimiter
+
+
+# [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] Helper SSOT para despachar calls
+# sync del cliente Supabase desde handlers `async def`. Pre-fix los 6
+# callsites `supabase.table(...).execute()` corrían inline dentro del event
+# loop, bloqueando ~10-200ms por roundtrip y throttlando otros handlers
+# async bajo carga (chat stream, webhook PayPal, diary upload). Mismo
+# patrón que P2-AUTH-ASYNC-SLEEP cerró para `auth.py::get_verified_user_id`.
+# `asyncio.to_thread` despacha al default thread pool — el event loop sirve
+# otras requests mientras Supabase responde. Tooltip-anchor:
+# P1-ASYNC-SYNC-DB-BLOCKING.
+async def _supabase_async(thunk):
+    return await asyncio.to_thread(thunk)
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +221,9 @@ async def api_validate_discount(
             raise HTTPException(status_code=400, detail="Código requerido")
 
         # Buscar el código en la tabla
-        res = supabase.table("discount_codes").select("*").eq("code", code).eq("is_active", True).execute()
+        res = await _supabase_async(
+            lambda: supabase.table("discount_codes").select("*").eq("code", code).eq("is_active", True).execute()
+        )
 
         if not res.data or len(res.data) == 0:
             return {"valid": False, "message": "Código no encontrado o inactivo."}
@@ -391,7 +407,9 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
             f"{user_id}. Tier asignado server-side: {tier_to_assign}"
         )
 
-        existing_res = supabase.table("user_profiles").select("paypal_subscription_id, subscription_status").eq("id", user_id).execute()
+        existing_res = await _supabase_async(
+            lambda: supabase.table("user_profiles").select("paypal_subscription_id, subscription_status").eq("id", user_id).execute()
+        )
         if existing_res.data and len(existing_res.data) > 0:
             old_sub_id = existing_res.data[0].get("paypal_subscription_id")
             old_status = existing_res.data[0].get("subscription_status")
@@ -456,11 +474,13 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
                                 ),
                             )
 
-        res = supabase.table("user_profiles").update({
-            "plan_tier": tier_to_assign,
-            "paypal_subscription_id": subscription_id,
-            "subscription_status": "ACTIVE"
-        }).eq("id", user_id).execute()
+        res = await _supabase_async(
+            lambda: supabase.table("user_profiles").update({
+                "plan_tier": tier_to_assign,
+                "paypal_subscription_id": subscription_id,
+                "subscription_status": "ACTIVE"
+            }).eq("id", user_id).execute()
+        )
 
         return {"success": True, "message": "Suscripción verificada y plan actualizado B2B."}
 
@@ -479,7 +499,9 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
             logger.warning(f"Intento no autorizado de cancelar suscripcion: req_user={user_id}, auth_user={verified_user_id}")
             raise HTTPException(status_code=401, detail="No autorizado.")
             
-        res = supabase.table("user_profiles").select("paypal_subscription_id").eq("id", user_id).execute()
+        res = await _supabase_async(
+            lambda: supabase.table("user_profiles").select("paypal_subscription_id").eq("id", user_id).execute()
+        )
         if not res.data or not res.data[0].get("paypal_subscription_id"):
             raise HTTPException(status_code=400, detail="No active subscription found to cancel.")
             
@@ -624,9 +646,11 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
         update_payload = {"subscription_status": "CANCELLED"}
         if end_date:
             update_payload["subscription_end_date"] = end_date
-            
-        supabase.table("user_profiles").update(update_payload).eq("id", user_id).execute()
-        
+
+        await _supabase_async(
+            lambda: supabase.table("user_profiles").update(update_payload).eq("id", user_id).execute()
+        )
+
         return {"success": True, "message": "Tu suscripción no se renovará, pero mantendrás tu plan actual hasta el final del ciclo pagado."}
 
     except HTTPException:
@@ -738,10 +762,12 @@ async def api_webhook_paypal(
             subscription_id = resource.get("id")
             if subscription_id:
                 logger.info(f"⬇️ Degradando suscripción {subscription_id} en BD debido a {event_type}.")
-                supabase.table("user_profiles").update({
-                    "plan_tier": "gratis",
-                    "subscription_status": "INACTIVE"
-                }).eq("paypal_subscription_id", subscription_id).execute()
+                await _supabase_async(
+                    lambda: supabase.table("user_profiles").update({
+                        "plan_tier": "gratis",
+                        "subscription_status": "INACTIVE"
+                    }).eq("paypal_subscription_id", subscription_id).execute()
+                )
         elif event_type == "BILLING.SUBSCRIPTION.CANCELLED":
             subscription_id = resource.get("id")
             end_date = resource.get("billing_info", {}).get("next_billing_time")
@@ -752,8 +778,10 @@ async def api_webhook_paypal(
                 update_payload = {"subscription_status": "CANCELLED"}
                 if end_date:
                     update_payload["subscription_end_date"] = end_date
-                    
-                supabase.table("user_profiles").update(update_payload).eq("paypal_subscription_id", subscription_id).execute()
+
+                await _supabase_async(
+                    lambda: supabase.table("user_profiles").update(update_payload).eq("paypal_subscription_id", subscription_id).execute()
+                )
         
         return {"success": True}
 
