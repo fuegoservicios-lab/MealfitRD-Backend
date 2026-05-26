@@ -5175,6 +5175,56 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"(threshold={_env_int('MEALFIT_DEPLOY_LAG_ALERT_HOURS', 168)}h)."
         )
 
+    # [P2-STUCK-CHUNKS · 2026-05-25] Cron de detección de chunks zombie del
+    # scheduler (pending + attempts=0 + execute_after past-due). El triple-filtro
+    # (incluido `execute_after < NOW()`) evita los false positives de JIT-future
+    # del audit P0 2026-05-25. Modelo Auto (explicit): si no hay zombies cierra
+    # alerts previas.
+    if not scheduler.get_job("alert_stuck_chunks"):
+        _STUCK_CHUNK_INT_MIN = _env_int("MEALFIT_STUCK_CHUNK_ALERT_INTERVAL_MIN", 30)
+        if _STUCK_CHUNK_INT_MIN < 5:
+            _STUCK_CHUNK_INT_MIN = 5
+        if _STUCK_CHUNK_INT_MIN > 1440:
+            _STUCK_CHUNK_INT_MIN = 1440
+        _add_job_jittered(scheduler,
+            _alert_stuck_chunks,
+            "interval",
+            minutes=_STUCK_CHUNK_INT_MIN,
+            id="alert_stuck_chunks",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-STUCK-CHUNKS] Cron _alert_stuck_chunks registrado cada "
+            f"{_STUCK_CHUNK_INT_MIN} min "
+            f"(overdue_h={_env_int('MEALFIT_STUCK_CHUNK_OVERDUE_HOURS', 6)})."
+        )
+
+    # [P2-STRANDED-PARTIAL · 2026-05-25] Cron del hueco simétrico de I8:
+    # detecta plans en `partial + days=[] + age > N hours`. Modelo Auto
+    # (explicit): si plan transiciona a complete/failed, cron cierra alert.
+    if not scheduler.get_job("alert_stranded_partial_plans"):
+        _STRANDED_INT_MIN = _env_int("MEALFIT_STRANDED_PARTIAL_INTERVAL_MIN", 60)
+        if _STRANDED_INT_MIN < 15:
+            _STRANDED_INT_MIN = 15
+        if _STRANDED_INT_MIN > 1440:
+            _STRANDED_INT_MIN = 1440
+        _add_job_jittered(scheduler,
+            _alert_stranded_partial_plans,
+            "interval",
+            minutes=_STRANDED_INT_MIN,
+            id="alert_stranded_partial_plans",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P2-STRANDED-PARTIAL] Cron _alert_stranded_partial_plans "
+            f"registrado cada {_STRANDED_INT_MIN} min "
+            f"(age_h={_env_int('MEALFIT_STRANDED_PARTIAL_AGE_HOURS', 72)})."
+        )
+
 
 def _pantry_refresh_horizon_hours_for_plan(total_days_requested: int | None) -> int:
     """Return the proactive pantry horizon based on plan length."""
@@ -16883,6 +16933,276 @@ def _alert_chunks_stuck_in_tz_unresolved() -> None:
         )
     except Exception as e:
         logger.error(f"[P0-α/TZ-STUCK-ALERT] No se pudo persistir la alerta: {e}")
+
+
+def _alert_stuck_chunks() -> None:
+    """[P2-STUCK-CHUNKS · 2026-05-25] Detecta chunks "zombie" del scheduler:
+    `status='pending' AND attempts=0` Y **`execute_after < NOW()`** (ya past-due)
+    Y `created_at < NOW() - INTERVAL N hours` (no recién creado).
+
+    El triple-filtro es importante. El audit P0 2026-05-25 inicialmente flageó
+    4 "chunks zombie" con `pending+attempts=0+age>24h` — forensic descubrió que
+    3 eran **JIT-scheduled para el futuro** (week 2-4 de planes rolling, con
+    `execute_after` 2026-05-26 a 2026-06-03). Sin el filtro `execute_after<NOW()`
+    esta alert produciría false positives masivos cada vez que se crea un plan
+    multi-semana.
+
+    Modelo de resolution: **Auto (explicit)** — cuando la condición desaparece
+    (chunks levantados / dead-letterados / cancelados), el cron UPDATE
+    resolved_at de las alerts existentes.
+
+    Knobs:
+      - `MEALFIT_STUCK_CHUNK_OVERDUE_HOURS` (default 6, clamp [1, 168]) —
+        horas que el chunk debe llevar past-due antes de alertar.
+      - `MEALFIT_STUCK_CHUNK_ALERT_INTERVAL_MIN` (default 30, clamp [5, 1440]) —
+        frecuencia del cron, consumido por register_plan_chunk_scheduler.
+      - `MEALFIT_STUCK_CHUNK_BATCH_LIMIT` (default 50, clamp [1, 500]) —
+        máximo de chunks distintos a reportar en una corrida (cap por
+        prudencia ante outages masivos).
+
+    Tooltip-anchor: P2-STUCK-CHUNKS.
+    """
+    _overdue_h = _env_int("MEALFIT_STUCK_CHUNK_OVERDUE_HOURS", 6)
+    if _overdue_h < 1:
+        _overdue_h = 1
+    if _overdue_h > 168:
+        _overdue_h = 168
+    _batch_limit = _env_int("MEALFIT_STUCK_CHUNK_BATCH_LIMIT", 50)
+    if _batch_limit < 1:
+        _batch_limit = 1
+    if _batch_limit > 500:
+        _batch_limit = 500
+
+    alert_key_prefix = "plan_chunk_zombie:"
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT
+                q.meal_plan_id::text AS meal_plan_id,
+                q.user_id::text AS user_id,
+                COUNT(*)::int AS chunk_count,
+                MIN(q.execute_after) AS earliest_due,
+                MAX(EXTRACT(EPOCH FROM (NOW() - q.execute_after))/3600)::float
+                    AS max_overdue_hours
+            FROM plan_chunk_queue q
+            WHERE q.status = 'pending'
+              AND q.attempts = 0
+              AND q.dead_lettered_at IS NULL
+              AND q.execute_after < NOW() - make_interval(hours => %s)
+              AND q.created_at < NOW() - make_interval(hours => %s)
+            GROUP BY q.meal_plan_id, q.user_id
+            ORDER BY MIN(q.execute_after) ASC
+            LIMIT %s
+            """,
+            (int(_overdue_h), int(_overdue_h), int(_batch_limit)),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P2-STUCK-CHUNKS] No se pudo consultar plan_chunk_queue: {e}")
+        return
+
+    # Modelo Auto (explicit): si NO hay zombies, resolver cualquier alert previa
+    # de este pattern. Limita el sweep para no rasguñar la tabla.
+    if not rows:
+        try:
+            execute_sql_write(
+                """
+                UPDATE system_alerts
+                SET resolved_at = NOW()
+                WHERE alert_key LIKE %s
+                  AND resolved_at IS NULL
+                """,
+                (alert_key_prefix + "%",),
+            )
+        except Exception as e:
+            logger.debug(f"[P2-STUCK-CHUNKS] sweep auto-resolve falló (best-effort): {e}")
+        return
+
+    # Emitir / refrescar alert per-plan_id. ON CONFLICT mantiene idempotencia.
+    # NOTA: alert_key construida con f-string literal (no via {alert_key_prefix})
+    # para que el parser de test_p2_audit_4_alert_keys_documented.py lo reconozca.
+    emitted = 0
+    for row in rows:
+        plan_id = row.get("meal_plan_id")
+        if not plan_id:
+            continue
+        alert_key = f"plan_chunk_zombie:{plan_id}"
+        user_id = row.get("user_id")
+        chunk_count = int(row.get("chunk_count") or 0)
+        max_overdue_hours = float(row.get("max_overdue_hours") or 0.0)
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                VALUES (%s, 'plan_chunk_zombie', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    metadata = EXCLUDED.metadata,
+                    affected_user_ids = EXCLUDED.affected_user_ids,
+                    resolved_at = NULL
+                """,
+                (
+                    alert_key,
+                    "Chunk(s) atascado(s) past-due sin pickup",
+                    (
+                        f"Plan {plan_id}: {chunk_count} chunk(s) en pending con "
+                        f"attempts=0 y execute_after past-due (max overdue "
+                        f"{max_overdue_hours:.1f}h, umbral {_overdue_h}h). "
+                        f"Scheduler NO los levantó. Investigar: reservation_status, "
+                        f"escalated_at, pipeline_snapshot.user_id."
+                    ),
+                    json.dumps({
+                        "meal_plan_id": plan_id,
+                        "chunk_count": chunk_count,
+                        "max_overdue_hours": round(max_overdue_hours, 2),
+                        "overdue_threshold_h": _overdue_h,
+                        "earliest_due": row.get("earliest_due").isoformat()
+                            if row.get("earliest_due") else None,
+                    }, ensure_ascii=False),
+                    json.dumps([user_id] if user_id else []),
+                ),
+            )
+            emitted += 1
+        except Exception as e:
+            logger.warning(f"[P2-STUCK-CHUNKS] persist alert {alert_key} falló: {e}")
+    if emitted:
+        logger.warning(
+            f"[P2-STUCK-CHUNKS] {emitted} plan(s) con chunks zombie past-due "
+            f"(threshold={_overdue_h}h)."
+        )
+
+
+def _alert_stranded_partial_plans() -> None:
+    """[P2-STRANDED-PARTIAL · 2026-05-25] Cierre del hueco simétrico de I8.
+
+    Invariante I8 (DB CHECK `meal_plans_complete_requires_days`) protege
+    `generation_status='complete' AND days=[]`. Pero NO existe protección
+    simétrica para `generation_status='partial' AND days=[] AND age>72h` —
+    estado "stranded partial": week 1 falló sin trace, plan vivo en partial,
+    usuario abandonado. Audit P0 2026-05-25 encontró 1 plan en este estado
+    (`884bd00a`, age 87h) — sin esta alert el operador lo descubrió manual.
+
+    NO añadimos CHECK constraint (rejectaría inserts iniciales que están
+    legítimamente partial mientras week 1 corre). Cron + alert es el cierre
+    operacional correcto.
+
+    Modelo de resolution: **Auto (explicit)** — cuando el plan transiciona
+    a `complete`/`failed`/`cancelled`, el sweep cierra la alert.
+
+    Knobs:
+      - `MEALFIT_STRANDED_PARTIAL_AGE_HOURS` (default 72, clamp [12, 720]) —
+        edad mínima antes de alertar. 72h match el spirit de I8 + da gracia
+        para chunks JIT que tardan en correr week 1.
+      - `MEALFIT_STRANDED_PARTIAL_INTERVAL_MIN` (default 60, clamp [15, 1440]) —
+        frecuencia del cron, consumido por register_plan_chunk_scheduler.
+      - `MEALFIT_STRANDED_PARTIAL_BATCH_LIMIT` (default 50, clamp [1, 500]) —
+        cap de planes a reportar por corrida.
+
+    Tooltip-anchor: P2-STRANDED-PARTIAL.
+    """
+    _age_h = _env_int("MEALFIT_STRANDED_PARTIAL_AGE_HOURS", 72)
+    if _age_h < 12:
+        _age_h = 12
+    if _age_h > 720:
+        _age_h = 720
+    _batch_limit = _env_int("MEALFIT_STRANDED_PARTIAL_BATCH_LIMIT", 50)
+    if _batch_limit < 1:
+        _batch_limit = 1
+    if _batch_limit > 500:
+        _batch_limit = 500
+
+    alert_key_prefix = "plan_stranded_partial:"
+
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT
+                mp.id::text AS plan_id,
+                mp.user_id::text AS user_id,
+                EXTRACT(EPOCH FROM (NOW() - mp.created_at))/3600 AS age_hours
+            FROM meal_plans mp
+            WHERE mp.plan_data->>'generation_status' = 'partial'
+              AND jsonb_array_length(
+                    COALESCE(mp.plan_data->'days', '[]'::jsonb)
+                  ) = 0
+              AND mp.created_at < NOW() - make_interval(hours => %s)
+            ORDER BY mp.created_at ASC
+            LIMIT %s
+            """,
+            (int(_age_h), int(_batch_limit)),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P2-STRANDED-PARTIAL] No se pudo consultar meal_plans: {e}")
+        return
+
+    # Auto (explicit): sin stranded, cerrar cualquier alert previa.
+    if not rows:
+        try:
+            execute_sql_write(
+                """
+                UPDATE system_alerts
+                SET resolved_at = NOW()
+                WHERE alert_key LIKE %s
+                  AND resolved_at IS NULL
+                """,
+                (alert_key_prefix + "%",),
+            )
+        except Exception as e:
+            logger.debug(f"[P2-STRANDED-PARTIAL] sweep auto-resolve falló (best-effort): {e}")
+        return
+
+    # NOTA: alert_key f-string literal (mismo motivo que _alert_stuck_chunks).
+    emitted = 0
+    for row in rows:
+        plan_id = row.get("plan_id")
+        if not plan_id:
+            continue
+        user_id = row.get("user_id")
+        age_hours = float(row.get("age_hours") or 0.0)
+        alert_key = f"plan_stranded_partial:{plan_id}"
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                VALUES (%s, 'plan_stranded_partial', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    metadata = EXCLUDED.metadata,
+                    affected_user_ids = EXCLUDED.affected_user_ids,
+                    resolved_at = NULL
+                """,
+                (
+                    alert_key,
+                    "Plan stranded en partial sin días generados",
+                    (
+                        f"Plan {plan_id} (user {user_id}) lleva {age_hours:.1f}h "
+                        f"en `generation_status='partial'` con `days=[]` (umbral "
+                        f"{_age_h}h). Cierre del hueco simétrico de I8 (que solo "
+                        f"cubre `complete+days=[]`). Acción típica: SOP P3-AUDIT-6 "
+                        f"corruption_repair + mark failed + cancel future chunks "
+                        f"(ver P0-2 cierre en audit 2026-05-25)."
+                    ),
+                    json.dumps({
+                        "plan_id": plan_id,
+                        "user_id": user_id,
+                        "age_hours": round(age_hours, 2),
+                        "age_threshold_h": _age_h,
+                    }, ensure_ascii=False),
+                    json.dumps([user_id] if user_id else []),
+                ),
+            )
+            emitted += 1
+        except Exception as e:
+            logger.warning(f"[P2-STRANDED-PARTIAL] persist alert {alert_key} falló: {e}")
+    if emitted:
+        logger.warning(
+            f"[P2-STRANDED-PARTIAL] {emitted} plan(s) stranded partial "
+            f"(threshold={_age_h}h). Aplicar SOP P3-AUDIT-6."
+        )
 
 
 def _alert_chunk_pantry_snapshots_stale() -> None:

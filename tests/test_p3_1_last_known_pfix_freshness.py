@@ -41,7 +41,7 @@ _APP_PY_PATH = _BACKEND_ROOT / "app.py"
 #
 # Si has cerrado un P-fix posterior y olvidaste subir este floor, el test
 # fallará intencionalmente — es la red de seguridad que cierra P3-1.
-_PFIX_DATE_FLOOR = date(2026, 5, 25)  # P1-COH-BENIGN-SKIP 2026-05-25: clasificador `_is_failure` del cron `_shopping_coherence_alert_job` contaba `skip_reason='below_min_plans'` (condición normal de baja actividad pre-launch) como fallo → alert `shopping_coherence_alert_job_failures_burst` espuria llegó a count=14 en prod. Fix: frozenset `_BENIGN_SKIP_REASONS={'below_min_plans'}` excluida del clasificador. Test parser-based test_p1_coh_benign_skip.py ancla el patrón. Detalle: project_p1_coh_benign_skip_2026_05_25.md.
+_PFIX_DATE_FLOOR = date(2026, 5, 25)  # P2-AUDIT-HARDENING 2026-05-25: bundle de 3 hardenings cierre del audit prod-readiness. P2-1 endpoint /admin/deploy-lag/check gana auto_bump+expected_marker opt-in (reduce SOP post-deploy de 2 round-trips a 1, defensa: requiere expected_marker para no auto-bumpear ciegamente). P2-2 cron `_alert_stuck_chunks` (alert_key `plan_chunk_zombie:<plan_id>`) con triple-filtro `pending+attempts=0+execute_after<NOW()` que cierra el false positive del audit P0 sobre JIT-future chunks de planes rolling. P2-3 cron `_alert_stranded_partial_plans` (alert_key `plan_stranded_partial:<plan_id>`) cierra el hueco simétrico de I8 (que solo cubre `complete+days=[]`). Detalle: project_p2_audit_hardening_2026_05_25.md.
 
 # Formato de marker permitido: `P<n>(-<seg>)+ · YYYY-MM-DD`. Suffix
 # multi-segmento permitido para `P2-NEW-A`, `P3-CANDIDATE-B`, etc.

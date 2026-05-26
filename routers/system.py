@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 from error_utils import safe_error_detail
 import hashlib
 import logging
@@ -625,10 +625,34 @@ def admin_invalidate_plan_graph(request: Request, body: Optional[_InvalidatePlan
     return {"success": True, **status}
 
 
+class _DeployLagCheckBody(BaseModel):
+    """[P2-DEPLOY-LAG-AUTO-BUMP · 2026-05-25] Body opcional para
+    `POST /admin/deploy-lag/check`.
+
+    Default (`auto_bump=False`): comportamiento legacy P0-PROD-1-DEPLOY —
+    solo invoca el detector + retorna snapshot.
+
+    Opt-in (`auto_bump=True`): si `live_marker == expected_marker` (param),
+    UPSERT `app_kv_store.expected_last_known_pfix = live_marker`. Reduce el
+    SOP post-deploy de 2 round-trips a 1.
+
+    `expected_marker` es OBLIGATORIO con `auto_bump=True`. Sin él, no hay
+    forma de validar que el binario deployado es el que el operador
+    esperaba — auto-bumpear ciegamente convertiría el KV en "lo que diga
+    el binario" en vez de "lo que el operador quería deployar".
+    """
+    auto_bump: bool = Field(default=False)
+    expected_marker: Optional[str] = Field(default=None)
+
+
 @router.post("/admin/deploy-lag/check")
-def admin_force_deploy_lag_check(request: Request):
-    """[P0-PROD-1-DEPLOY · 2026-05-12] Fuerza la ejecución inmediata del
-    detector `_alert_deploy_lag_marker_stale` sin esperar al cron.
+def admin_force_deploy_lag_check(
+    request: Request,
+    body: Optional[_DeployLagCheckBody] = Body(default=None),
+):
+    """[P0-PROD-1-DEPLOY · 2026-05-12 · ext P2-DEPLOY-LAG-AUTO-BUMP 2026-05-25]
+    Fuerza la ejecución inmediata del detector `_alert_deploy_lag_marker_stale`
+    sin esperar al cron + opcionalmente auto-bumpea el KV.
 
     Razón: el cron corre cada `MEALFIT_DEPLOY_LAG_CHECK_INTERVAL_HOURS`
     (default 1h). Cuando el operador acaba de publicar `expected_last_known_pfix`
@@ -642,21 +666,52 @@ def admin_force_deploy_lag_check(request: Request):
     Auth: `Authorization: Bearer <CRON_SECRET>` (mismo patrón que el resto
     de `/admin/*`). 503 si CRON_SECRET no está seteado.
 
-    Anchor: P0-PROD-1-DEPLOY-FORCE-CHECK.
+    Anchor: P0-PROD-1-DEPLOY-FORCE-CHECK + P2-DEPLOY-LAG-AUTO-BUMP.
+
+    Body opcional (Pydantic `_DeployLagCheckBody`):
+      - `auto_bump` (bool, default False): si True Y `live==expected_marker`,
+        UPSERT KV. Idempotente.
+      - `expected_marker` (str, optional): el marker que el operador espera
+        que esté live. OBLIGATORIO si auto_bump=True. Sin él → HTTP 400.
+
+    Response gana `kv_bumped` (bool) — True si efectivamente actualizó el KV.
 
     Notas operacionales:
       - Endpoint best-effort: si el detector lanza excepción inesperada,
         retornamos 500 con el `type(e).__name__` (no leak del traceback al
         cliente — usar logs server-side para el detalle completo).
-      - NO muta nada por sí mismo: solo invoca el detector, que sí puede
-        insertar alerts en `system_alerts`. Idempotente: ejecutarlo 2 veces
-        seguidas no duplica filas (ON CONFLICT (alert_key) DO UPDATE).
+      - Sin body O `auto_bump=false`: NO muta nada por sí mismo (solo invoca
+        el detector, que sí puede insertar alerts). Idempotente: ejecutarlo
+        2 veces seguidas no duplica filas (ON CONFLICT DO UPDATE).
+      - Con `auto_bump=true` + `expected_marker` MISMATCH live: NO bumpea
+        (defiende contra "el binario deployado no es el que pediste" — p.ej.
+        EasyPanel deployó commit equivocado). Operador investiga.
     """
     _verify_admin_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
+
+    # [P2-DEPLOY-LAG-AUTO-BUMP · 2026-05-25] Parse body opt-in
+    auto_bump = False
+    expected_marker_param: Optional[str] = None
+    if body is not None:
+        auto_bump = bool(body.auto_bump)
+        expected_marker_param = (
+            body.expected_marker.strip()
+            if isinstance(body.expected_marker, str) and body.expected_marker.strip()
+            else None
+        )
+    if auto_bump and not expected_marker_param:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "auto_bump=true requiere expected_marker (sin él no hay forma "
+                "de validar que el binario deployado es el correcto)."
+            ),
+        )
+
     try:
         from cron_tasks import _alert_deploy_lag_marker_stale, _DEPLOY_LAG_KV_KEY
-        from db_core import execute_sql_query
+        from db_core import execute_sql_query, execute_sql_write
         from app import _LAST_KNOWN_PFIX as live_marker
     except Exception as e:
         logger.error(f"[P0-PROD-1-DEPLOY] Import del detector falló: {e}")
@@ -694,6 +749,54 @@ def admin_force_deploy_lag_check(request: Request):
     except Exception as e:
         logger.debug(f"[P0-PROD-1-DEPLOY] SELECT KV expected (best-effort): {e}")
 
+    # [P2-DEPLOY-LAG-AUTO-BUMP · 2026-05-25] Auto-bump opt-in. Solo si:
+    #   1. auto_bump=true (opt-in explícito)
+    #   2. expected_marker (param) coincide con live_marker (binario corriendo)
+    #   3. expected_marker (param) != expected_marker (KV actual) — evita
+    #      UPDATE no-op si ya está sincronizado.
+    kv_bumped = False
+    if auto_bump and expected_marker_param and live_marker:
+        live_clean = live_marker.strip()
+        if expected_marker_param == live_clean:
+            # Binario deployado coincide con la intención del operador.
+            # Safe to bump KV.
+            if (expected_marker or "").strip() != live_clean:
+                try:
+                    execute_sql_write(
+                        """
+                        INSERT INTO app_kv_store (key, value, updated_at)
+                        VALUES (%s, %s::jsonb, NOW())
+                        ON CONFLICT (key) DO UPDATE
+                        SET value = EXCLUDED.value, updated_at = NOW()
+                        """,
+                        (_DEPLOY_LAG_KV_KEY, json.dumps(live_clean)),
+                    )
+                    expected_marker = live_clean
+                    kv_bumped = True
+                    logger.info(
+                        f"[P2-DEPLOY-LAG-AUTO-BUMP] KV actualizado a "
+                        f"`{live_clean}` (operador confirmó vía expected_marker)."
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[P2-DEPLOY-LAG-AUTO-BUMP] UPSERT KV falló: {e}"
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"auto_bump UPSERT falló: {type(e).__name__}",
+                    )
+            else:
+                # Ya sincronizado, no-op pero reportamos contractualmente.
+                logger.debug(
+                    f"[P2-DEPLOY-LAG-AUTO-BUMP] No-op: KV ya tiene `{live_clean}`."
+                )
+        else:
+            logger.warning(
+                f"[P2-DEPLOY-LAG-AUTO-BUMP] auto_bump SKIP: operador esperaba "
+                f"`{expected_marker_param}` pero live es `{live_clean}`. "
+                "El deploy NO landed con el commit esperado — investigar."
+            )
+
     drift = bool(
         expected_marker
         and live_marker
@@ -704,6 +807,7 @@ def admin_force_deploy_lag_check(request: Request):
         "live_marker": live_marker,
         "expected_marker": expected_marker,
         "drift": drift,
+        "kv_bumped": kv_bumped,
         "message": (
             "Drift detectado: forzar redeploy en EasyPanel." if drift
             else (
