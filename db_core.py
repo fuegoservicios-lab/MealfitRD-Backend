@@ -8,6 +8,10 @@ import logging
 from typing import Optional, List, Dict, Any, Tuple, Union
 from supabase import create_client, Client
 from dotenv import load_dotenv
+# [P1-DB-STMT-TIMEOUT · 2026-05-27] Helper registrado en `_KNOBS_REGISTRY`
+# (visible en /health/version y /api/system/knobs). `knobs` no tiene deps
+# internas → import a top-level seguro, sin riesgo de ciclo.
+from knobs import _env_int as _knob_env_int
 
 
 
@@ -81,6 +85,51 @@ DB_ASYNC_POOL_MIN_SIZE = _int_env("MEALFIT_DB_ASYNC_POOL_MIN_SIZE", 2, 0, 20)
 DB_ASYNC_POOL_MAX_SIZE = _int_env("MEALFIT_DB_ASYNC_POOL_MAX_SIZE", 12, 1, 100)
 DB_ASYNC_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_ASYNC_POOL_TIMEOUT_S", 20.0, 1.0, 120.0)
 
+# [P1-DB-STMT-TIMEOUT · 2026-05-27] Timeout de sentencia + idle-in-transaction
+# a NIVEL DE SESIÓN sobre cada conexión de los pools sync/async principales.
+# Cierra el vector de agotamiento del pool donde una query atascada (scan JSONB
+# lento sobre `meal_plans`, espera de `pg_advisory_lock`, stall de red) retiene
+# su slot indefinidamente. Con handlers FastAPI + crons APScheduler +
+# `_chunk_worker` compartiendo el pool sync (max 60), unas pocas queries
+# colgadas agotan el pool → waiters caen en `DB_POOL_TIMEOUT_S` → cascada
+# `couldn't get a connection`. Único net previo: el `statement_timeout`
+# server-side de Supavisor (~60s), demasiado alto bajo contención.
+#
+# Convierte "query atascada retiene slot para siempre" en "query falla tras N
+# ms, el slot vuelve al pool". El `idle_in_transaction_session_timeout` sólo
+# mata conexiones idle DENTRO de una transacción abierta (siempre un
+# bug/leak), nunca una query corriendo — por eso su default es más agresivo.
+#
+# Rollback sin redeploy: `MEALFIT_DB_STATEMENT_TIMEOUT_MS=0` desactiva el
+# statement_timeout (vuelve a depender sólo del backstop de Supavisor);
+# `MEALFIT_DB_IDLE_IN_TXN_TIMEOUT_MS=0` desactiva el idle-in-txn.
+# Los `SET LOCAL` per-transacción existentes (`set_meal_plan_for_update_timeouts`,
+# `execute_sql_write(lock_timeout_ms=...)`) overridean estos defaults por-tx.
+# Tooltip-anchor: P1-DB-STMT-TIMEOUT.
+DB_STATEMENT_TIMEOUT_MS = _knob_env_int(
+    "MEALFIT_DB_STATEMENT_TIMEOUT_MS", 30000, validator=lambda v: 0 <= v <= 600000
+)
+DB_IDLE_IN_TXN_TIMEOUT_MS = _knob_env_int(
+    "MEALFIT_DB_IDLE_IN_TXN_TIMEOUT_MS", 15000, validator=lambda v: 0 <= v <= 600000
+)
+
+
+def _session_timeout_statements() -> List[str]:
+    """[P1-DB-STMT-TIMEOUT · 2026-05-27] Lista de sentencias `SET ...` a aplicar
+    en el `configure` de cada conexión nueva de los pools sync/async. Valores
+    son ints clampeados por el knob (0..600000) → seguro inlinearlos (no es
+    user input; `SET` no acepta placeholders `%s` para estos parámetros).
+    Helper aislado para testabilidad (los tests monkeypatchean los módulo-level
+    `DB_*_TIMEOUT_MS` y verifican el SQL generado sin abrir conexión real)."""
+    stmts: List[str] = []
+    if DB_STATEMENT_TIMEOUT_MS > 0:
+        stmts.append(f"SET statement_timeout = {int(DB_STATEMENT_TIMEOUT_MS)}")
+    if DB_IDLE_IN_TXN_TIMEOUT_MS > 0:
+        stmts.append(
+            f"SET idle_in_transaction_session_timeout = {int(DB_IDLE_IN_TXN_TIMEOUT_MS)}"
+        )
+    return stmts
+
 if SUPABASE_URL and SUPABASE_KEY:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 else:
@@ -151,9 +200,41 @@ if SUPABASE_DB_URL:
             # pgBouncer Transaction Mode no soporta server-side prepared statements.
             # Deshabilitar auto-prepare para evitar errores "_pg3_N requires N params".
             conn.prepare_threshold = None
+            # [P1-DB-STMT-TIMEOUT · 2026-05-27] Session-level statement_timeout +
+            # idle_in_transaction_session_timeout. Best-effort: un fallo del SET
+            # NO debe impedir checkout de la conexión.
+            _stmts = _session_timeout_statements()
+            if _stmts:
+                try:
+                    with conn.cursor() as _c:
+                        for _stmt in _stmts:
+                            _c.execute(_stmt)
+                except Exception as _to_err:
+                    logger.debug(f"[P1-DB-STMT-TIMEOUT] SET sync falló (best-effort): {_to_err}")
 
         async def configure_async_conn(conn):
             await conn.set_autocommit(True)
+            conn.prepare_threshold = None
+            # [P1-DB-STMT-TIMEOUT · 2026-05-27] idem async.
+            _stmts = _session_timeout_statements()
+            if _stmts:
+                try:
+                    async with conn.cursor() as _c:
+                        for _stmt in _stmts:
+                            await _c.execute(_stmt)
+                except Exception as _to_err:
+                    logger.debug(f"[P1-DB-STMT-TIMEOUT] SET async falló (best-effort): {_to_err}")
+
+        def configure_checkpoint_conn(conn):
+            # [P1-DB-STMT-TIMEOUT · 2026-05-27] Pool del LangGraph checkpointer
+            # SIN session timeouts — preserva el comportamiento EXACTO del pool
+            # sensible (P1-CHAT-CHECKPOINT-*, bug SSL bad length / EOF detected).
+            # El PostgresSaver mantiene conexiones checked-out ~5-30s durante LLM
+            # calls; en autocommit NO están idle-in-transaction (el
+            # idle_in_transaction_session_timeout NO las mataría), pero por la
+            # fragilidad documentada de este pool (max=4, low-concurrency) no le
+            # aplicamos timeouts — el riesgo de exhaustion es despreciable.
+            conn.autocommit = True
             conn.prepare_threshold = None
 
         connection_pool = ConnectionPool(
@@ -186,7 +267,9 @@ if SUPABASE_DB_URL:
         logger.info(
             "🔌 [psycopg] ConnectionPool SYNC configurado: "
             f"min={DB_POOL_MIN_SIZE}, max={DB_POOL_MAX_SIZE}, "
-            f"timeout={DB_POOL_TIMEOUT_S}s, max_idle={DB_POOL_MAX_IDLE_S}s."
+            f"timeout={DB_POOL_TIMEOUT_S}s, max_idle={DB_POOL_MAX_IDLE_S}s "
+            f"[P1-DB-STMT-TIMEOUT: statement_timeout={DB_STATEMENT_TIMEOUT_MS}ms, "
+            f"idle_in_txn={DB_IDLE_IN_TXN_TIMEOUT_MS}ms (0=off)]."
         )
         logger.info(
             "🔌 [psycopg] ConnectionPool ASYNC configurado: "
@@ -240,7 +323,7 @@ if SUPABASE_DB_URL:
                 max_idle=30.0,
                 reconnect_timeout=5,
                 kwargs=get_client_kwargs(),
-                configure=configure_sync_conn,
+                configure=configure_checkpoint_conn,  # [P1-DB-STMT-TIMEOUT] sin session timeouts
                 check=ConnectionPool.check_connection,
                 open=False,
             )

@@ -5,6 +5,7 @@ from typing import Optional
 import logging
 import traceback
 import os
+import hmac
 import threading
 import asyncio
 import json as _json
@@ -1310,6 +1311,16 @@ def _enqueue_remaining_chunks(
     )
 
 
+# [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Set de strong-refs a tasks de fallback
+# postprocess (SSE done-callback). `asyncio.create_task` SIN guardar referencia
+# puede ser garbage-collected mid-flight (gotcha conocido de asyncio) → el
+# persist+schedule del fallback se perdería a la mitad, dejando un plan huérfano
+# (backstopped por `_sweep_orphan_plans` a 7d, pero evitable). Guardar el ref
+# aquí + discard en done-callback previene el GC y da un handle observable.
+# Tooltip-anchor: P2-FALLBACK-TASK-TRACKED.
+_BG_SSE_FALLBACK_TASKS: set = set()
+
+
 def _postprocess_pipeline_result(
     *,
     result: dict,
@@ -2434,13 +2445,21 @@ def api_analyze(
         # con la misma referencia → el usuario veía "Fallback: pollo y arroz" por
         # una semana. Mejor: 503 con mensaje claro para que reintente.
         if isinstance(result, dict) and result.get("_is_fallback"):
+            # [P1-SPEND-CAP-ALERT · 2026-05-28] Distinguir spending-cap (persistente)
+            # de saturación transitoria: el mensaje "intenta en 1-2 min" es FALSO
+            # cuando el cap mensual de Gemini está agotado (reintentar no ayuda).
+            _spend_cap = bool(result.get("_llm_spend_cap"))
             logger.warning(
                 f"🚨 [FALLBACK-GUARD] Pipeline devolvió plan de emergencia "
-                f"(LLM upstream caído). Devolviendo 503 sin persistir. user={actual_user_id or 'guest'}"
+                f"(LLM upstream caído{', spending cap' if _spend_cap else ''}). "
+                f"Devolviendo 503 sin persistir. user={actual_user_id or 'guest'}"
             )
             raise HTTPException(
                 status_code=503,
                 detail=(
+                    "El servicio de IA no está disponible en este momento. "
+                    "Estamos trabajando para restablecerlo; vuelve a intentarlo más tarde."
+                    if _spend_cap else
                     "La IA está temporalmente saturada y no pudimos generar tu plan. "
                     "Por favor intenta de nuevo en 1-2 minutos."
                 ),
@@ -2674,7 +2693,9 @@ async def api_analyze_stream(
 
         # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Guardrail + tracking del
         # pipeline pendiente. Permite que el pipeline continúe corriendo
-        # incluso si el cliente cierra el SSE (asyncio.shield más abajo);
+        # incluso si el cliente cierra el SSE (el pipeline corre como
+        # `asyncio.create_task` independiente, más abajo — NO está shielded;
+        # sobrevive porque `create_task` no se cancela al GC del generator);
         # el frontend puede volver al sitio y ver el plan listo.
         #
         # Guardrail: si el user tiene un pipeline activo < 15 min, rechazar
@@ -2798,7 +2819,8 @@ async def api_analyze_stream(
         # [P2-PIPELINE-TASK-DONE-CALLBACK · 2026-05-16] Bug observado 2026-05-16
         # 02:39-02:53 (plan_id=ninguno): user inició plan, cerró pestaña a los
         # 11min, SSE generator terminó, `_pipeline_task` siguió corriendo en
-        # background con `asyncio.shield`, eventualmente timed-out o falló, y
+        # background (asyncio.create_task independiente, NO shielded),
+        # eventualmente timed-out o falló, y
         # el row `pending_pipeline:bf6f1383` quedó con status='generating'
         # FOREVER. Causa raíz: el upsert KV-complete vive DENTRO del SSE
         # generator (se ejecuta cuando llega el event 'complete'). Si el
@@ -2959,10 +2981,14 @@ async def api_analyze_stream(
                                 )
                             except Exception:
                                 pass
+                    def _schedule_fallback_task():
+                        # [P2-FALLBACK-TASK-TRACKED · 2026-05-28] Guardar strong-ref
+                        # para que el task no sea GC'd mid-flight; discard al terminar.
+                        _t = asyncio.create_task(_fallback_postprocess())
+                        _BG_SSE_FALLBACK_TASKS.add(_t)
+                        _t.add_done_callback(_BG_SSE_FALLBACK_TASKS.discard)
                     try:
-                        loop.call_soon_threadsafe(
-                            lambda: asyncio.create_task(_fallback_postprocess())
-                        )
+                        loop.call_soon_threadsafe(_schedule_fallback_task)
                     except Exception as _sched_err:
                         logger.warning(
                             f"[P2-PIPELINE-TASK-DONE-COMPLETE] No se pudo programar "
@@ -2985,6 +3011,50 @@ async def api_analyze_stream(
                     f"[P2-PIPELINE-TASK-DONE-COMPLETE] callback falló: {_cb_err!r}"
                 )
         _pipeline_task.add_done_callback(_on_pipeline_task_done)
+
+        # [P2-GEN-WALL-TIMEOUT · 2026-05-27] Watchdog wall-clock sobre el
+        # pipeline. El pipeline corre como `asyncio.create_task` INDEPENDIENTE
+        # del SSE generator (sobrevive disconnect del cliente — feature
+        # P1-DEEP-SEARCH-PIPELINE). Si `arun_plan_pipeline` se cuelga de verdad
+        # (LLM upstream wedged, sin progreso, sin lanzar excepción), el task
+        # correría hasta el reinicio del proceso ocupando un slot y dejando el
+        # KV `pending_pipeline:<user>` en `generating` para siempre. Este guard
+        # lo cancela tras N segundos; el `_on_pipeline_task_done` de arriba ya
+        # marca KV `failed` en su rama `_task.cancelled()` → el frontend que
+        # vuelve ve el error en vez de un loading infinito.
+        #
+        # NO confundir con: (a) cancel cooperativo del user (`/api/plans/cancel`,
+        # maneja `_should_stop`), (b) disconnect del cliente (intencional
+        # keep-running). Esto es solo el techo duro anti-zombi.
+        #
+        # Knob `MEALFIT_GENERATION_MAX_WALL_S` (default 900s=15min, clamp
+        # [60, 3600]; 0 desactiva). 15min es generoso: la generación legítima
+        # (deep-search + day-gen paralelo + review médico) toma ~2-6min.
+        # Tooltip-anchor: P2-GEN-WALL-TIMEOUT.
+        _gen_wall_s = _env_int(
+            "MEALFIT_GENERATION_MAX_WALL_S",
+            900,
+            validator=lambda v: v == 0 or 60 <= v <= 3600,
+        )
+        if _gen_wall_s > 0:
+            async def _pipeline_wall_clock_guard():
+                try:
+                    await asyncio.sleep(_gen_wall_s)
+                except asyncio.CancelledError:
+                    return
+                if not _pipeline_task.done():
+                    logger.error(
+                        f"⏱️ [P2-GEN-WALL-TIMEOUT] Pipeline excedió {_gen_wall_s}s "
+                        f"sin completar — cancelando (anti-zombi). El KV se marca "
+                        f"failed via done_callback. user={_deep_search_user_id or 'guest'}"
+                    )
+                    _pipeline_task.cancel()
+            _wall_guard_task = asyncio.create_task(_pipeline_wall_clock_guard())
+            # Cancelar el watchdog cuando el pipeline termine (natural, error o
+            # cancel) para no dejar el sleep colgando hasta su deadline.
+            _pipeline_task.add_done_callback(
+                lambda _t, _g=_wall_guard_task: _g.cancel()
+            )
 
         async def event_generator():
             """Generador SSE que consume la cola de progreso."""
@@ -3085,12 +3155,25 @@ async def api_analyze_stream(
                             # chunks. Emitir error SSE para que el frontend muestre
                             # "intenta de nuevo" en lugar de un plan basura permanente.
                             if isinstance(result, dict) and result.get("_is_fallback"):
+                                # [P1-SPEND-CAP-ALERT · 2026-05-28] Mensaje honesto
+                                # cuando el fallback fue por spending-cap de Gemini:
+                                # "intenta en 1-2 min" es falso (reintentar no ayuda
+                                # hasta subir el cap). El system_alert ya lo emitió
+                                # el pipeline (graph_orchestrator).
+                                _spend_cap = bool(result.get("_llm_spend_cap"))
                                 logger.warning(
                                     f"🚨 [FALLBACK-GUARD/SSE] Pipeline devolvió plan de "
-                                    f"emergencia (LLM upstream caído). No se persiste. "
-                                    f"user={actual_user_id or 'guest'}"
+                                    f"emergencia (LLM upstream caído{', spending cap' if _spend_cap else ''}). "
+                                    f"No se persiste. user={actual_user_id or 'guest'}"
                                 )
-                                yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'llm_unavailable', 'message': 'La IA está temporalmente saturada y no pudimos generar tu plan. Por favor intenta de nuevo en 1-2 minutos.'}})}\n\n"
+                                _fallback_msg = (
+                                    'El servicio de IA no está disponible en este momento. '
+                                    'Estamos trabajando para restablecerlo; vuelve a intentarlo más tarde.'
+                                    if _spend_cap else
+                                    'La IA está temporalmente saturada y no pudimos generar tu plan. '
+                                    'Por favor intenta de nuevo en 1-2 minutos.'
+                                )
+                                yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'llm_unavailable', 'message': _fallback_msg}})}\n\n"
                                 break
 
                             # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Comportamiento INVERTIDO
@@ -3253,8 +3336,9 @@ async def api_analyze_stream(
                 # persisten el plan. El usuario lo recupera al volver via
                 # `/api/plans/pending-status`.
                 #
-                # El pipeline corre con `asyncio.shield` para sobrevivir al
-                # cancel del generator. NO lo cancelamos aquí.
+                # El pipeline corre como `asyncio.create_task` independiente del
+                # generator (NO shielded — sobrevive porque create_task no se
+                # cancela al GC/cancel del generator). NO lo cancelamos aquí.
                 logger.info(
                     "🔌 [SSE] Stream cancelado por cliente. Pipeline sigue "
                     "corriendo (deep-search mode); el usuario lo recuperará al volver."
@@ -4342,6 +4426,21 @@ def api_cancel_plan_generation(data: dict = Body(...)):
         pipeline checkea cooperativamente.
       - Retorna `{success: true, registered: bool}` — útil para tests.
       - Idempotente: cancelar dos veces el mismo session no falla.
+
+    [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] DECISIÓN ACEPTADA (no gatear con auth).
+    Tooltip-anchor: P2-CANCEL-NO-AUTH-ACCEPTED. El audit prod-readiness flageó
+    "endpoint sin auth que cancela + limpia el KV de un session_id". Se acepta
+    intencionalmente porque: (1) `session_id` es un UUID generado client-side,
+    NO enumerable — el atacante necesitaría conocer el UUID exacto de una
+    generación EN VUELO de la víctima (ventana de segundos); (2) el peor caso
+    es DoS de un único plan (la víctima re-dispara), sin lectura ni mutación de
+    datos; (3) el endpoint lo invocan tanto guests (sin JWT) como usuarios
+    autenticados desde `cancelGeneration()` — exigir JWT rompería el flujo guest
+    y añadiría latencia justo cuando el usuario quiere abortar. Gatear con auth
+    requeriría que `clear_pending_pipeline` fuese ownership-aware (cambio más
+    profundo) sin cerrar el vector para guests. Si se decide revertir esta
+    decisión, leer esta nota antes de invertir esfuerzo. Análogo al patrón
+    "Decisiones de producto" / "Advisors aceptados" de CLAUDE.md.
     """
     session_id = data.get("session_id") if isinstance(data, dict) else None
     if not session_id or not isinstance(session_id, str):
@@ -9131,7 +9230,13 @@ def _verify_admin_token(authorization: Optional[str]):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = authorization.replace("Bearer ", "").strip()
-    if token != cron_secret:
+    # [P1-PROD-AUDIT-BUNDLE · 2026-05-28] Comparación constant-time del admin
+    # token. Este gate protege TODOS los `/admin/*` (plans/system/notifications)
+    # con el mismo `CRON_SECRET`; un `!=` plano corta en el primer byte que
+    # difiere → side-channel de timing que permite recuperar el secreto
+    # byte-a-byte. `hmac.compare_digest` es el mismo patrón que ya usa el
+    # webhook handler (app.py). Tooltip-anchor: P1-ADMIN-TOKEN-CONSTTIME.
+    if not hmac.compare_digest(token, cron_secret):
         raise HTTPException(status_code=403, detail="Invalid admin token")
 
 

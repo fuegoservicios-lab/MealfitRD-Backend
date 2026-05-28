@@ -265,9 +265,25 @@ def test_p2_alert_keys_documented(alerts_doc: str) -> None:
 # ---------------------------------------------------------------------------
 
 def test_marker_bumped_to_p2_audit_hardening() -> None:
-    """`_LAST_KNOWN_PFIX` bumpeado a P2-AUDIT-HARDENING · 2026-05-25."""
+    """`_LAST_KNOWN_PFIX` debe estar en o despues de P2-AUDIT-HARDENING
+    (2026-05-25). Cuando supersede a este bundle un P-fix posterior, el
+    test se relaja a date-floor (patron sibling documentado: exact-match
+    al cierre + relajacion al supersede)."""
+    import re
+    from datetime import date, datetime
     app_py = (_BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
-    assert '_LAST_KNOWN_PFIX = "P2-AUDIT-HARDENING · 2026-05-25"' in app_py, (
-        "_LAST_KNOWN_PFIX no bumpeado a P2-AUDIT-HARDENING · 2026-05-25 "
-        "tras el cierre del bundle."
+    m = re.search(
+        r'^_LAST_KNOWN_PFIX\s*=\s*"(?P<val>[^"]+)"',
+        app_py,
+        re.MULTILINE,
+    )
+    assert m is not None, "_LAST_KNOWN_PFIX no encontrado en app.py"
+    marker = m.group("val")
+    date_m = re.search(r"(\d{4}-\d{2}-\d{2})$", marker)
+    assert date_m is not None, f"marker sin fecha ISO: {marker!r}"
+    marker_date = datetime.strptime(date_m.group(1), "%Y-%m-%d").date()
+    assert marker_date >= date(2026, 5, 25), (
+        f"_LAST_KNOWN_PFIX={marker!r} con fecha {marker_date} < "
+        f"floor 2026-05-25 (P2-AUDIT-HARDENING). Bumpear al ultimo "
+        f"P-fix cerrado."
     )

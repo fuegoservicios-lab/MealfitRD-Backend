@@ -376,7 +376,13 @@ CHUNK_MAX_RECOVERY_ATTEMPTS = max(1, int(os.environ.get("CHUNK_MAX_RECOVERY_ATTE
 # como mucho en cada tick de 15 min. Antes era literal 20 hardcoded; subido a const
 # tunable para no saturar Supabase si una caída de Gemini deja cientos de chunks failed
 # de golpe.
-CHUNK_RECOVERY_BATCH_LIMIT = max(1, int(os.environ.get("CHUNK_RECOVERY_BATCH_LIMIT", "20")))
+# [P1-KNOB-CLAMPS · 2026-05-26] Migrado a `_env_int(..., validator=...)` con clamp
+# [1, 1000]. Pre-fix `max(1, int(...))` tenía floor pero NO ceiling — operador
+# que setea `CHUNK_RECOVERY_BATCH_LIMIT=10000` causaba OOM/timeout del cron.
+# Auto-registro en `_KNOBS_REGISTRY` (visible en `/health/version`).
+CHUNK_RECOVERY_BATCH_LIMIT = _env_int(
+    "CHUNK_RECOVERY_BATCH_LIMIT", 20, validator=lambda v: 1 <= v <= 1000
+)
 # [P0-4] Máxima edad permitida para el snapshot de pantry antes de intentar un live-retry adicional.
 # Pasado este TTL, si el live sigue fallando se marca como stale_snapshot en los logs.
 CHUNK_PANTRY_SNAPSHOT_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_SNAPSHOT_TTL_HOURS", "6")))

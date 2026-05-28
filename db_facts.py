@@ -1,6 +1,7 @@
 from functools import lru_cache as _lru_cache
 import json
 import time as _time
+import threading as _threading
 import uuid
 import unicodedata as _uc
 from typing import Optional, List, Dict, Any, Tuple, Union
@@ -9,6 +10,78 @@ import logging
 logger = logging.getLogger(__name__)
 from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
 from cache_manager import redis_client
+
+
+# [P2-PROD-AUDIT-BUNDLE · 2026-05-27] Debounce in-process para
+# `delete_expired_temporal_facts`. Pre-fix: 3 callsites side-effect en search
+# (`get_user_facts_by_metadata`, `search_user_facts`, `search_user_facts_hybrid`)
+# emitían 3 DELETEs consecutivos al mismo `user_id` en milisegundos durante
+# un mismo pipeline run — observado en API logs 2026-05-28 (sintoma_temporal
+# cleanup repetido 3× en 4ms). El cleanup real solo necesita correr ~1x/min
+# por user; el resto son no-ops costosos (round-trip Supabase + WAL write
+# por el `delete` que mata 0 rows si ya fue limpiado).
+#
+# Knob `MEALFIT_TEMPORAL_FACTS_CLEANUP_DEBOUNCE_S` (default 60, clamp [5, 3600]):
+# ventana de skip per-user. Cuando se llama dentro de la ventana, el delete
+# se omite silenciosamente. Cuando se llama tras la ventana, ejecuta y
+# refresca el timestamp.
+#
+# Implementación: dict in-process `{user_id: last_cleanup_monotonic}` + lock.
+# In-process porque (a) el cleanup es idempotente — perder el debounce tras
+# restart solo hace 1 DELETE extra, no es bug; (b) cross-process sería overkill
+# para algo que solo evita N+1 dentro del mismo request/pipeline.
+_TEMPORAL_CLEANUP_LAST_RUN: Dict[str, float] = {}
+_TEMPORAL_CLEANUP_LOCK = _threading.Lock()
+# [P2-TEMPORAL-CLEANUP-GC · 2026-05-27] Umbral a partir del cual el record-path
+# de `_should_skip_temporal_cleanup` barre entries stale. Evita escanear el
+# dict cuando es pequeño; con muchos users distintos dispara la eviction.
+_TEMPORAL_CLEANUP_GC_THRESHOLD = 512
+
+
+def _temporal_cleanup_debounce_seconds() -> int:
+    """Lee la ventana de debounce del env. Clamp defensivo [5, 3600]."""
+    try:
+        raw = int(os.environ.get(
+            "MEALFIT_TEMPORAL_FACTS_CLEANUP_DEBOUNCE_S", "60"
+        ) or 60)
+    except (TypeError, ValueError):
+        return 60
+    if raw < 5:
+        return 5
+    if raw > 3600:
+        return 3600
+    return raw
+
+
+def _should_skip_temporal_cleanup(user_id: Optional[str]) -> bool:
+    """True si ya se hizo cleanup para este user dentro de la ventana de
+    debounce. False (y registra el timestamp) si toca correr. Si `user_id`
+    es None (cleanup global), nunca debouncea — esos son crons explícitos,
+    no side-effects de search."""
+    if not user_id:
+        return False
+    window_s = _temporal_cleanup_debounce_seconds()
+    now = _time.monotonic()
+    with _TEMPORAL_CLEANUP_LOCK:
+        last = _TEMPORAL_CLEANUP_LAST_RUN.get(user_id, 0.0)
+        if last and (now - last) < window_s:
+            return True
+        _TEMPORAL_CLEANUP_LAST_RUN[user_id] = now
+        # [P2-TEMPORAL-CLEANUP-GC · 2026-05-27] Eviction oportunista bajo el
+        # lock ya tomado. Pre-fix el dict crecía +1 por cada `user_id` distinto
+        # para siempre (leak lento ~10MB/100k users). Barre entries con edad
+        # > 2× ventana (un user fuera de esa ventana ya pasó el debounce de
+        # todos modos → re-añadir su key en su próxima búsqueda es correcto).
+        # Solo corre en el record-path (≈1×/ventana/user), no en cada skip.
+        if len(_TEMPORAL_CLEANUP_LAST_RUN) > _TEMPORAL_CLEANUP_GC_THRESHOLD:
+            _stale_cutoff = now - (2 * window_s)
+            _stale_keys = [
+                k for k, v in _TEMPORAL_CLEANUP_LAST_RUN.items()
+                if v < _stale_cutoff
+            ]
+            for _k in _stale_keys:
+                _TEMPORAL_CLEANUP_LAST_RUN.pop(_k, None)
+        return False
 
 
 # Errores transitorios típicos del pooler de Supabase / red. Reintentar con
@@ -174,8 +247,17 @@ def save_user_fact(user_id: str, fact: str, embedding: list, metadata: dict = No
         return None
 
 def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
-    """Elimina los hechos con categoría 'sintoma_temporal' que son más antiguos que 'hours'."""
+    """Elimina los hechos con categoría 'sintoma_temporal' que son más antiguos que 'hours'.
+
+    [P2-PROD-AUDIT-BUNDLE · 2026-05-27] Debounce in-process per-user via
+    `_should_skip_temporal_cleanup` — los 3 callsites side-effect en search
+    pueden invocarse en milisegundos durante el mismo pipeline run; el debounce
+    convierte los 3 DELETEs idénticos en 1. Cleanup global (`user_id=None`) NO
+    debouncea — esos son crons explícitos.
+    """
     if not supabase: return None
+    if _should_skip_temporal_cleanup(user_id):
+        return None
     from datetime import datetime, timedelta, timezone
 
     threshold_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()

@@ -394,6 +394,17 @@ def update_plan_data_atomic(
     _recovery_exhausted_chunks: dos chunks que escriben simultáneamente NO se
     sobrescriben — el segundo ve el plan_data ya actualizado por el primero.
 
+    [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] CONTRATO DEL MUTATOR (tooltip-anchor
+    P2-MUTATOR-PURITY): el `mutator` corre DENTRO del `SELECT … FOR UPDATE`,
+    reteniendo el row-lock + una conexión del pool sync (max 60) durante toda
+    su ejecución. DEBE ser una transformación pura, CPU-only, sobre el dict:
+    NADA de IO, llamadas LLM, sleeps, ni —crítico— re-entrada al pool
+    (`with connection_pool.connection()`) ni otra llamada DB. Un mutator que
+    haga IO o re-entre al pool retiene el slot + el lock por su duración; con
+    suficientes callers re-entrantes concurrentes se agota el pool sync →
+    deadlock/starvation. Si necesitas datos externos, resuélvelos ANTES de
+    llamar a `update_plan_data_atomic` y pásalos por closure al mutator.
+
     Args:
         plan_id: UUID del meal_plan a modificar.
         mutator: callable(plan_data: dict) -> dict | None. Si retorna un dict

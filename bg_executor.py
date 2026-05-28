@@ -65,6 +65,30 @@ _executor = ThreadPoolExecutor(
 )
 
 
+def shutdown_bg_executor(wait: bool = False) -> None:
+    """[P2-OPS-SHUTDOWN · 2026-05-27] Drena el pool en el teardown del lifespan
+    (SIGTERM de deploy). Deja de aceptar nuevos submits; los tasks en vuelo
+    siguen (Python no permite matar threads de forma segura — sus watchers
+    daemon ya emiten alert si exceden timeout).
+
+    `wait=False` (default): NO bloquea el shutdown — `cancel_futures=True`
+    descarta los tasks aún encolados (fire-and-forget best-effort, se re-derivan
+    en el próximo request). Preferimos un shutdown rápido a colgar el deploy
+    esperando summarize/facts pendientes (el mismo modo de fallo que P2-1 cierra
+    para el scheduler). Best-effort: cualquier excepción se loguea, no propaga.
+    Tooltip-anchor: P2-OPS-SHUTDOWN."""
+    try:
+        _executor.shutdown(wait=wait, cancel_futures=True)
+        logger.info(
+            "[P1-BG-THREAD-TIMEOUT] bg_executor pool drenado en shutdown "
+            f"(wait={wait}, cancel_futures=True)."
+        )
+    except Exception as e:
+        logger.warning(
+            f"[P1-BG-THREAD-TIMEOUT] shutdown_bg_executor falló (best-effort): {e}"
+        )
+
+
 def _persist_bg_task_timeout_alert(task_name: str, timeout_s: int) -> None:
     """Best-effort UPSERT en `system_alerts`. Cualquier excepción se loguea
     pero NO propaga al watcher (el watcher debe terminar limpio aunque la

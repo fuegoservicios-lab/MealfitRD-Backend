@@ -282,22 +282,36 @@ def api_get_chat_history(session_id: str, verified_user_id: Optional[str] = Depe
 
 @router.delete("/session/{session_id}")
 def api_delete_chat_session(session_id: str, verified_user_id: Optional[str] = Depends(get_verified_user_id)):
-    """Elimina una sesión de chat. Requiere autenticación pero sin validación IDOR
-    (RLS desactivado — la auth se maneja aquí)."""
+    """[P0-CHAT-DELETE-IDOR · 2026-05-26] Elimina sesión propia del usuario.
+
+    Pre-fix: el endpoint solo validaba `if not verified_user_id` (¿está
+    logueado?), pero NO `session.user_id == verified_user_id`. Cualquier
+    autenticado podía DELETE chats ajenos pasando session_id enumerado.
+
+    Post-fix: el helper `delete_chat_session(session_id, user_id)` ejecuta
+    pre-check de ownership server-side (patrón simétrico al GET /history).
+    Mapeo de error_msg a HTTP status:
+      - "not_found" → 404
+      - "forbidden" → 403
+      - otros → 500
+    """
     from db import delete_chat_session
     try:
         # [P1-AUDIT-3 · 2026-05-12] Rechaza UUIDs malformados con 400 antes de SQL.
         assert_valid_uuid(session_id)
         if not verified_user_id:
             raise HTTPException(status_code=401, detail="Token requerido para eliminar chats.")
-        
-        success, error_msg = delete_chat_session(session_id)
+
+        success, error_msg = delete_chat_session(session_id, verified_user_id)
         if success:
             logger.info(f"🗑️ Chat {session_id} eliminado por usuario {verified_user_id}")
             return {"success": True, "message": "Chat eliminado correctamente."}
-        else:
-            logger.error(f"❌ Fallo al eliminar chat {session_id}: {error_msg}")
-            raise HTTPException(status_code=500, detail=f"Error: {error_msg}")
+        if error_msg == "not_found":
+            raise HTTPException(status_code=404, detail="Conversación no encontrada.")
+        if error_msg == "forbidden":
+            raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
+        logger.error(f"❌ Fallo al eliminar chat {session_id}: {error_msg}")
+        raise HTTPException(status_code=500, detail=f"Error: {error_msg}")
     except HTTPException:
         raise
     except Exception as e:
@@ -564,6 +578,24 @@ async def api_chat_feedback(data: dict = Body(...), verified_user_id: Optional[s
     
     if not session_id or not content:
         raise HTTPException(status_code=400, detail="Missing session_id or content")
+
+    # [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Validación IDOR de ownership (espejo
+    # de `/history/{session_id}` y `DELETE /session/{session_id}`). Pre-fix el
+    # endpoint requería JWT pero NO verificaba que el `session_id` del body
+    # perteneciera al caller → un usuario autenticado que enumerara/adivinara el
+    # session_id de otro podía escribir feedback en su sesión ajena (y forzar
+    # get_or_create_session sobre ella). Si la sesión NO existe aún (owner None),
+    # el check pasa y get_or_create la crea a nombre del caller.
+    # Tooltip-anchor: P2-CHAT-FEEDBACK-OWNERSHIP.
+    assert_valid_uuid(session_id)
+    session_owner = await asyncio.to_thread(get_session_owner, session_id)
+    if session_owner and session_owner != "guest":
+        if not verified_user_id or verified_user_id != session_owner:
+            logger.warning(
+                f"🚫 [FEEDBACK AUTH FAILED] REJECTED. owner={session_owner} != "
+                f"verified={verified_user_id}"
+            )
+            raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
 
     # Asegurarnos de que exista la sesión en la base de datos antes de guardar feedback
     from db import get_or_create_session

@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P2-AUDIT-HARDENING · 2026-05-25"
+_LAST_KNOWN_PFIX = "P1-GEN-EFFICIENCY · 2026-05-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -352,6 +352,162 @@ _SCHEDULER_OPEN_ALERTS_LAST_REFRESH: float = 0.0
 # capped por `len(jobs) * 2 event_types`, ~50 entries para 25 jobs.
 _SCHEDULER_ALERT_LAST_EMIT: dict[str, float] = {}
 _SCHEDULER_ALERT_DEDUP_TTL_S: float = 5.0
+
+# [P1-CASCADE-INLINE · 2026-05-27] Detector inline de cascada en el listener.
+# Gap observado en audit 2026-05-27: el cron `_alert_scheduler_cascade_missed`
+# corre cada `MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN` (default 30, floor 5min
+# porque "Sub-5min agrava la propia cascada"). Cuando la cascada ocurre entre
+# dos ticks del cron, el parent `scheduler_cascade_missed` se emite con hasta
+# 30min de delay — SRE ve 18-25 misses huérfanos sin parent durante ese
+# intervalo. Live evidence 2026-05-27: 25 distinct `scheduler_missed_*` en 7min
+# con threshold default `3`, cero `scheduler_cascade_missed` parent emitido
+# todavía. El listener YA corre por cada event MISSED en sub-segundos — el
+# costo marginal de un counter in-memory + UPSERT condicional es despreciable
+# y NO es "otro cron en el burst" (es 1 INSERT/UPSERT por cada N=5 misses,
+# con dedup 120s entre emisiones).
+#
+# Sliding window de timestamps + dedup mantiene memoria estable; las
+# constantes son knobs operacionales con clamps defensivos.
+#
+# Knobs:
+#   MEALFIT_SCHEDULER_CASCADE_INLINE_ENABLED (default True)
+#     Kill switch operacional sin redeploy si el inline detector introduce
+#     volumen problemático contra `system_alerts`.
+#   MEALFIT_SCHEDULER_CASCADE_INLINE_WINDOW_S (default 60, clamp [10, 600])
+#     Ventana sliding sobre la que contamos distinct `job_id` misses.
+#   MEALFIT_SCHEDULER_CASCADE_INLINE_THRESHOLD (default 5, clamp [3, 50])
+#     N distinct jobs misseados dentro de la ventana → emit parent.
+#     Default 5 (vs 3 del cron) por margen anti-falso-positivo: el cron
+#     mira 1h lookback; el inline mira 60s — necesita ser más conservador
+#     para no emitir en bursts triviales de 3 jobs MISSED simultáneos
+#     post-restart legítimos (que el boot grace ya suprime parcialmente).
+#   MEALFIT_SCHEDULER_CASCADE_INLINE_DEDUP_S (default 120, clamp [30, 1800])
+#     Cooldown entre emisiones inline para no spammear si la cascada
+#     persiste — el cron de 30min toma el relevo después.
+#
+# Tooltip-anchor: P1-CASCADE-INLINE.
+import collections as _p1_collections
+_CASCADE_INLINE_MISS_TIMESTAMPS: "_p1_collections.deque[tuple[float, str]]" = (
+    _p1_collections.deque()
+)
+_CASCADE_INLINE_LOCK = threading.Lock()
+_CASCADE_INLINE_LAST_EMIT_AT: float = 0.0
+
+
+def _cascade_inline_enabled() -> bool:
+    """Kill switch operacional (env-driven, sin redeploy)."""
+    return os.environ.get(
+        "MEALFIT_SCHEDULER_CASCADE_INLINE_ENABLED", "1"
+    ).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _cascade_inline_window_s() -> float:
+    raw = _env_int("MEALFIT_SCHEDULER_CASCADE_INLINE_WINDOW_S", 60)
+    return float(max(10, min(raw, 600)))
+
+
+def _cascade_inline_threshold() -> int:
+    raw = _env_int("MEALFIT_SCHEDULER_CASCADE_INLINE_THRESHOLD", 5)
+    return max(3, min(raw, 50))
+
+
+def _cascade_inline_dedup_s() -> float:
+    raw = _env_int("MEALFIT_SCHEDULER_CASCADE_INLINE_DEDUP_S", 120)
+    return float(max(30, min(raw, 1800)))
+
+
+def _maybe_emit_inline_cascade_alert(job_id: str) -> None:
+    """[P1-CASCADE-INLINE · 2026-05-27] Append + slide + threshold check
+    + UPSERT del parent `scheduler_cascade_missed` directo desde el
+    listener. Llamado por `_scheduler_alert_listener` en cada EVENT_JOB_MISSED
+    DESPUÉS del boot grace check (no contar misses suprimidos).
+
+    Best-effort: cualquier excepción se loguea sin propagar al scheduler
+    (la cascada es señal informativa, no debe pausar workers).
+
+    Defense-in-depth: el cron `_alert_scheduler_cascade_missed` sigue siendo
+    el SSOT del parent — el inline solo acelera la detección. Si el inline
+    emite spurious, el cron lo confirma/desconfirma en el próximo tick.
+    """
+    if not _cascade_inline_enabled():
+        return
+    if supabase is None:
+        return
+    global _CASCADE_INLINE_LAST_EMIT_AT
+
+    try:
+        now_mono = time.monotonic()
+        window_s = _cascade_inline_window_s()
+        threshold = _cascade_inline_threshold()
+        dedup_s = _cascade_inline_dedup_s()
+
+        with _CASCADE_INLINE_LOCK:
+            # Append este miss + pop los expirados (sliding window).
+            _CASCADE_INLINE_MISS_TIMESTAMPS.append((now_mono, str(job_id)))
+            while (
+                _CASCADE_INLINE_MISS_TIMESTAMPS
+                and now_mono - _CASCADE_INLINE_MISS_TIMESTAMPS[0][0] > window_s
+            ):
+                _CASCADE_INLINE_MISS_TIMESTAMPS.popleft()
+
+            distinct_jobs = {jid for (_ts, jid) in _CASCADE_INLINE_MISS_TIMESTAMPS}
+            distinct_count = len(distinct_jobs)
+
+            if distinct_count < threshold:
+                return
+
+            # Dedup contra emisiones recientes (cooldown).
+            if now_mono - _CASCADE_INLINE_LAST_EMIT_AT < dedup_s:
+                logger.debug(
+                    f"[P1-CASCADE-INLINE] skip emit (dedup): {distinct_count} "
+                    f"distinct jobs in {window_s}s, but last emit "
+                    f"{now_mono - _CASCADE_INLINE_LAST_EMIT_AT:.1f}s ago "
+                    f"< dedup={dedup_s}s."
+                )
+                return
+
+            _CASCADE_INLINE_LAST_EMIT_AT = now_mono
+            # Snapshot de jobs para metadata (release lock antes del UPSERT
+            # para no bloquear el thread del scheduler durante el roundtrip
+            # a Supabase).
+            jobs_snapshot = sorted(distinct_jobs)
+
+        from datetime import datetime as _dt_p1c, timezone as _tz_p1c
+        now_iso = _dt_p1c.now(_tz_p1c.utc).isoformat()
+        supabase.table("system_alerts").upsert({
+            "alert_key": "scheduler_cascade_missed",
+            "alert_type": "scheduler_cascade",
+            "severity": "critical",
+            "title": f"Cascada de scheduler MISSED detectada inline ({len(jobs_snapshot)} jobs)",
+            "message": (
+                f"Listener inline detectó {len(jobs_snapshot)} jobs distintos "
+                f"MISSED en ventana {window_s:.0f}s (threshold={threshold}). "
+                f"Cron `_alert_scheduler_cascade_missed` confirmará en su "
+                f"siguiente tick (interval=MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN). "
+                f"Posibles causas: thread pool saturado, restart EasyPanel, "
+                f"GC pause sostenida."
+            ),
+            "metadata": {
+                "detected_by": "inline_listener",
+                "distinct_jobs_in_window": len(jobs_snapshot),
+                "window_seconds": window_s,
+                "threshold": threshold,
+                "jobs": jobs_snapshot[:50],  # Cap a 50 para no inflar JSON.
+            },
+            "triggered_at": now_iso,
+            "resolved_at": None,
+        }, on_conflict="alert_key").execute()
+        logger.warning(
+            f"[P1-CASCADE-INLINE] Emit parent scheduler_cascade_missed "
+            f"INLINE: {len(jobs_snapshot)} distinct jobs MISSED en {window_s:.0f}s "
+            f"(threshold={threshold}). Detector adelanta hasta 30min al cron."
+        )
+    except Exception as _inline_err:
+        logger.warning(
+            f"[P1-CASCADE-INLINE] Emit inline cascade falló (best-effort): "
+            f"{_inline_err}. El cron `_alert_scheduler_cascade_missed` "
+            f"seguirá siendo el SSOT."
+        )
 _OPEN_ALERTS_CACHE_TTL_S = int(os.environ.get(
     "MEALFIT_SCHEDULER_OPEN_ALERTS_CACHE_TTL_S", "60"
 ) or 60)
@@ -459,6 +615,12 @@ def _scheduler_alert_listener(event):
                         f"MEALFIT_SCHEDULER_BOOT_GRACE_MIN={_SCHEDULER_BOOT_GRACE_MIN}."
                     )
                     return
+            # [P1-CASCADE-INLINE · 2026-05-27] Counter sub-minuto: si >=N
+            # distinct jobs MISSED en ventana corta, emitir el parent
+            # `scheduler_cascade_missed` inline sin esperar al cron de 30min.
+            # Llamado DESPUÉS del boot grace check para no contar misses
+            # suprimidos (que ya son ruido conocido post-restart).
+            _maybe_emit_inline_cascade_alert(job_id)
         elif code == EVENT_JOB_ERROR:
             event_type = "error"
             severity = "critical"
@@ -669,6 +831,131 @@ async def _hardfloor_autoheal_loop(interval_s: int):
             raise
 
 
+# [P1-SCHEDULER-LEADER-LOCK · 2026-05-27] Leader election para el
+# `BackgroundScheduler` in-process. Razón: el scheduler corre dentro del
+# proceso uvicorn; si EasyPanel/gunicorn arranca con >1 worker, los crons se
+# ejecutan N veces (UPSERTs duplicados a `system_alerts`, races de pickup en
+# `plan_chunk_queue`, N× hard-floor loops). El repo asume 1 worker (ver
+# comentario ~L338) pero NO existe Dockerfile/Procfile versionado que lo fije
+# — el worker count vivía sólo en la UI de EasyPanel → asunción no enforced.
+#
+# Este guard adquiere un advisory lock de Postgres a NIVEL DE SESIÓN sobre una
+# conexión session-mode (5432) dedicada que se mantiene abierta toda la vida
+# del proceso. Sólo el worker que obtiene el lock arranca el scheduler + el
+# hard-floor loop; los demás sirven HTTP normalmente pero NO ejecutan crons.
+#
+# Forma de DOS-int `pg_try_advisory_lock(classid, objid)` → espacio de locks
+# SEPARADO del single-bigint `pg_advisory_xact_lock(hashtextextended(...))`
+# que usan los locks de meal_plans/user_history (db_plans.py) → CERO colisión.
+# Nivel de sesión (`pg_try_advisory_lock`, NO `_xact_`) → persiste mientras la
+# conexión viva; por eso debe ser session-mode 5432 (el Transaction Pooler
+# 6543 liberaría el lock al terminar la sentencia).
+#
+# FAIL-OPEN: si el mecanismo falla por cualquier razón (sin SUPABASE_DB_URL,
+# error de conexión, etc.) este worker actúa como leader igual — preferimos el
+# riesgo conocido de crons duplicados antes que DESACTIVAR todos los crons.
+# Knob MEALFIT_SCHEDULER_LEADER_LOCK=0 desactiva el guard (rollback sin
+# redeploy → comportamiento pre-fix: cada worker arranca su scheduler).
+# Tooltip-anchor: P1-SCHEDULER-LEADER-LOCK.
+def _build_session_mode_db_url() -> Optional[str]:
+    raw = os.environ.get("SUPABASE_DB_URL")
+    if not raw:
+        return None
+    url = raw.strip().strip("'").strip('"')
+    # Forzar session mode (5432): el advisory lock de sesión sólo persiste en
+    # session mode; el Transaction Pooler (6543) lo liberaría al terminar la
+    # sentencia. Mirror de la lógica de db_core.py.
+    if ".supabase." in url and ":6543" in url:
+        url = url.replace(":6543", ":5432")
+    return url
+
+
+def _acquire_scheduler_leader_lock():
+    """[P1-SCHEDULER-LEADER-LOCK · 2026-05-27] Devuelve `(is_leader, conn)`.
+    `conn` sostiene el lock de sesión (debe cerrarse en shutdown para liberarlo)
+    o None. FAIL-OPEN: ante cualquier error retorna `(True, None)` — este worker
+    actúa como leader (prefiere crons duplicados a cero crons).
+
+    [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] LIMITACIÓN ACEPTADA (tooltip-anchor
+    P2-LEADER-LOCK-TRIPWIRE): el liderazgo se latchea UNA vez en el startup y
+    NO se re-evalúa. Si la conn de sesión muere (blip de red / Supavisor),
+    Postgres libera el advisory lock pero este worker SIGUE actuando como
+    leader (fail-safe: preferimos crons sin lock a cero crons). Esto NO se
+    auto-cura y NO re-elige — es INTENCIONAL: el `Procfile` fija `--workers 1`,
+    así que sólo existe UN proceso y el escenario "dos leaders" es imposible en
+    la práctica. Este lock es un TRIPWIRE defensivo contra un deploy multi-worker
+    accidental (varios procesos → sólo el primero gana el lock), NO un mecanismo
+    de elección self-healing. Si algún día se corre con >1 worker de forma
+    intencional, AÑADIR aquí un heartbeat periódico que re-asierte el lock (sin
+    apilar el contador re-entrante: verificar vía `pg_locks`, no re-llamar
+    `pg_try_advisory_lock`) y re-elija ante caída de conn. Mientras `--workers 1`
+    sea el contrato, no vale la pena la complejidad adicional."""
+    if not _env_bool("MEALFIT_SCHEDULER_LEADER_LOCK", True):
+        logger.info(
+            "🔓 [P1-SCHEDULER-LEADER-LOCK] Guard desactivado via knob "
+            "MEALFIT_SCHEDULER_LEADER_LOCK=0 — este worker arranca el scheduler "
+            "sin leader election (comportamiento pre-fix)."
+        )
+        return True, None
+    classid = _env_int(
+        "MEALFIT_SCHEDULER_LEADER_LOCK_KEY",
+        424242,
+        validator=lambda v: -2147483648 <= v <= 2147483647,
+    )
+    session_url = _build_session_mode_db_url()
+    if not session_url:
+        logger.warning(
+            "🔓 [P1-SCHEDULER-LEADER-LOCK] SUPABASE_DB_URL ausente — fail-open: "
+            "este worker actúa como leader (sin lock). Esperado en dev local."
+        )
+        return True, None
+    conn = None
+    try:
+        import psycopg
+        conn = psycopg.connect(
+            session_url,
+            autocommit=True,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (classid, 1))
+            row = cur.fetchone()
+            got = bool(row[0]) if row else False
+        if got:
+            logger.info(
+                f"👑 [P1-SCHEDULER-LEADER-LOCK] Lock ({classid},1) adquirido — "
+                "este worker es el LEADER (ejecuta crons + hard-floor)."
+            )
+            return True, conn
+        # No somos leader: otro worker ya tiene el lock. La conn no sostiene
+        # nada → cerrarla y NO arrancar el scheduler en este worker.
+        try:
+            conn.close()
+        except Exception:
+            pass
+        logger.warning(
+            f"🚫 [P1-SCHEDULER-LEADER-LOCK] Lock ({classid},1) ya tomado por otro "
+            "worker — este worker NO ejecutará crons/hard-floor (sólo sirve HTTP). "
+            "Indica deploy multi-worker; el repo asume 1 worker (ver Procfile)."
+        )
+        return False, None
+    except Exception as _lock_err:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        logger.warning(
+            f"🔓 [P1-SCHEDULER-LEADER-LOCK] Adquisición de lock falló "
+            f"({type(_lock_err).__name__}: {_lock_err}) — fail-open: este worker "
+            "actúa como leader (prefiere crons duplicados a cero crons)."
+        )
+        return True, None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -865,11 +1152,26 @@ async def lifespan(app: FastAPI):
             f"(best-effort): {_spawn_err}"
         )
 
+    # [P1-SCHEDULER-LEADER-LOCK · 2026-05-27] Leader election ANTES de arrancar
+    # los dos loops continuos (hard-floor + APScheduler). Sólo el leader los
+    # ejecuta; en deploy multi-worker accidental los demás workers sirven HTTP
+    # sin duplicar crons. Fail-open (ver helper). La conn se cierra en shutdown.
+    _is_scheduler_leader, _leader_conn = _acquire_scheduler_leader_lock()
+    app.state.is_scheduler_leader = _is_scheduler_leader
+    app.state.scheduler_leader_conn = _leader_conn
+
     # [P0-LIVE-1 · 2026-05-11] Hard-floor autoheal asyncio task. Garantiza
     # sweeps de scheduler alerts + CB rows incluso si APScheduler está
     # saturado (corre en el event loop, no en el ThreadPoolExecutor del
     # scheduler). Guardado en app.state para cancelarlo en shutdown.
-    if _env_bool("MEALFIT_HARDFLOOR_AUTOHEAL_ENABLED", True):
+    if not _is_scheduler_leader:
+        # [P1-SCHEDULER-LEADER-LOCK] Worker no-leader: no corre hard-floor.
+        app.state.hardfloor_autoheal_task = None
+        logger.info(
+            "🛟 [P1-SCHEDULER-LEADER-LOCK] Hard-floor NO iniciado en este worker "
+            "(no-leader). Sólo el worker leader ejecuta sweeps/crons."
+        )
+    elif _env_bool("MEALFIT_HARDFLOOR_AUTOHEAL_ENABLED", True):
         _hardfloor_interval = _env_int("MEALFIT_HARDFLOOR_AUTOHEAL_INTERVAL_S", 300)
         _hardfloor_interval = max(60, min(_hardfloor_interval, 1800))
         app.state.hardfloor_autoheal_task = asyncio.create_task(
@@ -886,7 +1188,16 @@ async def lifespan(app: FastAPI):
             "MEALFIT_HARDFLOOR_AUTOHEAL_ENABLED."
         )
 
-    if HAS_SCHEDULER and scheduler:
+    if not _is_scheduler_leader and HAS_SCHEDULER and scheduler:
+        # [P1-SCHEDULER-LEADER-LOCK] Worker no-leader: NO registra ni arranca el
+        # scheduler. Las probes de startup posteriores (warm_plan_graph, schema
+        # checks) sí corren — este worker sirve HTTP normalmente.
+        logger.warning(
+            "⏰ [P1-SCHEDULER-LEADER-LOCK] APScheduler NO iniciado en este worker "
+            "(no-leader). Crons/chunking los ejecuta el worker leader."
+        )
+
+    if _is_scheduler_leader and HAS_SCHEDULER and scheduler:
         # [P0-NEW-2 · 2026-05-10] `run_proactive_checks` también pasa por el
         # wrapper SSOT de jitter. Knob `MEALFIT_SCHEDULER_JITTER_S` controla
         # el spread (default 45s). CronTrigger acepta `jitter` igual que
@@ -1080,8 +1391,39 @@ async def lifespan(app: FastAPI):
             )
 
     if HAS_SCHEDULER and scheduler:
-        scheduler.shutdown()
-    
+        # [P2-OPS-SHUTDOWN · 2026-05-27] `wait=False`: deja de despachar jobs
+        # inmediatamente sin BLOQUEAR el teardown esperando a que terminen los
+        # jobs en curso. Pre-fix `scheduler.shutdown()` defaultea a `wait=True`
+        # → con `_chunk_worker` mid-LLM-call (multi-minuto) el shutdown podía
+        # colgarse más allá del kill-grace de EasyPanel → SIGKILL. (Los writes
+        # del worker son data-safe: rollback de transacción + CHECK I8; lo que
+        # se evita acá es el hang del deploy y el trabajo LLM desperdiciado.)
+        scheduler.shutdown(wait=False)
+
+    # [P2-OPS-SHUTDOWN · 2026-05-27] Drenar el pool de bg_executor (summarize/
+    # facts fire-and-forget) — deja de aceptar submits + descarta encolados sin
+    # bloquear. Sin esto el pool quedaba sin teardown explícito.
+    try:
+        from bg_executor import shutdown_bg_executor
+        shutdown_bg_executor(wait=False)
+    except Exception as _bg_sd_err:
+        logger.debug(f"[P2-OPS-SHUTDOWN] shutdown_bg_executor falló: {_bg_sd_err}")
+
+    # [P1-SCHEDULER-LEADER-LOCK · 2026-05-27] Cerrar la conn que sostiene el
+    # advisory lock de sesión → lo libera para que el próximo proceso/worker
+    # pueda re-adquirirlo. Best-effort: un fallo aquí no debe romper shutdown.
+    _leader_conn = getattr(app.state, "scheduler_leader_conn", None)
+    if _leader_conn is not None:
+        try:
+            _leader_conn.close()
+            logger.info(
+                "👑 [P1-SCHEDULER-LEADER-LOCK] Leader lock liberado (conn cerrada)."
+            )
+        except Exception as _llc_err:
+            logger.debug(
+                f"[P1-SCHEDULER-LEADER-LOCK] cierre de leader conn falló: {_llc_err}"
+            )
+
     if connection_pool:
         connection_pool.close()
         logger.info("🔌 [psycopg] Pool de conexiones cerrado.")
@@ -1094,7 +1436,19 @@ async def lifespan(app: FastAPI):
 os.makedirs("uploads", exist_ok=True)
 
 
-app = FastAPI(lifespan=lifespan)
+# [P2-DOCS-GATE · 2026-05-27] Ocultar /docs, /redoc y /openapi.json en
+# producción. Pre-fix quedaban públicos → exponían el mapa completo de la API
+# (todos los endpoints + schemas request/response) a cualquiera, facilitando
+# reconnaissance. En dev se mantienen para DX. Gate por ENVIRONMENT (misma var
+# que usa el fail-secure de billing/webhook). Rollback: si necesitas /docs en
+# prod temporalmente, dejar ENVIRONMENT != "production". Tooltip-anchor: P2-DOCS-GATE.
+_IS_PRODUCTION = os.environ.get("ENVIRONMENT") == "production"
+app = FastAPI(
+    lifespan=lifespan,
+    docs_url=None if _IS_PRODUCTION else "/docs",
+    redoc_url=None if _IS_PRODUCTION else "/redoc",
+    openapi_url=None if _IS_PRODUCTION else "/openapi.json",
+)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 from routers.billing import router as billing_router, webhooks_router, discount_router
@@ -1695,6 +2049,47 @@ async def _correlation_id_middleware(request, call_next):
         # server-side sigue teniendo el ID.
         pass
     return response
+
+
+# [P2-BODY-SIZE-LIMIT · 2026-05-27] Rechaza requests cuyo `Content-Length`
+# excede el cap → previene DoS por agotamiento de memoria (un POST JSON
+# gigante a /api/analyze/stream o /api/auth/migrate se buffea entero en RAM
+# antes de llegar al handler). Default 25 MiB: por ENCIMA del upload de imagen
+# legítimo más grande (20 MB en /api/diary, routers/diary.py:189 lee el file
+# completo a memoria) pero acota payloads absurdos (100 MB+). Knob
+# `MEALFIT_MAX_REQUEST_BYTES` (clamp [1 MiB, 200 MiB]; 0 desactiva el guard).
+# Best-effort: solo aplica cuando el cliente envía `Content-Length` (transfer
+# chunked sin él lo limita uvicorn). Registrado como `@app.middleware` DESPUÉS
+# del de correlation → queda OUTERMOST → rechaza antes de cualquier otro
+# procesamiento. Tooltip-anchor: P2-BODY-SIZE-LIMIT.
+_MAX_REQUEST_BYTES = _env_int(
+    "MEALFIT_MAX_REQUEST_BYTES",
+    25 * 1024 * 1024,
+    validator=lambda v: v == 0 or (1024 * 1024 <= v <= 200 * 1024 * 1024),
+)
+
+
+@app.middleware("http")
+async def _body_size_limit_middleware(request, call_next):
+    if _MAX_REQUEST_BYTES > 0:
+        _cl = request.headers.get("content-length")
+        if _cl:
+            try:
+                _cl_int = int(_cl)
+            except (TypeError, ValueError):
+                _cl_int = None
+            if _cl_int is not None and _cl_int > _MAX_REQUEST_BYTES:
+                from fastapi.responses import JSONResponse
+                logger.warning(
+                    f"🛡️ [P2-BODY-SIZE-LIMIT] Rechazado {request.method} "
+                    f"{request.url.path}: content-length={_cl_int} > "
+                    f"{_MAX_REQUEST_BYTES} bytes."
+                )
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "El cuerpo de la solicitud es demasiado grande."},
+                )
+    return await call_next(request)
 
 
 

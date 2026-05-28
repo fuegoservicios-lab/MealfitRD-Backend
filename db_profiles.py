@@ -869,3 +869,41 @@ def get_water_tracker_enabled(user_id: str) -> bool:
     except Exception as e:
         logger.warning(f"[P3-WATER-TRACKER] get_water_tracker_enabled({user_id}) error: {e}")
         return True
+
+
+# [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Helper para que el agente IA
+# inyecte hidratación viva al system prompt. Reutiliza la tabla canónica
+# `water_intake_log` que ya alimenta /api/plans/water-intake. Filtra por
+# `user_id` (invariante I2) + `log_date` (fecha local del cliente).
+def get_water_intake_glasses_today(user_id: str, log_date: str) -> int:
+    """Lee los vasos consumidos hoy para `user_id`. Retorna 0 si no hay
+    fila o si la DB no está disponible. Fail-secure: cualquier error →
+    0 (no inventamos un valor que confunda al agente).
+
+    Args:
+        user_id: UUID del usuario autenticado.
+        log_date: Fecha local del cliente en formato YYYY-MM-DD.
+
+    Returns:
+        int: número de vasos registrados hoy (0..14).
+    """
+    if not supabase or not user_id or not log_date:
+        return 0
+    try:
+        res = (
+            supabase.table("water_intake_log")
+            .select("glasses")
+            .eq("user_id", user_id)
+            .eq("log_date", log_date)
+            .limit(1)
+            .execute()
+        )
+        if res and res.data and len(res.data) > 0:
+            return int(res.data[0].get("glasses") or 0)
+        return 0
+    except Exception as e:
+        logger.warning(
+            f"[P3-AGENT-HYDRATION-CONTEXT] get_water_intake_glasses_today"
+            f"({user_id}, {log_date}) error: {e}"
+        )
+        return 0

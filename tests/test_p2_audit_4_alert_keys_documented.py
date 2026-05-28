@@ -173,6 +173,18 @@ def _parse_emitted_patterns() -> dict[str, list[tuple[Path, int, str]]]:
         r'execute_sql_write\s*\(\s*"""[^"]*?INSERT\s+INTO\s+system_alerts[^"]*?"""\s*,\s*\(\s*[\n\s]*f?["\']([^"\'\n]+)["\']',
         re.DOTALL,
     )
+    # Patrón 4 [P1-CRON-CONSECUTIVE-FAIL · 2026-05-26]: invocaciones a
+    # `_track_cron_consecutive_failure(cron_name, alert_key, alert_type, ...)`.
+    # El segundo argumento posicional es el `alert_key` literal. El helper
+    # mismo hace `execute_sql_write(INSERT INTO system_alerts, ...)` pero
+    # recibe `alert_key` como variable → patrón 3 no lo detecta. Este
+    # patrón captura el literal en cada callsite del helper.
+    track_helper_re = re.compile(
+        r'_track_cron_consecutive_failure\s*\(\s*[\n\s]*'
+        r'f?["\'][^"\'\n]+["\']\s*,\s*[\n\s]*'  # arg 1 (cron_name)
+        r'f?["\']([^"\'\n]+)["\']',              # arg 2 (alert_key)
+        re.DOTALL,
+    )
 
     for fp in _EMITTER_FILES:
         if not fp.exists():
@@ -195,6 +207,13 @@ def _parse_emitted_patterns() -> dict[str, list[tuple[Path, int, str]]]:
             raw = m.group(1)
             norm = _normalize_pattern(raw)
             # Línea del literal capturado = offset hasta el comienzo del literal.
+            line_no = text.count("\n", 0, m.start(1)) + 1
+            out.setdefault(norm, []).append((fp.relative_to(_REPO_ROOT), line_no, raw))
+        # Patrón 4: invocaciones al helper SSOT `_track_cron_consecutive_failure`.
+        # Mismo cálculo de línea aproximada que patrón 3.
+        for m in track_helper_re.finditer(text):
+            raw = m.group(1)
+            norm = _normalize_pattern(raw)
             line_no = text.count("\n", 0, m.start(1)) + 1
             out.setdefault(norm, []).append((fp.relative_to(_REPO_ROOT), line_no, raw))
     return out

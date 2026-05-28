@@ -392,6 +392,7 @@ def get_pantry_tolerance_health():
             _PANTRY_TOLERANCE_FALLBACKS as _events,
             _PANTRY_TOLERANCE_FALLBACK_WINDOW_SECONDS as _window,
             _PANTRY_TOLERANCE_FALLBACK_MAX_RECORDS as _cap,
+            _get_fallback_buffers_lock,
         )
     except Exception as imp_err:
         logger.warning(f"[P1-4] No se pudo importar buffer de fallbacks: {imp_err}")
@@ -404,8 +405,10 @@ def get_pantry_tolerance_health():
             "buffer_capacity": 0,
         }
 
-    # Copia defensiva (el buffer puede mutarse mientras leemos).
-    snapshot_events = list(_events)
+    # [P2-FALLBACK-BUFFERS-LOCK · 2026-05-28] Snapshot bajo el lock compartido
+    # (los 3 threads del chunk worker mutan el buffer concurrentemente).
+    with _get_fallback_buffers_lock():
+        snapshot_events = list(_events)
     now = _p14_time.time()
     cutoff = now - _window
     in_window = [e for e in snapshot_events if e[0] >= cutoff]
@@ -456,6 +459,7 @@ def get_tz_fallback_health():
             _TZ_FALLBACK_WINDOW_SECONDS as _window,
             _TZ_FALLBACK_MAX_RECORDS as _cap,
             _TZ_FALLBACK_DEDUPE_KEYS as _dedupe,
+            _get_fallback_buffers_lock,
         )
     except Exception as imp_err:
         logger.warning(f"[P2-1] No se pudo importar buffer TZ fallback: {imp_err}")
@@ -471,7 +475,10 @@ def get_tz_fallback_health():
             "buffer_capacity": 0,
         }
 
-    snapshot_events = list(_events)
+    # [P2-FALLBACK-BUFFERS-LOCK · 2026-05-28] Snapshot bajo el lock compartido.
+    with _get_fallback_buffers_lock():
+        snapshot_events = list(_events)
+        active_dedupe_keys = len(_dedupe)
     now = _p21_time.time()
     cutoff = now - _window
     in_window = [e for e in snapshot_events if e[0] >= cutoff]
@@ -507,7 +514,7 @@ def get_tz_fallback_health():
         "unique_plans_24h": len(plans),
         "unique_users_24h": len(users),
         "oldest_event_age_seconds": int(now - oldest_ts) if oldest_ts else None,
-        "active_dedupe_keys": len(_dedupe),
+        "active_dedupe_keys": active_dedupe_keys,
         "buffer_capacity": int(_cap),
     }
 
@@ -998,33 +1005,54 @@ def admin_health_snapshot(request: Request):
 
 @router.get("/admin/crons-status")
 def admin_crons_status(request: Request):
-    """[P3-CRONS-STATUS-ADMIN · 2026-05-15] Snapshot del estado de crons +
-    knobs de kill-switch.
+    """[P3-CRONS-STATUS-ADMIN · 2026-05-15 · enriched P2-CRONS-HEALTH-AGGREGATE 2026-05-27]
+    Snapshot del estado de crons + knobs de kill-switch + salud por-job.
 
-    ANTES: ~25+ crons registrados en `register_plan_chunk_scheduler` cada
-    uno con su knob `MEALFIT_<NAME>_ENABLED` (P1-SCHEDULER-1, P2-NEXT-3,
-    P3-NEW-D). Si un cron nuevo se añadía sin registrar su knob, no había
-    tooling que lo detectara — SRE descubría el gap solo al intentar
-    apagar el cron durante un incidente y notar que el env var no
-    surtía efecto. Este endpoint enumera los jobs vivos del scheduler +
-    sus knobs registrados para que SRE pueda comparar contra el catálogo
-    esperado sin grep cross-archivo.
+    ANTES de P3-CRONS-STATUS-ADMIN (~2026-05-15): SRE descubría el gap de
+    knobs no-registrados solo al intentar apagar el cron durante un
+    incidente y notar que el env var no surtía efecto.
+
+    ANTES de P2-CRONS-HEALTH-AGGREGATE (~2026-05-27): el endpoint listaba
+    qué jobs estaban REGISTRADOS y cuándo correrían next, pero no decía
+    NADA sobre si estaban SANOS. Post-incidente, SRE tenía que cruzar
+    manualmente 3 fuentes:
+      - `app_kv_store` → `cron_failures_count:<cron_name>` (consecutive
+        failures + last_failure_at).
+      - `pipeline_metrics` → `MAX(created_at) WHERE node='_<cron>_tick'`
+        (último tick observable, liveness real).
+      - `scheduler.get_jobs()` → next_run_time (cuándo intentará de nuevo).
+    El enrichment agrega los 3 en una sola row por job — un curl muestra
+    "qué cron va peor right now" ordenado por `consecutive_failures DESC`.
 
     Auth: `Authorization: Bearer <CRON_SECRET>` (consistente con resto de
     `/admin/*`). 503 si CRON_SECRET no está seteado.
 
     Retorna:
-      - jobs: lista de `{job_id, next_run_time_iso, trigger, coalesce,
-        max_instances}` extraídos de `scheduler.get_jobs()`. Vacío si el
-        scheduler no está inicializado (HAS_SCHEDULER=False).
-      - knobs_registry: snapshot de `_KNOBS_REGISTRY` filtrado a knobs
-        cuyo nombre contiene `ENABLED` (kill switches) — permite verificar
+      - jobs: lista de dicts ordenada por (consecutive_failures DESC,
+        last_tick_at_iso ASC NULLS FIRST). Cada row contiene:
+          * job_id (str)
+          * next_run_time_iso (str | None)
+          * trigger (str)
+          * coalesce (bool)
+          * max_instances (int)
+          * consecutive_failures (int | None): de `cron_failures_count:<job_id>`.
+            None = no tracking (cron sin `_track_cron_consecutive_failure`).
+          * last_failure_at (str | None): ISO del último fallo registrado.
+          * last_tick_at (str | None): ISO del último tick en pipeline_metrics
+            (`node = '_<job_id>_tick'`). None = cron NO emite tick observable
+            o nunca ha corrido en la ventana de retención de pipeline_metrics.
+      - knobs_kill_switches: dict de knobs `*_ENABLED` para verificar
         qué crons están apagados sin redeploy.
-      - knobs_count_total: cardinalidad total del registry (incluye no-kill).
-      - has_scheduler: bool — False indica APScheduler no instalado o
-        deshabilitado por env.
+      - knobs_count_total: cardinalidad total del `_KNOBS_REGISTRY`.
+      - has_scheduler: bool.
+      - jobs_count: int (cardinalidad de la lista).
 
-    Anchor: P3-CRONS-STATUS-ADMIN.
+    Performance: 2 SELECTs adicionales (KV failures + pipeline_metrics tick
+    MAX por node). Ambos best-effort: si fallan, el endpoint retorna los
+    jobs sin enriquecer (mantiene back-compat con clientes que solo leen
+    el shape original).
+
+    Anchor: P3-CRONS-STATUS-ADMIN | P2-CRONS-HEALTH-AGGREGATE.
     """
     _verify_admin_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)
@@ -1053,6 +1081,117 @@ def admin_crons_status(request: Request):
                     )
     except Exception as e:
         logger.debug(f"[P3-CRONS-STATUS-ADMIN] scheduler import/iterate falló: {e}")
+
+    # [P2-CRONS-HEALTH-AGGREGATE · 2026-05-27] Enriquecimiento per-job con
+    # consecutive_failures + last_tick_at desde las 2 fuentes operacionales
+    # canónicas. Best-effort: cualquier fallo deja los campos en None y el
+    # endpoint sigue retornando el shape original.
+    failures_by_cron: dict[str, dict] = {}
+    last_tick_by_cron: dict[str, str] = {}
+
+    try:
+        # Source 1: KV `cron_failures_count:<cron_name>` (P1-CRON-CONSECUTIVE-FAIL).
+        # Payload: `{count, last_failure_at, last_error?, last_metadata?}`.
+        kv_rows = execute_sql_query(
+            """
+            SELECT key, value, updated_at
+              FROM app_kv_store
+             WHERE key LIKE 'cron_failures_count:%'
+            """,
+            (),
+            fetch_all=True,
+        ) or []
+        for row in kv_rows:
+            if not isinstance(row, dict):
+                continue
+            key = row.get("key") or ""
+            if not key.startswith("cron_failures_count:"):
+                continue
+            cron_name = key[len("cron_failures_count:"):]
+            payload = row.get("value")
+            if not isinstance(payload, dict):
+                # Defensive: psycopg puede devolver str si la column es text.
+                try:
+                    payload = json.loads(payload) if payload else {}
+                except Exception:
+                    payload = {}
+            failures_by_cron[cron_name] = {
+                "consecutive_failures": int(payload.get("count") or 0),
+                "last_failure_at": payload.get("last_failure_at"),
+                "last_error": (str(payload.get("last_error"))[:200]
+                               if payload.get("last_error") else None),
+            }
+    except Exception as e:
+        logger.debug(
+            f"[P2-CRONS-HEALTH-AGGREGATE] KV failures query falló (best-effort): {e}"
+        )
+
+    try:
+        # Source 2: `pipeline_metrics` ticks. Cada cron observable emite
+        # `_<cron_name>_tick` en cada run (P2-B-OBS pattern). MAX(created_at)
+        # por node = liveness real del cron.
+        #
+        # Ventana 7 días: suficiente para detectar starvation crónico
+        # (cron con interval ≥24h tickearía al menos 7 veces en 7d) sin
+        # full-scan de pipeline_metrics que crece monotónicamente.
+        tick_rows = execute_sql_query(
+            r"""
+            SELECT node, MAX(created_at) AS last_tick_at
+              FROM pipeline_metrics
+             WHERE node LIKE '\_%\_tick' ESCAPE '\'
+               AND created_at > NOW() - INTERVAL '7 days'
+             GROUP BY node
+            """,
+            (),
+            fetch_all=True,
+        ) or []
+        for row in tick_rows:
+            if not isinstance(row, dict):
+                continue
+            node = row.get("node") or ""
+            last_tick = row.get("last_tick_at")
+            # node = '_<cron_name>_tick' → cron_name = node[1:-5]
+            if node.startswith("_") and node.endswith("_tick") and len(node) > 6:
+                cron_name = node[1:-5]
+                if hasattr(last_tick, "isoformat"):
+                    last_tick_by_cron[cron_name] = last_tick.isoformat()
+                elif last_tick is not None:
+                    last_tick_by_cron[cron_name] = str(last_tick)
+    except Exception as e:
+        logger.debug(
+            f"[P2-CRONS-HEALTH-AGGREGATE] pipeline_metrics tick query falló "
+            f"(best-effort): {e}"
+        )
+
+    # Enrich cada job_id. cron_name = job_id (convención de los crons del
+    # repo). Si el job_id NO tiene entry en `failures_by_cron`, significa
+    # que el cron NO usa `_track_cron_consecutive_failure` — campo None.
+    for j in jobs_list:
+        jid = j.get("job_id") or ""
+        f = failures_by_cron.get(jid)
+        if f:
+            j["consecutive_failures"] = f["consecutive_failures"]
+            j["last_failure_at"] = f["last_failure_at"]
+            j["last_error"] = f["last_error"]
+        else:
+            j["consecutive_failures"] = None
+            j["last_failure_at"] = None
+            j["last_error"] = None
+        j["last_tick_at"] = last_tick_by_cron.get(jid)
+
+    # Sort: peor primero (más fallos consec. + tick más viejo). None tratado
+    # como peor (no tenemos data) para que SRE lo investigue.
+    def _sort_key(jd: dict) -> tuple:
+        cf = jd.get("consecutive_failures")
+        cf_val = -1 if cf is None else int(cf)
+        ltk = jd.get("last_tick_at") or ""
+        # consecutive_failures DESC, last_tick_at ASC (más viejo primero).
+        return (-cf_val, ltk)
+
+    try:
+        jobs_list.sort(key=_sort_key)
+    except Exception as e:
+        logger.debug(f"[P2-CRONS-HEALTH-AGGREGATE] sort falló (best-effort): {e}")
 
     knobs_kill_switches: dict[str, object] = {}
     knobs_count_total: int = 0

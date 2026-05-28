@@ -2183,6 +2183,91 @@ def rag_query_router(prompt: str) -> dict:
         logger.error(f"⚠️ [RAG ROUTER] Error en rewrite, usando prompt original: {e}")
         return {"skip": False, "query": prompt}
 
+
+# [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Helper que retorna un bloque
+# de system prompt con la hidratación actual del usuario (vasos consumidos
+# hoy + meta diaria). Solo emite si el toggle `water_tracker_enabled` está
+# activo (Settings → Personaliza tu panel → Hidratación). Si el toggle
+# está apagado, retorna string vacío — el agente no debe saber nada del
+# tracker para respetar la preferencia del usuario.
+#
+# El cómputo de la meta es una réplica simplificada de
+# `routers/plans.py::_compute_water_goal` (no importable desde aquí por
+# circular import: routers/plans.py ya importa de agent.py). Fórmula:
+# 35 ml/kg + bonus por actividad, clamp a [6, 14] vasos de 250ml.
+#
+# Fail-secure: cualquier excepción → retorna "" (no inyecta nada). El
+# agente puede usar la tool `check_hydration_today` si necesita el dato
+# bajo demanda en lugar de en cada turno.
+def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[str] = None) -> str:
+    if not user_id or user_id == "guest":
+        return ""
+    try:
+        from db_profiles import get_water_tracker_enabled, get_water_intake_glasses_today
+        if not get_water_tracker_enabled(user_id):
+            return ""
+
+        # Si el caller pasó la fecha local del cliente, usarla. Si no,
+        # caer a UTC del servidor (acepta una posible discrepancia de 1 día
+        # en zonas horarias extremas — RD es UTC-4 estable, OK en prod).
+        if not local_date_str:
+            from datetime import datetime as _dt, timezone as _tz
+            local_date_str = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+
+        glasses = get_water_intake_glasses_today(user_id, local_date_str)
+
+        # Calcular meta inline desde health_profile
+        try:
+            profile = get_user_profile(user_id) or {}
+            hp = profile.get("health_profile") or {}
+        except Exception:
+            hp = {}
+
+        goal = 8  # default fallback
+        weight_raw = hp.get("weight")
+        weight_unit = str(hp.get("weightUnit") or "lb").lower().strip()
+        activity_level = str(hp.get("activityLevel") or "").lower().strip()
+        if weight_raw not in (None, ""):
+            try:
+                w = float(weight_raw)
+                if w > 0:
+                    weight_kg = w if weight_unit == "kg" else round(w / 2.20462, 1)
+                    if 25 <= weight_kg <= 250:
+                        ml = weight_kg * 35.0
+                        # Bonus por actividad — match con plans._compute_water_goal
+                        if activity_level in ("intense", "very_active", "high"):
+                            ml += 500
+                        elif activity_level in ("moderate", "active", "medium"):
+                            ml += 250
+                        goal = max(6, min(14, round(ml / 250)))
+            except (ValueError, TypeError):
+                pass
+
+        # Mensaje contextual según el estado actual
+        if glasses >= goal:
+            return (
+                f"\n\n💧 HIDRATACIÓN HOY: El usuario ha consumido {glasses} de {goal} vasos "
+                f"de agua hoy (meta alcanzada ✅). Si surge el tema de hidratación, puedes "
+                f"reconocerlo. Toma esto en cuenta al hablar de energía o saciedad."
+            )
+        if glasses == 0:
+            return (
+                f"\n\n💧 HIDRATACIÓN HOY: El usuario aún no ha registrado ningún vaso de agua "
+                f"hoy (meta diaria: {goal} vasos). Si la conversación lo permite (mañana, "
+                f"comidas, energía), recuérdale amablemente la importancia de hidratarse."
+            )
+        pct = round((glasses / goal) * 100)
+        return (
+            f"\n\n💧 HIDRATACIÓN HOY: El usuario lleva {glasses} de {goal} vasos de agua "
+            f"({pct}% de su meta diaria). Toma esto en cuenta al hablar de energía, "
+            f"saciedad o digestión. Si lleva menos de la mitad y ya es tarde, sugiérele "
+            f"acelerar el ritmo con amabilidad."
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ [AGENT-HYDRATION-CONTEXT] error: {e}")
+        return ""
+
+
 def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None):
     # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Wall-clock total para el path
     # non-stream del chat. Pre-fix: solo el stream emitía
@@ -2352,7 +2437,12 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
                 system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
         except Exception as e:
             logger.error(f"⚠️ Error inyectando contexto de diario (non-stream): {e}")
-        
+
+        # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
+        # viva si el toggle está activo. Non-stream path no recibe
+        # `local_date`, así que cae al UTC server-side dentro del helper.
+        system_prompt += _build_hydration_context(user_id, local_date_str=None)
+
     config = {"configurable": {"thread_id": session_id}}
 
     # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Pool separado para PostgresSaver
@@ -2633,7 +2723,13 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
                 system_prompt += "\n\nDIARIO DE HOY: El usuario no ha registrado ninguna comida el día de hoy todavía."
         except Exception as e:
             logger.error(f"⚠️ Error inyectando contexto de diario: {e}")
-            
+
+        # [P3-AGENT-HYDRATION-CONTEXT · 2026-05-27] Inyectar hidratación
+        # viva si el toggle está activo. El stream path SÍ recibe
+        # `local_date` del cliente, que pasamos al helper para mayor
+        # precisión en zonas horarias no-UTC.
+        system_prompt += _build_hydration_context(user_id, local_date_str=local_date)
+
     config = {"configurable": {"thread_id": session_id}}
 
     # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Mismo split que el callsite del

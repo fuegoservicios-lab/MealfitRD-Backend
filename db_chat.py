@@ -307,15 +307,47 @@ def release_summarizing_lock(session_id: str):
         if "Server disconnected" not in error_msg:
             logger.error(f"Error releasing summarizing lock: {e}")
 
-def delete_chat_session(session_id: str) -> Tuple[bool, str]:
-    """Elimina una sesión de chat y todos sus mensajes y resúmenes asociados.
-    Usa SQL directo (psycopg) para bypassear completamente el REST API de Supabase."""
+def delete_chat_session(session_id: str, user_id: str) -> Tuple[bool, str]:
+    """[P0-CHAT-DELETE-IDOR · 2026-05-26] Elimina sesión + chats + summaries.
+
+    Valida ownership server-side antes de los DELETEs. Patrón simétrico al
+    guard de `GET /api/chat/history/{session_id}` (routers/chat.py:266).
+
+    Pre-fix (P2-AUDIT-HARDENING · 2026-05-25): la signature era
+    `delete_chat_session(session_id)` sin user_id; el router solo validaba
+    "está autenticado" pero NO "session.user_id == verified_user_id".
+    Atacante autenticado podía DELETE conversation_summaries +
+    agent_messages + agent_sessions ajenas pasando session_id enumerado.
+
+    Retorna:
+      - (True, "") si ownership validado y DELETEs ejecutados.
+      - (False, "not_found") si la sesión no existe (404 en caller).
+      - (False, "forbidden") si session.user_id != user_id (403 en caller).
+      - (False, "<exc>") en error genérico (500 en caller).
+
+    Defensa-en-profundidad: el DELETE de `agent_sessions` incluye
+    `AND user_id = %s` adicional. Aunque el pre-check ya cubre TOCTTOU
+    teórico, el predicate redundante cumple invariante I2 del repo.
+    """
     try:
-        # Borramos en orden para respetar Foreign Key constraints
+        owner = get_session_owner(session_id)
+        if owner is None:
+            return False, "not_found"
+        if str(owner) != str(user_id):
+            logger.warning(
+                f"🚫 [P0-CHAT-DELETE-IDOR] REJECTED. session={session_id} "
+                f"owner={owner} != caller={user_id}"
+            )
+            return False, "forbidden"
+
+        # Ownership validado — orden respeta FK constraints.
         execute_sql_write("DELETE FROM conversation_summaries WHERE session_id = %s", (session_id,))
         execute_sql_write("DELETE FROM agent_messages WHERE session_id = %s", (session_id,))
-        execute_sql_write("DELETE FROM agent_sessions WHERE id = %s", (session_id,))
-        logger.info(f"🗑️ [DB] Sesión {session_id} eliminada exitosamente (SQL directo)")
+        execute_sql_write(
+            "DELETE FROM agent_sessions WHERE id = %s AND user_id = %s",
+            (session_id, user_id),
+        )
+        logger.info(f"🗑️ [DB] Sesión {session_id} eliminada (owner={user_id})")
         return True, ""
     except Exception as e:
         logger.error(f"❌ [DB] Error eliminando la sesión {session_id}: {e}", exc_info=True)

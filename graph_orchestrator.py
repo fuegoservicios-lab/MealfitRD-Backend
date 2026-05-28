@@ -377,6 +377,16 @@ FACT_CHECK_POOL_SIZE        = max(1, min(16, _env_int("MEALFIT_FACT_CHECK_POOL_S
 # pipeline +90s (3 días × 30s extra), mejor caso 0 cambio. P4-TIMEOUT-2 CB
 # aún limita explosión bajo cascade-overload.
 CRITIQUE_FIX_TIMEOUT_S      = _env_float("MEALFIT_CRITIQUE_FIX_TIMEOUT_S",      180.0)
+# [P1-SELF-CRITIQUE-SKIP-CLEAN · 2026-05-28] Si los DOS detectores determinísticos
+# del self_critique (`_count_staple_repetitions` + `_detect_slot_incoherence`)
+# vienen vacíos, el plan no tiene issues "duros". El evaluador LLM (~30s siempre)
+# + sus correcciones (las llamadas más caras del pipeline: p50 ~192s, ~6.4k tokens
+# out, ~$3.5 acumulado en prod) solo aportarían pulido subjetivo marginal. Con el
+# knob ON saltamos TODO self_critique en ese caso → recorte de latencia+costo en
+# la mayoría de planes estructuralmente sanos. Flip a False restaura el evaluador
+# en cada plan (comportamiento pre-fix). Las señales determinísticas siguen siendo
+# el floor de calidad — solo se omite el pulido subjetivo cuando NO hay nada duro.
+SELF_CRITIQUE_SKIP_WHEN_CLEAN = _env_bool("MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN", True)
 
 # ============================================================
 # [P4-TIMEOUT-2] Self-critique circuit breaker
@@ -4562,6 +4572,18 @@ def _is_skeleton_fidelity_rejection(rejection_reasons) -> bool:
     )
 
 
+# [P2-DAYGEN-LITE-EASY · 2026-05-28] Opt-in: bajar el day_generator a un modelo
+# lite para perfiles FÁCILES (no clínicos) en attempt 1. day_generator es el paso
+# más voluminoso y el mayor costo del pipeline (~17k tokens in × N días/plan, ~$5.75
+# acumulado en prod); flash-lite cuesta ~10× menos por token. Default OFF: el lite
+# puede degradar instruction-following / tool-use (consultar_nutricion) → más
+# correcciones de self_critique que anularían el ahorro. El operador lo activa tras
+# validar calidad. NUNCA aplica a perfiles clínicos complejos (siempre full/PRO) ni
+# a retries (attempt>1 conserva el modelo de fiabilidad).
+DAYGEN_LITE_FOR_EASY = _env_bool("MEALFIT_DAYGEN_LITE_FOR_EASY", False)
+DAYGEN_EASY_MODEL = _env_str("MEALFIT_DAYGEN_EASY_MODEL", _FLASH_LITE_DEFAULT) or _FLASH_LITE_DEFAULT
+
+
 def _route_model_for_day_generator(
     form_data: dict,
     attempt: int,
@@ -4582,7 +4604,19 @@ def _route_model_for_day_generator(
     de ~$0.05 extra por plan (estimado por intento que escala).
     """
     if attempt <= 1 or not DAY_GEN_RETRY_USE_PRO:
-        return _route_model(form_data, attempt)
+        _base = _route_model(form_data, attempt)
+        # [P2-DAYGEN-LITE-EASY · 2026-05-28] Override lite solo en attempt 1 y solo
+        # si el router resolvió a FLASH (perfil fácil; NO escaló a PRO por
+        # complejidad clínica). Conserva la garantía de que perfiles complejos y
+        # retries usan el modelo full/PRO.
+        if attempt <= 1 and DAYGEN_LITE_FOR_EASY and _base == _FLASH_MODEL_NAME:
+            logger.info(
+                f"🔀 [ROUTER/DAYGEN-LITE] Perfil fácil + MEALFIT_DAYGEN_LITE_FOR_EASY=1 "
+                f"→ day generator usa {DAYGEN_EASY_MODEL} (en vez de {_FLASH_MODEL_NAME}). "
+                f"Recorte de costo en el paso más voluminoso; validar calidad."
+            )
+            return DAYGEN_EASY_MODEL
+        return _base
 
     if _is_skeleton_fidelity_rejection(prev_rejection_reasons):
         logger.info(
@@ -4642,6 +4676,32 @@ def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) ->
         return _FLASH_MODEL_NAME
 
 
+# [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Cap duro del history_context cuando NO
+# se pudo comprimir (CB-open / resultado sospechoso / excepción). Pre-fix esos
+# 3 fallbacks devolvían el blob crudo sin límite — y justo cuando el provider
+# está degradado (CB open) el planner recibía el contexto completo,
+# amplificando costo/latencia de tokens durante un outage. El reflection_node
+# además concatena al history_context en cada retry, así que crece sin tope.
+# Elisión head+tail: preserva las reglas médicas/alergias prepended desde
+# memory_context Y las alertas de calidad appended al final; descarta el medio
+# (la zona "lost in the middle"). Knob `MEALFIT_HISTORY_CONTEXT_MAX_CHARS`
+# (default 16000, floor 2000). Tooltip-anchor: P2-HISTORY-CONTEXT-CAP.
+def _cap_history_context(text: str) -> str:
+    cap = _env_int("MEALFIT_HISTORY_CONTEXT_MAX_CHARS", 16000, validator=lambda v: v >= 2000)
+    if not isinstance(text, str) or len(text) <= cap:
+        return text
+    half = (cap - 80) // 2
+    head = text[:half]
+    tail = text[-half:]
+    elided = len(text) - 2 * half
+    logger.warning(
+        f"✂️ [COMPRESIÓN] history_context sin comprimir ({len(text)} chars) "
+        f"excede cap {cap}; elisión head+tail ({elided} chars al medio) para "
+        f"acotar tokens. [P2-HISTORY-CONTEXT-CAP]"
+    )
+    return f"{head}\n\n[...{elided} chars elididos por cap MEALFIT_HISTORY_CONTEXT_MAX_CHARS...]\n\n{tail}"
+
+
 # ============================================================
 @_node_label("compressor")
 async def context_compression_node(state: PlanState) -> dict:
@@ -4687,7 +4747,7 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
     try:
         if not await _cb.acan_proceed():  # P1-Q3: CB per-modelo
             logger.warning("⚠️ [COMPRESIÓN] Circuit Breaker OPEN. Saltando compresión.")
-            return {"compressed_context": history_context}
+            return {"compressed_context": _cap_history_context(history_context)}
 
         # P0-4: Hard timeout con cancelación graceful (cleanup de sockets HTTP)
         result = await _safe_ainvoke(compressor_llm, prompt, timeout=30.0)
@@ -4712,14 +4772,14 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
         # Sanity check: si la compresión devolvió algo absurdamente corto, usar el original
         if len(compressed_text) < 50:
             logger.warning(f"⚠️ [COMPRESIÓN] Resultado sospechoso ({len(compressed_text)} chars). Usando contexto original.")
-            return {"compressed_context": history_context}
+            return {"compressed_context": _cap_history_context(history_context)}
 
         logger.info(f"🗜️ [COMPRESIÓN] Contexto reducido a {len(compressed_text)} caracteres.")
         return {"compressed_context": compressed_text}
     except Exception as e:
         await _cb.arecord_failure()  # P1-Q3: CB per-modelo
         logger.warning(f"⚠️ [COMPRESIÓN] Error comprimiendo contexto: {e}. Usando original.")
-        return {"compressed_context": history_context}
+        return {"compressed_context": _cap_history_context(history_context)}
 
 # ============================================================
 # NODO 1: PLANIFICADOR (Fase Map — esqueleto liviano)
@@ -6943,6 +7003,21 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         slot_block = ""
 
+    # [P1-SELF-CRITIQUE-SKIP-CLEAN · 2026-05-28] Early-exit: si AMBOS detectores
+    # determinísticos vinieron limpios (cero staples repetidos, cero incoherencias
+    # de slot), saltamos el evaluador LLM (~30s) y, por ende, sus correcciones (las
+    # llamadas más caras del pipeline). El plan ya es estructuralmente sano; el
+    # evaluador solo aportaría pulido subjetivo. Knob `MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN`
+    # (default True) — flip a False restaura el evaluador en cada plan.
+    if SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions and not slot_issues:
+        logger.info(
+            "⏭️ [SELF-CRITIQUE] Detectores determinísticos limpios (0 staples "
+            "repetidos, 0 incoherencias de slot) → skip evaluador+correcciones "
+            "(MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN). Recorte de latencia/costo; "
+            "plan entregado sin pulido subjetivo."
+        )
+        return {}
+
     # Brecha 4: Inyección de Contexto de Usuario
     form_data = state.get("form_data", {})
     adherence = form_data.get("_adherence_hint", "")
@@ -7144,9 +7219,21 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     # primer fix; 90s es el cap actual. Como las correcciones corren
                     # en `asyncio.gather`, subir el cap individual NO suma latencia
                     # — el wall-clock total es el max de las 3 ramas, no la suma.
-                    corrected_result: SingleDayPlanModel = await _safe_ainvoke(
-                        corrector_llm, correction_prompt, timeout=CRITIQUE_FIX_TIMEOUT_S
-                    )
+                    # [P2-SKELETON-AB-TELEMETRY · 2026-05-28] Tag distinto en
+                    # `llm_usage_events.node` para la corrección (vs el evaluador,
+                    # ambos vivían bajo `node='self_critique'`). Permite el A/B del
+                    # modelo del skeleton (knob `MEALFIT_PLANNER_MODEL`): correlacionar
+                    # `node='planner'` model ↔ tasa de `node='self_critique_correction'`
+                    # por plan_id, midiendo si un skeleton más fuerte reduce las
+                    # correcciones (el paso post-gen más caro). Set+reset task-local;
+                    # el emit ocurre dentro de `_safe_ainvoke` antes del return.
+                    _crit_node_token = _current_node_var.set("self_critique_correction")
+                    try:
+                        corrected_result: SingleDayPlanModel = await _safe_ainvoke(
+                            corrector_llm, correction_prompt, timeout=CRITIQUE_FIX_TIMEOUT_S
+                        )
+                    finally:
+                        _current_node_var.reset(_crit_node_token)
                     await _corrector_cb.arecord_success()  # P1-Q3
                     if corrected_result:
                         corrected_day = corrected_result.model_dump()
@@ -10511,6 +10598,68 @@ Responde ÚNICAMENTE con el JSON de revisión.
 # ============================================================
 # DECISIÓN CONDICIONAL: ¿Repetir o finalizar?
 # ============================================================
+def _persist_gemini_spend_cap_alert(user_id: Optional[str]) -> None:
+    """[P1-SPEND-CAP-ALERT · 2026-05-28] Emite `system_alerts.gemini_spend_cap_exceeded`
+    cuando el pipeline detecta el 429 "spending cap" de Gemini (cap mensual de
+    AI Studio agotado). A diferencia de un 429 transitorio (rate-limit, se libera
+    en segundos), el spending cap queda activo hasta que el operador suba/quite el
+    cap (https://ai.studio/spend) O ruede el ciclo de billing — reintentar NO ayuda.
+
+    Por qué existe (incidente 2026-05-28, plan user bf6f1383): el pipeline cayó
+    con `429 RESOURCE_EXHAUSTED: monthly spending cap` pero el único rastro quedó
+    en logs; el usuario veía "IA temporalmente saturada, intenta en 1-2 min"
+    (falso) y un operador solo se entera leyendo logs. Esta alert escala la
+    condición a `system_alerts` para que sea visible en dashboards SRE.
+
+    Best-effort (no propaga; el pipeline ya está degradando). Idempotente:
+    `alert_key` GLOBAL (la condición es project-wide, no per-user) → ON CONFLICT
+    bumpea `triggered_at`. Modelo de resolution: Manual (operador cierra tras
+    subir el cap).
+
+    tooltip-anchor: P1-SPEND-CAP-ALERT — row `gemini_spend_cap_exceeded` en
+    backend/docs/system_alerts_resolution_table.md.
+    """
+    try:
+        from db_core import execute_sql_write
+        import json as _json
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'gemini_spend_cap', 'critical', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                affected_user_ids = EXCLUDED.affected_user_ids,
+                resolved_at = NULL
+            """,
+            (
+                "gemini_spend_cap_exceeded",
+                "Gemini spending cap agotado — generacion de planes caida",
+                (
+                    "El proyecto de Gemini supero su spending cap mensual (429 "
+                    "RESOURCE_EXHAUSTED). TODAS las generaciones de plan fallaran "
+                    "hasta subir/quitar el cap en https://ai.studio/spend o hasta "
+                    "el reset del ciclo de billing. Reintentar NO ayuda. Resolver "
+                    "esta alerta tras subir el cap."
+                ),
+                _json.dumps(
+                    {"provider": "gemini", "remediation_url": "https://ai.studio/spend"},
+                    ensure_ascii=False,
+                ),
+                _json.dumps([str(user_id)] if user_id else [], ensure_ascii=False),
+            ),
+        )
+        logger.warning(
+            "🛑 [P1-SPEND-CAP-ALERT] system_alert `gemini_spend_cap_exceeded` "
+            "emitido — generacion caida hasta subir el cap en ai.studio/spend."
+        )
+    except Exception as _e:
+        logger.warning(
+            f"[P1-SPEND-CAP-ALERT] No se pudo persistir gemini_spend_cap_exceeded: {_e!r}"
+        )
+
+
 def _emit_plan_quality_degraded_alert(
     state: "PlanState",
     exit_reason: str,
@@ -10667,6 +10816,35 @@ def _emit_plan_quality_degraded_alert(
         )
 
 
+def _mark_plan_result_quality_degraded(state: PlanState, reason: str, severity: str) -> None:
+    """[P1-PROD-AUDIT-BUNDLE · 2026-05-28] Setea el flag user-visible
+    `plan_data._quality_degraded` en `state['plan_result']` para que el
+    frontend muestre el banner "la IA no pudo generar un plan óptimo".
+
+    Pre-fix: solo la rama `max_attempts` de `should_retry` seteaba este flag
+    (P1-LOW-SIGNAL-FALLBACK). Las otras ramas "end" que entregaban un plan con
+    `review_passed=False` (`high_contextual`, `invalid_pipeline_start`,
+    `budget_exhausted`) emitían SOLO el alert SRE → el usuario recibía un plan
+    con fallo creyéndolo normal (misma clase que P0-DEAD-LETTER-USER-NOTIFY).
+    Este helper centraliza el flag para que TODAS esas ramas notifiquen.
+
+    Best-effort: un fallo aquí no debe abortar la entrega del plan.
+    Tooltip-anchor: P1-QUALITY-DEGRADED-ALL-BRANCHES.
+    """
+    try:
+        _pr = state.get("plan_result")
+        if isinstance(_pr, dict):
+            _pr["_quality_degraded"] = True
+            _pr["_quality_degraded_reason"] = reason
+            _pr["_quality_degraded_severity"] = severity or "minor"
+            _pr["_quality_degraded_attempts"] = int(state.get("attempt", 1))
+    except Exception as _flag_e:
+        logger.warning(
+            f"[P1-QUALITY-DEGRADED-ALL-BRANCHES] No pude setear flag "
+            f"_quality_degraded en plan_result (reason={reason}): {_flag_e}"
+        )
+
+
 def should_retry(state: PlanState) -> str:
     """Decide si regenerar el plan o enviarlo al usuario.
 
@@ -10775,6 +10953,7 @@ def should_retry(state: PlanState) -> str:
                 f"{(state.get('rejection_reasons') or [])[:2]}"
             )
             _emit_plan_quality_degraded_alert(state, exit_reason="high_contextual", severity=severity)
+            _mark_plan_result_quality_degraded(state, reason="high_contextual", severity=severity)
             return "end"
         # 'regenerable' → cae al check de attempts/budget para decidir retry.
         # Si pasa los gates, ejecutará el retry como cualquier minor.
@@ -10844,6 +11023,7 @@ def should_retry(state: PlanState) -> str:
         )
         if not state.get("review_passed", False):
             _emit_plan_quality_degraded_alert(state, exit_reason="invalid_pipeline_start", severity=severity)
+            _mark_plan_result_quality_degraded(state, reason="invalid_pipeline_start", severity=severity)
         return "end"
 
     elapsed = time.time() - start
@@ -10859,6 +11039,7 @@ def should_retry(state: PlanState) -> str:
         )
         if not state.get("review_passed", False):
             _emit_plan_quality_degraded_alert(state, exit_reason="budget_exhausted", severity=severity)
+            _mark_plan_result_quality_degraded(state, reason="budget_exhausted", severity=severity)
         return "end"
 
     logger.info("🔄 [ORQUESTADOR] Revisión fallida → Regenerando plan con correcciones...")
@@ -14731,6 +14912,16 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             final_state = await asyncio.wait_for(run_graph(), timeout=GLOBAL_PIPELINE_TIMEOUT_S)
         except Exception as e:
             logger.error(f"🚨 [EXTREME GRACEFUL DEGRADATION] Error crítico en pipeline ({type(e).__name__}): {e}")
+            # [P1-SPEND-CAP-ALERT · 2026-05-28] Distinguir el 429 "spending cap"
+            # de Gemini (persistente hasta subir el cap) de un fallo transitorio.
+            # Reusa el detector canónico de shopping_calculator (lazy import: sin
+            # ciclo, shopping_calculator NO importa graph_orchestrator).
+            _spend_cap_hit = False
+            try:
+                from shopping_calculator import _is_gemini_spending_cap_error
+                _spend_cap_hit = _is_gemini_spending_cap_error(e)
+            except Exception:
+                _spend_cap_hit = False
             final_state = latest_state[0] if latest_state else {}
             # [P1-26] Flush de TODOS los token buffers pendientes ANTES de
             # entregar el fallback. Sin esto, tokens acumulados en buffers
@@ -14775,7 +14966,18 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 # P1-9: `_repair_partial_plan` ya setea `plan_partial["_is_fallback"]=True`
                 # cuando hace cualquier reparación. Nada más que hacer aquí.
                 _repair_partial_plan(plan_partial, nutrition=nutrition, requested_days=requested_days)
-    
+
+            # [P1-SPEND-CAP-ALERT · 2026-05-28] Si el pipeline cayó por el spending
+            # cap de Gemini: (1) marcar plan_result para que routers/plans.py emita
+            # un mensaje honesto al usuario (reintentar NO ayuda hasta subir el cap),
+            # (2) emitir system_alert al operador (idempotente, dedupe por alert_key
+            # global). Ambos best-effort — no abortan la entrega del fallback.
+            if _spend_cap_hit:
+                _pr = final_state.get("plan_result")
+                if isinstance(_pr, dict):
+                    _pr["_llm_spend_cap"] = True
+                _persist_gemini_spend_cap_alert(actual_form_data.get("user_id"))
+
         pipeline_duration = round(time.time() - pipeline_start, 2)
 
         # [P0-PIPE-1] Si el último intento empeoró respecto al mejor previo

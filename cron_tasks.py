@@ -117,6 +117,188 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
+# [P1-CRON-CONSECUTIVE-FAIL · 2026-05-26] Helper SSOT que rastrea fallos
+# consecutivos de un cron y emite `system_alerts` cuando cruza el umbral.
+# ------------------------------------------------------------
+# Generalización del patrón inline `P1-COH-CRON-CONSECUTIVE-FAIL` del cron
+# `_shopping_coherence_alert_job` (gold-standard del repo). Antes, los demás
+# crons productivos podían fallar N veces seguidas sin observabilidad —
+# `_drain_pending_facts_queue` congelaba la cola sin alerta, `_resolve_stale_
+# scheduler_alerts` dejaba acumular alerts huérfanas sin avisar al SRE,
+# `_recover_failed_chunks_for_long_plans` perdía batches de recovery
+# silenciosamente.
+#
+# Storage: `app_kv_store` con key `cron_failures_count:<cron_name>` y payload
+# `{count: int, last_failure_at: ISO, last_error: str?, last_metadata: {}}`.
+# Modelo Auto-explicit (reusable): run sin failure resetea KV.count=0 +
+# UPDATE `system_alerts SET resolved_at = NOW() WHERE alert_key = <alert_key>
+# AND resolved_at IS NULL`.
+#
+# Best-effort: cualquier excepción interna del tracker se silencia (debug log).
+# El cron NO debe nunca crashear porque su tracking falló; la falla del cron
+# real sigue siendo lo que importa.
+# ============================================================
+def _track_cron_consecutive_failure(
+    cron_name: str,
+    alert_key: str,
+    alert_type: str,
+    alert_title: str,
+    is_failure: bool,
+    *,
+    threshold: int = 2,
+    last_error: str | None = None,
+    extra_metadata: dict | None = None,
+) -> None:
+    """Tracking SSOT de fallos consecutivos por cron.
+
+    Args:
+        cron_name: id del cron (slug). Usado en el key KV.
+        alert_key: `system_alerts.alert_key` único (debe matchear convención
+            documentada en `docs/system_alerts_resolution_table.md`).
+        alert_type: `system_alerts.alert_type` (categoría).
+        alert_title: título humano que aparece en el alert.
+        is_failure: True si la corrida del cron debe contarse como fallo.
+        threshold: N fallos consecutivos para emitir alert. Default 2 (mismo
+            que `_shopping_coherence_alert_job`).
+        last_error: repr de la última excepción (opcional).
+        extra_metadata: dict adicional a embeber en el alert (best-effort).
+
+    Tooltip-anchor: P1-CRON-CONSECUTIVE-FAIL.
+    """
+    try:
+        kv_key = f"cron_failures_count:{cron_name}"
+        row = execute_sql_query(
+            "SELECT value FROM app_kv_store WHERE key = %s",
+            (kv_key,),
+            fetch_one=True,
+        )
+        prev_count = 0
+        if row and isinstance(row, dict):
+            raw = row.get("value")
+            if isinstance(raw, dict):
+                prev_count = int(raw.get("count", 0) or 0)
+
+        if is_failure:
+            new_count = prev_count + 1
+            payload = {
+                "count": new_count,
+                "last_failure_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if last_error:
+                payload["last_error"] = str(last_error)[:500]
+            if extra_metadata:
+                payload["last_metadata"] = extra_metadata
+            execute_sql_write(
+                """
+                INSERT INTO app_kv_store (key, value, updated_at)
+                VALUES (%s, %s::jsonb, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = NOW()
+                """,
+                (kv_key, json.dumps(payload, ensure_ascii=False)),
+            )
+            if new_count >= threshold:
+                execute_sql_write(
+                    """
+                    INSERT INTO system_alerts
+                        (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                    VALUES (%s, %s, 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                    ON CONFLICT (alert_key) DO UPDATE
+                    SET triggered_at = NOW(),
+                        metadata = EXCLUDED.metadata,
+                        resolved_at = NULL
+                    """,
+                    (
+                        alert_key,
+                        alert_type,
+                        alert_title,
+                        (
+                            f"`{cron_name}` acumuló {new_count} fallos consecutivos "
+                            f"(umbral={threshold}). last_error={last_error!r}. "
+                            f"Investigar antes de que silencio prolongado degrade el sistema."
+                        ),
+                        json.dumps(payload, ensure_ascii=False),
+                        json.dumps([]),
+                    ),
+                )
+        elif prev_count > 0:
+            # Run sin fallo → reset + auto-resolve.
+            execute_sql_write(
+                """
+                INSERT INTO app_kv_store (key, value, updated_at)
+                VALUES (%s, %s::jsonb, NOW())
+                ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = NOW()
+                """,
+                (
+                    kv_key,
+                    json.dumps(
+                        {"count": 0, "last_reset_at": datetime.now(timezone.utc).isoformat()},
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            try:
+                execute_sql_write(
+                    "UPDATE system_alerts SET resolved_at = NOW() "
+                    "WHERE alert_key = %s AND resolved_at IS NULL",
+                    (alert_key,),
+                )
+            except Exception:
+                pass
+    except Exception as _trk_err:
+        logger.debug(
+            f"[P1-CRON-CONSECUTIVE-FAIL] tracker para {cron_name} falló "
+            f"(best-effort): {_trk_err}"
+        )
+
+
+# ============================================================
+# [P1-CRON-TIMEOUT · 2026-05-26] Helper para envolver llamadas sync con
+# timeout duro per-iteration. Pensado para crons que iteran sobre N
+# usuarios y necesitan garantizar que un user atascado NO bloquee el resto.
+# ------------------------------------------------------------
+# Implementación: spawn daemon thread con `join(timeout)`. Si el join
+# vence sin que el thread termine, levantamos `TimeoutError`. El thread
+# original sigue ejecutando (Python no soporta thread cancellation), pero
+# es daemon → no bloquea shutdown del proceso. Eventualmente termina o
+# el proceso reinicia.
+#
+# NO usamos `signal.alarm` (Unix main-thread only, incompatible con
+# APScheduler worker threads ni Windows). NO usamos `concurrent.futures
+# .ThreadPoolExecutor` como context manager (su `__exit__` espera join
+# de todos los workers → exactamente lo que queremos evitar).
+#
+# Tooltip-anchor: P1-CRON-TIMEOUT.
+# ============================================================
+def _call_with_timeout(fn, timeout_s: float, *args, **kwargs):
+    """Envuelve una llamada sync con timeout duro. Si vence, raises
+    `TimeoutError` y el thread continúa en background (daemon)."""
+    import threading
+    result_box: dict = {"value": None, "error": None}
+
+    def _wrapper():
+        try:
+            result_box["value"] = fn(*args, **kwargs)
+        except BaseException as e:
+            result_box["error"] = e
+
+    t = threading.Thread(
+        target=_wrapper, daemon=True,
+        name=f"timed-{getattr(fn, '__name__', 'callable')}"
+    )
+    t.start()
+    t.join(timeout=float(timeout_s))
+    if t.is_alive():
+        raise TimeoutError(
+            f"{getattr(fn, '__name__', 'callable')} excedió {timeout_s}s"
+        )
+    if result_box["error"] is not None:
+        raise result_box["error"]
+    return result_box["value"]
+
+
+# ============================================================
 # [P1-CHUNKS-2] Excepción dedicada para señalizar que la reconciliación de
 # reservas agotó sus retries y el caller DEBE liberar+pausar antes de cualquier
 # acción posterior.
@@ -745,7 +927,14 @@ def _shopping_coherence_alert_job():
         # un valor fuera de rango (e.g. "1.5" o "-0.1") en lugar de propagar valor
         # absurdo a la lógica de alerta. `_env_int` ya maneja parse-failures
         # internamente (loguea WARNING + cae al default + marca `parse_failed=True`).
-        min_plans = _env_int("MEALFIT_COH_ALERT_MIN_PLANS", 5)
+        # [P1-KNOB-CLAMPS · 2026-05-26] Clamp [1, 10_000]. Pre-fix `_env_int`
+        # sin validator: operador con typo `MEALFIT_COH_ALERT_MIN_PLANS=0` o `-5`
+        # disparaba el guard `< min_plans` siempre (skip silencioso) o nunca
+        # (todos los runs evaluaban con 0 planes generando alertas falsas).
+        min_plans = _env_int(
+            "MEALFIT_COH_ALERT_MIN_PLANS", 5,
+            validator=lambda v: 1 <= v <= 10_000,
+        )
         cap_ratio_threshold = _env_float(
             "MEALFIT_COH_ALERT_CAP_RATIO", 0.05, validator=lambda v: 0.0 < v < 1.0
         )
@@ -1541,8 +1730,18 @@ def _alert_failed_inventory_deductions_backlog() -> None:
     No falla si supabase no está disponible (skip silencioso, mismo patrón
     que `_alert_deploy_lag_marker_stale`).
     """
-    threshold = _env_int("MEALFIT_FAILED_DEDUCTIONS_ALERT_THRESHOLD", 25)
-    lookback_h = _env_int("MEALFIT_FAILED_DEDUCTIONS_ALERT_LOOKBACK_H", 24)
+    # [P1-KNOB-CLAMPS · 2026-05-26] Clamp [1, 100_000] threshold y [1, 720] lookback.
+    # Pre-fix sin validator: operador con typo (`-5`, `100_000_000`) causaba skip
+    # silente o alertas constantes vacías. El guard `<= 0` pre-existente sigue
+    # como defensa-en-profundidad pero ya no debería disparar.
+    threshold = _env_int(
+        "MEALFIT_FAILED_DEDUCTIONS_ALERT_THRESHOLD", 25,
+        validator=lambda v: 1 <= v <= 100_000,
+    )
+    lookback_h = _env_int(
+        "MEALFIT_FAILED_DEDUCTIONS_ALERT_LOOKBACK_H", 24,
+        validator=lambda v: 1 <= v <= 720,
+    )
     if threshold <= 0 or lookback_h <= 0:
         return
 
@@ -3177,6 +3376,23 @@ def _resolve_stale_scheduler_alerts() -> None:
             f"[P2-B-OBS] sweep tick emit falló (best-effort): {_tick_err}"
         )
 
+    # [P1-CRON-CONSECUTIVE-FAIL · 2026-05-26] El primary sweep es el "standard".
+    # Si `sweep_failed=True` el cron core no resolvió alerts huérfanas → fallo
+    # del cron global. Los demás (cascade, orphan, hard_cap) son enhancements
+    # y pueden fallar sin que el cron principal esté roto.
+    _track_cron_consecutive_failure(
+        "resolve_stale_scheduler_alerts",
+        "resolve_stale_scheduler_alerts_failures_burst",
+        "resolve_stale_scheduler_alerts_failures_burst",
+        "Cron resolve_stale_scheduler_alerts con fallos consecutivos",
+        is_failure=sweep_failed,
+        extra_metadata={
+            "swept_standard": swept_count,
+            "swept_oneoff": oneoff_swept,
+            "ttl_hours": ttl_h,
+        },
+    )
+
 
 def _resolve_stale_plan_quality_alerts() -> None:
     """[P2-NEW-10 · 2026-05-11] Auto-resolve para alerts `plan_quality_degraded:*`
@@ -3562,6 +3778,360 @@ def _sweep_stale_emit_locks_kv() -> None:
         )
 
 
+# [P1-KV-SWEEP · 2026-05-26] Catálogo de prefixes con TTL declarado per-prefix.
+# El sweep `_sweep_stale_app_kv_store_prefixes` itera esta lista. Para añadir
+# un nuevo prefix: añade entrada (prefix, knob_name, default_h, clamp_lo,
+# clamp_hi). Mantén el mapeo en el test parser-based — la tabla es el contrato.
+#
+# Por qué un sweep unificado en vez de uno por prefix:
+#   Postgres no tiene TTL nativo. Los keys SET en distintos módulos
+#   (`agent.py::title_gen_inflight`, `db_plans.py::pending_pipeline`,
+#   `graph_orchestrator.py::rag_/reflection_`) confían en SELECT-side TTL
+#   (`WHERE updated_at > NOW() - INTERVAL N`) pero NUNCA borran DB-side.
+#   Filas muertas acumulan linealmente en N_users × N_profile_texts.
+#   Audit 2026-05-26 observó keys de 449h vivas en zero canonical. Un
+#   sweep único centralizado (vs N crons separados) reduce overhead +
+#   concentra la lista de prefixes para auditarla fácil.
+_KV_SWEEP_PREFIXES: list[dict] = [
+    {
+        "prefix": "title_gen_inflight:",
+        "knob": "MEALFIT_KV_TTL_TITLE_GEN_INFLIGHT_HOURS",
+        "default_h": 1,
+        "clamp": (1, 24),
+        "owner": "agent.py:1247 (TTL 5min inline, sin DELETE en path crash)",
+    },
+    {
+        "prefix": "pending_pipeline:",
+        "knob": "MEALFIT_KV_TTL_PENDING_PIPELINE_HOURS",
+        "default_h": 6,
+        "clamp": (1, 168),
+        "owner": "db_plans.py:72 (clear_pending_pipeline no always invoked)",
+    },
+    {
+        "prefix": "rag_",
+        "knob": "MEALFIT_KV_TTL_RAG_CACHE_HOURS",
+        "default_h": 24,
+        "clamp": (1, 168),
+        "owner": "graph_orchestrator.py::_LLM_CACHE.aset (TTL 300s SELECT-side)",
+    },
+    {
+        "prefix": "reflection_",
+        "knob": "MEALFIT_KV_TTL_REFLECTION_CACHE_HOURS",
+        "default_h": 24,
+        "clamp": (1, 168),
+        "owner": "graph_orchestrator.py:10899 (cache reflection meta-learning)",
+    },
+]
+
+
+def _sweep_stale_app_kv_store_prefixes() -> None:
+    """[P1-KV-SWEEP · 2026-05-26] GC unificado de keys stale en `app_kv_store`.
+
+    Audit prod-readiness 2026-05-26 observó leak garantizado en 3 patterns:
+      - `title_gen_inflight:*` — 5 keys huérfanas de 97h a 134h (SET en
+        agent.py:1247 con TTL inline 5min, NUNCA DELETE explícito; crash
+        de worker deja fila forever).
+      - `rag_<user>_<profile>` y `reflection_<user>_<...>` — keys de 62h,
+        127h, 449h. TTL 300s en SELECT-side via `make_interval(secs => 300)`
+        no garbage-collecta DB-side.
+      - `pending_pipeline:<user_id>` — 1 key de 62h con status=complete
+        (caller olvidó `clear_pending_pipeline`).
+
+    Estrategia: itera `_KV_SWEEP_PREFIXES` (catálogo declarativo), aplica
+    `DELETE WHERE key LIKE prefix%% AND updated_at < NOW() - INTERVAL N h`
+    por prefix con knob/default/clamp dedicado. Patrón espejo de
+    `_sweep_stale_emit_locks_kv` (P2-NEW-16) y `_sweep_stale_llm_circuit_
+    breakers` (P2-NEW-D).
+
+    Best-effort: errores per-prefix se loguean sin abortar el resto.
+    Emite tick observable `_sweep_stale_app_kv_store_prefixes_tick` con
+    counts por prefix.
+
+    Registrado en `register_plan_chunk_scheduler` con knob
+    `MEALFIT_KV_SWEEP_INTERVAL_MIN` (default 60, clamp [15, 1440]).
+
+    Tooltip-anchor: P1-KV-SWEEP-START.
+    """
+    per_prefix_counts: dict[str, int] = {}
+    per_prefix_failed: dict[str, bool] = {}
+
+    for spec in _KV_SWEEP_PREFIXES:
+        prefix = spec["prefix"]
+        knob = spec["knob"]
+        default_h = spec["default_h"]
+        clamp_lo, clamp_hi = spec["clamp"]
+        ttl_h = _env_int(
+            knob,
+            default_h,
+            validator=lambda v, lo=clamp_lo, hi=clamp_hi: lo <= v <= hi,
+        )
+        per_prefix_counts[prefix] = 0
+        per_prefix_failed[prefix] = False
+        try:
+            # `LIKE 'prefix%%'` — el `%%` se escapa en psycopg para emitir `%`
+            # literal (el SQL final ejecutado es `LIKE 'prefix%'`). El `prefix`
+            # mismo viene del catálogo controlado `_KV_SWEEP_PREFIXES` (no de
+            # input externo) → no es vector de injection.
+            deleted = execute_sql_write(
+                f"""
+                DELETE FROM app_kv_store
+                WHERE key LIKE %s
+                  AND updated_at < NOW() - make_interval(hours => %s)
+                RETURNING key
+                """,
+                (f"{prefix}%", int(ttl_h)),
+                returning=True,
+            ) or []
+            count = len(deleted) if isinstance(deleted, list) else 0
+            per_prefix_counts[prefix] = count
+            if count:
+                sample = [r.get("key") for r in deleted[:3] if isinstance(r, dict)]
+                logger.info(
+                    f"[P1-KV-SWEEP] DELETE {count} stale `{prefix}*` "
+                    f"keys (ttl_h={ttl_h}). Sample: {sample}"
+                )
+        except Exception as e:
+            per_prefix_failed[prefix] = True
+            logger.warning(
+                f"[P1-KV-SWEEP] sweep prefix=`{prefix}` falló "
+                f"(best-effort, ttl_h={ttl_h}): {e}"
+            )
+
+    total_deleted = sum(per_prefix_counts.values())
+    any_failed = any(per_prefix_failed.values())
+
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)
+            """,
+            (
+                "_sweep_stale_app_kv_store_prefixes_tick",
+                json.dumps({
+                    "total_deleted": total_deleted,
+                    "per_prefix_counts": per_prefix_counts,
+                    "per_prefix_failed": per_prefix_failed,
+                    "n_prefixes": len(_KV_SWEEP_PREFIXES),
+                }, ensure_ascii=False),
+            ),
+        )
+    except Exception as _tick_err:
+        logger.debug(
+            f"[P1-KV-SWEEP] tick emit falló (best-effort): {_tick_err}"
+        )
+
+    # [P1-CRON-CONSECUTIVE-FAIL · 2026-05-26] El tracker reusa el helper
+    # SSOT. Se considera fallo del cron si TODOS los prefixes fallaron
+    # (alguno OK significa que la conexión DB sirve; fallo total apunta
+    # a problema sistémico).
+    is_failure = any_failed and all(per_prefix_failed.values())
+    _track_cron_consecutive_failure(
+        "sweep_stale_app_kv_store_prefixes",
+        "sweep_stale_app_kv_store_prefixes_failures_burst",
+        "sweep_stale_app_kv_store_prefixes_failures_burst",
+        "Cron sweep_stale_app_kv_store_prefixes con fallos consecutivos",
+        is_failure=is_failure,
+        extra_metadata={"per_prefix_counts": per_prefix_counts,
+                        "per_prefix_failed": per_prefix_failed},
+    )
+
+
+def _sweep_stale_scheduler_missed_alerts() -> None:
+    """[P1-ORPHAN-MISSED-SWEEP · 2026-05-27] Cierra alerts `scheduler_missed_*`
+    huérfanas cuyo job NO re-ejecutó dentro de la ventana de observación.
+
+    Gap observado en audit 2026-05-27: el listener `_scheduler_alert_listener`
+    auto-resuelve `scheduler_missed_<job>` cuando ese mismo job dispara
+    `EVENT_JOB_EXECUTED` (P1-NEW-2). Funciona para jobs frecuentes (interval
+    1-2min) pero NO para jobs raros (interval ≥30min): la alert se queda
+    `resolved_at IS NULL` indefinidamente hasta el próximo tick legítimo.
+
+    Live evidence 2026-05-27: cascada de 25 misses post-restart EasyPanel.
+    6 jobs frecuentes auto-resolvieron en 20s vía listener; 19 jobs raros
+    (cada 30min/1h) siguieron unresolved 7+min después. Dashboard de alerts
+    activas se ensucia con cada cold-start, agitando SRE.
+
+    Estrategia:
+      1. Query alerts `scheduler_missed_*` AND resolved_at IS NULL AND
+         triggered_at < NOW() - MEALFIT_SCHEDULER_MISSED_SWEEP_AGE_HOURS.
+      2. **Guard sistémico**: si existe `scheduler_cascade_missed`
+         resolved_at IS NULL en la ventana reciente (1h por defecto), NO
+         cerrar los hijos — la cascada sigue activa y los misses son señal
+         de problema sistémico que SRE debe ver enteros (parent + hijos).
+      3. Si no hay parent activo: UPDATE batch resolved_at=NOW() + metadata
+         marcando `resolved_by='time_based_sweep'` (auditabilidad).
+      4. Tick observable + tracker consecutive-failure (mismo patrón
+         P1-CRON-BUNDLE).
+
+    Por qué time-based (no event-based):
+      Idealmente verificaríamos "el job ejecutó después del triggered_at"
+      cruzando con `EVENT_JOB_EXECUTED` events de APScheduler. Pero
+      APScheduler no persiste eventos (solo viven en el listener in-process)
+      y `pipeline_metrics` por job es opt-in (no todos los crons emiten).
+      Cruzar contra `pipeline_metrics` produciría falsos negativos masivos.
+      Time-based con guard de cascade activo es el balance correcto: alerts
+      huérfanas se cierran tras 2h asumiendo transient; cascadas reales se
+      preservan mientras el parent vive.
+
+    Knobs:
+      MEALFIT_SCHEDULER_MISSED_SWEEP_INTERVAL_MIN (default 60, clamp [15, 1440])
+      MEALFIT_SCHEDULER_MISSED_SWEEP_AGE_HOURS   (default 2,  clamp [1, 72])
+      MEALFIT_SCHEDULER_MISSED_SWEEP_BATCH_LIMIT (default 100, clamp [1, 1000])
+      MEALFIT_SCHEDULER_MISSED_SWEEP_CASCADE_LOOKBACK_MIN (default 60, clamp [10, 360])
+        Ventana en la que un `scheduler_cascade_missed` activo bloquea el sweep.
+
+    Modelo `system_alerts`: Auto-explicit (este cron RESUELVE alerts; no
+    emite alerts propias salvo via `_track_cron_consecutive_failure` →
+    `sweep_stale_scheduler_missed_alerts_failures_burst`).
+
+    Tooltip-anchor: P1-ORPHAN-MISSED-SWEEP.
+    """
+    from knobs import _env_int as _knob_env_int  # noqa: F401  (re-import defensive)
+
+    age_h = _env_int(
+        "MEALFIT_SCHEDULER_MISSED_SWEEP_AGE_HOURS",
+        2,
+        validator=lambda v: 1 <= v <= 72,
+    )
+    batch_limit = _env_int(
+        "MEALFIT_SCHEDULER_MISSED_SWEEP_BATCH_LIMIT",
+        100,
+        validator=lambda v: 1 <= v <= 1000,
+    )
+    cascade_lookback_min = _env_int(
+        "MEALFIT_SCHEDULER_MISSED_SWEEP_CASCADE_LOOKBACK_MIN",
+        60,
+        validator=lambda v: 10 <= v <= 360,
+    )
+
+    closed_count = 0
+    cascade_active = False
+    sweep_failed = False
+    last_error: str | None = None
+
+    try:
+        # Guard sistémico: ¿hay cascada activa?
+        cascade_row = execute_sql_query(
+            """
+            SELECT 1
+              FROM system_alerts
+             WHERE alert_key = 'scheduler_cascade_missed'
+               AND resolved_at IS NULL
+               AND triggered_at > NOW() - make_interval(mins => %s)
+             LIMIT 1
+            """,
+            (int(cascade_lookback_min),),
+            fetch_one=True,
+        )
+        cascade_active = bool(cascade_row)
+
+        if cascade_active:
+            logger.info(
+                f"[P1-ORPHAN-MISSED-SWEEP] Skip — cascada activa "
+                f"(`scheduler_cascade_missed` resolved_at IS NULL en últimos "
+                f"{cascade_lookback_min}min). Los misses huérfanos se "
+                f"preservan mientras el parent vive (señal sistémica)."
+            )
+        else:
+            # No hay parent activo → cerrar huérfanos.
+            # `id IN (SELECT ... LIMIT N)` cap defensivo si la primera corrida
+            # tras ventanas largas tiene >batch_limit candidatos.
+            closed_rows = execute_sql_write(
+                """
+                UPDATE system_alerts
+                   SET resolved_at = NOW(),
+                       metadata = COALESCE(metadata, '{}'::jsonb)
+                                  || jsonb_build_object(
+                                       'resolved_by', 'time_based_sweep',
+                                       'resolved_age_hours_floor', %s,
+                                       'resolved_at_sweep', NOW()::text
+                                     )
+                 WHERE id IN (
+                     SELECT id
+                       FROM system_alerts
+                      WHERE alert_key LIKE 'scheduler_missed_%%'
+                        AND resolved_at IS NULL
+                        AND triggered_at < NOW() - make_interval(hours => %s)
+                      LIMIT %s
+                 )
+                 RETURNING alert_key
+                """,
+                (int(age_h), int(age_h), int(batch_limit)),
+                returning=True,
+            ) or []
+            closed_count = len(closed_rows) if isinstance(closed_rows, list) else 0
+
+            if closed_count:
+                sample = [
+                    r.get("alert_key")
+                    for r in closed_rows[:5]
+                    if isinstance(r, dict)
+                ]
+                logger.info(
+                    f"[P1-ORPHAN-MISSED-SWEEP] Cerradas {closed_count} alerts "
+                    f"`scheduler_missed_*` huérfanas (age >{age_h}h, "
+                    f"batch={batch_limit}). Sample: {sample}"
+                )
+    except Exception as e:
+        sweep_failed = True
+        last_error = f"{type(e).__name__}: {e}"
+        logger.warning(
+            f"[P1-ORPHAN-MISSED-SWEEP] Sweep falló (best-effort): {last_error}"
+        )
+
+    # Tick observable: SIEMPRE emit (con count=0 si no cerró nada o cascada
+    # activa). Permite a SRE confirmar liveness del cron en pipeline_metrics
+    # incluso cuando no hace trabajo.
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO pipeline_metrics
+                (user_id, session_id, node, duration_ms, retries,
+                 tokens_estimated, confidence, metadata)
+            VALUES (NULL, NULL, %s, 0, 0, %s, 0, %s::jsonb)
+            """,
+            (
+                "_sweep_stale_scheduler_missed_alerts_tick",
+                int(closed_count),
+                json.dumps(
+                    {
+                        "age_h": int(age_h),
+                        "batch_limit": int(batch_limit),
+                        "cascade_lookback_min": int(cascade_lookback_min),
+                        "closed_count": int(closed_count),
+                        "cascade_active": bool(cascade_active),
+                        "sweep_failed": bool(sweep_failed),
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+    except Exception as _tick_err:
+        logger.debug(
+            f"[P1-ORPHAN-MISSED-SWEEP] tick emit falló (best-effort): {_tick_err}"
+        )
+
+    # Consecutive-failure tracker (mismo patrón P1-CRON-BUNDLE).
+    # NOTA: cascade_active=True NO es failure — es señal de que el sistema
+    # está protegiendo el parent. Solo `sweep_failed` cuenta como fallo real.
+    _track_cron_consecutive_failure(
+        "sweep_stale_scheduler_missed_alerts",
+        "sweep_stale_scheduler_missed_alerts_failures_burst",
+        "sweep_stale_scheduler_missed_alerts_failures_burst",
+        "Cron sweep_stale_scheduler_missed_alerts con fallos consecutivos",
+        is_failure=sweep_failed,
+        last_error=last_error,
+        extra_metadata={
+            "closed_count": int(closed_count),
+            "cascade_active": bool(cascade_active),
+            "age_h": int(age_h),
+        },
+    )
+
+
 def _gc_orphan_chunk_telemetry():
     """[P2-HIST-5 · 2026-05-09] Garbage-collect rows huérfanas de
     `chunk_lesson_telemetry` y `chunk_deferrals` con `meal_plan_id IS NULL`
@@ -3782,6 +4352,162 @@ def _gc_orphan_conversation_summaries():
         logger.warning(
             f"[P2-NEW-6/SUMMARIES-GC] DELETE falló (best-effort): {e}"
         )
+
+
+def _purge_old_pipeline_metrics():
+    """[P1-PROD-AUDIT-BUNDLE · 2026-05-28] Retención age-based de
+    `pipeline_metrics`. Tooltip-anchor: P1-PIPELINE-METRICS-RETENTION.
+
+    Por qué existe:
+      `pipeline_metrics` es append-only: ~40 callsites INSERT (cada tick de
+      cron emite un heartbeat) → ~1.5–1.9k filas/día (~550k/año). NO había
+      ningún DELETE age-based en el codebase (solo un DELETE puntual de probe
+      en graph_orchestrator.py). Write-amplification puro + los watchdogs que
+      hacen `MAX(created_at) WHERE node LIKE '_%_tick'` full-scanean una tabla
+      monótonamente creciente. Sin retención, query perf se degrada a escala.
+
+    Política (espejo de `_gc_orphan_chunk_telemetry` P2-HIST-5):
+      - Borra TODAS las filas (no solo huérfanas) con
+        `created_at < NOW() - MEALFIT_PIPELINE_METRICS_RETENTION_DAYS` (30).
+        `pipeline_metrics` es telemetría operacional; 30 días cubre el lookback
+        más largo que consume cualquier cron (P3-B = 1h, watchdogs = 7d).
+      - Knob kill-switch `MEALFIT_PIPELINE_METRICS_GC_ENABLED` (default True).
+      - Cap defensivo `MEALFIT_PIPELINE_METRICS_GC_MAX_ROWS` (default 50000)
+        por run, vía `id IN (SELECT id ... LIMIT n)` — evita lock contention en
+        el primer run tras meses sin GC; runs sucesivos limpian el resto.
+      - `retention_days <= 0` → skip (no destruir todo sin buffer).
+
+    Read-write idempotente, best-effort: cualquier fallo se loguea sin abortar
+    otros crons.
+    """
+    from knobs import _env_bool
+
+    enabled = _env_bool("MEALFIT_PIPELINE_METRICS_GC_ENABLED", True)
+    if not enabled:
+        logger.info(
+            "[P1-PIPELINE-METRICS-RETENTION] knob "
+            "MEALFIT_PIPELINE_METRICS_GC_ENABLED=false — skip."
+        )
+        return
+
+    retention_days = _env_int("MEALFIT_PIPELINE_METRICS_RETENTION_DAYS", 30)
+    if retention_days <= 0:
+        logger.warning(
+            f"[P1-PIPELINE-METRICS-RETENTION] retention_days={retention_days} <= 0 "
+            "— skip (set MEALFIT_PIPELINE_METRICS_RETENTION_DAYS >= 1 para activar)."
+        )
+        return
+
+    max_rows = _env_int("MEALFIT_PIPELINE_METRICS_GC_MAX_ROWS", 50000)
+    if max_rows <= 0:
+        max_rows = 50000
+
+    try:
+        from db_core import execute_sql_write
+    except Exception as e:
+        logger.warning(f"[P1-PIPELINE-METRICS-RETENTION] db_core import falló: {e}")
+        return
+
+    try:
+        sql = (
+            "DELETE FROM pipeline_metrics "
+            "WHERE id IN ( "
+            "  SELECT id FROM pipeline_metrics "
+            "  WHERE created_at < NOW() - make_interval(days => %s) "
+            "  LIMIT %s "
+            ") "
+            "RETURNING id"
+        )
+        res = execute_sql_write(sql, (retention_days, max_rows), returning=True)
+        n_purged = len(res or [])
+    except Exception as e:
+        logger.warning(
+            f"[P1-PIPELINE-METRICS-RETENTION] DELETE falló (best-effort): {e}"
+        )
+        return
+
+    if n_purged > 0:
+        logger.info(
+            f"[P1-PIPELINE-METRICS-RETENTION] purgadas {n_purged} filas de "
+            f"pipeline_metrics (retention={retention_days}d, cap={max_rows})."
+        )
+    else:
+        logger.info(
+            f"[P1-PIPELINE-METRICS-RETENTION] no hay filas > {retention_days}d. Skip."
+        )
+
+
+def _purge_old_usage_events():
+    """[P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Retención age-based de las tablas
+    de uso/costo append-only `llm_usage_events` y `api_usage`.
+    Tooltip-anchor: P2-USAGE-EVENTS-RETENTION.
+
+    Por qué existe:
+      Ambas son append-only sin purga (audit prod-readiness 2026-05-28):
+      `llm_usage_events` (~1.1k filas / 448 KB, 4 índices) y `api_usage`
+      (~145 filas) solo crecen. Misma clase que pipeline_metrics (P1-4) pero
+      menor volumen — retención más larga (90d) porque son logs de costo
+      útiles para analytics de billing.
+
+    Política (espejo de `_purge_old_pipeline_metrics`):
+      - Knob kill-switch `MEALFIT_USAGE_EVENTS_GC_ENABLED` (default True).
+      - `MEALFIT_USAGE_EVENTS_RETENTION_DAYS` (default 90, skip si <= 0).
+      - Cap `MEALFIT_USAGE_EVENTS_GC_MAX_ROWS` (default 50000) por tabla/run.
+      - Ambas tienen `id UUID` + `created_at` (verificado) → patrón
+        `id IN (SELECT id ... LIMIT n)`.
+
+    Read-write idempotente, best-effort.
+    """
+    from knobs import _env_bool
+
+    enabled = _env_bool("MEALFIT_USAGE_EVENTS_GC_ENABLED", True)
+    if not enabled:
+        logger.info("[P2-USAGE-EVENTS-RETENTION] knob GC_ENABLED=false — skip.")
+        return
+
+    retention_days = _env_int("MEALFIT_USAGE_EVENTS_RETENTION_DAYS", 90)
+    if retention_days <= 0:
+        logger.warning(
+            f"[P2-USAGE-EVENTS-RETENTION] retention_days={retention_days} <= 0 — skip "
+            "(set MEALFIT_USAGE_EVENTS_RETENTION_DAYS >= 1 para activar)."
+        )
+        return
+
+    max_rows = _env_int("MEALFIT_USAGE_EVENTS_GC_MAX_ROWS", 50000)
+    if max_rows <= 0:
+        max_rows = 50000
+
+    try:
+        from db_core import execute_sql_write
+    except Exception as e:
+        logger.warning(f"[P2-USAGE-EVENTS-RETENTION] db_core import falló: {e}")
+        return
+
+    # Whitelist hardcodeada de tablas (NUNCA interpolar nombre de tabla de input).
+    for table_name in ("llm_usage_events", "api_usage"):
+        try:
+            sql = (
+                f"DELETE FROM {table_name} "
+                f"WHERE id IN ( "
+                f"  SELECT id FROM {table_name} "
+                f"  WHERE created_at < NOW() - make_interval(days => %s) "
+                f"  LIMIT %s "
+                f") "
+                f"RETURNING id"
+            )
+            res = execute_sql_write(sql, (retention_days, max_rows), returning=True)
+            n = len(res or [])
+            if n > 0:
+                logger.info(
+                    f"[P2-USAGE-EVENTS-RETENTION] purgadas {n} filas de {table_name} "
+                    f"(retention={retention_days}d, cap={max_rows})."
+                )
+        except Exception as e:
+            logger.warning(
+                f"[P2-USAGE-EVENTS-RETENTION] DELETE en {table_name} falló "
+                f"(best-effort): {e}"
+            )
+            continue
 
 
 # [P0-NEW-2 · 2026-05-10] Jitter SSOT para todos los `add_job` registrados
@@ -4123,21 +4849,55 @@ def _drain_pending_facts_queue() -> None:
 
     Knob `MEALFIT_PENDING_FACTS_DRAIN_INTERVAL_MIN` (default 1, clamp [1, 30]).
 
+    [P1-CRON-CONSECUTIVE-FAIL · 2026-05-26] Tracker `_track_cron_consecutive_
+    failure` emite `drain_pending_facts_queue_failures_burst` cuando el cron
+    falla 2 corridas seguidas (default umbral). "Fallo" = imports cayeron,
+    query DISTINCT cayó, O todos los usuarios fallaron individualmente.
+    Failures per-user aislados NO cuentan como fallo del cron global (es
+    business-as-usual que algún user_id sea problemático puntualmente).
+
+    [P1-FACTS-DRAIN-BATCH · 2026-05-26] Batching via
+    `MEALFIT_FACTS_DRAIN_USERS_PER_TICK` (default 100, clamp [10, 500]).
+    Pre-fix: `SELECT DISTINCT user_id` sin LIMIT podía retornar 1000+ filas
+    bajo backlog acumulado → cron tick supera intervalo (60s default) →
+    APScheduler acumula MISSED → cascada potencial. El batch deja el resto
+    para el próximo tick (cron corre cada 1m por default, drena ~6k users/h).
+
     Tooltip-anchor: P1-AUDIT-1-DRAIN | trigger DB eliminado 2026-05-12.
     """
+    is_failure = False
+    last_error: str | None = None
+    drained_users = 0
     try:
-        from db_core import execute_sql_query
+        from db_core import execute_sql_query  # noqa: F401 (re-import idempotente)
     except Exception as imp_err:
         logger.warning(
             f"[P1-AUDIT-1] drain_pending_facts_queue: import db_core falló "
             f"(best-effort skip): {imp_err}"
         )
+        last_error = f"import db_core failed: {imp_err!r}"
+        _track_cron_consecutive_failure(
+            "drain_pending_facts_queue",
+            "drain_pending_facts_queue_failures_burst",
+            "drain_pending_facts_queue_failures_burst",
+            "Cron drain_pending_facts_queue con fallos consecutivos",
+            is_failure=True,
+            last_error=last_error,
+        )
         return
+
+    batch_limit = _env_int(
+        "MEALFIT_FACTS_DRAIN_USERS_PER_TICK",
+        100,
+        validator=lambda v: 10 <= v <= 500,
+    )
 
     try:
         rows = execute_sql_query(
             "SELECT DISTINCT user_id FROM pending_facts_queue "
-            "WHERE user_id IS NOT NULL",
+            "WHERE user_id IS NOT NULL "
+            "LIMIT %s",
+            (int(batch_limit),),
             fetch_all=True,
         ) or []
     except Exception as q_err:
@@ -4145,9 +4905,25 @@ def _drain_pending_facts_queue() -> None:
             f"[P1-AUDIT-1] drain_pending_facts_queue: query DISTINCT user_id "
             f"falló: {q_err}"
         )
+        _track_cron_consecutive_failure(
+            "drain_pending_facts_queue",
+            "drain_pending_facts_queue_failures_burst",
+            "drain_pending_facts_queue_failures_burst",
+            "Cron drain_pending_facts_queue con fallos consecutivos",
+            is_failure=True,
+            last_error=f"query failed: {q_err!r}",
+        )
         return
 
     if not rows:
+        # Tick exitoso (cola vacía es estado válido).
+        _track_cron_consecutive_failure(
+            "drain_pending_facts_queue",
+            "drain_pending_facts_queue_failures_burst",
+            "drain_pending_facts_queue_failures_burst",
+            "Cron drain_pending_facts_queue con fallos consecutivos",
+            is_failure=False,
+        )
         return
 
     try:
@@ -4157,21 +4933,48 @@ def _drain_pending_facts_queue() -> None:
             f"[P1-AUDIT-1] drain_pending_facts_queue: import "
             f"fact_extractor.process_pending_queue_sync falló: {imp_err}"
         )
+        _track_cron_consecutive_failure(
+            "drain_pending_facts_queue",
+            "drain_pending_facts_queue_failures_burst",
+            "drain_pending_facts_queue_failures_burst",
+            "Cron drain_pending_facts_queue con fallos consecutivos",
+            is_failure=True,
+            last_error=f"import process_pending_queue_sync failed: {imp_err!r}",
+        )
         return
 
-    drained_users = 0
+    user_failures = 0
+    total_users = 0
     for row in rows:
         uid = row.get("user_id") if isinstance(row, dict) else None
         if not uid:
             continue
+        total_users += 1
         try:
             process_pending_queue_sync(uid)
             drained_users += 1
         except Exception as u_err:
+            user_failures += 1
+            last_error = f"user_id={uid}: {u_err!r}"
             logger.warning(
                 f"[P1-AUDIT-1] drain_pending_facts_queue: drenaje "
                 f"falló para user={uid}: {u_err}"
             )
+
+    # "Fallo" del cron = TODOS los usuarios procesados fallaron (>=1 user
+    # con backlog y 0 drained). Si algunos OK y otros no, NO es fallo del
+    # cron global — los errors per-user ya están logueados arriba.
+    is_failure = total_users > 0 and drained_users == 0
+    _track_cron_consecutive_failure(
+        "drain_pending_facts_queue",
+        "drain_pending_facts_queue_failures_burst",
+        "drain_pending_facts_queue_failures_burst",
+        "Cron drain_pending_facts_queue con fallos consecutivos",
+        is_failure=is_failure,
+        last_error=last_error,
+        extra_metadata={"total_users": total_users, "drained": drained_users,
+                        "user_failures": user_failures, "batch_limit": int(batch_limit)},
+    )
 
     if drained_users:
         logger.info(
@@ -5072,6 +5875,49 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"registrado cada {_ORPHAN_GC_INT}h."
         )
 
+    # [P1-PROD-AUDIT-BUNDLE · 2026-05-28] Retención age-based de
+    # `pipeline_metrics` (append-only, ~1.5–1.9k filas/día, sin GA previo).
+    # Diario por default; knob `MEALFIT_PIPELINE_METRICS_GC_INTERVAL_HOURS`.
+    if not scheduler.get_job("purge_old_pipeline_metrics"):
+        _PM_GC_INT = _env_int("MEALFIT_PIPELINE_METRICS_GC_INTERVAL_HOURS", 24)
+        if _PM_GC_INT < 1:
+            _PM_GC_INT = 24
+        _add_job_jittered(scheduler,
+            _purge_old_pipeline_metrics,
+            "interval",
+            hours=_PM_GC_INT,
+            id="purge_old_pipeline_metrics",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P1-PIPELINE-METRICS-RETENTION] Cron _purge_old_pipeline_metrics "
+            f"registrado cada {_PM_GC_INT}h."
+        )
+
+    # [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Retención de tablas de uso/costo
+    # append-only (`llm_usage_events`, `api_usage`). Diario por default.
+    if not scheduler.get_job("purge_old_usage_events"):
+        _USAGE_GC_INT = _env_int("MEALFIT_USAGE_EVENTS_GC_INTERVAL_HOURS", 24)
+        if _USAGE_GC_INT < 1:
+            _USAGE_GC_INT = 24
+        _add_job_jittered(scheduler,
+            _purge_old_usage_events,
+            "interval",
+            hours=_USAGE_GC_INT,
+            id="purge_old_usage_events",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P2-USAGE-EVENTS-RETENTION] Cron _purge_old_usage_events "
+            f"registrado cada {_USAGE_GC_INT}h."
+        )
+
     # [P0-3-COHERENCE-WATCHDOG · 2026-05-10] Liveness check del watchdog P3-B.
     # Frecuencia 60 min: el watchdog horario debe emitir al menos 1 fila/h a
     # pipeline_metrics. Si pasan 2h sin emisiones (default threshold), este
@@ -5199,6 +6045,60 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"⏰ [P2-STUCK-CHUNKS] Cron _alert_stuck_chunks registrado cada "
             f"{_STUCK_CHUNK_INT_MIN} min "
             f"(overdue_h={_env_int('MEALFIT_STUCK_CHUNK_OVERDUE_HOURS', 6)})."
+        )
+
+    # [P1-KV-SWEEP · 2026-05-26] GC unificado de keys stale en `app_kv_store`.
+    # Limpia 4 prefixes (title_gen_inflight, pending_pipeline, rag_, reflection_)
+    # con TTL declarativo per-prefix. Cierra leak observado en audit 2026-05-26
+    # (keys huérfanas hasta 449h tras crash de worker o caller que olvida DELETE).
+    if not scheduler.get_job("sweep_stale_app_kv_store_prefixes"):
+        _KV_SWEEP_INT_MIN = _env_int(
+            "MEALFIT_KV_SWEEP_INTERVAL_MIN",
+            60,
+            validator=lambda v: 15 <= v <= 1440,
+        )
+        _add_job_jittered(scheduler,
+            _sweep_stale_app_kv_store_prefixes,
+            "interval",
+            minutes=_KV_SWEEP_INT_MIN,
+            id="sweep_stale_app_kv_store_prefixes",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P1-KV-SWEEP] Cron sweep_stale_app_kv_store_prefixes "
+            f"registrado cada {_KV_SWEEP_INT_MIN} min "
+            f"(n_prefixes={len(_KV_SWEEP_PREFIXES)})."
+        )
+
+    # [P1-ORPHAN-MISSED-SWEEP · 2026-05-27] Cierra alerts `scheduler_missed_*`
+    # huérfanas cuyo job no re-ejecutó dentro de la ventana de observación.
+    # Complementa P1-NEW-2 (auto-resolver via EVENT_JOB_EXECUTED del listener)
+    # cuyo gap es: jobs raros (interval ≥30min) nunca disparan el EXECUTED
+    # dentro de la ventana → alert vive forever inflando dashboard SRE.
+    # Guard sistémico: si `scheduler_cascade_missed` está activa, NO sweep
+    # (preserva señal sistémica para SRE). Modelo Auto-explicit.
+    if not scheduler.get_job("sweep_stale_scheduler_missed_alerts"):
+        _SCHED_MISSED_SWEEP_INT_MIN = _env_int(
+            "MEALFIT_SCHEDULER_MISSED_SWEEP_INTERVAL_MIN",
+            60,
+            validator=lambda v: 15 <= v <= 1440,
+        )
+        _add_job_jittered(scheduler,
+            _sweep_stale_scheduler_missed_alerts,
+            "interval",
+            minutes=_SCHED_MISSED_SWEEP_INT_MIN,
+            id="sweep_stale_scheduler_missed_alerts",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(
+            f"⏰ [P1-ORPHAN-MISSED-SWEEP] Cron sweep_stale_scheduler_missed_alerts "
+            f"registrado cada {_SCHED_MISSED_SWEEP_INT_MIN} min "
+            f"(age_h={_env_int('MEALFIT_SCHEDULER_MISSED_SWEEP_AGE_HOURS', 2)}, "
+            f"cascade_lookback_min={_env_int('MEALFIT_SCHEDULER_MISSED_SWEEP_CASCADE_LOOKBACK_MIN', 60)})."
         )
 
     # [P2-STRANDED-PARTIAL · 2026-05-25] Cron del hueco simétrico de I8:
@@ -5420,8 +6320,26 @@ def _is_user_local_refresh_hour(now_utc: datetime, tz_offset_minutes: int | None
 
 
 def _nightly_refresh_all_pending_snapshots(now_utc: datetime | None = None) -> None:
-    """[P0-D] Refresh all pending chunks of long plans (>=15d) at ~03:00 local user time."""
+    """[P0-D] Refresh all pending chunks of long plans (>=15d) at ~03:00 local user time.
+
+    [P2-NIGHTLY-OBS · 2026-05-26] Aplicada misma defensa que P1-4 al proactive
+    refresh: per-user timeout via `_call_with_timeout` (un user con
+    `get_user_inventory_net` lento ya no bloquea el resto del cron) y
+    `_track_cron_consecutive_failure` para escalar fallos consecutivos.
+    Knobs `MEALFIT_NIGHTLY_REFRESH_PER_USER_TIMEOUT_S` (default 30, clamp
+    [5, 300]) y `MEALFIT_NIGHTLY_REFRESH_TOTAL_BUDGET_S` (default 600,
+    clamp [60, 1800]) — paridad con los del proactive refresh.
+
+    "Fallo" del cron = toplevel `except Exception` capturó (algo sistémico).
+    Alert `nightly_refresh_all_pending_snapshots_failures_burst`.
+    """
     now_utc = now_utc or datetime.now(timezone.utc)
+    refreshed_count = 0
+    timed_out_users = 0
+    aborted_remaining = 0
+    failed_users = 0
+    is_failure = False
+    last_error: str | None = None
     try:
         rows = execute_sql_query(
             """
@@ -5455,10 +6373,18 @@ def _nightly_refresh_all_pending_snapshots(now_utc: datetime | None = None) -> N
             (CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS * 8,),
             fetch_all=True
         ) or []
-        
+
         if not rows:
+            # Tick exitoso (sin candidatos es estado válido).
+            _track_cron_consecutive_failure(
+                "nightly_refresh_all_pending_snapshots",
+                "nightly_refresh_all_pending_snapshots_failures_burst",
+                "nightly_refresh_all_pending_snapshots_failures_burst",
+                "Cron nightly_refresh_all_pending_snapshots con fallos consecutivos",
+                is_failure=False,
+            )
             return
-            
+
         rows = [
             row for row in rows
             if _is_user_local_refresh_hour(
@@ -5468,32 +6394,99 @@ def _nightly_refresh_all_pending_snapshots(now_utc: datetime | None = None) -> N
             )
         ]
         if not rows:
+            _track_cron_consecutive_failure(
+                "nightly_refresh_all_pending_snapshots",
+                "nightly_refresh_all_pending_snapshots_failures_burst",
+                "nightly_refresh_all_pending_snapshots_failures_burst",
+                "Cron nightly_refresh_all_pending_snapshots con fallos consecutivos",
+                is_failure=False,
+            )
             return
 
-        refreshed_count = 0
-        
-        for row in rows:
+        # [P2-NIGHTLY-OBS · 2026-05-26] Per-user timeout + total budget.
+        per_user_timeout = _env_int(
+            "MEALFIT_NIGHTLY_REFRESH_PER_USER_TIMEOUT_S", 30,
+            validator=lambda v: 5 <= v <= 300,
+        )
+        total_budget = _env_int(
+            "MEALFIT_NIGHTLY_REFRESH_TOTAL_BUDGET_S", 600,
+            validator=lambda v: 60 <= v <= 1800,
+        )
+        import time as _t_budget
+        _t_start = _t_budget.monotonic()
+
+        for idx, row in enumerate(rows):
+            # Budget guard: si el cron tardó >budget, parar.
+            if _t_budget.monotonic() - _t_start >= total_budget:
+                aborted_remaining = len(rows) - idx
+                logger.warning(
+                    f"[P0-D/NIGHTLY] Total budget {total_budget}s agotado; "
+                    f"abortando {aborted_remaining} users restantes "
+                    f"(se procesan en próximo tick)."
+                )
+                break
+
             uid = row.get("user_id")
             plan_id = row.get("meal_plan_id")
             if not uid or not plan_id:
                 continue
-                
-            live_inventory = get_user_inventory_net(uid)
+
+            try:
+                live_inventory = _call_with_timeout(
+                    get_user_inventory_net, per_user_timeout, uid
+                )
+            except TimeoutError:
+                timed_out_users += 1
+                logger.warning(
+                    f"[P0-D/NIGHTLY] Live fetch timeout ({per_user_timeout}s) "
+                    f"para {uid}. Continuando con next user."
+                )
+                continue
+            except Exception as e:
+                failed_users += 1
+                logger.debug(f"[P0-D/NIGHTLY] Live fetch falló para {uid}: {e}")
+                continue
+
             if live_inventory is not None:
                 try:
-                    _persist_fresh_pantry_to_chunks(row.get("task_id"), plan_id, list(live_inventory), user_id=str(uid))
+                    _persist_fresh_pantry_to_chunks(
+                        row.get("task_id"), plan_id, list(live_inventory),
+                        user_id=str(uid)
+                    )
                     refreshed_count += 1
                 except Exception as inner_e:
-                    logger.warning(f"[NIGHTLY REFRESH] Error actualizando plan {plan_id}: {inner_e}")
-                    
+                    failed_users += 1
+                    logger.warning(
+                        f"[NIGHTLY REFRESH] Error actualizando plan {plan_id}: {inner_e}"
+                    )
+
         if refreshed_count > 0:
             logger.info(
-                f"🌙 [P0-D] Nightly refresh completado: actualizados {refreshed_count} planes largos "
-                f"en ventana local 03:00."
+                f"🌙 [P0-D] Nightly refresh completado: actualizados "
+                f"{refreshed_count} planes largos en ventana local 03:00 "
+                f"(timed_out={timed_out_users}, failed={failed_users}, "
+                f"aborted={aborted_remaining})."
             )
-            
+
     except Exception as e:
+        is_failure = True
+        last_error = repr(e)
         logger.error(f"❌ [NIGHTLY REFRESH] Error general: {e}")
+
+    _track_cron_consecutive_failure(
+        "nightly_refresh_all_pending_snapshots",
+        "nightly_refresh_all_pending_snapshots_failures_burst",
+        "nightly_refresh_all_pending_snapshots_failures_burst",
+        "Cron nightly_refresh_all_pending_snapshots con fallos consecutivos",
+        is_failure=is_failure,
+        last_error=last_error,
+        extra_metadata={
+            "refreshed_count": refreshed_count,
+            "timed_out_users": timed_out_users,
+            "failed_users": failed_users,
+            "aborted_remaining": aborted_remaining,
+        } if not is_failure else {"last_error": last_error},
+    )
 
 def _proactive_refresh_pending_pantry_snapshots(now_utc: datetime | None = None) -> None:
     """[P0-C] Refresca snapshots de inventario en chunks pending/stale antes de su execute_after.
@@ -5587,13 +6580,52 @@ def _proactive_refresh_pending_pantry_snapshots(now_utc: datetime | None = None)
         if len(by_user) >= max_users:
             break
 
+    # [P1-CRON-TIMEOUT · 2026-05-26] Timeout duro per-usuario para que un user
+    # con backoff lento NO bloquee el cron entero. Sin el cap, un fetch de
+    # 60s+ × 100 users = 100min de tick → APScheduler acumula MISSED.
+    # Knob `MEALFIT_PROACTIVE_REFRESH_PER_USER_TIMEOUT_S` (default 30, clamp
+    # [5, 300]). Knob `MEALFIT_PROACTIVE_REFRESH_TOTAL_BUDGET_S` (default 600,
+    # clamp [60, 1800]) — budget total del cron tick. Si lo excede, abortamos
+    # los users restantes (se procesan en próximo tick).
+    per_user_timeout = _env_int(
+        "MEALFIT_PROACTIVE_REFRESH_PER_USER_TIMEOUT_S", 30,
+        validator=lambda v: 5 <= v <= 300,
+    )
+    total_budget = _env_int(
+        "MEALFIT_PROACTIVE_REFRESH_TOTAL_BUDGET_S", 600,
+        validator=lambda v: 60 <= v <= 1800,
+    )
+    import time as _t_budget
+    _t_start = _t_budget.monotonic()
+
     refreshed_users = 0
     refreshed_plans = 0
     failed_users = 0
+    timed_out_users = 0
+    aborted_remaining = 0
 
     for user_id, rows in by_user.items():
+        # Budget guard: si el cron ya tardó >budget, parar.
+        if _t_budget.monotonic() - _t_start >= total_budget:
+            aborted_remaining = len(by_user) - refreshed_users - failed_users - timed_out_users
+            logger.warning(
+                f"[P0-C/PROACTIVE] Total budget {total_budget}s agotado; "
+                f"abortando {aborted_remaining} users restantes "
+                f"(se procesan en próximo tick)."
+            )
+            break
+
         try:
-            live_inventory = get_user_inventory_net(user_id)
+            live_inventory = _call_with_timeout(
+                get_user_inventory_net, per_user_timeout, user_id
+            )
+        except TimeoutError:
+            timed_out_users += 1
+            logger.warning(
+                f"[P0-C/PROACTIVE] Live fetch timeout ({per_user_timeout}s) "
+                f"para {user_id}. Continuando con next user."
+            )
+            continue
         except Exception as e:
             failed_users += 1
             logger.debug(f"[P0-C/PROACTIVE] Live fetch falló para {user_id}: {e}")
@@ -5617,8 +6649,10 @@ def _proactive_refresh_pending_pantry_snapshots(now_utc: datetime | None = None)
 
     logger.info(
         f"[P0-C/PROACTIVE] Refresh ejecutado: users_ok={refreshed_users} "
-        f"users_failed={failed_users} plans_propagated={refreshed_plans} "
-        f"(threshold={refresh_threshold_hours:.1f}h, max_horizon={horizon_hours}h)."
+        f"users_failed={failed_users} users_timed_out={timed_out_users} "
+        f"aborted={aborted_remaining} plans_propagated={refreshed_plans} "
+        f"(threshold={refresh_threshold_hours:.1f}h, max_horizon={horizon_hours}h, "
+        f"per_user_timeout={per_user_timeout}s, total_budget={total_budget}s)."
     )
 
 
@@ -9716,6 +10750,26 @@ _PANTRY_TOLERANCE_FALLBACKS: list = []  # list[tuple[float_unix_ts, source, user
 _PANTRY_TOLERANCE_FALLBACK_WINDOW_SECONDS = 24 * 3600
 _PANTRY_TOLERANCE_FALLBACK_MAX_RECORDS = 5000
 
+# [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Lock compartido para los 3 ring-buffers
+# de telemetría in-memory (`_PANTRY_TOLERANCE_FALLBACKS`, `_TZ_FALLBACK_EVENTS`,
+# `_TZ_FALLBACK_DEDUPE_KEYS`). Los recorders corren desde el ThreadPoolExecutor
+# de `_chunk_worker` (max_workers=3) → read-modify-write concurrente: el
+# `while ...: pop(0)` y sobre todo la dict-comprehension de limpieza de
+# `_TZ_FALLBACK_DEDUPE_KEYS` pueden lanzar `RuntimeError: dictionary changed
+# size during iteration` o sub-podar el buffer. Mismo patrón lazy-init que
+# `_signal_cache_lock` (evita import temprano de threading). Los readers
+# (`routers/system.py`) toman el snapshot bajo este mismo lock.
+# Tooltip-anchor: P2-FALLBACK-BUFFERS-LOCK.
+_FALLBACK_BUFFERS_LOCK = None
+
+
+def _get_fallback_buffers_lock():
+    global _FALLBACK_BUFFERS_LOCK
+    if _FALLBACK_BUFFERS_LOCK is None:
+        import threading as _t
+        _FALLBACK_BUFFERS_LOCK = _t.Lock()
+    return _FALLBACK_BUFFERS_LOCK
+
 
 def _record_pantry_tolerance_fallback(source: str, user_id: str) -> None:
     """[P1-4] Registra un fallback no-trivial de pantry_tolerance.
@@ -9727,14 +10781,17 @@ def _record_pantry_tolerance_fallback(source: str, user_id: str) -> None:
     """
     import time as _p14_time
     now = _p14_time.time()
-    _PANTRY_TOLERANCE_FALLBACKS.append((now, source, str(user_id)))
-    cutoff = now - _PANTRY_TOLERANCE_FALLBACK_WINDOW_SECONDS
-    # Poda incremental: drop entradas viejas y exceso de cap.
-    while _PANTRY_TOLERANCE_FALLBACKS and (
-        _PANTRY_TOLERANCE_FALLBACKS[0][0] < cutoff
-        or len(_PANTRY_TOLERANCE_FALLBACKS) > _PANTRY_TOLERANCE_FALLBACK_MAX_RECORDS
-    ):
-        _PANTRY_TOLERANCE_FALLBACKS.pop(0)
+    # [P2-FALLBACK-BUFFERS-LOCK · 2026-05-28] read-modify-write bajo lock
+    # (recorder invocado desde 3 threads del chunk worker).
+    with _get_fallback_buffers_lock():
+        _PANTRY_TOLERANCE_FALLBACKS.append((now, source, str(user_id)))
+        cutoff = now - _PANTRY_TOLERANCE_FALLBACK_WINDOW_SECONDS
+        # Poda incremental: drop entradas viejas y exceso de cap.
+        while _PANTRY_TOLERANCE_FALLBACKS and (
+            _PANTRY_TOLERANCE_FALLBACKS[0][0] < cutoff
+            or len(_PANTRY_TOLERANCE_FALLBACKS) > _PANTRY_TOLERANCE_FALLBACK_MAX_RECORDS
+        ):
+            _PANTRY_TOLERANCE_FALLBACKS.pop(0)
 
 
 # [P2-1] Telemetría de fallbacks de TZ en `_enqueue_plan_chunk`. Antes cada chunk
@@ -9789,26 +10846,34 @@ def _record_tz_fallback(
     plan_key = str(meal_plan_id) if meal_plan_id is not None else "unknown_plan"
     dedupe_key = (plan_key, reason)
 
-    # Append al buffer agregable (siempre, también las repetidas).
-    _TZ_FALLBACK_EVENTS.append((now, str(user_id), plan_key, week_number, reason))
-    cutoff = now - _TZ_FALLBACK_WINDOW_SECONDS
-    while _TZ_FALLBACK_EVENTS and (
-        _TZ_FALLBACK_EVENTS[0][0] < cutoff
-        or len(_TZ_FALLBACK_EVENTS) > _TZ_FALLBACK_MAX_RECORDS
-    ):
-        _TZ_FALLBACK_EVENTS.pop(0)
+    # [P2-FALLBACK-BUFFERS-LOCK · 2026-05-28] Mutaciones del buffer agregable +
+    # del dict de dedupe bajo lock (recorder invocado desde 3 threads del chunk
+    # worker). La decisión `should_warn` se computa DENTRO del lock para evitar
+    # TOCTOU (dos threads emitiendo el WARNING a la vez). El logging y el armado
+    # del mensaje se hacen FUERA del lock para no retenerlo durante IO.
+    with _get_fallback_buffers_lock():
+        # Append al buffer agregable (siempre, también las repetidas).
+        _TZ_FALLBACK_EVENTS.append((now, str(user_id), plan_key, week_number, reason))
+        cutoff = now - _TZ_FALLBACK_WINDOW_SECONDS
+        while _TZ_FALLBACK_EVENTS and (
+            _TZ_FALLBACK_EVENTS[0][0] < cutoff
+            or len(_TZ_FALLBACK_EVENTS) > _TZ_FALLBACK_MAX_RECORDS
+        ):
+            _TZ_FALLBACK_EVENTS.pop(0)
 
-    # Decisión de WARNING: primera vez o TTL de dedupe expirado.
-    last_warned = _TZ_FALLBACK_DEDUPE_KEYS.get(dedupe_key)
-    should_warn = last_warned is None or (now - last_warned) >= _TZ_FALLBACK_DEDUPE_TTL_SECONDS
+        # Decisión de WARNING: primera vez o TTL de dedupe expirado.
+        last_warned = _TZ_FALLBACK_DEDUPE_KEYS.get(dedupe_key)
+        should_warn = last_warned is None or (now - last_warned) >= _TZ_FALLBACK_DEDUPE_TTL_SECONDS
+        if should_warn:
+            _TZ_FALLBACK_DEDUPE_KEYS[dedupe_key] = now
+            # Limpieza ocasional del dict de dedupe para que no crezca sin límite si
+            # llegan miles de planes corruptos distintos.
+            if len(_TZ_FALLBACK_DEDUPE_KEYS) > _TZ_FALLBACK_MAX_RECORDS:
+                stale_keys = [k for k, v in _TZ_FALLBACK_DEDUPE_KEYS.items() if (now - v) >= _TZ_FALLBACK_DEDUPE_TTL_SECONDS]
+                for k in stale_keys:
+                    _TZ_FALLBACK_DEDUPE_KEYS.pop(k, None)
+
     if should_warn:
-        _TZ_FALLBACK_DEDUPE_KEYS[dedupe_key] = now
-        # Limpieza ocasional del dict de dedupe para que no crezca sin límite si
-        # llegan miles de planes corruptos distintos.
-        if len(_TZ_FALLBACK_DEDUPE_KEYS) > _TZ_FALLBACK_MAX_RECORDS:
-            stale_keys = [k for k, v in _TZ_FALLBACK_DEDUPE_KEYS.items() if (now - v) >= _TZ_FALLBACK_DEDUPE_TTL_SECONDS]
-            for k in stale_keys:
-                _TZ_FALLBACK_DEDUPE_KEYS.pop(k, None)
         # [P0-2] Mensaje adaptado a la resolución para no mentir cuando ya no
         # estamos cayendo a NOW()+delay.
         if resolution == "forced_8am_utc":
@@ -10124,22 +11189,37 @@ def _pantry_covers_missing(missing_ingredients: list, current_pantry: list) -> t
 
 
 def _dispatch_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard") -> None:
+    # [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Rutea por el `bg_executor` bounded
+    # (timeout + alert + drenado en shutdown) en lugar de un daemon thread crudo.
+    # Pre-fix cada push era un `threading.Thread(...).start()` sin timeout ni
+    # tracking — el patrón exacto que `bg_executor` (P1-BG-THREAD-TIMEOUT) fue
+    # creado para reemplazar: si utils_push/FCM cuelga upstream, el daemon vive
+    # hasta el restart. Fallback a daemon thread si el submit falla.
+    # Tooltip-anchor: P2-PUSH-VIA-BG-EXECUTOR.
     try:
-        import threading
         from utils_push import send_push_notification
+        from bg_executor import submit_bg_task
 
-        threading.Thread(
-            target=send_push_notification,
-            kwargs={
-                "user_id": user_id,
-                "title": title,
-                "body": body,
-                "url": url,
-            },
-            daemon=True,
-        ).start()
+        submit_bg_task(
+            send_push_notification,
+            task_name="dispatch_push_notification",
+            user_id=user_id,
+            title=title,
+            body=body,
+            url=url,
+        )
     except Exception as push_err:
-        logger.warning(f"[P1-3/PANTRY] No se pudo enviar push: {push_err}")
+        logger.warning(f"[P2-PUSH-VIA-BG-EXECUTOR] submit_bg_task falló, fallback a thread crudo: {push_err}")
+        try:
+            import threading
+            from utils_push import send_push_notification as _fallback_push
+            threading.Thread(
+                target=_fallback_push,
+                kwargs={"user_id": user_id, "title": title, "body": body, "url": url},
+                daemon=True,
+            ).start()
+        except Exception as fb_err:
+            logger.warning(f"[P1-3/PANTRY] No se pudo enviar push: {fb_err}")
 
 
 def _reconcile_chunk_reservations(user_id: str, chunk_id: str, days: list, max_retries: int = 3) -> bool:
@@ -11466,6 +12546,7 @@ def _recover_failed_chunks_for_long_plans() -> None:
             # _enqueue_plan_chunk hace UPSERT que NO toca learning_metrics, así que
             # el contador persiste a través del reset attempts=0.
             new_recovery_attempts = prior_recovery_attempts + 1
+            counter_bumped = False
             try:
                 execute_sql_write("""
                     UPDATE plan_chunk_queue
@@ -11476,6 +12557,7 @@ def _recover_failed_chunks_for_long_plans() -> None:
                         )
                     WHERE id = %s
                 """, (new_recovery_attempts, task_id))
+                counter_bumped = True
             except Exception as bump_err:
                 logger.warning(
                     f"[P0-1-RECOVERY] No se pudo persistir recovery_attempts={new_recovery_attempts} "
@@ -11489,21 +12571,77 @@ def _recover_failed_chunks_for_long_plans() -> None:
                 f"Re-encolando como catchup..."
             )
 
-            _enqueue_plan_chunk(
-                user_id=str(user_id),
-                meal_plan_id=str(plan_id),
-                week_number=week_number,
-                days_offset=days_offset,
-                days_count=days_count,
-                pipeline_snapshot=snapshot,
-                chunk_kind="catchup"
-            )
+            # [P2-BATCH-ATOMICITY · 2026-05-26] Atomicidad per-chunk: si el
+            # `_enqueue_plan_chunk` falla, revertir el bump del counter para
+            # que el próximo tick re-intente. Sin la reversión, un crash entre
+            # el UPDATE de learning_metrics y el enqueue dejaría el counter
+            # incrementado sin que el chunk se re-encolara → próximos ticks
+            # incrementarían el counter sin re-intento real, llegando a
+            # CHUNK_MAX_RECOVERY_ATTEMPTS y escalando un chunk que JAMÁS se
+            # re-intentó. Pérdida silenciosa pre-fix.
+            try:
+                _enqueue_plan_chunk(
+                    user_id=str(user_id),
+                    meal_plan_id=str(plan_id),
+                    week_number=week_number,
+                    days_offset=days_offset,
+                    days_count=days_count,
+                    pipeline_snapshot=snapshot,
+                    chunk_kind="catchup"
+                )
+            except Exception as enq_err:
+                logger.error(
+                    f"[P2-BATCH-ATOMICITY] _enqueue_plan_chunk falló para "
+                    f"chunk {task_id} (week={week_number} plan={plan_id}): "
+                    f"{enq_err}. Revirtiendo recovery_attempts {new_recovery_attempts}"
+                    f"→{prior_recovery_attempts} para que el próximo tick re-intente."
+                )
+                if counter_bumped:
+                    try:
+                        execute_sql_write("""
+                            UPDATE plan_chunk_queue
+                            SET learning_metrics = COALESCE(learning_metrics, '{}'::jsonb)
+                                || jsonb_build_object(
+                                    'recovery_attempts', %s::int,
+                                    'last_recovery_rollback_at', NOW()::text,
+                                    'last_recovery_rollback_reason', %s
+                                )
+                            WHERE id = %s
+                        """, (prior_recovery_attempts, str(enq_err)[:200], task_id))
+                    except Exception as rev_err:
+                        logger.warning(
+                            f"[P2-BATCH-ATOMICITY] Revert counter falló para chunk "
+                            f"{task_id}: {rev_err}. recovery_attempts queda en "
+                            f"{new_recovery_attempts} (stuck si enqueue sigue fallando)."
+                        )
+                # Continuar con siguiente candidato; no romper el batch.
+                continue
 
         # [P1-3] Detección y escalado proactivo de chunks atrasados (lag > 24h)
         _detect_and_escalate_stuck_chunks()
 
+        # [P1-CRON-CONSECUTIVE-FAIL · 2026-05-26] Run exitoso (no excepción del
+        # try toplevel). Reset counter + auto-resolve si alert estaba abierta.
+        _track_cron_consecutive_failure(
+            "recover_failed_chunks_for_long_plans",
+            "recover_failed_chunks_for_long_plans_failures_burst",
+            "recover_failed_chunks_for_long_plans_failures_burst",
+            "Cron recover_failed_chunks_for_long_plans con fallos consecutivos",
+            is_failure=False,
+        )
+
     except Exception as e:
         logger.error(f"❌ [P0-1-RECOVERY] Error en cron de recuperación: {e}")
+        # [P1-CRON-CONSECUTIVE-FAIL · 2026-05-26] Toplevel except → batch entero
+        # falló. Increment counter; si cruza umbral emite alert.
+        _track_cron_consecutive_failure(
+            "recover_failed_chunks_for_long_plans",
+            "recover_failed_chunks_for_long_plans_failures_burst",
+            "recover_failed_chunks_for_long_plans_failures_burst",
+            "Cron recover_failed_chunks_for_long_plans con fallos consecutivos",
+            is_failure=True,
+            last_error=repr(e),
+        )
 
 
 def _recover_future_scheduled_pending_chunks() -> int:
@@ -12152,6 +13290,77 @@ def _escalate_unrecoverable_chunk(
         )
 
 
+def _notify_zombie_plan_generation_failed(plan_id: str, user_id: str) -> None:
+    """[P1-PROD-AUDIT-BUNDLE · 2026-05-28] Notifica al usuario cuando un plan
+    zombie se finaliza con 0 días materializados (`generation_status='failed'`).
+
+    Pre-fix: la rama 0-días de `_finalize_zombie_partial_plans` marcaba `failed`
+    pero —a diferencia de `_escalate_unrecoverable_chunk`— NO seteaba
+    `_user_action_required` ni enviaba push. El usuario quedaba en limbo (sin
+    banner, sin push) y solo se enteraba re-abriendo y poleando chunk-status.
+    Misma clase de bug que P0-DEAD-LETTER-USER-NOTIFY pero para el path
+    "nada se materializó".
+
+    Hace los 2 pasos idempotentes y best-effort (un fallo no debe romper el
+    conteo de finalización del cron): (1) UPDATE plan_data._user_action_required
+    + _plan_modified_at (banner Dashboard, reordena al top del Historial),
+    (2) push best-effort. Tooltip-anchor: P1-ZOMBIE-FAILED-NOTIFY.
+    """
+    action_title = "No pudimos generar tu plan"
+    action_body = (
+        "Hubo un problema y tu plan no llegó a generarse. "
+        "Abre Mealfit y vuelve a generarlo con tu nevera actual."
+    )
+    action_cta = "Generar plan"
+    action_url = "/dashboard?action_required=generation_failed"
+
+    try:
+        execute_sql_write(
+            """
+            UPDATE meal_plans
+            SET plan_data = jsonb_set(
+                COALESCE(plan_data, '{}'::jsonb)
+                    || jsonb_build_object(
+                        '_user_action_required',
+                        jsonb_build_object(
+                            'reason', 'generation_failed',
+                            'reason_code', 'generation_failed',
+                            'requested_at', NOW()::text,
+                            'title', %s::text,
+                            'body', %s::text,
+                            'cta', %s::text,
+                            'url', %s::text
+                        )
+                    ),
+                '{_plan_modified_at}',
+                to_jsonb(NOW()::text),
+                true
+            ),
+            updated_at = NOW()
+            WHERE id = %s
+              AND plan_data->>'generation_status' = 'failed'
+            """,
+            (action_title, action_body, action_cta, action_url, plan_id),
+        )
+    except Exception as plan_err:
+        logger.warning(
+            f"[P1-ZOMBIE-FAILED-NOTIFY] No se pudo anotar _user_action_required "
+            f"en plan {plan_id}: {plan_err}"
+        )
+
+    try:
+        _dispatch_push_notification(
+            user_id=user_id,
+            title=action_title,
+            body=action_body,
+            url=action_url,
+        )
+    except Exception as push_err:
+        logger.warning(
+            f"[P1-ZOMBIE-FAILED-NOTIFY] No se pudo despachar push a {user_id}: {push_err}"
+        )
+
+
 def _finalize_zombie_partial_plans() -> int:
     """[P0-A] Cierra planes que se quedaron en `generation_status='partial'` indefinidamente.
 
@@ -12244,6 +13453,11 @@ def _finalize_zombie_partial_plans() -> int:
                 f"{days_count}/{total_days_requested} días → status='{new_status}' "
                 f"(reason={reason})."
             )
+            # [P1-PROD-AUDIT-BUNDLE · 2026-05-28] Caso 0-días: el plan se marcó
+            # 'failed' sin que nada se materializara. Notificar al usuario
+            # (banner + push) en lugar de dejarlo en limbo.
+            if new_status == "failed" and user_id:
+                _notify_zombie_plan_generation_failed(plan_id, user_id)
         except Exception as upd_err:
             logger.error(
                 f"[P0-A/ZOMBIE-PARTIAL] UPDATE falló para plan {plan_id}: {upd_err}"
@@ -17204,6 +18418,169 @@ def _alert_stranded_partial_plans() -> None:
             f"(threshold={_age_h}h). Aplicar SOP P3-AUDIT-6."
         )
 
+    # ========================================================================
+    # [P1-ROLLING-ABANDONED · 2026-05-26] Segunda branch del sweep: planes
+    # rolling abandoned. Cierre del gap simétrico del P2-STRANDED-PARTIAL.
+    # ------------------------------------------------------------------------
+    # Audit 2026-05-26 observó plan `1cb1d027` (user `8e40b0fd`) en
+    # `partial+days=3+age=62h` con week 2 chunk en `pending_user_action`
+    # desde hace 62h. La invariante I8 protege `complete+days=[]`. El P2-
+    # STRANDED-PARTIAL cubre `partial+days=[]+age>72h`. Pero el caso
+    # `partial+days>0+rolling-chunks-todos-pending_user_action+age>168h`
+    # NO estaba cubierto: usuario empezó plan rolling, abandonó, plan vive
+    # forever en partial bloqueando lookups del Historial y métricas.
+    #
+    # Estrategia: detectar planes que cumplen TODAS:
+    #   1. `generation_status='partial'`.
+    #   2. `days > 0` (week 1 sí se generó — distingue de stranded P2-3).
+    #   3. Edad > 168h (1 semana — usuario realmente abandonó, no es
+    #      ventana JIT esperando ejecución natural).
+    #   4. Todos los chunks `pending` del plan están en estado terminal del
+    #      lifecycle abandonado (`pending_user_action`, `cancelled`,
+    #      `dead_lettered_at IS NOT NULL`) — sin chunks legítimamente
+    #      pending o procesando.
+    #
+    # Alert key `plan_rolling_abandoned:<plan_id>` (alert_type
+    # `plan_rolling_abandoned`). Modelo Auto-explicit: si el plan
+    # transiciona a `complete`, `failed`, o el usuario reanuda (algún
+    # chunk vuelve a `pending`/`processing`), el sweep cierra la alert.
+    #
+    # Tooltip-anchor: P1-ROLLING-ABANDONED.
+    # ========================================================================
+    _abandoned_age_h = _env_int(
+        "MEALFIT_ROLLING_ABANDONED_AGE_HOURS", 168,
+        validator=lambda v: 24 <= v <= 720,
+    )
+    _abandoned_batch_limit = _env_int(
+        "MEALFIT_ROLLING_ABANDONED_BATCH_LIMIT", 50,
+        validator=lambda v: 1 <= v <= 500,
+    )
+
+    abandoned_alert_key_prefix = "plan_rolling_abandoned:"
+
+    try:
+        abandoned_rows = execute_sql_query(
+            """
+            SELECT
+                mp.id::text AS plan_id,
+                mp.user_id::text AS user_id,
+                jsonb_array_length(COALESCE(mp.plan_data->'days', '[]'::jsonb)) AS days_count,
+                EXTRACT(EPOCH FROM (NOW() - mp.created_at))/3600 AS age_hours,
+                (
+                    SELECT COUNT(*) FROM plan_chunk_queue q
+                    WHERE q.meal_plan_id = mp.id
+                      AND q.status = 'pending'
+                ) AS pending_count,
+                (
+                    SELECT COUNT(*) FROM plan_chunk_queue q
+                    WHERE q.meal_plan_id = mp.id
+                      AND q.status = 'pending_user_action'
+                ) AS pending_user_action_count
+            FROM meal_plans mp
+            WHERE mp.plan_data->>'generation_status' = 'partial'
+              AND jsonb_array_length(
+                    COALESCE(mp.plan_data->'days', '[]'::jsonb)
+                  ) > 0
+              AND mp.created_at < NOW() - make_interval(hours => %s)
+              -- Solo planes donde NO hay chunks en estado activo (pending
+              -- regular sin terminal, o processing). Si los hay, el plan
+              -- sigue vivo y el sweep no debe alertar.
+              AND NOT EXISTS (
+                SELECT 1 FROM plan_chunk_queue q
+                WHERE q.meal_plan_id = mp.id
+                  AND q.status IN ('pending', 'processing')
+              )
+              -- Y SÍ existe al menos un chunk pending_user_action (señal
+              -- de plan rolling abandonado, no plan totalmente completo).
+              AND EXISTS (
+                SELECT 1 FROM plan_chunk_queue q
+                WHERE q.meal_plan_id = mp.id
+                  AND q.status = 'pending_user_action'
+              )
+            ORDER BY mp.created_at ASC
+            LIMIT %s
+            """,
+            (int(_abandoned_age_h), int(_abandoned_batch_limit)),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.warning(f"[P1-ROLLING-ABANDONED] No se pudo consultar meal_plans: {e}")
+        return
+
+    if not abandoned_rows:
+        # Auto-explicit: sin abandoned, cerrar cualquier alert previa.
+        try:
+            execute_sql_write(
+                """
+                UPDATE system_alerts
+                SET resolved_at = NOW()
+                WHERE alert_key LIKE %s
+                  AND resolved_at IS NULL
+                """,
+                (abandoned_alert_key_prefix + "%",),
+            )
+        except Exception as e:
+            logger.debug(
+                f"[P1-ROLLING-ABANDONED] sweep auto-resolve falló "
+                f"(best-effort): {e}"
+            )
+        return
+
+    abandoned_emitted = 0
+    for row in abandoned_rows:
+        plan_id = row.get("plan_id")
+        if not plan_id:
+            continue
+        user_id = row.get("user_id")
+        age_hours = float(row.get("age_hours") or 0.0)
+        days_count = int(row.get("days_count") or 0)
+        pending_ua = int(row.get("pending_user_action_count") or 0)
+        alert_key = f"plan_rolling_abandoned:{plan_id}"
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+                VALUES (%s, 'plan_rolling_abandoned', 'warning', %s, %s, %s::jsonb, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(),
+                    metadata = EXCLUDED.metadata,
+                    affected_user_ids = EXCLUDED.affected_user_ids,
+                    resolved_at = NULL
+                """,
+                (
+                    alert_key,
+                    "Plan rolling abandonado (week 1 ok, weeks siguientes en pending_user_action)",
+                    (
+                        f"Plan {plan_id} (user {user_id}) lleva {age_hours:.1f}h "
+                        f"en `generation_status='partial'` con {days_count} día(s) "
+                        f"generados y {pending_ua} chunk(s) en `pending_user_action` "
+                        f"(umbral edad {_abandoned_age_h}h). Usuario aparentemente "
+                        f"abandonó plan rolling. Acción típica: marcar plan como "
+                        f"`abandoned` o `failed` para liberar UI del Historial."
+                    ),
+                    json.dumps({
+                        "plan_id": plan_id,
+                        "user_id": user_id,
+                        "age_hours": round(age_hours, 2),
+                        "age_threshold_h": _abandoned_age_h,
+                        "days_count": days_count,
+                        "pending_user_action_count": pending_ua,
+                    }, ensure_ascii=False),
+                    json.dumps([user_id] if user_id else []),
+                ),
+            )
+            abandoned_emitted += 1
+        except Exception as e:
+            logger.warning(
+                f"[P1-ROLLING-ABANDONED] persist alert {alert_key} falló: {e}"
+            )
+    if abandoned_emitted:
+        logger.warning(
+            f"[P1-ROLLING-ABANDONED] {abandoned_emitted} plan(s) rolling "
+            f"abandonado(s) (threshold={_abandoned_age_h}h)."
+        )
+
 
 def _alert_chunk_pantry_snapshots_stale() -> None:
     """[P1-δ] Alerta cuando hay chunks pending con snapshots de pantry stale.
@@ -19953,21 +21330,14 @@ def _detect_and_escalate_stuck_chunks():
                     uid = str(r['user_id'])
                     if uid not in notified_users:
                         notified_users.add(uid)
-                        try:
-                            import threading
-                            from utils_push import send_push_notification
-                            threading.Thread(
-                                target=send_push_notification,
-                                kwargs={
-                                    "user_id": uid,
-                                    "title": "⚡ Optimizando tu plan",
-                                    "body": "Estamos terminando de ajustar los últimos detalles de tu plan. Estará listo en breve.",
-                                    "url": "/dashboard"
-                                },
-                                daemon=True
-                            ).start()
-                        except Exception as push_err:
-                            logger.warning(f" [P1-3/STUCK-DETECT] Error enviando push proactivo a {uid}: {push_err}")
+                        # [P2-PUSH-VIA-BG-EXECUTOR · 2026-05-28] vía helper bounded
+                        # (bg_executor) en lugar de daemon thread crudo.
+                        _dispatch_push_notification(
+                            user_id=uid,
+                            title="⚡ Optimizando tu plan",
+                            body="Estamos terminando de ajustar los últimos detalles de tu plan. Estará listo en breve.",
+                            url="/dashboard",
+                        )
 
             execute_sql_write("""
                 UPDATE plan_chunk_queue
@@ -20010,21 +21380,13 @@ def _detect_and_escalate_stuck_chunks():
                 if uid in notified_users:
                     continue
                 notified_users.add(uid)
-                try:
-                    import threading
-                    from utils_push import send_push_notification
-                    threading.Thread(
-                        target=send_push_notification,
-                        kwargs={
-                            "user_id": uid,
-                            "title": "⚠️ Tu plan necesita atención",
-                            "body": "No pudimos generar parte de tu plan a largo plazo. Entra a la app para regenerarlo.",
-                            "url": "/dashboard"
-                        },
-                        daemon=True
-                    ).start()
-                except Exception as push_err:
-                    logger.warning(f" [P1-3/STUCK-DETECT] Error enviando push de fallo terminal a {uid}: {push_err}")
+                # [P2-PUSH-VIA-BG-EXECUTOR · 2026-05-28] vía helper bounded.
+                _dispatch_push_notification(
+                    user_id=uid,
+                    title="⚠️ Tu plan necesita atención",
+                    body="No pudimos generar parte de tu plan a largo plazo. Entra a la app para regenerarlo.",
+                    url="/dashboard",
+                )
     except Exception as e:
         logger.error(f" [P1-3/STUCK-DETECT] Error en _detect_and_escalate_stuck_chunks: {e}")
 
@@ -20275,43 +21637,64 @@ def _cleanup_orphan_chunks() -> int:
     default 5 min).
 
     Pasos:
-      1. SELECT chunks vivos (pending/stale/processing) con meal_plan_id NOT IN
-         meal_plans (plan eliminado o nunca existió por inserción fallida).
-      2. Liberar reservas de inventario de cada chunk para evitar phantom
-         reserved_quantity en `user_inventory`.
-      3. UPDATE atómico marcando los chunks como 'cancelled'.
+      1. CTE atómico (P2-RACE-FIX · 2026-05-26): `SELECT ... FOR UPDATE SKIP LOCKED`
+         lockea los huérfanos + `UPDATE ... WHERE id IN (CTE) RETURNING` aplica el
+         cancel sobre los IDs lockeados. Snapshot atómico cierra el race "entre
+         SELECT y UPDATE alguien INSERT un meal_plan para uno de los chunks
+         huérfanos" — pre-fix `release_chunk_reservations` corría antes del UPDATE
+         y podía liberar reservas de un chunk que ya no era huérfano.
+      2. Liberar reservas de inventario de cada chunk cancelado (best-effort).
 
     Returns: número de chunks cancelados (0 si no había huérfanos o si hubo
     excepción). El error se loguea pero no se propaga, ya que es un job de
     mantenimiento que no debe romper el scheduler global.
+
+    Tooltip-anchor: P2-RACE-FIX-ORPHAN.
     """
     try:
-        orphan_chunks = execute_sql_query(
+        # [P2-RACE-FIX · 2026-05-26] CTE atómico. El `FOR UPDATE SKIP LOCKED`
+        # en el SELECT del CTE lockea los huérfanos durante la transacción
+        # implícita del statement; el UPDATE solo aplica a los IDs lockeados.
+        # Postgres garantiza atomicidad single-statement → no race entre el
+        # SELECT y el UPDATE. `RETURNING` nos da los IDs cancelados para el
+        # paso de release_reservations posterior (best-effort).
+        cancelled = execute_sql_write(
             """
-            SELECT id, user_id FROM plan_chunk_queue
-            WHERE status IN ('pending', 'stale', 'processing')
-            AND meal_plan_id::text NOT IN (SELECT id::text FROM meal_plans)
+            WITH orphans AS (
+                SELECT id, user_id FROM plan_chunk_queue
+                WHERE status IN ('pending', 'stale', 'processing')
+                  AND meal_plan_id::text NOT IN (SELECT id::text FROM meal_plans)
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE plan_chunk_queue
+            SET status = 'cancelled', updated_at = NOW()
+            FROM orphans
+            WHERE plan_chunk_queue.id = orphans.id
+            RETURNING plan_chunk_queue.id, plan_chunk_queue.user_id
             """,
-            fetch_all=True,
-        )
-        orphan_list = list(orphan_chunks or [])
-        for oc in orphan_list:
+            returning=True,
+        ) or []
+
+        cancelled_list = list(cancelled) if isinstance(cancelled, list) else []
+        # Release reservations DESPUÉS del UPDATE atómico. Si crash entre UPDATE
+        # y release, las reservas quedan huérfanas → cron de orphan-reservations
+        # (P2-CHUNKS-RESERVATIONS) las recoge en próximo tick. Mejor estado
+        # transient (reservas huérfanas) que el bug pre-fix (chunks "no orphan"
+        # con reservas liberadas).
+        for oc in cancelled_list:
             try:
                 release_chunk_reservations(str(oc["user_id"]), str(oc["id"]))
             except Exception as rel_err:
                 logger.warning(
-                    f"[P2-3] No se pudo liberar reservas de chunk huérfano {oc.get('id')}: {rel_err}"
+                    f"[P2-3] No se pudo liberar reservas de chunk huérfano "
+                    f"{oc.get('id')}: {rel_err}"
                 )
-        if orphan_list:
-            execute_sql_write("""
-                UPDATE plan_chunk_queue SET status = 'cancelled', updated_at = NOW()
-                WHERE status IN ('pending', 'stale', 'processing')
-                AND meal_plan_id::text NOT IN (SELECT id::text FROM meal_plans)
-            """)
+        if cancelled_list:
             logger.info(
-                f"[P2-3/ORPHAN-CLEANUP] Cancelados {len(orphan_list)} chunks huérfanos."
+                f"[P2-3/ORPHAN-CLEANUP] Cancelados {len(cancelled_list)} "
+                f"chunks huérfanos (CTE atómico)."
             )
-        return len(orphan_list)
+        return len(cancelled_list)
     except Exception as e:
         logger.warning(f"[P2-3/ORPHAN-CLEANUP] Error limpiando chunks huérfanos: {e}")
         return 0
@@ -26730,6 +28113,20 @@ def process_plan_chunk_queue(target_plan_id=None):
                 # prematuro). Con CAS, si attempts cambió el rowcount=0 y abortamos
                 # limpiamente — el otro worker maneja su propio retry/escalation.
                 # Patrón consistente con `_cas_update_chunk_status` (cron_tasks.py:5037).
+                # [P0-DEAD-LETTER-USER-NOTIFY · 2026-05-27] `dead_letter_reason`
+                # ahora canónico (`"recovery_exhausted"` de `ESCALATION_REASONS`)
+                # en vez del literal `str(e)[:240]`. Pre-fix la columna recibía
+                # texto crudo como `"[GAP3] Chunk 2 numeracion invalida..."` —
+                # NO clasificable por `/blocked_reasons` (caía al `_unknown`
+                # fallback de plans.py:3733) y rompía el copy del push porque
+                # `_escalate_unrecoverable_chunk` rechaza reasons fuera de
+                # `ESCALATION_REASONS` (P2-NEW-3). Resultado: SRE veía la alert
+                # agregada `dead_lettered_chunks_recent` pero el usuario quedaba
+                # en limbo (banner ausente, push ausente, `_user_action_required`
+                # vacío). Forensic completo (`str(e)[:1000]`) sigue persistido
+                # en `pipeline_metrics.error_message` vía `_record_chunk_metric`
+                # arriba — no se pierde nada operacionalmente. Anchor:
+                # P0-DEAD-LETTER-USER-NOTIFY.
                 if is_critical:
                     res = execute_sql_write("""
                         UPDATE plan_chunk_queue
@@ -26746,7 +28143,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                         retry_delay_minutes,
                         CHUNK_MAX_FAILURE_ATTEMPTS,
                         CHUNK_MAX_FAILURE_ATTEMPTS,
-                        str(e)[:240],
+                        "recovery_exhausted",
                         task_id,
                         _pickup_attempts,
                     ), returning=True)
@@ -26767,7 +28164,7 @@ def process_plan_chunk_queue(target_plan_id=None):
                         retry_delay_minutes,
                         CHUNK_MAX_FAILURE_ATTEMPTS,
                         CHUNK_MAX_FAILURE_ATTEMPTS,
-                        str(e)[:240],
+                        "recovery_exhausted",
                         task_id,
                         _pickup_attempts,
                     ), returning=True)
@@ -26808,21 +28205,47 @@ def process_plan_chunk_queue(target_plan_id=None):
                             WHERE meal_plan_id = %s AND status = 'pending'
                         """, (meal_plan_id,))
                         
-                        # 3. Notificar al usuario del fallo
+                        # 3. [P0-DEAD-LETTER-USER-NOTIFY · 2026-05-27] Notificacion al
+                        # usuario via `_escalate_unrecoverable_chunk` (helper canonico).
+                        # Pre-fix usaba `send_push_notification` inline con copy
+                        # mojibakeado (`"⚠️ Error extendiendo tu plan"` con bytes
+                        # double-encoded en el source UTF-8) Y NO seteaba
+                        # `_recovery_exhausted_chunks` ni `_user_action_required` en
+                        # `meal_plans.plan_data` -> el banner del frontend (Dashboard)
+                        # nunca aparecia. Tampoco emitia el per-chunk alert
+                        # `dead_lettered_chunk:<plan>:<week>` (solo quedaba la agregada
+                        # `dead_lettered_chunks_recent`). El helper hace los 4 pasos
+                        # idempotentemente: (1) UPDATE plan_chunk_queue (COALESCE: no
+                        # pisa el dead_lettered_at/dead_letter_reason que el UPDATE de
+                        # arriba ya escribio como canonical `"recovery_exhausted"`),
+                        # (2) UPDATE meal_plans.plan_data._recovery_exhausted_chunks +
+                        # _user_action_required (banner frontend), (3) INSERT
+                        # system_alerts per-chunk con alert_key
+                        # `dead_lettered_chunk:<plan>:<week>` (granular ademas del
+                        # agregado), (4) push notification con copy correcto en espanol
+                        # + URL `/dashboard?action_required=recovery_exhausted`. Best-
+                        # effort: un fallo del helper NO debe corromper el plan ni los
+                        # chunks futuros que ya cancelamos arriba; solo perdemos la
+                        # notificacion al usuario, que SRE puede recuperar via la alert
+                        # agregada `dead_lettered_chunks_recent`.
                         try:
-                            import threading
-                            from utils_push import send_push_notification
-                            threading.Thread(
-                                target=send_push_notification,
-                                kwargs={
-                                    "user_id": user_id,
-                                    "title": "âš ï¸ Error extendiendo tu plan",
-                                    "body": "Hubo un problema generando tus proximas semanas. Tus dias actuales estan intactos. Intenta generar un nuevo plan pronto.",
-                                    "url": "/dashboard"
-                                }
-                            ).start()
-                        except Exception as push_err:
-                            logger.warning(f" [CHUNK ZOMBIE] Fallo el push de error: {push_err}")
+                            _escalate_unrecoverable_chunk(
+                                task_id=task_id,
+                                user_id=user_id,
+                                plan_id=meal_plan_id,
+                                week_number=week_number,
+                                recovery_attempts=next_attempt,
+                                escalation_reason="recovery_exhausted",
+                            )
+                        except Exception as _esc_err:
+                            logger.error(
+                                f"[P0-DEAD-LETTER-USER-NOTIFY] _escalate_unrecoverable_chunk "
+                                f"fallo para chunk {task_id} plan {meal_plan_id} week "
+                                f"{week_number}: {type(_esc_err).__name__}: {_esc_err}. "
+                                f"Dead-letter en plan_chunk_queue persistio pero el usuario "
+                                f"no recibio notificacion. SRE puede recuperar via "
+                                f"`dead_lettered_chunks_recent` agregada."
+                            )
                     else:
                         logger.warning(f" [CHUNK ZOMBIE] Chunk {week_number} fallo 5 veces en modo IA. Activando Degraded Mode (Smart Shuffle).")
                         
@@ -26833,13 +28256,29 @@ def process_plan_chunk_queue(target_plan_id=None):
                             WHERE id = %s
                         """, (meal_plan_id,))
                         
-                        # 2. Rescatar este chunk y los futuros en degraded mode
+                        # 2. Rescatar este chunk y los futuros en degraded mode.
+                        # [P0-DEAD-LETTER-USER-NOTIFY · 2026-05-27] Limpiar
+                        # `dead_lettered_at`/`dead_letter_reason` en el rescue:
+                        # pre-fix el chunk que se acaba de marcar como 'failed' con
+                        # `dead_lettered_at = NOW()` (UPDATE arriba en este except)
+                        # era resucitado a 'pending' aquí, PERO conservaba el
+                        # `dead_lettered_at` y `dead_letter_reason` originales →
+                        # marca forense FALSA. El cron `_alert_new_dead_lettered_chunks`
+                        # (P1-2) lo contaba como dead-lettered aunque estuviera vivo
+                        # corriendo Smart Shuffle, inflando el agregado
+                        # `dead_lettered_chunks_recent` y agitando SRE con un incidente
+                        # inexistente. El rescue debe revertir TODO el estado de dead-
+                        # letter — el chunk genuinamente vuelve a la cola y solo se
+                        # marcará dead-letter de verdad si vuelve a agotar attempts en
+                        # modo degraded (rama `if is_degraded:` arriba).
                         execute_sql_write("""
-                            UPDATE plan_chunk_queue 
-                            SET status = 'pending', 
+                            UPDATE plan_chunk_queue
+                            SET status = 'pending',
                                 attempts = 0,
+                                dead_lettered_at = NULL,
+                                dead_letter_reason = NULL,
                                 pipeline_snapshot = jsonb_set(pipeline_snapshot, '{_degraded}', 'true'::jsonb),
-                                updated_at = NOW() 
+                                updated_at = NOW()
                             WHERE meal_plan_id = %s AND status IN ('pending', 'failed')
                         """, (meal_plan_id,))
                         
