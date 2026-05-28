@@ -149,7 +149,8 @@ async def test_push_route(user_id: str, request: Request):
     try:
         import os, json
         from pywebpush import webpush, WebPushException  # type: ignore[import-untyped]
-        
+        from utils_push import _PUSH_HTTP_TIMEOUT_S  # [P1-PUSH-TIMEOUT] SSOT del valor
+
         vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
         vapid_claim = os.environ.get("VAPID_CLAIM_EMAIL")
         
@@ -184,7 +185,8 @@ async def test_push_route(user_id: str, request: Request):
                     subscription_info=sub_info,
                     data=push_payload,
                     vapid_private_key=vapid_private,
-                    vapid_claims={"sub": vapid_claim}
+                    vapid_claims={"sub": vapid_claim},
+                    timeout=_PUSH_HTTP_TIMEOUT_S,  # [P1-PUSH-TIMEOUT]
                 )
                 success_count += 1
             except WebPushException as ex:

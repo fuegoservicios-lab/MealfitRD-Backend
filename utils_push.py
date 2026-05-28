@@ -2,8 +2,20 @@ import os
 import json
 import logging
 from db_core import execute_sql_query, execute_sql_write
+from knobs import _env_float
 
 logger = logging.getLogger(__name__)
+
+# [P1-PUSH-TIMEOUT · 2026-05-28] webpush() -> requests.post() SIN timeout bloquea
+# el thread indefinidamente cuando el push-service (FCM/Mozilla autopush) está
+# degradado o la ruta de red cuelga. Como send_push_notification se despacha vía
+# submit_bg_task (pool BOUNDED compartido con chat title/SSE), N threads colgados
+# saturan TODO el pool y degradan chat aunque el problema sea solo push; el
+# watcher alerta a 120s pero no puede matar un thread bloqueado en socket. El
+# timeout permite que el thread se libere solo. Knob: default 10s, clamp (0, 120].
+_PUSH_HTTP_TIMEOUT_S = _env_float(
+    "MEALFIT_PUSH_HTTP_TIMEOUT_S", 10.0, validator=lambda v: 0 < v <= 120
+)
 
 def send_push_notification(user_id: str, title: str, body: str, url: str = "/dashboard") -> bool:
     """
@@ -49,7 +61,8 @@ def send_push_notification(user_id: str, title: str, body: str, url: str = "/das
                     subscription_info=sub_info,
                     data=push_payload,
                     vapid_private_key=vapid_private,
-                    vapid_claims={"sub": vapid_claim}
+                    vapid_claims={"sub": vapid_claim},
+                    timeout=_PUSH_HTTP_TIMEOUT_S,  # [P1-PUSH-TIMEOUT] no bloquear el bg pool
                 )
                 logger.info(f"📲 [PUSH] Notificación exitosa al dispositivo del usuario {user_id}")
                 success_count += 1

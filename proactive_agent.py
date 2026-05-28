@@ -7,6 +7,7 @@ from db_core import connection_pool, execute_sql_query, execute_sql_write
 from db_chat import save_message, get_recent_messages
 from db import get_consumed_meals_today, get_user_profile
 from fact_extractor import get_embedding
+from knobs import _env_int
 
 logger = logging.getLogger(__name__)
 
@@ -218,8 +219,43 @@ def run_proactive_checks():
     
     sessions = get_active_users_for_proactive()
     logger.info(f"🔍 [CRON] Encontradas {len(sessions)} sesiones activas para verificar (Proactividad Inteligente).")
-    
+
+    # [P1-PROACTIVE-BUDGET · 2026-05-28] Cota de escala del cron de nudges.
+    # El loop hace ~10 queries/usuario (N+1: daily_nudge_count + global rate +
+    # 4×(avg_meal_hour + per-meal rate) + perfil/consumed/embedding) y 1 LLM
+    # invoke SERIAL cuando dispara nudge. A 1k-10k usuarios activos esto explota
+    # a 10k-150k queries + miles de invokes serial por tick, solapándose con el
+    # siguiente tick y saturando el pool de DB/threads. Sin cambiar la lógica de
+    # decisión, acotamos por tick: usuarios procesados, wall-clock total, y nudges
+    # (=invokes LLM). El excedente se atiende en ticks subsecuentes. Knobs con
+    # clamps; runtime/nudges = 0 desactiva esa cota. Tooltip-anchor: P1-PROACTIVE-BUDGET.
+    _max_users = max(1, min(_env_int("MEALFIT_PROACTIVE_MAX_USERS_PER_TICK", 250), 100000))
+    _max_runtime_s = max(0, min(_env_int("MEALFIT_PROACTIVE_MAX_RUNTIME_S", 240), 3600))
+    _max_nudges = max(0, min(_env_int("MEALFIT_PROACTIVE_MAX_NUDGES_PER_TICK", 150), 100000))
+    _t_start = datetime.now(timezone.utc)
+    _nudges_sent = 0
+    if len(sessions) > _max_users:
+        logger.warning(
+            f"⚠️ [P1-PROACTIVE-BUDGET] {len(sessions)} sesiones activas > cap "
+            f"{_max_users}/tick. Procesando las primeras {_max_users}; el resto "
+            f"se atenderá en ticks subsecuentes."
+        )
+        sessions = sessions[:_max_users]
+
     for s in sessions:
+        # [P1-PROACTIVE-BUDGET] cotas de wall-clock y de nudges (gasto LLM) por tick
+        if _max_runtime_s and (datetime.now(timezone.utc) - _t_start).total_seconds() > _max_runtime_s:
+            logger.warning(
+                f"⚠️ [P1-PROACTIVE-BUDGET] Wall-clock > {_max_runtime_s}s "
+                f"(enviados={_nudges_sent}); abortando resto del tick."
+            )
+            break
+        if _max_nudges and _nudges_sent >= _max_nudges:
+            logger.warning(
+                f"⚠️ [P1-PROACTIVE-BUDGET] Cap de nudges/tick ({_max_nudges}) "
+                f"alcanzado; abortando resto del tick."
+            )
+            break
         session_id = str(s.get("id"))
         user_id = str(s.get("user_id"))
         # GAP 3: Nudge Budget (max 2 nudges per day to avoid fatigue)
@@ -424,6 +460,7 @@ No uses demasiados emojis. Sé directo, breve y empático.
                 google_api_key=os.environ.get("GEMINI_API_KEY")
             )
             response = chat_llm.invoke(prompt)
+            _nudges_sent += 1  # [P1-PROACTIVE-BUDGET] cuenta el gasto LLM real del tick
             raw_content = response.content
             if isinstance(raw_content, list):
                 content = " ".join([b.get("text", "") for b in raw_content if isinstance(b, dict) and "text" in b]).strip()

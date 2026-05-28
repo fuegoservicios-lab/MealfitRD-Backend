@@ -4542,6 +4542,23 @@ def _purge_old_usage_events():
 # `scheduler.add_job(` directo escape el wrapper.
 _SCHEDULER_JITTER_S = max(0, min(_env_int("MEALFIT_SCHEDULER_JITTER_S", 45), 600))
 
+# [P1-SCHEDULER-STAGGER · 2026-05-28] Desfase determinístico del ancla de cada
+# IntervalTrigger. Los ~50 crons usan trigger "interval" y se registran en el
+# MISMO instante (startup), así que APScheduler ancla el ciclo de todos los que
+# comparten periodo al mismo arranque → sus next_run_time convergen (ráfaga).
+# Evidencia prod 2026-05-28: 31 jobs MISSED simultáneos (18:29:52-53) + alert
+# `scheduler_cascade_missed`. El jitter (45s) sólo dispersa dentro de una ventana
+# fija pero no rompe la convergencia de ciclos. Solución: dar a cada job un
+# `next_run_time` inicial = now + offset(job_id) determinístico ∈ [0, cap]. Esto
+# ancla cada ciclo a un instante único → adiós convergencia steady-state, y tras
+# un restart el primer run se reparte sobre [0, cap] en vez de un burst sincrónico.
+# Trade-off: cada cron corre una vez en los primeros ~cap s tras el arranque
+# (antes, uno de 6h no corría hasta +6h); todos los crons son idempotentes
+# (upsert/age-cutoff/sweep) así que un run extra al startup es benigno. Kill
+# switch + try/except: si algo falla, cae al comportamiento previo sin redeploy.
+_SCHEDULER_STAGGER_ENABLED = _env_bool("MEALFIT_SCHEDULER_STAGGER_ENABLED", True)
+_SCHEDULER_STAGGER_MAX_S = max(0, min(_env_int("MEALFIT_SCHEDULER_STAGGER_MAX_S", 120), 1800))
+
 
 def _add_job_jittered(scheduler, *args, **kwargs):
     """[P0-NEW-2 · 2026-05-10] Aplica `jitter=_SCHEDULER_JITTER_S` por
@@ -4552,8 +4569,47 @@ def _add_job_jittered(scheduler, *args, **kwargs):
     `setdefault` permite override explícito por callsite (ej.: un job que
     quiera jitter=0 por motivo operacional puede pasarlo y este wrapper
     no lo pisa).
+
+    [P1-SCHEDULER-STAGGER · 2026-05-28] Además, para triggers "interval" sin
+    `next_run_time`/`start_date` explícito, ancla el ciclo a un offset
+    determinístico por job_id (ver nota arriba). Bajo kill switch
+    `MEALFIT_SCHEDULER_STAGGER_ENABLED` (default True) + try/except fallback.
+    Tooltip-anchor: P1-SCHEDULER-STAGGER.
     """
     kwargs.setdefault("jitter", _SCHEDULER_JITTER_S)
+    try:
+        if (
+            _SCHEDULER_STAGGER_ENABLED
+            and _SCHEDULER_STAGGER_MAX_S > 0
+            and "next_run_time" not in kwargs
+            and "start_date" not in kwargs
+        ):
+            # trigger puede venir posicional (args[1]) o como kwarg
+            _trigger = kwargs.get("trigger")
+            if _trigger is None and len(args) >= 2 and isinstance(args[1], str):
+                _trigger = args[1]
+            if _trigger == "interval":
+                _interval_s = (
+                    int(kwargs.get("seconds", 0))
+                    + int(kwargs.get("minutes", 0)) * 60
+                    + int(kwargs.get("hours", 0)) * 3600
+                )
+                _job_id = kwargs.get("id")
+                if not _job_id and args:
+                    _job_id = getattr(args[0], "__name__", "")
+                if _job_id and _interval_s > 0:
+                    import hashlib
+                    # cap: no desfasar más que la mitad del periodo (un cron de
+                    # 1 min nunca se desfasa >30s) ni más que el knob.
+                    _cap = min(_SCHEDULER_STAGGER_MAX_S, max(1, _interval_s // 2))
+                    _h = int(hashlib.sha256(str(_job_id).encode("utf-8")).hexdigest()[:8], 16)
+                    _offset_s = _h % (_cap + 1)
+                    kwargs["next_run_time"] = datetime.now(timezone.utc) + timedelta(seconds=_offset_s)
+    except Exception as _stagger_err:  # pragma: no cover - defensivo
+        logger.warning(
+            f"⚠️ [P1-SCHEDULER-STAGGER] no aplicado a "
+            f"{kwargs.get('id') or (args[0] if args else '?')}: {_stagger_err}"
+        )
     return scheduler.add_job(*args, **kwargs)
 
 
