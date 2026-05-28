@@ -331,6 +331,18 @@ def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depend
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
 
+    # [P2-CHAT-WRITE-IDOR · 2026-05-28] El guard de arriba se SALTA cuando
+    # user_id == session_id (atacante envía session_id=<sesión de la víctima>,
+    # user_id=<mismo UUID>): la condición `user_id != session_id` es False y no
+    # se valida ownership; luego save_message(user_id=None) resuelve el dueño
+    # real vía get_session_owner e inyecta el mensaje bajo la víctima. Espejo de
+    # P0-CHAT-DELETE-IDOR: si la sesión YA tiene dueño, exigir que coincida con
+    # el token verificado. Sesión sin dueño (guest) o inexistente → permitido.
+    from db_chat import get_session_owner
+    _sess_owner = get_session_owner(session_id) if session_id else None
+    if _sess_owner and _sess_owner != verified_user_id:
+        raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
+
     # [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Cap longitud antes de INSERT en
     # `agent_messages`. Storage abuse: text column sin cap nativo → un
     # autenticado podría inflar la tabla sin pasar por LLM. Ver helper.
@@ -624,6 +636,13 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         if user_id and user_id != "guest" and user_id != session_id:
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
+
+        # [P2-CHAT-WRITE-IDOR · 2026-05-28] Cierra el bypass user_id==session_id
+        # (ver /message): si la sesión ya tiene dueño, exigir match con el token.
+        from db_chat import get_session_owner
+        _sess_owner = get_session_owner(session_id) if session_id else None
+        if _sess_owner and _sess_owner != verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
 
         # [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Cap longitud ANTES de
         # `save_message` y ANTES de invocar el LLM. Vector cerrado: DoS

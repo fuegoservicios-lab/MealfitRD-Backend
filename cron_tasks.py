@@ -4437,6 +4437,74 @@ def _purge_old_pipeline_metrics():
         )
 
 
+def _purge_old_plan_chunk_metrics():
+    """[P2-CHUNK-METRICS-RETENTION · 2026-05-28] Retención age-based de
+    `plan_chunk_metrics`. Tooltip-anchor: P2-CHUNK-METRICS-RETENTION.
+
+    Por qué existe:
+      `plan_chunk_metrics` es append-only (1 fila por chunk-event, INSERT no
+      upsert) y era la ÚNICA tabla de telemetría sin política de retención tras
+      P1-4 (pipeline_metrics) y P2-8 (usage events). Crece con el volumen de
+      generación indefinidamente. Espejo exacto de `_purge_old_pipeline_metrics`.
+
+    Política: borra filas con `created_at < NOW() - RETENTION_DAYS` (default 90 —
+      más generoso que pipeline_metrics: menos voluminosa y útil para post-mortems
+      de generación a mayor plazo). Knob kill-switch + cap por run (anti lock
+      contention en el primer run). Best-effort: cualquier fallo se loguea sin
+      abortar otros crons.
+    """
+    from knobs import _env_bool
+
+    if not _env_bool("MEALFIT_CHUNK_METRICS_GC_ENABLED", True):
+        logger.info(
+            "[P2-CHUNK-METRICS-RETENTION] knob MEALFIT_CHUNK_METRICS_GC_ENABLED=false — skip."
+        )
+        return
+
+    retention_days = _env_int("MEALFIT_CHUNK_METRICS_RETENTION_DAYS", 90)
+    if retention_days <= 0:
+        logger.warning(
+            f"[P2-CHUNK-METRICS-RETENTION] retention_days={retention_days} <= 0 — skip."
+        )
+        return
+
+    max_rows = _env_int("MEALFIT_CHUNK_METRICS_GC_MAX_ROWS", 50000)
+    if max_rows <= 0:
+        max_rows = 50000
+
+    try:
+        from db_core import execute_sql_write
+    except Exception as e:
+        logger.warning(f"[P2-CHUNK-METRICS-RETENTION] db_core import falló: {e}")
+        return
+
+    try:
+        sql = (
+            "DELETE FROM plan_chunk_metrics "
+            "WHERE id IN ( "
+            "  SELECT id FROM plan_chunk_metrics "
+            "  WHERE created_at < NOW() - make_interval(days => %s) "
+            "  LIMIT %s "
+            ") "
+            "RETURNING id"
+        )
+        res = execute_sql_write(sql, (retention_days, max_rows), returning=True)
+        n_purged = len(res or [])
+    except Exception as e:
+        logger.warning(f"[P2-CHUNK-METRICS-RETENTION] DELETE falló (best-effort): {e}")
+        return
+
+    if n_purged > 0:
+        logger.info(
+            f"[P2-CHUNK-METRICS-RETENTION] purgadas {n_purged} filas de "
+            f"plan_chunk_metrics (retention={retention_days}d, cap={max_rows})."
+        )
+    else:
+        logger.info(
+            f"[P2-CHUNK-METRICS-RETENTION] no hay filas > {retention_days}d. Skip."
+        )
+
+
 def _purge_old_usage_events():
     """[P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Retención age-based de las tablas
     de uso/costo append-only `llm_usage_events` y `api_usage`.
@@ -4559,6 +4627,14 @@ _SCHEDULER_JITTER_S = max(0, min(_env_int("MEALFIT_SCHEDULER_JITTER_S", 45), 600
 _SCHEDULER_STAGGER_ENABLED = _env_bool("MEALFIT_SCHEDULER_STAGGER_ENABLED", True)
 _SCHEDULER_STAGGER_MAX_S = max(0, min(_env_int("MEALFIT_SCHEDULER_STAGGER_MAX_S", 120), 1800))
 
+# [P2-CRON-CORRELATION · 2026-05-28] Cada ejecución de cron obtiene su propio
+# correlation_id (`corr=cron:<job>:<run>`) — antes los ~50 crons logueaban con
+# `corr=-` (sin hilo de correlación; reconstruir un cron requería grep por
+# nombre+timestamp). El docstring de correlation.py ya preveía este P-fix.
+# BackgroundScheduler usa MemoryJobStore (no serializa la func) → envolver la
+# func con un wrapper local es seguro. Kill switch + fallback.
+_CRON_CORRELATION_ENABLED = _env_bool("MEALFIT_CRON_CORRELATION_ENABLED", True)
+
 
 def _add_job_jittered(scheduler, *args, **kwargs):
     """[P0-NEW-2 · 2026-05-10] Aplica `jitter=_SCHEDULER_JITTER_S` por
@@ -4609,6 +4685,34 @@ def _add_job_jittered(scheduler, *args, **kwargs):
         logger.warning(
             f"⚠️ [P1-SCHEDULER-STAGGER] no aplicado a "
             f"{kwargs.get('id') or (args[0] if args else '?')}: {_stagger_err}"
+        )
+    # [P2-CRON-CORRELATION · 2026-05-28] Envuelve la func del cron con un scope
+    # de correlation_id por ejecución. Se hace DESPUÉS del stagger (que lee el
+    # __name__ original) y preserva el nombre vía functools.wraps. El setup del
+    # scope va en try → si falla, corre la func SIN scope (nunca doble-ejecución:
+    # el CM se crea fuera del `with`, así que un fallo de __fn propaga normal).
+    try:
+        if _CRON_CORRELATION_ENABLED and args and callable(args[0]):
+            import functools as _functools
+            _orig_fn = args[0]
+            _corr_job_id = kwargs.get("id") or getattr(_orig_fn, "__name__", "cron")
+
+            @_functools.wraps(_orig_fn)
+            def _corr_wrapped(*_a, __fn=_orig_fn, __jid=_corr_job_id, **_k):
+                try:
+                    from correlation import with_correlation_id, new_correlation_id
+                    _cm = with_correlation_id(f"cron:{__jid}:{new_correlation_id()}")
+                except Exception:
+                    _cm = None
+                if _cm is None:
+                    return __fn(*_a, **_k)
+                with _cm:
+                    return __fn(*_a, **_k)
+
+            args = (_corr_wrapped,) + tuple(args[1:])
+    except Exception as _corr_err:  # pragma: no cover - defensivo
+        logger.warning(
+            f"⚠️ [P2-CRON-CORRELATION] no aplicado a {kwargs.get('id', '?')}: {_corr_err}"
         )
     return scheduler.add_job(*args, **kwargs)
 
@@ -5972,6 +6076,27 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [P2-USAGE-EVENTS-RETENTION] Cron _purge_old_usage_events "
             f"registrado cada {_USAGE_GC_INT}h."
+        )
+
+    # [P2-CHUNK-METRICS-RETENTION · 2026-05-28] Retención de plan_chunk_metrics
+    # (append-only, única tabla de telemetría sin GC tras P1-4/P2-8). Diario.
+    if not scheduler.get_job("purge_old_plan_chunk_metrics"):
+        _CM_GC_INT = _env_int("MEALFIT_CHUNK_METRICS_GC_INTERVAL_HOURS", 24)
+        if _CM_GC_INT < 1:
+            _CM_GC_INT = 24
+        _add_job_jittered(scheduler,
+            _purge_old_plan_chunk_metrics,
+            "interval",
+            hours=_CM_GC_INT,
+            id="purge_old_plan_chunk_metrics",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P2-CHUNK-METRICS-RETENTION] Cron _purge_old_plan_chunk_metrics "
+            f"registrado cada {_CM_GC_INT}h."
         )
 
     # [P0-3-COHERENCE-WATCHDOG · 2026-05-10] Liveness check del watchdog P3-B.

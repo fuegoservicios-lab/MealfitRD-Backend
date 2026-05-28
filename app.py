@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-AUDIT-IMPL · 2026-05-28"
+_LAST_KNOWN_PFIX = "P2-AUDIT-IMPL · 2026-05-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -1510,8 +1510,39 @@ def readiness_check():
     Tooltip-anchor: P3-READY-REASON.
     """
     ready, reason = is_plan_graph_ready_with_reason()
-    if ready:
-        return {"status": "ready", "plan_graph": "compiled"}
+
+    # [P2-READY-DB-CHECK · 2026-05-28] Validación opcional de conectividad a DB.
+    # Pre-fix `/ready` solo miraba el grafo LangGraph; un pod con el grafo
+    # compilado pero el connection_pool muerto (Supavisor caído, credenciales
+    # rotadas) reportaba "ready" y el LB le enrutaba tráfico que fallaba en cada
+    # query. TOLERANTE por diseño (evita flapping del LB ante un blip):
+    #   - SELECT 1 con timeout corto (2s al tomar conn del pool), best-effort.
+    #   - Por DEFAULT solo se REPORTA en el body (`db`), sin cambiar 200/503.
+    #   - Con `MEALFIT_READY_REQUIRE_DB=true`, un fallo de DB escala a 503.
+    # db_ok: True=ok, False=fallo, None=pool no inicializado (no afirmar fallo).
+    # Tooltip-anchor: P2-READY-DB-CHECK.
+    db_ok: Optional[bool] = None
+    try:
+        from knobs import _env_bool
+        _require_db = _env_bool("MEALFIT_READY_REQUIRE_DB", False)
+    except Exception:
+        _require_db = False
+    try:
+        from db_core import connection_pool as _ready_pool
+        if _ready_pool is not None:
+            with _ready_pool.connection(timeout=2) as _ready_conn:
+                with _ready_conn.cursor() as _ready_cur:
+                    _ready_cur.execute("SELECT 1")
+                    _ready_cur.fetchone()
+            db_ok = True
+    except Exception:
+        db_ok = False
+
+    _db_blocks = bool(_require_db and db_ok is False)
+    if ready and not _db_blocks:
+        return {"status": "ready", "plan_graph": "compiled", "db": db_ok}
+    if ready and _db_blocks:
+        reason = "db_unreachable"
 
     # [P3-READY-REASON-HASH · 2026-05-15] Hash determinístico de los primeros
     # 8 chars de SHA-256(reason) para correlación cross-fleet. ANTES, dos
@@ -1533,7 +1564,8 @@ def readiness_check():
         status_code=503,
         detail={
             "status": "not_ready",
-            "plan_graph": "not_compiled",
+            "plan_graph": "compiled" if ready else "not_compiled",
+            "db": db_ok,
             "reason": reason,
             "reason_hash": reason_hash,
             "message": (
@@ -1761,7 +1793,13 @@ def health_version():
         "last_known_pfix": _LAST_KNOWN_PFIX,
         "knobs_count": knobs_count,
         "knobs_sample": knobs_sample,
-        "knobs_diff": knobs_diff,
+        # [P2-HEALTH-KNOBS-COUNT · 2026-05-28] Solo el CONTEO de overrides en el
+        # endpoint público. Pre-fix exponía `knobs_diff` (nombre+default+value de
+        # cada knob tuneado) sin auth → revelaba a anónimos QUÉ defensas están
+        # relajadas y a qué valor (p.ej. SHOPPING_COHERENCE_GUARD=warn, rate
+        # limits bajados, CB thresholds). El detalle completo sigue en
+        # `/admin/knobs`. Tooltip-anchor: P2-HEALTH-KNOBS-COUNT.
+        "knobs_overrides_count": len(knobs_diff),
         "cron_missed_1h_total": cron_missed_1h_total,
         # [P2-HEALTHZ-DEEP · 2026-05-12] 5 keys nuevas para blackbox monitor.
         "expected_marker": expected_marker,

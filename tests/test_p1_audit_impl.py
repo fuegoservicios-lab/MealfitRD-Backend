@@ -130,4 +130,13 @@ def test_p1_stmt_timeout_migration_content_and_dual_dir_identical():
 # --------------------------------------------------------------------------
 def test_p1_marker_bumped():
     src = _read(_BACKEND, "app.py")
-    assert 'P1-AUDIT-IMPL' in src, "_LAST_KNOWN_PFIX debe estar bumpeado a P1-AUDIT-IMPL"
+    # [supersede] El bundle P1-AUDIT-IMPL bumpeó el marker el 2026-05-28; un
+    # bundle posterior (P2-AUDIT-IMPL, etc.) puede haberlo avanzado. Aceptamos
+    # P1-AUDIT-IMPL o cualquier supersede con fecha >= 2026-05-28 (date-floor,
+    # patrón del repo para exact-match de markers entre bundles del mismo día).
+    import re
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
+    assert m, "no se encontró _LAST_KNOWN_PFIX en app.py"
+    marker = m.group(1)
+    date_m = re.search(r'(\d{4}-\d{2}-\d{2})', marker)
+    assert date_m and date_m.group(1) >= "2026-05-28", f"marker stale o sin supersede: {marker}"

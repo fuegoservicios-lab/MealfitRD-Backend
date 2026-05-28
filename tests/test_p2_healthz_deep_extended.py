@@ -211,7 +211,7 @@ def test_health_version_remains_public(app_src: str):
     "process_uptime_s",
     "last_known_pfix",
     "knobs_count",
-    "knobs_diff",
+    "knobs_overrides_count",
     "cron_missed_1h_total",
 ])
 def test_pre_existing_keys_preserved(app_src: str, key: str):

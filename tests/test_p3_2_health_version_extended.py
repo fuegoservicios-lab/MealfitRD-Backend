@@ -72,11 +72,14 @@ def test_health_version_exposes_process_uptime_s():
     )
 
 
-def test_health_version_exposes_knobs_diff():
+def test_health_version_exposes_knobs_overrides_count_not_values():
+    """[P2-HEALTH-KNOBS-COUNT · 2026-05-28] El endpoint público ya NO serializa
+    `knobs_diff` (nombres+valores de las defensas tuneadas) — solo el CONTEO de
+    overrides. El detalle completo sigue gateado en `/admin/knobs`."""
     src = _read_app()
-    assert '"knobs_diff"' in src
-    # Sanity: el cálculo del diff compara value vs default.
-    assert "value" in src and "default" in src
+    assert '"knobs_overrides_count"' in src
+    # El dict con valores ya NO se expone como key del response público.
+    assert '"knobs_diff":' not in src
 
 
 def test_health_version_exposes_cron_missed_1h_total():
