@@ -166,9 +166,15 @@ def test_record_helper_returns_false_on_db_failure():
     def boom(*_a, **_kw):
         raise RuntimeError("table missing")
 
+    # [G8/STALE-FIX · 2026-05-29] user_id/meal_plan_id deben ser UUIDs válidos: el gate
+    # P2-CHUNK-10 (cron_tasks.py:17472, añadido 2026-05-28) rechaza no-UUIDs ANTES del
+    # execute_sql_write, así que con "u"/"p" la función retornaba False por el gate y nunca
+    # ejercitaba el path de fallo de DB que este test pretende cubrir (el contador quedaba en 0).
     with patch("cron_tasks.execute_sql_write", side_effect=boom):
         ok = cron_tasks._record_chunk_lesson_telemetry(
-            user_id="u", meal_plan_id="p", week_number=1,
+            user_id="11111111-1111-1111-1111-111111111111",
+            meal_plan_id="22222222-2222-2222-2222-222222222222",
+            week_number=1,
             event="lesson_synthesized_low_confidence",
         )
     assert ok is False

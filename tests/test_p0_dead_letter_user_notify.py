@@ -114,10 +114,15 @@ def test_recovery_exhausted_is_canonical_in_escalation_reasons():
 
 
 def test_chunk_worker_updates_use_canonical_reason_not_str_e():
-    """Las dos UPDATEs del outer-catch de `_chunk_worker` (is_critical=True
-    y is_critical=False) deben pasar `"recovery_exhausted"` literal como
-    `dead_letter_reason` en su param list. NO `str(e)[:240]` (el bug
+    """El UPDATE del outer-catch de `_chunk_worker` debe pasar `"recovery_exhausted"`
+    literal como `dead_letter_reason` en su param list. NO `str(e)[:240]` (el bug
     original).
+
+    [S18-2 · GAP-6 · 2026-05-29] Pre-fix había DOS UPDATEs byte-idénticos (ramas
+    is_critical=True/False) y este test asertaba `>= 2`. El colapso S18-2 unificó
+    ambas en UN solo UPDATE (la única diferencia era una línea de log), así que ahora
+    se asienta `>= 1`. El intent real del test (canonical reason, NO `str(e)[:240]`)
+    se preserva por esta aserción + el guard anti-`str(e)[:240]` de abajo.
     """
     text = _read_cron_tasks()
 
@@ -128,9 +133,9 @@ def test_chunk_worker_updates_use_canonical_reason_not_str_e():
         text,
         re.MULTILINE,
     )
-    assert len(matches) >= 2, (
-        f'Esperaba >=2 lineas con `"recovery_exhausted",` como param de UPDATE '
-        f'en `_chunk_worker` (una para is_critical=True, otra para False). '
+    assert len(matches) >= 1, (
+        f'Esperaba >=1 linea con `"recovery_exhausted",` como param del UPDATE de '
+        f'escalation en `_chunk_worker` (colapsado de 2 a 1 en S18-2). '
         f'Encontre {len(matches)}. Si reemplazaste el canonical reason por '
         f'`str(e)[:240]`, regresamos al bug P0-DEAD-LETTER-USER-NOTIFY.'
     )

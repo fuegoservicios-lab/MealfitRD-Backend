@@ -185,20 +185,25 @@ def test_generator_exit_handler_present(chat_src: str) -> None:
     event_gen_pos = body.find("def event_generator")
     gen_body = body[event_gen_pos:]
 
+    # [P1-CHAT-CANCEL-ASYNC · 2026-05-19] El handler captura tanto
+    # `GeneratorExit` como `asyncio.CancelledError` en forma de tupla
+    # (`except (GeneratorExit, asyncio.CancelledError) as ...`). El regex
+    # acepta tanto `except GeneratorExit:` como `except (GeneratorExit, ...)`.
     gen_exit_match = re.search(
-        r"except\s+GeneratorExit\s*:",
+        r"except\s+\(?\s*GeneratorExit",
         gen_body,
     )
     assert gen_exit_match, (
         "P2-AUDIT-NEW-2 violation: el generator no maneja "
-        "`except GeneratorExit:`. Sin esto, los logs no distinguen "
-        "client-abort vs exception genuina, y el finally NO recibe "
-        "señal del path 'abort'."
+        "`GeneratorExit` (ni en forma de tupla con CancelledError). Sin esto, "
+        "los logs no distinguen client-abort vs exception genuina, y el "
+        "finally NO recibe señal del path 'abort'."
     )
 
     # El cuerpo del except debe contener un `raise` (no suprimir).
-    # Tomamos los siguientes ~500 chars del except como heurística.
-    handler_window = gen_body[gen_exit_match.end(): gen_exit_match.end() + 500]
+    # Ventana amplia (2500) porque el handler lleva un comentario extenso
+    # (P1-CHAT-CANCEL-ASYNC) antes del `raise`; con 500 el `raise` quedaba fuera.
+    handler_window = gen_body[gen_exit_match.end(): gen_exit_match.end() + 2500]
     # Buscar `raise` antes del siguiente `except` o `finally`.
     next_clause = re.search(r"\n\s+(except|finally|else)\s*", handler_window)
     handler_body = (
@@ -244,20 +249,24 @@ def test_finally_block_bills_idempotently(chat_src: str) -> None:
         "Sin este guard, facturaríamos en path donde el LLM NO emitió "
         "tokens (e.g., network drop pre-LLM)."
     )
-    assert "log_api_usage(user_id" in finally_body and '"gemini_chat"' in finally_body, (
-        "P2-AUDIT-NEW-2 violation: finally no invoca "
-        "`log_api_usage(user_id, \"gemini_chat\")`. Sin esto, la quota "
-        "nunca se decrementa."
+    # [P1-CHAT-BILL-VERIFIED-UID · 2026-05-30] El billing ahora se hace sobre
+    # `verified_user_id` (la identidad verificada por el token), NO sobre el
+    # `user_id` del body. Pre-fix el gate `user_id != session_id` permitía a un
+    # autenticado evadir el incremento del paywall enviando
+    # user_id==session_id==su-UUID. Facturar por verified_user_id cierra el
+    # bypass: guests (sin token → verified_user_id None) quedan exentos por la
+    # truthiness del propio verified_user_id (ya no se necesitan los guards
+    # `!= "guest"` / `!= session_id`). La parte P2-AUDIT-NEW-2 (idempotencia
+    # `not _billed` + `_chunk_observed`) se preserva intacta.
+    assert "log_api_usage(verified_user_id" in finally_body and '"gemini_chat"' in finally_body, (
+        "P1-CHAT-BILL-VERIFIED-UID violation: finally debe invocar "
+        "`log_api_usage(verified_user_id, \"gemini_chat\")` (identidad del "
+        "token), no `log_api_usage(user_id, ...)` del body."
     )
-    # Guest exemption preservada (mismo patrón que el código original).
-    assert (
-        'user_id != "guest"' in finally_body
-        and "user_id != session_id" in finally_body
-    ), (
-        "P2-AUDIT-NEW-2 violation: finally debe preservar guards anti-guest "
-        "(`user_id != \"guest\"`) y anti-session-only "
-        "(`user_id != session_id`). Sin esto facturaríamos a guests que "
-        "no tienen cuenta paga."
+    # Guest exemption: ahora vía truthiness de verified_user_id (None = guest).
+    assert "verified_user_id" in finally_body, (
+        "P1-CHAT-BILL-VERIFIED-UID violation: el billing del finally debe "
+        "gatearse en `verified_user_id` (guests → None → exentos)."
     )
 
 

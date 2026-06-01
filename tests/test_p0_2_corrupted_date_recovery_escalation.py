@@ -220,11 +220,13 @@ def test_recover_escalates_corrupted_date_when_attempts_exceed_max(
         "pipeline_snapshot": {"_pantry_pause_reason": "unrecoverable_corrupted_date"},
         "paused_seconds": 99999,
     }
+    # [P1-CHUNK-4] started_at antiguo → gate wall-clock cumplido, permite escalar.
     anchor_row = {
         "psd": "not-a-date-anywhere",
         "gsd": "neither-this",
         "created_at": "garbage",
         "attempts": CHUNK_ANCHOR_RECOVERY_MAX_ATTEMPTS - 1,
+        "started_at": "2020-01-01T00:00:00+00:00",
     }
 
     def query_side_effect(sql, *args, **kwargs):

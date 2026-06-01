@@ -163,6 +163,54 @@ def _env_bool(name: str, default: bool) -> bool:
     return value
 
 
+def thinking_budget_kwargs(model_name: str, env_var: str, default: int) -> dict:
+    """[P2-COST-THINKING-CAP-EXT · 2026-06-01] Devuelve `{"thinking_budget": N}`
+    para CAPAR el razonamiento (reasoning/thinking) de modelos thinking-capable
+    (gemini-3.5-flash / *-pro) en nodos de relleno-de-schema FUERA del pipeline
+    de planes — chat swap_llm, modify-meal tool, fact-extractor PRO. Espejo
+    parametrizado por knob del helper `_thinking_budget_kwargs` de
+    `graph_orchestrator.py` (P1-COST-THINKING-CAP), que solo cubre day-gen +
+    correctores.
+
+    Por qué importa para COSTO: los reasoning tokens facturan como OUTPUT
+    (~$9/M en flash, 6x el input). Sin cap, un nodo thinking-capable puede
+    emitir miles de tokens de razonamiento (day-gen sin cap llegó a 19,162 tok
+    de output, ~80% del costo del plan) en tareas que solo rellenan un schema.
+    Un techo GENEROSO (default 2048, el valor A/B-validado de day-gen que hace
+    una tarea MÁS dura — un día completo) recorta el runaway patológico SIN
+    tocar el razonamiento normal de un solo plato/extracción → ahorro sin
+    pérdida de calidad.
+
+    Semántica del knob (clamp [-1, 32768]):
+      - N >= 0  → cap el reasoning en N tokens.
+      - N < 0   → sentinela: sin cap (reasoning libre, comportamiento legacy /
+                  rollback sin redeploy).
+    flash-lite NO soporta thinking_config → dict vacío (evita pasar un kwarg
+    no soportado que rompería la construcción del LLM). Tooltip-anchor:
+    P2-COST-THINKING-CAP-EXT.
+    """
+    budget = _env_int(env_var, default, validator=lambda v: -1 <= v <= 32768)
+    if budget < 0:
+        return {}
+    if not model_name or "lite" in model_name.lower():
+        return {}
+    return {"thinking_budget": budget}
+
+
+def is_production() -> bool:
+    """[P2-PROD-AUDIT-3 · 2026-05-30] SSOT del check de entorno productivo.
+
+    ANTES 5 gates de seguridad (billing.py is_sandbox ×3, app.py _IS_PRODUCTION +
+    webhook fail-secure) usaban `os.environ.get("ENVIRONMENT") == "production"`
+    exact-match case/whitespace-sensitive, mientras plans.py YA normalizaba con
+    `.strip().lower()`. Un typo `Production`/`PRODUCTION`/` production ` flippeaba
+    `is_sandbox=True` y volvía bypasseables el sandbox de PayPal + (con un knob
+    `MEALFIT_ALLOW_WEBHOOK_UNSIGNED` residual) la verificación de firma del webhook.
+    Este helper normaliza lower+strip; todos los gates lo consumen.
+    """
+    return os.environ.get("ENVIRONMENT", "").strip().lower() == "production"
+
+
 def _env_str(name: str, default: str, choices: Optional[set[str]] = None) -> str:
     """[P1-2 · 2026-05-08] Knob de tipo string normalizado (lower+strip), con
     validación opcional de `choices`. Auto-registra en `_KNOBS_REGISTRY`.

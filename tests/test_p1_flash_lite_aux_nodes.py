@@ -117,8 +117,10 @@ def test_fact_checker_callsite_uses_helper():
     )
     assert m, "No encontré la asignación de `_fact_checker_model`."
     rhs = m.group("rhs").strip()
-    assert "_fact_checker_model_name()" in rhs, (
-        f"Callsite del fact-checker debe usar `_fact_checker_model_name()`, "
+    # [P2-ORCH-7 · 2026-05-28] El callsite ahora pasa `form_data` para el
+    # risk-tier (perfiles con alergias/condiciones escalan a Flash-full).
+    assert "_fact_checker_model_name(" in rhs, (
+        f"Callsite del fact-checker debe usar `_fact_checker_model_name(...)`, "
         f"encontré: {rhs!r}."
     )
     assert "_route_model(" not in rhs
@@ -133,8 +135,10 @@ def test_reviewer_callsite_uses_helper():
     )
     assert m, "No encontré la asignación de `_reviewer_model`."
     rhs = m.group("rhs").strip()
-    assert "_reviewer_model_name()" in rhs, (
-        f"Callsite del reviewer debe usar `_reviewer_model_name()`, "
+    # [P2-ORCH-7 · 2026-05-28] El callsite ahora pasa `form_data` para el
+    # risk-tier del reviewer médico (único gate LLM de seguridad clínica).
+    assert "_reviewer_model_name(" in rhs, (
+        f"Callsite del reviewer debe usar `_reviewer_model_name(...)`, "
         f"encontré: {rhs!r}."
     )
     assert "_route_model(" not in rhs

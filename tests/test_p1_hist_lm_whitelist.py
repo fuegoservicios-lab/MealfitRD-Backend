@@ -156,22 +156,34 @@ def test_post_pipeline_keys_in_frontend_catalog():
 # 3. Catálogo legacy de síntesis preservado
 # ---------------------------------------------------------------------------
 def test_legacy_synth_keys_preserved():
-    """Las 5 keys del whitelist legacy (`synth_quality_score`,
-    `synthesized_count`, `queue_count`, `recovery_attempts`,
-    `escalation_reason`) DEBEN seguir presentes en el catálogo nuevo.
-    Cubrir vs. regresión cosmética que las pierda."""
+    """[G8-LM-CATALOG-HONESTY · 2026-05-29] Las keys legacy de síntesis CON productor real
+    en `plan_chunk_queue.learning_metrics` (`recovery_attempts`, `escalation_reason`, vía
+    el merge de `_escalate_unrecoverable_chunk`) DEBEN seguir en el catálogo
+    `_LM_DISPLAY_GROUPS`. Cubre vs. regresión cosmética que las pierda.
+
+    REMOVIDAS del whitelist (G8): `synth_quality_score`, `synthesized_count`, `queue_count`.
+    NO se producen en `learning_metrics` → renderizaban SIEMPRE en blanco. `synthesized_count`
+    y `queue_count` viven en `chunk_lesson_telemetry` (otra superficie, ya renderizada en
+    History.jsx ~L3487 desde el objeto `lesson`); `synth_quality_score` no se computa en
+    ningún lado. Mantenerlas en el catálogo de learning_metrics era deshonesto (filas vacías)."""
     _LEGACY = {
-        "synth_quality_score",
-        "synthesized_count",
-        "queue_count",
         "recovery_attempts",
         "escalation_reason",
     }
     frontend_keys = _extract_lm_display_groups_keys()
     missing = _LEGACY - frontend_keys
     assert not missing, (
-        f"Keys legacy de síntesis perdidas tras la migración a "
+        f"Keys legacy de síntesis (con productor real) perdidas tras la migración a "
         f"_LM_DISPLAY_GROUPS: {sorted(missing)}."
+    )
+    # [G8] Anti-regresión: las 3 keys sin productor NO deben re-aparecer en el catálogo
+    # de learning_metrics (pertenecen a chunk_lesson_telemetry). Si alguien las re-añade,
+    # debe primero cablear un productor real en plan_chunk_queue.learning_metrics.
+    _NO_PRODUCER = {"synth_quality_score", "synthesized_count", "queue_count"}
+    leaked = _NO_PRODUCER & frontend_keys
+    assert not leaked, (
+        f"Keys sin productor en learning_metrics re-añadidas a _LM_DISPLAY_GROUPS "
+        f"(renderizarían en blanco): {sorted(leaked)}. Viven en chunk_lesson_telemetry."
     )
 
 

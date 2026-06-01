@@ -7,7 +7,7 @@ from db_core import connection_pool, execute_sql_query, execute_sql_write
 from db_chat import save_message, get_recent_messages
 from db import get_consumed_meals_today, get_user_profile
 from fact_extractor import get_embedding
-from knobs import _env_int
+from knobs import _env_int, _env_float
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,42 @@ def _proactive_model_name() -> str:
     return os.environ.get(
         "MEALFIT_PROACTIVE_SENTIMENT_MODEL",
         "gemini-3.1-flash-lite",
+    )
+
+
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke de los 2 constructores
+# `ChatGoogleGenerativeAI` del proactive agent: `classify_nudge_sentiment` (148)
+# y el compose-nudge del cron `run_proactive_checks` (457). Pre-fix: sin
+# `timeout=`. `run_proactive_checks` es SÍNCRONO y corre en el threadpool de
+# APScheduler con `max_instances=1`: si Gemini cuelga un socket, el invoke
+# bloquea el thread del cron indefinidamente → el slot del job queda tomado y el
+# nudge cron NUNCA vuelve a correr (no dispara MISSED ni ERROR — está "running",
+# no errored → ningún watchdog lo ve). El budget wall-clock (_max_runtime_s) solo
+# se chequea al tope de cada iteración de usuario, no puede abortar un invoke en
+# vuelo. El `timeout=` propaga al deadline gRPC → DeadlineExceeded, capturado por
+# los `except Exception` existentes (compose por-usuario contenido). Default 20s
+# (flash-lite, prompt corto); clamp (0, 120]. Knob auto-registrado.
+# Tooltip-anchor: P2-LLM-TIMEOUT-SWEEP.
+def _proactive_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_PROACTIVE_LLM_TIMEOUT_S",
+        20.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
+
+
+# [P1-PROACTIVE-TZ · 2026-05-30] Offset (en minutos, UTC→local sumando) de la
+# zona horaria dominicana (AST = UTC-4, sin DST). El cron computa `now_ast`
+# con `-4h` hardcodeado; este knob mantiene la MISMA constante para el filtro
+# de comidas consumidas y la convierte en operacional sin redeploy si DR
+# adoptara DST. Convención `getTimezoneOffset()` de JS = +240 para UTC-4 (lo
+# que `get_consumed_meals_today` suma a la fecha local para ir a UTC).
+# Tooltip-anchor: P1-PROACTIVE-TZ.
+def _proactive_tz_offset_min() -> int:
+    return _env_int(
+        "MEALFIT_PROACTIVE_TZ_OFFSET_MIN",
+        240,
+        validator=lambda v: 0 <= v <= 720,
     )
 
 def get_active_users_for_proactive() -> list:
@@ -124,7 +160,23 @@ def get_nudge_response_rate(user_id: str, nudge_type: str = None):
 
 def get_daily_nudge_count(user_id: str) -> int:
     try:
-        res = execute_sql_query("SELECT COUNT(*) as total FROM nudge_outcomes WHERE user_id = %s AND DATE(sent_at) = CURRENT_DATE", (user_id,), fetch_one=True)
+        # [P2-PROACTIVE-NUDGE-BUDGET-TZ · 2026-05-30] Contar contra el día
+        # CALENDARIO AST, no el UTC. Pre-fix: `DATE(sent_at) = CURRENT_DATE`
+        # con DB en TimeZone=UTC contaba el día UTC, que rota a las 20:00 AST
+        # (=00:00 UTC). Como los nudges se agendan en reloj AST y abarcan un día
+        # AST que cruza el límite UTC a las 20:00, hasta 2 nudges diurnos (día
+        # UTC D) + 2 vespertinos/Resumen 20:00-23:00 AST (día UTC D+1) = 4 en un
+        # mismo día AST, el DOBLE del cap anti-fatiga (>=2). Convertir a AST
+        # alinea el conteo con el reloj de agendado. Reusa la conversión
+        # 'America/Santo_Domingo' ya usada en get_avg_meal_hour (db_facts.py).
+        # Tooltip-anchor: P2-PROACTIVE-NUDGE-BUDGET-TZ.
+        res = execute_sql_query(
+            "SELECT COUNT(*) as total FROM nudge_outcomes "
+            "WHERE user_id = %s "
+            "AND (sent_at AT TIME ZONE 'America/Santo_Domingo')::date "
+            "= (NOW() AT TIME ZONE 'America/Santo_Domingo')::date",
+            (user_id,), fetch_one=True,
+        )
         return res.get("total", 0) if res else 0
     except Exception as e:
         logger.error(f"Error getting daily nudge count: {e}")
@@ -148,7 +200,8 @@ Devuelve ÚNICAMENTE un JSON válido con las claves "sentiment", "meal_logged" y
         chat_llm = ChatGoogleGenerativeAI(
             model=_proactive_model_name(),
             temperature=0.1,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
         res = chat_llm.invoke(prompt)
         text = str(res.content).strip()
@@ -376,7 +429,23 @@ def run_proactive_checks():
                 continue
                 
             # Validar el consumo de HOY
-            consumed = get_consumed_meals_today(user_id, date_str=now_ast.strftime("%Y-%m-%d"))
+            # [P1-PROACTIVE-TZ · 2026-05-30] PASAR tz_offset_mins. Pre-fix se
+            # pasaba `date_str` SIN offset → `get_consumed_meals_today` caía a
+            # su rama `else` (UTC), descartando `date_str` y construyendo la
+            # ventana con el día UTC. El "Resumen del día" dispara a
+            # now_ast.hour==23 (= 03:00 UTC del día siguiente): a esa hora la
+            # ventana UTC `[00:00Z..23:59Z]` del día ya rotado = `[20:00 AST hoy
+            # .. 19:59 AST mañana]`, EXCLUYENDO desayuno/almuerzo/cena
+            # registrados antes de las 20:00 AST. Un usuario cumplidor caía a
+            # `consumed==[]` y recibía el nudge indulgente "no registraste nada,
+            # ¿descuento todo de tu nevera?" — falso-positivo NOCTURNO para cada
+            # usuario standard. Con el offset, la rama AST-aware usa el día AST
+            # correcto. Tooltip-anchor: P1-PROACTIVE-TZ.
+            consumed = get_consumed_meals_today(
+                user_id,
+                date_str=now_ast.strftime("%Y-%m-%d"),
+                tz_offset_mins=_proactive_tz_offset_min(),
+            )
             
             if meal_to_check == "Resumen del día":
                 if consumed:
@@ -457,7 +526,8 @@ No uses demasiados emojis. Sé directo, breve y empático.
             chat_llm = ChatGoogleGenerativeAI(
                 model=_proactive_model_name(),
                 temperature=0.8,
-                google_api_key=os.environ.get("GEMINI_API_KEY")
+                google_api_key=os.environ.get("GEMINI_API_KEY"),
+                timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
             )
             response = chat_llm.invoke(prompt)
             _nudges_sent += 1  # [P1-PROACTIVE-BUDGET] cuenta el gasto LLM real del tick
@@ -493,8 +563,37 @@ No uses demasiados emojis. Sé directo, breve y empático.
         except Exception as e:
             logger.error(f"Error procesando proactividad para {session_id}: {e}")
 
+# ============================================================
+# [P3-COLDSTART-E2E · 2026-05-29] ⚰️ CÓDIGO MUERTO — NO REACTIVAR SIN MIGRAR
+# ------------------------------------------------------------
+# Las DOS funciones JIT Rolling Window de abajo
+# (`_trigger_week2_background_generation` + `check_and_trigger_jit_rolling_windows`)
+# están DESACTIVADAS. Su única invocación está comentada en
+# `run_proactive_checks` (línea ~213: "# check_and_trigger_jit_rolling_windows()
+# # Desactivado: El paso a Micro-Batching usa triggers interactivos") y NINGÚN
+# cron las registra (`register_plan_chunk_scheduler` en cron_tasks.py no las lista).
+#
+# El disparo REAL del próximo chunk vive 100% en `plan_chunk_queue` +
+# `process_plan_chunk_queue` (cron_tasks.py:23122): todos los chunks 2..N se
+# encolan al CREAR el plan con un `execute_after` de calendario y el worker
+# (cada 1 min, server-side) los levanta cuando llega su fecha. Modelo mental
+# único: "todo se dispara por plan_chunk_queue".
+#
+# Por qué NO se borran: el helper de append (`_apply_week2_append` →
+# `update_plan_data_atomic`) tiene cobertura de regresión lost-update activa en
+# `test_p1_audit_1_update_meal_plan_data_lostupdate.py`. Borrar las funciones perdería
+# ese path de test. Se MARCAN como DEAD para que un mantenedor no las reactive
+# por error: reactivarlas junto al worker = DOBLE generación del mismo bloque, y
+# el cuerpo exige `len(days) == 7` exacto (incompatible con chunks de 3 días del
+# micro-batching actual).
+# Tooltip-anchor: P3-COLDSTART-E2E-JIT-DEAD.
+# ============================================================
 def _trigger_week2_background_generation(user_id, plan_id, existing_plan_data):
-    """Generates the next 7 days in the background and appends to the existing plan."""
+    """[⚰️ DEAD CODE — ver banner P3-COLDSTART-E2E-JIT-DEAD arriba] Generates the
+    next 7 days in the background and appends to the existing plan.
+
+    NO invocada en producción (micro-batching usa plan_chunk_queue). Conservada
+    solo por la cobertura lost-update de `update_plan_data_atomic`."""
     from graph_orchestrator import run_plan_pipeline
     from db_profiles import get_user_profile
     from db_plans import update_plan_data_atomic
@@ -606,10 +705,14 @@ def _trigger_week2_background_generation(user_id, plan_id, existing_plan_data):
     threading.Thread(target=_bg_task, daemon=True).start()
 
 def check_and_trigger_jit_rolling_windows():
-    """
+    """[⚰️ DEAD CODE — ver banner P3-COLDSTART-E2E-JIT-DEAD arriba]
     JIT Rolling Windows Trigger:
     Detects users who are on Day 5 or 6 (i.e. plan generated 4-6 days ago)
     and if their plan has only 7 days, generates Week 2.
+
+    DESACTIVADA: su único callsite está comentado en `run_proactive_checks`.
+    El disparo del próximo chunk vive en `process_plan_chunk_queue`
+    (cron_tasks.py:23122). No reactivar sin migrar — ver banner.
     """
     logger.info("⏱️ [CRON JIT] Chequeando ventanas JIT (Rolling Windows) para Semana 2...")
     if not connection_pool: return

@@ -91,6 +91,20 @@ class ProgressRequest(BaseModel):
 # `_RECALC_LIMITER` y `_PDF_TELEMETRY_LIMITER` en routers/plans.py.
 _PROGRESS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 
+# [P1-DIARY-UPLOAD-RATELIMIT · 2026-05-30] Rate-limiter para `/upload`, el
+# endpoint MÁS CARO del router (Gemini Vision multimodal + embedding + INSERT a
+# Storage POR request). Pre-fix el único gate era `verify_api_quota`, que es
+# NO-OP para anónimos (toda su lógica está bajo `if verified_user_id:`). Un guest
+# sin token con `user_id=guest` + un JPEG ~1KB podía disparar 1 Gemini Vision
+# síncrono (ocupa el event loop en `--workers 1`) + 1 embedding por request, sin
+# límite → cost-amplification y degradación de disponibilidad. El hermano
+# `/progress` SÍ tenía `_PROGRESS_LIMITER`; el endpoint caro no. Hermano omitido
+# del P2-GUEST-LLM-RATELIMIT (que cubrió /swap-meal + /recipe/expand). Bucket por
+# user_id (autenticado) o `ip:<client_ip>` (guest) → aísla abusadores. Se APILA
+# sobre `verify_api_quota` (no lo reemplaza). Cap 10/60s holgado para el flujo
+# real de subir fotos del diario.
+_VISION_UPLOAD_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
+
 
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
 # permitidos para `/upload`. Cierra el gap F3 del audit
@@ -160,15 +174,63 @@ async def api_diary_upload(
     user_id: str = Form("guest"),
     session_id: str = Form(None),
     tz_offset_mins: int = Form(0),
-    verified_user_id: str = Depends(verify_api_quota)
+    verified_user_id: str = Depends(verify_api_quota),
+    # [P1-DIARY-UPLOAD-RATELIMIT · 2026-05-30] throttle por user_id/IP, apilado
+    # sobre verify_api_quota (que es no-op para guests). Ver _VISION_UPLOAD_LIMITER.
+    _rl_vision: Optional[str] = Depends(_VISION_UPLOAD_LIMITER),
 ):
     try:
-        # Validación de seguridad IDOR
-        if user_id and user_id != "guest" and user_id != session_id:
+        # [P1-PROD-AUDIT-3 · 2026-05-30] Validación de seguridad IDOR.
+        # ANTES el guard llevaba un short-circuit `and user_id != session_id`:
+        # un atacante autenticado (token propio válido) podía escribir en el
+        # visual_diary de una víctima enviando user_id == session_id == <victim_uuid>
+        # → la condición `user_id != session_id` era False → el check de ownership
+        # NUNCA se evaluaba → actual_user_id = victim → cross-user write (línea
+        # background _save_visual_entry_background). Hermano no-guardado de la
+        # clase P2-CHAT-WRITE-IDOR; /consumed POST y /consumed/{user_id} GET ya
+        # tenían el guard correcto SIN el escape hatch. Se elimina el short-circuit:
+        # el ownership se exige SIEMPRE para user_id autenticado.
+        # Validación UUID previa (paridad con /consumed/{user_id} GET, línea ~470)
+        # — además cierra inyección de path en la Storage key `{actual_user_id}/...`.
+        assert_valid_uuid(user_id, allow_guest=True)
+        if session_id is not None:
+            assert_valid_uuid(session_id, allow_guest=True)
+        if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
-                
+
         actual_user_id = user_id if user_id != "guest" else session_id
+
+        # [P1-DIARY-UPLOAD-GUEST-IDOR · 2026-05-30] Hermano del guest-path que
+        # P1-PROD-AUDIT-3 dejó abierto. Aquel fix endureció SOLO la rama
+        # autenticada (eliminó el escape `and user_id != session_id`); la rama
+        # guest (`actual_user_id = session_id`) seguía confiando en un
+        # `session_id` arbitrario SIN lookup de ownership. Un atacante NO
+        # autenticado (sin token → `verify_api_quota` es no-op) que envíe
+        # `user_id="guest"` + `session_id=<UUID real de la víctima>` lograba que
+        # `_save_visual_entry_background` escribiera en el `visual_diary` de la
+        # víctima (la tabla NO tiene FK a auth.users → la DB acepta cualquier
+        # UUID; SERVICE_ROLE bypassea RLS). Eso contamina el RAG/memoria de la
+        # víctima (vector de prompt-injection cross-user persistente). La capa
+        # de chat defiende el caso simétrico vía `get_session_owner`
+        # (chat.py /message,/stream,POST) — diary no tenía análogo.
+        #
+        # Fix: en la rama guest, NO atribuir la escritura a una identidad
+        # reclamada salvo que el token verificado coincida. Si no hay token (o
+        # no coincide), `actual_user_id=None` → se omite la persistencia (el
+        # análisis + macros igual se devuelven en la respuesta, así que el scan
+        # de comida sigue funcionando para invitados; solo no se persiste a un
+        # diario que un invitado tampoco puede leer — la GET exige auth).
+        # Tooltip-anchor: P1-DIARY-UPLOAD-GUEST-IDOR.
+        if user_id == "guest" and actual_user_id:
+            if not verified_user_id or verified_user_id != actual_user_id:
+                logger.warning(
+                    f"🛡️ [P1-DIARY-UPLOAD-GUEST-IDOR] guest upload con "
+                    f"session_id reclamando identidad sin token coincidente "
+                    f"(verified={'set' if verified_user_id else 'none'}). "
+                    f"Persistencia omitida — posible IDOR cross-user."
+                )
+                actual_user_id = None
 
         # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Validación de
         # content_type ANTES de leer bytes. Rechaza con HTTP 415 si
@@ -256,6 +318,20 @@ async def api_diary_upload(
         description = vision_result.get("description", "No se pudo analizar la imagen.")
         is_food = vision_result.get("is_food", False)
         calories = vision_result.get("calories", 0)
+        # [P2-DIARY-SCAN-MACROS · 2026-05-30] El vision agent ya estima las 4
+        # macros + un nombre corto; las exponemos al frontend para el modal
+        # "Escanear comida → registrar macros" del Dashboard. NO se persiste
+        # nada aquí (la confirmación + INSERT a consumed_meals la hace el
+        # usuario vía POST /api/diary/consumed tras revisar/editar).
+        # Tooltip-anchor: P2-DIARY-SCAN-MACROS.
+        protein = vision_result.get("protein", 0)
+        carbs = vision_result.get("carbs", 0)
+        healthy_fats = vision_result.get("healthy_fats", 0)
+        meal_name = vision_result.get("meal_name", "") or ""
+        # [P2-DIARY-SCAN-MACROS · 2026-05-30] Propaga si el analizador falló
+        # (timeout / 429 RESOURCE_EXHAUSTED / provider caído) para que el modal
+        # distinga "intenta más tarde" de "no es comida".
+        analysis_failed = vision_result.get("analysis_failed", False)
         
         # [P1-DIARY-PROMPT-INJECTION · 2026-05-15] Antes el endpoint concatenaba
         # un string instructivo ("poison_pill") al `description` cuando la regla
@@ -291,7 +367,11 @@ async def api_diary_upload(
 
                 chrono_schedule_type = "standard"
                 if user_id != "guest":
-                    profile = get_user_profile(user_id)
+                    # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] offload sync DB del
+                    # event loop (handler async). Hermano del contrato
+                    # P1-ASYNC-SYNC-DB-BLOCKING / P2-PROD-AUDIT-3 (ver chat.py
+                    # /tts que ya usa asyncio.to_thread para log_api_usage).
+                    profile = await asyncio.to_thread(get_user_profile, user_id)
                     if profile and profile.get("health_profile"):
                         chrono_schedule_type = profile["health_profile"].get("scheduleType", "standard")
 
@@ -308,7 +388,10 @@ async def api_diary_upload(
                     try:
                         from db_core import execute_sql_write
                         import json as _json_chrono
-                        execute_sql_write(
+                        # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] INSERT síncrono
+                        # offloaded del event loop (handler async).
+                        await asyncio.to_thread(
+                            execute_sql_write,
                             """
                             INSERT INTO pipeline_metrics
                                 (user_id, session_id, node, duration_ms, retries,
@@ -335,23 +418,40 @@ async def api_diary_upload(
             # ------------------------------------------------------------
 
             if actual_user_id and actual_user_id != session_id:
-                log_api_usage(actual_user_id, "gemini_vision")
+                # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] offload sync DB del event loop.
+                await asyncio.to_thread(log_api_usage, actual_user_id, "gemini_vision")
 
             # 4. Guardar en DB en segundo plano (embedding + insert).
             # `description` se persiste limpio (sin poison_pill) — la
             # signal chrono se canaliza por `pipeline_metrics`.
-            background_tasks.add_task(
-                _save_visual_entry_background,
-                actual_user_id, image_url, description
-            )
+            # [P1-DIARY-UPLOAD-GUEST-IDOR · 2026-05-30] Gate en actual_user_id:
+            # si la rama guest lo anuló (session_id reclamando identidad sin
+            # token coincidente), NO persistir — evita el cross-user write a un
+            # visual_diary ajeno (y el orphan row con user_id NULL).
+            if actual_user_id:
+                background_tasks.add_task(
+                    _save_visual_entry_background,
+                    actual_user_id, image_url, description
+                )
         else:
             logger.info("➡️ La imagen fue ignorada porque no se detectaron alimentos.")
 
         return {
             "success": True,
             "is_food": is_food,
+            "analysis_failed": analysis_failed,
             "description": description,
             "image_url": image_url,
+            # [P2-DIARY-SCAN-MACROS · 2026-05-30] Macros estimadas + nombre corto
+            # para el modal de registro del Dashboard. Cero costo extra (ya se
+            # computaron en process_image_with_vision).
+            "meal_name": meal_name,
+            "macros": {
+                "calories": calories,
+                "protein": protein,
+                "carbs": carbs,
+                "healthy_fats": healthy_fats,
+            },
             # [P1-DIARY-PROMPT-INJECTION · 2026-05-15] flag estructurado para
             # frontend; reemplaza la inyección de texto en `description`.
             "red_alert": chrono_red_alert,
@@ -406,10 +506,28 @@ def api_log_consumed_meal(
         if not user_id or user_id == "guest":
             return {"success": False, "message": "Inicia sesión para registrar comidas."}
 
-        log_consumed_meal(user_id, meal_name, int(calories), int(protein), int(carbs), int(healthy_fats), meal_type=meal_type)
+        # [P1-PROD-AUDIT-3 · 2026-05-30] Fail-loud en fallo de persistencia.
+        # ANTES se descartaba el return de log_consumed_meal y se devolvía
+        # success:true incondicional → en un blip de DB (la helper captura toda
+        # excepción y `return None`, db_facts.py) el usuario veía "registrada
+        # exitosamente" sin que nada persistiera, y `trigger_incremental_learning`
+        # se programaba sobre data fantasma. Hermano del fail-loud de /progress
+        # (404 en None) y /water-intake (503), y del caller chat-agent que ya
+        # chequea `if result is not None` (tools.py). log_consumed_meal retorna
+        # truthy en éxito (incl. True en dedup-skip) y None/falsy en fallo.
+        _logged_ok = log_consumed_meal(
+            user_id, meal_name, int(calories), int(protein), int(carbs),
+            int(healthy_fats), meal_type=meal_type,
+        )
+        if not _logged_ok:
+            raise HTTPException(
+                status_code=500,
+                detail="No se pudo registrar la comida. Reintenta en unos segundos.",
+            )
 
         # [GAP 4] Latencia de 18+ horas: Recalcular adherencia intradía en background.
         # [P3-DIARY-LATE-IMPORT · 2026-05-15] Import movido al top del archivo.
+        # Solo se programa tras confirmar la escritura (no sobre fantasma).
         background_tasks.add_task(trigger_incremental_learning, user_id)
 
         return {"success": True, "message": "Comida registrada exitosamente."}

@@ -54,6 +54,12 @@ def test_t2_incremental_keys_includes_learning_shopping_quality():
         # set in T1 by the worker but must survive T2's fresh-read overlay so
         # the UI/admin sees the chunk-level annotation.
         '_pantry_quantity_violations',
+        # [P2-CHUNK-6] Degradación a nivel plan-result (fallback / review-failed
+        # entregada igualmente). El worker las setea post-merge cuando
+        # run_plan_pipeline degradó; deben sobrevivir T2 para que el cron de
+        # auto-resolve de I5 vea el plan como NO-limpio.
+        '_is_fallback',
+        '_review_failed_but_delivered',
     }
     assert set(P0_4_T2_INCREMENTAL_KEYS) == expected, (
         "Si añadiste un nuevo campo que el worker calcula entre T1 y T2 sin "

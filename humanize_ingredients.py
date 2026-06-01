@@ -139,7 +139,15 @@ def humanize_ingredient(raw_ingredient: str) -> str:
             qty = float(parts[0]) / float(parts[1])
         else:
             qty = float(qty_str)
-    except ValueError:
+    except (ValueError, ZeroDivisionError):
+        # [P3-HUMANIZE-ZERODIV · 2026-05-30] Capturar también ZeroDivisionError:
+        # una hallucination del LLM como "1/0 lb de arroz" lanzaba ZeroDivisionError
+        # NO capturada que, vía el call-site sin try/except per-item en
+        # humanize_plan_ingredients, abortaba la humanización del plan COMPLETO
+        # (las ~21 comidas perdían las medidas caseras dominicanas por un solo
+        # ingrediente malformado). Ahora degrada de forma aislada — devuelve el
+        # raw de ESE ítem y deja el resto del plan humanizado. Simétrico con el
+        # hermano parse_fraction (shopping_calculator.py) que usa `except Exception`.
         return raw_ingredient
         
     # Convertir todo a gramos o ml

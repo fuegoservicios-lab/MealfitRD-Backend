@@ -8,7 +8,10 @@ class MacrosModel(BaseModel):
 
 class MealModel(BaseModel):
     meal: str = Field(description="Momento del día, Ej: 'Desayuno', 'Almuerzo', 'Merienda', 'Cena'")
-    time: str = Field(description="Hora sugerida, Ej: '8:00 AM'")
+    # [Z3-SCHEMA-DROP-TIME · 2026-05-28] Optional para que el LLM deje de emitirlo
+    # (campo no-renderizado: solo passthrough backend). Backfill 'Flexible' garantiza
+    # un valor downstream (ver graph_orchestrator backfill con `not m.get("time")`).
+    time: Optional[str] = Field(default=None, description="Hora sugerida (opcional, se rellena a 'Flexible' si falta)")
     name: str = Field(description="Nombre creativo y descriptivo del plato")
     desc: str = Field(description="Descripción apetitosa y profesional de la receta")
     prep_time: str = Field(description="Tiempo estimado de preparación, Ej: '15 min'")
@@ -17,7 +20,10 @@ class MealModel(BaseModel):
     protein: int = Field(default=0, description="Gramos de proteína estimados en esta porción, Ej: 30")
     carbs: int = Field(default=0, description="Gramos de carbohidratos estimados en esta porción, Ej: 45")
     fats: int = Field(default=0, description="Gramos de grasas estimados en esta porción, Ej: 15")
-    macros: List[str] = Field(description="Lista rápida de macros, Ej:['Alto en proteína', 'Bajo en carbohidratos']")
+    # [Z2-SCHEMA-DROP-MACROS · 2026-05-28] Optional: array de tags por-meal sin
+    # consumidor (el frontend lee macros a nivel-plan; un backfill lo sobreescribe).
+    # Output muerto pagado a $9/M. Optional → el LLM deja de emitirlo de forma fiable.
+    macros: Optional[List[str]] = Field(default=None, description="Lista rápida de macros (opcional, tags informativos)")
     ingredients: List[str] = Field(description="Lista de ingredientes consolidados sin clonar y con unidades comerciales exactas (texto simple), Ej:['1 plátano verde maduro', '2 huevos', '1/2 aguacate']")
     recipe: List[str] = Field(description="Pasos de preparación. DEBES usar los prefijos: 'Mise en place: ...', 'El Toque de Fuego: ...' y 'Montaje: ...'")
 

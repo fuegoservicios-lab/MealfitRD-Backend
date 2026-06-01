@@ -116,27 +116,47 @@ def get_user_profile(user_id: str):
         profile = res.data[0]
         
         # --- Graceful Degradation Middleware ---
-        if profile.get("subscription_status") == "CANCELLED" and profile.get("subscription_end_date"):
+        # [P1-PROD-AUDIT-3 · 2026-05-30] Revocador SSOT del tier pagado tras
+        # cancelación. ANTES la condición exigía `subscription_end_date` truthy:
+        # cuando PayPal cancela y OMITE `next_billing_time` (común en
+        # cancelaciones), el webhook BILLING.SUBSCRIPTION.CANCELLED dejaba
+        # `subscription_end_date = NULL` → esta rama NUNCA disparaba → acceso
+        # pagado perpetuo sin cobro (el quota gate en auth.py keya solo en
+        # plan_tier, que seguía basic/plus/ultra). Contraparte cancel-side del
+        # P1-BILLING-REACTIVATE-NOT-CANCELLED. Fix: CANCELLED se evalúa SIEMPRE;
+        # con end_date futura se respeta la gracia, sin end_date (o fecha
+        # ilegible) se degrada YA — fail-secure: PayPal ya no cobra, no hay base
+        # para conceder gracia indefinida.
+        if profile.get("subscription_status") == "CANCELLED":
             end_date_str = profile.get("subscription_end_date")
-            try:
-                from constants import safe_fromisoformat
-                end_date = safe_fromisoformat(end_date_str)
-                if end_date.tzinfo is None:
-                    end_date = end_date.replace(tzinfo=timezone.utc)
-                now_utc = datetime.now(timezone.utc)
-                
-                # Si ya cruzamos la hora exacta de terminación, lo degradamos
-                if now_utc > end_date:
-                    logger.info(f"⬇️ Degradando perfil de {user_id} a 'gratis'. El tiempo de su cancelación (Graceful) terminó.")
-                    supabase.table("user_profiles").update({
-                        "plan_tier": "gratis",
-                        "subscription_status": "INACTIVE"
-                    }).eq("id", user_id).execute()
-                    
-                    profile["plan_tier"] = "gratis"
-                    profile["subscription_status"] = "INACTIVE"
-            except Exception as d_e:
-                logger.error(f"Error parseando fechas en graceful degradation para {user_id}: {d_e}")
+            should_downgrade = False
+            if end_date_str:
+                try:
+                    from constants import safe_fromisoformat
+                    end_date = safe_fromisoformat(end_date_str)
+                    if end_date.tzinfo is None:
+                        end_date = end_date.replace(tzinfo=timezone.utc)
+                    now_utc = datetime.now(timezone.utc)
+                    # Si ya cruzamos la hora exacta de terminación, lo degradamos
+                    if now_utc > end_date:
+                        should_downgrade = True
+                except Exception as d_e:
+                    # Fecha ilegible → fail-secure: degradar (no perpetuar acceso
+                    # pagado por data corrupta).
+                    logger.error(f"Error parseando fechas en graceful degradation para {user_id}: {d_e}")
+                    should_downgrade = True
+            else:
+                # CANCELLED sin subscription_end_date: degradar ya (ver nota arriba).
+                should_downgrade = True
+
+            if should_downgrade:
+                logger.info(f"⬇️ Degradando perfil de {user_id} a 'gratis'. Cancelación efectiva (graceful terminado o sin fecha de fin de ciclo).")
+                supabase.table("user_profiles").update({
+                    "plan_tier": "gratis",
+                    "subscription_status": "INACTIVE"
+                }).eq("id", user_id).execute()
+                profile["plan_tier"] = "gratis"
+                profile["subscription_status"] = "INACTIVE"
         # ---------------------------------------
         
         return profile
@@ -797,11 +817,167 @@ def reset_user_account_preferences(user_id: str) -> bool:
                         "UPDATE user_profiles SET health_profile = '{}'::jsonb WHERE id = %s",
                         (user_id,),
                     )
+                    # 8. [P1-PROD-AUDIT-2 · 2026-05-30] Borrar también el diario
+                    # visual: alimenta el RAG visual / memoria a largo plazo del
+                    # agente, así que dejarlo contradice "verdadero inicio desde
+                    # cero" (el agente seguiría "recordando" fotos previas). El
+                    # objeto físico en Storage se purga best-effort fuera de la
+                    # transacción (Storage no es transaccional con Postgres).
+                    cursor.execute("DELETE FROM visual_diary WHERE user_id = %s", (user_id,))
+        # [P1-PROD-AUDIT-2] Storage best-effort tras commit DB (no bloquea el reset).
+        try:
+            _purge_visual_diary_storage(user_id)
+        except Exception as _st_e:
+            logger.warning(f"[P1-PROD-AUDIT-2] reset: purge Storage visual_diary falló (best-effort): {_st_e}")
         logger.info(f"♻️ Preferencias y planes reseteados DESDE CERO con éxito para UUID {user_id}")
         return True
     except Exception as e:
         logger.error(f"❌ Error reseteando preferencias para {user_id}: {e}")
         return False
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# [P1-PROD-AUDIT-2 · 2026-05-30] Borrado de cuenta DETERMINÍSTICO.
+#
+# Pre-fix NO existía flujo de borrado programático: el SRE corría
+# `auth.admin.delete_user` (manual vía dashboard), que solo cascadea las ~19
+# tablas con FK `ON DELETE CASCADE`. Las ~12 tablas con columna `user_id` SIN FK
+# (user_facts, visual_diary, weight_log, agent_sessions, ingredient_frequencies,
+# learning_experiments, abandoned_meal_reasons, nudge_outcomes, pipeline_metrics,
+# plan_chunk_metrics, chunk_deferrals, chunk_lesson_telemetry — varias con
+# `user_id` TEXT, por eso nunca pudieron FK-ear a auth.users uuid) quedaban con
+# PII huérfana INDEFINIDAMENTE, contradiciendo la Política de Privacidad
+# ("eliminar todos los datos asociados / CASCADE sobre todas las tablas").
+# Además el objeto físico en Storage `visual_diary_images/{user_id}/...` nunca se
+# borraba (Storage no cascadea de auth.users) y los checkpoints LangGraph
+# (keyed por `thread_id`, sin columna `user_id`) tampoco.
+#
+# Este helper borra TODA la data user-scoped de forma determinística, sin
+# depender de FKs ni de tipos. Best-effort per-tabla (cada DELETE en su propio
+# autocommit) → robusto ante orden de FK y re-ejecutable (borrar filas ya
+# cascadeadas es no-op). Pensado para invocarse desde el endpoint admin
+# `/api/system/admin/account/purge-data`, ANTES de `auth.admin.delete_user`.
+#
+# Decisión per-tabla (la que prometía documentar `p1_new_5`):
+#   - PII de salud/contenido → DELETE (user_facts, visual_diary, weight_log,
+#     consumed_meals, conversation_summaries, agent_messages, agent_sessions,
+#     abandoned_meal_reasons, meal_plans).
+#   - Telemetría/operacional con user_id → DELETE (no son verdaderamente anónimas:
+#     pipeline_metrics, plan_chunk_metrics, learning_experiments, nudge_outcomes,
+#     chunk_*, ingredient_frequencies, api_usage, llm_usage_events).
+#   - meal_plans_audit (backup forense) → DELETE (contiene plan_data = PII).
+# ───────────────────────────────────────────────────────────────────────────
+_USER_SCOPED_TABLES_USERID = (
+    "abandoned_meal_reasons", "agent_messages", "api_usage", "chunk_deferrals",
+    "chunk_lesson_telemetry", "chunk_user_locks", "consumed_meals",
+    "conversation_summaries", "custom_shopping_items", "failed_inventory_deductions",
+    "ingredient_frequencies", "learning_experiments", "llm_usage_events",
+    "meal_likes", "meal_rejections", "nightly_rotation_queue", "nudge_outcomes",
+    "pending_facts_queue", "pipeline_metrics", "plan_chunk_metrics",
+    "plan_chunk_queue", "push_subscriptions", "shopping_locks",
+    "unknown_ingredients", "user_depleted_items", "user_facts", "user_inventory",
+    "visual_diary", "water_intake_log", "weight_log", "meal_plans_audit",
+    # `meal_plans` al final: sus children (plan_chunk_queue, etc.) pueden
+    # FK-cascade a él; borrarlas antes evita cualquier orden problemático.
+    "meal_plans",
+)
+
+
+def _purge_visual_diary_storage(user_id: str) -> int:
+    """Best-effort: borra los objetos del bucket `visual_diary_images/{user_id}/`.
+    Storage NO cascadea de auth.users → sin esto las fotos sobreviven a cualquier
+    borrado. Retorna nº de objetos borrados (0 si falla / no hay)."""
+    if not supabase or not user_id:
+        return 0
+    try:
+        bucket = supabase.storage.from_("visual_diary_images")
+        entries = bucket.list(user_id) or []
+        paths = [
+            f"{user_id}/{e['name']}"
+            for e in entries
+            if isinstance(e, dict) and e.get("name")
+        ]
+        if paths:
+            bucket.remove(paths)
+        return len(paths)
+    except Exception as e:
+        logger.warning(
+            f"[P1-PROD-AUDIT-2] purge Storage visual_diary {user_id} falló (best-effort): {e}"
+        )
+        return 0
+
+
+def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str, Any]:
+    """Purga determinística de TODA la data user-scoped (ver bloque de doc arriba).
+
+    Args:
+        user_id: UUID del usuario.
+        include_profile: si True, borra también la fila de `user_profiles`
+            (último, porque varias tablas FK a él). False = purge de datos sin
+            tocar el perfil (e.g. GDPR data-erasure conservando la cuenta auth).
+
+    Returns:
+        dict con `deleted` (counts per tabla), `storage_objects_removed`, `errors`.
+    """
+    result: Dict[str, Any] = {
+        "user_id": user_id,
+        "deleted": {},
+        "errors": [],
+        "storage_objects_removed": 0,
+    }
+    if not supabase or not connection_pool or not user_id or user_id == "guest":
+        result["errors"].append("precondición inválida (supabase/pool/user_id)")
+        return result
+    try:
+        uuid.UUID(str(user_id))
+    except Exception:
+        result["errors"].append("user_id no es UUID válido")
+        return result
+
+    # 1. Checkpoints LangGraph (keyed por thread_id = agent_sessions.id::text).
+    #    DELETE ANTES de borrar agent_sessions (su fuente de thread_ids).
+    for ck_tbl in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+        try:
+            r = execute_sql_write(
+                f"DELETE FROM {ck_tbl} WHERE thread_id IN "
+                "(SELECT id::text FROM agent_sessions WHERE user_id = %s) RETURNING thread_id",
+                (user_id,), returning=True,
+            )
+            result["deleted"][ck_tbl] = len(r) if isinstance(r, list) else 0
+        except Exception as e:
+            result["errors"].append(f"{ck_tbl}: {e}")
+
+    # 2. agent_sessions + 3. todas las tablas user-scoped (best-effort per-tabla).
+    for tbl in ("agent_sessions",) + _USER_SCOPED_TABLES_USERID:
+        try:
+            r = execute_sql_write(
+                f"DELETE FROM {tbl} WHERE user_id = %s RETURNING user_id",
+                (user_id,), returning=True,
+            )
+            result["deleted"][tbl] = len(r) if isinstance(r, list) else 0
+        except Exception as e:
+            result["errors"].append(f"{tbl}: {e}")
+
+    # 4. Storage (best-effort, no transaccional con Postgres).
+    result["storage_objects_removed"] = _purge_visual_diary_storage(user_id)
+
+    # 5. user_profiles último (varias tablas FK a él).
+    if include_profile:
+        try:
+            r = execute_sql_write(
+                "DELETE FROM user_profiles WHERE id = %s RETURNING id",
+                (user_id,), returning=True,
+            )
+            result["deleted"]["user_profiles"] = len(r) if isinstance(r, list) else 0
+        except Exception as e:
+            result["errors"].append(f"user_profiles: {e}")
+
+    logger.info(
+        f"[P1-PROD-AUDIT-2] delete_account_data({user_id}): "
+        f"tablas_con_filas={sum(1 for v in result['deleted'].values() if v)}, "
+        f"storage={result['storage_objects_removed']}, errors={len(result['errors'])}"
+    )
+    return result
 
 
 # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13]

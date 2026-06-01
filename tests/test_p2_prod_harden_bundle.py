@@ -38,7 +38,11 @@ def _read(path: Path) -> str:
 class TestP2DocsGate:
     def test_is_production_flag(self):
         src = _read(_APP_PY)
-        assert '_IS_PRODUCTION = os.environ.get("ENVIRONMENT") == "production"' in src
+        # [P2-PROD-AUDIT-3 · 2026-05-30] Migrado al helper SSOT `is_production()`
+        # (knobs.py, normaliza lower+strip). Antes era el literal exact-match
+        # `os.environ.get("ENVIRONMENT") == "production"` (case/whitespace-sensible).
+        assert "_IS_PRODUCTION = is_production()" in src
+        assert "from knobs import" in src and "is_production" in src
 
     def test_docs_urls_gated(self):
         src = _read(_APP_PY)

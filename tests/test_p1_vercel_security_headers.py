@@ -148,6 +148,13 @@ def test_csp_whitelists_critical_hosts():
     - paypal.com   → billing → upgrades de tier rotos.
     - googletagmanager.com / google-analytics.com → marketing analytics.
     - posthog.com  → product analytics.
+    - api.pwnedpasswords.com → [P3-HIBP-CSP · 2026-05-31] HIBP k-anonymity
+      del chequeo de contraseña filtrada (Register + Reset, ver
+      `checkLeakedPassword.js`). Sin el host, al promover la CSP a enforced el
+      fetch a `/range/` se bloquea y el check DEGRADA-OPEN silencioso
+      (`leaked:false`) → contraseñas comprometidas pasan sin señal. Es la
+      contraparte del advisor aceptado `auth_leaked_password_protection`
+      (implementado en frontend porque el toggle nativo requiere plan Pro).
 
     [P2-AUDIT-4 · 2026-05-15] `fonts.googleapis.com` y `fonts.gstatic.com`
     REMOVIDOS de esta lista. Convención P3-SELF-HOST-FONTS: el E2E test
@@ -164,6 +171,9 @@ def test_csp_whitelists_critical_hosts():
         "*.paypal.com",
         "googletagmanager.com",
         "google-analytics.com",
+        # [P3-HIBP-CSP · 2026-05-31] connect-src para el chequeo HIBP de
+        # contraseña filtrada — sin él el check degrada-open al pasar a enforced.
+        "api.pwnedpasswords.com",
     ]
     missing = [host for host in critical_hosts if host not in csp]
     assert not missing, (

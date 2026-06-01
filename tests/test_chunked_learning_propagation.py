@@ -184,8 +184,10 @@ def _query_factory(plan_data, tasks=None, user_profile=None):
             res = {"plan_data": plan_data}
         elif "emergency_backup_plan" in query:
             res = {"backup": []}
-        elif "SELECT health_profile FROM user_profiles" in query:
-            res = {"health_profile": user_profile or {}}
+        elif "health_profile" in query and "user_profiles" in query:
+            # [S13-1 · GAP-2 · 2026-05-29] SELECT combinado health_profile +
+            # logging_preference; substring ampliado para tolerar la columna extra.
+            res = {"health_profile": user_profile or {}, "logging_preference": None}
         if res is not None:
             if fetch_one:
                 return res[0] if isinstance(res, list) and res else res
@@ -451,7 +453,12 @@ class _SqlitePool:
 
 
 def _build_sqlite_memory_db():
-    conn = sqlite3.connect(":memory:")
+    # [C2-LOCK-FALLTHROUGH · 2026-05-29] check_same_thread=False: tras el fix C2 el
+    # worker adquiere el user-lock y arranca el heartbeat daemon (otro thread). Aunque las
+    # ops de chunk_user_locks se interceptan como no-op en `_execute_sql_write` (el test no
+    # valida serialización de locks), dejamos esto como defensa por si un branch futuro del
+    # wrapper toca `conn` desde el thread.
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(
         """
@@ -641,6 +648,18 @@ def _make_sqlite_db_wrappers(conn, user_profile=None):
         if "RETURNING id, user_id, meal_plan_id, week_number" in query:
             plan_id = params[0] if params else None
             return _pick_next_task(plan_id if "AND q1.meal_plan_id = %s" in query else None)
+        # [C2/C3-TEST · 2026-05-29] El worker ahora adquiere user-lock real (fix C2) y lo
+        # libera ownership-aware (fix C3). El test es single-thread síncrono y NO valida la
+        # serialización de locks → interceptamos chunk_user_locks como no-op: el INSERT
+        # devuelve una fila sintética (para que `user_lock` sea truthy y el worker proceda
+        # a generar, como en prod), y heartbeat-UPDATE / release-DELETE son no-op (no tocan
+        # `conn` → el heartbeat daemon thread no rompe SQLite). Sin esto el INSERT caía a la
+        # branch genérica que ejecuta pero retorna [] → worker creía el lock fallido y diferia.
+        if "INSERT INTO chunk_user_locks" in query:
+            uid = params[0] if params else "user_sqlite"
+            return [{"user_id": uid, "locked_at": "2026-05-29T00:00:00"}]
+        if "chunk_user_locks" in query:
+            return []
         if "DELETE FROM plan_chunk_queue" in query or "status = 'processing'" in query and "COALESCE(attempts" in query:
             return []
         sql = re.sub(r"%s", "?", query)
@@ -2697,13 +2716,20 @@ def test_p1_3_helper_does_not_propagate_db_errors_to_caller():
 # (vía env var INGREDIENT_FATIGUE_DECAY_FACTOR) no regrese silenciosamente.
 
 def _make_consumed_meal(name: str, ingredients: list, days_ago: int):
-    """Helper para construir filas de consumed_meals con created_at relativo a hoy."""
+    """Helper para construir filas de consumed_meals con consumed_at relativo a hoy.
+
+    [GAP-1 · 2026-05-29] La clave es `consumed_at` (lo que el fetcher real
+    `get_consumed_meals_since` devuelve), NO `created_at`. El fixture previo usaba
+    `created_at`, que casaba con la clave (errónea) que la función leía y por eso
+    los tests pasaban mientras prod estaba roto — el masking exacto que cerró
+    GAP-1. Mantener `consumed_at` aquí ancla el contrato fetcher↔consumidor.
+    """
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    created_at = (_dt.now(_tz.utc) - _td(days=days_ago)).isoformat()
+    consumed_at = (_dt.now(_tz.utc) - _td(days=days_ago)).isoformat()
     return {
-        "name": name,
+        "meal_name": name,
         "ingredients": ingredients,
-        "created_at": created_at,
+        "consumed_at": consumed_at,
     }
 
 

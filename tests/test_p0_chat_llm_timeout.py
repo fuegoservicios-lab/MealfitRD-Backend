@@ -266,7 +266,10 @@ def test_defaults_are_reasonable():
         ("_chat_agent_llm_timeout_s", 15.0),
         ("_chat_swap_llm_timeout_s", 30.0),
         ("_chat_title_llm_timeout_s", 10.0),
-        ("_chat_router_llm_timeout_s", 8.0),
+        # [P1-CHAT-EMPTY-RESPONSE · 2026-05-20] default router bumpeado 8.0 → 12.0
+        # (Gemini API rechaza deadlines <10s con HTTP 400). Este test quedó stale
+        # tras ese bump; alineado al default documentado del código (2026-06-01).
+        ("_chat_router_llm_timeout_s", 12.0),
         ("_chat_graph_total_timeout_s", 60.0),
     ]
     for fn_name, expected_default in expectations:

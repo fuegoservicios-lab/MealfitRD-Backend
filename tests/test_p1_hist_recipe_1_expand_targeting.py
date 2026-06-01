@@ -167,8 +167,12 @@ def test_handler_precise_index_path_consistency_check(expand_body: str):
     envió índices stale (chunk worker reordenó días), preferimos no
     escribir y caer al fallback by-content.
     """
+    # [P1-RECIPE-EXPAND-FAILSIGNAL · 2026-05-30] Boy-scout: el callback de
+    # P1-AUDIT-1 renombró `target_meal` → `target_meal_fresh` (opera sobre la
+    # copia fresh re-SELECTada bajo FOR UPDATE). El regex quedó stale anclado
+    # al nombre viejo y este test fallaba desde 2026-05-15. Aceptar ambos.
     pattern = re.compile(
-        r"target_meal\.get\(\s*[\"']name[\"']\s*\)\s*==\s*req_name",
+        r"target_meal(?:_fresh)?\.get\(\s*[\"']name[\"']\s*\)\s*==\s*req_name",
         re.IGNORECASE,
     )
     assert pattern.search(expand_body), (

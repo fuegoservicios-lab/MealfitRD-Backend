@@ -129,6 +129,12 @@ _install_stub(
     _strip_untrusted_internal_keys=lambda *_a, **_kw: [],
     _enforce_days_to_generate_cap=lambda *_a, **_kw: False,
     _merge_other_text_fields=lambda *_a, **_kw: 0,
+    # [NG-4 · 2026-05-30] cron_tasks.py:110 importa _env_int/_env_float/_env_bool desde
+    # graph_orchestrator (P1-A · 2026-05-08); el stub quedó stale y rompía el import
+    # transitivo. Passthrough al default (las knobs no afectan estos tests de persistencia).
+    _env_int=lambda _name, default=0, **_kw: default,
+    _env_float=lambda _name, default=0.0, **_kw: default,
+    _env_bool=lambda _name, default=False, **_kw: default,
 )
 _install_stub(
     "memory_manager",
@@ -374,7 +380,11 @@ class TestPersistPantrySupplement:
         # El primer param del jsonb_set anidado es la lista urgente serializada.
         import json as _json
         assert _json.loads(params[0]) == ["pollo", "arroz"]
-        assert params[-1] == "plan-uuid-123"
+        # [NG-4 · 2026-05-30] I2: el UPDATE ahora filtra AND user_id = %s, así que
+        # meal_plan_id pasó de params[-1] a params[-2] y user_id es el último.
+        assert params[-2] == "plan-uuid-123"
+        assert params[-1] == "user-1"
+        assert "user_id = %s" in query
 
     def test_no_op_when_missing_list_empty(self):
         """No hacer ningún UPDATE si missing_list está vacía."""

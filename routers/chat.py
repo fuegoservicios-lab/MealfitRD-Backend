@@ -546,7 +546,10 @@ async def api_chat_tts(
         try:
             from db_core import execute_sql_write
             import json as _json_tts
-            execute_sql_write(
+            # [P2-PROD-AUDIT-3 · 2026-05-30] INSERT síncrono offloaded del event
+            # loop (handler async). Ver nota en el finally.
+            await asyncio.to_thread(
+                execute_sql_write,
                 """
                 INSERT INTO pipeline_metrics
                     (user_id, session_id, node, duration_ms, retries,
@@ -577,7 +580,13 @@ async def api_chat_tts(
         # tumbar la response del usuario.
         if _tts_request_started and not _tts_billed and verified_user_id:
             try:
-                log_api_usage(verified_user_id, "elevenlabs_tts")
+                # [P2-PROD-AUDIT-3 · 2026-05-30] `log_api_usage` es un INSERT
+                # síncrono (roundtrip DB ~10-200ms); este `finally` corre en CADA
+                # request TTS (incl. el success path), y este handler es `async def`
+                # → llamarlo directo bloqueaba el event loop del worker uvicorn.
+                # Hermano del contrato P1-ASYNC-SYNC-DB-BLOCKING (plans.py usa
+                # asyncio.to_thread; billing.py usa _supabase_async).
+                await asyncio.to_thread(log_api_usage, verified_user_id, "elevenlabs_tts")
                 _tts_billed = True
             except Exception as _audit_err:
                 logger.warning(f"[P1-TTS-FINALLY-LOG] log_api_usage tts falló: {_audit_err}")
@@ -839,15 +848,24 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 #   (a) Aún no se cobró (`_billed` flag, defensivo).
                 #   (b) El LLM emitió al menos un chunk de texto.
                 #   (c) Usuario autenticado (no guest, no session-only).
-                if (
-                    not _billed
-                    and _chunk_observed
-                    and user_id
-                    and user_id != "guest"
-                    and user_id != session_id
-                ):
+                # [P1-CHAT-BILL-VERIFIED-UID · 2026-05-30] Facturar contra la
+                # identidad VERIFICADA por el token (`verified_user_id`), NO el
+                # `user_id` del body. Pre-fix el gate `user_id != session_id`
+                # permitía a un autenticado evadir el incremento del paywall
+                # mensual enviando user_id==session_id==su-propio-UUID (la rama
+                # "guest gratis" asume user_id==session_id solo para invitados,
+                # pero un request crafteado puede igualarlos). El LLM corría y
+                # `log_api_usage` nunca incrementaba → `verify_api_quota` (que
+                # cuenta por verified_user_id) jamás alcanzaba el cap → Gemini
+                # ilimitado gratis para un tier `gratis`. Facturar por
+                # verified_user_id cierra el bypass: invitados (sin token →
+                # verified_user_id None) siguen gratis + acotados por
+                # `_CHAT_STREAM_LIMITER`; autenticados se facturan en la
+                # identidad que Supabase verificó (no spoofeable vía body).
+                # Tooltip-anchor: P1-CHAT-BILL-VERIFIED-UID.
+                if not _billed and _chunk_observed and verified_user_id:
                     try:
-                        log_api_usage(user_id, "gemini_chat")
+                        log_api_usage(verified_user_id, "gemini_chat")
                         _billed = True
                     except Exception as _bill_err:
                         logger.warning(
@@ -879,6 +897,21 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         if user_id and user_id != "guest" and user_id != session_id:
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado.")
+
+        # [P2-CHAT-WRITE-IDOR · 2026-05-30] Tercer hermano del guard de escritura
+        # IDOR. El check inline de arriba se SALTA cuando user_id == session_id
+        # (atacante manda session_id=<sesión de la víctima>, user_id=<mismo UUID>):
+        # `user_id != session_id` es False → no se valida ownership; luego
+        # `_resolve_user_id_for_db` → None → `save_message(user_id=None)` resuelve
+        # el dueño real vía `get_session_owner` e INYECTA mensajes en
+        # `agent_messages` + corrompe `nudge_outcomes`/`abandoned_meal_reasons` de
+        # la víctima, sin su token. `/message` (P2-CHAT-WRITE-IDOR) y `/stream`
+        # ya tenían este guard; este endpoint `POST /api/chat` lo había omitido.
+        # Si la sesión ya tiene dueño, exigir match con el token verificado.
+        from db_chat import get_session_owner
+        _sess_owner = get_session_owner(session_id) if session_id else None
+        if _sess_owner and _sess_owner != verified_user_id:
+            raise HTTPException(status_code=403, detail="Prohibido. No tienes acceso a esta conversación.")
 
         # [P0-CHAT-PROMPT-MAXLEN · 2026-05-19] Cap longitud antes de invocar
         # el LLM (`chat_with_agent`). Mismo vector que `/stream` pero sin
@@ -915,9 +948,12 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         # 🧠 Background: Resumir y podar mensajes si el historial creció demasiado
         background_tasks.add_task(summarize_and_prune, session_id)
         
-        if user_id and user_id != "guest" and user_id != session_id:
-            log_api_usage(user_id, "gemini_chat")
-        
+        # [P1-CHAT-BILL-VERIFIED-UID · 2026-05-30] Facturar por la identidad
+        # verificada por el token (ver el finally de /stream). Cierra el bypass
+        # del paywall vía user_id==session_id en este endpoint non-stream.
+        if verified_user_id:
+            log_api_usage(verified_user_id, "gemini_chat")
+
         # === CONTEXTO PARA HECHOS (Debounce Semántico) ===
         # Obtenemos el historial de la sesión para darle contexto al LLM extractor
         raw_history = get_session_messages(session_id)

@@ -73,8 +73,11 @@ def test_primary_model_knob_registered():
 
 def test_router_model_knob_registered():
     src = _read(_FACT_EX)
+    # [P1-ALL-MODELS-GA · 2026-05-21] El default GA es `gemini-3.1-flash-lite`
+    # (sin `-preview`). El regex tenía `-preview` stale (inconsistente con su
+    # propio mensaje de aserción abajo y con el código). Alineado 2026-06-01.
     pat = re.compile(
-        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL[\"\']\s*,\s*[\"\']gemini-3\.1-flash-lite-preview[\"\']',
+        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL[\"\']\s*,\s*[\"\']gemini-3\.1-flash-lite[\"\']',
         re.DOTALL,
     )
     assert pat.search(src), (

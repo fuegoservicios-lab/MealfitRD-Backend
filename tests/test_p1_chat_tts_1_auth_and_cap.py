@@ -163,14 +163,19 @@ def test_endpoint_logs_api_usage(src: str):
 
 def test_log_api_usage_inside_try_except(src: str):
     """El log_api_usage debe estar wrapped en try/except para que un fallo
-    de DB no rompa la response TTS al usuario (best-effort accounting)."""
+    de DB no rompa la response TTS al usuario (best-effort accounting).
+
+    [P2-PROD-AUDIT-3 · 2026-05-30] La llamada ahora va offloaded por
+    `await asyncio.to_thread(log_api_usage, verified_user_id, "elevenlabs_tts")`
+    (no bloquear el event loop en el handler async); el wrapping try/except del
+    finally SE PRESERVA. El test acepta ambas formas."""
     block = _extract_endpoint_block(src)
     # `rfind` para saltarnos la mención en el docstring y agarrar la llamada
-    # real (al final del bloque). `find` retornaría la primera ocurrencia,
-    # que es texto descriptivo dentro del """..."""—el wrap try/except no
-    # aplica ahí.
-    log_idx = block.rfind('log_api_usage(verified_user_id, "elevenlabs_tts")')
-    assert log_idx > 0, "log_api_usage no encontrado en el block"
+    # real (al final del bloque). Acepta forma directa o offloaded (to_thread).
+    log_idx = block.rfind('log_api_usage, verified_user_id, "elevenlabs_tts"')
+    if log_idx < 0:
+        log_idx = block.rfind('log_api_usage(verified_user_id, "elevenlabs_tts")')
+    assert log_idx > 0, "log_api_usage no encontrado en el block (¿cambió el call site?)"
     # Buscar `try:` antes de la llamada y `except` después
     pre_block = block[:log_idx]
     post_block = block[log_idx:]

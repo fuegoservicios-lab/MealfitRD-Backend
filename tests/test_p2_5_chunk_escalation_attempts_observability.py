@@ -41,7 +41,10 @@ import re
 import pytest
 
 
-_CRON = pathlib.Path(__file__).parent / "cron_tasks.py"
+# [Stale-fix P1-CHUNK-LEARN-3 · 2026-05-29] Era `.parent / "cron_tasks.py"` →
+# resolvía a tests/cron_tasks.py (inexistente) → 6 errores de setup. cron_tasks.py
+# vive en backend/ (parent.parent del test). Bug pre-existente de path.
+_CRON = pathlib.Path(__file__).resolve().parent.parent / "cron_tasks.py"
 
 
 @pytest.fixture(scope="module")

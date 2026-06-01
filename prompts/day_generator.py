@@ -67,11 +67,13 @@ REGLAS ESTRICTAS:
    - PROHIBIDO combinar atún + embutidos en el mismo día.
    - Galletas de soda: máximo 1 porción (30g) en todo el día, solo como merienda.
    - **HUEVOS — CAP DIARIO ESTRICTO**: MÁXIMO 3 unidades enteras EN ESTE DÍA. Si necesitas más proteína desde huevos (ej: omelette grande, revoltillo grueso), complementa con CLARAS (máximo 6 claras/día). El revisor médico flagea "carga excesiva de huevos" cuando el ciclo supera ~9 enteros en 3 días — superar este cap fuerza retry costoso (~210s) sin mejorar el plan. Repartición típica recomendada: desayuno ≤2 enteros + ≤2 claras, otra comida ≤1 entero. Para gain_muscle, las claras son tu aliado — tienen 100% del valor proteico sin la carga de colesterol que dispara el rechazo.
-13. HERRAMIENTA consultar_nutricion — LÍMITE ESTRICTO:
-   Úsala SOLO para los 2-3 ingredientes principales del día (proteína principal y carbohidrato principal).
-   MÁXIMO 3 llamadas en todo el día. NUNCA la uses para condimentos, especias, agua, aceite, sal,
-   vinagre, cilantro, ajo, cebolla, pimienta, orégano, frutas ni vegetales menores.
-   Si ya realizaste 3 llamadas, genera el JSON final de inmediato con los datos obtenidos.
+13. NUTRICIÓN — USA LA TABLA PRE-COMPUTADA, NO LLAMES HERRAMIENTAS: [Z1-PROMPT-CONTRADICTION]
+   El system prompt incluye una TABLA DE NUTRICIÓN PRE-COMPUTADA con los valores autoritativos
+   (kcal/proteína/carbos/grasas por 100g) de los ingredientes principales. ÚSALA DIRECTAMENTE.
+   NUNCA invoques `consultar_nutricion`: el roundtrip de herramienta es innecesario (los valores ya
+   están en tu contexto) y desperdicia tiempo y costo. Para ingredientes NO listados en la tabla,
+   ESTIMA los macros con tu conocimiento general. Genera el JSON final de inmediato con los valores
+   de la tabla + tus estimaciones, sin pasos intermedios de tool-calling.
 14. CAP DE SODIO AGREGADO POR DÍA (el revisor médico evalúa sodio total, no solo por ingrediente):
    Este día puede tener como MÁXIMO UN alimento de estas 4 categorías salty. NUNCA combines dos:
      a) Embutidos (longaniza, salami, jamón, chorizo)

@@ -166,6 +166,60 @@ REGLA ABSOLUTA PARA ESTE REINTENTO:
 """
 
 
+def build_pantry_drift_context(drift_warning) -> str:
+    """[P1-D · cableado P1-CHUNK-LEARN-3 · 2026-05-29] Bloque de contexto de DRIFT
+    de nevera entre el fin del chunk previo y el inicio de este chunk.
+
+    El cron `_compute_pantry_diff_warning` (cron_tasks.py) computa este dict ANTES de
+    generar el chunk N+1 y lo deja en `form_data["_pantry_drift_warning"]`. Pre-fix
+    NINGÚN builder lo consumía → la feature P1-D estaba muerta: se pagaba el cómputo,
+    el LLM nunca veía qué bajó/subió en la nevera, y solo la validación POST-LLM (con
+    retries que queman tokens) atrapaba el drift. Ahora el LLM recibe el contexto y
+    puede priorizar usar lo que se está agotando + incorporar lo que aumentó.
+
+    `drift_warning` es el dict `{critical_drops, notable_increases, new_items}` o None.
+    Retorna "" si no hay drift accionable (no-op transparente)."""
+    if not isinstance(drift_warning, dict):
+        return ""
+    drops = drift_warning.get("critical_drops") or []
+    increases = drift_warning.get("notable_increases") or []
+    new_items = drift_warning.get("new_items") or []
+    if not (drops or increases or new_items):
+        return ""
+
+    def _fmt(items):
+        out = []
+        for it in items[:10]:
+            if isinstance(it, dict):
+                name = it.get("name") or it.get("ingredient") or it.get("item") or ""
+                if not name:
+                    continue
+                out.append(str(name))
+            elif it:
+                out.append(str(it))
+        return out
+
+    lines = ["", "--- 📉 CAMBIOS EN LA NEVERA DESDE EL BLOQUE ANTERIOR ---"]
+    _drops = _fmt(drops)
+    _incr = _fmt(increases)
+    _new = _fmt(new_items)
+    if _drops:
+        lines.append(
+            f"BAJARON significativamente (PRIORIZA usarlos ahora antes de que se agoten): {', '.join(_drops)}."
+        )
+    if _incr:
+        lines.append(
+            f"AUMENTARON (considera incorporarlos para dar variedad): {', '.join(_incr)}."
+        )
+    if _new:
+        lines.append(
+            f"NUEVOS en la nevera (puedes usarlos): {', '.join(_new)}."
+        )
+    lines.append("Ajusta los platos de este bloque a esta realidad de inventario.")
+    lines.append("--------------------------------------------------------")
+    return "\n".join(lines)
+
+
 def build_rag_context(user_facts: str) -> str:
     """Genera el bloque de hechos permanentes del usuario (memoria vectorial)."""
     if not user_facts:
@@ -372,6 +426,98 @@ def build_technique_injection(selected_techniques: list) -> str:
         f"• Día 3 (Opción C): Aplica técnica '{selected_techniques[2]}'\n"
         f"Ajusta los gramos matemáticamente para cumplir las macros.\n"
         f"----------------------------------------------------------\n"
+    )
+
+
+def build_budget_context(form_data: dict) -> str:
+    """[BUDGET-CUSTOM · 2026-05-31] Bloque de presupuesto para el prompt del
+    planner. Antes `budget` se recolectaba/validaba pero NUNCA llegaba al LLM
+    (solo invalidaba caché). Ahora se inyecta el nivel categórico Y, si el
+    usuario eligió "Personalizar", el monto total en RD$ + la duración del ciclo,
+    para que el LLM ajuste la selección de ingredientes (cortes económicos,
+    proteínas accesibles, productos locales de temporada) al presupuesto.
+    Es una señal CUALITATIVA, no un cálculo exacto de costos — la app no tiene
+    base de precios por ingrediente. Fail-soft: '' si no hay budget."""
+    budget = (str(form_data.get("budget") or "")).strip().lower()
+    if not budget:
+        return ""
+
+    _LEVEL_GUIDANCE = {
+        "low": (
+            "El usuario tiene un presupuesto AJUSTADO. Prioriza ingredientes "
+            "económicos y de alto rendimiento: pollo de muslo/contramuslo (antes "
+            "que pechuga premium), huevos, lentejas, habichuelas, arroz, avena, "
+            "guineo, batata, y vegetales/frutas de temporada locales. Evita cortes "
+            "premium, mariscos caros, frutas importadas y quesos finos."
+        ),
+        "medium": (
+            "El usuario tiene un presupuesto MODERADO (equilibrio calidad/precio). "
+            "Combina proteínas accesibles (pollo, huevo, atún, carne molida) con "
+            "alguna opción de mayor calidad ocasional. Variedad razonable sin excesos."
+        ),
+        "high": (
+            "El usuario tiene un presupuesto AMPLIO. Puedes incluir mayor variedad "
+            "y cortes de mejor calidad (pechuga, res, pescado fresco, frutas "
+            "variadas), manteniendo el balance nutricional."
+        ),
+        "unlimited": (
+            "El usuario NO tiene restricción de presupuesto. Optimiza por calidad "
+            "nutricional y variedad sin preocuparte por el costo."
+        ),
+    }
+
+    if budget == "custom":
+        raw_amount = form_data.get("budgetAmount")
+        amount = None
+        try:
+            if raw_amount not in (None, ""):
+                amount = float(str(raw_amount).replace(",", ".").strip())
+        except (ValueError, TypeError):
+            amount = None
+        # [BUDGET-CURRENCY · 2026-05-31] Moneda del monto (default DOP=RD$). Se
+        # sanitiza a {DOP, USD}; el símbolo + nombre vienen de un mapping FIJO
+        # (no del valor crudo del cliente) → seguro contra prompt-injection.
+        currency = (str(form_data.get("budgetCurrency") or "DOP")).strip().upper()
+        if currency not in ("DOP", "USD"):
+            currency = "DOP"
+        _sym = "US$" if currency == "USD" else "RD$"
+        _cur_name = (
+            "dólares estadounidenses" if currency == "USD"
+            else "pesos dominicanos"
+        )
+        if amount and amount > 0:
+            duration = (str(form_data.get("groceryDuration") or "weekly")).strip().lower()
+            _dur_es = {
+                "weekly": "semanal (7 días)",
+                "biweekly": "quincenal (15 días)",
+                "monthly": "mensual (30 días)",
+            }.get(duration, "por ciclo")
+            return (
+                "\n--- 💰 PRESUPUESTO DE COMPRAS (OBLIGATORIO — AJUSTA INGREDIENTES) ---\n"
+                f"El usuario definió un presupuesto TOTAL de {_sym}{amount:,.0f} "
+                f"({_cur_name}) para su ciclo de compras {_dur_es}.\n"
+                "OBJETIVO: que la lista de compras del plan se MANTENGA CERCA de ese monto.\n"
+                "  - Prioriza ingredientes económicos y de alto rendimiento (pollo de "
+                "muslo, huevos, lentejas, habichuelas, arroz, avena, vegetales y frutas "
+                "de temporada locales).\n"
+                "  - Reutiliza ingredientes entre comidas para reducir desperdicio.\n"
+                "  - Evita cortes premium, mariscos caros, frutas importadas y marcas "
+                "caras salvo que el monto lo permita holgadamente.\n"
+                "Es una guía cualitativa: acércate al monto SIN sacrificar el balance "
+                "nutricional ni las calorías/macros objetivo.\n"
+                "------------------------------------------------------------\n"
+            )
+        # custom sin monto válido → fallback a guía moderada.
+        budget = "medium"
+
+    guidance = _LEVEL_GUIDANCE.get(budget)
+    if not guidance:
+        return ""
+    return (
+        "\n--- 💰 PRESUPUESTO DE COMPRAS ---\n"
+        f"{guidance}\n"
+        "Mantén SIEMPRE el balance nutricional y las calorías/macros objetivo.\n"
+        "----------------------------------\n"
     )
 
 
@@ -985,7 +1131,16 @@ def build_chunk_lessons_context(chunk_lessons: dict) -> str:
     if not lines:
         return ""
 
-    chunk_num = chunk_lessons.get("chunk_number", "anterior")
+    # [A7-KEYDRIFT · 2026-05-29] El worker escribe la clave PLURAL `chunk_numbers`
+    # (lista, cron_tasks.py:25815). Leer la singular `chunk_number` siempre caía al
+    # default "anterior" → el header del bloque de lecciones nunca mostraba el número
+    # real del chunk al LLM. Derivar el label desde la lista; fallback al singular legacy.
+    _chunk_nums = chunk_lessons.get("chunk_numbers")
+    if isinstance(_chunk_nums, list) and _chunk_nums:
+        _nums = [str(n) for n in _chunk_nums]
+        chunk_num = _nums[0] if len(_nums) == 1 else f"{_nums[0]}-{_nums[-1]}"
+    else:
+        chunk_num = chunk_lessons.get("chunk_number", "anterior")
     is_lifetime = chunk_lessons.get("is_lifetime_aggregated", False)
 
     header = f"--- 📋 LECCIONES DEL CHUNK {chunk_num} (APLICA OBLIGATORIAMENTE) ---"

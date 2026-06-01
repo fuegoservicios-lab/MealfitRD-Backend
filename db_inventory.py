@@ -1335,7 +1335,18 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                     break
 
         # Si no se encontró un registro compatible o no existía, insertamos uno nuevo.
-        # El INSERT no tiene race (la fila no existe hasta este momento).
+        # [P3-PROD-AUDIT-2 · 2026-05-30] El comentario legacy "El INSERT no tiene race"
+        # es engañoso CROSS-CALL: dos escritores concurrentes del MISMO item nuevo +
+        # unit + user (restock vs tool del chat) ambos ven `existing` vacío → ambos
+        # INSERT → el 2º viola el unique `(user_id, ingredient_name, unit)` → excepción
+        # tragada → `return False` → add perdido. NO es corrupción (la unique
+        # constraint PREVIENE duplicados; el peor caso es un add perdido recuperable
+        # re-presionando restock) → P3 narrow ACEPTADO. El fix ideal sería `INSERT ...
+        # ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE SET quantity =
+        # quantity + EXCLUDED.quantity` vía raw SQL (PostgREST upsert no soporta el
+        # increment), pero se difiere: requiere migrar `test_inventory_source_column.py`
+        # del mock `.insert()` a capturar `execute_sql_write`, costo > beneficio para
+        # esta race estrecha sin corrupción.
         if not updated:
             if quantity >= 0.01:
                 supabase.table("user_inventory").insert({
@@ -1347,6 +1358,26 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                     "last_mutation_type": mutation_type,
                     "source": source,
                 }).execute()
+            elif quantity < 0 and existing.data:
+                # [P2-DEDUCT-NOOP-INCOMPAT-UNIT · 2026-05-30] Deducción no-op
+                # silenciosa: HABÍA fila(s) del mismo ingrediente pero NINGUNA en
+                # unidad convertible (convert_amount → None para todas — típico
+                # cuando master_ingredients no tiene density_g_per_cup/unit y
+                # MEALFIT_CROSS_UNIT_CONVERSION_STRICT=True). Pre-fix retornábamos
+                # `True` aquí → deduct_consumed_meal_from_inventory lo clasificaba
+                # como succeeded → el item NUNCA llegaba a failed_inventory_deductions
+                # → ni se descontaba la nevera ni se reintentaba ni alertaba el cron
+                # de backlog. Retornar False lo enruta al replay queue
+                # (reason=deduction_returned_false) y señala el master incompleto.
+                # OJO: el caso `existing.data` VACÍO (item ausente en la nevera) NO
+                # entra aquí — sigue retornando True (ausencia ≠ failure, correcto).
+                logger.warning(
+                    f"[P2-DEDUCT-NOOP] deducción no-op: {len(existing.data)} fila(s) "
+                    f"existente(s) del ingrediente pero unidad incompatible — "
+                    f"user={user_id} ingredient={ingredient_name!r} unit={unit!r}. "
+                    f"Backfill density_g_per_cup/density_g_per_unit en master_ingredients."
+                )
+                return False
         return True
     except Exception as e:
         logger.error(f"Error actualizando inventario para {user_id}: {e}")
@@ -2244,8 +2275,26 @@ def sync_inventory_after_chunk_completion(
         # frontend que no envían lista de ingredientes).
         try:
             if ingredients_list:
-                deduct_consumed_meal_from_inventory(user_id, ingredients_list)
-                stats["items_deducted"] += len(ingredients_list)
+                # [P3-CHUNK-RECONCILE-TELEMETRY · 2026-05-30] Capturar el summary
+                # de deduct para contar lo REALMENTE deducido (succeeded+inferred),
+                # no el len aspiracional de ingredients_list (pre-fix la telemetría
+                # del cron [P0.1/PANTRY-SYNC] mentía sobre cuánto se dedujo). Los
+                # fallos ya se persisten en failed_inventory_deductions dentro de
+                # la propia deduct (replay SSOT). El marcado de inventory_synced_at
+                # sigue siendo INCONDICIONAL e intencional (filas sin ingredientes
+                # parseables NO deben reintentarse cada cierre de chunk) — solo
+                # corregimos la exactitud del contador.
+                _summary = deduct_consumed_meal_from_inventory(user_id, ingredients_list)
+                if isinstance(_summary, dict):
+                    stats["items_deducted"] += (
+                        len(_summary.get("succeeded", [])) + len(_summary.get("inferred", []))
+                    )
+                    _failed = _summary.get("failed_to_deduct", [])
+                    if _failed:
+                        stats["items_failed"] = stats.get("items_failed", 0) + len(_failed)
+                else:
+                    # Caller legacy / early-return None: conservar el conteo previo.
+                    stats["items_deducted"] += len(ingredients_list)
 
             execute_sql_write(
                 "UPDATE consumed_meals SET inventory_synced_at = NOW() WHERE id = %s",
@@ -2301,6 +2350,28 @@ def add_depleted_item(
         # que aplique según si master_ingredient_id es NULL o NOT NULL.
         # Mantenemos dos branches para que el SQL sea explícito.
         if master_ingredient_id:
+            # [P3-DEPLETED-DUAL-KEY · 2026-05-30] Borrar la fila name-keyed
+            # huérfana (master_ingredient_id NULL) del MISMO ingrediente antes
+            # del upsert master-keyed. Los dos unique indexes parciales
+            # (user,master) y (user,lower(name)) WHERE master IS NULL son
+            # disjuntos: sin esto, el mismo ingrediente lógico puede vivir como
+            # DOS filas — una creada por la migración one-shot del localStorage
+            # (legacy sin master_id) y otra por el chat agent / Pantry que SÍ
+            # resuelve master_id → "Maní" duplicado en Agotados, y un solo
+            # delete_depleted_item borra solo una. Best-effort: si falla, el
+            # upsert master procede igual (no bloquea el flujo principal).
+            try:
+                execute_sql_write(
+                    "DELETE FROM user_depleted_items "
+                    "WHERE user_id = %s::uuid AND master_ingredient_id IS NULL "
+                    "AND lower(trim(ingredient_name)) = lower(trim(%s))",
+                    (user_id, ingredient_name),
+                )
+            except Exception as _dual_err:
+                logger.debug(
+                    f"[P3-DEPLETED-DUAL-KEY] cleanup de fila name-keyed huérfana "
+                    f"falló (best-effort) user={user_id} name={ingredient_name!r}: {_dual_err}"
+                )
             query = """
                 INSERT INTO user_depleted_items (
                     user_id, master_ingredient_id, ingredient_name,
@@ -2414,6 +2485,62 @@ def delete_depleted_item(
         return False
 
 
+def delete_all_depleted_items(user_id: str) -> int:
+    """[P3-DELETEALL-DEPLETED · 2026-05-30] Borra TODAS las filas de
+    `user_depleted_items` del usuario. Lo usa 'Vaciar Nevera' (Pantry
+    confirmDeleteAll): vaciar la nevera implica que los recordatorios de
+    "agotado" también son obsoletos. Sin esto, el clear de `_persistDepleted([])`
+    del frontend era puramente cosmético — la fuente de verdad es esta tabla
+    (cross-device) y `_fetchAndApply` los repoblaba al próximo mount.
+
+    Filtro `WHERE user_id = %s` defensa-en-profundidad. Returns: count de filas
+    borradas (best-effort 0 si supabase no disponible o excepción).
+    """
+    if not supabase or not user_id:
+        return 0
+    try:
+        res = (
+            supabase.table("user_depleted_items")
+            .delete(count="exact")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return int(getattr(res, "count", 0) or 0)
+    except Exception as e:
+        logger.warning(f"[P3-DELETEALL-DEPLETED] delete_all_depleted_items falló user={user_id}: {e}")
+        return 0
+
+
+def bulk_delete_depleted_items(user_id: str, names) -> int:
+    """[P3-BACKEND-AUDIT · 2026-06-01] Borra en UN solo round-trip las filas de
+    `user_depleted_items` del usuario cuyo `ingredient_name` matchee (case-insensitive,
+    trim) cualquiera de `names`. Reemplaza el loop N+1 de `delete_depleted_item`
+    por nombre en `/restock` (hasta ~N DELETEs secuenciales colapsados a 1).
+
+    Preserva la semántica case-insensitive del helper singular vía
+    `lower(trim(ingredient_name)) = ANY(%s)` con `names` normalizados — más robusto
+    que `ilike` (que interpretaría `_`/`%` como wildcards). `WHERE user_id = %s`
+    defensa-en-profundidad (invariante I2). Best-effort: returns count de nombres
+    únicos solicitados (0 si supabase/pool no disponible o excepción). Anchor:
+    P3-RESTOCK-BULK-DELETE.
+    """
+    if not user_id or not names:
+        return 0
+    norm = sorted({str(n).strip().lower() for n in names if n and str(n).strip()})
+    if not norm:
+        return 0
+    try:
+        execute_sql_write(
+            "DELETE FROM user_depleted_items "
+            "WHERE user_id = %s AND lower(trim(ingredient_name)) = ANY(%s)",
+            (user_id, norm),
+        )
+        return len(norm)
+    except Exception as e:
+        logger.warning(f"[P3-RESTOCK-BULK-DELETE] bulk_delete_depleted_items falló user={user_id}: {e}")
+        return 0
+
+
 def bulk_upsert_depleted_items(user_id: str, items: List[Dict[str, Any]]) -> int:
     """[P3-DEPLETED-BD · 2026-05-22] Upsert batch de items agotados — usado
     por la migration one-shot del localStorage existente al BD (frontend
@@ -2430,10 +2557,28 @@ def bulk_upsert_depleted_items(user_id: str, items: List[Dict[str, Any]]) -> int
         name = item.get("ingredient_name") or item.get("name")
         if not name:
             continue
+        # [P2-DEPLETED-QTY-VALIDATE · 2026-05-30] Coerción defensiva de `quantity`
+        # ANTES de llamar add_depleted_item. El `float(...)` se evaluaba en el
+        # frame del CALLER (argumento), FUERA del try/except interno de
+        # add_depleted_item → un item legacy con quantity='½ lb'/'abc' (clase de
+        # data corrupta del audit 2026-05-23, manipulable vía DevTools) lanzaba
+        # ValueError que abortaba TODO el batch → HTTP 500 → la migración one-shot
+        # (Pantry.jsx solo setea el flag migrated_at en resp.ok) re-POST-eaba en
+        # CADA mount para siempre + perdía los items válidos del batch. Best-effort
+        # per-item: quantity corrupta cae a 1.0 (consistente con el patrón del módulo).
+        _raw_qty = item.get("quantity")
+        try:
+            qty = float(_raw_qty) if _raw_qty is not None else 1.0
+            # NaN (qty != qty), ±Inf y negativos → fallback 1.0 (sin import math).
+            if qty != qty or qty in (float("inf"), float("-inf")) or qty < 0:
+                qty = 1.0
+            qty = min(qty, 9999.0)  # cap defensivo contra valores absurdos
+        except (TypeError, ValueError):
+            qty = 1.0
         ok = add_depleted_item(
             user_id,
             ingredient_name=str(name),
-            quantity=float(item.get("quantity") or 1.0),
+            quantity=qty,
             unit=str(item.get("unit") or "unidad"),
             master_ingredient_id=item.get("master_ingredient_id"),
             category=item.get("category"),

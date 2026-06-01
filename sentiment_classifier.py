@@ -10,6 +10,7 @@ import json
 import logging
 import time
 from functools import lru_cache
+from knobs import _env_float, _env_str
 
 logger = logging.getLogger(__name__)
 
@@ -19,15 +20,40 @@ logger = logging.getLogger(__name__)
 from prompts.sentiment import PERSONALITY_PROFILES, SENTIMENT_PROMPT
 
 
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Cohorte omitida del sweep original: el
+# clasificador de sentimiento construye `ChatGoogleGenerativeAI` SIN `timeout=`.
+# Corre INLINE en el hot-path del chat (agent.py classify_sentiment) ANTES del
+# wrapper `_graph_timeout`, así que un socket colgado bloquearía el thread del
+# worker uvicorn. `_env_float` con clamp.
+# [P3-PREVIEW-MODEL-KNOB · 2026-05-30] Modelo a knob (era hardcoded) — un preview
+# de Gemini puede deprecarse sin aviso; permite swap sin redeploy.
+def _sentiment_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_SENTIMENT_LLM_TIMEOUT_S",
+        8.0,
+        validator=lambda v: 0.0 < v <= 60.0,
+    )
+
+
+def _sentiment_model_name() -> str:
+    return _env_str("MEALFIT_SENTIMENT_MODEL", "gemini-3.1-flash-lite")
+
+
 @lru_cache(maxsize=1)
 def _get_classifier_model():
-    """Inicializa el modelo clasificador una sola vez (singleton)."""
+    """Inicializa el modelo clasificador una sola vez (singleton).
+
+    Nota: el `@lru_cache(maxsize=1)` fija el `timeout=`/`model=` al primer build;
+    cambiar el knob requiere reinicio del worker (aceptable — son knobs de
+    operación, no intra-request)."""
     from langchain_google_genai import ChatGoogleGenerativeAI
     return ChatGoogleGenerativeAI(
-        model="gemini-3.1-flash-lite",
+        model=_sentiment_model_name(),
         temperature=0.0,
         max_output_tokens=10,
-        google_api_key=os.environ.get("GEMINI_API_KEY")
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline gRPC duro.
+        timeout=_sentiment_llm_timeout_s()
     )
 
 

@@ -160,11 +160,15 @@ def get_system_health(request: Request):
             metrics["emotional_distribution"] = {row['response_sentiment']: row['count'] for row in emotions}
 
         # 4. Average Quality Score (muestreo por perfiles más recientes).
+        # [A6-KEYDRIFT · 2026-05-29] La clave real es `quality_history_chunks` (lista de
+        # floats 0-1, cron_tasks.py:15281). `quality_history` (sin sufijo) NO tiene writers
+        # → el WHERE filtraba TODAS las filas y la métrica jamás se calculaba. El parser
+        # downstream (float(history[-1])) ya esperaba floats, solo la clave estaba mal.
         profiles = execute_sql_query(
             f"""
-            SELECT health_profile->>'quality_history' as qh
+            SELECT health_profile->>'quality_history_chunks' as qh
             FROM user_profiles
-            WHERE health_profile->>'quality_history' IS NOT NULL
+            WHERE health_profile->>'quality_history_chunks' IS NOT NULL
             ORDER BY updated_at DESC NULLS LAST
             LIMIT {profile_sample_limit}
             """,
@@ -555,9 +559,17 @@ def get_plan_graph_health():
                 "ready": False,
                 "build_failures": -1,
                 "status": "unknown",
+                # [P3-BACKEND-AUDIT · 2026-06-01] Endpoint PUBLICO (sin
+                # _verify_admin_token, a diferencia de /admin/*): NO filtrar
+                # type(e)/str(e) al cliente. La excepción realista aquí es un
+                # ImportError del import diferido → expondría nombres de
+                # módulo/símbolo (reconnaissance). El logger.error de arriba ya
+                # preserva el detalle full server-side con stack. Consistente con
+                # los otros handlers del router (safe_error_detail), P2-HEALTH-UID-STRIP
+                # y el truncado [:240] de P3-READY-REASON. Anchor: P3-HEALTH-LEAK-STRIP.
                 "message": (
-                    f"No se pudo importar/consultar el estado del orquestador: "
-                    f"{type(e).__name__}: {e}"
+                    "No se pudo importar/consultar el estado del orquestador "
+                    "(detalle en logs del servidor)."
                 ),
             },
         )
@@ -827,6 +839,69 @@ def admin_force_deploy_lag_check(
     }
 
 
+class _PurgeAccountBody(BaseModel):
+    """[P1-PROD-AUDIT-2 · 2026-05-30] Body para `POST /admin/account/purge-data`."""
+    user_id: str = Field(..., min_length=8, max_length=64)
+    include_profile: bool = Field(default=True)
+    delete_auth_user: bool = Field(default=False)
+
+
+@router.post("/admin/account/purge-data")
+def admin_purge_account_data(request: Request, body: _PurgeAccountBody):
+    """[P1-PROD-AUDIT-2 · 2026-05-30] Borrado de cuenta DETERMINÍSTICO (right-to-erasure).
+
+    Cierra el gap: pre-fix NO existía flujo programático de borrado. El SRE corría
+    `auth.admin.delete_user` (manual), que solo cascadea las ~19 tablas con FK
+    CASCADE → ~12 tablas con `user_id` SIN FK (user_facts, visual_diary, weight_log,
+    agent_sessions, etc., varias con user_id TEXT) retenían PII huérfana
+    indefinidamente, contradiciendo la Política de Privacidad. Storage y checkpoints
+    LangGraph tampoco se borraban.
+
+    Este endpoint invoca `db_profiles.delete_account_data(user_id)`, que purga TODA
+    la data user-scoped (33 tablas) + el bucket Storage `visual_diary_images/<uid>/`
+    + los checkpoints LangGraph (por thread_id), de forma determinística y re-ejecutable.
+
+    Auth: `Authorization: Bearer <CRON_SECRET>` (mismo gate que el resto de /admin/*).
+
+    Body:
+        `{"user_id": "<uuid>", "include_profile": true, "delete_auth_user": false}`
+        - `include_profile` (default true): borra también `user_profiles`.
+        - `delete_auth_user` (default false): si true, además llama
+          `auth.admin.delete_user` (borra la cuenta de auth — irreversible). Default
+          false para que el SRE confirme el data-purge antes del borrado de auth.
+
+    Responde 200 con `{deleted: {tabla: count}, storage_objects_removed, errors,
+    auth_user_deleted}`.
+    """
+    _verify_admin_token(request.headers.get("authorization"))
+    _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
+
+    try:
+        from db_profiles import delete_account_data
+    except Exception as e:
+        logger.error(f"[P1-PROD-AUDIT-2] import delete_account_data falló: {e}")
+        raise HTTPException(status_code=503, detail=f"Helper no disponible: {type(e).__name__}")
+
+    logger.warning(
+        f"[P1-PROD-AUDIT-2] PURGE de cuenta solicitado para user_id={body.user_id} "
+        f"(include_profile={body.include_profile}, delete_auth_user={body.delete_auth_user})."
+    )
+    result = delete_account_data(body.user_id, include_profile=body.include_profile)
+
+    auth_user_deleted = False
+    if body.delete_auth_user:
+        try:
+            from db_core import supabase
+            if supabase:
+                supabase.auth.admin.delete_user(body.user_id)
+                auth_user_deleted = True
+        except Exception as e:
+            result.setdefault("errors", []).append(f"auth.admin.delete_user: {e}")
+            logger.error(f"[P1-PROD-AUDIT-2] auth.admin.delete_user({body.user_id}) falló: {e}")
+
+    return {"success": len(result.get("errors", [])) == 0, "auth_user_deleted": auth_user_deleted, **result}
+
+
 # [P1-OBS-1 · 2026-05-12] Anchor: P1-OBS-1-HEALTH-SNAPSHOT.
 # Nodos observables expuestos en `watchdog_ticks`. Si añades un watchdog nuevo
 # que emite tick en pipeline_metrics, agrega su node aquí Y al test parser-based
@@ -989,6 +1064,15 @@ def admin_health_snapshot(request: Request):
     except Exception as e:
         logger.debug(f"[P1-OBS-1] SELECT circuit breakers falló: {e}")
 
+    # [P3-COMPRESSOR-CACHE · 2026-05-29] Hit-rate del cache de compresión de
+    # contexto (mide cuánto ahorra el cache antes de invertir más). Best-effort.
+    compressor_cache: Optional[dict] = None
+    try:
+        from graph_orchestrator import get_compressor_cache_stats
+        compressor_cache = get_compressor_cache_stats()
+    except Exception as e:
+        logger.debug(f"[P1-OBS-1] get_compressor_cache_stats falló: {e}")
+
     return {
         "success": True,
         "live_marker": live_marker,
@@ -1000,6 +1084,7 @@ def admin_health_snapshot(request: Request):
         "stuck_chunks": stuck_chunks,
         "dead_lettered_chunks": dead_lettered_chunks,
         "open_circuit_breakers": open_circuit_breakers,
+        "compressor_cache": compressor_cache,
     }
 
 

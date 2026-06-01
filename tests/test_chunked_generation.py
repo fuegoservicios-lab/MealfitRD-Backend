@@ -917,8 +917,11 @@ def _mock_execute_sql_query_factory(plan_data, backup_plan, user_profile=None, t
             res = {"plan_data": plan_data}
         elif "emergency_backup_plan" in query:
             res = {"backup": backup_plan}
-        elif "SELECT health_profile FROM user_profiles" in query:
-            res = {"health_profile": user_profile or {}}
+        elif "health_profile" in query and "user_profiles" in query:
+            # [S13-1 · GAP-2 · 2026-05-29] El gate ahora lee health_profile +
+            # logging_preference en un solo SELECT; el substring se amplió de
+            # "SELECT health_profile FROM user_profiles" a tolerar la columna extra.
+            res = {"health_profile": user_profile or {}, "logging_preference": None}
         
         if res is not None:
             if fetch_one:

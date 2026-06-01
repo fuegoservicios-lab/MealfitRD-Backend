@@ -119,6 +119,12 @@ class RateLimiter:
                 _emit_rl_cleanup_metric(_bucket_count, _expired_count)
                 if _bucket_limit_warn > 0 and _bucket_count > _bucket_limit_warn:
                     _emit_rl_saturation_alert(_bucket_count, _bucket_limit_warn)
+                else:
+                    # [P1-PROD-AUDIT-2 · 2026-05-30] La cardinalidad volvió bajo el
+                    # umbral → auto-resolver el alert si estaba abierto. Pre-fix
+                    # `rate_limiter_bucket_saturation` no tenía NINGÚN resolver →
+                    # rojo-permanente tras un único spike transitorio.
+                    _resolve_rl_saturation_alert()
             except Exception as _metric_err:
                 try:
                     logger.debug(
@@ -232,6 +238,24 @@ def _emit_rl_saturation_alert(bucket_count: int, threshold: int) -> None:
                 }, ensure_ascii=False),
                 _json.dumps([]),
             ),
+        )
+    except Exception:
+        pass
+
+
+def _resolve_rl_saturation_alert() -> None:
+    """[P1-PROD-AUDIT-2 · 2026-05-30] Auto-resolve de `rate_limiter_bucket_saturation`.
+
+    Pre-fix esta alert se emitía con `resolved_at = NULL` y NO tenía NINGÚN
+    resolver (Auto/Handler/sweep) → quedaba rojo-permanente en el panel tras un
+    único spike transitorio de cardinalidad. La llamamos en el cleanup tick cuando
+    `_bucket_count <= threshold`. Best-effort + idempotente; `AND resolved_at IS NULL`
+    para no re-tocar filas ya cerradas (clase NG-2/S12-2)."""
+    try:
+        from db_core import execute_sql_write
+        execute_sql_write(
+            "UPDATE system_alerts SET resolved_at = NOW() "
+            "WHERE alert_key = 'rate_limiter_bucket_saturation' AND resolved_at IS NULL",
         )
     except Exception:
         pass

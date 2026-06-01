@@ -31,10 +31,32 @@ Fix:
      un cap aplicado (canonicalmente).
   5. Knob `MEALFIT_COHERENCE_CAP_AWARE` (default True) kill switch sin redeploy.
 
-Limitación documentada: solo 5 caps de los ~15 totales instrumentados. Los
-demás (OLIVE, CITRUS, SWEETENER, SAUCE, OIL, CARBS, CANNED-PROTEIN, FRUITS-LARGE,
-FRUITS-PERISHABLE, BROTHS) siguen reportándose como divergencias hasta hookear
-análogamente si producen FP suficientes.
+[P2-CAPS-COHERENCE-RECONCILE-2 · 2026-05-30] Extensión: instrumentados 3 caps
+perecederos adicionales que SÍ llegan al guard (no son staples, son
+recipe-mentioned) — FRUITS-PERISHABLE (fresas/berries, recort ~68%),
+FRUITS-LARGE (melón/sandía) y CANNED-PROTEIN (atún/sardinas) — además de la
+rama 'mazo' de P3-HERB-CAP (el disparador COMÚN '1 mazo de cilantro', que antes
+solo registraba la rama 'g'/'cda', caso raro).
+
+[P3-CAPS-COHERENCE-RECONCILE-3 · 2026-05-30] CIERRE DE LA CLASE ENTERA. Los 7
+caps restantes que el scoping previo dejó diferidos ("cerrar solo lo que produce
+FP observados") ahora se instrumentan en TODAS sus ramas: OLIVE (4 ramas:
+unit/weight/count/volumétric), CITRUS (unit+g), SAUCE (lata+weight), OIL
+(botella+weight), CARBS (paquete+weight), SWEETENER (caja+weight), BROTHS (g+lb).
+Además se cerraron las ramas PARCIALES de los caps viejos (instrumentación
+incompleta del fix 2026-05-16, que registraba solo UNA rama por cap): VEG rama
+unit, SPICE rama sobre, LEGUMES rama paquete, CANNED rama weight, EGGS rama
+unidad, LACTEOS ramas lb+pote.
+
+Razón del cierre total (vs el defer previo): añadir `_record_cap_applied` es
+puramente ADITIVO y dirección-SEGURA (los caps solo reducen over-buy, nunca
+under-buy ni corrupción) → no hay riesgo. El guard ahora NUNCA ve una divergencia
+de magnitud falsa de un cap, sin importar qué unidad nativa emitió el LLM. CITRUS
+era el FP genuino (perecedero no-staple no-líquido que llega a la capa de
+magnitud del guard); los líquidos/condimentos (OIL/SAUCE/SWEETENER) son
+belt-and-suspenders sobre la tolerancia de líquidos (50%) + el filtro is_staple
+de presence/absence. Estado actual: 16/16 caps instrumentados en todas sus ramas
+(cero diferidos).
 """
 from __future__ import annotations
 
@@ -95,6 +117,29 @@ def test_aggregate_calls_reset_at_start():
     "P6-EGGS-AGGREGATE-CAP",
     "P6-LACTEOS-PERISHABLE-CAP",
     "P6-SPICE-CAP",
+    # [P2-CAPS-COHERENCE-RECONCILE-2 · 2026-05-30] Caps perecederos que SÍ
+    # llegan al guard (no-staple, recipe-mentioned), ahora instrumentados.
+    "P6-FRUITS-PERISHABLE-CAP",
+    "P6-FRUITS-LARGE-CAP",
+    "P6-CANNED-PROTEIN-CAP",
+    # [P3-CAPS-COHERENCE-RECONCILE-3 · 2026-05-30] Cierre de la clase entera:
+    # los 7 caps restantes que estaban diferidos ("solo cerrar FPs observados")
+    # ahora instrumentados en TODAS sus ramas. Registrar es puramente aditivo y
+    # dirección-segura (los caps solo reducen over-buy) → el guard nunca ve una
+    # divergencia de magnitud falsa sin importar qué unidad emitió el LLM. CITRUS
+    # es el FP genuino (perecedero no-staple no-líquido que llega al guard); los
+    # líquidos/staples (OIL/SAUCE/SWEETENER) son belt-and-suspenders sobre la
+    # tolerancia de líquidos + el filtro is_staple del guard. Además se cerraron
+    # las ramas parciales de los caps viejos (VEG unit, SPICE sobre, LEGUMES
+    # paquete, CANNED weight, EGGS unidad, LACTEOS lb+pote) que el fix original
+    # de 2026-05-16 había dejado sin registrar.
+    "P5-OLIVE-CAP",
+    "P6-CITRUS-CAP",
+    "P6-SAUCE-CAP",
+    "P6-OIL-CAP",
+    "P6-CARBS-CAP",
+    "P6-SWEETENER-CAP",
+    "P6-BROTHS-CAP",
 ])
 def test_cap_callsite_records_metadata(cap_marker: str):
     """Cada uno de los 5 caps instrumentados debe invocar `_record_cap_applied`.
@@ -160,10 +205,14 @@ def test_kill_switch_default_enabled():
     cuando no está set en env. Si flip a False, todas las divergencias
     magnitudes (legítimas o no) vuelven a contaminar al guard."""
     text = _read_shopping()
-    # Buscar el pattern que parsea el env var: `... not in ("false", "0", "off", "no")`
-    # Eso indica que cualquier otro string (incluido "true" o unset → "true" default) → True.
+    # [P2-CAPS-COHERENCE-RECONCILE-2 · 2026-05-30] Regex corregido. El previo
+    # exigía `MEALFIT_COHERENCE_CAP_AWARE ... .environ.get(... "true")` (var ANTES
+    # de .environ.get), orden imposible para el patrón real
+    # `.environ.get("MEALFIT_COHERENCE_CAP_AWARE", "true")` donde la var es el
+    # PRIMER argumento de get() → el test fallaba en falso contra código correcto.
+    # Ahora ancla el patrón real: el knob se lee con default "true".
     pattern = re.search(
-        r'MEALFIT_COHERENCE_CAP_AWARE[^\n]*?\.environ\.get\([^,]+,\s*["\']true["\']',
+        r'\.environ\.get\(\s*["\']MEALFIT_COHERENCE_CAP_AWARE["\']\s*,\s*["\']true["\']',
         text,
     )
     assert pattern, (

@@ -173,6 +173,22 @@ from knobs import (
 
 _SEMANTIC_INIT_FAIL_COOLDOWN_S = max(0, _knob_env_int("MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S", 600))
 
+
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30 · P2-PROD-AUDIT-3 cierre] Cohorte omitida del
+# sweep original: el cliente `GoogleGenerativeAIEmbeddings` de shopping_calculator
+# (init de `embed_documents` + runtime `embed_query` del semantic cache, alcanzado
+# en plan-gen / recalc-shopping-list) quedó SIN deadline. `_gemini_call_with_retry`
+# reintenta TRAS excepción pero NO impone deadline sobre un socket colgado → espera
+# infinita que bloquea el worker thread. `GoogleGenerativeAIEmbeddings` NO acepta
+# `timeout=` en esta versión del SDK — solo `client_args={"timeout": ...}` acota el
+# httpx deadline. Mismo knob que constants.py::_embeddings_llm_timeout_s.
+def _embeddings_llm_timeout_s() -> float:
+    return _knob_env_float(
+        "MEALFIT_EMBEDDING_LLM_TIMEOUT_S",
+        15.0,
+        validator=lambda v: 0.0 < v <= 60.0,
+    )
+
 # Batching del cache init de embeddings para no saturar RPM del modelo. Modelos
 # *-preview (ej. gemini-embedding-2-preview) tienen cuotas Tier 1 conservadoras
 # (~30-100 RPM). master_ingredients tiene 50-100+ ítems; mandarlos en una sola
@@ -455,7 +471,10 @@ def get_semantic_cache():
             from constants import GEMINI_EMBEDDING_TEXT_MODEL
             api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
             embeddings = GoogleGenerativeAIEmbeddings(
-                model=GEMINI_EMBEDDING_TEXT_MODEL, google_api_key=api_key
+                model=GEMINI_EMBEDDING_TEXT_MODEL,
+                google_api_key=api_key,
+                # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline httpx (ver helper).
+                client_args={"timeout": _embeddings_llm_timeout_s()},
             )
         except Exception as exc:
             logging.info(
@@ -1269,7 +1288,17 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
     deducir.
     """
     if isinstance(s, dict):
-        qty = float(s.get("quantity", 0))
+        # [P3-PARSE-QTY-DICT-GUARD · 2026-05-30] Blindar simétricamente con la
+        # rama string (que ya cae a 0.0 vía parse_fraction). Un futuro caller
+        # que pase un dict crudo con quantity='½'/'dos'/None/'inf' lanzaría
+        # ValueError/TypeError o propagaría NaN/Inf a la lista. Sin import math:
+        # `qty != qty` detecta NaN; `in (inf,-inf)` detecta Inf.
+        try:
+            qty = float(s.get("quantity", 0))
+            if qty != qty or qty in (float("inf"), float("-inf")):
+                qty = 0.0
+        except (TypeError, ValueError):
+            qty = 0.0
         unit = s.get("unit", "unidad")
         if unit:
             unit = str(unit).strip().lower()
@@ -4343,9 +4372,15 @@ def _strip_dairy_brand(name: str) -> str:
 # divergencias `magnitude` cuyo food matchea un cap aplicado (canonicalmente).
 # Knob kill switch `MEALFIT_COHERENCE_CAP_AWARE` (default True).
 #
-# Limitación: solo 5 caps de los ~15 totales están instrumentados (los que
-# producen los falsos positivos más frecuentes). Los demás siguen reportándose
-# como divergencias; si producen FP suficientes, hookearlos análogamente.
+# [P3-CAPS-COHERENCE-RECONCILE-3 · 2026-05-30] CLASE CERRADA: los 16 caps están
+# instrumentados en TODAS sus ramas de magnitud (HERB, VEG, OLIVE, CITRUS, SPICE,
+# LEGUMES-DRY, CANNED-PROTEIN, EGGS-AGGREGATE, LACTEOS-PERISHABLE, FRUITS-LARGE,
+# FRUITS-PERISHABLE, CARBS, SAUCE, OIL, SWEETENER, BROTHS). Registrar es aditivo y
+# dirección-segura (los caps solo reducen over-buy) → el guard nunca ve un FP de
+# magnitud de un cap, sin importar la unidad nativa que emitió el LLM. Si añades un
+# cap NUEVO, registra `_record_cap_applied(name, pre, post, "MARKER")` en CADA rama
+# que modifique `_units[...]` y añade el marker al parametrize de
+# `test_p1_caps_coherence_reconcile.py::test_cap_callsite_records_metadata`.
 _CAPS_APPLIED_LAST_RUN: list = []
 
 
@@ -5918,6 +5953,14 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 f"{_herb_cap_mazos} (person_weeks={_person_weeks:.1f}; "
                 f"hierbas frescas no se almacenan >1 semana)"
             )
+            # [P2-CAPS-COHERENCE-RECONCILE-2 · 2026-05-30] La rama 'mazo' (el
+            # disparador COMÚN — el LLM emite '1 mazo de cilantro') no registraba
+            # el cap, solo la rama 'g' (abajo, caso raro 'cda'). Sin el registro,
+            # el coherence guard ve la divergencia de magnitud en unidad 'mazo'
+            # (37→8) como crítica y fuerza un retry innecesario en mode=block
+            # (default prod). El test pasaba en falso porque 'found_any' lo
+            # satisfacía la rama 'g'. Registrar AMBAS ramas cierra el FP.
+            _record_cap_applied(_name, _old_mazos, _units['mazo'], "P3-HERB-CAP")
         # Cap por gramos: BLOQUE 1.5 también convierte g_total → mazos
         # vía `ceil(g_total / 50)`. Si LLM dijo "1 cda cilantro" eso ya
         # se convirtió a g en el loop anterior; cap aquí evita 23 mazos
@@ -5995,6 +6038,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _units[_unit_key] > _olive_cap_frascos:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_olive_cap_frascos)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P5-OLIVE-CAP")
                 logging.warning(
                     f"[P5-OLIVE-CAP] '{_name}' {_unit_key!r} cap: {_old:.1f} → "
                     f"{_olive_cap_frascos} (person_weeks={_person_weeks:.1f}; "
@@ -6014,6 +6058,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             for _wu in list(_present_units.keys()):
                 del _units[_wu]
             _units['g'] = float(_olive_cap_g)
+            _record_cap_applied(_name, _total_weight_g, _olive_cap_g, "P5-OLIVE-CAP")
             logging.warning(
                 f"[P5-OLIVE-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_olive_cap_g:.0f}g "
@@ -6035,6 +6080,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _olive_cap_count:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_olive_cap_count)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P5-OLIVE-CAP")
                 logging.warning(
                     f"[P5-OLIVE-CAP] '{_name}' {_unit_key} count cap: "
                     f"{_old:.0f} → {_olive_cap_count} (≈{_olive_cap_frascos} "
@@ -6074,6 +6120,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             # Sumamos al peso 'g' existente (defensa: si ya hay 'g' del weight
             # path, no perdemos; si no, creamos nuevo)
             _units['g'] = _units.get('g', 0.0) + float(_olive_cap_g)
+            _record_cap_applied(_name, _vol_total_g, _olive_cap_g, "P5-OLIVE-CAP")
             logging.warning(
                 f"[P5-OLIVE-CAP] '{_name}' volumétrico cap: {_vol_total_g:.0f}g "
                 f"(de {_vol_present}) → {_olive_cap_g:.0f}g "
@@ -6142,6 +6189,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _citrus_cap_units:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_citrus_cap_units)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-CITRUS-CAP")
                 logging.warning(
                     f"[P6-CITRUS-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
                     f"{_citrus_cap_units} (person_weeks={_person_weeks:.1f}; "
@@ -6150,6 +6198,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if 'g' in _units and _units['g'] > _citrus_cap_g:
             _old_g = _units['g']
             _units['g'] = float(_citrus_cap_g)
+            _record_cap_applied(_name, _old_g, _units['g'], "P6-CITRUS-CAP")
             logging.warning(
                 f"[P6-CITRUS-CAP] '{_name}' peso cap: {_old_g:.0f}g → "
                 f"{_citrus_cap_g:.0f}g (≈{_citrus_cap_units} unidades)"
@@ -6323,6 +6372,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _veg_cap_units:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_veg_cap_units)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P5-VEG-CAP")
                 logging.warning(
                     f"[P5-VEG-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
                     f"{_veg_cap_units} (person_weeks={_person_weeks:.1f}; "
@@ -6421,6 +6471,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _spice_cap_sobres:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_spice_cap_sobres)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-SPICE-CAP")
                 logging.warning(
                     f"[P6-SPICE-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
                     f"{_spice_cap_sobres} (person_weeks={_person_weeks:.1f}; "
@@ -6491,6 +6542,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _sweetener_cap_boxes:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_sweetener_cap_boxes)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-SWEETENER-CAP")
                 logging.warning(
                     f"[P6-SWEETENER-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
                     f"{_sweetener_cap_boxes} (person_weeks={_person_weeks:.1f}; "
@@ -6507,6 +6559,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             for _wu in list(_present_units.keys()):
                 del _units[_wu]
             _units['g'] = float(_sweetener_cap_g)
+            _record_cap_applied(_name, _total_weight_g, _sweetener_cap_g, "P6-SWEETENER-CAP")
             logging.warning(
                 f"[P6-SWEETENER-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_sweetener_cap_g:.0f}g "
@@ -6554,6 +6607,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _sauce_cap_latas:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_sauce_cap_latas)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-SAUCE-CAP")
                 logging.warning(
                     f"[P6-SAUCE-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
                     f"{_sauce_cap_latas} (person_weeks={_person_weeks:.1f}; "
@@ -6571,6 +6625,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             for _wu in list(_present_units.keys()):
                 del _units[_wu]
             _units['g'] = float(_sauce_cap_g)
+            _record_cap_applied(_name, _total_weight_g, _sauce_cap_g, "P6-SAUCE-CAP")
             logging.warning(
                 f"[P6-SAUCE-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_sauce_cap_g:.0f}g "
@@ -6622,6 +6677,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _oil_cap_botellas:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_oil_cap_botellas)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-OIL-CAP")
                 logging.warning(
                     f"[P6-OIL-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
                     f"{_oil_cap_botellas} (person_weeks={_person_weeks:.1f}; "
@@ -6638,6 +6694,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             for _wu in list(_present_units.keys()):
                 del _units[_wu]
             _units['g'] = float(_oil_cap_g)
+            _record_cap_applied(_name, _total_weight_g, _oil_cap_g, "P6-OIL-CAP")
             logging.warning(
                 f"[P6-OIL-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_oil_cap_g:.0f}g "
@@ -6691,6 +6748,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _carbs_cap_packages:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_carbs_cap_packages)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-CARBS-CAP")
                 logging.warning(
                     f"[P6-CARBS-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
                     f"{_carbs_cap_packages} (person_weeks={_person_weeks:.1f}; "
@@ -6707,6 +6765,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             for _wu in list(_present_units.keys()):
                 del _units[_wu]
             _units['g'] = float(_carbs_cap_g)
+            _record_cap_applied(_name, _total_weight_g, _carbs_cap_g, "P6-CARBS-CAP")
             logging.warning(
                 f"[P6-CARBS-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_carbs_cap_g:.0f}g "
@@ -6766,6 +6825,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _legumes_cap_packages:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_legumes_cap_packages)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-LEGUMES-DRY-CAP")
                 logging.warning(
                     f"[P6-LEGUMES-DRY-CAP] '{_name}' {_unit_key} cap: {_old:.1f} → "
                     f"{_legumes_cap_packages} (person_weeks={_person_weeks:.1f}; "
@@ -6823,6 +6883,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"{_canned_cap_latas} (person_weeks={_person_weeks:.1f}; "
                     f"~1 lata/persona/sem es uso intensivo realista)"
                 )
+                # [P2-CAPS-COHERENCE-RECONCILE-2 · 2026-05-30] Registrar el cap
+                # (atún/sardinas mencionados por receta) para no disparar retries
+                # falsos del coherence guard en mode=block.
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-CANNED-PROTEIN-CAP")
         _total_weight_g = sum(
             _units.get(u, 0) * _WEIGHT_UNIT_TO_G[u]
             for u in _WEIGHT_UNIT_TO_G
@@ -6833,6 +6897,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             for _wu in list(_present_units.keys()):
                 del _units[_wu]
             _units['g'] = float(_canned_cap_g)
+            _record_cap_applied(_name, _total_weight_g, _canned_cap_g, "P6-CANNED-PROTEIN-CAP")
             logging.warning(
                 f"[P6-CANNED-PROTEIN-CAP] '{_name}' peso total cap: {_total_weight_g:.0f}g "
                 f"(de {_present_units}) → {_canned_cap_g:.0f}g "
@@ -6899,6 +6964,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _eggs_cap_units:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_eggs_cap_units)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-EGGS-AGGREGATE-CAP")
                 logging.warning(
                     f"[P6-EGGS-AGGREGATE-CAP] '{_name}' {_unit_key} cap: "
                     f"{_old:.0f} → {_eggs_cap_units} (≈{_eggs_cap_cartones} "
@@ -7006,6 +7072,10 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"(person_weeks={_person_weeks:.1f}; storage realismo: "
                     f"frutas grandes duran 5-7 días refrigeradas enteras)"
                 )
+                # [P2-CAPS-COHERENCE-RECONCILE-2 · 2026-05-30] Registrar el cap
+                # para que el coherence guard (default block en prod) NO trate
+                # esta divergencia de magnitud como crítica y fuerce un retry.
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-FRUITS-LARGE-CAP")
 
         # Cap por gramos: aplica si el aggregator convirtió 'unidad' → 'g'
         if 'g' in _units:
@@ -7028,6 +7098,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"→ {_fruit_cap_g:.0f}g (≈{_fruit_cap_units} unidades a "
                     f"{_density:.0f}g c/u)"
                 )
+                _record_cap_applied(_name, _old_g, _units['g'], "P6-FRUITS-LARGE-CAP")
 
     # ============================================================
     # [P6-FRUITS-PERISHABLE-CAP] Cap defensivo para frutas perecederas
@@ -7082,6 +7153,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 f"person_weeks={_person_weeks:.1f}; storage realismo: "
                 f"frutas perecederas duran 3-5 días)"
             )
+            # [P2-CAPS-COHERENCE-RECONCILE-2 · 2026-05-30] Registrar el cap
+            # (perecedero no-staple que SÍ llega al guard) para no disparar
+            # retries falsos en mode=block. Registramos en cada rama porque la
+            # que dispara depende de la unidad nativa que emitió el LLM (g/lb/paquete).
+            _record_cap_applied(_name, _old_g, _units['g'], "P6-FRUITS-PERISHABLE-CAP")
         # Cap por libras (si LLM emitió "X lb de fresas")
         for _unit_key in ('lb', 'lbs', 'libra', 'libras'):
             if _unit_key in _units and _units[_unit_key] > _cap_lbs:
@@ -7091,6 +7167,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"[P6-FRUITS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
                     f"{_old:.1f} → {_cap_lbs:.0f} lbs"
                 )
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-FRUITS-PERISHABLE-CAP")
         # Cap por paquetes (1 paquete = 1 lb estándar dominicano)
         for _unit_key in ('paquete', 'paquetes'):
             if _unit_key in _units and _units[_unit_key] > _cap_lbs:
@@ -7100,6 +7177,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     f"[P6-FRUITS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
                     f"{_old:.0f} → {_cap_lbs:.0f} paquetes (1 paq ≈ 1 lb)"
                 )
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-FRUITS-PERISHABLE-CAP")
 
     # ============================================================
     # [P6-LACTEOS-PERISHABLE-CAP] Cap defensivo para lácteos perecederos
@@ -7198,6 +7276,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _cap_lbs:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_cap_lbs)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-LACTEOS-PERISHABLE-CAP")
                 logging.warning(
                     f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
                     f"{_old:.1f} → {_cap_lbs:.0f} lbs"
@@ -7209,6 +7288,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _cap_lbs:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_cap_lbs)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-LACTEOS-PERISHABLE-CAP")
                 logging.warning(
                     f"[P6-LACTEOS-PERISHABLE-CAP] '{_name}' {_unit_key} cap: "
                     f"{_old:.0f} → {_cap_lbs:.0f} {_unit_key} (1 unidad ≈ 16oz/1 lb)"
@@ -7255,6 +7335,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if 'g' in _units and _units['g'] > _cap_g:
             _old_g = _units['g']
             _units['g'] = float(_cap_g)
+            _record_cap_applied(_name, _old_g, _units['g'], "P6-BROTHS-CAP")
             logging.warning(
                 f"[P6-BROTHS-CAP] '{_name}' peso cap: {_old_g:.0f}g → "
                 f"{_cap_g:.0f}g (≈{_cap_lbs:.1f} lbs ≈ "
@@ -7265,6 +7346,7 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             if _unit_key in _units and _units[_unit_key] > _cap_lbs:
                 _old = _units[_unit_key]
                 _units[_unit_key] = float(_cap_lbs)
+                _record_cap_applied(_name, _old, _units[_unit_key], "P6-BROTHS-CAP")
                 logging.warning(
                     f"[P6-BROTHS-CAP] '{_name}' {_unit_key} cap: "
                     f"{_old:.1f} → {_cap_lbs:.1f} lbs"

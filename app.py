@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P2-AUDIT-IMPL · 2026-05-28"
+_LAST_KNOWN_PFIX = "P1-EVALUATOR-THINKING-CAP · 2026-06-01"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -234,7 +234,7 @@ from vision_agent import process_image_with_vision, get_multimodal_embedding
 # graph_orchestrator). Los 3 knobs `MEALFIT_SCHEDULER_*` de abajo eran raw
 # `os.environ.get` y no aparecían en `/health/version` ni en
 # `get_knobs_registry_snapshot()`. Migrados a `_env_int`/`_env_bool` aquí.
-from knobs import _env_int, _env_bool
+from knobs import _env_int, _env_bool, is_production
 
 # [P2-NEW-D · 2026-05-08] Knobs de scheduler. Antes `BackgroundScheduler()` se
 # instanciaba sin args; default APScheduler = `ThreadPoolExecutor(max_workers=10)`
@@ -919,6 +919,11 @@ def _acquire_scheduler_leader_lock():
             keepalives_idle=30,
             keepalives_interval=10,
             keepalives_count=5,
+            # [P3-PROD-AUDIT-2 · 2026-05-30] connect_timeout para no colgar el
+            # lifespan startup hasta el TCP timeout del OS si Supabase está
+            # inalcanzable durante un deploy (FastAPI no atendería /health ni
+            # /ready). Consistente con reconnect_timeout=5 de los pools.
+            connect_timeout=5,
         )
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (classid, 1))
@@ -1003,7 +1008,9 @@ async def lifespan(app: FastAPI):
             db_uri = os.environ.get("SUPABASE_DB_URL")
             # autocommit=True requerido por LangGraph PostgresSaver (puede crear
             # índices CONCURRENTLY internamente).
-            with psycopg.connect(db_uri, autocommit=True) as conn:
+            # [P3-PROD-AUDIT-2 · 2026-05-30] connect_timeout para no colgar el
+            # startup hasta el TCP timeout del OS si la DB está inalcanzable.
+            with psycopg.connect(db_uri, autocommit=True, connect_timeout=5) as conn:
                 PostgresSaver(conn).setup()
             logger.info("🚀 [Postgres] LangGraph Checkpointer setup OK.")
         except Exception as e:
@@ -1430,6 +1437,17 @@ async def lifespan(app: FastAPI):
     if async_connection_pool:
         await async_connection_pool.close()
         logger.info("🔌 [psycopg] Pool de conexiones asíncronas cerrado.")
+    # [P3-PROD-AUDIT-2 · 2026-05-30] Cerrar también el pool del LangGraph
+    # checkpointer (asimetría open/close: se abría en startup @986 pero el
+    # teardown inline lo omitía; `close_connection_pool()` que lo cubría es
+    # dead code sin callsites). Best-effort: con min_size=0 el impacto es nulo
+    # (proceso muere → conns liberadas), pero cerramos por higiene/consistencia.
+    if chat_checkpoint_pool:
+        try:
+            chat_checkpoint_pool.close()
+            logger.info("🔌 [psycopg] chat_checkpoint_pool cerrado.")
+        except Exception as _ccp_err:
+            logger.debug(f"[P3-PROD-AUDIT-2] cierre de chat_checkpoint_pool falló: {_ccp_err}")
 
 
 # Asegurarnos de que el directorio de uploads exista antes de montar recursos estáticos
@@ -1442,7 +1460,7 @@ os.makedirs("uploads", exist_ok=True)
 # reconnaissance. En dev se mantienen para DX. Gate por ENVIRONMENT (misma var
 # que usa el fail-secure de billing/webhook). Rollback: si necesitas /docs en
 # prod temporalmente, dejar ENVIRONMENT != "production". Tooltip-anchor: P2-DOCS-GATE.
-_IS_PRODUCTION = os.environ.get("ENVIRONMENT") == "production"
+_IS_PRODUCTION = is_production()  # [P2-PROD-AUDIT-3] SSOT normalizado (lower+strip)
 app = FastAPI(
     lifespan=lifespan,
     docs_url=None if _IS_PRODUCTION else "/docs",
@@ -2236,10 +2254,12 @@ def api_webhook_process_pending_facts(
     try:
         # [P0-WEBHOOK-1] Validación fail-secure del secret.
         webhook_secret = os.environ.get("WEBHOOK_SECRET")
-        is_production = os.environ.get("ENVIRONMENT") == "production"
+        # [P2-PROD-AUDIT-3 · 2026-05-30] SSOT normalizado (lower+strip). Var local
+        # renombrada para no sombrear el helper importado `is_production`.
+        _is_prod_env = is_production()
 
         if not webhook_secret:
-            if is_production:
+            if _is_prod_env:
                 logger.error(
                     "❌ [P0-WEBHOOK-1] WEBHOOK_SECRET ausente en producción. "
                     "Rechazando invocación (pre-fix saltaba el check entero)."

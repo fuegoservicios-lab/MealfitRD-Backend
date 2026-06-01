@@ -23,7 +23,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 from db import get_user_profile, update_user_health_profile
-from knobs import _env_str, _env_float  # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] / [P0-CHAT-LLM-TIMEOUT · 2026-05-19] auto-registry
+from knobs import _env_str, _env_float, _env_int, _env_bool, thinking_budget_kwargs  # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] / [P0-CHAT-LLM-TIMEOUT · 2026-05-19] auto-registry / [P2-COST-THINKING-CAP-EXT · 2026-06-01]
 # [P1-CHAT-CB · 2026-05-19] Breaker per-modelo del graph_orchestrator. NO
 # duplicamos la implementación — reusamos el singleton + knobs ya productivos
 # (`MEALFIT_CB_FAILURE_THRESHOLD=3`, `MEALFIT_CB_RESET_TIMEOUT_S=30`). Import
@@ -122,6 +122,46 @@ def strip_ui_action_tags_for_persist(text):
     return cleaned.strip()
 
 
+# [P2-GENCHUNK-SPEED · 2026-06-01] Claves derivadas/pesadas del `plan_data`
+# que NO aportan nada al razonamiento del chat-agent y que hoy se serializan
+# textualmente en el system prompt EN CADA TURNO (audit speed 2026-06-01).
+# - Los 4 `aggregated_shopping_list*` son listas pre-agregadas que el agente
+#   recomputa on-demand vía el tool `check_shopping_list`; la despensa +
+#   delta pendiente ya se inyectan compactos vía `build_inventory_context`.
+# - `_shopping_coherence_block*` es telemetría interna del guard de coherencia.
+# - `_archived_days` es historial podado del shift rolling (crece sin techo
+#   útil para el chat) — el Historial lo lee aparte, el chat no.
+# - `calc_household_multiplier` es un escalar de cálculo de shopping.
+# Mantener intactos: `calories`, `macros`, `name` y el `days[]` vivo completo
+# (cada meal con name/description/meal_type/time/macros/ingredients/recipe) —
+# el LLM los necesita para responder "qué como hoy" y para mapear el
+# `day_number`/`meal_type` correcto en `modify_single_meal`. NO podar días
+# week-2+ ni texto de recetas: degradaría la precisión del agente.
+# tooltip-anchor: _CHAT_PLAN_PRUNE_KEYS (test_p2_genchunk_speed parsea esto)
+_CHAT_PLAN_PRUNE_KEYS = (
+    "aggregated_shopping_list",
+    "aggregated_shopping_list_weekly",
+    "aggregated_shopping_list_biweekly",
+    "aggregated_shopping_list_monthly",
+    "_shopping_coherence_block",
+    "_shopping_coherence_block_history",
+    "_archived_days",
+    "calc_household_multiplier",
+)
+
+
+def _prune_plan_for_chat(plan):
+    """[P2-GENCHUNK-SPEED · 2026-06-01] Devuelve una copia shallow de `plan`
+    sin las claves derivadas/pesadas de `_CHAT_PLAN_PRUNE_KEYS`, para reducir
+    los input-tokens del system prompt del chat sin perder contenido semántico
+    que el agente razone. Defensivo: si `plan` no es dict, lo devuelve intacto.
+    Proyección shallow (no deep-copy): solo excluimos claves top-level; los
+    `days[]` y demás estructuras se referencian sin clonar (no se mutan)."""
+    if not isinstance(plan, dict):
+        return plan
+    return {k: v for k, v in plan.items() if k not in _CHAT_PLAN_PRUNE_KEYS}
+
+
 from schemas import MacrosModel, MealModel, DailyPlanModel, PlanModel
 from prompts import (
     DETERMINISTIC_VARIETY_PROMPT, SWAP_MEAL_PROMPT_TEMPLATE, 
@@ -209,6 +249,41 @@ def _chat_router_model_name() -> str:
         "MEALFIT_CHAT_ROUTER_MODEL",
         "gemini-3.1-flash-lite",
     )
+
+def _chat_title_max_output_tokens() -> int:
+    """[P3-COST-TITLE-OUTPUT-CAP · 2026-06-01] Cap de output del generador de
+    título de sesión. El prompt pide "2-4 palabras máximo" y el código YA
+    trunca a 32 chars post-hoc (agent.py ~L2112) — si el LLM ignora la
+    instrucción y emite una frase larga, esos tokens se generan (output
+    facturado) y luego se DESCARTAN. Capar el output elimina ese desperdicio.
+    Default 32 (holgado para 4 palabras es-DO; flash-lite no es thinking-capable
+    → no hay reasoning de por medio). Knob MEALFIT_CHAT_TITLE_MAX_OUTPUT_TOKENS,
+    clamp [8, 256]. Tooltip-anchor: P3-COST-TITLE-OUTPUT-CAP."""
+    return _env_int(
+        "MEALFIT_CHAT_TITLE_MAX_OUTPUT_TOKENS",
+        32,
+        validator=lambda v: 8 <= v <= 256,
+    )
+
+def _chat_prompt_static_prefix() -> bool:
+    """[P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Cuando True (default), el
+    system prompt del chat se ensambla con los bloques ESTÁTICOS byte-estables
+    (inline prompt + CULINARY_KNOWLEDGE_BASE + instrucciones de tools) al FRENTE
+    y los VOLÁTILES (build_temporal_context con minuto, circadiano, proactivo,
+    sentiment, RAG per-turn) al FINAL.
+
+    Por qué importa para COSTO: el chat es el subsistema LLM de mayor frecuencia
+    y su costo está dominado por el INPUT (~88% medido en prod: system prompt +
+    historial). Gemini cachea implícitamente el PREFIJO byte-estable (cached
+    input ~10x más barato), pero exige un mínimo de tokens. Pre-fix,
+    build_temporal_context() (hora con MINUTO, cambia cada turno) iba en
+    posición #2, dejando solo ~150 tok estáticos antes del primer byte volátil
+    — por debajo del mínimo del cache → el prefijo casi nunca hiteaba. Mover los
+    ~1300 tok estáticos al frente cruza el mínimo y habilita el descuento de
+    cache en turnos 2..N de la sesión. Es PURO reorden (mismo texto, cero cambio
+    semántico). Flip a False revierte al orden legacy sin redeploy. Tooltip-
+    anchor: P2-CHAT-PROMPT-STATIC-PREFIX."""
+    return _env_bool("MEALFIT_CHAT_PROMPT_STATIC_PREFIX", True)
 
 # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] Timeouts per-LLM-invoke y graph-total.
 # Pre-fix: las 5 callsites de `ChatGoogleGenerativeAI(...)` se construían SIN
@@ -689,6 +764,12 @@ def swap_meal(form_data: dict):
         temperature=temp,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_chat_swap_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
+        # [P2-COST-THINKING-CAP-EXT · 2026-06-01] Cap reasoning del swap (genera
+        # UN plato a schema MealModel + validador determinista + 3x retry). El
+        # razonamiento ilimitado de gemini-3.5-flash factura como output a $9/M;
+        # techo 2048 (=day-gen) recorta runaway sin tocar el razonamiento normal.
+        # Knob MEALFIT_SWAP_THINKING_BUDGET (-1 = sin cap). flash-lite → no-op.
+        **thinking_budget_kwargs(_chat_agent_swap_model_name(), "MEALFIT_SWAP_THINKING_BUDGET", 2048),
     ).with_structured_output(MealModel)
 
     # [P1-CHAT-CB-EXTEND · 2026-05-20] CB gate per-modelo del swap_llm.
@@ -1763,9 +1844,19 @@ def execute_tools(state: ChatState):
                     try:
                         parsed_mod = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
                         if isinstance(parsed_mod, dict) and "modified_meal" in parsed_mod:
-                            updated_plan_record = get_latest_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
-                            if updated_plan_record and "plan_data" in updated_plan_record:
-                                new_plan = updated_plan_record["plan_data"]
+                            # [P3-GENCHUNK-SPEED · 2026-06-01] `execute_modify_single_meal`
+                            # ahora retorna el `plan_data` ya mergeado (fresh-post-lock,
+                            # la misma data que la re-lectura traería). Usarlo directo
+                            # evita un SELECT serial redundante justo tras la escritura.
+                            # Fallback a `get_latest_meal_plan_with_id` solo si la key
+                            # está ausente (back-compat / parser degradado).
+                            _inband_plan = parsed_mod.get("plan_data")
+                            if isinstance(_inband_plan, dict) and _inband_plan:
+                                new_plan = _inband_plan
+                            else:
+                                updated_plan_record = get_latest_meal_plan_with_id(user_id if user_id and user_id != 'guest' else session_id)
+                                if updated_plan_record and "plan_data" in updated_plan_record:
+                                    new_plan = updated_plan_record["plan_data"]
                             # [P2-AUDIT-NEW-1 · 2026-05-12] Extraer
                             # `_coherence_warnings` ANTES de pisar `tool_result`
                             # con el friendly string. El tool `modify_single_meal`
@@ -2018,7 +2109,7 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             )
             return
 
-        title_llm = ChatGoogleGenerativeAI(model=_chat_title_model_name(), temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"), timeout=_chat_title_llm_timeout_s())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
+        title_llm = ChatGoogleGenerativeAI(model=_chat_title_model_name(), temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"), timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str)
         logger.debug(f"[chat_title bg] session={session_id} - Calling LLM API")
         try:
@@ -2207,41 +2298,38 @@ def _build_hydration_context(user_id: Optional[str], local_date_str: Optional[st
         if not get_water_tracker_enabled(user_id):
             return ""
 
-        # Si el caller pasó la fecha local del cliente, usarla. Si no,
-        # caer a UTC del servidor (acepta una posible discrepancia de 1 día
-        # en zonas horarias extremas — RD es UTC-4 estable, OK en prod).
+        # [P3-HYDRATION-CTX-TZ · 2026-05-31] Preferir la fecha LOCAL del
+        # cliente (la pasa el stream path). Si no llega (path non-stream
+        # `/api/chat`), caer a la fecha LOCAL DOMINICANA (UTC-4) vía el
+        # mismo helper que usan las tools `check_hydration_today` /
+        # `log_water_glass` — NO a UTC. Pre-fix caía a UTC: para un usuario
+        # de RD entre las 8 PM y medianoche (AST) la fecha UTC ya es
+        # "mañana", así que el agente leía el bucket de mañana (0 vasos) y
+        # podía regañar a un usuario que sí tomó agua hoy. Misma clase de
+        # bug UTC-vs-AST que P1-PROACTIVE-TZ.
         if not local_date_str:
-            from datetime import datetime as _dt, timezone as _tz
-            local_date_str = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+            from tools import _local_date_str_for_user
+            local_date_str = _local_date_str_for_user()
 
         glasses = get_water_intake_glasses_today(user_id, local_date_str)
 
-        # Calcular meta inline desde health_profile
+        # [P2-HYDRATION-GOAL-SSOT · 2026-05-31] Reusar la fórmula CANÓNICA
+        # `_compute_water_goal` — la MISMA meta exacta que ve el card del
+        # Dashboard y que reportan las tools check_hydration_today /
+        # log_water_glass. Pre-fix reimplementaba la meta inline y divergía:
+        # 250 ml/vaso (canónico = 240) + mapeo de actividad distinto
+        # (active→+250 en vez de +500; very_active→+500 en vez de +750;
+        # athlete/very_high→+0 en vez de +750; activityLevel ausente/null→+0
+        # en vez del default moderate +250). Resultado observado: el agente
+        # afirmaba una meta 1-2 vasos distinta a la del card para usuarios
+        # reales (3/8 con activityLevel=null). Import lazy igual que
+        # tools.check_hydration_today (cadena de carga routers.plans→agent→
+        # tools; se resuelve en runtime, sin ciclo de import).
         try:
-            profile = get_user_profile(user_id) or {}
-            hp = profile.get("health_profile") or {}
+            from routers.plans import _compute_water_goal
+            goal = int(_compute_water_goal(user_id).get("goal", 8) or 8)
         except Exception:
-            hp = {}
-
-        goal = 8  # default fallback
-        weight_raw = hp.get("weight")
-        weight_unit = str(hp.get("weightUnit") or "lb").lower().strip()
-        activity_level = str(hp.get("activityLevel") or "").lower().strip()
-        if weight_raw not in (None, ""):
-            try:
-                w = float(weight_raw)
-                if w > 0:
-                    weight_kg = w if weight_unit == "kg" else round(w / 2.20462, 1)
-                    if 25 <= weight_kg <= 250:
-                        ml = weight_kg * 35.0
-                        # Bonus por actividad — match con plans._compute_water_goal
-                        if activity_level in ("intense", "very_active", "high"):
-                            ml += 500
-                        elif activity_level in ("moderate", "active", "medium"):
-                            ml += 250
-                        goal = max(6, min(14, round(ml / 250)))
-            except (ValueError, TypeError):
-                pass
+            goal = 8
 
         # Mensaje contextual según el estado actual
         if glasses >= goal:
@@ -2290,41 +2378,57 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     
     if user_id:
         rag_decision = rag_query_router(prompt)
-        
+
         if not rag_decision.get("skip"):
+            optimized_query = rag_decision.get("query", prompt)
+            logger.info(f"🔍 [CHAT RAG] Buscando con query optimizada: '{optimized_query}'")
+
+            # [P3-GENCHUNK-SPEED · 2026-06-01] Los dos round-trips de embedding
+            # (texto vía gemini-embedding-001 vs multimodal vía
+            # gemini-embedding-2) usan el MISMO `optimized_query`, golpean
+            # modelos distintos y sus búsquedas vectoriales son independientes.
+            # Antes corrían en serie (≈2× latencia de embedding en cache-miss).
+            # Ahora corren concurrentes en un ThreadPoolExecutor (este path es
+            # sync y corre en el threadpool de FastAPI). try/except POR-UNIDAD
+            # preserva el aislamiento de fallos + el metric de observabilidad
+            # P3-CHAT-OBSERVABILITY (ahora cada unidad falla independiente, lo
+            # cual es estrictamente mejor que abortar la visual si la textual
+            # falla). Idéntico al sibling stream.
+            def _rag_text_unit():
+                try:
+                    query_emb = get_embedding(optimized_query)
+                    if query_emb:
+                        facts_data = search_user_facts(user_id, query_emb, threshold=0.5, limit=10)
+                        if facts_data:
+                            logger.info(f"🧠 [CHAT RAG] Hechos textuales recuperados: {len(facts_data)}")
+                            return "\n".join([f"• {item['fact']}" for item in facts_data])
+                except Exception as e:
+                    _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent")
+                    logger.error(f"⚠️ [CHAT RAG] Error recuperando hechos textuales: {e}")
+                return ""
+
+            def _rag_visual_unit():
+                try:
+                    visual_query_emb = get_multimodal_embedding(optimized_query)
+                    if visual_query_emb:
+                        visual_data = search_visual_diary(user_id, visual_query_emb, threshold=0.5, limit=10)
+                        if visual_data:
+                            logger.debug(f"📸 [CHAT RAG VISUAL] Entradas visuales recuperadas: {len(visual_data)}")
+                            return "\n".join([f"• {item['description']}" for item in visual_data])
+                except Exception as e:
+                    _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent")
+                    logger.error(f"⚠️ [CHAT RAG VISUAL] Error recuperando memoria visual: {e}")
+                return ""
+
             try:
-                
-                optimized_query = rag_decision.get("query", prompt)
-                
-                # 1. Buscar hechos textuales con query optimizada
-                logger.info(f"🔍 [CHAT RAG] Buscando con query optimizada: '{optimized_query}'")
-                query_emb = get_embedding(optimized_query)
-                if query_emb:
-                    facts_data = search_user_facts(user_id, query_emb, threshold=0.5, limit=10)
-                    if facts_data:
-                        fact_list = [f"• {item['fact']}" for item in facts_data]
-                        user_facts_text = "\n".join(fact_list)
-                        logger.info(f"🧠 [CHAT RAG] Hechos textuales recuperados: {len(facts_data)}")
-                
-                # 2. Buscar memoria visual
-                visual_query_emb = get_multimodal_embedding(optimized_query)
-                if visual_query_emb:
-                    visual_data = search_visual_diary(user_id, visual_query_emb, threshold=0.5, limit=10)
-                    if visual_data:
-                        visual_list = [f"• {item['description']}" for item in visual_data]
-                        visual_facts_text = "\n".join(visual_list)
-                        logger.debug(f"📸 [CHAT RAG VISUAL] Entradas visuales recuperadas: {len(visual_data)}")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _rag_ex:
+                    _f_text = _rag_ex.submit(_rag_text_unit)
+                    _f_visual = _rag_ex.submit(_rag_visual_unit)
+                    user_facts_text = _f_text.result() or ""
+                    visual_facts_text = _f_visual.result() or ""
             except Exception as e:
-                # [P3-CHAT-OBSERVABILITY · 2026-05-20] emit metric para que
-                # SRE pueda graficar "% de chats sin RAG por failure" —
-                # pre-fix el chat degradaba silentemente sin RAG, una
-                # regresión del embedding service quedaba invisible hasta
-                # queja del user.
-                _emit_chat_rag_embedding_failed_metric_best_effort(
-                    user_id, session_id, "chat_with_agent",
-                )
-                logger.error(f"⚠️ [CHAT RAG] Error recuperando memoria: {e}")
-            
+                logger.error(f"⚠️ [CHAT RAG] Error en ejecución concurrente de embeddings: {e}")
+
     rag_context = ""
     if user_facts_text or visual_facts_text:
         rag_context = "\n--- MEMORIA VECTORIAL (RAG) ---\nContexto recuperado de interacciones pasadas relevante a la pregunta actual:\n"
@@ -2336,24 +2440,32 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         rag_context += "⚠️ REGLA DE CONFLICTO: Si hay conflicto entre el historial reciente o los resúmenes y estos Hechos Permanentes, LOS HECHOS PERMANENTES SON LA LEY y tienen prioridad absoluta.\n"
         rag_context += "---------------------------------------------\n"
 
-    system_prompt = CHAT_AGENT_INLINE_PROMPT
-
-    system_prompt += build_temporal_context()
-
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
-    system_prompt += build_circadian_context(schedule_type)
-
-    system_prompt += build_temporal_proactive_context()
-    
-    system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
-    
-    if rag_context:
-        system_prompt += f"\n{rag_context}"
-    
     # Determinar si es un usuario autenticado o invitado
     is_authenticated = user_id and user_id != session_id and user_id != "guest"
-    
-    system_prompt += build_tools_instructions(user_id)
+
+    # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
+    # al final → maximiza cache implícito de Gemini sobre el prefijo. Ver
+    # `_chat_prompt_static_prefix`. Puro reorden; rama else = orden legacy.
+    if _chat_prompt_static_prefix():
+        system_prompt = CHAT_AGENT_INLINE_PROMPT
+        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        system_prompt += build_tools_instructions(user_id)
+        # --- bloques dinámicos (volátiles) al final ---
+        system_prompt += build_temporal_context()
+        system_prompt += build_circadian_context(schedule_type)
+        system_prompt += build_temporal_proactive_context()
+        if rag_context:
+            system_prompt += f"\n{rag_context}"
+    else:
+        system_prompt = CHAT_AGENT_INLINE_PROMPT
+        system_prompt += build_temporal_context()
+        system_prompt += build_circadian_context(schedule_type)
+        system_prompt += build_temporal_proactive_context()
+        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        if rag_context:
+            system_prompt += f"\n{rag_context}"
+        system_prompt += build_tools_instructions(user_id)
 
     inventory_str = ""
     shopping_delta_str = ""
@@ -2393,7 +2505,9 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
 
     if current_plan:
-        system_prompt += f"\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas activo:\n{json.dumps(current_plan)}\n\nUsa esta información para responder con exactitud preguntas sobre lo que le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado (como desayuno, almuerzo o cena)."
+        # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas antes
+        # de serializar (shopping agregados, coherence telemetry, archived days).
+        system_prompt += f"\n\nCONTEXTO CRÍTICO: El usuario actualmente tiene este plan de comidas activo:\n{json.dumps(_prune_plan_for_chat(current_plan))}\n\nUsa esta información para responder con exactitud preguntas sobre lo que le toca comer hoy o sugerir cambios basados en lo que ya tiene asignado (como desayuno, almuerzo o cena)."
         
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])
@@ -2577,42 +2691,80 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     memory = build_memory_context(session_id)
     
     # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO (Solo Plus o superior)
+    # [P3-GENCHUNK-SPEED · 2026-06-01] FASE 1 — `classify_sentiment` (gate
+    # plus/ultra/admin) y `rag_query_router` (gate basic+) son LLM calls
+    # independientes: ambas solo leen `prompt` y ninguna consume el output de
+    # la otra. Antes corrían en serie antes del primer token (≈2 round-trips
+    # Flash-Lite seriales sobre el critical path de TTFT). Ahora concurrentes
+    # en un ThreadPoolExecutor (este path es un generador sync en el threadpool
+    # de FastAPI). Ambas helpers tienen fallback seguro interno (neutral /
+    # {skip:False,query:prompt}) y short-circuits propios (rag_router salta
+    # mensajes casuales y tiene CB fast-path), así que la concurrencia NO añade
+    # superficie de error ni cambia los inputs al LLM principal.
     sentiment_result = {}
-    if plan_tier in ["plus", "ultra", "admin"]:
-        sentiment_result = classify_sentiment(prompt)
-    
-    # RAG INJECTION (con Query Routing inteligente)
     user_facts_text = ""
     visual_facts_text = ""
-    if user_id and plan_tier in ["basic", "plus", "ultra", "admin"]:
-        rag_decision = rag_query_router(prompt)
-        
-        if not rag_decision.get("skip"):
+    _do_sentiment = plan_tier in ["plus", "ultra", "admin"]
+    _do_rag = bool(user_id) and plan_tier in ["basic", "plus", "ultra", "admin"]
+    rag_decision = None
+    if _do_sentiment or _do_rag:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pre_ex:
+            _f_sent = _pre_ex.submit(classify_sentiment, prompt) if _do_sentiment else None
+            _f_rag = _pre_ex.submit(rag_query_router, prompt) if _do_rag else None
+            if _f_sent is not None:
+                try:
+                    sentiment_result = _f_sent.result() or {}
+                except Exception as _se:
+                    logger.warning(f"⚠️ [CHAT SENTIMENT] fallo (neutral fallback): {_se}")
+                    sentiment_result = {}
+            if _f_rag is not None:
+                try:
+                    rag_decision = _f_rag.result()
+                except Exception as _re2:
+                    logger.warning(f"⚠️ [CHAT RAG ROUTER] fallo: {_re2}")
+                    rag_decision = None
+
+    # RAG INJECTION (con Query Routing inteligente) — FASE 2
+    if _do_rag and rag_decision and not rag_decision.get("skip"):
+        optimized_query = rag_decision.get("query", prompt)
+
+        # [P3-GENCHUNK-SPEED · 2026-06-01] Los dos embeddings (texto vs
+        # multimodal) sobre el MISMO `optimized_query` son independientes →
+        # concurrentes. try/except por-unidad preserva el aislamiento de fallos
+        # + el metric P3-CHAT-OBSERVABILITY. Espejo exacto del path non-stream.
+        def _rag_text_unit():
             try:
-                
-                optimized_query = rag_decision.get("query", prompt)
-                
                 query_emb = get_embedding(optimized_query)
                 if query_emb:
                     facts_data = search_user_facts(user_id, query_emb, threshold=0.5, limit=10)
                     if facts_data:
-                        fact_list = [f"• {item['fact']}" for item in facts_data]
-                        user_facts_text = "\n".join(fact_list)
-                
+                        return "\n".join([f"• {item['fact']}" for item in facts_data])
+            except Exception as e:
+                _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent_stream")
+                logger.error(f"⚠️ [CHAT RAG] Error texto (stream): {e}")
+            return ""
+
+        def _rag_visual_unit():
+            try:
                 visual_query_emb = get_multimodal_embedding(optimized_query)
                 if visual_query_emb:
                     visual_data = search_visual_diary(user_id, visual_query_emb, threshold=0.5, limit=10)
                     if visual_data:
-                        visual_list = [f"• {item['description']}" for item in visual_data]
-                        visual_facts_text = "\n".join(visual_list)
+                        return "\n".join([f"• {item['description']}" for item in visual_data])
             except Exception as e:
-                # [P3-CHAT-OBSERVABILITY · 2026-05-20] Espejo del callsite
-                # en `chat_with_agent` (non-stream).
-                _emit_chat_rag_embedding_failed_metric_best_effort(
-                    user_id, session_id, "chat_with_agent_stream",
-                )
-                logger.error(f"⚠️ [CHAT RAG] Error en stream: {e}")
-            
+                _emit_chat_rag_embedding_failed_metric_best_effort(user_id, session_id, "chat_with_agent_stream")
+                logger.error(f"⚠️ [CHAT RAG VISUAL] Error visual (stream): {e}")
+            return ""
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _rag_ex:
+                _f_text = _rag_ex.submit(_rag_text_unit)
+                _f_visual = _rag_ex.submit(_rag_visual_unit)
+                user_facts_text = _f_text.result() or ""
+                visual_facts_text = _f_visual.result() or ""
+        except Exception as e:
+            logger.error(f"⚠️ [CHAT RAG] Error concurrente (stream): {e}")
+
     rag_context = ""
     if user_facts_text or visual_facts_text:
         rag_context = "\n--- MEMORIA VECTORIAL (RAG) ---\n"
@@ -2620,27 +2772,36 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
         if visual_facts_text: rag_context += f"Inventario Visual:\n{visual_facts_text}\n"
         rag_context += "Úsalo para responder de forma súper personalizada.\n⚠️ REGLA DE CONFLICTO: LOS HECHOS PERMANENTES SON LEY.\n---------------------------------------------\n"
 
-    system_prompt = CHAT_STREAM_INLINE_PROMPT
-
-    if is_call_mode:
-        system_prompt = CHAT_VOICE_MODE_PROMPT
-
-    system_prompt += build_temporal_context()
-    
     schedule_type = form_data.get("scheduleType", "standard") if form_data else "standard"
-    system_prompt += build_circadian_context(schedule_type)
+    _base_inline = CHAT_VOICE_MODE_PROMPT if is_call_mode else CHAT_STREAM_INLINE_PROMPT
 
-    system_prompt += build_temporal_proactive_context()
-    
-    # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
-    if sentiment_result.get("instruction"):
-        system_prompt += f"\n\n{sentiment_result['instruction']}"
-    
-    system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
-    
-    if rag_context: system_prompt += f"\n{rag_context}"
-    
-    system_prompt += build_tools_instructions_stream(user_id)
+    # [P2-CHAT-PROMPT-STATIC-PREFIX · 2026-06-01] Estáticos al frente, volátiles
+    # al final → maximiza cache implícito de Gemini. Ver `_chat_prompt_static_prefix`
+    # (nota en chat_with_agent). Puro reorden; rama else = orden legacy.
+    if _chat_prompt_static_prefix():
+        system_prompt = _base_inline
+        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        system_prompt += build_tools_instructions_stream(user_id)
+        # --- bloques dinámicos (volátiles) al final ---
+        system_prompt += build_temporal_context()
+        system_prompt += build_circadian_context(schedule_type)
+        system_prompt += build_temporal_proactive_context()
+        # 🎭 Personalidad adaptativa basada en el sentimiento detectado (per-turn)
+        if sentiment_result.get("instruction"):
+            system_prompt += f"\n\n{sentiment_result['instruction']}"
+        if rag_context:
+            system_prompt += f"\n{rag_context}"
+    else:
+        system_prompt = _base_inline
+        system_prompt += build_temporal_context()
+        system_prompt += build_circadian_context(schedule_type)
+        system_prompt += build_temporal_proactive_context()
+        # 🎭 Inyectar personalidad adaptativa basada en el sentimiento detectado
+        if sentiment_result.get("instruction"):
+            system_prompt += f"\n\n{sentiment_result['instruction']}"
+        system_prompt += f"\n{CULINARY_KNOWLEDGE_BASE}"
+        if rag_context: system_prompt += f"\n{rag_context}"
+        system_prompt += build_tools_instructions_stream(user_id)
 
     inventory_str = ""
     shopping_delta_str = ""
@@ -2680,7 +2841,9 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
     system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
 
     if current_plan:
-        system_prompt += f"\nCONTEXTO CRÍTICO: Plan activo:\n{json.dumps(current_plan)}\n"
+        # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas (ver
+        # _prune_plan_for_chat) antes de serializar — paridad con el path no-stream.
+        system_prompt += f"\nCONTEXTO CRÍTICO: Plan activo:\n{json.dumps(_prune_plan_for_chat(current_plan))}\n"
         
         if form_data and form_data.get("includeSupplements"):
             selected_supps = form_data.get("selectedSupplements", [])

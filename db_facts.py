@@ -211,11 +211,19 @@ def acquire_fact_lock(user_id: str) -> bool:
             
         return len(update_res.data) > 0
     except Exception as e:
-        # Si falla (ej. la columna no existe), imprimimos el error pero no bloqueamos
+        # [P3-PROD-AUDIT-3 · 2026-05-30] Fail-CLOSED (return False), no fail-open.
+        # ANTES un error de DB hacía `return True` ("lock adquirido") → dos
+        # invocaciones concurrentes durante un blip de DB podían proceder ambas →
+        # facts duplicados + doble costo LLM. Fail-closed es estrictamente más
+        # seguro SIN riesgo de pérdida: los callers tratan un skip como
+        # recuperable (fact_extractor reintenta + enqueue_pending_fact persistente
+        # drenado por cron/webhook). Se preserva la supresión de log para PGRST204
+        # (columna ausente) — ahí también skippeamos el ciclo en vez de procesar
+        # sin lock real.
         error_msg = str(e)
         if "PGRST204" not in error_msg:
             logger.error(f"Error acquiring fact lock: {e}")
-        return True
+        return False
 
 def release_fact_lock(user_id: str):
     """Libera el bloqueo de extracción de hechos."""
@@ -447,12 +455,17 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
                 from datetime import datetime, timezone
                 now = datetime.now(timezone.utc).isoformat()
                 
-                supabase.table("visual_diary").update({
-                    "frequency": old_freq + 1,
-                    "last_seen": now,
-                    "image_url": image_url,      # Actualizar con la foto más reciente
-                    "description": description   # Actualizar con la descripción más reciente
-                }).eq("id", existing_id).execute()
+                # [P3-PROD-AUDIT-2 · 2026-05-30] Incremento ATÓMICO de frequency
+                # (`frequency = frequency + 1` server-side) en vez del RMW
+                # `old_freq + 1`. Dos fotos casi-simultáneas del mismo plato (vía
+                # background tasks no sincronizados) ambas leían `frequency=N` y
+                # escribían `N+1` → un incremento perdido. `old_freq` sigue usado
+                # solo para el log informativo de arriba.
+                execute_sql_write(
+                    "UPDATE visual_diary SET frequency = frequency + 1, "
+                    "last_seen = %s, image_url = %s, description = %s WHERE id = %s",
+                    (now, image_url, description, existing_id),
+                )
                 
                 logger.debug(f"✅ [DEDUP VISUAL] Registro {str(existing_id)[:8]}... actualizado.")
                 return similar.data
@@ -531,7 +544,18 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                         f"[P2-CONSUMED-DEDUP] skip doble-tap: '{meal_name}' ({meal_type}) "
                         f"ya registrado en los últimos {_dedup_win}s."
                     )
-                    return True
+                    # [P2-CONSUMED-DEDUP-INVENTORY · 2026-05-30] Retornar un
+                    # sentinel DISTINGUIBLE (no `True`) para que el caller
+                    # (tools.log_consumed_meal) NO vuelva a deducir el inventario.
+                    # Pre-fix el dedup retornaba True == path de éxito real → el
+                    # caller no podía distinguir dedup-skip de INSERT, así que
+                    # deduct_consumed_meal_from_inventory corría de nuevo en la
+                    # re-emisión → la nevera se descontaba AL DOBLE del consumo
+                    # real (el diario calórico quedaba correcto vía dedup, pero
+                    # el inventario no). "deduped" es truthy y no-None, así que
+                    # los callers que chequean `is not None` / `if not result`
+                    # (tools.py:494, diary.py:478) lo siguen tratando como éxito.
+                    return "deduped"
             except Exception as _dedup_err:
                 logger.warning(
                     f"[P2-CONSUMED-DEDUP] check falló (procediendo con INSERT): {_dedup_err}"
@@ -640,8 +664,20 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
             logger.error(f"Error obteniendo comidas consumidas de hoy: {e}")
             return []
 
-def get_consumed_meals_since(user_id: str, since_iso_date: str):
-    """Obtiene todas las comidas consumidas por el usuario desde una fecha específica."""
+def get_consumed_meals_since(user_id: str, since_iso_date: str, include_ingredients: bool = False):
+    """Obtiene todas las comidas consumidas por el usuario desde una fecha específica.
+
+    [GAP-1 · 2026-05-29] `include_ingredients=True` añade la columna jsonb
+    `ingredients` para callers que hacen análisis ingredient-level
+    (`cron_tasks.calculate_ingredient_fatigue`). El default permanece lean per
+    P2-SELECT-STAR-CONSUMED-MEALS. **Key-drift histórico**: esta función SIEMPRE
+    proyectó `consumed_at` (no `created_at`) y nunca `ingredients`;
+    `calculate_ingredient_fatigue`/`calculate_day_of_week_adherence` leían
+    `created_at`/`ingredients` → resultado SIEMPRE vacío en prod (la fatiga de
+    ingredientes y la EMA day-of-week estaban muertas). Tests usaban fixtures con
+    las claves erróneas, enmascarando el bug. Anclado por
+    `test_gap_1_consumed_meals_fetcher_contract.py`.
+    """
     # [P2-SELECT-STAR-CONSUMED-MEALS · 2026-05-15] Columnas explícitas — caller
     # (`agent.py::log_consumed_meal` y stats agregadas) solo necesita los
     # campos básicos. Reduce I/O sobre tabla append-only que puede acumular
@@ -650,6 +686,8 @@ def get_consumed_meals_since(user_id: str, since_iso_date: str):
         "meal_name, calories, protein, carbs, healthy_fats, "
         "consumed_at, meal_type"
     )
+    if include_ingredients:
+        _COLUMNS = _COLUMNS + ", ingredients"
     try:
         if connection_pool:
             query = (

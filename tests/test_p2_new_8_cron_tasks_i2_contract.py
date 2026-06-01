@@ -36,17 +36,25 @@ from pathlib import Path
 
 _CRON_TASKS_PY = Path(__file__).resolve().parent.parent / "cron_tasks.py"
 
-_UPDATE_MEAL_PLANS_RE = re.compile(r"UPDATE\s+meal_plans\s+SET", re.IGNORECASE)
+# [NG-4 · 2026-05-30] Detección STATEMENT-AWARE (multi-line). El regex previo
+# `UPDATE\s+meal_plans\s+SET` se aplicaba LÍNEA-POR-LÍNEA + ventana fija de 5
+# líneas → era CIEGO a las ~24 formas multilínea (`UPDATE meal_plans\n SET ...`,
+# cuyo WHERE está ~30 líneas abajo) y string-concat, cubriendo solo 7 de 31
+# `UPDATE meal_plans` — falsa sensación de coverage que dejó pasar 2 violaciones
+# reales (21313 heal _plan_start_date, 22871 item-level restock). Ahora detectamos
+# el INICIO del statement (`UPDATE meal_plans` seguido de whitespace o fin-de-línea,
+# excluyendo `meal_plans_audit` por `_` y la prose `meal_plans.plan_data` por `.`)
+# y extraemos el cuerpo completo del statement hasta su cierre (`"""` o fin del
+# string SQL) para buscar el filtro dentro del WHERE real.
+_UPDATE_MEAL_PLANS_START_RE = re.compile(r"UPDATE\s+meal_plans(?=\s|$)", re.IGNORECASE)
+_SET_RE = re.compile(r"\bSET\b", re.IGNORECASE)
 _USER_ID_FILTER_RE = re.compile(r"AND\s+user_id\s*=\s*%s", re.IGNORECASE)
 # Razón ≥ 12 chars (1 \S + .{11,}). Marker decorativo (corto) NO califica.
 _I2_EXEMPT_RE = re.compile(r"#\s*I2-EXEMPT\s*:\s*(\S.{11,})", re.IGNORECASE)
 
-# Ventanas:
-#  - SQL siguiente al match: 5 líneas (cubre WHERE multilínea defensivo
-#    aunque los 4 sitios actuales sean single-line).
-#  - I2-EXEMPT precedente: 12 líneas (los 4 sitios actuales tienen el
-#    marker en las 4-6 líneas anteriores; margen razonable para futuros).
-_SQL_WINDOW_LINES = 5
+# Cota máxima de líneas del statement (el UPDATE multilínea más largo —
+# pantry-supplement full-aggr con 5 jsonb_set anidados — son ~30 líneas).
+_MAX_STMT_LINES = 50
 _EXEMPT_LOOKBACK_LINES = 12
 
 
@@ -54,30 +62,46 @@ def _read_cron_tasks_lines() -> list[str]:
     return _CRON_TASKS_PY.read_text(encoding="utf-8").splitlines()
 
 
-def _find_violation_sites(lines: list[str]) -> list[tuple[int, str]]:
-    """Retorna lista de `(line_no, line_text)` para cada UPDATE
-    meal_plans SET sin filter user_id y sin I2-EXEMPT precedente."""
-    violations: list[tuple[int, str]] = []
-    for line_no, line in enumerate(lines, start=1):
-        # Saltar líneas que SON comentarios (heurística: strip empieza con #).
-        # No saltar líneas de código que contienen `# comment` inline —
-        # `UPDATE meal_plans` no va inline en comentarios típicamente.
+def _statement_window(lines: list[str], idx: int) -> str:
+    """Texto del statement desde la línea `idx` (0-based) hasta su cierre: primer
+    `\"\"\"` (bloque triple-quoted) o fin del string SQL (`\",`/`\")`), cota
+    `_MAX_STMT_LINES`. Captura el WHERE aunque esté ~30 líneas abajo."""
+    out = []
+    for j in range(idx, min(len(lines), idx + _MAX_STMT_LINES)):
+        out.append(lines[j])
+        s = lines[j].rstrip()
+        if j > idx and '"""' in lines[j]:
+            break
+        if s.endswith('",') or s.endswith('")') or s.endswith('"),'):
+            break
+    return "\n".join(out)
+
+
+def _iter_meal_plans_updates(lines: list[str]):
+    """Yield `(line_no, has_filter, has_exempt)` por cada `UPDATE meal_plans ... SET`
+    real. Excluye menciones en prose/docstrings (statement sin `SET`)."""
+    for idx, line in enumerate(lines):
         if line.strip().startswith("#"):
             continue
-        if not _UPDATE_MEAL_PLANS_RE.search(line):
+        if not _UPDATE_MEAL_PLANS_START_RE.search(line):
             continue
-        # Ventana SQL: línea actual + N siguientes (capta WHERE multilínea).
-        sql_window = "\n".join(
-            lines[line_no - 1 : min(len(lines), line_no - 1 + _SQL_WINDOW_LINES)]
-        )
-        if _USER_ID_FILTER_RE.search(sql_window):
+        window = _statement_window(lines, idx)
+        if not _SET_RE.search(window):
+            continue  # mención en prose/docstring, no un UPDATE SQL real
+        has_filter = bool(_USER_ID_FILTER_RE.search(window))
+        lookback = "\n".join(lines[max(0, idx - _EXEMPT_LOOKBACK_LINES):idx])
+        has_exempt = bool(_I2_EXEMPT_RE.search(lookback))
+        yield (idx + 1, has_filter, has_exempt)
+
+
+def _find_violation_sites(lines: list[str]) -> list[tuple[int, str]]:
+    """Retorna `(line_no, line_text)` para cada UPDATE meal_plans sin filter
+    user_id y sin I2-EXEMPT precedente."""
+    violations: list[tuple[int, str]] = []
+    for line_no, has_filter, has_exempt in _iter_meal_plans_updates(lines):
+        if has_filter or has_exempt:
             continue
-        # Sin filter — buscar I2-EXEMPT en lookback.
-        lookback_start = max(0, line_no - 1 - _EXEMPT_LOOKBACK_LINES)
-        lookback = "\n".join(lines[lookback_start : line_no - 1])
-        if _I2_EXEMPT_RE.search(lookback):
-            continue
-        violations.append((line_no, line.strip()))
+        violations.append((line_no, lines[line_no - 1].strip()))
     return violations
 
 
@@ -118,20 +142,11 @@ def test_count_of_unfiltered_sites_matches_marker_count():
     lines = _read_cron_tasks_lines()
     sites_without_filter = 0
     sites_with_marker = 0
-    for line_no, line in enumerate(lines, start=1):
-        if line.strip().startswith("#"):
-            continue
-        if not _UPDATE_MEAL_PLANS_RE.search(line):
-            continue
-        sql_window = "\n".join(
-            lines[line_no - 1 : min(len(lines), line_no - 1 + _SQL_WINDOW_LINES)]
-        )
-        if _USER_ID_FILTER_RE.search(sql_window):
+    for _line_no, has_filter, has_exempt in _iter_meal_plans_updates(lines):
+        if has_filter:
             continue
         sites_without_filter += 1
-        lookback_start = max(0, line_no - 1 - _EXEMPT_LOOKBACK_LINES)
-        lookback = "\n".join(lines[lookback_start : line_no - 1])
-        if _I2_EXEMPT_RE.search(lookback):
+        if has_exempt:
             sites_with_marker += 1
 
     assert sites_without_filter > 0, (
@@ -145,6 +160,34 @@ def test_count_of_unfiltered_sites_matches_marker_count():
         f"`# I2-EXEMPT`. Falta marker en "
         f"{sites_without_filter - sites_with_marker} sitio(s) — ver "
         f"test_every_update_meal_plans_filters_or_exempts para localizar."
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2b. [NG-4] Coverage guard: el parser DEBE ver las formas multilínea
+# ---------------------------------------------------------------------------
+def test_parser_covers_multiline_update_forms():
+    """Anti-regresión del blind-spot que NG-4 cerró: si alguien re-estrecha la
+    detección a single-line (`UPDATE meal_plans SET` contiguo), el coverage cae de
+    ~31 a ~7 y vuelve a esconder UPDATEs sin filtrar. Anclamos un floor de
+    statements detectados Y exigimos que se detecten formas multilínea (donde
+    `UPDATE meal_plans` queda al final de línea, sin `SET` en la misma línea)."""
+    lines = _read_cron_tasks_lines()
+    detected = list(_iter_meal_plans_updates(lines))
+    assert len(detected) >= 25, (
+        f"P2-NEW-8/NG-4: solo {len(detected)} `UPDATE meal_plans` detectados; se "
+        f"esperaban ≥25. ¿Se re-estrechó el regex a single-line (re-abriendo el "
+        f"blind-spot multilínea)?"
+    )
+    # Al menos un statement multilínea real: `UPDATE meal_plans` al final de línea.
+    multiline_starts = sum(
+        1 for line in lines
+        if not line.strip().startswith("#")
+        and re.search(r"UPDATE\s+meal_plans\s*$", line, re.IGNORECASE)
+    )
+    assert multiline_starts >= 15, (
+        f"P2-NEW-8/NG-4: solo {multiline_starts} formas multilínea "
+        f"`UPDATE meal_plans$`; el parser line-by-line previo las ignoraba todas."
     )
 
 

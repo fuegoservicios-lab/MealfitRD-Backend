@@ -10,7 +10,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmb
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 
-from knobs import _env_str, _env_float
+from knobs import _env_str, _env_float, _env_int, thinking_budget_kwargs  # [P2-COST-THINKING-CAP-EXT · 2026-06-01]
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +90,49 @@ def _fact_extractor_router_model_name() -> str:
     """[P2-NEW-FACTEX-PRIMARY-MODEL-KNOB] Helper SSOT — modelo flash-lite
     del router `should_extract_facts` (gate cheap-first antes del PRO call)."""
     return _FACT_EXTRACTOR_ROUTER_MODEL
+
+
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeouts per-invoke del fact-extractor.
+# Pre-fix: los 3 constructores `ChatGoogleGenerativeAI` (pro sync, shadow en
+# daemon thread, router flash-lite) se creaban SIN `timeout=`. El PRO invoke
+# corre síncrono en el thread del threadpool que sirve `async_extract_and_save_facts`;
+# un Gemini colgado bloqueaba ese thread indefinidamente Y mantenía tomado el
+# fact-lock (liberado solo en el `finally`), bloqueando futuras extracciones del
+# mismo usuario. El `timeout=` propaga al deadline gRPC → DeadlineExceeded,
+# capturado por los `except` existentes (extract_facts→[], should_extract_facts→True).
+# Floor 10s: Gemini API rechaza deadlines <10s con HTTP 400 INVALID_ARGUMENT
+# (lección P1-CHAT-EMPTY-RESPONSE). Knobs auto-registrados.
+# Tooltip-anchor: P2-LLM-TIMEOUT-SWEEP.
+def _fact_extractor_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_FACT_EXTRACTOR_LLM_TIMEOUT_S",
+        30.0,
+        validator=lambda v: 10.0 <= v <= 120.0,
+    )
+
+
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Cohorte omitida del sweep original:
+# `GoogleGenerativeAIEmbeddings` (NO `ChatGoogleGenerativeAI`). En
+# `langchain-google-genai` el constructor de embeddings NO acepta `timeout=`
+# ni cablea `request_options`; el único arg que llega al cliente httpx (y por
+# tanto acota el deadline read/connect) es `client_args` → `HttpOptions(
+# client_args=...)` → `httpx.Client(timeout=<s>)` (verificado en el source de
+# la versión instalada). Sin esto, un socket de embedding colgado bloquea el
+# thread del bg-pool / fact-lock para siempre. `_env_float` con clamp.
+def _embeddings_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_EMBEDDING_LLM_TIMEOUT_S",
+        15.0,
+        validator=lambda v: 0.0 < v <= 60.0,
+    )
+
+
+def _fact_extractor_router_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_FACT_EXTRACTOR_ROUTER_LLM_TIMEOUT_S",
+        12.0,
+        validator=lambda v: 10.0 <= v <= 120.0,
+    )
 
 
 def _should_run_shadow(user_id: Optional[str]) -> bool:
@@ -218,6 +261,17 @@ def _invoke_with_shadow(
         model=pro_model,
         temperature=pro_temperature,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
+        timeout=_fact_extractor_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
+        # [P2-COST-THINKING-CAP-EXT · 2026-06-01] Cap reasoning del PRO de
+        # extracción/clasificación de hechos (output a schema FactsModel /
+        # BatchContradictionResult). gemini-3.5-flash es thinking-capable; el
+        # reasoning factura como output a $9/M en una tarea de extracción
+        # estructurada. Techo 2048 deja holgura sobrada para el path de
+        # contradicción/merge (gestión de datos, NO razonamiento de seguridad
+        # clínica — eso vive en reviewer/fact-checker). Knob
+        # MEALFIT_FACT_EXTRACTOR_THINKING_BUDGET (-1 = sin cap). El shadow A/B
+        # NO se capea (mide el modelo barato puro). flash-lite → no-op.
+        **thinking_budget_kwargs(pro_model, "MEALFIT_FACT_EXTRACTOR_THINKING_BUDGET", 2048),
     ).with_structured_output(output_schema)
     pro_result = pro_llm.invoke(prompt)
     pro_duration_ms = int((_time_module.monotonic() - pro_t0) * 1000)
@@ -234,6 +288,7 @@ def _invoke_with_shadow(
                 model=_FACT_SHADOW_MODEL,
                 temperature=pro_temperature,
                 google_api_key=os.environ.get("GEMINI_API_KEY"),
+                timeout=_fact_extractor_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
             ).with_structured_output(output_schema)
             flash_res = flash_llm.invoke(prompt)
             flash_ms = int((_time_module.monotonic() - flash_t0) * 1000)
@@ -323,7 +378,8 @@ def should_extract_facts(user_message: str) -> bool:
     llm = ChatGoogleGenerativeAI(
         model=_fact_extractor_router_model_name(),
         temperature=0.0,
-        google_api_key=os.environ.get("GEMINI_API_KEY")
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        timeout=_fact_extractor_router_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
     ).with_structured_output(RouterResult)
     
     try:
@@ -459,7 +515,7 @@ def extract_facts(user_message: str, recent_history: str = "", user_id: Optional
 
 CACHE_TTL_PERMANENT = 3153600000  # ~100 years — embeddings are deterministic for the same input
 
-@centralized_cache(ttl_seconds=CACHE_TTL_PERMANENT, maxsize=10000)
+@centralized_cache(ttl_seconds=CACHE_TTL_PERMANENT, maxsize=10000, cache_empty=False)
 def get_embedding(text: str) -> list:
     """Genera un vector embedding usando Gemini embedding (Caché Distribuido).
 
@@ -473,9 +529,14 @@ def get_embedding(text: str) -> list:
          modelo. Cambiar a fallback automático requeriría un segundo knob
          + versionado del cache (las dimensiones del vector pueden diferir
          entre modelos y romper similaridad search).
-      2. **Cache persistente**: `CACHE_TTL_PERMANENT = ~100 años` —
-         re-embedeos del mismo texto son raros. Una excepción transitoria
-         se ve solo una vez por texto único; el cache absorbe el rebound.
+      2. **Cache persistente**: `CACHE_TTL_PERMANENT = ~100 años` para los
+         embeddings EXITOSOS (deterministas para el mismo input). El fallo
+         `[]` NO se cachea — `cache_empty=False` (P2-EMBED-NO-CACHE-EMPTY ·
+         2026-05-30). Pre-fix el decorador cacheaba `[]` bajo el TTL de ~100
+         años, así que una excepción transitoria (timeout/429) envenenaba ese
+         texto para siempre y el hecho clínico se saltaba indefinidamente
+         (consumidores hacen `if not emb: skip`). Ahora un fallo transitorio se
+         re-intenta en el siguiente llamado del mismo texto.
       3. **Downstream tolera []**: los consumidores (`async_extract_and_save_facts`,
          hybrid search en `agent.py`, `proactive_agent.py`) chequean
          `if not emb: skip/degrade` y siguen el flujo sin propagar.
@@ -491,7 +552,9 @@ def get_embedding(text: str) -> list:
         _model_name = GEMINI_EMBEDDING_TEXT_MODEL
         embeddings = GoogleGenerativeAIEmbeddings(
             model=GEMINI_EMBEDDING_TEXT_MODEL,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline httpx (ver helper).
+            client_args={"timeout": _embeddings_llm_timeout_s()},
         )
         emb = embeddings.embed_query(text)
         logger.debug(f"[EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
@@ -646,23 +709,61 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
         for f_id in ids_to_delete_all:
             delete_user_fact(f_id)
 
+    # [P2-FACT-SAVE-FAIL-LOUD · 2026-05-30] Chequear el return de
+    # save_user_fact ANTES de contar el éxito. Pre-fix: FASE 3 soft-borraba los
+    # hechos contradictorios/fusionados (delete_user_fact arriba) y luego
+    # guardaba el reemplazo SIN verificar el return; `save_user_fact` traga la
+    # excepción de DB y `return None` (db_facts.py:253-255). El contador se
+    # incrementaba incondicionalmente y el log "[BATCH COMPLETO]" reportaba
+    # éxito aunque el INSERT no persistiera → en un blip transitorio entre el
+    # delete y el save, el hecho viejo queda soft-deleted y el corregido NUNCA
+    # persiste = pérdida NETA de un hecho de perfil (incluidas
+    # alergias/condiciones médicas), con telemetría falsamente positiva. El
+    # caller orquestador (async_extract_and_save_facts) NO reintenta un fallo
+    # de save dentro del pipeline (su retry solo cubre la adquisición del lock).
+    # Fix: contar solo en éxito + log.error VISIBLE (Sentry captura error-level)
+    # marcando la categoría crítica para que SRE vea la pérdida.
+    # Tooltip-anchor: P2-FACT-SAVE-FAIL-LOUD.
     saved_count = 0
     for pf in prepared_facts:
         if pf["fact_text"] in skipped_new_facts:
             logger.info(f"{log_prefix}⏭️ Hecho absorbido en fusión: '{pf['fact_text']}'")
             continue
-        save_user_fact(user_id, pf["fact_text"], pf["emb"], metadata=pf["metadata"])
-        logger.info(f"{log_prefix}📦 Nuevo hecho guardado: '{pf['fact_text']}' | Metadatos: {pf['metadata']}")
-        saved_count += 1
-    
+        _saved = save_user_fact(user_id, pf["fact_text"], pf["emb"], metadata=pf["metadata"])
+        if _saved:
+            logger.info(f"{log_prefix}📦 Nuevo hecho guardado: '{pf['fact_text']}' | Metadatos: {pf['metadata']}")
+            saved_count += 1
+        else:
+            _cat = (pf.get("metadata") or {}).get("category")
+            logger.error(
+                f"{log_prefix}🚨 [P2-FACT-SAVE-FAIL-LOUD] save_user_fact NO persistió "
+                f"'{pf['fact_text']}' (category={_cat}, critical={_cat in CRITICAL_CATEGORIES}) "
+                f"— si reemplazaba un hecho contradictorio ya soft-deleted, el perfil quedó SIN ese dato."
+            )
+
     merge_count = 0
     for mf in merged_facts_to_save:
         merged_emb = get_embedding(mf["fact_text"])
-        if merged_emb:
-            save_user_fact(user_id, mf["fact_text"], merged_emb, metadata=mf["metadata"])
+        if not merged_emb:
+            _cat = (mf.get("metadata") or {}).get("category")
+            logger.error(
+                f"{log_prefix}🚨 [P2-FACT-SAVE-FAIL-LOUD] embedding vacío para hecho fusionado "
+                f"'{mf['fact_text']}' (category={_cat}) — NO se guarda; los hechos absorbidos ya "
+                f"fueron soft-deleted (pérdida potencial)."
+            )
+            continue
+        _saved = save_user_fact(user_id, mf["fact_text"], merged_emb, metadata=mf["metadata"])
+        if _saved:
             logger.info(f"{log_prefix}🔀 Hecho fusionado guardado: '{mf['fact_text']}' | Metadatos: {mf['metadata']}")
             merge_count += 1
-    
+        else:
+            _cat = (mf.get("metadata") or {}).get("category")
+            logger.error(
+                f"{log_prefix}🚨 [P2-FACT-SAVE-FAIL-LOUD] save_user_fact NO persistió hecho "
+                f"fusionado '{mf['fact_text']}' (category={_cat}, critical={_cat in CRITICAL_CATEGORIES}) "
+                f"— hechos absorbidos ya soft-deleted; pérdida neta."
+            )
+
     total_deleted = len(ids_to_delete_all)
     logger.info(f"{log_prefix}✅ [BATCH COMPLETO] {saved_count} nuevos + {merge_count} fusionados, {total_deleted} eliminados.")
 

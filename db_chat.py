@@ -139,11 +139,31 @@ def get_session_owner(session_id: str) -> Optional[str]:
             return None
 
 def get_guest_chat_sessions(session_ids: list):
-    """Obtiene la lista de sesiones para invitados, mediante sus IDs."""
+    """Obtiene la lista de sesiones para invitados, mediante sus IDs.
+
+    [P1-CHAT-GUEST-IDOR · 2026-05-30] El filtro `.is_("user_id", "null")` es
+    OBLIGATORIO por seguridad. Este path recupera sesiones por id crudo (los
+    `session_ids` vienen del localStorage del cliente, sin verificar ownership),
+    así que SIN el filtro un usuario autenticado podía llamar
+    `GET /api/chat/sessions/<su_uid>?session_ids=<sesión_ajena>` y recibir la
+    sesión + el snippet del primer mensaje de OTRO usuario (IDOR + leak de PII).
+    Solo las sesiones genuinas de invitado (sin dueño, `user_id IS NULL`) deben
+    ser recuperables por id crudo; las sesiones propias de un usuario logueado
+    ya las trae `get_user_chat_sessions(user_id)` filtrando por owner. Una
+    sesión creada como guest y luego "reclamada" al loguearse queda con
+    `user_id` no-nulo → sale por el path de owner, no por este. Tooltip-anchor:
+    P1-CHAT-GUEST-IDOR (no remover el `.is_`).
+    """
     if not supabase or not session_ids: return []
     try:
         # Solo obtenemos hasta un límite prudente para evitar URLs muy largas
-        res = supabase.table("agent_sessions").select("*").in_("id", session_ids[:20]).execute()
+        res = (
+            supabase.table("agent_sessions")
+            .select("*")
+            .in_("id", session_ids[:20])
+            .is_("user_id", "null")  # [P1-CHAT-GUEST-IDOR] solo sesiones sin dueño (no IDOR)
+            .execute()
+        )
         sessions = res.data
         return _process_and_sort_sessions(sessions)
     except Exception as e:

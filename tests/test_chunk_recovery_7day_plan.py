@@ -59,6 +59,7 @@ def test_a_7day_plan_chunk_is_recoverable():
          patch("cron_tasks._enqueue_plan_chunk") as mock_enqueue, \
          patch("cron_tasks._detect_and_escalate_stuck_chunks"), \
          patch("cron_tasks._dispatch_push_notification") as mock_push, \
+         patch("cron_tasks._escalate_failed_window_expired_chunks"), \
          patch("cron_tasks._escalate_unrecoverable_chunk") as mock_escalate:
         _recover_failed_chunks_for_long_plans()
 
@@ -73,7 +74,10 @@ def test_a_7day_plan_chunk_is_recoverable():
     assert select_calls, "Debió ejecutarse la query SELECT de candidatos"
     sql_text, sql_params = select_calls[0]
     assert "make_interval(mins => %s)" in sql_text, "Query debe filtrar por min_age"
-    assert "(p.plan_data->>'total_days_requested')::int >= 7" in sql_text, "Scope debe ser 7d+"
+    # [Stale-fix P1-CHUNK-LEARN-3 · 2026-05-29] P2-CHUNK-10 (2026-05-28) cambió el scope
+    # de `>= 7` a `> 3` (planes de 4-6 días también chunkean — trigger > PLAN_CHUNK_SIZE=3).
+    # Esta aserción quedó stale desde entonces; la alineo con producción.
+    assert "(p.plan_data->>'total_days_requested')::int > 3" in sql_text, "Scope debe ser > PLAN_CHUNK_SIZE (3)"
     # [P0-1-RECOVERY/A] El filtro de fecha debe usar COALESCE con created_at como fallback.
     assert "COALESCE(" in sql_text and "p.created_at" in sql_text, \
         "Query debe usar COALESCE(grocery_start_date, p.created_at) para tolerar planes sin start_date"
@@ -94,6 +98,7 @@ def test_b_recovery_attempts_counter_incremented():
     with patch("cron_tasks.execute_sql_query", return_value=rows), \
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
          patch("cron_tasks._enqueue_plan_chunk"), \
+         patch("cron_tasks._escalate_failed_window_expired_chunks"), \
          patch("cron_tasks._detect_and_escalate_stuck_chunks"):
         _recover_failed_chunks_for_long_plans()
 
@@ -121,6 +126,7 @@ def test_c_escalation_after_max_recovery_attempts():
          patch("cron_tasks.execute_sql_write", side_effect=fake_write), \
          patch("cron_tasks._enqueue_plan_chunk") as mock_enqueue, \
          patch("cron_tasks._detect_and_escalate_stuck_chunks"), \
+         patch("cron_tasks._escalate_failed_window_expired_chunks"), \
          patch("cron_tasks._dispatch_push_notification") as mock_push:
         _recover_failed_chunks_for_long_plans()
 
@@ -148,6 +154,7 @@ def test_d_no_candidates_short_circuits_safely():
     with patch("cron_tasks.execute_sql_query", return_value=[]), \
          patch("cron_tasks.execute_sql_write") as mock_write, \
          patch("cron_tasks._enqueue_plan_chunk") as mock_enqueue, \
+         patch("cron_tasks._escalate_failed_window_expired_chunks"), \
          patch("cron_tasks._detect_and_escalate_stuck_chunks") as mock_stuck:
         _recover_failed_chunks_for_long_plans()
 

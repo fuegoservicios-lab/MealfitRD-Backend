@@ -34,7 +34,7 @@ from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker
 # + sin `timeout=` (puede colgar al worker indefinidamente) + sin CB gate
 # (avalancha si Gemini está degradado). El P1-CHAT-CB-EXTEND ya cubrió los
 # 4 callsites de `agent.py`; este fix cierra los 2 de `tools.py`.
-from knobs import _env_str, _env_float
+from knobs import _env_str, _env_float, thinking_budget_kwargs  # [P2-COST-THINKING-CAP-EXT · 2026-06-01]
 
 
 def _tools_pref_agent_model_name() -> str:
@@ -401,6 +401,17 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                     logger.info("💾 Plan generado desde chat guardado en DB.")
                 else:
                     logger.warning("⚠️ No se pudo guardar el plan generado desde chat.")
+                    # [P3-PROD-AUDIT-2 · 2026-05-30] Emitir alerta de persist-fail
+                    # (paridad con services._save_plan_and_track_background,
+                    # P2-PLAN-PERSIST-FAILED). Este path chat-driven era un
+                    # blind-spot de observabilidad: el fallo solo se logueaba.
+                    try:
+                        from services import _persist_plan_persist_failed_alert
+                        _persist_plan_persist_failed_alert(
+                            user_id, "chat_tool_save_failed: save_new_meal_plan_robust devolvió falsy"
+                        )
+                    except Exception as _al_e:
+                        logger.debug(f"[P3-PROD-AUDIT-2] persist alert (else) falló: {_al_e}")
                 
                 # 📈 Frequency Tracking para plan generado por chat (siempre, independiente del guardado)
                 try:
@@ -416,7 +427,13 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
 
             except Exception as db_e:
                 logger.error(f"⚠️ Aviso: No se pudo guardar el plan en Supabase (error {db_e}), pero el plan se devolverá al usuario.")
-            
+                # [P3-PROD-AUDIT-2 · 2026-05-30] idem rama else: alerta de persist-fail.
+                try:
+                    from services import _persist_plan_persist_failed_alert
+                    _persist_plan_persist_failed_alert(user_id, f"chat_tool_save_failed: {type(db_e).__name__}")
+                except Exception as _al_e:
+                    logger.debug(f"[P3-PROD-AUDIT-2] persist alert (except) falló: {_al_e}")
+
             return json.dumps(result)
         else:
             return "ERROR: El pipeline no pudo generar un plan. Intenta de nuevo."
@@ -471,7 +488,12 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
     )
     import db_inventory
     deduct_summary = None
-    if has_ingredients:
+    # [P2-CONSUMED-DEDUP-INVENTORY · 2026-05-30] NO deducir el inventario si el
+    # log fue un dedup-skip (re-emisión del LLM dentro de la ventana de 60s):
+    # db_log_consumed_meal retorna el sentinel "deduped" en ese caso. Sin este
+    # gate, la 2ª emisión saltaba el INSERT (calorías OK) pero corría la
+    # deducción de nuevo → la nevera se descontaba AL DOBLE del consumo real.
+    if has_ingredients and result != "deduped":
         deduct_summary = db_inventory.deduct_consumed_meal_from_inventory(user_id, ingredients)
 
     if result is not None:
@@ -631,6 +653,13 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         temperature=0.1,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_tools_modify_meal_llm_timeout_s(),
+        # [P2-COST-THINKING-CAP-EXT · 2026-06-01] Cap reasoning del modify (genera
+        # UN plato a schema MealModel + 3 validadores deterministas + retry).
+        # gemini-3.5-flash es thinking-capable; reasoning ilimitado factura como
+        # output a $9/M en una tarea de relleno-de-schema. Techo 2048 (=day-gen)
+        # recorta runaway sin tocar el razonamiento normal. Knob
+        # MEALFIT_MODIFY_THINKING_BUDGET (-1 = sin cap). flash-lite → no-op.
+        **thinking_budget_kwargs(_modify_model, "MEALFIT_MODIFY_THINKING_BUDGET", 2048),
     ).with_structured_output(MealModel)
     # `_modify_llm_for_usage` queda como referencia para telemetría: el
     # objeto con `.model` (sin `.with_structured_output(...)`) es el que
@@ -1060,6 +1089,14 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # presente solo si el guard reportó divergencias post-modificación.
             # El frontend (AgentPage) puede mostrar toast no-bloqueante.
             _resp = {"modified_meal": new_meal_data, "day": day_number, "meal_index": target_meal_index}
+            # [P3-GENCHUNK-SPEED · 2026-06-01] Incluir el `plan_data` ya mergeado
+            # (autoridad fresh-post-lock que `update_plan_data_atomic` retorna)
+            # para que `execute_tools` NO re-SELECTee el plan vía
+            # `get_latest_meal_plan_with_id` justo después de escribirlo (round-trip
+            # serial redundante en el critical path del chat). `execute_tools`
+            # parsea esta key, hidrata `new_plan`, y LUEGO pisa `tool_result` con
+            # un string amistoso → el blob NO llega al LLM (cero token bloat).
+            _resp["plan_data"] = merged_plan_data
             try:
                 if _agent_divergences:
                     from shopping_calculator import summarize_divergences_for_ui
@@ -1684,39 +1721,67 @@ def log_water_glass(user_id: str, count_delta: int = 1) -> str:
 
         log_date = _local_date_str_for_user()
 
-        # Lee el conteo actual.
-        res = (
-            supabase.table("water_intake_log")
-            .select("glasses")
-            .eq("user_id", user_id)
-            .eq("log_date", log_date)
-            .limit(1)
-            .execute()
-        )
-        current = 0
-        if res and res.data and len(res.data) > 0:
-            current = int(res.data[0].get("glasses") or 0)
+        # [P3-WATER-ATOMIC-DELTA · 2026-05-30] Incremento ATÓMICO en UNA sola
+        # sentencia. Pre-fix era read-modify-write (SELECT glasses → upsert
+        # current+delta) que perdía la escritura concurrente del card de
+        # Hidratación del Dashboard, el cual hace un SET ABSOLUTO sobre la misma
+        # fila (user_id,log_date) vía POST /api/plans/water-intake. Si el set
+        # absoluto aterrizaba entre el SELECT y el upsert de esta tool, el upsert
+        # lo pisaba con `stale_current+delta` (lost-update). Ahora `glasses + %s`
+        # se evalúa DENTRO del UPDATE bajo el row-lock del upsert (PK
+        # user_id,log_date) → sin ventana. Clamp [0,50] en SQL (GREATEST/LEAST)
+        # preserva el cap defensivo; RETURNING da el conteo autoritativo.
+        # Fallback al read-modify-write vía supabase solo si no hay
+        # connection_pool (env degradado) — ese path raro acepta la race
+        # cosmética/self-healing previa. Tooltip-anchor: P3-WATER-ATOMIC-DELTA.
+        new_count = None
+        try:
+            from db_core import connection_pool, execute_sql_write
+            if connection_pool:
+                _rows = execute_sql_write(
+                    """
+                    INSERT INTO water_intake_log (user_id, log_date, glasses, updated_at)
+                    VALUES (%s, %s, GREATEST(0, LEAST(50, %s)), now())
+                    ON CONFLICT (user_id, log_date)
+                    DO UPDATE SET glasses = GREATEST(0, LEAST(50, water_intake_log.glasses + %s)),
+                                  updated_at = now()
+                    RETURNING glasses
+                    """,
+                    (user_id, log_date, count_delta, count_delta),
+                    returning=True,
+                )
+                if _rows:
+                    new_count = int(_rows[0]["glasses"])
+        except Exception as _atomic_err:
+            logger.warning(
+                f"[P3-WATER-ATOMIC-DELTA] upsert atómico falló, fallback "
+                f"read-modify-write: {_atomic_err}"
+            )
 
-        new_count = max(0, min(50, current + count_delta))
-        actual_delta = new_count - current
-        if actual_delta == 0 and count_delta != 0:
-            # Se intentó sumar/restar pero el clamp absorbió el cambio.
-            if count_delta > 0:
-                return f"El usuario ya esta en el maximo de 50 vasos para hoy (cap defensivo). No se sumo nada."
-            else:
-                return f"El usuario ya esta en 0 vasos para hoy. No se puede restar mas."
-
-        payload = {
-            "user_id": user_id,
-            "log_date": log_date,
-            "glasses": new_count,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        (
-            supabase.table("water_intake_log")
-            .upsert(payload, on_conflict="user_id,log_date")
-            .execute()
-        )
+        if new_count is None:
+            # Fallback degradado (sin connection_pool / error del path atómico).
+            from datetime import datetime, timezone
+            res = (
+                supabase.table("water_intake_log")
+                .select("glasses")
+                .eq("user_id", user_id)
+                .eq("log_date", log_date)
+                .limit(1)
+                .execute()
+            )
+            current = 0
+            if res and res.data and len(res.data) > 0:
+                current = int(res.data[0].get("glasses") or 0)
+            new_count = max(0, min(50, current + count_delta))
+            supabase.table("water_intake_log").upsert(
+                {
+                    "user_id": user_id,
+                    "log_date": log_date,
+                    "glasses": new_count,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                on_conflict="user_id,log_date",
+            ).execute()
 
         # Reusa la meta personalizada para el mensaje de confirmacion.
         try:
@@ -1725,11 +1790,16 @@ def log_water_glass(user_id: str, count_delta: int = 1) -> str:
         except Exception:
             goal = 8
 
-        verb = "sumaron" if actual_delta > 0 else "restaron"
-        reached = " ¡Cumplio su meta del dia!" if new_count >= goal and current < goal else ""
+        verb = "sumaron" if count_delta > 0 else "restaron"
+        boundary = ""
+        if count_delta > 0 and new_count >= 50:
+            boundary = " (tope defensivo de 50 vasos/dia)."
+        elif count_delta < 0 and new_count <= 0:
+            boundary = " (minimo de 0 vasos)."
+        reached = " ¡Cumplio su meta del dia!" if new_count >= goal else ""
         return (
-            f"Listo: se {verb} {abs(actual_delta)} vaso(s). "
-            f"El usuario ahora lleva {new_count} de {goal} vasos hoy.{reached}"
+            f"Listo: se {verb} {abs(count_delta)} vaso(s). "
+            f"El usuario ahora lleva {new_count} de {goal} vasos hoy.{reached}{boundary}"
         )
     except Exception as e:
         logger.error(f"❌ [TOOL] log_water_glass error: {e}")

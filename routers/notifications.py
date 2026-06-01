@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from error_utils import safe_error_detail
+import asyncio
 import logging
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional
@@ -40,9 +41,17 @@ class PushSubscriptionItem(BaseModel):
     keys: Dict[str, str]
 
 @router.post("/subscribe")
-async def subscribe_push(sub: PushSubscriptionItem, user_id: str = Depends(_PUSH_SUBSCRIBE_LIMITER)):
+def subscribe_push(sub: PushSubscriptionItem, user_id: str = Depends(_PUSH_SUBSCRIBE_LIMITER)):
     """
     Guarda o actualiza la suscripción de un dispositivo para enviar notificaciones Push.
+
+    [P3-BACKEND-AUDIT · 2026-06-01] Declarado `def` plano (no `async def`): el
+    cuerpo ejecuta psycopg SÍNCRONO (`connection_pool.connection()` + cursor) que
+    bloquearía el event loop si corriera en una corrutina. FastAPI despacha
+    handlers sync a su threadpool automáticamente, sin bloquear el loop — mismo
+    patrón que `api_shift_plan`/`api_log_consumed_meal`. La dependencia async
+    (`_PUSH_SUBSCRIBE_LIMITER` → `get_verified_user_id`) se resuelve igual en el
+    loop antes de despachar el handler. Anchor: P3-NOTIF-EVENTLOOP.
     """
     if not user_id:
         raise HTTPException(status_code=401, detail="User ID en token no válido.")
@@ -85,33 +94,47 @@ async def subscribe_push(sub: PushSubscriptionItem, user_id: str = Depends(_PUSH
         logger.error(f"Error guardando push subscription: {e}")
         raise HTTPException(status_code=500, detail="Error en servidor guardando suscripción")
 
+def _delete_push_subscription_sync(user_id: str, endpoint_to_remove: str) -> None:
+    """[P3-BACKEND-AUDIT · 2026-06-01] Borrado síncrono de la fila de
+    push_subscriptions. Extraído para invocarse vía `asyncio.to_thread` desde
+    `unsubscribe_push` (que es `async def` porque hace `await request.json()`),
+    de forma que el psycopg bloqueante NO corra sobre el event loop."""
+    with connection_pool.connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM push_subscriptions WHERE user_id = %s AND subscription_data->>'endpoint' = %s",
+                (user_id, endpoint_to_remove)
+            )
+            conn.commit()
+
+
 @router.delete("/unsubscribe")
 async def unsubscribe_push(request: Request, user_id: str = Depends(_PUSH_UNSUBSCRIBE_LIMITER)):
     """
     Elimina una suscripción de dispositivo. Recibe el endpoint de la suscripción para borrar la fila exacta.
+
+    [P3-BACKEND-AUDIT · 2026-06-01] El DELETE psycopg síncrono se offloadea con
+    `await asyncio.to_thread(...)` para no bloquear el event loop (el handler debe
+    seguir `async def` por el `await request.json()`). Anchor: P3-NOTIF-EVENTLOOP.
     """
     if not user_id:
         raise HTTPException(status_code=401, detail="User ID en token no válido.")
-    
+
     if not connection_pool:
         raise HTTPException(status_code=500, detail="Database connection pool unavailable")
-    
+
     try:
         body = await request.json()
         endpoint_to_remove = body.get("endpoint")
         if not endpoint_to_remove:
             raise HTTPException(status_code=400, detail="Missing endpoint in request")
-            
-        with connection_pool.connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "DELETE FROM push_subscriptions WHERE user_id = %s AND subscription_data->>'endpoint' = %s",
-                    (user_id, endpoint_to_remove)
-                )
-                conn.commit()
-                
+
+        await asyncio.to_thread(_delete_push_subscription_sync, user_id, endpoint_to_remove)
+
         return {"status": "success", "message": "Subscription removed"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error borrando push subscription: {e}")
         raise HTTPException(status_code=500, detail="Error de BDD borrando suscripción")

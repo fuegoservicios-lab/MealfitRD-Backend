@@ -112,6 +112,50 @@ def merge_form_data_with_profile(user_id: str, form_data: Optional[dict]) -> dic
 
 
 
+# [P3-GENCHUNK-SPEED · 2026-06-01] Título determinista (cero LLM) usado como
+# placeholder síncrono cuando diferimos la generación del título creativo. Mirror
+# del fallback de `ai_helpers.generate_plan_title` (líneas ~147-149) para que el
+# nombre placeholder sea razonable si el título creativo nunca llega (worker kill).
+def _deterministic_plan_title_placeholder(plan_data: dict) -> str:
+    meal_names = [
+        m["name"]
+        for d in plan_data.get("days", [])
+        for m in d.get("meals", [])
+        if m.get("name")
+    ]
+    calories = plan_data.get("calories", 0)
+    if not meal_names:
+        return f"Plan Evolutivo - {datetime.now().strftime('%d/%m/%Y')}"
+    first_meal = meal_names[0]
+    short_name = first_meal[:20] + "…" if len(first_meal) > 20 else first_meal
+    return f"{short_name} — {calories} kcal"
+
+
+def _defer_creative_plan_title(plan_id: str, user_id: str, plan_data: dict, placeholder: str) -> None:
+    """[P3-GENCHUNK-SPEED · 2026-06-01] Genera el título creativo (LLM Flash-Lite)
+    en un thread daemon y lo escribe via UPDATE de UNA columna escalar (`name`),
+    fuera del critical path de time-to-plan-visible. Guard `AND name = <placeholder>`
+    para NO pisar un rename del usuario (PATCH /name) que haya ocurrido en la
+    ventana de ~1-2s. Guard `AND user_id` defense-in-depth (I2). UPDATE escalar →
+    exento de advisory lock (I7) y no puede lost-update plan_data del chunk worker.
+    Best-effort: si el worker muere antes de completar, el plan queda con el
+    placeholder (un nombre válido) — degradación cosmética aceptable."""
+    def _bg():
+        try:
+            creative = generate_plan_title(plan_data)
+            if creative and creative != placeholder:
+                from db_core import execute_sql_write
+                execute_sql_write(
+                    "UPDATE meal_plans SET name = %s WHERE id = %s AND user_id = %s AND name = %s",
+                    (creative, plan_id, user_id, placeholder),
+                )
+                logger.info(f"✨ [CHUNK/DEFER-TITLE] Título creativo aplicado a plan {plan_id}")
+        except Exception as _e_title:
+            logger.warning(f"⚠️ [CHUNK/DEFER-TITLE] Título diferido falló (placeholder se mantiene): {_e_title}")
+    import threading
+    threading.Thread(target=_bg, name="defer-plan-title", daemon=True).start()
+
+
 def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: list = None, total_days_requested: int = 7) -> str:
     """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
     Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
@@ -139,7 +183,21 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
                 if m.get("ingredients"):
                     ingredients.extend(m["ingredients"])
 
-        plan_name = generate_plan_title(plan_data)
+        # [P3-GENCHUNK-SPEED · 2026-06-01] El título creativo es una llamada LLM
+        # bloqueante (Gemini Flash-Lite, hasta 30s en el peor caso) que solo llena
+        # la columna cosmética `name` (lista del Historial) — NO es parte del menú
+        # de semana-1 que el usuario ve al completar. Este path (chunking) es
+        # síncrono en el critical path de time-to-plan-visible. Con el knob ON
+        # (default), usamos un placeholder determinista AHORA, persistimos +
+        # retornamos el plan_id de inmediato (para encolar semanas 2..N), y
+        # generamos el título creativo en background con un UPDATE escalar guardado.
+        # Knob MEALFIT_DEFER_PLAN_TITLE=0 revierte al comportamiento síncrono.
+        from knobs import _env_bool
+        _defer_title = _env_bool("MEALFIT_DEFER_PLAN_TITLE", True)
+        if _defer_title:
+            plan_name = _deterministic_plan_title_placeholder(plan_data)
+        else:
+            plan_name = generate_plan_title(plan_data)
         profile_embedding = plan_data.pop("_profile_embedding", None)
 
         insert_data = {
@@ -160,11 +218,77 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
         # Elimina la ventana TOCTOU entre guardar el plan y cancelar los chunks viejos.
         plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=True)
 
+        # [P3-GENCHUNK-SPEED · 2026-06-01] Disparar el título creativo en background
+        # SOLO tras tener el plan_id (para el UPDATE guardado) y solo si diferimos.
+        if _defer_title and plan_id:
+            _defer_creative_plan_title(plan_id, user_id, plan_data, plan_name)
+
         logger.info(f"💾 [CHUNK] Plan parcial (semana 1) guardado para {user_id}, plan_id={plan_id}")
         return plan_id
     except Exception as e:
         logger.error(f"❌ [CHUNK] Error guardando plan parcial para {user_id}: {e}")
         return None
+
+
+def _persist_plan_persist_failed_alert(user_id: Optional[str], reason: str) -> None:
+    """[P2-PLAN-PERSIST-FAILED-ALERT · 2026-05-30] Emite
+    `system_alerts.plan_persist_failed:<user_id>` cuando la persistencia de un
+    plan ya generado FALLA silenciosamente (INSERT de meal_plans falla por pool
+    exhaustion, statement_timeout, la CHECK I8 `meal_plans_complete_requires_days`,
+    serialization error, etc.).
+
+    Por qué existe (audit prod-readiness 2026-05-30): el chunking path
+    (`_postprocess_pipeline_result`) ignoraba un `save_partial_plan_get_id() ->
+    None` → el SSE generator marcaba el KV `complete` con `plan_id_final=None` y
+    emitía el evento `complete`: el usuario veía éxito pero el plan NO existía en
+    `meal_plans` (historial/dashboard vacíos, weeks 2..N nunca encoladas). Sin
+    alerta, el operador no tenía señal de esta falla del path crítico de
+    persistencia. El fix del path ahora emite el evento `error` al cliente; esta
+    alerta da la visibilidad operacional.
+
+    Best-effort (no propaga). Idempotente por `alert_key` per-user (ON CONFLICT
+    bumpea triggered_at). Modelo de resolution: Manual (operador investiga el
+    incidente de persistencia). tooltip-anchor: P2-PLAN-PERSIST-FAILED-ALERT —
+    row `plan_persist_failed:<>` en backend/docs/system_alerts_resolution_table.md.
+    """
+    try:
+        from db_core import execute_sql_write
+        import json as _json
+        _uid = str(user_id) if user_id else "unknown"
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'plan_persist_failed', 'critical', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                affected_user_ids = EXCLUDED.affected_user_ids,
+                resolved_at = NULL
+            """,
+            (
+                f"plan_persist_failed:{_uid}",
+                "Persistencia de plan fallida - plan generado NO guardado",
+                (
+                    "Un plan generado por el pipeline NO pudo persistirse en "
+                    "meal_plans (INSERT fallido: pool exhaustion, statement_timeout, "
+                    "CHECK constraint I8, serialization, etc). El usuario pudo ver un "
+                    "'complete' sin plan real en su historial. Investigar logs del path "
+                    f"de persistencia para el usuario afectado. Razon: {reason}."
+                ),
+                _json.dumps({"reason": reason}, ensure_ascii=False),
+                _json.dumps([_uid] if user_id else [], ensure_ascii=False),
+            ),
+        )
+        logger.error(
+            f"🛑 [P2-PLAN-PERSIST-FAILED-ALERT] system_alert plan_persist_failed "
+            f"emitido user={_uid[:8]} reason={reason}"
+        )
+    except Exception as _e:
+        logger.warning(
+            f"[P2-PLAN-PERSIST-FAILED-ALERT] No se pudo persistir el alert "
+            f"plan_persist_failed: {_e!r}"
+        )
 
 
 def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
@@ -211,7 +335,16 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
 
             insert_data = {
                 "user_id": user_id,
-                "plan_data": plan_data,
+                # [P2-ORCH-10 · 2026-05-28] Estampar generation_status='complete'
+                # (simétrico con el path de chunking que estampa 'partial' ~línea 147).
+                # Pre-fix el path no-chunking insertaba plan_data SIN el campo →
+                # quedaba FUERA del CHECK I8 (meal_plans_complete_requires_days, que
+                # exime NULL): un plan full-week con days=[] se mostraba como
+                # 'complete' con 0 días vía el default de lectura. Ahora el write
+                # entra bajo la invariante I8 (complete ⇒ days>0): si alguna
+                # regresión persistiera days vacío, el CHECK lo rechaza en vez de
+                # guardar corrupción silenciosa. Tooltip-anchor: P2-ORCH-10.
+                "plan_data": {**plan_data, "generation_status": plan_data.get("generation_status", "complete")},
                 "name": plan_name,
                 "calories": int(calories) if calories else 0,
                 "macros": macros,
@@ -274,6 +407,11 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             
     except Exception as e:
         logger.error(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")
+        # [P2-PLAN-PERSIST-FAILED-ALERT · 2026-05-30] El save corre como
+        # BackgroundTask (post-respuesta): si falla, el usuario ya tiene el plan
+        # en pantalla pero NO queda en su historial — falla silenciosa del path de
+        # persistencia. Emitir alerta para visibilidad operacional.
+        _persist_plan_persist_failed_alert(user_id, f"background_save_failed: {e}")
 
 
 def _process_swap_rejection_background(session_id: str, user_id: str, rejected_meal: str, meal_type: str):

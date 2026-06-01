@@ -27,11 +27,33 @@ def _read(*parts):
 # -------------------------------------------------------------------- P2-1
 def test_p2_chat_write_idor_message_and_stream():
     src = _read(_BACKEND, "routers", "chat.py")
-    assert src.count("P2-CHAT-WRITE-IDOR") >= 2, "el pre-check debe estar en /message Y /stream"
-    assert src.count("get_session_owner(session_id)") >= 2, "ownership pre-check faltante"
+    # [P2-CHAT-WRITE-IDOR · 2026-05-30] Umbral subido 2→3: el tercer hermano
+    # `POST /api/chat` (api_chat) había omitido el guard. Los TRES write-handlers
+    # que llaman save_message con session_id del body deben tener el pre-check.
+    assert src.count("P2-CHAT-WRITE-IDOR") >= 3, "el pre-check debe estar en /message, /stream Y POST /api/chat"
+    assert src.count("get_session_owner(session_id)") >= 3, "ownership pre-check faltante en alguno de los 3 write-handlers de chat"
     # el pre-check debe rechazar con 403 cuando el dueño no coincide
     assert "_sess_owner != verified_user_id" in src
     assert "status_code=403" in src
+
+
+def test_p2_chat_write_idor_api_chat_handler_guarded():
+    """[P2-CHAT-WRITE-IDOR · 2026-05-30] El handler `api_chat` (POST /api/chat),
+    tercer write-handler que invoca save_message con session_id del body, debe
+    contener el pre-check de ownership entre su definición y su primer
+    save_message — antes solo lo tenían /message y /stream."""
+    src = _read(_BACKEND, "routers", "chat.py")
+    # Localiza el bloque del handler api_chat y verifica que el guard aparezca
+    # antes del save_message del prompt del usuario.
+    start = src.index("def api_chat(")
+    end = src.index("save_message(session_id, \"user\"", start)
+    block = src[start:end]
+    assert "get_session_owner(session_id)" in block, (
+        "api_chat (POST /api/chat) debe tener el pre-check get_session_owner ANTES "
+        "de save_message — sin él, user_id==session_id abre IDOR de escritura."
+    )
+    assert "_sess_owner != verified_user_id" in block
+    assert "status_code=403" in block
 
 
 # -------------------------------------------------------------------- P2-2
@@ -95,5 +117,19 @@ def test_p2_genstatus_idx_migration_dual_dir_identical():
 
 # -------------------------------------------------------------------- marker
 def test_p2_marker_bumped():
+    # [P1-PROD-AUDIT-2 · 2026-05-30] Relajado de hardcode `"P2-AUDIT-IMPL"` a un
+    # floor de fecha: el marker `_LAST_KNOWN_PFIX` avanza con cada bundle (ya pasó
+    # por P1-CHAT-GUEST-IDOR → P1-PROD-AUDIT-2 desde el P2-AUDIT-IMPL del
+    # 2026-05-28). Anclar el string exacto del bundle 2026-05-28 convertía este
+    # test en un falso-rojo permanente tras cualquier bump posterior. La frescura
+    # del marker la valida `test_p3_1_last_known_pfix_freshness.py`; aquí solo
+    # exigimos que NO retroceda por debajo del bundle que este archivo cubre.
+    import re
     src = _read(_BACKEND, "app.py")
-    assert "P2-AUDIT-IMPL" in src, "_LAST_KNOWN_PFIX debe estar bumpeado a P2-AUDIT-IMPL"
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*["\']([^"\']+)["\']', src)
+    assert m, "_LAST_KNOWN_PFIX no encontrado en app.py"
+    md = re.search(r"(\d{4})-(\d{2})-(\d{2})", m.group(1))
+    assert md, f"marker sin fecha parseable: {m.group(1)!r}"
+    assert (int(md.group(1)), int(md.group(2)), int(md.group(3))) >= (2026, 5, 28), (
+        f"_LAST_KNOWN_PFIX {m.group(1)!r} es anterior al bundle P2-AUDIT-IMPL (2026-05-28)."
+    )

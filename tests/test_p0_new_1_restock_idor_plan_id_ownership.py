@@ -129,26 +129,52 @@ def test_restock_404_on_plan_id_ownership_mismatch(restock_body: str):
 
 
 def test_restock_update_filters_by_user_id_defense_in_depth(restock_body: str):
-    """El UPDATE final `meal_plans` DEBE filtrar por user_id (defense-in-
-    depth: aunque el SELECT arriba ya cerró el IDOR, mirroring del patrón
+    """El persist de `plan_data` DEBE filtrar por user_id (defense-in-depth:
+    aunque el SELECT arriba ya cerró el IDOR, mirroring del patrón
     P0-HIST-IDOR-1 retry-chunk:4119-4123 protege contra futuros refactors
-    que rompan el ownership check sin tocar el UPDATE).
+    que rompan el ownership check sin tocar el persist).
+
+    [P1-RESTOCK-LOSTUPDATE · 2026-05-30] La persistencia migró de full-overwrite
+    `supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id",...)
+    .eq("user_id", user_id)` a `update_plan_data_atomic(real_plan_id, _restock_mutator,
+    user_id=user_id)` (SELECT … FOR UPDATE para cerrar la ventana lost-update I7).
+    El filtro de ownership SE PRESERVA: `update_plan_data_atomic` incluye
+    `AND user_id = %s` en su SELECT y UPDATE internos (P2-OPEN-1) cuando se le
+    pasa `user_id=`. Este test ahora acepta CUALQUIERA de las dos formas, pero
+    EXIGE que el persist esté gateado por user_id de un modo u otro.
     """
-    # Buscar `.table("meal_plans").update({...}).eq("id", real_plan_id).eq("user_id", user_id)`
-    # con orden flexible. Usamos supabase-py builder syntax.
+    # Forma A (legacy supabase-py): `.table("meal_plans").update(...).eq("id",...).eq("user_id", user_id)`.
     update_pattern = re.compile(
         r'\.table\(\s*["\']meal_plans["\']\s*\)\s*\.update\([^)]*\)'
         r'(?P<chain>(?:\s*\.eq\([^)]+\))+)',
         re.DOTALL,
     )
-    updates = update_pattern.findall(restock_body)
-    assert updates, (
-        "P0-NEW-1 regresión: no se encontró ningún `.table('meal_plans')"
-        ".update(...).eq(...)` en `api_restock`. Si la lógica de "
-        "persistencia cambió a execute_sql_write, actualizar este parser."
+    legacy_updates = update_pattern.findall(restock_body)
+
+    # Forma B (atómica P1-RESTOCK-LOSTUPDATE): `update_plan_data_atomic(real_plan_id, ..., user_id=user_id)`.
+    atomic_match = re.search(
+        r"update_plan_data_atomic\s*\(\s*real_plan_id\s*,(?P<args>.*?)\)",
+        restock_body,
+        re.DOTALL,
+    )
+    atomic_has_user = bool(
+        atomic_match and re.search(r"user_id\s*=\s*user_id", atomic_match.group("args"))
     )
 
-    for chain in updates:
+    assert legacy_updates or atomic_has_user, (
+        "P0-NEW-1 / P1-RESTOCK-LOSTUPDATE regresión: el persist de plan_data en "
+        "`api_restock` no usa NI el patrón legacy `.table('meal_plans').update(...)"
+        ".eq(...)` NI `update_plan_data_atomic(real_plan_id, ..., user_id=user_id)`. "
+        "El ownership/lost-update guard desapareció."
+    )
+
+    if atomic_has_user:
+        # Path canónico actual: el filtro user_id vive dentro de
+        # update_plan_data_atomic; basta con que se le pase user_id=user_id.
+        return
+
+    # Path legacy: cada UPDATE chain debe filtrar id + user_id.
+    for chain in legacy_updates:
         has_id = bool(re.search(r'\.eq\(\s*["\']id["\']\s*,\s*\w+\s*\)', chain))
         has_user = bool(re.search(r'\.eq\(\s*["\']user_id["\']\s*,\s*user_id\s*\)', chain))
         assert has_id and has_user, (

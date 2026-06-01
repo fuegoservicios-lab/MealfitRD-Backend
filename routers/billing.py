@@ -10,7 +10,7 @@ from typing import Optional
 # Imports relativos al backend
 from auth import get_verified_user_id
 from db import supabase
-from knobs import _env_float
+from knobs import _env_float, _env_bool, is_production
 from rate_limiter import RateLimiter
 
 
@@ -282,11 +282,21 @@ async def api_validate_discount(
 # ---------------------------------------------------------------------------
 
 def _build_paypal_plan_tier_map() -> dict[str, str]:
-    mapping = {}
+    # [P1-BILLING-ANNUAL-MAP · 2026-05-31] Mapear AMBAS variantes (mensual Y
+    # anual) al mismo tier. El frontend (PaymentModal) usa 6 plan IDs distintos
+    # (3 mensuales + 3 anuales, en VITE_PAYPAL_PLAN_{TIER}[_ANNUAL]). Pre-fix
+    # este mapping solo leía los 3 mensuales `PAYPAL_PLAN_{TIER}_ID`; cuando un
+    # usuario pagaba el plan ANUAL, PayPal devolvía el plan_id anual, que NO
+    # mapeaba → HTTPException(400 "Plan no reconocido") DESPUÉS de que PayPal ya
+    # cobró = cobro-sin-upgrade (limbo, chargeback/soporte). El operador DEBE
+    # setear `PAYPAL_PLAN_{TIER}_ANNUAL_ID` en prod además de `PAYPAL_PLAN_{TIER}_ID`.
+    # Cada env var ausente se omite (degradación segura: ese plan_id se rechaza).
+    mapping: dict[str, str] = {}
     for tier in ("basic", "plus", "ultra"):
-        plan_id = os.environ.get(f"PAYPAL_PLAN_{tier.upper()}_ID")
-        if plan_id:
-            mapping[plan_id] = tier
+        for suffix in ("", "_ANNUAL"):
+            plan_id = os.environ.get(f"PAYPAL_PLAN_{tier.upper()}{suffix}_ID")
+            if plan_id:
+                mapping[plan_id] = tier
     return mapping
 
 
@@ -306,7 +316,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
 
         PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
         PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
-        is_sandbox = os.environ.get("ENVIRONMENT") != "production"
+        is_sandbox = not is_production()  # [P2-PROD-AUDIT-3] SSOT normalizado (lower+strip)
         PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
 
         # [P0-BILLING-2 · 2026-05-12] Fail-secure si faltan env vars PayPal
@@ -377,9 +387,11 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
             if not server_tier:
                 logger.warning(
                     f"[P0-BILLING-1] PayPal plan_id={verified_plan_id!r} no "
-                    f"mapea a tier interno. Configurar env vars "
+                    f"mapea a tier interno. Configurar env vars mensuales "
                     f"PAYPAL_PLAN_BASIC_ID/PAYPAL_PLAN_PLUS_ID/"
-                    f"PAYPAL_PLAN_ULTRA_ID. cliente hint: {client_hint_tier!r}."
+                    f"PAYPAL_PLAN_ULTRA_ID y anuales (P1-BILLING-ANNUAL-MAP) "
+                    f"PAYPAL_PLAN_BASIC_ANNUAL_ID/PAYPAL_PLAN_PLUS_ANNUAL_ID/"
+                    f"PAYPAL_PLAN_ULTRA_ANNUAL_ID. cliente hint: {client_hint_tier!r}."
                 )
                 raise HTTPException(
                     status_code=400,
@@ -482,6 +494,28 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
             }).eq("id", user_id).execute()
         )
 
+        # [P1-PROD-AUDIT-3 · 2026-05-30] Verificar que el UPDATE tocó una fila.
+        # PayPal YA validó/cobró en este punto; si `.eq("id", user_id)` matcheó 0
+        # filas (perfil ausente — caso patológico, el trigger handle_new_user lo
+        # crea al signup) el upgrade se perdía en silencio con success:true. Fail-
+        # loud + alert para reconciliación manual, espejo del cancel path arriba.
+        if not getattr(res, "data", None):
+            _persist_billing_alert(
+                alert_key=f"billing_profile_not_found_on_upgrade:{user_id}:{subscription_id}",
+                severity="critical",
+                title="Verify: perfil no encontrado al aplicar tier",
+                message=(
+                    f"User {user_id}: PayPal validó sub {subscription_id} (tier "
+                    f"{tier_to_assign}) pero el UPDATE de user_profiles matcheó 0 "
+                    f"filas. El usuario pagó pero el tier no se aplicó — reconciliar."
+                ),
+                metadata={"user_id": user_id, "sub_id": subscription_id, "tier": tier_to_assign},
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Perfil no encontrado al aplicar el plan. Contacta soporte; tu pago está registrado.",
+            )
+
         return {"success": True, "message": "Suscripción verificada y plan actualizado B2B."}
 
     except HTTPException:
@@ -509,7 +543,7 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
         
         PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
         PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
-        is_sandbox = os.environ.get("ENVIRONMENT") != "production"
+        is_sandbox = not is_production()  # [P2-PROD-AUDIT-3] SSOT normalizado (lower+strip)
         PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
 
         # [P0-BILLING-2 · 2026-05-12] Fail-secure en /cancel también: sin env
@@ -668,7 +702,7 @@ async def api_webhook_paypal(
         PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
         PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
         PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID")
-        is_sandbox = os.environ.get("ENVIRONMENT") != "production"
+        is_sandbox = not is_production()  # [P2-PROD-AUDIT-3] SSOT normalizado (lower+strip)
         PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
         
         body = await request.body()
@@ -722,8 +756,16 @@ async def api_webhook_paypal(
                     data={"grant_type": "client_credentials"}
                 )
                 if auth_resp.status_code != 200:
-                    logger.error("Error autenticando con PayPal en webhook")
-                    return {"success": False}
+                    # [P2-WEBHOOK-INFRA-503 · 2026-05-30] Fallo TRANSITORIO de infra
+                    # (OAuth con PayPal caído/5xx/timeout): NO podemos verificar la
+                    # firma, así que NO procesamos — pero devolvemos 5xx para que
+                    # PayPal REINTENTE dentro de su ventana de 3 días (25 reintentos).
+                    # Pre-fix retornaba HTTP 200 → PayPal lo leía como ack → NO
+                    # reintentaba → un SUSPENDED/EXPIRED legítimo se perdía → un
+                    # no-pagador quedaba en tier pagado. Distinto de firma inválida
+                    # (abajo), que SÍ debe seguir devolviendo 200 (reintentar no ayuda).
+                    logger.error("Error autenticando con PayPal en webhook (infra) — devolviendo 503 para retry")
+                    raise HTTPException(status_code=503, detail="PayPal auth transient failure; retry.")
                 
                 access_token = auth_resp.json().get("access_token")
                 
@@ -746,18 +788,72 @@ async def api_webhook_paypal(
                 if verify_resp.status_code != 200 or verify_resp.json().get("verification_status") != "SUCCESS":
                     logger.warning(f"🔒 Bloqueado: Firma del Webhook PayPal inválida: {verify_resp.text}")
                     return {"success": False, "message": "Signature mismatch"}
-        
+
+        # [P2-WEBHOOK-IDEMPOTENCY · 2026-05-30] Dedup de reentrega. PayPal reintenta
+        # el MISMO evento hasta 25× en 3 días (y, ahora que devolvemos 503 en fallos
+        # de infra, esos reintentos son esperados). Sin dedup, cada reentrega
+        # re-ejecuta el UPDATE — la mayoría idempotentes en valor, pero amplifica
+        # cualquier transición de estado. INSERT ON CONFLICT DO NOTHING sobre
+        # `transmission_id` (PK): si 0 filas → ya procesado → ack sin re-mutar.
+        # Best-effort: si la tabla/insert falla, seguimos (degrada al comportamiento
+        # previo, no bloquea webhooks legítimos). Solo corre tras pasar la firma.
+        _transmission_id = headers.get("paypal-transmission-id")
+        if _transmission_id:
+            try:
+                from db import execute_sql_write
+                # Reusamos el KV general `app_kv_store` (prefijo `paypal_webhook:`,
+                # GC por el sweep `_KV_SWEEP_PREFIXES`) — evita una tabla nueva +
+                # su advisor `rls_enabled_no_policy`. INSERT ON CONFLICT DO NOTHING
+                # RETURNING: lista vacía = ya existía = reentrega duplicada.
+                _kv_key = f"paypal_webhook:{_transmission_id}"
+                _first_time = await asyncio.to_thread(
+                    execute_sql_write,
+                    "INSERT INTO app_kv_store (key, value) VALUES (%s, '{}'::jsonb) "
+                    "ON CONFLICT (key) DO NOTHING RETURNING key",
+                    (_kv_key,), True,
+                )
+                if not _first_time:
+                    logger.info(
+                        f"♻️ [P2-WEBHOOK-IDEMPOTENCY] transmission_id={_transmission_id} "
+                        "ya procesado; ack idempotente sin re-procesar."
+                    )
+                    return {"success": True, "deduped": True}
+            except Exception as _dedup_e:
+                logger.warning(
+                    f"[P2-WEBHOOK-IDEMPOTENCY] dedup best-effort falló ({_dedup_e}); "
+                    "procesando el evento de todos modos."
+                )
+
         event_type = payload_dict.get("event_type")
         resource = payload_dict.get("resource", {})
         
         logger.info(f"⚡ [WEBHOOK PAYPAL] Evento recibido: {event_type}")
         
+        # [P2-BILLING-PAYMENT-FAILED-GRACE · 2026-05-30] `PAYMENT.FAILED` ya NO es
+        # terminal. Pre-fix lo incluía en `downgrade_events` → un fallo de pago
+        # TRANSITORIO (la tarjeta rebota una vez; PayPal reintenta durante su
+        # dunning window de varios días) degradaba al usuario a `gratis`
+        # INSTANTÁNEAMENTE, y NO existía handler de re-activación → el usuario
+        # perdía el acceso pagado AUNQUE PayPal cobrara con éxito en el reintento.
+        # Ahora:
+        #   - PAYMENT.FAILED → status no-destructivo `PAYMENT_RETRYING` (conserva
+        #     `plan_tier`; el acceso se gobierna por plan_tier, no por status).
+        #   - Solo SUSPENDED/EXPIRED (+ CANCELLED abajo) degradan (terminales).
+        #   - ACTIVATED / PAYMENT.SALE.COMPLETED → re-activa: restaura el tier
+        #     desde el `plan_id` de PayPal y limpia el flag de retry.
+        # Knob `MEALFIT_BILLING_PAYMENT_FAILED_GRACE` (default True) = kill-switch:
+        # a False revierte al comportamiento legacy (PAYMENT.FAILED degrada).
+        # Tooltip-anchor: P2-BILLING-PAYMENT-FAILED-GRACE.
+        _payment_failed_grace = _env_bool("MEALFIT_BILLING_PAYMENT_FAILED_GRACE", True)
+
         downgrade_events = [
-            "BILLING.SUBSCRIPTION.SUSPENDED", 
+            "BILLING.SUBSCRIPTION.SUSPENDED",
             "BILLING.SUBSCRIPTION.EXPIRED",
-            "BILLING.SUBSCRIPTION.PAYMENT.FAILED"
         ]
-        
+        if not _payment_failed_grace:
+            # Rollback legacy: tratar PAYMENT.FAILED como terminal.
+            downgrade_events.append("BILLING.SUBSCRIPTION.PAYMENT.FAILED")
+
         if event_type in downgrade_events:
             subscription_id = resource.get("id")
             if subscription_id:
@@ -768,6 +864,70 @@ async def api_webhook_paypal(
                         "subscription_status": "INACTIVE"
                     }).eq("paypal_subscription_id", subscription_id).execute()
                 )
+        elif _payment_failed_grace and event_type == "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
+            # Fallo de pago transitorio: NO degradar. Marcar retry y conservar tier.
+            subscription_id = resource.get("id")
+            if subscription_id:
+                logger.warning(
+                    f"💳 [P2-BILLING-PAYMENT-FAILED-GRACE] PAYMENT.FAILED para sub "
+                    f"{subscription_id}: marcando PAYMENT_RETRYING SIN degradar tier "
+                    f"(ventana de reintento de PayPal). Solo SUSPENDED/EXPIRED degradan."
+                )
+                await _supabase_async(
+                    lambda: supabase.table("user_profiles").update({
+                        "subscription_status": "PAYMENT_RETRYING"
+                    }).eq("paypal_subscription_id", subscription_id).execute()
+                )
+        elif event_type in ("BILLING.SUBSCRIPTION.ACTIVATED", "PAYMENT.SALE.COMPLETED"):
+            # Re-activación / pago exitoso (posiblemente tras un PAYMENT.FAILED).
+            # ACTIVATED es un recurso de SUSCRIPCIÓN (id + plan_id → restaura tier);
+            # PAYMENT.SALE.COMPLETED es un recurso de VENTA (la suscripción está en
+            # `billing_agreement_id`, sin plan_id → solo limpia el flag de retry).
+            if event_type == "BILLING.SUBSCRIPTION.ACTIVATED":
+                subscription_id = resource.get("id")
+                plan_id = resource.get("plan_id")
+            else:  # PAYMENT.SALE.COMPLETED
+                subscription_id = resource.get("billing_agreement_id")
+                plan_id = None
+            restored_tier = _build_paypal_plan_tier_map().get(plan_id) if plan_id else None
+            if subscription_id:
+                # [P1-BILLING-REACTIVATE-NOT-CANCELLED · 2026-05-30] NUNCA reactivar
+                # una suscripción CANCELLED. PayPal NO garantiza orden de webhooks
+                # (reintenta hasta 3 días): un PAYMENT.SALE.COMPLETED tardío del
+                # ciclo pagado puede aterrizar DESPUÉS de un CANCELLED. Pre-fix esto
+                # flippeaba `subscription_status` a ACTIVE INCONDICIONALMENTE →
+                # acceso pagado perpetuo sin cobro, porque el único revocador
+                # (db_profiles.py: degradación post-fin-de-ciclo) exige
+                # status==CANCELLED y jamás dispara tras la resurrección. Regresión
+                # introducida por el propio P2-BILLING-PAYMENT-FAILED-GRACE (mismo
+                # día). Knob kill-switch revierte al flip incondicional legacy.
+                _reactivate_guard = _env_bool("MEALFIT_BILLING_REACTIVATE_NOT_CANCELLED", True)
+                update_payload = {"subscription_status": "ACTIVE"}
+                if restored_tier:
+                    update_payload["plan_tier"] = restored_tier
+                logger.info(
+                    f"⬆️ [P2-BILLING-PAYMENT-FAILED-GRACE] {event_type} sub {subscription_id}: "
+                    f"status→ACTIVE"
+                    + (f", tier→{restored_tier}" if restored_tier else " (tier sin cambio)")
+                )
+
+                def _do_reactivate():
+                    q = supabase.table("user_profiles").update(update_payload).eq(
+                        "paypal_subscription_id", subscription_id
+                    )
+                    if _reactivate_guard:
+                        if event_type == "PAYMENT.SALE.COMPLETED":
+                            # Pago dentro del ciclo (sin plan_id): SOLO limpiar el
+                            # flag PAYMENT_RETRYING → ACTIVE. No forzar ACTIVE sobre
+                            # CANCELLED/INACTIVE (esos los gobierna su propia lógica).
+                            q = q.eq("subscription_status", "PAYMENT_RETRYING")
+                        else:
+                            # ACTIVATED puede reactivar PAYMENT_RETRYING/INACTIVE pero
+                            # NUNCA una sub CANCELLED por el usuario.
+                            q = q.neq("subscription_status", "CANCELLED")
+                    return q.execute()
+
+                await _supabase_async(_do_reactivate)
         elif event_type == "BILLING.SUBSCRIPTION.CANCELLED":
             subscription_id = resource.get("id")
             end_date = resource.get("billing_info", {}).get("next_billing_time")
@@ -785,6 +945,19 @@ async def api_webhook_paypal(
         
         return {"success": True}
 
+    except HTTPException:
+        # [P2-WEBHOOK-INFRA-503 · 2026-05-30] Propagar las HTTPException intencionales
+        # (503 fail-secure de misconfig @705 + 503 infra-OAuth). Pre-fix el
+        # `except Exception` de abajo las TRAGABA (HTTPException ⊂ Exception) y las
+        # convertía en HTTP 200 → el fail-secure 503 nunca llegaba al cliente y
+        # PayPal no reintentaba. Sin este `raise`, ambos 503 quedaban neutralizados.
+        raise
     except Exception as e:
+        # [P2-WEBHOOK-INFRA-503 · 2026-05-30] Cualquier otro fallo transitorio de
+        # procesamiento (red, timeout de verify, parse): devolver 5xx para que
+        # PayPal reintente, en vez de descartar el evento con un 200 silencioso.
+        # Firma genuinamente inválida sigue retornando 200 (es un `return`, no llega
+        # aquí). Un bug determinista reintentará 25× y luego PayPal desiste — ruido
+        # acotado, preferible a perder un evento de billing legítimo.
         logger.error(f"❌ Error procesando webhook PayPal: {e}")
-        return {"success": False}
+        raise HTTPException(status_code=503, detail="Webhook processing transient error; retry.")

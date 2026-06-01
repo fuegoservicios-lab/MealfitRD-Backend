@@ -37,12 +37,20 @@ except Exception as e:
 _local_cache = OrderedDict()
 _cache_lock = threading.Lock()
 
-def centralized_cache(ttl_seconds=3600, maxsize=1000):
+def centralized_cache(ttl_seconds=3600, maxsize=1000, cache_empty=True):
     """
     Decorador que intenta usar Redis (distribuido y compartido entre workers).
     Si Redis no está configurado, hace fallback a una caché local en memoria CON TTL real.
     Asume que los argumentos y el valor de retorno de la función decorada
     son 100% serializables a JSON.
+
+    [P2-EMBED-NO-CACHE-EMPTY · 2026-05-30] `cache_empty` (default True =
+    comportamiento histórico): si es False, un resultado FALSY (`[]`, `None`,
+    `{}`, `""`, `0`) NO se persiste en caché — se devuelve directo y el próximo
+    llamado re-ejecuta la función. Para funciones cuyo valor falsy representa un
+    FALLO transitorio (embeddings que caen a `return []` por timeout/429), esto
+    evita envenenar el caché con el fallo bajo TTL largo. NO usar en funciones
+    cuyo `[]`/`{}` vacío sea un resultado legítimo y caro de recomputar.
     """
     def decorator(func):
         @functools.wraps(func)
@@ -82,6 +90,12 @@ def centralized_cache(ttl_seconds=3600, maxsize=1000):
 
             # 4. Cache Miss: Ejecutar función pesada original
             result = func(*args, **kwargs)
+
+            # [P2-EMBED-NO-CACHE-EMPTY · 2026-05-30] Opt-out: no persistir un
+            # resultado falsy (ej. `[]` de un embedding fallido) bajo el TTL del
+            # caché. Devolver directo → el próximo llamado re-ejecuta.
+            if not cache_empty and not result:
+                return result
 
             # 5. Guardar en Caché
             if redis_client:

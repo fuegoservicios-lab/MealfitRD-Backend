@@ -31,6 +31,9 @@ def _paused_row(reason: str = "prev_chunk_not_concluded", paused_seconds: int = 
         "user_id": "user-A",
         "meal_plan_id": meal_plan_id,
         "week_number": week_number,
+        # [G-B2 · P2-CRON-OPT-4] days_offset ahora viaja en el batch SELECT (antes se
+        # re-query-aba por fila vía "SELECT days_offset, week_number FROM plan_chunk_queue").
+        "days_offset": 3,
         "pipeline_snapshot": {
             "form_data": {
                 "totalDays": 7,

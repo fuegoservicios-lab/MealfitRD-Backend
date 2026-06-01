@@ -67,6 +67,19 @@ _EMITTER_FILES = (
     # ghost-detection del test (line ~280) marcaría la row como
     # documentada-sin-emitter (falso positivo).
     _BACKEND / "agent.py",
+    # [P2-PLAN-PERSIST-FAILED · 2026-05-30] Añadido tras introducir
+    # `_persist_plan_persist_failed_alert` en services.py que emite
+    # `plan_persist_failed:<user_id>` cuando la persistencia de un plan
+    # ya generado falla (chunk INSERT → None / background save except).
+    _BACKEND / "services.py",
+    # [P1-PROD-AUDIT-2 · 2026-05-30] Blind-spot cerrado: estos dos emisores
+    # NO estaban en la lista → el test pasaba verde pese a que ambos emiten
+    # `alert_key` SIN row documentada NI resolver (rojo-permanente latente):
+    #   - bg_executor.py: `bg_task_timeout:<task_name>`
+    #   - rate_limiter.py: `rate_limiter_bucket_saturation`
+    # Ambos ahora con resolver Auto-explicit (sweep window-based / cleanup tick).
+    _BACKEND / "bg_executor.py",
+    _BACKEND / "rate_limiter.py",
 )
 
 # Whitelist de patterns emitidos pero sin row (excepción documentada).

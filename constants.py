@@ -45,7 +45,16 @@ PLAN_CHUNK_SIZE = 3  # Días generados por chunk en el pipeline de langgraph
 CHUNK_LEARNING_MODE = os.environ.get("CHUNK_LEARNING_MODE", "strict").strip().lower()
 if CHUNK_LEARNING_MODE not in {"strict", "safety_margin"}:
     CHUNK_LEARNING_MODE = "strict"
-CHUNK_PIPELINE_TIMEOUT_SECONDS = int(os.environ.get("CHUNK_PIPELINE_TIMEOUT_SECONDS", "180"))
+# [P3-PROD-AUDIT-3 · 2026-05-30] Floor/ceiling clamp + auto-registro en
+# _KNOBS_REGISTRY. ANTES era un `int(os.environ.get(...))` crudo sin clamp (a
+# diferencia de los demás CHUNK_* en este archivo): `CHUNK_PIPELINE_TIMEOUT_SECONDS=0`
+# (o negativo) hacía que `_fut.result(timeout=0)` lanzara TimeoutError inmediato en
+# CADA chunk → todos degradaban a Smart Shuffle tras 3 intentos → calidad de plan
+# fleet-wide degradada en silencio por un solo env var malo. El validator cae al
+# default 180 si está fuera de [30, 1800].
+CHUNK_PIPELINE_TIMEOUT_SECONDS = _env_int(
+    "CHUNK_PIPELINE_TIMEOUT_SECONDS", 180, validator=lambda v: 30 <= v <= 1800
+)
 # [P0-A] Default 0: CHUNK_PROACTIVE_MARGIN_DAYS=0 significa "después del último día del chunk previo" (no "el último día").
 # chunk N+1 se ejecuta DESPUÉS de que termine N para que el aprendizaje
 # vea la adherencia completa del chunk previo. Subir a 1 solo si el usuario reporta gaps de
@@ -201,6 +210,21 @@ CHUNK_REJECT_FORCED_UTC_ENQUEUE = (
 CHUNK_TZ_RECOVERY_MAX_ATTEMPTS = max(
     1,
     int(os.environ.get("CHUNK_TZ_RECOVERY_MAX_ATTEMPTS", "6")),
+)
+# [P1-CHUNK-4] Piso wall-clock (minutos por intento) para escalar un chunk pausado
+# (tz_unresolved / missing_anchor / corrupted_date) a dead_letter. El contador de
+# intentos por sí solo está ACOPLADO a la frecuencia del cron: si el cron corre más
+# seguido que los 15 min asumidos (o se dispara extra vía pre-pickup TZ sync, o un
+# operador reduce el intervalo), los intentos se acumulan más rápido que el tiempo
+# real y el chunk se dead-letterea ANTES de darle al usuario la ventana real (~45 min
+# anchor, ~90 min tz) para accionar (abrir la app → persistir tz_offset_minutes).
+# El piso wall-clock garantiza que NUNCA escalamos antes de `max_attempts × este
+# valor` minutos transcurridos desde el primer intento de recuperación, sin importar
+# cuántos ticks dispararon. Default 15 reconstruye exactamente la intención original
+# documentada (3×15≈45 min, 6×15≈90 min) como garantía de tiempo real, no de conteo.
+CHUNK_RECOVERY_MIN_WALL_MINUTES_PER_ATTEMPT = max(
+    1,
+    min(120, int(os.environ.get("CHUNK_RECOVERY_MIN_WALL_MINUTES_PER_ATTEMPT", "15"))),
 )
 # [P0-α/TZ-UNRESOLVED-ALERT] Alerta SRE cuando chunks llevan >Nh pausados con
 # `_pantry_pause_reason='tz_unresolved'`. El recovery cron resuelve el caso
@@ -988,6 +1012,16 @@ CHUNK_ZERO_LOG_NUDGE_MAX_USERS = max(1, int(os.environ.get("CHUNK_ZERO_LOG_NUDGE
 # lo que retenía locks huérfanos demasiado tiempo (worker crasheado bloqueaba al usuario).
 CHUNK_LOCK_HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("CHUNK_LOCK_HEARTBEAT_INTERVAL_SECONDS", "60"))
 CHUNK_LOCK_STALE_MINUTES = int(os.environ.get("CHUNK_LOCK_STALE_MINUTES", "3"))
+# [P2-CHUNK-1 · 2026-05-28] Ventana del zombie-rescue (un chunk 'processing' cuyo
+# worker murió). Antes era el literal hardcodeado `INTERVAL '10 minutes'` en el
+# SQL del worker, violando la convención de knobs. Clamp [CHUNK_LOCK_STALE_MINUTES,
+# 60]: el piso evita mirar más rápido que el staleness del heartbeat; el techo
+# evita ventanas absurdas. El reclaim ahora es heartbeat-aware (P1-CHUNK-2) — esta
+# ventana solo decide cuándo MIRAR, no a quién reclamar.
+CHUNK_ZOMBIE_RESCUE_MINUTES = max(
+    CHUNK_LOCK_STALE_MINUTES,
+    min(60, int(os.environ.get("CHUNK_ZOMBIE_RESCUE_MINUTES", "10"))),
+)
 # [P0-γ/HEARTBEAT-ALERTS] Dos alertas que cubren el hueco donde el thread daemon
 # de heartbeat muere o el zombie rescue se dispara sin razón legítima:
 #
@@ -1256,12 +1290,26 @@ GEMINI_EMBEDDING_TEXT_MODEL = _knob_env_str_constants(
 )
 
 
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Cohorte omitida: el singleton de
+# embeddings de constants no acepta `timeout=` — solo `client_args` acota el
+# deadline httpx. Sin esto, un socket colgado bloquea el thread del cron que
+# llama get_embedding (cron_tasks.py:21042/21047, max_instances=1). Mismo knob.
+def _embeddings_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_EMBEDDING_LLM_TIMEOUT_S",
+        15.0,
+        validator=lambda v: 0.0 < v <= 60.0,
+    )
+
+
 def get_embedding(text: str) -> List[float]:
     global _embedding_model
     if not _embedding_model:
         _embedding_model = GoogleGenerativeAIEmbeddings(
             model=GEMINI_EMBEDDING_TEXT_MODEL,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline httpx (ver helper).
+            client_args={"timeout": _embeddings_llm_timeout_s()},
         )
     if text not in _embedding_cache:
         emb = _embedding_model.embed_query(text)
@@ -2450,6 +2498,10 @@ CHUNK_LESSON_TELEMETRY_VALID_EVENTS = (
     "learning_rebuild_failed",
     "failed_chunk_skipped_for_learning",
     "lifetime_proxy_ratio_exceeded",
+    # [P2-CHUNK-9] Override del gate temporal/aprendizaje por flexible_mode: el
+    # chunk se generó SIN el aprendizaje continuo (gate not-ready bypaseado). Señal
+    # de salud para cuantificar cuántos chunks degradan el loop de aprendizaje.
+    "temporal_gate_override",
 )
 
 

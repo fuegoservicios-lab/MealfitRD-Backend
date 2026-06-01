@@ -59,26 +59,36 @@ def test_marker_present_in_source():
 
 
 def test_modal_footer_hides_restore_button_for_active():
-    """El motion.div del modal footer DEBE evaluar `getTemporalStatus`
-    y suprimir el botón cuando bucket ∈ {active, future}."""
+    """[P1-HIST-ACTIVE-IDENTITY · 2026-05-31] El modal footer DEBE suprimir
+    el botón "Reactivar" cuando el plan abierto es el plan ACTUAL (su
+    `id === currentPlanId`).
+
+    Pre-fix el ocultar se basaba en el bucket TEMPORAL (`bucket ∈ {active,
+    future}`). Eso producía dos bugs: (a) un plan INCOMPLETO sin menú cuya
+    ventana incluía hoy se trataba como activo y ocultaba "Reactivar"; (b)
+    un plan ANTERIOR cuya ventana solapaba hoy también ocultaba "Reactivar",
+    impidiendo reactivarlo. Ahora el gate es por IDENTIDAD del plan actual."""
     # Anchor: el comentario marker en el modal footer.
     assert "P3-HIST-ACTIVE-NO-REACTIVATE" in _HISTORY_JSX, (
         "Marker P3-HIST-ACTIVE-NO-REACTIVATE ausente en History.jsx — "
         "un refactor podría borrar el fix y reintroducir el botón en "
-        "planes activos."
+        "el plan actual."
     )
-    # El bucket que oculta el botón debe cubrir 'active' Y 'future'
-    # (no solo active — futures tampoco aplican).
-    idx = _HISTORY_JSX.find("P3-HIST-ACTIVE-NO-REACTIVATE")
-    assert idx > 0
-    # Localizamos el bloque del modalFooter (cerca de los 1500 chars
-    # siguientes al primer marker, donde está el footer).
-    # Buscamos directamente la expresión `_hideRestore = !!(_t &&`.
-    expr_idx = _HISTORY_JSX.find("_hideRestore = !!(_t && (_t.bucket === 'active' || _t.bucket === 'future'))")
+    # El ocultar se basa en la identidad del plan actual (currentPlanId),
+    # no en la ventana temporal.
+    expr_idx = _HISTORY_JSX.find(
+        "_hideRestore = !!currentPlanId && selectedPlan?.id === currentPlanId"
+    )
     assert expr_idx > 0, (
-        "Expresión `_hideRestore` ausente o con buckets distintos. "
-        "Si solo cubre 'active', los planes futuros (raros, generados "
-        "para empezar después) tampoco deben mostrar reactivar."
+        "Expresión `_hideRestore` del footer ausente o no basada en "
+        "`currentPlanId`. El botón Reactivar debe ocultarse SOLO para el "
+        "plan actual (identidad), no por la ventana de fechas."
+    )
+    # Defensa anti-regresión: el viejo gate temporal NO debe volver.
+    assert "_hideRestore = !!(_t && (_t.bucket === 'active'" not in _HISTORY_JSX, (
+        "Volvió el gate temporal `_hideRestore = !!(_t && _t.bucket === "
+        "'active'...)`. El contrato post P1-HIST-ACTIVE-IDENTITY es "
+        "identidad (currentPlanId), no la ventana temporal."
     )
 
 
@@ -88,20 +98,20 @@ def test_footer_returns_null_when_hidden():
     "Cerrar" del footer ya no existe. Sin esto, el modal mostraría
     una banda blanca vacía con padding 1.5rem en su pie (UX rara).
 
-    Nota: hay 2 callsites de `_hideRestore = !!(_t && …)` en
-    History.jsx — uno en el IIFE del banner action_required (línea
-    ~2294) y otro en el IIFE del modal footer (línea ~4927). Solo el
-    SEGUNDO debe tener el early-return null. Iteramos para localizar
-    el del footer específicamente."""
+    Nota: [P1-HIST-ACTIVE-IDENTITY · 2026-05-31] hay ≥2 callsites de
+    `_hideRestore = !!currentPlanId && …` en History.jsx — banner
+    action_required (copy), copy missing-days, e IIFE del modal footer
+    (render del CTA). Solo el del FOOTER (el último, más cerca del final)
+    debe tener el early-return null. Iteramos para localizarlo."""
     import re
     matches = list(re.finditer(
-        r"_hideRestore = !!\(_t && \(_t\.bucket === 'active' \|\| _t\.bucket === 'future'\)\);",
+        r"_hideRestore = !!currentPlanId &&",
         _HISTORY_JSX,
     ))
     assert len(matches) >= 2, (
-        "Esperaba al menos 2 callsites de `_hideRestore = !!(_t && …)`: "
-        "1 en el banner action_required (copy) + 1 en el modal footer "
-        "(render del CTA). Encontrados: %d" % len(matches)
+        "Esperaba al menos 2 callsites de `_hideRestore = !!currentPlanId "
+        "&& …`: banner action_required (copy) + modal footer (render del "
+        "CTA) + copy missing-days. Encontrados: %d" % len(matches)
     )
     # El último match es el del modal footer (más cerca del final del
     # archivo). Verificamos el early-return null en su bloque.

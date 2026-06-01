@@ -44,15 +44,18 @@ def _parse_days_from_text(text: str) -> list:
 
 
 def _apply_day_floor(llm_mentioned: list, slot_issues: list) -> list:
-    """Reproduce el floor logic del fix P6-CRITIQUE-DAY-FLOOR."""
+    """Reproduce el floor logic de P6-CRITIQUE-DAY-FLOOR + P2-ORCH-5.
+
+    [P2-ORCH-5 · 2026-05-28] Floor-FIRST: los días con incoherencia
+    determinística van al FRENTE (`deterministic_days + mentioned`), no al
+    final, para que el slice `[:critique_max_days]` bajo presión de budget no
+    los descarte. Antes era `mentioned + missing` (floor al final)."""
     deterministic_days = list(dict.fromkeys(
         int(d) for d in re.findall(r'[Dd]ía\s*(\d+)', "\n".join(slot_issues or []))
     ))
     mentioned = list(llm_mentioned)
     if deterministic_days:
-        missing = [d for d in deterministic_days if d not in mentioned]
-        if missing:
-            mentioned = list(dict.fromkeys(mentioned + missing))
+        mentioned = list(dict.fromkeys(deterministic_days + mentioned))
     if not mentioned:
         mentioned = [1]
     return mentioned
@@ -140,16 +143,32 @@ def test_detector_only_provides_floor():
 
 
 # ===========================================================================
-# 7. Orden preservado: LLM days primero, floor extras al final
+# 7. [P2-ORCH-5] Orden FLOOR-FIRST: los días determinísticos van primero (su
+#    orden), luego los extras del LLM. Antes (pre-P2-ORCH-5) era al revés
+#    (LLM primero, floor al final) → bajo cap dinámico=1-2 los días con
+#    incoherencia code-cierta se descartaban. Ahora el floor sobrevive al slice.
 # ===========================================================================
-def test_order_preservation():
-    """Los días del LLM van primero (su orden), luego los del floor."""
+def test_order_preservation_floor_first():
+    """Floor-first: días determinísticos al frente (en su orden), luego extras LLM."""
     slot_issues = ["Día 1: x", "Día 2: y", "Día 3: z"]
     llm_suggestions = "Día 3: ... Día 1: ..."
     mentioned = _parse_days_from_text(llm_suggestions)
-    assert mentioned == [3, 1]  # orden del LLM
+    assert mentioned == [3, 1]  # orden del LLM (pre-floor)
     final = _apply_day_floor(mentioned, slot_issues)
-    assert final == [3, 1, 2], f"Esperado [3, 1, 2] (LLM primero, floor extras), recibido {final}"
+    # deterministic_days=[1,2,3] al frente, dedup absorbe los del LLM ya presentes.
+    assert final == [1, 2, 3], f"Esperado [1, 2, 3] (floor-first P2-ORCH-5), recibido {final}"
+
+
+def test_floor_day_survives_budget_slice():
+    """[P2-ORCH-5] El día con incoherencia determinística (no mencionado por el
+    LLM) DEBE quedar en el head del slice incluso con critique_max_days=1."""
+    slot_issues = ["Día 2: 'res' x3 comidas"]  # día 2 = floor, code-cierto
+    llm_suggestions = "Día 5: variar técnica."  # LLM menciona otro día
+    mentioned = _parse_days_from_text(llm_suggestions)
+    final = _apply_day_floor(mentioned, slot_issues)
+    # Floor-first → [2, 5]; bajo cap=1 el slice [:1] conserva el día determinístico.
+    assert final[0] == 2, f"El floor day 2 debe ir primero, recibido {final}"
+    assert final[:1] == [2], f"Bajo cap=1 debe conservar el floor day, recibido {final[:1]}"
 
 
 # ===========================================================================

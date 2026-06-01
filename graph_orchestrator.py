@@ -11,7 +11,7 @@ from typing import TypedDict, Optional, Callable, Any, Literal
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI as _ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
-from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log, retry_if_exception
 import logging
 import threading
 from db_plans import search_similar_plan
@@ -156,12 +156,36 @@ LLM_MAX_WAIT_S              = _env_int  ("MEALFIT_LLM_MAX_WAIT_S",              
 # Bypass automático para `user_id` None / "guest" → preserva comportamiento
 # previo en cron jobs, batch, llamadas internas.
 LLM_PER_USER_ENABLED        = _env_bool ("MEALFIT_LLM_PER_USER_ENABLED",        True)
-LLM_MAX_PER_USER            = _env_int  ("MEALFIT_LLM_MAX_PER_USER",            2)
+# [P2-ORCH-8 · 2026-05-28] Default 2 → 3 para igualar PLAN_CHUNK_SIZE (=3): cada
+# generación dispara PLAN_CHUNK_SIZE días en paralelo (gather), pero con max=2 el
+# 3er día siempre quedaba en cola → day-gen efectivamente 2-wide en vez de 3-wide
+# (~una ola extra de 50-90s de wall-clock en el nodo que es >50% de la latencia).
+# El abuso cross-session sigue acotado por el cap global (LLM_MAX_CONCURRENT=4) +
+# el guard 409 de /pending-status. PLAN_CHUNK_SIZE se importa más abajo (~1344);
+# la reconciliación con warning vive allí. Tooltip-anchor: P2-ORCH-8.
+LLM_MAX_PER_USER            = _env_int  ("MEALFIT_LLM_MAX_PER_USER",            3)
 LLM_USER_LOCK_TIMEOUT_S     = _env_int  ("MEALFIT_LLM_USER_LOCK_TIMEOUT_S",     60)
+# [P3-PROD-AUDIT-3 · 2026-05-30] Cota del dict in-process `_local_sync` de
+# DistributedPerUserSemaphore. En modo Redis-DOWN (REDIS_URL ausente o Redis
+# caído — degradación soportada por cache_manager) el dict acumula un
+# threading.Semaphore por user_id DISTINTO sin eviction → fuga lenta pero
+# ilimitada en un proceso long-lived (--workers 1). Al exceder el cap se purgan
+# entradas IDLE (todos sus permits disponibles). Clamp generoso.
+LLM_PER_USER_LOCAL_CACHE_MAX = _env_int(
+    "MEALFIT_LLM_PER_USER_LOCAL_CACHE_MAX", 4096, validator=lambda v: 64 <= v <= 1_000_000
+)
 # Espera máxima por un slot per-user antes de degradar al semáforo global
 # (más corto que LLM_MAX_WAIT_S — un usuario saturado debe ceder rápido para
 # que el grafo continúe vía global).
 LLM_USER_MAX_WAIT_S         = _env_int  ("MEALFIT_LLM_USER_MAX_WAIT_S",         30)
+# [P2-ORCH-11 · 2026-05-28] Cota del busy-poll LOCAL (fallback cuando Redis está
+# caído). Los paths Redis ya degradan vía LLM_MAX_WAIT_S/LLM_USER_MAX_WAIT_S, pero
+# el busy-poll local giraba a 20Hz SIN cota → bajo Redis-down + saturación
+# sostenida, N corrutinas quemaban CPU del event loop hasta el techo de 720s del
+# pipeline. Al expirar: stat + warning + backpressure error (fail-fast → el handler
+# global entrega fallback). Default 120s, clamp [1, 3600]. Tooltip-anchor: P2-ORCH-11.
+LLM_LOCAL_MAX_WAIT_S        = _env_int  ("MEALFIT_LLM_LOCAL_MAX_WAIT_S",        120,
+                                         validator=lambda v: 1 <= v <= 3600)
 
 # [P1-28] Cap COMBINADO sobre la composición per-user → global.
 # `acquire_user_and_global` antes podía esperar hasta
@@ -243,6 +267,15 @@ HEDGE_MAX_CONCURRENT_KNOB   = _env_int  ("MEALFIT_HEDGE_MAX_CONCURRENT",        
 # intento = ~50% más de latencia/costo en chunks que reach max_attempts,
 # pero esos son <5% del volumen total — los happy paths siguen igual.
 MAX_ATTEMPTS                = _env_int  ("MEALFIT_MAX_ATTEMPTS",                3)
+# [P2-ORCH-12 · 2026-05-28] Límite de super-steps del grafo LangGraph como
+# defensa-en-profundidad. La terminación del retry depende hoy SOLO del contador
+# de intentos en retry_reflection_node + should_retry + budget guards. Un refactor
+# futuro que re-entre plan_skeleton sin incrementar `attempt` loopearía hasta el
+# techo de 720s (12 min/request) en vez de fallar rápido con GraphRecursionError.
+# Default 50 (>> el máximo legítimo ~26 super-steps de 3 intentos + marker_regen;
+# << un loop infinito). Clamp [10, 200]. Tooltip-anchor: P2-ORCH-12.
+GRAPH_RECURSION_LIMIT       = _env_int  ("MEALFIT_GRAPH_RECURSION_LIMIT",       50,
+                                         validator=lambda v: 10 <= v <= 200)
 # [P1-LOW-SIGNAL-FALLBACK · 2026-05-21] Umbral mínimo de `previous_plan_quality`
 # para inyectar señales de preferencia históricas (Señales 7-10 en
 # `_inject_history_aware_signals`). Sin este gate, un usuario con Quality
@@ -329,6 +362,13 @@ FACT_CHECK_TOOL_TIMEOUT_S   = _env_float("MEALFIT_FACT_CHECK_TOOL_TIMEOUT_S",   
 #     16 evita config errors absurdos (e.g. "MEALFIT_FACT_CHECK_POOL_SIZE=200")
 #     que saturarían threads del proceso sin beneficio.
 FACT_CHECK_POOL_SIZE        = max(1, min(16, _env_int("MEALFIT_FACT_CHECK_POOL_SIZE", 2)))
+# [P2-ORCH-13 · 2026-05-28] Pool de I/O DB (`_DB_EXECUTOR`) como knob. Antes era
+# max_workers=8 hardcoded — el pool COMPARTIDO de TODO el I/O DB sync vía `_adb`.
+# El step de assemble emite 1 fetch + 3 deltas concurrentes; con 2-3 pipelines +
+# crons la demanda excede 8 y las queries se serializan (tail latency) sin lever
+# para subirlo sin redeploy. Clamp [1, 64] (espejo del cap de FACT_CHECK_POOL_SIZE
+# — evita configs patológicas). Tooltip-anchor: P2-ORCH-13.
+DB_EXECUTOR_MAX_WORKERS     = max(1, min(64, _env_int("MEALFIT_DB_EXECUTOR_MAX_WORKERS", 8)))
 
 # --- Self-critique correction timeout (P1-FIX-CRITIQUE / P4-TIMEOUT-1) ---
 # Timeout por día corregido en `self_critique_node._correct_single_day`.
@@ -703,7 +743,21 @@ class DistributedLLMSemaphore:
         la última `acquire(blocking=False)` retornó False (no se retuvo slot)
         y no hay leak. Si fue cancelado tras adquirir, el `finally` libera.
         """
+        # [P2-ORCH-11] Cota de espera: sin esto el busy-poll giraba a 20Hz sin
+        # límite bajo Redis-down + saturación, hasta el techo de 720s del pipeline.
+        _deadline = time.monotonic() + LLM_LOCAL_MAX_WAIT_S
         while not self._local_semaphore.acquire(blocking=False):
+            if time.monotonic() >= _deadline:
+                _inc_budget_stat("local_wait_timeout")
+                logger.warning(
+                    f"🛑 [P2-ORCH-11] Busy-poll local del semáforo GLOBAL excedió "
+                    f"LLM_LOCAL_MAX_WAIT_S={LLM_LOCAL_MAX_WAIT_S}s (Redis-down + "
+                    f"saturación sostenida). Backpressure fail-fast en vez de girar "
+                    f"hasta el timeout global del pipeline."
+                )
+                raise RuntimeError(
+                    "LLM global local-semaphore backpressure: max wait exceeded (P2-ORCH-11)"
+                )
             await asyncio.sleep(0.05)
         try:
             yield
@@ -927,6 +981,29 @@ class DistributedPerUserSemaphore:
         with self._local_sync_lock:
             sem = self._local_sync.get(user_id)
             if sem is None:
+                # [P3-PROD-AUDIT-3 · 2026-05-30] GC oportunista antes de crear una
+                # entrada nueva: si el dict excede el cap (típico de un outage
+                # prolongado de Redis con muchos usuarios distintos), purga
+                # entradas IDLE — un Semaphore con TODOS sus permits disponibles
+                # (`_value >= max_per_user`) no tiene holders activos, así que
+                # descartarlo no afecta ningún acquire en vuelo. Una entrada en
+                # uso jamás se evicta. Peor caso (race con un holder que ya tomó la
+                # ref justo antes): ese usuario tiene 2 sems brevemente — el
+                # semáforo es backpressure soft, no un control de seguridad.
+                if len(self._local_sync) >= LLM_PER_USER_LOCAL_CACHE_MAX:
+                    _evicted = 0
+                    for _uid in list(self._local_sync.keys()):
+                        _s = self._local_sync.get(_uid)
+                        if _s is not None and getattr(_s, "_value", 0) >= self.max_per_user:
+                            del self._local_sync[_uid]
+                            _evicted += 1
+                            if len(self._local_sync) < LLM_PER_USER_LOCAL_CACHE_MAX:
+                                break
+                    if _evicted:
+                        logger.debug(
+                            f"[P3-PROD-AUDIT-3] GC cache per-user local sem: purgadas "
+                            f"{_evicted} entradas idle (cap={LLM_PER_USER_LOCAL_CACHE_MAX})."
+                        )
                 sem = threading.Semaphore(self.max_per_user)
                 self._local_sync[user_id] = sem
             return sem
@@ -943,7 +1020,21 @@ class DistributedPerUserSemaphore:
         múltiples loops vivos en el proceso (ver comentario del __init__).
         """
         sem = self._get_local_sync(user_id)
+        # [P2-ORCH-11] Misma cota que el semáforo global: fail-fast en vez de
+        # girar indefinidamente bajo Redis-down + saturación.
+        _deadline = time.monotonic() + LLM_LOCAL_MAX_WAIT_S
         while not sem.acquire(blocking=False):
+            if time.monotonic() >= _deadline:
+                _inc_budget_stat("local_wait_timeout_user")
+                logger.warning(
+                    f"🛑 [P2-ORCH-11] Busy-poll local del semáforo PER-USER "
+                    f"(user={user_id}) excedió LLM_LOCAL_MAX_WAIT_S="
+                    f"{LLM_LOCAL_MAX_WAIT_S}s (Redis-down + saturación). Backpressure "
+                    f"fail-fast en vez de girar hasta el timeout global."
+                )
+                raise RuntimeError(
+                    "LLM per-user local-semaphore backpressure: max wait exceeded (P2-ORCH-11)"
+                )
             await asyncio.sleep(0.05)
         try:
             yield
@@ -1348,6 +1439,21 @@ from constants import (
     # riesgo de divergir de COMPLEX_TECHNIQUE_KEYWORDS al añadir vocabulario.
     COMPLEX_TECHNIQUE_KEYWORDS, RECIPE_INGREDIENT_STOPWORDS,
 )
+
+# [P2-ORCH-8 · 2026-05-28] Reconciliación per-user vs PLAN_CHUNK_SIZE. Si el
+# operador bajó LLM_MAX_PER_USER por debajo de PLAN_CHUNK_SIZE, el day-gen de un
+# usuario correrá serializado en ceil(PLAN_CHUNK_SIZE/LLM_MAX_PER_USER) olas.
+# No clampeamos (un valor bajo puede ser intencional por multi-tenancy fairness),
+# solo alertamos para que sea decisión consciente y no un default accidental.
+if LLM_PER_USER_ENABLED and LLM_MAX_PER_USER < PLAN_CHUNK_SIZE:
+    _p2_orch_8_waves = -(-PLAN_CHUNK_SIZE // max(1, LLM_MAX_PER_USER))
+    logger.warning(
+        f"⚠️ [P2-ORCH-8] LLM_MAX_PER_USER={LLM_MAX_PER_USER} < PLAN_CHUNK_SIZE="
+        f"{PLAN_CHUNK_SIZE}: el day-gen de un usuario correrá en ~{_p2_orch_8_waves} "
+        f"olas seriales en vez de 1 (latencia extra en el nodo más caro). Subir "
+        f"MEALFIT_LLM_MAX_PER_USER a >= {PLAN_CHUNK_SIZE} para paralelismo intra-plan pleno."
+    )
+
 from fact_extractor import get_embedding
 from vision_agent import get_multimodal_embedding
 from db import get_recent_techniques, get_recent_meals_from_plans, check_meal_plan_generated_today, search_user_facts, search_visual_diary, get_user_facts_by_metadata
@@ -1548,6 +1654,86 @@ def _is_transient_upstream_error(exc: BaseException) -> bool:
         return False
     except Exception:
         return False
+
+
+# ============================================================
+# [P1-ORCH-2 · 2026-05-28] Latch global del spending-cap de Gemini en el
+# pipeline de generación (espejo del de shopping_calculator para embeddings).
+# ------------------------------------------------------------
+# El 429 "spending cap" es PERSISTENTE (activo hasta que el operador suba el
+# cap, ~30 días). Sin un latch: cada nodo lo reintenta 3x (tenacity) por día
+# paralelo → decenas de intentos facturados inútiles + segundos del budget de
+# 720s, y los CB per-modelo se abren espuriamente. Además, cuando el síntoma
+# que escapa al handler global NO es el 429 literal (sino "Circuit Breaker
+# OPEN" o "Todos los workers fallaron"), el string-match perdía la señal y el
+# usuario veía el mensaje falso "IA saturada, intenta en 1-2 min".
+#
+# El latch lo setea el PRIMER nodo que ve el 429; el handler global lo consulta
+# aunque el error que escapó sea un síntoma downstream. Reset por restart del
+# proceso o al expirar el window (default 1800s). `=0` desactiva el latch.
+# Knob: MEALFIT_PLAN_SPEND_CAP_BACKOFF_S.
+# Tooltip-anchor: P1-ORCH-2.
+# ============================================================
+PLAN_SPEND_CAP_BACKOFF_S = _env_int(
+    "MEALFIT_PLAN_SPEND_CAP_BACKOFF_S", 1800,
+    validator=lambda v: 0 <= v <= 86400,
+)
+_plan_spend_cap_until: float = 0.0
+
+
+def _is_plan_spend_cap_error(exc: BaseException) -> bool:
+    """[P1-ORCH-2] True si `exc` es el 429 spending-cap de Gemini. Reusa el
+    detector canónico de shopping_calculator (lazy import: sin ciclo)."""
+    try:
+        from shopping_calculator import _is_gemini_spending_cap_error
+        return bool(_is_gemini_spending_cap_error(exc))
+    except Exception:
+        return False
+
+
+def _note_plan_spend_cap() -> None:
+    """[P1-ORCH-2] Activa el latch global del spending-cap por
+    PLAN_SPEND_CAP_BACKOFF_S segundos (no-op si el knob es 0)."""
+    global _plan_spend_cap_until
+    if PLAN_SPEND_CAP_BACKOFF_S > 0:
+        _plan_spend_cap_until = time.time() + PLAN_SPEND_CAP_BACKOFF_S
+
+
+def _plan_spend_cap_active() -> bool:
+    """[P1-ORCH-2] True si el latch del spending-cap sigue activo. Lo consulta
+    el handler global para no perder la señal cuando escapa un síntoma."""
+    return _plan_spend_cap_until > time.time()
+
+
+async def _record_cb_failure_unless_transient(cb, exc) -> None:
+    """[P1-ORCH-1 · 2026-05-28] Registra un fallo en el CB SALVO que el error
+    NO refleje salud del modelo:
+      - 5xx transitorio de Google (`_is_transient_upstream_error`) — infra de
+        Google teniendo un hipo, no el modelo (incidente 2026-05-21).
+      - 429 spending-cap (`_is_plan_spend_cap_error`) — billing persistente;
+        reintentar no ayuda y abrir el CB agrava el outage (P1-ORCH-2). Además
+        activa el latch global para que el handler detecte el cap aunque escape
+        un síntoma downstream.
+      - timeout/agotamiento del POOL de DB (`_is_pool_timeout_error`) —
+        "couldn't get a connection" refleja salud de la DB/pooler, NO del modelo
+        LLM. La DB tiene su PROPIO breaker (`_BestEffortDBCircuitBreaker`). Sin
+        esta exclusión, una contención del pool async durante el fact-check/
+        reviewer abría el CB del modelo → fail-closed → rechazo "critical" falso
+        → se descartaba un plan ya generado (incidente 2026-05-28: pool async
+        max=10 saturado, reviewer flash-lite CB OPEN). Tooltip-anchor: P1-ORCH-1-DBPOOL.
+    Centraliza el patrón que vivía inline solo en planner/day-gen y lo extiende
+    a los ~9 nodos LLM restantes (reviewer/judge/evaluator/fact-checker/etc.).
+    Tooltip-anchor: P1-ORCH-1.
+    """
+    # [P1-ORCH-1-DBPOOL · 2026-05-28] La salud de la DB no es la salud del modelo.
+    if _is_pool_timeout_error(exc):
+        return
+    _spend_cap = _is_plan_spend_cap_error(exc)
+    if _spend_cap:
+        _note_plan_spend_cap()
+    if _spend_cap or _is_transient_upstream_error(exc):
+        return
+    await cb.arecord_failure()
 
 
 class LLMCircuitBreaker:
@@ -2383,7 +2569,8 @@ _atexit.register(
 # dejando transacciones rolled-back silenciosamente. Ahora se drena hasta
 # `DB_SHUTDOWN_DRAIN_S` (~3s default) para que las queries cortas commiteen.
 _DB_EXECUTOR = _DrainableThreadPoolExecutor(
-    max_workers=8, thread_name_prefix="db-io", name="db-io"
+    max_workers=DB_EXECUTOR_MAX_WORKERS,  # [P2-ORCH-13] knob MEALFIT_DB_EXECUTOR_MAX_WORKERS (era 8 hardcoded)
+    thread_name_prefix="db-io", name="db-io"
 )
 _atexit.register(
     _shutdown_drainable_executor,
@@ -2476,6 +2663,37 @@ async def _adb(fn, *args, **kwargs):
         from functools import partial
         return await loop.run_in_executor(_DB_EXECUTOR, ctx.run, partial(fn, *args, **kwargs))
     return await loop.run_in_executor(_DB_EXECUTOR, ctx.run, fn, *args)
+
+
+def _submit_best_effort_metric(fn, **kwargs):
+    """[P3-GENCHUNK-SPEED · 2026-06-01] Despacha un emit best-effort de
+    métrica/usage-event (`_emit_llm_usage_event_best_effort` /
+    `_emit_llm_timeout_metric`) al `_METRICS_EXECUTOR` para que el INSERT
+    bloqueante a DB NO corra en el event loop.
+
+    Pre-fix: estos emits (P1-COST-INSTRUMENTATION / P1-LLM-TIMEOUT-METRICS)
+    corrían SÍNCRONOS dentro de `_safe_ainvoke`, serializando el loop con un
+    round-trip psycopg por CADA llamada LLM exitosa. Peor bajo day-gen
+    concurrente: N `_safe_ainvoke` resolviendo casi-simultáneo, cada uno
+    bloqueando el loop por turnos antes de que los hermanos pudieran resolver.
+    Es el mismo antipatrón sync-DB-on-loop que P0-NEW-1 eliminó de ~15
+    callsites; este se añadió después y se escapó.
+
+    Snapshot del contexto del caller (`copy_context`, patrón P1-X3 / L3599)
+    preserva los ContextVars (request_id/user_id/`_current_node_var`) en el
+    worker — el helper de usage-event lee `_current_node_var` como fallback de
+    nodo, así que el snapshot mantiene el tag correcto. Fallback inline si el
+    submit falla (pool en shutdown): la señal es best-effort pero no la
+    perdemos gratis. Tooltip-anchor: P3-GENCHUNK-SPEED-METRIC-OFFLOAD.
+    """
+    try:
+        ctx = contextvars.copy_context()
+        _METRICS_EXECUTOR.submit(ctx.run, lambda: fn(**kwargs))
+    except Exception:
+        try:
+            fn(**kwargs)
+        except Exception:
+            pass
 
 
 # P0-A: Cap de timeout por tool-call individual de fact-checking. La tool
@@ -2589,10 +2807,23 @@ async def _safe_ainvoke(llm, payload, *, timeout: float):
         # para no enmascarar el response exitoso al caller. Sin esto, el
         # sistema queda ciego al costo real por modelo/nodo y no se pueden
         # tomar decisiones de optimización (context caching, retry budgets).
-        _emit_llm_usage_event_best_effort(
+        # [P3-GENCHUNK-SPEED · 2026-06-01] OFF-LOOP: el emit hace un INSERT
+        # psycopg BLOQUEANTE; correrlo síncrono congelaba el event loop por
+        # cada LLM call exitosa (peor bajo day-gen concurrente). Resolvemos el
+        # nodo desde el ContextVar AHORA (ventana set por el caller aún activa,
+        # p.ej. self_critique_correction L7846+) y lo pasamos explícito para no
+        # depender de leerlo en el worker; `copy_context` adentro del helper es
+        # belt-and-suspenders para los demás ContextVars.
+        try:
+            _emit_node = _current_node_var.get()
+        except Exception:
+            _emit_node = None
+        _submit_best_effort_metric(
+            _emit_llm_usage_event_best_effort,
             llm=llm,
             result=result,
             duration_s=time.time() - _safe_ainvoke_started_at,
+            node=_emit_node,
         )
         return result
     except asyncio.TimeoutError:
@@ -2607,7 +2838,10 @@ async def _safe_ainvoke(llm, payload, *, timeout: float):
         # hoc no se puede graficar "cuántos planes timeoutearon hoy por
         # modelo X". El emit es best-effort (try/except silencioso) — un
         # fallo de DB no debe enmascarar el TimeoutError original al caller.
-        _emit_llm_timeout_metric(
+        # [P3-GENCHUNK-SPEED · 2026-06-01] OFF-LOOP por simetría con el success
+        # path (este es el error path, raro, pero el INSERT igual bloquearía).
+        _submit_best_effort_metric(
+            _emit_llm_timeout_metric,
             node="_safe_ainvoke_timeout",
             timeout_threshold_s=timeout,
             actual_wait_s=time.time() - _safe_ainvoke_started_at,
@@ -2676,6 +2910,46 @@ def _emit_llm_timeout_metric(
             pass
 
 
+# [P2-ORCH-14 · 2026-05-28] Idempotencia del emit de usage-events. La misma
+# AIMessage puede pasar por DOS capas de emit: el override del LLM raw
+# (`ChatGoogleGenerativeAI.ainvoke/astream`, ~1264) Y `_safe_ainvoke` (~2737).
+# Sin guard, los callers RAW (compressor/fact_checker que pasan el subclass crudo
+# a `_safe_ainvoke`) doble-contarían el costo. La única razón de que hoy no
+# doble-cuenten es incidental (los structured runnables no exponen `.model`).
+# Stamp per-result (atributo o WeakSet de fallback) → emit exactamente una vez por
+# objeto-resultado real. Tooltip-anchor: P2-ORCH-14.
+_USAGE_EMIT_SEEN: "weakref.WeakSet" = weakref.WeakSet()
+
+
+def _usage_was_emitted(result) -> bool:
+    """[P2-ORCH-14] True si `result` ya fue contabilizado (no re-emitir)."""
+    try:
+        if getattr(result, "_mealfit_usage_emitted", False):
+            return True
+    except Exception:
+        pass
+    try:
+        return result in _USAGE_EMIT_SEEN
+    except Exception:
+        return False
+
+
+def _mark_usage_emitted(result) -> None:
+    """[P2-ORCH-14] Marca `result` como ya-contabilizado. Intenta atributo
+    (bypass de frozen vía object.__setattr__); si falla, WeakSet de identidad."""
+    try:
+        object.__setattr__(result, "_mealfit_usage_emitted", True)
+        return
+    except Exception:
+        pass
+    try:
+        _USAGE_EMIT_SEEN.add(result)
+    except Exception:
+        # Objeto no weakref-able/hashable → no se puede trackear; mejor permitir
+        # un emit (best-effort) que perder la fila por completo.
+        pass
+
+
 def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: str = None) -> None:
     """[P1-COST-INSTRUMENTATION · 2026-05-15] Extrae model + usage_metadata
     de un response exitoso de LangChain ChatGoogleGenerativeAI y persiste
@@ -2700,6 +2974,10 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: s
     que ya lo gestionan.
     """
     try:
+        # [P2-ORCH-14] Idempotencia: si esta result ya fue contabilizada por otra
+        # capa de emit (override raw vs _safe_ainvoke), abortar para no doble-contar.
+        if result is not None and _usage_was_emitted(result):
+            return
         model_name = None
         for attr in ("model", "model_name", "_model"):
             try:
@@ -2752,6 +3030,9 @@ def _emit_llm_usage_event_best_effort(*, llm, result, duration_s: float, node: s
                 current_node = None
 
         from db_profiles import log_llm_usage_event
+        # [P2-ORCH-14] Marcar ANTES del log (una sola fila por objeto-resultado).
+        if result is not None:
+            _mark_usage_emitted(result)
         log_llm_usage_event(
             model=model_name,
             node=current_node,
@@ -3193,6 +3474,8 @@ from prompts.plan_generator import (
     build_time_context,
     build_technique_injection,
     build_supplements_context,
+    # [BUDGET-CUSTOM · 2026-05-31] Presupuesto categórico + monto custom RD$ → LLM.
+    build_budget_context,
     build_grocery_duration_context,
     build_pantry_context,
     build_prices_context,
@@ -3207,6 +3490,7 @@ from prompts.plan_generator import (
     build_chunk_lessons_context,
     build_prev_chunk_adherence_context,
     build_pantry_correction_context,
+    build_pantry_drift_context,
 )
 from prompts.medical_reviewer import REVIEWER_SYSTEM_PROMPT
 from prompts.planner import PLANNER_SYSTEM_PROMPT
@@ -3972,12 +4256,27 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         "liked_meals_context": build_liked_meals_context(liked_meals),
         "correction_context": build_correction_context(review_feedback),
         "pantry_correction_context": build_pantry_correction_context(form_data.get("_pantry_correction", "")),
+        # [P1-D · cableado P1-CHUNK-LEARN-3 · 2026-05-29] Drift de nevera entre chunks.
+        # `_compute_pantry_diff_warning` lo computa en cron_tasks y lo deja en form_data;
+        # pre-fix ningún builder lo consumía (dead-write → feature P1-D muerta).
+        "pantry_drift_context": build_pantry_drift_context(form_data.get("_pantry_drift_warning")),
         "time_context": build_time_context(),
         "variety_prompt": variety_prompt,
         "supplements_context": build_supplements_context(form_data),
+        # [BUDGET-CUSTOM · 2026-05-31] Presupuesto (categórico + monto custom RD$)
+        # → ajuste de ingredientes. Pre-fix `budget` no llegaba al LLM.
+        "budget_context": build_budget_context(form_data),
         "grocery_duration_context": build_grocery_duration_context(form_data),
         "pantry_context": build_pantry_context(form_data),
-        "prices_context": build_prices_context(),
+        # [P3-GENCHUNK-SPEED · 2026-06-01] El catálogo de precios solo es
+        # relevante cuando hay señal de presupuesto (su propio texto dice
+        # "si el usuario pide algo económico"). Lo gateamos con el MISMO
+        # predicado no-vacío que `build_budget_context` (que ya transporta la
+        # señal real de budget al LLM): sin budget declarado, omitimos el bloque
+        # — el LLM no necesita el catálogo de precios para diseñar un plan sano,
+        # y el bloque crecería sin techo con la tabla master_ingredients.
+        # tooltip-anchor: P3-GENCHUNK-SPEED-PRICES-GATE
+        "prices_context": build_prices_context() if (str(form_data.get("budget") or "").strip()) else "",
         "taste_profile": taste_profile,
         "history_context": history_context,
     }
@@ -4051,9 +4350,87 @@ PROMPT_CACHE_SYSTEM_MESSAGE = _env_bool("MEALFIT_PROMPT_CACHE_SYSTEM_MESSAGE", T
 #     t=2000ms (cache populado); día 3 fire t=4000ms. Latencia plan +~4s,
 #     cache hit esperado ~50-60% en days 2+3 = $0.20-0.30/plan ahorrado.
 #
-# Default 0 (conservador). Operador activa con MEALFIT_DAY_GEN_CACHE_STAGGER_MS=2000
-# y mide via `SELECT pct_cached FROM llm_usage_events` antes/después.
-DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",     0)
+# [P2-ORCH-1 · 2026-05-28] Default 0 → 1500ms (activo). day_gen es el nodo más
+# caro (>50% del gasto) y con stagger=0 los N días disparaban simultáneos → 16%
+# cache hit medido vs ~50-60% esperado ($0.20-0.30/plan). Worst-case latencia
+# añadida = (N-1)*stagger; con PLAN_CHUNK_SIZE=3 y 1500ms = ~3s, despreciable vs
+# GLOBAL_PIPELINE_TIMEOUT_S=720s. Clamp [0,10000] evita que un valor patológico
+# serialice day-gen y reviente el timeout. Revertir sin redeploy:
+# MEALFIT_DAY_GEN_CACHE_STAGGER_MS=0. Validar con `SELECT cached_tokens FROM
+# llm_usage_events WHERE node LIKE '%day%'` (days 2..N deben mostrar cached>0).
+# Tooltip-anchor: P2-ORCH-1.
+DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",     1500,
+                                         validator=lambda v: 0 <= v <= 10000)
+
+# [P1-COST-THINKING-CAP · 2026-05-28] Cap del thinking budget de gemini-3.5-flash
+# en los nodos de GENERACIÓN/CORRECCIÓN (day-gen + correctores + planner skeleton),
+# NO en reviewer/judge/fact-checker (SÍ necesitan razonar → se dejan sin cap; además
+# defaultean a flash-lite que ni soporta thinking_config).
+# [P1-EVALUATOR-THINKING-CAP · 2026-06-01] El EVALUATOR de self_critique se EXCLUÍA
+# de aquí por la misma razón ("necesita razonar"), pero la telemetría de prod
+# (`llm_usage_events`: media 6426 / máx 14350 tok de OUTPUT para un schema de 5
+# scores + bool + string corto) reveló reasoning runaway — las señales duras
+# (slot_issues/staples/monotonía) ya van PRE-calculadas por código al prompt, así
+# que el razonamiento extra del LLM es mayormente desperdicio. Decisión revisada
+# (consenso 2026-06-01): se capa con un presupuesto DEDICADO y GENEROSO
+# (`EVALUATOR_THINKING_BUDGET`, default 4096 = 2x day-gen) que recorta solo el tail
+# patológico SIN tocar el razonamiento normal. Redes: el FLOOR determinista de días
+# (corrige incoherencias aunque el LLM las omita) + el knob `EVALUATOR_USE_PRO`.
+# Diagnóstico 2026-05-28: sin cap, cada call grande del
+# day-gen emitía ~16K output tokens (~12K de reasoning) a $9/M → ~80% del costo
+# del plan, cuando generar un día es rellenar un schema (no requiere 12K de
+# razonamiento). Semántica: -1=dynamic (comportamiento previo, sin cap),
+# 0=thinking off, >0=cap en N tokens. Default 2048 (punto medio seguro). Verificar
+# calidad A/B vía `llm_usage_events.output_tokens` antes/después; subir el knob si
+# la calidad baja. Solo aplica a modelos thinking-capable (gemini-3.5-flash);
+# flash-lite NO soporta thinking_config → se omite. Tooltip-anchor: P1-COST-THINKING-CAP.
+DAYGEN_THINKING_BUDGET      = _env_int  ("MEALFIT_DAYGEN_THINKING_BUDGET",       2048,
+                                         validator=lambda v: -1 <= v <= 32768)
+
+# [P1-EVALUATOR-THINKING-CAP · 2026-06-01] Presupuesto DEDICADO del thinking del
+# EVALUATOR de self_critique (línea ~7591). Default 4096 = DOBLE del de day-gen:
+# honra que "evaluar requiere razonar más que rellenar un schema" mientras recorta
+# el tail patológico medido en prod (avg_out 6426, max 14350 para CritiqueEvaluation).
+# Semántica idéntica a DAYGEN_THINKING_BUDGET (-1=sin cap/rollback, 0=off, >0=cap N).
+# Rollback sin redeploy: MEALFIT_EVALUATOR_THINKING_BUDGET=-1. Tooltip-anchor:
+# P1-EVALUATOR-THINKING-CAP.
+EVALUATOR_THINKING_BUDGET   = _env_int  ("MEALFIT_EVALUATOR_THINKING_BUDGET",     4096,
+                                         validator=lambda v: -1 <= v <= 32768)
+
+# [L1-UNBIND-NUTRITION-TOOL · 2026-05-28] Kill-switch para des-enlazar la tool
+# consultar_nutricion del day-gen. La tabla de nutrición ya está inyectada en el
+# SystemMessage cacheado (_build_nutrition_lookup_instruction) y Z1 instruye no
+# llamarla → la tool es redundante. Con False: bind_tools se omite → el modelo NO
+# puede emitir tool_calls → cero rondas de tool (garantía estructural sobre Z1, que
+# es solo a nivel prompt) + se quita el schema de la tool (~250-400 tok) de cada
+# call. Default True (la tool queda como fallback explícito) → flip a False tras
+# confirmar por telemetría que las tool-calls cayeron a ~0 (Z1) + spot-check de
+# macros por-porción de las proteínas/carbos principales. Tooltip-anchor: L1-UNBIND-NUTRITION-TOOL.
+DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",   True)
+
+
+def _thinking_budget_kwargs(model_name: str) -> dict:
+    """[P1-COST-THINKING-CAP] {"thinking_budget": N} para modelos thinking-capable
+    cuando el knob está activo (>=0). flash-lite no soporta thinking config →
+    dict vacío (evita pasar un kwarg no soportado que rompería la construcción)."""
+    if DAYGEN_THINKING_BUDGET < 0:
+        return {}
+    if not model_name or "lite" in model_name.lower():
+        return {}
+    return {"thinking_budget": DAYGEN_THINKING_BUDGET}
+
+
+def _evaluator_thinking_budget_kwargs(model_name: str) -> dict:
+    """[P1-EVALUATOR-THINKING-CAP · 2026-06-01] Gemelo de `_thinking_budget_kwargs`
+    pero con el presupuesto DEDICADO y más generoso `EVALUATOR_THINKING_BUDGET`
+    (default 4096 = 2x day-gen). Para el EVALUATOR de self_critique: emite un schema
+    diminuto (CritiqueEvaluation) pero su reasoning corría sin tope (prod max 14350
+    tok). flash-lite → dict vacío (no soporta thinking config). -1 → sin cap."""
+    if EVALUATOR_THINKING_BUDGET < 0:
+        return {}
+    if not model_name or "lite" in model_name.lower():
+        return {}
+    return {"thinking_budget": EVALUATOR_THINKING_BUDGET}
 
 
 # [P1-PROMPT-CACHE-STAGGER · 2026-05-16] Pre-computar el SystemMessage del
@@ -4220,18 +4597,61 @@ def _judge_model_name() -> str:
     return _env_str("MEALFIT_JUDGE_MODEL", _FLASH_LITE_DEFAULT) or _FLASH_LITE_DEFAULT
 
 
-def _fact_checker_model_name() -> str:
-    """[P1-FLASH-LITE-AUX-NODES] Modelo del fact-checker clínico.
-    Default Flash-Lite (investigación con tools + reporte conciso, schema-light).
-    Override knob: `MEALFIT_FACT_CHECKER_MODEL`."""
-    return _env_str("MEALFIT_FACT_CHECKER_MODEL", _FLASH_LITE_DEFAULT) or _FLASH_LITE_DEFAULT
+# [P2-ORCH-7 · 2026-05-28] Modelo "risk-tier" para el reviewer médico y el
+# fact-checker clínico cuando el perfil declara alergias/condiciones médicas.
+# El reviewer es el ÚNICO gate LLM de seguridad clínica y por defecto corría en
+# Flash-Lite (el tier más débil) incluso para los usuarios de mayor riesgo.
+# Default `gemini-3.5-flash` (GA, más capaz que Lite) — consistente con la
+# política no-preview del owner (P1-ALL-MODELS-GA). Perfiles sin restricciones
+# siguen en Flash-Lite (sin impacto de costo; el escalado solo aplica a perfiles
+# restringidos). Tooltip-anchor: P2-ORCH-7.
+_REVIEWER_RISK_TIER_DEFAULT = "gemini-3.5-flash"
+
+_PROFILE_RISK_NEGATIVES = {"", "ninguna", "ninguno", "none", "n/a", "na", "no", "nada"}
 
 
-def _reviewer_model_name() -> str:
-    """[P1-FLASH-LITE-AUX-NODES] Modelo del reviewer (pipeline_holistic).
-    Default Flash-Lite (`ReviewResult` schema strict, temp=0.1).
-    Override knob: `MEALFIT_REVIEWER_MODEL`."""
-    return _env_str("MEALFIT_REVIEWER_MODEL", _FLASH_LITE_DEFAULT) or _FLASH_LITE_DEFAULT
+def _profile_has_medical_risk(form_data) -> bool:
+    """[P2-ORCH-7] True si el perfil declara alergias o condiciones médicas
+    no-vacías. Determina el risk-tier del reviewer/fact-checker."""
+    if not isinstance(form_data, dict):
+        return False
+    for key in ("allergies", "medicalConditions"):
+        v = form_data.get(key)
+        if isinstance(v, (list, tuple, set)):
+            if any(str(x).strip() and str(x).strip().lower() not in _PROFILE_RISK_NEGATIVES for x in v):
+                return True
+        elif v and str(v).strip().lower() not in _PROFILE_RISK_NEGATIVES:
+            return True
+    return False
+
+
+def _fact_checker_model_name(form_data=None) -> str:
+    """[P1-FLASH-LITE-AUX-NODES · P2-ORCH-7] Modelo del fact-checker clínico.
+    Hard-override `MEALFIT_FACT_CHECKER_MODEL` siempre gana. Si el perfil tiene
+    alergias/condiciones → risk-tier (`MEALFIT_FACT_CHECKER_RISK_TIER_MODEL`,
+    default `gemini-3.5-flash`); de lo contrario Flash-Lite."""
+    _override = _env_str("MEALFIT_FACT_CHECKER_MODEL", "")
+    if _override:
+        return _override
+    if _profile_has_medical_risk(form_data):
+        return (_env_str("MEALFIT_FACT_CHECKER_RISK_TIER_MODEL", _REVIEWER_RISK_TIER_DEFAULT)
+                or _REVIEWER_RISK_TIER_DEFAULT)
+    return _FLASH_LITE_DEFAULT
+
+
+def _reviewer_model_name(form_data=None) -> str:
+    """[P1-FLASH-LITE-AUX-NODES · P2-ORCH-7] Modelo del reviewer (pipeline_holistic).
+    Hard-override `MEALFIT_REVIEWER_MODEL` siempre gana. Si el perfil tiene
+    alergias/condiciones médicas → risk-tier (`MEALFIT_REVIEWER_RISK_TIER_MODEL`,
+    default `gemini-3.5-flash`, más capaz que Lite para razonamiento clínico);
+    de lo contrario Flash-Lite (`ReviewResult` schema strict, temp=0.1)."""
+    _override = _env_str("MEALFIT_REVIEWER_MODEL", "")
+    if _override:
+        return _override
+    if _profile_has_medical_risk(form_data):
+        return (_env_str("MEALFIT_REVIEWER_RISK_TIER_MODEL", _REVIEWER_RISK_TIER_DEFAULT)
+                or _REVIEWER_RISK_TIER_DEFAULT)
+    return _FLASH_LITE_DEFAULT
 
 
 # [P1-PROMPT-TRIM-FORM-DATA · 2026-05-15] Reduce el dump de `form_data`
@@ -4494,6 +4914,7 @@ async def _attempt_pro_critique_correction(
             google_api_key=os.environ.get("GEMINI_API_KEY"),
             max_retries=0,
             timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
+            **_thinking_budget_kwargs(_PRO_MODEL_NAME),  # P1-COST-THINKING-CAP
         ).with_structured_output(SingleDayPlanModel)
         result = await _safe_ainvoke(
             pro_corrector,
@@ -4522,7 +4943,7 @@ async def _attempt_pro_critique_correction(
         return None, "pro_timeout"
     except Exception as e:
         try:
-            await pro_cb.arecord_failure()
+            await _record_cb_failure_unless_transient(pro_cb, e)  # P1-ORCH-1/2
         except Exception:
             pass
         logger.warning(
@@ -4686,6 +5107,160 @@ def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) ->
 # memory_context Y las alertas de calidad appended al final; descarta el medio
 # (la zona "lost in the middle"). Knob `MEALFIT_HISTORY_CONTEXT_MAX_CHARS`
 # (default 16000, floor 2000). Tooltip-anchor: P2-HISTORY-CONTEXT-CAP.
+# ============================================================
+# [P3-COMPRESSOR-CACHE · 2026-05-29] Cache content-addressed del resultado de
+# context_compression_node (optimización de costo LLM).
+# ------------------------------------------------------------
+# context_compression_node hace una llamada LLM (flash-lite, budget ~30s) en
+# CADA pipeline cuando history_context > 2000 chars — el caso común de usuarios
+# recurrentes con mucho historial (reglas médicas, alergias, platos recientes,
+# despensa, adherencia). El resultado es determinístico para un mismo input
+# (temperature=0.0 + prompt "no inventes nada, solo resume"), así que cachearlo
+# por hash SHA-256 del history_context es SEGURO: cualquier cambio del historial
+# produce otra key → invalidación automática (cero staleness). Un cache hit
+# ahorra una llamada LLM completa.
+#
+# In-process (no Redis): best-effort y por-worker. Un worker frío recomputa una
+# vez; no hay corrección que dependa del cache (el fallback siempre existe).
+# Acotado por nº de entradas + TTL. Knobs:
+#   MEALFIT_COMPRESSOR_CACHE_ENABLED   (True)  — kill switch sin redeploy.
+#   MEALFIT_COMPRESSOR_CACHE_TTL_S     (3600)  — vida de cada entrada.
+#   MEALFIT_COMPRESSOR_CACHE_MAX_ENTRIES (256) — cota de tamaño (LRU aprox).
+# Tooltip-anchor: P3-COMPRESSOR-CACHE.
+_COMPRESSOR_CACHE: "dict[str, tuple[str, float]]" = {}
+_COMPRESSOR_CACHE_LOCK = threading.Lock()
+
+
+def _compressor_cache_key(history_context: str) -> str:
+    return hashlib.sha256((history_context or "").encode("utf-8")).hexdigest()
+
+
+def _compressor_cache_get(history_context: str) -> Optional[str]:
+    """Devuelve el compressed_text cacheado para este history_context, o None."""
+    if not _env_bool("MEALFIT_COMPRESSOR_CACHE_ENABLED", True):
+        return None
+    key = _compressor_cache_key(history_context)
+    now = time.time()
+    with _COMPRESSOR_CACHE_LOCK:
+        entry = _COMPRESSOR_CACHE.get(key)
+        if entry is None:
+            return None
+        value, expiry = entry
+        if expiry < now:
+            _COMPRESSOR_CACHE.pop(key, None)
+            return None
+        return value
+
+
+def _compressor_cache_put(history_context: str, compressed_text: str) -> None:
+    """Cachea un compressed_text exitoso, con GC perezoso + cota de tamaño."""
+    if not _env_bool("MEALFIT_COMPRESSOR_CACHE_ENABLED", True):
+        return
+    ttl = _env_int("MEALFIT_COMPRESSOR_CACHE_TTL_S", 3600, validator=lambda v: v > 0)
+    max_entries = _env_int("MEALFIT_COMPRESSOR_CACHE_MAX_ENTRIES", 256, validator=lambda v: v > 0)
+    key = _compressor_cache_key(history_context)
+    now = time.time()
+    with _COMPRESSOR_CACHE_LOCK:
+        if len(_COMPRESSOR_CACHE) >= max_entries and key not in _COMPRESSOR_CACHE:
+            # 1) purgar expiradas.
+            for k in [k for k, (_, exp) in _COMPRESSOR_CACHE.items() if exp < now]:
+                _COMPRESSOR_CACHE.pop(k, None)
+            # 2) si sigue lleno, evict por expiry más cercano (≈LRU).
+            while len(_COMPRESSOR_CACHE) >= max_entries:
+                oldest = min(_COMPRESSOR_CACHE.items(), key=lambda kv: kv[1][1])[0]
+                _COMPRESSOR_CACHE.pop(oldest, None)
+        _COMPRESSOR_CACHE[key] = (compressed_text, now + ttl)
+
+
+# --- Telemetría (hit-rate) -------------------------------------------------
+# Contadores in-process para medir cuánto ahorra el cache en prod antes de
+# invertir más. Expuestos vía GET /api/system/admin/health-snapshot.
+_COMPRESSOR_CACHE_STATS = {"hits_memory": 0, "hits_kv": 0, "misses": 0}
+
+
+def _compressor_cache_record_hit(source: str) -> None:
+    with _COMPRESSOR_CACHE_LOCK:
+        if source == "kv":
+            _COMPRESSOR_CACHE_STATS["hits_kv"] += 1
+        else:
+            _COMPRESSOR_CACHE_STATS["hits_memory"] += 1
+
+
+def _compressor_cache_record_miss() -> None:
+    with _COMPRESSOR_CACHE_LOCK:
+        _COMPRESSOR_CACHE_STATS["misses"] += 1
+
+
+def get_compressor_cache_stats() -> dict:
+    """Snapshot de hits/misses del cache de compresión (telemetría admin).
+    [P3-COMPRESSOR-CACHE]"""
+    with _COMPRESSOR_CACHE_LOCK:
+        s = dict(_COMPRESSOR_CACHE_STATS)
+        s["in_process_entries"] = len(_COMPRESSOR_CACHE)
+    total = s["hits_memory"] + s["hits_kv"] + s["misses"]
+    s["total_lookups"] = total
+    s["hit_rate"] = round((s["hits_memory"] + s["hits_kv"]) / total, 4) if total else 0.0
+    return s
+
+
+# --- Capa 2: persistencia en app_kv_store (sobrevive restarts/deploys) ------
+# Bajo `--workers 1` el cache in-process se pierde en cada reinicio. El chunk
+# worker genera semanas sucesivas del mismo plan a lo largo de horas; si el
+# proceso reinicia entre chunks, el cache queda frío. Persistir en app_kv_store
+# (mismo patrón que rag_/reflection_) hace que el hit sobreviva. Sigue siendo
+# content-addressed (key = hash) → cero staleness. TTL SELECT-side via
+# MEALFIT_COMPRESSOR_CACHE_TTL_S; filas stale las GC el cron _sweep_stale_app_kv_store_prefixes
+# (prefix `compressor_cache:`). Best-effort: cualquier fallo de DB no rompe el pipeline.
+# Knob de kill-switch independiente: MEALFIT_COMPRESSOR_CACHE_PERSIST (True).
+_COMPRESSOR_CACHE_KV_PREFIX = "compressor_cache:"
+
+
+def _compressor_cache_kv_key(history_context: str) -> str:
+    return f"{_COMPRESSOR_CACHE_KV_PREFIX}{_compressor_cache_key(history_context)}"
+
+
+async def _compressor_cache_get_persistent(history_context: str) -> Optional[str]:
+    """Lee el compressed_text desde app_kv_store. Best-effort → None si falla."""
+    if not _env_bool("MEALFIT_COMPRESSOR_CACHE_ENABLED", True):
+        return None
+    if not _env_bool("MEALFIT_COMPRESSOR_CACHE_PERSIST", True):
+        return None
+    ttl = _env_int("MEALFIT_COMPRESSOR_CACHE_TTL_S", 3600, validator=lambda v: v > 0)
+    key = _compressor_cache_kv_key(history_context)
+    try:
+        row = await aexecute_sql_query(
+            "SELECT value FROM app_kv_store WHERE key = %s "
+            "AND updated_at > NOW() - make_interval(secs => %s)",
+            (key, ttl), fetch_one=True,
+        )
+        if not row:
+            return None
+        value = row.get("value") or {}
+        text = value.get("v") if isinstance(value, dict) else None
+        return text if (isinstance(text, str) and text) else None
+    except Exception as e:
+        logger.debug(f"[P3-COMPRESSOR-CACHE] get_persistent best-effort fail: {e}")
+        return None
+
+
+async def _compressor_cache_put_persistent(history_context: str, compressed_text: str) -> None:
+    """Persiste el compressed_text en app_kv_store. Best-effort (swallow)."""
+    if not _env_bool("MEALFIT_COMPRESSOR_CACHE_ENABLED", True):
+        return
+    if not _env_bool("MEALFIT_COMPRESSOR_CACHE_PERSIST", True):
+        return
+    key = _compressor_cache_kv_key(history_context)
+    try:
+        await aexecute_sql_write(
+            "INSERT INTO app_kv_store (key, value, updated_at) "
+            "VALUES (%s, %s::jsonb, NOW()) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+            (key, json.dumps({"v": compressed_text})),
+        )
+    except Exception as e:
+        logger.debug(f"[P3-COMPRESSOR-CACHE] put_persistent best-effort fail: {e}")
+
+
 def _cap_history_context(text: str) -> str:
     cap = _env_int("MEALFIT_HISTORY_CONTEXT_MAX_CHARS", 16000, validator=lambda v: v >= 2000)
     if not isinstance(text, str) or len(text) <= cap:
@@ -4711,7 +5286,30 @@ async def context_compression_node(state: PlanState) -> dict:
     # Solo comprimir si el contexto es demasiado largo (ej. > 2000 caracteres)
     if len(history_context) < 2000:
         return {"compressed_context": history_context}
-        
+
+    # [P3-COMPRESSOR-CACHE · 2026-05-29] Cache content-addressed → saltar la
+    # llamada LLM completa. Seguro porque la key es el hash del history_context.
+    # Capa 1: in-process (más rápido). Capa 2: app_kv_store (sobrevive restarts).
+    _cached = _compressor_cache_get(history_context)
+    if _cached is not None:
+        _compressor_cache_record_hit("memory")
+        logger.info(
+            f"🗜️ [COMPRESIÓN] Cache hit in-process ({len(history_context)} chars → "
+            f"{len(_cached)} cacheados). Skip LLM. [P3-COMPRESSOR-CACHE]"
+        )
+        return {"compressed_context": _cached}
+
+    _cached_kv = await _compressor_cache_get_persistent(history_context)
+    if _cached_kv is not None:
+        _compressor_cache_put(history_context, _cached_kv)  # calentar in-process
+        _compressor_cache_record_hit("kv")
+        logger.info(
+            f"🗜️ [COMPRESIÓN] Cache hit persistente ({len(history_context)} chars → "
+            f"{len(_cached_kv)} cacheados). Skip LLM. [P3-COMPRESSOR-CACHE]"
+        )
+        return {"compressed_context": _cached_kv}
+
+    _compressor_cache_record_miss()
     logger.info(f"🗜️ [COMPRESIÓN] Contexto masivo detectado ({len(history_context)} caracteres). Comprimiendo...")
     
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -4774,10 +5372,14 @@ Devuelve ÚNICAMENTE el contexto comprimido en viñetas directas.
             logger.warning(f"⚠️ [COMPRESIÓN] Resultado sospechoso ({len(compressed_text)} chars). Usando contexto original.")
             return {"compressed_context": _cap_history_context(history_context)}
 
+        # [P3-COMPRESSOR-CACHE] Cachear el resultado exitoso (content-addressed)
+        # en ambas capas: in-process + app_kv_store (sobrevive restarts).
+        _compressor_cache_put(history_context, compressed_text)
+        await _compressor_cache_put_persistent(history_context, compressed_text)
         logger.info(f"🗜️ [COMPRESIÓN] Contexto reducido a {len(compressed_text)} caracteres.")
         return {"compressed_context": compressed_text}
     except Exception as e:
-        await _cb.arecord_failure()  # P1-Q3: CB per-modelo
+        await _record_cb_failure_unless_transient(_cb, e)  # P1-Q3 · P1-ORCH-1/2
         logger.warning(f"⚠️ [COMPRESIÓN] Error comprimiendo contexto: {e}. Usando original.")
         return {"compressed_context": _cap_history_context(history_context)}
 
@@ -4816,6 +5418,18 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     if last_tech and attempt == 1:
         aban_techs = list(set(aban_techs + [last_tech]))
         logger.info(f"🔄 [CHUNK CONTINUATION] Técnica anterior bloqueada para este chunk: {last_tech}")
+
+    # [G9-BLOCKED-TECHNIQUES · P1-CHUNK-LEARN-3 · 2026-05-29] Honrar `_blocked_techniques`.
+    # El cron lo acumula (append+dedup a través de ciclos de resume/zero-log) y está
+    # whitelisteado, pero NINGÚN consumer lo leía: solo `_last_technique` (la ÚLTIMA) entraba
+    # a aban_techs → las técnicas bloqueadas de ciclos anteriores se re-seleccionaban (dead-write
+    # clase G10/G11). `_select_techniques` ya down-weightea aban_techs (×0.1), así que mergearlas
+    # honra la acumulación sin lógica nueva. attempt==1 (los retries ya bloquean vía el skeleton previo).
+    if attempt == 1:
+        blocked_techs = form_data.get("_blocked_techniques") or []
+        if isinstance(blocked_techs, list) and blocked_techs:
+            aban_techs = list(set(aban_techs + [t for t in blocked_techs if t]))
+            logger.info(f"🚫 [BLOCKED-TECHNIQUES] Técnicas acumuladas bloqueadas: {blocked_techs}")
 
     selected_techniques = _select_techniques(_uid, succ_techs, aban_techs)
 
@@ -4865,7 +5479,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"Información del Usuario:\n{json.dumps(_sanitize_form_data_for_prompt(form_data), indent=2)}\n"
         f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n{ctx['prev_chunk_adherence_context']}\n{ctx['weight_history_context']}\n{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
         f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n{ctx['history_context']}\n"
-        f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['prices_context']}\n"
+        f"{ctx['variety_prompt']}\n{ctx['pantry_context']}\n{ctx['pantry_drift_context']}\n{ctx['prices_context']}\n"
         f"{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
         f"{ctx['temporal_adherence_context']}\n"
         f"{ctx['motivation_context']}\n"
@@ -4893,6 +5507,25 @@ async def plan_skeleton_node(state: PlanState) -> dict:
 
     if form_data.get("_auto_simplify"):
         prompt_text += "\n\n⚠️ INSTRUCCIÓN DE SIMPLIFICACIÓN: Los planes complejos recientes han sido rechazados médicamente. Usa ingredientes BÁSICOS y métodos de cocción SENCILLOS. Minimiza el riesgo de desbalance."
+
+    # [G10-FORCE-TECHNIQUE-VARIETY · 2026-05-29] Consumo de `_force_technique_variety`.
+    # El worker (cron_tasks.py:_force_variety→_force_technique_variety downgrade) setea este
+    # flag cuando la repetición de ingredientes es alta PERO la nevera tiene baja diversidad:
+    # forzar variedad de INGREDIENTES sería incoherente con la despensa, así que se pide variar
+    # TÉCNICAS de preparación. Antes era dead-write (whitelisteado en _TRUSTED_INTERNAL_FORM_KEYS
+    # pero SIN consumer) → la adaptación era no-op silencioso (el usuario seguía recibiendo platos
+    # repetitivos justo cuando el sistema lo detectó). Hermano de `_force_variety` (ai_helpers.py).
+    if form_data.get("_force_technique_variety"):
+        prompt_text += "\n\n🍳 VARIEDAD DE TÉCNICA OBLIGATORIA: Los platos recientes repiten ingredientes y la despensa tiene baja diversidad. NO fuerces ingredientes nuevos (sería incoherente con lo disponible); en su lugar VARÍA DRÁSTICAMENTE las técnicas de preparación entre días y comidas — alterna método de cocción (horneado, salteado, guisado, a la plancha, hervido, al vapor), cortes, marinados, salsas y combinaciones, de modo que los mismos ingredientes base se perciban como platos distintos."
+
+    # [G11-CREATIVE-FREEDOM · 2026-05-29] Consumo de `_creative_freedom`. El preflight
+    # meta-learning (graph_orchestrator.py: rama score histórico >0.90) lo setea para PREMIAR
+    # con mayor libertad creativa — contraparte positiva de `_auto_simplify` (que SÍ se consumía
+    # acá arriba). Antes era dead-write (whitelisteado pero SIN consumer) → el refuerzo positivo
+    # del meta-learning estaba muerto: usuarios con planes consistentemente excelentes nunca
+    # recibían el boost de variedad/creatividad previsto.
+    if form_data.get("_creative_freedom"):
+        prompt_text += "\n\n✨ LIBERTAD CREATIVA: Tus planes recientes han sido de alta calidad y buena adherencia. Tienes mayor libertad para proponer combinaciones más creativas y recetas algo más elaboradas (siempre manteniendo coherencia nutricional, despensa y restricciones médicas). Aprovecha para introducir variedad y platos atractivos."
 
     if days_offset > 0:
         # Mostramos el rango real a generar.
@@ -4931,7 +5564,12 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         temperature=base_temp,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=0,
-        timeout=45
+        timeout=45,
+        # [P1-COST-THINKING-CAP] El planner es un nodo de GENERACIÓN (skeleton =
+        # nombres+slots, "no requiere razonamiento" per _planner_model_name). Faltaba
+        # en el set capado original. No-op en el default flash-lite; endurece los
+        # paths override (MEALFIT_PLANNER_MODEL=flash / "" → _route_model → flash/pro).
+        **_thinking_budget_kwargs(planner_model),  # P1-COST-THINKING-CAP
     ).with_structured_output(PlanSkeletonModel)
 
     # P1-Q3: CB per-modelo. Si pro está saturado, perfiles complejos paran;
@@ -4941,6 +5579,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
+        # [P2-ORCH-4 · 2026-05-28] El 429 spending-cap es persistente: reintentar
+        # es desperdicio puro. Falla rápido (resto de errores siguen reintentando;
+        # parse/Pydantic se auto-corrigen con el bump de temperatura por intento).
+        retry=retry_if_exception(lambda e: not _is_plan_spend_cap_error(e)),
         reraise=True,
         before_sleep=lambda retry_state: logger.warning(f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
     )
@@ -4968,10 +5610,10 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             await _planner_cb.arecord_success()
             return res
         except Exception as e:
-            # [P1-LLM-TRANSIENT-5XX · 2026-05-21] Ver day_cb. Excluimos 5xx
-            # transitorios de Google del conteo del CB.
-            if not _is_transient_upstream_error(e):
-                await _planner_cb.arecord_failure()
+            # [P1-LLM-TRANSIENT-5XX · 2026-05-21 · P1-ORCH-1/2 · 2026-05-28]
+            # Helper centralizado: excluye del CB los 5xx transitorios de Google
+            # Y el 429 spending-cap (persistente); además activa el latch del cap.
+            await _record_cb_failure_unless_transient(_planner_cb, e)
             raise e
 
     response = await invoke_planner()
@@ -5367,8 +6009,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             f"{ctx['quality_context']}\n{ctx['quality_hint_context']}\n{ctx['chunk_lessons_context']}\n{ctx['prev_chunk_adherence_context']}\n"
             f"{ctx['nutrition_context']}\n{ctx['time_context']}\n{ctx['taste_profile']}\n"
             f"{ctx['unified_behavioral_profile']}\n{ctx['correction_context']}\n{ctx['pantry_correction_context']}\n"
-            f"{ctx['supplements_context']}\n{ctx['grocery_duration_context']}\n"
-            f"{ctx['pantry_context']}\n{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
+            f"{ctx['supplements_context']}\n{ctx['budget_context']}\n{ctx['grocery_duration_context']}\n"
+            f"{ctx['pantry_context']}\n{ctx['pantry_drift_context']}\n{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
             f"{ctx['temporal_adherence_context']}\n"
             f"{ctx['motivation_context']}\n"
             f"{ctx['sleep_stress_context']}\n"
@@ -5398,12 +6040,20 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             temperature=temp_override if temp_override is not None else (base_temp if attempt == 1 else (base_temp + 0.1)),
             google_api_key=os.environ.get("GEMINI_API_KEY"),
             max_retries=0,
-            timeout=90
+            timeout=90,
+            **_thinking_budget_kwargs(day_model),  # P1-COST-THINKING-CAP
         )
 
         # Enlazar herramientas (Mejora 3)
         from tools_nutrition import NUTRITION_TOOLS, consultar_nutricion
-        day_llm_with_tools = day_llm.bind_tools(NUTRITION_TOOLS)
+        if DAYGEN_BIND_NUTRITION_TOOL:
+            day_llm_with_tools = day_llm.bind_tools(NUTRITION_TOOLS)
+        else:
+            # [L1-UNBIND-NUTRITION-TOOL] Tool des-enlazada: el modelo no puede
+            # invocar consultar_nutricion → cero rondas de tool (el loop rompe en
+            # iter 0 vía el `else: break`); la tabla pre-computada del SystemMessage
+            # es la fuente autoritativa. Sin tool schema en cada call.
+            day_llm_with_tools = day_llm
 
         # [P1-PROMPT-CACHE-STAGGER · 2026-05-16] System instruction
         # pre-computado a nivel módulo (`_DAY_SYSTEM_INSTRUCTION_CACHED` /
@@ -5424,6 +6074,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         @retry(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=1, min=2, max=8),
+            retry=retry_if_exception(lambda e: not _is_plan_spend_cap_error(e)),  # P2-ORCH-4
             reraise=True,
             before_sleep=lambda rs: logger.warning(f"⚠️  [DÍA {day_num}] Reintento #{rs.attempt_number}...")
         )
@@ -5527,8 +6178,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 # modelo en sí (o nuestra integración) está consistentemente
                 # roto. Pre-fix: 3 bursts de 502 abrían el CB → Días caían en
                 # cascada al fallback emergency. Ver incidente 2026-05-21 02:58.
-                if not _is_transient_upstream_error(e):
-                    await _day_cb.arecord_failure()  # P1-Q3
+                # [P1-ORCH-1/2 · 2026-05-28] Helper centralizado: excluye 5xx
+                # transitorios + 429 spending-cap (y activa el latch del cap).
+                await _record_cb_failure_unless_transient(_day_cb, e)  # P1-Q3
                 raise e
 
         day_result = await invoke_day()
@@ -5944,13 +6596,22 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                     failed_days.append(day_num)
 
         if failed_days and generated_days:
-            # P1-10: copy ya está importado a nivel módulo
-            valid_day_template = generated_days[0]
+            # [P2-ORCH-3 · 2026-05-28] Días fallidos → `_build_fallback_day`
+            # matemático (balanceado + allergen-aware) en vez de CLONAR verbatim
+            # el Día 0. El clon producía días byte-idénticos (mismas recetas/
+            # ingredientes) que evadían la anti-repetición y la fidelidad de
+            # skeleton; con 2/3 días fallidos el usuario veía 3 días idénticos.
+            # El día math respeta las restricciones declaradas y queda marcado
+            # (`_day_fallback`) para que review/scoring puedan degradar calidad.
+            _restricted = _fallback_restricted_tokens(form_data)
             for f_day in failed_days:
-                cloned = copy.deepcopy(valid_day_template)
-                cloned["day"] = f_day
-                generated_days.append(cloned)
-                logger.warning(f"⚠️ [FALLBACK EXTREMO] Día {f_day} clonado a partir del Día {valid_day_template.get('day', 1)}")
+                fb_day = _build_fallback_day(nutrition, f_day, _restricted)
+                fb_day["_day_fallback"] = True
+                _skel = next((d for d in skeleton_days if d.get("day") == f_day), None)
+                if _skel and _skel.get("day_name"):
+                    fb_day["day_name"] = _skel["day_name"]
+                generated_days.append(fb_day)
+                logger.warning(f"⚠️ [FALLBACK EXTREMO] Día {f_day} reemplazado por día de contingencia matemático (worker falló).")
         elif failed_days and not generated_days:
             # P0-2: Evitar propagar días vacíos si todos los workers fallan
             raise RuntimeError("Todos los workers de generación de días fallaron. Forzando fallback matemático global.")
@@ -6596,7 +7257,7 @@ mencionando explícitamente cuál criterio (1-4) fue decisivo.
         }
         
     except Exception as e:
-        await _judge_cb.arecord_failure()  # P1-Q3
+        await _record_cb_failure_unless_transient(_judge_cb, e)  # P1-Q3 · P1-ORCH-1/2
         logger.warning(f"⚠️ [ADVERSARIAL JUDGE] Falló la evaluación: {e}. Defaulting to Candidate A.")
         # P1-F: registrar el fallo del juez como observación AB. El default a A
         # es arbitrario (no LLM-decided), así que `include_pair=False` excluye
@@ -6770,6 +7431,38 @@ _MAIN_PROTEIN_ALIASES = {
 # sin ser problema.
 _HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun"}
 
+
+def _count_cross_day_heavy_protein_repetition(days: list, min_days: int = 3) -> dict:
+    """[P2-ORCH-6 · 2026-05-28] Cuenta en cuántos días DISTINTOS aparece cada
+    proteína PESADA (pollo/pavo/cerdo/res/pescado/atún). Devuelve las que
+    aparecen en >= `min_days` días — monotonía cross-day.
+
+    Cierra el gap del skip-when-clean: `_count_staple_repetitions` OMITE pescado
+    y carnes de su mapa de staples, y `_detect_slot_incoherence` solo mira
+    overlap INTRA-día. Sin este detector, 'salmón/pescado todos los días'
+    escapaba a ambos y se saltaba el evaluador subjetivo. Tooltip-anchor: P2-ORCH-6.
+    """
+    def _norm(s: str) -> str:
+        return unicodedata.normalize("NFD", s.lower()).encode("ascii", "ignore").decode("ascii")
+
+    aliases_norm = {
+        label: [_norm(a) for a in _MAIN_PROTEIN_ALIASES[label]]
+        for label in _HEAVY_PROTEIN_LABELS
+    }
+    day_counts: dict = {}
+    for day in days:
+        text_blob = ""
+        for meal in day.get("meals", []):
+            text_blob += " " + meal.get("name", "")
+            for ing in meal.get("ingredients", []) or []:
+                text_blob += " " + str(ing)
+        text_norm = _norm(text_blob)
+        for label, alias_list in aliases_norm.items():
+            if any(a in text_norm for a in alias_list):
+                day_counts[label] = day_counts.get(label, 0) + 1
+    return {k: v for k, v in day_counts.items() if v >= min_days}
+
+
 _MAIN_CARB_ALIASES = {
     "arroz": ["arroz"],
     "platano verde": ["platano verde", "guineo verde"],
@@ -6938,7 +7631,12 @@ async def self_critique_node(state: PlanState) -> dict:
         model=_evaluator_model,
         temperature=0.1,
         google_api_key=os.environ.get("GEMINI_API_KEY"),
-        max_retries=1
+        max_retries=1,
+        # [P1-EVALUATOR-THINKING-CAP · 2026-06-01] Cap GENEROSO (default 4096 = 2x
+        # day-gen) del reasoning. Prod: avg_out 6426 / max 14350 tok para un schema
+        # de 5 scores con las señales duras YA pre-calculadas → tail patológico.
+        # Aplica a flash Y pro (EVALUATOR_USE_PRO); flash-lite → no-op.
+        **_evaluator_thinking_budget_kwargs(_evaluator_model),  # P1-EVALUATOR-THINKING-CAP
     ).with_structured_output(CritiqueEvaluation)
 
     days_json = json.dumps(days, ensure_ascii=False)
@@ -6968,6 +7666,9 @@ async def self_critique_node(state: PlanState) -> dict:
     # Cubre el blind spot del compresor: el LLM no ve los ingredientes, así que
     # le damos esta tabla calculada por código para que penalice con certeza.
     staple_repetitions = _count_staple_repetitions(days)
+    # [P2-ORCH-6] Monotonía cross-day de proteína pesada (incluye pescado, que
+    # el mapa de staples OMITE). Alimenta el gate de skip-when-clean abajo.
+    heavy_protein_monotony = _count_cross_day_heavy_protein_repetition(days)
     suggested_day_hint = ""
     if staple_repetitions:
         items_str = ", ".join([f"'{k}' en {v} días" for k, v in staple_repetitions.items()])
@@ -7003,18 +7704,27 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         slot_block = ""
 
-    # [P1-SELF-CRITIQUE-SKIP-CLEAN · 2026-05-28] Early-exit: si AMBOS detectores
+    # [P1-SELF-CRITIQUE-SKIP-CLEAN · 2026-05-28] Early-exit: si los detectores
     # determinísticos vinieron limpios (cero staples repetidos, cero incoherencias
-    # de slot), saltamos el evaluador LLM (~30s) y, por ende, sus correcciones (las
-    # llamadas más caras del pipeline). El plan ya es estructuralmente sano; el
-    # evaluador solo aportaría pulido subjetivo. Knob `MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN`
-    # (default True) — flip a False restaura el evaluador en cada plan.
-    if SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions and not slot_issues:
+    # de slot, cero monotonía cross-day de proteína pesada), saltamos el evaluador
+    # LLM (~30s) y, por ende, sus correcciones (las llamadas más caras del
+    # pipeline). El plan ya es estructuralmente sano; el evaluador solo aportaría
+    # pulido subjetivo. Knob `MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN` (default True)
+    # — flip a False restaura el evaluador en cada plan.
+    # [P2-ORCH-6 · 2026-05-28] `heavy_protein_monotony` añadido al gate: el skip
+    # NO debe aplicar cuando una proteína pesada (p.ej. pescado/salmón) se repite
+    # en >=3 días — gap que `staple_repetitions` (sin pescado) no cubría.
+    # NOTA: las dimensiones puramente subjetivas del evaluador LLM (visual /
+    # cultural / temperatura) se OMITEN intencionalmente cuando todo está limpio
+    # (decisión de costo P1-GEN-EFFICIENCY); los detectores determinísticos son
+    # el piso de calidad garantizado.
+    if (SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions
+            and not slot_issues and not heavy_protein_monotony):
         logger.info(
             "⏭️ [SELF-CRITIQUE] Detectores determinísticos limpios (0 staples "
-            "repetidos, 0 incoherencias de slot) → skip evaluador+correcciones "
-            "(MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN). Recorte de latencia/costo; "
-            "plan entregado sin pulido subjetivo."
+            "repetidos, 0 incoherencias de slot, 0 monotonía de proteína pesada) "
+            "→ skip evaluador+correcciones (MEALFIT_SELF_CRITIQUE_SKIP_WHEN_CLEAN). "
+            "Recorte de latencia/costo; plan entregado sin pulido subjetivo."
         )
         return {}
 
@@ -7071,7 +7781,7 @@ PLAN A EVALUAR (días generados):
             )
             await _evaluator_cb.arecord_success()  # P1-Q3
         except Exception as e:
-            await _evaluator_cb.arecord_failure()  # P1-Q3
+            await _record_cb_failure_unless_transient(_evaluator_cb, e)  # P1-Q3 · P1-ORCH-1/2
             raise e
         logger.info(f"📊 [SELF-CRITIQUE] Scores -> Visual: {critique.visual_score}, Diversidad: {critique.diversity_score}, Cultural: {critique.cultural_score}, Temp: {critique.temperature_score}, Slot: {critique.slot_coherence_score}")
         
@@ -7099,7 +7809,13 @@ PLAN A EVALUAR (días generados):
                 if missing:
                     logger.info(f"🛟 [SELF-CRITIQUE] Días con incoherencia determinística no mencionados "
                           f"por el LLM: {missing} → añadidos al floor de corrección.")
-                    mentioned = list(dict.fromkeys(mentioned + missing))
+                # [P2-ORCH-5 · 2026-05-28] Floor-FIRST: los días con incoherencia
+                # DETERMINÍSTICA (code-cierta) van al FRENTE para que el slice
+                # `mentioned[:critique_max_days]` bajo presión de budget (cap 1-2)
+                # NUNCA los descarte en favor de días que el LLM solo "mencionó".
+                # Pre-fix: `mentioned + missing` los ponía al final → eran los
+                # primeros en caer al recortar, anulando el floor. Tooltip-anchor: P2-ORCH-5.
+                mentioned = list(dict.fromkeys(deterministic_days + mentioned))
             if not mentioned:
                 mentioned = [1]  # Default: corregir día 1 si no se menciona ninguno
             critique_max_days = _compute_self_critique_max_days(state)
@@ -7115,6 +7831,7 @@ PLAN A EVALUAR (días generados):
                 google_api_key=os.environ.get("GEMINI_API_KEY"),
                 max_retries=0,
                 timeout=80,
+                **_thinking_budget_kwargs(_corrector_model),  # P1-COST-THINKING-CAP
             ).with_structured_output(SingleDayPlanModel)
 
             ctx = _build_shared_context(state)
@@ -7331,7 +8048,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     )
                     return day_num, None, "timeout"
                 except Exception as e:
-                    await _corrector_cb.arecord_failure()  # P1-Q3
+                    await _record_cb_failure_unless_transient(_corrector_cb, e)  # P1-Q3 · P1-ORCH-1/2
                     logger.warning(f"⚠️ [SELF-CRITIQUE] Error corrigiendo Día {day_num}: {e}. Manteniendo original.")
                     _mark_critique_unresolved(target_day, f"error:{type(e).__name__}", critique.suggestions or "")
                     return day_num, None, f"error:{type(e).__name__}"
@@ -7435,9 +8152,23 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             logger.info("✅ [SELF-CRITIQUE] El plan pasó la evaluación visual y de coherencia.")
             
     except Exception as e:
-        logger.warning(f"⚠️ [SELF-CRITIQUE] Error crítico durante la evaluación/corrección: {e}")
-        raise e  # Bubble up to trigger graph fallback
-        
+        # [P1-ORCH-3 · 2026-05-28] NO re-raise. self_critique es un nodo de
+        # PULIDO no-esencial (se salta en retries y en planes limpios; sus skip
+        # paths hacen `return {}` sin lanzar). En este punto `partial` YA contiene
+        # el plan completo del day-generator. Abortar TODO el grafo por un fallo
+        # del evaluador/corrector escalaba "saltar el pulido" a la degradación
+        # global pesada (logs CRITICAL + riesgo de entregar un fallback matemático
+        # cuando ya había un plan válido en mano). Degradamos localmente: se
+        # conservan los días ya generados y deciden los gatekeepers reales
+        # (review_plan médico + coherence guard de assemble). `CancelledError`
+        # NO hereda de Exception en Py3.8+, así que la cancelación nunca se tragó.
+        # Tooltip-anchor: P1-ORCH-3.
+        logger.warning(
+            f"⚠️ [SELF-CRITIQUE] Error en evaluación/corrección (no-fatal, se "
+            f"conserva el plan generado): {type(e).__name__}: {e}"
+        )
+        return {"plan_result": partial}
+
     duration = round(time.time() - start_time, 2)
     logger.info(f"⏱️ [SELF-CRITIQUE] Completado en {duration}s")
     
@@ -7990,9 +8721,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
             
             # Auto-fill missing required keys to pass Pydantic Validation & Frontend
             if "meal" not in m: m["meal"] = m.get("name", "Comida").split(" ")[0] if " " in m.get("name", "") else m.get("name", "Comida")
-            if "time" not in m: m["time"] = "Flexible"
+            if not m.get("time"): m["time"] = "Flexible"  # [Z3] Optional emite None → guard .get()
             if "prep_time" not in m: m["prep_time"] = "15 min"
-            if "macros" not in m: m["macros"] = ["Plan Matemático"]
+            if not m.get("macros"): m["macros"] = ["Plan Matemático"]  # [Z2] Optional emite None → guard .get()
             if "ingredients" not in m: m["ingredients"] = ["Proteína magra al gusto", "Carbohidratos complejos", "Vegetales mixtos"]
             if "difficulty" not in m: m["difficulty"] = "Fácil"
             if "desc" not in m: m["desc"] = "Comida saludable y balanceada."
@@ -8070,12 +8801,25 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 largest_meal["fats"] = max(0, largest_meal.get("fats", 0) + fat_delta)
                 
             # Brecha 5: Aviso de ajuste de porciones
-            recipe_text = largest_meal.get("recipe", "")
-            if isinstance(recipe_text, list):
-                recipe_text = " ".join(recipe_text)
-            disclaimer = f"\n⚠️ Nota del Nutricionista AI: Las cantidades de los ingredientes fueron ajustadas matemáticamente para corregir un desvío de {abs(adjustment)} kcal."
-            if "Nota del Nutricionista AI" not in recipe_text:
-                largest_meal["recipe"] = recipe_text + disclaimer
+            # [P2-RECIPE-DISCLAIMER-LIST · 2026-05-30] Append el disclaimer como
+            # NUEVO elemento de la lista `recipe`, NO stringificar. Pre-fix:
+            # `" ".join(recipe_text) + disclaimer` convertía `recipe` de
+            # List[str] a `str` → (a) `PlanModel(**result)` rechazaba el tipo
+            # (`list_type`) marcando `_schema_invalid=True` → `review_plan_node`
+            # escalaba a crítico y el plan real del LLM se descartaba por el
+            # `_get_extreme_fallback_plan` genérico; (b) si llegaba al cliente,
+            # `Recipes.jsx` (`recipe.map(...)`) crasheaba (caught por
+            # GlobalErrorBoundary). Mantener List[str] preserva los 3 pilares
+            # (Mise en place / Fuego / Montaje) y el contrato del schema.
+            # Tooltip-anchor: P2-RECIPE-DISCLAIMER-LIST.
+            recipe_list = largest_meal.get("recipe", [])
+            if isinstance(recipe_list, str):
+                recipe_list = [recipe_list] if recipe_list.strip() else []
+            elif not isinstance(recipe_list, list):
+                recipe_list = []
+            disclaimer = f"⚠️ Nota del Nutricionista AI: Las cantidades de los ingredientes fueron ajustadas matemáticamente para corregir un desvío de {abs(adjustment)} kcal."
+            if not any("Nota del Nutricionista AI" in str(s) for s in recipe_list):
+                largest_meal["recipe"] = recipe_list + [disclaimer]
                 
             logger.info(f"⚖️ [MACRO BALANCING] Día {day.get('day')}: Desviación {diff}kcal -> Ajustado {adjustment}kcal en '{largest_meal.get('meal')}'")
 
@@ -8105,12 +8849,17 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 
                 # Brecha 5: Aviso de ajuste de porciones drástico
                 if scale_factor < 0.85 or scale_factor > 1.15:
-                    recipe_text = meal.get("recipe", "")
-                    if isinstance(recipe_text, list):
-                        recipe_text = " ".join(recipe_text)
-                    disclaimer = f"\n⚠️ Nota del Nutricionista AI: Las porciones fueron escaladas un {abs(1 - scale_factor)*100:.0f}% matemáticamente para cumplir tu meta estricta."
-                    if "Nota del Nutricionista AI" not in recipe_text:
-                        meal["recipe"] = recipe_text + disclaimer
+                    # [P2-RECIPE-DISCLAIMER-LIST · 2026-05-30] Append como
+                    # elemento de lista, NO stringificar (ver nota en la sección
+                    # de macro balancing arriba — mismo modo de fallo schema/crash).
+                    recipe_list = meal.get("recipe", [])
+                    if isinstance(recipe_list, str):
+                        recipe_list = [recipe_list] if recipe_list.strip() else []
+                    elif not isinstance(recipe_list, list):
+                        recipe_list = []
+                    disclaimer = f"⚠️ Nota del Nutricionista AI: Las porciones fueron escaladas un {abs(1 - scale_factor)*100:.0f}% matemáticamente para cumplir tu meta estricta."
+                    if not any("Nota del Nutricionista AI" in str(s) for s in recipe_list):
+                        meal["recipe"] = recipe_list + [disclaimer]
                         
             new_total = sum(m.get("cals", 0) for m in day_meals)
             logger.info(f"🔒 [STRICT NUTRITION] Día {day.get('day')}: Redistribución forzada ({deviation_pct*100:.0f}% desviación, {day_cals}→{new_total} kcal)")
@@ -9032,7 +9781,16 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
 
     days = list(plan_result.get("days") or [])
     form_data = state.get("form_data") or {}
-    skeleton = plan_result.get("_skeleton") or {}
+    # [P1-ORCH-4 · 2026-05-28] Fallback a `state['plan_skeleton']` cuando
+    # `plan_result` no trae `_skeleton`. Este nodo corre DESPUÉS de assemble,
+    # que retorna un dict nuevo SIN `_skeleton` (sobrescribe state['plan_result']).
+    # Sin este fallback, `skeleton` quedaba {} → (1) el prompt del corrector
+    # perdía la asignación de proteína obligatoria del planner, y (2)
+    # `_apply_protein_pool_scrub(corrected_day, {})` veía pool vacío y eliminaba
+    # TODAS las proteínas de los ingredientes del día regenerado (incoherencia
+    # receta↔ingredientes — justo lo que el guard combate). Mismo patrón de
+    # fallback que assemble_plan_node. Tooltip-anchor: P1-ORCH-4.
+    skeleton = plan_result.get("_skeleton") or state.get("plan_skeleton") or {}
     skeleton_days = skeleton.get("days", []) if isinstance(skeleton, dict) else []
 
     logger.info(
@@ -9050,6 +9808,7 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=0,
         timeout=80,
+        **_thinking_budget_kwargs(_corrector_model),  # P1-COST-THINKING-CAP
     ).with_structured_output(SingleDayPlanModel)
 
     ctx = _build_shared_context(state)
@@ -9179,7 +9938,7 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             if pro_corrected:
                 return day_num, pro_corrected
         except Exception as e:
-            await _corrector_cb.arecord_failure()
+            await _record_cb_failure_unless_transient(_corrector_cb, e)  # P1-ORCH-1/2
             logger.warning(
                 f"⚠️ [P5-MARKER-REGEN] Error re-corrigiendo Día {day_num}: {e}. "
                 f"Marker preservado."
@@ -9943,7 +10702,7 @@ async def review_plan_node(state: PlanState) -> dict:
             # [P1-FLASH-LITE-AUX-NODES · 2026-05-15] Default Flash-Lite via knob
             # `MEALFIT_FACT_CHECKER_MODEL`. Pre-fix: `_route_model(force_fast=True)`
             # hardcodeaba `gemini-3-flash-preview` (Flash regular).
-            _fact_checker_model = _fact_checker_model_name()
+            _fact_checker_model = _fact_checker_model_name(form_data)  # P2-ORCH-7 risk-tier
             _fact_checker_cb = _get_circuit_breaker(_fact_checker_model)
             fact_checker_llm = ChatGoogleGenerativeAI(
                 model=_fact_checker_model,
@@ -9953,9 +10712,19 @@ async def review_plan_node(state: PlanState) -> dict:
             
             fc_sys_prompt = "Eres un investigador clínico. Revisa las alergias y condiciones médicas frente a los ingredientes presentados. Usa tu herramienta para investigar posibles reacciones cruzadas, contraindicaciones o interacciones peligrosas. Cuando termines o si no ves riesgo, responde con un REPORTE CLÍNICO CONCISO con tus hallazgos."
             
+            # [P3-COST-FACTCHECK-INGREDIENTS-DEDUP · 2026-06-01] Dedup EXACTO
+            # (set sobre strings con cantidad) solo para el prompt del
+            # fact-checker, que re-envía esta HumanMessage en cada una de hasta
+            # 4 iteraciones del loop (10676). `all_ingredients` crudo (con
+            # duplicados) se PRESERVA intacto para validate_ingredients_against_pantry
+            # downstream. NO normaliza ni quita cantidades (eso arriesgaría
+            # reorder/pérdida clínica) — solo colapsa repeticiones byte-idénticas
+            # acumuladas entre días. Cero costo LLM. tooltip-anchor:
+            # P3-COST-FACTCHECK-INGREDIENTS-DEDUP
+            _fc_ingredients = sorted(set(all_ingredients))
             fc_messages = [
                 SystemMessage(content=fc_sys_prompt),
-                HumanMessage(content=f"Alergias: {allergies}\nCondiciones: {medical_conditions}\nDieta: {diet_type}\nIngredientes a evaluar: {all_ingredients}")
+                HumanMessage(content=f"Alergias: {allergies}\nCondiciones: {medical_conditions}\nDieta: {diet_type}\nIngredientes a evaluar: {_fc_ingredients}")
             ]
             
             for step in range(4): # Límite de 4 iteraciones
@@ -10059,7 +10828,10 @@ async def review_plan_node(state: PlanState) -> dict:
                     # caer y la asimetría dejaba el CB sin la señal completa.
                     # Symmetric con cómo `invoke_planner`/`invoke_day`/`invoke_with_retry`
                     # registran failure en su except handler.
-                    await _fact_checker_cb.arecord_failure()
+                    # [P1-ORCH-1/2 · 2026-05-28] Helper centralizado (excluye 5xx
+                    # transitorio + spend-cap). El timeout de la TOOL clínica
+                    # (arriba) NO usa el helper: ahí fail-closed es lo correcto.
+                    await _record_cb_failure_unless_transient(_fact_checker_cb, fc_e)
                     logger.warning(f"⚠️ [FACT-CHECK] Error durante la investigación: {fc_e}")
                     fact_check_report = f"Error en la investigación: {str(fc_e)}. Asumir precaución máxima."
                     break
@@ -10073,10 +10845,16 @@ async def review_plan_node(state: PlanState) -> dict:
         # ============================================================
         # FASE 2: REVISIÓN DETERMINISTA FINAL
         # ============================================================
-        review_prompt = f"""
-{REVIEWER_SYSTEM_PROMPT}
-
---- RESTRICCIONES DEL PACIENTE ---
+        # [P3-COST-REVIEWER-CACHE · 2026-06-01] Split del REVIEWER_SYSTEM_PROMPT
+        # estático (~350-450 tok) a un SystemMessage separado para que Gemini lo
+        # trate como system_instruction cacheable (mismo patrón ya vivo en
+        # planner/day-gen/evaluator bajo PROMPT_CACHE_SYSTEM_MESSAGE; el reviewer
+        # era el último nodo del pipeline en string plano). El cache-hit lo dan
+        # los retries tenacity del mismo plan + reviews consecutivas de los crons
+        # nightly/chunk dentro del TTL. Mismo texto, cero cambio semántico. Rama
+        # else = string plano legacy (rollback sin redeploy vía el knob existente
+        # MEALFIT_PROMPT_CACHE_SYSTEM_MESSAGE). tooltip-anchor: P3-COST-REVIEWER-CACHE
+        review_human_content = f"""--- RESTRICCIONES DEL PACIENTE ---
 Alergias declaradas: {json.dumps(allergies) if allergies else "Ninguna"}
 Condiciones médicas: {json.dumps(medical_conditions) if medical_conditions else "Ninguna"}
 Tipo de dieta: {diet_type}
@@ -10094,18 +10872,31 @@ Calorías totales: {plan.get("calories")} kcal
 Comidas e ingredientes:
 {chr(10).join(all_meals_summary)}
 
---- TODOS LOS INGREDIENTES DEL PLAN ---
-{json.dumps(all_ingredients)}
-
 Responde ÚNICAMENTE con el JSON de revisión.
 """
+        if PROMPT_CACHE_SYSTEM_MESSAGE:
+            review_prompt = [
+                SystemMessage(content=REVIEWER_SYSTEM_PROMPT),
+                HumanMessage(content=review_human_content),
+            ]
+        else:
+            review_prompt = f"{REVIEWER_SYSTEM_PROMPT}\n{review_human_content}"
+        # [P3-GENCHUNK-SPEED · 2026-06-01] Eliminado el bloque
+        # `--- TODOS LOS INGREDIENTES DEL PLAN --- {json.dumps(all_ingredients)}`
+        # que duplicaba textualmente cada ingrediente ya presente (agrupado
+        # por comida/día, vista más rica que el reviewer realmente escanea —
+        # ver REVIEWER_SYSTEM_PROMPT punto 1) en `all_meals_summary` arriba.
+        # `all_ingredients` SIGUE construido: lo consumen los validadores
+        # deterministas downstream (validate_ingredients_against_pantry) y la
+        # FASE 1 fact-checker — solo se quitó la duplicación en el prompt del LLM.
+        # tooltip-anchor: P3-GENCHUNK-SPEED-REVIEWER-DEDUP
         
         # P1-Q3: capturar modelo del reviewer para CB per-modelo
         # [P1-FLASH-LITE-AUX-NODES · 2026-05-15] Default Flash-Lite via knob
         # `MEALFIT_REVIEWER_MODEL` — tarea schema-strict (ReviewResult) con
         # temp=0.1. Pre-fix: `_route_model(form_data, attempt=1)` escalaba a
         # Pro en perfiles clínicos. Override por knob si regresión.
-        _reviewer_model = _reviewer_model_name()
+        _reviewer_model = _reviewer_model_name(form_data)  # P2-ORCH-7 risk-tier
         _reviewer_cb = _get_circuit_breaker(_reviewer_model)
         reviewer_llm = ChatGoogleGenerativeAI(
             model=_reviewer_model,
@@ -10119,6 +10910,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         @retry(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=1, min=2, max=8),
+            retry=retry_if_exception(lambda e: not _is_plan_spend_cap_error(e)),  # P2-ORCH-4
             reraise=True,
             before_sleep=lambda retry_state: logger.warning(f"⚠️  [REVISOR] Reintento #{retry_state.attempt_number}...")
         )
@@ -10137,7 +10929,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 await _reviewer_cb.arecord_success()  # P1-Q3
                 return res
             except Exception as e:
-                await _reviewer_cb.arecord_failure()  # P1-Q3
+                await _record_cb_failure_unless_transient(_reviewer_cb, e)  # P1-Q3 · P1-ORCH-1/2
                 raise e
         
         try:
@@ -11066,7 +11858,11 @@ async def reflection_node(state: PlanState) -> dict:
     if quality_score is None:
         return {} # Skip, es usuario nuevo o no hay datos recientes
         
-    meal_adherence = form_data.get("_meal_adherence", "Sin datos granulares")
+    # [P1-CHUNK-3] La clave que el feedback-loop ESCRIBE es `_meal_level_adherence`
+    # (cron_tasks.py:14815 + 15445). El read legacy `_meal_adherence` (singular) era
+    # una clave muerta: jamás se escribía, así que `reflection_node` siempre veía el
+    # default y el meta-aprendizaje nunca incorporaba la adherencia real por comida.
+    meal_adherence = form_data.get("_meal_level_adherence", "Sin datos granulares")
     successful = form_data.get("successful_techniques", "Ninguna")
     abandoned = form_data.get("abandoned_techniques", "Ninguna")
     fatigued = form_data.get("fatigued_ingredients", "Ninguno")
@@ -11122,7 +11918,7 @@ async def reflection_node(state: PlanState) -> dict:
             result = await _safe_ainvoke(reflector_llm, prompt, timeout=30.0)
             await _reflector_cb.arecord_success()  # P1-Q3
         except Exception as e:
-            await _reflector_cb.arecord_failure()  # P1-Q3
+            await _record_cb_failure_unless_transient(_reflector_cb, e)  # P1-Q3 · P1-ORCH-1/2
             raise e
         reflection_text = result.reflection
         logger.info(f"💡 [META-LEARNING] Diagnóstico: {reflection_text}")
@@ -11516,6 +12312,46 @@ def _pantry_cache_discard_reason(actual_form: dict, cached_form: dict) -> Option
     return None
 
 
+# ============================================================
+# [P2-ORCH-2 · 2026-05-28] Threshold del semantic cache como knob + telemetría.
+# ------------------------------------------------------------
+# El threshold de similitud coseno estaba hardcoded a 0.98 en el callsite — el
+# parámetro de COSTE más impactante del pipeline (un hit ahorra 30-90s + dólares
+# de generación) NO era tuneable sin redeploy y sin telemetría no se podía saber
+# si 0.98 estaba matando el hit-rate. Ahora es un knob clamp + stats por outcome
+# (hit / anti_repetition_reject / miss) expuestos vía
+# `get_semantic_cache_stats_snapshot()` para medir y bajar el umbral empíricamente.
+# Tooltip-anchor: P2-ORCH-2.
+# ============================================================
+SEMANTIC_CACHE_COSINE_THRESHOLD = _env_float(
+    "MEALFIT_SEMANTIC_CACHE_COSINE_THRESHOLD", 0.98,
+    validator=lambda v: 0.5 <= v <= 0.999,
+)
+_SEMANTIC_CACHE_STATS = {"hit": 0, "miss": 0, "anti_repetition_reject": 0}
+_SEMANTIC_CACHE_STATS_LOCK = threading.Lock()
+
+
+def _inc_semantic_cache_stat(kind: str, n: int = 1) -> None:
+    """[P2-ORCH-2] Incremento best-effort de los contadores del semantic cache."""
+    try:
+        with _SEMANTIC_CACHE_STATS_LOCK:
+            _SEMANTIC_CACHE_STATS[kind] = _SEMANTIC_CACHE_STATS.get(kind, 0) + n
+    except Exception:
+        pass
+
+
+def get_semantic_cache_stats_snapshot() -> dict:
+    """[P2-ORCH-2] Snapshot de los contadores del semantic cache (hit-rate).
+    Consumible por endpoints de observabilidad para tunear el threshold."""
+    with _SEMANTIC_CACHE_STATS_LOCK:
+        snap = dict(_SEMANTIC_CACHE_STATS)
+    total = snap.get("hit", 0) + snap.get("miss", 0) + snap.get("anti_repetition_reject", 0)
+    snap["total"] = total
+    snap["hit_rate"] = round(snap.get("hit", 0) / total, 4) if total else 0.0
+    snap["threshold"] = SEMANTIC_CACHE_COSINE_THRESHOLD
+    return snap
+
+
 @_node_label("semantic_cache_check")
 async def semantic_cache_check_node(state: PlanState) -> dict:
     """Busca un plan similar en la base de datos usando similitud de coseno para saltar la generación LLM.
@@ -11614,8 +12450,22 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
         # ampliamente favorable contra perder un cache hit que ahorraría 30-90s
         # de generación LLM. Bumpear a 20+ si el conteo de stale del startup
         # log (`P1-ORQ-5`) supera el ratio actual/legacy ≥ 2:1.
-        similar_plans = await _adb(search_similar_plan, profile_embedding, 0.98, 10)
-        
+        # [P2-ORCH-2] Threshold via knob (era 0.98 hardcoded). Loguear la mejor
+        # similitud candidata permite tunear el umbral empíricamente: si vemos
+        # candidatos consistentemente en ~0.95 rechazados por 0.98, bajar el knob.
+        similar_plans = await _adb(search_similar_plan, profile_embedding,
+                                   SEMANTIC_CACHE_COSINE_THRESHOLD, 10)
+        if similar_plans:
+            try:
+                _best_sim = max((p.get("similarity", 0) or 0) for p in similar_plans)
+                logger.info(
+                    f"🔎 [SEMANTIC CACHE] {len(similar_plans)} candidato(s) "
+                    f"≥ threshold {SEMANTIC_CACHE_COSINE_THRESHOLD:.3f} "
+                    f"(mejor similitud: {_best_sim:.4f})."
+                )
+            except Exception:
+                pass
+
         valid_plan = None
         plan_data = None
         
@@ -11910,16 +12760,22 @@ async def semantic_cache_check_node(state: PlanState) -> dict:
                         # Si más de la mitad de los platos están repetidos, descartar el caché
                         if len(filtered_repeated) > 0 and len(filtered_repeated) >= len(cached_meal_names) / 2:
                             logger.warning(f"⚠️ [SEMANTIC CACHE] Plan rechazado por anti-repetición ({len(filtered_repeated)}/{len(cached_meal_names)} platos repetidos). Forzando IA.")
+                            _inc_semantic_cache_stat("anti_repetition_reject")  # P2-ORCH-2
                             return {"semantic_cache_hit": False, "cached_plan_data": None}
                 except Exception as e:
                     logger.warning(f"⚠️ [SEMANTIC CACHE] Error validando anti-repetición del caché: {e}")
 
             logger.info(f"🚀 [SEMANTIC CACHE HIT] Plan idéntico encontrado (Similitud: {similar_plan.get('similarity', 0):.3f}). Saltando LLM.")
+            _inc_semantic_cache_stat("hit")  # P2-ORCH-2
             return {
                 "semantic_cache_hit": True,
                 "cached_plan_data": plan_data
             }
-                
+
+    # [P2-ORCH-2] Miss real: hubo candidatos evaluados pero ninguno fue aceptado
+    # (las salidas tempranas por sin-embedding/cache-disabled/error NO cuentan
+    # como miss — no medirían el hit-rate del threshold honestamente).
+    _inc_semantic_cache_stat("miss")
     return {"semantic_cache_hit": False, "cached_plan_data": None}
 
 def check_cache_hit(state: PlanState) -> str:
@@ -12609,7 +13465,10 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
     "_inventory_live_degraded",
     "_pantry_degraded_reason",
     "_pantry_correction",
-    "_is_emergency_generation",
+    # [G13-EMERGENCY-FLAG-DEAD · P1-CHUNK-LEARN-3 · 2026-05-29] Removida `_is_emergency_generation`:
+    # era dead-write sin consumer (el comportamiento de emergencia va vía el string `emergency_memory`
+    # en cron_tasks `_refill_emergency_backup`, no vía este flag). Si en el futuro se cablea un consumer
+    # real (e.g. un build_emergency_context que ramifique el prompt), re-añadir aquí + documentar el caller.
     "_plan_start_date_fallback_logged",
     "_pantry_diversity_warning",
     "_pantry_warning_sent",
@@ -12658,6 +13517,16 @@ _TRUSTED_INTERNAL_FORM_KEYS: frozenset = frozenset({
     "_liked_flavor_profiles",
     "_llm_retrospective",
     "_use_adversarial_play",
+    # [A1-KEYDRIFT · 2026-05-29] Dos señales conductuales backend-only derivadas
+    # de `nudge_outcomes` que `_inject_advanced_learning_signals`/`inject_learning_signals_from_profile`
+    # ESCRIBEN (cron_tasks.py:15355/15370 + 15764/15770) y que `build_adherence_context`
+    # LEE (graph_orchestrator.py:4129/4135 → prompts/plan_generator.py:603-620) para emitir
+    # instrucciones obligatorias al LLM ("CONVERSIÓN DE NUDGES CRÍTICA" + "TONO COMPROBADO").
+    # Faltaban acá → `_strip_untrusted_internal_keys` las borraba en silencio (misma clase
+    # que P1-CHUNK-3, trasladada a la capa del strip). Son derivadas server-side, NO claves
+    # del cliente, así que whitelistearlas no debilita la defensa anti-injection P0-A2.
+    "_nudge_conversion_rates",
+    "_successful_tone_strategies",
 
     # graph_orchestrator.py — flags internos (preflight + reroll)
     "_auto_simplify",
@@ -12805,7 +13674,15 @@ _FORM_HINT_ENUMS: dict[str, frozenset[str]] = {
     }),
     "_adherence_hint": frozenset({"low", "high"}),
     "_adherence_ema_hint": frozenset({
-        "temporary_dip", "drastic_change", "improving",
+        # [P2-ORCH-9 · 2026-05-28] 'stable' añadido: el productor
+        # (cron_tasks.inject_learning_signals_from_profile) emite 'stable' en el
+        # caso neutral (el más común). Sin esta entrada, `_validate_form_hint_enums`
+        # lo trataba como out-of-enum → lo limpiaba a None + WARNING falso de
+        # "drift de schema" en CADA generación de adherencia neutral (fatiga de
+        # alerta que entrena a ignorar la alarma P1-A8). El consumidor
+        # `_ema_hint_instructions` no tiene clave 'stable' → no-op reconocido
+        # (sin instrucción extra), que es el comportamiento correcto.
+        "temporary_dip", "drastic_change", "improving", "stable",
     }),
 }
 
@@ -13196,10 +14073,166 @@ def _enqueue_sanitize_metric(
 # ============================================================
 
 
-def _build_fallback_day(nutr: dict, day_number: int) -> dict:
+# ============================================================
+# [P0-ORCH-1 · 2026-05-28] Fallback matemático con filtrado de alérgenos.
+# ------------------------------------------------------------
+# El fallback determinista hardcodeaba un menú huevo+pollo+pescado SIN mirar
+# las restricciones declaradas. Peor: la rama crítica de
+# `_apply_critical_review_guardrails` se dispara JUSTO cuando un plan fue
+# rechazado por violar una alergia/condición médica — y entregaba un plan de
+# contingencia con el MISMO alérgeno (riesgo clase anafilaxia) bajo un
+# disclaimer de "plan seguro". Ahora cada slot elige la primera plantilla
+# cuyos tokens de alérgeno NO intersectan las restricciones del usuario; la
+# ÚLTIMA plantilla de cada pool es neutral (cero tokens) → siempre hay un meal
+# seguro por slot. Over-detección = dirección SEGURA (peor caso: se evita una
+# proteína innecesariamente y cae al template neutral; jamás se sirve el
+# alérgeno declarado).
+#
+# Knob `MEALFIT_FALLBACK_ALLERGEN_FILTER` (default True) revierte sin redeploy
+# al comportamiento previo (restricted_tokens vacío → pool[0] de cada slot =
+# el menú histórico idéntico).
+# Tooltip-anchor: P0-ORCH-1.
+# ============================================================
+FALLBACK_ALLERGEN_FILTER = _env_bool("MEALFIT_FALLBACK_ALLERGEN_FILTER", True)
+
+# token canónico -> keywords (lowercase, sin acentos) que lo delatan en las
+# restricciones declaradas. Las plantillas neutrales (tokens vacíos) cierran
+# la garantía de que SIEMPRE hay un meal seguro por slot.
+_FALLBACK_ALLERGEN_KEYWORDS = {
+    "egg":       ("huevo", "huevos", "egg", "clara de huevo"),
+    "chicken":   ("pollo", "chicken", "pechuga de pollo", "gallina"),
+    "fish":      ("pescado", "pescados", "fish", "atun", "salmon", "tilapia",
+                  "bacalao", "sardina", "mero"),
+    "shellfish": ("marisco", "mariscos", "camaron", "camarones", "langosta",
+                  "cangrejo", "shellfish", "shrimp", "ostra", "calamar", "pulpo"),
+    "beef":      ("carne de res", "ternera", "vacuno", "beef"),
+    "pork":      ("cerdo", "puerco", "pork", "tocino", "jamon", "chorizo",
+                  "salchicha", "embutido"),
+    "dairy":     ("leche", "lacteo", "lacteos", "lactosa", "dairy", "queso",
+                  "yogur", "yogurt", "mantequilla"),
+    "peanut":    ("mani", "peanut", "cacahuate", "cacahuete"),
+    "soy":       ("soya", "soja", "tofu", "edamame"),
+    "gluten":    ("gluten", "trigo", "wheat", "celiaco", "celiaca"),
+    "oats":      ("avena", "oat"),
+    "legume":    ("lenteja", "lentejas", "garbanzo", "garbanzos", "frijol",
+                  "frijoles", "habichuela", "habichuelas", "legumbre", "legumbres"),
+    "nuts":      ("nuez", "nueces", "almendra", "almendras", "frutos secos",
+                  "tree nut", "anacardo", "merey", "pistacho"),
+}
+
+# Des-acentuado mínimo (es-DO) para normalizar el texto de restricciones.
+_FALLBACK_ACCENT_MAP = str.maketrans("áéíóúüñ", "aeiouun")
+
+# Pools ordenados por slot: la PRIMERA entrada reproduce el menú histórico
+# (restricted vacío → comportamiento idéntico); la ÚLTIMA es neutral (sin
+# tokens). Cada entrada: (name, frozenset(tokens), desc, [ingredients]).
+_FALLBACK_MEAL_POOLS = {
+    "Desayuno": [
+        ("Huevos y Avena", frozenset({"egg", "oats", "gluten"}),
+         "Huevos revueltos con avena cocida y fruta.",
+         ["2 huevos", "1/2 taza de avena cocida", "1 fruta de temporada"]),
+        ("Avena con Frutas y Semillas", frozenset({"oats", "gluten"}),
+         "Avena cocida con frutas frescas y semillas.",
+         ["1/2 taza de avena", "frutas variadas", "1 cda de semillas de chía"]),
+        ("Frutas Frescas con Semillas", frozenset(),
+         "Bowl de frutas frescas de temporada con semillas.",
+         ["frutas variadas de temporada", "semillas de girasol o chía", "agua"]),
+    ],
+    "Almuerzo": [
+        ("Pollo y Arroz", frozenset({"chicken"}),
+         "Pechuga a la plancha con arroz blanco y vegetales.",
+         ["pechuga de pollo a la plancha", "arroz blanco", "vegetales al gusto"]),
+        ("Carne de Res y Arroz", frozenset({"beef"}),
+         "Carne de res magra con arroz y vegetales.",
+         ["carne de res magra", "arroz blanco", "vegetales al gusto"]),
+        ("Pescado con Arroz", frozenset({"fish"}),
+         "Filete de pescado con arroz y ensalada.",
+         ["filete de pescado", "arroz blanco", "ensalada verde"]),
+        ("Lentejas con Arroz", frozenset({"legume"}),
+         "Lentejas guisadas con arroz y vegetales.",
+         ["lentejas guisadas", "arroz blanco", "vegetales al gusto"]),
+        ("Arroz con Vegetales y Aguacate", frozenset(),
+         "Arroz con vegetales salteados y aguacate.",
+         ["arroz blanco", "vegetales salteados", "1/2 aguacate"]),
+    ],
+    "Cena": [
+        ("Pescado y Batata", frozenset({"fish"}),
+         "Filete de pescado al horno con batata asada.",
+         ["filete de pescado al horno", "batata asada", "vegetales al vapor"]),
+        ("Pollo con Vegetales", frozenset({"chicken"}),
+         "Pechuga de pollo con vegetales al vapor y batata.",
+         ["pechuga de pollo", "vegetales al vapor", "batata asada"]),
+        ("Carne de Res con Vegetales", frozenset({"beef"}),
+         "Carne de res magra con vegetales y batata.",
+         ["carne de res magra", "vegetales al vapor", "batata asada"]),
+        ("Garbanzos con Vegetales", frozenset({"legume"}),
+         "Garbanzos guisados con vegetales y batata.",
+         ["garbanzos guisados", "vegetales al vapor", "batata asada"]),
+        ("Ensalada de Vegetales con Aguacate", frozenset(),
+         "Ensalada abundante de vegetales con aguacate y aceite de oliva.",
+         ["vegetales variados", "1/2 aguacate", "aceite de oliva"]),
+    ],
+}
+
+
+def _detect_restricted_tokens(form_data: dict) -> frozenset:
+    """[P0-ORCH-1] Extrae los tokens de alérgeno declarados en el formulario.
+
+    Lee allergies / medicalConditions / dislikes / restrictions / intolerances
+    (listas o strings), normaliza (lowercase + sin acentos) y matchea contra
+    `_FALLBACK_ALLERGEN_KEYWORDS`. Over-detección es la dirección SEGURA: un
+    falso positivo solo evita una proteína de más (cae al template neutral).
+    """
+    if not isinstance(form_data, dict):
+        return frozenset()
+    parts = []
+    for key in ("allergies", "medicalConditions", "dislikes",
+                "restrictions", "intolerances", "foodRestrictions"):
+        v = form_data.get(key)
+        if isinstance(v, (list, tuple, set)):
+            parts.extend(str(x) for x in v)
+        elif v:
+            parts.append(str(v))
+    if not parts:
+        return frozenset()
+    text = " ".join(parts).lower().translate(_FALLBACK_ACCENT_MAP)
+    found = set()
+    for token, keywords in _FALLBACK_ALLERGEN_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text:
+                found.add(token)
+                break
+    return frozenset(found)
+
+
+def _fallback_restricted_tokens(form_data: dict) -> frozenset:
+    """[P0-ORCH-1] Wrapper gateado por `MEALFIT_FALLBACK_ALLERGEN_FILTER`.
+    Con el knob OFF retorna vacío → fallback idéntico al histórico."""
+    if not FALLBACK_ALLERGEN_FILTER:
+        return frozenset()
+    return _detect_restricted_tokens(form_data)
+
+
+def _select_safe_fallback_meal(pool: list, restricted_tokens: frozenset):
+    """[P0-ORCH-1] Primera plantilla del pool cuyos tokens NO intersectan las
+    restricciones. El último elemento de cada pool es neutral (tokens vacíos),
+    así que SIEMPRE hay un retorno seguro."""
+    for tmpl in pool:
+        if not (tmpl[1] & restricted_tokens):
+            return tmpl
+    # Inalcanzable en la práctica (pool[-1] es neutral); defensa por si un
+    # refactor futuro elimina la entrada neutral.
+    return pool[-1] if pool else None
+
+
+def _build_fallback_day(nutr: dict, day_number: int,
+                        restricted_tokens: frozenset = frozenset()) -> dict:
     """P1-A5: extraída del closure local de `arun_plan_pipeline`.
 
     Construye un día fallback determinista (3 comidas balanceadas).
+
+    [P0-ORCH-1 · 2026-05-28] `restricted_tokens` filtra alérgenos: cada slot
+    elige la primera plantilla segura. Vacío → menú histórico idéntico.
     """
     target_cal = nutr.get('target_calories', 2000)
     macros_dict = nutr.get('macros', {})
@@ -13207,7 +14240,8 @@ def _build_fallback_day(nutr: dict, day_number: int) -> dict:
     target_car = macros_dict.get('carbs_g', 200)
     target_fat = macros_dict.get('fats_g', 60)
 
-    def create_meal(name, cal_ratio, p_ratio, c_ratio, f_ratio, desc, meal_type):
+    def create_meal(tmpl, cal_ratio, p_ratio, c_ratio, f_ratio, meal_type):
+        name, _tokens, desc, ingredients = tmpl
         return {
             "meal": meal_type,
             "time": "Flexible",
@@ -13220,13 +14254,20 @@ def _build_fallback_day(nutr: dict, day_number: int) -> dict:
             "carbs": int(target_car * c_ratio),
             "fats": int(target_fat * f_ratio),
             "macros": ["Plan Matemático"],
-            "ingredients": ["1 porción de proteína magra", "1 porción de carbohidratos", "Vegetales al gusto"],
+            "ingredients": list(ingredients),
             "recipe": ["Mise en place: Preparar todo", "El Toque de Fuego: Cocinar la proteína", "Montaje: Servir"]
         }
 
-    meal1 = create_meal("Huevos y Avena", 0.3, 0.3, 0.3, 0.3, "Huevos revueltos con avena cocida.", "Desayuno")
-    meal2 = create_meal("Pollo y Arroz", 0.4, 0.4, 0.4, 0.4, "Pechuga a la plancha con arroz blanco y vegetales.", "Almuerzo")
-    meal3 = create_meal("Pescado y Batata", 0.3, 0.3, 0.3, 0.3, "Filete de pescado al horno con batata asada.", "Cena")
+    # (meal_type, ratio_cal, ratio_pro, ratio_car, ratio_fat) — ratios idénticos al menú histórico.
+    _slots = (
+        ("Desayuno", 0.3, 0.3, 0.3, 0.3),
+        ("Almuerzo", 0.4, 0.4, 0.4, 0.4),
+        ("Cena",     0.3, 0.3, 0.3, 0.3),
+    )
+    meals = []
+    for meal_type, r_cal, r_pro, r_car, r_fat in _slots:
+        tmpl = _select_safe_fallback_meal(_FALLBACK_MEAL_POOLS[meal_type], restricted_tokens)
+        meals.append(create_meal(tmpl, r_cal, r_pro, r_car, r_fat, meal_type))
 
     return {
         "day": day_number,
@@ -13235,11 +14276,12 @@ def _build_fallback_day(nutr: dict, day_number: int) -> dict:
         "total_protein": target_pro,
         "total_carbs": target_car,
         "total_fats": target_fat,
-        "meals": [meal1, meal2, meal3],
+        "meals": meals,
     }
 
 
-def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_offset: int = 0) -> dict:
+def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_offset: int = 0,
+                               restricted_tokens: frozenset = frozenset()) -> dict:
     """P1-A5: extraída del closure local de `arun_plan_pipeline`.
 
     Fallback matemático determinista para evitar caídas del sistema.
@@ -13247,6 +14289,9 @@ def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_off
     P0-1: `num_days` ahora se respeta — antes estaba hardcodeado a 3 y entregaba
     plans truncados al frontend cuando el usuario pidió 7. `day_offset` permite
     continuar la numeración cuando se rellenan días faltantes a un plan parcial.
+
+    [P0-ORCH-1 · 2026-05-28] `restricted_tokens` (de `_fallback_restricted_tokens`)
+    filtra alérgenos en cada slot. Vacío → menú histórico idéntico.
     """
     target_cal = nutr.get('target_calories', 2000)
     macros_dict = nutr.get('macros', {})
@@ -13255,9 +14300,9 @@ def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_off
     target_fat = macros_dict.get('fats_g', 60)
 
     safe_num_days = max(1, int(num_days or 1))
-    days = [_build_fallback_day(nutr, day_offset + i + 1) for i in range(safe_num_days)]
+    days = [_build_fallback_day(nutr, day_offset + i + 1, restricted_tokens) for i in range(safe_num_days)]
 
-    return {
+    plan = {
         "main_goal": goal,
         "insights": ["Este es un plan de contingencia generado matemáticamente debido a indisponibilidad temporal de la IA."],
         "calories": target_cal,
@@ -13288,6 +14333,12 @@ def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_off
             "indisponibilidad temporal de la IA. Por favor regenera más tarde."
         ),
     }
+    # [P0-ORCH-1] Observabilidad: marcar cuando el fallback evitó alérgenos
+    # declarados (útil para Grafana / debugging — el plan sigue siendo válido).
+    if restricted_tokens:
+        plan["_allergen_filtered"] = True
+        plan["_allergen_tokens"] = sorted(restricted_tokens)
+    return plan
 
 
 def _is_day_valid(day: dict) -> bool:
@@ -13314,9 +14365,14 @@ def _is_plan_complete(plan: dict, requested_days: int) -> bool:
     return all(_is_day_valid(d) for d in days)
 
 
-def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int) -> bool:
+def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int,
+                         restricted_tokens: frozenset = frozenset()) -> bool:
     """P1-A5: extraída del closure local. `nutrition` y `requested_days`
     ahora kwargs explícitos.
+
+    [P0-ORCH-1 · 2026-05-28] `restricted_tokens` se propaga a los
+    `_build_fallback_day` que reemplazan/rellenan días, para que un plan
+    parcial reparado tampoco reintroduzca alérgenos declarados.
 
     P0-2: Repara un plan parcial in-place. Retorna True si reparó algo.
 
@@ -13366,14 +14422,14 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int) ->
                 d["day"] = idx + 1
             new_days.append(d)
         else:
-            new_days.append(_build_fallback_day(nutrition, idx + 1))
+            new_days.append(_build_fallback_day(nutrition, idx + 1, restricted_tokens))
             replaced_count += 1
             repaired = True
 
     # Rellenar faltantes
     filled_count = 0
     while len(new_days) < requested_days:
-        new_days.append(_build_fallback_day(nutrition, len(new_days) + 1))
+        new_days.append(_build_fallback_day(nutrition, len(new_days) + 1, restricted_tokens))
         filled_count += 1
         repaired = True
 
@@ -13637,9 +14693,10 @@ def _apply_critical_review_guardrails(
 
     # [P1-32] Caso anómalo: el plan YA es `_is_fallback=True` PERO
     # presenta `_schema_invalid=True` o un rechazo médico crítico.
-    # `_get_extreme_fallback_plan()` siempre produce un plan válido y
-    # médicamente seguro (template matemático sin LLM), así que esta
-    # combinación NUNCA debería ocurrir naturalmente. Si llegamos aquí
+    # `_get_extreme_fallback_plan()` produce un plan válido y, tras P0-ORCH-1
+    # (2026-05-28), allergen-aware cuando se le pasa `restricted_tokens` (la
+    # regeneración de abajo lo hace), así que esta combinación NUNCA debería
+    # ocurrir naturalmente. Si llegamos aquí
     # con ese estado, indica:
     #   (a) Mutación downstream corrompió el plan post-fallback (race,
     #       bug aislado en `_repair_partial_plan`, etc.).
@@ -13695,6 +14752,9 @@ def _apply_critical_review_guardrails(
             nutrition,
             actual_form_data.get("mainGoal", "Salud General"),
             num_days=requested_days,
+            # [P0-ORCH-1] CRÍTICO: esta rama se dispara por rechazo médico/alergia.
+            # El fallback DEBE excluir el alérgeno declarado, nunca reintroducirlo.
+            restricted_tokens=_fallback_restricted_tokens(actual_form_data),
         )
         fallback_plan["_is_fallback"] = True
         fallback_plan["_critical_rejection"] = True
@@ -13764,6 +14824,7 @@ def _apply_final_defense_guardrails(
             nutrition,
             actual_form_data.get("mainGoal", "Salud General"),
             num_days=requested_days,
+            restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
         )
     elif not _is_plan_complete(plan_final, requested_days):
         days_count = len(plan_final.get("days") or [])
@@ -13771,7 +14832,8 @@ def _apply_final_defense_guardrails(
         logger.warning(f"🛡️ [P0-2 GUARDRAIL] Plan terminó incompleto pese a graph success. "
               f"Días: {days_count}/{requested_days}, inválidos: {invalid_count}. Reparando.")
         # P1-9: `_repair_partial_plan` ya setea el flag en plan_final si repara.
-        _repair_partial_plan(plan_final, nutrition=nutrition, requested_days=requested_days)
+        _repair_partial_plan(plan_final, nutrition=nutrition, requested_days=requested_days,
+                             restricted_tokens=_fallback_restricted_tokens(actual_form_data))  # [P0-ORCH-1]
 
     # Inyectar profile_embedding para que el caller lo guarde en la BD
     if final_state.get("profile_embedding") and final_state.get("plan_result"):
@@ -14211,7 +15273,13 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
     # Rollback sin redeploy: `MEALFIT_MIN_LEARNING_CONFIDENCE=0.0` desactiva
     # el gate (vuelta al comportamiento pre-fix).
     _prev_quality = actual_form_data.get("_previous_plan_quality")
-    _quality_hist = actual_form_data.get("quality_history", [])
+    # [A4-KEYDRIFT · 2026-05-29] La clave que el pipeline de chunks ESCRIBE es
+    # `quality_history_chunks` (cron_tasks.py:15281, lista de floats 0-1). La clave
+    # legacy `quality_history` (sin sufijo) NO tiene ningún writer en backend ni
+    # frontend → el fallback de confianza estaba MUERTO justo en el caso para el que
+    # fue diseñado (P2-CHUNK-4 omite `_previous_plan_quality` con consumed<3, y este
+    # promedio del historial era la red de seguridad). Fallback al nombre viejo por compat.
+    _quality_hist = actual_form_data.get("quality_history_chunks") or actual_form_data.get("quality_history", [])
     _adherence_hint = actual_form_data.get("_adherence_hint")
     _adherence_ema_hint = actual_form_data.get("_adherence_ema_hint")
 
@@ -14856,7 +15924,13 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 from routers.plans import is_session_cancelled as _is_cancelled
             except Exception:
                 _is_cancelled = lambda _sid: False
-            async for event in plan_graph.astream(initial_state, stream_mode="values"):
+            # [P2-ORCH-12] recursion_limit explícito: red de seguridad si un
+            # refactor futuro del retry deja un ciclo sin incrementar `attempt`
+            # (GraphRecursionError rápido vs colgar hasta el timeout de 720s).
+            async for event in plan_graph.astream(
+                initial_state, stream_mode="values",
+                config={"recursion_limit": GRAPH_RECURSION_LIMIT},
+            ):
                 latest_state[0] = event
                 # [P6-CANCEL-PIPELINE-CHECK] Self-abort entre nodos
                 if _pipeline_session_id and _is_cancelled(_pipeline_session_id):
@@ -14912,16 +15986,18 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             final_state = await asyncio.wait_for(run_graph(), timeout=GLOBAL_PIPELINE_TIMEOUT_S)
         except Exception as e:
             logger.error(f"🚨 [EXTREME GRACEFUL DEGRADATION] Error crítico en pipeline ({type(e).__name__}): {e}")
-            # [P1-SPEND-CAP-ALERT · 2026-05-28] Distinguir el 429 "spending cap"
-            # de Gemini (persistente hasta subir el cap) de un fallo transitorio.
-            # Reusa el detector canónico de shopping_calculator (lazy import: sin
-            # ciclo, shopping_calculator NO importa graph_orchestrator).
-            _spend_cap_hit = False
-            try:
-                from shopping_calculator import _is_gemini_spending_cap_error
-                _spend_cap_hit = _is_gemini_spending_cap_error(e)
-            except Exception:
-                _spend_cap_hit = False
+            # [P1-SPEND-CAP-ALERT · 2026-05-28 · P1-ORCH-2 · 2026-05-28]
+            # Distinguir el 429 "spending cap" de Gemini (persistente hasta subir
+            # el cap) de un fallo transitorio. Reusa el detector canónico
+            # (`_is_plan_spend_cap_error`, lazy import sin ciclo) sobre la
+            # excepción que escapó, PERO también consulta el latch global
+            # (`_plan_spend_cap_active`): durante un cap real, lo que escapa al
+            # handler suele ser un SÍNTOMA downstream ("Circuit Breaker OPEN",
+            # "Todos los workers fallaron") que NO contiene el string del cap —
+            # sin el latch perdíamos la señal y mostrábamos el mensaje falso
+            # "IA saturada, intenta en 1-2 min". El latch lo activó el primer
+            # nodo que vio el 429 (vía `_record_cb_failure_unless_transient`).
+            _spend_cap_hit = _is_plan_spend_cap_error(e) or _plan_spend_cap_active()
             final_state = latest_state[0] if latest_state else {}
             # [P1-26] Flush de TODOS los token buffers pendientes ANTES de
             # entregar el fallback. Sin esto, tokens acumulados en buffers
@@ -14959,13 +16035,15 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     nutrition,
                     actual_form_data.get("mainGoal", "Salud General"),
                     num_days=requested_days,
+                    restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
                 )
                 final_state["attempt"] = 1
                 final_state["review_passed"] = True
             else:
                 # P1-9: `_repair_partial_plan` ya setea `plan_partial["_is_fallback"]=True`
                 # cuando hace cualquier reparación. Nada más que hacer aquí.
-                _repair_partial_plan(plan_partial, nutrition=nutrition, requested_days=requested_days)
+                _repair_partial_plan(plan_partial, nutrition=nutrition, requested_days=requested_days,
+                                     restricted_tokens=_fallback_restricted_tokens(actual_form_data))  # [P0-ORCH-1]
 
             # [P1-SPEND-CAP-ALERT · 2026-05-28] Si el pipeline cayó por el spending
             # cap de Gemini: (1) marcar plan_result para que routers/plans.py emita
@@ -15090,6 +16168,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 nutrition,
                 actual_form_data.get("mainGoal", "Salud General"),
                 num_days=requested_days,
+                restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
             )
             # Marcar para que el caller (router/cron) NO lo persista como plan
             # real. `_is_fallback` ya lo setea `_get_extreme_fallback_plan`, pero

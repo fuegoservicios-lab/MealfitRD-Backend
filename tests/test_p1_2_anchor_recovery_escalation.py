@@ -242,11 +242,14 @@ def test_recover_escalates_when_attempts_exceed_max(
         "paused_seconds": 9999,
     }
     # attempts ya está en MAX-1; este tick lo lleva a MAX → escala.
+    # [P1-CHUNK-4] started_at antiguo → el gate wall-clock (max_attempts ×
+    # CHUNK_RECOVERY_MIN_WALL_MINUTES_PER_ATTEMPT) se cumple y permite escalar.
     anchor_row = {
         "psd": None,
         "gsd": None,
         "created_at": None,
         "attempts": CHUNK_ANCHOR_RECOVERY_MAX_ATTEMPTS - 1,
+        "started_at": "2020-01-01T00:00:00+00:00",
     }
 
     def query_side_effect(sql, *args, **kwargs):

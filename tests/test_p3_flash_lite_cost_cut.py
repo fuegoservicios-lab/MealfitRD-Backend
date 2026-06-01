@@ -88,11 +88,12 @@ def test_plan_title_no_hardcoded_model_in_generate_plan_title():
     `model="gemini-3.1-flash-lite"` literal (debe usar `_plan_title_model_name()`).
     Si reaparece el hardcoded, el knob queda no-op.
 
-    Nota: ai_helpers.py contiene 3 callsites ADICIONALES con `model="gemini-3.1-flash-lite"`
-    hardcoded (`expand_recipe_agent`, `generate_llm_retrospective`,
-    `extract_liked_flavor_profiles`) — son deuda P3-PREVIEW-MODEL-KNOB
-    separada (tracked, no cubierta por este test). Este test se limita
-    al callsite tocado por P3-FLASH-LITE-COST-CUT.
+    Nota: ai_helpers.py contiene 2 callsites ADICIONALES con `model="gemini-3.1-flash-lite"`
+    hardcoded (`generate_llm_retrospective`, `extract_liked_flavor_profiles`)
+    — son deuda P3-PREVIEW-MODEL-KNOB separada (tracked, no cubierta por este
+    test). `expand_recipe_agent` ya usa el knob `_recipe_expand_model_name()`
+    (P1-RECIPE-EXPAND-FAILSIGNAL · 2026-05-30). Este test se limita al callsite
+    tocado por P3-FLASH-LITE-COST-CUT.
     """
     src = _AI_HELPERS_PY.read_text(encoding="utf-8")
     # Extraer cuerpo de generate_plan_title: desde `def generate_plan_title`

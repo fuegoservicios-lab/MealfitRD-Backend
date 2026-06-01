@@ -32,7 +32,7 @@ from constants import (
 )
 from db import get_user_profile, update_user_health_profile, update_user_health_profile_atomic, get_user_ingredient_frequencies
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
-from knobs import _env_str  # [P3-FLASH-LITE-COST-CUT · 2026-05-21]
+from knobs import _env_str, _env_float  # [P3-FLASH-LITE-COST-CUT · 2026-05-21] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,37 @@ logger = logging.getLogger(__name__)
 # Tooltip-anchor: P3-FLASH-LITE-COST-CUT.
 def _plan_title_model_name() -> str:
     return _env_str("MEALFIT_PLAN_TITLE_MODEL", "gemini-3.1-flash-lite")
+
+
+# [P1-RECIPE-EXPAND-FAILSIGNAL · 2026-05-30] Knob para overridear el modelo del
+# "Chef AI" (`expand_recipe_agent`) sin redeploy — mismo patrón que
+# `_plan_title_model_name` (P3-FLASH-LITE-COST-CUT). Pre-fix: el callsite
+# hardcodeaba `model="gemini-3.1-flash-lite"`, violando P3-PREVIEW-MODEL-KNOB
+# (un retiro del modelo preview habría hecho fallar TODA expansión sin swap
+# posible). Default = lite (cero cambio de comportamiento).
+# Tooltip-anchor: P1-RECIPE-EXPAND-FAILSIGNAL-MODEL.
+def _recipe_expand_model_name() -> str:
+    return _env_str("MEALFIT_RECIPE_EXPAND_MODEL", "gemini-3.1-flash-lite")
+
+
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke compartido por los 4
+# constructores `ChatGoogleGenerativeAI` de este módulo: `generate_plan_title`
+# (callsite síncrono en services.py post-save del plan), `expand_recipe_agent`
+# (endpoint síncrono api_expand_recipe), `generate_llm_retrospective` y
+# `extract_liked_flavor_profiles` (corren en el thread del chunk-worker /
+# nightly cron via _persist_nightly_learning_signals). Pre-fix: ninguno pasaba
+# `timeout=`, así que un Gemini colgado bloqueaba indefinidamente el thread del
+# threadpool de FastAPI (title/recipe) o el thread del cron (retrospectiva), con
+# `max_retries` default del SDK (5) que NO avanza sobre sockets colgados. El
+# `timeout=` propaga al deadline gRPC → DeadlineExceeded, capturado por los
+# `except Exception` existentes (degradan a fallback determinístico). Default
+# 30s; clamp (0, 120]. Knob auto-registrado. Tooltip-anchor: P2-LLM-TIMEOUT-SWEEP.
+def _ai_helpers_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_AI_HELPERS_LLM_TIMEOUT_S",
+        30.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
 
 
 def generate_plan_title(plan_data: dict) -> str:
@@ -94,7 +125,8 @@ Responde SOLO con el título, nada más."""
         title_llm = ChatGoogleGenerativeAI(
             model=_plan_title_model_name(),
             temperature=0.9,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
         response = title_llm.invoke(prompt)
         content = response.content
@@ -869,39 +901,64 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     logger.info(f"✅ [ANTI MODE-COLLAPSE] Fruta sugerida: {chosen_fruits}")
     return prompt
 
-def expand_recipe_agent(meal_data: dict) -> list[str]:
-    """Expande una receta genérica en instrucciones súper detalladas actuando como un Chef Instructor Premium."""
+def expand_recipe_agent(meal_data: dict) -> Optional[list[str]]:
+    """Expande una receta genérica en instrucciones súper detalladas actuando
+    como un Chef Instructor Premium.
+
+    [P1-RECIPE-EXPAND-FAILSIGNAL · 2026-05-30] Devuelve `None` cuando la
+    expansión NO produce contenido nuevo válido (excepción LLM, circuit
+    breaker abierto, respuesta vacía o no-lista). Pre-fix: este helper
+    devolvía SILENCIOSAMENTE la receta original (`meal_data.get("recipe")`)
+    en cualquier fallo. El endpoint `/recipe/expand` interpretaba ese eco como
+    éxito → marcaba `isExpanded=True` + persistía + cobraba cuota, y el guard
+    del frontend (`if (meal.isExpanded) return`) jamás reintentaba — un único
+    blip de Gemini dejaba la comida (y, vía Camino-2, toda ocurrencia con la
+    misma receta) atrapada permanentemente en sus pasos tersos sin vía de
+    retry. Señalizar fallo con `None` permite al endpoint NO marcar el flag,
+    NO persistir y NO cobrar cuota, devolviendo la original solo para display.
+
+    Validación de salida (cierra schema gap P2 #9): la lista debe ser no-vacía
+    y contener al menos un paso string no-blank. Una respuesta degenerada
+    (lista vacía, o pasos todos blancos) se trata como fallo, NO como
+    expansión válida.
+
+    Tooltip-anchor: P1-RECIPE-EXPAND-FAILSIGNAL-AGENT
+    """
     logger.info(f"👨‍🍳 [CHEF AGENT] Expandiendo instrucciones para: {meal_data.get('name', 'Receta')}")
-    
+
     prompt = RECIPE_EXPANSION_PROMPT.format(
         name=meal_data.get("name", "Receta sin nombre"),
         desc=meal_data.get("desc", ""),
         ingredients_json=json.dumps(meal_data.get("ingredients", []), ensure_ascii=False),
         recipe_json=json.dumps(meal_data.get("recipe", []), ensure_ascii=False)
     )
-    
+
     try:
         llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite",
+            model=_recipe_expand_model_name(),  # [P1-RECIPE-EXPAND-FAILSIGNAL] knob, era hardcoded
             temperature=0.7,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         ).with_structured_output(ExpandedRecipeModel)
-        
+
         @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=5))
         def _invoke():
             return llm.invoke(prompt)
-            
+
         response = _invoke()
-        if hasattr(response, "recipe") and response.recipe:
-            logger.info("✅ [CHEF AGENT] Receta expandida con éxito.")
-            return response.recipe
-        else:
-            logger.warning("⚠️ [CHEF AGENT] El modelo no regresó la lista 'recipe'. Usando original.")
-            return meal_data.get("recipe", [])
-            
+        steps = getattr(response, "recipe", None) if response is not None else None
+        # Aceptar solo una lista no-vacía con ≥1 paso string no-blank.
+        if isinstance(steps, list):
+            clean_steps = [s for s in steps if isinstance(s, str) and s.strip()]
+            if clean_steps:
+                logger.info("✅ [CHEF AGENT] Receta expandida con éxito.")
+                return clean_steps
+        logger.warning("⚠️ [CHEF AGENT] El modelo no regresó una lista 'recipe' válida. Señalizando fallo (None).")
+        return None
+
     except Exception as e:
         logger.error(f"❌ [CHEF AGENT] Falla al expandir receta: {e}")
-        return meal_data.get("recipe", [])
+        return None
 
 
 def generate_llm_retrospective(user_id: str, plan_data: dict, consumed_records: list, recent_likes: list, recent_rejections: list) -> str:
@@ -941,13 +998,14 @@ REGLAS DE SALIDA:
         llm = ChatGoogleGenerativeAI(
             model="gemini-3.1-flash-lite",
             temperature=0.2,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
         response = llm.invoke(prompt)
         content = response.content
         if isinstance(content, list):
             content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
-        
+
         retrospective = str(content).strip()
         logger.info(f"✅ [LLM-as-Judge] Retrospectiva generada: {retrospective[:100]}...")
         return retrospective
@@ -978,7 +1036,8 @@ Ejemplos de características: "Prefiere desayunos salados con plátano", "Le gus
         llm = ChatGoogleGenerativeAI(
             model="gemini-3.1-flash-lite",
             temperature=0.2,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         ).with_structured_output(FlavorProfiles)
         
         response = llm.invoke(prompt)

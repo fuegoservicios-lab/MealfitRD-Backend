@@ -3,8 +3,27 @@ import logging
 from langchain_core.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
+from knobs import _env_float
 
 logger = logging.getLogger(__name__)
+
+
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Cohorte omitida del sweep original. La tool
+# `consultar_base_datos_medica` se despacha al `_FACT_CHECK_EXECUTOR`
+# (ThreadPoolExecutor, default 2 workers; graph_orchestrator.py) cuyo thread NO se
+# puede matar. El `asyncio.wait_for(asyncio.shield(future), 20s)` libera al caller
+# async pero deja el future corriendo "para que pueda completar y liberar el slot".
+# Si `clinical_llm.invoke` cuelga (socket Gemini sin respuesta) sin timeout, el slot
+# NUNCA se libera → tras 2 colgadas ambos workers quedan ocupados forever → todo
+# fact-check médico bloquea + degrada al fallback precautorio SIN alerta. El
+# `timeout=` debe ser < el cap downstream de 20s para que el deadline del LLM
+# dispare primero y libere el slot del pool.
+def _medical_tool_llm_timeout_s() -> float:
+    return _env_float(
+        "MEALFIT_MEDICAL_TOOL_LLM_TIMEOUT_S",
+        15.0,
+        validator=lambda v: 0.0 < v <= 60.0,
+    )
 
 
 def _medical_tool_model_name() -> str:
@@ -53,7 +72,10 @@ def consultar_base_datos_medica(query: str) -> str:
             model=_medical_tool_model_name(),
             temperature=0.0, # Determinista para evitar alucinaciones
             google_api_key=os.environ.get("GEMINI_API_KEY"),
-            max_retries=1
+            max_retries=1,
+            # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline < 20s del _FACT_CHECK
+            # _TOOL_TIMEOUT para que el LLM corte primero y libere el slot del pool.
+            timeout=_medical_tool_llm_timeout_s(),
         )
         
         sys_prompt = """

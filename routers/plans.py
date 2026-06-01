@@ -45,7 +45,7 @@ from graph_orchestrator import (
     _merge_other_text_fields,
 )
 from ai_helpers import expand_recipe_agent
-from services import _save_plan_and_track_background, _process_swap_rejection_background, save_partial_plan_get_id
+from services import _save_plan_and_track_background, _process_swap_rejection_background, save_partial_plan_get_id, _persist_plan_persist_failed_alert
 from db_inventory import restock_inventory, consume_inventory_items_completely
 from rate_limiter import RateLimiter
 from schemas import PUBLIC_SSE_EVENTS  # [P1-11] contrato público de eventos SSE
@@ -87,6 +87,18 @@ _PLAN_GEN_LIMITER = RateLimiter(max_calls=3, period_seconds=60)
 # `ip:<host>` para anon (vía RateLimiter P1-6).
 _RECALC_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 _PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
+
+# [P2-GUEST-LLM-RATELIMIT · 2026-05-30] `/swap-meal` y `/recipe/expand` invocan
+# Gemini pero solo tenían `Depends(verify_api_quota)`. Para un GUEST (no
+# autenticado) el paywall mensual NO aplica → un atacante podía martillar
+# cualquiera de los dos endpoints sin tope, amplificando costo de LLM contra
+# nuestra cuota. Estos limiters bucketean por `verified_user_id` o `ip:<host>`
+# (RateLimiter P1-6), capando el burst per-IP de anon sin estorbar el uso
+# legítimo (un usuario real no hace >12 swaps / >15 expansiones por minuto). Se
+# AÑADEN a `verify_api_quota` (paywall) — mismo patrón que `/analyze` con
+# `_PLAN_GEN_LIMITER`. Tooltip-anchor: P2-GUEST-LLM-RATELIMIT.
+_SWAP_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
+_EXPAND_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
 
 # [P1-16] Registry global de session_ids cancelados durante la generación.
 # Cuando el usuario clickea "Cancelar" en el frontend, el SSE se aborta
@@ -464,7 +476,7 @@ _MAIN_GOAL_ENUM = frozenset({
 # downstream existente.
 _SCHEDULE_TYPE_ENUM = frozenset({"standard", "night_shift", "variable"})
 _COOKING_TIME_ENUM  = frozenset({"none", "30min", "1hour", "plenty"})
-_BUDGET_ENUM        = frozenset({"low", "medium", "high", "unlimited"})
+_BUDGET_ENUM        = frozenset({"low", "medium", "high", "unlimited", "custom"})
 _GROCERY_DURATION_ENUM = frozenset({"weekly", "biweekly", "monthly"})
 _SLEEP_HOURS_ENUM   = frozenset({"< 6 horas", "6-7 horas", "7-8 horas", "> 8 horas"})
 _STRESS_LEVEL_ENUM  = frozenset({"Bajo", "Moderado", "Alto", "Muy Alto"})
@@ -475,7 +487,7 @@ _STRESS_LEVEL_ENUM  = frozenset({"Bajo", "Moderado", "Alto", "Muy Alto"})
 _NON_CRITICAL_ENUM_VALIDATIONS = (
     ("scheduleType",    _SCHEDULE_TYPE_ENUM,    True,  "standard|night_shift|variable"),
     ("cookingTime",     _COOKING_TIME_ENUM,     True,  "none|30min|1hour|plenty"),
-    ("budget",          _BUDGET_ENUM,           True,  "low|medium|high|unlimited"),
+    ("budget",          _BUDGET_ENUM,           True,  "low|medium|high|unlimited|custom"),
     ("groceryDuration", _GROCERY_DURATION_ENUM, True,  "weekly|biweekly|monthly"),
     ("sleepHours",      _SLEEP_HOURS_ENUM,      False, "< 6 horas|6-7 horas|7-8 horas|> 8 horas"),
     ("stressLevel",     _STRESS_LEVEL_ENUM,     False, "Bajo|Moderado|Alto|Muy Alto"),
@@ -1456,6 +1468,25 @@ def _postprocess_pipeline_result(
                 plan_start_date=plan_start_date,
                 tz_offset_mins=tz_offset_mins,
             )
+        else:
+            # [P2-PLAN-PERSIST-FAILED · 2026-05-30] `save_partial_plan_get_id`
+            # devolvió None: el INSERT de meal_plans falló (pool exhaustion,
+            # statement_timeout, CHECK I8 meal_plans_complete_requires_days,
+            # serialization error...). Pre-fix esto se tragaba en silencio → el
+            # caller (SSE generator) marcaba el KV `complete` con plan_id_final=None
+            # y emitía el evento `complete`: el usuario veía éxito pero el plan NO
+            # existía (historial/dashboard vacíos, chunks 2..N nunca encolados) y
+            # NINGÚN system_alert se levantaba. Marcamos un flag que los 3
+            # consumidores (sync L2494, SSE L3233, done-callback L2933) propagan
+            # como FALLA al usuario (error event / 503 / KV failed), y emitimos el
+            # system_alert para visibilidad operacional. Tooltip-anchor: P2-PLAN-PERSIST-FAILED.
+            result["_persist_failed"] = True
+            logger.error(
+                f"🛑 [P2-PLAN-PERSIST-FAILED] save_partial_plan_get_id devolvió None "
+                f"(INSERT meal_plans fallido) user={actual_user_id or 'guest'} "
+                f"transport={transport_label}. El plan NO se persistió — propagando como error."
+            )
+            _persist_plan_persist_failed_alert(actual_user_id, f"chunk_insert_failed:{transport_label}")
         if actual_user_id:
             from cron_tasks import _seed_emergency_backup_if_empty
             background_tasks.add_task(
@@ -1808,6 +1839,22 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
                     # 1. Atomic Shift (in-memory, saved at the end within transaction)
                     if needs_shift:
                         shift_amount = min(days_since_creation, len(shifted_days))
+                        # [P1-HIST-COMPLETE-PROGRESS · 2026-05-31] Preservar los
+                        # días que el shift PODA del array vivo, para que el
+                        # Historial muestre el progreso COMPLETO (todos los días
+                        # generados, incluidos los que ya pasaron). El Dashboard
+                        # "Tu Menú" y Recetas siguen usando `days` (ventana
+                        # rolling, renumerada 1..N que el chunk worker requiere);
+                        # SOLO el Historial lee `_archived_days`. Es aditivo: no
+                        # altera el slice ni el renumerado de abajo. Cap defensivo
+                        # para no crecer sin límite (a lo sumo el plan completo).
+                        if shift_amount > 0:
+                            _archived = shifted_data.get("_archived_days")
+                            if not isinstance(_archived, list):
+                                _archived = []
+                            _archived.extend(copy.deepcopy(shifted_days[:shift_amount]))
+                            _arch_cap = (total_planned_days if isinstance(total_planned_days, int) and total_planned_days > 0 else 30) + 31
+                            shifted_data["_archived_days"] = _archived[-_arch_cap:]
                         shifted_days = shifted_days[shift_amount:]
 
                     # 2. Update day names AND renumber days 1..N (requerido para continuidad del chunk worker)
@@ -2507,6 +2554,23 @@ def api_analyze(
             transport_label="sync",  # [P0-FIX-SEED] → context_label="seed_chunk1_sync"
         )
 
+        # [P2-PLAN-PERSIST-FAILED · 2026-05-30] Si la persistencia chunking falló
+        # (INSERT meal_plans → None), NO devolver un plan "exitoso" que no existe en
+        # DB. Devolver 503 para que el frontend muestre reintento (el alert ya se
+        # emitió en _postprocess_pipeline_result).
+        if isinstance(result, dict) and result.get("_persist_failed"):
+            logger.error(
+                f"🛑 [P2-PLAN-PERSIST-FAILED/sync] Plan no persistido — devolviendo 503. "
+                f"user={actual_user_id or 'guest'}"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Generamos tu plan pero no pudimos guardarlo por un problema "
+                    "temporal. Por favor intenta de nuevo en unos segundos."
+                ),
+            )
+
         # [P0-2] Adjuntar resumen de pantry-degraded al body + headers HTTP.
         # Cubre el caso P0-1 (initial chunk degraded) y el path futuro donde el
         # primer chunk ya viene marcado per-día — el frontend recibe la señal en
@@ -2924,6 +2988,34 @@ async def api_analyze_stream(
                             _result = pipeline_result.get("result")
                             if not _result:
                                 return
+                            # [P2-PIPELINE-FALLBACK-GUARD-DONE · 2026-05-30] Mismo guard
+                            # que los 2 paths reales (sync L2447 + SSE L3157): si el
+                            # pipeline devolvió un plan de emergencia matemático
+                            # (`_is_fallback`, LLM upstream caído), NO persistirlo via este
+                            # callback. Sin el guard, cuando el SSE generator muere ANTES de
+                            # procesar `_done` (la razón misma de existir de este callback) un
+                            # plan "Fallback: pollo y arroz" quedaba persistido + se encolaban
+                            # N chunks futuros → el usuario lo veía en su historial por una
+                            # semana. Marcamos KV failed para que el frontend muestre el
+                            # mensaje de reintento. Tooltip-anchor: P2-PIPELINE-FALLBACK-GUARD-DONE.
+                            if isinstance(_result, dict) and _result.get("_is_fallback"):
+                                logger.warning(
+                                    f"🚨 [P2-PIPELINE-FALLBACK-GUARD-DONE] Pipeline devolvió "
+                                    f"plan de emergencia; NO se persiste via done-callback. "
+                                    f"user={_deep_search_user_id[:8]}"
+                                )
+                                try:
+                                    from db_plans import upsert_pending_pipeline
+                                    upsert_pending_pipeline(
+                                        _deep_search_user_id,
+                                        status="failed",
+                                        error="llm_unavailable_fallback",
+                                    )
+                                except Exception as _kv_e:
+                                    logger.warning(
+                                        f"[P2-PIPELINE-FALLBACK-GUARD-DONE] KV failed update no-op: {_kv_e!r}"
+                                    )
+                                return
                             # Recomputar memory_ctx desde scope del endpoint
                             # (mismo cálculo que el SSE generator hace antes
                             # del postprocess original).
@@ -2953,6 +3045,28 @@ async def api_analyze_stream(
                                 # Ejecutando fallback..." que es único al fallback path.
                                 transport_label="sse",
                             )
+                            # [P2-PLAN-PERSIST-FAILED · 2026-05-30] Mismo guard que los
+                            # otros 2 consumidores: si la persistencia chunking falló, marcar
+                            # KV failed (no `complete` con plan_id_final=None) para que el
+                            # frontend que vuelve vía /pending-status vea el error, no un
+                            # phantom complete. El alert ya se emitió en el postprocess.
+                            if isinstance(_result, dict) and _result.get("_persist_failed"):
+                                logger.error(
+                                    f"🛑 [P2-PLAN-PERSIST-FAILED/done-callback] Plan no persistido "
+                                    f"— marcando KV failed. user={_deep_search_user_id[:8]}"
+                                )
+                                try:
+                                    from db_plans import upsert_pending_pipeline
+                                    upsert_pending_pipeline(
+                                        _deep_search_user_id,
+                                        status="failed",
+                                        error="plan_persist_failed",
+                                    )
+                                except Exception as _kv_e:
+                                    logger.warning(
+                                        f"[P2-PLAN-PERSIST-FAILED/done-callback] KV failed update no-op: {_kv_e!r}"
+                                    )
+                                return
                             _plan_id_final = (
                                 _result.get("id") or _result.get("plan_id")
                                 if isinstance(_result, dict) else None
@@ -3216,14 +3330,26 @@ async def api_analyze_stream(
                                 update_reason=data.get("update_reason"),
                             )
 
-                            # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15] Pre-fix tenía re-check
-                            # de disconnect aquí. Ahora ya NO cortamos persistencia.
+                            # [P1-DEEP-SEARCH-PIPELINE · 2026-05-15 · re-fixed
+                            # P2-PIPELINE-DISCONNECT-PERSIST · 2026-05-30] Pre-fix este
+                            # re-check hacía `break` ANTES del postprocess + KV-complete.
+                            # Pero el sentinel `_sse_completed_naturally` ya está True (se
+                            # setea al recibir `_done`), así que el done-callback hace no-op →
+                            # con el `break` el plan NUNCA se persistía y el KV
+                            # `pending_pipeline:<user>` quedaba en status='generating' PARA
+                            # SIEMPRE (spinner perpetuo al volver; bug clase plan bf6f1383). El
+                            # comentario YA decía "ya NO cortamos persistencia" pero el `break`
+                            # seguía vivo — contradicción detectada en audit 2026-05-30. Igual
+                            # que el check de disconnect de arriba: el plan huérfano es FEATURE;
+                            # solo logueamos y CONTINUAMOS para que el postprocess + KV-complete
+                            # corran y el user recupere el plan vía /pending-status.
+                            # Tooltip-anchor: P2-PIPELINE-DISCONNECT-PERSIST.
                             if await request.is_disconnected():
-                                logger.warning(
-                                    f"🔌 [P0-3 SSE] Cliente desconectado durante validación pantry. "
-                                    f"NO se persiste plan. user={actual_user_id or 'guest'}"
+                                logger.info(
+                                    f"🔌 [P2-PIPELINE-DISCONNECT-PERSIST] Cliente desconectado durante "
+                                    f"validación pantry. CONTINUANDO persistencia — el user recuperará "
+                                    f"el plan vía /pending-status. user={actual_user_id or 'guest'}"
                                 )
-                                break
 
                             # [P0-4/P1-1] Post-procesamiento centralizado. Antes este bloque
                             # (~200 líneas) estaba duplicado e incluía DB writes inline en el
@@ -3246,6 +3372,31 @@ async def api_analyze_stream(
                                 tz_offset_mins=tz_offset_mins,
                                 transport_label="sse",  # [P0-FIX-SEED] → context_label="seed_chunk1_sse"
                             )
+
+                            # [P2-PLAN-PERSIST-FAILED · 2026-05-30] Si la persistencia
+                            # chunking falló (INSERT meal_plans → None), NO emitir `complete`
+                            # con un plan_id_final=None (phantom success). Marcar KV failed +
+                            # emitir error event para que el frontend muestre reintento. El
+                            # system_alert ya se emitió en _postprocess_pipeline_result.
+                            if isinstance(result, dict) and result.get("_persist_failed"):
+                                logger.error(
+                                    f"🛑 [P2-PLAN-PERSIST-FAILED/SSE] Plan no persistido — "
+                                    f"emitiendo error en vez de complete. user={actual_user_id or 'guest'}"
+                                )
+                                if _deep_search_user_id:
+                                    try:
+                                        from db_plans import upsert_pending_pipeline
+                                        upsert_pending_pipeline(
+                                            _deep_search_user_id,
+                                            status="failed",
+                                            error="plan_persist_failed",
+                                        )
+                                    except Exception as _kv_e:
+                                        logger.warning(
+                                            f"[P2-PLAN-PERSIST-FAILED/SSE] KV failed update no-op: {_kv_e!r}"
+                                        )
+                                yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'plan_persist_failed', 'message': 'Generamos tu plan pero no pudimos guardarlo por un problema temporal. Por favor intenta de nuevo.'}})}\n\n"
+                                break
 
                             # [P1-2] Adjuntar `_pantry_degraded_summary` al payload del evento
                             # `complete`. Antes el SSE NO lo computaba: el sync exponía la
@@ -3467,7 +3618,7 @@ async def api_pending_pipeline_ack(
 
 
 @router.post("/recipe/expand")
-def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_EXPAND_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
     """[P1-HIST-RECIPE-1 · 2026-05-10] Expande una receta con pasos de chef
     y persiste el resultado en el plan correcto.
 
@@ -3548,10 +3699,19 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 )
                 if pre_row and isinstance(pre_row.get("meal"), dict):
                     existing_meal = pre_row["meal"]
+                    # [P2-RECIPE-DEDUP-LIST · 2026-05-30] `recipe` se persiste
+                    # SIEMPRE como `List[str]` (MealModel.recipe + el persist
+                    # escribe `expanded_steps` lista en plans.py). El check previo
+                    # `isinstance(..., str)` JAMÁS matcheaba → el early-return
+                    # dedup era código muerto y cada cook-click duplicado (tras
+                    # reload / cache-miss / cross-device) re-quemaba `log_api_usage`
+                    # + una llamada Gemini. `isinstance(..., list)` + la comparación
+                    # `!= req_recipe_original` (element-wise sobre listas) dispara
+                    # el dedup correctamente cuando la receta ya fue expandida.
                     already_expanded = (
                         existing_meal.get("isExpanded") is True
                         and existing_meal.get("name") == req_name
-                        and isinstance(existing_meal.get("recipe"), str)
+                        and isinstance(existing_meal.get("recipe"), list)
                         and existing_meal["recipe"] != req_recipe_original
                     )
                     if already_expanded:
@@ -3576,10 +3736,35 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                     f"{_dedup_err}"
                 )
 
+        # [P1-RECIPE-EXPAND-FAILSIGNAL · 2026-05-30] Llamar al Chef AI ANTES de
+        # cobrar cuota. `expand_recipe_agent` devuelve `None` cuando la
+        # expansión NO produjo contenido nuevo válido (excepción Gemini,
+        # circuit-breaker, respuesta vacía/no-lista). Pre-fix: (1) `log_api_usage`
+        # se invocaba ANTES de saber el resultado → un fallo cobraba un crédito
+        # del paywall (free=15) sin entregar receta de chef; (2) el helper
+        # devolvía la receta original en fallo y el endpoint marcaba
+        # `isExpanded=True` igual → el guard del frontend jamás reintentaba.
+        # Ahora: en fallo NO cobramos, NO persistimos y NO marcamos isExpanded —
+        # devolvemos la original para display con `success=False` para que el
+        # frontend abra el original SIN el flag (permitiendo retry posterior).
+        expanded_steps = expand_recipe_agent(data)
+
+        if not expanded_steps:
+            logger.warning(
+                "[P1-RECIPE-EXPAND-FAILSIGNAL] expand_recipe_agent devolvió None/vacío "
+                f"para meal='{req_name}' plan={req_plan_id}. Sin cobro de cuota, sin "
+                "persistencia, sin marcar isExpanded — devolviendo original para display."
+            )
+            return {
+                "success": False,
+                "expansion_failed": True,
+                "expanded_recipe": req_recipe_original or [],
+                "detail": "El Chef AI no pudo detallar esta receta ahora. Mostrando la versión original; intenta de nuevo en un momento.",
+            }
+
+        # Éxito real: cobrar cuota ahora (no antes — ver nota arriba).
         if user_id and user_id != "guest":
             log_api_usage(user_id, "gemini_recipe_expand")
-
-        expanded_steps = expand_recipe_agent(data)
 
         if user_id and user_id != "guest":
             # [P1-HIST-RECIPE-1] Resolver el plan target. Si el cliente
@@ -3744,7 +3929,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/swap-meal")
-def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_SWAP_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
     try:
         session_id = data.get("session_id")
         user_id = data.get("user_id")
@@ -3944,6 +4129,15 @@ def api_swap_meal_persist(
     new_meal_name = new_meal.get("name")
     if not isinstance(new_meal_name, str) or not new_meal_name.strip():
         raise HTTPException(status_code=400, detail="new_meal.name is required")
+    # [P3-PROD-AUDIT-2 · 2026-05-30] Cap de tamaño del meal client-controlled antes
+    # del jsonb_set (un meal legítimo ≈ pocos KB). Sin cap propio se persistía
+    # verbatim hasta el cap global. Knob compartido con /restore-local.
+    try:
+        import json as _json_cap
+        if len(_json_cap.dumps(new_meal)) > _env_int("MEALFIT_MAX_PLAN_DATA_BYTES", 2_097_152):
+            raise HTTPException(status_code=413, detail="new_meal demasiado grande.")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="new_meal no serializable.")
 
     from db_core import execute_sql_query
     from db_plans import update_plan_data_atomic
@@ -4011,6 +4205,13 @@ def api_swap_meal_persist(
             # sobre array path con `create_missing=true`.
             while len(meals) <= meal_index:
                 meals.append({})
+            # [P2-SWAP-RESET-ISEXPANDED · 2026-05-30] Defensa-en-profundidad: un
+            # plato swapeado trae su receta base sin expandir; jamás debe heredar
+            # `isExpanded:true` (cerraría el botón "Cocinar"→expand del frontend).
+            # El cliente ya envía isExpanded:false (AssessmentContext); forzarlo
+            # aquí cubre clientes futuros/legacy que omitan el reset.
+            if isinstance(new_meal, dict):
+                new_meal["isExpanded"] = False
             meals[meal_index] = new_meal
 
             # Strip las 4 aggregated_shopping_list* para forzar recalc
@@ -4301,6 +4502,17 @@ def api_restore_plan_local(
     past_plan_data = body.get("plan_data")
     if not isinstance(past_plan_data, dict):
         raise HTTPException(status_code=400, detail="plan_data must be a dict")
+    # [P3-PROD-AUDIT-2 · 2026-05-30] Cap de tamaño del blob JSONB client-controlled
+    # (un plan legítimo de 30 días ≈ decenas-cientos KB). Sin cap propio, se
+    # persistía verbatim hasta ~25 MiB (cap global) → lectores downstream (chunk
+    # worker, recalc, PDF) re-procesan un blob enorme. Blast-radius limitado al
+    # propio plan, pero el cap corta abusos absurdos. Knob clampeado.
+    try:
+        import json as _json_cap
+        if len(_json_cap.dumps(past_plan_data)) > _env_int("MEALFIT_MAX_PLAN_DATA_BYTES", 2_097_152):
+            raise HTTPException(status_code=413, detail="plan_data demasiado grande.")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="plan_data no serializable.")
 
     # Top-level derivados opcionales. Validación estricta para no aceptar
     # bogus que `Dashboard.jsx` interprete como header inválido.
@@ -4554,6 +4766,32 @@ async def api_upsert_depleted_items(
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+@router.delete("/depleted-items")
+async def api_delete_all_depleted_items(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P3-DELETEALL-DEPLETED · 2026-05-30] Borra TODOS los agotados del user.
+    Lo invoca Pantry.jsx::confirmDeleteAll ('Vaciar Nevera') para que los
+    recordatorios de "agotado" no reaparezcan al recargar — la fuente de verdad
+    es `user_depleted_items` (cross-device), no el localStorage. Pre-fix el
+    clear de `_persistDepleted([])` era cosmético y `_fetchAndApply` repoblaba
+    los agotados desde BD al próximo mount.
+
+    Returns `{"success": bool, "deleted": N}`. El realtime channel propaga el
+    DELETE a otros tabs/devices.
+    """
+    if not verified_user_id or verified_user_id == "guest":
+        raise HTTPException(status_code=401, detail="Auth requerida.")
+    try:
+        from db_inventory import delete_all_depleted_items
+        # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] handler async + DB sync → to_thread.
+        n = await asyncio.to_thread(delete_all_depleted_items, verified_user_id)
+        return {"success": True, "deleted": n}
+    except Exception as e:
+        logger.warning(f"[P3-DELETEALL-DEPLETED] DELETE /depleted-items (all) error: {e!r}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
 @router.delete("/depleted-items/{item_id}")
 async def api_delete_depleted_item(
     item_id: int,
@@ -4594,6 +4832,13 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             
         if not ingredients or not isinstance(ingredients, list):
             return {"success": False, "message": "Lista de ingredientes inválida."}
+
+        # [P3-PROD-AUDIT-2 · 2026-05-30] Cap de longitud (espejo de /depleted-items:500).
+        # Sin él, ~50k-500k items bajo el cap global de 25 MiB → N SELECTs + N
+        # RPC/INSERT secuenciales ocupan un worker thread sync por minutos
+        # (self-DoS de un worker). Knob clampeado.
+        if len(ingredients) > _env_int("MEALFIT_RESTOCK_MAX_ITEMS", 500):
+            return {"success": False, "message": "Lista de ingredientes demasiado grande."}
 
         # [P0-NEW-1 · 2026-05-10] Ownership check sobre `plan_id` user-provided.
         # Antes el SELECT en la rama `if plan_id` filtraba solo por `id` — un
@@ -4656,6 +4901,14 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         _existing_restocked = (plan_data or {}).get("restocked_items") or {}
         if not isinstance(_existing_restocked, dict):
             _existing_restocked = {}
+
+        # [P1-RESTOCK-LOSTUPDATE · 2026-05-30] Flag que el self-heal abajo
+        # levanta cuando la nevera estaba vacía. El persist atómico (mutator
+        # sobre plan_data FRESH) lo consulta para decidir si MERGE-a sobre
+        # `restocked_items` existente o arranca desde cero — replicando la
+        # semántica del `plan_data.pop(...)` del self-heal sobre el snapshot
+        # t=0, pero aplicada al fresh re-leído bajo FOR UPDATE.
+        _restock_self_heal_reset = False
 
         # [P3-RESTOCK-STALE-DEDUP · 2026-05-17] Self-heal del dedup `restocked_items`
         # cuando `user_inventory` quedó vacío.
@@ -4720,6 +4973,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
                         f"restocked_at_iso de plan_data (in-memory, persist al UPDATE)"
                     )
                     _existing_restocked = {}
+                    _restock_self_heal_reset = True
                     if isinstance(plan_data, dict):
                         plan_data.pop("is_restocked", None)
                         plan_data.pop("restocked_items", None)
@@ -4783,51 +5037,114 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         if success:
             log_api_usage(user_id, "restock_inventory")
 
-            # Marcar el plan como "restocked" en BD para futuras peticiones
-            if supabase and real_plan_id and plan_data is not None:
+            # Marcar el plan como "restocked" en BD para futuras peticiones.
+            #
+            # [P1-RESTOCK-LOSTUPDATE · 2026-05-30] Migrado de un UPDATE
+            # full-overwrite del JSONB plan_data completo vía supabase-py
+            # (que leía plan_data a t=0 sin lock, lo mutaba in-memory y reescribía
+            # el JSONB ENTERO a t=2) al patrón canónico `update_plan_data_atomic`
+            # (`SELECT … FOR UPDATE` + mutator sobre plan_data FRESH post-worker).
+            #
+            # Por qué: era la ÚLTIMA escritura full-overwrite de `plan_data` en
+            # routers/plans.py y la única violación de I7 restante (todos los
+            # hermanos ya migrados: /swap-meal/persist P1-SWAP-PERSIST-ATOMIC,
+            # /recalculate-shopping-list P1-RECALC-LOSTUPDATE, /restore-local
+            # P1-OPEN-1). Ventana lost-update real (no hipotética): entre el SELECT
+            # t=0 y el UPDATE t=2, `_chunk_worker` puede persistir `days[8..14]` de
+            # un plan multi-semana bajo advisory lock + el cron VISIÓN-C poda
+            # `restocked_items` vencidos vía jsonb_set — el full-overwrite a t=2
+            # los CLOBBEA silenciosamente (pérdida de comidas generadas). RLS filtra
+            # IDOR pero NO lost-update (mismo user_id).
+            #
+            # El mutator aplica SOLO las 3 keys que /restock posee (is_restocked,
+            # restocked_at_iso, restocked_items) MERGEANDO sobre el fresh —
+            # preserva days/_chunk_lessons/aggregated_shopping_list* y prunes
+            # concurrentes. `_names_to_mark` se computa FUERA del mutator (depende
+            # de persisted_names, ya resuelto) porque el mutator corre dentro del
+            # FOR UPDATE y DEBE ser puro CPU-only (contrato P2-MUTATOR-PURITY).
+            # `user_id=` preserva el filtro AND user_id=%s en SELECT+UPDATE
+            # (defensa-en-profundidad del ownership P0-NEW-1 + invariante I2).
+            #
+            # Tooltip-anchor: P1-RESTOCK-LOSTUPDATE-START | test_p1_restock_lostupdate
+            if real_plan_id:
                 try:
                     now_iso = _now_utc.isoformat()
-                    plan_data["is_restocked"] = True
-                    # [RIESGO-1/3 FIX] Timestamp ISO-8601 (blanket legacy):
-                    #   1. Filtrar perecederos del delta mid-cycle (<7d) en hybrid.
-                    #   2. Cron diario detecta restocks ≥7d y reactiva la lista.
-                    plan_data["restocked_at_iso"] = now_iso
-
-                    # [P1-2] restocked_items: timestamp por item para supresión
-                    # granular en _build_hybrid_shopping_list. Crece con cada
-                    # restock parcial; el cron limpia entradas vencidas.
-                    # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] Anotar SOLO los
-                    # names que efectivamente persistieron a DB (persisted_names
-                    # del retorno de restock_inventory). Pre-fix iterábamos
-                    # filtered_ingredients (input aspiracional) lo que dejaba
-                    # entries stale cuando hubo colisión silenciosa via
-                    # semantic embedding match. Fallback a filtered_ingredients
-                    # si persisted_names viene vacío (caller legacy) — preserva
-                    # el comportamiento previo en ese path.
-                    if not isinstance(plan_data.get("restocked_items"), dict):
-                        plan_data["restocked_items"] = {}
+                    # [P0-RESTOCK-DEDUP-NAME · 2026-05-20] Anotar SOLO los names
+                    # que efectivamente persistieron a DB (persisted_names del
+                    # retorno de restock_inventory); fallback a filtered_ingredients
+                    # para callers legacy (preserva el comportamiento previo).
                     _names_to_mark = (
                         persisted_names
                         if persisted_names
                         else [_name_of(it) for it in filtered_ingredients]
                     )
-                    for nm in _names_to_mark:
-                        if nm:
-                            plan_data["restocked_items"][strip_accents(str(nm).lower())] = now_iso
 
-                    # [P0-NEW-1 · 2026-05-10] Defense-in-depth doble candado:
-                    # aunque el SELECT arriba ya cerró el IDOR, el UPDATE
-                    # filtra también por user_id por si un race entre check
-                    # y UPDATE permite que alguien rote la ownership del
-                    # plan_id (improbable pero patrón mirroring de
-                    # P0-HIST-IDOR-1 retry-chunk:4119-4123).
-                    supabase.table("meal_plans").update({"plan_data": plan_data}).eq("id", real_plan_id).eq("user_id", user_id).execute()
-                    logger.info(
-                        f"✅ [RESTOCK] plan {real_plan_id}: input={len(filtered_ingredients)} "
-                        f"persisted={len(persisted_names)} restocked_items={len(plan_data['restocked_items'])} entries"
+                    def _restock_mutator(fresh: dict) -> dict:
+                        fresh["is_restocked"] = True
+                        # [RIESGO-1/3 FIX] Timestamp ISO-8601: (1) filtra
+                        # perecederos del delta mid-cycle (<7d) en hybrid;
+                        # (2) cron diario detecta restocks ≥7d y reactiva la lista.
+                        fresh["restocked_at_iso"] = now_iso
+                        # [P1-2] restocked_items: timestamp por item para
+                        # supresión granular en _build_hybrid_shopping_list.
+                        # Self-heal P3-RESTOCK-STALE-DEDUP: si la nevera estaba
+                        # vacía, el dedup previo es obsoleto → arrancar desde cero
+                        # (sobre el fresh). Si no, MERGE sobre el fresh para
+                        # preservar el prune concurrente del cron.
+                        if _restock_self_heal_reset:
+                            ri = {}
+                        else:
+                            ri = fresh.get("restocked_items")
+                            if not isinstance(ri, dict):
+                                ri = {}
+                        for nm in _names_to_mark:
+                            if nm:
+                                ri[strip_accents(str(nm).lower())] = now_iso
+                        fresh["restocked_items"] = ri
+                        return fresh
+
+                    from db_plans import update_plan_data_atomic
+                    _persisted = update_plan_data_atomic(
+                        real_plan_id, _restock_mutator, user_id=user_id
                     )
+                    if not _persisted:
+                        logger.warning(
+                            f"⚠️ [RESTOCK] plan {real_plan_id} no encontrado o no "
+                            f"pertenece al user — skip persist (inventario físico "
+                            f"ya restockeado; solo se omite el flag is_restocked)."
+                        )
+                    else:
+                        logger.info(
+                            f"✅ [RESTOCK] plan {real_plan_id}: input={len(filtered_ingredients)} "
+                            f"persisted={len(persisted_names)} restocked_items="
+                            f"{len(_persisted.get('restocked_items') or {})} entries (atomic)"
+                        )
                 except Exception as mark_err:
-                    logger.warning(f"⚠️ No se pudo marcar plan como restocked: {mark_err}")
+                    logger.warning(f"⚠️ No se pudo marcar plan como restocked (atomic): {mark_err}")
+            # P1-RESTOCK-LOSTUPDATE-END
+
+            # [P3-RESTOCK-DELETE-DEPLETED · 2026-05-30] Honrar el contrato que la
+            # migración p3_user_depleted_items documenta ("el restock desde la
+            # lista de compras DELETE-ea la fila aquí"): borrar de
+            # `user_depleted_items` los ingredientes efectivamente repuestos.
+            # Pre-fix /restock NUNCA tocaba la tabla → divergencia DB (badge
+            # AGOTADO zombi para items que el usuario ya compró) + crecimiento
+            # monótono de filas huérfanas sin GC. delete_depleted_item es
+            # idempotente (no-op si nada matchea), case-insensitive por nombre
+            # (ilike+trim) y filtra por user_id (defensa-en-profundidad).
+            # Best-effort: cualquier fallo NO debe abortar el restock (la nevera
+            # física ya se actualizó). El realtime channel propaga el DELETE a
+            # otros tabs/devices.
+            try:
+                # [P3-BACKEND-AUDIT · 2026-06-01] Bulk DELETE en 1 round-trip
+                # (antes: loop N+1 de delete_depleted_item por nombre → hasta N
+                # DELETEs secuenciales en el request path). bulk_delete_depleted_items
+                # preserva el match case-insensitive y el filtro user_id.
+                from db_inventory import bulk_delete_depleted_items
+                _names_to_clear = persisted_names or [_name_of(it) for it in filtered_ingredients]
+                bulk_delete_depleted_items(user_id, _names_to_clear)
+            except Exception as _depl_err:
+                logger.warning(f"⚠️ [P3-RESTOCK-DELETE-DEPLETED] cleanup falló (best-effort): {_depl_err}")
 
             return {
                 "success": True,
@@ -4861,7 +5178,14 @@ def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str
             
         if not ingredients or not isinstance(ingredients, list):
             return {"success": False, "message": "Lista de ingredientes inválida."}
-            
+
+        # [P3-PROD-AUDIT-3 · 2026-05-30] Cap de tamaño — único miembro de la
+        # familia inventory-batch sin él (/restock y /depleted-items ya capean a
+        # 500). Sin cap, un payload gigante hace girar el loop de normalización +
+        # un array bind enorme en el worker thread (self-DoS de un worker).
+        if len(ingredients) > _env_int("MEALFIT_CONSUME_MAX_ITEMS", 500):
+            return {"success": False, "message": "Lista de ingredientes demasiado grande."}
+
         success = consume_inventory_items_completely(user_id, ingredients)
         
         if success:
@@ -6014,10 +6338,22 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
         user_res = execute_sql_query("SELECT health_profile FROM user_profiles WHERE id = %s", (user_id,), fetch_one=True)
         if user_res and user_res.get("health_profile"):
             hp = user_res["health_profile"]
-            qh = hp.get("quality_history", [])
+            # [A5-KEYDRIFT · 2026-05-29] La clave real es `quality_history_chunks`
+            # (lista de FLOATS 0-1, cron_tasks.py:15281), NO `quality_history` (dead key,
+            # cero writers). Pre-fix el hint quedaba atascado en "Analizando..." para todos.
+            # Fallback al nombre viejo + guard de tipo (float nuevo vs dict legacy).
+            qh = hp.get("quality_history_chunks") or hp.get("quality_history", [])
             if qh and len(qh) > 0:
-                last_score = qh[-1].get("score", 0)
-                last_learning_hint = f"Ajustando variedad (Quality Score: {last_score}/100)"
+                _last = qh[-1]
+                if isinstance(_last, dict):
+                    last_score = _last.get("score", 0)  # formato legacy dict (0-100)
+                else:
+                    try:
+                        last_score = round(float(_last) * 100)  # float 0-1 → 0-100
+                    except (TypeError, ValueError):
+                        last_score = 0
+                if last_score:
+                    last_learning_hint = f"Ajustando variedad (Quality Score: {last_score}/100)"
 
         # [GAP C] Exponer quality_warning y desglose de tiers
         quality_warning = bool(plan_data.get("quality_warning", False))
@@ -8008,10 +8344,14 @@ def api_plan_chunk_metrics(
         El Historial mostraba el bucket de status (P0/P1) y el
         tier_breakdown agregado (P1-AUDIT-HIST-6) pero NO exponía
         las métricas ricas por-chunk:
-          - `learning_metrics` (jsonb con synth_quality_score,
-            synthesized_count, queue_count, etc. — populated por
-            `_escalate_unrecoverable_chunk` y otros paths del
-            pipeline LangGraph).
+          - `learning_metrics` (jsonb con recovery_attempts,
+            escalation_reason, shuffle_*, etc. — populated por
+            `_escalate_unrecoverable_chunk` (recovery_attempts/
+            escalation_reason) y el worker T1/T2. [G14-DOC-DRIFT ·
+            2026-05-29] synth_quality_score/synthesized_count/queue_count
+            NO viven aquí: synthesized_count/queue_count vienen de
+            chunk_lesson_telemetry y synth_quality_score no se computa —
+            G8 las removió del catálogo `_LM_DISPLAY_GROUPS`).
           - `lag_seconds_at_pickup` / `effective_lag_seconds_at_pickup`
             (cuánto se atrasó el sistema en agarrar el chunk).
           - `escalated_at` (timestamp de escalación si hubo).
@@ -9583,6 +9923,13 @@ def api_regenerate_dead_lettered_simplified(
             fd["_pantry_degraded_reason"] = "user_forced_simplified"
             snap["form_data"] = fd
 
+        # [P2-HIST-MODALS-A11Y · 2026-05-30] Defense-in-depth: WHERE filtra
+        # también por `meal_plan_id` (el ownership ya se validó arriba en el
+        # SELECT inicial + el lookup `chunk_row` con `meal_plan_id = %s`).
+        # Mismo patrón belt-and-suspenders que el UPDATE de `meal_plans` de
+        # abajo (P1-NEW-4) y que el hermano `retry-chunk` (P0-HIST-IDOR-1):
+        # un futuro refactor que rompa el check upstream sin tocar este
+        # UPDATE no debe re-introducir un re-enqueue cross-plan.
         execute_sql_write(
             """
             UPDATE plan_chunk_queue
@@ -9594,9 +9941,9 @@ def api_regenerate_dead_lettered_simplified(
                 execute_after = NOW(),
                 pipeline_snapshot = %s::jsonb,
                 updated_at = NOW()
-            WHERE id = %s
+            WHERE id = %s AND meal_plan_id = %s
             """,
-            (json.dumps(snap, ensure_ascii=False), chunk_id),
+            (json.dumps(snap, ensure_ascii=False), chunk_id, plan_id),
         )
 
         # Limpiar banner del frontend + [P3-2] mirror del flag por semana.
@@ -9639,6 +9986,15 @@ def api_regenerate_dead_lettered_simplified(
         )
 
         # Resolver alertas system_alerts asociadas a este chunk dead-lettered.
+        # [P2-CHUNK-8] Dos fixes:
+        #   (a) Typo: el alert_key canónico es `dead_lettered_chunks_recent`
+        #       (cron_tasks.py:18103); el código tenía las dos palabras invertidas,
+        #       así que el IN nunca matcheaba la agregada y ésta quedaba viva tras
+        #       un regenerate-simplified exitoso.
+        #   (b) Faltaba la alerta per-chunk `dead_lettered_chunk:<plan>:<week>`
+        #       (cron_tasks.py:13515). La doc (system_alerts_resolution_table.md L21)
+        #       declara que `regenerate-simplified` la resuelve, pero no estaba en el IN
+        #       → quedaba huérfana hasta que el sweep por edad la cerrara.
         try:
             execute_sql_write(
                 """
@@ -9647,10 +10003,14 @@ def api_regenerate_dead_lettered_simplified(
                 WHERE resolved_at IS NULL
                   AND alert_key IN (
                     'chunk_paused_indefinitely:' || %s || ':' || %s,
-                    'chunks_dead_lettered_recent'
+                    'dead_lettered_chunk:' || %s || ':' || %s,
+                    'dead_lettered_chunks_recent'
                   )
                 """,
-                (plan_id, str(chunk_row["week_number"])),
+                (
+                    plan_id, str(chunk_row["week_number"]),
+                    plan_id, str(chunk_row["week_number"]),
+                ),
             )
         except Exception:
             pass

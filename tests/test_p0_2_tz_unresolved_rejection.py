@@ -315,6 +315,10 @@ def test_recovery_escalates_after_max_attempts(
         "pipeline_snapshot": {
             "_pantry_pause_reason": "tz_unresolved",
             "_tz_recovery_attempts": CHUNK_TZ_RECOVERY_MAX_ATTEMPTS - 1,
+            # [P1-CHUNK-4] El gate wall-clock exige que haya transcurrido el piso
+            # (max_attempts × CHUNK_RECOVERY_MIN_WALL_MINUTES_PER_ATTEMPT) desde el
+            # primer intento, ADEMÁS del conteo. Timestamp antiguo → piso cumplido.
+            "_tz_recovery_started_at": "2020-01-01T00:00:00+00:00",
             "form_data": {},
         },
         "paused_seconds": 7200,

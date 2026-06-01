@@ -84,17 +84,38 @@ def test_endpoint_pending_status_defined():
 
 # ----- Backend: pipeline NO se cancela en disconnect -----
 
-def test_pipeline_task_cancel_only_on_explicit_cancel():
-    """Pre-fix tenía 3 sites de `_pipeline_task.cancel()` (disconnect
-    en _should_stop, except CancelledError, finally). Post-fix debe
-    tener SOLO 1 (cancel explícito vía session_id)."""
+def test_pipeline_task_cancel_only_on_explicit_or_wallclock():
+    """El pipeline NO debe cancelarse por disconnect (deep-search es feature).
+
+    Pre-fix tenía 3 sites de `_pipeline_task.cancel()` (disconnect en
+    _should_stop, except CancelledError, finally). El contrato es que NINGÚN
+    cancel viva en un path de disconnect.
+
+    [P2-GEN-WALL-TIMEOUT actualización · 2026-05-30] El conteo legítimo subió de
+    1 a 2 cuando se añadió `_pipeline_wall_clock_guard` (anti-zombi: cancela si el
+    pipeline excede el wall-clock timeout). Los 2 cancels legítimos son:
+      1. cancel explícito por `is_session_cancelled(session_id)` (usuario clickeó
+         "Cancelar Generación").
+      2. wall-clock guard (anti-zombi por timeout duro).
+    NINGUNO es un disconnect-cancel. La protección "disconnect NO corta
+    persistencia" la ancla `test_disconnect_does_not_break_persistence`.
+    """
     text = _read(_ROUTER)
-    # Contamos calls a `.cancel()` sobre `_pipeline_task` (no otros tasks).
     cancel_calls = re.findall(r"_pipeline_task\.cancel\(\)", text)
-    assert len(cancel_calls) == 1, (
-        f"P1-DEEP-SEARCH-PIPELINE: esperaba EXACTAMENTE 1 `_pipeline_task.cancel()` "
-        f"(solo el de cancel explícito por session_id), encontré {len(cancel_calls)}. "
-        f"Si hay más, el disconnect sigue cancelando el pipeline — deep-search no funciona."
+    assert len(cancel_calls) == 2, (
+        f"P1-DEEP-SEARCH-PIPELINE: esperaba EXACTAMENTE 2 `_pipeline_task.cancel()` "
+        f"(explícito por session_id + wall-clock anti-zombi), encontré {len(cancel_calls)}. "
+        f"Si hay más, posiblemente el disconnect volvió a cancelar el pipeline — "
+        f"deep-search dejaría de funcionar. Verifica que ningún cancel nuevo esté en "
+        f"un path de `is_disconnected()`."
+    )
+    # Invariante real: ningún `_pipeline_task.cancel()` dentro de un bloque
+    # `is_disconnected()` (1..8 líneas). Eso reabriría el bug que deep-search cerró.
+    bad = re.findall(r"is_disconnected\(\):(?:[^\n]*\n){1,8}?\s*_pipeline_task\.cancel\(\)", text)
+    assert len(bad) == 0, (
+        f"P1-DEEP-SEARCH-PIPELINE: encontré {len(bad)} `_pipeline_task.cancel()` "
+        f"dentro de un check `is_disconnected()` — el disconnect NO debe cancelar el "
+        f"pipeline (el plan huérfano es feature)."
     )
 
 
@@ -114,11 +135,21 @@ def test_disconnect_does_not_break_persistence():
     )
     if region:
         body = region.group(0)
-        # Contamos `is_disconnected() ... break` en ese bloque.
-        bad = re.findall(r"is_disconnected\(\):\s*\n[^\n]*\n[^\n]*break", body)
+        # [P2-PIPELINE-DISCONNECT-PERSIST · 2026-05-30] Regex ENDURECIDO. El patrón
+        # previo `is_disconnected():\s*\n[^\n]*\n[^\n]*break` solo capturaba la forma
+        # de 2 líneas entre `is_disconnected():` y `break`. La forma REAL en prod era
+        # un `logger.warning(...)` multi-línea (4 líneas) seguido de `break` — el
+        # regex NO la matcheaba → blind spot: el test daba falso verde mientras un
+        # `break` vivo dejaba el KV `pending_pipeline` en 'generating' para siempre.
+        # Nuevo patrón: `is_disconnected():` seguido de 1..8 líneas y luego `break`
+        # (non-greedy). El `break` legítimo del guard `_is_fallback` NO matchea porque
+        # NO está precedido por `is_disconnected()`.
+        bad = re.findall(r"is_disconnected\(\):(?:[^\n]*\n){1,8}?\s*break\b", body)
         assert len(bad) == 0, (
             f"P1-DEEP-SEARCH-PIPELINE: encontré {len(bad)} `is_disconnected → break` "
-            f"que cortan persistencia. Convertir a `logger.info` y continuar."
+            f"que cortan persistencia (el plan no se persiste y el KV queda "
+            f"'generating' para siempre). Convertir a `logger.info` y continuar — "
+            f"el plan huérfano es FEATURE (recovery vía /pending-status)."
         )
 
 

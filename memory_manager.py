@@ -62,9 +62,34 @@ MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 # Cualquier mismatch con la nomenclatura oficial se sigue detectando
 # vía `_summarize_failures` y se promueve a `logger.error` para que
 # SRE alertee (en lugar del warning silencioso original).
-MEMORY_SUMMARY_MODEL = os.environ.get(
-    "MEMORY_SUMMARY_MODEL", "gemini-3.1-flash-lite"
-).strip() or "gemini-3.1-flash-lite"
+# [P3-PROD-AUDIT-3 · 2026-05-30] Resuelto vía `_env_str` (no `os.environ.get` crudo)
+# para AUTO-REGISTRARSE en `_KNOBS_REGISTRY` → visible en /health/version y
+# get_knobs_registry_snapshot(). ANTES era invisible al inventario de knobs: durante
+# un incidente de deprecación de modelo Gemini, un SRE no podía confirmar el modelo
+# de summary vivo sin leer logs. `_env_str` normaliza lower+strip (inocuo: los IDs
+# Gemini ya son lowercase). Alineado con [P3-PREVIEW-MODEL-KNOB].
+from knobs import _env_str as _knob_env_str_mm
+MEMORY_SUMMARY_MODEL = _knob_env_str_mm("MEMORY_SUMMARY_MODEL", "gemini-3.1-flash-lite")
+
+
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke de los 2 constructores
+# `ChatGoogleGenerativeAI` del memory_manager (`summarize_and_prune` summary +
+# master structured-output). Pre-fix: sin `timeout=`, un Gemini colgado bloqueaba
+# el thread del cron que invoca `summarize_and_prune`; con `max_instances=1` el
+# slot del cron quedaba tomado para siempre (el subsistema de memoria de largo
+# plazo dejaba de resumir para todos los usuarios). El backoff exponencial P1-NEW-6
+# protege contra outage que *falla rápido*, pero NO contra un socket colgado (no
+# hay excepción que dispare el backoff). El `timeout=` convierte el cuelgue en
+# DeadlineExceeded → lo captura el except P1-18 (logger.error + alert + backoff).
+# Default 30s (prompts grandes + structured output); clamp (0, 120].
+# Knob auto-registrado. Tooltip-anchor: P2-LLM-TIMEOUT-SWEEP.
+def _memory_summary_llm_timeout_s() -> float:
+    from knobs import _env_float
+    return _env_float(
+        "MEALFIT_MEMORY_SUMMARY_LLM_TIMEOUT_S",
+        30.0,
+        validator=lambda v: 0.0 < v <= 120.0,
+    )
 
 # [P1-18] Contador in-memory de fallos del resumen. Se incrementa en cada
 # excepción de `summarize_and_prune` y se loggea a nivel `error` el primer
@@ -472,7 +497,8 @@ def summarize_and_prune(session_id: str):
         summary_llm = ChatGoogleGenerativeAI(
             model=MEMORY_SUMMARY_MODEL,
             temperature=0.1,
-            google_api_key=os.environ.get("GEMINI_API_KEY")
+            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            timeout=_memory_summary_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
         
         prompt = SUMMARY_PROMPT.format(conversation_block=conversation_block)
@@ -568,7 +594,8 @@ def summarize_and_prune(session_id: str):
             structured_summary_llm = ChatGoogleGenerativeAI(
                 model=MEMORY_SUMMARY_MODEL,
                 temperature=0.1,
-                google_api_key=os.environ.get("GEMINI_API_KEY")
+                google_api_key=os.environ.get("GEMINI_API_KEY"),
+                timeout=_memory_summary_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
             ).with_structured_output(EvolutionaryState)
             
             master_response = structured_summary_llm.invoke(master_prompt)
@@ -590,11 +617,29 @@ def summarize_and_prune(session_id: str):
             summary_ids = [s.get("id") for s in summaries if s.get("id")]
             if summary_ids:
                 # 1. Archivar los resúmenes originales en cold storage para no perder detalles finos
-                archive_summaries(summaries)
-                logger.info(f"📦 [MEMORY MANAGER] {len(summaries)} resúmenes originales enviados a cold storage.")
-                
-                # 2. Borrarlos de la tabla activa de memoria de trabajo
-                delete_summaries(summary_ids)
+                # [P3-SUMMARY-ARCHIVE-GUARD · 2026-05-30] Gate el delete en que el
+                # archive haya CONFIRMADO el INSERT. Pre-fix: archive_summaries
+                # traga su excepción y `return None` (db_chat.py:548-550), pero el
+                # delete_summaries corría INCONDICIONALMENTE → si el INSERT a
+                # summary_archive fallaba (blip DB / pooler EOF / schema mismatch),
+                # los originales se borraban de conversation_summaries SIN llegar a
+                # cold storage → search_deep_memory perdía ese período para siempre.
+                # Espejo del orden fail-fast de P1-20 (delete solo tras cleanup
+                # exitoso). Si el archive no confirma, NO borrar: el próximo tick
+                # re-archiva (peor caso = redundancia, nunca pérdida silenciosa).
+                # Tooltip-anchor: P3-SUMMARY-ARCHIVE-GUARD.
+                _archived = archive_summaries(summaries)
+                if _archived:
+                    logger.info(f"📦 [MEMORY MANAGER] {len(summaries)} resúmenes originales enviados a cold storage.")
+                    # 2. Borrarlos de la tabla activa de memoria de trabajo (solo tras archive OK)
+                    delete_summaries(summary_ids)
+                else:
+                    logger.error(
+                        f"🚨 [P3-SUMMARY-ARCHIVE-GUARD] archive_summaries NO confirmó el "
+                        f"INSERT a cold storage ({len(summaries)} resúmenes) — NO se borran "
+                        f"los originales de conversation_summaries (evita pérdida); el próximo "
+                        f"ciclo reintentará el archivado."
+                    )
                 
             save_summary(
                 session_id=session_id,
