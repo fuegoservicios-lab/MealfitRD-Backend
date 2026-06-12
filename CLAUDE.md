@@ -201,9 +201,9 @@ Si Supabase agrega supresión nativa de advisors aceptados en el dashboard, move
 | Backend profiling | `MEALFIT_SENTRY_PROFILES_SAMPLE_RATE` | `0.1` | `[0.0, 1.0]` |
 | Frontend traces | `VITE_SENTRY_TRACES_SAMPLE_RATE` | `0.1` | `[0.0, 1.0]` |
 
-### Vercel security headers (defensa-en-profundidad en mealfitrd.com)
+### Security headers en nginx (defensa-en-profundidad en mealfitrd.com)
 
-[P1-VERCEL-SECURITY-HEADERS · 2026-05-12] [`frontend/vercel.json`](frontend/vercel.json) declara 6 headers obligatorios para todas las rutas (HSTS, X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy, CSP-Report-Only). CSP arranca **Report-Only**; promover a enforced tras 1 semana de observación. Tabla de headers + hosts whitelisteados críticos + modos de fallo que cada uno cierra: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md). Test: [`test_p1_vercel_security_headers.py`](backend/tests/test_p1_vercel_security_headers.py).
+[P1-VERCEL-SECURITY-HEADERS · 2026-05-12 · migrado a nginx 2026-06-12] Los 6 headers (HSTS, X-Content-Type-Options nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy, CSP-Report-Only) viven en el snippet `/etc/nginx/snippets/mealfit-security.conf` del VPS Oracle, incluido en el server block HTTPS **y** en cada `location` con `add_header` propio (nginx no hereda `add_header` a un location que define los suyos). Antes vivían en `frontend/vercel.json`, eliminado al migrar de Vercel al VPS (despliegue 2026-06-12). CSP arranca **Report-Only**. Detalle: [`runbook_advisors_operational_subsections.md`](~/.claude/projects/.../memory/runbook_advisors_operational_subsections.md).
 
 ### Admin gate en `/api/system/health` (no es público)
 
