@@ -8240,6 +8240,12 @@ def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> boo
     return False
 
 
+# [P3-MACRO-SOLVER · 2026-06-13] Knob del "cerebro dividido" (lado determinista):
+# re-escala porciones para clavar macros desde master_ingredients. Default False
+# (rollout gradual; requiere la DB de macros poblada — ver food_db_integration.md).
+MACRO_SOLVER_ENABLED = _env_bool("MEALFIT_MACRO_SOLVER_ENABLED", False)
+
+
 def _meal_macro_num(x) -> float:
     """Parsea un valor de macro/caloría a float, tolerando "154g", "464 kcal", None."""
     try:
@@ -8278,6 +8284,50 @@ def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: fl
             f"C:{round(_meal_macro_num(meal.get('carbs')))}g",
             f"G:{round(_meal_macro_num(meal.get('fats')))}g",
         ]
+
+
+def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
+    """[P3-MACRO-SOLVER · 2026-06-13] Cerebro dividido — lado determinista.
+    Re-escala las porciones de los ingredientes del meal para clavar `slot_target`
+    {kcal,protein,carbs,fats} usando macros reales de `master_ingredients` (vía
+    `portion_solver.solve_meal_macros`), en vez de confiar en el porcionado a-ojo
+    del LLM. Re-escribe `ingredients` + `ingredients_raw` (cantidad líder + hint de
+    gramos, formato preservado → coherence guard/shopping/frontend lo parsean igual)
+    y actualiza los campos numéricos protein/carbs/fats/cals + display `macros`.
+
+    Fail-safe TOTAL: cualquier excepción o 0 ingredientes resueltos → deja el meal
+    INTACTO y retorna False (nunca rompe el assembly). Gated por knob upstream.
+    Mutates `meal` in-place. Retorna True si aplicó cambios. Anchor: P3-MACRO-SOLVER.
+    """
+    try:
+        ings = meal.get("ingredients")
+        if not isinstance(ings, list) or not ings:
+            return False
+        from portion_solver import solve_meal_macros
+        from nutrition_db import rescale_ingredient_string
+        res = solve_meal_macros([str(x) for x in ings], slot_target, db=db)
+        if res.get("resolved_count", 0) == 0:
+            return False  # nada resoluble → no tocar (degradación grácil)
+        meal["ingredients"] = res["ingredients"]
+        factors = res.get("factors_applied") or []
+        raw = meal.get("ingredients_raw")
+        if isinstance(raw, list) and len(raw) == len(factors):
+            meal["ingredients_raw"] = [
+                rescale_ingredient_string(str(r), f) for r, f in zip(raw, factors)
+            ]
+        ach = res["achieved"]
+        meal["protein"] = round(ach["protein"])
+        meal["carbs"] = round(ach["carbs"])
+        meal["fats"] = round(ach["fats"])
+        meal["cals"] = round(ach["kcal"])
+        meal["macros"] = [f"P:{round(ach['protein'])}g",
+                          f"C:{round(ach['carbs'])}g",
+                          f"G:{round(ach['fats'])}g"]
+        return True
+    except Exception as e:
+        logger.warning(f"[P3-MACRO-SOLVER] solver falló para meal "
+                       f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e} — meal intacto")
+        return False
 
 
 def _run_assembly_validations(
@@ -9327,6 +9377,40 @@ async def assemble_plan_node(state: PlanState) -> dict:
         result["aggregated_shopping_list_weekly"] = []
         result["aggregated_shopping_list_biweekly"] = []
         result["aggregated_shopping_list_monthly"] = []
+
+    # [P3-MACRO-SOLVER · 2026-06-13] Cerebro dividido — lado determinista (gated por
+    # knob MEALFIT_MACRO_SOLVER_ENABLED, default False). Tras el balancing legacy
+    # (que escala los NÚMEROS de macros sin tocar los ingredientes y tapa la
+    # inconsistencia con un disclaimer), re-escala las PORCIONES reales de cada meal
+    # para clavar su target de macros (= macro diario × cal_share del meal) usando los
+    # macros reales de master_ingredients. Corre ANTES de la humanización y del
+    # coherence guard → los gramos re-escritos fluyen a display + shopping + guard
+    # CONSISTENTES. Fail-safe TOTAL: cualquier error deja el plan como lo dejó el
+    # balancing legacy (nunca rompe el assembly). Anchor: P3-MACRO-SOLVER.
+    if MACRO_SOLVER_ENABLED and _daily_cals > 0 and (_pg or _cg or _fg):
+        try:
+            from nutrition_db import IngredientNutritionDB
+            _nut_db = IngredientNutritionDB()
+            _solver_n = 0
+            for _d in days:
+                _ms = _d.get("meals", []) or []
+                _day_c = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
+                for _m in _ms:
+                    _share = (_meal_macro_num(_m.get("cals")) / _day_c) if _day_c > 0 \
+                        else (1.0 / max(1, len(_ms)))
+                    _slot_target = {
+                        "kcal": _daily_cals * _share,
+                        "protein": _pg * _share,
+                        "carbs": _cg * _share,
+                        "fats": _fg * _share,
+                    }
+                    if _apply_macro_solver_to_meal(_m, _slot_target, _nut_db):
+                        _solver_n += 1
+            logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
+                        f"a su target de macros real (cerebro dividido)")
+        except Exception as _solver_e:
+            logger.warning(f"[P3-MACRO-SOLVER] bloque deshabilitado por error: "
+                           f"{type(_solver_e).__name__}: {_solver_e}")
 
     # Humanizar ingredientes a medidas caseras dominicanas para la UI (display-only)
     # P0-NEW-1.b: la humanización aplica regex y lookups por ingrediente sobre

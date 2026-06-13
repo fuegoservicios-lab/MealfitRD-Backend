@@ -129,6 +129,74 @@ def calculate_macros(target_calories: int, goal: str) -> dict:
 
 
 # ============================================================
+# [P2-MDDA-SLOT-ALLOCATION · 2026-06-13] Reparte los macros diarios objetivo
+# por slot de comida. Es el TARGET que consume `portion_solver.solve_portion_macros`
+# (lado determinista del cerebro dividido): cada comida recibe su cuota de
+# kcal/proteína/carbos/grasas, y el solver re-escala porciones para clavarla.
+# ============================================================
+
+# Splits por # de comidas (fracción del total diario por slot). Suman 1.0.
+# 4 comidas es el default del producto (desayuno/almuerzo/merienda/cena).
+MEAL_SLOT_SPLITS: dict = {
+    3: {"desayuno": 0.30, "almuerzo": 0.40, "cena": 0.30},
+    4: {"desayuno": 0.20, "almuerzo": 0.35, "merienda": 0.15, "cena": 0.30},
+    5: {"desayuno": 0.20, "merienda_am": 0.10, "almuerzo": 0.35,
+        "merienda_pm": 0.10, "cena": 0.25},
+}
+
+
+def allocate_macros_per_slot(
+    daily_targets: dict,
+    num_meals: int = 4,
+    splits: dict | None = None,
+) -> dict:
+    """[P2-MDDA-SLOT-ALLOCATION] Distribuye los macros diarios por slot de comida.
+
+    Args:
+        daily_targets: macros del día. Acepta aliases comunes
+            (``calories``/``target_calories``/``kcal``; ``protein``/``protein_g``;
+            ``carbs``/``carbs_g``; ``fats``/``fat``/``fats_g``).
+        num_meals: 3/4/5 → usa el split correspondiente de ``MEAL_SLOT_SPLITS``
+            (default 4). Valores fuera del set caen a 4.
+        splits: override explícito ``{slot: fracción}`` (debe sumar ~1.0); si se
+            pasa, ignora ``num_meals``. No se re-normaliza si no suma 1.0 — el
+            caller es responsable (permite repartos parciales intencionales).
+
+    Returns:
+        ``{slot: {kcal, protein, carbs, fats}}`` con cada macro = fracción × diario,
+        redondeado. Tooltip-anchor: P2-MDDA-SLOT-ALLOCATION.
+    """
+    def _g(*keys):
+        for k in keys:
+            v = daily_targets.get(k) if isinstance(daily_targets, dict) else None
+            if v is not None:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    continue
+        return 0.0
+
+    day = {
+        "kcal": _g("kcal", "calories", "target_calories", "cals"),
+        "protein": _g("protein", "protein_g", "proteina"),
+        "carbs": _g("carbs", "carbs_g", "carbohidratos"),
+        "fats": _g("fats", "fat", "fats_g", "grasas"),
+    }
+    if splits is None:
+        splits = MEAL_SLOT_SPLITS.get(num_meals, MEAL_SLOT_SPLITS[4])
+
+    out = {}
+    for slot, frac in splits.items():
+        out[slot] = {
+            "kcal": round(day["kcal"] * frac, 1),
+            "protein": round(day["protein"] * frac, 1),
+            "carbs": round(day["carbs"] * frac, 1),
+            "fats": round(day["fats"] * frac, 1),
+        }
+    return out
+
+
+# ============================================================
 # [P1-SWAP-MACROS · 2026-05-22] Validador post-gen de macros del meal
 # generado por LLM en swap/modify vs los targets del slot original.
 # Cierra el gap del audit "Cambiar Plato": pre-fix el prompt solo inyectaba
