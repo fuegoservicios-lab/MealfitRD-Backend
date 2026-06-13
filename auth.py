@@ -6,8 +6,8 @@ from db import (
     ensure_user_profile_exists,
     get_monthly_api_usage,
     get_user_profile,
-    supabase,
 )
+from neon_auth import verify_neon_jwt  # [P1-NEON-AUTH-MIGRATION · 2026-06-13]
 from knobs import _env_int  # [P3-TIER-LIMITS-ENV · 2026-05-20] auto-registry
 
 logger = logging.getLogger(__name__)
@@ -43,132 +43,74 @@ _TIER_LIMITS = {
 
 
 async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> Optional[str]:
-    """Verifica el JWT con la API de Supabase y retorna `user.id` si la firma es válida.
+    """Verifica el JWT de Neon Auth y retorna `sub` (user_id) si la firma es válida.
 
-    [P0-AUDIT-1 · 2026-05-12] El cuerpo legacy decodificaba el payload del JWT con
-    `base64.urlsafe_b64decode(...)` y retornaba `payload["sub"]` SIN verificar la
-    firma. Cualquier atacante podía construir un JWT con `sub` = victim_id (header
-    + payload válidos, firma arbitraria), mandarlo en `Authorization: Bearer …` y
-    todas las rutas autenticadas lo aceptaban como `verified_user_id` → account
-    takeover universal + IDOR sobre `meal_plans` / `user_inventory` /
-    `consumed_meals` / `user_facts` / `health_profile`.
+    [P1-NEON-AUTH-MIGRATION · 2026-06-13] Reemplaza la verificación que antes
+    hacía la API de Supabase Auth. Neon Auth (Better Auth) emite JWTs
+    EdDSA (Ed25519) validados LOCALMENTE contra el JWKS público cacheado
+    (`neon_auth.verify_neon_jwt`) — sin roundtrip de red por request en estado
+    caliente (mejora vs. Supabase, que llamaba a su API cada vez). El `sub` del
+    payload es el user_id (UUID), misma clave que `public.user_profiles.id`.
 
-    El backend usa `SUPABASE_KEY = SERVICE_ROLE` (bypassea RLS), así que esta
-    función era la ÚNICA línea de defensa de autenticación. Por eso el bypass
-    era catastrófico, no degradable.
+    [P0-AUDIT-1 · 2026-05-12] La invariante de seguridad se preserva intacta:
+    NUNCA se decodifica el payload sin verificar la firma. `verify_neon_jwt`
+    valida firma + `iss` + `aud` + `exp` con el algoritmo FIJO `["EdDSA"]`
+    (sin algorithm-confusion ni `none`) antes de retornar claims. El backend
+    conecta a Neon con un rol que bypassa RLS, así que esta función sigue
+    siendo la ÚNICA capa de auth — el fail-secure es obligatorio: cualquier
+    fallo (firma inválida, expirado, kid desconocido, JWKS inalcanzable) →
+    `None`, jamás un claim no verificado.
 
-    Fix: `supabase.auth.get_user(token)` valida la firma server-side llamando a
-    Supabase. Sin esa llamada (o si Supabase rechaza), NO aceptamos el token.
-    Fail-secure en todos los paths: cualquier excepción → log + `None`/403, jamás
-    retornamos un claim no verificado.
-
-    [P2-AUTH-ASYNC-SLEEP · 2026-05-12] Migrado a `async def`. Pre-fix:
-      - Sync `time.sleep` (0.5s) bloqueaba el worker thread sincronicamente
-        durante el retry transient ("Server disconnected"), reduciendo
-        throughput bajo carga (workers en sleep ≠ servicing requests).
-      - `supabase.auth.get_user(token)` es sync HTTP — bloqueaba el worker
-        durante ~50-200ms por request aunque no fallara.
-    Ahora:
-      - `await asyncio.sleep(0.5)` libera el event loop durante el retry.
-      - `await asyncio.to_thread(supabase.auth.get_user, token)` despacha la
-        call sync HTTP a un thread del default pool. El event loop sirve
-        otras requests mientras Supabase responde.
-    Resultado: throughput per-worker sube ~3-5× bajo carga (típicamente
-    100 req/s sostenido por worker vs ~20-30 req/s pre-fix). FastAPI
-    soporta async dependencies transparentemente — los callers existentes
-    (sync `verify_api_quota`, varios handlers) no requieren cambios.
+    [P2-AUTH-ASYNC-SLEEP · 2026-05-12] `async def` + `asyncio.to_thread` para la
+    verificación: en estado caliente es CPU-only (firma Ed25519) y retorna al
+    instante; el único I/O es el fetch ocasional del JWKS (primer request /
+    rotación de kid), que `to_thread` mantiene fuera del event loop.
 
     Contrato (callers ya lo asumen — preservado):
       * `Authorization` ausente / no `Bearer …`         → None.
-      * `supabase` client no inicializado               → None.
-      * Token cuya firma Supabase rechaza               → raise HTTPException 403.
-      * Token válido pero `user` inexistente (orphan)   → None.
-      * Token válido + user existente                   → user.id.
+      * Neon Auth no configurado / token vacío          → None.
+      * Token cuya firma o claims son inválidos          → None.
+      * Token válido sin `sub`                           → None.
+      * Token válido                                     → sub (user_id).
 
-    Tooltip-anchor: P0-AUDIT-1-AUTH-VERIFY | P2-AUTH-ASYNC-SLEEP | bypass cerrado 2026-05-12.
+    Tooltip-anchor: P0-AUDIT-1-AUTH-VERIFY | P1-NEON-AUTH-VERIFY | bypass cerrado 2026-05-12.
     Tests parser-based: `tests/test_p0_audit_1_auth_bypass.py`, `tests/test_p2_prod_audit_3.py`.
     """
     if not authorization or not authorization.startswith("Bearer "):
         return None
     token = authorization.split(" ", 1)[1].strip()
-    if not token or not supabase:
+    if not token:
         return None
 
-    # Reintento defensivo ante errores de RED transient (httpx). Cualquier otra
-    # excepción (firma inválida, expirado, etc.) → 403 inmediato.
-    #
-    # [P3-AUTH-RETRY-EXPANDED · 2026-05-18] Pre-fix solo matcheaba el substring
-    # "Server disconnected". `RemoteProtocolError`, `ReadError`, `ConnectError`,
-    # `PoolTimeout`, `ReadTimeout` (todos transient de pool/keep-alive
-    # Supabase) NO retroyaban, devolviendo 403 espurio al frontend. El usuario
-    # veía picos de 403 que limpiaba con reintentos del cliente. Ahora cubrimos
-    # los 5 nombres canónicos de httpx + el legacy "Server disconnected"
-    # (mensaje viejo de versiones anteriores).
-    _TRANSIENT_NETWORK_ERRORS = (
-        "RemoteProtocolError",
-        "ReadError",
-        "ConnectError",
-        "ConnectTimeout",
-        "PoolTimeout",
-        "ReadTimeout",
-        "TimeoutException",
-        "Server disconnected",  # legacy httpx message
-    )
-    MAX_ATTEMPTS = 4
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            # [P2-AUTH-ASYNC-SLEEP] `supabase.auth.get_user` es sync. Wrap
-            # en `to_thread` para liberar el event loop durante la HTTP call.
-            user_res = await asyncio.to_thread(supabase.auth.get_user, token)
-        except Exception as e:
-            err_str = str(e)
-            err_type = type(e).__name__
-            is_transient = (
-                err_type in _TRANSIENT_NETWORK_ERRORS
-                or any(name in err_str for name in _TRANSIENT_NETWORK_ERRORS)
-            )
-            if attempt < MAX_ATTEMPTS - 1 and is_transient:
-                # [P2-AUTH-ASYNC-SLEEP] `asyncio.sleep` cede el event loop
-                # (otros requests progresan).
-                # Backoff exponencial suave: 0.25s, 0.5s, 1.0s.
-                sleep_time = 0.25 * (2 ** attempt)
-                logger.info(
-                    f"Token validation falló con error transitorio {err_type} (intento {attempt + 1}/{MAX_ATTEMPTS}). "
-                    f"Reintentando en {sleep_time}s..."
-                )
-                await asyncio.sleep(sleep_time)
-                continue
-            # Log SIN exponer detalle al cliente (no leak de mensaje Supabase).
-            logger.warning(
-                f"[P0-AUDIT-1] Token validation falló: {err_type}"
-            )
-            raise HTTPException(status_code=403, detail="Token validation failed.")
-        if user_res and getattr(user_res, "user", None):
-            _u = user_res.user
-            # [P1-NEON-DB-MIGRATION · 2026-06-12] Garantiza la fila espejo en
-            # public.user_profiles (reemplaza el trigger handle_new_user de
-            # Supabase — en Neon no existe el schema auth). Cacheado
-            # in-process: tras el primer request del usuario es un no-op puro
-            # sin roundtrip. to_thread: el INSERT es sync (pool psycopg).
-            try:
-                await asyncio.to_thread(
-                    ensure_user_profile_exists,
-                    _u.id,
-                    getattr(_u, "email", None),
-                    (getattr(_u, "user_metadata", None) or {}).get("full_name"),
-                )
-            except Exception as ensure_err:
-                # Best-effort: el JWT ya validó — no bloquear auth por esto.
-                logger.warning(
-                    f"[P1-NEON-DB-MIGRATION] ensure_user_profile_exists lanzó "
-                    f"{type(ensure_err).__name__} (auth continúa)"
-                )
-            return _u.id
-        # Token formalmente válido pero user inexistente (orphan token tras
-        # delete de la cuenta). Tratamos como no-auth — el caller decide.
+    # [P1-NEON-AUTH-VERIFY] Verificación local contra el JWKS de Neon Auth.
+    # `verify_neon_jwt` JAMÁS lanza — retorna el payload validado o None.
+    # `to_thread` despacha el fetch ocasional del JWKS (red) fuera del loop.
+    payload = await asyncio.to_thread(verify_neon_jwt, token)
+    if not payload:
+        return None
+    uid = payload.get("sub")
+    if not uid:
+        # Token válido formalmente pero sin `sub` — no podemos identificar al
+        # usuario. Fail-secure: tratamos como no-auth.
         return None
 
-    return None
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Garantiza la fila espejo en
+    # public.user_profiles (reemplaza el trigger handle_new_user). Cacheado
+    # in-process: tras el primer request del usuario es un no-op puro.
+    # Best-effort: el JWT ya validó — no bloquear auth si el INSERT falla.
+    try:
+        await asyncio.to_thread(
+            ensure_user_profile_exists,
+            uid,
+            payload.get("email"),
+            payload.get("name"),
+        )
+    except Exception as ensure_err:
+        logger.warning(
+            f"[P1-NEON-DB-MIGRATION] ensure_user_profile_exists lanzó "
+            f"{type(ensure_err).__name__} (auth continúa)"
+        )
+    return uid
 
 
 def verify_api_quota(verified_user_id: Optional[str] = Depends(get_verified_user_id)) -> Optional[str]:

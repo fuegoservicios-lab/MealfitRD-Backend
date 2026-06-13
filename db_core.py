@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 import os
 import logging
 from typing import Optional, List, Dict, Any, Tuple, Union
-from supabase import create_client, Client
 from dotenv import load_dotenv
 # [P1-DB-STMT-TIMEOUT · 2026-05-27] Helper registrado en `_KNOBS_REGISTRY`
 # (visible en /health/version y /api/system/knobs). `knobs` no tiene deps
@@ -130,10 +129,15 @@ def _session_timeout_statements() -> List[str]:
         )
     return stmts
 
-if SUPABASE_URL and SUPABASE_KEY:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-else:
-    supabase = None
+# [P1-NEON-AUTH-MIGRATION · 2026-06-13] Cliente Supabase ELIMINADO.
+# Auth → Neon Auth (neon_auth.verify_neon_jwt). Datos → Neon (execute_sql_*).
+# El símbolo `supabase = None` se conserva SOLO para compatibilidad de imports
+# (`from db_core import supabase` en db_chat/db_profiles/shopping_calculator/
+# diary/system). Esos callsites guardan `if supabase is None` (Storage de
+# visual_diary y admin delete-user quedan no-op hasta migrar a Neon Auth admin
+# API / object storage; vision está disabled). NO se importa el paquete
+# `supabase` (removido de requirements) — por eso jamás se crea un cliente.
+supabase = None
 
 # Configuración del ConnectionPool para psycopg
 # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Hay DOS pools:

@@ -8,7 +8,13 @@ langchain-openai==1.3.0
 # [P1-COHERE-EMBED-V4 · 2026-06-12] SDK nativo para embeddings Cohere Embed v4
 # (embed-v4.0 @1536, input_type asimétrico) — ver embeddings_provider.py.
 cohere==7.0.4
-supabase==2.30.0
+# [P1-NEON-AUTH-MIGRATION · 2026-06-13] Supabase eliminado por completo.
+# Auth → Neon Auth (Better Auth): el backend valida JWTs EdDSA contra el JWKS
+# público (neon_auth.py). PyJWT + cryptography eran transitivos de supabase;
+# ahora explícitos. Datos → Neon (psycopg). Storage de visual_diary queda
+# pendiente de object storage (vision disabled).
+PyJWT==2.10.1
+cryptography==46.0.3
 pydantic==2.13.4
 python-dotenv==1.2.2
 langgraph==1.1.10

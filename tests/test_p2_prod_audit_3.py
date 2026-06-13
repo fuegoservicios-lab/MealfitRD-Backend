@@ -159,19 +159,22 @@ def test_no_time_sleep_in_auth(auth_src: str):
 
 
 def test_uses_asyncio_sleep_and_to_thread(auth_src: str):
-    """Debe usar `asyncio.sleep` para el retry + `asyncio.to_thread` para
-    envolver la call sync `supabase.auth.get_user`."""
+    """[P1-NEON-AUTH-MIGRATION · 2026-06-13] La verificación de identidad
+    despacha a thread para no bloquear el event loop.
+
+    Pre-Neon (Supabase): la call sync HTTP de validación se envolvía en
+    `to_thread` + un retry con `asyncio.sleep` ante flakiness de red. Con
+    Neon Auth la verificación es LOCAL contra el JWKS cacheado
+    (`verify_neon_jwt`): el único I/O es el fetch ocasional del JWKS, que
+    sigue yendo por `to_thread`; el retry-con-sleep ya NO aplica (no hay
+    roundtrip de red por request que falle de forma transitoria)."""
     assert "import asyncio" in auth_src, (
         "P2-AUTH-ASYNC-SLEEP: falta `import asyncio` en auth.py."
     )
-    assert "await asyncio.sleep(" in auth_src, (
-        "P2-AUTH-ASYNC-SLEEP: el retry transient no usa "
-        "`await asyncio.sleep(...)`."
-    )
-    assert "asyncio.to_thread(supabase.auth.get_user" in auth_src, (
-        "P2-AUTH-ASYNC-SLEEP: la call a `supabase.auth.get_user` no está "
-        "envuelta en `asyncio.to_thread`. Sin eso, el worker bloquea "
-        "durante la HTTP roundtrip a Supabase."
+    assert re.search(r"to_thread\(\s*verify_neon_jwt", auth_src) is not None, (
+        "P1-NEON-AUTH: la verificación `verify_neon_jwt` no está envuelta en "
+        "`asyncio.to_thread`. Sin eso, el worker bloquea durante el fetch del "
+        "JWKS (primer request / rotación de kid)."
     )
 
 
