@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 from datetime import datetime
 import json
+import math
 import unicodedata
 import re
 import hashlib
@@ -156,6 +157,47 @@ def _defer_creative_plan_title(plan_id: str, user_id: str, plan_data: dict, plac
     threading.Thread(target=_bg, name="defer-plan-title", daemon=True).start()
 
 
+def _sanitize_nonfinite_for_json(obj, _path="$", _found=None):
+    """[P2-PERSIST-NAN-GUARD · 2026-06-13] Reemplaza NaN/Infinity (floats no-finitos)
+    por 0.0 recursivamente. Postgres `jsonb` rechaza `NaN`/`Infinity` con
+    'invalid input syntax for type json' → el INSERT del plan falla y el plan
+    generado+aprobado se PIERDE (bug live 2026-06-13: persist failure tras 3 intentos).
+    Un número no-finito (de una división del solver/balancing/LLM) jamás debe perder un
+    plan. Devuelve (objeto_saneado, lista_de_paths_saneados) para telemetría de la fuente."""
+    if _found is None:
+        _found = []
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            _found.append(_path)
+            return (0.0, _found)
+        return (obj, _found)
+    if isinstance(obj, dict):
+        return ({k: _sanitize_nonfinite_for_json(v, f"{_path}.{k}", _found)[0]
+                 for k, v in obj.items()}, _found)
+    if isinstance(obj, list):
+        return ([_sanitize_nonfinite_for_json(v, f"{_path}[{i}]", _found)[0]
+                 for i, v in enumerate(obj)], _found)
+    return (obj, _found)
+
+
+def _scrub_plan_data_floats(plan_data: dict, user_id: str = "?") -> dict:
+    """Aplica `_sanitize_nonfinite_for_json` al plan_data y loguea si encontró
+    no-finitos (para rastrear la fuente). Fail-safe: si el scrub falla, devuelve el
+    original (mejor intentar persistir que perder el plan por el propio guard)."""
+    try:
+        scrubbed, found = _sanitize_nonfinite_for_json(plan_data)
+        if found:
+            logger.error(
+                f"🧼 [P2-PERSIST-NAN-GUARD] Saneados {len(found)} valor(es) NaN/Inf en "
+                f"plan_data antes del INSERT (user={user_id}). Paths: {found[:8]}. "
+                f"El plan SE GUARDA con 0.0 en esos campos — investigar la fuente upstream."
+            )
+        return scrubbed
+    except Exception as _e:
+        logger.warning(f"[P2-PERSIST-NAN-GUARD] scrub falló (no-op): {_e!r}")
+        return plan_data
+
+
 def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: list = None, total_days_requested: int = 7) -> str:
     """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
     Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
@@ -170,6 +212,10 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
             import logging
             logger.warning(f"🧹 [GAP 3] Recortando días huérfanos en partial plan. De {len(plan_data['days'])} a {total_days_requested}")
             plan_data["days"] = plan_data["days"][:total_days_requested]
+
+        # [P2-PERSIST-NAN-GUARD · 2026-06-13] Sanear NaN/Inf ANTES del INSERT — Postgres
+        # jsonb los rechaza ('invalid input syntax for type json') y el plan se perdería.
+        plan_data = _scrub_plan_data_floats(plan_data, user_id)
 
         calories = plan_data.get("calories", 0)
         macros = plan_data.get("macros", {})
@@ -313,6 +359,10 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
     try:
         # 1. Guardar Plan O(1) Arrays
         if supabase:
+            # [P2-PERSIST-NAN-GUARD · 2026-06-13] Sanear NaN/Inf antes del INSERT (mismo
+            # guard que save_partial_plan_get_id) — Postgres jsonb los rechaza.
+            plan_data = _scrub_plan_data_floats(plan_data, user_id)
+
             calories = plan_data.get("calories", 0)
             macros = plan_data.get("macros", {})
 

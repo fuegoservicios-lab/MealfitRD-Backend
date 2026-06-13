@@ -8245,14 +8245,52 @@ def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> boo
 # (rollout gradual; requiere la DB de macros poblada — ver food_db_integration.md).
 MACRO_SOLVER_ENABLED = _env_bool("MEALFIT_MACRO_SOLVER_ENABLED", False)
 
+# [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
+# últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
+# plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
+# plan fuera médicamente sano y con buenos macros. Algo de solape entre planes es
+# natural (la gente tiene comidas favoritas). Default 2: hasta 2 repetidos = OK; 3+ =
+# rechazo legítimo por falta de variedad. Subir a 0 revierte al comportamiento estricto.
+ANTI_REPETITION_TOLERANCE = _env_int("MEALFIT_ANTI_REPETITION_TOLERANCE", 2)
+
 
 def _meal_macro_num(x) -> float:
-    """Parsea un valor de macro/caloría a float, tolerando "154g", "464 kcal", None."""
+    """Parsea un valor de macro/caloría a float, tolerando "154g", "464 kcal", None.
+    [P2-PERSIST-NAN-GUARD · 2026-06-13] Coacciona NaN/Inf → 0.0 (sin import math:
+    `v == v` detecta NaN, comparación detecta Inf) para que un no-finito no se propague
+    al solver/balancing ni al INSERT — Postgres jsonb rechaza NaN/Infinity y perdería el plan."""
     try:
         s = str(x).strip().lower().replace("g", "").replace("kcal", "").strip()
-        return float(s) if s else 0.0
+        v = float(s) if s else 0.0
+        return v if (v == v and v not in (float("inf"), float("-inf"))) else 0.0
     except Exception:
         return 0.0
+
+
+_MEDICAL_NONE_SENTINELS = {
+    "", "ninguna", "ninguno", "ningunas", "ningunos", "none", "n/a", "na",
+    "no", "nada", "sin alergias", "sin condiciones", "ninguna alergia",
+}
+
+
+def _has_real_medical_flags(items) -> bool:
+    """[P2-MEDICAL-FACTCHECK-GATE · 2026-06-13] True si `items` (lista o string del
+    form) contiene alguna alergia/condición REAL, no el sentinel "Ninguna".
+
+    El frontend manda `allergies=["Ninguna"]` cuando el usuario no tiene alergias →
+    lista no-vacía → truthy → el gate `if allergies or medical_conditions` corría el
+    fact-checking médico por-ingrediente (~40s de tool calls) inútilmente para usuarios
+    sanos. Este helper filtra los sentinels. NO reduce rigor para quien SÍ tiene
+    restricciones reales — solo evita investigar interacciones que no aplican. Anchor:
+    P2-MEDICAL-FACTCHECK-GATE."""
+    if not items:
+        return False
+    if isinstance(items, str):
+        items = [items]
+    try:
+        return any(str(x).strip().lower() not in _MEDICAL_NONE_SENTINELS for x in items)
+    except Exception:
+        return bool(items)
 
 
 def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: float) -> None:
@@ -10854,7 +10892,10 @@ async def review_plan_node(state: PlanState) -> dict:
     start_time = time.time()
     
     # Si no hay restricciones, aprobar el chequeo médico automáticamente (bypasseando el LLM)
-    if not allergies and not medical_conditions and diet_type == "balanced" and not dislikes and not taste_profile:
+    # [P2-MEDICAL-FACTCHECK-GATE] `_has_real_medical_flags` filtra el sentinel "Ninguna"
+    # (el form manda allergies=["Ninguna"], que era truthy) — antes el bypass nunca
+    # disparaba para usuarios sin restricciones reales.
+    if not _has_real_medical_flags(allergies) and not _has_real_medical_flags(medical_conditions) and diet_type == "balanced" and not _has_real_medical_flags(dislikes) and not taste_profile:
         logger.info("✅ [REVISOR] Sin restricciones declaradas → Bypassing LLM Reviewer, procediendo a validaciones deterministas.")
         approved = True
         issues = []
@@ -10865,7 +10906,11 @@ async def review_plan_node(state: PlanState) -> dict:
         # FASE 1: AGENTE DE FACT-CHECKING (INVESTIGACIÓN CLÍNICA)
         # ============================================================
         fact_check_report = "Sin hallazgos adicionales."
-        if allergies or medical_conditions:
+        # [P2-MEDICAL-FACTCHECK-GATE · 2026-06-13] Solo investigar interacciones si hay
+        # alergias/condiciones REALES (no el sentinel "Ninguna"). Antes corría ~40s de
+        # tool calls por-ingrediente para usuarios sanos. Skip seguro: sin condiciones,
+        # no hay interacciones que evaluar.
+        if _has_real_medical_flags(allergies) or _has_real_medical_flags(medical_conditions):
             from tools_medical import consultar_base_datos_medica
             # P1-10: SystemMessage/HumanMessage/ToolMessage a nivel módulo
 
@@ -11368,14 +11413,20 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     generic_ignores = ['huevosrevueltos', 'huevoshervidos', 'avenacocida', 'panezekiel', 'tostada', 'arepa']
                     filtered_repeated = [rm for rm in repeated_meals if not any(g in rm for g in generic_ignores)]
                     
-                    if len(filtered_repeated) > 0:
+                    # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Rechazar SOLO si los
+                    # repetidos superan la tolerancia (default 2). 1-2 repetidos vs los
+                    # últimos 3 planes es solape natural; no degrada un plan sano. Anchor:
+                    # P2-ANTI-REPETITION-TOLERANCE.
+                    if len(filtered_repeated) > ANTI_REPETITION_TOLERANCE:
                         approved = False
                         issues.append(
                             f"REPETICIÓN DETECTADA: Los siguientes platos principales ya aparecieron en planes recientes y deben ser reemplazados por alternativas completamente diferentes: {', '.join(repeated_meals)}."
                         )
                         # P1-6: max — preservar critical/high si ya estaba marcado
                         severity = _severity_max(severity, "minor")
-                        logger.info(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados: {repeated_meals}")
+                        logger.info(f"🔄 [ANTI-REPETICIÓN] {len(repeated_meals)} platos repetidos detectados (>{ANTI_REPETITION_TOLERANCE} tolerancia): {repeated_meals}")
+                    elif filtered_repeated:
+                        logger.info(f"✅ [ANTI-REPETICIÓN] {len(filtered_repeated)} repetido(s) tolerado(s) (≤{ANTI_REPETITION_TOLERANCE}): {filtered_repeated}")
                     else:
                         logger.info(f"✅ [ANTI-REPETICIÓN] Sin repeticiones detectadas contra {len(recent_meal_names)} platos recientes.")
             else:
