@@ -8203,6 +8203,43 @@ class BatchParsedIngredients(BaseModel):
 #      entradas en vuelo, validación nueva añadida después), `_schema_invalid`
 #      se setea y `review_plan_node` lo eleva a critical → guardrail entrega
 #      fallback matemático.
+_SKELETON_PROTEIN_MODIFIER_STOPWORDS = {
+    "proteina", "proteína", "principal", "secundaria", "entero", "enteros",
+    "entera", "enteras", "molida", "molido", "molidas", "fresco", "fresca",
+    "frescos", "frescas", "cocida", "cocido", "cocidas", "cocidos", "asado",
+    "asada", "guisado", "guisada", "del", "con", "sin", "las", "los",
+}
+
+
+def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> bool:
+    """[P0-SKELETON-FIDELITY-MATCH · 2026-06-13] ¿La proteína que el skeleton
+    asignó al día aparece en los ingredientes? El `protein_pool` del skeleton
+    trae etiquetas con descriptores y alternativas ("lentejas (proteína
+    principal)", "huevos enteros / claras", "maní / mantequilla de maní") que
+    NUNCA aparecen verbatim en los ingredientes ("lentejas", "huevos", "maní").
+    El substring directo (`label in text`) daba FALSO POSITIVO de "omitió" aunque
+    el día SÍ incluía la proteína → rechazos HIGH espurios + entrega degradada
+    (`plan_quality_degraded`). Este matcher quita "(...)", parte alternativas en
+    "/", y exige match (con frontera de palabra) del token-núcleo de la proteína,
+    ignorando modificadores. Preserva la detección real (día que de verdad omite
+    la proteína asignada: ningún token matchea → sigue flageado).
+
+    Anchor: P0-SKELETON-FIDELITY-MATCH.
+    """
+    import re as _re2
+    base = _re2.sub(r"\([^)]*\)", " ", (assigned_label or "").lower())
+    for alt in base.split("/"):
+        # Token-núcleo de la proteína (≥3 chars, sin modificadores), con frontera
+        # de palabra para no matchear substrings ("pollo" NO debe matchear "repollo").
+        toks = [
+            t for t in _re2.findall(r"[a-záéíóúñ]+", alt)
+            if len(t) >= 3 and t not in _SKELETON_PROTEIN_MODIFIER_STOPWORDS
+        ]
+        if any(_re2.search(r"\b" + _re2.escape(t) + r"\b", ingredients_text) for t in toks):
+            return True
+    return False
+
+
 def _run_assembly_validations(
     result: dict,
     skeleton: dict,
@@ -8231,7 +8268,13 @@ def _run_assembly_validations(
             _flatten_ingredient(ing).lower() for meal in day.get("meals", [])
             for ing in meal.get("ingredients", [])
         )
-        missing_proteins = [p for p in assigned_proteins if p not in day_ingredients_text]
+        # [P0-SKELETON-FIDELITY-MATCH · 2026-06-13] Matcher tolerante a los
+        # descriptores/alternativas del protein_pool (ver _skeleton_protein_present).
+        # El `p not in text` directo daba falsos positivos de "omitió".
+        missing_proteins = [
+            p for p in assigned_proteins
+            if not _skeleton_protein_present(p, day_ingredients_text)
+        ]
         # [P3-SKELETON-FIDELITY-CRITIQUE-AWARE · 2026-05-16] Threshold dinámico
         # según si self_critique modificó el día. Pre-fix: threshold hardcoded
         # >=2 missing → rechazo crítico cuando self_critique legítimamente
