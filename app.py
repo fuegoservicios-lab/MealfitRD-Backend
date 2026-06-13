@@ -915,17 +915,14 @@ def _build_session_mode_db_url() -> Optional[str]:
     except Exception:
         pass
     # Fallback legacy (pools no configurados — e.g. import de psycopg_pool
-    # falló pero psycopg directo sí está disponible).
-    raw = os.environ.get("SUPABASE_DB_URL")
+    # falló pero psycopg directo sí está disponible). [P1-SUPABASE-CLEANUP ·
+    # 2026-06-13] Lee el endpoint DIRECTO de Neon (ya es session-mode nativo);
+    # el SUPABASE_DB_URL legacy se eliminó al borrar el proyecto Supabase, así
+    # que el rewrite :6543→:5432 (específico de Supavisor) ya no aplica.
+    raw = os.environ.get("DATABASE_URL") or os.environ.get("NEON_DATABASE_URL")
     if not raw:
         return None
-    url = raw.strip().strip("'").strip('"')
-    # Forzar session mode (5432): el advisory lock de sesión sólo persiste en
-    # session mode; el Transaction Pooler (6543) lo liberaría al terminar la
-    # sentencia. Mirror de la lógica de db_core.py.
-    if ".supabase." in url and ":6543" in url:
-        url = url.replace(":6543", ":5432")
-    return url
+    return raw.strip().strip("'").strip('"')
 
 
 def _acquire_scheduler_leader_lock():
@@ -963,7 +960,7 @@ def _acquire_scheduler_leader_lock():
     session_url = _build_session_mode_db_url()
     if not session_url:
         logger.warning(
-            "🔓 [P1-SCHEDULER-LEADER-LOCK] SUPABASE_DB_URL ausente — fail-open: "
+            "🔓 [P1-SCHEDULER-LEADER-LOCK] NEON_DATABASE_URL ausente — fail-open: "
             "este worker actúa como leader (sin lock). Esperado en dev local."
         )
         return True, None
@@ -1063,7 +1060,11 @@ async def lifespan(app: FastAPI):
     if connection_pool:
         try:
             import psycopg
-            db_uri = os.environ.get("SUPABASE_DB_URL")
+            # [P1-SUPABASE-CLEANUP · 2026-06-13] Resuelve el URL session-mode de
+            # Neon. Pre-fix leía SUPABASE_DB_URL → tras borrar el proyecto
+            # Supabase apuntaba a un tenant inexistente y el setup del
+            # checkpointer fallaba (capturado) en CADA boot.
+            db_uri = _build_session_mode_db_url()
             # autocommit=True requerido por LangGraph PostgresSaver (puede crear
             # índices CONCURRENTLY internamente).
             # [P3-PROD-AUDIT-2 · 2026-05-30] connect_timeout para no colgar el

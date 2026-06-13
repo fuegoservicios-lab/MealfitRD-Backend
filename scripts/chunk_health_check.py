@@ -760,9 +760,9 @@ def main() -> int:
     parser.add_argument("--user-id", help="UUID de un user específico para verificar chunks/lock.")
     args = parser.parse_args()
 
-    if not os.environ.get("SUPABASE_DB_URL"):
-        print(_red("✗ SUPABASE_DB_URL no está en env. Ejecutar:"))
-        print("    export SUPABASE_DB_URL='postgres://...'")
+    if not (os.environ.get("DATABASE_URL") or os.environ.get("NEON_DATABASE_URL")):
+        print(_red("✗ NEON_DATABASE_URL no está en env. Ejecutar:"))
+        print("    export NEON_DATABASE_URL='postgresql://...neon.tech/...'")
         return 1
 
     print(_bold("\n━━━ Chunk Health Check ━━━"))

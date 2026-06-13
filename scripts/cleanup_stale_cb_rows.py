@@ -72,7 +72,7 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 
 def _connection_string(override: str | None) -> str | None:
-    return override or os.environ.get("SUPABASE_DB_URL")
+    return override or os.environ.get("DATABASE_URL") or os.environ.get("NEON_DATABASE_URL")
 
 
 def main(argv: list[str]) -> int:
@@ -85,13 +85,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--apply", action="store_true",
                         help="Aplica DELETE. Sin esta flag, solo preview.")
     parser.add_argument("--connection-string", type=str, default=None,
-                        help="Override de SUPABASE_DB_URL.")
+                        help="Override de NEON_DATABASE_URL.")
     args = parser.parse_args(argv)
 
     conn_str = _connection_string(args.connection_string)
     if not conn_str:
         print(
-            "[P2-CB-FOSSIL] ERROR: SUPABASE_DB_URL no configurada y "
+            "[P2-CB-FOSSIL] ERROR: NEON_DATABASE_URL no configurada y "
             "--connection-string no provisto.",
             file=sys.stderr,
         )

@@ -1,6 +1,6 @@
 # MealfitRD.IA — guía operacional
 
-Plan nutricional generado por LLM para usuario dominicano. Backend Python/FastAPI + LangGraph + Supabase. Frontend React/Vite. Detalles cronológicos de los ~80 P-fixes activos: ver `~/.claude/projects/c--Users-angel-OneDrive-Escritorio-MealfitRD-IA/memory/MEMORY.md`.
+Plan nutricional generado por LLM para usuario dominicano. Backend Python/FastAPI + LangGraph + Neon (Postgres + Neon Auth). Frontend React/Vite. Detalles cronológicos de los ~80 P-fixes activos: ver `~/.claude/projects/c--Users-angel-OneDrive-Escritorio-MealfitRD-IA/memory/MEMORY.md`.
 
 ---
 

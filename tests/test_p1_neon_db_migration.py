@@ -4,10 +4,10 @@ Supabase).
 
 Contratos cubiertos (todos parser-based — no requieren DB viva):
 
-1. `db_core.py` define el knob `MEALFIT_DB_BACKEND` con default "supabase",
-   y la rama neon es FAIL-LOUD (RuntimeError) si faltan NEON_DATABASE_URL /
-   NEON_DATABASE_URL_POOLED — un fallback silencioso a Supabase escribiría
-   en la DB equivocada post-cutover (split-brain).
+1. `db_core.py` define el knob `MEALFIT_DB_BACKEND` con default "neon"
+   (Supabase eliminado 2026-06-13), y la rama neon es FAIL-LOUD (RuntimeError)
+   si faltan NEON_DATABASE_URL / NEON_DATABASE_URL_POOLED — un fallback
+   silencioso escribiría en la DB equivocada post-cutover (split-brain).
 2. `db_core.DB_SESSION_MODE_URL` existe y `app.py::_build_session_mode_db_url`
    lo consume (el leader lock del scheduler necesita session mode; la
    heurística legacy ':6543'→':5432' era NO-OP con hostnames Neon).
@@ -45,14 +45,18 @@ def _read(rel: str) -> str:
 # 1. Knob de backend + fail-loud
 # ---------------------------------------------------------------------------
 
-def test_db_core_defines_backend_knob_with_supabase_default():
+def test_db_core_defines_backend_knob_with_neon_default():
+    # [P1-SUPABASE-CLEANUP · 2026-06-13] Default flip "supabase"→"neon": el
+    # proyecto Supabase fue eliminado, así que un env var ausente debe caer en
+    # Neon (único backend real), no en la rama legacy rota (footgun: pools sin
+    # configurar). La rama legacy `else` se conserva inerte (ver test siguiente).
     src = _read("db_core.py")
     assert re.search(
-        r'MEALFIT_DB_BACKEND\s*=\s*\(os\.environ\.get\("MEALFIT_DB_BACKEND"\)\s*or\s*"supabase"\)',
+        r'MEALFIT_DB_BACKEND\s*=\s*\(os\.environ\.get\("MEALFIT_DB_BACKEND"\)\s*or\s*"neon"\)',
         src,
     ), (
-        "db_core.py debe definir MEALFIT_DB_BACKEND con default 'supabase' "
-        "(cutover a Neon es opt-in explícito via env)."
+        "db_core.py debe definir MEALFIT_DB_BACKEND con default 'neon' "
+        "(Supabase eliminado — el env var ausente cae en el único backend real)."
     )
 
 

@@ -166,7 +166,8 @@ chat_checkpoint_pool = None  # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20]
 DB_SESSION_MODE_URL = None
 
 # [P1-NEON-DB-MIGRATION · 2026-06-12] Selección del backend de DATOS Postgres.
-# Knob `MEALFIT_DB_BACKEND`: "supabase" (default histórico) | "neon".
+# Knob `MEALFIT_DB_BACKEND`: "neon" (default — único backend real tras borrar
+# Supabase 2026-06-13) | "supabase" (rama legacy INERTE, ya no funcional).
 #   - neon: pools principales ← NEON_DATABASE_URL_POOLED (PgBouncer transaction
 #     mode de Neon, análogo de Supavisor :6543); chat_checkpoint_pool ←
 #     NEON_DATABASE_URL (endpoint directo, session mode — mismo contrato que
@@ -177,7 +178,12 @@ DB_SESSION_MODE_URL = None
 # pero faltan los URLs, se aborta la config de pools (fail-loud → /ready 503)
 # en vez de degradar silenciosamente a Supabase: un fallback silencioso
 # escribiría en la DB equivocada (split-brain).
-MEALFIT_DB_BACKEND = (os.environ.get("MEALFIT_DB_BACKEND") or "supabase").strip().lower()
+# [P1-SUPABASE-CLEANUP · 2026-06-13] Default flip "supabase"→"neon": el proyecto
+# Supabase fue eliminado, así que un env var ausente debe caer en Neon (el único
+# backend real), NO en la rama legacy rota (footgun: pools sin configurar →
+# connection_pool=None → primera query falla). La rama "supabase" se conserva
+# inerte (solo alcanzable con MEALFIT_DB_BACKEND=supabase explícito, que ya falla).
+MEALFIT_DB_BACKEND = (os.environ.get("MEALFIT_DB_BACKEND") or "neon").strip().lower()
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 NEON_DATABASE_URL_POOLED = os.environ.get("NEON_DATABASE_URL_POOLED")
 

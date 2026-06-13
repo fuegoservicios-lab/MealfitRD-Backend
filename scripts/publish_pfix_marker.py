@@ -72,11 +72,11 @@ def upsert_kv(marker: str) -> tuple[bool, str | None]:
 
     Si la key ya tenía el mismo valor, was_changed=False (idempotente).
     """
-    db_url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
+    db_url = os.environ.get("DATABASE_URL") or os.environ.get("NEON_DATABASE_URL")
     if not db_url:
         raise RuntimeError(
-            "SUPABASE_DB_URL no está seteado. Necesitas exportar la "
-            "connection string del pooler antes de correr este script."
+            "NEON_DATABASE_URL no está seteado. Necesitas exportar la "
+            "connection string de Neon antes de correr este script."
         )
 
     try:
