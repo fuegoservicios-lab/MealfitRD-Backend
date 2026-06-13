@@ -297,7 +297,11 @@ def test_z2_z3_schema_fields_optional():
     assert "macros: Optional[List[str]] = Field(default=None" in _SCHEMAS
     # Backfill robusto contra None (Optional emite None, no ausencia).
     assert 'if not m.get("time"): m["time"] = "Flexible"' in _G
-    assert 'if not m.get("macros"): m["macros"] = ["Plan Matemático"]' in _G
+    # [Z2 → P0-MEAL-MACRO-RECOVERY · 2026-06-13] El backfill de macros ya no es un
+    # placeholder ciego: _recover_meal_macros estima el breakdown desde cals+split
+    # (el placeholder "Plan Matemático" queda como fallback solo cuando faltan cals).
+    assert "_recover_meal_macros(m, _ratio_p, _ratio_c, _ratio_f)" in _G
+    assert '["Plan Matemático"]' in _G
 
 
 def test_l1_bind_nutrition_tool_knob():

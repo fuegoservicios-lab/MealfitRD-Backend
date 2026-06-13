@@ -8240,6 +8240,46 @@ def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> boo
     return False
 
 
+def _meal_macro_num(x) -> float:
+    """Parsea un valor de macro/caloría a float, tolerando "154g", "464 kcal", None."""
+    try:
+        s = str(x).strip().lower().replace("g", "").replace("kcal", "").strip()
+        return float(s) if s else 0.0
+    except Exception:
+        return 0.0
+
+
+def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: float) -> None:
+    """[P0-MEAL-MACRO-RECOVERY · 2026-06-13] Garantiza que un meal tenga breakdown
+    de macros. Si protein/carbs/fats vienen todos en 0/ausentes (gap del day-gen o
+    self-critique fallido que dejó el día sin macros → shippeaba protein=0 +
+    placeholder "Plan Matemático" y el usuario veía 0g de proteína), los ESTIMA
+    desde las cals del meal con el split objetivo del plan (ratio_p/c/f = fracción
+    de cals por macro). Determinístico y muy superior a 0. Si además faltan las
+    cals, deja el placeholder. Si los numéricos existen pero falta la lista de
+    display `macros`, la reconstruye. Mutates `meal` in-place.
+
+    Anchor: P0-MEAL-MACRO-RECOVERY.
+    """
+    has_real = not all(_meal_macro_num(meal.get(k)) == 0 for k in ("protein", "carbs", "fats"))
+    if not has_real:
+        mcals = _meal_macro_num(meal.get("cals"))
+        if mcals > 0:
+            pm = round(mcals * ratio_p / 4)
+            cm = round(mcals * ratio_c / 4)
+            fm = round(mcals * ratio_f / 9)
+            meal["protein"], meal["carbs"], meal["fats"] = pm, cm, fm
+            meal["macros"] = [f"P:{pm}g", f"C:{cm}g", f"G:{fm}g"]
+        elif not meal.get("macros"):
+            meal["macros"] = ["Plan Matemático"]
+    elif not meal.get("macros"):
+        meal["macros"] = [
+            f"P:{round(_meal_macro_num(meal.get('protein')))}g",
+            f"C:{round(_meal_macro_num(meal.get('carbs')))}g",
+            f"G:{round(_meal_macro_num(meal.get('fats')))}g",
+        ]
+
+
 def _run_assembly_validations(
     result: dict,
     skeleton: dict,
@@ -8739,6 +8779,24 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # =========================================================
     days = result.get("days", [])
     
+    # [P0-MEAL-MACRO-RECOVERY · 2026-06-13] Ratios del split objetivo del plan
+    # para recuperar el breakdown de macros de meals que el day-gen (gap del LLM)
+    # o un self-critique fallido (cb_open/timeout/None → `_critique_unresolved` +
+    # surgical-regen que falla) dejó SIN protein/carbs/fats → shippeaban con
+    # protein=0 + placeholder "Plan Matemático" y el usuario veía 0g de proteína
+    # ese día. Estimar desde las cals del meal con el split del plan es
+    # determinístico y muy superior a 0 (caso transitorio, no el path feliz).
+    _daily_cals = _meal_macro_num(result.get("calories"))
+    _pg = _meal_macro_num(active_macros.get("protein_str"))
+    _cg = _meal_macro_num(active_macros.get("carbs_str"))
+    _fg = _meal_macro_num(active_macros.get("fats_str"))
+    if _daily_cals > 0 and (_pg or _cg or _fg):
+        _ratio_p = (_pg * 4) / _daily_cals
+        _ratio_c = (_cg * 4) / _daily_cals
+        _ratio_f = (_fg * 9) / _daily_cals
+    else:
+        _ratio_p, _ratio_c, _ratio_f = 0.30, 0.45, 0.25  # split estándar fallback
+
     # Normalizar claves para compatibilidad con cachés antiguos o fallbacks
     for d in days:
         for m in d.get("meals", []):
@@ -8750,7 +8808,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if "meal" not in m: m["meal"] = m.get("name", "Comida").split(" ")[0] if " " in m.get("name", "") else m.get("name", "Comida")
             if not m.get("time"): m["time"] = "Flexible"  # [Z3] Optional emite None → guard .get()
             if "prep_time" not in m: m["prep_time"] = "15 min"
-            if not m.get("macros"): m["macros"] = ["Plan Matemático"]  # [Z2] Optional emite None → guard .get()
+            # [P0-MEAL-MACRO-RECOVERY · 2026-06-13] Recupera el breakdown de macros
+            # del meal (estima desde cals + split si vienen en 0) — antes shippeaba
+            # protein=0 + placeholder "Plan Matemático" y el usuario veía 0g.
+            _recover_meal_macros(m, _ratio_p, _ratio_c, _ratio_f)
             if "ingredients" not in m: m["ingredients"] = ["Proteína magra al gusto", "Carbohidratos complejos", "Vegetales mixtos"]
             if "difficulty" not in m: m["difficulty"] = "Fácil"
             if "desc" not in m: m["desc"] = "Comida saludable y balanceada."
