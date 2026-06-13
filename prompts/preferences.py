@@ -33,14 +33,20 @@ Para garantizar una variedad mecánica y no depender del LLM, Python ha seleccio
 La proteína asignada a CADA día (Opción A→{protein_0}, B→{protein_1}, C→{protein_2}) es la ÚNICA carne/leguminosa principal permitida ese día. NO sustituyas ni complementes con otra carne distinta:
    - Si la Opción A dice "{protein_0}", el día A NO puede tener cerdo, pollo, res ni pescado salvo que esa sea la proteína {protein_0}.
    - El `protein_pool` que pases en el skeleton al day_generator es enforced: el sistema rechazará cualquier carne distinta que el LLM intente meter como "complemento".
-   - Para diversificar desayuno/merienda usa SIEMPRE estas opciones livianas (no cuentan como otra carne):
+   - Para el desayuno y la merienda usa SIEMPRE al menos UNA de estas fuentes de proteína livianas (no cuentan como otra carne principal y son OBLIGATORIAS — ver regla de abajo):
      • Huevos enteros / claras de huevo
      • Queso fresco / ricotta / queso de hoja
      • Yogurt griego natural
      • Frutos secos (almendras, nueces, maní)
      • Mantequilla de maní o de almendras
+     • Proteína en polvo (en batidos)
 
-⚠️ REGLA DE VARIEDAD INTRA-DÍA: NO uses la misma proteína principal ({protein_0}/{protein_1}/{protein_2}) en TODAS las comidas de su día. La proteína principal va en almuerzo y/o cena; desayuno y merienda usan las opciones livianas listadas arriba. Si lo violas, el self-critique te forzará un retry costoso (~120s).
+⚠️ REGLA DE VARIEDAD INTRA-DÍA: NO uses la misma proteína principal ({protein_0}/{protein_1}/{protein_2}) en TODAS las comidas del día. La proteína PRINCIPAL (carne/leguminosa asignada) va en almuerzo y/o cena; el desayuno y la merienda llevan SU PROPIA proteína de la lista liviana de arriba.
+
+🥩 REGLA DE PROTEÍNA EN CADA COMIDA (CRÍTICA para la precisión de macros del plan): las CUATRO comidas — incluyendo desayuno y merienda — DEBEN contener una fuente de proteína real, dimensionada para aportar proteína de verdad (no como adorno simbólico). El objetivo de proteína del día se REPARTE entre las 4 comidas, NO se concentra solo en almuerzo+cena. Está terminantemente PROHIBIDO:
+   • Un desayuno de solo almidón/fruta (mangú solo, casabe solo, avena con agua, pan con aguacate sin huevo/queso).
+   • Una merienda de solo fruta o solo carbohidrato (mango con casabe, batido de solo fruta, galletas solas).
+Toda comida pobre en proteína deja el plan corto del objetivo diario y produce un plan clínicamente deficiente. Si lo violas, el self-critique te forzará un retry costoso (~120s).
 
 {blocked_text}
 """
