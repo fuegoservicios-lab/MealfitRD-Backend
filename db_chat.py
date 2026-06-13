@@ -643,40 +643,61 @@ def archive_summaries(summaries_list: list):
 
 def search_deep_memory(user_id: str, query: str, limit: int = 5):
     """
-    Busca en el archivo frío (summary_archive) los resúmenes históricos de un usuario.
-    Hace un JOIN lógico: primero obtiene los session_ids del usuario,
-    luego busca en summary_archive por esos session_ids con búsqueda textual.
+    Busca en la memoria profunda del usuario. Capa legacy: ILIKE sobre el archivo
+    frío (summary_archive). [P1-DREAMING-1 · 2026-06-13] Capa nueva (gateada por
+    MEALFIT_DREAMING_RETRIEVAL_ENABLED): antepone el "modelo del usuario"
+    consolidado por el Dreaming via match semántico (RPC match_user_memory).
+    Fail-secure: sin COHERE_API_KEY o cualquier error → solo el ILIKE legacy.
     """
     if not connection_pool: return []
+    deep: list = []
+
+    # --- Capa Dreaming (vectorial): el user_model de alto nivel ---
     try:
-        # 1. Obtener todos los session_ids del usuario (::text — la columna
-        # session_id de summary_archive es TEXT, no uuid)
+        import dreaming
+        if dreaming._dreaming_retrieval_enabled():
+            from fact_extractor import get_embedding
+            emb = get_embedding(query, purpose="query")  # asimetría: lado de búsqueda
+            if emb:
+                emb_str = f"[{','.join(map(str, emb))}]"
+                rows = execute_sql_query(
+                    "SELECT user_model AS summary, 'consolidado' AS messages_start, "
+                    "'memoria' AS messages_end, 0 AS message_count, "
+                    "now()::text AS original_created_at "
+                    "FROM match_user_memory(query_embedding => %s::extensions.vector, "
+                    "match_threshold => %s, match_count => %s, p_user_id => %s)",
+                    (emb_str, 0.20, 1, user_id),
+                    fetch_all=True,
+                ) or []
+                deep.extend(rows)
+    except Exception as e:
+        logger.debug(f"[P1-DREAMING-1] branch vectorial de deep memory falló (fallback ILIKE): {e}")
+
+    # --- Capa legacy (ILIKE sobre el archivo frío) ---
+    try:
+        # session_ids del usuario (::text — summary_archive.session_id es TEXT)
         sessions_res = execute_sql_query(
             "SELECT id::text AS id FROM public.agent_sessions WHERE user_id = %s",
             (user_id,),
             fetch_all=True,
         )
-        if not sessions_res:
-            return []
-
-        session_ids = [s["id"] for s in sessions_res]
-
-        # 2. Buscar en summary_archive por esos session_ids con texto parcial
-        res = execute_sql_query(
-            "SELECT summary, messages_start::text AS messages_start, "
-            "messages_end::text AS messages_end, message_count, "
-            "original_created_at::text AS original_created_at "
-            "FROM public.summary_archive "
-            "WHERE session_id = ANY(%s::text[]) AND summary ILIKE %s "
-            "ORDER BY original_created_at DESC LIMIT %s",
-            (session_ids, f"%{query}%", limit),
-            fetch_all=True,
-        )
-
-        return res or []
+        if sessions_res:
+            session_ids = [s["id"] for s in sessions_res]
+            res = execute_sql_query(
+                "SELECT summary, messages_start::text AS messages_start, "
+                "messages_end::text AS messages_end, message_count, "
+                "original_created_at::text AS original_created_at "
+                "FROM public.summary_archive "
+                "WHERE session_id = ANY(%s::text[]) AND summary ILIKE %s "
+                "ORDER BY original_created_at DESC LIMIT %s",
+                (session_ids, f"%{query}%", limit),
+                fetch_all=True,
+            )
+            deep.extend(res or [])
     except Exception as e:
         logger.error(f"Error buscando en deep memory (summary_archive): {e}")
-        return []
+
+    return deep[:limit]
 
 def delete_summaries(summary_ids: list):
     """Elimina múltiples resúmenes por sus IDs."""

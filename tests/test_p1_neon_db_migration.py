@@ -277,15 +277,17 @@ def test_db_facts_vector_searches_cast_id_to_text():
 # 8. Marker bumpeado
 # ---------------------------------------------------------------------------
 
-def test_last_known_pfix_bumped_to_neon_migration():
-    """[P1-NEON-AUTH-MIGRATION · 2026-06-13] Acepta cualquier marker `P1-NEON-`
-    (DB o AUTH): ambos son fases de la misma migración a Neon. El cierre de la
-    fase Auth (posterior) movió el marker de DB→AUTH; lo que importa es que el
-    marker refleje la migración Neon, no la sub-fase exacta."""
+def test_last_known_pfix_well_formed():
+    """[P1-NEON-AUTH-MIGRATION · 2026-06-13 · relajado P1-DREAMING-1] El marker
+    `_LAST_KNOWN_PFIX` avanza con cada P-fix (ya pasó de P1-NEON-* a P1-DREAMING-1),
+    así que este test NO pinnea un prefijo concreto: valida solo el FORMATO
+    canónico `Pn-SLUG · YYYY-MM-DD`. El floor de fecha + frescura los ancla
+    `test_p3_1_last_known_pfix_freshness.py`; el cross-link slug↔test lo ancla
+    `test_p2_hist_audit_14_marker_test_link.py`."""
     src = _read("app.py")
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
     assert m, "_LAST_KNOWN_PFIX no encontrado en app.py"
-    assert m.group(1).startswith("P1-NEON-"), (
-        f"Marker actual: {m.group(1)!r} — el cierre de la migración Neon "
-        "(DB o AUTH) debe bumpearlo (contrato /health/version + deploy-lag)."
+    assert re.match(r'^P\d+-[A-Z0-9][A-Z0-9-]* · \d{4}-\d{2}-\d{2}$', m.group(1)), (
+        f"Marker mal formado: {m.group(1)!r} — debe ser `Pn-SLUG · YYYY-MM-DD` "
+        "(contrato /health/version + deploy-lag)."
     )

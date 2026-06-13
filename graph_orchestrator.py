@@ -4233,6 +4233,17 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     chunk_lessons = form_data.get("_chunk_lessons")
     prev_chunk_adherence = form_data.get("_prev_chunk_adherence")
 
+    # [P1-DREAMING-1 · 2026-06-13 · Fase 4] Bloque del "modelo del usuario"
+    # consolidado por el Dreaming, inyectado al generador de planes (gateado por
+    # MEALFIT_DREAMING_INJECT_PLAN_ENABLED, default OFF → '' → plan idéntico).
+    # Lazy import (dreaming hace lazy-import de LLMCircuitBreaker de este módulo).
+    _dream_plan_constraints = ""
+    try:
+        import dreaming as _dreaming_mod
+        _dream_plan_constraints = _dreaming_mod.build_plan_constraints_block(_uid)
+    except Exception:
+        pass
+
     return {
         "user_id": _uid,
         "quality_context": build_skeleton_quality_context(previous_plan_quality, meal_level_adherence),

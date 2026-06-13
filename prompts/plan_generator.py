@@ -660,9 +660,15 @@ def build_skeleton_quality_context(quality_score: float, meal_adherence: dict) -
     return ctx
 
 
-def build_adherence_context(adherence_hint: str, meal_level_adherence: dict = None, ignored_meal_types: list = None, abandoned_reasons: dict = None, emotional_state: str = None, successful_tone_strategies: list = None, nudge_conversion_rates: dict = None, frustrated_meal_types: list = None) -> str:
-    """Genera el bloque de feedback loop según la adherencia del usuario general y por tipo de comida."""
+def build_adherence_context(adherence_hint: str, meal_level_adherence: dict = None, ignored_meal_types: list = None, abandoned_reasons: dict = None, emotional_state: str = None, successful_tone_strategies: list = None, nudge_conversion_rates: dict = None, frustrated_meal_types: list = None, dynamic_user_constraints: str = "") -> str:
+    """Genera el bloque de feedback loop según la adherencia del usuario general y por tipo de comida.
+
+    [P1-DREAMING-1 · Fase 4] `dynamic_user_constraints` (opcional): bloque del
+    user_model consolidado por el Dreaming, antepuesto al feedback de adherencia.
+    Vacío por default (MEALFIT_DREAMING_INJECT_PLAN_ENABLED OFF) → bloque idéntico."""
     ctx = ""
+    if dynamic_user_constraints:
+        ctx += dynamic_user_constraints
     if adherence_hint == 'low':
         ctx += """
 --- 📉 FEEDBACK DE ADHERENCIA: BAJA ---

@@ -5138,6 +5138,113 @@ def _emit_hot_table_bloat_tick() -> None:
                 )
 
 
+# ===========================================================================
+# [P1-DREAMING-1 · 2026-06-13] Cron del sistema de Dreaming (consolidación de
+# memoria offline). La lógica vive en dreaming.run_dream_cycle(); aquí solo el
+# scheduling, la telemetría a pipeline_metrics y las alertas a system_alerts.
+# ===========================================================================
+def _emit_dreaming_alert(alert_key: str, alert_type: str, title: str,
+                         message: str, metadata: dict,
+                         affected_user_ids: list | None = None) -> None:
+    try:
+        execute_sql_write(
+            "INSERT INTO system_alerts "
+            "(alert_key, alert_type, severity, title, message, metadata, affected_user_ids) "
+            "VALUES (%s, %s, 'warning', %s, %s, %s::jsonb, %s::jsonb) "
+            "ON CONFLICT (alert_key) DO UPDATE "
+            "SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL",
+            (alert_key, alert_type, title, message,
+             json.dumps(metadata, ensure_ascii=False),
+             json.dumps([str(x) for x in (affected_user_ids or [])])),
+        )
+    except Exception as e:
+        logger.warning(f"[P1-DREAMING-1] alert {alert_key} falló (best-effort): {e}")
+
+
+def _persist_dream_contradiction_alert(user_id, contradictions) -> None:
+    """Emite `dream_contradiction:<user_id>` cuando el Dreaming detecta facts en
+    conflicto. NUNCA muta el fact (sobre todo clínico): es señal para revisión SRE."""
+    try:
+        items = []
+        for c in (contradictions or [])[:10]:
+            desc = getattr(c, "description", None)
+            fids = getattr(c, "fact_ids", None)
+            if desc is None and isinstance(c, dict):
+                desc, fids = c.get("description"), c.get("fact_ids")
+            items.append({"description": str(desc or "")[:200],
+                          "fact_ids": [str(x) for x in (fids or [])][:10]})
+        _emit_dreaming_alert(
+            f"dream_contradiction:{user_id}", "dream_contradiction",
+            "Contradicción de memoria detectada por Dreaming",
+            f"{len(contradictions or [])} contradicción(es) en los facts del usuario "
+            f"{str(user_id)[:8]} (no auto-resueltas; revisar si involucra alergia/condición).",
+            {"user_id": str(user_id), "contradictions": items},
+            affected_user_ids=[user_id],
+        )
+    except Exception as e:
+        logger.warning(f"[P1-DREAMING-1] _persist_dream_contradiction_alert falló: {e}")
+
+
+def _dream_consolidate_facts() -> None:
+    """[P1-DREAMING-1 · 2026-06-13] Cron nocturno de consolidación de memoria.
+    Delega en dreaming.run_dream_cycle() (early-return NEUTRAL si el knob master
+    MEALFIT_DREAMING_ENABLED está OFF — default). Emite pipeline_metrics +
+    alertas de budget/backlog + tracker de fallos consecutivos. Best-effort."""
+    # alert_key/cron_name inlineados como literales en los callsites de
+    # _track_cron_consecutive_failure (P2-AUDIT-4 Pattern 4 los detecta).
+    fail_title = "Cron dream_consolidate_facts con fallos consecutivos"
+    try:
+        import dreaming
+    except Exception as imp_err:
+        _track_cron_consecutive_failure("dream_consolidate_facts", "dreaming_consolidation_failures_burst", "dreaming_consolidation_failures_burst", fail_title,
+            is_failure=True, last_error=f"import dreaming failed: {imp_err!r}")
+        return
+    try:
+        agg = dreaming.run_dream_cycle()
+    except Exception as run_err:
+        logger.error(f"[P1-DREAMING-1] run_dream_cycle falló: {run_err}")
+        _track_cron_consecutive_failure("dream_consolidate_facts", "dreaming_consolidation_failures_burst", "dreaming_consolidation_failures_burst", fail_title,
+            is_failure=True, last_error=f"run failed: {run_err!r}")
+        return
+    # Éxito: resetea el contador de fallos consecutivos.
+    _track_cron_consecutive_failure("dream_consolidate_facts", "dreaming_consolidation_failures_burst", "dreaming_consolidation_failures_burst", fail_title, is_failure=False)
+    # Tick observable a pipeline_metrics (siempre, aun con knob OFF: confirma vida del cron).
+    try:
+        execute_sql_write(
+            "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, "
+            "retries, tokens_estimated, confidence, metadata) "
+            "VALUES (NULL, NULL, %s, 0, 0, %s, 0, %s::jsonb)",
+            ("dreaming_consolidation", int(round((agg.get("cost_usd", 0.0) or 0.0) * 1e6)),
+             json.dumps(agg, ensure_ascii=False)),
+        )
+    except Exception as tick_err:
+        logger.debug(f"[P1-DREAMING-1] pipeline_metrics tick falló: {tick_err}")
+    if not agg.get("enabled"):
+        return  # knob OFF → estado neutral, nada que alertar
+    if agg.get("budget_exhausted"):
+        _emit_dreaming_alert("dreaming_budget_exhausted", "dreaming_budget_exhausted",
+            "Budget nocturno de Dreaming agotado",
+            "El ciclo de Dreaming alcanzó MEALFIT_DREAMING_MAX_COST_USD_PER_NIGHT; "
+            "el resto de usuarios se procesa la próxima noche.", agg)
+    backlog = int(agg.get("backlog", 0) or 0)
+    backlog_threshold = _env_int("MEALFIT_DREAMING_BACKLOG_ALERT", 1000,
+        validator=lambda v: 0 <= v <= 100000)
+    if backlog > backlog_threshold:
+        _emit_dreaming_alert("dreaming_backlog_high", "dreaming_backlog_high",
+            "Backlog alto en dream_work_queue",
+            f"backlog={backlog} > umbral {backlog_threshold}: el cron no drena al ritmo "
+            "de encolado (subir MEALFIT_DREAMING_MAX_USERS_PER_NIGHT o investigar fallos).",
+            {"backlog": backlog, "threshold": backlog_threshold})
+    else:
+        try:
+            execute_sql_write(
+                "UPDATE system_alerts SET resolved_at = NOW() "
+                "WHERE alert_key = 'dreaming_backlog_high' AND resolved_at IS NULL")
+        except Exception:
+            pass
+    logger.info(f"💤 [P1-DREAMING-1] dream cycle: {agg}")
+
+
 def _drain_pending_facts_queue() -> None:
     """[P1-AUDIT-1 · 2026-05-12] Drena `pending_facts_queue` agrupando por user_id.
 
@@ -5400,6 +5507,31 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"⏰ [P1-AUDIT-1] Cron drain_pending_facts_queue registrado cada "
             f"{_facts_drain_interval} min (reemplaza trigger DB + webhook Vercel "
             f"con URL+secret hardcoded en pg_proc)."
+        )
+
+    # [P1-DREAMING-1 · 2026-06-13] Cron nocturno de consolidación de memoria (Dreaming).
+    # SIEMPRE se registra; el gate de ejecución vive DENTRO de run_dream_cycle()
+    # (early-return neutral si MEALFIT_DREAMING_ENABLED=false, el default). Así el
+    # cron es observable (tick a pipeline_metrics) sin coste cuando está apagado.
+    try:
+        import dreaming as _dreaming_mod
+        _dream_interval_h = _dreaming_mod._dreaming_interval_hours()
+    except Exception:
+        _dream_interval_h = 24
+    if not scheduler.get_job("dream_consolidate_facts"):
+        _add_job_jittered(scheduler,
+            _dream_consolidate_facts,
+            "interval",
+            hours=_dream_interval_h,
+            id="dream_consolidate_facts",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P1-DREAMING-1] Cron dream_consolidate_facts registrado cada "
+            f"{_dream_interval_h}h (gate interno MEALFIT_DREAMING_ENABLED, default OFF)."
         )
 
     # [P0-C] Job separado: refresh proactivo de snapshots de despensa en chunks pending/stale

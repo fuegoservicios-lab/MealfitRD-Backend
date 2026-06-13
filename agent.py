@@ -2362,7 +2362,7 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
     _chat_total_outcome = "ok"
 
     # Obtener contexto de memoria inteligente (resúmenes + mensajes recientes)
-    memory = build_memory_context(session_id)
+    memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
     
     # === RAG INJECTION (con Query Routing inteligente) ===
     user_facts_text = ""
@@ -2680,7 +2680,7 @@ from sentiment_classifier import classify_sentiment
 def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[dict] = None, user_id: Optional[str] = None, form_data: Optional[dict] = None, local_date: Optional[str] = None, tz_offset: Optional[int] = None, is_call_mode: bool = False, plan_tier: str = "gratis") -> Generator[str, None, None]:
     """Generador síncrono de chat que emite eventos del modelo y herramientas mediante SSE (JSONlines).
     FastAPI ejecuta esto en un threadpool externo, liberando el Event Loop para concurrencia real."""
-    memory = build_memory_context(session_id)
+    memory = build_memory_context(session_id, user_id)  # [P1-DREAMING-1] user_id → modelo del usuario
     
     # 🎭 ANÁLISIS DE SENTIMIENTO ADAPTATIVO (Solo Plus o superior)
     # [P3-GENCHUNK-SPEED · 2026-06-01] FASE 1 — `classify_sentiment` (gate

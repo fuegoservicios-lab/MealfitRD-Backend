@@ -198,6 +198,15 @@ def _parse_emitted_patterns() -> dict[str, list[tuple[Path, int, str]]]:
         r'f?["\']([^"\'\n]+)["\']',              # arg 2 (alert_key)
         re.DOTALL,
     )
+    # Patrón 5 [P1-DREAMING-1 · 2026-06-13]: callsites de
+    # `_emit_dreaming_alert("alert_key_literal", ...)` (helper del sistema de
+    # Dreaming en cron_tasks.py). El primer argumento posicional es el alert_key
+    # literal; el helper hace el INSERT INTO system_alerts internamente (recibe
+    # alert_key como variable → patrón 3 no lo detecta).
+    emit_dreaming_re = re.compile(
+        r'_emit_dreaming_alert\s*\(\s*[\n\s]*f?["\']([^"\'\n]+)["\']',
+        re.DOTALL,
+    )
 
     for fp in _EMITTER_FILES:
         if not fp.exists():
@@ -225,6 +234,12 @@ def _parse_emitted_patterns() -> dict[str, list[tuple[Path, int, str]]]:
         # Patrón 4: invocaciones al helper SSOT `_track_cron_consecutive_failure`.
         # Mismo cálculo de línea aproximada que patrón 3.
         for m in track_helper_re.finditer(text):
+            raw = m.group(1)
+            norm = _normalize_pattern(raw)
+            line_no = text.count("\n", 0, m.start(1)) + 1
+            out.setdefault(norm, []).append((fp.relative_to(_REPO_ROOT), line_no, raw))
+        # Patrón 5 [P1-DREAMING-1]: callsites de `_emit_dreaming_alert`.
+        for m in emit_dreaming_re.finditer(text):
             raw = m.group(1)
             norm = _normalize_pattern(raw)
             line_no = text.count("\n", 0, m.start(1)) + 1

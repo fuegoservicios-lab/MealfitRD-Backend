@@ -15,7 +15,7 @@ from langchain_core.messages import RemoveMessage
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 
 from db import (
@@ -754,10 +754,59 @@ def _format_evolutionary_state(state_json: dict) -> str:
     return "\n".join(parts)
 
 
-def build_memory_context(session_id: str) -> dict:
+# [P1-DREAMING-1 · 2026-06-13] Cache in-process del bloque "modelo del usuario"
+# (la síntesis de alto nivel que produce el Dreaming en user_memory_profile).
+# Evita un SELECT por cada turno de chat. (expira_ts, bloque_str) por user_id.
+_USER_MODEL_CACHE: dict = {}
+
+
+def _get_user_model_block(user_id: Optional[str]) -> str:
+    """Devuelve el bloque de texto del user_model para anteponer al prompt, o ''.
+    Gateado por MEALFIT_DREAMING_RETRIEVAL_ENABLED (default OFF → '' → prompt
+    idéntico a hoy). Cacheado TTL corto. Fail-open: cualquier error → ''."""
+    if not user_id:
+        return ""
+    try:
+        import dreaming
+        if not dreaming._dreaming_retrieval_enabled():
+            return ""
+    except Exception:
+        return ""
+    from knobs import _env_int
+    ttl = _env_int("MEALFIT_DREAMING_USER_MODEL_CACHE_TTL_S", 300,
+                   validator=lambda v: 0 <= v <= 3600)
+    now = time.time()
+    if ttl > 0:
+        ent = _USER_MODEL_CACHE.get(user_id)
+        if ent and ent[0] > now:
+            return ent[1]
+    block = ""
+    try:
+        prof = dreaming.get_user_memory_profile(user_id)
+        model = (prof or {}).get("user_model") if prof else None
+        if model:
+            cap = _env_int("MEALFIT_DREAMING_PROMPT_MAX_CHARS", 1200,
+                           validator=lambda v: 0 <= v <= 4000)
+            block = ("\n--- MODELO DEL USUARIO (síntesis consolidada de su memoria) ---\n"
+                     + str(model)[:cap]
+                     + "\n--------------------------------------------------------------\n")
+    except Exception as e:
+        logger.debug(f"[P1-DREAMING-1] user_model block falló (fail-open): {e}")
+        block = ""
+    if ttl > 0:
+        _USER_MODEL_CACHE[user_id] = (now + ttl, block)
+    return block
+
+
+def build_memory_context(session_id: str, user_id: Optional[str] = None) -> dict:
     """
     Construye el contexto completo de memoria para inyectar en los prompts.
     Soporta tanto resúmenes narrativos (texto) como Estado Evolutivo (JSON).
+
+    [P1-DREAMING-1 · 2026-06-13] `user_id` opcional: si está presente y
+    MEALFIT_DREAMING_RETRIEVAL_ENABLED, antepone el "modelo del usuario"
+    (síntesis del Dreaming) al contexto. Backward-compatible: sin user_id o
+    con el flag OFF, el resultado es idéntico al previo.
     
     Retorna:
         dict con:
@@ -796,6 +845,11 @@ def build_memory_context(session_id: str) -> dict:
             + "\n---------------------------------------------------------------------\n"
         )
     
+    # [P1-DREAMING-1] Antepone el modelo del usuario (síntesis del Dreaming) si
+    # aplica. Va a summary_context ANTES de computar full_context → llega al
+    # prompt sin tocar a los consumidores (chat_with_agent / _stream).
+    summary_context = _get_user_model_block(user_id) + summary_context
+
     # Construir contexto completo como string
     recent_str = ""
     if recent_messages:
