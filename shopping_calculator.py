@@ -174,20 +174,12 @@ from knobs import (
 _SEMANTIC_INIT_FAIL_COOLDOWN_S = max(0, _knob_env_int("MEALFIT_SEMANTIC_INIT_FAIL_COOLDOWN_S", 600))
 
 
-# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30 · P2-PROD-AUDIT-3 cierre] Cohorte omitida del
-# sweep original: el cliente `GoogleGenerativeAIEmbeddings` de shopping_calculator
-# (init de `embed_documents` + runtime `embed_query` del semantic cache, alcanzado
-# en plan-gen / recalc-shopping-list) quedó SIN deadline. `_gemini_call_with_retry`
-# reintenta TRAS excepción pero NO impone deadline sobre un socket colgado → espera
-# infinita que bloquea el worker thread. `GoogleGenerativeAIEmbeddings` NO acepta
-# `timeout=` en esta versión del SDK — solo `client_args={"timeout": ...}` acota el
-# httpx deadline. Mismo knob que constants.py::_embeddings_llm_timeout_s.
-def _embeddings_llm_timeout_s() -> float:
-    return _knob_env_float(
-        "MEALFIT_EMBEDDING_LLM_TIMEOUT_S",
-        15.0,
-        validator=lambda v: 0.0 < v <= 60.0,
-    )
+# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30 · P0-DEEPSEEK-MIGRATION · 2026-06-12]
+# El deadline del cliente de embeddings (init `embed_documents` + runtime
+# `embed_query` del semantic cache) ahora vive en `embeddings_provider`
+# (`_embeddings_timeout_s`, mismo knob `MEALFIT_EMBEDDING_LLM_TIMEOUT_S`) —
+# este módulo ya no construye su propio cliente; consume
+# `get_embeddings_client()`.
 
 # Batching del cache init de embeddings para no saturar RPM del modelo. Modelos
 # *-preview (ej. gemini-embedding-2-preview) tienen cuotas Tier 1 conservadoras
@@ -320,19 +312,20 @@ def _model_hash(model_name: str) -> str:
 
     [2026-05-06] Asegura que vectores cacheados con un modelo no se
     confundan con vectores de otro modelo (espacios vectoriales distintos).
-    Si cambias `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL`, las entradas Redis
-    viejas quedan ignoradas (no se intenta descifrarlas con cosine contra
-    embeddings del nuevo modelo) y se regeneran automáticamente.
+    [P0-DEEPSEEK-MIGRATION · 2026-06-12] El ID viene de
+    `embeddings_provider.get_embeddings_model_id()` (knob
+    `MEALFIT_EMBEDDINGS_MODEL`); si cambias de provider/modelo, las entradas
+    Redis viejas quedan ignoradas y se regeneran automáticamente.
     """
     import hashlib
     return hashlib.sha256(model_name.encode("utf-8")).hexdigest()[:8]
 
 
 def _redis_embed_cache_key(master_list: list) -> str:
-    from constants import GEMINI_EMBEDDING_TEXT_MODEL
+    from embeddings_provider import get_embeddings_model_id
     return (
         f"{_REDIS_EMBED_CACHE_KEY_PREFIX}:"
-        f"{_model_hash(GEMINI_EMBEDDING_TEXT_MODEL)}:"
+        f"{_model_hash(get_embeddings_model_id())}:"
         f"{_master_list_hash(master_list)}"
     )
 
@@ -465,21 +458,16 @@ def get_semantic_cache():
 
         # Cliente embeddings: barato instanciar (sin quota cost), necesario
         # tanto para Redis-hit (downstream `embed_query` runtime) como para
-        # Gemini-fetch (init de `embed_documents`).
-        try:
-            from langchain_google_genai import GoogleGenerativeAIEmbeddings
-            from constants import GEMINI_EMBEDDING_TEXT_MODEL
-            api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-            embeddings = GoogleGenerativeAIEmbeddings(
-                model=GEMINI_EMBEDDING_TEXT_MODEL,
-                google_api_key=api_key,
-                # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline httpx (ver helper).
-                client_args={"timeout": _embeddings_llm_timeout_s()},
-            )
-        except Exception as exc:
+        # el fetch inicial (init de `embed_documents`).
+        # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Via capa pluggable. Con
+        # provider `disabled` retorna None → fast-path Regex (path graceful
+        # pre-existente, mismo comportamiento que un fallo de instanciación).
+        from embeddings_provider import get_embeddings_client
+        embeddings = get_embeddings_client()
+        if embeddings is None:
             logging.info(
-                f"🟡 [P6-EMBED-CACHE-FIX] No se pudo instanciar embeddings client "
-                f"({type(exc).__name__}); fast-path Regex será usado."
+                "🟡 [P6-EMBED-CACHE-FIX] Embeddings provider disabled/no "
+                "instanciable; fast-path Regex será usado."
             )
             return None
 

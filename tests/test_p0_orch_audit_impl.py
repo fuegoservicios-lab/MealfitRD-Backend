@@ -31,6 +31,7 @@ Cobertura de los 19:
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -113,7 +114,12 @@ def test_p1_orch_2_global_handler_consults_latch():
 # P2-ORCH-4 — predicado tenacity excluye spend-cap (3 decoradores)
 # ===========================================================================
 def test_p2_orch_4_retry_predicate():
-    assert "retry_if_exception" in _G.split("\n")[13]  # import en la línea del tenacity import
+    # [P0-DEEPSEEK-MIGRATION] aserción position-independent: el import de
+    # tenacity puede moverse de línea con cambios de imports upstream.
+    _tenacity_import = next(
+        (ln for ln in _G.split("\n") if ln.startswith("from tenacity import")), ""
+    )
+    assert "retry_if_exception" in _tenacity_import
     assert _G.count("retry=retry_if_exception(lambda e: not _is_plan_spend_cap_error(e))") >= 3
 
 
@@ -147,14 +153,18 @@ def test_p2_orch_1_stagger_default_and_clamp():
 # P1-COST-THINKING-CAP — cap del thinking budget en day-gen + correctores
 # ===========================================================================
 def test_p1_cost_thinking_cap():
-    assert "DAYGEN_THINKING_BUDGET" in _G
-    assert "def _thinking_budget_kwargs(model_name: str) -> dict:" in _G
-    assert '"thinking_budget": DAYGEN_THINKING_BUDGET' in _G
-    # flash-lite excluido (no soporta thinking config).
-    assert '"lite" in model_name.lower()' in _G
-    # Aplicado al day-gen (80% del costo) + los 3 correctores (1 def + >=4 callsites).
-    assert _G.count("_thinking_budget_kwargs(") >= 5
-    assert "**_thinking_budget_kwargs(day_model)" in _G
+    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Este test ancla ahora la
+    REMOCIÓN del mecanismo P1-COST-THINKING-CAP: era exclusivo del SDK de
+    Gemini (reasoning facturaba como output ~$9/M). DeepSeek-V4 gestiona el
+    thinking nativamente y su output cuesta 10-30× menos. Si alguien
+    reintroduce el kwarg sin un provider que lo soporte, la construcción
+    del LLM rompería en runtime — este test lo bloquea en CI."""
+    _code = re.sub(r"#[^\n]*", "", _G)
+    assert "def _thinking_budget_kwargs" not in _code
+    assert "**_thinking_budget_kwargs(" not in _code
+    assert '"thinking_budget":' not in _code
+    # La nota de remoción queda como ancla textual del porqué.
+    assert "P0-DEEPSEEK-MIGRATION" in _G
 
 
 # ===========================================================================
@@ -200,7 +210,10 @@ def test_p2_orch_6_cross_day_detector():
 # ===========================================================================
 def test_p2_orch_7_risk_tier():
     assert "def _profile_has_medical_risk(form_data) -> bool:" in _G
-    assert '_REVIEWER_RISK_TIER_DEFAULT = "gemini-3.5-flash"' in _G
+    # [P0-DEEPSEEK-MIGRATION] risk-tier escala a PRO (constante SSOT de
+    # llm_provider) para TODOS los tiers — la seguridad clínica no se
+    # degrada por plan de pago.
+    assert "_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_PRO" in _G
     assert "def _reviewer_model_name(form_data=None) -> str:" in _G
     assert "def _fact_checker_model_name(form_data=None) -> str:" in _G
     assert "_reviewer_model = _reviewer_model_name(form_data)" in _G
@@ -409,19 +422,16 @@ def test_func_p2_orch_2_stats_snapshot_shape():
 
 @_needs_module
 def test_func_p1_cost_thinking_cap_gating():
-    """[P1-COST-THINKING-CAP] El kwarg solo se aplica a modelos thinking-capable
-    (gemini-3.5-flash); flash-lite y vacío → sin kwarg."""
-    b = _GO.DAYGEN_THINKING_BUDGET
-    kw = _GO._thinking_budget_kwargs("gemini-3.5-flash")
-    if b >= 0:
-        assert kw == {"thinking_budget": b}, f"esperaba budget {b}, vino {kw}"
-    else:
-        assert kw == {}, "knob -1 (dynamic) → sin kwarg"
-    assert _GO._thinking_budget_kwargs("gemini-3.1-flash-lite") == {}, "flash-lite no soporta thinking"
-    assert _GO._thinking_budget_kwargs("") == {}
-    # La librería soporta el campo (verificado en vivo).
-    from langchain_google_genai import ChatGoogleGenerativeAI as _C
-    assert "thinking_budget" in getattr(_C, "model_fields", {})
+    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Mecanismo removido: el módulo
+    NO debe exponer `_thinking_budget_kwargs` ni `DAYGEN_THINKING_BUDGET`,
+    y el wrapper ChatDeepSeek SWALLOWEA el kwarg legacy sin romper si un
+    callsite zombie lo pasara."""
+    assert not hasattr(_GO, "_thinking_budget_kwargs")
+    assert not hasattr(_GO, "DAYGEN_THINKING_BUDGET")
+    # Defensa del wrapper: kwarg legacy ignorado en silencio.
+    from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
+    llm = ChatDeepSeek(model=DEEPSEEK_FLASH, thinking_budget=2048)
+    assert llm.model_name == DEEPSEEK_FLASH
 
 
 @_needs_module

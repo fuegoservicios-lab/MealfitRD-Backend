@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P2-REALTIME-PUB-SYNC · 2026-06-01"
+_LAST_KNOWN_PFIX = "P1-NEON-DB-MIGRATION · 2026-06-12"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -205,7 +205,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from db import (
-    connection_pool, async_connection_pool, chat_checkpoint_pool, supabase,
+    connection_pool, async_connection_pool, chat_checkpoint_pool,
+    execute_sql_query, execute_sql_write,
     get_or_create_session, save_message, save_message_feedback, insert_like, get_user_likes,
     insert_rejection, get_active_rejections, get_latest_meal_plan, get_user_profile,
     update_user_health_profile, update_user_health_profile_atomic, get_all_user_facts, delete_user_fact,
@@ -431,7 +432,7 @@ def _maybe_emit_inline_cascade_alert(job_id: str) -> None:
     """
     if not _cascade_inline_enabled():
         return
-    if supabase is None:
+    if connection_pool is None:
         return
     global _CASCADE_INLINE_LAST_EMIT_AT
 
@@ -469,34 +470,51 @@ def _maybe_emit_inline_cascade_alert(job_id: str) -> None:
             _CASCADE_INLINE_LAST_EMIT_AT = now_mono
             # Snapshot de jobs para metadata (release lock antes del UPSERT
             # para no bloquear el thread del scheduler durante el roundtrip
-            # a Supabase).
+            # a la DB).
             jobs_snapshot = sorted(distinct_jobs)
 
         from datetime import datetime as _dt_p1c, timezone as _tz_p1c
-        now_iso = _dt_p1c.now(_tz_p1c.utc).isoformat()
-        supabase.table("system_alerts").upsert({
-            "alert_key": "scheduler_cascade_missed",
-            "alert_type": "scheduler_cascade",
-            "severity": "critical",
-            "title": f"Cascada de scheduler MISSED detectada inline ({len(jobs_snapshot)} jobs)",
-            "message": (
-                f"Listener inline detectó {len(jobs_snapshot)} jobs distintos "
-                f"MISSED en ventana {window_s:.0f}s (threshold={threshold}). "
-                f"Cron `_alert_scheduler_cascade_missed` confirmará en su "
-                f"siguiente tick (interval=MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN). "
-                f"Posibles causas: thread pool saturado, restart EasyPanel, "
-                f"GC pause sostenida."
+        now_utc = _dt_p1c.now(_tz_p1c.utc)
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] UPSERT via SQL directo (pool
+        # psycopg) — antes PostgREST. Misma semántica: upsert por alert_key
+        # con re-apertura (resolved_at=NULL) en cada emisión.
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, triggered_at, resolved_at)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, NULL)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET alert_type = EXCLUDED.alert_type,
+                severity = EXCLUDED.severity,
+                title = EXCLUDED.title,
+                message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata,
+                triggered_at = EXCLUDED.triggered_at,
+                resolved_at = NULL
+            """,
+            (
+                "scheduler_cascade_missed",
+                "scheduler_cascade",
+                "critical",
+                f"Cascada de scheduler MISSED detectada inline ({len(jobs_snapshot)} jobs)",
+                (
+                    f"Listener inline detectó {len(jobs_snapshot)} jobs distintos "
+                    f"MISSED en ventana {window_s:.0f}s (threshold={threshold}). "
+                    f"Cron `_alert_scheduler_cascade_missed` confirmará en su "
+                    f"siguiente tick (interval=MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN). "
+                    f"Posibles causas: thread pool saturado, restart EasyPanel, "
+                    f"GC pause sostenida."
+                ),
+                json.dumps({
+                    "detected_by": "inline_listener",
+                    "distinct_jobs_in_window": len(jobs_snapshot),
+                    "window_seconds": window_s,
+                    "threshold": threshold,
+                    "jobs": jobs_snapshot[:50],  # Cap a 50 para no inflar JSON.
+                }, ensure_ascii=False),
+                now_utc,
             ),
-            "metadata": {
-                "detected_by": "inline_listener",
-                "distinct_jobs_in_window": len(jobs_snapshot),
-                "window_seconds": window_s,
-                "threshold": threshold,
-                "jobs": jobs_snapshot[:50],  # Cap a 50 para no inflar JSON.
-            },
-            "triggered_at": now_iso,
-            "resolved_at": None,
-        }, on_conflict="alert_key").execute()
+        )
         logger.warning(
             f"[P1-CASCADE-INLINE] Emit parent scheduler_cascade_missed "
             f"INLINE: {len(jobs_snapshot)} distinct jobs MISSED en {window_s:.0f}s "
@@ -521,7 +539,7 @@ def _refresh_scheduler_open_alerts_cache(force: bool = False) -> int:
     """Sincroniza `_SCHEDULER_JOBS_WITH_OPEN_ALERTS` con la realidad de DB.
 
     Idempotente. Best-effort: cualquier excepción se loguea sin propagar.
-    Retorna el count de jobs en el set post-sync (0 si supabase no
+    Retorna el count de jobs en el set post-sync (0 si el pool DB no
     disponible o falló).
     """
     global _SCHEDULER_OPEN_ALERTS_LAST_REFRESH
@@ -529,21 +547,21 @@ def _refresh_scheduler_open_alerts_cache(force: bool = False) -> int:
         if time.time() - _SCHEDULER_OPEN_ALERTS_LAST_REFRESH < _OPEN_ALERTS_CACHE_TTL_S:
             with _SCHEDULER_OPEN_ALERTS_LOCK:
                 return len(_SCHEDULER_JOBS_WITH_OPEN_ALERTS)
-    if supabase is None:
+    if connection_pool is None:
         return 0
     try:
         # SELECT alerts abiertas; parsear job_id; reconstruir el set.
         # No paginamos: típicamente <100 alerts abiertas.
-        res = (
-            supabase.table("system_alerts")
-            .select("alert_key")
-            .is_("resolved_at", "null")
-            .or_(
-                "alert_key.like.scheduler_missed_%,alert_key.like.scheduler_error_%"
-            )
-            .execute()
-        )
-        rows = res.data or []
+        rows = execute_sql_query(
+            """
+            SELECT alert_key
+            FROM system_alerts
+            WHERE resolved_at IS NULL
+              AND (alert_key LIKE %s OR alert_key LIKE %s)
+            """,
+            ("scheduler_missed_%", "scheduler_error_%"),
+            fetch_all=True,
+        ) or []
         new_set: set[str] = set()
         for r in rows:
             key = (r or {}).get("alert_key") or ""
@@ -573,7 +591,7 @@ def _scheduler_alert_listener(event):
     saltarse silenciosamente, dejando solo log warning sin alerta accionable.
 
     Defensivo: cualquier error del listener se loguea sin crashear el scheduler
-    (un fallo en supabase no debe pausar el resto de los crons). Idempotente
+    (un fallo de DB no debe pausar el resto de los crons). Idempotente
     vía UPSERT por `alert_key` único: cada nuevo evento del mismo job actualiza
     la fila existente con el `triggered_at` más reciente.
 
@@ -647,7 +665,7 @@ def _scheduler_alert_listener(event):
             # SÍ existe una alert pendiente para este job_id (cache hit).
             # Refresh TTL=60s capta cambios out-of-band (resoluciones
             # manuales, sweeps del cron).
-            if supabase is None:
+            if connection_pool is None:
                 return
             # Refresh perezoso si pasó el TTL — barato (~1 SELECT/min).
             _refresh_scheduler_open_alerts_cache(force=False)
@@ -656,16 +674,24 @@ def _scheduler_alert_listener(event):
             if not needs_patch:
                 return  # ← skip PATCH no-op
             try:
-                _now_iso = datetime.now(_tz.utc).isoformat()
-                supabase.table("system_alerts").update({
-                    "resolved_at": _now_iso,
-                }).in_(
-                    "alert_key",
-                    [
-                        f"scheduler_missed_{job_id}",
-                        f"scheduler_error_{job_id}",
-                    ],
-                ).is_("resolved_at", "null").execute()
+                # [P1-NEON-DB-MIGRATION · 2026-06-12] UPDATE via SQL directo;
+                # el predicado `resolved_at IS NULL` preserva timestamps de
+                # alerts ya cerradas manualmente (paridad con P1-NEW-2).
+                execute_sql_write(
+                    """
+                    UPDATE system_alerts
+                    SET resolved_at = %s
+                    WHERE alert_key = ANY(%s)
+                      AND resolved_at IS NULL
+                    """,
+                    (
+                        datetime.now(_tz.utc),
+                        [
+                            f"scheduler_missed_{job_id}",
+                            f"scheduler_error_{job_id}",
+                        ],
+                    ),
+                )
                 # PATCH exitoso → remover del cache. Si el job vuelve a
                 # MISSED/ERROR, la rama de abajo lo re-añade.
                 with _SCHEDULER_OPEN_ALERTS_LOCK:
@@ -682,7 +708,7 @@ def _scheduler_alert_listener(event):
         else:
             return  # otros eventos no nos interesan
 
-        if supabase is None:
+        if connection_pool is None:
             return
         alert_key = f"scheduler_{event_type}_{job_id}"
 
@@ -706,24 +732,42 @@ def _scheduler_alert_listener(event):
             return
         _SCHEDULER_ALERT_LAST_EMIT[alert_key] = _now_mono
 
-        now_iso = datetime.now(_tz.utc).isoformat()
+        now_utc = datetime.now(_tz.utc)
         sched_iso = scheduled_run_time.isoformat() if scheduled_run_time else None
-        supabase.table("system_alerts").upsert({
-            "alert_key": alert_key,
-            "alert_type": "scheduler",
-            "severity": severity,
-            "title": title,
-            "message": message,
-            "metadata": {
-                "job_id": job_id,
-                "scheduled_run_time": sched_iso,
-                "event_type": event_type,
-                "max_workers": _SCHEDULER_MAX_WORKERS,
-                "misfire_grace_s": _SCHEDULER_MISFIRE_GRACE_S,
-            },
-            "triggered_at": now_iso,
-            "resolved_at": None,
-        }, on_conflict="alert_key").execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] UPSERT via SQL directo (pool
+        # psycopg) — antes PostgREST. Idempotente por alert_key único; cada
+        # nuevo evento re-abre la alert (resolved_at=NULL) con triggered_at
+        # más reciente.
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, triggered_at, resolved_at)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, NULL)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET alert_type = EXCLUDED.alert_type,
+                severity = EXCLUDED.severity,
+                title = EXCLUDED.title,
+                message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata,
+                triggered_at = EXCLUDED.triggered_at,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                "scheduler",
+                severity,
+                title,
+                message,
+                json.dumps({
+                    "job_id": job_id,
+                    "scheduled_run_time": sched_iso,
+                    "event_type": event_type,
+                    "max_workers": _SCHEDULER_MAX_WORKERS,
+                    "misfire_grace_s": _SCHEDULER_MISFIRE_GRACE_S,
+                }, ensure_ascii=False),
+                now_utc,
+            ),
+        )
         # [P1-PERF-1] Mantener cache sincrónico: alert recién insertada →
         # job_id en el set. Próximo EXECUTED disparará el PATCH.
         with _SCHEDULER_OPEN_ALERTS_LOCK:
@@ -858,6 +902,20 @@ async def _hardfloor_autoheal_loop(interval_s: int):
 # redeploy → comportamiento pre-fix: cada worker arranca su scheduler).
 # Tooltip-anchor: P1-SCHEDULER-LEADER-LOCK.
 def _build_session_mode_db_url() -> Optional[str]:
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] La resolución del URL session-mode
+    # vive en db_core (knob MEALFIT_DB_BACKEND): Neon → NEON_DATABASE_URL
+    # (endpoint directo), Supabase → SUPABASE_DB_URL forzado a :5432. El
+    # mirror local de la heurística ':6543'→':5432' era NO-OP con hostnames
+    # Neon y el leader lock habría caído en el pooler transaction-mode
+    # (advisory lock de sesión liberado por sentencia → lock inútil).
+    try:
+        from db_core import DB_SESSION_MODE_URL
+        if DB_SESSION_MODE_URL:
+            return DB_SESSION_MODE_URL
+    except Exception:
+        pass
+    # Fallback legacy (pools no configurados — e.g. import de psycopg_pool
+    # falló pero psycopg directo sí está disponible).
     raw = os.environ.get("SUPABASE_DB_URL")
     if not raw:
         return None
@@ -1490,6 +1548,12 @@ app.include_router(system_router)
 from routers.preferences import router as preferences_router
 app.include_router(preferences_router)
 
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Datos user-scoped que el frontend
+# accedía directo via PostgREST (inventario, perfil, lecturas de planes).
+# Post-Neon el cliente no tiene acceso a la DB — todo pasa por aquí.
+from routers.user_data import router as user_data_router
+app.include_router(user_data_router)
+
 @app.get("/")
 @app.get("/health")
 def health_check():
@@ -1690,19 +1754,23 @@ def health_version():
     # hora desde system_alerts. Detalle por job en /admin/cron-health.
     cron_missed_1h_total = 0
     try:
-        if supabase is not None:
+        if connection_pool is not None:
             from datetime import datetime as _dt, timezone as _tz, timedelta as _td
             cutoff = _dt.now(_tz.utc) - _td(hours=1)
-            res = (
-                supabase.table("system_alerts")
-                .select("alert_key", count="exact")
-                .eq("alert_type", "scheduler")
-                .like("alert_key", "scheduler_missed_%")
-                .gte("triggered_at", cutoff.isoformat())
-                .limit(0)
-                .execute()
+            # [P1-NEON-DB-MIGRATION · 2026-06-12] count-only via SQL directo
+            # (antes PostgREST count='exact' + limit(0)).
+            count_row = execute_sql_query(
+                """
+                SELECT count(*) AS count
+                FROM system_alerts
+                WHERE alert_type = 'scheduler'
+                  AND alert_key LIKE %s
+                  AND triggered_at >= %s
+                """,
+                ("scheduler_missed_%", cutoff),
+                fetch_one=True,
             )
-            cron_missed_1h_total = res.count or 0
+            cron_missed_1h_total = int(count_row["count"]) if count_row else 0
     except Exception:
         cron_missed_1h_total = -1
 
@@ -1717,17 +1785,14 @@ def health_version():
     expected_marker: Optional[str] = None
     drift: Optional[bool] = None
     try:
-        if supabase is not None:
-            kv_res = (
-                supabase.table("app_kv_store")
-                .select("value")
-                .eq("key", "expected_last_known_pfix")
-                .limit(1)
-                .execute()
+        if connection_pool is not None:
+            kv_row = execute_sql_query(
+                "SELECT value FROM app_kv_store WHERE key = %s LIMIT 1",
+                ("expected_last_known_pfix",),
+                fetch_one=True,
             )
-            rows = kv_res.data or []
-            if rows:
-                raw = rows[0].get("value")
+            if kv_row:
+                raw = kv_row.get("value")
                 # value es jsonb; psycopg deserializa a str/list/dict.
                 # Aceptamos str directo o str dentro de jsonb-string ("...").
                 expected_marker = raw if isinstance(raw, str) else None
@@ -1741,18 +1806,28 @@ def health_version():
 
     last_pipeline_metrics_tick_at: Optional[str] = None
     try:
-        if supabase is not None:
-            tick_res = (
-                supabase.table("pipeline_metrics")
-                .select("created_at")
-                .eq("node", "_hardfloor_autoheal_tick")
-                .order("created_at", desc=True)
-                .limit(1)
-                .execute()
+        if connection_pool is not None:
+            tick_row = execute_sql_query(
+                """
+                SELECT created_at
+                FROM pipeline_metrics
+                WHERE node = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                ("_hardfloor_autoheal_tick",),
+                fetch_one=True,
             )
-            tick_rows = tick_res.data or []
-            if tick_rows:
-                last_pipeline_metrics_tick_at = tick_rows[0].get("created_at")
+            if tick_row and tick_row.get("created_at") is not None:
+                _tick_raw = tick_row["created_at"]
+                # [P1-NEON-DB-MIGRATION · 2026-06-12] psycopg devuelve
+                # datetime (PostgREST devolvía string ISO); preservar el
+                # contrato string del poller externo con .isoformat().
+                last_pipeline_metrics_tick_at = (
+                    _tick_raw.isoformat()
+                    if hasattr(_tick_raw, "isoformat")
+                    else str(_tick_raw)
+                )
     except Exception:
         pass
 
@@ -1895,21 +1970,25 @@ def admin_cron_health():
             except Exception as e:
                 info["jobs_registered_error"] = f"{type(e).__name__}: {e}"
 
-        # MISSED last hour. Reusa el cliente Supabase global. Si no está
+        # MISSED last hour. Reusa el pool psycopg global. Si no está
         # disponible, devuelve dict vacío + flag explícito para diagnóstico.
-        if supabase is not None:
+        if connection_pool is not None:
             try:
                 cutoff = _dt.now(_tz.utc) - _td(hours=1)
-                res = (
-                    supabase.table("system_alerts")
-                    .select("alert_key,metadata,triggered_at")
-                    .eq("alert_type", "scheduler")
-                    .like("alert_key", "scheduler_missed_%")
-                    .gte("triggered_at", cutoff.isoformat())
-                    .limit(500)
-                    .execute()
-                )
-                missed_rows = res.data or []
+                # [P1-NEON-DB-MIGRATION · 2026-06-12] fetch + agregación en
+                # Python (paridad con el shape PostgREST previo).
+                missed_rows = execute_sql_query(
+                    """
+                    SELECT alert_key, metadata, triggered_at
+                    FROM system_alerts
+                    WHERE alert_type = 'scheduler'
+                      AND alert_key LIKE %s
+                      AND triggered_at >= %s
+                    LIMIT 500
+                    """,
+                    ("scheduler_missed_%", cutoff),
+                    fetch_all=True,
+                ) or []
                 counts: dict = {}
                 for row in missed_rows:
                     meta = row.get("metadata")
@@ -1926,20 +2005,26 @@ def admin_cron_health():
             except Exception as e:
                 info["missed_last_hour_error"] = f"{type(e).__name__}: {e}"
 
-            # Última cascada (si existe).
+            # Última cascada (si existe). Los timestamptz llegan como
+            # datetime (FastAPI los serializa a ISO en el response).
             try:
-                res = (
-                    supabase.table("system_alerts")
-                    .select("alert_key,severity,message,metadata,triggered_at,resolved_at")
-                    .eq("alert_key", "scheduler_cascade_missed")
-                    .limit(1)
-                    .execute()
+                cascade_row = execute_sql_query(
+                    """
+                    SELECT alert_key, severity, message, metadata, triggered_at, resolved_at
+                    FROM system_alerts
+                    WHERE alert_key = %s
+                    LIMIT 1
+                    """,
+                    ("scheduler_cascade_missed",),
+                    fetch_one=True,
                 )
-                rows = res.data or []
-                info["cascade_alert"] = rows[0] if rows else None
+                info["cascade_alert"] = cascade_row or None
             except Exception as e:
                 info["cascade_alert_error"] = f"{type(e).__name__}: {e}"
         else:
+            # Key histórica (pre-Neon era el cliente PostgREST); hoy señala
+            # pool psycopg no inicializado. Se preserva el nombre para no
+            # romper consumers del shape del endpoint.
             info["supabase_unavailable"] = True
 
         return info
@@ -2379,7 +2464,9 @@ def api_migrate_guest(
             if not existing_plan:
                 try:
                     from datetime import datetime
-                    if supabase:
+                    # [P1-NEON-DB-MIGRATION · 2026-06-12] El guard chequea el
+                    # pool psycopg (save_new_meal_plan_robust escribe via SQL).
+                    if connection_pool is not None:
                         calories = current_plan.get("calories", 0)
                         macros = current_plan.get("macros", {})
                         

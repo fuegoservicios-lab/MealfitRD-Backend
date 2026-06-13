@@ -368,9 +368,17 @@ def test_sweep_stale_chat_sessions_sql_does_not_reference_last_activity():
 # ============================================================
 
 def test_last_known_pfix_bumped_to_this_bundle():
-    """[P1-CHAT-PROD-AUDIT] `_LAST_KNOWN_PFIX` en app.py debe matchear
-    este bundle. Cross-link con `test_p2_hist_audit_14_marker_test_link`."""
+    """[P1-CHAT-PROD-AUDIT] Relajado a FLOOR-DE-FECHA: bundles posteriores
+    clobbean el marker legítimamente (mismo patrón documentado para
+    P2-COST-GEMINI-AUDIT en la memoria 2026-06-01). El contrato vigente es
+    que `_LAST_KNOWN_PFIX` sea >= la fecha de este bundle (2026-05-19) —
+    el formato/freshness lo enforza `test_p3_1_last_known_pfix_freshness`
+    y el cross-link marker↔test `test_p2_hist_audit_14_marker_test_link`."""
+    import re as _re
+
     src = _read(_APP_PY)
-    assert "P1-CHAT-PROD-AUDIT" in src, (
-        "_LAST_KNOWN_PFIX no bumpeado al marker de este bundle."
+    m = _re.search(r'_LAST_KNOWN_PFIX\s*=\s*"[^"]*·\s*(\d{4}-\d{2}-\d{2})"', src)
+    assert m, "_LAST_KNOWN_PFIX con fecha no encontrado en app.py"
+    assert m.group(1) >= "2026-05-19", (
+        f"_LAST_KNOWN_PFIX retrocedió a {m.group(1)} — anterior a este bundle."
     )

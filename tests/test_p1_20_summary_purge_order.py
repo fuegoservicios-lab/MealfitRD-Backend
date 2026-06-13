@@ -175,7 +175,7 @@ def test_purge_failure_aborts_delete_old_messages():
          patch.object(memory_manager, "delete_old_messages", side_effect=_fake_delete), \
          patch.object(memory_manager, "purge_langgraph_checkpoint",
                       side_effect=RuntimeError("simulated purge failure")), \
-         patch.object(memory_manager.ChatGoogleGenerativeAI, "invoke",
+         patch.object(memory_manager.ChatDeepSeek, "invoke",
                       return_value=MagicMock(content="resumen fake")):
         # No debe lanzar (el except global de summarize_and_prune captura).
         memory_manager.summarize_and_prune("test-session")

@@ -10,15 +10,15 @@ budgets, model swaps).
 Fix:
   1. Tabla `llm_usage_events` (migración SSOT
      `supabase/migrations/p1_cost_instrumentation_2026_05_15.sql`).
-  2. `db_profiles.compute_gemini_cost_micros(model, in, out, cached)` con
-     pricing dict (override via knob `MEALFIT_GEMINI_PRICING_JSON`).
+  2. `db_profiles.compute_llm_cost_micros(model, in, out, cached)` con
+     pricing dict (override via knob `MEALFIT_LLM_PRICING_JSON`).
   3. `db_profiles.log_llm_usage_event(...)` — INSERT best-effort.
   4. `graph_orchestrator._emit_llm_usage_event_best_effort(...)` invocado
      desde el path exitoso de `_safe_ainvoke` (tras `wait_for` ok, ANTES
      del `return result`).
 
 Estos tests son parser-based (no requieren DB ni red) + un grupo
-funcional puro sobre `compute_gemini_cost_micros`.
+funcional puro sobre `compute_llm_cost_micros`.
 """
 from __future__ import annotations
 
@@ -88,8 +88,9 @@ def test_migration_indexes_present():
 
 def test_db_profiles_exports_compute_and_logger():
     text = _DB_PROFILES_PATH.read_text(encoding="utf-8")
-    assert re.search(r"^def compute_gemini_cost_micros\(", text, re.MULTILINE), (
-        "P1-COST-INSTRUMENTATION: `compute_gemini_cost_micros` debe existir "
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] renombrada desde compute_gemini_*.
+    assert re.search(r"^def compute_llm_cost_micros\(", text, re.MULTILINE), (
+        "P1-COST-INSTRUMENTATION: `compute_llm_cost_micros` debe existir "
         "como función top-level en db_profiles.py."
     )
     assert re.search(r"^def log_llm_usage_event\(", text, re.MULTILINE), (
@@ -108,68 +109,66 @@ def test_log_llm_usage_event_kill_switch_present():
     )
 
 
-def test_compute_gemini_cost_micros_pro_pricing():
-    """Validación funcional pura: gemini-3.1-pro-preview a 1M in + 1M out
-    debe coincidir con la tabla de pricing default (input 1.25 + output 10
-    = $11.25 → 11_250_000 micros)."""
-    from db_profiles import compute_gemini_cost_micros
-    cost = compute_gemini_cost_micros(
-        "gemini-3.1-pro-preview",
+def test_compute_llm_cost_micros_pro_pricing():
+    """[P0-DEEPSEEK-MIGRATION] deepseek-v4-pro a 1M in + 1M out debe coincidir
+    con la tabla de pricing default (input $0.435 + output $0.87 = $1.305 →
+    1_305_000 micros)."""
+    from db_profiles import compute_llm_cost_micros
+    cost = compute_llm_cost_micros(
+        "deepseek-v4-pro",
         input_tokens=1_000_000,
         output_tokens=1_000_000,
         cached_tokens=0,
     )
-    assert cost == 11_250_000, (
-        f"Pricing Pro inesperado: {cost} (esperado 11_250_000 = $11.25). "
-        "Si Google cambió precios, actualizar `_DEFAULT_GEMINI_PRICING_MICROS_PER_M` "
+    assert cost == 1_305_000, (
+        f"Pricing Pro inesperado: {cost} (esperado 1_305_000 = $1.305). "
+        "Si DeepSeek cambió precios, actualizar `_DEFAULT_LLM_PRICING_MICROS_PER_M` "
         "Y este assert juntos."
     )
 
 
-def test_compute_gemini_cost_micros_flash_lite_pricing():
-    """Flash-Lite a 1M in + 1M out = $0.10 + $0.40 = $0.50 → 500_000."""
-    from db_profiles import compute_gemini_cost_micros
-    cost = compute_gemini_cost_micros(
-        "gemini-3.1-flash-lite",
+def test_compute_llm_cost_micros_flash_pricing():
+    """deepseek-v4-flash a 1M in + 1M out = $0.14 + $0.28 = $0.42 → 420_000."""
+    from db_profiles import compute_llm_cost_micros
+    cost = compute_llm_cost_micros(
+        "deepseek-v4-flash",
         input_tokens=1_000_000,
         output_tokens=1_000_000,
         cached_tokens=0,
     )
-    assert cost == 500_000, (
-        f"Pricing Flash-Lite inesperado: {cost} (esperado 500_000 = $0.50)."
+    assert cost == 420_000, (
+        f"Pricing Flash inesperado: {cost} (esperado 420_000 = $0.42)."
     )
 
 
-def test_compute_gemini_cost_micros_cached_discount():
-    """Cached tokens cuestan ~25% del input. 1M input con 800K cached debe
-    facturar: (200K × 1.25) + (800K × 0.3125) + 0 output = 250 + 250 = $500
-    en USD-per-M → $0.0005 absoluto para 1M tokens totales? No: pricing
-    expresado /M, no /K. Validemos con números más limpios:
-    Pro: 2M input, 2M cached (cap 100% cache), 0 output = 2M × $0.3125/M
-    = $0.625 → 625_000 micros."""
-    from db_profiles import compute_gemini_cost_micros
-    cost = compute_gemini_cost_micros(
-        "gemini-3.1-pro-preview",
+def test_compute_llm_cost_micros_cached_discount():
+    """Cached tokens facturan al rate de cache-hit. Pro: 2M input TODO
+    cacheado, 0 output = 2M × $0.003625/M = $0.00725 → 7_250 micros."""
+    from db_profiles import compute_llm_cost_micros
+    cost = compute_llm_cost_micros(
+        "deepseek-v4-pro",
         input_tokens=2_000_000,
         output_tokens=0,
         cached_tokens=2_000_000,
     )
-    # billable_input = max(0, 2M - 2M) = 0; cached = 2M × 312_500 / 1M = 625_000.
-    assert cost == 625_000, (
-        f"Cache discount mal aplicado: {cost} (esperado 625_000)."
+    # billable_input = max(0, 2M - 2M) = 0; cached = 2M × 3_625 / 1M = 7_250.
+    assert cost == 7_250, (
+        f"Cache discount mal aplicado: {cost} (esperado 7_250)."
     )
 
 
-def test_compute_gemini_cost_micros_unknown_model_returns_none():
-    from db_profiles import compute_gemini_cost_micros
-    assert compute_gemini_cost_micros("claude-opus-9000", 1000, 500) is None
+def test_compute_llm_cost_micros_unknown_model_returns_none():
+    from db_profiles import compute_llm_cost_micros
+    assert compute_llm_cost_micros("claude-opus-9000", 1000, 500) is None
+    # Los modelos Gemini retirados también son "desconocidos" post-migración.
+    assert compute_llm_cost_micros("gemini-3.5-flash", 1000, 500) is None
 
 
-def test_compute_gemini_cost_micros_handles_missing_tokens():
-    from db_profiles import compute_gemini_cost_micros
-    assert compute_gemini_cost_micros("gemini-3.1-pro-preview", None, 500) is None
-    assert compute_gemini_cost_micros("gemini-3.1-pro-preview", 1000, None) is None
-    assert compute_gemini_cost_micros(None, 1000, 500) is None
+def test_compute_llm_cost_micros_handles_missing_tokens():
+    from db_profiles import compute_llm_cost_micros
+    assert compute_llm_cost_micros("deepseek-v4-pro", None, 500) is None
+    assert compute_llm_cost_micros("deepseek-v4-pro", 1000, None) is None
+    assert compute_llm_cost_micros(None, 1000, 500) is None
 
 
 # ----- _safe_ainvoke instrumentación --------------------------------------

@@ -233,7 +233,7 @@ class TestGetSemanticCacheRedisIntegration:
 
         with patch("shopping_calculator.get_master_ingredients", return_value=master), \
              patch("cache_manager.redis_client", fake_redis), \
-             patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", fake_embeddings_class):
+             patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
             cache = sc.get_semantic_cache()
 
         assert cache is not None
@@ -257,7 +257,7 @@ class TestGetSemanticCacheRedisIntegration:
 
         with patch("shopping_calculator.get_master_ingredients", return_value=master), \
              patch("cache_manager.redis_client", fake_redis), \
-             patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", fake_embeddings_class):
+             patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
             cache = sc.get_semantic_cache()
 
         assert cache is not None

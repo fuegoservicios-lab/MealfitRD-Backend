@@ -5,12 +5,29 @@ import re
 import unicodedata
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from db_core import supabase, execute_sql_write
+from db_core import execute_sql_query, execute_sql_write
+from psycopg.types.json import Jsonb
 from shopping_calculator import _parse_quantity, get_plural_unit, get_master_ingredients
 from constants import normalize_ingredient_for_tracking
 
 logger = logging.getLogger(__name__)
 _RESERVATION_MEAL_TOKEN_RE = re.compile(r":meal:(.+)$")
+
+
+def _db_available() -> bool:
+    """[P1-NEON-DB-MIGRATION · 2026-06-12] Guard de disponibilidad del pool SQL.
+
+    Sustituye los checks legacy `if not supabase:` — los DATOS Postgres viven
+    ahora en Neon (el cliente supabase queda SOLO para Auth/Storage). Lectura
+    lazy de `db_core.connection_pool` (no `from db_core import connection_pool`
+    a nivel de módulo) para que los tests puedan patchear
+    `db_core.connection_pool` y para no congelar el valor en import-time.
+    """
+    try:
+        import db_core
+        return db_core.connection_pool is not None
+    except Exception:
+        return False
 
 # [P2-NEW-2 · 2026-05-10] Pre-registrar `MEALFIT_INVENTORY_RPC_STRICT` en
 # `_KNOBS_REGISTRY` al import-time. Antes (P1-NEW-1) el knob se leía solo
@@ -62,22 +79,20 @@ def _compute_dynamic_consumption_rates(
     Returns: dict `{nombre_normalizado: gramos/día}`. Vacío si no hay plan
     activo, falla la query, o el drift de household excede el threshold.
     """
-    if not supabase or not user_id:
+    if not _db_available() or not user_id:
         return {}
     try:
         # [P1-B 2026-05-07] meal_plans no tiene columna `is_active`; el flag
         # vive en plan_data JSONB. Plan "activo" = el más reciente del user.
-        res = (
-            supabase.table("meal_plans")
-            .select("plan_data")
-            .eq("user_id", user_id)
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
+        _plan_row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE user_id = %s "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+            fetch_one=True,
         )
-        if not res.data:
+        if not _plan_row:
             return {}
-        plan_data = res.data[0].get("plan_data") or {}
+        plan_data = _plan_row.get("plan_data") or {}
         if isinstance(plan_data, str):
             plan_data = json.loads(plan_data)
         weekly = plan_data.get("aggregated_shopping_list_weekly") or []
@@ -102,14 +117,12 @@ def _compute_dynamic_consumption_rates(
         m_now = current_household_multiplier
         if m_now is None:
             try:
-                _hp_res = (
-                    supabase.table("user_profiles")
-                    .select("health_profile")
-                    .eq("id", user_id)
-                    .limit(1)
-                    .execute()
+                _hp_row = execute_sql_query(
+                    "SELECT health_profile FROM user_profiles WHERE id = %s LIMIT 1",
+                    (user_id,),
+                    fetch_one=True,
                 )
-                hp = (_hp_res.data[0].get("health_profile") or {}) if _hp_res.data else {}
+                hp = (_hp_row.get("health_profile") or {}) if _hp_row else {}
                 from constants import compute_household_multiplier
                 m_now = compute_household_multiplier(hp)
             except Exception as _e:
@@ -197,10 +210,25 @@ from canonical_units import CANONICAL_UNIT_MAP as _CANONICAL_UNIT_MAP
 
 def get_raw_user_inventory(user_id: str) -> List[Dict[str, Any]]:
     """Obtiene los registros crudos de la base de datos para la despensa del usuario."""
-    if not supabase: return []
+    if not _db_available(): return []
     try:
-        res = supabase.table("user_inventory").select("*").eq("user_id", user_id).gt("quantity", 0).execute()
-        rows = res.data or []
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Casts de parity con PostgREST:
+        # uuid→text (consumers comparan/serializan strings), numeric→float8
+        # (aritmética downstream sin Decimal), timestamptz→string ISO-8601 con
+        # "T" vía to_jsonb (consumers hacen `created_at[:10]` y JSON-serializan
+        # las filas — `::text` daría separador espacio, no-ISO).
+        rows = execute_sql_query(
+            "SELECT id, user_id::text AS user_id, ingredient_name, "
+            "quantity::float8 AS quantity, unit, "
+            "to_jsonb(created_at) #>> '{}' AS created_at, "
+            "to_jsonb(updated_at) #>> '{}' AS updated_at, "
+            "master_ingredient_id::text AS master_ingredient_id, "
+            "reserved_quantity::float8 AS reserved_quantity, "
+            "reservation_details, last_mutation_type, source, category "
+            "FROM user_inventory WHERE user_id = %s AND quantity > 0",
+            (user_id,),
+            fetch_all=True,
+        ) or []
         for row in rows:
             qty = float(row.get("quantity") or 0)
             reserved = float(row.get("reserved_quantity") or 0)
@@ -254,10 +282,10 @@ def _slug_meal_name(meal_name: str) -> str:
 
 
 def _update_row_reservation(row_id: str, reserved_quantity: float, reservation_details: Dict[str, float]) -> None:
-    supabase.table("user_inventory").update({
-        "reserved_quantity": round(max(reserved_quantity, 0.0), 4),
-        "reservation_details": reservation_details,
-    }).eq("id", row_id).execute()
+    execute_sql_write(
+        "UPDATE user_inventory SET reserved_quantity = %s, reservation_details = %s WHERE id = %s",
+        (round(max(reserved_quantity, 0.0), 4), Jsonb(reservation_details), row_id),
+    )
 
 
 def _update_row_reservation_cas(
@@ -281,17 +309,17 @@ def _update_row_reservation_cas(
     """
     rounded_new = round(max(reserved_quantity, 0.0), 4)
     rounded_expected = round(max(float(expected_old_reserved or 0), 0.0), 4)
-    res = (
-        supabase.table("user_inventory")
-        .update({
-            "reserved_quantity": rounded_new,
-            "reservation_details": reservation_details,
-        })
-        .eq("id", row_id)
-        .eq("reserved_quantity", rounded_expected)
-        .execute()
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] RETURNING id reemplaza el `res.data`
+    # de PostgREST como detector de "0 filas afectadas" (conflicto CAS). El
+    # token CAS se compara en espacio numeric (`%s::numeric`) — paridad con
+    # PostgREST, que serializaba el float como literal decimal exacto.
+    rows = execute_sql_write(
+        "UPDATE user_inventory SET reserved_quantity = %s, reservation_details = %s "
+        "WHERE id = %s AND reserved_quantity = %s::numeric RETURNING id",
+        (rounded_new, Jsonb(reservation_details), row_id, rounded_expected),
+        returning=True,
     )
-    return bool(getattr(res, "data", None))
+    return bool(rows)
 
 def _infer_shelf_life_days(name: str, category: str) -> int:
     """[P0-2] Default shelf_life por categoría cuando master_ingredients no lo tiene.
@@ -349,9 +377,13 @@ def get_user_inventory(user_id: str, household_size: float | int | None = None) 
 
     if household_size is None:
         try:
-            res = supabase.table("user_profiles").select("health_profile").eq("id", user_id).limit(1).execute()
-            if res.data:
-                hp = res.data[0].get("health_profile") or {}
+            _hp_row = execute_sql_query(
+                "SELECT health_profile FROM user_profiles WHERE id = %s LIMIT 1",
+                (user_id,),
+                fetch_one=True,
+            )
+            if _hp_row:
+                hp = _hp_row.get("health_profile") or {}
                 # [P1-3] Si el perfil tiene `householdComposition` lo usamos
                 # como multiplier efectivo; si no, fallback al escalar legacy.
                 from constants import compute_household_multiplier
@@ -477,9 +509,13 @@ def get_user_inventory_net(user_id: str, household_size: float | int | None = No
 
     if household_size is None:
         try:
-            res = supabase.table("user_profiles").select("health_profile").eq("id", user_id).limit(1).execute()
-            if res.data:
-                hp = res.data[0].get("health_profile") or {}
+            _hp_row = execute_sql_query(
+                "SELECT health_profile FROM user_profiles WHERE id = %s LIMIT 1",
+                (user_id,),
+                fetch_one=True,
+            )
+            if _hp_row:
+                hp = _hp_row.get("health_profile") or {}
                 # [P1-3] Si el perfil tiene `householdComposition` lo usamos
                 # como multiplier efectivo; si no, fallback al escalar legacy.
                 from constants import compute_household_multiplier
@@ -842,10 +878,13 @@ def _apply_reservation_delta(
         if attempt == 0 and prefetched_rows is not None:
             rows = prefetched_rows
         else:
-            existing = supabase.table("user_inventory").select(
-                "id, quantity, unit, reserved_quantity, reservation_details"
-            ).eq("user_id", user_id).eq("ingredient_name", ingredient_name).execute()
-            rows = getattr(existing, "data", None) or []
+            rows = execute_sql_query(
+                "SELECT id, quantity::float8 AS quantity, unit, "
+                "reserved_quantity::float8 AS reserved_quantity, reservation_details "
+                "FROM user_inventory WHERE user_id = %s AND ingredient_name = %s",
+                (user_id, ingredient_name),
+                fetch_all=True,
+            ) or []
 
         if not rows:
             return False
@@ -934,7 +973,7 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
     Cuando CAS conflicta, retry attempts re-SELECT como antes (fresh state
     obligatorio post-conflict).
     """
-    if not supabase or not days:
+    if not _db_available() or not days:
         return 0
 
     # [P1-N1-RESERVATION-DELTA · 2026-05-15] Batch fetch del inventory completo
@@ -942,10 +981,13 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
     # cada `_apply_reservation_delta` hace su propio SELECT).
     rows_by_name: Optional[Dict[str, List[Dict[str, Any]]]] = None
     try:
-        _batch = supabase.table("user_inventory").select(
-            "id, ingredient_name, quantity, unit, reserved_quantity, reservation_details"
-        ).eq("user_id", user_id).execute()
-        _batch_rows = getattr(_batch, "data", None) or []
+        _batch_rows = execute_sql_query(
+            "SELECT id, ingredient_name, quantity::float8 AS quantity, unit, "
+            "reserved_quantity::float8 AS reserved_quantity, reservation_details "
+            "FROM user_inventory WHERE user_id = %s",
+            (user_id,),
+            fetch_all=True,
+        ) or []
         rows_by_name = {}
         for _r in _batch_rows:
             _nm = _r.get("ingredient_name")
@@ -982,15 +1024,18 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
 
 def release_meal_reservation(user_id: str, meal_name: str) -> int:
     """Libera reservas asociadas a una comida rechazada."""
-    if not supabase or not user_id or not meal_name:
+    if not _db_available() or not user_id or not meal_name:
         return 0
 
     released = 0
     try:
-        res = supabase.table("user_inventory").select(
-            "id, reserved_quantity, reservation_details"
-        ).eq("user_id", user_id).gt("reserved_quantity", 0).execute()
-        for row in res.data or []:
+        rows = execute_sql_query(
+            "SELECT id, reserved_quantity::float8 AS reserved_quantity, reservation_details "
+            "FROM user_inventory WHERE user_id = %s AND reserved_quantity > 0",
+            (user_id,),
+            fetch_all=True,
+        )
+        for row in rows or []:
             reservation_details = _normalize_reservation_details(row.get("reservation_details"))
             keys_to_remove = [k for k in reservation_details.keys() if _reservation_matches_meal(k, meal_name)]
             if not keys_to_remove:
@@ -1031,30 +1076,19 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
 
     prefix = f"chunk:{chunk_id}:"
 
-    # 1. Read snapshot de filas con reservas. Path supabase + fallback a SQL crudo si no
-    # hay client (p. ej. tests). Si ambos faltan, no hay nada que liberar.
+    # 1. Read snapshot de filas con reservas. [P1-NEON-DB-MIGRATION · 2026-06-12]
+    # Antes había rama dual supabase-REST/SQL; ahora el SQL directo es el único path.
     rows: List[Dict[str, Any]] = []
-    if supabase:
-        try:
-            res = supabase.table("user_inventory").select(
-                "id, reserved_quantity, reservation_details"
-            ).eq("user_id", user_id).gt("reserved_quantity", 0).execute()
-            rows = res.data or []
-        except Exception as e:
-            logger.error(f"[P1-A] SELECT inicial falló para chunk {chunk_id} user {user_id}: {e}")
-            return 0
-    else:
-        try:
-            from db_core import execute_sql_query
-            rows = execute_sql_query(
-                "SELECT id, reserved_quantity, reservation_details FROM user_inventory "
-                "WHERE user_id = %s AND reserved_quantity > 0",
-                (user_id,),
-                fetch_all=True,
-            ) or []
-        except Exception as e:
-            logger.error(f"[P1-A] SELECT crudo falló para chunk {chunk_id} user {user_id}: {e}")
-            return 0
+    try:
+        rows = execute_sql_query(
+            "SELECT id, reserved_quantity, reservation_details FROM user_inventory "
+            "WHERE user_id = %s AND reserved_quantity > 0",
+            (user_id,),
+            fetch_all=True,
+        ) or []
+    except Exception as e:
+        logger.error(f"[P1-A] SELECT inicial falló para chunk {chunk_id} user {user_id}: {e}")
+        return 0
 
     # 2. Compute updates en memoria. Skip filas sin keys del chunk objetivo.
     update_specs: List[Dict[str, Any]] = []
@@ -1144,17 +1178,20 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
 
 def _consume_reserved_inventory(user_id: str, ingredient_name: str, quantity: float, unit: str) -> bool:
     """Convierte reserva planificada en consumo real reduciendo reserved_quantity antes del descuento físico."""
-    if not supabase or quantity <= 0:
+    if not _db_available() or quantity <= 0:
         return False
 
-    existing = supabase.table("user_inventory").select(
-        "id, unit, reserved_quantity, reservation_details"
-    ).eq("user_id", user_id).eq("ingredient_name", ingredient_name).gt("reserved_quantity", 0).execute()
+    existing_rows = execute_sql_query(
+        "SELECT id, unit, reserved_quantity::float8 AS reserved_quantity, reservation_details "
+        "FROM user_inventory WHERE user_id = %s AND ingredient_name = %s AND reserved_quantity > 0",
+        (user_id, ingredient_name),
+        fetch_all=True,
+    )
 
     master_list = get_master_ingredients()
     master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
 
-    for row in existing.data or []:
+    for row in existing_rows or []:
         current_unit = row.get("unit") or unit or "unidad"
         converted_qty = convert_amount(quantity, unit, current_unit, master_item)
         if converted_qty is None:
@@ -1201,10 +1238,15 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
     la misma comida). El INSERT de fila nueva sigue en app-layer porque
     no hay race posible: la fila no existe hasta este INSERT.
     """
-    if not supabase: return False
+    if not _db_available(): return False
     try:
         # Extraemos sin filtrar por 'unit' para buscar compatibles
-        existing = supabase.table("user_inventory").select("id, quantity, unit").eq("user_id", user_id).eq("ingredient_name", ingredient_name).execute()
+        existing_rows = execute_sql_query(
+            "SELECT id, quantity::float8 AS quantity, unit FROM user_inventory "
+            "WHERE user_id = %s AND ingredient_name = %s",
+            (user_id, ingredient_name),
+            fetch_all=True,
+        ) or []
 
         master_list = get_master_ingredients()
         master_item = next((m for m in master_list if m["name"] == ingredient_name), {})
@@ -1213,9 +1255,9 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
 
         updated = False
 
-        if existing.data:
+        if existing_rows:
             # Buscar el primer registro temporalmente compatible
-            for row in existing.data:
+            for row in existing_rows:
                 row_id = row["id"]
                 current_qty = float(row["quantity"])
                 current_unit = row["unit"]
@@ -1234,17 +1276,26 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                     # `existing` y este UPDATE), caemos al INSERT como
                     # path de recuperación.
                     try:
-                        rpc_resp = supabase.rpc(
-                            "apply_inventory_delta",
-                            {
-                                "p_user_id": user_id,
-                                "p_row_id": row_id,
-                                "p_delta": round(converted_qty, 4),
-                                "p_mutation_type": mutation_type,
-                                "p_master_id": master_id,
-                            },
-                        ).execute()
-                        rpc_data = rpc_resp.data if hasattr(rpc_resp, "data") else None
+                        # [P1-NEON-DB-MIGRATION · 2026-06-12] RPC vía SELECT directo.
+                        # La función sigue existiendo en la DB (portada a Neon);
+                        # con conexión directa como postgres la atomicidad
+                        # FOR UPDATE se preserva. `%s::numeric` explícito porque
+                        # float8→numeric NO es cast implícito en resolución de
+                        # funciones.
+                        _rpc_row = execute_sql_query(
+                            "SELECT public.apply_inventory_delta("
+                            "%s::uuid, %s::bigint, %s::numeric, %s, %s::uuid"
+                            ") AS result",
+                            (
+                                user_id,
+                                row_id,
+                                round(converted_qty, 4),
+                                mutation_type,
+                                master_id,
+                            ),
+                            fetch_one=True,
+                        )
+                        rpc_data = _rpc_row.get("result") if _rpc_row else None
                         if isinstance(rpc_data, dict) and rpc_data.get("status") == "not_found":
                             # Race: fila desapareció entre nuestro SELECT y
                             # el FOR UPDATE. Loguear sin retry — el INSERT
@@ -1282,33 +1333,46 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                         from knobs import _env_bool as _knob_env_bool
                         _strict = _knob_env_bool("MEALFIT_INVENTORY_RPC_STRICT", False)
                         try:
-                            from datetime import timezone as _tz
-                            _now_iso = datetime.now(_tz.utc).isoformat()
-                            supabase.table("system_alerts").upsert({
-                                "alert_key": "inventory_rpc_fallback",
-                                "alert_type": "inventory",
-                                "severity": "critical",
-                                "title": "apply_inventory_delta RPC falló — fallback no-atómico",
-                                "message": (
-                                    f"RPC apply_inventory_delta lanzó "
-                                    f"{type(rpc_err).__name__}: {str(rpc_err)[:200]}. "
-                                    f"Path de deducción cayó al UPDATE legacy "
-                                    f"(SELECT-MODIFY-WRITE en app-layer) que NO "
-                                    f"serializa concurrent calls — lost-update "
-                                    f"race re-introducido temporalmente. Revisar "
-                                    f"deploy lag (¿migración p0_4_apply_inventory_delta_rpc.sql "
-                                    f"aplicada?) y permisos service_role."
+                            # [P1-NEON-DB-MIGRATION · 2026-06-12] Upsert por
+                            # alert_key (mismo patrón SQL que el alert P3-1 de
+                            # replace_shopping_list_only_items). triggered_at/
+                            # resolved_at usan defaults DB en INSERT y se
+                            # re-arman en el DO UPDATE.
+                            _alert_message = (
+                                f"RPC apply_inventory_delta lanzó "
+                                f"{type(rpc_err).__name__}: {str(rpc_err)[:200]}. "
+                                f"Path de deducción cayó al UPDATE legacy "
+                                f"(SELECT-MODIFY-WRITE en app-layer) que NO "
+                                f"serializa concurrent calls — lost-update "
+                                f"race re-introducido temporalmente. Revisar "
+                                f"deploy lag (¿migración p0_4_apply_inventory_delta_rpc.sql "
+                                f"aplicada?) y permisos service_role."
+                            )
+                            _alert_metadata = {
+                                "user_id": user_id,
+                                "row_id": row_id,
+                                "ingredient": ingredient_name,
+                                "exc_type": type(rpc_err).__name__,
+                                "strict_mode": _strict,
+                            }
+                            execute_sql_write(
+                                """
+                                INSERT INTO system_alerts
+                                    (alert_key, alert_type, severity, title, message, metadata)
+                                VALUES (%s, 'inventory', 'critical', %s, %s, %s::jsonb)
+                                ON CONFLICT (alert_key) DO UPDATE
+                                    SET triggered_at = NOW(),
+                                        message = EXCLUDED.message,
+                                        metadata = EXCLUDED.metadata,
+                                        resolved_at = NULL
+                                """,
+                                (
+                                    "inventory_rpc_fallback",
+                                    "apply_inventory_delta RPC falló — fallback no-atómico",
+                                    _alert_message,
+                                    json.dumps(_alert_metadata, ensure_ascii=False),
                                 ),
-                                "metadata": {
-                                    "user_id": user_id,
-                                    "row_id": row_id,
-                                    "ingredient": ingredient_name,
-                                    "exc_type": type(rpc_err).__name__,
-                                    "strict_mode": _strict,
-                                },
-                                "triggered_at": _now_iso,
-                                "resolved_at": None,
-                            }, on_conflict="alert_key").execute()
+                            )
                         except Exception as _alert_err:
                             logger.warning(
                                 f"[P1-NEW-1] No se pudo emitir system_alert "
@@ -1328,37 +1392,53 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                             raise
                         new_qty = round(current_qty + converted_qty, 4)
                         if new_qty < 0.01:
-                            supabase.table("user_inventory").delete().eq("id", row_id).execute()
+                            execute_sql_write(
+                                "DELETE FROM user_inventory WHERE id = %s",
+                                (row_id,),
+                            )
                         else:
-                            supabase.table("user_inventory").update({"quantity": new_qty, "master_ingredient_id": master_id, "last_mutation_type": mutation_type}).eq("id", row_id).execute()
+                            execute_sql_write(
+                                "UPDATE user_inventory SET quantity = %s, "
+                                "master_ingredient_id = %s::uuid, last_mutation_type = %s "
+                                "WHERE id = %s",
+                                (new_qty, master_id, mutation_type, row_id),
+                            )
                         updated = True
                     break
 
         # Si no se encontró un registro compatible o no existía, insertamos uno nuevo.
-        # [P3-PROD-AUDIT-2 · 2026-05-30] El comentario legacy "El INSERT no tiene race"
-        # es engañoso CROSS-CALL: dos escritores concurrentes del MISMO item nuevo +
-        # unit + user (restock vs tool del chat) ambos ven `existing` vacío → ambos
-        # INSERT → el 2º viola el unique `(user_id, ingredient_name, unit)` → excepción
-        # tragada → `return False` → add perdido. NO es corrupción (la unique
-        # constraint PREVIENE duplicados; el peor caso es un add perdido recuperable
-        # re-presionando restock) → P3 narrow ACEPTADO. El fix ideal sería `INSERT ...
-        # ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE SET quantity =
-        # quantity + EXCLUDED.quantity` vía raw SQL (PostgREST upsert no soporta el
-        # increment), pero se difiere: requiere migrar `test_inventory_source_column.py`
-        # del mock `.insert()` a capturar `execute_sql_write`, costo > beneficio para
-        # esta race estrecha sin corrupción.
+        # [P3-PROD-AUDIT-2 · 2026-05-30 · cerrado P1-NEON-DB-MIGRATION 2026-06-12]
+        # La race cross-call aceptada (dos escritores concurrentes del MISMO item
+        # nuevo + unit + user veían `existing` vacío → doble INSERT → el 2º violaba
+        # el unique `(user_id, ingredient_name, unit)` → add perdido) queda cerrada
+        # "de gratis" con la migración a raw SQL: `INSERT ... ON CONFLICT DO UPDATE
+        # SET quantity = quantity + EXCLUDED.quantity` (el increment que PostgREST
+        # upsert no soportaba). `source` NO se toca en el DO UPDATE — first-writer-
+        # wins (P0.2).
         if not updated:
             if quantity >= 0.01:
-                supabase.table("user_inventory").insert({
-                    "user_id": user_id,
-                    "ingredient_name": ingredient_name,
-                    "quantity": round(quantity, 4),  # Evitar floating point overflow
-                    "unit": unit,
-                    "master_ingredient_id": master_id,
-                    "last_mutation_type": mutation_type,
-                    "source": source,
-                }).execute()
-            elif quantity < 0 and existing.data:
+                execute_sql_write(
+                    """
+                    INSERT INTO user_inventory
+                        (user_id, ingredient_name, quantity, unit,
+                         master_ingredient_id, last_mutation_type, source)
+                    VALUES (%s, %s, %s, %s, %s::uuid, %s, %s)
+                    ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE
+                        SET quantity = user_inventory.quantity + EXCLUDED.quantity,
+                            master_ingredient_id = COALESCE(EXCLUDED.master_ingredient_id, user_inventory.master_ingredient_id),
+                            last_mutation_type = EXCLUDED.last_mutation_type
+                    """,
+                    (
+                        user_id,
+                        ingredient_name,
+                        round(quantity, 4),  # Evitar floating point overflow
+                        unit,
+                        master_id,
+                        mutation_type,
+                        source,
+                    ),
+                )
+            elif quantity < 0 and existing_rows:
                 # [P2-DEDUCT-NOOP-INCOMPAT-UNIT · 2026-05-30] Deducción no-op
                 # silenciosa: HABÍA fila(s) del mismo ingrediente pero NINGUNA en
                 # unidad convertible (convert_amount → None para todas — típico
@@ -1369,10 +1449,10 @@ def add_or_update_inventory_item(user_id: str, ingredient_name: str, quantity: f
                 # → ni se descontaba la nevera ni se reintentaba ni alertaba el cron
                 # de backlog. Retornar False lo enruta al replay queue
                 # (reason=deduction_returned_false) y señala el master incompleto.
-                # OJO: el caso `existing.data` VACÍO (item ausente en la nevera) NO
+                # OJO: el caso `existing_rows` VACÍO (item ausente en la nevera) NO
                 # entra aquí — sigue retornando True (ausencia ≠ failure, correcto).
                 logger.warning(
-                    f"[P2-DEDUCT-NOOP] deducción no-op: {len(existing.data)} fila(s) "
+                    f"[P2-DEDUCT-NOOP] deducción no-op: {len(existing_rows)} fila(s) "
                     f"existente(s) del ingrediente pero unidad incompatible — "
                     f"user={user_id} ingredient={ingredient_name!r} unit={unit!r}. "
                     f"Backfill density_g_per_cup/density_g_per_unit en master_ingredients."
@@ -1392,17 +1472,19 @@ def get_inventory_activity_since(user_id: str, since_iso: str) -> Dict[str, Any]
 
     Retorna {mutations_count, last_mutation_at, low_stock_items, consumption_mutations_count, manual_mutations_count}
     """
-    if not supabase or not user_id or not since_iso:
+    if not _db_available() or not user_id or not since_iso:
         return {"mutations_count": 0, "last_mutation_at": None, "low_stock_items": 0, "consumption_mutations_count": 0, "manual_mutations_count": 0}
     try:
-        res = (
-            supabase.table("user_inventory")
-            .select("id, ingredient_name, quantity, updated_at, last_mutation_type")
-            .eq("user_id", user_id)
-            .gte("updated_at", since_iso)
-            .execute()
-        )
-        rows = res.data or []
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] updated_at → string ISO (parity
+        # PostgREST): el max() de abajo compara strings y `last_mutation_at`
+        # se serializa a JSON aguas arriba.
+        rows = execute_sql_query(
+            "SELECT id, ingredient_name, quantity::float8 AS quantity, "
+            "to_jsonb(updated_at) #>> '{}' AS updated_at, last_mutation_type "
+            "FROM user_inventory WHERE user_id = %s AND updated_at >= %s",
+            (user_id, since_iso),
+            fetch_all=True,
+        ) or []
         if not rows:
             return {"mutations_count": 0, "last_mutation_at": None, "low_stock_items": 0, "consumption_mutations_count": 0, "manual_mutations_count": 0}
         last_mutation = max((r.get("updated_at") for r in rows if r.get("updated_at")), default=None)
@@ -1444,14 +1526,14 @@ def _persist_failed_inventory_deductions(user_id: str, failed_items: list) -> No
     Persistido como jsonb en columna `ingredients`. Schema: `attempts=0` inicial,
     `created_at`/`updated_at` defaults a `now()`.
     """
-    if not supabase or not user_id or not failed_items:
+    if not _db_available() or not user_id or not failed_items:
         return
     try:
-        supabase.table("failed_inventory_deductions").insert({
-            "user_id": user_id,
-            "ingredients": failed_items,
-            "attempts": 0,
-        }).execute()
+        execute_sql_write(
+            "INSERT INTO failed_inventory_deductions (user_id, ingredients, attempts) "
+            "VALUES (%s, %s, 0)",
+            (user_id, Jsonb(failed_items)),
+        )
     except Exception as insert_err:
         # Warning, no error: la deducción principal ya completó (o no);
         # esto es solo telemetría.
@@ -1705,7 +1787,7 @@ def deduct_consumed_meal_from_inventory(user_id: str, ingredients_list: List[str
     para auditar qué items necesitan entry explícita en
     `_TYPICAL_PORTION_BY_NAME`.
     """
-    if not supabase or not ingredients_list: return
+    if not _db_available() or not ingredients_list: return
 
     try:
         from knobs import _env_bool as _knob_env_bool
@@ -1845,7 +1927,7 @@ def restock_inventory(user_id: str, ingredients_list: list):
 
     Tooltip-anchor: P0-RESTOCK-DEDUP-NAME.
     """
-    if not supabase or not ingredients_list:
+    if not _db_available() or not ingredients_list:
         return False, []
 
     # 🔄 [MEJORA] Ya NO borramos el inventario completo. El frontend aplica Delta Shopping
@@ -1931,9 +2013,10 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
       4. Si el insert falla (False/excepción), se restauran las filas snapshotted.
     No es atomicidad real (un crash entre DELETE e INSERT pierde datos), pero
     elimina el principal modo de fallo: errores capturables en `restock_inventory`.
-    Trade-off aceptado: lograr atomicidad estricta requeriría una transacción
-    SQL directa via psycopg, bypaseando el patrón Supabase-REST que usa el
-    resto del módulo.
+    Trade-off aceptado: lograr atomicidad estricta requeriría envolver
+    snapshot→DELETE→INSERT en una transacción única — posible ahora que el
+    módulo va por SQL directo (P1-NEON-DB-MIGRATION), pero la paridad de
+    comportamiento se preserva tal cual (P3-D docstring).
 
     Knob `MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK` (default `on`):
       - `on`   : restore-on-failure activado (comportamiento P3-D).
@@ -1963,7 +2046,7 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
         "rolled_back_total": 0,
         "rolled_back_partial": False,
     }
-    if not supabase or not user_id:
+    if not _db_available() or not user_id:
         return stats
 
     # [P2-1 · 2026-05-08] `_env_str` registra en `_KNOBS_REGISTRY`.
@@ -1974,28 +2057,33 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
     snapshot_rows: List[Dict[str, Any]] = []
 
     try:
-        preserved = (
-            supabase.table("user_inventory")
-            .select("id", count="exact")
-            .eq("user_id", user_id)
-            .neq("source", "shopping_list")
-            .execute()
+        _preserved_row = execute_sql_query(
+            "SELECT count(*) AS count FROM user_inventory "
+            "WHERE user_id = %s AND source <> 'shopping_list'",
+            (user_id,),
+            fetch_one=True,
         )
-        stats["preserved_manual_rows"] = int(getattr(preserved, "count", 0) or len(preserved.data or []))
+        stats["preserved_manual_rows"] = int((_preserved_row or {}).get("count") or 0)
 
         # [P3-D] Snapshot full row data antes del DELETE para poder restaurar
-        # si el INSERT falla downstream. Necesitamos `*` (no solo `id`) porque
-        # la restauración re-inserta los valores originales.
+        # si el INSERT falla downstream. [P1-NEON-DB-MIGRATION · 2026-06-12]
+        # Set de columnas fijado explícitamente (antes `select("*")`): `id`
+        # solo para el log de recovery (managed_cols lo excluye del re-INSERT);
+        # uuid→text y numeric→float8 para que el re-INSERT y el log JSON sean
+        # type-safe.
         if rollback_enabled:
             try:
-                snapshot_res = (
-                    supabase.table("user_inventory")
-                    .select("*")
-                    .eq("user_id", user_id)
-                    .eq("source", "shopping_list")
-                    .execute()
-                )
-                snapshot_rows = list(snapshot_res.data or [])
+                snapshot_rows = execute_sql_query(
+                    "SELECT id, user_id::text AS user_id, ingredient_name, "
+                    "quantity::float8 AS quantity, unit, "
+                    "master_ingredient_id::text AS master_ingredient_id, "
+                    "reserved_quantity::float8 AS reserved_quantity, "
+                    "reservation_details, last_mutation_type, source, category "
+                    "FROM user_inventory WHERE user_id = %s AND source = 'shopping_list'",
+                    (user_id,),
+                    fetch_all=True,
+                ) or []
+                snapshot_rows = list(snapshot_rows)
             except Exception as snap_err:
                 # Snapshot falló — degradar a modo legacy (sin rollback)
                 # en lugar de abortar. Loggear para que SRE detecte el patrón.
@@ -2005,14 +2093,14 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
                 )
                 snapshot_rows = []
 
-        deleted = (
-            supabase.table("user_inventory")
-            .delete(count="exact")
-            .eq("user_id", user_id)
-            .eq("source", "shopping_list")
-            .execute()
+        # RETURNING id reemplaza el count='exact' de PostgREST.
+        _deleted_rows = execute_sql_write(
+            "DELETE FROM user_inventory WHERE user_id = %s AND source = 'shopping_list' "
+            "RETURNING id",
+            (user_id,),
+            returning=True,
         )
-        stats["deleted_shopping_rows"] = int(getattr(deleted, "count", 0) or 0)
+        stats["deleted_shopping_rows"] = len(_deleted_rows or [])
     except Exception as e:
         logger.error(
             f"[P0.2] Error eliminando items shopping_list para {user_id}: {e}. "
@@ -2062,7 +2150,21 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
                     clean_row["user_id"] = user_id
                 if not clean_row.get("source"):
                     clean_row["source"] = "shopping_list"
-                supabase.table("user_inventory").insert(clean_row).execute()
+                # [P1-NEON-DB-MIGRATION · 2026-06-12] INSERT con columnas
+                # dinámicas del snapshot (keys vienen de NUESTRO SELECT, no de
+                # input externo). Jsonb() para columnas jsonb
+                # (reservation_details).
+                _cols = list(clean_row.keys())
+                _vals = tuple(
+                    Jsonb(v) if isinstance(v, (dict, list)) else v
+                    for v in clean_row.values()
+                )
+                execute_sql_write(
+                    "INSERT INTO user_inventory ({}) VALUES ({})".format(
+                        ", ".join(_cols), ", ".join(["%s"] * len(_cols))
+                    ),
+                    _vals,
+                )
                 restored += 1
             except Exception as restore_err:
                 # Continuar con las demás filas — best-effort. Si una falla,
@@ -2154,14 +2256,13 @@ def replace_shopping_list_only_items(user_id: str, ingredients_list: list) -> Di
 
     if not insert_failed:
         try:
-            count_res = (
-                supabase.table("user_inventory")
-                .select("id", count="exact")
-                .eq("user_id", user_id)
-                .eq("source", "shopping_list")
-                .execute()
+            _count_row = execute_sql_query(
+                "SELECT count(*) AS count FROM user_inventory "
+                "WHERE user_id = %s AND source = 'shopping_list'",
+                (user_id,),
+                fetch_one=True,
             )
-            stats["inserted_rows"] = int(getattr(count_res, "count", 0) or 0)
+            stats["inserted_rows"] = int((_count_row or {}).get("count") or 0)
         except Exception:
             stats["inserted_rows"] = inserted_before  # best-effort
     return stats
@@ -2171,7 +2272,7 @@ def consume_inventory_items_completely(user_id: str, ingredient_names: List[str]
     """
     Vacia el inventario físico (quantity = 0) para los ingredientes especificados.
     """
-    if not supabase or not ingredient_names: return False
+    if not _db_available() or not ingredient_names: return False
     try:
         names_lower = [n.lower().strip() for n in ingredient_names]
 
@@ -2231,18 +2332,9 @@ def sync_inventory_after_chunk_completion(
                 (user_id, chunk_window_start_iso, chunk_window_end_iso),
                 fetch_all=True,
             ) or []
-        elif supabase:
-            res = (
-                supabase.table("consumed_meals")
-                .select("id, ingredients, consumed_at")
-                .eq("user_id", user_id)
-                .gte("consumed_at", chunk_window_start_iso)
-                .lt("consumed_at", chunk_window_end_iso)
-                .is_("inventory_synced_at", "null")
-                .execute()
-            )
-            rows = res.data or []
         else:
+            # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminada la rama legacy
+            # `elif supabase:` (PostgREST). Sin pool no hay DB de datos.
             return stats
     except Exception as e:
         logger.warning(
@@ -2340,10 +2432,10 @@ def add_depleted_item(
     aplica, pero el backend conecta como `postgres` que bypassea RLS).
 
     Returns:
-        True si la operación tuvo éxito, False si supabase no disponible o
+        True si la operación tuvo éxito, False si la DB no está disponible o
         excepción.
     """
-    if not supabase or not user_id or not ingredient_name:
+    if not _db_available() or not user_id or not ingredient_name:
         return False
     try:
         # ON CONFLICT con dos unique indexes partial — Postgres elige el
@@ -2428,24 +2520,26 @@ def list_depleted_items(user_id: str, limit: int = 200) -> List[Dict[str, Any]]:
     Returns:
         Lista de dicts con `{id, master_ingredient_id, ingredient_name,
         quantity, unit, category, shelf_life_days, depleted_at}`. Lista
-        vacía si supabase no disponible o el user no tiene agotados.
+        vacía si la DB no está disponible o el user no tiene agotados.
     """
-    if not supabase or not user_id:
+    if not _db_available() or not user_id:
         return []
     limit = max(1, min(int(limit), 500))
     try:
-        res = (
-            supabase.table("user_depleted_items")
-            .select(
-                "id, master_ingredient_id, ingredient_name, quantity, unit, "
-                "category, shelf_life_days, depleted_at"
-            )
-            .eq("user_id", user_id)
-            .order("depleted_at", desc=True)
-            .limit(limit)
-            .execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] uuid→text, numeric→float8 y
+        # depleted_at→string ISO-8601 con "T" (to_jsonb): las filas van al
+        # frontend vía /api/plans/depleted-items y `new Date(...)` de Safari
+        # no parsea el formato espacio-separado de `::text`.
+        rows = execute_sql_query(
+            "SELECT id, master_ingredient_id::text AS master_ingredient_id, "
+            "ingredient_name, quantity::float8 AS quantity, unit, category, "
+            "shelf_life_days, to_jsonb(depleted_at) #>> '{}' AS depleted_at "
+            "FROM user_depleted_items WHERE user_id = %s "
+            "ORDER BY depleted_at DESC LIMIT %s",
+            (user_id, limit),
+            fetch_all=True,
         )
-        return res.data or []
+        return rows or []
     except Exception as e:
         logger.warning(f"[P3-DEPLETED-BD] list_depleted_items falló user={user_id}: {e}")
         return []
@@ -2464,22 +2558,31 @@ def delete_depleted_item(
     profundidad. Returns True si una row fue eliminada, False si nada
     matched o excepción.
     """
-    if not supabase or not user_id:
+    if not _db_available() or not user_id:
         return False
     if not (item_id or master_ingredient_id or ingredient_name):
         logger.warning("[P3-DEPLETED-BD] delete_depleted_item: ningún criterio dado")
         return False
     try:
-        query = supabase.table("user_depleted_items").delete().eq("user_id", user_id)
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] RETURNING id reemplaza el
+        # `res.data` de PostgREST como detector de "≥1 fila borrada". El match
+        # por nombre usa lower(trim()) = lower(trim(%s)) — semántica
+        # equivalente al `ilike` legacy sin el riesgo de que `%`/`_` en el
+        # nombre actúen como wildcards (mismo patrón que bulk_delete).
         if item_id is not None:
-            query = query.eq("id", int(item_id))
+            _q = ("DELETE FROM user_depleted_items WHERE user_id = %s AND id = %s "
+                  "RETURNING id")
+            _params = (user_id, int(item_id))
         elif master_ingredient_id is not None:
-            query = query.eq("master_ingredient_id", master_ingredient_id)
+            _q = ("DELETE FROM user_depleted_items WHERE user_id = %s "
+                  "AND master_ingredient_id = %s::uuid RETURNING id")
+            _params = (user_id, master_ingredient_id)
         else:
-            # Match case-insensitive sobre ingredient_name (ilike + trim).
-            query = query.ilike("ingredient_name", str(ingredient_name).strip())
-        res = query.execute()
-        return bool(res.data)
+            _q = ("DELETE FROM user_depleted_items WHERE user_id = %s "
+                  "AND lower(trim(ingredient_name)) = lower(trim(%s)) RETURNING id")
+            _params = (user_id, str(ingredient_name).strip())
+        rows = execute_sql_write(_q, _params, returning=True)
+        return bool(rows)
     except Exception as e:
         logger.warning(f"[P3-DEPLETED-BD] delete_depleted_item falló user={user_id}: {e}")
         return False
@@ -2494,18 +2597,17 @@ def delete_all_depleted_items(user_id: str) -> int:
     (cross-device) y `_fetchAndApply` los repoblaba al próximo mount.
 
     Filtro `WHERE user_id = %s` defensa-en-profundidad. Returns: count de filas
-    borradas (best-effort 0 si supabase no disponible o excepción).
+    borradas (best-effort 0 si la DB no está disponible o excepción).
     """
-    if not supabase or not user_id:
+    if not _db_available() or not user_id:
         return 0
     try:
-        res = (
-            supabase.table("user_depleted_items")
-            .delete(count="exact")
-            .eq("user_id", user_id)
-            .execute()
+        rows = execute_sql_write(
+            "DELETE FROM user_depleted_items WHERE user_id = %s RETURNING id",
+            (user_id,),
+            returning=True,
         )
-        return int(getattr(res, "count", 0) or 0)
+        return len(rows or [])
     except Exception as e:
         logger.warning(f"[P3-DELETEALL-DEPLETED] delete_all_depleted_items falló user={user_id}: {e}")
         return 0

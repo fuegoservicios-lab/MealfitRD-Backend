@@ -83,11 +83,12 @@ _EXPECTED_HELPERS = [
 
 @pytest.mark.parametrize("helper_name, knob_name", _EXPECTED_HELPERS)
 def test_helper_defined_with_env_knob(agent_src: str, helper_name: str, knob_name: str):
-    """Cada helper `def _chat_*_model_name() -> str:` lee
-    `os.environ.get("MEALFIT_<KNOB>", "<default>")`."""
-    # Definición del helper.
+    """Cada helper `def _chat_*_model_name(...) -> str:` lee el knob
+    `MEALFIT_<KNOB>`. [P0-DEEPSEEK-MIGRATION · 2026-06-12] chat/swap aceptan
+    `user_id` opcional para tier-routing — la firma admite parámetros."""
+    # Definición del helper (con o sin parámetros — tier-routing).
     def_re = re.compile(
-        rf"def\s+{re.escape(helper_name)}\s*\(\s*\)\s*->\s*str\s*:",
+        rf"def\s+{re.escape(helper_name)}\s*\([^)]*\)\s*->\s*str\s*:",
     )
     m = def_re.search(agent_src)
     assert m is not None, (
@@ -111,21 +112,19 @@ def test_helper_defined_with_env_knob(agent_src: str, helper_name: str, knob_nam
 # 3. Cada uno de los 5 callsites usa un helper
 # ---------------------------------------------------------------------------
 def test_all_5_callsites_use_helper(agent_src: str):
-    """Cuenta callsites `ChatGoogleGenerativeAI(...)` y verifica que cada
-    uno tenga `model=_chat_*_model_name()` en su lista de args (no un
-    literal). Tolerante a saltos de línea entre args."""
-    # Buscar TODOS los callsites `ChatGoogleGenerativeAI(...)`. El módulo
-    # `from langchain_google_genai import ChatGoogleGenerativeAI` cuenta
-    # como import, no callsite — distinguimos por `(` después del nombre.
+    """Cuenta callsites `ChatDeepSeek(...)` y verifica que cada uno tenga
+    `model=_chat_*_model_name(...)` en su lista de args (no un literal).
+    [P0-DEEPSEEK-MIGRATION] El constructor es ChatDeepSeek y los helpers de
+    chat/swap reciben el user_id para tier-routing — el regex acepta args."""
     no_comments = re.sub(r"#[^\n]*", "", agent_src)
     callsite_re = re.compile(
-        r"ChatGoogleGenerativeAI\s*\(",
+        r"ChatDeepSeek\s*\(",
     )
     callsites = list(callsite_re.finditer(no_comments))
-    # Cada `ChatGoogleGenerativeAI(...)` puede cerrar en distintas posiciones.
-    # Extraemos un window de ~300 chars tras el paréntesis abierto para
+    # Cada `ChatDeepSeek(...)` puede cerrar en distintas posiciones.
+    # Extraemos un window de ~400 chars tras el paréntesis abierto para
     # capturar `model=...` argument.
-    helper_re = re.compile(r"model\s*=\s*_chat_\w+_model_name\s*\(\s*\)")
+    helper_re = re.compile(r"model\s*=\s*_chat_\w+_model_name\s*\([^)]*\)")
     offenders = []
     for m in callsites:
         window = no_comments[m.end():m.end() + 400]
@@ -134,7 +133,7 @@ def test_all_5_callsites_use_helper(agent_src: str):
             offenders.append(f"line {line_no}")
     assert not offenders, (
         f"P2-AUDIT-1 regresión: {len(offenders)} callsites de "
-        f"`ChatGoogleGenerativeAI(...)` no usan `model=_chat_*_model_name()`: "
+        f"`ChatDeepSeek(...)` no usan `model=_chat_*_model_name(...)`: "
         f"{offenders}. Cada callsite debe leer el modelo via uno de los 4 "
         f"helpers `_chat_agent_model_name`, `_chat_agent_swap_model_name`, "
         f"`_chat_title_model_name`, `_chat_router_model_name`."
@@ -143,7 +142,7 @@ def test_all_5_callsites_use_helper(agent_src: str):
     # Si cambia el conteo, sirve como tripwire para auditar el nuevo callsite.
     assert len(callsites) == 5, (
         f"P2-AUDIT-1 advertencia: detectados {len(callsites)} callsites de "
-        f"`ChatGoogleGenerativeAI(...)` en agent.py (esperados 5). Si añadiste "
+        f"`ChatDeepSeek(...)` en agent.py (esperados 5). Si añadiste "
         f"un callsite nuevo, asegúrate de que usa un helper `_chat_*_model_name()` "
         f"y actualizar `_EXPECTED_HELPERS` + este conteo. Si removiste uno, "
         f"reducir el conteo aquí."

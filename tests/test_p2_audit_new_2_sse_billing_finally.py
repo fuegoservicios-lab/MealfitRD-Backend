@@ -258,9 +258,9 @@ def test_finally_block_bills_idempotently(chat_src: str) -> None:
     # truthiness del propio verified_user_id (ya no se necesitan los guards
     # `!= "guest"` / `!= session_id`). La parte P2-AUDIT-NEW-2 (idempotencia
     # `not _billed` + `_chunk_observed`) se preserva intacta.
-    assert "log_api_usage(verified_user_id" in finally_body and '"gemini_chat"' in finally_body, (
+    assert "log_api_usage(verified_user_id" in finally_body and '"llm_chat"' in finally_body, (
         "P1-CHAT-BILL-VERIFIED-UID violation: finally debe invocar "
-        "`log_api_usage(verified_user_id, \"gemini_chat\")` (identidad del "
+        "`log_api_usage(verified_user_id, \"llm_chat\")` (identidad del "
         "token), no `log_api_usage(user_id, ...)` del body."
     )
     # Guest exemption: ahora vía truthiness de verified_user_id (None = guest).
@@ -299,9 +299,9 @@ def test_bg_tasks_no_longer_bills(chat_src: str) -> None:
     )
     bg_body = gen_body[bg_body_start: bg_body_start + next_anchor.start()]
 
-    assert "gemini_chat" not in bg_body, (
+    assert "llm_chat" not in bg_body, (
         "P2-AUDIT-NEW-2 violation: `bg_tasks()` aún contiene billing "
-        "`log_api_usage(..., \"gemini_chat\")`. Eso causa DOUBLE-BILLING "
+        "`log_api_usage(..., \"llm_chat\")`. Eso causa DOUBLE-BILLING "
         "(finally outer también cobra). Mover toda la lógica de billing "
         "al finally y dejar bg_tasks solo con summarization + facts."
     )

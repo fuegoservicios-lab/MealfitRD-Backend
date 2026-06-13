@@ -45,12 +45,12 @@ import memory_manager
 # 1. Default y override via env var.
 # ---------------------------------------------------------------------------
 def test_summary_model_default_is_valid_gemini_id():
-    """Default sin env var → el ID unificado del stack
-    (`gemini-3.1-flash-lite`, 2026-05-14)."""
+    """Default sin env var → el modelo barato del stack
+    ([P0-DEEPSEEK-MIGRATION · 2026-06-12] `deepseek-v4-flash`)."""
     # Limpiamos cualquier override del entorno actual.
     if os.environ.get("MEMORY_SUMMARY_MODEL"):
         pytest.skip("MEMORY_SUMMARY_MODEL ya está seteado, no podemos verificar default")
-    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-3.1-flash-lite"
+    assert memory_manager.MEMORY_SUMMARY_MODEL == "deepseek-v4-flash"
 
 
 def test_summary_model_overridable_via_env_var(monkeypatch):
@@ -74,12 +74,11 @@ def test_summary_model_strips_whitespace(monkeypatch):
 
 
 def test_summary_model_falls_back_when_env_var_empty(monkeypatch):
-    """Env var = '' (vacío después de strip) → fallback al default."""
+    """Env var = '' (vacío después de strip) → fallback al default
+    ([P0-DEEPSEEK-MIGRATION] `_env_str` retorna el default con env vacío)."""
     monkeypatch.setenv("MEMORY_SUMMARY_MODEL", "")
     importlib.reload(memory_manager)
-    # `"" or "gemini-3.1-flash-lite"` → default por la cláusula
-    # `or` defensiva en el módulo.
-    assert memory_manager.MEMORY_SUMMARY_MODEL == "gemini-3.1-flash-lite"
+    assert memory_manager.MEMORY_SUMMARY_MODEL == "deepseek-v4-flash"
     monkeypatch.delenv("MEMORY_SUMMARY_MODEL", raising=False)
     importlib.reload(memory_manager)
 

@@ -102,18 +102,19 @@ def test_timeout_helper_defined_with_env_float(
 
 
 # ---------------------------------------------------------------------------
-# 2. Cada uno de los 5 callsites `ChatGoogleGenerativeAI(...)` pasa `timeout=`
+# 2. Cada uno de los 5 callsites `ChatDeepSeek(...)` pasa `timeout=`
 # ---------------------------------------------------------------------------
 def test_all_5_callsites_pass_timeout(agent_src: str):
-    """Cada callsite `ChatGoogleGenerativeAI(...)` debe tener `timeout=`
-    en su lista de args. Pre-fix: cero callsites lo tenían."""
+    """Cada callsite `ChatDeepSeek(...)` debe tener `timeout=` en su lista
+    de args. Pre-fix: cero callsites lo tenían.
+    [P0-DEEPSEEK-MIGRATION · 2026-06-12] constructor renombrado."""
     no_comments = re.sub(r"#[^\n]*", "", agent_src)
-    callsite_re = re.compile(r"ChatGoogleGenerativeAI\s*\(")
+    callsite_re = re.compile(r"ChatDeepSeek\s*\(")
     callsites = list(callsite_re.finditer(no_comments))
 
     assert len(callsites) == 5, (
         f"P0-CHAT-LLM-TIMEOUT tripwire: detectados {len(callsites)} callsites "
-        f"de `ChatGoogleGenerativeAI(...)` en agent.py (esperados 5). Si "
+        f"de `ChatDeepSeek(...)` en agent.py (esperados 5). Si "
         f"añadiste un callsite nuevo, asegúrate de pasarle `timeout=` y "
         f"actualizar este conteo."
     )
@@ -131,8 +132,8 @@ def test_all_5_callsites_pass_timeout(agent_src: str):
 
     assert not offenders, (
         f"P0-CHAT-LLM-TIMEOUT regresión: {len(offenders)} callsites de "
-        f"`ChatGoogleGenerativeAI(...)` SIN `timeout=_chat_*_timeout_s()`: "
-        f"{offenders}. Sin timeout per-LLM, una llamada colgada a Gemini "
+        f"`ChatDeepSeek(...)` SIN `timeout=_chat_*_timeout_s()`: "
+        f"{offenders}. Sin timeout per-LLM, una llamada colgada al provider "
         f"bloquea el worker thread indefinidamente → thread pool starvation."
     )
 

@@ -81,8 +81,8 @@ def test_sync_db_calls_offloaded_to_thread():
     assert "await asyncio.to_thread(get_user_profile, user_id)" in src, (
         "get_user_profile (chrono) debe ir por asyncio.to_thread"
     )
-    assert 'await asyncio.to_thread(log_api_usage, actual_user_id, "gemini_vision")' in src, (
-        "log_api_usage (gemini_vision) debe ir por asyncio.to_thread"
+    assert 'await asyncio.to_thread(log_api_usage, actual_user_id, "llm_vision")' in src, (
+        "log_api_usage (llm_vision) debe ir por asyncio.to_thread"
     )
     assert re.search(
         r'await\s+asyncio\.to_thread\(\s*\n\s*execute_sql_write\s*,',

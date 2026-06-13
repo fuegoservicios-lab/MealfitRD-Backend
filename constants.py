@@ -1,8 +1,10 @@
 import logging
 import os
 import math
-from typing import List
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from typing import List, Optional
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Embeddings ahora via capa pluggable
+# (Gemini eliminado; DeepSeek no ofrece embeddings — provider pendiente).
+from embeddings_provider import get_text_embedding
 
 # [P2-1 · 2026-05-08] Helpers compartidos del registry de knobs. Antes los 5
 # knobs `MEALFIT_*` de este módulo (POOL_FALLBACK_ALERT_*, LESSON_BUFFER_BACKLOG,
@@ -1182,7 +1184,6 @@ def split_with_absorb(total_days: int, base: int = 3) -> list[int]:
     n_base = n_full - rem
     return [base] * n_base + [base + 1] * rem
 # --- VECTOR SEARCH CACHE ---
-_embedding_model = None
 
 # [P1-EMBEDDING-CACHE-BOUNDED · 2026-05-24] Caches de embeddings con bound LRU.
 # Pre-fix `_embedding_cache = {}` + `_pantry_embeddings_cache = {}` crecían
@@ -1266,55 +1267,32 @@ class _BoundedEmbeddingCache:
 _embedding_cache = _BoundedEmbeddingCache(_EMBEDDING_CACHE_MAXSIZE)
 _pantry_embeddings_cache = _BoundedEmbeddingCache(_EMBEDDING_CACHE_MAXSIZE)
 
-# [2026-05-06] Modelo de embeddings TEXT-ONLY (configurable). Default a
-# `gemini-embedding-2` GA estable. Aunque el flujo es text-only, este modelo
-# supera a `gemini-embedding-001` en TODOS los benchmarks de texto:
-#   - MTEB Multilingual: 69.9 vs 68.4
-#   - MTEB Code:         84.0 vs 76.0   (+8 pts)
-# Y al ser el mismo modelo que el multimodal (vision_agent), unifica el
-# espacio vectorial — abre cross-modal search a futuro (ej. buscar
-# ingredientes del shopping list contra fotos del visual diary sin re-embeber).
-#
-# Mantenemos un knob SEPARADO del multimodal por flexibilidad: si en el
-# futuro Google saca un text-only mejor que multimodal-en-texto, o si la
-# cuota multimodal se agota crónicamente y queremos degradar solo este
-# path, podemos cambiarlo sin tocar vision_agent.
-# [P2-1 · 2026-05-08] `_env_str` registra en `_KNOBS_REGISTRY`. El helper
-# normaliza vía `.strip().lower()`; los nombres de modelos Gemini ya son
-# lowercase (`models/gemini-embedding-2`, `models/gemini-embedding-001`,
-# `models/text-embedding-004`), así que la normalización no altera el valor.
-from knobs import _env_str as _knob_env_str_constants
-GEMINI_EMBEDDING_TEXT_MODEL = _knob_env_str_constants(
-    "MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL",
-    "models/gemini-embedding-2",
-)
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El knob legacy
+# `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL` y el singleton Gemini fueron
+# reemplazados por la capa pluggable `embeddings_provider.py`
+# (`MEALFIT_EMBEDDINGS_PROVIDER` / `MEALFIT_EMBEDDINGS_MODEL` /
+# `MEALFIT_EMBEDDINGS_BASE_URL` + env `EMBEDDINGS_API_KEY`). Con provider
+# `disabled` (default actual), `get_embedding` retorna None y los callers
+# degradan al matching no-semántico (regex/substring).
 
 
-# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Cohorte omitida: el singleton de
-# embeddings de constants no acepta `timeout=` — solo `client_args` acota el
-# deadline httpx. Sin esto, un socket colgado bloquea el thread del cron que
-# llama get_embedding (cron_tasks.py:21042/21047, max_instances=1). Mismo knob.
-def _embeddings_llm_timeout_s() -> float:
-    return _env_float(
-        "MEALFIT_EMBEDDING_LLM_TIMEOUT_S",
-        15.0,
-        validator=lambda v: 0.0 < v <= 60.0,
-    )
+def get_embedding(text: str) -> Optional[List[float]]:
+    """Embedding cacheado del texto, o None si el provider está disabled o
+    falló. Los fallos NO se cachean — el provider puede activarse en runtime
+    via env + restart, y un blip transitorio no debe envenenar el LRU.
 
+    [P1-COHERE-EMBED-V4] La key del LRU incluye el model_id del provider
+    (espacio vectorial). Este matching es texto-a-texto simétrico → ambos
+    lados usan el default `query` del provider."""
+    from embeddings_provider import get_embeddings_model_id
 
-def get_embedding(text: str) -> List[float]:
-    global _embedding_model
-    if not _embedding_model:
-        _embedding_model = GoogleGenerativeAIEmbeddings(
-            model=GEMINI_EMBEDDING_TEXT_MODEL,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
-            # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline httpx (ver helper).
-            client_args={"timeout": _embeddings_llm_timeout_s()},
-        )
-    if text not in _embedding_cache:
-        emb = _embedding_model.embed_query(text)
-        _embedding_cache[text] = emb
-    return _embedding_cache[text]
+    cache_key = (get_embeddings_model_id(), text)
+    if cache_key not in _embedding_cache:
+        emb = get_text_embedding(text)
+        if emb is None:
+            return None
+        _embedding_cache[cache_key] = emb
+    return _embedding_cache[cache_key]
 
 def cosine_similarity(v1: List[float], v2: List[float]) -> float:
     dot = sum(a * b for a, b in zip(v1, v2))
@@ -2230,26 +2208,37 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                     break
                     
             # 2. Si falló el match tradicional, intentamos Similitud Coseno (Mejora 4)
+            # [P0-DEEPSEEK-MIGRATION] `get_embedding` puede retornar None
+            # (provider disabled/fallo) — en ese caso se omite el matching
+            # semántico sin warning por-item y se cae al flujo no-vector.
             if not matched_pantry_key and len(base) > 2:
                 try:
                     gen_emb = get_embedding(base)
-                    best_match = None
-                    best_score = -1.0
-                    
-                    for p_key in pantry_ledger.keys():
-                        if p_key not in _pantry_embeddings_cache:
-                            _pantry_embeddings_cache[p_key] = get_embedding(p_key)
-                        
-                        p_emb = _pantry_embeddings_cache[p_key]
-                        score = cosine_similarity(gen_emb, p_emb)
-                        
-                        if score > best_score:
-                            best_score = score
-                            best_match = p_key
-                            
-                    if best_score > 0.85: # Threshold estricto para evitar falsos positivos
-                        logger.debug(f"🧠 [VECTOR MATCH] '{base}' -> '{best_match}' (score: {best_score:.3f})")
-                        matched_pantry_key = best_match
+                    if gen_emb is not None:
+                        # [P1-COHERE-EMBED-V4] key del cache versionada por
+                        # espacio vectorial (mismo patrón que _embedding_cache).
+                        from embeddings_provider import get_embeddings_model_id
+                        _emb_model_id = get_embeddings_model_id()
+                        best_match = None
+                        best_score = -1.0
+
+                        for p_key in pantry_ledger.keys():
+                            _p_cache_key = (_emb_model_id, p_key)
+                            p_emb = _pantry_embeddings_cache.get(_p_cache_key)
+                            if p_emb is None:
+                                p_emb = get_embedding(p_key)
+                                if p_emb is None:
+                                    continue
+                                _pantry_embeddings_cache[_p_cache_key] = p_emb
+                            score = cosine_similarity(gen_emb, p_emb)
+
+                            if score > best_score:
+                                best_score = score
+                                best_match = p_key
+
+                        if best_score > 0.85: # Threshold estricto para evitar falsos positivos
+                            logger.debug(f"🧠 [VECTOR MATCH] '{base}' -> '{best_match}' (score: {best_score:.3f})")
+                            matched_pantry_key = best_match
                 except Exception as e:
                     logger.warning(f"Error en Vector Search para '{base}': {e}")
                     

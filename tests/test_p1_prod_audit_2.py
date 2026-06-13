@@ -30,18 +30,24 @@ def test_p1_chat_api_chat_idor_guard():
 def test_p1_chunk_probe_llm_timeout():
     src = _read(_BACKEND, "cron_tasks.py")
     assert "def _chunk_probe_llm_timeout_s(" in src
-    # el constructor del probe debe llevar timeout=
-    probe_at = src.index('model="gemini-3.1-flash-lite"')
-    block = src[probe_at - 200: probe_at + 400]
-    assert "timeout=_chunk_probe_llm_timeout_s()" in src
+    # [P0-DEEPSEEK-MIGRATION] el constructor del probe usa el modelo FREE
+    # via knob (no hardcode) y debe llevar timeout=
+    probe_at = src.index("probe_llm = ChatDeepSeek(")
+    block = src[probe_at: probe_at + 600]
+    assert "model=model_free_tier()" in block
+    assert "timeout=_chunk_probe_llm_timeout_s()" in block
 
 
 # ─────────────────────────────────────────────── P2 #6: embeddings + sentiment timeouts
 def test_p2_embeddings_client_args_timeout():
-    for mod in ("fact_extractor.py", "vision_agent.py", "constants.py"):
-        src = _read(_BACKEND, mod)
-        assert "def _embeddings_llm_timeout_s(" in src, f"helper falta en {mod}"
-        assert 'client_args={"timeout": _embeddings_llm_timeout_s()}' in src, f"client_args falta en {mod}"
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El deadline de embeddings se
+    # consolidó en embeddings_provider (un solo constructor, kwarg nativo
+    # `timeout=` de OpenAIEmbeddings) — misma lección P2-LLM-TIMEOUT-SWEEP.
+    src = _read(_BACKEND, "embeddings_provider.py")
+    assert "def _embeddings_timeout_s(" in src, "helper falta en embeddings_provider"
+    assert '"timeout": _embeddings_timeout_s()' in src, (
+        "el constructor de embeddings debe acotar deadline via timeout="
+    )
 
 
 def test_p2_sentiment_timeout():

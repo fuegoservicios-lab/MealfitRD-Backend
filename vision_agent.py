@@ -3,7 +3,11 @@ import io
 import base64
 from cache_manager import centralized_cache
 from knobs import _env_str, _env_float  # [P3-VISION-MODEL-KNOB · 2026-05-20] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini eliminado. ChatDeepSeek acepta
+# base_url/api_key explícitos — el path vision lo reusa apuntando a CUALQUIER
+# provider OpenAI-compatible con soporte de imágenes.
+from llm_provider import ChatDeepSeek
+from embeddings_provider import get_text_embedding
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
@@ -13,28 +17,49 @@ import logging
 logger = logging.getLogger(__name__)  # [P2-LOGGER-MIGRATION · 2026-05-12]
 
 
-# [P3-VISION-MODEL-KNOB · 2026-05-20] Knob para overridear el modelo Gemini
-# Vision sin redeploy. Cierra el gap "hardcoded preview model" identificado
-# en `docs/gaps-audit-2026-05.md` (D3 / R2): el modelo
-# `gemini-3.1-pro-preview` ya causó CB stale 4.4 días en 2026-05-11 (CLAUDE.md
-# convención P3-PREVIEW-MODEL-KNOB). Si Google deprecia el preview sin aviso,
-# `vision_agent` rompe → la cadena entera de Diario Visual + cruce-de-silos
-# con `fact_extractor` queda silenciada hasta el próximo redeploy.
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Vision como provider PLUGGABLE.
+# DeepSeek-V4 NO acepta input de imágenes (verificado api-docs 2026-06-12),
+# así que el análisis visual queda detrás de un provider OpenAI-compatible
+# configurable (Qwen-VL, GLM-4V, moonshot, etc.) — mismo patrón que
+# embeddings_provider. Mientras `MEALFIT_VISION_PROVIDER=disabled` (default
+# hasta que el owner elija provider), `process_image_with_vision` retorna el
+# payload `analysis_failed=True` SIN llamar a ningún API: el frontend ya
+# distingue ese estado ("la IA no pudo analizar") de "no es comida".
 #
-# Con el knob:
-#   - Default = current production model (cero cambio de comportamiento).
-#   - SRE puede setear `MEALFIT_VISION_MODEL=gemini-3.1-pro` (stable, sin
-#     `-preview`) en EasyPanel y reiniciar el worker — vision retoma operación.
-#
-# Auto-registry en `_KNOBS_REGISTRY` vía `_env_str` → visible en
-# `/health/version` (admin gated). Patrón espejo de `proactive_agent.py`
-# (P3-PREVIEW-MODEL-KNOB).
-# Tooltip-anchor: P3-VISION-MODEL-KNOB.
+# Para activar sin tocar código:
+#   MEALFIT_VISION_PROVIDER=openai_compatible
+#   MEALFIT_VISION_MODEL=<model-id-con-vision>
+#   MEALFIT_VISION_BASE_URL=<base-url-openai-compatible>
+#   VISION_API_KEY=<key>   (env var, NUNCA hardcodeada)
+# Tooltip-anchor: P3-VISION-MODEL-KNOB (knob model preservado).
+_VISION_PROVIDER_DISABLED = "disabled"
+_VISION_PROVIDER_OPENAI_COMPATIBLE = "openai_compatible"
+_warned_vision_disabled = False
+
+
+def _vision_provider() -> str:
+    return _env_str(
+        "MEALFIT_VISION_PROVIDER",
+        _VISION_PROVIDER_DISABLED,
+        choices={_VISION_PROVIDER_DISABLED, _VISION_PROVIDER_OPENAI_COMPATIBLE},
+    )
+
+
 def _vision_model_name() -> str:
-    # [P1-ALL-MODELS-GA · 2026-05-21] Default migrado de `gemini-3.1-pro-preview`
-    # a `gemini-3.5-flash`. Vision pierde capacidad multimodal Pro pero gana
-    # GA stability + paid-tier directo. Rollback: `MEALFIT_VISION_MODEL=gemini-3.1-pro-preview`.
-    return _env_str("MEALFIT_VISION_MODEL", "gemini-3.5-flash")
+    return _env_str("MEALFIT_VISION_MODEL", "")
+
+
+def _vision_base_url() -> str:
+    return _env_str("MEALFIT_VISION_BASE_URL", "")
+
+
+def is_vision_enabled() -> bool:
+    """True si hay provider de visión activo con config mínima completa."""
+    return (
+        _vision_provider() == _VISION_PROVIDER_OPENAI_COMPATIBLE
+        and bool(_vision_model_name())
+        and bool(_vision_base_url())
+    )
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke del LLM Vision.
@@ -57,16 +82,8 @@ def _vision_llm_timeout_s() -> float:
     )
 
 
-# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Cohorte omitida: el `GoogleGenerativeAIEmbeddings`
-# multimodal no acepta `timeout=` — solo `client_args` llega al cliente httpx
-# y acota el deadline. Sin esto, un socket de embedding colgado bloquea el
-# event loop / thread. Mismo knob que fact_extractor/constants.
-def _embeddings_llm_timeout_s() -> float:
-    return _env_float(
-        "MEALFIT_EMBEDDING_LLM_TIMEOUT_S",
-        15.0,
-        validator=lambda v: 0.0 < v <= 60.0,
-    )
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El timeout de embeddings
+# (`MEALFIT_EMBEDDING_LLM_TIMEOUT_S`) ahora vive en `embeddings_provider`.
 
 
 # Definimos el modelo de salida estructurada para capturar la descripción
@@ -84,19 +101,50 @@ class ImageDescription(BaseModel):
     carbs: int = Field(description="Estimación de gramos de carbohidratos totales en la imagen. Usa 0 si no es comida.")
     healthy_fats: int = Field(description="Estimación de gramos de grasas saludables totales en la imagen. Usa 0 si no es comida.")
 
+def _vision_disabled_payload() -> dict:
+    """Payload soft-fail cuando el provider de visión está deshabilitado.
+    Misma shape que el except path — el frontend ya maneja `analysis_failed`."""
+    return {
+        "description": "Análisis de imagen no disponible temporalmente.",
+        "is_food": False,
+        "analysis_failed": True,
+        "meal_name": "",
+        "calories": 0,
+        "protein": 0,
+        "carbs": 0,
+        "healthy_fats": 0,
+    }
+
+
 async def process_image_with_vision(image_bytes: bytes) -> dict:
     """
-    Toma los bytes de una imagen, usa Gemini Vision para extraer una descripción
-    y determina si contiene alimentos usando structured output.
+    Toma los bytes de una imagen, usa el provider de visión configurado para
+    extraer una descripción y determina si contiene alimentos usando
+    structured output. Con `MEALFIT_VISION_PROVIDER=disabled` retorna el
+    payload `analysis_failed` sin tocar ningún API.
     """
+    global _warned_vision_disabled
+    if not is_vision_enabled():
+        if not _warned_vision_disabled:
+            logger.warning(
+                "⚠️ [VISION] Provider de visión DESACTIVADO "
+                "(MEALFIT_VISION_PROVIDER=disabled — DeepSeek no acepta "
+                "imágenes; provider pendiente de configurar). El Diario "
+                "Visual y 'Escanear comida' responderán analysis_failed. "
+                "Este aviso se emite una vez por proceso."
+            )
+            _warned_vision_disabled = True
+        return _vision_disabled_payload()
+
     try:
         # [P3-VISION-MODEL-KNOB · 2026-05-20] Modelo via knob (no hardcoded).
-        # Default preserva el modelo preview actual; SRE puede swap sin redeploy
-        # si Google deprecia. Tooltip-anchor: P3-VISION-MODEL-KNOB.
-        llm = ChatGoogleGenerativeAI(
+        # [P0-DEEPSEEK-MIGRATION] Cliente OpenAI-compatible con base_url/key
+        # del provider de visión configurado.
+        llm = ChatDeepSeek(
             model=_vision_model_name(),
             temperature=0.1,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
+            base_url=_vision_base_url(),
+            api_key=(os.environ.get("VISION_API_KEY") or "").strip() or None,
             timeout=_vision_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] no colgar el event loop
         ).with_structured_output(ImageDescription)
         
@@ -171,43 +219,44 @@ async def process_image_with_vision(image_bytes: bytes) -> dict:
             "healthy_fats": 0,
         }
 
-# [2026-05-06] Modelo de embeddings MULTIMODAL para visual diary y chat agent.
-# Configurable vía env. Default `gemini-embedding-2` (GA estable, multimodal —
-# texto + imágenes). Mismo benchmark que la variante preview (MTEB Multilingual
-# 69.9, TextCaps 89.6, Docci 93.4) pero sin las restricciones de cuota del
-# preview ni cambios disruptivos en futuras revisiones.
-#
-# Si Google saca un nuevo modelo multimodal mejor (ej. gemini-embedding-3),
-# cambias el knob sin tocar código. Si la cuota se agota crónicamente, puedes
-# temporalmente apuntar al text-only y aceptar perder multimodalidad hasta el
-# reset diario.
-GEMINI_EMBEDDING_MULTIMODAL_MODEL = os.environ.get(
-    "MEALFIT_GEMINI_EMBEDDING_MULTIMODAL_MODEL",
-    "models/gemini-embedding-2",
-)
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El embedding
+# "multimodal" siempre vectorizó el TEXTO de la descripción (no la imagen),
+# así que delega al provider de `embeddings_provider` (hoy Cohere Embed v4,
+# que ADEMÁS soporta imágenes si en el futuro se quiere búsqueda
+# imagen-a-imagen). Con provider inactivo, retorna None y
+# `async_process_and_save_visual_entry` aborta el guardado con warning
+# (path pre-existente).
 
 
-def get_multimodal_embedding(text: str) -> list:
+def get_multimodal_embedding(text: str, purpose: str = "query") -> list:
     """
-    Genera un embedding de la descripción usando Gemini.
+    Genera un embedding de la descripción via `embeddings_provider`.
     Usa el mismo patrón de caché centralizado que fact_extractor.get_embedding().
+
+    [P1-COHERE-EMBED-V4] `purpose="document"` SOLO en los paths que
+    PERSISTEN a `visual_diary.embedding` (este módulo + routers/diary);
+    las búsquedas del agente usan el default `"query"` — Embed v4 es
+    asimétrico y esa distinción es la palanca de precisión del retrieval.
     """
-    result = _cached_multimodal_embedding(text)
+    from embeddings_provider import get_embeddings_model_id
+
+    if purpose not in ("query", "document"):
+        purpose = "query"
+    result = _cached_multimodal_embedding(text, get_embeddings_model_id(), purpose)
     return list(result) if result else None
 
 @centralized_cache(ttl_seconds=3153600000, maxsize=10000, cache_empty=False)
-def _cached_multimodal_embedding(text: str):
-    """Wrapper cacheado para embeddings multimodales (Redis o local OrderedDict)."""
+def _cached_multimodal_embedding(text: str, model_id: str, purpose: str):
+    """Wrapper cacheado para embeddings del visual diary (Redis o local
+    OrderedDict). `model_id`/`purpose` son args para VERSIONAR la cache key
+    por espacio vectorial y lado (P1-COHERE-EMBED-V4 — sin esto un switch
+    de provider serviría vectores stale del espacio anterior desde Redis)."""
     try:
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model=GEMINI_EMBEDDING_MULTIMODAL_MODEL,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
-            # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline httpx (ver helper).
-            client_args={"timeout": _embeddings_llm_timeout_s()},
-        )
-        emb = embeddings.embed_query(text)
-        logger.info(f"🔑 [VISUAL EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
-        return list(emb[:768])
+        emb = get_text_embedding(text, purpose=purpose)
+        if not emb:
+            return None
+        logger.info(f"🔑 [VISUAL EMBEDDING CACHE] MISS → Generado embedding ({model_id}/{purpose}) para: '{text[:50]}...'")
+        return list(emb)
     except Exception as e:
         # [P3-VISION-FAIL-ERROR-LOG · 2026-05-30] error-level para Sentry (ver
         # process_image_with_vision). Mismo gap de observabilidad.
@@ -237,8 +286,8 @@ async def async_process_and_save_visual_entry(user_id: str, file_bytes: bytes, i
     description = vision_result.get("description", "")
     logger.info(f"✅ Descripción generada: '{description}'")
     
-    # Paso 2: Embedding
-    embedding = get_multimodal_embedding(description)
+    # Paso 2: Embedding (se PERSISTE en visual_diary → lado document)
+    embedding = get_multimodal_embedding(description, purpose="document")
     
     if not embedding:
         logger.warning("⚠️ No se pudo vectorizar la imagen. Abortando guardado.")

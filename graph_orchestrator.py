@@ -9,7 +9,16 @@ import time
 import json
 from typing import TypedDict, Optional, Callable, Any, Literal
 from langgraph.graph import StateGraph, END
-from langchain_google_genai import ChatGoogleGenerativeAI as _ChatGoogleGenerativeAI
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek. El wrapper local
+# `ChatDeepSeek` (abajo) subclasea el cliente base para backpressure +
+# instrumentación; el router por tier vive en llm_provider.
+from llm_provider import (
+    ChatDeepSeek as _ChatDeepSeekBase,
+    DEEPSEEK_FLASH,
+    DEEPSEEK_PRO,
+    PAID_TIERS,
+    get_user_tier,
+)
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log, retry_if_exception
 import logging
@@ -1256,7 +1265,7 @@ async def aacquire_user_and_global(user_id):
             yield
 
 
-class ChatGoogleGenerativeAI(_ChatGoogleGenerativeAI):
+class ChatDeepSeek(_ChatDeepSeekBase):
     """Wrapper para aplicar backpressure transparente a TODAS las llamadas
     LLM en LangGraph (síncrono y asíncrono).
 
@@ -4384,18 +4393,9 @@ DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",    
 # calidad A/B vía `llm_usage_events.output_tokens` antes/después; subir el knob si
 # la calidad baja. Solo aplica a modelos thinking-capable (gemini-3.5-flash);
 # flash-lite NO soporta thinking_config → se omite. Tooltip-anchor: P1-COST-THINKING-CAP.
-DAYGEN_THINKING_BUDGET      = _env_int  ("MEALFIT_DAYGEN_THINKING_BUDGET",       2048,
-                                         validator=lambda v: -1 <= v <= 32768)
-
-# [P1-EVALUATOR-THINKING-CAP · 2026-06-01] Presupuesto DEDICADO del thinking del
-# EVALUATOR de self_critique (línea ~7591). Default 4096 = DOBLE del de day-gen:
-# honra que "evaluar requiere razonar más que rellenar un schema" mientras recorta
-# el tail patológico medido en prod (avg_out 6426, max 14350 para CritiqueEvaluation).
-# Semántica idéntica a DAYGEN_THINKING_BUDGET (-1=sin cap/rollback, 0=off, >0=cap N).
-# Rollback sin redeploy: MEALFIT_EVALUATOR_THINKING_BUDGET=-1. Tooltip-anchor:
-# P1-EVALUATOR-THINKING-CAP.
-EVALUATOR_THINKING_BUDGET   = _env_int  ("MEALFIT_EVALUATOR_THINKING_BUDGET",     4096,
-                                         validator=lambda v: -1 <= v <= 32768)
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] `DAYGEN_THINKING_BUDGET` y
+# `EVALUATOR_THINKING_BUDGET` eliminados junto con sus helpers — eran caps
+# del reasoning de Gemini (ver nota en el bloque de helpers más abajo).
 
 # [L1-UNBIND-NUTRITION-TOOL · 2026-05-28] Kill-switch para des-enlazar la tool
 # consultar_nutricion del day-gen. La tabla de nutrición ya está inyectada en el
@@ -4409,28 +4409,15 @@ EVALUATOR_THINKING_BUDGET   = _env_int  ("MEALFIT_EVALUATOR_THINKING_BUDGET",   
 DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",   True)
 
 
-def _thinking_budget_kwargs(model_name: str) -> dict:
-    """[P1-COST-THINKING-CAP] {"thinking_budget": N} para modelos thinking-capable
-    cuando el knob está activo (>=0). flash-lite no soporta thinking config →
-    dict vacío (evita pasar un kwarg no soportado que rompería la construcción)."""
-    if DAYGEN_THINKING_BUDGET < 0:
-        return {}
-    if not model_name or "lite" in model_name.lower():
-        return {}
-    return {"thinking_budget": DAYGEN_THINKING_BUDGET}
-
-
-def _evaluator_thinking_budget_kwargs(model_name: str) -> dict:
-    """[P1-EVALUATOR-THINKING-CAP · 2026-06-01] Gemelo de `_thinking_budget_kwargs`
-    pero con el presupuesto DEDICADO y más generoso `EVALUATOR_THINKING_BUDGET`
-    (default 4096 = 2x day-gen). Para el EVALUATOR de self_critique: emite un schema
-    diminuto (CritiqueEvaluation) pero su reasoning corría sin tope (prod max 14350
-    tok). flash-lite → dict vacío (no soporta thinking config). -1 → sin cap."""
-    if EVALUATOR_THINKING_BUDGET < 0:
-        return {}
-    if not model_name or "lite" in model_name.lower():
-        return {}
-    return {"thinking_budget": EVALUATOR_THINKING_BUDGET}
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] `_thinking_budget_kwargs` y
+# `_evaluator_thinking_budget_kwargs` ELIMINADOS (P1-COST-THINKING-CAP /
+# P1-EVALUATOR-THINKING-CAP). Eran caps del reasoning de Gemini, que
+# facturaba como output a ~$9/M y producía runaways patológicos (day-gen
+# llegó a 19,162 tok). DeepSeek-V4 gestiona el thinking nativamente sin
+# budget por request, y su output cuesta $0.28–0.87/M (10-30× menos) — el
+# problema de costo que motivaba el cap ya no existe. Los knobs
+# `MEALFIT_DAYGEN_THINKING_BUDGET` / `MEALFIT_EVALUATOR_THINKING_BUDGET`
+# dejaron de leerse.
 
 
 # [P1-PROMPT-CACHE-STAGGER · 2026-05-16] Pre-computar el SystemMessage del
@@ -4587,7 +4574,10 @@ Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=T
 # crons/loops productivos leen model ID desde knob — modelos preview pueden
 # deprecarse sin aviso (audit 2026-05-11: `gemini-3.1-pro-preview` open=true
 # 4.4 días). Knob permite swap sin redeploy.
-_FLASH_LITE_DEFAULT = "gemini-3.1-flash-lite"
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] DeepSeek no tiene tier "lite"; el
+# modelo barato del stack es V4 Flash. El nombre de la constante se preserva
+# (los ~10 callsites/helpers la referencian como "el default barato").
+_FLASH_LITE_DEFAULT = DEEPSEEK_FLASH
 
 
 def _judge_model_name() -> str:
@@ -4599,13 +4589,13 @@ def _judge_model_name() -> str:
 
 # [P2-ORCH-7 · 2026-05-28] Modelo "risk-tier" para el reviewer médico y el
 # fact-checker clínico cuando el perfil declara alergias/condiciones médicas.
-# El reviewer es el ÚNICO gate LLM de seguridad clínica y por defecto corría en
-# Flash-Lite (el tier más débil) incluso para los usuarios de mayor riesgo.
-# Default `gemini-3.5-flash` (GA, más capaz que Lite) — consistente con la
-# política no-preview del owner (P1-ALL-MODELS-GA). Perfiles sin restricciones
-# siguen en Flash-Lite (sin impacto de costo; el escalado solo aplica a perfiles
-# restringidos). Tooltip-anchor: P2-ORCH-7.
-_REVIEWER_RISK_TIER_DEFAULT = "gemini-3.5-flash"
+# El reviewer es el ÚNICO gate LLM de seguridad clínica.
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default `deepseek-v4-pro` PARA TODOS
+# los tiers (incluido gratis): la seguridad clínica de perfiles con
+# alergias/condiciones NO se degrada por plan de pago — es 1 call por plan y
+# el delta de costo es centavos. Perfiles sin restricciones siguen en el
+# modelo barato. Tooltip-anchor: P2-ORCH-7.
+_REVIEWER_RISK_TIER_DEFAULT = DEEPSEEK_PRO
 
 _PROFILE_RISK_NEGATIVES = {"", "ninguna", "ninguno", "none", "n/a", "na", "no", "nada"}
 
@@ -4733,30 +4723,19 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 #
 # Defaults preservan comportamiento actual. Tooltip-anchor: P3-PLAN-MODEL-KNOBS.
 def _plan_pro_model_name() -> str:
-    # [P1-ALL-MODELS-GA · 2026-05-21] Default migrado de `gemini-3.1-pro-preview`
-    # a `gemini-3.5-flash` por decisión del owner: eliminar TODA dependencia de
-    # modelos `*-preview` (riesgo deprecation sin SLA + cuotas free-tier separadas
-    # aunque haya billing). Esto significa que perfiles CLÍNICOS complejos ahora
-    # se enrutan a Flash en lugar de Pro — trade-off: menor capacidad de razonamiento
-    # médico vs estabilidad operacional garantizada.
-    # Rollback si calidad clínica degrada visiblemente: `MEALFIT_PRO_MODEL=gemini-3.1-pro-preview`.
-    return _env_str("MEALFIT_PRO_MODEL", "gemini-3.5-flash")
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El "modelo PRO" del pipeline es el
+    # modelo del TIER PAGADO: DeepSeek V4 Pro ($0.435/M in · $0.87/M out).
+    # `_route_model` lo asigna a usuarios basic/plus/ultra.
+    # Rollback/swap sin redeploy: `MEALFIT_PRO_MODEL=<model-id>`.
+    return _env_str("MEALFIT_PRO_MODEL", DEEPSEEK_PRO)
 
 
 def _plan_flash_model_name() -> str:
-    # [P1-FLASH-MODEL-GA · 2026-05-21] Default `gemini-3.5-flash` (GA) en lugar
-    # de `gemini-3-flash-preview` (preview). Razones:
-    #   1. Modelos preview de Google pueden deprecarse sin aviso prolongado
-    #      (caso real: CB stale 4.4 días el 2026-05-11 con preview model).
-    #   2. `gemini-3-flash-preview` está sujeto a cuota free-tier de 20 RPD
-    #      (`generate_content_free_tier_requests`) → bloqueo crítico para
-    #      cuentas que aún no habilitaron billing en su proyecto Google Cloud
-    #      (observado en chunk 713ff43a, 2026-05-21).
-    #   3. `gemini-3.5-flash` es modelo GA estable, sujeto a quotas paid-tier
-    #      directas cuando hay billing activo (sin sufijo `-FreeTier` en el
-    #      `quotaId`).
-    # Rollback sin redeploy: `MEALFIT_FLASH_MODEL=gemini-3-flash-preview`.
-    return _env_str("MEALFIT_FLASH_MODEL", "gemini-3.5-flash")
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El "modelo FLASH" del pipeline es
+    # el modelo del TIER GRATIS y de los paths force_fast/aux: DeepSeek V4
+    # Flash ($0.14/M in · $0.28/M out). Rollback/swap sin redeploy:
+    # `MEALFIT_FLASH_MODEL=<model-id>`.
+    return _env_str("MEALFIT_FLASH_MODEL", DEEPSEEK_FLASH)
 
 
 def _planner_model_name() -> str:
@@ -4772,9 +4751,9 @@ def _planner_model_name() -> str:
     legacy sin redeploy.
 
     Rollback sin redeploy: `MEALFIT_PLANNER_MODEL=""` (cadena vacía) restaura
-    el ruteo dinámico. O `MEALFIT_PLANNER_MODEL=gemini-3.5-flash` fuerza flash GA.
+    el ruteo dinámico. O `MEALFIT_PLANNER_MODEL=deepseek-v4-pro` fuerza Pro.
     """
-    return _env_str("MEALFIT_PLANNER_MODEL", "gemini-3.1-flash-lite")
+    return _env_str("MEALFIT_PLANNER_MODEL", DEEPSEEK_FLASH)
 
 
 def _self_critique_model_name() -> str:
@@ -4825,9 +4804,9 @@ def _compressor_model_name() -> str:
     Costo 14d prod: $0.017/14d (1 evento) → $0.003/14d con lite. Centavos
     ahorro; el valor es estructural (limpia el hot-path de aux nodes).
 
-    Rollback sin redeploy: `MEALFIT_COMPRESSOR_MODEL=gemini-3.5-flash`.
+    Rollback sin redeploy: `MEALFIT_COMPRESSOR_MODEL=deepseek-v4-pro`.
     """
-    return _env_str("MEALFIT_COMPRESSOR_MODEL", "gemini-3.1-flash-lite")
+    return _env_str("MEALFIT_COMPRESSOR_MODEL", DEEPSEEK_FLASH)
 
 
 def _meta_learning_model_name() -> str:
@@ -4845,9 +4824,9 @@ def _meta_learning_model_name() -> str:
     Costo 14d prod: $0.019/14d (4 eventos) → $0.003/14d con lite. Ahorro
     marginal en absoluto pero ~84% relativo del node.
 
-    Rollback sin redeploy: `MEALFIT_META_LEARNING_MODEL=gemini-3.5-flash`.
+    Rollback sin redeploy: `MEALFIT_META_LEARNING_MODEL=deepseek-v4-pro`.
     """
-    return _env_str("MEALFIT_META_LEARNING_MODEL", "gemini-3.1-flash-lite")
+    return _env_str("MEALFIT_META_LEARNING_MODEL", DEEPSEEK_FLASH)
 
 
 # Module-level constants preserved para compatibilidad con los 34 callsites
@@ -4908,13 +4887,11 @@ async def _attempt_pro_critique_correction(
             f"🔄 {log_prefix} Día {day_num} reintentando con {_PRO_MODEL_NAME} "
             f"(timeout={CRITIQUE_PRO_FALLBACK_TIMEOUT_S:.0f}s)..."
         )
-        pro_corrector = ChatGoogleGenerativeAI(
+        pro_corrector = ChatDeepSeek(
             model=_PRO_MODEL_NAME,
             temperature=0.3,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             max_retries=0,
             timeout=int(CRITIQUE_PRO_FALLBACK_TIMEOUT_S),
-            **_thinking_budget_kwargs(_PRO_MODEL_NAME),  # P1-COST-THINKING-CAP
         ).with_structured_output(SingleDayPlanModel)
         result = await _safe_ainvoke(
             pro_corrector,
@@ -5053,48 +5030,39 @@ def _route_model_for_day_generator(
 def _route_model(form_data: dict, attempt: int = 1, force_fast: bool = False) -> str:
     """Mejora 1: Ruteo Dinámico de Modelos (Cost/Latency Routing).
 
-    [P1-FLASH-MODEL-GA · 2026-05-21] Usa `_FLASH_MODEL_NAME` (knob `MEALFIT_FLASH_MODEL`)
-    en lugar de hardcodear el modelo. Sin esto, el swap del default en `_plan_flash_model_name()`
-    no se reflejaba en estos paths (force_fast + FÁCIL routing) porque las strings
-    eran literales aquí.
+    [P0-DEEPSEEK-MIGRATION · 2026-06-12] El ruteo ahora es POR TIER DE
+    SUSCRIPCIÓN (decisión de producto 2026-06-12):
+      - `gratis` / guests / tier irresoluble → `_FLASH_MODEL_NAME` (V4 Flash)
+      - `basic` / `plus` / `ultra` (pagados) → `_PRO_MODEL_NAME` (V4 Pro)
+
+    El user_id se lee del ContextVar `user_id_var`, que `arun_plan_pipeline`
+    setea al entrar (cubre requests síncronos Y chunk workers de fondo).
+    Sin user en contexto → FLASH (fail-cheap: un fallo de lookup jamás
+    encarece la llamada). `force_fast=True` preserva su semántica histórica:
+    paths correctores/aux que eligen el modelo barato deliberadamente.
+
+    El ruteo legacy por complejidad clínica (P1-A) quedó reemplazado: la
+    seguridad clínica NO depende de este router — el reviewer médico y el
+    fact-checker escalan a PRO via risk-tier (P2-ORCH-7,
+    `_REVIEWER_RISK_TIER_DEFAULT`) para CUALQUIER perfil con
+    alergias/condiciones, incluido tier gratis. `form_data`/`attempt` se
+    conservan en la firma por compat con los callers (y un futuro ruteo
+    híbrido tier+complejidad puede reusarlos).
     """
     if force_fast:
         return _FLASH_MODEL_NAME
 
-    # En reintentos, ya NO forzamos pro-preview: era demasiado lento (90s+ solo el planner)
-    # y consumía el budget global antes de que los días pudieran terminar. Mantenemos el
-    # ruteo dinámico por complejidad para retries también.
-        
-    medical = form_data.get("medicalConditions", [])
-    allergies = form_data.get("allergies", [])
-    # P1-A: leer del array canónico `dislikes` (mergeado con `otherDislikes` por
-    # `_merge_other_text_fields` antes de cualquier nodo). El nombre legacy
-    # `dislikedIngredients` quedó huérfano: ningún cliente lo escribe, por lo
-    # que la rama "muchos dislikes → escalar a PRO" nunca se activaba para
-    # usuarios reales y el ruteo de complejidad sólo escalaba vía medical/allergies.
-    disliked = form_data.get("dislikes", [])
-    
-    # Consideramos "complejo" si tiene condiciones médicas serias, o muchas alergias
-    is_complex = False
-    if isinstance(medical, list) and len(medical) > 0:
-        if isinstance(medical[0], str) and medical[0].lower() not in ["ninguna", "none", "n/a", ""]:
-            is_complex = True
-        elif not isinstance(medical[0], str):
-            is_complex = True # Si no es string (ej. lista/dict anidado), asumimos complejidad
-    elif isinstance(medical, str) and medical.lower() not in ["ninguna", "none", "n/a", ""]:
-        is_complex = True
-        
-    if isinstance(allergies, list) and len(allergies) > 1:
-        is_complex = True
-    if isinstance(disliked, list) and len(disliked) > 3:
-        is_complex = True
-        
-    if is_complex:
-        logger.info(f"🔀 [ROUTER] Perfil CLÍNICO complejo detectado. Enrutando a modelo PRO ({_PRO_MODEL_NAME}).")
+    _uid = user_id_var.get()
+    tier = get_user_tier(_uid)
+    if tier in PAID_TIERS:
+        logger.info(
+            f"🔀 [ROUTER] Tier '{tier}' (pagado) → modelo PRO ({_PRO_MODEL_NAME})."
+        )
         return _PRO_MODEL_NAME
-    else:
-        logger.info(f"🔀 [ROUTER] Perfil FÁCIL detectado. Enrutando a modelo FLASH ({_FLASH_MODEL_NAME}).")
-        return _FLASH_MODEL_NAME
+    logger.info(
+        f"🔀 [ROUTER] Tier '{tier or 'gratis'}' → modelo FLASH ({_FLASH_MODEL_NAME})."
+    )
+    return _FLASH_MODEL_NAME
 
 
 # [P2-PROD-AUDIT-FOLLOWUP · 2026-05-28] Cap duro del history_context cuando NO
@@ -5312,16 +5280,16 @@ async def context_compression_node(state: PlanState) -> dict:
     _compressor_cache_record_miss()
     logger.info(f"🗜️ [COMPRESIÓN] Contexto masivo detectado ({len(history_context)} caracteres). Comprimiendo...")
     
-    from langchain_google_genai import ChatGoogleGenerativeAI
-
     # P1-Q3: capturar el modelo para usar el CB per-modelo.
     # [P3-COST-CUT-AUX · 2026-05-22] Usar helper `_compressor_model_name()`
-    # (knob `MEALFIT_COMPRESSOR_MODEL`, default `gemini-3.1-flash-lite`) en
+    # (knob `MEALFIT_COMPRESSOR_MODEL`, default DeepSeek V4 Flash) en
     # lugar del ruteo dinámico — la compresión es síntesis textual literal,
-    # no requiere razonamiento Pro. Rollback: setear el knob a flash full.
+    # no requiere razonamiento Pro. Rollback: setear el knob a deepseek-v4-pro.
+    # [P0-DEEPSEEK-MIGRATION] Usa el wrapper module-level ChatDeepSeek
+    # (backpressure + instrumentación), igual que el resto de nodos.
     _compressor_model = _compressor_model_name()
     _cb = _get_circuit_breaker(_compressor_model)
-    compressor_llm = ChatGoogleGenerativeAI(
+    compressor_llm = ChatDeepSeek(
         model=_compressor_model,
         temperature=0.0,
         max_retries=1
@@ -5559,17 +5527,11 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     if attempt > 1:
         logger.info(f"🔀 [RETRY MUTATION] Modelo '{planner_model}' + temp={base_temp} para intento {attempt}")
 
-    planner_llm = ChatGoogleGenerativeAI(
+    planner_llm = ChatDeepSeek(
         model=planner_model,
         temperature=base_temp,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=0,
         timeout=45,
-        # [P1-COST-THINKING-CAP] El planner es un nodo de GENERACIÓN (skeleton =
-        # nombres+slots, "no requiere razonamiento" per _planner_model_name). Faltaba
-        # en el set capado original. No-op en el default flash-lite; endurece los
-        # paths override (MEALFIT_PLANNER_MODEL=flash / "" → _route_model → flash/pro).
-        **_thinking_budget_kwargs(planner_model),  # P1-COST-THINKING-CAP
     ).with_structured_output(PlanSkeletonModel)
 
     # P1-Q3: CB per-modelo. Si pro está saturado, perfiles complejos paran;
@@ -6035,13 +5997,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         # la salud de cada modelo se rastrea independientemente.
         _day_cb = _get_circuit_breaker(day_model)
 
-        day_llm = ChatGoogleGenerativeAI(
+        day_llm = ChatDeepSeek(
             model=day_model,
             temperature=temp_override if temp_override is not None else (base_temp if attempt == 1 else (base_temp + 0.1)),
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             max_retries=0,
             timeout=90,
-            **_thinking_budget_kwargs(day_model),  # P1-COST-THINKING-CAP
         )
 
         # Enlazar herramientas (Mejora 3)
@@ -7072,10 +7032,9 @@ async def adversarial_judge_node(state: PlanState) -> dict:
     # si calidad regresiona en un perfil específico.
     _judge_model = _judge_model_name()
     _judge_cb = _get_circuit_breaker(_judge_model)
-    judge_llm = ChatGoogleGenerativeAI(
+    judge_llm = ChatDeepSeek(
         model=_judge_model,
         temperature=0.2,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=1
     ).with_structured_output(AdversarialJudgeResult)
 
@@ -7627,16 +7586,10 @@ async def self_critique_node(state: PlanState) -> dict:
     else:
         _evaluator_model = _self_critique_model_name()
     _evaluator_cb = _get_circuit_breaker(_evaluator_model)
-    evaluator_llm = ChatGoogleGenerativeAI(
+    evaluator_llm = ChatDeepSeek(
         model=_evaluator_model,
         temperature=0.1,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=1,
-        # [P1-EVALUATOR-THINKING-CAP · 2026-06-01] Cap GENEROSO (default 4096 = 2x
-        # day-gen) del reasoning. Prod: avg_out 6426 / max 14350 tok para un schema
-        # de 5 scores con las señales duras YA pre-calculadas → tail patológico.
-        # Aplica a flash Y pro (EVALUATOR_USE_PRO); flash-lite → no-op.
-        **_evaluator_thinking_budget_kwargs(_evaluator_model),  # P1-EVALUATOR-THINKING-CAP
     ).with_structured_output(CritiqueEvaluation)
 
     days_json = json.dumps(days, ensure_ascii=False)
@@ -7825,13 +7778,11 @@ PLAN A EVALUAR (días generados):
             # P1-Q3: capturar modelo del corrector para CB per-modelo
             _corrector_model = _route_model(form_data, force_fast=True)
             _corrector_cb = _get_circuit_breaker(_corrector_model)
-            corrector_llm = ChatGoogleGenerativeAI(
+            corrector_llm = ChatDeepSeek(
                 model=_corrector_model,
                 temperature=0.3,
-                google_api_key=os.environ.get("GEMINI_API_KEY"),
                 max_retries=0,
                 timeout=80,
-                **_thinking_budget_kwargs(_corrector_model),  # P1-COST-THINKING-CAP
             ).with_structured_output(SingleDayPlanModel)
 
             ctx = _build_shared_context(state)
@@ -9802,13 +9753,11 @@ async def surgical_marker_regen_node(state: PlanState) -> dict:
     # Setup del corrector — paridad con self_critique_node line ~5124.
     _corrector_model = _route_model(form_data, force_fast=True)
     _corrector_cb = _get_circuit_breaker(_corrector_model)
-    corrector_llm = ChatGoogleGenerativeAI(
+    corrector_llm = ChatDeepSeek(
         model=_corrector_model,
         temperature=0.3,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         max_retries=0,
         timeout=80,
-        **_thinking_budget_kwargs(_corrector_model),  # P1-COST-THINKING-CAP
     ).with_structured_output(SingleDayPlanModel)
 
     ctx = _build_shared_context(state)
@@ -10704,10 +10653,9 @@ async def review_plan_node(state: PlanState) -> dict:
             # hardcodeaba `gemini-3-flash-preview` (Flash regular).
             _fact_checker_model = _fact_checker_model_name(form_data)  # P2-ORCH-7 risk-tier
             _fact_checker_cb = _get_circuit_breaker(_fact_checker_model)
-            fact_checker_llm = ChatGoogleGenerativeAI(
+            fact_checker_llm = ChatDeepSeek(
                 model=_fact_checker_model,
                 temperature=0.0,
-                google_api_key=os.environ.get("GEMINI_API_KEY")
             ).bind_tools([consultar_base_datos_medica])
             
             fc_sys_prompt = "Eres un investigador clínico. Revisa las alergias y condiciones médicas frente a los ingredientes presentados. Usa tu herramienta para investigar posibles reacciones cruzadas, contraindicaciones o interacciones peligrosas. Cuando termines o si no ves riesgo, responde con un REPORTE CLÍNICO CONCISO con tus hallazgos."
@@ -10898,10 +10846,9 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # Pro en perfiles clínicos. Override por knob si regresión.
         _reviewer_model = _reviewer_model_name(form_data)  # P2-ORCH-7 risk-tier
         _reviewer_cb = _get_circuit_breaker(_reviewer_model)
-        reviewer_llm = ChatGoogleGenerativeAI(
+        reviewer_llm = ChatDeepSeek(
             model=_reviewer_model,
             temperature=0.1,  # Temperatura muy baja para ser preciso
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             max_retries=0,
             timeout=60
         ).with_structured_output(ReviewResult)
@@ -11890,10 +11837,9 @@ async def reflection_node(state: PlanState) -> dict:
         # lite cubre. Rollback: setear el knob a flash full.
         _reflector_model = _meta_learning_model_name()
         _reflector_cb = _get_circuit_breaker(_reflector_model)
-        reflector_llm = ChatGoogleGenerativeAI(
+        reflector_llm = ChatDeepSeek(
             model=_reflector_model,
             temperature=0.2,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             max_retries=1
         ).with_structured_output(ReflectionResult)
         

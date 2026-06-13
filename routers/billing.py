@@ -9,20 +9,23 @@ from typing import Optional
 
 # Imports relativos al backend
 from auth import get_verified_user_id
-from db import supabase
+from db import execute_sql_query, execute_sql_write
 from knobs import _env_float, _env_bool, is_production
+from psycopg.types.json import Jsonb
 from rate_limiter import RateLimiter
 
 
 # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] Helper SSOT para despachar calls
-# sync del cliente Supabase desde handlers `async def`. Pre-fix los 6
-# callsites `supabase.table(...).execute()` corrían inline dentro del event
-# loop, bloqueando ~10-200ms por roundtrip y throttlando otros handlers
-# async bajo carga (chat stream, webhook PayPal, diary upload). Mismo
-# patrón que P2-AUTH-ASYNC-SLEEP cerró para `auth.py::get_verified_user_id`.
-# `asyncio.to_thread` despacha al default thread pool — el event loop sirve
-# otras requests mientras Supabase responde. Tooltip-anchor:
-# P1-ASYNC-SYNC-DB-BLOCKING.
+# DB sync desde handlers `async def`. Pre-fix los 6 callsites DB corrían
+# inline dentro del event loop, bloqueando ~10-200ms por roundtrip y
+# throttlando otros handlers async bajo carga (chat stream, webhook PayPal,
+# diary upload). Mismo patrón que P2-AUTH-ASYNC-SLEEP cerró para
+# `auth.py::get_verified_user_id`. `asyncio.to_thread` despacha al default
+# thread pool — el event loop sirve otras requests mientras Postgres responde.
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Los thunks ahora envuelven
+# `execute_sql_query`/`execute_sql_write` (SQL directo a Neon) en lugar del
+# cliente PostgREST de Supabase; el nombre del helper se conserva porque es
+# tooltip-anchor de tests. Tooltip-anchor: P1-ASYNC-SYNC-DB-BLOCKING.
 async def _supabase_async(thunk):
     return await asyncio.to_thread(thunk)
 
@@ -139,7 +142,7 @@ def _persist_billing_alert(
 ) -> None:
     """Best-effort UPSERT a `system_alerts` con `alert_type='billing'`.
 
-    Idempotente vía `on_conflict='alert_key'`: alerts repetidos del mismo
+    Idempotente vía `ON CONFLICT (alert_key)`: alerts repetidos del mismo
     `(user_id, sub_id)` actualizan `triggered_at` sin duplicar filas.
     Cualquier excepción se loguea sin propagar — la alert es observabilidad
     y NO debe romper el flujo del handler que ya está mid-failure.
@@ -148,21 +151,29 @@ def _persist_billing_alert(
     resolution" en CLAUDE.md). SRE debe verificar PayPal dashboard y
     reconciliar BD manualmente; no hay auto-cierre.
     """
-    if supabase is None:
-        return
     try:
         from datetime import datetime, timezone
-        now_iso = datetime.now(timezone.utc).isoformat()
-        supabase.table("system_alerts").upsert({
-            "alert_key": alert_key,
-            "alert_type": "billing",
-            "severity": severity,
-            "title": title,
-            "message": message,
-            "metadata": metadata or {},
-            "triggered_at": now_iso,
-            "resolved_at": None,
-        }, on_conflict="alert_key").execute()
+        now_utc = datetime.now(timezone.utc)
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] SQL directo (antes PostgREST
+        # upsert). El DO UPDATE reescribe todas las columnas del payload,
+        # incl. `resolved_at = NULL` — re-emitir el mismo alert_key "reabre"
+        # la alert (parity con el upsert PostgREST previo).
+        execute_sql_write(
+            """
+            INSERT INTO public.system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, triggered_at, resolved_at)
+            VALUES (%s, 'billing', %s, %s, %s, %s, %s, NULL)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET alert_type = EXCLUDED.alert_type,
+                severity = EXCLUDED.severity,
+                title = EXCLUDED.title,
+                message = EXCLUDED.message,
+                metadata = EXCLUDED.metadata,
+                triggered_at = EXCLUDED.triggered_at,
+                resolved_at = NULL
+            """,
+            (alert_key, severity, title, message, Jsonb(metadata or {}), now_utc),
+        )
     except Exception as e:
         logger.error(
             f"[P1-BILLING-FAIL-LOUD] No se pudo persistir alert "
@@ -192,7 +203,7 @@ async def api_validate_discount(
     data: dict = Body(...),
     verified_user_id: Optional[str] = Depends(_DISCOUNT_VALIDATE_LIMITER),
 ):
-    """Valida un código de descuento contra la tabla discount_codes en Supabase.
+    """Valida un código de descuento contra la tabla discount_codes en Postgres.
 
     [P1-BILLING-3 · 2026-05-12] Pre-fix el endpoint era público (sin
     `Depends(get_verified_user_id)`) y sin rate-limit. Un atacante anónimo
@@ -220,15 +231,27 @@ async def api_validate_discount(
         if not code:
             raise HTTPException(status_code=400, detail="Código requerido")
 
-        # Buscar el código en la tabla
-        res = await _supabase_async(
-            lambda: supabase.table("discount_codes").select("*").eq("code", code).eq("is_active", True).execute()
+        # Buscar el código en la tabla.
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] `valid_from`/`valid_until` van
+        # con `::text` para preservar el parseo `datetime.fromisoformat(...)`
+        # de abajo (PostgREST devolvía strings ISO; psycopg devolvería datetime).
+        rows = await _supabase_async(
+            lambda: execute_sql_query(
+                """
+                SELECT discount_percent, max_uses, current_uses, applicable_tiers,
+                       valid_from::text AS valid_from, valid_until::text AS valid_until
+                  FROM public.discount_codes
+                 WHERE code = %s AND is_active = TRUE
+                """,
+                (code,),
+                fetch_all=True,
+            )
         )
 
-        if not res.data or len(res.data) == 0:
+        if not rows or len(rows) == 0:
             return {"valid": False, "message": "Código no encontrado o inactivo."}
 
-        discount = res.data[0]
+        discount = rows[0]
 
         # Verificar vigencia
         from datetime import datetime, timezone
@@ -419,12 +442,16 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
             f"{user_id}. Tier asignado server-side: {tier_to_assign}"
         )
 
-        existing_res = await _supabase_async(
-            lambda: supabase.table("user_profiles").select("paypal_subscription_id, subscription_status").eq("id", user_id).execute()
+        existing_row = await _supabase_async(
+            lambda: execute_sql_query(
+                "SELECT paypal_subscription_id, subscription_status FROM public.user_profiles WHERE id = %s",
+                (user_id,),
+                fetch_one=True,
+            )
         )
-        if existing_res.data and len(existing_res.data) > 0:
-            old_sub_id = existing_res.data[0].get("paypal_subscription_id")
-            old_status = existing_res.data[0].get("subscription_status")
+        if existing_row:
+            old_sub_id = existing_row.get("paypal_subscription_id")
+            old_status = existing_row.get("subscription_status")
 
             if old_sub_id and old_sub_id != subscription_id and old_status != "INACTIVE":
                 logger.info(f"🔄 Detectado Upgrade/Cambio. Cancelando suscripción antigua {old_sub_id} en PayPal...")
@@ -486,20 +513,42 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
                                 ),
                             )
 
-        res = await _supabase_async(
-            lambda: supabase.table("user_profiles").update({
-                "plan_tier": tier_to_assign,
-                "paypal_subscription_id": subscription_id,
-                "subscription_status": "ACTIVE"
-            }).eq("id", user_id).execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] El payload conserva la forma
+        # dict para que el anchor P0-BILLING-1 quede explícito: `plan_tier`
+        # viene de `tier_to_assign` (server-derived, invariante I-Billing-1)
+        # — NUNCA del body del cliente. `RETURNING id` preserva el check
+        # fail-loud de filas matcheadas de abajo.
+        update_payload = {
+            "plan_tier": tier_to_assign,
+            "paypal_subscription_id": subscription_id,
+            "subscription_status": "ACTIVE",
+        }
+        updated_rows = await _supabase_async(
+            lambda: execute_sql_write(
+                """
+                UPDATE public.user_profiles
+                   SET plan_tier = %s,
+                       paypal_subscription_id = %s,
+                       subscription_status = %s
+                 WHERE id = %s
+                RETURNING id
+                """,
+                (
+                    update_payload["plan_tier"],
+                    update_payload["paypal_subscription_id"],
+                    update_payload["subscription_status"],
+                    user_id,
+                ),
+                returning=True,
+            )
         )
 
         # [P1-PROD-AUDIT-3 · 2026-05-30] Verificar que el UPDATE tocó una fila.
-        # PayPal YA validó/cobró en este punto; si `.eq("id", user_id)` matcheó 0
+        # PayPal YA validó/cobró en este punto; si `WHERE id = user_id` matcheó 0
         # filas (perfil ausente — caso patológico, el trigger handle_new_user lo
         # crea al signup) el upgrade se perdía en silencio con success:true. Fail-
         # loud + alert para reconciliación manual, espejo del cancel path arriba.
-        if not getattr(res, "data", None):
+        if not updated_rows:
             _persist_billing_alert(
                 alert_key=f"billing_profile_not_found_on_upgrade:{user_id}:{subscription_id}",
                 severity="critical",
@@ -533,13 +582,17 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
             logger.warning(f"Intento no autorizado de cancelar suscripcion: req_user={user_id}, auth_user={verified_user_id}")
             raise HTTPException(status_code=401, detail="No autorizado.")
             
-        res = await _supabase_async(
-            lambda: supabase.table("user_profiles").select("paypal_subscription_id").eq("id", user_id).execute()
+        profile_row = await _supabase_async(
+            lambda: execute_sql_query(
+                "SELECT paypal_subscription_id FROM public.user_profiles WHERE id = %s",
+                (user_id,),
+                fetch_one=True,
+            )
         )
-        if not res.data or not res.data[0].get("paypal_subscription_id"):
+        if not profile_row or not profile_row.get("paypal_subscription_id"):
             raise HTTPException(status_code=400, detail="No active subscription found to cancel.")
-            
-        subscription_id = res.data[0]["paypal_subscription_id"]
+
+        subscription_id = profile_row["paypal_subscription_id"]
         
         PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
         PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
@@ -677,13 +730,21 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
         
         logger.info(f"✅ Suscripción {subscription_id} de usuario {user_id} cancelada. Mantendrá acceso hasta {end_date or 'fin de ciclo'}.")
         
-        update_payload = {"subscription_status": "CANCELLED"}
+        # `end_date` llega como string ISO de PayPal (`next_billing_time`);
+        # el cast explícito ::timestamptz lo convierte en el bind.
         if end_date:
-            update_payload["subscription_end_date"] = end_date
+            cancel_query = (
+                "UPDATE public.user_profiles SET subscription_status = 'CANCELLED', "
+                "subscription_end_date = %s::timestamptz WHERE id = %s"
+            )
+            cancel_params = (end_date, user_id)
+        else:
+            cancel_query = (
+                "UPDATE public.user_profiles SET subscription_status = 'CANCELLED' WHERE id = %s"
+            )
+            cancel_params = (user_id,)
 
-        await _supabase_async(
-            lambda: supabase.table("user_profiles").update(update_payload).eq("id", user_id).execute()
-        )
+        await _supabase_async(lambda: execute_sql_write(cancel_query, cancel_params))
 
         return {"success": True, "message": "Tu suscripción no se renovará, pero mantendrás tu plan actual hasta el final del ciclo pagado."}
 
@@ -800,7 +861,6 @@ async def api_webhook_paypal(
         _transmission_id = headers.get("paypal-transmission-id")
         if _transmission_id:
             try:
-                from db import execute_sql_write
                 # Reusamos el KV general `app_kv_store` (prefijo `paypal_webhook:`,
                 # GC por el sweep `_KV_SWEEP_PREFIXES`) — evita una tabla nueva +
                 # su advisor `rls_enabled_no_policy`. INSERT ON CONFLICT DO NOTHING
@@ -859,10 +919,11 @@ async def api_webhook_paypal(
             if subscription_id:
                 logger.info(f"⬇️ Degradando suscripción {subscription_id} en BD debido a {event_type}.")
                 await _supabase_async(
-                    lambda: supabase.table("user_profiles").update({
-                        "plan_tier": "gratis",
-                        "subscription_status": "INACTIVE"
-                    }).eq("paypal_subscription_id", subscription_id).execute()
+                    lambda: execute_sql_write(
+                        "UPDATE public.user_profiles SET plan_tier = 'gratis', "
+                        "subscription_status = 'INACTIVE' WHERE paypal_subscription_id = %s",
+                        (subscription_id,),
+                    )
                 )
         elif _payment_failed_grace and event_type == "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
             # Fallo de pago transitorio: NO degradar. Marcar retry y conservar tier.
@@ -874,9 +935,11 @@ async def api_webhook_paypal(
                     f"(ventana de reintento de PayPal). Solo SUSPENDED/EXPIRED degradan."
                 )
                 await _supabase_async(
-                    lambda: supabase.table("user_profiles").update({
-                        "subscription_status": "PAYMENT_RETRYING"
-                    }).eq("paypal_subscription_id", subscription_id).execute()
+                    lambda: execute_sql_write(
+                        "UPDATE public.user_profiles SET subscription_status = 'PAYMENT_RETRYING' "
+                        "WHERE paypal_subscription_id = %s",
+                        (subscription_id,),
+                    )
                 )
         elif event_type in ("BILLING.SUBSCRIPTION.ACTIVATED", "PAYMENT.SALE.COMPLETED"):
             # Re-activación / pago exitoso (posiblemente tras un PAYMENT.FAILED).
@@ -912,20 +975,33 @@ async def api_webhook_paypal(
                 )
 
                 def _do_reactivate():
-                    q = supabase.table("user_profiles").update(update_payload).eq(
-                        "paypal_subscription_id", subscription_id
-                    )
+                    # [P1-NEON-DB-MIGRATION · 2026-06-12] SET dinámico desde
+                    # `update_payload` (status siempre; plan_tier solo si se
+                    # derivó de plan_id) + filtro condicional del guard.
+                    set_clauses = ["subscription_status = %s"]
+                    params: list = [update_payload["subscription_status"]]
+                    if "plan_tier" in update_payload:
+                        set_clauses.append("plan_tier = %s")
+                        params.append(update_payload["plan_tier"])
+                    where_clauses = ["paypal_subscription_id = %s"]
+                    params.append(subscription_id)
                     if _reactivate_guard:
                         if event_type == "PAYMENT.SALE.COMPLETED":
                             # Pago dentro del ciclo (sin plan_id): SOLO limpiar el
                             # flag PAYMENT_RETRYING → ACTIVE. No forzar ACTIVE sobre
                             # CANCELLED/INACTIVE (esos los gobierna su propia lógica).
-                            q = q.eq("subscription_status", "PAYMENT_RETRYING")
+                            where_clauses.append("subscription_status = 'PAYMENT_RETRYING'")
                         else:
                             # ACTIVATED puede reactivar PAYMENT_RETRYING/INACTIVE pero
-                            # NUNCA una sub CANCELLED por el usuario.
-                            q = q.neq("subscription_status", "CANCELLED")
-                    return q.execute()
+                            # NUNCA una sub CANCELLED por el usuario. `<>` no matchea
+                            # filas con status NULL — mismo comportamiento que el
+                            # `.neq()` de PostgREST que reemplaza.
+                            where_clauses.append("subscription_status <> 'CANCELLED'")
+                    return execute_sql_write(
+                        f"UPDATE public.user_profiles SET {', '.join(set_clauses)} "
+                        f"WHERE {' AND '.join(where_clauses)}",
+                        tuple(params),
+                    )
 
                 await _supabase_async(_do_reactivate)
         elif event_type == "BILLING.SUBSCRIPTION.CANCELLED":
@@ -935,12 +1011,22 @@ async def api_webhook_paypal(
             if subscription_id:
                 logger.info(f"ℹ️ Webhook: Suscripción {subscription_id} cancelada remota/silenciosamente.")
                 
-                update_payload = {"subscription_status": "CANCELLED"}
+                # `end_date` es string ISO de PayPal — cast ::timestamptz en el bind.
                 if end_date:
-                    update_payload["subscription_end_date"] = end_date
+                    wh_cancel_query = (
+                        "UPDATE public.user_profiles SET subscription_status = 'CANCELLED', "
+                        "subscription_end_date = %s::timestamptz WHERE paypal_subscription_id = %s"
+                    )
+                    wh_cancel_params = (end_date, subscription_id)
+                else:
+                    wh_cancel_query = (
+                        "UPDATE public.user_profiles SET subscription_status = 'CANCELLED' "
+                        "WHERE paypal_subscription_id = %s"
+                    )
+                    wh_cancel_params = (subscription_id,)
 
                 await _supabase_async(
-                    lambda: supabase.table("user_profiles").update(update_payload).eq("paypal_subscription_id", subscription_id).execute()
+                    lambda: execute_sql_write(wh_cancel_query, wh_cancel_params)
                 )
         
         return {"success": True}

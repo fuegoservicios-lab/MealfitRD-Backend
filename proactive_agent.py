@@ -1,7 +1,8 @@
 import os
 import logging
 from datetime import datetime, timezone, timedelta
-from langchain_google_genai import ChatGoogleGenerativeAI
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
+from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
 
 from db_core import connection_pool, execute_sql_query, execute_sql_write
 from db_chat import save_message, get_recent_messages
@@ -14,30 +15,19 @@ logger = logging.getLogger(__name__)
 from prompts.proactive import PROACTIVE_PROMPT
 
 
-# [P3-PREVIEW-MODEL-KNOB · 2026-05-12] Knob para overridear el modelo
-# Gemini usado por las 2 callsites del proactive agent sin redeploy:
+# [P3-PREVIEW-MODEL-KNOB · 2026-05-12] Knob para overridear el modelo LLM
+# usado por las 2 callsites del proactive agent sin redeploy:
 #   - `classify_nudge_sentiment` (analiza respuestas del usuario al nudge).
 #   - `_compose_proactive_message` (genera el texto del nudge).
 #
-# Por qué un knob (no hardcode):
-#   El stack actual usa `gemini-3.1-flash-lite` consistentemente
-#   (graph_orchestrator `_PRO_MODEL_NAME`, fact_extractor, agent, etc.).
-#   Cambiar el default acá rompería la consistencia del stack. Pero los
-#   modelos `*-preview` de Google pueden deprecarse/retirarse sin aviso
-#   prolongado — el audit 2026-05-11 documentó CB rows stale por el
-#   modelo `gemini-3.1-pro-preview` 4.4 días seguidos. Si Google retira
-#   el flash-lite-preview, el cron de nudges deja de clasificar
-#   sentiment + no envía mensajes hasta el próximo deploy. Knob permite
-#   swap inmediato sin redeploy: setear
-#   `MEALFIT_PROACTIVE_SENTIMENT_MODEL=gemini-3.1-flash` (stable, sin
-#   `-preview`) y reiniciar el worker — el cron retomará operación.
-#
-# Default = current production model. Cambiar en env vars cuando
-# Google publique notice de deprecation.
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default DeepSeek V4 Flash: nudges y
+# clasificación de sentiment son tareas aux baratas — mismo modelo para
+# todos los tiers. Swap sin redeploy:
+# `MEALFIT_PROACTIVE_SENTIMENT_MODEL=deepseek-v4-pro` + restart del worker.
 def _proactive_model_name() -> str:
     return os.environ.get(
         "MEALFIT_PROACTIVE_SENTIMENT_MODEL",
-        "gemini-3.1-flash-lite",
+        DEEPSEEK_FLASH,
     )
 
 
@@ -197,10 +187,9 @@ Respuesta del usuario: "{user_reply}"
 Devuelve ÚNICAMENTE un JSON válido con las claves "sentiment", "meal_logged" y "causal_reason". No uses bloques markdown."""
 
     try:
-        chat_llm = ChatGoogleGenerativeAI(
+        chat_llm = ChatDeepSeek(
             model=_proactive_model_name(),
             temperature=0.1,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
         res = chat_llm.invoke(prompt)
@@ -523,10 +512,9 @@ No uses demasiados emojis. Sé directo, breve y empático.
                     style_instruction=style_instruction
                 )
                 
-            chat_llm = ChatGoogleGenerativeAI(
+            chat_llm = ChatDeepSeek(
                 model=_proactive_model_name(),
                 temperature=0.8,
-                google_api_key=os.environ.get("GEMINI_API_KEY"),
                 timeout=_proactive_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
             )
             response = chat_llm.invoke(prompt)

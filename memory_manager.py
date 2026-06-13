@@ -9,7 +9,8 @@ import os
 import time
 import json
 import logging
-from langchain_google_genai import ChatGoogleGenerativeAI
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
+from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
 from langchain_core.messages import RemoveMessage
 
 logger = logging.getLogger(__name__)
@@ -39,37 +40,21 @@ MAX_CHAR_THRESHOLD = 4000   # A partir de cuántos caracteres en total se dispar
 KEEP_RECENT = 10         # Cuántos mensajes recientes conservar sin resumir
 MAX_SUMMARIES = 5        # Umbral para condensar resúmenes en un Master Summary
 
-# [P1-18 + UNIFICATION 2026-05-14] Modelo de Gemini usado por
+# [P1-18 + P0-DEEPSEEK-MIGRATION · 2026-06-12] Modelo LLM usado por
 # `summarize_and_prune` para generar resúmenes y master summaries.
-# Cronología:
-#   - Pre-P1-18: hardcoded a `"gemini-3.1-flash-lite"`. En ese
-#     momento la familia 3.x aún no estaba publicada (los modelos
-#     válidos eran 1.5/2.0/2.5) y el SDK lo rechazaba con 404
-#     silenciosamente — el resumen fallaba y el historial seguía
-#     creciendo sin podarse, agotando la ventana del agente.
-#   - P1-18: default movido a `"gemini-2.5-flash"` (stable, no-preview)
-#     + env var override + logger.error en el except + contador de
-#     fallos (`_summarize_failures`).
-#   - 2026-05-14: la familia 3.x ya está publicada y el resto del stack
-#     (chat_llm en agent.py, fact_extractor, sentiment_classifier,
-#     ai_helpers, proactive_agent) usa `gemini-3.1-flash-lite`
-#     con éxito. Para unificar footprint operacional el default vuelve
-#     a ese ID. El knob `MEMORY_SUMMARY_MODEL` permite rollback inmediato
-#     a un modelo stable (`MEMORY_SUMMARY_MODEL=gemini-2.5-flash`) sin
-#     redeploy si Google deprecara el preview — alineado con el patrón
-#     `[P3-PREVIEW-MODEL-KNOB]` del repo.
+# Default DeepSeek V4 Flash (tarea aux barata de síntesis). El knob
+# `MEMORY_SUMMARY_MODEL` permite swap inmediato sin redeploy — alineado
+# con el patrón `[P3-PREVIEW-MODEL-KNOB]` del repo.
 #
-# Cualquier mismatch con la nomenclatura oficial se sigue detectando
-# vía `_summarize_failures` y se promueve a `logger.error` para que
-# SRE alertee (en lugar del warning silencioso original).
+# Cualquier mismatch con la nomenclatura oficial del provider se sigue
+# detectando vía `_summarize_failures` y se promueve a `logger.error` para
+# que SRE alertee (en lugar del warning silencioso original).
 # [P3-PROD-AUDIT-3 · 2026-05-30] Resuelto vía `_env_str` (no `os.environ.get` crudo)
 # para AUTO-REGISTRARSE en `_KNOBS_REGISTRY` → visible en /health/version y
-# get_knobs_registry_snapshot(). ANTES era invisible al inventario de knobs: durante
-# un incidente de deprecación de modelo Gemini, un SRE no podía confirmar el modelo
-# de summary vivo sin leer logs. `_env_str` normaliza lower+strip (inocuo: los IDs
-# Gemini ya son lowercase). Alineado con [P3-PREVIEW-MODEL-KNOB].
+# get_knobs_registry_snapshot(). `_env_str` normaliza lower+strip (inocuo:
+# los model IDs DeepSeek ya son lowercase).
 from knobs import _env_str as _knob_env_str_mm
-MEMORY_SUMMARY_MODEL = _knob_env_str_mm("MEMORY_SUMMARY_MODEL", "gemini-3.1-flash-lite")
+MEMORY_SUMMARY_MODEL = _knob_env_str_mm("MEMORY_SUMMARY_MODEL", DEEPSEEK_FLASH)
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke de los 2 constructores
@@ -494,10 +479,9 @@ def summarize_and_prune(session_id: str):
         # stack; rollback a `gemini-2.5-flash` stable sin redeploy
         # disponible via env var). Ver narrativa completa en el comment
         # block de la constante a nivel módulo.
-        summary_llm = ChatGoogleGenerativeAI(
+        summary_llm = ChatDeepSeek(
             model=MEMORY_SUMMARY_MODEL,
             temperature=0.1,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             timeout=_memory_summary_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
         
@@ -591,10 +575,9 @@ def summarize_and_prune(session_id: str):
             
             # Usar .with_structured_output() para garantizar JSON perfecto (0% fallos de parseo).
             # [P1-18] Mismo modelo configurable que el summary_llm de arriba.
-            structured_summary_llm = ChatGoogleGenerativeAI(
+            structured_summary_llm = ChatDeepSeek(
                 model=MEMORY_SUMMARY_MODEL,
                 temperature=0.1,
-                google_api_key=os.environ.get("GEMINI_API_KEY"),
                 timeout=_memory_summary_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
             ).with_structured_output(EvolutionaryState)
             

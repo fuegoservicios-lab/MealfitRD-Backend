@@ -18,7 +18,8 @@ from prompts import (
 )
 
 # Langchain
-from langchain_google_genai import ChatGoogleGenerativeAI
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
+from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, model_free_tier
 from schemas import ExpandedRecipeModel
 
 from constants import (
@@ -38,25 +39,21 @@ logger = logging.getLogger(__name__)
 
 
 # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Knob para overridear el modelo del
-# generador de títulos de plan sin redeploy. Pre-fix: `model="gemini-3.1-flash-lite"`
-# hardcoded en `generate_plan_title()` — viola la convención P3-PREVIEW-MODEL-KNOB
-# (todos los callsites Gemini productivos leen model ID via env var con default).
-# Default = `gemini-3.1-flash-lite` (cero cambio de comportamiento — sigue siendo lite).
-# Rollback si calidad degrada visiblemente: `MEALFIT_PLAN_TITLE_MODEL=gemini-3.5-flash`.
+# generador de títulos de plan sin redeploy (convención P3-PREVIEW-MODEL-KNOB).
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default = DeepSeek V4 Flash (tarea aux
+# barata, mismo modelo para todos los tiers).
 # Tooltip-anchor: P3-FLASH-LITE-COST-CUT.
 def _plan_title_model_name() -> str:
-    return _env_str("MEALFIT_PLAN_TITLE_MODEL", "gemini-3.1-flash-lite")
+    return _env_str("MEALFIT_PLAN_TITLE_MODEL", DEEPSEEK_FLASH)
 
 
 # [P1-RECIPE-EXPAND-FAILSIGNAL · 2026-05-30] Knob para overridear el modelo del
 # "Chef AI" (`expand_recipe_agent`) sin redeploy — mismo patrón que
-# `_plan_title_model_name` (P3-FLASH-LITE-COST-CUT). Pre-fix: el callsite
-# hardcodeaba `model="gemini-3.1-flash-lite"`, violando P3-PREVIEW-MODEL-KNOB
-# (un retiro del modelo preview habría hecho fallar TODA expansión sin swap
-# posible). Default = lite (cero cambio de comportamiento).
+# `_plan_title_model_name` (P3-FLASH-LITE-COST-CUT). [P0-DEEPSEEK-MIGRATION]
+# Default = DeepSeek V4 Flash (expansión de receta es relleno de schema).
 # Tooltip-anchor: P1-RECIPE-EXPAND-FAILSIGNAL-MODEL.
 def _recipe_expand_model_name() -> str:
-    return _env_str("MEALFIT_RECIPE_EXPAND_MODEL", "gemini-3.1-flash-lite")
+    return _env_str("MEALFIT_RECIPE_EXPAND_MODEL", DEEPSEEK_FLASH)
 
 
 # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Timeout per-invoke compartido por los 4
@@ -80,7 +77,7 @@ def _ai_helpers_llm_timeout_s() -> float:
 
 
 def generate_plan_title(plan_data: dict) -> str:
-    """Genera un título corto y creativo para un plan nutricional usando Gemini Flash-Lite."""
+    """Genera un título corto y creativo para un plan nutricional (modelo aux barato)."""
     try:
         # Extraer nombres de comidas para contexto
         meal_names = []
@@ -122,10 +119,9 @@ Contexto:
 Responde SOLO con el título, nada más."""
         
         # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Model via knob (P3-PREVIEW-MODEL-KNOB).
-        title_llm = ChatGoogleGenerativeAI(
+        title_llm = ChatDeepSeek(
             model=_plan_title_model_name(),
             temperature=0.9,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
         response = title_llm.invoke(prompt)
@@ -934,10 +930,9 @@ def expand_recipe_agent(meal_data: dict) -> Optional[list[str]]:
     )
 
     try:
-        llm = ChatGoogleGenerativeAI(
+        llm = ChatDeepSeek(
             model=_recipe_expand_model_name(),  # [P1-RECIPE-EXPAND-FAILSIGNAL] knob, era hardcoded
             temperature=0.7,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         ).with_structured_output(ExpandedRecipeModel)
 
@@ -995,10 +990,9 @@ REGLAS DE SALIDA:
 - Usa un tono clínico pero directo.
 - NO ofrezcas consejos futuros, SOLO hechos observados (ej: "El usuario respondió excelente a desayunos salados, pero rechazó todos los batidos dulces").
 """
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite",
+        llm = ChatDeepSeek(
+            model=model_free_tier(),  # [P0-DEEPSEEK-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
             temperature=0.2,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         )
         response = llm.invoke(prompt)
@@ -1033,10 +1027,9 @@ Platos: {', '.join(liked_names)}
 Ejemplos de características: "Prefiere desayunos salados con plátano", "Le gustan los guisos tradicionales dominicanos con salsa", "Disfruta de proteínas a la plancha"
 """
         
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-3.1-flash-lite",
+        llm = ChatDeepSeek(
+            model=model_free_tier(),  # [P0-DEEPSEEK-MIGRATION] aux barato (knob MEALFIT_MODEL_FREE_TIER)
             temperature=0.2,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             timeout=_ai_helpers_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
         ).with_structured_output(FlavorProfiles)
         

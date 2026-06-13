@@ -6,7 +6,8 @@ import unicodedata
 import time
 from typing import Optional
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
+from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, resolve_model_for_user
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
 from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry
@@ -34,20 +35,17 @@ from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker
 # + sin `timeout=` (puede colgar al worker indefinidamente) + sin CB gate
 # (avalancha si Gemini está degradado). El P1-CHAT-CB-EXTEND ya cubrió los
 # 4 callsites de `agent.py`; este fix cierra los 2 de `tools.py`.
-from knobs import _env_str, _env_float, thinking_budget_kwargs  # [P2-COST-THINKING-CAP-EXT · 2026-06-01]
+from knobs import _env_str, _env_float
 
 
 def _tools_pref_agent_model_name() -> str:
-    # [P1-ALL-MODELS-GA · 2026-05-21] Default migrado de `gemini-3.1-pro-preview`
-    # a `gemini-3.5-flash`. Rollback: `MEALFIT_TOOLS_PREF_AGENT_MODEL=gemini-3.1-pro-preview`.
-    # [P3-FLASH-LITE-COST-CUT · 2026-05-21] Default re-migrado a `gemini-3.1-flash-lite`.
-    # El preference analyzer hace clasificación simple (rechazos/gustos) — output
-    # estructurado de baja complejidad, sin constraints duros. Lite cubre el caso
-    # y reduce costo ~50% vs flash. Si retry rate / quality scores degradan en
-    # `pipeline_metrics`, rollback inmediato: `MEALFIT_TOOLS_PREF_AGENT_MODEL=gemini-3.5-flash`.
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default DeepSeek V4 Flash. El
+    # preference analyzer hace clasificación simple (rechazos/gustos) —
+    # tarea aux barata, mismo modelo para todos los tiers. Override:
+    # `MEALFIT_TOOLS_PREF_AGENT_MODEL=deepseek-v4-pro` si la calidad degrada.
     return _env_str(
         "MEALFIT_TOOLS_PREF_AGENT_MODEL",
-        "gemini-3.1-flash-lite",
+        DEEPSEEK_FLASH,
     )
 
 
@@ -59,13 +57,15 @@ def _tools_pref_agent_llm_timeout_s() -> float:
     )
 
 
-def _tools_modify_meal_model_name() -> str:
-    # [P1-ALL-MODELS-GA · 2026-05-21] Default migrado de `gemini-3.1-pro-preview`
-    # a `gemini-3.5-flash`. Rollback: `MEALFIT_TOOLS_MODIFY_MEAL_MODEL=gemini-3.1-pro-preview`.
-    return _env_str(
-        "MEALFIT_TOOLS_MODIFY_MEAL_MODEL",
-        "gemini-3.5-flash",
-    )
+def _tools_modify_meal_model_name(user_id: Optional[str] = None) -> str:
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] TIER-ROUTED: modificar una comida
+    # del plan es surface user-facing de calidad — paid (basic/plus/ultra) →
+    # deepseek-v4-pro, gratis/guest → deepseek-v4-flash. El override del knob
+    # SIEMPRE gana (rollback sin redeploy).
+    override = _env_str("MEALFIT_TOOLS_MODIFY_MEAL_MODEL", "")
+    if override:
+        return override
+    return resolve_model_for_user(user_id)
 
 
 def _tools_modify_meal_llm_timeout_s() -> float:
@@ -154,10 +154,9 @@ def analyze_preferences_agent(likes: list, history: list, active_rejections: Opt
     #   (c) sin CB gate → avalancha bajo provider degradado.
     # Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
     _pref_model = _tools_pref_agent_model_name()
-    pref_llm = ChatGoogleGenerativeAI(
+    pref_llm = ChatDeepSeek(
         model=_pref_model,
         temperature=0.3, # Baja temperatura para ser analítico
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_tools_pref_agent_llm_timeout_s(),
     )
 
@@ -647,28 +646,21 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # En 429 NO se cuenta como CB failure; en otros errores sí. Token
     # telemetry post-success rellena el blind-spot que tenía este callsite
     # en `llm_usage_events`. Tooltip-anchor: P1-TOOLS-LLM-HARDENING.
-    _modify_model = _tools_modify_meal_model_name()
-    modify_llm = ChatGoogleGenerativeAI(
+    # [P0-DEEPSEEK-MIGRATION] `user_id` viene FORZADO al valor autenticado por
+    # el override de execute_tools (P0-AGENT-1) — seguro para tier-routing.
+    _modify_model = _tools_modify_meal_model_name(user_id)
+    modify_llm = ChatDeepSeek(
         model=_modify_model,
         temperature=0.1,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_tools_modify_meal_llm_timeout_s(),
-        # [P2-COST-THINKING-CAP-EXT · 2026-06-01] Cap reasoning del modify (genera
-        # UN plato a schema MealModel + 3 validadores deterministas + retry).
-        # gemini-3.5-flash es thinking-capable; reasoning ilimitado factura como
-        # output a $9/M en una tarea de relleno-de-schema. Techo 2048 (=day-gen)
-        # recorta runaway sin tocar el razonamiento normal. Knob
-        # MEALFIT_MODIFY_THINKING_BUDGET (-1 = sin cap). flash-lite → no-op.
-        **thinking_budget_kwargs(_modify_model, "MEALFIT_MODIFY_THINKING_BUDGET", 2048),
     ).with_structured_output(MealModel)
     # `_modify_llm_for_usage` queda como referencia para telemetría: el
-    # objeto con `.model` (sin `.with_structured_output(...)`) es el que
+    # objeto con `.model_name` (sin `.with_structured_output(...)`) es el que
     # `_emit_llm_usage_event_best_effort` puede leer para resolver el
     # model_name. Si fallara, el helper retorna sin emit (best-effort).
-    _modify_llm_for_usage = ChatGoogleGenerativeAI(
+    _modify_llm_for_usage = ChatDeepSeek(
         model=_modify_model,
         temperature=0.1,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_tools_modify_meal_llm_timeout_s(),
     )
 
@@ -1563,9 +1555,14 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
                     "depleted_at": now_iso,
                 })
                 try:
-                    from db_core import supabase as _sb
-                    if _sb:
-                        _sb.table("user_inventory").delete().eq("id", row.get("id")).eq("user_id", user_id).execute()
+                    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL
+                    # directo (Neon). Preserva el filtro `AND user_id`
+                    # (invariante I2).
+                    from db import execute_sql_write as _sql_del
+                    _sql_del(
+                        "DELETE FROM public.user_inventory WHERE id = %s AND user_id = %s",
+                        (row.get("id"), user_id),
+                    )
                     depleted_count += 1
                 except Exception as _del_err:
                     logger.warning(
@@ -1643,24 +1640,21 @@ def check_hydration_today(user_id: str) -> str:
     """
     logger.info(f"💧 [TOOL EXECUTION] check_hydration_today para user {user_id}")
     try:
-        from db import supabase
-        if not supabase:
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo (Neon).
+        from db import connection_pool, execute_sql_query
+        if not connection_pool:
             return "No puedo consultar la hidratacion ahora mismo, la base de datos no esta disponible."
 
         log_date = _local_date_str_for_user()
 
         # Lee el conteo del dia.
-        res = (
-            supabase.table("water_intake_log")
-            .select("glasses, log_date")
-            .eq("user_id", user_id)
-            .eq("log_date", log_date)
-            .limit(1)
-            .execute()
+        _row = execute_sql_query(
+            "SELECT glasses FROM public.water_intake_log "
+            "WHERE user_id = %s AND log_date = %s LIMIT 1",
+            (user_id, log_date),
+            fetch_one=True,
         )
-        glasses = 0
-        if res and res.data and len(res.data) > 0:
-            glasses = int(res.data[0].get("glasses") or 0)
+        glasses = int(_row.get("glasses") or 0) if _row else 0
 
         # Reusa la formula personalizada del endpoint /water-intake.
         # Import lazy para evitar circular (routers/plans.py importa de aqui en futuro).
@@ -1714,9 +1708,8 @@ def log_water_glass(user_id: str, count_delta: int = 1) -> str:
     if count_delta == 0:
         return "El delta fue 0 — no se modifico nada."
     try:
-        from db import supabase
-        from datetime import datetime, timezone
-        if not supabase:
+        from db import connection_pool, execute_sql_write
+        if not connection_pool:
             return "No puedo modificar la hidratacion ahora mismo, la base de datos no esta disponible."
 
         log_date = _local_date_str_for_user()
@@ -1731,57 +1724,26 @@ def log_water_glass(user_id: str, count_delta: int = 1) -> str:
         # se evalúa DENTRO del UPDATE bajo el row-lock del upsert (PK
         # user_id,log_date) → sin ventana. Clamp [0,50] en SQL (GREATEST/LEAST)
         # preserva el cap defensivo; RETURNING da el conteo autoritativo.
-        # Fallback al read-modify-write vía supabase solo si no hay
-        # connection_pool (env degradado) — ese path raro acepta la race
-        # cosmética/self-healing previa. Tooltip-anchor: P3-WATER-ATOMIC-DELTA.
-        new_count = None
-        try:
-            from db_core import connection_pool, execute_sql_write
-            if connection_pool:
-                _rows = execute_sql_write(
-                    """
-                    INSERT INTO water_intake_log (user_id, log_date, glasses, updated_at)
-                    VALUES (%s, %s, GREATEST(0, LEAST(50, %s)), now())
-                    ON CONFLICT (user_id, log_date)
-                    DO UPDATE SET glasses = GREATEST(0, LEAST(50, water_intake_log.glasses + %s)),
-                                  updated_at = now()
-                    RETURNING glasses
-                    """,
-                    (user_id, log_date, count_delta, count_delta),
-                    returning=True,
-                )
-                if _rows:
-                    new_count = int(_rows[0]["glasses"])
-        except Exception as _atomic_err:
-            logger.warning(
-                f"[P3-WATER-ATOMIC-DELTA] upsert atómico falló, fallback "
-                f"read-modify-write: {_atomic_err}"
-            )
-
-        if new_count is None:
-            # Fallback degradado (sin connection_pool / error del path atómico).
-            from datetime import datetime, timezone
-            res = (
-                supabase.table("water_intake_log")
-                .select("glasses")
-                .eq("user_id", user_id)
-                .eq("log_date", log_date)
-                .limit(1)
-                .execute()
-            )
-            current = 0
-            if res and res.data and len(res.data) > 0:
-                current = int(res.data[0].get("glasses") or 0)
-            new_count = max(0, min(50, current + count_delta))
-            supabase.table("water_intake_log").upsert(
-                {
-                    "user_id": user_id,
-                    "log_date": log_date,
-                    "glasses": new_count,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
-                on_conflict="user_id,log_date",
-            ).execute()
+        # Tooltip-anchor: P3-WATER-ATOMIC-DELTA.
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST
+        # read-modify-write: los datos viven en Neon y el cliente supabase ya
+        # no apunta a la DB de datos (split-brain). Si el upsert atómico falla,
+        # el except exterior devuelve el error al agente.
+        _rows = execute_sql_write(
+            """
+            INSERT INTO water_intake_log (user_id, log_date, glasses, updated_at)
+            VALUES (%s, %s, GREATEST(0, LEAST(50, %s)), now())
+            ON CONFLICT (user_id, log_date)
+            DO UPDATE SET glasses = GREATEST(0, LEAST(50, water_intake_log.glasses + %s)),
+                          updated_at = now()
+            RETURNING glasses
+            """,
+            (user_id, log_date, count_delta, count_delta),
+            returning=True,
+        )
+        if not _rows:
+            return "Error registrando vaso de agua: la base de datos no confirmo el conteo."
+        new_count = int(_rows[0]["glasses"])
 
         # Reusa la meta personalizada para el mensaje de confirmacion.
         try:

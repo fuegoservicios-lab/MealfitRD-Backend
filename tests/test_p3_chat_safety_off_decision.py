@@ -96,43 +96,29 @@ def test_b_safety_off_decision_subsection_with_anchor():
     )
 
 
-# C) `_safety_settings` en agent.py coincide con la decisión documentada.
+# C) [P0-DEEPSEEK-MIGRATION · 2026-06-12] La decisión quedó SUPERSEDED:
+# los `safety_settings` (HarmCategory/HarmBlockThreshold) eran exclusivos
+# del SDK de Gemini. DeepSeek no expone content-filters configurables
+# client-side, así que la INTENCIÓN de la decisión (no bloquear charla
+# nutricional legítima de déficit/ayuno) queda cubierta por el default del
+# provider. Este test ancla ahora el estado superseded: el bloque NO debe
+# reaparecer en agent.py, y CLAUDE.md debe marcar la sección como superseded.
 def test_c_agent_safety_settings_match_decision():
     src = _read_agent_py()
-    assert "_safety_settings" in src, (
-        "P3-CHAT-SAFETY-OFF-DECISION: agent.py perdió la dict "
-        "`_safety_settings`. Si fue reorganizada, actualizar este test."
+    code_only = re.sub(r"#[^\n]*", "", src)
+    assert "_safety_settings = {" not in code_only, (
+        "P0-DEEPSEEK-MIGRATION: el dict `_safety_settings` (Gemini-only) "
+        "reapareció en agent.py. El provider DeepSeek no acepta ese kwarg — "
+        "el wrapper lo swallowearía en silencio y daría falsa sensación de "
+        "filtro configurado. Si se migra a un provider con safety settings, "
+        "re-documentar la decisión en CLAUDE.md antes de reintroducirlo."
+    )
+    assert "from google.genai" not in code_only, (
+        "P0-DEEPSEEK-MIGRATION: import del SDK de Google reapareció en agent.py."
     )
 
-    # DANGEROUS_CONTENT en OFF (la decisión cardinal).
-    assert re.search(
-        r"HARM_CATEGORY_DANGEROUS_CONTENT\s*:\s*HarmBlockThreshold\.OFF",
-        src,
-    ), (
-        "P3-CHAT-SAFETY-OFF-DECISION regresión: "
-        "`HARM_CATEGORY_DANGEROUS_CONTENT` ya NO es `OFF` en agent.py. "
-        "Si esto es intencional (producto decidió endurecer filtros), "
-        "actualizar la sub-sección `P3-CHAT-SAFETY-OFF-DECISION` en "
-        "CLAUDE.md + este test. Si NO es intencional, revertir el cambio: "
-        "los defaults de Google producen false-positives en el dominio "
-        "nutricional clínico (déficit calórico, ayuno, restricciones)."
+    claude_md = _read_claude_md()
+    assert "SUPERSEDED" in claude_md.upper(), (
+        "CLAUDE.md debe marcar la decisión P3-CHAT-SAFETY-OFF-DECISION como "
+        "superseded por P0-DEEPSEEK-MIGRATION."
     )
-
-    # Las 3 categorías secundarias en BLOCK_ONLY_HIGH (cobertura de
-    # abuso real preservada).
-    for category in (
-        "HARM_CATEGORY_HARASSMENT",
-        "HARM_CATEGORY_HATE_SPEECH",
-        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-    ):
-        assert re.search(
-            rf"{category}\s*:\s*HarmBlockThreshold\.BLOCK_ONLY_HIGH",
-            src,
-        ), (
-            f"P3-CHAT-SAFETY-OFF-DECISION regresión: `{category}` "
-            f"ya NO está en `BLOCK_ONLY_HIGH` en agent.py. La decisión "
-            f"documenta que SOLO `DANGEROUS_CONTENT` queda en OFF; el "
-            f"resto debe seguir cubriendo abuso real con umbral high. "
-            f"Actualizar el anchor `P3-CHAT-SAFETY-OFF-DECISION` en "
-            f"CLAUDE.md si esto es intencional."
-        )

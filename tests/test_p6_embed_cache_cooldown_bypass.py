@@ -77,7 +77,7 @@ def test_cooldown_active_redis_hit_serves_cache_without_gemini():
 
     with patch.object(sc, "get_master_ingredients", return_value=master), \
          patch("cache_manager.redis_client", fake_redis), \
-         patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", fake_embeddings_class):
+         patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
         cache = sc.get_semantic_cache()
 
     # Critical: Cache servido a pesar del cooldown
@@ -110,7 +110,7 @@ def test_cooldown_active_redis_miss_returns_none_no_gemini():
 
     with patch.object(sc, "get_master_ingredients", return_value=master), \
          patch("cache_manager.redis_client", fake_redis), \
-         patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", fake_embeddings_class):
+         patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
         cache = sc.get_semantic_cache()
 
     assert cache is None, "Redis miss + cooldown activo → fast-fail con None"
@@ -137,7 +137,7 @@ def test_no_cooldown_redis_hit_serves_cache():
 
     with patch.object(sc, "get_master_ingredients", return_value=master), \
          patch("cache_manager.redis_client", fake_redis), \
-         patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", fake_embeddings_class):
+         patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
         cache = sc.get_semantic_cache()
 
     assert cache is not None
@@ -164,7 +164,7 @@ def test_no_cooldown_redis_miss_calls_gemini_and_persists():
 
     with patch.object(sc, "get_master_ingredients", return_value=master), \
          patch("cache_manager.redis_client", fake_redis), \
-         patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", fake_embeddings_class):
+         patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
         cache = sc.get_semantic_cache()
 
     assert cache is not None
@@ -191,7 +191,7 @@ def test_inprocess_cache_hit_skips_redis_and_gemini():
 
     with patch.object(sc, "get_master_ingredients") as get_master, \
          patch("cache_manager.redis_client", fake_redis), \
-         patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", fake_embeddings_class):
+         patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
         cache = sc.get_semantic_cache()
 
     assert cache is pre_cached

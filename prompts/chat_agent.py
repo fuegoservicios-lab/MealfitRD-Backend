@@ -189,7 +189,7 @@ Mensaje del usuario: "{prompt}"
 
 Query optimizada:"""
 
-TITLE_GENERATION_PROMPT = """Actúa como el motor automático que da nombre a los historiales de chat en la barra lateral (como hace ChatGPT o Gemini).
+TITLE_GENERATION_PROMPT = """Actúa como el motor automático que da nombre a los historiales de chat en la barra lateral (como hace ChatGPT).
 Tu tarea es leer el primer mensaje del usuario y generar un título NATURAL, DESCRIPTIVO Y ÚNICO para esa conversación.
 
 REGLAS CRÍTICAS:

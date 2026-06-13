@@ -46,25 +46,24 @@ except Exception:
     sys.modules.setdefault("langgraph.checkpoint.memory", MagicMock())
     sys.modules.setdefault("langgraph.checkpoint.postgres", MagicMock())
 
-# [P0-5 · hoisted P3-NEW-E] Mismo eager-import para `langchain_google_genai`.
-# Algunos test files instalan stubs vía `_install_stub("langchain_google_genai",
-# GoogleGenerativeAIEmbeddings=object)` sin exponer `ChatGoogleGenerativeAI`.
-# Si tal archivo carga primero, un test posterior que importe
-# `ChatGoogleGenerativeAI` (e.g. via cron_tasks → ai_helpers → graph_orchestrator)
-# levanta `ImportError`. Importar el paquete real puebla sys.modules con el
-# surface completo y los stubs subsecuentes quedan como no-op.
+# [P0-5 · hoisted P3-NEW-E · P0-DEEPSEEK-MIGRATION 2026-06-12] Mismo
+# eager-import para `langchain_openai` (cliente base del provider DeepSeek,
+# ver `llm_provider.py`). Si un test file instala un stub parcial primero,
+# un import posterior del surface real (e.g. via cron_tasks → ai_helpers →
+# llm_provider) levanta `ImportError`. Importar el paquete real puebla
+# sys.modules con el surface completo y los stubs subsecuentes quedan como
+# no-op. Sólo stubeamos si el import real falla (CI sin la dependencia).
 try:
-    import langchain_google_genai  # noqa: F401
-    import langchain_google_genai.chat_models  # noqa: F401
-    from langchain_google_genai import (  # noqa: F401
-        ChatGoogleGenerativeAI,
-        GoogleGenerativeAIEmbeddings,
+    import langchain_openai  # noqa: F401
+    from langchain_openai import (  # noqa: F401
+        ChatOpenAI,
+        OpenAIEmbeddings,
     )
 except Exception:
     import sys
     from unittest.mock import MagicMock
-    if "langchain_google_genai" not in sys.modules:
+    if "langchain_openai" not in sys.modules:
         _stub = MagicMock()
-        _stub.ChatGoogleGenerativeAI = object
-        _stub.GoogleGenerativeAIEmbeddings = object
-        sys.modules["langchain_google_genai"] = _stub
+        _stub.ChatOpenAI = object
+        _stub.OpenAIEmbeddings = object
+        sys.modules["langchain_openai"] = _stub

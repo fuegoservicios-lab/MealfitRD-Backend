@@ -115,11 +115,12 @@ class TestGetSemanticCacheRespectsKnob:
         fake_redis.get.return_value = json.dumps(cached_vectors)
 
         fake_embeddings = MagicMock()
-        fake_embeddings_class = MagicMock(return_value=fake_embeddings)
 
+        # [P0-DEEPSEEK-MIGRATION] el cliente viene de la capa pluggable
+        # embeddings_provider (lazy-import dentro de get_semantic_cache).
         with patch.object(sc, "get_master_ingredients", return_value=master), \
              patch("cache_manager.redis_client", fake_redis), \
-             patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", fake_embeddings_class):
+             patch("embeddings_provider.get_embeddings_client", return_value=fake_embeddings):
             cache = sc.get_semantic_cache()
 
         assert cache is not None
@@ -141,7 +142,7 @@ class TestGetSemanticCacheRespectsKnob:
 
         with patch.object(sc, "get_master_ingredients", return_value=master), \
              patch("cache_manager.redis_client", fake_redis), \
-             patch("langchain_google_genai.GoogleGenerativeAIEmbeddings", MagicMock()):
+             patch("embeddings_provider.get_embeddings_client", return_value=MagicMock()):
             cache = sc.get_semantic_cache()
 
         assert cache is not None  # cache devuelto, knob no estaba on

@@ -64,7 +64,7 @@ class TestSourceContract:
         # El cache hit debe ocurrir ANTES de instanciar ChatGoogleGenerativeAI
         # (si no, no se ahorra la llamada). Verificamos el orden en el source.
         get_idx = _GO_SRC.find("_compressor_cache_get(history_context)")
-        llm_idx = _GO_SRC.find("compressor_llm = ChatGoogleGenerativeAI")
+        llm_idx = _GO_SRC.find("compressor_llm = ChatDeepSeek")
         assert get_idx != -1, "El nodo no consulta _compressor_cache_get"
         assert llm_idx != -1, "No se encontró la construcción del compressor_llm"
         assert get_idx < llm_idx, (
@@ -88,7 +88,7 @@ class TestSourceContract:
 
     def test_node_consults_persistent_before_llm_and_persists_on_success(self):
         get_p = _GO_SRC.find("await _compressor_cache_get_persistent(history_context)")
-        llm_idx = _GO_SRC.find("compressor_llm = ChatGoogleGenerativeAI")
+        llm_idx = _GO_SRC.find("compressor_llm = ChatDeepSeek")
         put_p = _GO_SRC.find("await _compressor_cache_put_persistent(history_context, compressed_text)")
         assert get_p != -1 and get_p < llm_idx, "Debe consultar la capa persistente antes del LLM"
         assert put_p != -1 and put_p > llm_idx, "Debe persistir tras la compresión exitosa"

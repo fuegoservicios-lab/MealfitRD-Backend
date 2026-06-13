@@ -51,15 +51,15 @@ def _extract_method_body(class_body: str, method_name: str) -> str:
 
 
 def test_ainvoke_override_captures_usage():
-    """`ChatGoogleGenerativeAI.ainvoke` debe llamar
+    """`ChatDeepSeek.ainvoke` debe llamar
     `_emit_llm_usage_event_best_effort` ANTES del `return result`."""
     text = _read_graph()
     class_match = re.search(
-        r"class ChatGoogleGenerativeAI\(_ChatGoogleGenerativeAI\):.*?(?=^class |\Z)",
+        r"class ChatDeepSeek\(_ChatDeepSeekBase\):.*?(?=^class |\Z)",
         text,
         re.MULTILINE | re.DOTALL,
     )
-    assert class_match, "Subclase `ChatGoogleGenerativeAI` no encontrada."
+    assert class_match, "Subclase `ChatDeepSeek` no encontrada."
     class_body = class_match.group(0)
 
     ainvoke_body = _extract_method_body(class_body, "ainvoke")
@@ -78,12 +78,12 @@ def test_ainvoke_override_captures_usage():
 
 
 def test_astream_override_accumulates_for_usage():
-    """`ChatGoogleGenerativeAI.astream` debe acumular chunks y emitir
+    """`ChatDeepSeek.astream` debe acumular chunks y emitir
     usage_metadata al final del stream. Sin esto, day_generator (único callsite
     de `.astream(...)` directo) no se contabiliza."""
     text = _read_graph()
     class_match = re.search(
-        r"class ChatGoogleGenerativeAI\(_ChatGoogleGenerativeAI\):.*?(?=^class |\Z)",
+        r"class ChatDeepSeek\(_ChatDeepSeekBase\):.*?(?=^class |\Z)",
         text,
         re.MULTILINE | re.DOTALL,
     )
@@ -108,7 +108,7 @@ def test_agenerate_override_extracts_from_llmresult():
     `result.generations[0][0].message` para emitir usage_metadata."""
     text = _read_graph()
     class_match = re.search(
-        r"class ChatGoogleGenerativeAI\(_ChatGoogleGenerativeAI\):.*?(?=^class |\Z)",
+        r"class ChatDeepSeek\(_ChatDeepSeekBase\):.*?(?=^class |\Z)",
         text,
         re.MULTILINE | re.DOTALL,
     )

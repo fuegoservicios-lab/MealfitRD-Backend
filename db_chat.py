@@ -18,11 +18,23 @@ from tenacity import (
     before_sleep_log,
 )
 
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Módulo migrado de PostgREST (supabase-py)
+# a SQL directo vía psycopg (datos viven en Neon; Supabase queda solo Auth+
+# Storage). Los SELECT castean uuid/timestamptz a ::text para preservar la
+# paridad de tipos con PostgREST (que devolvía JSON con strings ISO): los
+# consumers hacen slicing/`.endswith`/`fromisoformat`/comparaciones string
+# sobre `created_at` y usan ids como keys de dicts/sets.
+_AGENT_MESSAGE_COLS_SQL = (
+    "id::text AS id, session_id::text AS session_id, role, content, "
+    "created_at::text AS created_at, feedback, user_id::text AS user_id"
+)
+
 def delete_user_agent_sessions(user_id: str) -> bool:
     """Elimina todas las sesiones de agente para un usuario."""
-    if not supabase: return False
+    if not connection_pool: return False
     try:
-        supabase.table("agent_sessions").delete().eq("user_id", user_id).execute()
+        # FKs de agent_messages/conversation_summaries son ON DELETE CASCADE.
+        execute_sql_write("DELETE FROM public.agent_sessions WHERE user_id = %s", (user_id,))
         return True
     except Exception as e:
         logger.error(f"Error eliminando sesiones de agente de {user_id}: {e}")
@@ -30,9 +42,9 @@ def delete_user_agent_sessions(user_id: str) -> bool:
 
 def delete_single_agent_session(session_id: str) -> bool:
     """Elimina una sesión específica de agente."""
-    if not supabase: return False
+    if not connection_pool: return False
     try:
-        supabase.table("agent_sessions").delete().eq("id", session_id).execute()
+        execute_sql_write("DELETE FROM public.agent_sessions WHERE id = %s", (session_id,))
         return True
     except Exception as e:
         logger.error(f"Error eliminando sesion de agente {session_id}: {e}")
@@ -40,13 +52,21 @@ def delete_single_agent_session(session_id: str) -> bool:
 
 def update_session_title(session_id: str, new_title: str) -> bool:
     """Actualiza el título de una sesión."""
-    if not supabase: return False
+    if not connection_pool: return False
     try:
         # Buscar si ya existe el mensaje de titulo
-        res = supabase.table("agent_messages").select("id").eq("session_id", session_id).like("content", "[SYSTEM_TITLE] %").execute()
-        if res.data and len(res.data) > 0:
-            msg_id = res.data[0]["id"]
-            supabase.table("agent_messages").update({"content": f"[SYSTEM_TITLE] {new_title}"}).eq("id", msg_id).execute()
+        res = execute_sql_query(
+            "SELECT id::text AS id FROM public.agent_messages "
+            "WHERE session_id = %s AND content LIKE %s",
+            (session_id, "[SYSTEM_TITLE] %"),
+            fetch_all=True,
+        )
+        if res and len(res) > 0:
+            msg_id = res[0]["id"]
+            execute_sql_write(
+                "UPDATE public.agent_messages SET content = %s WHERE id = %s",
+                (f"[SYSTEM_TITLE] {new_title}", msg_id),
+            )
         else:
             # Si no existe, insertar un mensaje especial al inicio (fecha muy antigua o la misma de la sesion)
             save_message(session_id, "model", f"[SYSTEM_TITLE] {new_title}")
@@ -152,35 +172,44 @@ def get_guest_chat_sessions(session_ids: list):
     ya las trae `get_user_chat_sessions(user_id)` filtrando por owner. Una
     sesión creada como guest y luego "reclamada" al loguearse queda con
     `user_id` no-nulo → sale por el path de owner, no por este. Tooltip-anchor:
-    P1-CHAT-GUEST-IDOR (no remover el `.is_`).
+    P1-CHAT-GUEST-IDOR (no remover el `user_id IS NULL`).
     """
-    if not supabase or not session_ids: return []
+    if not connection_pool or not session_ids: return []
     try:
-        # Solo obtenemos hasta un límite prudente para evitar URLs muy largas
-        res = (
-            supabase.table("agent_sessions")
-            .select("*")
-            .in_("id", session_ids[:20])
-            .is_("user_id", "null")  # [P1-CHAT-GUEST-IDOR] solo sesiones sin dueño (no IDOR)
-            .execute()
+        # Solo obtenemos hasta un límite prudente (equivalente PostgREST
+        # legacy: .in_("id", ids[:20]).is_("user_id", "null")).
+        # [P1-CHAT-GUEST-IDOR] el predicado `user_id IS NULL` es OBLIGATORIO:
+        # solo sesiones sin dueño son recuperables por id crudo (no IDOR).
+        sessions = execute_sql_query(
+            "SELECT id::text AS id, created_at::text AS created_at, "
+            "locked_at::text AS locked_at, user_id::text AS user_id "
+            "FROM public.agent_sessions "
+            "WHERE id = ANY(%s::uuid[]) AND user_id IS NULL",
+            ([str(s) for s in session_ids[:20]],),
+            fetch_all=True,
         )
-        sessions = res.data
-        return _process_and_sort_sessions(sessions)
+        return _process_and_sort_sessions(sessions or [])
     except Exception as e:
         logger.error(f"Error en get_guest_chat_sessions: {e}")
         return []
 
 def get_user_chat_sessions(user_id: str):
     """Obtiene la lista de sesiones, ordenadas por actividad reciente."""
-    if not supabase: return[]
-    
+    if not connection_pool: return[]
+
     max_retries = 2
     for attempt in range(max_retries):
         try:
             # Fallback de seguridad si no existe user_id en la base de datos
-            res = supabase.table("agent_sessions").select("*").eq("user_id", user_id).order("created_at", desc=True).limit(60).execute()
-            sessions = res.data
-            return _process_and_sort_sessions(sessions)
+            sessions = execute_sql_query(
+                "SELECT id::text AS id, created_at::text AS created_at, "
+                "locked_at::text AS locked_at, user_id::text AS user_id "
+                "FROM public.agent_sessions WHERE user_id = %s "
+                "ORDER BY created_at DESC LIMIT 60",
+                (user_id,),
+                fetch_all=True,
+            )
+            return _process_and_sort_sessions(sessions or [])
         except Exception as e:
             if attempt < max_retries - 1:
                 import time
@@ -203,9 +232,20 @@ def _process_and_sort_sessions(sessions: list):
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                msg_res = supabase.table("agent_messages").select("session_id, content, created_at, role").in_("session_id", session_ids).order("created_at", desc=False).execute()
-                if msg_res and msg_res.data:
-                    all_messages = msg_res.data
+                # [P1-NEON-DB-MIGRATION · 2026-06-12] session_id::text para que
+                # las keys de `messages_by_session` matcheen los ids (también
+                # text) de las sesiones; created_at::text para el sort string.
+                msg_res = execute_sql_query(
+                    "SELECT session_id::text AS session_id, content, "
+                    "created_at::text AS created_at, role "
+                    "FROM public.agent_messages "
+                    "WHERE session_id = ANY(%s::uuid[]) "
+                    "ORDER BY created_at ASC",
+                    (session_ids,),
+                    fetch_all=True,
+                )
+                if msg_res:
+                    all_messages = msg_res
                 break
             except Exception as db_e:
                 if attempt < max_retries - 1:
@@ -273,12 +313,17 @@ def _process_and_sort_sessions(sessions: list):
 
 def get_session_messages(session_id: str):
     """Obtiene todos los mensajes de una sesion, ordenados cronologicamente."""
-    if not supabase: return []
+    if not connection_pool: return []
     max_retries = 2
     for attempt in range(max_retries):
         try:
-            res = supabase.table("agent_messages").select("*").eq("session_id", session_id).order("created_at", desc=False).execute()
-            return res.data
+            res = execute_sql_query(
+                f"SELECT {_AGENT_MESSAGE_COLS_SQL} FROM public.agent_messages "
+                "WHERE session_id = %s ORDER BY created_at ASC",
+                (session_id,),
+                fetch_all=True,
+            )
+            return res or []
         except Exception as e:
             if attempt < max_retries - 1:
                 import time
@@ -289,39 +334,45 @@ def get_session_messages(session_id: str):
 
 def acquire_summarizing_lock(session_id: str) -> bool:
     """Intenta adquirir el bloqueo para resumir. Retorna True si lo logra, False si ya está bloqueado."""
-    if not supabase: return True
+    if not connection_pool: return True
     try:
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
-        
-        # Verificar estado actual
-        res = supabase.table("agent_sessions").select("locked_at").eq("id", session_id).execute()
-        if res.data and len(res.data) > 0:
-            locked_at_str = res.data[0].get("locked_at")
-            if locked_at_str:
-                try:
-                    if locked_at_str.endswith("Z"):
-                        locked_at_str = locked_at_str[:-1] + "+00:00"
-                    locked_at = datetime.fromisoformat(locked_at_str)
-                    # Si el lock tiene menos de 5 minutos, está bloqueado
-                    if now - locked_at < timedelta(minutes=5):
-                        return False
-                except ValueError:
-                    pass # Asumimos expirado si falla el parseo
-                
+
+        # Verificar estado actual. [P1-NEON-DB-MIGRATION · 2026-06-12]
+        # psycopg devuelve `locked_at` como datetime tz-aware nativo —
+        # ya no hace falta el parseo string ISO de PostgREST.
+        res = execute_sql_query(
+            "SELECT locked_at FROM public.agent_sessions WHERE id = %s",
+            (session_id,),
+            fetch_one=True,
+        )
+        if res:
+            locked_at = res.get("locked_at")
+            # Si el lock tiene menos de 5 minutos, está bloqueado
+            if locked_at is not None and (now - locked_at) < timedelta(minutes=5):
+                return False
+
         # Intentar establecer el timestamp
-        update_res = supabase.table("agent_sessions").update({"locked_at": now.isoformat()}).eq("id", session_id).execute()
-            
-        return len(update_res.data) > 0
+        update_res = execute_sql_write(
+            "UPDATE public.agent_sessions SET locked_at = %s WHERE id = %s RETURNING id",
+            (now, session_id),
+            returning=True,
+        )
+
+        return bool(update_res)
     except Exception as e:
         logger.error(f"Error acquiring summarizing lock: {e}")
         return False
 
 def release_summarizing_lock(session_id: str):
     """Libera el bloqueo de resumen."""
-    if not supabase: return
+    if not connection_pool: return
     try:
-        supabase.table("agent_sessions").update({"locked_at": None}).eq("id", session_id).execute()
+        execute_sql_write(
+            "UPDATE public.agent_sessions SET locked_at = NULL WHERE id = %s",
+            (session_id,),
+        )
     except Exception as e:
         error_msg = str(e)
         if "Server disconnected" not in error_msg:
@@ -416,12 +467,18 @@ def _save_message_insert_with_retry(
     usa el backend) bypassea RLS.
 
     Tooltip-anchor: P2-CHAT-SAVE-MSG-RETRY + P1-CHAT-DB-USER-ID-RLS."""
-    supabase.table("agent_messages").insert({
-        "session_id": session_id,
-        "role": role,
-        "content": content,
-        "user_id": user_id,
-    }).execute()
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] INSERT directo con named params
+    # (psycopg acepta dict + placeholders %(name)s).
+    execute_sql_write(
+        "INSERT INTO public.agent_messages (session_id, role, content, user_id) "
+        "VALUES (%(session_id)s, %(role)s, %(content)s, %(user_id)s)",
+        {
+            "session_id": session_id,
+            "role": role,
+            "content": content,
+            "user_id": user_id,
+        },
+    )
 
 
 def save_message(
@@ -435,7 +492,7 @@ def save_message(
     scope post-auth); callsites legacy (db_plans.py, proactive_agent.py,
     services.py, etc.) no lo pasan y la función hace lookup vía
     `get_session_owner` como fallback. Tooltip-anchor: P1-CHAT-DB-USER-ID-RLS."""
-    if not supabase: return None
+    if not connection_pool: return None
 
     # [P1-CHAT-DB-USER-ID-RLS · 2026-05-19] Resolver user_id: prefer el
     # explícito (passed by caller post-auth); fallback al lookup por
@@ -461,42 +518,53 @@ def save_message(
 
 def save_message_feedback(session_id: str, content: str, feedback: str):
     """Guarda o remueve la retroalimentación (up/down/null) para un mensaje del modelo."""
-    if not supabase: return False
+    if not connection_pool: return False
     import logging
     logger = logging.getLogger(__name__)
     try:
         # feedback can be 'up', 'down', or None.
         logger.info(f"Intentando guardar feedback '{feedback}' para session '{session_id}'")
-        
+
         # We use a robust matching strategy because long strings with newlines often fail exact match
         robust_prefix = content.strip()[:60]
         # Escape SQL LIKE special chars just in case
         robust_prefix = robust_prefix.replace("%", "").replace("_", "")
         search_pattern = robust_prefix + "%"
-        
-        res = supabase.table("agent_messages").update({
-            "feedback": feedback
-        }).eq("session_id", session_id).eq("role", "model").ilike("content", search_pattern).execute()
-        
-        rows_affected = len(res.data) if res.data else 0
+
+        res = execute_sql_write(
+            "UPDATE public.agent_messages SET feedback = %s "
+            "WHERE session_id = %s AND role = 'model' AND content ILIKE %s "
+            "RETURNING id",
+            (feedback, session_id, search_pattern),
+            returning=True,
+        )
+
+        rows_affected = len(res) if res else 0
         logger.info(f"Feedback guardado, rows affected: {rows_affected}")
-        
+
         # Si aun así falla, intenta actualizar el ULTIMO mensaje del modelo en la sesion
         if rows_affected == 0:
             logger.warning("Fallo el match por sufijo. Actualizando el ultimo mensaje de modelo de esta sesion.")
-            last_msg = supabase.table("agent_messages").select("id").eq("session_id", session_id).eq("role", "model").order("created_at", desc=True).limit(1).execute()
-            if last_msg.data and len(last_msg.data) > 0:
-                msg_id = last_msg.data[0]["id"]
-                supabase.table("agent_messages").update({"feedback": feedback}).eq("id", msg_id).execute()
+            last_msg = execute_sql_query(
+                "SELECT id::text AS id FROM public.agent_messages "
+                "WHERE session_id = %s AND role = 'model' "
+                "ORDER BY created_at DESC LIMIT 1",
+                (session_id,),
+                fetch_one=True,
+            )
+            if last_msg:
+                execute_sql_write(
+                    "UPDATE public.agent_messages SET feedback = %s WHERE id = %s",
+                    (feedback, last_msg["id"]),
+                )
                 rows_affected = 1
             else:
                 logger.warning("No hay mensajes previos del modelo. Insertando el mensaje (posiblemente bienvenida autogenerada).")
-                supabase.table("agent_messages").insert({
-                    "session_id": session_id,
-                    "role": "model",
-                    "content": content,
-                    "feedback": feedback
-                }).execute()
+                execute_sql_write(
+                    "INSERT INTO public.agent_messages (session_id, role, content, feedback) "
+                    "VALUES (%s, 'model', %s, %s)",
+                    (session_id, content, feedback),
+                )
                 rows_affected = 1
 
         return rows_affected > 0
@@ -505,45 +573,71 @@ def save_message_feedback(session_id: str, content: str, feedback: str):
         return False
 
 def get_memory(session_id: str):
-    if not supabase: return []
-    res = supabase.table("agent_messages").select("*").eq("session_id", session_id).order("created_at", desc=False).execute()
-    return res.data
+    if not connection_pool: return []
+    res = execute_sql_query(
+        f"SELECT {_AGENT_MESSAGE_COLS_SQL} FROM public.agent_messages "
+        "WHERE session_id = %s ORDER BY created_at ASC",
+        (session_id,),
+        fetch_all=True,
+    )
+    return res or []
 
 def save_summary(session_id: str, summary: str, messages_start: str, messages_end: str, message_count: int):
     """Guarda un resumen de conversación en la tabla conversation_summaries."""
-    if not supabase: return None
-    res = supabase.table("conversation_summaries").insert({
-        "session_id": session_id,
-        "summary": summary,
-        "messages_start": messages_start,
-        "messages_end": messages_end,
-        "message_count": message_count,
-    }).execute()
-    return res.data
+    if not connection_pool: return None
+    res = execute_sql_write(
+        "INSERT INTO public.conversation_summaries "
+        "(session_id, summary, messages_start, messages_end, message_count) "
+        "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+        (session_id, summary, messages_start, messages_end, message_count),
+        returning=True,
+    )
+    return res
 
 def get_summaries(session_id: str):
     """Obtiene todos los resúmenes de una sesión, ordenados cronológicamente."""
-    if not supabase: return []
-    res = supabase.table("conversation_summaries").select("*").eq("session_id", session_id).order("messages_start", desc=False).execute()
-    return res.data
+    if not connection_pool: return []
+    res = execute_sql_query(
+        "SELECT id::text AS id, session_id::text AS session_id, summary, "
+        "messages_start::text AS messages_start, messages_end::text AS messages_end, "
+        "message_count, created_at::text AS created_at, user_id::text AS user_id "
+        "FROM public.conversation_summaries "
+        "WHERE session_id = %s ORDER BY messages_start ASC",
+        (session_id,),
+        fetch_all=True,
+    )
+    return res or []
 
 def archive_summaries(summaries_list: list):
-    """Guarda (archiva) una lista de resúmenes en cold storage antes de borrarlos."""
-    if not supabase or not summaries_list: return None
+    """Guarda (archiva) una lista de resúmenes en cold storage antes de borrarlos.
+
+    Retorna lista truthy si el INSERT confirmó, None si falló — el caller
+    (P3-SUMMARY-ARCHIVE-GUARD en memory_manager) gatea el delete en esto."""
+    if not connection_pool or not summaries_list: return None
     try:
         data_to_insert = []
         for s in summaries_list:
-            data_to_insert.append({
-                "session_id": s.get("session_id"),
-                "summary": s.get("summary"),
-                "messages_start": s.get("messages_start"),
-                "messages_end": s.get("messages_end"),
-                "message_count": s.get("message_count"),
-                "original_created_at": s.get("created_at")
-            })
+            data_to_insert.append((
+                # [P1-NEON-DB-MIGRATION · 2026-06-12] summary_archive.session_id
+                # es TEXT (no uuid): normalizar a str para el INSERT.
+                str(s.get("session_id")) if s.get("session_id") is not None else None,
+                s.get("summary"),
+                s.get("messages_start"),
+                s.get("messages_end"),
+                s.get("message_count"),
+                s.get("created_at"),
+            ))
         if data_to_insert:
-            res = supabase.table("summary_archive").insert(data_to_insert).execute()
-            return res.data
+            values_sql = ", ".join(["(%s, %s, %s, %s, %s, %s)"] * len(data_to_insert))
+            params = tuple(v for row in data_to_insert for v in row)
+            res = execute_sql_write(
+                "INSERT INTO public.summary_archive "
+                "(session_id, summary, messages_start, messages_end, message_count, original_created_at) "
+                f"VALUES {values_sql} RETURNING id",
+                params,
+                returning=True,
+            )
+            return res
         return None
     except Exception as e:
         logger.error(f"Error archivando resúmenes en cold storage: {e}")
@@ -555,44 +649,60 @@ def search_deep_memory(user_id: str, query: str, limit: int = 5):
     Hace un JOIN lógico: primero obtiene los session_ids del usuario,
     luego busca en summary_archive por esos session_ids con búsqueda textual.
     """
-    if not supabase: return []
+    if not connection_pool: return []
     try:
-        # 1. Obtener todos los session_ids del usuario
-        sessions_res = supabase.table("agent_sessions").select("id").eq("user_id", user_id).execute()
-        if not sessions_res.data:
+        # 1. Obtener todos los session_ids del usuario (::text — la columna
+        # session_id de summary_archive es TEXT, no uuid)
+        sessions_res = execute_sql_query(
+            "SELECT id::text AS id FROM public.agent_sessions WHERE user_id = %s",
+            (user_id,),
+            fetch_all=True,
+        )
+        if not sessions_res:
             return []
-        
-        session_ids = [s["id"] for s in sessions_res.data]
-        
+
+        session_ids = [s["id"] for s in sessions_res]
+
         # 2. Buscar en summary_archive por esos session_ids con texto parcial
-        res = supabase.table("summary_archive") \
-            .select("summary, messages_start, messages_end, message_count, original_created_at") \
-            .in_("session_id", session_ids) \
-            .ilike("summary", f"%{query}%") \
-            .order("original_created_at", desc=True) \
-            .limit(limit) \
-            .execute()
-        
-        return res.data
+        res = execute_sql_query(
+            "SELECT summary, messages_start::text AS messages_start, "
+            "messages_end::text AS messages_end, message_count, "
+            "original_created_at::text AS original_created_at "
+            "FROM public.summary_archive "
+            "WHERE session_id = ANY(%s::text[]) AND summary ILIKE %s "
+            "ORDER BY original_created_at DESC LIMIT %s",
+            (session_ids, f"%{query}%", limit),
+            fetch_all=True,
+        )
+
+        return res or []
     except Exception as e:
         logger.error(f"Error buscando en deep memory (summary_archive): {e}")
         return []
 
 def delete_summaries(summary_ids: list):
     """Elimina múltiples resúmenes por sus IDs."""
-    if not supabase: return None
+    if not connection_pool: return None
     try:
-        res = supabase.table("conversation_summaries").delete().in_("id", summary_ids).execute()
-        return res.data
+        res = execute_sql_write(
+            "DELETE FROM public.conversation_summaries WHERE id = ANY(%s::uuid[]) RETURNING id",
+            ([str(x) for x in summary_ids],),
+            returning=True,
+        )
+        return res
     except Exception as e:
         logger.error(f"Error borrando resúmenes: {e}")
         return None
 
 def delete_old_messages(session_id: str, before_timestamp: str):
     """Elimina mensajes de agent_messages anteriores o iguales al timestamp dado."""
-    if not supabase: return None
-    res = supabase.table("agent_messages").delete().eq("session_id", session_id).lte("created_at", before_timestamp).execute()
-    return res.data
+    if not connection_pool: return None
+    res = execute_sql_write(
+        "DELETE FROM public.agent_messages WHERE session_id = %s AND created_at <= %s RETURNING id",
+        (session_id, before_timestamp),
+        returning=True,
+    )
+    return res
 
 # [P1-CHAT-SUPABASE-RETRY · 2026-05-20] Detector best-effort de errores
 # transient de HTTP/2 al hablar con PostgREST de Supabase. `supabase-py`
@@ -645,45 +755,86 @@ def get_recent_messages(session_id: str, limit: int = 10):
     Conservador: retry_if_exception_type=Exception es amplio pero stop=2
     limita el blast radius (max 1 reintento). Si el error es genuino (parse,
     schema mismatch), el segundo intento también falla y el caller lo sabe.
-    """
-    if not supabase: return []
-    res = supabase.table("agent_messages").select("*").eq("session_id", session_id).order("created_at", desc=True).limit(limit).execute()
-    # Revertir el orden para que estén cronológicos (el query los trae desc)
-    return list(reversed(res.data)) if res.data else []
 
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Post-migración a SQL directo el
+    retry sigue siendo útil: cubre blips transient del pool psycopg contra
+    Neon (connection reset, pooler EOF) con la misma semántica.
+    """
+    if not connection_pool: return []
+    res = execute_sql_query(
+        f"SELECT {_AGENT_MESSAGE_COLS_SQL} FROM public.agent_messages "
+        "WHERE session_id = %s ORDER BY created_at DESC LIMIT %s",
+        (session_id, limit),
+        fetch_all=True,
+    )
+    # Revertir el orden para que estén cronológicos (el query los trae desc)
+    return list(reversed(res)) if res else []
+
+# [P1-NEON-DB-MIGRATION · 2026-06-12] insert_like/insert_rejection reciben
+# dicts construidos por callers (incl. el body crudo del endpoint /like) —
+# whitelist de columnas para construir el INSERT sin riesgo de injection
+# por keys arbitrarias (paridad con PostgREST, que rechazaba columnas
+# desconocidas; aquí se filtran silenciosamente).
 def insert_like(like_data: dict):
-    if not supabase: return None
-    res = supabase.table("meal_likes").insert(like_data).execute()
-    return res.data
+    if not connection_pool: return None
+    allowed = ("user_id", "meal_name", "meal_type")
+    cols = [c for c in allowed if c in like_data]
+    if not cols:
+        return None
+    placeholders = ", ".join(["%s"] * len(cols))
+    res = execute_sql_write(
+        f"INSERT INTO public.meal_likes ({', '.join(cols)}) VALUES ({placeholders}) RETURNING id",
+        tuple(like_data[c] for c in cols),
+        returning=True,
+    )
+    return res
 
 def get_user_likes(user_id: str):
-    if not supabase: return []
+    if not connection_pool: return []
     # Fetch all liked meals for this user
-    res = supabase.table("meal_likes").select("meal_name, meal_type").eq("user_id", user_id).execute()
-    return res.data
+    res = execute_sql_query(
+        "SELECT meal_name, meal_type FROM public.meal_likes WHERE user_id = %s",
+        (user_id,),
+        fetch_all=True,
+    )
+    return res or []
 
 def insert_rejection(rejection_data: dict):
     """Guarda un rechazo de comida con timestamp automático."""
-    if not supabase: return None
-    res = supabase.table("meal_rejections").insert(rejection_data).execute()
-    return res.data
+    if not connection_pool: return None
+    allowed = ("user_id", "session_id", "meal_name", "meal_type")
+    cols = [c for c in allowed if c in rejection_data]
+    if not cols:
+        return None
+    placeholders = ", ".join(["%s"] * len(cols))
+    res = execute_sql_write(
+        f"INSERT INTO public.meal_rejections ({', '.join(cols)}) VALUES ({placeholders}) RETURNING id",
+        tuple(rejection_data[c] for c in cols),
+        returning=True,
+    )
+    return res
 
 def get_active_rejections(user_id: str = None, session_id: str = None):
     """
     Obtiene todos los rechazos permanentes del usuario.
     Una vez que el usuario rechaza un plato, nunca vuelve a sugerirse.
     """
-    if not supabase: return []
+    if not connection_pool: return []
 
-    query = supabase.table("meal_rejections").select("meal_name, meal_type, rejected_at")
-
+    # rejected_at::text — los consumers tratan los rows como JSON-serializables
+    # (paridad PostgREST; datetime nativo rompería json.dumps en prompts).
     if user_id:
-        query = query.eq("user_id", user_id)
+        where_clause, params = "user_id = %s", (user_id,)
     elif session_id:
-        query = query.eq("session_id", session_id)
+        where_clause, params = "session_id = %s", (session_id,)
     else:
         return []
 
-    res = query.order("rejected_at", desc=True).execute()
-    return res.data
+    res = execute_sql_query(
+        "SELECT meal_name, meal_type, rejected_at::text AS rejected_at "
+        f"FROM public.meal_rejections WHERE {where_clause} ORDER BY rejected_at DESC",
+        params,
+        fetch_all=True,
+    )
+    return res or []
 

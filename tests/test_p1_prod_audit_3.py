@@ -108,10 +108,16 @@ def test_p1_lesson_flush_classifier_treats_fk_and_check_as_terminal():
 
 # ════════════════════════════════════════════════════════════════════ P2 timeouts
 def test_p2_shopping_calculator_embeddings_timeout():
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] shopping_calculator ya no
+    # construye su propio cliente de embeddings: delega a la capa pluggable
+    # `embeddings_provider.get_embeddings_client()`, cuyo constructor acota
+    # el deadline (`"timeout": _embeddings_timeout_s()`).
     src = _read("shopping_calculator.py")
-    assert "def _embeddings_llm_timeout_s(" in src
-    assert 'client_args={"timeout": _embeddings_llm_timeout_s()}' in src
-    assert "P2-LLM-TIMEOUT-SWEEP" in src
+    assert "from embeddings_provider import get_embeddings_client" in src
+    provider_src = _read("embeddings_provider.py")
+    assert "def _embeddings_timeout_s(" in provider_src
+    assert '"timeout": _embeddings_timeout_s()' in provider_src
+    assert "P2-LLM-TIMEOUT-SWEEP" in provider_src
 
 
 def test_p2_tools_medical_clinical_llm_timeout():

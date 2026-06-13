@@ -96,13 +96,14 @@ def test_tools_modify_meal_knobs_registered(tools_src: str):
 # ============================================================================
 
 def test_analyze_preferences_has_timeout_kwarg(tools_src: str):
-    """`ChatGoogleGenerativeAI(...)` dentro de `analyze_preferences_agent`
+    """`ChatDeepSeek(...)` dentro de `analyze_preferences_agent`
     DEBE pasar `timeout=` (no hardcode). Pre-fix: sin timeout, `.invoke()`
-    podía bloquear el worker thread indefinidamente bajo Gemini hang."""
+    podía bloquear el worker thread indefinidamente bajo provider hang.
+    [P0-DEEPSEEK-MIGRATION · 2026-06-12] constructor renombrado."""
     body = _function_body(
         tools_src, r"def\s+analyze_preferences_agent\s*\(", max_chars=4000
     )
-    assert "ChatGoogleGenerativeAI(" in body
+    assert "ChatDeepSeek(" in body
     # timeout= debe ser un kwarg literal en la construcción del cliente.
     assert "timeout=_tools_pref_agent_llm_timeout_s()" in body, (
         "P1-TOOLS-LLM-HARDENING regresión: `analyze_preferences_agent` "
@@ -183,7 +184,7 @@ def test_modify_meal_has_timeout_kwarg(tools_src: str):
     body = _function_body(
         tools_src, r"def\s+execute_modify_single_meal\s*\("
     )
-    assert "ChatGoogleGenerativeAI(" in body
+    assert "ChatDeepSeek(" in body
     assert "timeout=_tools_modify_meal_llm_timeout_s()" in body, (
         "P1-TOOLS-LLM-HARDENING regresión: `execute_modify_single_meal` "
         "construye CGGA sin `timeout=_tools_modify_meal_llm_timeout_s()`. "

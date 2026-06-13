@@ -56,7 +56,10 @@ _P2_1_MIGRATED_KNOBS = {
     "MEALFIT_POOL_FALLBACK_ALERT_COOLDOWN_HOURS": "int",
     "MEALFIT_LESSON_BUFFER_BACKLOG_THRESHOLD": "int",
     "MEALFIT_CHILDREN_MULTIPLIER": "float",
-    "MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL": "str",
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL`
+    # eliminado (Gemini retirado); su reemplazo vive en embeddings_provider:
+    "MEALFIT_EMBEDDINGS_PROVIDER": "str",
+    "MEALFIT_EMBEDDINGS_MODEL": "str",
     # db_inventory.py (función lazy)
     "MEALFIT_SHOPPING_LIST_REPLACE_ROLLBACK": "str",
     # shopping_calculator.py (module-init + funciones)
@@ -89,10 +92,14 @@ def _trigger_p2_1_lazy_registrations() -> None:
     """
     # Module-init coverage: los imports registran los knobs declarados a top.
     import knobs  # noqa: F401  (registry container)
-    import constants  # registra POOL_FALLBACK_*, LESSON_BUFFER_*, GEMINI_EMBEDDING_TEXT_MODEL
+    import constants  # registra POOL_FALLBACK_*, LESSON_BUFFER_*
     import error_utils  # función lazy
     import db_inventory  # función lazy
     import shopping_calculator  # registra SEMANTIC_INIT, EMBED_INIT, STAPLE_SHELF a module-init
+    # [P0-DEEPSEEK-MIGRATION] knobs de la capa pluggable de embeddings (lazy).
+    import embeddings_provider
+    embeddings_provider._embeddings_provider()  # MEALFIT_EMBEDDINGS_PROVIDER
+    embeddings_provider._embeddings_model()  # MEALFIT_EMBEDDINGS_MODEL
 
     # Trigger lazy registrations: invocar cada función que registra al ser llamada.
     error_utils._leak_enabled()  # MEALFIT_LEAK_DB_ERRORS

@@ -75,11 +75,13 @@ def test_default_flash_lite_constant_present():
     cleanup que el pricing dict.
     """
     text = _read_graph()
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] DeepSeek no tiene tier lite; el
+    # default barato del stack es la constante DEEPSEEK_FLASH de llm_provider.
     assert re.search(
-        r'_FLASH_LITE_DEFAULT\s*=\s*"gemini-3\.1-flash-lite"', text
+        r"_FLASH_LITE_DEFAULT\s*=\s*DEEPSEEK_FLASH", text
     ), (
         "P1-FLASH-LITE-AUX-NODES: constante `_FLASH_LITE_DEFAULT` con valor "
-        "`'gemini-3.1-flash-lite'` debe existir como SSOT del default."
+        "`DEEPSEEK_FLASH` debe existir como SSOT del default barato."
     )
 
 
@@ -92,7 +94,7 @@ def test_judge_callsite_uses_helper():
     # Localizar la región de `judge_llm = ChatGoogleGenerativeAI(...)` y
     # las ~6 líneas previas que asignan `_judge_model`.
     m = re.search(
-        r"_judge_model\s*=\s*(?P<rhs>[^\n]+)\n.*?judge_llm = ChatGoogleGenerativeAI\(\s*\n\s*model=_judge_model,",
+        r"_judge_model\s*=\s*(?P<rhs>[^\n]+)\n.*?judge_llm = ChatDeepSeek\(\s*\n\s*model=_judge_model,",
         text,
         re.DOTALL,
     )
@@ -111,7 +113,7 @@ def test_judge_callsite_uses_helper():
 def test_fact_checker_callsite_uses_helper():
     text = _read_graph()
     m = re.search(
-        r"_fact_checker_model\s*=\s*(?P<rhs>[^\n]+)\n.*?fact_checker_llm = ChatGoogleGenerativeAI",
+        r"_fact_checker_model\s*=\s*(?P<rhs>[^\n]+)\n.*?fact_checker_llm = ChatDeepSeek",
         text,
         re.DOTALL,
     )
@@ -129,7 +131,7 @@ def test_fact_checker_callsite_uses_helper():
 def test_reviewer_callsite_uses_helper():
     text = _read_graph()
     m = re.search(
-        r"_reviewer_model\s*=\s*(?P<rhs>[^\n]+)\n.*?reviewer_llm = ChatGoogleGenerativeAI",
+        r"_reviewer_model\s*=\s*(?P<rhs>[^\n]+)\n.*?reviewer_llm = ChatDeepSeek",
         text,
         re.DOTALL,
     )
@@ -163,18 +165,21 @@ def test_pricing_dict_includes_flash_lite():
     """
     db_path = _BACKEND_ROOT / "db_profiles.py"
     text = db_path.read_text(encoding="utf-8")
-    assert '"gemini-3.1-flash-lite"' in text, (
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] El modelo barato del stack es
+    # deepseek-v4-flash — su entry de pricing es la que habilita el costo de
+    # los nodos aux en llm_usage_events.
+    assert '"deepseek-v4-flash"' in text, (
         "P1-COST-INSTRUMENTATION pricing dict debe incluir entry para "
-        "`gemini-3.1-flash-lite`. Sin esta entry el costo no se calcula."
+        "`deepseek-v4-flash`. Sin esta entry el costo no se calcula."
     )
-    # Pricing real (en micros/M tokens): $0.25 / $1.50 / $0.025
+    # Pricing oficial DeepSeek 2026-06 (micros/M): $0.14 / $0.28 / $0.0028
     m = re.search(
-        r'"gemini-3\.1-flash-lite"\s*:\s*\{\s*"input"\s*:\s*250_000\s*,\s*"output"\s*:\s*1_500_000\s*,\s*"cached"\s*:\s*25_000\s*\}',
+        r'"deepseek-v4-flash"\s*:\s*\{\s*"input"\s*:\s*140_000\s*,\s*"output"\s*:\s*280_000\s*,\s*"cached"\s*:\s*2_800\s*\}',
         text,
     )
     assert m, (
-        "Pricing de Flash-Lite debe ser input=250_000 / output=1_500_000 / "
-        "cached=25_000 micros/M (= $0.25/$1.50/$0.025 per M tokens) per Google "
-        "AI doc 2026-05-21. Si Google cambia el pricing, actualizar AMBOS el "
-        "dict en db_profiles.py Y esta assertion."
+        "Pricing de V4 Flash debe ser input=140_000 / output=280_000 / "
+        "cached=2_800 micros/M (= $0.14/$0.28/$0.0028 per M tokens) per "
+        "api-docs.deepseek.com 2026-06-12. Si DeepSeek cambia el pricing, "
+        "actualizar AMBOS el dict en db_profiles.py Y esta assertion."
     )

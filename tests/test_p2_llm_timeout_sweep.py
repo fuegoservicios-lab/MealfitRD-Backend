@@ -68,18 +68,13 @@ _EXPECTED_MIN_CONSTRUCTORS = {
     "tools_medical.py": 1,
 }
 
-# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] `GoogleGenerativeAIEmbeddings` es una clase
-# DISTINTA de `ChatGoogleGenerativeAI` y NO acepta `timeout=`; solo `client_args`
-# (→ httpx.Client(timeout=)) acota el deadline. El sweep original solo cubrió
-# `ChatGoogleGenerativeAI`, dejando los 3 constructores de embeddings sin acotar.
-_EMBEDDING_MODULES = {
-    "fact_extractor.py": 1,
-    "vision_agent.py": 1,
-    "constants.py": 1,
-    # [P2-PROD-AUDIT-3 · 2026-05-30] Cliente embeddings de shopping_calculator
-    # (semantic cache init + runtime embed_query) quedó sin deadline.
-    "shopping_calculator.py": 1,
-}
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Los 4 constructores de embeddings
+# per-módulo fueron consolidados en la capa pluggable `embeddings_provider.py`
+# (constants/fact_extractor/vision_agent/shopping_calculator delegan a
+# `get_text_embedding`/`get_embeddings_client`). El deadline vive en UN solo
+# punto: `_build_client` pasa `timeout=` (kwarg nativo de OpenAIEmbeddings)
+# resuelto por `_embeddings_timeout_s` — misma lección P2-LLM-TIMEOUT-SWEEP.
+_EMBEDDINGS_PROVIDER = "embeddings_provider.py"
 
 
 def _read(name: str) -> str:
@@ -111,24 +106,25 @@ def _balanced_blocks(src: str, symbol: str):
 
 
 def _constructor_blocks(src: str):
-    return _balanced_blocks(src, "ChatGoogleGenerativeAI")
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] constructor renombrado.
+    return _balanced_blocks(src, "ChatDeepSeek")
 
 
 @pytest.mark.parametrize("module", _MODULES)
 def test_every_constructor_has_timeout(module):
     src = _read(module)
     blocks = _constructor_blocks(src)
-    assert blocks, f"No se encontró ningún ChatGoogleGenerativeAI( en {module}."
+    assert blocks, f"No se encontró ningún ChatDeepSeek( en {module}."
     expected = _EXPECTED_MIN_CONSTRUCTORS[module]
     assert len(blocks) >= expected, (
-        f"{module}: se esperaban >= {expected} constructores ChatGoogleGenerativeAI, "
+        f"{module}: se esperaban >= {expected} constructores ChatDeepSeek, "
         f"se hallaron {len(blocks)}. ¿Cambió el formato o se removió un callsite? "
         "Revisa antes de asumir que el scan sigue cubriendo todo."
     )
     missing = [ln for (ln, inner) in blocks if "timeout=" not in inner]
     assert not missing, (
-        f"{module}: constructores ChatGoogleGenerativeAI SIN `timeout=` en líneas "
-        f"{missing}. Un Gemini colgado bloquearía el thread/event-loop indefinidamente "
+        f"{module}: constructores ChatDeepSeek SIN `timeout=` en líneas "
+        f"{missing}. Un provider colgado bloquearía el thread/event-loop indefinidamente "
         "(P2-LLM-TIMEOUT-SWEEP). Añade `timeout=<helper>()` al constructor. "
         "Lee la memoria antes de remover un timeout existente."
     )
@@ -142,45 +138,42 @@ def test_anchor_present_in_all_modules():
         )
 
 
-@pytest.mark.parametrize("module", sorted(_EMBEDDING_MODULES))
-def test_every_embeddings_constructor_has_client_args_timeout(module):
-    """[P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Cada `GoogleGenerativeAIEmbeddings(...)`
-    debe pasar `client_args={"timeout": ...}` — el ÚNICO arg que acota el deadline
-    httpx en esta versión del SDK (NO acepta `timeout=` ni cablea `request_options`)."""
-    src = _read(module)
-    blocks = _balanced_blocks(src, "GoogleGenerativeAIEmbeddings")
-    expected = _EMBEDDING_MODULES[module]
-    assert len(blocks) >= expected, (
-        f"{module}: se esperaban >= {expected} constructores GoogleGenerativeAIEmbeddings, "
-        f"se hallaron {len(blocks)}. ¿Se removió/renombró un callsite?"
+def test_every_embeddings_constructor_has_client_args_timeout():
+    """[P2-LLM-TIMEOUT-SWEEP · P0-DEEPSEEK-MIGRATION] El constructor del
+    cliente de embeddings (consolidado en `embeddings_provider._build_client`)
+    DEBE pasar `timeout=` — sin deadline, un socket de embedding colgado
+    bloquea el thread del bg-pool / fact-lock para siempre."""
+    src = _read(_EMBEDDINGS_PROVIDER)
+    blocks = _balanced_blocks(src, "OpenAIEmbeddings")
+    # 1 constructor real (en _build_client). El import lazy no matchea
+    # `OpenAIEmbeddings(` porque no abre paréntesis.
+    constructor_blocks = [b for b in blocks if "model" in b[1] or "kwargs" in b[1]]
+    assert constructor_blocks or '"timeout"' in src, (
+        f"{_EMBEDDINGS_PROVIDER}: no se encontró el constructor OpenAIEmbeddings."
     )
-    missing = [
-        ln for (ln, inner) in blocks
-        if "client_args" not in inner or "timeout" not in inner
-    ]
-    assert not missing, (
-        f"{module}: GoogleGenerativeAIEmbeddings SIN `client_args={{'timeout': ...}}` en "
-        f"líneas {missing}. Un socket de embedding colgado bloquearía el thread "
-        "indefinidamente (P2-LLM-TIMEOUT-SWEEP). En esta versión del SDK `timeout=` "
-        "NO existe para embeddings — usa `client_args`."
+    assert '"timeout": _embeddings_timeout_s()' in src, (
+        f"{_EMBEDDINGS_PROVIDER}: el constructor de embeddings debe acotar el "
+        "deadline via `\"timeout\": _embeddings_timeout_s()` en sus kwargs "
+        "(P2-LLM-TIMEOUT-SWEEP). Sin esto, un socket colgado bloquea el thread."
     )
 
 
 def test_embeddings_timeout_helper_uses_env_float_with_validator():
-    """El helper `_embeddings_llm_timeout_s` debe existir en los 3 módulos de
-    embeddings y resolver vía `_env_float` con `validator=` (clamp)."""
-    for module in _EMBEDDING_MODULES:
-        src = _read(module)
-        m = re.search(
-            r"def\s+_embeddings_llm_timeout_s\s*\(\s*\)\s*->\s*float\s*:(.*?)(?:\n\ndef |\n\nclass |\Z)",
-            src,
-            re.DOTALL,
-        )
-        assert m, f"Falta el helper `_embeddings_llm_timeout_s` en {module}."
-        body = m.group(1)
-        assert "_env_float(" in body and "validator=" in body, (
-            f"`_embeddings_llm_timeout_s` en {module} debe usar `_env_float(..., validator=)`."
-        )
+    """El helper `_embeddings_timeout_s` (SSOT en embeddings_provider) debe
+    resolver vía `_env_float` con `validator=` (clamp) — mismo knob legacy
+    `MEALFIT_EMBEDDING_LLM_TIMEOUT_S`."""
+    src = _read(_EMBEDDINGS_PROVIDER)
+    m = re.search(
+        r"def\s+_embeddings_timeout_s\s*\(\s*\)\s*->\s*float\s*:(.*?)(?:\n\ndef |\n\nclass |\Z)",
+        src,
+        re.DOTALL,
+    )
+    assert m, f"Falta el helper `_embeddings_timeout_s` en {_EMBEDDINGS_PROVIDER}."
+    body = m.group(1)
+    assert "_env_float(" in body and "validator=" in body, (
+        "`_embeddings_timeout_s` debe usar `_env_float(..., validator=)`."
+    )
+    assert "MEALFIT_EMBEDDING_LLM_TIMEOUT_S" in body
 
 
 def test_timeout_helpers_use_env_float_with_validator():

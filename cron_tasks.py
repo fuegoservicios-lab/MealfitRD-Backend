@@ -981,28 +981,41 @@ def _shopping_coherence_alert_job():
         persist_history_enabled = _env_bool("MEALFIT_COHERENCE_CRON_PERSIST_HISTORY", True)
         _tick_persist_history_enabled = persist_history_enabled
 
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo (Neon).
+        # Import lazy del pool (late-binding: re-importar dentro de la función
+        # lee el valor ACTUAL de db_core.connection_pool). Los skip_reason
+        # conservan sus nombres históricos (`db_core_import_failed`,
+        # `supabase_not_initialized`) por continuidad de dashboards + el
+        # clasificador P1-COH-BENIGN-SKIP del finally.
         try:
-            from db_core import supabase
+            from db_core import connection_pool as _coh_pool
         except Exception as e:
             logger.warning(f"[COH-ALERT] db_core import falló: {e}")
             _tick_skip_reason = "db_core_import_failed"
             return
 
-        if not supabase:
-            logger.warning("[COH-ALERT] supabase no inicializado — skip.")
+        if not _coh_pool:
+            logger.warning("[COH-ALERT] connection_pool no inicializado — skip.")
             _tick_skip_reason = "supabase_not_initialized"
             return
 
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        # Ventana 24h sobre `created_at` DELIBERADO (planes nuevos del día);
+        # el cron horario P3-B es el que filtra por `updated_at`.
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         try:
-            res = (
-                supabase.table("meal_plans")
-                .select("id,user_id,plan_data")
-                .gte("created_at", cutoff)
-                .limit(500)
-                .execute()
-            )
-            plans = res.data or []
+            # `id`/`user_id` como ::text — parity con PostgREST (uuid → str):
+            # `plan_id` viaja a `update_meal_plan_data` y a `plan_id_hint`
+            # (logs/history) que esperan string.
+            plans = execute_sql_query(
+                """
+                SELECT id::text AS id, user_id::text AS user_id, plan_data
+                FROM public.meal_plans
+                WHERE created_at >= %s
+                LIMIT 500
+                """,
+                (cutoff,),
+                fetch_all=True,
+            ) or []
         except Exception as e:
             logger.warning(f"[COH-ALERT] fetch planes falló: {e}")
             _tick_skip_reason = "fetch_plans_failed"
@@ -1340,30 +1353,36 @@ def _aggregate_coherence_block_history_metrics():
         if max_plans <= 0:
             max_plans = 1000
 
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo (Neon).
+        # skip_reason conserva los nombres históricos (`db_core_import_failed`,
+        # `supabase_not_initialized`) por continuidad de dashboards.
         try:
-            from db_core import supabase
+            from db_core import connection_pool as _agg_pool
         except Exception as e:
             logger.warning(f"[P3-B/COH-METRICS] db_core import falló: {e}")
             _agg_tick_skip_reason = "db_core_import_failed"
             return
 
-        if not supabase:
-            logger.warning("[P3-B/COH-METRICS] supabase no inicializado — skip.")
+        if not _agg_pool:
+            logger.warning("[P3-B/COH-METRICS] connection_pool no inicializado — skip.")
             _agg_tick_skip_reason = "supabase_not_initialized"
             return
 
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_h)).isoformat()
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_h)
         try:
             # [P1-A · 2026-05-10] Filtrar por `updated_at` (P0-2 migration);
             # el índice `idx_meal_plans_user_updated_at` cubre el filtro.
-            res = (
-                supabase.table("meal_plans")
-                .select("id,user_id,plan_data")
-                .gte("updated_at", cutoff)
-                .limit(max_plans)
-                .execute()
-            )
-            plans = res.data or []
+            # `id`/`user_id` como ::text — parity con PostgREST (uuid → str).
+            plans = execute_sql_query(
+                """
+                SELECT id::text AS id, user_id::text AS user_id, plan_data
+                FROM public.meal_plans
+                WHERE updated_at >= %s
+                LIMIT %s
+                """,
+                (cutoff, max_plans),
+                fetch_all=True,
+            ) or []
         except Exception as e:
             logger.warning(f"[P3-B/COH-METRICS] fetch planes falló: {e}")
             _agg_tick_skip_reason = "fetch_plans_failed"
@@ -5283,6 +5302,30 @@ def _drain_pending_facts_queue() -> None:
         )
 
 
+def _delete_old_meal_rejections_weekly() -> None:
+    """[P1-NEON-DB-MIGRATION · 2026-06-12] Reemplazo APScheduler del pg_cron
+    job `cleanup_old_meal_rejections` que vivía DENTRO del Postgres de
+    Supabase (extensión pg_cron, semanal). Neon no garantiza pg_cron con
+    compute autosuspend, y la convención del repo es que TODO cron vive en
+    `register_plan_chunk_scheduler` (SSOT). Invoca la función SQL existente
+    `public.delete_old_meal_rejections()` (restaurada en Neon por el dump)."""
+    try:
+        from db import execute_sql_query
+        execute_sql_query(
+            "SELECT public.delete_old_meal_rejections() AS result",
+            fetch_one=True,
+        )
+        logger.info(
+            "🧹 [P1-NEON-DB-MIGRATION] delete_old_meal_rejections() ejecutada "
+            "(cleanup semanal de meal_rejections viejas)."
+        )
+    except Exception as e:
+        logger.error(
+            f"❌ [P1-NEON-DB-MIGRATION] cleanup semanal de meal_rejections "
+            f"falló: {type(e).__name__}: {e}"
+        )
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -5468,6 +5511,26 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             "⏰ [P1-LIVE-3] Cron de sweep de planes test-fixture registrado "
             "(03:45 UTC diario, age>=MEALFIT_SWEEP_SYNTHETIC_PLANS_AGE_HOURS hours)."
+        )
+
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Cleanup semanal de meal_rejections
+    # viejas — antes era pg_cron `cleanup_old_meal_rejections` dentro del
+    # Postgres de Supabase; migrado a APScheduler (SSOT de crons) porque Neon
+    # autosuspende el compute y pg_cron no es confiable ahí. Domingo 03:15 UTC
+    # (off-peak, antes de los sweeps hermanos 03:30/03:45).
+    if not scheduler.get_job("delete_old_meal_rejections_weekly"):
+        _add_job_jittered(scheduler,
+            _delete_old_meal_rejections_weekly,
+            CronTrigger(day_of_week="sun", hour=3, minute=15, timezone="UTC"),
+            id="delete_old_meal_rejections_weekly",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            "⏰ [P1-NEON-DB-MIGRATION] Cron semanal delete_old_meal_rejections "
+            "registrado (Dom 03:15 UTC — reemplaza pg_cron de Supabase)."
         )
 
     # [P0-5 · 2026-05-10] Alerta de backlog en `failed_inventory_deductions`.
@@ -26082,7 +26145,8 @@ def process_plan_chunk_queue(target_plan_id=None):
                 if is_degraded:
                     # [GAP 6 FIX: Probe LLM para auto-recovery]
                     try:
-                        from langchain_google_genai import ChatGoogleGenerativeAI
+                        # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Probe via DeepSeek.
+                        from llm_provider import ChatDeepSeek, model_free_tier
                         import os
                         # [P0-1-RECOVERY/WORKER-FIX] No importar datetime/timezone aquí: el módulo
                         # ya los tiene globales (cron_tasks.py:3). Importarlos localmente
@@ -26108,12 +26172,11 @@ def process_plan_chunk_queue(target_plan_id=None):
 
                         if can_probe:
                             logger.info(f" [GAP 6] Iniciando Probe LLM para auto-recovery del chunk {week_number}...")
-                            probe_llm = ChatGoogleGenerativeAI(
-                                model="gemini-3.1-flash-lite",
+                            probe_llm = ChatDeepSeek(
+                                model=model_free_tier(),
                                 temperature=0.0,
-                                google_api_key=os.environ.get("GEMINI_API_KEY"),
                                 max_retries=0,
-                                # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline gRPC duro:
+                                # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline duro:
                                 # sin esto un socket colgado dejaba el chunking entero en
                                 # halt silencioso (ver helper _chunk_probe_llm_timeout_s).
                                 timeout=_chunk_probe_llm_timeout_s()

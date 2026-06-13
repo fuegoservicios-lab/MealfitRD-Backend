@@ -52,6 +52,21 @@ def _get_embedding_body() -> str:
     return match.group(0)
 
 
+def _cached_embedding_body() -> str:
+    """[P1-COHERE-EMBED-V4 · 2026-06-12] La capa con try/except + logger
+    vive en `_cached_text_embedding` (la pública `get_embedding` es el
+    delegador que resuelve model_id/purpose para versionar la cache key)."""
+    src = _read()
+    match = re.search(
+        r"def\s+_cached_text_embedding\s*\(.*?(?=\ndef\s+|\Z)",
+        src, re.DOTALL,
+    )
+    assert match is not None, (
+        "`_cached_text_embedding` no encontrada en fact_extractor.py"
+    )
+    return match.group(0)
+
+
 def test_logging_imported_and_logger_declared():
     src = _read()
     assert re.search(r"^import\s+logging", src, re.MULTILINE), (
@@ -65,7 +80,7 @@ def test_logging_imported_and_logger_declared():
 def test_get_embedding_no_print_for_errors():
     """Regresión guard: el except NO debe usar `print(...)` — solo
     `logger.error`. Si alguien revierte, este test falla loud."""
-    body = _get_embedding_body()
+    body = _cached_embedding_body() + _get_embedding_body()
     # Buscar print() en el cuerpo (el debug del MISS sí puede ser print
     # legacy, pero idealmente también es logger.debug). El test foco es
     # que ningún `print(f"⚠️ Error` (o similar) sobreviva en el except.
@@ -77,19 +92,27 @@ def test_get_embedding_no_print_for_errors():
 
 
 def test_get_embedding_uses_logger_error_with_context():
-    """El log de error debe incluir contexto diagnóstico: modelo + longitud."""
-    body = _get_embedding_body()
+    """El log de error debe incluir contexto diagnóstico.
+    [P0-DEEPSEEK-MIGRATION · 2026-06-12] La generación vive ahora en
+    `embeddings_provider.get_text_embedding` (que loguea provider+modelo en
+    SU except — un solo punto para todos los surfaces); la capa cacheada de
+    fact_extractor (`_cached_text_embedding`, P1-COHERE-EMBED-V4) conserva
+    un except defensivo con `text_len`."""
+    body = _cached_embedding_body()
     assert "logger.error" in body, (
-        "`get_embedding` debe llamar `logger.error(...)` en el except."
-    )
-    # Contexto mínimo: modelo + text_len.
-    assert re.search(r"modelo\s*=\s*\{", body), (
-        "El log debe incluir `modelo={_model_name!r}` para diagnóstico de "
-        "quota/rate-limit (uno por modelo)."
+        "`_cached_text_embedding` debe llamar `logger.error(...)` en el except."
     )
     assert re.search(r"text_len\s*=\s*\{", body), (
         "El log debe incluir `text_len={len(text)}` para detectar si el "
         "error es por texto extremadamente largo (límite del provider)."
+    )
+    # El contexto provider+modelo vive en el error-log del provider SSOT.
+    provider_src = (
+        Path(__file__).resolve().parent.parent / "embeddings_provider.py"
+    ).read_text(encoding="utf-8")
+    assert "logger.error" in provider_src and "provider=%s, model=%s" in provider_src, (
+        "`embeddings_provider.get_text_embedding` debe loguear error-level "
+        "con contexto provider+modelo (convención P3-3)."
     )
 
 
@@ -108,17 +131,24 @@ def test_docstring_documents_fail_fast_decision():
 
 
 def test_model_name_bound_before_import():
-    """Defense-in-depth: `_model_name` debe inicializarse a un valor
-    placeholder ANTES del `from constants import` — sin esto, un fallo
-    en el import deja `_model_name` unbound y el except crashea."""
-    body = _get_embedding_body()
-    # Buscar el patrón `_model_name = "<unknown>"` antes del try.
-    match = re.search(
-        r"_model_name\s*=\s*[\"']<unknown>[\"'].*?try\s*:",
-        body, re.DOTALL,
+    """[P0-DEEPSEEK-MIGRATION · 2026-06-12 → P1-COHERE-EMBED-V4] El
+    defense-in-depth original (`_model_name = \"<unknown>\"` pre-import)
+    quedó obsoleto. Contrato vigente: la cadena de delegación es
+    `get_embedding` → `_cached_text_embedding` (cache key versionada por
+    model_id+purpose) → `embeddings_provider.get_text_embedding` (jamás
+    lanza), y el except defensivo NO referencia variables unbound."""
+    public_body = _get_embedding_body()
+    cached_body = _cached_embedding_body()
+    assert "_cached_text_embedding(" in public_body, (
+        "`get_embedding` debe delegar a la capa cacheada versionada."
     )
-    assert match is not None, (
-        "`_model_name` debe bindearse a `\"<unknown>\"` ANTES del `try:` — "
-        "si el `from constants import GEMINI_EMBEDDING_TEXT_MODEL` falla, "
-        "el log del except referenciaría una variable no-bindeada (UnboundLocalError)."
+    assert "get_embeddings_model_id" in public_body, (
+        "`get_embedding` debe resolver el model_id ANTES de la capa cacheada "
+        "(la cache key se construye con los args)."
+    )
+    assert "get_text_embedding(" in cached_body, (
+        "`_cached_text_embedding` debe delegar a embeddings_provider."
+    )
+    assert "GEMINI_EMBEDDING_TEXT_MODEL" not in public_body + cached_body, (
+        "El import legacy de constants no debe reaparecer."
     )

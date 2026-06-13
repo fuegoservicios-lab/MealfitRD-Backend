@@ -7,7 +7,7 @@ Contrato anclado (parser-based, corre DB-less con --noconftest):
         El endpoint `/recipe/expand`, ante `None`, devuelve `success=False` +
         `expansion_failed=True`, SIN marcar isExpanded, SIN persistir, SIN cobrar.
   #2    dedup pre-check usa `isinstance(..., list)` (era `str` → código muerto).
-  #3    `log_api_usage("gemini_recipe_expand")` se invoca DESPUÉS de
+  #3    `log_api_usage("llm_recipe_expand")` se invoca DESPUÉS de
         `expand_recipe_agent` (cobro tras éxito, no antes).
   #10   `expand_recipe_agent` usa el knob `_recipe_expand_model_name()`.
   #4    macro-balancing (`assemble_plan_node`) append el disclaimer como
@@ -100,15 +100,16 @@ def test_expand_agent_uses_model_knob(ai_src: str):
         "P1-RECIPE-EXPAND-FAILSIGNAL regresión: falta el helper "
         "_recipe_expand_model_name (knob del modelo)."
     )
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] default = constante DEEPSEEK_FLASH.
     assert re.search(
-        r'_env_str\(\s*"MEALFIT_RECIPE_EXPAND_MODEL"\s*,\s*"gemini-3\.1-flash-lite"',
+        r'_env_str\(\s*"MEALFIT_RECIPE_EXPAND_MODEL"\s*,\s*DEEPSEEK_FLASH',
         ai_src,
-    ), "El knob debe leer MEALFIT_RECIPE_EXPAND_MODEL con default flash-lite."
+    ), "El knob debe leer MEALFIT_RECIPE_EXPAND_MODEL con default DEEPSEEK_FLASH."
     body = _fn_body(ai_src, "expand_recipe_agent")
     assert "model=_recipe_expand_model_name()" in body, (
         "expand_recipe_agent debe usar model=_recipe_expand_model_name()."
     )
-    assert 'model="gemini-3.1-flash-lite"' not in body, (
+    assert not re.search(r'model\s*=\s*"[a-z0-9.-]+"', body), (
         "expand_recipe_agent volvió a hardcodear el modelo."
     )
 
@@ -133,7 +134,7 @@ def test_endpoint_charges_quota_after_llm(plans_src: str):
     body = _expand_body(plans_src)
     llm_idx = body.find("expanded_steps = expand_recipe_agent(data)")
     # El log_api_usage de cobro (path LLM) debe venir DESPUÉS del LLM call.
-    log_idx = body.rfind('log_api_usage(user_id, "gemini_recipe_expand")')
+    log_idx = body.rfind('log_api_usage(user_id, "llm_recipe_expand")')
     assert llm_idx > 0 and log_idx > 0
     assert log_idx > llm_idx, (
         "P1-RECIPE-EXPAND-FAILSIGNAL regresión: log_api_usage (cobro) ya no "

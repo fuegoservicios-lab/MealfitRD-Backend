@@ -9,7 +9,8 @@ import unicodedata
 logger = logging.getLogger(__name__)
 
 from constants import strip_accents, CULINARY_KNOWLEDGE_BASE, validate_ingredients_against_pantry
-from langchain_google_genai import ChatGoogleGenerativeAI
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek con router por tier.
+from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, resolve_model_for_user
 from langchain_core.tools import tool
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
@@ -23,7 +24,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 from db import get_user_profile, update_user_health_profile
-from knobs import _env_str, _env_float, _env_int, _env_bool, thinking_budget_kwargs  # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] / [P0-CHAT-LLM-TIMEOUT · 2026-05-19] auto-registry / [P2-COST-THINKING-CAP-EXT · 2026-06-01]
+from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] / [P0-CHAT-LLM-TIMEOUT · 2026-05-19] auto-registry
 # [P1-CHAT-CB · 2026-05-19] Breaker per-modelo del graph_orchestrator. NO
 # duplicamos la implementación — reusamos el singleton + knobs ya productivos
 # (`MEALFIT_CB_FAILURE_THRESHOLD=3`, `MEALFIT_CB_RESET_TIMEOUT_S=30`). Import
@@ -189,65 +190,60 @@ from tools import (
 )
 
 # Langchain Chat Model Initialization
-# Safety settings relajados: esta es una app de nutrición clínica donde los usuarios
-# hablan sobre hábitos alimenticios y emociones — los filtros por defecto bloquean falsamente.
-from google.genai.types import HarmCategory, HarmBlockThreshold
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El bloque `_safety_settings`
+# (HarmCategory/HarmBlockThreshold) fue eliminado: era exclusivo del SDK de
+# Gemini. DeepSeek no expone content-filters configurables client-side, así
+# que la decisión P3-CHAT-SAFETY-OFF (evitar false-positives en charlas de
+# déficit/ayuno) queda satisfecha por defecto del provider.
 
-_safety_settings = {
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.OFF,
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-}
-
-# [P2-AUDIT-1 · 2026-05-15] Knobs para overridear los modelos Gemini usados
-# por las 5 callsites de `ChatGoogleGenerativeAI(...)` en este módulo:
-#   - `llm` (módulo-level, swap/chat default)            → MEALFIT_CHAT_AGENT_MODEL
+# [P2-AUDIT-1 · 2026-05-15] Knobs para overridear los modelos LLM usados
+# por las 5 callsites de `ChatDeepSeek(...)` en este módulo:
+#   - `llm` (módulo-level, fallback default)             → MEALFIT_CHAT_AGENT_MODEL
 #   - `swap_llm` dentro de `swap_meal`                   → MEALFIT_CHAT_AGENT_SWAP_MODEL
 #   - `chat_llm` dentro de `call_model` (LangGraph node) → MEALFIT_CHAT_AGENT_MODEL (reusa)
 #   - `title_llm` dentro de `generate_session_title`     → MEALFIT_CHAT_TITLE_MODEL
 #   - `router_llm` dentro de `rag_query_router`          → MEALFIT_CHAT_ROUTER_MODEL
 #
-# Por qué un knob (no hardcode): convención del repo `P3-PREVIEW-MODEL-KNOB
-# · 2026-05-12` (CLAUDE.md). Los modelos `*-preview` de Google pueden
-# deprecarse/retirarse sin aviso prolongado — incidente real 2026-05-11
-# documentó CB rows stale por el modelo `gemini-3.1-pro-preview` 4.4 días
-# seguidos. Sin knob, swap del modelo requiere redeploy. Knob permite swap
-# inmediato sin redeploy: setear `MEALFIT_CHAT_AGENT_MODEL=gemini-3.1-flash`
-# (stable, sin `-preview`) y reiniciar el worker.
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] chat y swap son TIER-ROUTED: sin
+# override explícito del knob, el modelo se resuelve por plan de pago via
+# `llm_provider.resolve_model_for_user` (gratis/guest → deepseek-v4-flash,
+# basic/plus/ultra → deepseek-v4-pro). El override del knob SIEMPRE gana
+# (rollback / A-B test sin redeploy — convención P3-PREVIEW-MODEL-KNOB).
+# title/router son tareas aux baratas → V4 Flash fijo para todos los tiers.
 #
-# Defaults = current production models. Cambiar en env vars cuando Google
-# publique notice de deprecation o cuando se quiera A/B test un modelo nuevo.
-# Precedente en `proactive_agent.py:36` (`_proactive_model_name`).
+# CONSISTENCIA CB: los gates `_get_circuit_breaker(<model>)` DEBEN resolver
+# el modelo con EXACTAMENTE el mismo `user_id` que el constructor del LLM —
+# si difieren, el gate protege una key (`llm_circuit_breaker:<model>`)
+# distinta de la que falla.
 #
 # [P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15] Los 4 helpers leen via
 # `_env_str(...)` (NO `os.environ.get`) para auto-registrarse en
 # `_KNOBS_REGISTRY` (convención P3-NEW-D). Beneficio operacional: tras un
-# `MEALFIT_CHAT_AGENT_MODEL=gemini-3.1-flash` en EasyPanel, el SRE puede
-# verificar el cambio via `GET /api/system/admin/knobs` sin releer source.
+# override en el VPS, el SRE puede verificar el cambio via
+# `GET /api/system/admin/knobs` sin releer source.
 # Test parser-based: `tests/test_p3_chat_model_knobs_registry.py`.
-def _chat_agent_model_name() -> str:
-    return _env_str(
-        "MEALFIT_CHAT_AGENT_MODEL",
-        "gemini-3.5-flash",
-    )
+def _chat_agent_model_name(user_id: Optional[str] = None) -> str:
+    override = _env_str("MEALFIT_CHAT_AGENT_MODEL", "")
+    if override:
+        return override
+    return resolve_model_for_user(user_id)
 
-def _chat_agent_swap_model_name() -> str:
-    return _env_str(
-        "MEALFIT_CHAT_AGENT_SWAP_MODEL",
-        "gemini-3.5-flash",
-    )
+def _chat_agent_swap_model_name(user_id: Optional[str] = None) -> str:
+    override = _env_str("MEALFIT_CHAT_AGENT_SWAP_MODEL", "")
+    if override:
+        return override
+    return resolve_model_for_user(user_id)
 
 def _chat_title_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_TITLE_MODEL",
-        "gemini-3.1-flash-lite",
+        DEEPSEEK_FLASH,
     )
 
 def _chat_router_model_name() -> str:
     return _env_str(
         "MEALFIT_CHAT_ROUTER_MODEL",
-        "gemini-3.1-flash-lite",
+        DEEPSEEK_FLASH,
     )
 
 def _chat_title_max_output_tokens() -> int:
@@ -404,11 +400,12 @@ def _chat_stream_inactivity_timeout_s() -> float:
         validator=lambda v: 0.0 < v <= 120.0,
     )
 
-llm = ChatGoogleGenerativeAI(
+# [P0-DEEPSEEK-MIGRATION] Singleton módulo-level: se construye a import-time
+# (sin user en contexto) → resuelve al modelo FREE. Los paths per-request
+# (call_model/swap_meal) construyen su LLM con tier del usuario real.
+llm = ChatDeepSeek(
     model=_chat_agent_model_name(),
     temperature=0.2,
-    google_api_key=os.environ.get("GEMINI_API_KEY"),
-    safety_settings=_safety_settings,
     timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
 )
 
@@ -759,17 +756,13 @@ def swap_meal(form_data: dict):
     )
     
     temp = 0.3
-    swap_llm = ChatGoogleGenerativeAI(
-        model=_chat_agent_swap_model_name(),
+    # [P0-DEEPSEEK-MIGRATION] Tier-routing: el endpoint /swap-meal valida
+    # ownership de `user_id` contra el JWT ANTES de llegar acá (api_swap_meal).
+    _swap_uid = form_data.get("user_id")
+    swap_llm = ChatDeepSeek(
+        model=_chat_agent_swap_model_name(_swap_uid),
         temperature=temp,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_chat_swap_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
-        # [P2-COST-THINKING-CAP-EXT · 2026-06-01] Cap reasoning del swap (genera
-        # UN plato a schema MealModel + validador determinista + 3x retry). El
-        # razonamiento ilimitado de gemini-3.5-flash factura como output a $9/M;
-        # techo 2048 (=day-gen) recorta runaway sin tocar el razonamiento normal.
-        # Knob MEALFIT_SWAP_THINKING_BUDGET (-1 = sin cap). flash-lite → no-op.
-        **thinking_budget_kwargs(_chat_agent_swap_model_name(), "MEALFIT_SWAP_THINKING_BUDGET", 2048),
     ).with_structured_output(MealModel)
 
     # [P1-CHAT-CB-EXTEND · 2026-05-20] CB gate per-modelo del swap_llm.
@@ -785,7 +778,7 @@ def swap_meal(form_data: dict):
     # explícito y defendible: 503 le dice al user "el sistema sabe que
     # algo está mal", el plato fallback parecería decisión culinaria.
     # Tooltip-anchor: P1-CHAT-CB-EXTEND.
-    _swap_cb_model = _chat_agent_swap_model_name()
+    _swap_cb_model = _chat_agent_swap_model_name(_swap_uid)
     _swap_cb = _get_circuit_breaker(_swap_cb_model)
     if not _swap_cb.can_proceed():
         logger.warning(
@@ -1266,7 +1259,7 @@ def _emit_chat_rate_limited_metric_best_effort(user_id, session_id, model_name):
                 user_id if user_id and user_id != "guest" else None,
                 session_id,
                 "chat_llm_rate_limited",
-                _json_rl.dumps({"model": model_name, "provider": "gemini"}, ensure_ascii=False),
+                _json_rl.dumps({"model": model_name, "provider": "deepseek"}, ensure_ascii=False),
             ),
         )
     except Exception as _e_rl:
@@ -1517,11 +1510,12 @@ def call_model(state: ChatState):
         if not isinstance(m, SystemMessage):
             llm_messages.append(m)
             
-    chat_llm = ChatGoogleGenerativeAI(
-        model=_chat_agent_model_name(),
+    # [P0-DEEPSEEK-MIGRATION] Identidad para tier-routing (paid→pro). Guests
+    # (session_id) resuelven a flash via fail-cheap del router.
+    _model_uid = state.get("user_id") or state.get("session_id")
+    chat_llm = ChatDeepSeek(
+        model=_chat_agent_model_name(_model_uid),
         temperature=0.7,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
-        safety_settings=_safety_settings,
         timeout=_chat_agent_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
     )
     llm_with_tools = chat_llm.bind_tools(agent_tools)
@@ -1534,12 +1528,11 @@ def call_model(state: ChatState):
     # `record_success` / `record_failure` actualizan el estado para que el
     # resto del repo (pipeline de plan-gen, swap, etc.) vea el mismo breaker.
     #
-    # NOTA: `_chat_agent_model_name()` se llama 2x (callsite del CGGA arriba +
-    # aquí) en lugar de cachear en variable local — preserva el contrato del
-    # test P2-AUDIT-1 (regex busca `model=_chat_*_model_name()` literal en
-    # los args del CGGA). Costo trivial: el helper es un dict lookup en env
-    # con UPSERT idempotente al registry.
-    _cb_model = _chat_agent_model_name()
+    # NOTA: `_chat_agent_model_name(_model_uid)` se llama 2x (callsite del
+    # constructor arriba + aquí) con el MISMO uid — el modelo del gate CB debe
+    # coincidir con el del LLM construido (tier-routing P0-DEEPSEEK-MIGRATION).
+    # Costo trivial: tier lookup cacheado con TTL en llm_provider.
+    _cb_model = _chat_agent_model_name(_model_uid)
     _cb = _get_circuit_breaker(_cb_model)
     if not _cb.can_proceed():
         logger.warning(
@@ -1567,7 +1560,7 @@ def call_model(state: ChatState):
     # tokens completos). El helper es best-effort: cualquier fallo de
     # parse/DB se silencia y NO afecta el response al caller. Reutiliza
     # el SSOT del repo (mismo helper que plan-gen, mismo schema
-    # `llm_usage_events`, mismo cost calculation `compute_gemini_cost_micros`).
+    # `llm_usage_events`, mismo cost calculation `compute_llm_cost_micros`).
     # Tooltip-anchor: P2-CHAT-TOKEN-TELEMETRY.
     import time as _time_chat
     _chat_invoke_start = _time_chat.time()
@@ -1654,7 +1647,7 @@ def call_model(state: ChatState):
                     state.get("user_id") if state.get("user_id") and state.get("user_id") != "guest" else None,
                     state.get("session_id"),
                     "chat_llm_empty_response",
-                    _json_empty.dumps({"model": _cb_model, "provider": "gemini"}, ensure_ascii=False),
+                    _json_empty.dumps({"model": _cb_model, "provider": "deepseek"}, ensure_ascii=False),
                 ),
             )
         except Exception:
@@ -2109,7 +2102,7 @@ def generate_chat_title_background(user_id: str, session_id: str, first_message_
             )
             return
 
-        title_llm = ChatGoogleGenerativeAI(model=_chat_title_model_name(), temperature=0.7, google_api_key=os.environ.get("GEMINI_API_KEY"), timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
+        title_llm = ChatDeepSeek(model=_chat_title_model_name(), temperature=0.7, timeout=_chat_title_llm_timeout_s(), max_output_tokens=_chat_title_max_output_tokens())  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19] / [P3-COST-TITLE-OUTPUT-CAP · 2026-06-01]
         prompt = TITLE_GENERATION_PROMPT.format(first_message=first_message, used_titles=used_titles_str)
         logger.debug(f"[chat_title bg] session={session_id} - Calling LLM API")
         try:
@@ -2230,10 +2223,9 @@ def rag_query_router(prompt: str) -> dict:
         return {"skip": False, "query": prompt}
 
     try:
-        router_llm = ChatGoogleGenerativeAI(
+        router_llm = ChatDeepSeek(
             model=_chat_router_model_name(),
             temperature=0.0,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             timeout=_chat_router_llm_timeout_s(),  # [P0-CHAT-LLM-TIMEOUT · 2026-05-19]
         )
 

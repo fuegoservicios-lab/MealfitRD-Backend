@@ -62,12 +62,12 @@ def _extract_endpoint_body(src: str) -> str:
 
 
 def test_dedup_precheck_before_llm_call(src: str):
-    """El pre-check debe estar ANTES de `log_api_usage(... "gemini_recipe_expand")`
+    """El pre-check debe estar ANTES de `log_api_usage(... "llm_recipe_expand")`
     Y de `expand_recipe_agent(data)`."""
     body = _extract_endpoint_body(src)
 
     dedup_idx = body.find("[P1-NEW-11]")
-    log_idx = body.find('log_api_usage(user_id, "gemini_recipe_expand")')
+    log_idx = body.find('log_api_usage(user_id, "llm_recipe_expand")')
     llm_idx = body.find("expand_recipe_agent(data)")
 
     assert dedup_idx > 0, "P1-NEW-11 marker no encontrado en api_expand_recipe"
@@ -75,7 +75,7 @@ def test_dedup_precheck_before_llm_call(src: str):
     assert llm_idx > 0
     # El log_api_usage que cuenta es el del path LLM (último), no menciones en
     # comentarios. Buscamos el último.
-    last_log_idx = body.rfind('log_api_usage(user_id, "gemini_recipe_expand")')
+    last_log_idx = body.rfind('log_api_usage(user_id, "llm_recipe_expand")')
     last_llm_idx = body.rfind("expand_recipe_agent(data)")
     assert dedup_idx < last_log_idx, (
         "P1-NEW-11 regresión: el pre-check dedup ya no está ANTES de "

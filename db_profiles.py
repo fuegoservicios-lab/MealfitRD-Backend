@@ -8,7 +8,9 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 import os
 import logging
 logger = logging.getLogger(__name__)
-from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
+# [P1-NEON-DB-MIGRATION · 2026-06-12] `supabase` queda SOLO para Storage
+# (`_purge_visual_diary_storage`) — todo el acceso a datos va por SQL directo.
+from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write, execute_sql_transaction
 
 
 # ============================================================
@@ -91,30 +93,109 @@ def get_atomic_pool_fallback_snapshot() -> Dict[str, Any]:
             "strict_mode": REQUIRE_ATOMIC_POOL,
         }
 
+def _normalize_profile_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """[P1-NEON-DB-MIGRATION · 2026-06-12] Paridad de tipos con PostgREST.
+
+    psycopg devuelve tipos nativos (uuid.UUID, datetime/date, Decimal) donde
+    supabase-py devolvía JSON (strings ISO, floats). Los consumers del perfil
+    esperan la forma PostgREST — p.ej. `safe_fromisoformat(subscription_end_date)`
+    hace slicing de string. Convertimos: uuid→str, datetime/date→ISO string,
+    Decimal→float. jsonb (`health_profile`) ya es dict en ambos mundos.
+    """
+    from datetime import date as _date
+    from decimal import Decimal as _Decimal
+    out: Dict[str, Any] = {}
+    for k, v in row.items():
+        if isinstance(v, uuid.UUID):
+            out[k] = str(v)
+        elif isinstance(v, (datetime, _date)):
+            out[k] = v.isoformat()
+        elif isinstance(v, _Decimal):
+            out[k] = float(v)
+        else:
+            out[k] = v
+    return out
+
+
 def upsert_user_profile(user_id: str, health_profile: dict) -> bool:
     """Hace upsert del perfil de usuario y health_profile en user_profiles."""
-    if not supabase: return False
+    if not connection_pool: return False
     try:
-        supabase.table("user_profiles").upsert({
-            "id": user_id,
-            "health_profile": health_profile
-        }).execute()
+        from psycopg.types.json import Jsonb
+        execute_sql_write(
+            """
+            INSERT INTO user_profiles (id, health_profile)
+            VALUES (%s, %s)
+            ON CONFLICT (id) DO UPDATE SET health_profile = EXCLUDED.health_profile
+            """,
+            (user_id, Jsonb(health_profile)),
+        )
         return True
     except Exception as e:
         logger.error(f"Error en upsert_user_profile: {e}")
         return False
 
+
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Cache in-process de user_ids cuyo
+# profile row ya fue verificado/creado. Evita un INSERT ON CONFLICT por
+# request (solo cuesta uno por usuario por proceso). Se resetea por deploy —
+# el ON CONFLICT DO NOTHING hace el re-check idempotente y barato.
+_PROFILE_ENSURED_IDS: set = set()
+_PROFILE_ENSURED_MAX = 50_000  # backstop de memoria; reset total al superarlo
+
+
+def ensure_user_profile_exists(user_id: str, email: Optional[str] = None,
+                               full_name: Optional[str] = None) -> None:
+    """[P1-NEON-DB-MIGRATION · 2026-06-12] Reemplazo app-side del trigger
+    `handle_new_user` (vivía sobre `auth.users` en Supabase; en Neon el
+    schema `auth` no existe). Supabase Auth sigue creando el usuario JWT,
+    pero la fila espejo en `public.user_profiles` la garantiza el backend
+    en el primer request autenticado (auth.py::get_verified_user_id).
+
+    Mismo payload que el trigger original: (id, email, full_name, created_at).
+    ON CONFLICT (id) DO NOTHING — jamás pisa un profile existente (a
+    diferencia del upsert de health_profile). Best-effort: un fallo aquí NO
+    debe tumbar la autenticación (el caller ya validó el JWT); se loguea y
+    el siguiente request reintenta (el cache solo se llena tras éxito).
+    """
+    if not user_id or user_id in _PROFILE_ENSURED_IDS:
+        return
+    if not connection_pool:
+        return
+    try:
+        execute_sql_write(
+            """
+            INSERT INTO user_profiles (id, email, full_name, created_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (user_id, email, full_name),
+        )
+        if len(_PROFILE_ENSURED_IDS) >= _PROFILE_ENSURED_MAX:
+            _PROFILE_ENSURED_IDS.clear()
+        _PROFILE_ENSURED_IDS.add(user_id)
+    except Exception as e:
+        logger.error(
+            f"[P1-NEON-DB-MIGRATION] ensure_user_profile_exists falló para "
+            f"{user_id}: {type(e).__name__}: {e} (se reintenta en el próximo request)"
+        )
+
+
 def get_user_profile(user_id: str):
     """Obtiene el perfil completo del usuario, incluyendo el health_profile."""
-    if not supabase: return None
+    if not connection_pool: return None
     try:
         from datetime import datetime, timezone
-        res = supabase.table("user_profiles").select("*").eq("id", user_id).execute()
-        if not res.data:
+        row = execute_sql_query(
+            "SELECT * FROM user_profiles WHERE id = %s LIMIT 1",
+            (user_id,),
+            fetch_one=True,
+        )
+        if not row:
             return None
-            
-        profile = res.data[0]
-        
+
+        profile = _normalize_profile_row(row)
+
         # --- Graceful Degradation Middleware ---
         # [P1-PROD-AUDIT-3 · 2026-05-30] Revocador SSOT del tier pagado tras
         # cancelación. ANTES la condición exigía `subscription_end_date` truthy:
@@ -151,10 +232,18 @@ def get_user_profile(user_id: str):
 
             if should_downgrade:
                 logger.info(f"⬇️ Degradando perfil de {user_id} a 'gratis'. Cancelación efectiva (graceful terminado o sin fecha de fin de ciclo).")
-                supabase.table("user_profiles").update({
-                    "plan_tier": "gratis",
-                    "subscription_status": "INACTIVE"
-                }).eq("id", user_id).execute()
+                # I2: mutación filtrada por id=user_id. Placeholders nombrados
+                # (payload dict, paridad con el update PostgREST legacy).
+                execute_sql_write(
+                    "UPDATE user_profiles SET plan_tier = %(plan_tier)s, "
+                    "subscription_status = %(subscription_status)s "
+                    "WHERE id = %(id)s",
+                    {
+                        "plan_tier": "gratis",
+                        "subscription_status": "INACTIVE",
+                        "id": user_id,
+                    },
+                )
                 profile["plan_tier"] = "gratis"
                 profile["subscription_status"] = "INACTIVE"
         # ---------------------------------------
@@ -163,6 +252,36 @@ def get_user_profile(user_id: str):
     except Exception as e:
         logger.error(f"Error obteniendo perfil: {e}")
         return None
+
+
+def get_user_plan_tier(user_id: str) -> Optional[str]:
+    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Lookup liviano de `plan_tier`
+    para el router de modelos LLM (`llm_provider.resolve_model_for_user`).
+
+    Deliberadamente NO reusa `get_user_profile`: ese helper trae el perfil
+    completo Y ejecuta side-effects (downgrade de suscripciones CANCELLED).
+    El router de modelos corre en el hot path de CADA llamada LLM (con cache
+    TTL upstream) — necesita un SELECT de una columna, sin side-effects.
+
+    Retorna el tier crudo (`gratis`/`basic`/`plus`/`ultra`) o None si el
+    perfil no existe (guests / session_ids). El caller normaliza y aplica
+    fail-cheap. Excepciones propagan — el caller (`llm_provider.get_user_tier`)
+    las captura y degrada a `gratis`.
+    """
+    if not user_id:
+        return None
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] SQL directo vía pool (hot path —
+    # no abre conexión nueva). Sin try/except a propósito: las excepciones
+    # DEBEN propagar (el caller degrada a 'gratis').
+    row = execute_sql_query(
+        "SELECT plan_tier FROM user_profiles WHERE id = %s LIMIT 1",
+        (user_id,),
+        fetch_one=True,
+    )
+    if row:
+        return row.get("plan_tier") or "gratis"
+    return None
+
 
 def _invalidate_stale_chunks(user_id: str, reason: str):
     """Marca chunks pendientes como 'stale' para que el worker los re-genere con datos frescos."""
@@ -409,7 +528,7 @@ def update_user_health_profile_atomic(user_id: str, mutator):
 
 def update_user_health_profile(user_id: str, health_profile: dict):
     """Sobreescribe el JSONB de health_profile en la base de datos."""
-    if not supabase: return None
+    if not connection_pool: return None
     try:
         # --- GAP 4: Chunk Invalidation Detector (Conservative) ---
         # [P0-5] También detectamos cambio de tz_offset_minutes para sincronizar chunks
@@ -455,9 +574,15 @@ def update_user_health_profile(user_id: str, health_profile: dict):
             logger.warning(f"⚠️ [CHUNK INVALIDATION] Error checking for critical profile changes: {check_e}")
         # ---------------------------------------------------------
 
-        res = supabase.table("user_profiles").update({
-            "health_profile": health_profile
-        }).eq("id", user_id).execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] RETURNING id preserva la
+        # semántica PostgREST "res.data no-vacío si afectó fila" (los callers
+        # solo chequean truthiness; None en error).
+        from psycopg.types.json import Jsonb
+        res = execute_sql_write(
+            "UPDATE user_profiles SET health_profile = %s::jsonb WHERE id = %s RETURNING id",
+            (Jsonb(health_profile), user_id),
+            returning=True,
+        )
 
         # [P0-5] Tras persistir el nuevo perfil, propagar el cambio de TZ a chunks
         # pending/stale del usuario. Lazy import para evitar ciclo (cron_tasks → db).
@@ -470,26 +595,22 @@ def update_user_health_profile(user_id: str, health_profile: dict):
             except Exception as sync_e:
                 logger.warning(f"⚠️ [P0-5] Sync inmediato de TZ falló para {user_id}: {sync_e}")
 
-        return res.data
+        return res
     except Exception as e:
         logger.error(f"Error actualizando health_profile: {e}")
         return None
 
-def log_api_usage(user_id: str, endpoint: str = "gemini"):
+def log_api_usage(user_id: str, endpoint: str = "llm"):
     """Guarda un registro de uso de la API (consume 1 crédito)."""
     if not user_id or user_id == "guest": return None
     try:
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Rama fallback PostgREST eliminada
+        # — sin pool no hay datasource (los datos viven en Neon).
         from db_core import connection_pool
-        if connection_pool:
-            res = execute_sql_write("INSERT INTO api_usage (user_id, endpoint) VALUES (%s, %s)", (user_id, endpoint))
-            return res
-        else:
-            if not supabase: return None
-            res = supabase.table("api_usage").insert({
-                "user_id": user_id,
-                "endpoint": endpoint
-            }).execute()
-            return res.data
+        if not connection_pool:
+            return None
+        res = execute_sql_write("INSERT INTO api_usage (user_id, endpoint) VALUES (%s, %s)", (user_id, endpoint))
+        return res
     except Exception as e:
         logger.error(f"Error registrando api_usage: {e}")
         return None
@@ -504,7 +625,7 @@ def log_api_usage(user_id: str, endpoint: str = "gemini"):
 #
 # `llm_usage_events` (migración p1_cost_instrumentation_2026_05_15.sql) y
 # las dos funciones de abajo cierran ese gap:
-#   - `compute_gemini_cost_micros(model, in, out, cached)` → USD * 1e6.
+#   - `compute_llm_cost_micros(model, in, out, cached)` → USD * 1e6.
 #   - `log_llm_usage_event(...)` → INSERT best-effort post-LLM-success.
 #
 # Persistencia best-effort: cualquier fallo se silencia (no rompe la
@@ -513,45 +634,40 @@ def log_api_usage(user_id: str, endpoint: str = "gemini"):
 # ============================================================
 
 # Pricing default (USD por 1M tokens, expresado en MICROS para evitar
-# floats). Basado en Gemini 3.x preview pricing público a 2026-05.
-# Override sin redeploy via knob `MEALFIT_GEMINI_PRICING_JSON` (JSON string
+# floats). [P0-DEEPSEEK-MIGRATION · 2026-06-12] Basado en pricing oficial
+# DeepSeek V4 (api-docs.deepseek.com, consultado 2026-06-12).
+# Override sin redeploy via knob `MEALFIT_LLM_PRICING_JSON` (JSON string
 # `{"<model_prefix>": {"input": <micros_per_M>, "output": <micros_per_M>,
 # "cached": <micros_per_M>}}`).
 #
 # Match es por prefix-de-modelo (longest-prefix wins) — tolerante a sufijos
-# tipo `gemini-3.1-pro-preview-0514`. Si el modelo es desconocido se retorna
-# None y el evento se persiste sin costo (operador puede backfillar luego
-# ejecutando SQL con tokens × pricing nuevo).
-_DEFAULT_GEMINI_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
-    # [P3-MODEL-DEFAULT-FLASH35 · 2026-05-19] Pricing tier Estándar (paid)
-    # tomado de la doc oficial de Google AI 2026-05-19: input $1.50/M, output
-    # $9.00/M (incluye reasoning tokens), context cache storage $0.15/M.
-    # Tier "Lote"/"Flexible"/"Prioridad" tienen pricing distinto — si la app
-    # migra a esos tiers, override via knob `MEALFIT_GEMINI_PRICING_JSON`.
-    "gemini-3.5-flash":              {"input": 1_500_000, "output":  9_000_000, "cached": 150_000},
-    "gemini-3.1-pro-preview":        {"input": 1_250_000, "output": 10_000_000, "cached": 312_500},
-    "gemini-3.1-flash-preview":      {"input":   300_000, "output":  2_500_000, "cached":  75_000},
-    # [P3-PRICING-DICT-REFRESH · 2026-05-21] Pricing real de Google AI 2026-05-21
-    # tier Estándar (paid): input $0.25/M (text), output $1.50/M, cached $0.025/M.
-    # Pre-fix (P1-COST-INSTRUMENTATION original) tenía valores stale 2.5× por
-    # debajo: $0.10/$0.40/$0.025 — `llm_usage_events.cost_usd_micros` sub-reportaba
-    # significativamente. Audio pricing ($0.50 input / $0.05 cached) NO incluido
-    # — la app no usa modalidad audio. Si Google diferencia más modalidades,
-    # override via knob `MEALFIT_GEMINI_PRICING_JSON`.
-    "gemini-3.1-flash-lite":         {"input":   250_000, "output":  1_500_000, "cached":  25_000},
-    "gemini-3-flash-preview":        {"input":   300_000, "output":  2_500_000, "cached":  75_000},
+# de versión. Si el modelo es desconocido se retorna None y el evento se
+# persiste sin costo (operador puede backfillar luego ejecutando SQL con
+# tokens × pricing nuevo).
+_DEFAULT_LLM_PRICING_MICROS_PER_M: Dict[str, Dict[str, int]] = {
+    # DeepSeek V4 (USD/1M tokens):
+    #   flash: input $0.14 (cache miss) / $0.0028 (cache hit), output $0.28
+    #   pro:   input $0.435 (cache miss) / $0.003625 (cache hit), output $0.87
+    # "cached" = rate por token con cache HIT (DeepSeek context caching es
+    # automático server-side; el usage del API reporta hit/miss).
+    "deepseek-v4-flash": {"input": 140_000, "output": 280_000, "cached": 2_800},
+    "deepseek-v4-pro":   {"input": 435_000, "output": 870_000, "cached": 3_625},
+    # Aliases legacy del API (deprecan 2026-07-24) — mismo pricing que su
+    # equivalente V4. Presentes por si un knob los referencia en transición.
+    "deepseek-chat":     {"input": 140_000, "output": 280_000, "cached": 2_800},
+    "deepseek-reasoner": {"input": 435_000, "output": 870_000, "cached": 3_625},
 }
 
 
 def _resolve_pricing_table() -> Dict[str, Dict[str, int]]:
-    """Combina defaults + override del knob `MEALFIT_GEMINI_PRICING_JSON`.
+    """Combina defaults + override del knob `MEALFIT_LLM_PRICING_JSON`.
 
     Knob es opcional; si falla parsear, log debug y se usa solo defaults
     (fail-safe: no rompe la instrumentación si alguien typea mal el JSON
     en EasyPanel).
     """
-    table = dict(_DEFAULT_GEMINI_PRICING_MICROS_PER_M)
-    raw = os.environ.get("MEALFIT_GEMINI_PRICING_JSON", "").strip()
+    table = dict(_DEFAULT_LLM_PRICING_MICROS_PER_M)
+    raw = os.environ.get("MEALFIT_LLM_PRICING_JSON", "").strip()
     if not raw:
         return table
     try:
@@ -569,7 +685,7 @@ def _resolve_pricing_table() -> Dict[str, Dict[str, int]]:
     return table
 
 
-def compute_gemini_cost_micros(
+def compute_llm_cost_micros(
     model: Optional[str],
     input_tokens: Optional[int],
     output_tokens: Optional[int],
@@ -634,7 +750,7 @@ def log_llm_usage_event(
     if not model:
         return
     try:
-        cost_micros = compute_gemini_cost_micros(
+        cost_micros = compute_llm_cost_micros(
             model, input_tokens, output_tokens, cached_tokens or 0
         )
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
@@ -653,18 +769,8 @@ def log_llm_usage_event(
                     cost_micros, meta_json,
                 ),
             )
-        elif supabase:
-            supabase.table("llm_usage_events").insert({
-                "user_id": user_id,
-                "plan_id": plan_id,
-                "model": model,
-                "node": node,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cached_tokens": cached_tokens,
-                "cost_usd_micros": cost_micros,
-                "metadata": metadata or {},
-            }).execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Rama fallback PostgREST eliminada:
+        # sin pool el evento se pierde (best-effort, mismo contrato que un fallo).
     except Exception as e:
         try:
             logger.debug(
@@ -683,26 +789,15 @@ def get_monthly_api_usage(user_id: str) -> int:
         now = datetime.now()
         start_date = datetime(now.year, now.month, 1).isoformat()
         
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Rama fallback PostgREST (con su
+        # retry loop específico de red REST) eliminada — pool o nada.
         from db_core import connection_pool
-        if connection_pool:
-            res = execute_sql_query("SELECT count(*) as total FROM api_usage WHERE user_id = %s AND created_at >= %s", (user_id, start_date), fetch_one=True)
-            if res and 'total' in res:
-                return int(res['total'])
+        if not connection_pool:
             return 0
-        else:
-            if not supabase: return 0
-            max_retries = 2
-            for attempt in range(max_retries):
-                try:
-                    res = supabase.table("api_usage").select("*", count="exact").eq("user_id", user_id).gte("created_at", start_date).execute()
-                    return res.count if hasattr(res, 'count') and res.count is not None else 0
-                except Exception as inner_e:
-                    if attempt < max_retries - 1:
-                        import time
-                        time.sleep(0.5)
-                        continue
-                    logger.error(f"Error supabase get_monthly_api_usage: {inner_e}")
-                    return 0
+        res = execute_sql_query("SELECT count(*) as total FROM api_usage WHERE user_id = %s AND created_at >= %s", (user_id, start_date), fetch_one=True)
+        if res and 'total' in res:
+            return int(res['total'])
+        return 0
     except Exception as e:
         logger.error(f"Error obteniendo api_usage mensual: {e}")
         return 0
@@ -712,39 +807,40 @@ def migrate_guest_data(session_ids: list, new_user_id: str):
     Migra todos los datos asociados a uno o varios session_ids temporales
     (creados cuando el usuario era invitado) hacia el nuevo UUID del usuario registrado.
     """
-    if not supabase or not session_ids or not new_user_id: 
+    if not connection_pool or not session_ids or not new_user_id:
         return False
-    
+
     try:
-        # 1. Actualizar agent_sessions para vincular historiales de chat
-        supabase.table("agent_sessions").update({"user_id": new_user_id}).in_("id", session_ids).execute()
-        
-        # 2. Actualizar visual_diary (Vectores/Diario Visual)
-        supabase.table("visual_diary").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
-        
-        # 3. Actualizar user_facts (Vectores/Memoria a largo plazo)
-        supabase.table("user_facts").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
-        
-        # 4. Actualizar meal_plans (Planes guardados como guest, si los hubiera)
-        supabase.table("meal_plans").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
-        
-        # 5. Actualizar consumed_meals (Comidas registradas)
-        supabase.table("consumed_meals").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
-        
-        # 6. Actualizar pending_facts_queue
-        supabase.table("pending_facts_queue").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
-        
-        # 7. Actualizar meal_rejections (Ojo: estas usan session_id o user_id)
-        # Primero intentamos por session_id (como se guardan usualmente los rechazos guest)
-        supabase.table("meal_rejections").update({"user_id": new_user_id}).in_("session_id", session_ids).execute()
-        # Y también por user_id por si acaso
-        supabase.table("meal_rejections").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
-        
-        # 8. Actualizar meal_likes
-        supabase.table("meal_likes").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
-        
-        # 9. Actualizar Inventario Físico (Despensa)
-        supabase.table("user_inventory").update({"user_id": new_user_id}).in_("user_id", session_ids).execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Las 10 updates PostgREST
+        # secuenciales ahora corren en UNA transacción (migra todo o nada —
+        # antes un fallo a mitad dejaba la migración parcial committeada).
+        # Columnas uuid requieren cast %s::uuid[]: psycopg adapta list[str]
+        # como text[] y `uuid = ANY(text[])` no resuelve operador.
+        # meal_rejections.session_id es TEXT — esa va sin cast.
+        ids = list(session_ids)
+        execute_sql_transaction([
+            # 1. agent_sessions: vincular historiales de chat (filtro por PK id)
+            ("UPDATE agent_sessions SET user_id = %s WHERE id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 2. visual_diary (Vectores/Diario Visual)
+            ("UPDATE visual_diary SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 3. user_facts (Vectores/Memoria a largo plazo)
+            ("UPDATE user_facts SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 4. meal_plans (planes guardados como guest, si los hubiera)
+            ("UPDATE meal_plans SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 5. consumed_meals (comidas registradas)
+            ("UPDATE consumed_meals SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 6. pending_facts_queue
+            ("UPDATE pending_facts_queue SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 7. meal_rejections: primero por session_id (así se guardan los
+            # rechazos guest; columna TEXT)...
+            ("UPDATE meal_rejections SET user_id = %s WHERE session_id = ANY(%s)", (new_user_id, ids)),
+            # ...y también por user_id por si acaso
+            ("UPDATE meal_rejections SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 8. meal_likes
+            ("UPDATE meal_likes SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
+            # 9. user_inventory (Inventario Físico / Despensa)
+            ("UPDATE user_inventory SET user_id = %s WHERE user_id = ANY(%s::uuid[])", (new_user_id, ids)),
+        ])
         # 10. Recalcular frecuencias de ingredientes a partir de los planes migrados
         # Sin esto, el usuario registrado parte con freq=0 y pierde el historial de variedad.
         try:
@@ -786,7 +882,10 @@ def reset_user_account_preferences(user_id: str) -> bool:
     cuenta consistente. Pre-fix, un fallo en el statement #5 (después de
     borrar #1-4) dejaba la cuenta en estado parcial.
     """
-    if not supabase or not user_id or user_id == "guest":
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] `supabase` ya no es precondición:
+    # el reset es 100% SQL; el purge de Storage (best-effort) valida su
+    # propio cliente internamente.
+    if not user_id or user_id == "guest":
         return False
 
     if not connection_pool:
@@ -925,8 +1024,10 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
         "errors": [],
         "storage_objects_removed": 0,
     }
-    if not supabase or not connection_pool or not user_id or user_id == "guest":
-        result["errors"].append("precondición inválida (supabase/pool/user_id)")
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] `supabase` fuera de la precondición:
+    # la purga de datos es 100% SQL; Storage (best-effort) chequea su cliente.
+    if not connection_pool or not user_id or user_id == "guest":
+        result["errors"].append("precondición inválida (pool/user_id)")
         return result
     try:
         uuid.UUID(str(user_id))
@@ -989,13 +1090,16 @@ def update_long_term_memory_enabled(user_id: str, enabled: bool) -> bool:
     Devuelve True si el UPDATE afectó una fila. Filtrado por user_id
     (invariante I2: toda mutación a user_profiles requiere user_id explícito).
     """
-    if not supabase:
+    if not connection_pool:
         return False
     try:
-        res = supabase.table("user_profiles").update(
-            {"long_term_memory_enabled": bool(enabled)}
-        ).eq("id", user_id).execute()
-        return bool(res.data)
+        # I2: filtro por id=user_id. RETURNING id → "afectó una fila".
+        res = execute_sql_write(
+            "UPDATE user_profiles SET long_term_memory_enabled = %s WHERE id = %s RETURNING id",
+            (bool(enabled), user_id),
+            returning=True,
+        )
+        return bool(res)
     except Exception as e:
         logger.error(f"❌ Error update_long_term_memory_enabled({user_id}, {enabled}): {e}")
         return False
@@ -1010,13 +1114,17 @@ def update_water_tracker_enabled(user_id: str, enabled: bool) -> bool:
     (invariante I2). Default TRUE — el toggle se apaga explícitamente
     por el usuario desde Preferencias.
     """
-    if not supabase:
+    if not connection_pool:
         return False
     try:
-        res = supabase.table("user_profiles").update(
-            {"water_tracker_enabled": bool(enabled)}
-        ).eq("id", user_id).execute()
-        return bool(res.data)
+        # I2: filtro por id=user_id (equivalente PostgREST legacy: .eq("id", user_id)).
+        # RETURNING id → "afectó una fila".
+        res = execute_sql_write(
+            "UPDATE user_profiles SET water_tracker_enabled = %s WHERE id = %s RETURNING id",
+            (bool(enabled), user_id),
+            returning=True,
+        )
+        return bool(res)
     except Exception as e:
         logger.error(f"❌ Error update_water_tracker_enabled({user_id}, {enabled}): {e}")
         return False
@@ -1026,18 +1134,16 @@ def get_water_tracker_enabled(user_id: str) -> bool:
     """Lee el flag `water_tracker_enabled` para `user_id`. Fail-secure:
     cualquier excepción / fila inexistente → True (default, mismo que la
     columna DB)."""
-    if not supabase or not user_id:
+    if not connection_pool or not user_id:
         return True
     try:
-        res = (
-            supabase.table("user_profiles")
-            .select("water_tracker_enabled")
-            .eq("id", user_id)
-            .limit(1)
-            .execute()
+        row = execute_sql_query(
+            "SELECT water_tracker_enabled FROM user_profiles WHERE id = %s LIMIT 1",
+            (user_id,),
+            fetch_one=True,
         )
-        if res and res.data and len(res.data) > 0:
-            val = res.data[0].get("water_tracker_enabled")
+        if row:
+            val = row.get("water_tracker_enabled")
             if val is None:
                 return True
             return bool(val)
@@ -1063,19 +1169,16 @@ def get_water_intake_glasses_today(user_id: str, log_date: str) -> int:
     Returns:
         int: número de vasos registrados hoy (0..14).
     """
-    if not supabase or not user_id or not log_date:
+    if not connection_pool or not user_id or not log_date:
         return 0
     try:
-        res = (
-            supabase.table("water_intake_log")
-            .select("glasses")
-            .eq("user_id", user_id)
-            .eq("log_date", log_date)
-            .limit(1)
-            .execute()
+        row = execute_sql_query(
+            "SELECT glasses FROM water_intake_log WHERE user_id = %s AND log_date = %s LIMIT 1",
+            (user_id, log_date),
+            fetch_one=True,
         )
-        if res and res.data and len(res.data) > 0:
-            return int(res.data[0].get("glasses") or 0)
+        if row:
+            return int(row.get("glasses") or 0)
         return 0
     except Exception as e:
         logger.warning(

@@ -36,7 +36,9 @@ def _sentiment_llm_timeout_s() -> float:
 
 
 def _sentiment_model_name() -> str:
-    return _env_str("MEALFIT_SENTIMENT_MODEL", "gemini-3.1-flash-lite")
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default DeepSeek V4 Flash (aux barato).
+    from llm_provider import DEEPSEEK_FLASH
+    return _env_str("MEALFIT_SENTIMENT_MODEL", DEEPSEEK_FLASH)
 
 
 @lru_cache(maxsize=1)
@@ -46,13 +48,12 @@ def _get_classifier_model():
     Nota: el `@lru_cache(maxsize=1)` fija el `timeout=`/`model=` al primer build;
     cambiar el knob requiere reinicio del worker (aceptable — son knobs de
     operación, no intra-request)."""
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    return ChatGoogleGenerativeAI(
+    from llm_provider import ChatDeepSeek  # [P0-DEEPSEEK-MIGRATION]
+    return ChatDeepSeek(
         model=_sentiment_model_name(),
         temperature=0.0,
         max_output_tokens=10,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
-        # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline gRPC duro.
+        # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline duro del request.
         timeout=_sentiment_llm_timeout_s()
     )
 

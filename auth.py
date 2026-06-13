@@ -2,7 +2,12 @@ import asyncio
 import logging
 from typing import Optional
 from fastapi import Header, Depends, HTTPException
-from db import get_monthly_api_usage, get_user_profile, supabase
+from db import (
+    ensure_user_profile_exists,
+    get_monthly_api_usage,
+    get_user_profile,
+    supabase,
+)
 from knobs import _env_int  # [P3-TIER-LIMITS-ENV · 2026-05-20] auto-registry
 
 logger = logging.getLogger(__name__)
@@ -139,7 +144,26 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
             )
             raise HTTPException(status_code=403, detail="Token validation failed.")
         if user_res and getattr(user_res, "user", None):
-            return user_res.user.id
+            _u = user_res.user
+            # [P1-NEON-DB-MIGRATION · 2026-06-12] Garantiza la fila espejo en
+            # public.user_profiles (reemplaza el trigger handle_new_user de
+            # Supabase — en Neon no existe el schema auth). Cacheado
+            # in-process: tras el primer request del usuario es un no-op puro
+            # sin roundtrip. to_thread: el INSERT es sync (pool psycopg).
+            try:
+                await asyncio.to_thread(
+                    ensure_user_profile_exists,
+                    _u.id,
+                    getattr(_u, "email", None),
+                    (getattr(_u, "user_metadata", None) or {}).get("full_name"),
+                )
+            except Exception as ensure_err:
+                # Best-effort: el JWT ya validó — no bloquear auth por esto.
+                logger.warning(
+                    f"[P1-NEON-DB-MIGRATION] ensure_user_profile_exists lanzó "
+                    f"{type(ensure_err).__name__} (auth continúa)"
+                )
+            return _u.id
         # Token formalmente válido pero user inexistente (orphan token tras
         # delete de la cuenta). Tratamos como no-auth — el caller decide.
         return None

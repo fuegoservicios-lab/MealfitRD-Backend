@@ -6,11 +6,14 @@ import threading
 import time as _time_module
 from typing import Any, Callable
 from cache_manager import centralized_cache
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek (router por tier en
+# llm_provider). Embeddings via capa pluggable embeddings_provider.
+from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
+from embeddings_provider import get_text_embedding
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 
-from knobs import _env_str, _env_float, _env_int, thinking_budget_kwargs  # [P2-COST-THINKING-CAP-EXT · 2026-06-01]
+from knobs import _env_str, _env_float, _env_int
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +48,8 @@ from db import (
 #
 # Knobs:
 #   - MEALFIT_FACT_EXTRACTOR_SHADOW_MODEL (str, default '' = off)
-#       Setear a 'gemini-3-flash-preview' (o 'gemini-3.1-flash-lite'
-#       para test más agresivo) para activar.
+#       Setear a un model ID alternativo (e.g. 'deepseek-v4-pro' para medir
+#       si PRO extrae mejor que el default flash) para activar el A/B.
 #   - MEALFIT_FACT_EXTRACTOR_SHADOW_SAMPLE_RATE (float, default 0.1)
 #       Fracción de users que ejecutan el shadow (estable por hash(user_id)).
 _FACT_SHADOW_MODEL = _env_str("MEALFIT_FACT_EXTRACTOR_SHADOW_MODEL", "")
@@ -68,13 +71,18 @@ _FACT_SHADOW_SAMPLE_RATE = _env_float(
 # estos knobs, una deprecation de Google tira la extracción de hechos
 # hasta redeploy (45min Easypanel cold start). Tooltip-anchor:
 # P2-NEW-FACTEX-PRIMARY-MODEL-KNOB.
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Defaults DeepSeek V4 Flash: la
+# extracción de hechos es tarea de background (structured extraction a
+# schema) — corre en el modelo barato para TODOS los tiers. Override sin
+# redeploy via knob (e.g. `deepseek-v4-pro` si la calidad de extracción
+# clínica degrada visiblemente).
 _FACT_EXTRACTOR_PRIMARY_MODEL = _env_str(
     "MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL",
-    "gemini-3.5-flash",
+    DEEPSEEK_FLASH,
 )
 _FACT_EXTRACTOR_ROUTER_MODEL = _env_str(
     "MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL",
-    "gemini-3.1-flash-lite",
+    DEEPSEEK_FLASH,
 )
 
 
@@ -111,20 +119,10 @@ def _fact_extractor_llm_timeout_s() -> float:
     )
 
 
-# [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] Cohorte omitida del sweep original:
-# `GoogleGenerativeAIEmbeddings` (NO `ChatGoogleGenerativeAI`). En
-# `langchain-google-genai` el constructor de embeddings NO acepta `timeout=`
-# ni cablea `request_options`; el único arg que llega al cliente httpx (y por
-# tanto acota el deadline read/connect) es `client_args` → `HttpOptions(
-# client_args=...)` → `httpx.Client(timeout=<s>)` (verificado en el source de
-# la versión instalada). Sin esto, un socket de embedding colgado bloquea el
-# thread del bg-pool / fact-lock para siempre. `_env_float` con clamp.
-def _embeddings_llm_timeout_s() -> float:
-    return _env_float(
-        "MEALFIT_EMBEDDING_LLM_TIMEOUT_S",
-        15.0,
-        validator=lambda v: 0.0 < v <= 60.0,
-    )
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] El timeout de embeddings
+# (`MEALFIT_EMBEDDING_LLM_TIMEOUT_S`, lección P2-LLM-TIMEOUT-SWEEP) ahora se
+# aplica DENTRO de `embeddings_provider._embeddings_timeout_s` — un solo
+# punto para todos los surfaces de embeddings.
 
 
 def _fact_extractor_router_llm_timeout_s() -> float:
@@ -257,21 +255,10 @@ def _invoke_with_shadow(
     + skip. Cero impacto sobre la respuesta del endpoint.
     """
     pro_t0 = _time_module.monotonic()
-    pro_llm = ChatGoogleGenerativeAI(
+    pro_llm = ChatDeepSeek(
         model=pro_model,
         temperature=pro_temperature,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_fact_extractor_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
-        # [P2-COST-THINKING-CAP-EXT · 2026-06-01] Cap reasoning del PRO de
-        # extracción/clasificación de hechos (output a schema FactsModel /
-        # BatchContradictionResult). gemini-3.5-flash es thinking-capable; el
-        # reasoning factura como output a $9/M en una tarea de extracción
-        # estructurada. Techo 2048 deja holgura sobrada para el path de
-        # contradicción/merge (gestión de datos, NO razonamiento de seguridad
-        # clínica — eso vive en reviewer/fact-checker). Knob
-        # MEALFIT_FACT_EXTRACTOR_THINKING_BUDGET (-1 = sin cap). El shadow A/B
-        # NO se capea (mide el modelo barato puro). flash-lite → no-op.
-        **thinking_budget_kwargs(pro_model, "MEALFIT_FACT_EXTRACTOR_THINKING_BUDGET", 2048),
     ).with_structured_output(output_schema)
     pro_result = pro_llm.invoke(prompt)
     pro_duration_ms = int((_time_module.monotonic() - pro_t0) * 1000)
@@ -284,10 +271,9 @@ def _invoke_with_shadow(
     def _shadow_worker(pro_res=pro_result, pro_ms=pro_duration_ms):
         try:
             flash_t0 = _time_module.monotonic()
-            flash_llm = ChatGoogleGenerativeAI(
+            flash_llm = ChatDeepSeek(
                 model=_FACT_SHADOW_MODEL,
                 temperature=pro_temperature,
-                google_api_key=os.environ.get("GEMINI_API_KEY"),
                 timeout=_fact_extractor_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
             ).with_structured_output(output_schema)
             flash_res = flash_llm.invoke(prompt)
@@ -375,10 +361,9 @@ def should_extract_facts(user_message: str) -> bool:
     Mensaje: "{user_message}"
     """
     
-    llm = ChatGoogleGenerativeAI(
+    llm = ChatDeepSeek(
         model=_fact_extractor_router_model_name(),
         temperature=0.0,
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
         timeout=_fact_extractor_router_llm_timeout_s(),  # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
     ).with_structured_output(RouterResult)
     
@@ -516,61 +501,73 @@ def extract_facts(user_message: str, recent_history: str = "", user_id: Optional
 CACHE_TTL_PERMANENT = 3153600000  # ~100 years — embeddings are deterministic for the same input
 
 @centralized_cache(ttl_seconds=CACHE_TTL_PERMANENT, maxsize=10000, cache_empty=False)
-def get_embedding(text: str) -> list:
-    """Genera un vector embedding usando Gemini embedding (Caché Distribuido).
+def _cached_text_embedding(text: str, model_id: str, purpose: str) -> list:
+    """[P1-COHERE-EMBED-V4 · 2026-06-12] Capa cacheada REAL del embedding.
 
-    Modelo TEXT-ONLY configurable vía `constants.GEMINI_EMBEDDING_TEXT_MODEL`
-    (knob `MEALFIT_GEMINI_EMBEDDING_TEXT_MODEL`). Default `gemini-embedding-001`
-    estable. Caso de uso: knowledge graph de facts del usuario — todo texto.
+    La cache key del decorador se construye con (func, args) — por eso
+    `model_id` y `purpose` son ARGUMENTOS: versionan el caché Redis (TTL
+    ~100 años) por espacio vectorial (`embed-v4.0@1536`) y por lado
+    (`query`/`document`, Embed v4 es asimétrico). Sin esto, un switch de
+    provider serviría vectores del espacio ANTERIOR desde Redis — mezcla
+    silenciosa que rompe toda similarity (bug detectado en la migración
+    Gemini→Cohere).
+
+    El error queda visible vía `logger.error` (P3-3): el del provider lo
+    emite `embeddings_provider.get_text_embedding` (un solo punto para
+    todos los surfaces); este wrapper conserva un except defensivo con
+    contexto `text_len` por si el provider mismo es inimportable.
+    """
+    try:
+        emb = get_text_embedding(text, purpose=purpose)
+        if not emb:
+            return []
+        logger.debug(
+            f"[EMBEDDING CACHE] MISS → Generado embedding ({model_id}/{purpose}) "
+            f"para: '{text[:50]}...'"
+        )
+        return list(emb)
+    except Exception as e:
+        # [P3-3 · 2026-05-10] logger.error (no print) — feed Sentry/alerting.
+        logger.error(
+            f"[EMBEDDING] Falló get_embedding (provider import/runtime, "
+            f"text_len={len(text)}): {type(e).__name__}: {e}"
+        )
+        return []
+
+
+def get_embedding(text: str, purpose: str = "query") -> list:
+    """Genera un vector embedding via `embeddings_provider` (Caché Distribuido).
+
+    [P1-COHERE-EMBED-V4 · 2026-06-12] Provider de producción: Cohere Embed
+    v4 (`embed-v4.0`, dim 1536 — igual que las columnas pgvector tras la
+    migración `p1_cohere_embed_v4_vector_dims`). `purpose="document"` SOLO
+    para textos que se PERSISTEN para retrieval asimétrico (user_facts);
+    `"query"` (default) para todos los lados de búsqueda y comparaciones
+    simétricas. La asimetría input_type es la palanca de precisión del RAG.
 
     [P3-3 · 2026-05-10] Política de fallo: fail-fast con `return []`.
     Decisión deliberada (no se implementa fallback a modelo alternativo):
-      1. **Modelo único**: el knob `GEMINI_EMBEDDING_TEXT_MODEL` define UN
-         modelo. Cambiar a fallback automático requeriría un segundo knob
-         + versionado del cache (las dimensiones del vector pueden diferir
-         entre modelos y romper similaridad search).
+      1. **Modelo único**: el knob del provider define UN modelo. Fallback
+         automático requeriría doble versionado del cache y mezcla de
+         espacios vectoriales en pgvector.
       2. **Cache persistente**: `CACHE_TTL_PERMANENT = ~100 años` para los
-         embeddings EXITOSOS (deterministas para el mismo input). El fallo
-         `[]` NO se cachea — `cache_empty=False` (P2-EMBED-NO-CACHE-EMPTY ·
-         2026-05-30). Pre-fix el decorador cacheaba `[]` bajo el TTL de ~100
-         años, así que una excepción transitoria (timeout/429) envenenaba ese
-         texto para siempre y el hecho clínico se saltaba indefinidamente
-         (consumidores hacen `if not emb: skip`). Ahora un fallo transitorio se
+         embeddings EXITOSOS (deterministas para el mismo input + modelo +
+         purpose). El fallo `[]` NO se cachea — `cache_empty=False`
+         (P2-EMBED-NO-CACHE-EMPTY · 2026-05-30): un fallo transitorio se
          re-intenta en el siguiente llamado del mismo texto.
       3. **Downstream tolera []**: los consumidores (`async_extract_and_save_facts`,
          hybrid search en `agent.py`, `proactive_agent.py`) chequean
          `if not emb: skip/degrade` y siguen el flujo sin propagar.
-
-    El error queda visible vía `logger.error` (P3-3 — antes era `print(...)`
-    invisible a Sentry / log aggregation). Si la frecuencia de error sube en
-    `pipeline_metrics` o en Sentry, abrir P-fix dedicado con la decisión
-    fallback explícita (ej. degradar a modelo legacy con dim conversion).
     """
-    _model_name = "<unknown>"
-    try:
-        from constants import GEMINI_EMBEDDING_TEXT_MODEL
-        _model_name = GEMINI_EMBEDDING_TEXT_MODEL
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model=GEMINI_EMBEDDING_TEXT_MODEL,
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
-            # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline httpx (ver helper).
-            client_args={"timeout": _embeddings_llm_timeout_s()},
-        )
-        emb = embeddings.embed_query(text)
-        logger.debug(f"[EMBEDDING CACHE] MISS → Generado embedding para: '{text[:50]}...'")
-        return list(emb[:768])
-    except Exception as e:
-        # [P3-3 · 2026-05-10] logger.error (no print) — feed Sentry/alerting.
-        # Si esto se ve con frecuencia, el knob fail-fast deja un trail
-        # diagnosticable sin sentry_sdk.capture explícito (sentry captura
-        # error-level logs por default). `_model_name` se bindea ANTES del
-        # import, así que aunque el import de constants falle, el log es
-        # informativo (model=<unknown>).
-        logger.error(
-            f"[EMBEDDING] Falló get_embedding (modelo={_model_name!r}, "
-            f"text_len={len(text)}): {type(e).__name__}: {e}"
-        )
-        return []
+    from embeddings_provider import get_embeddings_model_id
+
+    # model_id en la key versiona el caché por espacio vectorial; con
+    # provider inactivo retorna "disabled" → el resultado [] NO se cachea
+    # (cache_empty=False), así que esa key jamás acumula entradas.
+    model_id = get_embeddings_model_id()
+    if purpose not in ("query", "document"):
+        purpose = "query"
+    return _cached_text_embedding(text, model_id, purpose)
 
 CRITICAL_CATEGORIES = {"condicion_medica", "alergia", "dieta", "objetivo"}
 
@@ -594,7 +591,11 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
         if not fact_text:
             continue
         
-        emb = get_embedding(fact_text)
+        # [P1-COHERE-EMBED-V4] purpose="document": este vector se PERSISTE en
+        # user_facts.embedding para retrieval asimétrico (las queries del RAG
+        # del chat/pipeline llegan con search_query). La similar-search de
+        # abajo compara doc-vs-doc (simétrica dentro del espacio document).
+        emb = get_embedding(fact_text, purpose="document")
         if not emb:
             continue
         
@@ -743,7 +744,7 @@ def _run_fact_pipeline(user_id: str, fact_items: list, log_prefix: str = ""):
 
     merge_count = 0
     for mf in merged_facts_to_save:
-        merged_emb = get_embedding(mf["fact_text"])
+        merged_emb = get_embedding(mf["fact_text"], purpose="document")  # [P1-COHERE-EMBED-V4] se persiste
         if not merged_emb:
             _cat = (mf.get("metadata") or {}).get("category")
             logger.error(
@@ -772,7 +773,7 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
     """
     Función orquestadora para ser ejecutada en background.
     Extrae hechos estructurados de un mensaje, revisa contradicciones con la DB
-    usando BATCHING (una sola llamada a Gemini para todos los hechos),
+    usando BATCHING (una sola llamada LLM para todos los hechos),
     borra los obsoletos y guarda los nuevos vectorizados y etiquetados.
     """
     try:

@@ -5,7 +5,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 import os
 import logging
 logger = logging.getLogger(__name__)
-from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
+from db_core import connection_pool, execute_sql_query, execute_sql_write
 from constants import strip_accents, GLOBAL_REVERSE_MAP
 from db_chat import insert_rejection, save_message
 from db_profiles import get_user_profile, update_user_health_profile, update_user_health_profile_atomic
@@ -70,20 +70,19 @@ def upsert_pending_pipeline(user_id: str, status: str = "generating",
                 pass
 
         key = _pending_pipeline_kv_key(user_id)
-        if connection_pool:
-            execute_sql_write(
-                """
-                INSERT INTO app_kv_store (key, value, updated_at)
-                VALUES (%s, %s::jsonb, NOW())
-                ON CONFLICT (key) DO UPDATE
-                  SET value = EXCLUDED.value, updated_at = NOW()
-                """,
-                (key, _json.dumps(payload)),
-            )
-        elif supabase:
-            supabase.table("app_kv_store").upsert({
-                "key": key, "value": payload,
-            }).execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback PostgREST eliminado:
+        # post-Neon el pool es mandatorio (un fallback REST apuntaría a la DB
+        # equivocada). Si el pool no está, execute_sql_write lanza y el except
+        # de abajo preserva el contrato best-effort (False + warning).
+        execute_sql_write(
+            """
+            INSERT INTO app_kv_store (key, value, updated_at)
+            VALUES (%s, %s::jsonb, NOW())
+            ON CONFLICT (key) DO UPDATE
+              SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            (key, _json.dumps(payload)),
+        )
         return True
     except Exception as e:
         # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Elevado de debug→warning para
@@ -103,19 +102,14 @@ def get_pending_pipeline(user_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         key = _pending_pipeline_kv_key(user_id)
-        if connection_pool:
-            row = execute_sql_query(
-                "SELECT value, updated_at FROM app_kv_store WHERE key = %s",
-                (key,), fetch_one=True
-            )
-            if not row:
-                return None
-            return row.get("value") or None
-        elif supabase:
-            res = supabase.table("app_kv_store").select("value, updated_at").eq("key", key).limit(1).execute()
-            if res.data and len(res.data) > 0:
-                return res.data[0].get("value")
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback PostgREST eliminado (pool mandatorio).
+        row = execute_sql_query(
+            "SELECT value, updated_at FROM app_kv_store WHERE key = %s",
+            (key,), fetch_one=True
+        )
+        if not row:
             return None
+        return row.get("value") or None
     except Exception as e:
         # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Elevado de debug→warning.
         logger.warning(
@@ -162,10 +156,8 @@ def clear_pending_pipeline(user_id: str) -> bool:
         return False
     try:
         key = _pending_pipeline_kv_key(user_id)
-        if connection_pool:
-            execute_sql_write("DELETE FROM app_kv_store WHERE key = %s", (key,))
-        elif supabase:
-            supabase.table("app_kv_store").delete().eq("key", key).execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback PostgREST eliminado (pool mandatorio).
+        execute_sql_write("DELETE FROM app_kv_store WHERE key = %s", (key,))
         return True
     except Exception as e:
         # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Elevado de debug→warning.
@@ -962,11 +954,15 @@ def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[
 
 def get_latest_meal_plan(user_id: str):
     """Obtiene el JSON del plan de comidas más reciente del usuario."""
-    if not supabase: return None
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo.
+    if not connection_pool: return None
     try:
-        res = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-        if res.data and len(res.data) > 0:
-            return res.data[0].get("plan_data")
+        row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+            (user_id,), fetch_one=True
+        )
+        if row:
+            return row.get("plan_data")
         return None
     except Exception as e:
         logger.error(f"Error obteniendo plan actual: {e}")
@@ -974,13 +970,17 @@ def get_latest_meal_plan(user_id: str):
 
 def get_recent_plans(user_id: str, days: int = 14) -> list:
     """Obtiene los JSON de los planes recientes dentro del rango de días especificado."""
-    if not supabase: return []
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo.
+    if not connection_pool: return []
     try:
         from datetime import datetime, timezone, timedelta
-        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        res = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).gte("created_at", cutoff_date).order("created_at", desc=True).execute()
-        if res.data:
-            return [row.get("plan_data") for row in res.data if row.get("plan_data")]
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+        rows = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE user_id = %s AND created_at >= %s ORDER BY created_at DESC",
+            (user_id, cutoff_date), fetch_all=True
+        )
+        if rows:
+            return [row.get("plan_data") for row in rows if row.get("plan_data")]
         return []
     except Exception as e:
         logger.error(f"Error obteniendo planes recientes: {e}")
@@ -988,12 +988,16 @@ def get_recent_plans(user_id: str, days: int = 14) -> list:
 
 def get_recent_meals_from_plans(user_id: str, days: int = 5):
     """Obtiene una lista de nombres de comidas de los planes recientes para evitar repeticiones."""
-    if not supabase: return []
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo.
+    if not connection_pool: return []
     try:
-        res = supabase.table("meal_plans").select("plan_data, meal_names").eq("user_id", user_id).order("created_at", desc=True).limit(days).execute()
+        rows = execute_sql_query(
+            "SELECT plan_data, meal_names FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+            (user_id, days), fetch_all=True
+        )
         meals = set() # 👈 Usar un Set evita enviar nombres duplicados al LLM y ahorra tokens
-        if res.data:
-            for row in res.data:
+        if rows:
+            for row in rows:
                 meal_names_sql = row.get("meal_names")
                 if meal_names_sql:
                     # 🚀 Fast Path O(1)
@@ -1015,27 +1019,8 @@ def get_recent_meals_from_plans(user_id: str, days: int = 5):
                                      meals.add(meal_name)
         return list(meals)
     except Exception as e:
-        error_msg = str(e)
-        if "meal_names" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
-            try:
-                logger.warning("⚠️ [DB] Columna meal_names ausente en GET, usando fallback O(N)...")
-                res_fb = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(days).execute()
-                meals_fb = set()
-                if res_fb.data:
-                    for row in res_fb.data:
-                        plan_data = row.get("plan_data", {})
-                        if isinstance(plan_data, dict):
-                             for day in plan_data.get("days", []):
-                                 for meal in day.get("meals", []):
-                                     if meal.get("name"): meals_fb.add(meal.get("name"))
-                             if "meals" in plan_data:
-                                 for meal in plan_data.get("meals", []):
-                                     if meal.get("name"): meals_fb.add(meal.get("name"))
-                return list(meals_fb)
-            except Exception as e2:
-                logger.error(f"Error obteniendo comidas recientes (fallback): {e2}")
-                return []
-                
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback PGRST205 (columna
+        # meal_names ausente) eliminado: la columna existe en el schema Neon.
         logger.error(f"Error obteniendo comidas recientes: {e}")
         return []
 
@@ -1044,13 +1029,20 @@ def get_recent_techniques(user_id: str, limit: int = 5) -> list:
     Retorna una lista de tuplas (technique, created_at) para que el caller pueda aplicar decaimiento temporal.
     Ejemplo: [('Horneado Saludable', '2026-03-18T...'), ('Al Vapor', '2026-03-15T...')]
     """
-    if not supabase or not user_id or user_id == "guest": return []
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo. `created_at::text`
+    # preserva el contrato string ISO que el caller parsea (graph_orchestrator
+    # `_select_techniques` hace `.endswith("Z")` + fromisoformat sobre el valor).
+    if not connection_pool or not user_id or user_id == "guest": return []
     try:
-        res = supabase.table("meal_plans").select("techniques, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        rows = execute_sql_query(
+            "SELECT techniques, created_at::text AS created_at FROM meal_plans "
+            "WHERE user_id = %s ORDER BY meal_plans.created_at DESC LIMIT %s",
+            (user_id, limit), fetch_all=True
+        )
         # Retornar lista de tuplas CON duplicados y timestamps para decaimiento temporal.
         techniques = []
-        if res.data:
-            for row in res.data:
+        if rows:
+            for row in rows:
                 techs = row.get("techniques")
                 created_at = row.get("created_at", "")
                 if techs and isinstance(techs, list):
@@ -1059,22 +1051,22 @@ def get_recent_techniques(user_id: str, limit: int = 5) -> list:
                             techniques.append((t, created_at))
         return techniques
     except Exception as e:
-        error_msg = str(e)
-        if "techniques" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
-            # La columna aún no existe en la DB → retornar vacío silenciosamente
-            return []
         logger.error(f"Error obteniendo técnicas recientes: {e}")
         return []
 
 def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
     """Extrae los ingredientes crudos directamente del JSON o de la columna optimizada si existe.
     Retorna una lista plana de strings de ingredientes."""
-    if not supabase or not user_id: return []
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo.
+    if not connection_pool or not user_id: return []
     try:
-        res = supabase.table("meal_plans").select("plan_data, ingredients").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+        rows = execute_sql_query(
+            "SELECT plan_data, ingredients FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT %s",
+            (user_id, limit), fetch_all=True
+        )
         all_ingredients = []
-        if res.data:
-            for row in res.data:
+        if rows:
+            for row in rows:
                 ingredients_sql = row.get("ingredients")
                 if ingredients_sql:
                     # 🚀 Fast Path O(1)
@@ -1090,43 +1082,21 @@ def get_ingredient_frequencies_from_plans(user_id: str, limit: int = 5) -> list:
                                     all_ingredients.extend(ingredients)
         return all_ingredients
     except Exception as e:
-        error_msg = str(e)
-        if "ingredients" in error_msg or "PGRST205" in error_msg or "Could not find" in error_msg:
-            try:
-                logger.warning("⚠️ [DB] Columna ingredients ausente en GET, usando fallback O(N)...")
-                res_fb = supabase.table("meal_plans").select("plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
-                all_ings_fb = []
-                if res_fb.data:
-                    for row in res_fb.data:
-                        plan_data = row.get("plan_data", {})
-                        if isinstance(plan_data, dict):
-                            for day in plan_data.get("days", []):
-                                for meal in day.get("meals", []):
-                                    ings = meal.get("ingredients", [])
-                                    if isinstance(ings, list):
-                                        all_ings_fb.extend(ings)
-                return all_ings_fb
-            except Exception as e2:
-                logger.error(f"Error extrayendo ingredientes de planes (fallback): {e2}")
-                return []
-                
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback PGRST205 (columna
+        # ingredients ausente) eliminado: la columna existe en el schema Neon.
         logger.error(f"Error extrayendo ingredientes de planes: {e}")
         return []
 
 def get_latest_meal_plan_with_id(user_id: str):
     """Obtiene el plan más reciente del usuario incluyendo su ID para poder actualizarlo."""
     try:
-        if connection_pool:
-            res = execute_sql_query("SELECT id, plan_data, created_at FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True)
-            if res:
-                return res
-            return None
-        else:
-            if not supabase: return None
-            res = supabase.table("meal_plans").select("id, plan_data, created_at").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-            if res.data and len(res.data) > 0:
-                return res.data[0]
-            return None
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback PostgREST eliminado (pool
+        # mandatorio post-Neon). Si el pool falta, execute_sql_query lanza y el
+        # except de abajo preserva el contrato (None + error log).
+        res = execute_sql_query("SELECT id, plan_data, created_at FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True)
+        if res:
+            return res
+        return None
     except Exception as e:
         logger.error(f"Error obteniendo plan con ID: {e}")
         return None
@@ -1169,10 +1139,10 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: str = None
         DEPRECATED — emite warning de log para forzar migración.
 
     Retorna:
-      - `True` (path psycopg con connection_pool) o `list` no vacío
-        (path supabase-py) si el UPDATE afectó alguna fila.
-      - `False`/`[]`/`None` si la fila no existe, no pertenece al
-        usuario, o el cliente Supabase está caído.
+      - `True` si el UPDATE se ejecutó (path psycopg con connection_pool).
+      - `None` si la operación falló (pool no disponible, error SQL).
+        [P1-NEON-DB-MIGRATION · 2026-06-12] El path supabase-py (que
+        retornaba `list`) fue eliminado — pool mandatorio post-Neon.
 
     Tooltip-anchor: P1-NEXT-1-LOCK-START | test_p1_next_1_update_meal_plan_data_holds_advisory_lock
     """
@@ -1184,47 +1154,36 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: str = None
                 f"degrada a legacy WHERE id. Migrar el callsite para "
                 f"pasar user_id."
             )
-        if connection_pool:
-            from psycopg.types.json import Jsonb
-            # [P1-NEXT-1 · 2026-05-11] El lock + UPDATE viven en la MISMA
-            # transacción. `pg_advisory_xact_lock` (vía
-            # `acquire_meal_plan_advisory_lock`) se libera al commit/rollback.
-            # Mismo purpose='general' que _chunk_worker T1/T2 y api_shift_plan
-            # → todos los writers full-overwrite del mismo plan se serializan.
-            with connection_pool.connection() as conn:
-                with conn.transaction():
-                    with conn.cursor() as cursor:
-                        acquire_meal_plan_advisory_lock(cursor, plan_id, purpose="general")
-                        if user_id is None:
-                            cursor.execute(
-                                "UPDATE meal_plans SET plan_data = %s WHERE id = %s",
-                                (Jsonb(new_plan_data), plan_id),
-                            )
-                        else:
-                            # Path nuevo con ownership a DB-level. Mismo patrón
-                            # que P0-HIST-IDOR-1/2 cerraron con `AND user_id = %s`
-                            # defense-in-depth (invariante I2).
-                            cursor.execute(
-                                "UPDATE meal_plans SET plan_data = %s WHERE id = %s AND user_id = %s",
-                                (Jsonb(new_plan_data), plan_id, user_id),
-                            )
-            return True
-        # Fallback supabase-py (dev/local sin connection_pool). No hay
-        # advisory locks via PostgREST → fallback documentado como
-        # back-compat dev-only. En prod connection_pool siempre presente.
-        if not supabase:
-            return None
-        if user_id is None:
-            res = supabase.table("meal_plans").update({"plan_data": new_plan_data}).eq("id", plan_id).execute()
-        else:
-            res = (
-                supabase.table("meal_plans")
-                .update({"plan_data": new_plan_data})
-                .eq("id", plan_id)
-                .eq("user_id", user_id)
-                .execute()
-            )
-        return res.data
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback supabase-py (dev/local
+        # sin connection_pool) eliminado: PostgREST no soporta advisory locks
+        # (violaba I7) y post-Neon apuntaría a la DB equivocada. Pool
+        # mandatorio — fail-loud; el except preserva el contrato None.
+        if not connection_pool:
+            raise RuntimeError("db connection_pool is not available (mandatorio post-Neon).")
+        from psycopg.types.json import Jsonb
+        # [P1-NEXT-1 · 2026-05-11] El lock + UPDATE viven en la MISMA
+        # transacción. `pg_advisory_xact_lock` (vía
+        # `acquire_meal_plan_advisory_lock`) se libera al commit/rollback.
+        # Mismo purpose='general' que _chunk_worker T1/T2 y api_shift_plan
+        # → todos los writers full-overwrite del mismo plan se serializan.
+        with connection_pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor() as cursor:
+                    acquire_meal_plan_advisory_lock(cursor, plan_id, purpose="general")
+                    if user_id is None:
+                        cursor.execute(
+                            "UPDATE meal_plans SET plan_data = %s WHERE id = %s",
+                            (Jsonb(new_plan_data), plan_id),
+                        )
+                    else:
+                        # Path nuevo con ownership a DB-level. Mismo patrón
+                        # que P0-HIST-IDOR-1/2 cerraron con `AND user_id = %s`
+                        # defense-in-depth (invariante I2).
+                        cursor.execute(
+                            "UPDATE meal_plans SET plan_data = %s WHERE id = %s AND user_id = %s",
+                            (Jsonb(new_plan_data), plan_id, user_id),
+                        )
+        return True
     except Exception as e:
         logger.error(f"Error actualizando plan_data: {e}")
         return None
@@ -1271,14 +1230,17 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     # --- MÉTODO ATÓMICO (RPC) para evitar Race Conditions ---
     # Si dos requests de swap llegan simultáneos, el FOR UPDATE en PostgreSQL
     # serializa las escrituras garantizando que ambos incrementos se registren.
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] RPC via SQL directo (antes PostgREST).
     try:
-        rpc_result = supabase.rpc("increment_friction_rpc", {
-            "p_user_id": user_id,
-            "p_ingredient": base_ingredient
-        }).execute()
-        
+        rpc_row = execute_sql_query(
+            "SELECT public.increment_friction_rpc(%s::uuid, %s) AS result",
+            (user_id, base_ingredient),
+            fetch_one=True,
+        )
+        rpc_val = rpc_row.get("result") if rpc_row else None
+
         # El RPC retorna el conteo PRE-RESET (ej: 3 si alcanzó el umbral)
-        new_count = rpc_result.data if isinstance(rpc_result.data, int) else 0
+        new_count = rpc_val if isinstance(rpc_val, int) else 0
         
         if new_count >= 3:
             logger.info(f"🛑 [FRICCIÓN SILENCIOSA] 3 strikes para {base_ingredient}. Auto-bloqueando ingrediente (vía RPC atómico).")
@@ -1299,12 +1261,9 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
         return False
         
     except Exception as rpc_e:
-        error_msg = str(rpc_e)
-        if "Could not find the function" in error_msg or "PGRST202" in error_msg:
-            # RPC aún no desplegado → fallback al método clásico (read-modify-write)
-            pass
-        else:
-            logger.error(f"⚠️ [FRICCIÓN] Error en RPC atómico, usando fallback: {rpc_e}")
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Detección PGRST202 ("RPC no
+        # desplegado") eliminada — la función existe en el schema Neon.
+        logger.error(f"⚠️ [FRICCIÓN] Error en RPC atómico, usando fallback: {rpc_e}")
     
     # --- FALLBACK ATÓMICO (P1-2): si el RPC no está disponible, usamos el
     # advisory lock + FOR UPDATE de `update_user_health_profile_atomic` para
@@ -1360,107 +1319,61 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
 def log_unknown_ingredients(user_id: str, unknown_ings: list, raw_map: dict = None):
     """Loguea ingredientes que el LLM genera pero que el sistema de sinónimos no reconoce.
     Se guardan en la tabla `unknown_ingredients` para revisión periódica y expansión del catálogo.
-    Usa RPC atómico con fallback a upsert clásico.
+    Usa el RPC atómico `log_unknown_ingredient_rpc` (incrementa occurrences en conflicto).
     """
-    if not supabase or not user_id or user_id == "guest" or not unknown_ings:
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] RPC via SQL directo (antes PostgREST).
+    # Fallbacks eliminados: detección PGRST202/PGRST205 ("RPC/tabla no
+    # desplegados") y upsert directo a `unknown_ingredients` — la función y la
+    # tabla existen en el schema Neon. Best-effort: el except loguea y retorna.
+    if not connection_pool or not user_id or user_id == "guest" or not unknown_ings:
         return
-    
+
     try:
         for ing in unknown_ings[:20]:  # Cap a 20 por plan para no saturar
             raw_text = raw_map.get(ing, "") if raw_map else ""
-            try:
-                # Intentar RPC atómico
-                supabase.rpc("log_unknown_ingredient_rpc", {
-                    "p_user_id": user_id,
-                    "p_ingredient": ing,
-                    "p_raw_text": raw_text or None
-                }).execute()
-            except Exception as rpc_e:
-                err = str(rpc_e)
-                if "Could not find the function" in err or "PGRST202" in err or "unknown_ingredients" in err:
-                    # RPC o tabla no desplegados aún → silenciar
-                    return
-                # Fallback: upsert directo
-                try:
-                    from datetime import datetime, timezone
-                    supabase.table("unknown_ingredients").upsert({
-                        "user_id": user_id,
-                        "ingredient": ing,
-                        "raw_text": raw_text or None,
-                        "occurrences": 1,
-                        "last_seen": datetime.now(timezone.utc).isoformat()
-                    }, on_conflict="user_id,ingredient").execute()
-                except Exception as fb_e:
-                    if "unknown_ingredients" in str(fb_e) or "PGRST205" in str(fb_e):
-                        return  # Tabla no existe aún → silenciar
-                    logger.error(f"⚠️ [UNKNOWN ING] Error en fallback: {fb_e}")
-                    return
-        
+            execute_sql_query(
+                "SELECT public.log_unknown_ingredient_rpc(%s::uuid, %s, %s)",
+                (user_id, ing, raw_text or None),
+                fetch_one=True,
+            )
+
         logger.info(f"📝 [UNKNOWN ING] {len(unknown_ings)} ingredientes no reconocidos logueados para revisión")
     except Exception as e:
         logger.error(f"⚠️ [UNKNOWN ING] Error logueando ingredientes desconocidos: {e}")
 
 def increment_ingredient_frequencies(user_id: str, ingredients: list[str]):
     """Incrementa la frecuencia histórica de los ingredientes consumidos por un usuario.
-    Intenta usar un RPC atómico O(1) robusto ante Race Conditions,
-    con fallback al viejo método Select+Upsert si la función SQL no se ha creado.
+    Usa el RPC atómico `increment_ingredient_frequencies_rpc` (ON CONFLICT
+    incrementa count), robusto ante Race Conditions.
     """
-    if not supabase or not user_id or user_id == "guest": return
-    
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] RPC via SQL directo (antes PostgREST).
+    # Fallback clásico Select+Upsert eliminado: era dev-only, tenía race
+    # condition documentada (lost update) y la función existe en el schema
+    # Neon. Best-effort: el except loguea y retorna.
+    if not connection_pool or not user_id or user_id == "guest": return
+
     try:
         from collections import Counter
-        from datetime import datetime, timezone
-        
+
         # strip_accents is imported globally
-            
+
         normalized_ings = [strip_accents(i.lower()).strip() for i in ingredients if i]
         if not normalized_ings: return
-        
+
         incoming_counts = Counter(normalized_ings)
         ingredients_list = list(incoming_counts.keys())
         counts_list = list(incoming_counts.values())
-        
-        # 1. Intentar método atómico (RPC) para evitar Race Conditions
-        try:
-            supabase.rpc("increment_ingredient_frequencies_rpc", {
-                "p_user_id": user_id,
-                "p_ingredients": ingredients_list,
-                "p_counts": counts_list
-            }).execute()
-            logger.info(f"✅ [DB] Frecuencia atómica (RPC) incrementada para {user_id} ({len(ingredients_list)} items)")
-            return
-        except Exception as rpc_e:
-            error_msg = str(rpc_e)
-            if "Could not find the function" in error_msg or "PGRST202" in error_msg:
-                # El usuario aún no corre el código SQL en Supabase, pasamos al fallback silenciosamente
-                pass
-            else:
-                logger.warning(f"⚠️ [DB] Aviso de RPC, recurriendo a fallback... Detalles: {rpc_e}")
 
-        # 2. Fallback clásico: Leer estado actual y luego hacer upsert
-        # ⚠️ RACE CONDITION: Si dos requests concurrentes leen el mismo count antes de que
-        # cualquiera escriba, un incremento se pierde (lost update).
-        # En producción, desplegar el RPC `increment_ingredient_frequencies_rpc` en Supabase
-        # para garantizar atomicidad. Este fallback solo existe para desarrollo local.
-        res = supabase.table("ingredient_frequencies").select("ingredient, count").eq("user_id", user_id).execute()
-        current_map = {row["ingredient"]: row["count"] for row in res.data} if res.data else {}
-        
-        upsert_rows = []
-        now_str = datetime.now(timezone.utc).isoformat()
-        
-        for ing, inc_val in incoming_counts.items():
-            new_val = current_map.get(ing, 0) + inc_val
-            upsert_rows.append({
-                "user_id": user_id,
-                "ingredient": ing,
-                "count": new_val,
-                "last_used": now_str
-            })
-            
-        if upsert_rows:
-            supabase.table("ingredient_frequencies").upsert(upsert_rows).execute()
-            logger.info(f"✅ [DB] Frecuencia (Fallback Clásico) incrementada para {user_id} ({len(upsert_rows)} items)")
-            
+        # Método atómico (RPC) para evitar Race Conditions. Casts explícitos:
+        # psycopg adapta list[str]/list[int] a arrays pero el cast fija el tipo
+        # exacto que la función espera (text[], integer[]).
+        execute_sql_query(
+            "SELECT public.increment_ingredient_frequencies_rpc(%s::uuid, %s::text[], %s::int[])",
+            (user_id, ingredients_list, counts_list),
+            fetch_one=True,
+        )
+        logger.info(f"✅ [DB] Frecuencia atómica (RPC) incrementada para {user_id} ({len(ingredients_list)} items)")
+
     except Exception as e:
         logger.error(f"⚠️ [DB] Error incrementando frecuecia de ingredientes: {e}")
 
@@ -1473,22 +1386,28 @@ def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
     estar alineado con cron_tasks.calculate_ingredient_fatigue. Antes ambos usaban 0.9
     hardcoded por separado — riesgo de drift si alguien tuneaba uno y olvidaba el otro.
     """
-    if not supabase or not user_id or user_id == "guest": return {}
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo. `last_used::text`
+    # preserva el contrato string ISO que el parse de abajo (safe_fromisoformat) espera.
+    if not connection_pool or not user_id or user_id == "guest": return {}
     try:
         from datetime import datetime, timedelta, timezone
         from constants import INGREDIENT_FATIGUE_DECAY_FACTOR as decay_factor
 
         now = datetime.now(timezone.utc)
-        cutoff_date = (now - timedelta(days=days_limit)).isoformat()
+        cutoff_date = now - timedelta(days=days_limit)
 
-        res = supabase.table("ingredient_frequencies").select("ingredient, count, last_used").eq("user_id", user_id).gte("last_used", cutoff_date).execute()
+        rows = execute_sql_query(
+            "SELECT ingredient, count, last_used::text AS last_used "
+            "FROM ingredient_frequencies WHERE user_id = %s AND last_used >= %s",
+            (user_id, cutoff_date), fetch_all=True
+        )
 
-        if not res.data:
+        if not rows:
             return {}
 
         freq_dict = {}
 
-        for row in res.data:
+        for row in rows:
             ingredient = row["ingredient"]
             count = row["count"]
             last_used_str = row.get("last_used")
@@ -1521,14 +1440,22 @@ def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
 
 def search_similar_plan(query_embedding: list, threshold: float = 0.98, limit: int = 1):
     """Busca planes similares usando búsqueda vectorial (similitud coseno) a través de la RPC."""
-    if not supabase: return []
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo. El vector se
+    # serializa como literal text (`str(list)` — mismo patrón que el INSERT de
+    # `profile_embedding` en _build_meal_plan_insert_sql) y se castea a
+    # `extensions.vector` (schema donde vive pgvector en el dump restaurado).
+    # `id/user_id::text` preservan el contrato string que PostgREST devolvía.
+    if not connection_pool: return []
     try:
-        res = supabase.rpc("match_similar_plan", {
-            "query_embedding": query_embedding,
-            "match_threshold": threshold,
-            "match_count": limit
-        }).execute()
-        return res.data
+        rows = execute_sql_query(
+            """
+            SELECT id::text AS id, user_id::text AS user_id, plan_data, similarity
+            FROM public.match_similar_plan(%s::extensions.vector, %s::float8, %s::int)
+            """,
+            (str(query_embedding), threshold, limit),
+            fetch_all=True,
+        )
+        return rows or []
     except Exception as e:
         logger.error(f"Error buscando planes similares: {e}")
         return []
@@ -1555,22 +1482,25 @@ def count_stale_cache_schema_plans(current_version: str, legacy_version: str) ->
           - `stale_count`: total de planes con versión != current_version
           - `stale_versions`: dict version → count de cada versión obsoleta
           - `total`: total de planes en la tabla
-        Vacío `{}` si Supabase no está disponible o el query falló.
+        Vacío `{}` si el pool no está disponible o el query falló.
 
     Best-effort: cualquier excepción se loguea como warning y devuelve {}.
     El startup NO debe fallar si este probe falla — es observabilidad pura.
     """
-    if not supabase:
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El count migra de PostgREST
+    # (count="exact") a SQL directo — el GROUP BY de abajo ya iba por pool.
+    if not connection_pool:
         return {}
     try:
         # COUNT exact total para contexto.
-        total_res = supabase.table("meal_plans").select("id", count="exact").limit(1).execute()
-        total = total_res.count or 0
+        total_row = execute_sql_query(
+            "SELECT COUNT(*) AS total FROM meal_plans", fetch_one=True
+        )
+        total = int(total_row.get("total") or 0) if total_row else 0
         if total == 0:
             return {"stale_count": 0, "stale_versions": {}, "total": 0}
 
-        # Bucket por versión via SQL crudo: el supabase-py no expone GROUP BY
-        # sobre extracciones de JSONB de forma fluida, y el RPC sería overkill.
+        # Bucket por versión via GROUP BY sobre extracción de JSONB.
         # `COALESCE(... ->> '_cache_schema_version', legacy)` aplica la misma
         # convención que `_is_cached_plan_schema_compatible` (línea ~6324 de
         # graph_orchestrator): planes pre-fix sin la key se cuentan como

@@ -175,9 +175,21 @@ class TestRouteModelForDayGenerator:
         )
         assert result == _FLASH_MODEL_NAME
 
-    def test_clinical_complex_attempt_1_uses_pro(self):
-        """Sanity: el routing default escala a Pro cuando hay condiciones
-        médicas. Esta lógica no es del fix nuevo; verificamos no regresión."""
+    def test_paid_tier_attempt_1_uses_pro(self, monkeypatch):
+        """Sanity post-P0-DEEPSEEK-MIGRATION: el routing default escala a Pro
+        cuando el USUARIO ES DE TIER PAGADO (el ruteo por complejidad clínica
+        fue reemplazado por ruteo por tier — la seguridad clínica vive en el
+        risk-tier del reviewer P2-ORCH-7, no acá).
+
+        NOTA reload-safety: se parchean los `__globals__` de la función
+        importada (no `sys.modules["graph_orchestrator"]`) — otros tests
+        (p6_evaluator_use_pro) recargan el módulo y desincronizarían el patch.
+        """
+        monkeypatch.setitem(
+            _route_model_for_day_generator.__globals__,
+            "get_user_tier",
+            lambda uid: "plus",
+        )
         form = {
             "mainGoal": "gain_muscle",
             "medicalConditions": ["diabetes tipo 2"],
@@ -259,9 +271,8 @@ def test_model_constants_match_production():
     """Las constantes de nombre de modelo deben coincidir con los IDs
     reales que el resto del codebase usa (CB tracking, logs).
 
-    [P1-FLASH-MODEL-GA · 2026-05-21] Flash actualizado a `gemini-3.5-flash` (GA).
-    [P1-ALL-MODELS-GA · 2026-05-21] Pro también migrado a `gemini-3.5-flash`
-    (eliminación total de modelos `*-preview` por riesgo deprecation).
+    [P0-DEEPSEEK-MIGRATION · 2026-06-12] Flash = modelo del tier gratis
+    (`deepseek-v4-flash`); Pro = modelo de tiers pagados (`deepseek-v4-pro`).
     """
-    assert _FLASH_MODEL_NAME == "gemini-3.5-flash"
-    assert _PRO_MODEL_NAME == "gemini-3.5-flash"
+    assert _FLASH_MODEL_NAME == "deepseek-v4-flash"
+    assert _PRO_MODEL_NAME == "deepseek-v4-pro"

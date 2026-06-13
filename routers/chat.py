@@ -697,7 +697,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
         )
         
         # [P2-AUDIT-NEW-2 · 2026-05-12] Billing idempotente vía flag + finally.
-        # ANTES: `log_api_usage(user_id, "gemini_chat")` vivía DENTRO de
+        # ANTES: `log_api_usage(user_id, "llm_chat")` vivía DENTRO de
         # `bg_tasks()` que solo se invocaba en path `type=="done"`. Si el
         # SSE se abortaba a mitad (Ctrl+C, cerrar tab, AbortController,
         # network drop) o lanzaba excepción mid-stream, el LLM YA había
@@ -865,7 +865,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 # Tooltip-anchor: P1-CHAT-BILL-VERIFIED-UID.
                 if not _billed and _chunk_observed and verified_user_id:
                     try:
-                        log_api_usage(verified_user_id, "gemini_chat")
+                        log_api_usage(verified_user_id, "llm_chat")
                         _billed = True
                     except Exception as _bill_err:
                         logger.warning(
@@ -952,7 +952,7 @@ def api_chat(background_tasks: BackgroundTasks, data: dict = Body(...), verified
         # verificada por el token (ver el finally de /stream). Cierra el bypass
         # del paywall vía user_id==session_id en este endpoint non-stream.
         if verified_user_id:
-            log_api_usage(verified_user_id, "gemini_chat")
+            log_api_usage(verified_user_id, "llm_chat")
 
         # === CONTEXTO PARA HECHOS (Debounce Semántico) ===
         # Obtenemos el historial de la sesión para darle contexto al LLM extractor

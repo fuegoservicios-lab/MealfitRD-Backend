@@ -8,7 +8,11 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 import os
 import logging
 logger = logging.getLogger(__name__)
-from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Módulo migrado a SQL directo (psycopg
+# pool, Neon). El cliente PostgREST `supabase` ya no se usa aquí — los datos
+# Postgres viven en Neon; Supabase conserva solo Auth+Storage (fuera de db_*).
+from db_core import connection_pool, execute_sql_query, execute_sql_write
+from psycopg.types.json import Jsonb
 from cache_manager import redis_client
 
 
@@ -187,29 +191,32 @@ def get_avg_meal_hour(user_id: str, meal_type: str, days_back: int = 14) -> Opti
 
 def acquire_fact_lock(user_id: str) -> bool:
     """Intenta adquirir el bloqueo para extracción de hechos. Retorna True si lo logra, False si ya está bloqueado."""
-    if not supabase: return True
+    if not connection_pool: return True
     try:
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
-        
-        # Verificar estado actual en user_profiles
-        res = supabase.table("user_profiles").select("fact_locked_at").eq("id", user_id).execute()
-        if res.data and len(res.data) > 0:
-            locked_at_str = res.data[0].get("fact_locked_at")
-            if locked_at_str:
-                try:
-                    if locked_at_str.endswith("Z"):
-                        locked_at_str = locked_at_str[:-1] + "+00:00"
-                    locked_at = datetime.fromisoformat(locked_at_str)
-                    if now - locked_at < timedelta(minutes=5):
-                        return False
-                except ValueError:
-                    pass
-                
-        # Intentar establecer el timestamp
-        update_res = supabase.table("user_profiles").update({"fact_locked_at": now.isoformat()}).eq("id", user_id).execute()
-            
-        return len(update_res.data) > 0
+
+        # Verificar estado actual en user_profiles.
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] psycopg devuelve timestamptz como
+        # datetime tz-aware — desaparece el parse manual del string ISO de PostgREST.
+        res = execute_sql_query(
+            "SELECT fact_locked_at FROM user_profiles WHERE id = %s",
+            (user_id,),
+            fetch_one=True,
+        )
+        if res:
+            locked_at = res.get("fact_locked_at")
+            if locked_at and (now - locked_at) < timedelta(minutes=5):
+                return False
+
+        # Intentar establecer el timestamp (RETURNING preserva el contrato
+        # "True solo si una fila fue actualizada" del `.data` de PostgREST).
+        updated = execute_sql_write(
+            "UPDATE user_profiles SET fact_locked_at = %s WHERE id = %s RETURNING id",
+            (now, user_id),
+            returning=True,
+        )
+        return bool(updated)
     except Exception as e:
         # [P3-PROD-AUDIT-3 · 2026-05-30] Fail-CLOSED (return False), no fail-open.
         # ANTES un error de DB hacía `return True` ("lock adquirido") → dos
@@ -217,39 +224,37 @@ def acquire_fact_lock(user_id: str) -> bool:
         # facts duplicados + doble costo LLM. Fail-closed es estrictamente más
         # seguro SIN riesgo de pérdida: los callers tratan un skip como
         # recuperable (fact_extractor reintenta + enqueue_pending_fact persistente
-        # drenado por cron/webhook). Se preserva la supresión de log para PGRST204
-        # (columna ausente) — ahí también skippeamos el ciclo en vez de procesar
-        # sin lock real.
-        error_msg = str(e)
-        if "PGRST204" not in error_msg:
-            logger.error(f"Error acquiring fact lock: {e}")
+        # drenado por cron/webhook).
+        logger.error(f"Error acquiring fact lock: {e}")
         return False
 
 def release_fact_lock(user_id: str):
     """Libera el bloqueo de extracción de hechos."""
-    if not supabase: return
+    if not connection_pool: return
     try:
-        supabase.table("user_profiles").update({"fact_locked_at": None}).eq("id", user_id).execute()
+        execute_sql_write(
+            "UPDATE user_profiles SET fact_locked_at = NULL WHERE id = %s",
+            (user_id,),
+        )
     except Exception as e:
-        error_msg = str(e)
-        if "PGRST204" not in error_msg:
-            logger.error(f"Error releasing fact lock: {e}")
+        logger.error(f"Error releasing fact lock: {e}")
 
 def save_user_fact(user_id: str, fact: str, embedding: list, metadata: dict = None):
     """Guarda un hecho, su embedding y sus metadatos en la base de datos."""
-    if not supabase: return None
+    if not connection_pool: return None
     try:
-        data_to_insert = {
-            "user_id": user_id,
-            "fact": fact,
-            "embedding": embedding
-        }
-        if metadata:
-            data_to_insert["metadata"] = metadata
-            
-        res = supabase.table("user_facts").insert(data_to_insert).execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] embedding list → literal pgvector
+        # '[0.1,0.2,...]' con cast explícito ::vector. Metadata omitido cae al
+        # default '{}'::jsonb de la columna (paridad con el INSERT PostgREST).
+        emb_str = f"[{','.join(map(str, embedding))}]"
+        res = execute_sql_write(
+            "INSERT INTO user_facts (user_id, fact, embedding, metadata) "
+            "VALUES (%s, %s, %s::vector, %s) RETURNING id",
+            (user_id, fact, emb_str, Jsonb(metadata or {})),
+            returning=True,
+        )
         _invalidate_rag_cache(user_id)
-        return res.data
+        return res
     except Exception as e:
         logger.error(f"Error guardando user_fact: {e}")
         return None
@@ -263,7 +268,7 @@ def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
     convierte los 3 DELETEs idénticos en 1. Cleanup global (`user_id=None`) NO
     debouncea — esos son crons explícitos.
     """
-    if not supabase: return None
+    if not connection_pool: return None
     if _should_skip_temporal_cleanup(user_id):
         return None
     from datetime import datetime, timedelta, timezone
@@ -271,10 +276,14 @@ def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
     threshold_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
     def _do_delete():
-        query = supabase.table("user_facts").delete().contains("metadata", {"category": "sintoma_temporal"}).lt("created_at", threshold_time)
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] `.contains()` PostgREST → operador
+        # JSONB `@>`; RETURNING preserva la forma list[dict] del `.data` previo.
+        query = "DELETE FROM user_facts WHERE metadata @> %s AND created_at < %s"
+        params = [Jsonb({"category": "sintoma_temporal"}), threshold_time]
         if user_id:
-            query = query.eq("user_id", user_id)
-        return query.execute().data
+            query += " AND user_id = %s"
+            params.append(user_id)
+        return execute_sql_write(query + " RETURNING id", tuple(params), returning=True)
 
     try:
         return _with_db_retry(_do_delete, _label="delete_expired_temporal_facts")
@@ -291,15 +300,20 @@ def get_user_facts_by_metadata(user_id: str, key: str, value: str):
 
     Ejemplo: get_user_facts_by_metadata(user_id, 'category', 'alergia')
     """
-    if not supabase: return []
+    if not connection_pool: return []
 
     # Auto-Limpieza de síntomas temporales antes de buscar
     delete_expired_temporal_facts(user_id)
 
     def _do_select():
-        filter_dict = {key: value}
-        res = supabase.table("user_facts").select("*").eq("user_id", user_id).eq("is_active", True).contains("metadata", filter_dict).execute()
-        return res.data
+        # Los consumidores (graph_orchestrator strict-RAG, cron_tasks alergias)
+        # solo leen `fact`/`metadata`; SELECT * preserva la forma del `.data`.
+        return execute_sql_query(
+            "SELECT * FROM user_facts "
+            "WHERE user_id = %s AND is_active = TRUE AND metadata @> %s",
+            (user_id, Jsonb({key: value})),
+            fetch_all=True,
+        )
 
     try:
         return _with_db_retry(_do_select, _label=f"get_user_facts_by_metadata({key}={value})")
@@ -309,11 +323,16 @@ def get_user_facts_by_metadata(user_id: str, key: str, value: str):
 
 def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):
     """Soft delete filtrando dentro del JSONB de metadata."""
-    if not supabase: return None
+    if not connection_pool: return None
     try:
-        res = supabase.table("user_facts").update({"is_active": False}).eq("user_id", user_id).contains("metadata", filter_dict).execute()
+        res = execute_sql_write(
+            "UPDATE user_facts SET is_active = FALSE "
+            "WHERE user_id = %s AND metadata @> %s RETURNING id",
+            (user_id, Jsonb(filter_dict)),
+            returning=True,
+        )
         _invalidate_rag_cache(user_id)
-        return res.data
+        return res
     except Exception as e:
         logger.error(f"Error haciendo soft delete a facts por metadata: {e}")
         return None
@@ -329,14 +348,23 @@ def search_user_facts(user_id: str, query_embedding: list, query_text: str = Non
         # Array Python a string pgvector '[1.2, 0.4, ...]'
         emb_str = f"[{','.join(map(str, query_embedding))}]"
         
+        # [P1-NEON-DB-MIGRATION] id::text — las funciones RETURNS TABLE(id uuid,...)
+        # devolverían uuid.UUID nativo y el cache LLM (graph_orchestrator hace
+        # json.dumps de estas rows) lanzaría TypeError. Paridad con PostgREST.
         if query_text:
             # Búsqueda híbrida (vector + full-text search)
-            query = "SELECT * FROM hybrid_search_user_facts(query_text => %s, query_embedding => %s, match_count => %s, p_user_id => %s)"
+            query = (
+                "SELECT id::text AS id, fact, metadata, similarity "
+                "FROM hybrid_search_user_facts(query_text => %s, query_embedding => %s, match_count => %s, p_user_id => %s)"
+            )
             res = execute_sql_query(query, (query_text, emb_str, limit, user_id), fetch_all=True)
             return res
         else:
             # Búsqueda vectorial pura
-            query = "SELECT * FROM match_user_facts(query_embedding => %s, match_threshold => %s, match_count => %s, p_user_id => %s)"
+            query = (
+                "SELECT id::text AS id, fact, metadata, similarity "
+                "FROM match_user_facts(query_embedding => %s, match_threshold => %s, match_count => %s, p_user_id => %s)"
+            )
             res = execute_sql_query(query, (emb_str, threshold, limit, user_id), fetch_all=True)
             return res
     except Exception as e:
@@ -354,7 +382,13 @@ def search_user_facts_hybrid(user_id: str, query_embedding: list, filter_metadat
         from psycopg.types.json import Jsonb
         emb_str = f"[{','.join(map(str, query_embedding))}]"
         
-        query = "SELECT * FROM match_user_facts_hybrid_metadata(query_embedding => %s, match_threshold => %s, match_count => %s, p_user_id => %s, p_metadata => %s)"
+        # [P1-NEON-DB-MIGRATION] casts ::text por la misma razón que
+        # search_user_facts (esta función retorna la fila completa).
+        query = (
+            "SELECT id::text AS id, user_id::text AS user_id, fact, metadata, "
+            "created_at::text AS created_at, is_active, similarity "
+            "FROM match_user_facts_hybrid_metadata(query_embedding => %s, match_threshold => %s, match_count => %s, p_user_id => %s, p_metadata => %s)"
+        )
         meta_param = Jsonb(filter_metadata) if filter_metadata else None
         
         res = execute_sql_query(query, (emb_str, threshold, limit, user_id, meta_param), fetch_all=True)
@@ -365,64 +399,96 @@ def search_user_facts_hybrid(user_id: str, query_embedding: list, filter_metadat
 
 def delete_user_fact(fact_id: str):
     """Hace un soft delete cambiando is_active a False"""
-    if not supabase: return None
+    if not connection_pool: return None
     try:
         # Extraer user_id antes de borrar para invalidar su caché
-        res_user = supabase.table("user_facts").select("user_id").eq("id", fact_id).execute()
-        user_id = res_user.data[0]["user_id"] if res_user.data else None
+        # (::text — el prefijo `rag_<user_id>_` de la caché espera string)
+        res_user = execute_sql_query(
+            "SELECT user_id::text AS user_id FROM user_facts WHERE id = %s",
+            (fact_id,),
+            fetch_one=True,
+        )
+        user_id = res_user["user_id"] if res_user else None
 
-        # En lugar de .delete(), usamos .update()
-        res = supabase.table("user_facts").update({"is_active": False}).eq("id", fact_id).execute()
-        
+        # En lugar de DELETE, soft delete via UPDATE
+        res = execute_sql_write(
+            "UPDATE user_facts SET is_active = FALSE WHERE id = %s RETURNING id",
+            (fact_id,),
+            returning=True,
+        )
+
         if user_id:
             _invalidate_rag_cache(user_id)
-            
-        return res.data
+
+        return res
     except Exception as e:
         logger.error(f"Error haciendo soft delete a user_fact: {e}")
         return None
 
 def enqueue_pending_fact(user_id: str, message: str, recent_history: str = ""):
-    """Encola un mensaje pendiente de extracción de hechos en Supabase."""
-    if not supabase: return None
+    """Encola un mensaje pendiente de extracción de hechos en la DB."""
+    if not connection_pool: return None
     try:
-        res = supabase.table("pending_facts_queue").insert({
-            "user_id": user_id,
-            "message": message,
-            "recent_history": recent_history or ""
-        }).execute()
-        return res.data
+        res = execute_sql_write(
+            "INSERT INTO pending_facts_queue (user_id, message, recent_history) "
+            "VALUES (%s, %s, %s) RETURNING id",
+            (user_id, message, recent_history or ""),
+            returning=True,
+        )
+        return res
     except Exception as e:
         logger.error(f"Error encolando hecho pendiente: {e}")
         return None
 
 def dequeue_pending_facts(user_id: str):
     """Obtiene todos los hechos pendientes de un usuario, ordenados cronológicamente."""
-    if not supabase: return []
+    if not connection_pool: return []
     try:
-        res = supabase.table("pending_facts_queue").select("*").eq("user_id", user_id).order("created_at", desc=False).execute()
-        return res.data
+        # id/user_id ::text — el caller (process_pending_queue_sync) acumula
+        # `pending["id"]` y los pasa a delete_pending_facts como strings.
+        res = execute_sql_query(
+            "SELECT id::text AS id, user_id::text AS user_id, message, "
+            "recent_history, created_at "
+            "FROM pending_facts_queue WHERE user_id = %s ORDER BY created_at ASC",
+            (user_id,),
+            fetch_all=True,
+        )
+        return res
     except Exception as e:
         logger.error(f"Error obteniendo hechos pendientes: {e}")
         return []
 
 def delete_pending_facts(fact_ids: list):
     """Elimina los registros procesados de la cola de pendientes."""
-    if not supabase or not fact_ids: return None
+    if not connection_pool or not fact_ids: return None
     try:
-        res = supabase.table("pending_facts_queue").delete().in_("id", fact_ids).execute()
-        return res.data
+        # `.in_()` → `= ANY(%s::uuid[])`; normaliza a str por si llegan uuid.UUID.
+        ids = [str(fid) for fid in fact_ids]
+        res = execute_sql_write(
+            "DELETE FROM pending_facts_queue WHERE id = ANY(%s::uuid[]) RETURNING id",
+            (ids,),
+            returning=True,
+        )
+        return res
     except Exception as e:
         logger.error(f"Error eliminando hechos pendientes procesados: {e}")
         return None
 
 def get_all_user_facts(user_id: str):
     """Obtiene todos los hechos (facts) de un usuario para mostrarlos en la UI de Ajustes."""
-    if not supabase: return []
+    if not connection_pool: return []
     try:
-        # Añadimos el filtro is_active
-        res = supabase.table("user_facts").select("id, fact, metadata, created_at").eq("user_id", user_id).eq("is_active", True).order("created_at", desc=True).execute()
-        return res.data
+        # id::text — el frontend usa el id como string para DELETE
+        # /api/user-facts/{id}. `created_at` queda datetime: FastAPI lo
+        # serializa a ISO-8601 con 'T', mismo wire-format que daba PostgREST.
+        res = execute_sql_query(
+            "SELECT id::text AS id, fact, metadata, created_at "
+            "FROM user_facts WHERE user_id = %s AND is_active = TRUE "
+            "ORDER BY created_at DESC",
+            (user_id,),
+            fetch_all=True,
+        )
+        return res
     except Exception as e:
         logger.error(f"Error obteniendo ALL user facts: {e}")
         return []
@@ -434,19 +500,23 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
     Si existe, actualiza frequency += 1 y last_seen = NOW() en lugar de crear un duplicado.
     Esto previene que el RAG visual se sature con 15 fotos idénticas de mangú.
     """
-    if not supabase: return None
+    if not connection_pool: return None
     try:
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] RPC PostgREST → llamada SQL directa
+        # a la función; el embedding viaja como literal pgvector con cast ::vector.
+        emb_str = f"[{','.join(map(str, embedding))}]"
+
         # === DEDUPLICACIÓN SEMÁNTICA: Buscar duplicados cercanos ===
         try:
-            similar = supabase.rpc("match_visual_diary", {
-                "query_embedding": embedding,
-                "match_threshold": 0.95,
-                "match_count": 1,
-                "p_user_id": user_id
-            }).execute()
-            
-            if similar.data and len(similar.data) > 0:
-                existing = similar.data[0]
+            similar = execute_sql_query(
+                "SELECT * FROM match_visual_diary(query_embedding => %s::vector, "
+                "match_threshold => %s, match_count => %s, p_user_id => %s)",
+                (emb_str, 0.95, 1, user_id),
+                fetch_all=True,
+            )
+
+            if similar:
+                existing = similar[0]
                 existing_id = existing.get("id")
                 old_freq = existing.get("frequency", 1) or 1
                 logger.info(f"🔄 [DEDUP VISUAL] Entrada similar detectada (sim>{0.95}). "
@@ -468,36 +538,38 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
                 )
                 
                 logger.debug(f"✅ [DEDUP VISUAL] Registro {str(existing_id)[:8]}... actualizado.")
-                return similar.data
+                return similar
         except Exception as dedup_err:
             # Si la deduplicación falla (ej. columnas aún no existen), insertar normalmente
             logger.error(f"⚠️ [DEDUP VISUAL] Error en deduplicación, insertando normalmente: {dedup_err}")
-        
+
         # === INSERCIÓN NORMAL (no hay duplicado) ===
-        res = supabase.table("visual_diary").insert({
-            "user_id": user_id,
-            "image_url": image_url,
-            "description": description,
-            "embedding": embedding,
-            "frequency": 1
-        }).execute()
-        return res.data
+        res = execute_sql_write(
+            "INSERT INTO visual_diary (user_id, image_url, description, embedding, frequency) "
+            "VALUES (%s, %s, %s, %s::vector, 1) RETURNING id",
+            (user_id, image_url, description, emb_str),
+            returning=True,
+        )
+        return res
     except Exception as e:
         logger.error(f"Error guardando visual_entry: {e}")
         return None
 
 def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 0.5, limit: int = 5):
-    """Busca fotos/entradas visuales similares usando la función RPC match_visual_diary."""
-    if not supabase: return []
+    """Busca fotos/entradas visuales similares usando la función SQL match_visual_diary."""
+    if not connection_pool: return []
 
     def _do_search():
-        res = supabase.rpc("match_visual_diary", {
-            "query_embedding": query_embedding,
-            "match_threshold": threshold,
-            "match_count": limit,
-            "p_user_id": user_id
-        }).execute()
-        return res.data
+        # id::text — los consumidores solo leen `description`, pero la fila
+        # puede acabar en JSON; string preserva la paridad con PostgREST.
+        emb_str = f"[{','.join(map(str, query_embedding))}]"
+        return execute_sql_query(
+            "SELECT id::text AS id, description, image_url, similarity "
+            "FROM match_visual_diary(query_embedding => %s::vector, "
+            "match_threshold => %s, match_count => %s, p_user_id => %s)",
+            (emb_str, threshold, limit, user_id),
+            fetch_all=True,
+        )
 
     try:
         return _with_db_retry(_do_search, _label="search_visual_diary")
@@ -506,7 +578,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         return []
 
 def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None, meal_type: str = "snack", mark_inventory_synced: bool = False):
-    """Guarda una comida consumida en la tabla consumed_meals de Supabase.
+    """Guarda una comida consumida en la tabla consumed_meals.
 
     [P0.1] Si el caller acaba de descontar los ingredientes del inventario,
     debe pasar `mark_inventory_synced=True` para que la reconciliación al
@@ -561,41 +633,26 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
                     f"[P2-CONSUMED-DEDUP] check falló (procediendo con INSERT): {_dedup_err}"
                 )
 
-        if connection_pool:
-            # [P1-CONSUMED-MEALS-JSONB · 2026-05-20] `consumed_meals.ingredients`
-            # es jsonb (verified via information_schema). psycopg3 type
-            # adaption convierte `list[str]` a Postgres ARRAY literal
-            # `{a,b,c}` por default, NO a JSON. Eso hace que el INSERT
-            # falle con `invalid input syntax for type json` ("Expected
-            # ':', but found ','" — Postgres trata de parsear `{...}`
-            # como JSON object). Pre-fix: el `Jsonb` se importaba pero
-            # NO se aplicaba al parámetro → bug silencioso desde la
-            # migración a connection_pool. `consumed_meals` quedó vacía
-            # en prod (0 rows) — el diario de comidas del agente
-            # nunca persistió nada. Tooltip-anchor: P1-CONSUMED-MEALS-JSONB.
-            from psycopg.types.json import Jsonb
-            execute_sql_write(
-                "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type, inventory_synced_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at)
-            )
-            return True
-        else:
-            if not supabase: return None
-            payload = {
-                "user_id": user_id,
-                "meal_name": meal_name,
-                "meal_type": meal_type,
-                "calories": calories,
-                "protein": protein,
-                "carbs": carbs,
-                "healthy_fats": healthy_fats,
-                "ingredients": ingredients if ingredients is not None else [],
-                "consumed_at": now,
-            }
-            if synced_at:
-                payload["inventory_synced_at"] = synced_at
-            res = supabase.table("consumed_meals").insert(payload).execute()
-            return res.data
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST:
+        # los datos viven en Neon; sin pool no hay path válido de escritura.
+        if not connection_pool:
+            return None
+        # [P1-CONSUMED-MEALS-JSONB · 2026-05-20] `consumed_meals.ingredients`
+        # es jsonb (verified via information_schema). psycopg3 type
+        # adaption convierte `list[str]` a Postgres ARRAY literal
+        # `{a,b,c}` por default, NO a JSON. Eso hace que el INSERT
+        # falle con `invalid input syntax for type json` ("Expected
+        # ':', but found ','" — Postgres trata de parsear `{...}`
+        # como JSON object). Pre-fix: el `Jsonb` se importaba pero
+        # NO se aplicaba al parámetro → bug silencioso desde la
+        # migración a connection_pool. `consumed_meals` quedó vacía
+        # en prod (0 rows) — el diario de comidas del agente
+        # nunca persistió nada. Tooltip-anchor: P1-CONSUMED-MEALS-JSONB.
+        execute_sql_write(
+            "INSERT INTO consumed_meals (user_id, meal_name, calories, protein, carbs, healthy_fats, ingredients, consumed_at, meal_type, inventory_synced_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (user_id, meal_name, calories, protein, carbs, healthy_fats, Jsonb(ingredients if ingredients is not None else []), now, meal_type, synced_at)
+        )
+        return True
     except Exception as e:
         logger.error(f"Error guardando comida consumida: {e}")
         return None
@@ -640,22 +697,15 @@ def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins:
                 "meal_name, calories, protein, carbs, healthy_fats, "
                 "consumed_at, meal_type"
             )
-            if connection_pool:
-                query = (
-                    f"SELECT {_COLUMNS} FROM consumed_meals "
-                    "WHERE user_id = %s AND consumed_at >= %s AND consumed_at < %s"
-                )
-                res = execute_sql_query(query, (user_id, start_str, end_str), fetch_all=True)
-                return res
-            else:
-                if not supabase: return []
-                res = supabase.table("consumed_meals")\
-                    .select(_COLUMNS)\
-                    .eq("user_id", user_id)\
-                    .gte("consumed_at", start_str)\
-                    .lt("consumed_at", end_str)\
-                    .execute()
-                return res.data
+            # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST.
+            if not connection_pool:
+                return []
+            query = (
+                f"SELECT {_COLUMNS} FROM consumed_meals "
+                "WHERE user_id = %s AND consumed_at >= %s AND consumed_at < %s"
+            )
+            res = execute_sql_query(query, (user_id, start_str, end_str), fetch_all=True)
+            return res
         except Exception as e:
             if attempt < max_retries - 1:
                 import time
@@ -689,21 +739,15 @@ def get_consumed_meals_since(user_id: str, since_iso_date: str, include_ingredie
     if include_ingredients:
         _COLUMNS = _COLUMNS + ", ingredients"
     try:
-        if connection_pool:
-            query = (
-                f"SELECT {_COLUMNS} FROM consumed_meals "
-                "WHERE user_id = %s AND consumed_at >= %s"
-            )
-            res = execute_sql_query(query, (user_id, since_iso_date), fetch_all=True)
-            return res
-        else:
-            if not supabase: return []
-            res = supabase.table("consumed_meals")\
-                .select(_COLUMNS)\
-                .eq("user_id", user_id)\
-                .gte("consumed_at", since_iso_date)\
-                .execute()
-            return res.data
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST.
+        if not connection_pool:
+            return []
+        query = (
+            f"SELECT {_COLUMNS} FROM consumed_meals "
+            "WHERE user_id = %s AND consumed_at >= %s"
+        )
+        res = execute_sql_query(query, (user_id, since_iso_date), fetch_all=True)
+        return res
     except Exception as e:
         logger.error(f"Error obteniendo comidas consumidas desde {since_iso_date}: {e}")
         return []

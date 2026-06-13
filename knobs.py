@@ -163,38 +163,13 @@ def _env_bool(name: str, default: bool) -> bool:
     return value
 
 
-def thinking_budget_kwargs(model_name: str, env_var: str, default: int) -> dict:
-    """[P2-COST-THINKING-CAP-EXT · 2026-06-01] Devuelve `{"thinking_budget": N}`
-    para CAPAR el razonamiento (reasoning/thinking) de modelos thinking-capable
-    (gemini-3.5-flash / *-pro) en nodos de relleno-de-schema FUERA del pipeline
-    de planes — chat swap_llm, modify-meal tool, fact-extractor PRO. Espejo
-    parametrizado por knob del helper `_thinking_budget_kwargs` de
-    `graph_orchestrator.py` (P1-COST-THINKING-CAP), que solo cubre day-gen +
-    correctores.
-
-    Por qué importa para COSTO: los reasoning tokens facturan como OUTPUT
-    (~$9/M en flash, 6x el input). Sin cap, un nodo thinking-capable puede
-    emitir miles de tokens de razonamiento (day-gen sin cap llegó a 19,162 tok
-    de output, ~80% del costo del plan) en tareas que solo rellenan un schema.
-    Un techo GENEROSO (default 2048, el valor A/B-validado de day-gen que hace
-    una tarea MÁS dura — un día completo) recorta el runaway patológico SIN
-    tocar el razonamiento normal de un solo plato/extracción → ahorro sin
-    pérdida de calidad.
-
-    Semántica del knob (clamp [-1, 32768]):
-      - N >= 0  → cap el reasoning en N tokens.
-      - N < 0   → sentinela: sin cap (reasoning libre, comportamiento legacy /
-                  rollback sin redeploy).
-    flash-lite NO soporta thinking_config → dict vacío (evita pasar un kwarg
-    no soportado que rompería la construcción del LLM). Tooltip-anchor:
-    P2-COST-THINKING-CAP-EXT.
-    """
-    budget = _env_int(env_var, default, validator=lambda v: -1 <= v <= 32768)
-    if budget < 0:
-        return {}
-    if not model_name or "lite" in model_name.lower():
-        return {}
-    return {"thinking_budget": budget}
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] `thinking_budget_kwargs` ELIMINADO.
+# Era el cap de reasoning-tokens de Gemini (P2-COST-THINKING-CAP-EXT): el
+# reasoning facturaba como output a ~$9/M y un runaway patológico dominaba el
+# costo del plan. DeepSeek-V4 gestiona el thinking nativamente (sin budget por
+# request en el API OpenAI-compatible) y su output cuesta $0.28–0.87/M — el
+# problema de costo que motivaba el cap dejó de existir. Los knobs
+# `MEALFIT_*_THINKING_BUDGET` ya no se leen.
 
 
 def is_production() -> bool:

@@ -55,34 +55,32 @@ def test_anchor_present_in_fact_extractor():
 
 def test_primary_model_knob_registered():
     src = _read(_FACT_EX)
-    # [P3-MODEL-DEFAULT-FLASH35 · 2026-05-19] Default migrado de
-    # `gemini-3.1-pro-preview` (preview, riesgo deprecation) a
-    # `gemini-3.5-flash` (stable). Override sigue disponible via env var.
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default = constante DEEPSEEK_FLASH
+    # de llm_provider (extracción es tarea aux barata, mismo modelo para
+    # todos los tiers). Override sigue disponible via env var.
     pat = re.compile(
-        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL[\"\']\s*,\s*[\"\']gemini-3\.5-flash[\"\']',
+        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL[\"\']\s*,\s*DEEPSEEK_FLASH',
         re.DOTALL,
     )
     assert pat.search(src), (
         "Knob `MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL` debe resolverse via "
-        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL\", \"gemini-3.5-flash\")`. "
-        "Default actual `gemini-3.5-flash` (P3-MODEL-DEFAULT-FLASH35 · 2026-05-19, "
-        "era `gemini-3.1-pro-preview`); override permite swap sin redeploy si "
-        "se requiere otro modelo."
+        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_PRIMARY_MODEL\", DEEPSEEK_FLASH)` "
+        "(P0-DEEPSEEK-MIGRATION · 2026-06-12); override permite swap sin "
+        "redeploy si se requiere otro modelo."
     )
 
 
 def test_router_model_knob_registered():
     src = _read(_FACT_EX)
-    # [P1-ALL-MODELS-GA · 2026-05-21] El default GA es `gemini-3.1-flash-lite`
-    # (sin `-preview`). El regex tenía `-preview` stale (inconsistente con su
-    # propio mensaje de aserción abajo y con el código). Alineado 2026-06-01.
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Default = DEEPSEEK_FLASH (gate
+    # cheap-first del router).
     pat = re.compile(
-        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL[\"\']\s*,\s*[\"\']gemini-3\.1-flash-lite[\"\']',
+        r'_env_str\(\s*[\"\']MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL[\"\']\s*,\s*DEEPSEEK_FLASH',
         re.DOTALL,
     )
     assert pat.search(src), (
         "Knob `MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL` debe resolverse via "
-        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL\", \"gemini-3.1-flash-lite\")`."
+        "`_env_str(\"MEALFIT_FACT_EXTRACTOR_ROUTER_MODEL\", DEEPSEEK_FLASH)`."
     )
 
 

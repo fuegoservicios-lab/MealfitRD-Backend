@@ -70,13 +70,13 @@ def test_chat_bills_on_verified_user_id():
     src = _read("routers/chat.py")
     assert "P1-CHAT-BILL-VERIFIED-UID" in src
     # Ambos sitios facturan por verified_user_id.
-    assert 'log_api_usage(verified_user_id, "gemini_chat")' in src, (
+    assert 'log_api_usage(verified_user_id, "llm_chat")' in src, (
         "Debe facturar log_api_usage sobre verified_user_id (token-verified)"
     )
     # El gate explotable user_id != session_id ya NO debe gobernar el billing:
     # no debe quedar un log_api_usage(user_id, ...) ACTIVO (el comentario del fix
     # lo cita como pre-fix → strip comentarios antes de la aserción negativa).
-    assert 'log_api_usage(user_id, "gemini_chat")' not in _code_only(src), (
+    assert 'log_api_usage(user_id, "llm_chat")' not in _code_only(src), (
         "El billing NO debe usar el user_id del body (bypass user_id==session_id)"
     )
 

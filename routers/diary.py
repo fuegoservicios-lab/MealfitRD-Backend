@@ -419,7 +419,7 @@ async def api_diary_upload(
 
             if actual_user_id and actual_user_id != session_id:
                 # [P2-DIARY-ASYNC-SYNC-DB · 2026-05-30] offload sync DB del event loop.
-                await asyncio.to_thread(log_api_usage, actual_user_id, "gemini_vision")
+                await asyncio.to_thread(log_api_usage, actual_user_id, "llm_vision")
 
             # 4. Guardar en DB en segundo plano (embedding + insert).
             # `description` se persiste limpio (sin poison_pill) — la
@@ -466,10 +466,11 @@ async def api_diary_upload(
 
 def _save_visual_entry_background(user_id: str, image_url: str, description: str):
     """Background task: genera embedding y guarda en la tabla visual_diary."""
-    
-    embedding = get_multimodal_embedding(description)
+
+    # [P1-COHERE-EMBED-V4] purpose="document": se persiste para retrieval asimétrico.
+    embedding = get_multimodal_embedding(description, purpose="document")
     if embedding:
-        logger.info(f"📦 Guardando entrada visual en la DB (Vector 768d)...")
+        logger.info(f"📦 Guardando entrada visual en la DB (Vector {len(embedding)}d)...")
         save_visual_entry(user_id=user_id, image_url=image_url, description=description, embedding=embedding)
         logger.info("✅ ¡Imagen registrada en el Diario Visual con éxito!")
     else:

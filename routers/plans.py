@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 # Importaciones relativas del entorno
 from auth import get_verified_user_id, verify_api_quota
 from db import (
-    supabase, get_user_likes, get_active_rejections, get_or_create_session, 
+    get_user_likes, get_active_rejections, get_or_create_session,
     save_message, update_user_health_profile, update_user_health_profile_atomic, log_api_usage, get_latest_meal_plan,
     get_latest_meal_plan_with_id, update_meal_plan_data, insert_like
 )
@@ -1437,7 +1437,7 @@ def _postprocess_pipeline_result(
     # 3. API usage audit
     if actual_user_id:
         try:
-            log_api_usage(actual_user_id, "gemini_analyze")
+            log_api_usage(actual_user_id, "llm_analyze")
         except Exception as _audit_err:
             logger.warning(f"⚠️ Error registrando log_api_usage: {_audit_err}")
 
@@ -1596,14 +1596,28 @@ from constants import PLAN_CHUNK_SIZE, split_with_absorb
 
 def _user_has_profile(user_id: str) -> bool:
     """Devuelve True si user_id tiene fila en user_profiles. Auto-crea fila mínima si falta."""
-    if not user_id or not supabase:
+    if not user_id:
         return False
     try:
-        res = supabase.table("user_profiles").select("id").eq("id", user_id).limit(1).execute()
-        if res.data:
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo (pool psycopg).
+        from db import execute_sql_query, execute_sql_write
+        row = execute_sql_query(
+            "SELECT 1 AS existe FROM public.user_profiles WHERE id = %s LIMIT 1",
+            (user_id,),
+            fetch_one=True,
+        )
+        if row:
             return True
-        # Usuario autenticado sin perfil → crear fila mínima para habilitar chunking y FK
-        supabase.table("user_profiles").upsert({"id": user_id, "health_profile": {}}).execute()
+        # Usuario autenticado sin perfil → crear fila mínima para habilitar chunking y FK.
+        # ON CONFLICT DO NOTHING preserva la semántica del upsert legacy: este branch
+        # solo corre cuando el SELECT no encontró fila, así que bajo race NO pisa un
+        # health_profile ya existente.
+        from psycopg.types.json import Jsonb
+        execute_sql_write(
+            "INSERT INTO public.user_profiles (id, health_profile) VALUES (%s, %s) "
+            "ON CONFLICT (id) DO NOTHING",
+            (user_id, Jsonb({})),
+        )
         import logging as _log
         _log.getLogger(__name__).info(f"✅ [PROFILE] Fila mínima creada en user_profiles para {user_id}")
         return True
@@ -3527,7 +3541,7 @@ async def api_analyze_stream(
                 # arrancar, así que el usuario debe pagar.
                 if user_id and user_id != "guest" and user_id != session_id:
                     try:
-                        log_api_usage(user_id, "gemini_analyze_stream")
+                        log_api_usage(user_id, "llm_analyze_stream")
                     except Exception as _audit_err:
                         logger.warning(
                             f"[P2-LIVE-7] log_api_usage analyze_stream falló: {_audit_err}"
@@ -3764,7 +3778,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
 
         # Éxito real: cobrar cuota ahora (no antes — ver nota arriba).
         if user_id and user_id != "guest":
-            log_api_usage(user_id, "gemini_recipe_expand")
+            log_api_usage(user_id, "llm_recipe_expand")
 
         if user_id and user_id != "guest":
             # [P1-HIST-RECIPE-1] Resolver el plan target. Si el cliente
@@ -3966,7 +3980,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
             background_tasks.add_task(_persist_swap_reason)
             
         if user_id and user_id != "guest":
-            log_api_usage(user_id, "gemini_swap_meal")
+            log_api_usage(user_id, "llm_swap_meal")
             
             # --- HOT SIGNAL PATH (MEJORA 4) ---
             try:
@@ -4859,30 +4873,41 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         # podría re-introducir wrong-plan persist como en P1-HIST-RECIPE-1).
         real_plan_id = None
         plan_data = None
-        if supabase:
-            try:
-                if plan_id:
-                    plan_res = (
-                        supabase.table("meal_plans")
-                        .select("id, plan_data")
-                        .eq("id", plan_id)
-                        .eq("user_id", user_id)
-                        .execute()
-                    )
-                    if not (plan_res and plan_res.data and len(plan_res.data) > 0):
-                        # plan_id no resoluble para este usuario. 404 sin
-                        # filtrar si existe para otro user.
-                        raise HTTPException(status_code=404, detail="Plan no encontrado")
-                else:
-                    plan_res = supabase.table("meal_plans").select("id, plan_data").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+        try:
+            # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo (Neon).
+            # Ambas ramas preservan el ownership P0-NEW-1 / invariante I2.
+            # `id::text` mantiene paridad de tipos con PostgREST (string, no
+            # uuid.UUID) para logs y el persist atómico aguas abajo.
+            from db import execute_sql_query
+            if plan_id:
+                # Equivalencia con el chain legacy supabase-py
+                # .eq("id", plan_id) + .eq("user_id", user_id)
+                # → WHERE id = %s AND user_id = %s (anchor test_p0_new_1).
+                plan_res = execute_sql_query(
+                    "SELECT id::text AS id, plan_data FROM public.meal_plans "
+                    "WHERE id = %s AND user_id = %s",
+                    (plan_id, user_id),
+                    fetch_one=True,
+                )
+                if not plan_res:
+                    # plan_id no resoluble para este usuario. 404 sin
+                    # filtrar si existe para otro user.
+                    raise HTTPException(status_code=404, detail="Plan no encontrado")
+            else:
+                plan_res = execute_sql_query(
+                    "SELECT id::text AS id, plan_data FROM public.meal_plans "
+                    "WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+                    (user_id,),
+                    fetch_one=True,
+                )
 
-                if plan_res and plan_res.data and len(plan_res.data) > 0:
-                    real_plan_id = plan_res.data[0].get("id")
-                    plan_data = plan_res.data[0].get("plan_data", {})
-            except HTTPException:
-                raise
-            except Exception as check_err:
-                logger.warning(f"⚠️ Error leyendo plan para restock: {check_err}")
+            if plan_res:
+                real_plan_id = plan_res.get("id")
+                plan_data = plan_res.get("plan_data", {})
+        except HTTPException:
+            raise
+        except Exception as check_err:
+            logger.warning(f"⚠️ Error leyendo plan para restock: {check_err}")
 
         # [P1-2] Idempotencia item-level: filtrar items ya registrados dentro del
         # ciclo activo. Antes el endpoint rechazaba el request entero si
@@ -5276,9 +5301,16 @@ _WATER_RETRY_ATTEMPTS = 2
 
 
 def _water_supabase_with_retry(builder_factory, op_label: str):
-    """Ejecuta una query supabase-py con 1 reintento. `builder_factory` es
-    una lambda/callable que CONSTRUYE el builder cada vez (los builders son
-    stateful — no se pueden reusar tras un `.execute()` parcial).
+    """Ejecuta una operación DB con 1 reintento. `builder_factory` es una
+    lambda/callable que EJECUTA la operación completa cada vez y retorna
+    el resultado.
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Migrado de builders supabase-py
+    (PostgREST, donde el factory CONSTRUÍA el builder y aquí se llamaba
+    `.execute()`) a callables sobre `execute_sql_query/_write` (pool psycopg
+    → Neon). El patrón factory se conserva: cada intento re-ejecuta la
+    operación contra una conexión fresca del pool, cubriendo la misma clase
+    de blips transitorios (conexión idle muerta tras tab en background).
 
     [P2-WATER-RETRY-NO-JITTER · 2026-05-24] Backoff exponencial + jitter
     absoluto. attempt=0 → base + U[0, jitter_max]; attempt=1 → base*2 +
@@ -5290,7 +5322,7 @@ def _water_supabase_with_retry(builder_factory, op_label: str):
     last_exc = None
     for attempt in range(_WATER_RETRY_ATTEMPTS):
         try:
-            return builder_factory().execute()
+            return builder_factory()
         except Exception as e:
             last_exc = e
             if attempt + 1 < _WATER_RETRY_ATTEMPTS:
@@ -5351,19 +5383,20 @@ def _compute_water_goal(user_id: str) -> dict:
         "computed_ml": None,
         "default": True,
     }
-    if not supabase or not user_id:
+    if not user_id:
         return default
     try:
-        res = (
-            supabase.table("user_profiles")
-            .select("health_profile")
-            .eq("id", user_id)
-            .limit(1)
-            .execute()
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo (Neon).
+        # health_profile es jsonb → psycopg lo devuelve como dict (paridad).
+        from db import execute_sql_query
+        res = execute_sql_query(
+            "SELECT health_profile FROM public.user_profiles WHERE id = %s LIMIT 1",
+            (user_id,),
+            fetch_one=True,
         )
-        if not res or not res.data:
+        if not res:
             return default
-        hp = res.data[0].get("health_profile") or {}
+        hp = res.get("health_profile") or {}
 
         weight_raw = hp.get("weight")
         if weight_raw is None or weight_raw == "":
@@ -5438,27 +5471,33 @@ def api_get_water_intake(
         raise HTTPException(status_code=401, detail="No autorizado.")
     log_date = _validate_water_date(date)
 
-    if not supabase:
-        # Fail-secure: si la DB no esta disponible, no inventamos un default
-        # que el cliente confunda con "ya marcaste vasos hoy".
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Gate equivalente al legacy `if not
+    # supabase`. Fail-secure: si la DB no esta disponible, no inventamos un
+    # default que el cliente confunda con "ya marcaste vasos hoy".
+    # `connection_pool` se importa de db_core (NO de la fachada db): la
+    # fachada bindea el valor al momento del import (None pre-init).
+    from db_core import connection_pool
+    if not connection_pool:
         raise HTTPException(status_code=503, detail="DB no disponible.")
 
     try:
+        from db import execute_sql_query
+        # `updated_at` se devuelve como datetime (FastAPI lo serializa a
+        # ISO-8601, mismo wire format que PostgREST). El frontend no lo parsea.
         res = _water_supabase_with_retry(
-            lambda: (
-                supabase.table("water_intake_log")
-                .select("glasses, log_date, updated_at")
-                .eq("user_id", verified_user_id)
-                .eq("log_date", log_date)
-                .limit(1)
+            lambda: execute_sql_query(
+                "SELECT glasses, updated_at FROM public.water_intake_log "
+                "WHERE user_id = %s AND log_date = %s LIMIT 1",
+                (verified_user_id, log_date),
+                fetch_one=True,
             ),
             op_label="GET water-intake",
         )
         glasses = 0
         updated_at = None
-        if res and res.data and len(res.data) > 0:
-            glasses = int(res.data[0].get("glasses") or 0)
-            updated_at = res.data[0].get("updated_at")
+        if res:
+            glasses = int(res.get("glasses") or 0)
+            updated_at = res.get("updated_at")
         goal_meta = _compute_water_goal(verified_user_id)
         # [P3-WATER-TRACKER · 2026-05-16] `enabled` se incluye aqui para que
         # el frontend NO requiera un fetch separado a /api/user/preferences/
@@ -5520,23 +5559,31 @@ def api_set_water_intake(
             detail=f"`glasses` fuera de rango [0, {_WATER_MAX_GLASSES}].",
         )
 
-    if not supabase:
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Gate equivalente al legacy `if not
+    # supabase` (ver nota del GET sobre por qué db_core y no la fachada).
+    from db_core import connection_pool
+    if not connection_pool:
         raise HTTPException(status_code=503, detail="DB no disponible.")
 
     try:
-        # Upsert via on_conflict en PK compuesta. `updated_at = NOW()` se
-        # toca explicitamente para que el cliente pueda distinguir "ya
-        # actualice hoy" del default seed.
-        payload = {
-            "user_id": verified_user_id,
-            "log_date": log_date,
-            "glasses": int(raw_glasses),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
+        # Upsert via ON CONFLICT en PK compuesta (user_id, log_date) —
+        # equivalente al upsert PostgREST con on_conflict="user_id,log_date".
+        # `updated_at = NOW()` se toca explicitamente para que el cliente
+        # pueda distinguir "ya actualice hoy" del default seed.
+        from db import execute_sql_write
         _water_supabase_with_retry(
-            lambda: (
-                supabase.table("water_intake_log")
-                .upsert(payload, on_conflict="user_id,log_date")
+            lambda: execute_sql_write(
+                "INSERT INTO public.water_intake_log "
+                "(user_id, log_date, glasses, updated_at) "
+                "VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (user_id, log_date) DO UPDATE SET "
+                "glasses = EXCLUDED.glasses, updated_at = EXCLUDED.updated_at",
+                (
+                    verified_user_id,
+                    log_date,
+                    int(raw_glasses),
+                    datetime.now(timezone.utc),
+                ),
             ),
             op_label="POST water-intake",
         )

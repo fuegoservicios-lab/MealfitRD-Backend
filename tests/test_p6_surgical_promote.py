@@ -89,7 +89,7 @@ def test_snapshot_promoted_when_at_least_one_fix_succeeds():
 
     with patch.object(go, "_safe_ainvoke", side_effect=fake_invoke), \
          patch.object(go, "_route_model", return_value="gemini-3-flash-preview"), \
-         patch.object(go, "ChatGoogleGenerativeAI"), \
+         patch.object(go, "ChatDeepSeek"), \
          patch.object(go, "_build_shared_context", return_value={
              "nutrition_context_minimal": "...",
          }):
@@ -122,7 +122,7 @@ def test_snapshot_NOT_promoted_when_zero_fixes():
 
     with patch.object(go, "_safe_ainvoke", side_effect=fake_invoke_none), \
          patch.object(go, "_route_model", return_value="gemini-3-flash-preview"), \
-         patch.object(go, "ChatGoogleGenerativeAI"), \
+         patch.object(go, "ChatDeepSeek"), \
          patch.object(go, "_build_shared_context", return_value={
              "nutrition_context_minimal": "...",
          }):
@@ -176,7 +176,7 @@ def test_promoted_plan_is_deepcopy():
 
     with patch.object(go, "_safe_ainvoke", side_effect=fake_invoke), \
          patch.object(go, "_route_model", return_value="gemini-3-flash-preview"), \
-         patch.object(go, "ChatGoogleGenerativeAI"), \
+         patch.object(go, "ChatDeepSeek"), \
          patch.object(go, "_build_shared_context", return_value={
              "nutrition_context_minimal": "...",
          }):

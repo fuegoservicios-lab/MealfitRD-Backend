@@ -146,45 +146,87 @@ else:
 connection_pool = None
 async_connection_pool = None  # Siempre declarado a nivel de módulo para garantizar importabilidad
 chat_checkpoint_pool = None  # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20]
-if SUPABASE_DB_URL:
+# [P1-NEON-DB-MIGRATION · 2026-06-12] URL session-mode resuelta según backend
+# activo (Neon direct o Supabase :5432). Consumida por el leader lock del
+# scheduler (app.py::_build_session_mode_db_url) — advisory locks de sesión
+# requieren session mode; un transaction pooler los liberaría por sentencia.
+DB_SESSION_MODE_URL = None
+
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Selección del backend de DATOS Postgres.
+# Knob `MEALFIT_DB_BACKEND`: "supabase" (default histórico) | "neon".
+#   - neon: pools principales ← NEON_DATABASE_URL_POOLED (PgBouncer transaction
+#     mode de Neon, análogo de Supavisor :6543); chat_checkpoint_pool ←
+#     NEON_DATABASE_URL (endpoint directo, session mode — mismo contrato que
+#     P1-CHECKPOINT-POOL-SPLIT). Supabase queda SOLO para Auth+Storage (el
+#     cliente `supabase` de arriba NO se toca).
+#   - supabase: comportamiento histórico con rewrites :5432↔:6543.
+# Cutover/rollback sin redeploy: flip del env var + restart. Si backend=neon
+# pero faltan los URLs, se aborta la config de pools (fail-loud → /ready 503)
+# en vez de degradar silenciosamente a Supabase: un fallback silencioso
+# escribiría en la DB equivocada (split-brain).
+MEALFIT_DB_BACKEND = (os.environ.get("MEALFIT_DB_BACKEND") or "supabase").strip().lower()
+NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
+NEON_DATABASE_URL_POOLED = os.environ.get("NEON_DATABASE_URL_POOLED")
+
+if SUPABASE_DB_URL or MEALFIT_DB_BACKEND == "neon":
     try:
         from psycopg_pool import ConnectionPool, AsyncConnectionPool
-        # Limpiar comillas basura por si acaso
-        clean_url = SUPABASE_DB_URL.strip().strip("'").strip('"')
 
-        # [P1-CHAT-CHECKPOINT-FIX · 2026-05-20] `original_session_url` debe
-        # SIEMPRE apuntar al puerto session-mode (5432), independientemente
-        # de cómo viene el env var. Pre-fix: `original_session_url = clean_url`
-        # capturaba el URL crudo antes del rewrite — pero si el operator
-        # copió "Transaction pooler" del dashboard de Supabase (que viene
-        # con :6543 hardcoded), el "rescate" no aplicaba y el
-        # `chat_checkpoint_pool` terminaba apuntando también a Supavisor
-        # transaction mode. Resultado: el bug SSL bad length / EOF que
-        # P1-CHECKPOINT-POOL-SPLIT pretendía cerrar se perpetuaba, y SOLO
-        # se duplicaban los pools sin beneficio.
-        #
-        # Fix: forzar el rewrite a :5432 SIEMPRE para `original_session_url`,
-        # tanto si el env var viene con :5432 (no-op) como con :6543 (revert
-        # explícito). El pool principal `connection_pool` sigue rewriteando
-        # a :6543 (lógica existente, transaction mode para concurrencia).
-        # Tooltip-anchor: P1-CHAT-CHECKPOINT-FIX.
-        if ".supabase." in clean_url and ":6543" in clean_url:
-            original_session_url = clean_url.replace(":6543", ":5432")
+        if MEALFIT_DB_BACKEND == "neon":
+            if not (NEON_DATABASE_URL and NEON_DATABASE_URL_POOLED):
+                raise RuntimeError(
+                    "[P1-NEON-DB-MIGRATION] MEALFIT_DB_BACKEND=neon requiere "
+                    "NEON_DATABASE_URL (direct) y NEON_DATABASE_URL_POOLED "
+                    "(pooler). Sin fallback silencioso a Supabase: split-brain."
+                )
+            clean_url = NEON_DATABASE_URL_POOLED.strip().strip("'").strip('"')
+            original_session_url = NEON_DATABASE_URL.strip().strip("'").strip('"')
             logger.info(
-                "🔧 [P1-CHAT-CHECKPOINT-FIX] chat_checkpoint_pool URL forzada "
-                "a :5432 (session mode) — env var SUPABASE_DB_URL venía con "
-                ":6543. Sin este rewrite, chat_checkpoint_pool reusaría "
-                "Supavisor transaction mode → SSL bad length / EOF al "
-                "`put_writes` del checkpointer al final de cada chat stream."
+                "🔌 [P1-NEON-DB-MIGRATION] Backend de datos: NEON "
+                "(pooled→pools principales, direct→chat_checkpoint_pool). "
+                "Supabase queda solo para Auth+Storage."
             )
         else:
-            original_session_url = clean_url
+            # Limpiar comillas basura por si acaso
+            clean_url = SUPABASE_DB_URL.strip().strip("'").strip('"')
 
-        # MEJORA 3: Connection Pooling - Forzar el uso del Transaction Pooler de Supabase (6543)
-        # Esto previene el agotamiento de conexiones directas (Connection Exhaustion) si el volumen crece.
-        if ".supabase." in clean_url and ":5432" in clean_url:
-            clean_url = clean_url.replace(":5432", ":6543")
-            logger.info("🔧 [psycopg] DB URL automatically rewritten to use Supabase Transaction Pooler (port 6543).")
+            # [P1-CHAT-CHECKPOINT-FIX · 2026-05-20] `original_session_url` debe
+            # SIEMPRE apuntar al puerto session-mode (5432), independientemente
+            # de cómo viene el env var. Pre-fix: `original_session_url = clean_url`
+            # capturaba el URL crudo antes del rewrite — pero si el operator
+            # copió "Transaction pooler" del dashboard de Supabase (que viene
+            # con :6543 hardcoded), el "rescate" no aplicaba y el
+            # `chat_checkpoint_pool` terminaba apuntando también a Supavisor
+            # transaction mode. Resultado: el bug SSL bad length / EOF que
+            # P1-CHECKPOINT-POOL-SPLIT pretendía cerrar se perpetuaba, y SOLO
+            # se duplicaban los pools sin beneficio.
+            #
+            # Fix: forzar el rewrite a :5432 SIEMPRE para `original_session_url`,
+            # tanto si el env var viene con :5432 (no-op) como con :6543 (revert
+            # explícito). El pool principal `connection_pool` sigue rewriteando
+            # a :6543 (lógica existente, transaction mode para concurrencia).
+            # Tooltip-anchor: P1-CHAT-CHECKPOINT-FIX.
+            if ".supabase." in clean_url and ":6543" in clean_url:
+                original_session_url = clean_url.replace(":6543", ":5432")
+                logger.info(
+                    "🔧 [P1-CHAT-CHECKPOINT-FIX] chat_checkpoint_pool URL forzada "
+                    "a :5432 (session mode) — env var SUPABASE_DB_URL venía con "
+                    ":6543. Sin este rewrite, chat_checkpoint_pool reusaría "
+                    "Supavisor transaction mode → SSL bad length / EOF al "
+                    "`put_writes` del checkpointer al final de cada chat stream."
+                )
+            else:
+                original_session_url = clean_url
+
+            # MEJORA 3: Connection Pooling - Forzar el uso del Transaction Pooler de Supabase (6543)
+            # Esto previene el agotamiento de conexiones directas (Connection Exhaustion) si el volumen crece.
+            if ".supabase." in clean_url and ":5432" in clean_url:
+                clean_url = clean_url.replace(":5432", ":6543")
+                logger.info("🔧 [psycopg] DB URL automatically rewritten to use Supabase Transaction Pooler (port 6543).")
+
+        # [P1-NEON-DB-MIGRATION] Export para consumidores que necesitan
+        # session mode (leader lock del scheduler). Válido en ambos backends.
+        DB_SESSION_MODE_URL = original_session_url
 
         def get_client_kwargs():
             return {

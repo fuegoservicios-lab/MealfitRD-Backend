@@ -1,7 +1,8 @@
 import os
 import logging
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
+# [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini → DeepSeek.
+from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH
 from langchain_core.messages import SystemMessage, HumanMessage
 from knobs import _env_float
 
@@ -27,25 +28,17 @@ def _medical_tool_llm_timeout_s() -> float:
 
 
 def _medical_tool_model_name() -> str:
-    """[P1-FLASH-MODEL-GA · 2026-05-21 · P3-COST-CUT-AUX · 2026-05-22]
-    Modelo de la herramienta médica via knob. Histórico:
-      - Pre-fix: hardcoded `gemini-3-flash-preview` → sujeto a cuota free-tier
-        20 RPD aunque billing esté activo.
-      - P1-FLASH-MODEL-GA (2026-05-21): default `gemini-3.5-flash` (GA, paid-tier).
-      - P3-COST-CUT-AUX (2026-05-22): default `gemini-3.1-flash-lite`. Razón:
-        la tool es Q&A clínico determinístico (temp=0.0), fact-lookup-style
-        sobre interacciones medicamentos↔alimentos / alergias cruzadas /
-        contraindicaciones. NO requiere razonamiento creativo ni multimodal.
-        Lite tiene base de conocimiento clínico suficiente para los patterns
-        comunes; el system prompt fuerza brevedad clínica. Fallback explícito
-        a "Sin contraindicaciones médicas conocidas" cubre casos donde lite
-        no tiene confianza. Ahorro: 6× cheaper per call.
+    """[P0-DEEPSEEK-MIGRATION · 2026-06-12] Modelo de la herramienta médica
+    via knob. Default DeepSeek V4 Flash: la tool es Q&A clínico
+    determinístico (temp=0.0), fact-lookup-style sobre interacciones
+    medicamentos↔alimentos / alergias cruzadas / contraindicaciones — NO
+    requiere razonamiento creativo ni multimodal. El system prompt fuerza
+    brevedad clínica y el fallback explícito a "Sin contraindicaciones
+    médicas conocidas" cubre casos de baja confianza.
 
-    Rollback sin redeploy: `MEALFIT_MEDICAL_TOOL_MODEL=gemini-3.5-flash` (o
-    `gemini-3-flash-preview` para path histórico). Test parser-based:
-    `test_p3_cost_cut_aux.py::test_medical_tool_default_is_lite`.
+    Rollback / escalado sin redeploy: `MEALFIT_MEDICAL_TOOL_MODEL=deepseek-v4-pro`.
     """
-    return os.environ.get("MEALFIT_MEDICAL_TOOL_MODEL", "gemini-3.1-flash-lite")
+    return os.environ.get("MEALFIT_MEDICAL_TOOL_MODEL", DEEPSEEK_FLASH)
 
 
 @tool
@@ -68,10 +61,9 @@ def consultar_base_datos_medica(query: str) -> str:
 
     # Utilizamos un LLM ligero pero capaz de razonar como base de datos clínica
     try:
-        clinical_llm = ChatGoogleGenerativeAI(
+        clinical_llm = ChatDeepSeek(
             model=_medical_tool_model_name(),
             temperature=0.0, # Determinista para evitar alucinaciones
-            google_api_key=os.environ.get("GEMINI_API_KEY"),
             max_retries=1,
             # [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] deadline < 20s del _FACT_CHECK
             # _TOOL_TIMEOUT para que el LLM corte primero y libere el slot del pool.

@@ -199,38 +199,37 @@ def test_plan_model_constants_use_helpers():
 
 
 def test_plan_model_defaults_preserved():
-    """Defaults del helper:
-    Pro=gemini-3.1-pro-preview, Flash=gemini-3.5-flash (P1-FLASH-MODEL-GA · 2026-05-21).
-
-    [P1-FLASH-MODEL-GA] Flash default migrado de `gemini-3-flash-preview` (preview,
-    sujeto a cuota free-tier 20 RPD) a `gemini-3.5-flash` (GA, paid-tier directo).
-    Pro queda intacto porque no hay equivalente GA con la misma capacidad médica.
+    """Defaults del helper [P0-DEEPSEEK-MIGRATION · 2026-06-12]:
+    Pro=DEEPSEEK_PRO (tiers pagados), Flash=DEEPSEEK_FLASH (tier gratis).
+    Los defaults referencian las CONSTANTES de llm_provider (no literales) —
+    el SSOT del ID vive en un solo lugar.
     """
     src = _GO_PY.read_text(encoding="utf-8")
 
     pro_default = re.search(
-        r'_env_str\(\s*"MEALFIT_PRO_MODEL"\s*,\s*"([^"]+)"\s*\)',
+        r'_env_str\(\s*"MEALFIT_PRO_MODEL"\s*,\s*(\w+)\s*\)',
         src,
     )
     flash_default = re.search(
-        r'_env_str\(\s*"MEALFIT_FLASH_MODEL"\s*,\s*"([^"]+)"\s*\)',
+        r'_env_str\(\s*"MEALFIT_FLASH_MODEL"\s*,\s*(\w+)\s*\)',
         src,
     )
     assert pro_default is not None, "no _env_str call for MEALFIT_PRO_MODEL"
     assert flash_default is not None, "no _env_str call for MEALFIT_FLASH_MODEL"
 
-    assert pro_default.group(1) == "gemini-3.5-flash", (
-        f"Default Pro model debe ser `gemini-3.5-flash` "
-        f"(P1-ALL-MODELS-GA · 2026-05-21) — got {pro_default.group(1)!r}. "
-        f"Decisión del owner: eliminar TODA dependencia de modelos `*-preview` "
-        f"(riesgo deprecation + free-tier caps). Rollback via env var: "
-        f"`MEALFIT_PRO_MODEL=gemini-3.1-pro-preview`."
+    assert pro_default.group(1) == "DEEPSEEK_PRO", (
+        f"Default Pro model debe ser la constante `DEEPSEEK_PRO` "
+        f"(P0-DEEPSEEK-MIGRATION · 2026-06-12) — got {pro_default.group(1)!r}. "
+        f"Rollback/swap via env var `MEALFIT_PRO_MODEL` sin tocar el default."
     )
-    assert flash_default.group(1) == "gemini-3.5-flash", (
-        f"Default Flash model debe ser `gemini-3.5-flash` (P1-FLASH-MODEL-GA · 2026-05-21) — "
-        f"got {flash_default.group(1)!r}. Si necesitas usar preview, set "
-        f"MEALFIT_FLASH_MODEL env var sin tocar el default."
+    assert flash_default.group(1) == "DEEPSEEK_FLASH", (
+        f"Default Flash model debe ser la constante `DEEPSEEK_FLASH` "
+        f"(P0-DEEPSEEK-MIGRATION · 2026-06-12) — got {flash_default.group(1)!r}."
     )
+    # Y las constantes resuelven a los IDs reales del API DeepSeek V4.
+    from llm_provider import DEEPSEEK_FLASH, DEEPSEEK_PRO
+    assert DEEPSEEK_FLASH == "deepseek-v4-flash"
+    assert DEEPSEEK_PRO == "deepseek-v4-pro"
 
 
 # ---------------------------------------------------------------------------

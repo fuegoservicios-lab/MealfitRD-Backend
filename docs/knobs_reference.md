@@ -93,7 +93,7 @@ completo, usar `/health/version` o `get_knobs_registry_snapshot()`.
 
 | Knob | Default | Cuándo cambiar |
 |---|---|---|
-| `MEALFIT_CB_FAILURE_THRESHOLD` | `3` | Subir a 5-7 si Gemini está flap-eando 5xx pero recovery rápido (3 es agresivo) |
+| `MEALFIT_CB_FAILURE_THRESHOLD` | `3` | Subir a 5-7 si el provider LLM está flap-eando 5xx pero recovery rápido (3 es agresivo) |
 | `MEALFIT_CB_RESET_TIMEOUT_S` | `30` | Subir a 60-120s si los flaps son largos (evita thundering herd post-reset) |
 
 ### Rate limiters
@@ -127,7 +127,10 @@ completo, usar `/health/version` o `get_knobs_registry_snapshot()`.
 
 | Knob | Default | Cuándo cambiar |
 |---|---|---|
-| `MEALFIT_<FEATURE>_MODEL` | varios | Swap de modelo Gemini sin redeploy (modelos preview pueden deprecarse sin aviso). Patrón `MEALFIT_CHAT_AGENT_MODEL`, `MEALFIT_CRITIQUE_MODEL`, etc. |
+| `MEALFIT_<FEATURE>_MODEL` | varios | Swap de modelo LLM sin redeploy. Patrón `MEALFIT_CHAT_AGENT_MODEL`, `MEALFIT_CRITIQUE_MODEL`, etc. El override per-feature gana sobre el router por tier (P0-DEEPSEEK-MIGRATION). |
+| `MEALFIT_MODEL_FREE_TIER` / `MEALFIT_MODEL_PAID_TIER` | `deepseek-v4-flash` / `deepseek-v4-pro` | Router por tier de suscripción — ver `backend/docs/llm_tier_routing.md` |
+| `MEALFIT_DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | Proxy/endpoint alternativo OpenAI-compatible |
+| `MEALFIT_TIER_CACHE_TTL_S` | `300` | TTL del cache de `plan_tier` por usuario (clamp [10, 3600]) |
 
 ### Pantry / chunk operacional
 

@@ -33,29 +33,27 @@ except Exception:
     sys.modules.setdefault("langgraph.checkpoint.memory", MagicMock())
     sys.modules.setdefault("langgraph.checkpoint.postgres", MagicMock())
 
-# [P0-5] Same eager-import for `langchain_google_genai`. Several test files install
-# a stub via `_install_stub("langchain_google_genai", GoogleGenerativeAIEmbeddings=object)`
-# without exposing `ChatGoogleGenerativeAI`. When such a file loads first, a later
-# test that imports `ChatGoogleGenerativeAI` (e.g. via cron_tasks → ai_helpers →
-# graph_orchestrator) raises `ImportError: cannot import name 'ChatGoogleGenerativeAI'
-# from 'langchain_google_genai' (unknown location)`. Importing the real package
-# here primes sys.modules with the full surface, and subsequent stub `setdefault`
-# / `_install_stub` calls become no-ops because the key is already populated.
+# [P0-5 · P0-DEEPSEEK-MIGRATION 2026-06-12] Same eager-import for
+# `langchain_openai` (base client of the DeepSeek provider, see
+# `llm_provider.py`). If a test file installs a partial stub first, a later
+# import of the real surface (e.g. via cron_tasks → ai_helpers →
+# llm_provider) raises ImportError. Importing the real package here primes
+# sys.modules with the full surface, and subsequent stub `setdefault` /
+# `_install_stub` calls become no-ops because the key is already populated.
 try:
-    import langchain_google_genai  # noqa: F401
-    import langchain_google_genai.chat_models  # noqa: F401
-    from langchain_google_genai import (  # noqa: F401
-        ChatGoogleGenerativeAI,
-        GoogleGenerativeAIEmbeddings,
+    import langchain_openai  # noqa: F401
+    from langchain_openai import (  # noqa: F401
+        ChatOpenAI,
+        OpenAIEmbeddings,
     )
 except Exception:
     import sys
     from unittest.mock import MagicMock
-    if "langchain_google_genai" not in sys.modules:
+    if "langchain_openai" not in sys.modules:
         _stub = MagicMock()
-        _stub.ChatGoogleGenerativeAI = object
-        _stub.GoogleGenerativeAIEmbeddings = object
-        sys.modules["langchain_google_genai"] = _stub
+        _stub.ChatOpenAI = object
+        _stub.OpenAIEmbeddings = object
+        sys.modules["langchain_openai"] = _stub
 
 import uuid
 import json
