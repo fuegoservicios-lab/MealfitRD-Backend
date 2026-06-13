@@ -274,10 +274,14 @@ def test_db_facts_vector_searches_cast_id_to_text():
 # ---------------------------------------------------------------------------
 
 def test_last_known_pfix_bumped_to_neon_migration():
+    """[P1-NEON-AUTH-MIGRATION · 2026-06-13] Acepta cualquier marker `P1-NEON-`
+    (DB o AUTH): ambos son fases de la misma migración a Neon. El cierre de la
+    fase Auth (posterior) movió el marker de DB→AUTH; lo que importa es que el
+    marker refleje la migración Neon, no la sub-fase exacta."""
     src = _read("app.py")
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
     assert m, "_LAST_KNOWN_PFIX no encontrado en app.py"
-    assert m.group(1).startswith("P1-NEON-DB-MIGRATION"), (
-        f"Marker actual: {m.group(1)!r} — el cierre de P1-NEON-DB-MIGRATION "
-        "debe bumpearlo (contrato /health/version + deploy-lag detector)."
+    assert m.group(1).startswith("P1-NEON-"), (
+        f"Marker actual: {m.group(1)!r} — el cierre de la migración Neon "
+        "(DB o AUTH) debe bumpearlo (contrato /health/version + deploy-lag)."
     )
