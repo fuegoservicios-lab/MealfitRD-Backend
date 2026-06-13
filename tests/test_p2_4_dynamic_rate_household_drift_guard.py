@@ -16,6 +16,7 @@ Ejecutar:
 """
 import os
 import sys
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,36 +27,59 @@ import pytest
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _make_supabase_mock(plan_data: dict | None, health_profile: dict | None = None):
-    """Construye un mock de `supabase` que devuelve `plan_data` para meal_plans
-    y `health_profile` para user_profiles. Soporta el chain `.table().select().eq().order().limit().execute()`
-    y `.table().select().eq().limit().execute()`.
+def _make_sql_mock(plan_data: dict | None, health_profile: dict | None = None):
+    """[P1-NEON-DB-MIGRATION · 2026-06-12] Mock de `db_inventory.execute_sql_query`
+    (el transporte PostgREST `supabase.table(...)` fue reemplazado por SQL
+    directo via pool psycopg). Enruta por la tabla referenciada en el SQL:
+
+      - `FROM meal_plans`     → `{"plan_data": plan_data}` (fetch_one) o None.
+      - `FROM user_profiles`  → `{"health_profile": health_profile}` o None.
+
+    Además verifica la forma del SQL productivo (scoping por user): el SELECT
+    de meal_plans DEBE filtrar `WHERE user_id = %s` y el de user_profiles
+    `WHERE id = %s` — si el source cambia la query, el router falla loud en
+    vez de devolver data del mock a una query distinta.
+
+    Paridad de tipos post-migración: psycopg decodifica jsonb a dict nativo,
+    así que `plan_data`/`health_profile` se devuelven como dict (no string).
     """
-    mp_chain = MagicMock()
-    mp_chain.execute.return_value = MagicMock(
-        data=[{"plan_data": plan_data}] if plan_data is not None else []
-    )
+    def _router(sql, params=None, fetch_one=False, fetch_all=False):
+        if "FROM meal_plans" in sql:
+            assert "WHERE user_id = %s" in sql, (
+                f"SELECT de meal_plans sin filtro `WHERE user_id = %s` — "
+                f"scoping perdido o query renombrada. SQL: {sql}"
+            )
+            return {"plan_data": plan_data} if plan_data is not None else None
+        if "FROM user_profiles" in sql:
+            assert "WHERE id = %s" in sql, (
+                f"SELECT de user_profiles sin filtro `WHERE id = %s`. SQL: {sql}"
+            )
+            return {"health_profile": health_profile} if health_profile is not None else None
+        raise AssertionError(f"Query SQL inesperada en _compute_dynamic_consumption_rates: {sql}")
 
-    up_chain = MagicMock()
-    up_chain.execute.return_value = MagicMock(
-        data=[{"health_profile": health_profile}] if health_profile is not None else []
-    )
+    return MagicMock(side_effect=_router)
 
-    def table_router(name):
-        chain = MagicMock()
-        # meal_plans path: select().eq().order().limit().execute()
-        # user_profiles path: select().eq().limit().execute()
-        if name == "meal_plans":
-            chain.select.return_value.eq.return_value.order.return_value.limit.return_value = mp_chain
-            chain.select.return_value.eq.return_value.order.return_value.limit.return_value.execute = mp_chain.execute
-        elif name == "user_profiles":
-            chain.select.return_value.eq.return_value.limit.return_value = up_chain
-            chain.select.return_value.eq.return_value.limit.return_value.execute = up_chain.execute
-        return chain
 
-    sup = MagicMock()
-    sup.table.side_effect = table_router
-    return sup
+def _queried_tables(sql_mock) -> list:
+    """Tablas tocadas por el mock (en orden), derivadas del primer arg SQL."""
+    tables = []
+    for call in sql_mock.call_args_list:
+        sql = call.args[0]
+        if "FROM meal_plans" in sql:
+            tables.append("meal_plans")
+        elif "FROM user_profiles" in sql:
+            tables.append("user_profiles")
+    return tables
+
+
+@contextmanager
+def _transport(sql_mock):
+    """Inyecta el transporte mockeado: `_db_available()` lee
+    `db_core.connection_pool` lazy (truthy ⇒ DB ok) y la función bajo test
+    usa el símbolo módulo-level `db_inventory.execute_sql_query`."""
+    with patch("db_core.connection_pool", object()), \
+         patch("db_inventory.execute_sql_query", sql_mock):
+        yield
 
 
 def _weekly_with_chicken(qty_g: float = 1400.0):
@@ -77,8 +101,8 @@ def test_no_drift_returns_rates_when_multipliers_match():
         "calc_household_multiplier": 4.0,
         "aggregated_shopping_list_weekly": _weekly_with_chicken(1400.0),
     }
-    sup = _make_supabase_mock(plan_data)
-    with patch("db_inventory.supabase", sup):
+    sql_mock = _make_sql_mock(plan_data)
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.0)
     assert rates, "Sin drift, los rates dinámicos deben devolverse"
@@ -94,9 +118,9 @@ def test_drift_within_threshold_returns_rates():
         "calc_household_multiplier": 4.0,
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
-    sup = _make_supabase_mock(plan_data)
+    sql_mock = _make_sql_mock(plan_data)
     # 4.0 → 4.5 = drift 12.5%, dentro del 20% default
-    with patch("db_inventory.supabase", sup):
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.5)
     assert rates, "Drift 12.5% < 20% threshold → rates devueltos"
@@ -110,9 +134,9 @@ def test_drift_exceeds_threshold_returns_empty():
         "calc_household_multiplier": 4.5,
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
-    sup = _make_supabase_mock(plan_data)
+    sql_mock = _make_sql_mock(plan_data)
     # 4.5 → 3.0 = drift 33.3%, excede 20%
-    with patch("db_inventory.supabase", sup):
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=3.0)
     assert rates == {}, "Drift 33% > 20% threshold → caller debe caer al fallback hardcoded"
@@ -126,8 +150,8 @@ def test_missing_calc_household_multiplier_returns_empty():
         # Sin `calc_household_multiplier` → no podemos validar drift
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
-    sup = _make_supabase_mock(plan_data)
-    with patch("db_inventory.supabase", sup):
+    sql_mock = _make_sql_mock(plan_data)
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.0)
     assert rates == {}, "Plan sin metadata → conservador, fallback hardcoded"
@@ -141,10 +165,10 @@ def test_threshold_knob_override_tightens_guard():
         "calc_household_multiplier": 4.0,
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
-    sup = _make_supabase_mock(plan_data)
+    sql_mock = _make_sql_mock(plan_data)
     # 4.0 → 4.5 = drift 12.5%, threshold ajustado a 5% → debe bloquear
     with patch.dict(os.environ, {"MEALFIT_DYNAMIC_RATE_HOUSEHOLD_DRIFT_THRESHOLD": "0.05"}):
-        with patch("db_inventory.supabase", sup):
+        with _transport(sql_mock):
             # Forzar re-lectura del knob: el helper hace import lazy cada llamada
             from db_inventory import _compute_dynamic_consumption_rates
             rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.5)
@@ -159,10 +183,10 @@ def test_threshold_knob_override_relaxes_guard():
         "calc_household_multiplier": 4.5,
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
-    sup = _make_supabase_mock(plan_data)
+    sql_mock = _make_sql_mock(plan_data)
     # drift 33%, threshold 50% → pasa
     with patch.dict(os.environ, {"MEALFIT_DYNAMIC_RATE_HOUSEHOLD_DRIFT_THRESHOLD": "0.50"}):
-        with patch("db_inventory.supabase", sup):
+        with _transport(sql_mock):
             from db_inventory import _compute_dynamic_consumption_rates
             rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=3.0)
     assert rates, "Threshold 50% > drift 33% → debe pasar"
@@ -176,12 +200,12 @@ def test_caller_passes_multiplier_skips_user_profiles_query():
         "calc_household_multiplier": 4.0,
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
-    sup = _make_supabase_mock(plan_data)  # health_profile=None → si se llamara fallaría
-    with patch("db_inventory.supabase", sup):
+    sql_mock = _make_sql_mock(plan_data)  # health_profile=None → si se consultara, retornaría None
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.0)
-    # Verificar que .table fue llamado solo con "meal_plans" (no "user_profiles")
-    table_calls = [call.args[0] for call in sup.table.call_args_list]
+    # Verificar que solo se consultó meal_plans (no user_profiles)
+    table_calls = _queried_tables(sql_mock)
     assert "user_profiles" not in table_calls, (
         "Si el caller pasa current_household_multiplier, el guard NO debe consultar user_profiles"
     )
@@ -197,11 +221,11 @@ def test_caller_passes_none_queries_user_profiles():
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
     health_profile = {"householdComposition": {"adults": 4, "children": 0}}
-    sup = _make_supabase_mock(plan_data, health_profile=health_profile)
-    with patch("db_inventory.supabase", sup):
+    sql_mock = _make_sql_mock(plan_data, health_profile=health_profile)
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=None)
-    table_calls = [call.args[0] for call in sup.table.call_args_list]
+    table_calls = _queried_tables(sql_mock)
     assert "user_profiles" in table_calls, (
         "Sin current_household_multiplier, el guard debe resolver M_now consultando user_profiles"
     )
@@ -213,8 +237,8 @@ def test_caller_passes_none_queries_user_profiles():
 # 9. No hay plan activo: {} (path independiente del guard)
 # ---------------------------------------------------------------------------
 def test_no_plan_returns_empty_without_invoking_guard():
-    sup = _make_supabase_mock(plan_data=None)
-    with patch("db_inventory.supabase", sup):
+    sql_mock = _make_sql_mock(plan_data=None)
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.0)
     assert rates == {}, "Sin plan activo → {} (no se evalúa el guard)"
@@ -228,8 +252,8 @@ def test_empty_weekly_returns_empty_even_with_no_drift():
         "calc_household_multiplier": 4.0,
         "aggregated_shopping_list_weekly": [],
     }
-    sup = _make_supabase_mock(plan_data)
-    with patch("db_inventory.supabase", sup):
+    sql_mock = _make_sql_mock(plan_data)
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.0)
     assert rates == {}, "Weekly vacía → no hay rates qué derivar"
@@ -243,9 +267,9 @@ def test_drift_at_exact_threshold_does_not_block():
         "calc_household_multiplier": 5.0,
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
-    sup = _make_supabase_mock(plan_data)
+    sql_mock = _make_sql_mock(plan_data)
     # 5.0 → 4.0 = drift exactamente 0.20 (igual al default)
-    with patch("db_inventory.supabase", sup):
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         rates = _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.0)
     assert rates, "Drift == threshold (no excede) → debe pasar"
@@ -259,8 +283,8 @@ def test_knob_registered_in_global_registry():
         "calc_household_multiplier": 4.0,
         "aggregated_shopping_list_weekly": _weekly_with_chicken(),
     }
-    sup = _make_supabase_mock(plan_data)
-    with patch("db_inventory.supabase", sup):
+    sql_mock = _make_sql_mock(plan_data)
+    with _transport(sql_mock):
         from db_inventory import _compute_dynamic_consumption_rates
         _compute_dynamic_consumption_rates("user-1", current_household_multiplier=4.0)
     from graph_orchestrator import get_knobs_registry_snapshot

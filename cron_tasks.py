@@ -6242,6 +6242,15 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             # [P2-NEW-7 · 2026-05-11] GC mensual delay-tolerant.
             misfire_grace_time=_aggregator_misfire_grace_s(),
         )
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Movido a su bloque correcto:
+        # este logger.info referencia `_ORPHAN_GC_INT` (definido arriba en
+        # ESTE bloque P2-HIST-5). Estaba mal ubicado dentro del bloque hermano
+        # P2-NEW-6 → UnboundLocalError si el job telemetry-GC ya existía pero
+        # el de summaries no (escenario de re-registro idempotente).
+        logger.info(
+            f"⏰ [P2-HIST-5/ORPHAN-GC] Cron _gc_orphan_chunk_telemetry "
+            f"registrado cada {_ORPHAN_GC_INT}h."
+        )
 
     # [P2-NEW-6 · 2026-05-11] GC mensual de `conversation_summaries`
     # con `session_id IS NULL` (huérfanas atípicas no cubiertas por
@@ -6264,10 +6273,6 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [P2-NEW-6/SUMMARIES-GC] Cron _gc_orphan_conversation_summaries "
             f"registrado cada {_SUMMARIES_GC_INT}h."
-        )
-        logger.info(
-            f"⏰ [P2-HIST-5/ORPHAN-GC] Cron _gc_orphan_chunk_telemetry "
-            f"registrado cada {_ORPHAN_GC_INT}h."
         )
 
     # [P1-PROD-AUDIT-BUNDLE · 2026-05-28] Retención age-based de

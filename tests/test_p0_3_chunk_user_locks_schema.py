@@ -117,6 +117,27 @@ def test_chunk_user_locks_insert_accepts_uuid_task_id():
         "DELETE FROM chunk_user_locks WHERE user_id = %s", (test_user_id,)
     )
 
+    # [test fix · Neon] `chunk_user_locks.user_id` tiene FK
+    # `chunk_user_locks_user_id_fkey REFERENCES user_profiles(id) ON DELETE CASCADE`.
+    # Pre-migración el INSERT iba por PostgREST; ahora `execute_sql_write` ejecuta el
+    # INSERT REAL contra Neon y la FK se enforce → el sentinel debe existir en
+    # user_profiles (y su parent auth.users) o la INSERT lanza ForeignKeyViolation
+    # en vez del type-mismatch que este smoke pretende detectar. Sembramos el parent
+    # de forma idempotente (mismo patrón que el fixture `seeded_user_profile`) y lo
+    # limpiamos en el finally. La propiedad verificada NO cambia: el INSERT del worker
+    # con un uuid task_id no debe romper por tipo de `locked_by_chunk_id`.
+    execute_sql_write(
+        "INSERT INTO auth.users (id, aud, role, email) "
+        "VALUES (%s, 'authenticated', 'authenticated', %s) "
+        "ON CONFLICT (id) DO NOTHING",
+        (test_user_id, f"p0-3-locks-{test_user_id[:8]}@test.local"),
+    )
+    execute_sql_write(
+        "INSERT INTO user_profiles (id, health_profile) VALUES (%s, '{}'::jsonb) "
+        "ON CONFLICT (id) DO NOTHING",
+        (test_user_id,),
+    )
+
     try:
         # Replica EXACTAMENTE el INSERT del worker (cron_tasks.py:11325).
         # Si el tipo de locked_by_chunk_id no es uuid-compatible, esto falla
@@ -143,6 +164,14 @@ def test_chunk_user_locks_insert_accepts_uuid_task_id():
             f"esperado {test_chunk_id!r}"
         )
     finally:
+        # Teardown FK-safe: locks → user_profiles → auth.users. (El DELETE de
+        # user_profiles cascadea a chunk_user_locks, pero lo hacemos explícito.)
         execute_sql_write(
             "DELETE FROM chunk_user_locks WHERE user_id = %s", (test_user_id,)
+        )
+        execute_sql_write(
+            "DELETE FROM user_profiles WHERE id = %s", (test_user_id,)
+        )
+        execute_sql_write(
+            "DELETE FROM auth.users WHERE id = %s", (test_user_id,)
         )

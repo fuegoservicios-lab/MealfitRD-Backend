@@ -28,9 +28,15 @@ Fix (P1-A · 2026-05-10):
     ROW) garantiza que cualquier mutación al plan bumpee la columna,
     así que cualquier append al history cae dentro del lookback.
 
+[P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el cron migró de
+PostgREST (builder `.gte(col, cutoff)`) a SQL directo via
+`execute_sql_query`. El filtro vive ahora en el literal SQL
+`WHERE updated_at >= %s` dentro de la misma función — los regex de este
+test parsean esa forma. Misma propiedad, transporte nuevo.
+
 Cobertura de este test (parser-based, no DB):
-    1. La función usa `updated_at` en el filtro `gte` de la query a
-       `meal_plans` (no `created_at`).
+    1. La función usa `updated_at` en el filtro `WHERE <col> >= %s` de la
+       query a `meal_plans` (no `created_at`).
     2. El comentario obsoleto que afirmaba "meal_plans NO tiene columna
        updated_at" desapareció (defense-in-depth contra revertir el fix
        sin actualizar la documentación).
@@ -84,27 +90,32 @@ def _extract_function_block(src: str, fn_name: str) -> str:
 # 1. La query del cron filtra por `updated_at`, no `created_at`.
 # ---------------------------------------------------------------------------
 def test_cron_filters_by_updated_at_not_created_at():
-    """Núcleo del fix: el `.gte` sobre `meal_plans` debe usar
+    """Núcleo del fix: el filtro temporal sobre `meal_plans` debe usar
     `updated_at`. Si esto falla, el cron volvió a perder regeneraciones
-    de planes viejos (regresión de P1-A → P0-OBS-1)."""
+    de planes viejos (regresión de P1-A → P0-OBS-1).
+
+    [P1-NEON-DB-MIGRATION] El filtro es ahora el literal SQL
+    `WHERE updated_at >= %s` dentro del `execute_sql_query` de la función
+    (antes builder PostgREST `.gte("updated_at", ...)`)."""
     src = _read(_CRON_PATH)
     block = _extract_function_block(src, "_aggregate_coherence_block_history_metrics")
 
-    # Debe haber al menos un .gte("updated_at", ...) — el call a Supabase REST.
+    # Debe haber al menos un `WHERE updated_at >= %s` — el SQL ejecutable
+    # del fetch (el placeholder %s ancla a código real, no comentarios).
     has_updated_at_filter = bool(re.search(
-        r'\.gte\(\s*[\'"]updated_at[\'"]\s*,', block,
+        r"WHERE\s+updated_at\s*>=\s*%s", block,
     ))
     assert has_updated_at_filter, (
-        "El cron debe filtrar `meal_plans` por `updated_at` (post-P0-2). "
-        "Si revertiste a `created_at`, perdiste regeneraciones de planes "
-        "viejos — la intención explícita de la migración P0-2 era cerrar "
-        "ese gap."
+        "El cron debe filtrar `meal_plans` por `updated_at` (post-P0-2) "
+        "via `WHERE updated_at >= %s` en el SQL del fetch. Si revertiste "
+        "a `created_at`, perdiste regeneraciones de planes viejos — la "
+        "intención explícita de la migración P0-2 era cerrar ese gap."
     )
 
     # Y NO debe haber filtro por `created_at` en el mismo bloque (el
     # trade-off documentado quedó obsoleto post-migración).
     has_created_at_filter = bool(re.search(
-        r'\.gte\(\s*[\'"]created_at[\'"]\s*,', block,
+        r"WHERE\s+created_at\s*>=\s*%s", block,
     ))
     assert not has_created_at_filter, (
         "El cron NO debe filtrar por `created_at` post-P1-A. Si necesitas "

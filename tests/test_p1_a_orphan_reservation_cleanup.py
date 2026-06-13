@@ -85,7 +85,16 @@ _install_stub(
 )
 _install_stub("pydantic", BaseModel=object, Field=lambda default=None, **_kw: default)
 _install_stub("schemas", HealthProfileSchema=object, ExpandedRecipeModel=object)
-_install_stub("graph_orchestrator", run_plan_pipeline=lambda *_a, **_kw: {})
+# cron_tasks importa también `_env_int`/`_env_float`/`_env_bool` desde
+# graph_orchestrator (auto-registro de knobs, P1-A · 2026-05-08) — el stub
+# debe proveerlos o el `import cron_tasks` falla en colección standalone.
+_install_stub(
+    "graph_orchestrator",
+    run_plan_pipeline=lambda *_a, **_kw: {},
+    _env_int=lambda _name, default=0, *_a, **_kw: default,
+    _env_float=lambda _name, default=0.0, *_a, **_kw: default,
+    _env_bool=lambda _name, default=False, *_a, **_kw: default,
+)
 _install_stub("memory_manager", build_memory_context=lambda *_a, **_kw: "")
 _install_stub("services", _save_plan_and_track_background=lambda *_a, **_kw: None)
 _install_stub("agent", analyze_preferences_agent=lambda *_a, **_kw: {})
@@ -105,7 +114,14 @@ except ImportError:
     )
 apscheduler_pkg = _install_stub("apscheduler")
 apscheduler_triggers_pkg = _install_stub("apscheduler.triggers")
-apscheduler_cron_pkg = _install_stub("apscheduler.triggers.cron", CronTrigger=object)
+# CronTrigger debe ser instanciable con kwargs: `register_plan_chunk_scheduler`
+# hace imports locales `from apscheduler.triggers.cron import CronTrigger as
+# _CronTrigger` que bypassean el patch de `cron_tasks.CronTrigger`, y un stub
+# `object` revienta con `object() takes no arguments`.
+apscheduler_cron_pkg = _install_stub(
+    "apscheduler.triggers.cron",
+    CronTrigger=lambda *_a, **_kw: "cron_trigger_stub",
+)
 apscheduler_pkg.triggers = apscheduler_triggers_pkg
 apscheduler_triggers_pkg.cron = apscheduler_cron_pkg
 
@@ -353,5 +369,12 @@ def test_cron_registered_in_scheduler():
 
     assert "recover_orphan_chunk_reservations" in scheduler.jobs
     job = scheduler.jobs["recover_orphan_chunk_reservations"]
-    assert job["func"] is cron_tasks._recover_orphan_chunk_reservations
+    # [P2-CRON-CORRELATION · 2026-05-28] `_add_job_jittered` envuelve cada
+    # cron func con un scope de correlation_id vía functools.wraps — el
+    # callable registrado puede ser el wrapper. `wraps` expone el original en
+    # `__wrapped__`; la propiedad verificada sigue siendo "el job ejecuta
+    # _recover_orphan_chunk_reservations".
+    registered_fn = job["func"]
+    unwrapped = getattr(registered_fn, "__wrapped__", registered_fn)
+    assert unwrapped is cron_tasks._recover_orphan_chunk_reservations
     assert job["trigger"] == "interval"

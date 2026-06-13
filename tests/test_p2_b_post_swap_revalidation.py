@@ -251,11 +251,17 @@ def test_block_flag_not_mutated(base_final_state, stub_aggregates):
 def test_p3b_cron_counts_post_swap_revalidation():
     """[P2-B → P3-B integration] El nuevo valor de action_taken debe tener
     su propio bucket en el cron `_aggregate_coherence_block_history_metrics`,
-    NO caer en `none_other` ni inflar `null_block_set`."""
+    NO caer en `none_other` ni inflar `null_block_set`.
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el fetch de meal_plans
+    es ahora `cron_tasks.execute_sql_query` (SQL directo, rows como dicts
+    con id/user_id str por el cast ::text) + guard `db_core.connection_pool`.
+    """
     import importlib, cron_tasks
     importlib.reload(cron_tasks)  # asegura código fresh
 
     # Construye plans con history que contiene post_swap_revalidation
+    # (rows con el shape del SELECT post-Neon: id/user_id ya str).
     plans = [{
         "id": "p1",
         "user_id": "u1",
@@ -277,22 +283,12 @@ def test_p3b_cron_counts_post_swap_revalidation():
     def _fake_execute_sql_write(sql, params, **kwargs):
         captured.append({"sql": sql, "params": params})
 
-    class _StubResult:
-        def __init__(self, data): self.data = data
-
-    class _StubTable:
-        def __init__(self, plans): self._plans = plans
-        def select(self, _): return self
-        def gte(self, *_): return self
-        def limit(self, _): return self
-        def execute(self): return _StubResult(self._plans)
-
-    class _StubSupabase:
-        def __init__(self, plans): self._plans = plans
-        def table(self, _): return _StubTable(self._plans)
+    def _fake_execute_sql_query(sql, params=None, **kwargs):
+        return list(plans)
 
     import db_core
-    with patch.object(db_core, "supabase", _StubSupabase(plans)), \
+    with patch.object(db_core, "connection_pool", object()), \
+         patch.object(cron_tasks, "execute_sql_query", _fake_execute_sql_query), \
          patch.object(cron_tasks, "execute_sql_write", _fake_execute_sql_write):
         cron_tasks._aggregate_coherence_block_history_metrics()
 

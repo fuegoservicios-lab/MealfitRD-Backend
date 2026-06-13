@@ -251,13 +251,20 @@ def test_h_anchors_present(billing_src: str):
 
 
 # ============================================================================
-# Test I: _persist_billing_alert usa supabase.table('system_alerts').upsert
+# Test I: _persist_billing_alert hace UPSERT SQL a system_alerts
 # ============================================================================
 
 def test_i_persist_billing_alert_uses_system_alerts_upsert(billing_src: str):
     """`_persist_billing_alert` debe escribir a `system_alerts` con
-    `on_conflict='alert_key'` (idempotente, mismo patrón que el resto
-    de emisores documentados en la tabla de CLAUDE.md)."""
+    `ON CONFLICT (alert_key) DO UPDATE` (idempotente, mismo patrón que el
+    resto de emisores documentados en la tabla de CLAUDE.md).
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado del transporte viejo
+    (`supabase.table("system_alerts").upsert(..., on_conflict="alert_key")`)
+    al SQL directo: `INSERT INTO public.system_alerts ... ON CONFLICT
+    (alert_key) DO UPDATE` con `resolved_at = NULL` en el DO UPDATE
+    (re-emitir el mismo alert_key "reabre" la alert — parity con el
+    upsert PostgREST previo)."""
     # Localizar el inicio del helper. Tolerante a `def ...(args) -> None:`
     # multi-línea con type hints.
     helper_start_re = re.compile(r"def\s+_persist_billing_alert\s*\(")
@@ -266,21 +273,28 @@ def test_i_persist_billing_alert_uses_system_alerts_upsert(billing_src: str):
         "P1-BILLING-FAIL-LOUD: definición de `_persist_billing_alert` no "
         "encontrada."
     )
-    # Ventana razonable post-definición: el helper debería caber en 2KB.
-    # Si el body crece más allá, el test puede ampliarse — pero 2KB es
-    # generoso para un UPSERT idempotente.
-    body = billing_src[m.start(): m.start() + 2000]
-    assert 'supabase.table("system_alerts")' in body, (
+    # Aislar el cuerpo del helper hasta el siguiente statement top-level
+    # (def / router) — incluye docstring + SQL del UPSERT.
+    tail = billing_src[m.start():]
+    end_m = re.search(r"\n(?:async def |def |router\s*=)", tail)
+    body = tail[: end_m.start()] if end_m else tail[:3000]
+    assert "INSERT INTO public.system_alerts" in body, (
         "P1-BILLING-FAIL-LOUD: helper no escribe a `system_alerts`. "
         "Esa es la tabla canónica del policy 'system_alerts resolution' "
         "en CLAUDE.md."
     )
-    assert 'on_conflict="alert_key"' in body, (
+    assert "ON CONFLICT (alert_key) DO UPDATE" in body, (
         "P1-BILLING-FAIL-LOUD: el UPSERT debe usar "
-        "`on_conflict='alert_key'` para que retries del mismo incidente "
-        "no dupliquen filas (idempotencia)."
+        "`ON CONFLICT (alert_key) DO UPDATE` para que retries del mismo "
+        "incidente no dupliquen filas (idempotencia)."
     )
-    assert '"alert_type": "billing"' in body, (
-        "P1-BILLING-FAIL-LOUD: alert_type debe ser 'billing' para que "
-        "dashboards/queries puedan filtrar por categoría."
+    assert re.search(r"VALUES\s*\(%s,\s*'billing'", body), (
+        "P1-BILLING-FAIL-LOUD: alert_type debe ser 'billing' (literal en "
+        "el VALUES del INSERT) para que dashboards/queries puedan filtrar "
+        "por categoría."
+    )
+    assert "resolved_at = NULL" in body, (
+        "P1-BILLING-FAIL-LOUD: el DO UPDATE debe resetear "
+        "`resolved_at = NULL` — re-emitir el mismo alert_key reabre la "
+        "alert (semántica del modelo upsert de system_alerts en CLAUDE.md)."
     )

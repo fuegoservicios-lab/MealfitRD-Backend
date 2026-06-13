@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 from fastapi import Response
-from db_inventory import get_user_inventory, release_meal_reservation
+from db_inventory import get_user_inventory_net, release_meal_reservation
 
 from cron_tasks import (
     _alert_if_degraded_rate_high,
@@ -746,9 +746,21 @@ def test_learning_metrics_counts_cross_category_fatigue_hits():
     assert metrics["fatigued_violations"] == 1
 
 
+# [test fix · Neon] Dos cambios:
+# 1) (transporte) Antes mockeaba `db_inventory.supabase` (símbolo removido en la
+#    migración → AttributeError de setup). El perfil se lee ahora vía
+#    `execute_sql_query` (SELECT health_profile FROM user_profiles); re-mockeamos ese
+#    símbolo con un side_effect que enruta por query (householdSize=1 + None para el
+#    SELECT de plan activo → rates dinámicos {} → fallback por categoría).
+# 2) (bug pre-existente, ya rojo en prerewrite_failed.txt) El test verifica que se use
+#    `available_quantity` (0.75) tras reservas, pero llamaba a `get_user_inventory`, que
+#    formatea con `quantity` GROSS (2.0 → "2 lbs") y nunca podía cumplir el assert. La
+#    función que SÍ prefiere `available_quantity` es `get_user_inventory_net`
+#    (db_inventory.py:552). Corregido el target al `_net` — misma propiedad que el
+#    nombre/docstring del test siempre pretendieron verificar.
 @patch('db_inventory.get_raw_user_inventory')
-@patch('db_inventory.supabase')
-def test_get_user_inventory_uses_available_quantity_after_reservations(mock_supabase, mock_raw_inventory):
+@patch('db_inventory.execute_sql_query')
+def test_get_user_inventory_uses_available_quantity_after_reservations(mock_query, mock_raw_inventory):
     mock_raw_inventory.return_value = [
         {
             "ingredient_name": "Pechuga de pollo",
@@ -759,20 +771,35 @@ def test_get_user_inventory_uses_available_quantity_after_reservations(mock_supa
             "created_at": "2026-04-20T12:00:00",
         }
     ]
-    mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
-        {"health_profile": {"householdSize": 1}}
-    ]
 
-    inventory = get_user_inventory("user_123")
+    def _query_side_effect(query, params=None, fetch_one=False, fetch_all=False, **kwargs):
+        if "health_profile" in query and "user_profiles" in query:
+            return {"health_profile": {"householdSize": 1}}
+        # SELECT plan_data FROM meal_plans (rates dinámicos): sin plan activo.
+        return None
+
+    mock_query.side_effect = _query_side_effect
+
+    inventory = get_user_inventory_net("user_123")
 
     assert any("0.75" in item and "Pechuga de pollo" in item for item in inventory)
 
 
-@patch('db_inventory.supabase')
-def test_release_meal_reservation_removes_matching_entries(mock_supabase):
-    table_mock = MagicMock()
-    mock_supabase.table.return_value = table_mock
-    table_mock.select.return_value.eq.return_value.gt.return_value.execute.return_value.data = [
+# [test fix · Neon] Antes mockeaba `db_inventory.supabase` (removido) y aserciones sobre
+# `table_mock.update.call_args`. `release_meal_reservation` lee ahora vía
+# `execute_sql_query` (SELECT ... reserved_quantity::float8, reservation_details FROM
+# user_inventory WHERE reserved_quantity > 0) y escribe vía `_update_row_reservation` →
+# `execute_sql_write("UPDATE user_inventory SET reserved_quantity = %s,
+# reservation_details = %s WHERE id = %s", (rounded, Jsonb(details), row_id))`.
+# Re-mockeamos ambos + connection_pool truthy (_db_available); la propiedad verificada
+# es idéntica: el reserved_quantity baja a 1.5 y la key matcheada se elimina del jsonb.
+@patch('db_inventory.execute_sql_write')
+@patch('db_inventory.execute_sql_query')
+def test_release_meal_reservation_removes_matching_entries(mock_query, mock_write, monkeypatch):
+    import db_core
+    monkeypatch.setattr(db_core, "connection_pool", object(), raising=False)
+
+    mock_query.return_value = [
         {
             "id": "inv_1",
             "reserved_quantity": 3.0,
@@ -786,9 +813,13 @@ def test_release_meal_reservation_removes_matching_entries(mock_supabase):
     released = release_meal_reservation("user_123", "Pollo con arroz")
 
     assert released == 1
-    update_payload = table_mock.update.call_args[0][0]
-    assert update_payload["reserved_quantity"] == 1.5
-    assert "chunk:task_1:meal:pollo_con_arroz" not in update_payload["reservation_details"]
+    # Params del UPDATE: (reserved_quantity, Jsonb(reservation_details), row_id).
+    update_params = mock_write.call_args[0][1]
+    assert update_params[0] == 1.5
+    # `reservation_details` viaja envuelto en psycopg Jsonb(...); el dict real está en .obj.
+    new_details = getattr(update_params[1], "obj", update_params[1])
+    assert "chunk:task_1:meal:pollo_con_arroz" not in new_details
+    assert update_params[2] == "inv_1"
 
 
 def test_build_filtered_edge_recipe_day_respects_dislikes_and_diet():
@@ -900,7 +931,11 @@ def test_degraded_rate_alert_does_not_persist_below_threshold(mock_write, mock_q
 
 
 def _mock_execute_sql_write_factory(tasks_to_return):
-    def side_effect(query, params=None, returning=False):
+    # [test fix · Neon] `execute_sql_write` ganó el kwarg `lock_timeout_ms` (db_core.py:469,
+    # usado por el heartbeat de chunks P0-1). El side_effect debe absorberlo o el heartbeat
+    # lanza `TypeError: got an unexpected keyword argument 'lock_timeout_ms'`, rompiendo el
+    # write y cascadeando al merge/shuffle del worker.
+    def side_effect(query, params=None, returning=False, **kwargs):
         if "RETURNING" in query:
             return tasks_to_return
         return None
@@ -911,6 +946,15 @@ def _mock_execute_sql_query_factory(plan_data, backup_plan, user_profile=None, t
         res = None
         if "SELECT * FROM plan_chunk_queue" in query:
             res = tasks or []
+        # [test fix · Neon] Pre-LLM TOCTOU JOIN check de `_validate_chunk_pre_llm`
+        # (cron_tasks.py:847) ahora va por `execute_sql_query`:
+        #   SELECT pcq.status AS chunk_status, mp.id AS plan_exists
+        #   FROM plan_chunk_queue pcq LEFT JOIN meal_plans mp ON ... WHERE pcq.id = %s
+        # Sin esta rama el query cae a `return None` → `_validate_chunk_pre_llm` retorna
+        # "chunk_unknown" y el worker aborta ANTES del LLM ("Chunk N desapareció..."),
+        # dejando 0 UPDATEs a meal_plans. Devolvemos chunk vivo + plan existente.
+        elif "plan_exists" in query and "plan_chunk_queue" in query:
+            res = {"chunk_status": "processing", "plan_exists": "plan_456"}
         elif "generation_status" in query:
             res = {"id": "plan_456", "status": "active", "plan_data": {"generation_status": "active"}}
         elif "SELECT plan_data FROM meal_plans" in query:

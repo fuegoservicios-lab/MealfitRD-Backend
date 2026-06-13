@@ -96,14 +96,21 @@ def test_p2_new_4_pantry_prefetch_plan_freshness():
     fetch_idx = src.find("recalculate-shopping-list", fn_idx)
     assert fn_idx > 0 and fetch_idx > 0
     section = src[fn_idx:fetch_idx]
-    # Debe haber un fetch a meal_plans antes del fetch al recalc.
+    # Debe haber un fetch del plan actual ANTES del fetch al recalc.
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El prefetch ya no es SELECT
+    # directo a `meal_plans` con supabase-js (PostgREST prohibido en el
+    # frontend tras el cutover a Neon): ahora va por el endpoint backend
+    # GET /api/plans-data/latest (routers/user_data.py), mismo shape
+    # {id, updated_at, plan_data}. La propiedad protegida es idéntica:
+    # leer el plan latest del usuario antes de aplicar el recalc.
     assert re.search(
-        r"\.from\(\s*['\"]meal_plans['\"]\s*\)",
+        r"/api/plans-data/latest",
         section,
     ), (
-        "P2-NEW-4 regresión: Pantry no prefetchea `meal_plans` antes "
-        "del recalc. Si el plan cambió en background (shift_plan), "
-        "el householdSize/groceryDuration enviado es del plan viejo."
+        "P2-NEW-4 regresión: Pantry no prefetchea el plan latest "
+        "(`GET /api/plans-data/latest`) antes del recalc. Si el plan "
+        "cambió en background (shift_plan), el householdSize/"
+        "groceryDuration enviado es del plan viejo."
     )
     assert "P2-NEW-4" in section, (
         "P2-NEW-4 regresión: marker P2-NEW-4 no presente en el bloque "

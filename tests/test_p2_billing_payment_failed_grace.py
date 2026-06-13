@@ -60,36 +60,48 @@ def test_payment_failed_not_in_default_downgrade_list():
 
 def test_payment_failed_soft_branch_sets_retrying_not_gratis():
     """Debe existir un branch PAYMENT.FAILED que setee PAYMENT_RETRYING SIN
-    poner plan_tier='gratis'."""
+    poner plan_tier='gratis'.
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el branch ya no termina
+    en `.execute()` (PostgREST) sino en `execute_sql_write(...)` con el
+    UPDATE SQL directo. Misma propiedad: solo flippea subscription_status,
+    jamás degrada tier."""
     src = _read()
     assert "PAYMENT_RETRYING" in src, (
         "Falta el status no-destructivo `PAYMENT_RETRYING` para PAYMENT.FAILED."
     )
     # El branch del soft-handling no debe degradar tier.
     m = re.search(
-        r'event_type\s*==\s*"BILLING\.SUBSCRIPTION\.PAYMENT\.FAILED".*?execute\(\)',
+        r'event_type\s*==\s*"BILLING\.SUBSCRIPTION\.PAYMENT\.FAILED"'
+        r'[\s\S]*?execute_sql_write\([\s\S]*?\(subscription_id,\),',
         src,
-        re.DOTALL,
     )
     assert m, "No se encontró el branch soft de PAYMENT.FAILED."
     branch = m.group(0)
-    assert "PAYMENT_RETRYING" in branch, "El branch PAYMENT.FAILED debe setear PAYMENT_RETRYING."
-    assert '"plan_tier": "gratis"' not in branch, (
+    assert "subscription_status = 'PAYMENT_RETRYING'" in branch, (
+        "El branch PAYMENT.FAILED debe setear subscription_status='PAYMENT_RETRYING' "
+        "en el UPDATE SQL."
+    )
+    assert "gratis" not in branch, (
         "El branch PAYMENT.FAILED NO debe poner plan_tier='gratis' (eso es degradar)."
     )
 
 
 def test_reactivation_branch_restores_tier():
     """Debe existir un branch para ACTIVATED/PAYMENT.SALE.COMPLETED que restaure
-    el tier desde el plan_id de PayPal (reuse `_build_paypal_plan_tier_map`)."""
+    el tier desde el plan_id de PayPal (reuse `_build_paypal_plan_tier_map`).
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el branch ya no termina
+    en `.execute()` (PostgREST) sino en el despacho del UPDATE SQL via
+    `await _supabase_async(_do_reactivate)`."""
     src = _read()
     assert "BILLING.SUBSCRIPTION.ACTIVATED" in src, (
         "Falta el handler de re-activación `BILLING.SUBSCRIPTION.ACTIVATED`."
     )
     m = re.search(
-        r'event_type\s+in\s+\(\s*"BILLING\.SUBSCRIPTION\.ACTIVATED".*?execute\(\)',
+        r'event_type\s+in\s+\(\s*"BILLING\.SUBSCRIPTION\.ACTIVATED"'
+        r'[\s\S]*?await _supabase_async\(_do_reactivate\)',
         src,
-        re.DOTALL,
     )
     assert m, "No se encontró el branch de re-activación."
     branch = m.group(0)

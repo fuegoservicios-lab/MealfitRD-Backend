@@ -51,7 +51,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 
-_DEFAULT_CAP = 53000  # [P1-HISTORY-ABORT · 2026-05-23] +1k para P2-USER-DEPLETED-ITEMS-FK-IDX row (~225 chars) + advisor entries. Bump 1.9%, bajo el threshold 10% que dispara limpieza estructural.
+_DEFAULT_CAP = 56500  # [P1-NEON-DB-MIGRATION · 2026-06-12] +3.5k para los 3 bullets de las migraciones del día (DeepSeek + Cohere + Neon), ya adelgazados doc-first (detalle en docs/llm_tier_routing.md, docs/embeddings_cohere.md, docs/neon_db_migration.md). Bump 6.6%, bajo el threshold 10% que dispara limpieza estructural. Próxima limpieza candidata: mover tablas "Advisors aceptados" a docs/ (verificar antes test_p2_whitelist_advisors_anchors_alive).
 _CAP_FLOOR = 10000     # típico minimum útil (esqueleto de invariantes)
 _CAP_CEILING = 200000  # ~5x el threshold del UI; arriba de eso es absurdo
 

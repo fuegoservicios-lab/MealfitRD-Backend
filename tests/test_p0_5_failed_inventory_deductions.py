@@ -90,8 +90,15 @@ def test_persist_failed_inserts_to_correct_table():
         "`_persist_failed_inventory_deductions` debe escribir a la tabla "
         "`failed_inventory_deductions` (no a otra)."
     )
-    assert re.search(r"\.table\(\s*[\"']failed_inventory_deductions[\"']\s*\)", body), (
-        "Debe usar `supabase.table(\"failed_inventory_deductions\").insert(...)`."
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El INSERT viaja por SQL directo
+    # (antes `supabase.table(...).insert(...)`). Las columnas canónicas
+    # (user_id, ingredients, attempts) deben preservarse.
+    assert re.search(
+        r"INSERT INTO failed_inventory_deductions\s*\(user_id,\s*ingredients,\s*attempts\)",
+        body,
+    ), (
+        "Debe usar `execute_sql_write(\"INSERT INTO failed_inventory_deductions "
+        "(user_id, ingredients, attempts) VALUES ...\")`."
     )
 
 

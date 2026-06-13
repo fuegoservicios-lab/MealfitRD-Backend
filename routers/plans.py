@@ -4880,9 +4880,6 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             # uuid.UUID) para logs y el persist atómico aguas abajo.
             from db import execute_sql_query
             if plan_id:
-                # Equivalencia con el chain legacy supabase-py
-                # .eq("id", plan_id) + .eq("user_id", user_id)
-                # → WHERE id = %s AND user_id = %s (anchor test_p0_new_1).
                 plan_res = execute_sql_query(
                     "SELECT id::text AS id, plan_data FROM public.meal_plans "
                     "WHERE id = %s AND user_id = %s",

@@ -19,26 +19,37 @@ Pre-fix (descubierto en audit prod-readiness 2026-05-30, workflow multi-agente):
          del primer user-message de la sesión).
 
 Post-fix:
-    `get_guest_chat_sessions` añade `.is_("user_id", "null")` a la query, de
+    `get_guest_chat_sessions` añade el predicado de ownership a la query, de
     modo que SOLO las sesiones genuinas de invitado (sin dueño) son
     recuperables por id crudo. Las sesiones propias de un usuario logueado las
     trae `get_user_chat_sessions(user_id)` filtrando por owner; una sesión
     creada como guest y luego reclamada queda con `user_id` no-nulo → sale por
     el path de owner, no por este.
 
+    [P1-NEON-DB-MIGRATION · 2026-06-12] El transporte migró de PostgREST
+    (`.in_("id", ...).is_("user_id", "null")`) a SQL directo via
+    `execute_sql_query`. El predicado equivalente es:
+        WHERE id = ANY(%s::uuid[]) AND user_id IS NULL
+    La propiedad de seguridad verificada es LA MISMA: el filtro
+    `user_id IS NULL` debe vivir en el SQL ejecutable de
+    `get_guest_chat_sessions` (no en comentarios ni docstrings).
+
 Contratos anclados:
-    1. Parser: el cuerpo de `get_guest_chat_sessions` contiene
-       `.is_("user_id", "null")` y aparece DESPUÉS del `.in_("id"`.
-    2. Parser: anchor `P1-CHAT-GUEST-IDOR` presente en db_chat.py.
-    3. Funcional: la cadena de query realmente invoca `.is_("user_id", "null")`
-       antes de `.execute()` (un mock-spy de supabase lo verifica).
+    1. Parser (AST): los string-literals EJECUTABLES de
+       `get_guest_chat_sessions` (docstring excluido, comentarios invisibles
+       al AST) contienen el WHERE con `id = ANY(...)` Y `user_id IS NULL`
+       conjugados con AND en la misma cláusula.
+    2. Parser: anchor `P1-CHAT-GUEST-IDOR` presente en db_chat.py + cap
+       `session_ids[:20]` en código ejecutable.
+    3. Funcional: en runtime el SQL pasado a `execute_sql_query` contiene
+       `user_id IS NULL` (mock-spy de db_chat.execute_sql_query lo verifica).
     4. Funcional: si la query se construye sin el filtro, el test falla.
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -51,35 +62,77 @@ def _read(p: Path) -> str:
     return p.read_text(encoding="utf-8")
 
 
-def _extract_function(src: str, name: str) -> str:
-    pattern = re.compile(
-        rf"^def\s+{re.escape(name)}\s*\([^)]*\)[^:]*:\n(?:[ \t]+.*\n|[ \t]*\n)+",
-        re.MULTILINE,
-    )
-    m = pattern.search(src)
-    assert m, f"No se encontró def `{name}` en el source."
-    return m.group(0)
+def _function_node(src: str, name: str) -> ast.FunctionDef:
+    """Localiza el FunctionDef via AST — los comentarios NO existen en el
+    árbol, así que todo lo que extraigamos de acá es código ejecutable."""
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"No se encontró def `{name}` en el source.")
+
+
+def _executable_string_literals(fn: ast.FunctionDef) -> str:
+    """Concatena los string-literals del cuerpo de la función EXCLUYENDO el
+    docstring (primera Expr-Constant-str). Así la prosa narrativa no puede
+    satisfacer las assertions — solo strings que el código realmente usa
+    (el SQL pasado a execute_sql_query)."""
+    body = list(fn.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    parts: list[str] = []
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                parts.append(node.value)
+    # Normaliza whitespace para que los regex no dependan del formateo.
+    return " ".join(" ".join(parts).split())
 
 
 # ---------------------------------------------------------------------------
-# Parser-based
+# Parser-based (AST — código ejecutable, no comentarios)
 # ---------------------------------------------------------------------------
 
 def test_guest_sessions_query_filters_user_id_null():
-    """La query de `get_guest_chat_sessions` DEBE incluir `.is_("user_id", "null")`."""
+    """El SQL de `get_guest_chat_sessions` DEBE incluir `user_id IS NULL`
+    AND-conjugado con el filtro por ids en la MISMA cláusula WHERE."""
     src = _read(_DB_CHAT_PY)
-    body = _extract_function(src, "get_guest_chat_sessions")
-    # Excluir el docstring (que cita el filtro narrativamente) para verificar
-    # que el `.is_` está en el CÓDIGO real, no solo mencionado en la prosa.
-    code_only = re.sub(r'""".*?"""', "", body, count=1, flags=re.DOTALL)
-    assert '.in_("id"' in code_only, (
-        "Falta el filtro `.in_(\"id\", ...)` en get_guest_chat_sessions."
+    fn = _function_node(src, "get_guest_chat_sessions")
+    sql_blob = _executable_string_literals(fn)
+    assert re.search(r"id\s*=\s*ANY\(", sql_blob), (
+        "Falta el filtro por ids (`WHERE id = ANY(%s::uuid[])`) en el SQL "
+        "ejecutable de get_guest_chat_sessions."
     )
-    assert '.is_("user_id", "null")' in code_only, (
-        "Falta `.is_(\"user_id\", \"null\")` en el CÓDIGO de `get_guest_chat_sessions`. "
-        "Sin ese filtro, un usuario autenticado puede recuperar sesiones de OTRO "
-        "usuario pasando `?session_ids=<sesión ajena>` (IDOR P1-CHAT-GUEST-IDOR). "
-        "Lee la memoria antes de remover el filtro."
+    assert re.search(
+        r"id\s*=\s*ANY\(%s::uuid\[\]\)\s+AND\s+user_id\s+IS\s+NULL", sql_blob
+    ), (
+        "Falta `AND user_id IS NULL` junto al filtro por ids en el SQL "
+        "ejecutable de `get_guest_chat_sessions`. Sin ese predicado, un "
+        "usuario autenticado puede recuperar sesiones de OTRO usuario "
+        "pasando `?session_ids=<sesión ajena>` (IDOR P1-CHAT-GUEST-IDOR). "
+        "Lee la memoria antes de remover el filtro. "
+        f"SQL ejecutable encontrado: {sql_blob!r}"
+    )
+
+
+def test_guest_sessions_caps_session_ids():
+    """El cap `session_ids[:20]` (límite prudente del legacy PostgREST)
+    sobrevive la migración a SQL directo — en código ejecutable."""
+    src = _read(_DB_CHAT_PY)
+    fn = _function_node(src, "get_guest_chat_sessions")
+    code = ast.get_source_segment(src, fn) or ""
+    # Solo líneas ejecutables: descarta comentarios full-line.
+    code_only = "\n".join(
+        ln for ln in code.splitlines() if not ln.strip().startswith("#")
+    )
+    assert re.search(r"session_ids\[:20\]", code_only), (
+        "Falta el cap `session_ids[:20]` en get_guest_chat_sessions — sin "
+        "límite, un cliente puede pasar miles de ids en un solo request."
     )
 
 
@@ -91,52 +144,46 @@ def test_anchor_present_in_db_chat():
 
 
 # ---------------------------------------------------------------------------
-# Funcional: mock-spy de la cadena supabase
+# Funcional: mock-spy de execute_sql_query (transporte SQL directo)
 # ---------------------------------------------------------------------------
 
-class _QuerySpy:
-    """Registra los filtros aplicados a la cadena de query supabase-py."""
-
-    def __init__(self, recorder: dict):
-        self._rec = recorder
-        self._rec.setdefault("calls", [])
-
-    def select(self, *a, **k):
-        self._rec["calls"].append(("select", a))
-        return self
-
-    def in_(self, col, vals):
-        self._rec["calls"].append(("in_", col))
-        return self
-
-    def is_(self, col, val):
-        self._rec["calls"].append(("is_", col, val))
-        return self
-
-    def execute(self):
-        self._rec["executed"] = True
-        # Devuelve un resultado vacío para no entrar a _process_and_sort_sessions.
-        res = MagicMock()
-        res.data = []
-        return res
-
-
-def test_guest_sessions_applies_user_id_null_filter_at_runtime():
-    """En runtime la cadena DEBE invocar `.is_("user_id", "null")` antes de execute()."""
+def test_guest_sessions_applies_user_id_null_filter_at_runtime(monkeypatch):
+    """En runtime el SQL enviado a `execute_sql_query` DEBE contener
+    `user_id IS NULL` — el filtro tiene que viajar en la query real, no
+    solo existir en el source."""
     import db_chat
 
-    recorder: dict = {}
-    fake_supabase = MagicMock()
-    fake_supabase.table.return_value = _QuerySpy(recorder)
+    captured: dict = {}
 
-    with patch.object(db_chat, "supabase", fake_supabase):
-        out = db_chat.get_guest_chat_sessions(["sess-a", "sess-b"])
+    def _spy_execute_sql_query(sql, params=None, *args, **kwargs):
+        captured["sql"] = sql
+        captured["params"] = params
+        captured["fetch_all"] = kwargs.get("fetch_all")
+        # Devuelve un resultado vacío para no entrar a _process_and_sort_sessions.
+        return []
+
+    # connection_pool truthy para pasar el guard `if not connection_pool`.
+    monkeypatch.setattr(db_chat, "connection_pool", object())
+    monkeypatch.setattr(db_chat, "execute_sql_query", _spy_execute_sql_query)
+
+    out = db_chat.get_guest_chat_sessions(["sess-a", "sess-b"])
 
     assert out == []  # data vacía → sin sesiones
-    assert recorder.get("executed") is True, "La query nunca se ejecutó."
-    is_calls = [c for c in recorder["calls"] if c[0] == "is_"]
-    assert ("is_", "user_id", "null") in is_calls, (
-        "La query de get_guest_chat_sessions NO aplicó `.is_(\"user_id\", \"null\")` "
-        "en runtime. Eso reabre el IDOR P1-CHAT-GUEST-IDOR: se devolverían sesiones "
-        f"de cualquier dueño. Filtros aplicados: {recorder['calls']}"
+    assert "sql" in captured, "La query nunca se ejecutó."
+    sql_norm = " ".join(str(captured["sql"]).split())
+    assert "agent_sessions" in sql_norm, (
+        f"La query no apunta a agent_sessions. SQL: {sql_norm!r}"
+    )
+    assert re.search(r"user_id\s+IS\s+NULL", sql_norm), (
+        "La query de get_guest_chat_sessions NO incluye `user_id IS NULL` "
+        "en runtime. Eso reabre el IDOR P1-CHAT-GUEST-IDOR: se devolverían "
+        f"sesiones de cualquier dueño. SQL ejecutado: {sql_norm!r}"
+    )
+    # Los ids viajan como lista de strings (cast ::uuid[] lo hace el SQL).
+    assert captured["params"] == (["sess-a", "sess-b"],), (
+        f"Params inesperados: {captured['params']!r} — los session_ids deben "
+        "viajar como única param list (str) para el `= ANY(%s::uuid[])`."
+    )
+    assert captured["fetch_all"] is True, (
+        "get_guest_chat_sessions debe pedir fetch_all=True (lista de sesiones)."
     )

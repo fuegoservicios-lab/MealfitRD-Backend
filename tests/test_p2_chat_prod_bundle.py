@@ -289,11 +289,17 @@ def test_p2_3_save_message_uses_retry_helper(db_chat_src: str) -> None:
         "`_save_message_insert_with_retry(session_id, role, content, ...)` "
         "en lugar del INSERT inline."
     )
-    # `save_message` no debe contener el INSERT directo.
+    # `save_message` no debe contener el INSERT directo — ni en la forma
+    # PostgREST legacy ni en la forma SQL directa (P1-NEON-DB-MIGRATION).
     assert 'supabase.table("agent_messages").insert(' not in body, (
         "[P2-CHAT-SAVE-MSG-RETRY] `save_message` NO debe contener el "
         "INSERT inline a `agent_messages` — debe delegar al helper "
         "retry-able."
+    )
+    assert "execute_sql_write(" not in body, (
+        "[P2-CHAT-SAVE-MSG-RETRY] `save_message` NO debe invocar "
+        "`execute_sql_write(...)` inline — el INSERT a `agent_messages` "
+        "debe vivir SOLO dentro del helper retry-able."
     )
 
 
@@ -376,23 +382,16 @@ def test_retry_decorator_attributes(db_chat_module) -> None:
 
 
 def test_retry_triggers_3_attempts(db_chat_module, monkeypatch) -> None:
-    """[P2-CHAT-SAVE-MSG-RETRY] forzar `supabase.table(...).insert(...).execute()`
-    a levantar → el decorator reintenta hasta 3 veces, luego reraise."""
+    """[P2-CHAT-SAVE-MSG-RETRY] forzar `execute_sql_write(...)` (INSERT SQL
+    directo post P1-NEON-DB-MIGRATION) a levantar → el decorator reintenta
+    hasta 3 veces, luego reraise."""
     call_count = {"n": 0}
 
-    class FakeQuery:
-        def insert(self, _data):
-            return self
+    def fake_execute_sql_write(_sql, _params=None, **_kwargs):
+        call_count["n"] += 1
+        raise ConnectionError("db blip simulado")
 
-        def execute(self):
-            call_count["n"] += 1
-            raise ConnectionError("supabase blip simulado")
-
-    class FakeSupabase:
-        def table(self, _name):
-            return FakeQuery()
-
-    monkeypatch.setattr(db_chat_module, "supabase", FakeSupabase())
+    monkeypatch.setattr(db_chat_module, "execute_sql_write", fake_execute_sql_write)
     # tenacity por defecto duerme entre attempts — para test rápido,
     # patcheamos `wait` a no-op vía `.retry.wait`:
     try:
@@ -405,7 +404,7 @@ def test_retry_triggers_3_attempts(db_chat_module, monkeypatch) -> None:
 
     with pytest.raises((ConnectionError, Exception)):
         db_chat_module._save_message_insert_with_retry(
-            "sess-x", "user", "blip-test"
+            "sess-x", "user", "blip-test", None  # user_id=None → guest legítimo
         )
     assert call_count["n"] == 3, (
         f"[P2-CHAT-SAVE-MSG-RETRY] esperaba 3 attempts (1 inicial + 2 "
@@ -415,26 +414,35 @@ def test_retry_triggers_3_attempts(db_chat_module, monkeypatch) -> None:
 
 def test_retry_success_first_try(db_chat_module, monkeypatch) -> None:
     """[P2-CHAT-SAVE-MSG-RETRY] cuando el INSERT pasa al primer intento,
-    NO reintenta — overhead trivial."""
+    NO reintenta — overhead trivial. Verifica además que el INSERT viaja a
+    `public.agent_messages` con los 4 named params (P1-CHAT-DB-USER-ID-RLS:
+    `user_id` puede ser None para guests)."""
     call_count = {"n": 0}
+    captured: dict = {}
 
-    class FakeQuery:
-        def insert(self, _data):
-            return self
+    def fake_execute_sql_write(sql, params=None, **kwargs):
+        call_count["n"] += 1
+        captured["sql"] = sql
+        captured["params"] = params
+        return None  # éxito
 
-        def execute(self):
-            call_count["n"] += 1
-            return None  # éxito
-
-    class FakeSupabase:
-        def table(self, _name):
-            return FakeQuery()
-
-    monkeypatch.setattr(db_chat_module, "supabase", FakeSupabase())
+    monkeypatch.setattr(db_chat_module, "execute_sql_write", fake_execute_sql_write)
     db_chat_module._save_message_insert_with_retry(
-        "sess-x", "model", "hola"
+        "sess-x", "model", "hola", None
     )
     assert call_count["n"] == 1, (
         f"[P2-CHAT-SAVE-MSG-RETRY] éxito al primer intento debe NO "
         f"reintentar. call_count={call_count['n']}."
+    )
+    assert "INSERT INTO public.agent_messages" in str(captured["sql"]), (
+        f"El helper debe INSERTar en public.agent_messages. SQL: {captured['sql']!r}"
+    )
+    assert captured["params"] == {
+        "session_id": "sess-x",
+        "role": "model",
+        "content": "hola",
+        "user_id": None,
+    }, (
+        f"Named params inesperados: {captured['params']!r} — el INSERT debe "
+        "llevar session_id/role/content/user_id (user_id None = guest)."
     )

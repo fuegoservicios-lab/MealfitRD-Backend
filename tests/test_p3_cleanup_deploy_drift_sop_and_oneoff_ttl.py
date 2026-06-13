@@ -29,6 +29,7 @@ Fix:
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -40,13 +41,87 @@ _REPO_ROOT = _BACKEND_ROOT.parent
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 _CRON_PY = _BACKEND_ROOT / "cron_tasks.py"
 
+# [Re-anchor 2026-06-12] Los pasos detallados del SOP (script SSOT, SQL de
+# fallback, cierre manual del alert, casos expected>live / live>expected)
+# se movieron de CLAUDE.md al runbook doc-first (patrón P3-CLAUDEMD-CAP):
+# CLAUDE.md conserva el header + 1-line + link; el cuerpo operativo vive en
+# `runbook_system_alerts_sops_2026_05_11.md` (memory dir del proyecto).
+# El test ahora verifica la cadena completa: header en CLAUDE.md → link al
+# runbook → literales operativos dentro del runbook. Mismo invariante:
+# el operador que parte de CLAUDE.md llega a los comandos exactos.
+_SOP_RUNBOOK_NAME = "runbook_system_alerts_sops_2026_05_11.md"
+_HOME = Path(os.path.expanduser("~"))
+_MEMORY_DIR_CANDIDATES = [
+    _HOME / ".claude" / "projects"
+    / "c--Users-angel-OneDrive-Escritorio-MealfitRD-IA" / "memory",
+    _HOME / ".claude" / "projects"
+    / "C--Users-angel-OneDrive-Escritorio-Nodalia-MealfitRD-Software-MealfitRD-IA"
+    / "memory",
+]
+
+
+def _locate_sop_runbook() -> Path | None:
+    for memory_dir in _MEMORY_DIR_CANDIDATES:
+        candidate = memory_dir / _SOP_RUNBOOK_NAME
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _extract_sop_block(src: str, heading_re: str) -> str:
+    """Extrae el bloque del SOP desde el heading hasta el siguiente heading
+    del mismo nivel o superior (`##`/`###`)."""
+    m = re.search(
+        heading_re + r"(.+?)(?=^###\s|^##\s|\Z)",
+        src,
+        re.DOTALL | re.MULTILINE,
+    )
+    return m.group(1) if m else ""
+
 
 # ---------------------------------------------------------------------------
-# P3-A: SOP documentado en CLAUDE.md
+# P3-A: SOP documentado en CLAUDE.md (header + link) → runbook (cuerpo)
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def claude_md_src() -> str:
     return _CLAUDE_MD.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def sop_body(claude_md_src: str) -> str:
+    """Cuerpo operativo del SOP: bloque de CLAUDE.md + bloque del runbook.
+
+    Falla (no skip) si el eslabón CLAUDE.md→runbook está roto: sin la
+    referencia el operador nuevo no encuentra los comandos; sin el runbook
+    el SOP completo desapareció."""
+    claude_block = _extract_sop_block(
+        claude_md_src,
+        r"^###\s+SOP:\s+resolver\s+`deploy_lag_drift_vs_expected`",
+    )
+    assert claude_block, "Bloque del SOP no encontrado en CLAUDE.md (header presente pero sin cuerpo)."
+    assert _SOP_RUNBOOK_NAME in claude_block, (
+        "P3-CLEANUP regresión: el bloque del SOP en CLAUDE.md ya no "
+        f"referencia `{_SOP_RUNBOOK_NAME}`. Tras el trim doc-first "
+        "(P3-CLAUDEMD-CAP), el link es el único camino del operador a los "
+        "pasos detallados — restaurarlo."
+    )
+    runbook_path = _locate_sop_runbook()
+    assert runbook_path is not None, (
+        f"Runbook `{_SOP_RUNBOOK_NAME}` ausente en los memory dirs "
+        f"{[str(p) for p in _MEMORY_DIR_CANDIDATES]}. Sin él, el SOP "
+        "referenciado desde CLAUDE.md apunta al vacío — restaurar desde "
+        "memoria o re-crear desde el P-fix P3-CLEANUP."
+    )
+    runbook_src = runbook_path.read_text(encoding="utf-8")
+    runbook_block = _extract_sop_block(
+        runbook_src,
+        r"^##\s+SOP:\s+resolver\s+`deploy_lag_drift_vs_expected`",
+    )
+    assert runbook_block, (
+        f"Sección `## SOP: resolver \\`deploy_lag_drift_vs_expected\\`` "
+        f"no encontrada dentro de {_SOP_RUNBOOK_NAME}."
+    )
+    return claude_block + "\n" + runbook_block
 
 
 def test_sop_section_header_present(claude_md_src: str):
@@ -65,78 +140,51 @@ def test_sop_section_header_present(claude_md_src: str):
     )
 
 
-def test_sop_references_publish_pfix_marker_script(claude_md_src: str):
+def test_sop_references_publish_pfix_marker_script(sop_body: str):
     """El SOP debe referenciar el script SSOT `publish_pfix_marker.py`
     como path de resolución preferido para bumpear el KV."""
-    # Restringir búsqueda al bloque del SOP (entre el header y el
-    # siguiente `###` o `##`).
-    sop_match = re.search(
-        r"^###\s+SOP:\s+resolver\s+`deploy_lag_drift_vs_expected`(.+?)(?=^###|^##\s)",
-        claude_md_src,
-        re.DOTALL | re.MULTILINE,
-    )
-    assert sop_match, "Bloque del SOP no encontrado (header presente pero sin cuerpo)."
-    body = sop_match.group(1)
-    assert "publish_pfix_marker.py" in body, (
+    assert "publish_pfix_marker.py" in sop_body, (
         "P3-CLEANUP regresión: SOP no referencia el script SSOT "
         "`publish_pfix_marker.py`. Sin la referencia, el operador podría "
         "actualizar el KV manualmente sin saber que existe el script."
     )
 
 
-def test_sop_provides_sql_update_kv_example(claude_md_src: str):
+def test_sop_provides_sql_update_kv_example(sop_body: str):
     """El SOP debe incluir el SQL UPDATE para actualizar el KV
     manualmente (fallback si el script falla o el operador no tiene
     `SUPABASE_DB_URL` seteado)."""
-    sop_match = re.search(
-        r"^###\s+SOP:\s+resolver\s+`deploy_lag_drift_vs_expected`(.+?)(?=^###|^##\s)",
-        claude_md_src,
-        re.DOTALL | re.MULTILINE,
-    )
-    body = sop_match.group(1) if sop_match else ""
-    assert "UPDATE app_kv_store" in body, (
+    assert "UPDATE app_kv_store" in sop_body, (
         "P3-CLEANUP regresión: SOP no incluye SQL UPDATE para el KV. "
         "El fallback manual es crítico — el script puede fallar por "
         "ausencia de SUPABASE_DB_URL en el shell del operador."
     )
-    assert "expected_last_known_pfix" in body, (
+    assert "expected_last_known_pfix" in sop_body, (
         "P3-CLEANUP regresión: SOP no menciona la key específica del KV "
         "(`expected_last_known_pfix`). Sin el nombre exacto, el "
         "operador podría actualizar otra fila."
     )
 
 
-def test_sop_provides_close_alert_example(claude_md_src: str):
+def test_sop_provides_close_alert_example(sop_body: str):
     """El SOP debe documentar cómo cerrar el alert manualmente si el
     cron tarda en re-evaluar (`UPDATE system_alerts SET resolved_at=NOW()`)."""
-    sop_match = re.search(
-        r"^###\s+SOP:\s+resolver\s+`deploy_lag_drift_vs_expected`(.+?)(?=^###|^##\s)",
-        claude_md_src,
-        re.DOTALL | re.MULTILINE,
-    )
-    body = sop_match.group(1) if sop_match else ""
-    assert "UPDATE system_alerts" in body and "resolved_at" in body, (
+    assert "UPDATE system_alerts" in sop_body and "resolved_at" in sop_body, (
         "P3-CLEANUP regresión: SOP no documenta cómo cerrar el alert. "
         "Sin esto, el operador espera al cron periódico (24h default) "
         "incluso después de corregir el drift."
     )
 
 
-def test_sop_distinguishes_live_vs_expected_lag(claude_md_src: str):
+def test_sop_distinguishes_live_vs_expected_lag(sop_body: str):
     """El SOP debe distinguir los dos casos: `expected > live` (binario
     rezagado, redeploy) vs `live > expected` (KV rezagado, bumpear KV)."""
-    sop_match = re.search(
-        r"^###\s+SOP:\s+resolver\s+`deploy_lag_drift_vs_expected`(.+?)(?=^###|^##\s)",
-        claude_md_src,
-        re.DOTALL | re.MULTILINE,
-    )
-    body = sop_match.group(1) if sop_match else ""
     # Buscar mención de ambos casos (orden flexible).
-    assert "expected > live" in body or "expected vs live" in body.lower(), (
+    assert "expected > live" in sop_body or "expected vs live" in sop_body.lower(), (
         "P3-CLEANUP regresión: SOP no menciona el caso `expected > live` "
         "(binario rezagado). Operador no sabrá que debe redeployar."
     )
-    assert "live > expected" in body, (
+    assert "live > expected" in sop_body, (
         "P3-CLEANUP regresión: SOP no menciona el caso `live > expected` "
         "(KV rezagado). Operador no sabrá que debe bumpear el KV."
     )

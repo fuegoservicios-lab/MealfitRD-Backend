@@ -110,8 +110,14 @@ def test_to_thread_used_in_preferences():
 
 
 def test_supabase_async_helper_in_billing():
-    """billing.py declara `_supabase_async` helper para wrappear los calls
-    `supabase.table(...).execute()` desde handlers async."""
+    """billing.py declara `_supabase_async` helper para wrappear los thunks
+    DB sync desde handlers async.
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: los thunks ya no son
+    `supabase.table(...).execute()` (PostgREST) sino lambdas sobre
+    `execute_sql_query`/`execute_sql_write` (SQL directo). El helper se
+    conserva con el mismo nombre (tooltip-anchor) y la misma propiedad:
+    ningún roundtrip DB inline en el event loop."""
     src = _read(_BILLING)
     assert re.search(
         r"async def _supabase_async\(.*?\):\s*\n\s*return await asyncio\.to_thread",
@@ -122,17 +128,21 @@ def test_supabase_async_helper_in_billing():
         "delegue a `asyncio.to_thread`. Sin este helper los callsites quedan "
         "verbose y un nuevo callsite olvidaría el wrap fácilmente."
     )
-    # Cero `supabase.table(...).execute()` directos en cuerpo de handlers
-    # async (heurística por proximidad: requerimos que cada execute() esté
-    # precedido por `_supabase_async(lambda:` o esté dentro del helper
-    # sync `_persist_billing_alert`).
-    callsites = [m.start() for m in re.finditer(r"supabase\.table\([^)]+\)", src)]
-    # Mínimo esperado: 7 callsites (6 originales del audit + 1 boy-scout
-    # /discount/validate). El helper _persist_billing_alert tiene 1 más
-    # (sync helper, no async handler).
-    assert len(callsites) >= 7, (
-        f"billing.py debe tener ≥7 callsites `supabase.table(...)`. "
-        f"Encontrados: {len(callsites)}."
+    # Callsites DB despachados via helper desde handlers async. Mínimo
+    # esperado: 7 (mismo floor que el audit original — 6 callsites + 1
+    # boy-scout /discount/validate). El helper sync `_persist_billing_alert`
+    # escribe directo (no async handler), igual que pre-migración.
+    wrapped = re.findall(r"await _supabase_async\(", src)
+    assert len(wrapped) >= 7, (
+        f"billing.py debe tener ≥7 callsites `await _supabase_async(...)`. "
+        f"Encontrados: {len(wrapped)}."
+    )
+    # El transporte PostgREST quedó eliminado fail-loud del módulo: cero
+    # callsites `supabase.table(` residuales.
+    assert "supabase.table(" not in src, (
+        "billing.py no debe conservar callsites PostgREST `supabase.table(` "
+        "tras P1-NEON-DB-MIGRATION (los fallbacks REST fueron eliminados "
+        "fail-loud)."
     )
 
 

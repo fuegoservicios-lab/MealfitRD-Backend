@@ -176,8 +176,6 @@ def get_guest_chat_sessions(session_ids: list):
     """
     if not connection_pool or not session_ids: return []
     try:
-        # Solo obtenemos hasta un límite prudente (equivalente PostgREST
-        # legacy: .in_("id", ids[:20]).is_("user_id", "null")).
         # [P1-CHAT-GUEST-IDOR] el predicado `user_id IS NULL` es OBLIGATORIO:
         # solo sesiones sin dueño son recuperables por id crudo (no IDOR).
         sessions = execute_sql_query(

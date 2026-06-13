@@ -150,11 +150,22 @@ def test_callers_match_migration_object_names() -> None:
     """
     db_plans_text = _DB_PLANS_PATH.read_text(encoding="utf-8")
 
-    assert 'rpc("match_similar_plan"' in db_plans_text, (
-        "`db_plans.search_similar_plan()` no invoca la RPC "
-        "`match_similar_plan`. Si fue renombrada en la migración SSOT, "
-        "actualizar el caller — un mismatch silencioso degrada el cache "
-        "hit rate a 0% sin error visible."
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El callsite migró de PostgREST
+    # (`supabase.rpc("match_similar_plan", ...)`) a SQL directo
+    # (`SELECT ... FROM public.match_similar_plan(...)`). Ambas formas son
+    # callsites válidos del MISMO objeto canónico — lo que este test ancla
+    # es la paridad de NOMBRE con la migración SSOT, no el transporte.
+    rpc_callsite = re.compile(
+        r'rpc\(\s*"match_similar_plan"'                 # forma PostgREST legacy
+        r"|FROM\s+public\.match_similar_plan\s*\(",     # forma SQL directa (psycopg)
+        re.IGNORECASE,
+    )
+    assert rpc_callsite.search(db_plans_text), (
+        "`db_plans.search_similar_plan()` no invoca la función "
+        "`match_similar_plan` (ni via rpc() ni via `FROM "
+        "public.match_similar_plan(...)`). Si fue renombrada en la "
+        "migración SSOT, actualizar el caller — un mismatch silencioso "
+        "degrada el cache hit rate a 0% sin error visible."
     )
 
     assert "profile_embedding" in db_plans_text, (

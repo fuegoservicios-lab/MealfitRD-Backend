@@ -24,7 +24,10 @@ Estrategia del test (parser estático sobre db_plans.py + los 4 callsites):
     1. Verificar signature con `user_id` opcional.
     2. Verificar branch `if user_id is None: legacy_warning + legacy_path`.
     3. Verificar branch ownership con `WHERE id = %s AND user_id = %s`.
-    4. Verificar branch supabase-py con `.eq("user_id", user_id)`.
+    4. [P1-NEON-DB-MIGRATION · 2026-06-12] Verificar que NO existe un path
+       PostgREST (`.table(`/`.eq(`) en el helper — el fallback supabase-py
+       fue eliminado fail-loud (no soporta advisory locks I7 y post-Neon
+       apuntaría a la DB equivocada).
     5. Verificar que LOS 4 callsites de producción pasan `user_id=`.
 
 Drift detection:
@@ -94,8 +97,8 @@ def test_legacy_path_warns_on_none_user_id(db_plans_src: str):
 
 def test_ownership_branch_uses_user_id_in_where(db_plans_src: str):
     """La rama nueva (user_id provisto) debe ejecutar UPDATE con
-    `WHERE id = %s AND user_id = %s` en el path psycopg y `.eq(...)
-    .eq(...)` en el path supabase-py.
+    `WHERE id = %s AND user_id = %s` en el path psycopg (único path
+    tras P1-NEON-DB-MIGRATION — el fallback supabase-py fue eliminado).
     """
     body = _extract_function_body(db_plans_src, "update_meal_plan_data")
 
@@ -107,13 +110,38 @@ def test_ownership_branch_uses_user_id_in_where(db_plans_src: str):
         "`AND user_id = %s` en el WHERE. IDOR re-abierto a DB-level."
     )
 
-    supabase_pattern = re.compile(
-        r'\.eq\(\s*["\']id["\']\s*,\s*plan_id\s*\)\s*\.eq\(\s*["\']user_id["\']\s*,\s*user_id\s*\)',
-        re.DOTALL,
+    # El UPDATE con ownership debe bindear (plan_id, user_id) — el WHERE
+    # de arriba sin estos params sería un literal muerto.
+    params_pattern = re.compile(
+        r"\(\s*Jsonb\(new_plan_data\)\s*,\s*plan_id\s*,\s*user_id\s*,?\s*\)",
     )
-    assert supabase_pattern.search(body), (
-        "P1-NEW-3 regresión: el path supabase-py no encadena "
-        "`.eq('id', plan_id).eq('user_id', user_id)`. IDOR re-abierto."
+    assert params_pattern.search(body), (
+        "P1-NEW-3 regresión: el execute del path ownership no bindea "
+        "`(Jsonb(new_plan_data), plan_id, user_id)`. El filtro user_id "
+        "quedó sin parámetro — IDOR re-abierto a DB-level."
+    )
+
+
+def test_no_postgrest_fallback_path(db_plans_src: str):
+    """[P1-NEON-DB-MIGRATION · 2026-06-12] El fallback PostgREST
+    (`supabase.table("meal_plans").update(...).eq(...)`) fue eliminado
+    fail-loud del helper: PostgREST no soporta advisory locks (violaba
+    I7) y post-Neon apuntaría a la DB equivocada. Si alguien lo
+    re-introduce, este test falla antes de que el lost-update vuelva.
+    """
+    body = _extract_function_body(db_plans_src, "update_meal_plan_data")
+    builder_pattern = re.compile(r"\.table\(|\.eq\(")
+    assert not builder_pattern.search(body), (
+        "P1-NEON-DB-MIGRATION regresión: `update_meal_plan_data` volvió a "
+        "tener un path builder PostgREST (`.table(`/`.eq(`). El único "
+        "transporte permitido es psycopg via connection_pool (advisory "
+        "lock + WHERE id/user_id en la misma transacción)."
+    )
+    assert "if not connection_pool" in body, (
+        "P1-NEON-DB-MIGRATION regresión: desapareció el guard fail-loud "
+        "`if not connection_pool` del helper. Sin pool el helper debe "
+        "fallar ruidoso (RuntimeError → except → None), no degradar a "
+        "otro transporte."
     )
 
 

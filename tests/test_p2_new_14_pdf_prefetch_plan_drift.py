@@ -32,6 +32,10 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DASH_FP = _REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx"
+# [P1-NEON-DB-MIGRATION · 2026-06-12] El SELECT estrecho del prefetch migró
+# del cliente supabase-js al endpoint backend GET /api/plans-data/{plan_id}
+# (routers/user_data.py) — el ownership ahora vive server-side (I2).
+_USER_DATA_PY = _REPO_ROOT / "backend" / "routers" / "user_data.py"
 
 
 @pytest.fixture(scope="module")
@@ -58,19 +62,47 @@ def test_p2_new_14_block_present(src: str):
 
 
 def test_select_filters_by_id_and_user_id(src: str):
+    """[P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el SELECT estrecho
+    pasó de `.eq('id', planData.id).eq('user_id', session.user.id)`
+    (supabase-js, ownership client-side) a `fetchWithAuth('/api/plans-data/
+    {plan_id}')` con ownership server-side. La MISMA propiedad se verifica
+    en dos mitades ejecutables:
+      1. El handler PDF fetchea el plan POR SU id (no "el más reciente").
+      2. El endpoint backend filtra `WHERE id = %s AND user_id = %s` (I2).
+    """
     body = _extract_handler_block(src)
     p2_idx = body.find("[P2-NEW-14 · 2026-05-11]")
     block = body[p2_idx:p2_idx + 3500]
-    # Patrón canónico: .eq('id', planData.id).eq('user_id', session.user.id)
-    assert ".eq('id', planData.id)" in block, (
-        "P2-NEW-14 regresión: el SELECT ya no filtra por `id`. "
-        "Sin esto, el prefetch trae el plan más reciente del user — "
-        "que podría NO ser el que se está exportando a PDF."
+    # Mitad 1 (frontend, código ejecutable — no comments): el fetch usa el
+    # plan_id local en la URL y va autenticado via fetchWithAuth.
+    assert re.search(
+        r"fetchWithAuth\(\s*`/api/plans-data/\$\{planData\.id\}`\s*\)",
+        block,
+    ), (
+        "P2-NEW-14 regresión: el prefetch ya no fetchea "
+        "`/api/plans-data/${planData.id}` via fetchWithAuth. Sin el id "
+        "explícito, el prefetch traería otro plan (wrong-plan PDF); sin "
+        "fetchWithAuth, el request va sin Bearer y el backend no puede "
+        "resolver ownership."
     )
-    assert ".eq('user_id', session.user.id)" in block, (
-        "P2-NEW-14 regresión: el SELECT ya no filtra por `user_id`. "
-        "Defense-in-depth: aún con RLS Supabase, el filtro explícito "
-        "previene casos edge (sesión recién expirada, etc.)."
+
+    # Mitad 2 (backend, SQL ejecutable): GET /plans-data/{plan_id} debe
+    # filtrar por id Y user_id — equivalente server-side del chain
+    # `.eq('id', ...).eq('user_id', ...)` que este test anclaba pre-Neon.
+    user_data_src = _USER_DATA_PY.read_text(encoding="utf-8")
+    m = re.search(r"def\s+api_get_plan_data\s*\(", user_data_src)
+    assert m, (
+        "P2-NEW-14/I2 regresión: `api_get_plan_data` no existe en "
+        "routers/user_data.py. Si el endpoint se movió/renombró, "
+        "actualizar este test ANTES de mergear."
+    )
+    nxt = re.search(r"\n(?:@router\.|def\s)", user_data_src[m.start() + 1:])
+    fn_body = user_data_src[m.start(): m.start() + 1 + (nxt.start() if nxt else len(user_data_src))]
+    assert re.search(r"WHERE\s+id\s*=\s*%s\s+AND\s+user_id\s*=\s*%s", fn_body), (
+        "P2-NEW-14/I2 regresión: el SELECT de `api_get_plan_data` ya no "
+        "filtra `WHERE id = %s AND user_id = %s`. El prefetch del PDF "
+        "leería plan_data ajeno (IDOR) — mismo contrato que el chain "
+        ".eq('id').eq('user_id') que este test anclaba pre-Neon."
     )
 
 

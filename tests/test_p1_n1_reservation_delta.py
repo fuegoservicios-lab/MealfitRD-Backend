@@ -70,12 +70,16 @@ def test_first_attempt_uses_prefetched(db_inv_src: str):
 
 
 def test_retries_still_refetch(db_inv_src: str):
-    """En attempts >= 1, debe forzarse SELECT fresh (no usar prefetched stale)."""
+    """En attempts >= 1, debe forzarse SELECT fresh (no usar prefetched stale).
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el SELECT fresh viaja por
+    `execute_sql_query(... FROM user_inventory ...)` en lugar del builder
+    PostgREST legacy."""
     body = _extract_fn_body(db_inv_src, "_apply_reservation_delta")
     # El else-branch del check `attempt == 0 and prefetched_rows is not None`
     # debe contener el SELECT fresh.
     assert re.search(
-        r"else:\s*\n[\s\S]{0,200}supabase\.table\(\"user_inventory\"\)\.select",
+        r"else:\s*\n[\s\S]{0,200}execute_sql_query\([\s\S]{0,300}FROM user_inventory",
         body,
     ), (
         "P1-N1-RESERVATION-DELTA: el else-branch (retries) ya no hace SELECT "
@@ -92,8 +96,10 @@ def test_reserve_plan_does_batch_fetch(db_inv_src: str):
         "P1-N1-RESERVATION-DELTA: el diccionario `rows_by_name` (batch index "
         "por ingredient_name) no aparece."
     )
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El SELECT batch va por
+    # execute_sql_query (SQL directo), no por el builder PostgREST legacy.
     assert re.search(
-        r"supabase\.table\(\"user_inventory\"\)\.select",
+        r"execute_sql_query\([\s\S]{0,300}FROM user_inventory",
         body,
     ), (
         "P1-N1-RESERVATION-DELTA: el SELECT batch upfront sobre user_inventory "

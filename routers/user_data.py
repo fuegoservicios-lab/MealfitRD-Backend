@@ -197,10 +197,16 @@ async def api_increment_inventory(
 
     def _inc():
         from db import execute_sql_write
+        # [P1-NEON-DB-MIGRATION] GREATEST(0, ...) replica el clamp server-side
+        # de la RPC SECURITY DEFINER `increment_inventory_quantity` (P2-4) que
+        # este endpoint reemplaza. Sin él, dos tabs decrementando en paralelo
+        # dejan quantity negativa (no hay CHECK constraint en user_inventory):
+        # el row desaparece de GET /api/inventory (filtra quantity > 0) pero
+        # sigue bloqueando el INSERT 409-dedup por el UNIQUE.
         return execute_sql_write(
             """
             UPDATE user_inventory
-            SET quantity = quantity + %s::numeric, updated_at = NOW()
+            SET quantity = GREATEST(0, quantity + %s::numeric), updated_at = NOW()
             WHERE id = %s AND user_id = %s
             RETURNING quantity::float8 AS quantity
             """,

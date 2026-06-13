@@ -25,6 +25,12 @@ import pytest
 # ---------------------------------------------------------------------------
 # 1. Función identifica chunks huérfanos y los cancela
 # ---------------------------------------------------------------------------
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado al CTE atómico de prod
+# (P2-RACE-FIX · 2026-05-26): `_cleanup_orphan_chunks` ya NO hace SELECT +
+# UPDATE en 2 pasos. Hace UN solo `execute_sql_write(CTE, returning=True)`
+# que detecta + cancela los huérfanos en un statement atómico (FOR UPDATE
+# SKIP LOCKED) y devuelve las filas canceladas vía RETURNING. Los orphans
+# ahora vienen del RETURN del write, no de un execute_sql_query separado.
 @patch("cron_tasks.release_chunk_reservations")
 @patch("cron_tasks.execute_sql_write")
 @patch("cron_tasks.execute_sql_query")
@@ -33,7 +39,8 @@ def test_cancels_chunks_whose_meal_plan_no_longer_exists(
 ):
     from cron_tasks import _cleanup_orphan_chunks
 
-    mock_query.return_value = [
+    # El CTE con RETURNING devuelve las filas canceladas (id, user_id).
+    mock_write.return_value = [
         {"id": "chunk-1", "user_id": "user-A"},
         {"id": "chunk-2", "user_id": "user-B"},
     ]
@@ -47,12 +54,20 @@ def test_cancels_chunks_whose_meal_plan_no_longer_exists(
     mock_release.assert_any_call("user-A", "chunk-1")
     mock_release.assert_any_call("user-B", "chunk-2")
 
-    # UPDATE de cancellation ejecutado.
+    # El statement de detección+cancelación atómico se ejecutó: un único
+    # `execute_sql_write` con el CTE `UPDATE plan_chunk_queue SET status =
+    # 'cancelled'` + RETURNING.
     update_calls = [
         c for c in mock_write.call_args_list
         if "UPDATE plan_chunk_queue" in c.args[0] and "cancelled" in c.args[0]
     ]
     assert len(update_calls) == 1
+    # Debe usar el snapshot atómico FOR UPDATE SKIP LOCKED + RETURNING
+    # (sin esto, reaparece el race "INSERT meal_plan entre SELECT y UPDATE").
+    assert "FOR UPDATE SKIP LOCKED" in update_calls[0].args[0]
+    assert "RETURNING" in update_calls[0].args[0]
+    # Y NO debe quedar un SELECT separado por execute_sql_query (2-step legacy).
+    mock_query.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -64,18 +79,21 @@ def test_cancels_chunks_whose_meal_plan_no_longer_exists(
 def test_no_orphans_no_update_no_release(mock_query, mock_write, mock_release):
     from cron_tasks import _cleanup_orphan_chunks
 
-    mock_query.return_value = []
+    # CTE no encontró huérfanos → RETURNING vacío.
+    mock_write.return_value = []
 
     cancelled = _cleanup_orphan_chunks()
 
     assert cancelled == 0
+    # Sin huérfanos, ninguna reserva se libera (la propiedad clave: no se
+    # toca nada cuando no hay nada que cancelar).
     mock_release.assert_not_called()
-    # No write SQL.
-    update_calls = [
-        c for c in mock_write.call_args_list
-        if "UPDATE plan_chunk_queue" in c.args[0]
-    ]
-    assert update_calls == []
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El statement de detección atómico
+    # SÍ se ejecuta (es el CTE que mira si hay huérfanos), pero como RETURNING
+    # viene vacío, cancela 0 filas → efecto neto nulo. Ya NO existe el patrón
+    # 2-step donde "no orphans" implicaba "no UPDATE" — ahora detección y
+    # cancelación son el mismo statement. No se hace un SELECT separado.
+    mock_query.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -87,16 +105,21 @@ def test_no_orphans_no_update_no_release(mock_query, mock_write, mock_release):
 def test_select_only_includes_live_statuses(mock_query, mock_write, mock_release):
     from cron_tasks import _cleanup_orphan_chunks
 
-    mock_query.return_value = []
+    mock_write.return_value = []
     _cleanup_orphan_chunks()
 
-    sql = mock_query.call_args.args[0]
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El filtro de estados vive ahora en el
+    # CTE del `execute_sql_write` (el SELECT del CTE), no en un execute_sql_query
+    # separado. Parseamos el SQL real del write.
+    sql = mock_write.call_args.args[0]
     # Estados vivos que pueden ser huérfanos.
     assert "'pending'" in sql
     assert "'stale'" in sql
     assert "'processing'" in sql
-    # NO incluye estados terminales ya cerrados.
+    # NO incluye estados terminales ya cerrados como candidatos a huérfano.
     assert "'completed'" not in sql
+    # 'cancelled' solo aparece en el `SET status = 'cancelled'` del UPDATE,
+    # nunca como estado de entrada candidato a cancelar.
     assert "'cancelled'" not in sql or "SET status = 'cancelled'" in sql
 
 
@@ -109,22 +132,27 @@ def test_select_only_includes_live_statuses(mock_query, mock_write, mock_release
 def test_release_error_does_not_abort_batch(mock_query, mock_write, mock_release):
     from cron_tasks import _cleanup_orphan_chunks
 
-    mock_query.return_value = [
+    # El CTE ya canceló ambos chunks atómicamente (RETURNING los 2).
+    mock_write.return_value = [
         {"id": "chunk-1", "user_id": "user-A"},
         {"id": "chunk-2", "user_id": "user-B"},
     ]
-    # release del primer chunk falla; el segundo debe procesarse igualmente y el
-    # UPDATE batch debe ejecutarse.
+    # release del primer chunk falla; el segundo debe procesarse igualmente.
+    # El cancel ya ocurrió en el CTE (pre-release), así que el conteo no se ve
+    # afectado por un fallo de release best-effort.
     mock_release.side_effect = [RuntimeError("boom"), None]
 
     cancelled = _cleanup_orphan_chunks()
 
     assert cancelled == 2
+    # Ambos chunks intentan liberar reservas pese al fallo del primero.
+    assert mock_release.call_count == 2
+    # El statement atómico de cancelación corrió una sola vez.
     update_calls = [
         c for c in mock_write.call_args_list
         if "UPDATE plan_chunk_queue" in c.args[0]
     ]
-    assert len(update_calls) == 1, "UPDATE de cancellation debe correr aunque release falle"
+    assert len(update_calls) == 1, "El CTE de cancellation corre aunque release falle"
 
 
 # ---------------------------------------------------------------------------
@@ -138,14 +166,16 @@ def test_query_exception_returns_zero_does_not_raise(
 ):
     from cron_tasks import _cleanup_orphan_chunks
 
-    mock_query.side_effect = RuntimeError("connection refused")
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] La query de detección+cancelación es
+    # ahora el `execute_sql_write` del CTE; un fallo de conexión sale de ahí.
+    mock_write.side_effect = RuntimeError("connection refused")
 
     # No debe propagar excepción (es job de mantenimiento).
     cancelled = _cleanup_orphan_chunks()
 
     assert cancelled == 0
+    # Si el statement atómico falló, no hay filas que liberar.
     mock_release.assert_not_called()
-    mock_write.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

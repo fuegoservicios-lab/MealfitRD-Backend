@@ -61,9 +61,16 @@ def test_p2_sentiment_timeout():
 def test_p1_billing_reactivate_not_cancelled():
     src = _read(_BACKEND, "routers", "billing.py")
     assert "P1-BILLING-REACTIVATE-NOT-CANCELLED" in src
-    assert '.neq(\n                            "subscription_status", "CANCELLED"\n                        )' in src \
-        or '.neq("subscription_status", "CANCELLED")' in src
-    assert 'q.eq("subscription_status", "PAYMENT_RETRYING")' in src
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado de los builders PostgREST
+    # (`.neq("subscription_status", "CANCELLED")` / `q.eq(..., "PAYMENT_RETRYING")`)
+    # al WHERE dinámico de `_do_reactivate` (SQL directo). Misma propiedad de
+    # seguridad: ACTIVATED jamás reactiva una sub CANCELLED por el usuario, y
+    # PAYMENT.SALE.COMPLETED solo limpia el flag PAYMENT_RETRYING. Se parsea el
+    # código ejecutable (los `where_clauses.append(...)`), no comentarios.
+    start = src.index("def _do_reactivate():")
+    body = src[start: src.index("await _supabase_async(_do_reactivate)", start)]
+    assert "where_clauses.append(\"subscription_status <> 'CANCELLED'\")" in body
+    assert "where_clauses.append(\"subscription_status = 'PAYMENT_RETRYING'\")" in body
 
 
 def test_p2_billing_webhook_infra_503():
@@ -152,11 +159,23 @@ def test_p2_inventory_fetch_executor_no_with():
 
 # ─────────────────────────────────────────────── P3 #17/#18: concurrencia
 def test_p3_inventory_insert_race_documented_accepted():
-    # El upsert ON CONFLICT se DIFIRIÓ (race narrow sin corrupción — la unique
-    # constraint previene duplicados; reescribir el mock-based test cuesta más que
-    # el beneficio). Aquí solo anclamos que el comentario engañoso fue corregido.
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El deferral original (race cross-call
+    # del doble INSERT ACEPTADA + comentario engañoso corregido) quedó CERRADO
+    # por el rewrite a SQL directo: el INSERT de `add_or_update_inventory_item`
+    # ahora es `ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE SET
+    # quantity = quantity + EXCLUDED.quantity` — el increment que PostgREST
+    # upsert no soportaba. Re-anclamos al SQL EJECUTABLE (más fuerte que el
+    # comment-anchor previo) + first-writer-wins de `source` (P0.2).
     src = _read(_BACKEND, "db_inventory.py")
-    assert 'El comentario legacy "El INSERT no tiene race"' in src
+    assert "P3-PROD-AUDIT-2" in src  # marker de la decisión original preservado
+    start = src.index("def add_or_update_inventory_item(")
+    body = src[start: src.index("\ndef ", start + 1)]
+    assert "ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE" in body
+    assert "quantity = user_inventory.quantity + EXCLUDED.quantity" in body
+    # P0.2 first-writer-wins: el DO UPDATE NO debe reescribir `source`.
+    conflict_at = body.index("ON CONFLICT (user_id, ingredient_name, unit) DO UPDATE")
+    set_clause = body[conflict_at: body.index('"""', conflict_at)]
+    assert "source = EXCLUDED.source" not in set_clause
 
 
 def test_p3_visual_diary_atomic_increment():

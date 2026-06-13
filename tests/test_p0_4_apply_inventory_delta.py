@@ -157,23 +157,48 @@ def test_add_or_update_calls_rpc():
         "`add_or_update_inventory_item` NO llama a la RPC `apply_inventory_delta`. "
         "El path UPDATE/DELETE quedó en app-layer — la lost-update race vuelve."
     )
-    assert re.search(r"\.rpc\(\s*[\"']apply_inventory_delta[\"']", body), (
-        "Llamada a la RPC debe ser `supabase.rpc(\"apply_inventory_delta\", ...)`."
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] La RPC se invoca via SQL directo
+    # `SELECT public.apply_inventory_delta(...)` (antes `supabase.rpc(...)`).
+    # La atomicidad FOR UPDATE de la función se preserva idéntica.
+    assert re.search(r"SELECT\s+public\.apply_inventory_delta\(", body), (
+        "Llamada a la RPC debe ser `SELECT public.apply_inventory_delta(...)` "
+        "via execute_sql_query."
     )
 
 
 def test_rpc_call_passes_required_params():
-    """El payload de la RPC debe incluir los 5 params canónicos."""
+    """La llamada SQL a la RPC debe pasar los 5 params canónicos con sus
+    casts explícitos. [P1-NEON-DB-MIGRATION · 2026-06-12] Equivalencia con el
+    payload PostgREST legacy `{p_user_id, p_row_id, p_delta, p_mutation_type,
+    p_master_id}`: ahora viajan posicionales — `%s::uuid` (user), `%s::bigint`
+    (row), `%s::numeric` (delta — float8→numeric NO es cast implícito en
+    resolución de funciones), `%s` (mutation_type), `%s::uuid` (master)."""
     src = _read(_DB_INVENTORY_PATH)
     func_match = re.search(
         r"def\s+add_or_update_inventory_item\(.*?(?=\ndef\s+|\Z)",
         src, re.DOTALL,
     )
     body = func_match.group(0)
-    required_params = ["p_user_id", "p_row_id", "p_delta", "p_mutation_type", "p_master_id"]
-    for param in required_params:
-        assert f'"{param}"' in body, (
-            f"Llamada a apply_inventory_delta omite `{param}` en el payload. "
+    assert '"%s::uuid, %s::bigint, %s::numeric, %s, %s::uuid"' in body, (
+        "Llamada a apply_inventory_delta debe pasar los 5 params posicionales "
+        "con casts explícitos (%s::uuid, %s::bigint, %s::numeric, %s, %s::uuid). "
+        "Sin el ::numeric explícito, Postgres no resuelve la función para "
+        "float8; sin los 5 params, la RPC devuelve error o aplica defaults "
+        "silenciosamente."
+    )
+    # Y la tupla de argumentos debe enviar los 5 valores canónicos en orden.
+    call_region_match = re.search(
+        r"SELECT\s+public\.apply_inventory_delta\([\s\S]{0,800}?fetch_one=True",
+        body,
+    )
+    assert call_region_match is not None, (
+        "No se encontró la región de la llamada RPC (hasta fetch_one=True). "
+        "Si cambiaste el shape de la llamada, actualiza este test."
+    )
+    call_region = call_region_match.group(0)
+    for ident in ("user_id", "row_id", "round(converted_qty, 4)", "mutation_type", "master_id"):
+        assert ident in call_region, (
+            f"Llamada a apply_inventory_delta omite `{ident}` en los params. "
             f"Sin todos los params, la RPC devuelve error o aplica defaults "
             f"silenciosamente."
         )

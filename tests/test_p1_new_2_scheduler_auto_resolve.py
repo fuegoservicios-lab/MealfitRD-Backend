@@ -100,30 +100,48 @@ def test_listener_handles_executed_branch(app_src: str):
 
     # Dentro del listener body, debe aparecer la actualización de
     # resolved_at con los alert_keys del scheduler.
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado del builder PostgREST
+    # (`.update({'resolved_at': ...})`) al SQL directo ejecutable:
+    # `UPDATE system_alerts SET resolved_at = %s`.
     resolve_pattern = re.compile(
-        r'\.update\(\s*\{\s*["\']resolved_at["\']\s*:',
-        re.DOTALL,
+        r"UPDATE\s+system_alerts\s+SET\s+resolved_at\s*=\s*%s",
     )
     assert resolve_pattern.search(body), (
-        "P1-NEW-2 regresión: el listener no llama "
-        "`.update({'resolved_at': ...})` para auto-resolver alerts. "
-        "Sin esto, las filas en system_alerts viven indefinidamente."
+        "P1-NEW-2 regresión: el listener no ejecuta "
+        "`UPDATE system_alerts SET resolved_at = %s` para auto-resolver "
+        "alerts. Sin esto, las filas en system_alerts viven indefinidamente."
     )
 
 
 def test_auto_resolve_filters_only_unresolved(app_src: str):
-    """El UPDATE de resolved_at debe filtrar por `resolved_at IS NULL`
-    (vía `.is_('resolved_at', 'null')` en supabase-py). Sin esto,
+    """El UPDATE de resolved_at debe filtrar por `resolved_at IS NULL`.
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado del builder PostgREST
+    (`.is_('resolved_at', 'null')`) al predicado SQL ejecutable dentro del
+    MISMO statement UPDATE del listener (no un comentario). Sin esto,
     pisamos timestamps de alerts ya cerradas manualmente.
     """
-    pattern = re.compile(
-        r'\.is_\(\s*["\']resolved_at["\']\s*,\s*["\']null["\']\s*\)',
+    listener_match = re.search(
+        r"def\s+_scheduler_alert_listener\s*\([^)]*\)\s*:(.*?)(?=\n(?:def\s|@app\.|@asynccontextmanager))",
+        app_src,
+        re.DOTALL,
     )
-    assert pattern.search(app_src), (
+    assert listener_match, (
+        "P1-NEW-2 regresión: no se encontró la función "
+        "`_scheduler_alert_listener` en app.py."
+    )
+    body = listener_match.group(1)
+    # El predicado debe vivir DENTRO del mismo string SQL del UPDATE
+    # ([^"] impide saltar a otro statement/comentario fuera del literal).
+    pattern = re.compile(
+        r'UPDATE\s+system_alerts\s+SET\s+resolved_at\s*=\s*%s'
+        r'[^"]*?WHERE[^"]*?resolved_at\s+IS\s+NULL',
+    )
+    assert pattern.search(body), (
         "P1-NEW-2 regresión: el UPDATE de resolved_at NO filtra por "
-        "`resolved_at IS NULL`. Sin este predicado, una alert que ops "
-        "resolvió hace días se le sobrescribe el timestamp cada vez "
-        "que el job ejecuta — perdemos el historial real de resolución."
+        "`resolved_at IS NULL` en el mismo statement. Sin este predicado, "
+        "una alert que ops resolvió hace días se le sobrescribe el "
+        "timestamp cada vez que el job ejecuta — perdemos el historial "
+        "real de resolución."
     )
 
 

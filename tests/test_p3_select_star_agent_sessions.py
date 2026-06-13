@@ -146,7 +146,10 @@ class TestSchedulerAlertDedup:
         )
 
     def test_dedup_check_before_upsert(self, app_src: str):
-        """El listener debe consultar el cache ANTES del UPSERT y skip si dentro de TTL."""
+        """El listener debe consultar el cache ANTES del UPSERT y skip si
+        dentro de TTL. [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado del
+        builder PostgREST (`supabase.table("system_alerts").upsert(`) al SQL
+        directo `INSERT INTO system_alerts` (UPSERT via ON CONFLICT)."""
         listener_match = re.search(
             r"def _scheduler_alert_listener\([\s\S]+?(?=\ndef |\nasync def )",
             app_src,
@@ -155,9 +158,10 @@ class TestSchedulerAlertDedup:
         body = listener_match.group(0)
         # Cache lookup debe aparecer ANTES del upsert.
         cache_pos = body.find("_SCHEDULER_ALERT_LAST_EMIT.get(")
-        upsert_pos = body.find('supabase.table("system_alerts").upsert(')
+        upsert_pos = body.find("INSERT INTO system_alerts")
         assert cache_pos != -1 and upsert_pos != -1, (
-            "P3-SCHEDULER-ALERT-DEDUP: cache lookup o upsert no encontrados en listener."
+            "P3-SCHEDULER-ALERT-DEDUP: cache lookup o upsert (INSERT INTO "
+            "system_alerts) no encontrados en listener."
         )
         assert cache_pos < upsert_pos, (
             "P3-SCHEDULER-ALERT-DEDUP: cache lookup debe ocurrir ANTES del UPSERT "

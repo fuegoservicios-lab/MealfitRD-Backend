@@ -26,8 +26,22 @@ Cubre:
 import json
 import os
 import tempfile
+import uuid
 from unittest.mock import patch, MagicMock
 import pytest
+
+
+# [P1-NEON-DB-MIGRATION · 2026-06-12] El flush (`_flush_pending_deferrals`) y
+# `_record_chunk_deferral` endurecieron un guard `_is_valid_uuid(user_id/
+# meal_plan_id)`: records con IDs no-UUID se descartan ANTES del INSERT (bajo
+# PostgREST/MagicMock cualquier string pasaba; contra Postgres real las columnas
+# son `uuid` NOT NULL). Los fixtures que verifican el path "válido → INSERT"
+# deben usar UUIDs reales para que el record sobreviva el guard y ejercite el
+# `execute_sql_write` mockeado. Helpers deterministas para legibilidad de asserts.
+_UID_1 = str(uuid.uuid5(uuid.NAMESPACE_DNS, "p16-user-1"))
+_UID_2 = str(uuid.uuid5(uuid.NAMESPACE_DNS, "p16-user-2"))
+_PID_1 = str(uuid.uuid5(uuid.NAMESPACE_DNS, "p16-plan-1"))
+_PID_2 = str(uuid.uuid5(uuid.NAMESPACE_DNS, "p16-plan-2"))
 
 
 @pytest.fixture
@@ -114,10 +128,11 @@ def test_p1_6_flush_no_file_is_noop(tmp_buffer_path):
 def test_p1_6_flush_succeeds_and_removes_file(mock_write, tmp_buffer_path):
     """Si todos los INSERTs son ok, el archivo debe eliminarse."""
     import cron_tasks
-    # Pre-poblar
+    # Pre-poblar (UUIDs reales: el guard `_is_valid_uuid` del flush descarta IDs
+    # no-UUID antes del INSERT — ver nota de cabecera P1-NEON-DB-MIGRATION).
     records = [
-        {"user_id": "u1", "meal_plan_id": "p1", "week_number": 1, "reason": "r1", "buffered_at": "2026-05-01T00:00:00+00:00"},
-        {"user_id": "u2", "meal_plan_id": "p2", "week_number": 2, "reason": "r2", "buffered_at": "2026-05-01T00:01:00+00:00"},
+        {"user_id": _UID_1, "meal_plan_id": _PID_1, "week_number": 1, "reason": "r1", "buffered_at": "2026-05-01T00:00:00+00:00"},
+        {"user_id": _UID_2, "meal_plan_id": _PID_2, "week_number": 2, "reason": "r2", "buffered_at": "2026-05-01T00:01:00+00:00"},
     ]
     with open(tmp_buffer_path, "w", encoding="utf-8") as f:
         for rec in records:
@@ -137,8 +152,8 @@ def test_p1_6_flush_discards_records_with_null_meal_plan_id(mock_write, tmp_buff
     """meal_plan_id None → descarta sin intentar INSERT (NOT NULL en schema)."""
     import cron_tasks
     records = [
-        {"user_id": "u1", "meal_plan_id": None, "week_number": 1, "reason": "r1"},  # invalid
-        {"user_id": "u2", "meal_plan_id": "p2", "week_number": 2, "reason": "r2"},  # valid
+        {"user_id": _UID_1, "meal_plan_id": None, "week_number": 1, "reason": "r1"},  # invalid: meal_plan_id None (NOT NULL)
+        {"user_id": _UID_2, "meal_plan_id": _PID_2, "week_number": 2, "reason": "r2"},  # valid: UUIDs reales
     ]
     with open(tmp_buffer_path, "w", encoding="utf-8") as f:
         for rec in records:
@@ -149,7 +164,8 @@ def test_p1_6_flush_discards_records_with_null_meal_plan_id(mock_write, tmp_buff
 
     assert stats["discarded_invalid"] == 1
     assert stats["flushed"] == 1
-    # Solo se intentó UN INSERT (el válido); el inválido se descartó antes.
+    # Solo se intentó UN INSERT (el válido); el inválido (meal_plan_id None) se
+    # descartó antes de tocar la DB.
     assert mock_write.call_count == 1
 
 
@@ -177,7 +193,10 @@ def test_p1_6_flush_keeps_records_on_transient_error(mock_write, tmp_buffer_path
     import cron_tasks
     mock_write.side_effect = Exception("connection timeout")
 
-    rec = {"user_id": "u1", "meal_plan_id": "p1", "week_number": 1, "reason": "r1"}
+    # UUIDs reales para que el record pase el guard y LLEGUE al INSERT (donde el
+    # error transitorio lo mantiene para retry). Con IDs no-UUID el flush lo
+    # descartaría antes de intentar el INSERT y el assert de `remaining` fallaría.
+    rec = {"user_id": _UID_1, "meal_plan_id": _PID_1, "week_number": 1, "reason": "r1"}
     with open(tmp_buffer_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -218,10 +237,15 @@ def test_p1_6_record_failure_persists_to_buffer(mock_write, tmp_buffer_path):
     # Resetear contador para no spamear logs de tests previos
     cron_tasks._chunk_deferral_telemetry_failures["count"] = 0
 
+    # UUIDs reales: `_record_chunk_deferral` tiene un hard guard que descarta IDs
+    # no-UUID ANTES del INSERT y NO los buffea (evita contaminar el buffer con
+    # basura de tests). Con UUIDs válidos el INSERT se intenta, falla por el
+    # `DB outage` mockeado, y el record SÍ se buffea para retry — que es lo que
+    # este test verifica.
     with patch("constants.CHUNK_DEFERRALS_BUFFER_PATH", tmp_buffer_path):
         result = cron_tasks._record_chunk_deferral(
-            user_id="user-buffered",
-            meal_plan_id="plan-buffered",
+            user_id=_UID_1,
+            meal_plan_id=_PID_1,
             week_number=3,
             reason="test_buffered_reason",
             days_until_prev_end=1,
@@ -233,8 +257,8 @@ def test_p1_6_record_failure_persists_to_buffer(mock_write, tmp_buffer_path):
         lines = [ln.strip() for ln in f.readlines() if ln.strip()]
     assert len(lines) == 1
     parsed = json.loads(lines[0])
-    assert parsed["user_id"] == "user-buffered"
-    assert parsed["meal_plan_id"] == "plan-buffered"
+    assert parsed["user_id"] == _UID_1
+    assert parsed["meal_plan_id"] == _PID_1
     assert parsed["week_number"] == 3
     assert parsed["reason"] == "test_buffered_reason"
     assert parsed["days_until_prev_end"] == 1

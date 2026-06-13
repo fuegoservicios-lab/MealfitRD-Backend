@@ -44,10 +44,15 @@ def test_strict_knob_read_at_module_load(db_inventory_src: str):
     aparecer al module-top-level (no dentro de ningún `def`), para que
     el side-effect del registro ocurra al import-time.
 
-    Estrategia: localizar todos los matches del knob, y para cada uno
-    verificar que NO está dentro de la región de cuerpo de algún `def`
-    al nivel superior del módulo. Tolera anidamiento en `try:`/`if:`
-    de top-level (que sí ejecutan en import-time)."""
+    Estrategia (AST): parsear el módulo y buscar el call dentro de los
+    statements top-level que NO sean def/class. Tolera anidamiento en
+    `try:`/`if:` de top-level (que sí ejecutan en import-time) y alias
+    del helper (`from knobs import _env_bool as _knob_env_bool`).
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] La heurística regex previa
+    ("def-a-def en columna 0") clasificaba mal el bloque top-level cuando un
+    `def` nuevo (e.g. `_db_available`) aparece ANTES del call en el archivo —
+    el AST resuelve la pertenencia real al module body."""
     matches = list(
         re.finditer(
             r'_env_bool\(\s*["\']MEALFIT_INVENTORY_RPC_STRICT["\']',
@@ -60,34 +65,28 @@ def test_strict_knob_read_at_module_load(db_inventory_src: str):
         "fue removido del módulo, `/admin/knobs` no lo expone."
     )
 
-    # Encontrar todos los `def `/`class ` al column 0. Cada uno abre
-    # una región hasta el siguiente top-level statement (próximo `def`/
-    # `class`/línea no-indentada no-blank).
-    def _find_def_regions(src: str) -> list[tuple[int, int]]:
-        """Devuelve [(start_byte, end_byte), ...] de cada cuerpo de def
-        top-level (column 0)."""
-        regions = []
-        # Localizar todos los `def name(` o `class name` con indent==0.
-        defs = list(
-            re.finditer(
-                r"^(?:def|class)\s+\w+",
-                src,
-                re.MULTILINE,
-            )
-        )
-        for i, d in enumerate(defs):
-            start = d.start()
-            # End = siguiente def/class top-level o EOF.
-            next_start = defs[i + 1].start() if i + 1 < len(defs) else len(src)
-            regions.append((start, next_start))
-        return regions
+    import ast
 
-    def_regions = _find_def_regions(db_inventory_src)
+    tree = ast.parse(db_inventory_src)
 
-    def _is_top_level(pos: int) -> bool:
-        return not any(start <= pos < end for start, end in def_regions)
+    def _contains_knob_call(node: ast.AST) -> bool:
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            func = sub.func
+            fname = getattr(func, "id", None) or getattr(func, "attr", None) or ""
+            if not fname.endswith("_env_bool") or not sub.args:
+                continue
+            first = sub.args[0]
+            if isinstance(first, ast.Constant) and first.value == "MEALFIT_INVENTORY_RPC_STRICT":
+                return True
+        return False
 
-    top_level_match = any(_is_top_level(m.start()) for m in matches)
+    top_level_match = any(
+        _contains_knob_call(stmt)
+        for stmt in tree.body
+        if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    )
 
     assert top_level_match, (
         "P2-NEW-2 regresión: `_env_bool('MEALFIT_INVENTORY_RPC_STRICT', "

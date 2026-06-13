@@ -38,7 +38,10 @@ from pathlib import Path
 import pytest
 
 
-_APP_PATH = Path(__file__).parent / "app.py"
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Path corregido: apuntaba a tests/app.py
+# (inexistente en el árbol actual — dependía de una copia untracked perdida al
+# mover el workspace). Ahora parsea el app.py productivo real.
+_APP_PATH = Path(__file__).parent.parent / "app.py"
 
 
 @pytest.fixture(scope="module")
@@ -171,8 +174,11 @@ def test_listener_handles_missed_and_error_codes(app_source):
 
 
 def test_listener_upserts_system_alerts_with_alert_key(app_source):
-    """El listener debe upsertar a `system_alerts` con `on_conflict='alert_key'`
-    para idempotencia (cada nuevo evento del mismo job actualiza la fila)."""
+    """El listener debe upsertar a `system_alerts` idempotente por `alert_key`
+    (cada nuevo evento del mismo job actualiza la fila). [P1-NEON-DB-MIGRATION
+    · 2026-06-12] Re-anclado del builder PostgREST (`.table().upsert(...,
+    on_conflict='alert_key')`) al SQL directo: `INSERT INTO system_alerts ...
+    ON CONFLICT (alert_key) DO UPDATE`. Misma propiedad verificada."""
     listener_match = re.search(
         r"def\s+_scheduler_alert_listener.*?(?=\n(?:def\s|@asynccontextmanager))",
         app_source,
@@ -180,16 +186,18 @@ def test_listener_upserts_system_alerts_with_alert_key(app_source):
     )
     assert listener_match
     body = listener_match.group(0)
-    assert 'table("system_alerts")' in body or "table('system_alerts')" in body, (
-        "Listener debe escribir a la tabla system_alerts."
+    assert "INSERT INTO system_alerts" in body, (
+        "Listener debe escribir a la tabla system_alerts (INSERT via "
+        "execute_sql_write)."
     )
-    assert "upsert" in body, "Listener debe usar UPSERT (no INSERT plano)."
-    assert (
-        'on_conflict="alert_key"' in body
-        or "on_conflict='alert_key'" in body
+    assert re.search(
+        r"INSERT INTO system_alerts[^\"]*?ON CONFLICT \(alert_key\) DO UPDATE",
+        body,
+        re.DOTALL,
     ), (
-        "UPSERT debe especificar on_conflict='alert_key' para que multiples "
-        "eventos del mismo job actualicen la misma fila (idempotencia)."
+        "El INSERT debe ser UPSERT idempotente: `ON CONFLICT (alert_key) "
+        "DO UPDATE` en el MISMO statement, para que multiples eventos del "
+        "mismo job actualicen la misma fila (idempotencia)."
     )
     # alert_key debe codificar el event_type + job_id para diferenciar runs.
     assert "scheduler_" in body and "job_id" in body, (
@@ -199,7 +207,7 @@ def test_listener_upserts_system_alerts_with_alert_key(app_source):
 
 def test_listener_has_defensive_try_except(app_source):
     """El listener debe envolver su lógica en try/except para no crashear el
-    scheduler si supabase falla (por ejemplo durante un DB outage)."""
+    scheduler si la escritura DB falla (por ejemplo durante un outage)."""
     listener_match = re.search(
         r"def\s+_scheduler_alert_listener.*?(?=\n(?:def\s|@asynccontextmanager))",
         app_source,
@@ -208,7 +216,7 @@ def test_listener_has_defensive_try_except(app_source):
     assert listener_match
     body = listener_match.group(0)
     assert "try:" in body and "except" in body, (
-        "Listener debe tener try/except defensivo. Si un fallo en supabase "
+        "Listener debe tener try/except defensivo. Si un fallo del write DB "
         "propaga, APScheduler puede des-registrar el listener (peor)."
     )
     # El except debe loguear, no silenciar completamente.

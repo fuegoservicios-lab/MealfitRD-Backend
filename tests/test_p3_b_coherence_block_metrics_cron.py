@@ -10,47 +10,28 @@ Cobertura:
   2. `confidence=0.0` cuando hay anomalías; `1.0` cuando todo normal.
   3. Resiliencia ante plan_data corrupto (string JSON inválido) y entradas
      no-dict en el historial.
-  4. Skip silencioso si supabase no está inicializado (no crash).
+  4. Tick con skip_reason si el pool SQL no está inicializado (no crash).
   5. INSERT a pipeline_metrics es best-effort (un fail de DB no debe
      enmascarar el motivo real del cron, pero tampoco crashea el scheduler).
   6. Knob `MEALFIT_COHERENCE_METRICS_LOOKBACK_H` con defensas contra
      valores patológicos (NaN/inf/<=0 → 1.0).
+
+[P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el cron ya no usa el
+builder PostgREST (`supabase.table(...).select(...).gte(...)`) sino
+`execute_sql_query` contra el pool psycopg (Neon). Los stubs mockean
+`cron_tasks.execute_sql_query` (fetch de meal_plans) + `db_core.connection_pool`
+(guard de disponibilidad). Los rows del fetch reflejan la paridad de tipos
+del SQL nuevo: `id::text`/`user_id::text` → str, `plan_data` jsonb → dict.
+El skip_reason `supabase_not_initialized` se PRESERVÓ deliberadamente
+(continuidad de dashboards) aunque el guard sea ahora `connection_pool`.
 """
 import math
 import pytest
 
 
 # ---------------------------------------------------------------------------
-# Helpers para construir el mock de supabase y los plan_data de prueba
+# Helpers para construir los plan_data de prueba (rows del fetch SQL)
 # ---------------------------------------------------------------------------
-class _StubExecuteResult:
-    def __init__(self, data):
-        self.data = data
-
-
-class _StubTable:
-    def __init__(self, plans):
-        self._plans = plans
-
-    def select(self, _cols):
-        return self
-
-    def gte(self, _col, _val):
-        return self
-
-    def limit(self, _n):
-        return self
-
-    def execute(self):
-        return _StubExecuteResult(self._plans)
-
-
-class _StubSupabase:
-    def __init__(self, plans):
-        self._plans = plans
-
-    def table(self, _name):
-        return _StubTable(self._plans)
 
 
 def _hist_entry(action_taken, block_set=False):
@@ -90,14 +71,26 @@ def captured_inserts(monkeypatch):
 
 
 @pytest.fixture
-def install_supabase(monkeypatch):
-    """Factory: instala un stub de supabase con los plans dados."""
+def install_plans(monkeypatch):
+    """Factory: stubea el fetch SQL de meal_plans con los plans dados.
+
+    [P1-NEON-DB-MIGRATION] `_aggregate_coherence_block_history_metrics` hace
+    `from db_core import connection_pool` cada vez (no lo cachea) y llama
+    `execute_sql_query` (binding módulo-level de cron_tasks). Patcheamos:
+      - `db_core.connection_pool` → objeto truthy (pasa el guard de
+        disponibilidad sin depender de DB real del entorno).
+      - `cron_tasks.execute_sql_query` → retorna los rows (dicts con
+        id/user_id str + plan_data dict, paridad del SELECT con ::text).
+    """
     def _install(plans):
-        # `_aggregate_coherence_block_history_metrics` hace `from db_core
-        # import supabase` cada vez (no lo cachea), así que monkeypatch del
-        # atributo del módulo basta.
         import db_core
-        monkeypatch.setattr(db_core, "supabase", _StubSupabase(plans))
+        import cron_tasks
+        monkeypatch.setattr(db_core, "connection_pool", object())
+        monkeypatch.setattr(
+            cron_tasks,
+            "execute_sql_query",
+            lambda sql, params=None, **kwargs: list(plans),
+        )
     return _install
 
 
@@ -105,9 +98,9 @@ def install_supabase(monkeypatch):
 # 1. Conteos por categoría de action_taken
 # ---------------------------------------------------------------------------
 class TestActionTakenCounts:
-    def test_all_normal_actions_counted(self, install_supabase, captured_inserts):
+    def test_all_normal_actions_counted(self, install_plans, captured_inserts):
         """Las 5 categorías "esperadas" se cuentan correctamente."""
-        install_supabase([
+        install_plans([
             _plan([_hist_entry("not_applicable")], plan_id="p1"),
             _plan([_hist_entry("degrade", block_set=True)], plan_id="p2"),
             _plan([_hist_entry("reject_minor", block_set=True)], plan_id="p3"),
@@ -127,9 +120,9 @@ class TestActionTakenCounts:
         # Anomalous porque hay hydration_error.
         assert meta["anomalous"] is True
 
-    def test_normal_only_no_anomaly(self, install_supabase, captured_inserts):
+    def test_normal_only_no_anomaly(self, install_plans, captured_inserts):
         """Sin invariant violations → confidence=1.0, anomalous=False."""
-        install_supabase([
+        install_plans([
             _plan([_hist_entry("not_applicable")], plan_id="p1"),
             _plan([_hist_entry("degrade", block_set=True)], plan_id="p2"),
         ])
@@ -143,10 +136,10 @@ class TestActionTakenCounts:
         meta = _parse_metadata(captured_inserts[0])
         assert meta["anomalous"] is False
 
-    def test_null_block_set_invariant_violation(self, install_supabase, captured_inserts):
+    def test_null_block_set_invariant_violation(self, install_plans, captured_inserts):
         """[P2-2 invariant] block_set=True + action_taken=None es bug:
         debe contar como `null_block_set` y disparar anomaly gate."""
-        install_supabase([
+        install_plans([
             _plan([_hist_entry(None, block_set=True)], plan_id="p1"),
         ])
         from cron_tasks import _aggregate_coherence_block_history_metrics
@@ -157,10 +150,10 @@ class TestActionTakenCounts:
         confidence_val = captured_inserts[0]["params"][6]
         assert confidence_val == 0.0
 
-    def test_none_other_legacy_path(self, install_supabase, captured_inserts):
+    def test_none_other_legacy_path(self, install_plans, captured_inserts):
         """action_taken=None + block_set=False NO debe pasar bajo P2-2; si
         aparece, contar como `none_other` (regresión a investigar)."""
-        install_supabase([
+        install_plans([
             _plan([_hist_entry(None, block_set=False)], plan_id="p1"),
         ])
         from cron_tasks import _aggregate_coherence_block_history_metrics
@@ -169,11 +162,11 @@ class TestActionTakenCounts:
         assert meta["counts"]["none_other"] == 1
         assert meta["anomalous"] is True
 
-    def test_unexpected_action_value_not_counted(self, install_supabase, captured_inserts):
+    def test_unexpected_action_value_not_counted(self, install_plans, captured_inserts):
         """Un `action_taken` con valor fuera de las 5 categorías esperadas
         NO debe inflar el dict (un typo en review_plan_node no debería
         dañar la calidad de la métrica)."""
-        install_supabase([
+        install_plans([
             _plan([_hist_entry("typoed_action", block_set=True)], plan_id="p1"),
             _plan([_hist_entry("degrade", block_set=True)], plan_id="p2"),
         ])
@@ -208,10 +201,10 @@ class TestActionTakenCounts:
 # ---------------------------------------------------------------------------
 class TestResilience:
     def test_string_plan_data_invalid_json_counted_as_parse_error(
-        self, install_supabase, captured_inserts
+        self, install_plans, captured_inserts
     ):
         """plan_data como string no-JSON: cuenta como parse_error y NO crashea."""
-        install_supabase([
+        install_plans([
             {"id": "p1", "user_id": "u1", "plan_data": "{bogus json"},
             _plan([_hist_entry("degrade", block_set=True)], plan_id="p2"),
         ])
@@ -221,20 +214,20 @@ class TestResilience:
         assert meta["parse_errors"] == 1
         assert meta["counts"]["degrade"] == 1
 
-    def test_history_with_non_dict_entries_skipped(self, install_supabase, captured_inserts):
+    def test_history_with_non_dict_entries_skipped(self, install_plans, captured_inserts):
         """Entradas que no son dict (e.g. None) se saltan sin crash."""
         history = [None, "string", _hist_entry("degrade", block_set=True), 42]
-        install_supabase([_plan(history, plan_id="p1")])
+        install_plans([_plan(history, plan_id="p1")])
         from cron_tasks import _aggregate_coherence_block_history_metrics
         _aggregate_coherence_block_history_metrics()
         meta = _parse_metadata(captured_inserts[0])
         assert meta["counts"]["degrade"] == 1
         assert meta["total_entries"] == 1  # Solo el dict válido.
 
-    def test_no_history_field_skipped(self, install_supabase, captured_inserts):
+    def test_no_history_field_skipped(self, install_plans, captured_inserts):
         """Plans sin `_shopping_coherence_block_history` se cuentan en
         plans_examined pero no en plans_with_history."""
-        install_supabase([
+        install_plans([
             {"id": "p1", "user_id": "u1", "plan_data": {}},  # no field
             _plan([_hist_entry("degrade", block_set=True)], plan_id="p2"),
         ])
@@ -246,21 +239,26 @@ class TestResilience:
 
 
 # ---------------------------------------------------------------------------
-# 3. Skip cuando supabase no está disponible
+# 3. Skip cuando el pool SQL no está disponible
 # ---------------------------------------------------------------------------
 class TestSupabaseUnavailable:
     def test_supabase_none_emits_tick_with_skip_reason(self, monkeypatch, captured_inserts):
-        """[P1-CRON-TOP-LEVEL-TRY · 2026-05-15] Si supabase es None, el cron
-        DEBE emitir tick observable a pipeline_metrics con
+        """[P1-CRON-TOP-LEVEL-TRY · 2026-05-15] Si el pool SQL es None, el
+        cron DEBE emitir tick observable a pipeline_metrics con
         `skip_reason='supabase_not_initialized'`. Pre-fix, hacía silent skip
         — el watchdog no podía distinguir "cron OK sin anomalías" de
-        "cron silenciosamente abortando por supabase=None 3h seguidas".
+        "cron silenciosamente abortando por pool=None 3h seguidas".
 
         Post-fix, el tick siempre se emite (via finally), con skip_reason
         que discrimina los 5 paths canónicos.
+
+        [P1-NEON-DB-MIGRATION · 2026-06-12] El guard es ahora
+        `db_core.connection_pool` (no `db_core.supabase`), pero el literal
+        `supabase_not_initialized` se preservó deliberadamente por
+        continuidad de dashboards — NO renombrarlo.
         """
         import db_core
-        monkeypatch.setattr(db_core, "supabase", None)
+        monkeypatch.setattr(db_core, "connection_pool", None)
         from cron_tasks import _aggregate_coherence_block_history_metrics
         # No debe lanzar.
         _aggregate_coherence_block_history_metrics()
@@ -268,13 +266,13 @@ class TestSupabaseUnavailable:
         # skip_reason='supabase_not_initialized' en metadata.
         assert len(captured_inserts) == 1, (
             f"P1-CRON-TOP-LEVEL-TRY: el tick observable debe emitirse aunque "
-            f"supabase=None. captured_inserts={captured_inserts!r}"
+            f"connection_pool=None. captured_inserts={captured_inserts!r}"
         )
         meta = _parse_metadata(captured_inserts[0])
         assert meta.get("skip_reason") == "supabase_not_initialized", (
             f"P1-CRON-TOP-LEVEL-TRY: skip_reason debe ser "
-            f"'supabase_not_initialized' cuando supabase=None. "
-            f"Got: {meta.get('skip_reason')!r}"
+            f"'supabase_not_initialized' (literal legacy preservado) cuando "
+            f"connection_pool=None. Got: {meta.get('skip_reason')!r}"
         )
 
 
@@ -293,13 +291,13 @@ class TestLookbackKnob:
         ("inf", 1.0),    # inf
     ])
     def test_lookback_knob_robust(
-        self, raw, expected, install_supabase, captured_inserts, monkeypatch
+        self, raw, expected, install_plans, captured_inserts, monkeypatch
     ):
         if raw is None:
             monkeypatch.delenv("MEALFIT_COHERENCE_METRICS_LOOKBACK_H", raising=False)
         else:
             monkeypatch.setenv("MEALFIT_COHERENCE_METRICS_LOOKBACK_H", raw)
-        install_supabase([])  # vacío basta para ver el knob en metadata
+        install_plans([])  # vacío basta para ver el knob en metadata
         from cron_tasks import _aggregate_coherence_block_history_metrics
         _aggregate_coherence_block_history_metrics()
         # El cron emite INSERT incluso con 0 plans (mantiene serie temporal en métricas).
@@ -311,7 +309,7 @@ class TestLookbackKnob:
 # 5. Best-effort del INSERT
 # ---------------------------------------------------------------------------
 class TestInsertBestEffort:
-    def test_insert_failure_does_not_crash_cron(self, monkeypatch, install_supabase):
+    def test_insert_failure_does_not_crash_cron(self, monkeypatch, install_plans):
         """Si execute_sql_write tira excepción, el cron NO debe propagarla
         (sino el scheduler la marca como ERROR y dispara la alerta crítica
         del listener P2-NEW-D — falso positivo). Best-effort silencioso."""
@@ -319,7 +317,7 @@ class TestInsertBestEffort:
             raise RuntimeError("DB connection refused")
         import cron_tasks
         monkeypatch.setattr(cron_tasks, "execute_sql_write", _failing_insert)
-        install_supabase([_plan([_hist_entry("degrade", block_set=True)], plan_id="p1")])
+        install_plans([_plan([_hist_entry("degrade", block_set=True)], plan_id="p1")])
         from cron_tasks import _aggregate_coherence_block_history_metrics
         # No debe lanzar.
         _aggregate_coherence_block_history_metrics()

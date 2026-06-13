@@ -59,6 +59,14 @@ _EXCLUDED_DIR_NAMES = {
     "scripts",
     ".venv",
     "venv",
+    # [2026-06-12] venvs locales adicionales detectados en backend/ (deps
+    # externas, NO código activo): `venv-test` (2026-05-29) y `test_venv`.
+    # `site-packages` como cinturón extra para cualquier venv futuro con
+    # otro nombre — langgraph/checkpoint/postgres trae CREATE TABLE IF NOT
+    # EXISTS legítimo de la librería que no es runtime DDL nuestro.
+    "venv-test",
+    "test_venv",
+    "site-packages",
     "node_modules",
     "__pycache__",
     ".git",

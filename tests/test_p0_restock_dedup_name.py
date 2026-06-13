@@ -326,7 +326,11 @@ def test_persisted_names_preserves_raw_input(db_inv_module, monkeypatch) -> None
         return True
 
     monkeypatch.setattr(db_inv_module, "add_or_update_inventory_item", _stub_add)
-    monkeypatch.setattr(db_inv_module, "supabase", object())  # truthy non-None
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El guard de disponibilidad pasó de
+    # `if not supabase:` a `_db_available()` que lee `db_core.connection_pool`
+    # lazy — patchear el pool a truthy reemplaza el viejo patch de `supabase`.
+    import db_core
+    monkeypatch.setattr(db_core, "connection_pool", object())  # truthy non-None
 
     success, persisted = db_inv_module.restock_inventory("u1", [
         {"name": "Maní", "quantity": 0.25, "unit": "lb"},  # sin master match → caería al semantic fallback PRE-FIX

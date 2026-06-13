@@ -13,11 +13,13 @@ Bug original (audit 2026-05-10):
 
 Estrategia del test (parser estático sobre db_inventory.py):
     1. Localizar el except block para `rpc_err` en `add_or_update_inventory_item`.
-    2. Verificar `supabase.table('system_alerts').upsert(...)` con
-       `alert_key='inventory_rpc_fallback'` Y `severity='critical'`.
+    2. Verificar el upsert SQL `INSERT INTO system_alerts ... ON CONFLICT
+       (alert_key) DO UPDATE` con param `"inventory_rpc_fallback"` Y
+       severity `'critical'` ([P1-NEON-DB-MIGRATION · 2026-06-12]: antes era
+       `supabase.table('system_alerts').upsert(...)` — misma propiedad).
     3. Verificar `_env_bool('MEALFIT_INVENTORY_RPC_STRICT', False)`.
     4. Verificar `if _strict: raise` antes del UPDATE legacy.
-    5. Verificar que `upsert` está dentro de try/except (no crashea la
+    5. Verificar que el upsert está dentro de try/except (no crashea la
        transacción principal si la inserción de alert falla).
 
 Drift detection:
@@ -42,6 +44,23 @@ def db_inventory_src() -> str:
     return _DB_INVENTORY_PY.read_text(encoding="utf-8")
 
 
+def _find_rpc_fallback_alert_insert(src: str):
+    """Localiza el `INSERT INTO system_alerts` (upsert por alert_key) cuyo
+    primer param es `"inventory_rpc_fallback"`. db_inventory tiene OTRO insert
+    a system_alerts (P3-1 partial rollback) — el match exige que el literal del
+    alert_key aparezca en la tupla de params inmediatamente después del SQL.
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Antes el upsert era
+    `supabase.table('system_alerts').upsert({...})`; ahora es SQL directo
+    `INSERT ... ON CONFLICT (alert_key) DO UPDATE` con params posicionales.
+    Devuelve (start_pos, block_text) o (None, None)."""
+    for m in re.finditer(r"INSERT INTO system_alerts", src):
+        block = src[m.start():m.start() + 1500]
+        if '"inventory_rpc_fallback"' in block:
+            return m.start(), block
+    return None, None
+
+
 def test_fallback_emits_system_alert(db_inventory_src: str):
     """El except block debe upsert a `system_alerts` con
     `alert_key='inventory_rpc_fallback'` y severity crítica."""
@@ -57,20 +76,24 @@ def test_fallback_emits_system_alert(db_inventory_src: str):
         "RPC desapareció. Restaurar el upsert a system_alerts."
     )
 
-    alert_pattern = re.compile(
-        r'["\']alert_key["\']\s*:\s*["\']inventory_rpc_fallback["\']',
-    )
-    assert alert_pattern.search(db_inventory_src), (
-        "P1-NEW-1 regresión: el upsert a system_alerts NO usa "
-        "`alert_key='inventory_rpc_fallback'`. Sin este key, las alerts "
-        "no aparecen agrupadas en `/admin/cron-health` ni se pueden "
-        "monitorear desde Supabase."
+    insert_start, block = _find_rpc_fallback_alert_insert(db_inventory_src)
+    assert insert_start is not None, (
+        "P1-NEW-1 regresión: no hay `INSERT INTO system_alerts` cuyo param "
+        "sea `\"inventory_rpc_fallback\"`. Sin este key, las alerts no "
+        "aparecen agrupadas en `/admin/cron-health` ni se pueden monitorear."
     )
 
-    severity_pattern = re.compile(
-        r'["\']severity["\']\s*:\s*["\']critical["\']',
+    # Upsert idempotente por alert_key (no flooding) + re-arm de resolved_at.
+    assert "ON CONFLICT (alert_key) DO UPDATE" in block, (
+        "P1-NEW-1 regresión: el INSERT del alert ya no es upsert por "
+        "alert_key — cada fallo de RPC floodearía system_alerts."
     )
-    assert severity_pattern.search(db_inventory_src), (
+    assert re.search(r"resolved_at\s*=\s*NULL", block), (
+        "P1-NEW-1 regresión: el DO UPDATE no re-arma `resolved_at = NULL` — "
+        "una alert resuelta no volvería a dispararse en recurrencia."
+    )
+
+    assert re.search(r"VALUES\s*\(\s*%s,\s*'inventory',\s*'critical'", block), (
         "P1-NEW-1 regresión: el alert no tiene severity=critical. La "
         "RPC NO debería fallar en producción; cuando falla, implica "
         "regresión y debe escalar al máximo nivel para que ops actúe."
@@ -126,37 +149,34 @@ def test_strict_mode_reraises(db_inventory_src: str):
 
 
 def test_upsert_wrapped_in_try_except(db_inventory_src: str):
-    """El upsert a system_alerts debe estar dentro de try/except. Si
-    Supabase está caído o el schema cambió, no debemos crashear el
-    flujo principal de la deducción (que ya está manejando un error
-    del path primario).
+    """El upsert (INSERT ... ON CONFLICT) a system_alerts debe estar dentro de
+    try/except. Si la DB está caída o el schema cambió, no debemos crashear el
+    flujo principal de la deducción (que ya está manejando un error del path
+    primario).
     """
-    # Encontrar el upsert con alert_key='inventory_rpc_fallback' y
-    # verificar que hacia arriba (en las últimas ~30 líneas) hay un
-    # `try:` y hacia abajo (en las próximas ~30 líneas) hay un
+    # Encontrar el INSERT con alert_key='inventory_rpc_fallback' y
+    # verificar que hacia arriba hay un `try:` cercano y hacia abajo hay un
     # `except Exception as _alert_err`.
-    upsert_match = re.search(
-        r'supabase\.table\(\s*["\']system_alerts["\']\s*\)\.upsert',
-        db_inventory_src,
-    )
-    assert upsert_match, (
-        "P1-NEW-1: no se encontró el upsert a system_alerts en "
-        "db_inventory.py. Si fue movido a otro módulo, actualizar el test."
+    upsert_start, _block = _find_rpc_fallback_alert_insert(db_inventory_src)
+    assert upsert_start is not None, (
+        "P1-NEW-1: no se encontró el upsert (INSERT ... ON CONFLICT) a "
+        "system_alerts en db_inventory.py. Si fue movido a otro módulo, "
+        "actualizar el test."
     )
 
-    upsert_start = upsert_match.start()
-    # Mirar las 1000 chars previas: debe haber un `try:` cercano.
-    preceding = db_inventory_src[max(0, upsert_start - 1000):upsert_start]
+    # Mirar las 2500 chars previas: debe haber un `try:` cercano (el bloque
+    # construye _alert_message/_alert_metadata multi-línea antes del INSERT).
+    preceding = db_inventory_src[max(0, upsert_start - 2500):upsert_start]
     assert re.search(r"\btry\s*:", preceding), (
         "P1-NEW-1 regresión: el upsert a `system_alerts` no está "
-        "precedido por un `try:` en su entorno inmediato. Si Supabase "
-        "está caído cuando la RPC falla, perdemos el flujo primario. "
+        "precedido por un `try:` en su entorno inmediato. Si la DB "
+        "está caída cuando la RPC falla, perdemos el flujo primario. "
         "Restaurar el try defensivo alrededor del upsert."
     )
 
     # Mirar las 3500 chars siguientes: debe haber un `except Exception as
-    # _alert_err`. Buffer amplio porque el upsert tiene un dict de metadata
-    # multi-línea (~80 líneas con indentación).
+    # _alert_err`. Buffer amplio porque el INSERT lleva SQL + params
+    # multi-línea con indentación.
     following = db_inventory_src[upsert_start:upsert_start + 3500]
     assert re.search(r"except\s+Exception\s+as\s+_alert_err", following), (
         "P1-NEW-1 regresión: el upsert a `system_alerts` no tiene un "

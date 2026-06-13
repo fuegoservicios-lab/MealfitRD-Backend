@@ -44,6 +44,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ---------------------------------------------------------------------------
 
 def _install_stub(module_name, **attrs):
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Try-real-first: si el módulo real es
+    # importable en este entorno, usarlo y solo rellenar attrs faltantes. Antes
+    # el stub sintético se instalaba siempre que el módulo no estuviera ya en
+    # sys.modules — eso envenenaba runs aislados/cluster (e.g. el stub de
+    # `db_inventory` ocultaba `_compute_dynamic_consumption_rates` a otros test
+    # files del mismo proceso, y el stub de `graph_orchestrator` rompía el
+    # `from graph_orchestrator import _env_int...` de cron_tasks). El fallback
+    # sintético se conserva para CI minimal sin deps instaladas.
+    if module_name not in sys.modules:
+        try:
+            __import__(module_name)
+        except Exception:
+            pass
     if module_name in sys.modules:
         existing = sys.modules[module_name]
         for key, value in attrs.items():
@@ -129,6 +142,13 @@ _install_stub(
     _enforce_days_to_generate_cap=lambda *_a, **_kw: False,
     # [P1-FORM-6] Añadido como cuarto helper importado por el router.
     _merge_other_text_fields=lambda *_a, **_kw: 0,
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] cron_tasks importa los knob helpers
+    # (`from graph_orchestrator import run_plan_pipeline, _env_int, _env_float,
+    # _env_bool` — P1-A auto-registry). El fallback sintético debe exportarlos
+    # o el import de cron_tasks revienta en CI sin el módulo real.
+    _env_int=lambda _name, default=0, **_kw: default,
+    _env_float=lambda _name, default=0.0, **_kw: default,
+    _env_bool=lambda _name, default=False, **_kw: default,
 )
 _install_stub(
     "memory_manager",

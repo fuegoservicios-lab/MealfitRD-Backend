@@ -18,15 +18,20 @@ Estrategia del test (parser estático, mismo patrón que
     1. Localizar `api_restock` en plans.py (signature + body) hasta el
        siguiente top-level `def`/`@router`.
     2. Verificar que el SELECT en la rama `if plan_id` filtra por user_id.
-    3. Verificar que el UPDATE final filtra por user_id (defense-in-depth).
+       [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado del chain PostgREST
+       `.eq("id", plan_id).eq("user_id", user_id)` al SQL real psycopg
+       `WHERE id = %s AND user_id = %s` + bind `(plan_id, user_id)` —
+       se parsea CÓDIGO EJECUTABLE (líneas-comentario excluidas).
+    3. Verificar que el persist final filtra por user_id (defense-in-depth,
+       via `update_plan_data_atomic(..., user_id=user_id)`).
     4. Verificar que un plan_id no resoluble lanza HTTPException 404.
     5. Verificar re-raise explícito de HTTPException antes del catch genérico
        (sin esto, el 404 se re-wrappea a 500 y el cliente pierde la señal).
 
 Drift detection bidireccional:
-    - Si alguien revierte el `.eq("user_id", user_id)` del SELECT → falla
-      `test_restock_select_filters_by_user_id`.
-    - Si alguien quita el `.eq("user_id", user_id)` del UPDATE → falla
+    - Si alguien revierte el `AND user_id = %s` del SELECT (o desbindea
+      `(plan_id, user_id)`) → falla `test_restock_select_filters_by_user_id`.
+    - Si alguien quita el gate user_id del persist → falla
       `test_restock_update_filters_by_user_id_defense_in_depth`.
     - Si alguien quita el 404 → falla
       `test_restock_404_on_plan_id_ownership_mismatch`.
@@ -75,15 +80,23 @@ def restock_body() -> str:
     return _extract_function_body(src, "api_restock")
 
 
+def _strip_comment_lines(code: str) -> str:
+    """Excluye líneas-comentario (`# ...`) — el contrato IDOR debe vivir en
+    CÓDIGO EJECUTABLE (SQL string literal + bind params), no en un
+    comentario-ancla que alguien pueda dejar stale tras un refactor."""
+    return "\n".join(
+        ln for ln in code.splitlines() if not ln.strip().startswith("#")
+    )
+
+
 def test_restock_select_filters_by_user_id(restock_body: str):
     """El SELECT en la rama `if plan_id` DEBE filtrar por user_id.
 
-    Forma aceptada (supabase-py builder):
-        .eq("id", plan_id).eq("user_id", user_id)
-    En cualquier orden — el contrato es que ambos predicados coexisten.
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Forma aceptada (SQL psycopg):
+        WHERE id = %s AND user_id = %s  +  bind (plan_id, user_id)
+    El contrato es el mismo que el chain legacy `.eq("id", plan_id)
+    .eq("user_id", user_id)`: ambos predicados coexisten en el SELECT.
     """
-    # Buscamos el bloque `if plan_id:` y verificamos que en sus líneas
-    # subsiguientes aparezca tanto .eq("id", plan_id) como .eq("user_id", user_id).
     branch_match = re.search(
         r"if\s+plan_id\s*:[\r\n]+(?P<body>(?:\s+.*[\r\n]+){1,30})",
         restock_body,
@@ -93,17 +106,23 @@ def test_restock_select_filters_by_user_id(restock_body: str):
         "`api_restock`. Si la lógica de detección del plan_id cambió, "
         "actualizar este parser."
     )
-    branch_body = branch_match.group("body")
+    branch_body = _strip_comment_lines(branch_match.group("body"))
 
-    has_id_filter = bool(re.search(r'\.eq\(\s*["\']id["\']\s*,\s*plan_id\s*\)', branch_body))
-    has_user_filter = bool(re.search(r'\.eq\(\s*["\']user_id["\']\s*,\s*user_id\s*\)', branch_body))
+    has_ownership_where = bool(re.search(
+        r"WHERE\s+id\s*=\s*%s\s+AND\s+user_id\s*=\s*%s", branch_body
+    ))
+    has_ownership_params = bool(re.search(
+        r"\(\s*plan_id\s*,\s*user_id\s*\)\s*,", branch_body
+    ))
 
-    assert has_id_filter and has_user_filter, (
+    assert has_ownership_where and has_ownership_params, (
         "P0-NEW-1 regresión: el SELECT dentro de `if plan_id:` NO "
-        "filtra simultáneamente por `id` y `user_id`. "
-        f"has_id_filter={has_id_filter}, has_user_filter={has_user_filter}. "
-        "Sin `.eq('user_id', user_id)` un atacante autenticado puede leer "
-        "(y subsecuentemente corromper) `plan_data` de planes ajenos."
+        "filtra simultáneamente por `id` y `user_id` en SQL ejecutable. "
+        f"has_ownership_where={has_ownership_where}, "
+        f"has_ownership_params={has_ownership_params}. "
+        "Sin `AND user_id = %s` (+ bind `(plan_id, user_id)`) un atacante "
+        "autenticado puede leer (y subsecuentemente corromper) `plan_data` "
+        "de planes ajenos."
     )
 
 

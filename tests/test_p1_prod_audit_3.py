@@ -168,8 +168,17 @@ def test_p3_fact_lock_fail_closed():
 
 
 def test_p3_billing_verify_checks_row_matched():
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el check de filas
+    # matcheadas pasó de `if not getattr(res, "data", None):` (PostgREST) a
+    # `if not updated_rows:` sobre el resultado del UPDATE con
+    # `RETURNING id` + `returning=True`. Misma propiedad fail-loud: si el
+    # UPDATE de /verify matcheó 0 filas tras el cobro PayPal → alert + 500.
     src = _read("routers", "billing.py")
-    assert 'if not getattr(res, "data", None):' in src
+    assert "RETURNING id" in src
+    assert "returning=True" in src
+    assert "if not updated_rows:" in src
+    # El check ocurre DESPUÉS del UPDATE con RETURNING (mismo flujo).
+    assert src.index("RETURNING id") < src.index("if not updated_rows:")
     assert "billing_profile_not_found_on_upgrade" in src
 
 

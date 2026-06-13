@@ -123,8 +123,14 @@ def test_no_datetime_utcnow_in_production_paths():
     for f in prod_files:
         rel = f.relative_to(_REPO_ROOT)
         parts = set(rel.parts)
-        # Skip tests, scratch, refactor scripts
-        if any(p in parts for p in ("tests", "scratch")):
+        # Skip tests, scratch, refactor scripts y venvs locales (deps
+        # externas en site-packages NO son código de producción nuestro —
+        # e.g. requests_toolbelt usa utcnow() y no podemos arreglarlo).
+        if any(p in parts for p in (
+            "tests", "scratch",
+            "venv", ".venv", "venv-test", "test_venv",
+            "site-packages", "node_modules",
+        )):
             continue
         if f.name.startswith(("test_", "refactor", "scratch_")):
             continue
@@ -292,9 +298,12 @@ def test_notifications_uses_rate_limiter(notifications_src: str):
 def test_notifications_handlers_use_limiters(notifications_src: str):
     """Los dos handlers deben llevar `Depends(_PUSH_*_LIMITER)`, no
     `Depends(get_verified_user_id)`."""
-    # /subscribe handler
+    # /subscribe handler. [P3-BACKEND-AUDIT · 2026-06-01] `subscribe_push`
+    # pasó a `def` plano (cuerpo psycopg síncrono — async bloquearía el
+    # event loop); el `async` es opcional en el regex porque la propiedad
+    # protegida es el LIMITER en la signature, no la corrutina.
     subscribe_match = re.search(
-        r'@router\.post\("/subscribe"\)\s*\n\s*async\s+def\s+subscribe_push\([^)]*\)',
+        r'@router\.post\("/subscribe"\)\s*\n\s*(?:async\s+)?def\s+subscribe_push\([^)]*\)',
         notifications_src,
         re.DOTALL,
     )
@@ -307,7 +316,7 @@ def test_notifications_handlers_use_limiters(notifications_src: str):
 
     # /unsubscribe handler
     unsubscribe_match = re.search(
-        r'@router\.delete\("/unsubscribe"\)\s*\n\s*async\s+def\s+unsubscribe_push\([^)]*\)',
+        r'@router\.delete\("/unsubscribe"\)\s*\n\s*(?:async\s+)?def\s+unsubscribe_push\([^)]*\)',
         notifications_src,
         re.DOTALL,
     )

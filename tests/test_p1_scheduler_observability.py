@@ -50,6 +50,17 @@ _CRON_TASKS = _BACKEND_ROOT / "cron_tasks.py"
 
 # Stub apscheduler if not installed (CI standalone).
 def _ensure_apscheduler_stub():
+    # Preferir el paquete REAL si está instalado: un stub parcial sombrea
+    # submódulos que app.py/cron_tasks importan (`apscheduler.triggers`)
+    # y rompe el import de app → skip silencioso de los tests funcionales.
+    try:
+        import apscheduler  # noqa: F401
+        import apscheduler.events  # noqa: F401
+        import apscheduler.schedulers.background  # noqa: F401
+        import apscheduler.executors.pool  # noqa: F401
+        return
+    except Exception:
+        pass
     if "apscheduler" not in sys.modules:
         for mod_name in (
             "apscheduler",
@@ -145,14 +156,21 @@ def test_p1_cascade_inline_marker_anchor_in_listener():
 def test_p1_cascade_inline_threshold_triggers_upsert(monkeypatch):
     """Functional: simular N misses > threshold dentro de la ventana →
     UPSERT a `system_alerts` con alert_key=`scheduler_cascade_missed`.
-    Mockear `supabase.table().upsert().execute()` para capturar la
-    invocación sin tocar DB real.
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-mockeado del cliente PostgREST
+    (`supabase.table().upsert().execute()`) al transporte SQL directo:
+    `app.execute_sql_write` capturado + `app.connection_pool` truthy
+    (el helper short-circuitea con `if connection_pool is None`).
     """
     _ensure_apscheduler_stub()
-    # Stub módulos pesados que app.py importa al top.
-    sys.modules.setdefault("sentry_sdk", types.ModuleType("sentry_sdk"))
-    # Mockear supabase ANTES de importar app.
-    fake_supabase = MagicMock()
+    # Preferir el sentry_sdk REAL si está instalado (app.py llama
+    # `sentry_sdk.init(...)`; un stub vacío rompe el import de app y
+    # forzaba skip silencioso). Stub solo si genuinamente no importable
+    # (mismo patrón P0-5 del conftest).
+    try:
+        import sentry_sdk  # noqa: F401
+    except Exception:
+        sys.modules.setdefault("sentry_sdk", types.ModuleType("sentry_sdk"))
+    write_mock = MagicMock()
     monkeypatch.setattr(
         "os.environ",
         {**__import__("os").environ, "MEALFIT_SCHEDULER_CASCADE_INLINE_THRESHOLD": "3",
@@ -175,7 +193,8 @@ def test_p1_cascade_inline_threshold_triggers_upsert(monkeypatch):
         # Reset state.
         app_mod._CASCADE_INLINE_MISS_TIMESTAMPS.clear()
         app_mod._CASCADE_INLINE_LAST_EMIT_AT = 0.0
-        app_mod.supabase = fake_supabase
+        app_mod.connection_pool = MagicMock()  # truthy → pasa el guard None
+        app_mod.execute_sql_write = write_mock
 
         # Simular 3 distinct jobs MISSED en rápida sucesión.
         app_mod._maybe_emit_inline_cascade_alert("job_a")
@@ -183,15 +202,25 @@ def test_p1_cascade_inline_threshold_triggers_upsert(monkeypatch):
         app_mod._maybe_emit_inline_cascade_alert("job_c")
 
         # Debe haber 1 UPSERT al alcanzar threshold=3.
-        # supabase.table("system_alerts").upsert({...}, on_conflict=...).execute()
-        assert fake_supabase.table.called, (
-            "P1-CASCADE-INLINE: supabase.table no fue invocado tras 3 misses con threshold=3."
+        assert write_mock.called, (
+            "P1-CASCADE-INLINE: execute_sql_write no fue invocado tras "
+            "3 misses con threshold=3."
         )
-        # Verificar que el call fue a system_alerts con alert_key correcto.
-        table_calls = fake_supabase.table.call_args_list
-        assert any(
-            call.args == ("system_alerts",) for call in table_calls
-        ), f"P1-CASCADE-INLINE: esperaba call a table('system_alerts'). Calls: {table_calls}"
+        # Verificar que el write fue el UPSERT idempotente a system_alerts
+        # con alert_key correcto como primer parámetro SQL.
+        sql = write_mock.call_args[0][0]
+        params = write_mock.call_args[0][1]
+        assert "INSERT INTO system_alerts" in sql, (
+            f"P1-CASCADE-INLINE: esperaba INSERT INTO system_alerts. SQL: {sql}"
+        )
+        assert "ON CONFLICT (alert_key) DO UPDATE" in sql, (
+            "P1-CASCADE-INLINE: el INSERT debe ser UPSERT idempotente por "
+            "alert_key (ON CONFLICT (alert_key) DO UPDATE)."
+        )
+        assert params[0] == "scheduler_cascade_missed", (
+            f"P1-CASCADE-INLINE: alert_key esperado 'scheduler_cascade_missed', "
+            f"recibido {params[0]!r}."
+        )
     finally:
         # Cleanup: dejar el módulo en su estado inicial para otros tests.
         if "app" in sys.modules:
@@ -200,10 +229,16 @@ def test_p1_cascade_inline_threshold_triggers_upsert(monkeypatch):
 
 def test_p1_cascade_inline_dedup_skips_within_cooldown(monkeypatch):
     """Functional: una segunda ronda de misses dentro del dedup window NO
-    debe disparar otro UPSERT. Patrón anti-spam."""
+    debe disparar otro UPSERT. Patrón anti-spam. [P1-NEON-DB-MIGRATION ·
+    2026-06-12] Re-mockeado PostgREST → `app.execute_sql_write` +
+    `app.connection_pool` truthy (mismo re-anclaje que el test anterior)."""
     _ensure_apscheduler_stub()
-    sys.modules.setdefault("sentry_sdk", types.ModuleType("sentry_sdk"))
-    fake_supabase = MagicMock()
+    # Ver nota del test anterior: stub de sentry_sdk solo si no importable.
+    try:
+        import sentry_sdk  # noqa: F401
+    except Exception:
+        sys.modules.setdefault("sentry_sdk", types.ModuleType("sentry_sdk"))
+    write_mock = MagicMock()
 
     monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_INLINE_THRESHOLD", "3")
     monkeypatch.setenv("MEALFIT_SCHEDULER_CASCADE_INLINE_WINDOW_S", "60")
@@ -221,18 +256,19 @@ def test_p1_cascade_inline_dedup_skips_within_cooldown(monkeypatch):
 
         app_mod._CASCADE_INLINE_MISS_TIMESTAMPS.clear()
         app_mod._CASCADE_INLINE_LAST_EMIT_AT = 0.0
-        app_mod.supabase = fake_supabase
+        app_mod.connection_pool = MagicMock()  # truthy → pasa el guard None
+        app_mod.execute_sql_write = write_mock
 
         # Primera tanda: debe emitir.
         for jid in ("job_a", "job_b", "job_c"):
             app_mod._maybe_emit_inline_cascade_alert(jid)
-        first_call_count = fake_supabase.table.call_count
+        first_call_count = write_mock.call_count
         assert first_call_count >= 1
 
         # Segunda tanda inmediata: dedup debe skipear.
         for jid in ("job_d", "job_e", "job_f"):
             app_mod._maybe_emit_inline_cascade_alert(jid)
-        second_call_count = fake_supabase.table.call_count
+        second_call_count = write_mock.call_count
         assert second_call_count == first_call_count, (
             f"P1-CASCADE-INLINE: dedup falló — esperaba que segunda tanda "
             f"(dentro de cooldown {300}s) NO disparara otro UPSERT. "

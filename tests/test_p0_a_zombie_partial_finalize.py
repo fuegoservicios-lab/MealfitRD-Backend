@@ -78,7 +78,17 @@ _install_stub(
 )
 _install_stub("pydantic", BaseModel=object, Field=lambda default=None, **_kw: default)
 _install_stub("schemas", HealthProfileSchema=object, ExpandedRecipeModel=object)
-_install_stub("graph_orchestrator", run_plan_pipeline=lambda *_a, **_kw: {})
+# [test fix · Neon] cron_tasks.py:111 importa `_env_int/_env_float/_env_bool` desde
+# graph_orchestrator (auto-registry de knobs P3-NEW-D). Sin estos en el stub, importar
+# cron_tasks abajo (standalone) falla con `ImportError: cannot import name '_env_int'`.
+# Mismo patrón que el stub de test_chunked_learning_propagation.py.
+_install_stub(
+    "graph_orchestrator",
+    run_plan_pipeline=lambda *_a, **_kw: {},
+    _env_int=lambda name, default, *_a, **_kw: int(default),
+    _env_float=lambda name, default, *_a, **_kw: float(default),
+    _env_bool=lambda name, default, *_a, **_kw: bool(default),
+)
 _install_stub("memory_manager", build_memory_context=lambda *_a, **_kw: "")
 _install_stub("services", _save_plan_and_track_background=lambda *_a, **_kw: None)
 _install_stub("agent", analyze_preferences_agent=lambda *_a, **_kw: {})
@@ -96,9 +106,20 @@ except ImportError:
         get_shopping_list_delta=lambda *_a, **_kw: [],
         _parse_quantity=_stub_parse_quantity,
     )
+# [test fix · Neon] `register_plan_chunk_scheduler` registra varios crons con
+# CronTrigger(...). Algunos (línea ~6149) re-importan localmente
+# `from apscheduler.triggers.cron import CronTrigger as _CronTrigger` y construyen
+# `_CronTrigger(hour=4, ...)`, escapando al `patch("cron_tasks.CronTrigger", ...)` que
+# el test aplica al símbolo módulo-level. Si el stub usa `CronTrigger=object`, esa
+# construcción local lanza `TypeError: object.__init__() takes no parameters`. Un
+# dummy callable que acepta cualquier arg lo evita sin afectar las aserciones.
+class _DummyCronTrigger:
+    def __init__(self, *_a, **_kw):
+        pass
+
 apscheduler_pkg = _install_stub("apscheduler")
 apscheduler_triggers_pkg = _install_stub("apscheduler.triggers")
-apscheduler_cron_pkg = _install_stub("apscheduler.triggers.cron", CronTrigger=object)
+apscheduler_cron_pkg = _install_stub("apscheduler.triggers.cron", CronTrigger=_DummyCronTrigger)
 apscheduler_pkg.triggers = apscheduler_triggers_pkg
 apscheduler_triggers_pkg.cron = apscheduler_cron_pkg
 
@@ -235,11 +256,17 @@ def test_multiple_candidates_each_updated():
         finalized = cron_tasks._finalize_zombie_partial_plans()
 
     assert finalized == 3
-    assert len(writes) == 3
+    # [test fix · P1-PROD-AUDIT-BUNDLE] El caso 0-días (p2 → 'failed') además invoca
+    # `_notify_zombie_plan_generation_failed`, que emite un UPDATE extra de
+    # `_user_action_required` vía execute_sql_write. Filtramos a los UPDATE de
+    # finalización (los que sellan `_partial_finalized_reason`) para mantener la
+    # propiedad real: exactamente un UPDATE de finalización por candidato.
+    finalize_writes = [w for w in writes if "_partial_finalized_reason" in w[0]]
+    assert len(finalize_writes) == 3
     # Status correcto por caso.
-    statuses = [w[1][0] for w in writes]
+    statuses = [w[1][0] for w in finalize_writes]
     assert statuses == ["complete_partial", "failed", "complete_partial"]
-    plan_ids = [w[1][2] for w in writes]
+    plan_ids = [w[1][2] for w in finalize_writes]
     assert plan_ids == ["p1", "p2", "p3"]
 
 
@@ -310,5 +337,17 @@ def test_cron_registered_in_scheduler():
 
     assert "finalize_zombie_partial_plans" in scheduler.jobs
     job = scheduler.jobs["finalize_zombie_partial_plans"]
-    assert job["func"] is cron_tasks._finalize_zombie_partial_plans
+    # [test fix · P2-CRON-CORRELATION] `_add_job_jittered` envuelve la func del cron con
+    # `_corr_wrapped` (scope de correlation_id por ejecución, cron_tasks.py:4859) cuando
+    # `_CRON_CORRELATION_ENABLED` (default True). `functools.wraps` preserva __name__ pero
+    # el objeto registrado YA NO es idéntico a `_finalize_zombie_partial_plans` (rompía el
+    # `is`). Verificamos la MISMA propiedad — que el job ejecuta el finalizador zombie —
+    # desenvolviendo via `__wrapped__` (que functools.wraps fija al original exacto), con
+    # fallback al `is` directo si el wrapper está desactivado.
+    registered_fn = job["func"]
+    unwrapped = getattr(registered_fn, "__wrapped__", registered_fn)
+    assert unwrapped is cron_tasks._finalize_zombie_partial_plans, (
+        f"El job registrado no resuelve a _finalize_zombie_partial_plans "
+        f"(registered={registered_fn!r}, unwrapped={unwrapped!r})"
+    )
     assert job["trigger"] == "interval"

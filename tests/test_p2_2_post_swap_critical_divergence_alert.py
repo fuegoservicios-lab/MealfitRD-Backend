@@ -403,11 +403,17 @@ def test_helper_handles_none_user_and_plan_with_unknown_key():
 def test_cron_p3b_counts_alerted_subbucket():
     """Una entry con action_taken=post_swap_revalidation + alerted=True debe
     incrementar BOTH `post_swap_revalidation` (legacy bucket) AND
-    `post_swap_critical_alerted` (sub-bucket P2-2)."""
+    `post_swap_critical_alerted` (sub-bucket P2-2).
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el fetch de meal_plans
+    es ahora `cron_tasks.execute_sql_query` (SQL directo, rows como dicts
+    con id/user_id str por el cast ::text) + guard `db_core.connection_pool`
+    (importado localmente dentro del cron — patcheamos en db_core).
+    """
     import unittest.mock as mock
     import cron_tasks
 
-    # Stub el supabase fetch: 1 plan con 1 entry alerted=True + 1 entry alerted=False.
+    # Stub del fetch SQL: 1 plan con 1 entry alerted=True + 1 entry alerted=False.
     plan_data = {
         "_shopping_coherence_block_history": [
             {"action_taken": "post_swap_revalidation", "alerted": True, "block_set": False},
@@ -416,13 +422,10 @@ def test_cron_p3b_counts_alerted_subbucket():
         ]
     }
 
-    fake_response = mock.MagicMock()
-    fake_response.data = [{"id": "plan-1", "user_id": "u-1", "plan_data": plan_data}]
-    fake_table = mock.MagicMock()
-    fake_table.select.return_value.gte.return_value.limit.return_value.execute.return_value = fake_response
+    fake_rows = [{"id": "plan-1", "user_id": "u-1", "plan_data": plan_data}]
 
-    fake_supabase = mock.MagicMock()
-    fake_supabase.table.return_value = fake_table
+    def _fake_query(sql, params=None, **kwargs):
+        return list(fake_rows)
 
     # Capturar metadata del INSERT a pipeline_metrics para inspeccionar counts.
     captured_metadata = []
@@ -431,11 +434,10 @@ def test_cron_p3b_counts_alerted_subbucket():
         if "pipeline_metrics" in sql and params:
             captured_metadata.append(params[-1])  # último param = metadata json
 
-    # `_aggregate_coherence_block_history_metrics` hace `from db_core import supabase`
-    # localmente; mockeamos ahí, no en cron_tasks.
-    with mock.patch("db_core.supabase", fake_supabase):
-        with mock.patch("cron_tasks.execute_sql_write", _fake_write):
-            cron_tasks._aggregate_coherence_block_history_metrics()
+    with mock.patch("db_core.connection_pool", new=object()):
+        with mock.patch("cron_tasks.execute_sql_query", _fake_query):
+            with mock.patch("cron_tasks.execute_sql_write", _fake_write):
+                cron_tasks._aggregate_coherence_block_history_metrics()
 
     assert len(captured_metadata) == 1
     import json as _json
