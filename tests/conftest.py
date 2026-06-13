@@ -51,8 +51,15 @@ except Exception:
     from unittest.mock import MagicMock
     if "langchain_openai" not in sys.modules:
         _stub = MagicMock()
-        _stub.ChatOpenAI = object
-        _stub.OpenAIEmbeddings = object
+        # ChatDeepSeek(ChatOpenAI) llama super().__init__(**kwargs); un stub
+        # `= object` peta (object.__init__ no acepta kwargs) y rompe la colección
+        # en entornos sin langchain_openai. Un stub-class que traga **kwargs sí
+        # permite instanciar las subclases.
+        class _StubLLM:
+            def __init__(self, *args, **kwargs):
+                pass
+        _stub.ChatOpenAI = _StubLLM
+        _stub.OpenAIEmbeddings = _StubLLM
         sys.modules["langchain_openai"] = _stub
 
 import uuid

@@ -718,41 +718,6 @@ def summarize_and_prune(session_id: str):
 # ============================================================
 # FUNCIÓN: Construir Contexto de Memoria para Prompts
 # ============================================================
-def _format_evolutionary_state(state_json: dict) -> str:
-    """
-    Transforma un JSON de Estado Evolutivo en texto legible para inyectar en el prompt del agente.
-    """
-    parts: list[str] = []
-    
-    if state_json.get("tendencias_adherencia"):
-        parts.append(f"📊 ADHERENCIA: {state_json['tendencias_adherencia']}")
-    
-    if state_json.get("nivel_estres"):
-        parts.append(f"🧠 ESTRÉS: {state_json['nivel_estres']}")
-    
-    if state_json.get("patrones_cocina"):
-        parts.append(f"🍳 COCINA: {state_json['patrones_cocina']}")
-    
-    feedback = state_json.get("feedback_recurrente", {})
-    if feedback:
-        if feedback.get("le_encanta"):
-            parts.append(f"❤️ LE ENCANTA: {', '.join(feedback['le_encanta'])}")
-        if feedback.get("rechaza"):
-            parts.append(f"🚫 RECHAZA: {', '.join(feedback['rechaza'])}")
-        if feedback.get("preferencias_horario"):
-            parts.append(f"🕐 HORARIOS: {feedback['preferencias_horario']}")
-    
-    if state_json.get("evolucion_dieta"):
-        parts.append(f"📈 EVOLUCIÓN DIETA: {state_json['evolucion_dieta']}")
-    
-    if state_json.get("contexto_personal"):
-        parts.append(f"👤 CONTEXTO PERSONAL: {state_json['contexto_personal']}")
-    
-    if state_json.get("notas_chef"):
-        parts.append(f"👨‍🍳 NOTAS CHEF: {state_json['notas_chef']}")
-    
-    return "\n".join(parts)
-
 
 # [P1-DREAMING-1 · 2026-06-13] Cache in-process del bloque "modelo del usuario"
 # (la síntesis de alto nivel que produce el Dreaming en user_memory_profile).
