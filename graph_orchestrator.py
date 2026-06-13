@@ -8251,6 +8251,13 @@ MACRO_SOLVER_ENABLED = _env_bool("MEALFIT_MACRO_SOLVER_ENABLED", False)
 # solver ON. Flip a False revierte a solo-escalado.
 MACRO_SOLVER_PROTEIN_TOPUP = _env_bool("MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP", True)
 
+# [P3-CAL-RECONCILE · 2026-06-13] Paso final del cerebro dividido: nivela las calorías
+# de cada día EXACTAMENTE al target re-escalando porciones + macros uniformemente (el
+# escalado uniforme preserva la consistencia receta↔macro). Cierra `cal_score` del
+# holistic (= max(0, 1 − desviación×5)) → 1.0 cuando la desviación es ~0. Solo con el
+# solver ON. Clamp de seguridad para no producir porciones absurdas.
+MACRO_SOLVER_CAL_RECONCILE = _env_bool("MEALFIT_MACRO_SOLVER_CAL_RECONCILE", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -9440,6 +9447,44 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _solver_e:
             logger.warning(f"[P3-MACRO-SOLVER] bloque deshabilitado por error: "
                            f"{type(_solver_e).__name__}: {_solver_e}")
+
+    # [P3-CAL-RECONCILE · 2026-06-13] Paso FINAL del cerebro dividido: nivelar las
+    # calorías de cada día EXACTAMENTE al target. Tras el solver (macros) + top-up
+    # (proteína), las kcal/día derivan ±. El holistic `cal_score = max(0, 1 − desv×5)`
+    # → 1.0 solo con desviación ~0. Escala uniforme por-día (porciones + macros por el
+    # mismo factor) → nivela kcal SIN romper la consistencia receta↔macro. Corre ANTES
+    # del shopping → los gramos finales fluyen a la lista. Fail-safe total.
+    if MACRO_SOLVER_ENABLED and MACRO_SOLVER_CAL_RECONCILE and _daily_cals > 0:
+        try:
+            from nutrition_db import rescale_ingredient_string as _rescale
+            _rec_n = 0
+            for _d in days:
+                _ms = _d.get("meals", []) or []
+                _dc = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
+                if _dc <= 0:
+                    continue
+                _f = max(0.6, min(1.6, _daily_cals / _dc))  # clamp anti-porciones-absurdas
+                if abs(_f - 1.0) < 0.02:
+                    continue  # ya dentro del 2% → no tocar
+                for _m in _ms:
+                    _ings = _m.get("ingredients")
+                    if isinstance(_ings, list):
+                        _m["ingredients"] = [_rescale(str(s), _f) for s in _ings]
+                    _raw = _m.get("ingredients_raw")
+                    if isinstance(_raw, list):
+                        _m["ingredients_raw"] = [_rescale(str(s), _f) for s in _raw]
+                    _m["protein"] = round(_meal_macro_num(_m.get("protein")) * _f)
+                    _m["carbs"] = round(_meal_macro_num(_m.get("carbs")) * _f)
+                    _m["fats"] = round(_meal_macro_num(_m.get("fats")) * _f)
+                    _m["cals"] = round(_meal_macro_num(_m.get("cals")) * _f)
+                    _m["macros"] = [f"P:{_m['protein']}g", f"C:{_m['carbs']}g", f"G:{_m['fats']}g"]
+                _rec_n += 1
+            if _rec_n:
+                logger.info(f"🎯 [P3-CAL-RECONCILE] Niveló calorías de {_rec_n} día(s) al "
+                            f"target exacto ({_daily_cals:.0f} kcal) — cierra cal_score del holistic")
+        except Exception as _rec_e:
+            logger.warning(f"[P3-CAL-RECONCILE] deshabilitado por error: "
+                           f"{type(_rec_e).__name__}: {_rec_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
