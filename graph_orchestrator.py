@@ -8245,6 +8245,12 @@ def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> boo
 # (rollout gradual; requiere la DB de macros poblada — ver food_db_integration.md).
 MACRO_SOLVER_ENABLED = _env_bool("MEALFIT_MACRO_SOLVER_ENABLED", False)
 
+# [P3-PROTEIN-TOPUP · 2026-06-13] Tras el escalado del solver, si una comida sigue corta
+# de proteína, añade una porción de la proteína más magra del pool aprobado del día para
+# cerrar el gap (el escalado no crea proteína inexistente; esto sí). Solo activo con el
+# solver ON. Flip a False revierte a solo-escalado.
+MACRO_SOLVER_PROTEIN_TOPUP = _env_bool("MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -8366,6 +8372,60 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
         logger.warning(f"[P3-MACRO-SOLVER] solver falló para meal "
                        f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e} — meal intacto")
         return False
+
+
+def _protein_topup_meal(meal: dict, target_protein: float, db, approved_proteins,
+                        *, floor_ratio: float = 0.75, max_add_g: int = 200) -> int:
+    """[P3-PROTEIN-TOPUP · 2026-06-13] Cierre determinista del gap de proteína. Si tras
+    el solver la proteína del meal queda por debajo de `target_protein × floor_ratio`,
+    añade una porción dimensionada de la proteína MÁS MAGRA (mayor proteína/kcal) del
+    pool APROBADO del día (allergen-safe, ya scrubbeado por restricciones) para cerrar el
+    gap — el escalado no puede crear proteína que no está en el plato; esto sí.
+
+    Fail-secure: si el pool está vacío o ninguna proteína resuelve en la DB con ≥5g/100g,
+    NO añade nada (jamás mete un alimento fuera del pool aprobado → cero riesgo de
+    alérgeno). Elegir la más MAGRA minimiza el overshoot de carbos/calorías. Cierra
+    además el déficit calórico (la proteína faltante es justo lo que bajaba las kcal).
+    Mutates `meal` in-place. Retorna gramos añadidos (0 si no aplicó). Anchor: P3-PROTEIN-TOPUP."""
+    try:
+        cur_p = _meal_macro_num(meal.get("protein"))
+        if target_protein <= 0 or cur_p >= target_protein * floor_ratio:
+            return 0
+        best = None  # (leanness, info)
+        for p in (approved_proteins or []):
+            info = db.lookup(p)
+            if info and info.protein >= 5:
+                leanness = info.protein / max(info.kcal, 1.0)  # g proteína por kcal
+                if best is None or leanness > best[0]:
+                    best = (leanness, info)
+        if best is None:
+            return 0  # nada con proteína real en el pool → fail-safe, no inventar
+        info = best[1]
+        gap = target_protein - cur_p
+        grams = min(max_add_g, int(round(gap / (info.protein / 100.0))))
+        if grams < 15:
+            return 0
+        f = grams / 100.0
+        name_disp = str(info.name).lower()
+        line = f"{grams}g de {name_disp} ({grams}g)"
+        meal.setdefault("ingredients", []).append(line)
+        if isinstance(meal.get("ingredients_raw"), list):
+            meal["ingredients_raw"].append(line)
+        meal["protein"] = round(cur_p + info.protein * f)
+        meal["carbs"] = round(_meal_macro_num(meal.get("carbs")) + info.carbs * f)
+        meal["fats"] = round(_meal_macro_num(meal.get("fats")) + info.fats * f)
+        meal["cals"] = round(_meal_macro_num(meal.get("cals")) + info.kcal * f)
+        meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+        rec = meal.get("recipe")
+        if isinstance(rec, list):
+            meal["recipe"] = rec + [
+                f"💪 Nota del Nutricionista AI: añade {grams}g de {name_disp} "
+                f"para completar tu objetivo de proteína."]
+        return grams
+    except Exception as e:
+        logger.warning(f"[P3-PROTEIN-TOPUP] falló para meal "
+                       f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e}")
+        return 0
 
 
 def _run_assembly_validations(
@@ -9340,10 +9400,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             from nutrition_db import IngredientNutritionDB
             _nut_db = IngredientNutritionDB()
+            _skel_days = (skeleton or {}).get("days", []) if isinstance(skeleton, dict) else []
             _solver_n = 0
-            for _d in days:
+            _topup_g = 0
+            for _di, _d in enumerate(days):
                 _ms = _d.get("meals", []) or []
                 _day_c = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
+                # Pool de proteínas APROBADO del día (allergen-safe) para el top-up.
+                _day_num = _d.get("day", _di + 1)
+                _sk = next((s for s in _skel_days if s.get("day") == _day_num), {})
+                _approved = _sk.get("protein_pool", []) if isinstance(_sk, dict) else []
                 for _m in _ms:
                     _share = (_meal_macro_num(_m.get("cals")) / _day_c) if _day_c > 0 \
                         else (1.0 / max(1, len(_ms)))
@@ -9355,8 +9421,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     }
                     if _apply_macro_solver_to_meal(_m, _slot_target, _nut_db):
                         _solver_n += 1
+                    # [P3-PROTEIN-TOPUP] Cerrar el gap de proteína que el escalado no pudo
+                    # (comida sin fuente de proteína suficiente) añadiendo del pool aprobado.
+                    if MACRO_SOLVER_PROTEIN_TOPUP:
+                        _topup_g += _protein_topup_meal(
+                            _m, _slot_target["protein"], _nut_db, _approved)
             logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
-                        f"a su target de macros real (cerebro dividido)")
+                        f"a su target de macros real (cerebro dividido)"
+                        + (f" + top-up de proteína {_topup_g}g total" if _topup_g else ""))
         except Exception as _solver_e:
             logger.warning(f"[P3-MACRO-SOLVER] bloque deshabilitado por error: "
                            f"{type(_solver_e).__name__}: {_solver_e}")
