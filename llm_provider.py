@@ -51,7 +51,7 @@ from typing import Optional
 
 from langchain_openai import ChatOpenAI
 
-from knobs import _env_int, _env_str
+from knobs import _env_int, _env_str, _env_bool
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,18 @@ logger = logging.getLogger(__name__)
 # depredan el 2026-07-24 — NO usarlos como default.
 DEEPSEEK_FLASH = "deepseek-v4-flash"
 DEEPSEEK_PRO = "deepseek-v4-pro"
+
+# [P1-DEEPSEEK-THINKING-OFF · 2026-06-13] DeepSeek-V4 trae "thinking mode"
+# (chain-of-thought) NATIVO ENCENDIDO por default. Para la generación de planes
+# (tool-calling con `consultar_nutricion` + relleno de macros) el reasoning NO
+# aporta calidad y multiplica la latencia: en el test E2E 2026-06-13 el skeleton
+# (structured-output, thinking ya OFF) tardó 9.5s pero cada día (tool-calling,
+# thinking ON) excedió el techo de 170s → TimeoutError → fallback matemático.
+# Por eso lo desactivamos por DEFAULT en TODOS los calls (no solo structured
+# output). Knob de rollback sin redeploy: `MEALFIT_DEEPSEEK_THINKING=on`
+# re-activa el reasoning (p.ej. si el reviewer clínico lo necesita). Cualquier
+# `extra_body.thinking` explícito del callsite SIEMPRE gana sobre este default.
+_DEEPSEEK_THINKING_DISABLED = not _env_bool("MEALFIT_DEEPSEEK_THINKING", False)
 
 # Tiers de pago canónicos (columna `user_profiles.plan_tier`, ver
 # routers/billing.py P0-BILLING-1). Todo lo demás («gratis», NULL, guests,
@@ -252,6 +264,13 @@ class ChatDeepSeek(ChatOpenAI):
         if max_output_tokens is not None and "max_tokens" not in kwargs:
             kwargs["max_tokens"] = max_output_tokens
         kwargs.setdefault("stream_usage", True)
+        # [P1-DEEPSEEK-THINKING-OFF · 2026-06-13] Desactiva thinking mode por
+        # default en TODOS los runnables (no solo structured-output). Merge
+        # no-destructivo: si el callsite ya pasó `extra_body.thinking`, gana.
+        if _DEEPSEEK_THINKING_DISABLED:
+            _extra = dict(kwargs.get("extra_body") or {})
+            _extra.setdefault("thinking", {"type": "disabled"})
+            kwargs["extra_body"] = _extra
         super().__init__(
             model=model,
             api_key=api_key or _deepseek_api_key(),

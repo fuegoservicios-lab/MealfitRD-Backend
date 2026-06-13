@@ -249,7 +249,7 @@ def save_user_fact(user_id: str, fact: str, embedding: list, metadata: dict = No
         emb_str = f"[{','.join(map(str, embedding))}]"
         res = execute_sql_write(
             "INSERT INTO user_facts (user_id, fact, embedding, metadata) "
-            "VALUES (%s, %s, %s::vector, %s) RETURNING id",
+            "VALUES (%s, %s, %s::extensions.vector, %s) RETURNING id",
             (user_id, fact, emb_str, Jsonb(metadata or {})),
             returning=True,
         )
@@ -509,7 +509,7 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
         # === DEDUPLICACIÓN SEMÁNTICA: Buscar duplicados cercanos ===
         try:
             similar = execute_sql_query(
-                "SELECT * FROM match_visual_diary(query_embedding => %s::vector, "
+                "SELECT * FROM match_visual_diary(query_embedding => %s::extensions.vector, "
                 "match_threshold => %s, match_count => %s, p_user_id => %s)",
                 (emb_str, 0.95, 1, user_id),
                 fetch_all=True,
@@ -546,7 +546,7 @@ def save_visual_entry(user_id: str, image_url: str, description: str, embedding:
         # === INSERCIÓN NORMAL (no hay duplicado) ===
         res = execute_sql_write(
             "INSERT INTO visual_diary (user_id, image_url, description, embedding, frequency) "
-            "VALUES (%s, %s, %s, %s::vector, 1) RETURNING id",
+            "VALUES (%s, %s, %s, %s::extensions.vector, 1) RETURNING id",
             (user_id, image_url, description, emb_str),
             returning=True,
         )
@@ -565,7 +565,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         emb_str = f"[{','.join(map(str, query_embedding))}]"
         return execute_sql_query(
             "SELECT id::text AS id, description, image_url, similarity "
-            "FROM match_visual_diary(query_embedding => %s::vector, "
+            "FROM match_visual_diary(query_embedding => %s::extensions.vector, "
             "match_threshold => %s, match_count => %s, p_user_id => %s)",
             (emb_str, threshold, limit, user_id),
             fetch_all=True,

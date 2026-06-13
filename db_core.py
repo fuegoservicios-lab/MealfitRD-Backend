@@ -121,6 +121,15 @@ def _session_timeout_statements() -> List[str]:
     Helper aislado para testabilidad (los tests monkeypatchean los módulo-level
     `DB_*_TIMEOUT_MS` y verifican el SQL generado sin abrir conexión real)."""
     stmts: List[str] = []
+    # [P1-NEON-DB-MIGRATION · 2026-06-13] search_path con `extensions`. Neon crea
+    # la extensión pgvector en el schema `extensions` (espejo del layout de
+    # Supabase) pero su search_path por default es solo `"$user", public` — sin
+    # esto, un `::vector` o un operador `<=>` app-side falla con `type "vector"
+    # does not exist`. Supabase ya incluía extensions en el path del rol; lo
+    # replicamos explícito para paridad. `extensions` solo tiene objetos de
+    # extensión (cero colisión con `public`). Las funciones match_* tienen su
+    # propio `SET search_path` y no dependen de esto.
+    stmts.append("SET search_path TO public, extensions")
     if DB_STATEMENT_TIMEOUT_MS > 0:
         stmts.append(f"SET statement_timeout = {int(DB_STATEMENT_TIMEOUT_MS)}")
     if DB_IDLE_IN_TXN_TIMEOUT_MS > 0:
