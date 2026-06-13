@@ -8374,23 +8374,25 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
         return False
 
 
-def _protein_topup_meal(meal: dict, target_protein: float, db, approved_proteins,
-                        *, floor_ratio: float = 0.75, max_add_g: int = 200) -> int:
-    """[P3-PROTEIN-TOPUP · 2026-06-13] Cierre determinista del gap de proteína. Si tras
-    el solver la proteína del meal queda por debajo de `target_protein × floor_ratio`,
-    añade una porción dimensionada de la proteína MÁS MAGRA (mayor proteína/kcal) del
-    pool APROBADO del día (allergen-safe, ya scrubbeado por restricciones) para cerrar el
-    gap — el escalado no puede crear proteína que no está en el plato; esto sí.
+def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_proteins,
+                        *, floor_g: float = 12.0, fill_to_g: float = 18.0,
+                        max_add_g: int = 120) -> int:
+    """[P3-PROTEIN-TOPUP · 2026-06-13] RESCATE de comidas egregiamente pobres en proteína.
+    Si tras el solver una comida queda por DEBAJO de un piso absoluto (`floor_g`, 12g),
+    añade una porción MODESTA de la proteína más MAGRA del pool APROBADO del día para
+    llevarla a `fill_to_g` (~18g) — NO al target completo del slot (eso sobre-disparaba:
+    el target diario es muy alto, ~2.8g/kg, casi toda comida quedaba "corta" → top-up
+    masivo → calorías explotaban). El objetivo es eliminar las meriendas/desayunos de 0-6g
+    que el escalado no puede arreglar (no hay proteína que escalar), sin reventar las kcal.
 
-    Fail-secure: si el pool está vacío o ninguna proteína resuelve en la DB con ≥5g/100g,
-    NO añade nada (jamás mete un alimento fuera del pool aprobado → cero riesgo de
-    alérgeno). Elegir la más MAGRA minimiza el overshoot de carbos/calorías. Cierra
-    además el déficit calórico (la proteína faltante es justo lo que bajaba las kcal).
-    Mutates `meal` in-place. Retorna gramos añadidos (0 si no aplicó). Anchor: P3-PROTEIN-TOPUP."""
+    Calorie-aware: nunca añade tanto que el meal supere su `slot_cal_target`. Fail-secure:
+    pool vacío o sin proteína resoluble (≥5g/100g) → no añade nada (jamás mete un alimento
+    fuera del pool aprobado → cero riesgo de alérgeno). La más MAGRA (mayor proteína/kcal)
+    minimiza el costo calórico. Mutates `meal`. Retorna gramos añadidos. Anchor: P3-PROTEIN-TOPUP."""
     try:
         cur_p = _meal_macro_num(meal.get("protein"))
-        if target_protein <= 0 or cur_p >= target_protein * floor_ratio:
-            return 0
+        if cur_p >= floor_g:
+            return 0  # ya tiene proteína suficiente — no tocar
         best = None  # (leanness, info)
         for p in (approved_proteins or []):
             info = db.lookup(p)
@@ -8401,8 +8403,14 @@ def _protein_topup_meal(meal: dict, target_protein: float, db, approved_proteins
         if best is None:
             return 0  # nada con proteína real en el pool → fail-safe, no inventar
         info = best[1]
-        gap = target_protein - cur_p
-        grams = min(max_add_g, int(round(gap / (info.protein / 100.0))))
+        gap = max(0.0, fill_to_g - cur_p)
+        grams = int(round(gap / (info.protein / 100.0)))
+        # Calorie-aware: no exceder el target calórico del slot.
+        cur_cal = _meal_macro_num(meal.get("cals"))
+        if slot_cal_target and slot_cal_target > cur_cal and info.kcal > 0:
+            grams_cal_cap = int((slot_cal_target - cur_cal) / (info.kcal / 100.0))
+            grams = min(grams, grams_cal_cap)
+        grams = min(max_add_g, grams)
         if grams < 15:
             return 0
         f = grams / 100.0
@@ -9425,7 +9433,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     # (comida sin fuente de proteína suficiente) añadiendo del pool aprobado.
                     if MACRO_SOLVER_PROTEIN_TOPUP:
                         _topup_g += _protein_topup_meal(
-                            _m, _slot_target["protein"], _nut_db, _approved)
+                            _m, _slot_target["kcal"], _nut_db, _approved)
             logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
                         f"a su target de macros real (cerebro dividido)"
                         + (f" + top-up de proteína {_topup_g}g total" if _topup_g else ""))
