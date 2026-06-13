@@ -9287,6 +9287,42 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     logger.info(f"📦 [CONSOLIDATION] Unificado '{old_ing}' -> '{new_ing}'")
     # =========================================================
 
+    # [P3-MACRO-SOLVER · 2026-06-13] Cerebro dividido — lado determinista (gated por
+    # knob MEALFIT_MACRO_SOLVER_ENABLED, default False). Tras el balancing legacy
+    # (que escala los NÚMEROS de macros sin tocar los ingredientes y tapa la
+    # inconsistencia con un disclaimer) y la consolidación, re-escala las PORCIONES
+    # reales de cada meal para clavar su target de macros (= macro diario × cal_share)
+    # usando los macros reales de master_ingredients. Corre ANTES de la agregación de
+    # la lista de compras Y de la humanización → los gramos re-escritos fluyen a
+    # recipe + shopping + coherence guard CONSISTENTES (si corriera después, la lista
+    # de compras quedaría con cantidades pre-solver → divergencias receta↔lista).
+    # Fail-safe TOTAL: cualquier error deja el plan como lo dejó el balancing legacy.
+    # Anchor: P3-MACRO-SOLVER.
+    if MACRO_SOLVER_ENABLED and _daily_cals > 0 and (_pg or _cg or _fg):
+        try:
+            from nutrition_db import IngredientNutritionDB
+            _nut_db = IngredientNutritionDB()
+            _solver_n = 0
+            for _d in days:
+                _ms = _d.get("meals", []) or []
+                _day_c = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
+                for _m in _ms:
+                    _share = (_meal_macro_num(_m.get("cals")) / _day_c) if _day_c > 0 \
+                        else (1.0 / max(1, len(_ms)))
+                    _slot_target = {
+                        "kcal": _daily_cals * _share,
+                        "protein": _pg * _share,
+                        "carbs": _cg * _share,
+                        "fats": _fg * _share,
+                    }
+                    if _apply_macro_solver_to_meal(_m, _slot_target, _nut_db):
+                        _solver_n += 1
+            logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
+                        f"a su target de macros real (cerebro dividido)")
+        except Exception as _solver_e:
+            logger.warning(f"[P3-MACRO-SOLVER] bloque deshabilitado por error: "
+                           f"{type(_solver_e).__name__}: {_solver_e}")
+
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
     _uid = form_data.get("user_id")
@@ -9377,40 +9413,6 @@ async def assemble_plan_node(state: PlanState) -> dict:
         result["aggregated_shopping_list_weekly"] = []
         result["aggregated_shopping_list_biweekly"] = []
         result["aggregated_shopping_list_monthly"] = []
-
-    # [P3-MACRO-SOLVER · 2026-06-13] Cerebro dividido — lado determinista (gated por
-    # knob MEALFIT_MACRO_SOLVER_ENABLED, default False). Tras el balancing legacy
-    # (que escala los NÚMEROS de macros sin tocar los ingredientes y tapa la
-    # inconsistencia con un disclaimer), re-escala las PORCIONES reales de cada meal
-    # para clavar su target de macros (= macro diario × cal_share del meal) usando los
-    # macros reales de master_ingredients. Corre ANTES de la humanización y del
-    # coherence guard → los gramos re-escritos fluyen a display + shopping + guard
-    # CONSISTENTES. Fail-safe TOTAL: cualquier error deja el plan como lo dejó el
-    # balancing legacy (nunca rompe el assembly). Anchor: P3-MACRO-SOLVER.
-    if MACRO_SOLVER_ENABLED and _daily_cals > 0 and (_pg or _cg or _fg):
-        try:
-            from nutrition_db import IngredientNutritionDB
-            _nut_db = IngredientNutritionDB()
-            _solver_n = 0
-            for _d in days:
-                _ms = _d.get("meals", []) or []
-                _day_c = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
-                for _m in _ms:
-                    _share = (_meal_macro_num(_m.get("cals")) / _day_c) if _day_c > 0 \
-                        else (1.0 / max(1, len(_ms)))
-                    _slot_target = {
-                        "kcal": _daily_cals * _share,
-                        "protein": _pg * _share,
-                        "carbs": _cg * _share,
-                        "fats": _fg * _share,
-                    }
-                    if _apply_macro_solver_to_meal(_m, _slot_target, _nut_db):
-                        _solver_n += 1
-            logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
-                        f"a su target de macros real (cerebro dividido)")
-        except Exception as _solver_e:
-            logger.warning(f"[P3-MACRO-SOLVER] bloque deshabilitado por error: "
-                           f"{type(_solver_e).__name__}: {_solver_e}")
 
     # Humanizar ingredientes a medidas caseras dominicanas para la UI (display-only)
     # P0-NEW-1.b: la humanización aplica regex y lookups por ingrediente sobre
