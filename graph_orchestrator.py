@@ -4408,6 +4408,20 @@ DAY_GEN_CACHE_STAGGER_MS    = _env_int  ("MEALFIT_DAY_GEN_CACHE_STAGGER_MS",    
 # macros por-porción de las proteínas/carbos principales. Tooltip-anchor: L1-UNBIND-NUTRITION-TOOL.
 DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",   True)
 
+# [P1-DEEPSEEK-JSON-MODE · 2026-06-13] DeepSeek-V4 flash, ante el prompt complejo
+# del day-generator (schema JSON + mucho contexto), IGNORA la instrucción "responde
+# solo JSON" y emite ~18K chars de razonamiento en prosa ("Let me analyze the
+# requirements...") → `json.loads` falla → se cuenta como fallo del CB → CB OPEN →
+# fallback matemático (test E2E 2026-06-13, 3 días en paralelo todos fallaron así).
+# El prompt estaba afinado para Gemini, que sí obedecía. Fix: forzar JSON mode
+# (`response_format={"type":"json_object"}`), que GARANTIZA salida JSON válida.
+# JSON mode es incompatible con tool-calling streaming → cuando está activo NO se
+# bindea la tool de nutrición (de todas formas un mock redundante: la tabla
+# autoritativa ya viaja en el SystemMessage cacheado, ver L1-UNBIND-NUTRITION-TOOL).
+# Validado en vivo: 17.3s/día con JSON parseable vs >70s de prosa sin parsear.
+# Rollback sin redeploy: MEALFIT_DAYGEN_JSON_MODE=False vuelve al tool-calling.
+DAYGEN_JSON_MODE = _env_bool("MEALFIT_DAYGEN_JSON_MODE", True)
+
 
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] `_thinking_budget_kwargs` y
 # `_evaluator_thinking_budget_kwargs` ELIMINADOS (P1-COST-THINKING-CAP /
@@ -5997,16 +6011,24 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         # la salud de cada modelo se rastrea independientemente.
         _day_cb = _get_circuit_breaker(day_model)
 
-        day_llm = ChatDeepSeek(
+        _day_llm_kwargs = dict(
             model=day_model,
             temperature=temp_override if temp_override is not None else (base_temp if attempt == 1 else (base_temp + 0.1)),
             max_retries=0,
             timeout=90,
         )
+        if DAYGEN_JSON_MODE:
+            # [P1-DEEPSEEK-JSON-MODE · 2026-06-13] Fuerza salida JSON válida —
+            # sin esto DeepSeek emite prosa-reasoning y el parse falla.
+            _day_llm_kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
+        day_llm = ChatDeepSeek(**_day_llm_kwargs)
 
         # Enlazar herramientas (Mejora 3)
         from tools_nutrition import NUTRITION_TOOLS, consultar_nutricion
-        if DAYGEN_BIND_NUTRITION_TOOL:
+        # [P1-DEEPSEEK-JSON-MODE] JSON mode es incompatible con tool-calling
+        # streaming → no bindear tools cuando está activo. La tabla nutricional
+        # ya viaja en el SystemMessage cacheado, así que el modelo no la necesita.
+        if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:
             day_llm_with_tools = day_llm.bind_tools(NUTRITION_TOOLS)
         else:
             # [L1-UNBIND-NUTRITION-TOOL] Tool des-enlazada: el modelo no puede
