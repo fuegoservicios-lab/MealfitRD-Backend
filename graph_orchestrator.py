@@ -8850,6 +8850,43 @@ def _protein_preserving_day_reconcile(meals: list, daily_cals: float, db) -> boo
         return False
 
 
+def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
+                                 *, ceiling_pct: float = 1.12) -> bool:
+    """[P3-PROTEIN-FLOOR · 2026-06-13] Techo simétrico al piso: si el día entrega
+    > ceiling_pct × target de proteína (el LLM/solver sobre-produjo, o el closer infló),
+    escala las porciones e ingredientes PROTEÍNA-dominantes hacia abajo para traer el día
+    AL target. Cierra el techo C1 sobre la proteína ENTREGADA (no solo la target) → evita
+    g/kg por encima de 2.2. Las kcal las rebalancea el reconcile protein-preserving después.
+    Mantiene consistencia receta↔macro (escala porción + macro juntos). Retorna True si trimó."""
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc
+        P = sum(_meal_macro_num(m.get("protein")) for m in meals)
+        if target_protein_day <= 0 or P <= target_protein_day * ceiling_pct:
+            return False
+        factor = target_protein_day / P  # < 1
+        for m in meals:
+            ings = m.get("ingredients")
+            if isinstance(ings, list):
+                m["ingredients"] = [
+                    _resc(str(s), factor) if _ingredient_is_protein_dominant(s, db) else str(s)
+                    for s in ings]
+            raw = m.get("ingredients_raw")
+            if isinstance(raw, list):
+                m["ingredients_raw"] = [
+                    _resc(str(s), factor) if _ingredient_is_protein_dominant(s, db) else str(s)
+                    for s in raw]
+            mp = round(_meal_macro_num(m.get("protein")) * factor)
+            mc = round(_meal_macro_num(m.get("carbs")))
+            mf = round(_meal_macro_num(m.get("fats")))
+            m["protein"] = mp
+            m["cals"] = round(4 * mp + 4 * mc + 9 * mf)
+            m["macros"] = [f"P:{mp}g", f"C:{mc}g", f"G:{mf}g"]
+        return True
+    except Exception as e:
+        logger.warning(f"[P3-PROTEIN-FLOOR] trim de techo falló: {type(e).__name__}: {e}")
+        return False
+
+
 # [P3-VARIETY · 2026-06-13] Tokens de plato-base (para detectar repetición intra-día) +
 # ingredientes premium (cap de apariciones) + descriptor sobre-usado. Advisory, no gate.
 _VARIETY_BASE_DISHES = ("revoltillo", "revuelto", "tortilla", "batido", "smoothie",
@@ -10075,6 +10112,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     elif MACRO_SOLVER_PROTEIN_TOPUP:
                         _topup_g += _protein_topup_meal(
                             _m, _slot_target["kcal"], _nut_db, _approved)
+                # [P3-PROTEIN-FLOOR] Techo simétrico: si el día quedó muy por ENCIMA del
+                # target de proteína (LLM/solver sobre-produjo), trímalo al target → mantiene
+                # la banda [piso, techo] y respeta el g/kg de C1 sobre lo ENTREGADO.
+                if PROTEIN_FLOOR_ENABLED and _pg > 0:
+                    _trim_day_protein_to_ceiling(_ms, _pg, _nut_db)
             logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
                         f"a su target de macros real (cerebro dividido)"
                         + (f" + top-up de proteína {_topup_g}g total" if _topup_g else ""))

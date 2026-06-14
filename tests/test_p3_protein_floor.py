@@ -155,6 +155,30 @@ def test_integracion_dia_deficitario_llega_al_target():
     assert abs(cals - daily_cals) < 120  # kcal cerca del target
 
 
+def test_trim_techo_baja_proteina_sobre_target():
+    from graph_orchestrator import _trim_day_protein_to_ceiling
+    # Día sobre-producido: 180g vs target 119g → trim al target.
+    meals = [
+        {"name": "A", "protein": 60, "carbs": 40, "fats": 15, "cals": 60*4+40*4+15*9,
+         "ingredients": ["200g de pollo (200g)", "1 taza de arroz (158g)"]},
+        {"name": "B", "protein": 60, "carbs": 50, "fats": 12, "cals": 60*4+50*4+12*9,
+         "ingredients": ["230g de pescado (230g)", "1 taza de arroz (158g)"]},
+        {"name": "C", "protein": 60, "carbs": 30, "fats": 10, "cals": 60*4+30*4+10*9,
+         "ingredients": ["250g de camarones (250g)", "ensalada"]},
+    ]
+    trimmed = _trim_day_protein_to_ceiling(meals, 119.0, _db(), ceiling_pct=1.12)
+    assert trimmed
+    P = sum(_meal_macro_num(m["protein"]) for m in meals)
+    assert abs(P - 119) <= 6  # bajó al target
+
+
+def test_trim_no_op_dentro_de_la_banda():
+    from graph_orchestrator import _trim_day_protein_to_ceiling
+    meals = [{"name": "A", "protein": 119, "carbs": 100, "fats": 30, "cals": 1500,
+              "ingredients": ["180g de pollo (180g)"]}]
+    assert _trim_day_protein_to_ceiling(meals, 119.0, _db(), ceiling_pct=1.12) is False
+
+
 def test_regla_piso_proteina_presente_en_prompt():
     # Ancla la regla de anclaje (A) en el prompt: un borrado la haría fallar aquí.
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
