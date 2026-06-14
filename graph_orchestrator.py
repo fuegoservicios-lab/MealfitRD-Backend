@@ -8297,6 +8297,11 @@ SLOT_DISTRIBUTION_ENABLED = _env_bool("MEALFIT_SLOT_DISTRIBUTION", True)
 # loops de regen. Cierra el hallazgo de la auditoría. Flip a False → no computa el reporte.
 MICRONUTRIENT_REPORT_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_REPORT", True)
 
+# [P3-VARIETY · 2026-06-13] Reporte advisory de variedad/pertinencia cultural (huevo,
+# 'cremoso', premium, plato-base repetido intra-día). NO bloquea (calidad blanda). El lever
+# duro es el prompt (regla de variedad+fidelidad cultural); esto da observabilidad. Cierra FS5.
+VARIETY_REPORT_ENABLED = _env_bool("MEALFIT_VARIETY_REPORT", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -8670,6 +8675,66 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         logger.warning(f"[P3-PROTEIN-TOPUP] falló para meal "
                        f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e}")
         return 0
+
+
+# [P3-VARIETY · 2026-06-13] Tokens de plato-base (para detectar repetición intra-día) +
+# ingredientes premium (cap de apariciones) + descriptor sobre-usado. Advisory, no gate.
+_VARIETY_BASE_DISHES = ("revoltillo", "revuelto", "tortilla", "batido", "smoothie",
+                        "licuado", "wrap", "ensalada", "sopa", "sancocho", "guiso",
+                        "guisad", "salteado", "horneado", "plancha", "pure")
+# Sinónimos del mismo plato-base → token canónico (revuelto/revoltillo = huevo revuelto;
+# smoothie/licuado = batido) para que la detección intra-día no los trate como distintos.
+_VARIETY_BASE_CANON = {"revuelto": "revoltillo", "smoothie": "batido",
+                       "licuado": "batido", "guisad": "guiso"}
+_PREMIUM_INGREDIENTS = ("ricotta", "yogur griego", "yogurt griego", "queso parmesano",
+                        "queso mozzarella", "salmon", "salmón")
+
+
+def build_variety_report(plan: dict) -> dict:
+    """[P3-VARIETY · 2026-06-13] Reporte ADVISORY de variedad/pertinencia cultural (FS5):
+    cuenta apariciones de huevo, descriptor 'cremoso', ingredientes premium, y platos-base
+    repetidos el mismo día. NO bloquea (variedad es calidad blanda → un gate causaría loops
+    de regen); surface telemetría + se inyecta a `result` para observabilidad. Cierra el
+    hallazgo de la auditoría (huevo 6/12, cremoso 4/12, ricotta×3). Anchor: P3-VARIETY."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    total_meals = egg_meals = cremoso = premium = same_day_repeats = 0
+    issues = []
+    for day in plan.get("days", []) or []:
+        meals = day.get("meals", []) or []
+        day_tokens = {}
+        for meal in meals:
+            total_meals += 1
+            name_low = strip_accents(str(meal.get("name", "")).lower())
+            if _meal_has_egg(meal, strip_accents):
+                egg_meals += 1
+            if "cremos" in name_low:
+                cremoso += 1
+            ings_low = strip_accents(" ".join(str(i) for i in meal.get("ingredients", []) or []).lower())
+            if any(p in name_low or p in ings_low for p in _PREMIUM_INGREDIENTS):
+                premium += 1
+            tok = next((t for t in _VARIETY_BASE_DISHES if t in name_low), None)
+            if tok:
+                tok = _VARIETY_BASE_CANON.get(tok, tok)  # colapsa sinónimos del mismo plato
+                day_tokens[tok] = day_tokens.get(tok, 0) + 1
+        for tok, n in day_tokens.items():
+            if n >= 2:
+                same_day_repeats += 1
+                issues.append(f"Día {day.get('day', '?')}: '{tok}' repetido {n}x el mismo día")
+    egg_cap = max(3, round(total_meals * 0.25))  # ~2-3 en 12 comidas
+    if egg_meals > egg_cap:
+        issues.append(f"Huevo en {egg_meals}/{total_meals} comidas (cap sugerido {egg_cap})")
+    if cremoso > 1:
+        issues.append(f"Descriptor 'cremoso' en {cremoso} platos (cap sugerido 1)")
+    if premium > 2:
+        issues.append(f"Ingredientes premium en {premium} comidas (cap sugerido 2)")
+    return {"total_meals": total_meals, "egg_meals": egg_meals, "cremoso": cremoso,
+            "premium": premium, "same_day_repeats": same_day_repeats, "issues": issues,
+            "ok": not issues}
 
 
 # [P3-SLOT-DISTRIBUTION · 2026-06-13] Mapa nombre-de-slot (es-DO) → key del split canónico.
@@ -9920,6 +9985,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _mn_e:
             logger.warning(f"[P3-MICRONUTRIENTS] deshabilitado por error: "
                            f"{type(_mn_e).__name__}: {_mn_e}")
+
+    # [P3-VARIETY · 2026-06-13] Reporte advisory de variedad/pertinencia cultural (FS5).
+    # Observabilidad — el lever duro es el prompt. Inyecta `result["variety_report"]`. Fail-safe.
+    if VARIETY_REPORT_ENABLED:
+        try:
+            _vr = build_variety_report(result)
+            result["variety_report"] = _vr
+            if not _vr.get("ok"):
+                logger.info(f"🍽️ [P3-VARIETY] Variedad advisory: {'; '.join(_vr.get('issues', []))}")
+        except Exception as _vr_e:
+            logger.warning(f"[P3-VARIETY] deshabilitado por error: "
+                           f"{type(_vr_e).__name__}: {_vr_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB

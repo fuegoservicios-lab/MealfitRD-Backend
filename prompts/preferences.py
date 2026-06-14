@@ -52,5 +52,10 @@ Toda comida pobre en proteína deja el plan corto del objetivo diario y produce 
 
 🧂 REGLA DE SODIO (salud cardiovascular — meta WHO <2000 mg/día): controla la sal. NO uses "sal y pimienta al gusto" genérico en cada plato; especifica una cantidad MEDIDA y modesta de sal (máx ~1 g = ¼ cucharadita por día repartido) y prioriza especias SIN sodio para dar sabor: ajo, cebolla, comino, orégano, cilantro, limón, pimienta. Evita Tajín, cubitos/sazón en polvo y salsas saladas; si usas salsa de soya, que sea baja en sodio y en cantidad mínima.
 
+🍽️ REGLA DE VARIEDAD Y FIDELIDAD CULTURAL DOMINICANA (adherencia real del usuario):
+   • VARIEDAD: el HUEVO no debe aparecer en más de 2-3 comidas de todo el plan (NO lo uses como relleno por defecto). NO repitas el mismo plato-base (revoltillo, batido, tortilla) dos veces el MISMO día. Rota las anclas proteicas entre días.
+   • FIDELIDAD CULTURAL es-DO: usa SOLO ingredientes dominicanos accesibles y cotidianos. NUNCA inventes ingredientes exóticos o no dominicanos (ej. Tajín mexicano, semillas/superfoods de moda). Prioriza los pilares accesibles: pollo, habichuelas (rojas/negras/blancas), pescado local, cerdo, huevos, y víveres (plátano, yuca, batata, ñame, yautía). Reserva ingredientes premium/caros (ricotta, yogur griego, quesos finos) a MÁXIMO 1-2 apariciones en todo el plan, no como base recurrente.
+   • TÉCNICA DE COCCIÓN: varía las técnicas — a la plancha, guisado dominicano, al horno, sopa/sancocho, salteado, hervido. NO hagas que todo sea "cremoso" o revuelto: usa el descriptor "cremoso/a" en MÁXIMO 1 plato del plan.
+
 {blocked_text}
 """
