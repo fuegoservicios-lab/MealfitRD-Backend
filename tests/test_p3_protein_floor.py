@@ -147,6 +147,21 @@ def test_closer_nota_sin_gramaje_hardcodeado():
     assert not _re.search(r"\d+\s*g de", nota)  # sin "Xg de ..." en la nota
 
 
+def test_closer_es_idempotente_no_re_anade_en_segunda_pasada():
+    # Re-assemble (retries/surgical) re-ejecuta el solver block. El closer NO debe re-añadir
+    # proteína (antes acumulaba "20g + 40g habichuelas" y duplicaba huevos → inflaba el día).
+    meal = {"name": "Lentejas con Arroz", "protein": 18, "carbs": 70, "fats": 12, "cals": 460,
+            "ingredients": ["1 taza de lentejas cocidas (198g)"]}
+    cands = _safe_high_density_proteins(["Ninguna"], _db())
+    a1 = _close_protein_gap_for_meal(meal, 42.0, _db(), cands, fill_pct=0.92)
+    n_ings = len(meal["ingredients"])
+    p_after = meal["protein"]
+    a2 = _close_protein_gap_for_meal(meal, 42.0, _db(), cands, fill_pct=0.92)  # 2ª pasada
+    assert a1 > 0 and a2 == 0  # la 2ª no añade
+    assert len(meal["ingredients"]) == n_ings  # no duplica ingredientes
+    assert meal["protein"] == p_after  # no infla la proteína
+
+
 def test_closer_no_op_si_ya_alcanza_target():
     meal = {"name": "Pollo a la Plancha", "protein": 40, "carbs": 10, "fats": 8, "cals": 300,
             "ingredients": ["150g de pollo (150g)"]}

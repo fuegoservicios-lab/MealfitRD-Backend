@@ -8679,6 +8679,8 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
     fuera del pool aprobado → cero riesgo de alérgeno). La más MAGRA (mayor proteína/kcal)
     minimiza el costo calórico. Mutates `meal`. Retorna gramos añadidos. Anchor: P3-PROTEIN-TOPUP."""
     try:
+        if meal.get("_protein_closed"):
+            return 0  # [P3-PROTEIN-IDEMPOTENT] ya se cerró en una pasada previa — no re-añadir
         cur_p = _meal_macro_num(meal.get("protein"))
         if cur_p >= floor_g:
             return 0  # ya tiene proteína suficiente — no tocar
@@ -8721,6 +8723,7 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         meal.setdefault("ingredients", []).append(line)
         if isinstance(meal.get("ingredients_raw"), list):
             meal["ingredients_raw"].append(line)
+        meal["_protein_closed"] = True  # [P3-PROTEIN-IDEMPOTENT] no re-cerrar en re-assemble
         meal["protein"] = round(cur_p + info.protein * f)
         meal["carbs"] = round(_meal_macro_num(meal.get("carbs")) + info.carbs * f)
         meal["fats"] = round(_meal_macro_num(meal.get("fats")) + info.fats * f)
@@ -8803,6 +8806,10 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
     solo usa proteínas no-cocción-safe (yogur/queso/whey), NUNCA huevo crudo (FS1). Las kcal
     extra las nivela aguas abajo el reconcile protein-preserving. Mutates meal. Retorna gramos."""
     try:
+        if meal.get("_protein_closed"):
+            return 0  # [P3-PROTEIN-IDEMPOTENT] ya se cerró en una pasada previa de assemble →
+            # no re-añadir (re-assemble en retries/surgical regen acumulaba proteína + duplicaba
+            # ingredientes, inflando el día por encima del techo g/kg). Fix del gap post-review.
         cur_p = _meal_macro_num(meal.get("protein"))
         target = slot_protein_target * fill_pct
         if target <= 0 or cur_p >= target:
@@ -8860,6 +8867,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         meal.setdefault("ingredients", []).append(line)
         if isinstance(meal.get("ingredients_raw"), list):
             meal["ingredients_raw"].append(line)
+        meal["_protein_closed"] = True  # [P3-PROTEIN-IDEMPOTENT] no re-cerrar en re-assemble
         meal["protein"] = round(cur_p + chosen.protein * f)
         meal["carbs"] = round(_meal_macro_num(meal.get("carbs")) + chosen.carbs * f)
         meal["fats"] = round(_meal_macro_num(meal.get("fats")) + chosen.fats * f)
