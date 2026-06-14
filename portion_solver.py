@@ -62,6 +62,70 @@ SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.4)
 # ingrediente a min_scale y otro a max_scale solo para clavar macros). Más alto = más fiel al LLM.
 SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10)
 
+# [P3-PROTEIN-FLOOR · 2026-06-14] El LSQ es SIMÉTRICO + regulariza hacia x=1 (el porcionado bajo del
+# LLM) → con ingredientes acoplados RETIENE la fuente de proteína para no pasarse de kcal/grasa →
+# sub-entrega de proteína sistemática (medido: ~50% en ±10%, déficit 30-70% en planes reales). La
+# proteína es el macro clínicamente crítico (muscle gain + saciedad). Este piso, POST-solve, escala
+# SOLO los ingredientes proteína-dominantes para cerrar el gap si la proteína quedó bajo target
+# (clamp max_scale), aceptando cierto overshoot de kcal como trade-off clínico. Solo actúa en
+# UNDERSHOOT; jamás recorta (overshoot intacto) ni toca meals sin fuente de proteína escalable
+# (proteína vegetal difusa → el fix correcto es upstream, no inflar carbos). Knob para A/B + rollback.
+SOLVER_PROTEIN_FLOOR = _envb("MEALFIT_SOLVER_PROTEIN_FLOOR", True)
+SOLVER_PROTEIN_FLOOR_TOL = _envf("MEALFIT_SOLVER_PROTEIN_FLOOR_TOL", 0.05)
+# Fracción calórica MÍNIMA de proteína para considerar un ingrediente "fuente de proteína" escalable.
+# 0.25 capta huevo (36%), queso, carne, pescado, leguminosas (31%); excluye arroz (~8%), aceite,
+# fruta. MÁS robusto que el macro DOMINANTE: huevo/queso son grasa-dominantes por kcal pero SON
+# fuentes de proteína — escalarlos cierra el déficit (el dominante los excluía → el piso no disparaba).
+SOLVER_PROTEIN_SOURCE_FRAC = _envf("MEALFIT_SOLVER_PROTEIN_SOURCE_FRAC", 0.25)
+
+
+def _is_protein_source(macros: dict) -> bool:
+    """True si el ingrediente es una FUENTE de proteína ESCALABLE: la proteína aporta
+    >= SOLVER_PROTEIN_SOURCE_FRAC de sus kcal Y NO es carbo-dominante (la proteína aporta al menos
+    tanto como los carbos). La 2ª condición excluye leguminosas/granos (lentejas/habichuelas/arroz):
+    escalarlos para clavar la proteína dispararía los carbos a porciones absurdas (3 tazas de
+    lentejas) → ese déficit de proteína vegetal difusa se corrige UPSTREAM, no inflando un carbo.
+    Capta huevo/queso (grasa-dominantes por kcal pero proteína-ricos y bajos en carbo), carne, pescado."""
+    p = macros.get("protein") or 0.0
+    if p <= 0:
+        return False
+    c = macros.get("carbs") or 0.0
+    kcal = macros.get("kcal") or (4.0 * p + 4.0 * c + 9.0 * (macros.get("fats") or 0))
+    if kcal <= 0:
+        return False
+    return (4.0 * p) / kcal >= SOLVER_PROTEIN_SOURCE_FRAC and (4.0 * p) >= (4.0 * c)
+
+
+def _apply_protein_floor(entries: list, sc: list, factors: list, tgt: dict, max_scale: float) -> bool:
+    """[P3-PROTEIN-FLOOR] Si la proteína achieved quedó bajo target, sube SOLO los factores de las
+    FUENTES de proteína (proteína >= SOLVER_PROTEIN_SOURCE_FRAC de sus kcal) para cerrar el gap, clamp
+    a max_scale. Muta `factors`. Retorna True si aplicó. Determinista; no-op si no hay fuente de
+    proteína escalable (proteína vegetal difusa → fix upstream) o si la proteína ya está en/sobre el
+    piso. Trade-off: cierta sobre-entrega de kcal/grasa (proteína es el macro clínicamente crítico)."""
+    tp = tgt.get("protein", 0) or 0
+    if tp <= 0:
+        return False
+    pg = [i for i in sc if _is_protein_source(entries[i]["macros"])]
+    if not pg:
+        return False  # sin fuente de proteína escalable → no inflar carbos/grasa para fingir proteína
+    ach_p = sum(entries[i]["macros"]["protein"] * factors[i] for i in sc)
+    if ach_p >= tp * (1.0 - SOLVER_PROTEIN_FLOOR_TOL):
+        return False  # ya en banda o por encima → no tocar (jamás recorta)
+    pg_p = sum(entries[i]["macros"]["protein"] * factors[i] for i in pg)
+    if pg_p <= 0:
+        return False
+    non_pg_p = ach_p - pg_p
+    extra = (tp - non_pg_p) / pg_p           # factor extra sobre las fuentes para clavar el target
+    if extra <= 1.0:
+        return False                          # solo subir
+    applied = False
+    for i in pg:
+        new_f = min(max_scale, factors[i] * extra)
+        if new_f > factors[i] + 1e-9:
+            factors[i] = new_f
+            applied = True
+    return applied
+
 
 def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
              reg: float, iters: int = 150) -> list:
@@ -108,6 +172,7 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
     sc = [i for i, e in enumerate(entries) if e.get("macros") and e.get("group")]
     if not sc:
         return factors, "none"
+    method = None
     if SOLVER_LSQ:
         try:
             _w = {"kcal": SOLVER_W_KCAL, "protein": SOLVER_W_PROTEIN,
@@ -122,18 +187,25 @@ def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale
                 xs = _box_lsq(A_rows, brow, wrow, min_scale, max_scale, SOLVER_LSQ_REG)
                 for j, i in enumerate(sc):
                     factors[i] = xs[j]
-                return factors, "lsq"
+                method = "lsq"
         except Exception:
             pass
-    # Fallback GREEDY por grupo de macro dominante (algoritmo v1).
-    gf = {}
-    for macro in _KCAL_PER_G:
-        current = sum(entries[i]["macros"][macro] for i in sc if entries[i]["group"] == macro)
-        tv = tgt.get(macro, 0)
-        gf[macro] = max(min_scale, min(max_scale, tv / current)) if (current > 0 and tv > 0) else 1.0
-    for i in sc:
-        factors[i] = gf[entries[i]["group"]]
-    return factors, "greedy"
+    if method is None:
+        # Fallback GREEDY por grupo de macro dominante (algoritmo v1).
+        gf = {}
+        for macro in _KCAL_PER_G:
+            current = sum(entries[i]["macros"][macro] for i in sc if entries[i]["group"] == macro)
+            tv = tgt.get(macro, 0)
+            gf[macro] = max(min_scale, min(max_scale, tv / current)) if (current > 0 and tv > 0) else 1.0
+        for i in sc:
+            factors[i] = gf[entries[i]["group"]]
+        method = "greedy"
+    # [P3-PROTEIN-FLOOR · 2026-06-14] Piso de proteína post-solve (cierra el déficit sistémico de
+    # sub-entrega que el LSQ simétrico introduce). Solo undershoot; clamp max_scale. No-op si no hay
+    # fuente de proteína escalable o si ya está en banda. Aplica a ambos métodos.
+    if SOLVER_PROTEIN_FLOOR and _apply_protein_floor(entries, sc, factors, tgt, max_scale):
+        method += "+pfloor"
+    return factors, method
 
 
 def _get(d: dict, *keys, default=0.0):
