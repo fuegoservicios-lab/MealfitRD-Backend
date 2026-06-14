@@ -16520,8 +16520,26 @@ def _apply_final_defense_guardrails(
                 }
                 logger.warning("🫘 [P3-CONDITION-RULES] Red de seguridad renal aplicó gate de derivación "
                                "profesional al plan entregado (cubre fallback/paths sin assemble).")
+        # [P3-CONDITION-RULES] Gate GENÉRICO en el punto de salida: si el usuario declaró CUALQUIER
+        # condición médica real y el plan entregado (incl. el fallback matemático, que bypassa el
+        # gate FS9 de assemble) no lo lleva, lo añadimos. Honestidad/seguridad: un plan para alguien
+        # con condición declarada SIEMPRE debe llevar la advertencia profesional, en cualquier path.
+        if (PRO_REVIEW_FLAG_ENABLED and isinstance(_pf_renal, dict)
+                and not isinstance(_pf_renal.get("requires_professional_review"), dict)
+                and _has_real_medical_flags(actual_form_data.get("medicalConditions"))):
+            _gc = [str(c) for c in (actual_form_data.get("medicalConditions") or [])
+                   if str(c).strip().lower() not in _MEDICAL_NONE_SENTINELS]
+            _pf_renal["requires_professional_review"] = {
+                "flag": True, "conditions": _gc,
+                "note": ("⚕️ Declaraste condición(es) de salud (" + ", ".join(_gc) + "). Este plan las "
+                         "considera de forma general pero NO sustituye la evaluación de tu médico o "
+                         "nutricionista. Consúltalo antes de seguir este plan, especialmente para "
+                         "ajustar porciones, sodio, azúcares o restricciones específicas."),
+            }
+            logger.warning(f"⚕️ [P3-CONDITION-RULES] Gate profesional genérico aplicado al plan "
+                           f"entregado (condiciones: {_gc}) — cubre fallback/paths sin assemble.")
     except Exception as _rsafe_e:
-        logger.warning(f"[P3-CONDITION-RULES] red de seguridad renal falló: "
+        logger.warning(f"[P3-CONDITION-RULES] red de seguridad de condiciones falló: "
                        f"{type(_rsafe_e).__name__}: {_rsafe_e}")
 
     # MEJORA 2: Extraer snapshot COMPLETO de señales activas para el Attribution Tracker.

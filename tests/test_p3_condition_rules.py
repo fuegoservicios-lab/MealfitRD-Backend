@@ -278,7 +278,8 @@ def test_source_cap_noop_when_not_renal_or_no_weight():
 def test_source_cap_and_safety_net_anchors():
     src = inspect.getsource(go)
     for marker in ("_apply_renal_cap_to_nutrition", "nutrition_target",
-                   "Red de seguridad renal", "RED DE SEGURIDAD RENAL"):
+                   "Red de seguridad renal", "RED DE SEGURIDAD RENAL",
+                   "Gate profesional genérico"):  # gate FS9 en fallback para cualquier condición
         assert marker in src, f"marker ausente: {marker}"
     # el cap en la fuente se invoca tras get_nutrition_targets
     assert "_apply_renal_cap_to_nutrition(nutrition, actual_form_data)" in src
