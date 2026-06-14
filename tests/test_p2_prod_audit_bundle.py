@@ -37,8 +37,8 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_ROOT.parent
 _DB_FACTS = _BACKEND_ROOT / "db_facts.py"
 _APP_PY = _BACKEND_ROOT / "app.py"
-_MIGRATIONS_ROOT = _REPO_ROOT / "supabase" / "migrations"
-_MIGRATIONS_BACKEND = _BACKEND_ROOT / "supabase" / "migrations"
+_MIGRATIONS_ROOT = _REPO_ROOT / "migrations"
+_MIGRATIONS_BACKEND = _BACKEND_ROOT / "migrations"
 _MIGRATION_FILENAME = "p2_prod_audit_bundle_user_facts_autovacuum_2026_05_27.sql"
 _SCRIPT_PATH = _BACKEND_ROOT / "scripts" / "check_deploy_lag_age.py"
 
@@ -175,7 +175,7 @@ def test_p2_1_debounce_isolates_per_user():
 
 def test_p2_2_migration_exists_in_both_dirs():
     """SSOT [P3-MIGRATIONS-SSOT · 2026-05-20]: migration debe vivir en AMBOS
-    dirs sincronizados (`supabase/migrations/` y `backend/supabase/migrations/`)."""
+    dirs sincronizados (`migrations/` y `backend/migrations/`)."""
     workspace_path = _MIGRATIONS_ROOT / _MIGRATION_FILENAME
     backend_path = _MIGRATIONS_BACKEND / _MIGRATION_FILENAME
     assert workspace_path.exists(), (

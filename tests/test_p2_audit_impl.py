@@ -107,8 +107,8 @@ _GENSTATUS_MIG = "p2_meal_plans_generation_status_idx_2026_05_28.sql"
 
 
 def test_p2_genstatus_idx_migration_dual_dir_identical():
-    backend_mig = _read(_BACKEND, "supabase", "migrations", _GENSTATUS_MIG)
-    root_mig = _read(_ROOT, "supabase", "migrations", _GENSTATUS_MIG)
+    backend_mig = _read(_BACKEND, "migrations", _GENSTATUS_MIG)
+    root_mig = _read(_ROOT, "migrations", _GENSTATUS_MIG)
     assert backend_mig == root_mig, "SSOT dual-dir: deben ser idénticas"
     assert "CREATE INDEX IF NOT EXISTS idx_meal_plans_generation_status" in backend_mig
     assert "plan_data->>'generation_status'" in backend_mig

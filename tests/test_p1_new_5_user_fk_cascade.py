@@ -33,7 +33,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIGRATION_FP = (
-    _REPO_ROOT / "supabase" / "migrations"
+    _REPO_ROOT / "migrations"
     / "p1_new_5_user_fk_cascade_consolidate.sql"
 )
 

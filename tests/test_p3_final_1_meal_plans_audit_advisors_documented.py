@@ -35,7 +35,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 _MIGRATION = (
     _REPO_ROOT
-    / "supabase"
     / "migrations"
     / "p3_final_1_meal_plans_audit_advisor_anchors.sql"
 )

@@ -27,7 +27,7 @@ Fix:
     service_role, (d) COMMENT ON FUNCTION cross-link al test.
 
 Estrategia del test (parser estático sobre la migración):
-    1. Verificar que la migración existe en `supabase/migrations/`.
+    1. Verificar que la migración existe en `migrations/`.
     2. Para cada una de las 3 functions:
        a. `CREATE OR REPLACE FUNCTION public.<name>(...)`
        b. `SET search_path = ''` (cadena vacía exactamente)
@@ -60,7 +60,6 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _MIGRATION_PATH = (
     _REPO_ROOT
-    / "supabase"
     / "migrations"
     / "p1_definer_functions_lockdown_2026_05_12.sql"
 )
@@ -78,7 +77,7 @@ def migration_src() -> str:
     if not _MIGRATION_PATH.exists():
         pytest.fail(
             f"P1-DEFINER-LOCKDOWN regresión: la migración "
-            f"{_MIGRATION_PATH.name} no existe en `supabase/migrations/`. "
+            f"{_MIGRATION_PATH.name} no existe en `migrations/`. "
             f"Si fue renombrada o eliminada, restaurarla o actualizar "
             f"este test. La migración es SSOT del lockdown; sin ella el "
             f"contrato REVOKE EXECUTE FROM authenticated es solo "
@@ -94,7 +93,7 @@ def test_anchor_present(migration_src: str):
     """Anchor textual `P1-DEFINER-LOCKDOWN` en comentarios + COMMENTs."""
     assert "P1-DEFINER-LOCKDOWN" in migration_src, (
         "P1-DEFINER-LOCKDOWN regresión: anchor textual desapareció. "
-        "Restaurar para `grep -r P1-DEFINER-LOCKDOWN supabase/migrations/`."
+        "Restaurar para `grep -r P1-DEFINER-LOCKDOWN migrations/`."
     )
 
 

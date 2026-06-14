@@ -1087,7 +1087,7 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
 
 # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13]
 # Helper para el toggle de memoria a largo plazo desde Settings.
-# Migración SSOT: supabase/migrations/add_long_term_memory_enabled_2026_05_13.sql
+# Migración SSOT: migrations/add_long_term_memory_enabled_2026_05_13.sql
 def update_long_term_memory_enabled(user_id: str, enabled: bool) -> bool:
     """Actualiza el flag `long_term_memory_enabled` en user_profiles.
 
@@ -1110,7 +1110,7 @@ def update_long_term_memory_enabled(user_id: str, enabled: bool) -> bool:
 
 
 # [P3-WATER-TRACKER · 2026-05-16] Helper para el toggle del tracker de
-# hidratación. Migración SSOT: supabase/migrations/add_water_tracker_enabled_2026_05_16.sql
+# hidratación. Migración SSOT: migrations/add_water_tracker_enabled_2026_05_16.sql
 def update_water_tracker_enabled(user_id: str, enabled: bool) -> bool:
     """Actualiza el flag `water_tracker_enabled` en user_profiles.
 

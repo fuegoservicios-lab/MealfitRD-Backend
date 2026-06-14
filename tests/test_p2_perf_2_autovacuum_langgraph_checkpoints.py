@@ -35,7 +35,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIGRATION = (
-    _REPO_ROOT / "supabase" / "migrations"
+    _REPO_ROOT / "migrations"
     / "p2_perf_2_autovacuum_langgraph_checkpoints.sql"
 )
 
@@ -46,7 +46,7 @@ _TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
 def migration_src() -> str:
     assert _MIGRATION.exists(), (
         "P2-PERF-2: migración SSOT "
-        "`supabase/migrations/p2_perf_2_autovacuum_langgraph_checkpoints.sql` "
+        "`migrations/p2_perf_2_autovacuum_langgraph_checkpoints.sql` "
         "no encontrada. Restaurarla — sin SSOT, el tuning vive solo en "
         "memoria del operador y se pierde tras un dump/restore."
     )

@@ -25,7 +25,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _SECURE_STORAGE = _REPO_ROOT / "frontend" / "src" / "config" / "secureFormStorage.js"
-_MIGRATION_SQL = _REPO_ROOT / "supabase" / "migrations" / "p3_profile_numeric_coerce_2026_05_20.sql"
+_MIGRATION_SQL = _REPO_ROOT / "migrations" / "p3_profile_numeric_coerce_2026_05_20.sql"
 
 
 def _read(path: Path) -> str:

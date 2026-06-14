@@ -12,13 +12,13 @@ Bug original (audit historial 2026-05-08):
 
 Fix:
     Migración SSOT
-    `supabase/migrations/p1_hist_audit_6_rls_force.sql` con
+    `migrations/p1_hist_audit_6_rls_force.sql` con
     `ALTER TABLE ... FORCE ROW LEVEL SECURITY` para ambas tablas.
     Idempotente vía DO block + check `relforcerowsecurity`.
     Aplicada al remoto (project mpoodlmnzaeuuazsazbj) y verificada.
 
 Cobertura (static analysis del SQL):
-    - Migración existe en `supabase/migrations/`.
+    - Migración existe en `migrations/`.
     - Header documenta el marker P1-HIST-AUDIT-6.
     - SQL aplica FORCE a AMBAS tablas (positivo).
     - SQL es idempotente (check `relforcerowsecurity` antes de ALTER).
@@ -42,7 +42,7 @@ import pytest
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _MIGRATION_PATH = (
     _BACKEND_ROOT.parent
-    / "supabase" / "migrations"
+    / "migrations"
     / "p1_hist_audit_6_rls_force.sql"
 )
 
@@ -54,7 +54,7 @@ def test_migration_file_exists():
     assert _MIGRATION_PATH.exists(), (
         f"No se encontró la migración P1-HIST-AUDIT-6 en "
         f"{_MIGRATION_PATH}. Path esperado por convención del repo "
-        f"(SSOT migrations en supabase/migrations/)."
+        f"(SSOT migrations en migrations/)."
     )
 
 

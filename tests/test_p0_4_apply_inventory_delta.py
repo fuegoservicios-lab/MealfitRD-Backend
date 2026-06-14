@@ -18,7 +18,7 @@ Bug original (audit 2026-05-10):
     `test_pantry_auto_sync_between_chunks.py` existe pero mockea —
     no ejerce DB real → la race quedaba invisible.
 
-Fix (`supabase/migrations/p0_4_apply_inventory_delta_rpc.sql`):
+Fix (`migrations/p0_4_apply_inventory_delta_rpc.sql`):
     RPC `apply_inventory_delta(p_user_id, p_row_id, p_delta, ...)`:
       - SECURITY DEFINER (backend service_role no setea auth.uid()).
       - `SELECT … FOR UPDATE` lockea la fila → serializa concurrent calls.
@@ -52,7 +52,7 @@ import pytest
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MIGRATION_PATH = _REPO_ROOT / "supabase" / "migrations" / "p0_4_apply_inventory_delta_rpc.sql"
+_MIGRATION_PATH = _REPO_ROOT / "migrations" / "p0_4_apply_inventory_delta_rpc.sql"
 _DB_INVENTORY_PATH = _REPO_ROOT / "backend" / "db_inventory.py"
 
 

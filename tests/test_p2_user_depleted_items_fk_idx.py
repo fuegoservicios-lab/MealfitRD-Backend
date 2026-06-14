@@ -34,13 +34,13 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _MIGRATION_NAME = "p2_user_depleted_items_fk_idx_2026_05_23.sql"
-_MIGRATION_ROOT = _REPO_ROOT / "supabase" / "migrations" / _MIGRATION_NAME
-_MIGRATION_BACKEND = _REPO_ROOT / "backend" / "supabase" / "migrations" / _MIGRATION_NAME
+_MIGRATION_ROOT = _REPO_ROOT / "migrations" / _MIGRATION_NAME
+_MIGRATION_BACKEND = _REPO_ROOT / "backend" / "migrations" / _MIGRATION_NAME
 
 
 def test_migration_file_present_in_both_ssot_dirs():
     """P3-MIGRATIONS-SSOT exige que TODA migration viva en ambos
-    `supabase/migrations/` (workspace) Y `backend/supabase/migrations/`
+    `migrations/` (workspace) Y `backend/migrations/`
     (backend repo). Si falta en uno, el push del repo correspondiente
     no lleva el cambio."""
     assert _MIGRATION_ROOT.exists(), (

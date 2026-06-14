@@ -3,7 +3,7 @@ prod-readiness 2026-05-27 (post-P0-DEAD-LETTER-USER-NOTIFY).
 
 Parser-based (lee el source de prod con regex) — NO importa `app`/`db_core`
 para evitar (a) el arranque de scheduler/DB en `import app`, (b) la colisión
-conocida `supabase` (pip) vs `backend/supabase/` (dir migrations) que rompe
+conocida `supabase` (pip) vs `backend/migrations/` (dir migrations) que rompe
 el import en el venv de tests. Cada assertion ancla un tooltip-anchor en el
 código fuente: si alguien renombra/borra la defensa, el test falla ANTES de
 que el comportamiento de prod cambie.

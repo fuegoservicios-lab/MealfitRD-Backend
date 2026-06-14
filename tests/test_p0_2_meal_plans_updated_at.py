@@ -50,7 +50,7 @@ import pytest
 
 # Raíz del repo: este test vive en backend/tests/, subir 2 niveles.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MIGRATION_PATH = _REPO_ROOT / "supabase" / "migrations" / "p0_2_meal_plans_updated_at.sql"
+_MIGRATION_PATH = _REPO_ROOT / "migrations" / "p0_2_meal_plans_updated_at.sql"
 _PLANS_ROUTER_PATH = _REPO_ROOT / "backend" / "routers" / "plans.py"
 
 

@@ -892,7 +892,7 @@ def _validate_chunk_pre_llm(task_id, meal_plan_id, user_id):
 
 # [P0.2] El helper `_backfill_plan_anchors_oneshot` fue eliminado. El backfill
 # de `_plan_start_date` / `grocery_start_date` ahora vive exclusivamente en
-# `supabase/migrations/p0_3_backfill_plan_anchors.sql`. La lógica runtime
+# `migrations/p0_3_backfill_plan_anchors.sql`. La lógica runtime
 # dependía de la env var `BACKFILL_PLAN_ANCHORS_DONE` para evitar doble-corrida,
 # frágil de configurar en deploy: si la var no se seteaba, los anchors se
 # re-escribían en cada arranque (idempotente pero con WAL traffic creciente);
@@ -17605,7 +17605,7 @@ def _record_chunk_metric(
     (escenario donde el LLM genera platos con ingredientes que ya no existen).
 
     [P2-NEW-G 2026-05-08] El ALTER runtime que aseguraba `is_rolling_refill` fue
-    movido a `supabase/migrations/p2_new_g_consolidate_runtime_ddl_2.sql` (SSOT).
+    movido a `migrations/p2_new_g_consolidate_runtime_ddl_2.sql` (SSOT).
     """
     try:
         repeat_pct = None
@@ -19494,7 +19494,7 @@ def _alert_new_dead_lettered_chunks() -> None:
     except Exception:
         # Cooldown lookup falló (e.g., system_alerts no existe) — seguimos al
         # INSERT. La tabla `system_alerts` se crea ahora vía la migración SSOT
-        # `supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql` (P3-B
+        # `migrations/p2_new_e_consolidate_runtime_ddl.sql` (P3-B
         # 2026-05-08 removió `_ensure_quality_alert_schema` y sus 12 call sites).
         pass
 

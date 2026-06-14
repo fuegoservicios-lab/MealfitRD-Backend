@@ -40,7 +40,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BACKEND_ROOT = _REPO_ROOT / "backend"
 _FRONTEND_ROOT = _REPO_ROOT / "frontend"
-_SUPABASE_ROOT = _REPO_ROOT / "supabase"
+_MIGRATIONS_ROOT = _REPO_ROOT / "migrations"
 
 _DIARY_PY = _BACKEND_ROOT / "routers" / "diary.py"
 _SYSTEM_PY = _BACKEND_ROOT / "routers" / "system.py"
@@ -84,18 +84,23 @@ def reset_password_src() -> str:
 # Section 1: P3-LOOSE-SQL-FILES
 # ============================================================================
 
-def test_no_loose_sql_files_at_supabase_root():
-    """`supabase/` solo debe contener `migrations/`. SQL sueltos en la raíz
-    rompen la convención SSOT (CLAUDE.md "DDL en runtime")."""
-    loose_files = sorted(p.name for p in _SUPABASE_ROOT.glob("*.sql"))
-    assert loose_files == [], (
-        f"P3-LOOSE-SQL-FILES regresión: archivos SQL sueltos detectados en "
-        f"`supabase/`: {loose_files}. Toda DDL/función vive en "
-        f"`supabase/migrations/`. Si necesitas añadir migration, usar "
-        f"`supabase migrations new <name>` para timestamping consistente. "
-        f"Si el archivo ya está aplicado en DB (verificar via "
-        f"`SELECT version FROM supabase_migrations.schema_migrations`), "
-        f"borrarlo — la copia loose solo confunde al operador."
+def test_migrations_dir_is_flat_ssot():
+    """[P1-NEON-DB-MIGRATION] El SSOT del DDL vive en `migrations/` (estructura
+    PLANA: los `.sql` directamente en el dir, sin subcarpeta). Guard de
+    regresión del rename `supabase/`→`migrations/`: `migrations/` existe con
+    `.sql` y NO quedó un `supabase/` legacy."""
+    assert _MIGRATIONS_ROOT.is_dir(), (
+        f"P1-NEON-DB-MIGRATION: falta el dir SSOT `migrations/` en {_REPO_ROOT}."
+    )
+    sql_files = sorted(p.name for p in _MIGRATIONS_ROOT.glob("*.sql"))
+    assert sql_files, (
+        "P1-NEON-DB-MIGRATION: `migrations/` no contiene `.sql` — "
+        "¿el rename movió mal los archivos?"
+    )
+    legacy = _REPO_ROOT / "supabase"
+    assert not legacy.exists(), (
+        "P1-NEON-DB-MIGRATION: el dir legacy `supabase/` reapareció. El SSOT del "
+        "DDL se renombró a `migrations/` (plano); mover los `.sql` y borrar `supabase/`."
     )
 
 

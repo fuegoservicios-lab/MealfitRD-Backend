@@ -264,7 +264,7 @@ def test_p0_hist_3_anchor_in_endpoint():
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_MIGRATION = _REPO_ROOT / "supabase" / "migrations" / "p0_hist_3_telemetry_orphan_fk.sql"
+_MIGRATION = _REPO_ROOT / "migrations" / "p0_hist_3_telemetry_orphan_fk.sql"
 
 
 def test_migration_file_exists():

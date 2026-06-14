@@ -46,7 +46,7 @@ import pytest
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MIGRATION_PATH = _REPO_ROOT / "supabase" / "migrations" / "p1_5_chunk_lesson_event_format_check.sql"
+_MIGRATION_PATH = _REPO_ROOT / "migrations" / "p1_5_chunk_lesson_event_format_check.sql"
 
 
 def _read(path: Path) -> str:

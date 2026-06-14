@@ -26,7 +26,7 @@ Cobertura:
     `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`,
     `CREATE INDEX IF NOT EXISTS`.
   - Si se detecta match: el test reporta archivo:línea para diagnóstico
-    rápido y guía al fix (consolidar a `supabase/migrations/<P-fix>.sql`).
+    rápido y guía al fix (consolidar a `migrations/<P-fix>.sql`).
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ import pytest
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_ROOT.parent
 
-# Patrones de DDL runtime que debe vivir SOLO en supabase/migrations/.
+# Patrones de DDL runtime que debe vivir SOLO en migrations/.
 # `(?i)` case-insensitive — algunos scripts viejos usaban `create table`.
 _DDL_PATTERNS = [
     re.compile(r"(?i)CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS"),
@@ -52,7 +52,7 @@ _DDL_PATTERNS = [
 #   - tests/                      : aserciones sobre DDL strings son válidas
 #   - scripts/                    : helpers de ops one-off
 #   - _deprecated_*.py.bak        : scripts archivados (no ejecutables)
-#   - supabase/migrations/        : SSOT autorizado
+#   - migrations/        : SSOT autorizado
 #   - .venv/, node_modules/, etc. : deps externas
 _EXCLUDED_DIR_NAMES = {
     "tests",
@@ -151,14 +151,14 @@ def test_no_runtime_ddl_create_table_in_active_backend():
     """Ningún archivo activo debe contener `CREATE TABLE IF NOT EXISTS`.
 
     Si este test falla: el statement debe migrarse a un archivo bajo
-    `supabase/migrations/<P-fix>_<descripcion>.sql` y el call site Python
+    `migrations/<P-fix>_<descripcion>.sql` y el call site Python
     debe reemplazarse por un no-op (preservando call sites para no romper
     tests con `patch(...)`) o eliminarse si no hay test dependency.
     """
     matches = _scan_pattern(_DDL_PATTERNS[0])
     assert not matches, (
         "Runtime DDL `CREATE TABLE IF NOT EXISTS` detectado en código activo.\n"
-        "Consolidar a supabase/migrations/. Hallazgos:\n  - "
+        "Consolidar a migrations/. Hallazgos:\n  - "
         + "\n  - ".join(matches)
     )
 
@@ -168,7 +168,7 @@ def test_no_runtime_ddl_add_column_in_active_backend():
     matches = _scan_pattern(_DDL_PATTERNS[1])
     assert not matches, (
         "Runtime DDL `ALTER TABLE ADD COLUMN IF NOT EXISTS` detectado en código activo.\n"
-        "Consolidar a supabase/migrations/. Hallazgos:\n  - "
+        "Consolidar a migrations/. Hallazgos:\n  - "
         + "\n  - ".join(matches)
     )
 
@@ -182,7 +182,7 @@ def test_no_runtime_ddl_create_index_in_active_backend():
     matches = _scan_pattern(_DDL_PATTERNS[2])
     assert not matches, (
         "Runtime DDL `CREATE INDEX IF NOT EXISTS` detectado en código activo.\n"
-        "Consolidar a supabase/migrations/. Hallazgos:\n  - "
+        "Consolidar a migrations/. Hallazgos:\n  - "
         + "\n  - ".join(matches)
     )
 
@@ -200,7 +200,7 @@ def test_deprecated_scripts_are_archived():
         "_deprecated_add_price_cols.py.bak",
         "_deprecated_migrate_subscriptions.py.bak",
         # [P3-2 · 2026-05-08] Archivo `add_semantic_cache.py` cuyo DDL fue
-        # consolidado a `supabase/migrations/p1_1_consolidate_semantic_cache_ddl.sql`.
+        # consolidado a `migrations/p1_1_consolidate_semantic_cache_ddl.sql`.
         "_deprecated_add_semantic_cache.py.bak",
     ]
     missing = [
@@ -243,16 +243,16 @@ def test_deprecated_scripts_have_deprecation_header_and_exec_guard():
     """
     archived_with_ssot_pointer = {
         "_deprecated_migrate_quality_alerts.py.bak":
-            "supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql",
+            "migrations/p2_new_e_consolidate_runtime_ddl.sql",
         "_deprecated_alter_db.py.bak":
-            "supabase/migrations/p1_2_missing_user_telemetry_tables.sql",
+            "migrations/p1_2_missing_user_telemetry_tables.sql",
         "_deprecated_add_price_cols.py.bak":
-            "supabase/migrations/p1_a_consolidate_remaining_runtime_ddl.sql",
+            "migrations/p1_a_consolidate_remaining_runtime_ddl.sql",
         "_deprecated_migrate_subscriptions.py.bak":
-            "supabase/migrations/p1_a_consolidate_remaining_runtime_ddl.sql",
+            "migrations/p1_a_consolidate_remaining_runtime_ddl.sql",
         # [P3-2 · 2026-05-08] Pointer a la migración SSOT del semantic cache.
         "_deprecated_add_semantic_cache.py.bak":
-            "supabase/migrations/p1_1_consolidate_semantic_cache_ddl.sql",
+            "migrations/p1_1_consolidate_semantic_cache_ddl.sql",
     }
     failures: list[str] = []
     for fname, ssot_path in archived_with_ssot_pointer.items():

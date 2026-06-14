@@ -8,7 +8,7 @@ adivine.
 
 ## Esquema (migración SSOT)
 
-[`supabase/migrations/p1_food_db_nutrition_schema_2026_06_13.sql`](../supabase/migrations/p1_food_db_nutrition_schema_2026_06_13.sql)
+[`migrations/p1_food_db_nutrition_schema_2026_06_13.sql`](../migrations/p1_food_db_nutrition_schema_2026_06_13.sql)
 añade a `master_ingredients` (todas NULLABLE → degradación grácil):
 
 | Columna | Tipo | Nota |

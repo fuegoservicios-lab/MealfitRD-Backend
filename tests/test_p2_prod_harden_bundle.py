@@ -4,7 +4,7 @@ es ambiental, no code-fix → no testeable).
 
 Parser-based (lee source de prod con regex) — NO importa `app`/`db_facts`/
 `routers.plans` para evitar el arranque de scheduler/DB y la colisión `supabase`
-pip vs `backend/supabase/` dir. Cada assertion ancla un tooltip-anchor.
+pip vs `backend/migrations/` dir. Cada assertion ancla un tooltip-anchor.
 
 P2-1 P2-OPS-SHUTDOWN: `scheduler.shutdown(wait=False)` + `shutdown_bg_executor`.
 P2-2 P2-BODY-SIZE-LIMIT: middleware que rechaza Content-Length > cap (413).

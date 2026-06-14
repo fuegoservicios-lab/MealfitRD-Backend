@@ -41,7 +41,7 @@ import pytest
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _MODULE_PATH = _BACKEND_ROOT / "db_meal_plans_audit.py"
 _MIGRATION = (
-    _BACKEND_ROOT.parent / "supabase" / "migrations"
+    _BACKEND_ROOT.parent / "migrations"
     / "p2_new_5_meal_plans_audit_table.sql"
 )
 _RUNBOOK = (

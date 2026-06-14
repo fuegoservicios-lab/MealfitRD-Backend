@@ -5,8 +5,8 @@ Bug pattern this test prevents (audit 2026-05-23, gap 5 of P2 bundle):
     El workspace usa DOS directorios de migrations mantenidos sincronizados
     por convención (P3-MIGRATIONS-SSOT · 2026-05-20 en CLAUDE.md):
 
-      - `supabase/migrations/`         (workspace-root, cross-repo)
-      - `backend/supabase/migrations/` (backend repo, propio remote)
+      - `migrations/`         (workspace-root, cross-repo)
+      - `backend/migrations/` (backend repo, propio remote)
 
     Razón: workspace-root `.gitignore` excluye `backend/` + `frontend/`
     (son repos hermanos con remotes propios). Para que un `git push`
@@ -45,8 +45,8 @@ from pathlib import Path
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_ROOT.parent
-_ROOT_MIGRATIONS = _REPO_ROOT / "supabase" / "migrations"
-_BACKEND_MIGRATIONS = _REPO_ROOT / "backend" / "supabase" / "migrations"
+_ROOT_MIGRATIONS = _REPO_ROOT / "migrations"
+_BACKEND_MIGRATIONS = _REPO_ROOT / "backend" / "migrations"
 
 
 def _list_sql_files(directory: Path) -> set[str]:
@@ -71,8 +71,8 @@ def test_both_migration_dirs_exist():
 
 def test_migration_filenames_in_sync():
     """**Test principal**: el set de filenames `.sql` debe ser
-    idéntico entre `supabase/migrations/` y
-    `backend/supabase/migrations/`.
+    idéntico entre `migrations/` y
+    `backend/migrations/`.
 
     Cuando este test falla, el dev añadió una migration a solo uno
     de los dirs. SOP de resolución (CLAUDE.md → 'SSOT de migrations'):
@@ -95,13 +95,13 @@ def test_migration_filenames_in_sync():
     if only_in_root:
         files_list = "\n        - ".join(sorted(only_in_root))
         msg_parts.append(
-            f"\n    Solo en `supabase/migrations/` (root) — falta en "
+            f"\n    Solo en `migrations/` (root) — falta en "
             f"backend:\n        - {files_list}"
         )
     if only_in_backend:
         files_list = "\n        - ".join(sorted(only_in_backend))
         msg_parts.append(
-            f"\n    Solo en `backend/supabase/migrations/` — falta en "
+            f"\n    Solo en `backend/migrations/` — falta en "
             f"root:\n        - {files_list}"
         )
 

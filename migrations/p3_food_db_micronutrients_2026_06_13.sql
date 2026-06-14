@@ -6,7 +6,7 @@
 -- (con sugerencia de suplemento para los gaps estructurales como la vit D).
 -- Todas NULLABLE → degradación grácil (sin micro → no se contabiliza ese ingrediente).
 -- Idempotente (re-ejecutable). SSOT dual-dir (P3-MIGRATIONS-SSOT): vive en
--- supabase/migrations/ Y backend/supabase/migrations/.
+-- migrations/ Y backend/migrations/.
 
 ALTER TABLE public.master_ingredients
     ADD COLUMN IF NOT EXISTS vitamin_d_mcg_per_100g    numeric,

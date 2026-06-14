@@ -7,7 +7,7 @@
 --   porque el índice está AUSENTE en producción. Verificación:
 --     SELECT indexname FROM pg_indexes WHERE tablename='chunk_lesson_telemetry';
 --   Solo devuelve `_pkey`, `_event_created_at`, `_user_created_at`. No hay
---   `DROP INDEX … plan_week` en supabase/migrations/, así que la causa más
+--   `DROP INDEX … plan_week` en migrations/, así que la causa más
 --   probable es que cuando p1_3 corrió, la tabla ya existía (creada por el
 --   runtime DDL antiguo de app.py:lifespan, anterior a P2-NEW-E que lo
 --   consolidó al SSOT migrations) y un drop manual posterior se aplicó

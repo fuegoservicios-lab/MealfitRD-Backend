@@ -148,8 +148,8 @@ def test_p1_4_knobs_present(knob):
 
 
 def test_p1_4_migration_ssot_dual_dir_identical():
-    backend_mig = _BACKEND_ROOT / "supabase" / "migrations" / _MIGRATION_NAME
-    root_mig = _WORKSPACE_ROOT / "supabase" / "migrations" / _MIGRATION_NAME
+    backend_mig = _BACKEND_ROOT / "migrations" / _MIGRATION_NAME
+    root_mig = _WORKSPACE_ROOT / "migrations" / _MIGRATION_NAME
     assert backend_mig.exists(), f"P1-4: falta migración backend {backend_mig}."
     assert root_mig.exists(), f"P1-4: falta migración root {root_mig}."
     assert backend_mig.read_bytes() == root_mig.read_bytes(), (
@@ -158,7 +158,7 @@ def test_p1_4_migration_ssot_dual_dir_identical():
 
 
 def test_p1_4_migration_creates_brin_idempotent():
-    mig = (_BACKEND_ROOT / "supabase" / "migrations" / _MIGRATION_NAME).read_text(encoding="utf-8")
+    mig = (_BACKEND_ROOT / "migrations" / _MIGRATION_NAME).read_text(encoding="utf-8")
     assert "CREATE INDEX IF NOT EXISTS idx_pipeline_metrics_created_brin" in mig, (
         "P1-4: la migración no crea el índice BRIN idempotente."
     )

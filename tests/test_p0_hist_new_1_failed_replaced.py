@@ -3,7 +3,7 @@ en /history-list y /history-status-summary.
 
 Bug original (audit profundo Historial 2026-05-09):
     El índice parcial `ux_plan_chunk_queue_live_week`
-    (`supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql:171`)
+    (`migrations/p2_new_e_consolidate_runtime_ddl.sql:171`)
     permite coexistencia `completed` + `failed` para misma
     `(meal_plan_id, week_number)` — típicamente cuando un chunk completó
     días, fue re-encolado (post-swap revalidation, manual retry) y el

@@ -115,10 +115,10 @@ def test_p2_alert_resolvers():
 # ─────────────────────────────────────────────── P2 #8: pipeline_metrics index (SSOT dual-dir)
 def test_p2_pipeline_metrics_index_migration_ssot():
     fname = "p2_pipeline_metrics_user_id_idx_2026_05_30.sql"
-    root_mig = os.path.join(_ROOT, "supabase", "migrations", fname)
-    backend_mig = os.path.join(_BACKEND, "supabase", "migrations", fname)
-    assert os.path.exists(root_mig), "migración falta en supabase/migrations/ (workspace root)"
-    assert os.path.exists(backend_mig), "migración falta en backend/supabase/migrations/"
+    root_mig = os.path.join(_ROOT, "migrations", fname)
+    backend_mig = os.path.join(_BACKEND, "migrations", fname)
+    assert os.path.exists(root_mig), "migración falta en migrations/ (workspace root)"
+    assert os.path.exists(backend_mig), "migración falta en backend/migrations/"
     a = _read(root_mig)
     b = _read(backend_mig)
     assert a == b, "las dos copias de la migración deben ser idénticas (P3-MIGRATIONS-SSOT)"

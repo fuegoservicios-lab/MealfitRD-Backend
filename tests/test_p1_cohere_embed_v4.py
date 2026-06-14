@@ -258,8 +258,8 @@ _MIG_NAME = "p1_cohere_embed_v4_vector_dims_2026_06_12.sql"
 
 
 def test_h_migracion_ssot_ambos_dirs():
-    root_mig = BACKEND.parent / "supabase" / "migrations" / _MIG_NAME
-    backend_mig = BACKEND / "supabase" / "migrations" / _MIG_NAME
+    root_mig = BACKEND.parent / "migrations" / _MIG_NAME
+    backend_mig = BACKEND / "migrations" / _MIG_NAME
     assert root_mig.exists(), f"Falta {root_mig} (dir SSOT workspace-root)"
     assert backend_mig.exists(), f"Falta {backend_mig} (dir SSOT backend)"
     assert root_mig.read_bytes() == backend_mig.read_bytes(), (
@@ -268,7 +268,7 @@ def test_h_migracion_ssot_ambos_dirs():
 
 
 def test_h2_migracion_contratos():
-    sql = (BACKEND / "supabase" / "migrations" / _MIG_NAME).read_text(encoding="utf-8")
+    sql = (BACKEND / "migrations" / _MIG_NAME).read_text(encoding="utf-8")
     # Idempotencia: gate por dimensión actual.
     assert sql.count("IS DISTINCT FROM 1536") >= 4  # 3 gates + sanity
     # NULL de vectores legacy (espacio Gemini incomparable) ANTES del ALTER.

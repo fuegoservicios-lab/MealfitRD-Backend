@@ -16,7 +16,7 @@ Contexto del gap (cerrado por P0.2):
     hardcoded "8am UTC" desalineando hasta 24h en TZ no-UTC.
 
     P0.2 elimina el helper Python y consolida el backfill en
-    `supabase/migrations/p0_3_backfill_plan_anchors.sql` como fuente única
+    `migrations/p0_3_backfill_plan_anchors.sql` como fuente única
     de verdad. Operador aplica vía `supabase db push` o SQL editor.
 
 Este test verifica:
@@ -35,7 +35,7 @@ import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MIGRATION_PATH = os.path.join(
-    REPO_ROOT, "supabase", "migrations", "p0_3_backfill_plan_anchors.sql"
+    REPO_ROOT, "migrations", "p0_3_backfill_plan_anchors.sql"
 )
 LEGACY_SQL_PATH = os.path.join(
     REPO_ROOT, "supabase", "p0_3_backfill_plan_anchors.sql"
@@ -49,7 +49,7 @@ CRON_TASKS_PATH = os.path.join(
 def migration_sql() -> str:
     assert os.path.exists(MIGRATION_PATH), (
         f"Migración canon no encontrada en {MIGRATION_PATH}. "
-        f"P0.2 movió el SQL desde supabase/ raíz a supabase/migrations/. "
+        f"P0.2 movió el SQL desde supabase/ raíz a migrations/. "
         f"Si fue renombrada, actualiza este test."
     )
     with open(MIGRATION_PATH, "r", encoding="utf-8") as fh:
@@ -66,7 +66,7 @@ def cron_tasks_source() -> str:
 # Group A — La migración SQL existe en la ubicación canon
 # ---------------------------------------------------------------------------
 def test_migration_lives_in_canonical_migrations_folder(migration_sql):
-    """El SQL del backfill debe vivir en `supabase/migrations/`, junto al
+    """El SQL del backfill debe vivir en `migrations/`, junto al
     resto de migraciones formales del proyecto (p1_2, p1_3, etc.).
     Si alguien lo mueve fuera, este test falla y los flujos de aplicación
     de migración (`supabase db push`) lo dejarían atrás."""
@@ -80,7 +80,7 @@ def test_legacy_sql_in_supabase_root_was_removed():
     contenido entre el archivo aplicado (operador) y el "documental"."""
     assert not os.path.exists(LEGACY_SQL_PATH), (
         f"El SQL legacy en {LEGACY_SQL_PATH} sigue presente. P0.2 requiere "
-        f"que solo exista la copia canon en supabase/migrations/. Si lo "
+        f"que solo exista la copia canon en migrations/. Si lo "
         f"reintrodujiste, los dos archivos pueden divergir."
     )
 
@@ -211,7 +211,7 @@ def test_runtime_helper_definition_was_removed(cron_tasks_source):
     ), (
         "El helper `_backfill_plan_anchors_oneshot` fue redefinido en "
         "cron_tasks.py. P0.2 lo eliminó intencionalmente — el backfill vive "
-        "exclusivamente en supabase/migrations/p0_3_backfill_plan_anchors.sql."
+        "exclusivamente en migrations/p0_3_backfill_plan_anchors.sql."
     )
 
 

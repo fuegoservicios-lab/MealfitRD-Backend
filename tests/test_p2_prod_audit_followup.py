@@ -160,8 +160,8 @@ def test_p2_8_knobs_present(knob):
 # P2-9: índice parcial system_alerts
 # ---------------------------------------------------------------------------
 def test_p2_9_migration_ssot_dual_dir_identical():
-    backend_mig = _BACKEND_ROOT / "supabase" / "migrations" / _SA_MIGRATION
-    root_mig = _WORKSPACE_ROOT / "supabase" / "migrations" / _SA_MIGRATION
+    backend_mig = _BACKEND_ROOT / "migrations" / _SA_MIGRATION
+    root_mig = _WORKSPACE_ROOT / "migrations" / _SA_MIGRATION
     assert backend_mig.exists(), f"P2-9: falta migración backend {backend_mig}."
     assert root_mig.exists(), f"P2-9: falta migración root {root_mig}."
     assert backend_mig.read_bytes() == root_mig.read_bytes(), (
@@ -170,7 +170,7 @@ def test_p2_9_migration_ssot_dual_dir_identical():
 
 
 def test_p2_9_migration_partial_index_idempotent():
-    mig = (_BACKEND_ROOT / "supabase" / "migrations" / _SA_MIGRATION).read_text(encoding="utf-8")
+    mig = (_BACKEND_ROOT / "migrations" / _SA_MIGRATION).read_text(encoding="utf-8")
     assert "CREATE INDEX IF NOT EXISTS idx_system_alerts_active" in mig, (
         "P2-9: la migración no crea el índice idempotente."
     )

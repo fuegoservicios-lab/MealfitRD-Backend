@@ -15,7 +15,7 @@ Motivación (audit 2026-05-14):
 
 Fix:
     Migración SSOT en
-    `supabase/migrations/p3_multiplier_db_check_2026_05_14.sql` con
+    `migrations/p3_multiplier_db_check_2026_05_14.sql` con
     el mismo patrón que P2-NEXT-4 (`meal_plans_complete_requires_days`):
       - Sanity check pre-deploy (RAISE EXCEPTION si hay violators).
       - DROP CONSTRAINT IF EXISTS + ADD NOT VALID (idempotente, no scan).
@@ -31,7 +31,7 @@ Fix:
     JSONB sin la key.
 
 Drift detection (parser-based):
-    1. La migración existe en `supabase/migrations/`.
+    1. La migración existe en `migrations/`.
     2. Constraint name `meal_plans_calc_household_multiplier_range`.
     3. Rango [1, 100] explícito en el CHECK.
     4. Sanity check DO $$ con RAISE EXCEPTION para violators.
@@ -54,7 +54,7 @@ from pathlib import Path
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_MIGRATIONS_DIR = _REPO_ROOT / "supabase" / "migrations"
+_MIGRATIONS_DIR = _REPO_ROOT / "migrations"
 _MIGRATION_FILE = _MIGRATIONS_DIR / "p3_multiplier_db_check_2026_05_14.sql"
 
 
@@ -66,7 +66,7 @@ def test_migration_file_exists():
         f"P3-MULTIPLIER-DB-CHECK violation: migración SSOT no encontrada "
         f"en {_MIGRATION_FILE}. El CHECK constraint vive en runtime de "
         f"prod (aplicado vía Supabase MCP el 2026-05-14) pero sin SSOT "
-        f"en /supabase/migrations, un cluster nuevo (staging/local) lo "
+        f"en /migrations, un cluster nuevo (staging/local) lo "
         f"perdería. Crear la migración con el contenido canónico."
     )
 

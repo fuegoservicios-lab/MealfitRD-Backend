@@ -6,7 +6,7 @@ Stack de DOS providers: DeepSeek (LLM) + Cohere (embeddings). SSOT:
 ## Contrato
 
 - Modelo `embed-v4.0` @ **1536 dims** (= columnas pgvector tras la migración
-  [`p1_cohere_embed_v4_vector_dims_2026_06_12.sql`](../supabase/migrations/p1_cohere_embed_v4_vector_dims_2026_06_12.sql),
+  [`p1_cohere_embed_v4_vector_dims_2026_06_12.sql`](../migrations/p1_cohere_embed_v4_vector_dims_2026_06_12.sql),
   aplicada 2026-06-12 — los vectores Gemini legacy @768 fueron anulados, el
   contenido se re-embeddea on-write). Dims válidas: 256/512/1024/1536
   (`MEALFIT_EMBEDDINGS_DIMENSION`).

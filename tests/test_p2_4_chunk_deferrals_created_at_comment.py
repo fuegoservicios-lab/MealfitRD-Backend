@@ -50,7 +50,7 @@ import pytest
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MIGRATION_PATH = _REPO_ROOT / "supabase" / "migrations" / "p2_4_chunk_deferrals_created_at_comment.sql"
+_MIGRATION_PATH = _REPO_ROOT / "migrations" / "p2_4_chunk_deferrals_created_at_comment.sql"
 _CRON_TASKS_PATH = _REPO_ROOT / "backend" / "cron_tasks.py"
 
 

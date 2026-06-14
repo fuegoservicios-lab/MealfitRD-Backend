@@ -18,7 +18,7 @@
 --
 -- Idempotente (IF NOT EXISTS / DROP CONSTRAINT IF EXISTS / CREATE OR REPLACE +
 -- DO $$ RAISE EXCEPTION sanity), re-ejecutable sin efecto. SSOT dual-dir:
--- copia byte-a-byte en supabase/migrations/ Y backend/supabase/migrations/.
+-- copia byte-a-byte en migrations/ Y backend/migrations/.
 
 -- ===========================================================================
 -- 1) Salience scoring sobre user_facts (la tabla que YA indexa pgvector).

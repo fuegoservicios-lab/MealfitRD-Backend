@@ -43,7 +43,7 @@ import pytest
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _CRON_TASKS = _BACKEND_ROOT / "cron_tasks.py"
-_MIGRATIONS_DIR = _BACKEND_ROOT.parent / "supabase" / "migrations"
+_MIGRATIONS_DIR = _BACKEND_ROOT.parent / "migrations"
 _MIGRATION_FILE = _MIGRATIONS_DIR / "p1_audit_1_drop_dead_webhook_trigger.sql"
 
 

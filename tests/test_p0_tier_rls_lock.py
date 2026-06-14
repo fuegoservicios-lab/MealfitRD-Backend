@@ -52,8 +52,8 @@ _UPDATE_CALL = re.compile(
 
 # Migraciones SSOT (deben existir idénticas en ambos dirs).
 _MIGRATION_DIRS = (
-    _REPO_ROOT / "supabase" / "migrations",
-    _REPO_ROOT / "backend" / "supabase" / "migrations",
+    _REPO_ROOT / "migrations",
+    _REPO_ROOT / "backend" / "migrations",
 )
 _MIGRATION_NAME = "p0_user_profiles_entitlement_lock_2026_05_31.sql"
 
@@ -129,7 +129,7 @@ def test_entitlement_lock_migration_present_and_synced():
     for p in paths:
         assert p.exists(), (
             f"P0-TIER-RLS-LOCK: falta la migración SSOT en {p}. Debe existir "
-            "idéntica en supabase/migrations Y backend/supabase/migrations "
+            "idéntica en migrations Y backend/migrations "
             "(convención P3-MIGRATIONS-SSOT)."
         )
     contents = [p.read_text(encoding="utf-8") for p in paths]

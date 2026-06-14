@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parent.parent
-_ROOT = _BACKEND.parent  # workspace root (tiene supabase/migrations espejo)
+_ROOT = _BACKEND.parent  # workspace root (tiene migrations espejo)
 _MIG_NAME = "p1_dreaming_1_salience_profile_2026_06_13.sql"
 
 
@@ -33,7 +33,7 @@ def _strip_sql_comments(sql: str) -> str:
 # 1. Migración idempotente + Neon-safe
 # ---------------------------------------------------------------------------
 def test_migration_idempotent_and_additive():
-    sql = _read(f"supabase/migrations/{_MIG_NAME}")
+    sql = _read(f"migrations/{_MIG_NAME}")
     # Idempotencia
     assert "ADD COLUMN IF NOT EXISTS salience_score" in sql
     assert "DROP CONSTRAINT IF EXISTS user_facts_salience_range" in sql
@@ -52,7 +52,7 @@ def test_migration_idempotent_and_additive():
 
 
 def test_migration_is_neon_safe_no_supabase_auth_or_rls():
-    raw = _read(f"supabase/migrations/{_MIG_NAME}")
+    raw = _read(f"migrations/{_MIG_NAME}")
     sql = _strip_sql_comments(raw)  # chequea DDL real, no la prosa de los comentarios
     # Neon: NO existe auth.users → las FKs van a public.user_profiles.
     assert "auth.users" not in sql, "Neon no tiene auth.users; FK debe ir a user_profiles"
@@ -65,7 +65,7 @@ def test_migration_is_neon_safe_no_supabase_auth_or_rls():
 
 
 def test_migration_uses_extensions_vector_1536():
-    sql = _read(f"supabase/migrations/{_MIG_NAME}")
+    sql = _read(f"migrations/{_MIG_NAME}")
     assert "extensions.vector(1536)" in sql
     assert "extensions.vector_cosine_ops" in sql  # HNSW opclass qualified
 
@@ -74,12 +74,12 @@ def test_migration_uses_extensions_vector_1536():
 # 2. SSOT dual-dir byte-idéntico
 # ---------------------------------------------------------------------------
 def test_migration_ssot_dual_dir_identical():
-    backend_sql = (_BACKEND / "supabase" / "migrations" / _MIG_NAME).read_bytes()
-    root_path = _ROOT / "supabase" / "migrations" / _MIG_NAME
+    backend_sql = (_BACKEND / "migrations" / _MIG_NAME).read_bytes()
+    root_path = _ROOT / "migrations" / _MIG_NAME
     assert root_path.exists(), f"Falta la copia SSOT en {root_path} (P3-MIGRATIONS-SSOT)"
     assert backend_sql == root_path.read_bytes(), (
-        "La migración de Dreaming NO es byte-idéntica entre backend/supabase/migrations "
-        "y supabase/migrations (P3-MIGRATIONS-SSOT dual-dir)."
+        "La migración de Dreaming NO es byte-idéntica entre backend/migrations "
+        "y migrations (P3-MIGRATIONS-SSOT dual-dir)."
     )
 
 

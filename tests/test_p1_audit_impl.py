@@ -8,7 +8,7 @@ Cubre 4 fixes (más P1-5 es operacional .env, sin código):
   - P1-1 P1-DB-STMT-TIMEOUT-ROLE : migración SSOT dual-dir ALTER ROLE service_role
 
 Parser-based a propósito (lee el source, no importa módulos): el venv de test
-tiene una colisión de import con `backend/supabase/` y los módulos prod requieren
+tiene una colisión de import con `backend/migrations/` y los módulos prod requieren
 langgraph/supabase ausentes. Correr con: py -3 -m pytest tests/test_p1_audit_impl.py --noconftest -q
 """
 import os
@@ -110,15 +110,15 @@ _MIGRATION = "p1_service_role_statement_timeout_2026_05_28.sql"
 
 
 def test_p1_stmt_timeout_migration_exists_both_dirs():
-    backend_mig = os.path.join(_BACKEND, "supabase", "migrations", _MIGRATION)
-    root_mig = os.path.join(_ROOT, "supabase", "migrations", _MIGRATION)
-    assert os.path.exists(backend_mig), "falta la migración en backend/supabase/migrations"
-    assert os.path.exists(root_mig), "falta la migración en supabase/migrations (root)"
+    backend_mig = os.path.join(_BACKEND, "migrations", _MIGRATION)
+    root_mig = os.path.join(_ROOT, "migrations", _MIGRATION)
+    assert os.path.exists(backend_mig), "falta la migración en backend/migrations"
+    assert os.path.exists(root_mig), "falta la migración en migrations (root)"
 
 
 def test_p1_stmt_timeout_migration_content_and_dual_dir_identical():
-    backend_mig = _read(_BACKEND, "supabase", "migrations", _MIGRATION)
-    root_mig = _read(_ROOT, "supabase", "migrations", _MIGRATION)
+    backend_mig = _read(_BACKEND, "migrations", _MIGRATION)
+    root_mig = _read(_ROOT, "migrations", _MIGRATION)
     assert backend_mig == root_mig, "SSOT dual-dir: las migraciones deben ser idénticas"
     assert "ALTER ROLE service_role SET statement_timeout" in backend_mig
     assert "idle_in_transaction_session_timeout" in backend_mig

@@ -38,7 +38,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _PLAN_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Plan.jsx"
 _HISTORY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "History.jsx"
 _ASSESSMENT_CTX = _REPO_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx"
-_MIGRATIONS_DIR = _REPO_ROOT / "supabase" / "migrations"
+_MIGRATIONS_DIR = _REPO_ROOT / "migrations"
 _INDEX_MIGRATION = (
     _MIGRATIONS_DIR
     / "p1_hist_new_7_recreate_chunk_lesson_telemetry_plan_week_idx.sql"
@@ -231,12 +231,12 @@ def test_history_jsx_compares_signal_to_last_fetch_ref():
 # ---------------------------------------------------------------------------
 def test_recreate_plan_week_index_migration_exists():
     """La migración que recrea `idx_chunk_lesson_telemetry_plan_week`
-    debe estar en `supabase/migrations/`. Sin SSOT en source, un
+    debe estar en `migrations/`. Sin SSOT en source, un
     rollback/replay de la DB pierde el índice y el advisor
     `unindexed_foreign_keys` reaparece."""
     assert _INDEX_MIGRATION.exists(), (
         f"Migración faltante: {_INDEX_MIGRATION.name}. La SSOT del FK "
-        f"index recreado debe vivir en `supabase/migrations/` para "
+        f"index recreado debe vivir en `migrations/` para "
         f"sobrevivir a un replay."
     )
 

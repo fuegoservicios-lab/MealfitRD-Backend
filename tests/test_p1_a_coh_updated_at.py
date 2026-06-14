@@ -6,7 +6,7 @@ P2-2 sobre `_shopping_coherence_block_history`) DEBE filtrar por
 Bug original (audit 2026-05-10):
     P0-2 (2026-05-10) añadió la columna `meal_plans.updated_at` + trigger
     BEFORE UPDATE + índice `idx_meal_plans_user_updated_at`. La intención
-    explícita de la migración (ver `supabase/migrations/p0_2_meal_plans_updated_at.sql`
+    explícita de la migración (ver `migrations/p0_2_meal_plans_updated_at.sql`
     líneas 13-23 y 89-100) era permitir que este cron volviese a usar
     `updated_at` después del workaround P0-OBS-1 que había caído a
     `created_at` cuando la columna no existía.
@@ -62,7 +62,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CRON_PATH = _REPO_ROOT / "backend" / "cron_tasks.py"
 _APP_PATH = _REPO_ROOT / "backend" / "app.py"
-_MIGRATION_PATH = _REPO_ROOT / "supabase" / "migrations" / "p0_2_meal_plans_updated_at.sql"
+_MIGRATION_PATH = _REPO_ROOT / "migrations" / "p0_2_meal_plans_updated_at.sql"
 
 
 def _read(path: Path) -> str:

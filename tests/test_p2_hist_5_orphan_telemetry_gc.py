@@ -337,7 +337,7 @@ def test_p0_hist_3_migration_still_present():
     """
     from pathlib import Path
     repo_root = Path(__file__).resolve().parent.parent.parent
-    mig = repo_root / "supabase" / "migrations" / "p0_hist_3_telemetry_orphan_fk.sql"
+    mig = repo_root / "migrations" / "p0_hist_3_telemetry_orphan_fk.sql"
     assert mig.is_file(), (
         f"Falta migración P0-HIST-3 ({mig.name}). El cron _gc_orphan_chunk_telemetry "
         "depende de que la FK SET NULL exista."

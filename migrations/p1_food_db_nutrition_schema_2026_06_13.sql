@@ -3,7 +3,7 @@
 -- computa los macros de cada comida desde estos valores en vez de que el LLM los
 -- alucine. Todas NULLABLE → degradación grácil (sin macros → fallback estimado del
 -- assembler). Idempotente (re-ejecutable sin error). SSOT dual-dir (P3-MIGRATIONS-SSOT):
--- este archivo vive en supabase/migrations/ Y backend/supabase/migrations/.
+-- este archivo vive en migrations/ Y backend/migrations/.
 
 ALTER TABLE public.master_ingredients
     ADD COLUMN IF NOT EXISTS kcal_per_100g          numeric,

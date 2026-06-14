@@ -17,7 +17,7 @@ MIGRACIÓN SSOT
 
   Aplicada vía Supabase MCP a producción (project_id=mpoodlmnzaeuuazsazbj)
   el 2026-05-19. Archivo del repo:
-  `supabase/migrations/db_p1_chat_user_id_rls_2026_05_19.sql`.
+  `migrations/db_p1_chat_user_id_rls_2026_05_19.sql`.
 
   Cambios:
     1. ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE
@@ -61,7 +61,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIGRATION_FP = (
-    _REPO_ROOT / "supabase" / "migrations" / "db_p1_chat_user_id_rls_2026_05_19.sql"
+    _REPO_ROOT / "migrations" / "db_p1_chat_user_id_rls_2026_05_19.sql"
 )
 _DB_CHAT_FP = _REPO_ROOT / "backend" / "db_chat.py"
 _CHAT_ROUTER_FP = _REPO_ROOT / "backend" / "routers" / "chat.py"
@@ -88,11 +88,11 @@ def chat_router_src() -> str:
 
 def test_migration_file_exists() -> None:
     """[P1-CHAT-DB-USER-ID-RLS] el archivo de migración debe existir en
-    `supabase/migrations/`. SSOT obligatorio (CLAUDE.md: 'DDL en runtime:
+    `migrations/`. SSOT obligatorio (CLAUDE.md: 'DDL en runtime:
     prohibido')."""
     assert _MIGRATION_FP.exists(), (
         f"[P1-CHAT-DB-USER-ID-RLS] falta {_MIGRATION_FP}. La migración "
-        f"debe estar en `supabase/migrations/` para ser SSOT."
+        f"debe estar en `migrations/` para ser SSOT."
     )
 
 

@@ -5,7 +5,7 @@ Anchor: P2-WHITELIST-AUDIT-ADVISORS.
 
 Hoy la tabla en CLAUDE.md documenta 7 advisors aceptados intencionalmente
 (security + performance). Cada uno DEBE estar respaldado por al menos un
-artefacto SQL (CREATE / COMMENT) en `supabase/migrations/`. Si alguien
+artefacto SQL (CREATE / COMMENT) en `migrations/`. Si alguien
 renombra un objeto (función, tabla, índice) o borra la migración SSOT,
 el COMMENT que justifica el advisor queda huérfano y un futuro auditor
 no tiene cómo verificar que la decisión sigue vigente.
@@ -15,7 +15,7 @@ el árbol de migraciones cargado en disco.
 
 Estrategia:
   - Para cada nombre canónico (función / tabla / índice), grep recursivo
-    sobre `supabase/migrations/*.sql`.
+    sobre `migrations/*.sql`.
   - Falla si algún nombre no aparece en al menos 1 archivo.
   - Para los unused_index entries, verifica adicionalmente que existe al
     menos UN `COMMENT ON INDEX` que mencione el nombre — porque la decisión
@@ -25,14 +25,14 @@ from pathlib import Path
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MIGRATIONS_DIR = _REPO_ROOT / "supabase" / "migrations"
+_MIGRATIONS_DIR = _REPO_ROOT / "migrations"
 
 
 def _load_all_migrations() -> dict:
     """Carga todos los .sql del directorio en un dict {filename: contents}."""
     assert _MIGRATIONS_DIR.exists(), (
         f"Directorio de migraciones no encontrado: {_MIGRATIONS_DIR}. "
-        f"Si moviste `supabase/migrations/` a otra ubicación (e.g., al repo "
+        f"Si moviste `migrations/` a otra ubicación (e.g., al repo "
         f"backend/), actualiza esta ruta + el resto de los tests parser-based "
         f"que asumen esta ubicación."
     )
@@ -69,7 +69,7 @@ def test_advisor_anchors_present_in_migrations():
     all_text = "\n".join(migrations.values())
     missing = [name for name in _REQUIRED_ANCHORS_ANY if name not in all_text]
     assert not missing, (
-        f"Anchors de advisors aceptados ausentes en supabase/migrations/: "
+        f"Anchors de advisors aceptados ausentes en migrations/: "
         f"{missing}. CLAUDE.md sección 'Advisors aceptados' los lista pero "
         f"ninguna migración los menciona. Posible regresión: alguien renombró "
         f"el objeto o borró la migración SSOT. Restaurar o actualizar tabla."

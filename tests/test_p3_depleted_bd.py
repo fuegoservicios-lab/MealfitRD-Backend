@@ -6,8 +6,8 @@ Cierra la limitación verificada 2026-05-22 tras P3-AGENT-DEPLETE:
 desktop, no ve el agotado".
 
 Stack:
-  - Migration SSOT: `supabase/migrations/p3_user_depleted_items_2026_05_22.sql`
-    + `backend/supabase/migrations/p3_user_depleted_items_2026_05_22.sql`.
+  - Migration SSOT: `migrations/p3_user_depleted_items_2026_05_22.sql`
+    + `backend/migrations/p3_user_depleted_items_2026_05_22.sql`.
   - Backend helpers en `db_inventory.py`: `add_depleted_item`,
     `list_depleted_items`, `delete_depleted_item`, `bulk_upsert_depleted_items`.
   - Endpoints REST en `routers/plans.py`: GET/POST `/depleted-items`,
@@ -35,8 +35,8 @@ _DB_INVENTORY_PY = _BACKEND_ROOT / "db_inventory.py"
 _TOOLS_PY = _BACKEND_ROOT / "tools.py"
 _PLANS_PY = _BACKEND_ROOT / "routers" / "plans.py"
 _PANTRY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Pantry.jsx"
-_MIGRATION_ROOT = _REPO_ROOT / "supabase" / "migrations" / "p3_user_depleted_items_2026_05_22.sql"
-_MIGRATION_BACKEND = _BACKEND_ROOT / "supabase" / "migrations" / "p3_user_depleted_items_2026_05_22.sql"
+_MIGRATION_ROOT = _REPO_ROOT / "migrations" / "p3_user_depleted_items_2026_05_22.sql"
+_MIGRATION_BACKEND = _BACKEND_ROOT / "migrations" / "p3_user_depleted_items_2026_05_22.sql"
 
 
 # ===========================================================================
@@ -44,7 +44,7 @@ _MIGRATION_BACKEND = _BACKEND_ROOT / "supabase" / "migrations" / "p3_user_deplet
 # ===========================================================================
 
 def test_migration_exists_in_root():
-    """Migration debe vivir en `supabase/migrations/` (workspace root)."""
+    """Migration debe vivir en `migrations/` (workspace root)."""
     assert _MIGRATION_ROOT.exists(), (
         f"P3-DEPLETED-BD regresión: migration faltante en {_MIGRATION_ROOT}. "
         f"Convención P3-MIGRATIONS-SSOT exige el archivo en este dir."
@@ -52,7 +52,7 @@ def test_migration_exists_in_root():
 
 
 def test_migration_exists_in_backend():
-    """Migration debe vivir TAMBIÉN en `backend/supabase/migrations/`."""
+    """Migration debe vivir TAMBIÉN en `backend/migrations/`."""
     assert _MIGRATION_BACKEND.exists(), (
         f"P3-DEPLETED-BD regresión: migration faltante en {_MIGRATION_BACKEND}. "
         f"Convención P3-MIGRATIONS-SSOT exige sincronía con root."

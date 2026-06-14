@@ -861,7 +861,7 @@ def test_degraded_rate_alert_persists_system_alert_and_marks_users(mock_write, m
     # emitiera `CREATE TABLE IF NOT EXISTS system_alerts` y
     # `ALTER TABLE ... ADD COLUMN IF NOT EXISTS quality_alert_at` en runtime.
     # Tras P2-NEW-G (`_ensure_quality_alert_schema` → no-op stub), el DDL ya
-    # NO se emite desde Python: vive en `supabase/migrations/p2_new_e_*.sql`.
+    # NO se emite desde Python: vive en `migrations/p2_new_e_*.sql`.
     # Reescritas para asertar la paridad real: el schema requerido EXISTE en
     # el SSOT de migrations. Si alguien remueve/renombra esa migración, este
     # test falla y guía al fix correcto. Drift estático del schema, no del
@@ -869,7 +869,7 @@ def test_degraded_rate_alert_persists_system_alert_and_marks_users(mock_write, m
     import pathlib
     _ssot_path = (
         pathlib.Path(__file__).resolve().parent.parent.parent
-        / "supabase" / "migrations" / "p2_new_e_consolidate_runtime_ddl.sql"
+        / "migrations" / "p2_new_e_consolidate_runtime_ddl.sql"
     )
     assert _ssot_path.is_file(), (
         f"SSOT migration file no existe en {_ssot_path}. "

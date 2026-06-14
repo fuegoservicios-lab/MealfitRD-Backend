@@ -6,7 +6,7 @@
 -- Producción tiene esos objetos vivos (vía las migraciones históricas
 -- `semantic_cache_migration` 2026-04-17 y `fix_match_similar_plan_search_path_extensions`
 -- 2026-05-06), pero el repo NO conservaba el archivo `.sql` correspondiente
--- en `supabase/migrations/`. Resultado: un greenfield clon del repo no podría
+-- en `migrations/`. Resultado: un greenfield clon del repo no podría
 -- reproducir el schema del semantic cache desde el SSOT del filesystem y
 -- dependía del script Python (mismo anti-patrón que cerró P1-A para los
 -- scripts price_per_*/paypal_*).

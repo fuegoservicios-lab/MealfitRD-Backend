@@ -39,8 +39,8 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_ROOT.parent
 _AGENT_PAGE_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "AgentPage.jsx"
 _PANTRY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Pantry.jsx"
-_MIGRATION_ROOT = _REPO_ROOT / "supabase" / "migrations" / "p3_realtime_publication_depleted_items_2026_05_22.sql"
-_MIGRATION_BACKEND = _BACKEND_ROOT / "supabase" / "migrations" / "p3_realtime_publication_depleted_items_2026_05_22.sql"
+_MIGRATION_ROOT = _REPO_ROOT / "migrations" / "p3_realtime_publication_depleted_items_2026_05_22.sql"
+_MIGRATION_BACKEND = _BACKEND_ROOT / "migrations" / "p3_realtime_publication_depleted_items_2026_05_22.sql"
 
 
 # ===========================================================================

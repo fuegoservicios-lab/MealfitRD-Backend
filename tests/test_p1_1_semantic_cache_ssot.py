@@ -4,7 +4,7 @@ Bug observado en el audit 2026-05-08:
   El script `backend/scripts/add_semantic_cache.py` declaraba 3 objetos del
   semantic cache (column `profile_embedding`, índice HNSW, RPC
   `match_similar_plan`) en runtime DDL, pero el repo NO conservaba el
-  archivo `.sql` correspondiente en `supabase/migrations/`. El historial
+  archivo `.sql` correspondiente en `migrations/`. El historial
   remoto de Supabase sí los tenía (vía `semantic_cache_migration` 2026-04-17
   y `fix_match_similar_plan_search_path_extensions` 2026-05-06), pero un
   greenfield clon del repo dependía del script Python para reproducir el
@@ -33,7 +33,7 @@ import pytest
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BACKEND_ROOT.parent
-_MIGRATION_PATH = _REPO_ROOT / "supabase" / "migrations" / "p1_1_consolidate_semantic_cache_ddl.sql"
+_MIGRATION_PATH = _REPO_ROOT / "migrations" / "p1_1_consolidate_semantic_cache_ddl.sql"
 # [P3-2 · 2026-05-08] El script original `backend/scripts/add_semantic_cache.py`
 # fue archivado a `_deprecated_*.py.bak` con exec guard. Buscamos el archivado
 # primero; si no existe (regresión: alguien lo restauró sin renombrar), miramos
@@ -45,7 +45,7 @@ _DB_PLANS_PATH = _BACKEND_ROOT / "db_plans.py"
 
 
 def test_migration_file_exists() -> None:
-    """SSOT: la migración debe existir como archivo en supabase/migrations/.
+    """SSOT: la migración debe existir como archivo en migrations/.
 
     Sin este archivo, un greenfield clone del repo no puede reproducir el
     schema del semantic cache desde el filesystem y dependería del script

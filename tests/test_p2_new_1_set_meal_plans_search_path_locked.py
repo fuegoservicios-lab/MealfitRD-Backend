@@ -16,7 +16,7 @@ Fix:
     a producción 2026-05-10; advisor desaparecido del linter.
 
 Estrategia del test (parser estático sobre la migración):
-    1. Verificar que la migración existe en `supabase/migrations/`.
+    1. Verificar que la migración existe en `migrations/`.
     2. Verificar `CREATE OR REPLACE FUNCTION public.set_meal_plans_updated_at`.
     3. Verificar `SET search_path = ''` (cadena vacía exactamente, no
        'public' — la cadena vacía es el lock más estricto).
@@ -40,7 +40,6 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _MIGRATION_PATH = (
     _REPO_ROOT
-    / "supabase"
     / "migrations"
     / "p2_new_1_set_meal_plans_updated_at_search_path.sql"
 )
@@ -51,7 +50,7 @@ def migration_src() -> str:
     if not _MIGRATION_PATH.exists():
         pytest.fail(
             f"P2-NEW-1 regresión: la migración {_MIGRATION_PATH.name} "
-            f"no existe en `supabase/migrations/`. Si fue renombrada o "
+            f"no existe en `migrations/`. Si fue renombrada o "
             f"eliminada, restaurarla o actualizar este test. La migración "
             f"es el SSOT que aplica `SET search_path = ''` a "
             f"`set_meal_plans_updated_at`."
@@ -126,5 +125,5 @@ def test_anchor_present(migration_src: str):
     localizar el fix rápidamente."""
     assert "P2-NEW-1" in migration_src, (
         "P2-NEW-1 regresión: anchor textual `P2-NEW-1` desapareció. "
-        "Restaurar para `grep -r P2-NEW-1` en `supabase/migrations/`."
+        "Restaurar para `grep -r P2-NEW-1` en `migrations/`."
     )

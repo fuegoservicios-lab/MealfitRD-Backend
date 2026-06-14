@@ -2,7 +2,7 @@
 de hidratacion. Reemplazo del card "Mi Nevera" del Dashboard.
 
 Contrato anclado por estos tests:
-  1. Migracion SSOT existe (`supabase/migrations/p3_water_tracker_2026_05_16.sql`)
+  1. Migracion SSOT existe (`migrations/p3_water_tracker_2026_05_16.sql`)
      con CHECK de rango, RLS, y FK ON DELETE CASCADE.
   2. Backend expone GET y POST `/api/plans/water-intake` en `routers/plans.py`
      usando `_WATER_TRACKER_LIMITER` (rate limiter, NO `verify_api_quota` —
@@ -32,7 +32,7 @@ _REPO_ROOT = _BACKEND_ROOT.parent
 _PLANS_PY = _BACKEND_ROOT / "routers" / "plans.py"
 _DASHBOARD_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx"
 _WATER_TRACKER_JSX = _REPO_ROOT / "frontend" / "src" / "components" / "dashboard" / "WaterTracker.jsx"
-_MIGRATION_SQL = _REPO_ROOT / "supabase" / "migrations" / "p3_water_tracker_2026_05_16.sql"
+_MIGRATION_SQL = _REPO_ROOT / "migrations" / "p3_water_tracker_2026_05_16.sql"
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +317,7 @@ def test_marker_water_tracker_test_file_still_present():
 _PREFERENCES_PY = _BACKEND_ROOT / "routers" / "preferences.py"
 _DB_PROFILES_PY = _BACKEND_ROOT / "db_profiles.py"
 _SETTINGS_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Settings.jsx"
-_TOGGLE_MIGRATION = _REPO_ROOT / "supabase" / "migrations" / "add_water_tracker_enabled_2026_05_16.sql"
+_TOGGLE_MIGRATION = _REPO_ROOT / "migrations" / "add_water_tracker_enabled_2026_05_16.sql"
 
 
 def test_toggle_migration_exists_and_idempotent():

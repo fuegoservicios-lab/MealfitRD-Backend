@@ -16,7 +16,7 @@ Bug original (audit Historial 2026-05-09):
 
 Fix:
     Migración SSOT
-    `supabase/migrations/p1_audit_hist_3_plan_chunk_queue_status_check.sql`:
+    `migrations/p1_audit_hist_3_plan_chunk_queue_status_check.sql`:
       1. Normaliza `'complete'` → `'completed'` (drift conocido).
       2. Cualquier otro valor inválido → `'cancelled'` (terminal seguro)
          con `dead_letter_reason` preservando el valor original.
@@ -28,7 +28,7 @@ Fix:
 
 Cobertura (static analysis del SQL — coherente con el patrón de
 P1-HIST-AUDIT-6 / P2-HIST-AUDIT-3):
-    1. Migración existe en supabase/migrations/.
+    1. Migración existe en migrations/.
     2. Header documenta marker P1-AUDIT-HIST-3.
     3. SQL contiene normalización de 'complete' → 'completed'.
     4. SQL contiene defensiva para otros valores no-canónicos.
@@ -48,7 +48,7 @@ import pytest
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _MIGRATION_PATH = (
     _BACKEND_ROOT.parent
-    / "supabase" / "migrations"
+    / "migrations"
     / "p1_audit_hist_3_plan_chunk_queue_status_check.sql"
 )
 
@@ -76,7 +76,7 @@ def test_migration_file_exists():
     assert _MIGRATION_PATH.exists(), (
         f"No se encontró la migración P1-AUDIT-HIST-3 en "
         f"{_MIGRATION_PATH}. Path esperado por convención del repo "
-        f"(SSOT migrations en supabase/migrations/)."
+        f"(SSOT migrations en migrations/)."
     )
 
 

@@ -7,7 +7,7 @@
 -- Pobladas desde USDA FoodData Central (nutrient ids 1090/1091/1258/1253) por
 -- scripts/populate_nutrition_db.py para los 97 ingredientes con fdc_id. Todas NULLABLE → degradación
 -- grácil (sin dato → no se contabiliza ese ingrediente en el validador). Idempotente (re-ejecutable).
--- SSOT dual-dir (P3-MIGRATIONS-SSOT): vive en supabase/migrations/ Y backend/supabase/migrations/.
+-- SSOT dual-dir (P3-MIGRATIONS-SSOT): vive en migrations/ Y backend/migrations/.
 
 ALTER TABLE public.master_ingredients
     ADD COLUMN IF NOT EXISTS magnesium_mg_per_100g     numeric,

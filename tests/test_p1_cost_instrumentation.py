@@ -9,7 +9,7 @@ budgets, model swaps).
 
 Fix:
   1. Tabla `llm_usage_events` (migración SSOT
-     `supabase/migrations/p1_cost_instrumentation_2026_05_15.sql`).
+     `migrations/p1_cost_instrumentation_2026_05_15.sql`).
   2. `db_profiles.compute_llm_cost_micros(model, in, out, cached)` con
      pricing dict (override via knob `MEALFIT_LLM_PRICING_JSON`).
   3. `db_profiles.log_llm_usage_event(...)` — INSERT best-effort.
@@ -32,7 +32,7 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _DB_PROFILES_PATH = _BACKEND_ROOT / "db_profiles.py"
 _GRAPH_PATH = _BACKEND_ROOT / "graph_orchestrator.py"
 _MIGRATION_PATH = (
-    _BACKEND_ROOT / "supabase" / "migrations"
+    _BACKEND_ROOT / "migrations"
     / "p1_cost_instrumentation_2026_05_15.sql"
 )
 
@@ -42,7 +42,7 @@ _MIGRATION_PATH = (
 def test_migration_file_exists():
     assert _MIGRATION_PATH.exists(), (
         "P1-COST-INSTRUMENTATION: falta la migración "
-        "supabase/migrations/p1_cost_instrumentation_2026_05_15.sql"
+        "migrations/p1_cost_instrumentation_2026_05_15.sql"
     )
 
 

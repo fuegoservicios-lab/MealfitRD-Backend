@@ -140,7 +140,7 @@ def test_p2_new_4_recalc_request_includes_plan_id():
 # ---------------------------------------------------------------------------
 def test_p2_new_5_meal_plans_audit_migration_exists():
     """Migración `p2_new_5_meal_plans_audit_table.sql` debe existir."""
-    fp = _REPO_ROOT / "supabase" / "migrations" / "p2_new_5_meal_plans_audit_table.sql"
+    fp = _REPO_ROOT / "migrations" / "p2_new_5_meal_plans_audit_table.sql"
     assert fp.exists(), (
         "P2-NEW-5 regresión: migración meal_plans_audit ausente. "
         "El SOP P3-AUDIT-6 de CLAUDE.md depende de esta tabla."
@@ -149,7 +149,7 @@ def test_p2_new_5_meal_plans_audit_migration_exists():
 
 def test_p2_new_5_audit_table_has_required_columns():
     """La migración debe definir las columnas críticas del audit log."""
-    fp = _REPO_ROOT / "supabase" / "migrations" / "p2_new_5_meal_plans_audit_table.sql"
+    fp = _REPO_ROOT / "migrations" / "p2_new_5_meal_plans_audit_table.sql"
     sql = fp.read_text(encoding="utf-8")
     required_cols = [
         "meal_plan_id", "plan_data_before", "action", "actor", "created_at",
@@ -169,7 +169,7 @@ def test_p2_new_5_audit_table_has_required_columns():
 def test_p2_new_5_audit_table_has_rls_forced():
     """La tabla audit debe tener RLS habilitado + forced — solo
     service_role puede leer/escribir."""
-    fp = _REPO_ROOT / "supabase" / "migrations" / "p2_new_5_meal_plans_audit_table.sql"
+    fp = _REPO_ROOT / "migrations" / "p2_new_5_meal_plans_audit_table.sql"
     sql = fp.read_text(encoding="utf-8")
     assert "ENABLE ROW LEVEL SECURITY" in sql, (
         "P2-NEW-5 regresión: RLS no habilitado en meal_plans_audit."

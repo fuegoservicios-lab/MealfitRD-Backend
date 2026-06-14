@@ -4,7 +4,7 @@ Referencia operacional del sistema de "Dreaming": una capa OFFLINE tipo sueño
 sobre el RAG existente (`user_facts` + Cohere embed-v4 @1536 + `match_user_facts`).
 SSOT del motor: [`backend/dreaming.py`](../dreaming.py). Cron:
 [`backend/cron_tasks.py`](../cron_tasks.py) (`_dream_consolidate_facts`). Migración:
-[`p1_dreaming_1_salience_profile_2026_06_13.sql`](../supabase/migrations/p1_dreaming_1_salience_profile_2026_06_13.sql).
+[`p1_dreaming_1_salience_profile_2026_06_13.sql`](../migrations/p1_dreaming_1_salience_profile_2026_06_13.sql).
 
 ## 1. Resumen
 

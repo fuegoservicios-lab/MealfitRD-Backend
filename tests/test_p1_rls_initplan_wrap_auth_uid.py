@@ -20,8 +20,8 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _MIGRATION_FILES = (
-    _REPO_ROOT / "supabase" / "migrations" / "p1_rls_initplan_wrap_auth_uid_2026_05_20.sql",
-    _REPO_ROOT / "backend" / "supabase" / "migrations" / "p1_rls_initplan_wrap_auth_uid_2026_05_20.sql",
+    _REPO_ROOT / "migrations" / "p1_rls_initplan_wrap_auth_uid_2026_05_20.sql",
+    _REPO_ROOT / "backend" / "migrations" / "p1_rls_initplan_wrap_auth_uid_2026_05_20.sql",
 )
 
 # (table, policy_name) — las 10 user-facing policies envueltas.
@@ -54,7 +54,7 @@ def test_workspace_and_backend_migrations_identical() -> None:
     a = _MIGRATION_FILES[0].read_text(encoding="utf-8")
     b = _MIGRATION_FILES[1].read_text(encoding="utf-8")
     assert a == b, (
-        "Drift entre supabase/migrations/ y backend/supabase/migrations/ — "
+        "Drift entre migrations/ y backend/migrations/ — "
         "actualizar ambos en el mismo commit (P3-MIGRATIONS-SSOT)."
     )
 

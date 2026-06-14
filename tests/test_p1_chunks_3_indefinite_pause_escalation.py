@@ -12,7 +12,7 @@ Las funciones colaboradoras (`_rebuild_recent_chunk_lessons_from_queue`,
 `_regenerate_recent_chunk_lessons_from_plan_days`, `_escalate_unrecoverable_chunk`,
 `_record_chunk_lesson_telemetry`) se mockean para aislar la lógica de escalación.
 (`_ensure_quality_alert_schema` fue eliminada en P3-B 2026-05-08 — el schema
-ahora vive en `supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql`.)
+ahora vive en `migrations/p2_new_e_consolidate_runtime_ddl.sql`.)
 """
 import json
 from unittest.mock import patch, MagicMock

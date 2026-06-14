@@ -44,8 +44,8 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _WORKSPACE_ROOT = _BACKEND_ROOT.parent
 
 _MIGRATION_NAME = "p2_realtime_pub_sync_2026_06_01.sql"
-_ROOT_MIGRATION = _WORKSPACE_ROOT / "supabase" / "migrations" / _MIGRATION_NAME
-_BACKEND_MIGRATION = _BACKEND_ROOT / "supabase" / "migrations" / _MIGRATION_NAME
+_ROOT_MIGRATION = _WORKSPACE_ROOT / "migrations" / _MIGRATION_NAME
+_BACKEND_MIGRATION = _BACKEND_ROOT / "migrations" / _MIGRATION_NAME
 
 _ASSESSMENT_CTX = (
     _WORKSPACE_ROOT / "frontend" / "src" / "context" / "AssessmentContext.jsx"

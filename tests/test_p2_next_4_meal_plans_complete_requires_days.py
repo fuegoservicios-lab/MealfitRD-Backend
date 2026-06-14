@@ -35,7 +35,7 @@ import pytest
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_MIGRATIONS_DIR = _REPO_ROOT / "supabase" / "migrations"
+_MIGRATIONS_DIR = _REPO_ROOT / "migrations"
 _MIGRATION_FILE = _MIGRATIONS_DIR / "p2_next_4_meal_plans_complete_requires_days.sql"
 
 
@@ -45,7 +45,7 @@ _MIGRATION_FILE = _MIGRATIONS_DIR / "p2_next_4_meal_plans_complete_requires_days
 def test_migration_file_exists():
     assert _MIGRATION_FILE.exists(), (
         f"P2-NEXT-4 violation: migración SSOT no encontrada en {_MIGRATION_FILE}. "
-        "El CHECK constraint vive en runtime de prod pero sin SSOT en /supabase/migrations, "
+        "El CHECK constraint vive en runtime de prod pero sin SSOT en /migrations, "
         "un cluster nuevo (staging/local) lo perdería. Crear la migración y aplicarla."
     )
 

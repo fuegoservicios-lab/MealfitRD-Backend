@@ -16,7 +16,7 @@ Fix:
     el nuevo índice.
 
 Cobertura (static analysis del SQL):
-    - Migración existe en `supabase/migrations/`.
+    - Migración existe en `migrations/`.
     - Marker P2-HIST-AUDIT-3.
     - CREATE INDEX con `(user_id, created_at DESC)`.
     - Idempotente vía `IF NOT EXISTS`.
@@ -38,7 +38,7 @@ import pytest
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _MIGRATION_PATH = (
     _BACKEND_ROOT.parent
-    / "supabase" / "migrations"
+    / "migrations"
     / "p2_hist_audit_3_meal_plans_user_created_at_idx.sql"
 )
 
@@ -53,7 +53,7 @@ def _migration_text() -> str:
 def test_migration_file_exists():
     assert _MIGRATION_PATH.exists(), (
         f"No se encontró la migración P2-HIST-AUDIT-3 en {_MIGRATION_PATH}. "
-        f"Path esperado por convención (SSOT en supabase/migrations/)."
+        f"Path esperado por convención (SSOT en migrations/)."
     )
 
 

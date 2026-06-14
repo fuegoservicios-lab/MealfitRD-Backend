@@ -16,7 +16,7 @@ Bug original (audit 2026-05-10):
     SOT en migrations es frágil.
 
 Fix:
-    Migración `supabase/migrations/p2_perf_1_consolidate_unused_index_comments.sql`
+    Migración `migrations/p2_perf_1_consolidate_unused_index_comments.sql`
     aplica las 2 COMMENTs faltantes. Esta verificación estática asegura
     que el archivo existe y contiene las referencias esperadas.
 
@@ -36,7 +36,7 @@ import pytest
 
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
-_MIGRATIONS_DIR = _BACKEND_ROOT.parent / "supabase" / "migrations"
+_MIGRATIONS_DIR = _BACKEND_ROOT.parent / "migrations"
 
 _NEW_MIGRATION = _MIGRATIONS_DIR / "p2_perf_1_consolidate_unused_index_comments.sql"
 _LEGACY_MIGRATION = _MIGRATIONS_DIR / "p1_hist_new_7_recreate_chunk_lesson_telemetry_plan_week_idx.sql"
