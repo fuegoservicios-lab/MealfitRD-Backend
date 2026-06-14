@@ -8285,6 +8285,12 @@ FOOD_SAFETY_GUARD = _env_bool("MEALFIT_FOOD_SAFETY_GUARD", True)
 # LLM y/o del solver). Trade-off: pequeña deriva del target (medibilidad > precisión exacta).
 PORTION_QUANTIZE_ENABLED = _env_bool("MEALFIT_PORTION_QUANTIZE", True)
 
+# [P3-SLOT-DISTRIBUTION · 2026-06-13] El solver usa el split FISIOLÓGICO canónico por slot
+# (desayuno 20% / almuerzo 35% / merienda 15% / cena 30%) como target de cada comida, en vez
+# del cal_share desbalanceado del LLM. Cierra el hallazgo de la auditoría: el desayuno
+# concentraba 48% kcal / 62% proteína. Flip a False → vuelve al cal_share del LLM (legacy).
+SLOT_DISTRIBUTION_ENABLED = _env_bool("MEALFIT_SLOT_DISTRIBUTION", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -8658,6 +8664,58 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         logger.warning(f"[P3-PROTEIN-TOPUP] falló para meal "
                        f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e}")
         return 0
+
+
+# [P3-SLOT-DISTRIBUTION · 2026-06-13] Mapa nombre-de-slot (es-DO) → key del split canónico.
+_SLOT_KEY_MAP = {
+    "desayuno": "desayuno", "breakfast": "desayuno",
+    "almuerzo": "almuerzo", "comida": "almuerzo", "lunch": "almuerzo",
+    "cena": "cena", "dinner": "cena",
+    "merienda": "merienda", "snack": "merienda", "merienda am": "merienda",
+    "merienda pm": "merienda", "media manana": "merienda", "media tarde": "merienda",
+    "merienda matutina": "merienda", "merienda vespertina": "merienda",
+}
+
+
+def _canonical_slot_fractions(meals: list) -> list:
+    """[P3-SLOT-DISTRIBUTION · 2026-06-13] Fracción de macros/kcal por meal según el split
+    FISIOLÓGICO canónico (`MEAL_SLOT_SPLITS`: desayuno 20% / almuerzo 35% / merienda 15% /
+    cena 30% para 4 comidas), NO según la distribución (a menudo desbalanceada) que emite el
+    LLM. Cierra el hallazgo de la auditoría: el desayuno concentraba 48% de las kcal y 62%
+    de la proteína del día; usar el `cal_share` del LLM como target del solver propagaba ese
+    desbalance (3 comidas bajo el umbral leucínico ~22g). Mapea cada slot por nombre; los
+    no-mapeados reciben parte igual del remanente; el vector se normaliza a sumar 1.0 →
+    preserva el total diario. Retorna lista de fracciones alineada con `meals`. Anchor:
+    P3-SLOT-DISTRIBUTION."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    from nutrition_calculator import MEAL_SLOT_SPLITS
+    n = len(meals)
+    if n == 0:
+        return []
+    split = MEAL_SLOT_SPLITS.get(n, MEAL_SLOT_SPLITS[4])
+    mer_keys = [k for k in split if k.startswith("merienda")]
+    fracs, mer_i = [], 0
+    for m in meals:
+        key = _SLOT_KEY_MAP.get(strip_accents(str(m.get("slot", "")).lower().strip()))
+        f = None
+        if key in split:
+            f = split[key]
+        elif key == "merienda" and mer_keys:
+            f = split[mer_keys[min(mer_i, len(mer_keys) - 1)]]
+            mer_i += 1
+        fracs.append(f)
+    assigned = sum(f for f in fracs if f is not None)
+    n_un = sum(1 for f in fracs if f is None)
+    if n_un:
+        rem = max(0.0, 1.0 - assigned) / n_un
+        fracs = [rem if f is None else f for f in fracs]
+    total = sum(fracs) or 1.0
+    return [f / total for f in fracs]
 
 
 def _apply_portion_quantization(plan: dict, db) -> int:
@@ -9741,9 +9799,15 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 _day_num = _d.get("day", _di + 1)
                 _sk = next((s for s in _skel_days if s.get("day") == _day_num), {})
                 _approved = _sk.get("protein_pool", []) if isinstance(_sk, dict) else []
-                for _m in _ms:
-                    _share = (_meal_macro_num(_m.get("cals")) / _day_c) if _day_c > 0 \
-                        else (1.0 / max(1, len(_ms)))
+                # [P3-SLOT-DISTRIBUTION] Fracción por slot: split fisiológico canónico
+                # (redistribuye kcal+proteína equitativamente) o cal_share del LLM (legacy).
+                _slot_fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
+                for _mi, _m in enumerate(_ms):
+                    if _slot_fracs:
+                        _share = _slot_fracs[_mi]
+                    else:
+                        _share = (_meal_macro_num(_m.get("cals")) / _day_c) if _day_c > 0 \
+                            else (1.0 / max(1, len(_ms)))
                     _slot_target = {
                         "kcal": _daily_cals * _share,
                         "protein": _pg * _share,
