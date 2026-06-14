@@ -8266,6 +8266,12 @@ MACRO_SOLVER_CAL_RECONCILE = _env_bool("MEALFIT_MACRO_SOLVER_CAL_RECONCILE", Tru
 # en fix-in-place → el revisor aprueba al 1er intento. Flip a False revierte a rechazar.
 RECIPE_COHERENCE_AUTOFIX = _env_bool("MEALFIT_RECIPE_COHERENCE_AUTOFIX", True)
 
+# [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
+# escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
+# (severity critical → regen) si encuentra uno. Defensa-en-profundidad sobre el revisor
+# LLM (que puede fallar). Crítico para uso clínico. Flip a False solo para debug.
+ALLERGEN_HARD_GUARD = _env_bool("MEALFIT_ALLERGEN_HARD_GUARD", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -8312,6 +8318,74 @@ def _has_real_medical_flags(items) -> bool:
         return any(str(x).strip().lower() not in _MEDICAL_NONE_SENTINELS for x in items)
     except Exception:
         return bool(items)
+
+
+# [C2-ALLERGEN-GUARD · 2026-06-13] Mapa de sinónimos de alérgenos comunes (es-DO) → términos
+# que pueden aparecer en los ingredientes. Sesgo a SOBRE-detectar: para alérgenos, un falso
+# positivo (rechazar un plan seguro) es MUCHO mejor que un falso negativo (servir el alérgeno).
+_ALLERGEN_SYNONYMS = {
+    "mani": ["mani", "cacahuate", "peanut", "mantequilla de mani"],
+    "frutos secos": ["almendra", "almendras", "nuez", "nueces", "maranon", "pistacho",
+                     "avellana", "merey", "maranon", "anacardo"],
+    "mariscos": ["camaron", "camarones", "langosta", "cangrejo", "langostino", "gambas",
+                 "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi"],
+    "pescado": ["pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo",
+                "dorado", "sardina", "merluza", "carite"],
+    "lacteos": ["leche", "queso", "yogurt", "mantequilla", "crema", "lacteo", "ricotta",
+                "mozzarella", "parmesano", "cottage"],
+    "lactosa": ["leche", "queso", "yogurt", "mantequilla", "crema", "ricotta", "mozzarella"],
+    "gluten": ["trigo", "pan", "pasta", "harina de trigo", "galleta", "galletas", "cebada",
+               "centeno", "gluten", "tortilla integral", "pan integral"],
+    "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas"],
+    "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas"],
+    "soya": ["soya", "soja", "tofu", "salsa de soya", "edamame"],
+}
+
+
+def _scan_allergen_violations(plan: dict, allergies) -> list:
+    """[C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de seguridad de alérgenos
+    (encima del revisor LLM, que puede fallar). Escanea cada ingrediente del plan contra
+    las alergias declaradas + sinónimos comunes DD; retorna lista de violaciones
+    (meal_name, ingrediente, término_alérgeno). Para alimentos sin sinónimo conocido,
+    matchea el texto literal de la alergia. Sesgo a sobre-detectar (seguridad > comodidad).
+    Anchor: C2-ALLERGEN-GUARD."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    import re as _re
+    if isinstance(allergies, str):
+        allergies = [allergies]
+    forbidden = set()
+    for a in (allergies or []):
+        a_low = strip_accents(str(a).strip().lower())
+        if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
+            continue
+        matched = False
+        for cat, syns in _ALLERGEN_SYNONYMS.items():
+            cat_n = strip_accents(cat)
+            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
+               any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
+                forbidden.update(strip_accents(s) for s in syns)
+                matched = True
+        if not matched:
+            forbidden.add(a_low)  # alergia free-text → match literal
+    if not forbidden:
+        return []
+    violations = []
+    for day in plan.get("days", []):
+        for meal in day.get("meals", []):
+            for ing in meal.get("ingredients", []):
+                ing_low = strip_accents(str(ing).lower())
+                for f in forbidden:
+                    # `(?:s|es)?` captura el plural español (fresa→fresas, pan→panes,
+                    # camaron→camarones) SIN falsos positivos de prefijo (leche≠lechosa).
+                    if f and _re.search(r"\b" + _re.escape(f) + r"(?:s|es)?\b", ing_low):
+                        violations.append((meal.get("name", "?"), str(ing), f))
+                        break
+    return violations
 
 
 def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: float) -> None:
@@ -11353,6 +11427,24 @@ Responde ÚNICAMENTE con el JSON de revisión.
             f"Detalles: {schema_errors}"
         )
         severity = _severity_max(severity, "critical")
+
+    # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos sobre el revisor
+    # LLM. Si CUALQUIER ingrediente matchea una alergia declarada (+ sinónimos), rechazo
+    # CRÍTICO inmediato → regen con directiva. Para alérgenos, jamás servir > comodidad.
+    if ALLERGEN_HARD_GUARD and _has_real_medical_flags(allergies):
+        _allergen_viol = _scan_allergen_violations(plan, allergies)
+        if _allergen_viol:
+            _viol_str = "; ".join(f"'{_ing}' (alérgeno '{_term}') en {_mn}"
+                                  for _mn, _ing, _term in _allergen_viol[:6])
+            logger.error(f"🚨 [C2-ALLERGEN-GUARD] {len(_allergen_viol)} violación(es) de alérgeno "
+                         f"declarado: {_viol_str}")
+            approved = False
+            issues.append(
+                f"ALÉRGENO DETECTADO (rechazo de seguridad clínica): el plan contiene "
+                f"ingrediente(s) que el usuario declaró como alergia. DEBES eliminarlos y "
+                f"reemplazarlos por alternativas seguras. Violaciones: {_viol_str}"
+            )
+            severity = _severity_max(severity, "critical")
 
     # [P2-A · 2026-05-07] Coherencia recetas↔lista en mode `block`.
     # `assemble_plan_node` invoca `run_shopping_coherence_guard`; cuando
