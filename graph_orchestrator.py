@@ -8293,6 +8293,17 @@ ALLERGEN_HARD_GUARD = _env_bool("MEALFIT_ALLERGEN_HARD_GUARD", True)
 # (sin target libre del alérgeno que resuelva en el catálogo es-DO) → siguen por el path crítico.
 ALLERGEN_SUBSTITUTION_ENABLED = _env_bool("MEALFIT_ALLERGEN_SUBSTITUTION", True)
 
+# [P3-CLOSER-EGG-BUDGET · 2026-06-14] El protein-closer (P3-PROTEIN-FLOOR) elige clara/huevo como la
+# proteína MAGRA de las comidas ligeras (están en _DAIRY_EGG_PROTEIN_HINT y tienen alta proteína/kcal)
+# → AÑADE huevo de relleno y empuja el conteo sobre el cap del VARIETY_HARD_GATE, que luego rechaza el
+# plan por sobreuso → se entrega marcado-degradado (medido en vivo: huevo en 5/12 comidas). Este
+# presupuesto hace al closer consciente del cap: una vez que el huevo llega al cap (mismo cálculo que
+# el gate), le pasa candidatos SIN huevo → diversifica con yogur/queso/whey. Complementa al closer
+# (cantidad de proteína) SIN tocar su lógica de selección/dish-fit; cuenta el huevo del LLM + el que el
+# closer añade. NO toca el huevo-protagonista (revoltillo/tortilla — eso lo pone el LLM). Flip a False
+# revierte al comportamiento previo.
+CLOSER_EGG_BUDGET_ENABLED = _env_bool("MEALFIT_CLOSER_EGG_BUDGET", True)
+
 # [P3-FOOD-SAFETY · 2026-06-13] Guard determinista de seguridad alimentaria en assemble:
 # detecta huevo (TCS) crudo/poco cocido (batido licuado o sin paso de cocción) e inyecta una
 # nota de seguridad accionable a la receta (macro-preservante, no rompe coherencia receta↔
@@ -10922,6 +10933,21 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
             _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0)
                               if PROTEIN_FLOOR_ENABLED else [])
+            # [P3-CLOSER-EGG-BUDGET · 2026-06-14] Presupuesto de huevo del closer: una vez que el huevo
+            # aparece en > cap comidas (mismo cap que VARIETY_HARD_GATE), pasa candidatos SIN huevo →
+            # diversifica con yogur/queso/whey en vez de empujar el huevo sobre el cap. Cuenta el huevo
+            # del LLM + el que el closer añade. `_c[1]` es el nombre (tupla (leanness, name, info)).
+            try:
+                from constants import strip_accents as _sa_egg
+            except Exception:
+                _sa_egg = lambda _s: _s  # noqa: E731
+            _egg_total_meals = sum(len(_dd.get("meals") or []) for _dd in days)
+            _egg_cap = max(3, round(_egg_total_meals * 0.25))
+            _egg_count = (sum(1 for _dd in days for _mm in (_dd.get("meals") or [])
+                              if _meal_has_egg(_mm, _sa_egg)) if CLOSER_EGG_BUDGET_ENABLED else 0)
+            _hd_candidates_no_egg = [_c for _c in _hd_candidates
+                                     if not any(_t in _sa_egg(str(_c[1]).lower())
+                                                for _t in ("huevo", "clara", "yema"))]
             for _di, _d in enumerate(days):
                 _ms = _d.get("meals", []) or []
                 _day_c = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
@@ -10951,9 +10977,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     # integrada como ingrediente real. Las kcal extra las nivela el reconcile
                     # protein-preserving aguas abajo. Fallback al top-up legacy si está off.
                     if PROTEIN_FLOOR_ENABLED and _hd_candidates:
+                        # [P3-CLOSER-EGG-BUDGET] sobre el cap → candidatos sin huevo (yogur/queso/whey).
+                        _egg_cands = (_hd_candidates_no_egg
+                                      if (CLOSER_EGG_BUDGET_ENABLED and _egg_count >= _egg_cap)
+                                      else _hd_candidates)
+                        _had_egg_pre = _meal_has_egg(_m, _sa_egg) if CLOSER_EGG_BUDGET_ENABLED else True
                         _topup_g += _close_protein_gap_for_meal(
-                            _m, _slot_target["protein"], _nut_db, _hd_candidates,
+                            _m, _slot_target["protein"], _nut_db, _egg_cands,
                             fill_pct=PROTEIN_FLOOR_FILL_PCT)
+                        if CLOSER_EGG_BUDGET_ENABLED and not _had_egg_pre and _meal_has_egg(_m, _sa_egg):
+                            _egg_count += 1  # el closer añadió huevo a esta comida → consume presupuesto
                     elif MACRO_SOLVER_PROTEIN_TOPUP:
                         _topup_g += _protein_topup_meal(
                             _m, _slot_target["kcal"], _nut_db, _approved)
