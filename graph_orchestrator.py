@@ -8356,6 +8356,12 @@ PROTEIN_GKG_CEILING_CUT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_CUT", 2.6)
 CONDITION_RULES_ENABLED = _env_bool("MEALFIT_CONDITION_RULES", True)
 RENAL_PROTEIN_GKG_CEILING = _env_float("MEALFIT_RENAL_PROTEIN_GKG", 0.8)   # KDIGO 2024 G3-G5 no-diálisis
 DM2_FIBER_G_PER_1000KCAL = _env_float("MEALFIT_DM2_FIBER_PER_1000KCAL", 14.0)  # ADA 2026 calidad de carbo
+# [P3-CONDITION-RULES · 2026-06-14] DM2: el revisor LLM escala preocupaciones glucémicas (miel,
+# plátano grande) a 'critical' → fallback matemático que pierde el plan real + la fibra ADA. Para
+# diabéticos sin violación de alérgeno/schema, la preocupación glucémica es de CALIDAD (no peligro
+# agudo): se degrada a 'high' (entrega el plan real con advertencia + retry, no fallback). Flip a
+# False revierte al fallback duro. Allergen/schema/renal criticals NUNCA se degradan.
+DM2_GLYCEMIC_SOFT_REJECT = _env_bool("MEALFIT_DM2_GLYCEMIC_SOFT_REJECT", True)
 
 # [P3-DATA-PROVENANCE · 2026-06-14] (Roadmap M1, quick-win) Anclaje de proveniencia: computa qué
 # fracción de los ingredientes del plan está trazada a USDA FoodData Central (columna `fdc_id`, ya
@@ -12520,9 +12526,11 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos sobre el revisor
     # LLM. Si CUALQUIER ingrediente matchea una alergia declarada (+ sinónimos), rechazo
     # CRÍTICO inmediato → regen con directiva. Para alérgenos, jamás servir > comodidad.
+    _had_allergen_critical = False  # [P3-CONDITION-RULES] marca criticals que NO deben degradarse
     if ALLERGEN_HARD_GUARD and _has_real_medical_flags(allergies):
         _allergen_viol = _scan_allergen_violations(plan, allergies)
         if _allergen_viol:
+            _had_allergen_critical = True
             _viol_str = "; ".join(f"'{_ing}' (alérgeno '{_term}') en {_mn}"
                                   for _mn, _ing, _term in _allergen_viol[:6])
             logger.error(f"🚨 [C2-ALLERGEN-GUARD] {len(_allergen_viol)} violación(es) de alérgeno "
@@ -12992,6 +13000,20 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 if 1 <= day_int <= days_in_chunk:
                     final_affected_days.add(day_int)
                 
+        # [P3-CONDITION-RULES · 2026-06-14] DM2: NO degradar a fallback matemático por preocupación
+        # glucémica. El revisor LLM escala miel/plátano-grande a 'critical' → `_apply_critical_review_
+        # guardrails` dispara un fallback matemático que PIERDE el plan real + la fibra ADA (validado
+        # en vivo). Para diabéticos, salvo allergen/schema/renal (criticals deterministas de seguridad
+        # que NO se tocan), la preocupación glucémica es de CALIDAD: la bajamos a 'high' → `should_retry`
+        # da un retry (con la directiva glucémica) y entrega el plan REAL con banner ámbar + el gate
+        # profesional, en vez de un plan de contingencia genérico. Knob MEALFIT_DM2_GLYCEMIC_SOFT_REJECT.
+        if (DM2_GLYCEMIC_SOFT_REJECT and CONDITION_RULES_ENABLED and severity == "critical"
+                and not plan.get("_schema_invalid") and not _had_allergen_critical
+                and _is_diabetes_condition(form_data)):
+            logger.warning("🩸 [P3-CONDITION-RULES] DM2: rechazo glucémico CRÍTICO degradado a 'high' "
+                           "→ entrega el plan real (con fibra ADA) + advertencia, no fallback matemático.")
+            severity = "high"
+
         result = {
             "review_passed": False,
             "review_feedback": feedback,

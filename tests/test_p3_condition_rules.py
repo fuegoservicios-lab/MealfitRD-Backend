@@ -285,6 +285,26 @@ def test_source_cap_and_safety_net_anchors():
     assert "_apply_renal_cap_to_nutrition(nutrition, actual_form_data)" in src
 
 
+def test_dm2_glycemic_soft_reject_knob_default():
+    assert go.DM2_GLYCEMIC_SOFT_REJECT is True
+
+
+def test_dm2_glycemic_downgrade_is_safe_scoped():
+    """task DM2-fallback: el revisor degrada el rechazo glucémico crítico a 'high' para diabéticos
+    → entrega el plan real (con fibra ADA) en vez de fallback matemático. La degradación NUNCA
+    toca allergen/schema criticals (siguen cayendo a fallback por seguridad). Ancla en source."""
+    src = inspect.getsource(go.review_plan_node)
+    # el downgrade existe y está acotado a diabetes
+    assert "DM2_GLYCEMIC_SOFT_REJECT" in src
+    assert "_is_diabetes_condition(form_data)" in src
+    assert 'severity = "high"' in src
+    # las salvaguardas: NO degradar allergen ni schema-invalid
+    assert "_had_allergen_critical" in src
+    assert '_schema_invalid' in src
+    # el flag de allergen se setea en el guard determinista
+    assert "_had_allergen_critical = True" in src
+
+
 def test_renal_enforcement_machinery_trims_meals_to_cap():
     """review#1/#7/#8 (el crítico): la maquinaria que usa el enforcement determinista per-comida
     (independiente del solver) realmente baja la proteína de las comidas al cap renal y refilla
