@@ -175,6 +175,19 @@ async def main():
     args = ap.parse_args()
     profiles = PROFILES[: args.n]
     sem = asyncio.Semaphore(args.concurrency)
+
+    # [P0-CLINICAL-VALIDATION · 2026-06-14] Abre los pools de Neon (como el lifespan de FastAPI en
+    # app.py): los pools se crean con open=False; sin abrirlos, arun_plan_pipeline no puede leer
+    # master_ingredients → PoolClosed → TODO el benchmark cae a fallback y mide el plan matemático,
+    # no el path REAL del LLM+solver. Bug latente del harness standalone — sin esto los números M2
+    # estarían sesgados al fallback determinista. Idempotente.
+    import db_core
+    if getattr(db_core, "connection_pool", None):
+        db_core.connection_pool.open()
+    if getattr(db_core, "async_connection_pool", None):
+        await db_core.async_connection_pool.open()
+    await asyncio.sleep(1.5)
+
     print(f"[M2-MACRO-BENCHMARK] Corriendo {len(profiles)} perfiles (concurrencia {args.concurrency})...")
     results = await asyncio.gather(*[_bench_one(p, sem) for p in profiles])
     agg = _aggregate(results)
