@@ -8302,6 +8302,16 @@ MICRONUTRIENT_REPORT_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_REPORT", True)
 # duro es el prompt (regla de variedad+fidelidad cultural); esto da observabilidad. Cierra FS5.
 VARIETY_REPORT_ENABLED = _env_bool("MEALFIT_VARIETY_REPORT", True)
 
+# [P3-PROTEIN-FLOOR · 2026-06-13] Cierre DURO del déficit de proteína (la re-auditoría del
+# plan fresco encontró que se entregaba 68% del target). El closer rellena cada comida a
+# `fill_pct` del target de proteína del slot con proteína de alta densidad allergen-safe
+# integrada; el reconcile protein-preserving nivela kcal escalando SOLO carbos/grasas. El
+# validador duro (review_plan_node) rechaza/reintenta si el día queda < floor_pct del target.
+PROTEIN_FLOOR_ENABLED = _env_bool("MEALFIT_PROTEIN_FLOOR", True)
+PROTEIN_FLOOR_FILL_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_FILL_PCT", 0.92)  # closer determinista
+PROTEIN_FLOOR_HARD_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT", 0.90)  # gate de retry
+PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -8675,6 +8685,169 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         logger.warning(f"[P3-PROTEIN-TOPUP] falló para meal "
                        f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e}")
         return 0
+
+
+# [P3-PROTEIN-FLOOR · 2026-06-13] Cierre del DÉFICIT de proteína (la re-auditoría del plan
+# fresco encontró que se entregaba 68% del target — los fixes eran advisory, no restricción
+# dura). El closer rellena cada comida a su target de proteína del slot con una proteína de
+# ALTA DENSIDAD allergen-safe, integrada como ingrediente real (gramos), y el reconcile
+# protein-preserving nivela las kcal escalando SOLO carbos/grasas (la proteína queda fija).
+# Proteínas no-cocción-safe (para batidos/ensaladas frías): yogur/queso/whey, NUNCA huevo crudo.
+_NO_COOK_SAFE_PROTEIN_HINT = ("yogur", "yogurt", "queso", "whey", "proteina", "proteína", "ricotta")
+
+
+def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0) -> list:
+    """[P3-PROTEIN-FLOOR] Proteínas de ALTA densidad (≥min_protein g/100g) del catálogo
+    dominicano que son allergen-SAFE para el usuario y resuelven en el catálogo nutricional.
+    Ordenadas por magrez (proteína/kcal) desc → el closer prefiere la de menor costo calórico.
+    Retorna [(leanness, name, info), …]. Cero alérgeno (reusa el mapa de sinónimos C2)."""
+    try:
+        from constants import DOMINICAN_PROTEINS, strip_accents
+    except Exception:
+        return []
+    import re as _re
+    forbidden = set()
+    if _has_real_medical_flags(allergies):
+        al = allergies if isinstance(allergies, list) else [allergies]
+        for a in al:
+            a_low = strip_accents(str(a).strip().lower())
+            if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
+                continue
+            matched = False
+            for cat, syns in _ALLERGEN_SYNONYMS.items():
+                cat_n = strip_accents(cat)
+                if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
+                   any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
+                    forbidden.update(strip_accents(s) for s in syns)
+                    matched = True
+            if not matched:
+                forbidden.add(a_low)
+    out = []
+    for name in DOMINICAN_PROTEINS:
+        nlow = strip_accents(str(name).lower())
+        if forbidden and any(f and (f in nlow or nlow in f) for f in forbidden):
+            continue  # alérgeno → excluir (fail-secure)
+        info = db.lookup(name)
+        if info and info.protein >= min_protein and info.kcal > 0:
+            out.append((info.protein / info.kcal, name, info))
+    out.sort(key=lambda x: x[0], reverse=True)
+    return out
+
+
+def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
+                                *, fill_pct: float = 0.92, max_add_g: int = 300) -> int:
+    """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
+    del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
+    INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
+    hay proteína que escalar en bases vegetales/almidón). Para preparaciones frías/licuadas
+    solo usa proteínas no-cocción-safe (yogur/queso/whey), NUNCA huevo crudo (FS1). Las kcal
+    extra las nivela aguas abajo el reconcile protein-preserving. Mutates meal. Retorna gramos."""
+    try:
+        cur_p = _meal_macro_num(meal.get("protein"))
+        target = slot_protein_target * fill_pct
+        if target <= 0 or cur_p >= target:
+            return 0
+        try:
+            from constants import strip_accents as _sa
+        except Exception:
+            def _sa(s):
+                import unicodedata
+                return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+        name_low = _sa(str(meal.get("name", "")).lower())
+        no_cook = any(b in name_low for b in _NO_COOK_BLENDED)
+        chosen = None
+        for _leanness, _name, info in (candidates or []):
+            nlow = _sa(str(info.name).lower())
+            if no_cook:
+                if not any(h in nlow for h in _NO_COOK_SAFE_PROTEIN_HINT):
+                    continue  # batido/frío → solo yogur/queso/whey
+                if any(t in nlow for t in _RAW_EGG_TERMS):
+                    continue
+            chosen = info
+            break
+        if chosen is None:
+            return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
+        gap = target - cur_p
+        grams = int(round(gap / (chosen.protein / 100.0)))
+        grams = max(10, min(grams, max_add_g))
+        f = grams / 100.0
+        nm = str(chosen.name).lower()
+        cook = "" if no_cook else " cocido"
+        line = f"{grams}g de {nm}{cook} ({grams}g)"
+        meal.setdefault("ingredients", []).append(line)
+        if isinstance(meal.get("ingredients_raw"), list):
+            meal["ingredients_raw"].append(line)
+        meal["protein"] = round(cur_p + chosen.protein * f)
+        meal["carbs"] = round(_meal_macro_num(meal.get("carbs")) + chosen.carbs * f)
+        meal["fats"] = round(_meal_macro_num(meal.get("fats")) + chosen.fats * f)
+        meal["cals"] = round(_meal_macro_num(meal.get("cals")) + chosen.kcal * f)
+        meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+        rec = meal.get("recipe")
+        if isinstance(rec, list):
+            verb = "Añade" if no_cook else "Cocina e incorpora"
+            meal["recipe"] = rec + [
+                f"💪 {verb} {grams}g de {nm} como fuente principal de proteína de esta comida."]
+        return grams
+    except Exception as e:
+        logger.warning(f"[P3-PROTEIN-FLOOR] closer falló para meal "
+                       f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e}")
+        return 0
+
+
+def _ingredient_is_protein_dominant(s: str, db) -> bool:
+    """True si la macro dominante (por kcal) del ingrediente es proteína → el reconcile NO lo
+    escala (protege la proteína). Ingredientes no resueltos → False (se escalan: suelen ser
+    carbo/veg/condimento de macro despreciable)."""
+    mc = db.macros_from_ingredient_string(str(s))
+    if not mc:
+        return False
+    pc = 4 * (mc.get("protein") or 0.0)
+    return pc >= 4 * (mc.get("carbs") or 0.0) and pc >= 9 * (mc.get("fats") or 0.0)
+
+
+def _protein_preserving_day_reconcile(meals: list, daily_cals: float, db) -> bool:
+    """[P3-PROTEIN-FLOOR · 2026-06-13] Nivela las kcal del día al target PRESERVANDO la
+    proteína: la proteína queda FIJA y solo se escalan carbos+grasas (macros e ingredientes
+    NO proteína-dominantes) por un factor isocalórico. Reemplaza el cal-reconcile uniforme
+    (que escalaba TODO, reduciendo la proteína que el closer acababa de añadir). Mantiene la
+    consistencia receta↔macro (escala porción + macro juntos). Mutates meals. Retorna True
+    si aplicó. Anchor: P3-PROTEIN-FLOOR."""
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc
+        P = sum(_meal_macro_num(m.get("protein")) for m in meals)
+        day_cals = sum(_meal_macro_num(m.get("cals")) for m in meals)
+        if day_cals <= 0:
+            return False
+        protein_cals = 4.0 * P
+        cur_np = day_cals - protein_cals
+        tgt_np = daily_cals - protein_cals
+        if cur_np <= 0 or tgt_np <= 0:
+            return False  # la proteína sola ≈ o excede el target → no tocar (raro)
+        factor = max(0.4, min(1.8, tgt_np / cur_np))
+        if abs(factor - 1.0) < 0.02:
+            return False
+        for m in meals:
+            ings = m.get("ingredients")
+            if isinstance(ings, list):
+                m["ingredients"] = [
+                    str(s) if _ingredient_is_protein_dominant(s, db) else _resc(str(s), factor)
+                    for s in ings]
+            raw = m.get("ingredients_raw")
+            if isinstance(raw, list):
+                m["ingredients_raw"] = [
+                    str(s) if _ingredient_is_protein_dominant(s, db) else _resc(str(s), factor)
+                    for s in raw]
+            m["carbs"] = round(_meal_macro_num(m.get("carbs")) * factor)
+            m["fats"] = round(_meal_macro_num(m.get("fats")) * factor)
+            mp = round(_meal_macro_num(m.get("protein")))
+            m["protein"] = mp
+            m["cals"] = round(4 * mp + 4 * m["carbs"] + 9 * m["fats"])
+            m["macros"] = [f"P:{mp}g", f"C:{m['carbs']}g", f"G:{m['fats']}g"]
+        return True
+    except Exception as e:
+        logger.warning(f"[P3-PROTEIN-FLOOR] reconcile protein-preserving falló: "
+                       f"{type(e).__name__}: {e}")
+        return False
 
 
 # [P3-VARIETY · 2026-06-13] Tokens de plato-base (para detectar repetición intra-día) +
@@ -9863,6 +10036,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
             _skel_days = (skeleton or {}).get("days", []) if isinstance(skeleton, dict) else []
             _solver_n = 0
             _topup_g = 0
+            # [P3-PROTEIN-FLOOR] Proteínas de alta densidad allergen-safe para el closer
+            # (cierra el déficit que el escalado no puede). Se computan una vez por plan.
+            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db)
+                              if PROTEIN_FLOOR_ENABLED else [])
             for _di, _d in enumerate(days):
                 _ms = _d.get("meals", []) or []
                 _day_c = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
@@ -9887,9 +10064,15 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     }
                     if _apply_macro_solver_to_meal(_m, _slot_target, _nut_db):
                         _solver_n += 1
-                    # [P3-PROTEIN-TOPUP] Cerrar el gap de proteína que el escalado no pudo
-                    # (comida sin fuente de proteína suficiente) añadiendo del pool aprobado.
-                    if MACRO_SOLVER_PROTEIN_TOPUP:
+                    # [P3-PROTEIN-FLOOR] Cierre del déficit: rellena al TARGET de proteína del
+                    # slot (no solo a un piso) con proteína de alta densidad allergen-safe
+                    # integrada como ingrediente real. Las kcal extra las nivela el reconcile
+                    # protein-preserving aguas abajo. Fallback al top-up legacy si está off.
+                    if PROTEIN_FLOOR_ENABLED and _hd_candidates:
+                        _topup_g += _close_protein_gap_for_meal(
+                            _m, _slot_target["protein"], _nut_db, _hd_candidates,
+                            fill_pct=PROTEIN_FLOOR_FILL_PCT)
+                    elif MACRO_SOLVER_PROTEIN_TOPUP:
                         _topup_g += _protein_topup_meal(
                             _m, _slot_target["kcal"], _nut_db, _approved)
             logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
@@ -9907,32 +10090,44 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # del shopping → los gramos finales fluyen a la lista. Fail-safe total.
     if MACRO_SOLVER_ENABLED and MACRO_SOLVER_CAL_RECONCILE and _daily_cals > 0:
         try:
-            from nutrition_db import rescale_ingredient_string as _rescale
+            from nutrition_db import rescale_ingredient_string as _rescale, IngredientNutritionDB as _RCDB
             _rec_n = 0
-            for _d in days:
-                _ms = _d.get("meals", []) or []
-                _dc = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
-                if _dc <= 0:
-                    continue
-                _f = max(0.6, min(1.6, _daily_cals / _dc))  # clamp anti-porciones-absurdas
-                if abs(_f - 1.0) < 0.02:
-                    continue  # ya dentro del 2% → no tocar
-                for _m in _ms:
-                    _ings = _m.get("ingredients")
-                    if isinstance(_ings, list):
-                        _m["ingredients"] = [_rescale(str(s), _f) for s in _ings]
-                    _raw = _m.get("ingredients_raw")
-                    if isinstance(_raw, list):
-                        _m["ingredients_raw"] = [_rescale(str(s), _f) for s in _raw]
-                    _m["protein"] = round(_meal_macro_num(_m.get("protein")) * _f)
-                    _m["carbs"] = round(_meal_macro_num(_m.get("carbs")) * _f)
-                    _m["fats"] = round(_meal_macro_num(_m.get("fats")) * _f)
-                    _m["cals"] = round(_meal_macro_num(_m.get("cals")) * _f)
-                    _m["macros"] = [f"P:{_m['protein']}g", f"C:{_m['carbs']}g", f"G:{_m['fats']}g"]
-                _rec_n += 1
-            if _rec_n:
-                logger.info(f"🎯 [P3-CAL-RECONCILE] Niveló calorías de {_rec_n} día(s) al "
-                            f"target exacto ({_daily_cals:.0f} kcal) — cierra cal_score del holistic")
+            if PROTEIN_FLOOR_ENABLED:
+                # [P3-PROTEIN-FLOOR] Reconcile PROTEIN-PRESERVING: la proteína (que el closer
+                # acaba de llevar al target) queda FIJA; solo se escalan carbos+grasas para
+                # nivelar las kcal. Reemplaza el escalado uniforme (que reducía la proteína).
+                _rcdb = _RCDB()
+                for _d in days:
+                    if _protein_preserving_day_reconcile(_d.get("meals", []) or [], _daily_cals, _rcdb):
+                        _rec_n += 1
+                if _rec_n:
+                    logger.info(f"🎯 [P3-PROTEIN-FLOOR] Reconcile protein-preserving niveló "
+                                f"{_rec_n} día(s) al target ({_daily_cals:.0f} kcal) sin tocar la proteína")
+            else:
+                for _d in days:
+                    _ms = _d.get("meals", []) or []
+                    _dc = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
+                    if _dc <= 0:
+                        continue
+                    _f = max(0.6, min(1.6, _daily_cals / _dc))  # clamp anti-porciones-absurdas
+                    if abs(_f - 1.0) < 0.02:
+                        continue  # ya dentro del 2% → no tocar
+                    for _m in _ms:
+                        _ings = _m.get("ingredients")
+                        if isinstance(_ings, list):
+                            _m["ingredients"] = [_rescale(str(s), _f) for s in _ings]
+                        _raw = _m.get("ingredients_raw")
+                        if isinstance(_raw, list):
+                            _m["ingredients_raw"] = [_rescale(str(s), _f) for s in _raw]
+                        _m["protein"] = round(_meal_macro_num(_m.get("protein")) * _f)
+                        _m["carbs"] = round(_meal_macro_num(_m.get("carbs")) * _f)
+                        _m["fats"] = round(_meal_macro_num(_m.get("fats")) * _f)
+                        _m["cals"] = round(_meal_macro_num(_m.get("cals")) * _f)
+                        _m["macros"] = [f"P:{_m['protein']}g", f"C:{_m['carbs']}g", f"G:{_m['fats']}g"]
+                    _rec_n += 1
+                if _rec_n:
+                    logger.info(f"🎯 [P3-CAL-RECONCILE] Niveló calorías de {_rec_n} día(s) al "
+                                f"target exacto ({_daily_cals:.0f} kcal) — cierra cal_score del holistic")
         except Exception as _rec_e:
             logger.warning(f"[P3-CAL-RECONCILE] deshabilitado por error: "
                            f"{type(_rec_e).__name__}: {_rec_e}")
@@ -11830,6 +12025,44 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 f"reemplazarlos por alternativas seguras. Violaciones: {_viol_str}"
             )
             severity = _severity_max(severity, "critical")
+
+    # [P3-PROTEIN-FLOOR · 2026-06-13] Validador DURO de piso de proteína: si algún día entrega
+    # < HARD_PCT del target diario → rechazo → regen con directiva. Cierra el déficit sistémico
+    # (la re-auditoría del plan fresco halló 68% del target). Simétrico al techo C1: un techo
+    # sin piso es media solución para hipertrofia. Es un BACKSTOP — el closer determinista
+    # (assemble_plan_node) ya rellena al target, así que rara vez dispara (solo si no hubo
+    # proteína de alta densidad disponible). Severity high → retry si hay budget, no falla duro.
+    if PROTEIN_FLOOR_HARD_GATE:
+        try:
+            import re as _re_pf
+            _tgt_p = None
+            _macros = plan.get("macros")
+            if isinstance(_macros, dict):
+                _mp = _re_pf.search(r"(\d+)", str(_macros.get("protein", "")))
+                if _mp:
+                    _tgt_p = float(_mp.group(1))
+            if _tgt_p and _tgt_p > 0:
+                _short_days = []
+                for _di_pf, _day_pf in enumerate(plan.get("days", []) or [], 1):
+                    _dp = sum(_meal_macro_num(_mm.get("protein")) for _mm in (_day_pf.get("meals", []) or []))
+                    if _dp < PROTEIN_FLOOR_HARD_PCT * _tgt_p:
+                        _short_days.append((_day_pf.get("day", _di_pf), round(_dp), round(_tgt_p)))
+                if _short_days:
+                    _sd_str = "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short_days)
+                    logger.warning(f"🛡 [P3-PROTEIN-FLOOR] {len(_short_days)} día(s) bajo el piso de "
+                                   f"proteína ({int(PROTEIN_FLOOR_HARD_PCT*100)}% de {int(_tgt_p)}g): {_sd_str}")
+                    approved = False
+                    issues.append(
+                        f"DÉFICIT DE PROTEÍNA (rechazo clínico para ganancia muscular): el plan no "
+                        f"alcanza el piso de proteína en {_sd_str}. Cada comida PRINCIPAL (almuerzo y "
+                        f"cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, "
+                        f"res, huevos, queso) dimensionada en gramos para que cada día sume al menos "
+                        f"{int(PROTEIN_FLOOR_HARD_PCT*100)}% del target ({int(_tgt_p)}g). NO dependas solo "
+                        f"de leguminosas/almidón en las comidas principales."
+                    )
+                    severity = _severity_max(severity, "high")
+        except Exception as _pf_e:
+            logger.warning(f"[P3-PROTEIN-FLOOR] validador falló: {type(_pf_e).__name__}: {_pf_e}")
 
     # [P2-A · 2026-05-07] Coherencia recetas↔lista en mode `block`.
     # `assemble_plan_node` invoca `run_shopping_coherence_guard`; cuando
