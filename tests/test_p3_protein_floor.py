@@ -36,6 +36,8 @@ _ROWS = [
      "protein_g_per_100g": 24, "carbs_g_per_100g": 0.2, "fats_g_per_100g": 0.3},
     {"name": "Arroz blanco", "aliases": ["arroz", "arroz blanco"], "kcal_per_100g": 130,
      "protein_g_per_100g": 2.7, "carbs_g_per_100g": 28, "fats_g_per_100g": 0.3, "density_g_per_cup": 158},
+    {"name": "Queso Mozzarella", "aliases": ["queso mozzarella", "mozzarella", "queso"], "kcal_per_100g": 280,
+     "protein_g_per_100g": 22, "carbs_g_per_100g": 2.2, "fats_g_per_100g": 22},
 ]
 
 
@@ -78,15 +80,17 @@ def test_closer_rellena_al_target_integrado():
                or "pollo" in str(i).lower()) for i in meal["ingredients"])
 
 
-def test_closer_no_cook_usa_proteina_segura():
-    # Batido: debe elegir yogur (no-cook-safe), NUNCA carne cruda/huevo. Pero yogur (10g)
-    # no está en el set alta-densidad (>=18). Con solo carne en el pool, no fuerza nada.
+def test_closer_no_cook_nunca_mete_carne_cruda():
+    # Batido: NUNCA carne cruda/huevo crudo. Solo proteína no-cocción-safe (queso/yogur).
     meal = {"name": "Batido de Mango", "protein": 6, "carbs": 40, "fats": 2, "cals": 200,
             "ingredients": ["1 mango (200g)"]}
-    cands = _safe_high_density_proteins(["Ninguna"], _db())  # pollo/pescado/camarones (cocción)
-    added = _close_protein_gap_for_meal(meal, 18.0, _db(), cands, fill_pct=0.92)
-    assert added == 0  # no mete pollo/camarón crudo en un batido
-    assert not any("pollo" in str(i).lower() or "camaron" in str(i).lower() for i in meal["ingredients"])
+    cands = _safe_high_density_proteins(["Ninguna"], _db())  # pollo/pescado/camarones/queso
+    _close_protein_gap_for_meal(meal, 18.0, _db(), cands, fill_pct=0.92)
+    nuevo = " ".join(str(i) for i in meal["ingredients"]).lower()
+    assert not any(t in nuevo for t in ("pollo", "camaron", "pescado", "huevo", "clara"))
+    # si añadió algo, fue lácteo no-cocción-safe (queso)
+    if len(meal["ingredients"]) > 1:
+        assert "queso" in nuevo
 
 
 def test_closer_no_cook_acepta_yogur_si_esta_en_candidatos():
@@ -98,6 +102,39 @@ def test_closer_no_cook_acepta_yogur_si_esta_en_candidatos():
     added = _close_protein_gap_for_meal(meal, 18.0, db, cands, fill_pct=0.92)
     assert added > 0
     assert any("yogur" in str(i).lower() for i in meal["ingredients"])
+
+
+def test_closer_dish_fit_comida_ligera_evita_carne_exotica():
+    # Desayuno (ligero): NO debe meter camarones; prefiere huevo/lácteo (queso).
+    meal = {"name": "Revoltillo de Huevo con Avena", "protein": 12, "carbs": 60, "fats": 14,
+            "cals": 12*4+60*4+14*9, "ingredients": ["2 huevos", "1 taza de avena"]}
+    cands = _safe_high_density_proteins(["Ninguna"], _db())  # camarones es el más magro
+    _close_protein_gap_for_meal(meal, 28.0, _db(), cands, fill_pct=0.92)
+    nuevo = " ".join(str(i) for i in meal["ingredients"]).lower()
+    assert "camaron" not in nuevo  # NO carne exótica en desayuno
+    assert "queso" in nuevo  # eligió lácteo (dish-fit ligero)
+
+
+def test_closer_congruencia_escala_proteina_del_plato():
+    # Si el plato ya menciona la proteína (pollo), el closer la prefiere (escala el tema).
+    meal = {"name": "Pollo Guisado con Arroz", "protein": 20, "carbs": 60, "fats": 12,
+            "cals": 20*4+60*4+12*9, "ingredients": ["80g de pollo", "1 taza de arroz"]}
+    cands = _safe_high_density_proteins(["Ninguna"], _db())
+    _close_protein_gap_for_meal(meal, 42.0, _db(), cands, fill_pct=0.92)
+    nuevo = " ".join(str(i) for i in meal["ingredients"]).lower()
+    assert "pollo" in nuevo and "camaron" not in nuevo  # escaló pollo, no metió camarón
+
+
+def test_closer_nota_sin_gramaje_hardcodeado():
+    # La nota NO debe llevar un gramaje fijo (se desfasaría tras el trim); refiere al ingrediente.
+    import re as _re
+    meal = {"name": "Lentejas con Arroz", "protein": 18, "carbs": 70, "fats": 12, "cals": 460,
+            "ingredients": ["1 taza de lentejas cocidas (198g)"], "recipe": ["Cocina."]}
+    cands = _safe_high_density_proteins(["Ninguna"], _db())
+    _close_protein_gap_for_meal(meal, 42.0, _db(), cands, fill_pct=0.92)
+    nota = next((s for s in meal["recipe"] if "💪" in s), "")
+    assert nota and "ingredientes" in nota
+    assert not _re.search(r"\d+\s*g de", nota)  # sin "Xg de ..." en la nota
 
 
 def test_closer_no_op_si_ya_alcanza_target():

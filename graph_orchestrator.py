@@ -8694,6 +8694,15 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
 # protein-preserving nivela las kcal escalando SOLO carbos/grasas (la proteína queda fija).
 # Proteínas no-cocción-safe (para batidos/ensaladas frías): yogur/queso/whey, NUNCA huevo crudo.
 _NO_COOK_SAFE_PROTEIN_HINT = ("yogur", "yogurt", "queso", "whey", "proteina", "proteína", "ricotta")
+# [P3-PROTEIN-FLOOR] Dish-fit del closer: comidas ligeras (desayuno/merienda) prefieren
+# proteína de huevo/lácteo; las principales prefieren carne — evita combos incongruentes
+# (camarón en un revoltillo de desayuno). Congruencia (proteína ya en el plato) gana primero.
+_LIGHT_MEAL_HINT = ("desayuno", "merienda", "avena", "batido", "smoothie", "licuado", "jugo",
+                    "tostada", "yogur", "fruta", "panqueque", "omelet", "tortilla", "revoltillo",
+                    "cereal", "granola", "bowl", "snack")
+_DAIRY_EGG_PROTEIN_HINT = ("huevo", "clara", "yogur", "yogurt", "queso", "ricotta", "whey", "proteina", "proteína")
+_MEAT_PROTEIN_HINT = ("pollo", "pavo", "cerdo", "res", "carne", "pescado", "atun", "atún",
+                      "sardina", "camaron", "camarón", "tilapia", "lomo", "chuleta", "longaniza")
 
 
 def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0) -> list:
@@ -8755,7 +8764,11 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
         name_low = _sa(str(meal.get("name", "")).lower())
         no_cook = any(b in name_low for b in _NO_COOK_BLENDED)
-        chosen = None
+        light = any(h in name_low for h in _LIGHT_MEAL_HINT)
+        meal_text = _sa((str(meal.get("name", "")) + " "
+                         + " ".join(str(i) for i in meal.get("ingredients", []) or [])).lower())
+        # Pool de candidatos válidos para el CONTEXTO (no-cook → solo no-cocción-safe).
+        _pool = []
         for _leanness, _name, info in (candidates or []):
             nlow = _sa(str(info.name).lower())
             if no_cook:
@@ -8763,10 +8776,26 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                     continue  # batido/frío → solo yogur/queso/whey
                 if any(t in nlow for t in _RAW_EGG_TERMS):
                     continue
-            chosen = info
-            break
-        if chosen is None:
+            _pool.append((info, nlow))
+        if not _pool:
             return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
+        # Dish-fit: 1) congruencia (proteína ya mencionada en el plato) → escala el tema;
+        # 2) categoría (ligera→huevo/lácteo, principal→carne); 3) fallback la más magra.
+        chosen = None
+        for info, nlow in _pool:
+            # congruencia solo con proteína de alta densidad (≥18): no "escala" lentejas
+            # (baja densidad → gramos absurdos); para esas cae a categoría.
+            if nlow and nlow in meal_text and (info.protein or 0) >= 18:
+                chosen = info
+                break
+        if chosen is None:
+            _pref = _DAIRY_EGG_PROTEIN_HINT if light else _MEAT_PROTEIN_HINT
+            for info, nlow in _pool:
+                if any(h in nlow for h in _pref):
+                    chosen = info
+                    break
+        if chosen is None:
+            chosen = _pool[0][0]  # la más magra (candidates ya viene ordenado)
         gap = target - cur_p
         grams = int(round(gap / (chosen.protein / 100.0)))
         grams = max(10, min(grams, max_add_g))
@@ -8784,9 +8813,12 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
         rec = meal.get("recipe")
         if isinstance(rec, list):
+            # Nota SIN gramaje hardcodeado: el ingrediente (que puede re-escalarse en el trim/
+            # cuantización) es la fuente de verdad → la nota nunca se desfasa.
             verb = "Añade" if no_cook else "Cocina e incorpora"
             meal["recipe"] = rec + [
-                f"💪 {verb} {grams}g de {nm} como fuente principal de proteína de esta comida."]
+                f"💪 {verb} el {nm} indicado en los ingredientes como fuente principal de "
+                f"proteína de esta comida."]
         return grams
     except Exception as e:
         logger.warning(f"[P3-PROTEIN-FLOOR] closer falló para meal "
@@ -10075,7 +10107,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
             _topup_g = 0
             # [P3-PROTEIN-FLOOR] Proteínas de alta densidad allergen-safe para el closer
             # (cierra el déficit que el escalado no puede). Se computan una vez por plan.
-            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db)
+            # min_protein=9 incluye yogur (blend-friendly para batidos) + el dish-fit del
+            # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
+            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0)
                               if PROTEIN_FLOOR_ENABLED else [])
             for _di, _d in enumerate(days):
                 _ms = _d.get("meals", []) or []
