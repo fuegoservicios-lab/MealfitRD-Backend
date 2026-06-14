@@ -15,6 +15,7 @@
 | `deploy_lag_marker_malformed` | cron `_alert_deploy_lag_marker_stale` cuando `_LAST_KNOWN_PFIX` no matchea regex `Pn-X · YYYY-MM-DD` | cron re-eval tras fix | Auto (implicit) |
 | `deploy_lag_marker_stale` | mismo cron cuando `_LAST_KNOWN_PFIX` < floor de fecha | cron re-eval tras bump | Auto (implicit) |
 | `deploy_lag_drift_vs_expected` | mismo cron cuando live ≠ `expected_last_known_pfix` (alert_type=`deploy_drift`); SOP en runbook | cron re-eval tras deploy o update KV | Auto (implicit) |
+| `clinical_band_drift` | cron `_clinical_band_drift_alert_job` (P4-SCOREBOARD) cuando el `clinical_band_score` promedio de la flota (métrica `clinical_band`, no-fallback) cae < umbral (default 0.45) sobre ≥N planes (alert_type=`precision_drift`) | cron re-eval cuando vuelve sobre el umbral (UPDATE `resolved_at`) | Auto (implicit) |
 | `failed_inventory_deductions_backlog` | cron `_alert_failed_inventory_deductions_backlog` > knob default 25 (24h lookback) | manual tras drenar backlog | Manual |
 | `plan_data_corrupted:<plan_id>:<field_name>` | mutators que detectan plan_data inválido (cron_tasks.py); SOP en runbook | manual (rollback vs hotfix) | Manual |
 | `reservation_reconciliation_exhausted:<plan_id>:<week>` | reconciliador de reservas tras N retries fallidos | manual: recuperar chunk + liberar reservas | Manual |

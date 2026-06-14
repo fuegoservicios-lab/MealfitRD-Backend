@@ -8381,6 +8381,12 @@ DATA_PROVENANCE_ENABLED = _env_bool("MEALFIT_DATA_PROVENANCE", True)
 # si correr la capa sobre meals-plantilla matemáticas alguna vez se porta mal en prod.
 FALLBACK_CLINICAL_LAYER_ENABLED = _env_bool("MEALFIT_FALLBACK_CLINICAL_LAYER", True)
 
+# [P4-SCOREBOARD · 2026-06-14] Banda de tolerancia del `clinical_band_score` (precisión por-plan medida,
+# no autoafirmada). Macros en [lower, upper] × target; kcal usa [0.95, 1.05] fijo (el reconcile las clava).
+# Default [0.90, 1.12] = la banda clínica documentada (piso de proteína 90%, techo ~112%).
+BAND_SCORE_LOWER = _env_float("MEALFIT_BAND_SCORE_LOWER", 0.90)
+BAND_SCORE_UPPER = _env_float("MEALFIT_BAND_SCORE_UPPER", 1.12)
+
 
 def _protein_gkg_ceiling(goal) -> float:
     """[P3-PROTEIN-CEILING-GOAL-AWARE] Techo de proteína entregada (g/kg) por objetivo: déficit/
@@ -16344,6 +16350,56 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int,
     return repaired
 
 
+def compute_clinical_band_score(plan: dict, nutrition: dict, *,
+                                lower: float = None, upper: float = None) -> dict:
+    """[P4-SCOREBOARD · 2026-06-14] Score DETERMINISTA de precisión por-plan: la fracción de celdas
+    (día × macro) en que el macro ENTREGADO (suma de las comidas del día) cae en la banda
+    [lower, upper] × target diario. Mide la precisión REAL del plan entregado → la precisión deja de ser
+    AUTOAFIRMADA (antes el "90-112%" era un claim sin medición por-plan). kcal usa una banda más estrecha
+    ([0.95, 1.05]) porque el reconcile clava las calorías y deja que los macros absorban el residual.
+    Cero LLM. Retorna {score, cells_in_band, cells_total, per_macro, band_*}. Fail-safe → score=None."""
+    try:
+        lo_m = BAND_SCORE_LOWER if lower is None else lower
+        hi_m = BAND_SCORE_UPPER if upper is None else upper
+        tm = (nutrition.get("total_daily_macros") if isinstance(nutrition, dict) else None) or \
+             (nutrition.get("macros") if isinstance(nutrition, dict) else None) or {}
+        pm = plan.get("macros") if isinstance(plan.get("macros"), dict) else {}
+        targets = {
+            "protein": _meal_macro_num(tm.get("protein_str")) or _meal_macro_num(pm.get("protein")),
+            "carbs": _meal_macro_num(tm.get("carbs_str")) or _meal_macro_num(pm.get("carbs")),
+            "fats": _meal_macro_num(tm.get("fats_str")) or _meal_macro_num(pm.get("fats")),
+            "kcal": _meal_macro_num((nutrition or {}).get("total_daily_calories")
+                                    or (nutrition or {}).get("target_calories")) or _meal_macro_num(plan.get("calories")),
+        }
+        bands = {"protein": (lo_m, hi_m), "carbs": (lo_m, hi_m), "fats": (lo_m, hi_m), "kcal": (0.95, 1.05)}
+        per = {k: {"in": 0, "total": 0} for k in targets}
+        for day in plan.get("days", []) or []:
+            meals = day.get("meals", []) or []
+            delivered = {
+                "protein": sum(_meal_macro_num(m.get("protein")) for m in meals),
+                "carbs": sum(_meal_macro_num(m.get("carbs")) for m in meals),
+                "fats": sum(_meal_macro_num(m.get("fats")) for m in meals),
+                "kcal": sum(_meal_macro_num(m.get("cals")) for m in meals),
+            }
+            for k, t in targets.items():
+                if t and t > 0:
+                    lo, hi = bands[k]
+                    per[k]["total"] += 1
+                    if lo * t <= delivered[k] <= hi * t:
+                        per[k]["in"] += 1
+        cin = sum(v["in"] for v in per.values())
+        ctot = sum(v["total"] for v in per.values())
+        return {
+            "score": round(cin / ctot, 3) if ctot else None,
+            "cells_in_band": cin, "cells_total": ctot,
+            "band_macros": [lo_m, hi_m], "band_kcal": [0.95, 1.05],
+            "per_macro": {k: (round(v["in"] / v["total"], 3) if v["total"] else None) for k, v in per.items()},
+        }
+    except Exception as _bs_e:
+        logger.warning(f"[P4-SCOREBOARD] compute_clinical_band_score falló: {type(_bs_e).__name__}: {_bs_e}")
+        return {"score": None, "cells_in_band": 0, "cells_total": 0, "error": True}
+
+
 def _compute_pipeline_holistic_score_and_emit(
     final_state: dict,
     *,
@@ -16465,6 +16521,39 @@ def _compute_pipeline_holistic_score_and_emit(
                 f"cal={cal_score:.2f}, zero_cal_days={days_with_zero_cals}, "
                 f"fallback={delivered_was_fallback})"
             )
+
+            # [P4-SCOREBOARD · 2026-06-14] Precisión MEDIDA por-plan (no autoafirmada): qué fracción de
+            # celdas (día × macro) del plan ENTREGADO cae en la banda clínica vs el target. Inyecta
+            # `plan["clinical_band_score"]` (→ persistido + visible para PDF/UI) y emite la métrica
+            # `clinical_band` a `pipeline_metrics` para el scoreboard de flota + el cron de drift. El
+            # fallback se marca en metadata para que la agregación lo excluya (sus macros son ~target
+            # por construcción → score engañosamente alto). Fail-safe: no afecta al plan entregado.
+            try:
+                _band = compute_clinical_band_score(plan, nutrition)
+                plan["clinical_band_score"] = _band
+                _band_val = _band.get("score")
+                if _band_val is not None:
+                    _emit_progress(initial_state, "metric", {
+                        "node": "clinical_band",
+                        "duration_ms": int(pipeline_duration * 1000),
+                        "retries": final_state.get("attempt", 1) - 1,
+                        "tokens_estimated": 0,
+                        "confidence": _band_val,   # = el band score [0,1]
+                        "metadata": {
+                            "cells_in_band": _band.get("cells_in_band"),
+                            "cells_total": _band.get("cells_total"),
+                            "per_macro": _band.get("per_macro"),
+                            "band_macros": _band.get("band_macros"),
+                            "delivered_was_fallback": delivered_was_fallback,
+                            "review_passed": final_state.get("review_passed"),
+                        },
+                    })
+                    logger.info(
+                        f"🎯 [CLINICAL BAND SCORE] Precisión medida: {_band_val:.2f} "
+                        f"({_band.get('cells_in_band')}/{_band.get('cells_total')} celdas en banda; "
+                        f"por-macro {_band.get('per_macro')}; fallback={delivered_was_fallback})")
+            except Exception as _cbs_e:
+                logger.warning(f"[P4-SCOREBOARD] emit del band score falló: {type(_cbs_e).__name__}: {_cbs_e}")
 
             # P1-NEW-4: emitir métrica de pérdidas de eventos SSE para esta
             # request. Solo persiste si hubo señal (>0) — evita ruido en la

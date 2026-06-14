@@ -5433,6 +5433,97 @@ def _delete_old_meal_rejections_weekly() -> None:
         )
 
 
+def _clinical_band_drift_alert_job():
+    """[P4-SCOREBOARD · 2026-06-14] Cron de DRIFT de precisión de flota. Agrega el `clinical_band_score`
+    (métrica `clinical_band` en pipeline_metrics, emitida por-plan en el orquestador) de las últimas N
+    horas EXCLUYENDO fallbacks, y emite el alert `clinical_band_drift` si el promedio cae bajo el umbral
+    con suficientes muestras → la precisión deja de ser AUTOAFIRMADA y se vigila proactivamente. Auto-
+    resuelve cuando vuelve sobre el umbral (modelo Auto-implicit). Emite tick observable siempre.
+
+    Knobs: MEALFIT_BAND_DRIFT_LOOKBACK_H (24, clamp [1,168]), MEALFIT_BAND_DRIFT_MIN_SAMPLES (10,
+    clamp [1,10000]), MEALFIT_BAND_DRIFT_THRESHOLD (0.45), MEALFIT_BAND_DRIFT_INTERVAL_H (6, clamp [1,48]).
+    Tooltip-anchor: P4-SCOREBOARD."""
+    alert_key = "clinical_band_drift"
+    lookback_h = max(1, min(_env_int("MEALFIT_BAND_DRIFT_LOOKBACK_H", 24), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_BAND_DRIFT_MIN_SAMPLES", 10), 10_000))
+    threshold = _env_float("MEALFIT_BAND_DRIFT_THRESHOLD", 0.45)
+    _n = 0
+    _avg = None
+    _alert_emitted = False
+    _skip = None
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT confidence FROM pipeline_metrics
+             WHERE node = 'clinical_band'
+               AND created_at > NOW() - (%s || ' hours')::interval
+               AND COALESCE(metadata->>'delivered_was_fallback', 'false') = 'false'
+               AND confidence IS NOT NULL
+            """,
+            (str(lookback_h),),
+            fetch_all=True,
+        ) or []
+        vals = []
+        for r in rows:
+            try:
+                vals.append(float(r.get("confidence")))
+            except (TypeError, ValueError):
+                continue
+        _n = len(vals)
+        if _n < min_samples:
+            _skip = f"insufficient_samples ({_n}<{min_samples})"
+        else:
+            _avg = round(sum(vals) / _n, 3)
+            if _avg < threshold:
+                execute_sql_write(
+                    """
+                    INSERT INTO system_alerts
+                        (alert_key, alert_type, severity, title, message, metadata)
+                    VALUES (%s, 'precision_drift', 'warning', %s, %s, %s::jsonb)
+                    ON CONFLICT (alert_key) DO UPDATE
+                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    """,
+                    (
+                        alert_key,
+                        "Precisión de macros bajó del umbral (clinical_band_score)",
+                        f"El clinical_band_score promedio de las últimas {lookback_h}h es {_avg} "
+                        f"(< umbral {threshold}) sobre {_n} planes no-fallback. La precisión de macros "
+                        f"de la flota se degradó — revisar el solver/datos/resolver.",
+                        json.dumps({"avg_band_score": _avg, "n_plans": _n, "lookback_h": lookback_h,
+                                    "threshold": threshold}, ensure_ascii=False),
+                    ),
+                )
+                _alert_emitted = True
+                logger.warning(
+                    f"🚨 [P4-SCOREBOARD] DRIFT de precisión: clinical_band_score promedio {_avg} "
+                    f"< {threshold} sobre {_n} planes ({lookback_h}h) → alert `{alert_key}` emitido")
+            else:
+                execute_sql_write(
+                    "UPDATE system_alerts SET resolved_at = NOW() "
+                    "WHERE alert_key = %s AND resolved_at IS NULL",
+                    (alert_key,),
+                )
+                logger.info(
+                    f"🎯 [P4-SCOREBOARD] clinical_band_score promedio {_avg} OK "
+                    f"(≥ {threshold}, {_n} planes / {lookback_h}h)")
+    except Exception as e:
+        logger.error(f"❌ [P4-SCOREBOARD] cron de drift de precisión falló: {type(e).__name__}: {e}")
+    finally:
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata)
+                VALUES ('_clinical_band_drift_alert_job_tick', 0, 0, 0, %s, %s::jsonb)
+                """,
+                (_avg if _avg is not None else -1.0,
+                 json.dumps({"n_plans": _n, "avg_band_score": _avg, "alert_emitted": _alert_emitted,
+                             "skip_reason": _skip, "threshold": threshold, "lookback_h": lookback_h},
+                            ensure_ascii=False)),
+            )
+        except Exception:
+            pass
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -5479,6 +5570,24 @@ def register_plan_chunk_scheduler(scheduler) -> None:
             f"{_autovacuum_tick_interval} min (observabilidad post-P1-B "
             f"autovacuum tuning)."
         )
+
+    # [P4-SCOREBOARD · 2026-06-14] Cron de drift de precisión: agrega clinical_band_score de flota y
+    # alerta si baja del umbral. Métrica de cambio lento (default 6h) → misfire_grace tolerante.
+    _band_drift_interval_h = max(1, min(_env_int("MEALFIT_BAND_DRIFT_INTERVAL_H", 6), 48))
+    if not scheduler.get_job("clinical_band_drift_alert"):
+        _add_job_jittered(scheduler,
+            _clinical_band_drift_alert_job,
+            "interval",
+            hours=_band_drift_interval_h,
+            id="clinical_band_drift_alert",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P4-SCOREBOARD] Cron clinical_band_drift_alert registrado cada "
+            f"{_band_drift_interval_h}h (precisión de macros vigilada en flota).")
 
     # [P1-AUDIT-1 · 2026-05-12] Cron que drena `pending_facts_queue`.
     # Reemplaza el trigger DB `process_facts_on_insert` + función
