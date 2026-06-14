@@ -1251,6 +1251,8 @@ def admin_crons_status(request: Request):
             if node.startswith("_") and node.endswith("_tick") and len(node) > 6:
                 cron_name = node[1:-5]
                 if hasattr(last_tick, "isoformat"):
+                    # last_tick garantizado no-None: hasattr(..., "isoformat") es False para None
+                    assert last_tick is not None
                     last_tick_by_cron[cron_name] = last_tick.isoformat()
                 elif last_tick is not None:
                     last_tick_by_cron[cron_name] = str(last_tick)

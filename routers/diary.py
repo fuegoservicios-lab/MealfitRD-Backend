@@ -553,8 +553,12 @@ def api_get_consumed_today(user_id: str, date: Optional[str] = None, tzOffset: O
         if not user_id or user_id == "guest":
             return {"meals": [], "totals": {"calories": 0, "protein": 0, "carbs": 0, "healthy_fats": 0}}
         
-        meals = get_consumed_meals_today(user_id, date_str=date, tz_offset_mins=tzOffset)
-        
+        meals = get_consumed_meals_today(user_id, date_str=date, tz_offset_mins=tzOffset)  # pyright: ignore[reportArgumentType]
+        # meals garantizado no-None: get_consumed_meals_today siempre retorna lista
+        # (todos los paths con return retornan [] o res:list; el None inferido es
+        # un fall-through teórico del loop de retry que el control de flujo no alcanza).
+        assert meals is not None
+
         total_cal = sum(m.get("calories", 0) for m in meals)
         total_pro = sum(m.get("protein", 0) for m in meals)
         total_car = sum(m.get("carbs", 0) for m in meals)
@@ -616,7 +620,7 @@ def api_log_progress(
         from datetime import datetime
         now_date = datetime.now().strftime("%Y-%m-%d")
 
-        result_box = {"weight_history": None}
+        result_box: dict[str, Optional[list]] = {"weight_history": None}
 
         def _weight_mutator(_hp):
             _wh = list(_hp.get("weight_history", []) or [])

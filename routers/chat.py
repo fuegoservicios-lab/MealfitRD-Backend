@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from error_utils import safe_error_detail
 from typing import Optional
@@ -361,7 +361,7 @@ def api_save_chat_message(data: dict = Body(...), verified_user_id: str = Depend
         return {"success": True}
     return {"success": False, "error": "Faltan parámetros"}
 
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import Response
 import asyncio
 import os
 import httpx
@@ -585,7 +585,7 @@ async def api_chat_tts(
                 # request TTS (incl. el success path), y este handler es `async def`
                 # → llamarlo directo bloqueaba el event loop del worker uvicorn.
                 # Hermano del contrato P1-ASYNC-SYNC-DB-BLOCKING (plans.py usa
-                # asyncio.to_thread; billing.py usa _supabase_async).
+                # asyncio.to_thread; billing.py usa _run_sync_db_in_thread).
                 await asyncio.to_thread(log_api_usage, verified_user_id, "elevenlabs_tts")
                 _tts_billed = True
             except Exception as _audit_err:

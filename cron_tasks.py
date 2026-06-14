@@ -19320,8 +19320,8 @@ def _alert_atomic_pool_fallback() -> None:
         f"user={last_user_id}). pool_available={pool_available}, "
         f"strict_mode={strict_mode}. Lost-updates silenciosos en "
         f"`health_profile` posibles bajo concurrencia. "
-        f"Verificar inicialización del pool (DATABASE_URL / "
-        f"SUPABASE_DB_URL, Supabase Pooler:6543). En prod considerar "
+        f"Verificar inicialización del pool (NEON_DATABASE_URL / "
+        f"NEON_DATABASE_URL_POOLED, pooler de Neon). En prod considerar "
         f"`MEALFIT_REQUIRE_ATOMIC_POOL=1` para fail-fast."
     )
 

@@ -22,11 +22,10 @@ from rate_limiter import RateLimiter
 # diary upload). Mismo patrón que P2-AUTH-ASYNC-SLEEP cerró para
 # `auth.py::get_verified_user_id`. `asyncio.to_thread` despacha al default
 # thread pool — el event loop sirve otras requests mientras Postgres responde.
-# [P1-NEON-DB-MIGRATION · 2026-06-12] Los thunks ahora envuelven
-# `execute_sql_query`/`execute_sql_write` (SQL directo a Neon) en lugar del
-# cliente PostgREST de Supabase; el nombre del helper se conserva porque es
-# tooltip-anchor de tests. Tooltip-anchor: P1-ASYNC-SYNC-DB-BLOCKING.
-async def _supabase_async(thunk):
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Los thunks envuelven
+# `execute_sql_query`/`execute_sql_write` (SQL directo a Neon).
+# Tooltip-anchor: P1-ASYNC-SYNC-DB-BLOCKING.
+async def _run_sync_db_in_thread(thunk):
     return await asyncio.to_thread(thunk)
 
 logger = logging.getLogger(__name__)
@@ -235,7 +234,7 @@ async def api_validate_discount(
         # [P1-NEON-DB-MIGRATION · 2026-06-12] `valid_from`/`valid_until` van
         # con `::text` para preservar el parseo `datetime.fromisoformat(...)`
         # de abajo (PostgREST devolvía strings ISO; psycopg devolvería datetime).
-        rows = await _supabase_async(
+        rows = await _run_sync_db_in_thread(
             lambda: execute_sql_query(
                 """
                 SELECT discount_percent, max_uses, current_uses, applicable_tiers,
@@ -367,7 +366,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         access_token = None
         verified_plan_id = None
 
-        if env_ready:
+        if env_ready and PAYPAL_CLIENT_ID and PAYPAL_SECRET:
             async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as client:
                 auth_resp = await client.post(
                     f"{PAYPAL_API_BASE}/v1/oauth2/token",
@@ -442,7 +441,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
             f"{user_id}. Tier asignado server-side: {tier_to_assign}"
         )
 
-        existing_row = await _supabase_async(
+        existing_row = await _run_sync_db_in_thread(
             lambda: execute_sql_query(
                 "SELECT paypal_subscription_id, subscription_status FROM public.user_profiles WHERE id = %s",
                 (user_id,),
@@ -523,7 +522,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
             "paypal_subscription_id": subscription_id,
             "subscription_status": "ACTIVE",
         }
-        updated_rows = await _supabase_async(
+        updated_rows = await _run_sync_db_in_thread(
             lambda: execute_sql_write(
                 """
                 UPDATE public.user_profiles
@@ -582,7 +581,7 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
             logger.warning(f"Intento no autorizado de cancelar suscripcion: req_user={user_id}, auth_user={verified_user_id}")
             raise HTTPException(status_code=401, detail="No autorizado.")
             
-        profile_row = await _supabase_async(
+        profile_row = await _run_sync_db_in_thread(
             lambda: execute_sql_query(
                 "SELECT paypal_subscription_id FROM public.user_profiles WHERE id = %s",
                 (user_id,),
@@ -621,7 +620,7 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
 
         end_date = None
 
-        if env_ready:
+        if env_ready and PAYPAL_CLIENT_ID and PAYPAL_SECRET:
             async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as client:
                 auth_resp = await client.post(
                     f"{PAYPAL_API_BASE}/v1/oauth2/token",
@@ -744,7 +743,7 @@ async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str 
             )
             cancel_params = (user_id,)
 
-        await _supabase_async(lambda: execute_sql_write(cancel_query, cancel_params))
+        await _run_sync_db_in_thread(lambda: execute_sql_write(cancel_query, cancel_params))
 
         return {"success": True, "message": "Tu suscripción no se renovará, pero mantendrás tu plan actual hasta el final del ciclo pagado."}
 
@@ -870,7 +869,7 @@ async def api_webhook_paypal(
                     execute_sql_write,
                     "INSERT INTO app_kv_store (key, value) VALUES (%s, '{}'::jsonb) "
                     "ON CONFLICT (key) DO NOTHING RETURNING key",
-                    (_kv_key,), True,
+                    (_kv_key,), returning=True,
                 )
                 if not _first_time:
                     logger.info(
@@ -918,7 +917,7 @@ async def api_webhook_paypal(
             subscription_id = resource.get("id")
             if subscription_id:
                 logger.info(f"⬇️ Degradando suscripción {subscription_id} en BD debido a {event_type}.")
-                await _supabase_async(
+                await _run_sync_db_in_thread(
                     lambda: execute_sql_write(
                         "UPDATE public.user_profiles SET plan_tier = 'gratis', "
                         "subscription_status = 'INACTIVE' WHERE paypal_subscription_id = %s",
@@ -934,7 +933,7 @@ async def api_webhook_paypal(
                     f"{subscription_id}: marcando PAYMENT_RETRYING SIN degradar tier "
                     f"(ventana de reintento de PayPal). Solo SUSPENDED/EXPIRED degradan."
                 )
-                await _supabase_async(
+                await _run_sync_db_in_thread(
                     lambda: execute_sql_write(
                         "UPDATE public.user_profiles SET subscription_status = 'PAYMENT_RETRYING' "
                         "WHERE paypal_subscription_id = %s",
@@ -1003,7 +1002,7 @@ async def api_webhook_paypal(
                         tuple(params),
                     )
 
-                await _supabase_async(_do_reactivate)
+                await _run_sync_db_in_thread(_do_reactivate)
         elif event_type == "BILLING.SUBSCRIPTION.CANCELLED":
             subscription_id = resource.get("id")
             end_date = resource.get("billing_info", {}).get("next_billing_time")
@@ -1025,7 +1024,7 @@ async def api_webhook_paypal(
                     )
                     wh_cancel_params = (subscription_id,)
 
-                await _supabase_async(
+                await _run_sync_db_in_thread(
                     lambda: execute_sql_write(wh_cancel_query, wh_cancel_params)
                 )
         

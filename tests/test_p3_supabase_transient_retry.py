@@ -5,7 +5,7 @@ pueden estar muertas; la primer query lo descubre y httpx levanta
 `RemoteProtocolError` / `ReadError` / `ConnectError`.
 
 Pre-fix: el catch devolvia 500 al cliente → console.error en DevTools + toast
-"No pudimos guardar". Post-fix: el helper `_water_supabase_with_retry`
+"No pudimos guardar". Post-fix: el helper `_execute_with_retry`
 reintenta 1 vez con backoff 350ms; si ambos fallan, devolvemos 503 (transient)
 en lugar de 500 (sugiere bug del endpoint). El frontend (WaterTracker.jsx)
 tambien reintenta 1 vez ante 5xx/network error antes de mostrar el toast.
@@ -38,11 +38,11 @@ _WATER_TRACKER = (
 
 
 def test_helper_declared_with_marker():
-    """`_water_supabase_with_retry(builder_factory, op_label)` debe existir
+    """`_execute_with_retry(builder_factory, op_label)` debe existir
     con el marker P3-SUPABASE-TRANSIENT-RETRY cerca, para que un refactor
     cosmetico no borre el por que del reintento."""
-    assert "def _water_supabase_with_retry(" in _PLANS, (
-        "Helper `_water_supabase_with_retry` no declarado en routers/plans.py."
+    assert "def _execute_with_retry(" in _PLANS, (
+        "Helper `_execute_with_retry` no declarado en routers/plans.py."
     )
     assert "P3-SUPABASE-TRANSIENT-RETRY" in _PLANS, (
         "Marker `P3-SUPABASE-TRANSIENT-RETRY` ausente en routers/plans.py."
@@ -54,11 +54,11 @@ def test_helper_uses_factory_pattern():
     de supabase-py son stateful y no se pueden reusar tras `.execute()`
     parcial)."""
     pat = re.compile(
-        r"def _water_supabase_with_retry\([^)]*\):.*?return last_exc \w*",
+        r"def _execute_with_retry\([^)]*\):.*?return last_exc \w*",
         re.DOTALL,
     )
     # Buscar referencias a builder_factory() (CON paréntesis):
-    body_start = _PLANS.find("def _water_supabase_with_retry(")
+    body_start = _PLANS.find("def _execute_with_retry(")
     assert body_start > 0
     body_end = _PLANS.find("\n\n\n", body_start)
     body = _PLANS[body_start:body_end if body_end > 0 else body_start + 2000]
@@ -93,7 +93,7 @@ def test_backoff_reasonable():
     '@router.post("/water-intake")',
 ])
 def test_both_endpoints_use_helper(endpoint_marker):
-    """GET y POST /water-intake DEBEN invocar `_water_supabase_with_retry`
+    """GET y POST /water-intake DEBEN invocar `_execute_with_retry`
     en lugar de `.execute()` directo."""
     idx = _PLANS.find(endpoint_marker)
     assert idx > 0, f"Endpoint {endpoint_marker} no encontrado."
@@ -101,8 +101,8 @@ def test_both_endpoints_use_helper(endpoint_marker):
     next_router = _PLANS.find("@router.", idx + len(endpoint_marker))
     end = next_router if next_router > 0 else idx + 3000
     body = _PLANS[idx:end]
-    assert "_water_supabase_with_retry(" in body, (
-        f"{endpoint_marker} no usa `_water_supabase_with_retry` — revierte el fix."
+    assert "_execute_with_retry(" in body, (
+        f"{endpoint_marker} no usa `_execute_with_retry` — revierte el fix."
     )
 
 

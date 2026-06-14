@@ -238,7 +238,7 @@ def get_user_profile(user_id: str):
                     "UPDATE user_profiles SET plan_tier = %(plan_tier)s, "
                     "subscription_status = %(subscription_status)s "
                     "WHERE id = %(id)s",
-                    {
+                    {  # pyright: ignore[reportArgumentType]
                         "plan_tier": "gratis",
                         "subscription_status": "INACTIVE",
                         "id": user_id,
@@ -405,8 +405,8 @@ def update_user_health_profile_atomic(user_id: str, mutator):
                 f"MEALFIT_REQUIRE_ATOMIC_POOL=1 — abortando "
                 f"update_user_health_profile_atomic({user_id}) en lugar de "
                 f"degradar a non-atómico. Verificar inicialización del pool "
-                f"en db_core (variables de entorno DATABASE_URL / "
-                f"SUPABASE_DB_URL, conectividad a Supabase Pooler:6543)."
+                f"en db_core (variables de entorno NEON_DATABASE_URL / "
+                f"NEON_DATABASE_URL_POOLED, conectividad al pooler de Neon)."
             )
 
         # Modo non-strict (default, dev): registramos + log estructurado +
@@ -991,9 +991,13 @@ def _purge_visual_diary_storage(user_id: str) -> int:
     try:
         bucket = supabase.storage.from_("visual_diary_images")
         entries = bucket.list(user_id) or []
+        # `supabase` es stub `None` (Supabase eliminado, ver db_core); el guard
+        # `if not supabase` arriba hace que pyright narre el cuerpo a Never y
+        # marque `for e in entries` como no-iterable. FP — código intencional
+        # preservado para cuando vuelva el object storage. Cero efecto runtime.
         paths = [
             f"{user_id}/{e['name']}"
-            for e in entries
+            for e in entries  # pyright: ignore[reportGeneralTypeIssues]
             if isinstance(e, dict) and e.get("name")
         ]
         if paths:

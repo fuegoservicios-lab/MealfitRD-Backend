@@ -5,7 +5,7 @@ import unicodedata as _uc
 from datetime import datetime, timedelta, timezone
 import os
 import logging
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, overload, Literal
 from dotenv import load_dotenv
 # [P1-DB-STMT-TIMEOUT · 2026-05-27] Helper registrado en `_KNOBS_REGISTRY`
 # (visible en /health/version y /api/system/knobs). `knobs` no tiene deps
@@ -19,10 +19,6 @@ logger = logging.getLogger(__name__)
 logging.getLogger("psycopg.pool").setLevel(logging.ERROR)
 
 load_dotenv()
-
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL")
 
 # Knobs MEALFIT_DB_POOL_* para sintonizar el psycopg ConnectionPool sin redeploy.
 # Existen porque bajo picos (RAG + cron chunk_queue + cache writes en paralelo)
@@ -187,61 +183,24 @@ MEALFIT_DB_BACKEND = (os.environ.get("MEALFIT_DB_BACKEND") or "neon").strip().lo
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 NEON_DATABASE_URL_POOLED = os.environ.get("NEON_DATABASE_URL_POOLED")
 
-if SUPABASE_DB_URL or MEALFIT_DB_BACKEND == "neon":
+if MEALFIT_DB_BACKEND == "neon":
     try:
         from psycopg_pool import ConnectionPool, AsyncConnectionPool
 
-        if MEALFIT_DB_BACKEND == "neon":
-            if not (NEON_DATABASE_URL and NEON_DATABASE_URL_POOLED):
-                raise RuntimeError(
-                    "[P1-NEON-DB-MIGRATION] MEALFIT_DB_BACKEND=neon requiere "
-                    "NEON_DATABASE_URL (direct) y NEON_DATABASE_URL_POOLED "
-                    "(pooler). Sin fallback silencioso a Supabase: split-brain."
-                )
-            clean_url = NEON_DATABASE_URL_POOLED.strip().strip("'").strip('"')
-            original_session_url = NEON_DATABASE_URL.strip().strip("'").strip('"')
-            logger.info(
-                "🔌 [P1-NEON-DB-MIGRATION] Backend de datos: NEON "
-                "(pooled→pools principales, direct→chat_checkpoint_pool). "
-                "Supabase queda solo para Auth+Storage."
+        # [P1-NEON-DB-MIGRATION] Neon es el ÚNICO backend de datos (Supabase
+        # eliminado por completo). Fail-loud si faltan los URLs → la config de
+        # pools aborta (/ready 503) en vez de dejar un pool a medio configurar.
+        if not (NEON_DATABASE_URL and NEON_DATABASE_URL_POOLED):
+            raise RuntimeError(
+                "[P1-NEON-DB-MIGRATION] Requiere NEON_DATABASE_URL (direct) y "
+                "NEON_DATABASE_URL_POOLED (pooler)."
             )
-        else:
-            # Limpiar comillas basura por si acaso
-            clean_url = SUPABASE_DB_URL.strip().strip("'").strip('"')
-
-            # [P1-CHAT-CHECKPOINT-FIX · 2026-05-20] `original_session_url` debe
-            # SIEMPRE apuntar al puerto session-mode (5432), independientemente
-            # de cómo viene el env var. Pre-fix: `original_session_url = clean_url`
-            # capturaba el URL crudo antes del rewrite — pero si el operator
-            # copió "Transaction pooler" del dashboard de Supabase (que viene
-            # con :6543 hardcoded), el "rescate" no aplicaba y el
-            # `chat_checkpoint_pool` terminaba apuntando también a Supavisor
-            # transaction mode. Resultado: el bug SSL bad length / EOF que
-            # P1-CHECKPOINT-POOL-SPLIT pretendía cerrar se perpetuaba, y SOLO
-            # se duplicaban los pools sin beneficio.
-            #
-            # Fix: forzar el rewrite a :5432 SIEMPRE para `original_session_url`,
-            # tanto si el env var viene con :5432 (no-op) como con :6543 (revert
-            # explícito). El pool principal `connection_pool` sigue rewriteando
-            # a :6543 (lógica existente, transaction mode para concurrencia).
-            # Tooltip-anchor: P1-CHAT-CHECKPOINT-FIX.
-            if ".supabase." in clean_url and ":6543" in clean_url:
-                original_session_url = clean_url.replace(":6543", ":5432")
-                logger.info(
-                    "🔧 [P1-CHAT-CHECKPOINT-FIX] chat_checkpoint_pool URL forzada "
-                    "a :5432 (session mode) — env var SUPABASE_DB_URL venía con "
-                    ":6543. Sin este rewrite, chat_checkpoint_pool reusaría "
-                    "Supavisor transaction mode → SSL bad length / EOF al "
-                    "`put_writes` del checkpointer al final de cada chat stream."
-                )
-            else:
-                original_session_url = clean_url
-
-            # MEJORA 3: Connection Pooling - Forzar el uso del Transaction Pooler de Supabase (6543)
-            # Esto previene el agotamiento de conexiones directas (Connection Exhaustion) si el volumen crece.
-            if ".supabase." in clean_url and ":5432" in clean_url:
-                clean_url = clean_url.replace(":5432", ":6543")
-                logger.info("🔧 [psycopg] DB URL automatically rewritten to use Supabase Transaction Pooler (port 6543).")
+        clean_url = NEON_DATABASE_URL_POOLED.strip().strip("'").strip('"')
+        original_session_url = NEON_DATABASE_URL.strip().strip("'").strip('"')
+        logger.info(
+            "🔌 [NEON] Backend de datos: NEON "
+            "(pooled→pools principales, direct→chat_checkpoint_pool)."
+        )
 
         # [P1-NEON-DB-MIGRATION] Export para consumidores que necesitan
         # session mode (leader lock del scheduler). Válido en ambos backends.
@@ -419,7 +378,17 @@ async def aclose_connection_pool():
         await async_connection_pool.close()
         logger.info("Async Connection pool cerrado.")
 
-def execute_sql_query(query: str, params: tuple = None, fetch_one: bool = False, fetch_all: bool = False):
+# [P-TYPING-1] Overloads para resolución de tipos por flag: `fetch_one=True`
+# devuelve `dict | None`; `fetch_all=True` (o sin flag, default seguro) devuelve
+# `list[dict]`. Sin esto, callsites que hacen `res.get(...)` / `res[0]` veían una
+# unión sucia y pyright emitía cientos de reportAttributeAccessIssue. Type-only.
+@overload
+def execute_sql_query(query: str, params: Optional[tuple] = ..., *, fetch_one: Literal[True], fetch_all: bool = ...) -> Optional[Dict[str, Any]]: ...
+@overload
+def execute_sql_query(query: str, params: Optional[tuple] = ..., *, fetch_all: Literal[True], fetch_one: Literal[False] = ...) -> List[Dict[str, Any]]: ...
+@overload
+def execute_sql_query(query: str, params: Optional[tuple] = ..., fetch_one: Literal[False] = ..., fetch_all: Literal[False] = ...) -> List[Dict[str, Any]]: ...
+def execute_sql_query(query: str, params: Optional[tuple] = None, fetch_one: bool = False, fetch_all: bool = False):
     """Ejecuta una consulta SQL directa usando el pool de psycopg.
 
     [P0-bonus] Antes, si el caller olvidaba pasar `fetch_one=True` o `fetch_all=True`,
@@ -447,7 +416,7 @@ def execute_sql_query(query: str, params: tuple = None, fetch_one: bool = False,
 
     with connection_pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cursor:
-            cursor.execute(query, params)
+            cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
             if fetch_one:
                 return cursor.fetchone()
             if fetch_all:
@@ -472,7 +441,13 @@ def execute_sql_query(query: str, params: tuple = None, fetch_one: bool = False,
                 pass
             return []
 
-def execute_sql_write(query: str, params: tuple = None, returning: bool = False, lock_timeout_ms: int = None):
+# [P-TYPING-1] Overloads: `returning=True` devuelve `list[dict]` (filas RETURNING);
+# sin `returning` devuelve `bool`. Type-only, runtime intacto.
+@overload
+def execute_sql_write(query: str, params: Optional[tuple] = ..., *, returning: Literal[True], lock_timeout_ms: Optional[int] = ...) -> List[Dict[str, Any]]: ...
+@overload
+def execute_sql_write(query: str, params: Optional[tuple] = ..., returning: Literal[False] = ..., lock_timeout_ms: Optional[int] = ...) -> bool: ...
+def execute_sql_write(query: str, params: Optional[tuple] = None, returning: bool = False, lock_timeout_ms: Optional[int] = None) -> Union[List[Dict[str, Any]], bool]:
     """Ejecuta una transacción INSERT/UPDATE/DELETE.
 
     [P1-3 · 2026-05-10] `lock_timeout_ms` opcional: cuando se provee, la
@@ -510,12 +485,12 @@ def execute_sql_write(query: str, params: tuple = None, returning: bool = False,
             with conn.transaction():
                 with conn.cursor(row_factory=dict_row) as cursor:
                     try:
-                        cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")
+                        cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")  # pyright: ignore[reportArgumentType, reportCallIssue]  # psycopg LiteralString FP
                     except Exception as set_err:
                         # Best-effort: si el SET LOCAL falla, seguimos sin él
                         # (comportamiento de antes — mejor que abortar el write).
                         logger.debug(f"[P1-3] SET LOCAL lock_timeout falló: {set_err}")
-                    cursor.execute(query, params)
+                    cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
                     if returning:
                         return cursor.fetchall()
                     try:
@@ -525,7 +500,7 @@ def execute_sql_write(query: str, params: tuple = None, returning: bool = False,
                     return True
         else:
             with conn.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(query, params)
+                cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
                 if returning:
                     return cursor.fetchall()
 
@@ -547,14 +522,14 @@ def execute_sql_transaction(queries_with_params: List[Tuple[str, tuple]]):
         with conn.transaction():
             with conn.cursor(row_factory=dict_row) as cursor:
                 for query, params in queries_with_params:
-                    cursor.execute(query, params)
+                    cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
                     try:
                         cursor.fetchall()
                     except psycopg.ProgrammingError:
                         pass
         return True
 
-async def aexecute_sql_query(query: str, params: tuple = None, fetch_one: bool = False, fetch_all: bool = False):
+async def aexecute_sql_query(query: str, params: Optional[tuple] = None, fetch_one: bool = False, fetch_all: bool = False):
     """Ejecuta una consulta SQL asíncrona usando el pool de psycopg async."""
     if 'async_connection_pool' not in globals() or not async_connection_pool:
         raise RuntimeError("db async_connection_pool is not available.")
@@ -564,7 +539,7 @@ async def aexecute_sql_query(query: str, params: tuple = None, fetch_one: bool =
     
     async with async_connection_pool.connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cursor:
-            await cursor.execute(query, params)
+            await cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
             if fetch_one:
                 res = await cursor.fetchone()
                 try:
@@ -581,7 +556,7 @@ async def aexecute_sql_query(query: str, params: tuple = None, fetch_one: bool =
                 pass
             return []
 
-async def aexecute_sql_write(query: str, params: tuple = None, returning: bool = False):
+async def aexecute_sql_write(query: str, params: Optional[tuple] = None, returning: bool = False):
     """Ejecuta una transacción INSERT/UPDATE/DELETE asíncrona."""
     if 'async_connection_pool' not in globals() or not async_connection_pool:
         raise RuntimeError("db async_connection_pool is not available.")
@@ -591,7 +566,7 @@ async def aexecute_sql_write(query: str, params: tuple = None, returning: bool =
     
     async with async_connection_pool.connection() as conn:
         async with conn.cursor(row_factory=dict_row) as cursor:
-            await cursor.execute(query, params)
+            await cursor.execute(query, params)  # pyright: ignore[reportArgumentType]  # psycopg exige LiteralString; query dinámico es el propósito del helper
             if returning:
                 return await cursor.fetchall()
                 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, BackgroundTasks, Request, Response
 from fastapi.responses import StreamingResponse
 from error_utils import safe_error_detail
-from typing import Optional
+from typing import Optional, Any
 import logging
 import traceback
 import os
@@ -33,7 +33,7 @@ from graph_orchestrator import (
     _env_int,
     # [P2-WATER-RETRY-NO-JITTER · 2026-05-24] `_env_float` para los knobs
     # `MEALFIT_WATER_RETRY_BACKOFF_BASE_S` / `MEALFIT_WATER_RETRY_JITTER_MAX_S`
-    # del helper `_water_supabase_with_retry` (auto-registro en KNOBS_REGISTRY).
+    # del helper `_execute_with_retry` (auto-registro en KNOBS_REGISTRY).
     _env_float,
     # [P1-FORM-6] Merge defensivo de `other*` text fields al router. El merge
     # también ocurre dentro de `arun_plan_pipeline` (línea ~8430); idempotente
@@ -1451,6 +1451,9 @@ def _postprocess_pipeline_result(
 
     # 5. Persistencia: chunking (planes largos) o save simple (tier gratis)
     if use_chunking:
+        # actual_user_id garantizado no-None: use_chunking solo es True cuando
+        # user_has_profile (que requiere actual_user_id truthy) — ver L2413/2729.
+        assert actual_user_id is not None
         plan_id = save_partial_plan_get_id(
             actual_user_id, result, selected_techniques, total_days_requested,
         )
@@ -2353,6 +2356,9 @@ def api_analyze(
         # silenciosamente, enmascarando bugs del cliente. Ahora 422 accionable.
         _ok_td, _td_err = _validate_total_days(data)
         if not _ok_td:
+            # _td_err garantizado no-None: _validate_total_days retorna (False, dict)
+            # cuando inválido y (True, None) cuando válido.
+            assert _td_err is not None
             raise HTTPException(
                 status_code=422,
                 detail={
@@ -2389,6 +2395,7 @@ def api_analyze(
         history = []
         likes = []
         taste_profile = ""
+        memory: dict = {}  # default cuando no hay session_id; .get(...) abajo guardado por `if session_id`
 
         if session_id:
             get_or_create_session(session_id)
@@ -2402,7 +2409,7 @@ def api_analyze(
             # [GAP 10] → Movido a inject_learning_signals_from_profile (P0 fix)
             pass
 
-        active_rejections = get_active_rejections(user_id=actual_user_id, session_id=session_id)
+        active_rejections = get_active_rejections(user_id=actual_user_id, session_id=session_id)  # pyright: ignore[reportArgumentType]
         rejected_meal_names = [r["meal_name"] for r in active_rejections] if active_rejections else []
 
         taste_profile = analyze_preferences_agent(likes, history, active_rejections=rejected_meal_names)
@@ -2671,6 +2678,9 @@ async def api_analyze_stream(
         # accionable, no un stream con error event (peor UX/handling JS).
         _ok_td, _td_err = _validate_total_days(data)
         if not _ok_td:
+            # _td_err garantizado no-None: _validate_total_days retorna (False, dict)
+            # cuando inválido y (True, None) cuando válido.
+            assert _td_err is not None
             raise HTTPException(
                 status_code=422,
                 detail={
@@ -2705,6 +2715,7 @@ async def api_analyze_stream(
         history = []
         likes = []
         taste_profile = ""
+        memory: dict = {}  # default cuando no hay session_id; .get(...) abajo guardado por `if session_id`
 
         if session_id:
             get_or_create_session(session_id)
@@ -2718,7 +2729,7 @@ async def api_analyze_stream(
             # [GAP 10] → Movido a inject_learning_signals_from_profile (P0 fix)
             pass
 
-        active_rejections = get_active_rejections(user_id=actual_user_id, session_id=session_id)
+        active_rejections = get_active_rejections(user_id=actual_user_id, session_id=session_id)  # pyright: ignore[reportArgumentType]
         rejected_meal_names = [r["meal_name"] for r in active_rejections] if active_rejections else []
 
         taste_profile = analyze_preferences_agent(likes, history, active_rejections=rejected_meal_names)
@@ -2854,7 +2865,7 @@ async def api_analyze_stream(
                 pass
 
         # Ejecutar el pipeline en un thread separado para no bloquear el event loop
-        pipeline_result = {"result": None, "error": None}
+        pipeline_result: dict[str, Any] = {"result": None, "error": None}
 
         async def run_pipeline():
             try:
@@ -2974,6 +2985,10 @@ async def api_analyze_stream(
                         f"persist + KV mark complete para user={_deep_search_user_id[:8]}."
                     )
                     async def _fallback_postprocess():
+                        # _deep_search_user_id garantizado no-None: el closure solo se
+                        # programa dentro del guard `if ... and _deep_search_user_id:` (arriba)
+                        # y la variable nunca se reasigna tras L2794.
+                        assert _deep_search_user_id is not None
                         try:
                             # [P2-PIPELINE-TASK-DONE-RACE-FIX · 2026-05-16] Bug
                             # observado plan_id=0844a613+5f5e5aa6 (2026-05-16 03:51):
@@ -3959,7 +3974,7 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         # Solo registrar rechazo cuando el usuario explícitamente dice "No me gusta"
         if rejected_meal and swap_reason == "dislike":
             logger.info(f"👎 [SWAP] Rechazo real registrado: '{rejected_meal}' (razón: {swap_reason})")
-            background_tasks.add_task(_process_swap_rejection_background, session_id, user_id, rejected_meal, meal_type)
+            background_tasks.add_task(_process_swap_rejection_background, session_id, user_id, rejected_meal, meal_type)  # pyright: ignore[reportArgumentType]
         else:
             logger.info(f"🔄 [SWAP] Cambio sin rechazo: '{rejected_meal or 'N/A'}' (razón: {swap_reason})")
 
@@ -4601,7 +4616,7 @@ def api_restore_plan_local(
                         f"WHERE id = %s AND user_id = %s"
                     )
                     params.extend([plan_id, verified_user_id])
-                    cursor.execute(sql, tuple(params))
+                    cursor.execute(sql, tuple(params))  # pyright: ignore[reportArgumentType]
 
         return {"success": True}
         # P1-OPEN-1-END
@@ -5297,7 +5312,7 @@ _WATER_RETRY_JITTER_MAX_S = _env_float(
 _WATER_RETRY_ATTEMPTS = 2
 
 
-def _water_supabase_with_retry(builder_factory, op_label: str):
+def _execute_with_retry(builder_factory, op_label: str):
     """Ejecuta una operación DB con 1 reintento. `builder_factory` es una
     lambda/callable que EJECUTA la operación completa cada vez y retorna
     el resultado.
@@ -5333,6 +5348,10 @@ def _water_supabase_with_retry(builder_factory, op_label: str):
                     f"{(str(e) or '')[:120]}. Reintentando en {sleep_s:.3f}s."
                 )
                 _time.sleep(sleep_s)
+    # last_exc garantizado no-None aquí: el loop (_WATER_RETRY_ATTEMPTS>=1) solo
+    # alcanza este punto cuando el intento final cayó en `except` (asignó last_exc);
+    # un intento exitoso retorna antes.
+    assert last_exc is not None
     raise last_exc
 
 # [P3-WATER-TRACKER · 2026-05-16] Personalizacion de la meta diaria.
@@ -5481,7 +5500,7 @@ def api_get_water_intake(
         from db import execute_sql_query
         # `updated_at` se devuelve como datetime (FastAPI lo serializa a
         # ISO-8601, mismo wire format que PostgREST). El frontend no lo parsea.
-        res = _water_supabase_with_retry(
+        res = _execute_with_retry(
             lambda: execute_sql_query(
                 "SELECT glasses, updated_at FROM public.water_intake_log "
                 "WHERE user_id = %s AND log_date = %s LIMIT 1",
@@ -5568,7 +5587,7 @@ def api_set_water_intake(
         # `updated_at = NOW()` se toca explicitamente para que el cliente
         # pueda distinguir "ya actualice hoy" del default seed.
         from db import execute_sql_write
-        _water_supabase_with_retry(
+        _execute_with_retry(
             lambda: execute_sql_write(
                 "INSERT INTO public.water_intake_log "
                 "(user_id, log_date, glasses, updated_at) "
@@ -5840,8 +5859,8 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             _restocked_at = plan_data.get("restocked_at_iso") if plan_data.get("is_restocked") else None
             # [P1-2] Item-level: precedencia sobre el blanket legacy.
             _restocked_items = plan_data.get("restocked_items") if isinstance(plan_data.get("restocked_items"), dict) else None
-            scaled_15_hybrid = _build_hybrid(scaled_7, scaled_15, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if scaled_15 else scaled_15
-            scaled_30_hybrid = _build_hybrid(scaled_7, scaled_30, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if scaled_30 else scaled_30
+            scaled_15_hybrid = _build_hybrid(scaled_7, scaled_15, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if scaled_15 else scaled_15  # pyright: ignore[reportArgumentType]  (structured=True ⇒ scaled_* son list)
+            scaled_30_hybrid = _build_hybrid(scaled_7, scaled_30, restocked_at_iso=_restocked_at, restocked_items=_restocked_items) if scaled_30 else scaled_30  # pyright: ignore[reportArgumentType]  (structured=True ⇒ scaled_* son list)
         except Exception as _hyb_e:
             logger.warning(f"[RECALC] _build_hybrid fallo: {_hyb_e}. Usando lista extrapolada.")
             scaled_15_hybrid = scaled_15
@@ -6016,7 +6035,7 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                     "household_size": household_size,
                     "timestamp": time.time(),
                     "weekly_items_count": len(scaled_7),
-                    "sample_item": scaled_7[0].get("display_string", "?") if scaled_7 else "empty"
+                    "sample_item": scaled_7[0].get("display_string", "?") if scaled_7 else "empty"  # pyright: ignore[reportAttributeAccessIssue]  (structured=True ⇒ scaled_7 es list[dict])
                 }
 
             return plan_data_fresh
@@ -6372,8 +6391,8 @@ def api_chunk_status(plan_id: str, response: Response, verified_user_id: Optiona
                 "days_count": r.get("days_count"),
                 "chunk_kind": r.get("chunk_kind"),
                 "reason_code": reason_code,
-                "execute_after": (_exec_after.isoformat() if hasattr(_exec_after, "isoformat") else _exec_after),
-                "updated_at": (_updated.isoformat() if hasattr(_updated, "isoformat") else _updated),
+                "execute_after": (_exec_after.isoformat() if hasattr(_exec_after, "isoformat") else _exec_after),  # pyright: ignore[reportOptionalMemberAccess]  (guarded por hasattr)
+                "updated_at": (_updated.isoformat() if hasattr(_updated, "isoformat") else _updated),  # pyright: ignore[reportOptionalMemberAccess]  (guarded por hasattr)
                 "paused_seconds": int(r.get("paused_seconds") or 0),
             })
         # P0-DASH-CHIP-HONESTY-END
@@ -7870,7 +7889,7 @@ def api_plan_lessons_detail(
     for r in rows:
         created_at = r.get("created_at")
         if hasattr(created_at, "isoformat"):
-            created_at = created_at.isoformat()
+            created_at = created_at.isoformat()  # pyright: ignore[reportOptionalMemberAccess]  (guarded por hasattr)
         # [P2-HIST-NEW-2 · 2026-05-09] Coerción defensiva del jsonb
         # `metadata`. psycopg suele entregar dicts pero un row legacy
         # con metadata=None o tipo no-dict (string raw, lista) caería
@@ -8698,14 +8717,14 @@ def api_plan_chunk_metrics(
                 "retries": r.get("retries"),
                 "lag_seconds": r.get("metrics_lag_seconds"),
                 "learning_repeat_pct": (
-                    float(r.get("learning_repeat_pct"))
+                    float(r.get("learning_repeat_pct"))  # pyright: ignore[reportArgumentType]  (guarded por is not None abajo)
                     if r.get("learning_repeat_pct") is not None
                     else None
                 ),
                 "rejection_violations": r.get("rejection_violations"),
                 "allergy_violations": r.get("allergy_violations"),
                 "pantry_snapshot_age_hours": (
-                    float(r.get("pantry_snapshot_age_hours"))
+                    float(r.get("pantry_snapshot_age_hours"))  # pyright: ignore[reportArgumentType]  (guarded por is not None abajo)
                     if r.get("pantry_snapshot_age_hours") is not None
                     else None
                 ),
@@ -8781,7 +8800,7 @@ def api_plan_chunk_metrics(
             # "sin info" vs "lista vacía explícita".
             "deferrals_count": int(r.get("deferrals_count") or 0),
             "deferral_reasons": (
-                [str(x) for x in r.get("deferral_reasons") if x]
+                [str(x) for x in r.get("deferral_reasons") if x]  # pyright: ignore[reportOptionalIterable]  (guarded por isinstance list abajo)
                 if isinstance(r.get("deferral_reasons"), list)
                 and r.get("deferral_reasons")
                 else None
@@ -9456,7 +9475,7 @@ def api_plans_history_list(
         # ya es text (extraído via ->>).
         created_at = row.get("created_at")
         if hasattr(created_at, "isoformat"):
-            created_at = created_at.isoformat()
+            created_at = created_at.isoformat()  # pyright: ignore[reportOptionalMemberAccess]  (guarded por hasattr)
 
         plans.append({
             "id": row.get("id"),
@@ -9495,13 +9514,13 @@ def api_plans_history_list(
             "grocery_start_date": (
                 row.get("grocery_start_date")
                 if isinstance(row.get("grocery_start_date"), str)
-                and row.get("grocery_start_date").strip()
+                and row.get("grocery_start_date").strip()  # pyright: ignore[reportOptionalMemberAccess]  (guarded por isinstance str)
                 else None
             ),
             "cycle_start_date": (
                 row.get("cycle_start_date")
                 if isinstance(row.get("cycle_start_date"), str)
-                and row.get("cycle_start_date").strip()
+                and row.get("cycle_start_date").strip()  # pyright: ignore[reportOptionalMemberAccess]  (guarded por isinstance str)
                 else None
             ),
             "coherence_adjusts_count": coherence_adjusts_count,
@@ -9568,7 +9587,7 @@ def api_plans_history_list(
             # frontend distinga "sin info" de "lista vacía".
             "chunk_pantry_degraded_count": int(row.get("chunk_pantry_degraded_count") or 0),
             "chunk_pantry_degraded_reasons": (
-                [str(r) for r in row.get("chunk_pantry_degraded_reasons") if r]
+                [str(r) for r in row.get("chunk_pantry_degraded_reasons") if r]  # pyright: ignore[reportOptionalIterable]  (guarded por isinstance list abajo)
                 if isinstance(row.get("chunk_pantry_degraded_reasons"), list)
                 and row.get("chunk_pantry_degraded_reasons")
                 else None
@@ -9581,7 +9600,7 @@ def api_plans_history_list(
             "primary_action_reason": (
                 str(row.get("primary_action_reason_code")).strip()
                 if isinstance(row.get("primary_action_reason_code"), str)
-                and row.get("primary_action_reason_code").strip()
+                and row.get("primary_action_reason_code").strip()  # pyright: ignore[reportOptionalMemberAccess]  (guarded por isinstance str)
                 else None
             ),
         })
@@ -10068,7 +10087,7 @@ def api_regenerate_dead_lettered_simplified(
         # /retry-chunk: el endpoint cobra cuota al validar pero no
         # incrementaba el contador. Re-encolar chunk = futuro LLM call.
         try:
-            log_api_usage(verified_user_id, "regenerate_simplified")
+            log_api_usage(verified_user_id, "regenerate_simplified")  # pyright: ignore[reportArgumentType]  (log_api_usage maneja None/guest internamente)
         except Exception as _audit_err:
             logger.warning(f"[P2-LIVE-7] log_api_usage regenerate_simplified falló: {_audit_err}")
 

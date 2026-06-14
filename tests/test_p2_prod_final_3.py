@@ -12,7 +12,7 @@ Bundle 3-en-1 que cierra los 3 P2 residuales del audit prod-readiness
     opcional `(int) -> bool`, fail → WARNING + cae al default + parse_failed.
 
   GAP-2 P2-WATER-RETRY-NO-JITTER:
-    `routers/plans.py::_water_supabase_with_retry` usaba backoff constante
+    `routers/plans.py::_execute_with_retry` usaba backoff constante
     350ms sin jitter ni exponencial. Thundering herd contra Supabase post-
     blip regional. Fix: backoff exponencial + jitter absoluto + 2 knobs
     `MEALFIT_WATER_RETRY_BACKOFF_BASE_S` y `MEALFIT_WATER_RETRY_JITTER_MAX_S`.
@@ -183,11 +183,11 @@ def test_water_retry_uses_knob_with_clamp():
 
 
 def test_water_retry_helper_uses_exponential_plus_jitter():
-    """El helper `_water_supabase_with_retry` calcula `sleep_s = base *
+    """El helper `_execute_with_retry` calcula `sleep_s = base *
     (2 ** attempt) + random.uniform(0.0, jitter_max)`. Pre-fix era constante
     `_time.sleep(_WATER_RETRY_BACKOFF_S)` sin jitter."""
     src = _read(_PLANS_ROUTER)
-    fn_start = src.find("def _water_supabase_with_retry")
+    fn_start = src.find("def _execute_with_retry")
     assert fn_start >= 0
     fn_body = src[fn_start: fn_start + 3000]
     # Backoff exponencial: base * (2 ** attempt)

@@ -20,9 +20,6 @@ Fix:
     - Decorator `@retry(stop_after_attempt(2), wait_exponential)` sobre
       `get_recent_messages` cubre el caso de socket muerto. Tenacity hace
       1 reintento con backoff 0.3-1.5s.
-    - Helper `_is_transient_supabase_http_error` (no usado en esta versión
-      del retry pero queda como anchor para extensiones futuras a otros
-      callsites — el nombre indica intención).
 
 Tests parser-based — anchor literal en código para que un refactor
 accidental que remueva el retry falle el CI.
@@ -76,30 +73,16 @@ def test_get_recent_messages_has_retry_decorator():
     )
 
 
-def test_is_transient_supabase_http_error_helper_exists():
-    """[P1-CHAT-SUPABASE-RETRY] Helper `_is_transient_supabase_http_error`
-    debe existir como anchor para extensiones futuras del retry a otros
-    callsites (si recurre el bug en otros endpoints de supabase-py)."""
+def test_dead_supabase_http_error_helper_removed():
+    """[P1-NEON-DB-MIGRATION] El helper `_is_transient_supabase_http_error`
+    (scaffolding de la era supabase-py/httpx, 0 callers en prod) fue removido
+    al migrar a psycopg directo sobre Neon — no hay httpx en el stack actual.
+    El `@retry` genérico sobre `get_recent_messages` (test de arriba) cubre
+    los transients de psycopg vía `retry_if_exception_type(Exception)`."""
     src = _read(_DB_CHAT_PY)
-    assert "def _is_transient_supabase_http_error(" in src, (
-        "Helper `_is_transient_supabase_http_error` ausente. Sin él, "
-        "extender el retry a otros callsites (e.g. `get_session_messages`, "
-        "`get_user_chat_sessions`) requiere duplicar la detection logic. "
-        "Ver P1-CHAT-SUPABASE-RETRY · 2026-05-20."
-    )
-    # Sanity: debe detectar RemoteProtocolError + Server disconnected.
-    helper_match = re.search(
-        r"def _is_transient_supabase_http_error\(.*?\n(.*?)(?=\ndef |\Z)",
-        src,
-        re.DOTALL,
-    )
-    assert helper_match
-    body = helper_match.group(1)
-    assert "RemoteProtocolError" in body, (
-        "Detector NO matchea `RemoteProtocolError` — el modo de fallo "
-        "principal queda descubierto."
-    )
-    assert "server disconnected" in body.lower(), (
-        "Detector NO matchea mensaje 'server disconnected' — fallback de "
-        "string match ausente."
+    assert "_is_transient_supabase_http_error" not in src, (
+        "El helper muerto `_is_transient_supabase_http_error` reapareció en "
+        "db_chat.py. Era scaffolding de supabase-py (httpx RemoteProtocolError) "
+        "sin callers; el stack ahora es psycopg/Neon. Si necesitas detección de "
+        "transients, extiende el `@retry` de `get_recent_messages`."
     )

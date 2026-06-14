@@ -93,14 +93,14 @@ def test_reactivation_branch_restores_tier():
 
     [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: el branch ya no termina
     en `.execute()` (PostgREST) sino en el despacho del UPDATE SQL via
-    `await _supabase_async(_do_reactivate)`."""
+    `await _run_sync_db_in_thread(_do_reactivate)`."""
     src = _read()
     assert "BILLING.SUBSCRIPTION.ACTIVATED" in src, (
         "Falta el handler de re-activación `BILLING.SUBSCRIPTION.ACTIVATED`."
     )
     m = re.search(
         r'event_type\s+in\s+\(\s*"BILLING\.SUBSCRIPTION\.ACTIVATED"'
-        r'[\s\S]*?await _supabase_async\(_do_reactivate\)',
+        r'[\s\S]*?await _run_sync_db_in_thread\(_do_reactivate\)',
         src,
     )
     assert m, "No se encontró el branch de re-activación."

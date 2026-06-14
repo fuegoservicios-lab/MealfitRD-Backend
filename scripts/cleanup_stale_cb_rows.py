@@ -46,7 +46,7 @@ Argumentos:
                         el script lista TODOS los `llm_circuit_breaker:*` en
                         zero canonical stale para que decidas manualmente.
     --apply             Aplica DELETE. Sin esta flag, solo preview (SELECT).
-    --connection-string Override de SUPABASE_DB_URL.
+    --connection-string Override de NEON_DATABASE_URL.
 
 Defensa-en-profundidad:
     - Solo borra rows con `failures=0 AND last_failure=0` (zero canonical, NO

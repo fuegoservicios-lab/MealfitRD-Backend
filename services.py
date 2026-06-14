@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+from typing import Any, Optional, cast
 from datetime import datetime
 import json
 import math
@@ -157,7 +157,7 @@ def _defer_creative_plan_title(plan_id: str, user_id: str, plan_data: dict, plac
     threading.Thread(target=_bg, name="defer-plan-title", daemon=True).start()
 
 
-def _sanitize_nonfinite_for_json(obj, _path="$", _found=None):
+def _sanitize_nonfinite_for_json(obj, _path="$", _found=None) -> tuple[Any, list]:
     """[P2-PERSIST-NAN-GUARD · 2026-06-13] Reemplaza NaN/Infinity (floats no-finitos)
     por 0.0 recursivamente. Postgres `jsonb` rechaza `NaN`/`Infinity` con
     'invalid input syntax for type json' → el INSERT del plan falla y el plan
@@ -198,7 +198,7 @@ def _scrub_plan_data_floats(plan_data: dict, user_id: str = "?") -> dict:
         return plan_data
 
 
-def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: list = None, total_days_requested: int = 7) -> str:
+def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None, total_days_requested: int = 7) -> Optional[str]:
     """Guarda la Semana 1 de un plan chunked de forma sincrónica y retorna el plan_id UUID.
     Usado exclusivamente por el flujo de Background Chunking para encolar las semanas restantes.
 
@@ -262,7 +262,9 @@ def save_partial_plan_get_id(user_id: str, plan_data: dict, selected_techniques:
 
         # [P0-2/ATOMIC] INSERT del plan + cancelación de chunks en una sola transacción.
         # Elimina la ventana TOCTOU entre guardar el plan y cancelar los chunks viejos.
-        plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=True)
+        # return_id=True garantiza un UUID str (ver db_plans.save_new_meal_plan_atomic);
+        # cast solo para descartar el Literal[True]/None inferido del helper sin anotación.
+        plan_id = cast("Optional[str]", save_new_meal_plan_atomic(user_id, insert_data, return_id=True))
 
         # [P3-GENCHUNK-SPEED · 2026-06-01] Disparar el título creativo en background
         # SOLO tras tener el plan_id (para el UPDATE guardado) y solo si diferimos.
@@ -337,7 +339,7 @@ def _persist_plan_persist_failed_alert(user_id: Optional[str], reason: str) -> N
         )
 
 
-def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: list = None):
+def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None):
     """Background task para guardar plan y actualizar frecuencias de ingredientes.
 
     [P2-PARTIAL-PLAN-1 · 2026-05-11] El parámetro `additional_db_queries`

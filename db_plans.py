@@ -373,7 +373,7 @@ def set_meal_plan_for_update_timeouts(cursor) -> None:
 def update_plan_data_atomic(
     plan_id: str,
     mutator,
-    lock_timeout_ms: int = None,
+    lock_timeout_ms: Optional[int] = None,
     *,
     user_id: Optional[str] = None,
 ) -> dict:
@@ -459,7 +459,7 @@ def update_plan_data_atomic(
         with conn.transaction():
             with conn.cursor(row_factory=dict_row) as cursor:
                 try:
-                    cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")
+                    cursor.execute(f"SET LOCAL lock_timeout = '{int(lock_timeout_ms)}ms'")  # pyright: ignore[reportArgumentType, reportCallIssue]  # psycopg LiteralString FP
                 except Exception as set_err:
                     logger.debug(f"[P0-2] No se pudo setear lock_timeout en update_plan_data_atomic: {set_err}")
 
@@ -875,7 +875,7 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
                     _apply_inherited_lifetime_lessons(user_id, data, cursor=cursor)
 
                     sql, vals = _build_meal_plan_insert_sql(data, with_returning=True)
-                    cursor.execute(sql, vals)
+                    cursor.execute(sql, vals)  # pyright: ignore[reportArgumentType]  # psycopg LiteralString FP (sql dinámico)
                     row = cursor.fetchone()
                     plan_id = str(row["id"]) if row else None
         return plan_id, len(cancelled_rows)
@@ -899,16 +899,19 @@ def save_new_meal_plan_atomic(user_id: str, insert_data: dict, return_id: bool =
     return plan_id if return_id else True
 
 
-def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[str, tuple]] = None, return_id: bool = False):
+def save_new_meal_plan_robust(insert_data: dict, additional_queries: Optional[List[Tuple[str, tuple]]] = None, return_id: bool = False):
     """Guarda un nuevo plan nutricional con fallback por si faltan columnas optimizadas.
 
     Si return_id=True, añade RETURNING id y devuelve el UUID del plan insertado (str).
     Si return_id=False (default), devuelve True al éxito como antes.
     """
     if not connection_pool: return None if return_id else False
+    # [P-TYPING-1] deepcopy fuera del try: garantiza `safe_data` ligado antes del
+    # except (que lo usa). Un fallo de deepcopy se propaga idéntico al path
+    # `else: raise try_db_e` previo (era inalcanzable: deepcopy de dict no falla).
+    import copy
+    safe_data = copy.deepcopy(insert_data)
     try:
-        import copy
-        safe_data = copy.deepcopy(insert_data)
 
         # [P0-1/INHERIT] Misma herencia cross-plan que el path atomic, pero sin
         # cursor compartido: el helper abre su propio SELECT vía execute_sql_query.
@@ -924,9 +927,10 @@ def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[
             execute_sql_transaction(queries_to_run)
             return True
         else:
-            result = execute_sql_write(query, tuple(vals), returning=return_id)
             if return_id:
+                result = execute_sql_write(query, tuple(vals), returning=True)
                 return str(result[0]["id"]) if result else None
+            execute_sql_write(query, tuple(vals))
             return True
     except Exception as try_db_e:
         err_msg = str(try_db_e)
@@ -943,9 +947,10 @@ def save_new_meal_plan_robust(insert_data: dict, additional_queries: List[Tuple[
                     execute_sql_transaction(queries_to_run)
                     return True
                 else:
-                    result = execute_sql_write(query, tuple(vals), returning=return_id)
                     if return_id:
+                        result = execute_sql_write(query, tuple(vals), returning=True)
                         return str(result[0]["id"]) if result else None
+                    execute_sql_write(query, tuple(vals))
                     return True
             except Exception as e2:
                 raise e2
@@ -1101,7 +1106,7 @@ def get_latest_meal_plan_with_id(user_id: str):
         logger.error(f"Error obteniendo plan con ID: {e}")
         return None
 
-def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: str = None):
+def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: Optional[str] = None):
     """[P1-NEW-3 · 2026-05-10] Actualiza el plan_data JSONB de un plan
     filtrando por `(id, user_id)` cuando se provee `user_id`.
 
@@ -1316,7 +1321,7 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
 
     return False
 
-def log_unknown_ingredients(user_id: str, unknown_ings: list, raw_map: dict = None):
+def log_unknown_ingredients(user_id: str, unknown_ings: list, raw_map: Optional[dict] = None):
     """Loguea ingredientes que el LLM genera pero que el sistema de sinónimos no reconoce.
     Se guardan en la tabla `unknown_ingredients` para revisión periódica y expansión del catálogo.
     Usa el RPC atómico `log_unknown_ingredient_rpc` (incrementa occurrences en conflicto).

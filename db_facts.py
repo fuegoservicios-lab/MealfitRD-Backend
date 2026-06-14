@@ -137,14 +137,14 @@ def _with_db_retry(fn, *args, _label: str = "db_op", _attempts: int = 2, **kwarg
                 f"reintentando en {delay:.1f}s ({attempt + 1}/{_attempts})."
             )
             _time.sleep(delay)
-    raise last_exc
+    raise last_exc  # pyright: ignore[reportGeneralTypeIssues]
 
 def _invalidate_rag_cache(user_id: str):
     """Invalida la caché RAG del usuario para evitar servir datos médicos obsoletos."""
     prefix = f"rag_{user_id}_"
     if redis_client:
         try:
-            for key in redis_client.scan_iter(f"{prefix}*"):
+            for key in redis_client.scan_iter(f"{prefix}*"):  # pyright: ignore[reportGeneralTypeIssues]
                 redis_client.delete(key)
         except Exception as e:
             logger.warning(f"Redis cache invalidate error: {e}")
@@ -239,7 +239,7 @@ def release_fact_lock(user_id: str):
     except Exception as e:
         logger.error(f"Error releasing fact lock: {e}")
 
-def save_user_fact(user_id: str, fact: str, embedding: list, metadata: dict = None):
+def save_user_fact(user_id: str, fact: str, embedding: list, metadata: Optional[dict] = None):
     """Guarda un hecho, su embedding y sus metadatos en la base de datos."""
     if not connection_pool: return None
     try:
@@ -259,7 +259,7 @@ def save_user_fact(user_id: str, fact: str, embedding: list, metadata: dict = No
         logger.error(f"Error guardando user_fact: {e}")
         return None
 
-def delete_expired_temporal_facts(user_id: str = None, hours: int = 48):
+def delete_expired_temporal_facts(user_id: Optional[str] = None, hours: int = 48):
     """Elimina los hechos con categoría 'sintoma_temporal' que son más antiguos que 'hours'.
 
     [P2-PROD-AUDIT-BUNDLE · 2026-05-27] Debounce in-process per-user via
@@ -337,7 +337,7 @@ def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):
         logger.error(f"Error haciendo soft delete a facts por metadata: {e}")
         return None
 
-def search_user_facts(user_id: str, query_embedding: list, query_text: str = None, threshold: float = 0.5, limit: int = 5):
+def search_user_facts(user_id: str, query_embedding: list, query_text: Optional[str] = None, threshold: float = 0.5, limit: int = 5):
     """Busca hechos similares usando búsqueda híbrida (si hay texto) o vectorial pura en Supabase."""
     if not connection_pool: return []
     
@@ -371,7 +371,7 @@ def search_user_facts(user_id: str, query_embedding: list, query_text: str = Non
         logger.error(f"Error buscando facts: {e}")
         return []
 
-def search_user_facts_hybrid(user_id: str, query_embedding: list, filter_metadata: dict = None, threshold: float = 0.5, limit: int = 5):
+def search_user_facts_hybrid(user_id: str, query_embedding: list, filter_metadata: Optional[dict] = None, threshold: float = 0.5, limit: int = 5):
     """Búsqueda Híbrida Vectorial: similitud de vectores pre-filtrada por metadatos (JSONB) usando pgvector RPC."""
     if not connection_pool: return []
     
@@ -577,7 +577,7 @@ def search_visual_diary(user_id: str, query_embedding: list, threshold: float = 
         logger.error(f"Error buscando visual_diary (tras retries): {e}")
         return []
 
-def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: list = None, meal_type: str = "snack", mark_inventory_synced: bool = False):
+def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int, carbs: int = 0, healthy_fats: int = 0, ingredients: Optional[list] = None, meal_type: str = "snack", mark_inventory_synced: bool = False):
     """Guarda una comida consumida en la tabla consumed_meals.
 
     [P0.1] Si el caller acaba de descontar los ingredientes del inventario,
@@ -657,7 +657,7 @@ def log_consumed_meal(user_id: str, meal_name: str, calories: int, protein: int,
         logger.error(f"Error guardando comida consumida: {e}")
         return None
 
-def get_consumed_meals_today(user_id: str, date_str: str = None, tz_offset_mins: int = None):
+def get_consumed_meals_today(user_id: str, date_str: Optional[str] = None, tz_offset_mins: Optional[int] = None):
     """Obtiene las comidas consumidas del día especificado en base a la zona horaria del usuario."""
     max_retries = 2
     for attempt in range(max_retries):

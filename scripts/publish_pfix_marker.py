@@ -12,8 +12,8 @@ Mismo formato que el cron P0-1 espera (string puro o objeto con
 `.marker`). Aquí escribimos string puro para simplicidad.
 
 Variables de entorno requeridas:
-    SUPABASE_DB_URL  — connection string al pooler (mismo que usa el
-                       backend en producción).
+    NEON_DATABASE_URL  — connection string a Neon (mismo que usa el
+                         backend en producción). También acepta DATABASE_URL.
 
 Salida:
     exit 0 — marker publicado o ya idéntico al valor en DB.

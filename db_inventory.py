@@ -693,7 +693,7 @@ def _resolve_unit_weight(master_item: dict) -> float | None:
     return None
 
 
-def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) -> float:
+def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) -> Optional[float]:
     """Intenta convertir matemáticamente una cantidad de una unidad a otra usando factores y densidades.
 
     [P1-1 · 2026-05-08] Cuando se requiere conversión cruzada (masa↔volumen o
@@ -759,6 +759,9 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
 
     # 3. Mass to Volume
     if from_unit_lower in mass_to_g and to_unit_lower in vol_to_ml:
+        # density garantizado no-None: esta rama implica needs_density=True (misma
+        # condición), así el bloque arriba o retornó None (strict) o asignó float.
+        assert density is not None
         g = qty * mass_to_g[from_unit_lower]
         cups = g / density
         ml = cups * 240.0
@@ -766,6 +769,9 @@ def convert_amount(qty: float, from_unit: str, to_unit: str, master_item: dict) 
 
     # 4. Volume to Mass
     if from_unit_lower in vol_to_ml and to_unit_lower in mass_to_g:
+        # density garantizado no-None: esta rama implica needs_density=True (misma
+        # condición), así el bloque arriba o retornó None (strict) o asignó float.
+        assert density is not None
         ml = qty * vol_to_ml[from_unit_lower]
         cups = ml / 240.0
         g = cups * density
@@ -1139,7 +1145,7 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
         )
         if _stmt_timeout_ms < 100:
             _stmt_timeout_ms = 5000  # defensa contra valores absurdos
-        queries = [
+        queries: list[tuple[str, tuple]] = [
             (f"SET LOCAL statement_timeout = {int(_stmt_timeout_ms)}", ()),
         ]
         queries.extend(
@@ -1487,7 +1493,7 @@ def get_inventory_activity_since(user_id: str, since_iso: str) -> Dict[str, Any]
         ) or []
         if not rows:
             return {"mutations_count": 0, "last_mutation_at": None, "low_stock_items": 0, "consumption_mutations_count": 0, "manual_mutations_count": 0}
-        last_mutation = max((r.get("updated_at") for r in rows if r.get("updated_at")), default=None)
+        last_mutation = max((r.get("updated_at") for r in rows if r.get("updated_at")), default=None)  # pyright: ignore[reportArgumentType]  # el filtro `if r.get("updated_at")` garantiza solo valores truthy (no-None) a max()
         # Items con stock muy bajo (≤ 0.5 en unidad arbitraria) sugieren consumo reciente
         low_stock = sum(1 for r in rows if float(r.get("quantity") or 0) <= 0.5)
         

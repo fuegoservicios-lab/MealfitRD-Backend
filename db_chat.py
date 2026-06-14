@@ -2,7 +2,7 @@ from functools import lru_cache as _lru_cache
 import json
 import uuid
 import unicodedata as _uc
-from typing import Optional, List, Dict, Any, Tuple, Union
+from typing import Optional, List, Dict, Any, Tuple, Union, cast
 import os
 import logging
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ def update_session_title(session_id: str, new_title: str) -> bool:
         logger.error(f"Error actualizando titulo de sesion {session_id}: {e}")
         return False
 
-def get_or_create_session(session_id: str, user_id: str = None):
+def get_or_create_session(session_id: str, user_id: Optional[str] = None):
     if not connection_pool: 
         logger.error(f"🚨 [SESSION] connection_pool es None! No se puede crear sesión {session_id}")
         return None
@@ -309,7 +309,7 @@ def _process_and_sort_sessions(sessions: list):
         logger.error(f"Error en getsessions: {e}")
         return
 
-def get_session_messages(session_id: str):
+def get_session_messages(session_id: str) -> List[Dict[str, Any]]:
     """Obtiene todos los mensajes de una sesion, ordenados cronologicamente."""
     if not connection_pool: return []
     max_retries = 2
@@ -321,7 +321,7 @@ def get_session_messages(session_id: str):
                 (session_id,),
                 fetch_all=True,
             )
-            return res or []
+            return cast(List[Dict[str, Any]], res or [])
         except Exception as e:
             if attempt < max_retries - 1:
                 import time
@@ -329,6 +329,7 @@ def get_session_messages(session_id: str):
                 continue
             logger.error(f"Error get_session_messages: {e}")
             return []
+    return []  # defensivo: range(max_retries) siempre itera (max_retries=2), inalcanzable
 
 def acquire_summarizing_lock(session_id: str) -> bool:
     """Intenta adquirir el bloqueo para resumir. Retorna True si lo logra, False si ya está bloqueado."""
@@ -470,7 +471,7 @@ def _save_message_insert_with_retry(
     execute_sql_write(
         "INSERT INTO public.agent_messages (session_id, role, content, user_id) "
         "VALUES (%(session_id)s, %(role)s, %(content)s, %(user_id)s)",
-        {
+        {  # pyright: ignore[reportArgumentType]
             "session_id": session_id,
             "role": role,
             "content": content,
@@ -514,7 +515,7 @@ def save_message(
     # 3 fallos consecutivos a Supabase es un incidente real, no transient.
     _save_message_insert_with_retry(session_id, role, content, user_id)
 
-def save_message_feedback(session_id: str, content: str, feedback: str):
+def save_message_feedback(session_id: str, content: str, feedback: Optional[str]):
     """Guarda o remueve la retroalimentación (up/down/null) para un mensaje del modelo."""
     if not connection_pool: return False
     import logging
@@ -723,36 +724,6 @@ def delete_old_messages(session_id: str, before_timestamp: str):
     )
     return res
 
-# [P1-CHAT-SUPABASE-RETRY · 2026-05-20] Detector best-effort de errores
-# transient de HTTP/2 al hablar con PostgREST de Supabase. `supabase-py`
-# usa httpx con conexión HTTP/2 keep-alive a `*.supabase.co`. Kong/PostgREST
-# cierra esas conexiones idle agresivamente (~30-60s); la PRIMER request
-# post-idle suele lanzar `httpx.RemoteProtocolError: Server disconnected`,
-# la SEGUNDA funciona porque httpx detecta el socket muerto y abre uno
-# nuevo. La librería NO maneja este reconnect automáticamente.
-#
-# Detección por type-name + message para evitar importar httpx a este
-# módulo (httpx es transitive dep de supabase-py, no first-class import
-# aquí). Patrón análogo a `_is_rate_limit_error` en agent.py (P1-CHAT-LLM-429).
-# Tooltip-anchor: P1-CHAT-SUPABASE-RETRY.
-def _is_transient_supabase_http_error(exc: BaseException) -> bool:
-    try:
-        name = type(exc).__name__
-        if name in (
-            "RemoteProtocolError",
-            "ConnectError",
-            "ReadTimeout",
-            "PoolTimeout",
-            "ConnectTimeout",
-        ):
-            return True
-        msg = str(exc).lower()
-        if "server disconnected" in msg or "connection reset" in msg:
-            return True
-        return False
-    except Exception:
-        return False
-
 
 @retry(
     stop=stop_after_attempt(2),
@@ -833,7 +804,7 @@ def insert_rejection(rejection_data: dict):
     )
     return res
 
-def get_active_rejections(user_id: str = None, session_id: str = None):
+def get_active_rejections(user_id: Optional[str] = None, session_id: Optional[str] = None):
     """
     Obtiene todos los rechazos permanentes del usuario.
     Una vez que el usuario rechaza un plato, nunca vuelve a sugerirse.

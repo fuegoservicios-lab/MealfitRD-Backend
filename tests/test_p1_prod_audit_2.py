@@ -68,7 +68,7 @@ def test_p1_billing_reactivate_not_cancelled():
     # PAYMENT.SALE.COMPLETED solo limpia el flag PAYMENT_RETRYING. Se parsea el
     # código ejecutable (los `where_clauses.append(...)`), no comentarios.
     start = src.index("def _do_reactivate():")
-    body = src[start: src.index("await _supabase_async(_do_reactivate)", start)]
+    body = src[start: src.index("await _run_sync_db_in_thread(_do_reactivate)", start)]
     assert "where_clauses.append(\"subscription_status <> 'CANCELLED'\")" in body
     assert "where_clauses.append(\"subscription_status = 'PAYMENT_RETRYING'\")" in body
 

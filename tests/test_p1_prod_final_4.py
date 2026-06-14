@@ -109,8 +109,8 @@ def test_to_thread_used_in_preferences():
     )
 
 
-def test_supabase_async_helper_in_billing():
-    """billing.py declara `_supabase_async` helper para wrappear los thunks
+def test_run_sync_db_in_thread_helper_in_billing():
+    """billing.py declara `_run_sync_db_in_thread` helper para wrappear los thunks
     DB sync desde handlers async.
 
     [P1-NEON-DB-MIGRATION · 2026-06-12] Re-anclado: los thunks ya no son
@@ -120,11 +120,11 @@ def test_supabase_async_helper_in_billing():
     ningún roundtrip DB inline en el event loop."""
     src = _read(_BILLING)
     assert re.search(
-        r"async def _supabase_async\(.*?\):\s*\n\s*return await asyncio\.to_thread",
+        r"async def _run_sync_db_in_thread\(.*?\):\s*\n\s*return await asyncio\.to_thread",
         src,
         re.DOTALL,
     ), (
-        "billing.py debe declarar `async def _supabase_async(thunk):` que "
+        "billing.py debe declarar `async def _run_sync_db_in_thread(thunk):` que "
         "delegue a `asyncio.to_thread`. Sin este helper los callsites quedan "
         "verbose y un nuevo callsite olvidaría el wrap fácilmente."
     )
@@ -132,9 +132,9 @@ def test_supabase_async_helper_in_billing():
     # esperado: 7 (mismo floor que el audit original — 6 callsites + 1
     # boy-scout /discount/validate). El helper sync `_persist_billing_alert`
     # escribe directo (no async handler), igual que pre-migración.
-    wrapped = re.findall(r"await _supabase_async\(", src)
+    wrapped = re.findall(r"await _run_sync_db_in_thread\(", src)
     assert len(wrapped) >= 7, (
-        f"billing.py debe tener ≥7 callsites `await _supabase_async(...)`. "
+        f"billing.py debe tener ≥7 callsites `await _run_sync_db_in_thread(...)`. "
         f"Encontrados: {len(wrapped)}."
     )
     # El transporte PostgREST quedó eliminado fail-loud del módulo: cero
