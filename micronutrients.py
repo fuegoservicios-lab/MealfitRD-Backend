@@ -141,3 +141,73 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F") -> dict:
                        f"{int(coverage*100)}%); NO incluye la sal añadida 'al gusto'. "
                        "Orientativo, no sustituye evaluación de un nutricionista."),
     }
+
+
+# [P3-SUPPLEMENT-ADVICE · 2026-06-13] Plantillas de suplementación por micronutriente floor.
+# Dosis de referencia para adulto sano (RDA/UL conservador); el `dose_fn` ajusta por sexo.
+# Cierra honestamente el gap que una dieta de alimentos enteros rara vez alcanza (vit D, hierro
+# en mujeres menstruantes, B12 en veganos): en vez de solo marcar "BAJO", da un plan accionable.
+_SUPPLEMENT_TEMPLATES = {
+    "vit_d_mcg": {
+        "nombre": "Vitamina D3",
+        "dosis": "600–800 UI/día (15–20 mcg)",
+        "alimentos": "pescado graso (salmón/sardina enlatada 1–2x/sem), yema de huevo, lácteo fortificado, exposición solar 10–15 min",
+        "precaucion": "no exceder 4000 UI/día sin control médico (UL).",
+    },
+    "calcium_mg": {
+        "nombre": "Calcio (citrato o carbonato)",
+        "dosis": "500 mg/día solo si no alcanzas con la dieta",
+        "alimentos": "yogur/queso, sardina con espina, vegetales de hoja verde, sésamo/ajonjolí, tofu",
+        "precaucion": "tómalo separado del hierro (compiten); no exceder 2500 mg/día totales.",
+    },
+    "iron_mg": {
+        "nombre": "Hierro (bisglicinato, mejor tolerado)",
+        "dosis_m": "8 mg/día solo si hay déficit confirmado",
+        "dosis_f": "18 mg/día (especialmente si menstrúas)",
+        "alimentos": "habichuelas/lentejas, carnes rojas magras, hígado, espinaca; acompaña con vit C (naranja/limón)",
+        "precaucion": "separado de lácteos/café/té; confirma déficit con análisis (ferritina) antes de suplementar dosis altas.",
+    },
+    "b12_mcg": {
+        "nombre": "Vitamina B12 (cianocobalamina)",
+        "dosis": "2.4 mcg/día (o 250–500 mcg/sem si suplementas)",
+        "alimentos": "huevo, lácteos, carne, pescado",
+        "precaucion": "ESENCIAL si tu dieta es vegana/vegetariana estricta — no es opcional en ese caso.",
+    },
+}
+
+
+def build_supplement_recommendations(report: dict, sex: str | None = "F") -> dict:
+    """[P3-SUPPLEMENT-ADVICE · 2026-06-13] A partir de los gaps FLOOR del reporte de
+    micronutrientes (vit D/calcio/hierro/B12 bajo), construye recomendaciones de
+    suplementación ACCIONABLES (suplemento + dosis sex-aware + alternativa alimentaria +
+    precaución). Cierra de forma honesta lo que los alimentos enteros rara vez alcanzan.
+    NO prescribe: incluye disclaimer profesional. Retorna {items, disclaimer, count}."""
+    male = str(sex or "").strip().lower() in _MALE_TERMS
+    items = []
+    for g in (report.get("gaps") or []):
+        key = g.get("key")
+        tpl = _SUPPLEMENT_TEMPLATES.get(key)
+        if not tpl or g.get("status") not in ("bajo", "estimado_bajo"):
+            continue  # solo floors realmente bajos; ceilings (sodio/azúcar) no son suplemento
+        dose = tpl.get("dosis")
+        if key == "iron_mg":
+            dose = tpl["dosis_m"] if male else tpl["dosis_f"]
+        items.append({
+            "nutriente": g.get("nutriente"),
+            "key": key,
+            "actual": g.get("valor"),
+            "objetivo": g.get("piso"),
+            "unidad": g.get("unidad"),
+            "suplemento": tpl["nombre"],
+            "dosis_sugerida": dose,
+            "primero_alimentos": tpl["alimentos"],
+            "precaucion": tpl["precaucion"],
+        })
+    return {
+        "items": items,
+        "count": len(items),
+        "disclaimer": ("Recomendación orientativa, NO una prescripción. Prioriza cerrar los "
+                       "gaps con ALIMENTOS primero; consulta a tu médico/nutricionista antes "
+                       "de iniciar cualquier suplemento (dosis y necesidad dependen de tu "
+                       "análisis de sangre y condiciones individuales)."),
+    }

@@ -8302,6 +8302,21 @@ MICRONUTRIENT_REPORT_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_REPORT", True)
 # duro es el prompt (regla de variedad+fidelidad cultural); esto da observabilidad. Cierra FS5.
 VARIETY_REPORT_ENABLED = _env_bool("MEALFIT_VARIETY_REPORT", True)
 
+# [P3-SUPPLEMENT-ADVICE · 2026-06-13] A partir de los gaps del panel de micros (vit D/calcio/
+# hierro/B12), genera recomendaciones de suplementación accionables (suplemento+dosis+alimentos
+# +precaución). Cierra honestamente lo que los alimentos enteros rara vez alcanzan. Advisory.
+SUPPLEMENT_ADVICE_ENABLED = _env_bool("MEALFIT_SUPPLEMENT_ADVICE", True)
+
+# [P3-PRO-REVIEW-FLAG · 2026-06-13] Si el usuario declaró condiciones médicas reales, marca el
+# plan con `requires_professional_review` + nota prominente. Honestidad/seguridad clínica.
+PRO_REVIEW_FLAG_ENABLED = _env_bool("MEALFIT_PRO_REVIEW_FLAG", True)
+
+# [P3-VARIETY-HARD-GATE · 2026-06-13] Convierte el cap de huevo (FS5 advisory) en restricción
+# DURA: review_plan_node rechaza+reintenta (acotado: 1 retry, luego entrega) si el huevo supera
+# el cap+threshold. El lever upstream es el prompt; esto da presión de retry. Flip a False → advisory.
+VARIETY_HARD_GATE_ENABLED = _env_bool("MEALFIT_VARIETY_HARD_GATE", True)
+VARIETY_HARD_GATE_EGG_SLACK = _env_int("MEALFIT_VARIETY_HARD_GATE_EGG_SLACK", 1)  # rechaza si egg > cap+slack
+
 # [P3-PROTEIN-FLOOR · 2026-06-13] Cierre DURO del déficit de proteína (la re-auditoría del
 # plan fresco encontró que se entregaba 68% del target). El closer rellena cada comida a
 # `fill_pct` del target de proteína del slot con proteína de alta densidad allergen-safe
@@ -10256,6 +10271,14 @@ async def assemble_plan_node(state: PlanState) -> dict:
             _ngaps = len(_mn.get("gaps", []))
             logger.info(f"🧪 [P3-MICRONUTRIENTS] Panel de micros computado "
                         f"(cobertura {int(_mn.get('coverage', 0)*100)}%, {_ngaps} gap(s) advisory)")
+            # [P3-SUPPLEMENT-ADVICE] Recomendaciones accionables para cerrar los gaps floor.
+            if SUPPLEMENT_ADVICE_ENABLED:
+                from micronutrients import build_supplement_recommendations
+                _supp = build_supplement_recommendations(_mn, sex=_sex)
+                if _supp.get("count"):
+                    result["micronutrient_supplement_advice"] = _supp
+                    logger.info(f"💊 [P3-SUPPLEMENT-ADVICE] {_supp['count']} recomendación(es) "
+                                f"de suplementación generada(s) para cerrar gaps de micros")
         except Exception as _mn_e:
             logger.warning(f"[P3-MICRONUTRIENTS] deshabilitado por error: "
                            f"{type(_mn_e).__name__}: {_mn_e}")
@@ -10271,6 +10294,29 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _vr_e:
             logger.warning(f"[P3-VARIETY] deshabilitado por error: "
                            f"{type(_vr_e).__name__}: {_vr_e}")
+
+    # [P3-PRO-REVIEW-FLAG · 2026-06-13] Si el usuario declaró condiciones médicas reales, marca
+    # el plan para revisión profesional + nota prominente. Honestidad/seguridad: un plan IA no
+    # sustituye la evaluación de un profesional para poblaciones con condiciones. Fail-safe.
+    if PRO_REVIEW_FLAG_ENABLED:
+        try:
+            _conds = form_data.get("medicalConditions") or form_data.get("medical_conditions")
+            if _has_real_medical_flags(_conds):
+                _cond_list = [str(c) for c in (_conds if isinstance(_conds, list) else [_conds])
+                              if str(c).strip().lower() not in _MEDICAL_NONE_SENTINELS]
+                result["requires_professional_review"] = {
+                    "flag": True,
+                    "conditions": _cond_list,
+                    "note": ("⚕️ Declaraste condición(es) de salud (" + ", ".join(_cond_list) + "). "
+                             "Este plan las considera de forma general pero NO sustituye la evaluación "
+                             "de tu médico o nutricionista. Consúltalo antes de seguir este plan, "
+                             "especialmente para ajustar porciones, sodio, azúcares o restricciones específicas."),
+                }
+                logger.info(f"⚕️ [P3-PRO-REVIEW-FLAG] Plan marcado para revisión profesional "
+                            f"(condiciones: {_cond_list})")
+        except Exception as _pr_e:
+            logger.warning(f"[P3-PRO-REVIEW-FLAG] deshabilitado por error: "
+                           f"{type(_pr_e).__name__}: {_pr_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
@@ -12142,6 +12188,32 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     severity = _severity_max(severity, "high")
         except Exception as _pf_e:
             logger.warning(f"[P3-PROTEIN-FLOOR] validador falló: {type(_pf_e).__name__}: {_pf_e}")
+
+    # [P3-VARIETY-HARD-GATE · 2026-06-13] Cap de huevo como restricción DURA (era advisory FS5).
+    # Si el huevo aparece en > cap + slack comidas, rechaza → retry con directiva. ACOTADO por
+    # `should_retry` (entrega en el attempt final, no loop infinito). El lever upstream es el
+    # prompt (rotar proteínas ligeras); esto añade presión de retry sobre el sobreuso egregio.
+    if VARIETY_HARD_GATE_ENABLED:
+        try:
+            _vr = plan.get("variety_report") if isinstance(plan, dict) else None
+            if isinstance(_vr, dict):
+                _egg = int(_vr.get("egg_meals", 0))
+                _tot = int(_vr.get("total_meals", 0)) or 12
+                _cap = max(3, round(_tot * 0.25))
+                if _egg > _cap + VARIETY_HARD_GATE_EGG_SLACK:
+                    logger.warning(f"🥚 [P3-VARIETY-HARD-GATE] Huevo en {_egg}/{_tot} comidas "
+                                   f"(cap {_cap}+{VARIETY_HARD_GATE_EGG_SLACK}) → rechazo para diversificar")
+                    approved = False
+                    issues.append(
+                        f"SOBREUSO DE HUEVO (rechazo de variedad): el huevo aparece en {_egg} de {_tot} "
+                        f"comidas (máximo {_cap}). Reemplaza el huevo en al menos {_egg - _cap} comida(s) "
+                        f"por otras proteínas dominicanas (pollo guisado, pescado, atún, sardina, res molida "
+                        f"magra, queso de freír, yogur griego, habichuelas) — NO uses huevo como relleno "
+                        f"por defecto. Mantén el huevo solo en desayunos/platos donde es el protagonista."
+                    )
+                    severity = _severity_max(severity, "high")
+        except Exception as _vg_e:
+            logger.warning(f"[P3-VARIETY-HARD-GATE] validador falló: {type(_vg_e).__name__}: {_vg_e}")
 
     # [P2-A · 2026-05-07] Coherencia recetas↔lista en mode `block`.
     # `assemble_plan_node` invoca `run_shopping_coherence_guard`; cuando
