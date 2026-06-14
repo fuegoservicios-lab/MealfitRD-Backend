@@ -345,7 +345,10 @@ def test_dm2_sugar_guard_idempotent_and_respects_sin_azucar():
 def test_dm2_sugar_guard_knob_and_anchors():
     assert go.DM2_SUGAR_GUARD is True
     src = inspect.getsource(go)
-    assert "_apply_condition_substitutions(result, form_data)" in src   # cableado en assemble
+    # [P3-FALLBACK-CLINICAL-LAYER Fase B] el guard de sustitución se invoca DENTRO de la capa clínica
+    # determinista (SSOT), que assemble consume vía `_apply_deterministic_clinical_layer(result, ...)`.
+    assert "_apply_condition_substitutions(plan, form_data)" in src        # call dentro de la capa SSOT
+    assert "_apply_deterministic_clinical_layer(result, form_data, nutrition)" in src  # cableado en assemble
 
 
 def test_renal_enforcement_machinery_trims_meals_to_cap():
