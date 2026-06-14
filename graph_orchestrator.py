@@ -3480,6 +3480,8 @@ from prompts.plan_generator import (
     # Antes ambos campos vivían en _REQUIRED_FORM_FIELDS sin consumer downstream —
     # promesa rota del wizard. Ahora se inyectan como hint de tono/sesgo al planner.
     build_sleep_stress_context,
+    # [P3-CONDITION-RULES · 2026-06-14] Directivas DM2 (ADA 2026) / ERC (KDIGO 2024) al generador.
+    build_medical_condition_context,
     build_time_context,
     build_technique_injection,
     build_supplements_context,
@@ -4209,6 +4211,15 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
 
     from ai_helpers import get_deterministic_variety_prompt
     variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid, rejection_reasons=rejection_reasons)
+    # [P3-CONDITION-RULES · 2026-06-14] Anexa las reglas clínicas por condición (DM2 ADA 2026 /
+    # ERC KDIGO 2024) al bloque de reglas determinista que SIEMPRE llega al generador. No-op para
+    # usuarios sin condición cubierta (el builder retorna ""). Lever de prompt; el refuerzo
+    # determinista (cap proteína renal, piso fibra DM2) ya vive en assemble/micronutrients.
+    if CONDITION_RULES_ENABLED:
+        try:
+            variety_prompt = (variety_prompt or "") + build_medical_condition_context(form_data)
+        except Exception:
+            pass
     adherence_hint = form_data.get("_adherence_hint", "")
     meal_level_adherence = form_data.get("_meal_level_adherence", {})
     ignored_meal_types = form_data.get("_ignored_meal_types", [])
@@ -8333,6 +8344,25 @@ PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
 PROTEIN_GKG_CEILING_DEFAULT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_DEFAULT", 2.2)
 PROTEIN_GKG_CEILING_CUT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_CUT", 2.6)
 
+# [P3-CONDITION-RULES · 2026-06-14] Reglas clínicas deterministas para el set Pareto cardio-
+# metabólico DR. Empieza con las DOS condiciones que el piso regulatorio más estricto (Medicare
+# MNT reembolsable) cubre: diabetes T2 y ERC. Cada una se modela como CONSTRAINT determinista
+# (no como confianza en el LLM), anclada a guía citable:
+#   • DM2  → ADA 2025/2026 ABANDONÓ el % fijo de carbos y el índice glucémico → "calidad del
+#            carbohidrato": fibra ≥14 g/1000 kcal + granos integrales + sin bebidas azucaradas.
+#   • ERC  → KDIGO 2024: proteína TECHO ~0.8 g/kg (G3-G5 no-diálisis) — lo OPUESTO al piso alto
+#            del producto. Generar un plan renal "correcto" requiere estadio/diálisis/K/P que NO
+#            modelamos → se trata como cap de SEGURIDAD + gate de derivación (FS9), no prescripción.
+CONDITION_RULES_ENABLED = _env_bool("MEALFIT_CONDITION_RULES", True)
+RENAL_PROTEIN_GKG_CEILING = _env_float("MEALFIT_RENAL_PROTEIN_GKG", 0.8)   # KDIGO 2024 G3-G5 no-diálisis
+DM2_FIBER_G_PER_1000KCAL = _env_float("MEALFIT_DM2_FIBER_PER_1000KCAL", 14.0)  # ADA 2026 calidad de carbo
+
+# [P3-DATA-PROVENANCE · 2026-06-14] (Roadmap M1, quick-win) Anclaje de proveniencia: computa qué
+# fracción de los ingredientes del plan está trazada a USDA FoodData Central (columna `fdc_id`, ya
+# poblada) y expone un sample de IDs en `result["data_provenance"]` → el PDF/UI muestra "Datos: USDA
+# FDC #XXXXX". Convierte la banda de precisión AUTOAFIRMADA en trazabilidad verificable de terceros.
+DATA_PROVENANCE_ENABLED = _env_bool("MEALFIT_DATA_PROVENANCE", True)
+
 
 def _protein_gkg_ceiling(goal) -> float:
     """[P3-PROTEIN-CEILING-GOAL-AWARE] Techo de proteína entregada (g/kg) por objetivo: déficit/
@@ -8355,12 +8385,17 @@ def _weight_kg_from_form(form_data: dict) -> float:
 
 def _goal_aware_trim_ceiling_pct(form_data: dict, target_protein_day: float) -> float:
     """[P3-PROTEIN-CEILING-GOAL-AWARE] `ceiling_pct` para el trim = techo_g/kg × peso / target.
-    Robusto a peso ausente: fallback por objetivo (déficit más laxo, volumen estricto)."""
+    Robusto a peso ausente: fallback por objetivo (déficit más laxo, volumen estricto).
+    [P3-CONDITION-RULES] ERC: el techo g/kg es 0.8 (KDIGO 2024), NO el alto goal-aware — invierte
+    la regla para que el trim baje la proteína a nivel renal en vez de protegerla alta."""
+    renal = CONDITION_RULES_ENABLED and isinstance(form_data, dict) and _is_renal_condition(form_data)
     goal = form_data.get("mainGoal") if isinstance(form_data, dict) else None
-    gkg = _protein_gkg_ceiling(goal)
+    gkg = RENAL_PROTEIN_GKG_CEILING if renal else _protein_gkg_ceiling(goal)
     wkg = _weight_kg_from_form(form_data) if isinstance(form_data, dict) else 0.0
     if wkg > 0 and target_protein_day and target_protein_day > 0:
         return max(1.0, min(1.30, (gkg * wkg) / target_protein_day))
+    if renal:
+        return 1.0  # ERC sin peso parseable → techo estricto al target (ya capeado aguas arriba)
     return 1.18 if gkg >= 2.5 else 1.08  # sin peso → fallback por objetivo
 
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
@@ -8409,6 +8444,52 @@ def _has_real_medical_flags(items) -> bool:
         return any(str(x).strip().lower() not in _MEDICAL_NONE_SENTINELS for x in items)
     except Exception:
         return bool(items)
+
+
+# [P3-CONDITION-RULES · 2026-06-14] Detección determinista de las condiciones del set Pareto DR.
+# Términos SIN acentos (se normalizan con strip_accents) y sobre-inclusivos: en seguridad clínica,
+# un falso positivo (aplicar un cap conservador a quien no lo necesita) es preferible a un falso
+# negativo (no detectar la condición). Anclaje regulatorio: DM2 + ERC = las 2 condiciones que
+# Medicare MNT reembolsable cubre.
+# Términos SSOT en constants.py — compartidos con prompts/plan_generator para que el detector del
+# cap determinista y el de la directiva de prompt NUNCA driften (cierra P3-CONDITION-RULES review #3).
+from constants import (RENAL_CONDITION_TERMS as _RENAL_CONDITION_TERMS,
+                       DIABETES_CONDITION_TERMS as _DIABETES_CONDITION_TERMS)
+
+
+def _condition_strings(form_data) -> list:
+    """Lista normalizada (lower + sin acentos, sin sentinel 'Ninguna') de las condiciones
+    médicas declaradas en el form. Base de toda regla determinista por condición."""
+    if not isinstance(form_data, dict):
+        return []
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        _sa = lambda x: x  # noqa: E731 — degradación: sin normalizar acentos (los términos cubren variantes)
+    raw = form_data.get("medicalConditions") or form_data.get("medical_conditions") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    out = []
+    for c in raw:
+        s = str(c).strip().lower()
+        if not s or s in _MEDICAL_NONE_SENTINELS:
+            continue
+        try:
+            s = _sa(s)
+        except Exception:
+            pass
+        out.append(s)
+    return out
+
+
+def _is_renal_condition(form_data) -> bool:
+    """[P3-CONDITION-RULES] True si el perfil declara ERC/enfermedad renal (gate KDIGO)."""
+    return any(any(t in c for t in _RENAL_CONDITION_TERMS) for c in _condition_strings(form_data))
+
+
+def _is_diabetes_condition(form_data) -> bool:
+    """[P3-CONDITION-RULES] True si el perfil declara diabetes/prediabetes (regla ADA 2026)."""
+    return any(any(t in c for t in _DIABETES_CONDITION_TERMS) for c in _condition_strings(form_data))
 
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Mapa de sinónimos de alérgenos comunes (es-DO) → términos
@@ -9686,6 +9767,57 @@ async def assemble_plan_node(state: PlanState) -> dict:
     }
     result["main_goal"] = nutrition["goal_label"]
 
+    # [P3-CONDITION-RULES · 2026-06-14] ERC — CAP DE SEGURIDAD de proteína (KDIGO 2024). En
+    # enfermedad renal G3-G5 no-diálisis la proteína se LIMITA a ~0.8 g/kg — lo OPUESTO al piso
+    # alto del producto. Sin esto, el solver/closer empujarían la proteína a 2.2-2.6 g/kg, que es
+    # IATROGÉNICO en ERC (acelera la progresión). Capeamos el TARGET en la fuente (`active_macros`
+    # + `result["macros"]`) para que TODO aguas abajo (solver, closer, trim, validador de piso,
+    # surgical regen, macros mostrados) use el target renal y quede consistente. Reasignamos las
+    # kcal liberadas a carbohidrato (swap 1:1 g, iso-calórico — proteína y carbo = 4 kcal/g). NO es
+    # una prescripción renal (estadio/diálisis/K/P no se modelan) → el gate FS9 abajo fuerza
+    # derivación profesional. Fail-safe total. Anchor: P3-CONDITION-RULES.
+    if CONDITION_RULES_ENABLED and _is_renal_condition(form_data):
+        try:
+            _wkg_renal = _weight_kg_from_form(form_data)
+            _old_p_renal = _meal_macro_num(active_macros.get("protein_str"))
+            _renal_cap = round(RENAL_PROTEIN_GKG_CEILING * _wkg_renal)
+            if _wkg_renal > 0 and _renal_cap > 0 and _renal_cap < _old_p_renal:
+                _freed_kcal_renal = (_old_p_renal - _renal_cap) * 4.0   # proteína = 4 kcal/g
+                _renal_diabetic = _is_diabetes_condition(form_data)
+                active_macros["protein_str"] = f"{_renal_cap}g"
+                result["macros"]["protein"] = f"{_renal_cap}g"
+                if _renal_diabetic:
+                    # [P3-CONDITION-RULES] Comorbilidad diabético-nefropatía (causa #1 de ERC): NO
+                    # volcar las kcal liberadas a carbohidrato (sube la carga glucémica, choca con la
+                    # regla DM2). Van a GRASA saludable (9 kcal/g), que ni DM2 ni ERC restringen tan
+                    # fuerte. El reparto fino lo valida el nefrólogo (gate FS9 reforzado abajo).
+                    _old_f_renal = _meal_macro_num(active_macros.get("fats_str"))
+                    _new_f_renal = round(_old_f_renal + _freed_kcal_renal / 9.0)
+                    active_macros["fats_str"] = f"{_new_f_renal}g"
+                    result["macros"]["fats"] = f"{_new_f_renal}g"
+                    _reassigned = "fat"
+                else:
+                    _old_c_renal = _meal_macro_num(active_macros.get("carbs_str"))
+                    _new_c_renal = round(_old_c_renal + (_old_p_renal - _renal_cap))  # swap proteína→carbo iso-kcal
+                    active_macros["carbs_str"] = f"{_new_c_renal}g"
+                    result["macros"]["carbs"] = f"{_new_c_renal}g"
+                    _reassigned = "carb"
+                result["renal_protein_cap"] = {
+                    "applied": True, "gkg": RENAL_PROTEIN_GKG_CEILING,
+                    "protein_g": _renal_cap, "was_g": round(_old_p_renal),
+                    "weight_kg": round(_wkg_renal, 1), "guideline": "KDIGO 2024 (G3-G5 no-diálisis)",
+                    "reassigned_to": _reassigned, "comorbid_diabetes": bool(_renal_diabetic),
+                    "meals_enforced": False,  # lo setea el enforcement determinista per-comida abajo
+                }
+                logger.warning(
+                    f"🫘 [P3-CONDITION-RULES] ERC detectada → cap de proteína {round(_old_p_renal)}g→"
+                    f"{_renal_cap}g (~{RENAL_PROTEIN_GKG_CEILING} g/kg × {_wkg_renal:.1f}kg); kcal "
+                    f"reasignadas a {_reassigned}{' (comorbilidad DM2)' if _renal_diabetic else ''}. "
+                    f"Gate de revisión profesional forzado (FS9).")
+        except Exception as _renal_e:
+            logger.warning(f"[P3-CONDITION-RULES] cap renal de proteína falló: "
+                           f"{type(_renal_e).__name__}: {_renal_e}")
+
     # =========================================================
     # OPTIMIZACIÓN DETERMINISTA POST-ASSEMBLY (GAP 4)
     # =========================================================
@@ -10274,6 +10406,39 @@ async def assemble_plan_node(state: PlanState) -> dict:
             logger.warning(f"[P3-CAL-RECONCILE] deshabilitado por error: "
                            f"{type(_rec_e).__name__}: {_rec_e}")
 
+    # [P3-CONDITION-RULES · 2026-06-14] ERC — ENFORCEMENT DETERMINISTA del cap sobre las COMIDAS,
+    # INDEPENDIENTE de MEALFIT_MACRO_SOLVER_ENABLED. El cap temprano (arriba) solo reescribió el
+    # header diario (target mostrado); el trim per-comida que baja la proteína REAL vivía SOLO bajo
+    # el gate del solver (default OFF). Una feature de SEGURIDAD clínica NO puede depender de un knob
+    # de performance: si el solver está off (dev, deploy sin el knob, rollback), el cap quedaría
+    # cosmético y el disclaimer FS9 afirmaría un límite que no llegó a las comidas (falsa seguridad).
+    # Aquí trimamos la proteína de cada comida al cap renal (ceiling_pct=1.0 → al target exacto) y
+    # reconciliamos kcal escalando carbo/grasa (protein-preserving) → header ≈ suma per-comida.
+    # Idempotente: si el solver ya trimó, es no-op. Solo marca meals_enforced=True si realmente bajó
+    # la proteína per-comida → el disclaimer FS9 solo afirma el límite cuando se aplicó de verdad.
+    if (CONDITION_RULES_ENABLED and PROTEIN_FLOOR_ENABLED
+            and isinstance(result.get("renal_protein_cap"), dict)
+            and result["renal_protein_cap"].get("applied") and _pg > 0):
+        try:
+            from nutrition_db import IngredientNutritionDB as _RENDB
+            _rendb = _RENDB()
+            _renal_enf_days = 0
+            for _d in result.get("days", []) or []:
+                _rmeals = _d.get("meals", []) or []
+                if _trim_day_protein_to_ceiling(_rmeals, _pg, _rendb, ceiling_pct=1.0):
+                    _renal_enf_days += 1
+                if _daily_cals > 0:
+                    _protein_preserving_day_reconcile(_rmeals, _daily_cals, _rendb)
+            result["renal_protein_cap"]["meals_enforced"] = True
+            result["renal_protein_cap"]["enforced_days"] = _renal_enf_days
+            logger.warning(f"🫘 [P3-CONDITION-RULES] ERC enforcement determinista per-comida: "
+                           f"proteína trimada al cap {round(_pg)}g en {_renal_enf_days} día(s) "
+                           f"(solver-independiente; header↔comidas consistente)")
+        except Exception as _renf_e:
+            result["renal_protein_cap"]["meals_enforced"] = False
+            logger.warning(f"[P3-CONDITION-RULES] enforcement renal per-comida falló: "
+                           f"{type(_renf_e).__name__}: {_renf_e}")
+
     # [P3-FOOD-SAFETY · 2026-06-13] Guard determinista de seguridad alimentaria. Corre
     # SIEMPRE (independiente del solver: el huevo crudo puede venir del LLM, como en el plan
     # 11d17452 auditado, o del top-up). Detecta huevo crudo/poco cocido e inyecta una nota de
@@ -10314,7 +10479,13 @@ async def assemble_plan_node(state: PlanState) -> dict:
             from micronutrients import build_micronutrient_report
             from nutrition_db import IngredientNutritionDB as _MNDB
             _sex = form_data.get("gender", "female")
-            _mn = build_micronutrient_report(result, _MNDB(), sex=_sex)
+            # [P3-CONDITION-RULES] Pasa condiciones + kcal/día → reporte DM2-aware: ADA 2026 reemplaza
+            # el %carbos/IG por CALIDAD del carbohidrato (fibra ≥14 g/1000 kcal). El builder eleva el
+            # piso de fibra para diabéticos y marca el gap como objetivo clínico citable, no advisory.
+            _mn = build_micronutrient_report(
+                result, _MNDB(), sex=_sex,
+                conditions=_condition_strings(form_data), daily_kcal=_daily_cals,
+                fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL)
             result["micronutrient_report"] = _mn
             _ngaps = len(_mn.get("gaps", []))
             logger.info(f"🧪 [P3-MICRONUTRIENTS] Panel de micros computado "
@@ -10343,6 +10514,43 @@ async def assemble_plan_node(state: PlanState) -> dict:
             logger.warning(f"[P3-VARIETY] deshabilitado por error: "
                            f"{type(_vr_e).__name__}: {_vr_e}")
 
+    # [P3-DATA-PROVENANCE · 2026-06-14] (Roadmap M1) Trazabilidad de datos: ¿qué fracción de los
+    # ingredientes del plan resuelve a un `fdc_id` de USDA FoodData Central (ya poblado en
+    # master_ingredients)? Inyecta `result["data_provenance"]` con conteo + sample de IDs públicos
+    # → el PDF/UI muestra la fuente. Convierte la banda de precisión autoafirmada en trazabilidad
+    # VERIFICABLE de terceros (gap #1 del análisis de mercado). Advisory, fail-safe total.
+    if DATA_PROVENANCE_ENABLED:
+        try:
+            from nutrition_db import IngredientNutritionDB as _PVDB
+            _pvdb = _PVDB()
+            _seen_prov = {}
+            for _d in result.get("days", []) or []:
+                for _m in _d.get("meals", []) or []:
+                    for _ing in _m.get("ingredients", []) or []:
+                        _info = _pvdb.lookup(str(_ing))
+                        if not _info:
+                            continue
+                        _key = (_info.name or str(_ing)).lower()
+                        _seen_prov.setdefault(_key, _info)
+            _total_u = len(_seen_prov)
+            _usda = [(i.name, i.fdc_id) for i in _seen_prov.values()
+                     if i.fdc_id and str(i.source or "").lower() == "usda"]
+            result["data_provenance"] = {
+                "primary_source": "USDA FoodData Central",
+                "secondary_sources": ["INCAP/LATINFOODS", "manual (curado es-DO)"],
+                "ingredients_resolved": _total_u,
+                "usda_traced": len(_usda),
+                "fdc_sample": [{"name": n, "fdc_id": int(f)} for n, f in _usda[:8]],
+                "note": (f"Datos nutricionales anclados a fuentes verificables: {len(_usda)} de "
+                         f"{_total_u} ingredientes resueltos trazables a USDA FoodData Central "
+                         "(IDs públicos en fdc.nal.usda.gov); el resto, INCAP/curado es-DO."),
+            }
+            logger.info(f"🔖 [P3-DATA-PROVENANCE] {len(_usda)}/{_total_u} ingredientes resueltos "
+                        f"trazables a USDA FDC")
+        except Exception as _pv_e:
+            logger.warning(f"[P3-DATA-PROVENANCE] deshabilitado por error: "
+                           f"{type(_pv_e).__name__}: {_pv_e}")
+
     # [P3-PRO-REVIEW-FLAG · 2026-06-13] Si el usuario declaró condiciones médicas reales, marca
     # el plan para revisión profesional + nota prominente. Honestidad/seguridad: un plan IA no
     # sustituye la evaluación de un profesional para poblaciones con condiciones. Fail-safe.
@@ -10352,16 +10560,42 @@ async def assemble_plan_node(state: PlanState) -> dict:
             if _has_real_medical_flags(_conds):
                 _cond_list = [str(c) for c in (_conds if isinstance(_conds, list) else [_conds])
                               if str(c).strip().lower() not in _MEDICAL_NONE_SENTINELS]
+                _note = ("⚕️ Declaraste condición(es) de salud (" + ", ".join(_cond_list) + "). "
+                         "Este plan las considera de forma general pero NO sustituye la evaluación "
+                         "de tu médico o nutricionista. Consúltalo antes de seguir este plan, "
+                         "especialmente para ajustar porciones, sodio, azúcares o restricciones específicas.")
+                # [P3-CONDITION-RULES · 2026-06-14] ERC: gate de derivación REFORZADO. La nutrición
+                # renal depende del estadio (G1-G5) y de diálisis, y el potasio/fósforo (críticos en
+                # ERC) NO se ajustan aquí. Aplicamos un cap conservador de proteína como SEGURIDAD,
+                # pero esto NO es una prescripción renal — debe validarlo un nefrólogo. Fail-secure.
+                _renal_flag = CONDITION_RULES_ENABLED and _is_renal_condition(form_data)
+                if _renal_flag:
+                    _cap_info = result.get("renal_protein_cap") or {}
+                    # Solo afirmar el límite si el enforcement per-comida ocurrió de verdad
+                    # (no solo el header) — evita el disclaimer falsa-seguridad si el trim falló.
+                    _cap_txt = (f" Se aplicó un límite conservador de proteína a ~{_cap_info.get('protein_g')}g/día "
+                                f"(≈{RENAL_PROTEIN_GKG_CEILING} g/kg) como medida de seguridad."
+                                if _cap_info.get("meals_enforced") else "")
+                    # [P3-CONDITION-RULES] Comorbilidad diabético-nefropatía (la causa #1 de ERC):
+                    # las reglas de fibra/leguminosas (DM2) y de potasio/fósforo/proteína (ERC) se
+                    # tensionan — el balance individual SOLO lo ajusta el profesional.
+                    _comorbid_txt = (" Tienes diabetes y enfermedad renal a la vez: las recomendaciones de "
+                                     "fibra/leguminosas (diabetes) y de potasio/fósforo/proteína (renal) deben "
+                                     "balancearse caso por caso — esto SOLO lo define tu nefrólogo/nutricionista."
+                                     if _cap_info.get("comorbid_diabetes") else "")
+                    _note = ("🫘 CONDICIÓN RENAL DETECTADA — IMPORTANTE: la nutrición en enfermedad renal "
+                             "depende de tu estadio (G1–G5) y de si estás en diálisis, y DEBE ser supervisada "
+                             "por tu nefrólogo o nutricionista renal." + _cap_txt + " Este plan NO es una "
+                             "prescripción renal: el potasio y el fósforo (críticos en ERC) no se ajustan aquí." +
+                             _comorbid_txt + " NO sigas este plan sin la validación de tu profesional de salud. ") + _note
                 result["requires_professional_review"] = {
                     "flag": True,
                     "conditions": _cond_list,
-                    "note": ("⚕️ Declaraste condición(es) de salud (" + ", ".join(_cond_list) + "). "
-                             "Este plan las considera de forma general pero NO sustituye la evaluación "
-                             "de tu médico o nutricionista. Consúltalo antes de seguir este plan, "
-                             "especialmente para ajustar porciones, sodio, azúcares o restricciones específicas."),
+                    "renal_gate": bool(_renal_flag),
+                    "note": _note,
                 }
                 logger.info(f"⚕️ [P3-PRO-REVIEW-FLAG] Plan marcado para revisión profesional "
-                            f"(condiciones: {_cond_list})")
+                            f"(condiciones: {_cond_list}, renal_gate={bool(_renal_flag)})")
         except Exception as _pr_e:
             logger.warning(f"[P3-PRO-REVIEW-FLAG] deshabilitado por error: "
                            f"{type(_pr_e).__name__}: {_pr_e}")
@@ -12233,7 +12467,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # sin piso es media solución para hipertrofia. Es un BACKSTOP — el closer determinista
     # (assemble_plan_node) ya rellena al target, así que rara vez dispara (solo si no hubo
     # proteína de alta densidad disponible). Severity high → retry si hay budget, no falla duro.
-    if PROTEIN_FLOOR_HARD_GATE:
+    # [P3-CONDITION-RULES · 2026-06-14] Exención renal: si se aplicó el cap renal de proteína, NO
+    # correr el piso duro — su directiva de rechazo ordena "fuente animal de alta densidad para
+    # ganancia muscular", justo lo CONTRARIO de lo clínicamente correcto en ERC (KDIGO baja la
+    # proteína). El cap ya garantiza que la proteína no es excesiva; un "déficit" vs el target
+    # capeado es aceptable en renal. Evita un retry que empuje proteína arriba en un paciente renal.
+    _renal_capped_plan = bool((plan.get("renal_protein_cap") or {}).get("applied")) if isinstance(plan, dict) else False
+    if PROTEIN_FLOOR_HARD_GATE and not _renal_capped_plan:
         try:
             import re as _re_pf
             _tgt_p = None

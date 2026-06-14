@@ -1525,6 +1525,23 @@ def strip_accents(s: str) -> str:
     Esta es la definición CANÓNICA. Importar desde aquí en todos los módulos."""
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
+
+# [P3-CONDITION-RULES · 2026-06-14] Términos canónicos (SSOT) de detección de condiciones del set
+# Pareto clínico DR. Normaliza el input del usuario con strip_accents + lower ANTES de comparar.
+# Importar desde aquí en graph_orchestrator (cap determinista de proteína / piso de fibra) Y en
+# prompts/plan_generator (directiva de prompt) para que los DOS detectores NUNCA driften — un drift
+# abre el modo peligroso "cap aplicado sin guía de prompt" (header capeado, comidas sin sesgo renal).
+RENAL_CONDITION_TERMS = (
+    "renal", "rinon", "kidney", "erc", "ckd", "nefro", "nephro", "dialisis", "dialysis",
+    "insuficiencia renal", "enfermedad renal", "chronic kidney", "glomerul", "nefropat",
+    "creatinina alta", "falla renal",
+)
+DIABETES_CONDITION_TERMS = (
+    "diabet", "dm2", "dm-2", "dm 2", "t2dm", "prediabet", "pre-diabet", "hiperglucem",
+    "resistencia a la insulina", "resistencia insulinica", "glucemia alta", "azucar alta",
+    "intolerancia a la glucosa", "intolerancia a glucosa",
+)
+
 def get_reverse_synonyms_map():
     """Crea un diccionario inverso donde la clave es la variante ('pechuga') y el valor es el término base ('pollo').
     Incluye tanto las versiones con acento como sin acento para máxima resiliencia."""

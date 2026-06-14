@@ -25,6 +25,25 @@ _ADDED_SUGAR_TERMS = ("miel", "azucar", "azúcar", "sirope", "jarabe", "panela",
 # empieza con M pero NO es masculino → la lista evita ese falso positivo).
 _MALE_TERMS = ("male", "masculino", "m", "hombre")
 
+# [P3-CONDITION-RULES · 2026-06-14] Términos de diabetes (sin acentos; el caller pasa las
+# condiciones ya normalizadas con strip_accents). ADA 2025/2026 abandonó el %carbos/IG fijo →
+# calidad del carbohidrato: fibra ≥14 g/1000 kcal. Aquí elevamos el piso de fibra para diabéticos.
+_DIABETES_TERMS = ("diabet", "dm2", "dm-2", "dm 2", "t2dm", "prediabet", "pre-diabet",
+                   "hiperglucem", "resistencia a la insulina", "resistencia insulinica",
+                   "glucemia alta", "azucar alta", "intolerancia a la glucosa", "intolerancia a glucosa")
+# Fibra mínima por 1000 kcal en DM2 (ADA 2026 "calidad del carbohidrato").
+_DM2_FIBER_PER_1000KCAL = 14.0
+
+
+def _has_diabetes(conditions) -> bool:
+    """True si alguna condición (lista de strings ya lowercased/sin-acentos) es diabetes."""
+    if not conditions:
+        return False
+    try:
+        return any(any(t in str(c) for t in _DIABETES_TERMS) for c in conditions)
+    except Exception:
+        return False
+
 
 def dri_targets(sex: str | None = "F") -> dict:
     """Pisos/techos DRI (IOM) + WHO por nutriente para un adulto. Sex-aware donde importa
@@ -96,14 +115,33 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
             "resolved_ings": resolved_ings, "total_ings": total_ings, "num_days": num_days}
 
 
-def build_micronutrient_report(plan: dict, db, sex: str | None = "F") -> dict:
+def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
+                               conditions=None, daily_kcal: float | None = None,
+                               fiber_per_1000kcal: float = _DM2_FIBER_PER_1000KCAL) -> dict:
     """Reporte advisory: panel de micros diarios vs DRI/WHO con status + nota accionable.
     status ∈ {ok, bajo, alto, estimado_bajo}. Floors incumplidos con cobertura parcial →
-    'estimado_bajo' (incierto, puede subir con lo no resuelto). NO rechaza el plan."""
+    'estimado_bajo' (incierto, puede subir con lo no resuelto). NO rechaza el plan.
+
+    [P3-CONDITION-RULES] Si `conditions` incluye diabetes, eleva el PISO de fibra a la regla
+    ADA 2026 de calidad del carbohidrato (≥14 g/1000 kcal, usando `daily_kcal`) en vez del DRI
+    general — convierte la fibra de un advisory genérico en un objetivo clínico citable por DM2."""
     totals = compute_plan_micronutrient_totals(plan, db)
     daily = totals["daily"]
     coverage = totals["coverage"]
     targets = dri_targets(sex)
+    condition_targets = []
+    # [P3-CONDITION-RULES] DM2: piso de fibra = max(DRI, 14 g/1000 kcal). ADA 2025/2026 reemplazó
+    # el target de %carbos/IG por "calidad del carbohidrato" — la fibra es el proxy citable.
+    if _has_diabetes(conditions) and daily_kcal and daily_kcal > 0:
+        dm2_fiber_floor = round(fiber_per_1000kcal * (daily_kcal / 1000.0), 1)
+        if dm2_fiber_floor > targets["fiber_g"]["floor"]:
+            targets["fiber_g"]["floor"] = dm2_fiber_floor
+        condition_targets.append({
+            "condicion": "Diabetes T2 / prediabetes",
+            "regla": f"Fibra ≥{targets['fiber_g']['floor']}g/día (≥{int(fiber_per_1000kcal)} g/1000 kcal)",
+            "guia": "ADA 2025/2026 — calidad del carbohidrato (reemplaza %carbos/índice glucémico)",
+            "actual": daily.get("fiber_g", 0.0),
+        })
     panel, gaps = [], []
     for key, tgt in targets.items():
         val = daily.get(key, 0.0)
@@ -137,6 +175,7 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F") -> dict:
         "resolved_ings": totals["resolved_ings"],
         "total_ings": totals["total_ings"],
         "sex": "M" if str(sex or "").strip().lower() in _MALE_TERMS else "F",
+        "condition_targets": condition_targets,
         "disclaimer": ("Estimado desde el catálogo nutricional (cobertura "
                        f"{int(coverage*100)}%); NO incluye la sal añadida 'al gusto'. "
                        "Orientativo, no sustituye evaluación de un nutricionista."),
