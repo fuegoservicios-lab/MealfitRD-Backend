@@ -70,8 +70,27 @@ def test_fallback_gets_clinical_layer_marker_and_reports():
     go._apply_deterministic_clinical_layer(plan, form, _nutrition())
     assert plan["_clinical_layer_applied"] is True
     assert "variety_report" in plan                          # FS5 advisory heredado
-    assert "data_provenance" in plan                         # M1 heredado (resuelve 0 con stub, pero presente)
     assert plan.get("_is_fallback") is True                  # sigue marcado como fallback
+
+
+def test_fallback_skips_data_provenance():
+    """La nota de proveniencia USDA NO debe montarse sobre un plan matemático (sería engañosa:
+    el fallback usa ingredientes-plantilla genéricos que no resuelven a fdc_id)."""
+    form = {"medicalConditions": ["Ninguna"], "gender": "male"}
+    plan = _fallback(form, _nutrition())
+    go._apply_deterministic_clinical_layer(plan, form, _nutrition())
+    assert "data_provenance" not in plan
+
+
+def test_default_fallback_keeps_plan_matematico_label():
+    """Tripwire: sin condición ni sustitución, ningún guard sobreescribe el label del fallback.
+    (Protege contra una futura edición de `_FALLBACK_MEAL_POOLS` que sembrara un contraindicado.)"""
+    form = {"medicalConditions": ["Ninguna"], "gender": "male"}
+    plan = _fallback(form, _nutrition())
+    go._apply_deterministic_clinical_layer(plan, form, _nutrition())
+    for d in plan["days"]:
+        for m in d["meals"]:
+            assert m["macros"] == ["Plan Matemático"]
 
 
 def test_fallback_renal_profile_inherits_fs9_gate_and_cap():

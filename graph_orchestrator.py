@@ -9716,20 +9716,29 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         form_data = {}
     nutrition = nutrition if isinstance(nutrition, dict) else {}
 
-    # ── Re-derivación de los locals que assemble computa antes del bloque (mirror 9959-10025 + 10039-10040) ──
+    # ── Re-derivación de los locals que assemble computa antes del bloque (espejo del post-proceso de
+    # macros + cap renal de la fuente [P3-CONDITION-RULES] + _daily_cals/_pg). ──
     # active_macros: COPIA del macros de la fuente (jamás mutar el `nutrition` del caller — bug si fuese ref).
+    # `or` (truthiness, NO .get(key, default)): endurecimiento intencional sobre el inline — un
+    # total_daily_macros vacío {} cae a `macros` en vez de quedar como {} sin protein_str.
     _src_macros = nutrition.get("total_daily_macros") or nutrition.get("macros") or {}
     active_macros = dict(_src_macros) if isinstance(_src_macros, dict) else {}
 
-    # Re-corre el cap renal de la fuente (mirror 9976-10025): el fallback (que bypassa assemble) queda
-    # capeado + con `renal_protein_cap` seteado → habilita el enforcement per-comida + el gate FS9. En el
-    # happy path active_macros ya viene capeado → no-op (cap < actual es falso). Fail-safe.
+    # Re-corre el cap renal de la fuente (espejo del cap [P3-CONDITION-RULES] de assemble): el fallback
+    # (que bypassa assemble) queda capeado + con `renal_protein_cap` seteado → habilita el enforcement
+    # per-comida + el gate FS9. En el happy path active_macros ya viene capeado → no-op. Fail-safe.
     try:
         if CONDITION_RULES_ENABLED and _is_renal_condition(form_data) and active_macros:
             _wkg = _weight_kg_from_form(form_data)
             _old_p = _meal_macro_num(active_macros.get("protein_str"))
             _cap = round(RENAL_PROTEIN_GKG_CEILING * _wkg)
-            _pm = plan.get("macros") if isinstance(plan.get("macros"), dict) else None
+            # Copia PRIVADA del header del plan antes de mutarlo → si un caller (p.ej. Fase B) pasara un
+            # plan cuyo `macros` ES el dict de `nutrition`, jamás lo corromperíamos (defensa anti-aliasing).
+            if isinstance(plan.get("macros"), dict):
+                plan["macros"] = dict(plan["macros"])
+                _pm = plan["macros"]
+            else:
+                _pm = None
             if _wkg > 0 and _cap > 0 and _cap < _old_p:
                 _freed = (_old_p - _cap) * 4.0
                 _diab = _is_diabetes_condition(form_data)
@@ -9758,7 +9767,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                         "reassigned_to": _reassigned, "comorbid_diabetes": bool(_diab),
                         "meals_enforced": False,
                     }
-        # Propaga el cap si vino ya aplicado desde la fuente (mirror 10022-10025).
+        # Propaga el cap si vino ya aplicado desde la fuente (espejo de la propagación inline).
         if (CONDITION_RULES_ENABLED and (nutrition.get("renal_protein_cap") or {}).get("applied")
                 and not (plan.get("renal_protein_cap") or {}).get("applied")):
             plan["renal_protein_cap"] = {**nutrition["renal_protein_cap"], "meals_enforced": False}
@@ -9774,14 +9783,18 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         if isinstance(_pm2, dict):
             _pg = _meal_macro_num(_pm2.get("protein"))
 
-    # Una sola instancia de DB para todos los guards (food-safety no la usa).
+    # Una sola instancia de DB para todos los guards (food-safety no la usa). Si falla la construcción
+    # (import roto), los guards quantize/micros/proveniencia se omiten — emitimos UN warning para no
+    # perder la señal (el bloque inline la emitía per-guard al instanciar 4 DBs). Anchor: P3-FALLBACK-CLINICAL-LAYER.
     try:
         from nutrition_db import IngredientNutritionDB
         _db = IngredientNutritionDB()
-    except Exception:
+    except Exception as _db_e:
         _db = None
+        logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] IngredientNutritionDB no disponible — guards "
+                       f"quantize/micros/proveniencia se omiten: {type(_db_e).__name__}: {_db_e}")
 
-    # ── Guard 1 (FS6/ERC): enforcement determinista per-comida del cap renal (mirror 10625-10646) ──
+    # ── Guard 1 (FS6/ERC): enforcement determinista per-comida del cap renal (espejo [P3-CONDITION-RULES]) ──
     if (CONDITION_RULES_ENABLED and PROTEIN_FLOOR_ENABLED and _db is not None
             and isinstance(plan.get("renal_protein_cap"), dict)
             and plan["renal_protein_cap"].get("applied") and _pg > 0):
@@ -9800,7 +9813,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
             logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] enforcement renal per-comida falló: "
                            f"{type(_renf_e).__name__}: {_renf_e}")
 
-    # ── Guard 2 (FS1): food-safety / huevo crudo (mirror 10653-10661) ──
+    # ── Guard 2 (FS1): food-safety / huevo crudo (espejo [P3-FOOD-SAFETY]) ──
     if FOOD_SAFETY_GUARD:
         try:
             _fs_n = _apply_food_safety_fixes(plan)
@@ -9809,7 +9822,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _fs_e:
             logger.warning(f"[P3-FOOD-SAFETY] error: {type(_fs_e).__name__}: {_fs_e}")
 
-    # ── Guard 3: sustitución de ingredientes por condición DM2/HTA (mirror 10667-10675) ──
+    # ── Guard 3: sustitución de ingredientes por condición DM2/HTA (espejo [P3-CONDITION-ENGINE]) ──
     if DM2_SUGAR_GUARD:
         try:
             _sg_n = _apply_condition_substitutions(plan, form_data)
@@ -9819,7 +9832,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _sg_e:
             logger.warning(f"[P3-CONDITION-ENGINE] error: {type(_sg_e).__name__}: {_sg_e}")
 
-    # ── Guard 4 (FS2): cuantización de porciones a unidades medibles (mirror 10682-10691) ──
+    # ── Guard 4 (FS2): cuantización de porciones a unidades medibles (espejo [P3-PORTION-QUANTIZE]) ──
     if PORTION_QUANTIZE_ENABLED and _db is not None:
         try:
             _q_n = _apply_portion_quantization(plan, _db)
@@ -9828,7 +9841,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _q_e:
             logger.warning(f"[P3-PORTION-QUANTIZE] error: {type(_q_e).__name__}: {_q_e}")
 
-    # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (mirror 10697-10723) ──
+    # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (espejo [P3-MICRONUTRIENTS]) ──
     if MICRONUTRIENT_REPORT_ENABLED and _db is not None:
         try:
             from micronutrients import build_micronutrient_report
@@ -9838,23 +9851,31 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 conditions=_condition_strings(form_data), daily_kcal=_daily_cals,
                 fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL)
             plan["micronutrient_report"] = _mn
+            _ngaps = len(_mn.get("gaps", []))
+            logger.info(f"🧪 [P3-MICRONUTRIENTS] Panel de micros computado "
+                        f"(cobertura {int(_mn.get('coverage', 0)*100)}%, {_ngaps} gap(s) advisory)")
             if SUPPLEMENT_ADVICE_ENABLED:
                 from micronutrients import build_supplement_recommendations
                 _supp = build_supplement_recommendations(_mn, sex=_sex)
                 if _supp.get("count"):
                     plan["micronutrient_supplement_advice"] = _supp
+                    logger.info(f"💊 [P3-SUPPLEMENT-ADVICE] {_supp['count']} recomendación(es) de "
+                                f"suplementación para cerrar gaps de micros")
         except Exception as _mn_e:
             logger.warning(f"[P3-MICRONUTRIENTS] error: {type(_mn_e).__name__}: {_mn_e}")
 
-    # ── Guard 6 (FS5): reporte advisory de variedad/pertinencia cultural (mirror 10727-10735) ──
+    # ── Guard 6 (FS5): reporte advisory de variedad/pertinencia cultural (espejo [P3-VARIETY]) ──
     if VARIETY_REPORT_ENABLED:
         try:
             plan["variety_report"] = build_variety_report(plan)
         except Exception as _vr_e:
             logger.warning(f"[P3-VARIETY] error: {type(_vr_e).__name__}: {_vr_e}")
 
-    # ── Guard 7 (M1): trazabilidad de proveniencia USDA FDC (mirror 10742-10772) ──
-    if DATA_PROVENANCE_ENABLED and _db is not None:
+    # ── Guard 7 (M1): trazabilidad de proveniencia USDA FDC (espejo [P3-DATA-PROVENANCE]) ──
+    # NO en fallbacks: el plan matemático usa ingredientes-plantilla genéricos ("arroz blanco", sin
+    # gramos) que rara vez resuelven a un fdc_id → la nota "X de Y trazables a USDA" sería engañosa
+    # (afirmaría anclaje de datos que ese plan no tiene). El happy path (assemble) sí la computa.
+    if DATA_PROVENANCE_ENABLED and _db is not None and not plan.get("_is_fallback"):
         try:
             _seen_prov = {}
             for _d in plan.get("days", []) or []:
@@ -9881,7 +9902,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _pv_e:
             logger.warning(f"[P3-DATA-PROVENANCE] error: {type(_pv_e).__name__}: {_pv_e}")
 
-    # ── Guard 8 (FS9): gate de revisión profesional + nota ERC reforzada (mirror 10777-10821) ──
+    # ── Guard 8 (FS9): gate de revisión profesional + nota ERC reforzada (espejo [P3-PRO-REVIEW-FLAG]) ──
     if PRO_REVIEW_FLAG_ENABLED:
         try:
             _conds = form_data.get("medicalConditions") or form_data.get("medical_conditions")
@@ -18298,8 +18319,9 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             if FALLBACK_CLINICAL_LAYER_ENABLED:
                 try:
                     _apply_deterministic_clinical_layer(plan_to_return, actual_form_data, nutrition)
-                except Exception:
-                    pass
+                except Exception as _fcl5_e:
+                    logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] capa clínica sobre fallback P1-5 "
+                                   f"falló (no bloquea el return): {type(_fcl5_e).__name__}: {_fcl5_e}")
 
         # [P3-NEW-8 · 2026-05-11] Validador runtime de tipos/rangos del
         # contrato. Best-effort log-only — NUNCA raise (el caller espera
