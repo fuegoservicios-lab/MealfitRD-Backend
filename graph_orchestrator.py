@@ -8784,8 +8784,11 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         chosen = None
         for info, nlow in _pool:
             # congruencia solo con proteína de alta densidad (≥18): no "escala" lentejas
-            # (baja densidad → gramos absurdos); para esas cae a categoría.
-            if nlow and nlow in meal_text and (info.protein or 0) >= 18:
+            # (baja densidad → gramos absurdos); para esas cae a categoría. Matchea por TOKEN
+            # (1ª palabra del nombre, ej. "queso" de "queso mozzarella") para que "con queso"
+            # en el plato escale el queso en vez de meter una proteína ajena.
+            _tok = nlow.split()[0] if nlow else ""
+            if _tok and len(_tok) >= 4 and _tok in meal_text and (info.protein or 0) >= 18:
                 chosen = info
                 break
         if chosen is None:

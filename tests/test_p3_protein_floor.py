@@ -125,6 +125,16 @@ def test_closer_congruencia_escala_proteina_del_plato():
     assert "pollo" in nuevo and "camaron" not in nuevo  # escaló pollo, no metió camarón
 
 
+def test_closer_congruencia_por_token_con_queso():
+    # "...con Queso..." debe escalar el queso (token), NO meter camarón ajeno.
+    meal = {"name": "Revuelto de Huevos con Queso y Batata", "protein": 14, "carbs": 50, "fats": 16,
+            "cals": 14*4+50*4+16*9, "ingredients": ["2 huevos", "50g de queso", "1 batata"]}
+    cands = _safe_high_density_proteins(["Ninguna"], _db())  # camarones es el más magro
+    _close_protein_gap_for_meal(meal, 28.0, _db(), cands, fill_pct=0.92)
+    nuevo = " ".join(str(i) for i in meal["ingredients"]).lower()
+    assert "queso" in nuevo and "camaron" not in nuevo
+
+
 def test_closer_nota_sin_gramaje_hardcodeado():
     # La nota NO debe llevar un gramaje fijo (se desfasaría tras el trim); refiere al ingrediente.
     import re as _re
