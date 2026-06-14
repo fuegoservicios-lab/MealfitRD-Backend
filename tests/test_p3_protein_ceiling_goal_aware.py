@@ -58,6 +58,33 @@ def test_volumen_trima_por_encima_de_2_2_gkg():
     assert P / wkg <= 2.25, f"volumen quedó en {P/wkg:.2f} g/kg (>2.2)"
 
 
+def test_helper_ceiling_pct_robusto_a_peso_ausente():
+    from graph_orchestrator import _goal_aware_trim_ceiling_pct
+    # con peso: volumen 54kg target 119g → ~1.0 (estricto 2.2 g/kg)
+    pct_vol = _goal_aware_trim_ceiling_pct({"weight": 54, "weightUnit": "kg", "mainGoal": "gain_muscle"}, 119.0)
+    assert abs(pct_vol - 1.0) < 0.02
+    # con peso: déficit 65kg target 140g → ~1.21 (permite hasta 2.6 g/kg)
+    pct_cut = _goal_aware_trim_ceiling_pct({"weight": 65, "weightUnit": "kg", "mainGoal": "lose_fat"}, 140.0)
+    assert 1.18 < pct_cut < 1.25
+    # SIN peso: fallback por objetivo (volumen estricto < déficit laxo)
+    f_vol = _goal_aware_trim_ceiling_pct({"mainGoal": "gain_muscle"}, 120.0)
+    f_cut = _goal_aware_trim_ceiling_pct({"mainGoal": "lose_fat"}, 120.0)
+    assert f_vol < f_cut
+
+
+def test_surgical_regen_reaplica_techo():
+    # Ancla: el nodo de surgical regen re-aplica el trim de techo a los días re-generados.
+    import ast as _ast
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "graph_orchestrator.py"), encoding="utf-8").read()
+    tree = _ast.parse(src)
+    node = next((n for n in _ast.walk(tree)
+                 if isinstance(n, _ast.AsyncFunctionDef) and n.name == "surgical_marker_regen_node"), None)
+    assert node is not None
+    body = _ast.get_source_segment(src, node)
+    assert "_trim_day_protein_to_ceiling" in body and "_goal_aware_trim_ceiling_pct" in body
+
+
 def test_deficit_permite_proteina_alta_protectora():
     # Déficit, 65kg, target 140g (2.15 g/kg). Un día a 158g (2.43 g/kg) → NO se trima (protector).
     wkg = 65.0

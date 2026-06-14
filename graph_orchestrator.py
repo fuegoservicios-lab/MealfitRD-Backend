@@ -8352,6 +8352,17 @@ def _weight_kg_from_form(form_data: dict) -> float:
     except (TypeError, ValueError):
         return 0.0
 
+
+def _goal_aware_trim_ceiling_pct(form_data: dict, target_protein_day: float) -> float:
+    """[P3-PROTEIN-CEILING-GOAL-AWARE] `ceiling_pct` para el trim = techo_g/kg × peso / target.
+    Robusto a peso ausente: fallback por objetivo (déficit más laxo, volumen estricto)."""
+    goal = form_data.get("mainGoal") if isinstance(form_data, dict) else None
+    gkg = _protein_gkg_ceiling(goal)
+    wkg = _weight_kg_from_form(form_data) if isinstance(form_data, dict) else 0.0
+    if wkg > 0 and target_protein_day and target_protein_day > 0:
+        return max(1.0, min(1.30, (gkg * wkg) / target_protein_day))
+    return 1.18 if gkg >= 2.5 else 1.08  # sin peso → fallback por objetivo
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -10195,11 +10206,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 # (no un % fijo del target) → ningún día de volumen pasa de 2.2 g/kg, y los de
                 # déficit pueden subir hasta 2.6 g/kg de forma clínicamente correcta.
                 if PROTEIN_FLOOR_ENABLED and _pg > 0:
-                    _wkg = _weight_kg_from_form(form_data)
-                    _max_p_day = _protein_gkg_ceiling(form_data.get("mainGoal")) * _wkg if _wkg > 0 else 0
-                    _ceil_pct = (max(1.0, min(1.30, _max_p_day / _pg))
-                                 if (_max_p_day > 0 and _pg > 0) else 1.12)
-                    _trim_day_protein_to_ceiling(_ms, _pg, _nut_db, ceiling_pct=_ceil_pct)
+                    _trim_day_protein_to_ceiling(
+                        _ms, _pg, _nut_db,
+                        ceiling_pct=_goal_aware_trim_ceiling_pct(form_data, _pg))
             logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
                         f"a su target de macros real (cerebro dividido)"
                         + (f" + top-up de proteína {_topup_g}g total" if _topup_g else ""))
@@ -11161,6 +11170,34 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
         f"🩹 [P5-MARKER-REGEN] Completado en {duration}s — "
         f"{fixed_count}/{len(marker_day_nums)} días re-corregidos."
     )
+
+    # [P3-PROTEIN-CEILING-GOAL-AWARE · 2026-06-14] Re-aplica el techo de proteína a los días
+    # RE-GENERADOS por el corrector LLM: el surgical regen escapa el trim de assemble (corre
+    # después), así que un día de volumen podía entregar >2.2 g/kg. Determinista, fail-safe →
+    # cierra el gap "las mutaciones post-review escapan los guards de assemble".
+    if PROTEIN_FLOOR_ENABLED:
+        try:
+            import re as _re_sr
+            from nutrition_db import IngredientNutritionDB as _SRDB
+            _tgt_p = None
+            _macros_sr = plan_result.get("macros")
+            if isinstance(_macros_sr, dict):
+                _m = _re_sr.search(r"(\d+)", str(_macros_sr.get("protein", "")))
+                if _m:
+                    _tgt_p = float(_m.group(1))
+            if _tgt_p and _tgt_p > 0:
+                _srdb = _SRDB()
+                _cp = _goal_aware_trim_ceiling_pct(form_data, _tgt_p)
+                _trim_n = 0
+                for _d in days:
+                    if _trim_day_protein_to_ceiling(_d.get("meals", []) or [], _tgt_p, _srdb, ceiling_pct=_cp):
+                        _trim_n += 1
+                if _trim_n:
+                    logger.info(f"🩹 [P3-PROTEIN-CEILING-GOAL-AWARE] Re-trim de techo aplicado a "
+                                f"{_trim_n} día(s) re-generado(s) por surgical regen")
+        except Exception as _srt_e:
+            logger.warning(f"[P3-PROTEIN-CEILING-GOAL-AWARE] re-trim surgical falló: "
+                           f"{type(_srt_e).__name__}: {_srt_e}")
 
     new_plan_result = {**plan_result, "days": days}
 
