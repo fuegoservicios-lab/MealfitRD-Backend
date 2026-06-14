@@ -8375,6 +8375,12 @@ DM2_SUGAR_GUARD = _env_bool("MEALFIT_DM2_SUGAR_GUARD", True)
 # FDC #XXXXX". Convierte la banda de precisión AUTOAFIRMADA en trazabilidad verificable de terceros.
 DATA_PROVENANCE_ENABLED = _env_bool("MEALFIT_DATA_PROVENANCE", True)
 
+# [P3-FALLBACK-CLINICAL-LAYER · 2026-06-14] Aplica la capa clínica determinista (FS1-FS9) al plan de
+# fallback matemático, que bypassa assemble y por tanto la perdía. Default True (el fallback debe
+# heredar food-safety + sustitución de sodio/azúcar + micros + gate FS9). Knob de rollback sin redeploy
+# si correr la capa sobre meals-plantilla matemáticas alguna vez se porta mal en prod.
+FALLBACK_CLINICAL_LAYER_ENABLED = _env_bool("MEALFIT_FALLBACK_CLINICAL_LAYER", True)
+
 
 def _protein_gkg_ceiling(goal) -> float:
     """[P3-PROTEIN-CEILING-GOAL-AWARE] Techo de proteína entregada (g/kg) por objetivo: déficit/
@@ -9689,6 +9695,229 @@ def _run_assembly_validations(
         logger.error(f"🚨 [ASSEMBLY VALIDATION] Plan corrupto post-assembly detectado: {err_msg}")
         result["_schema_invalid"] = True
         result["_schema_errors"] = err_msg
+
+
+# [P3-FALLBACK-CLINICAL-LAYER · 2026-06-14] SSOT de la CAPA CLÍNICA DETERMINISTA (solver-independiente):
+# los 8 guards FS1-FS9 que viven inline en assemble_plan_node (renal per-comida → food-safety →
+# condition-subs → quantize → micros/suplementos → variedad → proveniencia → gate FS9). Extraída para
+# que el FALLBACK matemático (`_get_extreme_fallback_plan`/`_repair_partial_plan`), que BYPASSA assemble,
+# la HEREDE en vez de entregar un plan sin food-safety, sin sustitución de sodio/azúcar, sin reporte de
+# micros y sin gate de derivación profesional. Self-contained: re-deriva `active_macros` (COPIA — jamás
+# muta `nutrition` del caller), re-corre el cap renal de la fuente, y recomputa `_pg`/`_daily_cals` desde
+# (plan, nutrition). Idempotente vía marker `_clinical_layer_applied`. Cada guard fail-safe individual.
+# Comparte UNA instancia de IngredientNutritionDB (antes el bloque inline instanciaba 4). Mutates `plan`.
+# Retorna `plan`. [Fase A: SSOT nueva consumida por el fallback; assemble sigue con su bloque inline.]
+def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: dict = None) -> dict:
+    if not isinstance(plan, dict):
+        return plan
+    if plan.get("_clinical_layer_applied"):
+        return plan  # ya corrió (happy path en assemble o doble-llamada en delivery) → no re-aplicar
+    if not isinstance(form_data, dict):
+        form_data = {}
+    nutrition = nutrition if isinstance(nutrition, dict) else {}
+
+    # ── Re-derivación de los locals que assemble computa antes del bloque (mirror 9959-10025 + 10039-10040) ──
+    # active_macros: COPIA del macros de la fuente (jamás mutar el `nutrition` del caller — bug si fuese ref).
+    _src_macros = nutrition.get("total_daily_macros") or nutrition.get("macros") or {}
+    active_macros = dict(_src_macros) if isinstance(_src_macros, dict) else {}
+
+    # Re-corre el cap renal de la fuente (mirror 9976-10025): el fallback (que bypassa assemble) queda
+    # capeado + con `renal_protein_cap` seteado → habilita el enforcement per-comida + el gate FS9. En el
+    # happy path active_macros ya viene capeado → no-op (cap < actual es falso). Fail-safe.
+    try:
+        if CONDITION_RULES_ENABLED and _is_renal_condition(form_data) and active_macros:
+            _wkg = _weight_kg_from_form(form_data)
+            _old_p = _meal_macro_num(active_macros.get("protein_str"))
+            _cap = round(RENAL_PROTEIN_GKG_CEILING * _wkg)
+            _pm = plan.get("macros") if isinstance(plan.get("macros"), dict) else None
+            if _wkg > 0 and _cap > 0 and _cap < _old_p:
+                _freed = (_old_p - _cap) * 4.0
+                _diab = _is_diabetes_condition(form_data)
+                active_macros["protein_str"] = f"{_cap}g"
+                if _pm is not None:
+                    _pm["protein"] = f"{_cap}g"
+                if _diab:
+                    _old_f = _meal_macro_num(active_macros.get("fats_str"))
+                    _new_f = round(_old_f + _freed / 9.0)
+                    active_macros["fats_str"] = f"{_new_f}g"
+                    if _pm is not None:
+                        _pm["fats"] = f"{_new_f}g"
+                    _reassigned = "fat"
+                else:
+                    _old_c = _meal_macro_num(active_macros.get("carbs_str"))
+                    _new_c = round(_old_c + (_old_p - _cap))
+                    active_macros["carbs_str"] = f"{_new_c}g"
+                    if _pm is not None:
+                        _pm["carbs"] = f"{_new_c}g"
+                    _reassigned = "carb"
+                if not (plan.get("renal_protein_cap") or {}).get("applied"):
+                    plan["renal_protein_cap"] = {
+                        "applied": True, "gkg": RENAL_PROTEIN_GKG_CEILING,
+                        "protein_g": _cap, "was_g": round(_old_p),
+                        "weight_kg": round(_wkg, 1), "guideline": "KDIGO 2024 (G3-G5 no-diálisis)",
+                        "reassigned_to": _reassigned, "comorbid_diabetes": bool(_diab),
+                        "meals_enforced": False,
+                    }
+        # Propaga el cap si vino ya aplicado desde la fuente (mirror 10022-10025).
+        if (CONDITION_RULES_ENABLED and (nutrition.get("renal_protein_cap") or {}).get("applied")
+                and not (plan.get("renal_protein_cap") or {}).get("applied")):
+            plan["renal_protein_cap"] = {**nutrition["renal_protein_cap"], "meals_enforced": False}
+    except Exception as _rc_e:
+        logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] re-derivación del cap renal falló: "
+                       f"{type(_rc_e).__name__}: {_rc_e}")
+
+    _daily_cals = _meal_macro_num(plan.get("calories")) or _meal_macro_num(
+        nutrition.get("total_daily_calories") or nutrition.get("target_calories"))
+    _pg = _meal_macro_num(active_macros.get("protein_str"))
+    if not _pg:  # fallback path: el header del plan trae macros={protein:"Ng"}
+        _pm2 = plan.get("macros")
+        if isinstance(_pm2, dict):
+            _pg = _meal_macro_num(_pm2.get("protein"))
+
+    # Una sola instancia de DB para todos los guards (food-safety no la usa).
+    try:
+        from nutrition_db import IngredientNutritionDB
+        _db = IngredientNutritionDB()
+    except Exception:
+        _db = None
+
+    # ── Guard 1 (FS6/ERC): enforcement determinista per-comida del cap renal (mirror 10625-10646) ──
+    if (CONDITION_RULES_ENABLED and PROTEIN_FLOOR_ENABLED and _db is not None
+            and isinstance(plan.get("renal_protein_cap"), dict)
+            and plan["renal_protein_cap"].get("applied") and _pg > 0):
+        try:
+            _enf_days = 0
+            for _d in plan.get("days", []) or []:
+                _rmeals = _d.get("meals", []) or []
+                if _trim_day_protein_to_ceiling(_rmeals, _pg, _db, ceiling_pct=1.0):
+                    _enf_days += 1
+                if _daily_cals > 0:
+                    _protein_preserving_day_reconcile(_rmeals, _daily_cals, _db)
+            plan["renal_protein_cap"]["meals_enforced"] = True
+            plan["renal_protein_cap"]["enforced_days"] = _enf_days
+        except Exception as _renf_e:
+            plan["renal_protein_cap"]["meals_enforced"] = False
+            logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] enforcement renal per-comida falló: "
+                           f"{type(_renf_e).__name__}: {_renf_e}")
+
+    # ── Guard 2 (FS1): food-safety / huevo crudo (mirror 10653-10661) ──
+    if FOOD_SAFETY_GUARD:
+        try:
+            _fs_n = _apply_food_safety_fixes(plan)
+            if _fs_n:
+                logger.warning(f"🥚 [P3-FOOD-SAFETY] Mitigó huevo crudo/poco cocido en {_fs_n} comida(s)")
+        except Exception as _fs_e:
+            logger.warning(f"[P3-FOOD-SAFETY] error: {type(_fs_e).__name__}: {_fs_e}")
+
+    # ── Guard 3: sustitución de ingredientes por condición DM2/HTA (mirror 10667-10675) ──
+    if DM2_SUGAR_GUARD:
+        try:
+            _sg_n = _apply_condition_substitutions(plan, form_data)
+            if _sg_n:
+                logger.warning(f"⚕️ [P3-CONDITION-ENGINE] Sustituyó ingredientes contraindicados "
+                               f"(azúcar/sodio) en {_sg_n} comida(s)")
+        except Exception as _sg_e:
+            logger.warning(f"[P3-CONDITION-ENGINE] error: {type(_sg_e).__name__}: {_sg_e}")
+
+    # ── Guard 4 (FS2): cuantización de porciones a unidades medibles (mirror 10682-10691) ──
+    if PORTION_QUANTIZE_ENABLED and _db is not None:
+        try:
+            _q_n = _apply_portion_quantization(plan, _db)
+            if _q_n:
+                logger.info(f"📏 [P3-PORTION-QUANTIZE] Redondeó porciones en {_q_n} comida(s)")
+        except Exception as _q_e:
+            logger.warning(f"[P3-PORTION-QUANTIZE] error: {type(_q_e).__name__}: {_q_e}")
+
+    # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (mirror 10697-10723) ──
+    if MICRONUTRIENT_REPORT_ENABLED and _db is not None:
+        try:
+            from micronutrients import build_micronutrient_report
+            _sex = form_data.get("gender", "female")
+            _mn = build_micronutrient_report(
+                plan, _db, sex=_sex,
+                conditions=_condition_strings(form_data), daily_kcal=_daily_cals,
+                fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL)
+            plan["micronutrient_report"] = _mn
+            if SUPPLEMENT_ADVICE_ENABLED:
+                from micronutrients import build_supplement_recommendations
+                _supp = build_supplement_recommendations(_mn, sex=_sex)
+                if _supp.get("count"):
+                    plan["micronutrient_supplement_advice"] = _supp
+        except Exception as _mn_e:
+            logger.warning(f"[P3-MICRONUTRIENTS] error: {type(_mn_e).__name__}: {_mn_e}")
+
+    # ── Guard 6 (FS5): reporte advisory de variedad/pertinencia cultural (mirror 10727-10735) ──
+    if VARIETY_REPORT_ENABLED:
+        try:
+            plan["variety_report"] = build_variety_report(plan)
+        except Exception as _vr_e:
+            logger.warning(f"[P3-VARIETY] error: {type(_vr_e).__name__}: {_vr_e}")
+
+    # ── Guard 7 (M1): trazabilidad de proveniencia USDA FDC (mirror 10742-10772) ──
+    if DATA_PROVENANCE_ENABLED and _db is not None:
+        try:
+            _seen_prov = {}
+            for _d in plan.get("days", []) or []:
+                for _m in _d.get("meals", []) or []:
+                    for _ing in _m.get("ingredients", []) or []:
+                        _info = _db.lookup(str(_ing))
+                        if not _info:
+                            continue
+                        _key = (_info.name or str(_ing)).lower()
+                        _seen_prov.setdefault(_key, _info)
+            _total_u = len(_seen_prov)
+            _usda = [(i.name, i.fdc_id) for i in _seen_prov.values()
+                     if i.fdc_id and str(i.source or "").lower() == "usda"]
+            plan["data_provenance"] = {
+                "primary_source": "USDA FoodData Central",
+                "secondary_sources": ["INCAP/LATINFOODS", "manual (curado es-DO)"],
+                "ingredients_resolved": _total_u,
+                "usda_traced": len(_usda),
+                "fdc_sample": [{"name": n, "fdc_id": int(f)} for n, f in _usda[:8]],
+                "note": (f"Datos nutricionales anclados a fuentes verificables: {len(_usda)} de "
+                         f"{_total_u} ingredientes resueltos trazables a USDA FoodData Central "
+                         "(IDs públicos en fdc.nal.usda.gov); el resto, INCAP/curado es-DO."),
+            }
+        except Exception as _pv_e:
+            logger.warning(f"[P3-DATA-PROVENANCE] error: {type(_pv_e).__name__}: {_pv_e}")
+
+    # ── Guard 8 (FS9): gate de revisión profesional + nota ERC reforzada (mirror 10777-10821) ──
+    if PRO_REVIEW_FLAG_ENABLED:
+        try:
+            _conds = form_data.get("medicalConditions") or form_data.get("medical_conditions")
+            if _has_real_medical_flags(_conds):
+                _cond_list = [str(c) for c in (_conds if isinstance(_conds, list) else [_conds])
+                              if str(c).strip().lower() not in _MEDICAL_NONE_SENTINELS]
+                _note = ("⚕️ Declaraste condición(es) de salud (" + ", ".join(_cond_list) + "). "
+                         "Este plan las considera de forma general pero NO sustituye la evaluación "
+                         "de tu médico o nutricionista. Consúltalo antes de seguir este plan, "
+                         "especialmente para ajustar porciones, sodio, azúcares o restricciones específicas.")
+                _renal_flag = CONDITION_RULES_ENABLED and _is_renal_condition(form_data)
+                if _renal_flag:
+                    _cap_info = plan.get("renal_protein_cap") or {}
+                    _cap_txt = (f" Se aplicó un límite conservador de proteína a ~{_cap_info.get('protein_g')}g/día "
+                                f"(≈{RENAL_PROTEIN_GKG_CEILING} g/kg) como medida de seguridad."
+                                if _cap_info.get("meals_enforced") else "")
+                    _comorbid_txt = (" Tienes diabetes y enfermedad renal a la vez: las recomendaciones de "
+                                     "fibra/leguminosas (diabetes) y de potasio/fósforo/proteína (renal) deben "
+                                     "balancearse caso por caso — esto SOLO lo define tu nefrólogo/nutricionista."
+                                     if _cap_info.get("comorbid_diabetes") else "")
+                    _note = ("🫘 CONDICIÓN RENAL DETECTADA — IMPORTANTE: la nutrición en enfermedad renal "
+                             "depende de tu estadio (G1–G5) y de si estás en diálisis, y DEBE ser supervisada "
+                             "por tu nefrólogo o nutricionista renal." + _cap_txt + " Este plan NO es una "
+                             "prescripción renal: el potasio y el fósforo (críticos en ERC) no se ajustan aquí." +
+                             _comorbid_txt + " NO sigas este plan sin la validación de tu profesional de salud. ") + _note
+                plan["requires_professional_review"] = {
+                    "flag": True,
+                    "conditions": _cond_list,
+                    "renal_gate": bool(_renal_flag),
+                    "note": _note,
+                }
+        except Exception as _pr_e:
+            logger.warning(f"[P3-PRO-REVIEW-FLAG] error: {type(_pr_e).__name__}: {_pr_e}")
+
+    plan["_clinical_layer_applied"] = True
+    return plan
 
 
 @_node_label("assembler")
@@ -16650,6 +16879,25 @@ def _apply_final_defense_guardrails(
     if final_state.get("profile_embedding") and final_state.get("plan_result"):
         final_state["plan_result"]["_profile_embedding"] = final_state["profile_embedding"]
 
+    # [P3-FALLBACK-CLINICAL-LAYER · 2026-06-14] El fallback matemático (`_get_extreme_fallback_plan`) y el
+    # parcial reparado (`_repair_partial_plan`) BYPASSAN assemble_plan_node → no heredan FS1-FS8. Aquí, en
+    # el punto único de salida, les aplicamos la capa clínica determinista COMPLETA (food-safety +
+    # sustitución de sodio/azúcar + quantize + micros + variedad + proveniencia + gate FS9). Solo corre
+    # sobre planes `_is_fallback` → no-op en el happy path (que ya pasó por el bloque inline de assemble);
+    # idempotente vía marker. Gated por knob para rollback. La red renal de abajo queda redundante-pero-
+    # inofensiva (idempotente) y sigue cubriendo el caso `FALLBACK_CLINICAL_LAYER_ENABLED=False`. Fail-safe.
+    if FALLBACK_CLINICAL_LAYER_ENABLED:
+        _fcl_plan = final_state.get("plan_result")
+        if (isinstance(_fcl_plan, dict) and _fcl_plan.get("_is_fallback")
+                and not _fcl_plan.get("_clinical_layer_applied")):
+            try:
+                _apply_deterministic_clinical_layer(_fcl_plan, actual_form_data, nutrition)
+                logger.warning("🛡️ [P3-FALLBACK-CLINICAL-LAYER] Capa clínica determinista aplicada al "
+                               "plan de fallback (food-safety + condition-subs + quantize + micros + gate FS9).")
+            except Exception as _fcl_e:
+                logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] error aplicando la capa al fallback: "
+                               f"{type(_fcl_e).__name__}: {_fcl_e}")
+
     # [P3-CONDITION-RULES · 2026-06-14] RED DE SEGURIDAD RENAL en el punto único de salida →
     # cubre TODO plan entregado, incluido el fallback matemático (que bypassa assemble y su gate
     # FS9). El protein del fallback YA viene capeado (se construye desde `nutrition` capeado en la
@@ -18044,6 +18292,14 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             # añadimos una marca específica de este path para que Grafana pueda
             # distinguir el origen del fallback en alerts.
             plan_to_return["_p1_5_emergency_return"] = True
+            # [P3-FALLBACK-CLINICAL-LAYER · 2026-06-14] Este fallback de emergencia se construye DESPUÉS
+            # de `_apply_final_defense_guardrails` → escapa la costura de allá. Aplícale la capa clínica
+            # determinista aquí también (idempotente vía marker). Fail-safe, no debe tumbar el return.
+            if FALLBACK_CLINICAL_LAYER_ENABLED:
+                try:
+                    _apply_deterministic_clinical_layer(plan_to_return, actual_form_data, nutrition)
+                except Exception:
+                    pass
 
         # [P3-NEW-8 · 2026-05-11] Validador runtime de tipos/rangos del
         # contrato. Best-effort log-only — NUNCA raise (el caller espera
