@@ -9708,6 +9708,62 @@ def _run_assembly_validations(
         result["_schema_errors"] = err_msg
 
 
+# [P4-CONSTRAINT-ABC · 2026-06-14] Cuerpos VERBATIM extraídos del cap renal para que el motor de
+# constraints (`clinical_constraints.RenalProteinCapConstraint`) DELEGUE a ellos sin reimplementar la
+# matemática validada. `_enforce_renal_per_meal` = cuerpo del Guard 1 de la capa clínica;
+# `_renal_exit_safety_net` = bloque renal de la red de salida (`_apply_final_defense_guardrails`). El
+# refactor es behavior-preserving: estos son copia textual, los call sites llaman al engine que llama
+# a estos. Tooltip-anchor: P4-CONSTRAINT-ABC.
+def _enforce_renal_per_meal(plan: dict, pg: float, daily_cals: float, db) -> None:
+    """Cuerpo verbatim del Guard 1 (ERC enforcement determinista per-comida). El gate (CONDITION_RULES_
+    ENABLED + PROTEIN_FLOOR_ENABLED + db + renal_protein_cap.applied + pg>0) lo mantiene el call site."""
+    try:
+        _enf_days = 0
+        for _d in plan.get("days", []) or []:
+            _rmeals = _d.get("meals", []) or []
+            if _trim_day_protein_to_ceiling(_rmeals, pg, db, ceiling_pct=1.0):
+                _enf_days += 1
+            if daily_cals > 0:
+                _protein_preserving_day_reconcile(_rmeals, daily_cals, db)
+        plan["renal_protein_cap"]["meals_enforced"] = True
+        plan["renal_protein_cap"]["enforced_days"] = _enf_days
+    except Exception as _renf_e:
+        plan["renal_protein_cap"]["meals_enforced"] = False
+        logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] enforcement renal per-comida falló: "
+                       f"{type(_renf_e).__name__}: {_renf_e}")
+
+
+def _renal_exit_safety_net(plan: dict, nutrition: dict, form_data: dict) -> None:
+    """Cuerpo verbatim del bloque RENAL de la red de seguridad en el punto único de salida. Garantiza
+    que un paciente renal NUNCA reciba un plan (incl. fallback) sin la advertencia de nefrólogo + la meta
+    del cap. No-op en el happy path (assemble ya seteó renal_gate). El gate genérico (cualquier condición)
+    queda inline en el call site. Fail-safe lo maneja el call site."""
+    _rcap_src = nutrition.get("renal_protein_cap") if isinstance(nutrition, dict) else None
+    if (PRO_REVIEW_FLAG_ENABLED and isinstance(plan, dict)
+            and isinstance(_rcap_src, dict) and _rcap_src.get("applied")):
+        if not plan.get("renal_protein_cap"):
+            plan["renal_protein_cap"] = {**_rcap_src, "meals_enforced": True}
+        _rpr_existing = plan.get("requires_professional_review")
+        if not (isinstance(_rpr_existing, dict) and _rpr_existing.get("renal_gate")):
+            _cap_txt = (f" Se aplicó un límite conservador de proteína a ~{_rcap_src.get('protein_g')}g/día "
+                        f"(≈{RENAL_PROTEIN_GKG_CEILING} g/kg) como medida de seguridad.")
+            _comorbid_txt = (" Tienes diabetes y enfermedad renal a la vez: el balance fibra/leguminosas "
+                             "vs potasio/fósforo/proteína SOLO lo define tu nefrólogo/nutricionista."
+                             if _rcap_src.get("comorbid_diabetes") else "")
+            _conds = [str(c) for c in (form_data.get("medicalConditions") or [])
+                      if str(c).strip().lower() not in _MEDICAL_NONE_SENTINELS]
+            plan["requires_professional_review"] = {
+                "flag": True, "renal_gate": True, "conditions": _conds,
+                "note": ("🫘 CONDICIÓN RENAL DETECTADA — IMPORTANTE: la nutrición en enfermedad renal "
+                         "depende de tu estadio (G1–G5) y de si estás en diálisis, y DEBE ser supervisada "
+                         "por tu nefrólogo o nutricionista renal." + _cap_txt + " Este plan NO es una "
+                         "prescripción renal: el potasio y el fósforo (críticos en ERC) no se ajustan aquí." +
+                         _comorbid_txt + " NO sigas este plan sin la validación de tu profesional de salud."),
+            }
+            logger.warning("🫘 [P3-CONDITION-RULES] Red de seguridad renal aplicó gate de derivación "
+                           "profesional al plan entregado (cubre fallback/paths sin assemble).")
+
+
 # [P3-FALLBACK-CLINICAL-LAYER · 2026-06-14] SSOT de la CAPA CLÍNICA DETERMINISTA (solver-independiente):
 # los 8 guards FS1-FS9 que viven inline en assemble_plan_node (renal per-comida → food-safety →
 # condition-subs → quantize → micros/suplementos → variedad → proveniencia → gate FS9). Extraída para
@@ -9805,24 +9861,29 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] IngredientNutritionDB no disponible — guards "
                        f"quantize/micros/proveniencia se omiten: {type(_db_e).__name__}: {_db_e}")
 
-    # ── Guard 1 (FS6/ERC): enforcement determinista per-comida del cap renal (espejo [P3-CONDITION-RULES]) ──
+    # [P4-CONSTRAINT-ABC · 2026-06-14] Motor de constraints declarativo (posición-preservante): despacha
+    # los guards condition-específicos (Guard 1 renal, Guard 3 sustituciones) vía constraints en orden de
+    # precedencia, SIN reordenar (food-safety sigue físicamente entre ambos). El cap renal NO se
+    # reimplementa — los constraints delegan a las funciones validadas. Fail-safe: si el engine falla, los
+    # guards inline-equivalentes (renal/subs) simplemente no corren (mismo efecto que su gate en False).
+    try:
+        from clinical_constraints import ClinicalConstraintEngine, ClinicalContext
+        _eng = ClinicalConstraintEngine(form_data)
+        _ctx = ClinicalContext(db=_db, daily_cals=_daily_cals, protein_g=_pg, active_macros=active_macros)
+    except Exception as _eng_e:
+        _eng = None
+        logger.warning(f"[P4-CONSTRAINT-ABC] engine no disponible: {type(_eng_e).__name__}: {_eng_e}")
+
+    # ── Guard 1 (FS6/ERC): enforcement determinista per-comida del cap renal (vía RenalProteinCapConstraint) ──
+    # [P4-CONSTRAINT-ABC review] Fallback directo si el engine no cargó (simétrico a Guard 3): el trim
+    # renal per-comida es SEGURIDAD iatrogénica — nunca debe saltarse silenciosamente por un import roto.
     if (CONDITION_RULES_ENABLED and PROTEIN_FLOOR_ENABLED and _db is not None
             and isinstance(plan.get("renal_protein_cap"), dict)
             and plan["renal_protein_cap"].get("applied") and _pg > 0):
-        try:
-            _enf_days = 0
-            for _d in plan.get("days", []) or []:
-                _rmeals = _d.get("meals", []) or []
-                if _trim_day_protein_to_ceiling(_rmeals, _pg, _db, ceiling_pct=1.0):
-                    _enf_days += 1
-                if _daily_cals > 0:
-                    _protein_preserving_day_reconcile(_rmeals, _daily_cals, _db)
-            plan["renal_protein_cap"]["meals_enforced"] = True
-            plan["renal_protein_cap"]["enforced_days"] = _enf_days
-        except Exception as _renf_e:
-            plan["renal_protein_cap"]["meals_enforced"] = False
-            logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] enforcement renal per-comida falló: "
-                           f"{type(_renf_e).__name__}: {_renf_e}")
+        if _eng is not None:
+            _eng.enforce_one("renal", plan, nutrition, _ctx)   # delega a _enforce_renal_per_meal
+        else:
+            _enforce_renal_per_meal(plan, _pg, _daily_cals, _db)   # fallback inline (engine no disponible)
 
     # ── Guard 2 (FS1): food-safety / huevo crudo (espejo [P3-FOOD-SAFETY]) ──
     if FOOD_SAFETY_GUARD:
@@ -9833,13 +9894,15 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _fs_e:
             logger.warning(f"[P3-FOOD-SAFETY] error: {type(_fs_e).__name__}: {_fs_e}")
 
-    # ── Guard 3: sustitución de ingredientes por condición DM2/HTA (espejo [P3-CONDITION-ENGINE]) ──
+    # ── Guard 3: sustitución de ingredientes por condición DM2/HTA/dislipidemia (vía SubstitutionEngineConstraint) ──
     if DM2_SUGAR_GUARD:
         try:
-            _sg_n = _apply_condition_substitutions(plan, form_data)
+            # delega al pase único `_apply_condition_substitutions`; fallback inline si el engine no cargó.
+            _sg_n = (_eng.enforce_one("substitutions", plan, nutrition, _ctx) if _eng is not None
+                     else _apply_condition_substitutions(plan, form_data))
             if _sg_n:
                 logger.warning(f"⚕️ [P3-CONDITION-ENGINE] Sustituyó ingredientes contraindicados "
-                               f"(azúcar/sodio) en {_sg_n} comida(s)")
+                               f"(azúcar/sodio/satfat) en {_sg_n} comida(s)")
         except Exception as _sg_e:
             logger.warning(f"[P3-CONDITION-ENGINE] error: {type(_sg_e).__name__}: {_sg_e}")
 
@@ -16833,30 +16896,16 @@ def _apply_final_defense_guardrails(
     # (assemble ya seteó renal_gate). Fail-safe.
     try:
         _pf_renal = final_state.get("plan_result")
-        _rcap_src = nutrition.get("renal_protein_cap") if isinstance(nutrition, dict) else None
-        if (PRO_REVIEW_FLAG_ENABLED and isinstance(_pf_renal, dict)
-                and isinstance(_rcap_src, dict) and _rcap_src.get("applied")):
-            if not _pf_renal.get("renal_protein_cap"):
-                _pf_renal["renal_protein_cap"] = {**_rcap_src, "meals_enforced": True}
-            _rpr_existing = _pf_renal.get("requires_professional_review")
-            if not (isinstance(_rpr_existing, dict) and _rpr_existing.get("renal_gate")):
-                _cap_txt = (f" Se aplicó un límite conservador de proteína a ~{_rcap_src.get('protein_g')}g/día "
-                            f"(≈{RENAL_PROTEIN_GKG_CEILING} g/kg) como medida de seguridad.")
-                _comorbid_txt = (" Tienes diabetes y enfermedad renal a la vez: el balance fibra/leguminosas "
-                                 "vs potasio/fósforo/proteína SOLO lo define tu nefrólogo/nutricionista."
-                                 if _rcap_src.get("comorbid_diabetes") else "")
-                _conds = [str(c) for c in (actual_form_data.get("medicalConditions") or [])
-                          if str(c).strip().lower() not in _MEDICAL_NONE_SENTINELS]
-                _pf_renal["requires_professional_review"] = {
-                    "flag": True, "renal_gate": True, "conditions": _conds,
-                    "note": ("🫘 CONDICIÓN RENAL DETECTADA — IMPORTANTE: la nutrición en enfermedad renal "
-                             "depende de tu estadio (G1–G5) y de si estás en diálisis, y DEBE ser supervisada "
-                             "por tu nefrólogo o nutricionista renal." + _cap_txt + " Este plan NO es una "
-                             "prescripción renal: el potasio y el fósforo (críticos en ERC) no se ajustan aquí." +
-                             _comorbid_txt + " NO sigas este plan sin la validación de tu profesional de salud."),
-                }
-                logger.warning("🫘 [P3-CONDITION-RULES] Red de seguridad renal aplicó gate de derivación "
-                               "profesional al plan entregado (cubre fallback/paths sin assemble).")
+        # [P4-CONSTRAINT-ABC · 2026-06-14] Capa 3 (red de salida) RENAL vía el engine → delega a
+        # `_renal_exit_safety_net` (cuerpo verbatim del bloque renal). El engine solo corre el constraint
+        # renal si el perfil es renal; el bloque interno re-chequea `renal_protein_cap.applied`. Efecto
+        # idéntico al bloque inline previo.
+        if isinstance(_pf_renal, dict):
+            try:
+                from clinical_constraints import ClinicalConstraintEngine as _CCE3
+                _CCE3(actual_form_data).run_safety_net(_pf_renal, nutrition)
+            except Exception:
+                _renal_exit_safety_net(_pf_renal, nutrition, actual_form_data)  # fallback (engine no disponible)
         # [P3-CONDITION-RULES] Gate GENÉRICO en el punto de salida: si el usuario declaró CUALQUIER
         # condición médica real y el plan entregado (incl. el fallback matemático, que bypassa el
         # gate FS9 de assemble) no lo lleva, lo añadimos. Honestidad/seguridad: un plan para alguien
@@ -17036,7 +17085,15 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
     # [P3-CONDITION-RULES · 2026-06-14] ERC: capear el target de proteína EN LA FUENTE (antes de
     # generación/review/fallback). Sin esto, el LLM generaba un plan alto en proteína que el revisor
     # renal-aware rechazaba → fallback matemático SIN capear (hallado en prueba en vivo). Fail-safe.
-    _apply_renal_cap_to_nutrition(nutrition, actual_form_data)
+    # [P4-CONSTRAINT-ABC · 2026-06-14] Capa 1 (ajuste-en-fuente) vía el engine → delega a
+    # `_apply_renal_cap_to_nutrition` (renal es hoy el único constraint con adjust_targets). Efecto idéntico.
+    try:
+        from clinical_constraints import ClinicalConstraintEngine as _CCE
+        _CCE(actual_form_data).run_adjust_targets(nutrition)
+    except Exception as _cct_e:
+        logger.warning(f"[P4-CONSTRAINT-ABC] adjust_targets vía engine falló, fallback directo: "
+                       f"{type(_cct_e).__name__}: {_cct_e}")
+        _apply_renal_cap_to_nutrition(nutrition, actual_form_data)
 
     # 2. Preparar contexto del historial (memoria inteligente y platos recientes)
     history_context = ""
