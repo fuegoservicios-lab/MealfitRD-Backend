@@ -305,6 +305,49 @@ def test_dm2_glycemic_downgrade_is_safe_scoped():
     assert "_had_allergen_critical = True" in src
 
 
+def test_dm2_sugar_guard_replaces_added_sugars():
+    """mejora DM2: guard determinista sustituye azúcar añadida/bebidas azucaradas por stevia/agua
+    (clínicamente mejor + deja de gatillar el rechazo del revisor). Azúcar natural (fruta) intacta."""
+    plan = {"days": [{"meals": [
+        {"name": "Desayuno", "ingredients": ["Avena 40g", "1 cda de miel", "Guineo 1 und"],
+         "ingredients_raw": ["Avena 40g", "1 cda de miel"], "recipe": ["Mezclar"]},
+        {"name": "Merienda", "ingredients": ["Yogur 150g", "2 cda de azúcar", "Refresco de cola"], "recipe": "Frío"},
+        {"name": "Almuerzo", "ingredients": ["Pollo 150g", "Arroz integral 100g"], "recipe": ["Guisar"]},
+    ]}]}
+    n = go._apply_diabetic_sugar_guard(plan, {"medicalConditions": ["Diabetes tipo 2"]})
+    assert n == 2
+    des = plan["days"][0]["meals"][0]
+    assert "Stevia al gusto" in des["ingredients"]
+    assert not any("miel" in str(i).lower() for i in des["ingredients"])
+    assert "Guineo 1 und" in des["ingredients"]           # azúcar natural NO se toca
+    assert any("Ajuste para diabetes" in str(s) for s in des["recipe"])
+    mer = plan["days"][0]["meals"][1]
+    assert "Agua" in mer["ingredients"] and not any("refresco" in str(i).lower() for i in mer["ingredients"])
+    assert plan["days"][0]["meals"][2].get("_dm2_sugar_fixed") is None  # almuerzo sin azúcar añadida
+
+
+def test_dm2_sugar_guard_noop_non_diabetic():
+    plan = {"days": [{"meals": [{"ingredients": ["1 cda de miel"]}]}]}
+    assert go._apply_diabetic_sugar_guard(plan, {"medicalConditions": ["Ninguna"]}) == 0
+    assert plan["days"][0]["meals"][0]["ingredients"] == ["1 cda de miel"]
+
+
+def test_dm2_sugar_guard_idempotent_and_respects_sin_azucar():
+    plan = {"days": [{"meals": [{"ingredients": ["Yogur sin azucar 150g", "1 cda de miel"]}]}]}
+    go._apply_diabetic_sugar_guard(plan, {"medicalConditions": ["dm2"]})
+    ings = plan["days"][0]["meals"][0]["ingredients"]
+    assert "Yogur sin azucar 150g" in ings                # 'sin azúcar' NO gatilla
+    assert "Stevia al gusto" in ings
+    # segundo run = no-op (ya es stevia)
+    assert go._apply_diabetic_sugar_guard(plan, {"medicalConditions": ["dm2"]}) == 0
+
+
+def test_dm2_sugar_guard_knob_and_anchors():
+    assert go.DM2_SUGAR_GUARD is True
+    src = inspect.getsource(go)
+    assert "_apply_diabetic_sugar_guard(result, form_data)" in src   # cableado en assemble
+
+
 def test_renal_enforcement_machinery_trims_meals_to_cap():
     """review#1/#7/#8 (el crítico): la maquinaria que usa el enforcement determinista per-comida
     (independiente del solver) realmente baja la proteína de las comidas al cap renal y refilla
