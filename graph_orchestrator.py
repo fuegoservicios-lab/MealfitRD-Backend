@@ -8569,77 +8569,66 @@ def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
                        f"{type(_rcn_e).__name__}: {_rcn_e}")
 
 
-# [P3-CONDITION-RULES · 2026-06-14] Azúcares añadidos → sustituto sin carga glucémica (para DM2).
-# Tokens SIN acento (el caller normaliza con strip_accents). Orden importa: lo específico primero
-# (leche condensada antes que el genérico 'azucar'); se sustituye en el PRIMER match.
-_DM2_ADDED_SUGAR_SUBS = (
-    (("miel", "honey"), "Stevia al gusto", "miel"),
-    (("sirope", "jarabe", "syrup"), "Stevia al gusto", "sirope/jarabe"),
-    (("panela", "melaza", "molasses"), "Stevia al gusto", "panela/melaza"),
-    (("leche condensada", "dulce de leche", "condensed milk"), "Leche evaporada sin azúcar", "leche condensada"),
-    (("refresco", "gaseosa", "soda", "malta", "jugo de caja", "jugo concentrado",
-      "jugo embotellado", "jugo de cajita"), "Agua", "bebida azucarada"),
-    (("azucar", "azúcar", "sugar"), "Stevia al gusto", "azúcar"),  # genérico, último + guarda negativa
-)
-# Frases que NO deben gatillar la sustitución de 'azucar' (ya es libre de azúcar añadida).
-_DM2_SUGAR_NEGATIVE = ("sin azucar", "no azucar", "0 azucar", "cero azucar", "libre de azucar",
-                       "0% azucar", "sin azucares", "bajo en azucar")
-
-
-def _dm2_sugar_substitution_for(ing_norm: str):
-    """Retorna (reemplazo, etiqueta) si el ingrediente (lower + sin acentos) es un azúcar añadido
-    a sustituir para un diabético; None si no aplica o ya es libre de azúcar."""
-    if any(neg in ing_norm for neg in _DM2_SUGAR_NEGATIVE):
-        return None
-    for tokens, repl, label in _DM2_ADDED_SUGAR_SUBS:
-        if any(t in ing_norm for t in tokens):
-            return repl, label
-    return None
-
-
-def _apply_diabetic_sugar_guard(plan: dict, form_data: dict) -> int:
-    """[P3-CONDITION-RULES · 2026-06-14] Guard determinista anti-azúcar-añadido para diabéticos
-    (patrón food-safety). Sustituye miel/sirope/azúcar/panela/leche condensada/bebidas azucaradas
-    por stevia/agua/lácteo-sin-azúcar en `ingredients` + `ingredients_raw` ANTES del review →
-    el plan es clínicamente mejor (sin pico glucémico) Y deja de gatillar el rechazo del revisor.
-    Macro-PRESERVANTE (conservador: el diabético recibe ≤ carbos que la etiqueta) + shopping-
-    consistente (reemplaza el token en ambas listas → recipe↔lista coherentes). Idempotente
-    (un re-run ve 'stevia', no azúcar). Inyecta una nota a la receta. Mutates `plan`. Retorna #comidas."""
-    if not (CONDITION_RULES_ENABLED and _is_diabetes_condition(form_data)):
+def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
+    """[P3-CONDITION-ENGINE · 2026-06-14] Guard determinista de SUSTITUCIÓN de ingredientes por
+    condición (patrón food-safety GENERALIZADO, dirigido por el registro `condition_rules`). Para
+    CADA condición activa sustituye los ingredientes contraindicados por una alternativa segura en
+    `ingredients`+`ingredients_raw` ANTES del review+shopping: DM2 → azúcar añadida→stevia/agua; HTA
+    → embutidos/cubitos/bacalao salado→fresco. El plan queda clínicamente mejor Y deja de gatillar
+    el rechazo del revisor. Macro-preservante (conservador), shopping-consistente, idempotente.
+    Mutates `plan`. Retorna #comidas ajustadas. Antes: `_apply_diabetic_sugar_guard` (solo DM2)."""
+    if not CONDITION_RULES_ENABLED:
+        return 0
+    try:
+        from condition_rules import collect_substitutions
+        subs = collect_substitutions(form_data)
+    except Exception:
+        subs = []
+    if not subs:
         return 0
     try:
         from constants import strip_accents as _sa
     except Exception:
         _sa = lambda x: x  # noqa: E731
+
+    def _match(ing_norm):
+        for s in subs:
+            if any(neg in ing_norm for neg in s["negatives"]):
+                continue
+            if any(t in ing_norm for t in s["tokens"]):
+                return s["replacement"], s["label"], s["condition"]
+        return None
+
     fixed = 0
     for day in plan.get("days", []) or []:
         for meal in day.get("meals", []) or []:
-            labels = []
+            labels, conds = [], set()
             for key in ("ingredients", "ingredients_raw"):
                 ings = meal.get(key)
                 if not isinstance(ings, list):
                     continue
                 out = []
                 for ing in ings:
-                    sub = _dm2_sugar_substitution_for(_sa(str(ing).lower()))
-                    if sub:
-                        # evita duplicar el mismo sustituto si ya está en la lista
-                        if sub[0] not in out:
-                            out.append(sub[0])
-                        labels.append(sub[1])
+                    m = _match(_sa(str(ing).lower()))
+                    if m:
+                        if m[0] not in out:  # evita duplicar el sustituto
+                            out.append(m[0])
+                        labels.append(m[1]); conds.add(m[2])
                     else:
                         out.append(ing)
                 meal[key] = out
             if labels:
                 uniq = sorted(set(labels))
-                note = (f"🩸 Ajuste para diabetes: se sustituyó {', '.join(uniq)} por una alternativa "
-                        f"sin azúcar añadida (stevia/agua) para controlar la carga glucémica (ADA 2026).")
+                note = (f"⚕️ Ajuste clínico (condición médica): se sustituyó {', '.join(uniq)} por una "
+                        f"alternativa segura (sin azúcar añadida / baja en sodio) para tu condición.")
                 rec = meal.get("recipe")
                 if not isinstance(rec, list):
                     rec = [] if rec is None else [str(rec)]
-                if not any("Ajuste para diabetes" in str(s) for s in rec):
+                if not any("Ajuste clínico" in str(s) for s in rec):
                     meal["recipe"] = rec + [note]
-                meal["_dm2_sugar_fixed"] = uniq
+                meal["_condition_subs_fixed"] = uniq
+                if "dm2" in conds:
+                    meal["_dm2_sugar_fixed"] = uniq  # flag de compatibilidad hacia atrás
                 fixed += 1
     return fixed
 
@@ -10615,18 +10604,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
             logger.warning(f"[P3-FOOD-SAFETY] deshabilitado por error: "
                            f"{type(_fs_e).__name__}: {_fs_e}")
 
-    # [P3-CONDITION-RULES · 2026-06-14] Guard anti-azúcar-añadido para diabéticos. Corre tras el
-    # guard de huevo crudo y ANTES de la agregación de compras + del review → sustituye miel/azúcar/
-    # bebidas azucaradas por stevia/agua: el plan queda clínicamente mejor (sin carga glucémica) Y
-    # el revisor deja de rechazarlo por esos ítems (menos fallbacks). Fail-safe total.
+    # [P3-CONDITION-ENGINE · 2026-06-14] Guard de SUSTITUCIÓN de ingredientes por condición (motor
+    # declarativo): tras el guard de huevo crudo y ANTES de shopping + review → DM2 azúcar→stevia/agua,
+    # HTA embutidos/cubitos/bacalao salado→fresco. El plan queda clínicamente mejor Y el revisor deja
+    # de rechazarlo por esos ítems (menos fallbacks). Fail-safe total. Antes: solo el sugar-guard DM2.
     if DM2_SUGAR_GUARD:
         try:
-            _sg_n = _apply_diabetic_sugar_guard(result, form_data)
+            _sg_n = _apply_condition_substitutions(result, form_data)
             if _sg_n:
-                logger.warning(f"🩸 [P3-CONDITION-RULES] DM2: sustituyó azúcar añadida/bebida "
-                               f"azucarada por stevia/agua en {_sg_n} comida(s) (control glucémico).")
+                logger.warning(f"⚕️ [P3-CONDITION-ENGINE] Sustituyó ingredientes contraindicados "
+                               f"(azúcar/sodio) por alternativas seguras en {_sg_n} comida(s).")
         except Exception as _sg_e:
-            logger.warning(f"[P3-CONDITION-RULES] guard de azúcar DM2 deshabilitado por error: "
+            logger.warning(f"[P3-CONDITION-ENGINE] guard de sustituciones deshabilitado por error: "
                            f"{type(_sg_e).__name__}: {_sg_e}")
 
     # [P3-PORTION-QUANTIZE · 2026-06-13] Paso de medibilidad: redondea las porciones a

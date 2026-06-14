@@ -52,13 +52,15 @@ def _envb(name: str, default: bool) -> bool:
 # El benchmark M2 midió la fuga: proteína 16% MAPE / solo 48% en ±10%. Este es el fix. Fallback al
 # greedy si falla o se desactiva. Pesos: kcal+proteína priorizados (lo clínicamente crítico).
 SOLVER_LSQ = _envb("MEALFIT_SOLVER_LSQ", True)
-SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 1.5)
-SOLVER_W_PROTEIN = _envf("MEALFIT_SOLVER_W_PROTEIN", 2.0)
-SOLVER_W_CARBS = _envf("MEALFIT_SOLVER_W_CARBS", 1.0)
-SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.0)
+# Pesos TUNED por el benchmark M2 (A/B 2026-06-14): proteína 2.0 sobre-priorizaba y regresaba la
+# grasa (12.2→15.8% MAPE). Rebalanceados → all-4-en-±10% subió de 24%→50% y la grasa volvió a 12.1%.
+SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 1.2)
+SOLVER_W_PROTEIN = _envf("MEALFIT_SOLVER_W_PROTEIN", 1.5)
+SOLVER_W_CARBS = _envf("MEALFIT_SOLVER_W_CARBS", 1.1)
+SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.4)
 # Regularización hacia el porcionado original del LLM (x=1): evita porciones absurdas (un
 # ingrediente a min_scale y otro a max_scale solo para clavar macros). Más alto = más fiel al LLM.
-SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.15)
+SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.10)
 
 
 def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,

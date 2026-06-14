@@ -364,87 +364,20 @@ def build_sleep_stress_context(form_data: dict) -> str:
     return "\n" + "\n".join(lines) + "\n"
 
 
-# [P3-CONDITION-RULES · 2026-06-14] Directivas clínicas DETERMINISTAS por condición del set
-# Pareto cardiometabólico DR (DM2 + ERC), ancladas a guía citable. Es el lever de PROMPT — el
-# refuerzo determinista (cap de proteína renal, piso de fibra DM2) vive en graph_orchestrator/
-# micronutrients. Retorna "" si no hay condición aplicable (no-op transparente). Los TÉRMINOS de
-# detección son SSOT en constants.py (idénticos a los del cap) → los dos detectores no driftan.
+# [P3-CONDITION-ENGINE · 2026-06-14] Delegado al MOTOR de constraints clínicos declarativo
+# (`condition_rules.py`), SSOT del comportamiento por condición (DM2/ERC/HTA/dislipidemia/anemia).
+# Antes la lógica DM2/ERC vivía inline aquí; ahora el registro la dirige → añadir una condición es
+# declarar una fila, no editar este archivo. Se mantiene el nombre por compatibilidad con callsites.
 
 
 def build_medical_condition_context(form_data: dict) -> str:
-    """[P3-CONDITION-RULES] Bloque de reglas nutricionales por condición médica declarada.
-    DM2 → ADA 2025/2026 (calidad del carbohidrato, NO %carbos/IG). ERC → KDIGO 2024 (proteína
-    moderada, sodio/potasio/fósforo controlados). DM2+ERC (diabético-nefropatía, la comorbilidad
-    renal #1) → bloque de RECONCILIACIÓN con precedencia clínica (ERC manda sobre la fibra DM2).
-    Detector normalizado (lower + strip_accents) y términos SSOT idénticos al cap determinista
-    (constants.py) para no driftar. No-op si el usuario no declaró condiciones cubiertas."""
-    if not isinstance(form_data, dict):
-        return ""
+    """[P3-CONDITION-ENGINE] Reglas nutricionales por condición, dirigidas por el registro
+    declarativo `condition_rules.CONDITION_RULES`. No-op si no hay condición cubierta."""
     try:
-        from constants import (strip_accents as _sa, RENAL_CONDITION_TERMS as _RT,
-                                DIABETES_CONDITION_TERMS as _DT)
+        from condition_rules import build_condition_prompt
+        return build_condition_prompt(form_data)
     except Exception:
         return ""
-    raw = form_data.get("medicalConditions") or form_data.get("medical_conditions") or []
-    if isinstance(raw, str):
-        raw = [raw]
-    _SENT = ("", "ninguna", "ninguno", "ningunas", "ningunos", "none", "n/a", "na",
-             "no", "nada", "sin alergias", "sin condiciones", "ninguna alergia")
-    conds = []
-    for c in raw:
-        s = str(c).strip().lower()
-        if not s or s in _SENT:
-            continue
-        try:
-            s = _sa(s)
-        except Exception:
-            pass
-        conds.append(s)
-    if not conds:
-        return ""
-    has_dm2 = any(any(t in c for t in _DT) for c in conds)
-    has_renal = any(any(t in c for t in _RT) for c in conds)
-    blocks = []
-    if has_dm2:
-        blocks.append(
-            "🩸 REGLA CLÍNICA — DIABETES T2 / PREDIABETES (ADA 2025/2026, CALIDAD DEL CARBOHIDRATO):\n"
-            "   • NO se trata de 'bajar los carbohidratos' ni de un % fijo: la guía ADA actual prioriza "
-            "la CALIDAD del carbohidrato sobre la cantidad. Diseña cada día así:\n"
-            "   • FIBRA ALTA (objetivo ≥14 g por cada 1000 kcal): incluye leguminosas "
-            "(habichuelas rojas/negras/blancas, lentejas, gandules), avena, vegetales abundantes y fruta entera con cáscara.\n"
-            "   • GRANOS INTEGRALES INTACTOS: prioriza arroz integral, avena y víveres con fibra (batata, "
-            "yuca, plátano verde) sobre harinas refinadas, pan blanco y arroz blanco pelado.\n"
-            "   • PROHIBIDAS las bebidas azucaradas (refrescos, jugos concentrados/embotellados, malta, jugos con azúcar añadida) "
-            "y los azúcares añadidos (miel, sirope, dulces); endulza con fruta o estevia.\n"
-            "   • Combina SIEMPRE el carbohidrato con proteína + grasa saludable + fibra en la misma comida "
-            "(modera la respuesta glucémica sin obsesionarse con el índice glucémico aislado)."
-        )
-    if has_renal:
-        blocks.append(
-            "🫘 REGLA CLÍNICA — ENFERMEDAD RENAL (KDIGO 2024) — PRECAUCIÓN, REQUIERE NEFRÓLOGO:\n"
-            "   • Proteína MODERADA, NO alta: usa porciones modestas de proteína de alta calidad (huevo, "
-            "pescado, pollo) — NO maximices la proteína (lo contrario a un plan de hipertrofia).\n"
-            "   • SODIO BAJO: especifica sal medida y mínima; evita embutidos, cubitos/sazón, bacalao salado, "
-            "salsas saladas y ultra-procesados.\n"
-            "   • Modera alimentos MUY altos en potasio/fósforo si aparecen en exceso (vísceras, lácteos en gran cantidad, "
-            "exceso de guineo/aguacate); el balance fino lo define el nefrólogo.\n"
-            "   • Este plan es ORIENTATIVO y NO sustituye la indicación de un profesional de salud renal."
-        )
-    if has_dm2 and has_renal:
-        blocks.append(
-            "⚖️ PRECEDENCIA CLÍNICA — DIABETES + ENFERMEDAD RENAL JUNTAS (diabético-nefropatía):\n"
-            "   • La regla RENAL MANDA sobre el target de fibra/leguminosas de la diabetes: las leguminosas "
-            "y los granos integrales (altos en potasio/fósforo) se MODERAN (no 'siempre') — prioriza la "
-            "calidad del carbohidrato vía vegetales BAJOS en potasio y porciones CONTROLADAS de grano.\n"
-            "   • Mantén la proteína MODERADA (renal) y el sodio bajo; NO subas la carga de carbohidrato "
-            "para compensar (choca con la diabetes). El balance fino fibra↔potasio/fósforo lo define el "
-            "nefrólogo — este plan solo orienta, no prescribe."
-        )
-    if not blocks:
-        return ""
-    return ("\n--- REGLAS NUTRICIONALES POR CONDICIÓN MÉDICA (DETERMINISTAS, CITABLES) ---\n"
-            + "\n\n".join(blocks)
-            + "\n----------------------------------------\n")
 
 
 def build_time_context() -> str:

@@ -1541,6 +1541,20 @@ DIABETES_CONDITION_TERMS = (
     "resistencia a la insulina", "resistencia insulinica", "glucemia alta", "azucar alta",
     "intolerancia a la glucosa", "intolerancia a glucosa",
 )
+# [P3-CONDITION-ENGINE · 2026-06-14] Extensión del set Pareto cardiometabólico DR. Términos sin
+# acento (el caller normaliza con strip_accents). Consumidos por el ConditionRuleEngine (condition_rules.py).
+HTA_CONDITION_TERMS = (
+    "hipertension", "hta", "presion alta", "presion arterial alta", "tension alta",
+    "hipertenso", "high blood pressure", "blood pressure",
+)
+DYSLIPIDEMIA_CONDITION_TERMS = (
+    "dislipidemia", "colesterol alto", "colesterol elevado", "trigliceridos altos",
+    "hipercolesterolemia", "ldl alto", "hiperlipidemia", "high cholesterol",
+)
+ANEMIA_CONDITION_TERMS = (
+    "anemia", "ferropenica", "ferropenia", "hierro bajo", "ferritina baja",
+    "deficiencia de hierro", "iron deficiency",
+)
 
 def get_reverse_synonyms_map():
     """Crea un diccionario inverso donde la clave es la variante ('pechuga') y el valor es el término base ('pollo').
