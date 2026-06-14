@@ -30,7 +30,13 @@ regresión de seguridad.**
 | gluten | `allergen:gluten` | pan de agua, pan integral, pan de trigo, tostada… | **Casabe** | sí |
 | gluten | `allergen:gluten` | pasta integral, espagueti, macarrón, fideo, lasaña… | **Arroz blanco** | sí |
 | gluten | `allergen:gluten` | galleta(s) de soda/trigo | **Galletas de arroz** | sí |
+| gluten | `allergen:gluten` | avena, hojuelas/harina/salvado de avena | **Quinoa** | sí |
 | gluten | `allergen:gluten` | cebada, centeno, cuscús, bulgur, tortilla de trigo… | **Arroz blanco** | sí |
+
+> **Avena (live-fix 2026-06-14):** la avena es naturalmente sin gluten, pero el revisor médico la
+> rechaza por contaminación cruzada (estándar conservador). Sin el swap, un plan con avena para un
+> alérgico a gluten caía a fallback. Se sustituye por **Quinoa** (GF nativo, en catálogo, alto en
+> proteína). Hallazgo de la prueba en vivo en producción.
 
 Vetos (gluten): `sin gluten`, `libre de gluten`, `de maiz`, `de arroz`, `de yuca`, `casabe`, `pana`…
 — evitan swappear un alimento que YA es libre del alérgeno.

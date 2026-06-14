@@ -145,6 +145,9 @@ def test_soy_tofu_to_chicken_and_sauce_to_lemon(go):
     ("Harina de trigo", "harina de trigo", "maíz"),
     ("Espagueti a la boloñesa", "espagueti", "arroz"),
     ("Galletas de soda", "galletas de soda", "galletas de arroz"),
+    # [live-fix] el revisor médico rechaza avena por contaminación cruzada → swap a Quinoa (GF)
+    ("0.25 taza de avena", "avena", "quinoa"),
+    ("Bowl Proteico de Avena con Chinola", "avena", "quinoa"),
 ])
 def test_gluten_staples_swapped(go, orig, token_gone, repl_token):
     plan = _plan([orig, "Vegetales"])

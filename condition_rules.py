@@ -307,6 +307,13 @@ _ALLERGEN_GLUTEN_SUBS = (
      "Arroz blanco", "pasta de trigo", True),
     (("galleta de soda", "galletas de soda", "galleta de trigo", "galletas de trigo"),
      "Galletas de arroz", "galletas de trigo", True),
+    # [P0-ALLERGEN-SUBS live-fix · 2026-06-14] La avena es naturalmente sin gluten PERO el revisor
+    # médico la rechaza por contaminación cruzada (estándar conservador) → sin este swap, un plan con
+    # avena para un alérgico a gluten cae a fallback. Swap a Quinoa (GF nativo, en catálogo, alto en
+    # proteína → ideal para volumen). 'avena' no es substring de 'avellana' (frutos secos) ni de otro
+    # ingrediente → token seguro. Hallazgo de la prueba en vivo P0-ALLERGEN-SUBS.
+    (("avena", "hojuelas de avena", "harina de avena", "salvado de avena"),
+     "Quinoa", "avena (gluten por contaminación)", True),
     (("cebada", "centeno", "cuscus", "bulgur", "germen de trigo", "salvado de trigo", "tortilla de trigo",
       "tortilla de harina", "tortilla integral"),
      "Arroz blanco", "cereal con gluten", True),
