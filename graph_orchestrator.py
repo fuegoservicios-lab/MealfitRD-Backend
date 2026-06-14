@@ -9878,12 +9878,15 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     if DATA_PROVENANCE_ENABLED and _db is not None and not plan.get("_is_fallback"):
         try:
             _seen_prov = {}
+            _tot_ings = _res_ings = 0  # [P4-UNIFIED-RESOLVER] cobertura de resolución (mismo loop, 0 costo extra)
             for _d in plan.get("days", []) or []:
                 for _m in _d.get("meals", []) or []:
                     for _ing in _m.get("ingredients", []) or []:
+                        _tot_ings += 1
                         _info = _db.lookup(str(_ing))
                         if not _info:
                             continue
+                        _res_ings += 1
                         _key = (_info.name or str(_ing)).lower()
                         _seen_prov.setdefault(_key, _info)
             _total_u = len(_seen_prov)
@@ -9899,6 +9902,14 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                          f"{_total_u} ingredientes resueltos trazables a USDA FoodData Central "
                          "(IDs públicos en fdc.nal.usda.gov); el resto, INCAP/curado es-DO."),
             }
+            # [P4-UNIFIED-RESOLVER · 2026-06-14] KPI de cobertura de resolución: qué fracción de los
+            # ingredientes del plan resuelve al catálogo (los NO resueltos son el "0 silencioso" — aportan
+            # 0 macros al solver). Sube con el resolver unificado (fuzzy + Cohere). Telemetría de flota.
+            if _tot_ings:
+                plan["resolution_coverage"] = {
+                    "resolved": _res_ings, "total": _tot_ings, "pct": round(_res_ings / _tot_ings, 3)}
+                logger.info(f"🔎 [P4-UNIFIED-RESOLVER] Cobertura de resolución: {_res_ings}/{_tot_ings} "
+                            f"({round(100 * _res_ings / _tot_ings)}%) ingredientes resueltos al catálogo")
         except Exception as _pv_e:
             logger.warning(f"[P3-DATA-PROVENANCE] error: {type(_pv_e).__name__}: {_pv_e}")
 

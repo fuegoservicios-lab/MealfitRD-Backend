@@ -1072,12 +1072,34 @@ def normalize_name(orig_name: str) -> str:
         if clean_n_stripped == alias_stripped:
             return master_name
 
-    # ── INTENTO 4: Regex sobre clean_n (último recurso antes de semántica) ──
+    # ── INTENTO 4: Regex sobre clean_n (último recurso antes de fuzzy/semántica) ──
     for alias_stripped, master_name in all_aliases:
         if re.search(r'\b' + re.escape(alias_stripped) + r'\b', clean_n_stripped, flags=re.IGNORECASE):
             return master_name
 
-    # Intento 3: Búsqueda de Similitud Semántica Vectorial (Fallback Local)
+    # ── INTENTO 5 [P4-UNIFIED-RESOLVER · 2026-06-14]: Fuzzy (difflib) ANTES de gastar un embedding.
+    # Atrapa typos y variantes menores ("platanno"→"plátano", "yogur griego"→"yogurt griego") que los
+    # tiers regex no cubren, sin costo de API. Conservador (ratio ≥ 0.87) para no introducir falsos
+    # positivos; los casos semánticos reales (sinónimos no-léxicos) los sigue cubriendo el embedding. ──
+    import difflib
+    # Formas candidatas a comparar (los strippers de prefijo/stop-words a veces dejan el query corto o
+    # le quitan contexto: "platanno maduro"→"platanno", "pechuga de poyo"→"poyo"). Comparamos contra el
+    # crudo, el limpio Y el original (solo parens removidos) y tomamos el mejor ratio por alias.
+    _orig_fuzz = strip_accents(re.sub(r'\(.*?\)', '', str(orig_name).lower()).strip())
+    _fuzz_forms = {f for f in (n_stripped, clean_n_stripped, _orig_fuzz) if f and len(f) > 3}
+    if _fuzz_forms:
+        _fuzz_best, _fuzz_name = 0.0, None
+        for alias_stripped, master_name in all_aliases:
+            if not alias_stripped:
+                continue
+            _r = max(difflib.SequenceMatcher(None, f, alias_stripped).ratio() for f in _fuzz_forms)
+            if _r > _fuzz_best:
+                _fuzz_best, _fuzz_name = _r, master_name
+        if _fuzz_best >= 0.87 and _fuzz_name:
+            logging.info(f"🔤 [Fuzzy Match] '{orig_name}' -> '{_fuzz_name}' (ratio {_fuzz_best:.3f})")
+            return _fuzz_name
+
+    # Intento 6: Búsqueda de Similitud Semántica Vectorial (Cohere v4, Fallback Local)
     # Solo vale la pena gastar un request si la palabra no fue encontrada en absoluto y tiene suficiente longitud
     if len(n) > 3:
         cache = get_semantic_cache()

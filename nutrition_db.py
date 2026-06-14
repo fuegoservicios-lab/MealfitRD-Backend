@@ -19,11 +19,20 @@ Diseño:
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 from canonical_units import to_base_amount, canonicalize_unit
+
+# [P4-UNIFIED-RESOLVER · 2026-06-14] Cuando los tiers baratos (exacto/alias) de este módulo fallan,
+# delega al resolver canónico `shopping_calculator.normalize_name` (regex clean_n + fuzzy difflib +
+# semántico Cohere v4) → un SOLO resolver para shopping Y nutrición. Mata el "0 silencioso" #1 (el
+# ingrediente no resolvía al catálogo → aportaba 0 macros). Knob de rollback sin redeploy.
+_UNIFIED_RESOLVER_ENABLED = (
+    os.environ.get("MEALFIT_NUTRITION_UNIFIED_RESOLVER", "true").strip().lower()
+    not in ("0", "false", "no", "off"))
 
 
 def _strip_accents(s: str) -> str:
@@ -304,7 +313,7 @@ class IngredientNutritionDB:
         aliases.sort(key=lambda x: len(x[0]), reverse=True)
         self._aliases = aliases
 
-    # ---- matching nombre→row (tiers 1-4, sin semántico) -----------------
+    # ---- matching nombre→row (tiers baratos + delegación unificada) -----
     def _match_row(self, raw_name: str) -> Optional[dict]:
         self._ensure_loaded()
         if not raw_name:
@@ -319,6 +328,25 @@ class IngredientNutritionDB:
         for alias_stripped, row in self._aliases:
             if alias_stripped and re.search(r"\b" + re.escape(alias_stripped) + r"\b", n_stripped):
                 return row
+        # Tier 3 [P4-UNIFIED-RESOLVER]: delega al resolver canónico (regex clean_n + fuzzy + Cohere
+        # semántico) que resuelve lo que los tiers baratos no. Solo con catálogo real (NO en rows
+        # inyectados de test, que usan un catálogo distinto al de normalize_name → determinismo offline).
+        if _UNIFIED_RESOLVER_ENABLED and not self._injected:
+            try:
+                from shopping_calculator import normalize_name
+                canon = normalize_name(raw_name)
+                if canon:
+                    row = self._by_name.get(canon)
+                    if row is None:  # normalize_name compara stripped; reintenta por nombre normalizado
+                        cs = _strip_accents(str(canon).strip().lower())
+                        for alias_stripped, r in self._aliases:
+                            if alias_stripped == cs:
+                                row = r
+                                break
+                    if row is not None:
+                        return row
+            except Exception:
+                pass
         return None
 
     def lookup(self, raw_name: str) -> Optional[NutritionInfo]:
