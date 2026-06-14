@@ -255,3 +255,134 @@ def collect_substitutions(form_data) -> list:
 
 def active_condition_labels(form_data) -> list:
     return [r.label for r in detect_active_rules(form_data)]
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# [P0-ALLERGEN-SUBS · 2026-06-14] Sustitución determinista de ALÉRGENOS IgE declarados
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# Cierra el gap del audit clínico (2026-06-14): las alergias declaradas (`form_data['allergies']`)
+# dependían del prompt + el backstop romo `_scan_allergen_violations` (que NUKE el plan entero a
+# fallback matemático). Este registro hace QUIRÚRGICA la defensa: para los alérgenos con un reemplazo
+# SEGURO que RESUELVE al catálogo `master_ingredients`, sustituye el ingrediente ofensor in-place
+# (preserva cantidad + recalcula macros por delta, vía el mismo motor que las sustituciones por
+# condición), conservando el plan rico del LLM. `_scan_allergen_violations` queda como red de
+# seguridad post-swap: cualquier residual sigue escalando a rechazo crítico → fallback.
+#
+# DECISIÓN HONESTA (documentada): lácteos, huevo, maní y frutos secos NO se sustituyen aquí — el
+# catálogo es-DO NO tiene un target libre del alérgeno que resuelva (no hay leche/queso vegetal, ni
+# mantequilla de semillas). Para esos, el path crítico→fallback existente sigue EXCLUYÉNDOLOS (cero
+# regresión). Habilitar lácteos/huevo requeriría filas nuevas en el catálogo (palanca de DATOS).
+#
+# TOKENS accent-free + lowercase (se matchean contra `strip_accents(ingrediente).lower()`) y
+# ESTRECHOS (lección del bug 'soya'/'pana'): nada de raíces ambiguas — 'pan de agua' (NO 'pan'
+# desnudo, que matchea 'pana'=fruta de pan); 'tofu'/'salsa de soya' (NO 'soya' desnudo). Lo que un
+# token estrecho no atrape (p.ej. 'pan' a secas) lo recoge el backstop `_scan_allergen_violations`.
+# Cada fila: (tokens, reemplazo, etiqueta, preserve_qty). Los reemplazos son nombres del catálogo
+# (con acentos) → resuelven en el delta de macros. preserve_qty=True para proteínas/almidones-staple.
+
+_ALLERGEN_FISH_SUBS = (
+    (("pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo", "sardina",
+      "merluza", "carite", "dorado", "filete de pescado"),
+     "Pechuga de pollo", "pescado", True),
+)
+_ALLERGEN_SHELLFISH_SUBS = (
+    (("camaron", "langosta", "langostino", "cangrejo", "marisco", "pulpo", "calamar",
+      "almeja", "ostra", "lambi", "gamba"),
+     "Pechuga de pollo", "mariscos", True),
+)
+_ALLERGEN_SOY_SUBS = (
+    # condimento (qty pequeña, 'al gusto') → reemplazo bare, NO preserva prefijo de cantidad.
+    (("salsa de soya", "salsa de soja", "teriyaki"), "Limón con especias", "salsa de soya", False),
+    # proteína de soya → swap a pollo preservando el peso comprable.
+    (("tofu", "edamame", "proteina de soya", "carne de soya", "soja texturizada", "soya texturizada"),
+     "Pechuga de pollo", "soya (tofu/edamame)", True),
+)
+_ALLERGEN_GLUTEN_SUBS = (
+    (("harina de trigo",), "Harina de maíz precocida", "harina de trigo", True),
+    (("pan de agua", "pan integral", "pan blanco", "pan de trigo", "pan tostado", "pan sandwich",
+      "pan pita", "tostada", "tostadas"),
+     "Casabe", "pan de trigo", True),
+    (("pasta integral", "espagueti", "macarron", "coditos", "fideo", "lasana", "tallarin",
+      "pasta de trigo", "penne", "ravioli", "ñoqui", "noqui"),
+     "Arroz blanco", "pasta de trigo", True),
+    (("galleta de soda", "galletas de soda", "galleta de trigo", "galletas de trigo"),
+     "Galletas de arroz", "galletas de trigo", True),
+    (("cebada", "centeno", "cuscus", "bulgur", "germen de trigo", "salvado de trigo", "tortilla de trigo",
+      "tortilla de harina", "tortilla integral"),
+     "Arroz blanco", "cereal con gluten", True),
+)
+# Vetos (accent-free): evitan swappear un alimento que YA es libre del alérgeno (queda SAFE igual,
+# pero no lo cambiamos innecesariamente). Solo gluten los necesita (variantes GF en el catálogo es-DO).
+_ALLERGEN_GLUTEN_NEGATIVES = ("sin gluten", "libre de gluten", "gluten free", "de maiz", "de arroz",
+                              "de yuca", "de almendra", "casabe", "pana")
+
+# Detección: alergia DECLARADA (texto del form, strip_accents+lower) → categoría con tabla de swaps.
+# Términos accent-free; matching `term in declared` (substring) — over-detección es la dirección SEGURA.
+_ALLERGEN_DETECT = {
+    "fish": ("pescado", "fish", "atun", "salmon", "bacalao", "tilapia", "sardina"),
+    "shellfish": ("marisco", "camaron", "langosta", "cangrejo", "shellfish", "crustaceo", "molusco"),
+    "soy": ("soya", "soja", "soy", "tofu", "edamame"),
+    "gluten": ("gluten", "trigo", "wheat", "celiac", "celiaqu", "tacc"),
+}
+_ALLERGEN_SUBS_BY_CAT = {
+    "fish": _ALLERGEN_FISH_SUBS,
+    "shellfish": _ALLERGEN_SHELLFISH_SUBS,
+    "soy": _ALLERGEN_SOY_SUBS,
+    "gluten": _ALLERGEN_GLUTEN_SUBS,
+}
+_ALLERGEN_NEGATIVES_BY_CAT = {
+    "gluten": _ALLERGEN_GLUTEN_NEGATIVES,
+}
+
+
+def collect_allergen_substitutions(form_data) -> list:
+    """[P0-ALLERGEN-SUBS · 2026-06-14] Sustituciones deterministas para los alérgenos IgE DECLARADOS
+    (`form_data['allergies']`) que tienen un reemplazo seguro que RESUELVE al catálogo es-DO
+    (fish/shellfish/soy/gluten). Mismo shape que `collect_substitutions` → reusa el motor compartido
+    `_apply_substitutions_core`. Cada item: {tokens, replacement, label, negatives, condition,
+    preserve_qty}. Lácteos/huevo/maní/frutos secos NO se incluyen (sin target que resuelva) → siguen
+    por el path crítico→fallback. Sentinel: P0-ALLERGEN-SUBS."""
+    if not isinstance(form_data, dict):
+        return []
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        _sa = lambda x: x  # noqa: E731
+    raw = form_data.get("allergies") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    declared = []
+    for a in raw:
+        s = str(a).strip().lower()
+        if not s or s in _MEDICAL_NONE_SENTINELS:
+            continue
+        try:
+            s = _sa(s)
+        except Exception:
+            pass
+        declared.append(s)
+    if not declared:
+        return []
+    out = []
+    for cat, terms in _ALLERGEN_DETECT.items():
+        if not any(t in d for t in terms for d in declared):
+            continue
+        negs = _ALLERGEN_NEGATIVES_BY_CAT.get(cat, ())
+        for sub in _ALLERGEN_SUBS_BY_CAT[cat]:
+            tokens, repl, label = sub[0], sub[1], sub[2]
+            preserve_qty = bool(sub[3]) if len(sub) > 3 else False
+            out.append({"tokens": tokens, "replacement": repl, "label": label,
+                        "negatives": negs, "condition": f"allergen:{cat}",
+                        "preserve_qty": preserve_qty})
+    return out
+
+
+def active_allergen_labels(form_data) -> list:
+    """Etiquetas es-DO de las categorías de alérgeno con swap determinista activo para el perfil."""
+    seen, out = set(), []
+    for s in collect_allergen_substitutions(form_data):
+        cat = s["condition"]
+        if cat not in seen:
+            seen.add(cat)
+            out.append(s["label"])
+    return out

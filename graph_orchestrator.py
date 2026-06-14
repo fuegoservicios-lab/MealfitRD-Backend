@@ -8283,6 +8283,16 @@ RECIPE_COHERENCE_AUTOFIX = _env_bool("MEALFIT_RECIPE_COHERENCE_AUTOFIX", True)
 # LLM (que puede fallar). Crítico para uso clínico. Flip a False solo para debug.
 ALLERGEN_HARD_GUARD = _env_bool("MEALFIT_ALLERGEN_HARD_GUARD", True)
 
+# [P0-ALLERGEN-SUBS · 2026-06-14] Sustitución QUIRÚRGICA de alérgenos IgE declarados en la capa
+# clínica (antes del review): para los alérgenos con un reemplazo seguro que RESUELVE al catálogo
+# (pescado/mariscos/soya→pollo; gluten→casabe/maíz/arroz), swap del ingrediente ofensor in-place
+# (preserva cantidad + recalcula macros por delta) conservando el plan rico del LLM, en vez de
+# nukear todo a fallback. El backstop `_scan_allergen_violations` (ALLERGEN_HARD_GUARD) queda como
+# red de seguridad post-swap → cero regresión de seguridad. Flip a False revierte al comportamiento
+# previo (detección→rechazo crítico→fallback). Lácteos/huevo/maní/frutos secos NO se sustituyen
+# (sin target libre del alérgeno que resuelva en el catálogo es-DO) → siguen por el path crítico.
+ALLERGEN_SUBSTITUTION_ENABLED = _env_bool("MEALFIT_ALLERGEN_SUBSTITUTION", True)
+
 # [P3-FOOD-SAFETY · 2026-06-13] Guard determinista de seguridad alimentaria en assemble:
 # detecta huevo (TCS) crudo/poco cocido (batido licuado o sin paso de cocción) e inyecta una
 # nota de seguridad accionable a la receta (macro-preservante, no rompe coherencia receta↔
@@ -8588,28 +8598,20 @@ _COND_SUB_QTY_PREFIX_RE = _re.compile(
     r"^\s*(\d[\d.,/]*\s*[a-záéíóúñ]*\.?\s*(?:de\s+)?)", _re.IGNORECASE)
 
 
-def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
-    """[P3-CONDITION-ENGINE · 2026-06-14] Guard determinista de SUSTITUCIÓN de ingredientes por
-    condición (patrón food-safety GENERALIZADO, dirigido por el registro `condition_rules`). Para
-    CADA condición activa sustituye los ingredientes contraindicados por una alternativa segura en
-    `ingredients`+`ingredients_raw` ANTES del review+shopping: DM2 → azúcar añadida→stevia/agua; HTA
-    → embutidos/cubitos/bacalao salado→fresco. El plan queda clínicamente mejor Y deja de gatillar
-    el rechazo del revisor.
+def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentinel: str,
+                              on_meal_fixed=None) -> int:
+    """[P0-ALLERGEN-SUBS · 2026-06-14] Motor de swap determinista COMPARTIDO por las sustituciones
+    por condición (DM2/HTA/dislipidemia) y por alérgeno IgE. `subs`: lista de dicts
+    {tokens, replacement, label, negatives, condition, preserve_qty} (de `collect_substitutions` o
+    `collect_allergen_substitutions`). `note_builder(uniq_labels, conds) -> str`: la nota es-DO
+    inyectada a la receta; `note_sentinel`: substring para la guarda de idempotencia de la nota.
+    `on_meal_fixed(meal, uniq_labels, conds)`: callback opcional para flags por-llamador.
 
-    PRESERVA el prefijo de cantidad del ingrediente original ("100g de longaniza" → "100g de Pechuga
-    de pollo") → la lista de compras conserva el peso comprable y el coherence guard sigue cuadrando.
-    RECOMPUTA los macros de la comida desde los strings sustituidos (el nuevo ingrediente tiene
-    composición distinta al reemplazado) → el header de macros deja de describir el embutido viejo;
-    fail-safe: si la DB no resuelve, deja los macros previos (la cantidad ya quedó preservada).
-    Idempotente. Mutates `plan`. Retorna #comidas. Antes: `_apply_diabetic_sugar_guard` (solo DM2,
-    y era quantity-less + macros stale — bug encontrado por review adversaria)."""
-    if not CONDITION_RULES_ENABLED:
-        return 0
-    try:
-        from condition_rules import collect_substitutions
-        subs = collect_substitutions(form_data)
-    except Exception:
-        subs = []
+    PRESERVA el prefijo de cantidad (staples) → la lista de compras conserva el peso comprable y el
+    coherence guard sigue cuadrando. RECOMPUTA los macros del plato por DELTA quirúrgico (fail-safe:
+    si la DB no resuelve AMBOS strings, deja los macros previos). Idempotente. Mutates `plan`.
+    Retorna #comidas afectadas. Extraído verbatim de `_apply_condition_substitutions` (P3-CONDITION-
+    ENGINE) para reusar el motor sin drift entre los dos llamadores."""
     if not subs:
         return 0
     try:
@@ -8692,18 +8694,78 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
                     except Exception:
                         pass
                 uniq = sorted(set(labels))
-                note = (f"⚕️ Ajuste clínico (condición médica): se sustituyó {', '.join(uniq)} por una "
-                        f"alternativa segura (sin azúcar añadida / baja en sodio) para tu condición.")
+                note = note_builder(uniq, conds)
                 rec = meal.get("recipe")
                 if not isinstance(rec, list):
                     rec = [] if rec is None else [str(rec)]
-                if not any("Ajuste clínico" in str(s) for s in rec):
+                if note and not any(note_sentinel in str(s) for s in rec):
                     meal["recipe"] = rec + [note]
-                meal["_condition_subs_fixed"] = uniq
-                if "dm2" in conds:
-                    meal["_dm2_sugar_fixed"] = uniq  # flag de compatibilidad hacia atrás
+                if on_meal_fixed:
+                    try:
+                        on_meal_fixed(meal, uniq, conds)
+                    except Exception:
+                        pass
                 fixed += 1
     return fixed
+
+
+def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
+    """[P3-CONDITION-ENGINE · 2026-06-14] Guard determinista de SUSTITUCIÓN de ingredientes por
+    condición (patrón food-safety GENERALIZADO, dirigido por el registro `condition_rules`). Para
+    CADA condición activa sustituye los ingredientes contraindicados por una alternativa segura en
+    `ingredients`+`ingredients_raw` ANTES del review+shopping: DM2 → azúcar añadida→stevia/agua; HTA
+    → embutidos/cubitos/bacalao salado→fresco. El plan queda clínicamente mejor Y deja de gatillar
+    el rechazo del revisor. Reusa `_apply_substitutions_core` (motor compartido con los alérgenos).
+
+    PRESERVA el prefijo de cantidad del ingrediente original ("100g de longaniza" → "100g de Pechuga
+    de pollo") → la lista conserva el peso comprable. RECOMPUTA macros por delta (fail-safe).
+    Idempotente. Mutates `plan`. Retorna #comidas."""
+    if not CONDITION_RULES_ENABLED:
+        return 0
+    try:
+        from condition_rules import collect_substitutions
+        subs = collect_substitutions(form_data)
+    except Exception:
+        subs = []
+
+    def _note(uniq, conds):
+        return (f"⚕️ Ajuste clínico (condición médica): se sustituyó {', '.join(uniq)} por una "
+                f"alternativa segura (sin azúcar añadida / baja en sodio) para tu condición.")
+
+    def _flags(meal, uniq, conds):
+        meal["_condition_subs_fixed"] = uniq
+        if "dm2" in conds:
+            meal["_dm2_sugar_fixed"] = uniq  # flag de compatibilidad hacia atrás
+
+    return _apply_substitutions_core(plan, subs, _note, "Ajuste clínico", _flags)
+
+
+def _apply_allergen_substitutions(plan: dict, form_data: dict) -> int:
+    """[P0-ALLERGEN-SUBS · 2026-06-14] Sustitución QUIRÚRGICA de alérgenos IgE DECLARADOS
+    (`form_data['allergies']`) por una alternativa segura que RESUELVE al catálogo, ANTES del review.
+    Cierra el gap del audit clínico: las alergias dependían del prompt + el backstop romo
+    `_scan_allergen_violations` (que nukea el plan entero a fallback). Aquí el swap es in-place
+    (preserva cantidad + macros por delta, vía el motor compartido) y conserva el plan rico del LLM;
+    `_scan_allergen_violations` (review) sigue escalando cualquier RESIDUAL a crítico → cero
+    regresión de seguridad. Solo fish/shellfish/soy/gluten (lácteos/huevo/maní/frutos secos NO tienen
+    target libre del alérgeno que resuelva en el catálogo es-DO → siguen por el path crítico→fallback).
+    Mutates `plan`. Retorna #comidas afectadas."""
+    if not ALLERGEN_SUBSTITUTION_ENABLED:
+        return 0
+    try:
+        from condition_rules import collect_allergen_substitutions
+        subs = collect_allergen_substitutions(form_data)
+    except Exception:
+        subs = []
+
+    def _note(uniq, conds):
+        return (f"🛡️ Sustitución por alergia declarada: se reemplazó {', '.join(uniq)} por una "
+                f"alternativa segura libre del alérgeno. Verifica igualmente las etiquetas de lo que compras.")
+
+    def _flags(meal, uniq, conds):
+        meal["_allergen_subs_fixed"] = uniq
+
+    return _apply_substitutions_core(plan, subs, _note, "Sustitución por alergia", _flags)
 
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Mapa de sinónimos de alérgenos comunes (es-DO) → términos
@@ -9893,6 +9955,20 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 logger.warning(f"🥚 [P3-FOOD-SAFETY] Mitigó huevo crudo/poco cocido en {_fs_n} comida(s)")
         except Exception as _fs_e:
             logger.warning(f"[P3-FOOD-SAFETY] error: {type(_fs_e).__name__}: {_fs_e}")
+
+    # ── Guard 2.5 (FS-IgE): sustitución QUIRÚRGICA de alérgenos IgE declarados (espejo [P0-ALLERGEN-SUBS]) ──
+    # Corre ANTES de las sustituciones por condición (Guard 3): la seguridad del alérgeno tiene la mayor
+    # precedencia. Swap del ingrediente ofensor por una alternativa segura que resuelve al catálogo,
+    # conservando el plan rico. El backstop `_scan_allergen_violations` (review) sigue escalando cualquier
+    # residual a rechazo crítico → cero regresión de seguridad. fish/shellfish/soy/gluten únicamente.
+    if ALLERGEN_SUBSTITUTION_ENABLED:
+        try:
+            _al_n = _apply_allergen_substitutions(plan, form_data)
+            if _al_n:
+                logger.warning(f"🛡️ [P0-ALLERGEN-SUBS] Sustituyó alérgeno(s) declarado(s) por alternativa "
+                               f"segura en {_al_n} comida(s)")
+        except Exception as _al_e:
+            logger.warning(f"[P0-ALLERGEN-SUBS] error: {type(_al_e).__name__}: {_al_e}")
 
     # ── Guard 3: sustitución de ingredientes por condición DM2/HTA/dislipidemia (vía SubstitutionEngineConstraint) ──
     if DM2_SUGAR_GUARD:
