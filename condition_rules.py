@@ -35,7 +35,9 @@ _MEDICAL_NONE_SENTINELS = frozenset({
 
 @dataclass(frozen=True)
 class ConditionRule:
-    """Una condición del set Pareto como DATO. `substitutions` = ((tokens...), reemplazo, etiqueta);
+    """Una condición del set Pareto como DATO. `substitutions` = ((tokens...), reemplazo, etiqueta,
+    preserve_qty?); `preserve_qty` (4º elem, opcional, default False) marca staples que aportan peso
+    (embutidos/bacalao) para los que el guard preserva el prefijo de cantidad y recalcula macros.
     `sub_negatives` = frases que vetan la sustitución (ej. 'baja en sodio'). `precedence` menor =
     mayor prioridad clínica de seguridad (ERC manda)."""
     id: str
@@ -49,26 +51,34 @@ class ConditionRule:
 
 
 # ── Tablas de sustitución determinista (patrón generalizado del sugar-guard) ──
+# Cada fila: (tokens, reemplazo, etiqueta, preserve_qty). `preserve_qty=True` SOLO para staples que
+# aportan peso/macros (embutidos, bacalao salado) → el guard preserva el prefijo de cantidad
+# ("100g de longaniza" → "100g de Pechuga de pollo") y recalcula los macros del plato por delta.
+# `False` para condimentos/azúcares donde la UNIDAD misma es lo contraindicado ("1 cubito de…",
+# "1 cda de miel") o son "al gusto" — preservar el prefijo dejaría la palabra ofensora en el string.
 _DM2_SUGAR_SUBS = (
-    (("miel", "honey"), "Stevia al gusto", "miel"),
-    (("sirope", "jarabe", "syrup"), "Stevia al gusto", "sirope/jarabe"),
-    (("panela", "melaza", "molasses"), "Stevia al gusto", "panela/melaza"),
-    (("leche condensada", "dulce de leche", "condensed milk"), "Leche evaporada sin azúcar", "leche condensada"),
+    (("miel", "honey"), "Stevia al gusto", "miel", False),
+    (("sirope", "jarabe", "syrup"), "Stevia al gusto", "sirope/jarabe", False),
+    (("panela", "melaza", "molasses"), "Stevia al gusto", "panela/melaza", False),
+    (("leche condensada", "dulce de leche", "condensed milk"), "Leche evaporada sin azúcar", "leche condensada", False),
     (("refresco", "gaseosa", "soda", "malta", "jugo de caja", "jugo concentrado",
-      "jugo embotellado", "jugo de cajita"), "Agua", "bebida azucarada"),
-    (("azucar", "azúcar", "sugar"), "Stevia al gusto", "azúcar"),
+      "jugo embotellado", "jugo de cajita"), "Agua", "bebida azucarada", False),
+    (("azucar", "azúcar", "sugar"), "Stevia al gusto", "azúcar", False),
 )
 _DM2_SUGAR_NEGATIVES = ("sin azucar", "no azucar", "0 azucar", "cero azucar", "libre de azucar",
                         "0% azucar", "sin azucares", "bajo en azucar")
 
 _HTA_SODIUM_SUBS = (
     (("embutido", "salami", "longaniza", "salchicha", "mortadela", "tocineta",
-      "bacon", "chorizo", "jamon", "jamón"), "Pechuga de pollo o pavo fresco", "embutidos"),
-    (("cubito", "sazon en polvo", "sazón en polvo", "sazon completa", "caldo en cubo",
-      "consome", "consomé", "maggi", "sopita", "sazonador"), "especias naturales (ajo, cebolla, orégano, comino)", "cubitos/sazón en polvo"),
-    (("bacalao salado", "bacalao seco", "arenque salado"), "Pescado fresco", "pescado salado"),
-    (("salsa de soya", "soya", "teriyaki"), "Limón o vinagre con especias", "salsa de soya"),
-    (("tajin", "tajín", "sal de ajo", "sal de cebolla"), "Especias sin sal añadida", "sazonadores salados"),
+      "bacon", "chorizo", "jamon", "jamón"), "Pechuga de pollo", "embutidos", True),
+    # OJO: tokens estrechos para no colisionar con proteína legítima — 'cubito de' (NO 'cubito', que
+    # matchearía 'cubitos de pollo' = pollo en cubos); 'salsa de soya' (NO 'soya' desnudo, que
+    # borraría tofu/leche-de-soya/carne-de-soya, proteína vegetal). Bug encontrado por review adversaria.
+    (("cubito de", "sazon en polvo", "sazón en polvo", "sazon completa", "caldo en cubo",
+      "consome", "consomé", "maggi", "sopita", "sazonador"), "Especias naturales (ajo, cebolla, orégano, comino)", "cubitos/sazón en polvo", False),
+    (("bacalao salado", "bacalao seco", "arenque salado"), "Pescado fresco", "pescado salado", True),
+    (("salsa de soya", "salsa de soja", "teriyaki"), "Limón con especias", "salsa de soya", False),
+    (("tajin", "tajín", "sal de ajo", "sal de cebolla"), "Especias sin sal añadida", "sazonadores salados", False),
 )
 _HTA_SODIUM_NEGATIVES = ("baja en sodio", "bajo en sodio", "sin sal", "sin sodio", "reducido en sodio")
 
@@ -200,12 +210,16 @@ def build_condition_prompt(form_data) -> str:
 
 def collect_substitutions(form_data) -> list:
     """Sustituciones deterministas de ingredientes activas para el perfil, en orden de precedencia.
-    Cada item: {tokens, replacement, label, negatives, condition}. El guard las aplica en un solo pase."""
+    Cada item: {tokens, replacement, label, negatives, condition, preserve_qty}. El guard las aplica
+    en un solo pase. Tolera filas legacy de 3 elementos (preserve_qty → False por defecto)."""
     out = []
     for r in detect_active_rules(form_data):
-        for tokens, repl, label in (r.substitutions or ()):
+        for sub in (r.substitutions or ()):
+            tokens, repl, label = sub[0], sub[1], sub[2]
+            preserve_qty = bool(sub[3]) if len(sub) > 3 else False
             out.append({"tokens": tokens, "replacement": repl, "label": label,
-                        "negatives": r.sub_negatives or (), "condition": r.id})
+                        "negatives": r.sub_negatives or (), "condition": r.id,
+                        "preserve_qty": preserve_qty})
     return out
 
 

@@ -8569,14 +8569,28 @@ def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
                        f"{type(_rcn_e).__name__}: {_rcn_e}")
 
 
+# [P3-CONDITION-ENGINE] Captura el prefijo de cantidad de un ingrediente ("100g de ", "2 lonjas de ",
+# "0.5 taza de ") para preservarlo al sustituir → la lista de compras conserva el peso y el coherence
+# guard sigue cuadrando. Sin prefijo (condimentos "al gusto") el sustituto queda sin cantidad (OK).
+_COND_SUB_QTY_PREFIX_RE = _re.compile(
+    r"^\s*(\d[\d.,/]*\s*[a-záéíóúñ]*\.?\s*(?:de\s+)?)", _re.IGNORECASE)
+
+
 def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
     """[P3-CONDITION-ENGINE · 2026-06-14] Guard determinista de SUSTITUCIÓN de ingredientes por
     condición (patrón food-safety GENERALIZADO, dirigido por el registro `condition_rules`). Para
     CADA condición activa sustituye los ingredientes contraindicados por una alternativa segura en
     `ingredients`+`ingredients_raw` ANTES del review+shopping: DM2 → azúcar añadida→stevia/agua; HTA
     → embutidos/cubitos/bacalao salado→fresco. El plan queda clínicamente mejor Y deja de gatillar
-    el rechazo del revisor. Macro-preservante (conservador), shopping-consistente, idempotente.
-    Mutates `plan`. Retorna #comidas ajustadas. Antes: `_apply_diabetic_sugar_guard` (solo DM2)."""
+    el rechazo del revisor.
+
+    PRESERVA el prefijo de cantidad del ingrediente original ("100g de longaniza" → "100g de Pechuga
+    de pollo") → la lista de compras conserva el peso comprable y el coherence guard sigue cuadrando.
+    RECOMPUTA los macros de la comida desde los strings sustituidos (el nuevo ingrediente tiene
+    composición distinta al reemplazado) → el header de macros deja de describir el embutido viejo;
+    fail-safe: si la DB no resuelve, deja los macros previos (la cantidad ya quedó preservada).
+    Idempotente. Mutates `plan`. Retorna #comidas. Antes: `_apply_diabetic_sugar_guard` (solo DM2,
+    y era quantity-less + macros stale — bug encontrado por review adversaria)."""
     if not CONDITION_RULES_ENABLED:
         return 0
     try:
@@ -8590,34 +8604,76 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
         from constants import strip_accents as _sa
     except Exception:
         _sa = lambda x: x  # noqa: E731
+    try:
+        from nutrition_db import IngredientNutritionDB
+        _db = IngredientNutritionDB()
+    except Exception:
+        _db = None
 
     def _match(ing_norm):
         for s in subs:
             if any(neg in ing_norm for neg in s["negatives"]):
                 continue
             if any(t in ing_norm for t in s["tokens"]):
-                return s["replacement"], s["label"], s["condition"]
+                return s
         return None
+
+    def _sub_string(orig, replacement, preserve_qty):
+        # Staples (preserve_qty): preserva el prefijo de cantidad ("100g de", "2 lonjas de") + el
+        # reemplazo → la lista de compras conserva el peso comprable. Condimentos/azúcares: deja el
+        # reemplazo bare (queda "al gusto"); preservar el prefijo dejaría la palabra ofensora ("cubito").
+        if preserve_qty:
+            m = _COND_SUB_QTY_PREFIX_RE.match(str(orig)) if _COND_SUB_QTY_PREFIX_RE else None
+            if m and m.group(1).strip():
+                return m.group(1) + replacement
+        return replacement
 
     fixed = 0
     for day in plan.get("days", []) or []:
         for meal in day.get("meals", []) or []:
-            labels, conds = [], set()
+            labels, conds, changed = [], set(), False
+            swaps = []  # (string_viejo, string_nuevo) — solo de la lista canónica, para el delta de macros
             for key in ("ingredients", "ingredients_raw"):
                 ings = meal.get(key)
                 if not isinstance(ings, list):
                     continue
                 out = []
                 for ing in ings:
-                    m = _match(_sa(str(ing).lower()))
-                    if m:
-                        if m[0] not in out:  # evita duplicar el sustituto
-                            out.append(m[0])
-                        labels.append(m[1]); conds.add(m[2])
+                    s = _match(_sa(str(ing).lower()))
+                    if s:
+                        new = _sub_string(ing, s["replacement"], s.get("preserve_qty"))
+                        if new not in out:  # evita duplicar el sustituto
+                            out.append(new)
+                        if key == "ingredients":
+                            swaps.append((str(ing), new))
+                        labels.append(s["label"]); conds.add(s["condition"]); changed = True
                     else:
                         out.append(ing)
                 meal[key] = out
-            if labels:
+            if changed:
+                # Ajusta los macros del plato por DELTA quirúrgico: macros(nuevo) - macros(viejo) SOLO de
+                # los ingredientes sustituidos → el header deja de describir el ingrediente viejo sin
+                # tocar (ni perder por 0-silencioso) la contribución del resto del plato. Fail-safe: si
+                # un string no resuelve, ese sumando es 0 (conservador). Mismo patrón que el quantize.
+                if _db is not None and swaps:
+                    try:
+                        _d = {"protein": 0.0, "carbs": 0.0, "fats": 0.0, "kcal": 0.0}
+                        _touched = False
+                        for _old, _new in swaps:
+                            _om = _db.macros_from_ingredient_string(_old) or {}
+                            _nm = _db.macros_from_ingredient_string(_new) or {}
+                            if _om or _nm:
+                                _touched = True
+                                for _k in _d:
+                                    _d[_k] += (_nm.get(_k) or 0.0) - (_om.get(_k) or 0.0)
+                        if _touched and any(_d.values()):
+                            meal["protein"] = max(0, round(_meal_macro_num(meal.get("protein")) + _d["protein"]))
+                            meal["carbs"] = max(0, round(_meal_macro_num(meal.get("carbs")) + _d["carbs"]))
+                            meal["fats"] = max(0, round(_meal_macro_num(meal.get("fats")) + _d["fats"]))
+                            meal["cals"] = max(0, round(_meal_macro_num(meal.get("cals")) + _d["kcal"]))
+                            meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+                    except Exception:
+                        pass
                 uniq = sorted(set(labels))
                 note = (f"⚕️ Ajuste clínico (condición médica): se sustituyó {', '.join(uniq)} por una "
                         f"alternativa segura (sin azúcar añadida / baja en sodio) para tu condición.")
