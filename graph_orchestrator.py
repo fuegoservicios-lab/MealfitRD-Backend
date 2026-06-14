@@ -8258,6 +8258,14 @@ MACRO_SOLVER_PROTEIN_TOPUP = _env_bool("MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP", Tru
 # solver ON. Clamp de seguridad para no producir porciones absurdas.
 MACRO_SOLVER_CAL_RECONCILE = _env_bool("MEALFIT_MACRO_SOLVER_CAL_RECONCILE", True)
 
+# [P3-RECIPE-COHERENCE-AUTOFIX · 2026-06-13] Auto-fix determinista de las violaciones de
+# coherencia receta↔ingrediente que HOY rechazan+reintentan (→ retry_penalty < 1.0 en el
+# holistic). Caso "forward" (la receta menciona una proteína que no está listada → la
+# scrubea/reemplaza por la proteína real del meal) + "completion" (falta paso final → lo
+# añade). El caso "reverse" ya lo auto-parchea review_plan_node. Convierte reject-and-retry
+# en fix-in-place → el revisor aprueba al 1er intento. Flip a False revierte a rechazar.
+RECIPE_COHERENCE_AUTOFIX = _env_bool("MEALFIT_RECIPE_COHERENCE_AUTOFIX", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -8588,20 +8596,65 @@ def _run_assembly_validations(
     for day in result.get("days", []):
         for meal in day.get("meals", []):
             ingredients = [_flatten_ingredient(i).lower() for i in meal.get("ingredients", [])]
-            recipe = meal.get("recipe", "")
-            if isinstance(recipe, list):
-                recipe = " ".join(recipe)
-            recipe = recipe.lower()
+            _recipe_raw = meal.get("recipe", "")
+            _recipe_steps = list(_recipe_raw) if isinstance(_recipe_raw, list) else ([_recipe_raw] if _recipe_raw else [])
+            recipe = " ".join(str(s) for s in _recipe_steps).lower()
+
+            # Proteína REAL del meal (primer sinónimo presente en ingredients) — para el auto-fix.
+            _actual_protein = None
+            for _ing in ingredients:
+                for _syns in protein_synonyms.values():
+                    _m = next((_s for _s in _syns if _re.search(r'\b' + _re.escape(_s) + r'\b', _ing)), None)
+                    if _m:
+                        _actual_protein = _m
+                        break
+                if _actual_protein:
+                    break
+
+            # FORWARD (Brecha 4): la receta menciona una proteína KEY sin sinónimo en ingredients.
+            _orphan_keys = []
             for cp, synonyms in protein_synonyms.items():
-                pattern = r'\b' + _re.escape(cp) + r'\b'
-                if _re.search(pattern, recipe):
+                if _re.search(r'\b' + _re.escape(cp) + r'\b', recipe):
                     if not any(any(_re.search(r'\b' + _re.escape(syn) + r'\b', ing) for syn in synonyms) for ing in ingredients):
-                        msg = f"Día {day.get('day')}, {meal.get('name')}: La receta indica '{cp}' pero no hay ningún ingrediente equivalente (ej. {', '.join(synonyms[:3])}) listado."
-                        recipe_coherence_errors.append(msg)
+                        _orphan_keys.append(cp)
+            if _orphan_keys:
+                if RECIPE_COHERENCE_AUTOFIX and _recipe_steps:
+                    # [P3-RECIPE-COHERENCE-AUTOFIX] Reemplaza la mención huérfana por la
+                    # proteína real del meal (o "proteína") → coherente, sin retry.
+                    _repl = _actual_protein or "proteína"
+                    _new_steps = []
+                    for _step in _recipe_steps:
+                        _s = str(_step)
+                        for _cp in _orphan_keys:
+                            _s = _re.sub(r'\b' + _re.escape(_cp) + r'\b', _repl, _s, flags=_re.IGNORECASE)
+                        _new_steps.append(_re.sub(r'\s{2,}', ' ', _s).strip())
+                    _recipe_steps = _new_steps
+                    meal["recipe"] = _new_steps
+                    recipe = " ".join(_new_steps).lower()
+                    logger.info(f"🩹 [RECIPE-COHERENCE-AUTOFIX] Día {day.get('day')} "
+                                f"{str(meal.get('name'))[:30]!r}: mención(es) huérfana(s) "
+                                f"{_orphan_keys} → {_repl!r} (evita retry, retry_penalty=1.0)")
+                else:
+                    for _cp in _orphan_keys:
+                        _syns3 = protein_synonyms.get(_cp, [])[:3]
+                        recipe_coherence_errors.append(
+                            f"Día {day.get('day')}, {meal.get('name')}: La receta indica "
+                            f"'{_cp}' pero no hay ningún ingrediente equivalente (ej. {', '.join(_syns3)}) listado.")
+
+            # COMPLETION (Brecha 3): falta un paso final de servido.
             completion_pattern = r'\b(sirve|servir|montaje|monta|emplata|emplatar|empaca|empacar|disfruta|disfrutar|agrega)\b'
             if not _re.search(completion_pattern, recipe):
-                msg = f"Día {day.get('day')}, {meal.get('name')}: La receta parece incompleta, falta un paso final (ej: 'Servir', 'Montaje' o 'Empacar')."
-                recipe_coherence_errors.append(msg)
+                if RECIPE_COHERENCE_AUTOFIX:
+                    _recipe_steps = _recipe_steps + ["Montaje: Sirve y disfruta tu comida."]
+                    meal["recipe"] = _recipe_steps
+                    recipe = " ".join(str(s) for s in _recipe_steps).lower()
+                    logger.info(f"🩹 [RECIPE-COHERENCE-AUTOFIX] Día {day.get('day')} "
+                                f"{str(meal.get('name'))[:30]!r}: añadido paso final faltante")
+                else:
+                    recipe_coherence_errors.append(
+                        f"Día {day.get('day')}, {meal.get('name')}: La receta parece incompleta, "
+                        f"falta un paso final (ej: 'Servir', 'Montaje' o 'Empacar').")
+
             for ing in ingredients:
                 clean_ing = _re.sub(r'[\d\.,\(\)/\-]', ' ', ing)
                 words = [w.strip() for w in clean_ing.split() if w.strip() and len(w.strip()) > 2]

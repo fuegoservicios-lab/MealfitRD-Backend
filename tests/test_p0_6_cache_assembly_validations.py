@@ -151,21 +151,27 @@ def test_helper_runs_recipe_coherence_for_cache_hit():
         f"esperado error de pollo no listado, got: {errors}"
 
 
-def test_helper_detects_recipe_missing_completion_step():
-    """Receta sin 'servir/montaje/emplatar/...' → coherence error."""
-    bad_meal = _valid_meal(
-        recipe=[
-            "Mise en place: preparar.",
-            "El Toque de Fuego: cocinar.",
-            # SIN paso final tipo 'Servir'/'Montaje'.
-            "Listo para comer.",
-        ],
-    )
-    plan = _valid_plan(days=[{"day": 1, "day_name": "Lunes", "meals": [bad_meal]}])
+def test_helper_detects_recipe_missing_completion_step(monkeypatch):
+    """Receta sin 'servir/montaje/...': con RECIPE_COHERENCE_AUTOFIX OFF se detecta+flaggea;
+    con ON (default, P3-RECIPE-COHERENCE-AUTOFIX) se auto-añade el paso final → sin error →
+    no fuerza retry (retry_penalty=1.0 en el holistic)."""
+    import graph_orchestrator as _go
+    _bad = ["Mise en place: preparar.", "El Toque de Fuego: cocinar.", "Listo para comer."]
+    # OFF → detección clásica (flaggea).
+    monkeypatch.setattr(_go, "RECIPE_COHERENCE_AUTOFIX", False)
+    plan = _valid_plan(days=[{"day": 1, "day_name": "Lunes", "meals": [_valid_meal(recipe=list(_bad))]}])
     _run_assembly_validations(plan, skeleton={}, affected_days_set=set())
     errors = plan.get("_recipe_coherence_errors") or []
     assert any("incompleta" in e.lower() or "paso final" in e.lower() for e in errors), \
-        f"esperado error de receta incompleta, got: {errors}"
+        f"con autofix OFF se espera el error, got: {errors}"
+    # ON → auto-fix: añade el paso, sin error.
+    monkeypatch.setattr(_go, "RECIPE_COHERENCE_AUTOFIX", True)
+    good_meal = _valid_meal(recipe=list(_bad))
+    plan2 = _valid_plan(days=[{"day": 1, "day_name": "Lunes", "meals": [good_meal]}])
+    _run_assembly_validations(plan2, skeleton={}, affected_days_set=set())
+    errors2 = plan2.get("_recipe_coherence_errors") or []
+    assert not any("incompleta" in e.lower() or "paso final" in e.lower() for e in errors2)
+    assert any("sirve" in str(s).lower() or "montaje" in str(s).lower() for s in good_meal["recipe"])
 
 
 # ---------------------------------------------------------------------------
