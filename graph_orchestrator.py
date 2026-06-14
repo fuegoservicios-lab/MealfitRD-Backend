@@ -8272,6 +8272,12 @@ RECIPE_COHERENCE_AUTOFIX = _env_bool("MEALFIT_RECIPE_COHERENCE_AUTOFIX", True)
 # LLM (que puede fallar). Crítico para uso clínico. Flip a False solo para debug.
 ALLERGEN_HARD_GUARD = _env_bool("MEALFIT_ALLERGEN_HARD_GUARD", True)
 
+# [P3-FOOD-SAFETY · 2026-06-13] Guard determinista de seguridad alimentaria en assemble:
+# detecta huevo (TCS) crudo/poco cocido (batido licuado o sin paso de cocción) e inyecta una
+# nota de seguridad accionable a la receta (macro-preservante, no rompe coherencia receta↔
+# lista). Cierra el hallazgo CRÍTICO de la auditoría clínica. Flip a False solo para debug.
+FOOD_SAFETY_GUARD = _env_bool("MEALFIT_FOOD_SAFETY_GUARD", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -8388,6 +8394,115 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
     return violations
 
 
+# [P3-FOOD-SAFETY · 2026-06-13] Seguridad alimentaria determinista: el huevo es un alimento
+# TCS (Time/Temperature Control for Safety); crudo/poco cocido = vector directo de Salmonella
+# enteritidis (CDC/FDA Food Code lo desaconsejan sin pasteurizar). Hallazgo CRÍTICO de la
+# auditoría clínica multi-agente (plan 11d17452: ½ huevo crudo LICUADO en un batido +
+# 1¼ huevos sin paso de cocción en un wrap). Simétrico al allergen guard: el revisor LLM
+# puede dejar pasar huevo crudo, y el solver/top-up podría AÑADIRLO a una preparación fría;
+# este guard determinista nunca sirve huevo crudo sin una mitigación explícita.
+_RAW_EGG_TERMS = ("huevo", "huevos", "clara", "claras", "yema", "yemas")
+# Preparaciones LICUADAS/FRÍAS donde el huevo queda inequívocamente CRUDO (no hay cocción
+# posible aguas abajo): un batido no se cocina. Aquí el riesgo es máximo y el fix es fuerte.
+_NO_COOK_BLENDED = ("batido", "smoothie", "licuado", "licuada", "malteada", "jugo")
+# Indicadores de que el huevo SÍ se cuece (≥71°C) → seguro. Sesgo a SEGURIDAD: un falso
+# "crudo" solo añade una nota inocua; un falso "cocido" sería peligroso (omitiría la nota),
+# así que se exigen términos ESPECÍFICOS de huevo cocido, NO genéricos ambiguos. Nota:
+# "tortilla" a secas es el pan plano (wrap) en es-DO, NO la tortilla de huevo → se exige
+# "tortilla de huevo" explícito para no dar por cocido un huevo crudo dentro de un wrap.
+_EGG_COOK_INDICATORS = (
+    "tortilla de huevo", "tortilla espanola", "revoltillo", "revuelto", "omelet", "omelette",
+    "huevo frito", "huevos fritos", "huevo cocid", "huevos cocid", "huevo hervi", "huevos hervi",
+    "huevo duro", "huevos duros", "escalfad", "poche", "huevo estrellad", "huevos estrellad",
+    "pasado por agua", "cocina el huevo", "cocina los huevo", "cuece el huevo", "cuece los huevo",
+    "frie el huevo", "frie los huevo", "fríe el huevo", "fríe los huevo",
+)
+
+
+def _meal_has_egg(meal: dict, strip_accents) -> bool:
+    """True si algún ingrediente del meal contiene huevo/clara/yema (token aislado)."""
+    import re as _re
+    for ing in meal.get("ingredients", []) or []:
+        ing_low = strip_accents(str(ing).lower())
+        for t in _RAW_EGG_TERMS:
+            if _re.search(r"\b" + t + r"\b", ing_low):
+                return True
+    return False
+
+
+def _meal_egg_is_cooked(meal: dict, strip_accents) -> bool:
+    """True si el nombre o la receta del meal indica que el huevo se cocina (≥71°C)."""
+    parts = [str(meal.get("name", ""))]
+    rec = meal.get("recipe")
+    if isinstance(rec, list):
+        parts.extend(str(s) for s in rec)
+    text = strip_accents(" ".join(parts).lower())
+    return any(c in text for c in _EGG_COOK_INDICATORS)
+
+
+def _scan_raw_egg_violations(plan: dict) -> list:
+    """[P3-FOOD-SAFETY · 2026-06-13] Detector determinista de huevo crudo/poco cocido.
+    Retorna lista de (day_idx, meal_idx, meal_name, kind) con kind ∈ {'blended','no_cook'}:
+    - 'blended': huevo en una preparación licuada (batido/jugo) → CRUDO inequívoco.
+    - 'no_cook': huevo presente y ningún indicador de cocción en nombre/receta → riesgo.
+    Sesgo a sobre-detectar (seguridad > comodidad); el auto-fix es macro-preservante y no
+    rompe la coherencia receta↔lista (no muta el token canónico del ingrediente)."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    violations = []
+    for di, day in enumerate(plan.get("days", []) or []):
+        for mi, meal in enumerate(day.get("meals", []) or []):
+            if not _meal_has_egg(meal, strip_accents):
+                continue
+            name_low = strip_accents(str(meal.get("name", "")).lower())
+            if any(b in name_low for b in _NO_COOK_BLENDED):
+                violations.append((di, mi, meal.get("name", "?"), "blended"))
+            elif not _meal_egg_is_cooked(meal, strip_accents):
+                violations.append((di, mi, meal.get("name", "?"), "no_cook"))
+    return violations
+
+
+# Notas de seguridad (prominentes, accionables) que el auto-fix inyecta a la receta.
+_FOOD_SAFETY_NOTE_BLENDED = (
+    "⚠️ Seguridad alimentaria: NO uses huevo crudo en un batido (riesgo de Salmonella). "
+    "Usa huevo PASTEURIZADO, o sustitúyelo por 1 medida de proteína en polvo o 2-3 "
+    "cucharadas de yogur griego para el mismo aporte proteico sin riesgo."
+)
+_FOOD_SAFETY_NOTE_NOCOOK = (
+    "⚠️ Seguridad alimentaria: cocina el huevo por completo (≥71°C, yema y clara firmes, "
+    "sin partes líquidas) antes de servir; evita el huevo crudo o poco cocido."
+)
+
+
+def _apply_food_safety_fixes(plan: dict) -> int:
+    """[P3-FOOD-SAFETY · 2026-06-13] Aplica mitigación determinista a las violaciones de
+    huevo crudo detectadas por `_scan_raw_egg_violations`. Macro-PRESERVANTE (no toca
+    cantidades ni macros) y shopping-SAFE (no muta el token canónico del ingrediente, solo
+    añade una nota a la receta) → corre con seguridad antes de la agregación de compras sin
+    introducir divergencias receta↔lista. Idempotente: no duplica una nota ya presente.
+    Retorna el número de meals mitigados. Anchor: P3-FOOD-SAFETY."""
+    fixed = 0
+    for di, mi, _name, kind in _scan_raw_egg_violations(plan):
+        try:
+            meal = plan["days"][di]["meals"][mi]
+        except (KeyError, IndexError, TypeError):
+            continue
+        note = _FOOD_SAFETY_NOTE_BLENDED if kind == "blended" else _FOOD_SAFETY_NOTE_NOCOOK
+        rec = meal.get("recipe")
+        if not isinstance(rec, list):
+            rec = [] if rec is None else [str(rec)]
+        if any("Seguridad alimentaria" in str(s) for s in rec):
+            continue  # ya mitigado → idempotente
+        meal["recipe"] = rec + [note]
+        meal["_food_safety_fixed"] = kind
+        fixed += 1
+    return fixed
+
+
 def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: float) -> None:
     """[P0-MEAL-MACRO-RECOVERY · 2026-06-13] Garantiza que un meal tenga breakdown
     de macros. Si protein/carbs/fats vienen todos en 0/ausentes (gap del day-gen o
@@ -8482,10 +8597,23 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         cur_p = _meal_macro_num(meal.get("protein"))
         if cur_p >= floor_g:
             return 0  # ya tiene proteína suficiente — no tocar
+        # [P3-FOOD-SAFETY] No añadir huevo crudo a preparaciones licuadas/frías (batido,
+        # jugo): no hay cocción posible aguas abajo → sería un vector de Salmonella. En esos
+        # slots se prefiere una proteína no-cocción-dependiente (yogur/proteína en polvo).
+        try:
+            from constants import strip_accents as _sa
+        except Exception:
+            def _sa(s):
+                import unicodedata
+                return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+        _name_low = _sa(str(meal.get("name", "")).lower())
+        _no_cook = any(b in _name_low for b in _NO_COOK_BLENDED)
         best = None  # (leanness, info)
         for p in (approved_proteins or []):
             info = db.lookup(p)
             if info and info.protein >= 5:
+                if _no_cook and any(t in _sa(str(info.name).lower()) for t in _RAW_EGG_TERMS):
+                    continue  # huevo crudo en batido prohibido → probar otra proteína del pool
                 leanness = info.protein / max(info.kcal, 1.0)  # g proteína por kcal
                 if best is None or leanness > best[0]:
                     best = (leanness, info)
@@ -9612,6 +9740,21 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _rec_e:
             logger.warning(f"[P3-CAL-RECONCILE] deshabilitado por error: "
                            f"{type(_rec_e).__name__}: {_rec_e}")
+
+    # [P3-FOOD-SAFETY · 2026-06-13] Guard determinista de seguridad alimentaria. Corre
+    # SIEMPRE (independiente del solver: el huevo crudo puede venir del LLM, como en el plan
+    # 11d17452 auditado, o del top-up). Detecta huevo crudo/poco cocido e inyecta una nota de
+    # seguridad accionable. Macro-preservante + shopping-safe (no muta el token canónico) →
+    # seguro correrlo antes de la agregación de compras. Fail-safe total.
+    if FOOD_SAFETY_GUARD:
+        try:
+            _fs_n = _apply_food_safety_fixes(result)
+            if _fs_n:
+                logger.warning(f"🥚 [P3-FOOD-SAFETY] Mitigó huevo crudo/poco cocido en "
+                               f"{_fs_n} comida(s) (nota de seguridad inyectada a la receta)")
+        except Exception as _fs_e:
+            logger.warning(f"[P3-FOOD-SAFETY] deshabilitado por error: "
+                           f"{type(_fs_e).__name__}: {_fs_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
