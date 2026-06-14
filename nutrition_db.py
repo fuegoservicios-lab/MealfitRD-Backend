@@ -261,6 +261,13 @@ class NutritionInfo:
     density_g_per_unit: Optional[float] = None
     density_g_per_cup: Optional[float] = None
     container_weight_g: Optional[float] = None
+    # [P3-MICRONUTRIENTS] panel clínico por-100g (None si la fila USDA no lo reporta).
+    vit_d_mcg: Optional[float] = None
+    calcium_mg: Optional[float] = None
+    iron_mg: Optional[float] = None
+    b12_mcg: Optional[float] = None
+    sugars_g: Optional[float] = None
+    potassium_mg: Optional[float] = None
 
 
 class IngredientNutritionDB:
@@ -337,6 +344,12 @@ class IngredientNutritionDB:
             density_g_per_unit=_num(row.get("density_g_per_unit")),
             density_g_per_cup=_num(row.get("density_g_per_cup")),
             container_weight_g=_num(row.get("container_weight_g")),
+            vit_d_mcg=_num(row.get("vitamin_d_mcg_per_100g")),
+            calcium_mg=_num(row.get("calcium_mg_per_100g")),
+            iron_mg=_num(row.get("iron_mg_per_100g")),
+            b12_mcg=_num(row.get("vitamin_b12_mcg_per_100g")),
+            sugars_g=_num(row.get("sugars_g_per_100g")),
+            potassium_mg=_num(row.get("potassium_mg_per_100g")),
         )
 
     # ---- conversión a gramos -------------------------------------------
@@ -404,6 +417,35 @@ class IngredientNutritionDB:
             "name": info.name, "grams": round(grams, 2),
             "kcal": round(info.kcal * f, 1), "protein": round(info.protein * f, 2),
             "carbs": round(info.carbs * f, 2), "fats": round(info.fats * f, 2),
+        }
+
+    def micros_from_ingredient_string(self, s: str) -> Optional[dict]:
+        """[P3-MICRONUTRIENTS] (string del plan) → panel de micros del aporte de ESE
+        ingrediente {grams, fiber, sodium_mg, vit_d_mcg, calcium_mg, iron_mg, b12_mcg,
+        sugars_g, potassium_mg} o None si no resuelve nombre/gramos. Cada micro es None si
+        el ingrediente no lo reporta (manual/USDA sin dato) → el validador no lo contabiliza."""
+        name = _split_qty_unit_name(s)[2]
+        info = self.lookup(name)
+        if not info:
+            return None
+        grams = self.grams_from_ingredient_string(s)
+        if grams is None:
+            return None
+        f = grams / 100.0
+
+        def _sc(x):
+            return round(x * f, 3) if x is not None else None
+
+        return {
+            "grams": round(grams, 1),
+            "fiber": _sc(info.fiber),
+            "sodium_mg": _sc(info.sodium_mg),
+            "vit_d_mcg": _sc(info.vit_d_mcg),
+            "calcium_mg": _sc(info.calcium_mg),
+            "iron_mg": _sc(info.iron_mg),
+            "b12_mcg": _sc(info.b12_mcg),
+            "sugars_g": _sc(info.sugars_g),
+            "potassium_mg": _sc(info.potassium_mg),
         }
 
     def macros_for_line(self, qty, unit, raw_name: str) -> Optional[dict]:

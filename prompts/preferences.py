@@ -50,5 +50,7 @@ Toda comida pobre en proteína deja el plan corto del objetivo diario y produce 
 
 🥚 REGLA DE SEGURIDAD ALIMENTARIA (CRÍTICA — riesgo de Salmonella): PROHIBIDO el huevo crudo o poco cocido. NUNCA pongas huevo (entero, clara o yema) en un batido, jugo, licuado o cualquier preparación FRÍA que no se cocine. Si una comida lleva huevo, su receta DEBE incluir un paso explícito de cocción completa (≥71°C: tortilla, revoltillo, frito, hervido duro, horneado). Para aportar proteína a un batido usa proteína en polvo o yogur griego, NUNCA huevo crudo.
 
+🧂 REGLA DE SODIO (salud cardiovascular — meta WHO <2000 mg/día): controla la sal. NO uses "sal y pimienta al gusto" genérico en cada plato; especifica una cantidad MEDIDA y modesta de sal (máx ~1 g = ¼ cucharadita por día repartido) y prioriza especias SIN sodio para dar sabor: ajo, cebolla, comino, orégano, cilantro, limón, pimienta. Evita Tajín, cubitos/sazón en polvo y salsas saladas; si usas salsa de soya, que sea baja en sodio y en cantidad mínima.
+
 {blocked_text}
 """

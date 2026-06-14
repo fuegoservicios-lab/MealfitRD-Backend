@@ -8291,6 +8291,12 @@ PORTION_QUANTIZE_ENABLED = _env_bool("MEALFIT_PORTION_QUANTIZE", True)
 # concentraba 48% kcal / 62% proteína. Flip a False → vuelve al cal_share del LLM (legacy).
 SLOT_DISTRIBUTION_ENABLED = _env_bool("MEALFIT_SLOT_DISTRIBUTION", True)
 
+# [P3-MICRONUTRIENTS · 2026-06-13] Computa el panel de micros del plan (sodio/fibra/azúcar/
+# vit D/calcio/hierro/B12/potasio) vs DRI/WHO e inyecta un reporte ADVISORY a `result`
+# (con sugerencia de suplemento para los gaps estructurales). NO es un gate duro → cero
+# loops de regen. Cierra el hallazgo de la auditoría. Flip a False → no computa el reporte.
+MICRONUTRIENT_REPORT_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_REPORT", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -9896,6 +9902,24 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _q_e:
             logger.warning(f"[P3-PORTION-QUANTIZE] deshabilitado por error: "
                            f"{type(_q_e).__name__}: {_q_e}")
+
+    # [P3-MICRONUTRIENTS · 2026-06-13] Reporte advisory del panel clínico de micros vs
+    # DRI/WHO (sex-aware). Corre tras la cuantización (refleja porciones finales). Inyecta
+    # `result["micronutrient_report"]` para PDF/coach. NO bloquea (gaps estructurales como
+    # la vit D rara vez se cierran con alimentos enteros → sugerencia de suplemento). Fail-safe.
+    if MICRONUTRIENT_REPORT_ENABLED:
+        try:
+            from micronutrients import build_micronutrient_report
+            from nutrition_db import IngredientNutritionDB as _MNDB
+            _sex = form_data.get("gender", "female")
+            _mn = build_micronutrient_report(result, _MNDB(), sex=_sex)
+            result["micronutrient_report"] = _mn
+            _ngaps = len(_mn.get("gaps", []))
+            logger.info(f"🧪 [P3-MICRONUTRIENTS] Panel de micros computado "
+                        f"(cobertura {int(_mn.get('coverage', 0)*100)}%, {_ngaps} gap(s) advisory)")
+        except Exception as _mn_e:
+            logger.warning(f"[P3-MICRONUTRIENTS] deshabilitado por error: "
+                           f"{type(_mn_e).__name__}: {_mn_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB

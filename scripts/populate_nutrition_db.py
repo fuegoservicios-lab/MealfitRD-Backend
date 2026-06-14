@@ -141,9 +141,34 @@ def _nut(food, *names):
     return 0.0
 
 
+def _extract_all(food):
+    """[P3-MICRONUTRIENTS] Extrae macros + micros por 100g de un food USDA → dict.
+    Vit D: prefiere mcg ("Vitamin D (D2 + D3)"); si solo hay IU, convierte (1 mcg = 40 IU).
+    Micros None si la fila no los reporta (frecuente en SR Legacy) → degradación grácil."""
+    vit_d = _nut(food, "Vitamin D (D2 + D3)")
+    if vit_d == 0.0:
+        iu = _nut(food, "Vitamin D (D2 + D3), International Units")
+        vit_d = round(iu / 40.0, 3) if iu else 0.0
+    return {
+        "p": _nut(food, "Protein"),
+        "c": _nut(food, "Carbohydrate, by difference"),
+        "fat": _nut(food, "Total lipid (fat)"),
+        "fiber": _nut(food, "Fiber, total dietary"),
+        "sodium": _nut(food, "Sodium, Na"),
+        "vit_d": vit_d,
+        "calcium": _nut(food, "Calcium, Ca"),
+        "iron": _nut(food, "Iron, Fe"),
+        "b12": _nut(food, "Vitamin B-12"),
+        "sugars": _nut(food, "Sugars, total including NLEA", "Sugars, total", "Total Sugars"),
+        "potassium": _nut(food, "Potassium, K"),
+        "fdc": food.get("fdcId"),
+        "desc": food.get("description"),
+    }
+
+
 def fetch_usda_by_fdc(fdc_id):
     """Fetch EXACTO por fdcId (endpoint /food/{id}) — determinista, sin ranking de
-    búsqueda. Para pinear el alimento correcto cuando search eligió mal."""
+    búsqueda. Para pinear el alimento correcto cuando search eligió mal. → dict de _extract_all."""
     url = f"https://api.nal.usda.gov/fdc/v1/food/{fdc_id}"
     for attempt in range(3):
         r = requests.get(url, params={"api_key": USDA_KEY}, timeout=25)
@@ -156,17 +181,14 @@ def fetch_usda_by_fdc(fdc_id):
         if r.status_code == 404:
             return None
         r.raise_for_status()
-        f = r.json()
-        return (_nut(f, "Protein"), _nut(f, "Carbohydrate, by difference"),
-                _nut(f, "Total lipid (fat)"), _nut(f, "Fiber, total dietary"),
-                _nut(f, "Sodium, Na"), f.get("fdcId"), f.get("description"))
+        return _extract_all(r.json())
     return None
 
 
 def fetch_usda(query):
-    """Devuelve (p, c, f, fiber, sodium, fdc_id, desc) por 100g, o None si no hay match.
-    Trae 5 candidatos y elige el primero con macros reales (P+C+F>0): hay filas
-    Foundation con todos los nutrientes en 0 (e.g. Oil, soybean fdc#748366)."""
+    """Devuelve dict de _extract_all por 100g, o None si no hay match. Trae 5 candidatos
+    y elige el primero con macros reales (P+C+F>0): hay filas Foundation con todos los
+    nutrientes en 0 (e.g. Oil, soybean fdc#748366)."""
     params = {"query": query, "api_key": USDA_KEY, "dataType": "Foundation,SR Legacy", "pageSize": 5}
     for attempt in range(3):
         r = requests.get(USDA_SEARCH, params=params, timeout=25)
@@ -182,14 +204,10 @@ def fetch_usda(query):
             return None
         best = None
         for f in foods:
-            p = _nut(f, "Protein")
-            c = _nut(f, "Carbohydrate, by difference")
-            fat = _nut(f, "Total lipid (fat)")
-            cand = (p, c, fat, _nut(f, "Fiber, total dietary"), _nut(f, "Sodium, Na"),
-                    f.get("fdcId"), f.get("description"))
+            cand = _extract_all(f)
             if best is None:
                 best = cand
-            if (p + c + fat) > 0:  # primera fila con macros reales gana
+            if (cand["p"] + cand["c"] + cand["fat"]) > 0:  # primera fila con macros reales gana
                 return cand
         return best  # todas en 0 (e.g. agua) → la primera
     return None
@@ -217,19 +235,23 @@ def main():
     for name in names:
         try:
             # Precedencia: FDC_PIN (exacto) > MANUAL > QUERY_OVERRIDE/USDA_QUERY.
+            # micros = {vit_d, calcium, iron, b12, sugars, potassium} (None para manual).
             if name in FDC_PIN:
                 res = fetch_usda_by_fdc(FDC_PIN[name])
                 if res == "RATE_LIMITED":
                     print(f"  ⏳ {name}: DEMO_KEY agotado"); miss += 1; continue
                 if not res:
                     print(f"  ❌ {name}: fdc#{FDC_PIN[name]} sin data"); miss += 1; continue
-                p, c, fat, fiber, sodium, fdc, desc = res
-                dd = name in _VIVERES_DD
-                src = "usda"
+                p, c, fat, fiber, sodium = res["p"], res["c"], res["fat"], res["fiber"], res["sodium"]
+                vit_d, calcium, iron, b12, sugars, potassium = (
+                    res["vit_d"], res["calcium"], res["iron"], res["b12"], res["sugars"], res["potassium"])
+                fdc, desc, dd, src = res["fdc"], res["desc"], name in _VIVERES_DD, "usda"
                 time.sleep(0.8 if USDA_KEY != "DEMO_KEY" else 2.2)
             elif name in MANUAL_MACROS:
                 kcal_src = MANUAL_MACROS[name]
                 p, c, fat, fiber, sodium, dd = kcal_src[1], kcal_src[2], kcal_src[3], kcal_src[4], kcal_src[5], kcal_src[6]
+                # Manual: sin micros USDA → NULL (degradación grácil en el validador).
+                vit_d = calcium = iron = b12 = sugars = potassium = None
                 fdc, src, desc = None, "manual", "manual"
             elif name in QUERY_OVERRIDE or name in USDA_QUERY:
                 q = QUERY_OVERRIDE.get(name) or USDA_QUERY[name]
@@ -238,24 +260,29 @@ def main():
                     print(f"  ⏳ {name}: DEMO_KEY agotado (necesita USDA key propia)"); miss += 1; continue
                 if not res:
                     print(f"  ❌ {name}: sin match USDA ({q})"); miss += 1; continue
-                p, c, fat, fiber, sodium, fdc, desc = res
-                dd = name in _VIVERES_DD
-                src = "usda"
+                p, c, fat, fiber, sodium = res["p"], res["c"], res["fat"], res["fiber"], res["sodium"]
+                vit_d, calcium, iron, b12, sugars, potassium = (
+                    res["vit_d"], res["calcium"], res["iron"], res["b12"], res["sugars"], res["potassium"])
+                fdc, desc, dd, src = res["fdc"], res["desc"], name in _VIVERES_DD, "usda"
                 time.sleep(0.8 if USDA_KEY != "DEMO_KEY" else 2.2)  # rate-limit cortesía
             else:
                 print(f"  ⚠️  {name}: sin mapeo (revisar)"); miss += 1; continue
 
             kcal = round(4 * p + 4 * c + 9 * fat, 1)  # Atwater consistente con el solver
             tag = "📝manual" if src == "manual" else f"🌐usda#{fdc}"
-            print(f"  ✅ {name:28} {tag:16} kcal={kcal:6} P{p:5.1f} C{c:5.1f} F{fat:5.1f}  ({str(desc)[:34]})")
+            _mtag = "" if src == "manual" else f" Na{sodium:4.0f} Fib{fiber:4.1f} VitD{vit_d or 0:4.1f} Ca{calcium or 0:4.0f}"
+            print(f"  ✅ {name:28} {tag:16} kcal={kcal:6} P{p:5.1f} C{c:5.1f} F{fat:5.1f}{_mtag}")
             if not args.dry_run:
                 cur.execute("""UPDATE master_ingredients SET
                         kcal_per_100g=%s, protein_g_per_100g=%s, carbs_g_per_100g=%s,
                         fats_g_per_100g=%s, fiber_g_per_100g=%s, sodium_mg_per_100g=%s,
+                        vitamin_d_mcg_per_100g=%s, calcium_mg_per_100g=%s, iron_mg_per_100g=%s,
+                        vitamin_b12_mcg_per_100g=%s, sugars_g_per_100g=%s, potassium_mg_per_100g=%s,
                         nutrition_source=%s, nutrition_source_date=CURRENT_DATE,
                         fdc_id=%s, is_dominican_cultivar=%s
                        WHERE name=%s""",
-                    (kcal, p, c, fat, fiber, sodium, src, fdc, dd, name))
+                    (kcal, p, c, fat, fiber, sodium, vit_d, calcium, iron, b12, sugars, potassium,
+                     src, fdc, dd, name))
             if src == "manual":
                 manual += 1
             else:
