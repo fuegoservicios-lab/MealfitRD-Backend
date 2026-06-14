@@ -155,7 +155,9 @@ def test_solver_dominant_macro_classification(db):
         {"protein": 100, "carbs": 0, "fats": 20}, db=db,
     )
     oil = res["ingredients"][0]
-    assert oil["quantity"] == pytest.approx(20.0)  # 10g × (20/10) fats factor
+    # 10g × (20/10) fats → ~20g. El solver LSQ con regularización hacia x≈1 da ~19.99 (no
+    # exacto 20.0): clava el target de grasa igual de bien, con tolerancia medible.
+    assert oil["quantity"] == pytest.approx(20.0, abs=0.5)
 
 
 # ───────────────────────── allocate_macros_per_slot ─────────────────────

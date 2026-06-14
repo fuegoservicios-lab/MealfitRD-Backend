@@ -26,11 +26,112 @@ LP entonces — no antes (convención del repo: no diseñar para requisitos hipo
 """
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 
 # Aportes calóricos Atwater (kcal/g) por macro — para decidir el macro dominante.
 _KCAL_PER_G = {"protein": 4.0, "carbs": 4.0, "fats": 9.0}
+
+
+def _envf(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _envb(name: str, default: bool) -> bool:
+    return str(os.environ.get(name, str(default))).strip().lower() in ("1", "true", "yes", "on")
+
+
+# [M2-SOLVER-NNLS · 2026-06-14] Solver multi-restricción: reemplaza el escalado GREEDY por-grupo
+# (que con ingredientes acoplados —pollo=P+grasa, arroz=C+P— no clava los 4 macros a la vez) por
+# mínimos cuadrados ACOTADOS con regularización hacia x≈1, resuelto por descenso por coordenadas
+# (box-QP convexo, exacto por coordenada, determinista, SIN dependencias — scipy no está instalado).
+# El benchmark M2 midió la fuga: proteína 16% MAPE / solo 48% en ±10%. Este es el fix. Fallback al
+# greedy si falla o se desactiva. Pesos: kcal+proteína priorizados (lo clínicamente crítico).
+SOLVER_LSQ = _envb("MEALFIT_SOLVER_LSQ", True)
+SOLVER_W_KCAL = _envf("MEALFIT_SOLVER_W_KCAL", 1.5)
+SOLVER_W_PROTEIN = _envf("MEALFIT_SOLVER_W_PROTEIN", 2.0)
+SOLVER_W_CARBS = _envf("MEALFIT_SOLVER_W_CARBS", 1.0)
+SOLVER_W_FATS = _envf("MEALFIT_SOLVER_W_FATS", 1.0)
+# Regularización hacia el porcionado original del LLM (x=1): evita porciones absurdas (un
+# ingrediente a min_scale y otro a max_scale solo para clavar macros). Más alto = más fiel al LLM.
+SOLVER_LSQ_REG = _envf("MEALFIT_SOLVER_LSQ_REG", 0.15)
+
+
+def _box_lsq(A_rows: list, b: list, weights: list, lo: float, hi: float,
+             reg: float, iters: int = 150) -> list:
+    """Mínimos cuadrados ACOTADOS con regularización hacia x=1, por descenso por coordenadas.
+    Minimiza  Σ_r w_r (Σ_j A[r][j]·x_j − b[r])²  +  reg·Σ_j (x_j − 1)²  s.a. x_j ∈ [lo, hi].
+    Problema convexo pequeño (≤~15 vars, ≤4 filas) → CD con minimización 1D exacta por coordenada
+    converge al óptimo global. Determinista, pure-python (sin numpy/scipy). Retorna x (factores)."""
+    nrows = len(A_rows)
+    n = len(A_rows[0]) if nrows else 0
+    x = [1.0] * n
+    if n == 0:
+        return x
+    denom = [reg + sum(weights[r] * A_rows[r][i] ** 2 for r in range(nrows)) for i in range(n)]
+    res = [sum(A_rows[r][i] * x[i] for i in range(n)) - b[r] for r in range(nrows)]  # Σ A·x − b
+    for _ in range(iters):
+        max_delta = 0.0
+        for i in range(n):
+            if denom[i] <= 0:
+                continue
+            num = reg  # = reg·1 (target del prior)
+            for r in range(nrows):
+                a = A_rows[r][i]
+                if a != 0.0:
+                    num -= weights[r] * a * (res[r] - a * x[i])  # c_r = res_r − a·x_i
+            xi = num / denom[i]
+            xi = lo if xi < lo else (hi if xi > hi else xi)
+            d = xi - x[i]
+            if d != 0.0:
+                for r in range(nrows):
+                    res[r] += A_rows[r][i] * d
+                x[i] = xi
+                if abs(d) > max_delta:
+                    max_delta = abs(d)
+        if max_delta < 1e-7:
+            break
+    return x
+
+
+def _compute_scale_factors(entries: list, tgt: dict, min_scale: float, max_scale: float) -> tuple:
+    """Factor de escalado POR-INGREDIENTE (alineado con `entries`). Usa el solver LSQ multi-macro
+    si está habilitado; si no (o si falla), cae al greedy por-grupo. `entries[i]` debe tener
+    `macros` ({kcal,protein,carbs,fats}|None) y `group` (macro dominante|None). Retorna (factors, method)."""
+    factors = [1.0] * len(entries)
+    sc = [i for i, e in enumerate(entries) if e.get("macros") and e.get("group")]
+    if not sc:
+        return factors, "none"
+    if SOLVER_LSQ:
+        try:
+            _w = {"kcal": SOLVER_W_KCAL, "protein": SOLVER_W_PROTEIN,
+                  "carbs": SOLVER_W_CARBS, "fats": SOLVER_W_FATS}
+            A_rows, brow, wrow = [], [], []
+            for m in ("kcal", "protein", "carbs", "fats"):
+                if tgt.get(m, 0) > 0:  # solo ecuaciones con target real (evita forzar macro→0)
+                    A_rows.append([entries[i]["macros"][m] for i in sc])
+                    brow.append(float(tgt[m]))
+                    wrow.append(_w[m])
+            if A_rows:
+                xs = _box_lsq(A_rows, brow, wrow, min_scale, max_scale, SOLVER_LSQ_REG)
+                for j, i in enumerate(sc):
+                    factors[i] = xs[j]
+                return factors, "lsq"
+        except Exception:
+            pass
+    # Fallback GREEDY por grupo de macro dominante (algoritmo v1).
+    gf = {}
+    for macro in _KCAL_PER_G:
+        current = sum(entries[i]["macros"][macro] for i in sc if entries[i]["group"] == macro)
+        tv = tgt.get(macro, 0)
+        gf[macro] = max(min_scale, min(max_scale, tv / current)) if (current > 0 and tv > 0) else 1.0
+    for i in sc:
+        factors[i] = gf[entries[i]["group"]]
+    return factors, "greedy"
 
 
 def _get(d: dict, *keys, default=0.0):
@@ -117,37 +218,32 @@ def solve_portion_macros(
                         "raw_qty": qty, "unit": unit, "name": name,
                         "macros": macros, "group": group})
 
-    # 2) factor de escalado por grupo de macro.
+    # 2) factor de escalado POR-INGREDIENTE (LSQ multi-macro; greedy fallback). El `report`
+    #    greedy por-macro se conserva como telemetría.
+    ing_factors, method = _compute_scale_factors(entries, tgt, min_scale, max_scale)
     report = {}
-    factors = {}
     for macro in _KCAL_PER_G:  # protein, carbs, fats
         current = sum(e["macros"][macro] for e in entries
                       if e["macros"] and e["group"] == macro)
         target_v = tgt[macro]
-        factor = 1.0
-        applied = False
-        if current > 0 and target_v > 0:
-            factor = max(min_scale, min(max_scale, target_v / current))
-            applied = abs(factor - 1.0) > 1e-9
-        factors[macro] = factor
+        gfactor = max(min_scale, min(max_scale, target_v / current)) if (current > 0 and target_v > 0) else 1.0
         report[macro] = {"current": round(current, 2), "target": round(target_v, 2),
-                         "factor": round(factor, 4), "applied": applied}
+                         "factor": round(gfactor, 4), "applied": abs(gfactor - 1.0) > 1e-9}
 
-    # 3) aplicar el factor a la cantidad de cada ingrediente de su grupo.
+    # 3) aplicar el factor por-ingrediente a la cantidad.
     out_ingredients = []
     achieved = {"kcal": 0.0, "protein": 0.0, "carbs": 0.0, "fats": 0.0}
     resolved = 0
-    for e, ing in zip(entries, ingredients):
+    for idx, (e, ing) in enumerate(zip(entries, ingredients)):
         new_ing = dict(ing) if isinstance(ing, dict) else {"name": e["name"],
                                                             "quantity": e["raw_qty"], "unit": e["unit"]}
         if e["macros"] and e["group"]:
-            f = factors[e["group"]]
+            f = ing_factors[idx]
             base_q = e["raw_qty"]
             try:
-                scaled_q = float(base_q) * f
-                new_ing["quantity"] = round(scaled_q, 2)
+                new_ing["quantity"] = round(float(base_q) * f, 2)
             except (TypeError, ValueError):
-                scaled_q = base_q
+                pass
             for m in achieved:
                 achieved[m] += e["macros"][m] * f
             resolved += 1
@@ -172,6 +268,7 @@ def solve_portion_macros(
         "achieved": achieved,
         "target": tgt,
         "report": report,
+        "method": method,
         "resolved_count": resolved,
         "unresolved": len(ingredients) - resolved,
         "converged": converged,
@@ -211,26 +308,25 @@ def solve_meal_macros(
                 group = max(contrib, key=contrib.get)
         entries.append({"s": s, "macros": macros, "group": group})
 
-    report, factors = {}, {}
+    # [M2-SOLVER-NNLS] Factor POR-INGREDIENTE (LSQ multi-macro; greedy fallback). Reemplaza el
+    # factor único por-grupo. El `report` greedy se conserva como telemetría por-macro.
+    ing_factors, method = _compute_scale_factors(entries, tgt, min_scale, max_scale)
+    report = {}
     for macro in _KCAL_PER_G:
         current = sum(e["macros"][macro] for e in entries
                       if e["macros"] and e["group"] == macro)
         target_v = tgt[macro]
-        factor, applied = 1.0, False
-        if current > 0 and target_v > 0:
-            factor = max(min_scale, min(max_scale, target_v / current))
-            applied = abs(factor - 1.0) > 1e-9
-        factors[macro] = factor
+        gfactor = max(min_scale, min(max_scale, target_v / current)) if (current > 0 and target_v > 0) else 1.0
         report[macro] = {"current": round(current, 2), "target": round(target_v, 2),
-                         "factor": round(factor, 4), "applied": applied}
+                         "factor": round(gfactor, 4), "applied": abs(gfactor - 1.0) > 1e-9}
 
     out_strings = []
     factors_applied = []  # factor por-ingrediente (1.0 = intacto), alineado con input
     achieved = {"kcal": 0.0, "protein": 0.0, "carbs": 0.0, "fats": 0.0}
     resolved = 0
-    for e in entries:
+    for idx, e in enumerate(entries):
         if e["macros"] and e["group"]:
-            f = factors[e["group"]]
+            f = ing_factors[idx]
             out_strings.append(rescale_ingredient_string(e["s"], f))
             factors_applied.append(f)
             for m in achieved:
@@ -260,6 +356,7 @@ def solve_meal_macros(
         "achieved": achieved,
         "target": tgt,
         "report": report,
+        "method": method,
         "resolved_count": resolved,
         "unresolved": len(ingredient_strings) - resolved,
         "converged": converged,
