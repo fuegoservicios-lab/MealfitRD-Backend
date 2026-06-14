@@ -358,32 +358,37 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
     """
     try:
         # 1. Guardar Plan O(1) Arrays
-        if supabase:
-            # [P2-PERSIST-NAN-GUARD · 2026-06-13] Sanear NaN/Inf antes del INSERT (mismo
-            # guard que save_partial_plan_get_id) — Postgres jsonb los rechaza.
-            plan_data = _scrub_plan_data_floats(plan_data, user_id)
+        # [P2-NEON-PERSIST-FIX · 2026-06-13] Removido el guard `if supabase:` (era de la era
+        # Supabase; en Neon `db.supabase` es None → se saltaba el guardado ENTERO y luego
+        # crasheaba con UnboundLocalError en `raw_ingredients`). Modo de fallo destapado por un
+        # test en vivo autenticado: el path no-chunked / fallback (cuando el SSE generator
+        # muere pre-postprocess, ej. conexión del cliente cae a mitad de generación) NO
+        # persistía el plan → se perdía silenciosamente + alerta plan_persist_failed.
+        # `save_new_meal_plan_atomic` (db_plans) es 100% Neon-native (execute_sql_*).
+        # [P2-PERSIST-NAN-GUARD · 2026-06-13] Sanear NaN/Inf antes del INSERT — Postgres jsonb los rechaza.
+        plan_data = _scrub_plan_data_floats(plan_data, user_id)
 
-            calories = plan_data.get("calories", 0)
-            macros = plan_data.get("macros", {})
+        calories = plan_data.get("calories", 0)
+        macros = plan_data.get("macros", {})
 
-            meal_names = []
-            ingredients = []
-            raw_ingredients = []
-            for d in plan_data.get("days", []):
-                for m in d.get("meals", []):
-                    if m.get("name"):
-                        meal_names.append(m.get("name"))
-                    if m.get("ingredients"):
-                        ingredients.extend(m.get("ingredients"))
-                        raw_ingredients.extend(m.get("ingredients"))
+        meal_names = []
+        ingredients = []
+        raw_ingredients = []
+        for d in plan_data.get("days", []):
+            for m in d.get("meals", []):
+                if m.get("name"):
+                    meal_names.append(m.get("name"))
+                if m.get("ingredients"):
+                    ingredients.extend(m.get("ingredients"))
+                    raw_ingredients.extend(m.get("ingredients"))
 
-            # Nombre creativo generado por IA (Gemini Flash-Lite)
-            plan_name = generate_plan_title(plan_data)
+        # Nombre creativo generado por IA
+        plan_name = generate_plan_title(plan_data)
 
-            # Extraer _profile_embedding si fue inyectado por la caché semántica
-            profile_embedding = plan_data.pop("_profile_embedding", None)
+        # Extraer _profile_embedding si fue inyectado por la caché semántica
+        profile_embedding = plan_data.pop("_profile_embedding", None)
 
-            insert_data = {
+        insert_data = {
                 "user_id": user_id,
                 # [P2-ORCH-10 · 2026-05-28] Estampar generation_status='complete'
                 # (simétrico con el path de chunking que estampa 'partial' ~línea 147).
@@ -400,28 +405,24 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                 "macros": macros,
                 "meal_names": meal_names,
                 "ingredients": ingredients
-            }
-            if profile_embedding:
-                insert_data["profile_embedding"] = profile_embedding
+        }
+        if profile_embedding:
+            insert_data["profile_embedding"] = profile_embedding
 
-            # Añadir técnicas de cocción si están disponibles
-            if selected_techniques:
-                insert_data["techniques"] = selected_techniques
+        # Añadir técnicas de cocción si están disponibles
+        if selected_techniques:
+            insert_data["techniques"] = selected_techniques
 
+        # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
+        if check_recent_meal_plan_exists(user_id, max_seconds=30):
+            logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
+            return
 
-            # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
-            if check_recent_meal_plan_exists(user_id, max_seconds=30):
-                logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
-                return
+        # [P0-2/ATOMIC + P2-PARTIAL-PLAN-1] Cancelar chunks + liberar reservas + INSERT en
+        # una sola transacción (Neon-native).
+        save_new_meal_plan_atomic(user_id, insert_data, return_id=False)
+        logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
 
-            # [P0-2/ATOMIC + P2-PARTIAL-PLAN-1] Cancelar chunks + liberar
-            # reservas + INSERT en una sola transacción. Único path —
-            # eliminado el branch pre-P2-PARTIAL-PLAN-1 que hacía CANCEL
-            # out-of-tx via execute_sql_write antes de
-            # save_new_meal_plan_robust.
-            save_new_meal_plan_atomic(user_id, insert_data, return_id=False)
-            logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
-            
         # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad)
         if raw_ingredients:
             # Conjunto de términos base canónicos (ej: "pollo", "platano verde", "aguacate")
