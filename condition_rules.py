@@ -12,7 +12,10 @@ Estado del enforcement por condición (honesto):
 - ERC: cap de proteína 0.8 g/kg + gate nefrólogo → enforced en graph (no migrado aquí aún) + referral.
 - DM2: fibra ADA (advisory) + sustitución azúcar→stevia (enforced, via este motor).
 - HTA: sustitución de sodio (embutidos/cubitos/bacalao→fresco) ENFORCED via este motor (NUEVO).
-- Dislipidemia: prompt (satfat<7% requiere columna satfat que falta en master_ingredients → M3).
+- Dislipidemia: sustitución de grasa saturada (mantequilla→aceite, lácteos enteros→bajos en grasa,
+  tocino/chicharrón→lean) ENFORCED via este motor + techo satfat<7% kcal medido en el panel
+  (columna saturated_fat_g poblada desde USDA, P4-UNIFIED-RESOLVER). El swap baja el LDL preservando
+  proteína; el techo del panel marca el residual. [P4-DYSLIPIDEMIA-ENFORCED · 2026-06-14]
 - Anemia: prompt + densidad de hierro (el panel ya computa iron_mg).
 """
 from __future__ import annotations
@@ -82,6 +85,33 @@ _HTA_SODIUM_SUBS = (
 )
 _HTA_SODIUM_NEGATIVES = ("baja en sodio", "bajo en sodio", "sin sal", "sin sodio", "reducido en sodio")
 
+# [P4-DYSLIPIDEMIA-ENFORCED · 2026-06-14] Dislipidemia → grasa saturada: swaps fuente-grasa-saturada →
+# versión magra/insaturada de la MISMA categoría (preserva proteína, baja el LDL). preserve_qty=True: el
+# reemplazo conserva la cantidad/volumen (misma comida, versión leaner) y el delta de macros lo ajusta el
+# guard. Tokens ESTRECHOS (lección del bug 'soya'): nada de 'manteca' desnudo (matchea 'mantecado'),
+# 'nata' (matchea 'natural'/'natilla') ni 'crema' (matchea 'crema de maní') — solo frases inequívocas.
+_DYSLIPIDEMIA_SATFAT_SUBS = (
+    (("mantequilla", "manteca de cerdo", "manteca vegetal", "margarina"), "Aceite de oliva", "mantequilla/manteca/margarina", True),
+    # NOTA: 'leche entera' NO se sustituye — el catálogo conflaciona 'leche entera' y 'leche descremada'
+    # en la MISMA fila `Leche`, así que el swap sería un no-op clínico (sin reducción de grasa real). Se
+    # reactivará cuando exista una fila distinta de leche descremada. (Hallazgo de review adversaria.)
+    (("crema de leche", "crema espesa"), "Leche evaporada", "crema de leche", True),
+    (("queso amarillo", "queso cheddar", "queso crema"), "Queso cottage", "queso alto en grasa", True),
+    (("yogur griego entero", "yogurt griego entero", "yogur entero", "yogurt entero", "yogur natural entero"),
+     "Yogurt griego sin azúcar", "yogur entero", True),
+    (("tocino", "tocineta", "chicharron", "chicharrón"), "Pechuga de pollo", "tocino/chicharrón", True),
+)
+_DYSLIPIDEMIA_NEGATIVES = ("descremad", "baja en grasa", "bajo en grasa", "light", "desnatad",
+                           "sin grasa", "0% grasa", "0 grasa",
+                           # nueces/semillas = grasa INSATURADA (saludable): 'mantequilla de maní/almendra'
+                           # NO debe caer en el swap de 'mantequilla'. (Veto análogo al 'baja en sodio' de HTA.)
+                           "mani", "maní", "cacahuate", "almendra", "marañon", "maranon", "semilla",
+                           # [review adversaria] 'chicharron'/'tocino' desnudos colisionan con
+                           # 'chicharrón DE POLLO' (pollo frito criollo = pollo), 'tocino DE PAVO' (ya magro)
+                           # y 'tocino DE CIELO' (postre). Ningún swap de dislipidemia debe disparar sobre
+                           # un '…de pollo/pavo'. 'coco' (crema de coco) NO es lácteo → no mislabelear.
+                           "de pollo", "de pavo", "de cielo", "coco")
+
 
 # ── El REGISTRO declarativo (SSOT del comportamiento por condición) ──
 CONDITION_RULES: tuple = (
@@ -125,7 +155,7 @@ CONDITION_RULES: tuple = (
     ),
     ConditionRule(
         id="dyslipidemia", label="Dislipidemia / colesterol alto", terms=DYSLIPIDEMIA_CONDITION_TERMS,
-        precedence=45,
+        precedence=45, substitutions=_DYSLIPIDEMIA_SATFAT_SUBS, sub_negatives=_DYSLIPIDEMIA_NEGATIVES,
         prompt_block=(
             "🫀 REGLA CLÍNICA — DISLIPIDEMIA (AHA 2021/ACC 2025):\n"
             "   • GRASA SATURADA BAJA (<7% de las calorías): evita frituras, piel de pollo, grasa visible de "

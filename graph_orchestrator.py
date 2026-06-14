@@ -8674,7 +8674,12 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
                         for _old, _new in swaps:
                             _om = _db.macros_from_ingredient_string(_old) or {}
                             _nm = _db.macros_from_ingredient_string(_new) or {}
-                            if _om or _nm:
+                            # [review adversaria P4] AMBOS deben resolver para aplicar el delta. Si solo
+                            # uno resuelve, el delta sería asimétrico: reemplazo no-resuelve → resta el
+                            # viejo y suma 0 (pierde proteína, re-introduce el "0 silencioso"); viejo
+                            # no-resuelve → suma el nuevo sin restar (infla). En ambos casos dejamos los
+                            # macros intactos (conservador) — la sustitución textual + cantidad ya pasó.
+                            if _om and _nm:
                                 _touched = True
                                 for _k in _d:
                                     _d[_k] += (_nm.get(_k) or 0.0) - (_om.get(_k) or 0.0)
