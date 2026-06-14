@@ -59,6 +59,7 @@ def dri_targets(sex: str | None = "F") -> dict:
         "iron_mg":       {"floor": 8.0 if male else 18.0, "unit": "mg"},
         "b12_mcg":       {"floor": 2.4, "unit": "mcg"},
         "potassium_mg":  {"floor": 3400.0 if male else 2600.0, "unit": "mg"},
+        "magnesium_mg":  {"floor": 420.0 if male else 320.0, "unit": "mg"},   # [P4] DRI IOM
     }
 
 
@@ -66,6 +67,7 @@ _LABELS = {
     "fiber_g": "Fibra", "sodium_mg": "Sodio", "free_sugars_g": "Azúcares añadidos",
     "vit_d_mcg": "Vitamina D", "calcium_mg": "Calcio", "iron_mg": "Hierro",
     "b12_mcg": "Vitamina B12", "potassium_mg": "Potasio",
+    "magnesium_mg": "Magnesio", "saturated_fat_g": "Grasa saturada",
 }
 
 _SUPPLEMENT_NOTE = {
@@ -79,7 +81,43 @@ _SUPPLEMENT_NOTE = {
     "potassium_mg": "Aumenta frutas, vegetales y legumbres (habichuelas, guineo, batata, espinaca).",
     "sodium_mg": "Reduce la sal añadida (≤1 g/día) y usa especias sin sodio (ajo, comino, orégano, limón).",
     "free_sugars_g": "Reduce miel/azúcares añadidos; endulza con fruta o estevia.",
+    "magnesium_mg": "Aumenta vegetales de hoja verde, legumbres, nueces/semillas y granos integrales (clave del patrón DASH).",
+    "saturated_fat_g": "Reduce frituras, piel de pollo, grasa visible de carnes, embutidos, mantequilla y lácteos enteros; "
+                       "usa cocción al horno/plancha/hervido y grasas insaturadas (aguacate, aceite de oliva).",
 }
+
+
+# [P4-UNIFIED-RESOLVER · 2026-06-14] Detección de HTA y dislipidemia para los targets condicionales
+# (DASH Mg/K, techo de grasa saturada) — SSOT de términos en constants (mismo registro del motor).
+def _has_condition(conditions, terms) -> bool:
+    if not conditions:
+        return False
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        _sa = lambda x: x  # noqa: E731
+    try:
+        # Normaliza la condición (lower + sin acentos) — los `terms` ya son ascii lowercase. Robusto
+        # tanto si el caller pasó el string normalizado como crudo ("Hipertensión").
+        return any(any(t in _sa(str(c).lower()) for t in terms) for c in conditions)
+    except Exception:
+        return False
+
+
+def _has_hta(conditions) -> bool:
+    try:
+        from constants import HTA_CONDITION_TERMS
+        return _has_condition(conditions, HTA_CONDITION_TERMS)
+    except Exception:
+        return _has_condition(conditions, ("hipertens", "presion alta", "presión alta", "hta"))
+
+
+def _has_dyslipidemia(conditions) -> bool:
+    try:
+        from constants import DYSLIPIDEMIA_CONDITION_TERMS
+        return _has_condition(conditions, DYSLIPIDEMIA_CONDITION_TERMS)
+    except Exception:
+        return _has_condition(conditions, ("colesterol", "dislipid", "trigliceri", "ldl alto"))
 
 
 def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
@@ -89,7 +127,8 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
     days = plan.get("days") or []
     num_days = max(1, len(days))
     acc = {k: 0.0 for k in ("fiber_g", "sodium_mg", "free_sugars_g", "vit_d_mcg",
-                            "calcium_mg", "iron_mg", "b12_mcg", "potassium_mg")}
+                            "calcium_mg", "iron_mg", "b12_mcg", "potassium_mg",
+                            "magnesium_mg", "saturated_fat_g")}  # [P4] DASH Mg + dislipidemia satfat
     total_ings = resolved_ings = 0
     for day in days:
         for meal in day.get("meals", []) or []:
@@ -106,6 +145,8 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
                 acc["iron_mg"] += m.get("iron_mg") or 0.0
                 acc["b12_mcg"] += m.get("b12_mcg") or 0.0
                 acc["potassium_mg"] += m.get("potassium_mg") or 0.0
+                acc["magnesium_mg"] += m.get("magnesium_mg") or 0.0           # [P4-UNIFIED-RESOLVER]
+                acc["saturated_fat_g"] += m.get("saturated_fat_g") or 0.0     # [P4-UNIFIED-RESOLVER]
                 ing_low = str(ing).lower()
                 if any(t in ing_low for t in _ADDED_SUGAR_TERMS):
                     acc["free_sugars_g"] += m.get("sugars_g") or 0.0
@@ -141,6 +182,33 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
             "regla": f"Fibra ≥{targets['fiber_g']['floor']}g/día (≥{int(fiber_per_1000kcal)} g/1000 kcal)",
             "guia": "ADA 2025/2026 — calidad del carbohidrato (reemplaza %carbos/índice glucémico)",
             "actual": daily.get("fiber_g", 0.0),
+        })
+    # [P4-UNIFIED-RESOLVER] HTA → patrón DASH: eleva el PISO de potasio (4700 mg) y magnesio (500 mg)
+    # sobre el DRI general. Antes el balance DASH era PROMPT-confiado; ahora se evalúa con dato real
+    # (columnas potassium/magnesium pobladas desde USDA). El techo de sodio ya vive en el DRI general.
+    if _has_hta(conditions):
+        if 4700.0 > targets["potassium_mg"]["floor"]:
+            targets["potassium_mg"]["floor"] = 4700.0
+        if 500.0 > targets["magnesium_mg"]["floor"]:
+            targets["magnesium_mg"]["floor"] = 500.0
+        condition_targets.append({
+            "condicion": "Hipertensión (patrón DASH)",
+            "regla": "Potasio ≥4700 mg/día + Magnesio ≥500 mg/día + Sodio <2000 mg/día",
+            "guia": "DASH (NHLBI/AHA-ACC) — el balance Na/K/Mg/Ca baja la presión arterial",
+            "actual": {"potasio": daily.get("potassium_mg", 0.0), "magnesio": daily.get("magnesium_mg", 0.0),
+                       "sodio": daily.get("sodium_mg", 0.0)},
+        })
+    # [P4-UNIFIED-RESOLVER] Dislipidemia → techo de GRASA SATURADA <7% de las kcal (AHA/ACC). Antes era
+    # PROMPT-only (faltaba la columna satfat); ahora se evalúa con dato real. Solo se añade el target
+    # cuando hay dislipidemia (todos consumen algo de satfat; la regla <7% es condicional).
+    if _has_dyslipidemia(conditions) and daily_kcal and daily_kcal > 0:
+        _satfat_ceiling = round(0.07 * daily_kcal / 9.0, 1)   # 7% de kcal → gramos (grasa = 9 kcal/g)
+        targets["saturated_fat_g"] = {"ceiling": _satfat_ceiling, "unit": "g"}
+        condition_targets.append({
+            "condicion": "Dislipidemia / colesterol alto",
+            "regla": f"Grasa saturada ≤{_satfat_ceiling}g/día (<7% de las kcal)",
+            "guia": "AHA 2021 / ACC 2025 — la grasa saturada eleva el LDL",
+            "actual": daily.get("saturated_fat_g", 0.0),
         })
     panel, gaps = [], []
     for key, tgt in targets.items():

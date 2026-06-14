@@ -277,6 +277,11 @@ class NutritionInfo:
     b12_mcg: Optional[float] = None
     sugars_g: Optional[float] = None
     potassium_mg: Optional[float] = None
+    # [P4-UNIFIED-RESOLVER] columnas nuevas para DASH (Mg) + dislipidemia (satfat/colesterol) + ERC (P).
+    magnesium_mg: Optional[float] = None
+    phosphorus_mg: Optional[float] = None
+    saturated_fat_g: Optional[float] = None
+    cholesterol_mg: Optional[float] = None
 
 
 class IngredientNutritionDB:
@@ -378,6 +383,10 @@ class IngredientNutritionDB:
             b12_mcg=_num(row.get("vitamin_b12_mcg_per_100g")),
             sugars_g=_num(row.get("sugars_g_per_100g")),
             potassium_mg=_num(row.get("potassium_mg_per_100g")),
+            magnesium_mg=_num(row.get("magnesium_mg_per_100g")),
+            phosphorus_mg=_num(row.get("phosphorus_mg_per_100g")),
+            saturated_fat_g=_num(row.get("saturated_fat_g_per_100g")),
+            cholesterol_mg=_num(row.get("cholesterol_mg_per_100g")),
         )
 
     # ---- conversión a gramos -------------------------------------------
@@ -474,6 +483,10 @@ class IngredientNutritionDB:
             "b12_mcg": _sc(info.b12_mcg),
             "sugars_g": _sc(info.sugars_g),
             "potassium_mg": _sc(info.potassium_mg),
+            "magnesium_mg": _sc(info.magnesium_mg),
+            "phosphorus_mg": _sc(info.phosphorus_mg),
+            "saturated_fat_g": _sc(info.saturated_fat_g),
+            "cholesterol_mg": _sc(info.cholesterol_mg),
         }
 
     def macros_for_line(self, qty, unit, raw_name: str) -> Optional[dict]:
