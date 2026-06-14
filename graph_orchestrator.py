@@ -8492,6 +8492,71 @@ def _is_diabetes_condition(form_data) -> bool:
     return any(any(t in c for t in _DIABETES_CONDITION_TERMS) for c in _condition_strings(form_data))
 
 
+def _cap_macros_dict_renal(md, cap_g: float, reassign_to: str):
+    """[P3-CONDITION-RULES] Capea la proteína de un dict de macros (`{protein_g/_str, ...}`) al
+    cap renal in place y reasigna las kcal liberadas a grasa (diabético) o carbo (iso-calórico).
+    Retorna la proteína original (g) si capeó, None si ya estaba ≤ cap. Mantiene `_g` y `_str`."""
+    if not isinstance(md, dict):
+        return None
+    p = _meal_macro_num(md.get("protein_g") if md.get("protein_g") is not None else md.get("protein_str"))
+    if p <= cap_g:
+        return None
+    freed = (p - cap_g) * 4.0  # proteína = 4 kcal/g
+    icap = int(round(cap_g))
+    md["protein_g"] = icap
+    md["protein_str"] = f"{icap}g"
+    if reassign_to == "fat":
+        f = _meal_macro_num(md.get("fats_g") if md.get("fats_g") is not None else md.get("fats_str"))
+        nf = int(round(f + freed / 9.0))
+        md["fats_g"] = nf; md["fats_str"] = f"{nf}g"
+    else:
+        c = _meal_macro_num(md.get("carbs_g") if md.get("carbs_g") is not None else md.get("carbs_str"))
+        nc = int(round(c + freed / 4.0))
+        md["carbs_g"] = nc; md["carbs_str"] = f"{nc}g"
+    return int(round(p))
+
+
+def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
+    """[P3-CONDITION-RULES · 2026-06-14] CAP RENAL EN LA FUENTE. Capea el target de proteína de
+    `nutrition` (KDIGO ~0.8 g/kg) ANTES de que fluya al skeleton/generación/review/fallback. Es el
+    fix raíz del modo de fallo hallado en la prueba en vivo: con el target a 2.2 g/kg, el LLM
+    generaba un plan alto en proteína, el revisor médico renal-aware lo RECHAZABA críticamente
+    ('carga proteica excesiva para ERC') y caía a un fallback matemático SIN capear. Capeando el
+    target aquí, el LLM genera un plan renal-apropiado que el revisor aprueba, y el fallback (que
+    se construye desde `nutrition.macros.protein_g`) también queda capeado. Mutates `nutrition`.
+    Diabético-nefropatía: reasigna a grasa (no carbo). Fail-safe — no aplica si no hay peso."""
+    if not (CONDITION_RULES_ENABLED and isinstance(nutrition, dict) and _is_renal_condition(form_data)):
+        return
+    try:
+        wkg = _weight_kg_from_form(form_data)
+        if wkg <= 0:
+            return
+        cap_g = round(RENAL_PROTEIN_GKG_CEILING * wkg)
+        if cap_g <= 0:
+            return
+        diabetic = _is_diabetes_condition(form_data)
+        reassign = "fat" if diabetic else "carb"
+        was = None
+        for key in ("macros", "total_daily_macros"):
+            w = _cap_macros_dict_renal(nutrition.get(key), cap_g, reassign)
+            if w:
+                was = w
+        if was:
+            nutrition["renal_protein_cap"] = {
+                "applied": True, "gkg": RENAL_PROTEIN_GKG_CEILING, "protein_g": cap_g,
+                "was_g": was, "weight_kg": round(wkg, 1),
+                "guideline": "KDIGO 2024 (G3-G5 no-diálisis)", "reassigned_to": reassign,
+                "comorbid_diabetes": bool(diabetic), "source": "nutrition_target",
+            }
+            logger.warning(
+                f"🫘 [P3-CONDITION-RULES] ERC: target de proteína capeado en la FUENTE {was}g→{cap_g}g "
+                f"(~{RENAL_PROTEIN_GKG_CEILING} g/kg × {wkg:.1f}kg), kcal a {reassign}"
+                f"{' (DM2)' if diabetic else ''}. Fluye a generación/review/fallback.")
+    except Exception as _rcn_e:
+        logger.warning(f"[P3-CONDITION-RULES] cap renal en la fuente falló: "
+                       f"{type(_rcn_e).__name__}: {_rcn_e}")
+
+
 # [C2-ALLERGEN-GUARD · 2026-06-13] Mapa de sinónimos de alérgenos comunes (es-DO) → términos
 # que pueden aparecer en los ingredientes. Sesgo a SOBRE-detectar: para alérgenos, un falso
 # positivo (rechazar un plan seguro) es MUCHO mejor que un falso negativo (servir el alérgeno).
@@ -9817,6 +9882,15 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _renal_e:
             logger.warning(f"[P3-CONDITION-RULES] cap renal de proteína falló: "
                            f"{type(_renal_e).__name__}: {_renal_e}")
+
+    # [P3-CONDITION-RULES · 2026-06-14] Si el cap renal se aplicó EN LA FUENTE (nutrition_target),
+    # el bloque de arriba no-opeó (active_macros ya venían capeados) y `result["renal_protein_cap"]`
+    # quedó sin setear. Propagamos la meta de la fuente aquí → habilita el enforcement per-comida
+    # (abajo) y el gate FS9. Caso normal en prod (el cap vive en la fuente desde el fix raíz).
+    if (CONDITION_RULES_ENABLED and isinstance(nutrition, dict)
+            and (nutrition.get("renal_protein_cap") or {}).get("applied")
+            and not (result.get("renal_protein_cap") or {}).get("applied")):
+        result["renal_protein_cap"] = {**nutrition["renal_protein_cap"], "meals_enforced": False}
 
     # =========================================================
     # OPTIMIZACIÓN DETERMINISTA POST-ASSEMBLY (GAP 4)
@@ -16414,6 +16488,42 @@ def _apply_final_defense_guardrails(
     if final_state.get("profile_embedding") and final_state.get("plan_result"):
         final_state["plan_result"]["_profile_embedding"] = final_state["profile_embedding"]
 
+    # [P3-CONDITION-RULES · 2026-06-14] RED DE SEGURIDAD RENAL en el punto único de salida →
+    # cubre TODO plan entregado, incluido el fallback matemático (que bypassa assemble y su gate
+    # FS9). El protein del fallback YA viene capeado (se construye desde `nutrition` capeado en la
+    # fuente); aquí solo garantizamos el gate de derivación profesional + la meta del cap, para que
+    # un paciente renal NUNCA reciba un plan sin la advertencia de nefrólogo. No-op en el happy path
+    # (assemble ya seteó renal_gate). Fail-safe.
+    try:
+        _pf_renal = final_state.get("plan_result")
+        _rcap_src = nutrition.get("renal_protein_cap") if isinstance(nutrition, dict) else None
+        if (PRO_REVIEW_FLAG_ENABLED and isinstance(_pf_renal, dict)
+                and isinstance(_rcap_src, dict) and _rcap_src.get("applied")):
+            if not _pf_renal.get("renal_protein_cap"):
+                _pf_renal["renal_protein_cap"] = {**_rcap_src, "meals_enforced": True}
+            _rpr_existing = _pf_renal.get("requires_professional_review")
+            if not (isinstance(_rpr_existing, dict) and _rpr_existing.get("renal_gate")):
+                _cap_txt = (f" Se aplicó un límite conservador de proteína a ~{_rcap_src.get('protein_g')}g/día "
+                            f"(≈{RENAL_PROTEIN_GKG_CEILING} g/kg) como medida de seguridad.")
+                _comorbid_txt = (" Tienes diabetes y enfermedad renal a la vez: el balance fibra/leguminosas "
+                                 "vs potasio/fósforo/proteína SOLO lo define tu nefrólogo/nutricionista."
+                                 if _rcap_src.get("comorbid_diabetes") else "")
+                _conds = [str(c) for c in (actual_form_data.get("medicalConditions") or [])
+                          if str(c).strip().lower() not in _MEDICAL_NONE_SENTINELS]
+                _pf_renal["requires_professional_review"] = {
+                    "flag": True, "renal_gate": True, "conditions": _conds,
+                    "note": ("🫘 CONDICIÓN RENAL DETECTADA — IMPORTANTE: la nutrición en enfermedad renal "
+                             "depende de tu estadio (G1–G5) y de si estás en diálisis, y DEBE ser supervisada "
+                             "por tu nefrólogo o nutricionista renal." + _cap_txt + " Este plan NO es una "
+                             "prescripción renal: el potasio y el fósforo (críticos en ERC) no se ajustan aquí." +
+                             _comorbid_txt + " NO sigas este plan sin la validación de tu profesional de salud."),
+                }
+                logger.warning("🫘 [P3-CONDITION-RULES] Red de seguridad renal aplicó gate de derivación "
+                               "profesional al plan entregado (cubre fallback/paths sin assemble).")
+    except Exception as _rsafe_e:
+        logger.warning(f"[P3-CONDITION-RULES] red de seguridad renal falló: "
+                       f"{type(_rsafe_e).__name__}: {_rsafe_e}")
+
     # MEJORA 2: Extraer snapshot COMPLETO de señales activas para el Attribution Tracker.
     # CADA señal que se inyecta al LLM debe estar aquí para que el Attribution Tracker
     # pueda correlacionar su presencia con el Quality Score resultante y tomar decisiones
@@ -16568,7 +16678,11 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
 
     # 1. Pre-calcular nutrición
     nutrition = get_nutrition_targets(actual_form_data)
-    
+    # [P3-CONDITION-RULES · 2026-06-14] ERC: capear el target de proteína EN LA FUENTE (antes de
+    # generación/review/fallback). Sin esto, el LLM generaba un plan alto en proteína que el revisor
+    # renal-aware rechazaba → fallback matemático SIN capear (hallado en prueba en vivo). Fail-safe.
+    _apply_renal_cap_to_nutrition(nutrition, actual_form_data)
+
     # 2. Preparar contexto del historial (memoria inteligente y platos recientes)
     history_context = ""
     if memory_context:

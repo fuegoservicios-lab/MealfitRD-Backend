@@ -235,6 +235,55 @@ def test_floor_gate_skips_renal_capped_plan():
     assert "not _renal_capped_plan" in src
 
 
+def test_source_cap_renal_only_reassigns_to_carb():
+    """review-live#1 (raíz): el cap renal vive EN LA FUENTE (nutrition) → fluye a generación/
+    review/fallback. Renal-only: proteína a 0.8 g/kg, kcal liberadas a carbo."""
+    nutr = {"macros": {"protein_g": 154, "carbs_g": 300, "fats_g": 80, "protein_str": "154g",
+                       "carbs_str": "300g", "fats_str": "80g"},
+            "total_daily_macros": {"protein_g": 154, "carbs_g": 300, "fats_g": 80,
+                                   "protein_str": "154g", "carbs_str": "300g", "fats_str": "80g"}}
+    go._apply_renal_cap_to_nutrition(nutr, {"weight": 70, "weightUnit": "kg",
+                                            "medicalConditions": ["Enfermedad renal cronica"]})
+    assert nutr["macros"]["protein_g"] == 56          # 0.8 × 70
+    assert nutr["total_daily_macros"]["protein_g"] == 56
+    assert nutr["macros"]["carbs_g"] > 300            # kcal liberadas → carbo
+    cap = nutr["renal_protein_cap"]
+    assert cap["applied"] and cap["reassigned_to"] == "carb" and cap["source"] == "nutrition_target"
+
+
+def test_source_cap_renal_diabetic_reassigns_to_fat():
+    """review#5 en la fuente: diabético-nefropatía → kcal liberadas a GRASA (no carbo)."""
+    nutr = {"macros": {"protein_g": 154, "carbs_g": 300, "fats_g": 80, "protein_str": "154g",
+                       "carbs_str": "300g", "fats_str": "80g"},
+            "total_daily_macros": {"protein_g": 154, "carbs_g": 300, "fats_g": 80}}
+    go._apply_renal_cap_to_nutrition(nutr, {"weight": 70, "weightUnit": "kg",
+                                            "medicalConditions": ["ERC", "Diabetes tipo 2"]})
+    assert nutr["macros"]["protein_g"] == 56
+    assert nutr["macros"]["fats_g"] > 80              # kcal → grasa
+    assert nutr["macros"]["carbs_g"] == 300           # carbo intacto (no sube glucemia)
+    assert nutr["renal_protein_cap"]["reassigned_to"] == "fat"
+    assert nutr["renal_protein_cap"]["comorbid_diabetes"] is True
+
+
+def test_source_cap_noop_when_not_renal_or_no_weight():
+    nutr = {"macros": {"protein_g": 154, "protein_str": "154g"}, "total_daily_macros": {}}
+    go._apply_renal_cap_to_nutrition(nutr, {"weight": 70, "weightUnit": "kg",
+                                            "medicalConditions": ["Diabetes tipo 2"]})
+    assert "renal_protein_cap" not in nutr            # diabético-no-renal → no cap
+    nutr2 = {"macros": {"protein_g": 154, "protein_str": "154g"}, "total_daily_macros": {}}
+    go._apply_renal_cap_to_nutrition(nutr2, {"medicalConditions": ["ERC"]})  # sin peso
+    assert "renal_protein_cap" not in nutr2
+
+
+def test_source_cap_and_safety_net_anchors():
+    src = inspect.getsource(go)
+    for marker in ("_apply_renal_cap_to_nutrition", "nutrition_target",
+                   "Red de seguridad renal", "RED DE SEGURIDAD RENAL"):
+        assert marker in src, f"marker ausente: {marker}"
+    # el cap en la fuente se invoca tras get_nutrition_targets
+    assert "_apply_renal_cap_to_nutrition(nutrition, actual_form_data)" in src
+
+
 def test_renal_enforcement_machinery_trims_meals_to_cap():
     """review#1/#7/#8 (el crítico): la maquinaria que usa el enforcement determinista per-comida
     (independiente del solver) realmente baja la proteína de las comidas al cap renal y refilla
