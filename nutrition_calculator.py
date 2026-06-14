@@ -105,12 +105,32 @@ def apply_goal_adjustment(tdee: float, goal: str) -> int:
     return int(round(target_calories / 50) * 50)
 
 
-def calculate_macros(target_calories: int, goal: str) -> dict:
+def _protein_ceiling_g_per_kg() -> float:
+    """[C1-PROTEIN-CEILING · 2026-06-13] Techo clínico de proteína por kg de peso corporal.
+    Knob `MEALFIT_PROTEIN_CEILING_G_PER_KG` (default 2.2, clamp [1.6, 3.0]). Posición ISSN:
+    1.6-2.2 g/kg cubre ganancia/preservación de músculo; >2.4 no aporta beneficio adicional
+    y es difícil de cumplir dentro del presupuesto calórico. El split por % de calorías
+    (30% para gain_muscle) puede dar 2.8+ g/kg en personas livianas con TDEE alto."""
+    import os
+    try:
+        v = float(os.environ.get("MEALFIT_PROTEIN_CEILING_G_PER_KG", "2.2"))
+    except (TypeError, ValueError):
+        return 2.2
+    return max(1.6, min(3.0, v))
+
+
+def calculate_macros(target_calories: int, goal: str, weight_kg: float = None) -> dict:
     """
     Calcula los gramos exactos de cada macronutriente basándose en:
     - Proteína: 4 cal/g
     - Carbohidratos: 4 cal/g
     - Grasas: 9 cal/g
+
+    [C1-PROTEIN-CEILING · 2026-06-13] Si `weight_kg` se provee, la proteína se CAPEA a un
+    techo clínico (`_protein_ceiling_g_per_kg()` × peso) y las calorías liberadas se
+    redistribuyen a carbohidratos (el macro flexible). Sin esto, el % de calorías producía
+    targets de 2.8+ g/kg (inalcanzables sin sobre-cargar proteína en cada comida y reñidos
+    con el presupuesto calórico → el plan quedaba sistemáticamente corto). Anchor: C1-PROTEIN-CEILING.
     """
     split = MACRO_SPLITS.get(goal, MACRO_SPLITS["maintenance"])
 
@@ -118,11 +138,25 @@ def calculate_macros(target_calories: int, goal: str) -> dict:
     carbs_cals = target_calories * split["carbs_pct"]
     fats_cals = target_calories * split["fats_pct"]
 
+    protein_g = protein_cals / 4.0
+    if weight_kg and weight_kg > 0:
+        ceiling_g = _protein_ceiling_g_per_kg() * float(weight_kg)
+        if protein_g > ceiling_g:
+            freed_cals = (protein_g - ceiling_g) * 4.0
+            protein_g = ceiling_g
+            protein_cals = protein_g * 4.0
+            carbs_cals += freed_cals  # redistribuir a carbos (macro flexible)
+            logger.info(
+                f"🩺 [C1-PROTEIN-CEILING] Proteína capeada a {_protein_ceiling_g_per_kg()} g/kg "
+                f"× {weight_kg}kg = {round(protein_g)}g (era {round(target_calories * split['protein_pct'] / 4)}g); "
+                f"{round(freed_cals)} kcal → carbos."
+            )
+
     return {
-        "protein_g": round(protein_cals / 4),
+        "protein_g": round(protein_g),
         "carbs_g": round(carbs_cals / 4),
         "fats_g": round(fats_cals / 9),
-        "protein_str": f"{round(protein_cals / 4)}g",
+        "protein_str": f"{round(protein_g)}g",
         "carbs_str": f"{round(carbs_cals / 4)}g",
         "fats_str": f"{round(fats_cals / 9)}g",
     }
@@ -1004,10 +1038,11 @@ def get_nutrition_targets(form_data: dict) -> dict:
 
     # Preservar el cálculo original para el Dashboard
     original_target_calories = target_calories
-    original_macros = calculate_macros(original_target_calories, goal)
+    # [C1-PROTEIN-CEILING] `weight` (kg) → techo clínico de proteína por peso corporal.
+    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight)
 
     # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS para la IA
-    macros = calculate_macros(target_calories, goal)
+    macros = calculate_macros(target_calories, goal, weight_kg=weight)
     
     # Descripción legible del objetivo
     goal_labels = {
