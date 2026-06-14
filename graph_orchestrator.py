@@ -8278,6 +8278,13 @@ ALLERGEN_HARD_GUARD = _env_bool("MEALFIT_ALLERGEN_HARD_GUARD", True)
 # lista). Cierra el hallazgo CRÍTICO de la auditoría clínica. Flip a False solo para debug.
 FOOD_SAFETY_GUARD = _env_bool("MEALFIT_FOOD_SAFETY_GUARD", True)
 
+# [P3-PORTION-QUANTIZE · 2026-06-13] Redondea las porciones del plan a unidades de cocina
+# medibles (¼ taza, ¼ cda, ½ unidad discreta, 5 g) ajustando los macros por el delta exacto.
+# Cierra el hallazgo de la auditoría: las fracciones decimales no medibles ('0.66 huevos',
+# '0.53 taza', '3.87 papas') matan la adherencia. Corre SIEMPRE (las fracciones vienen del
+# LLM y/o del solver). Trade-off: pequeña deriva del target (medibilidad > precisión exacta).
+PORTION_QUANTIZE_ENABLED = _env_bool("MEALFIT_PORTION_QUANTIZE", True)
+
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
 # plato repetido (de ~12) forzaba 3 reintentos → entrega degradada + alerta, aunque el
@@ -8651,6 +8658,60 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
         logger.warning(f"[P3-PROTEIN-TOPUP] falló para meal "
                        f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e}")
         return 0
+
+
+def _apply_portion_quantization(plan: dict, db) -> int:
+    """[P3-PORTION-QUANTIZE · 2026-06-13] Redondea las porciones de cada meal a unidades
+    de cocina medibles (¼ taza, ¼ cda, ½ unidad discreta, 5 g) vía
+    `nutrition_db.quantize_ingredient_string`, y AJUSTA los macros del meal por el delta
+    EXACTO del aporte de cada ingrediente reescalado (vía `db.macros_from_ingredient_string`)
+    → receta↔macro↔lista quedan consistentes. Reescribe `ingredients` (+ `ingredients_raw`
+    en lockstep, con el MISMO factor por índice). Cierra el hallazgo de la auditoría: las
+    fracciones decimales no medibles ('0.66 huevos', '0.53 taza', '3.87 papas') matan la
+    adherencia. Trade-off aceptado: el redondeo introduce una pequeña deriva del target
+    diario (la auditoría prioriza medibilidad sobre precisión exacta). Corre tras el
+    cal-reconcile y ANTES de la agregación de compras → los gramos redondeados fluyen a la
+    lista. Mutates `plan` in-place. Retorna nº de meals modificados. Anchor: P3-PORTION-QUANTIZE."""
+    from nutrition_db import quantize_ingredient_string, rescale_ingredient_string
+    changed_meals = 0
+    for day in plan.get("days", []) or []:
+        for meal in day.get("meals", []) or []:
+            ings = meal.get("ingredients")
+            if not isinstance(ings, list) or not ings:
+                continue
+            new_ings, factors = [], []
+            dp = dc = df = dk = 0.0
+            any_change = False
+            for ing in ings:
+                s = str(ing)
+                new_s, fac = quantize_ingredient_string(s)
+                factors.append(fac)
+                if abs(fac - 1.0) > 1e-6:
+                    mc = db.macros_from_ingredient_string(s)  # aporte ORIGINAL del ingrediente
+                    if mc:
+                        dp += mc["protein"] * (fac - 1.0)
+                        dc += mc["carbs"] * (fac - 1.0)
+                        df += mc["fats"] * (fac - 1.0)
+                        dk += mc["kcal"] * (fac - 1.0)
+                if new_s != s:
+                    any_change = True
+                new_ings.append(new_s)
+            if not any_change:
+                continue
+            meal["ingredients"] = new_ings
+            raw = meal.get("ingredients_raw")
+            if isinstance(raw, list) and len(raw) == len(factors):
+                meal["ingredients_raw"] = [
+                    rescale_ingredient_string(str(r), f) if abs(f - 1.0) > 1e-6 else str(r)
+                    for r, f in zip(raw, factors)
+                ]
+            meal["protein"] = max(0, round(_meal_macro_num(meal.get("protein")) + dp))
+            meal["carbs"] = max(0, round(_meal_macro_num(meal.get("carbs")) + dc))
+            meal["fats"] = max(0, round(_meal_macro_num(meal.get("fats")) + df))
+            meal["cals"] = max(0, round(_meal_macro_num(meal.get("cals")) + dk))
+            meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+            changed_meals += 1
+    return changed_meals
 
 
 def _run_assembly_validations(
@@ -9755,6 +9816,22 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _fs_e:
             logger.warning(f"[P3-FOOD-SAFETY] deshabilitado por error: "
                            f"{type(_fs_e).__name__}: {_fs_e}")
+
+    # [P3-PORTION-QUANTIZE · 2026-06-13] Paso de medibilidad: redondea las porciones a
+    # unidades de cocina (¼ taza, ¼ cda, ½ unidad, 5 g) ajustando macros por el delta.
+    # Corre tras cal-reconcile (cuyo escalado no-redondo introduce las fracciones) y ANTES
+    # de la agregación de compras → los gramos redondeados fluyen a la lista CONSISTENTES.
+    # Independiente del solver (las fracciones también vienen del LLM). Fail-safe total.
+    if PORTION_QUANTIZE_ENABLED:
+        try:
+            from nutrition_db import IngredientNutritionDB as _INDB
+            _q_n = _apply_portion_quantization(result, _INDB())
+            if _q_n:
+                logger.info(f"📏 [P3-PORTION-QUANTIZE] Redondeó porciones a unidades "
+                            f"medibles en {_q_n} comida(s) (ajuste de macros por delta)")
+        except Exception as _q_e:
+            logger.warning(f"[P3-PORTION-QUANTIZE] deshabilitado por error: "
+                           f"{type(_q_e).__name__}: {_q_e}")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB

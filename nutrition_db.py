@@ -78,10 +78,18 @@ def _fmt_num(x: float) -> str:
 
 
 def _normalize_unicode_fractions(s: str) -> str:
+    out = str(s)
+    # Número mixto: "1¼" → "1.25", "2½" → "2.5" (dígitos seguidos de fracción unicode).
     for k, v in _FRACTION_MAP.items():
-        if s.startswith(k):
-            return v + " " + s[len(k):].lstrip()
-    return s
+        if k in out:
+            out = re.sub(r"(\d+)\s*" + re.escape(k),
+                         lambda m, _v=v: _fmt_num(int(m.group(1)) + float(_v)) + " ", out)
+    # Fracción unicode standalone al inicio: "½ taza" → "0.5 taza".
+    for k, v in _FRACTION_MAP.items():
+        if out.startswith(k):
+            out = v + " " + out[len(k):].lstrip()
+            break
+    return re.sub(r"\s{2,}", " ", out)  # colapsa dobles espacios del reemplazo
 
 
 def _strip_qty_prefix(s: str) -> str:
@@ -139,6 +147,102 @@ def rescale_ingredient_string(s: str, factor: float) -> str:
 
     out = _GRAM_HINT_RE.sub(_scale_hint, out)
     return out
+
+
+# ── Cuantización de porciones a unidades de cocina medibles (P3-PORTION-QUANTIZE) ──
+_CUP_UNITS = ("taza", "tazas")
+_SPOON_UNITS = ("cucharada", "cucharadas", "cucharadita", "cucharaditas",
+                "cda", "cdta", "cdas", "cdtas")
+_GRAM_UNITS = ("g", "gr", "gramo", "gramos", "ml", "mililitro", "mililitros",
+               "kg", "litro", "litros", "l")
+# Fracciones medibles permitidas por tipo (snap a la más cercana; 1.0 acarrea al entero
+# siguiente). Tazas: ¼/⅓/½/⅔/¾ (existen tazas medidoras de esos tamaños). Cucharas: ¼/½/¾.
+# Discretos (huevo/papa/rebanada): solo ½ o entero. Incluyen 0 para detectar el carry/floor.
+_THIRD, _TWOTHIRD = 1.0 / 3.0, 2.0 / 3.0
+_CUP_FRACS = (0.0, 0.25, _THIRD, 0.5, _TWOTHIRD, 0.75, 1.0)
+_SPOON_FRACS = (0.0, 0.25, 0.5, 0.75, 1.0)
+_COUNT_FRACS = (0.0, 0.5, 1.0)
+
+
+def _detect_kind(raw: str) -> str:
+    """Tipo de unidad líder del ingrediente-string: cup/spoon/gram/count(discreto)."""
+    s = _strip_accents(_normalize_unicode_fractions(str(raw).strip()).lower())
+    m = _LEAD_QTY_RE.match(s)
+    rest = s[m.end():] if m else s
+    wm = re.match(r"\s*([a-z]+)", rest)
+    w = wm.group(1) if wm else ""
+    if w in _CUP_UNITS:
+        return "cup"
+    if w in _SPOON_UNITS or w.startswith("cucharad"):
+        return "spoon"
+    if w in _GRAM_UNITS:
+        return "gram"
+    return "count"
+
+
+def _snap_qty(qty: float, allowed) -> float:
+    """Snap `qty` a entero+fracción-permitida más cercana (1.0 acarrea). Nunca 0:
+    una cantidad positiva minúscula sube al mínimo incremento positivo permitido."""
+    whole = int(qty)
+    frac = qty - whole
+    best = min(allowed, key=lambda a: abs(a - frac))
+    val = whole + best  # best=1.0 acarrea al entero siguiente de forma natural
+    min_pos = min(a for a in allowed if a > 0)
+    if val < min_pos:
+        val = min_pos
+    return round(val, 4)
+
+
+def _integerize_gram_hint(s: str) -> str:
+    """Redondea el hint "(NNg/ml)" a entero para que la referencia de báscula sea limpia."""
+    def repl(m):
+        val = float(m.group(1).replace(",", "."))
+        return m.group(0).replace(m.group(1), str(int(round(val))), 1)
+    return _GRAM_HINT_RE.sub(repl, s)
+
+
+def quantize_ingredient_string(s: str):
+    """[P3-PORTION-QUANTIZE · 2026-06-13] Redondea la cantidad líder de un ingrediente-
+    string a un incremento medible en cocina (¼ taza, ¼ cda, ½ unidad discreta, 5 g) y
+    escala el hint de gramos de forma coherente; integeriza el hint como referencia de
+    báscula. Retorna (nuevo_string, factor) con factor = nueva_qty/qty_original (1.0 si
+    no cambió) — el caller ajusta los macros del meal por el delta del aporte de ESE
+    ingrediente. 'al gusto'/'opcional' → quita el número espurio sin tocar macros.
+
+    Cierra el hallazgo de la auditoría clínica: '0.66 huevos', '3.87 papas', '0.53 taza',
+    '3.74 rebanadas' no son pesables/medibles → matan la adherencia. Determinista y
+    macro-consistente (vía delta). Anchor: P3-PORTION-QUANTIZE."""
+    raw = str(s)
+    norm = _normalize_unicode_fractions(raw.strip())
+    m = _LEAD_QTY_RE.match(norm)
+    if not m:
+        return raw, 1.0
+    qty = _frac_to_float(m.group(1))
+    if qty is None or qty <= 0:
+        return raw, 1.0
+    low = _strip_accents(raw.lower())
+    # 'al gusto'/'opcional': la cantidad es espuria → quítala, deja el texto legible.
+    if "al gusto" in low or "a gusto" in low or "opcional" in low:
+        cleaned = _LEAD_QTY_RE.sub("", norm, count=1).strip()
+        if cleaned:
+            cleaned = cleaned[:1].upper() + cleaned[1:]
+            return cleaned, 1.0
+        return raw, 1.0
+    kind = _detect_kind(raw)
+    if kind == "gram":
+        new_qty = round(qty / 5.0) * 5.0  # gramos/ml → múltiplo de 5
+        if new_qty <= 0:  # <2.5 g: ya es pesable en báscula de precisión, no inflar
+            return _integerize_gram_hint(raw), 1.0
+    elif kind == "cup":
+        new_qty = _snap_qty(qty, _CUP_FRACS)
+    elif kind == "spoon":
+        new_qty = _snap_qty(qty, _SPOON_FRACS)
+    else:  # count (discreto: huevo/papa/rebanada/fruta)
+        new_qty = _snap_qty(qty, _COUNT_FRACS)
+    if abs(new_qty - qty) < 1e-4:
+        return _integerize_gram_hint(raw), 1.0
+    factor = new_qty / qty
+    return _integerize_gram_hint(rescale_ingredient_string(raw, factor)), factor
 
 
 @dataclass
