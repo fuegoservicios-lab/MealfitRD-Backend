@@ -8326,6 +8326,31 @@ PROTEIN_FLOOR_ENABLED = _env_bool("MEALFIT_PROTEIN_FLOOR", True)
 PROTEIN_FLOOR_FILL_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_FILL_PCT", 0.92)  # closer determinista
 PROTEIN_FLOOR_HARD_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT", 0.90)  # gate de retry
 PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
+# [P3-PROTEIN-CEILING-GOAL-AWARE · 2026-06-13] Techo de proteína ENTREGADA en g/kg, dependiente
+# del objetivo: ≤2.2 g/kg para volumen/mantenimiento (más proteína desplaza carbos útiles), pero
+# hasta ~2.6 g/kg en DÉFICIT (la evidencia respalda proteína alta para preservar músculo al perder
+# grasa). El trim por-día usa este techo absoluto en vez de un % fijo del target.
+PROTEIN_GKG_CEILING_DEFAULT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_DEFAULT", 2.2)
+PROTEIN_GKG_CEILING_CUT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_CUT", 2.6)
+
+
+def _protein_gkg_ceiling(goal) -> float:
+    """[P3-PROTEIN-CEILING-GOAL-AWARE] Techo de proteína entregada (g/kg) por objetivo: déficit/
+    pérdida de grasa → más alto (preservación muscular); volumen/mantenimiento → 2.2."""
+    g = str(goal or "").strip().lower()
+    is_cut = any(t in g for t in ("lose_fat", "lose_weight", "fat_loss", "deficit", "déficit",
+                                  "perdida", "pérdida", "cut", "definir", "adelgaz"))
+    return PROTEIN_GKG_CEILING_CUT if is_cut else PROTEIN_GKG_CEILING_DEFAULT
+
+
+def _weight_kg_from_form(form_data: dict) -> float:
+    """Peso en kg desde form_data (convierte lb→kg). 0.0 si ausente/no parseable."""
+    try:
+        w = float(form_data.get("weight") or 0)
+        unit = str(form_data.get("weightUnit") or "kg").strip().lower()
+        return w / 2.20462 if unit in ("lb", "lbs") else w
+    except (TypeError, ValueError):
+        return 0.0
 
 # [P2-ANTI-REPETITION-TOLERANCE · 2026-06-13] Tolerancia de platos repetidos vs los
 # últimos 3 planes ANTES de rechazar+reintentar. Pre-fix era tolerancia CERO: 1 solo
@@ -10164,11 +10189,17 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     elif MACRO_SOLVER_PROTEIN_TOPUP:
                         _topup_g += _protein_topup_meal(
                             _m, _slot_target["kcal"], _nut_db, _approved)
-                # [P3-PROTEIN-FLOOR] Techo simétrico: si el día quedó muy por ENCIMA del
-                # target de proteína (LLM/solver sobre-produjo), trímalo al target → mantiene
-                # la banda [piso, techo] y respeta el g/kg de C1 sobre lo ENTREGADO.
+                # [P3-PROTEIN-CEILING-GOAL-AWARE] Techo simétrico GOAL-AWARE: trima la proteína
+                # del día si excede el techo en g/kg del objetivo (2.2 volumen/mant; 2.6 déficit
+                # — proteína alta protege músculo al perder grasa). Usa el techo ABSOLUTO en g/kg
+                # (no un % fijo del target) → ningún día de volumen pasa de 2.2 g/kg, y los de
+                # déficit pueden subir hasta 2.6 g/kg de forma clínicamente correcta.
                 if PROTEIN_FLOOR_ENABLED and _pg > 0:
-                    _trim_day_protein_to_ceiling(_ms, _pg, _nut_db)
+                    _wkg = _weight_kg_from_form(form_data)
+                    _max_p_day = _protein_gkg_ceiling(form_data.get("mainGoal")) * _wkg if _wkg > 0 else 0
+                    _ceil_pct = (max(1.0, min(1.30, _max_p_day / _pg))
+                                 if (_max_p_day > 0 and _pg > 0) else 1.12)
+                    _trim_day_protein_to_ceiling(_ms, _pg, _nut_db, ceiling_pct=_ceil_pct)
             logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
                         f"a su target de macros real (cerebro dividido)"
                         + (f" + top-up de proteína {_topup_g}g total" if _topup_g else ""))
