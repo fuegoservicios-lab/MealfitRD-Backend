@@ -6,7 +6,7 @@ import math
 import uuid
 import asyncio
 from pydantic import BaseModel, Field, field_validator
-from db_core import supabase
+from db_core import _storage_client
 from db_profiles import get_user_profile, log_api_usage
 from auth import get_verified_user_id, verify_api_quota
 from path_validators import assert_valid_uuid
@@ -86,7 +86,7 @@ class ProgressRequest(BaseModel):
 # ANTES: POST autenticado sin throttling — un user (o bug en mobile que
 # tap-spammee el guardar peso) podía inflar `weight_history` JSONB.
 # La lista se cappea a últimos 30 (línea ~270) pero la mutación bajo
-# advisory lock + roundtrip a Supabase tiene costo. 10/60s es generoso
+# advisory lock + roundtrip a la DB tiene costo. 10/60s es generoso
 # (UI espera click manual) y restringe spam claro. Mismo patrón que
 # `_RECALC_LIMITER` y `_PDF_TELEMETRY_LIMITER` en routers/plans.py.
 _PROGRESS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
@@ -109,8 +109,8 @@ _VISION_UPLOAD_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 # [P3-VISION-UPLOAD-VALIDATION · 2026-05-20] Whitelist de content_types
 # permitidos para `/upload`. Cierra el gap F3 del audit
 # `docs/gaps-audit-2026-05.md`: pre-fix el endpoint aceptaba el
-# `file.content_type` declarado por el cliente Y lo pasaba directo a
-# Supabase Storage + a `process_image_with_vision`. Vectores cerrados:
+# `file.content_type` declarado por el cliente Y lo pasaba directo al
+# object storage + a `process_image_with_vision`. Vectores cerrados:
 #
 #   1. Cliente declara `content_type=application/octet-stream` (default
 #      browser para tipos desconocidos) → bypass del MIME-sniffing del
@@ -288,25 +288,25 @@ async def api_diary_upload(
         image_url = ""
         upload_success = False
 
-        # 1. Intentar subir a Supabase Storage
-        if supabase:
+        # 1. Intentar subir al object storage de visual_diary
+        if _storage_client:
             try:
                 res = await asyncio.to_thread(
-                    supabase.storage.from_("visual_diary_images").upload,
+                    _storage_client.storage.from_("visual_diary_images").upload,
                     path=unique_filename,
                     file=file_bytes,
                     file_options={"content-type": file.content_type}
                 )
-                image_url = supabase.storage.from_("visual_diary_images").get_public_url(unique_filename)
+                image_url = _storage_client.storage.from_("visual_diary_images").get_public_url(unique_filename)
                 upload_success = True
-                logger.info(f"☁️ Imagen guardada en Supabase: {image_url}")
+                logger.info(f"☁️ Imagen guardada en object storage: {image_url}")
             except Exception as sb_err:
-                logger.error(f"⚠️ Error subiendo a Supabase (¿Existe el bucket 'visual_diary_images'?): {sb_err}")
+                logger.error(f"⚠️ Error subiendo al object storage de visual_diary (¿Existe el bucket 'visual_diary_images'?): {sb_err}")
                 upload_success = False
 
-        # 2. Si no se pudo subir a Supabase, fallar (evitar guardar localmente en la nube)
+        # 2. Si no se pudo subir al object storage, fallar (evitar guardar localmente en la nube)
         if not upload_success:
-            logger.error("❌ No se pudo subir la imagen a Supabase. Abortando.")
+            logger.error("❌ No se pudo subir la imagen al object storage de visual_diary. Abortando.")
             raise HTTPException(status_code=500, detail="Error uploading image to cloud storage.")
             
             

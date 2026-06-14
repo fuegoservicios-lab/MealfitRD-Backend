@@ -9,7 +9,6 @@ import hashlib
 
 # Imports globales locales, movidos al tope para evitar el code smell "Lazy Loading"
 from db import (
-    supabase,
     increment_ingredient_frequencies,
     check_recent_meal_plan_exists,
     log_unknown_ingredients,
@@ -360,13 +359,13 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
     """
     try:
         # 1. Guardar Plan O(1) Arrays
-        # [P2-NEON-PERSIST-FIX · 2026-06-13] Removido el guard `if supabase:` (era de la era
-        # Supabase; en Neon `db.supabase` es None → se saltaba el guardado ENTERO y luego
-        # crasheaba con UnboundLocalError en `raw_ingredients`). Modo de fallo destapado por un
-        # test en vivo autenticado: el path no-chunked / fallback (cuando el SSE generator
-        # muere pre-postprocess, ej. conexión del cliente cae a mitad de generación) NO
-        # persistía el plan → se perdía silenciosamente + alerta plan_persist_failed.
-        # `save_new_meal_plan_atomic` (db_plans) es 100% Neon-native (execute_sql_*).
+        # [P2-NEON-PERSIST-FIX · 2026-06-13] Removido el guard legado sobre el cliente
+        # PostgREST (en Neon ese cliente es None → se saltaba el guardado ENTERO y luego
+        # crasheaba con UnboundLocalError en `raw_ingredients`). Modo de fallo destapado
+        # por un test en vivo autenticado: el path no-chunked / fallback (cuando el SSE
+        # generator muere pre-postprocess, ej. conexión del cliente cae a mitad de
+        # generación) NO persistía el plan → se perdía silenciosamente + alerta
+        # plan_persist_failed. `save_new_meal_plan_atomic` (db_plans) es 100% Neon-native.
         # [P2-PERSIST-NAN-GUARD · 2026-06-13] Sanear NaN/Inf antes del INSERT — Postgres jsonb los rechaza.
         plan_data = _scrub_plan_data_floats(plan_data, user_id)
 

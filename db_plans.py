@@ -1146,7 +1146,7 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: Optional[s
     Retorna:
       - `True` si el UPDATE se ejecutó (path psycopg con connection_pool).
       - `None` si la operación falló (pool no disponible, error SQL).
-        [P1-NEON-DB-MIGRATION · 2026-06-12] El path supabase-py (que
+        [P1-NEON-DB-MIGRATION · 2026-06-12] El path legado via PostgREST (que
         retornaba `list`) fue eliminado — pool mandatorio post-Neon.
 
     Tooltip-anchor: P1-NEXT-1-LOCK-START | test_p1_next_1_update_meal_plan_data_holds_advisory_lock
@@ -1159,9 +1159,9 @@ def update_meal_plan_data(plan_id: str, new_plan_data: dict, user_id: Optional[s
                 f"degrada a legacy WHERE id. Migrar el callsite para "
                 f"pasar user_id."
             )
-        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback supabase-py (dev/local
+        # [P1-NEON-DB-MIGRATION · 2026-06-12] Fallback via PostgREST (dev/local
         # sin connection_pool) eliminado: PostgREST no soporta advisory locks
-        # (violaba I7) y post-Neon apuntaría a la DB equivocada. Pool
+        # (violaba I7) y apuntaría a la DB equivocada. Pool
         # mandatorio — fail-loud; el except preserva el contrato None.
         if not connection_pool:
             raise RuntimeError("db connection_pool is not available (mandatorio post-Neon).")
@@ -1278,9 +1278,8 @@ def track_meal_friction(user_id: str, session_id: str, rejected_meal: str):
     # localmente, y el último UPDATE pisaba al primero — perdiendo 1 strike.
     # Con 3 strikes para auto-bloquear, perder strikes silenciosamente
     # significa que el ingrediente NUNCA se bloquea aunque el usuario lo
-    # rechace 3+ veces. El RPC nativo de Supabase sigue siendo el camino
-    # preferido (sin overhead del lock app-level), pero este fallback ya no
-    # es vulnerable a la race condition.
+    # rechace 3+ veces. El SQL directo sobre Neon ya no es vulnerable a esa
+    # race condition.
     decision_box = {"reset": False, "current_count": 0}
 
     def _friction_mutator(_hp):
@@ -1422,7 +1421,7 @@ def get_user_ingredient_frequencies(user_id: str, days_limit: int = 60) -> dict:
                 continue
                 
             try:
-                # Parse robusto para last_used asumiendo formato de Supabase
+                # Parse robusto para last_used asumiendo formato ISO de la DB
                 from constants import safe_fromisoformat
                 last_used_dt = safe_fromisoformat(last_used_str)
                 if last_used_dt.tzinfo is None:

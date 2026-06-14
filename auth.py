@@ -46,10 +46,10 @@ async def get_verified_user_id(authorization: Optional[str] = Header(None)) -> O
     """Verifica el JWT de Neon Auth y retorna `sub` (user_id) si la firma es válida.
 
     [P1-NEON-AUTH-MIGRATION · 2026-06-13] Reemplaza la verificación que antes
-    hacía la API de Supabase Auth. Neon Auth (Better Auth) emite JWTs
+    hacía el proveedor de Auth legacy. Neon Auth (Better Auth) emite JWTs
     EdDSA (Ed25519) validados LOCALMENTE contra el JWKS público cacheado
     (`neon_auth.verify_neon_jwt`) — sin roundtrip de red por request en estado
-    caliente (mejora vs. Supabase, que llamaba a su API cada vez). El `sub` del
+    caliente (mejora vs. el proveedor anterior, que llamaba a su API cada vez). El `sub` del
     payload es el user_id (UUID), misma clave que `public.user_profiles.id`.
 
     [P0-AUDIT-1 · 2026-05-12] La invariante de seguridad se preserva intacta:

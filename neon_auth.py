@@ -1,9 +1,9 @@
 """[P1-NEON-AUTH-MIGRATION · 2026-06-13] Verificación de JWTs de Neon Auth.
 
-Reemplaza la verificación de identidad que antes hacía la API de Supabase Auth
+Reemplaza la verificación de identidad que antes hacía el proveedor de Auth legacy
 (P0-AUDIT-1). Neon Auth (Better Auth) emite JWTs firmados con **EdDSA (Ed25519)**
 que se validan LOCALMENTE contra el JWKS público, cacheado en proceso — sin
-roundtrip de red por request (mejora vs. Supabase, que llamaba a su API cada vez).
+roundtrip de red por request (mejora vs. el proveedor anterior, que llamaba a su API cada vez).
 
 Contrato del JWT (verificado en vivo 2026-06-13):
   - `alg=EdDSA`, `kid` apunta a una clave del JWKS.

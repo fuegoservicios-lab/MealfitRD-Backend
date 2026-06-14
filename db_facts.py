@@ -9,8 +9,8 @@ import os
 import logging
 logger = logging.getLogger(__name__)
 # [P1-NEON-DB-MIGRATION · 2026-06-12] Módulo migrado a SQL directo (psycopg
-# pool, Neon). El cliente PostgREST `supabase` ya no se usa aquí — los datos
-# Postgres viven en Neon; Supabase conserva solo Auth+Storage (fuera de db_*).
+# pool, Neon). El cliente PostgREST legado ya no se usa aquí — los datos
+# Postgres viven en Neon (Auth y Storage son servicios externos a db_*).
 from db_core import connection_pool, execute_sql_query, execute_sql_write
 from psycopg.types.json import Jsonb
 from cache_manager import redis_client
@@ -22,7 +22,7 @@ from cache_manager import redis_client
 # emitían 3 DELETEs consecutivos al mismo `user_id` en milisegundos durante
 # un mismo pipeline run — observado en API logs 2026-05-28 (sintoma_temporal
 # cleanup repetido 3× en 4ms). El cleanup real solo necesita correr ~1x/min
-# por user; el resto son no-ops costosos (round-trip Supabase + WAL write
+# por user; el resto son no-ops costosos (round-trip a la DB + WAL write
 # por el `delete` que mata 0 rows si ya fue limpiado).
 #
 # Knob `MEALFIT_TEMPORAL_FACTS_CLEANUP_DEBOUNCE_S` (default 60, clamp [5, 3600]):
@@ -88,7 +88,7 @@ def _should_skip_temporal_cleanup(user_id: Optional[str]) -> bool:
         return False
 
 
-# Errores transitorios típicos del pooler de Supabase / red. Reintentar con
+# Errores transitorios típicos del pooler de DB / red. Reintentar con
 # backoff corto. Otros errores (sintaxis SQL, permisos) NO se reintentan.
 # [P3-RECALC-503-CLASSIFICATION · 2026-05-16] Añadido `couldn't get a connection`
 # — el error específico de pool exhaustion del psycopg connection pool cuando
@@ -105,7 +105,7 @@ _TRANSIENT_DB_ERROR_FRAGMENTS = (
     "broken pipe",
     "timeout",
     "couldn't get a connection",  # psycopg_pool exhaustion (free tier cap)
-    "remoteprotocolerror",  # httpx upstream supabase-py (idle conn died)
+    "remoteprotocolerror",  # httpx upstream legado (idle conn died)
 )
 
 
@@ -120,7 +120,7 @@ def _with_db_retry(fn, *args, _label: str = "db_op", _attempts: int = 2, **kwarg
     Crítico para queries que alimentan decisiones médicas (alergias, condiciones):
     devolver `[]` por un disconnect transitorio podría dejar pasar un alérgeno
     al plan generado. Reintento corto (2s + 4s) cubre la reconexión típica del
-    pooler de Supabase sin bloquear el pipeline.
+    pooler de Neon sin bloquear el pipeline.
     """
     last_exc = None
     delays = (2.0, 4.0)
@@ -338,7 +338,7 @@ def delete_user_facts_by_metadata(user_id: str, filter_dict: dict):
         return None
 
 def search_user_facts(user_id: str, query_embedding: list, query_text: Optional[str] = None, threshold: float = 0.5, limit: int = 5):
-    """Busca hechos similares usando búsqueda híbrida (si hay texto) o vectorial pura en Supabase."""
+    """Busca hechos similares usando búsqueda híbrida (si hay texto) o vectorial pura en Neon."""
     if not connection_pool: return []
     
     # Auto-Limpieza de síntomas temporales antes de buscar

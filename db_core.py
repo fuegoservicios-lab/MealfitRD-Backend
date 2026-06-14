@@ -15,7 +15,7 @@ from knobs import _env_int as _knob_env_int
 
 
 logger = logging.getLogger(__name__)
-# Suprimir warnings cosméticos de psycopg.pool sobre conexiones ACTIVE retornadas al pool (ej. por LangGraph PostgresSaver)
+# Suprimir warnings cosméticos de psycopg.pool sobre conexiones ACTIVE retornadas al pool (p.ej. por LangGraph PostgresSaver)
 logging.getLogger("psycopg.pool").setLevel(logging.ERROR)
 
 load_dotenv()
@@ -25,7 +25,7 @@ load_dotenv()
 # se observó saturación con `couldn't get a connection after 30.00 sec`. Permite:
 #   - Subir MAX_SIZE para absorber concurrencia mayor.
 #   - Bajar TIMEOUT_S para fallar rápido y diagnosticar antes de que se acumule cola.
-#   - Ajustar MAX_IDLE_S por debajo del idle timeout de Supavisor si éste cambia.
+#   - Ajustar MAX_IDLE_S por debajo del idle timeout del pooler si éste cambia.
 def _int_env(name: str, default: int, lo: int, hi: int) -> int:
     try:
         return max(lo, min(hi, int(os.environ.get(name, str(default)))))
@@ -41,7 +41,7 @@ def _float_env(name: str, default: float, lo: float, hi: float) -> float:
 # [P0-3] Defaults subidos tras incidente 2026-05-06 (`couldn't get a connection 30s` +
 # APScheduler skips bajo 2 pipelines paralelos). Trade-off:
 #   - MAX_SIZE 30→60: absorbe picos de RAG + cron chunk_queue + cache writes en paralelo.
-#     Supabase Transaction Pooler (6543) tolera muchas conexiones (multiplexa via pgBouncer).
+#     El Transaction Pooler de Neon (6543) tolera muchas conexiones (multiplexa via pgBouncer).
 #   - TIMEOUT 30s→15s: fail-fast para diagnosticar saturación antes de que se acumule cola
 #     de waiters. APScheduler ya skipea jobs cuando este timeout vence; bajarlo evita que
 #     un solo waiter bloquee el slot del job 15s extra.
@@ -67,7 +67,7 @@ DB_POOL_MAX_IDLE_S = _float_env("MEALFIT_DB_POOL_MAX_IDLE_S", 300.0, 30.0, 1800.
 # pero dejando headroom: el sync sigue siendo el path principal y el async solo
 # absorbe bursts de cache/CB-reset/observabilidad que toleran fail-best-effort.
 #
-# Si migras a Supabase Pro / dedicated, subir ambos: SYNC max=60, ASYNC max=20.
+# Si migras a un plan dedicado/Pro, subir ambos: SYNC max=60, ASYNC max=20.
 DB_ASYNC_POOL_MIN_SIZE = _int_env("MEALFIT_DB_ASYNC_POOL_MIN_SIZE", 2, 0, 20)
 # [P1-POOL-ASYNC-SPLIT-TUNE · 2026-05-16] Subido 8→12 tras observar que post-split
 # inicial los warnings "couldn't get a connection after 20.00 sec" seguían ~12
@@ -96,7 +96,7 @@ DB_ASYNC_POOL_TIMEOUT_S = _float_env("MEALFIT_DB_ASYNC_POOL_TIMEOUT_S", 20.0, 1.
 # bug/leak), nunca una query corriendo — por eso su default es más agresivo.
 #
 # Rollback sin redeploy: `MEALFIT_DB_STATEMENT_TIMEOUT_MS=0` desactiva el
-# statement_timeout (vuelve a depender sólo del backstop de Supavisor);
+# statement_timeout (vuelve a depender sólo del backstop del pooler);
 # `MEALFIT_DB_IDLE_IN_TXN_TIMEOUT_MS=0` desactiva el idle-in-txn.
 # Los `SET LOCAL` per-transacción existentes (`set_meal_plan_for_update_timeouts`,
 # `execute_sql_write(lock_timeout_ms=...)`) overridean estos defaults por-tx.
@@ -118,10 +118,10 @@ def _session_timeout_statements() -> List[str]:
     `DB_*_TIMEOUT_MS` y verifican el SQL generado sin abrir conexión real)."""
     stmts: List[str] = []
     # [P1-NEON-DB-MIGRATION · 2026-06-13] search_path con `extensions`. Neon crea
-    # la extensión pgvector en el schema `extensions` (espejo del layout de
-    # Supabase) pero su search_path por default es solo `"$user", public` — sin
-    # esto, un `::vector` o un operador `<=>` app-side falla con `type "vector"
-    # does not exist`. Supabase ya incluía extensions en el path del rol; lo
+    # la extensión pgvector en el schema `extensions` (el layout del proveedor
+    # anterior los tenía en el path por defecto), pero en Neon el search_path
+    # por default es solo `"$user", public` — sin esto, un `::vector` o un
+    # operador `<=>` app-side falla con `type "vector" does not exist`. Lo
     # replicamos explícito para paridad. `extensions` solo tiene objetos de
     # extensión (cero colisión con `public`). Las funciones match_* tienen su
     # propio `SET search_path` y no dependen de esto.
@@ -134,21 +134,20 @@ def _session_timeout_statements() -> List[str]:
         )
     return stmts
 
-# [P1-NEON-AUTH-MIGRATION · 2026-06-13] Cliente Supabase ELIMINADO.
+# [P1-NEON-AUTH-MIGRATION · 2026-06-13] Cliente de object storage ELIMINADO.
 # Auth → Neon Auth (neon_auth.verify_neon_jwt). Datos → Neon (execute_sql_*).
-# El símbolo `supabase = None` se conserva SOLO para compatibilidad de imports
-# (`from db_core import supabase` en db_chat/db_profiles/shopping_calculator/
-# diary/system). Esos callsites guardan `if supabase is None` (Storage de
-# visual_diary y admin delete-user quedan no-op hasta migrar a Neon Auth admin
-# API / object storage; vision está disabled). NO se importa el paquete
-# `supabase` (removido de requirements) — por eso jamás se crea un cliente.
-supabase = None
+# `_storage_client = None` es un placeholder para el object storage de
+# visual_diary (pendiente de migrar a un provider de object storage nuevo;
+# vision está disabled). Los callsites en db_chat/db_profiles/shopping_calculator/
+# diary usan guards `if _storage_client:` que quedan no-op mientras sea None.
+# NO se importa ningún paquete de storage (removido de requirements).
+_storage_client = None
 
 # Configuración del ConnectionPool para psycopg
 # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20] Hay DOS pools:
 #   - `connection_pool` (sync) + `async_connection_pool`: tráfico genérico de la
 #     app (queries del frontend, crons, RAG, embeddings). Usa **Transaction
-#     Pooler** (6543) para multiplexar conexiones via pgBouncer/Supavisor.
+#     Pooler** (6543) para multiplexar conexiones via pgBouncer/Supavisor (Neon).
 #   - `chat_checkpoint_pool`: SOLO para `langgraph.checkpoint.postgres.PostgresSaver`.
 #     Usa el URL ORIGINAL (port 5432, session mode). Razón documentada en el
 #     bloque donde se construye.
@@ -156,29 +155,28 @@ connection_pool = None
 async_connection_pool = None  # Siempre declarado a nivel de módulo para garantizar importabilidad
 chat_checkpoint_pool = None  # [P1-CHECKPOINT-POOL-SPLIT · 2026-05-20]
 # [P1-NEON-DB-MIGRATION · 2026-06-12] URL session-mode resuelta según backend
-# activo (Neon direct o Supabase :5432). Consumida por el leader lock del
+# activo (Neon direct, puerto 5432). Consumida por el leader lock del
 # scheduler (app.py::_build_session_mode_db_url) — advisory locks de sesión
 # requieren session mode; un transaction pooler los liberaría por sentencia.
 DB_SESSION_MODE_URL = None
 
 # [P1-NEON-DB-MIGRATION · 2026-06-12] Selección del backend de DATOS Postgres.
-# Knob `MEALFIT_DB_BACKEND`: "neon" (default — único backend real tras borrar
-# Supabase 2026-06-13) | "supabase" (rama legacy INERTE, ya no funcional).
+# Knob `MEALFIT_DB_BACKEND`: solo "neon" soportado (único backend de datos tras
+# la migración 2026-06-13). Cualquier otro valor → fail-loud (la rama legacy fue
+# eliminada).
 #   - neon: pools principales ← NEON_DATABASE_URL_POOLED (PgBouncer transaction
-#     mode de Neon, análogo de Supavisor :6543); chat_checkpoint_pool ←
-#     NEON_DATABASE_URL (endpoint directo, session mode — mismo contrato que
-#     P1-CHECKPOINT-POOL-SPLIT). Supabase queda SOLO para Auth+Storage (el
-#     cliente `supabase` de arriba NO se toca).
-#   - supabase: comportamiento histórico con rewrites :5432↔:6543.
+#     mode de Neon); chat_checkpoint_pool ← NEON_DATABASE_URL (endpoint directo,
+#     session mode — mismo contrato que P1-CHECKPOINT-POOL-SPLIT). Auth y object
+#     storage son servicios separados (el placeholder `_storage_client = None`
+#     se conserva por compat de imports hasta cablear object storage).
 # Cutover/rollback sin redeploy: flip del env var + restart. Si backend=neon
 # pero faltan los URLs, se aborta la config de pools (fail-loud → /ready 503)
-# en vez de degradar silenciosamente a Supabase: un fallback silencioso
-# escribiría en la DB equivocada (split-brain).
-# [P1-SUPABASE-CLEANUP · 2026-06-13] Default flip "supabase"→"neon": el proyecto
-# Supabase fue eliminado, así que un env var ausente debe caer en Neon (el único
-# backend real), NO en la rama legacy rota (footgun: pools sin configurar →
-# connection_pool=None → primera query falla). La rama "supabase" se conserva
-# inerte (solo alcanzable con MEALFIT_DB_BACKEND=supabase explícito, que ya falla).
+# en vez de degradar silenciosamente: un fallback silencioso escribiría en la
+# DB equivocada (split-brain).
+# [P1-SUPABASE-CLEANUP · 2026-06-13] Default a "neon": el proyecto legacy fue
+# eliminado, así que un env var ausente cae en Neon (el único backend real).
+# La rama legacy se eliminó por completo; cualquier valor distinto de "neon"
+# hace fail-loud (ver el raise más abajo).
 MEALFIT_DB_BACKEND = (os.environ.get("MEALFIT_DB_BACKEND") or "neon").strip().lower()
 NEON_DATABASE_URL = os.environ.get("NEON_DATABASE_URL")
 NEON_DATABASE_URL_POOLED = os.environ.get("NEON_DATABASE_URL_POOLED")
@@ -187,9 +185,9 @@ if MEALFIT_DB_BACKEND == "neon":
     try:
         from psycopg_pool import ConnectionPool, AsyncConnectionPool
 
-        # [P1-NEON-DB-MIGRATION] Neon es el ÚNICO backend de datos (Supabase
-        # eliminado por completo). Fail-loud si faltan los URLs → la config de
-        # pools aborta (/ready 503) en vez de dejar un pool a medio configurar.
+        # [P1-NEON-DB-MIGRATION] Neon es el ÚNICO backend de datos activo.
+        # Fail-loud si faltan los URLs → la config de pools aborta (/ready 503)
+        # en vez de dejar un pool a medio configurar.
         if not (NEON_DATABASE_URL and NEON_DATABASE_URL_POOLED):
             raise RuntimeError(
                 "[P1-NEON-DB-MIGRATION] Requiere NEON_DATABASE_URL (direct) y "
@@ -307,30 +305,30 @@ if MEALFIT_DB_BACKEND == "neon":
         # LangGraph para el siguiente turn.
         #
         # Root cause: el pool principal (`connection_pool`) usa Transaction
-        # Pooler (Supavisor port 6543), que mata conexiones idle agresivamente
-        # (~10-30s). Durante el chat flow, el PostgresSaver mantiene una
-        # connection abierta del pool ~5-15s mientras espera la LLM call;
-        # Supavisor la cierra mid-stream → al `put_writes` final, la conexión
-        # ya está muerta. Defensivamente psycopg keepalives no ayudan porque
-        # Supavisor corta a nivel aplicación, no TCP.
+        # Pooler (Neon/Supavisor port 6543), que mata conexiones idle
+        # agresivamente (~10-30s). Durante el chat flow, el PostgresSaver
+        # mantiene una connection abierta del pool ~5-15s mientras espera la
+        # LLM call; el pooler la cierra mid-stream → al `put_writes` final, la
+        # conexión ya está muerta. Defensivamente psycopg keepalives no ayudan
+        # porque el pooler corta a nivel aplicación, no TCP.
         #
         # Fix: el checkpointer usa `original_session_url` (sin rewrite a
         # 6543) → conexión directa session-mode (5432). Session mode no
         # mata conexiones idle de forma agresiva. Pool pequeño (1-4) porque
         # el chat-flow es low-concurrency (1 stream por user activo).
         #
-        # [P1-CHAT-CHECKPOINT-FIX · 2026-05-20] El WARN legacy
-        # "SUPABASE_DB_URL ya contiene :6543" fue removido — la nueva
-        # lógica de force-rewrite arriba garantiza que `original_session_url`
-        # SIEMPRE apunte a :5432 (session mode) cuando el host es Supabase,
-        # haciendo el WARN inalcanzable. Mantenemos el try/except por si
+        # [P1-CHAT-CHECKPOINT-FIX · 2026-05-20] El WARN legacy sobre rewrite
+        # de puerto fue removido — la nueva lógica de force-rewrite arriba
+        # garantiza que `original_session_url` SIEMPRE apunte a :5432
+        # (session mode), haciendo el WARN inalcanzable. Mantenemos el
+        # try/except por si
         # `ConnectionPool(...)` falla por otras razones (DNS, auth, etc).
         # [P1-CHAT-CHECKPOINT-DEGRADE · 2026-05-20] `min_size=0` + `max_idle=30`
-        # son recycling agresivo contra Supavisor session-pooler idle-kill.
+        # son recycling agresivo contra el idle-kill del session-pooler.
         # Pre-fix (`min_size=1, max_idle=300`): el pool pre-warmaba 1 conn al
         # startup que envejecía ~44s antes del primer chat, y LangGraph la
         # mantenía checkout durante el LLM call (10-30s). Al `put_writes`
-        # final, Supavisor ya la había matado → SSL bad length / EOF detected.
+        # final, el pooler ya la había matado → SSL bad length / EOF detected.
         # `min_size=0` evita warming de conns viejas. `max_idle=30` recicla
         # conns idle antes del kill threshold ~60-70s. Combinación: la conn
         # siempre nace fresh y vive corto. Tooltip-anchor: P1-CHAT-CHECKPOINT-DEGRADE.
@@ -351,7 +349,7 @@ if MEALFIT_DB_BACKEND == "neon":
                 "🔌 [psycopg] chat_checkpoint_pool configurado (session "
                 "mode, port 5432): min=0, max=4, max_idle=30s "
                 "[P1-CHAT-CHECKPOINT-DEGRADE: recycle agresivo evita conns "
-                "rancias que Supavisor mata mid-pipeline → SSL bad length]."
+                "rancias que el pooler mata mid-pipeline → SSL bad length]."
             )
         except Exception as checkpoint_pool_err:
             logger.error(

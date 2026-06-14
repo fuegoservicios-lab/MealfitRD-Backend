@@ -8,9 +8,10 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 import os
 import logging
 logger = logging.getLogger(__name__)
-# [P1-NEON-DB-MIGRATION · 2026-06-12] `supabase` queda SOLO para Storage
-# (`_purge_visual_diary_storage`) — todo el acceso a datos va por SQL directo.
-from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write, execute_sql_transaction
+# [P1-NEON-DB-MIGRATION · 2026-06-12] `_storage_client` es el placeholder del
+# object storage de visual_diary (`_purge_visual_diary_storage`) — pendiente
+# de migrar a provider nuevo; todo acceso a datos va por SQL directo.
+from db_core import _storage_client, connection_pool, execute_sql_query, execute_sql_write, execute_sql_transaction
 
 
 # ============================================================
@@ -97,8 +98,8 @@ def _normalize_profile_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """[P1-NEON-DB-MIGRATION · 2026-06-12] Paridad de tipos con PostgREST.
 
     psycopg devuelve tipos nativos (uuid.UUID, datetime/date, Decimal) donde
-    supabase-py devolvía JSON (strings ISO, floats). Los consumers del perfil
-    esperan la forma PostgREST — p.ej. `safe_fromisoformat(subscription_end_date)`
+    el cliente PostgREST legado devolvía JSON (strings ISO, floats). Los consumers
+    del perfil esperan la forma PostgREST — p.ej. `safe_fromisoformat(subscription_end_date)`
     hace slicing de string. Convertimos: uuid→str, datetime/date→ISO string,
     Decimal→float. jsonb (`health_profile`) ya es dict en ambos mundos.
     """
@@ -147,10 +148,10 @@ _PROFILE_ENSURED_MAX = 50_000  # backstop de memoria; reset total al superarlo
 def ensure_user_profile_exists(user_id: str, email: Optional[str] = None,
                                full_name: Optional[str] = None) -> None:
     """[P1-NEON-DB-MIGRATION · 2026-06-12] Reemplazo app-side del trigger
-    `handle_new_user` (vivía sobre `auth.users` en Supabase; en Neon el
-    schema `auth` no existe). Supabase Auth sigue creando el usuario JWT,
-    pero la fila espejo en `public.user_profiles` la garantiza el backend
-    en el primer request autenticado (auth.py::get_verified_user_id).
+    `handle_new_user` (vivía sobre `auth.users` en el proveedor anterior; en
+    Neon el schema `auth` no existe). El proveedor de Auth sigue creando el
+    usuario JWT, pero la fila espejo en `public.user_profiles` la garantiza
+    el backend en el primer request autenticado (auth.py::get_verified_user_id).
 
     Mismo payload que el trigger original: (id, email, full_name, created_at).
     ON CONFLICT (id) DO NOTHING — jamás pisa un profile existente (a
@@ -383,7 +384,7 @@ def update_user_health_profile_atomic(user_id: str, mutator):
 
     Fallback (degradación graceful — controlado por `MEALFIT_REQUIRE_ATOMIC_POOL`):
         Si `connection_pool` no está disponible (entornos dev sin psycopg
-        pool, Supabase REST puro), por default degrada al patrón legacy
+        pool configurado), por default degrada al patrón legacy
         get+update (no atómico): preserva funcionalidad en dev/scripts pero
         deja el bug de lost-update latente.
 
@@ -882,9 +883,9 @@ def reset_user_account_preferences(user_id: str) -> bool:
     cuenta consistente. Pre-fix, un fallo en el statement #5 (después de
     borrar #1-4) dejaba la cuenta en estado parcial.
     """
-    # [P1-NEON-DB-MIGRATION · 2026-06-12] `supabase` ya no es precondición:
-    # el reset es 100% SQL; el purge de Storage (best-effort) valida su
-    # propio cliente internamente.
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El object storage ya no es precondición:
+    # el reset es 100% SQL; el purge de object storage (best-effort) valida
+    # su propio cliente internamente.
     if not user_id or user_id == "guest":
         return False
 
@@ -984,16 +985,18 @@ _USER_SCOPED_TABLES_USERID = (
 
 def _purge_visual_diary_storage(user_id: str) -> int:
     """Best-effort: borra los objetos del bucket `visual_diary_images/{user_id}/`.
-    Storage NO cascadea de auth.users → sin esto las fotos sobreviven a cualquier
-    borrado. Retorna nº de objetos borrados (0 si falla / no hay)."""
-    if not supabase or not user_id:
+    El object storage de visual_diary no cascadea desde auth.users → sin esto
+    las fotos sobreviven a cualquier borrado. Retorna nº de objetos borrados
+    (0 si falla / no hay)."""
+    if not _storage_client or not user_id:
         return 0
     try:
-        bucket = supabase.storage.from_("visual_diary_images")
+        bucket = _storage_client.storage.from_("visual_diary_images")
         entries = bucket.list(user_id) or []
-        # `supabase` es stub `None` (Supabase eliminado, ver db_core); el guard
-        # `if not supabase` arriba hace que pyright narre el cuerpo a Never y
-        # marque `for e in entries` como no-iterable. FP — código intencional
+        # `_storage_client` es placeholder `None` (object storage de visual_diary
+        # pendiente de migrar, ver db_core); el guard `if not _storage_client`
+        # arriba hace que pyright narre el cuerpo a Never y marque
+        # `for e in entries` como no-iterable. FP — código intencional
         # preservado para cuando vuelva el object storage. Cero efecto runtime.
         paths = [
             f"{user_id}/{e['name']}"
@@ -1028,8 +1031,8 @@ def delete_account_data(user_id: str, include_profile: bool = True) -> Dict[str,
         "errors": [],
         "storage_objects_removed": 0,
     }
-    # [P1-NEON-DB-MIGRATION · 2026-06-12] `supabase` fuera de la precondición:
-    # la purga de datos es 100% SQL; Storage (best-effort) chequea su cliente.
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] El object storage queda fuera de la precondición:
+    # la purga de datos es 100% SQL; el object storage (best-effort) chequea su cliente.
     if not connection_pool or not user_id or user_id == "guest":
         result["errors"].append("precondición inválida (pool/user_id)")
         return result

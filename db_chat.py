@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union, cast
 import os
 import logging
 logger = logging.getLogger(__name__)
-from db_core import supabase, connection_pool, execute_sql_query, execute_sql_write
+from db_core import _storage_client, connection_pool, execute_sql_query, execute_sql_write
 # [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] Tenacity para retry exponencial
 # en `save_message`. Ya es dep declarada (requirements.txt:11 — tenacity==9.1.4)
 # y usada en todo el repo para retries de DB y LLM transients.
@@ -18,9 +18,9 @@ from tenacity import (
     before_sleep_log,
 )
 
-# [P1-NEON-DB-MIGRATION · 2026-06-12] Módulo migrado de PostgREST (supabase-py)
-# a SQL directo vía psycopg (datos viven en Neon; Supabase queda solo Auth+
-# Storage). Los SELECT castean uuid/timestamptz a ::text para preservar la
+# [P1-NEON-DB-MIGRATION · 2026-06-12] Módulo migrado de PostgREST (cliente legado)
+# a SQL directo vía psycopg (datos viven en Neon). Los SELECT castean
+# uuid/timestamptz a ::text para preservar la
 # paridad de tipos con PostgREST (que devolvía JSON con strings ISO): los
 # consumers hacen slicing/`.endswith`/`fromisoformat`/comparaciones string
 # sobre `created_at` y usan ids como keys de dicts/sets.
@@ -425,16 +425,16 @@ def delete_chat_session(session_id: str, user_id: str) -> Tuple[bool, str]:
 
 # [P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] El INSERT a `agent_messages` ahora
 # va envuelto en tenacity retry exponencial (3 intentos, base 0.5s,
-# multiplier 2, max 4s). Vector cerrado: si Supabase tiene un blip
-# transient mid-stream (network jitter, momentary 5xx, connection pool
-# exhausto), pre-fix el `.execute()` levantaba la excepción → el caller
+# multiplier 2, max 4s). Vector cerrado: si la DB tiene un blip transient
+# mid-stream (network jitter, momentary 5xx, connection pool exhausto),
+# pre-fix el `.execute()` levantaba la excepción → el caller
 # en routers/chat.py la atrapaba como `Error en bg tasks` (warning) y
 # el flujo seguía. El usuario veía la respuesta del agente RENDERIZADA
 # en su pantalla pero la respuesta NO existía en `agent_messages` →
 # mensaje fantasma. Al refrescar la sesión, el LLM perdía contexto del
 # turno anterior y respondía como si nada hubiera pasado.
 #
-# Retry específico para excepciones de Supabase/Postgrest: NO atrapamos
+# Retry específico para excepciones de DB/red: NO atrapamos
 # ValueError/KeyError (bug del caller, no transient). El `before_sleep_log`
 # emite WARNING a logs para que SRE pueda graficar la frecuencia.
 # Tooltip-anchor: P2-CHAT-SAVE-MSG-RETRY.
@@ -455,7 +455,7 @@ def _save_message_insert_with_retry(
     session_id: str, role: str, content: str, user_id: Optional[str]
 ) -> None:
     """[P2-CHAT-SAVE-MSG-RETRY · 2026-05-19] Helper aislado del INSERT
-    para que tenacity sólo envuelva el roundtrip a Supabase. El side-effect
+    para que tenacity sólo envuelva el roundtrip a la DB. El side-effect
     `handle_nudge_response` queda FUERA — su falla no debe disparar
     re-INSERT (re-procesaría el nudge response múltiples veces).
 
@@ -512,7 +512,7 @@ def save_message(
     # Si los 3 intentos fallan, la excepción se re-raises al caller — el
     # finally idempotente del SSE billing (P2-AUDIT-NEW-2) corre igual,
     # pero el caller decide cómo manejar el log. NO usamos `pass` silente:
-    # 3 fallos consecutivos a Supabase es un incidente real, no transient.
+    # 3 fallos consecutivos a la DB es un incidente real, no transient.
     _save_message_insert_with_retry(session_id, role, content, user_id)
 
 def save_message_feedback(session_id: str, content: str, feedback: Optional[str]):
@@ -737,10 +737,11 @@ def get_recent_messages(session_id: str, limit: int = 10):
 
     [P1-CHAT-SUPABASE-RETRY · 2026-05-20] Retry 2 intentos con backoff 0.3-1.5s
     para cubrir el caso `httpx.RemoteProtocolError: Server disconnected`
-    cuando Kong/PostgREST cierra la conexión HTTP/2 idle. La primera request
-    post-idle falla pero httpx abre socket nuevo para la segunda. Tenacity
-    re-raise tras agotar intentos para que callers (build_memory_context →
-    chat_with_agent_stream) puedan propagar la excepción si persiste.
+    cuando el gateway/PostgREST cerraba la conexión HTTP/2 idle (proveedor
+    legado). La primera request post-idle fallaba pero httpx abría socket nuevo
+    para la segunda. Tenacity re-raise tras agotar intentos para que callers
+    (build_memory_context → chat_with_agent_stream) puedan propagar la
+    excepción si persiste.
 
     Conservador: retry_if_exception_type=Exception es amplio pero stop=2
     limita el blast radius (max 1 reintento). Si el error es genuino (parse,

@@ -861,7 +861,7 @@ def api_chat_stream(background_tasks: BackgroundTasks, data: dict = Body(...), v
                 # verified_user_id cierra el bypass: invitados (sin token →
                 # verified_user_id None) siguen gratis + acotados por
                 # `_CHAT_STREAM_LIMITER`; autenticados se facturan en la
-                # identidad que Supabase verificó (no spoofeable vía body).
+                # identidad que el proveedor de Auth verificó (no spoofeable vía body).
                 # Tooltip-anchor: P1-CHAT-BILL-VERIFIED-UID.
                 if not _billed and _chunk_observed and verified_user_id:
                     try:

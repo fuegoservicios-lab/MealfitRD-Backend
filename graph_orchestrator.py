@@ -3173,7 +3173,7 @@ class PersistentLLMCache:
             # para próximas calls; no afecta el plan actual).
             logger.info(f"[LLM-CACHE] DB async set skipped (best-effort, no afecta plan): {e}")
 
-# Brecha 1 Fix: Estado Persistente (Redis / Supabase)
+# Brecha 1 Fix: Estado Persistente (Redis / DB)
 # P1-NEW-2: TTL configurable vía `MEALFIT_LLM_CACHE_TTL_S`. Default 300s.
 _LLM_CACHE = PersistentLLMCache(ttl_seconds=LLM_CACHE_TTL_S)
 CACHE_TTL_SECONDS = LLM_CACHE_TTL_S
@@ -6146,7 +6146,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                                     # P0-3: Despachar la tool sync a thread pool. Aunque la
                                     # tool actual es CPU-puro (lookup en dict), el agent loop
                                     # corre con N días en paralelo + retries: cualquier
-                                    # evolución a I/O (USDA API, Supabase) congelaría el
+                                    # evolución a I/O (USDA API, DB externa) congelaría el
                                     # event loop de todos los workers simultáneamente.
                                     result = await asyncio.to_thread(consultar_nutricion.invoke, tool_args)
                                 except Exception as e:
@@ -14038,7 +14038,7 @@ async def preflight_optimization_node(state: PlanState) -> dict:
         # holistic_score). Antes este nodo usaba SQL raw, lo que (a) duplicaba
         # parsing JSON, (b) saltaba la lógica de graceful-degradation que aplica
         # get_user_profile, (c) podía leer estados desfasados respecto a otros
-        # nodos si Supabase tenía réplicas de lectura.
+        # nodos si la DB tenía réplicas de lectura.
         # P0-NEW-1.e: get_user_profile sync bloqueaba el loop ~50-200ms al inicio
         # del pipeline. Despachado al `_DB_EXECUTOR` para no congelar callbacks.
         # Mejora 7: Leer el last_pipeline_score (Holistic Score) del perfil canónico
@@ -17656,7 +17656,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
 
             # 1. Recuperación estricta (Metadata JSONB) - ALERGIAS, CONDICIONES, RECHAZOS
             # P1-3: Las 3 lookups son independientes y cada una hace I/O contra
-            # Supabase (~50-200ms). Antes corrían secuenciales bloqueando el
+            # la DB (~50-200ms). Antes corrían secuenciales bloqueando el
             # event loop (~150-600ms total). Ahora se paralelizan en thread pool
             # → latencia ≈ max(latencias) y no se bloquea el loop.
             strict_facts_text = ""

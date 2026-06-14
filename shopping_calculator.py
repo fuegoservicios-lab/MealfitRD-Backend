@@ -5,7 +5,7 @@ import random
 from collections import defaultdict
 import logging
 from fractions import Fraction
-from db_core import supabase, connection_pool, execute_sql_query
+from db_core import _storage_client, connection_pool, execute_sql_query
 from canonical_units import canonicalize_unit, to_base_amount as _to_base_amount  # [P1-shop-coh-1] SSOT de unidades; [P1-NEW-10] conversor base
 
 import time as _time
@@ -1837,7 +1837,7 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     if density_per_u is not None:
         density_per_u = float(density_per_u)
 
-    # Fallback Semántico si no hay densidad en Supabase
+    # Fallback Semántico si no hay densidad en la DB
     if not density_per_u:
         from constants import UNIT_WEIGHTS
         n_clean = ''.join(c for c in unicodedata.normalize('NFD', n_lower) if unicodedata.category(c) != 'Mn')

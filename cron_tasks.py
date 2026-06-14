@@ -898,7 +898,7 @@ def _validate_chunk_pre_llm(task_id, meal_plan_id, user_id):
 # re-escribían en cada arranque (idempotente pero con WAL traffic creciente);
 # si se seteaba antes de aplicar la migración, los planes legacy quedaban sin
 # anchor y el cron caía al fallback hardcoded "8am UTC" desalineando hasta 24h
-# en TZ no-UTC. Migración SQL aplicada manualmente vía Supabase es la fuente
+# en TZ no-UTC. Migración SQL aplicada manualmente vía consola de DB es la fuente
 # única de verdad.
 
 
@@ -946,7 +946,7 @@ def _shopping_coherence_alert_job():
     """
     # [P2-LIVE-9 · 2026-05-11] Observability flags pre-inicializados para
     # que el tick en `finally:` reporte estado consistente aunque haya
-    # early return (supabase no init, fetch falla, < min_plans, etc).
+    # early return (pool no init, fetch falla, < min_plans, etc).
     _tick_n_plans = 0
     _tick_plans_with_div = 0
     _tick_cap_count = 0
@@ -985,7 +985,7 @@ def _shopping_coherence_alert_job():
         # Import lazy del pool (late-binding: re-importar dentro de la función
         # lee el valor ACTUAL de db_core.connection_pool). Los skip_reason
         # conservan sus nombres históricos (`db_core_import_failed`,
-        # `supabase_not_initialized`) por continuidad de dashboards + el
+        # `db_not_initialized`) por continuidad de dashboards + el
         # clasificador P1-COH-BENIGN-SKIP del finally.
         try:
             from db_core import connection_pool as _coh_pool
@@ -995,8 +995,8 @@ def _shopping_coherence_alert_job():
             return
 
         if not _coh_pool:
-            logger.warning("[COH-ALERT] connection_pool no inicializado — skip.")
-            _tick_skip_reason = "supabase_not_initialized"
+            logger.warning("[COH-ALERT] connection_pool no inicializado (pool de DB / Neon) — skip.")
+            _tick_skip_reason = "db_not_initialized"
             return
 
         # Ventana 24h sobre `created_at` DELIBERADO (planes nuevos del día);
@@ -1082,7 +1082,7 @@ def _shopping_coherence_alert_job():
                             # [NG-5 · 2026-05-30] Chequear el valor de retorno: un UPDATE de
                             # 0 filas (TOCTOU: plan borrado / user_id cambiado entre el SELECT
                             # del cron y este write) no debe contar como persistido. Truthy
-                            # cubre True (psycopg) y lista no-vacía (supabase). Solo afecta la
+                            # cubre True (psycopg) y lista no-vacía (path legado). Solo afecta la
                             # exactitud del counter log-only; sin pérdida de datos.
                             if _persist_plan_data(plan_id, plan_data, user_id=user_id):
                                 persisted_count += 1
@@ -1180,7 +1180,7 @@ def _shopping_coherence_alert_job():
             # umbral), NO un fallo del cron. Pre-fix se contaba como failure
             # → alert `shopping_coherence_alert_job_failures_burst` ruidosa
             # durante semanas pre-launch (count llegó a 14 en prod). Las otras
-            # 4 skip_reason (db_core_import_failed, supabase_not_initialized,
+            # 4 skip_reason (db_core_import_failed, db_not_initialized,
             # fetch_plans_failed, guard_persist_import_failed) sí son fallos
             # reales. Tooltip-anchor: P1-COH-BENIGN-SKIP.
             _BENIGN_SKIP_REASONS = frozenset({"below_min_plans"})
@@ -1324,7 +1324,7 @@ def _aggregate_coherence_block_history_metrics():
     """
     # [P1-CRON-TOP-LEVEL-TRY · 2026-05-15] Top-level try/finally + tick
     # observable. ANTES, los `return` tempranos (db_core import fail,
-    # supabase=None, fetch falla) salían silenciosamente sin emitir nada
+    # pool=None, fetch falla) salían silenciosamente sin emitir nada
     # a pipeline_metrics. El watchdog `_alert_pipeline_metrics_silence`
     # observa el heartbeat `_chunk_heartbeat_baseline` (que está OK), pero
     # NO observa este cron específico — un fallo de 3h consecutivas era
@@ -1355,7 +1355,7 @@ def _aggregate_coherence_block_history_metrics():
 
         # [P1-NEON-DB-MIGRATION · 2026-06-12] PostgREST → SQL directo (Neon).
         # skip_reason conserva los nombres históricos (`db_core_import_failed`,
-        # `supabase_not_initialized`) por continuidad de dashboards.
+        # `db_not_initialized`) por continuidad de dashboards.
         try:
             from db_core import connection_pool as _agg_pool
         except Exception as e:
@@ -1364,8 +1364,8 @@ def _aggregate_coherence_block_history_metrics():
             return
 
         if not _agg_pool:
-            logger.warning("[P3-B/COH-METRICS] connection_pool no inicializado — skip.")
-            _agg_tick_skip_reason = "supabase_not_initialized"
+            logger.warning("[P3-B/COH-METRICS] connection_pool (pool de DB / Neon) no inicializado — skip.")
+            _agg_tick_skip_reason = "db_not_initialized"
             return
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_h)
@@ -1505,7 +1505,7 @@ def _aggregate_coherence_block_history_metrics():
         # [P1-CRON-TOP-LEVEL-TRY · 2026-05-15] Tick observable SIEMPRE
         # (patrón P2-LIVE-9 de `_shopping_coherence_alert_job`). `skip_reason`
         # distingue 5+ paths: ok=None / db_core_import_failed /
-        # supabase_not_initialized / fetch_plans_failed / unhandled_exception.
+        # db_not_initialized / fetch_plans_failed / unhandled_exception.
         try:
             execute_sql_write(
                 "INSERT INTO pipeline_metrics (user_id, session_id, node, "
@@ -1600,7 +1600,7 @@ def _alert_deploy_lag_marker_stale():
                                                               (consumido por
                                                               register_plan_chunk_scheduler).
 
-    NO muta nada. NO depende de Supabase para la señal A — sigue funcionando
+    NO muta nada. NO depende de un cliente externo para la señal A — sigue funcionando
     aunque DB esté caída (la señal B se salta best-effort si el SELECT falla).
 
     Fuera de scope (P3 separado): comparación contra el SHA de GitHub. Eso
@@ -1792,7 +1792,7 @@ def _alert_failed_inventory_deductions_backlog() -> None:
       MEALFIT_FAILED_DEDUCTIONS_ALERT_INTERVAL_MIN (default 60)
         — frecuencia del cron (consumido por register_plan_chunk_scheduler).
 
-    No falla si supabase no está disponible (skip silencioso, mismo patrón
+    No falla si el pool no está disponible (skip silencioso, mismo patrón
     que `_alert_deploy_lag_marker_stale`).
     """
     # [P1-KNOB-CLAMPS · 2026-05-26] Clamp [1, 100_000] threshold y [1, 720] lookback.
@@ -1937,7 +1937,7 @@ def _process_failed_inventory_deductions_queue() -> None:
       5. Si alguno aún falla → UPDATE `attempts + 1`. Si attempts ≥ max →
          DELETE como dead-letter (WARN log).
 
-    NO falla si supabase / imports no disponibles (skip silencioso).
+    NO falla si pool / imports no disponibles (skip silencioso).
     """
     enabled = _env_bool("MEALFIT_FAILED_DEDUCTIONS_RETRY_ENABLED", True)
     if not enabled:
@@ -2113,7 +2113,7 @@ def _alert_pdf_stale_inventory_fallback_burst() -> None:
     Antes (audit 2026-05-13):
         El frontend solo emite `trackEvent` que va a Sentry/PostHog/GA/GTM.
         El backend NO observaba frecuencia → un blip prolongado de
-        Supabase que mantenía a la flota en stale fallback (cada PDF
+        un problema de DB que mantenía a la flota en stale fallback (cada PDF
         usando inventory cacheado) pasaba sin alert hasta que alguien
         miraba Sentry manualmente.
 
@@ -2129,7 +2129,7 @@ def _alert_pdf_stale_inventory_fallback_burst() -> None:
     AND resolved_at IS NULL`. Diferencia con `failed_inventory_deductions_backlog`
     (Manual): el evento PDF stale es transient por naturaleza (network
     blip), no implica corrupción persistente — el auto-resolve cierra
-    la alert sin SRE intervention cuando Supabase vuelve a responder.
+    la alert sin SRE intervention cuando la DB vuelve a responder.
 
     Knobs (registrados en `_KNOBS_REGISTRY` vía `_env_int`):
       MEALFIT_PDF_STALE_FALLBACK_ALERT_THRESHOLD (default 10)
@@ -2139,7 +2139,7 @@ def _alert_pdf_stale_inventory_fallback_burst() -> None:
       MEALFIT_PDF_STALE_FALLBACK_ALERT_INTERVAL_MIN (default 15)
         — frecuencia del cron (consumido por register_plan_chunk_scheduler).
 
-    No falla si supabase no está disponible (skip silencioso).
+    No falla si el pool no está disponible (skip silencioso).
     """
     threshold = _env_int("MEALFIT_PDF_STALE_FALLBACK_ALERT_THRESHOLD", 10)
     lookback_min = _env_int("MEALFIT_PDF_STALE_FALLBACK_ALERT_LOOKBACK_MIN", 60)
@@ -2188,7 +2188,7 @@ def _alert_pdf_stale_inventory_fallback_burst() -> None:
     if n < auto_resolve_threshold:
         # Auto-resolve: alert estaba abierta y el ratio cayó BAJO la banda
         # de hysteresis (ratio * threshold). Eventos transient (network
-        # blip, supabase pool exhausted) deben recuperarse sin SRE
+        # blip, DB pool exhausted) deben recuperarse sin SRE
         # intervention. P3-PDF-OBS-FU-C añadió hysteresis: pre-fix esta
         # rama era `n < threshold` (sin banda muerta).
         try:
@@ -2233,7 +2233,7 @@ def _alert_pdf_stale_inventory_fallback_burst() -> None:
                     f"afectados={distinct_users}). El fetch fresh de `user_inventory` "
                     f"está fallando o timeouteando — usuarios descargan PDFs con "
                     f"inventory cacheado y pueden comprar duplicados. Posibles "
-                    f"causas: pool de Supabase exhausted, latencia tail de Postgres, "
+                    f"causas: pool de Neon exhausted, latencia tail de Postgres, "
                     f"regresión en `fetchFreshInventoryWithTimeout` (frontend), o "
                     f"timeout 2000ms insuficiente bajo carga. Auto-resuelve cuando "
                     f"el ratio caiga bajo umbral."
@@ -2289,8 +2289,8 @@ def _alert_coherence_watchdog_silent():
       MEALFIT_COHERENCE_WATCHDOG_LIVENESS_INTERVAL_MIN (default 60) —
         frecuencia (consumido por register_plan_chunk_scheduler).
 
-    NO depende de Supabase REST: usa `execute_sql_query` (DB directa) para
-    que un blip transitorio en PostgREST no produzca falsa alerta.
+    NO depende de PostgREST: usa `execute_sql_query` (DB directa) para
+    que un blip transitorio en el cliente REST no produzca falsa alerta.
 
     Limitación intencional: si el scheduler entero está caído (P0-2
     cascade), este cron tampoco corre. Cubre el modo "scheduler vivo,
@@ -2460,7 +2460,7 @@ def _alert_pipeline_metrics_silence():
     contrato documentado en CLAUDE.md (tabla de system_alerts policy) y
     los tests P2-OBSERVABILITY-1 originales.
 
-    NO depende de Supabase REST: usa `execute_sql_query` (DB directa).
+    NO depende de PostgREST: usa `execute_sql_query` (DB directa).
     """
     global_threshold_min = _env_int("MEALFIT_PIPELINE_METRICS_SILENCE_ALERT_MIN", 30)
     if global_threshold_min < 5:
@@ -2898,7 +2898,7 @@ def _resolve_stale_scheduler_alerts() -> None:
     # `bg_task_timeout:<task_name>` (emitido por bg_executor.py cuando un bg task
     # excede su timeout). Pre-fix NO tenía NINGÚN resolver (Auto/Handler/sweep) →
     # quedaba rojo-permanente una vez disparado, pese a que la condición es
-    # transitoria (Gemini/Supabase colgado). Si no hay re-disparo (triggered_at no
+    # transitoria (LLM o DB colgado). Si no hay re-disparo (triggered_at no
     # se refresca) en la ventana TTL, la condición ya pasó → resolver. Lo doblamos
     # en este cron (en vez de registrar uno nuevo) porque es el sweep canónico de
     # alerts operacionales stale. RECORDAR `AND resolved_at IS NULL` para no
@@ -5412,7 +5412,7 @@ def _drain_pending_facts_queue() -> None:
 def _delete_old_meal_rejections_weekly() -> None:
     """[P1-NEON-DB-MIGRATION · 2026-06-12] Reemplazo APScheduler del pg_cron
     job `cleanup_old_meal_rejections` que vivía DENTRO del Postgres de
-    Supabase (extensión pg_cron, semanal). Neon no garantiza pg_cron con
+    la plataforma anterior (extensión pg_cron, semanal). Neon no garantiza pg_cron con
     compute autosuspend, y la convención del repo es que TODO cron vive en
     `register_plan_chunk_scheduler` (SSOT). Invoca la función SQL existente
     `public.delete_old_meal_rejections()` (restaurada en Neon por el dump)."""
@@ -5756,7 +5756,7 @@ def register_plan_chunk_scheduler(scheduler) -> None:
 
     # [P1-NEON-DB-MIGRATION · 2026-06-12] Cleanup semanal de meal_rejections
     # viejas — antes era pg_cron `cleanup_old_meal_rejections` dentro del
-    # Postgres de Supabase; migrado a APScheduler (SSOT de crons) porque Neon
+    # Postgres legado; migrado a APScheduler (SSOT de crons) porque Neon
     # autosuspende el compute y pg_cron no es confiable ahí. Domingo 03:15 UTC
     # (off-peak, antes de los sweeps hermanos 03:30/03:45).
     if not scheduler.get_job("delete_old_meal_rejections_weekly"):
@@ -5771,7 +5771,7 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         )
         logger.info(
             "⏰ [P1-NEON-DB-MIGRATION] Cron semanal delete_old_meal_rejections "
-            "registrado (Dom 03:15 UTC — reemplaza pg_cron de Supabase)."
+            "registrado (Dom 03:15 UTC — reemplaza pg_cron legado)."
         )
 
     # [P0-5 · 2026-05-10] Alerta de backlog en `failed_inventory_deductions`.
@@ -14847,7 +14847,7 @@ def _compute_chunk_retry_delay_minutes(next_attempt: int, is_critical: bool = Fa
 def _coerce_consumed_at_to_dt(val):
     """[GAP-1 · 2026-05-29 · key-drift fix] `consumed_meals.consumed_at` llega como
     `datetime` (psycopg `dict_row` sobre `timestamptz`) o como ISO string
-    (supabase / fixtures de test). Normaliza a `datetime` tz-aware en UTC.
+    (psycopg / fixtures de test). Normaliza a `datetime` tz-aware en UTC.
     Retorna `None` si no parseable. SSOT del parse temporal de comidas consumidas
     consumido por `calculate_ingredient_fatigue` y `calculate_day_of_week_adherence`,
     que antes leían `created_at` (clave inexistente en el fetcher real) → siempre 0
@@ -14981,7 +14981,7 @@ def calculate_ingredient_fatigue(user_id: str, days_back: int = 14, tuning_metri
         # 1. Temporal Decay
         # [GAP-1 · 2026-05-29] Leer `consumed_at` (la clave que el fetcher real
         # SÍ devuelve), no `created_at`. `_coerce_consumed_at_to_dt` tolera tanto
-        # datetime (psycopg) como ISO string (supabase/fixtures).
+        # datetime (psycopg) como ISO string (legado/fixtures).
         _consumed_dt = _coerce_consumed_at_to_dt(meal.get('consumed_at'))
         days_ago = max(0, (now - _consumed_dt).days) if _consumed_dt else 0
 
@@ -16071,7 +16071,7 @@ def _inject_advanced_learning_signals(user_id: str, pipeline_data: dict, health_
             # [P3-GENCHUNK-SPEED · 2026-06-01] Gatear el fetch en el MISMO flag
             # del que ambos consumidores dependen (JUDGE FEEDBACK L15768 y
             # attribution L15792 ambos AND `_quality_data_sufficient`). En
-            # cold-start (consumed<3) este fetch — un round-trip Supabase serial
+            # cold-start (consumed<3) este fetch — un round-trip DB serial
             # sobre el plan_data completo, JUSTO antes del chunk LLM — se descartaba
             # entero. Espeja el hoist G-B3/P2-CRON-OPT-4 que gateó
             # calculate_plan_quality_score en este mismo flag.
@@ -17301,7 +17301,7 @@ def _enqueue_plan_chunk(
     # `pending_user_action` con reason='empty_pantry_proactive'. El recovery cron
     # existente reanuda en cuanto detecta items suficientes.
     #
-    # Conservadores: si la lectura live falla (DB blip / Supabase down), NO
+    # Conservadores: si la lectura live falla (DB blip / Neon down), NO
     # pausamos — preferimos dejar el chunk en pending y que el worker, con su
     # backoff y snapshot fallback, decida más tarde. Pausar agresivamente con
     # info parcial sería peor UX que aceptar un retraso.
@@ -19207,7 +19207,7 @@ def _alert_atomic_pool_fallback() -> None:
       `db_profiles.update_user_health_profile_atomic` requiere `connection_pool`
       para serializar reads/writes con SELECT...FOR UPDATE. Si el pool no está
       inicializado (typical: misconfig de DATABASE_URL en deploy, conectividad
-      a Supabase Pooler:6543 caída, env-var truncada al copy/paste), por default
+      al pooler de Neon :6543 caída, env-var truncada al copy/paste), por default
       degrada al patrón legacy get+update (no atómico) y solo loguea WARNING +
       incrementa el counter `_POOL_FALLBACK_STATE`. Hasta P2-6 ese counter solo
       era inspectable via `/api/system/atomic-pool-health` (polling manual).
@@ -20528,7 +20528,7 @@ def _alert_chunk_pantry_snapshots_stale() -> None:
     (`CHUNK_STALE_SNAPSHOT_FORCE_GENERATE_HOURS`=24h, donde se fuerza
     flexible_mode para no bloquear) hay una zona intermedia donde el snapshot
     es viejo. Si hay un patrón sistémico (live-fetch caído, refresh proactivo
-    no corriendo, alta latencia de Supabase), los snapshots acumulan edad
+    no corriendo, alta latencia de Neon), los snapshots acumulan edad
     silenciosamente y los chunks degradan al pickup sin que SRE lo vea.
 
     Esta alerta detecta esa zona intermedia: cuenta chunks pending cuyo
@@ -20713,7 +20713,7 @@ def _alert_chunk_pantry_snapshots_stale() -> None:
                         f">{threshold_h}h. "
                         f"max={max_age_h:.1f}h avg={avg_age_h:.1f}h users={len(affected_user_ids)}. "
                         f"Posible causa: refresh proactivo no corriendo, live-fetch sistémico "
-                        f"caído, o latencia alta de Supabase. Sin intervención los chunks "
+                        f"caído, o latencia alta de Neon. Sin intervención los chunks "
                         f"forzarán flexible_mode al cruzar 24h (UX degradada)."
                     ),
                     json.dumps({
@@ -31033,10 +31033,10 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
     # 30.00 sec` en callers ajenos (p. ej. get_consumed_meals_today del dashboard).
     pending_enqueues: list[tuple] = []
 
-    # [POOL-FIX #2] Pre-fetch del inventario vía Supabase REST ANTES de entrar
+    # [POOL-FIX #2] Pre-fetch del inventario vía SQL ANTES de entrar
     # a la transacción del pool. La rama renewable de abajo necesita `live_inv`;
-    # ejecutar el helper REST dentro de la transacción mantiene la conexión del
-    # pool tomada durante varios round-trips HTTP (~100-1000ms cada uno),
+    # ejecutar el helper dentro de la transacción mantiene la conexión del
+    # pool tomada durante varios round-trips (~100-1000ms cada uno),
     # multiplicando el hold-time por tarea.
     pre_fetched_inv = None
     try:
@@ -31370,10 +31370,10 @@ def _background_shift_plan_for_user(user_id: str, tz_offset: int = 0) -> bool:
                         else:
                             # [POOL-FIX #2] Antes hacíamos `_bg_get_inv(user_id)` aquí,
                             # con la conexión del pool tomada y la transacción abierta.
-                            # Cada llamada hace varias HTTP round-trips a Supabase REST
-                            # (~100-1000ms cada una) — multiplicaba el hold-time del
-                            # pool. Ahora usamos `pre_fetched_inv` calculado al inicio
-                            # de la función, ANTES de entrar al `with connection_pool…`.
+                            # Cada llamada hacía varios round-trips (~100-1000ms cada
+                            # una) — multiplicaba el hold-time del pool. Ahora usamos
+                            # `pre_fetched_inv` calculado al inicio de la función,
+                            # ANTES de entrar al `with connection_pool…`.
                             live_inv = pre_fetched_inv
 
                             if live_inv is None or len(live_inv) < CHUNK_MIN_FRESH_PANTRY_ITEMS:
@@ -31658,7 +31658,7 @@ def trigger_background_rolling_refill() -> None:
 # nadie las borre. `summarize_and_prune` (memory_manager.py) ya recorta
 # mensajes DENTRO de una sesión activa (cap del historial inyectado al
 # LLM), pero NO toca sesiones inactivas. Resultado: bloat slow-burn de
-# DB + costo de storage Supabase + latencia creciente en queries
+# DB + costo de storage + latencia creciente en queries
 # `/api/chat/sessions/{user_id}` que escanea todo `agent_sessions`
 # WHERE user_id = X ORDER BY (sort se computa en Python sobre el
 # `last_activity` derivado de `agent_messages` — ver db_chat.py:240).

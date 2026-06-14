@@ -22,8 +22,8 @@ builder PostgREST (`supabase.table(...).select(...).gte(...)`) sino
 `cron_tasks.execute_sql_query` (fetch de meal_plans) + `db_core.connection_pool`
 (guard de disponibilidad). Los rows del fetch reflejan la paridad de tipos
 del SQL nuevo: `id::text`/`user_id::text` → str, `plan_data` jsonb → dict.
-El skip_reason `supabase_not_initialized` se PRESERVÓ deliberadamente
-(continuidad de dashboards) aunque el guard sea ahora `connection_pool`.
+El skip_reason `db_not_initialized` refleja que el guard es ahora
+`connection_pool` (pool de DB / Neon). Renombrado en P1-NEON-DB-MIGRATION.
 """
 import math
 import pytest
@@ -245,7 +245,7 @@ class TestSupabaseUnavailable:
     def test_supabase_none_emits_tick_with_skip_reason(self, monkeypatch, captured_inserts):
         """[P1-CRON-TOP-LEVEL-TRY · 2026-05-15] Si el pool SQL es None, el
         cron DEBE emitir tick observable a pipeline_metrics con
-        `skip_reason='supabase_not_initialized'`. Pre-fix, hacía silent skip
+        `skip_reason='db_not_initialized'`. Pre-fix, hacía silent skip
         — el watchdog no podía distinguir "cron OK sin anomalías" de
         "cron silenciosamente abortando por pool=None 3h seguidas".
 
@@ -253,9 +253,8 @@ class TestSupabaseUnavailable:
         que discrimina los 5 paths canónicos.
 
         [P1-NEON-DB-MIGRATION · 2026-06-12] El guard es ahora
-        `db_core.connection_pool` (no `db_core.supabase`), pero el literal
-        `supabase_not_initialized` se preservó deliberadamente por
-        continuidad de dashboards — NO renombrarlo.
+        `db_core.connection_pool` (pool de DB / Neon). String renombrado a
+        `db_not_initialized` (neutro, sin supabase).
         """
         import db_core
         monkeypatch.setattr(db_core, "connection_pool", None)
@@ -263,15 +262,15 @@ class TestSupabaseUnavailable:
         # No debe lanzar.
         _aggregate_coherence_block_history_metrics()
         # Tras P1-CRON-TOP-LEVEL-TRY: el INSERT SÍ debe emitirse, con
-        # skip_reason='supabase_not_initialized' en metadata.
+        # skip_reason='db_not_initialized' en metadata.
         assert len(captured_inserts) == 1, (
             f"P1-CRON-TOP-LEVEL-TRY: el tick observable debe emitirse aunque "
             f"connection_pool=None. captured_inserts={captured_inserts!r}"
         )
         meta = _parse_metadata(captured_inserts[0])
-        assert meta.get("skip_reason") == "supabase_not_initialized", (
+        assert meta.get("skip_reason") == "db_not_initialized", (
             f"P1-CRON-TOP-LEVEL-TRY: skip_reason debe ser "
-            f"'supabase_not_initialized' (literal legacy preservado) cuando "
+            f"'db_not_initialized' (pool de DB / Neon no inicializado) cuando "
             f"connection_pool=None. Got: {meta.get('skip_reason')!r}"
         )
 

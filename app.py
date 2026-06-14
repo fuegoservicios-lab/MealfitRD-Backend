@@ -200,7 +200,7 @@ logger = logging.getLogger(__name__)
 from correlation import install_log_filter  # noqa: E402 — orden intencional
 install_log_filter()
 
-# Silenciar logs verbosos de httpx (Supabase client)
+# Silenciar logs verbosos de httpx (cliente HTTP interno)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -895,7 +895,7 @@ async def _hardfloor_autoheal_loop(interval_s: int):
 # conexión viva; por eso debe ser session-mode 5432 (el Transaction Pooler
 # 6543 liberaría el lock al terminar la sentencia).
 #
-# FAIL-OPEN: si el mecanismo falla por cualquier razón (sin SUPABASE_DB_URL,
+# FAIL-OPEN: si el mecanismo falla por cualquier razón (sin DATABASE_URL,
 # error de conexión, etc.) este worker actúa como leader igual — preferimos el
 # riesgo conocido de crons duplicados antes que DESACTIVAR todos los crons.
 # Knob MEALFIT_SCHEDULER_LEADER_LOCK=0 desactiva el guard (rollback sin
@@ -904,10 +904,10 @@ async def _hardfloor_autoheal_loop(interval_s: int):
 def _build_session_mode_db_url() -> Optional[str]:
     # [P1-NEON-DB-MIGRATION · 2026-06-12] La resolución del URL session-mode
     # vive en db_core (knob MEALFIT_DB_BACKEND): Neon → NEON_DATABASE_URL
-    # (endpoint directo), Supabase → SUPABASE_DB_URL forzado a :5432. El
-    # mirror local de la heurística ':6543'→':5432' era NO-OP con hostnames
-    # Neon y el leader lock habría caído en el pooler transaction-mode
-    # (advisory lock de sesión liberado por sentencia → lock inútil).
+    # (endpoint directo, único backend activo). El mirror local de la
+    # heurística ':6543'→':5432' era NO-OP con hostnames Neon y el leader
+    # lock habría caído en el pooler transaction-mode (advisory lock de
+    # sesión liberado por sentencia → lock inútil).
     try:
         from db_core import DB_SESSION_MODE_URL
         if DB_SESSION_MODE_URL:
@@ -917,8 +917,8 @@ def _build_session_mode_db_url() -> Optional[str]:
     # Fallback legacy (pools no configurados — e.g. import de psycopg_pool
     # falló pero psycopg directo sí está disponible). [P1-SUPABASE-CLEANUP ·
     # 2026-06-13] Lee el endpoint DIRECTO de Neon (ya es session-mode nativo);
-    # el SUPABASE_DB_URL legacy se eliminó al borrar el proyecto Supabase, así
-    # que el rewrite :6543→:5432 (específico de Supavisor) ya no aplica.
+    # el rewrite :6543→:5432 (específico de Supavisor del proveedor anterior)
+    # ya no aplica porque el endpoint Neon es directo.
     raw = os.environ.get("DATABASE_URL") or os.environ.get("NEON_DATABASE_URL")
     if not raw:
         return None
@@ -975,7 +975,7 @@ def _acquire_scheduler_leader_lock():
             keepalives_interval=10,
             keepalives_count=5,
             # [P3-PROD-AUDIT-2 · 2026-05-30] connect_timeout para no colgar el
-            # lifespan startup hasta el TCP timeout del OS si Supabase está
+            # lifespan startup hasta el TCP timeout del OS si la DB está
             # inalcanzable durante un deploy (FastAPI no atendería /health ni
             # /ready). Consistente con reconnect_timeout=5 de los pools.
             connect_timeout=5,
@@ -1047,7 +1047,7 @@ async def lifespan(app: FastAPI):
         
     # [P2-NEW-E · 2026-05-07] El bloque DDL runtime (CREATE TABLE IF NOT EXISTS
     # + ALTERs + UPDATEs de backfill + índices para 7 tablas) que vivía aquí se
-    # consolidó al SSOT `supabase/migrations/p2_new_e_consolidate_runtime_ddl.sql`.
+    # consolidó al SSOT `migrations/p2_new_e_consolidate_runtime_ddl.sql`.
     # Mismo patrón estructural que P1-NEW-A 2026-05-08 cerró para índices:
     # cuando la DDL se recrea cada startup desde Python, un cambio de schema
     # vía SQL editor o migration nueva queda invisible al código y el siguiente
@@ -1061,9 +1061,9 @@ async def lifespan(app: FastAPI):
         try:
             import psycopg
             # [P1-SUPABASE-CLEANUP · 2026-06-13] Resuelve el URL session-mode de
-            # Neon. Pre-fix leía SUPABASE_DB_URL → tras borrar el proyecto
-            # Supabase apuntaba a un tenant inexistente y el setup del
-            # checkpointer fallaba (capturado) en CADA boot.
+            # Neon. Pre-fix leía una env var legada que apuntaba a un tenant
+            # inexistente y el setup del checkpointer fallaba (capturado) en
+            # CADA boot.
             db_uri = _build_session_mode_db_url()
             # autocommit=True requerido por LangGraph PostgresSaver (puede crear
             # índices CONCURRENTLY internamente).
@@ -1410,7 +1410,7 @@ async def lifespan(app: FastAPI):
                 "[P1-4/STARTUP] connection_pool=None — "
                 "update_user_health_profile_atomic degradará a non-atómico. "
                 "Lost-update bajo concurrencia es posible. Verificar "
-                "DATABASE_URL/SUPABASE_DB_URL y conectividad al pooler:6543."
+                "DATABASE_URL/NEON_DATABASE_URL y conectividad al pooler:6543."
             )
             if REQUIRE_ATOMIC_POOL:
                 logger.critical(
@@ -1545,7 +1545,7 @@ from routers.system import router as system_router
 app.include_router(system_router)
 # [LONG-TERM-MEMORY-TOGGLE · 2026-05-13] Endpoints para el toggle de memoria
 # a largo plazo (Settings del Dashboard). Migración SSOT:
-# supabase/migrations/add_long_term_memory_enabled_2026_05_13.sql
+# migrations/add_long_term_memory_enabled_2026_05_13.sql
 from routers.preferences import router as preferences_router
 app.include_router(preferences_router)
 
@@ -1946,7 +1946,7 @@ def admin_cron_health():
       - scheduler_config: defaults activos del pool (workers + misfire_grace).
 
     Sirve para responder en 1 seg "¿el scheduler está sano?" sin entrar a
-    Supabase logs. Cierra el gap diagnóstico identificado en el audit
+    los logs de la plataforma. Cierra el gap diagnóstico identificado en el audit
     2026-05-10 (operador tenía que correr 3 queries SQL para entender
     si era cascada, drift de deploy, o ambas).
     """
@@ -2023,10 +2023,10 @@ def admin_cron_health():
             except Exception as e:
                 info["cascade_alert_error"] = f"{type(e).__name__}: {e}"
         else:
-            # Key histórica (pre-Neon era el cliente PostgREST); hoy señala
-            # pool psycopg no inicializado. Se preserva el nombre para no
-            # romper consumers del shape del endpoint.
-            info["supabase_unavailable"] = True
+            # Señala que el pool psycopg (Neon) no está inicializado. Si un
+            # dashboard SRE externo leía la key anterior, actualizarlo a la
+            # nueva `db_pool_unavailable`.
+            info["db_pool_unavailable"] = True
 
         return info
     except Exception as e:
@@ -2320,7 +2320,7 @@ def api_webhook_process_pending_facts(
     _rl: Optional[str] = Depends(_WEBHOOK_FACTS_LIMITER),
 ):
     """
-    Endpoint consumido por el Webhook de Supabase (Database Trigger AFTER INSERT en pending_facts_queue).
+    Endpoint consumido por el Webhook de la DB (Database Trigger AFTER INSERT en pending_facts_queue).
     Permite procesar asíncronamente y de manera segura la cola de extracción sin depender de demonios en memoria.
 
     [P0-WEBHOOK-1 · 2026-05-12] Pre-fix: si `WEBHOOK_SECRET` no estaba seteada
@@ -2358,7 +2358,7 @@ def api_webhook_process_pending_facts(
                 "⚠️ [DEV] WEBHOOK_SECRET ausente; permitido solo fuera de producción."
             )
         else:
-            # Extraer token de múltiples fuentes posibles (Supabase custom headers)
+            # Extraer token de múltiples fuentes posibles (headers custom del webhook)
             token = ""
             if authorization and authorization.startswith("Bearer "):
                 token = authorization.split(" ", 1)[1]
@@ -2377,7 +2377,7 @@ def api_webhook_process_pending_facts(
                 raise HTTPException(status_code=401, detail="Unauthorized webhook invocation")
 
         # 2. Extraer el Payload del trigger
-        # Supabase webhooks mandan la fila en data["record"] cuando es un trigger INSERT
+        # Los webhooks de DB mandan la fila en data["record"] cuando es un trigger INSERT
         record = data.get("record", {})
         user_id = record.get("user_id") or data.get("user_id")
 

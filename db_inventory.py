@@ -17,9 +17,9 @@ _RESERVATION_MEAL_TOKEN_RE = re.compile(r":meal:(.+)$")
 def _db_available() -> bool:
     """[P1-NEON-DB-MIGRATION · 2026-06-12] Guard de disponibilidad del pool SQL.
 
-    Sustituye los checks legacy `if not supabase:` — los DATOS Postgres viven
-    ahora en Neon (el cliente supabase queda SOLO para Auth/Storage). Lectura
-    lazy de `db_core.connection_pool` (no `from db_core import connection_pool`
+    Sustituye los checks legacy `if not pool:` (la era del cliente PostgREST)
+    — los DATOS Postgres viven ahora en Neon. Lectura lazy de
+    `db_core.connection_pool` (no `from db_core import connection_pool`
     a nivel de módulo) para que los tests puedan patchear
     `db_core.connection_pool` y para no congelar el valor en import-time.
     """
@@ -975,7 +975,7 @@ def reserve_plan_ingredients(user_id: str, chunk_id: str, days: List[Dict[str, A
     usuario UNA VEZ al inicio, indexado por `ingredient_name`. Cada call a
     `_apply_reservation_delta` recibe `prefetched_rows=` para evitar el
     SELECT-per-ingredient. Plan de 30 ingredientes pre-fix = 30 roundtrips a
-    Supabase; post-fix = 1 roundtrip en el happy path (sin contención CAS).
+    la DB; post-fix = 1 roundtrip en el happy path (sin contención CAS).
     Cuando CAS conflicta, retry attempts re-SELECT como antes (fresh state
     obligatorio post-conflict).
     """
@@ -1064,15 +1064,15 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
     recogerá el chunk en el siguiente ciclo.
 
     Antes (P0-4 original): el loop ejecutaba un `_update_row_reservation` por fila vía
-    Supabase REST. Si Supabase devolvía 503 a la mitad (5 filas, 3 actualizadas, 2 no),
+    PostgREST. Si el endpoint devolvía 503 a la mitad (5 filas, 3 actualizadas, 2 no),
     el chunk quedaba con reservas fantasma. La próxima llamada NO veía las 3 ya liberadas
     (sus keys ya no existían en `reservation_details`) pero las 2 pendientes seguían
     inflando `reserved_quantity` indefinidamente.
 
     Ahora (P1-A): batch atómico vía `execute_sql_transaction`. El SELECT inicial sigue
-    yendo por Supabase REST porque es read-only y no participa en la transacción de
-    escritura. Los UPDATEs se acumulan en memoria y se ejecutan dentro de un único
-    BEGIN/COMMIT — psycopg revierte automáticamente si cualquiera de ellos falla.
+    siendo read-only y no participa en la transacción de escritura. Los UPDATEs se
+    acumulan en memoria y se ejecutan dentro de un único BEGIN/COMMIT — psycopg
+    revierte automáticamente si cualquiera de ellos falla.
 
     Devuelve la cantidad de keys de reserva eliminadas (NO filas afectadas), preservando
     el contrato histórico para callers que loguean el conteo.
@@ -1083,7 +1083,7 @@ def release_chunk_reservations(user_id: str, chunk_id: str) -> int:
     prefix = f"chunk:{chunk_id}:"
 
     # 1. Read snapshot de filas con reservas. [P1-NEON-DB-MIGRATION · 2026-06-12]
-    # Antes había rama dual supabase-REST/SQL; ahora el SQL directo es el único path.
+    # Antes había rama dual PostgREST/SQL; ahora el SQL directo es el único path.
     rows: List[Dict[str, Any]] = []
     try:
         rows = execute_sql_query(
@@ -2340,7 +2340,7 @@ def sync_inventory_after_chunk_completion(
             ) or []
         else:
             # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminada la rama legacy
-            # `elif supabase:` (PostgREST). Sin pool no hay DB de datos.
+            # `elif pool:` (PostgREST). Sin pool no hay DB de datos.
             return stats
     except Exception as e:
         logger.warning(
@@ -2629,7 +2629,7 @@ def bulk_delete_depleted_items(user_id: str, names) -> int:
     `lower(trim(ingredient_name)) = ANY(%s)` con `names` normalizados — más robusto
     que `ilike` (que interpretaría `_`/`%` como wildcards). `WHERE user_id = %s`
     defensa-en-profundidad (invariante I2). Best-effort: returns count de nombres
-    únicos solicitados (0 si supabase/pool no disponible o excepción). Anchor:
+    únicos solicitados (0 si pool no disponible o excepción). Anchor:
     P3-RESTOCK-BULK-DELETE.
     """
     if not user_id or not names:

@@ -260,7 +260,7 @@ def test_p2_live_9_skip_reasons_distinguishable(cron_source: str):
     body = _read_function_body(cron_source, "_shopping_coherence_alert_job")
     expected_reasons = [
         "db_core_import_failed",
-        "supabase_not_initialized",
+        "db_not_initialized",
         "fetch_plans_failed",
         "below_min_plans",
         "guard_persist_import_failed",

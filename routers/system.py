@@ -890,18 +890,18 @@ def admin_purge_account_data(request: Request, body: _PurgeAccountBody):
 
     auth_user_deleted = False
     if body.delete_auth_user:
-        # [P1-NEON-AUTH-MIGRATION · 2026-06-13] El cliente Supabase fue
-        # eliminado (`supabase is None` siempre). El borrado del usuario de
-        # auth ahora requiere la admin API de Neon Auth (Better Auth admin
-        # plugin / DELETE sobre `neon_auth.user`). La purga de datos
+        # [P1-NEON-AUTH-MIGRATION · 2026-06-13] El cliente de Auth legacy fue
+        # eliminado (el símbolo de compatibilidad siempre es None). El borrado
+        # del usuario de auth ahora requiere la admin API de Neon Auth (Better
+        # Auth admin plugin / DELETE sobre `neon_auth.user`). La purga de datos
         # user-scoped (delete_account_data, arriba) YA ocurrió; solo queda
         # el registro de identidad en Neon Auth. TODO: cablear Neon Auth
         # admin API cuando se exponga el secret server key. Por ahora,
         # no-op gracioso (no rompe el endpoint).
         try:
-            from db_core import supabase
-            if supabase:
-                supabase.auth.admin.delete_user(body.user_id)
+            from db_core import _storage_client
+            if _storage_client:
+                _storage_client.auth.admin.delete_user(body.user_id)
                 auth_user_deleted = True
             else:
                 result.setdefault("warnings", []).append(

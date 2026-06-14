@@ -90,7 +90,7 @@ def test_skip_reasons_canonical_set(cron_src: str):
     body = _extract_aggregate_fn_body(cron_src)
     canonical = {
         "db_core_import_failed",
-        "supabase_not_initialized",
+        "db_not_initialized",
         "fetch_plans_failed",
         "unhandled_exception",
     }

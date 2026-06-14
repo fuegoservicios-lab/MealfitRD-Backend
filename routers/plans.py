@@ -4086,8 +4086,8 @@ def api_swap_meal_persist(
     Persistencia atómica de un meal swap.
 
     Reemplaza el patrón frontend-only en `AssessmentContext.jsx:1240-1243`
-    que hacía ``supabase.from('meal_plans').update({plan_data}).eq('id', planId)``
-    pisando el JSONB completo. Ese patrón producía lost-update:
+    que hacía un UPDATE directo del JSONB completo desde el cliente
+    pisando plan_data. Ese patrón producía lost-update:
     si `_chunk_worker` finalizaba un chunk entre que el frontend leyó
     `planData` y escribió, los `days[7-14]` recién persistidos por el
     worker (y `_chunk_lessons`, `aggregated_shopping_list`, etc.) se
@@ -4304,8 +4304,8 @@ def api_set_grocery_start_date(
     `grocery_start_date` y/o `cycle_start_date` para el plan activo.
 
     Reemplaza el patrón frontend-only en `AssessmentContext.jsx:560`
-    que hacía ``supabase.from('meal_plans').update({plan_data: latestPlan}).eq('id', planId)``
-    pisando el JSONB completo al inyectar las fechas. Ese patrón
+    que hacía un UPDATE directo del JSONB completo desde el cliente
+    al inyectar las fechas. Ese patrón
     producía el MISMO lost-update que P0-NEW-A cerró en swap: si el
     cron ``_resolve_grocery_start_date`` (cron_tasks.py:15327) o
     ``_chunk_worker`` mutaba `plan_data` en paralelo (e.g.,
@@ -4473,9 +4473,9 @@ def api_restore_plan_local(
     frontend a `meal_plans`.
 
     Reemplaza el patrón legacy en `AssessmentContext.jsx:1514-1517` que hacía
-    ``supabase.from('meal_plans').update({plan_data, name, calories, macros})
-    .eq('id', planId)`` desde el cliente. Ese era el ÚNICO callsite cliente
-    que persistía full-overwrite a `meal_plans`. Modo de fallo:
+    un UPDATE full-overwrite de `meal_plans` directo desde el cliente.
+    Ese era el ÚNICO callsite cliente que persistía full-overwrite a `meal_plans`.
+    Modo de fallo:
         - Lost-update vs `_chunk_worker` concurrente: si el worker
           finalizaba un chunk (días 7-14, `_chunk_lessons`,
           `aggregated_shopping_list`) entre que el cliente leyó el state
@@ -4951,7 +4951,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         # cuando `user_inventory` quedó vacío.
         #
         # Modo de fallo cerrado: el usuario borraba TODOS los items de la nevera
-        # (Pantry.jsx::confirmDeleteAll → `supabase.from('user_inventory').delete`)
+        # (Pantry.jsx::confirmDeleteAll → DELETE directo en `user_inventory`)
         # y luego clicaba "Agregar a la Nevera" otra vez esperando el comportamiento
         # de la primera vez (re-popular toda la nevera). Pre-fix:
         #   1. confirmDeleteAll llama `_recalcShoppingListAfterPantryChange({
@@ -4987,7 +4987,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         if user_id and _existing_restocked:
             try:
                 # SQL raw via execute_sql_query (helper canónico del repo) en
-                # vez de supabase-py `count="exact"`: más predecible (retorna
+                # en vez de PostgREST `count="exact"`: más predecible (retorna
                 # int directo desde la fila result), evita edge cases del
                 # cliente (count=None bajo rate-limit/proxy) y consistente
                 # con el resto del repo (db_plans.py:215+, db_inventory.py).
@@ -5077,7 +5077,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             # Marcar el plan como "restocked" en BD para futuras peticiones.
             #
             # [P1-RESTOCK-LOSTUPDATE · 2026-05-30] Migrado de un UPDATE
-            # full-overwrite del JSONB plan_data completo vía supabase-py
+            # full-overwrite del JSONB plan_data completo vía PostgREST legado
             # (que leía plan_data a t=0 sin lock, lo mutaba in-memory y reescribía
             # el JSONB ENTERO a t=2) al patrón canónico `update_plan_data_atomic`
             # (`SELECT … FOR UPDATE` + mutator sobre plan_data FRESH post-worker).
@@ -5283,22 +5283,22 @@ def _sanitize_floats_for_json(obj):
 # [P3-SUPABASE-TRANSIENT-RETRY · 2026-05-16] El endpoint /water-intake se
 # dispara con frecuencia desde el listener visibilitychange del WaterTracker
 # (cada vez que el usuario vuelve al tab). Cuando el tab estuvo en background,
-# las conexiones HTTPS idle backend→Supabase pueden estar muertas: el primer
-# uso descubre el problema y httpx levanta `RemoteProtocolError` / `ReadError`
-# / `ConnectError` → pre-fix devolvíamos 500 al cliente, contaminando logs y
-# disparando toast de error. Reintento cubre 99% de los blips (la conexión
-# muerta se reemplaza en el reintento). Si todos fallan → 503 (transient,
-# retry) en lugar de 500 (sugiere bug).
+# las conexiones idle pueden estar muertas: el primer uso descubre el problema
+# y psycopg/httpx levanta `RemoteProtocolError` / `ReadError` / `ConnectError`
+# → pre-fix devolvíamos 500 al cliente, contaminando logs y disparando toast
+# de error. Reintento cubre 99% de los blips (la conexión muerta se reemplaza
+# en el reintento). Si todos fallan → 503 (transient, retry) en lugar de 500
+# (sugiere bug).
 #
 # [P2-WATER-RETRY-NO-JITTER · 2026-05-24] Pre-fix backoff constante 350ms
-# sin jitter ni exponencial. En escenarios de mass-retry (Supabase regional
-# blip → 100s de clients reintentan al mismo offset +350ms) → thundering
-# herd. Otros retries del repo ya usan exponencial (`db_inventory.py:916`
+# sin jitter ni exponencial. En escenarios de mass-retry (blip regional de DB
+# → 100s de clients reintentan al mismo offset +350ms) → thundering herd.
+# Otros retries del repo ya usan exponencial (`db_inventory.py:916`
 # usa `0.05 * (1 << attempt)`) o knob-controlled (`shopping_calculator.py`).
 # Ahora: `base * (2 ** attempt) + random.uniform(0, jitter_max)`. El jitter
 # absoluto (no proporcional) preserva backoff razonable incluso con base
 # muy chica. Knob `MEALFIT_WATER_RETRY_BACKOFF_BASE_S` permite ajustar
-# sin redeploy si latencia Supabase cambia. Tooltip-anchor: P2-WATER-RETRY-NO-JITTER.
+# sin redeploy si la latencia de la DB cambia. Tooltip-anchor: P2-WATER-RETRY-NO-JITTER.
 _WATER_RETRY_BACKOFF_BASE_S = _env_float(
     "MEALFIT_WATER_RETRY_BACKOFF_BASE_S",
     0.35,
@@ -5317,10 +5317,10 @@ def _execute_with_retry(builder_factory, op_label: str):
     lambda/callable que EJECUTA la operación completa cada vez y retorna
     el resultado.
 
-    [P1-NEON-DB-MIGRATION · 2026-06-12] Migrado de builders supabase-py
-    (PostgREST, donde el factory CONSTRUÍA el builder y aquí se llamaba
-    `.execute()`) a callables sobre `execute_sql_query/_write` (pool psycopg
-    → Neon). El patrón factory se conserva: cada intento re-ejecuta la
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Migrado de builders PostgREST legados
+    (donde el factory CONSTRUÍA el builder y aquí se llamaba `.execute()`)
+    a callables sobre `execute_sql_query/_write` (pool psycopg → Neon).
+    El patrón factory se conserva: cada intento re-ejecuta la
     operación contra una conexión fresca del pool, cubriendo la misma clase
     de blips transitorios (conexión idle muerta tras tab en background).
 
@@ -5487,9 +5487,9 @@ def api_get_water_intake(
         raise HTTPException(status_code=401, detail="No autorizado.")
     log_date = _validate_water_date(date)
 
-    # [P1-NEON-DB-MIGRATION · 2026-06-12] Gate equivalente al legacy `if not
-    # supabase`. Fail-secure: si la DB no esta disponible, no inventamos un
-    # default que el cliente confunda con "ya marcaste vasos hoy".
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Gate de disponibilidad del pool SQL.
+    # Fail-secure: si la DB no esta disponible, no inventamos un default que
+    # el cliente confunda con "ya marcaste vasos hoy".
     # `connection_pool` se importa de db_core (NO de la fachada db): la
     # fachada bindea el valor al momento del import (None pre-init).
     from db_core import connection_pool
@@ -5575,8 +5575,8 @@ def api_set_water_intake(
             detail=f"`glasses` fuera de rango [0, {_WATER_MAX_GLASSES}].",
         )
 
-    # [P1-NEON-DB-MIGRATION · 2026-06-12] Gate equivalente al legacy `if not
-    # supabase` (ver nota del GET sobre por qué db_core y no la fachada).
+    # [P1-NEON-DB-MIGRATION · 2026-06-12] Gate de disponibilidad del pool SQL
+    # (ver nota del GET sobre por qué db_core y no la fachada).
     from db_core import connection_pool
     if not connection_pool:
         raise HTTPException(status_code=503, detail="DB no disponible.")
@@ -6073,7 +6073,7 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 logger.warning(f"[RECALC/P2-COH-1] summarize_divergences_for_ui falló: {_sum_e}")
 
         # Devolver el plan_data merged directamente para evitar race conditions
-        # (el frontend no necesita re-fetch de Supabase). Es exactamente lo
+        # (el frontend no necesita re-fetch). Es exactamente lo
         # que persistimos bajo el lock — sin sorpresas downstream.
         # [P3-NAN-INF-SANITIZE · 2026-05-16] Sanitize antes de retornar:
         # algún cálculo downstream del aggregator produce NaN/Inf esporádicos
@@ -6107,7 +6107,7 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         # fuera del logger handler). Tooltip-anchor: P3-PDF-POLISH-4-D.
         logger.exception("❌ [RECALC] Error en /api/recalculate-shopping-list")
         # [P3-RECALC-503-CLASSIFICATION · 2026-05-16] Si la excepción es de
-        # pool/red transitoria (free tier `couldn't get a connection`, supabase
+        # pool/red transitoria (free tier `couldn't get a connection`,
         # `RemoteProtocolError`, etc.) escalamos a 503 "transient, retry" en
         # lugar de 500 "bug del endpoint". El cliente (Dashboard.jsx) reintenta
         # 1× tras 500ms y la mayoría de los blips se resuelven sin toast de
@@ -6136,7 +6136,7 @@ def api_pdf_stale_fallback_telemetry(
         El frontend hacía `trackEvent('pdf_stale_inventory_fallback', ...)`
         que solo enviaba a Sentry/PostHog/GA/GTM (canales externos). El
         backend NO observaba la frecuencia → imposible escalar a
-        `system_alerts` cuando un blip de Supabase mantiene a TODA la flota
+        `system_alerts` cuando un blip de la DB mantiene a TODA la flota
         en stale fallback durante horas. Operador dependía de mirar Sentry
         manualmente.
 
@@ -7345,9 +7345,8 @@ def api_delete_plan(
     """[P0-HIST-3 · 2026-05-09] Eliminación atómica de un plan + cleanup
     de locks de chunks asociados.
 
-    Reemplaza el patrón legacy del frontend (`History.jsx` hacía
-    ``supabase.from('meal_plans').delete().eq('id', plan_id)``
-    directo). Ese flujo dejaba dos clases de basura:
+    Reemplaza el patrón legacy del frontend (`History.jsx` hacía un DELETE
+    directo desde el cliente). Ese flujo dejaba dos clases de basura:
 
       1. **Locks zombi**: `chunk_user_locks` no tiene FK a
          `meal_plans` (sólo a `user_profiles`), así que un lock
@@ -8830,8 +8829,8 @@ def api_rename_plan(
     top-level `name` Y el `plan_data->>name` (jsonb) en un solo UPDATE.
 
     Reemplaza el patrón legacy `History.jsx::handleEditSave` que
-    hacía ``supabase.from('meal_plans').update({ name: trimmed })``
-    directo. Ese flujo dejaba `plan_data.name` con el valor viejo, y
+    hacía un UPDATE directo del campo `name` desde el cliente.
+    Ese flujo dejaba `plan_data.name` con el valor viejo, y
     cualquier flujo posterior que copiara `plan_data` (restore desde
     Historial pre-P0-HIST-1, swap, shift_plan que serializa
     plan_data) propagaba el nombre stale a otro contexto. P1-HIST-5
@@ -8986,7 +8985,7 @@ def api_plans_history_list(
 
     Bug original (audit historial 2026-05-08):
         ``History.jsx::fetchHistory`` hacía
-        ``supabase.from('meal_plans').select('*')``. Para un usuario
+        un ``SELECT *`` desde el cliente que arrastraba el blob completo. Para un usuario
         tier ultra con 50+ planes archivados, eso descarga 2-5MB en
         cada apertura del Historial — la mayoría como
         ``plan_data._lifetime_lessons_history``,
@@ -9014,7 +9013,7 @@ def api_plans_history_list(
 
     Lazy-load del modal:
         Cuando el usuario abre una card, el frontend hace una
-        request adicional a Supabase RPC/select por ``id`` para traer
+        request adicional al backend por ``id`` para traer
         ``plan_data.days`` (necesario para el menú del modal). Eso
         concentra el bandwidth pesado en el plan que sí se mira, no
         en la lista upfront.
@@ -10011,7 +10010,7 @@ def api_regenerate_dead_lettered_simplified(
 
         # Limpiar banner del frontend + [P3-2] mirror del flag por semana.
         # `_user_forced_simplified_weeks` es un dict {week_number: iso_ts}
-        # que el frontend lee desde plan_data (vía supabase direct) para
+        # que el frontend lee desde plan_data (vía endpoint backend) para
         # mostrar un badge sutil en los días de esa semana. Sin este mirror,
         # el flag solo vivía en plan_chunk_queue.pipeline_snapshot — que el
         # frontend nunca consulta — y el toggle quedaba write-only desde la

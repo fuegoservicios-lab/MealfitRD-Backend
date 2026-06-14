@@ -5,7 +5,7 @@ se rebasa.
 Bug observado (audit production-readiness 2026-05-15):
     `backend/routers/chat.py` lanzaba `threading.Thread(target=fn, daemon=True).start()`
     en dos sitios (título de chat línea 335; `bg_tasks` summarize + facts
-    extraction línea 436). Sin timeout, si Gemini/Supabase se cuelgan
+    extraction línea 436). Sin timeout, si el LLM o la DB se cuelgan
     (rate limit upstream, pool exhaustion, network blip) el thread daemon
     vive hasta que el proceso reinicia. Bajo carga de 100+ chats concurrentes
     + un blip de 5min, eso acumula cientos de threads zombies → memory +
@@ -112,7 +112,7 @@ def _persist_bg_task_timeout_alert(task_name: str, timeout_s: int) -> None:
                 f"Background task `{task_name}` excedió timeout {timeout_s}s",
                 (
                     f"El task `{task_name}` no terminó dentro del timeout "
-                    f"configurado ({timeout_s}s). Patrón habitual: LLM/Supabase "
+                    f"configurado ({timeout_s}s). Patrón habitual: LLM o DB "
                     f"cuelga upstream. Si recurre, revisar logs del worker y "
                     f"considerar bumpear `MEALFIT_BG_TASK_TIMEOUT_S` o "
                     f"investigar el cuello de botella."

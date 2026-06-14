@@ -277,7 +277,7 @@ def purge_langgraph_checkpoint(
 ):
     """
     Purga los mensajes antiguos del checkpoint de LangGraph (PostgresSaver)
-    para mantenerlo sincronizado con la tabla agent_messages de Supabase.
+    para mantenerlo sincronizado con la tabla agent_messages de la DB.
 
     Sin esta función, LangGraph acumula TODOS los mensajes históricos en su
     propio estado inmutable y los re-inyecta silenciosamente al modelo en cada
@@ -294,8 +294,8 @@ def purge_langgraph_checkpoint(
     preserva el contrato histórico (best-effort, log warning silencioso).
     `summarize_and_prune` lo invoca con `True` para que un fallo del purge
     aborte la subsiguiente `delete_old_messages` y mantenga consistencia
-    entre Supabase ↔ LangGraph (sin esto, A commiteaba el delete y B fallaba
-    silenciosamente → mensajes borrados de Supabase pero LangGraph aún los
+    entre DB ↔ LangGraph (sin esto, A commiteaba el delete y B fallaba
+    silenciosamente → mensajes borrados de la DB pero LangGraph aún los
     retenía → re-inyección al LLM en el siguiente turno).
     """
     if not connection_pool:
@@ -489,15 +489,15 @@ def summarize_and_prune(session_id: str):
         response = summary_llm.invoke(prompt)
         summary_text = response.content
         
-        # [P1-20] Orden crítico Supabase ↔ LangGraph para evitar carrera
+        # [P1-20] Orden crítico DB ↔ LangGraph para evitar carrera
         # de rollback parcial inconsistente.
         #
         # ANTES el flujo era:
-        #   1. save_summary (Supabase)          → COMMIT A
-        #   2. delete_old_messages (Supabase)   → COMMIT A'
+        #   1. save_summary (DB)                → COMMIT A
+        #   2. delete_old_messages (DB)         → COMMIT A'
         #   3. purge_langgraph_checkpoint       → COMMIT B (otro pool)
         # Si A/A' commiteaban pero B fallaba (DB blip, schema mismatch,
-        # SDK rejection), los mensajes estaban borrados de Supabase
+        # SDK rejection), los mensajes estaban borrados de la DB
         # PERO LangGraph aún los retenía → re-inyección al LLM en el
         # siguiente turno de la conversación, fugando contexto privado
         # ya supuestamente resumido.
@@ -506,13 +506,13 @@ def summarize_and_prune(session_id: str):
         #   1. save_summary (idempotente sobre messages_end timestamp)
         #   2. purge_langgraph_checkpoint(raise_on_failure=True) ANTES del
         #      delete_old_messages. Si LangGraph falla, propaga al except,
-        #      `delete_old_messages` NUNCA se ejecuta → Supabase conserva
+        #      `delete_old_messages` NUNCA se ejecuta → la DB conserva
         #      los mensajes (estado consistente: ambos lados los retienen,
         #      next cron tick lo retoma desde el principio).
         #   3. delete_old_messages SOLO si la purga ya tuvo éxito.
         #
         # Peor caso: paso 2 falla → redundancia (summary persistido +
-        # mensajes en Supabase + LangGraph) pero NO inconsistencia de
+        # mensajes en la DB + LangGraph) pero NO inconsistencia de
         # safety/contexto.
 
         # 1. Guardar el resumen en la base de datos.
@@ -525,7 +525,7 @@ def summarize_and_prune(session_id: str):
         )
 
         # 2. 🔗 SINCRONIZACIÓN CRÍTICA: Purgar checkpoint de LangGraph
-        # ANTES de borrar de Supabase (P1-20). Si el purge falla, el
+        # ANTES de borrar de la DB (P1-20). Si el purge falla, el
         # `raise_on_failure=True` propaga la excepción al except global
         # del summarize_and_prune, ABORTAMOS el delete_old_messages, y
         # la racha cuenta como fallo (P1-18 logger + P1-19 alert si N).
@@ -533,7 +533,7 @@ def summarize_and_prune(session_id: str):
             session_id, keep_recent=KEEP_RECENT, raise_on_failure=True
         )
 
-        # 3. Eliminar los mensajes ya resumidos de Supabase. Solo se
+        # 3. Eliminar los mensajes ya resumidos de la DB. Solo se
         # ejecuta si la purga de LangGraph tuvo éxito → consistencia
         # garantizada.
         delete_old_messages(session_id, before_timestamp=messages_end)

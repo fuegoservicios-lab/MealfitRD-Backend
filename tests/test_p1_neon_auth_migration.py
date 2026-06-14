@@ -8,7 +8,8 @@ Contratos cubiertos (parser-based, sin red):
   2. `auth.py` usa `verify_neon_jwt` y NO `supabase.auth.get_user` (P0-AUDIT-1
      preservado bajo el nuevo proveedor).
   3. `db_core.py` NO importa el paquete `supabase` ni crea un cliente
-     (`supabase = None` solo para compat de imports).
+     (`_storage_client = None` — placeholder del object storage de visual_diary,
+     pendiente de migrar a un provider nuevo; vision está disabled).
   4. `requirements.txt` no lista `supabase`; sí `PyJWT` + `cryptography`.
   5. Cero `from supabase import` / `import supabase` en código prod.
 """
@@ -58,8 +59,9 @@ def test_db_core_no_supabase_client():
     assert not re.search(r"create_client\(", src), (
         "db_core.py NO debe crear un cliente supabase."
     )
-    assert re.search(r"^supabase = None", src, re.MULTILINE), (
-        "db_core.py debe exponer `supabase = None` (compat de imports)."
+    assert re.search(r"^_storage_client = None", src, re.MULTILINE), (
+        "db_core.py debe exponer `_storage_client = None` (placeholder del "
+        "object storage de visual_diary, pendiente de migrar a provider nuevo)."
     )
 
 

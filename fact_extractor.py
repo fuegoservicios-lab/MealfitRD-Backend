@@ -796,7 +796,7 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
         if not lock_acquired:
             # ====== COLA PERSISTENTE: Nunca perder datos clínicos ======
             enqueue_pending_fact(user_id, message, recent_history)
-            logger.info(f"📋 [FACT EXTRACTOR] Mensaje encolado en Supabase para procesamiento posterior.")
+            logger.info(f"📋 [FACT EXTRACTOR] Mensaje encolado en la DB para procesamiento posterior.")
             return
             
         fact_items = extract_facts(message, recent_history, user_id=user_id)
@@ -815,15 +815,15 @@ def async_extract_and_save_facts(user_id: str, message: str, recent_history: str
         # Liberar el lock de BD para que la respuesta de FastAPI/UI no se bloquee ni devuelva timeout
         release_fact_lock(user_id)
         
-        # PROCESAR COLA PERSISTENTE (SUPABASE WEBHOOKS)
-        # El hilo asíncrono daemonizado (Fire-and-Forget local) fue removido debido a inestabilidad 
+        # PROCESAR COLA PERSISTENTE (WEBHOOKS)
+        # El hilo asíncrono daemonizado (Fire-and-Forget local) fue removido debido a inestabilidad
         # en entornos serverless/PaaS donde el proceso muere tras devolver la respuesta HTTP.
-        # Ahora, un TRIGGER AFTER INSERT en Supabase llamará de forma robusta a nuestro endpoint especial.
+        # Un TRIGGER AFTER INSERT en la DB llama de forma robusta a nuestro endpoint especial.
         logger.info(f"✅ Extracción en línea terminada. Webhook externo procesará la cola si quedaron pendientes.")
 
 
 def process_pending_queue_sync(user_id: str):
-    """Worker síncrono para drenar la cola de pendientes. Llamado por el Webhook de Supabase de manera robusta."""
+    """Worker síncrono para drenar la cola de pendientes. Llamado por el Webhook de DB de manera robusta."""
     
     if not acquire_fact_lock(user_id):
         logger.warning(f"⚠️ [WEBHOOK QUEUE] Lock ocupado para {user_id}. Se procesará luego.")

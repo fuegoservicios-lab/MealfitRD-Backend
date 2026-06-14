@@ -425,7 +425,7 @@ def execute_generate_new_plan(user_id: str, form_data: dict, instructions: str =
                     logger.error(f"⚠️ [FREQ TRACKING ERROR] Error en tools: {freq_e}")
 
             except Exception as db_e:
-                logger.error(f"⚠️ Aviso: No se pudo guardar el plan en Supabase (error {db_e}), pero el plan se devolverá al usuario.")
+                logger.error(f"⚠️ Aviso: No se pudo guardar el plan en la DB (error {db_e}), pero el plan se devolverá al usuario.")
                 # [P3-PROD-AUDIT-2 · 2026-05-30] idem rama else: alerta de persist-fail.
                 try:
                     from services import _persist_plan_persist_failed_alert
@@ -937,7 +937,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         except Exception as e:
             logger.warning(f"⚠️ [TOOL] No se pudo recalcular aggregated_shopping_list Delta: {e}")
         
-        # 5. Actualizar en Supabase atómicamente bajo FOR UPDATE row lock.
+        # 5. Actualizar en Neon atómicamente bajo FOR UPDATE row lock.
         #
         # [P1-AUDIT-1 · 2026-05-15] Migración del helper:
         # `update_meal_plan_data` → `update_plan_data_atomic`. Cierre del
@@ -1726,7 +1726,7 @@ def log_water_glass(user_id: str, count_delta: int = 1) -> str:
         # preserva el cap defensivo; RETURNING da el conteo autoritativo.
         # Tooltip-anchor: P3-WATER-ATOMIC-DELTA.
         # [P1-NEON-DB-MIGRATION · 2026-06-12] Eliminado el fallback PostgREST
-        # read-modify-write: los datos viven en Neon y el cliente supabase ya
+        # read-modify-write: los datos viven en Neon y el cliente legado ya
         # no apunta a la DB de datos (split-brain). Si el upsert atómico falla,
         # el except exterior devuelve el error al agente.
         _rows = execute_sql_write(

@@ -31,11 +31,11 @@ from db_profiles import (
 # [P1-ASYNC-SYNC-DB-BLOCKING · 2026-05-24] Los 4 handlers async de este router
 # llamaban funciones DB síncronas (`get_user_profile`, `update_*`) sin envolver
 # en `asyncio.to_thread`, bloqueando el event loop ~10-200ms por roundtrip
-# Supabase. Mismo modo de fallo que P2-AUTH-ASYNC-SLEEP cerró para `auth.py`:
+# a la DB. Mismo modo de fallo que P2-AUTH-ASYNC-SLEEP cerró para `auth.py`:
 # bajo carga concurrente (≥50 req/s), throttling severo de TODOS los demás
 # handlers async (chat stream, webhook PayPal, diary upload). Ahora cada call
 # DB pasa por `await asyncio.to_thread(...)` — el event loop sirve otras
-# requests mientras Supabase responde. Tooltip-anchor: P1-ASYNC-SYNC-DB-BLOCKING.
+# requests mientras la DB responde. Tooltip-anchor: P1-ASYNC-SYNC-DB-BLOCKING.
 
 logger = logging.getLogger(__name__)
 

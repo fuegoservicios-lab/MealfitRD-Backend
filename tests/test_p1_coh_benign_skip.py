@@ -11,7 +11,7 @@ nuevos en 24h que el umbral `min_plans`). En prod llegó a `count=14` antes
 del fix.
 
 Las 4 skip_reason restantes (`db_core_import_failed`,
-`supabase_not_initialized`, `fetch_plans_failed`,
+`db_not_initialized`, `fetch_plans_failed`,
 `guard_persist_import_failed`) SÍ son fallos reales y se siguen contando.
 
 Detalle: `project_p1_coh_benign_skip_2026_05_25.md`.
@@ -77,7 +77,7 @@ def test_other_failure_reasons_still_count(cron_source: str) -> None:
     (vaciando la alert)."""
     real_failures = (
         "db_core_import_failed",
-        "supabase_not_initialized",
+        "db_not_initialized",
         "fetch_plans_failed",
         "guard_persist_import_failed",
     )

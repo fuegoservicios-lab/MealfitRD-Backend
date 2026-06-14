@@ -1,7 +1,7 @@
 """[P1-NEON-DB-MIGRATION · 2026-06-12] Endpoints de datos user-scoped que
 reemplazan los accesos directos del frontend a Postgres via PostgREST
-(supabase-js). Post-migración a Neon, el frontend NO tiene acceso a la DB:
-PostgREST apunta al Postgres de SUPABASE (datos stale tras el cutover) —
+(cliente JS legacy). Post-migración a Neon, el frontend NO tiene acceso a la DB:
+PostgREST apuntaba al Postgres anterior (datos stale tras el cutover) —
 leerlo es servir data vieja; escribirlo es split-brain.
 
 Reemplazos cubiertos (audit 2026-06-12, sección frontend):

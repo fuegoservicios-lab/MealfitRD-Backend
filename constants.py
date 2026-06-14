@@ -400,7 +400,7 @@ CHUNK_RECOVERY_MIN_AGE_MINUTES = max(15, int(os.environ.get("CHUNK_RECOVERY_MIN_
 CHUNK_MAX_RECOVERY_ATTEMPTS = max(1, int(os.environ.get("CHUNK_MAX_RECOVERY_ATTEMPTS", "2")))
 # [P0-1-RECOVERY] Cap por corrida del cron de recovery: cuántos chunks failed re-encolar
 # como mucho en cada tick de 15 min. Antes era literal 20 hardcoded; subido a const
-# tunable para no saturar Supabase si una caída de Gemini deja cientos de chunks failed
+# tunable para no saturar la DB si una caída del LLM deja cientos de chunks failed
 # de golpe.
 # [P1-KNOB-CLAMPS · 2026-05-26] Migrado a `_env_int(..., validator=...)` con clamp
 # [1, 1000]. Pre-fix `max(1, int(...))` tenía floor pero NO ceiling — operador
@@ -558,7 +558,7 @@ CHUNK_PANTRY_PROACTIVE_REFRESH_MINUTES = max(15, int(os.environ.get("CHUNK_PANTR
 # barrido proactivo de hasta 7 días; los planes de 7d/15d siguen usando 48h vía lógica
 # dinámica en cron_tasks.py.
 CHUNK_PANTRY_PROACTIVE_REFRESH_HORIZON_HOURS = max(48, int(os.environ.get("CHUNK_PANTRY_PROACTIVE_REFRESH_HORIZON_HOURS", "168")))
-# Tope de usuarios procesados por corrida para no saturar Supabase en picos.
+# Tope de usuarios procesados por corrida para no saturar la DB en picos.
 CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS = max(1, int(os.environ.get("CHUNK_PANTRY_PROACTIVE_REFRESH_MAX_USERS", "50")))
 # [P0-D] Mínimo de mutaciones de inventario (rows con updated_at >= prev_chunk_start) para
 # considerar que el usuario está consumiendo el plan aunque no loguee comidas explícitamente.
