@@ -1863,5 +1863,166 @@ def mark_shopping_list_purchased(user_id: str, excluded_items: list[str] = None,
         logger.error(f"❌ [TOOL] Error en mark_shopping_list_purchased: {e}")
         return f"Error interno al realizar el registro de la compra: {str(e)}"
 
+
+# [P3-MICRO-FOOD-SUGGEST · 2026-06-15] Tabla nutriente (es/en) → columna del
+# master_ingredients + label + unidad + `is_ceiling` (True = es un TECHO: sodio/
+# azúcar/satfat/colesterol → sugerir alternativas BAJAS; False = es un PISO →
+# sugerir alimentos RICOS). Las columnas coinciden con nutrition_db.py.
+_MICRO_NUTRIENT_COLUMNS = {
+    "fibra": ("fiber_g_per_100g", "fibra", "g", False),
+    "fiber": ("fiber_g_per_100g", "fibra", "g", False),
+    "hierro": ("iron_mg_per_100g", "hierro", "mg", False),
+    "iron": ("iron_mg_per_100g", "hierro", "mg", False),
+    "calcio": ("calcium_mg_per_100g", "calcio", "mg", False),
+    "calcium": ("calcium_mg_per_100g", "calcio", "mg", False),
+    "vitamina d": ("vitamin_d_mcg_per_100g", "vitamina D", "mcg", False),
+    "vit d": ("vitamin_d_mcg_per_100g", "vitamina D", "mcg", False),
+    "vitamin d": ("vitamin_d_mcg_per_100g", "vitamina D", "mcg", False),
+    "vitamina b12": ("vitamin_b12_mcg_per_100g", "vitamina B12", "mcg", False),
+    "vitamin b12": ("vitamin_b12_mcg_per_100g", "vitamina B12", "mcg", False),
+    "b12": ("vitamin_b12_mcg_per_100g", "vitamina B12", "mcg", False),
+    "potasio": ("potassium_mg_per_100g", "potasio", "mg", False),
+    "potassium": ("potassium_mg_per_100g", "potasio", "mg", False),
+    "magnesio": ("magnesium_mg_per_100g", "magnesio", "mg", False),
+    "magnesium": ("magnesium_mg_per_100g", "magnesio", "mg", False),
+    "proteina": ("protein_g_per_100g", "proteína", "g", False),
+    "protein": ("protein_g_per_100g", "proteína", "g", False),
+    "sodio": ("sodium_mg_per_100g", "sodio", "mg", True),
+    "sodium": ("sodium_mg_per_100g", "sodio", "mg", True),
+    "azucar": ("sugars_g_per_100g", "azúcar", "g", True),
+    "azucares": ("sugars_g_per_100g", "azúcar", "g", True),
+    "sugar": ("sugars_g_per_100g", "azúcar", "g", True),
+    "grasa saturada": ("saturated_fat_g_per_100g", "grasa saturada", "g", True),
+    "saturated fat": ("saturated_fat_g_per_100g", "grasa saturada", "g", True),
+    "colesterol": ("cholesterol_mg_per_100g", "colesterol", "mg", True),
+    "cholesterol": ("cholesterol_mg_per_100g", "colesterol", "mg", True),
+}
+
+# Tokens para filtrar el catálogo por tipo de dieta (best-effort; la LLM hace el
+# filtro final con las restricciones completas del perfil en el system prompt).
+_VEGETARIAN_EXCLUDE = [
+    "carne", "pollo", "pavo", "pescado", "cerdo", "chuleta", "bacalao", "salami",
+    "jamon", "tocino", "longaniza", "salchich", "atun", "sardina", "marisco",
+    "camaron", "higado", "chicharron", "res ", "bistec", "costilla",
+]
+_VEGAN_EXCLUDE = _VEGETARIAN_EXCLUDE + [
+    "huevo", "leche", "queso", "yogur", "mantequilla", "crema", "lacteo", "miel",
+]
+
+
+def _resolve_micro_nutrient(nutrient: str):
+    """Nombre del nutriente (es/en, con/ sin acentos) → (columna, label, unidad,
+    is_ceiling) o None si no se reconoce."""
+    key = strip_accents((nutrient or "").strip().lower())
+    if key in _MICRO_NUTRIENT_COLUMNS:
+        return _MICRO_NUTRIENT_COLUMNS[key]
+    for k, v in _MICRO_NUTRIENT_COLUMNS.items():
+        if k in key or key in k:
+            return v
+    return None
+
+
+@tool
+def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> str:
+    """
+    Sugiere alimentos del catálogo nutricional para mejorar un micronutriente del
+    plan del usuario, filtrando por sus alergias, rechazos y tipo de dieta.
+    Úsala cuando el usuario pregunte qué comer para subir (o reducir) un
+    micronutriente: "¿qué como para más fibra?", "necesito más hierro", "cómo subo
+    la vitamina D", "cómo bajo el sodio".
+
+    Parámetros:
+    - nutrient: nombre del nutriente (ej: "fibra", "hierro", "calcio", "vitamina D",
+      "vitamina B12", "potasio", "magnesio", "proteína", "sodio", "azúcar",
+      "grasa saturada", "colesterol").
+    - top_n: cuántos alimentos sugerir (default 6).
+
+    Devuelve una lista rankeada de alimentos del catálogo con su aporte por 100g.
+    """
+    logger.info(f"🥗 [TOOL EXECUTION] suggest_foods_for_nutrient nutrient='{nutrient}' user={user_id}")
+    try:
+        resolved = _resolve_micro_nutrient(nutrient)
+        if not resolved:
+            return (
+                f"No reconozco el micronutriente '{nutrient}'. Nutrientes soportados: "
+                "fibra, hierro, calcio, vitamina D, vitamina B12, potasio, magnesio, "
+                "proteína, sodio, azúcar, grasa saturada, colesterol."
+            )
+        column, label, unit, is_ceiling = resolved
+
+        # Restricciones del usuario (best-effort). Las listas pueden venir como
+        # list o como string "Lacteos, Gluten".
+        allergies, dislikes, diet_type = [], [], "balanced"
+        try:
+            profile = get_user_profile(user_id) or {}
+            hp = profile.get("health_profile") or {}
+
+            def _as_list(v):
+                if isinstance(v, list):
+                    return v
+                if isinstance(v, str):
+                    return [x.strip() for x in v.split(",") if x.strip()]
+                return []
+
+            allergies = [strip_accents(str(a).lower()) for a in _as_list(hp.get("allergies"))]
+            dislikes = [strip_accents(str(d).lower()) for d in _as_list(hp.get("dislikes"))]
+            diet_type = (hp.get("dietType") or "balanced").strip().lower()
+        except Exception as _pe:
+            logger.warning(f"⚠ [TOOL] suggest_foods_for_nutrient: perfil no disponible ({_pe})")
+
+        exclude_tokens = [t for t in (allergies + dislikes) if t]
+        if diet_type == "vegetarian":
+            exclude_tokens += _VEGETARIAN_EXCLUDE
+        elif diet_type == "vegan":
+            exclude_tokens += _VEGAN_EXCLUDE
+
+        from shopping_calculator import get_master_ingredients
+        rows = get_master_ingredients() or []
+
+        candidates = []
+        for r in rows:
+            name = r.get("name")
+            if not name:
+                continue
+            try:
+                val = float(r.get(column))
+            except (TypeError, ValueError):
+                continue
+            # Piso → exigir aporte real (>0). Techo → incluir bajos (>=0).
+            if not is_ceiling and val <= 0:
+                continue
+            if val < 0:
+                continue
+            name_norm = strip_accents(str(name).lower())
+            if any(tok in name_norm for tok in exclude_tokens):
+                continue
+            candidates.append((name, val))
+
+        if not candidates:
+            return (
+                f"No encontré alimentos en el catálogo {'bajos' if is_ceiling else 'ricos'} en "
+                f"{label} compatibles con las restricciones del usuario. Sugiere fuentes "
+                "generales conocidas con criterio, respetando sus alergias y dieta."
+            )
+
+        # Techo → los MÁS BAJOS (mejores swaps); piso → los MÁS RICOS.
+        candidates.sort(key=lambda x: x[1], reverse=not is_ceiling)
+        n = max(1, min(int(top_n or 6), 12))
+        top = candidates[:n]
+
+        verb = "más bajos en" if is_ceiling else "más ricos en"
+        body = "\n".join(f"- {name}: {round(val, 1)}{unit} por cada 100g" for name, val in top)
+        guidance = (
+            f"Estos son alimentos del catálogo {verb} {label}, ya filtrados por las "
+            "restricciones del usuario. Recomiéndale 2-3 opciones prácticas con cantidades "
+            "realistas para integrarlas a su plan; NO listes todos crudos ni inventes valores."
+        )
+        return f"ALIMENTOS {verb.upper()} {label.upper()} (catálogo, por 100g):\n{body}\n\n{guidance}"
+
+    except Exception as e:
+        logger.error(f"❌ [TOOL] suggest_foods_for_nutrient error: {e}")
+        return f"Error consultando el catálogo de alimentos: {str(e)}"
+
+
 # Lista de tools disponibles para el agente
-agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass]
+agent_tools = [update_form_field, generate_new_plan_from_chat, log_consumed_meal, modify_single_meal, search_deep_memory, check_shopping_list, check_current_pantry, modify_pantry_inventory, mark_shopping_list_purchased, check_hydration_today, log_water_glass, suggest_foods_for_nutrient]

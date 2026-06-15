@@ -122,6 +122,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `search_deep_memory` cuando el usuario pregunte sobre datos de su pasado que no estén en el contexto inmediato del chat, como preferencias antiguas, alergias reportadas antes, o historial lejano.
 - Usa `check_hydration_today` cuando el usuario pregunte sobre su hidratación del día ('¿cuánta agua llevo?', '¿cumplí la meta de agua?', '¿voy bien con el agua?'), o cuando necesites contexto para sugerirle tomar agua.
 - Usa `log_water_glass` cuando el usuario diga que tomó agua o se equivocó marcando ('me tomé un vaso', 'marca dos más', 'borra el último', 'llevo 5 vasos'). Para valores absolutos, primero usa `check_hydration_today` para conocer el conteo actual y luego pasa el delta correcto.
+- Usa `suggest_foods_for_nutrient` cuando el usuario pregunte qué comer para mejorar un micronutriente específico de su plan (ej: '¿qué como para más fibra?', 'necesito más hierro', 'cómo subo la vitamina D', 'cómo bajo el sodio'). Devuelve alimentos del catálogo (criollos) ya filtrados por las alergias/rechazos/dieta del usuario; úsalos para recomendarle 2-3 opciones prácticas con cantidades realistas, NO inventes valores de nutrientes.
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario.
@@ -144,6 +145,7 @@ TIENES HERRAMIENTAS DISPONIBLES:
 - Usa `modify_pantry_inventory` cuando el usuario diga que comió, gastó, botó o compró un ingrediente específico (ej: 'me quedé sin aguacates', 'añade leche'). Modificará el inventario directamente.
 - Usa `search_deep_memory` cuando el usuario pregunte sobre su pasado lejano, experiencias anteriores con la dieta, o datos que no aparecen en la memoria reciente (ej: '¿Recuerdas qué comía al principio?', '¿Cómo me sentía hace meses?').
 - Usa `check_hydration_today` cuando pregunte sobre su agua del día ('¿cuánta agua llevo?', '¿voy bien?'). Usa `log_water_glass` cuando diga que se tomó agua o se equivocó marcando ('me tomé un vaso' → delta=1; 'borra uno' → delta=-1). Para absolutos, primero check y calcula el delta.
+- Usa `suggest_foods_for_nutrient` cuando pregunte qué comer para mejorar un micronutriente (ej: '¿qué como para más fibra?', 'necesito hierro', 'cómo bajo el sodio'). Devuelve alimentos del catálogo filtrados por sus alergias/dieta; recomiéndale 2-3 opciones prácticas con cantidades.
 
 🚨 REGLAS CRÍTICAS DE INTERFAZ (GATILLOS REACTIVOS) 🚨:
 1. Si modificas el plan de comidas con `modify_single_meal` o `generate_new_plan_from_chat`, DEBES incluir SIEMPRE la etiqueta silente `[UI_ACTION: REFRESH_PLAN]` EXACTAMENTE COMO SE MUESTRA en la respuesta. Esto actualizará la dieta en la pantalla del usuario.
