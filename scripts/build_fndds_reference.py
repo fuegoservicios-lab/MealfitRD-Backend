@@ -27,22 +27,27 @@ dotenv.load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 USDA_KEY = os.environ.get("USDA_API_KEY", "DEMO_KEY")
 SEARCH = "https://api.nal.usda.gov/fdc/v1/foods/search"
 
-# Plato/componente dominicano → análogos FNDDS en orden de preferencia (criollo primero, genérico después).
+# Plato/componente dominicano → (queries FNDDS en orden, keywords que el match DEBE contener). El guard de
+# keyword filtra la basura del search fuzzy de FDC ("beans, red"→"Cabbage, red"; "plantains green fried"→
+# "Fried green TOMATOES"): si el food Survey no contiene NINGUNA keyword en su descripción, se descarta y se
+# prueba la siguiente query; si ninguna pasa, MISS honesto (el plato no tiene análogo FNDDS limpio → queda en
+# curación manual). CURADO a 10 platos con análogo Survey DEFENSIBLE (verificado a mano vs el perfil de macros).
+# OMITIDOS (sin análogo Survey limpio — el search fuzzy solo da aproximaciones engañosas → curación manual):
+#   • mangu                → solo "meat pie"/"cracklings" (no plátano-verde-hervido-majado simple).
+#   • tostones             → "cracklings" (sobre-grasa de chicharrón) en vez de plátano frito simple.
+#   • platano frito        → "Plantain chips" (densidad ~×3, perfil C/F distinto al maduro frito).
+#   • habichuelas guisadas → "Bean SPROUTS" (perfil ≠ habichuelas; los granos ya son ingrediente del catálogo).
 _DR_DISH_TO_FNDDS = {
-    "moro":                 ["moro", "rice and beans", "rice, white, cooked, with beans"],
-    "arroz con habichuelas":["rice and beans", "rice, white, with pinto beans"],
-    "locrio":               ["locrio", "rice with chicken", "rice, white, cooked, with chicken"],
-    "mangu":                ["mangu", "plantain, ripe, boiled", "plantains, green, boiled, mashed"],
-    "sancocho":             ["sancocho", "stew, chicken", "soup, chicken and vegetable, stew type"],
-    "mofongo":              ["mofongo", "plantains, green, fried, mashed"],
-    "tostones":             ["tostones", "plantains, green, fried"],
-    "platano frito":        ["plantains, fried"],
-    "habichuelas guisadas": ["beans, red, cooked, stewed", "beans, pink, cooked"],
-    "pollo guisado":        ["chicken, stewed", "chicken, cooked, stewed"],
-    "arroz blanco":         ["rice, white, cooked, regular"],
-    "yuca hervida":         ["cassava, cooked"],
-    "batata":               ["sweet potato, cooked, boiled"],
-    "avena":                ["oatmeal, cooked"],
+    "moro":                 (["rice and beans", "rice, white, cooked, with beans"], ["bean"]),
+    "arroz con habichuelas":(["rice and beans", "rice, white, with pinto beans"], ["bean"]),
+    "locrio":               (["rice with chicken", "rice, white, cooked, with chicken"], ["rice"]),
+    "sancocho":             (["stew, chicken", "soup, chicken and vegetable, stew type"], ["stew", "soup"]),
+    "mofongo":              (["plantain with cracklings", "plantains, green, fried, mashed"], ["plantain"]),
+    "pollo guisado":        (["chicken, stewed", "chicken, cooked, stewed"], ["chicken"]),
+    "arroz blanco":         (["rice, white, cooked, regular", "rice, white, cooked"], ["rice"]),
+    "yuca hervida":         (["cassava, cooked"], ["cassava"]),
+    "batata":               (["sweet potato, baked, no added fat", "sweet potato, boiled"], ["potato"]),
+    "avena":                (["oatmeal, cooked"], ["oat"]),
 }
 
 _N = {  # nutrientName FNDDS → key
@@ -65,10 +70,13 @@ def _macros_from_food(food):
     return out
 
 
-def _search_fndds(query):
+def _search_fndds(query, keywords=None):
     """Busca SIN el param dataType (los paréntesis de 'Survey (FNDDS)' dan 400 en el GET) y filtra
-    client-side: PREFIERE Survey (FNDDS) —el plato compuesto medido— y cae a cualquier USDA con macros,
-    registrando el dataType real para honestidad. Devuelve (food, macros, data_type) | 'RATE_LIMITED' | None."""
+    client-side: SOLO Survey (FNDDS) —el plato compuesto medido— NUNCA Branded/Foundation/SR Legacy (los
+    Branded son etiquetas crowdsourced → basura tipo 'moro'→'TRUFFLE TORTE'). Además, si `keywords` se da,
+    el match DEBE contener alguna en su descripción → filtra la basura semántica del search fuzzy de FDC
+    ('beans, red'→'Cabbage, red'; 'plantains green fried'→'Fried green TOMATOES'). Mejor MISS honesto que un
+    análogo irrelevante. Devuelve (food, macros, 'Survey (FNDDS)') | 'RATE_LIMITED' | None."""
     params = {"query": query, "api_key": USDA_KEY, "pageSize": 25}
     for _ in range(3):
         r = requests.get(SEARCH, params=params, timeout=25)
@@ -79,11 +87,12 @@ def _search_fndds(query):
         if r.status_code >= 400:
             return None
         foods = r.json().get("foods") or []
-        # SOLO Survey (FNDDS) — el plato compuesto medido. NO caer a Branded/Foundation/SR Legacy: los
-        # Branded son etiquetas crowdsourced y producen matches basura (ej. 'moro'→'TRUFFLE TORTE'). Mejor
-        # MISS honesto que un proxy irrelevante; lo no-Survey se cubre con la curación manual existente.
-        survey = [f for f in foods if str(f.get("dataType")) == "Survey (FNDDS)"]
-        for f in survey:
+        for f in foods:
+            if str(f.get("dataType")) != "Survey (FNDDS)":
+                continue
+            desc = str(f.get("description", "")).lower()
+            if keywords and not any(kw in desc for kw in keywords):
+                continue   # guard semántico: descarta el match fuzzy irrelevante
             m = _macros_from_food(f)
             if (m["protein"] + m["carbs"] + m["fats"]) > 0:
                 return f, m, "Survey (FNDDS)"
@@ -99,7 +108,7 @@ def main():
     # Cap de requests para no quemar la cuota DEMO_KEY (30/hr, 50/día). Con first-hit-wins la mayoría
     # de platos resuelve en 1 request. Con una key propia (1000/hr) el cap no estorba.
     cap = 28 if USDA_KEY == "DEMO_KEY" else 999
-    for key, queries in _DR_DISH_TO_FNDDS.items():
+    for key, (queries, keywords) in _DR_DISH_TO_FNDDS.items():
         if rate_limited:
             misses.append(key); continue
         hit = None
@@ -107,7 +116,7 @@ def main():
             if req_count >= cap:
                 break
             req_count += 1
-            res = _search_fndds(q)
+            res = _search_fndds(q, keywords)
             if res == "RATE_LIMITED":
                 rate_limited = True
                 print("  ⏳ DEMO_KEY rate-limited — detengo el fetch (re-correr con USDA_API_KEY propia).",

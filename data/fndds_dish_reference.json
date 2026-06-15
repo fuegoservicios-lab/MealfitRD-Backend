@@ -1,0 +1,126 @@
+{
+  "_note": "[G16-FNDDS-GROUND-TRUTH] Referencia externa NO-CIRCULAR de macros (per-100g) para platos dominicanos desde USDA FNDDS (dominio público / CC0, uso comercial libre). Generado por scripts/build_fndds_reference.py. La usa clinical_validation_export.py para medir el PERFIL de macros que la app afirma vs un ground-truth independiente del catálogo propio.",
+  "_source": "USDA FoodData Central — Survey (FNDDS), CC0 1.0 (public domain)",
+  "dishes": {
+    "moro": {
+      "fdc_id": 2708990,
+      "fnds_description": "Beans and white rice",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "rice and beans",
+      "per_100g": {
+        "kcal": 164.0,
+        "protein": 6.5,
+        "carbs": 25.19,
+        "fats": 4.21
+      }
+    },
+    "arroz con habichuelas": {
+      "fdc_id": 2708990,
+      "fnds_description": "Beans and white rice",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "rice and beans",
+      "per_100g": {
+        "kcal": 164.0,
+        "protein": 6.5,
+        "carbs": 25.19,
+        "fats": 4.21
+      }
+    },
+    "locrio": {
+      "fdc_id": 2706438,
+      "fnds_description": "Chicken curry with rice",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "rice with chicken",
+      "per_100g": {
+        "kcal": 116.0,
+        "protein": 4.96,
+        "carbs": 15.12,
+        "fats": 4.0
+      }
+    },
+    "sancocho": {
+      "fdc_id": 2706678,
+      "fnds_description": "Stew, chicken",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "stew, chicken",
+      "per_100g": {
+        "kcal": 84.0,
+        "protein": 9.24,
+        "carbs": 6.29,
+        "fats": 2.34
+      }
+    },
+    "mofongo": {
+      "fdc_id": 2710139,
+      "fnds_description": "Green plantain with cracklings, Puerto Rican style",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "plantain with cracklings",
+      "per_100g": {
+        "kcal": 358.0,
+        "protein": 13.16,
+        "carbs": 26.97,
+        "fats": 22.82
+      }
+    },
+    "pollo guisado": {
+      "fdc_id": 2706678,
+      "fnds_description": "Stew, chicken",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "chicken, stewed",
+      "per_100g": {
+        "kcal": 84.0,
+        "protein": 9.24,
+        "carbs": 6.29,
+        "fats": 2.34
+      }
+    },
+    "arroz blanco": {
+      "fdc_id": 2708422,
+      "fnds_description": "Rice, white, cooked, glutinous",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "rice, white, cooked, regular",
+      "per_100g": {
+        "kcal": 96.0,
+        "protein": 2.01,
+        "carbs": 20.97,
+        "fats": 0.19
+      }
+    },
+    "yuca hervida": {
+      "fdc_id": 2709564,
+      "fnds_description": "Cassava, cooked",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "cassava, cooked",
+      "per_100g": {
+        "kcal": 191.0,
+        "protein": 1.42,
+        "carbs": 39.62,
+        "fats": 3.03
+      }
+    },
+    "batata": {
+      "fdc_id": 2709699,
+      "fnds_description": "Sweet potato, baked, no added fat",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "sweet potato, baked, no added fat",
+      "per_100g": {
+        "kcal": 82.0,
+        "protein": 1.64,
+        "carbs": 17.98,
+        "fats": 0.39
+      }
+    },
+    "avena": {
+      "fdc_id": 2708398,
+      "fnds_description": "Oatmeal, multigrain",
+      "data_type": "Survey (FNDDS)",
+      "query_used": "oatmeal, cooked",
+      "per_100g": {
+        "kcal": 56.0,
+        "protein": 2.12,
+        "carbs": 12.19,
+        "fats": 0.46
+      }
+    }
+  }
+}
