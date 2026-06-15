@@ -21,44 +21,16 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Receta canónica DR: dish -> {label, finished_g (peso COCIDO del plato), method, ingredients:[(nombre_catalogo, g_crudo)]}.
-# Gramos por 1 porción típica. Nombres = filas del catálogo (resuelven vía IngredientNutritionDB).
-_RECIPES = {
-    "moro": {
-        "label": "Moro de habichuelas", "finished_g": 230, "method": "arroz+habichuelas hervido",
-        "ingredients": [("Arroz blanco", 60), ("Habichuelas rojas", 35), ("Aceite vegetal", 6),
-                        ("Cebolla", 12), ("Ají cubanela", 8)],
-    },
-    "mangu": {
-        "label": "Mangú (plátano verde majado)", "finished_g": 200, "method": "plátano verde hervido+majado",
-        "ingredients": [("Plátano verde", 180), ("Aceite vegetal", 8), ("Cebolla", 15)],
-    },
-    "locrio de pollo": {
-        "label": "Locrío de pollo", "finished_g": 240, "method": "arroz+pollo guisado",
-        "ingredients": [("Arroz blanco", 60), ("Pechuga de pollo", 65), ("Aceite vegetal", 8),
-                        ("Cebolla", 12), ("Tomate", 15)],
-    },
-    "sancocho": {
-        "label": "Sancocho dominicano", "finished_g": 360, "method": "guiso/hervido con caldo",
-        "ingredients": [("Carne de res", 70), ("Yuca", 50), ("Plátano verde", 40), ("Auyama", 30),
-                        ("Ñame", 30), ("Cebolla", 10), ("Aceite vegetal", 5)],
-    },
-    "habichuelas guisadas": {
-        "label": "Habichuelas guisadas", "finished_g": 180, "method": "guiso",
-        "ingredients": [("Habichuelas rojas", 55), ("Auyama", 20), ("Aceite vegetal", 8),
-                        ("Cebolla", 12), ("Ají cubanela", 8)],
-    },
-    "tostones": {
-        "label": "Tostones (plátano verde frito)", "finished_g": 95, "method": "frito (pierde agua, absorbe aceite)",
-        "ingredients": [("Plátano verde", 120), ("Aceite vegetal", 12)],
-    },
-}
+_RECIPES_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                             "data", "dominican_dish_recipes.json")
 
-# Mapa plato DR -> key del análogo en data/fndds_dish_reference.json (para el cross-check externo).
-_FNDDS_KEY = {
-    "moro": "moro", "mangu": None, "locrio de pollo": "locrio", "sancocho": "sancocho",
-    "habichuelas guisadas": None, "tostones": None,
-}
+
+def _load_recipes():
+    """[FASE 2] Recetas curadas (input) desde data/dominican_dish_recipes.json: dish -> {label, finished_g,
+    method, fndds_key, ingredients:[[nombre_catalogo, g_crudo], ...]}. Separar el DATO curado de la lógica
+    de cómputo permite expandir el set sin tocar el script."""
+    with open(_RECIPES_PATH, encoding="utf-8") as f:
+        return (json.load(f) or {}).get("recipes") or {}
 
 
 def _fractions(p, c, f):
@@ -81,12 +53,14 @@ def main():
     except Exception:
         fndds = {}
 
+    recipes = _load_recipes()
     out = {}
-    print(f"{'plato':22} {'kcal/100g':>9} {'P':>5} {'C':>6} {'F':>5}  {'cobertura':>9}  FNDDS-cross", file=sys.stderr)
-    for key, rec in _RECIPES.items():
+    print(f"{'plato':26} {'kcal/100g':>9} {'P':>5} {'C':>6} {'F':>5}  {'cob':>4}  FNDDS-cross", file=sys.stderr)
+    for key, rec in recipes.items():
         tot = {"kcal": 0.0, "protein": 0.0, "carbs": 0.0, "fats": 0.0}
         constituents, resolved = [], 0
-        for name, g in rec["ingredients"]:
+        for ing in rec["ingredients"]:
+            name, g = (ing["name"], ing["g"]) if isinstance(ing, dict) else (ing[0], ing[1])
             m = db.macros_from_ingredient_string(f"{g}g {name}") or {}
             ok = bool(m)
             if ok:
@@ -101,7 +75,7 @@ def main():
 
         # Cross-check vs FNDDS (perfil de macros + kcal/100g).
         cross = None
-        fk = _FNDDS_KEY.get(key)
+        fk = rec.get("fndds_key")
         if fk and fk in fndds:
             fp = fndds[fk]["per_100g"]
             af = _fractions(per100["protein"], per100["carbs"], per100["fats"])
@@ -116,7 +90,7 @@ def main():
             "provenance": "computed from catalog/USDA constituents (CC0)",
         }
         _x = (f"dev {cross['profile_dev_pts']}pts, kcalΔ {cross['kcal_delta_pct']}%" if cross else "—")
-        print(f"{key:22} {per100['kcal']:9} {per100['protein']:5} {per100['carbs']:6} {per100['fats']:5}  {cov:9}  {_x}", file=sys.stderr)
+        print(f"{key:26} {per100['kcal']:9} {per100['protein']:5} {per100['carbs']:6} {per100['fats']:5}  {cov:4}  {_x}", file=sys.stderr)
 
     print(json.dumps({
         "_note": ("[G17-RECIPE-DECOMP · FASE 1] Platos dominicanos reconstruidos desde ingredientes "
