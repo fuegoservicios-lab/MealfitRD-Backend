@@ -1,137 +1,124 @@
-import pytest
+"""[P0-4 zero-log cascade · reescrito 2026-06-14] Cobertura de backend de la feature "zero-log
+consecutivo → degrade + push + delay 24h".
 
-# [STALE-MODULE-SKIP · 2026-06-14] Skip a nivel de MÓDULO (antes de los mocks + el import de
-# cron_tasks): `process_plan_chunk` fue renombrado a `process_plan_chunk_queue` (queue processor con
-# firma async distinta) y los mocks de módulo (langgraph/Gemini eliminado) ya NO cuadran con el
-# cron_tasks refactorizado → `AttributeError: __path__` al importar, que ABORTABA la colección de toda
-# la suite (`pytest -x`). Además los `sys.modules[...] = MagicMock()` de abajo CONTAMINAN la sesión.
-# Este skip evita ejecutar todo eso. La feature que el test cubría (zero-log consecutivo → degrade +
-# push + delay 24h) SIGUE VIVA en `cron_tasks.process_plan_chunk_queue` (~L26144) y NO tiene otra
-# cobertura de BACKEND (el test `test_p0_hist_learn_2_*` solo cubre el surfaceo en endpoints).
-# ACCIÓN PENDIENTE (owner): reescribir el mock contra el flujo nuevo (queue processor async) o borrar.
-pytest.skip(
-    "STALE: process_plan_chunk→process_plan_chunk_queue (firma async) + mocks de módulo incompatibles "
-    "(AttributeError __path__) que rompían la colección. Feature viva en process_plan_chunk_queue:26144+ "
-    "sin otra cobertura backend → reescribir o borrar.",
-    allow_module_level=True,
-)
+Cuando un chunk corre con learning zero-log tras `CHUNK_LEARNING_READY_MAX_DEFERRALS` deferrals y ya
+hubo 2 zero-logs consecutivos, el cron debe: (1) bumpear `plan_data._consecutive_zero_log_chunks` a 3,
+(2) flippear `generation_status` a `degraded_pending_engagement`, (3) disparar push notification, (4)
+delay de futuros chunks pending 24h.
 
-import sys
-from unittest.mock import MagicMock, patch
+POR QUÉ ESTE ENFOQUE (no driving del monolito):
+    El test original mockeaba módulos a nivel de `sys.modules[...] = MagicMock()` (contaminaba la
+    sesión + `AttributeError: __path__` con el cron refactorizado → rompía la colección de TODA la
+    suite) y llamaba a `process_plan_chunk(...)`, un per-chunk worker SYNC que ya NO existe. Tras el
+    refactor la cascade vive en una closure DOBLEMENTE anidada — `process_plan_chunk_queue` (~L24177)
+    → `_chunk_worker(task)` (~L24594) → la rama zero-log (~L26120) — no aislable ni invocable, y
+    driving el monolito de ~2000 líneas a esa rama vía mocks sería brittle (re-rompería con cada
+    refactor del cron). El bump pasó a `update_plan_data_atomic(meal_plan_id, _bump_zero_log, ...)` y el
+    push a `_build_zero_log_push_payload(...)` (módulo-level).
 
-# Mocks setup
-sys.modules['apscheduler'] = MagicMock()
-sys.modules['apscheduler.triggers'] = MagicMock()
-sys.modules['apscheduler.triggers.cron'] = MagicMock()
-sys.modules['apscheduler.schedulers'] = MagicMock()
-sys.modules['apscheduler.schedulers.background'] = MagicMock()
-sys.modules['langgraph'] = MagicMock()
-sys.modules['langgraph.graph'] = MagicMock()
-sys.modules['langchain_core'] = MagicMock()
-sys.modules['langchain_core.messages'] = MagicMock()
-sys.modules['langchain_core.tools'] = MagicMock()
-sys.modules['langchain_core.prompts'] = MagicMock()
+    Esta reescritura cubre lo que SÍ es testeable de forma mantenible:
+      - FUNCIONAL: `_build_zero_log_push_payload` (el copy/título/url del push por contador +
+        logging_preference) — la lógica de mensaje al usuario, módulo-level.
+      - PARSER-ANCHOR: la cascade no-aislable (bump→degrade en `_bump_zero_log`, vía
+        `update_plan_data_atomic`, el dispatch del push, el delay 24h con `week_number > %s`) — ancla
+        la feature contra borrado/refactor silencioso (el intent del test original).
+    CERO mocks de módulo → no contamina `sys.modules`. Reemplaza al test stale que estaba skipped.
+"""
+from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
-import json
-# [STALE-SKIP · 2026-06-14] `process_plan_chunk` fue renombrado a `process_plan_chunk_queue` (queue
-# processor, firma distinta) y el pipeline pasó a async; `langchain_google_genai` fue eliminado
-# (DeepSeek). Alias para que la colección de la suite NO rompa (el `import` fallaba → abortaba
-# `pytest -x`). El test en sí está SKIPPED: su cuerpo mockea el worker per-chunk SYNC viejo y necesita
-# reescritura contra el flujo nuevo. La feature que cubría (zero-log consecutivo → degrade + push +
-# delay 24h) SIGUE VIVA en `cron_tasks.process_plan_chunk_queue` (~L26144+) y NO tiene otra cobertura
-# de backend (el test `test_p0_hist_learn_2_*` solo cubre el surfaceo en endpoints) → reescribir o borrar.
-from cron_tasks import process_plan_chunk_queue as process_plan_chunk, CHUNK_LEARNING_READY_MAX_DEFERRALS  # noqa: F401
 
-@pytest.mark.skip(reason="STALE: process_plan_chunk→process_plan_chunk_queue (firma distinta) + pipeline "
-                         "async; reescribir el mock contra el flujo nuevo. Feature viva en "
-                         "process_plan_chunk_queue:26144+, sin otra cobertura backend.")
-@patch("cron_tasks.execute_sql_query")
-@patch("cron_tasks.execute_sql_write")
-@patch("cron_tasks._check_chunk_learning_ready")
-@patch("cron_tasks._dispatch_push_notification")
-@patch("cron_tasks.run_plan_pipeline")
-def test_consecutive_zero_log_cascade_and_push(
-    mock_pipeline, mock_push, mock_ready, mock_write, mock_query
-):
-    """
-    Test P0-4 fix: Verify that consecutive zero-log chunks are tracked,
-    future chunks are delayed by 24h, and reaching 3 consecutive hits
-    degrades the plan and sends a specific push notification.
-    """
-    task_id = "task-1"
-    user_id = "user-1"
-    meal_plan_id = "plan-15d"
-    week_number = 3
-    
-    # 1. Setup mock to simulate a zero-log failure after max deferrals
-    # So we trigger the exhaustion block for _is_zero_log
-    mock_ready.return_value = {
-        "ready": False,
-        "reason": "learning_zero_logs",
-        "zero_log_proxy": True,
-        "ratio": 0.0
-    }
-    
-    # Mock queries
-    # First query is plan_chunk_queue
-    # Second query is meal_plans (plan_data prior)
-    def mock_query_side_effect(query, params=None, fetch_one=False, fetch_all=False):
-        if "FROM plan_chunk_queue" in query:
-            return {
-                "pipeline_snapshot": {
-                    # Set deferrals to max so it goes to exhaustion block
-                    "_learning_ready_deferrals": CHUNK_LEARNING_READY_MAX_DEFERRALS,
-                    "_pantry_flexible_mode": False,
-                    "_learning_flexible_mode": False
-                }
-            }
-        elif "FROM meal_plans" in query:
-            return {
-                "plan_data": {
-                    # Simulate we already had 2 consecutive zero log chunks!
-                    "_consecutive_zero_log_chunks": 2
-                }
-            }
-        return {}
+_CRON = Path(__file__).resolve().parent.parent / "cron_tasks.py"
 
-    mock_query.side_effect = mock_query_side_effect
 
-    # 2. Execute process_plan_chunk
-    process_plan_chunk(task_id, user_id, meal_plan_id, week_number, {})
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# FUNCIONAL — `_build_zero_log_push_payload` (módulo-level): el push por contador + logging_preference
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+@pytest.fixture(scope="module")
+def build_payload():
+    from cron_tasks import _build_zero_log_push_payload
+    return _build_zero_log_push_payload
 
-    # 3. Assertions
-    # A) Push notification should have been sent with specific 3-strike copy
-    mock_push.assert_called_once()
-    push_args, push_kwargs = mock_push.call_args
-    assert push_kwargs["title"] == "Tu plan se está generando sin tu feedback"
-    assert "varios bloques sin registrar comidas" in push_kwargs["body"]
 
-    # B) Plan data should be updated with consecutive_zero_log_chunks = 3 and generation_status degraded
-    write_calls = mock_write.call_args_list
-    plan_update_called = False
-    cascade_delay_called = False
-    
-    for call in write_calls:
-        q = call[0][0]
-        p = call[0][1]
-        
-        if "UPDATE meal_plans SET plan_data" in q:
-            plan_update_called = True
-            # The params for this query should be: json_data, generation_status, meal_plan_id
-            # Wait, in the code we did COALESCE or direct assignment depending on condition
-            # Actually we did:
-            # "UPDATE meal_plans SET plan_data = %s::jsonb, generation_status = %s WHERE id = %s"
-            if "generation_status = %s" in q:
-                plan_data_arg = json.loads(p[0])
-                assert plan_data_arg["_consecutive_zero_log_chunks"] == 3
-                assert p[1] == "degraded_pending_engagement"
-                assert p[2] == meal_plan_id
+def test_push_3plus_manual_alarm_title_and_optout(build_payload):
+    """≥3 zero-logs + logging manual → título de alarma + CTA 'Continuar sin registrar' + deeplink."""
+    p = build_payload(3, "manual")
+    assert p["title"] == "Tu plan se está generando sin tu feedback"
+    assert "varios bloques sin registrar" in p["body"]
+    assert "Continuar sin registrar" in p["body"]
+    assert p["url"] != "/dashboard"  # deeplink al banner del diario (CHUNK_ZERO_LOG_DEEPLINK)
 
-        if "UPDATE plan_chunk_queue" in q and "execute_after = NOW() + interval '24 hours'" in q:
-            cascade_delay_called = True
-            assert p[0] == meal_plan_id
-            assert p[1] == week_number
-            
-    assert plan_update_called, "meal_plans update for 3 strikes missing"
-    assert cascade_delay_called, "future chunks were not delayed by 24h"
+
+def test_push_3plus_autoproxy_no_optout_cta(build_payload):
+    """≥3 + auto_proxy → mismo título de alarma pero SIN el CTA de opt-out (ya optó) + url default."""
+    p = build_payload(5, "auto_proxy")
+    assert p["title"] == "Tu plan se está generando sin tu feedback"
+    assert "Continuar sin registrar" not in p["body"]
+    assert p["url"] == "/dashboard"
+
+
+def test_push_below3_softer_title(build_payload):
+    """<3 → título suave (no alarma); manual sigue ofreciendo el opt-out."""
+    p = build_payload(2, "manual")
+    assert p["title"] == "Loguea tus comidas para continuar"
+    assert p["title"] != "Tu plan se está generando sin tu feedback"
+    assert "Continuar sin registrar" in p["body"]
+
+
+def test_push_below3_autoproxy(build_payload):
+    p = build_payload(1, "auto_proxy")
+    assert p["title"] == "Loguea tus comidas para continuar"
+    assert "Continuar sin registrar" not in p["body"]
+    assert p["url"] == "/dashboard"
+
+
+def test_push_payload_shape(build_payload):
+    """Contrato: siempre devuelve {title, body, url} (se pasa a _dispatch_push_notification(**payload))."""
+    p = build_payload(0, "manual")
+    assert set(p.keys()) == {"title", "body", "url"}
+    assert all(isinstance(p[k], str) and p[k] for k in p)
+
+
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+# PARSER-ANCHOR — la cascade vive en una closure doblemente anidada (no aislable); anclamos su lógica
+# en el source para que un refactor que la rompa/borre falle ESTE test ANTES de tocar producción.
+# ════════════════════════════════════════════════════════════════════════════════════════════════
+def _src() -> str:
+    return _CRON.read_text(encoding="utf-8")
+
+
+def test_anchor_bump_closure_degrades_at_3():
+    """`_bump_zero_log`: incrementa el contador y a ≥3 flippea generation_status a degraded."""
+    src = _src()
+    assert "def _bump_zero_log(" in src
+    assert 'pd["_consecutive_zero_log_chunks"] = n' in src
+    assert "if n >= 3:" in src
+    assert 'pd["generation_status"] = "degraded_pending_engagement"' in src
+
+
+def test_anchor_bump_via_atomic_rmw():
+    """El bump va por `update_plan_data_atomic` (SELECT FOR UPDATE + callback), NO por un overwrite
+    raw de `meal_plans SET plan_data` (que además fallaba: generation_status no es columna)."""
+    src = _src()
+    import re
+    assert re.search(r"update_plan_data_atomic\(\s*meal_plan_id,\s*_bump_zero_log", src), \
+        "el bump del contador debe pasar por update_plan_data_atomic(meal_plan_id, _bump_zero_log, ...)"
+
+
+def test_anchor_push_dispatched_with_consecutive_count():
+    """El push se construye con `_build_zero_log_push_payload(consecutive_zero_log_chunks=...)` y se
+    despacha vía `_dispatch_push_notification`."""
+    src = _src()
+    assert "_build_zero_log_push_payload(" in src
+    assert "consecutive_zero_log_chunks=" in src
+    assert "_dispatch_push_notification(" in src
+
+
+def test_anchor_future_chunks_delayed_24h():
+    """Delay de los chunks pending FUTUROS del mismo plan por 24h."""
+    src = _src()
+    import re
+    assert re.search(r"execute_after\s*=\s*NOW\(\)\s*\+\s*interval '24 hours'", src)
+    assert "week_number > %s" in src
