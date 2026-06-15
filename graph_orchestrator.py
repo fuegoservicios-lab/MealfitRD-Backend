@@ -8269,6 +8269,16 @@ MACRO_SOLVER_PROTEIN_TOPUP = _env_bool("MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP", Tru
 # solver ON. Clamp de seguridad para no producir porciones absurdas.
 MACRO_SOLVER_CAL_RECONCILE = _env_bool("MEALFIT_MACRO_SOLVER_CAL_RECONCILE", True)
 
+# [P1-MACRO-AWARE-RECONCILE · 2026-06-15] El reconcile de día actual (`_protein_preserving_day_reconcile`)
+# es protein-preserving pero SINGLE-FACTOR: escala carbos+grasas JUNTOS por un factor isocalórico (solo
+# clava kcal), lo que DISTORSIONA el split C:F que el solver logró → el benchmark midió carbos 19% / grasas
+# 22% MAPE (vs proteína 6%). Este knob activa un reconcile MULTI-MACRO: escala los ingredientes
+# carbo-dominantes hacia target_carbs y los grasa-dominantes hacia target_fats con factores SEPARADOS,
+# preservando la proteína. Como el target es internamente consistente (kcal=4P+4C+9F), clavar C y F clava
+# kcal. Default OFF (rollout gradual; validar con benchmark OFF-vs-ON antes de fijar a True — mismo
+# protocolo que MACRO_SOLVER_ENABLED). Fail-safe: si falla, el plan queda como lo dejó el solver.
+MACRO_AWARE_RECONCILE = _env_bool("MEALFIT_MACRO_AWARE_RECONCILE", False)
+
 # [P3-RECIPE-COHERENCE-AUTOFIX · 2026-06-13] Auto-fix determinista de las violaciones de
 # coherencia receta↔ingrediente que HOY rechazan+reintentan (→ retry_penalty < 1.0 en el
 # holistic). Caso "forward" (la receta menciona una proteína que no está listada → la
@@ -9331,6 +9341,73 @@ def _protein_preserving_day_reconcile(meals: list, daily_cals: float, db) -> boo
         return True
     except Exception as e:
         logger.warning(f"[P3-PROTEIN-FLOOR] reconcile protein-preserving falló: "
+                       f"{type(e).__name__}: {e}")
+        return False
+
+
+def _ingredient_macro_group(s: str, db) -> str | None:
+    """[P1-MACRO-AWARE-RECONCILE · 2026-06-15] Macro DOMINANTE (por kcal) del ingrediente:
+    'protein' | 'carbs' | 'fats'. None si no resuelve o si su aporte calórico es despreciable
+    (agua/condimento). Generaliza `_ingredient_is_protein_dominant` a las tres macros."""
+    mc = db.macros_from_ingredient_string(str(s))
+    if not mc:
+        return None
+    pc = 4.0 * (mc.get("protein") or 0.0)
+    cc = 4.0 * (mc.get("carbs") or 0.0)
+    fc = 9.0 * (mc.get("fats") or 0.0)
+    if pc <= 0 and cc <= 0 and fc <= 0:
+        return None
+    if pc >= cc and pc >= fc:
+        return "protein"
+    return "carbs" if cc >= fc else "fats"
+
+
+def _macro_aware_day_reconcile(meals: list, target_carbs: float, target_fats: float, db) -> bool:
+    """[P1-MACRO-AWARE-RECONCILE · 2026-06-15] Reconcile de día CONSCIENTE del split C:F. A diferencia
+    de `_protein_preserving_day_reconcile` (single-factor, kcal-only → distorsiona el split que el solver
+    logró), escala los ingredientes CARBO-dominantes hacia `target_carbs` y los GRASA-dominantes hacia
+    `target_fats` con factores SEPARADOS, dejando intactos los PROTEÍNA-dominantes (preserva el closer).
+    Como el target es internamente consistente (kcal=4P+4C+9F), clavar C y F clava kcal. Los ingredientes
+    no resueltos se tratan como carbo (suelen ser víveres/veg/condimento — misma asunción que el reconcile
+    legacy, que los escala). Mantiene receta↔macro (escala porción + número de macro por el mismo factor).
+    Mutates meals. Retorna True si aplicó. Fail-safe. Anchor: P1-MACRO-AWARE-RECONCILE."""
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc
+        curC = sum(_meal_macro_num(m.get("carbs")) for m in meals)
+        curF = sum(_meal_macro_num(m.get("fats")) for m in meals)
+        if curC <= 0 and curF <= 0:
+            return False
+        # Factores acotados (mismo clamp anti-porciones-absurdas que el reconcile legacy).
+        fC = max(0.4, min(1.8, target_carbs / curC)) if (curC > 0 and target_carbs > 0) else 1.0
+        fF = max(0.4, min(1.8, target_fats / curF)) if (curF > 0 and target_fats > 0) else 1.0
+        if abs(fC - 1.0) < 0.02 and abs(fF - 1.0) < 0.02:
+            return False  # ya en banda → no tocar
+        for m in meals:
+            for key in ("ingredients", "ingredients_raw"):
+                lst = m.get(key)
+                if not isinstance(lst, list):
+                    continue
+                new = []
+                for s in lst:
+                    g = _ingredient_macro_group(s, db)
+                    if g == "protein":
+                        new.append(str(s))                 # protege la proteína (closer)
+                    elif g == "fats":
+                        new.append(_resc(str(s), fF))
+                    else:                                   # carbs o no-resuelto → factor de carbo
+                        new.append(_resc(str(s), fC))
+                m[key] = new
+            mp = round(_meal_macro_num(m.get("protein")))
+            mc = round(_meal_macro_num(m.get("carbs")) * fC)
+            mf = round(_meal_macro_num(m.get("fats")) * fF)
+            m["protein"] = mp
+            m["carbs"] = mc
+            m["fats"] = mf
+            m["cals"] = round(4 * mp + 4 * mc + 9 * mf)
+            m["macros"] = [f"P:{mp}g", f"C:{mc}g", f"G:{mf}g"]
+        return True
+    except Exception as e:
+        logger.warning(f"[P1-MACRO-AWARE-RECONCILE] reconcile multi-macro falló: "
                        f"{type(e).__name__}: {e}")
         return False
 
@@ -11045,10 +11122,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 # nivelar las kcal. Reemplaza el escalado uniforme (que reducía la proteína).
                 _rcdb = _RCDB()
                 for _d in days:
-                    if _protein_preserving_day_reconcile(_d.get("meals", []) or [], _daily_cals, _rcdb):
+                    _ms_d = _d.get("meals", []) or []
+                    # [P1-MACRO-AWARE-RECONCILE] Multi-macro (clava C y F por separado → no distorsiona
+                    # el split del solver) si el knob está ON; si no, el single-factor protein-preserving.
+                    if MACRO_AWARE_RECONCILE:
+                        _ok_rec = _macro_aware_day_reconcile(_ms_d, _cg, _fg, _rcdb)
+                    else:
+                        _ok_rec = _protein_preserving_day_reconcile(_ms_d, _daily_cals, _rcdb)
+                    if _ok_rec:
                         _rec_n += 1
                 if _rec_n:
-                    logger.info(f"🎯 [P3-PROTEIN-FLOOR] Reconcile protein-preserving niveló "
+                    _rec_mode = "multi-macro (C+F)" if MACRO_AWARE_RECONCILE else "protein-preserving"
+                    logger.info(f"🎯 [P3-PROTEIN-FLOOR] Reconcile {_rec_mode} niveló "
                                 f"{_rec_n} día(s) al target ({_daily_cals:.0f} kcal) sin tocar la proteína")
             else:
                 for _d in days:
