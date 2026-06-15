@@ -1,0 +1,428 @@
+{
+  "_note": "[G17-RECIPE-DECOMP · FASE 1] Platos dominicanos reconstruidos desde ingredientes constituyentes (CC0). Macros per-100g del plato cocido = suma de macros crudos / peso final. Trazable (constituents) + cross-check vs FNDDS externo. Reemplaza la necesidad de una tabla criolla propietaria. Generado por scripts/build_dominican_dishes.py.",
+  "dishes": {
+    "moro": {
+      "label": "Moro de habichuelas",
+      "method": "arroz+habichuelas hervido",
+      "finished_g": 230,
+      "per_100g": {
+        "kcal": 172.5,
+        "protein": 5.3,
+        "carbs": 30.9,
+        "fats": 3.0
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "g": 60,
+          "resolved": true,
+          "macros": {
+            "kcal": 215.2,
+            "protein": 4.2,
+            "carbs": 48.2,
+            "fats": 0.6
+          }
+        },
+        {
+          "name": "Habichuelas rojas",
+          "g": 35,
+          "resolved": true,
+          "macros": {
+            "kcal": 120.6,
+            "protein": 7.9,
+            "carbs": 21.4,
+            "fats": 0.4
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6,
+          "resolved": true,
+          "macros": {
+            "kcal": 54.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 6.0
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 12,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.1,
+            "protein": 0.1,
+            "carbs": 1.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.9,
+            "protein": 0.1,
+            "carbs": 0.4,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": {
+        "fndds_dish": "Beans and white rice",
+        "fndds_per_100g": {
+          "kcal": 164.0,
+          "protein": 6.5,
+          "carbs": 25.19,
+          "fats": 4.21
+        },
+        "profile_dev_pts": 7.2,
+        "kcal_delta_pct": 5.2
+      },
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "mangu": {
+      "label": "Mangú (plátano verde majado)",
+      "method": "plátano verde hervido+majado",
+      "finished_g": 200,
+      "per_100g": {
+        "kcal": 176.3,
+        "protein": 1.2,
+        "carbs": 33.7,
+        "fats": 4.1
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Plátano verde",
+          "g": 180,
+          "resolved": true,
+          "macros": {
+            "kcal": 274.3,
+            "protein": 2.2,
+            "carbs": 66.1,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 6.4,
+            "protein": 0.2,
+            "carbs": 1.4,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "locrio de pollo": {
+      "label": "Locrío de pollo",
+      "method": "arroz+pollo guisado",
+      "finished_g": 240,
+      "per_100g": {
+        "kcal": 152.2,
+        "protein": 8.0,
+        "carbs": 20.8,
+        "fats": 4.1
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "g": 60,
+          "resolved": true,
+          "macros": {
+            "kcal": 215.2,
+            "protein": 4.2,
+            "carbs": 48.2,
+            "fats": 0.6
+          }
+        },
+        {
+          "name": "Pechuga de pollo",
+          "g": 65,
+          "resolved": true,
+          "macros": {
+            "kcal": 69.8,
+            "protein": 14.6,
+            "carbs": 0.0,
+            "fats": 1.2
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 12,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.1,
+            "protein": 0.1,
+            "carbs": 1.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Tomate",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 3.1,
+            "protein": 0.1,
+            "carbs": 0.6,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": {
+        "fndds_dish": "Chicken curry with rice",
+        "fndds_per_100g": {
+          "kcal": 116.0,
+          "protein": 4.96,
+          "carbs": 15.12,
+          "fats": 4.0
+        },
+        "profile_dev_pts": 4.5,
+        "kcal_delta_pct": 31.2
+      },
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "sancocho": {
+      "label": "Sancocho dominicano",
+      "method": "guiso/hervido con caldo",
+      "finished_g": 360,
+      "per_100g": {
+        "kcal": 92.8,
+        "protein": 4.8,
+        "carbs": 12.7,
+        "fats": 2.6
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Carne de res",
+          "g": 70,
+          "resolved": true,
+          "macros": {
+            "kcal": 98.5,
+            "protein": 15.1,
+            "carbs": 0.6,
+            "fats": 4.0
+          }
+        },
+        {
+          "name": "Yuca",
+          "g": 50,
+          "resolved": true,
+          "macros": {
+            "kcal": 80.2,
+            "protein": 0.7,
+            "carbs": 19.1,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Plátano verde",
+          "g": 40,
+          "resolved": true,
+          "macros": {
+            "kcal": 61.0,
+            "protein": 0.5,
+            "carbs": 14.7,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Auyama",
+          "g": 30,
+          "resolved": true,
+          "macros": {
+            "kcal": 9.3,
+            "protein": 0.3,
+            "carbs": 1.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ñame",
+          "g": 30,
+          "resolved": true,
+          "macros": {
+            "kcal": 35.8,
+            "protein": 0.5,
+            "carbs": 8.4,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 10,
+          "resolved": true,
+          "macros": {
+            "kcal": 4.3,
+            "protein": 0.1,
+            "carbs": 0.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 45.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 5.0
+          }
+        }
+      ],
+      "fndds_cross_check": {
+        "fndds_dish": "Stew, chicken",
+        "fndds_per_100g": {
+          "kcal": 84.0,
+          "protein": 9.24,
+          "carbs": 6.29,
+          "fats": 2.34
+        },
+        "profile_dev_pts": 16.1,
+        "kcal_delta_pct": 10.5
+      },
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "habichuelas guisadas": {
+      "label": "Habichuelas guisadas",
+      "method": "guiso",
+      "finished_g": 180,
+      "per_100g": {
+        "kcal": 152.7,
+        "protein": 7.1,
+        "carbs": 20.3,
+        "fats": 4.8
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Habichuelas rojas",
+          "g": 55,
+          "resolved": true,
+          "macros": {
+            "kcal": 189.6,
+            "protein": 12.4,
+            "carbs": 33.7,
+            "fats": 0.6
+          }
+        },
+        {
+          "name": "Auyama",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 6.2,
+            "protein": 0.2,
+            "carbs": 1.3,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 12,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.1,
+            "protein": 0.1,
+            "carbs": 1.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.9,
+            "protein": 0.1,
+            "carbs": 0.4,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "tostones": {
+      "label": "Tostones (plátano verde frito)",
+      "method": "frito (pierde agua, absorbe aceite)",
+      "finished_g": 95,
+      "per_100g": {
+        "kcal": 306.2,
+        "protein": 1.6,
+        "carbs": 46.4,
+        "fats": 12.7
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Plátano verde",
+          "g": 120,
+          "resolved": true,
+          "macros": {
+            "kcal": 182.9,
+            "protein": 1.5,
+            "carbs": 44.0,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 12,
+          "resolved": true,
+          "macros": {
+            "kcal": 108.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 12.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    }
+  }
+}
