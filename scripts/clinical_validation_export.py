@@ -73,6 +73,43 @@ def _delivered_day_claimed(day):
     return agg
 
 
+# ── [G16-FNDDS-GROUND-TRUTH · 2026-06-15] Validación NO-CIRCULAR contra USDA FNDDS (dominio público/CC0) ──
+# El check de integridad #1 recomputa desde el MISMO catálogo que genera las porciones → circular. FNDDS es
+# un ground-truth EXTERNO (platos compuestos medidos por encuestas US, incl. hispanos). Comparamos el PERFIL
+# de macros (fracción de kcal de P/C/F, INDEPENDIENTE de la porción) de la comida de la app vs el del plato
+# FNDDS análogo. Opcional: si no se generó la referencia (scripts/build_fndds_reference.py con USDA_API_KEY),
+# se omite sin romper. Provee la pieza de validación externa que el doc (clinical_validation.md) listaba como
+# pendiente por dataset.
+def _strip_accents(s) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(s)) if unicodedata.category(c) != "Mn").lower()
+
+
+def _load_fndds_reference() -> dict:
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "fndds_dish_reference.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return (json.load(f) or {}).get("dishes") or {}
+    except Exception:
+        return {}
+
+
+def _macro_fractions(p, c, f):
+    """Fracciones de kcal por macro (perfil independiente de la porción). None si no hay energía."""
+    kp, kc, kf = 4.0 * _num(p), 4.0 * _num(c), 9.0 * _num(f)
+    tot = kp + kc + kf
+    return (kp / tot, kc / tot, kf / tot) if tot > 0 else None
+
+
+def _match_fndds_dish(meal_name, dishes):
+    """Key del plato FNDDS cuyo nombre aparece (substring, sin acentos) en el nombre de la comida, o None."""
+    nm = _strip_accents(meal_name)
+    for key in dishes:
+        if _strip_accents(key) in nm:
+            return key
+    return None
+
+
 async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=15, help="nº de planes a muestrear")
@@ -108,6 +145,9 @@ async def main():
     days_low_res = 0         # días con res_pct < 60 (excluidos del agregado filtrado → tapan el 0-silencioso)
     band_cells = 0
     band_in = 0              # entregado(claim) dentro de [0.90,1.12]×target
+    fndds_ref = _load_fndds_reference()   # [G16-FNDDS] ground-truth externo (vacío si no se generó)
+    fndds_meals = 0
+    fndds_dev_sum = 0.0      # suma de desviación media de perfil de macros (P/C/F kcal-frac) vs FNDDS
     for r in rows:
         pd = r["plan_data"]
         if isinstance(pd, str):
@@ -149,6 +189,18 @@ async def main():
                     integ_all_cells += 1
                     if abs(cl - rc) / rc <= 0.15:
                         integ_all_band += 1
+            # [G16-FNDDS] Perfil de macros de cada comida vs su plato FNDDS análogo (EXTERNO, no-circular).
+            if fndds_ref:
+                for _meal in (day.get("meals") or []):
+                    _dk = _match_fndds_dish(_meal.get("name", ""), fndds_ref)
+                    if not _dk:
+                        continue
+                    _appf = _macro_fractions(_meal.get("protein"), _meal.get("carbs"), _meal.get("fats"))
+                    _p100 = fndds_ref[_dk].get("per_100g") or {}
+                    _reff = _macro_fractions(_p100.get("protein"), _p100.get("carbs"), _p100.get("fats"))
+                    if _appf and _reff:
+                        fndds_meals += 1
+                        fndds_dev_sum += sum(abs(a - b) for a, b in zip(_appf, _reff)) / 3.0
             if res_pct < 60:
                 days_low_res += 1
             row["nutricionista_aprobado"] = ""
@@ -191,6 +243,17 @@ async def main():
     if out_rows:
         print(f"  Días de BAJA RESOLUCIÓN (res_pct<60, excluidos del agregado filtrado): "
               f"{days_low_res}/{len(out_rows)} = {round(100*days_low_res/len(out_rows))}%", flush=True)
+    # [G16-FNDDS-GROUND-TRUTH · 2026-06-15] Validación EXTERNA no-circular: perfil de macros vs USDA FNDDS.
+    if not fndds_ref:
+        print("  FNDDS EXTERNO: referencia no generada — correr scripts/build_fndds_reference.py con "
+              "USDA_API_KEY para habilitar el ground-truth externo (G16).", flush=True)
+    elif fndds_meals:
+        print(f"  INTEGRIDAD vs FNDDS EXTERNO (perfil de macros P/C/F, NO-circular, ground-truth USDA CC0): "
+              f"{fndds_meals} comida(s) mapeada(s) a plato FNDDS, desviación media de perfil "
+              f"{round(100*fndds_dev_sum/fndds_meals,1)} pts (0 = perfil idéntico al plato FNDDS análogo).", flush=True)
+    else:
+        print(f"  FNDDS EXTERNO: 0 comidas mapearon a un plato FNDDS de la referencia "
+              f"({len(fndds_ref)} platos disponibles; los nombres de comida no coincidieron).", flush=True)
 
 
 if __name__ == "__main__":
