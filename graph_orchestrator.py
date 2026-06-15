@@ -8418,6 +8418,16 @@ FALLBACK_CLINICAL_LAYER_ENABLED = _env_bool("MEALFIT_FALLBACK_CLINICAL_LAYER", T
 BAND_SCORE_LOWER = _env_float("MEALFIT_BAND_SCORE_LOWER", 0.90)
 BAND_SCORE_UPPER = _env_float("MEALFIT_BAND_SCORE_UPPER", 1.12)
 
+# [P2-BAND-SCORE-GATE · 2026-06-15] Gate por-plan sobre el clinical_band_score: hoy un plan con la mitad de
+# las celdas día×macro fuera de banda (score bajo) se entrega IDÉNTICO a uno preciso, sin aviso. Este
+# gate marca `plan._quality_degraded=True` (reason=low_band_score) cuando el score cae bajo el umbral Y
+# no es fallback Y el plan no estaba ya marcado → dispara el banner de degradación YA EXISTENTE en el
+# frontend (honestidad: el usuario sabe que la precisión de macros fue baja). NO fuerza retry (corre
+# post-scoring, fuera del grafo). Default OFF: es user-facing → opt-in tras tunear el umbral contra la
+# distribución real de band_score. Knob de umbral aparte.
+BAND_SCORE_GATE_ENABLED = _env_bool("MEALFIT_BAND_SCORE_GATE", False)
+BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
+
 
 def _protein_gkg_ceiling(goal) -> float:
     """[P3-PROTEIN-CEILING-GOAL-AWARE] Techo de proteína entregada (g/kg) por objetivo: déficit/
@@ -16691,6 +16701,28 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
         return {"score": None, "cells_in_band": 0, "cells_total": 0, "error": True}
 
 
+def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: bool, attempt: int) -> bool:
+    """[P2-BAND-SCORE-GATE · 2026-06-15] Marca `plan._quality_degraded=True` (reason=low_band_score) si la
+    precisión MEDIDA (`clinical_band_score`) cae bajo `BAND_SCORE_GATE_THRESHOLD`, NO es fallback, y el
+    plan no estaba ya marcado por una razón peor → dispara el banner de degradación existente del
+    frontend (honestidad: la precisión de macros fue baja). NO fuerza retry (corre post-scoring, fuera
+    del grafo). Gateado por `BAND_SCORE_GATE_ENABLED` (default OFF — user-facing, opt-in tras tunear el
+    umbral). Retorna True si marcó. Puro + fail-safe (no lanza). Anchor: P2-BAND-SCORE-GATE."""
+    try:
+        if not BAND_SCORE_GATE_ENABLED or delivered_was_fallback or band_val is None:
+            return False
+        if band_val >= BAND_SCORE_GATE_THRESHOLD or plan.get("_quality_degraded"):
+            return False
+        plan["_quality_degraded"] = True
+        plan["_quality_degraded_reason"] = "low_band_score"
+        plan["_quality_degraded_severity"] = "minor"
+        plan["_quality_degraded_attempts"] = attempt
+        plan["_quality_degraded_band_score"] = band_val
+        return True
+    except Exception:
+        return False
+
+
 def _compute_pipeline_holistic_score_and_emit(
     final_state: dict,
     *,
@@ -16843,6 +16875,13 @@ def _compute_pipeline_holistic_score_and_emit(
                         f"🎯 [CLINICAL BAND SCORE] Precisión medida: {_band_val:.2f} "
                         f"({_band.get('cells_in_band')}/{_band.get('cells_total')} celdas en banda; "
                         f"por-macro {_band.get('per_macro')}; fallback={delivered_was_fallback})")
+                    # [P2-BAND-SCORE-GATE · 2026-06-15] Si la precisión medida cae bajo el umbral marca el plan
+                    # degradado → dispara el banner de degradación existente del frontend (honestidad).
+                    if _maybe_mark_low_band_degraded(plan, _band_val, delivered_was_fallback,
+                                                     final_state.get("attempt", 1)):
+                        logger.warning(
+                            f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_val:.2f} < umbral "
+                            f"{BAND_SCORE_GATE_THRESHOLD} → plan marcado _quality_degraded (low_band_score)")
             except Exception as _cbs_e:
                 logger.warning(f"[P4-SCOREBOARD] emit del band score falló: {type(_cbs_e).__name__}: {_cbs_e}")
 
