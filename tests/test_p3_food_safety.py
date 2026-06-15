@@ -82,20 +82,21 @@ def test_no_flag_sin_huevo():
 
 # ---------- Auto-fix ----------
 
-def test_autofix_inyecta_nota_batido_y_es_macro_preservante():
+def test_autofix_batido_sustituye_huevo_crudo():
+    # [P2-RAW-EGG-SUBSTITUTE · 2026-06-15] El caso 'blended' (Salmonella) ahora MITIGA A NIVEL DE
+    # COMPOSICIÓN: remueve el huevo crudo y lo sustituye por yogur griego (antes solo inyectaba una nota
+    # macro-preservante). El resto del plato queda intacto; la nota refleja el swap.
     meal = {"name": "Batido de Mango", "ingredients": ["1 mango (200g)", "½ huevo"],
             "protein": 10, "carbs": 45, "fats": 13, "cals": 335, "recipe": ["Licúa todo."]}
     plan = _plan(meal)
-    snapshot = {k: meal[k] for k in ("ingredients", "protein", "carbs", "fats", "cals")}
     n = _apply_food_safety_fixes(plan)
     assert n == 1
-    # nota inyectada
+    assert meal["_food_safety_fixed"] == "blended_substituted"
+    ings = " ".join(str(i).lower() for i in meal["ingredients"])
+    assert "huevo" not in ings, ("el huevo crudo debe removerse del batido", meal["ingredients"])
+    assert "yogur" in ings, ("debe quedar el reemplazo blend-safe", meal["ingredients"])
+    assert "1 mango (200g)" in meal["ingredients"], "el resto del plato queda intacto"
     assert any("Seguridad alimentaria" in s for s in meal["recipe"])
-    assert any("pasteurizado" in s.lower() or "proteína en polvo" in s.lower() for s in meal["recipe"])
-    # macro-preservante: cantidades, macros y token del ingrediente intactos
-    assert meal["ingredients"] == snapshot["ingredients"]
-    for k in ("protein", "carbs", "fats", "cals"):
-        assert meal[k] == snapshot[k]
 
 
 def test_autofix_nota_nocook_distinta():

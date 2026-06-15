@@ -8320,6 +8320,13 @@ CLOSER_EGG_BUDGET_ENABLED = _env_bool("MEALFIT_CLOSER_EGG_BUDGET", True)
 # lista). Cierra el hallazgo CRÍTICO de la auditoría clínica. Flip a False solo para debug.
 FOOD_SAFETY_GUARD = _env_bool("MEALFIT_FOOD_SAFETY_GUARD", True)
 
+# [P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Para el caso 'blended' (huevo crudo en un batido = vector DIRECTO
+# de Salmonella, hallazgo CRÍTICO original del audit) la mitigación pasa de NOTA a COMPOSICIÓN: remueve el
+# huevo crudo y lo sustituye por yogur griego (blend-safe, resuelve al catálogo) preservando cantidad +
+# delta de macros — el plan ya NO contiene el peligro, no depende de que el usuario lea la nota. El caso
+# 'no_cook' (cocinable) sigue con nota (cocinar es viable). Default True (seguridad). Anchor: P2-RAW-EGG-SUBSTITUTE.
+RAW_EGG_BLENDED_SUBSTITUTE_ENABLED = _env_bool("MEALFIT_RAW_EGG_BLENDED_SUBSTITUTE", True)
+
 # [P3-PORTION-QUANTIZE · 2026-06-13] Redondea las porciones del plan a unidades de cocina
 # medibles (¼ taza, ¼ cda, ½ unidad discreta, 5 g) ajustando los macros por el delta exacto.
 # Cierra el hallazgo de la auditoría: las fracciones decimales no medibles ('0.66 huevos',
@@ -8386,6 +8393,11 @@ PROTEIN_GKG_CEILING_CUT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_CUT", 2.6)
 #            modelamos → se trata como cap de SEGURIDAD + gate de derivación (FS9), no prescripción.
 CONDITION_RULES_ENABLED = _env_bool("MEALFIT_CONDITION_RULES", True)
 RENAL_PROTEIN_GKG_CEILING = _env_float("MEALFIT_RENAL_PROTEIN_GKG", 0.8)   # KDIGO 2024 G3-G5 no-diálisis
+# [P2-RENAL-CAP-FAILHARD · 2026-06-15] El cap renal de proteína es SEGURIDAD iatrogénica — su gate NO
+# debe compartir kill-switch con `PROTEIN_FLOOR_ENABLED` (un knob de hipertrofia). Knob dedicado, default
+# True (desactivarlo es una decisión deliberada de seguridad, no un efecto colateral de tunear el piso de
+# proteína). El Guard 1 del cap renal ahora se gatea por esto, NO por PROTEIN_FLOOR_ENABLED.
+RENAL_CAP_ENABLED = _env_bool("MEALFIT_RENAL_CAP", True)
 DM2_FIBER_G_PER_1000KCAL = _env_float("MEALFIT_DM2_FIBER_PER_1000KCAL", 14.0)  # ADA 2026 calidad de carbo
 # [P3-CONDITION-RULES · 2026-06-14] DM2: el revisor LLM escala preocupaciones glucémicas (miel,
 # plátano grande) a 'critical' → fallback matemático que pierde el plan real + la fibra ADA. Para
@@ -8978,6 +8990,66 @@ _FOOD_SAFETY_NOTE_NOCOOK = (
     "⚠️ Seguridad alimentaria: cocina el huevo por completo (≥71°C, yema y clara firmes, "
     "sin partes líquidas) antes de servir; evita el huevo crudo o poco cocido."
 )
+# [P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Nota cuando la mitigación fue a nivel de composición (swap real).
+_FOOD_SAFETY_NOTE_BLENDED_SUBBED = (
+    "⚠️ Seguridad alimentaria: se reemplazó el huevo crudo del batido por yogur griego "
+    "(aporte proteico similar, sin riesgo de Salmonella). Si prefieres huevo, úsalo PASTEURIZADO."
+)
+# Reemplazo blend-safe que RESUELVE al catálogo (validado por el contrato de resolubilidad P2-17).
+_BLEND_EGG_REPLACEMENT = "Yogurt griego sin azúcar"
+
+
+def _substitute_blended_raw_egg(meal: dict, db) -> bool:
+    """[P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Reemplaza el huevo crudo de una preparación LICUADA por una
+    proteína blend-safe (yogur griego) a nivel de COMPOSICIÓN — preserva el prefijo de cantidad y ajusta
+    los macros por DELTA quirúrgico (mismo patrón que `_apply_substitutions_core`). Solo para el caso
+    'blended' (vector directo de Salmonella). Mutates `meal`. Retorna True si swapeó. Fail-safe."""
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        _sa = lambda x: x  # noqa: E731
+    import re as _re
+    changed, swaps = False, []
+    for key in ("ingredients", "ingredients_raw"):
+        lst = meal.get(key)
+        if not isinstance(lst, list):
+            continue
+        out = []
+        for ing in lst:
+            ing_low = _sa(str(ing).lower())
+            if any(_re.search(r"\b" + t + r"\b", ing_low) for t in _RAW_EGG_TERMS):
+                # Reemplazo BARE (sin preservar prefijo): en "N huevos crudos" la palabra ofensora ES el
+                # sustantivo de conteo, así que preservar "N huevos " dejaría el huevo en el string. El
+                # conteo de huevos no mapea a gramos de yogur de todas formas; el delta de macros se
+                # computa del string viejo vs el nuevo. [P2-RAW-EGG-SUBSTITUTE bugfix]
+                new = _BLEND_EGG_REPLACEMENT
+                out.append(new)
+                if key == "ingredients":
+                    swaps.append((str(ing), new))
+                changed = True
+            else:
+                out.append(ing)
+        meal[key] = out
+    if changed and db is not None and swaps:
+        try:
+            _d = {"protein": 0.0, "carbs": 0.0, "fats": 0.0, "kcal": 0.0}
+            _touched = False
+            for _old, _new in swaps:
+                _om = db.macros_from_ingredient_string(_old) or {}
+                _nm = db.macros_from_ingredient_string(_new) or {}
+                if _om and _nm:  # ambos resuelven → delta seguro (mismo guard que condition-subs)
+                    _touched = True
+                    for _k in _d:
+                        _d[_k] += (_nm.get(_k) or 0.0) - (_om.get(_k) or 0.0)
+            if _touched and any(_d.values()):
+                meal["protein"] = max(0, round(_meal_macro_num(meal.get("protein")) + _d["protein"]))
+                meal["carbs"] = max(0, round(_meal_macro_num(meal.get("carbs")) + _d["carbs"]))
+                meal["fats"] = max(0, round(_meal_macro_num(meal.get("fats")) + _d["fats"]))
+                meal["cals"] = max(0, round(_meal_macro_num(meal.get("cals")) + _d["kcal"]))
+                meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+        except Exception:
+            pass
+    return changed
 
 
 def _apply_food_safety_fixes(plan: dict) -> int:
@@ -8987,20 +9059,35 @@ def _apply_food_safety_fixes(plan: dict) -> int:
     añade una nota a la receta) → corre con seguridad antes de la agregación de compras sin
     introducir divergencias receta↔lista. Idempotente: no duplica una nota ya presente.
     Retorna el número de meals mitigados. Anchor: P3-FOOD-SAFETY."""
+    # [P2-RAW-EGG-SUBSTITUTE] DB compartida para el delta de macros del swap (solo si el knob está ON).
+    _fsdb = None
+    if RAW_EGG_BLENDED_SUBSTITUTE_ENABLED:
+        try:
+            from nutrition_db import IngredientNutritionDB
+            _fsdb = IngredientNutritionDB()
+        except Exception:
+            _fsdb = None
     fixed = 0
     for di, mi, _name, kind in _scan_raw_egg_violations(plan):
         try:
             meal = plan["days"][di]["meals"][mi]
         except (KeyError, IndexError, TypeError):
             continue
-        note = _FOOD_SAFETY_NOTE_BLENDED if kind == "blended" else _FOOD_SAFETY_NOTE_NOCOOK
         rec = meal.get("recipe")
         if not isinstance(rec, list):
             rec = [] if rec is None else [str(rec)]
         if any("Seguridad alimentaria" in str(s) for s in rec):
             continue  # ya mitigado → idempotente
+        # [P2-RAW-EGG-SUBSTITUTE] Para 'blended' (Salmonella) sustituir el huevo a nivel de COMPOSICIÓN;
+        # si la sustitución corre, la nota refleja el swap. 'no_cook' (cocinable) sigue con nota de cocción.
+        if (kind == "blended" and RAW_EGG_BLENDED_SUBSTITUTE_ENABLED
+                and _substitute_blended_raw_egg(meal, _fsdb)):
+            note = _FOOD_SAFETY_NOTE_BLENDED_SUBBED
+            meal["_food_safety_fixed"] = "blended_substituted"
+        else:
+            note = _FOOD_SAFETY_NOTE_BLENDED if kind == "blended" else _FOOD_SAFETY_NOTE_NOCOOK
+            meal["_food_safety_fixed"] = kind
         meal["recipe"] = rec + [note]
-        meal["_food_safety_fixed"] = kind
         fixed += 1
     return fixed
 
@@ -9914,8 +10001,21 @@ def _enforce_renal_per_meal(plan: dict, pg: float, daily_cals: float, db) -> Non
                 _enf_days += 1
             if daily_cals > 0:
                 _protein_preserving_day_reconcile(_rmeals, daily_cals, db)
-        plan["renal_protein_cap"]["meals_enforced"] = True
+        # [P2-RENAL-CAP-FAILHARD · 2026-06-15] VERIFICAR, no asumir: tras el trim, confirma que NINGÚN día
+        # excede el cap (5% de tolerancia por redondeo). Antes se marcaba meals_enforced=True
+        # incondicionalmente — cosmético si el trim no convergía. Ahora el flag refleja la realidad
+        # (telemetría/PDF honestos) y un día que sigue sobre el cap deja meals_enforced=False + logger.error.
+        _verified = True
+        for _d in plan.get("days", []) or []:
+            _dp = sum(_meal_macro_num(_m.get("protein")) for _m in (_d.get("meals", []) or []))
+            if pg > 0 and _dp > pg * 1.05:
+                _verified = False
+                break
+        plan["renal_protein_cap"]["meals_enforced"] = _verified
         plan["renal_protein_cap"]["enforced_days"] = _enf_days
+        if not _verified:
+            logger.error("🛑 [P2-RENAL-CAP-FAILHARD] cap renal NO verificado tras el trim — algún día "
+                         "sigue sobre el techo de proteína; meals_enforced=False (revisar resolución).")
     except Exception as _renf_e:
         plan["renal_protein_cap"]["meals_enforced"] = False
         logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] enforcement renal per-comida falló: "
@@ -9931,7 +10031,24 @@ def _renal_exit_safety_net(plan: dict, nutrition: dict, form_data: dict) -> None
     if (PRO_REVIEW_FLAG_ENABLED and isinstance(plan, dict)
             and isinstance(_rcap_src, dict) and _rcap_src.get("applied")):
         if not plan.get("renal_protein_cap"):
-            plan["renal_protein_cap"] = {**_rcap_src, "meals_enforced": True}
+            plan["renal_protein_cap"] = {**_rcap_src, "meals_enforced": False}
+        # [P2-RENAL-CAP-FAILHARD · 2026-06-15] Backstop REAL (no cosmético): si el cap aún no se enforzó
+        # (este path bypasó la capa clínica), trima de verdad reusando las funciones validadas — el cap
+        # renal es seguridad iatrogénica, no debe quedar solo en una nota. `_enforce_renal_per_meal` setea
+        # meals_enforced según verificación real (P2-RENAL-CAP-FAILHARD). Antes esto seteaba True cosmético.
+        if RENAL_CAP_ENABLED and not plan["renal_protein_cap"].get("meals_enforced"):
+            _cap_g = _meal_macro_num(_rcap_src.get("protein_g"))
+            if _cap_g > 0:
+                try:
+                    from nutrition_db import IngredientNutritionDB
+                    _rdb = IngredientNutritionDB()
+                    _dc = (_meal_macro_num(plan.get("calories"))
+                           or _meal_macro_num(nutrition.get("target_calories")
+                                              or nutrition.get("total_daily_calories")))
+                    _enforce_renal_per_meal(plan, _cap_g, _dc, _rdb)
+                except Exception as _rexe:
+                    logger.warning(f"[P2-RENAL-CAP-FAILHARD] backstop renal en exit-net falló: "
+                                   f"{type(_rexe).__name__}: {_rexe}")
         _rpr_existing = plan.get("requires_professional_review")
         if not (isinstance(_rpr_existing, dict) and _rpr_existing.get("renal_gate")):
             _cap_txt = (f" Se aplicó un límite conservador de proteína a ~{_rcap_src.get('protein_g')}g/día "
@@ -10075,7 +10192,9 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # ── Guard 1 (FS6/ERC): enforcement determinista per-comida del cap renal (vía RenalProteinCapConstraint) ──
     # [P4-CONSTRAINT-ABC review] Fallback directo si el engine no cargó (simétrico a Guard 3): el trim
     # renal per-comida es SEGURIDAD iatrogénica — nunca debe saltarse silenciosamente por un import roto.
-    if (CONDITION_RULES_ENABLED and PROTEIN_FLOOR_ENABLED and _db is not None
+    # [P2-RENAL-CAP-FAILHARD · 2026-06-15] Gateado por RENAL_CAP_ENABLED (seguridad), NO por
+    # PROTEIN_FLOOR_ENABLED (hipertrofia) — decopla el kill-switch del cap renal del piso de proteína.
+    if (CONDITION_RULES_ENABLED and RENAL_CAP_ENABLED and _db is not None
             and isinstance(plan.get("renal_protein_cap"), dict)
             and plan["renal_protein_cap"].get("applied") and _pg > 0):
         if _eng is not None:
