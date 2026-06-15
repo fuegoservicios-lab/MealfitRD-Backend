@@ -1909,6 +1909,19 @@ _VEGAN_EXCLUDE = _VEGETARIAN_EXCLUDE + [
     "huevo", "leche", "queso", "yogur", "mantequilla", "crema", "lacteo", "miel",
 ]
 
+# [P3-MICRO-FOOD-SUGGEST] Condimentos/especias/hierbas secas: densísimos por 100g
+# pero se consumen en pizcas → no son "fuentes" prácticas de un micronutriente.
+# Sin esto, el top de fibra/hierro se llena de canela/orégano/albahaca y desplaza
+# los alimentos reales (chía, habichuelas). Match accent-insensible vía strip_accents.
+_CONDIMENT_EXCLUDE = [
+    "canela", "oregano", "albahaca", "pimienta", "pimenton", "paprika", "comino",
+    "laurel", "tomillo", "romero", "curcuma", "nuez moscada", "clavo de olor",
+    "anis", "sazon", "cubito", "caldo en polvo", "vainilla", "esencia", "extracto",
+    "especia", "condimento", "hierbas", "perejil seco", "cilantro seco",
+    "ajo en polvo", "cebolla en polvo", "jengibre en polvo", "polvo de hornear",
+    "bicarbonato",
+]
+
 
 def _resolve_micro_nutrient(nutrient: str):
     """Nombre del nutriente (es/en, con/ sin acentos) → (columna, label, unidad,
@@ -1995,6 +2008,9 @@ def suggest_foods_for_nutrient(user_id: str, nutrient: str, top_n: int = 6) -> s
                 continue
             name_norm = strip_accents(str(name).lower())
             if any(tok in name_norm for tok in exclude_tokens):
+                continue
+            # Condimentos/especias: densos por 100g pero no son fuentes prácticas.
+            if any(tok in name_norm for tok in _CONDIMENT_EXCLUDE):
                 continue
             candidates.append((name, val))
 
