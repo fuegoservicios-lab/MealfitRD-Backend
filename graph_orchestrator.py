@@ -8278,7 +8278,16 @@ MACRO_SOLVER_CAL_RECONCILE = _env_bool("MEALFIT_MACRO_SOLVER_CAL_RECONCILE", Tru
 # kcal. Default OFF (rollout gradual; validar con benchmark OFF-vs-ON antes de fijar a True — mismo
 # protocolo que MACRO_SOLVER_ENABLED). Fail-safe: si falla, el plan queda como lo dejó el solver.
 MACRO_AWARE_RECONCILE = _env_bool("MEALFIT_MACRO_AWARE_RECONCILE", False)
-
+# [P2-CARB-TARGET-TRIM · 2026-06-15] Cierra la sobre-entrega de carbos medida (carbos +17.5% sobre target,
+# peor en perfiles de bajas calorías). Causa raíz instrumentada: el reconcile nivela carbos al target PERO
+# la cuantización de porciones (FS2) los recomputa desde los ingredientes redondeados, y su piso mínimo
+# ("no puedes servir 13g de arroz") infla las porciones pequeñas. El trim corre DESPUÉS de la cuantización:
+# escala los ingredientes CARBO-dominantes hacia el target y RE-CUANTIZA (porciones cocinables; las de
+# unidad-entera —huevo/wrap— se auto-protegen al re-snapear). Recompute HONESTO de macros desde el string
+# real. Protein-preserving. El residual 'at-min' es irreducible (cota de porción cocinable) y se acepta.
+# Default OFF → A/B-validado antes de encender en prod.
+CARB_TARGET_TRIM_ENABLED = _env_bool("MEALFIT_CARB_TARGET_TRIM", False)
+CARB_TARGET_TRIM_TOL = _env_float("MEALFIT_CARB_TARGET_TRIM_TOL", 0.10)
 # [P3-RECIPE-COHERENCE-AUTOFIX · 2026-06-13] Auto-fix determinista de las violaciones de
 # coherencia receta↔ingrediente que HOY rechazan+reintentan (→ retry_penalty < 1.0 en el
 # holistic). Caso "forward" (la receta menciona una proteína que no está listada → la
@@ -9565,6 +9574,69 @@ def _macro_aware_day_reconcile(meals: list, target_carbs: float, target_fats: fl
         return False
 
 
+def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: float = 0.10) -> bool:
+    """[P2-CARB-TARGET-TRIM · 2026-06-15] Corre DESPUÉS de la cuantización (FS2). Si el día entrega carbos
+    > target*(1+tol), reduce las porciones de los ingredientes CARBO-dominantes hacia el target y RE-CUANTIZA
+    cada uno: las porciones flexibles (g/taza/cda) caen a un valor cocinable más bajo; las de unidad-entera
+    (huevo, wrap, lonja) se auto-protegen porque al re-snapear vuelven al entero. Recompute HONESTO de macros
+    desde el string CUANTIZADO real (delta por ingrediente vía macros_from_ingredient_string). Cierra el exceso
+    'above-min'; el residual 'at-min' es irreducible (no puedes servir 13g de arroz) y se acepta. Solo toca
+    carbo-dominantes → la proteína (closer) y los carbos atrapados en legumbres quedan intactos. Mutates meals.
+    Retorna True si trimó. Fail-safe. Anchor: P2-CARB-TARGET-TRIM."""
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        cur = sum(_meal_macro_num(m.get("carbs")) for m in meals)
+        if target_carbs <= 0 or cur <= target_carbs * (1.0 + tol):
+            return False
+        # Masa de carbos MOVIBLE (solo en ingredientes carbo-dominantes). Los carbos en proteína-dominantes
+        # (habichuelas/lentejas) son irreducibles sin tocar la proteína → fuera del trim.
+        items, movable = [], 0.0
+        for m in meals:
+            ings = m.get("ingredients")
+            if not isinstance(ings, list):
+                continue
+            for idx, ing in enumerate(ings):
+                if _ingredient_macro_group(str(ing), db) != "carbs":
+                    continue
+                _mc = db.macros_from_ingredient_string(str(ing)) or {}
+                _c = _mc.get("carbs") or 0.0
+                if _c > 0:
+                    movable += _c
+                    items.append((m, idx))
+        if movable <= 0:
+            return False
+        excess = cur - target_carbs
+        # Factor uniforme para los movibles (clamp [0.3, 1.0)); la re-cuantización por ingrediente protege
+        # contra porciones absurdas (las que caen bajo el mínimo cocinable se quedan en el mínimo → residual).
+        factor = max(0.3, min(1.0, (movable - excess) / movable))
+        if factor >= 0.999:
+            return False
+        applied = False
+        for m, idx in items:
+            ings = m.get("ingredients")
+            orig = str(ings[idx])
+            quant, _f = _quant(_resc(orig, factor))   # escala hacia target + re-snap a cocinable
+            if quant == orig:
+                continue
+            _mo = db.macros_from_ingredient_string(orig) or {}
+            _mn = db.macros_from_ingredient_string(quant) or {}
+            _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
+            _nc = max(0, round(_meal_macro_num(m.get("carbs")) + ((_mn.get("carbs") or 0) - (_mo.get("carbs") or 0))))
+            _nf = max(0, round(_meal_macro_num(m.get("fats")) + ((_mn.get("fats") or 0) - (_mo.get("fats") or 0))))
+            m["protein"], m["carbs"], m["fats"] = _np, _nc, _nf
+            m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
+            m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
+            ings[idx] = quant
+            raw = m.get("ingredients_raw")
+            if isinstance(raw, list) and len(raw) == len(ings):
+                raw[idx] = _resc(str(raw[idx]), factor)
+            applied = True
+        return applied
+    except Exception as e:
+        logger.warning(f"[P2-CARB-TARGET-TRIM] trim falló: {type(e).__name__}: {e}")
+        return False
+
+
 def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
                                  *, ceiling_pct: float = 1.12) -> bool:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Techo simétrico al piso: si el día entrega
@@ -10295,6 +10367,23 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 logger.info(f"📏 [P3-PORTION-QUANTIZE] Redondeó porciones en {_q_n} comida(s)")
         except Exception as _q_e:
             logger.warning(f"[P3-PORTION-QUANTIZE] error: {type(_q_e).__name__}: {_q_e}")
+
+    # ── Guard 4b (P2-CARB-TARGET-TRIM): cierra la sobre-entrega de carbos POST-cuantización ──
+    # La cuantización (Guard 4) recomputa macros desde los ingredientes redondeados; su piso mínimo infla las
+    # porciones pequeñas de perfiles de bajas calorías → carbos +17.5% sobre target (medido). Trim consciente
+    # de porción: escala carbo-dominantes hacia el target y RE-CUANTIZA (cocinable). Protein-preserving.
+    if CARB_TARGET_TRIM_ENABLED and _db is not None:
+        try:
+            _tc = _meal_macro_num(active_macros.get("carbs_str"))
+            _trim_n = 0
+            for _d in plan.get("days", []) or []:
+                if _trim_day_carbs_to_target(_d.get("meals", []) or [], _tc, _db, tol=CARB_TARGET_TRIM_TOL):
+                    _trim_n += 1
+            if _trim_n:
+                logger.info(f"🎯 [P2-CARB-TARGET-TRIM] Recortó carbos sobre-entregados en {_trim_n} día(s) "
+                            f"hacia el target ({_tc:.0f}g) con porciones cocinables")
+        except Exception as _ct_e:
+            logger.warning(f"[P2-CARB-TARGET-TRIM] error: {type(_ct_e).__name__}: {_ct_e}")
 
     # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (espejo [P3-MICRONUTRIENTS]) ──
     if MICRONUTRIENT_REPORT_ENABLED and _db is not None:
