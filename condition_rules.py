@@ -81,7 +81,9 @@ _HTA_SODIUM_SUBS = (
     # borraría tofu/leche-de-soya/carne-de-soya, proteína vegetal). Bug encontrado por review adversaria.
     (("cubito de", "sazon en polvo", "sazón en polvo", "sazon completa", "caldo en cubo",
       "consome", "consomé", "maggi", "sopita", "sazonador"), "Especias naturales (ajo, cebolla, orégano, comino)", "cubitos/sazón en polvo", False),
-    (("bacalao salado", "bacalao seco", "arenque salado"), "Pescado fresco", "pescado salado", True),
+    # [P2-SUBS-RESOLVE · 2026-06-15] "Filete de pescado blanco" (nombre del catálogo) — NO "Pescado
+    # fresco" (no resolvía → fantasma en la lista + delta de macros perdía el ingrediente). Audit P2.
+    (("bacalao salado", "bacalao seco", "arenque salado"), "Filete de pescado blanco", "pescado salado", True),
     (("salsa de soya", "salsa de soja", "teriyaki"), "Limón con especias", "salsa de soya", False),
     (("tajin", "tajín", "sal de ajo", "sal de cebolla"), "Especias sin sal añadida", "sazonadores salados", False),
 )

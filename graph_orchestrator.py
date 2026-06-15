@@ -8677,7 +8677,13 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                     s = _match(_sa(str(ing).lower()))
                     if s:
                         new = _sub_string(ing, s["replacement"], s.get("preserve_qty"))
-                        if new not in out:  # evita duplicar el sustituto
+                        # [P2-SUBS-DEDUP-QTY · 2026-06-15] Dedup SOLO condimentos bare (preserve_qty
+                        # False: 'Stevia al gusto' ×2 = ruido). Los staples con cantidad (preserve_qty
+                        # True) SE CONSERVAN aunque dos ofensores mapeen al mismo reemplazo
+                        # (salami+longaniza→2×pollo): el aggregator suma las cantidades → preserva el
+                        # peso comprable Y el delta de macros (2×pollo) cuadra con la lista. Antes el
+                        # dedup colapsaba a 1×pollo → media comida + macros inflados (bug del audit P2).
+                        if s.get("preserve_qty") or new not in out:
                             out.append(new)
                         if key == "ingredients":
                             swaps.append((str(ing), new))
