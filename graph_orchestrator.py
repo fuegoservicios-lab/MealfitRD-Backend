@@ -10049,6 +10049,15 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         _db = None
         logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] IngredientNutritionDB no disponible — guards "
                        f"quantize/micros/proveniencia se omiten: {type(_db_e).__name__}: {_db_e}")
+        # [P2-CLINICAL-LAYER-FAILSAFE · 2026-06-15] Fail-secure: si la DB de nutrición no carga, la capa
+        # clínica corre INCOMPLETA (sin quantize/micros/proveniencia y, peor, sin el enforcement renal
+        # per-comida ni la sustitución por condición que dependen de _db). Antes esto se omitía SILENCIOSO
+        # (solo un warning en logs). Ahora marca dura que viaja a la entrega → observable + degradable.
+        # logger.error (no warning) porque para un perfil con condición es una degradación de seguridad.
+        plan["_clinical_layer_incomplete"] = True
+        plan["_clinical_layer_incomplete_reason"] = f"db_unavailable:{type(_db_e).__name__}"
+        logger.error("🛑 [P2-CLINICAL-LAYER-FAILSAFE] Capa clínica INCOMPLETA (DB de nutrición no "
+                     "disponible) — plan marcado _clinical_layer_incomplete.")
 
     # [P4-CONSTRAINT-ABC · 2026-06-14] Motor de constraints declarativo (posición-preservante): despacha
     # los guards condition-específicos (Guard 1 renal, Guard 3 sustituciones) vía constraints en orden de
