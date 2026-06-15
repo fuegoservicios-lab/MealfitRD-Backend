@@ -894,7 +894,7 @@ CHUNK_GC_DEAD_LETTER_BATCH = max(10, min(10000, int(os.environ.get("CHUNK_GC_DEA
 # Knob ajustable sin redeploy. Si quieres desactivar el guard entero para flujos
 # iniciales, sube a 100. Si quieres preservar comportamiento legacy estricto,
 # bájalo a 1.
-PANTRY_GUARD_MIN_ITEMS = max(0, min(500, int(os.environ.get("MEALFIT_PANTRY_GUARD_MIN_ITEMS", "10"))))
+PANTRY_GUARD_MIN_ITEMS = max(0, min(500, _env_int("MEALFIT_PANTRY_GUARD_MIN_ITEMS", 10)))  # [P2-1-KNOBS-HYGIENE · 2026-06-15] vía helper, no os.environ raw
 
 # [P2-6 · 2026-05-08] Alertas proactivas sobre fallback no-atómico del pool.
 # `update_user_health_profile_atomic` cae al path legacy (get + update) cuando

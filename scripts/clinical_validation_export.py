@@ -103,6 +103,9 @@ async def main():
     # Acumuladores de integridad (claim vs recomputado) sobre celdas día×macro resueltas.
     integ_cells = 0
     integ_band = 0           # |claim-recomputado|/recomputado <= 0.15
+    integ_all_cells = 0      # [P2-VALIDATION-NO-FILTER · 2026-06-15] (gap-audit G16) idem SIN el filtro res_pct>=60
+    integ_all_band = 0
+    days_low_res = 0         # días con res_pct < 60 (excluidos del agregado filtrado → tapan el 0-silencioso)
     band_cells = 0
     band_in = 0              # entregado(claim) dentro de [0.90,1.12]×target
     for r in rows:
@@ -139,6 +142,15 @@ async def main():
                     integ_cells += 1
                     if abs(cl - rc) / rc <= 0.15:
                         integ_band += 1
+                # [P2-VALIDATION-NO-FILTER · 2026-06-15] (G16) integridad SIN el filtro res_pct: incluye los
+                # días de baja resolución que el agregado filtrado esconde (los peores casos del 0-silencioso).
+                # Límite inferior aún más conservador (los ingredientes no-resueltos aportan 0 al recomputado).
+                if rc > 0:
+                    integ_all_cells += 1
+                    if abs(cl - rc) / rc <= 0.15:
+                        integ_all_band += 1
+            if res_pct < 60:
+                days_low_res += 1
             row["nutricionista_aprobado"] = ""
             row["notas"] = ""
             out_rows.append(row)
@@ -169,6 +181,16 @@ async def main():
               f"(el resto: el LLM afirma macros que sus ingredientes NO aportan)", flush=True)
     else:
         print("  INTEGRIDAD: sin días con resolución >=60% para comparar (catálogo no resolvió).", flush=True)
+    # [P2-VALIDATION-NO-FILTER · 2026-06-15] (gap-audit G16) 2ª línea SIN el filtro res_pct: no esconde los
+    # días de baja resolución (el 0-silencioso). La diferencia entre esta cifra y la filtrada = cuánto está
+    # enmascarando el filtro. El benchmark EXTERNO (NutriBench/INCAP) sigue diferido por adquisición de dataset.
+    if integ_all_cells:
+        print(f"  INTEGRIDAD (SIN filtro res_pct — incluye días de baja resolución, G16): "
+              f"{integ_all_band}/{integ_all_cells} = {round(100*integ_all_band/integ_all_cells)}% "
+              f"(límite inferior; expone el 0-silencioso que el agregado filtrado oculta)", flush=True)
+    if out_rows:
+        print(f"  Días de BAJA RESOLUCIÓN (res_pct<60, excluidos del agregado filtrado): "
+              f"{days_low_res}/{len(out_rows)} = {round(100*days_low_res/len(out_rows))}%", flush=True)
 
 
 if __name__ == "__main__":

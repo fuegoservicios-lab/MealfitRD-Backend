@@ -90,6 +90,14 @@ USDA_QUERY = {
     "Papa": "potatoes raw", "Plátano maduro": "plantains ripe raw", "Plátano verde": "plantains green raw",
     "Yautía": "taro raw", "Yuca": "cassava raw", "Ñame": "yams raw",
 }
+# [P2-CULTIVAR-PROVENANCE · 2026-06-15] (gap-audit G17) PROVENIENCIA de los cultivares dominicanos: estas 9
+# viandas se pueblan con la ESPECIE USDA más cercana (proxy botánico: Yautía→taro, Ñame→yams, Plátano→
+# plantains, Auyama→pumpkin, Yuca→cassava, Batata→sweet potato), NO con datos CURADOS es-DO. Son
+# aproximaciones plausibles (especie correcta) pero el error vs el cultivar local NO está cuantificado.
+# Quedan marcadas `is_dominican_cultivar=TRUE` + `nutrition_source='usda'` (trazable a fdc_id, honesto en el
+# footer de proveniencia del PDF). CURACIÓN PENDIENTE (bloqueada por recurso externo): validar contra una
+# fuente Caribe (INCAP/LATINFOODS/FAO INFOODS) + revisión de nutricionista → ahí cambiarían a
+# `nutrition_source='incap'`/'curado'. Doc: backend/docs/food_db_integration.md. NO asumir que son curadas.
 _VIVERES_DD = {"Auyama", "Batata", "Guineo verde", "Papa", "Plátano maduro",
                "Plátano verde", "Yautía", "Yuca", "Ñame"}
 

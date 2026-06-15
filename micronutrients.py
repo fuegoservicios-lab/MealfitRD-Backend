@@ -57,18 +57,32 @@ def _has_diabetes(conditions) -> bool:
         return False
 
 
-def dri_targets(sex: str | None = "F") -> dict:
+def dri_targets(sex: str | None = "F", age: int | None = None) -> dict:
     """Pisos/techos DRI (IOM) + WHO por nutriente para un adulto. Sex-aware donde importa
     (hierro 18 vs 8 mg; fibra 25 vs 38 g; potasio 2600 vs 3400 mg). Default conservador
-    femenino (hierro alto) cuando el sexo es desconocido."""
+    femenino (hierro alto) cuando el sexo es desconocido.
+
+    [P2-DRI-AGE-AWARE · 2026-06-15] (gap-audit G15) Age-aware en los dos micros donde el DRI real cambia
+    con la edad y eso afecta la suplementación advisory: el HIERRO de la mujer baja de 18 mg (19-50) a 8 mg
+    post-menopausia (51+) — antes 18 mg para todas sobre-flageaba déficit en mayores; el CALCIO sube de
+    1000 a 1200 mg para mujeres 51+ y hombres 71+ — antes 1000 fijo sub-reforzaba en mayores. `age=None`
+    (desconocida) → valores de adulto joven (conservadores: hierro alto, calcio base)."""
     male = str(sex or "").strip().lower() in _MALE_TERMS
+    try:
+        _age = int(age) if age is not None else None
+    except (TypeError, ValueError):
+        _age = None
+    # Hierro (IOM/DRI): hombre 8 mg; mujer 18 mg (19-50) → 8 mg (51+, post-menopausia).
+    _iron = 8.0 if male else (8.0 if (_age is not None and _age >= 51) else 18.0)
+    # Calcio (IOM/DRI): 1200 mg para mujer 51+ / hombre 71+; 1000 mg resto.
+    _calcium = 1200.0 if (_age is not None and ((not male and _age >= 51) or (male and _age >= 71))) else 1000.0
     return {
         "fiber_g":       {"floor": 38.0 if male else 25.0, "unit": "g"},
         "sodium_mg":     {"ceiling": 2000.0, "unit": "mg"},          # WHO <2000
         "free_sugars_g": {"ceiling": 25.0, "unit": "g"},             # WHO condicional <5% E
         "vit_d_mcg":     {"floor": 15.0, "unit": "mcg"},             # DRI 600 UI
-        "calcium_mg":    {"floor": 1000.0, "unit": "mg"},
-        "iron_mg":       {"floor": 8.0 if male else 18.0, "unit": "mg"},
+        "calcium_mg":    {"floor": _calcium, "unit": "mg"},
+        "iron_mg":       {"floor": _iron, "unit": "mg"},
         "b12_mcg":       {"floor": 2.4, "unit": "mcg"},
         "potassium_mg":  {"floor": 3400.0 if male else 2600.0, "unit": "mg"},
         "magnesium_mg":  {"floor": 420.0 if male else 320.0, "unit": "mg"},   # [P4] DRI IOM
@@ -205,7 +219,8 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
 
 def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                                conditions=None, daily_kcal: float | None = None,
-                               fiber_per_1000kcal: float = _DM2_FIBER_PER_1000KCAL) -> dict:
+                               fiber_per_1000kcal: float = _DM2_FIBER_PER_1000KCAL,
+                               age: int | None = None) -> dict:
     """Reporte advisory: panel de micros diarios vs DRI/WHO con status + nota accionable.
     status ∈ {ok, bajo, alto, estimado_bajo, estimado_alto}. Floors incumplidos con cobertura
     parcial → 'estimado_bajo' (incierto, puede subir con lo no resuelto). Techos en apariencia
@@ -218,7 +233,7 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
     totals = compute_plan_micronutrient_totals(plan, db)
     daily = totals["daily"]
     coverage = totals["coverage"]
-    targets = dri_targets(sex)
+    targets = dri_targets(sex, age)   # [P2-DRI-AGE-AWARE · 2026-06-15] (G15) hierro/calcio age-aware
     condition_targets = []
     # [P3-CONDITION-RULES] DM2: piso de fibra = max(DRI, 14 g/1000 kcal). ADA 2025/2026 reemplazó
     # el target de %carbos/IG por "calidad del carbohidrato" — la fibra es el proxy citable.

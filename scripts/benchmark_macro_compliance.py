@@ -21,6 +21,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 
 from graph_orchestrator import arun_plan_pipeline
 
@@ -168,10 +169,47 @@ def _aggregate(results):
     }
 
 
+def _assert_no_regression(agg, baseline_path, max_mape_rise, max_band_drop):
+    """[gap-audit G13 · 2026-06-15] Gate de no-regresión: compara el agregado REAL_PLANS contra un baseline
+    JSON commiteado. ok=False si all-4-en-banda cae > max_band_drop pts O si la MAPE de algún macro sube
+    > max_mape_rise pts. Lo usa el job nightly (.github/workflows/macro-benchmark-nightly.yml) para fallar
+    el build ante una regresión de precisión (cambio de modelo/solver/catálogo) que hoy es invisible hasta
+    un audit manual. Retorna (ok, lines)."""
+    lines, ok = [], True
+    try:
+        with open(baseline_path, encoding="utf-8") as f:
+            base = json.load(f)
+    except Exception as e:
+        return False, [f"  ❌ no pude leer baseline {baseline_path}: {e}"]
+    cur = (agg or {}).get("REAL_PLANS") or {}
+    bse = (base or {}).get("REAL_PLANS") or {}
+    cb, bb = cur.get("all4_within_10pct_days_pct"), bse.get("all4_within_10pct_days_pct")
+    if cb is not None and bb is not None:
+        drop = bb - cb
+        if drop > max_band_drop:
+            ok = False
+        lines.append(f"  {'❌' if drop > max_band_drop else '✓'} all-4-en-banda: baseline {bb} → actual {cb} "
+                     f"(caída {drop:.1f}pts, máx {max_band_drop})")
+    for mac in ("kcal", "protein", "carbs", "fats"):
+        cm = ((cur.get("per_macro") or {}).get(mac) or {}).get("mape_pct")
+        bm = ((bse.get("per_macro") or {}).get(mac) or {}).get("mape_pct")
+        if cm is not None and bm is not None:
+            rise = cm - bm
+            if rise > max_mape_rise:
+                ok = False
+            lines.append(f"  {'❌' if rise > max_mape_rise else '✓'} {mac} MAPE: baseline {bm} → actual {cm} "
+                         f"(subió {rise:.1f}pts, máx {max_mape_rise})")
+    return ok, lines
+
+
 async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("n", nargs="?", type=int, default=len(PROFILES))
     ap.add_argument("--concurrency", type=int, default=3)
+    # [gap-audit G13 · 2026-06-15] Gate de no-regresión vs baseline commiteado (para el job nightly).
+    ap.add_argument("--baseline", default=None, help="JSON baseline; activa el gate de no-regresión")
+    ap.add_argument("--max-mape-rise", type=float, default=5.0, help="subida máx permitida de MAPE (pts)")
+    ap.add_argument("--max-band-drop", type=float, default=10.0, help="caída máx permitida de all-4-en-banda (pts)")
     args = ap.parse_args()
     profiles = PROFILES[: args.n]
     sem = asyncio.Semaphore(args.concurrency)
@@ -198,6 +236,17 @@ async def main():
     print("\n===== RESUMEN (banda = |entregado-target|/target) =====")
     print(json.dumps(agg, ensure_ascii=False, indent=2, default=str))
     print(f"\n[M2-MACRO-BENCHMARK] JSON completo: {out_path}")
+
+    # [gap-audit G13 · 2026-06-15] Gate de no-regresión vs baseline commiteado (job nightly).
+    if args.baseline:
+        ok, lines = _assert_no_regression(agg, args.baseline, args.max_mape_rise, args.max_band_drop)
+        print("\n===== NO-REGRESIÓN vs BASELINE (gap-audit G13) =====")
+        for ln in lines:
+            print(ln)
+        if not ok:
+            print("[M2-MACRO-BENCHMARK] ❌ REGRESIÓN de precisión detectada vs baseline — fallando el build.")
+            sys.exit(1)
+        print("[M2-MACRO-BENCHMARK] ✅ Sin regresión de precisión vs baseline.")
 
 
 if __name__ == "__main__":

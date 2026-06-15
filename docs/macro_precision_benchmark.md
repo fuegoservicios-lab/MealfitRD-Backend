@@ -17,7 +17,14 @@ producción → desviación diaria |entregado − target| / target por macro. Mi
 | **4/4 macros en ±10%** | — | **solo 24% de los días** | — | — |
 | **Planes FALLBACK (9)** | 100% en ±10% en TODO (matemático determinista, pero plan genérico) |
 
-- **Tasa de fallback: 45%** (9/20 cayeron al plan matemático). Pendiente confirmar artefacto-de-concurrencia vs real.
+- **Tasa de fallback: 45%** (9/20 cayeron al plan matemático).
+  - **[gap-audit G14 · 2026-06-15] Loop empírico cerrado (parcialmente):** query a `pipeline_metrics`
+    (node='clinical_band', 21d) → 153 eventos, fallback global **28.8%**, PERO **147/153 son guests**
+    (benchmark/smoke) y solo **6 eventos auth** (no significativo). Conclusión: la tasa real de usuarios
+    AUTENTICADOS NO se puede confirmar por volumen insuficiente; el agregado está inflado por tráfico
+    guest/benchmark. El fix G1 (None.dict() del planner → reintento en vez de fallback total, desplegado
+    2026-06-15) debe bajar la tasa por CB. **Re-medir** cuando haya volumen auth real; el cron
+    `plan_fallback_rate_high` (umbral 0.25) ya vigila la flota.
 - **Lectura honesta:** las **calorías** se clavan (±0.5%), pero el **split de macros (proteína la peor, 16% MAPE)**
   cae dentro de ±10% solo ~la mitad de las veces. La banda "90-112%" NO se cumple para los macros individuales.
 

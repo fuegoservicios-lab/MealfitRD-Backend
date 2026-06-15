@@ -8311,6 +8311,15 @@ CARB_TARGET_TRIM_TOL = _env_float("MEALFIT_CARB_TARGET_TRIM_TOL", 0.10)
 # corre si MACRO_AWARE_RECONCILE está ON (consistencia). Default True para ser efectivo donde el reconcile
 # ya está activo; rollback sin redeploy: MEALFIT_MACRO_POSTQUANT_RECONCILE=False.
 MACRO_POSTQUANT_RECONCILE = _env_bool("MEALFIT_MACRO_POSTQUANT_RECONCILE", True)
+# [P2-RESOLUTION-COVERAGE-GATE · 2026-06-15] (gap-audit G12) Gate de transparencia: si la cobertura de
+# resolución del plan (fracción de ingredientes que resuelven al catálogo de macros) cae bajo el piso →
+# marca _quality_degraded (reason=composite_dish_unresolved). Platos criollos compuestos (sancocho/mangú/
+# moro/locrío) no existen como filas → 0-silencioso: los macros ASERTADOS pueden divergir de los físicos.
+# Default OFF (opt-in tras medir la distribución de cobertura en prod, como el band-gate G6 — hoy 0 planes
+# con coverage persistida). Floor 0.7 (sugerido por el audit). La población de N platos compuestos es trabajo
+# de datos diferido (la otra mitad de G12).
+RESOLUTION_COVERAGE_GATE_ENABLED = _env_bool("MEALFIT_RESOLUTION_COVERAGE_GATE", False)
+RESOLUTION_COVERAGE_FLOOR = _env_float("MEALFIT_RESOLUTION_COVERAGE_FLOOR", 0.7)
 # [P3-RECIPE-COHERENCE-AUTOFIX · 2026-06-13] Auto-fix determinista de las violaciones de
 # coherencia receta↔ingrediente que HOY rechazan+reintentan (→ retry_penalty < 1.0 en el
 # holistic). Caso "forward" (la receta menciona una proteína que no está listada → la
@@ -8489,6 +8498,61 @@ BAND_SCORE_UPPER = _env_float("MEALFIT_BAND_SCORE_UPPER", 1.12)
 # MEALFIT_BAND_SCORE_GATE=False. Tras G4 (re-reconcile post-cuantización) la fracción marcada debe bajar.
 BAND_SCORE_GATE_ENABLED = _env_bool("MEALFIT_BAND_SCORE_GATE", True)
 BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
+
+
+# [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
+# PRODUCCIÓN, delata una degradación SILENCIOSA si está mal seteada. Función PURA (lee los knobs módulo-nivel
+# + is_production); un check de arranque (app.py lifespan) la emite a `system_alerts`. Cierra dos modos:
+#  - G7: el motor de precisión (solver) tiene default de código False y solo está ON por el .env del VPS →
+#    un redeploy con env limpio revierte al balancing "a ojo" (proteína ~16% MAPE) SIN aviso.
+#  - G10: los guards de SEGURIDAD (cap renal/alérgenos/gate de revisión/reglas por condición) default True →
+#    un override deliberado a False los apaga sin alerta runtime.
+_SAFETY_CRITICAL_KNOBS = (
+    ("MEALFIT_RENAL_CAP", lambda: RENAL_CAP_ENABLED),
+    ("MEALFIT_ALLERGEN_HARD_GUARD", lambda: ALLERGEN_HARD_GUARD),
+    ("MEALFIT_ALLERGEN_SUBSTITUTION", lambda: ALLERGEN_SUBSTITUTION_ENABLED),
+    ("MEALFIT_PRO_REVIEW_FLAG", lambda: PRO_REVIEW_FLAG_ENABLED),
+    ("MEALFIT_CONDITION_RULES", lambda: CONDITION_RULES_ENABLED),
+    ("MEALFIT_PROTEIN_FLOOR_HARD_GATE", lambda: PROTEIN_FLOOR_HARD_GATE),
+)
+
+
+def get_critical_config_warnings() -> list[dict]:
+    """Problemas de configuración crítica ACTIVOS en producción (lista vacía si todo OK o si no es prod —
+    en dev los toggles son esperados). Cada item: {alert_key, severity, title, message}. Pura + fail-safe.
+    Anchor: P2-CRITICAL-CONFIG-ALERT."""
+    try:
+        from knobs import is_production as _isprod
+        if not _isprod():
+            return []
+    except Exception:
+        return []
+    warnings: list[dict] = []
+    if not MACRO_SOLVER_ENABLED:
+        warnings.append({
+            "alert_key": "macro_engine_disabled_in_prod",
+            "severity": "high",
+            "title": "Motor de precisión de macros DESACTIVADO en producción",
+            "message": ("MEALFIT_MACRO_SOLVER_ENABLED=False en producción → las porciones las decide el LLM "
+                        "'a ojo' (proteína ~16% MAPE, ~24% de días con los 4 macros en banda) en vez del "
+                        "solver determinista. Causa típica: redeploy con .env limpio. Setear "
+                        "MEALFIT_MACRO_SOLVER_ENABLED=True (+ MACRO_AWARE_RECONCILE / MACRO_POSTQUANT_RECONCILE)."),
+        })
+    for env_name, getter in _SAFETY_CRITICAL_KNOBS:
+        try:
+            if not getter():
+                warnings.append({
+                    "alert_key": f"safety_guard_disabled_in_prod:{env_name}",
+                    "severity": "high",
+                    "title": f"Guard de seguridad clínica DESACTIVADO en producción: {env_name}",
+                    "message": (f"{env_name}=False en producción. Gobierna un guard de seguridad clínica "
+                                "(cap renal / alérgenos / gate de revisión profesional / reglas por condición / "
+                                "piso de proteína). Apagarlo abre un modo de fallo iatrogénico — confirmar que "
+                                "el override es intencional o restaurar el default True."),
+                })
+        except Exception:
+            pass
+    return warnings
 
 # ── [P2-PANEL-SOFT-REJECT · 2026-06-15] Soft-reject OBSERVABLE sobre el panel de micros ya computado.
 # Cubre 4 gaps del audit (P2-4 DASH/satfat/fibra, P2-5 micros alcanzables, P2-8 sodio/azúcar, P2-13 gate
@@ -10348,9 +10412,11 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # ── Guard 1 (FS6/ERC): enforcement determinista per-comida del cap renal (vía RenalProteinCapConstraint) ──
     # [P4-CONSTRAINT-ABC review] Fallback directo si el engine no cargó (simétrico a Guard 3): el trim
     # renal per-comida es SEGURIDAD iatrogénica — nunca debe saltarse silenciosamente por un import roto.
-    # [P2-RENAL-CAP-FAILHARD · 2026-06-15] Gateado por RENAL_CAP_ENABLED (seguridad), NO por
-    # PROTEIN_FLOOR_ENABLED (hipertrofia) — decopla el kill-switch del cap renal del piso de proteína.
-    if (CONDITION_RULES_ENABLED and RENAL_CAP_ENABLED and _db is not None
+    # [P2-RENAL-CAP-FAILHARD · 2026-06-15 · decoplado P2-SAFETY-KNOB-DECOUPLE · 2026-06-15 gap-audit G10]
+    # Gateado SOLO por RENAL_CAP_ENABLED (seguridad iatrogénica), NO por CONDITION_RULES_ENABLED ni
+    # PROTEIN_FLOOR_ENABLED (hipertrofia): apagar las reglas-por-condición (calidad) NO debe apagar el cap
+    # renal (seguridad). El `applied` (seteado upstream para perfiles renales) ya restringe a quién aplica.
+    if (RENAL_CAP_ENABLED and _db is not None
             and isinstance(plan.get("renal_protein_cap"), dict)
             and plan["renal_protein_cap"].get("applied") and _pg > 0):
         if _eng is not None:
@@ -10454,7 +10520,8 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
             _mn = build_micronutrient_report(
                 plan, _db, sex=_sex,
                 conditions=_condition_strings(form_data), daily_kcal=_daily_cals,
-                fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL)
+                fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL,
+                age=form_data.get("age"))   # [P2-DRI-AGE-AWARE · 2026-06-15] (G15) hierro/calcio por edad
             plan["micronutrient_report"] = _mn
             _ngaps = len(_mn.get("gaps", []))
             logger.info(f"🧪 [P3-MICRONUTRIENTS] Panel de micros computado "
@@ -17184,6 +17251,81 @@ def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallba
         return False
 
 
+def _maybe_mark_clinical_layer_incomplete_degraded(plan: dict, form_data: dict, delivered_was_fallback: bool) -> bool:
+    """[P2-CLINICAL-LAYER-CONSUMER · 2026-06-15] (gap-audit G8) Consume el flag `_clinical_layer_incomplete`
+    (hasta ahora dead-write): cuando la capa clínica determinista corrió INCOMPLETA (la DB de nutrición no
+    cargó → sin enforcement renal per-comida ni micros; o proteína de plato compuesto renal no-resuelta)
+    para un perfil con condición/alergia REAL, (a) marca `_quality_degraded` (banner user-facing existente)
+    con reason=clinical_layer_incomplete y (b) emite un `system_alert` (SRE). Para un perfil SIN condición/
+    alergia, la ausencia de esos guards es inocua → no marca. NO pisa una razón previa peor. El alert es
+    best-effort (raro: db_unavailable deploy-wide o renal compuesto no-resuelto). Anchor: P2-CLINICAL-LAYER-CONSUMER."""
+    try:
+        if delivered_was_fallback or not plan.get("_clinical_layer_incomplete"):
+            return False
+        _conds = (form_data or {}).get("medicalConditions") or (form_data or {}).get("medical_conditions")
+        _allerg = (form_data or {}).get("allergies") or (form_data or {}).get("alergias")
+        if not (_has_real_medical_flags(_conds) or _has_real_medical_flags(_allerg)):
+            return False
+        _reason = plan.get("_clinical_layer_incomplete_reason") or "clinical_layer_incomplete"
+        marked = False
+        if not plan.get("_quality_degraded"):
+            plan["_quality_degraded"] = True
+            plan["_quality_degraded_reason"] = "clinical_layer_incomplete"
+            plan["_quality_degraded_severity"] = "high"
+            plan["_quality_degraded_clinical_detail"] = _reason
+            marked = True
+        try:
+            from datetime import datetime as _dt_cli, timezone as _tz_cli
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata, triggered_at, resolved_at)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, NULL)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET severity=EXCLUDED.severity, title=EXCLUDED.title, message=EXCLUDED.message,
+                    metadata=EXCLUDED.metadata, triggered_at=EXCLUDED.triggered_at, resolved_at=NULL
+                """,
+                ("clinical_layer_incomplete", "clinical_layer", "high",
+                 "Capa clínica determinista INCOMPLETA para un perfil con condición/alergia",
+                 f"Plan entregado con _clinical_layer_incomplete (reason={_reason}) para un perfil con "
+                 "condición/alergia real: el enforcement renal per-comida y/o el panel de micros pudieron "
+                 "saltarse. Investigar (import de IngredientNutritionDB roto, o proteína de plato compuesto "
+                 "renal no-resuelta por el catálogo).",
+                 json.dumps({"reason": _reason}, ensure_ascii=False), _dt_cli.now(_tz_cli.utc)),
+            )
+        except Exception as _al_e:
+            logger.warning(f"[P2-CLINICAL-LAYER-CONSUMER] alert best-effort falló: {type(_al_e).__name__}: {_al_e}")
+        return marked
+    except Exception:
+        return False
+
+
+def _maybe_mark_low_resolution_degraded(plan: dict, delivered_was_fallback: bool) -> bool:
+    """[P2-RESOLUTION-COVERAGE-GATE · 2026-06-15] (gap-audit G12) Cuando la cobertura de resolución del plan
+    (fracción de ingredientes que resuelven al catálogo de macros, `plan['resolution_coverage']['pct']`) cae
+    bajo `RESOLUTION_COVERAGE_FLOOR`, marca _quality_degraded (reason=composite_dish_unresolved): los platos
+    criollos compuestos no-resueltos son el "0-silencioso" — el solver no re-porciona lo que no resuelve, así
+    que los macros ASERTADOS pueden divergir de los físicos. Señal de TRANSPARENCIA (no necesariamente macro
+    malo: los números se fuerzan al target). NO pisa una razón previa peor. Gateado por
+    MEALFIT_RESOLUTION_COVERAGE_GATE (default OFF — opt-in tras medir la distribución). Puro. Anchor:
+    P2-RESOLUTION-COVERAGE-GATE."""
+    try:
+        if not RESOLUTION_COVERAGE_GATE_ENABLED or delivered_was_fallback or plan.get("_quality_degraded"):
+            return False
+        rc = plan.get("resolution_coverage")
+        if not isinstance(rc, dict):
+            return False
+        pct = rc.get("pct")
+        if not isinstance(pct, (int, float)) or pct >= RESOLUTION_COVERAGE_FLOOR:
+            return False
+        plan["_quality_degraded"] = True
+        plan["_quality_degraded_reason"] = "composite_dish_unresolved"
+        plan["_quality_degraded_severity"] = "minor"
+        plan["_quality_degraded_resolution_pct"] = pct
+        return True
+    except Exception:
+        return False
+
+
 def _compute_pipeline_holistic_score_and_emit(
     final_state: dict,
     *,
@@ -17351,6 +17493,21 @@ def _compute_pipeline_holistic_score_and_emit(
                         logger.warning(
                             f"⚠️ [P2-PANEL-SOFT-REJECT] panel de micros fuera de banda → plan marcado "
                             f"_quality_degraded (reason={plan.get('_quality_degraded_reason')})")
+                    # [P2-CLINICAL-LAYER-CONSUMER · 2026-06-15] (gap-audit G8) Consume el flag dead-write
+                    # `_clinical_layer_incomplete`: si la capa clínica corrió incompleta para un perfil con
+                    # condición/alergia → banner user-facing + system_alert (antes solo logger.error).
+                    if _maybe_mark_clinical_layer_incomplete_degraded(plan, actual_form_data, delivered_was_fallback):
+                        logger.warning(
+                            "🛡 [P2-CLINICAL-LAYER-CONSUMER] plan marcado _quality_degraded "
+                            "(reason=clinical_layer_incomplete) + system_alert emitido")
+                    # [P2-RESOLUTION-COVERAGE-GATE · 2026-06-15] (gap-audit G12) Transparencia: si la
+                    # cobertura de resolución es baja (platos criollos compuestos no-resueltos), marca el plan
+                    # (reason=composite_dish_unresolved). Default OFF — opt-in tras medir la distribución.
+                    if _maybe_mark_low_resolution_degraded(plan, delivered_was_fallback):
+                        logger.warning(
+                            f"⚠️ [P2-RESOLUTION-COVERAGE-GATE] cobertura "
+                            f"{(plan.get('resolution_coverage') or {}).get('pct')} < {RESOLUTION_COVERAGE_FLOOR} "
+                            f"→ _quality_degraded (composite_dish_unresolved)")
             except Exception as _cbs_e:
                 logger.warning(f"[P4-SCOREBOARD] emit del band score falló: {type(_cbs_e).__name__}: {_cbs_e}")
 

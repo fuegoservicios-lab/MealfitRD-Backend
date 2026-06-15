@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15"
+_LAST_KNOWN_PFIX = "P2-CRITICAL-CONFIG-ALERT · 2026-06-15"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -396,10 +396,9 @@ _CASCADE_INLINE_LAST_EMIT_AT: float = 0.0
 
 
 def _cascade_inline_enabled() -> bool:
-    """Kill switch operacional (env-driven, sin redeploy)."""
-    return os.environ.get(
-        "MEALFIT_SCHEDULER_CASCADE_INLINE_ENABLED", "1"
-    ).strip().lower() not in ("0", "false", "no", "off")
+    """Kill switch operacional (env-driven, sin redeploy). [P2-1-KNOBS-HYGIENE · 2026-06-15] vía
+    `_env_bool` (auto-registro en `_KNOBS_REGISTRY` + visible en /health/version), no `os.environ.get` raw."""
+    return _env_bool("MEALFIT_SCHEDULER_CASCADE_INLINE_ENABLED", True)
 
 
 def _cascade_inline_window_s() -> float:
@@ -526,9 +525,7 @@ def _maybe_emit_inline_cascade_alert(job_id: str) -> None:
             f"{_inline_err}. El cron `_alert_scheduler_cascade_missed` "
             f"seguirá siendo el SSOT."
         )
-_OPEN_ALERTS_CACHE_TTL_S = int(os.environ.get(
-    "MEALFIT_SCHEDULER_OPEN_ALERTS_CACHE_TTL_S", "60"
-) or 60)
+_OPEN_ALERTS_CACHE_TTL_S = _env_int("MEALFIT_SCHEDULER_OPEN_ALERTS_CACHE_TTL_S", 60)  # [P2-1-KNOBS-HYGIENE] vía helper; clamp abajo
 if _OPEN_ALERTS_CACHE_TTL_S < 15:
     _OPEN_ALERTS_CACHE_TTL_S = 15
 if _OPEN_ALERTS_CACHE_TTL_S > 300:
@@ -1016,6 +1013,51 @@ def _acquire_scheduler_leader_lock():
         return True, None
 
 
+def _emit_critical_config_alerts() -> None:
+    """[P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Al arranque emite/resuelve `system_alerts`
+    para configuración crítica mal seteada EN PRODUCCIÓN: motor de precisión OFF (G7) o guards de seguridad
+    clínica OFF (G10). Best-effort: NUNCA rompe el arranque. Auto-resuelve los `critical_config` que ya no
+    aplican (config corregida + redeploy). En no-prod `get_critical_config_warnings()` retorna []."""
+    try:
+        from graph_orchestrator import get_critical_config_warnings
+        warnings = get_critical_config_warnings()
+    except Exception as _cfg_e:
+        logger.warning(f"[P2-CRITICAL-CONFIG-ALERT] no pude computar warnings de config: {_cfg_e}")
+        return
+    from datetime import datetime as _dt_cfg, timezone as _tz_cfg
+    now_utc = _dt_cfg.now(_tz_cfg.utc)
+    active_keys = [w["alert_key"] for w in warnings]
+    try:
+        for w in warnings:
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts
+                    (alert_key, alert_type, severity, title, message, metadata, triggered_at, resolved_at)
+                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, NULL)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET alert_type=EXCLUDED.alert_type, severity=EXCLUDED.severity, title=EXCLUDED.title,
+                    message=EXCLUDED.message, metadata=EXCLUDED.metadata, triggered_at=EXCLUDED.triggered_at,
+                    resolved_at=NULL
+                """,
+                (w["alert_key"], "critical_config", w["severity"], w["title"], w["message"],
+                 json.dumps({"detected_by": "startup_config_check"}, ensure_ascii=False), now_utc),
+            )
+            logger.warning(f"🛡 [P2-CRITICAL-CONFIG-ALERT] {w['alert_key']}: {w['title']}")
+        # Auto-resolver los `critical_config` abiertos que ya NO aplican (lista vacía → resuelve todos).
+        execute_sql_write(
+            """
+            UPDATE system_alerts SET resolved_at = %s
+            WHERE resolved_at IS NULL AND alert_type = 'critical_config'
+              AND NOT (alert_key = ANY(%s))
+            """,
+            (now_utc, active_keys),
+        )
+        if not warnings:
+            logger.info("✅ [P2-CRITICAL-CONFIG-ALERT] Config crítica OK (o entorno no-prod) — sin alertas.")
+    except Exception as _emit_e:
+        logger.warning(f"[P2-CRITICAL-CONFIG-ALERT] emisión best-effort falló: {_emit_e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -1274,6 +1316,13 @@ async def lifespan(app: FastAPI):
         # `register_plan_chunk_scheduler` (cron_tasks.py) junto al resto del
         # chunk system. Ya no se registra acá.
         register_plan_chunk_scheduler(scheduler)
+        # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Tras registrar crons, alerta si la
+        # config crítica está mal seteada en producción (motor de precisión OFF / guard de seguridad OFF).
+        # Best-effort, no bloquea el arranque (los knobs son estáticos → un check al arranque basta).
+        try:
+            _emit_critical_config_alerts()
+        except Exception as _cfg_alert_e:
+            logger.warning(f"[P2-CRITICAL-CONFIG-ALERT] startup check no-op: {_cfg_alert_e}")
         # [P2-NEW-F · 2026-05-08] Registrar listener ANTES de start() para no
         # perder los primeros eventos. Mask combinado MISSED|ERROR. Si la
         # telemetría está desactivada por knob, el listener corto-circuita

@@ -39,7 +39,11 @@ def test_gate_decoupled_from_protein_floor(go):
     src = Path(go.__file__).read_text(encoding="utf-8")
     assert "RENAL_CAP_ENABLED = _env_bool" in src
     # El gate del Guard 1 usa RENAL_CAP_ENABLED (no el knob de hipertrofia).
-    assert "CONDITION_RULES_ENABLED and RENAL_CAP_ENABLED and _db is not None" in src
+    # [P2-SAFETY-KNOB-DECOUPLE · 2026-06-15, gap-audit G10] Además se DESACOPLÓ de CONDITION_RULES_ENABLED:
+    # apagar las reglas-por-condición (calidad) NO debe apagar el cap renal (seguridad) → el gate del Guard 1
+    # es ahora SOLO `RENAL_CAP_ENABLED and _db is not None` (el `applied` upstream ya restringe a quién aplica).
+    assert "RENAL_CAP_ENABLED and _db is not None" in src
+    assert "CONDITION_RULES_ENABLED and RENAL_CAP_ENABLED and _db is not None" not in src
 
 
 def test_enforce_trims_and_verifies(go):
