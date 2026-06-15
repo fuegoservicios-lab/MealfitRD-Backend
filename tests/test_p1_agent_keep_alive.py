@@ -54,29 +54,32 @@ def test_dashboard_layout_renders_agentpage_residente():
 
 
 def test_dashboard_layout_uses_visited_ref_lazy():
-    """[P1-AGENT-KEEP-ALIVE] El layout debe usar `hasVisitedAgentRef` para
-    lazy-mount: solo montar AgentPage al primer visit (evita pagar 300KB
-    de chunk si el user nunca entra al chat)."""
+    """[P1-AGENT-KEEP-ALIVE · drift-fix 2026-06-15] Lazy-mount: AgentPage solo se monta al primer visit
+    (evita pagar ~300KB de chunk si el user nunca entra al chat). El guard se refactorizó de un useRef
+    (`hasVisitedAgentRef`) a un useState con set en render-phase (`hasVisitedAgent` + `if (isAgent &&
+    !hasVisitedAgent) setHasVisitedAgent(true)`), pero la GARANTÍA es idéntica."""
     src = _read(_APP_JSX)
-    assert "hasVisitedAgentRef" in src, (
-        "`hasVisitedAgentRef` ausente — sin lazy guard, AgentPage se "
-        "monta siempre incluso si el user nunca abre /dashboard/agent. "
-        "Ver P1-AGENT-KEEP-ALIVE."
+    assert "hasVisitedAgent" in src, (
+        "`hasVisitedAgent` ausente — sin lazy guard, AgentPage se monta siempre incluso si el user "
+        "nunca abre /dashboard/agent. Ver P1-AGENT-KEEP-ALIVE."
     )
-    # Sanity: el ref se usa para gatear el render.
+    # Sanity: el estado gatea el render condicional del AgentPage residente.
     assert re.search(
-        r"hasVisitedAgentRef\.current\s*&&",
+        r"\{\s*hasVisitedAgent\s*&&",
         src,
-    ), "El ref no se usa como guard del render condicional."
+    ), "El estado `hasVisitedAgent` no se usa como guard del render condicional."
 
 
-def test_useRef_imported():
-    """[P1-AGENT-KEEP-ALIVE] `useRef` debe estar en el import de React."""
+def test_lazy_mount_state_hook_imported():
+    """[P1-AGENT-KEEP-ALIVE · drift-fix 2026-06-15] El lazy-mount se refactorizó de useRef a useState
+    (`hasVisitedAgent` + `setHasVisitedAgent`). Verifica que el hook esté importado de react (antes
+    `useRef`, ahora `useState`) y que el setter del guard exista — sin esto, crashea al runtime."""
     src = _read(_APP_JSX)
     assert re.search(
-        r"import\s*\{[^}]*useRef[^}]*\}\s*from\s*['\"]react['\"]",
+        r"import\s*\{[^}]*useState[^}]*\}\s*from\s*['\"]react['\"]",
         src,
-    ), "`useRef` no importado de 'react' — el ref crashea al runtime."
+    ), "`useState` no importado de 'react' — el guard del lazy-mount crashea al runtime."
+    assert "setHasVisitedAgent" in src, "el setter `setHasVisitedAgent` del lazy-mount guard ausente."
 
 
 def test_agent_route_is_trampolin():

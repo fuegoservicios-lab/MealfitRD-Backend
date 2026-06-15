@@ -271,6 +271,14 @@ def test_anchor_collect_fn_in_condition_rules():
 
 
 def test_anchor_marker_in_app_py():
+    # [drift-fix · 2026-06-15] Antes hardcodeaba `"P0-ALLERGEN-SUBS" in marker` (cierto SOLO cuando este
+    # fix era el último mergeado). El marker `_LAST_KNOWN_PFIX` avanza con CADA P-fix → la aserción se
+    # volvió stale por diseño. La presencia del CÓDIGO P0-ALLERGEN-SUBS ya la ancla
+    # `test_anchor_collect_fn_in_condition_rules`; la freshness/formato del marker viven en
+    # `test_p3_1_last_known_pfix_freshness`. Aquí solo verificamos que el marker exista y tenga el
+    # formato `Pn-... · YYYY-MM-DD` (sanity, no un valor específico que se vuelve obsoleto).
     text = (_BACKEND_ROOT / "app.py").read_text(encoding="utf-8")
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*["\']([^"\']+)["\']', text)
-    assert m and "P0-ALLERGEN-SUBS" in m.group(1)
+    assert m, "_LAST_KNOWN_PFIX no encontrado en app.py"
+    assert re.search(r"·\s*\d{4}-\d{2}-\d{2}\s*$", m.group(1)), (
+        f"marker sin fecha bien formada (`Pn-... · YYYY-MM-DD`): {m.group(1)!r}")

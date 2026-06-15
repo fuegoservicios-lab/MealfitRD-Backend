@@ -60,6 +60,12 @@ _DASHBOARD = (_REPO_ROOT / "frontend" / "src" / "pages" / "Dashboard.jsx").read_
     encoding="utf-8"
 )
 _APP_PY = (_REPO_ROOT / "backend" / "app.py").read_text(encoding="utf-8")
+# [P3-DASH-WINDOW-TEST · 2026-05-29] La lógica de la ventana rolling se extrajo de Dashboard.jsx a
+# `utils/planWindow.js` (función pura `computeRollingWindow` + cap `MAX_WINDOW`, con su propio test JS
+# `planWindow.test.js`). Este test parser-based se actualizó para verificar que el refactor PRESERVA la
+# garantía (arranca en hoy, cap=4, ventana que se achica, sin tabs de días pasados) apuntando a la
+# ubicación ACTUAL del código, en vez de la implementación inline vieja en Dashboard.jsx.
+_PLANWINDOW = (_REPO_ROOT / "frontend" / "src" / "utils" / "planWindow.js").read_text(encoding="utf-8")
 
 
 def test_marker_present_in_dashboard():
@@ -70,46 +76,46 @@ def test_marker_present_in_dashboard():
 
 
 def test_max_window_replaces_window_size():
-    """`_MAX_WINDOW = 4` debe estar declarado y `_WINDOW_SIZE` antiguo NO."""
-    max_window_match = re.search(r"const\s+_MAX_WINDOW\s*=\s*(\d+)", _DASHBOARD)
+    """`MAX_WINDOW = 4` (en utils/planWindow.js tras el refactor 2026-05-29), aliasado en Dashboard.jsx
+    como `_MAX_WINDOW = MAX_WINDOW`; el `_WINDOW_SIZE` antiguo NO."""
+    max_window_match = re.search(r"const\s+MAX_WINDOW\s*=\s*(\d+)", _PLANWINDOW)
     assert max_window_match, (
-        "`_MAX_WINDOW` no encontrado en Dashboard.jsx. El refactor del "
-        "windowing fue revertido?"
+        "`MAX_WINDOW` no encontrado en utils/planWindow.js. El refactor del windowing fue revertido?"
     )
     assert int(max_window_match.group(1)) == 4, (
-        f"`_MAX_WINDOW` debe ser 4 (para mostrar [J,V,S,D] cuando chunk 2 "
-        f"entra). Actual: {max_window_match.group(1)}."
+        f"`MAX_WINDOW` debe ser 4 (para mostrar [J,V,S,D] cuando chunk 2 entra). "
+        f"Actual: {max_window_match.group(1)}."
     )
-    # `_WINDOW_SIZE` puede aparecer en comentarios explicando el cambio,
-    # pero NO en código ejecutable (declaración o uso).
+    # Dashboard.jsx aliasa el cap importado de planWindow.js.
+    assert re.search(r"const\s+_MAX_WINDOW\s*=\s*MAX_WINDOW", _DASHBOARD), (
+        "Dashboard.jsx debe aliasar `_MAX_WINDOW = MAX_WINDOW` (cap importado de planWindow.js)."
+    )
+    # `_WINDOW_SIZE` antiguo NO debe existir en código ejecutable (declaración).
     assert not re.search(r"^\s*const\s+_WINDOW_SIZE\s*=", _DASHBOARD, re.MULTILINE), (
-        "Declaración de `_WINDOW_SIZE` sigue activa. Debe estar reemplazada "
-        "por `_MAX_WINDOW`."
+        "Declaración de `_WINDOW_SIZE` sigue activa. Debe estar reemplazada por `_MAX_WINDOW`/`MAX_WINDOW`."
     )
 
 
 def test_visible_start_index_starts_from_today():
-    """`visibleStartIndex = Math.min(todayPlanDayIndex, ...)` — arranca SIEMPRE
-    en hoy. El patrón anti-colapso `Math.min(today, planDays.length - _WINDOW_SIZE)`
-    fue removido."""
-    # Anchor preciso: el nuevo cálculo es `Math.min(todayPlanDayIndex, Math.max(0, planDays.length - 1))`.
+    """La garantía 'arranca SIEMPRE en hoy, nunca retrocede' vive ahora en `computeRollingWindow`
+    (utils/planWindow.js: `visibleStartIndex = Math.min(todayPlanDayIndex, lastIndex)`); Dashboard.jsx
+    la consume. El patrón anti-colapso viejo (`planDays.length - _WINDOW_SIZE`) fue removido."""
+    # La lógica pura: nunca retrocede más allá del último día disponible (lastIndex).
     new_pattern = re.search(
-        r"visibleStartIndex\s*=\s*Math\.min\(\s*todayPlanDayIndex,\s*Math\.max\(0,\s*planDays\.length\s*-\s*1\)\s*\)",
-        _DASHBOARD,
+        r"visibleStartIndex\s*=\s*Math\.min\(\s*todayPlanDayIndex,\s*lastIndex\s*\)",
+        _PLANWINDOW,
     )
     assert new_pattern, (
-        "Nuevo cálculo de `visibleStartIndex` no encontrado. Esperado: "
-        "`Math.min(todayPlanDayIndex, Math.max(0, planDays.length - 1))`."
+        "computeRollingWindow debe calcular `visibleStartIndex = Math.min(todayPlanDayIndex, lastIndex)` "
+        "(arranca en hoy / último día disponible, nunca retrocede)."
     )
-
-    # Anti-pattern: el cálculo viejo NO debe existir.
-    old_pattern = re.search(
-        r"Math\.min\(\s*todayPlanDayIndex,\s*planDays\.length\s*-\s*_WINDOW_SIZE\s*\)",
-        _DASHBOARD,
+    # Dashboard.jsx CONSUME el helper (no reimplementa el cálculo inline).
+    assert re.search(r"computeRollingWindow\(", _DASHBOARD), (
+        "Dashboard.jsx debe usar `computeRollingWindow` (utils/planWindow.js) para la ventana."
     )
-    assert old_pattern is None, (
-        "Patrón anti-colapso `min(todayPlanDayIndex, planDays.length - _WINDOW_SIZE)` "
-        "sigue presente. Debe estar removido para que la ventana se achique."
+    # Anti-pattern: el cálculo viejo anti-colapso NO debe existir en ningún lado.
+    assert re.search(r"planDays\.length\s*-\s*_WINDOW_SIZE", _DASHBOARD) is None, (
+        "Patrón anti-colapso `planDays.length - _WINDOW_SIZE` sigue presente. Debe estar removido."
     )
 
 
@@ -140,16 +146,15 @@ def test_skeleton_uses_max_window():
 
 
 def test_use_effect_active_day_uses_max_window():
-    """El useEffect que reseta activeDayIndex cuando queda fuera de la
-    ventana también debe usar `_MAX_WINDOW`."""
-    pattern = re.search(
-        r"const\s+windowEnd\s*=\s*visibleStartIndex\s*\+\s*_MAX_WINDOW",
-        _DASHBOARD,
-    )
-    assert pattern, (
-        "useEffect del activeDayIndex debe calcular `windowEnd` con "
-        "`_MAX_WINDOW`. Si quedó `_WINDOW_SIZE`, runtime error."
-    )
+    """La re-selección del día activo cuando queda fuera de la ventana usa la lógica pura
+    `shouldReselectActiveDay` (utils/planWindow.js: `windowEnd = visibleStartIndex + maxWindow`); el
+    effect del Dashboard recalcula la ventana via `computeRollingWindow`."""
+    assert re.search(
+        r"const\s+windowEnd\s*=\s*visibleStartIndex\s*\+\s*maxWindow",
+        _PLANWINDOW,
+    ), ("`shouldReselectActiveDay` debe calcular `windowEnd = visibleStartIndex + maxWindow` (cap del slice).")
+    # El Dashboard aplica el recálculo de la ventana via el helper puro (no `_WINDOW_SIZE` inline).
+    assert re.search(r"computeRollingWindow\(", _DASHBOARD)
 
 
 def test_marker_bumped_in_app_py():
