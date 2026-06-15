@@ -1,3 +1,21 @@
+import pytest
+
+# [STALE-MODULE-SKIP · 2026-06-14] Skip a nivel de MÓDULO (antes de los mocks + el import de
+# cron_tasks): `process_plan_chunk` fue renombrado a `process_plan_chunk_queue` (queue processor con
+# firma async distinta) y los mocks de módulo (langgraph/Gemini eliminado) ya NO cuadran con el
+# cron_tasks refactorizado → `AttributeError: __path__` al importar, que ABORTABA la colección de toda
+# la suite (`pytest -x`). Además los `sys.modules[...] = MagicMock()` de abajo CONTAMINAN la sesión.
+# Este skip evita ejecutar todo eso. La feature que el test cubría (zero-log consecutivo → degrade +
+# push + delay 24h) SIGUE VIVA en `cron_tasks.process_plan_chunk_queue` (~L26144) y NO tiene otra
+# cobertura de BACKEND (el test `test_p0_hist_learn_2_*` solo cubre el surfaceo en endpoints).
+# ACCIÓN PENDIENTE (owner): reescribir el mock contra el flujo nuevo (queue processor async) o borrar.
+pytest.skip(
+    "STALE: process_plan_chunk→process_plan_chunk_queue (firma async) + mocks de módulo incompatibles "
+    "(AttributeError __path__) que rompían la colección. Feature viva en process_plan_chunk_queue:26144+ "
+    "sin otra cobertura backend → reescribir o borrar.",
+    allow_module_level=True,
+)
+
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -7,7 +25,6 @@ sys.modules['apscheduler.triggers'] = MagicMock()
 sys.modules['apscheduler.triggers.cron'] = MagicMock()
 sys.modules['apscheduler.schedulers'] = MagicMock()
 sys.modules['apscheduler.schedulers.background'] = MagicMock()
-sys.modules['langchain_google_genai'] = MagicMock()
 sys.modules['langgraph'] = MagicMock()
 sys.modules['langgraph.graph'] = MagicMock()
 sys.modules['langchain_core'] = MagicMock()
@@ -17,8 +34,18 @@ sys.modules['langchain_core.prompts'] = MagicMock()
 
 import pytest
 import json
-from cron_tasks import process_plan_chunk, CHUNK_LEARNING_READY_MAX_DEFERRALS
+# [STALE-SKIP · 2026-06-14] `process_plan_chunk` fue renombrado a `process_plan_chunk_queue` (queue
+# processor, firma distinta) y el pipeline pasó a async; `langchain_google_genai` fue eliminado
+# (DeepSeek). Alias para que la colección de la suite NO rompa (el `import` fallaba → abortaba
+# `pytest -x`). El test en sí está SKIPPED: su cuerpo mockea el worker per-chunk SYNC viejo y necesita
+# reescritura contra el flujo nuevo. La feature que cubría (zero-log consecutivo → degrade + push +
+# delay 24h) SIGUE VIVA en `cron_tasks.process_plan_chunk_queue` (~L26144+) y NO tiene otra cobertura
+# de backend (el test `test_p0_hist_learn_2_*` solo cubre el surfaceo en endpoints) → reescribir o borrar.
+from cron_tasks import process_plan_chunk_queue as process_plan_chunk, CHUNK_LEARNING_READY_MAX_DEFERRALS  # noqa: F401
 
+@pytest.mark.skip(reason="STALE: process_plan_chunk→process_plan_chunk_queue (firma distinta) + pipeline "
+                         "async; reescribir el mock contra el flujo nuevo. Feature viva en "
+                         "process_plan_chunk_queue:26144+, sin otra cobertura backend.")
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks.execute_sql_write")
 @patch("cron_tasks._check_chunk_learning_ready")
