@@ -1612,7 +1612,10 @@ IGNORED_TRACKING_TERMS = {
     "proteina", "proteinas", "carbohidrato", "carbohidratos",
     "vegetal", "vegetales", "fruta", "frutas", "grasa", "grasas",
     "aderezo", "aderezos", "caldo", "condimento", "condimentos",
-    "especias", "hierbas", "azucar", "miel", "polvo", "cucharada", "cucharadita", "taza"
+    "especias", "hierbas", "azucar", "miel", "polvo", "cucharada", "cucharadita", "taza",
+    # [P1-UNKNOWN-CATALOG-FILTER · 2026-06-15] Edulcorante "al gusto" es condimento de cero macros
+    # (no hay fila de catálogo ni la merece) — ignorar como azucar/miel para que no contamine unknown_ingredients.
+    "edulcorante", "edulcorantes", "estevia", "splenda"
 }
 
 # Pre-compilar patrones regex con \b al cargar el módulo (O(1) por llamada posterior)

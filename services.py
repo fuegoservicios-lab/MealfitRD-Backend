@@ -383,6 +383,39 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
                     ingredients.extend(m.get("ingredients"))
                     raw_ingredients.extend(m.get("ingredients"))
 
+        # [P1-UNKNOWN-CATALOG-FILTER · 2026-06-15] Instancia compartida del resolver del catálogo de
+        # macros (lazy-load cacheado). La usan (a) la cobertura de resolución persistida aquí abajo y
+        # (b) el filtro de unknowns en el bloque de freq-tracking. Una sola instancia evita recargar el
+        # catálogo dos veces en el mismo background task.
+        _catalog_db = None
+        try:
+            from nutrition_db import IngredientNutritionDB
+            _catalog_db = IngredientNutritionDB()
+        except Exception as _cat_e:
+            logger.warning(f"[P1-UNKNOWN-CATALOG-FILTER] catálogo no disponible: {type(_cat_e).__name__}: {_cat_e}")
+
+        # [P1-PERSIST-RESOLUTION-COVERAGE · 2026-06-15] Persistir en plan_data la cobertura de resolución
+        # (qué fracción de ingredientes del plan resuelve al catálogo de macros) al GUARDAR — punto único y
+        # confiable para TODO plan (chunked o no). El cómputo del clinical layer (graph_orchestrator) no
+        # llegaba a persistir (0/16 planes en prod lo tenían). Si upstream YA lo puso, se respeta (no se
+        # recomputa → cero costo extra). Telemetría de flota observable vía SQL. Knob rollback.
+        try:
+            from knobs import _env_bool as _eb
+        except Exception:
+            _eb = lambda _k, _d=False: _d  # noqa: E731  fail-safe si knobs no carga
+        if (_catalog_db is not None and raw_ingredients and "resolution_coverage" not in plan_data
+                and _eb("MEALFIT_PERSIST_RESOLUTION_COVERAGE", True)):
+            try:
+                _res = sum(1 for _i in raw_ingredients if _catalog_db.lookup(_i) is not None)
+                _tot = len(raw_ingredients)
+                if _tot:
+                    plan_data["resolution_coverage"] = {
+                        "resolved": _res, "total": _tot, "pct": round(_res / _tot, 3)}
+                    logger.info(f"🔎 [P1-PERSIST-RESOLUTION-COVERAGE] {_res}/{_tot} "
+                                f"({round(100 * _res / _tot)}%) ingredientes resueltos al catálogo (persistido)")
+            except Exception as _rc_e:
+                logger.warning(f"[P1-PERSIST-RESOLUTION-COVERAGE] error: {type(_rc_e).__name__}: {_rc_e}")
+
         # Nombre creativo generado por IA
         plan_name = generate_plan_title(plan_data)
 
@@ -446,7 +479,26 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
             
             if canonical:
                 increment_ingredient_frequencies(user_id, canonical)
-            
+
+            # [P1-UNKNOWN-CATALOG-FILTER · 2026-06-15] `unknown_ingredients` existe para señalar GAPS DEL
+            # CATÁLOGO de macros (qué ingrediente REAL falta agregar). Pero `canonical_bases`
+            # (GLOBAL_REVERSE_MAP, mapa de VARIEDAD) es MÁS ESTRECHO que el catálogo: "leche descremada",
+            # "chía", "queso" resuelven al catálogo de macros (vía aliases) pero no están en el mapa de
+            # variedad → se logueaban como falsos-positivos (11 de 11 entradas en prod 2026-06-14 eran de
+            # este tipo). Enrutamos los no-canónicos por el resolver del catálogo (el mismo que alimenta el
+            # solver de macros); SOLO los que TAMPOCO resuelven ahí son gaps reales. Así el log se vuelve
+            # señal accionable de "qué agregar". Knob de rollback: MEALFIT_UNKNOWN_LOG_USE_CATALOG=false.
+            if non_canonical and _catalog_db is not None and _eb("MEALFIT_UNKNOWN_LOG_USE_CATALOG", True):
+                try:
+                    _genuine = [n for n in non_canonical if _catalog_db.lookup(n) is None]
+                    _filtered = len(non_canonical) - len(_genuine)
+                    if _filtered:
+                        logger.info(f"🔎 [P1-UNKNOWN-CATALOG-FILTER] {_filtered} no-canónico(s) resuelven al "
+                                    "catálogo de macros (gap del mapa de variedad, NO del catálogo) → no logueados como unknown")
+                    non_canonical = _genuine
+                except Exception as _uf_e:
+                    logger.warning(f"[P1-UNKNOWN-CATALOG-FILTER] filtro catálogo falló (logueo todos): {type(_uf_e).__name__}: {_uf_e}")
+
             # 2b. Loguear ingredientes no reconocidos para revisión y expansión del catálogo
             if non_canonical:
                 raw_map = {normalize_ingredient_for_tracking(r): r for r in raw_ingredients if r}
