@@ -5524,6 +5524,106 @@ def _clinical_band_drift_alert_job():
             pass
 
 
+def _plan_fallback_rate_alert_job():
+    """[P1-MACRO-ROLLOUT-OBS · 2026-06-14] Cron de TASA DE FALLBACK de generación. Cuenta la fracción
+    de planes entregados como fallback matemático (`metadata->>'delivered_was_fallback'='true'` sobre la
+    métrica `clinical_band` de pipeline_metrics, emitida por-plan en el orquestador) en las últimas N
+    horas y emite el alert `plan_fallback_rate_high` si supera el umbral con muestra mínima. Auto-resuelve
+    cuando vuelve bajo el umbral (modelo Auto-implicit). Emite tick observable siempre.
+
+    Prerequisito de observabilidad del rollout del motor de macros (`MEALFIT_MACRO_SOLVER_ENABLED`): un
+    fallback alto significa que el plan rico del LLM NO se está entregando (precisión degradada + plan
+    genérico) y/o que activar el solver regresó la coherencia receta↔lista. La auditoría midió 45% de
+    fallback sin explicar → esta alerta lo vuelve visible y vigilable durante el canary. Espeja el patrón
+    de `degraded_rate_high` / `clinical_band_drift`.
+
+    Knobs: MEALFIT_FALLBACK_RATE_LOOKBACK_H (24, clamp [1,168]), MEALFIT_FALLBACK_RATE_MIN_SAMPLES (10,
+    clamp [1,10000]), MEALFIT_FALLBACK_RATE_THRESHOLD (0.25), MEALFIT_FALLBACK_RATE_INTERVAL_H (6, [1,48]).
+    Tooltip-anchor: P1-MACRO-ROLLOUT-OBS."""
+    alert_key = "plan_fallback_rate_high"
+    lookback_h = max(1, min(_env_int("MEALFIT_FALLBACK_RATE_LOOKBACK_H", 24), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_FALLBACK_RATE_MIN_SAMPLES", 10), 10_000))
+    threshold = _env_float("MEALFIT_FALLBACK_RATE_THRESHOLD", 0.25)
+    _n = 0
+    _fb = 0
+    _rate = None
+    _alert_emitted = False
+    _skip = None
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (
+                       WHERE COALESCE(metadata->>'delivered_was_fallback', 'false') = 'true'
+                   ) AS fallback
+              FROM pipeline_metrics
+             WHERE node = 'clinical_band'
+               AND created_at > NOW() - (%s || ' hours')::interval
+            """,
+            (str(lookback_h),),
+            fetch_all=True,
+        ) or []
+        if rows:
+            try:
+                _n = int(rows[0].get("total") or 0)
+                _fb = int(rows[0].get("fallback") or 0)
+            except (TypeError, ValueError):
+                _n, _fb = 0, 0
+        if _n < min_samples:
+            _skip = f"insufficient_samples ({_n}<{min_samples})"
+        else:
+            _rate = round(_fb / _n, 3)
+            if _rate > threshold:
+                execute_sql_write(
+                    """
+                    INSERT INTO system_alerts
+                        (alert_key, alert_type, severity, title, message, metadata)
+                    VALUES (%s, 'reliability_degradation', 'warning', %s, %s, %s::jsonb)
+                    ON CONFLICT (alert_key) DO UPDATE
+                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    """,
+                    (
+                        alert_key,
+                        "Tasa de fallback de generación sobre el umbral",
+                        f"El {int(_rate * 100)}% de los planes de las últimas {lookback_h}h se entregó "
+                        f"como fallback matemático ({_fb}/{_n}, > umbral {int(threshold * 100)}%). El plan "
+                        f"rico del LLM no se está entregando — revisar CB/LLM, pools, o (si se activó el "
+                        f"solver) coherencia receta↔lista.",
+                        json.dumps({"fallback_rate": _rate, "n_fallback": _fb, "n_plans": _n,
+                                    "lookback_h": lookback_h, "threshold": threshold}, ensure_ascii=False),
+                    ),
+                )
+                _alert_emitted = True
+                logger.warning(
+                    f"🚨 [P1-MACRO-ROLLOUT-OBS] Tasa de fallback {int(_rate * 100)}% "
+                    f"({_fb}/{_n}, {lookback_h}h) > {int(threshold * 100)}% → alert `{alert_key}` emitido")
+            else:
+                execute_sql_write(
+                    "UPDATE system_alerts SET resolved_at = NOW() "
+                    "WHERE alert_key = %s AND resolved_at IS NULL",
+                    (alert_key,),
+                )
+                logger.info(
+                    f"✅ [P1-MACRO-ROLLOUT-OBS] Tasa de fallback {int(_rate * 100)}% OK "
+                    f"(≤ {int(threshold * 100)}%, {_n} planes / {lookback_h}h)")
+    except Exception as e:
+        logger.error(f"❌ [P1-MACRO-ROLLOUT-OBS] cron de tasa de fallback falló: {type(e).__name__}: {e}")
+    finally:
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata)
+                VALUES ('_plan_fallback_rate_alert_job_tick', 0, 0, 0, %s, %s::jsonb)
+                """,
+                (_rate if _rate is not None else -1.0,
+                 json.dumps({"n_plans": _n, "n_fallback": _fb, "fallback_rate": _rate,
+                             "alert_emitted": _alert_emitted, "skip_reason": _skip,
+                             "threshold": threshold, "lookback_h": lookback_h}, ensure_ascii=False)),
+            )
+        except Exception:
+            pass
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -5588,6 +5688,24 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [P4-SCOREBOARD] Cron clinical_band_drift_alert registrado cada "
             f"{_band_drift_interval_h}h (precisión de macros vigilada en flota).")
+
+    # [P1-MACRO-ROLLOUT-OBS · 2026-06-14] Cron de tasa de fallback: prerequisito de observabilidad
+    # para activar el motor de macros con canary. Métrica de cambio lento (default 6h) → misfire tolerante.
+    _fallback_rate_interval_h = max(1, min(_env_int("MEALFIT_FALLBACK_RATE_INTERVAL_H", 6), 48))
+    if not scheduler.get_job("plan_fallback_rate_alert"):
+        _add_job_jittered(scheduler,
+            _plan_fallback_rate_alert_job,
+            "interval",
+            hours=_fallback_rate_interval_h,
+            id="plan_fallback_rate_alert",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P1-MACRO-ROLLOUT-OBS] Cron plan_fallback_rate_alert registrado cada "
+            f"{_fallback_rate_interval_h}h (tasa de fallback vigilada para el rollout del solver).")
 
     # [P1-AUDIT-1 · 2026-05-12] Cron que drena `pending_facts_queue`.
     # Reemplaza el trigger DB `process_facts_on_insert` + función

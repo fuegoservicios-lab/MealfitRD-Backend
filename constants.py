@@ -1555,6 +1555,29 @@ ANEMIA_CONDITION_TERMS = (
     "anemia", "ferropenica", "ferropenia", "hierro bajo", "ferritina baja",
     "deficiencia de hierro", "iron deficiency",
 )
+# [P1-CONDITION-COVERAGE · 2026-06-14] Condiciones comunes que faltaban del modelado clínico
+# (audit P1-de-precisión 2026-06-14). EMBARAZO/LACTANCIA es el caso de SEGURIDAD fail-hard: nunca
+# entregar un déficit calórico (ver el gate en nutrition_calculator). El resto (hipotiroidismo, gota,
+# hígado graso, SOP) son ADVISORY: prompt_block citable + gate de derivación FS9 — la regla fina la
+# valida el profesional, no el motor (evita enforcement clínico sin revisión humana). Términos SIN
+# acento (el caller normaliza con strip_accents) y sobre-inclusivos (dirección segura).
+PREGNANCY_CONDITION_TERMS = (
+    "embaraz", "gestac", "gestante", "lactan", "lactancia", "amamant",
+    "pregnan", "pregnancy", "breastfeed", "postparto", "post parto", "puerperio",
+)
+HYPOTHYROID_CONDITION_TERMS = (
+    "hipotiroid", "hashimoto", "hypothyroid", "tiroides baja", "tiroidea baja",
+)
+GOUT_CONDITION_TERMS = (
+    "gota", "acido urico", "hiperuricemia", "gout", "uric acid",
+)
+NAFLD_CONDITION_TERMS = (
+    "higado graso", "esteatosis", "nafld", "mafld", "fatty liver", "hepatica grasa",
+)
+PCOS_CONDITION_TERMS = (
+    "sop", "ovario poliquistico", "ovarios poliquisticos", "poliquistico", "pcos",
+    "sindrome de ovario", "ovarico poliquistico",
+)
 
 def get_reverse_synonyms_map():
     """Crea un diccionario inverso donde la clave es la variante ('pechuga') y el valor es el término base ('pollo').

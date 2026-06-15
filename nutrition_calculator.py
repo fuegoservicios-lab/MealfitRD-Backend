@@ -8,6 +8,47 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# [P1-PREGNANCY-DEFICIT-GATE · 2026-06-14] Gate de SEGURIDAD fail-hard: una persona embarazada o
+# lactando NUNCA debe recibir un déficit calórico (riesgo fetal/de lactancia). Antes el goal genérico
+# (lose_fat) aplicaba un déficit del 20% sin ninguna salvaguarda. Knob de rollback con default ON
+# (auto-registrado en _KNOBS_REGISTRY). Anchor: P1-PREGNANCY-DEFICIT-GATE.
+try:
+    from knobs import _env_bool as _nc_env_bool
+    PREGNANCY_DEFICIT_GATE_ENABLED = _nc_env_bool("MEALFIT_PREGNANCY_DEFICIT_GATE", True)
+except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a ON (seguro)
+    PREGNANCY_DEFICIT_GATE_ENABLED = True
+
+
+def _is_pregnancy_or_lactation(form_data) -> bool:
+    """True si el perfil declara embarazo/lactancia (en `medicalConditions` o en un campo dedicado).
+    Sobre-inclusivo a propósito: un falso positivo solo evita un déficit (seguro); un falso negativo
+    aplicaría un déficit a una embarazada (peligroso). Anchor: P1-PREGNANCY-DEFICIT-GATE."""
+    if not isinstance(form_data, dict):
+        return False
+    # Campo dedicado opcional (algunos forms lo envían aparte de medicalConditions).
+    for _k in ("isPregnant", "pregnant", "embarazada", "isLactating", "lactating", "breastfeeding"):
+        _v = form_data.get(_k)
+        if _v is True:
+            return True
+        if isinstance(_v, str) and _v.strip().lower() in ("1", "true", "yes", "si", "sí", "on"):
+            return True
+    try:
+        from constants import PREGNANCY_CONDITION_TERMS, strip_accents
+    except Exception:
+        return False
+    raw = form_data.get("medicalConditions") or form_data.get("medical_conditions") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    for _c in raw:
+        try:
+            _cl = strip_accents(str(_c).strip().lower())
+        except Exception:
+            _cl = str(_c).strip().lower()
+        if _cl and any(_t in _cl for _t in PREGNANCY_CONDITION_TERMS):
+            return True
+    return False
+
+
 def calculate_bmr(weight_kg: float, height_cm: float, age: int, gender: str, body_fat_pct: float = None) -> int:
     """
     Calcula el BMR (Tasa Metabólica Basal).
@@ -935,6 +976,28 @@ def get_nutrition_targets(form_data: dict) -> dict:
     activity_level = form_data.get("activityLevel", "moderate")
     goal = form_data.get("mainGoal") or form_data.get("goal") or "maintenance"
 
+    # [P1-PREGNANCY-DEFICIT-GATE · 2026-06-14] SEGURIDAD fail-hard ANTES de calcular calorías: si se
+    # declaró embarazo/lactancia y la meta produciría un déficit (lose_fat), se fuerza mantenimiento.
+    # El piso de TDEE más abajo es el cinturón-y-tirantes (cubre cualquier déficit dinámico residual).
+    # El plan además queda con requires_professional_review (FS9) vía las condiciones médicas.
+    _pregnancy_safety = None
+    if PREGNANCY_DEFICIT_GATE_ENABLED and _is_pregnancy_or_lactation(form_data):
+        _orig_goal = goal
+        if goal == "lose_fat":
+            goal = "maintenance"
+        _pregnancy_safety = {
+            "applied": True,
+            "original_goal": _orig_goal,
+            "effective_goal": goal,
+            "note": ("🤰 EMBARAZO/LACTANCIA DETECTADO — por seguridad NO se aplica déficit calórico "
+                     "(se usa al menos mantenimiento). El requerimiento energético sube en el 2º/3º "
+                     "trimestre y durante la lactancia; este plan es ORIENTATIVO y DEBE ser supervisado "
+                     "por tu obstetra/nutricionista: prioriza folato y hierro, y evita pescados altos en "
+                     "mercurio, embutidos y quesos/lácteos no pasteurizados (riesgo de listeria)."),
+        }
+        logger.warning(f"🤰 [P1-PREGNANCY-DEFICIT-GATE] Embarazo/lactancia → meta '{_orig_goal}' "
+                       f"forzada a '{goal}' (sin déficit).")
+
     # 1. BMR (Tasa Metabólica Basal)
     bmr = calculate_bmr(weight, height, age, gender, body_fat)
     
@@ -1028,6 +1091,12 @@ def get_nutrition_targets(form_data: dict) -> dict:
             logger.info(f"Error en metabolismo evolutivo: {e}")
     # -------------------------------------------------------------------
 
+    # [P1-PREGNANCY-DEFICIT-GATE · 2026-06-14] Piso de seguridad cinturón-y-tirantes: tras CUALQUIER
+    # ajuste (meta + déficit dinámico), una embarazada/lactante jamás queda por debajo de mantenimiento.
+    if _pregnancy_safety and target_calories < tdee:
+        target_calories = int(round(tdee / 50) * 50)
+        _pregnancy_safety["floored_to_tdee"] = target_calories
+
     calculation_details_str = (
         f"BMR (Mifflin-St Jeor): {bmr} kcal | "
         f"TDEE ({activity_level}, ×{ACTIVITY_MULTIPLIERS.get(activity_level, 1.55)}): {tdee} kcal | "
@@ -1063,7 +1132,9 @@ def get_nutrition_targets(form_data: dict) -> dict:
         "calculation_details": calculation_details_str,
         "kinematics": velocity_data if 'velocity_data' in locals() else None
     }
-    
+    if _pregnancy_safety:
+        result["pregnancy_lactation_safety"] = _pregnancy_safety
+
     logger.info(f"\n🔢 [CALCULADORA NUTRICIONAL] Resultados exactos:")
     logger.info(f"   📊 BMR: {bmr} kcal (Peso: {weight_display}, Altura: {height}cm, Edad: {age}, Género: {gender})")
     logger.info(f"   🏃 TDEE: {tdee} kcal (Actividad: {activity_level})")

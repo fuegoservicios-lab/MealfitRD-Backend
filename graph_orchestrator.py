@@ -8782,22 +8782,45 @@ def _apply_allergen_substitutions(plan: dict, form_data: dict) -> int:
 # [C2-ALLERGEN-GUARD · 2026-06-13] Mapa de sinónimos de alérgenos comunes (es-DO) → términos
 # que pueden aparecer en los ingredientes. Sesgo a SOBRE-detectar: para alérgenos, un falso
 # positivo (rechazar un plan seguro) es MUCHO mejor que un falso negativo (servir el alérgeno).
+# [P1-ALLERGEN-DERIVATIVES · 2026-06-14] Extensión con DERIVADOS / ingredientes compuestos por
+# categoría (whey/caseína/helado para lácteos; mayonesa/merengue/holandesa para huevo;
+# miso/tempeh/teriyaki/lecitina para soya; cuscús/seitán/malta/sémola para gluten; anchoa/surimi/
+# salsa inglesa para pescado; mazapán/nutella/praliné para frutos secos). Cierra el punto ciego
+# del audit: el alérgeno escondido en un compuesto (whey en un batido, mayonesa en un aderezo)
+# antes solo dependía del revisor LLM (falible). Es DETECCIÓN (backstop _scan_allergen_violations
+# + filtro de candidatos del closer), no sustitución → no requiere filas de catálogo nuevas y
+# preserva el sesgo de sobre-detección intencional. Anchor: P1-ALLERGEN-DERIVATIVES.
 _ALLERGEN_SYNONYMS = {
-    "mani": ["mani", "cacahuate", "peanut", "mantequilla de mani"],
+    "mani": ["mani", "cacahuate", "peanut", "mantequilla de mani", "crema de mani",
+             "salsa de mani"],
     "frutos secos": ["almendra", "almendras", "nuez", "nueces", "maranon", "pistacho",
-                     "avellana", "merey", "maranon", "anacardo"],
+                     "avellana", "merey", "maranon", "anacardo", "marzipan", "mazapan",
+                     "nutella", "praline", "turron", "pesto", "crema de avellana"],
     "mariscos": ["camaron", "camarones", "langosta", "cangrejo", "langostino", "gambas",
-                 "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi"],
+                 "marisco", "mariscos", "pulpo", "calamar", "almeja", "ostra", "lambi",
+                 "surimi"],
     "pescado": ["pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo",
-                "dorado", "sardina", "merluza", "carite"],
+                "dorado", "sardina", "merluza", "carite", "anchoa", "anchoas",
+                "salsa de pescado", "surimi", "caviar", "salsa inglesa", "worcestershire"],
     "lacteos": ["leche", "queso", "yogurt", "mantequilla", "crema", "lacteo", "ricotta",
-                "mozzarella", "parmesano", "cottage"],
-    "lactosa": ["leche", "queso", "yogurt", "mantequilla", "crema", "ricotta", "mozzarella"],
+                "mozzarella", "parmesano", "cottage", "whey", "suero de leche", "caseina",
+                "caseinato", "proteina de suero", "proteina de leche", "helado", "mantecado",
+                "dulce de leche", "queso crema", "requeson", "kefir", "natilla", "flan",
+                "leche condensada", "leche evaporada", "nata", "ghee"],
+    "lactosa": ["leche", "queso", "yogurt", "mantequilla", "crema", "ricotta", "mozzarella",
+                "whey", "suero de leche", "helado", "mantecado", "dulce de leche", "queso crema",
+                "requeson", "kefir", "natilla", "flan", "leche condensada", "leche evaporada"],
     "gluten": ["trigo", "pan", "pasta", "harina de trigo", "galleta", "galletas", "cebada",
-               "centeno", "gluten", "tortilla integral", "pan integral"],
-    "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas"],
-    "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas"],
-    "soya": ["soya", "soja", "tofu", "salsa de soya", "edamame"],
+               "centeno", "gluten", "tortilla integral", "pan integral", "cuscus", "couscous",
+               "seitan", "bulgur", "malta", "cerveza", "semola", "espagueti", "macarrones",
+               "lasana", "lasagna", "empanada", "bizcocho", "wheat"],
+    "huevo": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
+              "aioli", "alioli", "holandesa", "ponche", "mousse"],
+    "huevos": ["huevo", "huevos", "clara", "claras", "yema", "yemas", "mayonesa", "merengue",
+               "aioli", "alioli", "holandesa", "ponche", "mousse"],
+    "soya": ["soya", "soja", "tofu", "salsa de soya", "edamame", "miso", "tempeh",
+             "salsa teriyaki", "teriyaki", "natto", "lecitina de soya", "proteina de soya",
+             "proteina vegetal texturizada", "tvp"],
 }
 
 

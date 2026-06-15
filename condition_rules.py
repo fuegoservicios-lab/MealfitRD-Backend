@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from constants import (
     RENAL_CONDITION_TERMS, DIABETES_CONDITION_TERMS, HTA_CONDITION_TERMS,
     DYSLIPIDEMIA_CONDITION_TERMS, ANEMIA_CONDITION_TERMS,
+    PREGNANCY_CONDITION_TERMS, HYPOTHYROID_CONDITION_TERMS, GOUT_CONDITION_TERMS,
+    NAFLD_CONDITION_TERMS, PCOS_CONDITION_TERMS,
 )
 
 SAFETY_HARD = "safety_hard"            # reglas que el motor REESCRIBE determinísticamente
@@ -173,6 +175,71 @@ CONDITION_RULES: tuple = (
             "   • POTENCIA LA ABSORCIÓN: acompaña el hierro con vitamina C (naranja, limón, tomate, pimiento).\n"
             "   • FOLATO + B12: leguminosas, vegetales de hoja verde, huevo.\n"
             "   • SEPARA del café/té/lácteos en la misma comida (inhiben la absorción de hierro)."),
+    ),
+    # [P1-CONDITION-COVERAGE · 2026-06-14] Condiciones comunes que faltaban. ADVISORY (prompt_block +
+    # gate de derivación FS9, classification CLINICAL_REFERRAL): la guía es estándar-de-cuidado general;
+    # la regla fina (qué limitar/sustituir por estadio/severidad) la valida el profesional, NO el motor
+    # determinista (evita enforcement clínico sin revisión humana — cautela del audit P1). Embarazo es
+    # además SEGURIDAD: el déficit calórico ya lo bloquea el gate en nutrition_calculator.
+    ConditionRule(
+        id="pregnancy", label="Embarazo / lactancia", terms=PREGNANCY_CONDITION_TERMS,
+        precedence=15, classification=CLINICAL_REFERRAL,
+        prompt_block=(
+            "🤰 REGLA CLÍNICA — EMBARAZO / LACTANCIA (SEGURIDAD — REQUIERE OBSTETRA/NUTRICIONISTA):\n"
+            "   • NUNCA un déficit calórico: usa AL MENOS mantenimiento (el requerimiento sube en 2º/3º "
+            "trimestre y lactancia). NO es momento de perder peso.\n"
+            "   • FOLATO + HIERRO altos: vegetales de hoja verde, leguminosas, carnes magras, huevo; "
+            "acompaña el hierro con vitamina C.\n"
+            "   • CALCIO + PROTEÍNA suficientes: lácteos PASTEURIZADOS, pescado bajo en mercurio.\n"
+            "   • EVITA por listeria/seguridad: embutidos y quesos/lácteos NO pasteurizados, pescado "
+            "crudo, carne/huevo poco cocidos, pescados altos en mercurio (tiburón, pez espada, atún "
+            "grande), alcohol y exceso de cafeína.\n"
+            "   • Este plan es ORIENTATIVO y NO sustituye el control prenatal."),
+    ),
+    ConditionRule(
+        id="hypothyroid", label="Hipotiroidismo", terms=HYPOTHYROID_CONDITION_TERMS,
+        precedence=55, classification=CLINICAL_REFERRAL,
+        prompt_block=(
+            "🦋 REGLA CLÍNICA — HIPOTIROIDISMO (orientativa, requiere endocrinólogo):\n"
+            "   • YODO ADECUADO (sin exceso): sal yodada con moderación, pescado/mariscos, huevo, lácteos.\n"
+            "   • SELENIO + ZINC: nuez (1-2/día si no hay alergia), huevo, pollo, mariscos.\n"
+            "   • Modera los GOITRÓGENOS CRUDOS en gran cantidad (repollo, brócoli, coliflor, yuca cruda); "
+            "cocidos pierden el efecto — no es necesario eliminarlos.\n"
+            "   • Separa los suplementos de hierro/calcio de la levotiroxina (interfieren su absorción)."),
+    ),
+    ConditionRule(
+        id="gout", label="Gota / ácido úrico alto", terms=GOUT_CONDITION_TERMS,
+        precedence=55, classification=CLINICAL_REFERRAL,
+        prompt_block=(
+            "🦶 REGLA CLÍNICA — GOTA / HIPERURICEMIA (orientativa, requiere médico):\n"
+            "   • PURINAS BAJAS: limita vísceras (hígado, riñón, mollejas), mariscos, sardina/anchoa y "
+            "el exceso de carnes rojas.\n"
+            "   • CERO alcohol (especialmente cerveza) y bebidas/alimentos altos en fructosa (refrescos, "
+            "jugos azucarados).\n"
+            "   • HIDRATACIÓN abundante (agua) + lácteos BAJOS en grasa (protectores).\n"
+            "   • Vegetales, fruta entera, granos integrales y proteína magra con moderación."),
+    ),
+    ConditionRule(
+        id="nafld", label="Hígado graso (NAFLD/MAFLD)", terms=NAFLD_CONDITION_TERMS,
+        precedence=50, classification=CLINICAL_REFERRAL,
+        prompt_block=(
+            "🫥 REGLA CLÍNICA — HÍGADO GRASO (NAFLD/MAFLD) (orientativa, requiere médico):\n"
+            "   • REDUCE azúcar añadida y FRUCTOSA (refrescos, jugos, dulces, sirope) y carbohidratos "
+            "refinados (pan blanco, harinas) — son el principal motor de la grasa hepática.\n"
+            "   • PATRÓN MEDITERRÁNEO: aceite de oliva, pescado, vegetales, leguminosas, granos integrales.\n"
+            "   • CERO alcohol.\n"
+            "   • Si hay sobrepeso, una pérdida gradual de peso (7-10%) mejora la esteatosis."),
+    ),
+    ConditionRule(
+        id="pcos", label="SOP (ovario poliquístico)", terms=PCOS_CONDITION_TERMS,
+        precedence=50, classification=CLINICAL_REFERRAL,
+        prompt_block=(
+            "🌸 REGLA CLÍNICA — SOP / OVARIO POLIQUÍSTICO (orientativa, requiere ginecólogo/endocrino):\n"
+            "   • CALIDAD DEL CARBOHIDRATO (resistencia a la insulina): prioriza fibra alta, granos "
+            "integrales intactos y leguminosas; evita azúcares añadidos y harinas refinadas.\n"
+            "   • PROTEÍNA + GRASA SALUDABLE en cada comida para estabilizar la glucosa.\n"
+            "   • Patrón antiinflamatorio (pescado graso, aceite de oliva, vegetales).\n"
+            "   • Combina con actividad física; el manejo del peso mejora la sensibilidad a la insulina."),
     ),
 )
 
