@@ -168,6 +168,13 @@ CONDITION_RULES: tuple = (
             "   • GRASAS SALUDABLES: aguacate, aceite de oliva, pescado graso (sardina/salmón), nueces — con moderación.\n"
             "   • Sin grasas trans (margarina dura, productos de repostería industrial)."),
     ),
+    # [P2-ANEMIA-TARGET · 2026-06-15] DECISIÓN: la fila de anemia NO lleva `substitutions` a propósito.
+    # Anemia es un DÉFICIT a llenar, no un exceso a remover → no hay token-ofensor natural (un swap como
+    # 'pollo'→res destruiría variedad/proteína y chocaría con gota/ERC por comorbilidad), y el catálogo
+    # es-DO NO tiene hígado (un reemplazo a hígado violaría test_p2_subs_resolubility_contract). La
+    # cobertura va por: prompt_block + piso de hierro RDA-por-sexo (gap) + build_supplement_recommendations
+    # + el condition_target advisory de anemia (micronutrients.py, P2-ANEMIA-TARGET). NO añadir swaps sin
+    # re-evaluar P2-3.
     ConditionRule(
         id="anemia", label="Anemia ferropénica", terms=ANEMIA_CONDITION_TERMS,
         precedence=60,

@@ -15,6 +15,18 @@ resuelto). El techo de sodio que se dispara es señal fuerte; el que no, es inci
 """
 from __future__ import annotations
 
+# [P2-ANEMIA-TARGET · 2026-06-15] Surface advisory de un condition_target de anemia en el panel (paralelo
+# a DM2/HTA/dislipidemia). NO eleva el piso de hierro (usa el RDA 18F/8M ya vigente) → NO crea objetivo
+# inalcanzable nuevo → imposible de loopear (el panel es advisory por contrato, no alimenta should_retry).
+# Anemia es un DÉFICIT (no un exceso): no hay ingrediente-ofensor que sustituir + el catálogo es-DO no
+# tiene hígado y el swap magro→res perdería proteína → NO se añade `substitutions` a la fila anemia (ver
+# condition_rules.py). Default OFF (user-facing en panel/PDF). Knob canónico auto-registrado en _KNOBS_REGISTRY.
+try:
+    from knobs import _env_bool as _mn_env_bool
+    _ANEMIA_CONDITION_TARGET_ENABLED = _mn_env_bool("MEALFIT_ANEMIA_CONDITION_TARGET", False)
+except Exception:  # pragma: no cover - knobs siempre disponible en prod
+    _ANEMIA_CONDITION_TARGET_ENABLED = False
+
 # Términos de azúcar AÑADIDA (free sugars) — el techo WHO aplica a estos, NO al azúcar
 # intrínseco de fruta/leche (que no es preocupación de salud).
 _ADDED_SUGAR_TERMS = ("miel", "azucar", "azúcar", "sirope", "jarabe", "panela",
@@ -120,6 +132,15 @@ def _has_dyslipidemia(conditions) -> bool:
         return _has_condition(conditions, ("colesterol", "dislipid", "trigliceri", "ldl alto"))
 
 
+def _has_anemia(conditions) -> bool:
+    # [P2-ANEMIA-TARGET · 2026-06-15] Paralelo a _has_hta/_has_dyslipidemia.
+    try:
+        from constants import ANEMIA_CONDITION_TERMS
+        return _has_condition(conditions, ANEMIA_CONDITION_TERMS)
+    except Exception:
+        return _has_condition(conditions, ("anemia", "ferropen", "hierro bajo", "ferritina baja"))
+
+
 def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
     """Suma los micros de todos los ingredientes resueltos del plan y devuelve el PROMEDIO
     diario + metadata de cobertura. `free_sugars_g` solo cuenta el azúcar de ingredientes
@@ -209,6 +230,19 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
             "regla": f"Grasa saturada ≤{_satfat_ceiling}g/día (<7% de las kcal)",
             "guia": "AHA 2021 / ACC 2025 — la grasa saturada eleva el LDL",
             "actual": daily.get("saturated_fat_g", 0.0),
+        })
+    # [P2-ANEMIA-TARGET · 2026-06-15] Anemia ferropénica → surface el target de hierro como condition_target
+    # citable (paralelo a DM2/HTA/dislipidemia). NO modifica `targets` (el piso `iron_mg` 18F/8M YA es el RDA
+    # por sexo vigente → sin enforcement nuevo, sin objetivo inalcanzable nuevo → imposible de loopear). Solo
+    # añade una fila descriptiva al panel/PDF. Gateado por knob default OFF (user-facing).
+    if _ANEMIA_CONDITION_TARGET_ENABLED and _has_anemia(conditions):
+        _iron_floor = (targets.get("iron_mg") or {}).get("floor")
+        condition_targets.append({
+            "condicion": "Anemia ferropénica",
+            "regla": (f"Hierro ≥{_iron_floor}mg/día (RDA por sexo) + vitamina C en la misma comida"
+                      if _iron_floor else "Hierro alto (RDA por sexo) + vitamina C en la misma comida"),
+            "guia": "OMS/RDA — prioriza hierro hemo (carnes magras) + leguminosas; separa de café/té/lácteos",
+            "actual": daily.get("iron_mg", 0.0),
         })
     panel, gaps = [], []
     for key, tgt in targets.items():

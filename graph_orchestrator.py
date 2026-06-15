@@ -8398,6 +8398,13 @@ RENAL_PROTEIN_GKG_CEILING = _env_float("MEALFIT_RENAL_PROTEIN_GKG", 0.8)   # KDI
 # True (desactivarlo es una decisión deliberada de seguridad, no un efecto colateral de tunear el piso de
 # proteína). El Guard 1 del cap renal ahora se gatea por esto, NO por PROTEIN_FLOOR_ENABLED.
 RENAL_CAP_ENABLED = _env_bool("MEALFIT_RENAL_CAP", True)
+# [P2-RENAL-UNRESOLVED-PROTEIN · 2026-06-15] El cap renal recorta el NÚMERO de proteína + los
+# ingredientes RESUELTOS, pero un plato proteico COMPUESTO no-resuelto (sancocho/mondongo) deja su
+# proteína FÍSICA intacta → el cap es incompleto para ese plan. SEÑAL observable (telemetría backend +
+# PDF/`renal_protein_cap.unresolved_protein_items`), NO escalado ciego (encogería vegetales no-resueltos).
+# Default True (es telemetría pura, cero mutación de porciones). NO pisa `meals_enforced` (que refleja la
+# convergencia NUMÉRICA del trim, P2-RENAL-CAP-FAILHARD) — usa el campo nuevo `cap_complete`.
+RENAL_UNRESOLVED_PROTEIN_SIGNAL = _env_bool("MEALFIT_RENAL_UNRESOLVED_PROTEIN_SIGNAL", True)
 DM2_FIBER_G_PER_1000KCAL = _env_float("MEALFIT_DM2_FIBER_PER_1000KCAL", 14.0)  # ADA 2026 calidad de carbo
 # [P3-CONDITION-RULES · 2026-06-14] DM2: el revisor LLM escala preocupaciones glucémicas (miel,
 # plátano grande) a 'critical' → fallback matemático que pierde el plan real + la fibra ADA. Para
@@ -8439,6 +8446,22 @@ BAND_SCORE_UPPER = _env_float("MEALFIT_BAND_SCORE_UPPER", 1.12)
 # distribución real de band_score. Knob de umbral aparte.
 BAND_SCORE_GATE_ENABLED = _env_bool("MEALFIT_BAND_SCORE_GATE", False)
 BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
+
+# ── [P2-PANEL-SOFT-REJECT · 2026-06-15] Soft-reject OBSERVABLE sobre el panel de micros ya computado.
+# Cubre 4 gaps del audit (P2-4 DASH/satfat/fibra, P2-5 micros alcanzables, P2-8 sodio/azúcar, P2-13 gate
+# de condición) como sub-checks de UN helper post-scoring `_maybe_mark_panel_degraded` → marca
+# _quality_degraded (banner existente), NO hard-gate (cero loop de regen). Cada sub-check tras SU knob,
+# default OFF (user-facing + riesgo de falso positivo → opt-in tras tunear). Regla de oro: NUNCA gate-ar
+# objetivos inalcanzables (vit D / hierro 18mg femenino) → quedan FUERA de estos checks.
+# (P2-4 + P2-13) Gap CUANTITATIVO de una condición declarada fuera de banda tras los swaps:
+CONDITION_PANEL_DEGRADE_ENABLED = _env_bool("MEALFIT_CONDITION_PANEL_DEGRADE", False)
+CONDITION_PANEL_DEGRADE_MARGIN = _env_float("MEALFIT_CONDITION_PANEL_DEGRADE_MARGIN", 0.15)  # anti-ruido de redondeo
+# (P2-5) Micros ALCANZABLES con alimentos bajo el piso DRI (fibra/K/Mg/Ca). vit D/hierro/B12 EXCLUIDOS:
+MICRONUTRIENT_SOFT_REJECT_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_SOFT_REJECT", False)
+_MICRO_SOFT_REJECT_KEYS = frozenset({"fiber_g", "potassium_mg", "magnesium_mg", "calcium_mg"})
+# (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura alta (mitiga el falso positivo de sal 'al gusto'):
+SODIUM_SUGAR_DEGRADE_ENABLED = _env_bool("MEALFIT_SODIUM_SUGAR_DEGRADE", False)
+SODIUM_SUGAR_DEGRADE_MIN_COVERAGE = _env_float("MEALFIT_SODIUM_SUGAR_DEGRADE_MIN_COVERAGE", 0.75)
 
 
 def _protein_gkg_ceiling(goal) -> float:
@@ -9403,6 +9426,33 @@ def _ingredient_is_protein_dominant(s: str, db) -> bool:
     return pc >= 4 * (mc.get("carbs") or 0.0) and pc >= 9 * (mc.get("fats") or 0.0)
 
 
+def _name_matches_protein_hint(s) -> bool:
+    """[P2-RENAL-UNRESOLVED-PROTEIN · 2026-06-15] True si el NOMBRE del ingrediente sugiere proteína
+    (carne/pescado/lácteo/huevo) — reusa los hints del closer. Un vegetal/condimento/víver NO matchea."""
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        _sa = lambda x: x  # noqa: E731
+    t = _sa(str(s).lower())
+    return (any(h in t for h in _MEAT_PROTEIN_HINT) or any(h in t for h in _DAIRY_EGG_PROTEIN_HINT))
+
+
+def _ingredient_is_unresolved_protein(s, db) -> bool:
+    """[P2-RENAL-UNRESOLVED-PROTEIN · 2026-06-15] True si el ingrediente NO resuelve por NOMBRE al catálogo
+    (`db.lookup is None` — NO se usa `macros_from_ingredient_string`, que también es None por cantidad
+    no-convertible 'al gusto'/'1 lata', lo que daría falso positivo) Y el nombre sugiere proteína. Marca
+    los platos proteicos compuestos (sancocho/mondongo) cuya proteína FÍSICA el cap renal NO recortó.
+    Fail-safe. Anchor: P2-RENAL-UNRESOLVED-PROTEIN."""
+    try:
+        if db is None:
+            return False
+        if db.lookup(str(s)) is not None:
+            return False  # resuelve por nombre → el cap renal lo cubre
+        return _name_matches_protein_hint(s)
+    except Exception:
+        return False
+
+
 def _protein_preserving_day_reconcile(meals: list, daily_cals: float, db) -> bool:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Nivela las kcal del día al target PRESERVANDO la
     proteína: la proteína queda FIJA y solo se escalan carbos+grasas (macros e ingredientes
@@ -10284,12 +10334,22 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         try:
             _seen_prov = {}
             _tot_ings = _res_ings = 0  # [P4-UNIFIED-RESOLVER] cobertura de resolución (mismo loop, 0 costo extra)
+            # [P2-RENAL-UNRESOLVED-PROTEIN] detecta proteína-dominante no-resuelta en el MISMO loop (0 costo).
+            _renal_unresolved = []
+            _is_renal_for_sig = (RENAL_UNRESOLVED_PROTEIN_SIGNAL and CONDITION_RULES_ENABLED
+                                 and _is_renal_condition(form_data)
+                                 and isinstance(plan.get("renal_protein_cap"), dict)
+                                 and plan["renal_protein_cap"].get("applied"))
             for _d in plan.get("days", []) or []:
                 for _m in _d.get("meals", []) or []:
                     for _ing in _m.get("ingredients", []) or []:
                         _tot_ings += 1
                         _info = _db.lookup(str(_ing))
                         if not _info:
+                            # no-resuelto por NOMBRE: si el perfil es renal y el nombre sugiere proteína,
+                            # el cap renal no recortó su proteína física → acumular para la señal.
+                            if _is_renal_for_sig and _name_matches_protein_hint(_ing):
+                                _renal_unresolved.append(str(_ing))
                             continue
                         _res_ings += 1
                         _key = (_info.name or str(_ing)).lower()
@@ -10315,6 +10375,20 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                     "resolved": _res_ings, "total": _tot_ings, "pct": round(_res_ings / _tot_ings, 3)}
                 logger.info(f"🔎 [P4-UNIFIED-RESOLVER] Cobertura de resolución: {_res_ings}/{_tot_ings} "
                             f"({round(100 * _res_ings / _tot_ings)}%) ingredientes resueltos al catálogo")
+            # [P2-RENAL-UNRESOLVED-PROTEIN] Señal: el cap renal es INCOMPLETO si hay proteína-dominante
+            # no-resuelta (su proteína física no se recortó). Telemetría observable (NO muta porciones; NO
+            # pisa meals_enforced — usa el campo nuevo cap_complete). reason via setdefault (no pisa db_unavailable).
+            if _is_renal_for_sig and _renal_unresolved:
+                plan["_clinical_layer_incomplete"] = True
+                plan.setdefault("_clinical_layer_incomplete_reason", "renal_cap_unresolved_protein")
+                _rc = plan.get("renal_protein_cap")
+                if isinstance(_rc, dict):
+                    _rc["cap_complete"] = False
+                    _rc["unresolved_protein_items"] = _renal_unresolved[:10]
+                logger.warning(
+                    f"🛑 [P2-RENAL-UNRESOLVED-PROTEIN] cap renal incompleto: {len(_renal_unresolved)} "
+                    "ingrediente(s) proteína-dominante no resueltos (la proteína física del plato no se "
+                    "recortó; ver renal_protein_cap.unresolved_protein_items).")
         except Exception as _pv_e:
             logger.warning(f"[P3-DATA-PROVENANCE] error: {type(_pv_e).__name__}: {_pv_e}")
 
@@ -16851,6 +16925,78 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
         return False
 
 
+def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallback: bool, attempt: int) -> bool:
+    """[P2-PANEL-SOFT-REJECT · 2026-06-15] Soft-reject OBSERVABLE post-scoring sobre el panel de micros ya
+    computado (`plan['micronutrient_report']`). Cubre 4 gaps del audit como sub-checks (cada uno tras SU
+    knob, default OFF): condición declarada con target cuantitativo fuera de banda (P2-4/P2-13 →
+    reason=condition_panel_gap), micros alcanzables bajo piso (P2-5 → low_micros), sodio/azúcar sobre techo
+    con cobertura alta (P2-8 → high_sodium_sugar). Marca _quality_degraded (banner existente) con la razón
+    del PRIMER sub-check que dispara (precedencia: condición > micros > sodio/azúcar); NO pisa una razón
+    previa peor. NO fuerza retry (corre fuera del grafo) → cero loop de regen. Regla de oro: vit D / hierro
+    / B12 (inalcanzables con dieta) NUNCA disparan. Puro + fail-safe. Anchor: P2-PANEL-SOFT-REJECT."""
+    try:
+        if delivered_was_fallback or plan.get("_quality_degraded"):
+            return False
+        _mn = plan.get("micronutrient_report")
+        if not isinstance(_mn, dict):
+            return False
+        gaps = _mn.get("gaps") or []
+        reason = None
+        detail = None
+        # 1) (P2-4/P2-13) Gap cuantitativo de una CONDICIÓN DECLARADA fuera de banda (con margen anti-ruido).
+        if CONDITION_PANEL_DEGRADE_ENABLED:
+            try:
+                from condition_rules import detect_active_rules
+                _ids = {r.id for r in detect_active_rules(form_data)}
+            except Exception:
+                _ids = set()
+            _m = CONDITION_PANEL_DEGRADE_MARGIN
+            # (key, condición que lo target-ea, tipo). vit_d/iron/b12 ausentes a propósito (inalcanzables).
+            _checks = (("saturated_fat_g", "dyslipidemia", "techo"), ("sodium_mg", "hta", "techo"),
+                       ("potassium_mg", "hta", "piso"), ("magnesium_mg", "hta", "piso"),
+                       ("fiber_g", "dm2", "piso"))
+            for g in gaps:
+                _k = g.get("key")
+                _st = g.get("status")
+                for (_ck, _cid, _kind) in _checks:
+                    if _k != _ck or _cid not in _ids:
+                        continue
+                    if _kind == "techo" and _st == "alto" and g.get("techo"):
+                        if _meal_macro_num(g.get("valor")) > g["techo"] * (1 + _m):
+                            reason, detail = "condition_panel_gap", _k
+                    elif _kind == "piso" and _st == "bajo" and g.get("piso"):  # 'bajo' (NO 'estimado_bajo')
+                        if _meal_macro_num(g.get("valor")) < g["piso"] * (1 - _m):
+                            reason, detail = "condition_panel_gap", _k
+                    if reason:
+                        break
+                if reason:
+                    break
+        # 2) (P2-5) Micros ALCANZABLES con alimentos bajo el piso DRI (fibra/K/Mg/Ca), status 'bajo'.
+        if not reason and MICRONUTRIENT_SOFT_REJECT_ENABLED:
+            for g in gaps:
+                if g.get("key") in _MICRO_SOFT_REJECT_KEYS and g.get("status") == "bajo":
+                    reason, detail = "low_micros", g.get("key")
+                    break
+        # 3) (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura del catálogo alta (anti falso-positivo).
+        if not reason and SODIUM_SUGAR_DEGRADE_ENABLED:
+            _cov = _mn.get("coverage")
+            if isinstance(_cov, (int, float)) and _cov >= SODIUM_SUGAR_DEGRADE_MIN_COVERAGE:
+                for g in gaps:
+                    if g.get("key") in ("sodium_mg", "free_sugars_g") and g.get("status") == "alto":
+                        reason, detail = "high_sodium_sugar", g.get("key")
+                        break
+        if reason:
+            plan["_quality_degraded"] = True
+            plan["_quality_degraded_reason"] = reason
+            plan["_quality_degraded_severity"] = "minor"
+            plan["_quality_degraded_attempts"] = attempt
+            plan["_quality_degraded_panel_detail"] = detail
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def _compute_pipeline_holistic_score_and_emit(
     final_state: dict,
     *,
@@ -17010,6 +17156,14 @@ def _compute_pipeline_holistic_score_and_emit(
                         logger.warning(
                             f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_val:.2f} < umbral "
                             f"{BAND_SCORE_GATE_THRESHOLD} → plan marcado _quality_degraded (low_band_score)")
+                    # [P2-PANEL-SOFT-REJECT · 2026-06-15] Tras el band-gate: degrada (observable) si el panel
+                    # de micros deja un target de condición/micro/sodio-azúcar fuera de banda (cada sub-check
+                    # tras su knob, default OFF). No pisa una razón previa peor (band/max_attempts ganan).
+                    if _maybe_mark_panel_degraded(plan, actual_form_data, delivered_was_fallback,
+                                                  final_state.get("attempt", 1)):
+                        logger.warning(
+                            f"⚠️ [P2-PANEL-SOFT-REJECT] panel de micros fuera de banda → plan marcado "
+                            f"_quality_degraded (reason={plan.get('_quality_degraded_reason')})")
             except Exception as _cbs_e:
                 logger.warning(f"[P4-SCOREBOARD] emit del band score falló: {type(_cbs_e).__name__}: {_cbs_e}")
 
