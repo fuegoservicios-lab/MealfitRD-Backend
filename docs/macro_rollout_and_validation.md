@@ -72,6 +72,28 @@ en vivo. Por eso: validar con benchmark + canary ANTES de fijar el default.
 
 ---
 
+## 1b. Reconcile multi-macro (split C:F) — P1-MACRO-AWARE-RECONCILE
+
+[2026-06-15] Con el solver ON en prod, el benchmark reveló que el problema de precisión NO era la
+proteína (6% MAPE, resuelta) sino **carbos (19%) + grasas (22%)**: el reconcile de día legacy
+(`_protein_preserving_day_reconcile`) es single-factor (escala C+F juntos para clavar kcal) → no
+puede corregir el split C:F. El nuevo `_macro_aware_day_reconcile` escala carbo-dominantes→target_carbs
+y grasa-dominantes→target_fats con factores SEPARADOS (preservando proteína; el target es consistente
+kcal=4P+4C+9F → clavar C y F clava kcal). Knob `MEALFIT_MACRO_AWARE_RECONCILE`.
+
+**Validación en VPS (N=20, solver ON, concurrencia 1, OFF vs ON):**
+
+| | OFF | ON |
+|---|---|---|
+| all-4 macros en ±10% | 18.5% | **28.1%** |
+| grasas MAPE / en-banda | 22.0% / 29.6% | **10.7% / 64.9%** |
+| carbos MAPE | 19.4% | 17.9% |
+| kcal MAPE | 10.3% | 9.3% |
+| proteína MAPE | 6.2% | 7.4% (varianza de muestreo — el reconcile no toca proteína) |
+
+**Estado: ENABLED en prod** (`MEALFIT_MACRO_AWARE_RECONCILE=True` en el `.env` del VPS, 2026-06-15).
+Rollback de una línea: quitar/poner `False` en el `.env` + `sudo systemctl restart mealfit-backend`.
+
 ## 2. Validación clínica humana (P1-4)
 
 Gap estructural del audit: la banda de precisión es **autoafirmada**, sin revisión por nutricionista
