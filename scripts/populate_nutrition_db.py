@@ -105,6 +105,18 @@ MANUAL_MACROS = {
     "Salami dominicano":   (320, 16.0, 4.0, 27.0, 0, 1100, True),
 }
 
+# [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (gap-audit G5) Micros de las filas MANUAL de alto interés clínico
+# que USDA no cubre, ESTIMADOS conservadoramente desde el análogo USDA más cercano (caveat: NO trazables a
+# fdc_id; el panel los reporta y el techo coverage-aware ya no los oculta). Antes eran NULL → un plan rico en
+# embutidos reportaba satfat 'ok' a un dislipidémico (falso-negativo silencioso) + subestimaba hierro/B12 hemo.
+# (sat_fat_g, cholesterol_mg, iron_mg, b12_mcg) por 100g. Análogos: Salami→"Salami, dry/hard, pork";
+# Longaniza→"Sausage, pork, fresh, cooked"; Queso de hoja→"Cheese, queso fresco/blanco".
+MANUAL_MICROS = {
+    "Salami dominicano":    (11.0, 79.0, 1.5, 1.6),
+    "Longaniza dominicana": (10.0, 75.0, 1.3, 1.4),
+    "Queso de hoja":        (14.0, 70.0, 0.5, 0.8),
+}
+
 # --- Overrides post-auditoría [P2-MDDA-NUTRITION-AUDIT · 2026-06-13] ---
 # El heurístico "primer resultado de búsqueda" eligió alimentos errados para
 # algunos ingredientes (el ranking USDA no siempre pone el correcto primero:
@@ -251,7 +263,13 @@ def main():
                 kcal_src = MANUAL_MACROS[name]
                 p, c, fat, fiber, sodium, dd = kcal_src[1], kcal_src[2], kcal_src[3], kcal_src[4], kcal_src[5], kcal_src[6]
                 # Manual: sin micros USDA → NULL (degradación grácil en el validador).
-                vit_d = calcium = iron = b12 = sugars = potassium = None
+                vit_d = calcium = sugars = potassium = None
+                # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (G5) hierro/B12 estimados para los embutidos hemo
+                # (antes NULL → subestimaba el panel de anemia). satfat/colesterol se escriben aparte (no están
+                # en el UPDATE compartido). Si no hay estimado, queda None (degradación grácil).
+                _mm = MANUAL_MICROS.get(name)
+                iron = _mm[2] if _mm else None
+                b12 = _mm[3] if _mm else None
                 fdc, src, desc = None, "manual", "manual"
             elif name in QUERY_OVERRIDE or name in USDA_QUERY:
                 q = QUERY_OVERRIDE.get(name) or USDA_QUERY[name]
@@ -283,6 +301,15 @@ def main():
                        WHERE name=%s""",
                     (kcal, p, c, fat, fiber, sodium, vit_d, calcium, iron, b12, sugars, potassium,
                      src, fdc, dd, name))
+                # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (G5) satfat/colesterol de embutidos MANUAL en un
+                # UPDATE APARTE: NO están en el UPDATE compartido (que para filas USDA los escribiría NULL y
+                # regresaría las 84 ya pobladas). Contenido a filas manuales con estimado → cero riesgo de regresión.
+                if src == "manual" and name in MANUAL_MICROS:
+                    _satf, _chol = MANUAL_MICROS[name][0], MANUAL_MICROS[name][1]
+                    cur.execute(
+                        "UPDATE master_ingredients SET saturated_fat_g_per_100g=%s, "
+                        "cholesterol_mg_per_100g=%s WHERE name=%s",
+                        (_satf, _chol, name))
             if src == "manual":
                 manual += 1
             else:

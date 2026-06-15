@@ -338,8 +338,17 @@ def _persist_plan_persist_failed_alert(user_id: Optional[str], reason: str) -> N
         )
 
 
-def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None):
+def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_techniques: Optional[list] = None,
+                                    return_id: bool = False):
     """Background task para guardar plan y actualizar frecuencias de ingredientes.
+
+    [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] (gap-audit G2) `return_id`: cuando True, el INSERT corre
+    SÍNCRONO y PROPAGA la excepción al caller (en vez de tragarla) + retorna el UUID del plan. Lo usa el
+    branch no-chunked de `routers/plans.py`, que pre-fix hacía el INSERT como BackgroundTask fire-and-forget:
+    si fallaba, el usuario recibía 200/complete con el plan PERDIDO (historial/dashboard vacíos) y solo un
+    alert SRE — asimétrico vs el branch chunked, que falla-fuerte (`_persist_failed` → 503/error/KV-failed).
+    El tracking de frecuencias SIEMPRE es best-effort (su fallo NO afecta la persistencia ya exitosa ni se
+    propaga). Default False preserva el contrato background (tragar + alertar).
 
     [P2-PARTIAL-PLAN-1 · 2026-05-11] El parámetro `additional_db_queries`
     fue REMOVIDO. Ningún caller en producción lo usaba (verificado vía grep
@@ -450,14 +459,27 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
         # 🛡️ Dedup guard: evitar duplicados si otro código path ya guardó el plan
         if check_recent_meal_plan_exists(user_id, max_seconds=30):
             logger.info(f"🛡️ [DEDUP] Plan ya guardado recientemente para {user_id}. Omitiendo duplicado.")
-            return
+            return None
 
         # [P0-2/ATOMIC + P2-PARTIAL-PLAN-1] Cancelar chunks + liberar reservas + INSERT en
         # una sola transacción (Neon-native).
-        save_new_meal_plan_atomic(user_id, insert_data, return_id=False)
+        plan_id = save_new_meal_plan_atomic(user_id, insert_data, return_id=return_id)
         logger.debug(f"💾 [DB BACKGROUND] Plan guardado exitosamente en meal_plans para {user_id}")
+    except Exception as e:
+        # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] (gap-audit G2) Fallo del INSERT. Si el caller persiste
+        # SÍNCRONO (return_id=True), PROPAGAMOS para que marque `_persist_failed` (simétrico al branch
+        # chunked → 503/error-event/KV-failed). En modo background (return_id=False) preservamos el contrato:
+        # tragar tras alertar (el usuario ya recibió su respuesta — no podemos hacer más que alertar a SRE).
+        logger.error(f"⚠️ [BACKGROUND ERROR] Error guardando plan (INSERT): {e}")
+        _persist_plan_persist_failed_alert(user_id, f"{'sync' if return_id else 'background'}_save_failed: {e}")
+        if return_id:
+            raise
+        return None
 
-        # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad)
+    # 2. Track Frequencies (solo ingredientes canónicos que existan en los catálogos de variedad).
+    # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] Best-effort en su PROPIO try: el plan YA se persistió; un
+    # fallo de tracking NO debe propagarse al caller síncrono ni emitir 'persist_failed' (no es fallo de persistencia).
+    try:
         if raw_ingredients:
             # Conjunto de términos base canónicos (ej: "pollo", "platano verde", "aguacate")
             canonical_bases = set(GLOBAL_REVERSE_MAP.values())
@@ -510,12 +532,11 @@ def _save_plan_and_track_background(user_id: str, plan_data: dict, selected_tech
 
             
     except Exception as e:
-        logger.error(f"⚠️ [BACKGROUND ERROR] Error asíncrono guardando plan: {e}")
-        # [P2-PLAN-PERSIST-FAILED-ALERT · 2026-05-30] El save corre como
-        # BackgroundTask (post-respuesta): si falla, el usuario ya tiene el plan
-        # en pantalla pero NO queda en su historial — falla silenciosa del path de
-        # persistencia. Emitir alerta para visibilidad operacional.
-        _persist_plan_persist_failed_alert(user_id, f"background_save_failed: {e}")
+        # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] freq-tracking best-effort: el plan YA se persistió, su
+        # fallo NO afecta la entrega (NO emite persist_failed ni se propaga al caller síncrono).
+        logger.error(f"⚠️ [BACKGROUND ERROR] Error en freq-tracking del plan (no afecta persistencia): {e}")
+
+    return plan_id
 
 
 def _process_swap_rejection_background(session_id: str, user_id: str, rejected_meal: str, meal_type: str):

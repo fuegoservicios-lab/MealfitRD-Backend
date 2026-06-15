@@ -5605,6 +5605,20 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             else:
                 planner_payload = prompt_text
             res = await _safe_ainvoke(planner_llm, planner_payload, timeout=50.0)
+            # [P1-PLANNER-NONE-GUARD · 2026-06-15] El parser de structured-output
+            # (PydanticToolsParser, first_tool_only) devuelve None cuando el modelo
+            # NO emite tool-call (texto plano: posible bajo carga o thinking-disabled).
+            # Sin este guard, aguas abajo `response.model_dump()`/`.dict()` lanzaba
+            # AttributeError FUERA del scope de tenacity → el handler global lo
+            # degradaba a fallback matemático total, quemando un transient que un
+            # retry (con bump de temperatura por intento) recupera. Lo tratamos como
+            # fallo de parseo recuperable: NO `arecord_success`, raise → tenacity
+            # reintenta (ValueError no es spend-cap, el predicado de retry lo cubre)
+            # y, agotados los intentos, propaga un error TIPADO (no AttributeError).
+            if res is None:
+                raise ValueError(
+                    "[PLANIFICADOR] structured output devolvió None (modelo sin tool-call)"
+                )
             await _planner_cb.arecord_success()
             return res
         except Exception as e:
@@ -8288,6 +8302,15 @@ MACRO_AWARE_RECONCILE = _env_bool("MEALFIT_MACRO_AWARE_RECONCILE", False)
 # Default OFF → A/B-validado antes de encender en prod.
 CARB_TARGET_TRIM_ENABLED = _env_bool("MEALFIT_CARB_TARGET_TRIM", False)
 CARB_TARGET_TRIM_TOL = _env_float("MEALFIT_CARB_TARGET_TRIM_TOL", 0.10)
+# [P1-MACRO-POSTQUANT-RECONCILE · 2026-06-15] (gap-audit G4) El reconcile multi-macro corre ANTES de la
+# cuantización (FS2); la cuantización recomputa macros desde porciones redondeadas → re-introduce deriva en
+# C y F (no solo carbos sobre-target: también grasas y carbos BAJO target, que el carb-trim unidireccional
+# no toca). Causa raíz medida de carbos ~18% MAPE / all-4-en-banda ~28% incluso con el reconcile ON. Este
+# knob re-ejecuta `_macro_aware_day_reconcile` (bidireccional C+F, preserva proteína) DESPUÉS de la
+# cuantización y RE-CUANTIZA una vez: el re-snap protege los enteros (huevo/wrap → no "0.73 huevos"). Solo
+# corre si MACRO_AWARE_RECONCILE está ON (consistencia). Default True para ser efectivo donde el reconcile
+# ya está activo; rollback sin redeploy: MEALFIT_MACRO_POSTQUANT_RECONCILE=False.
+MACRO_POSTQUANT_RECONCILE = _env_bool("MEALFIT_MACRO_POSTQUANT_RECONCILE", True)
 # [P3-RECIPE-COHERENCE-AUTOFIX · 2026-06-13] Auto-fix determinista de las violaciones de
 # coherencia receta↔ingrediente que HOY rechazan+reintentan (→ retry_penalty < 1.0 en el
 # holistic). Caso "forward" (la receta menciona una proteína que no está listada → la
@@ -8407,6 +8430,13 @@ RENAL_PROTEIN_GKG_CEILING = _env_float("MEALFIT_RENAL_PROTEIN_GKG", 0.8)   # KDI
 # True (desactivarlo es una decisión deliberada de seguridad, no un efecto colateral de tunear el piso de
 # proteína). El Guard 1 del cap renal ahora se gatea por esto, NO por PROTEIN_FLOOR_ENABLED.
 RENAL_CAP_ENABLED = _env_bool("MEALFIT_RENAL_CAP", True)
+# [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (gap-audit G3) Hasta ahora `meals_enforced`/`cap_complete`
+# eran telemetría sin gate: un plan renal que NO converge bajo el techo KDIGO (0.8 g/kg) o con proteína
+# compuesta no-resuelta se ENTREGABA igual al paciente (riesgo iatrogénico). Este gate hace que
+# `review_plan_node` escale ese estado a rechazo CRÍTICO → `should_retry` retorna "end" → el guardrail
+# crítico sustituye por el fallback matemático, que está renal-capeado por construcción. Safety gate →
+# default True; flip a False revierte al comportamiento best-effort previo (entrega con disclaimer).
+RENAL_CAP_FAILHARD_GATE = _env_bool("MEALFIT_RENAL_CAP_FAILHARD_GATE", True)
 # [P2-RENAL-UNRESOLVED-PROTEIN · 2026-06-15] El cap renal recorta el NÚMERO de proteína + los
 # ingredientes RESUELTOS, pero un plato proteico COMPUESTO no-resuelto (sancocho/mondongo) deja su
 # proteína FÍSICA intacta → el cap es incompleto para ese plan. SEÑAL observable (telemetría backend +
@@ -8446,14 +8476,18 @@ FALLBACK_CLINICAL_LAYER_ENABLED = _env_bool("MEALFIT_FALLBACK_CLINICAL_LAYER", T
 BAND_SCORE_LOWER = _env_float("MEALFIT_BAND_SCORE_LOWER", 0.90)
 BAND_SCORE_UPPER = _env_float("MEALFIT_BAND_SCORE_UPPER", 1.12)
 
-# [P2-BAND-SCORE-GATE · 2026-06-15] Gate por-plan sobre el clinical_band_score: hoy un plan con la mitad de
-# las celdas día×macro fuera de banda (score bajo) se entrega IDÉNTICO a uno preciso, sin aviso. Este
-# gate marca `plan._quality_degraded=True` (reason=low_band_score) cuando el score cae bajo el umbral Y
-# no es fallback Y el plan no estaba ya marcado → dispara el banner de degradación YA EXISTENTE en el
-# frontend (honestidad: el usuario sabe que la precisión de macros fue baja). NO fuerza retry (corre
-# post-scoring, fuera del grafo). Default OFF: es user-facing → opt-in tras tunear el umbral contra la
-# distribución real de band_score. Knob de umbral aparte.
-BAND_SCORE_GATE_ENABLED = _env_bool("MEALFIT_BAND_SCORE_GATE", False)
+# [P2-BAND-SCORE-GATE · 2026-06-15 · activado P1-BAND-SCORE-GATE-ON · 2026-06-15] Gate por-plan sobre el
+# clinical_band_score: un plan con la mitad de las celdas día×macro fuera de banda (score bajo) se entregaba
+# IDÉNTICO a uno preciso, sin aviso. Este gate marca `plan._quality_degraded=True` (reason=low_band_score)
+# cuando el score cae bajo el umbral Y no es fallback Y el plan no estaba ya marcado → dispara el banner de
+# degradación YA EXISTENTE en el frontend (honestidad: el usuario sabe que la precisión de macros fue baja).
+# NO fuerza retry (corre post-scoring, fuera del grafo).
+# [gap-audit G6] ACTIVADO por default tras tunear el umbral contra la distribución REAL de prod
+# (pipeline_metrics.node='clinical_band', n=152, 2026-06-15): avg=0.707, p50=0.667, p25=0.500, min=0.167.
+# Umbral 0.5 marca SOLO la cola genuinamente pobre (≥mitad de celdas fuera de banda) — los 29 planes
+# no-fallback ≤~0.42; idéntico set a 0.45 (distribución discreta). Rollback sin redeploy:
+# MEALFIT_BAND_SCORE_GATE=False. Tras G4 (re-reconcile post-cuantización) la fracción marcada debe bajar.
+BAND_SCORE_GATE_ENABLED = _env_bool("MEALFIT_BAND_SCORE_GATE", True)
 BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
 
 # ── [P2-PANEL-SOFT-REJECT · 2026-06-15] Soft-reject OBSERVABLE sobre el panel de micros ya computado.
@@ -10384,6 +10418,33 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                             f"hacia el target ({_tc:.0f}g) con porciones cocinables")
         except Exception as _ct_e:
             logger.warning(f"[P2-CARB-TARGET-TRIM] error: {type(_ct_e).__name__}: {_ct_e}")
+
+    # ── Guard 4c (P1-MACRO-POSTQUANT-RECONCILE · gap-audit G4): re-nivela C/F DESPUÉS de la cuantización ──
+    # El reconcile multi-macro corrió ANTES de la cuantización (en assemble); la cuantización (Guard 4)
+    # recompuso macros desde porciones redondeadas → re-introdujo deriva BIDIRECCIONAL (carbos y grasas, sobre
+    # Y bajo target — el carb-trim de Guard 4b solo baja carbos sobre-target y está OFF por default). Aquí
+    # re-ejecutamos el MISMO reconcile validado (`_macro_aware_day_reconcile`: escala carbo/grasa-dominantes
+    # a target con factores separados, preserva proteína) y RE-CUANTIZAMOS una vez: el re-snap devuelve las
+    # porciones re-escaladas a unidades cocinables (los enteros —huevo/wrap— se auto-protegen, no "0.73
+    # huevos"). Una pasada reconcile→quant reduce el grueso del residual de cuantización; el remanente
+    # 'at-min' es irreducible. Solo corre si el reconcile multi-macro está activo. Fail-safe.
+    if MACRO_AWARE_RECONCILE and MACRO_POSTQUANT_RECONCILE and _db is not None:
+        try:
+            _tc_rr = _meal_macro_num(active_macros.get("carbs_str"))
+            _tf_rr = _meal_macro_num(active_macros.get("fats_str"))
+            if _tc_rr > 0 or _tf_rr > 0:
+                _rr_days = 0
+                for _d in plan.get("days", []) or []:
+                    if _macro_aware_day_reconcile(_d.get("meals", []) or [], _tc_rr, _tf_rr, _db):
+                        _rr_days += 1
+                if _rr_days:
+                    # Re-cuantizar para devolver las porciones re-niveladas a unidades cocinables.
+                    _req_n = _apply_portion_quantization(plan, _db) if PORTION_QUANTIZE_ENABLED else 0
+                    logger.info(f"🎯 [P1-MACRO-POSTQUANT-RECONCILE] Re-niveló C/F post-cuantización en "
+                                f"{_rr_days} día(s) (target C={_tc_rr:.0f}g F={_tf_rr:.0f}g) + re-cuantizó "
+                                f"{_req_n} comida(s)")
+        except Exception as _rr_e:
+            logger.warning(f"[P1-MACRO-POSTQUANT-RECONCILE] error: {type(_rr_e).__name__}: {_rr_e}")
 
     # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (espejo [P3-MICRONUTRIENTS]) ──
     if MICRONUTRIENT_REPORT_ENABLED and _db is not None:
@@ -13327,6 +13388,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # LLM. Si CUALQUIER ingrediente matchea una alergia declarada (+ sinónimos), rechazo
     # CRÍTICO inmediato → regen con directiva. Para alérgenos, jamás servir > comodidad.
     _had_allergen_critical = False  # [P3-CONDITION-RULES] marca criticals que NO deben degradarse
+    _had_renal_critical = False     # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] idem para el techo renal (G3)
     if ALLERGEN_HARD_GUARD and _has_real_medical_flags(allergies):
         _allergen_viol = _scan_allergen_violations(plan, allergies)
         if _allergen_viol:
@@ -13386,6 +13448,41 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     severity = _severity_max(severity, "high")
         except Exception as _pf_e:
             logger.warning(f"[P3-PROTEIN-FLOOR] validador falló: {type(_pf_e).__name__}: {_pf_e}")
+
+    # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (gap-audit G3) Techo renal de proteína como GATE, no
+    # telemetría. El cap renal (KDIGO 0.8 g/kg) es seguridad iatrogénica: en ERC el EXCESO de proteína
+    # daña. Hasta ahora, si el trim per-comida NO convergía (`meals_enforced=False`: algún día sigue
+    # sobre el techo) o había proteína-dominante compuesta NO resuelta (`cap_complete=False`: sancocho/
+    # mondongo cuya proteína FÍSICA no se recortó), esos flags eran telemetría que `should_retry` NUNCA
+    # leía → el plan sobre-proteico se entregaba al paciente renal con un disclaimer. Un plan numéricamente
+    # sobre el techo + nota NO es un plan dentro del techo. Aquí escalamos a CRÍTICO → `should_retry`
+    # retorna "end" → `_apply_critical_review_guardrails` sustituye por el fallback matemático, que está
+    # renal-capeado POR CONSTRUCCIÓN (`_apply_renal_cap_to_nutrition` capa la nutrition de origen +
+    # `_renal_exit_safety_net`). Marcamos `_had_renal_critical` para que el soft-reject DM2 (comórbido
+    # DM2+ERC es común) NO degrade este critical a 'high'. Gate de rollback: MEALFIT_RENAL_CAP_FAILHARD_GATE.
+    if RENAL_CAP_FAILHARD_GATE and _renal_capped_plan:
+        _rcap_info = plan.get("renal_protein_cap") or {}
+        _meals_unsafe = _rcap_info.get("meals_enforced") is False
+        _cap_incomplete = _rcap_info.get("cap_complete") is False
+        if _meals_unsafe or _cap_incomplete:
+            _renal_reason = ("el recorte per-comida no convergió bajo el techo (meals_enforced=False)"
+                             if _meals_unsafe
+                             else "hay proteína de platos compuestos sin resolver, no recortable "
+                                  "(cap_complete=False)")
+            logger.error(
+                f"🛑 [P1-RENAL-CAP-FAILHARD-GATE] Plan renal sobre el techo de proteína KDIGO "
+                f"(0.8 g/kg): {_renal_reason} → rechazo CRÍTICO. Se entregará el fallback matemático "
+                f"renal-capeado en vez del plan LLM sobre-proteico."
+            )
+            approved = False
+            _had_renal_critical = True
+            issues.append(
+                "TECHO RENAL DE PROTEÍNA VIOLADO (rechazo de seguridad clínica ERC): el plan supera el "
+                "cap de proteína KDIGO (0.8 g/kg para ERC G3-G5 no-diálisis) y no pudo recortarse de "
+                f"forma segura ({_renal_reason}). En enfermedad renal el exceso de proteína es "
+                "iatrogénico; se entrega un plan de contingencia renal-capeado en su lugar."
+            )
+            severity = _severity_max(severity, "critical")
 
     # [P3-VARIETY-HARD-GATE · 2026-06-13] Cap de huevo como restricción DURA (era advisory FS5).
     # Si el huevo aparece en > cap + slack comidas, rechaza → retry con directiva. ACOTADO por
@@ -13809,6 +13906,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
         # profesional, en vez de un plan de contingencia genérico. Knob MEALFIT_DM2_GLYCEMIC_SOFT_REJECT.
         if (DM2_GLYCEMIC_SOFT_REJECT and CONDITION_RULES_ENABLED and severity == "critical"
                 and not plan.get("_schema_invalid") and not _had_allergen_critical
+                and not _had_renal_critical  # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (G3) ERC comórbida: no degradar el techo renal
                 and _is_diabetes_condition(form_data)):
             logger.warning("🩸 [P3-CONDITION-RULES] DM2: rechazo glucémico CRÍTICO degradado a 'high' "
                            "→ entrega el plan real (con fibra ADA) + advertencia, no fallback matemático.")

@@ -98,6 +98,15 @@ _SUPPLEMENT_NOTE = {
                        "usa cocción al horno/plancha/hervido y grasas insaturadas (aguacate, aceite de oliva).",
 }
 
+# [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (gap-audit G5) Umbral de cobertura POR-NUTRIENTE bajo el cual un
+# TECHO en apariencia 'ok' se reporta 'estimado_alto' (incierto). Mismo 0.6 que el 'estimado_bajo' de los
+# pisos, para simetría. Caveat honesto para el panel/PDF.
+_CEILING_COVERAGE_FLOOR = 0.6
+_CEILING_ESTIMADO_NOTE = ("Estimado: algunos ingredientes no tienen dato de este nutriente en el catálogo, "
+                          "por lo que el total mostrado puede estar SUBESTIMADO y el valor real superar el "
+                          "techo. Verifícalo con tu nutricionista, especialmente si tienes una condición "
+                          "cardiometabólica.")
+
 
 # [P4-UNIFIED-RESOLVER · 2026-06-14] Detección de HTA y dislipidemia para los targets condicionales
 # (DASH Mg/K, techo de grasa saturada) — SSOT de términos en constants (mismo registro del motor).
@@ -150,6 +159,16 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
     acc = {k: 0.0 for k in ("fiber_g", "sodium_mg", "free_sugars_g", "vit_d_mcg",
                             "calcium_mg", "iron_mg", "b12_mcg", "potassium_mg",
                             "magnesium_mg", "saturated_fat_g")}  # [P4] DASH Mg + dislipidemia satfat
+    # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (gap-audit G5) Cobertura POR-NUTRIENTE: de los ingredientes
+    # RESUELTOS, cuántos traían dato NO-NULL de cada micro. `coverage` (global) NO basta para los TECHOS:
+    # un ingrediente puede resolver (tiene macros) pero traer la columna del micro NULL (p.ej. embutidos DD
+    # con saturated_fat_g sin poblar) → suma 0.0 → el techo reportaría 'ok' falso para un dislipidémico. La
+    # cobertura por-nutriente distingue "0 real" de "0 por NULL" → permite reportar 'estimado_alto' (incierto).
+    _SRC_KEY = {"fiber_g": "fiber", "sodium_mg": "sodium_mg", "vit_d_mcg": "vit_d_mcg",
+                "calcium_mg": "calcium_mg", "iron_mg": "iron_mg", "b12_mcg": "b12_mcg",
+                "potassium_mg": "potassium_mg", "magnesium_mg": "magnesium_mg",
+                "saturated_fat_g": "saturated_fat_g"}
+    present = {k: 0 for k in _SRC_KEY}
     total_ings = resolved_ings = 0
     for day in days:
         for meal in day.get("meals", []) or []:
@@ -168,12 +187,19 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
                 acc["potassium_mg"] += m.get("potassium_mg") or 0.0
                 acc["magnesium_mg"] += m.get("magnesium_mg") or 0.0           # [P4-UNIFIED-RESOLVER]
                 acc["saturated_fat_g"] += m.get("saturated_fat_g") or 0.0     # [P4-UNIFIED-RESOLVER]
+                # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] cuenta presencia NO-NULL por micro (G5).
+                for _ak, _sk in _SRC_KEY.items():
+                    if m.get(_sk) is not None:
+                        present[_ak] += 1
                 ing_low = str(ing).lower()
                 if any(t in ing_low for t in _ADDED_SUGAR_TERMS):
                     acc["free_sugars_g"] += m.get("sugars_g") or 0.0
     daily = {k: round(v / num_days, 1) for k, v in acc.items()}
     coverage = round(resolved_ings / total_ings, 2) if total_ings else 0.0
-    return {"daily": daily, "coverage": coverage,
+    # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (G5) fracción de resueltos con dato NO-NULL por micro.
+    nutrient_coverage = {k: (round(present[k] / resolved_ings, 2) if resolved_ings else 0.0)
+                         for k in present}
+    return {"daily": daily, "coverage": coverage, "nutrient_coverage": nutrient_coverage,
             "resolved_ings": resolved_ings, "total_ings": total_ings, "num_days": num_days}
 
 
@@ -181,8 +207,10 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                                conditions=None, daily_kcal: float | None = None,
                                fiber_per_1000kcal: float = _DM2_FIBER_PER_1000KCAL) -> dict:
     """Reporte advisory: panel de micros diarios vs DRI/WHO con status + nota accionable.
-    status ∈ {ok, bajo, alto, estimado_bajo}. Floors incumplidos con cobertura parcial →
-    'estimado_bajo' (incierto, puede subir con lo no resuelto). NO rechaza el plan.
+    status ∈ {ok, bajo, alto, estimado_bajo, estimado_alto}. Floors incumplidos con cobertura
+    parcial → 'estimado_bajo' (incierto, puede subir con lo no resuelto). Techos en apariencia
+    'ok' pero con cobertura POR-NUTRIENTE parcial → 'estimado_alto' (incierto, el real puede
+    superar el techo — dirección peligrosa, G5). NO rechaza el plan.
 
     [P3-CONDITION-RULES] Si `conditions` incluye diabetes, eleva el PISO de fibra a la regla
     ADA 2026 de calidad del carbohidrato (≥14 g/1000 kcal, usando `daily_kcal`) en vez del DRI
@@ -245,16 +273,30 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
             "actual": daily.get("iron_mg", 0.0),
         })
     panel, gaps = [], []
+    nutrient_coverage = totals.get("nutrient_coverage", {})
     for key, tgt in targets.items():
         val = daily.get(key, 0.0)
         unit = tgt["unit"]
         if "ceiling" in tgt:
             ceil = tgt["ceiling"]
-            status = "alto" if val > ceil else "ok"
+            # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (G5) La dirección PELIGROSA de un techo es la
+            # SUB-estimación (real > techo pero reportamos 'ok'). Si la cobertura POR-NUTRIENTE es parcial
+            # (ingredientes resueltos con la columna NULL — p.ej. embutidos DD sin satfat poblado), el total
+            # está subestimado → 'estimado_alto' (incierto + caveat), NUNCA 'ok' liso. Simétrico a 'estimado_bajo'.
+            _ncov = nutrient_coverage.get(key, coverage)
+            if val > ceil:
+                status = "alto"
+            elif _ncov < _CEILING_COVERAGE_FLOOR:
+                status = "estimado_alto"
+            else:
+                status = "ok"
             entry = {"nutriente": _LABELS[key], "key": key, "valor": val, "unidad": unit,
-                     "techo": ceil, "status": status}
+                     "techo": ceil, "status": status, "cobertura_nutriente": _ncov}
             if status == "alto":
                 entry["nota"] = _SUPPLEMENT_NOTE.get(key, "")
+                gaps.append(entry)
+            elif status == "estimado_alto":
+                entry["nota"] = _CEILING_ESTIMADO_NOTE
                 gaps.append(entry)
         else:
             floor = tgt["floor"]

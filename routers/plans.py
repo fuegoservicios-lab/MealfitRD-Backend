@@ -1501,12 +1501,26 @@ def _postprocess_pipeline_result(
         if plan_id:
             result["id"] = plan_id
     elif actual_user_id:
-        # [P0-5] Persistencia vía BackgroundTasks (no daemon thread): sobrevive
-        # SIGTERM con el grace period del worker.
-        background_tasks.add_task(
-            _save_plan_and_track_background,
-            actual_user_id, result, selected_techniques,
-        )
+        # [P1-NONCHUNKED-PERSIST-SYNC · 2026-06-15] (gap-audit G2) Persistir SÍNCRONO, no fire-and-forget.
+        # Pre-fix el INSERT corría como BackgroundTask: si fallaba (pool exhaustion, statement_timeout, CHECK
+        # I8, serialization), el usuario recibía 200/complete con el plan PERDIDO (historial/dashboard vacíos)
+        # y solo un alert SRE — asimétrico vs el branch chunked, que setea `_persist_failed` →
+        # 503/error-event/KV-failed en los 3 consumidores (sync L2582, SSE L3410, done-callback L3082). Ahora
+        # persistimos inline y, si el INSERT falla, marcamos `_persist_failed` para que esos mismos
+        # consumidores lo propaguen. El tracking de frecuencias sigue siendo best-effort dentro del helper.
+        try:
+            _pid = _save_plan_and_track_background(
+                actual_user_id, result, selected_techniques, return_id=True,
+            )
+            if _pid:
+                result["id"] = _pid
+        except Exception as _persist_e:
+            result["_persist_failed"] = True
+            logger.error(
+                f"🛑 [P2-PLAN-PERSIST-FAILED] Persistencia no-chunked falló inline para "
+                f"user={actual_user_id}: {type(_persist_e).__name__}: {_persist_e}. "
+                f"Propagando como error (el alert ya se emitió en _save_plan_and_track_background)."
+            )
         from cron_tasks import _seed_emergency_backup_if_empty
         background_tasks.add_task(
             _seed_emergency_backup_if_empty,
