@@ -100,13 +100,17 @@ def test_g12_noop_above_floor(monkeypatch):
     assert "_quality_degraded" not in plan
 
 
-def test_g12_default_off(monkeypatch):
-    """Default OFF (opt-in tras medir distribución): con el gate apagado, no marca aunque cobertura sea baja."""
+def test_g12_enabled_by_default():
+    """ACTIVADO por default tras medir la distribución de cobertura en prod (16 planes: avg 0.936, 0 bajo
+    0.7) → con floor 0.7 no hay false-flags hoy pero queda la red de transparencia lista."""
+    assert go.RESOLUTION_COVERAGE_GATE_ENABLED is True
+    assert 0.0 < go.RESOLUTION_COVERAGE_FLOOR <= 1.0
+
+
+def test_g12_disabled_is_noop(monkeypatch):
+    """Rollback (MEALFIT_RESOLUTION_COVERAGE_GATE=False): con el gate apagado no marca aunque cobertura sea baja."""
     monkeypatch.setattr(go, "RESOLUTION_COVERAGE_GATE_ENABLED", False)
     assert go._maybe_mark_low_resolution_degraded(_plan_cov(0.1), False) is False
-    # Y el default real del módulo es False.
-    import importlib
-    assert go.RESOLUTION_COVERAGE_GATE_ENABLED in (True, False)  # smoke: existe el knob
 
 
 def test_g12_noop_for_fallback(monkeypatch):

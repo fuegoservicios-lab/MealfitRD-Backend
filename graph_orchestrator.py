@@ -8315,10 +8315,12 @@ MACRO_POSTQUANT_RECONCILE = _env_bool("MEALFIT_MACRO_POSTQUANT_RECONCILE", True)
 # resolución del plan (fracción de ingredientes que resuelven al catálogo de macros) cae bajo el piso →
 # marca _quality_degraded (reason=composite_dish_unresolved). Platos criollos compuestos (sancocho/mangú/
 # moro/locrío) no existen como filas → 0-silencioso: los macros ASERTADOS pueden divergir de los físicos.
-# Default OFF (opt-in tras medir la distribución de cobertura en prod, como el band-gate G6 — hoy 0 planes
-# con coverage persistida). Floor 0.7 (sugerido por el audit). La población de N platos compuestos es trabajo
-# de datos diferido (la otra mitad de G12).
-RESOLUTION_COVERAGE_GATE_ENABLED = _env_bool("MEALFIT_RESOLUTION_COVERAGE_GATE", False)
+# ACTIVADO por default tras medir la distribución REAL en prod (16 planes no-fallback, 2026-06-15):
+# avg 0.936, min 0.878, p25 0.918, p50 0.937 — CERO planes bajo 0.7. Con floor 0.7 el gate NO produce
+# false-flags hoy (nada cae bajo el piso) pero queda como red de transparencia lista: si un plan futuro es
+# criollo-pesado (coverage < 0.7) dispara el banner composite_dish_unresolved. La población de N platos
+# compuestos como filas del catálogo es trabajo de datos diferido (la otra mitad de G12). Rollback: =False.
+RESOLUTION_COVERAGE_GATE_ENABLED = _env_bool("MEALFIT_RESOLUTION_COVERAGE_GATE", True)
 RESOLUTION_COVERAGE_FLOOR = _env_float("MEALFIT_RESOLUTION_COVERAGE_FLOOR", 0.7)
 # [P3-RECIPE-COHERENCE-AUTOFIX · 2026-06-13] Auto-fix determinista de las violaciones de
 # coherencia receta↔ingrediente que HOY rechazan+reintentan (→ retry_penalty < 1.0 en el
