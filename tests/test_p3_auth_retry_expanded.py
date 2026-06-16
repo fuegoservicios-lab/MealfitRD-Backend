@@ -42,6 +42,28 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+# [P1-NEON-AUTH-MIGRATION · 2026-06-13 · retirado 2026-06-16] OBSOLETO.
+# Este archivo cubría el retry de `get_verified_user_id` ante blips de red de la
+# Supabase Auth API (httpx RemoteProtocolError/ReadError/etc.). La migración a Neon
+# Auth reescribió la verificación: ahora se valida el JWT EdDSA LOCALMENTE contra el
+# JWKS cacheado (`neon_auth.verify_neon_jwt`), SIN roundtrip de red por request — así
+# que `_TRANSIENT_NETWORK_ERRORS`, el attempt-guard del retry y el `raise HTTPException(403)`
+# dentro de `auth.py` desaparecieron POR DISEÑO (el contrato fail-secure ahora es
+# `return None`; el 403 lo emiten los callers de rutas protegidas).
+# La invariante de seguridad P0-AUDIT-1 (token inválido → None, jamás un claim no
+# verificado, sin leak de detalle, algoritmo fijo anti-confusion) se PRESERVA en
+# `neon_auth.verify_neon_jwt` y está cubierta por tests VIVOS:
+#   - tests/test_p0_audit_1_auth_bypass.py
+#   - tests/test_p1_neon_auth_migration.py
+# Se retira (no se reescribe) para no duplicar esa cobertura. Si Neon Auth añadiera
+# en el futuro un retry de red propio, escribir un test nuevo contra `neon_auth`.
+pytest.skip(
+    "Obsoleto por P1-NEON-AUTH-MIGRATION: el retry contra la Supabase Auth API ya no "
+    "existe (Neon valida JWTs localmente). Seguridad P0-AUDIT-1 cubierta por "
+    "test_p0_audit_1_auth_bypass.py + test_p1_neon_auth_migration.py.",
+    allow_module_level=True,
+)
+
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _AUTH_PY = _BACKEND_ROOT / "auth.py"
 
