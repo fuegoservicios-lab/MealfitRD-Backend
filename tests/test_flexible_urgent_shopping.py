@@ -46,11 +46,19 @@ def test_flexible_mode_urgent_shopping_and_missing_ingredients():
     
     if _safe is not True:
         # P0-3: Parse missing ingredients
+        # [PANTRY GUARD] El string de rechazo de validate_ingredients_against_pantry
+        # lista los faltantes como "- Ingredientes COMPLETAMENTE INEXISTENTES en
+        # inventario: <a, b, c>.\n" (constants.py:2392). El marker es
+        # "INEXISTENTES en inventario:" y la línea termina en ".\n"; recortamos el
+        # punto final para extraer el nombre crudo del item.
         _missing = []
         if isinstance(_safe, str):
-            if "INEXISTENTES:" in _safe:
-                parts = _safe.split("INEXISTENTES:")[1].split(" | ")[0]
-                _missing.extend([i.strip() for i in parts.split(",") if i.strip()])
+            _marker = "INEXISTENTES en inventario:"
+            if _marker in _safe:
+                # Tomar el texto tras el marker hasta el fin de línea, sin el "." final.
+                _line = _safe.split(_marker, 1)[1].splitlines()[0]
+                _line = _line.rstrip().rstrip(".")
+                _missing.extend([i.strip() for i in _line.split(",") if i.strip()])
             if "matemáticamente" in _safe.lower():
                 _missing.append("Cantidades insuficientes (ver receta)")
 

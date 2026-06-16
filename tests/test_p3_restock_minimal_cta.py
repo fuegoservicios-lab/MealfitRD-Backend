@@ -88,21 +88,36 @@ def test_button_uses_minimal_classname(src: str) -> None:
 
 
 def test_button_bg_is_white(src: str) -> None:
-    """[P3-RESTOCK-MINIMAL-CTA] el botón ya no usa gradient verde — su
-    background inline es `#FFFFFF`."""
+    """[P3-RESTOCK-MINIMAL-CTA] el botón ya no usa gradient verde saturado.
+
+    [RESTOCK-CTA-COLOR · 2026-06-01] El rediseño posterior movió los colores
+    de inline a la clase CSS `.restock-cta-minimal` (para tematizar por
+    `data-theme`) y cambió el bg blanco plano por un tinte emerald suave
+    (`rgba(16, 185, 129, 0.10)`) — NO el verde saturado loud legacy. El
+    invariante que perdura: el gradient verde 135deg legacy NO está, y el
+    bg vive en CSS (no inline white)."""
     # El botón pre-fix tenía `background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)'`.
     # Verificamos que esa string específica NO está en la zona del botón.
     handler_idx = src.find("setShowRestockModal(true)")
     body = src[max(0, handler_idx - 200):handler_idx + 1500]
-    assert "background: '#FFFFFF'" in body, (
-        "[P3-RESTOCK-MINIMAL-CTA] el botón 'Ya compré todo' debe tener "
-        "`background: '#FFFFFF'` (blanco minimal). Si tiene gradient verde, "
-        "rompió la decisión de producto."
-    )
     assert "linear-gradient(135deg, #10B981 0%, #059669 100%)" not in body, (
         "[P3-RESTOCK-MINIMAL-CTA] el gradient verde legacy NO debe estar "
         "en el botón 'Ya compré todo'. Si reapareció, regresa al diseño "
         "saturado."
+    )
+    # Colores movidos a CSS class (RESTOCK-CTA-COLOR): tinte emerald suave,
+    # NO el verde saturado del gradient legacy.
+    cta_block = re.search(
+        r"\.restock-cta-minimal\s*\{(?P<body>[^}]+)\}",
+        src,
+        re.DOTALL,
+    )
+    assert cta_block, "CSS class .restock-cta-minimal no encontrada"
+    assert "background: rgba(16, 185, 129, 0.10)" in cta_block.group("body"), (
+        "[P3-RESTOCK-MINIMAL-CTA] el botón 'Ya compré la lista' debe usar el "
+        "tinte emerald suave `rgba(16, 185, 129, 0.10)` definido en CSS "
+        "(RESTOCK-CTA-COLOR · 2026-06-01). Si tiene gradient verde saturado, "
+        "rompió la decisión de producto."
     )
 
 
@@ -136,13 +151,21 @@ def test_button_dot_pulse_css_defined(src: str) -> None:
 
 
 def test_button_hover_uses_slate_border(src: str) -> None:
-    """[P3-RESTOCK-MINIMAL-CTA] hover oscurece el borde a slate-900 (no
-    a verde saturado). Coherente con paleta del sitio."""
+    """[P3-RESTOCK-MINIMAL-CTA] el botón tiene una regla de hover sobre el
+    borde.
+
+    [RESTOCK-CTA-COLOR / RESTOCK-CTA-HOVER-GLOW · 2026-06-01] El rediseño
+    posterior cambió el botón de outline-blanco-con-borde-slate a un tinte
+    emerald on-brand; consecuentemente el hover ahora intensifica el borde
+    emerald (`rgba(16, 185, 129, 0.6)`) + glow, NO el slate-900 del diseño
+    inicial. El invariante que perdura: existe una regla de hover que
+    oscurece/intensifica `border-color` del botón."""
     assert ".restock-cta-minimal:hover:not(:disabled)" in src
-    assert "border-color: #0F172A" in src, (
-        "[P3-RESTOCK-MINIMAL-CTA] hover del botón debe usar "
-        "`border-color: #0F172A` (slate-900 = --text-main). Si usa verde, "
-        "rompe la coherencia con paleta."
+    assert "border-color: rgba(16, 185, 129, 0.6)" in src, (
+        "[P3-RESTOCK-MINIMAL-CTA] hover del botón debe intensificar "
+        "`border-color: rgba(16, 185, 129, 0.6)` (emerald on-brand, "
+        "RESTOCK-CTA-COLOR · 2026-06-01). Si pierde la regla de hover sobre "
+        "el borde, regresa al botón plano sin feedback."
     )
 
 
@@ -204,13 +227,17 @@ def test_modal_icon_outline_no_heavy_bg(src: str) -> None:
         "verde debe estar removido."
     )
     # Nuevo: container 56×56 con border slate-200.
+    # [RESTOCK-CTA-COLOR · 2026-06-01] El borde literal #E2E8F0 se movió a la
+    # variable de tema `var(--border)` (que en claro ES #E2E8F0 = slate-200,
+    # index.css:283) para tematizar por data-theme. Mismo intent, themed.
     new_icon_pattern = re.compile(
-        r"width:\s*'56px',\s*height:\s*'56px'[^}]*?border:\s*'1\.5px solid #E2E8F0'",
+        r"width:\s*'56px',\s*height:\s*'56px'[^}]*?border:\s*'1\.5px solid var\(--border\)'",
         re.DOTALL,
     )
     assert new_icon_pattern.search(src), (
         "[P3-RESTOCK-MINIMAL-CTA] el icon container nuevo debe ser 56×56 con "
-        "border slate-200 (#E2E8F0) y background blanco — outline minimal."
+        "border `var(--border)` (slate-200 #E2E8F0 en claro) y background "
+        "themed — outline minimal."
     )
 
 
@@ -285,10 +312,14 @@ def test_modal_cancel_is_text_link_not_button(src: str) -> None:
         "[P3-RESTOCK-MINIMAL-CTA] `.restock-modal-cancel` debe tener "
         "`background: transparent` (text-link, no botón colorido)."
     )
-    assert "color: #94A3B8;" in body, (
+    # [RESTOCK-CTA-COLOR / RESTOCK-MODAL-DARK · 2026-06-01] El color literal
+    # se movió a la variable de tema `var(--text-muted)` (gris discreto,
+    # tematizado por data-theme) para que el cancel link siga siendo legible
+    # en modo oscuro. Mismo intent (gris discreto que no compite con el CTA).
+    assert "color: var(--text-muted);" in body, (
         "[P3-RESTOCK-MINIMAL-CTA] `.restock-modal-cancel` debe usar "
-        "`color: #94A3B8` (--text-light, gris discreto). Pre-fix también "
-        "lo usaba, mantener para consistencia con el resto del sitio."
+        "`color: var(--text-muted)` (gris discreto themed, RESTOCK-MODAL-DARK "
+        "· 2026-06-01). Mantener para consistencia con el resto del sitio."
     )
 
 

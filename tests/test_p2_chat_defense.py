@@ -221,16 +221,35 @@ def test_reduced_motion_media_query_present(index_css_src: str):
     )
 
 
+def _reduced_motion_universal_block(index_css_src: str) -> str:
+    """Devuelve el cuerpo del bloque `@media (prefers-reduced-motion: reduce)`
+    que target el selector universal (`*`).
+
+    [P2-CHAT-DEFENSE drift 2026-05-19→] index.css ahora tiene DOS bloques
+    `@media (prefers-reduced-motion: reduce)`: uno pre-existente acotado a
+    `.mf-cta-btn` (`transform: none`) y el bloque P2-REDUCED-MOTION universal
+    (`*, *::before, *::after { animation-duration: 0.01ms !important; ... }`).
+    El `re.search` non-greedy original matcheaba el PRIMER bloque (el de
+    `.mf-cta-btn`), que no contiene las reglas universales → falso rojo. Aquí
+    enumeramos todos los bloques y seleccionamos el universal."""
+    blocks = re.findall(
+        r"@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)\s*\{([\s\S]*?)\n\}",
+        index_css_src,
+    )
+    assert blocks, "Bloque @media (prefers-reduced-motion) no parseable."
+    universal = [b for b in blocks if re.search(r"(^|[\s,{])\*[\s,{]", b)]
+    assert universal, (
+        "P2-REDUCED-MOTION: ningún bloque `@media (prefers-reduced-motion: "
+        "reduce)` target el selector universal `*`. El reset global de "
+        "animaciones debe aplicar a todo el árbol."
+    )
+    return universal[0]
+
+
 def test_reduced_motion_universal_selector_targets_animations(index_css_src: str):
     """El bloque media query debe target `*` (universal) con
     `animation-duration: 0.01ms !important`."""
-    # Match el bloque entero
-    m = re.search(
-        r"@media\s*\(\s*prefers-reduced-motion[\s\S]*?\{([\s\S]*?)\n\}",
-        index_css_src,
-    )
-    assert m, "Bloque @media no parseable."
-    block = m.group(1)
+    block = _reduced_motion_universal_block(index_css_src)
     assert re.search(r"animation-duration\s*:\s*0\.01ms\s*!important", block), (
         "P2-REDUCED-MOTION: la regla `animation-duration: 0.01ms !important` no "
         "está en el bloque. Sin ella, animaciones siguen corriendo full speed."
@@ -245,12 +264,7 @@ def test_reduced_motion_overrides_smooth_scroll(index_css_src: str):
     """El bloque debe override `scroll-behavior: auto` — `.messages-container`
     tiene `scrollBehavior: 'smooth'` inline que dispararía smooth scroll
     incluso con reduced-motion preference."""
-    m = re.search(
-        r"@media\s*\(\s*prefers-reduced-motion[\s\S]*?\{([\s\S]*?)\n\}",
-        index_css_src,
-    )
-    assert m
-    block = m.group(1)
+    block = _reduced_motion_universal_block(index_css_src)
     assert re.search(r"scroll-behavior\s*:\s*auto\s*!important", block), (
         "P2-REDUCED-MOTION: `scroll-behavior: auto !important` no encontrado. "
         "Sin él, el smooth scroll inline del .messages-container ignora el "

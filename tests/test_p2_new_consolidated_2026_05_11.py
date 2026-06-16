@@ -126,8 +126,15 @@ def test_p2_new_4_recalc_request_includes_plan_id():
     src = pantry_fp.read_text(encoding="utf-8")
     recalc_idx = src.find("recalculate-shopping-list")
     assert recalc_idx > 0
-    # Buscar JSON.stringify dentro de ventana razonable.
-    body_block = src[recalc_idx:recalc_idx + 1200]
+    # Buscar `plan_id` en una ventana alrededor del fetch al recalc.
+    # [stale-parser fix · 2026-06-16] El body se extrajo a un const
+    # `recalcBody = JSON.stringify({... plan_id: planData?.id })` que se
+    # construye ANTES del fetch URL (líneas ~936-949) y se pasa como
+    # `body: recalcBody`. Antes el `JSON.stringify` venía inline DESPUÉS
+    # de la URL, así que la ventana solo miraba hacia adelante. Ahora la
+    # ventana cubre ±1200 chars para capturar el body declarado antes del
+    # fetch — la propiedad protegida (request incluye plan_id) es idéntica.
+    body_block = src[max(0, recalc_idx - 1200):recalc_idx + 1200]
     assert "plan_id" in body_block, (
         "P2-NEW-4 regresión: request al recalc ya no incluye `plan_id`. "
         "Sin él, backend no puede detectar drift entre client local "

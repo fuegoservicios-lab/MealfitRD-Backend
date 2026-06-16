@@ -34,16 +34,30 @@ def agent_page_src() -> str:
 
 
 def test_header_title_says_mealfit_v1_0(agent_page_src: str):
-    """El `<span className="agent-header-title">` debe contener `Mealfit V1.0`."""
-    # Match flexible: cualquier whitespace alrededor del texto dentro del span.
-    pattern = re.compile(
-        r'className\s*=\s*["\']agent-header-title["\'][\s\S]*?>\s*Mealfit V1\.0\s*<'
+    """El `<span className="agent-header-title">` debe contener `Mealfit V1.0`.
+
+    El `V1.0` se envuelve en un `<span>` anidado con su propia font-family
+    (versioning visible), así que el texto del header es
+    `Mealfit <span ...>V1.0</span>`. El regex tolera markup anidado entre
+    `Mealfit` y `V1.0` — lo que importa es que ambos tokens aparezcan, en
+    orden, dentro del span del título (cierre `</span>` del nested + el del
+    header dejan el texto renderizado como "Mealfit V1.0").
+    """
+    # Localizar la apertura del span del título y acotar a su contenido.
+    open_re = re.compile(r'className\s*=\s*["\']agent-header-title["\'][\s\S]*?>')
+    m_open = open_re.search(agent_page_src)
+    assert m_open is not None, (
+        "P3-AGENT-HEADER-TITLE regresión: `<span className=\"agent-header-title\">` "
+        "no encontrado en AgentPage.jsx."
     )
-    assert pattern.search(agent_page_src), (
+    after_open = agent_page_src[m_open.end():m_open.end() + 600]
+    # `Mealfit` … (markup anidado opcional) … `V1.0`, en ese orden.
+    pattern = re.compile(r"Mealfit\b[\s\S]*?V1\.0")
+    assert pattern.search(after_open), (
         "P3-AGENT-HEADER-TITLE regresión: el `<span className=\"agent-header-title\">` "
-        "NO contiene `Mealfit V1.0`. Si refactorizaste el header, mantén el "
-        "texto exacto — versioning visible al usuario. Cambiar a otra versión "
-        "es OK; sustituir Y actualizar este test en el mismo commit."
+        "NO contiene `Mealfit` seguido de `V1.0`. Si refactorizaste el header, "
+        "mantén ambos tokens — versioning visible al usuario. Cambiar a otra "
+        "versión es OK; sustituir Y actualizar este test en el mismo commit."
     )
 
 

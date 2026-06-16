@@ -330,7 +330,13 @@ def test_cascade_cron_registered():
         c for c in fake_scheduler.add_job.call_args_list
         if c.kwargs.get("id") == "alert_scheduler_cascade_missed"
     )
-    assert cascade_call.args[0] is _alert_scheduler_cascade_missed
+    # [test fix · P2-CRON-CORRELATION] _add_job_jittered envuelve la func del cron
+    # en `_corr_wrapped` (scope de correlation_id, default ON) vía functools.wraps,
+    # que preserva __name__ y setea __wrapped__ → la func que llega a add_job NO es
+    # la bare function sino el wrapper. Desenvolver con __wrapped__ recupera la
+    # identidad exacta (assert sigue siendo fuerte: liga al objeto de prod).
+    scheduled_fn = getattr(cascade_call.args[0], "__wrapped__", cascade_call.args[0])
+    assert scheduled_fn is _alert_scheduler_cascade_missed
     assert cascade_call.args[1] == "interval"
     assert "minutes" in cascade_call.kwargs
     # Default 30 min + clamp >=5.

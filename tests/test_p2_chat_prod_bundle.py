@@ -120,8 +120,14 @@ def test_p2_1_emit_after_record_success(agent_src: str) -> None:
         "ese path."
     )
     # Best-effort: el emit DEBE estar envuelto en try/except.
+    # [P3-CHAT-NODE-EXPLICIT drift 2026-05-20] Permitimos líneas de comentario
+    # entre el lazy import y la llamada (prod insertó el comment que explica el
+    # `node='chat_call_model'` explícito). El intent del assert es idéntico:
+    # `try:` → lazy import → emit, todo dentro del mismo bloque try/except.
     assert re.search(
-        r"try:\s*\n\s*from graph_orchestrator import _emit_llm_usage_event_best_effort\s*\n\s*_emit_llm_usage_event_best_effort\(",
+        r"try:\s*\n\s*from graph_orchestrator import _emit_llm_usage_event_best_effort\s*\n"
+        r"(?:\s*#[^\n]*\n)*"
+        r"\s*_emit_llm_usage_event_best_effort\(",
         body,
     ), (
         "[P2-CHAT-TOKEN-TELEMETRY] el emit debe estar dentro de un "

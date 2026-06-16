@@ -40,21 +40,36 @@ def test_env_pool_sync_lowered_for_freetier():
 
 def test_env_async_pool_knobs_present():
     """Los 3 knobs del pool async (MIN/MAX/TIMEOUT) deben estar en .env con
-    valores conservadores para free tier."""
+    valores conservadores para free tier.
+
+    [stale-parser fix 2026-06-16] El umbral original de P0-POOL-FREETIER-RETUNE
+    (async max ≤ 6, timeout ≤ 8) fue SUPERSEDED por dos retunes documentados
+    posteriores en el mismo `.env`:
+      - P1-BESTEFFORT-DB-CB (2026-05-21): async max 6→10 + timeout 8→12. El
+        `BestEffortDBCB` local ahora fail-fasts tras 3 timeouts, así que el
+        timeout bajo dejó de ser la palanca de fail-fast.
+      - P1-ORCH-1-DBPOOL (2026-05-28): sync max 20→12 para dar headroom real
+        al async dentro del cap pgBouncer.
+    El invariante operacional real — `sync_max + async_max ≤ 30` — sigue
+    enforced por `test_total_pool_within_pgbouncer_cap` (actual 12+10=22).
+    Estas dos aserciones per-knob solo guardan contra la regresión al estado
+    saturado (async max=12, timeout=20)."""
     env = _ENV_PATH.read_text(encoding="utf-8")
-    # MAX async ≤ 6 (vs default 12)
+    # MAX async ≤ 10 (P1-BESTEFFORT-DB-CB; default code 12 satura combinado con sync)
     max_m = re.search(r"^MEALFIT_DB_ASYNC_POOL_MAX_SIZE=(\d+)\s*$", env, re.MULTILINE)
     assert max_m, "MEALFIT_DB_ASYNC_POOL_MAX_SIZE faltante en .env"
-    assert int(max_m.group(1)) <= 6, (
-        "Async pool max no debe exceder 6 en free tier; el default code es 12 "
-        "que satura pgBouncer cuando se combina con sync."
+    assert int(max_m.group(1)) <= 10, (
+        "Async pool max no debe exceder 10 (P1-BESTEFFORT-DB-CB); el default "
+        "code es 12 que satura pgBouncer cuando se combina con sync."
     )
-    # TIMEOUT async ≤ 10s (best-effort fail-fast, vs default 20s)
+    # TIMEOUT async ≤ 12s (P1-BESTEFFORT-DB-CB; el BestEffortDBCB hace fail-fast,
+    # no el timeout bajo — vs default 20s que desperdicia wall-clock en saturación)
     to_m = re.search(r"^MEALFIT_DB_ASYNC_POOL_TIMEOUT_S=(\d+)\s*$", env, re.MULTILINE)
     assert to_m, "MEALFIT_DB_ASYNC_POOL_TIMEOUT_S faltante en .env"
-    assert int(to_m.group(1)) <= 10, (
-        "Async pool timeout debe ser ≤10s para que best-effort writes "
-        "(CB-RESET, LLM-CACHE, etc.) fallen rápido sin bloquear el plan."
+    assert int(to_m.group(1)) <= 12, (
+        "Async pool timeout debe ser ≤12s (P1-BESTEFFORT-DB-CB) para que "
+        "best-effort writes (CB-RESET, LLM-CACHE, etc.) no bloqueen el plan; "
+        "el BestEffortDBCB fail-fasts tras 3 timeouts."
     )
 
 

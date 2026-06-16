@@ -60,21 +60,31 @@ def test_assessment_context_writes_localstorage_signal():
 
     [P3-DOC-1 · 2026-05-11] Migrado desde Plan.jsx::savePlanToHistory
     (eliminada por dead code, 0 callers).
+
+    [stale-parser fix 2026-06-16] P2-AUDIT-3 (2026-05-15) migró el
+    `localStorage.setItem` inline al helper SSOT `safeLocalStorageSet`
+    (utils/safeLocalStorage.js) que atrapa SecurityError/QuotaExceededError
+    internamente. El handshake — un set de `mealfit_history_dirty_at` en
+    `saveGeneratedPlan` — se preserva; solo cambió de setItem crudo al
+    wrapper defensivo. El test tolera ambas formas.
     """
     src = _ASSESSMENT_CTX.read_text(encoding="utf-8")
     assert _STORAGE_KEY in src, (
         f"`{_STORAGE_KEY}` no encontrado en AssessmentContext.jsx. El "
         f"handshake con History.jsx se rompe — restaurar el "
-        f"`localStorage.setItem` en `saveGeneratedPlan` post-comentario "
-        f"`NOTA: NO guardamos en Supabase aquí`."
+        f"`safeLocalStorageSet`/`localStorage.setItem` en `saveGeneratedPlan` "
+        f"post-comentario `P0-HIST-NEW-2 contract preserved`."
     )
+    # Tolera tanto el setItem crudo (legacy) como el helper SSOT
+    # `safeLocalStorageSet` (P2-AUDIT-3) que envuelve setItem con try/catch.
     pattern = re.compile(
-        r"localStorage\s*\.\s*setItem\s*\(\s*['\"]" + re.escape(_STORAGE_KEY) + r"['\"]"
+        r"(?:localStorage\s*\.\s*setItem|safeLocalStorageSet)\s*\(\s*['\"]"
+        + re.escape(_STORAGE_KEY) + r"['\"]"
     )
     assert pattern.search(src), (
         f"La key `{_STORAGE_KEY}` aparece en AssessmentContext.jsx pero "
-        f"no como argumento de `localStorage.setItem`. El handshake requiere "
-        f"un setItem explícito."
+        f"no como argumento de `localStorage.setItem` ni de `safeLocalStorageSet`. "
+        f"El handshake requiere un set explícito."
     )
 
 
@@ -102,22 +112,39 @@ def test_assessment_context_signal_lives_in_save_generated_plan():
 
 
 def test_assessment_context_signal_is_try_wrapped():
-    """El `setItem` debe estar en try/catch: localStorage tira
-    `SecurityError` en private/incógnito. Sin try, el side-effect rompe
-    el flujo de aceptación del plan."""
+    """El `setItem` debe estar protegido contra `SecurityError`/
+    `QuotaExceededError` (private/incógnito, iOS). Sin protección, el
+    side-effect rompe el flujo de aceptación del plan.
+
+    [stale-parser fix 2026-06-16] P2-AUDIT-3 (2026-05-15) reemplazó el
+    try/catch inline por el helper SSOT `safeLocalStorageSet`
+    (utils/safeLocalStorage.js), cuyo cuerpo envuelve `setItem` en
+    try/catch (líneas 71-80) y NUNCA throws. Si el callsite usa el
+    helper, la protección es intrínseca y el try inline ya no aplica.
+    """
     src = _ASSESSMENT_CTX.read_text(encoding="utf-8")
+    # Forma SSOT (P2-AUDIT-3): el helper defensivo es la protección.
+    safe_helper_pos = src.find(f"safeLocalStorageSet('{_STORAGE_KEY}'")
+    if safe_helper_pos < 0:
+        safe_helper_pos = src.find(f'safeLocalStorageSet("{_STORAGE_KEY}"')
+    if safe_helper_pos >= 0:
+        # El helper subsume el try/catch — protección intrínseca.
+        return
+    # Forma legacy: setItem crudo, exige try/catch en proximidad.
     setitem_pos = src.find(f"setItem('{_STORAGE_KEY}'")
     if setitem_pos < 0:
         setitem_pos = src.find(f'setItem("{_STORAGE_KEY}"')
     assert setitem_pos > 0, (
-        "setItem call no encontrado — test_assessment_context_writes_localstorage_signal "
+        "setItem/safeLocalStorageSet call no encontrado — "
+        "test_assessment_context_writes_localstorage_signal "
         "ya falló previamente con mejor mensaje."
     )
     preceding = src[max(0, setitem_pos - 500): setitem_pos]
     assert "try {" in preceding, (
         "El `setItem` de la señal NO está envuelto en try/catch. "
         "localStorage puede tirar SecurityError en modo privado — "
-        "envolver en try { ... } catch { /* silent */ }."
+        "envolver en try { ... } catch { /* silent */ } o usar "
+        "`safeLocalStorageSet`."
     )
 
 

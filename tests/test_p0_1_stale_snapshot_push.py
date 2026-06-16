@@ -30,8 +30,15 @@ def _hp_with_last(iso: str | None) -> dict:
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks._dispatch_push_notification")
 def test_first_pause_emits_push_and_persists_cooldown(mock_push, mock_query, mock_write):
+    # [test fix · P1-2 CAS · 2026-05-10] El cooldown ya NO es SELECT-then-UPDATE
+    # en Python: `_maybe_notify_user_stale_snapshot_paused` delega a
+    # `_claim_push_cooldown_slot`, que hace UN `UPDATE user_profiles ... RETURNING id`
+    # con la condición de cooldown embebida en el WHERE. Slot ganado = rows
+    # devueltas. El slot_key viaja como PARÁMETRO (`ARRAY[%s]::text[]` /
+    # `health_profile ->> %s`), no como literal en el SQL string.
     import cron_tasks
-    mock_query.return_value = _hp_with_last(None)
+    # Slot ganado: el CAS UPDATE devuelve >=1 fila.
+    mock_write.return_value = [{"id": "user-p01-1"}]
 
     sent = cron_tasks._maybe_notify_user_stale_snapshot_paused(
         "user-p01-1", snapshot_age_hours=8.4
@@ -44,29 +51,35 @@ def test_first_pause_emits_push_and_persists_cooldown(mock_push, mock_query, moc
     assert "pausa" in push_kwargs["title"].lower() or "pausa" in push_kwargs["body"].lower()
     assert "8h" in push_kwargs["body"], "el body debe incluir la edad del snapshot"
 
-    # Cooldown persistido en health_profile._stale_snapshot_paused_notified_at
-    assert mock_write.called, "el cooldown timestamp debe persistirse"
+    # Cooldown reclamado vía CAS sobre user_profiles. El slot_key se pasa como
+    # parámetro (no como literal en el SQL string).
+    assert mock_write.called, "el cooldown CAS debe ejecutarse"
     write_args = mock_write.call_args
     sql_text = write_args.args[0]
-    assert "_stale_snapshot_paused_notified_at" in sql_text
     assert "user_profiles" in sql_text
+    assert "RETURNING" in sql_text.upper(), "el CAS debe usar UPDATE ... RETURNING"
+    sql_params = write_args.args[1]
+    assert "_stale_snapshot_paused_notified_at" in sql_params, (
+        "el slot_key debe viajar como parámetro del CAS UPDATE"
+    )
 
 
 @patch("cron_tasks.execute_sql_write")
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks._dispatch_push_notification")
 def test_cooldown_active_blocks_push(mock_push, mock_query, mock_write):
+    # [test fix · P1-2 CAS] Cooldown activo = el CAS UPDATE no matchea el WHERE
+    # (timestamp <24h) → 0 filas → `_claim_push_cooldown_slot` retorna False →
+    # no push. Lo modelamos devolviendo lista vacía de `execute_sql_write`.
     import cron_tasks
-    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    mock_query.return_value = _hp_with_last(recent)
+    mock_write.return_value = []
 
     sent = cron_tasks._maybe_notify_user_stale_snapshot_paused(
         "user-p01-2", snapshot_age_hours=10.0
     )
 
-    assert sent is False, "cooldown <24h debe bloquear el push"
+    assert sent is False, "cooldown <24h (CAS pierde) debe bloquear el push"
     assert not mock_push.called, "no debe disparar _dispatch_push_notification"
-    assert not mock_write.called, "no debe re-persistir el cooldown timestamp"
 
 
 @patch("cron_tasks.execute_sql_write")

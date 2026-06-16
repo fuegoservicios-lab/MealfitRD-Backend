@@ -43,7 +43,7 @@ import re
 import pytest
 
 
-_BACKEND = pathlib.Path(__file__).parent
+_BACKEND = pathlib.Path(__file__).parent.parent
 _CRON = _BACKEND / "cron_tasks.py"
 _SYSTEM = _BACKEND / "routers" / "system.py"
 

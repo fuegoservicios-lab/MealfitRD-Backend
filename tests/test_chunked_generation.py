@@ -89,11 +89,17 @@ def test_chunk_consumption_ratio_uses_implicit_proxy_when_no_explicit_logs_exist
 
     ratio_info = _calculate_chunk_consumption_ratio(previous_chunk_days, [])
 
-    assert ratio_info["ratio"] == 1.0
-    assert ratio_info["matched_meals"] == 3
+    # [P1-8] Sin logs explícitos Y sin actividad de inventario (mutations=0 default)
+    # → zero_log_no_mutations: el proxy se usa pero NO se fabrica el 50% asumido; el
+    # ratio honesto es 0.0 ("no hay evidencia de adherencia") y matched=0. El proxy
+    # implícito sigue activo (used_implicit_proxy=True, zero_log_proxy=True).
+    assert ratio_info["ratio"] == 0.0
+    assert ratio_info["matched_meals"] == 0
     assert ratio_info["planned_meals"] == 3
     assert ratio_info["explicit_logged_meals"] == 0
     assert ratio_info["used_implicit_proxy"] is True
+    assert ratio_info["zero_log_proxy"] is True
+    assert ratio_info["zero_log_no_mutations"] is True
 
 
 def test_chunk_consumption_ratio_keeps_gate_strict_when_some_explicit_logs_exist():
@@ -107,11 +113,18 @@ def test_chunk_consumption_ratio_keeps_gate_strict_when_some_explicit_logs_exist
         [{"meal_name": "Pollo guisado"}],
     )
 
-    assert ratio_info["ratio"] == pytest.approx(1 / 3, rel=1e-3)
-    assert ratio_info["matched_meals"] == 1
+    # [P0-3] Logging esparso: 1 log de 3 planeadas (< max(2, 3*0.25)) NO es señal
+    # representativa de adherencia → se activa el proxy implícito (sparse_logging).
+    # Con mutations=0 (default) el ratio sigue la fórmula del proxy: min(0.5 + 0, 0.85)
+    # = 0.5, y matched=planned_total=3. used_implicit_proxy=True (antes el path estricto
+    # daba 1/3 con proxy off, pre-P0-3).
+    assert ratio_info["ratio"] == pytest.approx(0.5, rel=1e-3)
+    assert ratio_info["matched_meals"] == 3
     assert ratio_info["planned_meals"] == 3
     assert ratio_info["explicit_logged_meals"] == 1
-    assert ratio_info["used_implicit_proxy"] is False
+    assert ratio_info["explicit_matched_meals"] == 1
+    assert ratio_info["used_implicit_proxy"] is True
+    assert ratio_info["sparse_logging_proxy"] is True
 
 
 def test_filter_days_by_fresh_pantry_keeps_only_days_with_majority_coverage():
@@ -211,7 +224,9 @@ def test_long_plan_refresh_jobs_keep_30d_snapshots_fresh_until_execute_after(
             return []
         return []
 
-    def _persist_side_effect(task_id, meal_plan_id, fresh_inventory):
+    def _persist_side_effect(task_id, meal_plan_id, fresh_inventory, user_id=None):
+        # [P0-5] _persist_fresh_pantry_to_chunks ahora acepta user_id (sincroniza
+        # tz_offset_minutes vivo al snapshot). El stub lo absorbe sin usarlo.
         snapshot_state["captured_at"] = current_now["value"]
 
     mock_query.side_effect = _query_side_effect
@@ -409,7 +424,10 @@ def test_chunk_waits_for_real_consumption_before_generating(mock_write, mock_que
         ]
     }
 
-    def _write_side_effect(query, params=None, returning=False):
+    def _write_side_effect(query, params=None, returning=False, **kwargs):
+        # [test fix · Neon] execute_sql_write ganó el kwarg lock_timeout_ms (heartbeat
+        # de chunks P0-1). El stub debe absorberlo vía **kwargs o el heartbeat lanza
+        # TypeError y cascadea al merge/shuffle del worker.
         if "RETURNING" in query:
             return tasks
         return None
@@ -441,7 +459,11 @@ def test_chunk_waits_for_real_consumption_before_generating(mock_write, mock_que
     assert deferred_params[0] == CHUNK_LEARNING_READY_DELAY_HOURS
     assert deferred_params[2] == 1
     assert deferred_snapshot["_learning_ready_deferrals"] == 1
-    assert deferred_snapshot["_last_learning_ready_ratio"] < 0.5
+    # [P0-3] 1 log de 3 planeadas activa el proxy de logging esparso: el ratio honesto
+    # es exactamente 0.5 (fórmula del proxy con mutations=0), no <0.5 como el path
+    # estricto pre-P0-3 (que daba 1/3). El gate sigue deferring (señal demasiado débil
+    # sin mutaciones de inventario), que es lo que este test valida.
+    assert deferred_snapshot["_last_learning_ready_ratio"] == 0.5
 
 
 @patch('cron_tasks.run_plan_pipeline')
@@ -449,7 +471,7 @@ def test_chunk_waits_for_real_consumption_before_generating(mock_write, mock_que
 @patch('cron_tasks._check_chunk_learning_ready')
 @patch('cron_tasks.execute_sql_query')
 @patch('cron_tasks.execute_sql_write')
-@patch('utils_push.send_push_notification')
+@patch('cron_tasks._dispatch_push_notification')
 def test_chunk_pauses_for_user_action_when_fresh_pantry_is_nearly_empty(
     mock_push, mock_write, mock_query, mock_learning_ready, mock_inventory, mock_pipeline
 ):
@@ -473,7 +495,10 @@ def test_chunk_pauses_for_user_action_when_fresh_pantry_is_nearly_empty(
         ]
     }
 
-    def _write_side_effect(query, params=None, returning=False):
+    def _write_side_effect(query, params=None, returning=False, **kwargs):
+        # [test fix · Neon] execute_sql_write ganó el kwarg lock_timeout_ms (heartbeat
+        # de chunks P0-1). El stub debe absorberlo vía **kwargs o el heartbeat lanza
+        # TypeError y cascadea al merge/shuffle del worker.
         if "RETURNING" in query:
             return tasks
         return None
@@ -500,18 +525,15 @@ def test_chunk_pauses_for_user_action_when_fresh_pantry_is_nearly_empty(
         "SET status = 'pending_user_action'" in call[0][0]
         for call in mock_write.call_args_list
     )
-    # [test fix] Antes asertaba `mock_thread.assert_called_once()`. Ahora _chunk_worker
-    # también arranca un heartbeat Thread (P0-4 lock heartbeat) además del push de
-    # notificación. Filtramos por target para validar que el push del usuario sí ocurrió
-    # exactamente una vez sin acoplarnos al thread del heartbeat.
-    push_thread_calls = [
-        c for c in mock_thread.call_args_list
-        if c.kwargs.get("target") is mock_push
-    ]
-    assert len(push_thread_calls) == 1, (
-        f"Se esperaba exactamente 1 Thread con target=send_push_notification, hubo "
-        f"{len(push_thread_calls)}"
+    # [P2-PUSH-VIA-BG-EXECUTOR · 2026-05-28] El push de "nevera vacía" ya NO se
+    # dispara con `threading.Thread(target=send_push_notification)`: ahora va por
+    # `_pause_chunk_for_pantry_refresh` → `_dispatch_push_notification` (rutea el
+    # send por el `bg_executor` bounded). Validamos que el usuario fue notificado
+    # exactamente una vez sin acoplarnos al mecanismo de threading interno.
+    assert mock_push.call_count == 1, (
+        f"Se esperaba exactamente 1 dispatch de push al usuario, hubo {mock_push.call_count}"
     )
+    assert mock_push.call_args.kwargs.get("user_id") == "user_123"
 
 
 def test_should_pause_for_empty_pantry_skips_when_flexible_mode_is_enabled():
@@ -595,11 +617,19 @@ def test_chunk_learning_ready_uses_implicit_proxy_when_user_has_no_explicit_logs
         snapshot=snapshot,
     )
 
-    assert learning_ready["ready"] is True
-    assert learning_ready["ratio"] == 1.0
-    assert learning_ready["matched_meals"] == 3
+    # [P1-8] Zero-log Y zero-mutations (no se mockea get_inventory_activity_since →
+    # actividad vacía → 0 mutaciones): el proxy implícito se marca (used_implicit_proxy
+    # True) pero el ratio honesto es 0.0 ("sin evidencia de adherencia"), NO el 1.0
+    # asumido pre-P1-8. Sin señal real de inventario el gate NO está ready (el caller
+    # debe pausar/forzar variedad de forma diferenciada). El caso CON mutaciones lo
+    # cubre test_zero_log_inventory_proxy_returns_weak_learning_signal.
+    assert learning_ready["ready"] is False
+    assert learning_ready["ratio"] == 0.0
+    assert learning_ready["matched_meals"] == 0
     assert learning_ready["planned_meals"] == 3
     assert learning_ready["used_implicit_proxy"] is True
+    assert learning_ready["zero_log_proxy"] is True
+    assert learning_ready["zero_log_no_mutations"] is True
 
 
 @patch('cron_tasks._enqueue_plan_chunk')
@@ -622,8 +652,16 @@ def test_shift_plan_blocks_rolling_refill_for_active_7_day_plan(mock_pool, mock_
     mock_conn.transaction.return_value.__enter__.return_value = mock_tx
     mock_cursor = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    # [P2-LOCK-2 · 2026-05-10] api_shift_plan resuelve el plan_id SIN row lock primero
+    # (SELECT id → fetchone) y SOLO DESPUÉS toma el FOR UPDATE (SELECT plan_data →
+    # fetchone), para unificar el orden advisory→FOR UPDATE con el chunk worker y evitar
+    # deadlocks. Eso son DOS fetchone antes de usar plan_data (el stub legacy daba uno
+    # solo). Tercera fetchone = COUNT de chunks vivos del plan de 7d (línea ~1931): con
+    # cnt>=1 hay chunks en vuelo → disable_rolling_refill_for_active_7d → enqueue NO se llama.
     mock_cursor.fetchone.side_effect = [
-        {"id": "plan_7d", "plan_data": plan_data},
+        {"id": "plan_7d"},
+        {"plan_data": plan_data},
+        {"cnt": 1},
     ]
 
     response = api_shift_plan(Response(), {"user_id": "user_123", "tzOffset": 0}, verified_user_id="user_123")
@@ -652,10 +690,16 @@ def test_shift_plan_skips_refill_when_target_week_chunk_already_exists(mock_pool
     mock_conn.transaction.return_value.__enter__.return_value = MagicMock()
     mock_cursor = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    # [P2-LOCK-2 · 2026-05-10] fetchone #1 = SELECT id (resolución sin lock); #2 = SELECT
+    # plan_data FOR UPDATE. El plan de 15d vencido por shift cae en el catch-up
+    # (not is_partial and needs_fill): #3 health_profile, #4 MAX(week_number) no-cancelado,
+    # #5 chunk conflictivo para la semana objetivo → como existe, enqueue NO se llama.
+    # (El stub legacy traía un {"cnt": 0} espurio de una estructura de query anterior.)
     mock_cursor.fetchone.side_effect = [
-        {"id": "plan_15d", "plan_data": plan_data},
+        {"id": "plan_15d"},
+        {"plan_data": plan_data},
         {"health_profile": {"budget": "mid"}},
-        {"cnt": 0},
+        {"max_week": 2},
         {"id": "chunk-existing", "status": "stale", "chunk_kind": "initial_plan"},
     ]
 
@@ -683,8 +727,13 @@ def test_shift_plan_uses_max_non_cancelled_week_when_failed_chunk_exists(mock_po
     mock_conn.transaction.return_value.__enter__.return_value = MagicMock()
     mock_cursor = MagicMock()
     mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+    # [P2-LOCK-2 · 2026-05-10] fetchone #1 = SELECT id (resolución sin lock); #2 = SELECT
+    # plan_data FOR UPDATE. El plan de 30d vencido por shift cae en el catch-up:
+    # #3 health_profile, #4 MAX(week_number) no-cancelado=4 → next_week=5, #5 chunk
+    # conflictivo=None → se encola con week_number=5.
     mock_cursor.fetchone.side_effect = [
-        {"id": "plan_30d", "plan_data": plan_data},
+        {"id": "plan_30d"},
+        {"plan_data": plan_data},
         {"health_profile": {"budget": "mid"}},
         {"max_week": 4},
         None,
@@ -1016,7 +1065,7 @@ def _setup_smart_cursor(mock_cursor, prior_plan):
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('llm_provider.ChatDeepSeek')
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -1027,6 +1076,11 @@ def _setup_smart_cursor(mock_cursor, prior_plan):
 @patch('db_facts.get_consumed_meals_since')
 @patch('db_facts.get_all_user_facts')
 def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, mock_likes, mock_inventory, mock_write, mock_query, mock_shop, mock_pool, mock_llm, _mock_ready, _mock_filter, _mock_sem):
+    # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Gemini eliminado: el probe de recuperación
+    # y la generación de chunks usan llm_provider.ChatDeepSeek. Patcheamos esa clase
+    # (antes langchain_google_genai.ChatGoogleGenerativeAI, ya inexistente) y forzamos
+    # que invoke falle → el probe LLM falla → el chunk se queda en modo degraded (Smart
+    # Shuffle), que es lo que este test valida.
     mock_llm.return_value.invoke.side_effect = Exception("Simulated LLM Outage")
     mock_likes.return_value = []
     mock_rejections.return_value = []
@@ -1078,14 +1132,19 @@ def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, moc
         mock_executor.return_value.__enter__.return_value.submit.side_effect = sync_submit
         process_plan_chunk_queue()
     
+    # [P0-4 · merge atómico T1/T2] El worker ahora escribe plan_data DOS veces: T1
+    # mergea los días nuevos (los 6 días renumerados), y T2 re-lee bajo FOR UPDATE y
+    # aplica keys incrementales (learning/shopping/quality). Ambos persisten los 6 días
+    # y matchean el substring del filtro. Validamos el primer write (T1 = el merge) para
+    # comprobar la renumeración del Smart Shuffle.
     update_calls = [call for call in mock_cursor.execute.call_args_list if "UPDATE meal_plans SET plan_data = %s::jsonb" in call[0][0]]
-    assert len(update_calls) == 1
-    
+    assert len(update_calls) >= 1
+
     args = update_calls[0][0]
     query = args[0]
     params = args[1]
     merged_data = json.loads(params[0]) if isinstance(params[0], str) else params[0]
-    
+
     assert len(merged_data["days"]) == 6
     assert merged_data["days"][3]["day"] == 4
     assert merged_data["days"][4]["day"] == 5
@@ -1096,7 +1155,7 @@ def test_chunk_degraded_fallback(mock_facts, mock_consumed, mock_rejections, moc
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -1184,9 +1243,18 @@ def test_queue_management_purge_and_rescue(mock_write):
     process_plan_chunk_queue()
     calls = mock_write.call_args_list
     queries = [call[0][0] for call in calls]
-    assert any("SET status = 'cancelled'" in q for q in queries)
+    # [P2-3 · 2026-05-26] El cancel de chunks huérfanos (SET status='cancelled')
+    # se extrajo de process_plan_chunk_queue a su propio cron `_cleanup_orphan_chunks`
+    # (corría inline cada 1 min y un timeout en su query bloqueaba el hot path).
+    # process_plan_chunk_queue conserva la purga de cancelled>48h y el zombie rescue.
     assert any("DELETE FROM plan_chunk_queue" in q and "status = 'cancelled'" in q for q in queries)
     assert any("attempts = COALESCE(attempts, 0) + 1" in q and "status = 'processing'" in q for q in queries)
+
+    # El cancel de huérfanos vive ahora en _cleanup_orphan_chunks (cron dedicado).
+    from cron_tasks import _cleanup_orphan_chunks
+    _cleanup_orphan_chunks()
+    cleanup_queries = [call[0][0] for call in mock_write.call_args_list]
+    assert any("SET status = 'cancelled'" in q for q in cleanup_queries)
 
 
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
@@ -1765,7 +1833,7 @@ def test_chunk_uses_snapshot_pantry_when_live_inventory_refresh_fails(
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -1826,11 +1894,15 @@ def test_edge_case_one_or_two_days(mock_facts, mock_consumed, mock_rejections, m
         process_plan_chunk_queue()
         
     update_calls = [call for call in mock_cursor.execute.call_args_list if "UPDATE meal_plans SET plan_data = %s::jsonb" in call[0][0]]
-    assert len(update_calls) == 1
-    
-    args = update_calls[0][0]
+    # [P0-1 FIX + P0-4 FIX] El worker emite DOS UPDATEs a meal_plans en el camino
+    # feliz: T1 (merge de days + learning, update_calls[0]) y T2 (re-lee fresh
+    # plan_data + overlay incremental de learning/shopping/quality, update_calls[1]).
+    # T1 contiene los días mergeados; T2 re-aplica solo P0_4_T2_INCREMENTAL_KEYS.
+    assert len(update_calls) == 2
+
+    args = update_calls[0][0]  # T1: el merge con los días
     merged_data = json.loads(args[1][0]) if isinstance(args[1][0], str) else args[1][0]
-    
+
     # Original 3 days + new 2 days = 5 days total
     assert len(merged_data["days"]) == 5
     assert merged_data["days"][3]["day"] == 4
@@ -1947,11 +2019,13 @@ def test_continuous_learning_mid_plan_injection(
     
     # Y que plan_data['days'][3:6] se unió sin la alergia (verificado en el mock_pipeline)
     update_calls = [call for call in mock_cursor.execute.call_args_list if "UPDATE meal_plans SET plan_data = %s::jsonb" in call[0][0]]
-    assert len(update_calls) == 1
-    
-    update_args = update_calls[0][0]
+    # [P0-1 FIX + P0-4 FIX] Camino feliz emite DOS UPDATEs: T1 (merge days+learning,
+    # update_calls[0]) y T2 (overlay incremental, update_calls[1]). T1 lleva los días.
+    assert len(update_calls) == 2
+
+    update_args = update_calls[0][0]  # T1: el merge con los días
     merged_data = json.loads(update_args[1][0]) if isinstance(update_args[1][0], str) else update_args[1][0]
-    
+
     assert len(merged_data["days"]) == 6
     for i in range(3, 6):
         for meal in merged_data["days"][i]["meals"]:
@@ -2179,7 +2253,7 @@ def test_pantry_hybrid_tolerance_quantity():
 # prior_plan. Mockear el filtro como passthrough invalida la prueba.
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2256,7 +2330,7 @@ def test_chunk_degraded_fallback_pauses_when_no_pantry_coverage(
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2326,41 +2400,57 @@ def test_chunk_learning_stub_starved_window(
     assert "forzar la variedad" in prompt_used.lower() or "diversificar" in prompt_used.lower() or "distint" in prompt_used.lower()
 
 def test_release_chunk_reservations_frees_inventory():
-    """P0-4: reservar 100g de pollo en chunk X, cancelar chunk, verificar que get_user_inventory_net no descuenta."""
+    """P0-4: reservar 100g de pollo en chunk X, cancelar chunk, verificar que get_user_inventory_net no descuenta.
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] El path PostgREST (`db_inventory.supabase`)
+    fue eliminado: ahora el read va por `execute_sql_query` y el write batch por
+    `execute_sql_transaction` (atómico). Este test mockea el SQL directo en vez del
+    cliente Supabase desaparecido, y asserta sobre el UPDATE atómico que pone
+    reserved_quantity=0 y remueve la key de la reserva.
+    """
     from unittest.mock import patch, MagicMock
     from db_inventory import (
         release_chunk_reservations,
         _make_reservation_key,
-        _normalize_reservation_details,
     )
-    
+
     chunk_id = "test-chunk-999"
     user_id = "user_p04"
     reservation_key = _make_reservation_key(chunk_id, "Pollo Asado")
-    
-    # Simulate a row with 500g total, 100g reserved for our chunk
+
+    # Simulate a row with 100g reserved for our chunk.
     mock_row = {
         "id": "row-1",
         "reserved_quantity": 100.0,
         "reservation_details": {reservation_key: 100.0},
     }
-    
-    mock_supabase = MagicMock()
-    mock_select = MagicMock()
-    mock_select.eq.return_value.gt.return_value.execute.return_value.data = [mock_row]
-    mock_supabase.table.return_value.select.return_value = mock_select
-    mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
-    
-    with patch("db_inventory.supabase", mock_supabase):
+
+    captured_queries = []
+
+    def _fake_transaction(queries):
+        captured_queries.extend(queries)
+        return True
+
+    # connection_pool truthy + execute_sql_transaction presente → path atómico.
+    with patch("db_inventory.execute_sql_query", return_value=[mock_row]), \
+         patch("db_core.connection_pool", MagicMock()), \
+         patch("db_core.execute_sql_transaction", side_effect=_fake_transaction):
         released = release_chunk_reservations(user_id, chunk_id)
-    
+
     assert released == 1
-    # Verify _update_row_reservation was called with reserved_quantity=0 and empty details
-    update_call = mock_supabase.table.return_value.update
-    update_call.assert_called_once()
-    call_args = update_call.call_args[0][0]
-    assert call_args["reserved_quantity"] == 0.0
-    assert reservation_key not in call_args["reservation_details"]
+    # El batch atómico = [SET LOCAL statement_timeout, UPDATE user_inventory ...].
+    update_queries = [
+        q for q in captured_queries
+        if "UPDATE user_inventory" in q[0] and "reserved_quantity" in q[0]
+    ]
+    assert len(update_queries) == 1, f"Se esperaba 1 UPDATE atómico, hubo {len(update_queries)}: {captured_queries}"
+    _query, _params = update_queries[0]
+    # params = (new_reserved, Jsonb(new_details), row_id)
+    assert _params[0] == 0.0
+    assert _params[2] == "row-1"
+    # _params[1] es un wrapper Jsonb; su .obj es el dict de details ya sin la key.
+    new_details = getattr(_params[1], "obj", _params[1])
+    assert reservation_key not in new_details
 
 def test_partial_reservation_marks_chunk_and_defers_next():
     """P0-5: mock Supabase to fail 4 of 5 reservations → reservation_status='partial'.
@@ -2408,7 +2498,7 @@ def test_partial_reservation_marks_chunk_and_defers_next():
 @patch('shopping_calculator.get_semantic_cache', return_value=None)
 @patch('cron_tasks._filter_days_by_fresh_pantry', side_effect=_filter_passthrough)
 @patch('cron_tasks._check_chunk_learning_ready', side_effect=_ready_passing)
-@patch('langchain_google_genai.ChatGoogleGenerativeAI')
+@patch('llm_provider.ChatDeepSeek')  # [P0-DEEPSEEK-MIGRATION] Gemini eliminado; el probe/gen usa ChatDeepSeek
 @patch('db_core.connection_pool')
 @patch('shopping_calculator.get_shopping_list_delta')
 @patch('cron_tasks.execute_sql_query')
@@ -2518,7 +2608,10 @@ def test_sparse_logging_proxy_passes_with_inventory_mutations(mock_consumed, moc
     snapshot = {"form_data": {"_plan_start_date": "2026-04-21T00:00:00+00:00"}}
     
     mock_consumed.return_value = [{"meal_name": "A", "status": "consumed", "id": "1"}]
-    mock_inv_activity.return_value = {"mutations_count": 5}
+    # [P0-D] El proxy de inventario decide con `consumption_mutations_count`
+    # (deducciones por consumo), NO con el `mutations_count` genérico (que ahora
+    # incluye también ediciones manuales). >= MIN_MUTATIONS (2) → proxy usado.
+    mock_inv_activity.return_value = {"mutations_count": 5, "consumption_mutations_count": 5}
 
     learning_ready = _check_chunk_learning_ready(
         user_id="user_123",
@@ -2582,7 +2675,10 @@ def test_zero_log_inventory_proxy_returns_weak_learning_signal(mock_consumed, mo
     snapshot = {"form_data": {"_plan_start_date": "2026-04-21T00:00:00+00:00"}}
 
     mock_consumed.return_value = []
-    mock_inv_activity.return_value = {"mutations_count": 4}
+    # [P0-D] El proxy zero-log decide con `consumption_mutations_count` (no el
+    # `mutations_count` genérico). 4 deducciones por consumo >= MIN_MUTATIONS (2) →
+    # proxy usado, señal débil pero ready (el usuario tocó su nevera sin loguear).
+    mock_inv_activity.return_value = {"mutations_count": 4, "consumption_mutations_count": 4}
 
     learning_ready = _check_chunk_learning_ready(
         user_id="user_123",
@@ -2661,16 +2757,43 @@ def test_synchronous_week1_seeds_last_chunk_learning_for_chunk2(
     # Prior plan query returns None (no previous plan)
     mock_execute_sql_query.return_value = None
 
+    # [P1-5] `_validate_form_data_min` ahora rechaza con 422 si faltan campos
+    # mínimos del formulario (age/weight/height/gender/... + allergies/medical).
+    # Antes el endpoint aceptaba payloads minimalistas; este test enfoca el seeding
+    # de _last_chunk_learning, así que poblamos los required para superar el guard.
     data = {
         "user_id": "test_user",
         "session_id": "test_session",
         "totalDays": 15,
         "tzOffset": 240,
-        "mainGoal": "Ganar masa"
+        # [P1-3] `_validate_form_data_ranges` exige mainGoal en el enum
+        # (lose_fat|gain_muscle|maintenance|performance); "Ganar masa" se rechaza con 422.
+        "mainGoal": "gain_muscle",
+        "age": 30,
+        "weight": 154,
+        "height": 170,
+        "gender": "male",
+        "activityLevel": "moderate",
+        "weightUnit": "lb",
+        "householdSize": 1,
+        "groceryDuration": "weekly",
+        "motivation": "Quiero recuperar mi energía y sentirme bien para mi familia.",
+        "allergies": ["Ninguna"],
+        "medicalConditions": ["Ninguna"],
+        "scheduleType": "standard",
+        "cookingTime": "30min",
+        "budget": "medium",
+        "sleepHours": "7-8 horas",
+        "stressLevel": "Moderado",
+        "dislikes": ["Ninguno"],
+        "struggles": ["Ninguno"],
     }
 
     bg_tasks = BackgroundTasks()
-    res = api_analyze(bg_tasks, data, verified_user_id="test_user")
+    # api_analyze signature: (background_tasks, response, data=Body(...), verified_user_id=...)
+    # El 2º parámetro posicional es `response: Response`; pasar `data` ahí dejaba
+    # el dict en `response` y el sentinel `Body(...)` en `data` → 'Body' object has no .get.
+    res = api_analyze(bg_tasks, Response(), data, verified_user_id="test_user")
 
     assert res.get("generation_status") == "partial"
     assert res.get("id") == "plan-seed-test"

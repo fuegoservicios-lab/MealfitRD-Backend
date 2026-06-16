@@ -199,7 +199,7 @@ def test_ring_buffer_caps_at_max_records():
 # ---------------------------------------------------------------------------
 def test_health_endpoint_aggregates_by_reason_and_top_plans():
     from cron_tasks import _record_tz_fallback
-    from routers.system import get_tz_fallback_health
+    from routers.system import get_tz_fallback_health, _hash_uuid_for_public
 
     # Plan A: 5 hits del mismo reason.
     for week in range(2, 7):
@@ -219,7 +219,11 @@ def test_health_endpoint_aggregates_by_reason_and_top_plans():
     assert res["unique_plans_24h"] == 3
     assert res["unique_users_24h"] == 3
     # plan-A tiene más hits, debe estar primero en top_plans.
-    assert res["top_plans_24h"][0]["plan_id"] == "plan-A"
+    # [P2-HEALTH-UID-STRIP · 2026-05-12] El endpoint público dejó de exponer
+    # `plan_id` UUID literal (enumerable polleando) y devuelve `plan_hash`
+    # = SHA-256(plan_id)[:12]. El assert verifica el plan correcto vía su hash
+    # determinístico en vez del UUID raw.
+    assert res["top_plans_24h"][0]["plan_hash"] == _hash_uuid_for_public("plan-A")
     assert res["top_plans_24h"][0]["count"] == 5
 
 

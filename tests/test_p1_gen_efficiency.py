@@ -51,8 +51,15 @@ def test_skip_when_clean_knob_default_true():
 
 
 def test_skip_when_clean_guard_before_evaluator():
-    guard = "SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions and not slot_issues"
-    assert guard in _GRAPH, "El early-exit debe condicionar por knob + ambos detectores limpios."
+    # [P2-ORCH-6 · 2026-05-28] El gate se partió en dos líneas y añadió un tercer
+    # detector (`heavy_protein_monotony`): el skip solo aplica si TODOS los
+    # detectores determinísticos vinieron limpios. El contrato sigue siendo
+    # "knob + detectores limpios"; aquí anclamos las dos cláusulas estables.
+    guard = "SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions"
+    assert guard in _GRAPH, "El early-exit debe condicionar por knob + detectores limpios."
+    assert "not slot_issues and not heavy_protein_monotony" in _GRAPH, (
+        "El gate debe seguir exigiendo slot_issues + heavy_protein_monotony limpios (P2-ORCH-6)."
+    )
     body = _func_body(_GRAPH, "async def self_critique_node(")
     i_guard = body.find("SELF_CRITIQUE_SKIP_WHEN_CLEAN and not staple_repetitions")
     # La 1ª `_safe_ainvoke(` del cuerpo es la llamada del EVALUADOR (la cara, con

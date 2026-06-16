@@ -37,11 +37,18 @@ def agent_page_src() -> str:
 def test_input_wrapper_non_centered_padding(agent_page_src: str):
     """El padding del `input-wrapper` en la variante `isCentered=false` debe
     ser `'1.25rem 2rem 1.75rem 2rem'` (top/right/bottom/left). Sin breathing
-    inferior suficiente, el input se ve pegado al borde del card."""
-    # Match el ternary completo:
-    # `padding: isCentered ? '1.5rem 1.25rem 2.5rem 1.25rem' : '<este>'`
+    inferior suficiente, el input se ve pegado al borde del card.
+
+    [P3-AGENT-INPUT-CENTER · 2026-05-19] El padding pasó a un ternary anidado
+    `padding: isMobile ? (isCentered ? ... : ...) : (...)` para diferenciar
+    desktop/mobile. El contrato del bottom-pad de 1.75rem se preserva en la
+    rama mobile no-centrada — el regex matchea el ternary `isCentered`
+    independientemente del wrapper `isMobile ?` que lo precede.
+    """
+    # Match el ternary `isCentered ? '1.5rem 1.25rem 2.5rem 1.25rem' : '<este>'`
+    # esté o no envuelto por la rama `isMobile ? (...)`.
     pattern = re.compile(
-        r"padding\s*:\s*isCentered\s*\?\s*['\"]1\.5rem\s+1\.25rem\s+2\.5rem\s+1\.25rem['\"]\s*:\s*['\"]1\.25rem\s+2rem\s+1\.75rem\s+2rem['\"]"
+        r"isCentered\s*\?\s*['\"]1\.5rem\s+1\.25rem\s+2\.5rem\s+1\.25rem['\"]\s*:\s*['\"]1\.25rem\s+2rem\s+1\.75rem\s+2rem['\"]"
     )
     assert pattern.search(agent_page_src), (
         "P3-AGENT-INPUT-BOTTOM-PAD regresión: padding del `input-wrapper` "

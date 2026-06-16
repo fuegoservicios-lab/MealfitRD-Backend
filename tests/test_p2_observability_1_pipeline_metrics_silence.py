@@ -39,7 +39,14 @@ import pytest
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _CRON_PY = _BACKEND_ROOT / "cron_tasks.py"
-_CLAUDE_MD = _BACKEND_ROOT.parent / "CLAUDE.md"
+# [stale-parser fix · 2026-06-16] La tabla canónica de system_alerts
+# resolution fue movida de CLAUDE.md a backend/docs/ (Fase 5 trim ·
+# 2026-05-14, presión de tamaño del CLAUDE.md que carga cada turn —
+# P3-CLAUDEMD-CAP). El drift-detection test SSOT
+# `test_p2_audit_4_alert_keys_documented` ya lee de esta ubicación; este
+# test G es una verificación de conveniencia redundante y debe apuntar al
+# mismo archivo canónico, no al CLAUDE.md ahora-stale.
+_CLAUDE_MD = _BACKEND_ROOT / "docs" / "system_alerts_resolution_table.md"
 
 
 @pytest.fixture(scope="module")
@@ -158,11 +165,13 @@ def test_f_auto_resolves_on_tick_recovery(cron_src: str):
 
 
 def test_g_alert_key_documented_in_claude_md(claude_md_src: str):
-    """La alert_key debe estar en la tabla de system_alerts policy."""
+    """La alert_key debe estar en la tabla canónica de system_alerts policy
+    (`backend/docs/system_alerts_resolution_table.md`, movida desde CLAUDE.md
+    en Fase 5 trim · 2026-05-14)."""
     assert "pipeline_metrics_silence" in claude_md_src, (
         "P2-OBSERVABILITY-1: alert_key `pipeline_metrics_silence` no "
-        "documentado en CLAUDE.md. El test "
-        "`test_p2_audit_4_alert_keys_documented` falla si se omite."
+        "documentado en backend/docs/system_alerts_resolution_table.md. "
+        "El test `test_p2_audit_4_alert_keys_documented` falla si se omite."
     )
 
 

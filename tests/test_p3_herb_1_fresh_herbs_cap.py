@@ -73,8 +73,16 @@ class TestParseQuantityMazo:
 # 2. Cap escalado por person-weeks (multiplier × 3/7)
 # ---------------------------------------------------------------------------
 class TestHerbCapScaling:
-    """Cap = max(2, round(multiplier × 3/7)). Verificamos que escala
-    correctamente a través de ciclos y tamaños de hogar."""
+    """Cap = max(_HERB_MAZO_CAP_FLOOR, round(person_weeks)) donde
+    person_weeks = max(1.0, multiplier × 3/7).
+
+    [P3-HERB-CAP-FLOOR · 2026-05-16] El floor pasó de hardcoded 2 a knob
+    `MEALFIT_HERB_MAZO_CAP_FLOOR` con DEFAULT 1. Razón documentada en
+    shopping_calculator.py: para 1 persona × 7 días, 2 mazos (~100g, ¼ lb)
+    de cilantro/perejil son excesivos; 1 mazo (~50g) basta. Solo afecta el
+    caso 1p × semanal (person_weeks=1.0) — todo plan 2p+ o cycle >1 semana
+    tiene person_weeks >= 2, donde el floor no muerde. Este test refleja el
+    default floor=1 actual de prod."""
 
     def _herb_qty(self, multiplier: float) -> int:
         result = aggregate_and_deduct_shopping_list(
@@ -95,7 +103,9 @@ class TestHerbCapScaling:
         ("quincenal x 2 personas", 2 * 2 * 7 / 3, 4),
         ("quincenal x 1 persona", 1 * 2 * 7 / 3, 2),
         ("semanal x 2 personas", 2 * 1 * 7 / 3, 2),
-        ("semanal x 1 persona", 1 * 1 * 7 / 3, 2),  # max(2, 1)
+        # [P3-HERB-CAP-FLOOR · 2026-05-16] floor default 1 (era 2):
+        # person_weeks = max(1.0, 2.33×3/7=1.0) = 1.0 → max(1, round(1.0)) = 1.
+        ("semanal x 1 persona", 1 * 1 * 7 / 3, 1),  # max(1, round(1.0))
     ])
     def test_cap_scales_with_person_weeks(self, scenario, multiplier, expected):
         actual = self._herb_qty(multiplier)
@@ -104,11 +114,14 @@ class TestHerbCapScaling:
             f"recibido {actual}"
         )
 
-    def test_minimum_cap_is_2_when_demand_exceeds(self):
-        """Para multipliers muy bajos, person_weeks puede dar 1 → max(2, 1)
-        garantiza que el cap NUNCA baje de 2. Verificamos pidiendo 5 mazos
-        con multiplier mínimo: la demanda 5 excede el cap 2, así que se
-        clampa a 2 (no a 1)."""
+    def test_minimum_cap_clamps_high_demand_to_floor(self):
+        """[P3-HERB-CAP-FLOOR · 2026-05-16] Para multipliers muy bajos,
+        person_weeks se clampa a 1.0 → cap = max(floor, round(1.0)) = floor.
+        El floor default es 1 (era 2 hardcoded). Verificamos pidiendo 5 mazos
+        con multiplier mínimo: la demanda 5 excede el cap (=floor=1), así que
+        se clampa al floor. Garantiza que una demanda alta nunca eluda el
+        cap — el comportamiento que el test protege (clamp efectivo) sigue
+        intacto; solo bajó el valor del piso de 2 a 1."""
         result = aggregate_and_deduct_shopping_list(
             plan_ingredients=["5 mazos de cilantro"],
             multiplier=1.0,  # caso degenerate
@@ -118,8 +131,8 @@ class TestHerbCapScaling:
             (r for r in result if "cilantro" in r.get("name", "").lower()), None
         )
         actual = int(cilantro["market_qty"])
-        # Cap es 2 (mínimo); 5 demanda excede así que se clampa a 2
-        assert actual == 2, f"Cap mínimo debe ser 2, recibido {actual}"
+        # Cap = floor default (1); demanda 5 excede así que se clampa a 1.
+        assert actual == 1, f"Cap floor (default 1) debe clampar 5→1, recibido {actual}"
 
 
 # ---------------------------------------------------------------------------

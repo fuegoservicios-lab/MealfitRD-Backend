@@ -114,7 +114,26 @@ def test_jit_rolling_window_marked_dead_anchor():
 
 
 def test_marker_present_in_app_py():
-    assert '_LAST_KNOWN_PFIX = "P3-COLDSTART-E2E · 2026-05-29"' in _APP
+    # `_LAST_KNOWN_PFIX` es el marker del ÚLTIMO P-fix mergeado en HEAD
+    # (CLAUDE.md → 'Convenciones del repo') y por diseño lo sobreescribe cada
+    # P-fix posterior. Cuando este bundle se mergeó, `P3-COLDSTART-E2E ·
+    # 2026-05-29` era el último; P-fixes posteriores ya lo bumpearon
+    # legítimamente. Aserción durable: marker presente, bien formado, y con
+    # fecha >= la de este bundle (prueba que no fue revertido a uno más viejo).
+    import re
+    from datetime import datetime, date
+
+    m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', _APP)
+    assert m is not None, "_LAST_KNOWN_PFIX no encontrado en app.py"
+    marker = m.group(1)
+    fmt = re.match(r"^P\d+(?:-[A-Z0-9]+)+\s+·\s+(\d{4}-\d{2}-\d{2})$", marker)
+    assert fmt is not None, (
+        f"marker actual = {marker!r}; esperaba formato 'Pn-X · YYYY-MM-DD'."
+    )
+    assert datetime.strptime(fmt.group(1), "%Y-%m-%d").date() >= date(2026, 5, 29), (
+        f"marker actual = {marker!r} con fecha < 2026-05-29 (fecha de este "
+        f"bundle P3-COLDSTART-E2E). El marker fue revertido a un P-fix más viejo."
+    )
 
 
 # ===========================================================================

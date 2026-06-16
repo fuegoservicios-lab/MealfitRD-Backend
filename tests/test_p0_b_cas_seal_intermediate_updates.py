@@ -100,11 +100,17 @@ def test_chunk_already_merged_seals_modified_at_in_memory():
     aparece justo antes del comentario "Re-escribir plan_data dentro del mismo FOR UPDATE".
     """
     source = _read_source()
-    # Buscar el comentario marker y verificar que justo arriba (≤200 chars) hay un
+    # Buscar el comentario marker y verificar que justo arriba hay un
     # asignamiento a `plan_data['_plan_modified_at']`.
     marker_idx = source.find("Re-escribir plan_data dentro del mismo FOR UPDATE")
     assert marker_idx > -1, "no se encontró el comentario marker del path chunk_already_merged"
-    preceding = source[max(0, marker_idx - 600):marker_idx]
+    # [test fix · P1-21] El sello in-memory (plan_data['_plan_modified_at'] = now)
+    # SIGUE presente justo en este path, pero un comentario [P1-21] añadido entre
+    # el sello y el marker (re-adquisición explícita del advisory lock 'general')
+    # empujó el sello a ~1473 chars del marker. La ventana de 600 chars ya no lo
+    # alcanzaba aunque prod sí sella. Ampliada a 1600 — sigue acotada al mismo
+    # bloque chunk_already_merged (no cruza a otra función/path).
+    preceding = source[max(0, marker_idx - 1600):marker_idx]
     assert "plan_data['_plan_modified_at']" in preceding or 'plan_data["_plan_modified_at"]' in preceding, (
         "El path chunk_already_merged reescribe plan_data completo SIN sellar "
         "`_plan_modified_at` en memoria primero. Esto deja al CAS ciego ante este "
@@ -154,6 +160,23 @@ def test_no_intermediate_jsonb_set_update_to_plan_data_without_seal():
         # casos no hay competencia con un merge concurrente: el primero solo bumpea un contador
         # benigno; el segundo aborta el chunk antes del FOR UPDATE protegido por CAS.
         "_anchor_recovery_attempts",
+        # [test fix · P0-A] `_pantry_supplement_required` se escribe SOLO desde el helper
+        # dedicado `_persist_pantry_supplement_to_plan_data` (y se limpia en
+        # `_clear_pantry_supplement_from_plan_data`). Ambos hacen su PROPIO
+        # read-modify-write (SELECT plan_data ... AND user_id=%s → jsonb_set) y corren
+        # en el path de PAUSA (`pending_user_action`) ANTES de mergear los días del
+        # chunk — el merge nunca ocurre en ese tick, así que no hay comparación CAS
+        # downstream que pudieran cegar. Fuera del flujo de merge de process_chunk_task.
+        "_pantry_supplement_required",
+        # [test fix · P0-A] `_plan_start_date` se cura en `_check_chunk_learning_ready`
+        # (el GATE, antes del pickup/merge). Misma razón que `_anchor_recovery_attempts`,
+        # con el que comparte función: el gate corre antes del FOR UPDATE protegido por CAS.
+        "_plan_start_date",
+        # [test fix] `restocked_items` se reescribe en el sweep cron
+        # `_reactivate_shopping_list_after_perishable_cycle` (I2-EXEMPT cross-user
+        # system-wide), un cron separado fuera de process_chunk_task — el CAS del worker
+        # no lo cubre porque no es parte del flujo del merge.
+        "restocked_items",
     )
     violations = []
     for block in blocks:
@@ -207,10 +230,16 @@ def test_full_overwrite_plan_data_updates_seal_modified_at_in_memory():
 
     # Ventana amplia: en cron_tasks.py el sello in-memory puede aparecer hasta
     # ~80 líneas antes del cursor.execute (path T1 chunk_already_merged sella
-    # ~líneas 15600 y el execute ocurre ~línea 15677, ej.). 8000 chars cubre
-    # ~150 líneas con margen, sin falsos cruzados entre funciones distintas
-    # (los UPDATEs a meal_plans están separados por bastante más).
-    CTX_WINDOW = 8000
+    # ~líneas 15600 y el execute ocurre ~línea 15677, ej.).
+    # [test fix · P1-1/P0-5] El sello del T1 "Merge normal" (plan_data
+    # ['_plan_modified_at'] = now, ~línea 29867) SIGUE presente, pero el bloque
+    # de comentarios P0-1/P1-1 + el runtime defense-check P0-5 que se intercalan
+    # entre el sello y el `UPDATE ... _t1_persist_view` empujaron el sello a
+    # ~8260 chars del execute, justo por encima de la ventana 8000. Ampliada a
+    # 9000: cubre el gap real y sigue MUY por debajo de la distancia al T2
+    # (~40k chars, que de todos modos está exento por su marker propio), así que
+    # no introduce falsos negativos cruzando a un seal ajeno.
+    CTX_WINDOW = 9000
 
     for match in pattern.finditer(source):
         ctx_start = max(0, match.start() - CTX_WINDOW)

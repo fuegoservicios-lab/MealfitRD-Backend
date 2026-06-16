@@ -91,12 +91,18 @@ def test_signal_moved_to_assessment_context(context_src: str):
         "en AssessmentContext.jsx. El handshake con History.jsx se rompe — "
         "restaurar el setItem dentro de `saveGeneratedPlan`."
     )
+    # [P2-AUDIT-3 · 2026-05-15] El raw `localStorage.setItem(...)` fue migrado
+    # al helper SSOT `safeLocalStorageSet(...)` (frontend/src/utils/safeLocalStorage.js)
+    # que atrapa SecurityError/QuotaExceededError; internamente llama a
+    # `window.localStorage.setItem(key, serialized)` (línea 73), así que el
+    # handshake con History.jsx se preserva. Aceptamos AMBAS formas.
     pattern = re.compile(
-        r"localStorage\s*\.\s*setItem\s*\(\s*['\"]mealfit_history_dirty_at['\"]"
+        r"(?:localStorage\s*\.\s*setItem|safeLocalStorageSet)\s*\(\s*['\"]mealfit_history_dirty_at['\"]"
     )
     assert pattern.search(context_src), (
         "P3-DOC-1: `mealfit_history_dirty_at` aparece en AssessmentContext "
-        "pero NO como `localStorage.setItem`. Necesario para el handshake."
+        "pero NO como `localStorage.setItem` ni `safeLocalStorageSet`. "
+        "Necesario para el handshake."
     )
 
 

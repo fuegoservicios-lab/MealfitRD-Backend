@@ -128,11 +128,22 @@ def test_alert_persisted_at_threshold():
 def test_alert_repeat_after_repeat_interval():
     """Tras la alerta inicial, la siguiente debe disparar al cruzar
     threshold + repeat_every. Smoke test (uso fake threshold/repeat para
-    evitar spam de N reales)."""
+    evitar spam de N reales).
+
+    [test-drift 2026-06-16] El backoff exponencial P1-NEW-6
+    (`_summary_backoff_should_skip`, añadido DESPUÉS de P1-19) salta la
+    invocación una vez `count >= 5` y `elapsed < 10min`, congelando el
+    contador en 5 dentro de un loop síncrono rápido como este → el
+    segundo persist (n == threshold + repeat) nunca se alcanzaba. El
+    backoff es comportamiento de prod CORRECTO; para ejercitar la lógica
+    de re-alerta por intervalo hay que desactivarlo vía su propio knob
+    kill-switch (exactamente lo que recomienda el log de skip:
+    `Set MEALFIT_SUMMARY_BACKOFF_ENABLED=false para forzar`)."""
     threshold = memory_manager._SUMMARY_FAILURE_ALERT_THRESHOLD
     repeat = memory_manager._SUMMARY_FAILURE_ALERT_REPEAT_EVERY
 
-    with patch.object(memory_manager, "acquire_summarizing_lock", return_value=True), \
+    with patch.dict("os.environ", {"MEALFIT_SUMMARY_BACKOFF_ENABLED": "false"}), \
+         patch.object(memory_manager, "acquire_summarizing_lock", return_value=True), \
          patch.object(memory_manager, "release_summarizing_lock"), \
          patch.object(memory_manager, "get_memory", side_effect=RuntimeError("err")), \
          patch.object(memory_manager, "_persist_summary_failure_alert") as persist_mock:

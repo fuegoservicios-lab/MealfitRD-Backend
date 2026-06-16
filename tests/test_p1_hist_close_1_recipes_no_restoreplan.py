@@ -160,21 +160,33 @@ def test_no_restoreplan_named_import():
 # 5. Preserva el localStorage.setItem('mealfit_plan', ...)
 # ---------------------------------------------------------------------------
 def test_localstorage_setitem_mealfit_plan_preserved():
-    """Si un revert quita el `localStorage.setItem` junto con el
-    `restorePlan`, el usuario perdería la consistencia inmediata UI
+    """Si un revert quita el update del cache local de `mealfit_plan` junto
+    con el `restorePlan`, el usuario perdería la consistencia inmediata UI
     al navegar a /plan tras expandir. Alertar específicamente.
+
+    [P3-RECIPE-SAFE-LS · 2026-05-30] El raw `localStorage.setItem('mealfit_plan',
+    JSON.stringify(planData))` se migró al helper SSOT no-throw
+    `safeLocalStorageSet('mealfit_plan', planData)` (utils/safeLocalStorage.js),
+    que internamente hace `JSON.stringify(value)` + `localStorage.setItem(key, ...)`
+    — comportamiento idéntico, envuelto en try/catch para iOS Private Mode /
+    QuotaExceededError. Aceptamos AMBAS formas para que el contrato (preservar
+    el cache local de `mealfit_plan`) sobreviva al refactor.
     """
     src = _read_recipes_source()
+    # Forma legacy raw o el helper SSOT P3-RECIPE-SAFE-LS — ambas preservan
+    # el update del cache local de `mealfit_plan`.
     pattern = re.compile(
-        r"localStorage\.setItem\s*\(\s*[\'\"]mealfit_plan[\'\"]\s*,\s*"
-        r"JSON\.stringify\s*\(\s*planData\s*\)"
+        r"(?:localStorage\.setItem|safeLocalStorageSet)\s*\(\s*"
+        r"[\'\"]mealfit_plan[\'\"]\s*,\s*"
+        r"(?:JSON\.stringify\s*\(\s*)?planData"
     )
     assert pattern.search(src), (
-        "Recipes.jsx ya no llama `localStorage.setItem('mealfit_plan', "
-        "JSON.stringify(planData))` tras expandir la receta. Esto rompe "
-        "la consistencia UI inmediata: al navegar a /plan post-expand, "
-        "el usuario vería la receta original hasta que el siguiente "
-        "fetch del server actualice el cache local."
+        "Recipes.jsx ya no actualiza el cache local de `mealfit_plan` "
+        "(ni raw `localStorage.setItem('mealfit_plan', JSON.stringify(planData))` "
+        "ni el helper `safeLocalStorageSet('mealfit_plan', planData)`) tras "
+        "expandir la receta. Esto rompe la consistencia UI inmediata: al "
+        "navegar a /plan post-expand, el usuario vería la receta original "
+        "hasta que el siguiente fetch del server actualice el cache local."
     )
 
 

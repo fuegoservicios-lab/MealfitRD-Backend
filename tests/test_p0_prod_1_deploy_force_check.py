@@ -106,9 +106,18 @@ def test_d_admin_endpoint_uses_verify_admin_token(system_src: str):
     """El handler `admin_force_deploy_lag_check` invoca `_verify_admin_token`
     ANTES de cualquier import del detector — gate de defense-in-depth."""
     # Aislar el handler.
+    # [stale-parser fix 2026-06-16] P2-DEPLOY-LAG-AUTO-BUMP (2026-05-25)
+    # añadió un body Pydantic `body: Optional[_DeployLagCheckBody] =
+    # Body(default=None)` a la signature, que ahora abarca varias líneas y
+    # contiene parens anidados (`Body(default=None)`). El regex previo usaba
+    # `\([^)]*\)` que se detenía en el primer `)` interno y dejaba de matchear
+    # el `):` de cierre real. Capturamos hasta el `:` que cierra la signature
+    # (tolerando `def`/`async def` + parens anidados con [\s\S]) y luego el
+    # cuerpo hasta el próximo `@router.`. El handler sigue siendo sync `def`
+    # con `_verify_admin_token` como primera línea ejecutable.
     handler_match = re.search(
         r'@router\.post\("/admin/deploy-lag/check"\)\s*\n'
-        r'def\s+(\w+)\([^)]*\):(.*?)(?=@router\.|\Z)',
+        r'(?:async\s+)?def\s+(\w+)\([\s\S]*?\)\s*:(.*?)(?=@router\.|\Z)',
         system_src,
         re.DOTALL,
     )

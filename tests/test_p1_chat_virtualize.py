@@ -35,6 +35,13 @@ _AGENT_PAGE_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "AgentPage.jsx"
 _VIRT_LIST_JSX = (
     _REPO_ROOT / "frontend" / "src" / "components" / "agent" / "VirtualizedMessageList.jsx"
 )
+# [P2-AGENT-VIRTUOSO-LAZY · 2026-05-31] El threshold se extrajo a un módulo
+# liviano propio para que AgentPage lo lea sin arrastrar react-virtuoso (el
+# componente pesado se carga via lazy()). VirtualizedMessageList re-exporta el
+# valor para back-compat.
+_VIRT_THRESHOLD_JS = (
+    _REPO_ROOT / "frontend" / "src" / "components" / "agent" / "virtualizeThreshold.js"
+)
 _PACKAGE_JSON = _REPO_ROOT / "frontend" / "package.json"
 
 
@@ -46,6 +53,11 @@ def agent_page_src() -> str:
 @pytest.fixture(scope="module")
 def virt_list_src() -> str:
     return _VIRT_LIST_JSX.read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def virt_threshold_src() -> str:
+    return _VIRT_THRESHOLD_JS.read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
@@ -94,9 +106,14 @@ def test_virt_list_imports_virtuoso(virt_list_src: str):
     )
 
 
-def test_virtualize_threshold_constant_exported(virt_list_src: str):
+def test_virtualize_threshold_constant_exported(virt_threshold_src: str, virt_list_src: str):
     """`VIRTUALIZE_THRESHOLD` debe declararse y exportarse para que
     AgentPage haga el switch.
+
+    [P2-AGENT-VIRTUOSO-LAZY · 2026-05-31] La declaración `export const
+    VIRTUALIZE_THRESHOLD = N` se movió a su propio módulo liviano
+    `virtualizeThreshold.js` (para que AgentPage lo lea sin arrastrar
+    react-virtuoso). VirtualizedMessageList.jsx lo re-exporta para back-compat.
 
     El valor debe ser un entero positivo razonable (>=50). Valores muy
     bajos virtualizan sesiones cortas sin beneficio; muy altos retrasan
@@ -104,15 +121,23 @@ def test_virtualize_threshold_constant_exported(virt_list_src: str):
     pattern = re.compile(
         r"export\s+const\s+VIRTUALIZE_THRESHOLD\s*=\s*(\d+)\s*;"
     )
-    m = pattern.search(virt_list_src)
+    m = pattern.search(virt_threshold_src)
     assert m, (
         "P1-CHAT-VIRTUALIZE regresión: `export const VIRTUALIZE_THRESHOLD = N` "
-        "no encontrado."
+        "no encontrado en virtualizeThreshold.js (SSOT del threshold tras "
+        "P2-AGENT-VIRTUOSO-LAZY)."
     )
     value = int(m.group(1))
     assert 50 <= value <= 500, (
         f"P1-CHAT-VIRTUALIZE: VIRTUALIZE_THRESHOLD={value} fuera del rango "
         f"razonable [50,500]. El audit pedía >200 — usar 100-200 es óptimo."
+    )
+    # Back-compat: VirtualizedMessageList.jsx debe re-exportar la constante.
+    assert re.search(
+        r"export\s*\{\s*VIRTUALIZE_THRESHOLD\s*\}", virt_list_src
+    ), (
+        "P1-CHAT-VIRTUALIZE regresión: VirtualizedMessageList.jsx ya no "
+        "re-exporta `VIRTUALIZE_THRESHOLD` — rompe back-compat de importadores."
     )
 
 
@@ -150,17 +175,38 @@ def test_anchor_present_agent_page(agent_page_src: str):
 
 
 def test_agent_page_imports_virtualize_threshold(agent_page_src: str):
-    """AgentPage debe importar `VirtualizedMessageList` y `VIRTUALIZE_THRESHOLD`
-    desde el módulo VirtualizedMessageList."""
-    pattern = re.compile(
-        r"import\s*\{\s*(?:VirtualizedMessageList\s*,\s*VIRTUALIZE_THRESHOLD"
-        r"|VIRTUALIZE_THRESHOLD\s*,\s*VirtualizedMessageList)\s*\}"
-        r"\s*from\s*['\"]\.\./components/agent/VirtualizedMessageList['\"]"
+    """AgentPage debe (a) importar `VIRTUALIZE_THRESHOLD` desde el módulo
+    liviano `virtualizeThreshold` y (b) cargar `VirtualizedMessageList` via
+    `lazy()`.
+
+    [P2-AGENT-VIRTUOSO-LAZY · 2026-05-31] El import combinado anterior
+    (`{ VirtualizedMessageList, VIRTUALIZE_THRESHOLD } from '.../VirtualizedMessageList'`)
+    arrastraba react-virtuoso al chunk de AgentPage para el 100% de los
+    usuarios del chat. Ahora el threshold se lee del módulo liviano (sin
+    react-virtuoso) y el componente pesado se carga via lazy() solo cuando se
+    cruza el umbral. La intención (switch del path virtualizado) se preserva."""
+    # (a) threshold desde el módulo liviano.
+    threshold_import = re.search(
+        r"import\s*\{\s*VIRTUALIZE_THRESHOLD\s*\}"
+        r"\s*from\s*['\"]\.\./components/agent/virtualizeThreshold['\"]",
+        agent_page_src,
     )
-    assert pattern.search(agent_page_src), (
-        "P1-CHAT-VIRTUALIZE regresión: el import de VirtualizedMessageList + "
-        "VIRTUALIZE_THRESHOLD no se encuentra en AgentPage.jsx. Sin él, el "
-        "switch del path virtualizado no funciona."
+    assert threshold_import, (
+        "P1-CHAT-VIRTUALIZE regresión: el import de `VIRTUALIZE_THRESHOLD` "
+        "desde `../components/agent/virtualizeThreshold` no se encuentra en "
+        "AgentPage.jsx. Sin él, el switch del path virtualizado no funciona."
+    )
+    # (b) componente pesado via lazy().
+    lazy_import = re.search(
+        r"VirtualizedMessageList\s*=\s*lazy\(\s*\(\)\s*=>\s*import\(\s*"
+        r"['\"]\.\./components/agent/VirtualizedMessageList['\"]\s*\)\s*\)",
+        agent_page_src,
+    )
+    assert lazy_import, (
+        "P1-CHAT-VIRTUALIZE regresión: `VirtualizedMessageList = lazy(() => "
+        "import('../components/agent/VirtualizedMessageList'))` no se encuentra "
+        "en AgentPage.jsx. El componente pesado debe cargarse via lazy() para "
+        "no arrastrar react-virtuoso al chunk del chat (P2-AGENT-VIRTUOSO-LAZY)."
     )
 
 

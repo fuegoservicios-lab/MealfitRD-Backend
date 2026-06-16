@@ -197,17 +197,24 @@ def test_control_panel_rendered_in_jsx():
 
 
 def test_floor_shadow_under_fridge():
-    """`.nevera-fridge-body::after` debe declarar la sombra del piso —
-    sensación de objeto pesado apoyado. Sin ella el marco "flota".
+    """La sombra del piso bajo la nevera — sensación de objeto pesado
+    apoyado, sin ella el marco "flota".
+
+    [P3-PANTRY-FEET-INSIDE · 2026-05-19] El refactor movió las patitas DENTRO
+    del interior-wrap y eliminó el `.nevera-fridge-body::after` flotante (el
+    page-frame externo es ahora el borde visual de la nevera). La sombra del
+    piso sobrevive en `.nevera-empty-fridge::after` (comentada literalmente
+    "Subtle floor shadow under the fridge"). Anclamos ahí — mantiene las
+    mismas garantías: radial-gradient + filter blur.
     """
     src = _read_pantry()
-    # Buscar el bloque del body::after
+    # Buscar el bloque de la sombra del piso (post-P3-PANTRY-FEET-INSIDE).
     match = re.search(
-        r"\.nevera-fridge-body::after\s*\{([^}]+)\}",
+        r"\.nevera-empty-fridge::after\s*\{([^}]+)\}",
         src,
         re.DOTALL,
     )
-    assert match, "`.nevera-fridge-body::after` no encontrada"
+    assert match, "`.nevera-empty-fridge::after` (sombra del piso) no encontrada"
     body = match.group(1)
     assert "radial-gradient" in body, (
         "Sombra del piso debe usar `radial-gradient` para difuminar "

@@ -110,26 +110,49 @@ def test_mobile_breakpoint_exists():
 
 
 def test_mobile_header_padding_compact():
-    """Padding del header mobile reducido para evitar header gigante.
-    Pre-fix: `padding: 1.6rem 2.2rem 1.25rem 1rem`. Post-fix: ≤ 1.4rem top,
-    ≤ 0.85rem bottom.
+    """Padding del header mobile con bottom reducido para cerrar el gap con
+    el body. Pre-fix: `padding: 1.6rem 2.2rem 1.25rem 1rem` (bottom 1.25rem
+    dejaba gap visible).
+
+    [P3-PANTRY-BRAND-SPACING · 2026-05-19] El padding-TOP fue SUBIDO
+    deliberadamente (1.4rem → 2.2rem) para que el brand label absoluto no
+    pise el pill "Solo lo que tienes" debajo — por eso ya no asertamos un
+    techo sobre el top. El invariante que protege este test (cerrar el gap
+    al body) vive en el padding-BOTTOM, que sigue compacto (≤ 0.85rem).
+    Además el `.nevera-header` mobile ahora lleva comentarios entre `{` y
+    `padding:`, así que aislamos el bloque por brace-tracking y buscamos el
+    `padding:` dentro.
     """
     src = _read_pantry()
     body = _extract_media_block(src, 640)
-    # Match: .nevera-header { ... padding: <top> <right> <bottom> <left> ... }
+    # Aislar el bloque `.nevera-header { ... }` tolerando comentarios internos.
+    header_idx = body.find(".nevera-header")
+    assert header_idx >= 0, (
+        "No se encontró regla `.nevera-header` en el bloque mobile."
+    )
+    # Brace-track el cuerpo del .nevera-header desde header_idx.
+    brace_start = body.find("{", header_idx)
+    assert brace_start >= 0
+    depth, i = 0, brace_start
+    header_block = ""
+    while i < len(body):
+        if body[i] == "{":
+            depth += 1
+        elif body[i] == "}":
+            depth -= 1
+            if depth == 0:
+                header_block = body[brace_start + 1:i]
+                break
+        i += 1
     match = re.search(
-        r"\.nevera-header\s*\{\s*padding:\s*([\d.]+)rem\s+([\d.]+)rem\s+([\d.]+)rem\s+([\d.]+)rem",
-        body,
+        r"padding:\s*([\d.]+)rem\s+([\d.]+)rem\s+([\d.]+)rem\s+([\d.]+)rem",
+        header_block,
     )
     assert match, (
-        "No se encontró declaración `.nevera-header { padding: ... }` "
-        "en el bloque mobile."
+        "No se encontró declaración `padding: <4 valores>` dentro de "
+        "`.nevera-header { ... }` del bloque mobile."
     )
     top, _, bottom, _ = map(float, match.groups())
-    assert top <= 1.4, (
-        f"Mobile header padding-top = {top}rem (debe ser ≤ 1.4rem). "
-        f"Pre-fix era 1.6rem que dejaba header gigante."
-    )
     assert bottom <= 0.85, (
         f"Mobile header padding-bottom = {bottom}rem (debe ser ≤ 0.85rem). "
         f"Pre-fix era 1.25rem que dejaba gap visible al body."
@@ -228,10 +251,16 @@ def test_extra_small_breakpoint_exists():
         "breakpoint extra-small, iPhone SE y similares ven el layout "
         "de 640px que sigue siendo demasiado para 360-380px."
     )
-    # Debe tener al menos reglas para header padding y title font-size
+    # Debe tener al menos reglas para header padding y compactación de botones.
     assert ".nevera-header" in body, (
         "Bloque ≤380px sin regla para `.nevera-header`."
     )
-    assert ".nevera-title" in body, (
-        "Bloque ≤380px sin regla para `.nevera-title`."
+    # [P3-PANTRY-NO-TITLE · 2026-05-19] El `.nevera-title` fue ELIMINADO del
+    # layout (el JSX ya no renderiza el title row, ver comentario en el bloque
+    # mobile). La compactación extra-small que sobrevive son los botones de
+    # acción (add/delete-all), que el docstring describe (font 0.85→0.78rem).
+    assert ".nevera-add-btn" in body or ".nevera-delete-all-btn" in body, (
+        "Bloque ≤380px sin regla para los botones de acción "
+        "(`.nevera-add-btn`/`.nevera-delete-all-btn`). Tras P3-PANTRY-NO-TITLE "
+        "esta es la compactación extra-small que reemplazó al `.nevera-title`."
     )

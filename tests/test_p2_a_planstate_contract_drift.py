@@ -103,6 +103,11 @@ def _scan_backend_for_assignment(key: str) -> list[str]:
     Patterns aceptados como evidencia de "key real":
       - `<dict>["<key>"] = ...`            (asignación dict)
       - `<dict>['<key>'] = ...`            (idem comillas simples)
+      - `"<key>": ...` / `'<key>': ...`    (asignación dict-literal — la forma
+                                            canónica con que los nodos
+                                            construyen `plan_result`, ej.
+                                            `return {"plan_result": {"_skeleton":
+                                            skeleton, ...}}`)
       - `<dict>.pop("<key>", ...)`         (consumidor — implica que existe)
       - `<dict>.setdefault("<key>", ...)`  (idem)
       - `jsonb_set(..., '{<key>}', ...)`   (persistencia DB path-text)
@@ -113,9 +118,19 @@ def _scan_backend_for_assignment(key: str) -> list[str]:
     """
     quoted_d = re.escape('"' + key + '"')
     quoted_s = re.escape("'" + key + "'")
-    # Asignación, pop, setdefault, jsonb path text/array
+    # Asignación subscript, dict-literal `"<key>": valor`, pop, setdefault,
+    # jsonb path text/array.
+    #
+    # [P2-A drift] La forma dict-literal (`"_skeleton": skeleton,`) faltaba: los
+    # nodos del grafo construyen `plan_result` como dict-literal en el `return`,
+    # no via subscript `result["_skeleton"] = ...`. Sin reconocerla, `_skeleton`
+    # (asignado en graph_orchestrator.py ~6686/6691/6696) producía falso drift
+    # pese a ser una key real, viva y consumida (`.get("_skeleton")` en múltiples
+    # sitios). El `:` con valor a continuación evita matchear bullets de prosa
+    # (`#   - \`_skeleton\``, que no tienen `: <valor>` de código tras el backtick).
     assign_re = re.compile(
         rf"\[\s*(?:{quoted_d}|{quoted_s})\s*\]\s*="
+        rf"|(?:{quoted_d}|{quoted_s})\s*:\s*\S"
         rf"|\.pop\(\s*(?:{quoted_d}|{quoted_s})"
         rf"|\.setdefault\(\s*(?:{quoted_d}|{quoted_s})"
         rf"|jsonb_set\([^)]*'\{{[^}}]*{re.escape(key)}[^}}]*\}}'"

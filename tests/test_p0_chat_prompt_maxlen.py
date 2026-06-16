@@ -269,10 +269,12 @@ def test_enforce_raises_413_over_cap(helpers, monkeypatch) -> None:
     `detail` que contiene tamaño + cap (debug-friendly para el cliente)."""
     from fastapi import HTTPException
     monkeypatch.setenv("MEALFIT_CHAT_PROMPT_MAX_CHARS", "10")
+    # El cap clampa a 256 (no 10), así que el string debe superar 256 para
+    # que el helper levante 413. Usamos 300 chars (> 256 clamped cap).
     with pytest.raises(HTTPException) as exc_info:
-        helpers._enforce_chat_prompt_cap("x" * 100, field_name="prompt")
+        helpers._enforce_chat_prompt_cap("x" * 300, field_name="prompt")
     assert exc_info.value.status_code == 413
-    assert "100" in exc_info.value.detail  # tamaño rechazado
+    assert "300" in exc_info.value.detail  # tamaño rechazado
     assert "256" in exc_info.value.detail  # cap aplicado (clamp a 256, no 10)
 
 

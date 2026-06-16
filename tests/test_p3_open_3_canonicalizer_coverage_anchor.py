@@ -55,28 +55,26 @@ _CANONICALIZERS_EXISTING: set[str] = {
     "canonicalize_frutas_tropicales", # mango/piña/papaya-lechosa
     "canonicalize_verduras_hoja",    # lechuga/espinaca/rúcula/acelga/berro
     "canonicalize_aceites",          # oliva/girasol/coco/aguacate
+    # [P3-NEW-12 · 2026-05-11] Las 5 familias candidato deferred fueron
+    # promovidas a canonicalizers activos (wired al guard en
+    # shopping_calculator.py:4639-4660 y 5493-5509). Antes en
+    # `_CANDIDATES_DEFERRED`, ahora implementadas.
+    "canonicalize_citricos",         # limón/lima/naranja/mandarina/toronja
+    "canonicalize_tomate",           # tomate/tomate cherry
+    "canonicalize_cebolla",          # cebolla/cebollín
+    "canonicalize_quesos_blancos_rd", # queso blanco/de freír/mozzarella/etc.
+    "canonicalize_frutos_secos",     # almendras/maní/nueces/etc.
 }
 
 # Familias candidato deferred (audit 2026-05-11). YAGNI hasta que el
 # cron diario `_shopping_coherence_alert_job` muestre evidencia.
-_CANDIDATES_DEFERRED: dict[str, str] = {
-    "citricos": (
-        "limón/limón verde/naranja/toronja. Trigger: >5% del bucket "
-        "unknown del cron diario corresponde a algún cítrico."
-    ),
-    "tomate": (
-        "criollo/cherry/perita/uva. Mismo trigger."
-    ),
-    "cebolla": (
-        "roja/blanca/morada/perla. Mismo trigger."
-    ),
-    "quesos_blancos_rd": (
-        "queso fresco/de freír/blanco duro/edam. Mismo trigger."
-    ),
-    "frutos_secos": (
-        "almendras/maní/nueces/cashew. Mismo trigger."
-    ),
-}
+#
+# [P3-NEW-12 · 2026-05-11] Las 5 familias originales (cítricos, tomate,
+# cebolla, quesos blancos, frutos secos) fueron promovidas a
+# canonicalizers activos y movidas a `_CANONICALIZERS_EXISTING`. No
+# quedan candidatos deferred hoy; si surge una familia nueva del análisis
+# operacional (>5% del bucket unknown), añadirla aquí.
+_CANDIDATES_DEFERRED: dict[str, str] = {}
 
 # Threshold del criterio (porcentaje del bucket unknown). Si SRE bumpea
 # esto, actualizar también la sección "Cómo decidir promover".

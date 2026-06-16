@@ -80,12 +80,23 @@ def test_helper_retries_at_least_twice():
 
 
 def test_backoff_reasonable():
-    """Backoff [0.1, 2.0] segundos. <100ms no le da tiempo a la conexion
-    nueva; >2s bloquea el worker thread."""
-    m = re.search(r"_WATER_RETRY_BACKOFF_S\s*=\s*([\d.]+)", _PLANS)
-    assert m, "Constante `_WATER_RETRY_BACKOFF_S` no declarada."
+    """Backoff base [0.1, 2.0] segundos. <100ms no le da tiempo a la conexion
+    nueva; >2s bloquea el worker thread.
+
+    [P2-WATER-RETRY-NO-JITTER · 2026-05-24] La constante `_WATER_RETRY_BACKOFF_S`
+    (backoff constante 350ms) fue reemplazada por `_WATER_RETRY_BACKOFF_BASE_S`
+    (base del exponencial `base * (2 ** attempt) + jitter`, knob-driven via
+    `MEALFIT_WATER_RETRY_BACKOFF_BASE_S`) para evitar thundering herd en
+    mass-retry. Asertamos el DEFAULT del `_env_float` (2º argumento posicional),
+    que es el backoff base efectivo sin override de env."""
+    m = re.search(
+        r"_WATER_RETRY_BACKOFF_BASE_S\s*=\s*_env_float\(\s*\"[^\"]+\"\s*,\s*([\d.]+)",
+        _PLANS,
+        re.DOTALL,
+    )
+    assert m, "Constante `_WATER_RETRY_BACKOFF_BASE_S` no declarada."
     s = float(m.group(1))
-    assert 0.1 <= s <= 2.0, f"_WATER_RETRY_BACKOFF_S={s} fuera de [0.1, 2.0]."
+    assert 0.1 <= s <= 2.0, f"_WATER_RETRY_BACKOFF_BASE_S default={s} fuera de [0.1, 2.0]."
 
 
 @pytest.mark.parametrize("endpoint_marker", [

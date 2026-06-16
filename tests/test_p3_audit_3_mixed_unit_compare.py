@@ -49,26 +49,32 @@ def test_multi_unit_perfect_match_no_divergence():
 # ---------------------------------------------------------------------------
 def test_multi_unit_one_unit_missing_in_aggregated():
     """Receta "1 lata + 1 cda", lista solo "1 lata" → divergencia
-    SOLO en la unit faltante (`cda`), NO en la unit que matchea (`lata`)."""
+    SOLO en la unit faltante, NO en la unit que matchea (`lata`).
+
+    [P2-UNIT-CONV-1 · 2026-05-11] El converter de coherencia (default True
+    tras este P-fix, posterior a P3-AUDIT-3) pre-normaliza `cda` a su base de
+    volumen `ml` (1 cda = 15 ml). La divergencia se reporta bajo `ml`, NO
+    bajo `cda` — el contrato multi-unit (per-unit, sin colapso oportunista)
+    se preserva; solo cambia el nombre de la unit reportada."""
     expected = {"Salsa Picante": {"lata": 1.0, "cda": 1.0}}
-    aggregated = {"Salsa Picante": {"lata": 1.0}}  # falta cda
+    aggregated = {"Salsa Picante": {"lata": 1.0}}  # falta cda (→ ml)
     divergences = compare_expected_vs_aggregated(expected, aggregated, tolerance=0.05)
-    # Esperamos exactamente UNA divergencia en `cda`.
+    # Esperamos exactamente UNA divergencia en `ml` (la base de `cda`).
     units_reported = {d["unit"] for d in divergences}
-    assert "cda" in units_reported, (
-        f"P3-AUDIT-3 regresión: unit `cda` faltante en aggregated NO se "
+    assert "ml" in units_reported, (
+        f"P3-AUDIT-3 regresión: unit faltante en aggregated (`cda`→`ml`) NO se "
         f"reportó. Divergences: {divergences}"
     )
     assert "lata" not in units_reported, (
         f"P3-AUDIT-3: unit `lata` matchea — no debe reportarse. "
         f"Divergences: {divergences}"
     )
-    # Hipótesis debe ser cap_swallowed_modifier (qty=0 en aggregated para
-    # esta unit pero el food existe en otra unit).
-    cda_div = next(d for d in divergences if d["unit"] == "cda")
-    assert cda_div["hypothesis"] in ("unit_mismatch", "cap_swallowed_modifier"), (
+    # Hipótesis debe ser cap_swallowed_modifier o unit_mismatch (qty=0 en
+    # aggregated para esta unit pero el food existe en otra unit).
+    ml_div = next(d for d in divergences if d["unit"] == "ml")
+    assert ml_div["hypothesis"] in ("unit_mismatch", "cap_swallowed_modifier"), (
         f"P3-AUDIT-3: hipótesis inesperada para multi-unit miss. "
-        f"Got: {cda_div['hypothesis']!r}"
+        f"Got: {ml_div['hypothesis']!r}"
     )
 
 
@@ -76,23 +82,27 @@ def test_multi_unit_one_unit_missing_in_aggregated():
 # 3. Multi-unit con unit extra en aggregated → fantasma multi-unit
 # ---------------------------------------------------------------------------
 def test_multi_unit_aggregated_has_extra_unit():
-    """Receta "1 lata", lista "1 lata + 0.5 cda" → fantasma en `cda`
-    (delta_pct = inf, expected=0, actual>0)."""
+    """Receta "1 lata", lista "1 lata + 0.5 cda" → fantasma en la base de
+    `cda` (`ml`): delta_pct = inf, expected=0, actual>0.
+
+    [P2-UNIT-CONV-1 · 2026-05-11] El converter normaliza `cda`→`ml` (default
+    True post-P-fix). El fantasma se reporta bajo `ml` con `actual_qty = 7.5`
+    (0.5 cda × 15 ml/cda). Sigue siendo fantasma (expected=0, delta=inf)."""
     expected = {"Salsa Picante": {"lata": 1.0}}
-    aggregated = {"Salsa Picante": {"lata": 1.0, "cda": 0.5}}  # cda extra
+    aggregated = {"Salsa Picante": {"lata": 1.0, "cda": 0.5}}  # cda extra (→ ml)
     divergences = compare_expected_vs_aggregated(expected, aggregated, tolerance=0.05)
     units_reported = {d["unit"] for d in divergences}
-    assert "cda" in units_reported, (
-        f"P3-AUDIT-3: unit `cda` extra (fantasma multi-unit) NO se "
+    assert "ml" in units_reported, (
+        f"P3-AUDIT-3: unit extra (`cda`→`ml`, fantasma multi-unit) NO se "
         f"reportó. Divergences: {divergences}"
     )
     # `lata` matchea → no reporta.
     assert "lata" not in units_reported
-    # Fantasma → delta_pct=inf.
-    cda_div = next(d for d in divergences if d["unit"] == "cda")
-    assert cda_div["expected_qty"] == 0.0
-    assert cda_div["actual_qty"] == 0.5
-    assert cda_div["delta_pct"] == float("inf")
+    # Fantasma → delta_pct=inf. actual_qty = 0.5 cda × 15 ml = 7.5 ml.
+    ml_div = next(d for d in divergences if d["unit"] == "ml")
+    assert ml_div["expected_qty"] == 0.0
+    assert ml_div["actual_qty"] == 7.5
+    assert ml_div["delta_pct"] == float("inf")
 
 
 # ---------------------------------------------------------------------------
@@ -133,19 +143,24 @@ def test_multi_unit_magnitude_divergence_per_unit():
 # ---------------------------------------------------------------------------
 def test_multi_food_multi_unit_independent():
     """2 foods cada uno con multi-unit. Divergencias por food no
-    interfieren entre sí."""
+    interfieren entre sí.
+
+    [P2-UNIT-CONV-1 · 2026-05-11] `cda`→`ml` (default True post-P-fix). En
+    Salsa la divergencia se reporta bajo `ml` (2 cda=30ml vs 1 cda=15ml). En
+    Aceite `l`+`cda` se consolidan a `ml` idéntico en ambos lados → sin
+    divergencia. El aislamiento per-food se preserva."""
     expected = {
         "Salsa": {"lata": 1.0, "cda": 2.0},
         "Aceite": {"l": 1.0, "cda": 5.0},
     }
     aggregated = {
-        "Salsa": {"lata": 1.0, "cda": 1.0},  # cda mitad → divergencia
+        "Salsa": {"lata": 1.0, "cda": 1.0},  # cda mitad → divergencia (→ ml)
         "Aceite": {"l": 1.0, "cda": 5.0},     # match perfecto
     }
     divergences = compare_expected_vs_aggregated(expected, aggregated, tolerance=0.05)
-    # Solo Salsa.cda divergente.
+    # Solo Salsa divergente, bajo la base `ml` de `cda`.
     foods_unit = {(d["food"], d["unit"]) for d in divergences}
-    assert ("Salsa", "cda") in foods_unit
+    assert ("Salsa", "ml") in foods_unit
     assert ("Salsa", "lata") not in foods_unit  # match
     assert all(d["food"] != "Aceite" for d in divergences), (
         f"P3-AUDIT-3: Aceite matchea exacto — no debe aparecer. "
@@ -159,7 +174,12 @@ def test_multi_food_multi_unit_independent():
 def test_multi_unit_all_divergent():
     """Si ambas units del mismo food divergen, ambas se reportan
     (no colapso oportunista). Usamos ratios 0.2 (fuera de yield bands)
-    para clasificación determinística como pantry_overdeduct."""
+    para clasificación determinística como pantry_overdeduct.
+
+    [P2-UNIT-CONV-1 · 2026-05-11] `cda`→`ml` (default True post-P-fix). La
+    segunda unit se reporta bajo `ml` (10 cda=150ml vs 2 cda=30ml, ratio
+    0.2); `lata` (no convertible) pasa-through. Ambas siguen reportándose
+    independientemente (sin colapso)."""
     expected = {"Salsa Picante": {"lata": 5.0, "cda": 10.0}}
     aggregated = {"Salsa Picante": {"lata": 1.0, "cda": 2.0}}  # ambas ratio=0.2
     divergences = compare_expected_vs_aggregated(expected, aggregated, tolerance=0.05)
@@ -167,8 +187,8 @@ def test_multi_unit_all_divergent():
     assert "lata" in units_reported, (
         f"P3-AUDIT-3: lata divergente NO se reportó. {divergences}"
     )
-    assert "cda" in units_reported, (
-        f"P3-AUDIT-3: cda divergente NO se reportó. {divergences}"
+    assert "ml" in units_reported, (
+        f"P3-AUDIT-3: cda (→ml) divergente NO se reportó. {divergences}"
     )
     # Ambas son ratio 0.2 → pantry_overdeduct (< default 0.5, fuera de yield).
     for d in divergences:

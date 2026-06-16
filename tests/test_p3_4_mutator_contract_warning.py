@@ -35,7 +35,7 @@ import re
 import pytest
 
 
-_DB_PROFILES = pathlib.Path(__file__).parent / "db_profiles.py"
+_DB_PROFILES = pathlib.Path(__file__).parent.parent / "db_profiles.py"
 
 
 # ---------------------------------------------------------------------------

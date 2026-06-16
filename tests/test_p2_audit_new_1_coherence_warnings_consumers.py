@@ -249,9 +249,15 @@ def test_stream_done_includes_coherence_warnings(agent_src: str) -> None:
     """C) El yield del SSE `done` en `chat_with_agent_stream` incluye
     `coherence_warnings` leído del `final_state_snapshot`.
     """
-    # Buscar el yield del done
+    # Buscar el yield del done.
+    # [P2-AUDIT-NEW-1 drift] El yield real serializa via
+    # `json.dumps({'type': 'done', ...})`, así que `type` va entre comillas
+    # (`'type'`) y precedido por `{json.dumps({`. El patrón anterior asumía
+    # `type` sin comilla de apertura y rompía sobre la `{` literal del dict.
+    # Buscamos directamente el par clave/valor `"type": "done"` (cualquier
+    # estilo de comilla) en una línea `yield`.
     done_yield = re.search(
-        r"yield\s+f[\"'][^\"']*type[\"']\s*:\s*[\"']done[\"'][^\"']*",
+        r"yield\s+f?[\"'][^\n]*[\"']type[\"']\s*:\s*[\"']done[\"']",
         agent_src,
     )
     assert done_yield, "No se encontró yield del evento `done` en agent.py."

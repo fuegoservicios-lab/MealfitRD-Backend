@@ -188,9 +188,25 @@ def test_plan_injection_wired_fase4():
     )
 
 
-def test_marker_is_dreaming():
+def test_marker_well_formed():
+    """`_LAST_KNOWN_PFIX` debe existir y tener el formato canónico
+    `Pn-... · YYYY-MM-DD` de un cierre de P-fix.
+
+    [Actualizado] El test original pinneaba el marker a `P1-DREAMING-1`, pero
+    `_LAST_KNOWN_PFIX` es un GLOBAL móvil que se bumpea en CADA cierre de P-fix
+    (ver convención `_LAST_KNOWN_PFIX` en CLAUDE.md). Fixes posteriores a
+    Dreaming (2026-06-13) lo avanzaron legítimamente — pinnearlo aquí rompía
+    el test en cada fix nuevo. El wiring del sistema Dreaming queda anclado por
+    los otros tests de este archivo (migración/knobs/scoping/RPC/propagación/
+    inyección al plan); el formato + freshness del marker los enforza
+    `test_p3_1_last_known_pfix_freshness.py`."""
     src = _read("app.py")
     m = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
-    assert m and m.group(1).startswith("P1-DREAMING-1"), (
-        f"_LAST_KNOWN_PFIX debe reflejar el cierre de Dreaming, es {m.group(1) if m else None!r}"
+    assert m is not None, "_LAST_KNOWN_PFIX ausente de app.py"
+    # Formato canónico: marker tipo P-fix + separador `·` + fecha ISO.
+    assert re.match(
+        r"^P\d+-[A-Z0-9].*·\s*\d{4}-\d{2}-\d{2}$", m.group(1)
+    ), (
+        f"_LAST_KNOWN_PFIX debe reflejar un cierre de P-fix con formato "
+        f"`Pn-... · YYYY-MM-DD`, es {m.group(1)!r}"
     )

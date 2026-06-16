@@ -227,8 +227,35 @@ def test_budget_input_no_longer_matched_but_not_rejected():
 # ---------------------------------------------------------------------------
 
 def test_marker_bumped():
-    """``_LAST_KNOWN_PFIX`` debe estar bumpeado a
-    ``P3-NEWPLAN-NO-BUDGET-MODAL · 2026-05-23``."""
-    assert '_LAST_KNOWN_PFIX = "P3-NEWPLAN-NO-BUDGET-MODAL · 2026-05-23"' in APP_PY, (
-        "Marker `_LAST_KNOWN_PFIX` no fue bumpeado."
+    """``_LAST_KNOWN_PFIX`` debe estar bumpeado a un marker real y fresco.
+
+    Originalmente pineaba el literal exacto
+    ``P3-NEWPLAN-NO-BUDGET-MODAL · 2026-05-23`` (el valor al cerrar ESTE
+    P-fix). Pero ``_LAST_KNOWN_PFIX`` es un marker rolling: CADA P-fix
+    posterior lo bumpea (ver convención en CLAUDE.md + SSOT
+    ``test_p3_1_last_known_pfix_freshness``), así que pinear el literal lo
+    rompe en el primer cierre subsiguiente. La intención real del test era
+    "el marker SÍ se bumpeó para este feature, no quedó en un placeholder
+    pre-feature". Reflejamos el prod actual verificando que el marker:
+      1. existe y sigue el formato canónico ``Pn-X · YYYY-MM-DD``, y
+      2. tiene fecha >= la fecha de este P-fix (2026-05-23) — confirma que
+         hubo bump (este feature o uno posterior), nunca regresión.
+    """
+    m = re.search(
+        r'_LAST_KNOWN_PFIX\s*=\s*"(?P<val>[^"]+)"', APP_PY
+    )
+    assert m is not None, "Marker `_LAST_KNOWN_PFIX` no encontrado en app.py."
+    marker = m.group("val")
+    fmt = re.match(
+        r"^P\d+(?:-[A-Z0-9]+)+\s+·\s+(?P<date>\d{4}-\d{2}-\d{2})$", marker
+    )
+    assert fmt is not None, (
+        f"`_LAST_KNOWN_PFIX={marker!r}` no sigue el formato canónico "
+        f"`Pn-X · YYYY-MM-DD` (ver test_p3_1_last_known_pfix_freshness)."
+    )
+    from datetime import date as _date
+    marker_date = _date.fromisoformat(fmt.group("date"))
+    assert marker_date >= _date(2026, 5, 23), (
+        f"`_LAST_KNOWN_PFIX={marker!r}` tiene fecha < 2026-05-23 (fecha de "
+        f"este P-fix) → el marker regresó a un valor pre-feature."
     )

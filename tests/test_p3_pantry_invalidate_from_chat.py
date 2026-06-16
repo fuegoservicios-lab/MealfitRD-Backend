@@ -167,9 +167,13 @@ def test_agent_page_writes_localstorage_key(agent_page_src: str):
         "`mealfit_pantry_dirty_at` no se escribe en `AgentPage.jsx`. "
         "Pantry.jsx no podrá invalidar su cache."
     )
-    assert ".setItem(" in agent_page_src, (
-        "P3-PANTRY-INVALIDATE-FROM-CHAT regresión: no hay `setItem` en "
-        "AgentPage.jsx para persistir el dirty mark."
+    # [P1-FRONTEND-HARDEN · 2026-05-23] El raw `.setItem(` fue migrado al
+    # wrapper `safeLocalStorageSet(...)` (utils/safeLocalStorage) que envuelve
+    # el setItem con guard de QuotaExceeded/private-mode. Aceptar ambos: lo
+    # que importa es que la key se persista, no la API exacta.
+    assert ".setItem(" in agent_page_src or "safeLocalStorageSet(" in agent_page_src, (
+        "P3-PANTRY-INVALIDATE-FROM-CHAT regresión: no hay `setItem` ni "
+        "`safeLocalStorageSet` en AgentPage.jsx para persistir el dirty mark."
     )
 
 
@@ -222,15 +226,18 @@ def test_pantry_consumes_dirty_one_shot(pantry_src: str):
     """Tras leer el dirty flag, `Pantry.jsx` debe `removeItem` la key — sin
     esto el cache se invalidaría perpetuamente en cada mount, anulando
     el cache TTL=10min y golpeando la BD innecesariamente."""
-    # removeItem('mealfit_pantry_dirty_at') o similar.
+    # removeItem('mealfit_pantry_dirty_at') o el wrapper hardened.
+    # [P1-FRONTEND-HARDEN · 2026-05-23] El raw `removeItem` fue migrado a
+    # `safeLocalStorageRemove(...)` (utils/safeLocalStorage) — el throw del
+    # removeItem raw en iOS Private Mode envenenaba la key. Aceptar ambos.
     assert re.search(
-        r"removeItem\(\s*['\"]mealfit_pantry_dirty_at['\"]\s*\)",
+        r"(?:removeItem|safeLocalStorageRemove)\(\s*['\"]mealfit_pantry_dirty_at['\"]\s*\)",
         pantry_src,
     ), (
         "P3-PANTRY-INVALIDATE-FROM-CHAT regresión: `Pantry.jsx` no hace "
-        "`removeItem('mealfit_pantry_dirty_at')` tras consumir el flag. "
-        "Sin one-shot, cada mount invalidaría el cache aunque ya hayamos "
-        "leído fresh data."
+        "`removeItem`/`safeLocalStorageRemove('mealfit_pantry_dirty_at')` "
+        "tras consumir el flag. Sin one-shot, cada mount invalidaría el "
+        "cache aunque ya hayamos leído fresh data."
     )
 
 

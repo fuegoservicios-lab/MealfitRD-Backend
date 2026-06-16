@@ -131,21 +131,36 @@ def test_migration_has_failloud_sanity_checks():
 # 4. Cross-link con el consumidor frontend.
 # ---------------------------------------------------------------------------
 def test_frontend_meal_plans_subscription_still_present():
-    """La suscripción a meal_plans (que la publicación habilita) debe seguir
-    existiendo. Si se remueve sin despublicar la tabla, la publicación queda
-    como desperdicio (el caso opuesto que cerramos para custom_shopping_items).
-    """
+    """El consumidor de chunk-updates de meal_plans debe seguir existiendo
+    para que el data-path no quede huérfano (el caso opuesto que cerramos
+    para custom_shopping_items).
+
+    [gemini/neon-stale fix · 2026-06-16] P1-NEON-DB-MIGRATION (2026-06-12)
+    eliminó Supabase Realtime por completo (la publicación `db_realtime`/
+    `supabase_realtime` murió con el cutover a Neon). El canal Realtime
+    `meal-plan-chunk-updates` (`table: 'meal_plans'`) fue REEMPLAZADO por un
+    polling suave de `GET /api/plans-data/latest` cada 25s mientras el plan
+    está generándose (AssessmentContext.jsx:1259+), preservando el merge-al-
+    state y el guard `P2-REALTIME-PLAN-ID-GUARD`. La invariante protegida es
+    idéntica: el frontend sigue consumiendo los chunk-updates de meal_plans
+    (no es un WAL/publicación sin consumidor) — solo cambió el transporte de
+    Realtime a polling. Aceptamos AMBAS formas para no romper si un futuro
+    re-introduce Realtime (con su publicación correspondiente)."""
     if not _ASSESSMENT_CTX.exists():
         pytest.skip("Frontend no presente en este checkout.")
     src = _read(_ASSESSMENT_CTX)
-    assert "table: 'meal_plans'" in src, (
-        "La suscripción Realtime a meal_plans desapareció de "
-        "AssessmentContext.jsx. Si fue intencional, despublica también la "
-        "tabla (migración) para no dejar WAL de Realtime sin consumidor."
+    has_realtime_sub = "table: 'meal_plans'" in src
+    has_polling_consumer = "/api/plans-data/latest" in src
+    assert has_realtime_sub or has_polling_consumer, (
+        "El consumidor de chunk-updates de meal_plans desapareció de "
+        "AssessmentContext.jsx (ni suscripción Realtime `table: 'meal_plans'` "
+        "ni polling `GET /api/plans-data/latest`). Si se eliminó la "
+        "suscripción Realtime sin reemplazo, la publicación queda como "
+        "desperdicio (WAL sin consumidor)."
     )
     assert "P2-REALTIME-PUB-SYNC" in src, (
         "El anchor P2-REALTIME-PUB-SYNC (que documenta la dependencia de la "
-        "publicación) desapareció del frontend."
+        "publicación / su reemplazo por polling) desapareció del frontend."
     )
 
 

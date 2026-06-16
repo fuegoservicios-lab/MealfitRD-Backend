@@ -37,6 +37,7 @@ from graph_orchestrator import (
     _HIGH_SEVERITY_CONTEXTUAL_KEYWORDS,
     _classify_high_severity,
     should_retry,
+    MAX_ATTEMPTS,
 )
 
 
@@ -132,9 +133,16 @@ class TestShouldRetryHighRegenerable:
         assert should_retry(state) == "end"
 
     def test_high_regenerable_attempt_max_aborta(self):
-        """Aún si HIGH es regenerable, al alcanzar MAX_ATTEMPTS=2 abortamos."""
+        """Aún si HIGH es regenerable, al alcanzar MAX_ATTEMPTS abortamos.
+
+        [stale-parser fix · P1-LOW-SIGNAL-FALLBACK · 2026-05-21] MAX_ATTEMPTS
+        subió de 2 → 3 (más intentos para usuarios de señal baja + banner
+        explícito cuando se agotan). El test ahora ancla `attempt=MAX_ATTEMPTS`
+        (el valor real, no el literal 2) para no volver a driftear con el knob.
+        En `attempt < MAX_ATTEMPTS` el retry es correcto (quedan intentos);
+        sólo en el cap se aborta — que es lo que este test verifica."""
         state = self._base_state(
-            attempt=2,
+            attempt=MAX_ATTEMPTS,
             rejection_reasons=["Falta de variedad en proteínas"],
         )
         assert should_retry(state) == "end"

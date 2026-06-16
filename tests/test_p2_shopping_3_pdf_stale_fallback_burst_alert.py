@@ -82,8 +82,16 @@ def test_endpoint_route_decorator_present(plans_src: str):
 
 
 def test_endpoint_uses_verified_user_id_dependency(plans_src: str):
-    """Endpoint exige autenticación via `get_verified_user_id` — no
-    `verify_api_quota` (paywall absurdo para telemetría).
+    """Endpoint exige autenticación + rate-limit via `_PDF_TELEMETRY_LIMITER`
+    (RateLimiter que retorna `verified_user_id`) — no `verify_api_quota`
+    (paywall absurdo para telemetría).
+
+    [P3-PDF-POLISH-4-C · 2026-05-14] `Depends(_PDF_TELEMETRY_LIMITER)` (30/60s)
+    reemplazó `Depends(get_verified_user_id)`: el RateLimiter ya devuelve el
+    `verified_user_id` autenticado, así que la auth se preserva y además se
+    añade rate-limiting per-spam. La quota-exemption está documentada en
+    CLAUDE.md (Historial-quota-exemption). El handler aún hace
+    `if not verified_user_id: raise 401`.
     """
     decorator_idx = plans_src.find('@router.post("/telemetry/pdf-stale-fallback")')
     assert decorator_idx > 0
@@ -93,9 +101,10 @@ def test_endpoint_uses_verified_user_id_dependency(plans_src: str):
         "Sin auth, un atacante puede flood-ear pipeline_metrics y disparar la "
         "alert artificialmente."
     )
-    assert "Depends(get_verified_user_id)" in after, (
-        "P2-SHOPPING-3 regresión: la dependency `Depends(get_verified_user_id)` "
-        "fue removida. Restaurar."
+    assert "Depends(_PDF_TELEMETRY_LIMITER)" in after, (
+        "P2-SHOPPING-3 regresión: la dependency `Depends(_PDF_TELEMETRY_LIMITER)` "
+        "(RateLimiter que retorna verified_user_id, P3-PDF-POLISH-4-C) fue "
+        "removida. Restaurar — sin ella el endpoint pierde auth + rate-limit."
     )
     # `Depends(verify_api_quota)` NO debe aparecer en la signature — pattern
     # más específico que `verify_api_quota` literal (que el docstring
@@ -112,7 +121,11 @@ def test_endpoint_uses_verified_user_id_dependency(plans_src: str):
 def test_endpoint_inserts_into_pipeline_metrics_with_correct_node(plans_src: str):
     """El INSERT persiste `node='pdf_stale_inventory_fallback'`."""
     decorator_idx = plans_src.find('@router.post("/telemetry/pdf-stale-fallback")')
-    after = plans_src[decorator_idx:decorator_idx + 3000]
+    # El docstring del handler creció (P3-PDF-OBS-FU-B clamp comments); acotar
+    # al cuerpo completo del handler (hasta el próximo `@router.`) en lugar de
+    # una ventana fija que el docstring desbordaba antes de llegar al INSERT.
+    handler_end = plans_src.find("\n@router.", decorator_idx + 1)
+    after = plans_src[decorator_idx:handler_end] if handler_end > 0 else plans_src[decorator_idx:]
     assert "INSERT INTO pipeline_metrics" in after, (
         "P2-SHOPPING-3 regresión: el handler ya no INSERTa en `pipeline_metrics`. "
         "Sin esa fila, el cron leería 0 y nunca alertaría."
@@ -200,7 +213,12 @@ def test_cron_emits_correct_alert_key(cron_src: str):
     con `alert_type = 'shopping'` y `severity = 'warning'`.
     """
     fn_start = cron_src.find("def _alert_pdf_stale_inventory_fallback_burst")
-    body = cron_src[fn_start:fn_start + 4000]
+    # El docstring + comments de hysteresis (P3-PDF-OBS-FU-C) crecieron y
+    # empujaron el INSERT (alert_type 'shopping') más allá de una ventana fija
+    # de 4000 chars. Acotar al cuerpo completo de la función (hasta el próximo
+    # `\ndef ` a nivel de módulo) para capturarlo sin asumir un tamaño fijo.
+    next_def = cron_src.find("\ndef ", fn_start + 1)
+    body = cron_src[fn_start:next_def] if next_def > 0 else cron_src[fn_start:]
     assert "pdf_stale_inventory_fallback_burst" in body, (
         "P2-SHOPPING-3 regresión: la alert_key cambió. El SOP y la tabla "
         "system_alerts en CLAUDE.md quedarían desincronizados."

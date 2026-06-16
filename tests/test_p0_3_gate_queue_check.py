@@ -112,16 +112,27 @@ def test_gate_query_uses_active_states_only():
     filtro incluyera 'completed', el gate bloquearía indefinidamente cualquier
     plan multi-chunk porque chunks ya completados serían tratados como
     'todavía activos'."""
-    captured = {}
+    # [test fix · P0-3/STALE-RECOVERY] El gate ahora hace DOS execute_sql_query
+    # en la rama `not previous_chunk_days`: (1) el COUNT de chunks activos en
+    # queue (el que queremos verificar) y, si n=0, (2) un re-read fresco
+    # `SELECT plan_data FROM meal_plans` (P0-3 stale-recovery). Capturar solo la
+    # última llamada agarraba la #2 → assert fallaba. Coleccionamos todas y
+    # localizamos la query del filtro de estados por su contenido.
+    calls = []
 
     def _capture(query, params, fetch_one=None):
-        captured["query"] = query
-        captured["params"] = params
+        calls.append({"query": query, "params": params})
         return {"n": 0}
 
     with patch("cron_tasks.execute_sql_query", side_effect=_capture):
         _check_chunk_learning_ready(**_base_kwargs())
 
+    queue_calls = [c for c in calls if "plan_chunk_queue" in c["query"]]
+    assert queue_calls, (
+        "El gate debe consultar plan_chunk_queue por estados activos antes del "
+        "fail-open. No se capturó ninguna query contra plan_chunk_queue."
+    )
+    captured = queue_calls[0]
     q = captured["query"]
     # Estados activos que SÍ deben bloquear:
     assert "'pending'" in q

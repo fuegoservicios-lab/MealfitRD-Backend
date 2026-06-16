@@ -107,19 +107,24 @@ def test_sandia_caps_to_4_for_2p_monthly():
 # ===========================================================================
 # 3. Piña, lechosa, papaya
 # ===========================================================================
-@pytest.mark.parametrize("ingredient,density,per_week", [
-    ("99 pinas", 1500.0, 1),
-    ("99 lechosas", 800.0, 1),
-    ("99 papayas", 800.0, 1),
+# [search_name] El aggregator canonicaliza variedades a su nombre dominicano
+# (constants.DOMINICAN_FRUIT_VARIETY: "papaya" → "lechosa"), así que el item de
+# salida lleva el nombre canónico, no el literal del input. Buscamos por el
+# nombre canónico esperado. Antes el test extraía el substring del input
+# (`papaya`) y no encontraba el item ("Lechosa") → -1.0.
+@pytest.mark.parametrize("ingredient,density,per_week,search_name", [
+    ("99 pinas", 1500.0, 1, "pina"),
+    ("99 lechosas", 800.0, 1, "lechosa"),
+    ("99 papayas", 800.0, 1, "lechosa"),  # papaya → Lechosa (canónico DR)
 ])
-def test_other_large_fruits_capped(ingredient, density, per_week):
+def test_other_large_fruits_capped(ingredient, density, per_week, search_name):
     """Cada fruta del dict respeta su per_week específico."""
     result = aggregate_and_deduct_shopping_list(
         plan_ingredients=[ingredient],
         multiplier=18.666666,
         structured=True,
     )
-    name_sub = ingredient.split()[1].rstrip("s")  # extrae "pina", "lechosa", etc
+    name_sub = search_name
     qty_g = _qty_grams_for(result, name_sub, unit_density_g=density)
     expected_cap = max(2, int(round(per_week * 8)))
     cap_g = _expected_max_g(expected_cap * density, margin_pct=0.15)

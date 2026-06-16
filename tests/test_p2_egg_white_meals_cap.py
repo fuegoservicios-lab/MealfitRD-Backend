@@ -57,8 +57,9 @@ def test_cap_applied_in_egg_white_block():
     "recortar frecuencia."""
     text = _read_graph()
     # El cap nuevo debe aparecer después de "MAX_EGG_WHITES_PER_DAY" pero
-    # antes del log final.
-    idx_max_day = text.find("MAX_EGG_WHITES_PER_DAY,  12")
+    # antes del log final. El knob PER_DAY se declara como asignación
+    # `MAX_EGG_WHITES_PER_DAY  = _env_int("MEALFIT_MAX_EGG_WHITES_PER_DAY",  12)`.
+    idx_max_day = text.find('MAX_EGG_WHITES_PER_DAY  = _env_int')
     idx_max_meals = text.find("MAX_MEALS_WITH_EGG_WHITES")
     assert idx_max_day > 0 and idx_max_meals > 0, "Knobs no encontrados."
     assert idx_max_meals > idx_max_day, (
@@ -71,9 +72,16 @@ def test_loop_for_meals_with_eggw_count():
     """El bloque debe iterar sobre `result.days[*].meals` contando los que "
     "tienen claras, NO solo aplicar al primero."""
     text = _read_graph()
-    # Buscar el bloque del cap nuevo.
-    idx = text.find("[P2-EGG-WHITE-MEALS-CAP")
-    assert idx > 0, "Marker `[P2-EGG-WHITE-MEALS-CAP` no encontrado en cuerpo."
+    # Buscar el bloque de IMPLEMENTACIÓN del cap nuevo. El marker
+    # `[P2-EGG-WHITE-MEALS-CAP` aparece dos veces: en la declaración del knob
+    # (comentario, ~línea 509) y en el pass de implementación (~línea 11188,
+    # anotado "Tercer pass"). El loop vive en el segundo, así que anclamos a
+    # ese marker concreto.
+    idx = text.find("[P2-EGG-WHITE-MEALS-CAP · 2026-05-16] Tercer pass")
+    assert idx > 0, (
+        "Bloque de implementación `[P2-EGG-WHITE-MEALS-CAP ... Tercer pass` "
+        "no encontrado en cuerpo."
+    )
     # Ventana suficiente para abarcar el for-loop.
     block = text[idx : idx + 2000]
     assert "_meals_with_eggw_list" in block, (
@@ -90,7 +98,9 @@ def test_recorta_a_1_simbolica_no_elimina():
     """El cap recorta a 1 clara simbólica en lugar de eliminar el ingrediente. "
     "Eliminar rompería la receta (ej. \"Revoltillo de Claras\" sin claras)."""
     text = _read_graph()
-    idx = text.find("[P2-EGG-WHITE-MEALS-CAP")
+    # Anclar al bloque de implementación (segundo marker, "Tercer pass"), no
+    # al comentario del knob.
+    idx = text.find("[P2-EGG-WHITE-MEALS-CAP · 2026-05-16] Tercer pass")
     block = text[idx : idx + 2000]
     # Debe asignar `f"1 {_rest}"` (1 clara simbólica) en lugar de empty string
     assert re.search(r'"1 \{_rest\}"', block) or "f\"1 {_rest}\"" in block, (
@@ -103,10 +113,13 @@ def test_log_consolidado_3_caps():
     """El log final debe consolidar los 3 caps (PER_MEAL, PER_DAY, MEALS_COUNT) "
     "en una sola línea con info útil para SRE."""
     text = _read_graph()
-    # Buscar el log [EGG-WHITE-CAP] post-fix.
+    # Buscar el log [EGG-WHITE-CAP] post-fix. El log es un f-string multilínea
+    # que contiene comillas internas, así que usamos DOTALL (`.` matchea
+    # newlines) en vez de `[^"]*` (que se cortaba en la primera comilla).
     log_match = re.search(
-        r'\[EGG-WHITE-CAP\][^"]*MAX_MEALS_WITH_EGG_WHITES',
+        r'\[EGG-WHITE-CAP\].*?MAX_MEALS_WITH_EGG_WHITES',
         text,
+        re.DOTALL,
     )
     assert log_match, (
         "El log [EGG-WHITE-CAP] no menciona `MAX_MEALS_WITH_EGG_WHITES`. "

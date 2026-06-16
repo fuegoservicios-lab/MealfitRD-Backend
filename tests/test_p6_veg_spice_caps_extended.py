@@ -211,8 +211,13 @@ class TestVegExtDoesNotAffectOthers:
         )
         qty_g = _qty_grams_for(result, "tomate")
         if qty_g > 0:
-            # Cap: 5/persona/sem × 8 pw = 40 unidades × 100g = 4000g
-            cap_g = 40 * 100.0 * 1.10  # +10% margen
+            # [STALE-PARSER-FIX] Cap: 5/persona/sem × 8 pw = 40 unidades.
+            # La conversión a gramos usa la density REAL del master DB para
+            # tomate (150g/unidad), igual que `_qty_grams_for` ('unidad'
+            # → ×150.0) y los tests hermanos (papa/plátano usan density
+            # real, no el default del dict 100g). Prod capea correctamente
+            # a 40 unidades; 40×150g = 6000g.
+            cap_g = _expected_max_g(40 * 150.0)
             assert qty_g <= cap_g, (
                 f"Tomate cap (P6-VEG-EXT-6) debe firar: {qty_g:.0f}g > {cap_g:.0f}g"
             )

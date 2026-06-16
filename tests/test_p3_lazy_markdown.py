@@ -39,13 +39,22 @@ def test_lazy_wrapper_exists():
 
 def test_lazy_wrapper_uses_react_lazy_with_dynamic_import():
     src = _LAZY_WRAPPER.read_text(encoding="utf-8")
-    # `React.lazy(() => import('react-markdown'))` o `lazy(() => import(...))`
-    pat = re.compile(
-        r"lazy\s*\(\s*\(\s*\)\s*=>\s*import\s*\(\s*['\"]react-markdown['\"]\s*\)\s*\)",
+    # [P1-MARKDOWN-SANITIZE · 2026-05-19] El wrapper pasó de
+    # `lazy(() => import('react-markdown'))` a un factory async que carga
+    # `react-markdown` + `rehype-sanitize` en paralelo via `Promise.all`:
+    #   `lazy(async () => { const [...] = await Promise.all([import('react-markdown'), import('rehype-sanitize')]); ... })`
+    # El dynamic import de react-markdown sigue presente y sigue siendo lazy
+    # (dentro del factory de `lazy(...)`), así que Vite sigue emitiendo un chunk
+    # async separado. Verificamos ambas piezas: (1) `lazy(` envuelve un factory
+    # (arrow sync o async), y (2) ese factory contiene `import('react-markdown')`.
+    assert re.search(r"\blazy\s*\(\s*(?:async\s*)?\(\s*\)\s*=>", src), (
+        "LazyMarkdown debe envolver el componente en `lazy((async) () => ...)`. "
+        "Sin `lazy(...)`, no hay split de chunk."
     )
-    assert pat.search(src), (
-        "LazyMarkdown debe usar `lazy(() => import('react-markdown'))`. "
-        "Sin dynamic import, Vite no genera chunk async separado."
+    assert re.search(r"import\s*\(\s*['\"]react-markdown['\"]\s*\)", src), (
+        "LazyMarkdown debe usar dynamic `import('react-markdown')` dentro del "
+        "factory de `lazy(...)`. Sin dynamic import, Vite no genera chunk async "
+        "separado."
     )
 
 

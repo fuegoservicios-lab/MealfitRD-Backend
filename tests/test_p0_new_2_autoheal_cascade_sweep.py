@@ -319,10 +319,16 @@ def test_sweep_tick_emit_inside_try_except(cron_src: str):
     body = _extract_function_body(cron_src, "_resolve_stale_scheduler_alerts")
     tick_idx = body.find("_scheduler_alerts_sweep_tick")
     assert tick_idx >= 0, "tick emit no encontrado (cubierto por otro test)"
-    # Ventana: 800 chars antes (para capturar `try:`) y 800 después
+    # Ventana: 800 chars antes (para capturar `try:`) y 2400 después
     # (para capturar `except` posterior al INSERT).
+    # [stale-parser fix 2026-06-16] El dict de metadata del tick creció
+    # (P3-CLEANUP + P2-NEW-E + P1-CRON-CONSECUTIVE-FAIL añadieron ~25 keys),
+    # empujando el `except Exception as _tick_err:` a ~1700 chars tras el
+    # nombre del node. El INSERT sigue íntegramente envuelto en try/except
+    # (best-effort intacto); solo el span del bloque creció. Ampliamos la
+    # ventana forward para alcanzar el `except`.
     window_start = max(0, tick_idx - 800)
-    window = body[window_start:tick_idx + 800]
+    window = body[window_start:tick_idx + 2400]
     assert "try:" in window and "except" in window, (
         "P2-B-OBS regresión: tick emit del sweep no está dentro de "
         "try/except. Best-effort: una excepción al insert (DB blip, "

@@ -76,10 +76,18 @@ def test_sensitive_key_list_includes_critical_substrings():
 
 
 def test_sentry_init_uses_before_send_and_before_breadcrumb():
-    """`Sentry.init({...})` DEBE pasar `beforeSend` y `beforeBreadcrumb`."""
+    """`Sentry.init({...})` DEBE pasar `beforeSend` y `beforeBreadcrumb`.
+
+    [P2-SENTRY-TREESHAKE · 2026-05-23] El init se importa named-aliased
+    (`import { init as sentryInit }`) para tree-shaking, así que el callsite
+    es `sentryInit({...})`, no `Sentry.init({...})`. El regex acepta ambas
+    formas y un `;` opcional de cierre.
+    """
     src = _read_main()
-    m = re.search(r"Sentry\.init\(\{\s*(.*?)\n\}\)", src, re.DOTALL)
-    assert m is not None, "No se encontró bloque `Sentry.init({...})` en main.jsx"
+    m = re.search(r"(?:Sentry\.init|sentryInit)\(\{\s*(.*?)\n\}\);?", src, re.DOTALL)
+    assert m is not None, (
+        "No se encontró bloque `Sentry.init({...})` / `sentryInit({...})` en main.jsx"
+    )
     block = m.group(1)
     assert "beforeSend: _sentryBeforeSend" in block, (
         "Sentry.init debe pasar `beforeSend: _sentryBeforeSend`."

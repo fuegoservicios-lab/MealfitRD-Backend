@@ -117,7 +117,7 @@ def test_marker_in_endpoint():
 # 2. Auth
 # ---------------------------------------------------------------------------
 def test_history_list_requires_auth():
-    from auth import verify_api_quota
+    from auth import verify_api_quota, get_verified_user_id
     from routers.plans import router
 
     app = FastAPI()

@@ -26,6 +26,27 @@ from pathlib import Path
 import pytest
 
 
+def _strip_handler_docstring(body: str) -> str:
+    """Elimina el docstring triple-quoted del handler (entre la firma `def`
+    y el primer statement de código) para que el window de inspección del
+    auth cubra CÓDIGO real, no prosa.
+
+    [P2-AUDIT-4 drift 2026-05-27] `/admin/crons-status` recibió un docstring
+    extenso (P2-CRONS-HEALTH-AGGREGATE) que empujó el `_verify_admin_token(...)`
+    (presente y correcto, al inicio del cuerpo) más allá del window fijo de
+    2500 chars → falso positivo. El docstring no es lógica ejecutable; el
+    contrato es "auth ANTES de cualquier statement", así que lo descartamos
+    antes de medir."""
+    m = re.search(r'def\s+\w+\s*\([^)]*\)\s*(?:->[^\:]+)?:\s*', body)
+    if not m:
+        return body
+    head, rest = body[: m.end()], body[m.end():]
+    doc = re.match(r'\s*(?P<q>"""|\'\'\')[\s\S]*?(?P=q)', rest)
+    if doc:
+        rest = rest[doc.end():]
+    return head + rest
+
+
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _ROUTERS_DIR = _BACKEND_ROOT / "routers"
 
@@ -77,7 +98,11 @@ def test_every_admin_endpoint_calls_verify_admin_token():
     """
     violations = []
     for filename, line_no, method, route, body in _iter_admin_endpoints():
-        if "_verify_admin_token" not in body[:2500]:
+        # Descartar el docstring del handler: el contrato es "auth antes del
+        # primer statement de código", no "auth en los primeros 2500 chars de
+        # texto incluyendo prosa" (ver _strip_handler_docstring).
+        code_body = _strip_handler_docstring(body)
+        if "_verify_admin_token" not in code_body[:2500]:
             violations.append(f"{filename}:{line_no} {method.upper()} {route}")
     assert not violations, (
         "P2-AUDIT-4 violation: endpoint(s) con prefijo /admin/ NO invocan "

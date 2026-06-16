@@ -134,21 +134,27 @@ def test_perf_telemetry_helper_defined(agent_page_src: str):
 
 
 def test_perf_telemetry_uses_sentry_breadcrumb(agent_page_src: str):
-    """El helper debe usar `Sentry.addBreadcrumb` (NO `captureMessage` — eso
-    saturaría la cuota Sentry de la app con eventos por cada stream)."""
+    """El helper debe usar el breadcrumb de Sentry (NO `captureMessage` — eso
+    saturaría la cuota Sentry de la app con eventos por cada stream).
+
+    AgentPage.jsx migró del star-import (`Sentry.addBreadcrumb`) al named
+    import tree-shaking-friendly (`import { addBreadcrumb } from '@sentry/react'`
+    → `addBreadcrumb(...)`). Ambas formas son el MISMO breadcrumb de Sentry;
+    aceptamos las dos. La defensa real es: breadcrumb sí, captureMessage no."""
     pattern = re.compile(
-        r"_emitChatPerfTelemetry\s*=[\s\S]{0,800}?Sentry\.addBreadcrumb",
+        r"_emitChatPerfTelemetry\s*=[\s\S]{0,800}?(?:Sentry\.)?addBreadcrumb",
     )
     assert pattern.search(agent_page_src), (
         "P3-CHAT-FOCUS-TELEM regresión: el helper no usa "
-        "Sentry.addBreadcrumb. Si volvió a usar captureMessage, satura la "
-        "cuota Sentry — la convención P1-SENTRY-SAMPLE-COST aplica acá."
+        "addBreadcrumb (ni `Sentry.addBreadcrumb` ni el named import). Si "
+        "volvió a usar captureMessage, satura la cuota Sentry — la "
+        "convención P1-SENTRY-SAMPLE-COST aplica acá."
     )
     forbidden = re.compile(
-        r"_emitChatPerfTelemetry\s*=[\s\S]{0,800}?Sentry\.captureMessage",
+        r"_emitChatPerfTelemetry\s*=[\s\S]{0,800}?(?:Sentry\.)?captureMessage",
     )
     assert not forbidden.search(agent_page_src), (
-        "P3-CHAT-FOCUS-TELEM regresión: el helper usa Sentry.captureMessage "
+        "P3-CHAT-FOCUS-TELEM regresión: el helper usa captureMessage "
         "— saturaría cuota Sentry (un evento por stream completado = "
         "miles de eventos/día). Usar breadcrumb para métricas operacionales."
     )

@@ -29,7 +29,11 @@ def test_inventory_proxy_strictness_manual_blocks(mock_consumed, mock_activity):
     
     assert res["ready"] is False
     assert res["inventory_proxy_used"] is False
-    assert res["ratio"] == 1.0  # El ratio implícito sigue siendo 1.0 (o similar) temporalmente pero ready es False
+    # [P1-8] zero_log_proxy + consumption_mutations_count == 0 ⇒ ratio = 0.0
+    # ("no evidencia"). Antes la fórmula `0.5 + mutations/total` arrancaba en 0.5
+    # y versiones legacy asumían 1.0; ahora _calculate_chunk_consumption_ratio
+    # devuelve 0.0 honesto cuando no hay logs ni mutaciones de inventario.
+    assert res["ratio"] == 0.0
 
 @patch("cron_tasks.get_inventory_activity_since")
 @patch("cron_tasks.get_consumed_meals_since")

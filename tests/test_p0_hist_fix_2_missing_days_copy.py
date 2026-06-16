@@ -75,18 +75,26 @@ def test_marker_present_in_css():
 def test_chip_uses_progress_framing_not_raw_fraction():
     """El render del chip NO debe usar `{_missingDays}/{_totalRequested}`
     crudo (forma antigua, ambigua). Debe usar progreso explícito
-    `{_planDaysLen} de {_totalRequested} listos` para evitar la
-    ambigüedad reportada por el usuario."""
+    `{_generatedTotal} de {_displayTotal} listos` para evitar la
+    ambigüedad reportada por el usuario.
+
+    [stale-parser fix 2026-06-16] P0-HIST-FIX-4 refinó el numerador del
+    chip de `_planDaysLen` a `_generatedTotal` (= `_planDaysLen +
+    _expiredDays`) para incluir días generados pero ya expirados/rotados
+    del array. El denominador sigue siendo `_displayTotal` (plan
+    original). El framing explícito "X de Y listos" — la invariante real
+    de este test — se preserva; solo cambió el nombre de la variable del
+    numerador. Ver History.jsx línea ~5301."""
     text = _HISTORY_JSX.read_text(encoding="utf-8")
     # Antiguo formato no debe estar.
     assert "{_missingDays}/{_totalRequested}" not in text, (
         "El chip antiguo `{_missingDays}/{_totalRequested}` regresa "
         "al bug de ambigüedad. Usa el progreso explícito "
-        "`{_planDaysLen} de {_totalRequested} listos`."
+        "`{_generatedTotal} de {_displayTotal} listos`."
     )
     # Nuevo formato debe estar.
-    assert "{_planDaysLen} de {_totalRequested} listos" in text, (
-        "El chip debe usar `{_planDaysLen} de {_totalRequested} "
+    assert "{_generatedTotal} de {_displayTotal} listos" in text, (
+        "El chip debe usar `{_generatedTotal} de {_displayTotal} "
         "listos` como progreso explícito."
     )
 

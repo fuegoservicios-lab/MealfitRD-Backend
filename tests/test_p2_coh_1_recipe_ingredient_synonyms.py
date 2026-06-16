@@ -178,9 +178,17 @@ class TestExtendedSynonyms:
 # 4. Negative tests: el check sigue flageando incoherencias REALES
 # ---------------------------------------------------------------------------
 class TestNegativeStillFlags:
-    def test_recipe_dice_pescado_sin_ingrediente_de_pez(self):
+    def test_recipe_dice_pescado_sin_ingrediente_de_pez(self, monkeypatch):
         """Si la receta menciona pescado pero ingredients NO tiene ningún
-        pez, el check debe flagear (regresión guard)."""
+        pez, el check debe flagear (regresión guard).
+
+        [P3-RECIPE-COHERENCE-AUTOFIX] El default de prod
+        (`RECIPE_COHERENCE_AUTOFIX=True`) auto-repara la mención huérfana
+        reescribiéndola a la proteína real del meal en lugar de flagear, así
+        que para ejercitar la lógica de detección hay que desactivar el knob
+        (mismo patrón que `test_p0_6_cache_assembly_validations`)."""
+        import graph_orchestrator as _go
+        monkeypatch.setattr(_go, "RECIPE_COHERENCE_AUTOFIX", False)
         errors = _run_check(
             meal_name="Plato Confuso",
             recipe="Cocinar el pescado a fuego alto. Servir caliente.",
@@ -191,7 +199,11 @@ class TestNegativeStillFlags:
             f"Recipe sin ingredient de pez DEBE flagearse, recibido: {pescado_err}"
         )
 
-    def test_recipe_dice_res_sin_ingrediente_de_res(self):
+    def test_recipe_dice_res_sin_ingrediente_de_res(self, monkeypatch):
+        # [P3-RECIPE-COHERENCE-AUTOFIX] ver test anterior — autofix OFF para
+        # ejercitar la rama de detección (no la de auto-reparación).
+        import graph_orchestrator as _go
+        monkeypatch.setattr(_go, "RECIPE_COHERENCE_AUTOFIX", False)
         errors = _run_check(
             meal_name="Plato Confuso",
             recipe="Cocinar la res a la plancha. Servir.",

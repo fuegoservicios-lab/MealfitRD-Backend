@@ -23,26 +23,37 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 def test_p3_new_1_claude_md_documents_plan_id_lifecycle():
     """CLAUDE.md debe tener una sección "Lifecycle de plan_id"
-    documentando los 6 sistemas + invariantes I1-I5."""
+    documentando los 6 sistemas + invariantes I1-I5.
+
+    [P3-CLAUDEMD-CAP doc-first restructure] El diagrama visual con los
+    stages en MAYÚSCULAS (FORMULARIO/ORQUESTADOR/…) fue MOVIDO al runbook
+    externo `runbook_plan_id_lifecycle.md` (CLAUDE.md trimmeado -46% para
+    respetar el cap de chars; convención "header + 1-line + link"). La
+    sección sigue en CLAUDE.md y enumera los 6 sistemas como prosa de flujo
+    (`formulario → orquestador → chunks → shopping/PDF → historial → recipe
+    expand`). Verificamos esos 6 stages en minúsculas, que es como prod los
+    documenta ahora."""
     claude_md = (_REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     assert "Lifecycle de `plan_id`" in claude_md, (
         "P3-NEW-1 regresión: sección 'Lifecycle de plan_id' ausente "
         "en CLAUDE.md. Sin la documentación, los devs no saben dónde "
         "se asigna ni dónde valida ownership el sistema."
     )
-    # 6 stages: form → orchestrator → chunks → shopping → historial → recipe
+    # 6 stages: form → orchestrator → chunks → shopping → historial → recipe.
+    # Tras el doc-first restructure viven como prosa de flujo en minúsculas.
+    lower = claude_md.lower()
     expected_stages = [
-        "FORMULARIO",
-        "ORQUESTADOR",
-        "CHUNKS",
-        "SHOPPING LIST",
-        "HISTORIAL",
-        "RECIPE EXPAND",
+        "formulario",
+        "orquestador",
+        "chunks",
+        "shopping",
+        "historial",
+        "recipe expand",
     ]
     for stage in expected_stages:
-        assert stage in claude_md, (
-            f"P3-NEW-1 regresión: stage `{stage}` ausente del flow "
-            "diagram. El lifecycle de plan_id queda incompleto."
+        assert stage in lower, (
+            f"P3-NEW-1 regresión: stage `{stage}` ausente del flujo del "
+            "lifecycle. El lifecycle de plan_id queda incompleto."
         )
 
 

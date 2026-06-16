@@ -60,6 +60,12 @@ _MECHANICAL_EVENTS_EXPECTED = {
     "learning_rebuild_failed",
     "failed_chunk_skipped_for_learning",
     "lifetime_proxy_ratio_exceeded",
+    # [P2-CHUNK-9] Telemetría del override del gate temporal/aprendizaje
+    # (flexible_mode bypassea el gate). Es MÉTRICA mecánica — cuantifica
+    # cuántos chunks se generan SIN aprendizaje continuo, NO una lección
+    # semántica. Por eso NO está en `LESSON_COUNT_EVENT_WHITELIST` (constants.py)
+    # pero SÍ en `CHUNK_LESSON_TELEMETRY_VALID_EVENTS`.
+    "temporal_gate_override",
 }
 
 

@@ -74,7 +74,7 @@ def test_goal_label_rendered_via_mapping_not_raw_replace():
     # render del card). Buscar dentro del bloque, no en todo el archivo
     # (otros surfaces de Settings pueden usar replace _ legitimamente).
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,8000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match, "No se localizo el bloque de la seccion 'plan'."
@@ -98,7 +98,7 @@ def test_legacy_emerald_gradient_and_shadow_removed():
     tiene `overflow:hidden` y la sombra de 25px se clipeaba abajo."""
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,8000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match, "No se localizo el bloque de la seccion 'plan'."
@@ -122,7 +122,7 @@ def test_cta_uses_minimal_slate_pattern():
     P3-RESTOCK-MINIMAL-CTA del Dashboard."""
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,8000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match
@@ -147,7 +147,7 @@ def test_prefers_reduced_motion_respected():
     la microinteraccion translateX para a11y (WCAG 2.3.3 baseline)."""
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,8000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match
@@ -163,7 +163,7 @@ def test_kcal_formatted_for_es_do_locale():
     para separador de miles consistente con el producto (no '2100' raw)."""
     src = _read(_SETTINGS_JSX)
     section_match = re.search(
-        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,8000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
+        r"activeSection\s*===\s*['\"]plan['\"][\s\S]{0,16000}?(?=activeSection\s*===\s*['\"]subscription['\"])",
         src,
     )
     assert section_match

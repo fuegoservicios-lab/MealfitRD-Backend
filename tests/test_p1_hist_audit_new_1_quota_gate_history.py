@@ -73,8 +73,15 @@ _HISTORY_ENDPOINTS = [
 # representativos. Si alguien agrega un endpoint LLM nuevo, no falla aquí
 # (este test no censura ausencias), pero si alguien REMUEVE el gate de
 # uno listado, sí falla.
+# [P3-SHIFT-PLAN-QUOTA-EXEMPT · 2026-06-15] `api_shift_plan` se removió de
+# esta lista: avanzar la ventana rolling de un plan YA generado es
+# mantenimiento, no generación de plan nuevo. Pasó de `verify_api_quota`
+# (que daba 402 + crédito extra al llegar al cap, congelando un plan ya
+# pagado) a `Depends(_SHIFT_LIMITER)` (RateLimiter, 20/60s). Documentado en
+# CLAUDE.md → "Historial-quota-exemption" y anclado por
+# `test_p3_shift_plan_quota_exempt.py`. NO es un bypass del paywall: el
+# endpoint no consume créditos LLM de generación nueva.
 _LLM_ENDPOINTS = [
-    ("api_shift_plan", "POST /shift-plan"),
     ("api_analyze", "POST /analyze"),
     ("api_expand_recipe", "POST /recipe/expand"),
     ("api_swap_meal", "POST /swap-meal"),

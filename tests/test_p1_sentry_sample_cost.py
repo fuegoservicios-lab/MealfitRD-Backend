@@ -157,12 +157,18 @@ def test_frontend_clamps_and_defaults_to_0_1():
 
 def test_frontend_sentry_init_uses_variable_not_literal():
     src = _read(_FRONTEND_MAIN)
-    # Aislar el bloque Sentry.init({...})
-    m = re.search(r"Sentry\.init\(\{\s*(.*?)\n\}\)", src, re.DOTALL)
-    assert m is not None, "No se encontró bloque `Sentry.init({...})` en main.jsx"
+    # Aislar el bloque del init de Sentry.
+    # [P2-SENTRY-TREESHAKE · 2026-05-23] main.jsx pasó de `import * as Sentry`
+    # (`Sentry.init({...})`) a un named import `import { init as sentryInit }`
+    # (`sentryInit({...})`) para habilitar tree-shaking. El regex acepta ambas
+    # formas para reflejar el callsite real sin re-acoplar al star-import viejo.
+    m = re.search(r"(?:Sentry\.init|sentryInit)\(\{\s*(.*?)\n\}\)", src, re.DOTALL)
+    assert m is not None, (
+        "No se encontró bloque `Sentry.init({...})` ni `sentryInit({...})` en main.jsx"
+    )
     block = m.group(1)
     assert "SENTRY_TRACES_SAMPLE_RATE" in block, (
-        "Sentry.init debe usar `tracesSampleRate: SENTRY_TRACES_SAMPLE_RATE`"
+        "El init de Sentry debe usar `tracesSampleRate: SENTRY_TRACES_SAMPLE_RATE`"
     )
     # tracesSampleRate NO debe ser literal 1.0 / 0.5 / etc.
     bad = re.search(r"tracesSampleRate\s*:\s*[01]\.\d+", block)

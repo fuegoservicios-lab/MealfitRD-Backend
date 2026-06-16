@@ -56,8 +56,11 @@ def test_water_cache_key_includes_date():
     src = _read(_WATER_JSX)
     # Buscar referencia al prefix + getLocalDateString.
     assert "LS_WATER_CACHE_PREFIX" in src
+    # El helper recibe `userId` para scoping per-usuario de la cache key
+    # (evita servir cache del usuario A al B en logout/login); el arg es
+    # opcional en el regex para tolerar la firma `()` o `(userId)`.
     helper = re.search(
-        r"const\s+readWaterStateFromCache\s*=\s*\(\s*\)\s*=>\s*\{(.+?)\};",
+        r"const\s+readWaterStateFromCache\s*=\s*\([^)]*\)\s*=>\s*\{(.+?)\};",
         src,
         re.DOTALL,
     )
@@ -73,9 +76,11 @@ def test_water_state_persists_on_change():
     glasses/goal/goalBasis al cambio, para que próximo mount encuentre
     cache fresco."""
     src = _read(_WATER_JSX)
-    # Buscar useEffect con deps que incluyan glasses, goal y currentDate.
+    # Buscar useEffect con deps que incluyan glasses, goal, goalBasis y
+    # currentDate. El user-scoping de la cache key añadió un `userId` final
+    # opcional a las deps; el regex lo tolera.
     persist = re.search(
-        r"useEffect\(\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*,\s*\[\s*glasses\s*,\s*goal\s*,\s*goalBasis\s*,\s*currentDate\s*\]\s*\)",
+        r"useEffect\(\s*\(\s*\)\s*=>\s*\{(.+?)\}\s*,\s*\[\s*glasses\s*,\s*goal\s*,\s*goalBasis\s*,\s*currentDate\s*(?:,\s*userId\s*)?\]\s*\)",
         src,
         re.DOTALL,
     )
@@ -87,8 +92,16 @@ def test_water_state_persists_on_change():
     assert "setItem" in body or "safeLocalStorageSet" in body, (
         "Persist effect no escribe a localStorage."
     )
-    assert "LS_WATER_CACHE_PREFIX" in body or "mealfit_water_state_" in body, (
-        "Persist effect no usa la cache key esperada."
+    # La construcción de la key se extrajo al helper `_waterCacheKey(userId,
+    # currentDate)` (que internamente usa LS_WATER_CACHE_PREFIX) para scoping
+    # per-usuario; el persist effect lo invoca en vez de inlinear el prefix.
+    assert (
+        "LS_WATER_CACHE_PREFIX" in body
+        or "mealfit_water_state_" in body
+        or "_waterCacheKey" in body
+    ), (
+        "Persist effect no usa la cache key esperada (ni el prefix inline ni "
+        "el helper `_waterCacheKey`)."
     )
 
 

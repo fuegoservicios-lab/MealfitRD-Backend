@@ -83,15 +83,30 @@ def test_db_core_uses_mealfit_pool_knobs():
         assert knob in src, f"Knob `{knob}` no encontrado en db_core.py"
 
 
-def test_db_core_uses_transaction_pooler_port_6543():
-    """Producción debe rewriter `:5432` a `:6543` (Supabase Transaction Pooler).
+def test_db_core_uses_neon_pooled_and_direct_urls():
+    """Producción debe multiplexar conexiones vía el pooler de Neon.
 
-    Sin esto, conexiones directas se agotan al escalar. Es la mitigación
-    natural de no separar pools — el pooler de Supabase multiplexa.
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Supabase fue eliminado por completo.
+    El viejo contrato "rewrite `:5432`→`:6543` (Supabase Transaction Pooler)"
+    ya no aplica: Neon NO distingue pooled vs direct por puerto, sino por
+    HOSTNAME (`-pooler` suffix) expuesto en dos env vars separados. El
+    contrato post-migración es:
+      - `NEON_DATABASE_URL_POOLED` → pools principales (pooler / transaction
+        mode, multiplexa via PgBouncer/Supavisor; reemplaza el rol del 6543).
+      - `NEON_DATABASE_URL` → `chat_checkpoint_pool` (endpoint directo,
+        session mode; el LangGraph PostgresSaver requiere session mode).
+
+    Sin esta separación, conexiones directas se agotan al escalar — la misma
+    motivación que el rewrite a 6543 cerraba en el mundo Supabase.
     """
     src = _read(_DB_CORE)
-    assert ':6543' in src and ':5432' in src, (
-        "El rewrite a port 6543 (transaction pooler) debe estar presente."
+    assert "NEON_DATABASE_URL_POOLED" in src, (
+        "Los pools principales deben consumir `NEON_DATABASE_URL_POOLED` "
+        "(pooler de Neon, transaction mode) para multiplexar conexiones."
+    )
+    assert "NEON_DATABASE_URL" in src, (
+        "El `chat_checkpoint_pool` debe consumir `NEON_DATABASE_URL` "
+        "(endpoint directo, session mode) — requerido por el PostgresSaver."
     )
 
 

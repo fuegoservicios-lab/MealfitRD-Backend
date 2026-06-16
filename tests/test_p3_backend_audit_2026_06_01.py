@@ -177,12 +177,31 @@ def test_restock_uses_bulk_delete_not_loop():
 # 5. Marker cross-link
 # ---------------------------------------------------------------------------
 def test_marker_bumped_to_this_bundle():
-    """El marker _LAST_KNOWN_PFIX refleja este bundle (cross-link con
-    test_p2_hist_audit_14 + freshness P3-1)."""
+    """El marker _LAST_KNOWN_PFIX existe y es posterior (o igual) a este bundle.
+
+    `_LAST_KNOWN_PFIX` es el marker del ÚLTIMO P-fix mergeado en HEAD (ver
+    CLAUDE.md → 'Convenciones del repo'); por diseño lo sobreescribe cada
+    P-fix posterior. Por eso este test NO puede congelar el marker en
+    `P3-BACKEND-AUDIT · ` — cuando este bundle se mergeó ESE era el último,
+    pero P-fixes posteriores (actual: el bundle de triage de junio) ya lo
+    bumpearon legítimamente. La aserción durable es: el marker está presente,
+    bien formado (`Pn-... · YYYY-MM-DD`), y su fecha >= la de este bundle
+    (2026-06-01) — lo que prueba que NO fue revertido a un marker más viejo.
+    El formato/floor canónico lo enforza `test_p3_1_last_known_pfix_freshness.py`."""
+    from datetime import datetime, date
+
     m = re.search(
         r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', _read(_APP)
     )
     assert m is not None, "_LAST_KNOWN_PFIX no encontrado"
-    assert m.group(1).startswith("P3-BACKEND-AUDIT · "), (
-        f"marker actual = {m.group(1)!r}; esperaba prefijo 'P3-BACKEND-AUDIT · '"
+    marker = m.group(1)
+    fmt = re.match(r"^P\d+(?:-[A-Z0-9]+)+\s+·\s+(\d{4}-\d{2}-\d{2})$", marker)
+    assert fmt is not None, (
+        f"marker actual = {marker!r}; esperaba formato 'Pn-X · YYYY-MM-DD'."
+    )
+    marker_date = datetime.strptime(fmt.group(1), "%Y-%m-%d").date()
+    assert marker_date >= date(2026, 6, 1), (
+        f"marker actual = {marker!r} con fecha {marker_date} < 2026-06-01 "
+        f"(fecha de este bundle P3-BACKEND-AUDIT). El marker fue revertido a "
+        f"un P-fix más viejo que este bundle."
     )

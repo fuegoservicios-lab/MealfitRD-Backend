@@ -196,14 +196,22 @@ def test_modify_single_meal_returns_warnings(tools_src: str):
 
 
 def test_claude_md_documents_t2_change(claude_md: str):
-    """CLAUDE.md surface table refleja la escalación selectiva."""
-    # La tabla debe mencionar el knob y "block_severe_only"
+    """CLAUDE.md surface section refleja la escalación selectiva.
+
+    Nota [P3-CLAUDEMD-CAP refactor]: la tabla canónica detallada (con el
+    identificador `block_severe_only` en snake_case) se movió a
+    `backend/docs/coherence_surfaces_table.md` para respetar el cap de
+    tamaño de CLAUDE.md. La sección "Surfaces que escriben" en CLAUDE.md
+    retiene el RESUMEN que describe la escalada de T2 en prosa con guiones
+    (`block-severe-only`), por lo que aceptamos cualquiera de las dos formas
+    — ambas documentan por qué T2 ahora puede bloquear (la tabla decía
+    'No bloquea' pre-fix)."""
     surfaces_section = claude_md[claude_md.find("Surfaces que escriben"):claude_md.find("Surfaces que escriben") + 6000]
-    assert "block_severe_only" in surfaces_section, (
-        "P2-COHERENCE-1 regresión: la tabla 'Surfaces que escriben' en "
-        "CLAUDE.md ya no menciona `block_severe_only`. Sin esto, un revisor "
-        "futuro no entiende por qué T2 ahora puede bloquear (la tabla decía "
-        "'No bloquea' pre-fix)."
+    assert "block_severe_only" in surfaces_section or "block-severe-only" in surfaces_section, (
+        "P2-COHERENCE-1 regresión: la sección 'Surfaces que escriben' en "
+        "CLAUDE.md ya no menciona la escalada `block_severe_only` / "
+        "`block-severe-only`. Sin esto, un revisor futuro no entiende por "
+        "qué T2 ahora puede bloquear (la tabla decía 'No bloquea' pre-fix)."
     )
     knob_section = claude_md[claude_md.find("MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY"):]
     assert "MEALFIT_COHERENCE_T2_BLOCK_SEVERE_ONLY" in knob_section, (

@@ -40,6 +40,12 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CRON_FP = _REPO_ROOT / "backend" / "cron_tasks.py"
 _CLAUDE_FP = _REPO_ROOT / "CLAUDE.md"
+# [P3-CLAUDEMD-CAP refactor] La tabla canónica de ~32 `alert_key` (con las
+# filas `plan_quality_degraded` y `post_swap_critical_divergence_*` y sus
+# markers P-fix) se movió de CLAUDE.md a este doc dedicado para respetar el
+# cap de tamaño de CLAUDE.md. La doc de la sección "Política de system_alerts
+# resolution" en CLAUDE.md apunta explícitamente a este archivo.
+_ALERT_TABLE_FP = _REPO_ROOT / "backend" / "docs" / "system_alerts_resolution_table.md"
 
 
 @pytest.fixture(scope="module")
@@ -168,23 +174,34 @@ def test_registered_in_scheduler(src: str):
 
 
 def test_claude_md_documents_p2_new_10():
-    """CLAUDE.md tabla alerts debe mencionar P2-NEW-10 en las 2 filas."""
-    claude_md = _CLAUDE_FP.read_text(encoding="utf-8")
-    # Las 2 filas afectadas deben mencionar el marker.
-    pq_idx = claude_md.find("plan_quality_degraded:<user_id>:<plan_id>")
-    # Skip a la tabla extensa (hay 2 hits: I5 invariante + tabla alerts).
-    pq_idx_2 = claude_md.find("plan_quality_degraded:<user_id>:<plan_id>", pq_idx + 1)
-    target = pq_idx_2 if pq_idx_2 > 0 else pq_idx
-    row = claude_md[target:target + 2500]
+    """La tabla canónica de alerts debe mencionar P2-NEW-10 en las 2 filas.
+
+    [P3-CLAUDEMD-CAP refactor] La tabla de ~32 `alert_key` se movió de
+    CLAUDE.md a `backend/docs/system_alerts_resolution_table.md`. Las filas
+    `plan_quality_degraded` y `post_swap_critical_divergence_*` (con el marker
+    P2-NEW-10 que las conecta al cron auto-resolve) viven ahora ahí. Leemos
+    ese doc canónico, no CLAUDE.md (que solo retiene la invariante I5)."""
+    alert_table = _ALERT_TABLE_FP.read_text(encoding="utf-8")
+    # La fila plan_quality_degraded debe mencionar el marker.
+    pq_idx = alert_table.find("plan_quality_degraded")
+    assert pq_idx > 0, (
+        "P2-NEW-10 regresión: la fila `plan_quality_degraded` desapareció de "
+        "la tabla canónica de alerts."
+    )
+    row = alert_table[pq_idx:pq_idx + 2500]
     assert "P2-NEW-10" in row, (
-        "P2-NEW-10 regresión: la fila `plan_quality_degraded` en CLAUDE.md "
-        "ya no menciona el marker. Sin él, el modelo de resolution "
-        "documentado (Auto explicit) no se conecta al cron que lo implementa."
+        "P2-NEW-10 regresión: la fila `plan_quality_degraded` en la tabla "
+        "canónica de alerts ya no menciona el marker. Sin él, el modelo de "
+        "resolution documentado (Auto explicit) no se conecta al cron que lo "
+        "implementa."
     )
     # post_swap row debe estar adyacente y también mencionar P2-NEW-10.
-    post_idx = claude_md.find("post_swap_critical_divergence_<key_id>")
-    assert post_idx > 0
-    post_row = claude_md[post_idx:post_idx + 1500]
+    post_idx = alert_table.find("post_swap_critical_divergence")
+    assert post_idx > 0, (
+        "P2-NEW-10 regresión: la fila `post_swap_critical_divergence_*` "
+        "desapareció de la tabla canónica de alerts."
+    )
+    post_row = alert_table[post_idx:post_idx + 1500]
     assert "P2-NEW-10" in post_row, (
         "P2-NEW-10 regresión: la fila `post_swap_critical_divergence_*` "
         "no menciona el marker. Sin él, alguien podría asumir que la "

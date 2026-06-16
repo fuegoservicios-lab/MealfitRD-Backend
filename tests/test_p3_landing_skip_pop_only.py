@@ -110,12 +110,20 @@ def test_redirect_gated_by_navigationType_pop():
 
 def test_redirect_gated_by_landing_and_assessment():
     """[P3-LANDING-SKIP-POP-ONLY] Tres guards obligatorios: isOnLanding +
-    hasCompletedAssessment + navigationType === 'POP'."""
+    hasCompletedAssessment + navigationType === 'POP'.
+
+    [LANDING-SKIP-NO-PLAN-FLASH · 2026-06-01] El bloque `if (isOnLanding &&
+    navigationType === 'POP')` ahora ramifica internamente: `planData` decide
+    /dashboard, `hasCompletedAssessment` decide /assessment. `hasCompletedAssessment`
+    aparece DESPUES del primer `return <Navigate to=/dashboard>` (no antes), asi
+    que matcheamos el bloque landing-POP COMPLETO (hasta el `return children`
+    final) en vez de cortar en el primer return de /dashboard."""
     src = _read(_PROTECTED_ROUTE_JSX)
     if_match = re.search(
-        r"if\s*\(\s*isOnLanding[^)]+\)\s*\{[\s\S]*?return\s+<Navigate\s+to=['\"]/dashboard['\"]",
+        r"if\s*\(\s*isOnLanding[^)]+\)\s*\{[\s\S]*?return\s+children\s*;",
         src,
     )
+    assert if_match, "Bloque del redirect landing-POP no encontrado."
     condition = if_match.group(0)
     assert "isOnLanding" in condition
     assert "hasCompletedAssessment" in condition, (
@@ -148,13 +156,30 @@ def test_no_viewport_gating_residual():
 
 
 def test_assessment_redirect_still_precedes():
-    """[P3-LANDING-SKIP-POP-ONLY] Precedencia: /assessment antes que /dashboard."""
+    """[P3-LANDING-SKIP-POP-ONLY] Precedencia: el guard del assessment
+    (redirect a /assessment) debe preceder al redirect landing-POP a /dashboard.
+
+    [P1-GUEST-MODE · 2026-06-15] El bloque de invitado anadido al tope emite
+    su propio `<Navigate to=/dashboard>` ANTES del guard de assessment, asi que
+    ya no podemos comparar contra el PRIMER /dashboard del archivo. Anclamos el
+    /dashboard al que vive dentro del bloque landing-POP (`if (isOnLanding ...)`)
+    — ese es el redirect cuya precedencia protege el contrato (sin plan ni
+    assessment, el usuario debe ir al wizard, no al dashboard)."""
     src = _read(_PROTECTED_ROUTE_JSX)
     assessment_match = re.search(r"<Navigate\s+to=['\"]/assessment['\"]", src)
-    dashboard_match = re.search(r"<Navigate\s+to=['\"]/dashboard['\"]", src)
-    assert assessment_match and dashboard_match
-    assert assessment_match.start() < dashboard_match.start(), (
-        "Redirect a /assessment debe preceder al de /dashboard."
+    # /dashboard dentro del bloque landing-POP (no el del guest mode al tope).
+    landing_block = re.search(
+        r"if\s*\(\s*isOnLanding[^)]+\)\s*\{[\s\S]*?return\s+children\s*;",
+        src,
+    )
+    assert landing_block, "Bloque landing-POP no encontrado."
+    dashboard_in_landing = re.search(
+        r"<Navigate\s+to=['\"]/dashboard['\"]", landing_block.group(0)
+    )
+    assert assessment_match and dashboard_in_landing
+    dashboard_abs_start = landing_block.start() + dashboard_in_landing.start()
+    assert assessment_match.start() < dashboard_abs_start, (
+        "Redirect a /assessment debe preceder al de /dashboard (landing-POP)."
     )
 
 

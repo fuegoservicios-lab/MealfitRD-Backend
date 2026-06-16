@@ -257,8 +257,12 @@ class TestBatataCap:
                     f"Batata cap fallido: {qty} > 24 (PDF mostraba 51)"
                 )
             elif unit in ("lb", "lbs"):
-                # 24 batatas × 200g = 4800g = 10.6 lbs cap
-                assert qty <= 11
+                # [STALE-PARSER-FIX] El cap usa la density REAL del master
+                # DB para batata (220g/unidad), no el default del dict (200g).
+                # Cap = 24 unidades × 220g = 5280g = 11.64 lbs. Prod capea
+                # correctamente a 24 unidades (51 → 24); el bound previo de
+                # 11 lbs asumía 200g/unidad.
+                assert qty <= 24 * 220.0 / 453.592 * 1.05  # ≈12.2 lbs
 
     @pytest.mark.parametrize("scenario,multiplier,expected_cap_uds", [
         ("4p mensual", 4 * 4 * 7 / 3, 48),

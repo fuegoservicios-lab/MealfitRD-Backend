@@ -128,15 +128,28 @@ def test_helper_receives_cron_daily_action_taken(cron_body: str):
 def test_select_fetches_user_id(cron_body: str):
     """El SELECT de planes para evaluación DEBE incluir `user_id` para
     que `update_meal_plan_data(..., user_id=user_id)` aplique el filtro
-    AND user_id = %s (invariante I2 CLAUDE.md)."""
-    select_re = re.compile(
+    AND user_id = %s (invariante I2 CLAUDE.md).
+
+    [stale-parser fix · 2026-06-16] P1-NEON-DB-MIGRATION (2026-06-12)
+    reemplazó el `supabase.from('meal_plans').select('id,user_id,plan_data')`
+    (PostgREST) por SQL directo: `SELECT id::text AS id, user_id::text AS
+    user_id, plan_data FROM public.meal_plans WHERE ...`. La invariante
+    protegida es idéntica (el fetch trae user_id para alimentar el persist
+    con filtro I2); solo cambió la sintaxis del fetch. El regex ahora matchea
+    AMBAS formas: el `.select('...user_id...')` legacy O el `SELECT ...
+    user_id ... FROM ... meal_plans` SQL."""
+    legacy_postgrest_re = re.compile(
         r"\.select\s*\(\s*['\"][^'\"]*user_id[^'\"]*['\"]\s*\)",
     )
-    assert select_re.search(cron_body), (
+    sql_select_re = re.compile(
+        r"SELECT[\s\S]*?\buser_id\b[\s\S]*?FROM[\s\S]*?meal_plans",
+        re.IGNORECASE,
+    )
+    assert legacy_postgrest_re.search(cron_body) or sql_select_re.search(cron_body), (
         "P2-NEXT-2 violation: el SELECT de `meal_plans` en el cron NO "
         "incluye `user_id`. Sin user_id, `update_meal_plan_data` cae al "
         "path legacy con warning `[I2-MISS]`, perdiendo defense-in-depth. "
-        "Fix: `select('id,user_id,plan_data')`."
+        "Fix: `SELECT id, user_id, plan_data FROM public.meal_plans ...`."
     )
 
 

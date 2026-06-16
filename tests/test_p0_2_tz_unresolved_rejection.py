@@ -39,8 +39,13 @@ def _hp_with_last(iso: str | None) -> dict:
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks._dispatch_push_notification")
 def test_helper_first_call_emits_push_and_persists_cooldown(mock_push, mock_query, mock_write):
+    # [test fix · P1-2 CAS · 2026-05-10] `_maybe_notify_user_tz_unresolved` delega
+    # el cooldown a `_claim_push_cooldown_slot`: UN `UPDATE user_profiles ...
+    # RETURNING id` con la condición de cooldown en el WHERE. Slot ganado = rows.
+    # El slot_key (`_tz_unresolved_notified_at`) viaja como PARÁMETRO, no como
+    # literal en el SQL string.
     import cron_tasks
-    mock_query.return_value = _hp_with_last(None)
+    mock_write.return_value = [{"id": "user-p02-1"}]  # CAS gana
 
     sent = cron_tasks._maybe_notify_user_tz_unresolved("user-p02-1")
 
@@ -50,25 +55,31 @@ def test_helper_first_call_emits_push_and_persists_cooldown(mock_push, mock_quer
     assert push_kwargs["user_id"] == "user-p02-1"
     assert "zona horaria" in push_kwargs["body"].lower() or "zona horaria" in push_kwargs["title"].lower()
     assert push_kwargs["url"].startswith("/dashboard?action_required=tz_unresolved")
-    # Cooldown persistido
+    # Cooldown reclamado vía CAS sobre user_profiles; slot_key como parámetro.
     assert mock_write.called
     sql_text = mock_write.call_args.args[0]
-    assert "_tz_unresolved_notified_at" in sql_text
+    assert "user_profiles" in sql_text
+    assert "RETURNING" in sql_text.upper(), "el CAS debe usar UPDATE ... RETURNING"
+    sql_params = mock_write.call_args.args[1]
+    assert "_tz_unresolved_notified_at" in sql_params, (
+        "el slot_key debe viajar como parámetro del CAS UPDATE"
+    )
 
 
 @patch("cron_tasks.execute_sql_write")
 @patch("cron_tasks.execute_sql_query")
 @patch("cron_tasks._dispatch_push_notification")
 def test_helper_cooldown_active_blocks_push(mock_push, mock_query, mock_write):
+    # [test fix · P1-2 CAS] Cooldown activo = el CAS UPDATE no matchea el WHERE
+    # (timestamp <24h) → 0 filas → False → no push. Lo modelamos con
+    # `execute_sql_write` devolviendo lista vacía.
     import cron_tasks
-    recent = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-    mock_query.return_value = _hp_with_last(recent)
+    mock_write.return_value = []
 
     sent = cron_tasks._maybe_notify_user_tz_unresolved("user-p02-2")
 
     assert sent is False
     assert not mock_push.called
-    assert not mock_write.called
 
 
 @patch("cron_tasks.execute_sql_write")

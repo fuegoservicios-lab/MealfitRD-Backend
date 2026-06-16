@@ -111,12 +111,24 @@ def test_day_generator_constructs_system_instruction_under_knob():
     """`generate_single_day` debe construir `day_system_instruction` que
     contenga `DAY_GENERATOR_SYSTEM_PROMPT` + el schema JSON cuando el knob
     está habilitado, y dejarlo en `None` cuando knob=False (legacy: schema
-    inline en streaming_prompt)."""
+    inline en streaming_prompt).
+
+    [stale-parser fix · P1-PROMPT-CACHE-STAGGER · 2026-05-16] La generación
+    per-call de `schema_dict` se movió a nivel módulo: el system instruction
+    cacheable ahora es la constante pre-computada
+    `_DAY_SYSTEM_INSTRUCTION_CACHED = (DAY_GENERATOR_SYSTEM_PROMPT +
+    _DAY_SCHEMA_INSTRUCTION + _NUTRITION_LOOKUP_INSTRUCTION)`. Cuando knob=True,
+    `day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED` (que ya embebe
+    DAY_GENERATOR_SYSTEM_PROMPT + schema). El contrato — system instruction
+    con los 5K tokens cacheables — se mantiene; sólo se pre-computa para
+    garantizar byte-equivalence (sort_keys=True). El test ahora ancla la
+    región en `generate_single_day` y acepta la constante pre-computada."""
     text = _read_graph()
-    # Anclar por la línea `schema_dict = SingleDayPlanModel.model_json_schema()`
-    # que es única.
+    # Anclar la región dentro de `generate_single_day` por el comentario del
+    # fix STAGGER + el gate del knob, hasta el `@retry` de `invoke_day`.
     region_match = re.search(
-        r"schema_dict = SingleDayPlanModel\.model_json_schema\(\).*?(?=\n\s{8}@retry)",
+        r"if PROMPT_CACHE_SYSTEM_MESSAGE:\s*\n\s*streaming_prompt = prompt_text"
+        r".*?(?=\n\s{8}@retry)",
         text,
         re.DOTALL,
     )
@@ -125,9 +137,10 @@ def test_day_generator_constructs_system_instruction_under_knob():
     assert "PROMPT_CACHE_SYSTEM_MESSAGE" in region, (
         "La construcción del schema del day_generator debe gatear por el knob."
     )
-    assert "day_system_instruction = DAY_GENERATOR_SYSTEM_PROMPT" in region, (
-        "Cuando knob=True, `day_system_instruction` debe incluir "
-        "`DAY_GENERATOR_SYSTEM_PROMPT` (5K tokens cacheables)."
+    assert "day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED" in region, (
+        "Cuando knob=True, `day_system_instruction` debe ser la constante "
+        "pre-computada `_DAY_SYSTEM_INSTRUCTION_CACHED` (que embebe "
+        "`DAY_GENERATOR_SYSTEM_PROMPT` + schema, 5K tokens cacheables)."
     )
     assert "day_system_instruction = None" in region, (
         "Cuando knob=False, `day_system_instruction = None` señala al messages "

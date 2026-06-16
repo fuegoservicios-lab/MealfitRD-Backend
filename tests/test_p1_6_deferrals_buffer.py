@@ -90,8 +90,16 @@ def test_p1_6_append_appends_to_existing_file(tmp_buffer_path):
     assert json.loads(lines[1])["user_id"] == "u2"
 
 
-def test_p1_6_append_fifo_cap_drops_oldest(tmp_buffer_path):
-    """Si el archivo ya tiene >= MAX_RECORDS, las líneas más viejas se descartan."""
+def test_p1_6_append_does_not_cap_on_each_append(tmp_buffer_path):
+    """[P0-8] `_append_deferral_to_buffer` ya NO aplica el FIFO cap en cada append.
+
+    El refactor P0-8 cambió el append de read-modify-write (reescribir TODO el
+    archivo + cap en cada llamada) a append simple O(1) (`open(path, "a")` +
+    flush + fsync). El cap se DELEGA al sweep `_flush_pending_deferrals`. Por eso
+    un append sobre un archivo con 5 records pre-existentes deja 6 líneas — el
+    cap NO se aplica aquí aunque `CHUNK_DEFERRALS_BUFFER_MAX_RECORDS` sea menor.
+    Ver `test_p1_6_flush_applies_fifo_cap_drops_oldest` para el cap real.
+    """
     import cron_tasks
     # Pre-poblar con 5 records
     with open(tmp_buffer_path, "w", encoding="utf-8") as f:
@@ -105,10 +113,47 @@ def test_p1_6_append_fifo_cap_drops_oldest(tmp_buffer_path):
 
     with open(tmp_buffer_path, "r", encoding="utf-8") as f:
         lines = [ln.strip() for ln in f.readlines() if ln.strip()]
-    # Después del cap (3) y append, debe haber 3 records: los 2 más recientes pre-existentes + el nuevo
-    assert len(lines) == 3
+    # Append simple: los 5 pre-existentes + el nuevo = 6 (cap NO aplicado en append)
+    assert len(lines) == 6
     assert json.loads(lines[-1])["user_id"] == "u_new"
-    assert json.loads(lines[0])["user_id"] == "u3"  # los más viejos (u0, u1, u2) se cayeron
+    assert json.loads(lines[0])["user_id"] == "u0"  # los viejos siguen ahí
+
+
+@patch("cron_tasks.execute_sql_write")
+def test_p1_6_flush_applies_fifo_cap_drops_oldest(mock_write, tmp_buffer_path):
+    """[P0-8] El FIFO cap se aplica durante el flush, no en cada append.
+
+    Cuando el outage entre flushes deja el buffer por encima del cap, el sweep
+    `_flush_pending_deferrals` trunca a las N más recientes (las más viejas se
+    descartan — FIFO). Mockeamos un error transitorio para que los records se
+    MANTENGAN (no se persistan) y el truncado del cap sea observable en el
+    archivo reescrito.
+    """
+    import cron_tasks
+    mock_write.side_effect = Exception("connection timeout")  # transitorio → mantener
+
+    # UUIDs reales (el guard `_is_valid_uuid` descarta IDs no-UUID antes del INSERT).
+    # Uno por record para poder identificar cuáles sobreviven el cap.
+    uids = [str(uuid.uuid5(uuid.NAMESPACE_DNS, f"p16-fifo-user-{i}")) for i in range(5)]
+    pids = [str(uuid.uuid5(uuid.NAMESPACE_DNS, f"p16-fifo-plan-{i}")) for i in range(5)]
+    with open(tmp_buffer_path, "w", encoding="utf-8") as f:
+        for i in range(5):
+            f.write(json.dumps({
+                "user_id": uids[i], "meal_plan_id": pids[i], "week_number": 1,
+                "reason": f"old{i}", "buffered_at": "2026-05-01T00:00:00+00:00",
+            }) + "\n")
+
+    with patch("constants.CHUNK_DEFERRALS_BUFFER_PATH", tmp_buffer_path):
+        with patch("constants.CHUNK_DEFERRALS_BUFFER_MAX_RECORDS", 3):
+            stats = cron_tasks._flush_pending_deferrals()
+
+    with open(tmp_buffer_path, "r", encoding="utf-8") as f:
+        lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+    # Tras el cap (3) en el flush: las 3 más recientes (índices 2,3,4) sobreviven.
+    assert len(lines) == 3
+    assert stats["remaining"] == 3
+    assert json.loads(lines[0])["user_id"] == uids[2]   # u0, u1 (más viejos) se cayeron
+    assert json.loads(lines[-1])["user_id"] == uids[4]  # el más reciente sobrevive
 
 
 # ---------------------------------------------------------------------------

@@ -57,15 +57,35 @@ def _extract_kv_subsection(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# A) Marker P3-AUDIT-1 presente en la subsección (señala el trim).
+# A) La subsección señala el trim: referencia el runbook y NO re-inlinea el
+#    detalle verbose (diagrama de transiciones / SOPs / SQL).
+#
+#    [drift 2026-05-14] El trim estructural posterior (CLAUDE.md cap, "-46% en
+#    6 fases") compactó la subsección aún más (de ~2700 a ~1521 chars) y
+#    dropeó el breadcrumb literal `P3-AUDIT-1`. La PROVENIENCIA que ese marker
+#    daba ("dónde vivía el contenido antes") quedó subsumida por el link al
+#    runbook, que sigue presente. El contrato funcional de P3-AUDIT-1 (detalle
+#    movido al runbook + subsección compacta) lo verifican B/C/D. Este test
+#    se re-ancla a la EVIDENCIA del trim: runbook referenciado + el detalle
+#    verbose (que vive en el runbook) NO está re-inlineado en CLAUDE.md.
 # ---------------------------------------------------------------------------
 
 def test_a_p3_audit_1_marker_in_kv_subsection(claude_md: str):
     section = _extract_kv_subsection(claude_md)
-    assert "P3-AUDIT-1" in section, (
-        "P3-AUDIT-1 regresión: la subsección KV no menciona P3-AUDIT-1 "
-        "como el P-fix que movió el detalle al runbook. Sin este marker, "
-        "un futuro mantenedor no entiende dónde vivía el contenido antes."
+    # El link al runbook es el breadcrumb que reemplazó al marker literal:
+    # señala dónde vive el detalle que P3-AUDIT-1 movió fuera de CLAUDE.md.
+    assert "runbook_llm_circuit_breaker_kv_lifecycle" in section, (
+        "P3-AUDIT-1 regresión: la subsección KV no referencia el runbook al "
+        "que P3-AUDIT-1 movió el detalle. Sin el link, un futuro mantenedor "
+        "no sabe dónde vive el diagrama de transiciones / SOPs / SQL."
+    )
+    # El detalle verbose movido al runbook NO debe estar re-inlineado en
+    # CLAUDE.md (si reaparece, el trim de P3-AUDIT-1 fue revertido).
+    verbose_markers = ("Diagrama de transiciones detallado", "```sql", "SOP detallado")
+    reinlined = [m for m in verbose_markers if m in section]
+    assert not reinlined, (
+        f"P3-AUDIT-1 regresión: la subsección KV re-inlineó detalle verbose "
+        f"{reinlined} que debe vivir en el runbook, no en CLAUDE.md."
     )
 
 

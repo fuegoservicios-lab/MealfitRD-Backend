@@ -201,21 +201,46 @@ def test_queso_not_capped_by_yogurt():
 
 
 def test_leche_not_capped_by_yogurt():
-    """Leche es lácteo pero no perecedero como yogurt (sellado dura
-    semanas). NO debe matchear el cap de yogurt."""
+    """[STALE-PARSER-FIX] P6-LACTEOS-EXT-4 (2026-05-07) añadió DELIBERADAMENTE
+    'leche': 1.75 lb/persona/sem al cap de lácteos perecederos (cap all-cause
+    por volumen: lácteos abiertos duran ~14 días). El test viejo asumía que
+    leche NUNCA se capeaba — premisa stale.
+
+    Cap esperado para 2p×mes (8 pw): round(1.75 × 8) = 14 lbs ≈ 2.8 L ≈
+    3 cartones de 946ml. Input raw '10 lbs de leche' × 18.67 ≈ 186 lbs → se
+    capea muy por debajo del raw, pero a su PROPIO límite (no al de yogurt).
+    El display DB-backed sale en 'cartón' (3) o lbs (14) según master_map.
+    """
     result = aggregate_and_deduct_shopping_list(
         plan_ingredients=["10 lbs de leche"],
         multiplier=18.666666,
         structured=True,
     )
     from constants import strip_accents
+    _WEIGHT_PER_UNIT = {  # gramos aprox por unidad de display
+        "lb": 453.592, "lbs": 453.592, "libra": 453.592, "libras": 453.592,
+        "carton": 946.0, "cartones": 946.0, "g": 1.0,
+    }
+    seen = False
     for r in result:
         if not isinstance(r, dict):
             continue
         name = strip_accents(r.get("name", "")).lower()
-        if "leche" in name:
-            qty = float(r.get("market_qty", 0))
-            assert qty > 5  # No capeado al límite de yogurt
+        if "leche" not in name:
+            continue
+        seen = True
+        qty = float(r.get("market_qty", 0))
+        unit = strip_accents((r.get("market_unit") or "")).lower()
+        qty_g = qty * _WEIGHT_PER_UNIT.get(unit, 453.592)
+        # Cap documentado: 14 lbs ≈ 6350g. Generoso margen +20% por
+        # redondeo de unidad de display (cartón/lb). Debe estar MUY por
+        # debajo del raw (~186 lbs ≈ 84600g) → cap firó.
+        leche_cap_g = 14 * 453.592 * 1.20  # ≈7620g
+        assert 0 < qty_g <= leche_cap_g, (
+            f"Leche debe capearse a su propio límite (~14 lbs / 3 cartones), "
+            f"recibido {qty_g:.0f}g ({qty} {unit})"
+        )
+    assert seen, "Leche debe aparecer en la lista"
 
 
 def test_aceite_not_capped_by_caldo():

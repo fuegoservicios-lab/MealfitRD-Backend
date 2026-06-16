@@ -123,10 +123,19 @@ def test_dry_run_does_not_require_db():
 # 5. main() retorna exit code (no levanta sin DB env)
 # ---------------------------------------------------------------------------
 def test_main_returns_1_when_db_url_missing(monkeypatch):
-    """Sin SUPABASE_DB_URL ni DATABASE_URL, `main([])` debe retornar 1
-    (no excepción no-capturada)."""
+    """Sin connection string a la DB, `main([])` debe retornar 1
+    (no excepción no-capturada).
+
+    [P1-NEON-DB-MIGRATION · 2026-06-12] El script dejó de leer
+    `SUPABASE_DB_URL`; ahora resuelve `DATABASE_URL or NEON_DATABASE_URL`
+    (ver `upsert_kv`). Hay que borrar las TRES (la vieja Supabase por
+    higiene + las dos Neon que el `.env` cargado por `db_core` puebla) para
+    que la precondición "sin DB URL" realmente se cumpla; de lo contrario
+    `NEON_DATABASE_URL` del `.env` haría que `upsert_kv` conecte y `main`
+    retorne 0."""
     monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
     sys.path.insert(0, str(_BACKEND_ROOT))
     try:
         from scripts.publish_pfix_marker import main

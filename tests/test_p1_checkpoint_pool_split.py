@@ -78,30 +78,41 @@ def test_chat_checkpoint_pool_uses_original_session_url():
     )
 
 
-def test_original_session_url_preserved_before_rewrite():
-    """[P1-CHECKPOINT-POOL-SPLIT] `original_session_url` debe asignarse
-    ANTES del `.replace(":5432", ":6543")` que el setup hace al
-    `clean_url`. Si se asigna después, contendría el URL rewrited y
-    el chat_checkpoint_pool quedaría con el bug."""
-    src = _read(_DB_CORE_PY)
-    # Buscamos el line number de cada asignación clave.
-    lines = src.splitlines()
+def test_original_session_url_is_neon_direct_endpoint():
+    """[P1-CHECKPOINT-POOL-SPLIT · actualizado P1-NEON-DB-MIGRATION 2026-06-12]
+    `original_session_url` debe derivar del endpoint DIRECTO de Neon
+    (`NEON_DATABASE_URL`), distinto del URL pooled (`NEON_DATABASE_URL_POOLED`)
+    que alimenta los pools principales.
 
-    assign_lineno = next(
-        (i for i, ln in enumerate(lines) if re.search(r"original_session_url\s*=\s*clean_url\b", ln)),
-        None,
+    Era Supabase: el split capturaba `original_session_url = clean_url` ANTES
+    del rewrite `:5432`→`:6543`, para que el checkpointer usara session mode.
+    Post-Neon (Supabase eliminado): Neon expone DOS URLs separados, así que el
+    rewrite de puerto desapareció — el checkpointer toma directamente el
+    endpoint directo session-mode. El INVARIANTE (checkpointer ≠ pooler) se
+    preserva por la separación de URLs."""
+    src = _read(_DB_CORE_PY)
+    session_from_direct = re.search(
+        r"original_session_url\s*=\s*NEON_DATABASE_URL\b", src
     )
-    rewrite_lineno = next(
-        (i for i, ln in enumerate(lines) if 'replace(":5432", ":6543")' in ln),
-        None,
+    clean_from_pooled = re.search(
+        r"clean_url\s*=\s*NEON_DATABASE_URL_POOLED\b", src
     )
-    assert assign_lineno is not None, "Asignación `original_session_url = clean_url` ausente."
-    assert rewrite_lineno is not None, "Rewrite `:5432 → :6543` ausente — refactor del setup?"
-    assert assign_lineno < rewrite_lineno, (
-        f"`original_session_url` se asigna en línea {assign_lineno + 1} pero el "
-        f"rewrite ocurre en {rewrite_lineno + 1}. Order inverted → "
-        f"`original_session_url` contiene el URL post-rewrite, perdiendo la "
-        f"intención del split. Ver P1-CHECKPOINT-POOL-SPLIT · 2026-05-20."
+    assert session_from_direct is not None, (
+        "`original_session_url = NEON_DATABASE_URL` (endpoint directo) ausente. "
+        "Sin el endpoint directo session-mode, chat_checkpoint_pool caería al "
+        "pooler y el bug del SSL bad length vuelve. Ver P1-CHECKPOINT-POOL-SPLIT "
+        "· 2026-05-20 / P1-NEON-DB-MIGRATION · 2026-06-12."
+    )
+    assert clean_from_pooled is not None, (
+        "`clean_url = NEON_DATABASE_URL_POOLED` (pooler) ausente — los pools "
+        "principales deben usar el URL pooled, distinto del directo del "
+        "checkpointer. Refactor del setup?"
+    )
+    # El rewrite legacy de puerto NO debe reaparecer (Neon no lo necesita).
+    assert 'replace(":5432", ":6543")' not in src, (
+        "Reapareció el rewrite legacy `:5432`→`:6543`. Post-Neon NO debe "
+        "existir — Neon usa URLs separados (pooled vs direct), no rewrite de "
+        "puerto. Ver P1-NEON-DB-MIGRATION · 2026-06-12."
     )
 
 

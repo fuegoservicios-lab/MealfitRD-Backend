@@ -48,10 +48,26 @@ def test_knob_registered():
 
 def test_module_level_constants_present():
     """Constantes pre-computadas a nivel módulo eliminan re-cómputo por
-    call + garantizan byte-equivalence del SystemMessage."""
+    call + garantizan byte-equivalence del SystemMessage.
+
+    [stale-parser fix] `_DAY_SYSTEM_INSTRUCTION_CACHED` evolucionó de un
+    single-line `= DAY_GENERATOR_SYSTEM_PROMPT` a una concatenación
+    multi-línea `(DAY_GENERATOR_SYSTEM_PROMPT + _DAY_SCHEMA_INSTRUCTION +
+    _NUTRITION_LOOKUP_INSTRUCTION)` — la instrucción cacheable ahora
+    embebe schema + nutrition lookup (más superficie cacheable estable).
+    Sigue siendo una constante módulo-level construida desde el prompt
+    base. El regex acepta el `=` seguido de `DAY_GENERATOR_SYSTEM_PROMPT`
+    aunque medie un `(` y salto de línea."""
     src = _GO_PY.read_text(encoding="utf-8")
     assert "_DAY_SCHEMA_INSTRUCTION = _build_day_schema_instruction()" in src
-    assert "_DAY_SYSTEM_INSTRUCTION_CACHED = DAY_GENERATOR_SYSTEM_PROMPT" in src
+    assert re.search(
+        r"_DAY_SYSTEM_INSTRUCTION_CACHED\s*=\s*\(?\s*DAY_GENERATOR_SYSTEM_PROMPT",
+        src,
+    ), (
+        "`_DAY_SYSTEM_INSTRUCTION_CACHED` debe ser una constante módulo-level "
+        "construida desde `DAY_GENERATOR_SYSTEM_PROMPT` (regression de "
+        "P1-PROMPT-CACHE-STAGGER si se re-genera per-call)."
+    )
 
 
 def test_schema_instruction_uses_sort_keys():
@@ -117,14 +133,23 @@ def test_stagger_logic_present_in_gather():
     )
 
 
-def test_default_stagger_is_zero():
-    """Default del knob = 0 (legacy preserved). El operador activa
-    explícitamente con env var."""
+def test_default_stagger_is_1500():
+    """[P2-ORCH-1 · 2026-05-28] Default del knob cambió de 0 → 1500ms
+    (activo). day_gen es el nodo más caro (>50% del gasto) y con stagger=0
+    los N días disparaban simultáneos → 16% cache hit medido vs ~50-60%
+    esperado ($0.20-0.30/plan). Worst-case latencia añadida = (N-1)*stagger
+    (~3s con PLAN_CHUNK_SIZE=3), despreciable vs el timeout global. Clamp
+    [0,10000]. Revertir sin redeploy: MEALFIT_DAY_GEN_CACHE_STAGGER_MS=0.
+
+    El default vive en el llamado a `_env_int(..., 1500, validator=...)`."""
     src = _GO_PY.read_text(encoding="utf-8")
     assert re.search(
-        r'_env_int\s*\(\s*"MEALFIT_DAY_GEN_CACHE_STAGGER_MS"\s*,\s*0\s*\)',
+        r'_env_int\s*\(\s*"MEALFIT_DAY_GEN_CACHE_STAGGER_MS"\s*,\s*1500\s*,',
         src,
-    ), "Default del knob debe ser 0 (no breaking change al desplegar)."
+    ), (
+        "Default del knob debe ser 1500 (P2-ORCH-1: stagger activo por "
+        "default para subir cache hit del nodo day-gen)."
+    )
 
 
 def test_no_per_call_json_dumps_of_schema_in_generate_single_day():

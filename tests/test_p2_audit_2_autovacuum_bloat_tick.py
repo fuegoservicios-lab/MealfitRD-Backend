@@ -35,7 +35,12 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BACKEND_ROOT = _REPO_ROOT / "backend"
 _CRON_TASKS = _BACKEND_ROOT / "cron_tasks.py"
-_CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
+# [P3-CLAUDEMD-CAP / P2-NEW-3 drift] La tabla canónica de alert_keys de
+# `system_alerts` se movió de CLAUDE.md al doc SSOT
+# `backend/docs/system_alerts_resolution_table.md` (doc-first, para respetar
+# el cap de tamaño de CLAUDE.md). El drift bidireccional lo enforza
+# `test_p2_audit_4_alert_keys_documented` contra ese mismo doc.
+_ALERT_KEYS_DOC = _BACKEND_ROOT / "docs" / "system_alerts_resolution_table.md"
 
 _P1B_TABLES = (
     "app_kv_store",
@@ -155,17 +160,20 @@ def test_f_auto_resolves_when_healthy(cron_src: str):
     )
 
 
-# G) Documentado en CLAUDE.md.
+# G) Documentado en el doc SSOT de alert_keys.
 def test_g_alert_key_documented_in_claude_md():
-    src = _CLAUDE_MD.read_text(encoding="utf-8")
-    # El test global de drift (test_p2_audit_4_alert_keys_documented) ya
-    # enforza esto en general; aquí lo verificamos específicamente para
-    # claridad del fix.
+    # [P3-CLAUDEMD-CAP drift] La tabla de alert_keys vive ahora en el doc
+    # canónico `backend/docs/system_alerts_resolution_table.md` (no inline en
+    # CLAUDE.md). El test global de drift
+    # (test_p2_audit_4_alert_keys_documented) parsea ESE doc; aquí lo
+    # verificamos específicamente para claridad del fix.
+    src = _ALERT_KEYS_DOC.read_text(encoding="utf-8")
     assert "hot_table_bloat:<table>" in src, (
         "P2-AUDIT-2: pattern `hot_table_bloat:<table>` no documentado en "
-        "CLAUDE.md (tabla 'Política de system_alerts resolution'). Añadir "
-        "fila con productor + resolver antes de mergear — el test global "
-        "test_p2_audit_4_alert_keys_documented también fallará."
+        "`backend/docs/system_alerts_resolution_table.md` (tabla canónica de "
+        "system_alerts). Añadir fila con productor + resolver antes de "
+        "mergear — el test global test_p2_audit_4_alert_keys_documented "
+        "también fallará."
     )
 
 

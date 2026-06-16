@@ -78,8 +78,18 @@ def test_penalty_multiplier_03():
     ×0.1 de embutidos procesados — cerdo magro es legítimo en otros goals)."""
     text = _read_ai_helpers()
     # Buscar el bloque del penalty fatty.
+    # [stale-parser fix · 2026-06-16] El ancla original
+    # `_GOALS_PENALIZE_FATTY_FRESH` aparece DOS veces (la definición del set
+    # + el `if _main_goal in _GOALS_PENALIZE_FATTY_FRESH:`), y la definición
+    # del set viene ANTES del loop del penalty PROCESADO (×0.1). Con `.*?`
+    # non-greedy el regex agarraba el `protein_weights[i] *= 0.1` del bloque
+    # de embutidos, no el ×0.3 del bloque fatty. Anclar en
+    # `any(kw in p_norm for kw in _FATTY_FRESH_MEAT_KEYWORDS)` identifica
+    # inequívocamente el loop fatty fresh — la propiedad protegida (su
+    # multiplier es ×0.3) es idéntica. Prod (ai_helpers.py:413-414) ya aplica
+    # ×0.3 en ese loop.
     m = re.search(
-        r"_GOALS_PENALIZE_FATTY_FRESH.*?protein_weights\[i\]\s*\*=\s*([\d.]+)",
+        r"_FATTY_FRESH_MEAT_KEYWORDS\s*\)\s*:\s*protein_weights\[i\]\s*\*=\s*([\d.]+)",
         text,
         re.DOTALL,
     )

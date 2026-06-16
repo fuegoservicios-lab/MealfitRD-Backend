@@ -70,24 +70,19 @@ def test_no_plan_modified_at_string_in_handler(expand_body: str):
     referencia). Si aparece, alguien volvió a bumpear el sort
     semántico desde recipe/expand, contra la decisión P3-NEW-1.
     """
-    # Permitimos la mención dentro del comentario explicativo P3-NEW-1
-    # (el bloque que DOCUMENTA la decisión). Excluimos esa región antes
-    # de buscar el string.
-    decision_block = re.search(
-        r"\[P3-NEW-1.*?Si en el futuro el Historial.*?al mismo tiempo\.",
-        expand_body,
-        re.DOTALL,
+    # Permitimos la mención dentro de CUALQUIER comentario explicativo
+    # (el bloque P3-NEW-1 que DOCUMENTA la decisión menciona el path, y
+    # ese comentario fue reescrito con el tiempo — antes terminaba en
+    # "Si en el futuro el Historial... al mismo tiempo.", ahora añade la
+    # nota de restauración P1-NEW-7). En vez de anclar a una frase
+    # narrativa frágil, removemos TODAS las líneas-comentario (lstrip
+    # empieza con `#`) antes de buscar la referencia ACTIVA. El contrato
+    # real es "ninguna referencia de CÓDIGO" (asignación/jsonb_set/uso),
+    # no "ninguna mención en comentario".
+    scrubbed = "\n".join(
+        line for line in expand_body.splitlines()
+        if not line.lstrip().startswith("#")
     )
-    if decision_block:
-        # Reemplazamos el bloque por placeholder para que su mención de
-        # `_plan_modified_at` no falsifique el match.
-        scrubbed = (
-            expand_body[: decision_block.start()]
-            + "<<DECISION_BLOCK_REDACTED>>"
-            + expand_body[decision_block.end() :]
-        )
-    else:
-        scrubbed = expand_body
 
     forbidden = re.search(r"_plan_modified_at", scrubbed)
     assert not forbidden, (

@@ -159,24 +159,32 @@ def test_jit_week2_sets_caller_keys_before_pipeline(proact_src: str):
 
 
 def test_claude_md_documents_caller_context(orch_src):
-    """CLAUDE.md tabla de alerts debe mencionar `caller_context`
+    """La tabla canónica de alerts debe mencionar `caller_context`
     en la fila `plan_quality_degraded` — sin docs, una regresión que
-    elimine el campo del metadata podría pasar code review."""
-    claude_md = (_REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+    elimine el campo del metadata podría pasar code review.
+
+    [stale-parser fix] La tabla canónica de ~32 `alert_key` se movió de
+    CLAUDE.md a `backend/docs/system_alerts_resolution_table.md` (P2-NEW-3
+    + convención doc-first del repo: CLAUDE.md queda con header + link, el
+    detalle vive en `docs/`). La fila `plan_quality_degraded` con el marker
+    P1-NEW-9 y `caller_context` ahora vive ahí. Este test apunta al doc
+    canónico actual."""
+    alerts_doc = (
+        _REPO_ROOT / "backend" / "docs" / "system_alerts_resolution_table.md"
+    ).read_text(encoding="utf-8")
     # La fila plan_quality_degraded debe mencionar P1-NEW-9 y caller_context.
-    row_idx = claude_md.find("plan_quality_degraded:<user_id>:<plan_id>")
-    assert row_idx > 0, "fila `plan_quality_degraded` no encontrada en CLAUDE.md"
-    # Hay 2 hits — la invariante I5 (tabla arriba) y la tabla de alerts.
-    # Tomamos la SEGUNDA (la de la tabla extensa) para verificar el detalle.
-    row_idx_2 = claude_md.find("plan_quality_degraded:<user_id>:<plan_id>", row_idx + 1)
-    if row_idx_2 < 0:
-        row_idx_2 = row_idx
+    row_idx = alerts_doc.find("plan_quality_degraded:<user_id>:<plan_id>")
+    assert row_idx > 0, (
+        "fila `plan_quality_degraded` no encontrada en "
+        "backend/docs/system_alerts_resolution_table.md"
+    )
     # Ventana razonable para leer hasta el final de la fila.
-    row_chunk = claude_md[row_idx_2:row_idx_2 + 1500]
+    row_chunk = alerts_doc[row_idx:row_idx + 1500]
     assert "P1-NEW-9" in row_chunk, (
-        "P1-NEW-9 regresión: la fila `plan_quality_degraded` en CLAUDE.md "
-        "ya no menciona el P-fix. Sin marker, un revisor futuro no "
-        "encontrará el contexto de por qué existe `caller_context`."
+        "P1-NEW-9 regresión: la fila `plan_quality_degraded` en "
+        "system_alerts_resolution_table.md ya no menciona el P-fix. Sin "
+        "marker, un revisor futuro no encontrará el contexto de por qué "
+        "existe `caller_context`."
     )
     assert "caller_context" in row_chunk, (
         "P1-NEW-9 regresión: la fila `plan_quality_degraded` no menciona "

@@ -136,8 +136,13 @@ def test_source_has_split_loops():
     import inspect
     import shopping_calculator as sc
     src = inspect.getsource(sc.aggregate_and_deduct_shopping_list)
-    # Localizar la sección eggs
-    idx = src.find("P6-EGGS-AGGREGATE-CAP")
+    # Localizar la sección eggs. Anclar en la forma con brackets
+    # `[P6-EGGS-AGGREGATE-CAP]` (header de la sección real del cap) en lugar
+    # del bare token, porque comentarios posteriores (P1-CAPS-COHERENCE-RECONCILE
+    # al inicio de la función) listan `P6-EGGS-AGGREGATE-CAP,` entre los caps
+    # acumulados en `_CAPS_APPLIED_LAST_RUN` ~1600 líneas antes del fix real,
+    # lo que envenenaba el `find` y dejaba la ventana de 6000 chars fuera del fix.
+    idx = src.find("[P6-EGGS-AGGREGATE-CAP]")
     assert idx >= 0, "P6-EGGS-AGGREGATE-CAP debe existir en el código"
     section = src[idx:idx + 6000]
     # Marker del fix

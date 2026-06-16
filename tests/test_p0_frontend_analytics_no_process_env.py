@@ -55,6 +55,26 @@ _EXCLUDED_GLOBS = (
 _PROCESS_ENV_RE = re.compile(r"\bprocess\.env\b")
 _WHITELIST_MARKER = "P0-FRONTEND-ANALYTICS WHITELIST"
 
+# Una mención de `process.env` dentro de un comentario `//` es documental
+# (e.g. analytics.js documenta el bug histórico citando `process.env.NODE_ENV`)
+# y NO crashea en runtime — Vite no evalúa comentarios. El scanner solo debe
+# flagear `process.env` en código ejecutable, no en la narrativa del fix.
+_LINE_COMMENT_RE = re.compile(r"^\s*//")
+
+
+def _is_comment_line(line: str) -> bool:
+    """True si la línea es un comentario `//` de una sola línea (la única
+    forma en que `process.env` aparece documentalmente en el bundle)."""
+    return bool(_LINE_COMMENT_RE.match(line))
+
+
+def _strip_line_comments(text: str) -> str:
+    """Elimina las líneas-comentario `//` para que las menciones documentales
+    de `process.env` no se confundan con código ejecutable."""
+    return "\n".join(
+        line for line in text.split("\n") if not _is_comment_line(line)
+    )
+
 
 def _iter_frontend_src_files():
     for ext in ("*.js", "*.jsx"):
@@ -72,7 +92,10 @@ def test_analytics_js_uses_import_meta_env():
     """`analytics.js` debe usar `import.meta.env.MODE` (Vite-correct), NO
     `process.env.NODE_ENV` (browser-broken)."""
     assert _ANALYTICS.exists(), f"analytics.js no encontrado en {_ANALYTICS}"
-    text = _ANALYTICS.read_text(encoding="utf-8")
+    raw = _ANALYTICS.read_text(encoding="utf-8")
+    # Excluimos las líneas-comentario: analytics.js documenta el bug histórico
+    # citando `process.env.NODE_ENV` en un comentario `//` (no es código).
+    text = _strip_line_comments(raw)
     assert "process.env" not in text, (
         f"P0-FRONTEND-ANALYTICS regression: `analytics.js` volvió a usar "
         f"`process.env`. Vite NO define `process` en bundle de browser — "
@@ -108,6 +131,10 @@ def test_no_process_env_in_frontend_bundle():
         lines = text.split("\n")
         for idx, line in enumerate(lines):
             if not _PROCESS_ENV_RE.search(line):
+                continue
+            # Las menciones documentales en comentarios `//` no crashean en
+            # runtime (Vite no evalúa comentarios) — no son violaciones.
+            if _is_comment_line(line):
                 continue
             # Buscar marker whitelist en las 3 líneas previas.
             window_start = max(0, idx - 3)

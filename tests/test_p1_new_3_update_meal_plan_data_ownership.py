@@ -69,9 +69,14 @@ def _extract_function_body(src: str, fn_name: str) -> str:
 def test_signature_accepts_user_id(db_plans_src: str):
     """`update_meal_plan_data(plan_id, new_plan_data, user_id=None)` debe
     aceptar `user_id` como kwarg opcional con default `None`."""
+    # [stale-parser fix] La signature usa `user_id: Optional[str] = None`
+    # (tipado correcto para un kwarg opcional); el regex acepta tanto el
+    # literal `str` como `Optional[str]`. El contrato (param opcional con
+    # default None) se mantiene intacto.
     pattern = re.compile(
         r"def\s+update_meal_plan_data\s*\(\s*plan_id\s*:\s*str\s*,\s*"
-        r"new_plan_data\s*:\s*dict\s*,\s*user_id\s*:\s*str\s*=\s*None\s*\)\s*:",
+        r"new_plan_data\s*:\s*dict\s*,\s*user_id\s*:\s*"
+        r"(?:Optional\[\s*str\s*\]|str)\s*=\s*None\s*\)\s*:",
     )
     assert pattern.search(db_plans_src), (
         "P1-NEW-3 regresión: la signature de `update_meal_plan_data` "

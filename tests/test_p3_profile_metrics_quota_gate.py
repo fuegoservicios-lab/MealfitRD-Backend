@@ -162,13 +162,27 @@ def test_last_known_pfix_bumped():
     """[P3-PROFILE-METRICS-QUOTA-GATE] El marker debe estar bumped en
     backend/app.py para que `/health/version` exponga el nuevo slug y
     el cron `_alert_deploy_lag_marker_stale` detecte el deploy. Sin
-    bump, un operador no puede confirmar que el fix está vivo en prod."""
+    bump, un operador no puede confirmar que el fix está vivo en prod.
+
+    `_LAST_KNOWN_PFIX` es un marker GLOBAL único: cada P-fix posterior lo
+    re-bumpea (ver test_p3_1_last_known_pfix_freshness). Tras P3-PROFILE-
+    METRICS-QUOTA-GATE (2026-05-20) varios P-fixes más avanzaron el marker
+    (hoy `P2-TRIAGE-REALBUGS · 2026-06-16`). Asertar el slug literal de
+    este fix iría stale por diseño; lo invariante es que el marker nunca
+    regrese antes de la fecha en que este fix aterrizó."""
+    from datetime import datetime
+
     app_py = _REPO_ROOT / "backend" / "app.py"
     src = app_py.read_text(encoding="utf-8")
     match = re.search(r'_LAST_KNOWN_PFIX\s*=\s*"([^"]+)"', src)
     assert match, "_LAST_KNOWN_PFIX no encontrado en backend/app.py"
     marker = match.group(1)
-    assert "P3-PROFILE-METRICS-QUOTA-GATE" in marker or "2026-05-20" in marker, (
-        f"_LAST_KNOWN_PFIX={marker!r} no refleja este P-fix. "
-        "Bumpear a algo como 'P3-PROFILE-METRICS-QUOTA-GATE · 2026-05-20'."
+    m = re.match(r"^P\d+(?:-[A-Z0-9]+)+\s+·\s+(\d{4}-\d{2}-\d{2})$", marker)
+    assert m is not None, (
+        f"_LAST_KNOWN_PFIX={marker!r} no sigue el formato `Pn-X · YYYY-MM-DD`."
+    )
+    marker_date = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+    assert marker_date >= datetime(2026, 5, 20).date(), (
+        f"_LAST_KNOWN_PFIX={marker!r} tiene fecha anterior a la de este "
+        f"P-fix (2026-05-20). El marker regresó — investigar."
     )

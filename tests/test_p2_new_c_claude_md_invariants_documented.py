@@ -107,8 +107,14 @@ def test_invariant_present_in_table(lifecycle_table: str, inv_id: str):
         ("I5", "plan_quality_degraded"),
         # I6: P0-NEW-A swap-meal/persist.
         ("I6", "P0-NEW-A"),
-        # I7: P1-NEW-B advisory lock test.
-        ("I7", "P1-NEW-B"),
+        # I7: advisory lock / FOR UPDATE wiring. La fila I7 fue reescrita
+        # (el patrón preferido pasó a `update_plan_data_atomic` FOR UPDATE +
+        # callback, P0-2/P1-AUDIT-1), y el marker del P-fix advisory-lock se
+        # ancla ahora vía su test de regresión `test_p1_new_b_*`
+        # (test_p1_new_b_chunk_full_overwrite_holds_advisory_lock.py), no por
+        # el token uppercase `P1-NEW-B` en prosa. El test-file slug es el
+        # anchor canónico al P-fix que enforce I7.
+        ("I7", "test_p1_new_b_"),
     ],
 )
 def test_invariant_references_canonical_token(lifecycle_table: str, inv_id: str, required_token: str):

@@ -115,7 +115,18 @@ def test_pre_pickup_tz_sync_runs_after_zombie_rescue():
     call_order = []
 
     def _record_sql_write(query, params=None, fetch_all=None, returning=None, **kw):
-        if query and "WHERE status = 'processing'" in query and "INTERVAL '10 minutes'" in query:
+        # [test fix · P2-CHUNK-1] El zombie-rescue movió la ventana de 10min de
+        # literal `INTERVAL '10 minutes'` a knob CHUNK_ZOMBIE_RESCUE_MINUTES via
+        # `make_interval(mins => %s)`. Identificamos la query por sus marcadores
+        # estables: UPDATE a plan_chunk_queue, filtra processing por updated_at
+        # stale (make_interval) y excluye dead-lettered + lock con heartbeat fresco.
+        if (
+            query
+            and "UPDATE plan_chunk_queue" in query
+            and "status = 'processing'" in query
+            and "updated_at < NOW() - make_interval(mins => %s)" in query
+            and "dead_lettered_at IS NULL" in query
+        ):
             call_order.append("zombie_rescue")
         elif query and "FOR UPDATE SKIP LOCKED" in query and "plan_chunk_queue" in query:
             call_order.append("pickup")

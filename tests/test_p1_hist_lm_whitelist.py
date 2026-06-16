@@ -70,17 +70,44 @@ def test_vitest_file_exists():
 # ---------------------------------------------------------------------------
 # 2. Drift detection: keys del writer ↔ keys del catálogo frontend
 # ---------------------------------------------------------------------------
+def _lm_display_groups_block() -> str:
+    """Devuelve el bloque source del array `const _LM_DISPLAY_GROUPS = [ ... ]`
+    de History.jsx, con corchetes balanceados.
+
+    [G8 / refactor por grupos · 2026-05-29] `_LM_DISPLAY_GROUPS` pasó de un
+    array plano de tuples a un array de objetos `{id, title, keys:[...]}` —
+    las tuples `['key','label','type']` viven ahora anidadas dentro de
+    `keys`. Además el token `_LM_DISPLAY_GROUPS` aparece primero en un
+    COMMENT antes de la declaración real. Por eso ya no sirve el viejo
+    `text.find('_LM_DISPLAY_GROUPS')` + `find('];')` (agarraba un `];`
+    ajeno río arriba). Localizamos la declaración real y balanceamos `[`/`]`.
+    """
+    text = _HISTORY_JSX.read_text(encoding="utf-8")
+    m = re.search(r"const\s+_LM_DISPLAY_GROUPS\s*=\s*\[", text)
+    assert m is not None, (
+        "Declaración `const _LM_DISPLAY_GROUPS = [` no encontrada en History.jsx"
+    )
+    start = m.end() - 1  # posición del `[` de apertura
+    depth = 0
+    i = start
+    while i < len(text):
+        c = text[i]
+        if c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                i += 1
+                break
+        i += 1
+    assert depth == 0, "Corchetes no balanceados en _LM_DISPLAY_GROUPS"
+    return text[start:i]
+
+
 def _extract_lm_display_groups_keys() -> set[str]:
     """Parsea `_LM_DISPLAY_GROUPS` en History.jsx y extrae el set de
-    todas las keys (1er elemento de cada tuple)."""
-    text = _HISTORY_JSX.read_text(encoding="utf-8")
-    # Localizar el bloque del array (defensivo: del `_LM_DISPLAY_GROUPS = [`
-    # hasta el cierre con `];`).
-    start = text.find("_LM_DISPLAY_GROUPS")
-    assert start != -1, "_LM_DISPLAY_GROUPS no encontrado en History.jsx"
-    end = text.find("];", start)
-    assert end != -1, "Cierre `];` no encontrado tras _LM_DISPLAY_GROUPS"
-    block = text[start:end]
+    todas las keys (1er elemento de cada tuple anidada en `keys`)."""
+    block = _lm_display_groups_block()
     # Tuple shape: ['key', 'label', 'type'] — capturamos el primer string.
     pattern = re.compile(
         r"\[\s*['\"]([a-z_]+)['\"]\s*,\s*['\"][^'\"]+['\"]\s*,\s*['\"][a-z_]+['\"]\s*\]"
@@ -205,14 +232,15 @@ def test_declared_types_are_valid():
     helper `_fmtLmValue` debe poder manejar. Type fuera de la
     whitelist => regresión silenciosa (el helper devolvería null
     como default y el chip nunca renderizaría)."""
-    text = _HISTORY_JSX.read_text(encoding="utf-8")
-    start = text.find("_LM_DISPLAY_GROUPS")
-    end = text.find("];", start)
-    block = text[start:end]
+    block = _lm_display_groups_block()
     pattern = re.compile(
         r"\[\s*['\"][a-z_]+['\"]\s*,\s*['\"][^'\"]+['\"]\s*,\s*['\"]([a-z_]+)['\"]\s*\]"
     )
     declared_types = set(pattern.findall(block))
+    assert declared_types, (
+        "No se extrajo ningún type de _LM_DISPLAY_GROUPS — el parser está roto "
+        "o el array quedó vacío."
+    )
     _VALID_TYPES = {
         "number", "int", "pct", "bool", "preview",
         "severity", "severity_high", "hours", "str",

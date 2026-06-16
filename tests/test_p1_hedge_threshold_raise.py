@@ -37,13 +37,18 @@ _GRAPH_ORCH = Path(__file__).parent.parent / "graph_orchestrator.py"
 # ---------------------------------------------------------------------------
 
 def test_hedge_after_base_default_is_90_in_source():
-    """El default literal debe ser 90.0 en source. Si alguien baja a 45
+    """El default literal debe ser 120.0 en source. Si alguien baja a 45
     en un revert, este test falla antes de regresar el comportamiento
     costoso. Si quieres bajarlo (e.g., a 60), actualiza también este test
-    con justificación en CLAUDE.md."""
+    con justificación en CLAUDE.md.
+
+    [P3-COST-CUT-V2 · 2026-05-21] Default subido 90s → 120s (análisis de
+    costo de hedges que fired pero perdieron — ver comentario en source).
+    El contrato sigue siendo "threshold alto para evitar hedges innecesarios";
+    aquí anclamos el valor actual."""
     src = _GRAPH_ORCH.read_text(encoding="utf-8")
-    assert 'HEDGE_AFTER_BASE_S          = _env_float("MEALFIT_HEDGE_AFTER_BASE_S",          90.0)' in src, (
-        "HEDGE_AFTER_BASE_S default debe ser 90.0 (P1-HEDGE-THRESHOLD-RAISE)."
+    assert 'HEDGE_AFTER_BASE_S          = _env_float("MEALFIT_HEDGE_AFTER_BASE_S",          120.0)' in src, (
+        "HEDGE_AFTER_BASE_S default debe ser 120.0 (P3-COST-CUT-V2, raise sobre P1-HEDGE-THRESHOLD-RAISE)."
     )
 
 

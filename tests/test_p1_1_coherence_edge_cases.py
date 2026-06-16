@@ -28,6 +28,29 @@ from unittest.mock import patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_coherence_alias_cache():
+    """[test-drift 2026-06-16] `_canonicalize_for_coherence` ahora pasa por
+    `_get_coherence_alias_map_cached` (P2-COHERENCE-GUARD-PERF · 2026-05-16,
+    añadido DESPUÉS de P1-1) que memoiza el alias_map con TTL=300s a nivel
+    módulo. Sin reset, un test que parchea `get_master_ingredients=[]`
+    (p.ej. `test_pavo_rules_unaffected_by_p1_1`) deja el cache poblado con
+    un map vacío que sobrevive 300s → el siguiente test que parchea un
+    master_map real (`test_master_map_wins_over_fallback`) ve el cache
+    stale, el lookup de alias falla y cae al fallback singularize. El cache
+    es comportamiento de prod CORRECTO (master_ingredients es dataset
+    estático, el restart del backend lo invalida); el test solo necesita
+    invalidarlo entre casos que parchean distintos masters."""
+    import shopping_calculator as _sc
+    _sc._COHERENCE_ALIAS_MAP_CACHE = None
+    _sc._COHERENCE_ALIAS_MAP_CACHE_AT = 0.0
+    _sc._COHERENCE_ALIAS_MAP_CACHE_SIZE = 0
+    yield
+    _sc._COHERENCE_ALIAS_MAP_CACHE = None
+    _sc._COHERENCE_ALIAS_MAP_CACHE_AT = 0.0
+    _sc._COHERENCE_ALIAS_MAP_CACHE_SIZE = 0
+
+
 # ---------------------------------------------------------------------------
 # 1. Singularización es-DO
 # ---------------------------------------------------------------------------

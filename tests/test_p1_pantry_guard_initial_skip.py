@@ -72,16 +72,25 @@ def test_marker_present_in_routers_plans():
 
 
 def test_knob_defined_with_clamp():
-    """El knob PANTRY_GUARD_MIN_ITEMS debe existir con clamp [0, 500] y default 10."""
+    """El knob PANTRY_GUARD_MIN_ITEMS debe existir con clamp [0, 500] y default 10.
+
+    [stale-parser fix · P2-1-KNOBS-HYGIENE · 2026-06-15] La lectura del env
+    var se migró de `int(os.environ.get("MEALFIT_PANTRY_GUARD_MIN_ITEMS",
+    "10"))` al helper `_env_int("MEALFIT_PANTRY_GUARD_MIN_ITEMS", 10)`
+    (semántica idéntica: default 10, lee el env var si está presente). El
+    clamp `max(0, min(500, ...))` se preserva. El regex acepta ambas formas.
+    """
     match = re.search(
-        r"PANTRY_GUARD_MIN_ITEMS\s*=\s*max\(0,\s*min\(500,\s*int\(os\.environ\.get\([\"']MEALFIT_PANTRY_GUARD_MIN_ITEMS[\"'],\s*[\"'](\d+)[\"']\)\)\)",
+        r"PANTRY_GUARD_MIN_ITEMS\s*=\s*max\(0,\s*min\(500,\s*"
+        r"(?:int\(os\.environ\.get\([\"']MEALFIT_PANTRY_GUARD_MIN_ITEMS[\"'],\s*[\"'](\d+)[\"']\)\)"
+        r"|_env_int\(\s*[\"']MEALFIT_PANTRY_GUARD_MIN_ITEMS[\"'],\s*(\d+)\s*\))\)",
         _CONSTANTS,
     )
     assert match, (
         "Knob PANTRY_GUARD_MIN_ITEMS no encontrado con shape `max(0, min(500, ...))`. "
         "Sin clamp, valores patológicos no se protegen."
     )
-    default_value = int(match.group(1))
+    default_value = int(match.group(1) or match.group(2))
     assert default_value == 10, (
         f"Default debería ser 10 (≈'nevera mínimamente poblada'), "
         f"actual: {default_value}. Si cambió, revisar la racionalización."

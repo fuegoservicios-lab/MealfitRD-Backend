@@ -99,10 +99,18 @@ def test_baseline_gate_is_total_gt_zero_not_anomalous():
     """La gate del baseline emit debe ser `if _total > 0` (no `_is_anomalous`).
     Si fuera anomalous-only, sería duplicado del path original."""
     src = _read_source()
-    # Buscar el bloque P2-NEW-7 (marcado con comment textual) y verificar
-    # que su gate contiene `_total > 0` antes del INSERT, no _is_anomalous.
-    p2_marker = src.find("[P2-NEW-7")
-    assert p2_marker > -1, "Marker `[P2-NEW-7` no presente en el bloque."
+    # Buscar el bloque del heartbeat baseline y verificar que su gate
+    # contiene `_total > 0` antes del INSERT, no _is_anomalous.
+    # Nota: el marker `[P2-NEW-7` aparece 6 veces en cron_tasks.py — 5 son de
+    # un P2-NEW-7 distinto (colisión de número, fechado 2026-05-11, "Misfire
+    # grace amplio para crones agregadores"). El bloque del heartbeat baseline
+    # es el fechado 2026-05-10 con el texto "Baseline emit"; anclamos a ese
+    # marker específico en vez del primer `[P2-NEW-7` (que era el de misfire).
+    p2_marker = src.find("[P2-NEW-7 · 2026-05-10] Baseline emit")
+    assert p2_marker > -1, (
+        "Marker `[P2-NEW-7 · 2026-05-10] Baseline emit` no presente en el "
+        "bloque del heartbeat baseline."
+    )
     window = src[p2_marker:p2_marker + 1500]
     # La estructura esperada: comment block + `if _total > 0:` + try + emit.
     pattern = re.compile(r"if\s+_total\s*>\s*0\s*:")

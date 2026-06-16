@@ -95,15 +95,35 @@ def test_zero_window_confirm_in_settings():
 
 
 def test_settings_invokes_confirm_toast_at_least_twice():
-    """Los 2 callsites pre-fix (`window.confirm` Renovar + Cero) deben estar
-    migrados a `confirmToast`. Si alguien los borra sin reemplazar, el test
-    falla loud — confirmando que la UX no regresó a "no preguntar"."""
+    """La UX de confirmación de las acciones destructivas NO debe regresar a
+    "no preguntar".
+
+    [stale-parser fix · 2026-06-16] El test original exigía ≥2 callsites de
+    `confirmToast(` (los 2 `window.confirm` legacy Renovar + Cero). Pero dos
+    refactors intencionales movieron esos flujos FUERA de `confirmToast`:
+      - P3-RESET-CONFIRM-NO-DOUBLE-CONFIRM · 2026-05-16: el `confirmToast`
+        bloqueante de Renovar/Cero renderizaba DETRÁS del OptionPickerModal
+        (z-index) → se eliminó. "Renovar" muestra la info en el `infoBand` del
+        modal (sin segundo confirm); "Cero" salta directo al modal de
+        confirmación dedicado `showResetConfirm` ("¿Empezar desde cero?").
+      - P1-FRONTEND-HARDEN · 2026-05-23: `handleDeleteFact` migró su
+        `window.confirm` nativo a `confirmToast` (1 callsite real restante).
+    La invariante protegida sigue viva: cada acción destructiva pide
+    confirmación. La verificamos por su forma actual — ≥1 `confirmToast(`
+    (delete-fact) Y el modal de confirmación `showResetConfirm` para el reset
+    total. Si alguien borra AMBOS, el test falla loud."""
     src = _read(_SETTINGS)
     calls = re.findall(r"\bconfirmToast\s*\(", src)
-    assert len(calls) >= 2, (
-        f"Settings.jsx debe tener ≥2 invocaciones de `confirmToast(` (Renovar + "
-        f"Cero). Encontrados: {len(calls)}. Si removiste un confirm "
-        f"intencionalmente, actualiza el conteo del test."
+    assert len(calls) >= 1, (
+        f"Settings.jsx debe conservar ≥1 invocación de `confirmToast(` "
+        f"(handleDeleteFact). Encontrados: {len(calls)}. Si removiste el "
+        f"confirm de olvidar-fact, la UX regresó a 'no preguntar'."
+    )
+    assert "showResetConfirm" in src, (
+        "Settings.jsx debe conservar el modal de confirmación "
+        "`showResetConfirm` ('¿Empezar desde cero?') que guarda el reset "
+        "total. Sin él, la acción destructiva 'Empezar de cero' ejecutaría "
+        "sin confirmación (regresión de UX)."
     )
 
 

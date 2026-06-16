@@ -71,12 +71,22 @@ def test_escalation_updates_have_cas_attempts_guard():
 
 
 def test_escalation_updates_pass_pickup_attempts():
-    """Ambos call sites pasan `_pickup_attempts` como último param del
-    tuple de params, alineado con `AND attempts = %s` del WHERE."""
+    """El call site del UPDATE de escalation pasa `_pickup_attempts` como
+    último param del tuple de params, alineado con `AND attempts = %s` del
+    WHERE.
+
+    [S18-2 · GAP-6 · 2026-05-29] Las 2 ramas `is_critical` (critical +
+    normal) se COLAPSARON en un único UPDATE: el SQL + params eran
+    byte-idénticos (la única diferencia operacional, `retry_delay_minutes`,
+    se computa una vez arriba con `is_critical=is_critical`); la rama
+    crítica sólo añadía una línea de log. Por eso `_pickup_attempts,` ahora
+    aparece UNA vez (antes 2) como param del único UPDATE consolidado. El
+    CAS guard `WHERE id = %s AND attempts = %s` + token `_pickup_attempts`
+    sigue intacto."""
     src = _read_source()
     # Cuenta ocurrencias de `_pickup_attempts,` en la sección del
-    # except handler (~L22250-L22310). Verificación laxa: que el
-    # símbolo aparezca al menos 2 veces como param de UPDATEs.
+    # except handler. Verificación: que el símbolo aparezca como param
+    # del UPDATE consolidado de escalation.
     # Trim al rango razonable: desde `is_critical = lag_seconds > 86400`
     # hasta el final del except handler.
     start_match = re.search(r"is_critical\s*=\s*lag_seconds\s*>\s*86400", src)
@@ -93,13 +103,14 @@ def test_escalation_updates_pass_pickup_attempts():
         "IMPLEMENTATION]` que marca el final del bloque escalation."
     )
     section = src[start_match.start():end_match.start()]
-    # `_pickup_attempts` debe aparecer al menos 2 veces como param (al
-    # final de cada tuple de params, antes del `), returning=True)`).
+    # `_pickup_attempts` debe aparecer >=1 vez como param (al final del
+    # tuple de params, antes del `), returning=True)`) del UPDATE
+    # consolidado tras S18-2/GAP-6.
     occurrences = section.count("_pickup_attempts,")
-    assert occurrences >= 2, (
-        f"Esperaba >=2 referencias a `_pickup_attempts,` (param de los 2 "
-        f"UPDATEs de escalation). Encontradas: {occurrences}. Sin el CAS "
-        f"token correcto el WHERE clause no aplica."
+    assert occurrences >= 1, (
+        f"Esperaba >=1 referencia a `_pickup_attempts,` (param del UPDATE "
+        f"consolidado de escalation tras S18-2/GAP-6). Encontradas: "
+        f"{occurrences}. Sin el CAS token correcto el WHERE clause no aplica."
     )
 
 

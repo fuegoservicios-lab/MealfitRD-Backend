@@ -31,7 +31,7 @@ def test_a_persists_mode_event_when_meal_plan_id_provided():
     """[P1-3] Con meal_plan_id, el evento queda en _mode_history y se setea _current_mode."""
     captured_mutators = []
 
-    def fake_atomic(plan_id, mutator, lock_timeout_ms=None):
+    def fake_atomic(plan_id, mutator, lock_timeout_ms=None, *, user_id=None):
         # Simular el contrato real del helper: pasar plan_data inicial vacío
         pd = {}
         result = mutator(pd)
@@ -114,12 +114,12 @@ def test_d_appends_to_existing_mode_history():
         {"ts": "2026-04-01T00:00:00+00:00", "mode": "flexible", "reason": "old_event", "week_number": 1},
     ]
 
-    def fake_atomic(plan_id, mutator, lock_timeout_ms=None):
+    def fake_atomic(plan_id, mutator, lock_timeout_ms=None, *, user_id=None):
         pd = {"_mode_history": list(initial_history)}
         return mutator(pd)
 
     captured = {}
-    def capture_atomic(plan_id, mutator, lock_timeout_ms=None):
+    def capture_atomic(plan_id, mutator, lock_timeout_ms=None, *, user_id=None):
         result = fake_atomic(plan_id, mutator, lock_timeout_ms)
         captured["result"] = result
         return result
@@ -150,7 +150,7 @@ def test_e_caps_history_at_100_events():
     ]
 
     captured = {}
-    def fake_atomic(plan_id, mutator, lock_timeout_ms=None):
+    def fake_atomic(plan_id, mutator, lock_timeout_ms=None, *, user_id=None):
         pd = {"_mode_history": list(initial_history)}
         result = mutator(pd)
         captured["result"] = result

@@ -179,11 +179,24 @@ class TestP1SchedulerLeaderLock:
         )
 
     def test_session_url_forces_5432(self):
+        """El leader lock requiere session mode; el transaction pooler
+        liberaría el advisory lock al terminar la sentencia.
+
+        [migration-stale fix · P1-NEON-DB-MIGRATION 2026-06-12 +
+        P1-SUPABASE-CLEANUP 2026-06-13] El rewrite literal `:6543`→`:5432`
+        era específico del pooler Supavisor de Supabase (proveedor anterior).
+        Tras la migración a Neon, el endpoint directo (NEON_DATABASE_URL) ya
+        es session-mode nativo y `_build_session_mode_db_url` delega en
+        `db_core.DB_SESSION_MODE_URL` (export canónico session-mode para el
+        leader lock). El contrato "session mode, no transaction pooler" se
+        mantiene; el rewrite Supabase-específico quedó obsoleto."""
         src = _read(_APP_PY)
         body = src.split("def _build_session_mode_db_url(")[1].split("def _acquire_scheduler_leader_lock(")[0]
-        assert 'replace(":6543", ":5432")' in body, (
-            "El leader lock requiere session mode (5432); el transaction "
-            "pooler (6543) liberaría el advisory lock al terminar la sentencia."
+        assert "DB_SESSION_MODE_URL" in body, (
+            "El leader lock requiere session mode; `_build_session_mode_db_url` "
+            "debe delegar en `db_core.DB_SESSION_MODE_URL` (export session-mode "
+            "tras P1-NEON-DB-MIGRATION). El transaction pooler liberaría el "
+            "advisory lock al terminar la sentencia."
         )
 
     def test_fail_open_acts_as_leader_on_error(self):

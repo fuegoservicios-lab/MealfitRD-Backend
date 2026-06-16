@@ -50,13 +50,18 @@ class TestGuineoVerdeCap:
                 multiplier=18.666666,
                 structured=True,
             )
+        # [STALE-PARSER-FIX] 'guineos verdes' colapsa a 'Guineo' vía
+        # canonicalize_musaceae (P3-NEW-6) ANTES del veg-cap loop —
+        # madurez es variable temporal, no producto distinto. El cap
+        # SIGUE firando (objetivo del test: 168 Uds → cap), pero el
+        # display name en el warning es 'Guineo', no 'guineo verde'.
         guineo_caps = [
             r for r in caplog.records
             if "P5-VEG-CAP" in r.message
-            and "guineo" in r.message.lower() and "verde" in r.message.lower()
+            and "guineo" in r.message.lower()
         ]
         assert guineo_caps, (
-            f"P5-VEG-CAP debe firar para guineo verde. "
+            f"P5-VEG-CAP debe firar para guineo verde (colapsado a 'Guineo'). "
             f"Warnings: {[r.message for r in caplog.records if 'VEG-CAP' in r.message]}"
         )
 

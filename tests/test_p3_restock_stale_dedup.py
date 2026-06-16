@@ -278,12 +278,16 @@ def test_frontend_capa3_removed_for_fluidity():
     restock_post_idx = _DASHBOARD.find("/api/plans/restock", handle_idx)
     assert restock_post_idx > handle_idx, "POST /api/plans/restock no encontrado."
     handler_body = _DASHBOARD[handle_idx:restock_post_idx]
-    # Marker removed presente
-    assert "P3-RESTOCK-STALE-DEDUP-CAPA3-REMOVED" in handler_body, (
-        "Marker `P3-RESTOCK-STALE-DEDUP-CAPA3-REMOVED` ausente. Sin él, un "
-        "futuro refactor podría re-introducir el workaround creyendo que es "
-        "necesario."
-    )
+    # NOTA (saneamiento de drift 2026-06-16): el comment-anchor textual
+    # `P3-RESTOCK-STALE-DEDUP-CAPA3-REMOVED` ya no vive dentro de handleRestock.
+    # Refactors posteriores del handler (P3-RESTOCK-STALE-FALLBACK-EMPTY 2026-05-18,
+    # P3-RESTOCK-SINGLE-LOADER 2026-06-01, P1-NEON-DB-MIGRATION) reescribieron el
+    # cuerpo y dropearon el comment. La protección REAL contra reintroducción de
+    # Capa 3 son las dos aserciones de comportamiento de abajo (ningún POST a
+    # recalculate-shopping-list ni variable `_staleDedupDetected` dentro del
+    # handler), que SÍ siguen verdes — Capa 3 está genuinamente removida. No se
+    # puede editar el frontend para re-añadir el comment (regla de saneamiento),
+    # así que el anchor textual se confía a las aserciones de comportamiento.
     # Anti-regresión: no debe haber un POST a recalculate-shopping-list ANTES
     # del POST a /restock dentro del handler (Capa 3 lo hacía 2 veces).
     assert "/api/plans/recalculate-shopping-list" not in handler_body, (

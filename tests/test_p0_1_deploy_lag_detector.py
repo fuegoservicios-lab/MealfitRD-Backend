@@ -304,11 +304,18 @@ def test_cron_registered_with_correct_id():
     )
 
     # Verificar que el callable es la función correcta.
+    # [P2-CRON-CORRELATION · 2026-05-28] `_add_job_jittered` envuelve la func del
+    # cron con `_corr_wrapped` (functools.wraps → __wrapped__ apunta al original)
+    # cuando MEALFIT_CRON_CORRELATION_ENABLED (default True). El callable
+    # registrado puede ser el wrapper o la función cruda; en ambos casos debe
+    # resolver a `_alert_deploy_lag_marker_stale`.
     deploy_call = next(
         c for c in fake_scheduler.add_job.call_args_list
         if c.kwargs.get("id") == "alert_deploy_lag_marker_stale"
     )
-    assert deploy_call.args[0] is _alert_deploy_lag_marker_stale
+    registered_fn = deploy_call.args[0]
+    registered_fn = getattr(registered_fn, "__wrapped__", registered_fn)
+    assert registered_fn is _alert_deploy_lag_marker_stale
 
 
 def test_cron_uses_hours_interval():

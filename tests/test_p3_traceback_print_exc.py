@@ -99,8 +99,15 @@ def test_no_traceback_print_exc_in_production_paths():
     offenders = []
     # Carpetas excluidas (sustring match — `test_venv`, `.venv-pkg`, etc.
     # caen bajo `venv` o `_venv`).
+    # [saneamiento drift 2026-06-16] `scratch` añadido al set de exclusión.
+    # P3-DEBUG-TIME-CLEANUP · 2026-05-20 movió `refactor.py`/`refactor_plans.py`
+    # (scripts one-shot de migración) a `backend/scratch/legacy_root_helpers/`,
+    # pero el exclude/whitelist no se actualizó. Esos scripts contienen
+    # `traceback.print_exc()` dentro de string-literals (code-as-data para
+    # find/replace) — NO son paths productivos. `scratch` es la misma categoría
+    # que `scripts` (helpers one-shot fuera del runtime de prod).
     _EXCLUDED_DIR_SUBSTRINGS = (
-        "tests", "scripts", "venv", "_venv", ".venv", "__pycache__",
+        "tests", "scripts", "scratch", "venv", "_venv", ".venv", "__pycache__",
         "site-packages", "node_modules",
     )
     for py in _BACKEND_ROOT.rglob("*.py"):

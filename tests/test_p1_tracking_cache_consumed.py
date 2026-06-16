@@ -96,15 +96,21 @@ def test_consumed_persisted_on_change_with_guard():
     assert "safeLocalStorageSet" in body, (
         "useEffect no llama `safeLocalStorageSet` — no persiste."
     )
-    # Guard contra default vacío: no persistir si calories===0 && protein===0
+    # Guard contra el default vacío para no sobreescribir el cache real con
+    # un placeholder en 0. [P3-TRACKING-CACHE-EMPTY-FETCH · 2026-05-27]
+    # reemplazó el guard heurístico `calories===0 && protein===0` (que también
+    # bloqueaba un día legítimamente en 0) por un flag explícito `_fetched`
+    # seteado SOLO tras el fetch real al server: `if (!consumed._fetched) return`.
     assert re.search(
-        r"calories\s*===?\s*0.*protein\s*===?\s*0",
+        r"_fetched",
         body,
         re.DOTALL,
     ), (
-        "Guard contra default vacío {calories:0, protein:0, ...} ausente. "
-        "Persistir vacío bloquea la hidratación con datos frescos. Ver "
-        "P1-TRACKING-CACHE-CONSUMED · 2026-05-20."
+        "Guard contra default vacío ausente. Debe usar el flag `_fetched` "
+        "(set post-fetch del server) para no persistir el placeholder vacío "
+        "y bloquear la hidratación con datos frescos. Ver "
+        "P1-TRACKING-CACHE-CONSUMED · 2026-05-20 / "
+        "P3-TRACKING-CACHE-EMPTY-FETCH · 2026-05-27."
     )
 
 

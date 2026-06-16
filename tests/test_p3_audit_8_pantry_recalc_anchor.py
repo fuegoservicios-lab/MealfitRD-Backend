@@ -62,19 +62,42 @@ def test_helper_defined():
 
 
 def test_helper_invoked_4_times():
-    """El helper debe invocarse exactamente 4 veces (delete, delete-undo,
-    deleteAll, add). Regex distingue invocaciones (`name(`) de la
-    declaración (`name = async`)."""
+    """El recálculo debe dispararse tras las 4 mutaciones de la nevera
+    (delete, delete-undo, deleteAll, add). [P2-NEW-12 · 2026-05-11] introdujo
+    el wrapper coalescente `_scheduleRecalcShoppingList` (debounce 500ms): los
+    3 callsites INDIVIDUALES (delete, delete-undo, add) ahora pasan por el
+    scheduler — que internamente invoca el helper UNA vez desde su timer — y
+    `confirmDeleteAll` sigue llamando al helper directo (con args). Por eso el
+    conteo de invocaciones DIRECTAS del helper bajó de 4 a 2 (timer del
+    scheduler + confirmDeleteAll), mientras el wiring lógico P3-AUDIT-8 sigue
+    intacto: 4 puntos de recálculo (3 via scheduler + 1 directo deleteAll).
+
+    Este test verifica AMBAS capas para que un revert silente (borrar el
+    scheduler o un callsite) falle: 2 invocaciones directas del helper +
+    los callsites del scheduler que cubren los 3 paths individuales."""
     src = _read_pantry()
-    # Matchea solo invocaciones, no la declaración (que tiene `= async` entre
-    # el nombre y el `(`).
+    # Capa 1: invocaciones DIRECTAS del helper (no la declaración `= async`).
     invocation_re = re.compile(r"_recalcShoppingListAfterPantryChange\s*\(")
-    matches = invocation_re.findall(src)
-    assert len(matches) == 4, (
-        f"Esperaba 4 invocaciones de `_recalcShoppingListAfterPantryChange` "
-        f"(delete, delete-undo, deleteAll, add); encontré {len(matches)}. "
-        f"Si añadiste/quitaste un call site, actualiza este test Y el "
-        f"frontend test `Pantry.p3_audit_8_recalc_after_change.test.js`."
+    direct_matches = invocation_re.findall(src)
+    assert len(direct_matches) == 2, (
+        f"Esperaba 2 invocaciones DIRECTAS de `_recalcShoppingListAfterPantryChange` "
+        f"(timer del scheduler P2-NEW-12 + confirmDeleteAll); encontré "
+        f"{len(direct_matches)}. Si añadiste/quitaste un call site, actualiza "
+        f"este test Y el frontend test `Pantry.p3_audit_8_recalc_after_change.test.js`."
+    )
+    # Capa 2: el scheduler coalescente cablea los 3 paths individuales
+    # (delete, delete-undo, add). Debe definirse + invocarse desde múltiples
+    # callsites además del re-schedule trailing interno.
+    assert "const _scheduleRecalcShoppingList = " in src, (
+        "El wrapper coalescente `_scheduleRecalcShoppingList` (P2-NEW-12) fue "
+        "removido. Los paths individuales add/delete quedarían sin recálculo."
+    )
+    schedule_calls = re.findall(r"_scheduleRecalcShoppingList\s*\(\s*\)", src)
+    assert len(schedule_calls) >= 4, (
+        f"Esperaba ≥4 invocaciones de `_scheduleRecalcShoppingList()` "
+        f"(re-schedule trailing + delete + delete-undo + add); encontré "
+        f"{len(schedule_calls)}. Un path individual de mutación perdió su "
+        f"recálculo — bug P3-AUDIT-8 vuelve."
     )
 
 

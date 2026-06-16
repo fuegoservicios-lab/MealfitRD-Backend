@@ -223,7 +223,14 @@ def test_cron_job_registered_with_configured_interval():
         "Cron job 'cleanup_orphan_chunks' no fue registrado en register_plan_chunk_scheduler."
     )
     call = cleanup_calls[0]
-    assert call.args[0] is _cleanup_orphan_chunks
+    # [P2-CRON-CORRELATION · 2026-05-28] `_add_job_jittered` envuelve la func
+    # del cron en un scope de correlation_id (`_corr_wrapped`) vía
+    # `functools.wraps`, así que `add_job` recibe el wrapper, NO la func desnuda.
+    # `functools.wraps` preserva `__wrapped__` apuntando al original — el assert
+    # desenrolla el wrapper para verificar el target real sin acoplar al
+    # detalle de si el wrapping está activo.
+    registered_fn = getattr(call.args[0], "__wrapped__", call.args[0])
+    assert registered_fn is _cleanup_orphan_chunks
     assert call.args[1] == "interval"
     assert call.kwargs["minutes"] == CHUNK_ORPHAN_CLEANUP_INTERVAL_MINUTES
     assert call.kwargs["max_instances"] == 1

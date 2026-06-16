@@ -78,16 +78,31 @@ def test_execute_sql_write_accepts_lock_timeout_ms():
     )
 
 
+def _extract_execute_sql_write_impl_body(src: str) -> str:
+    """[test-drift 2026-06-16] `execute_sql_write` ahora va precedida por
+    dos stubs `@overload` (P-TYPING-1, type-only — `def ...: ...` en una
+    línea), añadidos DESPUÉS de P1-3. Un `re.search` ingenuo del primer
+    `def execute_sql_write(` captura el stub (cuyo "cuerpo" es solo `...`)
+    y pierde la implementación real → falsos negativos. La implementación
+    real es la única cuya signature usa `= None` (los overloads usan
+    `= ...`). Anclamos sobre ese default para saltar los stubs sin
+    debilitar la verificación del cuerpo."""
+    func_match = re.search(
+        r"def\s+execute_sql_write\([^)]*=\s*None[^)]*\).*?(?=\ndef\s+|\Z)",
+        src, re.DOTALL,
+    )
+    assert func_match is not None, (
+        "No se encontró la implementación real de execute_sql_write "
+        "(la signature con defaults `= None`, no los stubs @overload)."
+    )
+    return func_match.group(0)
+
+
 def test_execute_sql_write_emits_set_local_lock_timeout():
     """Cuando `lock_timeout_ms` está presente, el body debe ejecutar
     `SET LOCAL lock_timeout = '<N>ms'` antes del query principal."""
     src = _read(_DB_CORE_PATH)
-    func_match = re.search(
-        r"def\s+execute_sql_write\(.*?(?=\ndef\s+|\Z)",
-        src, re.DOTALL,
-    )
-    assert func_match is not None
-    body = func_match.group(0)
+    body = _extract_execute_sql_write_impl_body(src)
     assert "SET LOCAL lock_timeout" in body, (
         "execute_sql_write debe ejecutar `SET LOCAL lock_timeout = '<N>ms'` "
         "cuando `lock_timeout_ms` está presente. Sin esto el parámetro es "
@@ -100,11 +115,7 @@ def test_execute_sql_write_wraps_in_transaction():
     `conn.transaction()` el autocommit aplica el SET LOCAL inmediatamente
     y lo pierde en el siguiente comando)."""
     src = _read(_DB_CORE_PATH)
-    func_match = re.search(
-        r"def\s+execute_sql_write\(.*?(?=\ndef\s+|\Z)",
-        src, re.DOTALL,
-    )
-    body = func_match.group(0)
+    body = _extract_execute_sql_write_impl_body(src)
     assert "conn.transaction()" in body, (
         "execute_sql_write debe usar `conn.transaction()` cuando aplica "
         "lock_timeout_ms — sin tx explícita, el `SET LOCAL` se pierde "

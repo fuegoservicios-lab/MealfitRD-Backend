@@ -206,24 +206,43 @@ class TestAgentPageSentryCapture:
         return (_FRONTEND / "src" / "pages" / "AgentPage.jsx").read_text(encoding="utf-8")
 
     def test_sentry_imported(self, agent_page_src: str):
-        assert re.search(
+        # [frontend-ui/treeshake fix · 2026-06-16] P2-SENTRY-TREESHAKE
+        # (2026-05-23) cambió `import * as Sentry from '@sentry/react'` por
+        # imports NOMBRADOS `import { captureException, addBreadcrumb } from
+        # '@sentry/react'` para no bloquear el tree-shaking de los ~12
+        # símbolos restantes del SDK. La invariante protegida (Sentry está
+        # importado desde @sentry/react para la captura de errores) es
+        # idéntica; aceptamos AMBAS formas (star-import legacy O named
+        # imports que incluyan `captureException`).
+        star_import = re.search(
             r"import\s+\*\s+as\s+Sentry\s+from\s+['\"]@sentry/react['\"]",
             agent_page_src,
-        ), (
-            "P2-AGENTPAGE-ERROR-SENTRY: `import * as Sentry from '@sentry/react'` no aparece."
+        )
+        named_import = re.search(
+            r"import\s+\{[^}]*\bcaptureException\b[^}]*\}\s+from\s+['\"]@sentry/react['\"]",
+            agent_page_src,
+        )
+        assert star_import or named_import, (
+            "P2-AGENTPAGE-ERROR-SENTRY: no se importa Sentry desde "
+            "'@sentry/react' (ni `import * as Sentry` ni named import de "
+            "`captureException`)."
         )
 
     def test_capture_helper_defined(self, agent_page_src: str):
         assert "_captureAgentPageException" in agent_page_src, (
             "P2-AGENTPAGE-ERROR-SENTRY: helper `_captureAgentPageException` no definido."
         )
-        # Helper debe llamar a Sentry.captureException con tags.
+        # Helper debe llamar a captureException con tags.
+        # [frontend-ui/treeshake fix · 2026-06-16] P2-SENTRY-TREESHAKE pasó de
+        # `Sentry.captureException(...)` (star-import) a `captureException(...)`
+        # (named import). Aceptamos AMBOS prefijos — la invariante (la captura
+        # etiqueta `component: 'AgentPage'`) es idéntica.
         assert re.search(
-            r"Sentry\.captureException\([\s\S]{0,200}tags:\s*\{\s*component:\s*['\"]AgentPage['\"]",
+            r"(?:Sentry\.)?captureException\([\s\S]{0,200}tags:\s*\{\s*component:\s*['\"]AgentPage['\"]",
             agent_page_src,
         ), (
             "P2-AGENTPAGE-ERROR-SENTRY: el helper no llama a "
-            "`Sentry.captureException(err, { tags: { component: 'AgentPage', ... } })`."
+            "`captureException(err, { tags: { component: 'AgentPage', ... } })`."
         )
 
     def test_three_error_handlers_use_capture(self, agent_page_src: str):

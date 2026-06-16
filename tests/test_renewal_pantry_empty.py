@@ -20,7 +20,7 @@ import json
 from cron_tasks import _background_shift_plan_for_user
 
 @patch("db_core.connection_pool")
-@patch("cron_tasks.get_user_inventory_net")
+@patch("db_inventory.get_user_inventory_net")
 @patch("cron_tasks._enqueue_plan_chunk")
 @patch("utils_push.send_push_notification")
 def test_renewal_pantry_empty_aborts_generation(
@@ -53,9 +53,13 @@ def test_renewal_pantry_empty_aborts_generation(
     }
 
     mock_cursor.fetchone.side_effect = [
-        # 1. SELECT FOR UPDATE returns the expired plan
-        {"id": plan_id, "plan_data": plan_data},
-        # 2. SELECT health_profile
+        # 1. SELECT id FROM meal_plans (resolve plan_id sin row lock — P2-LOCK-2)
+        {"id": plan_id},
+        # 2. SELECT plan_data FROM meal_plans WHERE id = %s FOR UPDATE
+        {"plan_data": plan_data},
+        # 3. SELECT COUNT(*) chunks en vuelo -> 0
+        {"cnt": 0},
+        # 4. SELECT health_profile
         {"health_profile": {"diet": "mediterranean"}},
     ]
 

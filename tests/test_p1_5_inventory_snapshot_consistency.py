@@ -107,18 +107,27 @@ def test_overrides_pass_through_to_aggregator():
     el inventario REDUCE las cantidades del delta. Comparamos con la misma
     invocación SIN override (donde el fetch interno fallará bajo test
     environment y devolverá inventory vacío) para verificar que el
-    override SÍ deduce."""
+    override SÍ deduce.
+
+    [test-drift 2026-06-16] P3-CANONICAL-AGG-WEEKLY (shopping_calculator.py
+    :7801, 2026-05-18 — DESPUÉS de P1-5) le dio a `is_new_plan=True`
+    precedencia EXPLÍCITA sobre el override: en modo canónico no se deduce
+    NADA (`physical_inventory = []` antes del check del override). Por eso
+    con `is_new_plan=True` el override quedaba inerte y `qty_with ==
+    qty_without`. Para ejercitar la deducción del override hay que usar
+    `is_new_plan=False` (modo delta), que es donde el override existe para
+    reusar un snapshot. Prod es CORRECTO; el test debe pedir el modo delta."""
     plan = {"days": [{"meals": [{"ingredients": ["500 g de pollo"]}]}]}
 
-    # Llamada CON override (1 lb pollo en inventario).
+    # Llamada CON override (500g pollo en inventario), modo delta.
     with_override = get_shopping_list_delta(
-        "guest", plan, is_new_plan=True, structured=True, multiplier=1.0,
+        "guest", plan, is_new_plan=False, structured=True, multiplier=1.0,
         inventory_override=[{"quantity": 500, "unit": "g", "ingredient_name": "pollo"}],
         consumed_override=[],
     )
     # Llamada SIN override (path normal: guest → fetch helper retorna [],[]).
     without_override = get_shopping_list_delta(
-        "guest", plan, is_new_plan=True, structured=True, multiplier=1.0,
+        "guest", plan, is_new_plan=False, structured=True, multiplier=1.0,
     )
 
     def _pollo_qty(result):
@@ -166,8 +175,13 @@ def test_fetch_helper_signature_returns_tuple():
 # 4. Defensa estructural: los 5 callers en batch usan el snapshot único.
 # ---------------------------------------------------------------------------
 def _read_file(path):
+    # [test-drift 2026-06-16] Los archivos de prod (graph_orchestrator.py,
+    # routers/plans.py, cron_tasks.py, tools.py) viven en el backend root
+    # (el PADRE de tests/), no dentro de tests/. El join previo resolvía a
+    # `tests/<file>` → FileNotFoundError. Anclamos al backend root.
     import os
-    full = os.path.join(os.path.dirname(__file__), path)
+    backend_root = os.path.dirname(os.path.dirname(__file__))
+    full = os.path.join(backend_root, path)
     with open(full, encoding="utf-8") as f:
         return f.read()
 

@@ -74,8 +74,11 @@ def _scan_source_for_lesson_literals(source: str) -> set[str]:
 
 
 def _read_cron_tasks_source() -> str:
-    here = os.path.dirname(__file__)
-    src_path = os.path.join(here, "cron_tasks.py")
+    # cron_tasks.py vive en backend/ (no en tests/); resolver el path desde el
+    # módulo importado en vez de asumir el dir del test (que apuntaba a
+    # tests/cron_tasks.py inexistente → FileNotFoundError).
+    import cron_tasks
+    src_path = cron_tasks.__file__
     with open(src_path, "r", encoding="utf-8") as f:
         return f.read()
 
@@ -95,7 +98,21 @@ def test_lesson_literals_classified_in_deferred_or_allowlist():
     source = _read_cron_tasks_source()
     found = _scan_source_for_lesson_literals(source)
     classified = set(P0_1_DEFERRED_LEARNING_KEYS) | _P0_5_LESSON_KEY_ALLOWLIST
-    unclassified = found - classified
+    # Literales que matchean el patrón por substring pero NO son campos de
+    # plan_data del worker — la atomicidad P0-1 no aplica a ellos. Se excluyen
+    # del scan en vez de añadirse al allowlist de prod (que es para keys de
+    # plan_data), porque ninguno se escribe jamás a meal_plans.plan_data:
+    #   - '_flush_pending_lesson_telemetry': NOMBRE de función/cron (def + id de
+    #     job + node_name en pipeline_metrics). No es un field.
+    #   - '_force_unblock_lessons_count': metadata escrita SOLO a
+    #     plan_chunk_queue.pipeline_snapshot (resumed_snap/sealed_snap del cron
+    #     force-unblock), nunca a plan_data → el runtime defense check P0-5 (que
+    #     escanea plan_data) no lo ve.
+    _NON_PLAN_DATA_LESSON_LITERALS = {
+        '_flush_pending_lesson_telemetry',
+        '_force_unblock_lessons_count',
+    }
+    unclassified = found - classified - _NON_PLAN_DATA_LESSON_LITERALS
     assert not unclassified, (
         f"Literales no clasificados detectados en cron_tasks.py: {sorted(unclassified)}.\n\n"
         f"Cada uno debe ir a:\n"

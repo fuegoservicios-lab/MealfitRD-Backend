@@ -106,15 +106,24 @@ def test_history_list_does_not_strip_legacy_totalDays():
 def test_chip_uses_display_total_not_active_total():
     """El render del chip NO debe usar `_totalRequested` o
     `_activeTotal` directamente. Debe usar `_displayTotal` para
-    reflejar el plan original que el usuario nombró."""
+    reflejar el plan original que el usuario nombró.
+
+    [stale-parser fix 2026-06-16] P0-HIST-FIX-4 refinó el numerador del
+    chip de `_planDaysLen` a `_generatedTotal` (= `_planDaysLen +
+    _expiredDays`). El denominador — la invariante real de este test —
+    sigue siendo `_displayTotal` (plan original, no `_activeTotal`
+    decrementado por shift_plan). El regex tolera ambos numeradores
+    (`_planDaysLen` legacy o `_generatedTotal` actual). Ver History.jsx
+    línea ~5301."""
     text = _HISTORY_JSX.read_text(encoding="utf-8")
-    # Buscar el chip render: `{_planDaysLen} de {X} listos`.
+    # Buscar el chip render: `{<numerador>} de {X} listos`. El numerador
+    # puede ser `_planDaysLen` (legacy) o `_generatedTotal` (post-FIX-4).
     m = re.search(
-        r"\{_planDaysLen\}\s*de\s*\{(\w+)\}\s*listos",
+        r"\{(?:_planDaysLen|_generatedTotal)\}\s*de\s*\{(\w+)\}\s*listos",
         text,
     )
     assert m is not None, (
-        "Chip render `{_planDaysLen} de {X} listos` no encontrado."
+        "Chip render `{_generatedTotal} de {X} listos` no encontrado."
     )
     var_used = m.group(1)
     assert var_used == "_displayTotal", (

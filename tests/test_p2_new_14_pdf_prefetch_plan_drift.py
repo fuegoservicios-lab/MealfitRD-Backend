@@ -109,27 +109,47 @@ def test_select_filters_by_id_and_user_id(src: str):
 def test_compares_plan_modified_at(src: str):
     body = _extract_handler_block(src)
     p2_idx = body.find("[P2-NEW-14 · 2026-05-11]")
-    block = body[p2_idx:p2_idx + 3500]
+    block = body[p2_idx:p2_idx + 6500]
+    # El marker semántico `_plan_modified_at` sigue computándose (para
+    # telemetría/logging del drift corregido — `latestModified`/`localModified`).
     assert "_plan_modified_at" in block, (
-        "P2-NEW-14 regresión: el prefetch ya no compara `_plan_modified_at`. "
-        "Sin esa señal semántica, no hay forma de detectar drift "
+        "P2-NEW-14 regresión: el prefetch ya no referencia `_plan_modified_at`. "
+        "Sin esa señal semántica, se pierde la telemetría del drift "
         "(updated_at físico cambia por trigger en muchos paths)."
     )
-    assert re.search(
-        r"latestModified\s+&&\s+latestModified\s*!==\s*localModified",
-        block,
-    ), (
-        "P2-NEW-14 regresión: la condición de drift ya no es "
-        "`latestModified && latestModified !== localModified`. Sin el "
-        "primer truthy check, un local sin marker (legacy) dispararía "
-        "sync espuria; sin el `!==`, no se detecta drift real."
+    # [P3-PDF-ALWAYS-SYNC · 2026-05-18] La condición de drift basada en
+    # timestamps (`latestModified && latestModified !== localModified`) fue
+    # REEMPLAZADA intencionalmente por sync incondicional (`if (true)`): el
+    # timestamp tenía falsos negativos cuando localStorage y DB compartían
+    # `_plan_modified_at` pero diferían en `aggregated_shopping_list_weekly`
+    # (recalc intermedio que no bumpeaba el marker). Para el PDF, SIEMPRE se
+    # sincroniza desde DB → cero riesgo de lista stale. Verificamos que ese
+    # always-sync sigue vivo (no que reaparezca la comparación con falsos
+    # negativos).
+    assert re.search(r"if\s*\(\s*true\s*\)", block), (
+        "P2-NEW-14/P3-PDF-ALWAYS-SYNC regresión: el sync incondicional "
+        "`if (true)` desapareció del prefetch. Si volviste a gatear el sync "
+        "por comparación de timestamps (`latestModified !== localModified`), "
+        "reintrodujiste el falso-negativo que P3-PDF-ALWAYS-SYNC cerró "
+        "(PDF con lista stale cuando el marker no se bumpeó)."
+    )
+    assert "P3-PDF-ALWAYS-SYNC" in block, (
+        "P2-NEW-14 regresión: el rationale `P3-PDF-ALWAYS-SYNC` (por qué se "
+        "sincroniza siempre en vez de comparar timestamps) desapareció del "
+        "bloque. Sin él, un refactor podría re-gatear el sync por timestamp "
+        "y reintroducir el falso-negativo."
     )
 
 
 def test_syncs_localStorage_and_state(src: str):
     body = _extract_handler_block(src)
     p2_idx = body.find("[P2-NEW-14 · 2026-05-11]")
-    block = body[p2_idx:p2_idx + 3500]
+    # [P3-PDF-ALWAYS-SYNC · 2026-05-18 + P3-CONSOLE-DEMOTE + P2-PDF-OBS-1]
+    # añadieron comentarios explicativos verbosos al bloque del prefetch, lo
+    # que empujó el código de sync real (setItem ~+4128, setPlanData ~+4303,
+    # catch ~+5804) más allá de la ventana original de 3500 chars. Ampliamos
+    # a 6500 para abarcar el bloque completo del drift sin tocar el frontend.
+    block = body[p2_idx:p2_idx + 6500]
     assert "localStorage.setItem('mealfit_plan'" in block, (
         "P2-NEW-14 regresión: el sync ya no actualiza `localStorage`. "
         "Sin él, próximo refresh vuelve a leer stale."
@@ -154,7 +174,10 @@ def test_effective_plan_data_used_downstream(src: str):
 def test_prefetch_wrapped_in_try_catch(src: str):
     body = _extract_handler_block(src)
     p2_idx = body.find("[P2-NEW-14 · 2026-05-11]")
-    block = body[p2_idx:p2_idx + 3500]
+    # Ventana ampliada a 6500 (ver nota en test_syncs_localStorage_and_state):
+    # el `catch (driftErr)` quedó a ~+5804 del marker tras los comentarios
+    # de P3-PDF-ALWAYS-SYNC / P2-PDF-OBS-1.
+    block = body[p2_idx:p2_idx + 6500]
     # try/catch best-effort
     assert "try {" in block, (
         "P2-NEW-14 regresión: el prefetch ya no está envuelto en try. "

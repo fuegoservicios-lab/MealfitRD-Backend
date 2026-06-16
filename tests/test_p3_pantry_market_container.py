@@ -60,11 +60,22 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _PANTRY_JSX = _REPO_ROOT / "frontend" / "src" / "pages" / "Pantry.jsx"
+# [P1-NEON-DB-MIGRATION · 2026-06-12] El transporte del inventario migró de
+# PostgREST `.select('*, master_ingredients(...)')` (frontend) a los endpoints
+# backend GET /api/inventory + GET /api/catalog, cuyo SELECT vive en
+# routers/user_data.py. La proyección de `market_container` que antes estaba
+# en el frontend ahora está en el SQL del backend.
+_USER_DATA_PY = _REPO_ROOT / "backend" / "routers" / "user_data.py"
 
 
 def _read_pantry() -> str:
     assert _PANTRY_JSX.exists(), f"Pantry.jsx no encontrado en {_PANTRY_JSX}"
     return _PANTRY_JSX.read_text(encoding="utf-8")
+
+
+def _read_user_data() -> str:
+    assert _USER_DATA_PY.exists(), f"user_data.py no encontrado en {_USER_DATA_PY}"
+    return _USER_DATA_PY.read_text(encoding="utf-8")
 
 
 def test_p3_pantry_market_container_marker_present():
@@ -78,27 +89,51 @@ def test_p3_pantry_market_container_marker_present():
 
 
 def test_user_inventory_select_includes_market_container():
-    """Los 5+ callsites del SELECT de `user_inventory` con JOIN a
-    `master_ingredients` DEBEN incluir `market_container` en la proyección
-    del JOIN. Sin esto, el JOIN no devuelve ese campo y el display layer
-    no puede leerlo (cae a `item.unit` que es el genérico).
-    """
-    src = _read_pantry()
+    """El SELECT del JOIN `user_inventory` ↔ `master_ingredients` DEBE incluir
+    `market_container` en la proyección. Sin esto, el endpoint no devuelve ese
+    campo y el display layer (frontend) no puede leerlo (cae a `item.unit` que
+    es el genérico).
 
-    # Buscar todos los SELECT con master_ingredients(...)
-    selects = re.findall(
-        r"\.select\(\s*'\*,\s*master_ingredients\(([^)]+)\)'",
+    [P1-NEON-DB-MIGRATION · 2026-06-12] Pre-migración esta proyección vivía en
+    los `.select('*, master_ingredients(...)')` PostgREST del frontend
+    (Pantry.jsx, 5 callsites). El cutover a Neon movió el transporte a los
+    endpoints backend GET /api/inventory + GET /api/catalog, cuyo SELECT vive
+    en routers/user_data.py. Ahora anclamos la proyección en el backend (SSOT
+    real del dato): cada `jsonb_build_object(... 'market_container', ...)` que
+    embebe `master_ingredients` en el JOIN con `user_inventory` debe incluir el
+    campo, más la query del catálogo.
+    """
+    src = _read_user_data()
+
+    # Proyecciones que embeben master_ingredients en el JOIN (GET /api/inventory
+    # + POST insert-and-return). Forma: jsonb_build_object(... mi.market_container ...).
+    join_projections = re.findall(
+        r"jsonb_build_object\((.*?)\)\s*END\s+AS\s+master_ingredients",
         src,
+        re.DOTALL,
     )
-    assert len(selects) >= 4, (
-        f"Esperaba ≥4 SELECT de user_inventory con JOIN master_ingredients, "
-        f"encontré {len(selects)}: {selects}"
+    assert len(join_projections) >= 2, (
+        f"Esperaba ≥2 proyecciones jsonb_build_object(...) AS master_ingredients "
+        f"sobre el JOIN user_inventory↔master_ingredients en user_data.py, "
+        f"encontré {len(join_projections)}."
     )
-    for fields in selects:
+    for fields in join_projections:
         assert "market_container" in fields, (
-            f"SELECT del JOIN no incluye `market_container`. Fields: '{fields}'. "
-            f"Sin él, el frontend no recibe el dato del backend."
+            f"Proyección del JOIN master_ingredients no incluye "
+            f"`market_container`. Sin él, el endpoint no devuelve el dato y el "
+            f"frontend cae a `item.unit` (genérico). Block: {fields!r}"
         )
+
+    # La query del catálogo (GET /api/catalog) también debe proyectar
+    # market_container desde master_ingredients.
+    assert re.search(
+        r"SELECT[\s\S]*?market_container[\s\S]*?FROM\s+master_ingredients",
+        src,
+    ), (
+        "La query del catálogo (FROM master_ingredients) no proyecta "
+        "`market_container`. El picker de unidades no ofrecería el contenedor "
+        "curado dominicano."
+    )
 
 
 def test_render_item_card_uses_market_container_as_display():

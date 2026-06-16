@@ -60,7 +60,15 @@ def test_p1_3_hard_fail_off_escalates_to_flex_directly(
 
     with patch("cron_tasks.CHUNK_PANTRY_HARD_FAIL_ON_STALE", False):
         # _pause_chunk_for_stale_inventory NO debe ser llamado en este path P1-3.
-        with patch("cron_tasks._pause_chunk_for_stale_inventory") as mock_pause:
+        # [test-drift 2026-06-16] El push del escalado P1-3 ya NO se dispara
+        # directo: P0-2 lo enrutó por `_maybe_notify_user_pantry_degraded`,
+        # que sólo llega a `_dispatch_push_notification` si el slot de
+        # cooldown (CAS atómico) se reclama. Sin DB el slot nunca se reclama
+        # → el push no se enviaba en el test. Forzamos el slot a True para
+        # ejercitar el dispatch (el cooldown 6h es comportamiento de prod
+        # correcto, sólo bloquea el envío en el harness sin DB).
+        with patch("cron_tasks._claim_push_cooldown_slot", return_value=True), \
+             patch("cron_tasks._pause_chunk_for_stale_inventory") as mock_pause:
             result = cron_tasks._refresh_chunk_pantry(
                 user_id="user-p13-1",
                 form_data=form_data,
@@ -86,12 +94,21 @@ def test_p1_3_hard_fail_off_escalates_to_flex_directly(
         f"con args {mock_pause.call_args_list}"
     )
 
-    # Push notification SÍ debe haberse disparado.
+    # Push notification SÍ debe haberse disparado (via el helper P0-2 con
+    # cooldown, no directo).
     assert mock_push.called, "P1-3 debe enviar push notification al escalar a flex"
     push_kwargs = mock_push.call_args.kwargs
     assert push_kwargs["user_id"] == "user-p13-1"
-    assert "datos parciales" in push_kwargs["body"].lower() or \
-           "30h" in push_kwargs["body"]
+    # [test-drift 2026-06-16] El body ahora viene de
+    # `_P02_PANTRY_DEGRADED_PUSH_COPY["stale_snapshot_auto_flex"]` (P0-2):
+    # copy fijo "Plan generado con tu última nevera" + cuerpo sobre nevera
+    # sin sincronizar. El copy viejo "datos parciales"/"30h" ya no aplica.
+    body_low = push_kwargs["body"].lower()
+    title_low = push_kwargs.get("title", "").lower()
+    assert "sincroniz" in body_low or "nevera" in title_low, (
+        f"El push del escalado debe usar el copy P0-2 de pantry-degraded; "
+        f"got title={push_kwargs.get('title')!r} body={push_kwargs['body']!r}"
+    )
 
 
 @patch("cron_tasks._dispatch_push_notification")

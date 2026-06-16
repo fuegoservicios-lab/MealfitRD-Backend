@@ -133,12 +133,26 @@ def test_opaque_background_in_dropdown():
         # propiedad de shadow/border. Como simplificación: si hay rgba
         # con alpha entre 0 y 0.99 en la propiedad `background:`, fallar.
         pass
-    # Verificación directa: el background debe ser `#FFFFFF` o similar opaco
+    # Verificación directa: el background debe ser opaco.
+    # El hardcode `#FFFFFF` original fue migrado al token de tema
+    # `var(--bg-card)` (dark-mode), que resuelve a un hex OPACO en ambos
+    # temas (index.css: light `#FFFFFF`, dark `#111827` — sin canal alpha).
+    # Sigue cumpliendo el contrato anti-flicker: fondo sólido sin
+    # compositing extra. Aceptamos `#hex`, `rgb(...)`, `white`/`FFFFFF`, o el
+    # token `var(--bg-card)` opaco. Se mantiene el rechazo del `rgba(...,<1)`
+    # semi-translúcido que causaba el flash.
     bg_match = _re.search(r"background:\s*['\"]([^'\"]+)['\"]", style_block)
     assert bg_match, "No pude parsear el background del dropdown"
     bg_value = bg_match.group(1)
-    assert bg_value.startswith("#") or "rgb(" in bg_value or bg_value in ("white", "FFFFFF"), (
+    _is_opaque = (
+        bg_value.startswith("#")
+        or "rgb(" in bg_value
+        or bg_value in ("white", "FFFFFF")
+        or bg_value == "var(--bg-card)"
+    )
+    assert _is_opaque and "rgba(" not in bg_value, (
         f"REGRESIÓN: background del dropdown es `{bg_value}` (semi-translúcido). "
         "Pre-fix usaba `rgba(255,255,255,0.97)` + backdropFilter — combinación "
-        "que producía el flash. Mantener `#FFFFFF` opaco."
+        "que producía el flash. Mantener un fondo opaco (`#FFFFFF` o el token "
+        "opaco `var(--bg-card)`)."
     )

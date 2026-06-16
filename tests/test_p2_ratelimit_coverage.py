@@ -53,10 +53,33 @@ _PROTECTION_PATTERNS = [
     # RateLimiter directo o limiters nombrados con sufijo _LIMITER.
     r"Depends\s*\(\s*RateLimiter\s*\(",
     r"Depends\s*\(\s*_[A-Z_]+_LIMITER\s*\)",
+    # [stale-parser fix · 2026-06-16] Patrón canónico de la familia /admin/*
+    # (8 en plans.py + 3 en system.py + notifications.py): el gate de auth y
+    # el rate-limit NO van como `Depends(...)` sino como llamadas in-body
+    # `_verify_admin_token(request.headers.get("authorization"))` +
+    # `_check_admin_rate_limit(request)` (P2-ADMIN-RATE-LIMIT · 2026-05-15;
+    # el helper vive en routers.plans para no duplicar el CRON_SECRET check
+    # en 5 lugares — por eso NO es una dependencia FastAPI). Ambos son
+    # protección real: `_verify_admin_token` rechaza 401/403/503 con
+    # `hmac.compare_digest` contra CRON_SECRET; `_check_admin_rate_limit`
+    # levanta 429. El parser original solo veía el `Depends(_verify_admin_token)`
+    # y marcaba estos endpoints (ya gateados) como falsos-positivos.
+    r"_verify_admin_token\s*\(",
+    r"_check_admin_rate_limit\s*\(",
 ]
 
 _PROTECTION_RE = re.compile("|".join(_PROTECTION_PATTERNS))
 _EXEMPT_MARKER_RE = re.compile(r"#\s*\[RATELIMIT-EXEMPT:\s*[^\]]+\]", re.IGNORECASE)
+# [stale-parser fix · 2026-06-16] Exención documentada equivalente al marker
+# `# [RATELIMIT-EXEMPT: ...]`. El endpoint `POST /api/plans/cancel` es
+# intencionalmente sin auth ni rate-limit por decisión de producto aceptada
+# (P2-CANCEL-NO-AUTH-ACCEPTED / P2-PROD-AUDIT-FOLLOWUP · 2026-05-28): session_id
+# es un UUID no-enumerable client-side, el peor caso es DoS de un único plan
+# en-vuelo (la víctima re-dispara), sin lectura/mutación de datos, y lo invocan
+# guests sin JWT. La justificación completa vive en el docstring del handler
+# (análoga al patrón "Decisiones de producto" / "Advisors aceptados" de
+# CLAUDE.md). El anchor in-prod cumple el mismo rol que el marker.
+_ACCEPTED_NO_AUTH_ANCHOR_RE = re.compile(r"P2-CANCEL-NO-AUTH-ACCEPTED")
 
 # Decoradores que indican endpoint mutador HTTP (POST/PUT/DELETE/PATCH).
 # GET no se cubre (read-only, JWT verify es suficiente; whitelist explícita
@@ -103,6 +126,9 @@ def _check_block_protected(block: str) -> tuple[bool, str | None]:
     if _EXEMPT_MARKER_RE.search(block):
         m = _EXEMPT_MARKER_RE.search(block)
         return True, f"exempt-marker: {m.group(0).strip()}"
+    if _ACCEPTED_NO_AUTH_ANCHOR_RE.search(block):
+        m = _ACCEPTED_NO_AUTH_ANCHOR_RE.search(block)
+        return True, f"accepted-no-auth-decision: {m.group(0).strip()}"
     m = _PROTECTION_RE.search(block)
     if m:
         return True, f"protection: {m.group(0).strip()}"
