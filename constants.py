@@ -1328,7 +1328,7 @@ PROTEIN_SYNONYMS = {
     # como sinónimo (incidente 2026-05-05 — plan rechazado y entregado roto).
     # `mahi-mahi` y `mahi mahi` se incluyen ambos para tolerar la convención
     # de hyphenation que el LLM elige inconsistentemente.
-    "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "salmon", "atún", "atun", "tilapia", "filete de pescado",
+    "pescado": ["pescado", "dorado", "chillo", "mero", "salmón", "salmon", "tilapia", "filete de pescado",
                 "bacalao", "bacalao desalado", "bacalao salado", "filete de bacalao",
                 "filete de mero", "filete de tilapia", "filete de chillo", "filete de dorado",
                 "merluza", "filete de merluza",

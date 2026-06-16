@@ -37,17 +37,25 @@ def test_canonicalize_huevo_excludes_compound_dishes_first():
 
 
 # ───────────── Bug 2: drift de acentos fallback↔canónico de proteína ─────────────
-def test_protein_canonical_has_unaccented_fish_variants():
-    """El canónico debe contener las formas SIN tilde ('salmon'/'atun') que usa el
-    fallback de nutrition_calculator, para que el fallback siga siendo subconjunto."""
+def test_protein_canonical_resolves_unaccented_fish_variants():
+    """Las formas SIN tilde ('salmon'/'atun') que usa el fallback de
+    nutrition_calculator deben resolver en el canónico (subset). 'salmon' faltaba
+    y se añadió a 'pescado'; 'atun' ya resolvía vía la categoría dedicada 'atún'
+    (NO se duplica en 'pescado' — eso rompería test_synonyms within-category)."""
     pytest.importorskip("langchain_google_genai", reason="constants.py requiere langchain")
     from constants import PROTEIN_SYNONYMS
 
-    pescado = set(a.lower() for a in PROTEIN_SYNONYMS["pescado"])
-    assert {"salmon", "atun"}.issubset(pescado), (
-        "El canónico de 'pescado' perdió las variantes sin tilde — el fallback "
+    union = set()
+    for variants in PROTEIN_SYNONYMS.values():
+        union.update(a.lower() for a in variants)
+    assert {"salmon", "atun"}.issubset(union), (
+        "El canónico perdió las variantes sin tilde — el fallback "
         "_FALLBACK_PROTEIN_SYNONYMS dejaría de ser subconjunto (drift de acentos)."
     )
+    # 'salmon' (sin tilde) era el único genuinamente ausente → vive en 'pescado'.
+    assert "salmon" in {a.lower() for a in PROTEIN_SYNONYMS["pescado"]}
+    # 'atun' NO debe duplicarse en 'pescado' (ya está en la categoría 'atún').
+    assert "atun" not in {a.lower() for a in PROTEIN_SYNONYMS["pescado"]}
 
 
 # ───────────── Bug 3: G18 — cost NO va en el slot tokens_estimated del dreaming tick ─────────────
