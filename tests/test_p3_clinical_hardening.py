@@ -73,10 +73,15 @@ def _func_src(name):
 
 
 def test_fs9_pro_review_flag_en_assemble():
-    src = _func_src("assemble_plan_node")
+    # [P3-FALLBACK-CLINICAL-LAYER Fase B] FS9 se movió del inline de assemble al SSOT
+    # `_apply_deterministic_clinical_layer` (que assemble + fallback heredan). El test verifica el wiring
+    # en el SSOT + que assemble delegue a él.
+    src = _func_src("_apply_deterministic_clinical_layer")
     assert "requires_professional_review" in src
     assert "_has_real_medical_flags" in src
     assert "PRO_REVIEW_FLAG_ENABLED" in src
+    assert "_apply_deterministic_clinical_layer(" in _func_src("assemble_plan_node"), \
+        "assemble debe delegar la capa clínica al SSOT (Fase B)"
 
 
 def test_fs7_variety_hard_gate_en_review():
@@ -88,6 +93,10 @@ def test_fs7_variety_hard_gate_en_review():
 
 
 def test_fs8_supplement_wiring_en_assemble():
-    src = _func_src("assemble_plan_node")
+    # [P3-FALLBACK-CLINICAL-LAYER Fase B] FS8 (suplementación) se movió al SSOT
+    # `_apply_deterministic_clinical_layer` (heredado por assemble + fallback).
+    src = _func_src("_apply_deterministic_clinical_layer")
     assert "build_supplement_recommendations" in src
     assert "micronutrient_supplement_advice" in src
+    assert "_apply_deterministic_clinical_layer(" in _func_src("assemble_plan_node"), \
+        "assemble debe delegar la capa clínica al SSOT (Fase B)"

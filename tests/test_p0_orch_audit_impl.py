@@ -306,8 +306,10 @@ def test_z2_z3_schema_fields_optional():
 
 def test_l1_bind_nutrition_tool_knob():
     # [L1-UNBIND-NUTRITION-TOOL] bind_tools gateado por knob (default True).
+    # [P1-DEEPSEEK-JSON-MODE] el gate ahora también excluye JSON mode (tool-calling incompatible con
+    # streaming JSON) → `if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:`. El knob sigue gateando.
     assert 'DAYGEN_BIND_NUTRITION_TOOL  = _env_bool ("MEALFIT_DAYGEN_BIND_NUTRITION_TOOL",   True)' in _G
-    assert "if DAYGEN_BIND_NUTRITION_TOOL:" in _G
+    assert "if DAYGEN_BIND_NUTRITION_TOOL and not DAYGEN_JSON_MODE:" in _G
     assert "day_llm_with_tools = day_llm.bind_tools(NUTRITION_TOOLS)" in _G
     assert "day_llm_with_tools = day_llm\n" in _G  # rama unbound
 
@@ -401,7 +403,9 @@ def test_func_p2_orch_6_fish_monotony_detected():
         {"meals": [{"name": "Cena de pescado", "ingredients": ["salmon"]}]},
     ]
     rep = _GO._count_cross_day_heavy_protein_repetition(days)
-    assert rep.get("fish", 0) >= 3, f"monotonía de pescado debe detectarse: {rep}"
+    # `_HEAVY_PROTEIN_LABELS` usa claves en español ('pescado', no 'fish'). El consumidor (7733) solo
+    # checa truthiness del dict (no indexa por clave), así que el español es correcto — el test pedía 'fish' (stale).
+    assert rep.get("pescado", 0) >= 3, f"monotonía de pescado debe detectarse: {rep}"
 
 
 @_needs_module
