@@ -44,6 +44,12 @@ _CAT = [
     {"name": "Leche", "aliases": ["leche descremada"],
      "kcal_per_100g": 61, "protein_g_per_100g": 3.2, "carbs_g_per_100g": 4.8, "fats_g_per_100g": 3.3,
      "density_g_per_cup": 244},
+    {"name": "Huevo", "aliases": ["huevos", "huevos enteros"],
+     "kcal_per_100g": 143, "protein_g_per_100g": 12.6, "carbs_g_per_100g": 0.7, "fats_g_per_100g": 9.5,
+     "density_g_per_unit": 50, "density_g_per_cup": 243},
+    {"name": "Clara de huevo", "aliases": ["claras de huevo", "clara de huevo", "claras"],
+     "kcal_per_100g": 48, "protein_g_per_100g": 10.9, "carbs_g_per_100g": 0.7, "fats_g_per_100g": 0.2,
+     "density_g_per_unit": 33, "density_g_per_cup": 243},
 ]
 
 
@@ -104,6 +110,29 @@ def test_pepino_and_granola_and_mani_resolve():
 def test_pescado_fresco_alias_resolves():
     m = _db().macros_from_ingredient_string("200g de pescado fresco (mero o chillo)")
     assert m is not None and m["name"] == "Filete de pescado blanco" and m["grams"] == 200.0
+
+
+def test_egg_white_separated_from_whole_egg():
+    # "claras de huevo" → Clara de huevo (48 kcal/100g, 0.2g grasa), NO Huevo entero (143 kcal, 9.5g).
+    # Cierra el sobre-conteo ~2.7x de un staple del desayuno DR.
+    db = _db()
+    m = db.macros_from_ingredient_string("3 claras de huevo")
+    assert m is not None and m["name"] == "Clara de huevo"
+    assert m["grams"] == 99.0          # 3 × 33 g (clara), NO 3 × 50 g (huevo entero)
+    assert abs(m["kcal"] - 47.5) < 1.0  # ~48 kcal, NO ~208
+    # Control: el huevo ENTERO sigue resolviendo a Huevo (no se afecta el routing).
+    mw = db.macros_from_ingredient_string("2 huevos")
+    assert mw is not None and mw["name"] == "Huevo" and mw["grams"] == 100.0
+
+
+def test_egg_whites_in_ml_and_cups_resolve_via_volumetric_density():
+    # Clara líquida en ml/taza resuelve (density_g_per_cup=243); 375 ml ≈ 380 g a macros de clara.
+    db = _db()
+    m_ml = db.macros_from_ingredient_string("375 ml de claras de huevo")
+    assert m_ml is not None and m_ml["name"] == "Clara de huevo" and abs(m_ml["grams"] - 379.7) < 1.0
+    assert abs(m_ml["kcal"] - 182.2) < 2.0   # 380 g × 0.48, NO × 1.43
+    m_cup = db.macros_from_ingredient_string("1.5 tazas de claras de huevo")
+    assert m_cup is not None and abs(m_cup["grams"] - 364.5) < 2.0
 
 
 # ── 3. Guard anti-shadowing: el maní pelado NO se traga la mantequilla de maní ──

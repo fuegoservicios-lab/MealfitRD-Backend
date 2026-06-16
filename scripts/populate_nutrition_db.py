@@ -80,6 +80,8 @@ USDA_QUERY = {
     "Filete de pescado blanco": "fish tilapia raw", "Huevo": "egg whole raw fresh",
     "Jamón de pavo": "turkey ham cured", "Pechuga de pollo": "chicken breast boneless skinless raw",
     "Tofu": "tofu raw firm",
+    # [P1-RESOLVER-COVERAGE · 2026-06-16 follow-up] clara separada del huevo entero (precisión).
+    "Clara de huevo": "egg white raw fresh",
     # Vegetales
     "Ajo": "garlic raw", "Ají cubanela": "peppers sweet green raw", "Berenjena": "eggplant raw",
     "Brócoli": "broccoli raw", "Cebolla": "onions raw", "Cilantro": "coriander cilantro leaves raw",
