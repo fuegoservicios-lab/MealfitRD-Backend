@@ -49,11 +49,14 @@ def test_cheese_swap_preserves_quantity():
     assert repl[0].isdigit() and "cottage" in repl.lower()   # conserva 60g
 
 
-def test_whole_milk_intentionally_not_substituted():
-    """[review adversaria] 'leche entera' NO se sustituye: el catálogo la conflaciona con 'descremada'
-    en la misma fila → el swap sería un no-op clínico. Documentado, no un bug."""
-    plan = {"days": [{"meals": [{"ingredients": ["250ml de leche entera"]}]}]}
-    assert go._apply_condition_substitutions(plan, DYS) == 0
+def test_whole_milk_substituted_to_skim():
+    """[P2-2 · 2026-06-16] REACTIVADO: ya existe la fila distinta 'Leche descremada' (migración p2_2) →
+    el swap de dislipidemia leche entera→descremada vuelve a aplicar (antes era no-op por conflación de
+    fila). Verificado a nivel registro (determinista, sin DB)."""
+    subs = cr.collect_substitutions(DYS)
+    milk = [s for s in subs if "leche entera" in s["tokens"]]
+    assert milk, "el swap leche entera→descremada debe estar en el registro de dislipidemia"
+    assert milk[0]["replacement"] == "Leche descremada"
 
 
 def test_respects_low_fat_negative():

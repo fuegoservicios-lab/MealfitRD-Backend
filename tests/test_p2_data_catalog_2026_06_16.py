@@ -2,7 +2,7 @@
 
 - P2-1: "Yema de huevo" separada de "Huevo" (entero) — la yema real es ~3x grasa/colesterol.
 - P2-2: "Leche descremada" separada de "Leche" (entera) + reactiva el swap de dislipidemia.
-- P2-3: "Yogur griego entero" separado de "Yogurt griego sin azúcar" (nonfat).
+- P2-3: "Yogurt griego entero" separado de "Yogurt griego sin azúcar" (nonfat).
 - P2-4: ningún alimento alto en grasa (fats>5) queda sin satfat (NULL) → falso 'ok' a dislipidémicos.
 
 Las aserciones de DATOS necesitan Neon (skip sin NEON_DATABASE_URL → se validan en VPS/CI con DB).
@@ -51,7 +51,7 @@ def test_populate_has_usda_queries():
     src = (_BE / "scripts" / "populate_nutrition_db.py").read_text(encoding="utf-8")
     assert '"Yema de huevo": "egg yolk' in src
     assert '"Leche descremada": "milk nonfat' in src
-    assert '"Yogur griego entero": "yogurt greek plain whole' in src
+    assert '"Yogurt griego entero": "yogurt greek plain whole' in src
 
 
 # ───────────────────────── P2-1/2/3: filas nuevas separadas (datos) ─────────────────────────
@@ -77,7 +77,7 @@ def test_leche_descremada_separated():
 
 @_skip
 def test_yogur_entero_separated():
-    rows = _q("SELECT fats_g_per_100g FROM master_ingredients WHERE name='Yogur griego entero'")
+    rows = _q("SELECT fats_g_per_100g FROM master_ingredients WHERE name='Yogurt griego entero'")
     assert rows and float(rows[0][0]) > 3, "yogur griego entero debe tener grasa ~4, no la del nonfat (0.37)"
     nonfat = _q("SELECT aliases FROM master_ingredients WHERE name='Yogurt griego sin azúcar'")[0][0]
     assert "yogur griego" not in nonfat, "el bare 'yogur griego' debe quedar en el entero, no en el nonfat"

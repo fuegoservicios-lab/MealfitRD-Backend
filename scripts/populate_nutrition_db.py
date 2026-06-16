@@ -86,7 +86,7 @@ USDA_QUERY = {
     # leche descremada≠entera, yogur griego entero≠nonfat) — datos USDA reales, no inventados.
     "Yema de huevo": "egg yolk raw fresh",
     "Leche descremada": "milk nonfat fat free skim",
-    "Yogur griego entero": "yogurt greek plain whole milk",
+    "Yogurt griego entero": "yogurt greek plain whole milk",
     # Vegetales
     "Ajo": "garlic raw", "Ají cubanela": "peppers sweet green raw", "Berenjena": "eggplant raw",
     "Brócoli": "broccoli raw", "Cebolla": "onions raw", "Cilantro": "coriander cilantro leaves raw",

@@ -10,12 +10,12 @@
 
 INSERT INTO public.master_ingredients (slug, name, category, default_unit, aliases,
         density_g_per_unit, density_g_per_cup, shelf_life_days, price_per_lb, price_per_unit)
-SELECT 'yogur-griego-entero', 'Yogur griego entero', 'Lácteos', 'pote',
+SELECT 'yogurt-griego-entero', 'Yogurt griego entero', 'Lácteos', 'pote',
        ARRAY['yogur griego entero','yogurt griego entero','yogur entero','yogurt entero',
              'yogur natural entero','yogur griego natural entero',
              'yogur griego','yogurt griego','yogurt griego natural']::text[],
        NULL, 245, 14, 0, 0
-WHERE NOT EXISTS (SELECT 1 FROM public.master_ingredients WHERE name = 'Yogur griego entero');
+WHERE NOT EXISTS (SELECT 1 FROM public.master_ingredients WHERE name = 'Yogurt griego entero');
 
 -- Quita los aliases BARE/ambiguos del nonfat (quedan los explícitos sin-azúcar/0%/sin-grasa).
 UPDATE public.master_ingredients
@@ -24,7 +24,7 @@ WHERE name = 'Yogurt griego sin azúcar';
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM public.master_ingredients WHERE name = 'Yogur griego entero') THEN
+    IF NOT EXISTS (SELECT 1 FROM public.master_ingredients WHERE name = 'Yogurt griego entero') THEN
         RAISE EXCEPTION '[P2-3] sanity: falta la fila Yogur griego entero';
     END IF;
     IF EXISTS (SELECT 1 FROM public.master_ingredients
