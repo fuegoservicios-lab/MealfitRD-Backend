@@ -8468,6 +8468,22 @@ DM2_GLYCEMIC_SOFT_REJECT = _env_bool("MEALFIT_DM2_GLYCEMIC_SOFT_REJECT", True)
 # el rechazo del revisor. Macro-preservante (conservador: el diabético recibe ≤ carbos que la
 # etiqueta) + shopping-consistente (reemplaza el token en ingredients e ingredients_raw). Flip a False desactiva.
 DM2_SUGAR_GUARD = _env_bool("MEALFIT_DM2_SUGAR_GUARD", True)
+# [P1-DIET-HARD-GUARD · 2026-06-15] (gap-audit P1-3) Backstop DETERMINISTA de dietType (vegano/
+# vegetariano/pescetariano), espejo del allergen guard (C2-ALLERGEN-GUARD). Hasta ahora la ÚNICA defensa
+# contra un producto animal en un plan vegano era el `critical` del revisor LLM — falible Y degradable por
+# el soft-reject DM2 (P1-1). `_scan_diet_violations` escala cualquier producto animal en un plan veg* a
+# CRÍTICO → `should_retry` retorna "end" → el guardrail entrega el fallback, que `_diet_restricted_tokens`
+# hace diet-aware (SIN esto el fallback servía pollo/huevo/pescado igual — counterproductivo). Safety gate
+# → default True; flip a False revierte a depender solo del LLM. Anchor: P1-DIET-HARD-GUARD.
+DIET_HARD_GUARD = _env_bool("MEALFIT_DIET_HARD_GUARD", True)
+# [P1-DM2-GLYCEMIC-ONLY · 2026-06-15] (gap-audit P1-1) El soft-reject DM2 (DM2_GLYCEMIC_SOFT_REJECT)
+# degradaba CUALQUIER critical del revisor a 'high' para diabéticos — no solo el glucémico — excluyendo
+# solo los flags deterministas (schema/alérgeno/renal/dieta). Un critical de seguridad NO-glucémico
+# phraseado libremente por el LLM (p.ej. "este plan no es seguro por X") se entregaba con banner en vez
+# de caer al fallback. Con este gate, el downgrade SOLO aplica si el critical es reconociblemente
+# glucémico (`_critical_is_purely_glycemic`) Y no menciona otra preocupación de seguridad. Default True;
+# flip a False revierte al downgrade incondicional previo. Anchor: P1-DM2-GLYCEMIC-ONLY.
+DM2_DOWNGRADE_GLYCEMIC_ONLY = _env_bool("MEALFIT_DM2_DOWNGRADE_GLYCEMIC_ONLY", True)
 
 # [P3-DATA-PROVENANCE · 2026-06-14] (Roadmap M1, quick-win) Anclaje de proveniencia: computa qué
 # fracción de los ingredientes del plan está trazada a USDA FoodData Central (columna `fdc_id`, ya
@@ -8516,6 +8532,8 @@ _SAFETY_CRITICAL_KNOBS = (
     ("MEALFIT_PRO_REVIEW_FLAG", lambda: PRO_REVIEW_FLAG_ENABLED),
     ("MEALFIT_CONDITION_RULES", lambda: CONDITION_RULES_ENABLED),
     ("MEALFIT_PROTEIN_FLOOR_HARD_GATE", lambda: PROTEIN_FLOOR_HARD_GATE),
+    ("MEALFIT_DIET_HARD_GUARD", lambda: DIET_HARD_GUARD),  # [P1-DIET-HARD-GUARD] backstop vegano/vegetariano
+    ("MEALFIT_DM2_DOWNGRADE_GLYCEMIC_ONLY", lambda: DM2_DOWNGRADE_GLYCEMIC_ONLY),  # [P1-DM2-GLYCEMIC-ONLY]
 )
 
 
@@ -9038,6 +9056,160 @@ def _scan_allergen_violations(plan: dict, allergies) -> list:
                         violations.append((meal.get("name", "?"), str(ing), f))
                         break
     return violations
+
+
+# [P1-DIET-HARD-GUARD · 2026-06-15] (gap-audit P1-3) Términos de productos animales por categoría (es-DO,
+# se comparan acent-stripped). El scan distingue por dietType: VEGANO prohíbe todo (carne+pescado+huevo+
+# lácteo); VEGETARIANO prohíbe carne+pescado (huevo/lácteo OK); PESCETARIANO prohíbe solo carne de tierra.
+# Sesgo a sobre-detectar (seguridad de la restricción > comodidad), igual que el allergen guard — un falso
+# positivo solo manda el plan al fallback (que es diet-aware vía `_diet_restricted_tokens`).
+_DIET_FLESH_TERMS = (  # carne de tierra + aves
+    "pollo", "gallina", "pavo", "pavipollo", "res", "ternera", "vacuno", "carne", "carne molida",
+    "bistec", "churrasco", "cerdo", "puerco", "chuleta", "chicharron", "tocino", "tocineta", "jamon",
+    "salami", "longaniza", "chorizo", "salchicha", "salchichon", "embutido", "costilla", "mondongo",
+    "chivo", "cabro", "conejo", "higado", "pernil",
+)
+_DIET_SEAFOOD_TERMS = (  # pescado + mariscos
+    "pescado", "atun", "salmon", "tilapia", "bacalao", "sardina", "mero", "chillo", "dorado",
+    "carite", "arenque", "merluza", "camaron", "langosta", "cangrejo", "langostino", "marisco",
+    "calamar", "pulpo", "lambi", "surimi", "anchoa", "caviar",
+)
+_DIET_EGG_TERMS = (
+    "huevo", "huevos", "clara", "claras", "yema", "yemas",
+    # [post-review 2026-06-15] procesados con huevo que el sibling allergen guard ('huevo' synonyms) ya
+    # cubría. Over-detect bias consistente: una versión vegana ("mayonesa vegana", "merengue de aquafaba")
+    # la excusa `_plant_adj` por adyacencia o cae al fallback (vegano-seguro). Nunca se sirve huevo a un vegano.
+    "mayonesa", "merengue", "mousse", "alioli", "aioli",
+)
+_DIET_DAIRY_TERMS = (
+    "leche", "queso", "yogur", "yogurt", "mantequilla", "crema", "lacteo", "ricotta", "mozzarella",
+    "parmesano", "cottage", "requeson", "kefir", "natilla", "suero de leche", "whey", "caseina",
+    "dulce de leche", "leche condensada", "leche evaporada", "nata", "ghee",
+    # [post-review 2026-06-15] productos animales procesados que el sibling allergen guard ya cubría
+    "helado", "mantecado", "flan",
+)
+
+
+def _canonicalize_diet_type(diet) -> str:
+    """[P1-DIET-HARD-GUARD · 2026-06-15] Normaliza dietType a {vegan|vegetarian|pescatarian|balanced},
+    cubriendo TODAS las variantes que el backend ACEPTA (`_DIET_TYPE_LEGACY_ACCEPTED` en routers/plans.py:
+    EN + ES masculino/femenino — p.ej. 'vegana'/'vegetariana' son data legacy real de health_profile).
+    Acent-stripped. SSOT compartido por el scan Y el fallback (cierra el gap post-review donde las formas
+    femeninas eludían ambos). Anchor: P1-DIET-HARD-GUARD."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    d = strip_accents(str(diet or "").strip().lower())
+    if d in ("vegano", "vegan", "vegana"):
+        return "vegan"
+    if d in ("vegetariano", "vegetarian", "vegetariana", "ovolactovegetariano", "ovo-lacto-vegetariano"):
+        return "vegetarian"
+    if d in ("pescetariano", "pescatariano", "pescatarian", "pescetarian", "pescetariana", "pescatariana"):
+        return "pescatarian"
+    return "balanced"
+
+
+def _scan_diet_violations(plan: dict, diet_type) -> list:
+    """[P1-DIET-HARD-GUARD · 2026-06-15] Backstop DETERMINISTA de dietType, espejo de
+    `_scan_allergen_violations`. Escanea cada ingrediente contra los productos animales prohibidos por la
+    dieta declarada (vegano/vegetariano/pescetariano) y retorna [(meal_name, ingrediente, categoría)].
+    Excluye análogos plant-based por ADYACENCIA ("carne de soya", "leche de coco", "salami vegano") — NO
+    excusa real-meat con un plant lejano ("pollo con leche de coco" SÍ viola). Sesgo a sobre-detectar.
+    Anchor: P1-DIET-HARD-GUARD."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    import re as _re
+    canon = _canonicalize_diet_type(diet_type)
+    if canon == "vegan":
+        forbidden = ([(t, "carne") for t in _DIET_FLESH_TERMS]
+                     + [(t, "pescado/marisco") for t in _DIET_SEAFOOD_TERMS]
+                     + [(t, "huevo") for t in _DIET_EGG_TERMS]
+                     + [(t, "lácteo") for t in _DIET_DAIRY_TERMS])
+    elif canon == "vegetarian":
+        forbidden = ([(t, "carne") for t in _DIET_FLESH_TERMS]
+                     + [(t, "pescado/marisco") for t in _DIET_SEAFOOD_TERMS])
+    elif canon == "pescatarian":
+        forbidden = [(t, "carne de tierra") for t in _DIET_FLESH_TERMS]
+    else:
+        return []  # balanced / omnívora / desconocida → sin restricción de dieta
+    # Análogo plant-based ADYACENTE al término ("de soya", "vegano", "vegetal", "de coco"…). Solo excusa
+    # cuando aparece pegado tras el término — un plant lejano no excusa la proteína animal real.
+    _plant_adj = _re.compile(
+        r"^\s*(?:de\s+|estilo\s+|tipo\s+|a\s+la\s+)?"
+        r"(?:soya|soja|coco|almendra|almendras|mani|cacahuate|maranon|anacardo|cajuil|guisante|"
+        r"arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
+    )
+    violations = []
+    for day in plan.get("days", []) or []:
+        for meal in day.get("meals", []) or []:
+            for ing in meal.get("ingredients", []) or []:
+                ing_low = strip_accents(str(ing).lower())
+                for term, label in forbidden:
+                    m = _re.search(r"\b" + _re.escape(term) + r"(?:s|es)?\b", ing_low)
+                    if not m:
+                        continue
+                    if _plant_adj.match(ing_low[m.end(): m.end() + 18]):
+                        continue  # "carne de soya" / "leche de coco" / "salami vegano" → no viola
+                    violations.append((meal.get("name", "?"), str(ing), label))
+                    break
+    return violations
+
+
+# [P1-DM2-GLYCEMIC-ONLY · 2026-06-15] (gap-audit P1-1) Marcadores (acent-stripped) para clasificar si un
+# rechazo CRÍTICO del revisor es PURAMENTE glucémico (seguro de degradar a 'high' para diabéticos) vs. una
+# preocupación de seguridad de otro tipo (que debe ir al fallback). Sesgo conservador: sin señal glucémica
+# positiva → NO se degrada (se preserva el critical → fallback).
+_GLYCEMIC_MARKERS = (
+    # [post-review 2026-06-15] 'jugo'/'zumo'/'soda'/'carbo' eran substrings demasiado amplios (jugo
+    # gástrico, bicarbonato de soda, carbonatado) → anclados a contexto azucarado.
+    "glucos", "glucem", "glicem", "glycemic", "azucar", "indice glucemico", "carga glucemica",
+    "ig alto", "alto ig", "miel", "jarabe", "almibar", "sirope", "melaza", "panela", "dulce",
+    "postre", "jugo de fruta", "jugo natural", "jugo azucarado", "jugo de china", "jugo de naranja",
+    "refresco", "platano", "guineo maduro", "carbohidrato simple", "carbohidratos simples",
+    "harina refinada", "pan blanco", "arroz blanco", "fructosa", "sacarosa", "mermelada",
+    "bebida azucarada", "sugar", "carbohidrato", "indice glicemico",
+)
+# [post-review 2026-06-15] (1) crudo/cruda ANCLADO a frases food-safety inequívocas (el bare 'crud*'
+# tragaba 'miel cruda'/'jugo crudo'/'vegetales crudos' glucémicos → falso fallback del diabético). (2) Se
+# añaden concerns AGUDAS no-glucémicas: interacción farmacológica (warfarina/metformina) + renal/iatrogénica.
+# (3) NO se añaden sodio/colesterol/grasa-saturada: HTA y dislipidemia son advisory-by-decision (CLAUDE.md
+# G9 — NO hard-gate a fallback); para esas, degradar+banner+sustitución es el comportamiento correcto, y
+# bloquearlas aquí subiría el fallback indebidamente.
+_NON_GLYCEMIC_SAFETY_MARKERS = (
+    "alergi", "alerg", "anafilax", "vegano", "vegana", "vegetarian",
+    "huevo crudo", "huevos crudos", "carne cruda", "pollo crudo", "pescado crudo", "res cruda",
+    "ceviche", "sin cocer", "sin coccion", "salmonel", "listeria", "embaraz", "lactancia", "celiac",
+    "intoxic", "toxic", "mercurio",
+    "interaccion", "medicament", "metformina", "warfarina", "anticoagulante",
+    "renal", "potasio", "fosforo",
+)
+
+
+def _critical_is_purely_glycemic(issues) -> bool:
+    """[P1-DM2-GLYCEMIC-ONLY · 2026-06-15] True SOLO si los issues del rechazo crítico evidencian una
+    preocupación glucémica Y ninguna otra de seguridad (alérgeno/dieta/food-safety/embarazo/celíaca).
+    Conservador: sin señal glucémica positiva → False (no degradar). Anchor: P1-DM2-GLYCEMIC-ONLY."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    glyc = False
+    for raw in (issues or []):
+        t = strip_accents(str(raw).lower())
+        if any(b in t for b in _NON_GLYCEMIC_SAFETY_MARKERS):
+            return False
+        if any(g in t for g in _GLYCEMIC_MARKERS):
+            glyc = True
+    return glyc
 
 
 # [P3-FOOD-SAFETY · 2026-06-13] Seguridad alimentaria determinista: el huevo es un alimento
@@ -10645,6 +10817,33 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 }
         except Exception as _pr_e:
             logger.warning(f"[P3-PRO-REVIEW-FLAG] error: {type(_pr_e).__name__}: {_pr_e}")
+
+    # ── Guard 8b (FS9 low-calorie) [P1-MIN-CALORIE-FLOOR · 2026-06-15] (gap-audit P1-2) ──
+    # Si el objetivo calórico fue elevado al piso clínico (`nutrition.low_calorie_floored`), aplica el gate
+    # de revisión profesional AUNQUE no haya condición médica declarada (mujer pequeña/mayor en déficit).
+    # Merge no destructivo con un `requires_professional_review` previo (renal/condiciones).
+    if PRO_REVIEW_FLAG_ENABLED and isinstance(nutrition, dict) and nutrition.get("low_calorie_floored"):
+        try:
+            _lc_note = ("⚠️ OBJETIVO CALÓRICO MUY BAJO: tu meta calculada cayó por debajo del mínimo clínico "
+                        "seguro y fue elevada a un piso de seguridad. Un déficit tan agresivo puede ser "
+                        "riesgoso (pérdida de masa muscular, déficit de micronutrientes, fatiga). Consulta a "
+                        "un médico o nutricionista antes de seguir un plan tan hipocalórico.")
+            _existing = plan.get("requires_professional_review")
+            if isinstance(_existing, dict) and _existing.get("flag"):
+                if _lc_note not in (_existing.get("note") or ""):
+                    _existing["note"] = ((_existing.get("note") or "") + " " + _lc_note).strip()
+                _existing["low_calorie_floored"] = True
+            else:
+                plan["requires_professional_review"] = {
+                    "flag": True,
+                    "conditions": [],
+                    "low_calorie_floored": True,
+                    "note": _lc_note,
+                }
+            logger.warning("⚠️ [P1-MIN-CALORIE-FLOOR] gate de revisión profesional (FS9) aplicado por "
+                           "objetivo calórico bajo el piso clínico.")
+        except Exception as _lc_e:
+            logger.warning(f"[P1-MIN-CALORIE-FLOOR] FS9 wiring error: {type(_lc_e).__name__}: {_lc_e}")
 
     plan["_clinical_layer_applied"] = True
     return plan
@@ -13458,6 +13657,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # CRÍTICO inmediato → regen con directiva. Para alérgenos, jamás servir > comodidad.
     _had_allergen_critical = False  # [P3-CONDITION-RULES] marca criticals que NO deben degradarse
     _had_renal_critical = False     # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] idem para el techo renal (G3)
+    _had_diet_critical = False      # [P1-DIET-HARD-GUARD · 2026-06-15] idem para la restricción de dieta (P1-3)
     if ALLERGEN_HARD_GUARD and _has_real_medical_flags(allergies):
         _allergen_viol = _scan_allergen_violations(plan, allergies)
         if _allergen_viol:
@@ -13473,6 +13673,30 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 f"reemplazarlos por alternativas seguras. Violaciones: {_viol_str}"
             )
             severity = _severity_max(severity, "critical")
+
+    # [P1-DIET-HARD-GUARD · 2026-06-15] (gap-audit P1-3) Backstop DETERMINISTA de dietType, espejo del
+    # allergen guard. Si un plan veg* (vegano/vegetariano/pescetariano) contiene un producto animal
+    # prohibido → rechazo CRÍTICO → regen con directiva → si no converge, fallback (diet-aware vía
+    # `_diet_restricted_tokens`). Marca `_had_diet_critical` para que el soft-reject DM2 NO lo degrade
+    # (vegano+DM2 es posible). Antes la ÚNICA defensa era el `critical` del revisor LLM (falible).
+    if DIET_HARD_GUARD:
+        try:
+            _diet_viol = _scan_diet_violations(plan, form_data.get("dietType"))
+            if _diet_viol:
+                _had_diet_critical = True
+                _dv_str = "; ".join(f"'{_ing}' ({_cat}) en {_mn}" for _mn, _ing, _cat in _diet_viol[:6])
+                logger.error(f"🥦 [P1-DIET-HARD-GUARD] {len(_diet_viol)} violación(es) de dieta "
+                             f"'{form_data.get('dietType')}': {_dv_str}")
+                approved = False
+                issues.append(
+                    f"DIETA INCOMPATIBLE (rechazo de restricción declarada): el plan contiene producto(s) "
+                    f"animal(es) incompatibles con la dieta '{form_data.get('dietType')}' del usuario. DEBES "
+                    f"reemplazarlos por alternativas vegetales que resuelvan (leguminosas, tofu, etc.). "
+                    f"Violaciones: {_dv_str}"
+                )
+                severity = _severity_max(severity, "critical")
+        except Exception as _dv_e:
+            logger.warning(f"[P1-DIET-HARD-GUARD] scan de dieta falló: {type(_dv_e).__name__}: {_dv_e}")
 
     # [P3-PROTEIN-FLOOR · 2026-06-13] Validador DURO de piso de proteína: si algún día entrega
     # < HARD_PCT del target diario → rechazo → regen con directiva. Cierra el déficit sistémico
@@ -13976,6 +14200,8 @@ Responde ÚNICAMENTE con el JSON de revisión.
         if (DM2_GLYCEMIC_SOFT_REJECT and CONDITION_RULES_ENABLED and severity == "critical"
                 and not plan.get("_schema_invalid") and not _had_allergen_critical
                 and not _had_renal_critical  # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (G3) ERC comórbida: no degradar el techo renal
+                and not _had_diet_critical   # [P1-DIET-HARD-GUARD · 2026-06-15] (P1-3) vegano/vegetariano: no degradar la restricción de dieta
+                and (not DM2_DOWNGRADE_GLYCEMIC_ONLY or _critical_is_purely_glycemic(issues))  # [P1-DM2-GLYCEMIC-ONLY · 2026-06-15] (P1-1) solo degrada criticals reconociblemente glucémicos
                 and _is_diabetes_condition(form_data)):
             logger.warning("🩸 [P3-CONDITION-RULES] DM2: rechazo glucémico CRÍTICO degradado a 'high' "
                            "→ entrega el plan real (con fibra ADA) + advertencia, no fallback matemático.")
@@ -16843,12 +17069,35 @@ def _detect_restricted_tokens(form_data: dict) -> frozenset:
     return frozenset(found)
 
 
-def _fallback_restricted_tokens(form_data: dict) -> frozenset:
-    """[P0-ORCH-1] Wrapper gateado por `MEALFIT_FALLBACK_ALLERGEN_FILTER`.
-    Con el knob OFF retorna vacío → fallback idéntico al histórico."""
-    if not FALLBACK_ALLERGEN_FILTER:
+def _diet_restricted_tokens(form_data: dict) -> frozenset:
+    """[P1-DIET-HARD-GUARD · 2026-06-15] (gap-audit P1-3) Tokens del vocabulario de fallback
+    (`_FALLBACK_ALLERGEN_KEYWORDS`) que un `dietType` veg* prohíbe, para que el fallback matemático sea
+    diet-aware. SIN esto, escalar una violación vegana a crítico→fallback servía pollo/huevo/pescado igual
+    (el pool[0] de cada slot es animal); con esto, cada slot cae a la plantilla de leguminosa/neutral
+    (vegana). Anchor: P1-DIET-HARD-GUARD."""
+    if not isinstance(form_data, dict):
         return frozenset()
-    return _detect_restricted_tokens(form_data)
+    canon = _canonicalize_diet_type(form_data.get("dietType"))  # SSOT compartido con el scan (P1 fix)
+    if canon == "vegan":
+        return frozenset({"chicken", "fish", "shellfish", "beef", "pork", "egg", "dairy"})
+    if canon == "vegetarian":
+        return frozenset({"chicken", "fish", "shellfish", "beef", "pork"})
+    if canon == "pescatarian":
+        return frozenset({"chicken", "beef", "pork"})
+    return frozenset()
+
+
+def _fallback_restricted_tokens(form_data: dict) -> frozenset:
+    """[P0-ORCH-1 · +P1-DIET-HARD-GUARD] Tokens restringidos del fallback: alérgenos (gateado por
+    `MEALFIT_FALLBACK_ALLERGEN_FILTER`) UNIÓN tokens de `dietType` (gateado por `MEALFIT_DIET_HARD_GUARD` —
+    el fallback debe ser veg-safe independientemente del filtro de alérgenos). Ambos OFF + dieta balanceada
+    → vacío → fallback histórico idéntico."""
+    tokens: set = set()
+    if FALLBACK_ALLERGEN_FILTER:
+        tokens |= _detect_restricted_tokens(form_data)
+    if DIET_HARD_GUARD:
+        tokens |= _diet_restricted_tokens(form_data)
+    return frozenset(tokens)
 
 
 def _select_safe_fallback_meal(pool: list, restricted_tokens: frozenset):

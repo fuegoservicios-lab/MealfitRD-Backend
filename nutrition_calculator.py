@@ -18,6 +18,32 @@ try:
 except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a ON (seguro)
     PREGNANCY_DEFICIT_GATE_ENABLED = True
 
+# [P1-MIN-CALORIE-FLOOR · 2026-06-15] (gap-audit P1-2) Piso mínimo de calorías GENERAL (no solo embarazo).
+# Hasta ahora el único floor calórico era el de embarazo/lactancia; un perfil válido pero extremo (mujer
+# pequeña/mayor en déficit → ~850 kcal) caía bajo el mínimo clínico sin floor ni flag. Estándar clínico
+# conservador: ~1200 kcal/día mujer, ~1500 kcal/día hombre (umbral bajo el cual un déficit sostenido es
+# riesgoso: pérdida muscular, déficit de micronutrientes). Floor de seguridad + flag `low_calorie_floored`
+# → gate de revisión profesional (FS9) aguas abajo. Auto-registrado en _KNOBS_REGISTRY. Anchor: P1-MIN-CALORIE-FLOOR.
+try:
+    from knobs import _env_int as _nc_env_int
+    MIN_TARGET_KCAL_FEMALE = _nc_env_int("MEALFIT_MIN_TARGET_KCAL_FEMALE", 1200)
+    MIN_TARGET_KCAL_MALE = _nc_env_int("MEALFIT_MIN_TARGET_KCAL_MALE", 1500)
+except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a defaults clínicos
+    MIN_TARGET_KCAL_FEMALE = 1200
+    MIN_TARGET_KCAL_MALE = 1500
+
+
+def _min_target_kcal(gender) -> int:
+    """[P1-MIN-CALORIE-FLOOR · 2026-06-15] Piso clínico de calorías por sexo (mujer 1200 / hombre 1500).
+    Sexo explícito no-male (female/'') → piso de mujer (más bajo, no sobre-floorea). NOTA: el caller
+    `get_nutrition_targets` ya defaultea `gender='male'` cuando la key falta, así que un perfil SIN género
+    resuelve al piso de hombre (1500) — consistente con `calculate_bmr`, que usa el mismo default male.
+    Anchor: P1-MIN-CALORIE-FLOOR."""
+    g = str(gender or "").strip().lower()
+    if g in ("male", "masculino", "hombre", "m"):
+        return MIN_TARGET_KCAL_MALE
+    return MIN_TARGET_KCAL_FEMALE
+
 
 def _is_pregnancy_or_lactation(form_data) -> bool:
     """True si el perfil declara embarazo/lactancia (en `medicalConditions` o en un campo dedicado).
@@ -1097,6 +1123,23 @@ def get_nutrition_targets(form_data: dict) -> dict:
         target_calories = int(round(tdee / 50) * 50)
         _pregnancy_safety["floored_to_tdee"] = target_calories
 
+    # [P1-MIN-CALORIE-FLOOR · 2026-06-15] (gap-audit P1-2) Piso clínico GENERAL tras TODOS los ajustes
+    # (meta + déficit dinámico + piso de embarazo): ningún objetivo cae bajo el mínimo seguro por sexo.
+    # Si floorea, se registra `_low_calorie_floored` para cablear el gate de revisión profesional (FS9).
+    _low_calorie_floored = None
+    _min_kcal = _min_target_kcal(gender)
+    if target_calories < _min_kcal:
+        _pre_floor_calories = target_calories
+        target_calories = _min_kcal
+        _low_calorie_floored = {
+            "applied": True,
+            "pre_floor_calories": _pre_floor_calories,
+            "floored_to": _min_kcal,
+            "gender": gender,
+        }
+        logger.warning(f"⚠️ [P1-MIN-CALORIE-FLOOR] Objetivo {_pre_floor_calories} kcal < piso clínico "
+                       f"{_min_kcal} kcal ({gender}) → elevado al piso. Requiere revisión profesional (FS9).")
+
     calculation_details_str = (
         f"BMR (Mifflin-St Jeor): {bmr} kcal | "
         f"TDEE ({activity_level}, ×{ACTIVITY_MULTIPLIERS.get(activity_level, 1.55)}): {tdee} kcal | "
@@ -1134,6 +1177,8 @@ def get_nutrition_targets(form_data: dict) -> dict:
     }
     if _pregnancy_safety:
         result["pregnancy_lactation_safety"] = _pregnancy_safety
+    if _low_calorie_floored:
+        result["low_calorie_floored"] = _low_calorie_floored
 
     logger.info(f"\n🔢 [CALCULADORA NUTRICIONAL] Resultados exactos:")
     logger.info(f"   📊 BMR: {bmr} kcal (Peso: {weight_display}, Altura: {height}cm, Edad: {age}, Género: {gender})")
