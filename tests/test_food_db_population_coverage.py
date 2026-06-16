@@ -1,11 +1,11 @@
 """[P2-MDDA-NUTRITION-AUDIT · 2026-06-13] Cobertura + curación de la base de macros.
 
 Dos capas:
-  1. OFFLINE (parser): el mapeo del script `populate_nutrition_db.py` cubre los 105
+  1. OFFLINE (parser): el mapeo del script `populate_nutrition_db.py` cubre los 109
      ingredientes, las 7 correcciones post-auditoría están ancladas en FDC_PIN, y los
      valores MANUAL son estructuralmente sanos. Ancla la curación en código (un renombre
      o borrado de un fix rompe el test antes que la data en prod).
-  2. INTEGRACIÓN (DB-gated, se SKIPea sin conexión Neon): ≥95/105 con kcal_per_100g
+  2. INTEGRACIÓN (DB-gated, se SKIPea sin conexión Neon): ≥99/109 con kcal_per_100g
      poblado + auto-consistencia Atwater (kcal == 4P+4C+9F).
 """
 import importlib.util
@@ -36,9 +36,10 @@ EXPECTED_FDC_PINS = {
 
 
 # ─────────────────────────── OFFLINE: curación ───────────────────────────
-def test_mapping_covers_105_ingredients():
+def test_mapping_covers_109_ingredients():
+    # 105 base + 4 [P1-RESOLVER-COVERAGE · 2026-06-16] (Manzana, Pepino, Granola, Maní).
     base = set(M.USDA_QUERY) | set(M.MANUAL_MACROS)
-    assert len(base) == 105, f"Se esperaban 105 ingredientes mapeados, hay {len(base)}"
+    assert len(base) == 109, f"Se esperaban 109 ingredientes mapeados, hay {len(base)}"
 
 
 def test_usda_and_manual_disjoint():

@@ -60,11 +60,13 @@ USDA_QUERY = {
     "Salsa de soya baja en sodio": "soy sauce reduced sodium", "Salsa de tomate": "tomato sauce canned",
     "Semillas de chía": "seeds chia dried", "Tortilla integral": "tortilla whole wheat",
     "Vinagre de manzana": "vinegar cider",
+    # [P1-RESOLVER-COVERAGE · 2026-06-16] alimentos atómicos añadidos (gap medido vs planes reales).
+    "Granola": "granola homemade", "Maní": "peanuts all types dry-roasted without salt",
     # Frutas
     "Aguacate": "avocado raw", "Chinola": "passion-fruit purple raw", "Fresas": "strawberries raw",
     "Guineo": "banana raw", "Lechosa": "papaya raw", "Limón": "lime raw",
     "Mango": "mango raw", "Melón": "melon cantaloupe raw", "Naranja": "orange raw",
-    "Piña": "pineapple raw", "Sandía": "watermelon raw",
+    "Piña": "pineapple raw", "Sandía": "watermelon raw", "Manzana": "apples raw with skin",
     # Lácteos
     "Leche": "milk whole", "Leche evaporada": "milk canned evaporated",
     "Mantequilla": "butter salted", "Queso blanco": "cheese queso fresco",
@@ -84,7 +86,7 @@ USDA_QUERY = {
     "Coliflor": "cauliflower raw", "Espinacas": "spinach raw", "Jengibre": "ginger root raw",
     "Lechuga": "lettuce green leaf raw", "Molondrones": "okra raw", "Pimiento morrón": "peppers sweet red raw",
     "Repollo": "cabbage raw", "Tayota": "chayote raw", "Tomate": "tomatoes red ripe raw",
-    "Vainitas": "beans snap green raw", "Zanahoria": "carrots raw",
+    "Vainitas": "beans snap green raw", "Zanahoria": "carrots raw", "Pepino": "cucumber with peel raw",
     # Víveres (viandas DD → USDA tiene la especie; flag is_dominican_cultivar)
     "Auyama": "pumpkin raw", "Batata": "sweet potato raw", "Guineo verde": "plantains green raw",
     "Papa": "potatoes raw", "Plátano maduro": "plantains ripe raw", "Plátano verde": "plantains green raw",

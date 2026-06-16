@@ -58,8 +58,14 @@ def _num(x) -> Optional[float]:
 # ── Parsing/rescaling de ingredientes-string del plan ("0.5 taza de avena (50g)") ──
 _FRACTION_MAP = {"½": "0.5", "¼": "0.25", "¾": "0.75", "⅓": "0.3333",
                  "⅔": "0.6667", "⅕": "0.2", "⅛": "0.125"}
-# Hint de peso/volumen del LLM: "(50g)", "(240 ml)", "(140gr)".
-_GRAM_HINT_RE = re.compile(r"\((\d+(?:[.,]\d+)?)\s*(g|gr|gramos|ml|mililitros)\b[^)]*\)", re.I)
+# Hint de peso/volumen del LLM: "(50g)", "(240 ml)", "(140gr)". [P1-RESOLVER-COVERAGE · 2026-06-16]
+# `[^)]*?` permite texto ANTES del número dentro del paréntesis ("(wrap, 60g)", "(aprox. 50g)",
+# "(cocido, 150g)") — el número+unidad ya no tiene que ir pegado a "(". Usa el peso que el LLM mismo
+# declaró (no adivina). Medido: cerraba lonjas tipo "tortilla de harina de trigo (wrap, 60g)".
+_GRAM_HINT_RE = re.compile(r"\([^)]*?(\d+(?:[.,]\d+)?)\s*(g|gr|gramos|ml|mililitros)\b[^)]*\)", re.I)
+# Hint SOLO en gramos (no ml). El peso explícito en g es la conversión más confiable del LLM → se
+# prefiere SIEMPRE sobre un hint en ml en el mismo paréntesis ("(60 ml leche, 200g)" → 200g, no densidad).
+_GRAM_ONLY_HINT_RE = re.compile(r"\([^)]*?(\d+(?:[.,]\d+)?)\s*(g|gr|gramos)\b[^)]*\)", re.I)
 # Cantidad líder al inicio del string: "0.5", "1/2", "150", "1,5".
 _LEAD_QTY_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?)\s*")
 _UNIT_TOKEN_RE = re.compile(r"^\s*([a-záéíóúñ]+)\b", re.I)
@@ -424,12 +430,12 @@ class IngredientNutritionDB:
         más confiable); si es "(NNml)" usa densidad volumétrica; sin hint, parsea
         cantidad+unidad y usa `to_grams`. None si no se resuelve."""
         s = str(s)
-        m = _GRAM_HINT_RE.search(s)
+        mg = _GRAM_ONLY_HINT_RE.search(s)
+        if mg:  # peso explícito en g gana siempre (incluso si hay un hint en ml en el mismo paréntesis)
+            return float(mg.group(1).replace(",", "."))
+        m = _GRAM_HINT_RE.search(s)  # sin hint en g → si hay ml, convertir por densidad
         if m:
             val = float(m.group(1).replace(",", "."))
-            unit = m.group(2).lower()
-            if unit.startswith("g"):  # g / gr / gramos
-                return val
             info = self.lookup(_strip_qty_prefix(s))  # ml → densidad del alimento
             if info and info.density_g_per_cup:
                 return val * (info.density_g_per_cup / 240.0)
