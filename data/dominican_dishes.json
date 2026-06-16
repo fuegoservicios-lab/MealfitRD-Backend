@@ -1982,22 +1982,22 @@
       "method": "gandules hervidos + guiso con auyama",
       "finished_g": 185,
       "per_100g": {
-        "kcal": 215.6,
-        "protein": 11.1,
-        "carbs": 33.7,
-        "fats": 4.0
+        "kcal": 149.1,
+        "protein": 7.0,
+        "carbs": 21.8,
+        "fats": 3.8
       },
       "resolution_coverage": 1.0,
       "constituents": [
         {
           "name": "Gandules",
-          "g": 90,
+          "g": 55,
           "resolved": true,
           "macros": {
-            "kcal": 316.3,
-            "protein": 19.5,
-            "carbs": 56.5,
-            "fats": 1.3
+            "kcal": 193.3,
+            "protein": 11.9,
+            "carbs": 34.5,
+            "fats": 0.8
           }
         },
         {
@@ -3070,6 +3070,1776 @@
             "protein": 0.0,
             "carbs": 0.0,
             "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "pollo frito dominicano": {
+      "label": "Pollo frito dominicano",
+      "method": "Pechuga sazonada con ajo, limón, orégano y sal; pasada por harina de trigo y frita por inmersión en aceite vegetal. Pierde agua y absorbe aceite (~12g retenido en la costra). Peso crudo de pechuga ~180g baja a carne frita + costra.",
+      "finished_g": 165,
+      "per_100g": {
+        "kcal": 228.3,
+        "protein": 25.9,
+        "carbs": 9.7,
+        "fats": 9.5
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "g": 180,
+          "resolved": true,
+          "macros": {
+            "kcal": 193.3,
+            "protein": 40.5,
+            "carbs": 0.0,
+            "fats": 3.5
+          }
+        },
+        {
+          "name": "Harina de trigo",
+          "g": 18,
+          "resolved": true,
+          "macros": {
+            "kcal": 63.9,
+            "protein": 1.9,
+            "carbs": 13.7,
+            "fats": 0.2
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 12,
+          "resolved": true,
+          "macros": {
+            "kcal": 108.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 12.0
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 4,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.7,
+            "protein": 0.3,
+            "carbs": 1.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Limón",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 2.3,
+            "protein": 0.0,
+            "carbs": 0.5,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 1,
+          "resolved": true,
+          "macros": {
+            "kcal": 3.5,
+            "protein": 0.1,
+            "carbs": 0.7,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 2,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "pescado frito": {
+      "label": "Pescado frito",
+      "method": "Filete de pescado blanco sazonado con limón, ajo y sal; ligero enharinado y frito en aceite vegetal. Pierde humedad y absorbe ~10g de aceite en la costra.",
+      "finished_g": 150,
+      "per_100g": {
+        "kcal": 201.6,
+        "protein": 23.8,
+        "carbs": 7.1,
+        "fats": 8.7
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Filete de pescado blanco",
+          "g": 170,
+          "resolved": true,
+          "macros": {
+            "kcal": 162.7,
+            "protein": 34.2,
+            "carbs": 0.0,
+            "fats": 2.9
+          }
+        },
+        {
+          "name": "Harina de trigo",
+          "g": 12,
+          "resolved": true,
+          "macros": {
+            "kcal": 42.6,
+            "protein": 1.2,
+            "carbs": 9.2,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 10,
+          "resolved": true,
+          "macros": {
+            "kcal": 90.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 10.0
+          }
+        },
+        {
+          "name": "Limón",
+          "g": 6,
+          "resolved": true,
+          "macros": {
+            "kcal": 2.8,
+            "protein": 0.0,
+            "carbs": 0.6,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 3,
+          "resolved": true,
+          "macros": {
+            "kcal": 4.3,
+            "protein": 0.2,
+            "carbs": 0.8,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 2,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "chuleta de cerdo frita": {
+      "label": "Chuleta de cerdo frita",
+      "method": "Chuleta de cerdo sazonada con ajo, limón, orégano y sal; frita en aceite vegetal. Suelta grasa propia y agua, absorbe poco aceite neto (~8g). Crudo ~180g baja a ~145g cocido.",
+      "finished_g": 145,
+      "per_100g": {
+        "kcal": 268.1,
+        "protein": 26.5,
+        "carbs": 1.6,
+        "fats": 17.3
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Cerdo",
+          "g": 180,
+          "resolved": true,
+          "macros": {
+            "kcal": 305.3,
+            "protein": 38.0,
+            "carbs": 0.0,
+            "fats": 17.1
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 4,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.7,
+            "protein": 0.3,
+            "carbs": 1.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Limón",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 2.3,
+            "protein": 0.0,
+            "carbs": 0.5,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 1,
+          "resolved": true,
+          "macros": {
+            "kcal": 3.5,
+            "protein": 0.1,
+            "carbs": 0.7,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 2,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "queso frito": {
+      "label": "Queso frito",
+      "method": "Lonjas de queso de freír (queso de hoja) fritas en aceite vegetal hasta dorar. Pierde algo de suero/agua y absorbe ~8g de aceite. Crudo ~80g rinde ~75g cocido.",
+      "finished_g": 75,
+      "per_100g": {
+        "kcal": 414.9,
+        "protein": 21.3,
+        "carbs": 3.2,
+        "fats": 35.2
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Queso de hoja",
+          "g": 80,
+          "resolved": true,
+          "macros": {
+            "kcal": 239.2,
+            "protein": 16.0,
+            "carbs": 2.4,
+            "fats": 18.4
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "huevos fritos": {
+      "label": "Huevos fritos",
+      "method": "Dos huevos fritos en aceite vegetal con pizca de sal. Pierden algo de agua y absorben ~6g de aceite. Dos huevos crudos ~100g + aceite retenido.",
+      "finished_g": 105,
+      "per_100g": {
+        "kcal": 183.7,
+        "protein": 12.0,
+        "carbs": 0.7,
+        "fats": 14.8
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "g": 100,
+          "resolved": true,
+          "macros": {
+            "kcal": 138.9,
+            "protein": 12.6,
+            "carbs": 0.7,
+            "fats": 9.5
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6,
+          "resolved": true,
+          "macros": {
+            "kcal": 54.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 6.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "batida de guineo": {
+      "label": "Batida de guineo",
+      "method": "Licuar el guineo maduro con leche fría y un toque de miel hasta obtener una bebida cremosa. No hay pérdida de peso: el peso final es la suma de los ingredientes.",
+      "finished_g": 360,
+      "per_100g": {
+        "kcal": 80.0,
+        "protein": 2.4,
+        "carbs": 12.5,
+        "fats": 2.3
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Guineo",
+          "g": 110,
+          "resolved": true,
+          "macros": {
+            "kcal": 108.4,
+            "protein": 1.2,
+            "carbs": 25.1,
+            "fats": 0.4
+          }
+        },
+        {
+          "name": "Leche",
+          "g": 240,
+          "resolved": true,
+          "macros": {
+            "kcal": 146.4,
+            "protein": 7.6,
+            "carbs": 11.5,
+            "fats": 7.8
+          }
+        },
+        {
+          "name": "Miel",
+          "g": 10,
+          "resolved": true,
+          "macros": {
+            "kcal": 33.1,
+            "protein": 0.0,
+            "carbs": 8.2,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "batida de lechosa": {
+      "label": "Batida de lechosa (papaya)",
+      "method": "Licuar la lechosa madura en cubos con leche y miel hasta quedar suave. Bebida sin pérdida de peso: peso final = suma de ingredientes.",
+      "finished_g": 450,
+      "per_100g": {
+        "kcal": 61.0,
+        "protein": 1.9,
+        "carbs": 9.2,
+        "fats": 1.8
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Lechosa",
+          "g": 200,
+          "resolved": true,
+          "macros": {
+            "kcal": 94.8,
+            "protein": 0.9,
+            "carbs": 21.6,
+            "fats": 0.5
+          }
+        },
+        {
+          "name": "Leche",
+          "g": 240,
+          "resolved": true,
+          "macros": {
+            "kcal": 146.4,
+            "protein": 7.6,
+            "carbs": 11.5,
+            "fats": 7.8
+          }
+        },
+        {
+          "name": "Miel",
+          "g": 10,
+          "resolved": true,
+          "macros": {
+            "kcal": 33.1,
+            "protein": 0.0,
+            "carbs": 8.2,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "batida de fresa": {
+      "label": "Batida de fresa",
+      "method": "Licuar las fresas con leche fría y miel hasta integrar. Bebida sin pérdida de peso: peso final = suma de ingredientes.",
+      "finished_g": 400,
+      "per_100g": {
+        "kcal": 58.4,
+        "protein": 2.1,
+        "carbs": 7.8,
+        "fats": 2.1
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Fresas",
+          "g": 150,
+          "resolved": true,
+          "macros": {
+            "kcal": 54.2,
+            "protein": 1.0,
+            "carbs": 11.5,
+            "fats": 0.5
+          }
+        },
+        {
+          "name": "Leche",
+          "g": 240,
+          "resolved": true,
+          "macros": {
+            "kcal": 146.4,
+            "protein": 7.6,
+            "carbs": 11.5,
+            "fats": 7.8
+          }
+        },
+        {
+          "name": "Miel",
+          "g": 10,
+          "resolved": true,
+          "macros": {
+            "kcal": 33.1,
+            "protein": 0.0,
+            "carbs": 8.2,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "yogurt griego con frutas": {
+      "label": "Yogurt griego con frutas",
+      "method": "Servir el yogurt griego en un bol y cubrir con fresas y mango picados; endulzar con un hilo de miel. Sin cocción ni pérdida de peso: peso final = suma de ingredientes.",
+      "finished_g": 298,
+      "per_100g": {
+        "kcal": 63.3,
+        "protein": 6.2,
+        "carbs": 8.9,
+        "fats": 0.3
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Yogurt griego sin azúcar",
+          "g": 170,
+          "resolved": true,
+          "macros": {
+            "kcal": 100.5,
+            "protein": 17.5,
+            "carbs": 6.2,
+            "fats": 0.6
+          }
+        },
+        {
+          "name": "Fresas",
+          "g": 60,
+          "resolved": true,
+          "macros": {
+            "kcal": 21.7,
+            "protein": 0.4,
+            "carbs": 4.6,
+            "fats": 0.2
+          }
+        },
+        {
+          "name": "Mango",
+          "g": 60,
+          "resolved": true,
+          "macros": {
+            "kcal": 40.0,
+            "protein": 0.5,
+            "carbs": 9.0,
+            "fats": 0.2
+          }
+        },
+        {
+          "name": "Miel",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 26.5,
+            "protein": 0.0,
+            "carbs": 6.6,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "pan integral con mantequilla de mani": {
+      "label": "Pan integral con mantequilla de maní",
+      "method": "Tostar ligeramente las rebanadas de pan integral y untar con mantequilla de maní. Pérdida de agua mínima al tostar; peso final casi igual a la suma de ingredientes.",
+      "finished_g": 85,
+      "per_100g": {
+        "kcal": 407.1,
+        "protein": 16.5,
+        "carbs": 36.5,
+        "fats": 21.6
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Pan integral",
+          "g": 56,
+          "resolved": true,
+          "macros": {
+            "kcal": 141.1,
+            "protein": 6.9,
+            "carbs": 23.9,
+            "fats": 2.0
+          }
+        },
+        {
+          "name": "Mantequilla de maní",
+          "g": 32,
+          "resolved": true,
+          "macros": {
+            "kcal": 204.9,
+            "protein": 7.1,
+            "carbs": 7.1,
+            "fats": 16.4
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "habichuelas blancas guisadas": {
+      "label": "Habichuelas blancas guisadas",
+      "method": "Sofreir cebolla, ajo, aji cubanela y pimiento morron en aceite; agregar salsa de tomate y auyama; incorporar las habichuelas blancas cocidas con su caldo y dejar guisar hasta espesar. Finalizar con cilantro y sal.",
+      "finished_g": 185,
+      "per_100g": {
+        "kcal": 161.7,
+        "protein": 7.7,
+        "carbs": 22.2,
+        "fats": 4.7
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Habichuelas blancas",
+          "g": 55,
+          "resolved": true,
+          "macros": {
+            "kcal": 188.3,
+            "protein": 12.9,
+            "carbs": 33.2,
+            "fats": 0.5
+          }
+        },
+        {
+          "name": "Auyama",
+          "g": 30,
+          "resolved": true,
+          "macros": {
+            "kcal": 9.3,
+            "protein": 0.3,
+            "carbs": 1.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 8.5,
+            "protein": 0.2,
+            "carbs": 1.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 3.5,
+            "protein": 0.1,
+            "carbs": 0.7,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 12,
+          "resolved": true,
+          "macros": {
+            "kcal": 3.7,
+            "protein": 0.1,
+            "carbs": 0.7,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.7,
+            "protein": 0.2,
+            "carbs": 1.1,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 7.1,
+            "protein": 0.3,
+            "carbs": 1.4,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Cilantro",
+          "g": 4,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.1,
+            "protein": 0.1,
+            "carbs": 0.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 2,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "garbanzos guisados": {
+      "label": "Garbanzos guisados",
+      "method": "Sofreir cebolla, ajo y aji cubanela en aceite; agregar salsa de tomate y un poco de tomate fresco; incorporar los garbanzos cocidos con caldo y guisar hasta que la salsa espese. Terminar con cilantro y sal.",
+      "finished_g": 190,
+      "per_100g": {
+        "kcal": 176.1,
+        "protein": 7.1,
+        "carbs": 23.0,
+        "fats": 6.2
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Garbanzos",
+          "g": 60,
+          "resolved": true,
+          "macros": {
+            "kcal": 233.0,
+            "protein": 12.3,
+            "carbs": 37.8,
+            "fats": 3.6
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 8.5,
+            "protein": 0.2,
+            "carbs": 1.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 3.5,
+            "protein": 0.1,
+            "carbs": 0.7,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Tomate",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 4.2,
+            "protein": 0.2,
+            "carbs": 0.8,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 18,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.2,
+            "protein": 0.2,
+            "carbs": 1.0,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 7.1,
+            "protein": 0.3,
+            "carbs": 1.4,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Cilantro",
+          "g": 4,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.1,
+            "protein": 0.1,
+            "carbs": 0.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 2,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "arroz integral cocido": {
+      "label": "Arroz integral cocido",
+      "method": "Lavar el arroz integral; hervir en agua con sal y un toque de aceite, tapar y cocinar a fuego bajo hasta absorber el agua (el grano integral absorbe ~2.5-3x su peso). Reposar y soltar con tenedor.",
+      "finished_g": 195,
+      "per_100g": {
+        "kcal": 149.7,
+        "protein": 2.6,
+        "carbs": 27.5,
+        "fats": 3.2
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Arroz integral",
+          "g": 70,
+          "resolved": true,
+          "macros": {
+            "kcal": 255.9,
+            "protein": 5.1,
+            "carbs": 53.7,
+            "fats": 2.3
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 4,
+          "resolved": true,
+          "macros": {
+            "kcal": 36.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 4.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 2,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "quinoa cocida": {
+      "label": "Quinoa cocida",
+      "method": "Enjuagar bien la quinoa para retirar saponinas; hervir en agua con sal (~2x el volumen del grano), tapar y cocinar a fuego bajo hasta que el agua se absorba y aparezca el germen. La quinoa cocida pesa ~3x el peso crudo.",
+      "finished_g": 185,
+      "per_100g": {
+        "kcal": 119.3,
+        "protein": 4.6,
+        "carbs": 20.8,
+        "fats": 2.0
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Quinoa",
+          "g": 60,
+          "resolved": true,
+          "macros": {
+            "kcal": 220.7,
+            "protein": 8.5,
+            "carbs": 38.5,
+            "fats": 3.6
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "guineitos hervidos": {
+      "label": "Guineitos hervidos",
+      "method": "Pelar los guineos verdes y hervir en agua con sal hasta que esten tiernos al tenedor (~20-25 min). Escurrir. El hervido conserva aproximadamente el mismo peso del guineo pelado.",
+      "finished_g": 175,
+      "per_100g": {
+        "kcal": 101.5,
+        "protein": 1.1,
+        "carbs": 23.5,
+        "fats": 0.3
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Guineo verde",
+          "g": 180,
+          "resolved": true,
+          "macros": {
+            "kcal": 177.7,
+            "protein": 2.0,
+            "carbs": 41.1,
+            "fats": 0.6
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 2,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "asopao de pollo": {
+      "label": "Asopao de pollo",
+      "method": "Sofreir cebolla, ajo, ají cubanela, pimiento morrón y cilantro en aceite. Agregar la pechuga de pollo en trozos y dorar. Añadir salsa de tomate y orégano. Incorporar el arroz crudo y abundante agua/caldo, hervir a fuego medio sin tapar hasta que el arroz se ablande y suelte almidón, dejándolo caldoso. El arroz absorbe agua y el caldo diluye el plato hasta ~400 g por porción.",
+      "finished_g": 400,
+      "per_100g": {
+        "kcal": 89.5,
+        "protein": 5.9,
+        "carbs": 10.7,
+        "fats": 2.6
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "g": 45,
+          "resolved": true,
+          "macros": {
+            "kcal": 161.4,
+            "protein": 3.2,
+            "carbs": 36.1,
+            "fats": 0.5
+          }
+        },
+        {
+          "name": "Pechuga de pollo",
+          "g": 85,
+          "resolved": true,
+          "macros": {
+            "kcal": 91.3,
+            "protein": 19.1,
+            "carbs": 0.0,
+            "fats": 1.6
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 25,
+          "resolved": true,
+          "macros": {
+            "kcal": 10.7,
+            "protein": 0.3,
+            "carbs": 2.3,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 3.5,
+            "protein": 0.1,
+            "carbs": 0.7,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 4.6,
+            "protein": 0.1,
+            "carbs": 0.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 4,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.7,
+            "protein": 0.3,
+            "carbs": 1.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Cilantro",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.4,
+            "protein": 0.1,
+            "carbs": 0.2,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.7,
+            "protein": 0.2,
+            "carbs": 1.1,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 0.5,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.8,
+            "protein": 0.0,
+            "carbs": 0.3,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1.5,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "sopa de pollo con vegetales": {
+      "label": "Sopa de pollo con vegetales",
+      "method": "Hervir la pechuga de pollo en agua con cebolla, ajo y cilantro para hacer caldo. Agregar papa, zanahoria y auyama en trozos y cocinar hasta ablandar. La auyama se deshace ligeramente y espesa el caldo. Sin arroz; mucha agua/caldo diluye la porción hasta ~420 g.",
+      "finished_g": 420,
+      "per_100g": {
+        "kcal": 52.6,
+        "protein": 5.0,
+        "carbs": 4.4,
+        "fats": 1.6
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Pechuga de pollo",
+          "g": 80,
+          "resolved": true,
+          "macros": {
+            "kcal": 85.9,
+            "protein": 18.0,
+            "carbs": 0.0,
+            "fats": 1.5
+          }
+        },
+        {
+          "name": "Papa",
+          "g": 70,
+          "resolved": true,
+          "macros": {
+            "kcal": 42.6,
+            "protein": 1.8,
+            "carbs": 8.7,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Zanahoria",
+          "g": 40,
+          "resolved": true,
+          "macros": {
+            "kcal": 17.7,
+            "protein": 0.4,
+            "carbs": 3.8,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Auyama",
+          "g": 50,
+          "resolved": true,
+          "macros": {
+            "kcal": 15.4,
+            "protein": 0.5,
+            "carbs": 3.2,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 8.5,
+            "protein": 0.2,
+            "carbs": 1.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 3,
+          "resolved": true,
+          "macros": {
+            "kcal": 4.3,
+            "protein": 0.2,
+            "carbs": 0.8,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Cilantro",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.4,
+            "protein": 0.1,
+            "carbs": 0.2,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 45.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 5.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1.5,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "crema de auyama": {
+      "label": "Crema de auyama",
+      "method": "Sofreir cebolla y ajo en mantequilla. Agregar la auyama en trozos y agua/caldo, hervir hasta que la auyama esté muy blanda. Licuar todo hasta obtener una crema, agregar leche evaporada y sal. El agua de cocción y la leche diluyen la porción hasta ~350 g.",
+      "finished_g": 350,
+      "per_100g": {
+        "kcal": 50.3,
+        "protein": 1.3,
+        "carbs": 5.5,
+        "fats": 2.6
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Auyama",
+          "g": 200,
+          "resolved": true,
+          "macros": {
+            "kcal": 61.8,
+            "protein": 2.0,
+            "carbs": 13.0,
+            "fats": 0.2
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 25,
+          "resolved": true,
+          "macros": {
+            "kcal": 10.7,
+            "protein": 0.3,
+            "carbs": 2.3,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 3,
+          "resolved": true,
+          "macros": {
+            "kcal": 4.3,
+            "protein": 0.2,
+            "carbs": 0.8,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Mantequilla",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 58.7,
+            "protein": 0.1,
+            "carbs": 0.0,
+            "fats": 6.5
+          }
+        },
+        {
+          "name": "Leche evaporada",
+          "g": 30,
+          "resolved": true,
+          "macros": {
+            "kcal": 40.6,
+            "protein": 2.0,
+            "carbs": 3.0,
+            "fats": 2.3
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1.5,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "asopao de camarones": {
+      "label": "Asopao de camarones",
+      "method": "Sofreir cebolla, ajo, ají cubanela, pimiento morrón y cilantro en aceite. Añadir salsa de tomate y orégano. Incorporar el arroz crudo con abundante agua/caldo y hervir caldoso hasta ablandar el arroz; agregar los camarones al final y cocinar pocos minutos. El arroz absorbe agua y el caldo diluye el plato hasta ~400 g por porción.",
+      "finished_g": 400,
+      "per_100g": {
+        "kcal": 84.8,
+        "protein": 5.4,
+        "carbs": 10.7,
+        "fats": 2.3
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Arroz blanco",
+          "g": 45,
+          "resolved": true,
+          "macros": {
+            "kcal": 161.4,
+            "protein": 3.2,
+            "carbs": 36.1,
+            "fats": 0.5
+          }
+        },
+        {
+          "name": "Camarones",
+          "g": 85,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.2,
+            "protein": 17.1,
+            "carbs": 0.0,
+            "fats": 0.4
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 25,
+          "resolved": true,
+          "macros": {
+            "kcal": 10.7,
+            "protein": 0.3,
+            "carbs": 2.3,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 3.5,
+            "protein": 0.1,
+            "carbs": 0.7,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 4.6,
+            "protein": 0.1,
+            "carbs": 0.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Ajo",
+          "g": 4,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.7,
+            "protein": 0.3,
+            "carbs": 1.1,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Cilantro",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.4,
+            "protein": 0.1,
+            "carbs": 0.2,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 5.7,
+            "protein": 0.2,
+            "carbs": 1.1,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 72.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 8.0
+          }
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 0.5,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.8,
+            "protein": 0.0,
+            "carbs": 0.3,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1.5,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "pure de papa": {
+      "label": "Puré de papa",
+      "method": "papa hervida + majada con leche y mantequilla",
+      "finished_g": 225,
+      "per_100g": {
+        "kcal": 91.4,
+        "protein": 2.9,
+        "carbs": 12.0,
+        "fats": 3.6
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Papa",
+          "g": 200,
+          "resolved": true,
+          "macros": {
+            "kcal": 121.6,
+            "protein": 5.1,
+            "carbs": 24.8,
+            "fats": 0.2
+          }
+        },
+        {
+          "name": "Leche",
+          "g": 40,
+          "resolved": true,
+          "macros": {
+            "kcal": 24.4,
+            "protein": 1.3,
+            "carbs": 1.9,
+            "fats": 1.3
+          }
+        },
+        {
+          "name": "Mantequilla",
+          "g": 8,
+          "resolved": true,
+          "macros": {
+            "kcal": 58.7,
+            "protein": 0.1,
+            "carbs": 0.0,
+            "fats": 6.5
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1.5,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Pimienta negra",
+          "g": 0.3,
+          "resolved": true,
+          "macros": {
+            "kcal": 1.0,
+            "protein": 0.0,
+            "carbs": 0.2,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "vegetales al vapor": {
+      "label": "Vegetales al vapor",
+      "method": "brócoli, zanahoria y vainitas al vapor (pierden poca agua) con chorrito de aceite",
+      "finished_g": 175,
+      "per_100g": {
+        "kcal": 66.4,
+        "protein": 1.9,
+        "carbs": 7.6,
+        "fats": 3.1
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Brócoli",
+          "g": 70,
+          "resolved": true,
+          "macros": {
+            "kcal": 26.9,
+            "protein": 1.8,
+            "carbs": 4.4,
+            "fats": 0.2
+          }
+        },
+        {
+          "name": "Zanahoria",
+          "g": 55,
+          "resolved": true,
+          "macros": {
+            "kcal": 24.3,
+            "protein": 0.5,
+            "carbs": 5.3,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Vainitas",
+          "g": 50,
+          "resolved": true,
+          "macros": {
+            "kcal": 20.0,
+            "protein": 1.0,
+            "carbs": 3.7,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Aceite de oliva",
+          "g": 5,
+          "resolved": true,
+          "macros": {
+            "kcal": 45.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 5.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "tortilla de huevo": {
+      "label": "Tortilla de huevo con cebolla y queso",
+      "method": "huevo batido cuajado en aceite con cebolla y queso (pierde algo de agua, absorbe aceite)",
+      "finished_g": 150,
+      "per_100g": {
+        "kcal": 184.0,
+        "protein": 11.6,
+        "carbs": 2.2,
+        "fats": 14.3
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Huevo",
+          "g": 100,
+          "resolved": true,
+          "macros": {
+            "kcal": 138.9,
+            "protein": 12.6,
+            "carbs": 0.7,
+            "fats": 9.5
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 20,
+          "resolved": true,
+          "macros": {
+            "kcal": 8.5,
+            "protein": 0.2,
+            "carbs": 1.9,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Queso blanco",
+          "g": 25,
+          "resolved": true,
+          "macros": {
+            "kcal": 74.6,
+            "protein": 4.5,
+            "carbs": 0.7,
+            "fats": 6.0
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6,
+          "resolved": true,
+          "macros": {
+            "kcal": 54.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 6.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 1,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "mangu con los tres golpes": {
+      "label": "Mangú con los tres golpes",
+      "method": "plátano verde hervido+majado + huevo frito + queso de hoja frito + salami frito (combo; fritos absorben aceite)",
+      "finished_g": 345,
+      "per_100g": {
+        "kcal": 230.8,
+        "protein": 7.7,
+        "carbs": 20.7,
+        "fats": 13.0
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Plátano verde",
+          "g": 180,
+          "resolved": true,
+          "macros": {
+            "kcal": 274.3,
+            "protein": 2.2,
+            "carbs": 66.1,
+            "fats": 0.1
+          }
+        },
+        {
+          "name": "Cebolla",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 6.4,
+            "protein": 0.2,
+            "carbs": 1.4,
+            "fats": 0.0
+          }
+        },
+        {
+          "name": "Huevo",
+          "g": 50,
+          "resolved": true,
+          "macros": {
+            "kcal": 69.5,
+            "protein": 6.3,
+            "carbs": 0.4,
+            "fats": 4.8
+          }
+        },
+        {
+          "name": "Queso de hoja",
+          "g": 50,
+          "resolved": true,
+          "macros": {
+            "kcal": 149.5,
+            "protein": 10.0,
+            "carbs": 1.5,
+            "fats": 11.5
+          }
+        },
+        {
+          "name": "Salami dominicano",
+          "g": 50,
+          "resolved": true,
+          "macros": {
+            "kcal": 161.5,
+            "protein": 8.0,
+            "carbs": 2.0,
+            "fats": 13.5
+          }
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 15,
+          "resolved": true,
+          "macros": {
+            "kcal": 135.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 15.0
+          }
+        },
+        {
+          "name": "Sal",
+          "g": 2,
+          "resolved": true,
+          "macros": {
+            "kcal": 0.0,
+            "protein": 0.0,
+            "carbs": 0.0,
+            "fats": 0.0
+          }
+        }
+      ],
+      "fndds_cross_check": null,
+      "provenance": "computed from catalog/USDA constituents (CC0)"
+    },
+    "casabe con queso": {
+      "label": "Casabe con queso",
+      "method": "casabe (torta de yuca lista) con queso blanco encima (sin cocción, sin pérdida de agua)",
+      "finished_g": 110,
+      "per_100g": {
+        "kcal": 320.5,
+        "protein": 10.6,
+        "carbs": 39.8,
+        "fats": 13.2
+      },
+      "resolution_coverage": 1.0,
+      "constituents": [
+        {
+          "name": "Casabe",
+          "g": 50,
+          "resolved": true,
+          "macros": {
+            "kcal": 173.4,
+            "protein": 0.8,
+            "carbs": 42.0,
+            "fats": 0.2
+          }
+        },
+        {
+          "name": "Queso blanco",
+          "g": 60,
+          "resolved": true,
+          "macros": {
+            "kcal": 179.1,
+            "protein": 10.9,
+            "carbs": 1.8,
+            "fats": 14.3
           }
         }
       ],

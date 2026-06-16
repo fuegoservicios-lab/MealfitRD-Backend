@@ -1,82 +1,1865 @@
 {
   "_note": "[G17-RECIPE-DECOMP] Recetas canónicas de platos dominicanos: ingredientes (nombre EXACTO del catálogo master_ingredients) + gramos CRUDOS + peso COCIDO final del plato (1 porción). Input curado de scripts/build_dominican_dishes.py, que computa los macros per-100g desde los constituyentes (CC0) + cross-check vs FNDDS. fndds_key = key en data/fndds_dish_reference.json para el cross-check (null si no hay análogo).",
   "recipes": {
-    "moro": {"label": "Moro de habichuelas", "finished_g": 230, "method": "arroz+habichuelas hervido", "fndds_key": "moro",
-             "ingredients": [["Arroz blanco", 60], ["Habichuelas rojas", 35], ["Aceite vegetal", 6], ["Cebolla", 12], ["Ají cubanela", 8]]},
-    "mangu": {"label": "Mangú (plátano verde majado)", "finished_g": 200, "method": "plátano verde hervido+majado", "fndds_key": null,
-              "ingredients": [["Plátano verde", 180], ["Aceite vegetal", 8], ["Cebolla", 15]]},
-    "locrio de pollo": {"label": "Locrío de pollo", "finished_g": 240, "method": "arroz+pollo guisado", "fndds_key": "locrio",
-                        "ingredients": [["Arroz blanco", 60], ["Pechuga de pollo", 65], ["Aceite vegetal", 8], ["Cebolla", 12], ["Tomate", 15]]},
-    "sancocho": {"label": "Sancocho dominicano", "finished_g": 360, "method": "guiso/hervido con caldo", "fndds_key": "sancocho",
-                 "ingredients": [["Carne de res", 70], ["Yuca", 50], ["Plátano verde", 40], ["Auyama", 30], ["Ñame", 30], ["Cebolla", 10], ["Aceite vegetal", 5]]},
-    "habichuelas guisadas": {"label": "Habichuelas guisadas", "finished_g": 180, "method": "guiso", "fndds_key": null,
-                             "ingredients": [["Habichuelas rojas", 55], ["Auyama", 20], ["Aceite vegetal", 8], ["Cebolla", 12], ["Ají cubanela", 8]]},
-    "tostones": {"label": "Tostones (plátano verde frito)", "finished_g": 95, "method": "frito (pierde agua, absorbe aceite)", "fndds_key": null,
-                 "ingredients": [["Plátano verde", 120], ["Aceite vegetal", 12]]},
-
-    "arroz blanco": {"label": "Arroz blanco", "finished_g": 215, "method": "sofrito + hervido (absorbe agua ~3x; arroz DR lleva aceite → más kcal que arroz en agua)", "fndds_key": "arroz blanco",
-                     "ingredients": [{"name": "Arroz blanco", "g": 70}, {"name": "Aceite vegetal", "g": 7}, {"name": "Sal", "g": 1.5}]},
-    "arroz con pollo": {"label": "Arroz con pollo", "finished_g": 320, "method": "pollo guisado + arroz cocido junto", "fndds_key": null,
-                        "ingredients": [{"name": "Arroz blanco", "g": 70}, {"name": "Pechuga de pollo", "g": 95}, {"name": "Aceite vegetal", "g": 9}, {"name": "Cebolla", "g": 20}, {"name": "Ají cubanela", "g": 15}, {"name": "Pimiento morrón", "g": 12}, {"name": "Salsa de tomate", "g": 18}, {"name": "Ajo", "g": 4}, {"name": "Cilantro", "g": 4}, {"name": "Sal", "g": 1.5}]},
-    "moro de gandules": {"label": "Moro de gandules", "finished_g": 300, "method": "arroz+gandules cocido con sofrito", "fndds_key": null,
-                         "ingredients": [{"name": "Arroz blanco", "g": 70}, {"name": "Gandules", "g": 55}, {"name": "Aceite vegetal", "g": 9}, {"name": "Cebolla", "g": 18}, {"name": "Ají cubanela", "g": 12}, {"name": "Salsa de tomate", "g": 15}, {"name": "Ajo", "g": 4}, {"name": "Cilantro", "g": 4}, {"name": "Sal", "g": 1.5}]},
-    "moro de habichuelas negras": {"label": "Moro de habichuelas negras", "finished_g": 300, "method": "arroz+habichuelas negras cocido con sofrito", "fndds_key": null,
-                                   "ingredients": [{"name": "Arroz blanco", "g": 70}, {"name": "Habichuelas negras", "g": 55}, {"name": "Aceite vegetal", "g": 9}, {"name": "Cebolla", "g": 18}, {"name": "Ají cubanela", "g": 12}, {"name": "Salsa de tomate", "g": 15}, {"name": "Ajo", "g": 4}, {"name": "Cilantro", "g": 4}, {"name": "Sal", "g": 1.5}]},
-    "arroz con maiz": {"label": "Arroz con maíz", "finished_g": 290, "method": "arroz+maíz cocido con sofrito ligero", "fndds_key": null,
-                       "ingredients": [{"name": "Arroz blanco", "g": 70}, {"name": "Maíz dulce en granos", "g": 50}, {"name": "Aceite vegetal", "g": 8}, {"name": "Cebolla", "g": 15}, {"name": "Salsa de tomate", "g": 12}, {"name": "Ajo", "g": 3}, {"name": "Sal", "g": 1.5}]},
-    "arroz con longaniza": {"label": "Arroz con longaniza", "finished_g": 305, "method": "longaniza dorada + arroz cocido", "fndds_key": null,
-                            "ingredients": [{"name": "Arroz blanco", "g": 70}, {"name": "Longaniza dominicana", "g": 65}, {"name": "Aceite vegetal", "g": 5}, {"name": "Cebolla", "g": 18}, {"name": "Ají cubanela", "g": 12}, {"name": "Salsa de tomate", "g": 15}, {"name": "Ajo", "g": 4}, {"name": "Cilantro", "g": 3}, {"name": "Sal", "g": 1}]},
-
-    "pollo guisado": {"label": "Pollo guisado dominicano", "finished_g": 165, "method": "guiso/braseado en sofrito con poca agua", "fndds_key": "pollo guisado",
-                      "ingredients": [{"name": "Pechuga de pollo", "g": 140}, {"name": "Aceite vegetal", "g": 7}, {"name": "Cebolla", "g": 18}, {"name": "Ají cubanela", "g": 12}, {"name": "Tomate", "g": 18}, {"name": "Salsa de tomate", "g": 15}, {"name": "Ajo", "g": 4}, {"name": "Orégano dominicano", "g": 0.5}, {"name": "Sal", "g": 1}]},
-    "carne de res guisada": {"label": "Carne de res guisada", "finished_g": 160, "method": "guiso/braseado lento en sofrito", "fndds_key": null,
-                             "ingredients": [{"name": "Carne de res", "g": 150}, {"name": "Aceite vegetal", "g": 7}, {"name": "Cebolla", "g": 18}, {"name": "Ají cubanela", "g": 12}, {"name": "Tomate", "g": 18}, {"name": "Salsa de tomate", "g": 15}, {"name": "Ajo", "g": 4}, {"name": "Pimiento morrón", "g": 10}, {"name": "Sal", "g": 1}]},
-    "cerdo guisado": {"label": "Cerdo guisado", "finished_g": 160, "method": "guiso/braseado en sofrito", "fndds_key": null,
-                      "ingredients": [{"name": "Cerdo", "g": 150}, {"name": "Aceite vegetal", "g": 6}, {"name": "Cebolla", "g": 18}, {"name": "Ají cubanela", "g": 12}, {"name": "Tomate", "g": 18}, {"name": "Salsa de tomate", "g": 15}, {"name": "Ajo", "g": 4}, {"name": "Orégano dominicano", "g": 0.5}, {"name": "Sal", "g": 1}]},
-    "pescado guisado": {"label": "Pescado guisado (filete blanco)", "finished_g": 175, "method": "filete guisado en salsa de sofrito", "fndds_key": null,
-                        "ingredients": [{"name": "Filete de pescado blanco", "g": 160}, {"name": "Aceite vegetal", "g": 7}, {"name": "Cebolla", "g": 18}, {"name": "Ají cubanela", "g": 12}, {"name": "Tomate", "g": 20}, {"name": "Salsa de tomate", "g": 15}, {"name": "Ajo", "g": 4}, {"name": "Limón", "g": 8}, {"name": "Sal", "g": 1}]},
-    "bacalao guisado": {"label": "Bacalao guisado con papa", "finished_g": 285, "method": "bacalao desalado guisado con papa y tomate", "fndds_key": null,
-                        "ingredients": [{"name": "Bacalao", "g": 110}, {"name": "Papa", "g": 120}, {"name": "Aceite de oliva", "g": 8}, {"name": "Cebolla", "g": 25}, {"name": "Ají cubanela", "g": 12}, {"name": "Tomate", "g": 25}, {"name": "Salsa de tomate", "g": 20}, {"name": "Ajo", "g": 4}, {"name": "Aceitunas", "g": 10}, {"name": "Pimiento morrón", "g": 12}]},
-    "pollo al horno": {"label": "Pollo al horno (pechuga)", "finished_g": 120, "method": "horneado con adobo (pierde agua)", "fndds_key": null,
-                       "ingredients": [{"name": "Pechuga de pollo", "g": 160}, {"name": "Aceite de oliva", "g": 6}, {"name": "Ajo", "g": 5}, {"name": "Naranja", "g": 10}, {"name": "Orégano dominicano", "g": 0.5}, {"name": "Cebolla", "g": 12}, {"name": "Sal", "g": 1.2}, {"name": "Pimienta negra", "g": 0.3}]},
-
-    "habichuelas negras guisadas": {"label": "Habichuelas negras guisadas", "finished_g": 185, "method": "habichuelas hervidas + guiso con auyama", "fndds_key": null,
-                                    "ingredients": [{"name": "Habichuelas negras", "g": 55}, {"name": "Auyama", "g": 25}, {"name": "Cebolla", "g": 15}, {"name": "Ají cubanela", "g": 12}, {"name": "Ajo", "g": 4}, {"name": "Cilantro", "g": 3}, {"name": "Salsa de tomate", "g": 18}, {"name": "Aceite vegetal", "g": 6}, {"name": "Sal", "g": 2}]},
-    "lentejas guisadas": {"label": "Lentejas guisadas", "finished_g": 190, "method": "lentejas hervidas + guiso con zanahoria", "fndds_key": null,
-                          "ingredients": [{"name": "Lentejas", "g": 55}, {"name": "Zanahoria", "g": 25}, {"name": "Cebolla", "g": 15}, {"name": "Ají cubanela", "g": 12}, {"name": "Ajo", "g": 4}, {"name": "Cilantro", "g": 3}, {"name": "Salsa de tomate", "g": 18}, {"name": "Aceite vegetal", "g": 6}, {"name": "Sal", "g": 2}]},
-    "gandules guisados": {"label": "Gandules guisados", "finished_g": 185, "method": "gandules hervidos + guiso con auyama", "fndds_key": null,
-                          "ingredients": [{"name": "Gandules", "g": 90}, {"name": "Auyama", "g": 25}, {"name": "Cebolla", "g": 15}, {"name": "Ají cubanela", "g": 12}, {"name": "Ajo", "g": 4}, {"name": "Cilantro", "g": 3}, {"name": "Salsa de tomate", "g": 18}, {"name": "Aceite vegetal", "g": 6}, {"name": "Sal", "g": 2}]},
-    "yuca hervida": {"label": "Yuca hervida", "finished_g": 195, "method": "hervida en agua con sal", "fndds_key": "yuca hervida",
-                     "ingredients": [{"name": "Yuca", "g": 200}, {"name": "Sal", "g": 2}]},
-    "batata hervida": {"label": "Batata hervida", "finished_g": 165, "method": "hervida en agua con sal", "fndds_key": "batata",
-                       "ingredients": [{"name": "Batata", "g": 175}, {"name": "Sal", "g": 2}]},
-    "platano verde hervido": {"label": "Plátano verde hervido", "finished_g": 175, "method": "hervido en agua con sal", "fndds_key": null,
-                              "ingredients": [{"name": "Plátano verde", "g": 180}, {"name": "Sal", "g": 2}]},
-
-    "platanos maduros fritos": {"label": "Plátanos maduros fritos", "finished_g": 150, "method": "frito (pierde agua, absorbe aceite)", "fndds_key": null,
-                                "ingredients": [{"name": "Plátano maduro", "g": 180}, {"name": "Aceite vegetal", "g": 9}, {"name": "Sal", "g": 0.5}]},
-    "yuca frita": {"label": "Yuca frita", "finished_g": 190, "method": "hervida + frita (absorbe aceite)", "fndds_key": null,
-                   "ingredients": [{"name": "Yuca", "g": 220}, {"name": "Aceite vegetal", "g": 11}, {"name": "Sal", "g": 1}]},
-    "chicharron de cerdo": {"label": "Chicharrón de cerdo", "finished_g": 95, "method": "frito en su grasa (pierde mucha agua)", "fndds_key": null,
-                            "ingredients": [{"name": "Cerdo", "g": 160}, {"name": "Aceite vegetal", "g": 6}, {"name": "Sal", "g": 1.5}, {"name": "Ajo", "g": 4}, {"name": "Limón", "g": 8}]},
-    "mofongo": {"label": "Mofongo", "finished_g": 210, "method": "plátano frito majado compacto con chicharrón y ajo (denso)", "fndds_key": "mofongo",
-                "ingredients": [{"name": "Plátano verde", "g": 250}, {"name": "Aceite vegetal", "g": 15}, {"name": "Cerdo", "g": 45}, {"name": "Ajo", "g": 6}, {"name": "Sal", "g": 2}]},
-    "papas fritas": {"label": "Papas fritas", "finished_g": 150, "method": "fritas (pierde agua, absorbe aceite)", "fndds_key": null,
-                     "ingredients": [{"name": "Papa", "g": 210}, {"name": "Aceite vegetal", "g": 12}, {"name": "Sal", "g": 1}]},
-    "salami frito": {"label": "Salami frito", "finished_g": 105, "method": "frito en rodajas (rinde grasa)", "fndds_key": null,
-                     "ingredients": [{"name": "Salami dominicano", "g": 120}, {"name": "Aceite vegetal", "g": 4}]},
-
-    "huevos revueltos": {"label": "Huevos revueltos", "finished_g": 135, "method": "huevo batido revuelto con cebolla en aceite", "fndds_key": null,
-                         "ingredients": [{"name": "Huevo", "g": 100}, {"name": "Aceite vegetal", "g": 7}, {"name": "Cebolla", "g": 25}, {"name": "Sal", "g": 1}, {"name": "Pimienta negra", "g": 0.3}]},
-    "avena cocida": {"label": "Avena cocida con leche", "finished_g": 240, "method": "avena cocida en leche (absorbe líquido)", "fndds_key": "avena",
-                     "ingredients": [{"name": "Avena", "g": 50}, {"name": "Leche", "g": 200}, {"name": "Canela en polvo", "g": 0.5}, {"name": "Estevia", "g": 0.5}]},
-    "ensalada verde": {"label": "Ensalada verde con aguacate", "finished_g": 200, "method": "cruda, aliñada con aceite de oliva y limón", "fndds_key": null,
-                       "ingredients": [{"name": "Lechuga", "g": 70}, {"name": "Tomate", "g": 60}, {"name": "Cebolla", "g": 20}, {"name": "Aguacate", "g": 50}, {"name": "Aceite de oliva", "g": 8}, {"name": "Limón", "g": 10}, {"name": "Sal", "g": 1}]},
-    "ensalada rusa": {"label": "Ensalada rusa dominicana", "finished_g": 260, "method": "vegetales hervidos en cubos, aliñados en frío", "fndds_key": null,
-                      "ingredients": [{"name": "Papa", "g": 130}, {"name": "Zanahoria", "g": 60}, {"name": "Vainitas", "g": 40}, {"name": "Huevo", "g": 50}, {"name": "Mostaza", "g": 12}, {"name": "Sal", "g": 1.5}]},
-    "espagueti guisado": {"label": "Espagueti guisado dominicano", "finished_g": 300, "method": "pasta hervida + guiso de salami y salsa", "fndds_key": null,
-                          "ingredients": [{"name": "Pasta integral", "g": 90}, {"name": "Salami dominicano", "g": 50}, {"name": "Salsa de tomate", "g": 60}, {"name": "Cebolla", "g": 30}, {"name": "Aceite vegetal", "g": 8}, {"name": "Sal", "g": 1.5}]},
-    "berenjena guisada": {"label": "Berenjena guisada", "finished_g": 220, "method": "berenjena en cubos guisada con sofrito y tomate", "fndds_key": null,
-                          "ingredients": [{"name": "Berenjena", "g": 180}, {"name": "Cebolla", "g": 30}, {"name": "Ají cubanela", "g": 25}, {"name": "Pimiento morrón", "g": 20}, {"name": "Tomate", "g": 40}, {"name": "Salsa de tomate", "g": 25}, {"name": "Ajo", "g": 4}, {"name": "Aceite vegetal", "g": 10}, {"name": "Sal", "g": 1.5}]}
+    "moro": {
+      "label": "Moro de habichuelas",
+      "finished_g": 230,
+      "method": "arroz+habichuelas hervido",
+      "fndds_key": "moro",
+      "ingredients": [
+        [
+          "Arroz blanco",
+          60
+        ],
+        [
+          "Habichuelas rojas",
+          35
+        ],
+        [
+          "Aceite vegetal",
+          6
+        ],
+        [
+          "Cebolla",
+          12
+        ],
+        [
+          "Ají cubanela",
+          8
+        ]
+      ]
+    },
+    "mangu": {
+      "label": "Mangú (plátano verde majado)",
+      "finished_g": 200,
+      "method": "plátano verde hervido+majado",
+      "fndds_key": null,
+      "ingredients": [
+        [
+          "Plátano verde",
+          180
+        ],
+        [
+          "Aceite vegetal",
+          8
+        ],
+        [
+          "Cebolla",
+          15
+        ]
+      ]
+    },
+    "locrio de pollo": {
+      "label": "Locrío de pollo",
+      "finished_g": 240,
+      "method": "arroz+pollo guisado",
+      "fndds_key": "locrio",
+      "ingredients": [
+        [
+          "Arroz blanco",
+          60
+        ],
+        [
+          "Pechuga de pollo",
+          65
+        ],
+        [
+          "Aceite vegetal",
+          8
+        ],
+        [
+          "Cebolla",
+          12
+        ],
+        [
+          "Tomate",
+          15
+        ]
+      ]
+    },
+    "sancocho": {
+      "label": "Sancocho dominicano",
+      "finished_g": 360,
+      "method": "guiso/hervido con caldo",
+      "fndds_key": "sancocho",
+      "ingredients": [
+        [
+          "Carne de res",
+          70
+        ],
+        [
+          "Yuca",
+          50
+        ],
+        [
+          "Plátano verde",
+          40
+        ],
+        [
+          "Auyama",
+          30
+        ],
+        [
+          "Ñame",
+          30
+        ],
+        [
+          "Cebolla",
+          10
+        ],
+        [
+          "Aceite vegetal",
+          5
+        ]
+      ]
+    },
+    "habichuelas guisadas": {
+      "label": "Habichuelas guisadas",
+      "finished_g": 180,
+      "method": "guiso",
+      "fndds_key": null,
+      "ingredients": [
+        [
+          "Habichuelas rojas",
+          55
+        ],
+        [
+          "Auyama",
+          20
+        ],
+        [
+          "Aceite vegetal",
+          8
+        ],
+        [
+          "Cebolla",
+          12
+        ],
+        [
+          "Ají cubanela",
+          8
+        ]
+      ]
+    },
+    "tostones": {
+      "label": "Tostones (plátano verde frito)",
+      "finished_g": 95,
+      "method": "frito (pierde agua, absorbe aceite)",
+      "fndds_key": null,
+      "ingredients": [
+        [
+          "Plátano verde",
+          120
+        ],
+        [
+          "Aceite vegetal",
+          12
+        ]
+      ]
+    },
+    "arroz blanco": {
+      "label": "Arroz blanco",
+      "finished_g": 215,
+      "method": "sofrito + hervido (absorbe agua ~3x; arroz DR lleva aceite → más kcal que arroz en agua)",
+      "fndds_key": "arroz blanco",
+      "ingredients": [
+        {
+          "name": "Arroz blanco",
+          "g": 70
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 7
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "arroz con pollo": {
+      "label": "Arroz con pollo",
+      "finished_g": 320,
+      "method": "pollo guisado + arroz cocido junto",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Arroz blanco",
+          "g": 70
+        },
+        {
+          "name": "Pechuga de pollo",
+          "g": 95
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 9
+        },
+        {
+          "name": "Cebolla",
+          "g": 20
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 12
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 18
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 4
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "moro de gandules": {
+      "label": "Moro de gandules",
+      "finished_g": 300,
+      "method": "arroz+gandules cocido con sofrito",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Arroz blanco",
+          "g": 70
+        },
+        {
+          "name": "Gandules",
+          "g": 55
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 9
+        },
+        {
+          "name": "Cebolla",
+          "g": 18
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 4
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "moro de habichuelas negras": {
+      "label": "Moro de habichuelas negras",
+      "finished_g": 300,
+      "method": "arroz+habichuelas negras cocido con sofrito",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Arroz blanco",
+          "g": 70
+        },
+        {
+          "name": "Habichuelas negras",
+          "g": 55
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 9
+        },
+        {
+          "name": "Cebolla",
+          "g": 18
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 4
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "arroz con maiz": {
+      "label": "Arroz con maíz",
+      "finished_g": 290,
+      "method": "arroz+maíz cocido con sofrito ligero",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Arroz blanco",
+          "g": 70
+        },
+        {
+          "name": "Maíz dulce en granos",
+          "g": 50
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8
+        },
+        {
+          "name": "Cebolla",
+          "g": 15
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 12
+        },
+        {
+          "name": "Ajo",
+          "g": 3
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "arroz con longaniza": {
+      "label": "Arroz con longaniza",
+      "finished_g": 305,
+      "method": "longaniza dorada + arroz cocido",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Arroz blanco",
+          "g": 70
+        },
+        {
+          "name": "Longaniza dominicana",
+          "g": 65
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 5
+        },
+        {
+          "name": "Cebolla",
+          "g": 18
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 3
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "pollo guisado": {
+      "label": "Pollo guisado dominicano",
+      "finished_g": 165,
+      "method": "guiso/braseado en sofrito con poca agua",
+      "fndds_key": "pollo guisado",
+      "ingredients": [
+        {
+          "name": "Pechuga de pollo",
+          "g": 140
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 7
+        },
+        {
+          "name": "Cebolla",
+          "g": 18
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Tomate",
+          "g": 18
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 0.5
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "carne de res guisada": {
+      "label": "Carne de res guisada",
+      "finished_g": 160,
+      "method": "guiso/braseado lento en sofrito",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Carne de res",
+          "g": 150
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 7
+        },
+        {
+          "name": "Cebolla",
+          "g": 18
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Tomate",
+          "g": 18
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 10
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "cerdo guisado": {
+      "label": "Cerdo guisado",
+      "finished_g": 160,
+      "method": "guiso/braseado en sofrito",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Cerdo",
+          "g": 150
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6
+        },
+        {
+          "name": "Cebolla",
+          "g": 18
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Tomate",
+          "g": 18
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 0.5
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "pescado guisado": {
+      "label": "Pescado guisado (filete blanco)",
+      "finished_g": 175,
+      "method": "filete guisado en salsa de sofrito",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Filete de pescado blanco",
+          "g": 160
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 7
+        },
+        {
+          "name": "Cebolla",
+          "g": 18
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Tomate",
+          "g": 20
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Limón",
+          "g": 8
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "bacalao guisado": {
+      "label": "Bacalao guisado con papa",
+      "finished_g": 285,
+      "method": "bacalao desalado guisado con papa y tomate",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Bacalao",
+          "g": 110
+        },
+        {
+          "name": "Papa",
+          "g": 120
+        },
+        {
+          "name": "Aceite de oliva",
+          "g": 8
+        },
+        {
+          "name": "Cebolla",
+          "g": 25
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Tomate",
+          "g": 25
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 20
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Aceitunas",
+          "g": 10
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 12
+        }
+      ]
+    },
+    "pollo al horno": {
+      "label": "Pollo al horno (pechuga)",
+      "finished_g": 120,
+      "method": "horneado con adobo (pierde agua)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Pechuga de pollo",
+          "g": 160
+        },
+        {
+          "name": "Aceite de oliva",
+          "g": 6
+        },
+        {
+          "name": "Ajo",
+          "g": 5
+        },
+        {
+          "name": "Naranja",
+          "g": 10
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 0.5
+        },
+        {
+          "name": "Cebolla",
+          "g": 12
+        },
+        {
+          "name": "Sal",
+          "g": 1.2
+        },
+        {
+          "name": "Pimienta negra",
+          "g": 0.3
+        }
+      ]
+    },
+    "habichuelas negras guisadas": {
+      "label": "Habichuelas negras guisadas",
+      "finished_g": 185,
+      "method": "habichuelas hervidas + guiso con auyama",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Habichuelas negras",
+          "g": 55
+        },
+        {
+          "name": "Auyama",
+          "g": 25
+        },
+        {
+          "name": "Cebolla",
+          "g": 15
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 3
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 18
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "lentejas guisadas": {
+      "label": "Lentejas guisadas",
+      "finished_g": 190,
+      "method": "lentejas hervidas + guiso con zanahoria",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Lentejas",
+          "g": 55
+        },
+        {
+          "name": "Zanahoria",
+          "g": 25
+        },
+        {
+          "name": "Cebolla",
+          "g": 15
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 3
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 18
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "gandules guisados": {
+      "label": "Gandules guisados",
+      "finished_g": 185,
+      "method": "gandules hervidos + guiso con auyama",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Gandules",
+          "g": 55
+        },
+        {
+          "name": "Auyama",
+          "g": 25
+        },
+        {
+          "name": "Cebolla",
+          "g": 15
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 12
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 3
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 18
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "yuca hervida": {
+      "label": "Yuca hervida",
+      "finished_g": 195,
+      "method": "hervida en agua con sal",
+      "fndds_key": "yuca hervida",
+      "ingredients": [
+        {
+          "name": "Yuca",
+          "g": 200
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "batata hervida": {
+      "label": "Batata hervida",
+      "finished_g": 165,
+      "method": "hervida en agua con sal",
+      "fndds_key": "batata",
+      "ingredients": [
+        {
+          "name": "Batata",
+          "g": 175
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "platano verde hervido": {
+      "label": "Plátano verde hervido",
+      "finished_g": 175,
+      "method": "hervido en agua con sal",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Plátano verde",
+          "g": 180
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "platanos maduros fritos": {
+      "label": "Plátanos maduros fritos",
+      "finished_g": 150,
+      "method": "frito (pierde agua, absorbe aceite)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Plátano maduro",
+          "g": 180
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 9
+        },
+        {
+          "name": "Sal",
+          "g": 0.5
+        }
+      ]
+    },
+    "yuca frita": {
+      "label": "Yuca frita",
+      "finished_g": 190,
+      "method": "hervida + frita (absorbe aceite)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Yuca",
+          "g": 220
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 11
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "chicharron de cerdo": {
+      "label": "Chicharrón de cerdo",
+      "finished_g": 95,
+      "method": "frito en su grasa (pierde mucha agua)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Cerdo",
+          "g": 160
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Limón",
+          "g": 8
+        }
+      ]
+    },
+    "mofongo": {
+      "label": "Mofongo",
+      "finished_g": 210,
+      "method": "plátano frito majado compacto con chicharrón y ajo (denso)",
+      "fndds_key": "mofongo",
+      "ingredients": [
+        {
+          "name": "Plátano verde",
+          "g": 250
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 15
+        },
+        {
+          "name": "Cerdo",
+          "g": 45
+        },
+        {
+          "name": "Ajo",
+          "g": 6
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "papas fritas": {
+      "label": "Papas fritas",
+      "finished_g": 150,
+      "method": "fritas (pierde agua, absorbe aceite)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Papa",
+          "g": 210
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 12
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "salami frito": {
+      "label": "Salami frito",
+      "finished_g": 105,
+      "method": "frito en rodajas (rinde grasa)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Salami dominicano",
+          "g": 120
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 4
+        }
+      ]
+    },
+    "huevos revueltos": {
+      "label": "Huevos revueltos",
+      "finished_g": 135,
+      "method": "huevo batido revuelto con cebolla en aceite",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Huevo",
+          "g": 100
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 7
+        },
+        {
+          "name": "Cebolla",
+          "g": 25
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        },
+        {
+          "name": "Pimienta negra",
+          "g": 0.3
+        }
+      ]
+    },
+    "avena cocida": {
+      "label": "Avena cocida con leche",
+      "finished_g": 240,
+      "method": "avena cocida en leche (absorbe líquido)",
+      "fndds_key": "avena",
+      "ingredients": [
+        {
+          "name": "Avena",
+          "g": 50
+        },
+        {
+          "name": "Leche",
+          "g": 200
+        },
+        {
+          "name": "Canela en polvo",
+          "g": 0.5
+        },
+        {
+          "name": "Estevia",
+          "g": 0.5
+        }
+      ]
+    },
+    "ensalada verde": {
+      "label": "Ensalada verde con aguacate",
+      "finished_g": 200,
+      "method": "cruda, aliñada con aceite de oliva y limón",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Lechuga",
+          "g": 70
+        },
+        {
+          "name": "Tomate",
+          "g": 60
+        },
+        {
+          "name": "Cebolla",
+          "g": 20
+        },
+        {
+          "name": "Aguacate",
+          "g": 50
+        },
+        {
+          "name": "Aceite de oliva",
+          "g": 8
+        },
+        {
+          "name": "Limón",
+          "g": 10
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "ensalada rusa": {
+      "label": "Ensalada rusa dominicana",
+      "finished_g": 260,
+      "method": "vegetales hervidos en cubos, aliñados en frío",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Papa",
+          "g": 130
+        },
+        {
+          "name": "Zanahoria",
+          "g": 60
+        },
+        {
+          "name": "Vainitas",
+          "g": 40
+        },
+        {
+          "name": "Huevo",
+          "g": 50
+        },
+        {
+          "name": "Mostaza",
+          "g": 12
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "espagueti guisado": {
+      "label": "Espagueti guisado dominicano",
+      "finished_g": 300,
+      "method": "pasta hervida + guiso de salami y salsa",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Pasta integral",
+          "g": 90
+        },
+        {
+          "name": "Salami dominicano",
+          "g": 50
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 60
+        },
+        {
+          "name": "Cebolla",
+          "g": 30
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "berenjena guisada": {
+      "label": "Berenjena guisada",
+      "finished_g": 220,
+      "method": "berenjena en cubos guisada con sofrito y tomate",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Berenjena",
+          "g": 180
+        },
+        {
+          "name": "Cebolla",
+          "g": 30
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 25
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 20
+        },
+        {
+          "name": "Tomate",
+          "g": 40
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 25
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 10
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "pollo frito dominicano": {
+      "label": "Pollo frito dominicano",
+      "finished_g": 165,
+      "method": "Pechuga sazonada con ajo, limón, orégano y sal; pasada por harina de trigo y frita por inmersión en aceite vegetal. Pierde agua y absorbe aceite (~12g retenido en la costra). Peso crudo de pechuga ~180g baja a carne frita + costra.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Pechuga de pollo",
+          "g": 180
+        },
+        {
+          "name": "Harina de trigo",
+          "g": 18
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 12
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Limón",
+          "g": 5
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 1
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "pescado frito": {
+      "label": "Pescado frito",
+      "finished_g": 150,
+      "method": "Filete de pescado blanco sazonado con limón, ajo y sal; ligero enharinado y frito en aceite vegetal. Pierde humedad y absorbe ~10g de aceite en la costra.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Filete de pescado blanco",
+          "g": 170
+        },
+        {
+          "name": "Harina de trigo",
+          "g": 12
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 10
+        },
+        {
+          "name": "Limón",
+          "g": 6
+        },
+        {
+          "name": "Ajo",
+          "g": 3
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "chuleta de cerdo frita": {
+      "label": "Chuleta de cerdo frita",
+      "finished_g": 145,
+      "method": "Chuleta de cerdo sazonada con ajo, limón, orégano y sal; frita en aceite vegetal. Suelta grasa propia y agua, absorbe poco aceite neto (~8g). Crudo ~180g baja a ~145g cocido.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Cerdo",
+          "g": 180
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Limón",
+          "g": 5
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 1
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "queso frito": {
+      "label": "Queso frito",
+      "finished_g": 75,
+      "method": "Lonjas de queso de freír (queso de hoja) fritas en aceite vegetal hasta dorar. Pierde algo de suero/agua y absorbe ~8g de aceite. Crudo ~80g rinde ~75g cocido.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Queso de hoja",
+          "g": 80
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8
+        }
+      ]
+    },
+    "huevos fritos": {
+      "label": "Huevos fritos",
+      "finished_g": 105,
+      "method": "Dos huevos fritos en aceite vegetal con pizca de sal. Pierden algo de agua y absorben ~6g de aceite. Dos huevos crudos ~100g + aceite retenido.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Huevo",
+          "g": 100
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "batida de guineo": {
+      "label": "Batida de guineo",
+      "finished_g": 360,
+      "method": "Licuar el guineo maduro con leche fría y un toque de miel hasta obtener una bebida cremosa. No hay pérdida de peso: el peso final es la suma de los ingredientes.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Guineo",
+          "g": 110
+        },
+        {
+          "name": "Leche",
+          "g": 240
+        },
+        {
+          "name": "Miel",
+          "g": 10
+        }
+      ]
+    },
+    "batida de lechosa": {
+      "label": "Batida de lechosa (papaya)",
+      "finished_g": 450,
+      "method": "Licuar la lechosa madura en cubos con leche y miel hasta quedar suave. Bebida sin pérdida de peso: peso final = suma de ingredientes.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Lechosa",
+          "g": 200
+        },
+        {
+          "name": "Leche",
+          "g": 240
+        },
+        {
+          "name": "Miel",
+          "g": 10
+        }
+      ]
+    },
+    "batida de fresa": {
+      "label": "Batida de fresa",
+      "finished_g": 400,
+      "method": "Licuar las fresas con leche fría y miel hasta integrar. Bebida sin pérdida de peso: peso final = suma de ingredientes.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Fresas",
+          "g": 150
+        },
+        {
+          "name": "Leche",
+          "g": 240
+        },
+        {
+          "name": "Miel",
+          "g": 10
+        }
+      ]
+    },
+    "yogurt griego con frutas": {
+      "label": "Yogurt griego con frutas",
+      "finished_g": 298,
+      "method": "Servir el yogurt griego en un bol y cubrir con fresas y mango picados; endulzar con un hilo de miel. Sin cocción ni pérdida de peso: peso final = suma de ingredientes.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Yogurt griego sin azúcar",
+          "g": 170
+        },
+        {
+          "name": "Fresas",
+          "g": 60
+        },
+        {
+          "name": "Mango",
+          "g": 60
+        },
+        {
+          "name": "Miel",
+          "g": 8
+        }
+      ]
+    },
+    "pan integral con mantequilla de mani": {
+      "label": "Pan integral con mantequilla de maní",
+      "finished_g": 85,
+      "method": "Tostar ligeramente las rebanadas de pan integral y untar con mantequilla de maní. Pérdida de agua mínima al tostar; peso final casi igual a la suma de ingredientes.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Pan integral",
+          "g": 56
+        },
+        {
+          "name": "Mantequilla de maní",
+          "g": 32
+        }
+      ]
+    },
+    "habichuelas blancas guisadas": {
+      "label": "Habichuelas blancas guisadas",
+      "finished_g": 185,
+      "method": "Sofreir cebolla, ajo, aji cubanela y pimiento morron en aceite; agregar salsa de tomate y auyama; incorporar las habichuelas blancas cocidas con su caldo y dejar guisar hasta espesar. Finalizar con cilantro y sal.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Habichuelas blancas",
+          "g": 55
+        },
+        {
+          "name": "Auyama",
+          "g": 30
+        },
+        {
+          "name": "Cebolla",
+          "g": 20
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 12
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 20
+        },
+        {
+          "name": "Ajo",
+          "g": 5
+        },
+        {
+          "name": "Cilantro",
+          "g": 4
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "garbanzos guisados": {
+      "label": "Garbanzos guisados",
+      "finished_g": 190,
+      "method": "Sofreir cebolla, ajo y aji cubanela en aceite; agregar salsa de tomate y un poco de tomate fresco; incorporar los garbanzos cocidos con caldo y guisar hasta que la salsa espese. Terminar con cilantro y sal.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Garbanzos",
+          "g": 60
+        },
+        {
+          "name": "Cebolla",
+          "g": 20
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15
+        },
+        {
+          "name": "Tomate",
+          "g": 20
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 18
+        },
+        {
+          "name": "Ajo",
+          "g": 5
+        },
+        {
+          "name": "Cilantro",
+          "g": 4
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "arroz integral cocido": {
+      "label": "Arroz integral cocido",
+      "finished_g": 195,
+      "method": "Lavar el arroz integral; hervir en agua con sal y un toque de aceite, tapar y cocinar a fuego bajo hasta absorber el agua (el grano integral absorbe ~2.5-3x su peso). Reposar y soltar con tenedor.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Arroz integral",
+          "g": 70
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 4
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "quinoa cocida": {
+      "label": "Quinoa cocida",
+      "finished_g": 185,
+      "method": "Enjuagar bien la quinoa para retirar saponinas; hervir en agua con sal (~2x el volumen del grano), tapar y cocinar a fuego bajo hasta que el agua se absorba y aparezca el germen. La quinoa cocida pesa ~3x el peso crudo.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Quinoa",
+          "g": 60
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "guineitos hervidos": {
+      "label": "Guineitos hervidos",
+      "finished_g": 175,
+      "method": "Pelar los guineos verdes y hervir en agua con sal hasta que esten tiernos al tenedor (~20-25 min). Escurrir. El hervido conserva aproximadamente el mismo peso del guineo pelado.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Guineo verde",
+          "g": 180
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "asopao de pollo": {
+      "label": "Asopao de pollo",
+      "finished_g": 400,
+      "method": "Sofreir cebolla, ajo, ají cubanela, pimiento morrón y cilantro en aceite. Agregar la pechuga de pollo en trozos y dorar. Añadir salsa de tomate y orégano. Incorporar el arroz crudo y abundante agua/caldo, hervir a fuego medio sin tapar hasta que el arroz se ablande y suelte almidón, dejándolo caldoso. El arroz absorbe agua y el caldo diluye el plato hasta ~400 g por porción.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Arroz blanco",
+          "g": 45
+        },
+        {
+          "name": "Pechuga de pollo",
+          "g": 85
+        },
+        {
+          "name": "Cebolla",
+          "g": 25
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 5
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 20
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 0.5
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "sopa de pollo con vegetales": {
+      "label": "Sopa de pollo con vegetales",
+      "finished_g": 420,
+      "method": "Hervir la pechuga de pollo en agua con cebolla, ajo y cilantro para hacer caldo. Agregar papa, zanahoria y auyama en trozos y cocinar hasta ablandar. La auyama se deshace ligeramente y espesa el caldo. Sin arroz; mucha agua/caldo diluye la porción hasta ~420 g.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Pechuga de pollo",
+          "g": 80
+        },
+        {
+          "name": "Papa",
+          "g": 70
+        },
+        {
+          "name": "Zanahoria",
+          "g": 40
+        },
+        {
+          "name": "Auyama",
+          "g": 50
+        },
+        {
+          "name": "Cebolla",
+          "g": 20
+        },
+        {
+          "name": "Ajo",
+          "g": 3
+        },
+        {
+          "name": "Cilantro",
+          "g": 5
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 5
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "crema de auyama": {
+      "label": "Crema de auyama",
+      "finished_g": 350,
+      "method": "Sofreir cebolla y ajo en mantequilla. Agregar la auyama en trozos y agua/caldo, hervir hasta que la auyama esté muy blanda. Licuar todo hasta obtener una crema, agregar leche evaporada y sal. El agua de cocción y la leche diluyen la porción hasta ~350 g.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Auyama",
+          "g": 200
+        },
+        {
+          "name": "Cebolla",
+          "g": 25
+        },
+        {
+          "name": "Ajo",
+          "g": 3
+        },
+        {
+          "name": "Mantequilla",
+          "g": 8
+        },
+        {
+          "name": "Leche evaporada",
+          "g": 30
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "asopao de camarones": {
+      "label": "Asopao de camarones",
+      "finished_g": 400,
+      "method": "Sofreir cebolla, ajo, ají cubanela, pimiento morrón y cilantro en aceite. Añadir salsa de tomate y orégano. Incorporar el arroz crudo con abundante agua/caldo y hervir caldoso hasta ablandar el arroz; agregar los camarones al final y cocinar pocos minutos. El arroz absorbe agua y el caldo diluye el plato hasta ~400 g por porción.",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Arroz blanco",
+          "g": 45
+        },
+        {
+          "name": "Camarones",
+          "g": 85
+        },
+        {
+          "name": "Cebolla",
+          "g": 25
+        },
+        {
+          "name": "Ají cubanela",
+          "g": 15
+        },
+        {
+          "name": "Pimiento morrón",
+          "g": 15
+        },
+        {
+          "name": "Ajo",
+          "g": 4
+        },
+        {
+          "name": "Cilantro",
+          "g": 5
+        },
+        {
+          "name": "Salsa de tomate",
+          "g": 20
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 8
+        },
+        {
+          "name": "Orégano dominicano",
+          "g": 0.5
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        }
+      ]
+    },
+    "pure de papa": {
+      "label": "Puré de papa",
+      "finished_g": 225,
+      "method": "papa hervida + majada con leche y mantequilla",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Papa",
+          "g": 200
+        },
+        {
+          "name": "Leche",
+          "g": 40
+        },
+        {
+          "name": "Mantequilla",
+          "g": 8
+        },
+        {
+          "name": "Sal",
+          "g": 1.5
+        },
+        {
+          "name": "Pimienta negra",
+          "g": 0.3
+        }
+      ]
+    },
+    "vegetales al vapor": {
+      "label": "Vegetales al vapor",
+      "finished_g": 175,
+      "method": "brócoli, zanahoria y vainitas al vapor (pierden poca agua) con chorrito de aceite",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Brócoli",
+          "g": 70
+        },
+        {
+          "name": "Zanahoria",
+          "g": 55
+        },
+        {
+          "name": "Vainitas",
+          "g": 50
+        },
+        {
+          "name": "Aceite de oliva",
+          "g": 5
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "tortilla de huevo": {
+      "label": "Tortilla de huevo con cebolla y queso",
+      "finished_g": 150,
+      "method": "huevo batido cuajado en aceite con cebolla y queso (pierde algo de agua, absorbe aceite)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Huevo",
+          "g": 100
+        },
+        {
+          "name": "Cebolla",
+          "g": 20
+        },
+        {
+          "name": "Queso blanco",
+          "g": 25
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 6
+        },
+        {
+          "name": "Sal",
+          "g": 1
+        }
+      ]
+    },
+    "mangu con los tres golpes": {
+      "label": "Mangú con los tres golpes",
+      "finished_g": 345,
+      "method": "plátano verde hervido+majado + huevo frito + queso de hoja frito + salami frito (combo; fritos absorben aceite)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Plátano verde",
+          "g": 180
+        },
+        {
+          "name": "Cebolla",
+          "g": 15
+        },
+        {
+          "name": "Huevo",
+          "g": 50
+        },
+        {
+          "name": "Queso de hoja",
+          "g": 50
+        },
+        {
+          "name": "Salami dominicano",
+          "g": 50
+        },
+        {
+          "name": "Aceite vegetal",
+          "g": 15
+        },
+        {
+          "name": "Sal",
+          "g": 2
+        }
+      ]
+    },
+    "casabe con queso": {
+      "label": "Casabe con queso",
+      "finished_g": 110,
+      "method": "casabe (torta de yuca lista) con queso blanco encima (sin cocción, sin pérdida de agua)",
+      "fndds_key": null,
+      "ingredients": [
+        {
+          "name": "Casabe",
+          "g": 50
+        },
+        {
+          "name": "Queso blanco",
+          "g": 60
+        }
+      ]
+    }
   }
 }
