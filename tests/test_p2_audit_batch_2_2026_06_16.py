@@ -176,6 +176,21 @@ def test_p2_13_allergen_collector_diet_aware(cr):
     assert any(s["replacement"] == "Pechuga de pollo" for s in balanced), "balanced reemplaza a pollo (control)"
 
 
+def test_p2_13_pescatarian_fish_allergy_not_fish(cr):
+    """[review-fix] pescetariano + alergia a pescado: el reemplazo del pescado NO puede ser pescado
+    (reintroduciría el alérgeno). Debe caer a vegetal."""
+    subs = cr.collect_allergen_substitutions({"allergies": ["pescado"]}, diet_type="pescetariano")
+    fish_subs = [s for s in subs if s["condition"] == "allergen:fish"]
+    assert fish_subs, "debe haber sub para el alérgeno pescado"
+    for s in fish_subs:
+        r = s["replacement"].lower()
+        assert "pescado" not in r and "filete de pescado" not in r, \
+            f"pescetariano+alergia-pescado NO debe reemplazar a pescado: {s['replacement']}"
+    # shellfish allergy + pescatarian SÍ puede ir a pescado (pescado != mariscos)
+    shell = cr.collect_allergen_substitutions({"allergies": ["camarones"]}, diet_type="pescetariano")
+    assert any(s["condition"] == "allergen:shellfish" for s in shell)
+
+
 # ───────────────────────── P2-15: fold de restricciones a allergies ─────────────────────────
 def test_p2_15_fold_intolerances_into_allergies(go):
     fd = {"allergies": ["Ninguna"], "intolerances": ["mariscos"], "dislikes": ["Ninguno"]}

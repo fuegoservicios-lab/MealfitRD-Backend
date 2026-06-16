@@ -82,6 +82,11 @@ USDA_QUERY = {
     "Tofu": "tofu raw firm",
     # [P1-RESOLVER-COVERAGE · 2026-06-16 follow-up] clara separada del huevo entero (precisión).
     "Clara de huevo": "egg white raw fresh",
+    # [P2-1/P2-2/P2-3 · 2026-06-16] filas nuevas separadas del genérico (yema≠huevo entero,
+    # leche descremada≠entera, yogur griego entero≠nonfat) — datos USDA reales, no inventados.
+    "Yema de huevo": "egg yolk raw fresh",
+    "Leche descremada": "milk nonfat fat free skim",
+    "Yogur griego entero": "yogurt greek plain whole milk",
     # Vegetales
     "Ajo": "garlic raw", "Ají cubanela": "peppers sweet green raw", "Berenjena": "eggplant raw",
     "Brócoli": "broccoli raw", "Cebolla": "onions raw", "Cilantro": "coriander cilantro leaves raw",

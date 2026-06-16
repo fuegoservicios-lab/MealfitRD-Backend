@@ -96,9 +96,10 @@ _HTA_SODIUM_NEGATIVES = ("baja en sodio", "bajo en sodio", "sin sal", "sin sodio
 # 'nata' (matchea 'natural'/'natilla') ni 'crema' (matchea 'crema de maní') — solo frases inequívocas.
 _DYSLIPIDEMIA_SATFAT_SUBS = (
     (("mantequilla", "manteca de cerdo", "manteca vegetal", "margarina"), "Aceite de oliva", "mantequilla/manteca/margarina", True),
-    # NOTA: 'leche entera' NO se sustituye — el catálogo conflaciona 'leche entera' y 'leche descremada'
-    # en la MISMA fila `Leche`, así que el swap sería un no-op clínico (sin reducción de grasa real). Se
-    # reactivará cuando exista una fila distinta de leche descremada. (Hallazgo de review adversaria.)
+    # [P2-2 · 2026-06-16] REACTIVADO: ya existe la fila distinta `Leche descremada` (migración p2_2), así que
+    # el swap reduce grasa real (entera 3.25g → descremada ~0.1g). Token ESTRECHO 'leche entera' (NO 'leche'
+    # desnudo, que borraría descremada/evaporada). El negative 'descremad' (abajo) lo hace idempotente.
+    (("leche entera", "leche completa"), "Leche descremada", "leche entera", True),
     (("crema de leche", "crema espesa"), "Leche evaporada", "crema de leche", True),
     (("queso amarillo", "queso cheddar", "queso crema"), "Queso cottage", "queso alto en grasa", True),
     (("yogur griego entero", "yogurt griego entero", "yogur entero", "yogurt entero", "yogur natural entero"),
@@ -340,9 +341,14 @@ def _canon_diet(diet) -> str:
     return "balanced"
 
 
-def _redirect_replacement_for_diet(repl: str, diet_canon: str) -> str:
+def _redirect_replacement_for_diet(repl: str, diet_canon: str, allergen_cat: str = None) -> str:
     """[P2-13] Redirige un reemplazo animal a uno compatible con la dieta. Vegan/vegetarian → vegetal;
-    pescatarian → solo carne-de-tierra→pescado; balanced → sin cambio."""
+    pescatarian → solo carne-de-tierra→pescado; balanced → sin cambio.
+    [P2-13 review-fix] `allergen_cat`: si la sustitución es por ALERGIA a pescado y la dieta es pescetariana,
+    el target NO puede ser pescado (lo prohíbe la alergia) NI carne de tierra (lo prohíbe la dieta) → cae a
+    vegetal, como vegano. Sin esto, pescetariano+alergia-pescado redirigía pollo→pescado (reintroduce el alérgeno)."""
+    if allergen_cat == "fish" and diet_canon == "pescatarian":
+        return _VEG_PROTEIN_REDIRECT.get(repl, repl)
     if diet_canon in ("vegan", "vegetarian"):
         return _VEG_PROTEIN_REDIRECT.get(repl, repl)
     if diet_canon == "pescatarian":
@@ -495,7 +501,7 @@ def collect_allergen_substitutions(form_data, diet_type=None) -> list:
         for sub in _ALLERGEN_SUBS_BY_CAT[cat]:
             tokens, repl, label = sub[0], sub[1], sub[2]
             preserve_qty = bool(sub[3]) if len(sub) > 3 else False
-            repl = _redirect_replacement_for_diet(repl, _dc)  # [P2-13] diet-aware redirect
+            repl = _redirect_replacement_for_diet(repl, _dc, allergen_cat=cat)  # [P2-13] diet+allergen-aware
             out.append({"tokens": tokens, "replacement": repl, "label": label,
                         "negatives": negs, "condition": f"allergen:{cat}",
                         "preserve_qty": preserve_qty})
