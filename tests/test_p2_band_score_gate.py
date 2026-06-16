@@ -3,7 +3,7 @@
 Hoy un plan con la mitad de las celdas día×macro fuera de banda (band_score bajo) se entrega IDÉNTICO
 a uno preciso, sin aviso (audit P2-14). `_maybe_mark_low_band_degraded` marca el plan como
 _quality_degraded (reason=low_band_score) cuando la precisión medida cae bajo el umbral → dispara el
-banner de degradación YA EXISTENTE en el frontend. NO fuerza retry. Default OFF (user-facing, opt-in).
+banner de degradación YA EXISTENTE en el frontend. NO fuerza retry. Default ON (P1-BAND-SCORE-GATE-ON, umbral 0.5 tuneado contra prod).
 
 Validación determinista del helper puro (sin LLM/DB/créditos).
 """
@@ -25,8 +25,10 @@ def gate_on(go, monkeypatch):
     return go
 
 
-def test_default_knob_off(go):
-    assert go.BAND_SCORE_GATE_ENABLED is False, "default OFF (validate-first, user-facing)"
+def test_default_knob_on(go):
+    # [P2-8 · 2026-06-16] El gate fue ACTIVADO por P1-BAND-SCORE-GATE-ON (umbral 0.5 tuneado contra prod).
+    # El assert legacy decía `is False` (stale) → rojo en main. Ahora refleja el default ON real.
+    assert go.BAND_SCORE_GATE_ENABLED is True, "default ON (gap-audit G6 / P1-BAND-SCORE-GATE-ON)"
 
 
 def test_off_does_not_mark(go, monkeypatch):

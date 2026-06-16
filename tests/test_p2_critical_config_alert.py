@@ -28,9 +28,13 @@ _SAFETY_ATTRS = ("RENAL_CAP_ENABLED", "ALLERGEN_HARD_GUARD", "ALLERGEN_SUBSTITUT
 
 
 def _all_healthy(monkeypatch):
-    """Producción + todo bien (solver ON, guards ON)."""
+    """Producción + todo bien (solver ON, reconcile ON, guards ON)."""
     monkeypatch.setattr(knobs, "is_production", lambda: True)
     monkeypatch.setattr(go, "MACRO_SOLVER_ENABLED", True)
+    # [P2-7 · 2026-06-16] el reconcile multi-macro debe estar ON o get_critical_config_warnings emite
+    # macro_reconcile_degraded_in_prod (default de código MACRO_AWARE_RECONCILE=False).
+    monkeypatch.setattr(go, "MACRO_AWARE_RECONCILE", True)
+    monkeypatch.setattr(go, "MACRO_POSTQUANT_RECONCILE", True)
     for a in _SAFETY_ATTRS:
         monkeypatch.setattr(go, a, True)
 
@@ -55,6 +59,34 @@ def test_macro_engine_off_in_prod_warns(monkeypatch):
     keys = {w["alert_key"] for w in warns}
     assert "macro_engine_disabled_in_prod" in keys
     assert all(w["severity"] == "high" for w in warns)
+
+
+def test_reconcile_off_with_solver_on_warns(monkeypatch):
+    """[P2-7] Solver ON pero MACRO_AWARE_RECONCILE OFF en prod → macro_reconcile_degraded_in_prod."""
+    _all_healthy(monkeypatch)
+    monkeypatch.setattr(go, "MACRO_AWARE_RECONCILE", False)
+    warns = go.get_critical_config_warnings()
+    keys = {w["alert_key"] for w in warns}
+    assert "macro_reconcile_degraded_in_prod" in keys
+    assert all(w["severity"] == "high" for w in warns)
+
+
+def test_postquant_off_alone_warns(monkeypatch):
+    """[P2-7] MACRO_POSTQUANT_RECONCILE OFF (solver+aware ON) → también alerta."""
+    _all_healthy(monkeypatch)
+    monkeypatch.setattr(go, "MACRO_POSTQUANT_RECONCILE", False)
+    keys = {w["alert_key"] for w in go.get_critical_config_warnings()}
+    assert "macro_reconcile_degraded_in_prod" in keys
+
+
+def test_reconcile_alert_suppressed_when_solver_off(monkeypatch):
+    """[P2-7] Si el solver está OFF, NO se duplica con reconcile-degraded (solver-off ya lo cubre)."""
+    _all_healthy(monkeypatch)
+    monkeypatch.setattr(go, "MACRO_SOLVER_ENABLED", False)
+    monkeypatch.setattr(go, "MACRO_AWARE_RECONCILE", False)
+    keys = {w["alert_key"] for w in go.get_critical_config_warnings()}
+    assert "macro_engine_disabled_in_prod" in keys
+    assert "macro_reconcile_degraded_in_prod" not in keys
 
 
 def test_safety_guard_off_in_prod_warns(monkeypatch):

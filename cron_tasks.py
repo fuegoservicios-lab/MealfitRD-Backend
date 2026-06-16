@@ -653,6 +653,17 @@ P0_4_T2_INCREMENTAL_KEYS = (
     # (`_resolve_stale_plan_quality_alerts`, L3486) y /history vean el plan como NO-limpio.
     '_is_fallback',
     '_review_failed_but_delivered',
+    # [P2-10 · 2026-06-16] (gap-audit P2-10) Flags user-facing de degradación de calidad (band-score/panel/
+    # clinical-layer/resolution gates) producidos por `run_plan_pipeline` para semanas 2+ — antes el worker
+    # los DESCARTABA (asimétrico vs el path no-chunked) → el banner del Dashboard nunca aparecía en semana 2+.
+    '_quality_degraded',
+    '_quality_degraded_reason',
+    '_quality_degraded_severity',
+    '_quality_degraded_attempts',
+    '_quality_degraded_band_score',
+    '_quality_degraded_panel_detail',
+    '_quality_degraded_clinical_detail',
+    '_quality_degraded_resolution_pct',
     # [P0-5] Pantry quantity violation annotation (advisory/hybrid mode).
     # Set in T1 by the worker (cron_tasks.py:16124) and must survive T2's
     # fresh-read overlay so the UI/admin sees the chunk-level annotation.
@@ -30374,6 +30385,22 @@ def process_plan_chunk_queue(target_plan_id=None):
                     full_plan_data['_is_fallback'] = True
                 if _chunk_review_failed:
                     full_plan_data['_review_failed_but_delivered'] = True
+                # [P2-10-CHUNK-QUALITY-DEGRADED · 2026-06-16] (gap-audit P2-10) propaga el flag user-facing
+                # `_quality_degraded` (y su detalle) que `run_plan_pipeline` produjo para semanas 2+ — antes el
+                # worker lo descartaba. Inerte si el productor no marcó. `result` puede no estar bound en el
+                # smart-shuffle path → NameError-guard (mismo patrón que el bloque P2-CHUNK-6).
+                try:
+                    if isinstance(result, dict) and result.get('_quality_degraded'):
+                        for _qd_k in ('_quality_degraded', '_quality_degraded_reason', '_quality_degraded_severity',
+                                      '_quality_degraded_attempts', '_quality_degraded_band_score',
+                                      '_quality_degraded_panel_detail', '_quality_degraded_clinical_detail',
+                                      '_quality_degraded_resolution_pct'):
+                            if _qd_k in result:
+                                full_plan_data[_qd_k] = result[_qd_k]
+                        logger.warning(f"[P2-10-CHUNK-QUALITY-DEGRADED] Plan {meal_plan_id} chunk {week_number} "
+                                       f"_quality_degraded propagado (reason={result.get('_quality_degraded_reason')})")
+                except NameError:
+                    pass  # smart-shuffle path no rebindea `result`
                 if _chunk_result_is_fallback or _chunk_review_failed:
                     logger.warning(
                         f"[P2-CHUNK-6] Plan {meal_plan_id} chunk {week_number} entregado DEGRADADO "

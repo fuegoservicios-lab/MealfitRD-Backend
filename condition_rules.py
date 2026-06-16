@@ -314,15 +314,54 @@ def build_condition_prompt(form_data) -> str:
             + "\n----------------------------------------\n")
 
 
-def collect_substitutions(form_data) -> list:
+# [P2-13 · 2026-06-16] (gap-audit P2-13) Las subs por condición/alérgeno reemplazaban a proteína ANIMAL
+# (Pechuga de pollo / Filete de pescado blanco) sin mirar dietType → inyectaban animal en un plan vegano.
+# Redirige el reemplazo a una proteína vegetal que RESUELVE al catálogo (Lentejas, verificado). Espejo
+# mínimo de graph_orchestrator._canonicalize_diet_type (duplicado a propósito — import circular: condition_rules
+# es importado POR graph_orchestrator). Solo redirige CARNE/PESCADO; lácteo/huevo (vegetariano los permite)
+# NO se tocan — el residual lácteo en vegano lo cubre el backstop P1-DIET-HARD-GUARD → fallback diet-aware.
+_VEG_PROTEIN_REDIRECT = {"Pechuga de pollo": "Lentejas", "Filete de pescado blanco": "Lentejas"}
+_PESC_PROTEIN_REDIRECT = {"Pechuga de pollo": "Filete de pescado blanco"}  # pescetariano: permite pescado
+
+
+def _canon_diet(diet) -> str:
+    """[P2-13] dietType → {vegan|vegetarian|pescatarian|balanced} (EN + ES masc/fem). Acent-stripped."""
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        _sa = lambda x: x  # noqa: E731
+    d = _sa(str(diet or "").strip().lower())
+    if d in ("vegano", "vegan", "vegana"):
+        return "vegan"
+    if d in ("vegetariano", "vegetarian", "vegetariana", "ovolactovegetariano"):
+        return "vegetarian"
+    if d in ("pescetariano", "pescatariano", "pescatarian", "pescetarian", "pescetariana", "pescatariana"):
+        return "pescatarian"
+    return "balanced"
+
+
+def _redirect_replacement_for_diet(repl: str, diet_canon: str) -> str:
+    """[P2-13] Redirige un reemplazo animal a uno compatible con la dieta. Vegan/vegetarian → vegetal;
+    pescatarian → solo carne-de-tierra→pescado; balanced → sin cambio."""
+    if diet_canon in ("vegan", "vegetarian"):
+        return _VEG_PROTEIN_REDIRECT.get(repl, repl)
+    if diet_canon == "pescatarian":
+        return _PESC_PROTEIN_REDIRECT.get(repl, repl)
+    return repl
+
+
+def collect_substitutions(form_data, diet_type=None) -> list:
     """Sustituciones deterministas de ingredientes activas para el perfil, en orden de precedencia.
     Cada item: {tokens, replacement, label, negatives, condition, preserve_qty}. El guard las aplica
-    en un solo pase. Tolera filas legacy de 3 elementos (preserve_qty → False por defecto)."""
+    en un solo pase. Tolera filas legacy de 3 elementos (preserve_qty → False por defecto).
+    [P2-13] `diet_type` (opcional) redirige reemplazos animales a proteína vegetal/pescado para veg*."""
+    _dc = _canon_diet(diet_type) if diet_type else "balanced"
     out = []
     for r in detect_active_rules(form_data):
         for sub in (r.substitutions or ()):
             tokens, repl, label = sub[0], sub[1], sub[2]
             preserve_qty = bool(sub[3]) if len(sub) > 3 else False
+            repl = _redirect_replacement_for_diet(repl, _dc)  # [P2-13] diet-aware redirect
             out.append({"tokens": tokens, "replacement": repl, "label": label,
                         "negatives": r.sub_negatives or (), "condition": r.id,
                         "preserve_qty": preserve_qty})
@@ -358,7 +397,7 @@ def active_condition_labels(form_data) -> list:
 
 _ALLERGEN_FISH_SUBS = (
     (("pescado", "bacalao", "atun", "salmon", "tilapia", "mero", "chillo", "sardina",
-      "merluza", "carite", "dorado", "filete de pescado"),
+      "merluza", "carite", "dorado", "filete de pescado", "arenque", "arenque salado"),  # [P2-12] +arenque
      "Pechuga de pollo", "pescado", True),
 )
 _ALLERGEN_SHELLFISH_SUBS = (
@@ -418,15 +457,17 @@ _ALLERGEN_NEGATIVES_BY_CAT = {
 }
 
 
-def collect_allergen_substitutions(form_data) -> list:
+def collect_allergen_substitutions(form_data, diet_type=None) -> list:
     """[P0-ALLERGEN-SUBS · 2026-06-14] Sustituciones deterministas para los alérgenos IgE DECLARADOS
     (`form_data['allergies']`) que tienen un reemplazo seguro que RESUELVE al catálogo es-DO
     (fish/shellfish/soy/gluten). Mismo shape que `collect_substitutions` → reusa el motor compartido
     `_apply_substitutions_core`. Cada item: {tokens, replacement, label, negatives, condition,
     preserve_qty}. Lácteos/huevo/maní/frutos secos NO se incluyen (sin target que resuelva) → siguen
-    por el path crítico→fallback. Sentinel: P0-ALLERGEN-SUBS."""
+    por el path crítico→fallback. Sentinel: P0-ALLERGEN-SUBS.
+    [P2-13] `diet_type` (opcional) redirige el reemplazo animal (pollo) a vegetal/pescado para veg*."""
     if not isinstance(form_data, dict):
         return []
+    _dc = _canon_diet(diet_type) if diet_type else "balanced"  # [P2-13] diet-aware redirect
     try:
         from constants import strip_accents as _sa
     except Exception:
@@ -454,6 +495,7 @@ def collect_allergen_substitutions(form_data) -> list:
         for sub in _ALLERGEN_SUBS_BY_CAT[cat]:
             tokens, repl, label = sub[0], sub[1], sub[2]
             preserve_qty = bool(sub[3]) if len(sub) > 3 else False
+            repl = _redirect_replacement_for_diet(repl, _dc)  # [P2-13] diet-aware redirect
             out.append({"tokens": tokens, "replacement": repl, "label": label,
                         "negatives": negs, "condition": f"allergen:{cat}",
                         "preserve_qty": preserve_qty})

@@ -8311,6 +8311,12 @@ CARB_TARGET_TRIM_TOL = _env_float("MEALFIT_CARB_TARGET_TRIM_TOL", 0.10)
 # corre si MACRO_AWARE_RECONCILE está ON (consistencia). Default True para ser efectivo donde el reconcile
 # ya está activo; rollback sin redeploy: MEALFIT_MACRO_POSTQUANT_RECONCILE=False.
 MACRO_POSTQUANT_RECONCILE = _env_bool("MEALFIT_MACRO_POSTQUANT_RECONCILE", True)
+# [P2-MACRO-TRUTHUP · 2026-06-16] (gap-audit P2-5) Recompute del NÚMERO de macros del meal desde los strings
+# FINALES de ingredientes (post reconcile/quant/trim, que reescriben números por escalado/delta, NO
+# re-sumando) → el band-score deja de leer un número drifteado sub-tolerancia (~1-2g/comida). Gate
+# any_resolved + all-macro-bearing (no under-cuenta platos criollos no-resueltos). Default True (read-only
+# sobre números ya derivados; NO toca strings ni la proteína-via-closer). Rollback: MEALFIT_MACRO_TRUTHUP=False.
+MACRO_TRUTHUP_ENABLED = _env_bool("MEALFIT_MACRO_TRUTHUP", True)
 # [P2-RESOLUTION-COVERAGE-GATE · 2026-06-15] (gap-audit G12) Gate de transparencia: si la cobertura de
 # resolución del plan (fracción de ingredientes que resuelven al catálogo de macros) cae bajo el piso →
 # marca _quality_degraded (reason=composite_dish_unresolved). Platos criollos compuestos (sancocho/mangú/
@@ -8322,6 +8328,13 @@ MACRO_POSTQUANT_RECONCILE = _env_bool("MEALFIT_MACRO_POSTQUANT_RECONCILE", True)
 # compuestos como filas del catálogo es trabajo de datos diferido (la otra mitad de G12). Rollback: =False.
 RESOLUTION_COVERAGE_GATE_ENABLED = _env_bool("MEALFIT_RESOLUTION_COVERAGE_GATE", True)
 RESOLUTION_COVERAGE_FLOOR = _env_float("MEALFIT_RESOLUTION_COVERAGE_FLOOR", 0.7)
+# [P2-LOW-COVERAGE-MEALS · 2026-06-16] (gap-audit P2-6) El gate de cobertura es por-PLAN; un meal a 50%
+# (macros mostrados parciales por `_apply_macro_solver_to_meal`, que sobreescribe con solo-resueltos) dentro
+# de un plan a 0.9 NO dispara nada. Telemetría POR-MEAL (logger.warning + métrica `low_coverage_meals`), NO
+# hard-gate. Default ON (telemetría pura, no user-facing). Floor 0.6 = <60% ingredientes resueltos → macros
+# sospechosos de under-count. Rollback: MEALFIT_LOW_COVERAGE_MEAL_SIGNAL=False.
+LOW_COVERAGE_MEAL_SIGNAL = _env_bool("MEALFIT_LOW_COVERAGE_MEAL_SIGNAL", True)
+LOW_COVERAGE_MEAL_FLOOR = _env_float("MEALFIT_LOW_COVERAGE_MEAL_FLOOR", 0.6)
 # [P3-RECIPE-COHERENCE-AUTOFIX · 2026-06-13] Auto-fix determinista de las violaciones de
 # coherencia receta↔ingrediente que HOY rechazan+reintentan (→ retry_penalty < 1.0 en el
 # holistic). Caso "forward" (la receta menciona una proteína que no está listada → la
@@ -8484,6 +8497,13 @@ DIET_HARD_GUARD = _env_bool("MEALFIT_DIET_HARD_GUARD", True)
 # glucémico (`_critical_is_purely_glycemic`) Y no menciona otra preocupación de seguridad. Default True;
 # flip a False revierte al downgrade incondicional previo. Anchor: P1-DM2-GLYCEMIC-ONLY.
 DM2_DOWNGRADE_GLYCEMIC_ONLY = _env_bool("MEALFIT_DM2_DOWNGRADE_GLYCEMIC_ONLY", True)
+# [P2-FOLD-RESTRICTION-ALIASES · 2026-06-16] (gap-audit P2-15) Defensa-en-profundidad latente: pliega
+# intolerances/restrictions/foodRestrictions → `allergies` en _merge_other_text_fields, para simetría con
+# `_detect_restricted_tokens` (que YA lee esos 6 campos para el fallback). El wizard es-DO actual NO emite
+# esos 3 campos, pero filas legacy de health_profile / campos futuros podrían → el swap quirúrgico de
+# alérgenos quedaría ciego sin esto. Default True (over-detección = dirección segura). Flip a False si un
+# campo futuro reusa restrictions/intolerances con semántica de PREFERENCIA (no alérgeno).
+FOLD_RESTRICTION_ALIASES = _env_bool("MEALFIT_FOLD_RESTRICTION_ALIASES", True)
 
 # [P3-DATA-PROVENANCE · 2026-06-14] (Roadmap M1, quick-win) Anclaje de proveniencia: computa qué
 # fracción de los ingredientes del plan está trazada a USDA FoodData Central (columna `fdc_id`, ya
@@ -8516,6 +8536,12 @@ BAND_SCORE_UPPER = _env_float("MEALFIT_BAND_SCORE_UPPER", 1.12)
 # MEALFIT_BAND_SCORE_GATE=False. Tras G4 (re-reconcile post-cuantización) la fracción marcada debe bajar.
 BAND_SCORE_GATE_ENABLED = _env_bool("MEALFIT_BAND_SCORE_GATE", True)
 BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
+# [P2-BAND-MACROS-ONLY · 2026-06-16] (gap-audit P2-9) El band-score headline incluye la celda kcal (casi
+# siempre en banda por el reconcile) → infla ~25% vs precisión de macros. `compute_clinical_band_score` ya
+# expone `score_macros_only` (excluye kcal). Este knob hace que el band-GATE puntúe sobre macros-only.
+# Default FALSE: el umbral 0.5 está tuneado contra la distribución MIXTA (avg 0.707 en prod); flipear a True
+# SIN re-tunear el umbral inundaría de banners. Activar tras medir la distribución macros-only en prod.
+BAND_GATE_USE_MACROS_ONLY = _env_bool("MEALFIT_BAND_GATE_USE_MACROS_ONLY", False)
 
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
@@ -8557,6 +8583,22 @@ def get_critical_config_warnings() -> list[dict]:
                         "'a ojo' (proteína ~16% MAPE, ~24% de días con los 4 macros en banda) en vez del "
                         "solver determinista. Causa típica: redeploy con .env limpio. Setear "
                         "MEALFIT_MACRO_SOLVER_ENABLED=True (+ MACRO_AWARE_RECONCILE / MACRO_POSTQUANT_RECONCILE)."),
+        })
+    # [P2-RECONCILE-DEGRADED-ALERT · 2026-06-16] (gap-audit P2-7) Solver ON pero el reconcile multi-macro
+    # OFF: el solver dimensiona porciones pero sin el reconcile el split C:F no se clava (carbos/grasas
+    # ~19-22% MAPE vs ~10% con ambos ON). Vector: redeploy con .env limpio (MACRO_AWARE_RECONCILE default
+    # de código = False). Solver-OFF ya lo cubre macro_engine_disabled_in_prod → aquí solo si solver ON.
+    elif not (MACRO_AWARE_RECONCILE and MACRO_POSTQUANT_RECONCILE):
+        _off = [n for n, v in (("MEALFIT_MACRO_AWARE_RECONCILE", MACRO_AWARE_RECONCILE),
+                               ("MEALFIT_MACRO_POSTQUANT_RECONCILE", MACRO_POSTQUANT_RECONCILE)) if not v]
+        warnings.append({
+            "alert_key": "macro_reconcile_degraded_in_prod",
+            "severity": "high",
+            "title": "Reconcile multi-macro DESACTIVADO con solver ON en producción",
+            "message": (f"Solver ON pero {', '.join(_off)}=False en producción → el reconcile no clava el "
+                        "split C:F (carbos/grasas ~19-22% MAPE vs ~10% con ambos ON). Causa típica: redeploy "
+                        "con .env limpio. Setear MEALFIT_MACRO_AWARE_RECONCILE=True y "
+                        "MEALFIT_MACRO_POSTQUANT_RECONCILE=True."),
         })
     for env_name, getter in _SAFETY_CRITICAL_KNOBS:
         try:
@@ -8923,7 +8965,10 @@ def _apply_condition_substitutions(plan: dict, form_data: dict) -> int:
         return 0
     try:
         from condition_rules import collect_substitutions
-        subs = collect_substitutions(form_data)
+        # [P2-13] diet-aware: redirige reemplazos animales a vegetal/pescado para veg* (gated por DIET_HARD_GUARD)
+        subs = collect_substitutions(
+            form_data,
+            diet_type=_canonicalize_diet_type(form_data.get("dietType")) if DIET_HARD_GUARD else None)
     except Exception:
         subs = []
 
@@ -8953,7 +8998,10 @@ def _apply_allergen_substitutions(plan: dict, form_data: dict) -> int:
         return 0
     try:
         from condition_rules import collect_allergen_substitutions
-        subs = collect_allergen_substitutions(form_data)
+        # [P2-13] diet-aware: redirige el reemplazo animal (pollo) a vegetal/pescado para veg*
+        subs = collect_allergen_substitutions(
+            form_data,
+            diet_type=_canonicalize_diet_type(form_data.get("dietType")) if DIET_HARD_GUARD else None)
     except Exception:
         subs = []
 
@@ -9846,6 +9894,50 @@ def _macro_aware_day_reconcile(meals: list, target_carbs: float, target_fats: fl
         return False
 
 
+def _truth_up_meal_macros_from_strings(meal: dict, db) -> bool:
+    """[P2-MACRO-TRUTHUP · 2026-06-16] (gap-audit P2-5) Recomputa el NÚMERO de macros del meal sumando
+    `db.macros_from_ingredient_string` sobre los strings FINALES de `meal['ingredients']` (post reconcile/
+    quant/trim, que reescriben números por escalado/delta, NUNCA re-sumando) → cierra el drift número↔string
+    sub-tolerancia (~1-2g/comida) que el band-score lee. GATE conservador: solo override si al menos un
+    ingrediente resuelve Y ningún ingrediente con nombre-resoluble tiene cantidad no-convertible (si no,
+    dejaría de contar masa real → under-count en platos compuestos). Mutates meal. Retorna True si reescribió.
+    Solo toca NÚMEROS (NO strings → la lista de compras, derivada de strings, queda intacta). Fail-safe.
+    Anchor: P2-MACRO-TRUTHUP."""
+    try:
+        ings = meal.get("ingredients")
+        if not isinstance(ings, list) or not ings:
+            return False
+        P = C = F = K = 0.0
+        any_resolved = False
+        for ing in ings:
+            mc = db.macros_from_ingredient_string(str(ing))
+            if mc is None:
+                # No resuelve por nombre O cantidad no-convertible ('al gusto'/'1 lata'). Si el NOMBRE
+                # resuelve pero la cantidad no → hay masa real no sumable → NO override (conservador).
+                if db.lookup(str(ing)) is not None:
+                    return False
+                continue  # nombre no resuelve (condimento/criollo) → aporte ~despreciable, seguir
+            any_resolved = True
+            P += mc.get("protein") or 0.0
+            C += mc.get("carbs") or 0.0
+            F += mc.get("fats") or 0.0
+            K += mc.get("kcal") or 0.0
+        if not any_resolved:
+            return False
+        np_, nc, nf = max(0, round(P)), max(0, round(C)), max(0, round(F))
+        nk = max(0, round(K)) if K > 0 else max(0, round(4 * np_ + 4 * nc + 9 * nf))
+        changed = (np_ != round(_meal_macro_num(meal.get("protein"))) or
+                   nc != round(_meal_macro_num(meal.get("carbs"))) or
+                   nf != round(_meal_macro_num(meal.get("fats"))))
+        meal["protein"], meal["carbs"], meal["fats"], meal["cals"] = np_, nc, nf, nk
+        meal["macros"] = [f"P:{np_}g", f"C:{nc}g", f"G:{nf}g"]
+        return changed
+    except Exception as e:
+        logger.warning(f"[P2-MACRO-TRUTHUP] truth-up falló para meal "
+                       f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e}")
+        return False
+
+
 def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: float = 0.10) -> bool:
     """[P2-CARB-TARGET-TRIM · 2026-06-15] Corre DESPUÉS de la cuantización (FS2). Si el día entrega carbos
     > target*(1+tol), reduce las porciones de los ingredientes CARBO-dominantes hacia el target y RE-CUANTIZA
@@ -10633,6 +10725,20 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _sg_e:
             logger.warning(f"[P3-CONDITION-ENGINE] error: {type(_sg_e).__name__}: {_sg_e}")
 
+    # ── Guard 3.5 (P2-12 · 2026-06-16, gap-audit P2-12): re-aplica allergen subs DESPUÉS de Guard 3. ──
+    # Las subs por condición (HTA/dislipidemia) pueden REINTRODUCIR un alérgeno que Guard 2.5 ya limpió
+    # (edge: HTA 'arenque salado' → 'Filete de pescado blanco' en un alérgico a pescado). El motor es
+    # idempotente (re-escanea los strings ACTUALES; el residual ya-swappeado no re-matchea) → segunda pasada
+    # barata. Corre ANTES de Guard 4 (quantize) para que la cuantización vea los ingredientes finales.
+    if ALLERGEN_SUBSTITUTION_ENABLED:
+        try:
+            _al2_n = _apply_allergen_substitutions(plan, form_data)
+            if _al2_n:
+                logger.warning(f"🛡️ [P2-12] Re-sustituyó alérgeno reintroducido por Guard 3 en "
+                               f"{_al2_n} comida(s)")
+        except Exception as _al2_e:
+            logger.warning(f"[P2-12] re-pass allergen subs error: {type(_al2_e).__name__}: {_al2_e}")
+
     # ── Guard 4 (FS2): cuantización de porciones a unidades medibles (espejo [P3-PORTION-QUANTIZE]) ──
     if PORTION_QUANTIZE_ENABLED and _db is not None:
         try:
@@ -10725,6 +10831,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         try:
             _seen_prov = {}
             _tot_ings = _res_ings = 0  # [P4-UNIFIED-RESOLVER] cobertura de resolución (mismo loop, 0 costo extra)
+            _low_cov_meals = []  # [P2-LOW-COVERAGE-MEALS] meals con cobertura por-meal < floor (telemetría)
             # [P2-RENAL-UNRESOLVED-PROTEIN] detecta proteína-dominante no-resuelta en el MISMO loop (0 costo).
             _renal_unresolved = []
             _is_renal_for_sig = (RENAL_UNRESOLVED_PROTEIN_SIGNAL and CONDITION_RULES_ENABLED
@@ -10733,8 +10840,10 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                  and plan["renal_protein_cap"].get("applied"))
             for _d in plan.get("days", []) or []:
                 for _m in _d.get("meals", []) or []:
+                    _m_tot = _m_res = 0  # [P2-LOW-COVERAGE-MEALS] cobertura por-meal (mismo loop)
                     for _ing in _m.get("ingredients", []) or []:
                         _tot_ings += 1
+                        _m_tot += 1
                         _info = _db.lookup(str(_ing))
                         if not _info:
                             # no-resuelto por NOMBRE: si el perfil es renal y el nombre sugiere proteína,
@@ -10743,8 +10852,22 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                 _renal_unresolved.append(str(_ing))
                             continue
                         _res_ings += 1
+                        _m_res += 1
                         _key = (_info.name or str(_ing)).lower()
                         _seen_prov.setdefault(_key, _info)
+                    # [P2-LOW-COVERAGE-MEALS · 2026-06-16] (gap-audit P2-6) Telemetría POR-MEAL: el gate de
+                    # cobertura es por-PLAN; un meal a <floor con macros parciales (`_apply_macro_solver_to_meal`
+                    # sobreescribe con solo-resueltos) no dispara nada. Solo señal (logger + flag + métrica),
+                    # NO hard-gate. Heredado: este loop ya excluye fallbacks (10803), así que no flagea sus
+                    # plantillas genéricas.
+                    if LOW_COVERAGE_MEAL_SIGNAL and _m_tot > 0:
+                        _m_pct = _m_res / _m_tot
+                        if _m_pct < LOW_COVERAGE_MEAL_FLOOR:
+                            _low_cov_meals.append({"day": _d.get("day"), "name": str(_m.get("name"))[:40],
+                                                   "resolved": _m_res, "total": _m_tot, "pct": round(_m_pct, 3)})
+                            logger.warning(f"⚠ [P2-LOW-COVERAGE-MEALS] meal {str(_m.get('name'))[:40]!r} "
+                                           f"cobertura {_m_res}/{_m_tot} ({round(100 * _m_pct)}%) < floor "
+                                           f"{LOW_COVERAGE_MEAL_FLOOR} → macros mostrados parciales")
             _total_u = len(_seen_prov)
             _usda = [(i.name, i.fdc_id) for i in _seen_prov.values()
                      if i.fdc_id and str(i.source or "").lower() == "usda"]
@@ -10766,6 +10889,8 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                     "resolved": _res_ings, "total": _tot_ings, "pct": round(_res_ings / _tot_ings, 3)}
                 logger.info(f"🔎 [P4-UNIFIED-RESOLVER] Cobertura de resolución: {_res_ings}/{_tot_ings} "
                             f"({round(100 * _res_ings / _tot_ings)}%) ingredientes resueltos al catálogo")
+            if _low_cov_meals:  # [P2-LOW-COVERAGE-MEALS] resumen por-meal para PDF/telemetría (NO hard-gate)
+                plan["low_coverage_meals"] = _low_cov_meals
             # [P2-RENAL-UNRESOLVED-PROTEIN] Señal: el cap renal es INCOMPLETO si hay proteína-dominante
             # no-resuelta (su proteína física no se recortó). Telemetría observable (NO muta porciones; NO
             # pisa meals_enforced — usa el campo nuevo cap_complete). reason via setdefault (no pisa db_unavailable).
@@ -10844,6 +10969,23 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                            "objetivo calórico bajo el piso clínico.")
         except Exception as _lc_e:
             logger.warning(f"[P1-MIN-CALORIE-FLOOR] FS9 wiring error: {type(_lc_e).__name__}: {_lc_e}")
+
+    # ── Guard 8z (P2-MACRO-TRUTHUP · 2026-06-16, gap-audit P2-5): recompute del NÚMERO de macros desde los
+    # strings FINALES de ingredientes. Corre DESPUÉS de quant/carb-trim/post-quant-reconcile (todos reescriben
+    # números por escalado/delta, no re-sumando) y ANTES del scoring (delivery) → el clinical_band_score mide
+    # lo que la lista de compras realmente entrega. Gate any_resolved + all-macro-bearing. Solo NÚMEROS (NO
+    # strings → coherencia/compra intacta). Fail-safe.
+    if MACRO_TRUTHUP_ENABLED and _db is not None:
+        try:
+            _tu_n = 0
+            for _d in plan.get("days", []) or []:
+                for _m in _d.get("meals", []) or []:
+                    if _truth_up_meal_macros_from_strings(_m, _db):
+                        _tu_n += 1
+            if _tu_n:
+                logger.info(f"🔎 [P2-MACRO-TRUTHUP] Recompute de macros desde strings finales en {_tu_n} comida(s)")
+        except Exception as _tu_e:
+            logger.warning(f"[P2-MACRO-TRUTHUP] error: {type(_tu_e).__name__}: {_tu_e}")
 
     plan["_clinical_layer_applied"] = True
     return plan
@@ -16744,6 +16886,35 @@ def _merge_other_text_fields(form_data: dict) -> int:
             existing_lower.add(cleaned_lower)
             added_total += 1
         form_data[canonical] = existing
+    # [P2-15 · 2026-06-16] espejo de _detect_restricted_tokens: pliega intolerances/restrictions/
+    # foodRestrictions a `allergies` para simetría del swap quirúrgico (gap latente — el wizard es-DO actual
+    # no las emite, pero _detect_restricted_tokens YA confía en esos 6 campos para el fallback). NO se pliega
+    # medicalConditions/dislikes (semántica distinta). Over-detección = dirección segura (peor caso: fallback).
+    if FOLD_RESTRICTION_ALIASES:
+        try:
+            _alg = form_data.get("allergies")
+            _alg = list(_alg) if isinstance(_alg, (list, tuple)) else ([_alg] if _alg else [])
+            _alg_lower = {str(i).strip().lower() for i in _alg if i}
+            _alg_only_sentinel = bool(_alg) and all(
+                isinstance(i, str) and i.strip().lower() in _SENTINEL_NONE_VALUES for i in _alg)
+            for _rf in ("intolerances", "restrictions", "foodRestrictions"):
+                _v = form_data.get(_rf)
+                _items = _v if isinstance(_v, (list, tuple)) else ([_v] if _v else [])
+                for _it in _items:
+                    _s = str(_it).strip()
+                    if not _s or _s.lower() in _SENTINEL_NONE_VALUES:
+                        continue
+                    if _alg_only_sentinel:  # una restricción REAL desplaza el sentinel 'Ninguna'
+                        _alg, _alg_lower, _alg_only_sentinel = [], set(), False
+                    if _s.lower() in _alg_lower:
+                        continue
+                    _alg.append(_s)
+                    _alg_lower.add(_s.lower())
+                    added_total += 1
+            if _alg:
+                form_data["allergies"] = _alg
+        except Exception as _fold_e:
+            logger.warning(f"[P2-15] fold de restricciones falló: {type(_fold_e).__name__}: {_fold_e}")
     return added_total
 
 
@@ -17397,9 +17568,16 @@ def compute_clinical_band_score(plan: dict, nutrition: dict, *,
                         per[k]["in"] += 1
         cin = sum(v["in"] for v in per.values())
         ctot = sum(v["total"] for v in per.values())
+        # [P2-BAND-MACROS-ONLY · 2026-06-16] (gap-audit P2-9) Score SOLO de macros (excluye la celda kcal,
+        # que el reconcile clava casi siempre → infla el headline ~25% vs la precisión real de macros).
+        _mk = ("protein", "carbs", "fats")
+        cin_m = sum(per[k]["in"] for k in _mk if k in per)
+        ctot_m = sum(per[k]["total"] for k in _mk if k in per)
         return {
             "score": round(cin / ctot, 3) if ctot else None,
             "cells_in_band": cin, "cells_total": ctot,
+            "score_macros_only": round(cin_m / ctot_m, 3) if ctot_m else None,
+            "cells_in_band_macros": cin_m, "cells_total_macros": ctot_m,
             "band_macros": [lo_m, hi_m], "band_kcal": [0.95, 1.05],
             "per_macro": {k: (round(v["in"] / v["total"], 3) if v["total"] else None) for k, v in per.items()},
         }
@@ -17413,8 +17591,8 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
     precisión MEDIDA (`clinical_band_score`) cae bajo `BAND_SCORE_GATE_THRESHOLD`, NO es fallback, y el
     plan no estaba ya marcado por una razón peor → dispara el banner de degradación existente del
     frontend (honestidad: la precisión de macros fue baja). NO fuerza retry (corre post-scoring, fuera
-    del grafo). Gateado por `BAND_SCORE_GATE_ENABLED` (default OFF — user-facing, opt-in tras tunear el
-    umbral). Retorna True si marcó. Puro + fail-safe (no lanza). Anchor: P2-BAND-SCORE-GATE."""
+    del grafo). Gateado por `BAND_SCORE_GATE_ENABLED` (default ON tras P1-BAND-SCORE-GATE-ON · 2026-06-15,
+    umbral 0.5 tuneado contra prod). Retorna True si marcó. Puro + fail-safe (no lanza). Anchor: P2-BAND-SCORE-GATE."""
     try:
         if not BAND_SCORE_GATE_ENABLED or delivered_was_fallback or band_val is None:
             return False
@@ -17719,6 +17897,7 @@ def _compute_pipeline_holistic_score_and_emit(
                         "metadata": {
                             "cells_in_band": _band.get("cells_in_band"),
                             "cells_total": _band.get("cells_total"),
+                            "score_macros_only": _band.get("score_macros_only"),  # [P2-BAND-MACROS-ONLY] kcal-excluido
                             "per_macro": _band.get("per_macro"),
                             "band_macros": _band.get("band_macros"),
                             "delivered_was_fallback": delivered_was_fallback,
@@ -17731,34 +17910,55 @@ def _compute_pipeline_holistic_score_and_emit(
                         f"por-macro {_band.get('per_macro')}; fallback={delivered_was_fallback})")
                     # [P2-BAND-SCORE-GATE · 2026-06-15] Si la precisión medida cae bajo el umbral marca el plan
                     # degradado → dispara el banner de degradación existente del frontend (honestidad).
-                    if _maybe_mark_low_band_degraded(plan, _band_val, delivered_was_fallback,
+                    # [P2-BAND-MACROS-ONLY · 2026-06-16] (P2-9) el gate puntúa sobre score_macros_only cuando
+                    # BAND_GATE_USE_MACROS_ONLY (default False hasta re-tunear el umbral vs la dist. macros-only).
+                    _band_gate_val = (_band.get("score_macros_only")
+                                      if BAND_GATE_USE_MACROS_ONLY and _band.get("score_macros_only") is not None
+                                      else _band_val)
+                    if _maybe_mark_low_band_degraded(plan, _band_gate_val, delivered_was_fallback,
                                                      final_state.get("attempt", 1)):
                         logger.warning(
-                            f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_val:.2f} < umbral "
+                            f"⚠️ [P2-BAND-SCORE-GATE] band_score {_band_gate_val:.2f} < umbral "
                             f"{BAND_SCORE_GATE_THRESHOLD} → plan marcado _quality_degraded (low_band_score)")
-                    # [P2-PANEL-SOFT-REJECT · 2026-06-15] Tras el band-gate: degrada (observable) si el panel
-                    # de micros deja un target de condición/micro/sodio-azúcar fuera de banda (cada sub-check
-                    # tras su knob, default OFF). No pisa una razón previa peor (band/max_attempts ganan).
-                    if _maybe_mark_panel_degraded(plan, actual_form_data, delivered_was_fallback,
-                                                  final_state.get("attempt", 1)):
-                        logger.warning(
-                            f"⚠️ [P2-PANEL-SOFT-REJECT] panel de micros fuera de banda → plan marcado "
-                            f"_quality_degraded (reason={plan.get('_quality_degraded_reason')})")
-                    # [P2-CLINICAL-LAYER-CONSUMER · 2026-06-15] (gap-audit G8) Consume el flag dead-write
-                    # `_clinical_layer_incomplete`: si la capa clínica corrió incompleta para un perfil con
-                    # condición/alergia → banner user-facing + system_alert (antes solo logger.error).
-                    if _maybe_mark_clinical_layer_incomplete_degraded(plan, actual_form_data, delivered_was_fallback):
-                        logger.warning(
-                            "🛡 [P2-CLINICAL-LAYER-CONSUMER] plan marcado _quality_degraded "
-                            "(reason=clinical_layer_incomplete) + system_alert emitido")
-                    # [P2-RESOLUTION-COVERAGE-GATE · 2026-06-15] (gap-audit G12) Transparencia: si la
-                    # cobertura de resolución es baja (platos criollos compuestos no-resueltos), marca el plan
-                    # (reason=composite_dish_unresolved). Default OFF — opt-in tras medir la distribución.
-                    if _maybe_mark_low_resolution_degraded(plan, delivered_was_fallback):
-                        logger.warning(
-                            f"⚠️ [P2-RESOLUTION-COVERAGE-GATE] cobertura "
-                            f"{(plan.get('resolution_coverage') or {}).get('pct')} < {RESOLUTION_COVERAGE_FLOOR} "
-                            f"→ _quality_degraded (composite_dish_unresolved)")
+                # [P2-11-DEGRADED-GATES-UNCONDITIONAL · 2026-06-16] (gap-audit P2-11) Estos 3 gates NO dependen
+                # de _band_val (cada uno guarda internamente delivered_was_fallback + no pisa razón peor) →
+                # DESINDENTADOS fuera del `if _band_val is not None:` para que corran AUNQUE
+                # clinical_band_score=None (nutrition malformado / scorer falló). Cierra el hueco donde el G8
+                # fail-secure y los gates panel/resolución quedaban inalcanzables justo cuando los datos fallan.
+                # [P2-PANEL-SOFT-REJECT · 2026-06-15] degrada (observable) si el panel de micros deja un target
+                # de condición/micro/sodio-azúcar fuera de banda (cada sub-check tras su knob, default OFF).
+                if _maybe_mark_panel_degraded(plan, actual_form_data, delivered_was_fallback,
+                                              final_state.get("attempt", 1)):
+                    logger.warning(
+                        f"⚠️ [P2-PANEL-SOFT-REJECT] panel de micros fuera de banda → plan marcado "
+                        f"_quality_degraded (reason={plan.get('_quality_degraded_reason')})")
+                # [P2-CLINICAL-LAYER-CONSUMER · 2026-06-15] (gap-audit G8) Consume el flag dead-write
+                # `_clinical_layer_incomplete`: capa clínica incompleta para perfil con condición/alergia →
+                # banner user-facing + system_alert (antes solo logger.error).
+                if _maybe_mark_clinical_layer_incomplete_degraded(plan, actual_form_data, delivered_was_fallback):
+                    logger.warning(
+                        "🛡 [P2-CLINICAL-LAYER-CONSUMER] plan marcado _quality_degraded "
+                        "(reason=clinical_layer_incomplete) + system_alert emitido")
+                # [P2-RESOLUTION-COVERAGE-GATE · 2026-06-15] (gap-audit G12) Transparencia: cobertura baja
+                # (platos criollos compuestos no-resueltos) → marca (reason=composite_dish_unresolved). Default OFF.
+                if _maybe_mark_low_resolution_degraded(plan, delivered_was_fallback):
+                    logger.warning(
+                        f"⚠️ [P2-RESOLUTION-COVERAGE-GATE] cobertura "
+                        f"{(plan.get('resolution_coverage') or {}).get('pct')} < {RESOLUTION_COVERAGE_FLOOR} "
+                        f"→ _quality_degraded (composite_dish_unresolved)")
+                # [P2-LOW-COVERAGE-MEALS · 2026-06-16] (gap-audit P2-6) métrica de flota por-meal (NO hard-gate):
+                # emite solo si hay ≥1 meal bajo el floor de cobertura (telemetría, no banner).
+                _low_cov = plan.get("low_coverage_meals") or []
+                if _low_cov:
+                    _emit_progress(initial_state, "metric", {
+                        "node": "low_coverage_meals",
+                        "duration_ms": int(pipeline_duration * 1000),
+                        "retries": final_state.get("attempt", 1) - 1,
+                        "tokens_estimated": 0,
+                        "confidence": 1.0 - min(1.0, len(_low_cov) / 9.0),
+                        "metadata": {"count": len(_low_cov), "meals": _low_cov[:10],
+                                     "delivered_was_fallback": delivered_was_fallback},
+                    })
             except Exception as _cbs_e:
                 logger.warning(f"[P4-SCOREBOARD] emit del band score falló: {type(_cbs_e).__name__}: {_cbs_e}")
 
