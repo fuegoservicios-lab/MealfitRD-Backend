@@ -60,6 +60,16 @@ def test_t2_incremental_keys_includes_learning_shopping_quality():
         # auto-resolve de I5 vea el plan como NO-limpio.
         '_is_fallback',
         '_review_failed_but_delivered',
+        # [P2-10 · 2026-06-16] Flags user-facing de degradación de calidad (band-score/
+        # panel/clinical-layer/resolution gates) que el worker ahora propaga en semana 2+.
+        '_quality_degraded',
+        '_quality_degraded_reason',
+        '_quality_degraded_severity',
+        '_quality_degraded_attempts',
+        '_quality_degraded_band_score',
+        '_quality_degraded_panel_detail',
+        '_quality_degraded_clinical_detail',
+        '_quality_degraded_resolution_pct',
     }
     assert set(P0_4_T2_INCREMENTAL_KEYS) == expected, (
         "Si añadiste un nuevo campo que el worker calcula entre T1 y T2 sin "

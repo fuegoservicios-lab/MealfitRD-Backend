@@ -3465,16 +3465,20 @@ def canonicalize_huevo(name) -> str | None:
     if not name:
         return None
     n_low = str(name).strip().lower()
+    # [P2-TRIAGE-REALBUGS · 2026-06-16] Exclusión de platos compuestos PRIMERO.
+    # "tortilla", "omelette", "endiablado" son comidas, NO ingredientes shopping.
+    # DEBE correr ANTES de los branches claras/yema: antes el bug de orden hacía
+    # que "Omelette de claras" matcheara 'claras' y devolviera 'Huevo' en vez de
+    # None (el docstring siempre documentó la intención de excluir estos platos).
+    if re.search(r'\b(tortilla|omelette|omelete|endiablad)', n_low):
+        return None
     # Claras (lab/preparados): "claras de huevo", "claras pasteurizadas".
     if re.search(r'\bclaras?\b', n_low):
         return 'Huevo'
     # Yemas: "yema de huevo", "yemas".
     if re.search(r'\byemas?\b', n_low):
         return 'Huevo'
-    # Huevo en sus formas básicas (excluye productos compuestos).
-    # Negativo: si menciona "tortilla", "omelette", "endiablado" → es plato.
-    if re.search(r'\b(tortilla|omelette|omelete|endiablad)', n_low):
-        return None
+    # Huevo en sus formas básicas.
     if re.search(r'\bhuevos?\b', n_low):
         return 'Huevo'
     return None

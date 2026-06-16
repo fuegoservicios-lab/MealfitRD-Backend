@@ -36,10 +36,12 @@ EXPECTED_FDC_PINS = {
 
 
 # ─────────────────────────── OFFLINE: curación ───────────────────────────
-def test_mapping_covers_110_ingredients():
-    # 105 base + 5 [P1-RESOLVER-COVERAGE · 2026-06-16] (Manzana, Pepino, Granola, Maní, Clara de huevo).
+def test_mapping_covers_113_ingredients():
+    # 105 USDA_QUERY + 8 MANUAL_MACROS = 113. Incluye los +3 de P2-DATA-CATALOG
+    # (Yema de huevo, Leche descremada, Yogurt griego entero) sobre los 110 previos
+    # (que ya cubrían los +5 de P1-RESOLVER-COVERAGE: Manzana/Pepino/Granola/Maní/Clara de huevo).
     base = set(M.USDA_QUERY) | set(M.MANUAL_MACROS)
-    assert len(base) == 110, f"Se esperaban 110 ingredientes mapeados, hay {len(base)}"
+    assert len(base) == 113, f"Se esperaban 113 ingredientes mapeados, hay {len(base)}"
 
 
 def test_usda_and_manual_disjoint():

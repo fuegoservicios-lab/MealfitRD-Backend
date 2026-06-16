@@ -51,7 +51,7 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CLAUDE_MD = _REPO_ROOT / "CLAUDE.md"
 
-_DEFAULT_CAP = 56500  # [P1-NEON-DB-MIGRATION · 2026-06-12] +3.5k para los 3 bullets de las migraciones del día (DeepSeek + Cohere + Neon), ya adelgazados doc-first (detalle en docs/llm_tier_routing.md, docs/embeddings_cohere.md, docs/neon_db_migration.md). Bump 6.6%, bajo el threshold 10% que dispara limpieza estructural. Próxima limpieza candidata: mover tablas "Advisors aceptados" a docs/ (verificar antes test_p2_whitelist_advisors_anchors_alive).
+_DEFAULT_CAP = 58000  # [P2-TRIAGE-REALBUGS · 2026-06-16] 56500→58000 (+2.65%, bajo el threshold 10%): la CLAUDE.md root creció a 56733 por bullets P-fix acumulados (UVICORN-RELOAD/SQL-forensic/soft-fail/shift-plan-exempt) y rompía el cap previo sin margen de respiración (test_p1_prod_final_1 exige ≥800). Próxima limpieza candidata: mover tablas "Advisors aceptados" a docs/ (verificar antes test_p2_whitelist_advisors_anchors_alive). [P1-NEON-DB-MIGRATION · 2026-06-12] el bump previo a 56500 absorbió DeepSeek+Cohere+Neon, ya adelgazados doc-first.
 _CAP_FLOOR = 10000     # típico minimum útil (esqueleto de invariantes)
 _CAP_CEILING = 200000  # ~5x el threshold del UI; arriba de eso es absurdo
 

@@ -5221,11 +5221,14 @@ def _dream_consolidate_facts() -> None:
     _track_cron_consecutive_failure("dream_consolidate_facts", "dreaming_consolidation_failures_burst", "dreaming_consolidation_failures_burst", fail_title, is_failure=False)
     # Tick observable a pipeline_metrics (siempre, aun con knob OFF: confirma vida del cron).
     try:
+        # [P2-TRIAGE-REALBUGS · 2026-06-16] G18: el slot `tokens_estimated` NO debe
+        # llevar un valor no-token (antes metía int(round(cost_usd*1e6)) ahí). El cost
+        # ya vive en metadata.cost_usd (agg) — slot a 0 para respetar la convención.
         execute_sql_write(
             "INSERT INTO pipeline_metrics (user_id, session_id, node, duration_ms, "
             "retries, tokens_estimated, confidence, metadata) "
-            "VALUES (NULL, NULL, %s, 0, 0, %s, 0, %s::jsonb)",
-            ("dreaming_consolidation", int(round((agg.get("cost_usd", 0.0) or 0.0) * 1e6)),
+            "VALUES (NULL, NULL, %s, 0, 0, 0, 0, %s::jsonb)",
+            ("dreaming_consolidation",
              json.dumps(agg, ensure_ascii=False)),
         )
     except Exception as tick_err:
