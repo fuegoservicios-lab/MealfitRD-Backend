@@ -100,6 +100,16 @@ _PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 _SWAP_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
 _EXPAND_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
 
+# [P3-SHIFT-PLAN-QUOTA-EXEMPT · 2026-06-15] `/shift-plan` AVANZA la ventana rolling
+# de un plan YA generado (mantenimiento, no un plan nuevo). Estaba bajo
+# `verify_api_quota` + `log_api_usage("shift_plan")` (P2-LIVE-7) → al llegar al cap
+# mensual el dashboard recibía 402 y la ventana se congelaba, ADEMÁS de cobrar un
+# crédito extra por usar un plan ya pagado. Per la convención `Historial-quota-
+# exemption`: el anti-hammering correcto es un RateLimiter per-user/IP, NO el
+# paywall mensual. Ahora shift-plan usa SOLO este limiter (es idempotente: no-op si
+# el plan está al día), sin contar contra el cap. Tooltip-anchor: P3-SHIFT-PLAN-QUOTA-EXEMPT.
+_SHIFT_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+
 # [P1-16] Registry global de session_ids cancelados durante la generación.
 # Cuando el usuario clickea "Cancelar" en el frontend, el SSE se aborta
 # del lado cliente — pero ANTES de P1-16 el pipeline backend seguía
@@ -1653,10 +1663,14 @@ def chunk_size_for_next_slot(days_since_creation: int, total_planned_days: int, 
     return base
 
 @router.post("/shift-plan")
-def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id: Optional[str] = Depends(_SHIFT_LIMITER)):
     """
     On-demand endpoint to trigger an atomic shift + rolling window generation.
     Idempotent: if the plan is already up-to-date, does nothing.
+
+    [P3-SHIFT-PLAN-QUOTA-EXEMPT · 2026-06-15] Usa `_SHIFT_LIMITER` (RateLimiter)
+    en vez de `verify_api_quota`: avanzar la ventana de un plan ya generado es
+    mantenimiento, no debe bloquearse (402) ni cobrar un crédito al llegar al cap.
     """
     from db_core import execute_sql_write, execute_sql_query
     from datetime import datetime, timezone, timedelta
@@ -2299,16 +2313,14 @@ def api_shift_plan(response: Response, data: dict = Body(...), verified_user_id:
         # [P0-2] Resumen de pantry-degraded + headers para la rama de shift exitoso.
         _p02_summary = _attach_pantry_degraded_response_meta(response, shifted_data)
 
-        # [P2-LIVE-7 · 2026-05-11] Audit api_usage. `verify_api_quota` solo LEE
-        # el contador mensual — no incrementa. Si no llamamos `log_api_usage`,
-        # el paywall no cuenta este shift contra el cap del usuario y un
-        # cliente abusivo podría disparar shifts infinitos para forzar
-        # regeneración de chunks.
-        if verified_user_id:
-            try:
-                log_api_usage(verified_user_id, "shift_plan")
-            except Exception as _audit_err:
-                logger.warning(f"[P2-LIVE-7] log_api_usage shift_plan falló: {_audit_err}")
+        # [P3-SHIFT-PLAN-QUOTA-EXEMPT · 2026-06-15] Ya NO se llama
+        # `log_api_usage("shift_plan")` aquí: contaba el avance de la ventana
+        # rolling contra el cap mensual (P2-LIVE-7), bloqueando el plan ya generado
+        # al llegar a 15/15 y cobrando un crédito extra por usarlo. El abuso que
+        # P2-LIVE-7 temía ("shifts infinitos para forzar regeneración") lo cierra
+        # ahora `_SHIFT_LIMITER` (RateLimiter per-user/IP) + la idempotencia del
+        # shift, sin penalizar el uso legítimo. Costo LLM real sigue en
+        # `llm_usage_events` (telemetría separada del paywall).
 
         return {
             "success": True,
