@@ -3368,6 +3368,24 @@ class PlanState(TypedDict):
     #   - `_selected_techniques`              (técnicas culinarias inyectadas
     #                                           al prompt; preservar entre attempts).
     #
+    # [P2-TRIAGE-REALBUGS · 2026-06-16] CLINICAL LAYER + QUALITY-DEGRADED MARKERS
+    # (de P2-CLINICAL-LAYER-CONSUMER + P4-SCOREBOARD + quality-degraded gating
+    # ~10600-11002 y ~17597-17932; viajan en `plan_result`, NO en state —
+    # consumidos por `review_plan_node`/`should_retry`, el chunk worker T2
+    # (P2-10) y los banners user-facing del Dashboard):
+    #   - `_clinical_layer_applied`           (bool — la capa clínica determinista
+    #                                           FS1-FS9 corrió sobre el plan).
+    #   - `_clinical_layer_incomplete`        (bool — la capa clínica no pudo
+    #                                           aplicarse del todo, ej. db_unavailable).
+    #   - `_clinical_layer_incomplete_reason` (string — motivo del incomplete).
+    #   - `_quality_degraded`                 (bool — plan entregado pero marcado
+    #                                           degradado al usuario).
+    #   - `_quality_degraded_reason`          (string — low_band_score /
+    #                                           clinical_layer_incomplete /
+    #                                           composite_dish_unresolved).
+    #   - `_quality_degraded_severity`        (string — minor / high).
+    #   - `_quality_degraded_attempts`        (int — nº de attempt al degradar).
+    #
     # Si una migración futura (ej. mover coherence handling a un nodo dedicado
     # `coherence_arbiter_node`) requiere visibilidad state-level, declarar el
     # campo en este TypedDict ANTES de tocar el call site — el bug equivalente
