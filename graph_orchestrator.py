@@ -8785,6 +8785,34 @@ def _cap_macros_dict_renal(md, cap_g: float, reassign_to: str):
     return int(round(p))
 
 
+def _renal_reassign_macro(active_macros: dict, cap_g: int, old_p: float, diabetic: bool, mirror) -> str:
+    """[P2-14-RENAL-REASSIGN · 2026-06-16] (gap-audit P2-14) Dedup VERBATIM del reassign renal de proteína
+    que estaba triplicado inline en `_apply_deterministic_clinical_layer` y `assemble_plan_node` (SITES B/C).
+    Capea `protein_str` a `cap_g` y reasigna las kcal liberadas: a GRASA si diabético (comorbilidad
+    diabético-nefropatía: NO subir la carga glucémica con carbo) o a CARBO iso-kcal (swap 1:1 g, ambos
+    4 kcal/g) si no. Escribe `active_macros` (claves *_str) y, si no es None, el dict espejo `mirror`
+    (claves SIN sufijo: protein/fats/carbs). El caller pasa `mirror` YA copiado (anti-aliasing) — el helper
+    NO copia. Usa round() (NO int(round()) como SITE A) por equivalencia byte con los inline B/C. Retorna
+    'fat'|'carb'. NO cambia la política carb-vs-fat (decisión clínica diferida a nutricionista). Anchor: P2-14-RENAL-REASSIGN."""
+    _freed = (old_p - cap_g) * 4.0  # proteína = 4 kcal/g
+    active_macros["protein_str"] = f"{cap_g}g"
+    if mirror is not None:
+        mirror["protein"] = f"{cap_g}g"
+    if diabetic:
+        _old_f = _meal_macro_num(active_macros.get("fats_str"))
+        _new_f = round(_old_f + _freed / 9.0)
+        active_macros["fats_str"] = f"{_new_f}g"
+        if mirror is not None:
+            mirror["fats"] = f"{_new_f}g"
+        return "fat"
+    _old_c = _meal_macro_num(active_macros.get("carbs_str"))
+    _new_c = round(_old_c + (old_p - cap_g))  # swap proteína→carbo iso-kcal (1:1 g)
+    active_macros["carbs_str"] = f"{_new_c}g"
+    if mirror is not None:
+        mirror["carbs"] = f"{_new_c}g"
+    return "carb"
+
+
 def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
     """[P3-CONDITION-RULES · 2026-06-14] CAP RENAL EN LA FUENTE. Capea el target de proteína de
     `nutrition` (KDIGO ~0.8 g/kg) ANTES de que fluya al skeleton/generación/review/fallback. Es el
@@ -10599,25 +10627,9 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
             else:
                 _pm = None
             if _wkg > 0 and _cap > 0 and _cap < _old_p:
-                _freed = (_old_p - _cap) * 4.0
                 _diab = _is_diabetes_condition(form_data)
-                active_macros["protein_str"] = f"{_cap}g"
-                if _pm is not None:
-                    _pm["protein"] = f"{_cap}g"
-                if _diab:
-                    _old_f = _meal_macro_num(active_macros.get("fats_str"))
-                    _new_f = round(_old_f + _freed / 9.0)
-                    active_macros["fats_str"] = f"{_new_f}g"
-                    if _pm is not None:
-                        _pm["fats"] = f"{_new_f}g"
-                    _reassigned = "fat"
-                else:
-                    _old_c = _meal_macro_num(active_macros.get("carbs_str"))
-                    _new_c = round(_old_c + (_old_p - _cap))
-                    active_macros["carbs_str"] = f"{_new_c}g"
-                    if _pm is not None:
-                        _pm["carbs"] = f"{_new_c}g"
-                    _reassigned = "carb"
+                # [P2-14-RENAL-REASSIGN] dedup verbatim: capea protein + reasigna kcal a fat(DM2)/carbo iso-kcal.
+                _reassigned = _renal_reassign_macro(active_macros, _cap, _old_p, _diab, _pm)
                 if not (plan.get("renal_protein_cap") or {}).get("applied"):
                     plan["renal_protein_cap"] = {
                         "applied": True, "gkg": RENAL_PROTEIN_GKG_CEILING,
@@ -11279,26 +11291,12 @@ async def assemble_plan_node(state: PlanState) -> dict:
             _old_p_renal = _meal_macro_num(active_macros.get("protein_str"))
             _renal_cap = round(RENAL_PROTEIN_GKG_CEILING * _wkg_renal)
             if _wkg_renal > 0 and _renal_cap > 0 and _renal_cap < _old_p_renal:
-                _freed_kcal_renal = (_old_p_renal - _renal_cap) * 4.0   # proteína = 4 kcal/g
                 _renal_diabetic = _is_diabetes_condition(form_data)
-                active_macros["protein_str"] = f"{_renal_cap}g"
-                result["macros"]["protein"] = f"{_renal_cap}g"
-                if _renal_diabetic:
-                    # [P3-CONDITION-RULES] Comorbilidad diabético-nefropatía (causa #1 de ERC): NO
-                    # volcar las kcal liberadas a carbohidrato (sube la carga glucémica, choca con la
-                    # regla DM2). Van a GRASA saludable (9 kcal/g), que ni DM2 ni ERC restringen tan
-                    # fuerte. El reparto fino lo valida el nefrólogo (gate FS9 reforzado abajo).
-                    _old_f_renal = _meal_macro_num(active_macros.get("fats_str"))
-                    _new_f_renal = round(_old_f_renal + _freed_kcal_renal / 9.0)
-                    active_macros["fats_str"] = f"{_new_f_renal}g"
-                    result["macros"]["fats"] = f"{_new_f_renal}g"
-                    _reassigned = "fat"
-                else:
-                    _old_c_renal = _meal_macro_num(active_macros.get("carbs_str"))
-                    _new_c_renal = round(_old_c_renal + (_old_p_renal - _renal_cap))  # swap proteína→carbo iso-kcal
-                    active_macros["carbs_str"] = f"{_new_c_renal}g"
-                    result["macros"]["carbs"] = f"{_new_c_renal}g"
-                    _reassigned = "carb"
+                # [P2-14-RENAL-REASSIGN] dedup verbatim del reassign. Política PRESERVADA: comorbilidad
+                # diabético-nefropatía (causa #1 de ERC) reasigna las kcal liberadas a GRASA saludable
+                # (9 kcal/g) en vez de carbo (no sube la carga glucémica); no-diabético a carbo iso-kcal.
+                # El reparto fino lo valida el nefrólogo (gate FS9 reforzado abajo). mirror = result["macros"].
+                _reassigned = _renal_reassign_macro(active_macros, _renal_cap, _old_p_renal, _renal_diabetic, result["macros"])
                 result["renal_protein_cap"] = {
                     "applied": True, "gkg": RENAL_PROTEIN_GKG_CEILING,
                     "protein_g": _renal_cap, "was_g": round(_old_p_renal),
