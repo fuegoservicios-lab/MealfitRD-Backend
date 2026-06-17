@@ -854,8 +854,13 @@ class DistributedLLMSemaphore:
 
     @asynccontextmanager
     async def aacquire(self):
-        from cache_manager import redis_async_client
-        if not redis_async_client:
+        # [P2-REDIS-ASYNC-PERLOOP · 2026-06-17] Cliente per-loop: el global
+        # `redis_async_client` (creado al import) rompe con "Event loop is closed"
+        # cuando esta corutina corre en el loop de generación. `get_redis_async()`
+        # devuelve uno ligado al loop ACTUAL (o None → fallback local).
+        from cache_manager import get_redis_async
+        _rc = get_redis_async()
+        if not _rc:
             async with self._alocal_acquire():
                 yield
             return
@@ -871,20 +876,20 @@ class DistributedLLMSemaphore:
                 try:
                     now = time.time()
                     # 1. Limpiar locks expirados (evita leaks por workers caídos)
-                    await redis_async_client.zremrangebyscore(self.key, "-inf", now - self.timeout)
+                    await _rc.zremrangebyscore(self.key, "-inf", now - self.timeout)
 
                     # 2. Intentar adquirir agregando a la cola
-                    await redis_async_client.zadd(self.key, {req_id: now})
+                    await _rc.zadd(self.key, {req_id: now})
 
                     # 3. Verificar posición en la cola
-                    rank = await redis_async_client.zrank(self.key, req_id)
+                    rank = await _rc.zrank(self.key, req_id)
 
                     if rank is not None and rank < self.max_concurrent:
                         acquired = True
                         break
                     else:
                         # Cola llena, retirarse y esperar
-                        await redis_async_client.zrem(self.key, req_id)
+                        await _rc.zrem(self.key, req_id)
                         # P0-B: chequeo de bound ANTES del sleep. Después del
                         # zrem ya no estamos en la cola Redis, así que el
                         # fallback a local no deja estado pendiente.
@@ -909,12 +914,10 @@ class DistributedLLMSemaphore:
 
         finally:
             if acquired:
-                from cache_manager import redis_async_client
-                if redis_async_client:
-                    try:
-                        await redis_async_client.zrem(self.key, req_id)
-                    except Exception:
-                        pass
+                try:
+                    await _rc.zrem(self.key, req_id)
+                except Exception:
+                    pass
 
 
 # P1-NEW-2: knobs configurables vía env (`MEALFIT_LLM_*`).
@@ -1120,8 +1123,13 @@ class DistributedPerUserSemaphore:
             yield
             return
 
-        from cache_manager import redis_async_client
-        if not redis_async_client:
+        # [P2-REDIS-ASYNC-PERLOOP · 2026-06-17] Cliente per-loop (ver get_redis_async).
+        # Antes usaba el global `redis_async_client` → "Event loop is closed" en el
+        # loop de generación → caía a fallback local en CADA plan. Ahora el path Redis
+        # funciona; el fallback local queda solo para Redis-down real.
+        from cache_manager import get_redis_async
+        _rc = get_redis_async()
+        if not _rc:
             async with self._alocal_acquire(user_id):
                 yield
             return
@@ -1134,13 +1142,13 @@ class DistributedPerUserSemaphore:
             while not acquired:
                 try:
                     now = time.time()
-                    await redis_async_client.zremrangebyscore(key, "-inf", now - self.timeout)
-                    await redis_async_client.zadd(key, {req_id: now})
-                    rank = await redis_async_client.zrank(key, req_id)
+                    await _rc.zremrangebyscore(key, "-inf", now - self.timeout)
+                    await _rc.zadd(key, {req_id: now})
+                    rank = await _rc.zrank(key, req_id)
                     if rank is not None and rank < self.max_per_user:
                         acquired = True
                         break
-                    await redis_async_client.zrem(key, req_id)
+                    await _rc.zrem(key, req_id)
                     elapsed = time.monotonic() - wait_started
                     if elapsed >= self.max_wait_s:
                         logger.warning(
@@ -1160,7 +1168,7 @@ class DistributedPerUserSemaphore:
         finally:
             if acquired:
                 try:
-                    await redis_async_client.zrem(key, req_id)
+                    await _rc.zrem(key, req_id)
                 except Exception:
                     pass
 
@@ -7857,7 +7865,12 @@ PLAN A EVALUAR (días generados):
             corrector_llm = ChatDeepSeek(
                 model=_corrector_model,
                 temperature=0.3,
-                max_retries=0,
+                # [P1-SELFCRITIQUE-RETRY · 2026-06-17] 0→1: un error de CONEXIÓN
+                # transitorio con DeepSeek dejaba el día sin corregir (el PRO-fallback
+                # solo cubre TimeoutError, no ConnectionError → caía al except genérico
+                # "Error corrigiendo Día N. Manteniendo original"). Un reintento del
+                # cliente recupera el blip sin tocar el timeout (80s) ni el CB.
+                max_retries=1,
                 timeout=80,
             ).with_structured_output(SingleDayPlanModel)
 

@@ -1,4 +1,5 @@
 import os
+import asyncio
 import json
 import hashlib
 import functools
@@ -32,6 +33,45 @@ except ImportError:
 except Exception as e:
     redis_client = None
     logger.warning(f"⚠️ [CACHE] Error conectando a Redis, se usará caché local: {e}")
+
+
+def get_redis_async():
+    """[P2-REDIS-ASYNC-PERLOOP · 2026-06-17] Cliente `redis.asyncio` ligado al
+    event-loop ACTUAL.
+
+    `redis.asyncio` cachea sus conexiones en el event-loop que primero las await-ea.
+    El cliente module-global `redis_async_client` se crea al import (un loop), pero
+    la generación de planes corre en SU PROPIO loop (vía run_until_complete/asyncio.run
+    desde el handler SSE), que luego se cierra. Reusar el cliente global en un loop
+    distinto/muerto rompe con `RuntimeError: Event loop is closed` (observado en el
+    semáforo per-usuario, que entonces caía a fallback local).
+
+    Fix: un cliente por loop, cacheado como atributo del PROPIO loop → su ciclo de
+    vida se ata al loop (sin leak, sin reuse de id()). Si no hay REDIS_URL, no hay
+    loop activo, o falla la creación → devuelve None y el caller usa su fallback
+    local (mismo comportamiento que antes, pero ahora el path Redis SÍ funciona en
+    el loop de generación). Fail-soft: nunca lanza.
+    """
+    _ra = globals().get("redis_async")
+    _url = globals().get("REDIS_URL")
+    if _ra is None or not _url:
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    client = getattr(loop, "_mf_redis_async_client", None)
+    if client is None:
+        try:
+            client = _ra.from_url(_url, decode_responses=True)
+        except Exception as _e:
+            logger.warning(f"⚠️ [CACHE] get_redis_async: no se pudo crear cliente per-loop: {_e}")
+            return None
+        try:
+            setattr(loop, "_mf_redis_async_client", client)
+        except Exception:
+            pass  # uvloop/C-loops pueden prohibir atributos; el cliente igual sirve (sin cache)
+    return client
 
 # Fallback local cache (LRU con TTL real utilizando OrderedDict)
 _local_cache = OrderedDict()
