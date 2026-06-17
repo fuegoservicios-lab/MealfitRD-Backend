@@ -5638,6 +5638,45 @@ def _plan_fallback_rate_alert_job():
             pass
 
 
+def _price_inflation_adjust_job():
+    """[P2-PRICES-ENGINE-1 · 2026-06-16] Reescala los precios vivos de la lista de
+    compras desde la base × el último índice de inflación de alimentos (BCRD).
+
+    Auto-sanador e idempotente: corre a diario (knob), pero sólo escribe filas cuyo
+    precio efectivo cambia, así que un día sin índice nuevo es no-op. Gated por
+    `MEALFIT_PRICES_ENABLED` DENTRO de `recompute_adjusted_prices` → el cron SIEMPRE
+    se registra (observable) pero no toca DB cuando el feature está OFF (default).
+    """
+    _result = {"status": "error"}
+    _report = {}
+    try:
+        import price_engine as _pe
+        _result = _pe.recompute_adjusted_prices()
+        _report = _pe.price_staleness_report()
+        if _result.get("status") == "ok":
+            logger.info(
+                f"💰 [P2-PRICES-ENGINE-1] reescala: {_result.get('updated')} actualizados, "
+                f"{_result.get('skipped')} sin período base, índice={_result.get('latest_period')}; "
+                f"cobertura={_report.get('coverage_pct')} stale={_report.get('stale')}"
+            )
+        else:
+            logger.info(f"💤 [P2-PRICES-ENGINE-1] reescala no-op: status={_result.get('status')}")
+    except Exception as e:
+        logger.error(f"❌ [P2-PRICES-ENGINE-1] cron de inflación falló: {type(e).__name__}: {e}")
+    finally:
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata)
+                VALUES ('_price_inflation_adjust_job_tick', 0, 0, 0, %s, %s::jsonb)
+                """,
+                (float(_report.get("coverage_pct") or -1.0),
+                 json.dumps({"result": _result, "report": _report}, ensure_ascii=False, default=str)),
+            )
+        except Exception:
+            pass
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -5720,6 +5759,31 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [P1-MACRO-ROLLOUT-OBS] Cron plan_fallback_rate_alert registrado cada "
             f"{_fallback_rate_interval_h}h (tasa de fallback vigilada para el rollout del solver).")
+
+    # [P2-PRICES-ENGINE-1 · 2026-06-16] Cron de reescala de precios por inflación.
+    # SIEMPRE se registra; el gate de ejecución vive DENTRO de
+    # recompute_adjusted_prices() (no-op si MEALFIT_PRICES_ENABLED=false, default).
+    # Auto-sanador: corre a diario pero sólo escribe filas que cambian. Métrica de
+    # cambio lento (el índice es mensual) → misfire_grace tolerante.
+    try:
+        import price_engine as _price_mod
+        _price_adjust_interval_h = _price_mod.adjust_interval_h()
+    except Exception:
+        _price_adjust_interval_h = 24
+    if not scheduler.get_job("price_inflation_adjust"):
+        _add_job_jittered(scheduler,
+            _price_inflation_adjust_job,
+            "interval",
+            hours=_price_adjust_interval_h,
+            id="price_inflation_adjust",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P2-PRICES-ENGINE-1] Cron price_inflation_adjust registrado cada "
+            f"{_price_adjust_interval_h}h (reescala precios = base × índice; no-op si OFF).")
 
     # [P1-AUDIT-1 · 2026-05-12] Cron que drena `pending_facts_queue`.
     # Reemplaza el trigger DB `process_facts_on_insert` + función
