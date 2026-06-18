@@ -32,6 +32,20 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-s
     MIN_TARGET_KCAL_FEMALE = 1200
     MIN_TARGET_KCAL_MALE = 1500
 
+# [P1-MINOR-SAFETY-GATE · 2026-06-18] (audit fresco P1-A) Gate de SEGURIDAD para menores de edad (<18).
+# El formulario acepta edades 12-17 (router `_BIO_RANGES["age"]=(12,100)`) pero el pipeline los trataba como
+# adultos: BMR Mifflin (no validada en adolescentes), déficit -20% permitido sobre un cuerpo en crecimiento,
+# piso de kcal de adulto, y CERO gate de revisión profesional por edad. Es la simétrica del gate de embarazo
+# (P1-PREGNANCY-DEFICIT-GATE). Por seguridad: un menor NUNCA recibe déficit calórico (se fuerza al menos
+# mantenimiento) y el plan SIEMPRE queda con `requires_professional_review` (FS9). NO inventamos un piso
+# pediátrico de kcal ni ecuaciones pediátricas (Schofield/IOM) — eso requiere validación clínica; el flag FS9
+# deriva esos ajustes a un profesional. Knob de rollback default ON (auto-registrado). Anchor: P1-MINOR-SAFETY-GATE.
+try:
+    from knobs import _env_bool as _nc_env_bool_minor
+    MINOR_SAFETY_GATE_ENABLED = _nc_env_bool_minor("MEALFIT_MINOR_SAFETY_GATE", True)
+except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a ON (seguro)
+    MINOR_SAFETY_GATE_ENABLED = True
+
 
 def _min_target_kcal(gender) -> int:
     """[P1-MIN-CALORIE-FLOOR · 2026-06-15] Piso clínico de calorías por sexo (mujer 1200 / hombre 1500).
@@ -957,7 +971,10 @@ def get_nutrition_targets(form_data: dict) -> dict:
     try:
         weight_raw = float(form_data.get("weight", 154))
         height = float(form_data.get("height", 170))
-        age = int(form_data.get("age", 25))
+        # [P1-MINOR-SAFETY-GATE review] `int(float(...))` (no `int(...)`) para igualar al router
+        # (`_coerce_numeric kind='int'`): un age string-decimal ("17.5") NO debe caer al default 25
+        # (adulto) y eludir el gate de menores — int("17.5") lanza, int(float("17.5"))=17.
+        age = int(float(form_data.get("age", 25)))
     except (ValueError, TypeError):
         weight_raw, height, age = 154, 170, 25  # Defaults seguros
     
@@ -1023,6 +1040,31 @@ def get_nutrition_targets(form_data: dict) -> dict:
         }
         logger.warning(f"🤰 [P1-PREGNANCY-DEFICIT-GATE] Embarazo/lactancia → meta '{_orig_goal}' "
                        f"forzada a '{goal}' (sin déficit).")
+
+    # [P1-MINOR-SAFETY-GATE · 2026-06-18] (audit fresco P1-A) SEGURIDAD para menores: simétrica del gate de
+    # embarazo. Un menor (<18) NUNCA recibe déficit calórico (se fuerza al menos mantenimiento); el piso de
+    # TDEE más abajo es el cinturón-y-tirantes. El plan queda con `requires_professional_review` (FS9) vía
+    # `minor_safety` aguas abajo (Guard 8c). NO se cambian las ecuaciones (BMR/floor de adulto) — eso lo
+    # deriva el flag FS9 a un profesional, sin inventar valores pediátricos no validados.
+    _minor_safety = None
+    if MINOR_SAFETY_GATE_ENABLED and 0 < age < 18:  # `age` ya es int (parseado arriba con int(float(...)))
+        _orig_goal_minor = form_data.get("mainGoal") or form_data.get("goal") or "maintenance"
+        # Basado en el AJUSTE, no en el string 'lose_fat': cualquier meta deficitaria (ahora o futura en
+        # GOAL_ADJUSTMENTS) se neutraliza a mantenimiento para un menor. El piso TDEE de abajo es el respaldo.
+        if GOAL_ADJUSTMENTS.get(goal, 0.0) < 0:
+            goal = "maintenance"
+        _minor_safety = {
+            "applied": True,
+            "age": age,
+            "original_goal": _orig_goal_minor,
+            "effective_goal": goal,
+            "note": ("🧒 MENOR DE EDAD DETECTADO (edad " + str(age) + ") — por seguridad NO se aplica déficit "
+                     "calórico (un cuerpo en crecimiento no debe restringir energía) y este plan es ORIENTATIVO: "
+                     "las necesidades de un adolescente las define un pediatra/nutricionista (las ecuaciones de "
+                     "este plan están calibradas para adultos). Consúltalo antes de seguir este plan."),
+        }
+        logger.warning(f"🧒 [P1-MINOR-SAFETY-GATE] Menor de edad (edad={age}) → meta '{_orig_goal_minor}' "
+                       f"efectiva '{goal}' (sin déficit); requiere revisión profesional (FS9).")
 
     # 1. BMR (Tasa Metabólica Basal)
     bmr = calculate_bmr(weight, height, age, gender, body_fat)
@@ -1123,6 +1165,12 @@ def get_nutrition_targets(form_data: dict) -> dict:
         target_calories = int(round(tdee / 50) * 50)
         _pregnancy_safety["floored_to_tdee"] = target_calories
 
+    # [P1-MINOR-SAFETY-GATE · 2026-06-18] Piso cinturón-y-tirantes: tras CUALQUIER ajuste (meta + déficit
+    # dinámico), un menor jamás queda por debajo de mantenimiento (TDEE).
+    if _minor_safety and target_calories < tdee:
+        target_calories = int(round(tdee / 50) * 50)
+        _minor_safety["floored_to_tdee"] = target_calories
+
     # [P1-MIN-CALORIE-FLOOR · 2026-06-15] (gap-audit P1-2) Piso clínico GENERAL tras TODOS los ajustes
     # (meta + déficit dinámico + piso de embarazo): ningún objetivo cae bajo el mínimo seguro por sexo.
     # Si floorea, se registra `_low_calorie_floored` para cablear el gate de revisión profesional (FS9).
@@ -1179,6 +1227,8 @@ def get_nutrition_targets(form_data: dict) -> dict:
         result["pregnancy_lactation_safety"] = _pregnancy_safety
     if _low_calorie_floored:
         result["low_calorie_floored"] = _low_calorie_floored
+    if _minor_safety:
+        result["minor_safety"] = _minor_safety
 
     logger.info(f"\n🔢 [CALCULADORA NUTRICIONAL] Resultados exactos:")
     logger.info(f"   📊 BMR: {bmr} kcal (Peso: {weight_display}, Altura: {height}cm, Edad: {age}, Género: {gender})")

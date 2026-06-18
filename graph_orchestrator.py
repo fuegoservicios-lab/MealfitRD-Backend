@@ -10782,6 +10782,29 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _al2_e:
             logger.warning(f"[P2-12] re-pass allergen subs error: {type(_al2_e).__name__}: {_al2_e}")
 
+    # ── Guard 3.6 (FS6/ERC re-check) [P1-RENAL-RECHECK-POST-SUBS · 2026-06-18, audit fresco P1-C] ──
+    # Re-enforza el cap renal DESPUÉS de las sustituciones por condición (Guard 3) + el re-pase de alérgenos
+    # (Guard 3.5). Esas subs pueden RE-INFLAR la proteína de un paciente renal (ej. renal+dislipidemia:
+    # 'yogur entero'→'Yogurt griego', 'queso amarillo'→cottage suben proteína/100g). Guard 1 verificó
+    # `meals_enforced` ANTES de esas subs → el flag quedaba stale-True y el fail-hard gate de should_retry
+    # confiaba en él, entregando proteína sobre el techo KDIGO presentada como enforced (iatrogénico en ERC).
+    # Re-corre el MISMO enforcement validado (idempotente: trima al cap ABSOLUTO sobre los totales POST-subs),
+    # PRE-cuantización para que el snap a porciones cocinables limpie las porciones trimadas. La verificación
+    # HONESTA del flag `meals_enforced` sobre los totales FINALES la hace Guard 4d (post-cuantización), porque
+    # la cuantización corre después y puede re-inflar proteína por redondeo. Mismo gate que Guard 1. Anchor:
+    # P1-RENAL-RECHECK-POST-SUBS.
+    if (RENAL_CAP_ENABLED and _db is not None
+            and isinstance(plan.get("renal_protein_cap"), dict)
+            and plan["renal_protein_cap"].get("applied") and _pg > 0):
+        try:
+            if _eng is not None:
+                _eng.enforce_one("renal", plan, nutrition, _ctx)   # delega a _enforce_renal_per_meal
+            else:
+                _enforce_renal_per_meal(plan, _pg, _daily_cals, _db)   # fallback inline (engine no disponible)
+        except Exception as _rr2_e:
+            logger.warning(f"[P1-RENAL-RECHECK-POST-SUBS] re-enforce renal post-subs falló: "
+                           f"{type(_rr2_e).__name__}: {_rr2_e}")
+
     # ── Guard 4 (FS2): cuantización de porciones a unidades medibles (espejo [P3-PORTION-QUANTIZE]) ──
     if PORTION_QUANTIZE_ENABLED and _db is not None:
         try:
@@ -10834,6 +10857,33 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                 f"{_req_n} comida(s)")
         except Exception as _rr_e:
             logger.warning(f"[P1-MACRO-POSTQUANT-RECONCILE] error: {type(_rr_e).__name__}: {_rr_e}")
+
+    # ── Guard 4d (FS6/ERC verificación FINAL) [P1-RENAL-RECHECK-POST-SUBS · 2026-06-18, review P1] ──
+    # La cuantización (Guard 4) + carb-trim (4b) + post-quant reconcile (4c) recomputan macros desde porciones
+    # redondeadas DESPUÉS del trim renal de Guard 3.6 → el redondeo al alza de un ingrediente proteína-dominante
+    # puede re-inflar la proteína del día sobre el cap KDIGO tras la verificación de 3.6, dejando meals_enforced
+    # stale-True. El fail-hard gate de should_retry lee `meals_enforced` sobre el plan POST-cuantización, así que
+    # AQUÍ re-verificamos HONESTAMENTE sobre los totales FINALES (re-suma pura, no requiere DB). NO re-trimamos
+    # aquí (eso de-cuantizaría las porciones); si algún día excede el cap (tolerancia 5%), meals_enforced=False
+    # → el exit-net `_renal_exit_safety_net` re-trima en la entrega y el fail-hard gate escala. Anchor:
+    # P1-RENAL-RECHECK-POST-SUBS.
+    if (RENAL_CAP_ENABLED and isinstance(plan.get("renal_protein_cap"), dict)
+            and plan["renal_protein_cap"].get("applied") and _pg > 0):
+        try:
+            _rc_final_ok = True
+            for _d in plan.get("days", []) or []:
+                _dp = sum(_meal_macro_num(_m.get("protein")) for _m in (_d.get("meals", []) or []))
+                if _dp > _pg * 1.05:
+                    _rc_final_ok = False
+                    break
+            plan["renal_protein_cap"]["meals_enforced"] = _rc_final_ok
+            if not _rc_final_ok:
+                logger.warning("🛑 [P1-RENAL-RECHECK-POST-SUBS] proteína sobre el cap tras cuantización — "
+                               "meals_enforced=False (exit-net re-trima / fail-hard gate escala).")
+        except Exception as _rcf_e:
+            plan["renal_protein_cap"]["meals_enforced"] = False
+            logger.warning(f"[P1-RENAL-RECHECK-POST-SUBS] verificación final renal falló: "
+                           f"{type(_rcf_e).__name__}: {_rcf_e}")
 
     # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (espejo [P3-MICRONUTRIENTS]) ──
     if MICRONUTRIENT_REPORT_ENABLED and _db is not None:
@@ -11012,6 +11062,33 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                            "objetivo calórico bajo el piso clínico.")
         except Exception as _lc_e:
             logger.warning(f"[P1-MIN-CALORIE-FLOOR] FS9 wiring error: {type(_lc_e).__name__}: {_lc_e}")
+
+    # ── Guard 8c (FS9 minor) [P1-MINOR-SAFETY-GATE · 2026-06-18] (audit fresco P1-A) ──
+    # Si el perfil es de un menor de edad (`nutrition.minor_safety`, seteado por get_nutrition_targets),
+    # aplica el gate de revisión profesional AUNQUE no haya condición médica declarada. Espejo de Guard 8b.
+    # Merge no destructivo con un `requires_professional_review` previo (renal/condiciones/low-calorie).
+    if PRO_REVIEW_FLAG_ENABLED and isinstance(nutrition, dict) and nutrition.get("minor_safety"):
+        try:
+            _mn_note = ("🧒 PERFIL DE MENOR DE EDAD: las necesidades nutricionales de niños y adolescentes "
+                        "difieren de las de un adulto (crecimiento, desarrollo) y este plan usa cálculos "
+                        "calibrados para adultos. NO se aplicó déficit calórico por seguridad. Consulta a un "
+                        "pediatra o nutricionista infantil antes de seguir este plan.")
+            _existing_mn = plan.get("requires_professional_review")
+            if isinstance(_existing_mn, dict) and _existing_mn.get("flag"):
+                if _mn_note not in (_existing_mn.get("note") or ""):
+                    _existing_mn["note"] = ((_existing_mn.get("note") or "") + " " + _mn_note).strip()
+                _existing_mn["minor"] = True
+            else:
+                plan["requires_professional_review"] = {
+                    "flag": True,
+                    "conditions": [],
+                    "minor": True,
+                    "note": _mn_note,
+                }
+            logger.warning("🧒 [P1-MINOR-SAFETY-GATE] gate de revisión profesional (FS9) aplicado por "
+                           "perfil de menor de edad.")
+        except Exception as _mn_e:
+            logger.warning(f"[P1-MINOR-SAFETY-GATE] FS9 wiring error: {type(_mn_e).__name__}: {_mn_e}")
 
     # ── Guard 8z (P2-MACRO-TRUTHUP · 2026-06-16, gap-audit P2-5): recompute del NÚMERO de macros desde los
     # strings FINALES de ingredientes. Corre DESPUÉS de quant/carb-trim/post-quant-reconcile (todos reescriben

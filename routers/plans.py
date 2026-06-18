@@ -9957,6 +9957,13 @@ def api_regenerate_dead_lettered_simplified(
          banner.
       6. Re-encolar status='pending' execute_after=NOW().
     """
+    # [P1-REGEN-AUTH-GATE · 2026-06-18] (audit fresco P1-B) Guard de auth explícito: `verify_api_quota`
+    # retorna None sin auth → el ownership check de abajo (`if verified_user_id and ...`) se saltaría por
+    # completo. Espejo de /retry-chunk (P0-HIST-IDOR-1). Sin esto, un no-autenticado que conozca/adivine un
+    # plan_id (UUID) puede forzar el re-encolado de chunks ajenos → llamadas LLM sin billing
+    # (cost-amplification / DoS dirigido). Anchor: P1-REGEN-AUTH-GATE.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     from db_core import execute_sql_query, execute_sql_write
     import json
     try:
@@ -10141,6 +10148,13 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
     de un plan que se generó parcialmente con Smart Shuffle. Idempotente: si no hay
     chunks degradados completados, no hace nada.
     """
+    # [P1-REGEN-AUTH-GATE · 2026-06-18] (audit fresco P1-B) Guard de auth explícito: `verify_api_quota`
+    # retorna None sin auth → el ownership check de abajo (`if verified_user_id and ...`) se saltaría por
+    # completo. Espejo de /retry-chunk (P0-HIST-IDOR-1). Sin esto, un no-autenticado que conozca/adivine un
+    # plan_id (UUID) puede forzar el re-encolado de chunks ajenos → llamadas LLM sin billing
+    # (cost-amplification / DoS dirigido). Anchor: P1-REGEN-AUTH-GATE.
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
     from db_core import execute_sql_query, execute_sql_write
     import json
     try:
