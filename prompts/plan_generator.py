@@ -380,6 +380,18 @@ def build_medical_condition_context(form_data: dict) -> str:
         return ""
 
 
+def build_medication_context(form_data: dict) -> str:
+    """[P1-MEDICATION-RULES · 2026-06-18] Directivas de interacción fármaco-alimento, dirigidas por el
+    registro declarativo `medication_rules.MEDICATION_RULES` (warfarina↔vit K, metformina↔B12, IECA/ARA-II
+    ↔potasio, levotiroxina↔Ca/Fe). No-op si no hay medicamento cubierto. Emite solo texto canned (no
+    re-emite input crudo del usuario → no es vector de prompt-injection)."""
+    try:
+        from medication_rules import build_medication_prompt
+        return build_medication_prompt(form_data)
+    except Exception:
+        return ""
+
+
 def build_time_context() -> str:
     """Genera el bloque de contexto temporal dinámico (fecha, día, clima caribeño y cultura)."""
     now_local = datetime.now()

@@ -3508,6 +3508,8 @@ from prompts.plan_generator import (
     build_sleep_stress_context,
     # [P3-CONDITION-RULES · 2026-06-14] Directivas DM2 (ADA 2026) / ERC (KDIGO 2024) al generador.
     build_medical_condition_context,
+    # [P1-MEDICATION-RULES · 2026-06-18] Directivas de interacción fármaco-alimento al generador.
+    build_medication_context,
     build_time_context,
     build_technique_injection,
     build_supplements_context,
@@ -4244,6 +4246,15 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     if CONDITION_RULES_ENABLED:
         try:
             variety_prompt = (variety_prompt or "") + build_medical_condition_context(form_data)
+        except Exception:
+            pass
+    # [P1-MEDICATION-RULES · 2026-06-18] (audit fresco P1-A) Anexa las interacciones fármaco-alimento
+    # (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe) al mismo bloque
+    # determinista. No-op para perfiles sin medicamento cubierto. Lever de prompt; el gate FS9 + el
+    # monitor de vit K (anticoagulante) viven en _apply_deterministic_clinical_layer (Guard 8d).
+    if MEDICATION_RULES_ENABLED:
+        try:
+            variety_prompt = (variety_prompt or "") + build_medication_context(form_data)
         except Exception:
             pass
     adherence_hint = form_data.get("_adherence_hint", "")
@@ -8320,9 +8331,14 @@ MACRO_SOLVER_CAL_RECONCILE = _env_bool("MEALFIT_MACRO_SOLVER_CAL_RECONCILE", Tru
 # 22% MAPE (vs proteína 6%). Este knob activa un reconcile MULTI-MACRO: escala los ingredientes
 # carbo-dominantes hacia target_carbs y los grasa-dominantes hacia target_fats con factores SEPARADOS,
 # preservando la proteína. Como el target es internamente consistente (kcal=4P+4C+9F), clavar C y F clava
-# kcal. Default OFF (rollout gradual; validar con benchmark OFF-vs-ON antes de fijar a True — mismo
-# protocolo que MACRO_SOLVER_ENABLED). Fail-safe: si falla, el plan queda como lo dejó el solver.
-MACRO_AWARE_RECONCILE = _env_bool("MEALFIT_MACRO_AWARE_RECONCILE", False)
+# kcal. Fail-safe: si falla, el plan queda como lo dejó el solver.
+# [P1-MACRO-RECONCILE-DEFAULT · 2026-06-18] (audit fresco P1-C) Default flipeado OFF→ON. El A/B OFF-vs-ON
+# YA se corrió y validó (grasas 22%→10.7% MAPE, all-4-en-banda 18.5%→28.1%, proteína invariante) y el VPS
+# lo lleva ON vía .env desde 2026-06-15. El default de código quedaba en False → un redeploy con .env limpio
+# (o dev local) revertía SILENCIOSAMENTE al balancing single-factor que distorsiona el split C:F, Y dejaba
+# MUERTO el Guard 4c (post-quant reconcile, default True pero gateado por este AND — gap-audit G4). Alinear
+# el default de código con la config validada de prod cierra ambos. Rollback sin redeploy: =False.
+MACRO_AWARE_RECONCILE = _env_bool("MEALFIT_MACRO_AWARE_RECONCILE", True)
 # [P2-CARB-TARGET-TRIM · 2026-06-15] Cierra la sobre-entrega de carbos medida (carbos +17.5% sobre target,
 # peor en perfiles de bajas calorías). Causa raíz instrumentada: el reconcile nivela carbos al target PERO
 # la cuantización de porciones (FS2) los recomputa desde los ingredientes redondeados, y su piso mínimo
@@ -8535,6 +8551,16 @@ DM2_DOWNGRADE_GLYCEMIC_ONLY = _env_bool("MEALFIT_DM2_DOWNGRADE_GLYCEMIC_ONLY", T
 # alérgenos quedaría ciego sin esto. Default True (over-detección = dirección segura). Flip a False si un
 # campo futuro reusa restrictions/intolerances con semántica de PREFERENCIA (no alérgeno).
 FOLD_RESTRICTION_ALIASES = _env_bool("MEALFIT_FOLD_RESTRICTION_ALIASES", True)
+# [P1-MEDICATION-RULES · 2026-06-18] (audit fresco P1-A) Motor declarativo de interacciones fármaco-
+# alimento (`medication_rules.py`): el formulario captura `medications` (chips, opcional) → directiva al
+# generador (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe) + gate FS9. Safety
+# gate (defensa-en-profundidad clínica) → default True; flip a False desactiva el motor. Anchor: P1-MEDICATION-RULES.
+MEDICATION_RULES_ENABLED = _env_bool("MEALFIT_MEDICATION_RULES", True)
+# [P1-WARFARIN-VITAMIN-K · 2026-06-18] (audit fresco P1-B) Monitor de consistencia de vitamina K para
+# usuarios de anticoagulante (warfarina): adjunta a `plan["medication_review"]` la variabilidad día a día
+# de hoja verde (heurística por nombre — el catálogo no tiene mcg de vit K, follow-up de datos) + advisory.
+# El riesgo de la warfarina es la INCONSISTENCIA, no el valor absoluto. Default True; flip a False lo apaga.
+WARFARIN_VITAMIN_K_GATING = _env_bool("MEALFIT_WARFARIN_VITAMIN_K_GATING", True)
 
 # [P3-DATA-PROVENANCE · 2026-06-14] (Roadmap M1, quick-win) Anclaje de proveniencia: computa qué
 # fracción de los ingredientes del plan está trazada a USDA FoodData Central (columna `fdc_id`, ya
@@ -8591,6 +8617,7 @@ _SAFETY_CRITICAL_KNOBS = (
     ("MEALFIT_PROTEIN_FLOOR_HARD_GATE", lambda: PROTEIN_FLOOR_HARD_GATE),
     ("MEALFIT_DIET_HARD_GUARD", lambda: DIET_HARD_GUARD),  # [P1-DIET-HARD-GUARD] backstop vegano/vegetariano
     ("MEALFIT_DM2_DOWNGRADE_GLYCEMIC_ONLY", lambda: DM2_DOWNGRADE_GLYCEMIC_ONLY),  # [P1-DM2-GLYCEMIC-ONLY]
+    ("MEALFIT_MEDICATION_RULES", lambda: MEDICATION_RULES_ENABLED),  # [P1-MEDICATION-RULES] interacciones fármaco-alimento + FS9
 )
 
 
@@ -11094,6 +11121,49 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                            "perfil de menor de edad.")
         except Exception as _mn_e:
             logger.warning(f"[P1-MINOR-SAFETY-GATE] FS9 wiring error: {type(_mn_e).__name__}: {_mn_e}")
+
+    # ── Guard 8d (FS9 interacciones fármaco-alimento) [P1-MEDICATION-RULES / P1-WARFARIN-VITAMIN-K · 2026-06-18] ──
+    # (audit fresco P1-A/P1-B) Si el perfil declara un medicamento con interacción dietética conocida
+    # (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe), adjunta el bloque
+    # `medication_review` (advisories citables para el PDF) y aplica el gate de revisión profesional (FS9),
+    # AUNQUE no haya condición médica declarada. Para anticoagulantes (P1-B) añade el monitor de
+    # CONSISTENCIA de vitamina K (variabilidad día a día de hoja verde — el riesgo del INR es la
+    # inconsistencia, no el valor absoluto; sin mcg porque el catálogo no tiene la columna). Merge no
+    # destructivo con un `requires_professional_review` previo (renal/condiciones/low-calorie/menor).
+    if MEDICATION_RULES_ENABLED:
+        try:
+            from medication_rules import (detect_active_medications, build_medication_advisories,
+                                          detect_anticoagulant, vitamin_k_consistency)
+            _active_meds = detect_active_medications(form_data)
+            if _active_meds:
+                _med_labels = [r.label for r in _active_meds]
+                _med_review = {"medications": _med_labels,
+                               "advisories": build_medication_advisories(_active_meds)}
+                # P1-B: monitor de consistencia de vit K (solo anticoagulantes).
+                if WARFARIN_VITAMIN_K_GATING and detect_anticoagulant(form_data):
+                    _med_review["vitamin_k_consistency"] = vitamin_k_consistency(plan)
+                plan["medication_review"] = _med_review
+                # FS9: las interacciones fármaco-alimento ameritan coordinación médica/farmacéutica.
+                _med_note = ("💊 MEDICAMENTOS + ALIMENTACIÓN: declaraste medicamento(s) con interacción "
+                             "dietética conocida (" + ", ".join(_med_labels) + "). Este plan da pautas "
+                             "generales; el ajuste fino (dosis, timing, INR/potasio) lo define tu médico o "
+                             "farmacéutico. Consúltalo antes de cambios.")
+                _existing_med = plan.get("requires_professional_review")
+                if isinstance(_existing_med, dict) and _existing_med.get("flag"):
+                    if _med_note not in (_existing_med.get("note") or ""):
+                        _existing_med["note"] = ((_existing_med.get("note") or "") + " " + _med_note).strip()
+                    _existing_med["medication_interaction"] = True
+                else:
+                    plan["requires_professional_review"] = {
+                        "flag": True,
+                        "conditions": [],
+                        "medication_interaction": True,
+                        "note": _med_note,
+                    }
+                logger.warning("💊 [P1-MEDICATION-RULES] gate de revisión profesional (FS9) aplicado por "
+                               f"interacción fármaco-alimento: {', '.join(_med_labels)}")
+        except Exception as _med_e:
+            logger.warning(f"[P1-MEDICATION-RULES] Guard 8d error: {type(_med_e).__name__}: {_med_e}")
 
     # ── Guard 8z (P2-MACRO-TRUTHUP · 2026-06-16, gap-audit P2-5): recompute del NÚMERO de macros desde los
     # strings FINALES de ingredientes. Corre DESPUÉS de quant/carb-trim/post-quant-reconcile (todos reescriben

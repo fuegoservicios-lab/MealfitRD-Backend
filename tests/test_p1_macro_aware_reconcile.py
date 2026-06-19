@@ -117,11 +117,16 @@ def test_reconcile_failsafe_on_bad_db(go):
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-# C. Parser anchor + knob default OFF (cero impacto en prod hasta validar)
+# C. Parser anchor + knob default ON [P1-MACRO-RECONCILE-DEFAULT · 2026-06-18, audit fresco P1-C]
 # ════════════════════════════════════════════════════════════════════════════════════════════════
-def test_knob_default_off_and_marker(go):
-    assert go.MACRO_AWARE_RECONCILE is False, "el knob DEBE estar OFF por default (rollout validate-first)"
+def test_knob_default_on_and_marker(go):
+    # [P1-MACRO-RECONCILE-DEFAULT · 2026-06-18] Default flipeado OFF→ON: el A/B OFF-vs-ON ya se validó
+    # (grasas 22%→10.7% MAPE, all-4-en-banda 18.5%→28.1%) y el VPS lo lleva ON vía .env desde 2026-06-15.
+    # El default de código en False dejaba el reconcile multi-macro Y el Guard 4c (post-quant, gateado por
+    # este AND) MUERTOS en un redeploy con .env limpio o en dev local.
+    assert go.MACRO_AWARE_RECONCILE is True, "el knob DEBE estar ON por default (A/B validado, prod ya ON)"
     from pathlib import Path
     src = Path(go.__file__).read_text(encoding="utf-8")
     assert "P1-MACRO-AWARE-RECONCILE" in src
+    assert "P1-MACRO-RECONCILE-DEFAULT" in src
     assert "def _macro_aware_day_reconcile(" in src
