@@ -73,6 +73,16 @@ _RAW_UPDATE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# [P2-RAW-UPDATE-MULTILINE · 2026-06-18] (audit fresco P2) Detección statement-aware (no línea-por-línea):
+# el regex de una sola línea era CIEGO a la forma multilínea `UPDATE meal_plans\n  SET plan_data = %s` (mismo
+# blind-spot que NG-4 cerró en test_p2_new_8). Buscamos el INICIO `UPDATE meal_plans`, tomamos una ventana del
+# statement y verificamos un full-overwrite `plan_data = %s`. `_PLAN_DATA_OVERWRITE_RE` NO matchea
+# `jsonb_set(plan_data, ...)` (coma, no `=`) ni el merge `plan_data = plan_data || %s` (tras `=` viene
+# `plan_data`, no `%s`) — ambos exentos de I7.
+_UPDATE_MEAL_PLANS_START_RE = re.compile(r"UPDATE\s+meal_plans(?=\s|$)", re.IGNORECASE)
+_PLAN_DATA_OVERWRITE_RE = re.compile(r"\bplan_data\s*=\s*%s", re.IGNORECASE)
+_MAX_STMT_LINES = 50
+
 # Whitelist marker inline.
 _WHITELIST_RE = re.compile(
     r"#\s*\[P3-NEXT-3\s+WHITELIST\s*:\s*(?P<reason>.+?)\]",
@@ -96,16 +106,31 @@ def _iter_backend_py_files():
         yield path
 
 
+def _statement_window(lines: list[str], idx: int) -> str:
+    """Concatena desde `lines[idx]` hasta el fin del statement (`;` o cierre de string triple) o
+    `_MAX_STMT_LINES` líneas — captura el `SET plan_data = %s` aunque esté en la línea siguiente al UPDATE."""
+    chunk: list[str] = []
+    for j in range(idx, min(len(lines), idx + _MAX_STMT_LINES)):
+        chunk.append(lines[j])
+        if ";" in lines[j] or '"""' in lines[j] or "'''" in lines[j]:
+            break
+    return "\n".join(chunk)
+
+
 def _find_raw_updates(lines: list[str]) -> list[tuple[int, str]]:
-    """Devuelve [(line_no, snippet)] de matches al patrón."""
+    """[P2-RAW-UPDATE-MULTILINE] Devuelve [(line_no, snippet)] de full-overwrites
+    `UPDATE meal_plans ... SET plan_data = %s` — statement-aware (cubre formas multilínea)."""
     matches: list[tuple[int, str]] = []
-    for idx, line in enumerate(lines, start=1):
+    for idx, line in enumerate(lines):
         stripped = line.strip()
         # Saltar comentarios y docstrings de una línea.
         if stripped.startswith("#"):
             continue
-        if _RAW_UPDATE_RE.search(line):
-            matches.append((idx, stripped))
+        if not _UPDATE_MEAL_PLANS_START_RE.search(line):
+            continue
+        window = _statement_window(lines, idx)
+        if _PLAN_DATA_OVERWRITE_RE.search(window):
+            matches.append((idx + 1, stripped))
     return matches
 
 

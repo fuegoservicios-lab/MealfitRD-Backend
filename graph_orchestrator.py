@@ -10052,7 +10052,12 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
             ings[idx] = quant
             raw = m.get("ingredients_raw")
             if isinstance(raw, list) and len(raw) == len(ings):
-                raw[idx] = _resc(str(raw[idx]), factor)
+                # [P2-CARB-TRIM-RAW-LOCKSTEP · 2026-06-18] (audit fresco P2) El factor TOTAL de `ings[idx]`
+                # (orig→quant) es `factor × _f` (el escalado al target + el re-snap a cocinable). `raw` debe
+                # escalarse por el MISMO factor efectivo, no solo por `factor` — si no, la lista de compras
+                # (que prefiere ingredients_raw) diverge en magnitud de la receta cuantizada. Espejo del
+                # lockstep de _apply_portion_quantization.
+                raw[idx] = _resc(str(raw[idx]), factor * _f)
             applied = True
         return applied
     except Exception as e:
@@ -13944,7 +13949,20 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 )
                 severity = _severity_max(severity, "critical")
         except Exception as _dv_e:
-            logger.warning(f"[P1-DIET-HARD-GUARD] scan de dieta falló: {type(_dv_e).__name__}: {_dv_e}")
+            # [P2-DIET-SCAN-FAIL-SECURE · 2026-06-18] (audit fresco P2) FAIL-SECURE, no fail-open: si el scan
+            # de dieta lanza, NO podemos certificar que el plan respeta la restricción veg* → escalamos a
+            # crítico (igual que el allergen guard hermano, que ni siquiera está envuelto en try/except).
+            # Antes el except solo logueaba un warning → un fallo de esta capa determinista pasaba en silencio.
+            _had_diet_critical = True
+            approved = False
+            issues.append(
+                "DIETA NO VERIFICABLE (rechazo de seguridad): no se pudo verificar que el plan respeta la "
+                f"dieta '{form_data.get('dietType')}' declarada (error en el verificador). Regenera el plan "
+                "asegurando que NO contenga productos animales incompatibles."
+            )
+            severity = _severity_max(severity, "critical")
+            logger.error(f"🛑 [P2-DIET-SCAN-FAIL-SECURE] scan de dieta falló → escalado a crítico fail-secure: "
+                         f"{type(_dv_e).__name__}: {_dv_e}")
 
     # [P3-PROTEIN-FLOOR · 2026-06-13] Validador DURO de piso de proteína: si algún día entrega
     # < HARD_PCT del target diario → rechazo → regen con directiva. Cierra el déficit sistémico
@@ -18065,6 +18083,25 @@ def _compute_pipeline_holistic_score_and_emit(
                         "metadata": {"count": len(_low_cov), "meals": _low_cov[:10],
                                      "delivered_was_fallback": delivered_was_fallback},
                     })
+                # [P2-RESOLUTION-COVERAGE-METRIC · 2026-06-18] (audit fresco P2) Emite resolution_coverage.pct
+                # a pipeline_metrics (antes solo se persistía en `plan`) → habilita el cron de DRIFT de
+                # cobertura de flota (`_resolution_coverage_drift_alert_job`), análogo data-layer de
+                # clinical_band_drift. Solo non-fallback (el fallback no resuelve ingredientes del LLM).
+                _rc_cov = plan.get("resolution_coverage")
+                if (isinstance(_rc_cov, dict) and _rc_cov.get("pct") is not None
+                        and not delivered_was_fallback):
+                    try:
+                        _emit_progress(initial_state, "metric", {
+                            "node": "resolution_coverage",
+                            "duration_ms": int(pipeline_duration * 1000),
+                            "retries": final_state.get("attempt", 1) - 1,
+                            "tokens_estimated": 0,
+                            "confidence": float(_rc_cov.get("pct")),
+                            "metadata": {"resolved": _rc_cov.get("resolved"), "total": _rc_cov.get("total"),
+                                         "delivered_was_fallback": delivered_was_fallback},
+                        })
+                    except (TypeError, ValueError):
+                        pass
             except Exception as _cbs_e:
                 logger.warning(f"[P4-SCOREBOARD] emit del band score falló: {type(_cbs_e).__name__}: {_cbs_e}")
 
@@ -19730,6 +19767,20 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 except Exception as _fcl5_e:
                     logger.warning(f"[P3-FALLBACK-CLINICAL-LAYER] capa clínica sobre fallback P1-5 "
                                    f"falló (no bloquea el return): {type(_fcl5_e).__name__}: {_fcl5_e}")
+            # [P2-P1-5-BAND-METRIC · 2026-06-18] (audit fresco P2) El emit de arriba corrió con plan_result
+            # None/empty → short-circuit (gate `if plan and isinstance(plan, dict)`), sin métrica clinical_band.
+            # Re-emitimos sobre el fallback P1-5 para que esta entrega CUENTE en plan_fallback_rate_high
+            # (delivered_was_fallback=true) — si no, una ráfaga de este path subestima la tasa de fallback.
+            # Fail-safe: no debe tumbar el return.
+            try:
+                final_state["plan_result"] = plan_to_return
+                _compute_pipeline_holistic_score_and_emit(
+                    final_state, nutrition=nutrition, actual_form_data=actual_form_data,
+                    initial_state=initial_state, pipeline_duration=pipeline_duration,
+                )
+            except Exception as _p15m_e:
+                logger.warning(f"[P2-P1-5-BAND-METRIC] re-emit de métrica band sobre fallback P1-5 falló: "
+                               f"{type(_p15m_e).__name__}: {_p15m_e}")
 
         # [P3-NEW-8 · 2026-05-11] Validador runtime de tipos/rangos del
         # contrato. Best-effort log-only — NUNCA raise (el caller espera

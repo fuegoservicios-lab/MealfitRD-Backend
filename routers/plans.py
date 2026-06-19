@@ -2539,6 +2539,17 @@ def api_analyze(
         # con la misma referencia → el usuario veía "Fallback: pollo y arroz" por
         # una semana. Mejor: 503 con mensaje claro para que reintente.
         if isinstance(result, dict) and result.get("_is_fallback"):
+            # [P2-CRITICAL-REJECTION-CODE · 2026-06-18] (audit fresco P2) Rechazo crítico (alérgeno/condición):
+            # 422 con mensaje accionable ("revisa tus restricciones"), NO 503 "IA saturada" (reintentar no
+            # resuelve una restricción fija). El plan NO se entrega. Anchor: P2-CRITICAL-REJECTION-CODE.
+            if result.get("_critical_rejection"):
+                _crit_msg = result.get("_review_disclaimer") or (
+                    "No pudimos generar un plan que respete tus restricciones declaradas (alergia o "
+                    "condición de salud). Revisa tus restricciones e intenta de nuevo.")
+                logger.warning(
+                    f"🛑 [FALLBACK-GUARD] Rechazo crítico (restricción declarada). Devolviendo 422 sin "
+                    f"persistir. user={actual_user_id or 'guest'}")
+                raise HTTPException(status_code=422, detail=_crit_msg)
             # [P1-SPEND-CAP-ALERT · 2026-05-28] Distinguir spending-cap (persistente)
             # de saturación transitoria: el mensaje "intenta en 1-2 min" es FALSO
             # cuando el cap mensual de Gemini está agotado (reintentar no ayuda).
@@ -3324,6 +3335,22 @@ async def api_analyze_stream(
                             # chunks. Emitir error SSE para que el frontend muestre
                             # "intenta de nuevo" en lugar de un plan basura permanente.
                             if isinstance(result, dict) and result.get("_is_fallback"):
+                                # [P2-CRITICAL-REJECTION-CODE · 2026-06-18] (audit fresco P2) Un rechazo
+                                # CRÍTICO (alérgeno/condición declarada que la IA no logró satisfacer) viene
+                                # con `_is_fallback=True` + `_critical_rejection=True`. El mensaje genérico
+                                # "IA saturada, intenta en 1-2 min" es ENGAÑOSO aquí: reintentar NO resuelve
+                                # una restricción fija del usuario. Emitimos un code distinto + el disclaimer
+                                # ("revisa tus restricciones"). El plan NO se entrega (seguro: ningún alérgeno
+                                # llega al usuario). Anchor: P2-CRITICAL-REJECTION-CODE.
+                                if result.get("_critical_rejection"):
+                                    _crit_msg = result.get("_review_disclaimer") or (
+                                        'No pudimos generar un plan que respete tus restricciones declaradas '
+                                        '(alergia o condición de salud). Revisa tus restricciones e intenta de nuevo.')
+                                    logger.warning(
+                                        f"🛑 [FALLBACK-GUARD/SSE] Rechazo crítico (restricción declarada). "
+                                        f"No se persiste. user={actual_user_id or 'guest'}")
+                                    yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'critical_restriction', 'message': _crit_msg}})}\n\n"
+                                    break
                                 # [P1-SPEND-CAP-ALERT · 2026-05-28] Mensaje honesto
                                 # cuando el fallback fue por spending-cap de Gemini:
                                 # "intenta en 1-2 min" es falso (reintentar no ayuda
@@ -10194,6 +10221,10 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
                 snap = json.loads(snap)
             snap.pop("_degraded", None)
 
+            # [P2-REGEN-CHUNK-USER-SCOPE · 2026-06-18] (audit fresco P2) Defense-in-depth: el WHERE filtra
+            # también por user_id (subquery), espejo de /retry-chunk (P0-HIST-IDOR-1). El ownership ya se
+            # validó arriba (plan_row + guard 401 P1-REGEN-AUTH-GATE), pero si un refactor rompe el check
+            # upstream, este candado de segundo nivel evita re-encolar chunks de un plan ajeno.
             execute_sql_write("""
                 UPDATE plan_chunk_queue
                 SET status = 'pending',
@@ -10204,7 +10235,9 @@ def api_regen_degraded_chunks(plan_id: str, verified_user_id: Optional[str] = De
                     escalated_at = NOW(),
                     updated_at = NOW()
                 WHERE id = %s
-            """, (json.dumps(snap, ensure_ascii=False), ch["id"]))
+                  AND meal_plan_id = %s
+                  AND meal_plan_id IN (SELECT id FROM meal_plans WHERE user_id = %s)
+            """, (json.dumps(snap, ensure_ascii=False), ch["id"], plan_id, verified_user_id))
             regenerated += 1
 
         # 4. Marcar plan como partial para que el frontend retome polling

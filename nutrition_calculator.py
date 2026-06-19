@@ -26,8 +26,13 @@ except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-s
 # → gate de revisión profesional (FS9) aguas abajo. Auto-registrado en _KNOBS_REGISTRY. Anchor: P1-MIN-CALORIE-FLOOR.
 try:
     from knobs import _env_int as _nc_env_int
-    MIN_TARGET_KCAL_FEMALE = _nc_env_int("MEALFIT_MIN_TARGET_KCAL_FEMALE", 1200)
-    MIN_TARGET_KCAL_MALE = _nc_env_int("MEALFIT_MIN_TARGET_KCAL_MALE", 1500)
+    # [P2-MIN-KCAL-KNOB-CLAMP · 2026-06-18] (audit fresco P2) `validator=` rango [800, 4000]: un valor
+    # inválido (0, typo "120", negativo) NO debe desactivar/degradar SILENCIOSAMENTE el piso clínico de
+    # calorías — cae al default seguro + marca parse_failed (visible en /health/version). Es el único guard
+    # de seguridad de esta dimensión que sin clamp podía romperse por un número fuera de rango sin parse-error.
+    _MIN_KCAL_RANGE = lambda v: 800 <= v <= 4000  # noqa: E731 (lambda inline, consistente con otros knobs)
+    MIN_TARGET_KCAL_FEMALE = _nc_env_int("MEALFIT_MIN_TARGET_KCAL_FEMALE", 1200, validator=_MIN_KCAL_RANGE)
+    MIN_TARGET_KCAL_MALE = _nc_env_int("MEALFIT_MIN_TARGET_KCAL_MALE", 1500, validator=_MIN_KCAL_RANGE)
 except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a defaults clínicos
     MIN_TARGET_KCAL_FEMALE = 1200
     MIN_TARGET_KCAL_MALE = 1500
@@ -54,7 +59,7 @@ def _min_target_kcal(gender) -> int:
     resuelve al piso de hombre (1500) — consistente con `calculate_bmr`, que usa el mismo default male.
     Anchor: P1-MIN-CALORIE-FLOOR."""
     g = str(gender or "").strip().lower()
-    if g in ("male", "masculino", "hombre", "m"):
+    if g in ("male", "masculino", "masculina", "hombre", "m"):  # 'masculina' por simetría
         return MIN_TARGET_KCAL_MALE
     return MIN_TARGET_KCAL_FEMALE
 
@@ -106,11 +111,19 @@ def calculate_bmr(weight_kg: float, height_cm: float, age: int, gender: str, bod
         bmr = 370 + (21.6 * lean_body_mass)
     else:
         # Mifflin-St Jeor
-        if gender.lower() in ["male", "masculino", "m", "hombre"]:
+        _g = str(gender or "").strip().lower()  # None-safe (un caller interno podría pasar gender=None)
+        if _g in ("male", "masculino", "masculina", "m", "hombre"):  # 'masculina' por simetría con femenino/femenina
             bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5
         else:
+            # [P2-GENDER-ENUM-WARN · 2026-06-18] (audit fresco P2) El else aplica la ecuación FEMENINA; un
+            # `gender` no reconocido (other/no-binario/typo/'') cae aquí en SILENCIO con un sesgo de ~-166 kcal.
+            # Warneamos para observabilidad (mismo patrón P0-FORM-5 de activity/goal): el path normal pasa el
+            # enum del router; un warning aquí señala caller interno (cron/agent/perfil legacy) o drift de schema.
+            if _g not in ("female", "femenino", "femenina", "f", "mujer"):
+                logger.warning(f"[P2-GENDER-ENUM-WARN] gender={gender!r} no reconocido (ni male ni female) — "
+                               f"se aplica la ecuación/piso femenino por default.")
             bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) - 161
-    
+
     return int(round(bmr))
 
 
@@ -186,21 +199,30 @@ def apply_goal_adjustment(tdee: float, goal: str) -> int:
     return int(round(target_calories / 50) * 50)
 
 
+# [P2-SOLVER-KNOBS-REGISTRY · 2026-06-18] (audit fresco P2) Lectura module-level vía `_env_float`
+# (auto-registra en _KNOBS_REGISTRY → visible en /health/version); antes os.environ crudo per-call eludía
+# el registry. El clamp [1.6, 3.0] se preserva en la función. Fail-safe a 2.2.
+try:
+    from knobs import _env_float as _nc_env_float
+    _PROTEIN_CEILING_RAW = _nc_env_float("MEALFIT_PROTEIN_CEILING_G_PER_KG", 2.2)
+except Exception:  # pragma: no cover - knobs siempre disponible en prod
+    _PROTEIN_CEILING_RAW = 2.2
+
+
 def _protein_ceiling_g_per_kg() -> float:
     """[C1-PROTEIN-CEILING · 2026-06-13] Techo clínico de proteína por kg de peso corporal.
     Knob `MEALFIT_PROTEIN_CEILING_G_PER_KG` (default 2.2, clamp [1.6, 3.0]). Posición ISSN:
     1.6-2.2 g/kg cubre ganancia/preservación de músculo; >2.4 no aporta beneficio adicional
     y es difícil de cumplir dentro del presupuesto calórico. El split por % de calorías
     (30% para gain_muscle) puede dar 2.8+ g/kg en personas livianas con TDEE alto."""
-    import os
     try:
-        v = float(os.environ.get("MEALFIT_PROTEIN_CEILING_G_PER_KG", "2.2"))
+        return max(1.6, min(3.0, float(_PROTEIN_CEILING_RAW)))
     except (TypeError, ValueError):
         return 2.2
-    return max(1.6, min(3.0, v))
 
 
-def calculate_macros(target_calories: int, goal: str, weight_kg: float = None) -> dict:
+def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
+                     body_fat_pct: float = None) -> dict:
     """
     Calcula los gramos exactos de cada macronutriente basándose en:
     - Proteína: 4 cal/g
@@ -212,6 +234,11 @@ def calculate_macros(target_calories: int, goal: str, weight_kg: float = None) -
     redistribuyen a carbohidratos (el macro flexible). Sin esto, el % de calorías producía
     targets de 2.8+ g/kg (inalcanzables sin sobre-cargar proteína en cada comida y reñidos
     con el presupuesto calórico → el plan quedaba sistemáticamente corto). Anchor: C1-PROTEIN-CEILING.
+
+    [P2-PROTEIN-CEILING-ADJ-WEIGHT · 2026-06-18] (audit fresco P2) Si `body_fat_pct` > 30 (obesidad), el
+    techo se calcula sobre el PESO AJUSTADO (LBM + 0.25×(peso−LBM)), no el peso total: 2.2 g/kg × peso total
+    sobre-prescribe en obesidad (ej. 150 kg/45% grasa → 330 g/día). La práctica clínica usa peso ajustado/masa
+    magra. Sin `body_fat_pct` o ≤30% se mantiene el peso total (comportamiento previo, cero regresión).
     """
     split = MACRO_SPLITS.get(goal, MACRO_SPLITS["maintenance"])
 
@@ -221,16 +248,21 @@ def calculate_macros(target_calories: int, goal: str, weight_kg: float = None) -
 
     protein_g = protein_cals / 4.0
     if weight_kg and weight_kg > 0:
-        ceiling_g = _protein_ceiling_g_per_kg() * float(weight_kg)
+        _ceiling_wkg = float(weight_kg)
+        if body_fat_pct and body_fat_pct > 30:
+            _lbm = float(weight_kg) * (1 - (float(body_fat_pct) / 100.0))
+            _ceiling_wkg = _lbm + 0.25 * (float(weight_kg) - _lbm)  # peso ajustado (obesidad)
+        ceiling_g = _protein_ceiling_g_per_kg() * _ceiling_wkg
         if protein_g > ceiling_g:
             freed_cals = (protein_g - ceiling_g) * 4.0
             protein_g = ceiling_g
             protein_cals = protein_g * 4.0
             carbs_cals += freed_cals  # redistribuir a carbos (macro flexible)
+            _wlabel = "ajustado" if abs(_ceiling_wkg - float(weight_kg)) > 0.05 else "total"
             logger.info(
                 f"🩺 [C1-PROTEIN-CEILING] Proteína capeada a {_protein_ceiling_g_per_kg()} g/kg "
-                f"× {weight_kg}kg = {round(protein_g)}g (era {round(target_calories * split['protein_pct'] / 4)}g); "
-                f"{round(freed_cals)} kcal → carbos."
+                f"× {round(_ceiling_wkg, 1)}kg ({_wlabel}) = {round(protein_g)}g "
+                f"(era {round(target_calories * split['protein_pct'] / 4)}g); {round(freed_cals)} kcal → carbos."
             )
 
     return {
@@ -1199,10 +1231,11 @@ def get_nutrition_targets(form_data: dict) -> dict:
     # Preservar el cálculo original para el Dashboard
     original_target_calories = target_calories
     # [C1-PROTEIN-CEILING] `weight` (kg) → techo clínico de proteína por peso corporal.
-    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight)
+    # [P2-PROTEIN-CEILING-ADJ-WEIGHT] `body_fat` → peso ajustado para el techo en obesidad (>30% grasa).
+    original_macros = calculate_macros(original_target_calories, goal, weight_kg=weight, body_fat_pct=body_fat)
 
     # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS para la IA
-    macros = calculate_macros(target_calories, goal, weight_kg=weight)
+    macros = calculate_macros(target_calories, goal, weight_kg=weight, body_fat_pct=body_fat)
     
     # Descripción legible del objetivo
     goal_labels = {

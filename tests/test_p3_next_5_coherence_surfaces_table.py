@@ -43,14 +43,17 @@ _BACKEND = _REPO_ROOT / "backend"
 _CLAUDE_MD = _BACKEND / "docs" / "coherence_surfaces_table.md"
 
 # action_taken values esperados que el código DEBE emitir y la tabla
-# DEBE mencionar. Estos son los 6 valores canónicos post-P2-NEXT-2.
+# DEBE mencionar. 8 valores canónicos: 6 post-P2-NEXT-2 + 2 del audit fresco 2026-06-18
+# (warn_only_pantry_supplement, warn_only_recovery_gap_f).
 _CANONICAL_ACTION_TAKEN_VALUES = {
-    "not_applicable",         # assemble_plan_node mode=warn / block-no-critical
-    "post_swap_revalidation", # _recompute_aggregates_after_swap
-    "warn_only_chunk_t2",     # _chunk_worker T2 (P1-NEXT-2)
-    "warn_only_recalc",       # /recalculate-shopping-list (P1-NEXT-2)
-    "warn_only_agent_tool",   # tools.modify_single_meal (P1-NEXT-2)
-    "warn_only_cron_daily",   # _shopping_coherence_alert_job (P2-NEXT-2)
+    "not_applicable",            # assemble_plan_node mode=warn / block-no-critical
+    "post_swap_revalidation",    # _recompute_aggregates_after_swap
+    "warn_only_chunk_t2",        # _chunk_worker T2 (P1-NEXT-2)
+    "warn_only_recalc",          # /recalculate-shopping-list (P1-NEXT-2)
+    "warn_only_agent_tool",      # tools.modify_single_meal (P1-NEXT-2)
+    "warn_only_cron_daily",      # _shopping_coherence_alert_job (P2-NEXT-2)
+    "warn_only_pantry_supplement",  # _persist/_clear_pantry_supplement (P2-COHERENCE-PANTRY-SUPPLEMENT, audit fresco)
+    "warn_only_recovery_gap_f",     # _process_pending_shopping_lists (P2-COHERENCE-RECOVERY-GAP-F, audit fresco)
 }
 
 # Archivos donde los action_taken DEBEN aparecer como string literal.

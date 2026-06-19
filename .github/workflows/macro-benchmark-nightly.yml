@@ -1,0 +1,65 @@
+# [gap-audit G13 · 2026-06-15 · relocado P2-NIGHTLY-WORKFLOW-RELOCATE 2026-06-18] Job NIGHTLY de
+# no-regresión de precisión de macros.
+#
+# Cierra el gap "una regresión de precisión (cambio de modelo/solver/reconcile/catálogo/condition_rules)
+# es invisible hasta un audit manual". El mínimo fixture-based (test_p4_scoreboard.py) YA corre en el CI
+# estándar (sin LLM); ESTE job es el gate E2E que NO puede correr en el CI normal (necesita DEEPSEEK_API_KEY
+# + Neon). Corre el benchmark contra el set held-out y FALLA si la precisión regresa más allá de la tolerancia
+# vs el baseline commiteado (backend/tests/fixtures/macro_baseline.json).
+#
+# [P2-NIGHTLY-WORKFLOW-RELOCATE · 2026-06-18] (audit fresco P2) Este archivo vivía SOLO en el workspace-root
+# `.github/workflows/` (no versionado — el workspace-root no es repo git) → GitHub Actions del repo backend
+# nunca lo ejecutaba. Copiado a `backend/.github/workflows/` (mismo dir + convención de paths `backend/...`
+# que `ci.yml`) para que sea alcanzable por Actions. Anclado por test_p2_macro_benchmark_nightly_workflow.py.
+#
+# ACTIVACIÓN (pendiente del owner): configurar los secrets DEEPSEEK_API_KEY / NEON_DATABASE_URL_POOLED /
+# NEON_DATABASE_URL / COHERE_API_KEY en el repo. Sin ellos el job se auto-salta (no falla). Tras estabilizar
+# G4/G6, refrescar macro_baseline.json con una corrida N=20 y bajar las tolerancias.
+name: macro-benchmark-nightly
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # 03:00 America/Santo_Domingo (UTC-4) aprox.
+  workflow_dispatch: {}
+
+jobs:
+  macro-precision-no-regression:
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+      NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      NEON_DATABASE_URL_POOLED: ${{ secrets.NEON_DATABASE_URL_POOLED }}
+      MEALFIT_DB_BACKEND: neon
+      MEALFIT_MACRO_SOLVER_ENABLED: "true"
+      MEALFIT_MACRO_AWARE_RECONCILE: "true"
+      MEALFIT_MACRO_POSTQUANT_RECONCILE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Guard — skip si no hay secrets configurados
+        id: guard
+        run: |
+          if [ -z "$DEEPSEEK_API_KEY" ] || [ -z "$NEON_DATABASE_URL_POOLED" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Secrets ausentes (DEEPSEEK_API_KEY / NEON_DATABASE_URL_POOLED) — job auto-saltado."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.skip == 'false'
+        with:
+          python-version: "3.12"
+      - name: Install backend deps
+        if: steps.guard.outputs.skip == 'false'
+        # [P2-NIGHTLY-WORKFLOW-RELOCATE review] Paths ROOT-relative: en el repo backend
+        # (origin MealfitRD-Backend) la raíz del checkout ES el backend (app.py/scripts/tests/
+        # requirements.txt en raíz, sin subdir `backend/`). Un prefijo `backend/` resolvería a
+        # `backend/backend/...` y fallaría al activar los secrets.
+        run: pip install -q -r requirements.txt
+      - name: Benchmark de precisión + gate de no-regresión vs baseline
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          PYTHONPATH=. python scripts/benchmark_macro_compliance.py 20 \
+            --concurrency 2 \
+            --baseline tests/fixtures/macro_baseline.json \
+            --max-mape-rise 5 --max-band-drop 10

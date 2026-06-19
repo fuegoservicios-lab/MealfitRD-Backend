@@ -5638,6 +5638,196 @@ def _plan_fallback_rate_alert_job():
             pass
 
 
+def _resolution_coverage_drift_alert_job():
+    """[P2-RESOLUTION-COVERAGE-DRIFT · 2026-06-18] (audit fresco P2) Cron de DRIFT de cobertura del resolver
+    de macros a nivel FLOTA — el análogo data-layer de `clinical_band_drift`. Promedia
+    `resolution_coverage.pct` (métrica `resolution_coverage` de pipeline_metrics, emitida por-plan non-fallback
+    en el orquestador) de las últimas N horas y emite `resolution_coverage_drift` si cae bajo el umbral con
+    muestra mínima. Cierra el blind-spot: el gate per-plan (RESOLUTION_COVERAGE_FLOOR=0.7) solo marca un plan
+    individual <0.7; un deslizamiento gradual de la p50 de flota (más platos criollos compuestos no-resueltos,
+    o un catálogo roto) nunca lo dispara. Auto-resuelve (modelo Auto-implicit). Emite tick observable siempre.
+
+    Knobs: MEALFIT_RESCOV_DRIFT_LOOKBACK_H (24, clamp [1,168]), MEALFIT_RESCOV_DRIFT_MIN_SAMPLES (10,
+    clamp [1,10000]), MEALFIT_RESCOV_DRIFT_THRESHOLD (0.85), MEALFIT_RESCOV_DRIFT_INTERVAL_H (6, clamp [1,48]).
+    Tooltip-anchor: P2-RESOLUTION-COVERAGE-DRIFT."""
+    alert_key = "resolution_coverage_drift"
+    lookback_h = max(1, min(_env_int("MEALFIT_RESCOV_DRIFT_LOOKBACK_H", 24), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_RESCOV_DRIFT_MIN_SAMPLES", 10), 10_000))
+    threshold = _env_float("MEALFIT_RESCOV_DRIFT_THRESHOLD", 0.85)
+    _n = 0
+    _avg = None
+    _alert_emitted = False
+    _skip = None
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT confidence FROM pipeline_metrics
+             WHERE node = 'resolution_coverage'
+               AND created_at > NOW() - (%s || ' hours')::interval
+               AND confidence IS NOT NULL
+            """,
+            (str(lookback_h),),
+            fetch_all=True,
+        ) or []
+        vals = []
+        for r in rows:
+            try:
+                vals.append(float(r.get("confidence")))
+            except (TypeError, ValueError):
+                continue
+        _n = len(vals)
+        if _n < min_samples:
+            _skip = f"insufficient_samples ({_n}<{min_samples})"
+        else:
+            _avg = round(sum(vals) / _n, 3)
+            if _avg < threshold:
+                execute_sql_write(
+                    """
+                    INSERT INTO system_alerts
+                        (alert_key, alert_type, severity, title, message, metadata)
+                    VALUES (%s, 'precision_drift', 'warning', %s, %s, %s::jsonb)
+                    ON CONFLICT (alert_key) DO UPDATE
+                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    """,
+                    (
+                        alert_key,
+                        "Cobertura del resolver de macros bajó del umbral (flota)",
+                        f"La cobertura promedio del resolver de las últimas {lookback_h}h es {_avg} "
+                        f"(< umbral {threshold}) sobre {_n} planes no-fallback. Más ingredientes no resuelven "
+                        f"al catálogo (0-silencioso) → precisión de macros degradándose. Revisar catálogo/"
+                        f"resolver o un shift hacia platos criollos compuestos.",
+                        json.dumps({"avg_coverage": _avg, "n_plans": _n, "lookback_h": lookback_h,
+                                    "threshold": threshold}, ensure_ascii=False),
+                    ),
+                )
+                _alert_emitted = True
+                logger.warning(
+                    f"🚨 [P2-RESOLUTION-COVERAGE-DRIFT] cobertura promedio {_avg} < {threshold} sobre {_n} "
+                    f"planes ({lookback_h}h) → alert `{alert_key}` emitido")
+            else:
+                execute_sql_write(
+                    "UPDATE system_alerts SET resolved_at = NOW() "
+                    "WHERE alert_key = %s AND resolved_at IS NULL",
+                    (alert_key,),
+                )
+                logger.info(
+                    f"📚 [P2-RESOLUTION-COVERAGE-DRIFT] cobertura promedio {_avg} OK "
+                    f"(≥ {threshold}, {_n} planes / {lookback_h}h)")
+    except Exception as e:
+        logger.error(f"❌ [P2-RESOLUTION-COVERAGE-DRIFT] cron de drift de cobertura falló: "
+                     f"{type(e).__name__}: {e}")
+    finally:
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata)
+                VALUES ('_resolution_coverage_drift_alert_job_tick', 0, 0, 0, %s, %s::jsonb)
+                """,
+                (_avg if _avg is not None else -1.0,
+                 json.dumps({"n_plans": _n, "avg_coverage": _avg, "alert_emitted": _alert_emitted,
+                             "skip_reason": _skip, "threshold": threshold, "lookback_h": lookback_h},
+                            ensure_ascii=False)),
+            )
+        except Exception:
+            pass
+
+
+def _review_failed_delivered_rate_alert_job():
+    """[P2-REVIEW-FAILED-RATE · 2026-06-18] (audit fresco P2) Cron de TASA de entregas DEGRADADAS no-fallback
+    del pipeline inicial. Cuenta la fracción de planes entregados NO-fallback que fallaron el review
+    (`review_passed='false'`) sobre la métrica `clinical_band` de las últimas N horas, y emite
+    `review_failed_delivered_rate_high` si supera el umbral con muestra mínima. Cierra el blind-spot: el modo
+    de fallo "plan entregado tras rechazo no-crítico (variedad/repetición/skeleton-fidelity), buenas macros →
+    band alto" NO baja `clinical_band_drift` (band alto) ni `plan_fallback_rate_high` (no es fallback); solo
+    emitía el alert per-plan `plan_quality_degraded:*` (sin umbral de tasa, auto-resuelve a 60min). Auto-
+    resuelve (Auto-implicit). Tick observable siempre.
+
+    Knobs: MEALFIT_REVFAIL_RATE_LOOKBACK_H (24, clamp [1,168]), MEALFIT_REVFAIL_RATE_MIN_SAMPLES (10,
+    clamp [1,10000]), MEALFIT_REVFAIL_RATE_THRESHOLD (0.20), MEALFIT_REVFAIL_RATE_INTERVAL_H (6, clamp [1,48]).
+    Tooltip-anchor: P2-REVIEW-FAILED-RATE."""
+    alert_key = "review_failed_delivered_rate_high"
+    lookback_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_LOOKBACK_H", 24), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_MIN_SAMPLES", 10), 10_000))
+    threshold = _env_float("MEALFIT_REVFAIL_RATE_THRESHOLD", 0.20)
+    _n = 0
+    _rf = 0
+    _rate = None
+    _alert_emitted = False
+    _skip = None
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT COUNT(*) AS delivered,
+                   COUNT(*) FILTER (WHERE metadata->>'review_passed' = 'false') AS review_failed
+              FROM pipeline_metrics
+             WHERE node = 'clinical_band'
+               AND created_at > NOW() - (%s || ' hours')::interval
+               AND COALESCE(metadata->>'delivered_was_fallback', 'false') = 'false'
+            """,
+            (str(lookback_h),),
+            fetch_all=True,
+        ) or []
+        if rows:
+            try:
+                _n = int(rows[0].get("delivered") or 0)
+                _rf = int(rows[0].get("review_failed") or 0)
+            except (TypeError, ValueError):
+                _n, _rf = 0, 0
+        if _n < min_samples:
+            _skip = f"insufficient_samples ({_n}<{min_samples})"
+        else:
+            _rate = round(_rf / _n, 3)
+            if _rate > threshold:
+                execute_sql_write(
+                    """
+                    INSERT INTO system_alerts
+                        (alert_key, alert_type, severity, title, message, metadata)
+                    VALUES (%s, 'reliability_degradation', 'warning', %s, %s, %s::jsonb)
+                    ON CONFLICT (alert_key) DO UPDATE
+                    SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                    """,
+                    (
+                        alert_key,
+                        "Tasa de entregas que fallaron el review sobre el umbral",
+                        f"El {int(_rate * 100)}% de las generaciones no-fallback de las últimas {lookback_h}h "
+                        f"se entregó FALLANDO el review ({_rf}/{_n}, > umbral {int(threshold * 100)}%). Plan "
+                        f"entregado con review_passed=false (variedad/repetición/skeleton-fidelity) — revisar "
+                        f"el reviewer/retry budget del pipeline inicial.",
+                        json.dumps({"review_failed_rate": _rate, "n_review_failed": _rf, "n_delivered": _n,
+                                    "lookback_h": lookback_h, "threshold": threshold}, ensure_ascii=False),
+                    ),
+                )
+                _alert_emitted = True
+                logger.warning(
+                    f"🚨 [P2-REVIEW-FAILED-RATE] {int(_rate * 100)}% review-failed ({_rf}/{_n}, {lookback_h}h) "
+                    f"> {int(threshold * 100)}% → alert `{alert_key}` emitido")
+            else:
+                execute_sql_write(
+                    "UPDATE system_alerts SET resolved_at = NOW() "
+                    "WHERE alert_key = %s AND resolved_at IS NULL",
+                    (alert_key,),
+                )
+                logger.info(
+                    f"✅ [P2-REVIEW-FAILED-RATE] tasa review-failed {int(_rate * 100)}% OK "
+                    f"(≤ {int(threshold * 100)}%, {_n} entregas / {lookback_h}h)")
+    except Exception as e:
+        logger.error(f"❌ [P2-REVIEW-FAILED-RATE] cron de tasa review-failed falló: {type(e).__name__}: {e}")
+    finally:
+        try:
+            execute_sql_write(
+                """
+                INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata)
+                VALUES ('_review_failed_delivered_rate_alert_job_tick', 0, 0, 0, %s, %s::jsonb)
+                """,
+                (_rate if _rate is not None else -1.0,
+                 json.dumps({"n_delivered": _n, "n_review_failed": _rf, "review_failed_rate": _rate,
+                             "alert_emitted": _alert_emitted, "skip_reason": _skip,
+                             "threshold": threshold, "lookback_h": lookback_h}, ensure_ascii=False)),
+            )
+        except Exception:
+            pass
+
+
 def _price_inflation_adjust_job():
     """[P2-PRICES-ENGINE-1 · 2026-06-16] Reescala los precios vivos de la lista de
     compras desde la base × el último índice de inflación de alimentos (BCRD).
@@ -5759,6 +5949,40 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [P1-MACRO-ROLLOUT-OBS] Cron plan_fallback_rate_alert registrado cada "
             f"{_fallback_rate_interval_h}h (tasa de fallback vigilada para el rollout del solver).")
+
+    # [P2-RESOLUTION-COVERAGE-DRIFT · 2026-06-18] (audit fresco P2) Drift de cobertura del resolver (flota).
+    _rescov_interval_h = max(1, min(_env_int("MEALFIT_RESCOV_DRIFT_INTERVAL_H", 6), 48))
+    if not scheduler.get_job("resolution_coverage_drift_alert"):
+        _add_job_jittered(scheduler,
+            _resolution_coverage_drift_alert_job,
+            "interval",
+            hours=_rescov_interval_h,
+            id="resolution_coverage_drift_alert",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P2-RESOLUTION-COVERAGE-DRIFT] Cron resolution_coverage_drift_alert registrado cada "
+            f"{_rescov_interval_h}h (cobertura del resolver de macros vigilada a nivel flota).")
+
+    # [P2-REVIEW-FAILED-RATE · 2026-06-18] (audit fresco P2) Tasa de entregas no-fallback que fallaron review.
+    _revfail_interval_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_INTERVAL_H", 6), 48))
+    if not scheduler.get_job("review_failed_delivered_rate_alert"):
+        _add_job_jittered(scheduler,
+            _review_failed_delivered_rate_alert_job,
+            "interval",
+            hours=_revfail_interval_h,
+            id="review_failed_delivered_rate_alert",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+            misfire_grace_time=_aggregator_misfire_grace_s(),
+        )
+        logger.info(
+            f"⏰ [P2-REVIEW-FAILED-RATE] Cron review_failed_delivered_rate_alert registrado cada "
+            f"{_revfail_interval_h}h (tasa de entregas degradadas no-fallback del pipeline inicial).")
 
     # [P2-PRICES-ENGINE-1 · 2026-06-16] Cron de reescala de precios por inflación.
     # SIEMPRE se registra; el gate de ejecución vive DENTRO de
@@ -10876,6 +11100,22 @@ def _persist_pantry_supplement_to_plan_data(
         else:
             aggr_active = aggr_7
 
+        # [P2-COHERENCE-PANTRY-SUPPLEMENT · 2026-06-18] (audit fresco P2) Telemetría de coherencia write-time.
+        # Este surface reconstruye las 4 listas (mismo aggregator canónico que assemble); corre el guard en
+        # modo WARN (NO bloquea: no hay LLM en el loop para retry — paridad con surfaces #4/#5/#6). Antes el
+        # guard NUNCA corría aquí → una divergencia recetas↔lista pasaba sin telemetría hasta el cron diario.
+        # Ahora corre y LOGUEA la divergencia al instante (COH-GUARD/warn); la PERSISTENCIA del history la hace
+        # el cron diario #6 (`_shopping_coherence_alert_job`) — no añadimos un 2º write al hot path del chunk
+        # worker. Fail-safe (no bloquea el persist del flag). Anchor: P2-COHERENCE-PANTRY-SUPPLEMENT.
+        try:
+            from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_guard
+            plan_data["aggregated_shopping_list"] = aggr_active  # el guard lee la lista activa
+            _coh_guard(plan_data, multiplier=household_multiplier, mode_override="warn",
+                       action_taken="warn_only_pantry_supplement", plan_id_hint=str(meal_plan_id))
+        except Exception as _coh_e:
+            logger.warning(f"[P2-COHERENCE-PANTRY-SUPPLEMENT] guard de coherencia falló (no bloquea): "
+                           f"{type(_coh_e).__name__}: {_coh_e}")
+
         execute_sql_write(
             """
             UPDATE meal_plans
@@ -10997,6 +11237,18 @@ def _clear_pantry_supplement_from_plan_data(
                 aggr_active = aggr_30
             else:
                 aggr_active = aggr_7
+
+            # [P2-COHERENCE-PANTRY-SUPPLEMENT · 2026-06-18] (audit fresco P2) Telemetría de coherencia
+            # write-time (modo WARN, no bloquea; detección + log al instante). Espejo del persist. La
+            # persistencia del history la cubre el cron diario #6. Fail-safe.
+            try:
+                from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_guard
+                plan_data["aggregated_shopping_list"] = aggr_active
+                _coh_guard(plan_data, multiplier=household_multiplier, mode_override="warn",
+                           action_taken="warn_only_pantry_supplement", plan_id_hint=str(meal_plan_id))
+            except Exception as _coh_e:
+                logger.warning(f"[P2-COHERENCE-PANTRY-SUPPLEMENT] guard de coherencia falló (no bloquea): "
+                               f"{type(_coh_e).__name__}: {_coh_e}")
 
             execute_sql_write(
                 """
@@ -17733,6 +17985,20 @@ def _process_pending_shopping_lists():
                 else:
                     aggr_active = aggr_7
                     
+                # [P2-COHERENCE-RECOVERY-GAP-F · 2026-06-18] (audit fresco P2) Telemetría de coherencia
+                # write-time para el recovery de planes 'partial_no_shopping' (reconstruye las 4 listas con
+                # el mismo aggregator que assemble). Modo WARN (no bloquea: recovery cron, sin LLM en loop;
+                # detección + log al instante). La persistencia del history la cubre el cron diario #6.
+                # Fail-safe. Anchor: P2-COHERENCE-RECOVERY-GAP-F.
+                try:
+                    from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_guard
+                    plan_data["aggregated_shopping_list"] = aggr_active
+                    _coh_guard(plan_data, multiplier=household, mode_override="warn",
+                               action_taken="warn_only_recovery_gap_f", plan_id_hint=str(meal_plan_id))
+                except Exception as _coh_e:
+                    logger.warning(f"[P2-COHERENCE-RECOVERY-GAP-F] guard de coherencia falló (no bloquea): "
+                                   f"{type(_coh_e).__name__}: {_coh_e}")
+
                 total_generated = plan_data.get('total_days_generated', 0)
                 total_requested = plan_data.get('total_days_requested', 7)
                 new_status = "complete" if total_generated >= int(total_requested) else "partial"

@@ -30,9 +30,15 @@ from canonical_units import to_base_amount, canonicalize_unit
 # delega al resolver canónico `shopping_calculator.normalize_name` (regex clean_n + fuzzy difflib +
 # semántico Cohere v4) → un SOLO resolver para shopping Y nutrición. Mata el "0 silencioso" #1 (el
 # ingrediente no resolvía al catálogo → aportaba 0 macros). Knob de rollback sin redeploy.
-_UNIFIED_RESOLVER_ENABLED = (
-    os.environ.get("MEALFIT_NUTRITION_UNIFIED_RESOLVER", "true").strip().lower()
-    not in ("0", "false", "no", "off"))
+# [P2-SOLVER-KNOBS-REGISTRY · 2026-06-18] (audit fresco P2) Vía `_env_bool` (auto-registra en
+# _KNOBS_REGISTRY → visible en /health/version); antes os.environ crudo eludía el registry. Fail-safe.
+try:
+    from knobs import _env_bool as _ndb_env_bool
+    _UNIFIED_RESOLVER_ENABLED = _ndb_env_bool("MEALFIT_NUTRITION_UNIFIED_RESOLVER", True)
+except Exception:  # pragma: no cover - knobs siempre disponible en prod
+    _UNIFIED_RESOLVER_ENABLED = (
+        os.environ.get("MEALFIT_NUTRITION_UNIFIED_RESOLVER", "true").strip().lower()
+        not in ("0", "false", "no", "off"))
 
 
 def _strip_accents(s: str) -> str:

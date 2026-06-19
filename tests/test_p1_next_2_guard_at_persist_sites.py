@@ -85,8 +85,13 @@ _INLINE_GUARD_RE = re.compile(
 # el 'aggregated_shopping_list' pelado es el delimitador del bloque).
 # Detecta tanto dict-style (`plan_data["aggregated_shopping_list"] = ...`)
 # como atribución plana ('aggregated_shopping_list': X) en dicts literales.
+# [P2-COHERENCE-TABLE · 2026-06-18] (audit fresco P2) Además de la forma Python dict-style, capturamos la
+# forma SQL `'{aggregated_shopping_list}'` de `jsonb_set` — antes el regex era ciego a ella y 3 surfaces
+# (persist/clear pantry-supplement + recovery GAP-F) escapaban al contrato. El `\}` tras la key excluye los
+# sufijos `{..._weekly/_biweekly/_monthly}` automáticamente (no terminan en `aggregated_shopping_list}`).
 _WRITE_RE = re.compile(
-    r"""['"]aggregated_shopping_list['"]\s*\]?\s*=\s*\w""",
+    r"""['"]aggregated_shopping_list['"]\s*\]?\s*=\s*\w"""       # Python dict-style assignment
+    r"""|['"]\{aggregated_shopping_list\}['"]""",                # jsonb_set SQL path (P2-COHERENCE-TABLE)
 )
 
 # Whitelist marker inline.

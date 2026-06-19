@@ -76,11 +76,15 @@ def dri_targets(sex: str | None = "F", age: int | None = None) -> dict:
     _iron = 8.0 if male else (8.0 if (_age is not None and _age >= 51) else 18.0)
     # Calcio (IOM/DRI): 1200 mg para mujer 51+ / hombre 71+; 1000 mg resto.
     _calcium = 1200.0 if (_age is not None and ((not male and _age >= 51) or (male and _age >= 71))) else 1000.0
+    # [P2-DRI-AGE-AWARE-VITD · 2026-06-18] (audit fresco P2) Vit D (IOM/DRI): 15 mcg (600 UI) para 1-70 años;
+    # 20 mcg (800 UI) para 71+ — antes 15 fijo sub-flageaba déficit en el grupo de mayor riesgo de
+    # insuficiencia. Simétrico al ajuste por edad de hierro/calcio (el set original solo cubría esos dos).
+    _vit_d = 20.0 if (_age is not None and _age >= 71) else 15.0
     return {
         "fiber_g":       {"floor": 38.0 if male else 25.0, "unit": "g"},
         "sodium_mg":     {"ceiling": 2000.0, "unit": "mg"},          # WHO <2000
         "free_sugars_g": {"ceiling": 25.0, "unit": "g"},             # WHO condicional <5% E
-        "vit_d_mcg":     {"floor": 15.0, "unit": "mcg"},             # DRI 600 UI
+        "vit_d_mcg":     {"floor": _vit_d, "unit": "mcg"},           # DRI 600 UI (15 mcg) / 800 UI (20 mcg) 71+
         "calcium_mg":    {"floor": _calcium, "unit": "mg"},
         "iron_mg":       {"floor": _iron, "unit": "mg"},
         "b12_mcg":       {"floor": 2.4, "unit": "mcg"},

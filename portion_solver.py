@@ -34,15 +34,21 @@ from typing import Optional
 _KCAL_PER_G = {"protein": 4.0, "carbs": 4.0, "fats": 9.0}
 
 
-def _envf(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
+# [P2-SOLVER-KNOBS-REGISTRY · 2026-06-18] (audit fresco P2) Delegamos a los helpers de knobs.py para que
+# los 6 knobs MEALFIT_SOLVER_* se auto-registren en _KNOBS_REGISTRY → visibles en /health/version. Antes
+# leían os.environ crudo y eludían el registry: un override de los pesos del solver (núcleo de precisión)
+# era invisible al operador. Fail-safe: si knobs no importa, helpers locales equivalentes (raw os.environ).
+try:
+    from knobs import _env_float as _envf, _env_bool as _envb  # auto-registran en _KNOBS_REGISTRY
+except Exception:  # pragma: no cover - knobs siempre disponible en prod
+    def _envf(name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, default))
+        except (TypeError, ValueError):
+            return default
 
-
-def _envb(name: str, default: bool) -> bool:
-    return str(os.environ.get(name, str(default))).strip().lower() in ("1", "true", "yes", "on")
+    def _envb(name: str, default: bool) -> bool:
+        return str(os.environ.get(name, str(default))).strip().lower() in ("1", "true", "yes", "on")
 
 
 # [M2-SOLVER-NNLS · 2026-06-14] Solver multi-restricción: reemplaza el escalado GREEDY por-grupo

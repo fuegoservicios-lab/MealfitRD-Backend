@@ -36,6 +36,28 @@ def _num(x) -> float:
         return 0.0
 
 
+# [P2-VALIDATION-INTEGRITY-PURE · 2026-06-18] (audit fresco P2) Las decisiones de banda/integridad estaban
+# inline en main() (que requiere Neon vivo) → un cambio del umbral 0.15, del piso res_pct 60, o de la banda
+# [0.90, 1.12] no lo atrapaba ningún test. Extraídas a funciones PURAS testeables en CI con fixtures sintéticos.
+_INTEGRITY_TOL = 0.15        # |claim - recomputado| / recomputado <= 0.15
+_BAND_LO, _BAND_HI = 0.90, 1.12
+_RES_PCT_FLOOR = 60          # día debe resolver >= 60% de ingredientes para entrar al agregado filtrado
+
+
+def _macro_in_band(claimed: float, target: float) -> bool:
+    """True si `claimed` cae en la banda [0.90, 1.12]×target. target<=0 → no aplica (False)."""
+    if target <= 0:
+        return False
+    return _BAND_LO <= claimed / target <= _BAND_HI
+
+
+def _integrity_in_band(claimed: float, recomputed: float, tol: float = _INTEGRITY_TOL) -> bool:
+    """True si |claimed - recomputado| / recomputado <= tol. recomputado<=0 → no aplica (False)."""
+    if recomputed <= 0:
+        return False
+    return abs(claimed - recomputed) / recomputed <= tol
+
+
 async def _open_pools():
     """Abre los pools de Neon igual que el lifespan de FastAPI (app.py)."""
     import db_core
@@ -172,22 +194,22 @@ async def main():
                 row[f"claim_{mac}"] = round(cl)
                 row[f"recomp_{mac}"] = round(rc)
                 row[f"claim_vs_tgt_%"] = None
-                # banda target (solo sobre claim)
+                # banda target (solo sobre claim) — [P2-VALIDATION-INTEGRITY-PURE] vía helper puro
                 if t > 0 and mac != "kcal":
                     band_cells += 1
-                    if 0.90 <= cl / t <= 1.12:
+                    if _macro_in_band(cl, t):
                         band_in += 1
-                # integridad claim vs recomputado (solo donde el día resolvió >=60%)
-                if res_pct >= 60 and rc > 0:
+                # integridad claim vs recomputado (solo donde el día resolvió >= piso res_pct)
+                if res_pct >= _RES_PCT_FLOOR and rc > 0:
                     integ_cells += 1
-                    if abs(cl - rc) / rc <= 0.15:
+                    if _integrity_in_band(cl, rc):
                         integ_band += 1
                 # [P2-VALIDATION-NO-FILTER · 2026-06-15] (G16) integridad SIN el filtro res_pct: incluye los
                 # días de baja resolución que el agregado filtrado esconde (los peores casos del 0-silencioso).
                 # Límite inferior aún más conservador (los ingredientes no-resueltos aportan 0 al recomputado).
                 if rc > 0:
                     integ_all_cells += 1
-                    if abs(cl - rc) / rc <= 0.15:
+                    if _integrity_in_band(cl, rc):
                         integ_all_band += 1
             # [G16-FNDDS] Perfil de macros de cada comida vs su plato FNDDS análogo (EXTERNO, no-circular).
             if fndds_ref:
@@ -201,7 +223,7 @@ async def main():
                     if _appf and _reff:
                         fndds_meals += 1
                         fndds_dev_sum += sum(abs(a - b) for a, b in zip(_appf, _reff)) / 3.0
-            if res_pct < 60:
+            if res_pct < _RES_PCT_FLOOR:   # [P2-VALIDATION-INTEGRITY-PURE] una sola constante gobierna el filtro
                 days_low_res += 1
             row["nutricionista_aprobado"] = ""
             row["notas"] = ""

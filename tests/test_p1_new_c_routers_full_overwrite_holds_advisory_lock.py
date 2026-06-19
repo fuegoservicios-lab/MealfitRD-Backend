@@ -48,8 +48,13 @@ import pytest
 _PLANS_PY = Path(__file__).resolve().parent.parent.parent / "backend" / "routers" / "plans.py"
 
 
+# [P2-FULLOVERWRITE-FSTRING-ANCHOR · 2026-06-18] (audit fresco P2) Además de la forma literal, capturamos la
+# forma f-string dinámica `UPDATE meal_plans SET {', '.join(set_clauses)}` (api_restore_plan_local, P1-OPEN-1),
+# donde set_clauses incluye `plan_data = %s::jsonb`. Antes el blanket era ciego a ella → el lock de
+# /restore-local solo lo anclaba su test dedicado; ahora el contrato I7 blanket también lo cubre.
 _FULL_OVERWRITE_RE = re.compile(
-    r"UPDATE\s+meal_plans\s+SET\s+plan_data\s*=\s*%s::jsonb",
+    r"UPDATE\s+meal_plans\s+SET\s+plan_data\s*=\s*%s::jsonb"   # forma literal (api_shift_plan)
+    r"|UPDATE\s+meal_plans\s+SET\s+\{",                         # forma f-string (api_restore_plan_local)
     re.IGNORECASE,
 )
 _LOCK_CALL_RE = re.compile(
