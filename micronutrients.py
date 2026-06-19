@@ -168,6 +168,18 @@ def _has_anemia(conditions) -> bool:
         return _has_condition(conditions, ("anemia", "ferropen", "hierro bajo", "ferritina baja"))
 
 
+def _has_renal(conditions) -> bool:
+    # [P1-RENAL-SODIUM-SUBS · 2026-06-19] (audit fresco P1-4) Paralelo a _has_hta. El panel imponía
+    # condition_target de sodio solo para HTA → un perfil ERC-puro (sin HTA) no surfaceaba la restricción
+    # de sodio renal (estándar-de-cuidado KDIGO). Cierra la asimetría de OBSERVABILIDAD del panel/PDF.
+    try:
+        from constants import RENAL_CONDITION_TERMS
+        return _has_condition(conditions, RENAL_CONDITION_TERMS)
+    except Exception:
+        return _has_condition(conditions, ("renal", "rinon", "erc", "ckd", "nefro", "enfermedad renal",
+                                           "insuficiencia renal", "nefropat"))
+
+
 def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
     """Suma los micros de todos los ingredientes resueltos del plan y devuelve el PROMEDIO
     diario + metadata de cobertura. `free_sugars_g` solo cuenta el azúcar de ingredientes
@@ -265,6 +277,20 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
             "guia": "DASH (NHLBI/AHA-ACC) — el balance Na/K/Mg/Ca baja la presión arterial",
             "actual": {"potasio": daily.get("potassium_mg", 0.0), "magnesio": daily.get("magnesium_mg", 0.0),
                        "sodio": daily.get("sodium_mg", 0.0)},
+        })
+    # [P1-RENAL-SODIUM-SUBS · 2026-06-19] (audit fresco P1-4) ERC → surface la restricción de SODIO como
+    # condition_target citable (paralelo a HTA), cerrando la asimetría de observabilidad: antes solo HTA
+    # generaba un target de sodio en el panel, así que un perfil ERC-puro (sin HTA) no lo veía. NO modifica
+    # `targets` (el techo `sodium_mg` 2000 del DRI ya aplica a todos → sin enforcement nuevo, sin objetivo
+    # inalcanzable). El cap de proteína KDIGO y los swaps de sodio (condition_rules) son el enforcement; esto
+    # es solo el espejo de display. NO eleva potasio (lo contrario al riesgo renal — comorbilidad renal+HTA
+    # es el P2-2 pendiente).
+    if _has_renal(conditions):
+        condition_targets.append({
+            "condicion": "Enfermedad renal crónica",
+            "regla": "Sodio <2000 mg/día (sal medida mínima) — modera potasio/fósforo si aparecen en exceso",
+            "guia": "KDIGO 2024 — la restricción de sodio reduce sobrecarga de volumen, edema y proteinuria",
+            "actual": daily.get("sodium_mg", 0.0),
         })
     # [P4-UNIFIED-RESOLVER] Dislipidemia → techo de GRASA SATURADA <7% de las kcal (AHA/ACC). Antes era
     # PROMPT-only (faltaba la columna satfat); ahora se evalúa con dato real. Solo se añade el target

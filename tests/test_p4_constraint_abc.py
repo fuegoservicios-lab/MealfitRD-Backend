@@ -21,7 +21,9 @@ import graph_orchestrator as go
 
 # ── (a) Engine: constraints activos por precedencia ──
 def test_engine_active_constraints_by_profile():
-    assert [c.id for c in cc.ClinicalConstraintEngine({"medicalConditions": ["Enfermedad renal crónica"]}).active] == ["renal"]
+    # [P1-RENAL-SODIUM-SUBS · 2026-06-19] ERC-puro ahora también lleva sustituciones de sodio (la fila renal
+    # reusa _HTA_SODIUM_SUBS) → renal(10) + substitutions(30), antes solo ["renal"].
+    assert [c.id for c in cc.ClinicalConstraintEngine({"medicalConditions": ["Enfermedad renal crónica"]}).active] == ["renal", "substitutions"]
     # HTA + dislipidemia → ambas son substitution-bearing → UN solo constraint 'substitutions'
     assert [c.id for c in cc.ClinicalConstraintEngine({"medicalConditions": ["Hipertensión", "Colesterol alto"]}).active] == ["substitutions"]
     # renal + DM2 → renal(10) antes que substitutions(30)

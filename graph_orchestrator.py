@@ -11196,6 +11196,37 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _tu_e:
             logger.warning(f"[P2-MACRO-TRUTHUP] error: {type(_tu_e).__name__}: {_tu_e}")
 
+    # ── Guard 8z.1 (ERC re-verificación POST-truthup) [P1-RENAL-TRUTHUP-RECHECK · 2026-06-19, audit fresco P1-3] ──
+    # Guard 8z (MACRO-TRUTHUP, arriba) reescribe meal['protein'] re-sumando los strings FINALES de ingredientes
+    # — corre DESPUÉS de la verificación renal de Guard 4d. La proteína en ingredientes NO proteína-dominantes
+    # (yogur/leche/leguminosas mixtas: el trim renal de Guard 3.6 escala el NÚMERO del meal pero solo reescribe
+    # los strings de los ingredientes protein-dominant) puede restaurarse sobre el cap KDIGO, dejando
+    # `meals_enforced` stale-True. AMBAS defensas downstream confían en ese flag: el exit-net
+    # `_renal_exit_safety_net` (re-trima solo si `not meals_enforced`) y el fail-hard gate de `should_retry`
+    # (escala solo si `meals_enforced is False`) → un fail-open de un fail-hard de seguridad clínica. Re-
+    # verificamos HONESTAMENTE aquí, tras el ÚLTIMO pase que reescribe números y ANTES del return, para que el
+    # flag refleje los totales realmente entregados. Re-suma pura (no requiere DB), idéntica a Guard 4d. Corre
+    # incondicional si el cap renal aplica (idempotente cuando 8z no movió nada → reafirma el valor de 4d).
+    # OJO: `_pg` es el TARGET del cap (lado izquierdo); NO se re-suma tras 8z — 8z reescribe el ENTREGADO
+    # (los números de cada comida), no la meta. Comparar entregado-vs-target fijo es justo el check honesto.
+    if (RENAL_CAP_ENABLED and isinstance(plan.get("renal_protein_cap"), dict)
+            and plan["renal_protein_cap"].get("applied") and _pg > 0):
+        try:
+            _rc_tu_ok = True
+            for _d in plan.get("days", []) or []:
+                _dp = sum(_meal_macro_num(_m.get("protein")) for _m in (_d.get("meals", []) or []))
+                if _dp > _pg * 1.05:
+                    _rc_tu_ok = False
+                    break
+            plan["renal_protein_cap"]["meals_enforced"] = _rc_tu_ok
+            if not _rc_tu_ok:
+                logger.warning("🛑 [P1-RENAL-TRUTHUP-RECHECK] proteína renal sobre el cap tras truth-up (8z) — "
+                               "meals_enforced=False (exit-net re-trima / fail-hard gate escala).")
+        except Exception as _rctu_e:
+            plan["renal_protein_cap"]["meals_enforced"] = False
+            logger.warning(f"[P1-RENAL-TRUTHUP-RECHECK] re-verificación renal post-truthup falló: "
+                           f"{type(_rctu_e).__name__}: {_rctu_e}")
+
     plan["_clinical_layer_applied"] = True
     return plan
 
@@ -17896,6 +17927,7 @@ def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallba
             _m = CONDITION_PANEL_DEGRADE_MARGIN
             # (key, condición que lo target-ea, tipo). vit_d/iron/b12 ausentes a propósito (inalcanzables).
             _checks = (("saturated_fat_g", "dyslipidemia", "techo"), ("sodium_mg", "hta", "techo"),
+                       ("sodium_mg", "renal", "techo"),  # [P1-RENAL-SODIUM-SUBS · 2026-06-19] (P1-4) paridad con HTA
                        ("potassium_mg", "hta", "piso"), ("magnesium_mg", "hta", "piso"),
                        ("fiber_g", "dm2", "piso"))
             for g in gaps:

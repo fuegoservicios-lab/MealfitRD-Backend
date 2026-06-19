@@ -121,8 +121,24 @@ _DYSLIPIDEMIA_NEGATIVES = ("descremad", "baja en grasa", "bajo en grasa", "light
 # ── El REGISTRO declarativo (SSOT del comportamiento por condición) ──
 CONDITION_RULES: tuple = (
     ConditionRule(
+        # [P1-RENAL-SODIUM-SUBS · 2026-06-19] (audit fresco P1-4) La fila renal ENFORZA ahora la
+        # restricción de sodio de forma determinista, no solo en el prompt_block. Reusa la tabla de HTA
+        # (`_HTA_SODIUM_SUBS`: embutidos/cubitos/bacalao→fresco) — la restricción de sodio en ERC es
+        # estándar-de-cuidado (sobrecarga de volumen/edema/proteinuria) y los ofensores son los mismos. El
+        # swap embutido→Pechuga de pollo sube proteína/100g, pero el cap renal KDIGO la re-trima POST-subs
+        # (Guard 3.6 `_trim_day_protein_to_ceiling`) y la re-verifica POST-truthup (Guard 8z.1, P1-3) → no
+        # rompe el techo de proteína. Cierra la asimetría con HTA (sodio enforced) que tenía solo ERC.
+        # DEPENDENCIA DE KNOB (operador): el re-trim del cap (Guard 1/3.6/4d/8z.1) está gateado por
+        # RENAL_CAP_ENABLED, mientras estos subs corren bajo CONDITION_RULES_ENABLED → si se apaga el cap pero
+        # NO las condiciones, el swap subiría proteína sin re-trim (default RENAL_CAP_ENABLED=True lo evita;
+        # asimetría pre-existente compartida con los subs dislipidemia/DM2-en-renal).
+        # TRADE-OFF renal+VEGANO (follow-up del owner): para dietas veg* el redirect diet-aware reemplaza el
+        # ofensor por 'Lentejas' (alto K/fósforo, lo que KDIGO pide moderar) en vez de pollo → es un trade
+        # lateral (quita sodio, añade K/P), acotado en cantidad y cubierto por el gate nefrólogo. Anclado por
+        # test (renal+vegano → Lentejas); cambiarlo a un veto K/P es decisión clínica del owner (ver P2 audit).
         id="renal", label="Enfermedad renal crónica", terms=RENAL_CONDITION_TERMS,
         precedence=10, classification=CLINICAL_REFERRAL,
+        substitutions=_HTA_SODIUM_SUBS, sub_negatives=_HTA_SODIUM_NEGATIVES,
         prompt_block=(
             "🫘 REGLA CLÍNICA — ENFERMEDAD RENAL (KDIGO 2024) — PRECAUCIÓN, REQUIERE NEFRÓLOGO:\n"
             "   • Proteína MODERADA, NO alta: porciones modestas de proteína de alta calidad (huevo, "
