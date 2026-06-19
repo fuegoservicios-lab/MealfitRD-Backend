@@ -8567,6 +8567,12 @@ FOLD_RESTRICTION_ALIASES = _env_bool("MEALFIT_FOLD_RESTRICTION_ALIASES", True)
 # generador (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe) + gate FS9. Safety
 # gate (defensa-en-profundidad clínica) → default True; flip a False desactiva el motor. Anchor: P1-MEDICATION-RULES.
 MEDICATION_RULES_ENABLED = _env_bool("MEALFIT_MEDICATION_RULES", True)
+# [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (audit fresco P1-1) Hace el panel de micros consciente de los
+# fármacos que ELEVAN el potasio (ahorrador de potasio / IECA-ARA-II): cuando hay uno, NO eleva el piso DASH
+# de potasio (4700) ni emite la nota "come más guineo/aguacate" — antes el panel determinista empujaba a más
+# potasio mientras `medication_review` advertía lo contrario (hiperkalemia → arritmia). Default True (safety,
+# espejo del guard renal `not _has_renal`); flip a False revierte al panel medication-blind. Anchor: P1-POTASSIUM-PANEL-MED-AWARE.
+POTASSIUM_PANEL_MED_AWARE_ENABLED = _env_bool("MEALFIT_POTASSIUM_PANEL_MED_AWARE", True)
 # [P1-WARFARIN-VITAMIN-K · 2026-06-18] (audit fresco P1-B) Monitor de consistencia de vitamina K para
 # usuarios de anticoagulante (warfarina): adjunta a `plan["medication_review"]` la variabilidad día a día
 # de hoja verde (heurística por nombre — el catálogo no tiene mcg de vit K, follow-up de datos) + advisory.
@@ -11049,6 +11055,18 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception:
             _pregnant = False
 
+    # [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (audit fresco P1-1) Detecta si el perfil toma un fármaco que
+    # ELEVA el potasio sérico (ahorrador de potasio / IECA-ARA-II) para que el panel NO maximice el potasio DASH
+    # (evita el nudge a hiperkalemia que contradecía a `medication_review`). Independiente de MEDICATION_RULES_ENABLED:
+    # es una supresión de SEGURIDAD del panel — si el usuario declaró el fármaco, no se maximiza su potasio. Fail-safe → False.
+    _k_elev_med = False
+    if POTASSIUM_PANEL_MED_AWARE_ENABLED:
+        try:
+            from medication_rules import detect_potassium_elevating_med
+            _k_elev_med = bool(detect_potassium_elevating_med(form_data))
+        except Exception:
+            _k_elev_med = False
+
     # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (espejo [P3-MICRONUTRIENTS]) ──
     if MICRONUTRIENT_REPORT_ENABLED and _db is not None:
         try:
@@ -11059,7 +11077,8 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 conditions=_condition_strings(form_data), daily_kcal=_daily_cals,
                 fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL,
                 age=form_data.get("age"),   # [P2-DRI-AGE-AWARE · 2026-06-15] (G15) hierro/calcio por edad
-                pregnant=_pregnant)          # [P2-DRI-PREGNANCY-AWARE · 2026-06-19] (P2-4) hierro 27/folato/B12
+                pregnant=_pregnant,          # [P2-DRI-PREGNANCY-AWARE · 2026-06-19] (P2-4) hierro 27/folato/B12
+                k_elevating_med=_k_elev_med) # [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (P1-1) no maximizar K con fármaco-K
             plan["micronutrient_report"] = _mn
             _ngaps = len(_mn.get("gaps", []))
             logger.info(f"🧪 [P3-MICRONUTRIENTS] Panel de micros computado "

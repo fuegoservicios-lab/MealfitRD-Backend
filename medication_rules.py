@@ -400,6 +400,20 @@ def detect_anticoagulant(form_data) -> bool:
     return any(r.anticoagulant for r in detect_active_medications(form_data))
 
 
+# [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (audit fresco P1-1) Reglas cuyo fármaco ELEVA el potasio
+# sérico: ahorradores de potasio (espironolactona/eplerenona/amilorida/triamtereno) e IECA/ARA-II. Lo
+# consume el panel de micros para NO elevar el piso DASH de potasio (4700 mg) cuando uno está presente —
+# espejo del guard renal `not _has_renal`: la ERC ya suprime el piso DASH-K por riesgo de hiperkalemia; un
+# fármaco que sube el potasio debe suprimirlo igual. Cierra la asimetría medication-blind del panel.
+_K_ELEVATING_MED_IDS = frozenset({"potassium_sparing_diuretic", "ace_arb"})
+
+
+def detect_potassium_elevating_med(form_data) -> bool:
+    """True si el perfil declara un fármaco que ELEVA el potasio sérico (ahorrador de potasio o IECA/
+    ARA-II) → el panel de micros NO maximiza el potasio DASH (evita el nudge a hiperkalemia → arritmia)."""
+    return any(r.id in _K_ELEVATING_MED_IDS for r in detect_active_medications(form_data))
+
+
 def build_timing_advisories(active_rules_or_form) -> list:
     """[P2-MEDICATION-TIMING-ADVISORY · 2026-06-18] (audit fresco P2-1) Subconjunto de advisories para
     fármacos TIMING-SENSITIVE (la absorción depende de cuándo se toman respecto a las comidas — p.ej.

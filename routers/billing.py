@@ -857,31 +857,52 @@ async def api_webhook_paypal(
         # `transmission_id` (PK): si 0 filas → ya procesado → ack sin re-mutar.
         # Best-effort: si la tabla/insert falla, seguimos (degrada al comportamiento
         # previo, no bloquea webhooks legítimos). Solo corre tras pasar la firma.
+        # [P1-WEBHOOK-DEDUP-ATOMIC · 2026-06-19] (audit fresco P1-2) Claim de DOS FASES para que el dedup no
+        # PIERDA eventos de billing. Antes el marcador se INSERTaba+commiteaba (su propia conexión autocommit)
+        # ANTES de aplicar la transición de estado (UPDATE de plan_tier/subscription_status): si un UPDATE fallaba
+        # transitoriamente (hiccup de Neon/lock/red) → `except` → 503 → PayPal reintenta el MISMO transmission_id,
+        # pero el reintento veía el marcador YA committeado y la rama `deduped` SALTABA el procesamiento → el
+        # evento se perdía PERMANENTEMENTE (no-pagador en tier pagado / pagador degradado). Reabría exactamente la
+        # clase que P2-WEBHOOK-INFRA-503 cerró, vía la capa de dedup. Ahora el marcador solo cuenta como
+        # "procesado" cuando su value es {"status":"done"}, escrito DESPUÉS del procesamiento exitoso (fase 2, al
+        # final del try). Un marcador 'processing' (claim cuya entrega previa murió a mitad) NO deduplica → el
+        # reintento re-procesa (los UPDATE de estado son idempotentes en valor). El prefijo `paypal_webhook:`
+        # lo sigue limpiando el sweep `_KV_SWEEP_PREFIXES`.
         _transmission_id = headers.get("paypal-transmission-id")
-        if _transmission_id:
+        _dedup_kv_key = f"paypal_webhook:{_transmission_id}" if _transmission_id else None
+        if _dedup_kv_key:
             try:
-                # Reusamos el KV general `app_kv_store` (prefijo `paypal_webhook:`,
-                # GC por el sweep `_KV_SWEEP_PREFIXES`) — evita una tabla nueva +
-                # su advisor `rls_enabled_no_policy`. INSERT ON CONFLICT DO NOTHING
-                # RETURNING: lista vacía = ya existía = reentrega duplicada.
-                _kv_key = f"paypal_webhook:{_transmission_id}"
-                _first_time = await asyncio.to_thread(
+                # Fase 1 (claim): INSERT 'processing' ON CONFLICT DO NOTHING RETURNING. Lista no-vacía = lo
+                # claimeamos nosotros (primera entrega). Lista vacía = el marcador ya existía → deduplicar SOLO
+                # si una entrega previa COMPLETÓ (status=done); si está 'processing', re-procesar (no perder).
+                _claimed = await asyncio.to_thread(
                     execute_sql_write,
-                    "INSERT INTO app_kv_store (key, value) VALUES (%s, '{}'::jsonb) "
+                    "INSERT INTO app_kv_store (key, value) VALUES (%s, jsonb_build_object('status', 'processing')) "
                     "ON CONFLICT (key) DO NOTHING RETURNING key",
-                    (_kv_key,), returning=True,
+                    (_dedup_kv_key,), returning=True,
                 )
-                if not _first_time:
-                    logger.info(
-                        f"♻️ [P2-WEBHOOK-IDEMPOTENCY] transmission_id={_transmission_id} "
-                        "ya procesado; ack idempotente sin re-procesar."
+                if not _claimed:
+                    _already_done = await asyncio.to_thread(
+                        execute_sql_write,
+                        "SELECT 1 AS done FROM app_kv_store WHERE key = %s AND value->>'status' = 'done'",
+                        (_dedup_kv_key,), returning=True,
                     )
-                    return {"success": True, "deduped": True}
+                    if _already_done:
+                        logger.info(
+                            f"♻️ [P2-WEBHOOK-IDEMPOTENCY] transmission_id={_transmission_id} "
+                            "ya procesado (status=done); ack idempotente sin re-procesar."
+                        )
+                        return {"success": True, "deduped": True}
+                    logger.info(
+                        f"♻️ [P1-WEBHOOK-DEDUP-ATOMIC] transmission_id={_transmission_id} con marcador "
+                        "'processing' (entrega previa incompleta); re-procesando para no perder el evento."
+                    )
             except Exception as _dedup_e:
                 logger.warning(
                     f"[P2-WEBHOOK-IDEMPOTENCY] dedup best-effort falló ({_dedup_e}); "
                     "procesando el evento de todos modos."
                 )
+                _dedup_kv_key = None  # KV roto → no intentar marcar 'done' al final
 
         event_type = payload_dict.get("event_type")
         resource = payload_dict.get("resource", {})
@@ -1027,7 +1048,28 @@ async def api_webhook_paypal(
                 await _run_sync_db_in_thread(
                     lambda: execute_sql_write(wh_cancel_query, wh_cancel_params)
                 )
-        
+
+        # [P1-WEBHOOK-DEDUP-ATOMIC · 2026-06-19] (audit fresco P1-2) Fase 2: marca el evento COMPLETADO solo
+        # ahora que TODAS las transiciones de estado se aplicaron sin excepción. Si un UPDATE de arriba hubiera
+        # lanzado, el flujo saltó al `except` (→ 503) SIN llegar aquí → el marcador queda 'processing' → el
+        # reintento de PayPal re-procesa (en vez de deduplicar y perder el evento). Best-effort: si el marcado
+        # falla, el reintento re-procesa (idempotente), nunca pierde el evento.
+        if _dedup_kv_key:
+            try:
+                await asyncio.to_thread(
+                    execute_sql_write,
+                    # `updated_at = NOW()` igual que los demás writers de app_kv_store: el GC (`_KV_SWEEP_PREFIXES`)
+                    # borra por updated_at, así el TTL del marcador se cuenta desde el completion, no desde el claim.
+                    "UPDATE app_kv_store SET value = jsonb_build_object('status', 'done'), updated_at = NOW() "
+                    "WHERE key = %s",
+                    (_dedup_kv_key,),
+                )
+            except Exception as _mark_e:
+                logger.warning(
+                    f"[P1-WEBHOOK-DEDUP-ATOMIC] no se pudo marcar 'done' "
+                    f"({type(_mark_e).__name__}); el reintento re-procesará (idempotente)."
+                )
+
         return {"success": True}
 
     except HTTPException:

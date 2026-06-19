@@ -124,6 +124,15 @@ _SUPPLEMENT_NOTE = {
                        "usa cocción al horno/plancha/hervido y grasas insaturadas (aguacate, aceite de oliva).",
 }
 
+# [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (audit fresco P1-1) Nota ALTERNATIVA del potasio cuando el perfil
+# toma un fármaco que lo eleva (ahorrador-K/IECA-ARA-II): el piso baja al DRI (no DASH 4700), pero si el plan
+# entrega potasio bajo el DRI, la nota estándar `_SUPPLEMENT_NOTE["potassium_mg"]` ("come más guineo/aguacate")
+# CONTRADIRÍA al `medication_review` ("NO maximices potasio") en el mismo PDF. Esta nota lo modera en su lugar,
+# cerrando el contradictorio también en la capa del gap del piso (la fila DASH ya se moderó arriba).
+_POTASSIUM_RESTRICTED_NOTE = ("Mantén el potasio en porciones MODERADAS y parejas (no lo maximices): tu "
+                              "medicación puede elevar el potasio en sangre (riesgo de hiperkalemia). El "
+                              "balance fino lo define tu médico con análisis.")
+
 # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (gap-audit G5) Umbral de cobertura POR-NUTRIENTE bajo el cual un
 # TECHO en apariencia 'ok' se reporta 'estimado_alto' (incierto). Mismo 0.6 que el 'estimado_bajo' de los
 # pisos, para simetría. Caveat honesto para el panel/PDF.
@@ -244,7 +253,8 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
 def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                                conditions=None, daily_kcal: float | None = None,
                                fiber_per_1000kcal: float = _DM2_FIBER_PER_1000KCAL,
-                               age: int | None = None, pregnant: bool = False) -> dict:
+                               age: int | None = None, pregnant: bool = False,
+                               k_elevating_med: bool = False) -> dict:
     """Reporte advisory: panel de micros diarios vs DRI/WHO con status + nota accionable.
     status ∈ {ok, bajo, alto, estimado_bajo, estimado_alto}. Floors incumplidos con cobertura
     parcial → 'estimado_bajo' (incierto, puede subir con lo no resuelto). Techos en apariencia
@@ -291,17 +301,36 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
     # Para renal+HTA, el sodio bajo de DASH sí aplica (cubierto por la rama renal de abajo + el cap/subs);
     # solo se omite la maximización de potasio/magnesio. La HTA es la causa #1 de ERC → comorbilidad común.
     if _has_hta(conditions) and not _has_renal(conditions):
-        if 4700.0 > targets["potassium_mg"]["floor"]:
-            targets["potassium_mg"]["floor"] = 4700.0
+        # Magnesio (DASH) siempre aplica: un ahorrador de potasio / IECA-ARA-II no contraindica el magnesio.
         if 500.0 > targets["magnesium_mg"]["floor"]:
             targets["magnesium_mg"]["floor"] = 500.0
-        condition_targets.append({
-            "condicion": "Hipertensión (patrón DASH)",
-            "regla": "Potasio ≥4700 mg/día + Magnesio ≥500 mg/día + Sodio <2000 mg/día",
-            "guia": "DASH (NHLBI/AHA-ACC) — el balance Na/K/Mg/Ca baja la presión arterial",
-            "actual": {"potasio": daily.get("potassium_mg", 0.0), "magnesio": daily.get("magnesium_mg", 0.0),
-                       "sodio": daily.get("sodium_mg", 0.0)},
-        })
+        # [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (audit fresco P1-1) El piso DASH de potasio (4700) se
+        # eleva SOLO si el perfil NO toma un fármaco que ELEVE el potasio sérico (`k_elevating_med`: ahorrador
+        # de potasio —espironolactona— o IECA/ARA-II). Antes el panel era CIEGO a `medications`: subía el piso a
+        # 4700 y emitía la nota "come más guineo/aguacate/leguminosas" mientras `medication_review` decía lo
+        # contrario ("NO maximices potasio") → señales OPUESTAS en el mismo PDF, y el panel determinista empujaba
+        # la dirección PELIGROSA (hiperkalemia → arritmia). Es la asimetría exacta del guard renal `not _has_renal`:
+        # la ERC ya suprime el piso DASH-K; un fármaco que sube el potasio debe suprimirlo igual. El sodio bajo de
+        # DASH (techo 2000 del DRI) y el magnesio sí aplican; solo se omite la MAXIMIZACIÓN del potasio.
+        if not k_elevating_med:
+            if 4700.0 > targets["potassium_mg"]["floor"]:
+                targets["potassium_mg"]["floor"] = 4700.0
+            condition_targets.append({
+                "condicion": "Hipertensión (patrón DASH)",
+                "regla": "Potasio ≥4700 mg/día + Magnesio ≥500 mg/día + Sodio <2000 mg/día",
+                "guia": "DASH (NHLBI/AHA-ACC) — el balance Na/K/Mg/Ca baja la presión arterial",
+                "actual": {"potasio": daily.get("potassium_mg", 0.0), "magnesio": daily.get("magnesium_mg", 0.0),
+                           "sodio": daily.get("sodium_mg", 0.0)},
+            })
+        else:
+            condition_targets.append({
+                "condicion": "Hipertensión (patrón DASH) — potasio moderado por medicación",
+                "regla": "Magnesio ≥500 mg/día + Sodio <2000 mg/día — NO maximizar el potasio (medicación que lo eleva)",
+                "guia": ("DASH adaptado: tu medicamento (ahorrador de potasio o IECA/ARA-II) ELEVA el potasio "
+                         "sérico → mantén porciones moderadas de guineo/aguacate/leguminosas; el balance fino lo "
+                         "define tu médico con análisis (riesgo de hiperkalemia)."),
+                "actual": {"magnesio": daily.get("magnesium_mg", 0.0), "sodio": daily.get("sodium_mg", 0.0)},
+            })
     # [P1-RENAL-SODIUM-SUBS · 2026-06-19] (audit fresco P1-4) ERC → surface la restricción de SODIO como
     # condition_target citable (paralelo a HTA), cerrando la asimetría de observabilidad: antes solo HTA
     # generaba un target de sodio en el panel, así que un perfil ERC-puro (sin HTA) no lo veía. NO modifica
@@ -378,7 +407,14 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
             entry = {"nutriente": _LABELS[key], "key": key, "valor": val, "unidad": unit,
                      "piso": floor, "status": status}
             if status in ("bajo", "estimado_bajo"):
-                entry["nota"] = _SUPPLEMENT_NOTE.get(key, "")
+                # [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (audit fresco P1-1) Con un fármaco que eleva el
+                # potasio, NO emitir la nota DRI "come más guineo/aguacate" (contradiría la moderación de
+                # potasio del medication_review → hiperkalemia). El potasio basal sigue siendo necesario, pero
+                # el panel/PDF no debe NUDGEAR a subirlo. Gateado por el mismo flag de P1-1 (rollback vía knob).
+                if key == "potassium_mg" and k_elevating_med:
+                    entry["nota"] = _POTASSIUM_RESTRICTED_NOTE
+                else:
+                    entry["nota"] = _SUPPLEMENT_NOTE.get(key, "")
                 gaps.append(entry)
         panel.append(entry)
     return {
