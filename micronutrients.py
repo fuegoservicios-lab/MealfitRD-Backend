@@ -57,7 +57,7 @@ def _has_diabetes(conditions) -> bool:
         return False
 
 
-def dri_targets(sex: str | None = "F", age: int | None = None) -> dict:
+def dri_targets(sex: str | None = "F", age: int | None = None, pregnant: bool = False) -> dict:
     """Pisos/techos DRI (IOM) + WHO por nutriente para un adulto. Sex-aware donde importa
     (hierro 18 vs 8 mg; fibra 25 vs 38 g; potasio 2600 vs 3400 mg). Default conservador
     femenino (hierro alto) cuando el sexo es desconocido.
@@ -66,14 +66,22 @@ def dri_targets(sex: str | None = "F", age: int | None = None) -> dict:
     con la edad y eso afecta la suplementación advisory: el HIERRO de la mujer baja de 18 mg (19-50) a 8 mg
     post-menopausia (51+) — antes 18 mg para todas sobre-flageaba déficit en mayores; el CALCIO sube de
     1000 a 1200 mg para mujeres 51+ y hombres 71+ — antes 1000 fijo sub-reforzaba en mayores. `age=None`
-    (desconocida) → valores de adulto joven (conservadores: hierro alto, calcio base)."""
+    (desconocida) → valores de adulto joven (conservadores: hierro alto, calcio base).
+
+    [P2-DRI-PREGNANCY-AWARE · 2026-06-19] (audit fresco P2-4) `pregnant=True` sube los micros COMPUTADOS
+    cuyo RDA cambia en embarazo/lactancia y donde el déficit es más caro: HIERRO 27 mg (RDA gestación, vs
+    18) y B12 2.6 mcg (vs 2.4). El FOLATO (RDA 600 mcg DFE) NO se añade a `targets` a propósito — el catálogo
+    no tiene columna de folato, así que un floor sin dato mostraría 'bajo' siempre (falso). El folato se
+    surfacea como condition_target advisory en `build_micronutrient_report`. El embarazo tiene precedencia
+    sobre el ajuste post-menopáusico del hierro (una embarazada >51 es excepcional pero el RDA gestación manda)."""
     male = str(sex or "").strip().lower() in _MALE_TERMS
     try:
         _age = int(age) if age is not None else None
     except (TypeError, ValueError):
         _age = None
     # Hierro (IOM/DRI): hombre 8 mg; mujer 18 mg (19-50) → 8 mg (51+, post-menopausia).
-    _iron = 8.0 if male else (8.0 if (_age is not None and _age >= 51) else 18.0)
+    # [P2-DRI-PREGNANCY-AWARE] embarazo → 27 mg (manda sobre sexo/edad).
+    _iron = 27.0 if pregnant else (8.0 if male else (8.0 if (_age is not None and _age >= 51) else 18.0))
     # Calcio (IOM/DRI): 1200 mg para mujer 51+ / hombre 71+; 1000 mg resto.
     _calcium = 1200.0 if (_age is not None and ((not male and _age >= 51) or (male and _age >= 71))) else 1000.0
     # [P2-DRI-AGE-AWARE-VITD · 2026-06-18] (audit fresco P2) Vit D (IOM/DRI): 15 mcg (600 UI) para 1-70 años;
@@ -87,7 +95,7 @@ def dri_targets(sex: str | None = "F", age: int | None = None) -> dict:
         "vit_d_mcg":     {"floor": _vit_d, "unit": "mcg"},           # DRI 600 UI (15 mcg) / 800 UI (20 mcg) 71+
         "calcium_mg":    {"floor": _calcium, "unit": "mg"},
         "iron_mg":       {"floor": _iron, "unit": "mg"},
-        "b12_mcg":       {"floor": 2.4, "unit": "mcg"},
+        "b12_mcg":       {"floor": 2.6 if pregnant else 2.4, "unit": "mcg"},   # [P2-DRI-PREGNANCY-AWARE]
         "potassium_mg":  {"floor": 3400.0 if male else 2600.0, "unit": "mg"},
         "magnesium_mg":  {"floor": 420.0 if male else 320.0, "unit": "mg"},   # [P4] DRI IOM
     }
@@ -236,7 +244,7 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
 def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                                conditions=None, daily_kcal: float | None = None,
                                fiber_per_1000kcal: float = _DM2_FIBER_PER_1000KCAL,
-                               age: int | None = None) -> dict:
+                               age: int | None = None, pregnant: bool = False) -> dict:
     """Reporte advisory: panel de micros diarios vs DRI/WHO con status + nota accionable.
     status ∈ {ok, bajo, alto, estimado_bajo, estimado_alto}. Floors incumplidos con cobertura
     parcial → 'estimado_bajo' (incierto, puede subir con lo no resuelto). Techos en apariencia
@@ -249,8 +257,19 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
     totals = compute_plan_micronutrient_totals(plan, db)
     daily = totals["daily"]
     coverage = totals["coverage"]
-    targets = dri_targets(sex, age)   # [P2-DRI-AGE-AWARE · 2026-06-15] (G15) hierro/calcio age-aware
+    targets = dri_targets(sex, age, pregnant=pregnant)   # [P2-DRI-AGE-AWARE/PREGNANCY-AWARE] hierro/calcio/B12
     condition_targets = []
+    # [P2-DRI-PREGNANCY-AWARE · 2026-06-19] (audit fresco P2-4) Embarazo/lactancia → condition_target citable
+    # con folato (RDA 600 mcg DFE — NO computable, sin columna en el catálogo, por eso advisory y no floor) +
+    # hierro 27 mg (sí computado, ya elevado en `targets`). Cierra la falsa tranquilidad del panel en el estado
+    # de mayor consecuencia por déficit (anemia materna / defectos del tubo neural).
+    if pregnant:
+        condition_targets.append({
+            "condicion": "Embarazo / lactancia",
+            "regla": "Folato ≥600 mcg/día (hoja verde, leguminosas, cítricos) + Hierro ≥27 mg/día (con vit C)",
+            "guia": "RDA gestación (IOM) — prioriza folato (tubo neural) y hierro (anemia materna); evita listeria",
+            "actual": {"hierro": daily.get("iron_mg", 0.0)},
+        })
     # [P3-CONDITION-RULES] DM2: piso de fibra = max(DRI, 14 g/1000 kcal). ADA 2025/2026 reemplazó
     # el target de %carbos/IG por "calidad del carbohidrato" — la fibra es el proxy citable.
     if _has_diabetes(conditions) and daily_kcal and daily_kcal > 0:
@@ -266,7 +285,12 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
     # [P4-UNIFIED-RESOLVER] HTA → patrón DASH: eleva el PISO de potasio (4700 mg) y magnesio (500 mg)
     # sobre el DRI general. Antes el balance DASH era PROMPT-confiado; ahora se evalúa con dato real
     # (columnas potassium/magnesium pobladas desde USDA). El techo de sodio ya vive en el DRI general.
-    if _has_hta(conditions):
+    # [P2-RENAL-HTA-POTASSIUM-GUARD · 2026-06-19] (audit fresco P2-2) El piso DASH de potasio (4700) y
+    # magnesio (500) se aplica SOLO si NO hay ERC comórbida: en enfermedad renal el potasio se RESTRINGE
+    # (riesgo de hiperkalemia → arritmia), así que el piso DASH está contraindicado y manda el techo renal.
+    # Para renal+HTA, el sodio bajo de DASH sí aplica (cubierto por la rama renal de abajo + el cap/subs);
+    # solo se omite la maximización de potasio/magnesio. La HTA es la causa #1 de ERC → comorbilidad común.
+    if _has_hta(conditions) and not _has_renal(conditions):
         if 4700.0 > targets["potassium_mg"]["floor"]:
             targets["potassium_mg"]["floor"] = 4700.0
         if 500.0 > targets["magnesium_mg"]["floor"]:
@@ -392,6 +416,12 @@ _SUPPLEMENT_TEMPLATES = {
         "nombre": "Hierro (bisglicinato, mejor tolerado)",
         "dosis_m": "8 mg/día solo si hay déficit confirmado",
         "dosis_f": "18 mg/día (especialmente si menstrúas)",
+        # [P2-IRON-DOSE-AGE-AWARE · 2026-06-19] (audit fresco P2-7) post-menopausia (≥51): el RDA baja a 8 mg
+        # y el exceso de hierro en mayores se asocia a riesgo CV → dosis menor + sin el copy de "si menstrúas".
+        "dosis_f_post": "8 mg/día solo si hay déficit confirmado (post-menopausia)",
+        # [P2-SUPPLEMENT-PREGNANCY-AWARE · 2026-06-19] (review P2) embarazo: RDA 27 mg — coherente con el piso
+        # del panel (dri_targets pregnant→27); manda sobre el ajuste por sexo/edad. Bajo control prenatal.
+        "dosis_f_preg": "27 mg/día (embarazo/lactancia) — bajo control prenatal/médico",
         "alimentos": "habichuelas/lentejas, carnes rojas magras, hígado, espinaca; acompaña con vit C (naranja/limón)",
         "precaucion": "separado de lácteos/café/té; confirma déficit con análisis (ferritina) antes de suplementar dosis altas.",
     },
@@ -404,7 +434,8 @@ _SUPPLEMENT_TEMPLATES = {
 }
 
 
-def build_supplement_recommendations(report: dict, sex: str | None = "F") -> dict:
+def build_supplement_recommendations(report: dict, sex: str | None = "F", age: int | None = None,
+                                     pregnant: bool = False) -> dict:
     """[P3-SUPPLEMENT-ADVICE · 2026-06-13] A partir de los gaps FLOOR del reporte de
     micronutrientes (vit D/calcio/hierro/B12 bajo), construye recomendaciones de
     suplementación ACCIONABLES (suplemento + dosis sex-aware + alternativa alimentaria +
@@ -419,7 +450,21 @@ def build_supplement_recommendations(report: dict, sex: str | None = "F") -> dic
             continue  # solo floors realmente bajos; ceilings (sodio/azúcar) no son suplemento
         dose = tpl.get("dosis")
         if key == "iron_mg":
-            dose = tpl["dosis_m"] if male else tpl["dosis_f"]
+            # [P2-IRON-DOSE-AGE-AWARE · 2026-06-19] (P2-7) age-aware como el piso DRI: mujer ≥51 → dosis
+            # post-menopáusica (8 mg), no la de menstruante (18 mg). Cierra la incoherencia floor-age-aware
+            # vs dose-sex-only. `age` puede faltar → cae a la dosis de menstruante (conservador).
+            if pregnant:
+                # [P2-SUPPLEMENT-PREGNANCY-AWARE · 2026-06-19] embarazo manda sobre sexo/edad (RDA 27 mg),
+                # coherente con el piso 27 del panel — evita la tarjeta contradictoria (panel 27 / dosis 18).
+                dose = tpl["dosis_f_preg"]
+            elif male:
+                dose = tpl["dosis_m"]
+            else:
+                try:
+                    _a = int(age) if age is not None else None
+                except (TypeError, ValueError):
+                    _a = None
+                dose = tpl["dosis_f_post"] if (_a is not None and _a >= 51) else tpl["dosis_f"]
         items.append({
             "nutriente": g.get("nutriente"),
             "key": key,

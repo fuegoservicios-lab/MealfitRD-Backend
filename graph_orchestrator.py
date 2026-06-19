@@ -7963,7 +7963,7 @@ REGLA DE PRECEDENCIA INVIOLABLE (si hay conflicto, gana esta):
 - La ASIGNACIÓN DEL PLANIFICADOR es HARD CONSTRAINT — NUNCA la violes aunque el critique pida cambiar una proteína/carbohidrato asignado.
 - Si el critique sugiere cambiar la proteína de almuerzo o cena (slot coherence violation), pero esa proteína FUE ASIGNADA por el planificador para este día, MANTÉN la proteína y resuelve la coherencia de slot por OTRO medio:
   • Cambia el CARBOHIDRATO de la cena (yuca→batata, arroz→ñame, papas→casabe).
-  • Cambia la TÉCNICA de cocción (a la plancha→guisada→al horno→ceviche).
+  • Cambia la TÉCNICA de cocción (a la plancha→guisada→al horno→al vapor).
   • Cambia el VEGETAL/acompañamiento (ensalada→sopa, fresca→cocida).
   • Cambia la PRESENTACIÓN (bowl→wrap, plato→pita).
 - Solo si NINGUNA proteína está duplicada en el skeleton (ej. skeleton dice "pavo" Y "queso") puedes alternarlas entre slots.
@@ -8430,6 +8430,12 @@ FOOD_SAFETY_GUARD = _env_bool("MEALFIT_FOOD_SAFETY_GUARD", True)
 # 'no_cook' (cocinable) sigue con nota (cocinar es viable). Default True (seguridad). Anchor: P2-RAW-EGG-SUBSTITUTE.
 RAW_EGG_BLENDED_SUBSTITUTE_ENABLED = _env_bool("MEALFIT_RAW_EGG_BLENDED_SUBSTITUTE", True)
 
+# [P2-FOOD-SAFETY-SEAFOOD · 2026-06-19] (audit fresco P2-1) Extiende el scan de food-safety (antes solo-huevo)
+# a pescado/carne CRUDOS (ceviche/sushi/sashimi/tartar/carpaccio). El ceviche dominicano marina pescado en
+# cítrico pero NO lo cuece — el ácido desnaturaliza, no elimina Vibrio/anisakis/Listeria. Macro-preservante
+# (solo nota, como 'no_cook'). Default True (seguridad); flip a False revierte al scan solo-huevo.
+RAW_SEAFOOD_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_SEAFOOD_SAFETY", True)
+
 # [P3-PORTION-QUANTIZE · 2026-06-13] Redondea las porciones del plan a unidades de cocina
 # medibles (¼ taza, ¼ cda, ½ unidad discreta, 5 g) ajustando los macros por el delta exacto.
 # Cierra el hallazgo de la auditoría: las fracciones decimales no medibles ('0.66 huevos',
@@ -8496,6 +8502,11 @@ PROTEIN_GKG_CEILING_CUT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_CUT", 2.6)
 #            modelamos → se trata como cap de SEGURIDAD + gate de derivación (FS9), no prescripción.
 CONDITION_RULES_ENABLED = _env_bool("MEALFIT_CONDITION_RULES", True)
 RENAL_PROTEIN_GKG_CEILING = _env_float("MEALFIT_RENAL_PROTEIN_GKG", 0.8)   # KDIGO 2024 G3-G5 no-diálisis
+# [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (audit fresco P2-5) KDIGO usa peso AJUSTADO/ideal (no real) para el
+# target g/kg en OBESIDAD: con peso real, 0.8 g/kg sobre 120 kg da ~96 g (vs ~56 g ideal) → cap +71% más
+# permisivo justo donde el exceso proteico es más dañino (daño glomerular). Default OFF (opt-in: el owner lo
+# habilita tras validar; el cap con peso real sigue siendo conservador-suficiente + el gate FS9 nefrólogo es la red).
+RENAL_ADJUSTED_WEIGHT_ENABLED = _env_bool("MEALFIT_RENAL_ADJUSTED_WEIGHT", False)
 # [P2-RENAL-CAP-FAILHARD · 2026-06-15] El cap renal de proteína es SEGURIDAD iatrogénica — su gate NO
 # debe compartir kill-switch con `PROTEIN_FLOOR_ENABLED` (un knob de hipertrofia). Knob dedicado, default
 # True (desactivarlo es una decisión deliberada de seguridad, no un efecto colateral de tunear el piso de
@@ -8717,6 +8728,31 @@ def _weight_kg_from_form(form_data: dict) -> float:
         return 0.0
 
 
+def _renal_weight_basis_kg(form_data: dict) -> float:
+    """[P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (audit fresco P2-5) Base de peso para el CAP RENAL de proteína.
+    KDIGO usa peso AJUSTADO/ideal en obesidad (IMC>30), no el peso real. Gateado por MEALFIT_RENAL_ADJUSTED_WEIGHT
+    (default OFF → peso real, comportamiento actual). OFF / sin height / IMC≤30 → peso real (fail-safe). IBW por
+    Devine; ajustado = IBW + 0.4×(real−IBW), clamp [IBW, real] (nunca sobre el real ni bajo el ideal). Solo lo
+    consumen los 3 callsites del cap renal — el resto del código sigue con `_weight_kg_from_form`."""
+    wkg = _weight_kg_from_form(form_data)
+    if not RENAL_ADJUSTED_WEIGHT_ENABLED or wkg <= 0 or not isinstance(form_data, dict):
+        return wkg
+    try:
+        h_cm = float(form_data.get("height") or 0)
+        if h_cm <= 0:
+            return wkg
+        bmi = wkg / ((h_cm / 100.0) ** 2)
+        if bmi <= 30.0:
+            return wkg  # solo ajusta en obesidad (donde real vs ideal diverge materialmente)
+        h_in = h_cm / 2.54
+        male = str(form_data.get("gender") or "").strip().lower() in ("male", "masculino", "masculina", "hombre", "m")
+        ibw = (50.0 if male else 45.5) + 2.3 * max(0.0, h_in - 60.0)
+        adjusted = ibw + 0.4 * (wkg - ibw)
+        return max(ibw, min(wkg, adjusted))
+    except (TypeError, ValueError):
+        return wkg
+
+
 def _goal_aware_trim_ceiling_pct(form_data: dict, target_protein_day: float) -> float:
     """[P3-PROTEIN-CEILING-GOAL-AWARE] `ceiling_pct` para el trim = techo_g/kg × peso / target.
     Robusto a peso ausente: fallback por objetivo (déficit más laxo, volumen estricto).
@@ -8890,7 +8926,7 @@ def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
     if not (CONDITION_RULES_ENABLED and isinstance(nutrition, dict) and _is_renal_condition(form_data)):
         return
     try:
-        wkg = _weight_kg_from_form(form_data)
+        wkg = _renal_weight_basis_kg(form_data)   # [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (P2-5) peso ajustado en obesidad
         if wkg <= 0:
             return
         cap_g = round(RENAL_PROTEIN_GKG_CEILING * wkg)
@@ -9443,6 +9479,55 @@ _FOOD_SAFETY_NOTE_BLENDED_SUBBED = (
 # Reemplazo blend-safe que RESUELVE al catálogo (validado por el contrato de resolubilidad P2-17).
 _BLEND_EGG_REPLACEMENT = "Yogurt griego sin azúcar"
 
+# [P2-FOOD-SAFETY-SEAFOOD · 2026-06-19] (audit fresco P2-1) Platos de pescado/carne CRUDOS, accent-free.
+# Tokens ESTRECHOS: nombres de plato inequívocamente crudo (ceviche/sushi/...) + frases explícitas
+# ('pescado crudo'). NO 'crudo'/'cruda' desnudo → matchearía 'zanahoria cruda' (vegetal seguro).
+_RAW_SEAFOOD_MEAT_TERMS = (  # INEQUÍVOCOS: plato crudo de pescado/carne, match standalone.
+    "ceviche", "cebiche", "sushi", "sashimi", "tiradito",
+    "pescado crudo", "carne cruda", "res cruda", "atun crudo", "salmon crudo", "marisco crudo",
+)
+# [review P2] tartar/carpaccio existen también de VEGETAL ('tartar de remolacha', 'carpaccio de calabacín')
+# → ambiguos: solo flagean si co-ocurren con un sustantivo de proteína ANIMAL en el mismo texto.
+_RAW_PREP_AMBIGUOUS = ("tartar", "tartare", "carpaccio")
+_RAW_ANIMAL_PROTEIN_TERMS = ("pescado", "atun", "salmon", "res", "carne", "ternera", "marisco", "camaron",
+                             "pulpo", "vieira", "ostra", "bacalao", "mero", "tilapia", "chillo", "filete")
+_FOOD_SAFETY_NOTE_RAW_SEAFOOD = (
+    "⚠️ Seguridad alimentaria: este plato lleva pescado/marisco o carne CRUDOS (ceviche, sushi, tartar). "
+    "El cítrico del ceviche NO cuece el pescado. Riesgo de Vibrio, anisakis y Listeria — EVÍTALO en "
+    "embarazo o si tu sistema inmune está comprometido. Usa pescado previamente congelado de fuente "
+    "confiable, o elige una preparación COCIDA (a la plancha / al horno / guisada)."
+)
+
+
+def _scan_raw_seafood_meat_violations(plan: dict) -> list:
+    """[P2-FOOD-SAFETY-SEAFOOD · 2026-06-19] (audit fresco P2-1) Detecta platos de pescado/carne crudos por
+    nombre/receta/ingredientes (ceviche/sushi/tartar/...). Retorna lista de (day_idx, meal_idx, meal_name).
+    Sesgo a seguridad con tokens estrechos (nombres de plato crudo, no 'crudo' desnudo → no flagea vegetales
+    crudos). Espejo de `_scan_raw_egg_violations`; el fix es macro-preservante (solo añade nota)."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    out = []
+    for di, day in enumerate(plan.get("days", []) or []):
+        for mi, meal in enumerate(day.get("meals", []) or []):
+            parts = [str(meal.get("name", ""))]
+            rec = meal.get("recipe")
+            if isinstance(rec, list):
+                parts.extend(str(s) for s in rec)
+            for ing in (meal.get("ingredients", []) or []):
+                parts.append(str(ing))
+            text = strip_accents(" ".join(parts).lower())
+            hit = any(t in text for t in _RAW_SEAFOOD_MEAT_TERMS)
+            if not hit and any(t in text for t in _RAW_PREP_AMBIGUOUS):
+                # tartar/carpaccio solo cuentan con proteína animal en el plato (no 'tartar de remolacha').
+                hit = any(a in text for a in _RAW_ANIMAL_PROTEIN_TERMS)
+            if hit:
+                out.append((di, mi, meal.get("name", "?")))
+    return out
+
 
 def _substitute_blended_raw_egg(meal: dict, db) -> bool:
     """[P2-RAW-EGG-SUBSTITUTE · 2026-06-15] Reemplaza el huevo crudo de una preparación LICUADA por una
@@ -9534,6 +9619,22 @@ def _apply_food_safety_fixes(plan: dict) -> int:
             meal["_food_safety_fixed"] = kind
         meal["recipe"] = rec + [note]
         fixed += 1
+    # [P2-FOOD-SAFETY-SEAFOOD · 2026-06-19] (audit fresco P2-1) Pescado/carne crudos → nota de seguridad
+    # determinista (macro-preservante; idempotente por substring específico, no choca con la nota de huevo).
+    if RAW_SEAFOOD_SAFETY_ENABLED:
+        for di, mi, _sname in _scan_raw_seafood_meat_violations(plan):
+            try:
+                meal = plan["days"][di]["meals"][mi]
+            except (KeyError, IndexError, TypeError):
+                continue
+            rec = meal.get("recipe")
+            if not isinstance(rec, list):
+                rec = [] if rec is None else [str(rec)]
+            if any("pescado/marisco o carne CRUDOS" in str(s) for s in rec):
+                continue  # idempotente
+            meal["recipe"] = rec + [_FOOD_SAFETY_NOTE_RAW_SEAFOOD]
+            meal["_food_safety_seafood"] = True   # campo propio: NO pisa `_food_safety_fixed` del huevo si coexisten
+            fixed += 1
     return fixed
 
 
@@ -9592,6 +9693,18 @@ def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
             return False  # nada resoluble → no tocar (degradación grácil)
         meal["ingredients"] = res["ingredients"]
         factors = res.get("factors_applied") or []
+        # [P2-SOLVER-CLAMP-TELEMETRY · 2026-06-19] (audit fresco P2-9) Observabilidad de la saturación del clamp
+        # del solver ([0.3, 3.5]): cuando un factor satura, el slot quedó FUERA de banda ANTES de que actúe el
+        # closer (contribuye al techo de all-4-band ~66.7%). Solo telemetría (flag + log) — NO cambia el plan;
+        # mide la frecuencia real antes de considerar subir max_scale para proteína-dominantes (opción b).
+        try:
+            _sat = sum(1 for _f in factors if isinstance(_f, (int, float)) and (_f <= 0.301 or _f >= 3.499))
+            if _sat:
+                meal["_solver_clamp_saturated"] = _sat
+                logger.info(f"📐 [P2-SOLVER-CLAMP-TELEMETRY] {_sat}/{len(factors)} factor(es) saturaron el clamp "
+                            f"[0.3,3.5] en meal {str(meal.get('name'))[:40]!r} (slot fuera de banda pre-closer).")
+        except Exception:
+            pass
         raw = meal.get("ingredients_raw")
         if isinstance(raw, list) and len(raw) == len(factors):
             meal["ingredients_raw"] = [
@@ -10686,7 +10799,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     # per-comida + el gate FS9. En el happy path active_macros ya viene capeado → no-op. Fail-safe.
     try:
         if CONDITION_RULES_ENABLED and _is_renal_condition(form_data) and active_macros:
-            _wkg = _weight_kg_from_form(form_data)
+            _wkg = _renal_weight_basis_kg(form_data)   # [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (P2-5)
             _old_p = _meal_macro_num(active_macros.get("protein_str"))
             _cap = round(RENAL_PROTEIN_GKG_CEILING * _wkg)
             # Copia PRIVADA del header del plan antes de mutarlo → si un caller (p.ej. Fase B) pasara un
@@ -10924,6 +11037,18 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
             logger.warning(f"[P1-RENAL-RECHECK-POST-SUBS] verificación final renal falló: "
                            f"{type(_rcf_e).__name__}: {_rcf_e}")
 
+    # [P2-DRI-PREGNANCY-AWARE / P2-PREGNANCY-FS9-GATE · 2026-06-19] (audit fresco P2-3/P2-4) Detección SSOT
+    # de embarazo/lactancia, reusada por el panel de micros (Guard 5, hierro/folato) y el gate FS9 (Guard 8e).
+    # Fuente: el flag de get_nutrition_targets O el detector directo sobre el form (cubre el path fallback
+    # donde `nutrition` podría no traer el flag). Fail-safe → False.
+    _pregnant = bool(nutrition.get("pregnancy_lactation_safety"))
+    if not _pregnant:
+        try:
+            from nutrition_calculator import _is_pregnancy_or_lactation as _is_preg_lac
+            _pregnant = bool(_is_preg_lac(form_data))
+        except Exception:
+            _pregnant = False
+
     # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (espejo [P3-MICRONUTRIENTS]) ──
     if MICRONUTRIENT_REPORT_ENABLED and _db is not None:
         try:
@@ -10933,14 +11058,16 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 plan, _db, sex=_sex,
                 conditions=_condition_strings(form_data), daily_kcal=_daily_cals,
                 fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL,
-                age=form_data.get("age"))   # [P2-DRI-AGE-AWARE · 2026-06-15] (G15) hierro/calcio por edad
+                age=form_data.get("age"),   # [P2-DRI-AGE-AWARE · 2026-06-15] (G15) hierro/calcio por edad
+                pregnant=_pregnant)          # [P2-DRI-PREGNANCY-AWARE · 2026-06-19] (P2-4) hierro 27/folato/B12
             plan["micronutrient_report"] = _mn
             _ngaps = len(_mn.get("gaps", []))
             logger.info(f"🧪 [P3-MICRONUTRIENTS] Panel de micros computado "
                         f"(cobertura {int(_mn.get('coverage', 0)*100)}%, {_ngaps} gap(s) advisory)")
             if SUPPLEMENT_ADVICE_ENABLED:
                 from micronutrients import build_supplement_recommendations
-                _supp = build_supplement_recommendations(_mn, sex=_sex)
+                _supp = build_supplement_recommendations(_mn, sex=_sex, age=form_data.get("age"),
+                                                         pregnant=_pregnant)  # [P2-IRON-DOSE-AGE-AWARE / P2-SUPPLEMENT-PREGNANCY-AWARE]
                 if _supp.get("count"):
                     plan["micronutrient_supplement_advice"] = _supp
                     logger.info(f"💊 [P3-SUPPLEMENT-ADVICE] {_supp['count']} recomendación(es) de "
@@ -11128,6 +11255,36 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                            "perfil de menor de edad.")
         except Exception as _mn_e:
             logger.warning(f"[P1-MINOR-SAFETY-GATE] FS9 wiring error: {type(_mn_e).__name__}: {_mn_e}")
+
+    # ── Guard 8e (FS9 embarazo/lactancia) [P2-PREGNANCY-FS9-GATE · 2026-06-19] (audit fresco P2-3) ──
+    # Si el perfil declara embarazo/lactancia (`_pregnant`: flag de get_nutrition_targets O detector sobre el
+    # form), aplica el gate de revisión profesional con una nota OBSTÉTRICA dedicada. Cierra la asimetría: los
+    # gates de menor (8c) y low-calorie (8b) tenían su Guard espejo; el embarazo solo alcanzaba FS9 por la vía
+    # indirecta de las condiciones médicas. El gate de déficit calórico ya corre aparte (nutrition_calculator).
+    # Merge no destructivo. Espejo de Guard 8c.
+    if PRO_REVIEW_FLAG_ENABLED and _pregnant:
+        try:
+            _pg_note = ("🤰 EMBARAZO / LACTANCIA: tus necesidades de energía y micronutrientes (folato, hierro, "
+                        "calcio, B12) son mayores y el déficit calórico está contraindicado — este plan usa al "
+                        "menos mantenimiento. Requiere control prenatal: consulta a tu obstetra o nutricionista "
+                        "antes de seguirlo, y evita alimentos de riesgo de listeria (lácteos no pasteurizados, "
+                        "pescado/carne crudos, embutidos).")
+            _existing_pg = plan.get("requires_professional_review")
+            if isinstance(_existing_pg, dict) and _existing_pg.get("flag"):
+                if _pg_note not in (_existing_pg.get("note") or ""):
+                    _existing_pg["note"] = ((_existing_pg.get("note") or "") + " " + _pg_note).strip()
+                _existing_pg["pregnancy"] = True
+            else:
+                plan["requires_professional_review"] = {
+                    "flag": True,
+                    "conditions": [],
+                    "pregnancy": True,
+                    "note": _pg_note,
+                }
+            logger.warning("🤰 [P2-PREGNANCY-FS9-GATE] gate de revisión profesional (FS9) aplicado por "
+                           "embarazo/lactancia.")
+        except Exception as _pg_e:
+            logger.warning(f"[P2-PREGNANCY-FS9-GATE] FS9 wiring error: {type(_pg_e).__name__}: {_pg_e}")
 
     # ── Guard 8d (FS9 interacciones fármaco-alimento) [P1-MEDICATION-RULES / P1-WARFARIN-VITAMIN-K · 2026-06-18] ──
     # (audit fresco P1-A/P1-B) Si el perfil declara un medicamento con interacción dietética conocida
@@ -11515,7 +11672,7 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # derivación profesional. Fail-safe total. Anchor: P3-CONDITION-RULES.
     if CONDITION_RULES_ENABLED and _is_renal_condition(form_data):
         try:
-            _wkg_renal = _weight_kg_from_form(form_data)
+            _wkg_renal = _renal_weight_basis_kg(form_data)   # [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (P2-5)
             _old_p_renal = _meal_macro_num(active_macros.get("protein_str"))
             _renal_cap = round(RENAL_PROTEIN_GKG_CEILING * _wkg_renal)
             if _wkg_renal > 0 and _renal_cap > 0 and _renal_cap < _old_p_renal:
@@ -13052,7 +13209,16 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
         "_marker_regen_attempted": True,
     }
     if fixed_count > 0:
-        state_update["_best_attempt_plan"] = copy.deepcopy(new_plan_result)
+        # [P2-MARKER-REGEN-CLINICAL-RECHECK · 2026-06-19] (audit fresco P2-13) Los días re-corregidos por
+        # surgical_marker_regen NO recibieron la capa clínica completa (solo el re-trim de proteína general). Si
+        # re-review demota y este snapshot se restaura, se entregaría sin food-safety + subs de sodio. Stripeamos
+        # `_clinical_layer_applied` para que el re-apply POST-SWAP (en arun_plan_pipeline, tras
+        # `_swap_to_best_attempt_if_better`) detecte el flag ausente y re-aplique la capa. (El seam de salida
+        # `_is_fallback` NO cubre este snapshot — es no-fallback y corre antes del swap.) Sin el strip, el re-apply
+        # post-swap haría no-op. La red renal de salida ya corre independiente del flag.
+        _best_snap = copy.deepcopy(new_plan_result)
+        _best_snap.pop("_clinical_layer_applied", None)
+        state_update["_best_attempt_plan"] = _best_snap
         state_update["_best_attempt_severity"] = "approved"
         state_update["_best_attempt_reasons"] = []
         state_update["_best_attempt_review_passed"] = True
@@ -19821,6 +19987,22 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     "🔄 [P0-PIPE-1] Plan final restaurado a snapshot del mejor "
                     "intento previo (telemetría: `_best_attempt_swapped_from`)."
                 )
+                # [P2-MARKER-REGEN-CLINICAL-RECHECK · 2026-06-19] (audit fresco P2-13, fix review-P1) El snapshot
+                # restaurado (best-attempt de surgical_marker_regen) puede traer días re-corregidos SIN la capa
+                # clínica completa (solo el re-trim de proteína). Su flag `_clinical_layer_applied` se stripeó en
+                # la promoción (surgical_marker_regen_node) JUSTO para que aquí, tras el swap, la capa se RE-APLIQUE.
+                # El seam de salida (:18714) NO lo cubría (gateado por `_is_fallback`, y corre ANTES del swap). Va
+                # ANTES del re-aggregate para que la lista de compras refleje los swaps de sodio/azúcar. Idempotente:
+                # flag presente (snapshots normales) → no-op; renal cap chequea `applied`; food-safety/subs idempotentes.
+                try:
+                    _swapped_plan = final_state.get("plan_result")
+                    if isinstance(_swapped_plan, dict) and not _swapped_plan.get("_clinical_layer_applied"):
+                        _apply_deterministic_clinical_layer(_swapped_plan, actual_form_data, nutrition)
+                        logger.warning("🛡️ [P2-MARKER-REGEN-CLINICAL-RECHECK] Capa clínica re-aplicada al snapshot "
+                                       "restaurado (food-safety + subs sodio/azúcar + micros + gate FS9).")
+                except Exception as _mrc_e:
+                    logger.warning(f"[P2-MARKER-REGEN-CLINICAL-RECHECK] re-aplicación post-swap falló: "
+                                   f"{type(_mrc_e).__name__}: {_mrc_e}")
                 # [ROLLBACK-AGGREGATE-FIX 2026-05-07] Tras swap, los
                 # `aggregated_shopping_list_*` del snapshot pueden estar
                 # desincronizados entre ciclos (capturados en distintos

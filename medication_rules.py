@@ -429,6 +429,11 @@ _HIGH_VIT_K_TERMS = (
     "coles de bruselas", "col de bruselas", "perejil", "cilantro", "esparrago", "grelos",
     "hojas de nabo", "hojas de mostaza", "rucula", "vainita", "habichuela tierna", "quimbombo",
     "molondron", "okra",
+    # [P2-VITK-GENERIC-TERMS · 2026-06-19] (audit fresco P2-8) Platos GENÉRICOS de hoja verde que antes
+    # contaban 0 (sub-conteo → variabilidad falsa-alta/baja del monitor de vit K). Tokens de bajo riesgo de
+    # falso-positivo (verde/hoja explícito). +aguacate (vit K moderada, ubicuo en RD).
+    "ensalada verde", "ensalada mixta", "hojas verdes", "vegetales verdes", "vegetales de hoja verde",
+    "aguacate",
 )
 
 

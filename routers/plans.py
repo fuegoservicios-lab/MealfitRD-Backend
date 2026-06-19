@@ -7205,6 +7205,18 @@ def api_restore_plan(
                         # advisory lock automáticamente.
                         is_noop = True
                     else:
+                        # [P2-RESTORE-PLAN-LOCK · 2026-06-19] (audit fresco P2-14) El full-overwrite de
+                        # plan_data de 3c DEBE serializarse contra los escritores per-plan (_chunk_worker T1/T2,
+                        # /shift) que toman `acquire_meal_plan_advisory_lock(purpose='general')`. El lock per-USER
+                        # de arriba serializa restores entre sí pero NO contra un worker ya dentro de su FOR UPDATE
+                        # sobre ESTE plan (la cancelación de chunks de 3a no es atómica respecto a eso). Lock
+                        # transaccional (libera al COMMIT/ROLLBACK). Orden global consistente: user-history <
+                        # general (ningún writer toma general→user-history) → sin deadlock. Cumple I7 para /restore.
+                        # El SOURCE NO se lockea a propósito: su plan_data solo se LEE (snapshot inmutable, fuera de
+                        # la tx), nunca se sobrescribe → no es superficie I7. El cleanup de chunks del source (3a-bis)
+                        # puede contender filas MVCC con un worker del source, pero es pre-existente y no afecta I7.
+                        from db_plans import acquire_meal_plan_advisory_lock as _restore_acquire_lock
+                        _restore_acquire_lock(cur, target_plan_id, purpose="general")
                         # 3a) Cancelar TODOS los chunks "vivos" del target.
                         #     [P0-AUDIT-HIST-1 · 2026-05-09] El filtro
                         #     histórico era `('pending', 'processing')`,
