@@ -64,6 +64,12 @@ class MedicationRule:
     # de timing dedicado (medication_review.timing_advisories), distinto del advisory de interacción general.
     timing_sensitive: bool = False
     precedence: int = 50
+    # [P1-MED-AMBIGUOUS-TERM-VETO · 2026-06-19] Frases que VETAN la detección cuando un `term` ambiguo
+    # haría falso-positivo con una CONDICIÓN (no un fármaco) vía el backstop de texto libre. Ej: 'insulina'
+    # matchea "resistencia a la insulina" (condición DM2 de alta prevalencia, NO insulina-fármaco). El veto
+    # es per-candidato: una cadena que matchea un term PERO contiene un negative NO activa la regla — la
+    # "Insulina" del chip (sin 'resistencia') sí matchea; "resistencia a la insulina" queda vetada.
+    term_negatives: tuple = ()
 
 
 # ── El REGISTRO declarativo (SSOT de las interacciones fármaco-alimento) ──
@@ -85,6 +91,12 @@ MEDICATION_RULES: tuple = (
             "repollo, lechuga, acelga) de forma PAREJA entre todos los días — NO concentres muchos en un "
             "día y ninguno en otro. La ESTABILIDAD importa más que la cantidad.\n"
             "   • Cantidades MODERADAS y similares cada día (no las elimines: la vitamina K es saludable).\n"
+            # [P1-POTASSIUM-SPARING-DIURETIC · 2026-06-19] (audit fresco P1-2, simétrica vit-K) Resuelve la
+            # auto-contradicción cross-motor: la regla DASH de HTA prioriza hoja verde mientras la warfarina
+            # exige CONSISTENCIA. La consistencia TIENE PRECEDENCIA — explícito para que el LLM no maximice.
+            "   • Si te indicaron una dieta DASH/alta en vegetales de hoja verde (hipertensión), NO la "
+            "interpretes como 'más hoja verde': mantén la cantidad CONSISTENTE día a día (la estabilidad, "
+            "no la cantidad, es lo que protege tu INR).\n"
             "   • EVITA jugo de toronja/pomelo y suplementos de vitamina K/E sin indicación médica.\n"
             "   • Este plan es ORIENTATIVO; el ajuste fino lo define tu médico según tu INR."),
     ),
@@ -120,6 +132,35 @@ MEDICATION_RULES: tuple = (
             "moderación; el balance fino lo controla el médico con análisis."),
     ),
     MedicationRule(
+        # [P1-POTASSIUM-SPARING-DIURETIC · 2026-06-19] (audit fresco P1-2) Los ahorradores de potasio
+        # (espironolactona/Aldactone — 1ª línea en HTA resistente e ICC en RD — eplerenona, amilorida,
+        # triamtereno) ELEVAN el potasio sérico: el MISMO riesgo de los IECA/ARA-II. Sin esta fila no se
+        # detectaban → ni advisory ni gate FS9, y la directiva DASH de la HTA (que prioriza potasio) AMPLIFICABA
+        # el riesgo de hiperkalemia que la fila ace_arb ya advierte. El prompt_block toma PRECEDENCIA explícita
+        # sobre el "sube potasio" de DASH (resolución prompt-level; la capa determinista de conflictos es el
+        # follow-up sistémico S1).
+        id="potassium_sparing_diuretic", label="Diurético ahorrador de potasio (espironolactona)",
+        terms=("espironolactona", "spironolactone", "aldactone", "eplerenona", "eplerenone",
+               "amilorida", "amiloride", "triamtereno", "triamterene", "ahorrador de potasio",
+               "diuretico ahorrador"),
+        precedence=40,
+        interaction=("Los diuréticos ahorradores de potasio (espironolactona, eplerenona, amilorida, "
+                     "triamtereno) ELEVAN el potasio en sangre — el mismo riesgo de los IECA/ARA-II y "
+                     "potencialmente grave (hiperkalemia → arritmia)."),
+        recommendation=("EVITA los sustitutos de sal 'lite'/'sin sodio' (cloruro de potasio) y los "
+                        "suplementos de potasio. Si te recomendaron una dieta alta en potasio (DASH), "
+                        "consúltala con tu médico ANTES de seguirla: tu fármaco ya eleva el potasio. Tu "
+                        "médico controla tu potasio sérico."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — DIURÉTICO AHORRADOR DE POTASIO (ESPIRONOLACTONA/ALDACTONE) — REQUIERE MÉDICO:\n"
+            "   • Este fármaco ELEVA el potasio en sangre (riesgo de hiperkalemia → arritmia).\n"
+            "   • PRECEDENCIA sobre cualquier indicación de AUMENTAR el potasio (incluida la dieta DASH de "
+            "hipertensión): NO maximices guineo, aguacate, leguminosas ni vegetales de hoja verde — mantén "
+            "porciones MODERADAS y parejas, no abundantes.\n"
+            "   • NO uses sustitutos de sal 'lite'/'sin sodio' (son CLORURO DE POTASIO) ni suplementos de potasio.\n"
+            "   • El balance fino lo controla tu médico con análisis de potasio sérico."),
+    ),
+    MedicationRule(
         id="levothyroxine", label="Levotiroxina (tiroides)",
         terms=("levotiroxina", "levothyroxine", "eutirox", "synthroid", "euthyrox", "tiroxina",
                "liotironina", "liothyronine"),
@@ -133,6 +174,149 @@ MEDICATION_RULES: tuple = (
             "   • TIMING: la levotiroxina se toma en ayunas; el desayuno (sobre todo lácteos/calcio, "
             "hierro, café y soya) debe ir 30-60 min DESPUÉS de la pastilla.\n"
             "   • Separa los suplementos de calcio/hierro al menos 4 h de la pastilla (reducen su absorción)."),
+    ),
+    # ── [P2-MEDICATION-RULES-EXPAND · 2026-06-19] 7 reglas adicionales (revisadas por
+    #    farmacólogo clínico, APROBADO-CON-CAMBIOS). Direcciones del potasio verificadas:
+    #    la tiazida/asa BAJA K → se diseña NEUTRAL para no contradecir a IECA/ARA-II ni al
+    #    ahorrador (que lo SUBEN). El gate FS9 ya defiere al médico en politerapia. NO
+    #    duplica `potassium_sparing_diuretic` (esa la cubre el owner). ──
+    MedicationRule(
+        id="insulin_secretagogue", label="Insulina, sulfonilurea o glinida (diabetes)",
+        terms=("insulina", "insulin", "lantus", "novorapid", "humalog", "levemir", "tresiba", "glargina",
+               "glibenclamida", "glyburide", "gliburida", "daonil", "euglucon", "glimepirida", "glimepiride",
+               "amaryl", "glicazida", "gliclazida", "gliclazide", "diamicron", "glipizida", "repaglinida",
+               "nateglinida", "sulfonilurea"),
+        precedence=25,
+        # [P1-MED-AMBIGUOUS-TERM-VETO · 2026-06-19] 'insulina'/'insulin' matchea "resistencia a la insulina"
+        # / "resistencia insulinica" (condición DM2, NO insulina-fármaco) vía el backstop de texto libre →
+        # advisory de hipoglucemia + FS9 espurios a un insulino-RESISTENTE sin insulina. El veto excluye esas
+        # frases pero deja pasar la "Insulina"-fármaco del chip (sin 'resistencia'). +'insulinoma' (tumor).
+        term_negatives=("resistencia", "sensibilidad", "resistente", "insulinoma"),
+        interaction=("La insulina y los secretagogos (glibenclamida, glimepirida, glicazida, repaglinida) "
+                     "pueden causar BAJAS de azúcar (hipoglucemia) si se saltan o retrasan comidas o si los "
+                     "carbohidratos varían mucho de un día a otro. (La metformina sola NO causa hipoglucemia.)"),
+        recommendation=("NO te saltes comidas; mantén una cantidad y horario de carbohidratos CONSISTENTES "
+                        "cada día e incluye fibra y proteína en cada comida. Ten a mano una fuente de azúcar "
+                        "rápida por si sientes temblor/sudor/mareo. Tu médico ajusta la dosis."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — INSULINA / SECRETAGOGO (DIABETES) — RIESGO DE HIPOGLUCEMIA:\n"
+            "   • NO omitas comidas; reparte los carbohidratos de forma CONSISTENTE en cantidad y horario "
+            "cada día (evita días de muchos carbos y días de casi ninguno).\n"
+            "   • Incluye fibra y proteína en cada comida para estabilizar la glucosa; evita bebidas azucaradas.\n"
+            "   • Ante síntomas de baja de azúcar (temblor, sudor, mareo) toma azúcar rápida. El ajuste de "
+            "dosis lo hace el médico."),
+    ),
+    MedicationRule(
+        id="corticosteroid", label="Corticoide (prednisona y similares)",
+        terms=("prednisona", "prednisone", "prednisolona", "prednisolone", "deltasone", "dexametasona",
+               "dexamethasone", "metilprednisolona", "methylprednisolone", "hidrocortisona", "betametasona",
+               "corticoide", "corticosteroide", "glucocorticoide"),
+        precedence=35,
+        interaction=("Los corticoides retienen sodio y líquidos, ELEVAN el azúcar en sangre y, con el uso "
+                     "PROLONGADO o repetido, reducen el calcio (riesgo óseo) y el potasio."),
+        recommendation=("Reduce el sodio (sal, embutidos, enlatados) y limita azúcares/refinados (controlan "
+                        "la glucosa). En tratamientos prolongados o repetidos, asegura calcio y vitamina D "
+                        "(lácteos, sardina con espina). Tu médico ajusta."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — CORTICOIDE (PREDNISONA Y SIMILARES):\n"
+            "   • BAJO EN SODIO (retienen líquidos/suben la presión): limita sal, embutidos, enlatados.\n"
+            "   • CONTROLA EL AZÚCAR: limita bebidas azucaradas, dulces y harinas refinadas (suben la glucosa).\n"
+            "   • SOBRE TODO en tratamientos PROLONGADOS o repetidos: refuerza CALCIO y VITAMINA D (lácteos, "
+            "sardina con espina) — el uso crónico afecta el hueso. (Cursos cortos: menos relevante.)"),
+    ),
+    MedicationRule(
+        id="diuretic_depleting", label="Diurético (tiazida / de asa)",
+        terms=("hidroclorotiazida", "hydrochlorothiazide", "hctz", "clortalidona", "chlorthalidone",
+               "indapamida", "indapamide", "furosemida", "furosemide", "lasix", "torasemida", "bumetanida"),
+        precedence=43,
+        interaction=("Los diuréticos tiazídicos y de asa (hidroclorotiazida, furosemida) pueden BAJAR el "
+                     "potasio y el magnesio en sangre."),
+        recommendation=("Mantén una alimentación variada con vegetales, frutas y buena hidratación; sodio "
+                        "moderado (limita sal/embutidos). Tu médico controla tus electrolitos: no hagas "
+                        "cambios drásticos de potasio sin su indicación, sobre todo si también tomas IECA/"
+                        "ARA-II o un ahorrador de potasio."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — DIURÉTICO (TIAZIDA / DE ASA):\n"
+            "   • Pueden BAJAR potasio/magnesio: mantén una dieta variada con vegetales y frutas y buena "
+            "hidratación; el médico controla los niveles con análisis.\n"
+            "   • SODIO moderado (limita sal/embutidos). NO hagas cambios drásticos de potasio sin "
+            "indicación médica (sobre todo si también tomas IECA/ARA-II o un ahorrador de potasio)."),
+    ),
+    MedicationRule(
+        id="ppi", label="Protector gástrico (omeprazol/IBP)",
+        terms=("omeprazol", "omeprazole", "prilosec", "esomeprazol", "esomeprazole", "nexium",
+               "pantoprazol", "pantoprazole", "lansoprazol", "lansoprazole", "rabeprazol", "dexlansoprazol",
+               "inhibidor de bomba"),
+        precedence=46,
+        interaction=("El uso PROLONGADO de inhibidores de la bomba de protones (omeprazol y similares) puede "
+                     "reducir la absorción de vitamina B12, magnesio, calcio y hierro."),
+        recommendation=("Asegura fuentes de B12 (huevo, lácteos, carne, pescado), magnesio (hoja verde, "
+                        "nueces, leguminosas), calcio y hierro; combina el hierro vegetal con vitamina C "
+                        "(limón, naranja). Tu médico puede medir estos niveles."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — PROTECTOR GÁSTRICO (OMEPRAZOL/IBP):\n"
+            "   • Refuerza VITAMINA B12 (huevo, lácteos, carne, pescado), MAGNESIO (hoja verde, nueces, "
+            "leguminosas), CALCIO y HIERRO — el uso prolongado reduce su absorción.\n"
+            "   • Combina el hierro vegetal con vitamina C (limón, naranja) para mejorar su absorción."),
+    ),
+    MedicationRule(
+        id="gout", label="Gota / ácido úrico (alopurinol)",
+        # [P1-MED-AMBIGUOUS-TERM-VETO · 2026-06-19] Quitado el descriptor 'acido urico' — es una CONDICIÓN
+        # ("ácido úrico alto"), no un fármaco; matcheaba via el backstop y emitía un prompt_block de ALOPURINOL
+        # + FS9 a alguien sin medicación. Se quedan los nombres de fármaco inequívocos (alopurinol/febuxostat/
+        # colchicina/probenecid). La hiperuricemia como condición se modela en condition_rules (gout), no aquí.
+        terms=("alopurinol", "allopurinol", "zyloprim", "febuxostat", "adenuric", "colchicina", "colchicine",
+               "probenecid"),
+        precedence=47,
+        interaction=("El ácido úrico alto y la gota se afectan por la dieta: las carnes rojas y vísceras, los "
+                     "mariscos y sardinas, el alcohol (sobre todo cerveza) y las bebidas con fructosa lo SUBEN. "
+                     "Las purinas VEGETALES no aumentan las crisis."),
+        recommendation=("Limita vísceras, carnes rojas en exceso, mariscos y sardinas; evita el alcohol (en "
+                        "especial cerveza) y las bebidas azucaradas/con fructosa; toma suficiente agua. Las "
+                        "legumbres/habichuelas y los vegetales —aunque tengan purinas— NO se restringen; los "
+                        "lácteos bajos en grasa son favorables."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — GOTA / ÁCIDO ÚRICO (ALOPURINOL):\n"
+            "   • LIMITA purinas ANIMALES altas: vísceras (hígado, riñón), carnes rojas en exceso, mariscos, "
+            "sardinas, anchoas.\n"
+            "   • EVITA el alcohol (sobre todo cerveza) y las bebidas azucaradas/con fructosa (suben el ácido úrico).\n"
+            "   • NO restrinjas legumbres/habichuelas (lentejas, guandules, frijoles) ni vegetales aunque "
+            "tengan purinas — la evidencia muestra que NO empeoran la gota. Favorece HIDRATACIÓN y lácteos "
+            "bajos en grasa."),
+    ),
+    MedicationRule(
+        id="statin", label="Estatina (colesterol)",
+        terms=("atorvastatina", "atorvastatin", "lipitor", "simvastatina", "simvastatin", "zocor",
+               "rosuvastatina", "rosuvastatin", "crestor", "lovastatina", "pravastatina", "pitavastatina",
+               "fluvastatina", "estatina"),
+        precedence=48,
+        interaction=("La toronja/pomelo (y su jugo) puede elevar los niveles de ALGUNAS estatinas en sangre "
+                     "—sobre todo atorvastatina y simvastatina— y aumentar el riesgo de daño muscular. "
+                     "(Rosuvastatina y pravastatina casi no se afectan.)"),
+        recommendation=("Evita el jugo de toronja/pomelo, especialmente si tomas atorvastatina o simvastatina. "
+                        "Mantén una dieta cardiosaludable (baja en grasa saturada, alta en fibra)."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — ESTATINA (COLESTEROL):\n"
+            "   • EVITA la toronja/pomelo y su jugo (elevan atorvastatina/simvastatina → riesgo muscular; "
+            "rosuvastatina/pravastatina casi no se afectan).\n"
+            "   • Prioriza dieta cardiosaludable: baja en grasa saturada (limita frituras, embutidos, lácteos "
+            "enteros), alta en fibra y grasas insaturadas (aceite de oliva, aguacate, pescado)."),
+    ),
+    MedicationRule(
+        id="calcium_channel_blocker", label="Calcioantagonista (presión)",
+        terms=("amlodipina", "amlodipino", "amlodipine", "norvasc", "nifedipina", "nifedipine", "adalat",
+               "felodipina", "felodipine", "nicardipina", "lercanidipina", "nitrendipina"),
+        precedence=49,
+        interaction=("La toronja/pomelo puede elevar los niveles de algunos calcioantagonistas (sobre todo "
+                     "nifedipina y felodipina) y bajar más la presión de lo esperado."),
+        recommendation=("Evita el jugo de toronja/pomelo. Mantén una dieta baja en sodio para la presión "
+                        "(limita sal, embutidos, enlatados y comida rápida)."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — CALCIOANTAGONISTA (PRESIÓN):\n"
+            "   • EVITA la toronja/pomelo y su jugo (sobre todo con nifedipina/felodipina: potencian el "
+            "efecto y bajan más la presión).\n"
+            "   • Dieta BAJA EN SODIO: limita sal de mesa, embutidos, enlatados, caldos en cubo y comida "
+            "rápida; prioriza alimentos frescos."),
     ),
 )
 
@@ -173,8 +357,12 @@ def detect_active_medications(form_data) -> list:
     meds = _norm_medications(form_data)
     if not meds:
         return []
+    # [P1-MED-AMBIGUOUS-TERM-VETO · 2026-06-19] Veto per-candidato: una cadena activa la regla solo si
+    # matchea un `term` Y NO contiene ningún `term_negatives` (evita que 'insulina'/'insulin' de
+    # insulin_secretagogue falso-positivee con la condición "resistencia a la insulina" vía el backstop).
     active = [r for r in MEDICATION_RULES
-              if any(any(t in m for t in r.terms) for m in meds)]
+              if any((any(t in m for t in r.terms) and not any(neg in m for neg in r.term_negatives))
+                     for m in meds)]
     return sorted(active, key=lambda r: r.precedence)
 
 
