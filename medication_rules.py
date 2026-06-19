@@ -59,6 +59,10 @@ class MedicationRule:
     recommendation: str    # qué hacer (es-DO, accionable)
     prompt_block: str      # directiva determinista al generador LLM
     anticoagulant: bool = False
+    # [P2-MEDICATION-TIMING-ADVISORY · 2026-06-18] (audit fresco P2-1) marca fármacos cuya ABSORCIÓN
+    # depende del TIMING respecto a las comidas (levotiroxina ↔ calcio/hierro/soya) → surface un banner
+    # de timing dedicado (medication_review.timing_advisories), distinto del advisory de interacción general.
+    timing_sensitive: bool = False
     precedence: int = 50
 
 
@@ -119,7 +123,7 @@ MEDICATION_RULES: tuple = (
         id="levothyroxine", label="Levotiroxina (tiroides)",
         terms=("levotiroxina", "levothyroxine", "eutirox", "synthroid", "euthyrox", "tiroxina",
                "liotironina", "liothyronine"),
-        precedence=45,
+        timing_sensitive=True, precedence=45,
         interaction=("El calcio, el hierro y la soya/fibra reducen la absorción de la levotiroxina si se "
                      "toman junto con ella."),
         recommendation=("Toma la levotiroxina en ayunas con agua y espera 30-60 min antes de desayunar; "
@@ -206,6 +210,17 @@ def detect_anticoagulant(form_data) -> bool:
     """True si el perfil declara un anticoagulante (warfarina/acenocumarol) → gatea el monitor de
     consistencia de vitamina K (P1-WARFARIN-VITAMIN-K)."""
     return any(r.anticoagulant for r in detect_active_medications(form_data))
+
+
+def build_timing_advisories(active_rules_or_form) -> list:
+    """[P2-MEDICATION-TIMING-ADVISORY · 2026-06-18] (audit fresco P2-1) Subconjunto de advisories para
+    fármacos TIMING-SENSITIVE (la absorción depende de cuándo se toman respecto a las comidas — p.ej.
+    levotiroxina ↔ calcio/hierro/soya). El frontend lo renderiza como un banner de timing dedicado,
+    distinto del advisory de interacción general. Acepta lista de `MedicationRule` o `form_data` dict."""
+    if isinstance(active_rules_or_form, dict):
+        active_rules_or_form = detect_active_medications(active_rules_or_form)
+    return [{"medicamento": r.label, "recomendacion": r.recommendation}
+            for r in (active_rules_or_form or []) if getattr(r, "timing_sensitive", False)]
 
 
 def requires_medication_review(form_data) -> bool:

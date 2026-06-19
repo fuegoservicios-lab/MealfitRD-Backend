@@ -8561,6 +8561,13 @@ MEDICATION_RULES_ENABLED = _env_bool("MEALFIT_MEDICATION_RULES", True)
 # de hoja verde (heurística por nombre — el catálogo no tiene mcg de vit K, follow-up de datos) + advisory.
 # El riesgo de la warfarina es la INCONSISTENCIA, no el valor absoluto. Default True; flip a False lo apaga.
 WARFARIN_VITAMIN_K_GATING = _env_bool("MEALFIT_WARFARIN_VITAMIN_K_GATING", True)
+# [P2-STRUCTURED-RETRY-CONTEXT · 2026-06-18] (audit fresco P2-2) Cuando review_plan_node rechaza, el
+# retry inyecta SOLO texto libre ("RECHAZADO por: ..."). Este knob añade al directive un resumen
+# DETERMINISTA de los deltas de macro por día (proteína/carbos/grasas/kcal entregados vs objetivo, los que
+# caen fuera de banda) → el planner recibe números concretos ("Día 2: proteína 70g vs objetivo 110g") en
+# vez de solo la prosa del revisor → converge en menos intentos. Read-only sobre el plan rechazado +
+# nutrition; NO cambia el control de flujo del grafo. Default True; rollback: =False.
+STRUCTURED_RETRY_CONTEXT_ENABLED = _env_bool("MEALFIT_STRUCTURED_RETRY_CONTEXT", True)
 
 # [P3-DATA-PROVENANCE · 2026-06-14] (Roadmap M1, quick-win) Anclaje de proveniencia: computa qué
 # fracción de los ingredientes del plan está trazada a USDA FoodData Central (columna `fdc_id`, ya
@@ -11133,7 +11140,8 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
     if MEDICATION_RULES_ENABLED:
         try:
             from medication_rules import (detect_active_medications, build_medication_advisories,
-                                          detect_anticoagulant, vitamin_k_consistency)
+                                          detect_anticoagulant, vitamin_k_consistency,
+                                          build_timing_advisories)
             _active_meds = detect_active_medications(form_data)
             if _active_meds:
                 _med_labels = [r.label for r in _active_meds]
@@ -11142,6 +11150,12 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 # P1-B: monitor de consistencia de vit K (solo anticoagulantes).
                 if WARFARIN_VITAMIN_K_GATING and detect_anticoagulant(form_data):
                     _med_review["vitamin_k_consistency"] = vitamin_k_consistency(plan)
+                # [P2-MEDICATION-TIMING-ADVISORY · 2026-06-18] (audit fresco P2-1) Banner de timing
+                # dedicado para fármacos cuya absorción depende del momento de la comida (levotiroxina ↔
+                # calcio/hierro/soya). El frontend lo renderiza prominente, distinto del advisory general.
+                _timing = build_timing_advisories(_active_meds)
+                if _timing:
+                    _med_review["timing_advisories"] = _timing
                 plan["medication_review"] = _med_review
                 # FS9: las interacciones fármaco-alimento ameritan coordinación médica/farmacéutica.
                 _med_note = ("💊 MEDICAMENTOS + ALIMENTACIÓN: declaraste medicamento(s) con interacción "
@@ -15366,6 +15380,47 @@ async def preflight_optimization_node(state: PlanState) -> dict:
 # ============================================================
 # CONSTRUCTOR DEL GRAFO
 # ============================================================
+def _structured_rejection_context(plan_result, nutrition, *, max_cells: int = 8) -> str:
+    """[P2-STRUCTURED-RETRY-CONTEXT · 2026-06-18] (audit fresco P2-2) Resumen DETERMINISTA de los deltas de
+    macro por día del plan RECHAZADO vs el objetivo, para enriquecer la directiva del retry con números
+    concretos (en vez de solo la prosa del revisor). Reusa el MISMO cómputo que `compute_clinical_band_score`
+    (suma de macros por día desde `m.get('protein'/'carbs'/'fats')`). Lista solo las celdas día×macro FUERA
+    de banda [BAND_SCORE_LOWER, BAND_SCORE_UPPER], peores primero, capeado a `max_cells`. Devuelve "" si no
+    hay datos o todo está en banda. Puro + fail-safe (NO cambia control de flujo). Anchor: P2-STRUCTURED-RETRY-CONTEXT."""
+    try:
+        if not isinstance(plan_result, dict) or not isinstance(nutrition, dict):
+            return ""
+        lo, hi = BAND_SCORE_LOWER, BAND_SCORE_UPPER
+        tm = nutrition.get("total_daily_macros") or nutrition.get("macros") or {}
+        pm = plan_result.get("macros") if isinstance(plan_result.get("macros"), dict) else {}
+        targets = {
+            "proteína": _meal_macro_num(tm.get("protein_str")) or _meal_macro_num(pm.get("protein")),
+            "carbohidratos": _meal_macro_num(tm.get("carbs_str")) or _meal_macro_num(pm.get("carbs")),
+            "grasas": _meal_macro_num(tm.get("fats_str")) or _meal_macro_num(pm.get("fats")),
+        }
+        _keymap = {"proteína": "protein", "carbohidratos": "carbs", "grasas": "fats"}
+        rows = []
+        for i, day in enumerate(plan_result.get("days", []) or [], start=1):
+            meals = day.get("meals", []) or []
+            for label, tgt in targets.items():
+                if not tgt or tgt <= 0:
+                    continue
+                delivered = sum(_meal_macro_num(m.get(_keymap[label])) for m in meals)
+                ratio = delivered / tgt
+                if ratio < lo or ratio > hi:
+                    rows.append((abs(ratio - 1.0), i, label, delivered, tgt, ratio))
+        if not rows:
+            return ""
+        rows.sort(key=lambda r: r[0], reverse=True)  # peores deltas primero
+        lines = [f"Día {i}: {label} {deliv:.0f}g vs objetivo {tgt:.0f}g ({ratio*100:.0f}% de la meta)"
+                 for (_d, i, label, deliv, tgt, ratio) in rows[:max_cells]]
+        return ("DESVIACIONES DE MACRO MEDIDAS en el plan rechazado (corrige estas celdas específicas; "
+                f"banda objetivo {int(lo*100)}-{int(hi*100)}%): " + "; ".join(lines) + ".")
+    except Exception as _src_e:
+        logger.warning(f"[P2-STRUCTURED-RETRY-CONTEXT] error: {type(_src_e).__name__}: {_src_e}")
+        return ""
+
+
 @_node_label("retry_reflection")
 async def retry_reflection_node(state: PlanState) -> dict:
     """Inyecta contexto de rechazo como directiva para el retry (GAP 1).
@@ -15410,6 +15465,17 @@ async def retry_reflection_node(state: PlanState) -> dict:
     }
     if reasons:
         directive = f"El plan anterior fue RECHAZADO por: {'; '.join(reasons)}. MUTA DRÁSTICAMENTE la estrategia."
+        # [P2-STRUCTURED-RETRY-CONTEXT · 2026-06-18] (audit fresco P2-2) Enriquece la directiva con los
+        # deltas de macro DETERMINISTAS del plan rechazado (números concretos por día×macro fuera de banda)
+        # → el planner corrige celdas específicas en vez de adivinar desde la prosa. Read-only + fail-safe;
+        # no altera el control de flujo. Gateado por knob (rollback sin redeploy).
+        if STRUCTURED_RETRY_CONTEXT_ENABLED:
+            try:
+                _struct = _structured_rejection_context(state.get("plan_result"), state.get("nutrition"))
+                if _struct:
+                    directive = directive + " " + _struct
+            except Exception:
+                pass
         logger.info(f"🔄 [RETRY REFLECTION] Intento {attempt}. Directiva inyectada: {directive}")
         update_data["reflection_directive"] = directive
     return update_data
