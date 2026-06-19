@@ -108,7 +108,7 @@ from constants import (
 # `_log_active_knobs()` no muestran overrides aplicados a estos crons → SRE
 # que cambia un knob en prod no puede confirmar que tomó efecto. Patrón
 # espejo de P1-3 (shopping_calculator) y P3-NEW-D (auto-registry).
-from graph_orchestrator import run_plan_pipeline, _env_int, _env_float, _env_bool
+from graph_orchestrator import run_plan_pipeline, _env_int, _env_float, _env_bool, _env_str
 from memory_manager import build_memory_context
 from services import _save_plan_and_track_background
 from agent import analyze_preferences_agent
@@ -2479,7 +2479,11 @@ def _alert_pipeline_metrics_silence():
     if global_threshold_min > 720:
         global_threshold_min = 720  # 12h hard ceiling — si el operador setea más, está roto
 
-    raw_nodes = os.environ.get("MEALFIT_PIPELINE_METRICS_SILENCE_NODE", "") or ""
+    # [P2-SILENCE-NODE-KNOB-REGISTRY · 2026-06-19] (audit fresco P2-15) Leer vía `_env_str` (no `os.environ.get`
+    # crudo) para que el knob se auto-registre en `_KNOBS_REGISTRY` y sea visible en `/health/version` — su knob
+    # hermano (_ALERT_MIN) ya usa `_env_int`. `_env_str` normaliza con strip/lower (los node names son lowercase →
+    # seguro; el CSV con thresholds `:N` lo parsea `_parse_silence_observed_nodes`).
+    raw_nodes = _env_str("MEALFIT_PIPELINE_METRICS_SILENCE_NODE", "_hardfloor_autoheal_tick") or ""
     parsed = _parse_silence_observed_nodes(raw_nodes)
     if not parsed:
         parsed = [("_hardfloor_autoheal_tick", None)]

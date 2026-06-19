@@ -320,6 +320,22 @@ def build_condition_prompt(form_data) -> str:
             "granos integrales (altos en potasio/fósforo) se MODERAN — prioriza vegetales BAJOS en potasio.\n"
             "   • Mantén proteína MODERADA (renal) y sodio bajo; NO subas la carga de carbohidrato. El balance "
             "fino lo define el nefrólogo.")
+    # [P2-RENAL-HTA-POTASSIUM-PROMPT · 2026-06-19] (audit fresco P2, cluster S1) Árbitro renal+HTA del potasio.
+    # El prompt_block de HTA pide "POTASIO/MAGNESIO/CALCIO ALTOS" (patrón DASH) mientras el renal pide MODERAR
+    # potasio/fósforo → directivas contradictorias sin resolución (la rama genérica de abajo solo arbitra
+    # sodio/proteína/grasa-saturada, nunca el potasio). En ERC la dirección segura es MODERAR el potasio
+    # (hiperkalemia → arritmia): la regla renal MANDA. Espejo del bloque dm2+renal. El panel determinista ya
+    # gatea el piso DASH-K en ERC (P2-RENAL-HTA-POTASSIUM-GUARD); esto cierra la mitad prompt al generador.
+    # `elif` para preservar el encadenamiento: dm2+renal (que también modera potasio) tiene precedencia; un
+    # perfil con las tres (dm2+hta+renal) cae en la rama dm2+renal, que ya modera potasio/leguminosas.
+    elif "hta" in ids and "renal" in ids:
+        blocks.append(
+            "⚖️ PRECEDENCIA CLÍNICA — HIPERTENSIÓN + ENFERMEDAD RENAL JUNTAS:\n"
+            "   • La regla RENAL MANDA sobre el potasio/magnesio ALTOS del patrón DASH de la hipertensión: en "
+            "enfermedad renal el potasio se MODERA (riesgo de hiperkalemia → arritmia) — NO maximices guineo, "
+            "aguacate, leguminosas ni vegetales de hoja verde; mantén porciones moderadas y parejas.\n"
+            "   • SÍ conserva el SODIO BAJO de DASH (beneficia ambas condiciones). El balance fino del potasio "
+            "lo define el nefrólogo.")
     elif len(active) >= 2:
         labels = ", ".join(r.label for r in active)
         blocks.append(

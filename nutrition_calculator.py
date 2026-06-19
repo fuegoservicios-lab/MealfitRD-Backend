@@ -1058,7 +1058,11 @@ def get_nutrition_targets(form_data: dict) -> dict:
     _pregnancy_safety = None
     if PREGNANCY_DEFICIT_GATE_ENABLED and _is_pregnancy_or_lactation(form_data):
         _orig_goal = goal
-        if goal == "lose_fat":
+        # [P2-PREGNANCY-GATE-ADJUSTMENT · 2026-06-19] (audit fresco P2-16) Basado en el AJUSTE numérico, no en el
+        # string 'lose_fat' — espejo del gate de menores (línea ~1086). Hoy son equivalentes (lose_fat es la única
+        # meta deficitaria en GOAL_ADJUSTMENTS), pero si se añade una meta deficitaria nueva, el gate de embarazo
+        # la neutralizaría igual (el piso TDEE de abajo ya protege las kcal; esto cierra la asimetría de telemetría).
+        if GOAL_ADJUSTMENTS.get(goal, 0.0) < 0:
             goal = "maintenance"
         _pregnancy_safety = {
             "applied": True,

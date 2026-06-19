@@ -25,6 +25,7 @@ consistente, no eliminar) es además la intervención clínicamente correcta.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -318,6 +319,32 @@ MEDICATION_RULES: tuple = (
             "   • Dieta BAJA EN SODIO: limita sal de mesa, embutidos, enlatados, caldos en cubo y comida "
             "rápida; prioriza alimentos frescos."),
     ),
+    # [P2-MAOI-TYRAMINE · 2026-06-19] (audit fresco P2-7) Antidepresivos IMAO (+ el antibiótico linezolid):
+    # interacción potencialmente LETAL y dietéticamente accionable (tiramina de añejados/fermentados → crisis
+    # hipertensiva). Prevalencia baja en RD (los IMAO clásicos casi no se usan) pero el riesgo es agudo y el
+    # plan SÍ puede sesgarse a evitar quesos curados/embutidos/fermentados. precedence alta (seguridad). Una
+    # fila declarativa, mismo patrón. 'imao' va en un campo de medicamentos (bajo riesgo de falso-positivo).
+    MedicationRule(
+        id="maoi", label="Antidepresivo IMAO (tiramina)",
+        terms=("fenelzina", "phenelzine", "nardil", "tranilcipromina", "tranylcypromine", "parnate",
+               "isocarboxazida", "isocarboxazid", "marplan", "moclobemida", "moclobemide",
+               "inhibidor de la monoaminooxidasa", "imao", "linezolid"),
+        precedence=20,
+        interaction=("Los antidepresivos IMAO (y el antibiótico linezolid) reaccionan con la TIRAMINA de los "
+                     "alimentos añejados/fermentados (quesos curados, embutidos/carnes curadas, fermentados, "
+                     "vino tinto, cerveza de barril): pueden provocar una crisis hipertensiva (subida brusca y "
+                     "peligrosa de la presión)."),
+        recommendation=("EVITA quesos curados/añejos, embutidos y carnes curadas, pescados ahumados/salados, "
+                        "fermentados (chucrut, miso, exceso de salsa de soya), habas, y el alcohol (vino tinto, "
+                        "cerveza de barril). Prefiere alimentos FRESCOS. Tu médico/farmacéutico te orienta."),
+        prompt_block=(
+            "💊 INTERACCIÓN FÁRMACO-ALIMENTO — ANTIDEPRESIVO IMAO / LINEZOLID (TIRAMINA) — REQUIERE MÉDICO:\n"
+            "   • EVITA alimentos altos en TIRAMINA (riesgo de crisis hipertensiva): quesos curados/añejos, "
+            "embutidos y carnes curadas/fermentadas, pescados ahumados/salados, fermentados (chucrut, miso, "
+            "exceso de salsa de soya), habas, y alcohol (vino tinto, cerveza de barril).\n"
+            "   • PRIORIZA alimentos FRESCOS y bien refrigerados (la tiramina sube con el añejamiento).\n"
+            "   • El balance fino lo define tu médico/farmacéutico."),
+    ),
 )
 
 _RULES_BY_ID = {r.id: r for r in MEDICATION_RULES}
@@ -352,17 +379,33 @@ def _norm_medications(form_data) -> list:
     return out
 
 
+# [P2-MED-VETO-TOKENIZE · 2026-06-19] (audit fresco P2-6) Conectores para partir un campo de texto LIBRE en
+# sub-frases antes del veto. Sin esto, el veto per-candidato sobre-suprimía un fármaco REAL que co-ocurre con
+# una frase-condición vetada en el MISMO string ("tengo resistencia a la insulina y tomo lantus" → 'resistencia'
+# vetaba TODA la cadena → 'lantus' tampoco activaba). Partiendo por conectores cada sub-frase se evalúa aparte:
+# "resistencia a la insulina" queda vetada, "tomo lantus" activa la regla.
+_MED_PHRASE_SPLIT = re.compile(r"\s+y\s+|\s+e\s+|[,/;.]+")
+
+
+def _med_phrases(m: str) -> list:
+    """Sub-frases de un campo de medicación (split por conectores). Fallback: la cadena entera."""
+    parts = [p.strip() for p in _MED_PHRASE_SPLIT.split(m) if p.strip()]
+    return parts or [m]
+
+
 def detect_active_medications(form_data) -> list:
     """Reglas de medicación activas para el perfil, ordenadas por precedencia (seguridad primero)."""
     meds = _norm_medications(form_data)
     if not meds:
         return []
-    # [P1-MED-AMBIGUOUS-TERM-VETO · 2026-06-19] Veto per-candidato: una cadena activa la regla solo si
-    # matchea un `term` Y NO contiene ningún `term_negatives` (evita que 'insulina'/'insulin' de
-    # insulin_secretagogue falso-positivee con la condición "resistencia a la insulina" vía el backstop).
+    # [P1-MED-AMBIGUOUS-TERM-VETO + P2-MED-VETO-TOKENIZE · 2026-06-19] Veto per-SUB-FRASE: una regla activa si
+    # ALGUNA sub-frase de algún campo matchea un `term` Y NO contiene ningún `term_negatives` en ESA sub-frase.
+    # Per-sub-frase (no per-candidato completo) evita sobre-suprimir un fármaco real que co-ocurre con la
+    # frase-condición vetada en un mismo string de texto libre. Default term_negatives=() → sin efecto en el
+    # resto de reglas (la sub-frase entera matchea como antes).
     active = [r for r in MEDICATION_RULES
-              if any((any(t in m for t in r.terms) and not any(neg in m for neg in r.term_negatives))
-                     for m in meds)]
+              if any((any(t in p for t in r.terms) and not any(neg in p for neg in r.term_negatives))
+                     for m in meds for p in _med_phrases(m))]
     return sorted(active, key=lambda r: r.precedence)
 
 

@@ -133,6 +133,14 @@ _POTASSIUM_RESTRICTED_NOTE = ("Mantén el potasio en porciones MODERADAS y parej
                               "medicación puede elevar el potasio en sangre (riesgo de hiperkalemia). El "
                               "balance fino lo define tu médico con análisis.")
 
+# [P2-RENAL-FIBER-NOTE · 2026-06-19] (audit fresco P2, cluster S1) Nota de fibra para perfiles con ERC: la fibra
+# NO se restringe en enfermedad renal, pero su FUENTE sí — la nota estándar empuja "legumbres (habichuelas)",
+# altas en potasio/fósforo que KDIGO pide moderar. Esta variante orienta la fibra a vegetales/frutas bajos en
+# potasio, coherente con la moderación renal (cierra la asimetría con el guard de potasio del panel).
+_FIBER_RENAL_NOTE = ("Aumenta la fibra con vegetales y frutas bajos en potasio (ej. manzana, pera, repollo, "
+                     "zanahoria, pepino) y avena; MODERA las leguminosas y granos muy altos en potasio/fósforo "
+                     "si tienes enfermedad renal — el balance fino lo define tu nefrólogo.")
+
 # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (gap-audit G5) Umbral de cobertura POR-NUTRIENTE bajo el cual un
 # TECHO en apariencia 'ok' se reporta 'estimado_alto' (incierto). Mismo 0.6 que el 'estimado_bajo' de los
 # pisos, para simetría. Caveat honesto para el panel/PDF.
@@ -413,6 +421,8 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                 # el panel/PDF no debe NUDGEAR a subirlo. Gateado por el mismo flag de P1-1 (rollback vía knob).
                 if key == "potassium_mg" and k_elevating_med:
                     entry["nota"] = _POTASSIUM_RESTRICTED_NOTE
+                elif key == "fiber_g" and _has_renal(conditions):
+                    entry["nota"] = _FIBER_RENAL_NOTE   # [P2-RENAL-FIBER-NOTE] no empujar leguminosas en ERC
                 else:
                     entry["nota"] = _SUPPLEMENT_NOTE.get(key, "")
                 gaps.append(entry)

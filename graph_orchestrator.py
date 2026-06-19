@@ -8578,6 +8578,12 @@ POTASSIUM_PANEL_MED_AWARE_ENABLED = _env_bool("MEALFIT_POTASSIUM_PANEL_MED_AWARE
 # de hoja verde (heurística por nombre — el catálogo no tiene mcg de vit K, follow-up de datos) + advisory.
 # El riesgo de la warfarina es la INCONSISTENCIA, no el valor absoluto. Default True; flip a False lo apaga.
 WARFARIN_VITAMIN_K_GATING = _env_bool("MEALFIT_WARFARIN_VITAMIN_K_GATING", True)
+# [P2-WARFARIN-VITK-CONSUME · 2026-06-19] (audit fresco P2, cluster S1) El monitor `vitamin_k_consistency`
+# (Guard 8d) computa la variabilidad día a día de hoja verde para anticoagulantes pero NADIE lo consumía.
+# Este knob hace que una variabilidad ALTA marque `_quality_degraded` (banner observable, NO retry) para que
+# el usuario/clínico revise — el riesgo del INR es la inconsistencia, no el valor absoluto. Solo aplica a
+# anticoagulantes (el monitor solo existe si detect_anticoagulant). Default True (señal de seguridad rara).
+WARFARIN_VITK_DEGRADE_ENABLED = _env_bool("MEALFIT_WARFARIN_VITK_DEGRADE", True)
 # [P2-STRUCTURED-RETRY-CONTEXT · 2026-06-18] (audit fresco P2-2) Cuando review_plan_node rechaza, el
 # retry inyecta SOLO texto libre ("RECHAZADO por: ..."). Este knob añade al directive un resumen
 # DETERMINISTA de los deltas de macro por día (proteína/carbos/grasas/kcal entregados vs objetivo, los que
@@ -8767,7 +8773,15 @@ def _goal_aware_trim_ceiling_pct(form_data: dict, target_protein_day: float) -> 
     renal = CONDITION_RULES_ENABLED and isinstance(form_data, dict) and _is_renal_condition(form_data)
     goal = form_data.get("mainGoal") if isinstance(form_data, dict) else None
     gkg = RENAL_PROTEIN_GKG_CEILING if renal else _protein_gkg_ceiling(goal)
-    wkg = _weight_kg_from_form(form_data) if isinstance(form_data, dict) else 0.0
+    # [P2-RENAL-TRIM-WEIGHT-BASIS · 2026-06-19] (audit fresco P2-5) El cap renal usa `_renal_weight_basis_kg`
+    # (peso ajustado IBW Devine en obesidad cuando MEALFIT_RENAL_ADJUSTED_WEIGHT=ON); el trim-ceiling usaba el
+    # peso REAL → con el knob ON + renal obeso, el techo del trim quedaba más laxo que el cap (inconsistencia
+    # latente). Comparten ahora la misma base. Default OFF → `_renal_weight_basis_kg` devuelve el peso real → cero
+    # cambio de comportamiento.
+    if renal and isinstance(form_data, dict):
+        wkg = _renal_weight_basis_kg(form_data)
+    else:
+        wkg = _weight_kg_from_form(form_data) if isinstance(form_data, dict) else 0.0
     if wkg > 0 and target_protein_day and target_protein_day > 0:
         return max(1.0, min(1.30, (gkg * wkg) / target_protein_day))
     if renal:
@@ -9496,7 +9510,23 @@ _RAW_SEAFOOD_MEAT_TERMS = (  # INEQUÍVOCOS: plato crudo de pescado/carne, match
 # → ambiguos: solo flagean si co-ocurren con un sustantivo de proteína ANIMAL en el mismo texto.
 _RAW_PREP_AMBIGUOUS = ("tartar", "tartare", "carpaccio")
 _RAW_ANIMAL_PROTEIN_TERMS = ("pescado", "atun", "salmon", "res", "carne", "ternera", "marisco", "camaron",
-                             "pulpo", "vieira", "ostra", "bacalao", "mero", "tilapia", "chillo", "filete")
+                             "pulpo", "vieira", "ostra", "bacalao", "mero", "tilapia", "chillo", "filete",
+                             # [P2-RAW-POULTRY-SAFETY · 2026-06-19] (audit fresco P2-8) Ave en la lista de
+                             # co-ocurrencia tartar/carpaccio (Campylobacter/Salmonella). NO se añade al
+                             # standalone (`_RAW_SEAFOOD_MEAT_TERMS`): el pollo "siempre cocido" en es-DO hace
+                             # innecesario el standalone, que además falsearía con instrucciones negadas ("que
+                             # no quede crudo"). 'tartar/carpaccio de pollo' (crudo inequívoco) sí se flagea.
+                             "pollo", "ave", "pavo", "gallina",
+                             # [P2-RAW-SEAFOOD-SPECIES · 2026-06-19] (audit fresco P2-9) Especies RD que faltaban
+                             # en la co-ocurrencia (un 'carpaccio de corvina'/'tartar de langosta' escapaba).
+                             "corvina", "dorado", "langosta", "cangrejo", "lambi", "concha")
+# [P2-RAW-POULTRY-SAFETY · 2026-06-19] (review) La rama ambigua (tartar/carpaccio) matchea por LÍMITE DE PALABRA,
+# no por substring: evita falsos-positivos en vegetales seguros — 'ave'⊄avena (granola), 'pollo'⊄repollo (col),
+# 'res'⊄fresa (este último era un latente PRE-EXISTENTE de la lista original). El standalone sigue por substring
+# (sus tokens son inequívocos y largos). Texto ya accent-free lowercase → `\b` ASCII es correcto.
+import re as _fs_re
+_RAW_ANIMAL_PROTEIN_RE = _fs_re.compile(
+    r"\b(?:" + "|".join(_fs_re.escape(_t) for _t in _RAW_ANIMAL_PROTEIN_TERMS) + r")\b")
 _FOOD_SAFETY_NOTE_RAW_SEAFOOD = (
     "⚠️ Seguridad alimentaria: este plato lleva pescado/marisco o carne CRUDOS (ceviche, sushi, tartar). "
     "El cítrico del ceviche NO cuece el pescado. Riesgo de Vibrio, anisakis y Listeria — EVÍTALO en "
@@ -9529,7 +9559,8 @@ def _scan_raw_seafood_meat_violations(plan: dict) -> list:
             hit = any(t in text for t in _RAW_SEAFOOD_MEAT_TERMS)
             if not hit and any(t in text for t in _RAW_PREP_AMBIGUOUS):
                 # tartar/carpaccio solo cuentan con proteína animal en el plato (no 'tartar de remolacha').
-                hit = any(a in text for a in _RAW_ANIMAL_PROTEIN_TERMS)
+                # [P2-RAW-POULTRY-SAFETY] match por límite de palabra (no substring → 'pollo'⊄repollo, 'ave'⊄avena).
+                hit = bool(_RAW_ANIMAL_PROTEIN_RE.search(text))
             if hit:
                 out.append((di, mi, meal.get("name", "?")))
     return out
@@ -10076,6 +10107,15 @@ def _macro_aware_day_reconcile(meals: list, target_carbs: float, target_fats: fl
         fF = max(0.4, min(1.8, target_fats / curF)) if (curF > 0 and target_fats > 0) else 1.0
         if abs(fC - 1.0) < 0.02 and abs(fF - 1.0) < 0.02:
             return False  # ya en banda → no tocar
+        # [P2-RECONCILE-CLAMP-TELEMETRY · 2026-06-19] (audit fresco P2-10) Telemetría de saturación del clamp
+        # [0.4,1.8] en la ruta de nivelación DOMINANTE (corre por default, a diferencia del solver cuya telemetría
+        # P2-SOLVER-CLAMP-TELEMETRY vive en un surface OFF). Cuando el clamp satura, el día queda fuera de banda
+        # de forma internamente consistente (perfil bajo-cal o porcionado LLM desbalanceado) → causa raíz directa
+        # del techo de all-4-band. Log observable para medir la frecuencia sin inferirla del band-score agregado.
+        if fC <= 0.4 or fC >= 1.8 or fF <= 0.4 or fF >= 1.8:
+            logger.warning(f"⚠ [P2-RECONCILE-CLAMP-TELEMETRY] clamp de reconcile saturado "
+                           f"(fC={round(fC, 2)} fF={round(fF, 2)}; curC={round(curC)} curF={round(curF)} "
+                           f"targetC={round(target_carbs)} targetF={round(target_fats)}) → día fuera de banda.")
         for m in meals:
             for key in ("ingredients", "ingredients_raw"):
                 lst = m.get(key)
@@ -18145,6 +18185,16 @@ def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallba
                     if g.get("key") in ("sodium_mg", "free_sugars_g") and g.get("status") == "alto":
                         reason, detail = "high_sodium_sugar", g.get("key")
                         break
+        # 4) [P2-WARFARIN-VITK-CONSUME · 2026-06-19] (audit fresco P2, cluster S1) Consume el monitor de
+        # consistencia de vit-K (Guard 8d): para un anticoagulante, una hoja verde MUY variable día a día
+        # desestabiliza el INR (sangrado/coágulos). Marca _quality_degraded (banner, NO retry) para revisión.
+        # Lee el monitor ya computado en plan["medication_review"]; solo existe para anticoagulantes.
+        if not reason and WARFARIN_VITK_DEGRADE_ENABLED:
+            _mr = plan.get("medication_review")
+            if isinstance(_mr, dict):
+                _vk = _mr.get("vitamin_k_consistency")
+                if isinstance(_vk, dict) and _vk.get("variability") == "high":
+                    reason, detail = "vitamin_k_inconsistent", "vitamin_k"
         if reason:
             plan["_quality_degraded"] = True
             plan["_quality_degraded_reason"] = reason
