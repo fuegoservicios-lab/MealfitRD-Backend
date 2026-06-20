@@ -53,7 +53,7 @@ def test_disclaimer_explains_storage_caps():
         "arbitrarios para el usuario."
     )
     # Ejemplos de categorías que se capean (al menos 2 de 3)
-    cap_categories = ["hierbas frescas", "lácteos perecederos", "cítricos"]
+    cap_categories = ["hierbas", "lácteos", "cítricos"]
     mentioned = sum(1 for cat in cap_categories if cat in src)
     assert mentioned >= 2, (
         f"Disclaimer menciona solo {mentioned} categorías de cap. "
@@ -75,11 +75,11 @@ def test_disclaimer_extension_conditional_on_density():
 
 
 def test_disclaimer_preserves_original_smart_engine_text():
-    """NO regresión: el disclaimer original 'Smart Engine: ... empaques del
-    mercado local. Ajusta según tu inventario...' debe preservarse intacto.
-    La extensión SE AGREGA, no REEMPLAZA."""
+    """NO regresión: el disclaimer mantiene los conceptos clave (Smart Engine,
+    cantidades exactas, empaques del mercado local, Ud.=unidad). Texto minimizado
+    2026-06-20 (más claro/conciso) — anclas actualizadas a la nueva redacción."""
     src = _DASHBOARD_JSX.read_text(encoding="utf-8")
     assert "<strong>Smart Engine:</strong>" in src
-    assert "calculadas de manera exacta" in src
+    assert "cantidades exactas" in src
     assert "empaques del mercado local" in src
-    assert '"Ud." significa "Unidad"' in src
+    assert "Ud.</strong> = unidad" in src
