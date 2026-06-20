@@ -8503,6 +8503,13 @@ PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
 CARB_TO_PROTEIN_SWAP_ENABLED = _env_bool("MEALFIT_CARB_TO_PROTEIN_SWAP", False)
 CARB_TO_PROTEIN_SWAP_FLOOR_PCT = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_FLOOR_PCT", 1.0)  # A/B harness: f1.0 > f0.95
 CARB_TO_PROTEIN_SWAP_CARB_TOL = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_CARB_TOL", 0.05)
+# [P3-MACRO-REBALANCE · 2026-06-19] Re-apunta las 3 macros al target DESPUÉS de la cuantización (cierra el
+# error de redondeo que degrada las macros continuas casi-perfectas a ~7%). A/B determinista con el harness
+# (corpus fijo de 18 planes): all4 53.7→87.0, proteína w10 78→96 (MAPE 7.1→2.8), carbos w10 82→94, grasas
+# 87→96, kcal MAPE 4.0→2.3, CERO regresión, porciones cocinables (reusa el cuantizador). Default ON (win
+# grande validado); rollback sin redeploy = `MEALFIT_MACRO_REBALANCE=false`.
+MACRO_REBALANCE_ENABLED = _env_bool("MEALFIT_MACRO_REBALANCE", True)
+MACRO_REBALANCE_TOL = _env_float("MEALFIT_MACRO_REBALANCE_TOL", 0.04)
 # [P3-PROTEIN-CEILING-GOAL-AWARE · 2026-06-13] Techo de proteína ENTREGADA en g/kg, dependiente
 # del objetivo: ≤2.2 g/kg para volumen/mantenimiento (más proteína desplaza carbos útiles), pero
 # hasta ~2.6 g/kg en DÉFICIT (la evidencia respalda proteína alta para preservar músculo al perder
@@ -10277,6 +10284,81 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
         return False
 
 
+def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fats: float, db,
+                                    *, target_protein: float = 0.0, tol: float = 0.04, passes: int = 3) -> bool:
+    """[P3-MACRO-REBALANCE · 2026-06-19] Corre DESPUÉS de la cuantización (FS2). La cuantización redondea cada
+    ingrediente INDEPENDIENTE → los errores de redondeo se ACUMULAN. Medido con el harness determinista: los
+    carbos/grasas CONTINUOS (pre-redondeo) son casi PERFECTOS (~0.9% MAPE), pero el redondeo independiente los
+    degrada a ~7%/5%. Este paso RE-APUNTA carbos y grasas a su target diario escalando los ingredientes
+    macro-dominantes hacia el target y RE-CUANTIZANDO cada uno → aterriza en la porción cocinable MÁS CERCANA
+    AL TARGET (no a la continua, que difería por el error acumulado). BIDIRECCIONAL (sube y baja). Protein-
+    preserving: solo toca carbo- y grasa-dominantes (la proteína-dominante queda intacta — la maneja el
+    closer/swap). Reusa la maquinaria exacta del carb-trim (rescale→quantize→delta honesto→raw lockstep).
+    Mutates meals. Retorna True si ajustó. Fail-safe. Anchor: P3-MACRO-REBALANCE."""
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        applied_any = False
+
+        def _one(macro_key, target):
+            nonlocal applied_any
+            cur = sum(_meal_macro_num(m.get(macro_key)) for m in meals)
+            if target <= 0 or cur <= 0 or abs(cur - target) <= target * tol:
+                return
+            items, movable = [], 0.0
+            for m in meals:
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                for idx, ing in enumerate(ings):
+                    if _ingredient_macro_group(str(ing), db) != macro_key:
+                        continue
+                    _mc = db.macros_from_ingredient_string(str(ing)) or {}
+                    _v = _mc.get(macro_key) or 0.0
+                    if _v > 0:
+                        movable += _v
+                        items.append((m, idx))
+            if movable <= 0:
+                return
+            desired_movable = target - (cur - movable)   # cuánto deben aportar los movibles
+            if desired_movable <= 0:
+                return
+            factor = max(0.3, min(2.5, desired_movable / movable))   # BIDIRECCIONAL (sube y baja)
+            if abs(factor - 1.0) < 0.02:
+                return
+            for m, idx in items:
+                ings = m.get("ingredients")
+                orig = str(ings[idx])
+                quant, _f = _quant(_resc(orig, factor))   # escala al target + re-snap cocinable
+                if quant == orig:
+                    continue
+                _mo = db.macros_from_ingredient_string(orig) or {}
+                _mn = db.macros_from_ingredient_string(quant) or {}
+                _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
+                _nc = max(0, round(_meal_macro_num(m.get("carbs")) + ((_mn.get("carbs") or 0) - (_mo.get("carbs") or 0))))
+                _nf = max(0, round(_meal_macro_num(m.get("fats")) + ((_mn.get("fats") or 0) - (_mo.get("fats") or 0))))
+                m["protein"], m["carbs"], m["fats"] = _np, _nc, _nf
+                m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
+                m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
+                ings[idx] = quant
+                raw = m.get("ingredients_raw")
+                if isinstance(raw, list) and len(raw) == len(ings):
+                    raw[idx] = _resc(str(raw[idx]), factor * _f)
+                applied_any = True
+
+        # Re-apunta las 3 macros (Gauss-Seidel): escalar carbo/grasa-dominantes movía la pequeña proteína que
+        # cargan → drift; re-apuntar proteína también lo corrige. Carbo/grasa/proteína-dominantes se cruzan poco
+        # (arroz ~0 grasa, aceite ~0 carbo, pollo ~0 carbo) → 3 pases convergen. Proteína aima AL target (≤ techo).
+        for _ in range(max(1, passes)):
+            if target_protein and target_protein > 0:
+                _one("protein", target_protein)
+            _one("carbs", target_carbs)
+            _one("fats", target_fats)
+        return applied_any
+    except Exception as e:
+        logger.warning(f"[P3-MACRO-REBALANCE] rebalance falló: {type(e).__name__}: {e}")
+        return False
+
+
 def _trim_day_protein_to_ceiling(meals: list, target_protein_day: float, db,
                                  *, ceiling_pct: float = 1.12) -> bool:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Techo simétrico al piso: si el día entrega
@@ -11744,6 +11826,24 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
         except Exception as _swap_e:
             logger.warning(f"[P3-CARB-TO-PROTEIN-SWAP] deshabilitado por error: "
                            f"{type(_swap_e).__name__}: {_swap_e}")
+
+    # [P3-MACRO-REBALANCE · 2026-06-19] Tras swap + cuantización: re-apunta carbos/grasas al target diario,
+    # cerrando el error de redondeo que la cuantización independiente acumula (carbos/grasas continuos casi
+    # perfectos → ~7%/5% tras redondear). Determinista, protein-preserving, gated OFF hasta confirmar el A/B.
+    if MACRO_REBALANCE_ENABLED and _cg and _fg:
+        try:
+            from nutrition_db import IngredientNutritionDB as _RebNDB
+            _reb_db = _RebNDB()
+            _reb_n = 0
+            for _d in (days or []):
+                if _rebalance_day_macros_to_target(_d.get("meals") or [], _cg, _fg, _reb_db,
+                                                   target_protein=_pg, tol=MACRO_REBALANCE_TOL):
+                    _reb_n += 1
+            if _reb_n:
+                logger.info(f"⚖️ [P3-MACRO-REBALANCE] re-apuntó carbos/grasas al target en {_reb_n} día(s) "
+                            f"(cierra el error de redondeo de la cuantización)")
+        except Exception as _reb_e:
+            logger.warning(f"[P3-MACRO-REBALANCE] deshabilitado por error: {type(_reb_e).__name__}: {_reb_e}")
 
 
 async def assemble_plan_node(state: PlanState) -> dict:
