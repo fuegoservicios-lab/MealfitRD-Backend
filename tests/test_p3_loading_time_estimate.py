@@ -84,15 +84,17 @@ def test_timer_pauses_when_status_ready():
 
 def test_adaptive_copy_four_phases():
     """El copy debe tener 4 fases según `elapsedSec`. Calibrado a la duración
-    REAL de prod (12-13 min observado en logs 2026-05-16, rango honesto 10-15 min).
+    REAL de prod en la era DeepSeek V4 (medido 2026-06-17): ~3-5 min pipeline
+    completo (skeleton ~22s + day_gen paralelo ~30s + self-critique ~2min +
+    reviewer + assembly). Rango honesto = 4-5 min.
 
     Verificamos los 4 strings literales esperados."""
     src = _PLAN_JSX.read_text(encoding="utf-8")
     expected_phrases = [
-        "Esto suele tomar entre 10 y 15 minutos",                  # <30s
-        "estimado 10-15 minutos",                                  # 30s-15min
-        "ya casi terminamos, espera un poco más",                  # 15-20min
-        "gracias por tu paciencia",                                # >20min
+        "Esto suele tomar entre 4 y 5 minutos",                   # <30s
+        "estimado 4-5 minutos",                                   # 30s-6min
+        "ya casi terminamos, espera un poco más",                # 6-10min
+        "gracias por tu paciencia",                              # >10min
     ]
     for phrase in expected_phrases:
         assert phrase in src, (
@@ -102,22 +104,21 @@ def test_adaptive_copy_four_phases():
 
 
 def test_estimate_calibrated_to_realistic_duration():
-    """Regression guard: el estimate inicial NO debe decir "3-5 minutos" ni
-    "5-10 minutos" — esa calibración era irreal y causaba que el usuario
-    asumiera que el sistema se colgó tras 5-10 min cuando aún era normal.
-    Duración real medida 2026-05-16: 12:55 (775s) pipeline completo con
-    Supabase free tier + retries."""
+    """Regression guard (invertido 2026-06-17): el estimate NO debe regresar al
+    rango STALE de la era Gemini ("10 y 15 minutos" / "10-15 minutos"). Con
+    DeepSeek V4 el pipeline tarda ~3-5 min (medido en prod 2026-06-17, logs de
+    generaciones reales). Mostrar 10-15 min hacía esperar 2-3x lo real → el
+    usuario asumía que se colgó o cancelaba innecesariamente."""
     src = _PLAN_JSX.read_text(encoding="utf-8")
     forbidden_phrases = [
-        "de 3 a 5 minutos",       # original incorrect
-        "estimado 3-5 minutos",
+        "entre 10 y 15 minutos",
+        "estimado 10-15 minutos",
         "5-10 minutos",
     ]
     for phrase in forbidden_phrases:
         assert phrase not in src, (
-            f"Calibración stale detectada: `{phrase!r}` aparece en Plan.jsx. "
-            f"La duración real del pipeline es ~10-15 min, NO 3-5 min. Si "
-            f"vuelves a usar ese rango, los usuarios pensarán que se colgó."
+            f"Calibración stale (era Gemini) detectada: `{phrase!r}` en Plan.jsx. "
+            f"La duración real con DeepSeek es ~4-5 min. No revertir al rango 10-15."
         )
 
 
