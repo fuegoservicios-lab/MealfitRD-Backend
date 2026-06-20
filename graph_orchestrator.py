@@ -8484,6 +8484,15 @@ PROTEIN_FLOOR_ENABLED = _env_bool("MEALFIT_PROTEIN_FLOOR", True)
 PROTEIN_FLOOR_FILL_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_FILL_PCT", 0.92)  # closer determinista
 PROTEIN_FLOOR_HARD_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT", 0.90)  # gate de retry
 PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
+# [P3-CARB-TO-PROTEIN-SWAP · 2026-06-19] Palanca de precisión MEDIDA con el harness offline determinista
+# (scripts/macro_sizing_replay.py): en días con déficit de proteína (<floor_pct×target) Y exceso de carbos
+# (>(1+tol)×target), convierte el exceso de carbos en proteína magra a kcal CONSTANTE. Cierra el déficit que
+# el closer per-meal (capado por fill_pct + idempotencia _protein_closed) deja abierto en days carbo-pesados
+# — medido: ~la mitad de los días deficitarios son swappables (lose_fat carbo-pesado). Default OFF (validar
+# por A/B antes de flip). Diagnóstico: subir fill_pct solo es suma-cero a kcal fijo; el swap arregla AMBOS macros.
+CARB_TO_PROTEIN_SWAP_ENABLED = _env_bool("MEALFIT_CARB_TO_PROTEIN_SWAP", False)
+CARB_TO_PROTEIN_SWAP_FLOOR_PCT = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_FLOOR_PCT", 1.0)  # A/B harness: f1.0 > f0.95
+CARB_TO_PROTEIN_SWAP_CARB_TOL = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_CARB_TOL", 0.05)
 # [P3-PROTEIN-CEILING-GOAL-AWARE · 2026-06-13] Techo de proteína ENTREGADA en g/kg, dependiente
 # del objetivo: ≤2.2 g/kg para volumen/mantenimiento (más proteína desplaza carbos útiles), pero
 # hasta ~2.6 g/kg en DÉFICIT (la evidencia respalda proteína alta para preservar músculo al perder
@@ -11448,6 +11457,285 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
 
 
 @_node_label("assembler")
+def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db, candidates,
+                                          *, floor_pct=0.95, carb_tol=0.05) -> int:
+    """[P3-CARB-TO-PROTEIN-SWAP · 2026-06-19] Día con déficit de proteína (<floor_pct×target) Y exceso de
+    carbos (>(1+tol)×target): convierte el exceso de carbos en proteína magra a kcal CONSTANTE. Proteína y
+    carbo son AMBOS 4 kcal/g → el swap gramo-por-gramo es kcal-neutral por construcción → el reconcile NO lo
+    deshace (a diferencia de subir fill_pct, que añade proteína→kcal sube→reconcile recorta TODO = suma cero).
+    Mecánica: (1) añade proteína magra (candidato allergen-safe alta densidad) para ~cerrar el gap, midiendo
+    las kcal REALES que aporta (proteína + grasa del alimento); (2) quita esas kcal/4 de carbos vía
+    _trim_day_carbs_to_target → net kcal≈0, proteína↑, carbos↓. Cierra el déficit que el closer per-meal
+    (capado por fill_pct + idempotencia _protein_closed) deja abierto en days carbo-pesados (medido con el
+    harness offline: ~la mitad de los días deficitarios son swappables, típicamente lose_fat). Mutates meals.
+    Retorna gramos de proteína añadidos (0 si no aplica). Fail-safe. Anchor: P3-CARB-TO-PROTEIN-SWAP."""
+    try:
+        day_p = sum(_meal_macro_num(m.get("protein")) for m in meals)
+        day_c = sum(_meal_macro_num(m.get("carbs")) for m in meals)
+        if p_target_day <= 0 or c_target_day <= 0:
+            return 0
+        protein_gap = p_target_day * floor_pct - day_p
+        carb_excess = day_c - c_target_day * (1.0 + carb_tol)
+        # Solo days que son AMBOS deficitarios-de-proteína Y carbo-pesados. Si falta cualquiera, el swap
+        # rompería el macro que ya está bien (no hay carbo en exceso para convertir sin caer bajo target).
+        if protein_gap < 8 or carb_excess < 8:
+            return 0
+        # gramos de proteína a añadir: limitado por el gap Y por la capacidad de carbo (la remoción será
+        # ~1.15× los gramos de proteína por la grasa del alimento → /1.15 conservador para no sobre-recortar).
+        swap_g = int(min(protein_gap, carb_excess / 1.15))
+        if swap_g < 8:
+            return 0
+        # candidato magro/denso (candidates viene ordenado por leanness asc → 1º con ≥18 g/100g es muy magro)
+        chosen = None
+        for _leanness, _name, info in (candidates or []):
+            if (info.protein or 0) >= 18:
+                chosen = info
+                break
+        if chosen is None:
+            return 0
+        # comida destino: la de MÁS carbos (donde sobra carbo y cabe la proteína de forma natural)
+        target_meal = max(meals, key=lambda m: _meal_macro_num(m.get("carbs")), default=None)
+        if target_meal is None:
+            return 0
+        try:
+            from constants import strip_accents as _sa
+        except Exception:
+            def _sa(s):
+                return str(s)
+        nm = str(chosen.name).lower()
+        name_low = _sa(str(target_meal.get("name", "")).lower())
+        no_cook = any(b in name_low for b in _NO_COOK_BLENDED)
+        if no_cook and not any(h in _sa(nm) for h in _NO_COOK_SAFE_PROTEIN_HINT):
+            return 0  # batido/frío → no forzar una proteína de cocción; sale sin tocar el día
+        grams_food = int(round(swap_g / (chosen.protein / 100.0)))
+        grams_food = max(10, min(grams_food, 300))
+        f = grams_food / 100.0
+        p_add = chosen.protein * f
+        c_add = (chosen.carbs or 0.0) * f
+        f_add = (chosen.fats or 0.0) * f
+        kcal_add = 4 * p_add + 4 * c_add + 9 * f_add
+        line = f"{grams_food}g de {nm}{'' if no_cook else ' cocido'} ({grams_food}g)"
+        target_meal.setdefault("ingredients", []).append(line)
+        if isinstance(target_meal.get("ingredients_raw"), list):
+            target_meal["ingredients_raw"].append(line)
+        tp = _meal_macro_num(target_meal.get("protein")) + p_add
+        tc = _meal_macro_num(target_meal.get("carbs")) + c_add
+        tf = _meal_macro_num(target_meal.get("fats")) + f_add
+        target_meal["protein"], target_meal["carbs"], target_meal["fats"] = round(tp), round(tc), round(tf)
+        target_meal["cals"] = round(4 * tp + 4 * tc + 9 * tf)
+        target_meal["macros"] = [f"P:{round(tp)}g", f"C:{round(tc)}g", f"G:{round(tf)}g"]
+        rec = target_meal.get("recipe")
+        if isinstance(rec, list):
+            verb = "Añade" if no_cook else "Cocina e incorpora"
+            target_meal["recipe"] = rec + [
+                f"💪 {verb} el {nm} indicado en los ingredientes (proteína magra de esta comida)."]
+        # 2) quitar kcal_add/4 gramos de carbos → mantiene kcal CONSTANTE (reusa el carb-trim cuantizador)
+        carbs_g_to_remove = kcal_add / 4.0
+        new_carb_day_target = max(0.0, (day_c + c_add) - carbs_g_to_remove)
+        _trim_day_carbs_to_target(meals, new_carb_day_target, db, tol=0.0)
+        return int(round(p_add))
+    except Exception as e:
+        logger.warning(f"[P3-CARB-TO-PROTEIN-SWAP] swap falló: {type(e).__name__}: {e}")
+        return 0
+
+
+# [MACRO-ENGINE-EXTRACT · 2026-06-19] Motor de sizing DETERMINISTA extraído VERBATIM de assemble_plan_node
+# (solver → closer → trim-techo → cal-reconcile → capa clínica FS1-FS9). Razón: hacerlo LLAMABLE para que el
+# harness de validación offline (scripts/macro_sizing_replay.py) reproduzca SOLO este motor sobre planes crudos
+# cacheados — sin LLM, sin review, sin reintentos, sin paralelismo → A/B de precisión fiel, gratis y sin ruido.
+# Behavior-preserving: el cuerpo es el bloque original sin cambios. Muta `result`/`days` in-place; retorna None.
+def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition):
+    # [P3-MACRO-SOLVER · 2026-06-13] Cerebro dividido — lado determinista (gated por
+    # knob MEALFIT_MACRO_SOLVER_ENABLED, default False). Tras el balancing legacy
+    # (que escala los NÚMEROS de macros sin tocar los ingredientes y tapa la
+    # inconsistencia con un disclaimer) y la consolidación, re-escala las PORCIONES
+    # reales de cada meal para clavar su target de macros (= macro diario × cal_share)
+    # usando los macros reales de master_ingredients. Corre ANTES de la agregación de
+    # la lista de compras Y de la humanización → los gramos re-escritos fluyen a
+    # recipe + shopping + coherence guard CONSISTENTES (si corriera después, la lista
+    # de compras quedaría con cantidades pre-solver → divergencias receta↔lista).
+    # Fail-safe TOTAL: cualquier error deja el plan como lo dejó el balancing legacy.
+    # Anchor: P3-MACRO-SOLVER.
+    if MACRO_SOLVER_ENABLED and _daily_cals > 0 and (_pg or _cg or _fg):
+        try:
+            from nutrition_db import IngredientNutritionDB
+            _nut_db = IngredientNutritionDB()
+            _skel_days = (skeleton or {}).get("days", []) if isinstance(skeleton, dict) else []
+            _solver_n = 0
+            _topup_g = 0
+            # [P3-PROTEIN-FLOOR] Proteínas de alta densidad allergen-safe para el closer
+            # (cierra el déficit que el escalado no puede). Se computan una vez por plan.
+            # min_protein=9 incluye yogur (blend-friendly para batidos) + el dish-fit del
+            # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
+            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0)
+                              if PROTEIN_FLOOR_ENABLED else [])
+            # [P3-CLOSER-EGG-BUDGET · 2026-06-14] Presupuesto de huevo del closer: una vez que el huevo
+            # aparece en > cap comidas (mismo cap que VARIETY_HARD_GATE), pasa candidatos SIN huevo →
+            # diversifica con yogur/queso/whey en vez de empujar el huevo sobre el cap. Cuenta el huevo
+            # del LLM + el que el closer añade. `_c[1]` es el nombre (tupla (leanness, name, info)).
+            try:
+                from constants import strip_accents as _sa_egg
+            except Exception:
+                _sa_egg = lambda _s: _s  # noqa: E731
+            _egg_total_meals = sum(len(_dd.get("meals") or []) for _dd in days)
+            _egg_cap = max(3, round(_egg_total_meals * 0.25))
+            _egg_count = (sum(1 for _dd in days for _mm in (_dd.get("meals") or [])
+                              if _meal_has_egg(_mm, _sa_egg)) if CLOSER_EGG_BUDGET_ENABLED else 0)
+            _hd_candidates_no_egg = [_c for _c in _hd_candidates
+                                     if not any(_t in _sa_egg(str(_c[1]).lower())
+                                                for _t in ("huevo", "clara", "yema"))]
+            for _di, _d in enumerate(days):
+                _ms = _d.get("meals", []) or []
+                _day_c = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
+                # Pool de proteínas APROBADO del día (allergen-safe) para el top-up.
+                _day_num = _d.get("day", _di + 1)
+                _sk = next((s for s in _skel_days if s.get("day") == _day_num), {})
+                _approved = _sk.get("protein_pool", []) if isinstance(_sk, dict) else []
+                # [P3-SLOT-DISTRIBUTION] Fracción por slot: split fisiológico canónico
+                # (redistribuye kcal+proteína equitativamente) o cal_share del LLM (legacy).
+                _slot_fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
+                for _mi, _m in enumerate(_ms):
+                    if _slot_fracs:
+                        _share = _slot_fracs[_mi]
+                    else:
+                        _share = (_meal_macro_num(_m.get("cals")) / _day_c) if _day_c > 0 \
+                            else (1.0 / max(1, len(_ms)))
+                    _slot_target = {
+                        "kcal": _daily_cals * _share,
+                        "protein": _pg * _share,
+                        "carbs": _cg * _share,
+                        "fats": _fg * _share,
+                    }
+                    if _apply_macro_solver_to_meal(_m, _slot_target, _nut_db):
+                        _solver_n += 1
+                    # [P3-PROTEIN-FLOOR] Cierre del déficit: rellena al TARGET de proteína del
+                    # slot (no solo a un piso) con proteína de alta densidad allergen-safe
+                    # integrada como ingrediente real. Las kcal extra las nivela el reconcile
+                    # protein-preserving aguas abajo. Fallback al top-up legacy si está off.
+                    if PROTEIN_FLOOR_ENABLED and _hd_candidates:
+                        # [P3-CLOSER-EGG-BUDGET] sobre el cap → candidatos sin huevo (yogur/queso/whey).
+                        _egg_cands = (_hd_candidates_no_egg
+                                      if (CLOSER_EGG_BUDGET_ENABLED and _egg_count >= _egg_cap)
+                                      else _hd_candidates)
+                        _had_egg_pre = _meal_has_egg(_m, _sa_egg) if CLOSER_EGG_BUDGET_ENABLED else True
+                        _topup_g += _close_protein_gap_for_meal(
+                            _m, _slot_target["protein"], _nut_db, _egg_cands,
+                            fill_pct=PROTEIN_FLOOR_FILL_PCT)
+                        if CLOSER_EGG_BUDGET_ENABLED and not _had_egg_pre and _meal_has_egg(_m, _sa_egg):
+                            _egg_count += 1  # el closer añadió huevo a esta comida → consume presupuesto
+                    elif MACRO_SOLVER_PROTEIN_TOPUP:
+                        _topup_g += _protein_topup_meal(
+                            _m, _slot_target["kcal"], _nut_db, _approved)
+                # [P3-PROTEIN-CEILING-GOAL-AWARE] Techo simétrico GOAL-AWARE: trima la proteína
+                # del día si excede el techo en g/kg del objetivo (2.2 volumen/mant; 2.6 déficit
+                # — proteína alta protege músculo al perder grasa). Usa el techo ABSOLUTO en g/kg
+                # (no un % fijo del target) → ningún día de volumen pasa de 2.2 g/kg, y los de
+                # déficit pueden subir hasta 2.6 g/kg de forma clínicamente correcta.
+                if PROTEIN_FLOOR_ENABLED and _pg > 0:
+                    _trim_day_protein_to_ceiling(
+                        _ms, _pg, _nut_db,
+                        ceiling_pct=_goal_aware_trim_ceiling_pct(form_data, _pg))
+            logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
+                        f"a su target de macros real (cerebro dividido)"
+                        + (f" + top-up de proteína {_topup_g}g total" if _topup_g else ""))
+        except Exception as _solver_e:
+            logger.warning(f"[P3-MACRO-SOLVER] bloque deshabilitado por error: "
+                           f"{type(_solver_e).__name__}: {_solver_e}")
+
+    # [P3-CAL-RECONCILE · 2026-06-13] Paso FINAL del cerebro dividido: nivelar las
+    # calorías de cada día EXACTAMENTE al target. Tras el solver (macros) + top-up
+    # (proteína), las kcal/día derivan ±. El holistic `cal_score = max(0, 1 − desv×5)`
+    # → 1.0 solo con desviación ~0. Escala uniforme por-día (porciones + macros por el
+    # mismo factor) → nivela kcal SIN romper la consistencia receta↔macro. Corre ANTES
+    # del shopping → los gramos finales fluyen a la lista. Fail-safe total.
+    if MACRO_SOLVER_ENABLED and MACRO_SOLVER_CAL_RECONCILE and _daily_cals > 0:
+        try:
+            from nutrition_db import rescale_ingredient_string as _rescale, IngredientNutritionDB as _RCDB
+            _rec_n = 0
+            if PROTEIN_FLOOR_ENABLED:
+                # [P3-PROTEIN-FLOOR] Reconcile PROTEIN-PRESERVING: la proteína (que el closer
+                # acaba de llevar al target) queda FIJA; solo se escalan carbos+grasas para
+                # nivelar las kcal. Reemplaza el escalado uniforme (que reducía la proteína).
+                _rcdb = _RCDB()
+                for _d in days:
+                    _ms_d = _d.get("meals", []) or []
+                    # [P1-MACRO-AWARE-RECONCILE] Multi-macro (clava C y F por separado → no distorsiona
+                    # el split del solver) si el knob está ON; si no, el single-factor protein-preserving.
+                    if MACRO_AWARE_RECONCILE:
+                        _ok_rec = _macro_aware_day_reconcile(_ms_d, _cg, _fg, _rcdb)
+                    else:
+                        _ok_rec = _protein_preserving_day_reconcile(_ms_d, _daily_cals, _rcdb)
+                    if _ok_rec:
+                        _rec_n += 1
+                if _rec_n:
+                    _rec_mode = "multi-macro (C+F)" if MACRO_AWARE_RECONCILE else "protein-preserving"
+                    logger.info(f"🎯 [P3-PROTEIN-FLOOR] Reconcile {_rec_mode} niveló "
+                                f"{_rec_n} día(s) al target ({_daily_cals:.0f} kcal) sin tocar la proteína")
+            else:
+                for _d in days:
+                    _ms = _d.get("meals", []) or []
+                    _dc = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
+                    if _dc <= 0:
+                        continue
+                    _f = max(0.6, min(1.6, _daily_cals / _dc))  # clamp anti-porciones-absurdas
+                    if abs(_f - 1.0) < 0.02:
+                        continue  # ya dentro del 2% → no tocar
+                    for _m in _ms:
+                        _ings = _m.get("ingredients")
+                        if isinstance(_ings, list):
+                            _m["ingredients"] = [_rescale(str(s), _f) for s in _ings]
+                        _raw = _m.get("ingredients_raw")
+                        if isinstance(_raw, list):
+                            _m["ingredients_raw"] = [_rescale(str(s), _f) for s in _raw]
+                        _m["protein"] = round(_meal_macro_num(_m.get("protein")) * _f)
+                        _m["carbs"] = round(_meal_macro_num(_m.get("carbs")) * _f)
+                        _m["fats"] = round(_meal_macro_num(_m.get("fats")) * _f)
+                        _m["cals"] = round(_meal_macro_num(_m.get("cals")) * _f)
+                        _m["macros"] = [f"P:{_m['protein']}g", f"C:{_m['carbs']}g", f"G:{_m['fats']}g"]
+                    _rec_n += 1
+                if _rec_n:
+                    logger.info(f"🎯 [P3-CAL-RECONCILE] Niveló calorías de {_rec_n} día(s) al "
+                                f"target exacto ({_daily_cals:.0f} kcal) — cierra cal_score del holistic")
+        except Exception as _rec_e:
+            logger.warning(f"[P3-CAL-RECONCILE] deshabilitado por error: "
+                           f"{type(_rec_e).__name__}: {_rec_e}")
+
+    # [P3-FALLBACK-CLINICAL-LAYER · 2026-06-14 · Fase B] Capa clínica determinista (FS1-FS9) — SSOT
+    # ÚNICA, ahora compartida con el path de fallback. El cap renal de la fuente (arriba) ya seteó
+    # result["renal_protein_cap"] + active_macros; la función re-deriva idempotentemente (no-op aquí en
+    # el happy path) y corre los 8 guards en orden: enforcement renal per-comida → food-safety →
+    # sustitución por condición → quantize → micros/suplementos → variedad → proveniencia → gate FS9.
+    # Antes este bloque vivía inline DUPLICADO; ahora assemble y el fallback consumen la MISMA función
+    # (cero drift posible). El marker `_clinical_layer_applied` lo deja idempotente cross-path.
+    _apply_deterministic_clinical_layer(result, form_data, nutrition)
+
+    # [P3-CARB-TO-PROTEIN-SWAP · 2026-06-19] Tras la capa clínica (plan YA dimensionado/cuantizado): en days
+    # con déficit de proteína + exceso de carbos, swap kcal-neutral carbo→proteína (cierra el déficit que el
+    # closer per-meal no alcanza). Corre al FINAL para ver el estado real post-quantize. Skip si el cap renal
+    # aplica (subir proteína violaría el cap iatrogénico KDIGO — la proteína está BAJA a propósito, no por
+    # déficit). Gated OFF por default — validado por A/B con scripts/macro_sizing_replay.py antes de flip.
+    if CARB_TO_PROTEIN_SWAP_ENABLED:
+        try:
+            _renal_capped = (bool(((nutrition or {}).get("renal_protein_cap") or {}).get("applied"))
+                             or bool(((result or {}).get("renal_protein_cap") or {}).get("applied")))
+            if not _renal_capped:
+                from nutrition_db import IngredientNutritionDB as _SwapNDB
+                _swap_db = _SwapNDB()
+                _swap_cands = _safe_high_density_proteins(form_data.get("allergies"), _swap_db, min_protein=18.0)
+                _swapped_days = 0
+                for _d in (days or []):
+                    if _swap_excess_carbs_to_protein_for_day(
+                            _d.get("meals") or [], _pg, _cg, _swap_db, _swap_cands,
+                            floor_pct=CARB_TO_PROTEIN_SWAP_FLOOR_PCT, carb_tol=CARB_TO_PROTEIN_SWAP_CARB_TOL):
+                        _swapped_days += 1
+                if _swapped_days:
+                    logger.info(f"🔄 [P3-CARB-TO-PROTEIN-SWAP] {_swapped_days} día(s): exceso de carbos → "
+                                f"proteína magra a kcal-constante (cierra déficit fuera del alcance del closer)")
+        except Exception as _swap_e:
+            logger.warning(f"[P3-CARB-TO-PROTEIN-SWAP] deshabilitado por error: "
+                           f"{type(_swap_e).__name__}: {_swap_e}")
+
+
 async def assemble_plan_node(state: PlanState) -> dict:
     """Ensambla el plan final combinando skeleton + días paralelos + datos del calculador, o re-ensambla un plan en caché."""
     nutrition = state["nutrition"]
@@ -12229,169 +12517,22 @@ async def assemble_plan_node(state: PlanState) -> dict:
                     logger.info(f"📦 [CONSOLIDATION] Unificado '{old_ing}' -> '{new_ing}'")
     # =========================================================
 
-    # [P3-MACRO-SOLVER · 2026-06-13] Cerebro dividido — lado determinista (gated por
-    # knob MEALFIT_MACRO_SOLVER_ENABLED, default False). Tras el balancing legacy
-    # (que escala los NÚMEROS de macros sin tocar los ingredientes y tapa la
-    # inconsistencia con un disclaimer) y la consolidación, re-escala las PORCIONES
-    # reales de cada meal para clavar su target de macros (= macro diario × cal_share)
-    # usando los macros reales de master_ingredients. Corre ANTES de la agregación de
-    # la lista de compras Y de la humanización → los gramos re-escritos fluyen a
-    # recipe + shopping + coherence guard CONSISTENTES (si corriera después, la lista
-    # de compras quedaría con cantidades pre-solver → divergencias receta↔lista).
-    # Fail-safe TOTAL: cualquier error deja el plan como lo dejó el balancing legacy.
-    # Anchor: P3-MACRO-SOLVER.
-    if MACRO_SOLVER_ENABLED and _daily_cals > 0 and (_pg or _cg or _fg):
+    # [MACRO-CAPTURE · 2026-06-19] Hook GATEADO (solo dev/benchmark, no-op en prod): guarda el plan CRUDO
+    # (post-LLM + balancing legacy, PRE-motor determinista) + los targets, para reproducir `_apply_macro_engine`
+    # OFFLINE (sin LLM, sin review, sin reintentos, sin paralelismo) y A/B-ear la precisión gratis y sin ruido.
+    # Append JSON-lines al path de MEALFIT_MACRO_CAPTURE. Fail-safe. Ver scripts/macro_sizing_replay.py.
+    if os.environ.get("MEALFIT_MACRO_CAPTURE"):
         try:
-            from nutrition_db import IngredientNutritionDB
-            _nut_db = IngredientNutritionDB()
-            _skel_days = (skeleton or {}).get("days", []) if isinstance(skeleton, dict) else []
-            _solver_n = 0
-            _topup_g = 0
-            # [P3-PROTEIN-FLOOR] Proteínas de alta densidad allergen-safe para el closer
-            # (cierra el déficit que el escalado no puede). Se computan una vez por plan.
-            # min_protein=9 incluye yogur (blend-friendly para batidos) + el dish-fit del
-            # closer prefiere carne (≥18) para principales y lácteo/yogur para licuados/ligeras.
-            _hd_candidates = (_safe_high_density_proteins(form_data.get("allergies"), _nut_db, min_protein=9.0)
-                              if PROTEIN_FLOOR_ENABLED else [])
-            # [P3-CLOSER-EGG-BUDGET · 2026-06-14] Presupuesto de huevo del closer: una vez que el huevo
-            # aparece en > cap comidas (mismo cap que VARIETY_HARD_GATE), pasa candidatos SIN huevo →
-            # diversifica con yogur/queso/whey en vez de empujar el huevo sobre el cap. Cuenta el huevo
-            # del LLM + el que el closer añade. `_c[1]` es el nombre (tupla (leanness, name, info)).
-            try:
-                from constants import strip_accents as _sa_egg
-            except Exception:
-                _sa_egg = lambda _s: _s  # noqa: E731
-            _egg_total_meals = sum(len(_dd.get("meals") or []) for _dd in days)
-            _egg_cap = max(3, round(_egg_total_meals * 0.25))
-            _egg_count = (sum(1 for _dd in days for _mm in (_dd.get("meals") or [])
-                              if _meal_has_egg(_mm, _sa_egg)) if CLOSER_EGG_BUDGET_ENABLED else 0)
-            _hd_candidates_no_egg = [_c for _c in _hd_candidates
-                                     if not any(_t in _sa_egg(str(_c[1]).lower())
-                                                for _t in ("huevo", "clara", "yema"))]
-            for _di, _d in enumerate(days):
-                _ms = _d.get("meals", []) or []
-                _day_c = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
-                # Pool de proteínas APROBADO del día (allergen-safe) para el top-up.
-                _day_num = _d.get("day", _di + 1)
-                _sk = next((s for s in _skel_days if s.get("day") == _day_num), {})
-                _approved = _sk.get("protein_pool", []) if isinstance(_sk, dict) else []
-                # [P3-SLOT-DISTRIBUTION] Fracción por slot: split fisiológico canónico
-                # (redistribuye kcal+proteína equitativamente) o cal_share del LLM (legacy).
-                _slot_fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
-                for _mi, _m in enumerate(_ms):
-                    if _slot_fracs:
-                        _share = _slot_fracs[_mi]
-                    else:
-                        _share = (_meal_macro_num(_m.get("cals")) / _day_c) if _day_c > 0 \
-                            else (1.0 / max(1, len(_ms)))
-                    _slot_target = {
-                        "kcal": _daily_cals * _share,
-                        "protein": _pg * _share,
-                        "carbs": _cg * _share,
-                        "fats": _fg * _share,
-                    }
-                    if _apply_macro_solver_to_meal(_m, _slot_target, _nut_db):
-                        _solver_n += 1
-                    # [P3-PROTEIN-FLOOR] Cierre del déficit: rellena al TARGET de proteína del
-                    # slot (no solo a un piso) con proteína de alta densidad allergen-safe
-                    # integrada como ingrediente real. Las kcal extra las nivela el reconcile
-                    # protein-preserving aguas abajo. Fallback al top-up legacy si está off.
-                    if PROTEIN_FLOOR_ENABLED and _hd_candidates:
-                        # [P3-CLOSER-EGG-BUDGET] sobre el cap → candidatos sin huevo (yogur/queso/whey).
-                        _egg_cands = (_hd_candidates_no_egg
-                                      if (CLOSER_EGG_BUDGET_ENABLED and _egg_count >= _egg_cap)
-                                      else _hd_candidates)
-                        _had_egg_pre = _meal_has_egg(_m, _sa_egg) if CLOSER_EGG_BUDGET_ENABLED else True
-                        _topup_g += _close_protein_gap_for_meal(
-                            _m, _slot_target["protein"], _nut_db, _egg_cands,
-                            fill_pct=PROTEIN_FLOOR_FILL_PCT)
-                        if CLOSER_EGG_BUDGET_ENABLED and not _had_egg_pre and _meal_has_egg(_m, _sa_egg):
-                            _egg_count += 1  # el closer añadió huevo a esta comida → consume presupuesto
-                    elif MACRO_SOLVER_PROTEIN_TOPUP:
-                        _topup_g += _protein_topup_meal(
-                            _m, _slot_target["kcal"], _nut_db, _approved)
-                # [P3-PROTEIN-CEILING-GOAL-AWARE] Techo simétrico GOAL-AWARE: trima la proteína
-                # del día si excede el techo en g/kg del objetivo (2.2 volumen/mant; 2.6 déficit
-                # — proteína alta protege músculo al perder grasa). Usa el techo ABSOLUTO en g/kg
-                # (no un % fijo del target) → ningún día de volumen pasa de 2.2 g/kg, y los de
-                # déficit pueden subir hasta 2.6 g/kg de forma clínicamente correcta.
-                if PROTEIN_FLOOR_ENABLED and _pg > 0:
-                    _trim_day_protein_to_ceiling(
-                        _ms, _pg, _nut_db,
-                        ceiling_pct=_goal_aware_trim_ceiling_pct(form_data, _pg))
-            logger.info(f"🧮 [P3-MACRO-SOLVER] Re-escaló porciones de {_solver_n} meals "
-                        f"a su target de macros real (cerebro dividido)"
-                        + (f" + top-up de proteína {_topup_g}g total" if _topup_g else ""))
-        except Exception as _solver_e:
-            logger.warning(f"[P3-MACRO-SOLVER] bloque deshabilitado por error: "
-                           f"{type(_solver_e).__name__}: {_solver_e}")
-
-    # [P3-CAL-RECONCILE · 2026-06-13] Paso FINAL del cerebro dividido: nivelar las
-    # calorías de cada día EXACTAMENTE al target. Tras el solver (macros) + top-up
-    # (proteína), las kcal/día derivan ±. El holistic `cal_score = max(0, 1 − desv×5)`
-    # → 1.0 solo con desviación ~0. Escala uniforme por-día (porciones + macros por el
-    # mismo factor) → nivela kcal SIN romper la consistencia receta↔macro. Corre ANTES
-    # del shopping → los gramos finales fluyen a la lista. Fail-safe total.
-    if MACRO_SOLVER_ENABLED and MACRO_SOLVER_CAL_RECONCILE and _daily_cals > 0:
-        try:
-            from nutrition_db import rescale_ingredient_string as _rescale, IngredientNutritionDB as _RCDB
-            _rec_n = 0
-            if PROTEIN_FLOOR_ENABLED:
-                # [P3-PROTEIN-FLOOR] Reconcile PROTEIN-PRESERVING: la proteína (que el closer
-                # acaba de llevar al target) queda FIJA; solo se escalan carbos+grasas para
-                # nivelar las kcal. Reemplaza el escalado uniforme (que reducía la proteína).
-                _rcdb = _RCDB()
-                for _d in days:
-                    _ms_d = _d.get("meals", []) or []
-                    # [P1-MACRO-AWARE-RECONCILE] Multi-macro (clava C y F por separado → no distorsiona
-                    # el split del solver) si el knob está ON; si no, el single-factor protein-preserving.
-                    if MACRO_AWARE_RECONCILE:
-                        _ok_rec = _macro_aware_day_reconcile(_ms_d, _cg, _fg, _rcdb)
-                    else:
-                        _ok_rec = _protein_preserving_day_reconcile(_ms_d, _daily_cals, _rcdb)
-                    if _ok_rec:
-                        _rec_n += 1
-                if _rec_n:
-                    _rec_mode = "multi-macro (C+F)" if MACRO_AWARE_RECONCILE else "protein-preserving"
-                    logger.info(f"🎯 [P3-PROTEIN-FLOOR] Reconcile {_rec_mode} niveló "
-                                f"{_rec_n} día(s) al target ({_daily_cals:.0f} kcal) sin tocar la proteína")
-            else:
-                for _d in days:
-                    _ms = _d.get("meals", []) or []
-                    _dc = sum(_meal_macro_num(_mm.get("cals")) for _mm in _ms)
-                    if _dc <= 0:
-                        continue
-                    _f = max(0.6, min(1.6, _daily_cals / _dc))  # clamp anti-porciones-absurdas
-                    if abs(_f - 1.0) < 0.02:
-                        continue  # ya dentro del 2% → no tocar
-                    for _m in _ms:
-                        _ings = _m.get("ingredients")
-                        if isinstance(_ings, list):
-                            _m["ingredients"] = [_rescale(str(s), _f) for s in _ings]
-                        _raw = _m.get("ingredients_raw")
-                        if isinstance(_raw, list):
-                            _m["ingredients_raw"] = [_rescale(str(s), _f) for s in _raw]
-                        _m["protein"] = round(_meal_macro_num(_m.get("protein")) * _f)
-                        _m["carbs"] = round(_meal_macro_num(_m.get("carbs")) * _f)
-                        _m["fats"] = round(_meal_macro_num(_m.get("fats")) * _f)
-                        _m["cals"] = round(_meal_macro_num(_m.get("cals")) * _f)
-                        _m["macros"] = [f"P:{_m['protein']}g", f"C:{_m['carbs']}g", f"G:{_m['fats']}g"]
-                    _rec_n += 1
-                if _rec_n:
-                    logger.info(f"🎯 [P3-CAL-RECONCILE] Niveló calorías de {_rec_n} día(s) al "
-                                f"target exacto ({_daily_cals:.0f} kcal) — cierra cal_score del holistic")
-        except Exception as _rec_e:
-            logger.warning(f"[P3-CAL-RECONCILE] deshabilitado por error: "
-                           f"{type(_rec_e).__name__}: {_rec_e}")
-
-    # [P3-FALLBACK-CLINICAL-LAYER · 2026-06-14 · Fase B] Capa clínica determinista (FS1-FS9) — SSOT
-    # ÚNICA, ahora compartida con el path de fallback. El cap renal de la fuente (arriba) ya seteó
-    # result["renal_protein_cap"] + active_macros; la función re-deriva idempotentemente (no-op aquí en
-    # el happy path) y corre los 8 guards en orden: enforcement renal per-comida → food-safety →
-    # sustitución por condición → quantize → micros/suplementos → variedad → proveniencia → gate FS9.
-    # Antes este bloque vivía inline DUPLICADO; ahora assemble y el fallback consumen la MISMA función
-    # (cero drift posible). El marker `_clinical_layer_applied` lo deja idempotente cross-path.
-    _apply_deterministic_clinical_layer(result, form_data, nutrition)
+            import copy as _cp_mc
+            with open(os.environ["MEALFIT_MACRO_CAPTURE"], "a", encoding="utf-8") as _mcf:
+                _mcf.write(json.dumps({
+                    "result": _cp_mc.deepcopy(result), "skeleton": _cp_mc.deepcopy(skeleton),
+                    "daily_cals": _daily_cals, "pg": _pg, "cg": _cg, "fg": _fg,
+                    "form_data": _cp_mc.deepcopy(form_data), "nutrition": _cp_mc.deepcopy(nutrition),
+                }, ensure_ascii=False, default=str) + "\n")
+        except Exception as _mc_e:
+            logger.warning(f"[MACRO-CAPTURE] {type(_mc_e).__name__}: {_mc_e}")
+    _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
