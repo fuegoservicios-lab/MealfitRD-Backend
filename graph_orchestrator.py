@@ -14850,10 +14850,19 @@ Responde ÚNICAMENTE con el JSON de revisión.
         is_strict_required = bool(form_data.get("_strict_pantry_required", False))
         has_pantry = bool(form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list"))
         pantry_advisory_only = bool(form_data.get("_pantry_advisory_only", False))
+        # [P1-VARIETY-IGNORE-PANTRY · 2026-06-20] "Renovar Plan Actual" (variety)
+        # ignora la despensa por diseño: genera un plan NUEVO con alimentos
+        # diferentes (simétrico a la supresión del bloque Zero-Waste en
+        # build_pantry_context). Si validáramos los platos nuevos contra la
+        # despensa, fallarían por no estar en ella → retries → plan degradado.
+        is_variety_regen = form_data.get("update_reason") == "variety"
         needs_pantry_validation = (
             not pantry_advisory_only
+            and not is_variety_regen
             and (is_rotation or is_strict_required or has_pantry)
         )
+        if is_variety_regen and has_pantry:
+            logger.info("🔄 [PANTRY GUARD] Saltando validación de despensa por update_reason=variety (plan nuevo con alimentos diferentes).")
 
         if needs_pantry_validation:
             # P1-10: validate_ingredients_against_pantry a nivel módulo

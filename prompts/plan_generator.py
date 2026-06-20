@@ -1417,6 +1417,17 @@ def build_pantry_context(form_data: dict) -> str:
     if form_data.get("_is_rotation_reroll", False):
         return ""
 
+    # [P1-VARIETY-IGNORE-PANTRY · 2026-06-20] "Renovar Plan Actual" (variety)
+    # genera a propósito un plan NUEVO con alimentos DIFERENTES al plan previo —
+    # NO es un reaprovechamiento de despensa. Emitir el bloque Zero-Waste aquí le
+    # diría al LLM "reusa tu nevera", produciendo platos casi idénticos al plan
+    # anterior y contradiciendo la intención del usuario. Por eso lo suprimimos.
+    # La validación simétrica en review_plan_node también se salta para 'variety'
+    # (de lo contrario el reviewer rechazaría los platos nuevos por no estar en la
+    # despensa → retries → plan degradado).
+    if form_data.get("update_reason") == "variety":
+        return ""
+
     PERISHABLE_KEYWORDS = [
         "aguacate", "pescado", "pollo", "carne", "res", "cerdo", "tomate", "lechuga", "espinaca",
         "brocoli", "brócoli", "guineo", "platano", "plátano", "banano", "manzana", "fresa",
