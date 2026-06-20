@@ -7551,6 +7551,19 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 market_obj["is_perishable"] = is_perishable_category(
                     _cat_for_perish, market_obj.get("shelf_life_days")
                 )
+                # [P3-PRICE-UNIT-COVERAGE · 2026-06-20] Si el costo quedó en 0 (ítem que se vende por ENVASE:
+                # price_per_unit>0, price_per_lb=0 — aceite/miel/huevo/yogurt entran por peso y daban 0),
+                # costear desde el conteo de envases del DISPLAY (market_qty = lo que el usuario REALMENTE compra:
+                # 1 botella, 1 cartón, 2 Ud) × price_per_unit. Usa market_qty (no el conteo crudo, que puede estar
+                # en otra unidad que el precio: 30 huevos vs precio por cartón). Cierra ~40% de ítems caros sin precio.
+                if item_cost <= 0 and price_per_unit > 0:
+                    try:
+                        _mq_disp = float(market_obj.get("market_qty") or 0)
+                    except (TypeError, ValueError):
+                        _mq_disp = 0.0
+                    if _mq_disp > 0:
+                        item_cost = _mq_disp * price_per_unit
+                        total_estimated_cost += item_cost
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
@@ -7591,6 +7604,19 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 market_obj["is_perishable"] = is_perishable_category(
                     _cat_for_perish, market_obj.get("shelf_life_days")
                 )
+                # [P3-PRICE-UNIT-COVERAGE · 2026-06-20] Si el costo quedó en 0 (ítem que se vende por ENVASE:
+                # price_per_unit>0, price_per_lb=0 — aceite/miel/huevo/yogurt entran por peso y daban 0),
+                # costear desde el conteo de envases del DISPLAY (market_qty = lo que el usuario REALMENTE compra:
+                # 1 botella, 1 cartón, 2 Ud) × price_per_unit. Usa market_qty (no el conteo crudo, que puede estar
+                # en otra unidad que el precio: 30 huevos vs precio por cartón). Cierra ~40% de ítems caros sin precio.
+                if item_cost <= 0 and price_per_unit > 0:
+                    try:
+                        _mq_disp = float(market_obj.get("market_qty") or 0)
+                    except (TypeError, ValueError):
+                        _mq_disp = 0.0
+                    if _mq_disp > 0:
+                        item_cost = _mq_disp * price_per_unit
+                        total_estimated_cost += item_cost
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
