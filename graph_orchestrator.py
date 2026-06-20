@@ -3506,6 +3506,10 @@ from prompts.plan_generator import (
     # Antes ambos campos vivían en _REQUIRED_FORM_FIELDS sin consumer downstream —
     # promesa rota del wizard. Ahora se inyectan como hint de tono/sesgo al planner.
     build_sleep_stress_context,
+    # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Bloque de súper personalización
+    # (gustos positivos, cocina/cultura, religión, equipo, sabor, nivel de cocina,
+    # texto libre) desde health_profile.super_personalization → planner + day gen.
+    build_super_personalization_context,
     # [P3-CONDITION-RULES · 2026-06-14] Directivas DM2 (ADA 2026) / ERC (KDIGO 2024) al generador.
     build_medical_condition_context,
     # [P1-MEDICATION-RULES · 2026-06-18] Directivas de interacción fármaco-alimento al generador.
@@ -4319,6 +4323,10 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # tono/sesgo. Retorna "" si ambos valores son no-accionables (sleep 7-8h,
         # stress Bajo/Moderado) — no contamina el prompt con low-signal data.
         "sleep_stress_context": build_sleep_stress_context(form_data),
+        # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Preferencias ricas opt-in
+        # (health_profile.super_personalization). Retorna "" si el usuario no
+        # llenó el panel → no-op transparente.
+        "super_personalization_context": build_super_personalization_context(form_data),
         "rag_context": "",
         "fatigue_context": build_fatigue_context(fatigued_ingredients),
         "liked_meals_context": build_liked_meals_context(liked_meals),
@@ -5524,7 +5532,8 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"{ctx['adherence_context']}\n{ctx['success_patterns_context']}\n"
         f"{ctx['temporal_adherence_context']}\n"
         f"{ctx['motivation_context']}\n"
-        f"{ctx['sleep_stress_context']}\n\n"
+        f"{ctx['sleep_stress_context']}\n"
+        f"{ctx['super_personalization_context']}\n\n"
         f"Técnicas de cocción asignadas (una por día):\n"
         f"{techniques_str}\n\n"
     )
@@ -6063,6 +6072,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             f"{ctx['temporal_adherence_context']}\n"
             f"{ctx['motivation_context']}\n"
             f"{ctx['sleep_stress_context']}\n"
+            f"{ctx['super_personalization_context']}\n"
             f"{assignment_context}\n"
             f"{recycled_days_context}\n"
         )

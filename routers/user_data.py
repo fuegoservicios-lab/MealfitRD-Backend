@@ -437,3 +437,122 @@ async def api_get_plan_data(
     if not row:
         raise HTTPException(status_code=404, detail="Plan no encontrado.")
     return {"plan": row}
+
+
+# ---------------------------------------------------------------------------
+# Súper Personalización (health_profile.super_personalization)
+# [P1-SUPERPERSONALIZATION-1 · 2026-06-19]
+# ---------------------------------------------------------------------------
+# Panel opt-in (Ajustes) con dimensiones de PREFERENCIA que el wizard no captura:
+# gustos positivos, cocina/cultura, restricción religiosa, equipo de cocina,
+# perfil de sabor, nivel de cocina + un texto libre. Persiste como sub-key JSONB
+# de health_profile (sin migración). Se inyecta a plan-gen y chat vía
+# `build_super_personalization_context`. ADITIVO: NO toca alergias/condiciones/
+# medicamentos (esas viven en sus campos estructurados validados).
+
+_SUPERPERS_RELIGION_VALUES = {"", "none", "halal", "kosher", "sin_cerdo", "sin_res", "sin_alcohol"}
+_SUPERPERS_SKILL_VALUES = {"", "principiante", "intermedio", "avanzado"}
+_SUPERPERS_FLAVOR_KEYS = ("picante", "dulce", "salado")
+_SUPERPERS_FLAVOR_LEVELS = {"", "bajo", "medio", "alto"}
+_SUPERPERS_LIST_KEYS = ("foodLikes", "cuisines", "kitchenEquipment")
+_SUPERPERS_MAX_LIST = 30
+_SUPERPERS_MAX_ITEM_LEN = 60
+_SUPERPERS_MAX_FREETEXT = 1500
+
+
+def _clean_super_personalization(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Valida + normaliza el payload (defensivo: listas acotadas, enums
+    validados, freeText capado). 422 ante shapes inválidos."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Payload inválido.")
+    out: Dict[str, Any] = {}
+    for key in _SUPERPERS_LIST_KEYS:
+        raw = payload.get(key) or []
+        if not isinstance(raw, list):
+            raise HTTPException(status_code=422, detail=f"'{key}' debe ser una lista.")
+        items = []
+        seen = set()
+        for x in raw[:_SUPERPERS_MAX_LIST]:
+            s = str(x).strip()[:_SUPERPERS_MAX_ITEM_LEN]
+            if s and s.lower() not in seen:
+                seen.add(s.lower())
+                items.append(s)
+        out[key] = items
+    rel = str(payload.get("religiousRestriction") or "").strip().lower()
+    if rel not in _SUPERPERS_RELIGION_VALUES:
+        raise HTTPException(status_code=422, detail="religiousRestriction inválida.")
+    out["religiousRestriction"] = "" if rel == "none" else rel
+    skill = str(payload.get("cookingSkill") or "").strip().lower()
+    if skill not in _SUPERPERS_SKILL_VALUES:
+        raise HTTPException(status_code=422, detail="cookingSkill inválido.")
+    out["cookingSkill"] = skill
+    flavor_in = payload.get("flavorProfile") or {}
+    flavor_out: Dict[str, str] = {}
+    if not isinstance(flavor_in, dict):
+        raise HTTPException(status_code=422, detail="flavorProfile debe ser un objeto.")
+    for k in _SUPERPERS_FLAVOR_KEYS:
+        lvl = str(flavor_in.get(k) or "").strip().lower()
+        if lvl not in _SUPERPERS_FLAVOR_LEVELS:
+            raise HTTPException(status_code=422, detail=f"flavorProfile.{k} inválido.")
+        if lvl:
+            flavor_out[k] = lvl
+    out["flavorProfile"] = flavor_out
+    free = payload.get("freeText") or ""
+    if not isinstance(free, str):
+        raise HTTPException(status_code=422, detail="freeText debe ser texto.")
+    out["freeText"] = free.strip()[:_SUPERPERS_MAX_FREETEXT]
+    return out
+
+
+@router.get("/user/preferences/super-personalization")
+async def api_get_super_personalization(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Devuelve el payload de súper personalización del usuario (o {} si no lo
+    ha llenado). Read-only, cero costo LLM (misma exención que el resto de
+    /user/preferences)."""
+    uid = _require_user(verified_user_id)
+    from db import get_user_profile
+
+    profile = await asyncio.to_thread(get_user_profile, uid)
+    hp = (profile or {}).get("health_profile") or {}
+    sp = hp.get("super_personalization") if isinstance(hp, dict) else None
+    return {"super_personalization": sp if isinstance(sp, dict) else {}}
+
+
+class SuperPersonalizationBody(BaseModel):
+    foodLikes: Optional[list] = None
+    cuisines: Optional[list] = None
+    kitchenEquipment: Optional[list] = None
+    religiousRestriction: Optional[str] = None
+    cookingSkill: Optional[str] = None
+    flavorProfile: Optional[Dict[str, Any]] = None
+    freeText: Optional[str] = None
+
+
+@router.put("/user/preferences/super-personalization")
+async def api_put_super_personalization(
+    body: SuperPersonalizationBody = Body(...),
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """Persiste el payload validado en health_profile.super_personalization vía
+    update_user_health_profile_atomic (SELECT…FOR UPDATE + callback, I7 — sin
+    lost-update bajo concurrencia). Filtra por user_id autenticado (I2)."""
+    uid = _require_user(verified_user_id)
+    cleaned = _clean_super_personalization(body.dict())
+
+    from datetime import datetime, timezone
+    cleaned["updatedAt"] = datetime.now(timezone.utc).isoformat()
+
+    from db import update_user_health_profile_atomic
+
+    def _mutator(hp):
+        if not isinstance(hp, dict):
+            hp = {}
+        hp["super_personalization"] = cleaned
+        return hp
+
+    new_hp = await asyncio.to_thread(update_user_health_profile_atomic, uid, _mutator)
+    if new_hp is None:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+    return {"super_personalization": cleaned}

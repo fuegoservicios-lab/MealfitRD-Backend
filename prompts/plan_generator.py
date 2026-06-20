@@ -364,6 +364,122 @@ def build_sleep_stress_context(form_data: dict) -> str:
     return "\n" + "\n".join(lines) + "\n"
 
 
+# [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Bloque de "Súper Personalización".
+# Dimensiones de PREFERENCIA que el wizard NO captura (gustos POSITIVOS, cocina/
+# cultura, restricción religiosa, equipo de cocina, perfil de sabor, nivel de
+# cocina) + un texto libre. Vive en `health_profile.super_personalization`
+# (sub-key JSONB → sin migración) y viaja en `form_data` como el resto de campos.
+#
+# CONTRATO (espejo de build_motivation_context / build_sleep_stress_context):
+# es ADITIVO. Sesga SELECCIÓN y TONO dentro del catálogo permitido, y EXCLUYE
+# por cultura/religión (solo quita opciones, nunca añade riesgo). NO altera
+# alergias, condiciones médicas, medicamentos ni macros — esas son estrictas y
+# vienen de otros bloques. El texto libre se asume ya saneado contra prompt
+# injection por `_sanitize_form_data_recursive` (recorre dicts/listas anidados).
+_SUPERPERS_RELIGION_RULES = {
+    "halal": "Dieta HALAL: NUNCA incluyas cerdo ni derivados (tocino, jamón, chicharrón) ni alcohol/vino de cocina.",
+    "kosher": "Dieta KOSHER: NUNCA incluyas cerdo ni mariscos, y NO mezcles carne con lácteos en la misma comida.",
+    "sin_cerdo": "NUNCA incluyas cerdo ni derivados (tocino, jamón, chicharrón, salami de cerdo).",
+    "sin_res": "NUNCA incluyas carne de res ni derivados.",
+    "sin_alcohol": "NUNCA uses alcohol (vino, cerveza, licores) ni siquiera para cocinar.",
+}
+_SUPERPERS_SKILL_HINTS = {
+    "principiante": "Nivel de cocina PRINCIPIANTE: recetas simples, pocos pasos, técnicas básicas, listas de ingredientes cortas.",
+    "intermedio": "Nivel de cocina INTERMEDIO: técnicas estándar y recetas de complejidad media están bien.",
+    "avanzado": "Nivel de cocina AVANZADO: puedes proponer preparaciones más elaboradas cuando aporten valor.",
+}
+_SUPERPERS_FLAVOR_LABELS = {"picante": "picante", "dulce": "dulce", "salado": "salado"}
+_SUPERPERS_FLAVOR_LEVELS = {"bajo", "medio", "alto"}
+
+
+def build_super_personalization_context(form_data: dict) -> str:
+    """[P1-SUPERPERSONALIZATION-1] Bloque de súper personalización del usuario.
+
+    Lee `form_data["super_personalization"]` (dict). Retorna "" si no hay datos
+    accionables (no-op transparente). Ver contrato en el comentario de arriba.
+    """
+    if not isinstance(form_data, dict):
+        return ""
+    sp = form_data.get("super_personalization")
+    if not isinstance(sp, dict) or not sp:
+        # Fallback: algunos call sites transportan el health_profile anidado en
+        # form_data (en vez de los campos planos ya hidratados). Cubre ambos
+        # transportes sin acoplar el builder a un único shape.
+        hp = form_data.get("health_profile")
+        if isinstance(hp, dict):
+            sp = hp.get("super_personalization")
+    if not isinstance(sp, dict) or not sp:
+        return ""
+
+    def _clean_list(key):
+        v = sp.get(key)
+        if not isinstance(v, list):
+            return []
+        return [str(x).strip() for x in v if isinstance(x, str) and str(x).strip()]
+
+    lines = []
+    likes = _clean_list("foodLikes")
+    if likes:
+        lines.append(
+            f"😋 Le ENCANTAN (priorízalos cuando encajen en macros y restricciones): {', '.join(likes)}."
+        )
+    cuisines = _clean_list("cuisines")
+    if cuisines:
+        lines.append(f"🌎 Cocinas/estilos preferidos: {', '.join(cuisines)}. Sesga el menú hacia estos estilos.")
+    equipment = _clean_list("kitchenEquipment")
+    if equipment:
+        lines.append(
+            f"🍳 Equipo de cocina disponible: {', '.join(equipment)}. Usa SOLO técnicas viables con este "
+            f"equipo (no asumas horno/airfryer si no están en la lista)."
+        )
+
+    religion = sp.get("religiousRestriction")
+    if isinstance(religion, str):
+        rule = _SUPERPERS_RELIGION_RULES.get(religion.strip().lower())
+        if rule:
+            lines.append(f"🕌 {rule}")
+
+    skill = sp.get("cookingSkill")
+    if isinstance(skill, str):
+        hint = _SUPERPERS_SKILL_HINTS.get(skill.strip().lower())
+        if hint:
+            lines.append(f"👨‍🍳 {hint}")
+
+    flavor = sp.get("flavorProfile")
+    if isinstance(flavor, dict):
+        flavor_parts = []
+        for k, label in _SUPERPERS_FLAVOR_LABELS.items():
+            lvl = flavor.get(k)
+            if isinstance(lvl, str) and lvl.strip().lower() in _SUPERPERS_FLAVOR_LEVELS:
+                flavor_parts.append(f"{label}={lvl.strip().lower()}")
+        if flavor_parts:
+            lines.append(
+                f"👅 Perfil de sabor preferido ({', '.join(flavor_parts)}): ajusta condimentación dentro de lo permitido."
+            )
+
+    free = sp.get("freeText")
+    if isinstance(free, str) and free.strip():
+        free_t = free.strip()
+        if len(free_t) > 1200:
+            free_t = free_t[:1200] + "…"
+        lines.append(f'📝 En sus palabras: "{free_t}"')
+
+    if not lines:
+        return ""
+
+    body = "\n".join(lines)
+    return (
+        "\n--- SÚPER PERSONALIZACIÓN DEL USUARIO ---\n"
+        f"{body}\n\n"
+        "INSTRUCCIÓN: Usa estas señales para PERSONALIZAR la selección de platos, el "
+        "estilo y el tono dentro del catálogo y las reglas ya permitidas. Las exclusiones "
+        "por cultura/religión SÍ son obligatorias (nunca incluyas lo prohibido). NO uses "
+        "este bloque para alterar alergias, condiciones médicas, medicamentos ni macros — "
+        "esas son estrictas y vienen de otros bloques.\n"
+        "----------------------------------------\n"
+    )
+
+
 # [P3-CONDITION-ENGINE · 2026-06-14] Delegado al MOTOR de constraints clínicos declarativo
 # (`condition_rules.py`), SSOT del comportamiento por condición (DM2/ERC/HTA/dislipidemia/anemia).
 # Antes la lógica DM2/ERC vivía inline aquí; ahora el registro la dirige → añadir una condición es

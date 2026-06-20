@@ -2496,6 +2496,19 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
 
     system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
 
+    # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
+    # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
+    # chat coach — reusa el mismo builder del generador de planes. Retorna "" si
+    # el usuario no llenó el panel → no-op. Así el coach responde más preciso
+    # (qué le ENCANTA, qué cocina prefiere, qué equipo tiene) sin tocar las
+    # restricciones clínicas, que siguen viniendo de form_data estructurado.
+    if form_data:
+        try:
+            from prompts.plan_generator import build_super_personalization_context
+            system_prompt += build_super_personalization_context(form_data)
+        except Exception as _sp_err:
+            logger.warning(f"[P1-SUPERPERSONALIZATION-1] No se pudo inyectar súper personalización al chat: {_sp_err}")
+
     if current_plan:
         # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas antes
         # de serializar (shopping agregados, coherence telemetry, archived days).
@@ -2831,6 +2844,19 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             shopping_delta_str = ", ".join(cleaned_shop)
 
     system_prompt += build_inventory_context(inventory_str, shopping_delta_str)
+
+    # [P1-SUPERPERSONALIZATION-1 · 2026-06-19] Inyecta el bloque de súper
+    # personalización (gustos/cultura/equipo/sabor/nivel/texto libre) también al
+    # chat coach — reusa el mismo builder del generador de planes. Retorna "" si
+    # el usuario no llenó el panel → no-op. Así el coach responde más preciso
+    # (qué le ENCANTA, qué cocina prefiere, qué equipo tiene) sin tocar las
+    # restricciones clínicas, que siguen viniendo de form_data estructurado.
+    if form_data:
+        try:
+            from prompts.plan_generator import build_super_personalization_context
+            system_prompt += build_super_personalization_context(form_data)
+        except Exception as _sp_err:
+            logger.warning(f"[P1-SUPERPERSONALIZATION-1] No se pudo inyectar súper personalización al chat: {_sp_err}")
 
     if current_plan:
         # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas (ver
