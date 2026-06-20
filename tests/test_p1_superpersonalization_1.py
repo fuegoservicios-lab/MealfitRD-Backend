@@ -153,3 +153,89 @@ def test_cleaner_rejects_invalid_enums():
         clean({"flavorProfile": {"picante": "extremo"}})
     with pytest.raises(HTTPException):
         clean({"foodLikes": "no-soy-lista"})
+
+
+# --------------------------------------------------------------------------
+# Fase 3: el PUT encola extracción de facts del freeText (enriquecimiento RAG)
+# --------------------------------------------------------------------------
+
+def _make_client(monkeypatch, *, prev_freetext=None, knob=True):
+    """App mínima con el router de user_data; db/fact_extractor mockeados vía
+    sys.modules + auth overrideado. Retorna (client, calls)."""
+    import sys
+    import types
+
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        import routers.user_data as ud
+    except Exception as e:  # pragma: no cover
+        pytest.skip(f"FastAPI/TestClient/router no disponible: {e}")
+
+    calls = []
+
+    def fake_update(_uid, mutator):
+        hp = {}
+        if prev_freetext is not None:
+            hp["super_personalization"] = {"freeText": prev_freetext}
+        return mutator(hp)
+
+    fake_db = types.ModuleType("db")
+    fake_db.update_user_health_profile_atomic = fake_update
+    fake_db.get_user_profile = lambda _uid: {"health_profile": {}}
+    monkeypatch.setitem(sys.modules, "db", fake_db)
+
+    fake_fx = types.ModuleType("fact_extractor")
+    fake_fx.async_extract_and_save_facts = lambda *a, **k: calls.append(a)
+    monkeypatch.setitem(sys.modules, "fact_extractor", fake_fx)
+
+    monkeypatch.setattr(ud, "_SUPERPERS_EXTRACT_FACTS", knob)
+
+    app = FastAPI()
+    app.include_router(ud.router)
+    app.dependency_overrides[ud.get_verified_user_id] = lambda: "test-user-123"
+    return TestClient(app), calls
+
+
+def _put(client, payload):
+    return client.put("/api/user/preferences/super-personalization", json=payload)
+
+
+def test_put_schedules_extraction_on_new_freetext(monkeypatch):
+    client, calls = _make_client(monkeypatch, prev_freetext=None, knob=True)
+    res = _put(client, {"freeText": "Trabajo de noche y odio el cilantro."})
+    assert res.status_code == 200
+    assert len(calls) == 1
+    assert calls[0][0] == "test-user-123"
+    assert "cilantro" in calls[0][1]
+
+
+def test_put_skips_extraction_when_freetext_unchanged(monkeypatch):
+    client, calls = _make_client(monkeypatch, prev_freetext="Trabajo de noche.", knob=True)
+    res = _put(client, {"freeText": "Trabajo de noche."})
+    assert res.status_code == 200
+    assert calls == []
+
+
+def test_put_skips_extraction_when_empty_freetext(monkeypatch):
+    client, calls = _make_client(monkeypatch, prev_freetext=None, knob=True)
+    res = _put(client, {"foodLikes": ["mango"], "freeText": ""})
+    assert res.status_code == 200
+    assert calls == []
+
+
+def test_put_respects_knob_off(monkeypatch):
+    client, calls = _make_client(monkeypatch, prev_freetext=None, knob=False)
+    res = _put(client, {"freeText": "texto nuevo importante para el perfil"})
+    assert res.status_code == 200
+    assert calls == []
+
+
+def test_put_returns_cleaned_payload(monkeypatch):
+    client, _calls = _make_client(monkeypatch, prev_freetext=None, knob=False)
+    res = _put(client, {"foodLikes": ["  Mango  ", "mango"], "cookingSkill": "Avanzado"})
+    assert res.status_code == 200
+    sp = res.json()["super_personalization"]
+    assert sp["foodLikes"] == ["Mango"]  # trim + dedup
+    assert sp["cookingSkill"] == "avanzado"
+    assert "updatedAt" in sp

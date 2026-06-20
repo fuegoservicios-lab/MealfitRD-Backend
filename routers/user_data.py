@@ -32,8 +32,9 @@ from typing import Any, Dict, Optional
 
 import asyncio
 import logging
+import os
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import BaseModel
 
 from auth import get_verified_user_id
@@ -459,6 +460,16 @@ _SUPERPERS_MAX_LIST = 30
 _SUPERPERS_MAX_ITEM_LEN = 60
 _SUPERPERS_MAX_FREETEXT = 1500
 
+# [P1-SUPERPERSONALIZATION-1 · Fase 3 · 2026-06-19] Kill-switch del enriquecimiento
+# del RAG: al guardar con un freeText NUEVO, se extraen facts (DeepSeek-flash) →
+# user_facts (Cohere embed) en background, para que el RAG los recupere en
+# plan-gen Y chat automáticamente. Default ON; flip a "false" en el .env del VPS
+# para apagar sin redeploy (cuesta ~1 call LLM + 1 embedding por guardado con
+# texto cambiado). Reusa el MISMO pipeline que el chat (dedup/contradicción/lock).
+_SUPERPERS_EXTRACT_FACTS = os.getenv(
+    "MEALFIT_SUPERPERS_EXTRACT_FACTS", "true"
+).strip().lower() in ("1", "true", "yes", "on")
+
 
 def _clean_super_personalization(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Valida + normaliza el payload (defensivo: listas acotadas, enums
@@ -532,27 +543,60 @@ class SuperPersonalizationBody(BaseModel):
 
 @router.put("/user/preferences/super-personalization")
 async def api_put_super_personalization(
+    background_tasks: BackgroundTasks,
     body: SuperPersonalizationBody = Body(...),
     verified_user_id: str = Depends(get_verified_user_id),
 ):
     """Persiste el payload validado en health_profile.super_personalization vía
     update_user_health_profile_atomic (SELECT…FOR UPDATE + callback, I7 — sin
-    lost-update bajo concurrencia). Filtra por user_id autenticado (I2)."""
+    lost-update bajo concurrencia). Filtra por user_id autenticado (I2).
+
+    [Fase 3] Si el `freeText` CAMBIÓ, extrae facts del texto en background →
+    user_facts (Cohere embed) para que el RAG los recupere en plan-gen Y chat."""
     uid = _require_user(verified_user_id)
-    cleaned = _clean_super_personalization(body.dict())
+    cleaned = _clean_super_personalization(body.model_dump())
 
     from datetime import datetime, timezone
     cleaned["updatedAt"] = datetime.now(timezone.utc).isoformat()
 
     from db import update_user_health_profile_atomic
 
+    # [Fase 3] Detecta si el freeText cambió (vs el guardado previo) para NO
+    # re-extraer facts en cada guardado. Se computa dentro del mutator (que ve
+    # el hp actual bajo el lock) y se lee fuera vía closure.
+    _state = {"freetext_changed": False}
+
     def _mutator(hp):
         if not isinstance(hp, dict):
             hp = {}
+        prev = hp.get("super_personalization")
+        prev_free = prev.get("freeText") if isinstance(prev, dict) else ""
+        new_free = cleaned.get("freeText") or ""
+        _state["freetext_changed"] = bool(new_free) and new_free != (prev_free or "")
         hp["super_personalization"] = cleaned
         return hp
 
     new_hp = await asyncio.to_thread(update_user_health_profile_atomic, uid, _mutator)
     if new_hp is None:
         raise HTTPException(status_code=404, detail="Perfil no encontrado.")
+
+    # [Fase 3] Enriquecer el RAG: extraer facts del texto libre en background.
+    # `async_extract_and_save_facts` es síncrona (router lite + lock + LLM +
+    # embed + dedup); BackgroundTasks la corre en el threadpool TRAS enviar la
+    # respuesta → no bloquea el PUT. Reusa el MISMO pipeline que el chat, así
+    # que los facts heredan dedup/contradicción/embedding asimétrico.
+    if _SUPERPERS_EXTRACT_FACTS and _state["freetext_changed"]:
+        try:
+            from fact_extractor import async_extract_and_save_facts
+            background_tasks.add_task(async_extract_and_save_facts, uid, cleaned["freeText"])
+            logger.info(
+                f"[P1-SUPERPERSONALIZATION-1/Fase3] Extracción de facts encolada "
+                f"para user {uid} (freeText {len(cleaned['freeText'])} chars)."
+            )
+        except Exception as _fx_err:  # noqa: BLE001 — best-effort, no rompe el guardado
+            logger.warning(
+                f"[P1-SUPERPERSONALIZATION-1/Fase3] No se pudo encolar extracción "
+                f"de facts: {_fx_err}"
+            )
+
     return {"super_personalization": cleaned}
