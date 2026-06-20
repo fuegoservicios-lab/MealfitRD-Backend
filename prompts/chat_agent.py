@@ -254,11 +254,12 @@ def build_user_identity_context(form_data: dict, full_name: str = "") -> str:
 
     block = "\n\n--- 👤 PERFIL DEL USUARIO (identidad y datos corporales) ---\n"
     block += (
-        "Estás hablando con esta persona. Úsalo para personalizar la conversación: "
-        "salúdala/refiérete a ella por su nombre cuando sea natural, y adapta tus "
-        "consejos a su sexo, edad y objetivo. NO uses este bloque para alterar "
-        "alergias, condiciones médicas ni los macros de su plan — esos vienen de "
-        "sus propios bloques.\n"
+        "Estás hablando con esta persona. Úsalo para personalizar con naturalidad: "
+        "adapta tono y consejos a su sexo, edad y objetivo. Su nombre es para que lo "
+        "reconozcas; úsalo con MODERACIÓN (no en cada mensaje) y NUNCA lo repitas dos "
+        "veces en la misma respuesta ni lo uses como muletilla al inicio — tutéala con "
+        "naturalidad. NO uses este bloque para alterar alergias, condiciones médicas "
+        "ni los macros de su plan — esos vienen de sus propios bloques.\n"
     )
     block += "\n".join(parts)
     block += "\n----------------------------------------------------------\n"
