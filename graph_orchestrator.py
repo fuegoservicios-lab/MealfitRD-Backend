@@ -6049,7 +6049,15 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         target_date = start_date + timedelta(days=global_day - 1)
         day_name = dias_es[target_date.weekday()]
 
-        assignment_context = build_day_assignment_context(skeleton_day, day_num, day_name=day_name)
+        # [P3-PROTEIN-SLOT-TARGET · 2026-06-19] Pasa el target de proteína diario (activo = respeta cap renal)
+        # para que el prompt inyecte el target EN GRAMOS por comida. Cierra el under-delivery del LLM en crudo.
+        # Gated: knob off → None → el builder no añade el bloque (backward-compatible).
+        _day_protein_g = None
+        if PROTEIN_SLOT_TARGET_PROMPT_ENABLED and isinstance(nutrition, dict):
+            _active_m = nutrition.get("total_daily_macros") or nutrition.get("macros") or {}
+            _day_protein_g = _meal_macro_num(_active_m.get("protein_str") or _active_m.get("protein_g"))
+        assignment_context = build_day_assignment_context(skeleton_day, day_num, day_name=day_name,
+                                                          daily_protein_g=_day_protein_g)
 
         random_seed = random.randint(10000, 99999)
 
@@ -8502,6 +8510,11 @@ PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
 # por A/B antes de flip). Diagnóstico: subir fill_pct solo es suma-cero a kcal fijo; el swap arregla AMBOS macros.
 CARB_TO_PROTEIN_SWAP_ENABLED = _env_bool("MEALFIT_CARB_TO_PROTEIN_SWAP", False)
 CARB_TO_PROTEIN_SWAP_FLOOR_PCT = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_FLOOR_PCT", 1.0)  # A/B harness: f1.0 > f0.95
+# [P3-PROTEIN-SLOT-TARGET · 2026-06-19] Inyecta el target de proteína EN GRAMOS por comida al prompt del día
+# (proteína_diaria × fracción canónica del slot). El LLM under-delivers proteína en crudo (~85% del target);
+# darle el número exacto sube el arranque. SOFT (motor/swap/piso siguen de backstop). Default ON; rollback sin
+# redeploy = `MEALFIT_PROTEIN_SLOT_TARGET_PROMPT=false`. Marginal a N=6 pero inofensivo + reduce el tail catastrófico.
+PROTEIN_SLOT_TARGET_PROMPT_ENABLED = _env_bool("MEALFIT_PROTEIN_SLOT_TARGET_PROMPT", True)
 CARB_TO_PROTEIN_SWAP_CARB_TOL = _env_float("MEALFIT_CARB_TO_PROTEIN_SWAP_CARB_TOL", 0.05)
 # [P3-PROTEIN-CEILING-GOAL-AWARE · 2026-06-13] Techo de proteína ENTREGADA en g/kg, dependiente
 # del objetivo: ≤2.2 g/kg para volumen/mantenimiento (más proteína desplaza carbos útiles), pero

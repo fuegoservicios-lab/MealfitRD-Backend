@@ -257,8 +257,16 @@ _POOL_IMPLICATIONS = {
 }
 
 
-def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None) -> str:
-    """Genera el bloque de contexto con la asignación del planificador para un día."""
+def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str = None,
+                                 daily_protein_g: float = None) -> str:
+    """Genera el bloque de contexto con la asignación del planificador para un día.
+
+    [P3-PROTEIN-SLOT-TARGET · 2026-06-19] `daily_protein_g` (opcional): si se pasa, inyecta el TARGET
+    de proteína EN GRAMOS por comida (proteína_diaria × fracción canónica del slot). Razón: el LLM
+    under-delivers proteína en crudo (medido: ~85% del target, 46% de los días <90%) porque solo veía
+    la LISTA de fuentes, nunca cuántos gramos por comida. Darle el número exacto sube el punto de arranque
+    → menos cierre post-hoc del motor → mejor precisión final + menos retries (que cuestan tokens). SOFT
+    (el motor + el piso de proteína siguen siendo el backstop determinista)."""
     import re as _re
     pool_str = ', '.join(skeleton_day.get('protein_pool', []))
     pool_lower = pool_str.lower()
@@ -328,6 +336,46 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
     breakfast_cat = skeleton_day.get('breakfast_category', '')
     breakfast_block = f"\n• 🍳 CATEGORÍA DE DESAYUNO ASIGNADA: {breakfast_cat}\n  (⚠️ OBLIGATORIO: El desayuno de este día DEBE ser de esta categoría. NO uses mangú/tubérculos si la categoría asignada es otra)." if breakfast_cat else ""
 
+    # [P3-PROTEIN-SLOT-TARGET · 2026-06-19] Target de proteína EN GRAMOS por comida = proteína_diaria ×
+    # fracción canónica del slot (MEAL_SLOT_SPLITS). El LLM lo usa para DIMENSIONAR la proteína asignada
+    # en gramos reales en vez de adivinar (under-delivery medida: ~85% del target en crudo).
+    _meal_types = skeleton_day.get('meal_types') or ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']
+    protein_targets_block = ""
+    if daily_protein_g and daily_protein_g > 0 and _meal_types:
+        try:
+            from nutrition_calculator import MEAL_SLOT_SPLITS
+            _splits = MEAL_SLOT_SPLITS.get(len(_meal_types), {})
+            _used, _per_slot = set(), []
+            for _mt in _meal_types:
+                _nm = _strip_acc(str(_mt).lower())
+                if "desay" in _nm:
+                    _k = "desayuno"
+                elif "almuerz" in _nm or "comida" in _nm:
+                    _k = "almuerzo"
+                elif "cena" in _nm:
+                    _k = "cena"
+                elif "merienda" in _nm or "snack" in _nm:
+                    _k = ("merienda_am" if ("merienda_am" in _splits and "merienda_am" not in _used)
+                          else ("merienda_pm" if "merienda_pm" in _splits else "merienda"))
+                else:
+                    _k = None
+                _frac = _splits.get(_k) if _k else None
+                if _frac is None:
+                    _frac = 1.0 / len(_meal_types)   # fallback: reparto uniforme
+                _used.add(_k)
+                _per_slot.append((_mt, max(1, round(daily_protein_g * _frac))))
+            _line = " | ".join(f"{_mt}: ~{_g}g" for _mt, _g in _per_slot)
+            protein_targets_block = (
+                f"\n🎯 PROTEÍNA POR COMIDA (target en GRAMOS — el macro MÁS incumplido, NO lo subestimes):\n"
+                f"   → {_line}   (total del día: {round(daily_protein_g)}g)\n"
+                f"   ⚠️ DIMENSIONA la proteína asignada en gramos reales para alcanzar cada target. Referencia: "
+                f"100g pechuga de pollo ≈ 31g proteína · 100g pescado ≈ 22g · 1 huevo ≈ 6g · 100g carne magra ≈ 26g. "
+                f"Ej: para ~52g en un almuerzo, usa ~170g de pollo. Las comidas PRINCIPALES (almuerzo/cena) DEBEN "
+                f"llevar una fuente animal dimensionada en gramos; NO dependas de almidón/leguminosa sola para la proteína."
+            )
+        except Exception:
+            protein_targets_block = ""
+
     return f"""
 --- 📋 ASIGNACIÓN DEL PLANIFICADOR PARA OPCIÓN {day_num} ---
 • Concepto Temático: {skeleton_day.get('brief_concept', 'Día variado')}{day_name_block}{breakfast_block}
@@ -335,7 +383,7 @@ def build_day_assignment_context(skeleton_day: dict, day_num: int, day_name: str
 • Proteínas Asignadas: {pool_str}
 • Carbohidratos Asignados: {', '.join(skeleton_day.get('carb_pool', []))}
 • Frutas Asignadas: {', '.join(skeleton_day.get('fruit_pool', []))}
-• Comidas a Generar: {', '.join(skeleton_day.get('meal_types', ['Desayuno', 'Almuerzo', 'Merienda', 'Cena']))}
+• Comidas a Generar: {', '.join(_meal_types)}{protein_targets_block}
 {prohibited_block}
 DEBES basar tus recetas en estos ingredientes asignados para garantizar
 variedad entre los 3 días del plan. Puedes agregar condimentos, especias,
