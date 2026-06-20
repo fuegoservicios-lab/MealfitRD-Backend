@@ -72,6 +72,29 @@ def test_equipment_and_skill_and_flavor():
     assert "picante=alto" in out and "dulce=bajo" in out
 
 
+def test_sin_mariscos_preset():
+    out = build_super_personalization_context(
+        {"super_personalization": {"religiousRestriction": "sin_mariscos"}}
+    )
+    assert "mariscos" in out.lower() and "NUNCA" in out
+
+
+def test_otra_custom_restriction_is_injected_as_hard_exclusion():
+    out = build_super_personalization_context(
+        {"super_personalization": {
+            "religiousRestriction": "otra",
+            "religiousRestrictionOther": "sin carne los viernes",
+        }}
+    )
+    assert "sin carne los viernes" in out
+    assert "NUNCA" in out and "🕌" in out
+    # 'otra' sin texto → NO inyecta línea de restricción
+    out2 = build_super_personalization_context(
+        {"super_personalization": {"religiousRestriction": "otra", "religiousRestrictionOther": "   "}}
+    )
+    assert "🕌" not in out2
+
+
 def test_free_text_is_capped():
     long_text = "a" * 5000
     out = build_super_personalization_context(
@@ -139,6 +162,20 @@ def test_cleaner_normalizes_and_caps():
     assert out["cookingSkill"] == "intermedio"
     assert out["flavorProfile"] == {"picante": "alto", "salado": "medio"}  # "" se omite
     assert len(out["freeText"]) <= 1500
+
+
+def test_cleaner_handles_otra_and_sin_mariscos():
+    clean = _import_cleaner()
+    # 'otra' válida + texto preservado (trim + cap)
+    out = clean({"religiousRestriction": "OTRA", "religiousRestrictionOther": "  jainista (sin raíces)  "})
+    assert out["religiousRestriction"] == "otra"
+    assert out["religiousRestrictionOther"] == "jainista (sin raíces)"
+    # si NO es 'otra', el texto libre se limpia
+    out2 = clean({"religiousRestriction": "halal", "religiousRestrictionOther": "ignorame"})
+    assert out2["religiousRestrictionOther"] == ""
+    # sin_mariscos es un preset válido ahora
+    out3 = clean({"religiousRestriction": "sin_mariscos"})
+    assert out3["religiousRestriction"] == "sin_mariscos"
 
 
 def test_cleaner_rejects_invalid_enums():

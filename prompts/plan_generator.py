@@ -381,6 +381,7 @@ _SUPERPERS_RELIGION_RULES = {
     "kosher": "Dieta KOSHER: NUNCA incluyas cerdo ni mariscos, y NO mezcles carne con lácteos en la misma comida.",
     "sin_cerdo": "NUNCA incluyas cerdo ni derivados (tocino, jamón, chicharrón, salami de cerdo).",
     "sin_res": "NUNCA incluyas carne de res ni derivados.",
+    "sin_mariscos": "NUNCA incluyas mariscos (camarones, langosta, cangrejo, pulpo, calamar, almejas, mejillones, ostras, etc.).",
     "sin_alcohol": "NUNCA uses alcohol (vino, cerveza, licores) ni siquiera para cocinar.",
 }
 _SUPERPERS_SKILL_HINTS = {
@@ -435,9 +436,19 @@ def build_super_personalization_context(form_data: dict) -> str:
 
     religion = sp.get("religiousRestriction")
     if isinstance(religion, str):
-        rule = _SUPERPERS_RELIGION_RULES.get(religion.strip().lower())
-        if rule:
-            lines.append(f"🕌 {rule}")
+        rel = religion.strip().lower()
+        if rel == "otra":
+            # Restricción libre del usuario → exclusión DURA (igual que los presets).
+            other = sp.get("religiousRestrictionOther")
+            if isinstance(other, str) and other.strip():
+                lines.append(
+                    f'🕌 Restricción cultural/religiosa del usuario: "{other.strip()}". Respétala '
+                    f"SIEMPRE — NUNCA incluyas lo que prohíbe."
+                )
+        else:
+            rule = _SUPERPERS_RELIGION_RULES.get(rel)
+            if rule:
+                lines.append(f"🕌 {rule}")
 
     skill = sp.get("cookingSkill")
     if isinstance(skill, str):

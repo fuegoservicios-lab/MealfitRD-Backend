@@ -451,8 +451,9 @@ async def api_get_plan_data(
 # `build_super_personalization_context`. ADITIVO: NO toca alergias/condiciones/
 # medicamentos (esas viven en sus campos estructurados validados).
 
-_SUPERPERS_RELIGION_VALUES = {"", "none", "halal", "kosher", "sin_cerdo", "sin_res", "sin_alcohol"}
+_SUPERPERS_RELIGION_VALUES = {"", "none", "halal", "kosher", "sin_cerdo", "sin_res", "sin_mariscos", "sin_alcohol", "otra"}
 _SUPERPERS_SKILL_VALUES = {"", "principiante", "intermedio", "avanzado"}
+_SUPERPERS_MAX_OTHER = 80  # restricción cultural/religiosa "otra" (texto libre acotado)
 _SUPERPERS_FLAVOR_KEYS = ("picante", "dulce", "salado")
 _SUPERPERS_FLAVOR_LEVELS = {"", "bajo", "medio", "alto"}
 _SUPERPERS_LIST_KEYS = ("foodLikes", "cuisines", "kitchenEquipment")
@@ -493,6 +494,9 @@ def _clean_super_personalization(payload: Dict[str, Any]) -> Dict[str, Any]:
     if rel not in _SUPERPERS_RELIGION_VALUES:
         raise HTTPException(status_code=422, detail="religiousRestriction inválida.")
     out["religiousRestriction"] = "" if rel == "none" else rel
+    # Texto libre de la restricción "otra" (solo relevante si rel == "otra").
+    other = str(payload.get("religiousRestrictionOther") or "").strip()[:_SUPERPERS_MAX_OTHER]
+    out["religiousRestrictionOther"] = other if out["religiousRestriction"] == "otra" else ""
     skill = str(payload.get("cookingSkill") or "").strip().lower()
     if skill not in _SUPERPERS_SKILL_VALUES:
         raise HTTPException(status_code=422, detail="cookingSkill inválido.")
@@ -536,6 +540,7 @@ class SuperPersonalizationBody(BaseModel):
     cuisines: Optional[list] = None
     kitchenEquipment: Optional[list] = None
     religiousRestriction: Optional[str] = None
+    religiousRestrictionOther: Optional[str] = None
     cookingSkill: Optional[str] = None
     flavorProfile: Optional[Dict[str, Any]] = None
     freeText: Optional[str] = None
