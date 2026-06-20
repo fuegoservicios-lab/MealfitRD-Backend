@@ -174,6 +174,97 @@ def build_inventory_context(inventory_str: str, shopping_delta_str: str) -> str:
     return ctx
 
 
+# [P3-CHAT-IDENTITY · 2026-06-20] Mapa de objetivos → etiqueta legible es-DO para
+# el bloque de identidad del coach. Fallback en el builder si el código no está aquí.
+_GOAL_LABELS_ES = {
+    "lose_fat": "perder grasa",
+    "fat_loss": "perder grasa",
+    "lose_weight": "perder peso",
+    "weight_loss": "perder peso",
+    "gain_muscle": "ganar músculo",
+    "muscle_gain": "ganar músculo",
+    "build_muscle": "ganar músculo",
+    "maintain": "mantener peso",
+    "maintenance": "mantener peso",
+    "recomp": "recomposición corporal",
+    "body_recomposition": "recomposición corporal",
+    "improve_health": "mejorar la salud",
+    "general_health": "mejorar la salud",
+    "health": "mejorar la salud",
+    "performance": "rendimiento deportivo",
+}
+
+
+def build_user_identity_context(form_data: dict, full_name: str = "") -> str:
+    """[P3-CHAT-IDENTITY · 2026-06-20] Bloque compacto de IDENTIDAD + DATOS
+    CORPORALES para que el coach conozca al usuario (nombre, sexo biológico,
+    edad, peso, altura, objetivo). Lo lee de `form_data` (health_profile) + el
+    `full_name` (user_profiles). Aditivo y NO clínico: NO inyecta alergias,
+    condiciones ni medicamentos (esos viven en sus bloques estrictos) y NO altera
+    los macros del plan. Retorna "" si no hay ningún dato accionable."""
+    if not isinstance(form_data, dict):
+        form_data = {}
+
+    parts = []
+
+    name = full_name.strip() if isinstance(full_name, str) else ""
+    if name:
+        parts.append(f"- Nombre: {name}")
+
+    gender = form_data.get("gender")
+    if gender in ("male", "female"):
+        parts.append(f"- Sexo biológico: {'Hombre' if gender == 'male' else 'Mujer'}")
+
+    age = form_data.get("age")
+    try:
+        if age is not None and str(age).strip() != "":
+            age_i = int(float(age))
+            if 0 < age_i < 130:
+                parts.append(f"- Edad: {age_i} años")
+    except (TypeError, ValueError):
+        pass
+
+    weight = form_data.get("weight")
+    wunit = form_data.get("weightUnit") or "kg"
+    try:
+        if weight is not None and str(weight).strip() != "":
+            wnum = float(weight)
+            if wnum > 0:
+                wtxt = str(int(wnum)) if wnum == int(wnum) else f"{wnum:.1f}"
+                parts.append(f"- Peso: {wtxt} {wunit}")
+    except (TypeError, ValueError):
+        pass
+
+    height = form_data.get("height")  # cm canonical
+    try:
+        if height is not None and str(height).strip() != "":
+            hnum = float(height)
+            if hnum > 0:
+                parts.append(f"- Altura: {int(hnum)} cm")
+    except (TypeError, ValueError):
+        pass
+
+    goal = form_data.get("mainGoal") or form_data.get("goal")
+    if goal and isinstance(goal, str) and goal.strip():
+        goal_label = _GOAL_LABELS_ES.get(goal.strip().lower()) or goal.strip().replace("_", " ")
+        parts.append(f"- Objetivo principal: {goal_label}")
+
+    if not parts:
+        return ""
+
+    block = "\n\n--- 👤 PERFIL DEL USUARIO (identidad y datos corporales) ---\n"
+    block += (
+        "Estás hablando con esta persona. Úsalo para personalizar la conversación: "
+        "salúdala/refiérete a ella por su nombre cuando sea natural, y adapta tus "
+        "consejos a su sexo, edad y objetivo. NO uses este bloque para alterar "
+        "alergias, condiciones médicas ni los macros de su plan — esos vienen de "
+        "sus propios bloques.\n"
+    )
+    block += "\n".join(parts)
+    block += "\n----------------------------------------------------------\n"
+    return block
+
+
 # ============================================================
 # PROMPTS UTILITARIOS
 # ============================================================

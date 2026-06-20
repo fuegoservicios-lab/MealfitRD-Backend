@@ -179,6 +179,7 @@ from prompts.chat_agent import (
     build_tools_instructions,
     build_tools_instructions_stream,
     build_inventory_context,
+    build_user_identity_context,
 )
 
 from tools import (
@@ -2509,6 +2510,19 @@ def chat_with_agent(session_id: str, prompt: str, current_plan: Optional[dict] =
         except Exception as _sp_err:
             logger.warning(f"[P1-SUPERPERSONALIZATION-1] No se pudo inyectar súper personalización al chat: {_sp_err}")
 
+    # [P3-CHAT-IDENTITY · 2026-06-20] Bloque de identidad + datos corporales
+    # (nombre/sexo/edad/peso/altura/objetivo) → el coach SABE con quién habla y
+    # personaliza (te saluda por tu nombre, adapta consejos por sexo/edad/objetivo).
+    # Aditivo, NO clínico (no toca alergias/condiciones ni los macros del plan).
+    # Best-effort: el nombre solo se carga para usuarios autenticados.
+    try:
+        _id_name = ""
+        if user_id and user_id != session_id and user_id != "guest":
+            _id_name = (get_user_profile(user_id) or {}).get("full_name") or ""
+        system_prompt += build_user_identity_context(form_data or {}, _id_name)
+    except Exception as _id_err:
+        logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
+
     if current_plan:
         # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas antes
         # de serializar (shopping agregados, coherence telemetry, archived days).
@@ -2857,6 +2871,17 @@ def chat_with_agent_stream(session_id: str, prompt: str, current_plan: Optional[
             system_prompt += build_super_personalization_context(form_data)
         except Exception as _sp_err:
             logger.warning(f"[P1-SUPERPERSONALIZATION-1] No se pudo inyectar súper personalización al chat: {_sp_err}")
+
+    # [P3-CHAT-IDENTITY · 2026-06-20] Identidad + datos corporales (paridad con el
+    # path no-stream). El coach conoce nombre/sexo/edad/peso/altura/objetivo y
+    # personaliza. Aditivo, no clínico. Nombre solo para autenticados (best-effort).
+    try:
+        _id_name = ""
+        if user_id and user_id != session_id and user_id != "guest":
+            _id_name = (get_user_profile(user_id) or {}).get("full_name") or ""
+        system_prompt += build_user_identity_context(form_data or {}, _id_name)
+    except Exception as _id_err:
+        logger.warning(f"[P3-CHAT-IDENTITY] No se pudo inyectar identidad al chat: {_id_err}")
 
     if current_plan:
         # [P2-GENCHUNK-SPEED · 2026-06-01] Podar claves derivadas/pesadas (ver
