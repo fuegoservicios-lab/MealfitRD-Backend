@@ -4856,7 +4856,25 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
     # `expected_only` → en modo=block fuerza retry. Filtrar expected_raw aquí cubre
     # AMBAS capas (presence en :4797 y magnitude en :4831, que derivan de expected_raw).
     if _verified_ingredients_only_enabled() and isinstance(expected_raw, dict):
+        # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] El filtro evita un retry-storm
+        # (decisión: no bloquear por condimentos raros como laurel/comino), pero ANTES
+        # era 100% silencioso: si el LLM desobedeció la instrucción upstream
+        # (_get_verified_catalog_instruction) y metió un ingrediente SUSTANTIVO fuera de
+        # los 119, desaparecía de la lista Y del lado esperado del guard → cero señal →
+        # "lista de compras incompleta entregada sin aviso" (el miedo del owner). Ahora
+        # capturamos lo filtrado ANTES de descartarlo y emitimos un WARNING grep-able para
+        # medir la tasa real de desobediencia (si es alta, hay que ampliar catálogo o
+        # forzar retry; si es ~0, el sistema cumple). Tooltip-anchor: P1-VERIFIED-ONLY-OBSERVABILITY.
+        _expected_before_filter = set(expected_raw.keys())
         expected_raw = {k: v for k, v in expected_raw.items() if _is_verified_for_shopping(k)}
+        _dropped_recipe_ingredients = _expected_before_filter - set(expected_raw.keys())
+        if _dropped_recipe_ingredients:
+            logging.warning(
+                "[VERIFIED-ONLY-GUARD-BLIND] %d ingrediente(s) de RECETAS fuera del catálogo "
+                "verificado → ausentes de la lista de compras sin aviso (LLM desobedeció el "
+                "prompt upstream): %s",
+                len(_dropped_recipe_ingredients), sorted(_dropped_recipe_ingredients)[:25],
+            )
 
     aggregated_list = plan_result.get("aggregated_shopping_list") or []
     aggregated_names_raw = set()
@@ -7561,9 +7579,14 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if (_verified_ingredients_only_enabled()
                 and not _is_verified_for_shopping(name)
                 and price_per_lb <= 0 and price_per_unit <= 0):
-            logging.info(
-                f"[VERIFIED-ONLY] '{name}' excluido de la lista: no es un alimento "
-                "verificado con precio La Sirena (probable invención del LLM)."
+            # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el
+            # drop sea grep-able en prod: este es el punto exacto donde un ingrediente de
+            # receta fuera de los 119 desaparece de la lista. Espejo del guard (P1-VERIFIED-ONLY-OBSERVABILITY).
+            logging.warning(
+                "[VERIFIED-ONLY-DROP] '%s' excluido de la lista: fuera del catálogo "
+                "verificado de 119 (probable desobediencia del LLM al prompt upstream). "
+                "Si es sustantivo, la lista de compras queda incompleta.",
+                name,
             )
             continue
 
