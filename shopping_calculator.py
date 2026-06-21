@@ -4125,6 +4125,17 @@ def canonicalize_frutos_secos(name) -> str | None:
     if not name:
         return None
     n_low = str(name).lower()
+    # [P1-NUT-BUTTER-DISTINCT · 2026-06-21] La mantequilla/crema/pasta de un fruto seco es un
+    # PRODUCTO DISTINTO del fruto seco crudo (SKU, precio y presentación distintos): la
+    # "Mantequilla de maní" (frasco RD$117) NO es "Maní" crudo (frasco RD$185); la crema de
+    # almendra NO es "Almendras". NO consolidar a la nuez base — devolver None para que el
+    # master_map resuelva el producto distinto por su propio nombre. Sin esto, el `\bman[íi]\b`
+    # de abajo matcheaba "maní" DENTRO de "mantequilla de maní" → "Maní", y la lista de compras
+    # contradecía la receta (la receta decía mantequilla de maní, la lista mostraba maní crudo
+    # — el usuario compraría el producto equivocado). Simétrico en el coherence guard porque
+    # ambos lados (recetas y lista) pasan por esta misma función. Tooltip-anchor: P1-NUT-BUTTER-DISTINCT.
+    if re.search(r'\b(mantequilla|crema|pasta)\s+de\s+\w', n_low) or 'peanut butter' in n_low or 'almond butter' in n_low:
+        return None
     if re.search(r'\balmendras?\b', n_low):
         return 'Almendras'
     if (
