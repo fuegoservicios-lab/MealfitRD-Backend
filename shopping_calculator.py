@@ -5653,9 +5653,13 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         if re.search(r'^almendras?\b', _can_lower) and 'mantequilla' not in _can_lower:
             canonical_name = 'Almendras fileteadas'
 
-        # Consolidación: Orégano variantes (seco, dominicano) → Orégano dominicano
+        # [P3-OREGANO-DISPLAY-NAME · 2026-06-20] Variantes de orégano (seco, dominicano) → 'Orégano'
+        # (display; el owner pidió quitar 'dominicano', redundante en es-DO). Este literal ES el
+        # nombre mostrado/almacenado en aggregated_shopping_list (NO master_ingredients.name).
+        # 'Orégano' resuelve en master_map (:5491) para el lookup de precio/envase (:5773) vía el
+        # alias 'orégano'.title()='Orégano' del catálogo (slug='oregano'). NO revertir sin re-alinear.
         if re.search(r'^or[eé]gano\b', _can_lower):
-            canonical_name = 'Orégano dominicano'
+            canonical_name = 'Orégano'
 
         # Consolidación: Tortilla/Tortillas integral/integrales → Tortilla integral
         if re.search(r'^tortillas?\s+integral', _can_lower):
