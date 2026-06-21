@@ -2418,6 +2418,19 @@ def api_analyze(
                 },
             )
 
+        # [P2-BUDGET-FLOOR · 2026-06-21] Bloqueo pre-generación: si el presupuesto 'custom' es
+        # insuficiente para las metas del usuario (calorías × días × hogar), bloquear y pedir
+        # ajuste — decisión del owner. NUNCA bajamos la calidad nutricional para encajar en un
+        # precio físicamente imposible (los pisos clínicos son budget-blind, Fase 2). El helper
+        # es fail-open; envolvemos el import para que un fallo jamás impida generar.
+        try:
+            from nutrition_calculator import validate_budget_sufficient as _vbs
+            _budget_ok, _budget_detail = _vbs(data)
+        except Exception:
+            _budget_ok, _budget_detail = True, None
+        if not _budget_ok:
+            raise HTTPException(status_code=422, detail={"code": "budget_insufficient", **(_budget_detail or {})})
+
         history = []
         likes = []
         taste_profile = ""
@@ -2748,6 +2761,19 @@ async def api_analyze_stream(
                     ),
                 },
             )
+
+        # [P2-BUDGET-FLOOR · 2026-06-21] Bloqueo pre-generación: si el presupuesto 'custom' es
+        # insuficiente para las metas del usuario (calorías × días × hogar), bloquear y pedir
+        # ajuste — decisión del owner. NUNCA bajamos la calidad nutricional para encajar en un
+        # precio físicamente imposible (los pisos clínicos son budget-blind, Fase 2). El helper
+        # es fail-open; envolvemos el import para que un fallo jamás impida generar.
+        try:
+            from nutrition_calculator import validate_budget_sufficient as _vbs
+            _budget_ok, _budget_detail = _vbs(data)
+        except Exception:
+            _budget_ok, _budget_detail = True, None
+        if not _budget_ok:
+            raise HTTPException(status_code=422, detail={"code": "budget_insufficient", **(_budget_detail or {})})
 
         history = []
         likes = []

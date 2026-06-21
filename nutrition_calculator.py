@@ -1272,5 +1272,135 @@ def get_nutrition_targets(form_data: dict) -> dict:
     logger.info(f"   🏃 TDEE: {tdee} kcal (Actividad: {activity_level})")
     logger.info(f"   🎯 Calorías Objetivo: {target_calories} kcal ({goal_labels.get(goal, goal)})")
     logger.info(f"   🥩 Proteína: {macros['protein_g']}g | 🍚 Carbos: {macros['carbs_g']}g | 🥑 Grasas: {macros['fats_g']}g")
-    
+
     return result
+
+
+# ============================================================
+# [P2-BUDGET-FLOOR · 2026-06-21] Piso de presupuesto escalado por metas (Fase 3 del build
+# "todo terreno" pedido por el owner). Decisión de producto del owner: BLOQUEAR si el
+# presupuesto declarado (modo 'custom') es físicamente insuficiente para alimentar al usuario
+# según SUS metas, y pedir ajuste — NUNCA bajar la calidad nutricional para encajar en un
+# precio demasiado bajo. El presupuesto NO toca los pisos clínicos (proteína/calorías son
+# budget-blind, ver Fase 2); este floor sólo evita prometer un plan profesional con un monto
+# imposible. Tooltip-anchor: P2-BUDGET-FLOOR.
+# ============================================================
+_GROCERY_DURATION_DAYS = {"weekly": 7, "biweekly": 15, "monthly": 30}
+
+
+def _budget_floor_enabled() -> bool:
+    return os.environ.get("MEALFIT_BUDGET_FLOOR_ENABLED", "true").lower() != "false"
+
+
+def _budget_floor_per_day_base_dop() -> float:
+    """RD$/día/persona a la caloría de referencia = el piso 'comer bien' que el owner fijó en
+    el frontend (BUDGET_MIN_PER_DAY=200 DOP). Knob para tunear con la inflación."""
+    try:
+        return max(0.0, float(os.environ.get("MEALFIT_BUDGET_FLOOR_PER_DAY_DOP", "200")))
+    except (TypeError, ValueError):
+        return 200.0
+
+
+def _budget_floor_kcal_ref() -> float:
+    try:
+        return max(800.0, float(os.environ.get("MEALFIT_BUDGET_FLOOR_KCAL_REF", "2000")))
+    except (TypeError, ValueError):
+        return 2000.0
+
+
+def _budget_usd_to_dop() -> float:
+    try:
+        return max(1.0, float(os.environ.get("MEALFIT_BUDGET_USD_TO_DOP", "60")))
+    except (TypeError, ValueError):
+        return 60.0
+
+
+def _budget_floor_tolerance_pct() -> float:
+    try:
+        v = float(os.environ.get("MEALFIT_BUDGET_FLOOR_TOLERANCE_PCT", "0.05"))
+        return min(0.5, max(0.0, v))
+    except (TypeError, ValueError):
+        return 0.05
+
+
+def min_budget_for_goals(form_data: dict) -> dict:
+    """Estima el presupuesto MÍNIMO (en DOP) para alimentar al usuario según sus metas
+    (calorías objetivo), su ciclo de compras (días) y su hogar (personas). Calibrado al piso
+    del frontend (200 DOP/día/persona a 2000 kcal) y escalado LINEALMENTE con las calorías:
+    un usuario de 3500 kcal necesita más comida → más presupuesto. Conservador (lower bound)
+    para NO sobre-bloquear. Devuelve {min_budget_dop, min_per_day_dop, days, household, target_calories}."""
+    days = _GROCERY_DURATION_DAYS.get(str(form_data.get("groceryDuration") or "weekly").lower(), 7)
+    try:
+        household = int(float(form_data.get("householdSize") or 1))
+    except (TypeError, ValueError):
+        household = 1
+    household = min(12, max(1, household))
+    try:
+        nutr = get_nutrition_targets(form_data)
+        target_calories = int(nutr.get("target_calories") or 0)
+    except Exception as e:
+        logger.warning(f"[P2-BUDGET-FLOOR] get_nutrition_targets falló ({type(e).__name__}); usando ref")
+        target_calories = 0
+    if target_calories <= 0:
+        target_calories = int(_budget_floor_kcal_ref())
+    base = _budget_floor_per_day_base_dop()
+    cal_scale = max(1.0, target_calories / _budget_floor_kcal_ref())
+    min_per_day = base * cal_scale
+    min_budget_dop = min_per_day * days * household
+    return {
+        "min_budget_dop": round(min_budget_dop),
+        "min_per_day_dop": round(min_per_day),
+        "days": days,
+        "household": household,
+        "target_calories": target_calories,
+    }
+
+
+def validate_budget_sufficient(form_data: dict) -> tuple:
+    """Bloqueo pre-generación: si el presupuesto 'custom' declarado es insuficiente para las
+    metas, retorna (False, detail) con los números para el mensaje accionable. Solo aplica a
+    budget='custom' con monto explícito (las opciones categóricas son cualitativas). Fail-open:
+    ante cualquier error, NO bloquea (mejor generar que romper el flujo)."""
+    try:
+        if not _budget_floor_enabled():
+            return True, None
+        if str(form_data.get("budget") or "").lower() != "custom":
+            return True, None
+        try:
+            declared = float(str(form_data.get("budgetAmount")).replace(",", "").strip())
+        except (TypeError, ValueError):
+            declared = 0.0
+        if declared <= 0:
+            # custom sin monto válido: build_budget_context cae a 'medium', no es nuestro bloqueo.
+            return True, None
+        currency = str(form_data.get("budgetCurrency") or "DOP").upper()
+        usd_dop = _budget_usd_to_dop()
+        declared_dop = declared * usd_dop if currency == "USD" else declared
+        info = min_budget_for_goals(form_data)
+        threshold = info["min_budget_dop"] * (1.0 - _budget_floor_tolerance_pct())
+        if declared_dop >= threshold:
+            return True, None
+        min_in_currency = (info["min_budget_dop"] / usd_dop) if currency == "USD" else info["min_budget_dop"]
+        sym = "US$" if currency == "USD" else "RD$"
+        msg = (
+            f"Tu presupuesto de {sym}{round(declared):,} es insuficiente para tus metas "
+            f"({info['target_calories']} kcal/día × {info['days']} días"
+            + (f" × {info['household']} personas" if info["household"] > 1 else "")
+            + f"). El mínimo para un plan profesional es ~{sym}{round(min_in_currency):,}. "
+            "Sube tu presupuesto o ajusta tus metas (menos días, menos personas, o una meta "
+            "calórica menor). No bajamos la calidad nutricional para encajar en un presupuesto "
+            "demasiado bajo."
+        )
+        return False, {
+            "error_code": "budget_below_goal_floor",
+            "min_budget": round(min_in_currency),
+            "declared": round(declared),
+            "currency": currency,
+            "days": info["days"],
+            "household": info["household"],
+            "target_calories": info["target_calories"],
+            "message": msg,
+        }
+    except Exception as e:
+        logger.warning(f"[P2-BUDGET-FLOOR] validate_budget_sufficient falló ({type(e).__name__}: {e}); fail-open")
+        return True, None
