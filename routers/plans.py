@@ -3335,6 +3335,20 @@ async def api_analyze_stream(
                             # chunks. Emitir error SSE para que el frontend muestre
                             # "intenta de nuevo" en lugar de un plan basura permanente.
                             if isinstance(result, dict) and result.get("_is_fallback"):
+                                # [P1-PENDING-PIPELINE-SSE-FALLBACK-CLEAR · 2026-06-20] Estos breaks del
+                                # FALLBACK-GUARD ya setearon `_sse_completed_naturally=True` (L3326) → el
+                                # done-callback SALTA su mark-failed (race-fix L3047 → return). Sin marcar el
+                                # KV aquí, `pending_pipeline` queda 'generating' FOREVER → el frontend muestra
+                                # "Diseñando tu plan" colgado (incidente 2026-06-20 user 9b686868: 14min+
+                                # pegado tras un fallo de breaker). Marcar 'failed' cierra AMBOS sub-casos
+                                # (crítico + LLM caído). Tooltip-anchor: P1-PENDING-PIPELINE-SSE-FALLBACK-CLEAR.
+                                if _deep_search_user_id:
+                                    try:
+                                        from db_plans import upsert_pending_pipeline
+                                        _fb_err_code = "critical_restriction" if result.get("_critical_rejection") else "llm_unavailable_fallback"
+                                        upsert_pending_pipeline(_deep_search_user_id, status="failed", error=_fb_err_code)
+                                    except Exception as _kv_e:
+                                        logger.warning(f"[P1-PENDING-PIPELINE-SSE-FALLBACK-CLEAR] KV failed update no-op: {_kv_e!r}")
                                 # [P2-CRITICAL-REJECTION-CODE · 2026-06-18] (audit fresco P2) Un rechazo
                                 # CRÍTICO (alérgeno/condición declarada que la IA no logró satisfacer) viene
                                 # con `_is_fallback=True` + `_critical_rejection=True`. El mensaje genérico
