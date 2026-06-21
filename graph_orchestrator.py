@@ -12763,7 +12763,24 @@ async def assemble_plan_node(state: PlanState) -> dict:
                      inventory_override=inv_snapshot, consumed_override=consumed_snapshot),
             )
         else:
-            aggr_list_7, aggr_list_15, aggr_list_30 = [], [], []
+            # [P1-GUEST-SHOPPING · 2026-06-21] Sin user_id (invitado) no hay inventario
+            # que descontar → construimos la lista COMPLETA (overrides vacíos = cero
+            # deducción) para que el plan de invitado NAZCA con lista de compras y se
+            # preserve al adoptar la cuenta. Antes el invitado quedaba con lista vacía
+            # → "plan incompleto" tras registrarse. Try/except: si el builder no tolera
+            # user_id=None, degradamos a vacío (comportamiento previo) sin romper la gen.
+            try:
+                aggr_list_7, aggr_list_15, aggr_list_30 = await asyncio.gather(
+                    _adb(get_shopping_list_delta, None, result, True, False, True, 1.0 * household,
+                         inventory_override=[], consumed_override=[]),
+                    _adb(get_shopping_list_delta, None, result, True, False, True, 2.0 * household,
+                         inventory_override=[], consumed_override=[]),
+                    _adb(get_shopping_list_delta, None, result, True, False, True, 4.0 * household,
+                         inventory_override=[], consumed_override=[]),
+                )
+            except Exception as _e_guest_shop:
+                logger.warning(f"⚠️ [P1-GUEST-SHOPPING] Builder falló para invitado, lista vacía: {_e_guest_shop}")
+                aggr_list_7, aggr_list_15, aggr_list_30 = [], [], []
 
         grocery_duration = form_data.get("groceryDuration", "weekly")
 
