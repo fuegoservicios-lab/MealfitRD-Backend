@@ -5861,12 +5861,12 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     # Fallback agresivo para atrapar ' Uds.' o cualquier sufijo
                     u_qty += units.pop(k)
             if u_qty > 0:
-                if u_qty <= 6:
-                    units['cartón (6 uds.)'] = units.get('cartón (6 uds.)', 0) + 1
-                elif u_qty <= 15:
-                    units['medio cartón (15 uds.)'] = units.get('medio cartón (15 uds.)', 0) + 1
-                else:
-                    units['cartón (30 uds.)'] = units.get('cartón (30 uds.)', 0) + math.ceil(u_qty / 30.0)
+                # [P3-EGG-REAL-CARTONS · 2026-06-20] Solo cartones REALES de 30 uds. En el
+                # mercado DR NO existen cartones de 6 ni 15 (confirmado por el owner con fotos
+                # de la tienda); los huevos se compran por cartón completo, no por separado.
+                # Para cualquier conteo, redondear HACIA ARRIBA a cartones de 30 — es el estándar
+                # + mejor valor por huevo; duran ~3-5 semanas refrigerados, el resto no se desperdicia.
+                units['cartón (30 uds.)'] = units.get('cartón (30 uds.)', 0) + math.ceil(u_qty / 30.0)
 
         for u in list(units.keys()):
             q = units[u]

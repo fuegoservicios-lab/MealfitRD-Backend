@@ -16,6 +16,14 @@ market_qty × price_per_unit; (D) huevo 'cartón (N uds.)' → (market_qty × N)
 Datos reales verificados en master_ingredients (prod Neon): huevo ud=280 cont=900 dens=50;
 arroz-blanco lb=32.70 cont=907; garbanzos lb=69.74 cont=453; camarones lb=299 (sin container);
 lechosa lb=20 ud=66.14; tofu lb=168.38 ud=147 cont=396; melón lb=21.77 ud=72.
+
+[P3-EGG-REAL-CARTONS · 2026-06-20] El pre-processing del huevo (aggregate_and_deduct)
+ahora SOLO crea 'cartón (30 uds.)' redondeando hacia arriba — en el mercado DR no existen
+cartones de 6 ni 15 (confirmado por el owner con fotos de la tienda; los huevos se compran
+por cartón completo). El helper sigue siendo robusto a cualquier 'cartón (N uds.)' (defensa),
+pero producción solo verá cartones de 30; precio actual del huevo = 295/cartón → completo 295.
+Los tests de 6/15 abajo verifican la ROBUSTEZ de la fórmula del helper, no buckets que
+producción cree (ver test_preprocessing_huevo_solo_crea_cartones_de_30).
 """
 from __future__ import annotations
 
@@ -112,3 +120,29 @@ def test_master_item_none_no_crashea():
 def test_envase_solo_price_per_lb_sin_container_devuelve_cero():
     # envase nombrado, solo price_per_lb, SIN container_weight_g → no se puede convertir → 0 (honesto)
     assert _cost_from_market(_mk(1, "paquete"), {}, 50.0, 0) == 0.0
+
+
+# ── [P3-EGG-REAL-CARTONS · 2026-06-20] El pre-processing solo crea cartones REALES de 30
+def test_huevo_carton_30_precio_actual_295():
+    # precio actual en prod = 295/cartón → cartón completo (30 uds.) = 295
+    assert _cost_from_market(_mk(1, "cartón (30 uds.)"), {}, 0, 295) == pytest.approx(295.0)
+
+
+def test_huevo_dos_cartones_30_precio_actual():
+    # 2 cartones de 30 (61+ huevos) → 2 × 295 = 590
+    assert _cost_from_market(_mk(2, "cartón (30 uds.)"), {}, 0, 295) == pytest.approx(590.0)
+
+
+def test_preprocessing_huevo_solo_crea_cartones_de_30():
+    """En el mercado DR no existen cartones de 6 ni 15; el huevo se compra por cartón
+    completo. El pre-processing del huevo (aggregate_and_deduct) debe redondear HACIA
+    ARRIBA a 'cartón (30 uds.)' y NUNCA crear los buckets falsos 'medio cartón (15 uds.)'
+    ni 'cartón (6 uds.)'. Ancla la corrección reportada por el owner con fotos de la tienda."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "shopping_calculator.py").read_text(encoding="utf-8")
+    idx = src.index("P3-EGG-REAL-CARTONS")
+    block = src[idx:idx + 650]  # cubre el comentario + la línea de código del bucket
+    assert "cartón (30 uds.)" in block, "el pre-processing debe crear 'cartón (30 uds.)'"
+    assert "math.ceil" in block, "debe redondear HACIA ARRIBA (ceil) a cartones completos"
+    assert "medio cartón (15 uds.)" not in block, "no debe crear el bucket falso de 15 uds."
+    assert "cartón (6 uds.)" not in block, "no debe crear el bucket falso de 6 uds."
