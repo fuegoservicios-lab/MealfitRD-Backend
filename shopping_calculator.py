@@ -5274,6 +5274,68 @@ def _strip_presentation_modifier_prefix(name: str) -> str:
     return cleaned
 
 
+def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
+    """[P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costea sobre el DISPLAY real — lo que el
+    usuario COMPRA (el paquete/cartón/Ud que apply_smart_market_units ya redondeó), no
+    sobre el peso CRUDO de la receta. Cierra el desajuste donde staples por-peso
+    (arroz/habichuelas/nueces) sub-costeaban (cobraban los gramos de la receta cuando el
+    display dice '1 paquete (2 lb)') y el huevo sobre-costeaba (cobraba cartón completo
+    por 'medio cartón'). Reemplaza al fallback P3-PRICE-UNIT-COVERAGE (solo-si-0).
+    Devuelve el costo RD$ de la cantidad mostrada. Tooltip-anchor: P3-PRICE-MARKET-COVERAGE."""
+    try:
+        mqty = float(market_obj.get("market_qty") or 0)
+    except (TypeError, ValueError):
+        mqty = 0.0
+    if mqty <= 0:
+        return 0.0
+    munit = str(market_obj.get("market_unit") or "").lower().strip()
+    _mi = master_item or {}
+    try:
+        container_g = float(_mi.get("container_weight_g") or 0)
+    except (TypeError, ValueError):
+        container_g = 0.0
+    try:
+        density_g = float(_mi.get("density_g_per_unit") or 0)
+    except (TypeError, ValueError):
+        density_g = 0.0
+
+    # (D) HUEVO — unidad textual 'cartón (N uds.)' / 'medio cartón (15 uds.)'. El egg
+    # pre-process (L5801-5807) consolida los huevos en buckets de cartón; price_per_unit
+    # es por cartón de 30. Costo por-huevo = (market_qty × N huevos del bucket) × (precio/30).
+    _egg_m = re.search(r'\((\d+)\s*uds?\.?\)', munit)
+    if _egg_m and 'cart' in munit and price_per_unit > 0:
+        return mqty * float(_egg_m.group(1)) * (price_per_unit / 30.0)
+
+    # (A) Display en LIBRAS: market_qty ya está en libras → price_per_lb directo.
+    if munit in ("lb", "lbs"):
+        if price_per_lb > 0:
+            return mqty * price_per_lb
+        if price_per_unit > 0 and container_g > 0:
+            return max(1, math.ceil(mqty * 453.592 / container_g)) * price_per_unit
+        return 0.0
+
+    # (C) Display por UNIDAD NATURAL (Ud./Cabeza: lechosa, melón, plátano enteros).
+    if munit in ("ud.", "uds.", "ud", "uds", "unidad", "unidades", "cabeza", "cabezas"):
+        if price_per_unit > 0:
+            return mqty * price_per_unit
+        if price_per_lb > 0 and density_g > 0:
+            return mqty * density_g / 453.592 * price_per_lb
+        return 0.0
+
+    # Sin unidad costeable.
+    if munit in ("al gusto", ""):
+        return 0.0
+
+    # (B) Display por ENVASE NOMBRADO (paquete/pote/botella/sobre/lata/funda/frasco/mazo).
+    # market_qty = nº de ESE envase. price_per_unit es por envase; si solo hay price_per_lb
+    # + peso del envase, convertir envases→libras (1 paquete arroz 907g → 2 lb × price_per_lb).
+    if price_per_unit > 0:
+        return mqty * price_per_unit
+    if price_per_lb > 0 and container_g > 0:
+        return mqty * container_g / 453.592 * price_per_lb
+    return 0.0
+
+
 def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ingredients: list[str] = None, categorize: bool = False, structured: bool = False, multiplier: float = 1.0):
     # [P1-CAPS-COHERENCE-RECONCILE · 2026-05-16] Reset del tracker de caps al
     # inicio de cada run del aggregator. Los caps que se apliquen durante
@@ -7530,9 +7592,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 _n_lower = name.lower()
                 if any(kw in _n_lower for kw in ['pechuga', 'pavo', 'yogurt', 'lechosa', 'aguacate', 'arroz']):
                     logging.info(f"  🔬 [RAW LBS] {name}: {weight_in_lbs:.4f} lbs (mult={multiplier})")
-                item_cost = weight_in_lbs * price_per_lb
-                total_estimated_cost += item_cost
                 market_obj = apply_smart_market_units(name, weight_in_lbs, 'lb', 0.0, master_item)
+                # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costo desde el DISPLAY redondeado (lo que
+                # se compra), no desde weight_in_lbs crudo -> cierra el sub-costeo de staples por-peso.
+                item_cost = _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit)
+                total_estimated_cost += item_cost
                 market_obj["category"] = cat
                 market_obj["display_category"] = display_cat
                 market_obj["is_staple"] = False
@@ -7551,19 +7615,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 market_obj["is_perishable"] = is_perishable_category(
                     _cat_for_perish, market_obj.get("shelf_life_days")
                 )
-                # [P3-PRICE-UNIT-COVERAGE · 2026-06-20] Si el costo quedó en 0 (ítem que se vende por ENVASE:
-                # price_per_unit>0, price_per_lb=0 — aceite/miel/huevo/yogurt entran por peso y daban 0),
-                # costear desde el conteo de envases del DISPLAY (market_qty = lo que el usuario REALMENTE compra:
-                # 1 botella, 1 cartón, 2 Ud) × price_per_unit. Usa market_qty (no el conteo crudo, que puede estar
-                # en otra unidad que el precio: 30 huevos vs precio por cartón). Cierra ~40% de ítems caros sin precio.
-                if item_cost <= 0 and price_per_unit > 0:
-                    try:
-                        _mq_disp = float(market_obj.get("market_qty") or 0)
-                    except (TypeError, ValueError):
-                        _mq_disp = 0.0
-                    if _mq_disp > 0:
-                        item_cost = _mq_disp * price_per_unit
-                        total_estimated_cost += item_cost
+                # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] El costo ya viene de _cost_from_market
+                # (sobre el display redondeado real); reemplaza al fallback P3-PRICE-UNIT-COVERAGE solo-si-0.
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
@@ -7581,11 +7634,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 if added and u.lower() in ['unidad', 'unidades', 'ud', 'uds', 'ud.', 'uds.', 'cabeza', 'cabezas', 'diente', 'dientes', 'mazo', 'mazos']:
                     logging.info(f"🔀 [DEDUP] Saltando entrada duplicada por {u} para '{name}' (ya tiene entrada por peso)")
                     continue
-                item_cost = 0.0
-                if u in ['unidad', 'unidades', 'lata', 'latas', 'paquete', 'paquetes']:
-                    item_cost = q * price_per_unit
-                    total_estimated_cost += item_cost
                 market_obj = apply_smart_market_units(name, 0.0, u, q, master_item)
+                # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] Costo desde el DISPLAY (envase/carton
+                # redondeado); cubre huevo medio-carton (parsea "(N uds.)" x precio/30) y envases.
+                item_cost = _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit)
+                total_estimated_cost += item_cost
                 market_obj["category"] = cat
                 market_obj["display_category"] = display_cat
                 market_obj["is_staple"] = False
@@ -7604,19 +7657,8 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                 market_obj["is_perishable"] = is_perishable_category(
                     _cat_for_perish, market_obj.get("shelf_life_days")
                 )
-                # [P3-PRICE-UNIT-COVERAGE · 2026-06-20] Si el costo quedó en 0 (ítem que se vende por ENVASE:
-                # price_per_unit>0, price_per_lb=0 — aceite/miel/huevo/yogurt entran por peso y daban 0),
-                # costear desde el conteo de envases del DISPLAY (market_qty = lo que el usuario REALMENTE compra:
-                # 1 botella, 1 cartón, 2 Ud) × price_per_unit. Usa market_qty (no el conteo crudo, que puede estar
-                # en otra unidad que el precio: 30 huevos vs precio por cartón). Cierra ~40% de ítems caros sin precio.
-                if item_cost <= 0 and price_per_unit > 0:
-                    try:
-                        _mq_disp = float(market_obj.get("market_qty") or 0)
-                    except (TypeError, ValueError):
-                        _mq_disp = 0.0
-                    if _mq_disp > 0:
-                        item_cost = _mq_disp * price_per_unit
-                        total_estimated_cost += item_cost
+                # [P3-PRICE-MARKET-COVERAGE · 2026-06-20] El costo ya viene de _cost_from_market
+                # (sobre el display redondeado real); reemplaza al fallback P3-PRICE-UNIT-COVERAGE solo-si-0.
                 market_obj["estimated_cost_rd"] = round(item_cost, 2) if item_cost > 0 else None
                 item_val = market_obj if structured else market_obj["display_string"]
                 results.append(item_val)
