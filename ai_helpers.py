@@ -431,10 +431,27 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         unique_proteins.append(pick)
         _pool_p = [(p, w) for p, w in _pool_p if p != pick]
     
-    # 🥗 GARANTÍA NUTRICIONAL: Asegurar al menos 1 leguminosa en la selección
+    # 🥗 GARANTÍA NUTRICIONAL: Asegurar al menos 1 leguminosa en la selección.
+    # [P1-LEGUME-GUARANTEE-GOAL-AWARE · 2026-06-16] Goal-aware: para gain_muscle NO
+    # se fuerza una leguminosa como proteína PRINCIPAL de un día. Una base de
+    # leguminosa (lentejas/garbanzos + almidón) no alcanza el piso de proteína (90%
+    # de un target alto — p.ej. 108g de 120g) con porciones cocinables → el revisor
+    # médico rechaza por DÉFICIT DE PROTEÍNA → retry-storm + entrega degradada.
+    # Observado en vivo (corr 13117aff, 2026-06-16: la garantía forzó 'Lentejas' y
+    # 'Garbanzos' como proteína principal → días 84-107g vs piso 108g; peor aún,
+    # forzaba la leguminosa INCLUSO cuando la directiva de retry decía explícitamente
+    # "NO dependas solo de leguminosas"). Las leguminosas siguen apareciendo como
+    # acompañante en la generación del día; solo no se IMPONEN como proteína
+    # principal del esqueleto para los objetivos de este set.
+    _GOALS_SKIP_LEGUME_GUARANTEE = {"gain_muscle"}  # tooltip-anchor: legume_guarantee_goal_gate
     LEGUME_NAMES = {"habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos"}
     has_legume = any(p.lower() in LEGUME_NAMES for p in unique_proteins)
-    if not has_legume:
+    if not has_legume and _main_goal in _GOALS_SKIP_LEGUME_GUARANTEE:
+        logger.info(
+            f"🥩 [GARANTÍA NUTRICIONAL] Omitida para goal='{_main_goal}' — la leguminosa "
+            f"no se impone como proteína principal (manda el piso de proteína)."
+        )
+    elif not has_legume:
         available_legumes = [p for p in available_proteins if p.lower() in LEGUME_NAMES]
         if available_legumes:
             legume_pick = random.choice(available_legumes)

@@ -525,8 +525,10 @@ def build_supplement_recommendations(report: dict, sex: str | None = "F", age: i
     return {
         "items": items,
         "count": len(items),
-        "disclaimer": ("Recomendación orientativa, NO una prescripción. Prioriza cerrar los "
-                       "gaps con ALIMENTOS primero; consulta a tu médico/nutricionista antes "
-                       "de iniciar cualquier suplemento (dosis y necesidad dependen de tu "
-                       "análisis de sangre y condiciones individuales)."),
+        # [P3-MICRO-SUGGEST-CLARITY · 2026-06-19] Disclaimer más corto y claro
+        # (antes era un párrafo denso). Conserva los 2 puntos clave: comida primero
+        # + consultar al médico, e indica que la dosis depende del caso/análisis.
+        "disclaimer": ("Orientativo, no es una prescripción. Cubre los gaps con comida "
+                       "primero y consulta a tu médico antes de tomar suplementos "
+                       "(la dosis depende de tu análisis y tu caso)."),
     }
