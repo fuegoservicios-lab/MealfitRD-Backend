@@ -7047,6 +7047,56 @@ def api_retry_chunk(plan_id: str, chunk_id: str, verified_user_id: Optional[str]
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+@router.post("/adopt-guest-plan")
+def api_adopt_guest_plan(
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(get_verified_user_id),
+):
+    """[P1-GUEST-ADOPT-1 · 2026-06-21] Adopta el plan generado por un INVITADO
+    (vive en localStorage; los invitados no persisten a la DB) hacia su cuenta
+    recién creada / sin plan. SOLO procede si la cuenta NO tiene ya un plan — si
+    ya tiene, 409 y el frontend descarta el de invitado (la cuenta existente manda;
+    spec del owner: login a cuenta-CON-plan = cero cambio). El doble-invoke queda
+    cubierto: la 2a llamada ve el plan de la 1a → 409, y el dedup interno de
+    _save_plan_and_track_background atrapa la carrera concurrente.
+
+    Invariantes: I1 (plan_id nace del INSERT atómico, nunca del cliente), I2
+    (user_id viene del JWT verificado, no del body), I6 (este endpoint ES el
+    gateway backend; el frontend NO escribe meal_plans directo), I7/I8 (el INSERT
+    de save_new_meal_plan_atomic stampa generation_status + cancela chunks en una
+    sola transacción). Tooltip-anchor: P1-GUEST-ADOPT-1
+    """
+    if not verified_user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    plan_data = (data or {}).get("plan_data")
+    if not isinstance(plan_data, dict) or not plan_data.get("days"):
+        raise HTTPException(status_code=400, detail="plan_data inválido (falta days)")
+
+    # PRIORIDAD: la cuenta existente gana. Si ya tiene plan, NO adoptamos.
+    existing = get_latest_meal_plan_with_id(verified_user_id)
+    if existing:
+        raise HTTPException(status_code=409, detail="account_already_has_plan")
+
+    # I1: plan_id nace del INSERT. return_id=True corre SÍNCRONO + propaga la
+    # excepción + retorna el UUID; su dedup interno retorna None si una doble
+    # invocación concurrente ya insertó.
+    try:
+        plan_id = _save_plan_and_track_background(
+            verified_user_id, plan_data, selected_techniques=None, return_id=True
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+    if not plan_id:
+        return {"success": True, "adopted": False, "reason": "dedup"}
+
+    logger.info(f"✅ [P1-GUEST-ADOPT-1] Plan de invitado adoptado → user={verified_user_id} plan_id={plan_id}")
+    return {"success": True, "adopted": True, "plan_id": plan_id}
+
+
 @router.post("/restore")
 def api_restore_plan(
     data: dict = Body(...),
