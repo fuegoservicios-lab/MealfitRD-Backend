@@ -72,7 +72,21 @@ def _qty_grams_for(result: list, name_substr: str) -> float:
         if unit in ("lb", "lbs", "libra", "libras"):
             return qty * 453.592
         if unit in ("frasco", "frascos", "pote", "potes", "botella", "botellas"):
-            return qty * 340.194
+            # [P6-SPICE-CAP-TEST-DRIFT-FIX · 2026-06-21] NO asumir frasco=340g (ese
+            # es el frasco de ACEITUNAS). Las especias en frasco real son ~85g (ajo)
+            # / 90.7g (orégano) en master_ingredients → tras el cap quedan en 1 frasco,
+            # bien por debajo de cap_g. Leer el peso real del display_qty ("1 frasco
+            # (90g)" / "(12 oz)"); fallback 90.7g (frasco típico de especia). El cap en
+            # sí funciona correcto en prod (logs: → 56g); el bug era esta constante.
+            import re as _re
+            _lbl = str(r.get("display_qty") or r.get("sku_size_label") or "")
+            _mg = _re.search(r"(\d+(?:\.\d+)?)\s*g\b", _lbl)
+            if _mg:
+                return qty * float(_mg.group(1))
+            _moz = _re.search(r"(\d+(?:\.\d+)?)\s*oz\b", _lbl)
+            if _moz:
+                return qty * float(_moz.group(1)) * 28.35
+            return qty * 90.7
         if unit == "g":
             return qty
         if unit in ("unidad", "ud.", "uds.", "unidades"):
