@@ -5,6 +5,7 @@ Elimina la carga matemática del LLM para evitar alucinaciones numéricas.
 """
 
 import logging
+import os  # [P2-BUDGET-FLOOR · 2026-06-21] usado por los knobs del piso de presupuesto (otras funciones lo importan local)
 
 logger = logging.getLogger(__name__)
 
