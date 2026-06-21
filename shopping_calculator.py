@@ -554,6 +554,64 @@ def get_master_ingredients():
                 _master_cache = []
     return _master_cache
 
+
+# ============================================================
+# [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Enforcement: SOLO alimentos
+# verificados con precio La Sirena (los 119 de master_ingredients) pueden
+# aparecer en la lista de compras. Decisión del owner: "no quiero que el LLM
+# invente alimentos; solo los 119 verificados deben estar en la lista".
+# Dos puntos consumen la MISMA `_is_verified_for_shopping` → simetría garantizada:
+#   (1) drop en `aggregate_and_deduct_shopping_list` (excluye de la lista), y
+#   (2) espejo en `run_shopping_coherence_guard` (filtra expected_raw) — sin el
+#       espejo, dropear un ingrediente inventado generaría divergencia
+#       `expected_only` → en modo=block fuerza retry costoso del plan.
+# Gateado por knob; flip a False revierte sin redeploy.
+# Tooltip-anchor: P3-VERIFIED-INGREDIENTS-ONLY.
+# ------------------------------------------------------------
+def _verified_ingredients_only_enabled() -> bool:
+    # Default OFF en CÓDIGO (safe-by-default): así los tests de coherencia base no se
+    # alteran y el rollback es trivial. Se ACTIVA en producción vía el .env del VPS
+    # (MEALFIT_VERIFIED_INGREDIENTS_ONLY=true) — decisión del owner: solo los 119
+    # alimentos verificados con precio La Sirena pueden aparecer en la lista.
+    return _knob_env_bool("MEALFIT_VERIFIED_INGREDIENTS_ONLY", False)
+
+
+_VERIFIED_SHOPPING_NAMES = None
+_VERIFIED_SHOPPING_NAMES_TS = 0.0
+
+
+def _get_verified_shopping_name_set() -> set:
+    """Set de nombres canónicos (accent-stripped, lower) de los master_ingredients
+    CON precio La Sirena verificado (price_per_lb>0 OR price_per_unit>0). Cacheado
+    con el mismo TTL que get_master_ingredients (refresca precios/aliases nuevos)."""
+    global _VERIFIED_SHOPPING_NAMES, _VERIFIED_SHOPPING_NAMES_TS
+    now = _time.time()
+    if _VERIFIED_SHOPPING_NAMES is None or (now - _VERIFIED_SHOPPING_NAMES_TS) > _MASTER_CACHE_TTL:
+        from constants import strip_accents as _sa
+        rows = get_master_ingredients() or []
+        _VERIFIED_SHOPPING_NAMES = {
+            _sa(str(r.get("name") or "").lower().strip())
+            for r in rows
+            if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0
+        }
+        _VERIFIED_SHOPPING_NAMES_TS = now
+    return _VERIFIED_SHOPPING_NAMES
+
+
+def _is_verified_for_shopping(name) -> bool:
+    """True si `name` resuelve (vía normalize_name, el resolver SSOT recetas→master)
+    a un master_ingredients con precio verificado. Usado IDÉNTICAMENTE por el drop
+    del aggregator y el espejo del coherence guard — la simetría drop↔espejo está
+    garantizada por construcción (misma función), así un alimento inventado (laurel,
+    comino, cúrcuma) se excluye de la lista Y del set esperado, sin forzar retry."""
+    try:
+        canon = normalize_name(name)
+    except Exception:
+        return False
+    from constants import strip_accents as _sa
+    return _sa(str(canon).lower().strip()) in _get_verified_shopping_name_set()
+
+
 DEFAULT_G_PER_TAZA = 150
 
 # ============================================================
@@ -4780,6 +4838,15 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
         logging.warning(f"[COH-GUARD] expected_sum_from_recipes falló: {e}")
         return []
 
+    # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] ESPEJO del drop del aggregator:
+    # filtra el lado ESPERADO (recetas) a ingredientes verificados con la MISMA
+    # `_is_verified_for_shopping`. Sin esto, un ingrediente inventado (laurel) que el
+    # aggregator dropeó de la lista seguiría en expected_raw → divergencia
+    # `expected_only` → en modo=block fuerza retry. Filtrar expected_raw aquí cubre
+    # AMBAS capas (presence en :4797 y magnitude en :4831, que derivan de expected_raw).
+    if _verified_ingredients_only_enabled() and isinstance(expected_raw, dict):
+        expected_raw = {k: v for k, v in expected_raw.items() if _is_verified_for_shopping(k)}
+
     aggregated_list = plan_result.get("aggregated_shopping_list") or []
     aggregated_names_raw = set()
     for item in aggregated_list:
@@ -7473,6 +7540,21 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
 
         price_per_lb = float(master_item.get("price_per_lb", 0) or 0)
         price_per_unit = float(master_item.get("price_per_unit", 0) or 0)
+
+        # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Solo alimentos verificados con
+        # precio La Sirena (los 119 de master_ingredients) pueden aparecer en la lista.
+        # Un ingrediente inventado por el LLM (laurel, comino, cúrcuma...) que NO resuelve
+        # a master con precio se EXCLUYE. El espejo en run_shopping_coherence_guard filtra
+        # expected_raw con la MISMA `_is_verified_for_shopping`, así que este drop es un
+        # SUBCONJUNTO del filtro esperado → cero divergencias `expected_only` → cero retry.
+        if (_verified_ingredients_only_enabled()
+                and not _is_verified_for_shopping(name)
+                and price_per_lb <= 0 and price_per_unit <= 0):
+            logging.info(
+                f"[VERIFIED-ONLY] '{name}' excluido de la lista: no es un alimento "
+                "verificado con precio La Sirena (probable invención del LLM)."
+            )
+            continue
 
         # [PROTEIN-UNIT-FALLBACK] Aplica ANTES de la extracción de peso.
         # Solo convierte si: (a) cat=Proteínas, (b) master.default_unit='lb',

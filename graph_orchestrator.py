@@ -4594,6 +4594,55 @@ _DAY_SYSTEM_INSTRUCTION_CACHED = (
 )
 
 
+# [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Catálogo verificado inyectado al
+# SystemMessage del day-gen para que el LLM NO invente alimentos: solo puede usar los
+# alimentos con precio La Sirena (master_ingredients). Lazy (la 1ra generación, con DB
+# disponible) + cacheado a nivel módulo → byte-equivalente en llamadas siguientes (cache
+# hit preservado). Gateado por el MISMO knob que el enforcement de la lista
+# (_verified_ingredients_only_enabled). Fail-open: si la DB no lista o falla, retorna ""
+# (mejor un plan sin restricción que un pipeline roto). Tooltip-anchor: P3-VERIFIED-INGREDIENTS-ONLY.
+_VERIFIED_CATALOG_INSTRUCTION_CACHE = None
+
+
+def _get_verified_catalog_instruction() -> str:
+    global _VERIFIED_CATALOG_INSTRUCTION_CACHE
+    try:
+        from shopping_calculator import _verified_ingredients_only_enabled, get_master_ingredients
+        if not _verified_ingredients_only_enabled():
+            return ""
+    except Exception:
+        return ""
+    if _VERIFIED_CATALOG_INSTRUCTION_CACHE is not None:
+        return _VERIFIED_CATALOG_INSTRUCTION_CACHE
+    try:
+        rows = get_master_ingredients() or []
+        names = sorted({
+            str(r.get("name") or "").strip()
+            for r in rows
+            if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0
+        })
+        if not names:
+            return ""
+        block = (
+            "\n\n=== CATÁLOGO VERIFICADO — USA EXCLUSIVAMENTE ESTOS ALIMENTOS ===\n"
+            "El usuario SOLO puede comprar alimentos con precio verificado en el supermercado. "
+            "DEBES construir TODAS las comidas (y sus `ingredients`) usando ÚNICAMENTE los alimentos "
+            "de la lista de abajo. PROHIBIDO ABSOLUTO inventar o agregar cualquier alimento fuera de "
+            "esta lista — ni proteínas, ni vegetales, ni frutas, ni granos, NI CONDIMENTOS NI ESPECIAS. "
+            "Si una receta tradicional pide algo que no está aquí (ej. laurel, comino, cúrcuma, sazón en "
+            "polvo, achiote, pimienta de olor), OMÍTELO por completo — usa solo los sazonadores verificados "
+            "de la lista (sal, ajo, cebolla, orégano, cilantro, perejil, etc.). "
+            f"Lista de {len(names)} alimentos verificados (cada ingrediente que emitas DEBE corresponder a "
+            "uno de estos):\n"
+            + ", ".join(names)
+        )
+        _VERIFIED_CATALOG_INSTRUCTION_CACHE = block
+        return block
+    except Exception as e:
+        logger.warning(f"[VERIFIED-ONLY] No se pudo construir el catálogo verificado del prompt: {e}")
+        return ""
+
+
 # [P3-COST-CUT-V2 · 2026-05-21] System instruction cacheable del SELF-CRITIQUE
 # EVALUATOR. ANTES: el prompt completo (rol + criterios + datos del plan) iba
 # como un solo string concatenado a `_safe_ainvoke(evaluator_llm, prompt, ...)`,
@@ -6137,9 +6186,12 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         # `sort_keys=True` en el dumps módulo-level garantiza determinismo.
         if PROMPT_CACHE_SYSTEM_MESSAGE:
             streaming_prompt = prompt_text
-            day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED
+            # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Append del catálogo verificado
+            # (lazy + cacheado → byte-equivalente tras la 1ra call = cache hit preservado).
+            # Restringe al LLM a los alimentos con precio La Sirena; "" si el knob está off.
+            day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED + _get_verified_catalog_instruction()
         else:
-            streaming_prompt = prompt_text + _DAY_SCHEMA_INSTRUCTION
+            streaming_prompt = prompt_text + _DAY_SCHEMA_INSTRUCTION + _get_verified_catalog_instruction()
             day_system_instruction = None
 
         # P1-10: HumanMessage/AIMessage/ToolMessage están a nivel módulo

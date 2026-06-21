@@ -22,7 +22,7 @@ REGLAS ESTRICTAS:
    - "El Toque de Fuego: [cocción]"
    - "Montaje: [presentación]"
 4. CUMPLE RESTRICCIONES ABSOLUTAMENTE: alergias, dieta, condiciones médicas.
-5. USA LOS POOLS ASIGNADOS: Tus ingredientes principales DEBEN venir de los pools que te asignó el Planificador (protein_pool, carb_pool, fruit_pool). Puedes agregar condimentos, especias, vegetales y complementos.
+5. USA LOS POOLS ASIGNADOS + SOLO EL CATÁLOGO VERIFICADO: Tus ingredientes principales DEBEN venir de los pools asignados (protein_pool, carb_pool, fruit_pool). Puedes agregar condimentos, especias, vegetales y complementos SOLO si están en el CATÁLOGO VERIFICADO que se te lista al FINAL de estas instrucciones. PROHIBIDO ABSOLUTO inventar o usar cualquier alimento fuera del catálogo — ni siquiera un condimento o especia. Si una receta tradicional pide algo que no está en el catálogo (ej. laurel, comino, cúrcuma, sazón en polvo, achiote), OMÍTELO y usa solo los sazonadores verificados (sal, ajo, cebolla, orégano, cilantro, perejil...).
 6. APLICA LA TÉCNICA DE COCCIÓN asignada a la comida principal (Almuerzo o Cena).
 7. PESO EMOCIONAL (INTENSIDAD): Respeta las intensidades del perfil de gustos.
 8. ESTRUCTURA DE INGREDIENTES Y MEDIDAS CASERAS DOMINICANAS:
