@@ -8567,6 +8567,17 @@ PROTEIN_FLOOR_ENABLED = _env_bool("MEALFIT_PROTEIN_FLOOR", True)
 PROTEIN_FLOOR_FILL_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_FILL_PCT", 0.92)  # closer determinista
 PROTEIN_FLOOR_HARD_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT", 0.90)  # gate de retry
 PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
+# [P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Garantía DURA del piso de proteína (Fase 2 del
+# build "todo terreno" pedido por el owner). Hasta ahora el piso era best-effort: si el LLM
+# no convergía tras los retries (o se agotaba el budget de tiempo), un plan bajo el piso se
+# ENTREGABA con banner (severity 'high', NO 'critical' → sin sustitución). Con este gate, si
+# el plan final sigue bajo el piso al finalizar (CUALQUIER ruta de agotamiento: max_attempts,
+# budget, high-contextual), `_apply_critical_review_guardrails` lo sustituye por el fallback
+# matemático — que es protein-targeted POR CONSTRUCCIÓN (`_build_fallback_day` asigna
+# protein=target×ratio, ratios suman 1.0 → cada día = target ≥ piso). Exento renal: su techo
+# KDIGO (RENAL_CAP_FAILHARD_GATE) manda; subir proteína sería iatrogénico. Mirror del patrón
+# renal. Flip a False → revierte al best-effort previo (entrega con disclaimer).
+PROTEIN_FLOOR_FAILHARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_FAILHARD_GATE", True)
 # [P3-CARB-TO-PROTEIN-SWAP · 2026-06-19] Palanca de precisión MEDIDA con el harness offline determinista
 # (scripts/macro_sizing_replay.py): en días con déficit de proteína (<floor_pct×target) Y exceso de carbos
 # (>(1+tol)×target), convierte el exceso de carbos en proteína magra a kcal CONSTANTE. Cierra el déficit que
@@ -8907,6 +8918,41 @@ def _meal_macro_num(x) -> float:
         return v if (v == v and v not in (float("inf"), float("-inf"))) else 0.0
     except Exception:
         return 0.0
+
+
+def _protein_floor_shortfall(plan, *, renal_capped: bool):
+    """[P3-PROTEIN-FLOOR / P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Días bajo el piso de
+    proteína (HARD_PCT × target diario). SSOT compartido por `review_plan_node` (gate de
+    retry, severity 'high') y `_apply_critical_review_guardrails` (backstop fail-hard al
+    finalizar). Devuelve lista de (day_label, protein_g, target_g); vacía si cumple, está
+    exento (renal o gate off), o no hay target válido.
+
+    Mide la proteína DECLARADA por comida (`_meal_macro_num`) — la MISMA medida que usan el
+    gate de review Y el fallback matemático (cuyos macros declarados = target por
+    construcción: `_build_fallback_day` asigna protein=target×ratio, ratios suman 1.0). Así,
+    un fallback sustituido SIEMPRE pasa esta verificación (la garantía es coherente con la
+    medida). Tooltip-anchor: P2-PROTEIN-FLOOR-FAILHARD."""
+    if not PROTEIN_FLOOR_HARD_GATE or renal_capped or not isinstance(plan, dict):
+        return []
+    try:
+        import re as _re_pf
+        _tgt_p = None
+        _macros = plan.get("macros")
+        if isinstance(_macros, dict):
+            _mp = _re_pf.search(r"(\d+)", str(_macros.get("protein", "")))
+            if _mp:
+                _tgt_p = float(_mp.group(1))
+        if not _tgt_p or _tgt_p <= 0:
+            return []
+        _short = []
+        for _i, _day in enumerate(plan.get("days", []) or [], 1):
+            _dp = sum(_meal_macro_num(_mm.get("protein")) for _mm in (_day.get("meals", []) or []))
+            if _dp < PROTEIN_FLOOR_HARD_PCT * _tgt_p:
+                _short.append((_day.get("day", _i), round(_dp), round(_tgt_p)))
+        return _short
+    except Exception as _pf_e:
+        logger.warning(f"[P3-PROTEIN-FLOOR] cálculo de shortfall falló: {type(_pf_e).__name__}: {_pf_e}")
+        return []
 
 
 _MEDICAL_NONE_SENTINELS = {
@@ -14666,37 +14712,26 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # proteína). El cap ya garantiza que la proteína no es excesiva; un "déficit" vs el target
     # capeado es aceptable en renal. Evita un retry que empuje proteína arriba en un paciente renal.
     _renal_capped_plan = bool((plan.get("renal_protein_cap") or {}).get("applied")) if isinstance(plan, dict) else False
-    if PROTEIN_FLOOR_HARD_GATE and not _renal_capped_plan:
-        try:
-            import re as _re_pf
-            _tgt_p = None
-            _macros = plan.get("macros")
-            if isinstance(_macros, dict):
-                _mp = _re_pf.search(r"(\d+)", str(_macros.get("protein", "")))
-                if _mp:
-                    _tgt_p = float(_mp.group(1))
-            if _tgt_p and _tgt_p > 0:
-                _short_days = []
-                for _di_pf, _day_pf in enumerate(plan.get("days", []) or [], 1):
-                    _dp = sum(_meal_macro_num(_mm.get("protein")) for _mm in (_day_pf.get("meals", []) or []))
-                    if _dp < PROTEIN_FLOOR_HARD_PCT * _tgt_p:
-                        _short_days.append((_day_pf.get("day", _di_pf), round(_dp), round(_tgt_p)))
-                if _short_days:
-                    _sd_str = "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short_days)
-                    logger.warning(f"🛡 [P3-PROTEIN-FLOOR] {len(_short_days)} día(s) bajo el piso de "
-                                   f"proteína ({int(PROTEIN_FLOOR_HARD_PCT*100)}% de {int(_tgt_p)}g): {_sd_str}")
-                    approved = False
-                    issues.append(
-                        f"DÉFICIT DE PROTEÍNA (rechazo clínico para ganancia muscular): el plan no "
-                        f"alcanza el piso de proteína en {_sd_str}. Cada comida PRINCIPAL (almuerzo y "
-                        f"cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, "
-                        f"res, huevos, queso) dimensionada en gramos para que cada día sume al menos "
-                        f"{int(PROTEIN_FLOOR_HARD_PCT*100)}% del target ({int(_tgt_p)}g). NO dependas solo "
-                        f"de leguminosas/almidón en las comidas principales."
-                    )
-                    severity = _severity_max(severity, "high")
-        except Exception as _pf_e:
-            logger.warning(f"[P3-PROTEIN-FLOOR] validador falló: {type(_pf_e).__name__}: {_pf_e}")
+    # [P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Lógica del piso extraída a `_protein_floor_shortfall`
+    # (SSOT compartido con el backstop fail-hard de `_apply_critical_review_guardrails`). Aquí el
+    # gate sigue marcando severity 'high' → retry: el LLM puede arreglarlo en otro intento. La
+    # garantía DURA (sustituir por fallback si se agotan los retries) vive en el backstop al finalizar.
+    _short_days = _protein_floor_shortfall(plan, renal_capped=_renal_capped_plan)
+    if _short_days:
+        _tgt_p = _short_days[0][2]
+        _sd_str = "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short_days)
+        logger.warning(f"🛡 [P3-PROTEIN-FLOOR] {len(_short_days)} día(s) bajo el piso de "
+                       f"proteína ({int(PROTEIN_FLOOR_HARD_PCT*100)}% de {int(_tgt_p)}g): {_sd_str}")
+        approved = False
+        issues.append(
+            f"DÉFICIT DE PROTEÍNA (rechazo clínico para ganancia muscular): el plan no "
+            f"alcanza el piso de proteína en {_sd_str}. Cada comida PRINCIPAL (almuerzo y "
+            f"cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, "
+            f"res, huevos, queso) dimensionada en gramos para que cada día sume al menos "
+            f"{int(PROTEIN_FLOOR_HARD_PCT*100)}% del target ({int(_tgt_p)}g). NO dependas solo "
+            f"de leguminosas/almidón en las comidas principales."
+        )
+        severity = _severity_max(severity, "high")
 
     # [P1-RENAL-CAP-FAILHARD-GATE · 2026-06-15] (gap-audit G3) Techo renal de proteína como GATE, no
     # telemetría. El cap renal (KDIGO 0.8 g/kg) es seguridad iatrogénica: en ERC el EXCESO de proteína
@@ -19008,16 +19043,40 @@ def _apply_critical_review_guardrails(
         # embedding del intento original).
         already_fallback = False
 
+    # [P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Backstop DURO del piso de proteína: si tras
+    # agotar los retries (CUALQUIER ruta: max_attempts, budget, high-contextual) el plan
+    # entregado SIGUE bajo el piso, sustituirlo por el fallback matemático (protein-targeted
+    # por construcción) en vez de entregar el plan degradado con banner. El gate de review
+    # (severity 'high') ya le dio al LLM sus intentos; esto cierra la garantía "todo terreno"
+    # pedida por el owner. Exento renal (su techo KDIGO manda — subir proteína sería
+    # iatrogénico). Knob de rollback: MEALFIT_PROTEIN_FLOOR_FAILHARD_GATE.
+    _protein_floor_breach = False
+    if (PROTEIN_FLOOR_FAILHARD_GATE and not review_passed
+            and isinstance(plan_result, dict) and not already_fallback):
+        _renal_capped_final = bool((plan_result.get("renal_protein_cap") or {}).get("applied"))
+        _pf_short = _protein_floor_shortfall(plan_result, renal_capped=_renal_capped_final)
+        if _pf_short:
+            _protein_floor_breach = True
+            logger.error(
+                "🛑 [P2-PROTEIN-FLOOR-FAILHARD] Plan entregado bajo el piso de proteína tras "
+                "agotar retries (%d día[s]: %s) → sustituyendo por fallback matemático "
+                "protein-targeted en vez de entregar degradado.",
+                len(_pf_short), "; ".join(f"Día {d}:{p}/{t}g" for d, p, t in _pf_short),
+            )
+
     needs_critical_fallback = isinstance(plan_result, dict) and not already_fallback and (
         schema_invalid
         or (not review_passed and rejection_severity == "critical")
+        or _protein_floor_breach
     )
 
     if needs_critical_fallback:
-        cause = (
-            "SCHEMA INVÁLIDO (plan no renderizable por el frontend)"
-            if schema_invalid else "rechazo médico CRÍTICO"
-        )
+        if schema_invalid:
+            cause = "SCHEMA INVÁLIDO (plan no renderizable por el frontend)"
+        elif rejection_severity == "critical":
+            cause = "rechazo médico CRÍTICO"
+        else:
+            cause = "DÉFICIT DE PROTEÍNA bajo el piso (fail-hard tras agotar retries)"
         logger.error(f"🚨 [P0-1/P1-8 GUARDRAIL] Fallback forzado por: {cause}. "
               f"Generando plan matemático ({requested_days} días). "
               f"review_passed={review_passed}, severity={rejection_severity}, "
@@ -19036,13 +19095,25 @@ def _apply_critical_review_guardrails(
         fallback_plan["_review_severity"] = "critical"
         if schema_invalid:
             # Preservar el detalle del error de schema para debugging downstream
+            fallback_plan["_fallback_reason"] = "schema_invalid"
             fallback_plan["_schema_errors"] = plan_result.get("_schema_errors", "schema inválido")
             fallback_plan["_review_disclaimer"] = (
                 "El plan generado por la IA tenía estructura inválida y no pudo ser entregado. "
                 "Este es un plan de contingencia matemático. "
                 "Por favor regenera más tarde."
             )
+        elif _protein_floor_breach and rejection_severity != "critical":
+            # [P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] NO es un rechazo médico — la IA no
+            # alcanzó el piso de proteína tras agotar los intentos. Disclaimer honesto +
+            # `_fallback_reason` específico para el banner (Fase 7) y la telemetría.
+            fallback_plan["_fallback_reason"] = "protein_floor"
+            fallback_plan["_review_disclaimer"] = (
+                "El plan generado por la IA no alcanzaba el mínimo de proteína para tus metas "
+                "tras varios intentos. Este es un plan de contingencia matemático que SÍ cumple "
+                "tus macros. Por favor regenera para una versión más variada."
+            )
         else:
+            fallback_plan["_fallback_reason"] = "medical_critical"
             fallback_plan["_review_disclaimer"] = (
                 "El sistema detectó violaciones críticas (alergias o condiciones médicas) "
                 "en el plan generado por la IA y lo descartó por seguridad. "
