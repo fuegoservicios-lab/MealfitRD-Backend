@@ -4983,6 +4983,14 @@ async def _attempt_pro_critique_correction(
             await pro_cb.arecord_success()
             corrected = result.model_dump()
             corrected["day"] = day_num
+            # [P-PRO-FALLBACK-ON-NONE · 2026-06-19] Paridad con el path Flash exitoso
+            # (`corrected_day["_critique_applied"] = True`): el día corregido por Pro
+            # también deviene legítimamente del skeleton (swap de proteína para resolver
+            # slot/diversidad), así que debe relajar el threshold de SKELETON-FIDELITY
+            # (>=3 missing en vez de >=2). Sin esto, una corrección Pro válida podía
+            # disparar un rechazo fatal falso — riesgo que sube ahora que el Pro
+            # fallback se invoca también en el modo de fallo dominante (None de Flash).
+            corrected["_critique_applied"] = True
             logger.info(
                 f"✅ {log_prefix} Día {day_num} corregido con {_PRO_MODEL_NAME}."
             )
@@ -8053,8 +8061,21 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                     # `corrected_result` None: LLM retornó respuesta no-parseable
                     # tras `_safe_ainvoke`. No es timeout ni excepción, pero el
                     # día sigue sin corrección — mismo modo de fallo.
-                    logger.warning(f"⚠️ [SELF-CRITIQUE] Día {day_num}: corrector LLM retornó None. Manteniendo original.")
-                    _mark_critique_unresolved(target_day, "llm_returned_none", critique.suggestions or "")
+                    # [P-PRO-FALLBACK-ON-NONE · 2026-06-19] Escala a Pro IGUAL que el
+                    # path de timeout (abajo). Antes el None de Flash (respuesta no-
+                    # parseable) era el ÚNICO modo de fallo que NO reintentaba con Pro
+                    # — y es el DOMINANTE bajo saturación de Flash (medido 4/4 días en
+                    # prod 2026-06-19 corr=c872593a → diversidad/slot quedaban sin
+                    # corregir). Pro es más estable con structured-output complejo;
+                    # mismo knob CRITIQUE_PRO_FALLBACK_ENABLED + CB guard que el timeout.
+                    pro_corrected, pro_reason = await _attempt_pro_critique_correction(
+                        correction_prompt, day_num,
+                        log_prefix="[SELF-CRITIQUE/PRO-FALLBACK]",
+                    )
+                    if pro_corrected:
+                        return day_num, pro_corrected, None
+                    logger.warning(f"⚠️ [SELF-CRITIQUE] Día {day_num}: corrector LLM retornó None (+{pro_reason}). Manteniendo original.")
+                    _mark_critique_unresolved(target_day, f"llm_returned_none+{pro_reason}", critique.suggestions or "")
                     return day_num, None, "llm_returned_none"
                 except asyncio.TimeoutError:
                     # [P6-TIMEOUT-DIAG] Log diagnóstico del prompt y target_day
@@ -13383,8 +13404,17 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
                         f"(best-effort): {_scrub_err}"
                     )
                 return day_num, corrected_day
+            # [P-PRO-FALLBACK-ON-NONE · 2026-06-19] Flash devolvió None (no-parseable,
+            # modo de fallo dominante) → escala a Pro IGUAL que el path de timeout
+            # (abajo). Cierra la asimetría: antes solo el timeout reintentaba con Pro.
+            pro_corrected, _pro_reason = await _attempt_pro_critique_correction(
+                correction_prompt, day_num,
+                log_prefix="[P5-MARKER-REGEN/PRO-FALLBACK]",
+            )
+            if pro_corrected:
+                return day_num, pro_corrected
             logger.warning(
-                f"⚠️ [P5-MARKER-REGEN] Día {day_num}: corrector LLM retornó None. "
+                f"⚠️ [P5-MARKER-REGEN] Día {day_num}: corrector LLM retornó None (+{_pro_reason}). "
                 f"Marker preservado, plan sigue al usuario sin la corrección."
             )
         except asyncio.TimeoutError:
