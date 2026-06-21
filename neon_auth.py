@@ -47,28 +47,70 @@ _ORIGIN = f"{_parsed.scheme}://{_parsed.netloc}" if _parsed and _parsed.netloc e
 # Cache del JWKS. TTL largo (las claves rotan rara vez); un kid-miss fuerza
 # refresh inmediato (cubre rotación sin esperar el TTL).
 _JWKS_TTL_S = float(os.environ.get("MEALFIT_NEON_AUTH_JWKS_TTL_S") or 3600)
-_jwks_cache: dict = {"keys": None, "fetched_at": 0.0}
+_jwks_cache: dict = {"keys": None, "fetched_at": 0.0, "last_fail_at": 0.0}
 _jwks_lock = threading.Lock()
-_JWKS_FETCH_TIMEOUT_S = 10
+# [P1-NEON-AUTH-JWKS-HARDEN · 2026-06-18] Timeout bajado de 10→4s + negative-cache:
+# tras un fallo del fetch, servir el cache previo (stale) por COOLDOWN s sin
+# re-intentar. Las claves previas siguen válidas para tokens pre-rotación, así que
+# un outage/lentitud del JWKS de Neon Auth NO tumba TODA la autenticación ni
+# serializa verificaciones concurrentes detrás de fetches repetidos.
+_JWKS_FETCH_TIMEOUT_S = float(os.environ.get("MEALFIT_NEON_AUTH_JWKS_TIMEOUT_S") or 4)
+_JWKS_NEG_CACHE_COOLDOWN_S = float(os.environ.get("MEALFIT_NEON_AUTH_JWKS_NEG_COOLDOWN_S") or 30)
+
+# [P1-NEON-AUTH-CONFIG-FAILLOUD · 2026-06-18] Fail-loud al import si en producción
+# la config de Neon Auth es inválida: sin NEON_AUTH_BASE_URL o con _ORIGIN no
+# parseable, verify_neon_jwt retorna None para TODO Bearer → "nadie entra",
+# silenciosamente. Un error en logs lo hace visible al instante en un deploy mal
+# configurado, en vez de degradar a "todos los logins fallan".
+if os.environ.get("ENVIRONMENT", "").lower() == "production" and (
+    not NEON_AUTH_BASE_URL or not _ORIGIN
+):
+    logger.error(
+        "[P1-NEON-AUTH] CONFIG INVÁLIDA en producción: NEON_AUTH_BASE_URL/_ORIGIN "
+        "ausente o no parseable → TODA verificación de JWT fallará (nadie puede "
+        "autenticarse). Revisar la env var NEON_AUTH_BASE_URL (con scheme https://)."
+    )
 
 
 def is_neon_auth_configured() -> bool:
-    """True si `NEON_AUTH_BASE_URL` está seteado (auth verificable)."""
-    return bool(NEON_AUTH_BASE_URL)
+    """True si `NEON_AUTH_BASE_URL` está seteado Y su origin es parseable
+    (auth verificable). Antes solo chequeaba la URL; un valor sin scheme dejaba
+    `_ORIGIN=None` y rompía la verificación silenciosamente."""
+    return bool(NEON_AUTH_BASE_URL) and bool(_ORIGIN)
 
 
 def _fetch_jwks(force: bool = False) -> list:
     now = time.monotonic()
     with _jwks_lock:
         cached = _jwks_cache["keys"]
-        if (not force and cached is not None
-                and (now - _jwks_cache["fetched_at"]) < _JWKS_TTL_S):
+        fresh = cached is not None and (now - _jwks_cache["fetched_at"]) < _JWKS_TTL_S
+        if not force and fresh:
             return cached
-        req = urllib.request.Request(_JWKS_URL, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=_JWKS_FETCH_TIMEOUT_S) as resp:
-            keys = json.loads(resp.read().decode())["keys"]
+        # Negative-cache: si un fetch reciente falló, NO re-intentar (no martillear
+        # ni serializar) — servir el cache previo mientras dure el cooldown.
+        last_fail = _jwks_cache.get("last_fail_at", 0.0)
+        if cached is not None and (now - last_fail) < _JWKS_NEG_CACHE_COOLDOWN_S:
+            return cached
+        try:
+            req = urllib.request.Request(_JWKS_URL, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=_JWKS_FETCH_TIMEOUT_S) as resp:
+                keys = json.loads(resp.read().decode())["keys"]
+        except Exception as e:
+            _jwks_cache["last_fail_at"] = time.monotonic()
+            if cached is not None:
+                # Stale-fallback: el JWKS está caído/lento pero las claves previas
+                # siguen firmando los tokens vigentes → seguimos verificando.
+                logger.warning(
+                    f"[P1-NEON-AUTH] JWKS fetch falló ({type(e).__name__}); "
+                    "sirviendo cache previo (stale)."
+                )
+                return cached
+            # Sin cache previo (cold start con JWKS caído) → propagar; verify_neon_jwt
+            # lo traduce a None (fail-secure).
+            raise
         _jwks_cache["keys"] = keys
-        _jwks_cache["fetched_at"] = now
+        _jwks_cache["fetched_at"] = time.monotonic()
+        _jwks_cache["last_fail_at"] = 0.0
         return keys
 
 
@@ -88,6 +130,54 @@ def _signing_key(token: str, force_refresh: bool = False) -> Ed25519PublicKey:
     raise ValueError(f"No hay JWK que matchee kid={kid!r} en el JWKS")
 
 
+# [P2-AUTH-FAILURE-OBS · 2026-06-18] Contadores in-process de fallos de verificación
+# por razón. Cheap (sin DB en el hot path); el cron `_auth_failure_alert_job`
+# (cron_tasks.py) los drena periódicamente, emite el agregado a pipeline_metrics y
+# alerta (`auth_failure_rate_high`) si las fallas SOSPECHOSAS (firma mala / JWKS caído /
+# kid-miss / claims, NO 'expired' que es normal cada ~15min) superan el umbral. Cierra el
+# blind-spot: un credential-spray o un outage del JWKS de Neon eran invisibles hasta que
+# los usuarios reportaban. Worker único (uvicorn --workers 1) → un proceso comparte el contador.
+_AUTH_FAIL_LOCK = threading.Lock()
+_AUTH_FAIL_COUNTS: dict = {
+    "expired": 0, "bad_sig": 0, "bad_claims": 0, "jwks_unreachable": 0, "kid_miss": 0, "other": 0,
+}
+
+
+def _classify_auth_fail(exc: Exception) -> str:
+    name = type(exc).__name__
+    if isinstance(exc, jwt.InvalidSignatureError) or "Signature" in name or name == "DecodeError":
+        return "bad_sig"
+    if isinstance(exc, (jwt.InvalidAudienceError, jwt.InvalidIssuerError)):
+        return "bad_claims"
+    if isinstance(exc, (OSError, TimeoutError)) or name in ("URLError", "HTTPError", "timeout"):
+        return "jwks_unreachable"
+    msg = str(exc).lower()
+    if "kid" in msg or "jwk" in msg:
+        return "kid_miss"
+    return "other"
+
+
+def _record_auth_fail(reason: str) -> None:
+    try:
+        with _AUTH_FAIL_LOCK:
+            _AUTH_FAIL_COUNTS[reason] = _AUTH_FAIL_COUNTS.get(reason, 0) + 1
+    except Exception:
+        pass
+
+
+def drain_auth_fail_counts() -> dict:
+    """Snapshot de los contadores + reset a 0 (lo llama el cron de observabilidad).
+    Best-effort; nunca lanza."""
+    try:
+        with _AUTH_FAIL_LOCK:
+            snap = dict(_AUTH_FAIL_COUNTS)
+            for k in _AUTH_FAIL_COUNTS:
+                _AUTH_FAIL_COUNTS[k] = 0
+        return snap
+    except Exception:
+        return {}
+
+
 def verify_neon_jwt(token: str) -> Optional[dict]:
     """Verifica firma + claims (iss/aud/exp) de un JWT de Neon Auth.
 
@@ -95,7 +185,7 @@ def verify_neon_jwt(token: str) -> Optional[dict]:
     NUNCA lanza — todo error se traduce a `None` para que el caller trate
     el token como no-autenticado sin filtrar detalle al cliente.
     """
-    if not NEON_AUTH_BASE_URL or not token:
+    if not NEON_AUTH_BASE_URL or not _ORIGIN or not token:
         return None
     try:
         key = _signing_key(token)
@@ -109,9 +199,11 @@ def verify_neon_jwt(token: str) -> Optional[dict]:
         return payload
     except jwt.ExpiredSignatureError:
         # Normal cada ~15 min; el frontend refresca y reintenta. No es ataque.
+        _record_auth_fail("expired")
         logger.info("[P1-NEON-AUTH] JWT expirado (el cliente debe refrescar).")
         return None
     except Exception as e:
         # Firma inválida, kid desconocido, JWKS inalcanzable, claims malos, etc.
+        _record_auth_fail(_classify_auth_fail(e))
         logger.warning(f"[P1-NEON-AUTH] Verificación de JWT falló: {type(e).__name__}")
         return None

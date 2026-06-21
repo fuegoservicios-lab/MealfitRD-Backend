@@ -146,12 +146,11 @@ def test_get_verified_user_id_is_async(auth_src: str):
 
 
 def test_no_time_sleep_in_auth(auth_src: str):
-    """`time.sleep` está prohibido en auth.py (bloquea event loop)."""
-    # No debe quedar ningún `import time` ni `time.sleep`
-    assert not re.search(r"^\s*import\s+time\s*$", auth_src, re.MULTILINE), (
-        "P2-AUTH-ASYNC-SLEEP: `import time` aún presente en auth.py. "
-        "Reemplazado por `import asyncio`."
-    )
+    """`time.sleep(...)` (BLOQUEANTE) está prohibido en auth.py — congela el event
+    loop. [P1-FIRST-PARTY-SESSION · 2026-06-16] `import time` SÍ se permite ahora:
+    se usa `time.time()` (no-bloqueante) para los timestamps iat/exp y el cap
+    absoluto de la cookie de sesión first-party. El hazard real (time.sleep, que
+    motivó P2-AUTH-ASYNC-SLEEP) sigue prohibido — usar `await asyncio.sleep`."""
     assert "time.sleep(" not in auth_src, (
         "P2-AUTH-ASYNC-SLEEP regresión: `time.sleep(...)` reintroducido. "
         "Bloquea el event loop. Usar `await asyncio.sleep(...)`."

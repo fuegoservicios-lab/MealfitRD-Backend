@@ -1603,6 +1603,11 @@ app.include_router(preferences_router)
 # Post-Neon el cliente no tiene acceso a la DB — todo pasa por aquí.
 from routers.user_data import router as user_data_router
 app.include_router(user_data_router)
+# [P1-FIRST-PARTY-SESSION · 2026-06-16] Cookie de sesión first-party
+# (__Host-mf_session) para que iOS PWA conserve la sesión al cerrar la app
+# (Neon Auth sirve su cookie third-party → iOS la borra al cerrar).
+from routers.auth_session import router as auth_session_router
+app.include_router(auth_session_router)
 
 @app.get("/")
 @app.get("/health")

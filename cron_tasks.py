@@ -5871,6 +5871,74 @@ def _price_inflation_adjust_job():
             pass
 
 
+def _auth_failure_alert_job():
+    """[P2-AUTH-FAILURE-OBS · 2026-06-18] Cron de observabilidad de fallos de
+    verificación de JWT (neon_auth). Drena el contador in-process por razón, emite el
+    agregado a `pipeline_metrics` (node='auth_jwt_verify_fail') y el alert
+    `auth_failure_rate_high` si las fallas SOSPECHOSAS (firma mala / JWKS caído /
+    kid-miss / claims — NO 'expired', que es normal cada ~15min) superan el umbral en el
+    intervalo. Auto-resuelve cuando vuelve bajo el umbral (modelo Auto-implicit). Cierra
+    el blind-spot: un credential-spray o un outage del JWKS de Neon Auth eran invisibles
+    hasta que los usuarios reportaban "no puedo entrar".
+
+    Knobs: MEALFIT_AUTH_FAIL_ALERT_THRESHOLD (50), MEALFIT_AUTH_FAIL_ALERT_INTERVAL_MIN (15, clamp [5,120]).
+    Tooltip-anchor: P2-AUTH-FAILURE-OBS."""
+    alert_key = "auth_failure_rate_high"
+    threshold = max(1, _env_int("MEALFIT_AUTH_FAIL_ALERT_THRESHOLD", 50))
+    interval_min = max(5, min(_env_int("MEALFIT_AUTH_FAIL_ALERT_INTERVAL_MIN", 15), 120))
+    counts: dict = {}
+    suspicious = 0
+    _alert_emitted = False
+    try:
+        from neon_auth import drain_auth_fail_counts
+        counts = drain_auth_fail_counts() or {}
+        suspicious = (
+            int(counts.get("bad_sig", 0)) + int(counts.get("jwks_unreachable", 0))
+            + int(counts.get("kid_miss", 0)) + int(counts.get("bad_claims", 0))
+            + int(counts.get("other", 0))
+        )
+        if suspicious > threshold:
+            execute_sql_write(
+                """
+                INSERT INTO system_alerts (alert_key, alert_type, severity, title, message, metadata)
+                VALUES (%s, 'reliability_degradation', 'warning', %s, %s, %s::jsonb)
+                ON CONFLICT (alert_key) DO UPDATE
+                SET triggered_at = NOW(), metadata = EXCLUDED.metadata, resolved_at = NULL
+                """,
+                (
+                    alert_key,
+                    "Tasa alta de fallos de verificación de JWT",
+                    f"{suspicious} verificaciones de JWT fallaron por causas sospechosas "
+                    f"(firma/JWKS/kid/claims) en los últimos ~{interval_min} min (> umbral {threshold}). "
+                    f"Posible credential-spray o outage del JWKS de Neon Auth. Desglose: {counts}.",
+                    json.dumps({"suspicious": suspicious, "threshold": threshold,
+                                "counts": counts, "interval_min": interval_min}, ensure_ascii=False),
+                ),
+            )
+            _alert_emitted = True
+            logger.warning(
+                f"🚨 [P2-AUTH-FAILURE-OBS] {suspicious} fallos de JWT sospechosos > {threshold} "
+                f"(~{interval_min}min) → alert `{alert_key}` emitido. Desglose: {counts}")
+        else:
+            execute_sql_write(
+                "UPDATE system_alerts SET resolved_at = NOW() WHERE alert_key = %s AND resolved_at IS NULL",
+                (alert_key,),
+            )
+    except Exception as e:
+        logger.error(f"❌ [P2-AUTH-FAILURE-OBS] cron de fallos de auth falló: {type(e).__name__}: {e}")
+    finally:
+        try:
+            execute_sql_write(
+                "INSERT INTO pipeline_metrics (node, duration_ms, retries, tokens_estimated, confidence, metadata) "
+                "VALUES ('auth_jwt_verify_fail', 0, 0, 0, %s, %s::jsonb)",
+                (float(suspicious),
+                 json.dumps({"counts": counts, "suspicious": suspicious,
+                             "alert_emitted": _alert_emitted}, ensure_ascii=False)),
+            )
+        except Exception:
+            pass
+
+
 def register_plan_chunk_scheduler(scheduler) -> None:
     """Registra el polling del worker de chunks una sola vez en el scheduler global."""
     if not scheduler:
@@ -6425,6 +6493,22 @@ def register_plan_chunk_scheduler(scheduler) -> None:
         logger.info(
             f"⏰ [G9/DEGRADED-RATE] Cron _alert_if_degraded_rate_high registrado cada {_DR_INT} min."
         )
+
+    # [P2-AUTH-FAILURE-OBS · 2026-06-18] Cron de observabilidad de fallos de verificación
+    # de JWT (credential-spray / outage del JWKS de Neon). Drena el contador in-process de
+    # neon_auth cada N min y emite/auto-resuelve el alert `auth_failure_rate_high`.
+    if not scheduler.get_job("auth_failure_alert_job"):
+        _AF_INT = max(5, min(_env_int("MEALFIT_AUTH_FAIL_ALERT_INTERVAL_MIN", 15), 120))
+        _add_job_jittered(scheduler,
+            _auth_failure_alert_job,
+            "interval",
+            minutes=_AF_INT,
+            id="auth_failure_alert_job",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
+        logger.info(f"⏰ [P2-AUTH-FAILURE-OBS] Cron _auth_failure_alert_job registrado cada {_AF_INT} min.")
 
     # [P2-6 · 2026-05-08] Alerta proactiva sobre fallback no-atómico del pool.
     # Cubre el hueco "fallback_count > 0 invisible hasta polling manual del
