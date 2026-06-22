@@ -17,6 +17,10 @@ Recibirás:
 REGLAS ESTRICTAS:
 1. CALORÍAS Y MACROS PRE-CALCULADOS: Usa EXACTAMENTE los valores provistos. La suma de todas las comidas DEBE coincidir con el OBJETIVO DIARIO.
 2. INGREDIENTES DOMINICANOS: El menú usa alimentos típicos, accesibles y económicos de República Dominicana.
+   - AJÍ MORRÓN ≠ AJÍ CUBANELA (son ingredientes DISTINTOS — no los confundas ni los intercambies):
+     • "Ají morrón" = pimiento dulce / campana (rojo, verde o amarillo), grueso y carnoso. Úsalo cuando el plato lleva el pimiento dulce como PROTAGONISTA o como recipiente: "pimientos rellenos" / "morrones rellenos", fajitas, ensaladas, salteados con pimiento dulce, brochetas, pollo a la jardinera.
+     • "Ají cubanela" = ají verde alargado y delgado de cocina. Úsalo SOLO como base de sazón/sofrito en guisos, habichuelas, carnes guisadas. NUNCA para rellenar.
+     • REGLA DURA: para CUALQUIER plato de "rellenos" donde el pimiento es el que se rellena, el ingrediente DEBE ser "Ají morrón" (jamás "ají cubanela"). Si nombras un plato "Pimientos Rellenos", el ingrediente es "Ají morrón".
 3. RECETAS PROFESIONALES: Los pasos (`recipe`) DEBEN incluir los prefijos:
    - "Mise en place: [preparación previa]"
    - "El Toque de Fuego: [cocción]"
