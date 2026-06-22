@@ -327,8 +327,16 @@ CHUNK_ZERO_LOG_AUTO_ESCALATE = (
 # suficientes.
 #
 # Solo se prueba para chunks no-iniciales (week_number > 1 y chunk_kind !=
-# 'initial_plan') para evitar duplicar la validación que ya hace
-# `routers/plans.py` antes de aceptar la creación inicial del plan.
+# 'initial_plan'). [P2-PANTRY-COMMENT-FIX · 2026-06-21] El plan INICIAL es
+# intencionalmente EXENTO del mínimo de nevera: su lista de compras DEFINE el
+# inventario futuro, así que un usuario nuevo con la nevera vacía DEBE poder
+# generar su primer plan (onboarding). NO es que `routers/plans.py` valide un
+# piso inicial — al contrario, `_run_pantry_validation_for_initial_chunk`
+# (P1-PANTRY-GUARD-INITIAL-SKIP) SALTA la validación contra la nevera cuando hay
+# < PANTRY_GUARD_MIN_ITEMS items. El mínimo de nevera (este guard) aplica SOLO al
+# MANTENIMIENTO: cuando el usuario ya tiene un ciclo vivo y, con el tiempo, borra
+# o agota los alimentos de su nevera — ahí el plan rolling SÍ debe respetar lo
+# que hay y pausar/pedir reabastecer si cae bajo el mínimo.
 CHUNK_PANTRY_PROACTIVE_GUARD = (
     os.environ.get("CHUNK_PANTRY_PROACTIVE_GUARD", "true").lower() == "true"
 )
