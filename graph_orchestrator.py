@@ -18663,6 +18663,32 @@ def _maybe_mark_low_band_degraded(plan: dict, band_val, delivered_was_fallback: 
         return False
 
 
+def _maybe_mark_shopping_incomplete_degraded(plan: dict, delivered_was_fallback: bool, attempt: int) -> bool:
+    """[P2-FASE7-HONESTY · 2026-06-21] Marca `_quality_degraded` reason=shopping_list_incomplete cuando el
+    plan ENTREGADO quedó con la lista de compras VACÍA pese a tener recetas (señal `_shopping_completeness.is_empty`
+    de assemble; ver P2-SHOPPING-COMPLETENESS). A diferencia de los otros markers post-scoring, este SOBRESCRIBE
+    el reason GENÉRICO de agotamiento (max_attempts/budget_exhausted/invalid_pipeline_start): "tu lista quedó
+    incompleta" es más específico + accionable para el usuario que "el revisor no aprobó tras varios intentos".
+    Respeta razones MÁS específicas/graves ya marcadas (clínicas/seguridad) y NO toca planes fallback (esos ya
+    llevan su propio disclaimer). Puro + fail-safe. Anchor: P2-FASE7-HONESTY."""
+    try:
+        if delivered_was_fallback:
+            return False
+        sc = plan.get("_shopping_completeness")
+        if not (isinstance(sc, dict) and sc.get("is_empty")):
+            return False
+        cur = plan.get("_quality_degraded_reason")
+        if plan.get("_quality_degraded") and cur not in (None, "max_attempts", "budget_exhausted", "invalid_pipeline_start"):
+            return False  # ya marcado por una razón más específica → respetar
+        plan["_quality_degraded"] = True
+        plan["_quality_degraded_reason"] = "shopping_list_incomplete"
+        plan["_quality_degraded_severity"] = "high"
+        plan["_quality_degraded_attempts"] = attempt
+        return True
+    except Exception:
+        return False
+
+
 def _maybe_mark_panel_degraded(plan: dict, form_data: dict, delivered_was_fallback: bool, attempt: int) -> bool:
     """[P2-PANEL-SOFT-REJECT · 2026-06-15] Soft-reject OBSERVABLE post-scoring sobre el panel de micros ya
     computado (`plan['micronutrient_report']`). Cubre 4 gaps del audit como sub-checks (cada uno tras SU
@@ -19012,6 +19038,15 @@ def _compute_pipeline_holistic_score_and_emit(
                         f"⚠️ [P2-RESOLUTION-COVERAGE-GATE] cobertura "
                         f"{(plan.get('resolution_coverage') or {}).get('pct')} < {RESOLUTION_COVERAGE_FLOOR} "
                         f"→ _quality_degraded (composite_dish_unresolved)")
+                # [P2-FASE7-HONESTY · 2026-06-21] Lista de compras VACÍA en el plan entregado (Fase 5
+                # is_empty) → sobrescribe el genérico max_attempts con un motivo específico + accionable
+                # ("tu lista quedó incompleta"). Corre al final: respeta razones clínicas más específicas,
+                # solo pisa el genérico de agotamiento. Es la preocupación #1 del owner (la lista).
+                if _maybe_mark_shopping_incomplete_degraded(plan, delivered_was_fallback,
+                                                            final_state.get("attempt", 1)):
+                    logger.warning(
+                        "🛒 [P2-FASE7-HONESTY] lista de compras vacía con recetas → plan marcado "
+                        "_quality_degraded (reason=shopping_list_incomplete)")
                 # [P2-LOW-COVERAGE-MEALS · 2026-06-16] (gap-audit P2-6) métrica de flota por-meal (NO hard-gate):
                 # emite solo si hay ≥1 meal bajo el floor de cobertura (telemetría, no banner).
                 _low_cov = plan.get("low_coverage_meals") or []
