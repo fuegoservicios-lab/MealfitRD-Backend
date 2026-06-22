@@ -1311,12 +1311,15 @@ def _budget_floor_enabled() -> bool:
 
 
 def _budget_floor_per_day_base_dop() -> float:
-    """RD$/día/persona a la caloría de referencia = el piso 'comer bien' que el owner fijó en
-    el frontend (BUDGET_MIN_PER_DAY=200 DOP). Knob para tunear con la inflación."""
+    """RD$/día/persona a la caloría de referencia = el piso 'comer bien'. [BUDGET-MIN-RAISE ·
+    2026-06-22] El owner subió el piso a RD$4,000 para 7 días → 4000/7 ≈ 571.43 RD$/día. DEBE
+    quedar consistente con el frontend (BUDGET_MIN_PER_DAY.DOP=4000/7 en formValidation.js):
+    ambos son lineales per-día × días, así el form no permite un monto que el backend rechace.
+    Knob para tunear con la inflación."""
     try:
-        return max(0.0, float(os.environ.get("MEALFIT_BUDGET_FLOOR_PER_DAY_DOP", "200")))
+        return max(0.0, float(os.environ.get("MEALFIT_BUDGET_FLOOR_PER_DAY_DOP", "571.43")))
     except (TypeError, ValueError):
-        return 200.0
+        return 571.43
 
 
 def _budget_floor_kcal_ref() -> float:
