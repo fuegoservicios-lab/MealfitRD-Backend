@@ -1,4 +1,7 @@
 import asyncio
+import base64
+import hashlib
+import hmac
 import logging
 import os
 import time
@@ -57,6 +60,35 @@ def session_cookies_enabled() -> bool:
     """True sólo si hay un secreto FUERTE (≥32 chars). Sin él, fail-secure: la
     cookie first-party ni se emite ni se acepta (solo Bearer)."""
     return len(_SESSION_SECRET) >= 32
+
+
+def derive_form_key(uid: str) -> Optional[str]:
+    """[P1-FORM-KEY · 2026-06-21] Llave ESTABLE por usuario para cifrar el
+    formulario sensible en el navegador (frontend `secureFormStorage.js`).
+    Derivada del MISMO secreto que firma la cookie first-party
+    (`MEALFIT_SESSION_SECRET`) vía HMAC-SHA256 sobre el `user_id`.
+
+    Por qué existe: antes el front cifraba el form con el `access_token` de Neon,
+    que ROTA (re-login, o Brave/Safari borra la cookie → la sesión se reconstruye
+    con otro token o ninguno) → el blob cifrado quedaba indescifrable y el usuario
+    "perdía" sus respuestas (alergias/condiciones/medicamentos/dislikes/obstáculos).
+    Esta llave depende SOLO de `user_id` + el secreto del servidor → es estable
+    across re-logins y rotaciones → el form sobrevive.
+
+    Seguridad: NO es el `access_token` ni el secreto crudo; es un HMAC
+    determinístico que SOLO el servidor puede recomputar (el cliente nunca conoce
+    `MEALFIT_SESSION_SECRET`). Se entrega únicamente en respuestas a requests YA
+    autenticadas (mismo gate que `/me` y `/session`). Devuelve None si el secreto
+    no está configurado → el front degrada al token (comportamiento anterior, cero
+    regresión)."""
+    if not uid or len(_SESSION_SECRET) < 32:
+        return None
+    mac = hmac.new(
+        _SESSION_SECRET.encode("utf-8"),
+        f"mealfit-form-enc:v1:{uid}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(mac).decode("ascii").rstrip("=")
 
 
 # [P2-SESSION-SECRET-FAIL-LOUD · 2026-06-19] (audit fresco P2-11/P2-14) En PRODUCCIÓN, si MEALFIT_SESSION_SECRET

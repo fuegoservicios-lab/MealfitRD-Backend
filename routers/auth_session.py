@@ -24,6 +24,7 @@ from auth import (
     clear_session_cookie,
     session_cookie_iat,
     session_cookies_enabled,
+    derive_form_key,
     SESSION_COOKIE_NAME,
 )
 from rate_limiter import RateLimiter
@@ -59,7 +60,9 @@ async def create_session(
         return {"ok": False, "session_cookie": False}
     # `token` también va en el body → el cliente lo guarda en localStorage como
     # fallback iOS-PWA (donde la cookie no persiste entre lanzamientos).
-    return {"ok": True, "session_cookie": True, "user_id": uid, "token": token}
+    # [P1-FORM-KEY · 2026-06-21] `form_key` = llave estable por usuario para cifrar
+    # el formulario sensible en el navegador (sobrevive re-logins / rotación de token).
+    return {"ok": True, "session_cookie": True, "user_id": uid, "token": token, "form_key": derive_form_key(uid)}
 
 
 @router.get("/me")
@@ -88,7 +91,10 @@ async def session_me(
         iat = session_cookie_iat(src)
         if iat:
             new_token = set_session_cookie(response, uid, iat=iat)
-    return {"user_id": uid, "token": new_token}
+    # [P1-FORM-KEY · 2026-06-21] Llave estable para cifrar el form sensible (ver
+    # /session). Se entrega en /me para que el cliente la tenga al reabrir la app
+    # vía sesión first-party (cuando ya no hay sesión de Neon ni access_token).
+    return {"user_id": uid, "token": new_token, "form_key": derive_form_key(uid)}
 
 
 @router.post("/logout")
