@@ -1110,6 +1110,23 @@ def normalize_name(orig_name: str) -> str:
         # como pavo genérico fresh.
         return 'Pavo'
 
+    # [P3-YOGURT-CONSOLIDATE · 2026-06-22] Todo yogurt (griego/natural/entero/
+    # sin azúcar/0%/light) resuelve a UN solo ítem de compra: "Yogurt". El LLM
+    # emite variantes ("yogurt griego entero", "yogurt griego sin azúcar") que
+    # antes resolvían a master rows distintos → 2+ líneas duplicadas en la lista
+    # de compras (pedido del owner: "que diga solo yogurt, 1 solo"). Guard
+    # temprano determinista (mismo patrón que el guard de pavo arriba) — evita la
+    # colisión ambigua de alias same-length entre las filas variantes y es
+    # simétrico con canonicalize_lacteo (coherencia → 'Yogur').
+    #
+    # SOLO afecta la AGREGACIÓN/DISPLAY de la lista de compras: el master row
+    # "Yogurt" provee precio/envase (pote). La distinción nutricional entero vs
+    # nonfat (P2-3: fat 4g vs 0.37g) se PRESERVA porque nutrition_db resuelve las
+    # variantes por sus aliases en Tier-1/2 ANTES de delegar a normalize_name
+    # (Tier-3). Tooltip-anchor: P3-YOGURT-CONSOLIDATE.
+    if re.search(r'\byogur(t)?\b', _opl):
+        return 'Yogurt'
+
     n_stripped = strip_accents(n)
     clean_n_stripped = strip_accents(clean_n)
     
