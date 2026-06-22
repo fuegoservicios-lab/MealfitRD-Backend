@@ -44,8 +44,29 @@ def test_lata_null_market_container_se_unitariza():
 
 
 def test_item_a_granel_real_NO_se_envasa():
-    # default_unit='lb' (carne a granel) NO debe envasarse aunque market_container sea NULL.
-    mi = _mi(name='Pechuga de pollo', default_unit='lb', container_weight_g=None,
-             price_per_lb=175, price_per_unit=0, category='Carnes')
-    m = sc.apply_smart_market_units('Pechuga de pollo', 1.5, 'lb', 1.5, mi)
+    # default_unit='lb' (carne a granel, SIN deal de empaque) NO debe envasarse
+    # aunque market_container sea NULL. Ej: bistec de res al peso en el mostrador.
+    mi = _mi(name='Bistec de res', default_unit='lb', container_weight_g=None,
+             price_per_lb=210, price_per_unit=0, category='Carnes')
+    m = sc.apply_smart_market_units('Bistec de res', 1.5, 'lb', 1.5, mi)
     assert (m.get('market_unit') or '').lower() in ('lb', 'lbs'), m
+
+
+def test_pechuga_pollo_se_cobra_por_paquete_1lb():
+    """[P1-CHICKEN-PKG · 2026-06-22] La pechuga de pollo importada congelada se vende
+    en paquetes discretos de 1 lb (RD$135 el paquete) — el mínimo comprable es 1 lb.
+    Con market_container='paquete' + container_weight_g=454 + price_per_unit=135, una
+    receta que pide <1 lb se redondea a 1 paquete (RD$135), NO a ½ lb (≈RD$67 a granel)."""
+    mi = _mi(name='Pechuga de pollo', default_unit='lb', market_container='paquete',
+             container_weight_g=454, price_per_lb=135, price_per_unit=135,
+             density_g_per_unit=170, category='Proteínas')
+    # Receta pide 0.4 lb → 1 paquete (piso de 1 lb), NO ½ lb a granel.
+    m = sc.apply_smart_market_units('Pechuga de pollo', 0.4, 'lb', 0.4, mi)
+    assert (m.get('market_unit') or '').lower() == 'paquete', m
+    assert float(m.get('market_qty')) == 1.0, m
+    assert sc._cost_from_market(m, mi, 135, 135) == 135.0
+    # Receta pide 2.0 lb → 2 paquetes = RD$270.
+    m2 = sc.apply_smart_market_units('Pechuga de pollo', 2.0, 'lb', 2.0, mi)
+    assert (m2.get('market_unit') or '').lower() == 'paquete', m2
+    assert float(m2.get('market_qty')) == 2.0, m2
+    assert sc._cost_from_market(m2, mi, 135, 135) == 270.0
