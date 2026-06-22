@@ -612,6 +612,20 @@ def _is_verified_for_shopping(name) -> bool:
     return _sa(str(canon).lower().strip()) in _get_verified_shopping_name_set()
 
 
+def _seasoning_catalog_keep_enabled() -> bool:
+    # [P2-SEASONING-CATALOG-KEEP · 2026-06-22] Default ON. Un ingrediente del CATÁLOGO verificado
+    # (cilantro, orégano, etc.) que el LLM emitió SOLO en cantidad nominal (pizca/al gusto, sin peso)
+    # se LISTA con 1 empaque mínimo en vez de dropearse — la receta lo usa y es un alimento comprable.
+    # Cierra la lista-incompleta para sazones de catálogo (caso visto en vivo 2026-06-22: cilantro +
+    # orégano dominicano caídos por "pizca"). NO afecta no-catálogo (esos siguen el drop +
+    # observabilidad VERIFIED-ONLY). Flip a False revierte al drop. Tooltip-anchor: P2-SEASONING-CATALOG-KEEP.
+    return _knob_env_bool("MEALFIT_SEASONING_CATALOG_KEEP", True)
+
+
+# Peso por defecto (~1 empaque pequeño de sazón) cuando el master no trae container_weight_g/density.
+_SEASONING_DEFAULT_G = 40.0
+
+
 DEFAULT_G_PER_TAZA = 150
 
 # ============================================================
@@ -7686,26 +7700,56 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         # No aporta a una lista de compras real
         remaining_real = any(u not in nominal_units for u in units) or has_weight
         if not remaining_real:
-            # [P2-AGGREGATE-DROP-DIAG · 2026-05-16] Diagnostic logging.
-            # Cuando un ingrediente aparece en `aggregated` (visible en log
-            # `🛒 [AGGREGATE]`) pero NO en `aggregated_shopping_list` final
-            # (log `🛒 [AGGREGATE FINAL]`), el coherence guard lo reporta
-            # como `expected_only` divergence. Sin este log, debugging
-            # requiere agregar instrumentación cada vez. Caso observado
-            # 2026-05-16 plan 4cc91584: Avena emitida por receta pero
-            # dropeada porque sus únicas unidades eran nominales (pizca/
-            # al gusto). Este log captura el modo de fallo para que el
-            # próximo incidente sea diagnosticable from log only.
-            logging.info(
-                f"🛒 [AGGREGATE-DROP] '{name}' dropeado: sin peso "
-                f"(weight_in_lbs={weight_in_lbs:.4f}) y todas las unidades "
-                f"eran nominales (pizca/al gusto/etc). Units pre-dedup: "
-                f"{list(units.keys()) if units else '(vacío)'}. Si esperabas "
-                f"que el item apareciera en la lista, revisar la receta "
-                f"upstream: probablemente el LLM emitió cantidad nominal "
-                f"sin peso/unidad concreta."
-            )
-            continue
+            # [P2-SEASONING-CATALOG-KEEP · 2026-06-22] Si el ingrediente RESUELVE al catálogo
+            # verificado (cilantro, orégano dominicano, etc.) pero el LLM lo emitió SOLO en cantidad
+            # nominal (pizca/al gusto, sin peso), NO lo dropees: la receta lo usa y es un alimento
+            # comprable. Le asignamos el peso de 1 empaque (container_weight_g → density → default) y
+            # dejamos que caiga al path normal de abajo → apply_smart_market_units lo lista como
+            # "1 frasco/mazo". Cierra la lista-incompleta para sazones de catálogo (caso en vivo
+            # 2026-06-22). Los NO-catálogo ya se dropearon arriba (VERIFIED-ONLY) o caen al drop de abajo.
+            _keep_seasoning = False
+            if _seasoning_catalog_keep_enabled():
+                try:
+                    _keep_seasoning = _is_verified_for_shopping(name) and (price_per_lb > 0 or price_per_unit > 0)
+                except Exception:
+                    _keep_seasoning = False
+            if _keep_seasoning:
+                try:
+                    _seas_g = float(master_item.get("container_weight_g") or 0) or float(master_item.get("density_g_per_unit") or 0)
+                except (TypeError, ValueError):
+                    _seas_g = 0.0
+                if _seas_g <= 0:
+                    _seas_g = _SEASONING_DEFAULT_G
+                weight_in_lbs = _seas_g / 453.592
+                has_weight = True
+                units = {}
+                logging.info(
+                    f"🌿 [SEASONING-CATALOG-KEEP] '{name}' es de catálogo pero el LLM lo emitió solo como "
+                    f"cantidad nominal (pizca/al gusto) → listado como ~1 empaque (~{_seas_g:.0f}g) en vez "
+                    f"de dropearlo (la receta lo usa). Cae al procesamiento normal de peso."
+                )
+                # NO continue: cae al `if has_weight:` de abajo y se procesa como ítem normal.
+            else:
+                # [P2-AGGREGATE-DROP-DIAG · 2026-05-16] Diagnostic logging.
+                # Cuando un ingrediente aparece en `aggregated` (visible en log
+                # `🛒 [AGGREGATE]`) pero NO en `aggregated_shopping_list` final
+                # (log `🛒 [AGGREGATE FINAL]`), el coherence guard lo reporta
+                # como `expected_only` divergence. Sin este log, debugging
+                # requiere agregar instrumentación cada vez. Caso observado
+                # 2026-05-16 plan 4cc91584: Avena emitida por receta pero
+                # dropeada porque sus únicas unidades eran nominales (pizca/
+                # al gusto). Este log captura el modo de fallo para que el
+                # próximo incidente sea diagnosticable from log only.
+                logging.info(
+                    f"🛒 [AGGREGATE-DROP] '{name}' dropeado: sin peso "
+                    f"(weight_in_lbs={weight_in_lbs:.4f}) y todas las unidades "
+                    f"eran nominales (pizca/al gusto/etc). Units pre-dedup: "
+                    f"{list(units.keys()) if units else '(vacío)'}. Si esperabas "
+                    f"que el item apareciera en la lista, revisar la receta "
+                    f"upstream: probablemente el LLM emitió cantidad nominal "
+                    f"sin peso/unidad concreta."
+                )
+                continue
             
         if has_weight:
             if weight_in_lbs > 0.0001:
