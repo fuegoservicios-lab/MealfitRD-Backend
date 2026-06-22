@@ -33,7 +33,14 @@ REGLAS ESTRICTAS:
    - PREFIERE usar medidas caseras dominicanas siempre que sea posible (ej: "½ plátano verde", "1 taza de arroz", "2 lonjas de queso", "1 pechuga de pollo", "1 cda de aceite").
    - Si el ingrediente no se presta para medidas caseras, usa unidades métricas (g, oz, lb, ml).
    - PROHIBIDO ABSOLUTO: "pizcas", "ramitas", "chorritos" u otras medidas imprecisas.
-   - NO clones ingredientes en el mismo plato — consolida en un solo renglón.
+   - NO clones ingredientes en el mismo plato — consolida los DUPLICADOS del MISMO alimento en un solo renglón.
+   - **CADA CONDIMENTO EN SU PROPIO RENGLÓN [P3-SALT-SEPARATE-LINE · 2026-06-22]**: NUNCA combines DOS
+     alimentos distintos en un mismo renglón de `ingredients`. En particular SAL y PIMIENTA van SEPARADAS:
+     emite `"Sal al gusto"` Y `"Pimienta negra al gusto"` como DOS ingredientes distintos, NUNCA
+     `"Sal y pimienta al gusto"` en uno solo. RAZÓN CRÍTICA: la lista de compras resuelve cada renglón a UN
+     solo alimento — un renglón "sal y pimienta" se mapea SOLO a pimienta y la SAL DESAPARECE de la lista
+     (el usuario nunca la compra). Aplica a cualquier "X y Y" en un renglón (ej. "ajo y cebolla" → dos
+     renglones aparte). Tras la coma/"y" hay otro alimento → sepáralo.
    - REGLA BIDIRECCIONAL OBLIGATORIA (el revisor rechaza si la incumples):
      a) TODO alimento mencionado en la receta DEBE estar en `ingredients`.
      b) TODO ingrediente en `ingredients` DEBE ser usado EXPLÍCITAMENTE en algún paso de la receta (Mise en place, El Toque de Fuego o Montaje). Si decides NO usarlo en la receta, ELIMÍNALO de `ingredients`. NUNCA listes un ingrediente que no aparece en los pasos.

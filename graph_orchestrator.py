@@ -6518,6 +6518,19 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 _scrubbed = _ing
                 for _pattern, _repl in _UNIT_REPLACEMENTS:
                     _scrubbed = _re.sub(_pattern, _repl, _scrubbed, flags=_re.IGNORECASE)
+                # [P3-SALT-SEPARATE-LINE · 2026-06-22] Backstop determinista: el LLM combina "Sal y pimienta
+                # al gusto" en UN renglón → el resolver del shopping mapea ese renglón a UN solo alimento
+                # (Pimienta) y la SAL DESAPARECE de la lista (bug visto en vivo: sal usada en 7 comidas, 0 en
+                # la lista). Si un ingrediente menciona sal Y pimienta, lo separamos en dos renglones — receta,
+                # lista y coherence guard ven lo mismo. `\bsal\b` no matchea 'salsa'/'ensalada' (word-boundary).
+                # El prompt (regla 8) ya pide emitirlos separados; esto lo GARANTIZA. tooltip-anchor: P3-SALT-SEPARATE-LINE
+                _sl = _scrubbed.lower()
+                if _re.search(r'\bsal\b', _sl) and _re.search(r'\bpimienta\b', _sl):
+                    _new_ings.append("Sal al gusto")
+                    _new_ings.append("Pimienta negra al gusto")
+                    logger.info(f"🧂 [DÍA {day_num}/P3-SALT-SEPARATE-LINE] Separado '{_ing}' → "
+                                f"'Sal al gusto' + 'Pimienta negra al gusto' (la sal se perdía de la lista)")
+                    continue
                 if _scrubbed != _ing:
                     logger.info(f"🧹 [DÍA {day_num}] Unidad normalizada: '{_ing}' → '{_scrubbed}'")
                 _new_ings.append(_scrubbed)
