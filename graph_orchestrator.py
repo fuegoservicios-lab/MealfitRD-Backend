@@ -8578,6 +8578,19 @@ PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
 # KDIGO (RENAL_CAP_FAILHARD_GATE) manda; subir proteína sería iatrogénico. Mirror del patrón
 # renal. Flip a False → revierte al best-effort previo (entrega con disclaimer).
 PROTEIN_FLOOR_FAILHARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_FAILHARD_GATE", True)
+# [P2-SHOPPING-COMPLETENESS · 2026-06-21] Mínimo de completitud de la lista de compras (Fase 5 del
+# build "todo terreno"). El owner: "la lista debe tener un mínimo de alimentos para que los planes
+# estén al 100%, dependiendo si es de 7/15/30 días". La lista DERIVA del plan (cuyos gates de
+# variedad/proteína/calorías ya evitan planes degenerados), así que el piso es defensa-en-profundidad
+# + observabilidad. `is_empty` (lista vacía CON recetas) es el bug claro → reject vía
+# SHOPPING_EMPTY_LIST_REJECT (independiente del modo del coherence guard: en warn/off el guard no
+# rechaza, este gate sí). `is_sparse` (pocos distintos) → solo telemetría (no bloquea: los gates de
+# variedad del plan ya cubren la mayoría, y la variedad NO escala linealmente con los días).
+SHOPPING_COMPLETENESS_GATE = _env_bool("MEALFIT_SHOPPING_COMPLETENESS_GATE", True)
+SHOPPING_EMPTY_LIST_REJECT = _env_bool("MEALFIT_SHOPPING_EMPTY_LIST_REJECT", True)
+SHOPPING_MIN_DISTINCT_BASE = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_BASE", 6)
+SHOPPING_MIN_DISTINCT_PER_WEEK = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_PER_WEEK", 2)
+SHOPPING_MIN_DISTINCT_CAP = _env_int("MEALFIT_SHOPPING_MIN_DISTINCT_CAP", 16)
 # [P3-CARB-TO-PROTEIN-SWAP · 2026-06-19] Palanca de precisión MEDIDA con el harness offline determinista
 # (scripts/macro_sizing_replay.py): en días con déficit de proteína (<floor_pct×target) Y exceso de carbos
 # (>(1+tol)×target), convierte el exceso de carbos en proteína magra a kcal CONSTANTE. Cierra el déficit que
@@ -8953,6 +8966,57 @@ def _protein_floor_shortfall(plan, *, renal_capped: bool):
     except Exception as _pf_e:
         logger.warning(f"[P3-PROTEIN-FLOOR] cálculo de shortfall falló: {type(_pf_e).__name__}: {_pf_e}")
         return []
+
+
+def _shopping_list_completeness(plan, form_data):
+    """[P2-SHOPPING-COMPLETENESS · 2026-06-21] Mide si la lista de compras es suficientemente
+    completa para la duración del ciclo. Devuelve {days, distinct, expected_min, is_empty, is_sparse}.
+
+    - distinct: alimentos DISTINTOS en `aggregated_shopping_list` (excluye los "🚨 urgentes",
+      que son supplement post-hoc, no la lista base).
+    - expected_min: piso escalado por semanas del ciclo (base + (weeks-1)×per_week, capeado).
+      Conservador a propósito: la VARIEDAD de alimentos NO escala linealmente con los días — un
+      plan de 30d reusa ingredientes y compra MÁS cantidad, no necesariamente más distintos. Por
+      eso el incremento por semana es pequeño y hay tope (evita falsos "escasos").
+    - is_empty: el plan TIENE recetas con ingredientes pero la lista salió con 0 alimentos (bug
+      del builder o drop total). Señal DURA.
+    - is_sparse: 0 < distinct < expected_min (señal SUAVE; los gates de variedad del plan ya
+      cubren la mayoría). Tooltip-anchor: P2-SHOPPING-COMPLETENESS."""
+    _days_map = {"weekly": 7, "biweekly": 15, "monthly": 30}
+    days = _days_map.get(str((form_data or {}).get("groceryDuration") or "weekly").lower(), 7)
+    agg = (plan.get("aggregated_shopping_list") if isinstance(plan, dict) else None) or []
+    names = set()
+    for _it in agg:
+        if not isinstance(_it, dict):
+            continue
+        _cat = str(_it.get("category") or _it.get("display_category") or "").lower()
+        if "urgente" in _cat:
+            continue
+        _nm = str(_it.get("name") or _it.get("display_name") or "").strip().lower()
+        if _nm:
+            names.add(_nm)
+    distinct = len(names)
+    _has_ingredients = False
+    if isinstance(plan, dict):
+        for _d in (plan.get("days") or []):
+            for _m in (_d.get("meals") or []):
+                if _m.get("ingredients"):
+                    _has_ingredients = True
+                    break
+            if _has_ingredients:
+                break
+    weeks = max(1, round(days / 7))
+    expected_min = min(
+        SHOPPING_MIN_DISTINCT_CAP,
+        SHOPPING_MIN_DISTINCT_BASE + (weeks - 1) * SHOPPING_MIN_DISTINCT_PER_WEEK,
+    )
+    return {
+        "days": days,
+        "distinct": distinct,
+        "expected_min": expected_min,
+        "is_empty": bool(_has_ingredients and distinct == 0),
+        "is_sparse": bool(_has_ingredients and 0 < distinct < expected_min),
+    }
 
 
 _MEDICAL_NONE_SENTINELS = {
@@ -12871,6 +12935,23 @@ async def assemble_plan_node(state: PlanState) -> dict:
         result["aggregated_shopping_list_biweekly"] = []
         result["aggregated_shopping_list_monthly"] = []
 
+    # [P2-SHOPPING-COMPLETENESS · 2026-06-21] Completitud de la lista (alimentos distintos vs mínimo
+    # escalado por duración) + telemetría. `review_plan_node` lee `_shopping_completeness` para el
+    # gate de lista-vacía. Aquí la lista está recién construida y garantizada presente (éxito o
+    # except→[]), así que el veredicto es fiable. NO bloquea aquí (assemble no decide retry).
+    if SHOPPING_COMPLETENESS_GATE:
+        try:
+            _sc = _shopping_list_completeness(result, form_data)
+            result["_shopping_completeness"] = _sc
+            if _sc["is_empty"]:
+                logger.error(f"🛑 [P2-SHOPPING-COMPLETENESS] Lista de compras VACÍA con recetas "
+                             f"presentes ({_sc['days']}d) — posible fallo del builder o drop total.")
+            elif _sc["is_sparse"]:
+                logger.warning(f"🛒 [P2-SHOPPING-COMPLETENESS] Lista escasa: {_sc['distinct']} alimentos "
+                               f"distintos < mínimo {_sc['expected_min']} para {_sc['days']}d (soft).")
+        except Exception as _sce:
+            logger.warning(f"[P2-SHOPPING-COMPLETENESS] cálculo en assemble falló: {type(_sce).__name__}: {_sce}")
+
     # Humanizar ingredientes a medidas caseras dominicanas para la UI (display-only)
     # P0-NEW-1.b: la humanización aplica regex y lookups por ingrediente sobre
     # todo el plan (~21 meals × ~5 ingredientes); aunque es CPU-bound, llamarla
@@ -14793,6 +14874,25 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     severity = _severity_max(severity, "high")
         except Exception as _vg_e:
             logger.warning(f"[P3-VARIETY-HARD-GATE] validador falló: {type(_vg_e).__name__}: {_vg_e}")
+
+    # [P2-SHOPPING-COMPLETENESS · 2026-06-21] Gate de lista de compras VACÍA — INDEPENDIENTE del
+    # modo del coherence guard (en warn/off el guard no rechaza; este gate sí). Si el plan tiene
+    # recetas pero la lista salió sin alimentos (bug del builder / drop total), rechazo → retry.
+    # `is_sparse` NO bloquea (ya se emitió telemetría en assemble; los gates de variedad del plan
+    # cubren la mayoría). Lee el veredicto que `assemble_plan_node` computó sobre la lista recién
+    # construida. Knob de rollback: MEALFIT_SHOPPING_EMPTY_LIST_REJECT.
+    if SHOPPING_EMPTY_LIST_REJECT:
+        _scomp = plan.get("_shopping_completeness") if isinstance(plan, dict) else None
+        if isinstance(_scomp, dict) and _scomp.get("is_empty"):
+            logger.error(f"🛑 [P2-SHOPPING-COMPLETENESS] Lista de compras vacía con recetas presentes "
+                         f"({_scomp.get('days')}d) → rechazo (retry).")
+            approved = False
+            issues.append(
+                "LISTA DE COMPRAS VACÍA: el plan tiene recetas pero la lista de compras salió sin "
+                "alimentos. Reconstruye el plan asegurando que CADA ingrediente de las recetas "
+                "aparezca en la lista de compras con su cantidad."
+            )
+            severity = _severity_max(severity, "high")
 
     # [P2-A · 2026-05-07] Coherencia recetas↔lista en mode `block`.
     # `assemble_plan_node` invoca `run_shopping_coherence_guard`; cuando
