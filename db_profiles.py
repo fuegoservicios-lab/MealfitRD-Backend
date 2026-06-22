@@ -977,6 +977,13 @@ _USER_SCOPED_TABLES_USERID = (
     "plan_chunk_queue", "push_subscriptions", "shopping_locks",
     "unknown_ingredients", "user_depleted_items", "user_facts", "user_inventory",
     "visual_diary", "water_intake_log", "weight_log", "meal_plans_audit",
+    # [P1-ACCOUNT-DELETE-1 · 2026-06-22] Tablas Dreaming (P1-DREAMING-1, creadas
+    # 2026-06-13 DESPUÉS de esta lista del 2026-05-30). Cascadean a user_profiles
+    # ON DELETE CASCADE, así que con include_profile=True ya se limpiaban; se
+    # añaden EXPLÍCITAS para defensa-en-profundidad (la lista es el SSOT del
+    # borrado, NO el grafo de FKs — Neon eliminó los FKs a auth.users) y para que
+    # include_profile=False (data-erasure conservando cuenta) no las deje huérfanas.
+    "user_memory_profile", "dream_work_queue", "dream_consolidation_log",
     # `meal_plans` al final: sus children (plan_chunk_queue, etc.) pueden
     # FK-cascade a él; borrarlas antes evita cualquier orden problemático.
     "meal_plans",

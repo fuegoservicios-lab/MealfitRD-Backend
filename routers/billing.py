@@ -572,6 +572,99 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         logger.error(f"❌ Error interno en /api/subscription/verify: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
+# ---------------------------------------------------------------------------
+# [P1-ACCOUNT-DELETE-1 · 2026-06-22] Helper SSOT reutilizable para cancelar una
+# suscripción PayPal, con la MISMA política fail-loud que `/cancel`. Lo consume
+# el flujo de eliminación de cuenta (`POST /api/account/delete`): hay que cancelar
+# en PayPal ANTES de borrar `user_profiles` (que guarda `paypal_subscription_id`),
+# o PayPal seguiría cobrando indefinidamente sin handle para detenerlo.
+#
+# NO toca la BD (el caller decide). Retorna `end_date` ISO en éxito/idempotente;
+# `raise HTTPException(502/503)` + alerta en fallo real → el caller ABORTA el
+# borrado (nunca dejamos una sub viva tras "eliminar cuenta").
+# ---------------------------------------------------------------------------
+async def cancel_paypal_subscription_for_user(
+    user_id: str, subscription_id: str, *, reason: str
+) -> Optional[str]:
+    PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID")
+    PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET")
+    is_sandbox = not is_production()
+    PAYPAL_API_BASE = "https://api-m.sandbox.paypal.com" if is_sandbox else "https://api-m.paypal.com"
+    env_ready = bool(PAYPAL_CLIENT_ID and PAYPAL_SECRET)
+    allow_bypass = (
+        os.environ.get("MEALFIT_ALLOW_PAYPAL_BYPASS", "").lower() in ("1", "true", "yes")
+    )
+    # Fail-secure: sin credenciales en producción NO seguimos — borrar la cuenta
+    # perdería el subscription_id mientras PayPal sigue cobrando (P0-BILLING-2).
+    if not env_ready and not is_sandbox and not allow_bypass:
+        logger.error(
+            "❌ [P1-ACCOUNT-DELETE-1] PAYPAL_CLIENT_ID/PAYPAL_SECRET ausentes en "
+            "producción — cancel pre-borrado rechazado para no perder el handle "
+            "de una sub que seguiría cobrando."
+        )
+        raise HTTPException(status_code=503, detail="Payment provider misconfigured. Contact support.")
+    if not env_ready:
+        # sandbox/bypass dev sin credenciales reales: no hay sub que cancelar de verdad.
+        logger.warning("[P1-ACCOUNT-DELETE-1] PayPal env ausente (sandbox/bypass) — cancel omitido.")
+        return None
+
+    end_date = None
+    async with httpx.AsyncClient(timeout=_HTTPX_TIMEOUT_S) as client:
+        auth_resp = await client.post(
+            f"{PAYPAL_API_BASE}/v1/oauth2/token",
+            auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
+            data={"grant_type": "client_credentials"},
+        )
+        if auth_resp.status_code != 200:
+            _persist_billing_alert(
+                alert_key=f"billing_cancel_failed:{user_id}:{subscription_id}",
+                severity="critical",
+                title="Account-delete: OAuth PayPal falló — cancel no notificado",
+                message=(
+                    f"User {user_id} eliminó su cuenta; cancel de sub {subscription_id} "
+                    f"no se pudo notificar (OAuth status={auth_resp.status_code}: "
+                    f"{(auth_resp.text or '')[:300]}). Borrado ABORTADO."
+                ),
+                metadata={"user_id": user_id, "sub_id": subscription_id, "stage": "oauth", "flow": "account_delete"},
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="No se pudo contactar el proveedor de pagos. Reintenta en unos minutos; si persiste, contacta soporte.",
+            )
+        access_token = auth_resp.json().get("access_token")
+
+        sub_info_resp = await client.get(
+            f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if sub_info_resp.status_code == 200:
+            end_date = sub_info_resp.json().get("billing_info", {}).get("next_billing_time")
+
+        cancel_resp = await client.post(
+            f"{PAYPAL_API_BASE}/v1/billing/subscriptions/{subscription_id}/cancel",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={"reason": reason},
+        )
+        if not _is_paypal_cancel_idempotent_success(cancel_resp.status_code, cancel_resp.text):
+            _persist_billing_alert(
+                alert_key=f"billing_cancel_failed:{user_id}:{subscription_id}",
+                severity="critical",
+                title="Account-delete: PayPal rechazó la cancelación — riesgo cobro post-borrado",
+                message=(
+                    f"User {user_id} eliminó su cuenta; PayPal /cancel de sub {subscription_id} "
+                    f"respondió status={cancel_resp.status_code}: {(cancel_resp.text or '')[:300]}. "
+                    f"Borrado ABORTADO para no perder el handle de una sub viva."
+                ),
+                metadata={"user_id": user_id, "sub_id": subscription_id, "stage": "cancel", "flow": "account_delete"},
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="El proveedor de pagos rechazó la cancelación. Reintenta en unos minutos; si persiste, contacta soporte.",
+            )
+    logger.info(f"✅ [P1-ACCOUNT-DELETE-1] Sub {subscription_id} de {user_id} cancelada antes de eliminar la cuenta.")
+    return end_date
+
+
 @router.post("/cancel")
 async def api_cancel_subscription(data: dict = Body(...), verified_user_id: str = Depends(get_verified_user_id)):
     try:

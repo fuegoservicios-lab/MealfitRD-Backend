@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, UploadFile, File, Form, Body, Header, Depends
+from fastapi import FastAPI, Request, Response, HTTPException, BackgroundTasks, UploadFile, File, Form, Body, Header, Depends
 from error_utils import safe_error_detail
 import logging
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P2-COHERENCE-PACKAGE-UNITS · 2026-06-22"
+_LAST_KNOWN_PFIX = "P1-ACCOUNT-DELETE-1 · 2026-06-22"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -2110,7 +2110,7 @@ def api_test_proactive(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_push)
     return {"status": "started", "message": "Task queued"}
 
-from auth import get_verified_user_id, verify_api_quota
+from auth import get_verified_user_id, verify_api_quota, clear_session_cookie
 from rate_limiter import RateLimiter
 from services import _save_plan_and_track_background, _process_swap_rejection_background
 
@@ -2135,6 +2135,9 @@ from services import _save_plan_and_track_background, _process_swap_rejection_ba
 # Anchor: P2-RATELIMIT-COVERAGE-WEBHOOKS.
 _WEBHOOK_FACTS_LIMITER = RateLimiter(max_calls=10, period_seconds=60)
 _AUTH_MIGRATE_LIMITER = RateLimiter(max_calls=5, period_seconds=300)
+# [P1-ACCOUNT-DELETE-1 · 2026-06-22] Borrado de cuenta = destructivo + irreversible
+# → throttle estricto (3/5min) para cortar replay/loop/CSRF accidental.
+_ACCOUNT_DELETE_LIMITER = RateLimiter(max_calls=3, period_seconds=300)
 
 # [P2-CORS-NARROW · 2026-05-12] Setup CORS para el frontend React.
 #
@@ -2364,6 +2367,88 @@ def api_reset_user_preferences(verified_user_id: str = Depends(get_verified_user
         raise
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/account/reset-preferences: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
+@app.post("/api/account/delete")
+async def api_delete_my_account(
+    response: Response,
+    data: dict = Body(default={}),
+    verified_user_id: Optional[str] = Depends(_ACCOUNT_DELETE_LIMITER),
+):
+    """[P1-ACCOUNT-DELETE-1 · 2026-06-22] Eliminación de cuenta SELF-SERVICE e
+    IRREVERSIBLE desde Ajustes. Reusa el motor determinístico `delete_account_data`
+    (P1-PROD-AUDIT-2) que purga TODA la data user-scoped (~36 tablas + checkpoints
+    LangGraph + Storage).
+
+    Seguridad / contrato:
+      - `verified_user_id` se deriva SOLO del JWT verificado (vía el RateLimiter
+        que llama `get_verified_user_id`). NUNCA se acepta un `user_id` del body
+        → no IDOR (simétrico de I2 / P0-AGENT-1). El endpoint admin
+        `/api/system/admin/account/purge-data` SÍ toma user_id del body pero está
+        CRON_SECRET-gated; este NO debe copiar esa forma.
+      - Confirmación explícita: el body debe traer `confirm == "ELIMINAR"`.
+      - Throttle estricto (`_ACCOUNT_DELETE_LIMITER`, 3/5min).
+
+    Flujo cancel-then-delete (fail-loud):
+      1. Si hay suscripción PayPal activa → cancelarla ANTES de borrar (la fila
+         user_profiles guarda `paypal_subscription_id`; borrarla sin cancelar =
+         cobro fantasma). Un fallo real de PayPal aborta el borrado (502/503).
+      2. `delete_account_data(uid, include_profile=True)` → purga determinística.
+      3. Invalida la cookie de sesión first-party server-side (belt-and-suspenders
+         con el `resetApp()`/signOut del cliente).
+
+    Limitación conocida (documentada): la identidad de Neon Auth NO se borra aún
+    (admin API no cableada, ver routers/system.py). Tras eliminar, la data está
+    100% borrada y la sesión invalidada; si el usuario vuelve a iniciar sesión con
+    el mismo correo obtiene una cuenta NUEVA vacía (re-registro), no la anterior.
+    """
+    if not verified_user_id or verified_user_id == "guest":
+        raise HTTPException(status_code=401, detail="Autenticación requerida.")
+    if str((data or {}).get("confirm") or "").strip().upper() != "ELIMINAR":
+        raise HTTPException(status_code=400, detail="Confirmación inválida. Escribe ELIMINAR para confirmar.")
+    try:
+        # 1. Cancelar PayPal ANTES de borrar (cancel-then-delete, fail-loud).
+        billing_cancelled = False
+        sub_row = await asyncio.to_thread(
+            lambda: execute_sql_query(
+                "SELECT paypal_subscription_id, subscription_status FROM public.user_profiles WHERE id = %s",
+                (verified_user_id,), fetch_one=True,
+            )
+        )
+        sub_id = (sub_row or {}).get("paypal_subscription_id")
+        sub_status = str((sub_row or {}).get("subscription_status") or "").upper()
+        if sub_id and sub_status not in ("CANCELLED", "INACTIVE", "EXPIRED"):
+            from routers.billing import cancel_paypal_subscription_for_user
+            # fail-loud: si PayPal rechaza, esto raise 502/503 y ABORTA el borrado
+            # → nunca dejamos una sub viva tras "eliminar cuenta".
+            await cancel_paypal_subscription_for_user(
+                verified_user_id, sub_id, reason="El usuario eliminó su cuenta desde la App."
+            )
+            billing_cancelled = True
+
+        # 2. Purga determinística de TODA la data user-scoped (motor existente).
+        from db_profiles import delete_account_data
+        result = await asyncio.to_thread(delete_account_data, verified_user_id, True)
+
+        # 3. Invalidar la sesión first-party server-side.
+        clear_session_cookie(response)
+
+        ok = len(result.get("errors") or []) == 0
+        logger.info(
+            f"[P1-ACCOUNT-DELETE-1] cuenta {verified_user_id} eliminada "
+            f"(ok={ok}, billing_cancelled={billing_cancelled}, errors={len(result.get('errors') or [])})"
+        )
+        return {
+            "success": ok,
+            "billing_cancelled": billing_cancelled,
+            "deleted": result.get("deleted"),
+            "errors": result.get("errors"),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [P1-ACCOUNT-DELETE-1] Error eliminando cuenta {verified_user_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @app.post("/api/webhooks/process-pending-facts")
