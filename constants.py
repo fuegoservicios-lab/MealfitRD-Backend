@@ -1311,8 +1311,17 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
     return dot / (norm1 * norm2)
 # ---------------------------
 
+# [P3-PAVO-SKELETON-VERIFIED-ALIGN · 2026-06-22] "Pavo" (pavo fresco genérico) → "Jamón de pavo": el
+# pool del esqueleto ofrecía "Pavo" pero el ÚNICO pavo con precio verificado en el catálogo es "Jamón de
+# pavo" (RD$255/lb; no existe "Pavo"/"Pechuga de pavo" priced). Con verified-only ON eso producía el modo
+# observado en vivo (corr=4a8d46e1, 2026-06-22): esqueleto asigna "Pavo" → el LLM escribe "Pechuga de pavo"
+# en la receta → la lista de compras lo DROPEA (no verificado) → receta dice pavo pero la lista no lo trae.
+# Alinear el pool con el catálogo verificado (nombre real comprable en DR) cierra el gap end-to-end: receta
+# y lista usan "Jamón de pavo" de forma coherente. La canonicalización fresh/procesado de normalize_name
+# (P3-PROTEIN-CAP-2) y la variety-map quedan intactas. Para gain_muscle, el penalty de embutidos lo
+# deprioriza (correcto: el deli no es ideal para hipertrofia).
 DOMINICAN_PROTEINS = [
-    "Pollo", "Cerdo", "Res", "Pavo", "Pescado", "Atún", "Huevos", "Queso de Freír",
+    "Pollo", "Cerdo", "Res", "Jamón de pavo", "Pescado", "Atún", "Huevos", "Queso de Freír",
     "Salami Dominicano", "Camarones", "Chuleta", "Longaniza",
     "Habichuelas Rojas", "Habichuelas Negras", "Habichuelas Blancas",
     "Gandules", "Lentejas", "Garbanzos", "Soya/Tofu",
