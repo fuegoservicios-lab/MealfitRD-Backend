@@ -1771,6 +1771,57 @@ def _find_best_sku(g_total: float, available_sizes_g: list, anti_waste_pct: floa
     fallback_count = max(1, math.ceil(g_total / largest_size))
     return fallback_count, largest_size
 
+
+def _select_market_package(g_total: float, market_packages, anti_waste_pct: float = 0.02):
+    """[P1-PKG-DURATION-PRICING · 2026-06-22] Elige el envase REAL (tamaño + precio) para
+    cubrir `g_total` gramos y devuelve también el PRECIO del tamaño elegido.
+
+    `anti_waste_pct` por defecto 0.02 = mismo umbral estricto que el path SKU legacy de
+    `apply_smart_market_units` (ANTI_WASTE_THRESHOLD local), para que la selección sea
+    idéntica a la que ya producía buenos tamaños por duración.
+
+    Reutiliza la MISMA heurística de SKU (`_find_best_sku`: mínimo desperdicio + mínimo
+    conteo) sobre los tamaños declarados en `market_packages`, de modo que la selección
+    sigue siendo duración-aware (g_total ya viene escalado por `base_duration_scale`):
+    7 días → paquete chico, 30 días → paquete grande. La diferencia vs el path legacy es
+    que ahora cada tamaño trae su PRECIO real, cerrando el sobrecobro por precio plano
+    (ej. arroz 30 días: 10 lb × 55 = RD$550 → 1 paquete 10 lb = RD$327, descuento por
+    volumen verificado in-store).
+
+    `market_packages`: lista [{"grams": N, "price": RD$, "label": "..."}].
+    Returns dict {count, grams, price, label} o None si no hay datos usables.
+    Tooltip-anchor: P1-PKG-DURATION-PRICING.
+    """
+    if not market_packages or not isinstance(market_packages, list):
+        return None
+    pkgs = []
+    for p in market_packages:
+        if not isinstance(p, dict):
+            continue
+        try:
+            g = float(p.get("grams"))
+            pr = float(p.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if g > 0 and pr >= 0:
+            pkgs.append((g, pr, str(p.get("label") or "")))
+    if not pkgs:
+        return None
+    sizes = [g for (g, _, _) in pkgs]
+    if g_total <= 0:
+        # Sin necesidad calculable: 1 unidad del envase más pequeño.
+        g_sel, pr_sel, lbl_sel = min(pkgs, key=lambda t: t[0])
+        return {"count": 1, "grams": g_sel, "price": pr_sel, "label": lbl_sel}
+    if len(sizes) > 1:
+        count, size_g = _find_best_sku(g_total, sizes, anti_waste_pct)
+    else:
+        size_g = sizes[0]
+        count = max(1, math.ceil(g_total / size_g))
+    # Mapear el tamaño elegido de vuelta a su precio/label (match por grams más cercano).
+    g_sel, pr_sel, lbl_sel = min(pkgs, key=lambda t: abs(t[0] - size_g))
+    return {"count": int(count), "grams": g_sel, "price": pr_sel, "label": lbl_sel}
+
+
 def to_unicode_fraction(frac_str: str) -> str:
     mapping = {"1/4": "¼", "1/2": "½", "3/4": "¾"}
     return mapping.get(frac_str, frac_str)
@@ -1989,12 +2040,33 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         db_container = master_item.get("default_unit")
     db_container_weight_g = master_item.get("container_weight_g")
     available_sizes = master_item.get("available_sizes_g")
-    
+    market_packages = master_item.get("market_packages")
+    # [P1-PKG-DURATION-PRICING · 2026-06-22] Precio del envase elegido (RD$/paquete) — se
+    # propaga al market_obj para que `_cost_from_market` costee por tamaño real, no plano.
+    market_pkg_price = None
+
     if db_container and db_container_weight_g and weight_in_lbs > 0:
         g_total = weight_in_lbs * 453.592
-        
+
+        # ── [P1-PKG-DURATION-PRICING] Path por market_packages (tamaño + PRECIO real) ──
+        # Tiene prioridad sobre available_sizes_g: usa la MISMA heurística de SKU sobre los
+        # tamaños con precio, y arrastra el precio del tamaño elegido (descuento por volumen).
+        _mp_sel = _select_market_package(g_total, market_packages)
+        if _mp_sel is not None:
+            sku_count = _mp_sel["count"]
+            sku_size_g = _mp_sel["grams"]
+            sku_label = _mp_sel["label"] or _sku_size_label(sku_size_g, db_container)
+            market_pkg_price = _mp_sel["price"]
+            display_qty = (
+                f"{sku_count} {get_plural_unit(sku_count, db_container)} "
+                f"{_format_pkg_suffix(sku_count, sku_label)}"
+            ).rstrip()
+            market_qty = sku_count
+            market_unit = db_container
+            was_unitarized = True
+            confidence = 1.0
         # ── SKU-Aware Path: múltiples tamaños disponibles ──
-        if available_sizes and isinstance(available_sizes, list) and len(available_sizes) > 1:
+        elif available_sizes and isinstance(available_sizes, list) and len(available_sizes) > 1:
             sku_count, sku_size_g = _find_best_sku(g_total, available_sizes, ANTI_WASTE_THRESHOLD)
             sku_label = _sku_size_label(sku_size_g, db_container)
             # [P1-PDF-5] Sufijo "c/u" cuando count > 1 para evitar lectura
@@ -2480,6 +2552,11 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     }
     if sku_label:
         result["sku_size_label"] = sku_label
+    # [P1-PKG-DURATION-PRICING] Precio del envase real elegido (RD$/paquete). Consumido por
+    # `_cost_from_market` para costear por tamaño (count × precio), cerrando el sobrecobro
+    # de precio plano en staples con descuento por volumen.
+    if market_pkg_price is not None:
+        result["market_pkg_price_rd"] = market_pkg_price
     return result
 
 
@@ -5448,6 +5525,22 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
         mqty = 0.0
     if mqty <= 0:
         return 0.0
+
+    # (0) [P1-PKG-DURATION-PRICING · 2026-06-22] Precio por TAMAÑO de envase real. Si
+    # apply_smart_market_units eligió un market_package (tamaño+precio de la tabla
+    # verificada), costear con count × precio_del_paquete — descuento por volumen real,
+    # NO price_per_lb plano. Usa market_qty_numeric (float fiel) cuando exista; cualquier
+    # bump posterior (MARKET_MINIMUMS) se refleja porque el precio es por-paquete.
+    _pkg_price = market_obj.get("market_pkg_price_rd")
+    if _pkg_price is not None:
+        try:
+            _pp = float(_pkg_price)
+            _mq = float(market_obj.get("market_qty_numeric") or mqty or 0)
+            if _pp >= 0 and _mq > 0:
+                return _mq * _pp
+        except (TypeError, ValueError):
+            pass
+
     munit = str(market_obj.get("market_unit") or "").lower().strip()
     _mi = master_item or {}
     try:
