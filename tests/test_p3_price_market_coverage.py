@@ -133,16 +133,18 @@ def test_huevo_dos_cartones_30_precio_actual():
     assert _cost_from_market(_mk(2, "cartón (30 uds.)"), {}, 0, 295) == pytest.approx(590.0)
 
 
-def test_preprocessing_huevo_solo_crea_cartones_de_30():
-    """En el mercado DR no existen cartones de 6 ni 15; el huevo se compra por cartón
-    completo. El pre-processing del huevo (aggregate_and_deduct) debe redondear HACIA
-    ARRIBA a 'cartón (30 uds.)' y NUNCA crear los buckets falsos 'medio cartón (15 uds.)'
-    ni 'cartón (6 uds.)'. Ancla la corrección reportada por el owner con fotos de la tienda."""
+def test_preprocessing_huevo_cartones_reales_20_30():
+    """[ampliado P1-EGG-CARTON-SIZES 2026-06-22] El huevo se compra por cartón completo. El
+    mercado DR tiene DOS cartones reales (20 y 30 uds, verificados por el owner) — NO existen
+    los buckets falsos de 6 ni 15. El pre-processing elige el cartón cost-óptimo vía
+    `_choose_egg_carton` (lee market_packages), con 'cartón (30 uds.)' como fallback redondeado
+    hacia arriba si no hay datos. Ancla la decisión actualizada."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "shopping_calculator.py").read_text(encoding="utf-8")
     idx = src.index("P3-EGG-REAL-CARTONS")
-    block = src[idx:idx + 650]  # cubre el comentario + la línea de código del bucket
-    assert "cartón (30 uds.)" in block, "el pre-processing debe crear 'cartón (30 uds.)'"
-    assert "math.ceil" in block, "debe redondear HACIA ARRIBA (ceil) a cartones completos"
+    block = src[idx:idx + 1200]  # cubre el comentario + selector + fallback
+    assert "_choose_egg_carton" in block, "debe elegir el cartón cost-óptimo (20 vs 30)"
+    assert "cartón (30 uds.)" in block, "fallback al cartón de 30 sin datos"
+    assert "math.ceil" in block, "el fallback redondea HACIA ARRIBA (ceil) a cartones completos"
     assert "medio cartón (15 uds.)" not in block, "no debe crear el bucket falso de 15 uds."
     assert "cartón (6 uds.)" not in block, "no debe crear el bucket falso de 6 uds."

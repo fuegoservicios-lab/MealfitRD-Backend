@@ -1467,6 +1467,15 @@ def _parse_quantity(s, *, apply_yield_multiplier: bool = True, apply_legumbres_y
     
 def get_plural_unit(num, u):
     if num <= 1 or not u: return u
+    # [P1-EGG-CARTON-SIZES · 2026-06-22] Unidades con sufijo parentético, p.ej.
+    # 'cartón (30 uds.)' → pluralizar SOLO la palabra-cabeza y re-anexar el sufijo
+    # ('2 cartones (30 uds.)', no '2 cartón (30 uds.)'). Para unidades simples (sin
+    # paréntesis) el comportamiento es idéntico al previo.
+    _paren_suffix = ""
+    _m_paren = re.match(r'^\s*([^(]+?)\s*(\(.*\))\s*$', u)
+    if _m_paren:
+        u = _m_paren.group(1).strip()
+        _paren_suffix = " " + _m_paren.group(2)
     u_lower = u.lower()
     PLURALS = {
         'lb': 'lbs', 'lbs': 'lbs',
@@ -1484,7 +1493,7 @@ def get_plural_unit(num, u):
     # Preservar capitalización del input: si "Pote" → "Potes", si "pote" → "potes"
     if len(result) > 0 and u[0].isupper() and result[0].islower():
         result = result[0].upper() + result[1:]
-    return result
+    return result + _paren_suffix
 
 # Mínimos comprables en mercado/colmado dominicano
 MARKET_MINIMUMS = {
@@ -1804,22 +1813,71 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
         except (TypeError, ValueError):
             continue
         if g > 0 and pr >= 0:
-            pkgs.append((g, pr, str(p.get("label") or "")))
+            # [P1-EGG-CARTON-SIZES · 2026-06-22] `unit` opcional por envase: la FORMA del
+            # paquete (lata/paquete/sobre/pote) cuando difiere del market_container genérico.
+            # Cierra el wart "1 lata (800 g seco)" cuando un mismo ítem (habichuelas) se vende
+            # en lata Y en bolsa. Sin `unit` → fallback a db_container (comportamiento previo).
+            pkgs.append((g, pr, str(p.get("label") or ""), str(p.get("unit") or "")))
     if not pkgs:
         return None
-    sizes = [g for (g, _, _) in pkgs]
+    sizes = [g for (g, _, _, _) in pkgs]
     if g_total <= 0:
         # Sin necesidad calculable: 1 unidad del envase más pequeño.
-        g_sel, pr_sel, lbl_sel = min(pkgs, key=lambda t: t[0])
-        return {"count": 1, "grams": g_sel, "price": pr_sel, "label": lbl_sel}
+        g_sel, pr_sel, lbl_sel, unit_sel = min(pkgs, key=lambda t: t[0])
+        return {"count": 1, "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel}
     if len(sizes) > 1:
         count, size_g = _find_best_sku(g_total, sizes, anti_waste_pct)
     else:
         size_g = sizes[0]
         count = max(1, math.ceil(g_total / size_g))
-    # Mapear el tamaño elegido de vuelta a su precio/label (match por grams más cercano).
-    g_sel, pr_sel, lbl_sel = min(pkgs, key=lambda t: abs(t[0] - size_g))
-    return {"count": int(count), "grams": g_sel, "price": pr_sel, "label": lbl_sel}
+    # Mapear el tamaño elegido de vuelta a su precio/label/unit (match por grams más cercano).
+    g_sel, pr_sel, lbl_sel, unit_sel = min(pkgs, key=lambda t: abs(t[0] - size_g))
+    return {"count": int(count), "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel}
+
+
+def _choose_egg_carton(total_eggs: float, egg_packages):
+    """[P1-EGG-CARTON-SIZES · 2026-06-22] Elige el CARTÓN de huevos cost-óptimo para cubrir
+    `total_eggs`, sobre los tamaños declarados en `market_packages` con campo `units`
+    (no `grams` — los huevos se cuentan por unidad discreta, no por peso).
+
+    Los huevos NO pasan por el weight-path de apply_smart_market_units (se consolidan a
+    'cartón (N uds.)' antes), así que el path market_packages por gramos no aplica. Este
+    selector es el equivalente para huevos: elige el tamaño de cartón con MENOR costo total
+    (count × precio_cartón), prefiriendo menos cartones y luego el cartón más grande en empate.
+
+    Ejemplos con [{units:20,price:200},{units:30,price:295}]:
+      14 huevos → cartón 20 (1×200=200, vs 1×295) — ahorra RD$95 en planes de 7 días.
+      22 huevos → cartón 30 (1×295, vs 2×20=400).
+      56 huevos → 2×cartón 30 (590, vs 3×20=600).
+
+    `egg_packages`: lista [{"units": N, "price": RD$, "label": "..."}].
+    Returns dict {units, count, price, label} o None si no hay datos usables.
+    Tooltip-anchor: P1-EGG-CARTON-SIZES.
+    """
+    if not egg_packages or not isinstance(egg_packages, list):
+        return None
+    cartons = []
+    for p in egg_packages:
+        if not isinstance(p, dict):
+            continue
+        try:
+            u = int(float(p.get("units")))
+            pr = float(p.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if u > 0 and pr >= 0:
+            cartons.append((u, pr, str(p.get("label") or "")))
+    if not cartons:
+        return None
+    need = max(1.0, float(total_eggs))
+    best = None
+    for u, pr, lbl in cartons:
+        count = max(1, math.ceil(need / u))
+        cost = count * pr
+        key = (cost, count, -u)  # menor costo, luego menos cartones, luego cartón más grande
+        if best is None or key < best[0]:
+            best = (key, u, count, pr, lbl)
+    return {"units": best[1], "count": best[2], "price": best[3], "label": best[4]}
 
 
 def to_unicode_fraction(frac_str: str) -> str:
@@ -2057,12 +2115,16 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
             sku_size_g = _mp_sel["grams"]
             sku_label = _mp_sel["label"] or _sku_size_label(sku_size_g, db_container)
             market_pkg_price = _mp_sel["price"]
+            # [P1-EGG-CARTON-SIZES · 2026-06-22] Unidad de DISPLAY = la forma del envase
+            # elegido (lata vs paquete) cuando difiere del market_container genérico. Sin
+            # `unit` en el package → fallback a db_container (comportamiento previo).
+            _pkg_unit = _mp_sel.get("unit") or db_container
             display_qty = (
-                f"{sku_count} {get_plural_unit(sku_count, db_container)} "
+                f"{sku_count} {get_plural_unit(sku_count, _pkg_unit)} "
                 f"{_format_pkg_suffix(sku_count, sku_label)}"
             ).rstrip()
             market_qty = sku_count
-            market_unit = db_container
+            market_unit = _pkg_unit
             was_unitarized = True
             confidence = 1.0
         # ── SKU-Aware Path: múltiples tamaños disponibles ──
@@ -5552,12 +5614,26 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     except (TypeError, ValueError):
         density_g = 0.0
 
-    # (D) HUEVO — unidad textual 'cartón (N uds.)' / 'medio cartón (15 uds.)'. El egg
-    # pre-process (L5801-5807) consolida los huevos en buckets de cartón; price_per_unit
-    # es por cartón de 30. Costo por-huevo = (market_qty × N huevos del bucket) × (precio/30).
+    # (D) HUEVO — unidad textual 'cartón (N uds.)'. El egg pre-process consolida los huevos en
+    # buckets de cartón (`_choose_egg_carton`).
+    # [P1-EGG-CARTON-SIZES · 2026-06-22] Costo con el PRECIO REAL del cartón elegido desde
+    # market_packages (por `units` == N): cartón 20 = RD$200, cartón 30 = RD$295. El precio NO
+    # escala linealmente (20→200=10/huevo, 30→295=9.83/huevo), así que derivar de price_per_unit/30
+    # sobrecobraría/subcobraría el cartón de 20. Fallback legacy (price_per_unit por cartón de 30)
+    # si no hay market_packages para ese tamaño. Tooltip-anchor: P1-EGG-CARTON-SIZES.
     _egg_m = re.search(r'\((\d+)\s*uds?\.?\)', munit)
-    if _egg_m and 'cart' in munit and price_per_unit > 0:
-        return mqty * float(_egg_m.group(1)) * (price_per_unit / 30.0)
+    if _egg_m and 'cart' in munit:
+        _carton_n = int(_egg_m.group(1))
+        _egg_pkgs = _mi.get("market_packages")
+        if isinstance(_egg_pkgs, list):
+            for _p in _egg_pkgs:
+                try:
+                    if isinstance(_p, dict) and int(float(_p.get("units"))) == _carton_n and _p.get("price") is not None:
+                        return mqty * float(_p["price"])
+                except (TypeError, ValueError):
+                    continue
+        if price_per_unit > 0:
+            return mqty * float(_carton_n) * (price_per_unit / 30.0)
 
     # (A) Display en LIBRAS: market_qty ya está en libras → price_per_lb directo.
     if munit in ("lb", "lbs"):
@@ -6118,12 +6194,19 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     # Fallback agresivo para atrapar ' Uds.' o cualquier sufijo
                     u_qty += units.pop(k)
             if u_qty > 0:
-                # [P3-EGG-REAL-CARTONS · 2026-06-20] Solo cartones REALES de 30 uds. En el
-                # mercado DR NO existen cartones de 6 ni 15 (confirmado por el owner con fotos
-                # de la tienda); los huevos se compran por cartón completo, no por separado.
-                # Para cualquier conteo, redondear HACIA ARRIBA a cartones de 30 — es el estándar
-                # + mejor valor por huevo; duran ~3-5 semanas refrigerados, el resto no se desperdicia.
-                units['cartón (30 uds.)'] = units.get('cartón (30 uds.)', 0) + math.ceil(u_qty / 30.0)
+                # [P3-EGG-REAL-CARTONS · 2026-06-20 · ampliado P1-EGG-CARTON-SIZES 2026-06-22]
+                # Los huevos se compran por cartón completo (no por separado). El owner verificó
+                # in-store DOS tamaños reales en el mercado DR: cartón de 20 uds (RD$200, mejor
+                # para planes de 7 días) y cartón de 30 uds (RD$295, mejor valor/huevo para 15-30
+                # días). `_choose_egg_carton` elige el tamaño cost-óptimo según los huevos
+                # necesarios, leyendo Huevo.market_packages [{units,price,label}]. Sin datos →
+                # fallback al cartón de 30 (comportamiento previo P3-EGG-REAL-CARTONS).
+                _egg_sel = _choose_egg_carton(u_qty, master_item.get("market_packages"))
+                if _egg_sel:
+                    _egg_key = f"cartón ({_egg_sel['units']} uds.)"
+                    units[_egg_key] = units.get(_egg_key, 0) + _egg_sel["count"]
+                else:
+                    units['cartón (30 uds.)'] = units.get('cartón (30 uds.)', 0) + math.ceil(u_qty / 30.0)
 
         for u in list(units.keys()):
             q = units[u]
