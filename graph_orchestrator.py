@@ -4243,24 +4243,34 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
 
     from ai_helpers import get_deterministic_variety_prompt
     variety_prompt = get_deterministic_variety_prompt(history_context, form_data, user_id=_uid, rejection_reasons=rejection_reasons)
-    # [P3-CONDITION-RULES · 2026-06-14] Anexa las reglas clínicas por condición (DM2 ADA 2026 /
-    # ERC KDIGO 2024) al bloque de reglas determinista que SIEMPRE llega al generador. No-op para
-    # usuarios sin condición cubierta (el builder retorna ""). Lever de prompt; el refuerzo
-    # determinista (cap proteína renal, piso fibra DM2) ya vive en assemble/micronutrients.
+    # [P1-MED-CONTEXT-DAYGEN · 2026-06-22] Las directivas clínicas deterministas (condición +
+    # medicación) se computan en un bloque PROPIO (`clinical_directives_context`) para que lleguen
+    # NO SOLO al esqueleto (vía variety_prompt, abajo) sino TAMBIÉN al day-generator de producción
+    # (`generate_days_parallel_node`), que es el nodo que elige los ingredientes/recetas reales
+    # (toronja↔estatina, hoja verde↔warfarina, sustituto de sal↔IECA). Pre-fix solo se anexaban a
+    # `variety_prompt` → únicamente el esqueleto las veía; un perfil medicado en tier gratis (Flash,
+    # el day-gen escala a PRO solo por tier) recibía el prompt del plato SIN la directiva. No-op para
+    # perfiles sin condición/medicamento cubierto (ambos builders retornan "") → day-gen prompt
+    # byte-equivalente = prompt-cache preservado. tooltip-anchor: P1-MED-CONTEXT-DAYGEN
+    clinical_directives = ""
+    # [P3-CONDITION-RULES · 2026-06-14] Reglas clínicas por condición (DM2 ADA 2026 / ERC KDIGO 2024).
+    # No-op para usuarios sin condición cubierta. Lever de prompt; el refuerzo determinista (cap
+    # proteína renal, piso fibra DM2) ya vive en assemble/micronutrients.
     if CONDITION_RULES_ENABLED:
         try:
-            variety_prompt = (variety_prompt or "") + build_medical_condition_context(form_data)
+            clinical_directives += build_medical_condition_context(form_data)
         except Exception:
             pass
-    # [P1-MEDICATION-RULES · 2026-06-18] (audit fresco P1-A) Anexa las interacciones fármaco-alimento
-    # (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe) al mismo bloque
-    # determinista. No-op para perfiles sin medicamento cubierto. Lever de prompt; el gate FS9 + el
-    # monitor de vit K (anticoagulante) viven en _apply_deterministic_clinical_layer (Guard 8d).
+    # [P1-MEDICATION-RULES · 2026-06-18] (audit fresco P1-A) Interacciones fármaco-alimento
+    # (warfarina↔vit K, metformina↔B12, IECA/ARA-II↔potasio, levotiroxina↔Ca/Fe). No-op para perfiles
+    # sin medicamento cubierto. Lever de prompt; el gate FS9 + el monitor de vit K (anticoagulante)
+    # viven en _apply_deterministic_clinical_layer (Guard 8d).
     if MEDICATION_RULES_ENABLED:
         try:
-            variety_prompt = (variety_prompt or "") + build_medication_context(form_data)
+            clinical_directives += build_medication_context(form_data)
         except Exception:
             pass
+    variety_prompt = (variety_prompt or "") + clinical_directives
     adherence_hint = form_data.get("_adherence_hint", "")
     meal_level_adherence = form_data.get("_meal_level_adherence", {})
     ignored_meal_types = form_data.get("_ignored_meal_types", [])
@@ -4338,6 +4348,11 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         "pantry_drift_context": build_pantry_drift_context(form_data.get("_pantry_drift_warning")),
         "time_context": build_time_context(),
         "variety_prompt": variety_prompt,
+        # [P1-MED-CONTEXT-DAYGEN · 2026-06-22] Directivas clínicas (condición + medicación) aisladas
+        # de la variedad para inyectarlas TAMBIÉN al day-generator (donde se eligen los ingredientes
+        # reales). "" si el perfil no tiene condición/medicamento cubierto. tooltip-anchor:
+        # P1-MED-CONTEXT-DAYGEN
+        "clinical_directives_context": clinical_directives,
         "supplements_context": build_supplements_context(form_data),
         # [BUDGET-CUSTOM · 2026-05-31] Presupuesto (categórico + monto custom RD$)
         # → ajuste de ingredientes. Pre-fix `budget` no llegaba al LLM.
@@ -6130,6 +6145,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             f"{ctx['motivation_context']}\n"
             f"{ctx['sleep_stress_context']}\n"
             f"{ctx['super_personalization_context']}\n"
+            # [P1-MED-CONTEXT-DAYGEN · 2026-06-22] Directivas clínicas deterministas (condición +
+            # interacción fármaco-alimento) en el prompt del nodo que elige ingredientes/recetas
+            # reales. Antes solo llegaban al esqueleto; ahora también al day-gen (incluido Flash en
+            # tier gratis). "" si el perfil no aplica. tooltip-anchor: P1-MED-CONTEXT-DAYGEN
+            f"{ctx['clinical_directives_context']}\n"
             f"{assignment_context}\n"
             f"{recycled_days_context}\n"
         )
@@ -8670,6 +8690,18 @@ DM2_SUGAR_GUARD = _env_bool("MEALFIT_DM2_SUGAR_GUARD", True)
 # hace diet-aware (SIN esto el fallback servía pollo/huevo/pescado igual — counterproductivo). Safety gate
 # → default True; flip a False revierte a depender solo del LLM. Anchor: P1-DIET-HARD-GUARD.
 DIET_HARD_GUARD = _env_bool("MEALFIT_DIET_HARD_GUARD", True)
+# [P1-SURGICAL-PROMOTE-BYPASS · 2026-06-22] (audit fresco P1-2) `surgical_marker_regen_node` promovía el
+# plan re-corrigido a `_best_attempt_review_passed=True` + severity='approved' de forma INCONDICIONAL
+# cuando fixed_count>0. Si la corrección LLM introducía un déficit de proteína (observado en vivo) o un
+# producto animal en un plan veg*, ese snapshot 'approved' sobrevivía a la re-review (la democión queda
+# bloqueada por current_rank<prior_rank) y `_swap_to_best_attempt_if_better` restauraba review_passed=True
+# → los backstops fail-hard (piso de proteína, diet guard), gateados por `not review_passed`, NO corrían
+# → plan degradado entregado SIN banner. Con este gate, antes de promover re-validamos el plan
+# post-surgical con los MISMOS escáneres deterministas del review (`_protein_floor_shortfall` +
+# `_scan_diet_violations`); si regresa una violación, NO promovemos (dejamos el snapshot 'approved'
+# pre-surgical como best y que la re-review + los backstops finales manejen la regresión). Default True;
+# flip a False revierte a la promoción incondicional previa. Anchor: P1-SURGICAL-PROMOTE-BYPASS.
+SURGICAL_PROMOTE_REVALIDATE = _env_bool("MEALFIT_SURGICAL_PROMOTE_REVALIDATE", True)
 # [P1-DM2-GLYCEMIC-ONLY · 2026-06-15] (gap-audit P1-1) El soft-reject DM2 (DM2_GLYCEMIC_SOFT_REJECT)
 # degradaba CUALQUIER critical del revisor a 'high' para diabéticos — no solo el glucémico — excluyendo
 # solo los flags deterministas (schema/alérgeno/renal/dieta). Un critical de seguridad NO-glucémico
@@ -8787,6 +8819,7 @@ _SAFETY_CRITICAL_KNOBS = (
     ("MEALFIT_DIET_HARD_GUARD", lambda: DIET_HARD_GUARD),  # [P1-DIET-HARD-GUARD] backstop vegano/vegetariano
     ("MEALFIT_DM2_DOWNGRADE_GLYCEMIC_ONLY", lambda: DM2_DOWNGRADE_GLYCEMIC_ONLY),  # [P1-DM2-GLYCEMIC-ONLY]
     ("MEALFIT_MEDICATION_RULES", lambda: MEDICATION_RULES_ENABLED),  # [P1-MEDICATION-RULES] interacciones fármaco-alimento + FS9
+    ("MEALFIT_SURGICAL_PROMOTE_REVALIDATE", lambda: SURGICAL_PROMOTE_REVALIDATE),  # [P1-SURGICAL-PROMOTE-BYPASS] re-validación pre-promoción del surgical regen
 )
 
 
@@ -9582,6 +9615,38 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
                     violations.append((meal.get("name", "?"), str(ing), label))
                     break
     return violations
+
+
+def _surgical_promote_blocked_reason(new_plan_result: dict, form_data: dict):
+    """[P1-SURGICAL-PROMOTE-BYPASS · 2026-06-22] (audit fresco P1-2) SSOT testeable del gate de
+    promoción de `surgical_marker_regen_node`. Devuelve el motivo (str) por el que el plan
+    post-surgical NO debe promoverse a 'approved'/review_passed=True, o `None` si es seguro promover.
+
+    Re-usa los MISMOS escáneres deterministas del review:
+      - `_protein_floor_shortfall` (exento renal — su techo KDIGO manda; subir proteína sería iatrogénico).
+      - `_scan_diet_violations` (producto animal en plan veg*), gateado por `DIET_HARD_GUARD`.
+
+    Razón: la corrección LLM del surgical regen puede introducir un déficit de proteína (observado en
+    vivo) o un producto animal prohibido. Si se promueve un plan así a 'approved', el snapshot sobrevive
+    a la re-review y `_swap_to_best_attempt_if_better` restaura review_passed=True → los backstops
+    fail-hard (gateados por `not review_passed`) NO corren → plan degradado entregado SIN banner. Si
+    este helper devuelve un motivo, el nodo NO promueve y deja el snapshot 'approved' pre-surgical como
+    best. Fail-safe: un error del escáner devuelve un motivo (conservador → no promover).
+    tooltip-anchor: P1-SURGICAL-PROMOTE-BYPASS"""
+    if not isinstance(new_plan_result, dict):
+        return None
+    try:
+        _renal_capped = bool((new_plan_result.get("renal_protein_cap") or {}).get("applied"))
+        _short = _protein_floor_shortfall(new_plan_result, renal_capped=_renal_capped)
+        if _short:
+            return "piso de proteína: " + "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short[:4])
+        if DIET_HARD_GUARD:
+            _viol = _scan_diet_violations(new_plan_result, form_data.get("dietType") if isinstance(form_data, dict) else None)
+            if _viol:
+                return "dieta veg*: " + "; ".join(f"'{_ing}' ({_cat}) en {_mn}" for _mn, _ing, _cat in _viol[:4])
+    except Exception as _e:
+        return f"error de re-validación: {type(_e).__name__}: {_e}"
+    return None
 
 
 # [P1-DM2-GLYCEMIC-ONLY · 2026-06-15] (gap-audit P1-1) Marcadores (acent-stripped) para clasificar si un
@@ -13760,7 +13825,19 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
         "plan_result": new_plan_result,
         "_marker_regen_attempted": True,
     }
-    if fixed_count > 0:
+    # [P1-SURGICAL-PROMOTE-BYPASS · 2026-06-22] (audit fresco P1-2) Antes de promover el plan
+    # post-surgical a 'approved'/review_passed=True, re-validamos que la corrección LLM no haya
+    # introducido una regresión DE SEGURIDAD que el snapshot 'approved' enmascararía (la promoción
+    # hace que `_swap_to_best_attempt_if_better` restaure review_passed=True → los backstops fail-hard,
+    # gateados por `not review_passed`, NO correrían). Usamos los MISMOS escáneres deterministas que el
+    # review: piso de proteína (exento renal — su techo KDIGO manda) y diet-hard-guard (producto animal
+    # en plan veg*). Si hay violación, NO promovemos: dejamos el snapshot 'approved' pre-surgical (que
+    # YA pasó el review médico) como best, y la re-review + los guardrails finales manejan la regresión.
+    # tooltip-anchor: P1-SURGICAL-PROMOTE-BYPASS
+    _sr_promote_blocked_reason = None
+    if SURGICAL_PROMOTE_REVALIDATE and fixed_count > 0:
+        _sr_promote_blocked_reason = _surgical_promote_blocked_reason(new_plan_result, form_data)
+    if fixed_count > 0 and _sr_promote_blocked_reason is None:
         # [P2-MARKER-REGEN-CLINICAL-RECHECK · 2026-06-19] (audit fresco P2-13) Los días re-corregidos por
         # surgical_marker_regen NO recibieron la capa clínica completa (solo el re-trim de proteína general). Si
         # re-review demota y este snapshot se restaura, se entregaría sin food-safety + subs de sodio. Stripeamos
@@ -13780,6 +13857,16 @@ Devuelve el Día {day_num} corregido con EXACTAMENTE la misma estructura JSON y 
             f"({fixed_count}/{len(marker_day_nums)} markers resueltos) a "
             f"best_attempt — protege contra rollback si re-review demote "
             f"por issue ortogonal."
+        )
+    elif fixed_count > 0:
+        # [P1-SURGICAL-PROMOTE-BYPASS] La corrección resolvió markers PERO introdujo una regresión de
+        # seguridad → NO promovemos. El plan post-surgical sigue en `plan_result` (va a re-review +
+        # backstops finales); el snapshot 'approved' pre-surgical queda como best para el swap.
+        logger.warning(
+            f"🛡 [P1-SURGICAL-PROMOTE-BYPASS] Plan post-surgical NO promovido a 'approved' "
+            f"({fixed_count}/{len(marker_day_nums)} markers resueltos) — regresión detectada "
+            f"({_sr_promote_blocked_reason}). Re-review + backstops fail-hard manejarán la regresión; "
+            f"se preserva el snapshot pre-surgical aprobado para el swap."
         )
     return state_update
 
