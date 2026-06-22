@@ -1001,15 +1001,32 @@ def get_nutrition_targets(form_data: dict) -> dict:
     # NOTA: El frontend envía el peso en la unidad que el usuario seleccionó (LB o KG)
     # junto con el campo 'weightUnit' que indica la unidad.
     # La altura siempre se almacena en CM.
+    _age_defaulted = False
     try:
         weight_raw = float(form_data.get("weight", 154))
         height = float(form_data.get("height", 170))
         # [P1-MINOR-SAFETY-GATE review] `int(float(...))` (no `int(...)`) para igualar al router
         # (`_coerce_numeric kind='int'`): un age string-decimal ("17.5") NO debe caer al default 25
         # (adulto) y eludir el gate de menores — int("17.5") lanza, int(float("17.5"))=17.
-        age = int(float(form_data.get("age", 25)))
+        _age_raw = form_data.get("age")
+        age = int(float(_age_raw)) if _age_raw is not None else 25
+        _age_defaulted = _age_raw is None
     except (ValueError, TypeError):
         weight_raw, height, age = 154, 170, 25  # Defaults seguros
+        _age_defaulted = True
+    # [P2-MINOR-GATE-SILENT-DEFAULT · 2026-06-22] (audit fresco P2-7) age ausente/no-parseable cae al default
+    # 25 (adulto) → un menor real de un caller interno legacy eludiría el gate de menores (BMR adulto + déficit
+    # permitido, sin FS9) SIN rastro. El path normal (router `_validate_form_data_min`) siempre envía age válido
+    # → esto solo afecta callers internos que leen perfiles legacy. WARNEAMOS para observabilidad (mismo patrón
+    # que weightUnit P0-FORM-4): un operador que vea esta línea para un usuario real investiga el caller.
+    # tooltip-anchor: P2-MINOR-GATE-SILENT-DEFAULT
+    if _age_defaulted:
+        logger.warning(
+            f"[P2-MINOR-GATE-SILENT-DEFAULT] nutrition_calculator: age ausente/no-parseable en form_data "
+            f"(user_id={form_data.get('user_id')}, raw={form_data.get('age')!r}). Asumiendo 25 (adulto) — si "
+            f"el usuario fuera MENOR, el gate de menores (FS9) NO se aplicaría. Bug del caller si es un perfil "
+            f"real; el path por router valida age."
+        )
     
     # [P0-FORM-4] El path normal pasa por `_validate_form_data_min` (router) que
     # ya rechaza payloads sin `weightUnit`. Pero esta función también la invocan

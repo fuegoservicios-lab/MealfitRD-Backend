@@ -924,6 +924,18 @@ _HEALTH_SNAPSHOT_WATCHDOG_NODES = (
     "_pipeline_metrics_silence_check_tick",
 )
 
+# [P2-FLEET-QUALITY-VISIBILITY · 2026-06-22] (audit fresco P2-18) Crons de calidad de flota cuyos
+# números actuales (band score / fallback rate / review-failed rate / cobertura de resolución) el
+# health-snapshot ahora expone ON-DEMAND — antes SRE solo veía las alertas por-umbral, no los valores.
+# Cada cron emite un tick `_<job>_tick` a pipeline_metrics (confidence=valor + metadata con n_plans/skip_reason).
+# tooltip-anchor: P2-FLEET-QUALITY-VISIBILITY
+_HEALTH_SNAPSHOT_FLEET_QUALITY_NODES = (
+    "_clinical_band_drift_alert_job_tick",
+    "_plan_fallback_rate_alert_job_tick",
+    "_resolution_coverage_drift_alert_job_tick",
+    "_review_failed_delivered_rate_alert_job_tick",
+)
+
 
 @router.get("/admin/health-snapshot")
 def admin_health_snapshot(request: Request):
@@ -1085,6 +1097,40 @@ def admin_health_snapshot(request: Request):
     except Exception as e:
         logger.debug(f"[P1-OBS-1] get_compressor_cache_stats falló: {e}")
 
+    # 7. [P2-FLEET-QUALITY-VISIBILITY · 2026-06-22] Números de calidad de flota ON-DEMAND: último tick de
+    # cada cron de calidad (valor + metadata con n_plans/skip_reason/threshold). Cierra el gap "solo veíamos
+    # las alertas por-umbral, no los valores actuales" — un curl muestra band/fallback/review-failed/cobertura.
+    fleet_quality: dict = {node: None for node in _HEALTH_SNAPSHOT_FLEET_QUALITY_NODES}
+    try:
+        rows = execute_sql_query(
+            """
+            SELECT DISTINCT ON (node) node, created_at, confidence, metadata
+              FROM pipeline_metrics
+             WHERE node = ANY(%s::text[])
+             ORDER BY node, created_at DESC
+            """,
+            (list(_HEALTH_SNAPSHOT_FLEET_QUALITY_NODES),),
+            fetch_all=True,
+        ) or []
+        for r in rows:
+            node = r.get("node")
+            if not node:
+                continue
+            _md = r.get("metadata")
+            if isinstance(_md, str):
+                try:
+                    _md = json.loads(_md)
+                except Exception:
+                    _md = None
+            _last = r.get("created_at")
+            fleet_quality[str(node)] = {
+                "last_at": _last.isoformat() if _last else None,
+                "value": float(r["confidence"]) if r.get("confidence") is not None else None,
+                "metadata": _md if isinstance(_md, dict) else None,
+            }
+    except Exception as e:
+        logger.debug(f"[P2-FLEET-QUALITY-VISIBILITY] SELECT fleet_quality falló: {e}")
+
     return {
         "success": True,
         "live_marker": live_marker,
@@ -1097,6 +1143,7 @@ def admin_health_snapshot(request: Request):
         "dead_lettered_chunks": dead_lettered_chunks,
         "open_circuit_breakers": open_circuit_breakers,
         "compressor_cache": compressor_cache,
+        "fleet_quality": fleet_quality,
     }
 
 

@@ -1881,7 +1881,26 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
         normalized_restrictions.extend(["camaron", "camarones", "pescado", "atun"])
     if any(r in ["carne", "carnes", "meat"] for r in normalized_restrictions):
         normalized_restrictions.extend(["pollo", "cerdo", "res", "chuleta", "longaniza", "salami"])
-        
+    # [P2-VARIETY-CATALOG-NOT-FILTERED · 2026-06-22] (audit fresco P2-4) Catch-all de categorías de alérgenos
+    # cuyos chips llegan como CATEGORÍA ("lácteos"/"frutos secos"/"huevo"...) y NO matchean los nombres
+    # concretos del catálogo (Queso, Yogurt, Nueces, Huevos) — análogo al catch-all de mariscos/carne de arriba.
+    # Pre-fix solo mariscos/carne se expandían → un alérgico a lácteos/nueces/huevo veía esos alimentos en el
+    # pool de variedad (el allergen guard determinista downstream los bloqueaba, pero subía rechazo→retry).
+    # Sesgo a sobre-filtrar. tooltip-anchor: P2-VARIETY-CATALOG-NOT-FILTERED
+    if any(r in ["lacteos", "lacteo", "lactosa", "dairy"] for r in normalized_restrictions):
+        normalized_restrictions.extend(["leche", "queso", "yogur", "yogurt", "mantequilla", "crema",
+                                        "ricotta", "mozzarella", "parmesano", "requeson", "suero de leche"])
+    if any(r in ["frutos secos", "nueces", "nuts", "tree nuts"] for r in normalized_restrictions):
+        normalized_restrictions.extend(["almendra", "nuez", "maranon", "pistacho", "avellana", "merey", "anacardo"])
+    if any(r in ["mani", "cacahuate", "peanut", "peanuts"] for r in normalized_restrictions):
+        normalized_restrictions.extend(["mani", "cacahuate", "mantequilla de mani"])
+    if any(r in ["huevo", "huevos", "egg", "eggs"] for r in normalized_restrictions):
+        normalized_restrictions.extend(["huevo", "clara", "yema", "mayonesa"])
+    if any(r in ["gluten", "trigo", "wheat"] for r in normalized_restrictions):
+        normalized_restrictions.extend(["trigo", "pan", "pasta", "harina de trigo", "galleta"])
+    if any(r in ["soya", "soja", "soy"] for r in normalized_restrictions):
+        normalized_restrictions.extend(["soya", "soja", "tofu", "edamame"])
+
     # [OPTIMIZACIÓN O(1)] Compilar un único patrón maestro ultra veloz
     import re
     or_pattern = '|'.join(map(re.escape, normalized_restrictions))

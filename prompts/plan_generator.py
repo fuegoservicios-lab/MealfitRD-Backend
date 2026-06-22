@@ -393,11 +393,35 @@ _SUPERPERS_FLAVOR_LABELS = {"picante": "picante", "dulce": "dulce", "salado": "s
 _SUPERPERS_FLAVOR_LEVELS = {"bajo", "medio", "alto"}
 
 
+def _scrub_superpers_text(s: str) -> str:
+    """[P2-SUPERPERS-FREETEXT-SANITIZE · 2026-06-22] (audit fresco P2-11) Scrub P1-Q8 de un campo de TEXTO
+    LIBRE de súper personalización ANTES de inyectarlo a un prompt. El CHAT (agent.py) NO sanitiza form_data
+    como sí hace el plan (`_sanitize_form_data_recursive`); este builder es el SSOT read-path de AMBAS rutas,
+    así que saneamos aquí. Quita invisibles/bidi (preservando acentos/mayúsculas para el display) y blanquea
+    el valor si detecta un patrón de inyección. Lazy import (graph_orchestrator importa este módulo → el
+    deferred evita el ciclo; en runtime el orquestador ya está cargado). Fail-open al texto crudo solo si el
+    sanitizador no carga. tooltip-anchor: P2-SUPERPERS-FREETEXT-SANITIZE"""
+    if not isinstance(s, str) or not s.strip():
+        return ""
+    try:
+        from graph_orchestrator import _detect_injection_in_text, _INVISIBLE_CHAR_RX
+        stripped = _INVISIBLE_CHAR_RX.sub("", s).strip()
+        if _detect_injection_in_text(stripped):
+            return ""  # inyección detectada → descartar el campo (no envenenar el prompt)
+        return stripped
+    except Exception:
+        return s.strip()
+
+
 def build_super_personalization_context(form_data: dict) -> str:
     """[P1-SUPERPERSONALIZATION-1] Bloque de súper personalización del usuario.
 
     Lee `form_data["super_personalization"]` (dict). Retorna "" si no hay datos
     accionables (no-op transparente). Ver contrato en el comentario de arriba.
+
+    [P2-SUPERPERS-FREETEXT-SANITIZE · 2026-06-22] Los campos de texto libre
+    (foodLikes/cuisines/kitchenEquipment/religiousRestrictionOther/freeText) pasan
+    por `_scrub_superpers_text` (P1-Q8) antes de entrar al prompt.
     """
     if not isinstance(form_data, dict):
         return ""
@@ -416,7 +440,14 @@ def build_super_personalization_context(form_data: dict) -> str:
         v = sp.get(key)
         if not isinstance(v, list):
             return []
-        return [str(x).strip() for x in v if isinstance(x, str) and str(x).strip()]
+        # [P2-SUPERPERS-FREETEXT-SANITIZE] cada item de lista es texto libre del usuario → scrub P1-Q8.
+        out = []
+        for x in v:
+            if isinstance(x, str):
+                sx = _scrub_superpers_text(x)
+                if sx:
+                    out.append(sx)
+        return out
 
     lines = []
     likes = _clean_list("foodLikes")
@@ -439,10 +470,10 @@ def build_super_personalization_context(form_data: dict) -> str:
         rel = religion.strip().lower()
         if rel == "otra":
             # Restricción libre del usuario → exclusión DURA (igual que los presets).
-            other = sp.get("religiousRestrictionOther")
-            if isinstance(other, str) and other.strip():
+            other = _scrub_superpers_text(sp.get("religiousRestrictionOther") or "")
+            if other:
                 lines.append(
-                    f'🕌 Restricción cultural/religiosa del usuario: "{other.strip()}". Respétala '
+                    f'🕌 Restricción cultural/religiosa del usuario: "{other}". Respétala '
                     f"SIEMPRE — NUNCA incluyas lo que prohíbe."
                 )
         else:
@@ -468,9 +499,8 @@ def build_super_personalization_context(form_data: dict) -> str:
                 f"👅 Perfil de sabor preferido ({', '.join(flavor_parts)}): ajusta condimentación dentro de lo permitido."
             )
 
-    free = sp.get("freeText")
-    if isinstance(free, str) and free.strip():
-        free_t = free.strip()
+    free_t = _scrub_superpers_text(sp.get("freeText") or "")
+    if free_t:
         if len(free_t) > 1200:
             free_t = free_t[:1200] + "…"
         lines.append(f'📝 En sus palabras: "{free_t}"')

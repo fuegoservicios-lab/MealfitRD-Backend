@@ -207,6 +207,14 @@ def _parse_emitted_patterns() -> dict[str, list[tuple[Path, int, str]]]:
         r'_emit_dreaming_alert\s*\(\s*[\n\s]*f?["\']([^"\'\n]+)["\']',
         re.DOTALL,
     )
+    # Patrón 6 [P2-PIPELINE-CRASH-NO-ALERT · 2026-06-22]: callsites de
+    # `_persist_pipeline_crash_alert("alert_key_literal", ...)` (graph_orchestrator.py). El primer
+    # argumento posicional es el alert_key literal; el helper hace el INSERT INTO system_alerts
+    # internamente (recibe alert_key como variable → patrón 3 no lo detecta).
+    persist_crash_re = re.compile(
+        r'_persist_pipeline_crash_alert\s*\(\s*[\n\s]*f?["\']([^"\'\n]+)["\']',
+        re.DOTALL,
+    )
 
     for fp in _EMITTER_FILES:
         if not fp.exists():
@@ -240,6 +248,12 @@ def _parse_emitted_patterns() -> dict[str, list[tuple[Path, int, str]]]:
             out.setdefault(norm, []).append((fp.relative_to(_REPO_ROOT), line_no, raw))
         # Patrón 5 [P1-DREAMING-1]: callsites de `_emit_dreaming_alert`.
         for m in emit_dreaming_re.finditer(text):
+            raw = m.group(1)
+            norm = _normalize_pattern(raw)
+            line_no = text.count("\n", 0, m.start(1)) + 1
+            out.setdefault(norm, []).append((fp.relative_to(_REPO_ROOT), line_no, raw))
+        # Patrón 6 [P2-PIPELINE-CRASH-NO-ALERT]: callsites de `_persist_pipeline_crash_alert`.
+        for m in persist_crash_re.finditer(text):
             raw = m.group(1)
             norm = _normalize_pattern(raw)
             line_no = text.count("\n", 0, m.start(1)) + 1

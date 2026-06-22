@@ -5462,8 +5462,13 @@ def _clinical_band_drift_alert_job():
     clamp [1,10000]), MEALFIT_BAND_DRIFT_THRESHOLD (0.45), MEALFIT_BAND_DRIFT_INTERVAL_H (6, clamp [1,48]).
     Tooltip-anchor: P4-SCOREBOARD."""
     alert_key = "clinical_band_drift"
-    lookback_h = max(1, min(_env_int("MEALFIT_BAND_DRIFT_LOOKBACK_H", 24), 168))
-    min_samples = max(1, min(_env_int("MEALFIT_BAND_DRIFT_MIN_SAMPLES", 10), 10_000))
+    # [P2-FLEET-CRON-MIN-SAMPLES · 2026-06-22] (audit fresco P2-17) Defaults previos (lookback 24h +
+    # min_samples 10) hacían SKIP permanente al volumen real (~7 gen/día → ~7 < 10) → la detección de
+    # degradación SISTÉMICA quedaba apagada y SRE leía "sin alertas" como "sano". Subimos lookback a 72h
+    # (~21 muestras a 7/día) y bajamos el piso a 5 → el cron evalúa de verdad. Ambos siguen siendo knobs
+    # (clamps intactos). Mismo cambio en los 4 crons de calidad de flota. tooltip-anchor: P2-FLEET-CRON-MIN-SAMPLES
+    lookback_h = max(1, min(_env_int("MEALFIT_BAND_DRIFT_LOOKBACK_H", 72), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_BAND_DRIFT_MIN_SAMPLES", 5), 10_000))
     threshold = _env_float("MEALFIT_BAND_DRIFT_THRESHOLD", 0.45)
     _n = 0
     _avg = None
@@ -5559,8 +5564,9 @@ def _plan_fallback_rate_alert_job():
     clamp [1,10000]), MEALFIT_FALLBACK_RATE_THRESHOLD (0.25), MEALFIT_FALLBACK_RATE_INTERVAL_H (6, [1,48]).
     Tooltip-anchor: P1-MACRO-ROLLOUT-OBS."""
     alert_key = "plan_fallback_rate_high"
-    lookback_h = max(1, min(_env_int("MEALFIT_FALLBACK_RATE_LOOKBACK_H", 24), 168))
-    min_samples = max(1, min(_env_int("MEALFIT_FALLBACK_RATE_MIN_SAMPLES", 10), 10_000))
+    # [P2-FLEET-CRON-MIN-SAMPLES · 2026-06-22] lookback 24→72h + piso 10→5 (ver _clinical_band_drift_alert_job).
+    lookback_h = max(1, min(_env_int("MEALFIT_FALLBACK_RATE_LOOKBACK_H", 72), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_FALLBACK_RATE_MIN_SAMPLES", 5), 10_000))
     threshold = _env_float("MEALFIT_FALLBACK_RATE_THRESHOLD", 0.25)
     _n = 0
     _fb = 0
@@ -5655,8 +5661,9 @@ def _resolution_coverage_drift_alert_job():
     clamp [1,10000]), MEALFIT_RESCOV_DRIFT_THRESHOLD (0.85), MEALFIT_RESCOV_DRIFT_INTERVAL_H (6, clamp [1,48]).
     Tooltip-anchor: P2-RESOLUTION-COVERAGE-DRIFT."""
     alert_key = "resolution_coverage_drift"
-    lookback_h = max(1, min(_env_int("MEALFIT_RESCOV_DRIFT_LOOKBACK_H", 24), 168))
-    min_samples = max(1, min(_env_int("MEALFIT_RESCOV_DRIFT_MIN_SAMPLES", 10), 10_000))
+    # [P2-FLEET-CRON-MIN-SAMPLES · 2026-06-22] lookback 24→72h + piso 10→5 (ver _clinical_band_drift_alert_job).
+    lookback_h = max(1, min(_env_int("MEALFIT_RESCOV_DRIFT_LOOKBACK_H", 72), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_RESCOV_DRIFT_MIN_SAMPLES", 5), 10_000))
     threshold = _env_float("MEALFIT_RESCOV_DRIFT_THRESHOLD", 0.85)
     _n = 0
     _avg = None
@@ -5750,8 +5757,9 @@ def _review_failed_delivered_rate_alert_job():
     clamp [1,10000]), MEALFIT_REVFAIL_RATE_THRESHOLD (0.20), MEALFIT_REVFAIL_RATE_INTERVAL_H (6, clamp [1,48]).
     Tooltip-anchor: P2-REVIEW-FAILED-RATE."""
     alert_key = "review_failed_delivered_rate_high"
-    lookback_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_LOOKBACK_H", 24), 168))
-    min_samples = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_MIN_SAMPLES", 10), 10_000))
+    # [P2-FLEET-CRON-MIN-SAMPLES · 2026-06-22] lookback 24→72h + piso 10→5 (ver _clinical_band_drift_alert_job).
+    lookback_h = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_LOOKBACK_H", 72), 168))
+    min_samples = max(1, min(_env_int("MEALFIT_REVFAIL_RATE_MIN_SAMPLES", 5), 10_000))
     threshold = _env_float("MEALFIT_REVFAIL_RATE_THRESHOLD", 0.20)
     _n = 0
     _rf = 0
@@ -18087,10 +18095,11 @@ def _process_pending_shopping_lists():
                     logger.warning(f"[P2-COHERENCE-RECOVERY-GAP-F] guard de coherencia falló (no bloquea): "
                                    f"{type(_coh_e).__name__}: {_coh_e}")
 
+                # Solo para el log (snapshot del SELECT inicial); el WRITE recomputa el status FRESCO en SQL.
                 total_generated = plan_data.get('total_days_generated', 0)
                 total_requested = plan_data.get('total_days_requested', 7)
-                new_status = "complete" if total_generated >= int(total_requested) else "partial"
-                
+                _snapshot_status = "complete" if total_generated >= int(total_requested) else "partial"
+
                 # [P1-SHOPPING-1 · 2026-05-13] Defense-en-profundidad I2: el
                 # cron `_process_pending_shopping_lists` itera planes
                 # `partial_no_shopping` system-wide (sin user input) y el FK del
@@ -18100,6 +18109,12 @@ def _process_pending_shopping_lists():
                 # contra el riesgo de reusar este UPDATE como template para
                 # un endpoint user-facing futuro (donde la omisión sí abriría
                 # IDOR). El `user_id` ya viene del SELECT inicial (línea ~14218).
+                # [P2-RECOVERY-CRON-STALE-WINDOW · 2026-06-22] (audit fresco P2-19) `generation_status` se
+                # computa AHORA con un CASE en SQL que relee `total_days_generated`/`total_days_requested`
+                # FRESCOS del row al momento del UPDATE — no del snapshot Python del SELECT inicial. Cierra la
+                # ventana stale donde /shift-plan o el chunk worker T2 modificaban `total_days_generated`
+                # entre el SELECT y este WRITE → status incoherente. jsonb_set sigue siendo key-surgical
+                # (I7-exento) + AND user_id (I2) + CHECK I8 lo respalda. tooltip-anchor: P2-RECOVERY-CRON-STALE-WINDOW
                 execute_sql_write("""
                     UPDATE meal_plans
                     SET plan_data = jsonb_set(
@@ -18113,7 +18128,12 @@ def _process_pending_shopping_lists():
                             ),
                             '{aggregated_shopping_list}', %s::jsonb
                         ),
-                        '{generation_status}', %s::jsonb
+                        '{generation_status}',
+                        to_jsonb(
+                            CASE WHEN COALESCE(NULLIF(plan_data->>'total_days_generated', '')::int, 0)
+                                      >= COALESCE(NULLIF(plan_data->>'total_days_requested', '')::int, 7)
+                                 THEN 'complete' ELSE 'partial' END
+                        )
                     )
                     WHERE id = %s AND user_id = %s
                 """, (
@@ -18121,11 +18141,11 @@ def _process_pending_shopping_lists():
                     json.dumps(aggr_15_hybrid, ensure_ascii=False),
                     json.dumps(aggr_30_hybrid, ensure_ascii=False),
                     json.dumps(aggr_active, ensure_ascii=False),
-                    json.dumps(new_status),
                     meal_plan_id,
                     user_id,
                 ))
-                logger.info(f" [GAP F] Shopping list recuperada para plan {meal_plan_id}.")
+                logger.info(f" [GAP F] Shopping list recuperada para plan {meal_plan_id} "
+                            f"(status snapshot={_snapshot_status}; el WRITE recomputó fresco en SQL).")
             except Exception as e:
                 logger.error(f" [GAP F] Error recuperando shopping list para plan {meal_plan_id}: {e}")
     except Exception as e:

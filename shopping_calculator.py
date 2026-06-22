@@ -2818,12 +2818,23 @@ def compare_expected_vs_aggregated(
 
             delta_pct = abs(act_qty - exp_qty) / exp_qty
             if delta_pct > tolerance:
+                # [P2-COHERENCE-PACKAGE-UNITS · 2026-06-22] (audit fresco P2-15) Falso-positivo de magnitud
+                # por unidades de ENVASE no convertibles: la receta pide el alimento en una unidad convertible
+                # (g/ml/lb) pero `apply_smart_market_units` lo presenta en la lista como envase (pote/frasco/
+                # Ud.). El conversor (`_normalize_food_units_to_base`) solo unifica g/ml/lb → para la unidad
+                # esperada act_qty=0 aunque el alimento SÍ está en la lista bajo otra unidad → delta_pct=1.0
+                # finito → entraba al subset crítico B → block + retry FALSO. Lo detectamos (alimento presente
+                # bajo OTRA unidad) y lo tageamos `unit_mismatch`: sigue como telemetría warn pero NO es crítico
+                # (no se puede comparar magnitud entre "1 pote" y "200 g"). NO debilita la detección real: cuando
+                # las unidades SÍ son comparables, act_qty refleja la cantidad real. tooltip-anchor: P2-COHERENCE-PACKAGE-UNITS
+                _unit_mismatch = (act_qty == 0 and any(float(v or 0) > 0 for v in act_units.values()))
                 divergences.append({
                     "food": food,
                     "unit": unit,
                     "expected_qty": exp_qty,
                     "actual_qty": act_qty,
                     "delta_pct": delta_pct,
+                    "unit_mismatch": _unit_mismatch,
                     "hypothesis": _classify_divergence_hypothesis(exp_qty, act_qty, exp_units, act_units, food=food),
                 })
 
@@ -5071,9 +5082,13 @@ def run_shopping_coherence_guard(plan_result: dict, *, mode_override: str = None
             critical.extend(d for d in divergences if d["side"] == "expected_only")
             # Crítico B: divergencias de magnitud con delta finito > tolerance
             # (excluir fantasmas con delta=inf — pueden ser staples no marcados).
+            # [P2-COHERENCE-PACKAGE-UNITS · 2026-06-22] Excluir `unit_mismatch` (alimento presente bajo una
+            # unidad de envase no convertible: "1 pote" vs "200 g" no es una divergencia de magnitud real →
+            # bloquearía + reintentaría en falso). Sigue contado como divergencia warn (telemetría).
             critical.extend(
                 d for d in magnitude_divs
                 if d.get("delta_pct") != float("inf") and d.get("expected_qty", 0) > 0
+                and not d.get("unit_mismatch")
             )
             if critical:
                 plan_result["_shopping_coherence_block"] = critical

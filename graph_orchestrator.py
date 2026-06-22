@@ -4320,7 +4320,12 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # los targets duros para preservar balance. Reduce ~60-75% del
         # bloque, traduce a ~20-30s menos por corrección bajo provider load.
         "nutrition_context_minimal": build_minimal_correction_context(nutrition),
-        "adherence_context": build_adherence_context(adherence_hint, meal_level_adherence, ignored_meal_types, abandoned_reasons, emotional_state, successful_tone_strategies, nudge_conversion_rates, frustrated_meal_types),
+        # [P2-DREAMING-PLAN-DEADWRITE · 2026-06-22] (audit fresco P2-12) `_dream_plan_constraints`
+        # (bloque del user_model consolidado por el Dreaming, Fase 4) se computaba arriba pero NUNCA
+        # se inyectaba → feature muerta. Lo pasamos como `dynamic_user_constraints` (que
+        # `build_adherence_context` antepone al feedback de adherencia). "" cuando
+        # MEALFIT_DREAMING_INJECT_PLAN_ENABLED OFF (default) → bloque idéntico. tooltip-anchor: P2-DREAMING-PLAN-DEADWRITE
+        "adherence_context": build_adherence_context(adherence_hint, meal_level_adherence, ignored_meal_types, abandoned_reasons, emotional_state, successful_tone_strategies, nudge_conversion_rates, frustrated_meal_types, dynamic_user_constraints=_dream_plan_constraints),
         "success_patterns_context": build_success_patterns_context(succ_techs, aban_techs, []),
         "temporal_adherence_context": build_temporal_adherence_context(form_data.get("day_of_week_adherence", {})),
         "unified_behavioral_profile": build_unified_behavioral_profile(user_facts, fatigued_ingredients, liked_meals, liked_flavor_profiles, cold_start_recs, allergies, llm_retrospective),
@@ -4616,19 +4621,78 @@ _DAY_SYSTEM_INSTRUCTION_CACHED = (
 # hit preservado). Gateado por el MISMO knob que el enforcement de la lista
 # (_verified_ingredients_only_enabled). Fail-open: si la DB no lista o falla, retorna ""
 # (mejor un plan sin restricción que un pipeline roto). Tooltip-anchor: P3-VERIFIED-INGREDIENTS-ONLY.
-_VERIFIED_CATALOG_INSTRUCTION_CACHE = None
+# [P2-VERIFIED-CATALOG-NOT-FILTERED · 2026-06-22] cache keyed por frozenset de tokens excluidos
+# (antes era un único global → servía maní/lácteos/huevo/carnes a alérgicos y veganos, contradiciendo
+# la regla de exclusión del mismo prompt → subía rechazo→retry). El caso base (sin restricción) usa la
+# key frozenset() → byte-equivalente al bloque previo = prompt-cache preservado para la mayoría.
+_VERIFIED_CATALOG_INSTRUCTION_CACHE = {}
 
 
-def _get_verified_catalog_instruction() -> str:
-    global _VERIFIED_CATALOG_INSTRUCTION_CACHE
+def _verified_catalog_excluded_tokens(form_data) -> frozenset:
+    """[P2-VERIFIED-CATALOG-NOT-FILTERED · 2026-06-22] (audit fresco P2-3) Tokens (acent-stripped) que NO
+    deben aparecer en el catálogo verificado servido al day-gen: alérgenos declarados (+ sinónimos DD,
+    MISMA expansión que `_scan_allergen_violations`) ∪ productos animales prohibidos por la dieta
+    (`_DIET_*` según `_canonicalize_diet_type`). Sin form_data / sin restricción → frozenset() (catálogo
+    base completo). tooltip-anchor: P2-VERIFIED-CATALOG-NOT-FILTERED"""
+    if not isinstance(form_data, dict):
+        return frozenset()
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    excluded = set()
+    # Alérgenos (+ sinónimos) — misma lógica que `_scan_allergen_violations`.
+    allergies = form_data.get("allergies")
+    if isinstance(allergies, str):
+        allergies = [allergies]
+    for a in (allergies or []):
+        a_low = strip_accents(str(a).strip().lower())
+        if not a_low or a_low in _MEDICAL_NONE_SENTINELS:
+            continue
+        matched = False
+        for cat, syns in _ALLERGEN_SYNONYMS.items():
+            cat_n = strip_accents(cat)
+            if a_low == cat_n or cat_n in a_low or a_low in cat_n or \
+               any(a_low in strip_accents(s) or strip_accents(s) in a_low for s in syns):
+                excluded.update(strip_accents(s) for s in syns)
+                matched = True
+        if not matched:
+            excluded.add(a_low)  # alergia free-text → match literal
+    # Dieta (productos animales prohibidos) — misma partición que `_scan_diet_violations`.
+    canon = _canonicalize_diet_type(form_data.get("dietType"))
+    if canon == "vegan":
+        _diet_terms = _DIET_FLESH_TERMS + _DIET_SEAFOOD_TERMS + _DIET_EGG_TERMS + _DIET_DAIRY_TERMS
+    elif canon == "vegetarian":
+        _diet_terms = _DIET_FLESH_TERMS + _DIET_SEAFOOD_TERMS
+    elif canon == "pescatarian":
+        _diet_terms = _DIET_FLESH_TERMS
+    else:
+        _diet_terms = ()
+    for t in _diet_terms:
+        excluded.add(strip_accents(t))
+    return frozenset(excluded)
+
+
+def _get_verified_catalog_instruction(form_data=None) -> str:
     try:
         from shopping_calculator import _verified_ingredients_only_enabled, get_master_ingredients
         if not _verified_ingredients_only_enabled():
             return ""
     except Exception:
         return ""
-    if _VERIFIED_CATALOG_INSTRUCTION_CACHE is not None:
-        return _VERIFIED_CATALOG_INSTRUCTION_CACHE
+    excluded = _verified_catalog_excluded_tokens(form_data)
+    _cached = _VERIFIED_CATALOG_INSTRUCTION_CACHE.get(excluded)
+    if _cached is not None:
+        return _cached
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    import re as _re_vc
     try:
         rows = get_master_ingredients() or []
         names = sorted({
@@ -4636,6 +4700,13 @@ def _get_verified_catalog_instruction() -> str:
             for r in rows
             if (r.get("price_per_lb") or 0) > 0 or (r.get("price_per_unit") or 0) > 0
         })
+        if excluded:
+            # Filtra los alimentos prohibidos por alergia/dieta (word-boundary + plural ES, igual que los
+            # guards) — no tiene sentido listarlos como "USA EXCLUSIVAMENTE" si el mismo prompt los prohíbe.
+            def _is_excluded(_nm: str) -> bool:
+                _nl = strip_accents(_nm.lower())
+                return any(_t and _re_vc.search(r"\b" + _re_vc.escape(_t) + r"(?:s|es)?\b", _nl) for _t in excluded)
+            names = [n for n in names if not _is_excluded(n)]
         if not names:
             return ""
         block = (
@@ -4651,7 +4722,7 @@ def _get_verified_catalog_instruction() -> str:
             "uno de estos):\n"
             + ", ".join(names)
         )
-        _VERIFIED_CATALOG_INSTRUCTION_CACHE = block
+        _VERIFIED_CATALOG_INSTRUCTION_CACHE[excluded] = block
         return block
     except Exception as e:
         logger.warning(f"[VERIFIED-ONLY] No se pudo construir el catálogo verificado del prompt: {e}")
@@ -6209,9 +6280,11 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # [P3-VERIFIED-INGREDIENTS-ONLY · 2026-06-20] Append del catálogo verificado
             # (lazy + cacheado → byte-equivalente tras la 1ra call = cache hit preservado).
             # Restringe al LLM a los alimentos con precio La Sirena; "" si el knob está off.
-            day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED + _get_verified_catalog_instruction()
+            # [P2-VERIFIED-CATALOG-NOT-FILTERED · 2026-06-22] Se pasa form_data → el catálogo excluye
+            # alérgenos/dieta del usuario (cache keyed por set excluido; base sin restricción = idéntico).
+            day_system_instruction = _DAY_SYSTEM_INSTRUCTION_CACHED + _get_verified_catalog_instruction(form_data)
         else:
-            streaming_prompt = prompt_text + _DAY_SCHEMA_INSTRUCTION + _get_verified_catalog_instruction()
+            streaming_prompt = prompt_text + _DAY_SCHEMA_INSTRUCTION + _get_verified_catalog_instruction(form_data)
             day_system_instruction = None
 
         # P1-10: HumanMessage/AIMessage/ToolMessage están a nivel módulo
@@ -8645,11 +8718,15 @@ PROTEIN_GKG_CEILING_CUT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_CUT", 2.6)
 #            modelamos → se trata como cap de SEGURIDAD + gate de derivación (FS9), no prescripción.
 CONDITION_RULES_ENABLED = _env_bool("MEALFIT_CONDITION_RULES", True)
 RENAL_PROTEIN_GKG_CEILING = _env_float("MEALFIT_RENAL_PROTEIN_GKG", 0.8)   # KDIGO 2024 G3-G5 no-diálisis
-# [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (audit fresco P2-5) KDIGO usa peso AJUSTADO/ideal (no real) para el
-# target g/kg en OBESIDAD: con peso real, 0.8 g/kg sobre 120 kg da ~96 g (vs ~56 g ideal) → cap +71% más
-# permisivo justo donde el exceso proteico es más dañino (daño glomerular). Default OFF (opt-in: el owner lo
-# habilita tras validar; el cap con peso real sigue siendo conservador-suficiente + el gate FS9 nefrólogo es la red).
-RENAL_ADJUSTED_WEIGHT_ENABLED = _env_bool("MEALFIT_RENAL_ADJUSTED_WEIGHT", False)
+# [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19 · default→True P2-RENAL-WEIGHT-BASIS 2026-06-22] KDIGO usa peso
+# AJUSTADO/ideal (no real) para el target g/kg en OBESIDAD: con peso real, 0.8 g/kg sobre 120 kg da ~96 g (vs
+# ~56 g ideal) → cap +71% más permisivo justo donde el exceso proteico es más dañino (daño glomerular).
+# [P2-RENAL-WEIGHT-BASIS · 2026-06-22] (audit fresco P2-9) Default→True: es el método KDIGO estándar y
+# estrictamente MÁS seguro para el subgrupo afectado; está acotado a CKD+IMC>30 (IBW Devine, clamp [IBW,real])
+# → no-op para no-obesos (IMC≤30 retorna peso real) y no-renales (solo lo consumen los 3 callsites del cap
+# renal). El default previo (peso real) era el menos seguro. Knob de rollback `MEALFIT_RENAL_ADJUSTED_WEIGHT`.
+# tooltip-anchor: P2-RENAL-WEIGHT-BASIS
+RENAL_ADJUSTED_WEIGHT_ENABLED = _env_bool("MEALFIT_RENAL_ADJUSTED_WEIGHT", True)
 # [P2-RENAL-CAP-FAILHARD · 2026-06-15] El cap renal de proteína es SEGURIDAD iatrogénica — su gate NO
 # debe compartir kill-switch con `PROTEIN_FLOOR_ENABLED` (un knob de hipertrofia). Knob dedicado, default
 # True (desactivarlo es una decisión deliberada de seguridad, no un efecto colateral de tunear el piso de
@@ -8883,7 +8960,12 @@ def get_critical_config_warnings() -> list[dict]:
 # default OFF (user-facing + riesgo de falso positivo → opt-in tras tunear). Regla de oro: NUNCA gate-ar
 # objetivos inalcanzables (vit D / hierro 18mg femenino) → quedan FUERA de estos checks.
 # (P2-4 + P2-13) Gap CUANTITATIVO de una condición declarada fuera de banda tras los swaps:
-CONDITION_PANEL_DEGRADE_ENABLED = _env_bool("MEALFIT_CONDITION_PANEL_DEGRADE", False)
+# [P2-SATFAT-CEILING-OBSERVABLE · 2026-06-22] (audit fresco P2-8) Default→True: es banner-only (marca
+# _quality_degraded, NO fuerza retry ni cambia porciones) y tiene margen anti-ruido (CONDITION_PANEL_DEGRADE_MARGIN
+# 0.15) que mitiga falsos positivos de redondeo. Cierra el gap "techo de satfat (dislipidemia)/DASH solo panel,
+# sin honestidad observable" — alinea con el principio del build todo-terreno (cada degradación con copy
+# accionable). Knob de rollback `MEALFIT_CONDITION_PANEL_DEGRADE`. tooltip-anchor: P2-SATFAT-CEILING-OBSERVABLE
+CONDITION_PANEL_DEGRADE_ENABLED = _env_bool("MEALFIT_CONDITION_PANEL_DEGRADE", True)
 CONDITION_PANEL_DEGRADE_MARGIN = _env_float("MEALFIT_CONDITION_PANEL_DEGRADE_MARGIN", 0.15)  # anti-ruido de redondeo
 # (P2-5) Micros ALCANZABLES con alimentos bajo el piso DRI (fibra/K/Mg/Ca). vit D/hierro/B12 EXCLUIDOS:
 MICRONUTRIENT_SOFT_REJECT_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_SOFT_REJECT", False)
@@ -12108,6 +12190,32 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                             f"(cierra el error de redondeo de la cuantización)")
         except Exception as _reb_e:
             logger.warning(f"[P3-MACRO-REBALANCE] deshabilitado por error: {type(_reb_e).__name__}: {_reb_e}")
+
+    # [P2-MACRO-REBALANCE-RENAL-STALE · 2026-06-22] (audit fresco P2-5) El macro-rebalance (arriba) re-apunta
+    # TAMBIÉN la proteína al target (= cap KDIGO en ERC) y RE-CUANTIZA → el redondeo puede re-inflar la proteína
+    # de algún día sobre el cap DESPUÉS de la última verificación renal (Guard 8z.1 dentro de la capa clínica),
+    # dejando `meals_enforced` stale-True. Re-verificamos HONESTAMENTE aquí (re-suma pura idéntica a Guard 8z.1),
+    # tras el ÚLTIMO pase que reescribe la proteína entregada, para que el flag refleje lo realmente servido — el
+    # exit-net `_renal_exit_safety_net` y el fail-hard gate de `should_retry` confían en él. Gated por la MISMA
+    # condición del rebalance (si no corrió, no introdujo staleness). tooltip-anchor: P2-MACRO-REBALANCE-RENAL-STALE
+    if (MACRO_REBALANCE_ENABLED and _cg and _fg and RENAL_CAP_ENABLED
+            and isinstance((result or {}).get("renal_protein_cap"), dict)
+            and result["renal_protein_cap"].get("applied") and _pg and _pg > 0):
+        try:
+            _rc_reb_ok = True
+            for _d in (result.get("days") or []):
+                _dp = sum(_meal_macro_num(_m.get("protein")) for _m in (_d.get("meals", []) or []))
+                if _dp > _pg * 1.05:
+                    _rc_reb_ok = False
+                    break
+            result["renal_protein_cap"]["meals_enforced"] = _rc_reb_ok
+            if not _rc_reb_ok:
+                logger.warning("🛑 [P2-MACRO-REBALANCE-RENAL-STALE] proteína renal sobre el cap tras macro-rebalance "
+                               "— meals_enforced=False (exit-net re-trima / fail-hard gate escala).")
+        except Exception as _rcreb_e:
+            result["renal_protein_cap"]["meals_enforced"] = False
+            logger.warning(f"[P2-MACRO-REBALANCE-RENAL-STALE] re-verificación renal post-rebalance falló: "
+                           f"{type(_rcreb_e).__name__}: {_rcreb_e}")
 
 
 async def assemble_plan_node(state: PlanState) -> dict:
@@ -15547,6 +15655,47 @@ def _persist_gemini_spend_cap_alert(user_id: Optional[str]) -> None:
         logger.warning(
             f"[P1-SPEND-CAP-ALERT] No se pudo persistir gemini_spend_cap_exceeded: {_e!r}"
         )
+
+
+def _persist_pipeline_crash_alert(alert_key: str, user_id: Optional[str], detail: str = "") -> None:
+    """[P2-PIPELINE-CRASH-NO-ALERT · 2026-06-22] (audit fresco P2-16) Emite un system_alert CRÍTICO cuando el
+    pipeline de generación cae a un fallback de EMERGENCIA: (a) degradación global / timeout que fuerza
+    review_passed=True (`pipeline_crash_fallback`), o (b) el último fallback de defensa P1-5
+    (`pipeline_emergency_fallback_p1_5`). Pre-fix el ÚNICO alert en estos paths era el spend-cap → un outage
+    del LLM (o un bug que tumbe el grafo) entregaba el fallback matemático SIN señal a SRE
+    (`_emit_plan_quality_degraded_alert` vive dentro de `should_retry`, que estos paths NO atraviesan; P1-5
+    solo hacía `logger.critical`). Best-effort (no propaga — el pipeline ya degrada). Idempotente: `alert_key`
+    GLOBAL → ON CONFLICT bumpea triggered_at. Modelo de resolution: Manual (SRE cierra tras estabilizar el
+    provider/bug). tooltip-anchor: P2-PIPELINE-CRASH-NO-ALERT"""
+    try:
+        from db_core import execute_sql_write
+        import json as _json
+        execute_sql_write(
+            """
+            INSERT INTO system_alerts
+                (alert_key, alert_type, severity, title, message, metadata, affected_user_ids)
+            VALUES (%s, 'pipeline_crash', 'critical', %s, %s, %s::jsonb, %s::jsonb)
+            ON CONFLICT (alert_key) DO UPDATE
+            SET triggered_at = NOW(),
+                metadata = EXCLUDED.metadata,
+                affected_user_ids = EXCLUDED.affected_user_ids,
+                resolved_at = NULL
+            """,
+            (
+                alert_key,
+                "Pipeline de generacion cayo a fallback de emergencia",
+                ("El pipeline de generacion de plan no pudo entregar un plan del LLM y cayo al fallback "
+                 "matematico de emergencia. Causa tipica: outage/timeout del proveedor LLM o bug aguas "
+                 "arriba en el grafo. El usuario recibio un plan degradado (no del LLM). Reintentar puede "
+                 "no ayudar hasta estabilizar la causa. Revisar logs del pipeline para la traza."),
+                _json.dumps({"detail": str(detail)[:500]}, ensure_ascii=False),
+                _json.dumps([str(user_id)] if user_id else [], ensure_ascii=False),
+            ),
+        )
+        logger.warning(f"🛑 [P2-PIPELINE-CRASH-NO-ALERT] system_alert `{alert_key}` emitido — "
+                       f"pipeline cayo a fallback de emergencia.")
+    except Exception as _e:
+        logger.warning(f"[P2-PIPELINE-CRASH-NO-ALERT] No se pudo persistir {alert_key}: {_e!r}")
 
 
 def _emit_plan_quality_degraded_alert(
@@ -20738,6 +20887,14 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 if isinstance(_pr, dict):
                     _pr["_llm_spend_cap"] = True
                 _persist_gemini_spend_cap_alert(actual_form_data.get("user_id"))
+            else:
+                # [P2-PIPELINE-CRASH-NO-ALERT · 2026-06-22] Crash/timeout del grafo NO spend-cap → el único
+                # rastro era logger.error. Emitir system_alert dedicado para que SRE vea el outage del LLM /
+                # bug aguas arriba (best-effort, no bloquea la entrega del fallback).
+                _persist_pipeline_crash_alert(
+                    "pipeline_crash_fallback", actual_form_data.get("user_id"),
+                    detail=f"{type(e).__name__}: {str(e)[:200]}",
+                )
 
         pipeline_duration = round(time.time() - pipeline_start, 2)
 
@@ -20874,6 +21031,12 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
             # añadimos una marca específica de este path para que Grafana pueda
             # distinguir el origen del fallback en alerts.
             plan_to_return["_p1_5_emergency_return"] = True
+            # [P2-PIPELINE-CRASH-NO-ALERT · 2026-06-22] El logger.critical de arriba era el único rastro de
+            # este path (bug upstream en los guardrails). Emitir system_alert dedicado para SRE (best-effort).
+            _persist_pipeline_crash_alert(
+                "pipeline_emergency_fallback_p1_5", actual_form_data.get("user_id"),
+                detail=f"plan_result invalido tras guardrails (requested_days={requested_days})",
+            )
             # [P3-FALLBACK-CLINICAL-LAYER · 2026-06-14] Este fallback de emergencia se construye DESPUÉS
             # de `_apply_final_defense_guardrails` → escapa la costura de allá. Aplícale la capa clínica
             # determinista aquí también (idempotente vía marker). Fail-safe, no debe tumbar el return.

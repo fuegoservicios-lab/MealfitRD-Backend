@@ -106,6 +106,22 @@ _DYSLIPIDEMIA_SATFAT_SUBS = (
      "Yogurt griego sin azúcar", "yogur entero", True),
     (("tocino", "tocineta", "chicharron", "chicharrón"), "Pechuga de pollo", "tocino/chicharrón", True),
 )
+# [P2-PREGNANCY-MERCURY-GUARD · 2026-06-22] (audit fresco P2-6) Swap determinista de pescados ALTOS EN
+# MERCURIO (metilmercurio = teratógeno) → pescado blanco bajo en mercurio, SOLO para embarazo/lactancia.
+# Espejo de los subs de condición (mismo mecanismo token→reemplazo resoluble). Pre-fix la ÚNICA defensa era
+# el prompt_block + el gate FS9 (obstetra). Incluye SOLO especies inequívocamente altas (FDA "Choices to
+# Avoid"): tiburón, pez espada, marlin, blanquillo (tilefish del Golfo), king mackerel (caballa gigante /
+# macarela rey). EXCLUYE 'atún' A PROPÓSITO: el atún light/enlatado es FDA "Best/Good Choice" en moderación
+# durante el embarazo → un swap ciego de un staple barato sería over-restrictivo (degradaría calidad/costo);
+# el prompt_block ya advierte sobre 'atún grande'. preserve_qty=True (misma porción de pescado blanco).
+# 'Filete de pescado blanco' resuelve al catálogo (lo usa también _HTA_SODIUM_SUBS).
+_PREGNANCY_MERCURY_SUBS = (
+    (("tiburon", "tiburón", "pez espada", "pez-espada", "marlin", "blanquillo",
+      "caballa gigante", "macarela rey", "king mackerel"),
+     "Filete de pescado blanco", "pescado alto en mercurio", True),
+)
+_PREGNANCY_MERCURY_NEGATIVES = ("bajo en mercurio", "blanco", "tilapia")
+
 _DYSLIPIDEMIA_NEGATIVES = ("descremad", "baja en grasa", "bajo en grasa", "light", "desnatad",
                            "sin grasa", "0% grasa", "0 grasa",
                            # nueces/semillas = grasa INSATURADA (saludable): 'mantequilla de maní/almendra'
@@ -136,6 +152,15 @@ CONDITION_RULES: tuple = (
         # ofensor por 'Lentejas' (alto K/fósforo, lo que KDIGO pide moderar) en vez de pollo → es un trade
         # lateral (quita sodio, añade K/P), acotado en cantidad y cubierto por el gate nefrólogo. Anclado por
         # test (renal+vegano → Lentejas); cambiarlo a un veto K/P es decisión clínica del owner (ver P2 audit).
+        # [P2-RENAL-POTASSIUM-DETERMINISTIC · 2026-06-22] (audit fresco P2-10) DECISIÓN documentada (el audit
+        # permite "implementar O documentar la asimetría"): NO se añade un cap/veto DETERMINISTA de potasio/
+        # fósforo para ERC (a diferencia de proteína —cap KDIGO— y sodio —subs— que SÍ son deterministas).
+        # Razón: un cap de K/P seguro requiere (a) data de potasio/fósforo por-ingrediente VALIDADA (el catálogo
+        # no la tiene con confianza clínica) y (b) que el umbral por estadio (G3a→G5) lo defina un nefrólogo —
+        # un veto ciego "guineo/aguacate/leguminosas fuera" degradaría planes y chocaría con HTA (que pide K
+        # ALTO) y anemia bajo comorbilidad. La defensa actual es: prompt_block ("modera K/P si aparecen en
+        # exceso") + classification=CLINICAL_REFERRAL + gate FS9 (el plan se deriva al nefrólogo). Revisitar si
+        # el owner consigue data de K/P validada + criterio clínico por estadio.
         id="renal", label="Enfermedad renal crónica", terms=RENAL_CONDITION_TERMS,
         precedence=10, classification=CLINICAL_REFERRAL,
         substitutions=_HTA_SODIUM_SUBS, sub_negatives=_HTA_SODIUM_NEGATIVES,
@@ -210,6 +235,9 @@ CONDITION_RULES: tuple = (
     ConditionRule(
         id="pregnancy", label="Embarazo / lactancia", terms=PREGNANCY_CONDITION_TERMS,
         precedence=15, classification=CLINICAL_REFERRAL,
+        # [P2-PREGNANCY-MERCURY-GUARD · 2026-06-22] Swap determinista de pescado alto en mercurio (ver
+        # `_PREGNANCY_MERCURY_SUBS`). Antes embarazo era advisory-puro (solo prompt + FS9).
+        substitutions=_PREGNANCY_MERCURY_SUBS, sub_negatives=_PREGNANCY_MERCURY_NEGATIVES,
         prompt_block=(
             "🤰 REGLA CLÍNICA — EMBARAZO / LACTANCIA (SEGURIDAD — REQUIERE OBSTETRA/NUTRICIONISTA):\n"
             "   • NUNCA un déficit calórico: usa AL MENOS mantenimiento (el requerimiento sube en 2º/3º "
