@@ -56,6 +56,16 @@ REGLAS ESTRICTAS:
      Sub-emitir staples cotidianos hace que el shopping list mensual quede
      <50% del consumo real → usuario tiene que ir al supermercado a media
      semana. Emite porciones de comida real, no de degustación.
+   - **CONDIMENTOS — UN SOLO VINAGRE/ACEITE POR PLAN (minimiza la lista de compras)
+     [P3-CONDIMENT-CONSOLIDATION · 2026-06-22]**: para acidez o aderezo general usa
+     SIEMPRE "vinagre blanco" (el vinagre base, el más económico y versátil); NO
+     introduzcas vinagres distintos (balsámico, de manzana, de vino) salvo que el plato
+     lo exija por su identidad. Igual con aceites: usa "aceite de oliva" de forma
+     consistente en todo el día, no alternes con otros. Razón: generas UN solo día pero
+     el usuario recibe un plan completo — si cada día usa un vinagre/aceite distinto, la
+     lista de compras le obliga a comprar VARIAS botellas de ~473ml para usar 1 cucharada
+     en toda la semana (desperdicio puro). Converge al mismo condimento base que usarían
+     los demás días. Un solo vinagre blanco cubre la gran mayoría de los aderezos.
 9. COMPLETITUD NUTRICIONAL:
    - Desayuno: base sólida + proteína + fruta. PROHIBIDO arroz en desayuno. IMPORTANTE: Usa la CATEGORÍA de desayuno asignada por el Planificador (Mangú/tubérculos, Avena/cereales, Pan/tostadas, Batido/bowl, Revoltillo/tortilla). NO elijas mangú si el planificador asignó otra categoría.
    - Almuerzo/Cena: incluir al menos 1 vegetal/ensalada.
