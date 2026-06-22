@@ -1960,6 +1960,16 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
     ANTI_WASTE_THRESHOLD = 0.02
 
     db_container = master_item.get("market_container")
+    # [P1-POTE-PRICING · 2026-06-22] Fallback a `default_unit` cuando `market_container`
+    # es NULL pero el item se vende en ENVASE (default_unit ∈ _CONTAINER_UNIT_ALIASES)
+    # con `container_weight_g` poblado. Sin esto, items como la Mantequilla de maní
+    # (pote, 454g, price_per_lb>0) NO se unitarizaban → caían al display "X lb" + cobro
+    # a GRANEL (½ lb ≈ RD$29) en vez de por POTE (1 pote = RD$117). Solo aplica a
+    # unidades de envase (NO pesos lb/g/kg) → no "envasa" un staple a granel. Cubre
+    # además Leche evaporada/lata, Galletas de soda/paquete, Harina de trigo/paquete,
+    # Yogurt griego/pote (mismo gap de datos: market_container NULL).
+    if not db_container and (master_item.get("default_unit") or "").strip().lower() in _CONTAINER_UNIT_ALIASES:
+        db_container = master_item.get("default_unit")
     db_container_weight_g = master_item.get("container_weight_g")
     available_sizes = master_item.get("available_sizes_g")
     
