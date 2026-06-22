@@ -3172,46 +3172,40 @@ def summarize_divergences_for_ui(divergences: list, max_items: int = 5) -> list:
     Skipea entries no-dict y campos ausentes (resilient a evolución
     futura del guard sin romper UI).
 
-    [P1-COHERENCE-BANNER-NOISE · 2026-06-22] Filtra el RUIDO de aromáticos/
-    sazón presentes-en-lista-en-otra-unidad antes del top-N. Un food vendido en
-    una unidad de compra distinta a la de la receta (ajo: receta en "dientes" /
-    lista en "cabezas"; cilantro: receta en "g" / lista en "mazo"; cebolla:
-    receta en "g" / lista por peso-envase) produce un PAR de divergencias:
-      - "fantasma": expected≈0, actual>0 (el food SÍ está en la lista, en la
-        unidad de compra) → hipótesis `unknown` ("Causa indeterminada").
-      - "faltante en esa unidad": expected>0, actual=0 (la receta lo pide en
-        otra unidad) → hipótesis `unit_mismatch`.
-    El food ESTÁ en la lista → decirle al usuario "puede necesitar ajuste
-    manual" es un FALSO POSITIVO. Se omiten del banner los foods que tienen un
-    fantasma (presentes en lista). NO se oculta un sub-suministro real: ese sería
-    expected>0 Y actual>0 en la MISMA unidad (sin fantasma) → sigue surfaceándose.
-    La telemetría/historial (`run_shopping_coherence_guard_and_append_history`)
-    conserva TODAS las divergencias; este filtro es solo para el banner UI.
-    Tooltip-anchor: P1-COHERENCE-BANNER-NOISE.
+    [P1-COHERENCE-BANNER-NOISE · 2026-06-22] El banner UI ("Lista revisada — N
+    items pueden necesitar ajuste manual") debe surfacear SOLO divergencias
+    ACCIONABLES por el usuario:
+      - `cap_swallowed_modifier`: el alimento está en las recetas pero AUSENTE de
+        la lista → "se te puede olvidar comprarlo" (accionable).
+      - `pantry_overdeduct`: sub-suministro SEVERO (actual < expected/2, la nevera
+        dedujo de más) → "te puedes quedar corto" (accionable).
+    Se OMITEN del banner las divergencias de MAGNITUD benignas — `unknown`,
+    `unit_mismatch`, `yield_uncovered` — que en la práctica son artefactos NO
+    accionables: el alimento SÍ está en la lista, solo difiere por unidad de
+    compra (ajo receta "dientes" / lista "cabezas"; cilantro "g" / "mazo"),
+    rendimiento cocido↔crudo (cerdo, camarón), o compra por unidad entera
+    (plátano, guineo, aguacate). En un re-escalado (cambio de duración) estas
+    divergencias no representan drift real recetas↔lista — escalan ambos lados.
+    Sin este filtro, cambiar la lista a 15/30 días disparaba un banner alarmante
+    de 5 "Causa indeterminada" sobre alimentos que estaban correctos en la lista.
+
+    NO se oculta nada accionable: "ausente" y "sub-suministro severo" siguen
+    surfaceándose. La telemetría/historial
+    (`run_shopping_coherence_guard_and_append_history`) conserva TODAS las
+    divergencias para post-mortem; este filtro es solo para el banner UI.
+    Knob `MEALFIT_COHERENCE_BANNER_ACTIONABLE_ONLY` (default True) revierte sin
+    redeploy. Tooltip-anchor: P1-COHERENCE-BANNER-NOISE.
     """
     if not divergences:
         return []
-    # Foods presentes en la lista (tienen un "fantasma": expected≈0, actual>0).
-    _present_in_list = set()
-    for d in divergences:
-        if not isinstance(d, dict):
-            continue
-        try:
-            _exp = float(d.get("expected_qty") or 0)
-            _act = float(d.get("actual_qty") or 0)
-        except (TypeError, ValueError):
-            _exp, _act = 0.0, 0.0
-        if _act > 0 and _exp <= 0:
-            _food = d.get("food") or d.get("name") or ""
-            if _food:
-                _present_in_list.add(_food)
+    _actionable_only = _knob_env_bool("MEALFIT_COHERENCE_BANNER_ACTIONABLE_ONLY", True)
+    _ACTIONABLE_HYPOTHESES = {"cap_swallowed_modifier", "pantry_overdeduct"}
     out = []
     for d in divergences:
         if not isinstance(d, dict):
             continue
-        _food_key = d.get("food") or d.get("name") or ""
-        if _food_key and _food_key in _present_in_list:
-            # Benigno: el food está en la lista, solo difiere la unidad receta↔compra.
+        if _actionable_only and (d.get("hypothesis") or "unknown") not in _ACTIONABLE_HYPOTHESES:
+            # Benigno/no-accionable (magnitud por unidad/yield/cap): fuera del banner.
             continue
         item = {
             "food": d.get("food") or d.get("name") or "",

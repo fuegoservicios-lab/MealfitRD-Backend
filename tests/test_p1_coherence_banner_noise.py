@@ -1,19 +1,24 @@
 """[P1-COHERENCE-BANNER-NOISE · 2026-06-22] El banner "Lista revisada — N items
-pueden necesitar ajuste manual" del recálculo NO debe marcar aromáticos/sazón que
-SÍ están en la lista (en una unidad de compra distinta a la de la receta).
+pueden necesitar ajuste manual" (recálculo + agent tool) debe surfacear SOLO
+divergencias ACCIONABLES, no artefactos de magnitud sobre alimentos que SÍ están
+en la lista.
 
-Caso real (plan del owner, recalc a 15 días): ajo (receta "10 dientes" / lista "3
-cabezas"), cebolla (receta "60 g" / lista por peso), cilantro/perejil (receta "g" /
-lista "mazo"), ají morrón (receta "g" / lista "unidad") aparecían como "Causa
-indeterminada". El food ESTÁ en la lista → falso positivo.
+Caso real (plan del owner, recalc a 15/30 días): aparecían 5 ítems "Causa
+indeterminada" — ajo (receta "10 dientes" / lista "3 cabezas"), cebolla, cilantro,
+perejil, ají morrón; y al filtrarlos afloraban cerdo/camarón (yield cocido↔crudo) y
+plátano/guineo/aguacate (compra por unidad entera). Todos están CORRECTOS en la
+lista — falso positivo.
 
-`summarize_divergences_for_ui` omite del banner los foods con "fantasma"
-(expected≈0, actual>0 = presente en lista). NO oculta sub-suministros reales
-(expected>0 Y actual>0 en la MISMA unidad, sin fantasma). El historial conserva todo.
+`summarize_divergences_for_ui` ahora surface solo `cap_swallowed_modifier` (ausente
+de la lista → "se te olvida comprarlo") y `pantry_overdeduct` (sub-suministro severo
+→ "te quedas corto"). Omite `unknown`/`unit_mismatch`/`yield_uncovered` (artefactos
+no accionables). El historial conserva TODAS las divergencias.
 """
 from __future__ import annotations
 
 from pathlib import Path
+
+import pytest
 
 from shopping_calculator import summarize_divergences_for_ui
 
@@ -29,55 +34,60 @@ def test_marker_present():
     assert "P1-COHERENCE-BANNER-NOISE" in src
 
 
-def test_aromatic_present_in_list_is_dropped():
-    """Ajo con par fantasma+unit_mismatch (presente en lista) → omitido del banner."""
+def test_aromatic_unit_mismatch_dropped():
+    """Ajo presente en otra unidad (par fantasma 'unknown' + 'unit_mismatch') → fuera del banner."""
     divs = [
-        # fantasma: la lista tiene 3 cabezas, receta esperaba 0 en esa unidad
-        {"food": "Ajo", "side": "magnitude", "magnitude": True, "hypothesis": "unknown",
+        {"food": "Ajo", "magnitude": True, "hypothesis": "unknown",
          "expected_qty": 0.0, "actual_qty": 3.0, "delta_pct": float("inf")},
-        # faltante en la unidad de receta: receta pide 10 dientes, lista 0 dientes
-        {"food": "Ajo", "side": "magnitude", "magnitude": True, "hypothesis": "unit_mismatch",
+        {"food": "Ajo", "magnitude": True, "hypothesis": "unit_mismatch",
          "expected_qty": 10.0, "actual_qty": 0.0, "delta_pct": 1.0},
     ]
-    out = summarize_divergences_for_ui(divs)
-    assert out == [], "Ajo está en la lista (fantasma) → no debe salir en el banner"
+    assert summarize_divergences_for_ui(divs) == []
+
+
+def test_yield_and_wholeunit_magnitude_dropped():
+    """Cerdo (yield cocido/crudo) y guineo (unidad entera) = magnitud benigna → fuera."""
+    divs = [
+        {"food": "Cerdo", "magnitude": True, "hypothesis": "unknown", "expected_qty": 800, "actual_qty": 1150},
+        {"food": "Guineo", "magnitude": True, "hypothesis": "unknown", "expected_qty": 120, "actual_qty": 350},
+        {"food": "Limón", "magnitude": True, "hypothesis": "unit_mismatch", "expected_qty": 60, "actual_qty": 0},
+        {"food": "Pollo", "magnitude": True, "hypothesis": "yield_uncovered", "expected_qty": 1000, "actual_qty": 1350},
+    ]
+    assert summarize_divergences_for_ui(divs) == []
 
 
 def test_truly_missing_food_is_kept():
-    """Un food REALMENTE ausente de la lista (sin fantasma) sí se surface."""
+    """Alimento REALMENTE ausente de la lista (cap_swallowed_modifier) → accionable, se surface."""
     divs = [
-        {"food": "Ajonjolí", "side": "presence", "magnitude": False, "hypothesis": "cap_swallowed_modifier",
-         "expected_qty": 30.0, "actual_qty": 0.0},
+        {"food": "Ajonjolí", "side": "presence", "magnitude": False,
+         "hypothesis": "cap_swallowed_modifier", "expected_qty": 30.0, "actual_qty": 0.0},
     ]
     out = summarize_divergences_for_ui(divs)
     assert _foods(out) == {"Ajonjolí"}
 
 
-def test_same_unit_undersupply_is_kept():
-    """Sub-suministro real (misma unidad, exp>0 Y act>0, sin fantasma) NO se oculta."""
+def test_severe_undersupply_is_kept():
+    """Sub-suministro SEVERO (pantry_overdeduct) → accionable ('te quedas corto'), se surface."""
     divs = [
-        {"food": "Pechuga de pollo", "side": "magnitude", "magnitude": True, "hypothesis": "yield_uncovered",
-         "expected_qty": 1000.0, "actual_qty": 500.0, "delta_pct": -0.5},
+        {"food": "Pechuga de pollo", "magnitude": True, "hypothesis": "pantry_overdeduct",
+         "expected_qty": 1000.0, "actual_qty": 300.0, "delta_pct": -0.7},
     ]
     out = summarize_divergences_for_ui(divs)
     assert _foods(out) == {"Pechuga de pollo"}
 
 
-def test_mixed_drops_only_present():
-    """Mezcla: aromáticos presentes se omiten, faltante real + magnitud real se conservan."""
+def test_mixed_keeps_only_actionable():
+    """Mezcla real: aromáticos/yield/unidad benignos fuera; ausente + sub-suministro severo dentro."""
     divs = [
         {"food": "Ajo", "magnitude": True, "hypothesis": "unknown", "expected_qty": 0.0, "actual_qty": 3.0},
-        {"food": "Ajo", "magnitude": True, "hypothesis": "unit_mismatch", "expected_qty": 10.0, "actual_qty": 0.0},
-        {"food": "Cebolla", "magnitude": True, "hypothesis": "unknown", "expected_qty": 0.0, "actual_qty": 453.0},
-        {"food": "Cilantro", "magnitude": True, "hypothesis": "unknown", "expected_qty": 0.0, "actual_qty": 1.0},
+        {"food": "Cebolla", "magnitude": True, "hypothesis": "unit_mismatch", "expected_qty": 60.0, "actual_qty": 0.0},
+        {"food": "Camarón", "magnitude": True, "hypothesis": "unknown", "expected_qty": 200, "actual_qty": 280},
+        {"food": "Aguacate", "magnitude": True, "hypothesis": "unknown", "expected_qty": 100, "actual_qty": 400},
         {"food": "Ajonjolí", "magnitude": False, "hypothesis": "cap_swallowed_modifier", "expected_qty": 30.0, "actual_qty": 0.0},
-        {"food": "Ají cubanela", "magnitude": True, "hypothesis": "unknown", "expected_qty": 0.5, "actual_qty": 2.0, "delta_pct": 3.0},
+        {"food": "Habichuelas", "magnitude": True, "hypothesis": "pantry_overdeduct", "expected_qty": 900, "actual_qty": 200},
     ]
-    out = summarize_divergences_for_ui(divs)
-    foods = _foods(out)
-    assert "Ajo" not in foods and "Cebolla" not in foods and "Cilantro" not in foods
-    assert "Ajonjolí" in foods       # realmente ausente → accionable
-    assert "Ají cubanela" in foods   # exp>0 Y act>0 sin fantasma → magnitud real, se conserva
+    foods = _foods(summarize_divergences_for_ui(divs))
+    assert foods == {"Ajonjolí", "Habichuelas"}  # solo lo accionable
 
 
 def test_max_items_respected():
@@ -86,12 +96,13 @@ def test_max_items_respected():
          "expected_qty": 10.0, "actual_qty": 0.0}
         for i in range(10)
     ]
-    out = summarize_divergences_for_ui(divs, max_items=3)
-    assert len(out) == 3
+    assert len(summarize_divergences_for_ui(divs, max_items=3)) == 3
 
 
 def test_empty_and_nondict_safe():
     assert summarize_divergences_for_ui([]) == []
     assert summarize_divergences_for_ui(None) == []
-    out = summarize_divergences_for_ui([None, "x", {"food": "Sal", "hypothesis": "cap_swallowed_modifier", "expected_qty": 5, "actual_qty": 0}])
+    out = summarize_divergences_for_ui(
+        [None, "x", {"food": "Sal", "hypothesis": "cap_swallowed_modifier", "expected_qty": 5, "actual_qty": 0}]
+    )
     assert _foods(out) == {"Sal"}

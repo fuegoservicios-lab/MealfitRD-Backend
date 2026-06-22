@@ -274,9 +274,13 @@ def test_severe_helper_does_not_flag_unknown(helper_callable):
 
 
 def test_summarize_caps_at_max_items(helper_callable):
-    """`summarize_divergences_for_ui` respeta max_items."""
+    """`summarize_divergences_for_ui` respeta max_items.
+
+    [P1-COHERENCE-BANNER-NOISE · 2026-06-22] El summary ahora filtra a hipótesis
+    ACCIONABLES (cap_swallowed_modifier / pantry_overdeduct) — `unknown` se omite
+    del banner. Este test usa `cap_swallowed_modifier` para ejercitar max_items."""
     _, _, summarize = helper_callable
-    divs = [{"food": f"Item{i}", "hypothesis": "unknown"} for i in range(20)]
+    divs = [{"food": f"Item{i}", "hypothesis": "cap_swallowed_modifier"} for i in range(20)]
     out = summarize(divs, max_items=5)
     assert len(out) == 5
     assert out[0]["food"] == "Item0"
@@ -284,9 +288,12 @@ def test_summarize_caps_at_max_items(helper_callable):
 
 
 def test_summarize_skips_non_dicts(helper_callable):
-    """Resilient a items inválidos (no-dict)."""
+    """Resilient a items inválidos (no-dict).
+
+    [P1-COHERENCE-BANNER-NOISE] Usa hipótesis accionable (cap_swallowed_modifier);
+    `unknown` ahora se filtra del banner."""
     _, _, summarize = helper_callable
-    divs = [{"food": "OK", "hypothesis": "unknown"}, "string-malformada", None, {"food": "OK2", "hypothesis": "unknown"}]
+    divs = [{"food": "OK", "hypothesis": "cap_swallowed_modifier"}, "string-malformada", None, {"food": "OK2", "hypothesis": "cap_swallowed_modifier"}]
     out = summarize(divs, max_items=10)
     assert len(out) == 2
     assert {x["food"] for x in out} == {"OK", "OK2"}
