@@ -97,9 +97,15 @@ def test_marker_bumped():
 
 
 def test_frontend_calls_delete_endpoint():
-    fe = (_BE.parent / "frontend" / "src" / "pages" / "AccountSettings.jsx")
-    if not fe.exists():
+    comp = _BE.parent / "frontend" / "src" / "components" / "account" / "DeleteAccountSection.jsx"
+    if not comp.exists():
         return  # frontend repo puede no estar presente en algunos checkouts CI
-    src = fe.read_text(encoding="utf-8")
+    src = comp.read_text(encoding="utf-8")
     assert "/api/account/delete" in src
-    assert "resetApp" in src  # logout completo post-borrado
+    assert "resetApp" in src           # logout completo post-borrado
+    assert "ELIMINAR" in src           # confirm gate
+    # La MISMA sección se monta en los DOS settings (landing + dashboard).
+    for page in ("AccountSettings.jsx", "Settings.jsx"):
+        p = _BE.parent / "frontend" / "src" / "pages" / page
+        if p.exists():
+            assert "DeleteAccountSection" in p.read_text(encoding="utf-8"), f"{page} no monta DeleteAccountSection"
