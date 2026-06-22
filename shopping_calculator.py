@@ -3171,12 +3171,47 @@ def summarize_divergences_for_ui(divergences: list, max_items: int = 5) -> list:
       `{food, hypothesis, side, magnitude, delta_pct?}`
     Skipea entries no-dict y campos ausentes (resilient a evolución
     futura del guard sin romper UI).
+
+    [P1-COHERENCE-BANNER-NOISE · 2026-06-22] Filtra el RUIDO de aromáticos/
+    sazón presentes-en-lista-en-otra-unidad antes del top-N. Un food vendido en
+    una unidad de compra distinta a la de la receta (ajo: receta en "dientes" /
+    lista en "cabezas"; cilantro: receta en "g" / lista en "mazo"; cebolla:
+    receta en "g" / lista por peso-envase) produce un PAR de divergencias:
+      - "fantasma": expected≈0, actual>0 (el food SÍ está en la lista, en la
+        unidad de compra) → hipótesis `unknown` ("Causa indeterminada").
+      - "faltante en esa unidad": expected>0, actual=0 (la receta lo pide en
+        otra unidad) → hipótesis `unit_mismatch`.
+    El food ESTÁ en la lista → decirle al usuario "puede necesitar ajuste
+    manual" es un FALSO POSITIVO. Se omiten del banner los foods que tienen un
+    fantasma (presentes en lista). NO se oculta un sub-suministro real: ese sería
+    expected>0 Y actual>0 en la MISMA unidad (sin fantasma) → sigue surfaceándose.
+    La telemetría/historial (`run_shopping_coherence_guard_and_append_history`)
+    conserva TODAS las divergencias; este filtro es solo para el banner UI.
+    Tooltip-anchor: P1-COHERENCE-BANNER-NOISE.
     """
     if not divergences:
         return []
+    # Foods presentes en la lista (tienen un "fantasma": expected≈0, actual>0).
+    _present_in_list = set()
+    for d in divergences:
+        if not isinstance(d, dict):
+            continue
+        try:
+            _exp = float(d.get("expected_qty") or 0)
+            _act = float(d.get("actual_qty") or 0)
+        except (TypeError, ValueError):
+            _exp, _act = 0.0, 0.0
+        if _act > 0 and _exp <= 0:
+            _food = d.get("food") or d.get("name") or ""
+            if _food:
+                _present_in_list.add(_food)
     out = []
     for d in divergences:
         if not isinstance(d, dict):
+            continue
+        _food_key = d.get("food") or d.get("name") or ""
+        if _food_key and _food_key in _present_in_list:
+            # Benigno: el food está en la lista, solo difiere la unidad receta↔compra.
             continue
         item = {
             "food": d.get("food") or d.get("name") or "",
