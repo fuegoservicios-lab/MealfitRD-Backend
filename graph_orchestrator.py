@@ -8753,6 +8753,22 @@ BAND_SCORE_GATE_THRESHOLD = _env_float("MEALFIT_BAND_SCORE_GATE_THRESHOLD", 0.5)
 # SIN re-tunear el umbral inundaría de banners. Activar tras medir la distribución macros-only en prod.
 BAND_GATE_USE_MACROS_ONLY = _env_bool("MEALFIT_BAND_GATE_USE_MACROS_ONLY", False)
 
+# [P2-BAND-RETRY-GATE · 2026-06-21] (Fase 6 del build "todo terreno") La banda de macros como GATE DE
+# RETRY, no solo banner. El band-score gate existente (BAND_SCORE_GATE) marca `_quality_degraded`
+# POST-grafo (banner) cuando la precisión medida cae bajo umbral, pero NO fuerza retry. El owner pidió
+# "duro en las 4 macros": este gate fuerza un RETRY cuando el `clinical_band_score` cae bajo
+# BAND_RETRY_THRESHOLD, dándole al motor determinista (reconcile/quantize/closers — la convergencia YA
+# existe) + al LLM otra pasada para acercar las 4 macros a la banda [90,112]%.
+#   HONESTIDAD FÍSICA: la banda PERFECTA (todas las celdas día×macro) NO es alcanzable por la granularidad
+#   de porción cocinable (no puedes servir 0.73 huevos; techo ~66.7% all-4-en-banda MEDIDO). Forzar retry
+#   hacia 1.0 haría que la MAYORÍA de planes reintenten (avg medido 0.707) y la mayoría aún fallaría →
+#   más entregas degradadas y costo LLM, SIN ganar precisión. Por eso el umbral default (0.5) ataca SOLO
+#   la cola genuinamente pobre (≥mitad de celdas fuera de banda) — un retry real para esos, sin mass-retry.
+#   Subir el umbral via knob = más "duro" a costa de más retries (medir antes). En agotamiento, el banner
+#   post-grafo (low_band_score) informa. Rollback: MEALFIT_BAND_RETRY_GATE=False.
+BAND_RETRY_GATE_ENABLED = _env_bool("MEALFIT_BAND_RETRY_GATE", True)
+BAND_RETRY_THRESHOLD = _env_float("MEALFIT_BAND_RETRY_THRESHOLD", 0.5)
+
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
 # PRODUCCIÓN, delata una degradación SILENCIOSA si está mal seteada. Función PURA (lee los knobs módulo-nivel
@@ -14893,6 +14909,35 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 "aparezca en la lista de compras con su cantidad."
             )
             severity = _severity_max(severity, "high")
+
+    # [P2-BAND-RETRY-GATE · 2026-06-21] (Fase 6) Banda de macros como gate de RETRY (no solo el banner
+    # post-grafo low_band_score). Si la precisión MEDIDA (clinical_band_score, el MISMO score del banner
+    # → cero drift) cae bajo el umbral, rechazo → retry para que el motor determinista (reconcile/quantize/
+    # closers) + el LLM reajusten porciones hacia la banda [90,112]%. Umbral conservador (0.5 = cola pobre)
+    # por la granularidad de porción cocinable: la banda PERFECTA es inalcanzable (no hay 0.73 huevos), así
+    # que forzar hacia 1.0 sería mass-retry inútil. En agotamiento, el banner post-grafo informa.
+    if BAND_RETRY_GATE_ENABLED:
+        try:
+            _bsr = compute_clinical_band_score(plan, {})
+            _bsr_val = (_bsr.get("score_macros_only")
+                        if BAND_GATE_USE_MACROS_ONLY and _bsr.get("score_macros_only") is not None
+                        else _bsr.get("score"))
+            if _bsr_val is not None and _bsr_val < BAND_RETRY_THRESHOLD:
+                _low = [k for k, v in (_bsr.get("per_macro") or {}).items()
+                        if v is not None and v < 0.5 and k != "kcal"]
+                logger.warning(f"📊 [P2-BAND-RETRY-GATE] band_score={_bsr_val} < {BAND_RETRY_THRESHOLD} "
+                               f"(per_macro={_bsr.get('per_macro')}) → rechazo para reintentar el balanceo de macros.")
+                approved = False
+                issues.append(
+                    "PRECISIÓN DE MACROS BAJA: varios días tienen macros fuera de la banda objetivo "
+                    "(90-112% del target diario)"
+                    + (f", especialmente {', '.join(_low)}" if _low else "")
+                    + ". Reajusta las PORCIONES (gramos) de cada comida para que la suma diaria de "
+                    "proteína, carbohidratos y grasas caiga dentro de la banda objetivo, sin cambiar los platos."
+                )
+                severity = _severity_max(severity, "high")
+        except Exception as _bsr_e:
+            logger.warning(f"[P2-BAND-RETRY-GATE] cálculo falló: {type(_bsr_e).__name__}: {_bsr_e}")
 
     # [P2-A · 2026-05-07] Coherencia recetas↔lista en mode `block`.
     # `assemble_plan_node` invoca `run_shopping_coherence_guard`; cuando
