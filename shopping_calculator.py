@@ -5293,26 +5293,29 @@ def _emit_coherence_guard_metric(
     ingredient_count: int,
     divergence_count: int,
 ) -> None:
-    """[P2-COHERENCE-GUARD-PERF · 2026-05-15 · umbral subido a 3000 P3-COH-GUARD-PERF-THRESHOLD 2026-06-22]
+    """[P2-COHERENCE-GUARD-PERF · 2026-05-15 · umbral 1000→3000→5000 P3-COH-GUARD-PERF-THRESHOLD 2026-06-22]
     Best-effort INSERT a `pipeline_metrics` con perf del coherence guard. Knob umbral:
-    `MEALFIT_COHERENCE_GUARD_SLOW_MS` (default 3000) — log warning si excede para que un refactor
+    `MEALFIT_COHERENCE_GUARD_SLOW_MS` (default 5000) — log warning si excede para que un refactor
     accidental O(n²) sea detectable sin esperar a tail-latency en user-facing.
 
-    [P3-COH-GUARD-PERF-THRESHOLD · 2026-06-22] Default subido de 1000→3000ms: medición en vivo (3
-    generaciones, planes 4a8d46e1/33a003b2/e819b76b) mostró que el BASELINE normal del guard es ~1.5s
-    (1530/1557ms) con carga típica (40-45 recetas), con spikes ocasionales a ~4.8s por autoscale del VPS
-    (0.25-2 CU) bajo carga — NO por regresión algorítmica (el costo es la canonicalización, constante para
-    la carga). Con el umbral en 1000ms el warning "Posible regresión perf — investigar" disparaba en CADA
-    generación (3/3 false-positives) → ruido que enmascara un spike real. 3000ms deja pasar el baseline y
-    solo avisa en outliers genuinos. El metric numérico SIEMPRE se persiste (la telemetría per-plan no se
-    pierde); esto solo modula el WARNING. Rollback: MEALFIT_COHERENCE_GUARD_SLOW_MS=1000.
+    [P3-COH-GUARD-PERF-THRESHOLD · 2026-06-22] Default subido 1000→3000ms y luego 3000→5000ms con datos
+    más ricos. La distribución de `pipeline_metrics WHERE node='coherence_guard_validation'` reveló DOS
+    poblaciones: (a) guards de plan-pequeño/per-chunk ~0-15ms (p50=1ms, mayoría de las calls), y (b) guards
+    de PLAN COMPLETO (47 recetas × 47 ingredientes + ~70 divergencias) que cuestan ~3-3.8s de forma
+    CONSISTENTE (medición 9 calls hora 21:00 2026-06-22: p50=3027, p90=3676, max=3844). El costo del guard
+    de plan completo es la canonicalización O(recetas×ingredientes) — constante para la carga, NO regresión.
+    Con umbral 3000ms el warning disparaba en CADA recálculo de plan completo (baseline ~3.0-3.8s) → ruido.
+    5000ms queda por encima del p90 observado (3676) con headroom, así solo avisa regresiones reales (>5s,
+    ~1.5× el baseline). El metric numérico SIEMPRE se persiste (telemetría per-plan intacta); esto solo
+    modula el WARNING. Optimización pendiente (no regresión): cachear la canonicalización del guard para
+    bajar el baseline de plan completo de ~3s. Rollback: MEALFIT_COHERENCE_GUARD_SLOW_MS=3000.
     """
     try:
         import os as _os_coh
         try:
-            _slow_threshold_ms = int(_os_coh.environ.get("MEALFIT_COHERENCE_GUARD_SLOW_MS", "3000"))
+            _slow_threshold_ms = int(_os_coh.environ.get("MEALFIT_COHERENCE_GUARD_SLOW_MS", "5000"))
         except (TypeError, ValueError):
-            _slow_threshold_ms = 3000
+            _slow_threshold_ms = 5000
 
         if duration_ms > _slow_threshold_ms:
             logging.warning(
