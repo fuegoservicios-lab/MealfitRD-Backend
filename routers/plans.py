@@ -3716,6 +3716,32 @@ async def api_pending_pipeline_status(
         return {"status": "none"}
 
 
+@router.get("/pantry-status")
+async def api_pantry_status(
+    verified_user_id: str = Depends(get_verified_user_id),
+):
+    """[P2-PANTRY-LOW-BANNER · 2026-06-21] Estado del mínimo de nevera para el aviso inmediato
+    en "Mi Nevera". Expone el MISMO conteo que usa el guard de mantenimiento server-side
+    (`_count_meaningful_pantry_items(get_user_inventory_net(user_id))` vs CHUNK_MIN_FRESH_PANTRY_ITEMS)
+    → CERO drift: el banner del frontend dice exactamente lo que el backend haría al preparar la
+    próxima lista de mantenimiento. Read-only, cero costo LLM (NO verify_api_quota, igual que los
+    GET de polling del Historial, P1-AUDIT-3). Guests / sin nevera → safe defaults (sin aviso).
+    Response: {meaningful_count, min_required, is_below}.
+    """
+    from constants import CHUNK_MIN_FRESH_PANTRY_ITEMS as _MIN
+    if not verified_user_id or verified_user_id == "guest":
+        return {"meaningful_count": 0, "min_required": int(_MIN), "is_below": False}
+    try:
+        from db_inventory import get_user_inventory_net
+        from cron_tasks import _count_meaningful_pantry_items
+        net = await asyncio.to_thread(get_user_inventory_net, verified_user_id)
+        count = _count_meaningful_pantry_items(net or [])
+        return {"meaningful_count": int(count), "min_required": int(_MIN), "is_below": count < _MIN}
+    except Exception as e:
+        logger.warning(f"[P2-PANTRY-LOW-BANNER] /pantry-status error: {e!r}")
+        return {"meaningful_count": 0, "min_required": int(_MIN), "is_below": False}
+
+
 @router.post("/pending-status/ack")
 async def api_pending_pipeline_ack(
     verified_user_id: str = Depends(get_verified_user_id),
