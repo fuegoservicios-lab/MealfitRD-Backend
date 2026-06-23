@@ -2066,7 +2066,15 @@ def apply_smart_market_units(name: str, weight_in_lbs: float, unit_str: str, raw
         density_per_u = float(density_per_u)
 
     # Fallback Semántico si no hay densidad en la DB
-    if not density_per_u:
+    # [P3-WEIGHT-DEFAULT-NO-UNITIZE · 2026-06-22] Si el item está DECLARADO por peso
+    # (default_unit ∈ lb/kg/g) y la DB no tiene densidad, NO inventar una densidad-unidad
+    # desde UNIT_WEIGHTS — ese fallback forzaba unitización absurda: sandía con "L=30/lb"
+    # (owner) + density NULL caía a UNIT_WEIGHTS["sandia"]=3000g → "1 sandía entera (~6.6 lbs)
+    # RD$198" para una necesidad de 200g, en vez de costear por libra (0.5 lb = RD$15). Carnes
+    # ya están excluidas de BLOQUE 2 por is_meat_seafood; este guard cubre frutas/víveres
+    # vendidos por peso (sandía picada por libra). Tooltip-anchor: P3-WEIGHT-DEFAULT-NO-UNITIZE.
+    _du_weight = (master_item.get("default_unit") or "").strip().lower() in ('lb', 'lbs', 'kg', 'g', 'gr', 'gramo', 'gramos')
+    if not density_per_u and not _du_weight:
         from constants import UNIT_WEIGHTS
         n_clean = ''.join(c for c in unicodedata.normalize('NFD', n_lower) if unicodedata.category(c) != 'Mn')
         # Búsqueda exacta o como palabra entera para evitar "agua" == "pan de agua"
@@ -6193,7 +6201,13 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             from constants import UNIT_WEIGHTS, strip_accents, VOLUMETRIC_DENSITIES
             n_clean = strip_accents(name.lower())
             
-            if g_per_u <= 0:
+            # [P3-WEIGHT-DEFAULT-NO-UNITIZE · 2026-06-22] Espejo del guard de apply_smart_market_units:
+            # un item DECLARADO por peso (default_unit ∈ lb/kg/g) NO recibe densidad-unidad fantasma
+            # de UNIT_WEIGHTS tampoco AQUÍ. Sin esto el aggregator unitizaría sandía a 3000g (1 melón
+            # entero) internamente mientras el display la costea por libra → ambos paths divergen y el
+            # coherence guard podría flaggear magnitud. Mantiene aggregator↔display coherentes.
+            _du_weight_agg = (master_item.get("default_unit") or "").strip().lower() in ('lb', 'lbs', 'kg', 'g', 'gr', 'gramo', 'gramos')
+            if g_per_u <= 0 and not _du_weight_agg:
                 for k, v in UNIT_WEIGHTS.items():
                     if k == n_clean or (re.search(rf'\b{re.escape(k)}(s|es)?\b', n_clean)):
                         g_per_u = v
