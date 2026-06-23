@@ -4127,6 +4127,14 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
         logger.error(f"❌ [ERROR] Error en /api/recipe/expand: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
+def _pantry_sufficiency_gate_on() -> bool:
+    """[P2-PANTRY-SUFFICIENCY · 2026-06-23] Master switch del gate de suficiencia de la
+    Nevera para los botones de actualizar platos (swap individual + día completo).
+    OFF en código; ON en prod vía .env (`MEALFIT_PANTRY_SUFFICIENCY_GATE=true`) — mismo
+    patrón de rollout que VERIFIED_INGREDIENTS_ONLY (dark ship → flip sin redeploy)."""
+    return os.environ.get("MEALFIT_PANTRY_SUFFICIENCY_GATE", "false").strip().lower() in ("1", "true", "yes", "on")
+
+
 @router.post("/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_SWAP_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
     try:
@@ -4140,7 +4148,44 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
         swap_reason = data.get("swap_reason", "variety")  # variety | time | dislike | similar | budget
-        
+
+        # [P2-PANTRY-SUFFICIENCY · 2026-06-23] Gate de suficiencia de la Nevera ANTES de
+        # consumir cuota o llamar al LLM. Requisito del owner: el plato nuevo debe ser
+        # preparable con lo que hay en la Nevera; si NO alcanzan las macros del objetivo
+        # (palanca = proteína), NO generamos nada y avisamos "agrega más ítems". Soft-fail
+        # HTTP-200 (mismo patrón que swap_strict_pantry_no_inventory) → el plato actual se
+        # preserva y NO se descuenta regeneración (este return precede a log_api_usage).
+        # Gateado por knob (OFF en código, ON en prod vía .env); el evaluador es fail-open.
+        if (
+            _pantry_sufficiency_gate_on()
+            and user_id and user_id != "guest"
+        ):
+            try:
+                from inventory_sufficiency import evaluate_pantry_sufficiency
+                _meal_target = {
+                    "kcal": data.get("target_calories"),
+                    "protein_g": data.get("target_protein"),
+                    "carbs_g": data.get("target_carbs"),
+                    "fats_g": data.get("target_fats"),
+                }
+                _suff = evaluate_pantry_sufficiency(user_id, data, scope="meal", meal_target=_meal_target)
+                if not _suff.get("sufficient", True):
+                    logger.info(
+                        f"🧊 [P2-PANTRY-SUFFICIENCY] swap bloqueado — Nevera insuficiente "
+                        f"(deficits={[d.get('nutrient') for d in _suff.get('deficits', [])]})"
+                    )
+                    return {
+                        "swap_failed": True,
+                        "error_code": "pantry_insufficient_for_goal",
+                        "error_message": _suff.get("message") or (
+                            "Tu Nevera no alcanza para cubrir tus metas en este plato. "
+                            "Agrega más ítems a tu Nevera (sobre todo proteína)."
+                        ),
+                        "deficits": _suff.get("deficits", []),
+                    }
+            except Exception as _suff_e:
+                logger.warning(f"⚠️ [P2-PANTRY-SUFFICIENCY] gate falló (no bloquea): {_suff_e}")
+
         # Solo registrar rechazo cuando el usuario explícitamente dice "No me gusta"
         if rejected_meal and swap_reason == "dislike":
             logger.info(f"👎 [SWAP] Rechazo real registrado: '{rejected_meal}' (razón: {swap_reason})")
