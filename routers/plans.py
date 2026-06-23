@@ -6176,15 +6176,35 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
             # `_coherence_warnings` en la response.
             try:
                 from shopping_calculator import run_shopping_coherence_guard_and_append_history as _coh_recalc
-                divs, _ = _coh_recalc(
-                    plan_data_fresh,
-                    multiplier=household_multiplier,
-                    mode_override="warn",
-                    attempt=1,
-                    action_taken="warn_only_recalc",
-                    plan_id_hint=plan_id,
-                )
-                _captured_divergences.extend(divs or [])
+                # [P3-COHERENCE-RECALC-CANONICAL · 2026-06-23] El guard DEBE evaluar la
+                # lista CANÓNICA de 1 semana (`scaled_7`), NO `active_list`. Para
+                # biweekly/monthly `active_list` es el HÍBRIDO escalado ×N y, si el
+                # usuario hizo restock, RESTOCK-DEDUCIDO (via `_build_hybrid` con
+                # `restocked_items`). Comparar las recetas (scope = 1 semana de menú)
+                # contra esa lista producía DOS clases de falsos positivos:
+                #   (a) magnitud: recetas×1sem vs lista×4 (mensual) → unknown/unit_mismatch.
+                #   (b) presencia: items YA comprados (deducidos del híbrido) marcados
+                #       como `cap_swallowed_modifier` ("faltan de la lista") → el toast
+                #       "tu lista tuvo N revisiones automáticas" salía SIN razón real.
+                # `scaled_7` = needs canónicos de 1 semana a multiplier base (is_new_plan
+                # → sin deducir inventario), alineado con el scope de `days`. Restauramos
+                # `active_list` después para persistir la lista correcta en la columna.
+                # Tooltip-anchor: P3-COHERENCE-RECALC-CANONICAL.
+                _list_for_guard = scaled_7 if scaled_7 else plan_data_fresh.get("aggregated_shopping_list")
+                _active_for_persist = plan_data_fresh.get("aggregated_shopping_list")
+                plan_data_fresh["aggregated_shopping_list"] = _list_for_guard
+                try:
+                    divs, _ = _coh_recalc(
+                        plan_data_fresh,
+                        multiplier=household_multiplier,
+                        mode_override="warn",
+                        attempt=1,
+                        action_taken="warn_only_recalc",
+                        plan_id_hint=plan_id,
+                    )
+                    _captured_divergences.extend(divs or [])
+                finally:
+                    plan_data_fresh["aggregated_shopping_list"] = _active_for_persist
             except Exception as _coh_recalc_e:
                 logger.warning(f"[RECALC] coherence guard helper falló (no aborta): {_coh_recalc_e}")
 
