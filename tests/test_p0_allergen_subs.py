@@ -144,7 +144,7 @@ def test_soy_tofu_to_chicken_and_sauce_to_lemon(go):
     ("Pan de agua", "pan de agua", "casabe"),
     ("Harina de trigo", "harina de trigo", "maíz"),
     ("Espagueti a la boloñesa", "espagueti", "arroz"),
-    ("Galletas de soda", "galletas de soda", "galletas de arroz"),
+    ("Galletas de soda", "galletas de soda", "casabe"),  # [P3-GALLETA-ARROZ-REMOVE] target GF → Casabe
     # [live-fix] el revisor médico rechaza avena por contaminación cruzada → swap a Quinoa (GF)
     ("0.25 taza de avena", "avena", "quinoa"),
     ("Bowl Proteico de Avena con Chinola", "avena", "quinoa"),

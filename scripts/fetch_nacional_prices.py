@@ -164,7 +164,7 @@ MATCH = {
     "semillas-chia":    (["desayuno", "reposteria"], ["chia"]),
     # ── Despensa: galletas ──
     "galletas-de-soda": (["galletas"], ["soda"]),
-    "galletas-arroz":   (["galletas"], ["galleta de arroz", "arroz"]),
+    # [P3-GALLETA-ARROZ-REMOVE] galleta de arroz eliminada del catálogo (no se vende en La Sirena)
     # ── Despensa: edulcorantes / frutos secos ──
     "estevia":          (["azucar"], ["estevia", "stevia"]),
     "almendras":        (["picaderas", "reposteria"], ["almendra"]),

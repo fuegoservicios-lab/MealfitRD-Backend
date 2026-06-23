@@ -486,8 +486,12 @@ _ALLERGEN_GLUTEN_SUBS = (
     (("pasta integral", "espagueti", "macarron", "coditos", "fideo", "lasana", "tallarin",
       "pasta de trigo", "penne", "ravioli", "ñoqui", "noqui"),
      "Arroz blanco", "pasta de trigo", True),
+    # [P3-GALLETA-ARROZ-REMOVE · 2026-06-22] Target GF cambiado "Galletas de arroz"→"Casabe":
+    # el owner confirmó que La Sirena no vende galletas de arroz → fuera del catálogo. Casabe
+    # (cracker de yuca, GF nativo dominicano, en catálogo) es el reemplazo crujiente disponible
+    # (ya se usa para el swap de pan GF arriba).
     (("galleta de soda", "galletas de soda", "galleta de trigo", "galletas de trigo"),
-     "Galletas de arroz", "galletas de trigo", True),
+     "Casabe", "galletas de trigo", True),
     # [P0-ALLERGEN-SUBS live-fix · 2026-06-14] La avena es naturalmente sin gluten PERO el revisor
     # médico la rechaza por contaminación cruzada (estándar conservador) → sin este swap, un plan con
     # avena para un alérgico a gluten cae a fallback. Swap a Quinoa (GF nativo, en catálogo, alto en

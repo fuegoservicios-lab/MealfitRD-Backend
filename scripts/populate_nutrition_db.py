@@ -46,7 +46,7 @@ USDA_QUERY = {
     "Albahaca seca": "basil dried", "Almendras fileteadas": "almonds",
     "Arroz blanco": "rice white long-grain raw", "Arroz integral": "rice brown long-grain raw",
     "Avena": "oats", "Canela en polvo": "cinnamon ground",
-    "Extracto de vainilla": "vanilla extract", "Galletas de arroz": "rice cakes",
+    "Extracto de vainilla": "vanilla extract",  # [P3-GALLETA-ARROZ-REMOVE] galleta de arroz eliminada del catálogo
     "Galletas de soda": "crackers saltines", "Gandules": "pigeon peas mature seeds raw",
     "Garbanzos": "chickpeas garbanzo mature seeds raw", "Habichuelas blancas": "beans white mature seeds raw",
     "Habichuelas negras": "beans black mature seeds raw", "Habichuelas rojas": "beans kidney red mature seeds raw",

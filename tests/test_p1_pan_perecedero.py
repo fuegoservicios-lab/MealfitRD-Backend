@@ -185,7 +185,7 @@ def test_casabe_still_staple_no_regression():
 def test_galletas_still_staple_no_regression():
     """NO regresión: galletas selladas son staples reales."""
     classify = _load_classifier()
-    for name in ("Galletas de soda", "Galletas de arroz"):
+    for name in ("Galletas de soda",):  # [P3-GALLETA-ARROZ-REMOVE] galletas de arroz fuera del catálogo
         result = classify(
             name,
             {"category": "Despensa", "shelf_life_days": 30},
