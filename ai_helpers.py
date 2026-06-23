@@ -33,7 +33,7 @@ from constants import (
 )
 from db import get_user_profile, update_user_health_profile, update_user_health_profile_atomic, get_user_ingredient_frequencies
 from cpu_tasks import _calcular_frecuencias_regex_cpu_bound
-from knobs import _env_str, _env_float  # [P3-FLASH-LITE-COST-CUT · 2026-05-21] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30]
+from knobs import _env_str, _env_float, _env_bool  # [P3-FLASH-LITE-COST-CUT · 2026-05-21] / [P2-LLM-TIMEOUT-SWEEP · 2026-05-30] / [P3-GAINMUSCLE-PROTEIN-DENSITY · 2026-06-23]
 
 logger = logging.getLogger(__name__)
 
@@ -465,7 +465,38 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             else:
                 unique_proteins.append(legume_pick)
                 logger.info(f"🥗 [GARANTÍA NUTRICIONAL] Leguminosa '{legume_pick}' añadida")
-    
+
+    # [P3-GAINMUSCLE-PROTEIN-DENSITY · 2026-06-23] Para gain_muscle las proteínas PRINCIPALES del
+    # esqueleto deben ser de ALTA densidad (animal). Sin esto el selector podía elegir 3 proteínas de
+    # BAJA densidad (visto en vivo corr=f36bd39f: Queso Ricotta + Habichuelas Rojas + Gandules) → días
+    # bajo el piso de proteína (124g) → el LLM rellena con huevo → choca con el cap de huevo Y el piso
+    # a la vez → 3 rechazos del revisor → entrega DEGRADADA. Reemplazamos las proteínas-main de baja
+    # densidad (leguminosas + ricotta/cottage/crema) por alta densidad usando el pool ponderado (que ya
+    # penaliza embutidos/grasas). Las leguminosas/ricotta siguen apareciendo como ACOMPAÑANTE en la
+    # generación del día (no se IMPONEN como main). Knob rollback: MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN.
+    # Tooltip-anchor: P3-GAINMUSCLE-PROTEIN-DENSITY.
+    # Set EXPLÍCITO (NO reusar LEGUME_NAMES — omite "habichuelas blancas", cazado por el test trial 7).
+    _LOW_DENSITY_AS_MAIN = {
+        "habichuelas rojas", "habichuelas negras", "habichuelas blancas",
+        "gandules", "lentejas", "garbanzos",
+        "queso ricotta", "queso cottage", "queso crema",
+    }
+    if _main_goal == "gain_muscle" and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True):
+        _low_mains = [p for p in unique_proteins if p.lower() in _LOW_DENSITY_AS_MAIN]
+        if _low_mains:
+            _hd_pool = [(p, w) for p, w in zip(available_proteins, protein_weights)
+                        if p not in unique_proteins and p.lower() not in _LOW_DENSITY_AS_MAIN]
+            for _rep in _low_mains:
+                if not _hd_pool:
+                    break  # sin alta-densidad disponible → conservar el de baja densidad (graceful)
+                _new = random.choices([x[0] for x in _hd_pool], weights=[x[1] for x in _hd_pool], k=1)[0]
+                unique_proteins[unique_proteins.index(_rep)] = _new
+                _hd_pool = [(p, w) for p, w in _hd_pool if p != _new]
+                logger.info(
+                    f"💪 [GAIN-MUSCLE PROTEIN-DENSITY] '{_new}' (alta densidad) reemplaza a "
+                    f"'{_rep}' (baja densidad como proteína principal)"
+                )
+
     unique_carbs = []
     _pool_c = list(zip(available_carbs, carb_weights))
     while len(unique_carbs) < num_carbs_to_pick and _pool_c:
