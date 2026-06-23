@@ -1162,14 +1162,24 @@ def swap_meal(form_data: dict):
     retries_used = invoke_with_retry.retry.statistics.get("attempt_number", 1) if hasattr(invoke_with_retry, 'retry') else 1
     logger.info(f"✅ [COMPLETADO] Nueva alternativa {meal_type} generada en {duration_secs}s | retries_used={retries_used}")
     logger.info("-------------------------------------------------------------\n")
+    # [P5-RESTOCK-PRESERVE · 2026-06-23] Señaliza si el plato se generó RESTRINGIDO a la
+    # despensa (clean_ingredients no vacío → el LLM solo pudo usar lo de la Nevera y el pantry
+    # guard lo validó). El frontend NO debe limpiar is_restocked para platos pantry-strict:
+    # cocinan desde la Nevera, no introducen nada que el usuario deba comprar. Solo el
+    # FREE_GENERATION (despensa vacía) deja pantry_constrained=False → ahí sí puede haber
+    # ingredientes nuevos a comprar y limpiar is_restocked es correcto.
+    _pantry_constrained = bool(clean_ingredients)
     if hasattr(response, "model_dump"):
-        return getattr(response, "model_dump")()
+        _out = getattr(response, "model_dump")()
     elif isinstance(response, dict):
-        return response
+        _out = response
     elif hasattr(response, "dict"):
-        return getattr(response, "dict")()
+        _out = getattr(response, "dict")()
     else:
         raise ValueError("El modelo de IA generó una respuesta inválida. Por favor, reintenta.")
+    if isinstance(_out, dict):
+        _out["pantry_constrained"] = _pantry_constrained
+    return _out
 
 
 

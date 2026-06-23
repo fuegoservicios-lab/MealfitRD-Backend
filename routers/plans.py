@@ -4688,6 +4688,7 @@ def api_regenerate_day(
                 nm = swap_meal(meal_form)
                 if isinstance(nm, dict) and nm.get("name"):
                     nm["isExpanded"] = False
+                    nm.pop("pantry_constrained", None)  # [P5-RESTOCK-PRESERVE] metadata transitoria, no persistir
                     new_meals.append(nm)
                     regenerated += 1
                     _decrement_ledger_by_meal(ledger, nm, _db)
@@ -6466,7 +6467,15 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                 _inv_count_at_recalc == 0
                 and plan_data_fresh.get("is_restocked")
             )
-            if (has_changed or _empty_pantry_heal) and plan_data_fresh.get("is_restocked"):
+            # [P5-RESTOCK-PRESERVE · 2026-06-23] Recalc disparado por un cambio de PLATOS
+            # pantry-strict (regenerate-day / swap desde la Nevera), NO por household/duration.
+            # Esos cocinan desde la Nevera existente → el usuario NO necesita re-comprar, así que
+            # is_restocked DEBE preservarse. Sin esto, un recalc post-day-regen veía un falso
+            # `has_changed` (duración/multiplier recomputados) y limpiaba is_restocked → el banner
+            # "Tu Nevera está vacía" y el botón "Ya compré la lista" reaparecían pese a tener la
+            # Nevera llena (bug recurrente reportado). El heal de pantry-VACÍA sí gana (seguridad).
+            _preserve_restock = bool(data.get("preserve_restock", False)) and _inv_count_at_recalc > 0
+            if (has_changed or _empty_pantry_heal) and plan_data_fresh.get("is_restocked") and not _preserve_restock:
                 plan_data_fresh.pop("is_restocked", None)
                 plan_data_fresh.pop("restocked_at_iso", None)
                 plan_data_fresh.pop("restocked_items", None)
@@ -6479,6 +6488,8 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
                     else "user_inventory vacío (flags previos stale)"
                 )
                 logger.info(f"🔄 [RECALC] is_restocked limpiado — {_reason}")
+            elif _preserve_restock and (has_changed or _empty_pantry_heal):
+                logger.info("🔄 [RECALC] is_restocked PRESERVADO (preserve_restock=tweak pantry-strict, Nevera no vacía)")
 
             # [P1-NEXT-2 · 2026-05-11] Coherence guard sobre la lista recién
             # escalada. Antes, /recalculate-shopping-list persistía
