@@ -67,8 +67,11 @@ def test_similar_modal_option_still_supported_as_passive_reason():
     'similar' SÍ activa strict-pantry (es uno de los reasons base). El
     test ahora verifica la nueva derivación (inversa): cravings/weekend
     son las únicas opt-out."""
+    # [P4-UPDATE-DISHES-STRICT-ALL · 2026-06-23] La derivación quedó anidada bajo el knob
+    # strict-all: `strict_pantry = True if _strict_all else (swap_reason not in (...))`.
+    # El tuple opt-out (cravings/weekend) se preserva en el `else` (default OFF = legacy).
     m = re.search(
-        r"strict_pantry\s*=\s*swap_reason\s+not\s+in\s+\(([^)]+)\)",
+        r"else \(swap_reason\s+not\s+in\s+\(([^)]+)\)",
         AGENT_PY,
     )
     assert m, (
@@ -111,8 +114,11 @@ def test_budget_and_pantry_first_still_strict_via_default_inversion():
     que aún emiten ``swap_reason='budget'`` o ``'pantry_first'`` siguen
     cayendo en strict-pantry — pero ahora via la inversión del default,
     no via tuple explícito. El test ancla el contrato."""
+    # [P4-UPDATE-DISHES-STRICT-ALL · 2026-06-23] La derivación quedó anidada bajo el knob
+    # strict-all: `strict_pantry = True if _strict_all else (swap_reason not in (...))`.
+    # El tuple opt-out (cravings/weekend) se preserva en el `else` (default OFF = legacy).
     m = re.search(
-        r"strict_pantry\s*=\s*swap_reason\s+not\s+in\s+\(([^)]+)\)",
+        r"else \(swap_reason\s+not\s+in\s+\(([^)]+)\)",
         AGENT_PY,
     )
     assert m, (

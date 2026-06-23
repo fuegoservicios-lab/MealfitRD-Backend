@@ -4509,6 +4509,252 @@ def api_swap_meal_persist(
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 
+# [P3-PANTRY-SUFFICIENCY · 2026-06-23] Helpers del endpoint "actualizar día completo".
+_DAY_REASON_MAP = {
+    "variety": "variety", "time": "time", "cravings": "cravings",
+    "dislike": "dislike", "similar": "similar", "weekend": "weekend",
+}
+
+
+def _map_day_reason(reason) -> str:
+    return _DAY_REASON_MAP.get(str(reason or "variety").strip().lower(), "variety")
+
+
+def _inventory_grams_ledger(rows, db) -> dict:
+    """Live inventory → {nombre_canónico: gramos_disponibles} (para reservar entre platos del día)."""
+    ledger: dict = {}
+    for row in rows or []:
+        try:
+            info = db.lookup(row.get("ingredient_name") or "")
+            if not info:
+                continue
+            qty = row.get("available_quantity")
+            if qty is None:
+                qty = row.get("quantity") or 0
+            grams = db.to_grams(float(qty or 0), row.get("unit") or "", info)
+            if grams and grams > 0:
+                ledger[info.name] = ledger.get(info.name, 0.0) + grams
+        except Exception:
+            continue
+    return ledger
+
+
+def _ledger_to_pantry_lines(ledger: dict) -> list:
+    """{nombre: gramos} → ['281g de Pollo', ...] para `current_pantry_ingredients` de swap_meal."""
+    return [f"{int(round(g))}g de {name}" for name, g in (ledger or {}).items() if g and g > 0]
+
+
+def _decrement_ledger_by_meal(ledger: dict, meal: dict, db) -> None:
+    """[D7] Resta del ledger los gramos consumidos por los ingredientes del plato aceptado,
+    para que dos platos del MISMO día no 'usen' el mismo pollo (doble-gasto)."""
+    for ing in (meal.get("ingredients") or []):
+        try:
+            s = ing if isinstance(ing, str) else (ing.get("name") or ing.get("item") or "")
+            if not s:
+                continue
+            m = db.macros_from_ingredient_string(s)
+            if not m:
+                continue
+            nm, grams = m.get("name"), m.get("grams")
+            if nm in ledger and grams:
+                ledger[nm] = max(0.0, ledger[nm] - float(grams))
+        except Exception:
+            continue
+
+
+@router.post("/{plan_id}/regenerate-day")
+def api_regenerate_day(
+    plan_id: str,
+    background_tasks: BackgroundTasks,
+    data: dict = Body(...),
+    verified_user_id: Optional[str] = Depends(verify_api_quota),
+    _rl: None = Depends(_SWAP_LIMITER),
+):
+    """[P3-PANTRY-SUFFICIENCY · 2026-06-23] Regenera TODOS los platos de UN día,
+    pantry-constrained, con gate de suficiencia.
+
+    Por qué un endpoint NUEVO (no extender /analyze): la regeneración del CICLO ignora
+    la nevera para cualquier `update_reason` (3 surfaces: [P1-PANTRY-GUARD-REGEN-SKIP],
+    [P1-VARIETY-IGNORE-PANTRY]). Este path NUNCA entra al pipeline del ciclo → los
+    esquiva por completo y REUSA la maquinaria correcta de `swap_meal` (strict-pantry
+    por default). El día = LOOP de swaps pantry-strict reservando inventario entre
+    platos (D7), persistido atómicamente.
+
+    Flujo: ownership → gate de suficiencia (scope=day, target = suma de macros del día
+    del plan) → si insuficiente, soft-fail 200 SIN cuota → si alcanza, swap por meal con
+    reserva de inventario → persist `days[i].meals[*]` vía update_plan_data_atomic (I6/I7)
+    → 1 crédito. Gate detrás de `_pantry_sufficiency_gate_on()`.
+    """
+    try:
+        user_id = data.get("user_id")
+        if not user_id or user_id == "guest":
+            raise HTTPException(status_code=401, detail="Crea tu cuenta para actualizar platos con IA.")
+        if not verified_user_id or verified_user_id != user_id:
+            raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
+
+        day_index = data.get("day_index")
+        if not isinstance(day_index, int) or isinstance(day_index, bool) or day_index < 0 or day_index >= 100:
+            raise HTTPException(status_code=400, detail="day_index must be int in [0, 99]")
+        reason = _map_day_reason(data.get("reason") or data.get("update_reason"))
+
+        from db_core import execute_sql_query
+        from db_plans import update_plan_data_atomic
+
+        plan_row = execute_sql_query(
+            "SELECT plan_data FROM meal_plans WHERE id = %s AND user_id = %s",
+            (plan_id, user_id),
+            fetch_one=True,
+        )
+        if not plan_row:
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+        plan_data = plan_row.get("plan_data") or {}
+        if isinstance(plan_data, str):
+            import json as _json
+            plan_data = _json.loads(plan_data)
+        days = plan_data.get("days") or []
+        if day_index >= len(days):
+            raise HTTPException(status_code=400, detail=f"day_index fuera de rango (plan tiene {len(days)} días)")
+        day = days[day_index]
+        meals = (day.get("meals") if isinstance(day, dict) else None) or []
+        if not meals:
+            raise HTTPException(status_code=400, detail="El día no tiene platos para actualizar.")
+
+        # Target del día = suma de las macros de los platos actuales (goal-correcto).
+        day_target = {"kcal": 0.0, "protein_g": 0.0, "carbs_g": 0.0, "fats_g": 0.0}
+        for _m in meals:
+            if not isinstance(_m, dict):
+                continue
+            day_target["kcal"] += float(_m.get("cals") or 0)
+            day_target["protein_g"] += float(_m.get("protein") or 0)
+            day_target["carbs_g"] += float(_m.get("carbs") or 0)
+            day_target["fats_g"] += float(_m.get("fats") or 0)
+
+        # GATE DE SUFICIENCIA (scope=day) ANTES de cuota/LLM.
+        if _pantry_sufficiency_gate_on():
+            try:
+                from inventory_sufficiency import evaluate_pantry_sufficiency
+                _suff = evaluate_pantry_sufficiency(user_id, data, scope="day", meal_target=day_target)
+                if not _suff.get("sufficient", True):
+                    logger.info(
+                        f"🧊 [P3-PANTRY-SUFFICIENCY] día bloqueado — Nevera insuficiente "
+                        f"(deficits={[d.get('nutrient') for d in _suff.get('deficits', [])]})"
+                    )
+                    return {
+                        "regen_failed": True,
+                        "error_code": "pantry_insufficient_for_goal",
+                        "error_message": _suff.get("message") or (
+                            "Tu Nevera no alcanza para cubrir tu objetivo del día. "
+                            "Agrega más ítems (sobre todo proteína) e inténtalo de nuevo."
+                        ),
+                        "deficits": _suff.get("deficits", []),
+                    }
+            except Exception as _suff_e:
+                logger.warning(f"⚠️ [P3-PANTRY-SUFFICIENCY] gate falló (no bloquea): {_suff_e}")
+
+        # Loop de swaps pantry-strict con reserva de inventario entre platos.
+        from agent import swap_meal
+        from nutrition_db import IngredientNutritionDB
+        from db import get_raw_user_inventory
+
+        _db = IngredientNutritionDB()
+        ledger = _inventory_grams_ledger(get_raw_user_inventory(user_id), _db)
+
+        new_meals: list = []
+        regenerated = 0
+        slots_kept: list = []
+        for meal in meals:
+            if not isinstance(meal, dict):
+                new_meals.append(meal)
+                continue
+            meal_form = {
+                "user_id": user_id,
+                "session_id": data.get("session_id"),
+                "rejected_meal": meal.get("name"),
+                "meal_type": meal.get("meal") or meal.get("meal_type") or "Comida",
+                "swap_reason": reason,
+                "target_calories": meal.get("cals"),
+                "target_protein": meal.get("protein"),
+                "target_carbs": meal.get("carbs"),
+                "target_fats": meal.get("fats"),
+                "diet_type": data.get("diet_type") or data.get("dietType") or "balanced",
+                "goal": data.get("goal") or data.get("mainGoal"),
+                "allergies": data.get("allergies") or [],
+                "dislikes": data.get("dislikes") or [],
+                # Pantry reservada (gramos restantes tras los platos ya aceptados de hoy).
+                "current_pantry_ingredients": _ledger_to_pantry_lines(ledger),
+            }
+            try:
+                nm = swap_meal(meal_form)
+                if isinstance(nm, dict) and nm.get("name"):
+                    nm["isExpanded"] = False
+                    new_meals.append(nm)
+                    regenerated += 1
+                    _decrement_ledger_by_meal(ledger, nm, _db)
+                else:
+                    new_meals.append(meal)
+                    slots_kept.append(meal.get("meal") or meal.get("meal_type"))
+            except ValueError as _ve:
+                # Un plato no se pudo generar desde la nevera → conservar el original.
+                logger.info(f"[P3-REGEN-DAY] slot conservado (no generable): {meal.get('name')!r} — {_ve}")
+                new_meals.append(meal)
+                slots_kept.append(meal.get("meal") or meal.get("meal_type"))
+
+        if regenerated == 0:
+            # Nada se regeneró → NO consumir cuota; soft-fail accionable.
+            return {
+                "regen_failed": True,
+                "error_code": "pantry_insufficient_for_goal",
+                "error_message": (
+                    "No pudimos crear platos nuevos con lo que hay en tu Nevera. "
+                    "Agrega más ítems (sobre todo proteína) e inténtalo de nuevo."
+                ),
+                "deficits": [],
+            }
+
+        # Persistencia atómica de days[day_index].meals (espejo de _swap_mutator, escalado al día).
+        def _day_mutator(pd: dict) -> dict:
+            _days = pd.get("days")
+            if not isinstance(_days, list):
+                raise ValueError(f"plan_data.days corrupted (type={type(_days).__name__})")
+            if day_index >= len(_days):
+                raise IndexError(f"day_index={day_index} fuera de rango (plan tiene {len(_days)} días)")
+            _day = _days[day_index]
+            if not isinstance(_day, dict):
+                raise ValueError(f"plan_data.days[{day_index}] corrupted")
+            _day["meals"] = new_meals
+            for _k in (
+                "aggregated_shopping_list",
+                "aggregated_shopping_list_weekly",
+                "aggregated_shopping_list_biweekly",
+                "aggregated_shopping_list_monthly",
+            ):
+                pd.pop(_k, None)
+            from datetime import datetime as _dt, timezone as _tz
+            pd["_plan_modified_at"] = _dt.now(_tz.utc).isoformat()
+            return pd
+
+        result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+        # Cuota: 1 crédito por día completo (post-éxito, D3).
+        log_api_usage(user_id, "llm_regenerate_day")
+
+        return {
+            "success": True,
+            "day_index": day_index,
+            "meals_regenerated": regenerated,
+            "slots_kept": slots_kept,
+        }
+    except HTTPException:
+        raise
+    except (IndexError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Inconsistencia en plan_data: {e}")
+    except Exception as e:
+        logger.error(f"❌ [ERROR] Error en /regenerate-day: {str(e)}")
+        raise HTTPException(status_code=500, detail=safe_error_detail(e))
+
+
 @router.post("/{plan_id}/grocery-start-date")
 def api_set_grocery_start_date(
     plan_id: str,

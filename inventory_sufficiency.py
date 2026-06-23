@@ -217,7 +217,21 @@ def evaluate_pantry_sufficiency(
         daily = _daily_targets(form_data)
         if scope == "day":
             frac = 1.0
-            required = dict(daily)
+            if meal_target:
+                # El caller (regenerate-day) pasa el target REAL del día = suma de las
+                # macros de los platos del plan (ya goal-correcto) → más fiable que
+                # recomputar desde form_data potencialmente incompleto.
+                required = {
+                    "kcal": float(meal_target.get("kcal") or meal_target.get("cals") or 0),
+                    "protein_g": float(meal_target.get("protein_g") or meal_target.get("protein") or 0),
+                    "carbs_g": float(meal_target.get("carbs_g") or meal_target.get("carbs") or 0),
+                    "fats_g": float(meal_target.get("fats_g") or meal_target.get("fats") or 0),
+                }
+                # Si el caller no pobló macros (todo 0) → caer al target diario calculado.
+                if required["protein_g"] <= 0 and required["kcal"] <= 0:
+                    required = dict(daily)
+            else:
+                required = dict(daily)
         else:  # "meal"
             if meal_target:
                 required = {

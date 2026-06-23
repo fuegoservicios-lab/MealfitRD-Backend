@@ -113,14 +113,16 @@ def test_strict_pantry_uses_inverted_default():
     """``strict_pantry`` debe derivarse como ``swap_reason not in
     ("cravings", "weekend")`` — default strict con opt-out solo para
     indulgencia explícita."""
+    # [P4-UPDATE-DISHES-STRICT-ALL · 2026-06-23] La derivación quedó anidada bajo el knob
+    # strict-all (default OFF = legacy): el opt-out cravings/weekend vive en el `else`.
     m = re.search(
-        r"strict_pantry\s*=\s*swap_reason\s+not\s+in\s+\(\s*[\"']cravings[\"']\s*,\s*[\"']weekend[\"']\s*\)",
+        r"else \(swap_reason\s+not\s+in\s+\(\s*[\"']cravings[\"']\s*,\s*[\"']weekend[\"']\s*\)\)",
         AGENT_PY,
     )
     assert m, (
-        "Falta o está mal formado el flip `strict_pantry = swap_reason "
-        "not in (\"cravings\", \"weekend\")` en agent.py. Si lo "
-        "renombraste, sincroniza este test."
+        "Falta o está mal formado el opt-out `swap_reason not in (\"cravings\", "
+        "\"weekend\")` (bajo el knob strict-all) en agent.py. Si lo renombraste, "
+        "sincroniza este test."
     )
 
 

@@ -806,7 +806,14 @@ def swap_meal(form_data: dict):
     # SOLO arma el plato con `clean_ingredients[:4]`. Si no hay
     # clean_ingredients y strict_pantry está activo → el fallback raise
     # explícito (router lo mapea a 422). Tooltip-anchor: P1-SWAP-STRICT-PANTRY.
-    strict_pantry = swap_reason not in ("cravings", "weekend")
+    # [P4-UPDATE-DISHES-STRICT-ALL · 2026-06-23] Requisito del owner: los botones de
+    # actualizar platos cocinan con lo que hay en la NEVERA — TODOS los motivos deben ser
+    # pantry-strict, incluidos cravings/weekend (antes exentos para permitir ingredientes
+    # externos). `swap_meal` es EXCLUSIVO de esos botones (el chat usa
+    # execute_modify_single_meal), así que el cambio no afecta otros surfaces. Dark-ship:
+    # default OFF en código (preserva legacy + tests cravings/weekend) → ON en prod vía .env.
+    _strict_all = os.environ.get("MEALFIT_UPDATE_DISHES_STRICT_ALL_REASONS", "false").strip().lower() in ("1", "true", "yes", "on")
+    strict_pantry = True if _strict_all else (swap_reason not in ("cravings", "weekend"))
 
     # [P2-SWAP-CONSISTENCY · 2026-05-22] Tolerancia de ingredientes externos
     # cuando el user pidió un antojo / plato festivo: hard-pantry colisionaba
@@ -816,13 +823,14 @@ def swap_meal(form_data: dict):
     # `MEALFIT_SWAP_EXTERNAL_INGREDIENTS_ALLOWED` (default 2, clamp [0, 5]).
     # cravings/weekend: usa el knob. Resto: 0 (legacy strict). Tooltip-anchor:
     # P2-SWAP-CONSISTENCY-EXTERNAL.
-    if swap_reason in ("cravings", "weekend"):
+    if swap_reason in ("cravings", "weekend") and not _strict_all:
         try:
             _external_tolerance = int(os.environ.get("MEALFIT_SWAP_EXTERNAL_INGREDIENTS_ALLOWED", "2"))
         except (TypeError, ValueError):
             _external_tolerance = 2
         _external_tolerance = max(0, min(5, _external_tolerance))
     else:
+        # [P4-UPDATE-DISHES-STRICT-ALL] strict-all → cero ingredientes externos para TODOS.
         _external_tolerance = 0
 
     # [P1-SWAP-MACROS · 2026-05-22] Buffer mutable del prompt para inyectar
