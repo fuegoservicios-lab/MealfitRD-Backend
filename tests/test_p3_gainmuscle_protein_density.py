@@ -20,6 +20,7 @@ _BACKEND = Path(__file__).resolve().parent.parent
 _LOW_DENSITY = {
     "habichuelas rojas", "habichuelas negras", "habichuelas blancas", "gandules",
     "lentejas", "garbanzos", "queso ricotta", "queso cottage", "queso crema",
+    "'yogurt'",  # regular (match exacto entre comillas para no matchear 'yogurt griego')
 }
 
 

@@ -480,6 +480,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         "habichuelas rojas", "habichuelas negras", "habichuelas blancas",
         "gandules", "lentejas", "garbanzos",
         "queso ricotta", "queso cottage", "queso crema",
+        "yogurt",  # regular ~4g prot/100g (NO "yogurt griego" — ése es alto en proteína, exact-match)
     }
     if _main_goal == "gain_muscle" and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True):
         _low_mains = [p for p in unique_proteins if p.lower() in _LOW_DENSITY_AS_MAIN]
