@@ -4652,7 +4652,7 @@ def api_regenerate_day(
                 logger.warning(f"⚠️ [P3-PANTRY-SUFFICIENCY] gate falló (no bloquea): {_suff_e}")
 
         # Loop de swaps pantry-strict con reserva de inventario entre platos.
-        from agent import swap_meal
+        from agent import swap_meal, LLMRateLimitedError, LLMCircuitBreakerOpen
         from nutrition_db import IngredientNutritionDB
         from db import get_raw_user_inventory
 
@@ -4662,6 +4662,7 @@ def api_regenerate_day(
         new_meals: list = []
         regenerated = 0
         slots_kept: list = []
+        _ai_unavailable = False  # [P5-REGEN-DAY-LLM-DEGRADE] rate-limit / breaker abierto
         for meal in meals:
             if not isinstance(meal, dict):
                 new_meals.append(meal)
@@ -4698,8 +4699,33 @@ def api_regenerate_day(
                 logger.info(f"[P3-REGEN-DAY] slot conservado (no generable): {meal.get('name')!r} — {_ve}")
                 new_meals.append(meal)
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
+            except (LLMRateLimitedError, LLMCircuitBreakerOpen) as _llm_e:
+                # [P5-REGEN-DAY-LLM-DEGRADE · 2026-06-23] Condición TRANSITORIA del proveedor
+                # (rate-limit o breaker abierto). Antes escapaba al handler genérico → HTTP 500
+                # opaco. Ahora: conservar el plato, marcar el flag y ABORTAR el loop (no tiene
+                # sentido reintentar N veces si la IA está caída). Si nada se regeneró → soft-fail
+                # accionable "reintenta" SIN cobrar crédito; si algo se logró antes, se persiste.
+                logger.warning(
+                    f"[P3-REGEN-DAY] IA no disponible ({type(_llm_e).__name__}) en "
+                    f"{meal.get('name')!r} — abortando loop del día."
+                )
+                _ai_unavailable = True
+                new_meals.append(meal)
+                slots_kept.append(meal.get("meal") or meal.get("meal_type"))
+                break
 
         if regenerated == 0:
+            if _ai_unavailable:
+                # Fallo transitorio del proveedor → NO consumir cuota; pedir reintento.
+                return {
+                    "regen_failed": True,
+                    "error_code": "ai_unavailable",
+                    "error_message": (
+                        "El servicio de IA está ocupado en este momento. "
+                        "Espera unos segundos e inténtalo de nuevo."
+                    ),
+                    "deficits": [],
+                }
             # Nada se regeneró → NO consumir cuota; soft-fail accionable.
             return {
                 "regen_failed": True,

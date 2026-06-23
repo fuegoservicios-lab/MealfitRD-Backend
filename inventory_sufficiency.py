@@ -241,6 +241,15 @@ def evaluate_pantry_sufficiency(
                     "fats_g": float(meal_target.get("fats_g") or meal_target.get("fats") or 0),
                 }
                 frac = (required["kcal"] / daily["kcal"]) if daily["kcal"] else _DEFAULT_MEAL_FRACTION
+                # [P5-MEAL-PROTEIN-FALLBACK · 2026-06-23] La PALANCA del gate es la PROTEÍNA.
+                # Si el caller pobló kcal pero NO la proteína del plato (frontend viejo
+                # cacheado pre-P5, o un meal cuyo objeto guardó solo `cals`), required[protein]
+                # quedaría en 0 → `_check` lo salta → el gate degrada a SOLO-kcal y una Nevera
+                # de arroz+aceite (mucha kcal, poca proteína) pasaría. Evitamos esa pérdida
+                # silenciosa de la palanca: caemos al target diario escalado por la fracción
+                # calórica de este plato (espejo del fallback all-zero de scope='day').
+                if required["protein_g"] <= 0 and required["kcal"] > 0 and daily.get("protein_g", 0) > 0:
+                    required["protein_g"] = daily["protein_g"] * frac
             else:
                 frac = _DEFAULT_MEAL_FRACTION
                 required = {k: v * frac for k, v in daily.items()}
