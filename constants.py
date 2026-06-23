@@ -159,7 +159,23 @@ LIFETIME_LESSON_MIN_WEIGHT = max(
     0.0,
     min(1.0, float(os.environ.get("LIFETIME_LESSON_MIN_WEIGHT", "0.1"))),
 )
-CHUNK_MIN_FRESH_PANTRY_ITEMS = max(1, int(os.environ.get("CHUNK_MIN_FRESH_PANTRY_ITEMS", "3")))
+# [P2-PANTRY-FLOOR-VS-NUDGE · 2026-06-23] PISO DURO que gatea la PAUSA de la
+# generación de mantenimiento (`_should_pause_chunk_for_insufficient_pantry`): si
+# la nevera tiene MENOS ítems significativos que esto, no se puede generar un plan
+# "desde la nevera" → se pausa. NO es un objetivo de nevera surtida (ese es
+# PANTRY_RECOMMENDED_ITEMS abajo, solo nudge visual). MANTENER BAJO: subirlo alto
+# congelaría el mantenimiento de casi todos (pocos usuarios reales tienen 20+
+# ítems distintos). Bump 3→5: 3 ítems es casi-vacío; 5 es un piso más honesto.
+CHUNK_MIN_FRESH_PANTRY_ITEMS = max(1, int(os.environ.get("CHUNK_MIN_FRESH_PANTRY_ITEMS", "5")))
+# [P2-PANTRY-FLOOR-VS-NUDGE · 2026-06-23] OBJETIVO RECOMENDADO (nudge visual, NO
+# bloquea NADA): número aspiracional que el banner "Mi Nevera" muestra para animar
+# al usuario a surtir mejor su nevera y que sus planes la aprovechen. Desacoplado
+# del piso duro de arriba — subirlo NO afecta la generación, solo el copy. Clamp
+# [piso, 100]. Knob `MEALFIT_PANTRY_RECOMMENDED_ITEMS` para A/B sin redeploy.
+PANTRY_RECOMMENDED_ITEMS = max(
+    CHUNK_MIN_FRESH_PANTRY_ITEMS,
+    min(100, int(os.environ.get("MEALFIT_PANTRY_RECOMMENDED_ITEMS", "20"))),
+)
 CHUNK_PANTRY_EMPTY_TTL_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_TTL_HOURS", "12")))
 CHUNK_PANTRY_EMPTY_REMINDER_HOURS = max(1, int(os.environ.get("CHUNK_PANTRY_EMPTY_REMINDER_HOURS", "4")))
 CHUNK_PANTRY_EMPTY_MAX_REMINDERS = max(0, int(os.environ.get("CHUNK_PANTRY_EMPTY_MAX_REMINDERS", "2")))
