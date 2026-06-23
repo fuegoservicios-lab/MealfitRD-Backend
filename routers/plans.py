@@ -4745,6 +4745,10 @@ def api_regenerate_day(
             "day_index": day_index,
             "meals_regenerated": regenerated,
             "slots_kept": slots_kept,
+            # Devolvemos los meals nuevos para que el frontend actualice
+            # planData.days[day_index].meals localmente (sin refetch) y luego
+            # invoque /recalculate-shopping-list (mismo patrón que swap).
+            "meals": new_meals,
         }
     except HTTPException:
         raise
