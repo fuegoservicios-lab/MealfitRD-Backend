@@ -99,6 +99,10 @@ _PDF_TELEMETRY_LIMITER = RateLimiter(max_calls=30, period_seconds=60)
 # `_PLAN_GEN_LIMITER`. Tooltip-anchor: P2-GUEST-LLM-RATELIMIT.
 _SWAP_LIMITER = RateLimiter(max_calls=12, period_seconds=60)
 _EXPAND_LIMITER = RateLimiter(max_calls=15, period_seconds=60)
+# [P1-BUDGET-FLOOR-PERSONALIZED · 2026-06-23] Cálculo del piso de presupuesto personalizado
+# (por calorías + hogar + ciclo). Se llama en cambios de input del form/dashboard → cupo generoso.
+# Pure-calc (sin DB, sin LLM); rate-limit por user/IP solo anti-spam.
+_BUDGET_FLOOR_LIMITER = RateLimiter(max_calls=40, period_seconds=60)
 
 # [P3-SHIFT-PLAN-QUOTA-EXEMPT · 2026-06-15] `/shift-plan` AVANZA la ventana rolling
 # de un plan YA generado (mantenimiento, no un plan nuevo). Estaba bajo
@@ -3746,6 +3750,47 @@ async def api_pantry_status(
     except Exception as e:
         logger.warning(f"[P2-PANTRY-LOW-BANNER] /pantry-status error: {e!r}")
         return {"meaningful_count": 0, "min_required": int(_MIN), "recommended_target": int(_REC), "is_below": False}
+
+
+@router.post("/budget-floor")
+async def api_budget_floor(
+    payload: dict = Body(default=None),
+    _uid: Optional[str] = Depends(_BUDGET_FLOOR_LIMITER),
+):
+    """[P1-BUDGET-FLOOR-PERSONALIZED · 2026-06-23] Piso de presupuesto PERSONALIZADO por las metas
+    (calorías objetivo × hogar × ciclo) para que el frontend muestre el MISMO mínimo que el gate
+    `validate_budget_sufficient` — cero drift, cero 422-sorpresa para usuarios de calorías altas.
+
+    Antes el form/dashboard mostraban `minBudgetFor` (piso a la caloría de referencia 2000 kcal,
+    sin escalar): un usuario de 2800 kcal veía "mínimo RD$7,000" pero el backend exigía más → 422
+    al generar. Este endpoint computa el piso real con la MISMA `min_budget_for_goals` que el gate.
+
+    Pure-calc sobre los campos provistos (NO lee DB, NO datos de usuario) → seguro sin auth,
+    rate-limited por user/IP (anti-spam). Cero costo LLM (NO `verify_api_quota`). Fail-open:
+    ante cualquier error devuelve `{ok: False}` y el frontend cae al mínimo estático.
+    Response: {ok, min_budget, min_budget_dop, currency, days, household, target_calories}."""
+    form = payload if isinstance(payload, dict) else {}
+    try:
+        from nutrition_calculator import min_budget_for_goals, _budget_usd_to_dop
+        info = await asyncio.to_thread(min_budget_for_goals, form)
+        currency = str(form.get("budgetCurrency") or "DOP").upper()
+        if currency not in ("DOP", "USD"):
+            currency = "DOP"
+        usd_dop = _budget_usd_to_dop()
+        min_dop = float(info["min_budget_dop"])
+        min_in_currency = round(min_dop / usd_dop) if currency == "USD" else round(min_dop)
+        return {
+            "ok": True,
+            "min_budget": int(min_in_currency),
+            "min_budget_dop": int(round(min_dop)),
+            "currency": currency,
+            "days": int(info["days"]),
+            "household": int(info["household"]),
+            "target_calories": int(info["target_calories"]),
+        }
+    except Exception as e:
+        logger.warning(f"[P1-BUDGET-FLOOR-PERSONALIZED] /budget-floor error: {e!r}")
+        return {"ok": False}
 
 
 @router.post("/pending-status/ack")
