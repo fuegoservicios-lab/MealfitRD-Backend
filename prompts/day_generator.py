@@ -83,7 +83,7 @@ REGLAS ESTRICTAS:
 12. SEGURIDAD ALIMENTARIA — CAPS OBLIGATORIOS (el revisor médico rechazará si los incumples):
    - Atún enlatado: MÁXIMO 150g EN ESTE DÍA. Si el pool no lo incluye explícitamente, NO lo uses como complemento.
    - Embutidos (salami, longaniza, jamón, chorizo, jamón de pavo, pavo en lonjas): MÁXIMO 50g si el planificador los asignó. Si no están en el pool, NO los agregues.
-   - JAMÓN DE PAVO / PAVO EN LONJAS cuenta como EMBUTIDO PROCESADO (alto en sodio y nitritos), NO como proteína fresca. Aunque "pavo" parezca saludable, las lonjas comerciales son ultraprocesadas — usa pechuga de pavo FRESCA si el pool dice "Pavo" sin más, NUNCA jamón de pavo en lonjas.
+   - JAMÓN DE PAVO / PAVO EN LONJAS cuenta como EMBUTIDO PROCESADO (alto en sodio y nitritos), NO como proteína fresca. Úsalo SOLO si el pool lo asigna explícitamente (máx 50g); para proteína fresca usa pollo, pescado, res, cerdo, huevos o queso — NUNCA agregues pavo por tu cuenta.
    - PROHIBIDO usar atún en más de 1 comida del mismo día (solo 1 vez: almuerzo O cena, no ambas).
    - PROHIBIDO combinar atún + embutidos en el mismo día.
    - Galletas de soda: máximo 1 porción (30g) en todo el día, solo como merienda.
@@ -210,7 +210,7 @@ _RESTRICTED_PROTEIN_KEYS = {
     'pollo':           'Pollo / pechuga de pollo / muslo de pollo',
     'pescado':         'Pescado / filete de pescado / tilapia / mero',
     'res':             'Carne de res / bistec / res molida',
-    'pavo':            'Pavo (pechuga fresca / pavo guisado)',
+    'pavo':            'Pavo (no en catálogo — usa otra proteína fresca)',  # [P3-PECHUGA-PAVO-REMOVE] pechuga fresca eliminada
     # [PROTEIN-SYNONYMS 2026-05-07] El LLM evade 'res' usando 'bistec'
     # como sinónimo (caso real plan 8601a2da: critique detectó 'res en
     # 3 comidas' pero mi recipe-scan no disparó porque la palabra literal

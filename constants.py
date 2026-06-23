@@ -1320,7 +1320,11 @@ def cosine_similarity(v1: List[float], v2: List[float]) -> float:
 # resuelve a la fila priced → aparece en la lista. Coherente end-to-end. (rev1 apuntaba a "Jamón de pavo"
 # RD$255 como workaround cuando pechuga no estaba priced; superado al verificarse la pechuga.)
 DOMINICAN_PROTEINS = [
-    "Pollo", "Cerdo", "Res", "Pechuga de pavo", "Pescado", "Atún", "Huevos", "Queso de Freír",
+    # [P3-PECHUGA-PAVO-REMOVE · 2026-06-23] "Pechuga de pavo" eliminada: el owner confirmó que La Sirena
+    # NO vende pechuga de pavo fresca. El pool ya no ofrece pavo fresco (jamón de pavo es embutido
+    # procesado, gateado aparte por _RESTRICTED_PROTEIN_KEYS, no proteína principal). Otras proteínas
+    # cubren. canonicalize_pavo + PROTEIN_SYNONYMS quedan (defensivos/inertes; la pechuga ya no aparece).
+    "Pollo", "Cerdo", "Res", "Pescado", "Atún", "Huevos", "Queso de Freír",
     "Salami Dominicano", "Camarones", "Chuleta", "Longaniza",
     "Habichuelas Rojas", "Habichuelas Negras", "Habichuelas Blancas",
     "Gandules", "Lentejas", "Garbanzos",
