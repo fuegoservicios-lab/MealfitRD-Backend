@@ -4663,6 +4663,12 @@ def api_regenerate_day(
         regenerated = 0
         slots_kept: list = []
         _ai_unavailable = False  # [P5-REGEN-DAY-LLM-DEGRADE] rate-limit / breaker abierto
+        # [P5-DAY-REGEN-VARIETY · 2026-06-23] Variedad intra-día: acumula los platos ya resueltos
+        # de HOY (nuevos + conservados) para que cada swap siguiente NO los repita (evita el
+        # mode-collapse "3 platos de camarones"). Knob ON por default (mejora de calidad); el
+        # fallback de factibilidad (reintento sin exclusiones) lo hace seguro.
+        day_avoid: list = []
+        _variety_on = os.environ.get("MEALFIT_DAY_REGEN_INTRADAY_VARIETY", "true").strip().lower() in ("1", "true", "yes", "on")
         for meal in meals:
             if not isinstance(meal, dict):
                 new_meals.append(meal)
@@ -4685,21 +4691,40 @@ def api_regenerate_day(
                 "current_pantry_ingredients": _ledger_to_pantry_lines(ledger),
             }
             try:
-                nm = swap_meal(meal_form)
+                # [P5-DAY-REGEN-VARIETY] 1er intento con exclusiones de variedad (los platos ya
+                # resueltos hoy). Si el chef IA NO converge con esas restricciones, 2º intento SIN
+                # ellas (solo pantry-strict) → priorizamos variedad pero nunca dejamos un plato sin
+                # cambiar si era factible cocinarlo desde la Nevera.
+                try:
+                    _form_v = dict(meal_form)
+                    if _variety_on and day_avoid:
+                        _form_v["disliked_meals"] = list(day_avoid)
+                    nm = swap_meal(_form_v)
+                except ValueError:
+                    if _variety_on and day_avoid:
+                        logger.info(f"[P5-DAY-REGEN-VARIETY] reintento SIN exclusiones de variedad para {meal.get('name')!r}")
+                        nm = swap_meal(meal_form)
+                    else:
+                        raise
                 if isinstance(nm, dict) and nm.get("name"):
                     nm["isExpanded"] = False
                     nm.pop("pantry_constrained", None)  # [P5-RESTOCK-PRESERVE] metadata transitoria, no persistir
                     new_meals.append(nm)
                     regenerated += 1
+                    day_avoid.append(nm["name"])  # [P5-DAY-REGEN-VARIETY] el siguiente swap lo evita
                     _decrement_ledger_by_meal(ledger, nm, _db)
                 else:
                     new_meals.append(meal)
                     slots_kept.append(meal.get("meal") or meal.get("meal_type"))
+                    if meal.get("name"):
+                        day_avoid.append(meal["name"])  # conservado → tampoco lo dupliquemos
             except ValueError as _ve:
                 # Un plato no se pudo generar desde la nevera → conservar el original.
                 logger.info(f"[P3-REGEN-DAY] slot conservado (no generable): {meal.get('name')!r} — {_ve}")
                 new_meals.append(meal)
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
+                if meal.get("name"):
+                    day_avoid.append(meal["name"])
             except (LLMRateLimitedError, LLMCircuitBreakerOpen) as _llm_e:
                 # [P5-REGEN-DAY-LLM-DEGRADE · 2026-06-23] Condición TRANSITORIA del proveedor
                 # (rate-limit o breaker abierto). Antes escapaba al handler genérico → HTTP 500
