@@ -660,7 +660,21 @@ def swap_meal(form_data: dict):
             )
 
     if clean_ingredients:
-        context_extras += f"\n    - ⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario quiere cambiar este plato pero DEBES utilizar ingredientes que ya estén en su lista actual. Ingredientes disponibles: {', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, sin agregar ingredientes foráneos."
+        # [P5-SWAP-PORTION-DISCIPLINE · 2026-06-23] Antes el bloque listaba los ingredientes
+        # pero NO daba disciplina de PORCIÓN → el LLM proponía cantidades grandes y el pantry
+        # guard rechazaba por `over_limit` → reintentos (swap lento, ~26s/2 retries). Añadimos
+        # la regla de "porciones moderadas de UN solo plato" para que acierte a la primera.
+        context_extras += (
+            f"\n    - ⚠️ REGLA DE RECICLAJE (ROTACIÓN DE DESPENSA): El usuario quiere cambiar este plato pero DEBES "
+            f"utilizar ingredientes que ya estén en su despensa/lista actual. Ingredientes disponibles: "
+            f"{', '.join(clean_ingredients)}. Tienes permiso creativo para proponer un plato usando solo esta base, "
+            f"sin agregar ingredientes foráneos."
+            f"\n    - 📏 CANTIDADES (CRÍTICO para no fallar): es UN SOLO plato para UNA comida. Usa porciones MODERADAS "
+            f"y realistas por ingrediente (las normales de un plato individual: p.ej. ~100-150g de proteína, ~1 taza de "
+            f"carbohidrato), NUNCA cantidades grandes ni 'toda la despensa'. El inventario es LIMITADO: si de un "
+            f"ingrediente hay poco, úsalo en cantidad pequeña o no lo incluyas. Pedir más de lo que el usuario tiene "
+            f"hará que el plato se rechace."
+        )
     else:
         logger.warning(
             f"⚠️ [SWAP_MEAL] GUARDRAIL BYPASS — Sin despensa detectada | "
