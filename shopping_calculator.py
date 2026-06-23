@@ -1485,6 +1485,7 @@ def get_plural_unit(num, u):
         'sobre': 'sobres', 'sobrecito': 'sobrecitos',
         'botella': 'botellas', 'frasco': 'frascos',
         'fundita': 'funditas', 'mazo': 'mazos', 'envase': 'envases',
+        'tarro': 'tarros', 'barrita': 'barritas',  # [P3-PKG-DAIRY-VEG · 2026-06-22] mantequilla
         'rebanada': 'rebanadas', 'hoja': 'hojas',
         'cda': 'cdas', 'cdta': 'cdtas', 'taza': 'tazas',
         'ud.': 'Uds.',
@@ -1511,6 +1512,8 @@ MARKET_MINIMUMS = {
     "cartón": 1,
     "carton": 1,
     "envase": 1,
+    "tarro": 1,
+    "barrita": 1,
     "cabeza": 1,
     "ud.": 1,
     "ud": 1,
