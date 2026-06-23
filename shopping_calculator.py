@@ -1826,13 +1826,40 @@ def _select_market_package(g_total: float, market_packages, anti_waste_pct: floa
         g_sel, pr_sel, lbl_sel, unit_sel = min(pkgs, key=lambda t: t[0])
         return {"count": 1, "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel}
     if len(sizes) > 1:
-        count, size_g = _find_best_sku(g_total, sizes, anti_waste_pct)
+        # [P1-PKG-COST-OPTIMAL · 2026-06-22] Elegir por COSTO total mínimo, no por
+        # desperdicio+conteo (el path legacy `_find_best_sku` penaliza el nº de paquetes,
+        # lo que hacía comprar 2 four-packs de yogurt griego RD$730 cuando 6 potes sueltos
+        # RD$600 —exacto— eran más baratos). Para cada tamaño contamos con el MISMO floor
+        # anti-desperdicio que _find_best_sku (under-buy permitido si under<over → NO
+        # over-compra bulk, p.ej. no elige 5 lb de arroz para una necesidad de ~2 lb) y
+        # tomamos el de MENOR costo total; desempate: menos desperdicio, menos paquetes,
+        # envase más grande. Verificado: arroz 7d→2lb/15d→5lb/30d→10lb y habichuelas
+        # mantienen su selección; yogurt 900g → 6 potes (no 2 four-packs). Tooltip-anchor:
+        # P1-PKG-COST-OPTIMAL.
+        best_key = None
+        chosen = None
+        for (g, pr, lbl, unit) in pkgs:
+            raw = g_total / g
+            floor_c = math.floor(raw)
+            if floor_c >= 1:
+                under = g_total - floor_c * g
+                over = (floor_c + 1) * g - g_total
+                frac = raw - floor_c
+                count_c = floor_c if (frac <= anti_waste_pct or under < over) else floor_c + 1
+            else:
+                count_c = 1
+            cost_c = count_c * pr
+            waste = max(0.0, count_c * g - g_total)
+            key = (round(cost_c, 4), round(waste, 4), count_c, -g)
+            if best_key is None or key < best_key:
+                best_key = key
+                chosen = {"count": int(count_c), "grams": g, "price": pr, "label": lbl, "unit": unit}
+        return chosen
     else:
         size_g = sizes[0]
         count = max(1, math.ceil(g_total / size_g))
-    # Mapear el tamaño elegido de vuelta a su precio/label/unit (match por grams más cercano).
-    g_sel, pr_sel, lbl_sel, unit_sel = min(pkgs, key=lambda t: abs(t[0] - size_g))
-    return {"count": int(count), "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel}
+        g_sel, pr_sel, lbl_sel, unit_sel = min(pkgs, key=lambda t: abs(t[0] - size_g))
+        return {"count": int(count), "grams": g_sel, "price": pr_sel, "label": lbl_sel, "unit": unit_sel}
 
 
 def _choose_egg_carton(total_eggs: float, egg_packages):
@@ -5646,26 +5673,27 @@ def _cost_from_market(market_obj, master_item, price_per_lb, price_per_unit):
     except (TypeError, ValueError):
         density_g = 0.0
 
-    # (D) HUEVO — unidad textual 'cartón (N uds.)'. El egg pre-process consolida los huevos en
-    # buckets de cartón (`_choose_egg_carton`).
-    # [P1-EGG-CARTON-SIZES · 2026-06-22] Costo con el PRECIO REAL del cartón elegido desde
-    # market_packages (por `units` == N): cartón 20 = RD$200, cartón 30 = RD$295. El precio NO
-    # escala linealmente (20→200=10/huevo, 30→295=9.83/huevo), así que derivar de price_per_unit/30
-    # sobrecobraría/subcobraría el cartón de 20. Fallback legacy (price_per_unit por cartón de 30)
-    # si no hay market_packages para ese tamaño. Tooltip-anchor: P1-EGG-CARTON-SIZES.
-    _egg_m = re.search(r'\((\d+)\s*uds?\.?\)', munit)
-    if _egg_m and 'cart' in munit:
-        _carton_n = int(_egg_m.group(1))
-        _egg_pkgs = _mi.get("market_packages")
-        if isinstance(_egg_pkgs, list):
-            for _p in _egg_pkgs:
+    # (D) UNIDADES EMPAQUETADAS — 'cartón (N uds.)' (huevos) o 'paquete (N uds.)' (ajo 4-pack).
+    # El pre-process consolida en buckets: huevos vía `_choose_egg_carton`, ajo vía P1-AJO-4PACK.
+    # [P1-EGG-CARTON-SIZES + P1-AJO-4PACK · 2026-06-22] Costo con el PRECIO REAL del paquete
+    # elegido desde market_packages (por `units` == N): huevos cartón 20=RD$200/30=RD$295; ajo
+    # paquete 4=RD$60. El precio NO escala linealmente, así que derivar de price_per_unit sería
+    # incorrecto. Genérico: cualquier '(N uds.)' busca su precio en market_packages.units (solo
+    # huevos y ajo producen ese sufijo). Fallback legacy (price_per_unit por cartón de 30) SOLO
+    # para cartón de huevos ('cart'). Tooltip-anchor: P1-EGG-CARTON-SIZES | P1-AJO-4PACK.
+    _units_m = re.search(r'\((\d+)\s*uds?\.?\)', munit)
+    if _units_m:
+        _pack_n = int(_units_m.group(1))
+        _pkgs = _mi.get("market_packages")
+        if isinstance(_pkgs, list):
+            for _p in _pkgs:
                 try:
-                    if isinstance(_p, dict) and int(float(_p.get("units"))) == _carton_n and _p.get("price") is not None:
+                    if isinstance(_p, dict) and int(float(_p.get("units"))) == _pack_n and _p.get("price") is not None:
                         return mqty * float(_p["price"])
                 except (TypeError, ValueError):
                     continue
-        if price_per_unit > 0:
-            return mqty * float(_carton_n) * (price_per_unit / 30.0)
+        if 'cart' in munit and price_per_unit > 0:
+            return mqty * float(_pack_n) * (price_per_unit / 30.0)
 
     # (A) Display en LIBRAS: market_qty ya está en libras → price_per_lb directo.
     if munit in ("lb", "lbs"):
@@ -6187,7 +6215,16 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     u_dientes += units.pop(k)
             if u_dientes > 0:
                 units['cabeza'] = units.get('cabeza', 0) + (u_dientes / 10.0)
-                
+            # [P1-AJO-4PACK · 2026-06-22] El ajo en RD se vende en PAQUETES de 4 cabezas
+            # (RD$60 el paquete, verificado in-store por el owner) — no por cabeza suelta.
+            # Redondear las cabezas necesarias HACIA ARRIBA a paquetes de 4 (mismo patrón que
+            # el cartón de huevos) para que un plan que necesite 1-2 cabezas cueste el paquete
+            # completo (RD$60), no 15-30. El egg/units-cost branch de _cost_from_market lee el
+            # precio real del 4-pack desde Ajo.market_packages [{units:4, price:60}].
+            _cab = units.pop('cabeza', 0)
+            if _cab and _cab > 0:
+                units['paquete (4 uds.)'] = units.get('paquete (4 uds.)', 0) + math.ceil(_cab / 4.0)
+
         # Empaque comercial mínimo para Huevos (Cartones en RD)
         # PRE-PASO: Convertir cualquier peso/volumen de huevos a unidades
         # (ej: "150ml de claras de huevo" ≈ 5 huevos, "100g de huevo" ≈ 2 huevos)

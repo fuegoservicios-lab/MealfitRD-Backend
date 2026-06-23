@@ -109,10 +109,14 @@ def test_arroz_30d_no_longer_overcharges_flat():
 
 
 def test_sal_tiers():
+    # [P1-PKG-COST-OPTIMAL · 2026-06-22] La selección ahora es cost-óptima. Para 800g de sal,
+    # 2×1lb (2×17=RD$34) es MÁS BARATO que 1×2lb (RD$40) — la sal de 2lb está priceada más cara
+    # por libra que la de 1lb, así que el cost-optimal correctamente prefiere 2 de 1lb (ahorra
+    # RD$6). Antes (waste+count) elegía 1×2lb por el penalty de conteo.
     _, c7 = _cost_for_grams(SAL, 300)
     _, c30 = _cost_for_grams(SAL, 800)
     assert c7 == pytest.approx(17)   # 1 lb
-    assert c30 == pytest.approx(40)  # 2 lb
+    assert c30 == pytest.approx(34)  # 2×1 lb (cost-óptimo, más barato que 1×2lb=40)
 
 
 # ───────────────────────── backward-compat (sin market_packages) ─────────────────────────
