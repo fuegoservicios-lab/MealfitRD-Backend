@@ -1310,16 +1310,27 @@ def _budget_floor_enabled() -> bool:
     return os.environ.get("MEALFIT_BUDGET_FLOOR_ENABLED", "true").lower() != "false"
 
 
-def _budget_floor_per_day_base_dop() -> float:
-    """RD$/día/persona a la caloría de referencia = el piso 'comer bien'. [BUDGET-MIN-RAISE ·
-    2026-06-22] El owner subió el piso a RD$4,000 para 7 días → 4000/7 ≈ 571.43 RD$/día. DEBE
-    quedar consistente con el frontend (BUDGET_MIN_PER_DAY.DOP=4000/7 en formValidation.js):
-    ambos son lineales per-día × días, así el form no permite un monto que el backend rechace.
-    Knob para tunear con la inflación."""
+# [BUDGET-MIN-NONLINEAR · 2026-06-23] Piso TOTAL por ciclo (DOP) a la caloría de referencia,
+# household 1. NO lineal: ciclos largos tienen descuento por compra grande (pedido del owner:
+# 7d=4000, 15d=7000, 30d=13000; antes era lineal 571.43 RD$/día → 15d=8571, 30d=17143). DEBE
+# quedar consistente con BUDGET_MIN_TOTAL del frontend (formValidation.js). cal_scale (calorías)
+# y household se aplican ENCIMA en min_budget_for_goals. Supersede el knob per-día
+# MEALFIT_BUDGET_FLOOR_PER_DAY_DOP (ahora inerte). Knob por ciclo para tunear con la inflación.
+_BUDGET_CYCLE_FLOOR_DEFAULTS_DOP = {7: "4000", 15: "7000", 30: "13000"}
+
+
+def _budget_cycle_floor_dop(days: int) -> float:
+    """Piso de presupuesto TOTAL del ciclo en DOP a la caloría de referencia (household 1),
+    NO lineal. Knob por ciclo: MEALFIT_BUDGET_FLOOR_TOTAL_{7,15,30}D_DOP."""
+    default = _BUDGET_CYCLE_FLOOR_DEFAULTS_DOP.get(int(days))
+    if default is None:
+        # Ciclo no estándar (no debería ocurrir): interpola desde el piso de 7 días (conservador).
+        per_day_7 = float(_BUDGET_CYCLE_FLOOR_DEFAULTS_DOP[7]) / 7.0
+        return max(0.0, per_day_7 * max(1, int(days)))
     try:
-        return max(0.0, float(os.environ.get("MEALFIT_BUDGET_FLOOR_PER_DAY_DOP", "571.43")))
+        return max(0.0, float(os.environ.get(f"MEALFIT_BUDGET_FLOOR_TOTAL_{int(days)}D_DOP", default)))
     except (TypeError, ValueError):
-        return 571.43
+        return float(default)
 
 
 def _budget_floor_kcal_ref() -> float:
@@ -1346,10 +1357,11 @@ def _budget_floor_tolerance_pct() -> float:
 
 def min_budget_for_goals(form_data: dict) -> dict:
     """Estima el presupuesto MÍNIMO (en DOP) para alimentar al usuario según sus metas
-    (calorías objetivo), su ciclo de compras (días) y su hogar (personas). Calibrado al piso
-    del frontend (200 DOP/día/persona a 2000 kcal) y escalado LINEALMENTE con las calorías:
-    un usuario de 3500 kcal necesita más comida → más presupuesto. Conservador (lower bound)
-    para NO sobre-bloquear. Devuelve {min_budget_dop, min_per_day_dop, days, household, target_calories}."""
+    (calorías objetivo), su ciclo de compras (días) y su hogar (personas). [BUDGET-MIN-NONLINEAR ·
+    2026-06-23] Parte de un piso TOTAL por ciclo NO lineal (7d=4000, 15d=7000, 30d=13000;
+    descuento por compra grande) calibrado al frontend, y lo escala por calorías (un usuario de
+    3500 kcal necesita más comida → más presupuesto) y por hogar. Conservador (lower bound) para
+    NO sobre-bloquear. Devuelve {min_budget_dop, min_per_day_dop, days, household, target_calories}."""
     days = _GROCERY_DURATION_DAYS.get(str(form_data.get("groceryDuration") or "weekly").lower(), 7)
     try:
         household = int(float(form_data.get("householdSize") or 1))
@@ -1364,10 +1376,12 @@ def min_budget_for_goals(form_data: dict) -> dict:
         target_calories = 0
     if target_calories <= 0:
         target_calories = int(_budget_floor_kcal_ref())
-    base = _budget_floor_per_day_base_dop()
+    # [BUDGET-MIN-NONLINEAR · 2026-06-23] Piso por ciclo (no lineal) × escalado por calorías ×
+    # hogar. min_per_day se deriva sólo para el display/back-compat del dict.
+    cycle_base = _budget_cycle_floor_dop(days)
     cal_scale = max(1.0, target_calories / _budget_floor_kcal_ref())
-    min_per_day = base * cal_scale
-    min_budget_dop = min_per_day * days * household
+    min_budget_dop = cycle_base * cal_scale * household
+    min_per_day = min_budget_dop / max(1, days)
     return {
         "min_budget_dop": round(min_budget_dop),
         "min_per_day_dop": round(min_per_day),

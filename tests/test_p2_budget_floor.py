@@ -4,8 +4,9 @@ Decisión del owner (audit presupuesto↔calidad): BLOQUEAR si el presupuesto 'c
 es físicamente insuficiente para alimentar al usuario según SUS metas (calorías × días × hogar),
 y pedir ajuste — NUNCA bajar la calidad nutricional para encajar en un precio imposible.
 
-El piso se calibra al número del propio frontend (200 DOP/día/persona a 2000 kcal = "comer bien")
-y escala linealmente con las calorías objetivo. Conservador (lower bound) para no sobre-bloquear.
+El piso parte de un total por ciclo NO lineal (7d=4000, 15d=7000, 30d=13000; descuento por compra
+grande) calibrado al frontend, y escala por calorías y hogar. Conservador (lower bound) para no
+sobre-bloquear. [BUDGET-MIN-NONLINEAR · 2026-06-23]
 """
 import os
 
@@ -43,8 +44,26 @@ def test_min_budget_escala_con_dias_y_hogar():
     hogar2 = nc.min_budget_for_goals(_form(grocery="weekly", household=2))["min_budget_dop"]
     assert mensual > semanal, "30 días debe costar más que 7."
     assert hogar2 > semanal, "2 personas deben costar más que 1."
-    # 30 días ≈ ~4.3× los 7 días (lineal en días).
-    assert mensual >= semanal * 3.5
+    # [BUDGET-MIN-NONLINEAR · 2026-06-23] 30d (13000) cuesta MÁS que 7d (4000) pero MENOS que el
+    # lineal (30/7 × 4000 = 17143): descuento por compra grande. Ratio real 13000/4000 = 3.25.
+    assert mensual >= semanal * 3.0
+    assert mensual < semanal * (30 / 7)
+
+
+def test_cycle_floors_match_owner_values():
+    # [BUDGET-MIN-NONLINEAR · 2026-06-23] Pisos por ciclo EXACTOS del owner (a caloría de ref,
+    # household 1). cal_scale (calorías) y household se aplican ENCIMA en min_budget_for_goals.
+    assert nc._budget_cycle_floor_dop(7) == 4000
+    assert nc._budget_cycle_floor_dop(15) == 7000
+    assert nc._budget_cycle_floor_dop(30) == 13000
+    # No lineal: 30 días cuesta menos que el lineal 7d×(30/7).
+    assert nc._budget_cycle_floor_dop(30) < nc._budget_cycle_floor_dop(7) / 7 * 30
+    # Knob por ciclo overridea sin redeploy.
+    os.environ["MEALFIT_BUDGET_FLOOR_TOTAL_15D_DOP"] = "9999"
+    try:
+        assert nc._budget_cycle_floor_dop(15) == 9999
+    finally:
+        del os.environ["MEALFIT_BUDGET_FLOOR_TOTAL_15D_DOP"]
 
 
 def test_min_budget_escala_con_calorias():

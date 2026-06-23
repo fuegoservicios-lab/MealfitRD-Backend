@@ -166,8 +166,9 @@ def test_build_budget_context_uses_currency():
 def test_budget_minimum_enforced_and_shared_ssot():
     _FORMVAL = (_REPO_ROOT / "frontend" / "src" / "config" / "formValidation.js").read_text(encoding="utf-8")
     # SSOT del mínimo en formValidation.
-    assert "export const minBudgetFor" in _FORMVAL and "BUDGET_MIN_PER_DAY" in _FORMVAL, (
-        "Falta el helper SSOT `minBudgetFor` / `BUDGET_MIN_PER_DAY` en formValidation.js."
+    # [BUDGET-MIN-NONLINEAR · 2026-06-23] La tabla per-ciclo reemplazó BUDGET_MIN_PER_DAY.
+    assert "export const minBudgetFor" in _FORMVAL and "BUDGET_MIN_TOTAL" in _FORMVAL, (
+        "Falta el helper SSOT `minBudgetFor` / `BUDGET_MIN_TOTAL` en formValidation.js."
     )
     # El flow gatea "Siguiente Paso" con el MÍNIMO (no solo > 0).
     assert "minBudgetFor(fd.budgetCurrency" in _FLOW_JSX, (
