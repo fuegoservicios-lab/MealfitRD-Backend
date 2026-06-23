@@ -1323,9 +1323,15 @@ DOMINICAN_PROTEINS = [
     "Pollo", "Cerdo", "Res", "Pechuga de pavo", "Pescado", "Atún", "Huevos", "Queso de Freír",
     "Salami Dominicano", "Camarones", "Chuleta", "Longaniza",
     "Habichuelas Rojas", "Habichuelas Negras", "Habichuelas Blancas",
-    "Gandules", "Lentejas", "Garbanzos", "Soya/Tofu",
+    "Gandules", "Lentejas", "Garbanzos",
     "Queso Ricotta", "Queso Blanco", "Queso Mozzarella", "Yogurt"
 ]
+# [P3-TOFU-REMOVE · 2026-06-22] "Soya/Tofu" eliminado del pool de proteínas ofrecibles: el owner
+# confirmó que La Sirena NO vende tofu (ni carne de soya como producto verificado). El esqueleto ya
+# no lo ofrece; el master row "Tofu" fue borrado (no priced, fuera del catálogo VERIFIED-ONLY). Las
+# refs de tofu en condition_rules/allergy maps SE CONSERVAN a propósito (defensa: si un usuario
+# alérgico a soya menciona tofu en texto libre, el swap tofu→pollo sigue activo). Proteína vegana
+# ahora = leguminosas (Gandules/Lentejas/Garbanzos/Habichuelas). Tooltip-anchor: P3-TOFU-REMOVE.
 
 DOMINICAN_CARBS = [
     "Plátano Verde", "Plátano Maduro", "Yuca", "Batata", "Arroz Blanco", 
@@ -1449,7 +1455,7 @@ NUTRITIONAL_CATEGORIES = {
     "carnes rojas y embutidos": ["cerdo", "res", "chuleta", "longaniza", "salami dominicano"],
     "pescados y mariscos": ["pescado", "atún", "sardina", "camarones"],
     "huevos y lácteos": ["huevos", "queso de freír", "queso", "yogurt", "leche", "queso crema", "ricotta", "cottage", "yogurt griego"],
-    "legumbres": ["habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos", "soya/tofu"],
+    "legumbres": ["habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos"],  # [P3-TOFU-REMOVE] soya/tofu fuera
     "víveres y almidones": ["plátano verde", "plátano maduro", "yuca", "batata", "guineítos verdes", "ñame", "yautía", "papas", "casabe"],
     "cereales": ["arroz blanco", "arroz integral", "avena", "pasta", "quinoa", "pan integral", "pan"]
 }

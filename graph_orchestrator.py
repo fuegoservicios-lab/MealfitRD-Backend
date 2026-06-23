@@ -14985,7 +14985,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 issues.append(
                     f"DIETA INCOMPATIBLE (rechazo de restricción declarada): el plan contiene producto(s) "
                     f"animal(es) incompatibles con la dieta '{form_data.get('dietType')}' del usuario. DEBES "
-                    f"reemplazarlos por alternativas vegetales que resuelvan (leguminosas, tofu, etc.). "
+                    f"reemplazarlos por alternativas vegetales que resuelvan (leguminosas, etc.). "  # [P3-TOFU-REMOVE] no sugerir tofu (no se vende)
                     f"Violaciones: {_dv_str}"
                 )
                 severity = _severity_max(severity, "critical")
