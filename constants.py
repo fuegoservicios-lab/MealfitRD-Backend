@@ -2160,12 +2160,32 @@ UNIT_WEIGHTS = {
     "ajies": 100.0,
 }
 
-def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base_name: str) -> float | None:
-    """Convierte matemáticamente entre familias de unidades incompatibles (Masa/Vol/Unidad)."""
+# [P5-CASABE-UNIT-WEIGHT · 2026-06-23] Formas físicas que comparten término
+# nutricional/sinónimo con otro alimento (vía CARB_SYNONYMS → normalize_ingredient_for_tracking)
+# pero cuyo PESO-POR-UNIDAD físico es MUY distinto. Sin este override, el pantry guard
+# heredaba el peso-por-unidad del término normalizado y rechazaba por `over_limit` falso.
+# Caso observado en prod (swap cravings, corr=ae089712, 2026-06-23): el LLM pidió
+# "1 unidad de Casabe (~30g, una hoja pequeña)" → casabe normaliza a "yuca" (es yuca
+# deshidratada, misma nutrición — test_synonyms lo exige) → heredaba UNIT_WEIGHTS["yuca"]=400g
+# (¡una raíz entera!) → 400g > 281g de tu paquete × 1.30 → rechazo → retry innecesario (~+10s).
+# La nutrición/sinónimo de casabe→yuca se PRESERVA; SOLO se corrige el peso-por-unidad físico
+# para la matemática del guard. Añade aquí cualquier forma análoga (arepita de yuca, etc.).
+_PHYSICAL_UNIT_WEIGHT_OVERRIDES = {
+    "casabe": 20.0,  # una hoja/torta de casabe ≈ 20g (NO 400g de yuca entera)
+}
+
+
+def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base_name: str, original_name: str | None = None) -> float | None:
+    """Convierte matemáticamente entre familias de unidades incompatibles (Masa/Vol/Unidad).
+
+    [P5-CASABE-UNIT-WEIGHT] `original_name` (opcional): nombre crudo del ingrediente ANTES de
+    normalizar. Si contiene una forma de `_PHYSICAL_UNIT_WEIGHT_OVERRIDES`, su peso-por-unidad
+    físico GANA sobre el del `base_name` normalizado (ej: casabe usa 20g, no los 400g de yuca).
+    """
     if not base_name: return None
     density = VOLUMETRIC_DENSITIES.get(base_name)
     unit_weight = UNIT_WEIGHTS.get(base_name)
-    
+
     if density is None:
         for k, v in VOLUMETRIC_DENSITIES.items():
             if k in base_name or base_name in k:
@@ -2175,6 +2195,14 @@ def _get_converted_quantity(req_qty: float, req_unit: str, dispo_unit: str, base
         for k, v in UNIT_WEIGHTS.items():
             if k in base_name or base_name in k:
                 unit_weight = v
+                break
+
+    # [P5-CASABE-UNIT-WEIGHT] Override del peso-por-unidad físico según el nombre ORIGINAL.
+    if original_name:
+        _orig = strip_accents(original_name.lower().strip())
+        for _phys_key, _phys_w in _PHYSICAL_UNIT_WEIGHT_OVERRIDES.items():
+            if _phys_key in _orig:
+                unit_weight = _phys_w
                 break
 
     if req_unit == 'g' and dispo_unit == 'ml' and density: return req_qty / density
@@ -2399,7 +2427,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                     if available_qty <= 0.01:
                         converted = True
                         break
-                    req_qty_in_dispo_unit = _get_converted_quantity(gen_base_qty, gen_base_unit, dispo_unit, matched_pantry_key)
+                    req_qty_in_dispo_unit = _get_converted_quantity(gen_base_qty, gen_base_unit, dispo_unit, matched_pantry_key, original_name=gen_name)
                     if req_qty_in_dispo_unit is not None:
                         if req_qty_in_dispo_unit > (available_qty * tolerance):
                             formatted_req = _format_unit_qty(gen_base_qty, gen_base_unit)
@@ -2418,7 +2446,7 @@ def validate_ingredients_against_pantry(generated_ingredients: list, pantry_ingr
                         
                         # Conversiones directas de masa desde fallback a la unidad de la despensa
                         if dispo_unit in ['g', 'kg', 'lb', 'oz', 'ml', 'unidad']:
-                            req_qty_in_dispo_unit = _get_converted_quantity(fallback_g, 'g', dispo_unit, matched_pantry_key)
+                            req_qty_in_dispo_unit = _get_converted_quantity(fallback_g, 'g', dispo_unit, matched_pantry_key, original_name=gen_name)
                             if req_qty_in_dispo_unit is None:
                                 if dispo_unit == 'g': req_qty_in_dispo_unit = fallback_g
                                 elif dispo_unit == 'kg': req_qty_in_dispo_unit = fallback_g / 1000.0
