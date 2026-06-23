@@ -26,3 +26,15 @@ def test_light_protein_options_still_present():
     # Las otras fuentes de proteína liviana siguen (el requisito de proteína por comida no se rompe).
     for opt in ("Huevos enteros", "ricotta", "Yogurt griego", "Mantequilla de maní"):
         assert opt in _PREFS, f"falta opción de proteína liviana: {opt}"
+
+
+def test_food_safety_blended_note_no_protein_powder():
+    """[P3-PROTEIN-POWDER-REMOVE] El food-safety note de batidos (huevo crudo) ya no sugiere
+    proteína en polvo — solo yogur griego (alternativa segura disponible). Cazado por workflow."""
+    import re
+    src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
+    m = re.search(r"_FOOD_SAFETY_NOTE_BLENDED\s*=\s*\(\n(.*?)\n\)", src, re.DOTALL)
+    assert m, "no se encontró _FOOD_SAFETY_NOTE_BLENDED"
+    note = m.group(1).lower()
+    assert "polvo" not in note, "el food-safety note de batidos aún sugiere proteína en polvo"
+    assert "yogur" in note, "el food-safety note debe ofrecer yogur griego como alternativa"

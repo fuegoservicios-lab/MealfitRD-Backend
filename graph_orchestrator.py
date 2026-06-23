@@ -9867,10 +9867,13 @@ def _scan_raw_egg_violations(plan: dict) -> list:
 
 
 # Notas de seguridad (prominentes, accionables) que el auto-fix inyecta a la receta.
+# [P3-PROTEIN-POWDER-REMOVE · 2026-06-22] Esta nota ya NO sugiere proteína en polvo (suplemento
+# fuera del catálogo, no vendido en La Sirena). Yogur griego es la alternativa segura y siempre
+# disponible para batidos. (Comentario fuera del literal para no falsear el test parser-based.)
 _FOOD_SAFETY_NOTE_BLENDED = (
     "⚠️ Seguridad alimentaria: NO uses huevo crudo en un batido (riesgo de Salmonella). "
-    "Usa huevo PASTEURIZADO, o sustitúyelo por 1 medida de proteína en polvo o 2-3 "
-    "cucharadas de yogur griego para el mismo aporte proteico sin riesgo."
+    "Usa huevo PASTEURIZADO, o sustitúyelo por 2-3 cucharadas de yogur griego "
+    "para el mismo aporte proteico sin riesgo."
 )
 _FOOD_SAFETY_NOTE_NOCOOK = (
     "⚠️ Seguridad alimentaria: cocina el huevo por completo (≥71°C, yema y clara firmes, "
@@ -10170,7 +10173,7 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
             return 0  # ya tiene proteína suficiente — no tocar
         # [P3-FOOD-SAFETY] No añadir huevo crudo a preparaciones licuadas/frías (batido,
         # jugo): no hay cocción posible aguas abajo → sería un vector de Salmonella. En esos
-        # slots se prefiere una proteína no-cocción-dependiente (yogur/proteína en polvo).
+        # slots se prefiere una proteína no-cocción-dependiente (yogur griego).
         try:
             from constants import strip_accents as _sa
         except Exception:
