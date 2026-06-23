@@ -4236,6 +4236,18 @@ def canonicalize_tomate(name) -> str | None:
     if not name:
         return None
     n_low = str(name).lower()
+    # [P3-TOMATE-SAUCE-FIX · 2026-06-22] Las formas PROCESADAS de tomate NO son tomate fresco:
+    # salsa/pasta/puré/ketchup tienen su propio item de catálogo ("Salsa de tomate") y su propio
+    # cap (P6-SAUCE-CAP, no P5-VEG-CAP); tomate seco/deshidratado es otro producto. El docstring
+    # decía que se excluían "ya en el master_map" pero el `\btomates?\b` de abajo NO está anclado y
+    # las capturaba → en planes reales "salsa de tomate" se canonicalizaba a "Tomate", se mezclaba
+    # y costeaba como tomate de ensalada (disparaba P5-VEG-CAP en vez de P6-SAUCE-CAP). Early-return
+    # None para que conserven su nombre y resuelvan a su master item. El callsite L6058 ya estaba
+    # bien (ancla `^tomates?\b` + excluye salsa/pasta). Tooltip-anchor: P3-TOMATE-SAUCE-FIX.
+    if "tomate" in n_low and re.search(r'\b(?:salsa|pasta|pur[eé]|ketchup|k[eé]tchup|catsup)\b', n_low):
+        return None
+    if re.search(r'\btomates?\s+(?:seco|secos|deshidratad)', n_low):
+        return None
     # Cherry/uva PRIMERO (preserva como producto distinto).
     if re.search(r'\btomates?\s+(?:cherry|uva)\b', n_low):
         return 'Tomate cherry'

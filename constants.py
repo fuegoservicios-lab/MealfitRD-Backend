@@ -1381,7 +1381,11 @@ PROTEIN_SYNONYMS = {
     "lentejas": ["lentejas", "lenteja"],
     "garbanzos": ["garbanzos", "garbanzo", "hummus", "puré de garbanzos"],
     "soya/tofu": ["soya/tofu", "soya", "tofu", "carne de soya", "tofu/soya", "tofu/soya firme", "tofu firme", "soya firme"],
-    "pavo": ["pavo", "pechuga de pavo", "pavo asado", "pavo desmenuzado", "jamón de pavo", "pavo molido", "carne de pavo"]
+    # [P3-PAVO-SYNONYM-KEY · 2026-06-22] Key renombrada "pavo"→"pechuga de pavo" para alinear con
+    # el catálogo (DOMINICAN_PROTEINS usa "Pechuga de pavo" verificado desde P3-CONDIMENT-CONSOLIDATION).
+    # test_synonyms::test_catalog_lists_match_synonym_keys exige que cada item del catálogo tenga key
+    # en su synonym map; "Pechuga de pavo" no la tenía (era alias bajo "pavo"). "pavo" queda como alias.
+    "pechuga de pavo": ["pechuga de pavo", "pavo", "pavo asado", "pavo desmenuzado", "jamón de pavo", "pavo molido", "carne de pavo"]
 }
 
 CARB_SYNONYMS = {
