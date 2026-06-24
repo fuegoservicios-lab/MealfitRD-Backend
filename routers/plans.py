@@ -4175,6 +4175,16 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
             _v = hp.get(_src)
             if _v and not data.get(_dst):
                 data[_dst] = _v
+        # [P2-UPDATE-HYDRATE-BIOMETRICS · 2026-06-23] (audit inteligencia P2-12) Hidratar biométricos
+        # del perfil cuando el body no los trae. El frontend `regenerateSingleMeal` NO envía
+        # gender/age/weight/height/activityLevel/weightUnit/goal → el gate de suficiencia caía a defaults
+        # (male/maintenance/154lb, ~2300 kcal) → `frac` sesgado → micros advisory sub-escalados + WARN
+        # P0-FORM-4 spameado. Hidratamos server-side (sin tocar el frontend). Solo rellena lo ausente.
+        if os.environ.get("MEALFIT_UPDATE_HYDRATE_BIOMETRICS", "true").strip().lower() in ("1", "true", "yes", "on"):
+            for _bk in ("weight", "height", "age", "gender", "activityLevel", "activity_level",
+                        "weightUnit", "goal", "mainGoal", "bodyFat"):
+                if data.get(_bk) in (None, "", 0) and hp.get(_bk) not in (None, ""):
+                    data[_bk] = hp.get(_bk)
     except Exception as _enrich_e:
         logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] enrich perfil falló (no bloquea): {_enrich_e}")
 

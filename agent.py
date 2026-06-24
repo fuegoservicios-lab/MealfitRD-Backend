@@ -492,6 +492,52 @@ def swap_meal(form_data: dict):
         except Exception as _macro_e:
             logger.debug(f"[P1-SWAP-MACROS] No se derivaron targets desde calc_macros: {_macro_e}")
 
+    # [P2-8-SWAP-SLOT-TARGET · 2026-06-23] (audit inteligencia P2-8) Validar contra el slot OBJETIVO
+    # (derivado del objetivo diario del usuario) en vez del plato ACTUAL, que puede venir drifteado
+    # (un desayuno a 12g cuando el slot pide 30g → todo swap se ancla a ~12g → el drift se vuelve
+    # permanente). form_data trae biométricos hidratados server-side por el router (P2-12). REEMPLAZA
+    # los target_* heredados; fallback a ellos si no hay daily targets / error. Default OFF: subir el
+    # target puede aumentar fallos de swap pantry-strict (el usuario priorizó variedad sobre clavar la
+    # macro del slot) → validar A/B antes de flip. Knob MEALFIT_SWAP_TARGET_FROM_SLOT.
+    _p28_uid = form_data.get("user_id")
+    if (
+        _p28_uid and _p28_uid != "guest"
+        and os.environ.get("MEALFIT_SWAP_TARGET_FROM_SLOT", "false").strip().lower() in ("1", "true", "yes", "on")
+    ):
+        try:
+            from nutrition_calculator import get_nutrition_targets as _gnt8, allocate_macros_per_slot as _alloc8
+            _nt8 = _gnt8(form_data)
+            if _nt8 and _nt8.get("target_calories"):
+                _m8 = _nt8.get("macros") or {}
+                _daily8 = {
+                    "kcal": _nt8.get("target_calories"), "protein": _m8.get("protein_g"),
+                    "carbs": _m8.get("carbs_g"), "fats": _m8.get("fats_g"),
+                }
+                try:
+                    _num8 = int(form_data.get("num_meals") or form_data.get("mealsPerDay") or 4)
+                except (TypeError, ValueError):
+                    _num8 = 4
+                _slots8 = _alloc8(_daily8, _num8)
+                _mt8 = strip_accents(str(meal_type or "").lower()).strip()
+                _slot_key8 = next(
+                    (k for k in _slots8 if k == _mt8 or k.split("_")[0] in _mt8 or _mt8 in k),
+                    None,
+                )
+                if _slot_key8 is None and "merienda" in _mt8:
+                    _slot_key8 = next((k for k in _slots8 if k.startswith("merienda")), None)
+                _st8 = _slots8.get(_slot_key8) if _slot_key8 else None
+                if _st8 and _st8.get("protein"):
+                    target_calories = round(_st8["kcal"])
+                    target_protein = round(_st8["protein"])
+                    target_carbs = round(_st8["carbs"])
+                    target_fats = round(_st8["fats"])
+                    logger.info(
+                        f"🎯 [P2-8-SWAP-SLOT-TARGET] target del slot '{_slot_key8}': "
+                        f"{target_calories}kcal / {target_protein}g P (era plato actual)"
+                    )
+        except Exception as _p28_e:
+            logger.debug(f"[P2-8-SWAP-SLOT-TARGET] slot target falló (no bloquea): {_p28_e}")
+
     allergies = form_data.get("allergies", [])
     dislikes = form_data.get("dislikes", [])
     liked_meals = form_data.get("liked_meals", [])
@@ -738,6 +784,25 @@ def swap_meal(form_data: dict):
             ]
             if _fresh_proteins:
                 available_proteins = _fresh_proteins
+
+        # [P2-9-GAINMUSCLE-MAINS · 2026-06-23] (audit inteligencia P2-9) gain_muscle: sesgar la
+        # SUGERENCIA a proteínas de ALTA densidad (excluir mains de baja densidad: leguminosas /
+        # ricotta-cottage-crema / yogurt regular) — paridad con el esqueleto de S1
+        # (P3-GAINMUSCLE-PROTEIN-DENSITY, mismo set módulo-level). Antes el swap/regenerate-day podía
+        # elegir Ricotta/Habichuelas como main → día bajo el piso de proteína. Graceful: si NO quedan de
+        # alta densidad, conserva las disponibles. Knob compartido MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN.
+        _swap_goal = (form_data.get("goal") or form_data.get("mainGoal") or "").strip().lower()
+        if (
+            _swap_goal == "gain_muscle"
+            and os.environ.get("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", "true").strip().lower() in ("1", "true", "yes", "on")
+        ):
+            try:
+                from ai_helpers import _LOW_DENSITY_AS_MAIN as _LDM
+                _hd_proteins = [p for p in available_proteins if p.lower() not in _LDM]
+                if _hd_proteins:
+                    available_proteins = _hd_proteins
+            except Exception as _gm_e:
+                logger.debug(f"[P2-9-GAINMUSCLE-MAINS] filtro densidad falló (no bloquea): {_gm_e}")
         
         user_id = form_data.get("user_id")
         db_freq_map = {}

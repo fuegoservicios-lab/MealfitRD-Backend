@@ -166,6 +166,20 @@ def _apply_recency_fatigue(freq_map, user_id):
         return freq_map
 
 
+# [P3-GAINMUSCLE-PROTEIN-DENSITY · 2026-06-23 · elevado a módulo P2-9 · 2026-06-23] Proteínas de BAJA
+# densidad que NO deben usarse como proteína PRINCIPAL en gain_muscle (piso de proteína alto). Set
+# EXPLÍCITO (NO reusar LEGUME_NAMES — omite "habichuelas blancas", cazado por el test trial 7). Elevado
+# a nivel módulo para que las superficies de UPDATE (swap_meal, audit inteligencia P2-9) reusen el MISMO
+# set que el esqueleto de S1 (get_deterministic_variety_prompt) — un swap/regenerate-day de gain_muscle
+# ya no elige Ricotta/Habichuelas/Gandules como main. tooltip-anchor: P2-9-GAINMUSCLE-MAINS
+_LOW_DENSITY_AS_MAIN = {
+    "habichuelas rojas", "habichuelas negras", "habichuelas blancas",
+    "gandules", "lentejas", "garbanzos",
+    "queso ricotta", "queso cottage", "queso crema",
+    "yogurt",  # regular ~4g prot/100g (NO "yogurt griego" — ése es alto en proteína, exact-match)
+}
+
+
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None, rejection_reasons: list = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
     logger.debug("🎲 [ANTI MODE-COLLAPSE] Calculando Matriz de Ingredientes (Round-Robin)...")
@@ -475,13 +489,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # penaliza embutidos/grasas). Las leguminosas/ricotta siguen apareciendo como ACOMPAÑANTE en la
     # generación del día (no se IMPONEN como main). Knob rollback: MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN.
     # Tooltip-anchor: P3-GAINMUSCLE-PROTEIN-DENSITY.
-    # Set EXPLÍCITO (NO reusar LEGUME_NAMES — omite "habichuelas blancas", cazado por el test trial 7).
-    _LOW_DENSITY_AS_MAIN = {
-        "habichuelas rojas", "habichuelas negras", "habichuelas blancas",
-        "gandules", "lentejas", "garbanzos",
-        "queso ricotta", "queso cottage", "queso crema",
-        "yogurt",  # regular ~4g prot/100g (NO "yogurt griego" — ése es alto en proteína, exact-match)
-    }
+    # Set EXPLÍCITO `_LOW_DENSITY_AS_MAIN` elevado a nivel módulo (P2-9) — reusado por swap_meal.
     if _main_goal == "gain_muscle" and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True):
         _low_mains = [p for p in unique_proteins if p.lower() in _LOW_DENSITY_AS_MAIN]
         if _low_mains:

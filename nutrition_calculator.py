@@ -368,6 +368,23 @@ def _meal_macros_tolerance_pct() -> float:
     return max(0.05, min(0.50, v))
 
 
+def _swap_cals_tolerance_mult() -> float:
+    """[P2-SWAP-CALS-TOLERANCE-KNOB · 2026-06-23] (audit inteligencia P2-13) Multiplicador de la
+    tolerancia calórica vs la base. Knob `MEALFIT_SWAP_CALS_TOLERANCE_MULT` (default 1.5, clamp
+    [1.0, 2.0]). Las kcal varían más que protein/carbs/fats por side dishes → la base se relaja ×N
+    SOLO para kcal. El default 1.5 (→ ±22.5% con base 0.15) es decisión testeada; un swap puede
+    persistir ese drift sin re-escalar (P1-2 rebalancer lo cierra al re-apuntar al target). Bajarlo
+    a ~1.2 (→ ±18%) estrecha el drift kcal por-comida SIN redeploy — medir tasa de retries/422 antes.
+    Tooltip-anchor: P2-SWAP-CALS-TOLERANCE-KNOB.
+    """
+    import os
+    try:
+        v = float(os.environ.get("MEALFIT_SWAP_CALS_TOLERANCE_MULT", "1.5"))
+    except (TypeError, ValueError):
+        return 1.5
+    return max(1.0, min(2.0, v))
+
+
 def _meal_macros_validate_enabled() -> bool:
     """Kill switch `MEALFIT_SWAP_MACROS_VALIDATE` (default True). Si False, el
     swap/modify retorna lo que el LLM emita sin validar macros (legacy pre-fix).
@@ -448,7 +465,7 @@ def validate_meal_macros_against_targets(
 
     drifts: dict = {}
     failures: list = []
-    cals_tolerance = min(1.0, tolerance_pct * 1.5)
+    cals_tolerance = min(1.0, tolerance_pct * _swap_cals_tolerance_mult())  # [P2-SWAP-CALS-TOLERANCE-KNOB]
 
     for key in ("cals", "protein", "carbs", "fats"):
         try:

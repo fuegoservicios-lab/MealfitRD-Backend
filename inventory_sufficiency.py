@@ -230,6 +230,14 @@ def evaluate_pantry_sufficiency(
                 # Si el caller no pobló macros (todo 0) → caer al target diario calculado.
                 if required["protein_g"] <= 0 and required["kcal"] <= 0:
                     required = dict(daily)
+                # [P5-DAY-PROTEIN-FALLBACK · 2026-06-23] (audit inteligencia P2-11) Espejo del fallback de
+                # scope='meal': si el caller pobló kcal pero NO la proteína (meals con `cals` sin key
+                # `protein` — plan legacy/degradado/parcial), required[protein_g]=0 → `_check` la salta →
+                # el gate degrada a SOLO-kcal y una Nevera de arroz+aceite (mucha kcal, poca proteína)
+                # pasaría el día bajo el piso de proteína (la PALANCA, decisión D1 lever-only). frac=1.0
+                # para day → target diario COMPLETO (NO escalar por fracción).
+                elif required["protein_g"] <= 0 and required["kcal"] > 0 and daily.get("protein_g", 0) > 0:
+                    required["protein_g"] = daily["protein_g"]
             else:
                 required = dict(daily)
         else:  # "meal"

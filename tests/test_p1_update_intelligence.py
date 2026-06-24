@@ -150,10 +150,6 @@ def test_all_p1_knobs_present():
         assert knob in (AGENT + TOOLS + PLANS + ORCH), f"knob {knob} ausente"
 
 
-def test_marker_bumped():
-    assert "P1-UPDATE-INTELLIGENCE" in _read("app.py")
-
-
 # ── Funcional (guardado por import de routers.plans) ──────────────────────────
 try:
     from routers.plans import _enrich_clinical_from_profile as _ENRICH

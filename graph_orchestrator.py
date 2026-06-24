@@ -10918,8 +10918,25 @@ def build_variety_report(plan: dict) -> dict:
         issues.append(f"Descriptor 'cremoso' en {cremoso} platos (cap sugerido 1)")
     if premium > 2:
         issues.append(f"Ingredientes premium en {premium} comidas (cap sugerido 2)")
+    # [P2-10-CROSS-DAY-PROTEIN · 2026-06-23] (audit inteligencia P2-10) Detección ALWAYS-ON de monotonía
+    # de proteína PESADA cross-day (≥3 días con la misma proteína). Antes SOLO corría en
+    # `self_critique_node`, que hace return temprano en attempt>1 → un plan que va a retry por macro/
+    # médica regeneraba días en attempt 2 SIN revisión de monotonía cross-day no-huevo (pollo en los 3
+    # días sin que nada lo cazara). `build_variety_report` corre en CADA attempt (Guard 6) → cierra el
+    # gap. Advisory por default (variedad es calidad blanda; un gate duro causa loops): se expone como
+    # field `cross_day_proteins` SIN tocar `issues`/`ok`. Con MEALFIT_CROSS_DAY_PROTEIN_GATE=true se
+    # añade a `issues` para alimentar un gate suave futuro. tooltip-anchor: P2-10-CROSS-DAY-PROTEIN
+    cross_day_proteins: dict = {}
+    try:
+        cross_day_proteins = _count_cross_day_heavy_protein_repetition(plan.get("days", []) or [])
+        if cross_day_proteins and os.environ.get("MEALFIT_CROSS_DAY_PROTEIN_GATE", "false").strip().lower() in ("1", "true", "yes", "on"):
+            for _lbl, _n in cross_day_proteins.items():
+                issues.append(f"Proteína '{_lbl}' repetida en {_n} días (monotonía cross-day)")
+    except Exception:
+        cross_day_proteins = {}
     return {"total_meals": total_meals, "egg_meals": egg_meals, "cremoso": cremoso,
-            "premium": premium, "same_day_repeats": same_day_repeats, "issues": issues,
+            "premium": premium, "same_day_repeats": same_day_repeats,
+            "cross_day_proteins": cross_day_proteins, "issues": issues,
             "ok": not issues}
 
 
