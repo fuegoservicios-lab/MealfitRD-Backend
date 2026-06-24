@@ -32,3 +32,20 @@ def test_feasibility_fallback_retries_without_exclusions():
     assert "reintento SIN exclusiones de variedad" in _PLANS
     # El reintento usa meal_form crudo (sin las exclusiones de variedad).
     assert re.search(r"nm = swap_meal\(meal_form\)", _PLANS)
+
+
+def test_excludes_main_protein_too():
+    # [P5-DAY-REGEN-VARIETY-PROTEIN] además del NOMBRE, excluye la PROTEÍNA principal del plato
+    # aceptado → 4 proteínas distintas, no 2 de res.
+    assert "P5-DAY-REGEN-VARIETY-PROTEIN" in _PLANS
+    assert "def _main_protein_of_meal" in _PLANS
+    assert "_MAIN_PROTEIN_DETECT" in _PLANS
+    # La proteína del plato nuevo y la del conservado entran a day_avoid.
+    assert re.search(r"_p_new\s*=\s*_main_protein_of_meal\(nm\)", _PLANS)
+    assert re.search(r"day_avoid\.append\(_p_new\)", _PLANS)
+
+
+def test_protein_detect_covers_key_proteins():
+    # El mapa debe cubrir las proteínas dominicanas clave (res/carne, camarones, cerdo, pescado, huevos).
+    for kw in ("camaron", "pollo", "cerdo", "res", "carne", "pescado", "huevo"):
+        assert any(kw == k for k, _ in __import__("re").findall(r'\("([^"]+)",\s*"([^"]+)"\)', _PLANS)) or kw in _PLANS

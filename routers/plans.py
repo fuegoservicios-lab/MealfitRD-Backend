@@ -4562,6 +4562,44 @@ def _decrement_ledger_by_meal(ledger: dict, meal: dict, db) -> None:
             continue
 
 
+# [P5-DAY-REGEN-VARIETY-PROTEIN · 2026-06-23] Detección de la proteína principal de un plato
+# (nombre + ingredientes) para excluirla en los swaps siguientes del día → 4 proteínas distintas,
+# no 2 de res. Orden: principales primero, lácteos/legumbres al final (queso/yogurt son la
+# "proteína" solo si no hay carne/pescado en el plato). Substrings sin acento.
+_MAIN_PROTEIN_DETECT = [
+    ("camaron", "Camarones"),
+    ("pollo", "Pollo"), ("pechuga", "Pollo"),
+    ("chuleta", "Cerdo"), ("longaniza", "Cerdo"), ("cerdo", "Cerdo"), ("puerco", "Cerdo"),
+    ("carne de res", "Res"), ("bistec", "Res"), ("carne molida", "Res"), ("res", "Res"), ("carne", "Res"),
+    ("atun", "Atun"), ("filete de pescado", "Pescado"), ("pescado", "Pescado"),
+    ("salami", "Salami"),
+    ("revoltillo", "Huevos"), ("tortilla de huevo", "Huevos"), ("claras", "Huevos"), ("huevo", "Huevos"),
+    ("habichuela", "Habichuelas"), ("gandul", "Gandules"), ("lenteja", "Lentejas"), ("garbanzo", "Garbanzos"),
+    ("mantequilla de mani", "Mani"),
+    ("ricotta", "Queso"), ("mozzarella", "Queso"), ("queso de hoja", "Queso"), ("queso", "Queso"),
+    ("yogur", "Yogurt"),
+]
+
+
+def _main_protein_of_meal(meal: dict) -> Optional[str]:
+    """Proteína principal de un plato (o None). Heurística por substrings del nombre+ingredientes."""
+    if not isinstance(meal, dict):
+        return None
+    import unicodedata
+    parts = [str(meal.get("name") or "")]
+    for ing in (meal.get("ingredients") or []):
+        if isinstance(ing, str):
+            parts.append(ing)
+        elif isinstance(ing, dict):
+            parts.append(str(ing.get("name") or ing.get("item") or ""))
+    text = " ".join(parts).lower()
+    text = "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
+    for kw, canon in _MAIN_PROTEIN_DETECT:
+        if kw in text:
+            return canon
+    return None
+
+
 @router.post("/{plan_id}/regenerate-day")
 def api_regenerate_day(
     plan_id: str,
@@ -4711,13 +4749,21 @@ def api_regenerate_day(
                     nm.pop("pantry_constrained", None)  # [P5-RESTOCK-PRESERVE] metadata transitoria, no persistir
                     new_meals.append(nm)
                     regenerated += 1
-                    day_avoid.append(nm["name"])  # [P5-DAY-REGEN-VARIETY] el siguiente swap lo evita
+                    # [P5-DAY-REGEN-VARIETY] el siguiente swap evita el NOMBRE y la PROTEÍNA principal
+                    # del plato aceptado (→ 4 proteínas distintas, no 2 de res).
+                    day_avoid.append(nm["name"])
+                    _p_new = _main_protein_of_meal(nm)
+                    if _p_new:
+                        day_avoid.append(_p_new)
                     _decrement_ledger_by_meal(ledger, nm, _db)
                 else:
                     new_meals.append(meal)
                     slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                     if meal.get("name"):
                         day_avoid.append(meal["name"])  # conservado → tampoco lo dupliquemos
+                        _p_kept = _main_protein_of_meal(meal)
+                        if _p_kept:
+                            day_avoid.append(_p_kept)
             except ValueError as _ve:
                 # Un plato no se pudo generar desde la nevera → conservar el original.
                 logger.info(f"[P3-REGEN-DAY] slot conservado (no generable): {meal.get('name')!r} — {_ve}")
@@ -4725,6 +4771,9 @@ def api_regenerate_day(
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                 if meal.get("name"):
                     day_avoid.append(meal["name"])
+                    _p_kept2 = _main_protein_of_meal(meal)
+                    if _p_kept2:
+                        day_avoid.append(_p_kept2)
             except (LLMRateLimitedError, LLMCircuitBreakerOpen) as _llm_e:
                 # [P5-REGEN-DAY-LLM-DEGRADE · 2026-06-23] Condición TRANSITORIA del proveedor
                 # (rate-limit o breaker abierto). Antes escapaba al handler genérico → HTTP 500
