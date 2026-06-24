@@ -1,5 +1,28 @@
 # [P1-LIVE-2 · 2026-05-12] CI gate para MealfitRD.IA.
 #
+# [CI-FLAT-LAYOUT · 2026-05-18] El workflow asumía un layout monorepo
+# (`workspace/{backend,frontend,CLAUDE.md,supabase,...}`) pero faltaba la
+# orquestación: el checkout de este repo trae backend code + workspace
+# config mezclados en la raíz, y faltaba el segundo checkout del frontend
+# (`fuegoservicios-lab/MealfitRD`, repo separado).
+#
+# ~93 tests parser-based usan `Path(__file__).resolve().parents[2]` para
+# resolver paths como `${WORKSPACE}/backend/routers/plans.py` o
+# `${WORKSPACE}/frontend/vercel.json` — sin el layout monorepo, fallaban
+# con FileNotFoundError.
+#
+# Fix: post-checkout, reorganizamos al layout que los tests esperan:
+#   ${WORKSPACE}/CLAUDE.md          ← promovido desde backend repo root
+#   ${WORKSPACE}/supabase/          ← promovido
+#   ${WORKSPACE}/scripts/           ← promovido (si existe)
+#   ${WORKSPACE}/backend/           ← este repo (sin los configs workspace)
+#   ${WORKSPACE}/backend/routers/
+#   ${WORKSPACE}/backend/tests/
+#   ${WORKSPACE}/backend/*.py
+#   ${WORKSPACE}/frontend/          ← fuegoservicios-lab/MealfitRD
+#   ${WORKSPACE}/frontend/src/
+#   ${WORKSPACE}/frontend/vercel.json
+#
 # Hasta que este workflow exista, el repo no tenía ejecución automática de
 # tests pre-merge. Toda la red de seguridad (~120+ tests parser-based +
 # Vitest frontend) dependía de que el desarrollador invoque pytest/vitest
@@ -7,20 +30,9 @@
 # 5 tests SOP por una línea reformateada) no se detectaba hasta el siguiente
 # audit manual.
 #
-# Este workflow corre 3 jobs en paralelo cuando el repo se conecte a GitHub:
-#   1. backend-tests : pytest del bundle parser-based + funcionales.
-#   2. frontend-tests: vitest unit + integration.
-#   3. frontend-build: vite build production (catch errores de bundle).
-#
 # Trigger:
 #   - push a cualquier branch (gate de regresión continua).
 #   - pull_request a main (gate pre-merge).
-#
-# Política:
-#   - main protegido: PR requiere los 3 jobs verde antes de mergear
-#     (configurar branch protection rule en GitHub UI tras primer push).
-#   - cualquier job rojo bloquea el merge — NO usar "merge anyway" salvo
-#     hotfix P0 documentado en PR description con plan de fix-forward.
 
 name: CI
 
@@ -30,7 +42,6 @@ on:
   pull_request:
     branches: [main, master]
 
-# Cancelar runs viejos del mismo branch para no agotar minutos.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -41,8 +52,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout
+      - name: Checkout backend (en subdir `backend/`)
         uses: actions/checkout@v4
+        with:
+          path: backend
+
+      - name: Checkout frontend (sibling `frontend/` para tests parser-based)
+        uses: actions/checkout@v4
+        with:
+          repository: fuegoservicios-lab/MealfitRD
+          path: frontend
+
+      - name: Promover configs workspace al root (CLAUDE.md/supabase/scripts)
+        # [CI-FLAT-LAYOUT · 2026-05-18] Los tests usan `parents[2]/CLAUDE.md`
+        # asumiendo que vive en el workspace root, pero el repo lo trackea
+        # en su raíz. Movemos solo configs workspace; el código backend
+        # queda en `backend/`.
+        run: |
+          cd backend
+          for f in CLAUDE.md supabase scripts; do
+            if [ -e "$f" ]; then mv "$f" ..; fi
+          done
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -61,20 +91,31 @@ jobs:
       - name: Run pytest (parser-based + functional)
         working-directory: backend
         env:
-          # Las suites parser-based no requieren DB real. Las E2E sí, pero
-          # se marcan con @pytest.mark.e2e y se pueden filtrar en CI sin DB.
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUNBUFFERED: "1"
+          # [CI-FLAT-LAYOUT · 2026-05-18] Stubs para que módulos que instancian
+          # clients a import-time (db_core.create_client(SUPABASE_URL,
+          # SUPABASE_KEY), agent.py:128 ChatGoogleGenerativeAI) no aborten
+          # antes de collection. Tests parser-based no usan los clients; los
+          # funcionales que sí los tocan deben mockear o estar marcados @e2e.
+          SUPABASE_URL: https://stub-for-ci.supabase.co
+          SUPABASE_KEY: stub_anon_key_for_ci_parser_tests_only
+          SUPABASE_DB_URL: postgresql://stub:stub@localhost:5432/stub
+          GOOGLE_API_KEY: stub_for_ci
+          GEMINI_API_KEY: stub_for_ci
         run: |
-          pytest tests/ -v --tb=short -m "not e2e" -x
+          pytest tests/ -v --tb=short -m "not e2e" --continue-on-collection-errors
 
   frontend-tests:
     name: Frontend Vitest
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout
+      - name: Checkout frontend
         uses: actions/checkout@v4
+        with:
+          repository: fuegoservicios-lab/MealfitRD
+          path: frontend
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -96,8 +137,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout
+      - name: Checkout frontend
         uses: actions/checkout@v4
+        with:
+          repository: fuegoservicios-lab/MealfitRD
+          path: frontend
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -112,9 +156,6 @@ jobs:
 
       - name: Vite production build
         working-directory: frontend
-        # Vite build valida tree-shaking + import resolution + bundle size.
-        # Falla si hay imports rotos, dependencias missing, o errores de
-        # transformación que pasan vitest pero rompen prod.
         run: npm run build
 
   # [P2-LIVE-1 · 2026-05-12] Lint job no-bloqueante.
@@ -124,19 +165,17 @@ jobs:
   # `process` en utils/analytics.js). Bloquear merges sobre esa baseline
   # paralizaría todo. Por eso `continue-on-error: true`: el job EJECUTA y reporta
   # status visible en GitHub UI, pero NO bloquea el merge.
-  #
-  # Roadmap: tras cleanup incremental que reduzca el count a 0, flippear a
-  # `continue-on-error: false` para convertirlo en gate bloqueante real. Hasta
-  # entonces este job sirve como telemetría: si un PR introduce errores nuevos,
-  # se ven en el status check aunque no bloquee.
   frontend-lint:
     name: Frontend lint (non-blocking)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: true
     steps:
-      - name: Checkout
+      - name: Checkout frontend
         uses: actions/checkout@v4
+        with:
+          repository: fuegoservicios-lab/MealfitRD
+          path: frontend
 
       - name: Set up Node
         uses: actions/setup-node@v4
