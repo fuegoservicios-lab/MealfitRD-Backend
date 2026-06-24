@@ -9720,8 +9720,52 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
 # sin redeploy: MEALFIT_UPDATE_CLINICAL_GUARD=false. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD
 UPDATE_CLINICAL_GUARD = _env_bool("MEALFIT_UPDATE_CLINICAL_GUARD", True)
 
+# [P1-MERCURY-UPDATE-GUARD · 2026-06-24] (re-audit P1-2) Sub-knob del backstop de mercurio-embarazo en
+# las superficies de UPDATE. El pescado ALTO en mercurio (metilmercurio = teratógeno) NO es alérgeno IgE
+# ni producto veg*-prohibido → los scanners de alérgeno/dieta del backstop NO lo cazan. S1 lo SUSTITUYE
+# determinista (Guard 3, `_PREGNANCY_MERCURY_SUBS` en condition_rules) pero swap/regenerate-day/chat-modify
+# no pasan por el grafo → la única defensa era la directiva-prompt (falible). Default ON (seguridad).
+# Rollback granular sin tocar el knob clínico general: MEALFIT_UPDATE_MERCURY_GUARD=false.
+MERCURY_UPDATE_GUARD = _env_bool("MEALFIT_UPDATE_MERCURY_GUARD", True)
 
-def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None) -> list:
+
+def _scan_mercury_pregnancy_violations(meal: dict, form_data) -> list:
+    """[P1-MERCURY-UPDATE-GUARD · 2026-06-24] Detecta pescado ALTO en mercurio en un meal cuando el perfil
+    declara embarazo/lactancia (metilmercurio = teratógeno). Reusa los MISMOS términos que el swap
+    determinista de S1 (`_PREGNANCY_MERCURY_SUBS` en condition_rules) → SSOT, no se duplica la lista.
+    Detección ABORTIVA: devuelve strings de violación (vacío = seguro) para que el backstop fuerce retry
+    (swap) o aborte fail-secure (chat-modify), espejo del manejo de alérgenos. EXCLUYE atún a propósito
+    (FDA Best/Good Choice en moderación durante el embarazo). Best-effort: cualquier error → [] (no
+    bloquea por un fallo del scanner; la directiva-prompt sigue como defensa). tooltip-anchor: P1-MERCURY-UPDATE-GUARD"""
+    if not MERCURY_UPDATE_GUARD or not isinstance(meal, dict):
+        return []
+    try:
+        from nutrition_calculator import _is_pregnancy_or_lactation
+        if not _is_pregnancy_or_lactation(form_data):
+            return []
+        from condition_rules import _PREGNANCY_MERCURY_SUBS, _PREGNANCY_MERCURY_NEGATIVES
+        from constants import strip_accents
+        _terms = _PREGNANCY_MERCURY_SUBS[0][0]
+        _negs = tuple(strip_accents(str(_n).lower()) for _n in _PREGNANCY_MERCURY_NEGATIVES)
+        _hay = [str(_i) for _i in (meal.get("ingredients") or [])]
+        if meal.get("name"):
+            _hay.append(str(meal.get("name")))
+        out = []
+        for _item in _hay:
+            _il = strip_accents(_item.lower())
+            if any(_n and _n in _il for _n in _negs):
+                continue
+            for _t in _terms:
+                _tl = strip_accents(str(_t).lower())
+                if _tl and _tl in _il:
+                    out.append(f"pescado alto en mercurio, no apto en embarazo/lactancia: '{_item}'")
+                    break
+        return out
+    except Exception:
+        return []
+
+
+def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None, form_data=None) -> list:
     """[P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Backstop DETERMINISTA per-comida, reusable por las
     superficies de UPDATE (swap individual S3, regenerate-day S2, chat modify del coach). Espejo
     quirúrgico de los escáneres que el grafo de generación (S1) corre en `review_plan_node`.
@@ -9750,9 +9794,57 @@ def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None) ->
         if DIET_HARD_GUARD:
             for _mn, _ing, _cat in _scan_diet_violations(mini, diet_type):
                 out.append(f"{_cat} (no apto para la dieta declarada): '{_ing}'")
+        # [P1-MERCURY-UPDATE-GUARD · 2026-06-24] (re-audit P1-2) Mercurio-embarazo: no es alérgeno IgE ni
+        # producto veg* → los scanners de arriba no lo cazan. Solo corre si `form_data` declara embarazo/
+        # lactancia (el helper es no-op si no). Cierra el hueco de paridad con el swap determinista de S1.
+        if form_data is not None:
+            out.extend(_scan_mercury_pregnancy_violations(meal, form_data))
     except Exception as _clin_e:
         return [f"error de re-validación clínica ({type(_clin_e).__name__}: {_clin_e}) — bloqueo conservador"]
     return out
+
+
+def renal_protein_trim_for_update(meals: list, protein_ceiling_g: float, db=None, *, renal_capped: bool = True) -> bool:
+    """[P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) Re-enforza el cap renal KDIGO de proteína en
+    las superficies de UPDATE (swap S3 / regenerate-day S2 / chat-modify). S1 capea la proteína per-comida/
+    día en el grafo (`_enforce_renal_per_meal`, Guard 1, seguridad iatrogénica ~0.8 g/kg en ERC G3-G5) pero
+    los updates NO pasan por el grafo → un swap/regen podía entregar proteína POR ENCIMA del techo sin
+    ningún guard determinista (el backstop solo cubre alérgeno/dieta).
+
+    Reusa `_trim_day_protein_to_ceiling(ceiling_pct=1.0)`: trima SOLO hacia abajo (jamás sube proteína —
+    subirla sería iatrogénico en ERC). `meals` puede ser [1 meal] (techo = target del slot, ya renal-aware
+    porque el plan se capeó en S1) o la lista del día (techo = cap del día `renal_protein_cap.protein_g`).
+    No-op si no `renal_capped`. Gateado por RENAL_CAP_ENABLED (seguridad iatrogénica, NO por
+    UPDATE_CLINICAL_GUARD — mismo desacople que S1). Best-effort: error → log + deja el/los meal(s) intactos
+    (el cap ya se aplicó en S1; el gate ±15% acota el drift residual). Devuelve True si trimó.
+    tooltip-anchor: P1-RENAL-UPDATE-ENFORCE"""
+    if not (RENAL_CAP_ENABLED and renal_capped):
+        return False
+    if not isinstance(meals, list) or not meals:
+        return False
+    try:
+        _ceil = float(protein_ceiling_g or 0)
+    except Exception:
+        _ceil = 0.0
+    if _ceil <= 0:
+        return False
+    try:
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        _trimmed = _trim_day_protein_to_ceiling(meals, _ceil, db, ceiling_pct=1.0)
+        if _trimmed:
+            logger.info(
+                f"🫘 [P1-RENAL-UPDATE-ENFORCE] proteína de update trimada al techo renal "
+                f"(~{round(_ceil)}g) en {len(meals)} plato(s)"
+            )
+        return _trimmed
+    except Exception as _rt_e:
+        logger.warning(
+            f"[P1-RENAL-UPDATE-ENFORCE] trim renal de update falló (no bloquea): "
+            f"{type(_rt_e).__name__}: {_rt_e}"
+        )
+        return False
 
 
 def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None) -> bool:

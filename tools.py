@@ -28,7 +28,7 @@ import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
-from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD
+from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
 # callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
 # Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
@@ -936,8 +936,15 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # original se mantiene intacto y el agente informa al usuario. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD
         if UPDATE_CLINICAL_GUARD:
             try:
+                # [P1-MERCURY-UPDATE-GUARD · 2026-06-24] El backstop necesita el perfil clínico para
+                # detectar mercurio-embarazo. Construimos un form con `medicalConditions` del health_profile
+                # server-side (no del cliente) para que `_is_pregnancy_or_lactation` lo vea aunque el chat
+                # no lo haya enviado en `form_data`.
+                _clin_form = dict(form_data or {})
+                if not _clin_form.get("medicalConditions") and not _clin_form.get("medical_conditions"):
+                    _clin_form["medicalConditions"] = _hp.get("medicalConditions") or _hp.get("medical_conditions") or []
                 _clin_viol = clinical_backstop_for_meal(
-                    new_meal_data, allergies=_clin_allergies, diet_type=_clin_diet
+                    new_meal_data, allergies=_clin_allergies, diet_type=_clin_diet, form_data=_clin_form
                 )
             except Exception as _clin_exc:
                 _clin_viol = [f"error backstop clínico: {type(_clin_exc).__name__}"]
@@ -953,6 +960,16 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     "que no puedes incluir ese alimento por sus alergias o restricciones de dieta, y "
                     "ofrécele una alternativa segura."
                 )
+
+        # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) Si el plan lleva cap renal KDIGO, trima la
+        # proteína del plato modificado al techo del slot (`original_protein`, ya renal-aware porque el plan
+        # se capeó en S1) antes de persistir → un modify por chat no rompe el techo iatrogénico. No-op si el
+        # plan no es renal; best-effort (no bloquea). Gateado internamente por RENAL_CAP_ENABLED.
+        try:
+            if bool((plan_data.get("renal_protein_cap") or {}).get("applied")) and original_protein:
+                renal_protein_trim_for_update([new_meal_data], float(original_protein or 0), renal_capped=True)
+        except Exception as _renal_e:
+            logger.warning(f"[P1-RENAL-UPDATE-ENFORCE] trim renal en modify falló (no bloquea): {type(_renal_e).__name__}: {_renal_e}")
 
         target_day["meals"][target_meal_index] = new_meal_data
 

@@ -4733,6 +4733,10 @@ def api_regenerate_day(
         if isinstance(plan_data, str):
             import json as _json
             plan_data = _json.loads(plan_data)
+        # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) ¿El plan lleva cap renal KDIGO? Usado para
+        # (a) NO empujar la proteína hacia la meta en el retarget (sería iatrogénico) y (b) trimar el día
+        # regenerado al techo de proteína en el persist.
+        _renal_capped = bool((plan_data.get("renal_protein_cap") or {}).get("applied"))
         days = plan_data.get("days") or []
         if day_index >= len(days):
             raise HTTPException(status_code=400, detail=f"day_index fuera de rango (plan tiene {len(days)} días)")
@@ -4783,6 +4787,12 @@ def api_regenerate_day(
                     }
                     if any(_goal_day.values()):
                         for _kk in day_target:
+                            # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] NO subir la proteína hacia la meta en
+                            # perfiles con cap renal: el max(suma, meta) la empujaría por encima del techo
+                            # iatrogénico KDIGO. El cap manda (mismo criterio que _protein_floor_shortfall,
+                            # que exime renal). Las demás macros (kcal/carbs/fats) sí retargetean normal.
+                            if _kk == "protein_g" and _renal_capped:
+                                continue
                             day_target[_kk] = max(day_target.get(_kk, 0.0), _goal_day.get(_kk, 0.0))
                         _meal_scale = {
                             "cals": day_target["kcal"] / max(_sum_current["kcal"], 1.0),
@@ -4950,6 +4960,13 @@ def api_regenerate_day(
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
                 break
 
+        # [P1-REGEN-DAY-PARTIAL-AI-DEGRADE · 2026-06-24] (re-audit P1-4) Si la IA cayó a mitad del loop, el
+        # `break` dejó SIN procesar los platos posteriores → padear new_meals con los originales restantes
+        # para que el full-replace `_day["meals"]=new_meals` NO trunque el día (perdería platos). Idempotente
+        # si el loop completó (len iguales) o si nada se interrumpió.
+        if _ai_unavailable and len(new_meals) < len(meals):
+            new_meals.extend(meals[len(new_meals):])
+
         if regenerated == 0:
             if _ai_unavailable:
                 # Fallo transitorio del proveedor → NO consumir cuota; pedir reintento.
@@ -4984,6 +5001,17 @@ def api_regenerate_day(
             if not isinstance(_day, dict):
                 raise ValueError(f"plan_data.days[{day_index}] corrupted")
             _day["meals"] = new_meals
+            # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) Defensa-en-profundidad a nivel DÍA: si
+            # el plan lleva cap renal KDIGO, trima el día regenerado al techo de proteína del día
+            # (renal_protein_cap.protein_g) — espejo de _enforce_renal_per_meal de S1. El per-meal trim de
+            # swap_meal ya capa cada plato; esto garantiza el invariante agregado del día. Best-effort.
+            try:
+                _rcap = pd.get("renal_protein_cap") or {}
+                if bool(_rcap.get("applied")) and float(_rcap.get("protein_g") or 0) > 0:
+                    from graph_orchestrator import renal_protein_trim_for_update as _rtu
+                    _rtu(new_meals, float(_rcap.get("protein_g")), db=_db, renal_capped=True)
+            except Exception as _renal_day_e:
+                logger.debug(f"[P1-RENAL-UPDATE-ENFORCE] trim renal del día falló (no bloquea): {_renal_day_e}")
             for _k in (
                 "aggregated_shopping_list",
                 "aggregated_shopping_list_weekly",
@@ -5015,7 +5043,11 @@ def api_regenerate_day(
             raise HTTPException(status_code=404, detail="Plan no encontrado")
 
         # Cuota: 1 crédito por día completo (post-éxito, D3).
-        log_api_usage(user_id, "llm_regenerate_day")
+        # [P1-REGEN-DAY-PARTIAL-AI-DEGRADE · 2026-06-24] NO cobramos si la IA cayó a mitad del loop:
+        # la degradación es por causa transitoria del proveedor, no del usuario (coherente con la rama
+        # regenerated==0 que tampoco cobra). El día parcial se persiste gratis + se avisa "reintenta".
+        if not _ai_unavailable:
+            log_api_usage(user_id, "llm_regenerate_day")
 
         # [P1-REGEN-DAY-RETARGET · 2026-06-23] Revalidación de banda a nivel DÍA: si la proteína
         # entregada quedó < 90% del objetivo del día, avisar (honestidad, espejo de S1) en vez de
@@ -5041,6 +5073,15 @@ def api_regenerate_day(
             "slots_kept": slots_kept,
             # [P1-REGEN-DAY-RETARGET] aviso honesto si el día quedó bajo en proteína vs objetivo.
             "day_quality_warning": _day_warning,
+            # [P1-REGEN-DAY-PARTIAL-AI-DEGRADE · 2026-06-24] Señaliza interrupción por IA caída a mitad:
+            # el día se persistió con los platos logrados (+ originales padeados, sin pérdida), NO se cobró
+            # crédito, y el frontend muestra un aviso accionable "reintenta para completar" — distinto del
+            # toast de slots_kept (que comunica falta de inventario para CAMBIAR, no caída del proveedor).
+            "ai_interrupted": bool(_ai_unavailable),
+            "ai_interrupted_message": (
+                f"La IA se interrumpió: se actualizaron {regenerated} de {len(meals)} platos. "
+                f"No se descontó tu crédito; reintenta para completar el día."
+            ) if _ai_unavailable else None,
             # Devolvemos los meals nuevos para que el frontend actualice
             # planData.days[day_index].meals localmente (sin refetch) y luego
             # invoque /recalculate-shopping-list (mismo patrón que swap).

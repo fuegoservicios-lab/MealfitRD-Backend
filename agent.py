@@ -31,7 +31,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 # de un solo nivel: `graph_orchestrator` NO importa `agent` (verificado), no
 # hay ciclo. Si en el futuro la dirección de import cambia, mover el helper
 # a un módulo neutro.
-from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD
+from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update
 import concurrent.futures
 import traceback
 from datetime import datetime, timezone
@@ -602,6 +602,10 @@ def swap_meal(form_data: dict):
 
     # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES (ZERO-TRUST) ---
     clean_ingredients = []
+    # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) ¿El plan activo lleva cap renal KDIGO? Lo
+    # leemos del plan persistido (se setea en S1). Si aplica, trimamos la proteína del plato nuevo al
+    # techo del slot antes de devolverlo (un swap NO debe romper el cap iatrogénico). Default False.
+    _renal_capped = False
     # [P1-UPDATE-CROSS-DAY-VARIETY · 2026-06-23] (audit inteligencia P1-5) Texto de las OTRAS comidas
     # del plan activo (acent-stripped) para sesgar la sugerencia anti mode-collapse hacia proteínas
     # NO presentes ya en el plan → un swap "para variar" no devuelve la misma proteína que domina el
@@ -628,6 +632,12 @@ def swap_meal(form_data: dict):
                             consumed_ingredients.extend(ings)
                 
                 clean_ingredients = get_realtime_pantry(plan_record["plan_data"], consumed_ingredients)
+
+                # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] Leer el flag del cap renal del plan persistido.
+                try:
+                    _renal_capped = bool(((plan_record.get("plan_data") or {}).get("renal_protein_cap") or {}).get("applied"))
+                except Exception:
+                    _renal_capped = False
 
                 # [P1-UPDATE-CROSS-DAY-VARIETY] Capturar nombres de las OTRAS comidas del plan
                 # (excluyendo la rechazada) para el sesgo de variedad cross-day más abajo.
@@ -1179,7 +1189,7 @@ def swap_meal(form_data: dict):
                     res if isinstance(res, dict) else {}
                 )
                 _clin_viol = clinical_backstop_for_meal(
-                    meal_dump, allergies=allergies, diet_type=diet_type
+                    meal_dump, allergies=allergies, diet_type=diet_type, form_data=form_data
                 )
             except Exception as _clin_exc:
                 _clin_viol = [f"error backstop clínico: {type(_clin_exc).__name__}"]
@@ -1385,13 +1395,23 @@ def swap_meal(form_data: dict):
     # de la nevera. Escaneamos lo que se DEVUELVE; si viola, fail-secure raise → el router lo
     # mapea a soft-fail y el plato original (clínicamente validado en S1) se preserva.
     if UPDATE_CLINICAL_GUARD and isinstance(_out, dict):
-        _final_viol = clinical_backstop_for_meal(_out, allergies=allergies, diet_type=diet_type)
+        _final_viol = clinical_backstop_for_meal(_out, allergies=allergies, diet_type=diet_type, form_data=form_data)
         if _final_viol:
             logger.warning(
                 f"🛡 [P0-UPDATE-CLINICAL-GUARD] plato final (fallback) viola seguridad clínica → "
                 f"fail-secure | meal_type={meal_type} | viol={_final_viol}"
             )
             raise ValueError("CLINICAL_VIOLATION: " + "; ".join(_final_viol))
+
+    # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] (re-audit P1-1) Si el plan lleva cap renal KDIGO, trima la
+    # proteína del plato nuevo al techo del slot (`target_protein`, ya renal-aware porque el plan se capeó
+    # en S1). El gate de macros ACEPTA hasta +15% de overshoot → en un paciente renal ese exceso compone
+    # el techo iatrogénico. `renal_protein_trim_for_update` solo trima hacia abajo (best-effort, no bloquea).
+    if isinstance(_out, dict) and _renal_capped and target_protein:
+        try:
+            renal_protein_trim_for_update([_out], float(target_protein or 0), renal_capped=True)
+        except Exception as _renal_e:
+            logger.warning(f"[P1-RENAL-UPDATE-ENFORCE] trim renal en swap falló (no bloquea): {type(_renal_e).__name__}: {_renal_e}")
     return _out
 
 
