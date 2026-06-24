@@ -6236,6 +6236,41 @@ def _validate_water_date(date_str: str) -> str:
         raise HTTPException(status_code=400, detail="Formato de fecha invalido. Usa YYYY-MM-DD.")
 
 
+# [P3-WATER-HALF-GLASS · 2026-06-24] Racha de hidratación: días consecutivos
+# (hacia atrás desde `today_str`) en que el usuario alcanzó su meta
+# (glasses >= goal). Si HOY aún no se cumple, la racha cuenta hasta AYER — un
+# día en progreso no debe "romper" visualmente la racha. Fail-open a 0 (la
+# racha es decorativa: nunca debe tumbar el GET del tracker).
+def _compute_water_streak(user_id: str, goal: int, today_str: str) -> int:
+    if not user_id or not goal:
+        return 0
+    try:
+        from db import execute_sql_query
+        rows = execute_sql_query(
+            "SELECT log_date, glasses FROM public.water_intake_log "
+            "WHERE user_id = %s AND log_date <= %s "
+            "ORDER BY log_date DESC LIMIT 90",
+            (user_id, today_str),
+            fetch_all=True,
+        ) or []
+        met = {}
+        for r in rows:
+            d = r.get("log_date")
+            d_str = d.isoformat() if hasattr(d, "isoformat") else str(d)
+            met[d_str] = float(r.get("glasses") or 0) >= float(goal)
+        today = datetime.strptime(today_str, "%Y-%m-%d").date()
+        # Punto de partida: hoy si ya cumplió, si no ayer.
+        cur = today if met.get(today_str) else today - timedelta(days=1)
+        streak = 0
+        while met.get(cur.isoformat()):
+            streak += 1
+            cur = cur - timedelta(days=1)
+        return streak
+    except Exception as e:
+        logger.warning(f"[P3-WATER-HALF-GLASS] streak error: {e}")
+        return 0
+
+
 @router.get("/water-intake")
 def api_get_water_intake(
     date: str,
@@ -6270,10 +6305,11 @@ def api_get_water_intake(
             ),
             op_label="GET water-intake",
         )
-        glasses = 0
+        glasses = 0.0
         updated_at = None
         if res:
-            glasses = int(res.get("glasses") or 0)
+            # [P3-WATER-HALF-GLASS · 2026-06-24] numeric → float (medios vasos).
+            glasses = float(res.get("glasses") or 0)
             updated_at = res.get("updated_at")
         goal_meta = _compute_water_goal(verified_user_id)
         # [P3-WATER-TRACKER · 2026-05-16] `enabled` se incluye aqui para que
@@ -6292,6 +6328,9 @@ def api_get_water_intake(
                 "computed_ml": goal_meta["computed_ml"],
                 "default": goal_meta["default"],
             },
+            # [P3-WATER-HALF-GLASS · 2026-06-24] Racha de días consecutivos
+            # cumpliendo la meta (para el card rediseñado). Fail-open a 0.
+            "streak": _compute_water_streak(verified_user_id, goal_meta["goal"], log_date),
             "enabled": get_water_tracker_enabled(verified_user_id),
             "updated_at": updated_at,
         }
@@ -6328,13 +6367,20 @@ def api_set_water_intake(
     log_date = _validate_water_date(date_str)
 
     raw_glasses = data.get("glasses")
-    if not isinstance(raw_glasses, int) or isinstance(raw_glasses, bool):
-        raise HTTPException(status_code=400, detail="Campo `glasses` debe ser entero.")
+    # [P3-WATER-HALF-GLASS · 2026-06-24] Acepta enteros Y medios vasos (0.5).
+    # `bool` excluido explicitamente (Python: bool subclass int) — True/False no
+    # son conteos validos.
+    if isinstance(raw_glasses, bool) or not isinstance(raw_glasses, (int, float)):
+        raise HTTPException(status_code=400, detail="Campo `glasses` debe ser numérico.")
+    # Paso de 0.5: `glasses*2` debe ser entero (los 0.5 son exactos en binario).
+    if (raw_glasses * 2) != int(raw_glasses * 2):
+        raise HTTPException(status_code=400, detail="`glasses` debe ser múltiplo de 0.5.")
     if raw_glasses < 0 or raw_glasses > _WATER_MAX_GLASSES:
         raise HTTPException(
             status_code=400,
             detail=f"`glasses` fuera de rango [0, {_WATER_MAX_GLASSES}].",
         )
+    glasses_val = float(raw_glasses)
 
     # [P1-NEON-DB-MIGRATION · 2026-06-12] Gate de disponibilidad del pool SQL
     # (ver nota del GET sobre por qué db_core y no la fachada).
@@ -6358,7 +6404,7 @@ def api_set_water_intake(
                 (
                     verified_user_id,
                     log_date,
-                    int(raw_glasses),
+                    glasses_val,
                     datetime.now(timezone.utc),
                 ),
             ),
@@ -6372,7 +6418,7 @@ def api_set_water_intake(
         return {
             "success": True,
             "date": log_date,
-            "glasses": int(raw_glasses),
+            "glasses": glasses_val,
             "goal": goal_meta["goal"],
             "goal_basis": {
                 "weight_kg": goal_meta["weight_kg"],

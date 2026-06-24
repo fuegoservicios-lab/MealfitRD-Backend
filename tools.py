@@ -1748,7 +1748,8 @@ def check_hydration_today(user_id: str) -> str:
             (user_id, log_date),
             fetch_one=True,
         )
-        glasses = int(_row.get("glasses") or 0) if _row else 0
+        # [P3-WATER-HALF-GLASS · 2026-06-24] numeric → float (medios vasos).
+        glasses = float(_row.get("glasses") or 0) if _row else 0.0
 
         # Reusa la formula personalizada del endpoint /water-intake.
         # Import lazy para evitar circular (routers/plans.py importa de aqui en futuro).
@@ -1761,9 +1762,10 @@ def check_hydration_today(user_id: str) -> str:
         pct = round((glasses / goal) * 100) if goal else 0
         remaining = max(0, goal - glasses)
 
-        msg_parts = [f"Hidratacion HOY ({log_date}): {glasses} de {goal} vasos ({pct}%)."]
+        # `:g` formatea 4.0 → "4" y 4.5 → "4.5" (sin .0 colgante).
+        msg_parts = [f"Hidratacion HOY ({log_date}): {glasses:g} de {goal} vasos ({pct}%)."]
         if remaining > 0:
-            msg_parts.append(f"Le faltan {remaining} para cumplir su meta.")
+            msg_parts.append(f"Le faltan {remaining:g} para cumplir su meta.")
         else:
             msg_parts.append(f"Ya cumplio su meta del dia.")
         if is_personalized:
@@ -1778,11 +1780,13 @@ def check_hydration_today(user_id: str) -> str:
 
 
 @tool
-def log_water_glass(user_id: str, count_delta: int = 1) -> str:
+def log_water_glass(user_id: str, count_delta: float = 1) -> str:
     """Suma o resta vasos de agua al registro de hidratacion del usuario para HOY.
 
+    Acepta medios vasos (0.5) — un "sorbo" cuenta medio vaso.
     Usa esta herramienta cuando el usuario diga que se tomo agua o que se equivoco:
     - 'me tome un vaso' / 'marca uno mas' → count_delta=1 (default)
+    - 'me tome un sorbo / medio vaso' → count_delta=0.5
     - 'me tome 3 vasos seguidos' → count_delta=3
     - 'borra el ultimo / me equivoque' → count_delta=-1
     - 'resetea el dia' → primero check_hydration_today para saber el conteo
@@ -1792,15 +1796,20 @@ def log_water_glass(user_id: str, count_delta: int = 1) -> str:
     primero usa `check_hydration_today` para saber el conteo actual, calcula
     el delta y pasa ese valor (5 - actual).
 
-    El conteo total queda clamped a [0, 50] (cap defensivo de la tabla).
-    Tras la mutacion, incluye SIEMPRE la etiqueta `[UI_ACTION: REFRESH_HYDRATION]`
-    en tu respuesta para que el Dashboard recargue el card de Hidratacion.
+    El delta debe ser multiplo de 0.5. El conteo total queda clamped a [0, 50]
+    (cap defensivo de la tabla). Tras la mutacion, incluye SIEMPRE la etiqueta
+    `[UI_ACTION: REFRESH_HYDRATION]` en tu respuesta para que el Dashboard
+    recargue el card de Hidratacion.
     """
     logger.info(f"💧 [TOOL EXECUTION] log_water_glass user={user_id} delta={count_delta}")
-    if not isinstance(count_delta, int) or isinstance(count_delta, bool):
-        return "Error: el delta de vasos debe ser un entero (positivo para sumar, negativo para restar)."
+    # [P3-WATER-HALF-GLASS · 2026-06-24] Acepta enteros y medios vasos (0.5).
+    if isinstance(count_delta, bool) or not isinstance(count_delta, (int, float)):
+        return "Error: el delta de vasos debe ser numerico (positivo para sumar, negativo para restar)."
+    if (count_delta * 2) != int(count_delta * 2):
+        return "Error: el delta debe ser multiplo de 0.5 (medio vaso)."
     if count_delta == 0:
         return "El delta fue 0 — no se modifico nada."
+    count_delta = float(count_delta)
     try:
         from db import connection_pool, execute_sql_write
         if not connection_pool:
@@ -1837,7 +1846,8 @@ def log_water_glass(user_id: str, count_delta: int = 1) -> str:
         )
         if not _rows:
             return "Error registrando vaso de agua: la base de datos no confirmo el conteo."
-        new_count = int(_rows[0]["glasses"])
+        # [P3-WATER-HALF-GLASS · 2026-06-24] numeric → float (medios vasos).
+        new_count = float(_rows[0]["glasses"])
 
         # Reusa la meta personalizada para el mensaje de confirmacion.
         try:
@@ -1853,9 +1863,10 @@ def log_water_glass(user_id: str, count_delta: int = 1) -> str:
         elif count_delta < 0 and new_count <= 0:
             boundary = " (minimo de 0 vasos)."
         reached = " ¡Cumplio su meta del dia!" if new_count >= goal else ""
+        # `:g` formatea 4.0 → "4" y 4.5 → "4.5" (sin .0 colgante).
         return (
-            f"Listo: se {verb} {abs(count_delta)} vaso(s). "
-            f"El usuario ahora lleva {new_count} de {goal} vasos hoy.{reached}{boundary}"
+            f"Listo: se {verb} {abs(count_delta):g} vaso(s). "
+            f"El usuario ahora lleva {new_count:g} de {goal} vasos hoy.{reached}{boundary}"
         )
     except Exception as e:
         logger.error(f"❌ [TOOL] log_water_glass error: {e}")

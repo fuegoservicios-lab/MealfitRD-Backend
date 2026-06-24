@@ -167,9 +167,17 @@ def test_backend_validates_date_and_glasses():
     )
     assert post_block
     body = post_block.group(0)
-    assert "isinstance(raw_glasses, int)" in body
+    # [P3-WATER-HALF-GLASS · 2026-06-24] El POST acepta enteros Y medios vasos
+    # (0.5) → valida (int, float) + paso de 0.5, sin perder el guard de bool.
+    assert "isinstance(raw_glasses, (int, float))" in body, (
+        "El POST debe aceptar int Y float (medios vasos) — isinstance (int, float)."
+    )
     assert "isinstance(raw_glasses, bool)" in body, (
         "Sin el check de bool, `True`/`False` pasan como 1/0 (Python: bool subclass int)."
+    )
+    assert "(raw_glasses * 2)" in body, (
+        "Falta el guard de paso 0.5 (`(raw_glasses * 2) != int(...)`) — sin él, "
+        "un cliente podría enviar 0.3 vasos."
     )
     assert "_WATER_MAX_GLASSES" in body
 
@@ -408,11 +416,13 @@ def test_watertracker_gates_on_enabled():
 
 
 def test_watertracker_subtitle_affirmative_when_personalized():
-    """[Fix 1] El subtitulo debe usar copy afirmativo (`personalizado para`)
+    """[Fix 1] El subtitulo debe usar copy afirmativo (`personalizad{o,a} para`)
     cuando `goalBasis.default === false`, distinguible del fallback default
-    incluso cuando el goal computado coincide con 8."""
+    incluso cuando el goal computado coincide con 8.
+    [P3-WATER-HALF-GLASS · 2026-06-24] El rediseño usa la forma femenina
+    gramaticalmente correcta ("Meta personalizada para …"); aceptamos ambas."""
     src = _WATER_TRACKER_JSX.read_text(encoding="utf-8")
-    assert "personalizado para" in src, (
+    assert ("personalizado para" in src) or ("personalizada para" in src), (
         "Subtitulo no usa copy afirmativo. Cuando goal computado = 8 (caso "
         "comun: usuarios 50-60kg), el subtitulo es indistinguible del default."
     )
