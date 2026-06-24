@@ -1293,7 +1293,25 @@ def swap_meal(form_data: dict):
             raise LLMRateLimitedError(
                 f"swap_meal LLM rate limited for model={_swap_cb_model}: {e!r}"
             ) from e
-        _swap_cb.record_failure()
+        # [P2-CB-GUARDRAIL-NOT-FAILURE · 2026-06-24] Un rechazo de GUARDRAIL/validador (coherencia
+        # receta↔lista, macros, prep-time, clínico, pantry → ValueError) significa que el PROVEEDOR
+        # respondió pero el output no pasó NUESTRA validación — NO es señal de salud del proveedor.
+        # Contarlo como CB failure abría el breaker por un plato "difícil" y, al ser per-modelo
+        # COMPARTIDO, tumbaba el regenerate-day/swaps de TODOS los usuarios (caso real 2026-06-24:
+        # 'dorado' no listado en la receta agotó los 3 retries → breaker abierto → merienda/cena del
+        # día ni se intentaron). Solo los errores REALES de transporte/proveedor (timeout/5xx/conexión)
+        # cuentan; los validadores levantan ValueError, un fallo de proveedor NO. Knob
+        # MEALFIT_SWAP_CB_COUNT_GUARDRAIL=true revierte al comportamiento anterior.
+        # tooltip-anchor: P2-CB-GUARDRAIL-NOT-FAILURE
+        _cb_count_guardrail = os.environ.get(
+            "MEALFIT_SWAP_CB_COUNT_GUARDRAIL", "false").strip().lower() in ("1", "true", "yes", "on")
+        if isinstance(e, ValueError) and not _cb_count_guardrail:
+            logger.info(
+                f"🎚 [P2-CB-GUARDRAIL-NOT-FAILURE] rechazo de guardrail NO cuenta como CB failure "
+                f"(proveedor sano) | meal_type={meal_type}"
+            )
+        else:
+            _swap_cb.record_failure()
         logger.error(f"❌ [SWAP_MEAL] Fallaron los intentos LLM y validador: {e}. Usando Plato Fallback.")
         # [P1-SWAP-STRICT-PANTRY · 2026-05-22] En modo strict (budget /
         # pantry_first) sin clean_ingredients, NO podemos construir un
