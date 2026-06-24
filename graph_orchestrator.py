@@ -9847,6 +9847,26 @@ def renal_protein_trim_for_update(meals: list, protein_ceiling_g: float, db=None
         return False
 
 
+def food_safety_backstop_for_meal(meal: dict) -> int:
+    """[P2-FOOD-SAFETY-UPDATE · 2026-06-24] (re-audit P2-1) Re-aplica la mitigación determinista de
+    seguridad alimentaria (huevo crudo FS1 + pescado/marisco/carne crudos) en las superficies de UPDATE
+    (swap S3 / regenerate-day S2 / chat-modify). S1 la corre en `_apply_deterministic_clinical_layer`
+    (Guard 2) pero los updates NO pasan por el grafo → un swap a 'ceviche'/'sushi'/'huevo en batido' se
+    persistía sin la nota de seguridad. Envuelve el meal en un mini-plan y reusa `_apply_food_safety_fixes`
+    (MACRO-PRESERVANTE: solo añade una nota a la receta, salvo blended-egg que sustituye; shopping-safe;
+    idempotente). FAIL-OPEN: la nota es advisory; un error del scanner NUNCA bloquea el update (a diferencia
+    del backstop clínico de alérgeno/dieta, que es abortivo). Gateado por FOOD_SAFETY_GUARD (el mismo de
+    S1). Mutates `meal` in-place (es el mismo objeto dentro del mini-plan). Retorna nº de mitigaciones.
+    tooltip-anchor: P2-FOOD-SAFETY-UPDATE"""
+    if not FOOD_SAFETY_GUARD or not isinstance(meal, dict):
+        return 0
+    try:
+        return _apply_food_safety_fixes({"days": [{"meals": [meal]}]})
+    except Exception as _fs_e:
+        logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety backstop falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
+        return 0
+
+
 def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None) -> bool:
     """[P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Recomputa
     `plan['micronutrient_report']` (+ `micronutrient_supplement_advice`) tras un update de platos

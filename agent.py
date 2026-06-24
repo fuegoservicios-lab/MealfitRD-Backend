@@ -31,7 +31,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 # de un solo nivel: `graph_orchestrator` NO importa `agent` (verificado), no
 # hay ciclo. Si en el futuro la dirección de import cambia, mover el helper
 # a un módulo neutro.
-from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update
+from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal
 import concurrent.futures
 import traceback
 from datetime import datetime, timezone
@@ -612,7 +612,19 @@ def swap_meal(form_data: dict):
     # resto del plan (señal que `get_user_ingredient_frequencies` pierde en un plan recién generado).
     _plan_meals_text_for_variety = ""
     user_id = form_data.get("user_id")
-    
+
+    # [P2-REGEN-DAY-PANTRY-OVERRIDE · 2026-06-24] (re-audit P2-5) Cuando el caller (loop de regenerate-day)
+    # provee un ledger de pantry YA reservado (gramos restantes tras los platos del día ya aceptados), ESE
+    # ledger es la fuente de verdad de la nevera — NO la nevera-virtual completa del plan
+    # (`get_realtime_pantry`), que ignora la reserva inter-plato (D7) y deja que 2 platos del mismo día
+    # reclamen el mismo ingrediente escaso. Honramos el override explícito. Default ON.
+    _pantry_override = (
+        bool(form_data.get("pantry_override"))
+        and os.environ.get("MEALFIT_REGEN_DAY_PANTRY_OVERRIDE", "true").strip().lower() in ("1", "true", "yes", "on")
+    )
+    _override_lines = form_data.get("current_pantry_ingredients") if _pantry_override else None
+    _has_override = bool(_override_lines and isinstance(_override_lines, list) and len(_override_lines) > 0)
+
     # Intento Primario: Extraer ingredientes directamente del plan activo en BD
     if user_id and user_id != "guest":
         try:
@@ -620,8 +632,8 @@ def swap_meal(form_data: dict):
             plan_record = get_latest_meal_plan_with_id(user_id)
             if plan_record and "plan_data" in plan_record:
                 from db_facts import get_consumed_meals_since
-                from shopping_calculator import get_realtime_pantry
-                
+                from shopping_calculator import get_realtime_pantry, aggregate_shopping_list as _agg_pantry
+
                 plan_created_at = plan_record.get("created_at")
                 consumed_ingredients = []
                 if plan_created_at:
@@ -630,8 +642,12 @@ def swap_meal(form_data: dict):
                         ings = cm.get("ingredients") or []
                         if isinstance(ings, list):
                             consumed_ingredients.extend(ings)
-                
-                clean_ingredients = get_realtime_pantry(plan_record["plan_data"], consumed_ingredients)
+
+                if _has_override:
+                    # [P2-REGEN-DAY-PANTRY-OVERRIDE] El ledger reservado gana sobre la nevera-virtual del plan.
+                    clean_ingredients = _agg_pantry([str(i).strip() for i in _override_lines if i and isinstance(i, str) and len(str(i)) > 2])
+                else:
+                    clean_ingredients = get_realtime_pantry(plan_record["plan_data"], consumed_ingredients)
 
                 # [P1-RENAL-UPDATE-ENFORCE · 2026-06-24] Leer el flag del cap renal del plan persistido.
                 try:
@@ -1389,6 +1405,44 @@ def swap_meal(form_data: dict):
         except Exception as _rb_e:
             logger.warning(f"[P1-UPDATE-MACRO-REBALANCE] rebalance falló (no bloquea): {type(_rb_e).__name__}: {_rb_e}")
 
+    # [P2-SWAP-PROTEIN-CLOSER · 2026-06-24] (re-audit P2-2/P2-3) El gate de macros ACEPTA hasta -15% de
+    # proteína sin re-escalar → swaps repetidos erosionan la proteína al borde inferior de la banda. Si el
+    # plato pasó el gate pero quedó bajo el target del slot, rellena la proteína al ~target con proteína de
+    # alta densidad allergen-safe (reusa el closer determinista de S1, espejo del piso de proteína). RIESGO
+    # PANTRY: el closer AÑADE un ingrediente → re-validamos la Nevera y REVERTIMOS si rompe (never-worse-
+    # than-current). Renal EXENTO (el trim renal manda — no subir proteína). Default OFF: misma cautela de
+    # portion/ingredient-scaling que P1-2; A/B con scripts/macro_sizing_replay antes de flip ON.
+    # regenerate-day (S2, P2-3) lo hereda vía el loop de swap_meal. Fail-safe: error → deja el meal del LLM.
+    if (
+        isinstance(_out, dict)
+        and os.environ.get("MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER", "false").strip().lower() in ("1", "true", "yes", "on")
+        and target_protein and float(target_protein or 0) > 0
+        and not _renal_capped
+    ):
+        try:
+            from graph_orchestrator import _close_protein_gap_for_meal, _safe_high_density_proteins
+            from nutrition_db import IngredientNutritionDB
+            import copy as _copy_cl
+            if float(_out.get("protein") or 0) < float(target_protein):
+                _cl_db = IngredientNutritionDB()
+                _snap_cl = _copy_cl.deepcopy(_out)
+                _cands = _safe_high_density_proteins(allergies, _cl_db)
+                _added = _close_protein_gap_for_meal(_out, float(target_protein), _cl_db, _cands)
+                if _added and clean_ingredients:
+                    _reval_cl = validate_ingredients_against_pantry(
+                        _out.get("ingredients") or [], clean_ingredients, allow_external_count=_external_tolerance
+                    )
+                    if _reval_cl is not True:
+                        logger.info(f"🎚 [P2-SWAP-PROTEIN-CLOSER] closer rompió pantry → revertido | {_reval_cl}")
+                        _out.clear()
+                        _out.update(_snap_cl)
+                    else:
+                        logger.info(f"🎚 [P2-SWAP-PROTEIN-CLOSER] proteína cerrada al target | meal_type={meal_type}")
+                elif _added:
+                    logger.info(f"🎚 [P2-SWAP-PROTEIN-CLOSER] proteína cerrada (sin pantry-strict) | meal_type={meal_type}")
+        except Exception as _cl_e:
+            logger.warning(f"[P2-SWAP-PROTEIN-CLOSER] closer falló (no bloquea): {type(_cl_e).__name__}: {_cl_e}")
+
     # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Guard FINAL defensa-en-profundidad: el path de
     # "Plato Fallback" (knob MEALFIT_SWAP_EMIT_FALLBACK_DISH=true) arma el plato desde
     # clean_ingredients[:4] sin pasar por el check del retry loop → podría contener un alérgeno
@@ -1412,6 +1466,15 @@ def swap_meal(form_data: dict):
             renal_protein_trim_for_update([_out], float(target_protein or 0), renal_capped=True)
         except Exception as _renal_e:
             logger.warning(f"[P1-RENAL-UPDATE-ENFORCE] trim renal en swap falló (no bloquea): {type(_renal_e).__name__}: {_renal_e}")
+
+    # [P2-FOOD-SAFETY-UPDATE · 2026-06-24] (re-audit P2-1) Re-aplica la mitigación determinista de seguridad
+    # alimentaria (huevo crudo / pescado-marisco-carne crudos) — S1 la corre en el grafo pero el swap no.
+    # Macro-preservante (solo añade nota a la receta), fail-open, idempotente, gateado por FOOD_SAFETY_GUARD.
+    if isinstance(_out, dict):
+        try:
+            food_safety_backstop_for_meal(_out)
+        except Exception as _fs_e:
+            logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety en swap falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
     return _out
 
 

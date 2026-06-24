@@ -4158,6 +4158,18 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
             *[str(a).strip() for a in body_allergies if str(a).strip()],
             *[str(a).strip() for a in prof_allergies if str(a).strip()],
         })
+        # [P2-UPDATE-HYDRATE-DISLIKES · 2026-06-24] (re-audit P2-4) Hidratar dislikes server-side (UNION
+        # body+perfil), espejo de allergies. El frontend los manda desde storage cifrado → en la ventana
+        # stale post-login / cambio de dispositivo llegan vacíos y un swap reintroduce un alimento que el
+        # usuario marcó "no me gusta" (S1 sí lo respeta). NO es safety (fail-open natural). Knob
+        # MEALFIT_UPDATE_HYDRATE_DISLIKES (default ON).
+        if os.environ.get("MEALFIT_UPDATE_HYDRATE_DISLIKES", "true").strip().lower() in ("1", "true", "yes", "on"):
+            _prof_dislikes = hp.get("dislikes") or []
+            _body_dislikes = data.get("dislikes") or []
+            data["dislikes"] = list({
+                *[str(d).strip() for d in _body_dislikes if str(d).strip()],
+                *[str(d).strip() for d in _prof_dislikes if str(d).strip()],
+            })
         data["diet_type"] = (
             data.get("diet_type") or data.get("dietType")
             or hp.get("dietType") or hp.get("diet_type") or "balanced"
@@ -4898,6 +4910,10 @@ def api_regenerate_day(
                 "medications": data.get("medications"),
                 # Pantry reservada (gramos restantes tras los platos ya aceptados de hoy).
                 "current_pantry_ingredients": _ledger_to_pantry_lines(ledger),
+                # [P2-REGEN-DAY-PANTRY-OVERRIDE · 2026-06-24] (re-audit P2-5) Señal explícita: swap_meal debe
+                # validar contra ESTE ledger reservado (reserva inter-plato D7), NO contra la nevera-virtual
+                # completa del plan → dos platos del mismo día no reclaman el mismo ingrediente escaso.
+                "pantry_override": True,
             }
             try:
                 # [P5-DAY-REGEN-VARIETY] 1er intento con exclusiones de variedad (los platos ya

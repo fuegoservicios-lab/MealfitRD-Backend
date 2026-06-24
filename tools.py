@@ -28,7 +28,7 @@ import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
-from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update
+from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
 # callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
 # Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
@@ -970,6 +970,13 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 renal_protein_trim_for_update([new_meal_data], float(original_protein or 0), renal_capped=True)
         except Exception as _renal_e:
             logger.warning(f"[P1-RENAL-UPDATE-ENFORCE] trim renal en modify falló (no bloquea): {type(_renal_e).__name__}: {_renal_e}")
+
+        # [P2-FOOD-SAFETY-UPDATE · 2026-06-24] (re-audit P2-1) Mitigación de seguridad alimentaria (huevo/
+        # pescado-marisco crudos) — el chat-modify no pasa por el grafo. Macro-preservante, fail-open.
+        try:
+            food_safety_backstop_for_meal(new_meal_data)
+        except Exception as _fs_e:
+            logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety en modify falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
 
         target_day["meals"][target_meal_index] = new_meal_data
 
