@@ -634,10 +634,15 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     # corre antes del persist. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD
     _clin_allergies = []
     _clin_diet = None
+    _hp = {}
+    try:
+        from db import get_user_profile as _get_profile
+        _hp = (_get_profile(user_id) or {}).get("health_profile") or {}
+    except Exception as _hp_load_e:
+        logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] no se cargó perfil (no bloquea): {_hp_load_e}")
+
     if UPDATE_CLINICAL_GUARD:
         try:
-            from db import get_user_profile as _get_profile
-            _hp = (_get_profile(user_id) or {}).get("health_profile") or {}
             _clin_allergies = _hp.get("allergies") or []
             _clin_diet = _hp.get("dietType") or _hp.get("diet_type")
             if form_data:  # union con lo que mande el caller (defensa-en-profundidad)
@@ -657,7 +662,37 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     + context_extras
                 )
         except Exception as _clin_load_e:
-            logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] no se cargó perfil clínico (no bloquea): {_clin_load_e}")
+            logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] no se procesó perfil clínico (no bloquea): {_clin_load_e}")
+
+    # [P1-UPDATE-SUPERPERS · 2026-06-23] (audit inteligencia P1-4) Inyectar súper-personalización
+    # (gustos/cocina/religión/equipo) al prompt del modify — paridad con S1 y con swap.
+    if _hp and os.environ.get("MEALFIT_UPDATE_SUPERPERS", "true").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            from prompts.plan_generator import build_super_personalization_context
+            _sp_block = build_super_personalization_context({"health_profile": _hp})
+            if _sp_block:
+                context_extras = "\n" + _sp_block.strip() + "\n" + context_extras
+        except Exception as _sp_e:
+            logger.debug(f"[P1-UPDATE-SUPERPERS] super-pers context (modify) falló: {_sp_e}")
+
+    # [P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Inyectar directivas de condición +
+    # fármaco-alimento al prompt del modify — paridad con S1.
+    if _hp and os.environ.get("MEALFIT_UPDATE_CONDITION_DIRECTIVES", "true").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            from condition_rules import build_condition_prompt
+            from medication_rules import build_medication_prompt
+            _cond_form = {
+                "medicalConditions": _hp.get("medicalConditions") or _hp.get("medical_conditions") or [],
+                "medications": _hp.get("medications") or [],
+            }
+            _cond_block = build_condition_prompt(_cond_form)
+            if _cond_block:
+                context_extras = "\n" + _cond_block.strip() + "\n" + context_extras
+            _med_block = build_medication_prompt(_cond_form)
+            if _med_block:
+                context_extras = "\n" + _med_block.strip() + "\n" + context_extras
+        except Exception as _cond_e:
+            logger.debug(f"[P1-UPDATE-MICROS] directivas condición/fármaco (modify) fallaron: {_cond_e}")
 
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),

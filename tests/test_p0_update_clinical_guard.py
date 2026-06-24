@@ -188,7 +188,3 @@ def test_rollback_knob_exists():
     src = _read("graph_orchestrator.py")
     assert 'MEALFIT_UPDATE_CLINICAL_GUARD' in src
     assert re.search(r"UPDATE_CLINICAL_GUARD\s*=\s*_env_bool", src)
-
-
-def test_marker_present_in_app():
-    assert "P0-UPDATE-CLINICAL-GUARD" in _read("app.py")

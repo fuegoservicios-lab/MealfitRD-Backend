@@ -556,6 +556,11 @@ def swap_meal(form_data: dict):
 
     # --- REGLA CRÍTICA: ROTACIÓN CON INGREDIENTES EXISTENTES (ZERO-TRUST) ---
     clean_ingredients = []
+    # [P1-UPDATE-CROSS-DAY-VARIETY · 2026-06-23] (audit inteligencia P1-5) Texto de las OTRAS comidas
+    # del plan activo (acent-stripped) para sesgar la sugerencia anti mode-collapse hacia proteínas
+    # NO presentes ya en el plan → un swap "para variar" no devuelve la misma proteína que domina el
+    # resto del plan (señal que `get_user_ingredient_frequencies` pierde en un plan recién generado).
+    _plan_meals_text_for_variety = ""
     user_id = form_data.get("user_id")
     
     # Intento Primario: Extraer ingredientes directamente del plan activo en BD
@@ -577,6 +582,22 @@ def swap_meal(form_data: dict):
                             consumed_ingredients.extend(ings)
                 
                 clean_ingredients = get_realtime_pantry(plan_record["plan_data"], consumed_ingredients)
+
+                # [P1-UPDATE-CROSS-DAY-VARIETY] Capturar nombres de las OTRAS comidas del plan
+                # (excluyendo la rechazada) para el sesgo de variedad cross-day más abajo.
+                try:
+                    _rej_low = strip_accents(str(rejected_meal or "").lower())
+                    _names = []
+                    for _d in (plan_record["plan_data"].get("days") or []):
+                        for _m in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                            if not isinstance(_m, dict):
+                                continue
+                            _nm = str(_m.get("name") or "")
+                            if _nm and strip_accents(_nm.lower()) != _rej_low:
+                                _names.append(_nm)
+                    _plan_meals_text_for_variety = strip_accents(" ".join(_names).lower())
+                except Exception:
+                    _plan_meals_text_for_variety = ""
         except Exception as e:
             logger.error(f"⚠️ [SWAP_MEAL] Error extrayendo inventario desde BD: {e}")
 
@@ -701,6 +722,22 @@ def swap_meal(form_data: dict):
         available_proteins = [p for p in filtered_p if p.lower() not in rejected_lower]
         available_carbs = [c for c in filtered_c if c.lower() not in rejected_lower]
         available_veggies = [v for v in filtered_v if v.lower() not in rejected_lower]
+
+        # [P1-UPDATE-CROSS-DAY-VARIETY · 2026-06-23] (audit inteligencia P1-5) Sesgar la sugerencia
+        # hacia proteínas que NO aparecen ya en el resto del plan → un swap "para variar" aumenta la
+        # variedad cross-day en vez de devolver la proteína dominante. Bias SUAVE: solo restringe si
+        # quedan proteínas "frescas"; si todas ya están en el plan (o no hay texto del plan / guest),
+        # mantiene available_proteins intacto (nunca deja sin candidatos). Knob.
+        if (
+            _plan_meals_text_for_variety
+            and os.environ.get("MEALFIT_UPDATE_CROSS_DAY_VARIETY", "true").strip().lower() in ("1", "true", "yes", "on")
+        ):
+            _fresh_proteins = [
+                p for p in available_proteins
+                if strip_accents(p.lower()) not in _plan_meals_text_for_variety
+            ]
+            if _fresh_proteins:
+                available_proteins = _fresh_proteins
         
         user_id = form_data.get("user_id")
         db_freq_map = {}
@@ -759,6 +796,34 @@ def swap_meal(form_data: dict):
     
     start_time = time.time()
     
+    # [P1-UPDATE-SUPERPERS · 2026-06-23] (audit inteligencia P1-4) Inyectar súper-personalización
+    # (gustos/cocina/religión/equipo/sabor/nivel) al prompt del swap — paridad con S1. Incluye la
+    # exclusión DURA de religión (sin_cerdo/sin_alcohol/halal/kosher) que sin esto se reintroducía.
+    if os.environ.get("MEALFIT_UPDATE_SUPERPERS", "true").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            from prompts.plan_generator import build_super_personalization_context
+            _sp_block = build_super_personalization_context(form_data)
+            if _sp_block:
+                context_extras += "\n    " + _sp_block.strip()
+        except Exception as _sp_e:
+            logger.debug(f"[P1-UPDATE-SUPERPERS] super-pers context falló (no bloquea): {_sp_e}")
+    # [P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Inyectar directivas de condición
+    # médica + fármaco-alimento (DM2/HTA/renal/anemia/embarazo/warfarina) al prompt del swap —
+    # paridad con la directiva de S1. form_data trae medicalConditions/medications enriquecidos
+    # server-side por el router.
+    if os.environ.get("MEALFIT_UPDATE_CONDITION_DIRECTIVES", "true").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            from condition_rules import build_condition_prompt
+            from medication_rules import build_medication_prompt
+            _cond_block = build_condition_prompt(form_data)
+            if _cond_block:
+                context_extras += "\n    " + _cond_block.strip()
+            _med_block = build_medication_prompt(form_data)
+            if _med_block:
+                context_extras += "\n    " + _med_block.strip()
+        except Exception as _cond_e:
+            logger.debug(f"[P1-UPDATE-MICROS] directivas condición/fármaco fallaron (no bloquea): {_cond_e}")
+
     prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
         rejected_meal=rejected_meal,
         meal_type=meal_type,
@@ -1211,6 +1276,44 @@ def swap_meal(form_data: dict):
         raise ValueError("El modelo de IA generó una respuesta inválida. Por favor, reintenta.")
     if isinstance(_out, dict):
         _out["pantry_constrained"] = _pantry_constrained
+
+    # [P1-UPDATE-MACRO-REBALANCE · 2026-06-23] (audit inteligencia P1-2) Rebalanceador determinista de
+    # macros hacia el target del slot — la MISMA maquinaria que en S1 lleva la proteína entregada de
+    # ~85% del LLM crudo a ~98-103% (benchmark). swap/regenerate-day NO lo corrían (solo el gate ±15%,
+    # que ACEPTA el drift sin re-escalar → la proteína se erosiona hacia el borde al cambiar varios
+    # platos). regenerate-day lo hereda vía el loop de swap_meal (el ledger se decrementa con el meal YA
+    # rebalanceado, sin desync). RIESGO PANTRY: escalar porciones puede exceder la Nevera → re-validamos
+    # pantry y REVERTIMOS si rompe. Default OFF (validar A/B con scripts/macro_sizing_replay antes de
+    # flip): MEALFIT_UPDATE_MACRO_REBALANCE=true. Fail-safe: error → deja el meal del LLM intacto.
+    if (
+        isinstance(_out, dict)
+        and os.environ.get("MEALFIT_UPDATE_MACRO_REBALANCE", "false").strip().lower() in ("1", "true", "yes", "on")
+        and (target_protein or target_carbs or target_fats)
+    ):
+        try:
+            from graph_orchestrator import _rebalance_day_macros_to_target
+            from nutrition_db import IngredientNutritionDB
+            import copy as _copy
+            _rb_db = IngredientNutritionDB()
+            _snapshot = _copy.deepcopy(_out)
+            _changed = _rebalance_day_macros_to_target(
+                [_out], float(target_carbs or 0), float(target_fats or 0),
+                _rb_db, target_protein=float(target_protein or 0),
+            )
+            if _changed and clean_ingredients:
+                # Pantry-strict: el rebalance pudo escalar una porción por encima de la Nevera → re-validar.
+                _reval = validate_ingredients_against_pantry(
+                    _out.get("ingredients") or [], clean_ingredients, allow_external_count=_external_tolerance
+                )
+                if _reval is not True:
+                    logger.info(f"🎚 [P1-UPDATE-MACRO-REBALANCE] rebalance rompió pantry → revertido | {_reval}")
+                    _out.clear()
+                    _out.update(_snapshot)
+                else:
+                    logger.info(f"🎚 [P1-UPDATE-MACRO-REBALANCE] macros re-apuntadas al slot | meal_type={meal_type}")
+        except Exception as _rb_e:
+            logger.warning(f"[P1-UPDATE-MACRO-REBALANCE] rebalance falló (no bloquea): {type(_rb_e).__name__}: {_rb_e}")
+
     # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Guard FINAL defensa-en-profundidad: el path de
     # "Plato Fallback" (knob MEALFIT_SWAP_EMIT_FALLBACK_DISH=true) arma el plato desde
     # clean_ingredients[:4] sin pasar por el check del retry loop → podría contener un alérgeno

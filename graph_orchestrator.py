@@ -9755,6 +9755,68 @@ def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None) ->
     return out
 
 
+def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None) -> bool:
+    """[P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Recomputa
+    `plan['micronutrient_report']` (+ `micronutrient_supplement_advice`) tras un update de platos
+    (swap individual / regenerate-day) para que el panel de micros y el PDF NO queden stale — el
+    frontend (Dashboard / NotificationCenter) los lee. Espejo del Guard 5 de `assemble_plan_node`.
+
+    Best-effort: cualquier error deja el plan intacto (el panel es advisory, nunca bloquea el
+    update). Devuelve True si recomputó. tooltip-anchor: P1-UPDATE-MICROS"""
+    if not MICRONUTRIENT_REPORT_ENABLED or not isinstance(plan, dict):
+        return False
+    try:
+        from micronutrients import build_micronutrient_report
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        _fd = form_data or {}
+        _sex = _fd.get("gender") or "female"
+        try:
+            from nutrition_calculator import _is_pregnancy_or_lactation as _ipl
+            _pregnant = bool(_ipl(_fd))
+        except Exception:
+            _pregnant = False
+        _k_elev = False
+        try:
+            from medication_rules import detect_potassium_elevating_med
+            _k_elev = bool(detect_potassium_elevating_med(_fd))
+        except Exception:
+            _k_elev = False
+        _ndays = len(plan.get("days") or []) or 1
+        try:
+            _daily_kcal = sum(
+                _meal_macro_num(_m.get("cals"))
+                for _d in (plan.get("days") or [])
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else [])
+            ) / _ndays
+        except Exception:
+            _daily_kcal = 0.0
+        _mn = build_micronutrient_report(
+            plan, db, sex=_sex,
+            conditions=_condition_strings(_fd), daily_kcal=_daily_kcal,
+            fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL,
+            age=_fd.get("age"), pregnant=_pregnant, k_elevating_med=_k_elev,
+        )
+        plan["micronutrient_report"] = _mn
+        if SUPPLEMENT_ADVICE_ENABLED:
+            try:
+                from micronutrients import build_supplement_recommendations
+                _supp = build_supplement_recommendations(_mn, sex=_sex, age=_fd.get("age"), pregnant=_pregnant)
+                if _supp.get("count"):
+                    plan["micronutrient_supplement_advice"] = _supp
+            except Exception:
+                pass
+        logger.info(
+            f"🧪 [P1-UPDATE-MICROS] panel de micros recomputado post-update "
+            f"(cobertura {int(_mn.get('coverage', 0) * 100)}%, {len(_mn.get('gaps', []))} gap(s))"
+        )
+        return True
+    except Exception as _mn_e:
+        logger.warning(f"[P1-UPDATE-MICROS] recompute micro report falló (no bloquea): {type(_mn_e).__name__}: {_mn_e}")
+        return False
+
+
 def _surgical_promote_blocked_reason(new_plan_result: dict, form_data: dict):
     """[P1-SURGICAL-PROMOTE-BYPASS · 2026-06-22] (audit fresco P1-2) SSOT testeable del gate de
     promoción de `surgical_marker_regen_node`. Devuelve el motivo (str) por el que el plan
@@ -15942,6 +16004,15 @@ def _mark_plan_result_quality_degraded(state: PlanState, reason: str, severity: 
         )
 
 
+# [P1-MARKER-UNRESOLVED-HONESTY · 2026-06-23] (audit inteligencia P1-6) Si el surgical regen YA
+# corrió y AÚN quedan días con `_critique_unresolved` (doble fallo self_critique + surgical por
+# timeout/CB/error), el plan se entregaba como `review_passed=True` SIN banner — el reviewer médico
+# aprueba (lente ortogonal a slot-coherence/monotonía) y el flag de degradación nunca se seteaba.
+# Con el knob ON marcamos `_quality_degraded` (minor) para que el usuario sepa que puede haber
+# repetición y use Cambiar Plato. Rollback: MEALFIT_MARKER_UNRESOLVED_HONESTY=false.
+MARKER_UNRESOLVED_HONESTY = _env_bool("MEALFIT_MARKER_UNRESOLVED_HONESTY", True)
+
+
 def should_retry(state: PlanState) -> str:
     """Decide si regenerar el plan o enviarlo al usuario.
 
@@ -15995,6 +16066,21 @@ def should_retry(state: PlanState) -> str:
                     f"surgical regen antes de enviar al usuario."
                 )
                 return "marker_regen"
+        elif MARKER_UNRESOLVED_HONESTY:
+            # [P1-MARKER-UNRESOLVED-HONESTY · 2026-06-23] El surgical regen YA corrió pero
+            # pueden quedar días con `_critique_unresolved` (timeout/CB/error en la 2da pasada).
+            # Marcar degradado (minor) en vez de entregar silenciosamente un día con repetición
+            # almuerzo↔cena / slot incoherente como si estuviera plenamente verificado.
+            _residual_markers = _collect_unresolved_marker_days(state.get("plan_result"))
+            if _residual_markers:
+                logger.warning(
+                    f"🩹 [P1-MARKER-UNRESOLVED-HONESTY] surgical regen agotado pero "
+                    f"{len(_residual_markers)} día(s) siguen con `_critique_unresolved` "
+                    f"(días {_residual_markers}) → marcando _quality_degraded (minor)."
+                )
+                _mark_plan_result_quality_degraded(
+                    state, reason="slot_coherence_unresolved", severity="minor"
+                )
         logger.info("✅ [ORQUESTADOR] Revisión aprobada → Enviando al usuario.")
         return "end"
 

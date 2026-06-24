@@ -4162,6 +4162,19 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
             data.get("diet_type") or data.get("dietType")
             or hp.get("dietType") or hp.get("diet_type") or "balanced"
         )
+        # [P1-UPDATE-SUPERPERS · 2026-06-23] (audit inteligencia P1-4) Adjuntar super_personalization
+        # del perfil → swap_meal (S3) y regenerate-day (S2) inyectan gustos/cocina/religión/equipo al
+        # prompt (paridad con S1). La exclusión DURA de religión (sin_cerdo/sin_alcohol/halal/kosher)
+        # se reintroducía en updates sin esto.
+        if not data.get("super_personalization") and isinstance(hp.get("super_personalization"), dict):
+            data["super_personalization"] = hp.get("super_personalization")
+        # [P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Adjuntar condiciones/medicamentos
+        # del perfil → los updates inyectan directivas de condición + pisos de micro (paridad con S1).
+        for _src, _dst in (("medicalConditions", "medicalConditions"), ("medical_conditions", "medicalConditions"),
+                           ("medications", "medications")):
+            _v = hp.get(_src)
+            if _v and not data.get(_dst):
+                data[_dst] = _v
     except Exception as _enrich_e:
         logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] enrich perfil falló (no bloquea): {_enrich_e}")
 
@@ -4728,6 +4741,53 @@ def api_regenerate_day(
             day_target["carbs_g"] += float(_m.get("carbs") or 0)
             day_target["fats_g"] += float(_m.get("fats") or 0)
 
+        # [P1-REGEN-DAY-RETARGET · 2026-06-23] (audit inteligencia P1-3) El target del día NO debe ser
+        # SOLO la suma de los platos ACTUALES: si el día venía drifteado/degradado (p.ej. gain_muscle
+        # clavado a ~100g de proteína), regenerarlo contra esa suma PERPETÚA el déficit. Recomputamos el
+        # objetivo real desde el perfil biométrico (server-side; el body puede traer defaults
+        # male-maintenance) y tomamos el MÁXIMO por nutriente (nunca bajar de la meta). Escalamos los
+        # targets per-meal en la misma proporción para que el día sume el objetivo. Fail-open: si faltan
+        # biométricos, se queda con la suma actual (comportamiento previo). Knob MEALFIT_REGEN_DAY_RETARGET_TO_GOAL.
+        _sum_current = dict(day_target)
+        _meal_scale = {"cals": 1.0, "protein": 1.0, "carbs": 1.0, "fats": 1.0}
+        _retarget_on = os.environ.get("MEALFIT_REGEN_DAY_RETARGET_TO_GOAL", "true").strip().lower() in ("1", "true", "yes", "on")
+        if _retarget_on:
+            try:
+                from db import get_user_profile as _gup
+                from nutrition_calculator import get_nutrition_targets as _gnt
+                _hp_bio = (_gup(user_id) or {}).get("health_profile") or {}
+                _bio = {}
+                for _k in ("weight", "height", "age", "gender", "weightUnit", "bodyFat"):
+                    _v = data.get(_k)
+                    _bio[_k] = _v if _v not in (None, "", 0) else _hp_bio.get(_k)
+                _bio["activityLevel"] = data.get("activityLevel") or data.get("activity_level") or _hp_bio.get("activityLevel") or _hp_bio.get("activity_level")
+                _bio["goal"] = data.get("goal") or data.get("mainGoal") or _hp_bio.get("goal") or _hp_bio.get("mainGoal") or "maintenance"
+                if _bio.get("weight") and _bio.get("height"):
+                    _nt = _gnt(_bio)
+                    _gm = _nt.get("macros") or {}
+                    _goal_day = {
+                        "kcal": float(_nt.get("target_calories") or 0),
+                        "protein_g": float(_gm.get("protein_g") or 0),
+                        "carbs_g": float(_gm.get("carbs_g") or 0),
+                        "fats_g": float(_gm.get("fats_g") or 0),
+                    }
+                    if any(_goal_day.values()):
+                        for _kk in day_target:
+                            day_target[_kk] = max(day_target.get(_kk, 0.0), _goal_day.get(_kk, 0.0))
+                        _meal_scale = {
+                            "cals": day_target["kcal"] / max(_sum_current["kcal"], 1.0),
+                            "protein": day_target["protein_g"] / max(_sum_current["protein_g"], 1.0),
+                            "carbs": day_target["carbs_g"] / max(_sum_current["carbs_g"], 1.0),
+                            "fats": day_target["fats_g"] / max(_sum_current["fats_g"], 1.0),
+                        }
+                        _scale_dbg = {k: round(v, 2) for k, v in _meal_scale.items()}
+                        logger.info(
+                            f"🎯 [P1-REGEN-DAY-RETARGET] day_target→goal {day_target} "
+                            f"(suma actual {_sum_current}); scale={_scale_dbg}"
+                        )
+            except Exception as _rt_e:
+                logger.warning(f"⚠️ [P1-REGEN-DAY-RETARGET] retarget falló (no bloquea): {_rt_e}")
+
         # GATE DE SUFICIENCIA (scope=day) ANTES de cuota/LLM.
         if _pantry_sufficiency_gate_on():
             try:
@@ -4768,6 +4828,28 @@ def api_regenerate_day(
         # fallback de factibilidad (reintento sin exclusiones) lo hace seguro.
         day_avoid: list = []
         _variety_on = os.environ.get("MEALFIT_DAY_REGEN_INTRADAY_VARIETY", "true").strip().lower() in ("1", "true", "yes", "on")
+        # [P1-UPDATE-CROSS-DAY-VARIETY · 2026-06-23] (audit inteligencia P1-5) Sembrar day_avoid con
+        # las proteínas principales de los OTROS días del plan → el día regenerado tiende a proteínas
+        # distintas de las ya presentes (evita "pollo en los 3 días"). El gate cross-day de S1
+        # (self_critique) NO corre en updates; esto lo aproxima. Se aplica vía el mismo `_variety_on`
+        # del loop + el fallback de factibilidad (reintento sin exclusiones) lo hace seguro si la
+        # Nevera no permite variar. Knob propio: MEALFIT_UPDATE_CROSS_DAY_VARIETY (default ON).
+        if (
+            _variety_on
+            and os.environ.get("MEALFIT_UPDATE_CROSS_DAY_VARIETY", "true").strip().lower() in ("1", "true", "yes", "on")
+        ):
+            for _di, _other_day in enumerate(days):
+                if _di == day_index or not isinstance(_other_day, dict):
+                    continue
+                for _om in (_other_day.get("meals") or []):
+                    _op = _main_protein_of_meal(_om) if isinstance(_om, dict) else None
+                    if _op and _op not in day_avoid:
+                        day_avoid.append(_op)
+            if day_avoid:
+                logger.info(
+                    f"🎲 [P1-UPDATE-CROSS-DAY-VARIETY] day_avoid sembrado con "
+                    f"{len(day_avoid)} proteína(s) de otros días: {day_avoid}"
+                )
         for meal in meals:
             if not isinstance(meal, dict):
                 new_meals.append(meal)
@@ -4778,14 +4860,22 @@ def api_regenerate_day(
                 "rejected_meal": meal.get("name"),
                 "meal_type": meal.get("meal") or meal.get("meal_type") or "Comida",
                 "swap_reason": reason,
-                "target_calories": meal.get("cals"),
-                "target_protein": meal.get("protein"),
-                "target_carbs": meal.get("carbs"),
-                "target_fats": meal.get("fats"),
+                # [P1-REGEN-DAY-RETARGET · 2026-06-23] Targets per-meal escalados hacia el objetivo del
+                # día (no la suma drifteada). _meal_scale=1.0 cuando no hubo retarget (sin biométricos).
+                "target_calories": round(float(meal.get("cals") or 0) * _meal_scale["cals"]) or meal.get("cals"),
+                "target_protein": round(float(meal.get("protein") or 0) * _meal_scale["protein"]) or meal.get("protein"),
+                "target_carbs": round(float(meal.get("carbs") or 0) * _meal_scale["carbs"]) or meal.get("carbs"),
+                "target_fats": round(float(meal.get("fats") or 0) * _meal_scale["fats"]) or meal.get("fats"),
                 "diet_type": data.get("diet_type") or data.get("dietType") or "balanced",
                 "goal": data.get("goal") or data.get("mainGoal"),
                 "allergies": data.get("allergies") or [],
                 "dislikes": data.get("dislikes") or [],
+                # [P1-UPDATE-SUPERPERS / P1-UPDATE-MICROS · 2026-06-23] Transportar súper-personalización
+                # + condiciones/medicamentos (enriquecidos server-side por _enrich_clinical_from_profile)
+                # al swap → el día regenerado hereda gustos/religión/equipo + directivas clínicas (paridad S1).
+                "super_personalization": data.get("super_personalization"),
+                "medicalConditions": data.get("medicalConditions"),
+                "medications": data.get("medications"),
                 # Pantry reservada (gramos restantes tras los platos ya aceptados de hoy).
                 "current_pantry_ingredients": _ledger_to_pantry_lines(ledger),
             }
@@ -4893,6 +4983,21 @@ def api_regenerate_day(
                 pd.pop(_k, None)
             from datetime import datetime as _dt, timezone as _tz
             pd["_plan_modified_at"] = _dt.now(_tz.utc).isoformat()
+            # [P1-UPDATE-MICROS · 2026-06-23] (audit inteligencia P1-7) Recomputar el panel de micros
+            # sobre el plan mutado → el Dashboard/PDF no quedan stale tras regenerar el día. Best-effort
+            # (nunca bloquea el update). Knob MEALFIT_UPDATE_RECOMPUTE_MICROS.
+            if os.environ.get("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    from graph_orchestrator import recompute_micronutrient_report_for_plan
+                    _micro_form = {
+                        "gender": data.get("gender") or data.get("sex"),
+                        "age": data.get("age"),
+                        "medicalConditions": data.get("medicalConditions"),
+                        "medications": data.get("medications"),
+                    }
+                    recompute_micronutrient_report_for_plan(pd, _micro_form, db=_db)
+                except Exception as _mfe:
+                    logger.debug(f"[P1-UPDATE-MICROS] recompute (regen-day) falló: {_mfe}")
             return pd
 
         result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)
@@ -4902,11 +5007,30 @@ def api_regenerate_day(
         # Cuota: 1 crédito por día completo (post-éxito, D3).
         log_api_usage(user_id, "llm_regenerate_day")
 
+        # [P1-REGEN-DAY-RETARGET · 2026-06-23] Revalidación de banda a nivel DÍA: si la proteína
+        # entregada quedó < 90% del objetivo del día, avisar (honestidad, espejo de S1) en vez de
+        # persistir silenciosamente un día por debajo de la meta. La Nevera puede no tener proteína.
+        _day_warning = None
+        if _retarget_on and day_target.get("protein_g", 0) > 0:
+            _new_protein = sum(float(_m.get("protein") or 0) for _m in new_meals if isinstance(_m, dict))
+            if _new_protein < 0.90 * day_target["protein_g"]:
+                _day_warning = (
+                    f"Este día quedó en ~{round(_new_protein)}g de proteína, por debajo de tu objetivo "
+                    f"(~{round(day_target['protein_g'])}g). Tu Nevera puede no tener suficiente proteína: "
+                    f"agrega más ítems o ajusta las porciones."
+                )
+                logger.info(
+                    f"⚠️ [P1-REGEN-DAY-RETARGET] día bajo en proteína: "
+                    f"{round(_new_protein)}g < 90% de {round(day_target['protein_g'])}g"
+                )
+
         return {
             "success": True,
             "day_index": day_index,
             "meals_regenerated": regenerated,
             "slots_kept": slots_kept,
+            # [P1-REGEN-DAY-RETARGET] aviso honesto si el día quedó bajo en proteína vs objetivo.
+            "day_quality_warning": _day_warning,
             # Devolvemos los meals nuevos para que el frontend actualice
             # planData.days[day_index].meals localmente (sin refetch) y luego
             # invoque /recalculate-shopping-list (mismo patrón que swap).
