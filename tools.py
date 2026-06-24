@@ -694,6 +694,51 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         except Exception as _cond_e:
             logger.debug(f"[P1-UPDATE-MICROS] directivas condición/fármaco (modify) fallaron: {_cond_e}")
 
+    # [P2-CHATMODIFY-DISLIKES · 2026-06-24] (re-audit P2-6) Inyectar los DISGUSTOS como prohibición dura
+    # (espejo de swap agent.py:548). chat-modify NUNCA los leía → un "cámbiame el almuerzo" podía
+    # reintroducir un alimento marcado "no me gusta" (S1/swap sí lo respetan). UNION _hp+form_data
+    # (defensa-en-profundidad, igual que allergies). El template ya honra la EXCEPCIÓN: si el usuario pide
+    # explícitamente el alimento en `changes`, su deseo reciente gana. Knob MEALFIT_UPDATE_HYDRATE_DISLIKES.
+    # tooltip-anchor: P2-CHATMODIFY-DISLIKES
+    if os.environ.get("MEALFIT_UPDATE_HYDRATE_DISLIKES", "true").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            _cm_dislikes = list({
+                *[str(d).strip() for d in (_hp.get("dislikes") or []) if str(d).strip()],
+                *[str(d).strip() for d in ((form_data or {}).get("dislikes") or []) if str(d).strip()],
+            })
+            if _cm_dislikes:
+                context_extras = (
+                    "\n🚫 DISGUSTOS (PROHIBIDO INCLUIR estos alimentos ni como sustituto, salvo que el "
+                    "usuario los pida EXPLÍCITAMENTE en el cambio): " + ", ".join(_cm_dislikes) + ".\n"
+                    + context_extras
+                )
+        except Exception as _cm_dis_e:
+            logger.debug(f"[P2-CHATMODIFY-DISLIKES] inyección de dislikes (modify) falló: {_cm_dis_e}")
+
+    # [P2-CHATMODIFY-GAINMUSCLE-DENSITY · 2026-06-24] (re-audit P2-7) Para gain_muscle, prohibir como
+    # PROTEÍNA PRINCIPAL las de baja densidad (leguminosas/ricotta/cottage/crema/yogurt regular) — ante un
+    # cambio abierto el LLM (temp 0.1) podía devolver un main de baja densidad que swap/S1 filtran vía
+    # _LOW_DENSITY_AS_MAIN → día bajo el piso de proteína. Honra la regla #1 del template (deseo explícito
+    # gana). Knob compartido MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN. tooltip-anchor: P2-CHATMODIFY-GAINMUSCLE-DENSITY
+    _cm_goal = (
+        (_hp.get("goal") or _hp.get("mainGoal") or ((form_data or {}).get("goal") if form_data else "") or "")
+    ).strip().lower()
+    if (
+        _cm_goal == "gain_muscle"
+        and os.environ.get("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", "true").strip().lower() in ("1", "true", "yes", "on")
+    ):
+        try:
+            from ai_helpers import _LOW_DENSITY_AS_MAIN as _LDM_CM
+            _ldm_names = ", ".join(sorted(str(x) for x in _LDM_CM))
+            context_extras = (
+                "\n💪 OBJETIVO GANAR MÚSCULO — PROTEÍNA PRINCIPAL: usa proteína animal de ALTA densidad "
+                "(pollo, carne, pescado, huevos, atún). NO uses como BASE PRINCIPAL del plato proteínas de "
+                "baja densidad (" + _ldm_names + ") salvo que el usuario lo pida explícitamente en el cambio.\n"
+                + context_extras
+            )
+        except Exception as _cm_gm_e:
+            logger.debug(f"[P2-CHATMODIFY-GAINMUSCLE-DENSITY] directiva densidad (modify) falló: {_cm_gm_e}")
+
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
@@ -763,6 +808,14 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         _validate_recipe_coh = None
         _recipe_coh_enabled = lambda: False  # noqa: E731
 
+    # [P2-UPDATE-MACRO-TRUTHUP · 2026-06-24] (re-audit P2-1) Truth-up de macros desde strings de
+    # ingredientes ANTES del band-validator (bloque dentro de invoke_with_retry). Cierra el inflado del
+    # JSON por el LLM en chat-modify. db lazy compartida entre reintentos. Knob MEALFIT_UPDATE_MACRO_TRUTHUP
+    # default ON. tooltip-anchor: P2-UPDATE-MACRO-TRUTHUP
+    _tu_db_holder = [None]
+    _update_macro_truthup_enabled = lambda: os.environ.get(  # noqa: E731
+        "MEALFIT_UPDATE_MACRO_TRUTHUP", "true").strip().lower() in ("1", "true", "yes", "on")
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8),
@@ -829,6 +882,34 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 logger.warning(
                     f"[P1-SWAP-RECIPE-COHERENCE] validator helper falló (no aborta): "
                     f"{type(_coh_exc).__name__}: {_coh_exc}"
+                )
+
+        # [P2-UPDATE-MACRO-TRUTHUP · 2026-06-24] (re-audit P2-1) Recompute del NÚMERO de macros desde los
+        # strings FINALES de ingredientes ANTES del band-validator → cierra el inflado del JSON por el LLM
+        # (chat-modify persiste el plan él mismo → la cifra fantasma quedaba commiteada). Espejo del Guard
+        # 8z de S1. Solo NÚMEROS (NO strings → lista de compras intacta). Fail-safe. Mutamos `res` para que
+        # el band-validator y el merge persistente lean la cifra real. tooltip-anchor: P2-UPDATE-MACRO-TRUTHUP
+        if _update_macro_truthup_enabled():
+            try:
+                from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu_fn
+                if _tu_db_holder[0] is None:
+                    from nutrition_db import IngredientNutritionDB as _TUDB
+                    _tu_db_holder[0] = _TUDB()
+                _tu_meal = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                if _tu_fn(_tu_meal, _tu_db_holder[0]):
+                    for _tk in ("protein", "carbs", "fats", "cals", "macros"):
+                        if _tk in _tu_meal:
+                            if isinstance(res, dict):
+                                res[_tk] = _tu_meal[_tk]
+                            elif hasattr(res, _tk):
+                                setattr(res, _tk, _tu_meal[_tk])
+                    logger.info("🔎 [P2-UPDATE-MACRO-TRUTHUP] macros chat-modify recomputadas desde strings")
+            except Exception as _tu_exc:
+                logger.warning(
+                    f"[P2-UPDATE-MACRO-TRUTHUP] truth-up chat-modify falló (no aborta): "
+                    f"{type(_tu_exc).__name__}: {_tu_exc}"
                 )
 
         # [P1-SWAP-MACROS · 2026-05-22] Validación post-gen de macros vs
@@ -1181,6 +1262,25 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 _agent_divergences.extend(_divs or [])
             except Exception as _coh_agent_e:
                 logger.warning(f"[TOOL] coherence guard helper fallo (no aborta): {_coh_agent_e}")
+
+            # [P2-CHATMODIFY-MICROS-STALE · 2026-06-24] (re-audit P2-2) Recomputar el panel de micros sobre
+            # el plan mutado → Dashboard/PDF no quedan stale. chat-modify PERSISTE el plan él mismo (este
+            # callback) sin etapa downstream que refresque micros (a diferencia del swap, cuyo recalc
+            # client-side al menos corre después). Espejo de regenerate-day P1-7. `_hp` ya cargado en el
+            # closure (health_profile, ~tools.py:640). Best-effort. Knob compartido MEALFIT_UPDATE_RECOMPUTE_MICROS.
+            # tooltip-anchor: P2-CHATMODIFY-MICROS-STALE
+            if os.environ.get("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    from graph_orchestrator import recompute_micronutrient_report_for_plan
+                    _micro_form_cm = {
+                        "gender": _hp.get("gender") or _hp.get("sex"),
+                        "age": _hp.get("age"),
+                        "medicalConditions": _hp.get("medicalConditions") or _hp.get("medical_conditions"),
+                        "medications": _hp.get("medications"),
+                    }
+                    recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)
+                except Exception as _cm_micro_e:
+                    logger.debug(f"[P2-CHATMODIFY-MICROS-STALE] recompute (chat-modify) falló: {_cm_micro_e}")
 
             return plan_data_fresh
 

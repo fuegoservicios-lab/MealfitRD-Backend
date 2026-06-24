@@ -21,7 +21,7 @@ from db import (
     get_latest_meal_plan_with_id, update_meal_plan_data, insert_like
 )
 from memory_manager import build_memory_context, summarize_and_prune
-from agent import analyze_preferences_agent, swap_meal
+from agent import analyze_preferences_agent, swap_meal, LLMRateLimitedError, LLMCircuitBreakerOpen
 from graph_orchestrator import (
     run_plan_pipeline,
     arun_plan_pipeline,
@@ -4280,22 +4280,35 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     logger.warning(f"⚠️ [SWAP LEARN] Error persistiendo swap reason: {e}")
             background_tasks.add_task(_persist_swap_reason)
             
+        # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] (re-audit P2-4) Cobro post-éxito: el swap cobraba el
+        # crédito ANTES de llamar swap_meal → si la IA fallaba (retries agotados / clínico no converge /
+        # rate-limit / circuit-breaker) el usuario pagaba y recibía su plato original sin que se le dijera
+        # "no se descontó" (asimetría vs regenerate-day, que NO cobra ante caída). Con el knob (default ON)
+        # el cobro se mueve a DESPUÉS del éxito. Legacy (knob OFF): cobra pre-swap. tooltip-anchor: P2-SWAP-CHARGE-ON-SUCCESS
+        _swap_charge_on_success_only = os.environ.get(
+            "MEALFIT_SWAP_CHARGE_ON_SUCCESS_ONLY", "true").strip().lower() in ("1", "true", "yes", "on")
+
         if user_id and user_id != "guest":
-            log_api_usage(user_id, "llm_swap_meal")
-            
-            # --- HOT SIGNAL PATH (MEJORA 4) ---
+            if not _swap_charge_on_success_only:
+                log_api_usage(user_id, "llm_swap_meal")
+
+            # --- HOT SIGNAL PATH (MEJORA 4) --- (input al LLM → SIEMPRE pre-swap, independiente del cobro)
             try:
                 # Obtenemos likes y rechazos recientes para que el LLM no repita errores en el JIT Swap
                 recent_likes = get_user_likes(user_id)
                 recent_rejections = get_active_rejections(user_id=user_id, session_id=session_id)
-                
+
                 data["liked_meals"] = [like["meal_name"] for like in recent_likes] if recent_likes else []
                 data["disliked_meals"] = [r["meal_name"] for r in recent_rejections] if recent_rejections else []
                 logger.info(f"🔥 [HOT SIGNAL] Inyectando {len(data['liked_meals'])} likes y {len(data['disliked_meals'])} rechazos al JIT Swap.")
             except Exception as e:
                 logger.warning(f"⚠️ [HOT SIGNAL] Error recuperando señales en tiempo real: {e}")
-            
+
         result = swap_meal(data)
+        # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] Cobro post-éxito (default): swap_meal entregó un plato.
+        # Sus modos de fallo (retries/clínico/breaker/rate-limit) levantan ANTES de aquí → no se cobra.
+        if user_id and user_id != "guest" and _swap_charge_on_success_only:
+            log_api_usage(user_id, "llm_swap_meal")
         return result
     except HTTPException:
         raise
@@ -4345,7 +4358,8 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 "error_message": (
                     "El chef IA no pudo generar una alternativa coherente "
                     "tras varios intentos. Reintenta o elige otra razón "
-                    "de cambio. Tu plato actual se mantiene sin cambios."
+                    "de cambio. Tu plato actual se mantiene sin cambios. "
+                    "No se descontó tu crédito."
                 ),
             }
             if _hard_fail_422:
@@ -4365,7 +4379,8 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 "error_code": "swap_clinical_violation",
                 "error_message": (
                     "No pudimos generar una alternativa segura para tus alergias o "
-                    "restricciones de dieta. Tu plato actual se mantiene sin cambios."
+                    "restricciones de dieta. Tu plato actual se mantiene sin cambios. "
+                    "No se descontó tu crédito."
                 ),
             }
             if _hard_fail_422:
@@ -4377,6 +4392,21 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
 
         logger.error(f"❌ [ERROR] Error en /api/swap-meal: {_msg}")
         raise HTTPException(status_code=500, detail=safe_error_detail(ve))
+    except (LLMRateLimitedError, LLMCircuitBreakerOpen) as _llm_e:
+        # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] (re-audit P2-4) Caída TRANSITORIA del proveedor
+        # (rate-limit o circuit-breaker abierto) DENTRO de swap_meal. Antes caía al `except Exception`
+        # genérico → HTTP 500 opaco con el crédito YA quemado. Ahora: el cobro es post-éxito (arriba) →
+        # esta excepción precede al cobro → NO se cobró. Soft-fail 200 honesto (espejo de regenerate-day
+        # `ai_unavailable`). El plato original se preserva en el cliente.
+        logger.warning(f"⚠️ [P2-SWAP-CHARGE-ON-SUCCESS] IA no disponible ({type(_llm_e).__name__}) → soft-fail sin cobro")
+        return {
+            "swap_failed": True,
+            "error_code": "swap_ai_unavailable",
+            "error_message": (
+                "El servicio de IA está ocupado en este momento. Tu plato actual se mantiene "
+                "sin cambios. No se descontó tu crédito; reintenta en unos segundos."
+            ),
+        }
     except Exception as e:
         logger.error(f"❌ [ERROR] Error en /api/swap-meal: {str(e)}")
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
@@ -4487,6 +4517,24 @@ def api_swap_meal_persist(
             # patrón espejo de `DELETE /{plan_id}` y `/retry-chunk`.
             raise HTTPException(status_code=404, detail="Plan no encontrado")
 
+        # [P2-SWAP-MICROS-STALE · 2026-06-24] (re-audit P2-2) Hidratar biométricos del perfil SERVER-SIDE
+        # para recomputar el panel de micros tras el swap. El body de /swap-meal/persist NO trae
+        # gender/age/condiciones → un form vacío daría un DRI sin la elevación de embarazo/edad (una
+        # embarazada vería hierro/folato sin el bump gestacional). Best-effort; fail-open a {} (el recompute
+        # cae a defaults DRI base, mejor que nada). tooltip-anchor: P2-SWAP-MICROS-STALE
+        _micro_form = {}
+        try:
+            from db import get_user_profile as _gup_micro
+            _hp_micro = (_gup_micro(verified_user_id) or {}).get("health_profile") or {}
+            _micro_form = {
+                "gender": _hp_micro.get("gender") or _hp_micro.get("sex"),
+                "age": _hp_micro.get("age"),
+                "medicalConditions": _hp_micro.get("medicalConditions") or _hp_micro.get("medical_conditions"),
+                "medications": _hp_micro.get("medications"),
+            }
+        except Exception as _micro_form_e:
+            logger.debug(f"[P2-SWAP-MICROS-STALE] no se pudo hidratar _micro_form: {_micro_form_e}")
+
         # [P1-SWAP-PERSIST-ATOMIC · 2026-05-22] Migrado el UPDATE plano
         # (`execute_sql_write` con `jsonb_set` chained) a
         # `update_plan_data_atomic` (db_plans.py:381, P0-2 / P2-OPEN-1).
@@ -4568,6 +4616,18 @@ def api_swap_meal_persist(
 
             if clear_is_restocked:
                 plan_data["is_restocked"] = False
+
+            # [P2-SWAP-MICROS-STALE · 2026-06-24] (re-audit P2-2) Recomputar el panel de micros sobre el
+            # plan mutado → Dashboard/PDF no quedan stale tras el swap (espejo de regenerate-day P1-7, que
+            # ya lo hace en _day_mutator). `_micro_form` se hidrató server-side arriba (el body no trae
+            # biométricos). Best-effort (nunca bloquea el persist). Knob compartido MEALFIT_UPDATE_RECOMPUTE_MICROS.
+            # tooltip-anchor: P2-SWAP-MICROS-STALE
+            if os.environ.get("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
+                try:
+                    from graph_orchestrator import recompute_micronutrient_report_for_plan
+                    recompute_micronutrient_report_for_plan(plan_data, _micro_form, db=None)
+                except Exception as _mfe:
+                    logger.debug(f"[P2-SWAP-MICROS-STALE] recompute (swap) falló: {_mfe}")
 
             return plan_data
 
@@ -4849,6 +4909,11 @@ def api_regenerate_day(
 
         _db = IngredientNutritionDB()
         ledger = _inventory_grams_ledger(get_raw_user_inventory(user_id), _db)
+        # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Decrementar el ledger también por los
+        # platos CONSERVADOS (no solo los regenerados) para que un swap posterior no re-reclame un
+        # ingrediente que un plato kept ya consume. Knob default ON. tooltip-anchor: P2-REGEN-DAY-LEDGER-LEAK
+        _ledger_keep_decrement_on = os.environ.get(
+            "MEALFIT_REGEN_DAY_LEDGER_KEEP_DECREMENT", "true").strip().lower() in ("1", "true", "yes", "on")
 
         new_meals: list = []
         regenerated = 0
@@ -4946,6 +5011,12 @@ def api_regenerate_day(
                 else:
                     new_meals.append(meal)
                     slots_kept.append(meal.get("meal") or meal.get("meal_type"))
+                    # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Reservar en el ledger los
+                    # ingredientes del plato CONSERVADO (espejo del decrement del regenerado, ~4975). Sin
+                    # esto un plato regenerado MÁS TARDE ve el ledger inflado y re-reclama un ingrediente
+                    # que el plato kept ya consume → el día sobre-asigna la Nevera.
+                    if _ledger_keep_decrement_on:
+                        _decrement_ledger_by_meal(ledger, meal, _db)
                     if meal.get("name"):
                         day_avoid.append(meal["name"])  # conservado → tampoco lo dupliquemos
                         _p_kept = _main_protein_of_meal(meal)
@@ -4956,6 +5027,10 @@ def api_regenerate_day(
                 logger.info(f"[P3-REGEN-DAY] slot conservado (no generable): {meal.get('name')!r} — {_ve}")
                 new_meals.append(meal)
                 slots_kept.append(meal.get("meal") or meal.get("meal_type"))
+                # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Mismo decrement que la rama else:
+                # el plato conservado consume su inventario aunque no se haya podido regenerar.
+                if _ledger_keep_decrement_on:
+                    _decrement_ledger_by_meal(ledger, meal, _db)
                 if meal.get("name"):
                     day_avoid.append(meal["name"])
                     _p_kept2 = _main_protein_of_meal(meal)
@@ -5065,22 +5140,40 @@ def api_regenerate_day(
         if not _ai_unavailable:
             log_api_usage(user_id, "llm_regenerate_day")
 
-        # [P1-REGEN-DAY-RETARGET · 2026-06-23] Revalidación de banda a nivel DÍA: si la proteína
-        # entregada quedó < 90% del objetivo del día, avisar (honestidad, espejo de S1) en vez de
-        # persistir silenciosamente un día por debajo de la meta. La Nevera puede no tener proteína.
+        # [P1-REGEN-DAY-RETARGET · 2026-06-23 · P2-REGEN-DAY-WARN-MULTI-AXIS · 2026-06-24 (re-audit P2-8)]
+        # Revalidación de banda a nivel DÍA (honestidad, espejo de S1): avisar si el día entregado quedó por
+        # debajo del objetivo retargeteado, en vez de persistir silenciosamente. ANTES solo auditaba proteína
+        # (1 de 4 ejes que el retarget computa) → un día que retargetea a, p.ej., 2400 kcal pero cuya Nevera
+        # solo arma ~1700 se persistía CALLADO si la proteína (cubierta por una densa) pasaba el umbral.
+        # Ahora multi-eje: proteína (<90%), calorías (<85%, déficit severo) y carbos (<85%, SOLO si el
+        # objetivo es ganar músculo — un déficit de carbos es esperado/deseado en pérdida de peso, no se
+        # avisa). Renal: la proteína NO se empuja a la meta en el retarget (day_target['protein_g'] = suma
+        # original), así que el umbral no produce falso aviso iatrogénico. Knob MEALFIT_REGEN_DAY_WARN_MULTI_AXIS
+        # (default ON) revierte a proteína-only. tooltip-anchor: P2-REGEN-DAY-WARN-MULTI-AXIS
         _day_warning = None
         if _retarget_on and day_target.get("protein_g", 0) > 0:
+            _multi_axis = os.environ.get(
+                "MEALFIT_REGEN_DAY_WARN_MULTI_AXIS", "true").strip().lower() in ("1", "true", "yes", "on")
             _new_protein = sum(float(_m.get("protein") or 0) for _m in new_meals if isinstance(_m, dict))
+            _deficits = []
             if _new_protein < 0.90 * day_target["protein_g"]:
+                _deficits.append(f"~{round(_new_protein)}g de proteína (objetivo ~{round(day_target['protein_g'])}g)")
+            if _multi_axis:
+                _goal_lc = str(data.get("goal") or data.get("mainGoal") or "").strip().lower()
+                if day_target.get("kcal", 0) > 0:
+                    _new_kcal = sum(float(_m.get("cals") or 0) for _m in new_meals if isinstance(_m, dict))
+                    if _new_kcal < 0.85 * day_target["kcal"]:
+                        _deficits.append(f"~{round(_new_kcal)} kcal (objetivo ~{round(day_target['kcal'])})")
+                if _goal_lc in ("gain_muscle", "bulk") and day_target.get("carbs_g", 0) > 0:
+                    _new_carbs = sum(float(_m.get("carbs") or 0) for _m in new_meals if isinstance(_m, dict))
+                    if _new_carbs < 0.85 * day_target["carbs_g"]:
+                        _deficits.append(f"~{round(_new_carbs)}g de carbohidratos (objetivo ~{round(day_target['carbs_g'])}g)")
+            if _deficits:
                 _day_warning = (
-                    f"Este día quedó en ~{round(_new_protein)}g de proteína, por debajo de tu objetivo "
-                    f"(~{round(day_target['protein_g'])}g). Tu Nevera puede no tener suficiente proteína: "
-                    f"agrega más ítems o ajusta las porciones."
+                    "Este día quedó en " + "; ".join(_deficits) + ", por debajo de tu objetivo. "
+                    "Tu Nevera puede no tener suficiente: agrega más ítems o ajusta las porciones."
                 )
-                logger.info(
-                    f"⚠️ [P1-REGEN-DAY-RETARGET] día bajo en proteína: "
-                    f"{round(_new_protein)}g < 90% de {round(day_target['protein_g'])}g"
-                )
+                logger.info(f"⚠️ [P2-REGEN-DAY-WARN-MULTI-AXIS] día bajo objetivo: {_deficits}")
 
         return {
             "success": True,

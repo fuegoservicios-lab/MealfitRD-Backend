@@ -1029,6 +1029,14 @@ def swap_meal(form_data: dict):
         _validate_prep_time = None
         _prep_time_validate_enabled = lambda: False  # noqa: E731
 
+    # [P2-UPDATE-MACRO-TRUTHUP · 2026-06-24] (re-audit P2-1) Truth-up de macros desde los strings de
+    # ingredientes ANTES del band-validator (bloque dentro de invoke_with_retry). Cierra el inflado del
+    # JSON por el LLM. db lazy compartida entre los reintentos (evita recargar el índice 3×). Knob
+    # MEALFIT_UPDATE_MACRO_TRUTHUP default ON. tooltip-anchor: P2-UPDATE-MACRO-TRUTHUP
+    _tu_db_holder = [None]
+    _update_macro_truthup_enabled = lambda: os.environ.get(  # noqa: E731
+        "MEALFIT_UPDATE_MACRO_TRUTHUP", "true").strip().lower() in ("1", "true", "yes", "on")
+
     # Invocar LLM con reintentos automáticos (tenacity)
     @retry(
         stop=stop_after_attempt(3),
@@ -1147,6 +1155,36 @@ def swap_meal(form_data: dict):
                 logger.warning(
                     f"[P2-SWAP-PREP-TIME] validator helper falló (no aborta): "
                     f"{type(_pt_exc).__name__}: {_pt_exc}"
+                )
+
+        # [P2-UPDATE-MACRO-TRUTHUP · 2026-06-24] (re-audit P2-1) Recompute del NÚMERO de macros desde los
+        # strings FINALES de ingredientes ANTES del band-validator → cierra el inflado del JSON por el LLM
+        # (emite protein:30 con ingredientes que rinden ~12g → pasaba la banda y persistía; Dashboard/PDF/
+        # day_quality_warning operaban sobre cifra fantasma). Espejo del Guard 8z de S1
+        # (graph_orchestrator._truth_up_meal_macros_from_strings). Solo NÚMEROS (NO strings → lista de
+        # compras intacta). Fail-safe. Mutamos `res` para que el band-validator y la persistencia (_out)
+        # lean la cifra real. tooltip-anchor: P2-UPDATE-MACRO-TRUTHUP
+        if _update_macro_truthup_enabled():
+            try:
+                from graph_orchestrator import _truth_up_meal_macros_from_strings as _tu_fn
+                if _tu_db_holder[0] is None:
+                    from nutrition_db import IngredientNutritionDB as _TUDB
+                    _tu_db_holder[0] = _TUDB()
+                _tu_meal = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                if _tu_fn(_tu_meal, _tu_db_holder[0]):
+                    for _tk in ("protein", "carbs", "fats", "cals", "macros"):
+                        if _tk in _tu_meal:
+                            if isinstance(res, dict):
+                                res[_tk] = _tu_meal[_tk]
+                            elif hasattr(res, _tk):
+                                setattr(res, _tk, _tu_meal[_tk])
+                    logger.info(f"🔎 [P2-UPDATE-MACRO-TRUTHUP] macros swap recomputadas desde strings | meal_type={meal_type}")
+            except Exception as _tu_exc:
+                logger.warning(
+                    f"[P2-UPDATE-MACRO-TRUTHUP] truth-up swap falló (no aborta): "
+                    f"{type(_tu_exc).__name__}: {_tu_exc}"
                 )
 
         # [P1-SWAP-MACROS · 2026-05-22] Validación post-gen de macros vs
