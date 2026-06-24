@@ -4135,6 +4135,37 @@ def _pantry_sufficiency_gate_on() -> bool:
     return os.environ.get("MEALFIT_PANTRY_SUFFICIENCY_GATE", "false").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
+    """[P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquece `data` IN-PLACE con los campos clínicos
+    leídos SERVER-SIDE desde health_profile (allergies UNIONADAS body+perfil + dietType), para que
+    `swap_meal` (y por herencia `regenerate-day`, que hace loop de swaps) corra su backstop
+    determinista contra la VERDAD del perfil y no solo contra el body del cliente.
+
+    Cierra el vector benigno real documentado por el audit: ventana de 50-200ms post-login donde el
+    frontend manda allergies=[] mientras el storage cifrado aún no hidrató → un swap en esa ventana
+    colaba un alérgeno IgE. Espejo de I2 / P0-AGENT-1: los datos sensibles nacen del servidor, nunca
+    se confían al cliente. No-op para guests / sin perfil / error (fail-OPEN hacia el body — el
+    backstop determinista de swap_meal sigue corriendo con lo que haya).
+    tooltip-anchor: P0-UPDATE-CLINICAL-GUARD"""
+    if not user_id or user_id == "guest" or not isinstance(data, dict):
+        return
+    try:
+        from db import get_user_profile
+        hp = (get_user_profile(user_id) or {}).get("health_profile") or {}
+        prof_allergies = hp.get("allergies") or []
+        body_allergies = data.get("allergies") or []
+        data["allergies"] = list({
+            *[str(a).strip() for a in body_allergies if str(a).strip()],
+            *[str(a).strip() for a in prof_allergies if str(a).strip()],
+        })
+        data["diet_type"] = (
+            data.get("diet_type") or data.get("dietType")
+            or hp.get("dietType") or hp.get("diet_type") or "balanced"
+        )
+    except Exception as _enrich_e:
+        logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] enrich perfil falló (no bloquea): {_enrich_e}")
+
+
 @router.post("/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_SWAP_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
     try:
@@ -4144,7 +4175,12 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
         if user_id and user_id != "guest":
             if not verified_user_id or verified_user_id != user_id:
                 raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
-                
+
+        # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet SERVER-SIDE desde el
+        # perfil ANTES del gate de suficiencia y del swap → el backstop clínico de swap_meal corre
+        # contra la verdad del perfil, no contra el body (cierra la ventana stale post-login).
+        _enrich_clinical_from_profile(data, user_id)
+
         rejected_meal = data.get("rejected_meal")
         meal_type = data.get("meal_type", "")
         swap_reason = data.get("swap_reason", "variety")  # variety | time | dislike | similar | budget
@@ -4275,6 +4311,26 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                     "El chef IA no pudo generar una alternativa coherente "
                     "tras varios intentos. Reintenta o elige otra razón "
                     "de cambio. Tu plato actual se mantiene sin cambios."
+                ),
+            }
+            if _hard_fail_422:
+                raise HTTPException(status_code=422, detail={
+                    "code": _payload["error_code"],
+                    "message": _payload["error_message"],
+                })
+            return _payload
+
+        # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] El backstop clínico no pudo entregar un plato
+        # seguro tras los retries (alérgeno/dieta) → fail-secure: preservar el plato original
+        # (clínicamente validado en S1) e informar al usuario. Soft-fail 200 (mismo patrón).
+        if _msg.startswith("CLINICAL_VIOLATION"):
+            logger.warning(f"🛡 [P0-UPDATE-CLINICAL-GUARD] soft-fail → {_msg}")
+            _payload = {
+                "swap_failed": True,
+                "error_code": "swap_clinical_violation",
+                "error_message": (
+                    "No pudimos generar una alternativa segura para tus alergias o "
+                    "restricciones de dieta. Tu plato actual se mantiene sin cambios."
                 ),
             }
             if _hard_fail_422:
@@ -4629,6 +4685,11 @@ def api_regenerate_day(
             raise HTTPException(status_code=401, detail="Crea tu cuenta para actualizar platos con IA.")
         if not verified_user_id or verified_user_id != user_id:
             raise HTTPException(status_code=401, detail="No autorizado. Token inválido o no coincide.")
+
+        # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Enriquecer allergies/diet SERVER-SIDE desde el
+        # perfil → el loop de swaps (meal_form lee data["allergies"]/data["diet_type"]) hereda el
+        # backstop clínico contra la verdad del perfil. Un día completo es ×4 la exposición.
+        _enrich_clinical_from_profile(data, user_id)
 
         day_index = data.get("day_index")
         if not isinstance(day_index, int) or isinstance(day_index, bool) or day_index < 0 or day_index >= 100:

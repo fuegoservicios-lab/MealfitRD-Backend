@@ -9712,6 +9712,49 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
     return violations
 
 
+# [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Knob del backstop clínico determinista para las
+# superficies de UPDATE de platos (swap individual S3, regenerate-day S2, chat modify). Default
+# ON: es una capa de SEGURIDAD (alérgenos IgE + dieta hard veg*) que el grafo S1 SÍ corre en
+# `review_plan_node` pero que las superficies de edición esquivaban por completo. No-op cuando
+# `allergies` está vacío y la dieta es balanced/omnívora → seguro para tests existentes. Rollback
+# sin redeploy: MEALFIT_UPDATE_CLINICAL_GUARD=false. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD
+UPDATE_CLINICAL_GUARD = _env_bool("MEALFIT_UPDATE_CLINICAL_GUARD", True)
+
+
+def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None) -> list:
+    """[P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Backstop DETERMINISTA per-comida, reusable por las
+    superficies de UPDATE (swap individual S3, regenerate-day S2, chat modify del coach). Espejo
+    quirúrgico de los escáneres que el grafo de generación (S1) corre en `review_plan_node`.
+
+    PROBLEMA QUE CIERRA: swap/regenerate-day/modify re-arman el plato 100% con el LLM y NO pasan
+    por el grafo → ni reviewer médico ni `_apply_deterministic_clinical_layer` ni los scans de
+    alérgeno/dieta. Sin este backstop un alérgico que pide "cámbiale el pollo por camarones"
+    obtenía camarones persistidos, o un swap reintroducía cerdo/res en un plan vegano. Las
+    `allergies`/`diet_type` deben venir enriquecidas SERVER-SIDE desde `health_profile` por el
+    caller (router), NUNCA confiando solo en el body del cliente (espejo de I2 / P0-AGENT-1).
+
+    Envuelve el meal en un mini-plan {days:[{meals:[meal]}]} y reusa `_scan_allergen_violations`
+    (C2-ALLERGEN-GUARD, sinónimos DD + over-detect bias) + `_scan_diet_violations`
+    (P1-DIET-HARD-GUARD, gateado por DIET_HARD_GUARD, excluye análogos plant-based por adyacencia).
+
+    Devuelve lista de strings legibles de violación (vacía = seguro). FAIL-SECURE: cualquier error
+    del escáner devuelve una violación sintética (conservador → no persistir), idéntico criterio
+    que `_surgical_promote_blocked_reason`. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD"""
+    if not isinstance(meal, dict):
+        return []
+    out = []
+    try:
+        mini = {"days": [{"meals": [meal]}]}
+        for _mn, _ing, _term in _scan_allergen_violations(mini, allergies or []):
+            out.append(f"alérgeno '{_term}' en el ingrediente '{_ing}'")
+        if DIET_HARD_GUARD:
+            for _mn, _ing, _cat in _scan_diet_violations(mini, diet_type):
+                out.append(f"{_cat} (no apto para la dieta declarada): '{_ing}'")
+    except Exception as _clin_e:
+        return [f"error de re-validación clínica ({type(_clin_e).__name__}: {_clin_e}) — bloqueo conservador"]
+    return out
+
+
 def _surgical_promote_blocked_reason(new_plan_result: dict, form_data: dict):
     """[P1-SURGICAL-PROMOTE-BYPASS · 2026-06-22] (audit fresco P1-2) SSOT testeable del gate de
     promoción de `surgical_marker_regen_node`. Devuelve el motivo (str) por el que el plan

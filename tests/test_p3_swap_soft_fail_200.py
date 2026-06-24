@@ -159,8 +159,13 @@ def test_frontend_handler_returns_currentname_on_soft_fail():
     """[PARSER] El handler debe ``return currentName`` después del toast
     para preservar el plato original (NO degradar a fallback local)."""
     # Buscar el bloque del soft-fail check
+    # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Cota ampliada 20→45: la rama
+    # `pantry_insufficient_for_goal` (P5-PANTRY-SUFFICIENCY) + la discriminación por
+    # error_code crecieron el bloque del soft-fail por encima de 20 líneas, dejando
+    # `return currentName` fuera de la ventana de captura. El `}` matcheado sigue siendo
+    # el del bloque del if (la ventana es no-greedy por línea).
     m = re.search(
-        r"if\s*\(\s*newMealData\?\.\s*swap_failed\s*===\s*true\s*\)\s*\{\s*\n((?:[^\n]*\n){5,20})\s*\}",
+        r"if\s*\(\s*newMealData\?\.\s*swap_failed\s*===\s*true\s*\)\s*\{\s*\n((?:[^\n]*\n){5,45})\s*\}",
         CONTEXT_JSX,
     )
     assert m, (

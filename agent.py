@@ -31,7 +31,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 # de un solo nivel: `graph_orchestrator` NO importa `agent` (verificado), no
 # hay ciclo. Si en el futuro la dirección de import cambia, mover el helper
 # a un módulo neutro.
-from graph_orchestrator import _get_circuit_breaker
+from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD
 import concurrent.futures
 import traceback
 from datetime import datetime, timezone
@@ -1035,6 +1035,38 @@ def swap_meal(form_data: dict):
                     f"{type(_macros_exc).__name__}: {_macros_exc}"
                 )
 
+        # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Backstop clínico determinista (alérgenos + dieta
+        # hard veg*). El swap NO pasa por el grafo (ni reviewer médico ni capa clínica de S1) → sin
+        # esto un alérgeno declarado o un producto veg*-prohibido podía persistirse. `allergies` y
+        # `diet_type` ya vienen enriquecidos SERVER-SIDE desde health_profile por el router
+        # (api_swap_meal / api_regenerate_day). Violación → feedback al retry prompt; si persiste
+        # tras los 3 intentos, el caller cae al path fail-secure (preserva el plato original, NO
+        # emite fallback que pudiera violar). FAIL-SECURE: error del backstop = violación.
+        # Knob MEALFIT_UPDATE_CLINICAL_GUARD=false revierte. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD
+        if UPDATE_CLINICAL_GUARD:
+            try:
+                meal_dump = res.model_dump() if hasattr(res, "model_dump") else (
+                    res if isinstance(res, dict) else {}
+                )
+                _clin_viol = clinical_backstop_for_meal(
+                    meal_dump, allergies=allergies, diet_type=diet_type
+                )
+            except Exception as _clin_exc:
+                _clin_viol = [f"error backstop clínico: {type(_clin_exc).__name__}"]
+            if _clin_viol:
+                logger.warning(
+                    f"🛡 [P0-UPDATE-CLINICAL-GUARD] swap viola seguridad clínica | "
+                    f"meal_type={meal_type} | viol={_clin_viol}"
+                )
+                _current_prompt[0] = prompt_text + (
+                    f"\n\n🛑 SEGURIDAD CLÍNICA (OBLIGATORIO, NO NEGOCIABLE): el plato anterior incluyó: "
+                    f"{'; '.join(_clin_viol)}. Está TERMINANTEMENTE PROHIBIDO incluir esos alimentos "
+                    f"(alergias / restricción de dieta del usuario). Regenera el plato SIN ellos ni sus "
+                    f"derivados. Si el cambio solicitado exige un alimento prohibido, ignóralo y propón "
+                    f"una alternativa segura."
+                )
+                raise ValueError("CLINICAL_VIOLATION: " + "; ".join(_clin_viol))
+
         return res
 
     try:
@@ -1179,6 +1211,19 @@ def swap_meal(form_data: dict):
         raise ValueError("El modelo de IA generó una respuesta inválida. Por favor, reintenta.")
     if isinstance(_out, dict):
         _out["pantry_constrained"] = _pantry_constrained
+    # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Guard FINAL defensa-en-profundidad: el path de
+    # "Plato Fallback" (knob MEALFIT_SWAP_EMIT_FALLBACK_DISH=true) arma el plato desde
+    # clean_ingredients[:4] sin pasar por el check del retry loop → podría contener un alérgeno
+    # de la nevera. Escaneamos lo que se DEVUELVE; si viola, fail-secure raise → el router lo
+    # mapea a soft-fail y el plato original (clínicamente validado en S1) se preserva.
+    if UPDATE_CLINICAL_GUARD and isinstance(_out, dict):
+        _final_viol = clinical_backstop_for_meal(_out, allergies=allergies, diet_type=diet_type)
+        if _final_viol:
+            logger.warning(
+                f"🛡 [P0-UPDATE-CLINICAL-GUARD] plato final (fallback) viola seguridad clínica → "
+                f"fail-secure | meal_type={meal_type} | viol={_final_viol}"
+            )
+            raise ValueError("CLINICAL_VIOLATION: " + "; ".join(_final_viol))
     return _out
 
 

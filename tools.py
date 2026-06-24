@@ -28,7 +28,7 @@ import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
-from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker
+from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
 # callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
 # Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
@@ -625,6 +625,40 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     except Exception as e:
         logger.error(f"Error cargando precios en modify_meal: {e}")
     
+    # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Cargar alergias + dieta SERVER-SIDE desde el
+    # health_profile del user_id (que ya viene FORZADO al valor autenticado por el override de
+    # execute_tools, P0-AGENT-1 — NUNCA del cliente). Pre-fix: MODIFY_MEAL_PROMPT_TEMPLATE no
+    # tenía campo de alergia y su instrucción #1 ordenaba obedecer el cambio pedido → un alérgico
+    # que pedía "cámbiale el pollo por camarones" obtenía camarones persistidos. Inyectamos un
+    # bloque de seguridad como instrucción #0 (por encima del cambio) + el backstop determinista
+    # corre antes del persist. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD
+    _clin_allergies = []
+    _clin_diet = None
+    if UPDATE_CLINICAL_GUARD:
+        try:
+            from db import get_user_profile as _get_profile
+            _hp = (_get_profile(user_id) or {}).get("health_profile") or {}
+            _clin_allergies = _hp.get("allergies") or []
+            _clin_diet = _hp.get("dietType") or _hp.get("diet_type")
+            if form_data:  # union con lo que mande el caller (defensa-en-profundidad)
+                _clin_allergies = list({*[str(a) for a in _clin_allergies], *[str(a) for a in (form_data.get("allergies") or [])]})
+                _clin_diet = _clin_diet or form_data.get("dietType") or form_data.get("diet_type")
+            _clin_bits = []
+            if _clin_allergies:
+                _clin_bits.append(f"ALERGIAS DECLARADAS (PROHIBIDO INCLUIR estos alimentos o sus derivados): {', '.join(str(a) for a in _clin_allergies)}")
+            if _clin_diet and str(_clin_diet).strip().lower() not in ("balanced", "balanceada", "omnivoro", "omnívoro", "omnivora", ""):
+                _clin_bits.append(f"DIETA: {_clin_diet} — respeta sus restricciones de alimentos de origen animal.")
+            if _clin_bits:
+                context_extras = (
+                    "\n🛑 SEGURIDAD CLÍNICA (REGLA #0, POR ENCIMA DEL CAMBIO PEDIDO): "
+                    + " ".join(_clin_bits)
+                    + " Si el cambio solicitado exige un alimento prohibido, NO lo apliques: propón "
+                      "una alternativa segura.\n"
+                    + context_extras
+                )
+        except Exception as _clin_load_e:
+            logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] no se cargó perfil clínico (no bloquea): {_clin_load_e}")
+
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),
@@ -859,7 +893,32 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # Preservar el momento y la hora originales
         new_meal_data["meal"] = target_meal.get("meal")
         new_meal_data["time"] = target_meal.get("time")
-        
+
+        # [P0-UPDATE-CLINICAL-GUARD · 2026-06-23] Backstop determinista ANTES de persistir: el chat
+        # modify NO pasa por el grafo (ni reviewer médico ni capa clínica). Si el plato generado
+        # introduce un alérgeno declarado o un producto veg*-prohibido, NO lo persistimos —
+        # fail-secure abortivo (mismo patrón que "FALLO POR INVENTARIO INSUFICIENTE"): el plato
+        # original se mantiene intacto y el agente informa al usuario. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD
+        if UPDATE_CLINICAL_GUARD:
+            try:
+                _clin_viol = clinical_backstop_for_meal(
+                    new_meal_data, allergies=_clin_allergies, diet_type=_clin_diet
+                )
+            except Exception as _clin_exc:
+                _clin_viol = [f"error backstop clínico: {type(_clin_exc).__name__}"]
+            if _clin_viol:
+                logger.warning(
+                    f"🛡 [P0-UPDATE-CLINICAL-GUARD] modify_single_meal viola seguridad clínica → "
+                    f"abort fail-secure | day={day_number} meal={meal_type} | viol={_clin_viol}"
+                )
+                return (
+                    "FALLO POR SEGURIDAD CLÍNICA: el cambio solicitado introduciría un alimento que "
+                    "el usuario NO puede consumir (" + "; ".join(_clin_viol) + "). El cambio fue "
+                    "revertido y el plato original se mantuvo intacto. Informa al usuario amablemente "
+                    "que no puedes incluir ese alimento por sus alergias o restricciones de dieta, y "
+                    "ofrécele una alternativa segura."
+                )
+
         target_day["meals"][target_meal_index] = new_meal_data
 
         # [P1-AUDIT-1 · 2026-05-15] Inicialización a None para que el callback
