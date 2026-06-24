@@ -21,6 +21,7 @@ TAREA DEL AGENTE (INTERPRETACIÓN EN TIEMPO REAL):
 5. Devuelve estrictamente el esquema de comida solicitado, en español. Los campos `cals`, `protein`, `carbs`, `fats` del JSON DEBEN reflejar el cálculo real del plato propuesto (no copiar los targets ciegamente).
 6. Asegúrate de incluir los prefijos en la receta (Mise en place:, El Toque de Fuego:, Montaje:).
 7. ESTRUCTURA DE INGREDIENTES (GUARDRAIL MATEMÁTICO): Usa ESTRICTAMENTE medidas medibles en masa/volumen (g, oz, lb, kg, tazas, cdas, ml). ESTÁ TOTALMENTE PROHIBIDO usar unidades ambiguas e irresolubles como "pizcas", "ramitas", "chorritos", "hojitas" o "puñados". La ÚNICA excepción a esta regla son frutas, vegetales, rebanadas de pan y huevos, que pueden ir por "unidad". NUNCA clones o repitas el mismo ingrediente en dos líneas distintas; consolídalo.
+8. COHERENCIA RECETA↔INGREDIENTES (OBLIGATORIO, el plato se RECHAZA si lo violas): cada alimento que menciones en los pasos de la receta DEBE existir en el array `ingredients` con el MISMO nombre. NUNCA renombres una proteína/ingrediente genérico a una especie o corte específico en la receta. Ejemplo del error a evitar: si en `ingredients` pusiste "Filete de pescado blanco", en la receta escribe "pescado blanco" o "filete de pescado", JAMÁS "dorado", "mero", "chillo", "salmón" ni otra especie que el usuario NO compró. Si de verdad quieres una especie concreta, ponla TAL CUAL en `ingredients` (con su gramaje) para que el usuario pueda comprarla. Misma regla para cortes de carne, tipos de queso, etc.
 """
 
 MODIFY_MEAL_PROMPT_TEMPLATE = """Eres el Chef Profesional de MealfitRD. El usuario quiere MODIFICAR una comida específica de su plan.
@@ -50,6 +51,7 @@ INSTRUCCIONES:
 6. Dale un nombre nuevo y creativo al plato modificado{context_extras}
 7. ESTRUCTURA DE INGREDIENTES (GUARDRAIL MATEMÁTICO): Usa ESTRICTAMENTE medidas medibles en masa/volumen (g, oz, lb, kg, tazas, cdas, ml). ESTÁ TOTALMENTE PROHIBIDO usar unidades ambiguas e irresolubles como "pizcas", "ramitas", "chorritos", "hojitas" o "puñados". La ÚNICA excepción a esta regla son frutas, vegetales, rebanadas de pan y huevos, que pueden ir por "unidad". NUNCA clones o repitas el mismo ingrediente; consolídalo.
 8. REGLA DE SALVATAJE PROACTIVO: Si en la despensa observas ingredientes marcados como URGENTES por caducidad, TIENES LA OBLIGACIÓN ABSOLUTA de usarlos si encajan contextualmente para evitar el desperdicio.
+9. COHERENCIA RECETA↔INGREDIENTES (OBLIGATORIO, el plato se RECHAZA si lo violas): cada alimento que menciones en los pasos de la receta DEBE existir en el array `ingredients` con el MISMO nombre. NUNCA renombres una proteína/ingrediente genérico a una especie o corte específico en la receta. Ejemplo del error a evitar: si en `ingredients` hay "Filete de pescado blanco", en la receta escribe "pescado blanco" o "filete de pescado", JAMÁS "dorado", "mero", "chillo", "salmón" ni otra especie que el usuario NO compró. Si de verdad quieres una especie concreta, ponla TAL CUAL en `ingredients` (con su gramaje). Misma regla para cortes de carne, tipos de queso, etc.
 """
 
 RECIPE_EXPANSION_PROMPT = """
