@@ -114,6 +114,15 @@ _BUDGET_FLOOR_LIMITER = RateLimiter(max_calls=40, period_seconds=60)
 # el plan está al día), sin contar contra el cap. Tooltip-anchor: P3-SHIFT-PLAN-QUOTA-EXEMPT.
 _SHIFT_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
 
+# [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] Espejo de P3-SHIFT-PLAN-QUOTA-EXEMPT para los dos endpoints de
+# inventario sin costo LLM: `/restock` ("Ya compré la lista" → user_inventory) y `/inventory/consume`
+# (sub-paso de renovar plan → quantity=0). Estaban bajo `verify_api_quota` + `log_api_usage` → al llegar
+# al cap mensual congelaban la Nevera (no se podía meter la compra ni renovar) Y cada llamada quemaba un
+# crédito de planes (get_monthly_api_usage cuenta TODA fila de api_usage sin filtrar endpoint). El
+# anti-hammering correcto es un RateLimiter per-user/IP, NO el paywall. Tooltip-anchor: P1-NEVERA-QUOTA-EXEMPT.
+_RESTOCK_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+_CONSUME_LIMITER = RateLimiter(max_calls=20, period_seconds=60)
+
 # [P1-16] Registry global de session_ids cancelados durante la generación.
 # Cuando el usuario clickea "Cancelar" en el frontend, el SSE se aborta
 # del lado cliente — pero ANTES de P1-16 el pipeline backend seguía
@@ -5758,7 +5767,7 @@ async def api_delete_depleted_item(
 
 
 @router.post("/restock")
-def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_RESTOCK_LIMITER)):  # [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] inventario, cero costo LLM → NO paywall (RateLimiter anti-spam)
     try:
         user_id = data.get("user_id")
         plan_id = data.get("plan_id")
@@ -5983,7 +5992,8 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
             success, persisted_names = bool(_restock_res), []
 
         if success:
-            log_api_usage(user_id, "restock_inventory")
+            # [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] NO log_api_usage: el restock es inventario sin costo
+            # LLM y NO debe contar contra el cap mensual (lo contrario congelaba la Nevera + drenaba créditos).
 
             # Marcar el plan como "restocked" en BD para futuras peticiones.
             #
@@ -6113,7 +6123,7 @@ def api_restock(data: dict = Body(...), verified_user_id: Optional[str] = Depend
         raise HTTPException(status_code=500, detail=safe_error_detail(e))
 
 @router.post("/inventory/consume")
-def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota)):
+def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str] = Depends(_CONSUME_LIMITER)):  # [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] vaciar consumidos, cero costo LLM → NO paywall
     try:
         user_id = data.get("user_id")
         ingredients = data.get("ingredients")
@@ -6135,9 +6145,10 @@ def api_consume_inventory(data: dict = Body(...), verified_user_id: Optional[str
             return {"success": False, "message": "Lista de ingredientes demasiado grande."}
 
         success = consume_inventory_items_completely(user_id, ingredients)
-        
+
         if success:
-            log_api_usage(user_id, "consume_inventory")
+            # [P1-NEVERA-QUOTA-EXEMPT · 2026-06-24] NO log_api_usage: vaciar consumidos es inventario sin
+            # costo LLM; contarlo abortaba la renovación de plan al cap con "Error al sincronizar despensa".
             return {"success": True, "message": "Inventario actualizado exitosamente."}
         else:
             return {"success": False, "message": "Hubo un problema vaciando algunos ingredientes."}
