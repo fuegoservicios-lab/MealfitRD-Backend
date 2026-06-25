@@ -4306,6 +4306,39 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
     except Exception:
         pass
 
+    # [P1-MICRONUTRIENT-STEER · 2026-06-24] Directiva CUANTITATIVA de micros alcanzables (magnesio/
+    # calcio/hierro/fibra/potasio) para el day-gen — convierte la guía heurística en pisos numéricos
+    # citables, para que el generador construya DENSIDAD nutricional, no solo cantidad. Reusa los
+    # MISMOS inputs (sex/age/conditions/kcal/pregnant/k_elev) que el reporte advisory de
+    # assemble_plan_node → guía y panel COHERENTES. "" cuando el knob está OFF o el perfil no aplica.
+    # Fail-safe (jamás rompe la generación). tooltip-anchor: P1-MICRONUTRIENT-STEER
+    micronutrient_targets_context = ""
+    if MICRONUTRIENT_STEER_ENABLED:
+        try:
+            from micronutrients import build_micronutrient_targets_directive
+            _mn_kcal = nutrition.get("calories") or nutrition.get("target_calories") or nutrition.get("kcal")
+            _mn_preg = bool(nutrition.get("pregnancy_lactation_safety"))
+            if not _mn_preg:
+                try:
+                    from nutrition_calculator import _is_pregnancy_or_lactation as _mn_ipl
+                    _mn_preg = bool(_mn_ipl(form_data))
+                except Exception:
+                    _mn_preg = False
+            _mn_kelev = False
+            if POTASSIUM_PANEL_MED_AWARE_ENABLED:
+                try:
+                    from medication_rules import detect_potassium_elevating_med
+                    _mn_kelev = bool(detect_potassium_elevating_med(form_data))
+                except Exception:
+                    _mn_kelev = False
+            micronutrient_targets_context = build_micronutrient_targets_directive(
+                sex=form_data.get("gender", "female"), age=form_data.get("age"),
+                conditions=_condition_strings(form_data), daily_kcal=_mn_kcal,
+                pregnant=_mn_preg, k_elevating_med=_mn_kelev,
+                goal=form_data.get("mainGoal"))  # [P1-MICRONUTRIENT-STEER-PROTEIN-AWARE] gain_muscle → proteína manda
+        except Exception:
+            micronutrient_targets_context = ""
+
     return {
         "user_id": _uid,
         "quality_context": build_skeleton_quality_context(previous_plan_quality, meal_level_adherence),
@@ -4358,6 +4391,9 @@ def _build_shared_context(state: PlanState, force_rebuild: bool = False) -> dict
         # reales). "" si el perfil no tiene condición/medicamento cubierto. tooltip-anchor:
         # P1-MED-CONTEXT-DAYGEN
         "clinical_directives_context": clinical_directives,
+        # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables (magnesio/calcio/
+        # hierro/fibra/potasio) como guía cuantitativa de densidad nutricional. "" si knob OFF/no aplica.
+        "micronutrient_targets_context": micronutrient_targets_context,
         "supplements_context": build_supplements_context(form_data),
         # [BUDGET-CUSTOM · 2026-05-31] Presupuesto (categórico + monto custom RD$)
         # → ajuste de ingredientes. Pre-fix `budget` no llegaba al LLM.
@@ -6221,6 +6257,9 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # reales. Antes solo llegaban al esqueleto; ahora también al day-gen (incluido Flash en
             # tier gratis). "" si el perfil no aplica. tooltip-anchor: P1-MED-CONTEXT-DAYGEN
             f"{ctx['clinical_directives_context']}\n"
+            # [P1-MICRONUTRIENT-STEER · 2026-06-24] Pisos numéricos de micros alcanzables al day-gen
+            # (densidad nutricional cuantitativa, no solo cantidad). "" cuando knob OFF/no aplica.
+            f"{ctx['micronutrient_targets_context']}\n"
             f"{assignment_context}\n"
             f"{recycled_days_context}\n"
         )
@@ -8643,6 +8682,21 @@ SLOT_DISTRIBUTION_ENABLED = _env_bool("MEALFIT_SLOT_DISTRIBUTION", True)
 # (con sugerencia de suplemento para los gaps estructurales). NO es un gate duro → cero
 # loops de regen. Cierra el hallazgo de la auditoría. Flip a False → no computa el reporte.
 MICRONUTRIENT_REPORT_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_REPORT", True)
+
+# [P1-MICRONUTRIENT-STEER · 2026-06-24] Inyecta los PISOS NUMÉRICOS de micros alcanzables (magnesio/
+# calcio/hierro/fibra/potasio) al prompt del day-generator como GUÍA cuantitativa — convierte la guía
+# heurística histórica ("usa legumbres para hierro") en objetivos citables, para que el generador
+# construya densidad nutricional y no solo cantidad. Es el lado "steer" (NO un gate: el reporte advisory
+# sigue siendo la verdad post-hoc → cero loops de regen). Usa los MISMOS inputs/pisos que el reporte de
+# assemble → guía y panel coherentes. Flip a False → no inyecta la sección (prompt sin el bloque).
+MICRONUTRIENT_STEER_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_STEER", True)
+
+# [P1-MICRONUTRIENT-CHUNK-RECOMPUTE · 2026-06-24] Recalcula `plan_data['micronutrient_report']` en el
+# `_chunk_worker` tras anexar cada chunk, para que el panel de un plan CHUNKED (15/30 días) refleje TODOS
+# los días generados y no quede clavado en la semana 1 (assemble computa el reporte 1 sola vez). Reusa el
+# helper SSOT `recompute_micronutrient_report_for_plan` (best-effort, nunca bloquea el merge). Kill-switch:
+# flip a False si genera contención en el bloque atomic del chunk worker (el reporte queda week-1-based).
+MICRONUTRIENT_CHUNK_RECOMPUTE_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CHUNK_RECOMPUTE", True)
 
 # [P3-VARIETY · 2026-06-13] Reporte advisory de variedad/pertinencia cultural (huevo,
 # 'cremoso', premium, plato-base repetido intra-día). NO bloquea (calidad blanda). El lever

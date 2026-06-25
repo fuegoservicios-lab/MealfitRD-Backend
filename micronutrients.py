@@ -88,6 +88,17 @@ def dri_targets(sex: str | None = "F", age: int | None = None, pregnant: bool = 
     # 20 mcg (800 UI) para 71+ — antes 15 fijo sub-flageaba déficit en el grupo de mayor riesgo de
     # insuficiencia. Simétrico al ajuste por edad de hierro/calcio (el set original solo cubría esos dos).
     _vit_d = 20.0 if (_age is not None and _age >= 71) else 15.0
+    # [P1-FOOD-DB-EXTENDED-MICROS · 2026-06-25] Panel exhaustivo (DRI/IOM, sex/embarazo-aware donde el RDA
+    # cambia). Folato DFE (clave embarazo, ya advisory → ahora computado), zinc (músculo/inmunidad), vit A
+    # RAE, vit C, vit E, vit K (AI; ojo warfarina, ver nota), selenio, omega-3 ALA (AI).
+    _zinc     = 11.0 if (pregnant or male) else 8.0     # RDA mg (lactancia 12; embarazo 11)
+    _folate   = 600.0 if pregnant else 400.0            # mcg DFE (embarazo 600)
+    _vit_a    = 770.0 if pregnant else (900.0 if male else 700.0)   # mcg RAE (embarazo 770)
+    _vit_c    = 85.0 if pregnant else (90.0 if male else 75.0)      # mg (embarazo 85)
+    _vit_e    = 15.0                                    # mg alfa-tocoferol (adulto)
+    _vit_k    = 120.0 if male else 90.0                 # mcg (AI)
+    _selenium = 60.0 if pregnant else 55.0             # mcg (embarazo 60)
+    _omega3   = 1.4 if pregnant else (1.6 if male else 1.1)         # g ALA (AI)
     return {
         "fiber_g":       {"floor": 38.0 if male else 25.0, "unit": "g"},
         "sodium_mg":     {"ceiling": 2000.0, "unit": "mg"},          # WHO <2000
@@ -98,6 +109,15 @@ def dri_targets(sex: str | None = "F", age: int | None = None, pregnant: bool = 
         "b12_mcg":       {"floor": 2.6 if pregnant else 2.4, "unit": "mcg"},   # [P2-DRI-PREGNANCY-AWARE]
         "potassium_mg":  {"floor": 3400.0 if male else 2600.0, "unit": "mg"},
         "magnesium_mg":  {"floor": 420.0 if male else 320.0, "unit": "mg"},   # [P4] DRI IOM
+        # [P1-FOOD-DB-EXTENDED-MICROS] panel exhaustivo (todos floors).
+        "zinc_mg":       {"floor": _zinc, "unit": "mg"},
+        "folate_mcg":    {"floor": _folate, "unit": "mcg"},
+        "vit_a_mcg":     {"floor": _vit_a, "unit": "mcg"},
+        "vit_c_mg":      {"floor": _vit_c, "unit": "mg"},
+        "vit_e_mg":      {"floor": _vit_e, "unit": "mg"},
+        "vit_k_mcg":     {"floor": _vit_k, "unit": "mcg"},
+        "selenium_mcg":  {"floor": _selenium, "unit": "mcg"},
+        "omega3_g":      {"floor": _omega3, "unit": "g"},
     }
 
 
@@ -106,6 +126,10 @@ _LABELS = {
     "vit_d_mcg": "Vitamina D", "calcium_mg": "Calcio", "iron_mg": "Hierro",
     "b12_mcg": "Vitamina B12", "potassium_mg": "Potasio",
     "magnesium_mg": "Magnesio", "saturated_fat_g": "Grasa saturada",
+    # [P1-FOOD-DB-EXTENDED-MICROS] panel exhaustivo
+    "zinc_mg": "Zinc", "folate_mcg": "Folato", "vit_a_mcg": "Vitamina A",
+    "vit_c_mg": "Vitamina C", "vit_e_mg": "Vitamina E", "vit_k_mcg": "Vitamina K",
+    "selenium_mcg": "Selenio", "omega3_g": "Omega-3",
 }
 
 _SUPPLEMENT_NOTE = {
@@ -122,6 +146,16 @@ _SUPPLEMENT_NOTE = {
     "magnesium_mg": "Aumenta vegetales de hoja verde, legumbres, nueces/semillas y granos integrales (clave del patrón DASH).",
     "saturated_fat_g": "Reduce frituras, piel de pollo, grasa visible de carnes, embutidos, mantequilla y lácteos enteros; "
                        "usa cocción al horno/plancha/hervido y grasas insaturadas (aguacate, aceite de oliva).",
+    # [P1-FOOD-DB-EXTENDED-MICROS] notas accionables (comida primero) del panel exhaustivo.
+    "zinc_mg": "Refuerza con carnes (res/cerdo), mariscos, huevo, legumbres, nueces/semillas (calabaza/ajonjolí).",
+    "folate_mcg": "Aumenta vegetales de hoja verde, legumbres (habichuelas/lentejas), aguacate, cítricos y granos fortificados.",
+    "vit_a_mcg": "Aumenta vegetales naranja/verde oscuro (zanahoria, auyama, batata, espinaca), huevo y lácteos.",
+    "vit_c_mg": "Aumenta cítricos (naranja/limón), guayaba, pimiento/ají, brócoli y frutas frescas; ayuda a absorber el hierro.",
+    "vit_e_mg": "Refuerza con nueces/semillas (almendra, girasol), aceites vegetales, aguacate y hoja verde.",
+    "vit_k_mcg": "Se obtiene de vegetales de hoja verde (espinaca, brócoli). IMPORTANTE: si tomas anticoagulante "
+                 "(warfarina), NO la aumentes de golpe — mantén una ingesta CONSISTENTE y coordina con tu médico.",
+    "selenium_mcg": "Refuerza con pescado/mariscos, huevo, carnes y nuez de Brasil (1-2 al día bastan).",
+    "omega3_g": "Aumenta pescado graso (sardina/salmón), linaza/chía, nueces y aceite de canola.",
 }
 
 # [P1-POTASSIUM-PANEL-MED-AWARE · 2026-06-19] (audit fresco P1-1) Nota ALTERNATIVA del potasio cuando el perfil
@@ -213,7 +247,10 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
     num_days = max(1, len(days))
     acc = {k: 0.0 for k in ("fiber_g", "sodium_mg", "free_sugars_g", "vit_d_mcg",
                             "calcium_mg", "iron_mg", "b12_mcg", "potassium_mg",
-                            "magnesium_mg", "saturated_fat_g")}  # [P4] DASH Mg + dislipidemia satfat
+                            "magnesium_mg", "saturated_fat_g",
+                            # [P1-FOOD-DB-EXTENDED-MICROS] panel exhaustivo
+                            "zinc_mg", "folate_mcg", "vit_a_mcg", "vit_c_mg",
+                            "vit_e_mg", "vit_k_mcg", "selenium_mcg", "omega3_g")}
     # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] (gap-audit G5) Cobertura POR-NUTRIENTE: de los ingredientes
     # RESUELTOS, cuántos traían dato NO-NULL de cada micro. `coverage` (global) NO basta para los TECHOS:
     # un ingrediente puede resolver (tiene macros) pero traer la columna del micro NULL (p.ej. embutidos DD
@@ -222,12 +259,25 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
     _SRC_KEY = {"fiber_g": "fiber", "sodium_mg": "sodium_mg", "vit_d_mcg": "vit_d_mcg",
                 "calcium_mg": "calcium_mg", "iron_mg": "iron_mg", "b12_mcg": "b12_mcg",
                 "potassium_mg": "potassium_mg", "magnesium_mg": "magnesium_mg",
-                "saturated_fat_g": "saturated_fat_g"}
+                "saturated_fat_g": "saturated_fat_g",
+                # [P1-FOOD-DB-EXTENDED-MICROS] panel exhaustivo (report-key → micros-dict key, idénticos)
+                "zinc_mg": "zinc_mg", "folate_mcg": "folate_mcg", "vit_a_mcg": "vit_a_mcg",
+                "vit_c_mg": "vit_c_mg", "vit_e_mg": "vit_e_mg", "vit_k_mcg": "vit_k_mcg",
+                "selenium_mcg": "selenium_mcg", "omega3_g": "omega3_g"}
     present = {k: 0 for k in _SRC_KEY}
     total_ings = resolved_ings = 0
     for day in days:
         for meal in day.get("meals", []) or []:
-            for ing in meal.get("ingredients", []) or []:
+            # [P1-MICRONUTRIENT-RAW-INGREDIENTS · 2026-06-25] Prefiere `ingredients_raw` (forma CANÓNICA
+            # con gramaje explícito + nombre real del protein-closer: "20g de queso mozzarella cocido")
+            # sobre `ingredients` (forma DISPLAY: "¾ lonja/pedazo de queso", que NO resuelve nombre/unidad).
+            # El display pierde resolubilidad → sub-cuenta los micros del closer (queso/yogurt: calcio/B12/
+            # magnesio) y, peor, un RECÓMPUTO post-generación (chunk worker P1-MICRONUTRIENT-CHUNK-RECOMPUTE
+            # / swap / regenerate-day) sobre el display daría un total MENOR que el de assemble (que se
+            # computó sobre la forma raw) → panel inconsistente. Usar raw recupera ~7% de magnesio
+            # (436→467 medido en vivo) y hace recompute == assemble. Fallback a `ingredients` si no hay raw
+            # (planes viejos / meals sin la lista). tooltip-anchor: P1-MICRONUTRIENT-RAW-INGREDIENTS
+            for ing in (meal.get("ingredients_raw") or meal.get("ingredients") or []):
                 total_ings += 1
                 m = db.micros_from_ingredient_string(str(ing))
                 if not m:
@@ -242,6 +292,15 @@ def compute_plan_micronutrient_totals(plan: dict, db) -> dict:
                 acc["potassium_mg"] += m.get("potassium_mg") or 0.0
                 acc["magnesium_mg"] += m.get("magnesium_mg") or 0.0           # [P4-UNIFIED-RESOLVER]
                 acc["saturated_fat_g"] += m.get("saturated_fat_g") or 0.0     # [P4-UNIFIED-RESOLVER]
+                # [P1-FOOD-DB-EXTENDED-MICROS] panel exhaustivo
+                acc["zinc_mg"] += m.get("zinc_mg") or 0.0
+                acc["folate_mcg"] += m.get("folate_mcg") or 0.0
+                acc["vit_a_mcg"] += m.get("vit_a_mcg") or 0.0
+                acc["vit_c_mg"] += m.get("vit_c_mg") or 0.0
+                acc["vit_e_mg"] += m.get("vit_e_mg") or 0.0
+                acc["vit_k_mcg"] += m.get("vit_k_mcg") or 0.0
+                acc["selenium_mcg"] += m.get("selenium_mcg") or 0.0
+                acc["omega3_g"] += m.get("omega3_g") or 0.0
                 # [P1-CEILING-COVERAGE-AWARE · 2026-06-15] cuenta presencia NO-NULL por micro (G5).
                 for _ak, _sk in _SRC_KEY.items():
                     if m.get(_sk) is not None:
@@ -406,10 +465,20 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
                 gaps.append(entry)
         else:
             floor = tgt["floor"]
+            # [P1-FLOOR-COVERAGE-AWARE · 2026-06-24] Simétrico a P1-CEILING-COVERAGE-AWARE (rama
+            # ceiling arriba): un PISO incumplido es INCIERTO no solo cuando la cobertura GLOBAL es
+            # parcial, sino también cuando la cobertura POR-NUTRIENTE de ESTE micro es parcial
+            # (ingredientes RESUELTOS pero con la columna del micro en NULL → suman 0.0 → SUBESTIMAN
+            # el total de este micro específico). Antes la rama floor solo miraba `coverage` global
+            # → un piso como el magnesio reportaba 'bajo' CONFIADO aunque sus contribuyentes de alta
+            # frecuencia (yogurt/casabe/ajo con magnesium NULL) lo subestimaran sistemáticamente. El
+            # backfill del catálogo (P1-MICRONUTRIENT-CATALOG-BACKFILL) corrige el VALOR; esta rama
+            # corrige la HONESTIDAD del status para los NULL residuales (filas nuevas / no resueltos).
+            _ncov_floor = nutrient_coverage.get(key, coverage)
             if val >= floor:
                 status = "ok"
-            elif coverage < 0.6:
-                status = "estimado_bajo"  # cobertura parcial → incierto
+            elif coverage < 0.6 or _ncov_floor < _CEILING_COVERAGE_FLOOR:
+                status = "estimado_bajo"  # cobertura global o por-nutriente parcial → incierto
             else:
                 status = "bajo"
             entry = {"nutriente": _LABELS[key], "key": key, "valor": val, "unidad": unit,
@@ -477,6 +546,54 @@ _SUPPLEMENT_TEMPLATES = {
         "alimentos": "huevo, lácteos, carne, pescado",
         "precaucion": "ESENCIAL si tu dieta es vegana/vegetariana estricta — no es opcional en ese caso.",
     },
+    # [P1-FOOD-DB-EXTENDED-MICROS] suplementos del panel exhaustivo (solo los que aplica suplementar).
+    "zinc_mg": {
+        "nombre": "Zinc (citrato o gluconato)",
+        "dosis": "8–11 mg/día solo si no alcanzas con la dieta",
+        "alimentos": "carnes, mariscos, huevo, legumbres, semillas de calabaza/ajonjolí",
+        "precaucion": "no exceder 40 mg/día (UL); el exceso compite con el cobre.",
+    },
+    "folate_mcg": {
+        "nombre": "Ácido fólico / Folato",
+        "dosis": "400 mcg/día (600 mcg en embarazo, bajo control prenatal)",
+        "alimentos": "hoja verde, legumbres, aguacate, cítricos",
+        "precaucion": "en embarazo es ESENCIAL (tubo neural); confírmalo con tu médico antes/durante la gestación.",
+    },
+    "vit_c_mg": {
+        "nombre": "Vitamina C (ácido ascórbico)",
+        "dosis": "75–90 mg/día solo si no alcanzas con fruta/vegetales",
+        "alimentos": "naranja/limón, guayaba, pimiento/ají, brócoli",
+        "precaucion": "no exceder 2000 mg/día (UL); dosis altas pueden causar molestias digestivas.",
+    },
+    "omega3_g": {
+        "nombre": "Omega-3 (aceite de pescado EPA/DHA o de algas)",
+        "dosis": "250–500 mg/día de EPA+DHA (o linaza/chía para ALA)",
+        "alimentos": "pescado graso (sardina/salmón), linaza, chía, nueces",
+        "precaucion": "si tomas anticoagulante, consulta a tu médico (puede afectar la coagulación).",
+    },
+    # [P1-SUPPLEMENT-COMPLETE · 2026-06-25] Magnesio/vit E/fibra: el panel exhaustivo los marca
+    # "bajo" pero no tenían plantilla → la tarjeta de suplemento caía en silencio. Magnesio es un
+    # suplemento seguro y común (glicinato); vit E y fibra van con encuadre "comida primero"
+    # (forma suplementaria existe pero el alimento es preferible). Decisión del owner: cerrar los
+    # gaps con SUPLEMENTACIÓN, no forzando alimentos en el menú.
+    "magnesium_mg": {
+        "nombre": "Magnesio (glicinato o citrato)",
+        "dosis": "200–400 mg/día solo si no alcanzas con la dieta (glicinato = mejor tolerado)",
+        "alimentos": "hoja verde, legumbres, nueces/semillas (calabaza/ajonjolí), avena, cacao, aguacate",
+        "precaucion": "no exceder 350 mg/día en forma suplementaria (UL); el exceso es laxante. Precaución en enfermedad renal.",
+    },
+    "vit_e_mg": {
+        "nombre": "Vitamina E (d-alfa-tocoferol)",
+        "dosis": "comida primero; ~15 mg/día solo si no alcanzas (evita dosis altas de rutina)",
+        "alimentos": "almendras/avellanas, semillas de girasol, aceites vegetales, aguacate, hoja verde",
+        "precaucion": "no exceder 1000 mg/día (UL); dosis altas + anticoagulante aumentan riesgo de sangrado.",
+    },
+    "fiber_g": {
+        "nombre": "Fibra (psyllium / cáscara de plántago)",
+        "dosis": "comida primero; 5–10 g/día de psyllium si no alcanzas (sube gradual + agua)",
+        "alimentos": "legumbres, avena, frutas con cáscara, vegetales, granos integrales, linaza/chía",
+        "precaucion": "aumenta gradual y con suficiente agua; sepáralo de medicamentos (puede reducir su absorción).",
+    },
 }
 
 
@@ -532,3 +649,98 @@ def build_supplement_recommendations(report: dict, sex: str | None = "F", age: i
                        "primero y consulta a tu médico antes de tomar suplementos "
                        "(la dosis depende de tu análisis y tu caso)."),
     }
+
+
+def build_micronutrient_targets_directive(sex: str | None = "female", age: int | None = None,
+                                          conditions=None, daily_kcal: float | None = None,
+                                          pregnant: bool = False,
+                                          k_elevating_med: bool = False,
+                                          goal: str | None = None) -> str:
+    """[P1-MICRONUTRIENT-STEER · 2026-06-24] Directiva CUANTITATIVA de micronutrientes para el
+    prompt del day-generator. Convierte la guía HEURÍSTICA histórica ("usa legumbres para fibra/
+    hierro") en PISOS NUMÉRICOS accionables para los micros ALCANZABLES con alimentos enteros
+    (magnesio, calcio, hierro, fibra, potasio). Es el lado "steer" del par steer/gate: GUÍA al
+    generador hacia densidad nutricional, NO es un gate (el `build_micronutrient_report` advisory
+    sigue siendo la fuente de verdad post-hoc — este módulo NUNCA rechaza un plan, ver docstring).
+
+    Diseño deliberado:
+    - Usa los MISMOS pisos `dri_targets(sex, age, pregnant)` + las MISMAS elevaciones por condición
+      (DM2 fibra ADA, DASH Mg/K) que el reporte → la guía y el panel quedan COHERENTES.
+    - EXCLUYE la vitamina D: rara vez se alcanza con comida entera → se cubre con suplemento
+      (`build_supplement_recommendations`); forzarla distorsionaría el plan (anti-patrón del módulo).
+    - EXCLUYE los TECHOS (sodio/azúcar): "come menos sal" es otra instrucción, ya cubierta aparte.
+    - Respeta `k_elevating_med`: con un fármaco que eleva el potasio sérico NO empuja a maximizarlo
+      (mismo guard de seguridad que el panel P1-POTASSIUM-PANEL-MED-AWARE → evita nudge a hiperkalemia).
+    - [P1-MICRONUTRIENT-STEER-PROTEIN-AWARE · 2026-06-25] Respeta `goal`: en `gain_muscle` el piso de
+      proteína es alto y MANDA. La directiva antepone una línea de PRIORIDAD (proteína animal de alta
+      densidad en cada comida principal) y reordena Mg/Fe para que la leguminosa sea GUARNICIÓN, no
+      plato-base — evita el nudge a déficit de proteína que disparaba retries (observado: 3 intentos en vivo).
+    - Fail-safe: cualquier error → "" (prompt sin la sección, jamás rompe la generación)."""
+    try:
+        is_muscle = str(goal or "").strip().lower() in ("gain_muscle", "muscle_gain", "ganar_musculo", "ganar musculo")
+        targets = dri_targets(sex, age, pregnant=pregnant)
+        fiber_floor = targets["fiber_g"]["floor"]
+        mg_floor = targets["magnesium_mg"]["floor"]
+        k_floor = targets["potassium_mg"]["floor"]
+        ca_floor = targets["calcium_mg"]["floor"]
+        fe_floor = targets["iron_mg"]["floor"]
+        # Elevaciones por condición — espejo EXACTO de build_micronutrient_report (coherencia guía↔panel).
+        if _has_diabetes(conditions) and daily_kcal and daily_kcal > 0:
+            fiber_floor = max(fiber_floor, round(_DM2_FIBER_PER_1000KCAL * (daily_kcal / 1000.0), 1))
+        if _has_hta(conditions) and not _has_renal(conditions):
+            mg_floor = max(mg_floor, 500.0)
+            if not k_elevating_med:
+                k_floor = max(k_floor, 4700.0)
+        lines = ["--- OBJETIVOS DE MICRONUTRIENTES (densidad nutricional del día) ---"]
+        if is_muscle:
+            lines.append(
+                "PRIORIDAD: el piso de proteína y una fuente animal de ALTA densidad (pollo, pescado, "
+                "cerdo, res, huevos, queso) en CADA comida principal (almuerzo y cena) MANDAN. Logra los "
+                "micros de abajo con GUARNICIONES, vegetales, semillas y nueces como COMPLEMENTO — NUNCA "
+                "reemplaces la proteína principal por leguminosas o almidón para subir un micronutriente."
+            )
+        lines.append(
+            "Además de las calorías y los macros, busca que el día APUNTE de forma NATURAL a estos "
+            "pisos diarios. NO fuerces un solo alimento ni distorsiones las porciones: intégralos en "
+            "comidas dominicanas variadas y sabrosas."
+        )
+        # Magnesio y Hierro: en gain_muscle se reordenan para NO empujar la leguminosa como plato-base
+        # (compite con el piso de proteína); en el resto de objetivos la leguminosa lidera (fuente barata
+        # y eficiente de ambos micros + fibra).
+        if is_muscle:
+            lines.append(f"• Magnesio ≥{int(round(mg_floor))} mg → nueces/semillas (linaza, maní, ajonjolí), "
+                         "vegetales de hoja verde, avena y granos integrales (leguminosas solo como guarnición).")
+            lines.append(f"• Hierro ≥{fe_floor:g} mg → carnes rojas magras y huevo (hierro hemo); acompaña con "
+                         "vitamina C (naranja/limón) en la misma comida para absorber mejor.")
+        else:
+            lines.append(f"• Magnesio ≥{int(round(mg_floor))} mg → vegetales de hoja verde, legumbres (habichuelas), "
+                         "nueces/semillas (linaza, maní, ajonjolí), avena y granos integrales.")
+            lines.append(f"• Hierro ≥{fe_floor:g} mg → legumbres, carnes rojas magras, huevo; acompaña con vitamina C "
+                         "(naranja/limón) en la misma comida para mejorar la absorción.")
+        lines.append(f"• Calcio ≥{int(round(ca_floor))} mg → lácteos (yogur, queso), ajonjolí/sésamo, hoja verde, "
+                     "sardina con espina.")
+        lines.append(f"• Fibra ≥{int(round(fiber_floor))} g → vegetales, frutas con cáscara, legumbres y granos integrales.")
+        # [P1-FOOD-DB-EXTENDED-MICROS · 2026-06-25] micros nuevos GANABLES con comida y sin conflicto de
+        # medicación/UL (zinc, folato, vit C). El resto del panel exhaustivo (vit A/E/K/selenio/omega-3)
+        # queda informativo en el medidor, NO se mete al steering (evita sobre-restringir + el choque vit K↔warfarina).
+        try:
+            lines.append(f"• Zinc ≥{targets['zinc_mg']['floor']:g} mg → carnes, mariscos, huevo, legumbres, semillas de calabaza/ajonjolí.")
+            lines.append(f"• Folato ≥{int(round(targets['folate_mcg']['floor']))} mcg → hoja verde, legumbres, aguacate, cítricos.")
+            lines.append(f"• Vitamina C ≥{int(round(targets['vit_c_mg']['floor']))} mg → cítricos, guayaba, pimiento/ají, brócoli (mejora la absorción del hierro).")
+            # [P1-MICRO-STEER-OMEGA3-VITE · 2026-06-25] Vit E y Omega-3 también son alcanzables con comida
+            # (nueces/semillas/pescado) y eran 2 de los bajos típicos → al steering para empujarlos a meta.
+            lines.append(f"• Vitamina E ≥{targets['vit_e_mg']['floor']:g} mg → nueces/almendras, semillas de girasol, aguacate y aceites vegetales.")
+            lines.append(f"• Omega-3 ≥{targets['omega3_g']['floor']:g} g → linaza/chía, pescado graso (sardina/salmón) 1-2x/sem, nueces.")
+        except Exception:
+            pass
+        if k_elevating_med:
+            lines.append("• Potasio: mantén porciones MODERADAS y parejas (NO lo maximices) — el perfil "
+                         "toma un fármaco que eleva el potasio sérico (riesgo de hiperkalemia).")
+        else:
+            lines.append(f"• Potasio ≥{int(round(k_floor))} mg → guineo, plátano, batata, aguacate, "
+                         "espinaca, legumbres y naranja.")
+        lines.append("La vitamina D casi nunca se alcanza solo con alimentos: NO la fuerces (se cubre "
+                     "con un consejo de suplemento aparte).")
+        return "\n".join(lines)
+    except Exception:
+        return ""

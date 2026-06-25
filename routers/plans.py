@@ -2884,6 +2884,51 @@ async def api_analyze_stream(
                             ),
                         },
                     )
+                # [P1-DEDUP-RECENT-PLAN · 2026-06-25] Idempotencia POST-completion. El guard de arriba
+                # (pipeline activo, KV='generating') NO cubre el caso real observado: se cae el internet
+                # DESPUÉS de que el plan ya se generó y persistió (KV ya en 'complete'); el usuario
+                # reintenta 2-3 min después → se generaba un 2º plan DUPLICADO (2× costo LLM, 2 filas).
+                # Aquí: si ya existe un plan USABLE creado hace < N min, devolvemos 409 con su plan_id
+                # (el frontend lo adopta) en vez de regenerar. Ventana corta + knob → NO bloquea
+                # regeneraciones legítimas (a los N min ya puedes pedir otro). Best-effort: un error en
+                # la verificación NUNCA impide generar. tooltip-anchor: P1-DEDUP-RECENT-PLAN
+                _dedup_min = _env_int("MEALFIT_RECENT_PLAN_DEDUP_MINUTES", 5, validator=lambda v: 0 <= v <= 120)
+                if _dedup_min > 0:
+                    from db_plans import get_latest_meal_plan_with_id
+                    _recent = get_latest_meal_plan_with_id(_deep_search_user_id)
+                    if _recent and _recent.get("id") and _recent.get("created_at"):
+                        _rpd = _recent.get("plan_data") or {}
+                        if isinstance(_rpd, str):
+                            import json as _json_dedup
+                            try:
+                                _rpd = _json_dedup.loads(_rpd)
+                            except Exception:
+                                _rpd = {}
+                        _usable = bool((_rpd or {}).get("days"))  # plan real (no vacío/fallido)
+                        _ca = _recent["created_at"]
+                        if isinstance(_ca, str):
+                            _ca = datetime.fromisoformat(_ca.replace("Z", "+00:00"))
+                        if getattr(_ca, "tzinfo", None) is None:
+                            _ca = _ca.replace(tzinfo=timezone.utc)
+                        _age_min = (datetime.now(timezone.utc) - _ca).total_seconds() / 60.0
+                        if _usable and 0 <= _age_min < _dedup_min:
+                            logger.info(
+                                f"📌 [P1-DEDUP-RECENT-PLAN] user={_deep_search_user_id[:8]} reintentó a "
+                                f"{_age_min:.1f}min de crear un plan → devolviendo el existente "
+                                f"plan_id={str(_recent['id'])[:8]} (evita duplicado + doble costo LLM)."
+                            )
+                            raise HTTPException(
+                                status_code=409,
+                                detail={
+                                    "code": "plan_recently_created",
+                                    "plan_id": str(_recent["id"]),
+                                    "message": (
+                                        "Tu plan ya estaba listo (quizá se te cayó la conexión). Te lo "
+                                        "mostramos en vez de crear otro, para no duplicarlo. Si quieres uno "
+                                        "distinto, intenta de nuevo en unos minutos."
+                                    ),
+                                },
+                            )
                 # Reservar slot para este user. Si falla la KV, log + continuar
                 # (deep-search recovery se pierde pero la generación procede).
                 # [P1-DEEP-SEARCH-DEBUG · 2026-05-15] Capturar el bool de retorno

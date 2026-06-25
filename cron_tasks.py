@@ -1185,7 +1185,13 @@ def _shopping_coherence_alert_job():
         # - count >= threshold → emit `system_alerts` (auto-resolve cuando
         #   un siguiente run OK lo limpia).
         try:
-            from db_core import execute_sql_query
+            # [P1-COH-ALERT-UNBOUND-FIX · 2026-06-25] `execute_sql_query` YA está importado a nivel de
+            # módulo (línea ~22). El `from db_core import execute_sql_query` LOCAL que vivía aquí dentro
+            # convertía el nombre en variable LOCAL de TODA la función `_shopping_coherence_alert_job`
+            # (Python: una asignación a un nombre en cualquier punto del cuerpo lo hace local en todo el
+            # scope) → el `plans = execute_sql_query(...)` PREVIO (fetch de planes, ~L1020) explotaba con
+            # `UnboundLocalError: cannot access local variable 'execute_sql_query'` → el cron diario de
+            # coherencia quedaba roto cada corrida. NO re-añadir el import local. tooltip-anchor: P1-COH-ALERT-UNBOUND-FIX
             # [P1-COH-BENIGN-SKIP · 2026-05-25] `below_min_plans` es condición
             # normal de baja actividad (menos planes nuevos en 24h que el
             # umbral), NO un fallo del cron. Pre-fix se contaba como failure
@@ -29809,6 +29815,25 @@ def process_plan_chunk_queue(target_plan_id=None):
                             plan_data['days'] = merged_days
                             new_total = len(merged_days)
                             plan_data['total_days_generated'] = new_total
+
+                            # [P1-MICRONUTRIENT-CHUNK-RECOMPUTE · 2026-06-24] Recalcula el panel de micros
+                            # sobre el plan COMPLETO tras anexar el chunk. Antes el reporte se computaba 1
+                            # sola vez en assemble (semana 1) y NUNCA se recalculaba al crecer el plan → un
+                            # plan chunked de 15/30 días mostraba el panel basado solo en los días 1-3 (stale
+                            # y pre-steering). Reusa el helper SSOT de swap/regenerate-day (best-effort,
+                            # self-gated por MICRONUTRIENT_REPORT_ENABLED). Corre DENTRO del bloque atomic
+                            # (bajo el advisory lock del chunk worker) → el reporte se persiste con el MISMO
+                            # write que `days`. NUNCA bloquea el merge. tooltip-anchor: P1-MICRONUTRIENT-CHUNK-RECOMPUTE
+                            try:
+                                from graph_orchestrator import (
+                                    recompute_micronutrient_report_for_plan as _mn_recompute_chunk,
+                                    MICRONUTRIENT_CHUNK_RECOMPUTE_ENABLED as _mn_chunk_recompute_on,
+                                )
+                                if _mn_chunk_recompute_on:
+                                    _mn_recompute_chunk(plan_data, form_data, db=None)
+                            except Exception as _mn_cr_e:
+                                logger.warning(f"[P1-MICRONUTRIENT-CHUNK-RECOMPUTE] recompute falló (no bloquea): "
+                                               f"{type(_mn_cr_e).__name__}: {_mn_cr_e}")
 
                             if form_data.get("_sparse_logging_proxy"):
                                 _sfc = plan_data.get("_sparse_forced_chunks", [])

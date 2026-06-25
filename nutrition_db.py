@@ -294,6 +294,15 @@ class NutritionInfo:
     phosphorus_mg: Optional[float] = None
     saturated_fat_g: Optional[float] = None
     cholesterol_mg: Optional[float] = None
+    # [P1-FOOD-DB-EXTENDED-MICROS · 2026-06-25] panel exhaustivo (None si la fila no lo reporta).
+    zinc_mg: Optional[float] = None
+    folate_mcg: Optional[float] = None
+    vit_a_mcg: Optional[float] = None
+    vit_c_mg: Optional[float] = None
+    vit_e_mg: Optional[float] = None
+    vit_k_mcg: Optional[float] = None
+    selenium_mcg: Optional[float] = None
+    omega3_g: Optional[float] = None
 
 
 class IngredientNutritionDB:
@@ -399,6 +408,15 @@ class IngredientNutritionDB:
             phosphorus_mg=_num(row.get("phosphorus_mg_per_100g")),
             saturated_fat_g=_num(row.get("saturated_fat_g_per_100g")),
             cholesterol_mg=_num(row.get("cholesterol_mg_per_100g")),
+            # [P1-FOOD-DB-EXTENDED-MICROS] panel exhaustivo.
+            zinc_mg=_num(row.get("zinc_mg_per_100g")),
+            folate_mcg=_num(row.get("folate_mcg_dfe_per_100g")),
+            vit_a_mcg=_num(row.get("vitamin_a_mcg_rae_per_100g")),
+            vit_c_mg=_num(row.get("vitamin_c_mg_per_100g")),
+            vit_e_mg=_num(row.get("vitamin_e_mg_per_100g")),
+            vit_k_mcg=_num(row.get("vitamin_k_mcg_per_100g")),
+            selenium_mcg=_num(row.get("selenium_mcg_per_100g")),
+            omega3_g=_num(row.get("omega3_ala_g_per_100g")),
         )
 
     # ---- conversión a gramos -------------------------------------------
@@ -499,6 +517,15 @@ class IngredientNutritionDB:
             "phosphorus_mg": _sc(info.phosphorus_mg),
             "saturated_fat_g": _sc(info.saturated_fat_g),
             "cholesterol_mg": _sc(info.cholesterol_mg),
+            # [P1-FOOD-DB-EXTENDED-MICROS] panel exhaustivo.
+            "zinc_mg": _sc(info.zinc_mg),
+            "folate_mcg": _sc(info.folate_mcg),
+            "vit_a_mcg": _sc(info.vit_a_mcg),
+            "vit_c_mg": _sc(info.vit_c_mg),
+            "vit_e_mg": _sc(info.vit_e_mg),
+            "vit_k_mcg": _sc(info.vit_k_mcg),
+            "selenium_mcg": _sc(info.selenium_mcg),
+            "omega3_g": _sc(info.omega3_g),
         }
 
     def macros_for_line(self, qty, unit, raw_name: str) -> Optional[dict]:
