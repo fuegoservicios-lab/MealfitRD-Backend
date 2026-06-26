@@ -9802,6 +9802,12 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
 # sin redeploy: MEALFIT_UPDATE_CLINICAL_GUARD=false. tooltip-anchor: P0-UPDATE-CLINICAL-GUARD
 UPDATE_CLINICAL_GUARD = _env_bool("MEALFIT_UPDATE_CLINICAL_GUARD", True)
 
+# [P2-UPDATE-CONDITION-SUBST · 2026-06-26] (audit 3-flujos P2) Knob del backstop de SUSTITUCIÓN por
+# condición médica en las superficies de UPDATE (swap/regenerate-day/chat-modify). Dedicado (no reusa
+# DM2_SUGAR_GUARD) para permitir rollback de SOLO los updates sin tocar el Guard 3 de S1 — ya validado y
+# vivo en prod. Default ON. tooltip-anchor: P2-UPDATE-CONDITION-SUBST
+UPDATE_CONDITION_SUBST_ENABLED = _env_bool("MEALFIT_UPDATE_CONDITION_SUBST", True)
+
 # [P1-MERCURY-UPDATE-GUARD · 2026-06-24] (re-audit P1-2) Sub-knob del backstop de mercurio-embarazo en
 # las superficies de UPDATE. El pescado ALTO en mercurio (metilmercurio = teratógeno) NO es alérgeno IgE
 # ni producto veg*-prohibido → los scanners de alérgeno/dieta del backstop NO lo cazan. S1 lo SUSTITUYE
@@ -9946,6 +9952,32 @@ def food_safety_backstop_for_meal(meal: dict) -> int:
         return _apply_food_safety_fixes({"days": [{"meals": [meal]}]})
     except Exception as _fs_e:
         logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety backstop falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
+        return 0
+
+
+def condition_substitution_backstop_for_meal(meal: dict, form_data: dict) -> int:
+    """[P2-UPDATE-CONDITION-SUBST · 2026-06-26] (audit 3-flujos P2) Re-aplica la SUSTITUCIÓN determinista
+    de ingredientes por condición médica en las superficies de UPDATE (swap S3 / regenerate-day S2 /
+    chat-modify): DM2 → azúcar añadida→stevia/agua; HTA → embutidos/cubitos/bacalao salado→fresco;
+    dislipidemia → mantequilla/lácteos enteros/tocino→magro. S1 la corre como Guard 3 del grafo
+    (`_apply_condition_substitutions`, el mecanismo de enforcement ELEGIDO en
+    clinical_enforcement_decisions.md) pero los updates NO pasan por el grafo → un swap/modify a
+    'longaniza'/'mantequilla'/'azúcar' se persistía contraindicado (la única defensa era la
+    directiva-prompt advisory, falible con un LLM). Envuelve el meal en un mini-plan y reusa
+    `_apply_condition_substitutions` (PRESERVA el prefijo de cantidad comprable, RECOMPUTA macros por
+    delta, IDEMPOTENTE, mutates `meal` in-place — es el mismo objeto dentro del mini-plan). FAIL-OPEN:
+    la sustitución es advisory (NUNCA bloquea el update, a diferencia del backstop de alérgeno/dieta que
+    es abortivo). Gateado por UPDATE_CONDITION_SUBST_ENABLED (rollback independiente de S1) + DM2_SUGAR_GUARD
+    (mismo feature-gate de S1); el propio `_apply_condition_substitutions` respeta CONDITION_RULES_ENABLED.
+    Requiere `form_data['medicalConditions']` (enriquecido server-side por `_enrich_clinical_from_profile`
+    en swap/regenerate-day; desde el health_profile en chat-modify). Espejo de food_safety_backstop_for_meal.
+    Retorna nº de comidas afectadas. tooltip-anchor: P2-UPDATE-CONDITION-SUBST"""
+    if not UPDATE_CONDITION_SUBST_ENABLED or not DM2_SUGAR_GUARD or not isinstance(meal, dict):
+        return 0
+    try:
+        return _apply_condition_substitutions({"days": [{"meals": [meal]}]}, form_data or {})
+    except Exception as _cs_e:
+        logger.warning(f"[P2-UPDATE-CONDITION-SUBST] condition-subst backstop falló (no bloquea): {type(_cs_e).__name__}: {_cs_e}")
         return 0
 
 

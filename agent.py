@@ -31,7 +31,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 # de un solo nivel: `graph_orchestrator` NO importa `agent` (verificado), no
 # hay ciclo. Si en el futuro la dirección de import cambia, mover el helper
 # a un módulo neutro.
-from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal
+from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal
 import concurrent.futures
 import traceback
 from datetime import datetime, timezone
@@ -1531,6 +1531,17 @@ def swap_meal(form_data: dict):
             food_safety_backstop_for_meal(_out)
         except Exception as _fs_e:
             logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety en swap falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
+
+    # [P2-UPDATE-CONDITION-SUBST · 2026-06-26] (audit 3-flujos P2) Sustitución determinista por condición
+    # médica (DM2 azúcar / HTA sodio / dislipidemia grasa sat.) — paridad con el Guard 3 de S1, que los
+    # updates esquivaban (solo directiva-prompt advisory). Macro-preservante, idempotente, fail-open.
+    # `form_data` trae medicalConditions enriquecidas server-side por _enrich_clinical_from_profile (aplica
+    # a swap S3 y, por herencia del loop de swaps, a regenerate-day S2).
+    if isinstance(_out, dict):
+        try:
+            condition_substitution_backstop_for_meal(_out, form_data)
+        except Exception as _cs_e:
+            logger.warning(f"[P2-UPDATE-CONDITION-SUBST] condition-subst en swap falló (no bloquea): {type(_cs_e).__name__}: {_cs_e}")
     return _out
 
 

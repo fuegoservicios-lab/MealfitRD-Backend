@@ -4906,6 +4906,40 @@ def api_regenerate_day(
         if not meals:
             raise HTTPException(status_code=400, detail="El día no tiene platos para actualizar.")
 
+        # [P2-REGEN-DAY-IDEMPOTENCY · 2026-06-26] (audit 3-flujos P2) Guard de idempotencia server-side:
+        # /regenerate-day es PAGADO (1 crédito) + LENTO (~1 min, N swaps LLM secuenciales) y SÍNCRONO
+        # (persiste + cobra aunque el cliente se desconecte). Un retry tras perder la respuesta HTTP (red
+        # caída — el mismo caso que cerró P1-DEDUP-RECENT-PLAN, pero a nivel-DÍA) re-corría el loop,
+        # RE-COBRABA y pisaba el día ya persistido. Si este día se regeneró con éxito hace < N seg,
+        # devolvemos los platos YA persistidos (already_applied) SIN re-correr ni cobrar. Knob
+        # MEALFIT_REGEN_DAY_DEDUP_SECONDS (default 45; 0=off; clamp [0, 600]). El marker se setea
+        # post-cobro más abajo. tooltip-anchor: P2-REGEN-DAY-IDEMPOTENCY
+        try:
+            _dedup_secs = int(os.environ.get("MEALFIT_REGEN_DAY_DEDUP_SECONDS", "45"))
+        except (TypeError, ValueError):
+            _dedup_secs = 45
+        _dedup_secs = max(0, min(600, _dedup_secs))
+        if _dedup_secs > 0:
+            from db_plans import check_recent_regen_day
+            if check_recent_regen_day(user_id, plan_id, day_index, max_seconds=_dedup_secs):
+                logger.info(
+                    f"♻️ [P2-REGEN-DAY-IDEMPOTENCY] retry duplicado (user={user_id[:8]} "
+                    f"plan={plan_id[:8]} day={day_index}) dentro de {_dedup_secs}s → already_applied "
+                    f"(sin re-correr el loop ni cobrar)"
+                )
+                return {
+                    "success": True,
+                    "already_applied": True,
+                    "day_index": day_index,
+                    "meals_regenerated": 0,
+                    "slots_kept": len(meals),
+                    "day_quality_warning": None,
+                    "ai_interrupted": False,
+                    "ai_interrupted_message": None,
+                    "meals": meals,
+                    "message": "Este día ya se actualizó hace un momento.",
+                }
+
         # Target del día = suma de las macros de los platos actuales (goal-correcto).
         day_target = {"kcal": 0.0, "protein_g": 0.0, "carbs_g": 0.0, "fats_g": 0.0}
         for _m in meals:
@@ -5228,6 +5262,14 @@ def api_regenerate_day(
         # regenerated==0 que tampoco cobra). El día parcial se persiste gratis + se avisa "reintenta".
         if not _ai_unavailable:
             log_api_usage(user_id, "llm_regenerate_day")
+            # [P2-REGEN-DAY-IDEMPOTENCY · 2026-06-26] Marca el día como recién-regenerado con ÉXITO
+            # (post-persist + post-cobro) → un retry tras corte de red dentro de la ventana recibe
+            # already_applied en vez de re-correr el loop + re-cobrar. Best-effort (no bloquea el update;
+            # si solo falla el KV, lo peor es que un retry duplicado vuelva a cobrar como antes del fix).
+            # Gateado por el mismo `if not _ai_unavailable`: una interrupción de IA NO marca el día (el
+            # retry debe poder completarlo). tooltip-anchor: P2-REGEN-DAY-IDEMPOTENCY
+            from db_plans import mark_regen_day_done
+            mark_regen_day_done(user_id, plan_id, day_index)
 
         # [P1-REGEN-DAY-RETARGET · 2026-06-23 · P2-REGEN-DAY-WARN-MULTI-AXIS · 2026-06-24 (re-audit P2-8)]
         # Revalidación de banda a nivel DÍA (honestidad, espejo de S1): avisar si el día entregado quedó por

@@ -16,6 +16,7 @@ Parser-based (corre local + CI con `py`/venv).
 """
 import ast
 import os
+import re
 
 import pytest
 
@@ -126,7 +127,11 @@ def test_p2_5_frontend_swap_recalc_retry():
 
 # ── marker freshness ──────────────────────────────────────────────────────────
 def test_last_known_pfix_bumped():
-    assert "P2-UPDATE-INTELLIGENCE-3" in APP, "_LAST_KNOWN_PFIX debe reflejar este cierre"
+    # [de-pin · 2026-06-26] `_LAST_KNOWN_PFIX` es single-valued → pinear "P2-UPDATE-INTELLIGENCE-3"
+    # quedó stale apenas un P-fix posterior bumpeó el marker. Contrato durable del bump:
+    # test_p3_1_last_known_pfix_freshness (formato + floor) + test_p2_hist_audit_14_marker_test_link.
+    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P\d+-[A-Z0-9-]+ · \d{4}-\d{2}-\d{2}"', APP), \
+        "_LAST_KNOWN_PFIX debe existir con formato `Pn-... · YYYY-MM-DD`"
 
 
 if __name__ == "__main__":

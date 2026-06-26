@@ -191,6 +191,71 @@ def check_recent_meal_plan_exists(user_id: str, max_seconds: int = 30) -> bool:
         logger.warning(f"⚠️ [DEDUP] Error en check_recent_meal_plan_exists: {e}")
     return False
 
+
+def _regen_day_dedup_kv_key(user_id: str, plan_id: str, day_index: int) -> str:
+    return f"regen_day_done:{user_id}:{plan_id}:{int(day_index)}"
+
+
+def mark_regen_day_done(user_id: str, plan_id: str, day_index: int) -> bool:
+    """[P2-REGEN-DAY-IDEMPOTENCY · 2026-06-26] (audit 3-flujos P2) Marca en `app_kv_store` que el día
+    <day_index> del plan <plan_id> de <user_id> acaba de regenerarse con ÉXITO (se llama post-persist +
+    post-cobro). Un retry del cliente tras perder la respuesta HTTP (red caída) lo lee vía
+    `check_recent_regen_day` y recibe `already_applied` en vez de re-correr el loop LLM y RE-COBRAR.
+    Best-effort: un fallo del KV NO rompe el update (solo se pierde la protección de idempotencia para
+    ese retry). tooltip-anchor: P2-REGEN-DAY-IDEMPOTENCY"""
+    if not user_id or not plan_id:
+        return False
+    try:
+        key = _regen_day_dedup_kv_key(user_id, plan_id, day_index)
+        execute_sql_write(
+            """
+            INSERT INTO app_kv_store (key, value, updated_at)
+            VALUES (%s, %s::jsonb, NOW())
+            ON CONFLICT (key) DO UPDATE
+              SET value = EXCLUDED.value, updated_at = NOW()
+            """,
+            (key, _json.dumps({"day_index": int(day_index)})),
+        )
+        return True
+    except Exception as e:
+        logger.warning(
+            f"[P2-REGEN-DAY-IDEMPOTENCY] mark_regen_day_done FAILED "
+            f"user={user_id} plan={plan_id} day={day_index}: {e!r}"
+        )
+        return False
+
+
+def check_recent_regen_day(user_id: str, plan_id: str, day_index: int, max_seconds: int = 45) -> bool:
+    """[P2-REGEN-DAY-IDEMPOTENCY · 2026-06-26] True si el día <day_index> de <plan_id> se regeneró con
+    éxito hace < `max_seconds` (marca puesta por `mark_regen_day_done`). Usado al inicio de
+    /regenerate-day para cortar un retry duplicado ANTES del loop LLM + cobro. FAIL-OPEN: cualquier
+    error o `max_seconds<=0` → False (el update procede normal). tooltip-anchor: P2-REGEN-DAY-IDEMPOTENCY"""
+    if not user_id or not plan_id or max_seconds <= 0:
+        return False
+    try:
+        from datetime import datetime, timezone
+        key = _regen_day_dedup_kv_key(user_id, plan_id, day_index)
+        row = execute_sql_query(
+            "SELECT updated_at FROM app_kv_store WHERE key = %s",
+            (key,), fetch_one=True
+        )
+        if not row or not row.get("updated_at"):
+            return False
+        ts = row["updated_at"]
+        if isinstance(ts, str):
+            from constants import safe_fromisoformat
+            ts = safe_fromisoformat(ts)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - ts).total_seconds() < max_seconds
+    except Exception as e:
+        logger.warning(
+            f"[P2-REGEN-DAY-IDEMPOTENCY] check_recent_regen_day FAILED "
+            f"user={user_id} plan={plan_id} day={day_index}: {e!r}"
+        )
+        return False
+
+
 def check_meal_plan_generated_today(user_id: str) -> bool:
     """Valida si el último plan generado por el usuario se realizó el día actual."""
     if not connection_pool: return False

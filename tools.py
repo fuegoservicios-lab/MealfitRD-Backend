@@ -28,7 +28,7 @@ import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
-from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal
+from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
 # callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
 # Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
@@ -987,7 +987,24 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 raise _RLErr(
                     f"execute_modify_single_meal LLM rate limited for model={_modify_model}: {e!r}"
                 ) from e
-            _modify_cb.record_failure()
+            # [P2-CB-GUARDRAIL-NOT-FAILURE · 2026-06-26] (espejo de agent.py::swap_meal) Un rechazo de
+            # validador/guardrail en chat-modify (pantry L845 / recipe-coherence L878 / macro-drift L942
+            # → ValueError) significa que el PROVEEDOR respondió pero el output no pasó NUESTRA validación
+            # — NO es señal de salud del proveedor. El breaker `_modify_cb` es per-modelo COMPARTIDO
+            # cross-worker; contar un guardrail como fallo lo abre por un plato "difícil" y deja
+            # execute_modify_single_meal en fail-fast ~30s para TODO el tier con DeepSeek sano (mismo modo
+            # de fallo que cerró el fix hermano el 2026-06-24, pero por la superficie del chat). Solo
+            # timeout/5xx/conexión (no-ValueError) cuentan como CB failure. Knob
+            # MEALFIT_MODIFY_CB_COUNT_GUARDRAIL=true revierte. tooltip-anchor: P2-CB-GUARDRAIL-NOT-FAILURE
+            _cb_count_guardrail = os.environ.get(
+                "MEALFIT_MODIFY_CB_COUNT_GUARDRAIL", "false").strip().lower() in ("1", "true", "yes", "on")
+            if isinstance(e, ValueError) and not _cb_count_guardrail:
+                logger.info(
+                    f"🎚 [P2-CB-GUARDRAIL-NOT-FAILURE] rechazo de guardrail en chat-modify NO cuenta "
+                    f"como CB failure (proveedor sano) | meal_type={meal_type}"
+                )
+            else:
+                _modify_cb.record_failure()
             logger.error(f"❌ [TOOL] Fallaron los intentos: {e}. Aplicando Fallback de Seguridad Abortivo.")
 
             # En lugar de corromper la BD con ingredientes aleatorios,
@@ -1058,6 +1075,18 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             food_safety_backstop_for_meal(new_meal_data)
         except Exception as _fs_e:
             logger.warning(f"[P2-FOOD-SAFETY-UPDATE] food-safety en modify falló (no bloquea): {type(_fs_e).__name__}: {_fs_e}")
+
+        # [P2-UPDATE-CONDITION-SUBST · 2026-06-26] (audit 3-flujos P2) Sustitución determinista por condición
+        # médica (DM2/HTA/dislipidemia) — paridad con el Guard 3 de S1. El chat no envía el wizard form →
+        # enriquecemos medicalConditions desde el health_profile server-side (_hp), igual que el backstop
+        # clínico de arriba. Macro-preservante, idempotente, fail-open (advisory, no aborta el modify).
+        try:
+            _cond_form = dict(form_data or {})
+            if not _cond_form.get("medicalConditions") and not _cond_form.get("medical_conditions"):
+                _cond_form["medicalConditions"] = _hp.get("medicalConditions") or _hp.get("medical_conditions") or []
+            condition_substitution_backstop_for_meal(new_meal_data, _cond_form)
+        except Exception as _cs_e:
+            logger.warning(f"[P2-UPDATE-CONDITION-SUBST] condition-subst en modify falló (no bloquea): {type(_cs_e).__name__}: {_cs_e}")
 
         target_day["meals"][target_meal_index] = new_meal_data
 

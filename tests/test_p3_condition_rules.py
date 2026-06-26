@@ -232,7 +232,14 @@ def test_floor_gate_skips_renal_capped_plan():
     correr en un plan renal capeado. Ancla la guarda en el source de review_plan_node."""
     src = inspect.getsource(go.review_plan_node)
     assert "_renal_capped_plan" in src
-    assert "not _renal_capped_plan" in src
+    # [anchor actualizado · 2026-06-26] El skip renal del piso de proteína se movió DENTRO de
+    # `_protein_floor_shortfall(plan, renal_capped=_renal_capped_plan)` — el helper exime los días
+    # renal-capeados (memoria P1-RENAL-UPDATE-ENFORCE: "_protein_floor_shortfall, que exime renal").
+    # La propiedad de seguridad se PRESERVA vía el parámetro; anclamos esa forma en vez del antiguo
+    # inline `not _renal_capped_plan` (que el refactor renombró). Verificado: el flag renal fluye al
+    # validador de piso, que NO empuja proteína animal en un plan renal capeado.
+    assert "renal_capped=_renal_capped_plan" in src, \
+        "el flag renal debe fluir al validador de piso de proteína (que exime los planes renal-capeados)"
 
 
 def test_source_cap_renal_only_reassigns_to_carb():

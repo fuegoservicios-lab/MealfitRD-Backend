@@ -89,7 +89,11 @@ def test_p2_5_swap_honors_pantry_override():
 
 # ── marker + knobs ────────────────────────────────────────────────────────────
 def test_p2_marker_bumped():
-    assert "P2-UPDATE-INTELLIGENCE-2" in APP
+    # [de-pin · 2026-06-26] `_LAST_KNOWN_PFIX` es single-valued → pinear "P2-UPDATE-INTELLIGENCE-2"
+    # quedó stale apenas un P-fix posterior bumpeó el marker. Contrato durable del bump:
+    # test_p3_1_last_known_pfix_freshness (formato + floor) + test_p2_hist_audit_14_marker_test_link.
+    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P\d+-[A-Z0-9-]+ · \d{4}-\d{2}-\d{2}"', APP), \
+        "_LAST_KNOWN_PFIX debe existir con formato `Pn-... · YYYY-MM-DD`"
 
 
 def test_p2_knobs_present():
