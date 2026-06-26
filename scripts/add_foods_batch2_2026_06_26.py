@@ -2,6 +2,8 @@
 (master_ingredients, Neon) para llevarlo de 157 → 200: 8 vegetales + 8 frutas + 5 granos + 6 especias/hierbas
 + 3 semillas/grasas + 8 proteína animal + 4 lácteos + 1 víver. Cierra los huecos de variedad restantes
 (granos delgados, especias para apetecibilidad, proteína animal por presupuesto, frutas/vegetales para 30 días).
+Vegetales: Puerro, Ají gustoso, Bok choy, Lechuga romana, Nabo, Alcachofa, Palmito, Cebollín
+(Berza→Ají gustoso por no ser común en RD; Maíz tierno descartado = dup de "Maíz dulce en granos").
 
 NUTRICIÓN: 100% USDA FoodData Central, curada + verificada adversarialmente (workflow batch2). Vive en
 `scripts/data/new_foods_batch2_2026_06_26.json` (SSOT del dato). Convención del catálogo respetada:
@@ -65,9 +67,9 @@ def _load_records():
 PRICES = {
     # --- Vegetales ---
     "Puerro":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Berza":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Ají gustoso":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # reemplaza Berza (no común en RD)
     "Bok choy":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Maíz tierno":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Lechuga romana":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # reemplaza Maíz tierno (dup de "Maíz dulce en granos")
     "Nabo":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Alcachofa":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Palmito":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
