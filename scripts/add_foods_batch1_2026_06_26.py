@@ -79,14 +79,14 @@ PRICES = {
     "Champiñones":           {"packages": [{"unit": "paquete", "grams": 227, "label": "8 oz", "price": 205}]},
     "Remolacha":             {"price_per_lb": 45},
     "Apio":                  {"price_per_lb": 49},
-    "Acelga":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "Paquete 28g" implausible ($5.3/g) — ¿280g?
-    "Berro":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "Paquete" sin gramos — necesito peso
+    "Acelga":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: el producto del "28g/149" es NORI (alga marina), NO acelga — decisión pendiente
+    "Berro":                 {"packages": [{"unit": "paquete", "grams": 100, "label": "paquete (~100 g est.)", "price": 44}]},  # Inahnsa; gramos estimados (empaque no los imprime)
     "Rúcula":                {"packages": [{"unit": "paquete", "grams": 57, "label": "2 oz", "price": 43},
                                            {"unit": "paquete", "grams": 227, "label": "8 oz", "price": 130}]},
     "Calabacín":             {"price_per_lb": 49},
     "Kale":                  {"packages": [{"unit": "paquete", "grams": 170, "label": "6 oz", "price": 205}]},
     "Repollo morado":        {"price_per_lb": 59},
-    "Rábano":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "8 unid" — necesito gramos del paquete
+    "Rábano":                {"packages": [{"unit": "paquete", "grams": 200, "label": "8 unid (~200 g est.)", "price": 85}]},  # Lucas Pérez; ~8 rábanos, gramos estimados
     "Espárragos":            {"packages": [{"unit": "paquete", "grams": 450, "label": "450 g", "price": 405}]},
     "Coles de Bruselas":     {"packages": [{"unit": "paquete", "grams": 900, "label": "900 g", "price": 220}]},
     # --- Frutas ---
