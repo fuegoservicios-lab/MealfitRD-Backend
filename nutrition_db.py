@@ -19,12 +19,19 @@ Diseño:
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 from canonical_units import to_base_amount, canonicalize_unit
+
+logger = logging.getLogger(__name__)
+# [P1-MICRO-DENSITY-OBSERVABLE · 2026-06-26] (audit gap #6) Dedup de los warnings de "gap de densidad":
+# 1 WARN por ingrediente por proceso (evita spam por-comida). Se resetea al reiniciar el binario → un gap
+# nuevo (ingrediente cup-measurable sin densidad) re-alerta, que es justo lo que queremos.
+_MICRO_DENSITY_GAP_WARNED: set = set()
 
 # [P4-UNIFIED-RESOLVER · 2026-06-14] Cuando los tiers baratos (exacto/alias) de este módulo fallan,
 # delega al resolver canónico `shopping_calculator.normalize_name` (regex clean_n + fuzzy difflib +
@@ -497,6 +504,20 @@ class IngredientNutritionDB:
             return None
         grams = self.grams_from_ingredient_string(s)
         if grams is None:
+            # [P1-MICRO-DENSITY-OBSERVABLE · 2026-06-26] (audit gap #6) El ingrediente RESOLVIÓ por nombre
+            # (info existe) pero NO por gramos → típico: medido en "taza"/volumen sin density_g_per_cup, o
+            # unidad discreta sin density_g_per_unit. Eso descarta TODOS sus micros SILENCIOSAMENTE (modo de
+            # fallo que producía falsos-bajos de Vit K/fibra y exigía auditorías manuales reactivas). Lo
+            # hacemos OBSERVABLE: WARN dedup-por-ingrediente → backfill proactivo de la densidad faltante.
+            try:
+                if info.name not in _MICRO_DENSITY_GAP_WARNED:
+                    _MICRO_DENSITY_GAP_WARNED.add(info.name)
+                    logger.warning(
+                        "⚠️ [P1-MICRO-DENSITY-OBSERVABLE] micros descartados de '%s': resolvió nombre pero no "
+                        "gramos (falta density_g_per_cup/unit en master_ingredients). Ej: %s",
+                        info.name, str(s)[:70])
+            except Exception:
+                pass
             return None
         f = grams / 100.0
 
