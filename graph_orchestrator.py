@@ -8785,6 +8785,12 @@ VARIETY_HARD_GATE_EGG_SLACK = _env_int("MEALFIT_VARIETY_HARD_GATE_EGG_SLACK", 1)
 # legítimamente el mismo día (pollo a la plancha + pescado a la plancha) → gatear-las sobre-reintentaría.
 VARIETY_GATE_FRUIT_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_REPEAT", True)
 VARIETY_GATE_BASE_DISH_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT", False)
+# [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (auditoría gap #5) Pareo intra-plato chocante: fruta dulce dominante
+# + base salada (almidón/huevo-salado/crucífera) en el NOMBRE del MISMO plato (caso del owner: "mango con
+# arroz"). El prompt (day_generator 15f) ya lo prohíbe pero era 100% advisory → sin red determinista. Esto
+# lo hace gate de RETRY (con la misma degradación a advisory en intento final que el resto de gates de
+# variedad → cero riesgo de cero-plan). Default ON: el owner pidió explícitamente que esto NO pase.
+VARIETY_GATE_FRUIT_CLASH = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_CLASH", True)
 # [P1-VARIETY-REPEAT-GRACEFUL · 2026-06-26] Degradación con gracia del gate de variedad-repetida.
 # En el ÚLTIMO intento (attempt >= MAX_ATTEMPTS) la fruta-repetida / plato-base-repetido NO debe
 # RECHAZAR el plan: es un defecto cosmético y bloquearlo convierte un plan válido en un fallback de
@@ -11382,6 +11388,29 @@ _FEATURED_FRUITS = ("mango", "guineo", "banana", "lechosa", "papaya", "pina", "f
                     "melon", "sandia", "uva", "pera", "manzana", "mandarina", "guayaba",
                     "chinola", "maracuya", "mamey", "zapote", "cereza", "kiwi", "arandano")
 
+# [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (audit gap #5) Detección determinista del pareo intra-plato chocante.
+# CONSERVADOR para minimizar falsos positivos (un falso positivo solo cuesta un retry — degrada a advisory
+# en intento final — pero igual queremos precisión):
+#   - Frutas: SOLO las inequívocamente dulces/postre. Excluye guineo/banana (plátano salado: mangú/tostones),
+#     manzana/pera/fresa/uva (aceptables en ensalada), naranja/limón (aderezo). Estas son las "fruta dulce
+#     dominante" que el prompt nombra.
+#   - Bases saladas: almidones (arroz/moro/pasta…), huevo-salado (revoltillo/revuelto) y crucíferas/berenjena.
+#     NO proteínas (pollo con piña / cerdo con guayaba son platos tropicales aceptables).
+#   - Match SOLO en el NOMBRE del plato (no ingredientes) + word-boundary: "Arroz con mango" / "Revoltillo con
+#     mango" / "Coliflor y mango" disparan; una fruta de guarnición en ingredientes NO (menos falsos positivos).
+_SWEET_DOMINANT_FRUITS = ("mango", "pina", "lechosa", "papaya", "guayaba", "melon", "sandia", "mamey", "zapote")
+_SAVORY_CLASH_TOKENS = ("arroz", "moro", "locrio", "pasta", "espagueti", "macarron", "fideo", "espaguetis",
+                        "revoltillo", "revuelto", "coliflor", "brocoli", "berenjena")
+
+
+def _name_has_token(token: str, text_low: str) -> bool:
+    """True si `token` aparece en `text_low` (ya en minúscula/sin acentos) con frontera de palabra
+    inicial → evita que 'pina' matchee 'espina' o 'macarron' matchee substrings. [P1-FRUIT-SAVORY-CLASH]"""
+    try:
+        return _re.search(r"\b" + _re.escape(token), text_low) is not None
+    except Exception:
+        return token in text_low
+
 
 def build_variety_report(plan: dict) -> dict:
     """[P3-VARIETY · 2026-06-13] Reporte ADVISORY de variedad/pertinencia cultural (FS5):
@@ -11395,7 +11424,7 @@ def build_variety_report(plan: dict) -> dict:
         def strip_accents(s):
             import unicodedata
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
-    total_meals = egg_meals = cremoso = premium = same_day_repeats = fruit_repeats = 0
+    total_meals = egg_meals = cremoso = premium = same_day_repeats = fruit_repeats = sweet_savory_clash = 0
     issues = []
     for day in plan.get("days", []) or []:
         meals = day.get("meals", []) or []
@@ -11420,6 +11449,16 @@ def build_variety_report(plan: dict) -> dict:
             for fr in _FEATURED_FRUITS:
                 if fr in name_low:
                     day_fruits[fr] = day_fruits.get(fr, 0) + 1
+            # [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (audit gap #5) Pareo intra-plato chocante en el NOMBRE:
+            # fruta dulce dominante + base salada (mango+arroz / revoltillo+mango / coliflor+mango). El conteo
+            # alimenta el gate de retry (_variety_repeat_gate_issues); aquí se surface también como issue advisory.
+            if (any(_name_has_token(fr, name_low) for fr in _SWEET_DOMINANT_FRUITS)
+                    and any(_name_has_token(tok, name_low) for tok in _SAVORY_CLASH_TOKENS)):
+                sweet_savory_clash += 1
+                issues.append(
+                    f"Día {day.get('day', '?')}: '{meal.get('name', '?')}' combina fruta dulce dominante con "
+                    f"base salada (pareo chocante — ej. fruta+arroz/huevo/crucífera)"
+                )
         for tok, n in day_tokens.items():
             if n >= 2:
                 same_day_repeats += 1
@@ -11453,7 +11492,7 @@ def build_variety_report(plan: dict) -> dict:
         cross_day_proteins = {}
     return {"total_meals": total_meals, "egg_meals": egg_meals, "cremoso": cremoso,
             "premium": premium, "same_day_repeats": same_day_repeats,
-            "fruit_repeats": fruit_repeats,
+            "fruit_repeats": fruit_repeats, "sweet_savory_clash": sweet_savory_clash,
             "cross_day_proteins": cross_day_proteins, "issues": issues,
             "ok": not issues}
 
@@ -11474,6 +11513,17 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
                 "2+ comidas del mismo día. Usa una fruta DISTINTA en cada comida del día (lechosa, "
                 "guineo, piña, fresa, manzana, naranja…) y NO combines fruta dulce con huevo/salado "
                 "en el mismo plato (ej. evita 'revoltillo de huevos con mango')."
+            )
+        # [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (audit gap #5) Pareo intra-plato chocante → rechazo (retry
+        # acotado; degrada a advisory en intento final como el resto de gates de variedad → sin cero-plan).
+        if VARIETY_GATE_FRUIT_CLASH and int(variety_report.get("sweet_savory_clash", 0)) > 0:
+            out.append(
+                "PAREO CHOCANTE FRUTA+SALADO (rechazo de coherencia de sabor): un plato combina fruta dulce "
+                "dominante (mango, piña, lechosa, papaya, melón…) con una base salada (arroz u otro almidón, "
+                "huevo revuelto, o crucíferas como coliflor/brócoli). La fruta dulce va con yogur/avena/"
+                "nueces/queso fresco o sola — NUNCA con arroz, huevo salado ni vegetales salados (evita "
+                "'arroz con mango', 'revoltillo con mango', 'coliflor y mango'). Reemplaza la fruta por una "
+                "guarnición salada coherente, o muévela a una merienda con yogur/avena."
             )
         if VARIETY_GATE_BASE_DISH_REPEAT and int(variety_report.get("same_day_repeats", 0)) > 0:
             out.append(
