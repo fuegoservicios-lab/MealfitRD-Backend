@@ -2,9 +2,9 @@
 (master_ingredients, Neon) para llevarlo de 157 → 200: 8 vegetales + 8 frutas + 5 granos + 6 especias/hierbas
 + 3 semillas/grasas + 8 proteína animal + 4 lácteos + 1 víver. Cierra los huecos de variedad restantes
 (granos delgados, especias para apetecibilidad, proteína animal por presupuesto, frutas/vegetales para 30 días).
-Vegetales: Puerro, Culantro, Bok choy, Lechuga romana, Nabo, Alcachofa, Palmito, Cebollín
-(Berza→Culantro/recao [Ají gustoso se descartó por redundante con "Ají cubanela"]; Maíz tierno descartado =
-dup de "Maíz dulce en granos" → Lechuga romana).
+Vegetales: Puerro, Cundeamor, Bok choy, Lechuga romana, Nabo, Alcachofa, Palmito, Cebollín
+(slot de Berza→Cundeamor/melón amargo, tras descartar Ají gustoso [≈Ají cubanela] y Culantro [≈Cilantro] por
+redundancia/confusión de nombre; Maíz tierno descartado = dup de "Maíz dulce en granos" → Lechuga romana).
 
 NUTRICIÓN: 100% USDA FoodData Central, curada + verificada adversarialmente (workflow batch2). Vive en
 `scripts/data/new_foods_batch2_2026_06_26.json` (SSOT del dato). Convención del catálogo respetada:
@@ -68,7 +68,7 @@ def _load_records():
 PRICES = {
     # --- Vegetales ---
     "Puerro":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Culantro":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # reemplaza Berza (Ají gustoso era redundante con cubanela) → Culantro/recao
+    "Cundeamor":             {"price_per_lb": None, "price_per_unit": None, "market_packages": None},   # reemplaza Berza (descartados Ají gustoso [≈cubanela] y Culantro [≈cilantro] por redundancia)
     "Bok choy":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Lechuga romana":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # reemplaza Maíz tierno (dup de "Maíz dulce en granos")
     "Nabo":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
