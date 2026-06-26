@@ -26,7 +26,7 @@ from constants import (
     RENAL_CONDITION_TERMS, DIABETES_CONDITION_TERMS, HTA_CONDITION_TERMS,
     DYSLIPIDEMIA_CONDITION_TERMS, ANEMIA_CONDITION_TERMS,
     PREGNANCY_CONDITION_TERMS, HYPOTHYROID_CONDITION_TERMS, GOUT_CONDITION_TERMS,
-    NAFLD_CONDITION_TERMS, PCOS_CONDITION_TERMS,
+    NAFLD_CONDITION_TERMS, PCOS_CONDITION_TERMS, GASTRITIS_CONDITION_TERMS,
 )
 
 SAFETY_HARD = "safety_hard"            # reglas que el motor REESCRIBE determinísticamente
@@ -294,6 +294,28 @@ CONDITION_RULES: tuple = (
             "   • PROTEÍNA + GRASA SALUDABLE en cada comida para estabilizar la glucosa.\n"
             "   • Patrón antiinflamatorio (pescado graso, aceite de oliva, vegetales).\n"
             "   • Combina con actividad física; el manejo del peso mejora la sensibilidad a la insulina."),
+    ),
+    # [P1-GASTRITIS-RULE · 2026-06-26] (auditoría gap #8) El chip 'Gastritis' del form no tenía ConditionRule
+    # → solo disparaba el FS9 genérico advisory. Ahora tiene guía citable (estándar-de-cuidado: evitar
+    # irritantes). ADVISORY (prompt_block + CLINICAL_REFERRAL) como hipotiroidismo/gota/NAFLD: la severidad
+    # (qué tolera cada paciente) la define el gastroenterólogo, no el motor determinista — los "irritantes"
+    # son individuales (no hay un token-ofensor universal que swappear sin destruir el plato criollo). El
+    # prompt cubre la dirección segura; precedencia baja (no choca con cardiometabólicas).
+    ConditionRule(
+        id="gastritis", label="Gastritis / reflujo (ERGE)", terms=GASTRITIS_CONDITION_TERMS,
+        precedence=58, classification=CLINICAL_REFERRAL,
+        prompt_block=(
+            "🔥 REGLA CLÍNICA — GASTRITIS / REFLUJO (ERGE) (orientativa, requiere gastroenterólogo):\n"
+            "   • EVITA IRRITANTES: picante (ají picante, salsas picantes), exceso de cítricos ácidos "
+            "(naranja agria, limón en gran cantidad), tomate concentrado, café y bebidas con cafeína, "
+            "chocolate, menta, bebidas gaseosas y alcohol.\n"
+            "   • SIN FRITOS NI MUY GRASOSO: prefiere cocción al horno/plancha/hervido/al vapor; las frituras "
+            "y comidas muy grasosas retrasan el vaciamiento y empeoran el reflujo.\n"
+            "   • COMIDAS PEQUEÑAS Y FRECUENTES: porciones moderadas, comer despacio, NO acostarse hasta "
+            "2-3 horas después de comer; evita las comidas muy abundantes de noche.\n"
+            "   • PREFIERE: avena, arroz, viandas hervidas, vegetales cocidos no ácidos, proteínas magras "
+            "(pollo/pescado/pavo a la plancha), lácteos bajos en grasa según tolerancia.\n"
+            "   • Este plan es ORIENTATIVO; la tolerancia a cada alimento es individual y la define tu médico."),
     ),
 )
 

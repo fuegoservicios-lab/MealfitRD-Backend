@@ -1644,6 +1644,14 @@ PCOS_CONDITION_TERMS = (
     "sop", "ovario poliquistico", "ovarios poliquisticos", "poliquistico", "pcos",
     "sindrome de ovario", "ovarico poliquistico",
 )
+# [P1-GASTRITIS-RULE · 2026-06-26] (auditoría gap #8) El form expone el chip 'Gastritis'
+# (InteractiveQuestions.jsx) → escribe a medicalConditions, pero NINGUNA ConditionRule lo enforzaba (solo
+# disparaba el gate FS9 genérico advisory). Términos SIN acento (el caller normaliza con strip_accents) e
+# inclusivos (gastritis + reflujo/ERGE + úlcera + acidez). Sobre-inclusión = dirección segura.
+GASTRITIS_CONDITION_TERMS = (
+    "gastritis", "reflujo", "erge", "gerd", "acidez", "ulcera", "ulcera peptica", "ulcera gastrica",
+    "gastric", "gastrico", "agruras", "dispepsia", "esofagitis", "hernia hiatal",
+)
 
 def get_reverse_synonyms_map():
     """Crea un diccionario inverso donde la clave es la variante ('pechuga') y el valor es el término base ('pollo').

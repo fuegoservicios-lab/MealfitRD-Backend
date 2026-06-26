@@ -22,10 +22,19 @@ from __future__ import annotations
 # tiene hígado y el swap magro→res perdería proteína → NO se añade `substitutions` a la fila anemia (ver
 # condition_rules.py). Default OFF (user-facing en panel/PDF). Knob canónico auto-registrado en _KNOBS_REGISTRY.
 try:
-    from knobs import _env_bool as _mn_env_bool
+    from knobs import _env_bool as _mn_env_bool, _env_float as _mn_env_float
     _ANEMIA_CONDITION_TARGET_ENABLED = _mn_env_bool("MEALFIT_ANEMIA_CONDITION_TARGET", False)
+    # [P1-RENAL-K-CEILING · 2026-06-26] (auditoría gap #8) Techo OBSERVABLE de potasio en ERC (hiperkalemia
+    # = riesgo AGUDO de arritmia, lo que el audit flageó como "no capado"). NO es un veto/retiro de alimentos
+    # (respeta la decisión P2-RENAL-POTASSIUM-DETERMINISTIC de NO hacer un veto ciego): es un techo de PANEL
+    # que DEGRADA (banner) cuando el plan excede, usando la columna potassium_mg ya poblada desde USDA. El
+    # umbral fino por estadio (G3a→G5/diálisis) lo define el nefrólogo; el default es un piso de seguridad.
+    _RENAL_K_CEILING_ENABLED = _mn_env_bool("MEALFIT_RENAL_K_CEILING", True)
+    _RENAL_K_CEILING_MG = _mn_env_float("MEALFIT_RENAL_K_CEILING_MG", 3000.0)
 except Exception:  # pragma: no cover - knobs siempre disponible en prod
     _ANEMIA_CONDITION_TARGET_ENABLED = False
+    _RENAL_K_CEILING_ENABLED = True
+    _RENAL_K_CEILING_MG = 3000.0
 
 # Términos de azúcar AÑADIDA (free sugars) — el techo WHO aplica a estos, NO al azúcar
 # intrínseco de fruta/leche (que no es preocupación de salud).
@@ -412,6 +421,19 @@ def build_micronutrient_report(plan: dict, db, sex: str | None = "F",
             "guia": "KDIGO 2024 — la restricción de sodio reduce sobrecarga de volumen, edema y proteinuria",
             "actual": daily.get("sodium_mg", 0.0),
         })
+        # [P1-RENAL-K-CEILING · 2026-06-26] (auditoría gap #8) Techo OBSERVABLE de potasio (hiperkalemia
+        # AGUDA = arritmia). Convierte el floor DRI de potasio en un TECHO para ERC (el piso DASH-K ya se
+        # suprime arriba con `not _has_renal`). El panel marca 'alto' (→ banner/degrade) cuando el plan
+        # excede → cierra el gap "hiperkalemia ERC no capada". NO veta alimentos ni fuerza retry (la
+        # variedad/costo se preservan); es observabilidad + steering. Knob MEALFIT_RENAL_K_CEILING.
+        if _RENAL_K_CEILING_ENABLED:
+            targets["potassium_mg"] = {"ceiling": _RENAL_K_CEILING_MG, "unit": "mg"}
+            condition_targets.append({
+                "condicion": "Enfermedad renal crónica — potasio moderado",
+                "regla": f"Potasio ≤{int(_RENAL_K_CEILING_MG)} mg/día (moderar — riesgo de hiperkalemia/arritmia)",
+                "guia": "KDIGO — en ERC el potasio se MODERA; el umbral exacto por estadio lo define tu nefrólogo",
+                "actual": daily.get("potassium_mg", 0.0),
+            })
     # [P4-UNIFIED-RESOLVER] Dislipidemia → techo de GRASA SATURADA <7% de las kcal (AHA/ACC). Antes era
     # PROMPT-only (faltaba la columna satfat); ahora se evalúa con dato real. Solo se añade el target
     # cuando hay dislipidemia (todos consumen algo de satfat; la regla <7% es condicional).

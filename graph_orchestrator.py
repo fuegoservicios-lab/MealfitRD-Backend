@@ -8879,6 +8879,25 @@ PROTEIN_GKG_CEILING_CUT = _env_float("MEALFIT_PROTEIN_GKG_CEILING_CUT", 2.6)
 #            modelamos → se trata como cap de SEGURIDAD + gate de derivación (FS9), no prescripción.
 CONDITION_RULES_ENABLED = _env_bool("MEALFIT_CONDITION_RULES", True)
 RENAL_PROTEIN_GKG_CEILING = _env_float("MEALFIT_RENAL_PROTEIN_GKG", 0.8)   # KDIGO 2024 G3-G5 no-diálisis
+# [P1-RENAL-DIALYSIS-STAGING · 2026-06-26] (auditoría gap #8) El cap renal de proteína se ESTADIFICA por
+# diálisis: KDIGO recomienda 1.0-1.2 g/kg en hemodiálisis/diálisis peritoneal (la diálisis PIERDE proteína/
+# aminoácidos por el dializado → restringir a 0.8 como no-diálisis es IATROGÉNICO, riesgo de malnutrición/
+# desgaste proteico-energético). Sin diálisis declarada → 0.8 (G3-G5 no-diálisis, conservador). Detección
+# por los términos de diálisis ya presentes en RENAL_CONDITION_TERMS. Cierra el gap "cap fijo 0.8 sin staging".
+RENAL_DIALYSIS_PROTEIN_GKG = _env_float("MEALFIT_RENAL_DIALYSIS_PROTEIN_GKG", 1.2)   # KDIGO HD/PD
+
+
+def _renal_protein_gkg_for_profile(form_data) -> float:
+    """[P1-RENAL-DIALYSIS-STAGING · 2026-06-26] Techo g/kg de proteína renal estadificado: 1.2 si el perfil
+    declara diálisis (hemodiálisis/peritoneal), 0.8 (no-diálisis) en otro caso. SSOT de los 4 sitios que
+    computan el cap. Fail-safe: cualquier duda → 0.8 (el más conservador/seguro)."""
+    try:
+        for _c in _condition_strings(form_data):
+            if "dialis" in _c or "dialys" in _c or "hemodial" in _c or "peritoneal" in _c:
+                return RENAL_DIALYSIS_PROTEIN_GKG
+    except Exception:
+        pass
+    return RENAL_PROTEIN_GKG_CEILING
 # [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19 · default→True P2-RENAL-WEIGHT-BASIS 2026-06-22] KDIGO usa peso
 # AJUSTADO/ideal (no real) para el target g/kg en OBESIDAD: con peso real, 0.8 g/kg sobre 120 kg da ~96 g (vs
 # ~56 g ideal) → cap +71% más permisivo justo donde el exceso proteico es más dañino (daño glomerular).
@@ -9187,7 +9206,8 @@ def _goal_aware_trim_ceiling_pct(form_data: dict, target_protein_day: float) -> 
     la regla para que el trim baje la proteína a nivel renal en vez de protegerla alta."""
     renal = CONDITION_RULES_ENABLED and isinstance(form_data, dict) and _is_renal_condition(form_data)
     goal = form_data.get("mainGoal") if isinstance(form_data, dict) else None
-    gkg = RENAL_PROTEIN_GKG_CEILING if renal else _protein_gkg_ceiling(goal)
+    # [P1-RENAL-DIALYSIS-STAGING] techo renal estadificado por diálisis (1.2) vs no-diálisis (0.8).
+    gkg = _renal_protein_gkg_for_profile(form_data) if renal else _protein_gkg_ceiling(goal)
     # [P2-RENAL-TRIM-WEIGHT-BASIS · 2026-06-19] (audit fresco P2-5) El cap renal usa `_renal_weight_basis_kg`
     # (peso ajustado IBW Devine en obesidad cuando MEALFIT_RENAL_ADJUSTED_WEIGHT=ON); el trim-ceiling usaba el
     # peso REAL → con el knob ON + renal obeso, el techo del trim quedaba más laxo que el cap (inconsistencia
@@ -9450,7 +9470,8 @@ def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
         wkg = _renal_weight_basis_kg(form_data)   # [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (P2-5) peso ajustado en obesidad
         if wkg <= 0:
             return
-        cap_g = round(RENAL_PROTEIN_GKG_CEILING * wkg)
+        _gkg = _renal_protein_gkg_for_profile(form_data)  # [P1-RENAL-DIALYSIS-STAGING] 1.2 diálisis / 0.8 no
+        cap_g = round(_gkg * wkg)
         if cap_g <= 0:
             return
         diabetic = _is_diabetes_condition(form_data)
@@ -9462,14 +9483,15 @@ def _apply_renal_cap_to_nutrition(nutrition: dict, form_data: dict) -> None:
                 was = w
         if was:
             nutrition["renal_protein_cap"] = {
-                "applied": True, "gkg": RENAL_PROTEIN_GKG_CEILING, "protein_g": cap_g,
+                "applied": True, "gkg": _gkg, "protein_g": cap_g,
                 "was_g": was, "weight_kg": round(wkg, 1),
-                "guideline": "KDIGO 2024 (G3-G5 no-diálisis)", "reassigned_to": reassign,
+                "guideline": ("KDIGO 2024 (diálisis 1.0-1.2 g/kg)" if _gkg >= 1.0
+                              else "KDIGO 2024 (G3-G5 no-diálisis 0.8 g/kg)"), "reassigned_to": reassign,
                 "comorbid_diabetes": bool(diabetic), "source": "nutrition_target",
             }
             logger.warning(
                 f"🫘 [P3-CONDITION-RULES] ERC: target de proteína capeado en la FUENTE {was}g→{cap_g}g "
-                f"(~{RENAL_PROTEIN_GKG_CEILING} g/kg × {wkg:.1f}kg), kcal a {reassign}"
+                f"(~{_gkg} g/kg × {wkg:.1f}kg), kcal a {reassign}"
                 f"{' (DM2)' if diabetic else ''}. Fluye a generación/review/fallback.")
     except Exception as _rcn_e:
         logger.warning(f"[P3-CONDITION-RULES] cap renal en la fuente falló: "
@@ -11976,7 +11998,7 @@ def _renal_exit_safety_net(plan: dict, nutrition: dict, form_data: dict) -> None
         _rpr_existing = plan.get("requires_professional_review")
         if not (isinstance(_rpr_existing, dict) and _rpr_existing.get("renal_gate")):
             _cap_txt = (f" Se aplicó un límite conservador de proteína a ~{_rcap_src.get('protein_g')}g/día "
-                        f"(≈{RENAL_PROTEIN_GKG_CEILING} g/kg) como medida de seguridad.")
+                        f"(≈{_rcap_src.get('gkg', RENAL_PROTEIN_GKG_CEILING)} g/kg) como medida de seguridad.")
             _comorbid_txt = (" Tienes diabetes y enfermedad renal a la vez: el balance fibra/leguminosas "
                              "vs potasio/fósforo/proteína SOLO lo define tu nefrólogo/nutricionista."
                              if _rcap_src.get("comorbid_diabetes") else "")
@@ -12028,7 +12050,8 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         if CONDITION_RULES_ENABLED and _is_renal_condition(form_data) and active_macros:
             _wkg = _renal_weight_basis_kg(form_data)   # [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (P2-5)
             _old_p = _meal_macro_num(active_macros.get("protein_str"))
-            _cap = round(RENAL_PROTEIN_GKG_CEILING * _wkg)
+            _gkg = _renal_protein_gkg_for_profile(form_data)  # [P1-RENAL-DIALYSIS-STAGING] 1.2 diálisis / 0.8 no
+            _cap = round(_gkg * _wkg)
             # Copia PRIVADA del header del plan antes de mutarlo → si un caller (p.ej. Fase B) pasara un
             # plan cuyo `macros` ES el dict de `nutrition`, jamás lo corromperíamos (defensa anti-aliasing).
             if isinstance(plan.get("macros"), dict):
@@ -12042,9 +12065,11 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 _reassigned = _renal_reassign_macro(active_macros, _cap, _old_p, _diab, _pm)
                 if not (plan.get("renal_protein_cap") or {}).get("applied"):
                     plan["renal_protein_cap"] = {
-                        "applied": True, "gkg": RENAL_PROTEIN_GKG_CEILING,
+                        "applied": True, "gkg": _gkg,
                         "protein_g": _cap, "was_g": round(_old_p),
-                        "weight_kg": round(_wkg, 1), "guideline": "KDIGO 2024 (G3-G5 no-diálisis)",
+                        "weight_kg": round(_wkg, 1),
+                        "guideline": ("KDIGO 2024 (diálisis 1.0-1.2 g/kg)" if _gkg >= 1.0
+                                      else "KDIGO 2024 (G3-G5 no-diálisis 0.8 g/kg)"),
                         "reassigned_to": _reassigned, "comorbid_diabetes": bool(_diab),
                         "meals_enforced": False,
                     }
@@ -12423,7 +12448,7 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 if _renal_flag:
                     _cap_info = plan.get("renal_protein_cap") or {}
                     _cap_txt = (f" Se aplicó un límite conservador de proteína a ~{_cap_info.get('protein_g')}g/día "
-                                f"(≈{RENAL_PROTEIN_GKG_CEILING} g/kg) como medida de seguridad."
+                                f"(≈{_cap_info.get('gkg', RENAL_PROTEIN_GKG_CEILING)} g/kg) como medida de seguridad."
                                 if _cap_info.get("meals_enforced") else "")
                     _comorbid_txt = (" Tienes diabetes y enfermedad renal a la vez: las recomendaciones de "
                                      "fibra/leguminosas (diabetes) y de potasio/fósforo/proteína (renal) deben "
@@ -13243,7 +13268,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             _wkg_renal = _renal_weight_basis_kg(form_data)   # [P2-RENAL-ADJUSTED-WEIGHT · 2026-06-19] (P2-5)
             _old_p_renal = _meal_macro_num(active_macros.get("protein_str"))
-            _renal_cap = round(RENAL_PROTEIN_GKG_CEILING * _wkg_renal)
+            _gkg_renal = _renal_protein_gkg_for_profile(form_data)  # [P1-RENAL-DIALYSIS-STAGING] 1.2 diálisis / 0.8 no
+            _renal_cap = round(_gkg_renal * _wkg_renal)
             if _wkg_renal > 0 and _renal_cap > 0 and _renal_cap < _old_p_renal:
                 _renal_diabetic = _is_diabetes_condition(form_data)
                 # [P2-14-RENAL-REASSIGN] dedup verbatim del reassign. Política PRESERVADA: comorbilidad
@@ -13252,15 +13278,17 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 # El reparto fino lo valida el nefrólogo (gate FS9 reforzado abajo). mirror = result["macros"].
                 _reassigned = _renal_reassign_macro(active_macros, _renal_cap, _old_p_renal, _renal_diabetic, result["macros"])
                 result["renal_protein_cap"] = {
-                    "applied": True, "gkg": RENAL_PROTEIN_GKG_CEILING,
+                    "applied": True, "gkg": _gkg_renal,
                     "protein_g": _renal_cap, "was_g": round(_old_p_renal),
-                    "weight_kg": round(_wkg_renal, 1), "guideline": "KDIGO 2024 (G3-G5 no-diálisis)",
+                    "weight_kg": round(_wkg_renal, 1),
+                    "guideline": ("KDIGO 2024 (diálisis 1.0-1.2 g/kg)" if _gkg_renal >= 1.0
+                                  else "KDIGO 2024 (G3-G5 no-diálisis 0.8 g/kg)"),
                     "reassigned_to": _reassigned, "comorbid_diabetes": bool(_renal_diabetic),
                     "meals_enforced": False,  # lo setea el enforcement determinista per-comida abajo
                 }
                 logger.warning(
                     f"🫘 [P3-CONDITION-RULES] ERC detectada → cap de proteína {round(_old_p_renal)}g→"
-                    f"{_renal_cap}g (~{RENAL_PROTEIN_GKG_CEILING} g/kg × {_wkg_renal:.1f}kg); kcal "
+                    f"{_renal_cap}g (~{_gkg_renal} g/kg × {_wkg_renal:.1f}kg); kcal "
                     f"reasignadas a {_reassigned}{' (comorbilidad DM2)' if _renal_diabetic else ''}. "
                     f"Gate de revisión profesional forzado (FS9).")
         except Exception as _renal_e:
