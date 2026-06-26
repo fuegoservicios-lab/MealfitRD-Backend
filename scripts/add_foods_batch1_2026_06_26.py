@@ -37,6 +37,7 @@ except Exception:
     pass
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 _NEON = os.environ.get("NEON_DATABASE_URL_POOLED") or os.environ.get("NEON_DATABASE_URL")
 COMMIT = "--commit" in sys.argv
@@ -61,18 +62,19 @@ def _load_records():
 # envase (P1-PKG-DURATION-PRICING). Si lo dejas None, el costeo usa price_per_lb/unit simple.
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 PRICES = {
-    # --- Proteína vegana (Proteínas: por unidad/paquete) ---
-    "Tofu firme":            {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Soya texturizada":      {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Edamame":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    # --- Proteína vegana (Despensa: leguminosas secas / semillas, por lb) ---
-    "Guisantes secos":       {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Frijoles pintos":       {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Habas":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Merey":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Semillas de calabaza":  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Semillas de girasol":   {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Nuez":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # walnut (reemplaza Tempeh, no disponible RD)
+    # --- Proteína vegana — PRECIOS RD (La Sirena/Nacional, 2026-06-26) vía "packages" (cost-óptimo) ---
+    "Tofu firme":            {"packages": [{"unit": "lata", "grams": 539, "label": "19 oz", "price": 250}]},
+    "Soya texturizada":      {"packages": [{"unit": "paquete", "grams": 200, "label": "200 g", "price": 100}]},
+    "Edamame":               {"packages": [{"unit": "paquete", "grams": 500, "label": "500 g", "price": 195}]},
+    "Guisantes secos":       {"packages": [{"unit": "lata", "grams": 425, "label": "15 oz", "price": 125}]},
+    "Frijoles pintos":       {"packages": [{"unit": "paquete", "grams": 800, "label": "800 g", "price": 127}]},
+    "Habas":                 {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 205}]},
+    "Merey":                 {"packages": [{"unit": "tarro", "grams": 113, "label": "4 oz", "price": 255},
+                                           {"unit": "tarro", "grams": 198, "label": "7 oz", "price": 385},
+                                           {"unit": "paquete", "grams": 411, "label": "14.5 oz", "price": 689}]},
+    "Semillas de calabaza":  {"packages": [{"unit": "tarro", "grams": 227, "label": "8 oz", "price": 305}]},
+    "Semillas de girasol":   {"packages": [{"unit": "paquete", "grams": 400, "label": "400 g", "price": 145}]},
+    "Nuez":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # walnut: FALTA precio (no estaba en tu tabla)
     # --- Vegetales ---
     "Champiñones":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Remolacha":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
@@ -128,7 +130,29 @@ _COLMAP = {
 def _is_priced(p):
     if not p:
         return False
-    return bool(p.get("price_per_lb")) or bool(p.get("price_per_unit"))
+    return bool(p.get("packages")) or bool(p.get("price_per_lb")) or bool(p.get("price_per_unit"))
+
+
+def _derive_price_fields(p):
+    """De un PRICES entry deriva los campos DB de precio/envase.
+    Con "packages" [{unit,grams,label,price}]: market_packages (cost-óptimo P1-PKG) + price_per_unit (envase
+    más pequeño = default de compra) + price_per_lb (mejor $/g × 453.6, tarifa a granel) + container_weight_g/
+    market_container/available_sizes_g. Garantiza price_per_unit>0 → pasa el gate de verificados (shopping
+    _verified_ingredients). Sin packages: usa los precios planos."""
+    pkgs = p.get("packages") or []
+    if pkgs:
+        pkgs_sorted = sorted(pkgs, key=lambda x: x["grams"])
+        smallest = pkgs_sorted[0]
+        best_per_g = min(x["price"] / x["grams"] for x in pkgs)
+        return {
+            "market_packages": Jsonb(pkgs),
+            "available_sizes_g": Jsonb(sorted({int(round(x["grams"])) for x in pkgs})),
+            "price_per_unit": smallest["price"],
+            "price_per_lb": round(best_per_g * 453.592, 2),
+            "container_weight_g": smallest["grams"],
+            "market_container": smallest.get("unit"),
+        }
+    return {"price_per_lb": p.get("price_per_lb") or 0, "price_per_unit": p.get("price_per_unit") or 0}
 
 
 def main():
@@ -143,7 +167,7 @@ def main():
     if not _NEON:
         print("FATAL: NEON url ausente"); sys.exit(1)
 
-    today = datetime.date.today().isoformat()
+    today = datetime.date.today()
     inserted = skipped_exist = skipped_price = 0
     with psycopg.connect(_NEON) as conn:
         existing = {row[0] for row in conn.execute("SELECT name FROM public.master_ingredients").fetchall()}
@@ -166,11 +190,8 @@ def main():
                 "density_g_per_unit": r.get("density_g_per_unit"),
                 "nutrition_source": "usda", "nutrition_source_date": today,
                 "fdc_id": r.get("fdc_id"),
-                "price_per_lb": price.get("price_per_lb") or 0,
-                "price_per_unit": price.get("price_per_unit") or 0,
             }
-            if price.get("market_packages"):
-                cols["market_packages"] = json.dumps(price["market_packages"])
+            cols.update(_derive_price_fields(price))  # price_per_lb/unit + market_packages + container + sizes
             for k, dbcol in _COLMAP.items():
                 cols[dbcol] = r.get(k)
             colnames = list(cols.keys())
@@ -182,7 +203,8 @@ def main():
                     vals,
                 )
             print(f"  {'+ INSERTADO' if COMMIT else '+ (dry) insertaría'}: {nm} [{r['category']}] "
-                  f"({r['kcal']}kcal/{r['protein_g']}P) precio={price.get('price_per_lb') or price.get('price_per_unit')}")
+                  f"({r['kcal']}kcal/{r['protein_g']}P) unit={cols.get('price_per_unit')} lb={cols.get('price_per_lb')} "
+                  f"pkgs={len(price.get('packages') or [])}")
             inserted += 1
         if COMMIT:
             conn.commit()
