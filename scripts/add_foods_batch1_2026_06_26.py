@@ -89,6 +89,7 @@ PRICES = {
     "Rábano":                {"packages": [{"unit": "paquete", "grams": 200, "label": "8 unid (~200 g est.)", "price": 85}]},  # Lucas Pérez; ~8 rábanos, gramos estimados
     "Espárragos":            {"packages": [{"unit": "paquete", "grams": 450, "label": "450 g", "price": 405}]},
     "Coles de Bruselas":     {"packages": [{"unit": "paquete", "grams": 900, "label": "900 g", "price": 220}]},
+    "Nori":                  {"packages": [{"unit": "paquete", "grams": 28, "label": "28 g (10 hojas)", "price": 149}]},  # alga marina (reemplaza el slot acelga)
     # --- Frutas ---
     "Guayaba":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Guanábana":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
