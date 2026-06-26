@@ -63,7 +63,6 @@ def _load_records():
 PRICES = {
     # --- Proteína vegana (Proteínas: por unidad/paquete) ---
     "Tofu firme":            {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Tempeh":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Soya texturizada":      {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Edamame":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     # --- Proteína vegana (Despensa: leguminosas secas / semillas, por lb) ---
@@ -73,6 +72,7 @@ PRICES = {
     "Merey":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Semillas de calabaza":  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Semillas de girasol":   {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Nuez":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # walnut (reemplaza Tempeh, no disponible RD)
     # --- Vegetales ---
     "Champiñones":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Remolacha":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
