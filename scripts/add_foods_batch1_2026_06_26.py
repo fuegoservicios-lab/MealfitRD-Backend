@@ -97,6 +97,7 @@ PRICES = {
     "Mandarina":             {"price_per_lb": 109},
     "Toronja":               {"price_per_lb": 140},
     "Uva":                   {"price_per_lb": 169},
+    "Coco":                  {"packages": [{"unit": "unidad", "grams": 300, "label": "1 coco (~300g pulpa)", "price": 69}]},  # alimento nuevo (coco entero)
     # --- Lácteos vegetales — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
     "Leche de almendras":    {"packages": [{"unit": "carton", "grams": 946, "label": "32 oz", "price": 260}]},
     "Leche de coco":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "Coco unidad@69" es COCO ENTERO (fruta), no leche de coco (bebida)
