@@ -75,19 +75,20 @@ PRICES = {
     "Semillas de calabaza":  {"packages": [{"unit": "tarro", "grams": 227, "label": "8 oz", "price": 305}]},
     "Semillas de girasol":   {"packages": [{"unit": "paquete", "grams": 400, "label": "400 g", "price": 145}]},
     "Nueces mixtas":         {"packages": [{"unit": "paquete", "grams": 100, "label": "100 g", "price": 95}]},
-    # --- Vegetales ---
-    "Champiñones":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Remolacha":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Apio":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Acelga":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Berro":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Rúcula":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Calabacín":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Kale":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Repollo morado":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Rábano":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Espárragos":            {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Coles de Bruselas":     {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    # --- Vegetales — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
+    "Champiñones":           {"packages": [{"unit": "paquete", "grams": 227, "label": "8 oz", "price": 205}]},
+    "Remolacha":             {"price_per_lb": 45},
+    "Apio":                  {"price_per_lb": 49},
+    "Acelga":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "Paquete 28g" implausible ($5.3/g) — ¿280g?
+    "Berro":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "Paquete" sin gramos — necesito peso
+    "Rúcula":                {"packages": [{"unit": "paquete", "grams": 57, "label": "2 oz", "price": 43},
+                                           {"unit": "paquete", "grams": 227, "label": "8 oz", "price": 130}]},
+    "Calabacín":             {"price_per_lb": 49},
+    "Kale":                  {"packages": [{"unit": "paquete", "grams": 170, "label": "6 oz", "price": 205}]},
+    "Repollo morado":        {"price_per_lb": 59},
+    "Rábano":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "8 unid" — necesito gramos del paquete
+    "Espárragos":            {"packages": [{"unit": "paquete", "grams": 450, "label": "450 g", "price": 405}]},
+    "Coles de Bruselas":     {"packages": [{"unit": "paquete", "grams": 900, "label": "900 g", "price": 220}]},
     # --- Frutas ---
     "Guayaba":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Guanábana":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
