@@ -8816,6 +8816,16 @@ PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
 # KDIGO (RENAL_CAP_FAILHARD_GATE) manda; subir proteína sería iatrogénico. Mirror del patrón
 # renal. Flip a False → revierte al best-effort previo (entrega con disclaimer).
 PROTEIN_FLOOR_FAILHARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_FAILHARD_GATE", True)
+# [P1-PROTEIN-FLOOR-DELIVER · 2026-06-26] (auditoría gap #3) El FAILHARD de arriba sustituía el plan por el
+# fallback matemático, PERO ese fallback nace con `aggregated_shopping_list = []` (la lista se construye en
+# assemble_plan_node, que ya corrió) → el guard SSE/sync lo trata como `_is_fallback` y ERRORea (422/503) →
+# CERO plan tras una "garantía", con el toast engañoso "Revisa tus restricciones". El plan ORIGINAL del LLM
+# sí tiene lista de compras completa. Con este knob ON, cuando el ÚNICO motivo de fallo es el piso de
+# proteína (no schema inválido ni rechazo médico crítico — esos SIEMPRE van al fallback por seguridad),
+# entregamos el plan original como DEGRADADO (MODE 1: banner ámbar + disclaimer honesto "bajo tu meta de
+# proteína, regenera"), en vez de cero-plan. Es la ruta de entrega ya probada (_review_failed_but_delivered).
+# Flip a False → revierte al swap-a-fallback (que hoy = cero-plan). tooltip-anchor: P1-PROTEIN-FLOOR-DELIVER.
+PROTEIN_FLOOR_DELIVER_DEGRADED = _env_bool("MEALFIT_PROTEIN_FLOOR_DELIVER_DEGRADED", True)
 # [P2-SHOPPING-COMPLETENESS · 2026-06-21] Mínimo de completitud de la lista de compras (Fase 5 del
 # build "todo terreno"). El owner: "la lista debe tener un mínimo de alimentos para que los planes
 # estén al 100%, dependiendo si es de 7/15/30 días". La lista DERIVA del plan (cuyos gates de
@@ -20229,6 +20239,24 @@ def _apply_critical_review_guardrails(
                 len(_pf_short), "; ".join(f"Día {d}:{p}/{t}g" for d, p, t in _pf_short),
             )
 
+    # [P1-PROTEIN-FLOOR-DELIVER · 2026-06-26] (auditoría gap #3) Si el ÚNICO motivo de fallo es el piso de
+    # proteína (no schema inválido ni rechazo médico crítico — esos van SIEMPRE al fallback por seguridad),
+    # NO swappear al fallback matemático (nace con lista de compras VACÍA → el guard lo rechaza = cero-plan
+    # tras una "garantía", con el toast engañoso "Revisa tus restricciones"). En su lugar, entregar el plan
+    # ORIGINAL del LLM (que SÍ tiene lista completa) como DEGRADADO más abajo (MODE 1). Cerrar el piso de
+    # forma compliant + deliverable requeriría construir la lista del fallback (trabajo futuro).
+    _protein_floor_deliver_degraded = (
+        PROTEIN_FLOOR_DELIVER_DEGRADED and _protein_floor_breach
+        and not schema_invalid and rejection_severity != "critical"
+    )
+    if _protein_floor_deliver_degraded:
+        _protein_floor_breach = False  # no disparar needs_critical_fallback por el piso de proteína
+        logger.warning(
+            "⚠️ [P1-PROTEIN-FLOOR-DELIVER] Plan bajo el piso de proteína tras agotar retries → entregando "
+            "el plan ORIGINAL degradado (con su lista de compras) en vez del fallback de lista vacía "
+            "(que el guard rechazaría = cero-plan)."
+        )
+
     needs_critical_fallback = isinstance(plan_result, dict) and not already_fallback and (
         schema_invalid
         or (not review_passed and rejection_severity == "critical")
@@ -20295,11 +20323,21 @@ def _apply_critical_review_guardrails(
         plan_result["_review_failed_but_delivered"] = True
         plan_result["_review_issues"] = rejection_reasons
         plan_result["_review_severity"] = rejection_severity or "minor"
-        plan_result["_review_disclaimer"] = (
-            "Este plan no superó completamente la verificación médica automática. "
-            "Las observaciones encontradas son no-críticas, pero te recomendamos "
-            "regenerarlo o revisarlo con tu nutricionista."
-        )
+        if _protein_floor_deliver_degraded:
+            # [P1-PROTEIN-FLOOR-DELIVER · 2026-06-26] (audit gap #3) Disclaimer específico de proteína (no
+            # "verificación médica"): el plan es válido y completo, solo no alcanza del todo la meta de proteína.
+            plan_result["_fallback_reason"] = "protein_floor"
+            plan_result["_review_disclaimer"] = (
+                "Tras varios intentos, este plan no alcanza del todo tu meta de proteína. Es un plan "
+                "completo y válido (incluye tu lista de compras); te recomendamos regenerarlo para "
+                "acercarlo más a tu objetivo de proteína."
+            )
+        else:
+            plan_result["_review_disclaimer"] = (
+                "Este plan no superó completamente la verificación médica automática. "
+                "Las observaciones encontradas son no-críticas, pero te recomendamos "
+                "regenerarlo o revisarlo con tu nutricionista."
+            )
 
 
 def _apply_final_defense_guardrails(
