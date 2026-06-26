@@ -8737,6 +8737,14 @@ PRO_REVIEW_FLAG_ENABLED = _env_bool("MEALFIT_PRO_REVIEW_FLAG", True)
 # el cap+threshold. El lever upstream es el prompt; esto da presión de retry. Flip a False → advisory.
 VARIETY_HARD_GATE_ENABLED = _env_bool("MEALFIT_VARIETY_HARD_GATE", True)
 VARIETY_HARD_GATE_EGG_SLACK = _env_int("MEALFIT_VARIETY_HARD_GATE_EGG_SLACK", 1)  # rechaza si egg > cap+slack
+# [P2-VARIETY-GATE-REPEAT · 2026-06-25] Fruta dulce repetida + plato-base repetido el mismo día como
+# gate de RETRY (eran advisory en build_variety_report). El lever upstream es el prompt (regla 15f);
+# esto añade presión de retry acotada (should_retry entrega en el attempt final) cuando el LLM no
+# obedece. FRUIT default ON (señal clara, bajo falso-positivo). BASE_DISH default OFF: el detector
+# de plato-base incluye técnicas comunes ('ensalada','plancha','salteado') que pueden repetirse
+# legítimamente el mismo día (pollo a la plancha + pescado a la plancha) → gatear-las sobre-reintentaría.
+VARIETY_GATE_FRUIT_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_REPEAT", True)
+VARIETY_GATE_BASE_DISH_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT", False)
 
 # [P3-PROTEIN-FLOOR · 2026-06-13] Cierre DURO del déficit de proteína (la re-auditoría del
 # plan fresco encontró que se entregaba 68% del target). El closer rellena cada comida a
@@ -11252,6 +11260,34 @@ def build_variety_report(plan: dict) -> dict:
             "fruit_repeats": fruit_repeats,
             "cross_day_proteins": cross_day_proteins, "issues": issues,
             "ok": not issues}
+
+
+def _variety_repeat_gate_issues(variety_report: dict) -> list:
+    """[P2-VARIETY-GATE-REPEAT · 2026-06-25] Convierte fruta-repetida / plato-base-repetido (advisory
+    en `build_variety_report`) en motivos de RECHAZO para `review_plan_node` cuando los knobs están ON.
+    Retorna la lista de issues con directiva de retry (vacía = no rechaza). El retry lo acota
+    `should_retry` (entrega en el attempt final, NO loop infinito). Helper puro → unit-testable.
+    Anchor: P2-VARIETY-GATE-REPEAT."""
+    out = []
+    if not isinstance(variety_report, dict):
+        return out
+    try:
+        if VARIETY_GATE_FRUIT_REPEAT and int(variety_report.get("fruit_repeats", 0)) > 0:
+            out.append(
+                "FRUTA REPETIDA EL MISMO DÍA (rechazo de variedad): una misma fruta dulce aparece en "
+                "2+ comidas del mismo día. Usa una fruta DISTINTA en cada comida del día (lechosa, "
+                "guineo, piña, fresa, manzana, naranja…) y NO combines fruta dulce con huevo/salado "
+                "en el mismo plato (ej. evita 'revoltillo de huevos con mango')."
+            )
+        if VARIETY_GATE_BASE_DISH_REPEAT and int(variety_report.get("same_day_repeats", 0)) > 0:
+            out.append(
+                "PLATO-BASE REPETIDO EL MISMO DÍA (rechazo de variedad): el mismo tipo de plato "
+                "(p.ej. revoltillo/huevos revueltos, batido) aparece 2+ veces el mismo día. Rota a "
+                "preparaciones distintas en cada comida del día."
+            )
+    except Exception:
+        return []
+    return out
 
 
 # [P3-SLOT-DISTRIBUTION · 2026-06-13] Mapa nombre-de-slot (es-DO) → key del split canónico.
@@ -15538,6 +15574,13 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         f"magra, queso de freír, yogur griego, habichuelas) — NO uses huevo como relleno "
                         f"por defecto. Mantén el huevo solo en desayunos/platos donde es el protagonista."
                     )
+                    severity = _severity_max(severity, "high")
+                # [P2-VARIETY-GATE-REPEAT] Fruta dulce repetida / plato-base repetido el mismo día →
+                # rechazo (retry acotado). Detector en build_variety_report; lever upstream = prompt 15(f).
+                for _rep_issue in _variety_repeat_gate_issues(_vr):
+                    logger.warning(f"🍓 [P2-VARIETY-GATE-REPEAT] {_rep_issue[:64]}… → rechazo para diversificar")
+                    approved = False
+                    issues.append(_rep_issue)
                     severity = _severity_max(severity, "high")
         except Exception as _vg_e:
             logger.warning(f"[P3-VARIETY-HARD-GATE] validador falló: {type(_vg_e).__name__}: {_vg_e}")
