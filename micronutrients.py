@@ -578,7 +578,10 @@ _SUPPLEMENT_TEMPLATES = {
     # gaps con SUPLEMENTACIÓN, no forzando alimentos en el menú.
     "magnesium_mg": {
         "nombre": "Magnesio (glicinato o citrato)",
-        "dosis": "200–400 mg/día solo si no alcanzas con la dieta (glicinato = mejor tolerado)",
+        # [P1-SUPPLEMENT-UL-SAFE · 2026-06-26] (audit gap #4) El tope del rango era 400 mg, que EXCEDE su
+        # propio UL suplementario de 350 mg declarado abajo → la tarjeta se auto-contradecía. Alineado a 350.
+        "dosis": "200–350 mg/día solo si no alcanzas con la dieta (glicinato = mejor tolerado)",
+        "ul": 350,  # [P1-SUPPLEMENT-UL-SAFE] UL suplementario (mg). Test de regresión ancla dosis_max ≤ ul.
         "alimentos": "hoja verde, legumbres, nueces/semillas (calabaza/ajonjolí), avena, cacao, aguacate",
         "precaucion": "no exceder 350 mg/día en forma suplementaria (UL); el exceso es laxante. Precaución en enfermedad renal.",
     },
@@ -597,20 +600,36 @@ _SUPPLEMENT_TEMPLATES = {
 }
 
 
+# [P1-SUPPLEMENT-CONDITION-AWARE · 2026-06-26] (audit gap #4) Suplementos a SUPRIMIR ante una condición
+# médica donde la forma suplementaria es un riesgo activo (no solo "precaución"). Magnesio en ERC →
+# hipermagnesemia (el riñón insuficiente no excreta el exceso → riesgo cardíaco/neuromuscular): NO se
+# sugiere dosis. El paciente igual ve el micro "bajo" en el panel (informativo), pero sin tarjeta de dosis.
+# Mismo principio fail-secure que el potasio (que nunca tiene plantilla). El balance fino lo define su
+# nefrólogo. Si añades un suplemento riesgoso en otra condición, agrégalo aquí con su razón.
+_SUPPLEMENT_RENAL_SUPPRESS = frozenset({"magnesium_mg"})
+
+
 def build_supplement_recommendations(report: dict, sex: str | None = "F", age: int | None = None,
-                                     pregnant: bool = False) -> dict:
+                                     pregnant: bool = False, conditions=None) -> dict:
     """[P3-SUPPLEMENT-ADVICE · 2026-06-13] A partir de los gaps FLOOR del reporte de
     micronutrientes (vit D/calcio/hierro/B12 bajo), construye recomendaciones de
     suplementación ACCIONABLES (suplemento + dosis sex-aware + alternativa alimentaria +
     precaución). Cierra de forma honesta lo que los alimentos enteros rara vez alcanzan.
-    NO prescribe: incluye disclaimer profesional. Retorna {items, disclaimer, count}."""
+    NO prescribe: incluye disclaimer profesional. Retorna {items, disclaimer, count}.
+
+    [P1-SUPPLEMENT-CONDITION-AWARE · 2026-06-26] `conditions` (lista de strings del perfil) suprime
+    suplementos riesgosos para una condición declarada — hoy: magnesio en ERC (hipermagnesemia)."""
     male = str(sex or "").strip().lower() in _MALE_TERMS
+    renal = _has_renal(conditions) if conditions else False
     items = []
     for g in (report.get("gaps") or []):
         key = g.get("key")
         tpl = _SUPPLEMENT_TEMPLATES.get(key)
         if not tpl or g.get("status") not in ("bajo", "estimado_bajo"):
             continue  # solo floors realmente bajos; ceilings (sodio/azúcar) no son suplemento
+        if renal and key in _SUPPLEMENT_RENAL_SUPPRESS:
+            # [P1-SUPPLEMENT-CONDITION-AWARE] fail-secure: en ERC NO sugerimos dosis de magnesio.
+            continue
         dose = tpl.get("dosis")
         if key == "iron_mg":
             # [P2-IRON-DOSE-AGE-AWARE · 2026-06-19] (P2-7) age-aware como el piso DRI: mujer ≥51 → dosis

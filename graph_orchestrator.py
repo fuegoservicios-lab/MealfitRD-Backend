@@ -10078,7 +10078,9 @@ def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None
         if SUPPLEMENT_ADVICE_ENABLED:
             try:
                 from micronutrients import build_supplement_recommendations
-                _supp = build_supplement_recommendations(_mn, sex=_sex, age=_fd.get("age"), pregnant=_pregnant)
+                _supp = build_supplement_recommendations(
+                    _mn, sex=_sex, age=_fd.get("age"), pregnant=_pregnant,
+                    conditions=_condition_strings(_fd))  # [P1-SUPPLEMENT-CONDITION-AWARE] suprime Mg en ERC
                 if _supp.get("count"):
                     plan["micronutrient_supplement_advice"] = _supp
             except Exception:
@@ -12245,7 +12247,8 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
             if SUPPLEMENT_ADVICE_ENABLED:
                 from micronutrients import build_supplement_recommendations
                 _supp = build_supplement_recommendations(_mn, sex=_sex, age=form_data.get("age"),
-                                                         pregnant=_pregnant)  # [P2-IRON-DOSE-AGE-AWARE / P2-SUPPLEMENT-PREGNANCY-AWARE]
+                                                         pregnant=_pregnant,  # [P2-IRON-DOSE-AGE-AWARE / P2-SUPPLEMENT-PREGNANCY-AWARE]
+                                                         conditions=_condition_strings(form_data))  # [P1-SUPPLEMENT-CONDITION-AWARE] suprime Mg en ERC
                 if _supp.get("count"):
                     plan["micronutrient_supplement_advice"] = _supp
                     logger.info(f"💊 [P3-SUPPLEMENT-ADVICE] {_supp['count']} recomendación(es) de "
