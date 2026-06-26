@@ -8791,6 +8791,13 @@ VARIETY_GATE_BASE_DISH_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT
 # lo hace gate de RETRY (con la misma degradación a advisory en intento final que el resto de gates de
 # variedad → cero riesgo de cero-plan). Default ON: el owner pidió explícitamente que esto NO pase.
 VARIETY_GATE_FRUIT_CLASH = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_CLASH", True)
+# [P1-FRUIT-DEDUP · 2026-06-26] (auditoría gap #7) De-dup DETERMINISTA de fruta dulce repetida el mismo día:
+# reescribe la 2ª+ aparición a una fruta del pool no usada ese día (nombre + ingredientes). Cierra el cierre
+# que el gate de variedad dejaba abierto (project_variety_repeat_graceful: en el intento final el gate degrada
+# a advisory y ENTREGABA la repetición; el auto-swap estaba scopeado como follow-up NO hecho). Corre en la
+# capa clínica ANTES de build_variety_report + de la agregación de compras → el gate rara vez se dispara y la
+# lista queda coherente con el swap. Default ON. Flip a False revierte a solo-gate (entrega repetición en final).
+FRUIT_DEDUP_ENABLED = _env_bool("MEALFIT_FRUIT_DEDUP", True)
 # [P1-VARIETY-REPEAT-GRACEFUL · 2026-06-26] Degradación con gracia del gate de variedad-repetida.
 # En el ÚLTIMO intento (attempt >= MAX_ATTEMPTS) la fruta-repetida / plato-base-repetido NO debe
 # RECHAZAR el plan: es un defecto cosmético y bloquearlo convierte un plan válido en un fallback de
@@ -11434,6 +11441,71 @@ def _name_has_token(token: str, text_low: str) -> bool:
         return token in text_low
 
 
+# [P1-FRUIT-DEDUP · 2026-06-26] (audit gap #7) Pool de frutas dulces de reemplazo (nombres del catálogo es-DO
+# → resuelven en la lista de compras). El de-dup reescribe la 2ª+ fruta repetida a una del pool no usada ese día.
+_FRUIT_DEDUP_POOL = ("Lechosa", "Guineo", "Piña", "Fresas", "Manzana", "Melón", "Pera", "Mango", "Sandía")
+_ACCENT_FLEX_MAP = {"a": "[aá]", "e": "[eé]", "i": "[ií]", "o": "[oó]", "u": "[uúü]", "n": "[nñ]"}
+
+
+def _accent_flex_pattern(stripped_word: str) -> str:
+    """Patrón regex que matchea `stripped_word` (sin acentos) contra su forma ACENTUADA en el texto original:
+    'pina'→'p[ií][nñ][aá]' matchea 'piña'/'Piña'; 'melon'→'mel[oó][nñ]' matchea 'melón'. [P1-FRUIT-DEDUP]"""
+    return "".join(_ACCENT_FLEX_MAP.get(ch, _re.escape(ch)) for ch in stripped_word)
+
+
+def dedup_featured_fruits_in_plan(plan: dict) -> int:
+    """[P1-FRUIT-DEDUP · 2026-06-26] (audit gap #7) Reescribe determinísticamente la 2ª+ aparición de una
+    fruta dulce FEATURED repetida el MISMO día a una fruta del pool no usada ese día (en el NOMBRE + los
+    ingredientes). Retorna nº de swaps; mutates `plan` in-place. Fail-safe TOTAL (cualquier error → plan
+    intacto). Corre en la capa clínica ANTES de build_variety_report + de la agregación de compras → la lista
+    refleja el swap (coherente receta↔lista). El drift de macros es despreciable (frutas iso-calóricas)."""
+    if not isinstance(plan, dict):
+        return 0
+    try:
+        from constants import strip_accents as _sa
+    except Exception:
+        def _sa(s):
+            return s
+    swaps = 0
+    pool = [(_sa(f.lower()), f) for f in _FRUIT_DEDUP_POOL]
+    try:
+        for day in plan.get("days", []) or []:
+            seen = set()  # frutas featured ya usadas este día (accent-stripped)
+            for meal in (day.get("meals", []) or []):
+                if not isinstance(meal, dict):
+                    continue
+                name = str(meal.get("name", ""))
+                name_low = _sa(name.lower())
+                fr = next((f for f in _FEATURED_FRUITS if f in name_low), None)
+                if not fr:
+                    continue
+                if fr not in seen:
+                    seen.add(fr)
+                    continue
+                # fruta REPETIDA el mismo día → reemplazar por una del pool no usada ese día
+                repl = next((orig for low, orig in pool if low not in seen and low != fr), None)
+                if not repl:
+                    continue
+                try:
+                    pat = _re.compile(r"(?i)" + _accent_flex_pattern(fr) + r"s?")
+                    new_name, n = pat.subn(repl, name, count=1)
+                    if n == 0:
+                        continue  # no se pudo localizar la forma superficial en el nombre → no tocar (seguro)
+                    meal["name"] = new_name
+                    ings = meal.get("ingredients")
+                    if isinstance(ings, list):
+                        meal["ingredients"] = [
+                            (pat.sub(repl, str(i), count=1) if fr in _sa(str(i).lower()) else i) for i in ings
+                        ]
+                    seen.add(_sa(repl.lower()))
+                    swaps += 1
+                except Exception:
+                    continue
+    except Exception:
+        return swaps
+    return swaps
+
+
 def build_variety_report(plan: dict) -> dict:
     """[P3-VARIETY · 2026-06-13] Reporte ADVISORY de variedad/pertinencia cultural (FS5):
     cuenta apariciones de huevo, descriptor 'cremoso', ingredientes premium, y platos-base
@@ -12340,6 +12412,19 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                                 f"suplementación para cerrar gaps de micros")
         except Exception as _mn_e:
             logger.warning(f"[P3-MICRONUTRIENTS] error: {type(_mn_e).__name__}: {_mn_e}")
+
+    # [P1-FRUIT-DEDUP · 2026-06-26] (audit gap #7) De-dup determinista de fruta repetida ANTES del variety
+    # report + de la agregación de compras (más abajo en assemble) → el gate de variedad rara vez se dispara
+    # y la lista de compras refleja el swap (coherente). Fail-safe. Cierra "entrega la repetición en el intento
+    # final". Corre aquí (capa clínica) porque es el último punto antes de que se construya la lista.
+    if FRUIT_DEDUP_ENABLED:
+        try:
+            _ndedup = dedup_featured_fruits_in_plan(plan)
+            if _ndedup:
+                logger.info(f"🍓 [P1-FRUIT-DEDUP] {_ndedup} fruta(s) repetida(s) el mismo día reescrita(s) "
+                            f"a una fruta distinta (de-dup determinista, pre-lista de compras).")
+        except Exception as _fd_e:
+            logger.warning(f"[P1-FRUIT-DEDUP] de-dup falló (plan intacto): {type(_fd_e).__name__}: {_fd_e}")
 
     # ── Guard 6 (FS5): reporte advisory de variedad/pertinencia cultural (espejo [P3-VARIETY]) ──
     if VARIETY_REPORT_ENABLED:
