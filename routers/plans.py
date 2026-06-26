@@ -3369,6 +3369,13 @@ async def api_analyze_stream(
                     return True
                 return False
 
+            # [P1-ANALYZE-NO-CHARGE-ON-FALLBACK · 2026-06-26] Flag de "no se entregó plan
+            # utilizable". Se setea True en los exits de fallback (IA caída / rechazo crítico /
+            # spend-cap / persist-failed / error duro de pipeline) para que el `finally` NO cobre
+            # un crédito del cap cuando el usuario no recibió plan (paridad con S2 `if not
+            # _ai_unavailable` y S3 charge-on-success). Default False → success y cancel (plan
+            # recuperable async vía /pending-status) SÍ cobran.
+            _plan_delivery_failed = False
             try:
                 while True:
                     # [P6-CANCEL-PROPAGATION-FIX] Chequeo PRE-evento: si user
@@ -3410,6 +3417,9 @@ async def api_analyze_stream(
                         _sse_completed_naturally["flag"] = True
                         # Enviar resultado final o error
                         if pipeline_result["error"]:
+                            # [P1-ANALYZE-NO-CHARGE-ON-FALLBACK · 2026-06-26] Error duro del
+                            # pipeline → no se entrega plan; no cobrar el crédito.
+                            _plan_delivery_failed = True
                             yield f"data: {_json.dumps({'event': 'error', 'data': {'message': pipeline_result['error']}})}\n\n"
                         elif pipeline_result["result"]:
                             result = pipeline_result["result"]
@@ -3447,6 +3457,8 @@ async def api_analyze_stream(
                                     logger.warning(
                                         f"🛑 [FALLBACK-GUARD/SSE] Rechazo crítico (restricción declarada). "
                                         f"No se persiste. user={actual_user_id or 'guest'}")
+                                    # [P1-ANALYZE-NO-CHARGE-ON-FALLBACK · 2026-06-26] Rechazo crítico (restricción declarada no satisfecha) → no cobrar.
+                                    _plan_delivery_failed = True
                                     yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'critical_restriction', 'message': _crit_msg}})}\n\n"
                                     break
                                 # [P1-SPEND-CAP-ALERT · 2026-05-28] Mensaje honesto
@@ -3467,6 +3479,8 @@ async def api_analyze_stream(
                                     'La IA está temporalmente saturada y no pudimos generar tu plan. '
                                     'Por favor intenta de nuevo en 1-2 minutos.'
                                 )
+                                # [P1-ANALYZE-NO-CHARGE-ON-FALLBACK · 2026-06-26] IA caída / spending-cap → no cobrar.
+                                _plan_delivery_failed = True
                                 yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'llm_unavailable', 'message': _fallback_msg}})}\n\n"
                                 break
 
@@ -3575,6 +3589,8 @@ async def api_analyze_stream(
                                         logger.warning(
                                             f"[P2-PLAN-PERSIST-FAILED/SSE] KV failed update no-op: {_kv_e!r}"
                                         )
+                                # [P1-ANALYZE-NO-CHARGE-ON-FALLBACK · 2026-06-26] Persistencia falló (plan no guardado) → no cobrar.
+                                _plan_delivery_failed = True
                                 yield f"data: {_json.dumps({'event': 'error', 'data': {'code': 'plan_persist_failed', 'message': 'Generamos tu plan pero no pudimos guardarlo por un problema temporal. Por favor intenta de nuevo.'}})}\n\n"
                                 break
 
@@ -3702,15 +3718,34 @@ async def api_analyze_stream(
                 # [P2-LIVE-7 · 2026-05-11] Audit api_usage. `verify_api_quota`
                 # solo lee — sin log_api_usage, streaming pipelines no contaban
                 # contra el cap mensual del usuario. Log en `finally` para que
-                # se cargue independiente del path de salida (success / error
-                # / cancel): el `_pipeline_task` ya consumió compute LLM al
-                # arrancar, así que el usuario debe pagar.
+                # se cargue independiente del path de salida (success / cancel).
+                #
+                # [P1-ANALYZE-NO-CHARGE-ON-FALLBACK · 2026-06-26] PERO no cobrar cuando el
+                # usuario NO recibió un plan utilizable: los exits de fallback (IA caída /
+                # rechazo crítico / spend-cap / persist-failed / error duro de pipeline) caían al
+                # MISMO finally que el éxito → quemaban un crédito del cap sin entregar plan.
+                # Asimetría con S2 (`if not _ai_unavailable`, P1-REGEN-DAY-PARTIAL-AI-DEGRADE) y
+                # S3 (charge-on-success, P2-SWAP-CHARGE-ON-SUCCESS) que ya hacen lo correcto. El
+                # sub-caso circuit-breaker/spend-cap ni siquiera consumió compute (propósito del
+                # breaker). `cancel` SÍ cobra: el pipeline sigue en background (deep-search) y el
+                # user recupera el plan vía /pending-status, así que entregó plan. Knob
+                # MEALFIT_CHARGE_ON_FALLBACK=true revierte al cobro incondicional sin redeploy.
+                # Tooltip-anchor: P1-ANALYZE-NO-CHARGE-ON-FALLBACK.
+                _charge_on_fallback = os.environ.get(
+                    "MEALFIT_CHARGE_ON_FALLBACK", "false"
+                ).strip().lower() in ("1", "true", "yes", "on")
                 if user_id and user_id != "guest" and user_id != session_id:
-                    try:
-                        log_api_usage(user_id, "llm_analyze_stream")
-                    except Exception as _audit_err:
-                        logger.warning(
-                            f"[P2-LIVE-7] log_api_usage analyze_stream falló: {_audit_err}"
+                    if not _plan_delivery_failed or _charge_on_fallback:
+                        try:
+                            log_api_usage(user_id, "llm_analyze_stream")
+                        except Exception as _audit_err:
+                            logger.warning(
+                                f"[P2-LIVE-7] log_api_usage analyze_stream falló: {_audit_err}"
+                            )
+                    else:
+                        logger.info(
+                            f"[P1-ANALYZE-NO-CHARGE-ON-FALLBACK] No se cobra crédito: el usuario "
+                            f"no recibió plan utilizable (fallback/error). user={user_id[:8]}"
                         )
 
         return StreamingResponse(

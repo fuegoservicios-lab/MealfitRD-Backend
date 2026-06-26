@@ -140,7 +140,15 @@ def test_p1_4_frontend_surfaces_ai_interrupted():
 
 # ── marker + freshness ────────────────────────────────────────────────────────
 def test_p1_marker_bumped():
-    assert "P1-UPDATE-INTELLIGENCE-2" in APP, "_LAST_KNOWN_PFIX debe reflejar este cierre"
+    # [de-pin · 2026-06-26] `_LAST_KNOWN_PFIX` es single-valued: pinear el valor
+    # específico de ESTE cierre lo vuelve stale apenas un P-fix posterior bumpea el
+    # marker (pasó con P2-DISH-COHERENCE el 2026-06-25 y P1-ANALYZE-NO-CHARGE-ON-FALLBACK
+    # el 2026-06-26). El contrato DURABLE del bump vive en
+    # test_p3_1_last_known_pfix_freshness (formato + floor de fecha) y
+    # test_p2_hist_audit_14_marker_test_link (cross-link slug↔test). Aquí solo
+    # verificamos que el marker existe y está bien formado (`Pn-... · YYYY-MM-DD`).
+    assert re.search(r'_LAST_KNOWN_PFIX\s*=\s*"P\d+-[A-Z0-9-]+ · \d{4}-\d{2}-\d{2}"', APP), \
+        "_LAST_KNOWN_PFIX debe existir con formato `Pn-... · YYYY-MM-DD`"
 
 
 # ── Funcional (guardado por import de graph_orchestrator) ─────────────────────
