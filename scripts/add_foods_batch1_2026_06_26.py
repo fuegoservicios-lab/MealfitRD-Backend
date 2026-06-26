@@ -74,7 +74,7 @@ PRICES = {
                                            {"unit": "paquete", "grams": 411, "label": "14.5 oz", "price": 689}]},
     "Semillas de calabaza":  {"packages": [{"unit": "tarro", "grams": 227, "label": "8 oz", "price": 305}]},
     "Semillas de girasol":   {"packages": [{"unit": "paquete", "grams": 400, "label": "400 g", "price": 145}]},
-    "Nuez":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # walnut: FALTA precio (no estaba en tu tabla)
+    "Nueces mixtas":         {"packages": [{"unit": "paquete", "grams": 100, "label": "100 g", "price": 95}]},
     # --- Vegetales ---
     "Champiñones":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Remolacha":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
