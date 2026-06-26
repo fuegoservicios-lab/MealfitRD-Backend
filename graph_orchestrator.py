@@ -8703,6 +8703,17 @@ MICRONUTRIENT_CHUNK_RECOMPUTE_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CHUNK_R
 # duro es el prompt (regla de variedad+fidelidad cultural); esto da observabilidad. Cierra FS5.
 VARIETY_REPORT_ENABLED = _env_bool("MEALFIT_VARIETY_REPORT", True)
 
+# [P2-DISH-COHERENCE · 2026-06-25] El protein closer tenía dos defectos de COHERENCIA de plato:
+# (a) decidía ligero-vs-principal leyendo el NOMBRE del plato (no el SLOT) → un snack cuyo nombre
+# no contenía palabra-pista ("Puñado de Almendras y Nueces") caía a la rama "principal" y recibía
+# carne/pescado (camarón) como proteína añadida — incongruente con una merienda; (b) NUNCA
+# reflejaba en el `name` la proteína que añadía como "fuente principal" → el plato terminaba
+# ESCONDIENDO su proteína principal (115g de camarón en un plato llamado solo "almendras y nueces").
+# Este knob activa: fit por SLOT (merienda/desayuno → lácteo/huevo, nunca carne/pescado) + reflejo
+# del ingrediente añadido en el nombre. Flip a False revierte al comportamiento legacy. Anchor:
+# P2-DISH-COHERENCE.
+CLOSER_DISH_COHERENCE_ENABLED = _env_bool("MEALFIT_CLOSER_DISH_COHERENCE", True)
+
 # [P3-SUPPLEMENT-ADVICE · 2026-06-13] A partir de los gaps del panel de micros (vit D/calcio/
 # hierro/B12), genera recomendaciones de suplementación accionables (suplemento+dosis+alimentos
 # +precaución). Cierra honestamente lo que los alimentos enteros rara vez alcanzan. Advisory.
@@ -10492,6 +10503,8 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
             meal["recipe"] = rec + [
                 f"💪 Nota del Nutricionista AI: añade {grams}g de {name_disp} "
                 f"para completar tu objetivo de proteína."]
+        # [P2-DISH-COHERENCE] Refleja en el nombre la proteína de rescate (no esconderla).
+        _reflect_added_protein_in_name(meal, info.name, _sa)
         return grams
     except Exception as e:
         logger.warning(f"[P3-PROTEIN-TOPUP] falló para meal "
@@ -10555,6 +10568,44 @@ def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0) -> lis
     return out
 
 
+def _meal_slot_is_light(meal: dict, strip_accents_fn) -> bool:
+    """[P2-DISH-COHERENCE · 2026-06-25] ¿El SLOT de esta comida es ligero (merienda/desayuno)?
+    El closer decidía ligero-vs-principal SOLO por el nombre del plato; un snack cuyo nombre no
+    contiene palabra-pista ('Puñado de Almendras y Nueces') caía a 'principal' y recibía carne/
+    pescado. Leer el slot (`meal['meal']` o `meal['slot']`) cierra ese hueco: una merienda jamás
+    debe recibir camarón/lomo como proteína añadida. Anchor: P2-DISH-COHERENCE."""
+    slot_low = strip_accents_fn(str(meal.get("meal") or meal.get("slot") or "").lower().strip())
+    return "merienda" in slot_low or "desayuno" in slot_low or "snack" in slot_low
+
+
+def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_fn) -> bool:
+    """[P2-DISH-COHERENCE · 2026-06-25] Si el closer añadió `protein_name` como FUENTE PRINCIPAL de
+    proteína y el nombre del plato NO la menciona, refléjala en el nombre. Un plato nunca debe
+    esconder su proteína principal: el caso observado fue un snack 'Puñado de Almendras y Nueces
+    con Ralladura de Limón' que llevaba 115g de camarón solo en los ingredientes (el usuario leía
+    el nombre y no esperaba camarón). Idempotente: si el primer token de la proteína (≥4 chars) ya
+    está en el nombre, no toca nada. Conector ' y ' si el nombre ya usa ' con ', si no ' con '.
+    Gated por CLOSER_DISH_COHERENCE_ENABLED. Retorna True si renombró. Anchor: P2-DISH-COHERENCE."""
+    try:
+        if not CLOSER_DISH_COHERENCE_ENABLED:
+            return False
+        name = str(meal.get("name") or "").strip()
+        pname = str(protein_name or "").strip()
+        if not name or not pname:
+            return False
+        name_low = strip_accents_fn(name.lower())
+        nm_low = strip_accents_fn(pname.lower())
+        tok = nm_low.split()[0] if nm_low else ""
+        if tok and len(tok) >= 4 and tok in name_low:
+            return False  # la proteína ya está en el nombre → no duplicar
+        proper = " ".join(w.capitalize() for w in pname.split()[:2])  # "yogur griego" → "Yogur Griego"
+        connector = " y " if " con " in f" {name_low} " else " con "
+        meal["name"] = f"{name}{connector}{proper}"
+        return True
+    except Exception:
+        return False
+
+
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, fill_pct: float = 0.92, max_add_g: int = 300) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
@@ -10580,7 +10631,11 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
         name_low = _sa(str(meal.get("name", "")).lower())
         no_cook = any(b in name_low for b in _NO_COOK_BLENDED)
-        light = any(h in name_low for h in _LIGHT_MEAL_HINT)
+        # [P2-DISH-COHERENCE] El slot manda sobre el nombre: una merienda/desayuno es SIEMPRE
+        # ligera (→ lácteo/huevo), aunque su nombre no traiga palabra-pista. Cierra el caso del
+        # snack 'Puñado de Almendras y Nueces' que recibía camarón por leer solo el nombre.
+        light = (any(h in name_low for h in _LIGHT_MEAL_HINT)
+                 or (CLOSER_DISH_COHERENCE_ENABLED and _meal_slot_is_light(meal, _sa)))
         meal_text = _sa((str(meal.get("name", "")) + " "
                          + " ".join(str(i) for i in meal.get("ingredients", []) or [])).lower())
         # Pool de candidatos válidos para el CONTEXTO (no-cook → solo no-cocción-safe).
@@ -10639,6 +10694,9 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             meal["recipe"] = rec + [
                 f"💪 {verb} el {nm} indicado en los ingredientes como fuente principal de "
                 f"proteína de esta comida."]
+        # [P2-DISH-COHERENCE] El closer acaba de meter `chosen` como proteína PRINCIPAL: refléjala
+        # en el nombre si no estaba (no esconder la proteína principal del plato).
+        _reflect_added_protein_in_name(meal, chosen.name, _sa)
         return grams
     except Exception as e:
         logger.warning(f"[P3-PROTEIN-FLOOR] closer falló para meal "
@@ -11040,6 +11098,13 @@ _VARIETY_BASE_CANON = {"revuelto": "revoltillo", "smoothie": "batido",
                        "licuado": "batido", "guisad": "guiso"}
 _PREMIUM_INGREDIENTS = ("ricotta", "yogur griego", "yogurt griego", "queso parmesano",
                         "queso mozzarella", "salmon", "salmón")
+# [P2-DISH-COHERENCE · 2026-06-25] Frutas FEATURED (dulces) para la detección de repetición intra-día.
+# Excluye limón/naranja a propósito: se usan como ralladura/aderezo en varias comidas sin ser
+# "la fruta del plato" (contarlas sobre-flagearía). El caso observado: mango en el desayuno (revoltillo
+# + mango) Y en la merienda (mango + mozzarella) el mismo día → repetición + pareo dudoso.
+_FEATURED_FRUITS = ("mango", "guineo", "banana", "lechosa", "papaya", "pina", "fresa",
+                    "melon", "sandia", "uva", "pera", "manzana", "mandarina", "guayaba",
+                    "chinola", "maracuya", "mamey", "zapote", "cereza", "kiwi", "arandano")
 
 
 def build_variety_report(plan: dict) -> dict:
@@ -11054,11 +11119,12 @@ def build_variety_report(plan: dict) -> dict:
         def strip_accents(s):
             import unicodedata
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
-    total_meals = egg_meals = cremoso = premium = same_day_repeats = 0
+    total_meals = egg_meals = cremoso = premium = same_day_repeats = fruit_repeats = 0
     issues = []
     for day in plan.get("days", []) or []:
         meals = day.get("meals", []) or []
         day_tokens = {}
+        day_fruits = {}
         for meal in meals:
             total_meals += 1
             name_low = strip_accents(str(meal.get("name", "")).lower())
@@ -11073,10 +11139,19 @@ def build_variety_report(plan: dict) -> dict:
             if tok:
                 tok = _VARIETY_BASE_CANON.get(tok, tok)  # colapsa sinónimos del mismo plato
                 day_tokens[tok] = day_tokens.get(tok, 0) + 1
+            # [P2-DISH-COHERENCE] Cuenta frutas FEATURED por su mención en el NOMBRE (1 por meal):
+            # detecta la misma fruta dulce repartida en ≥2 comidas del mismo día (mango ×2).
+            for fr in _FEATURED_FRUITS:
+                if fr in name_low:
+                    day_fruits[fr] = day_fruits.get(fr, 0) + 1
         for tok, n in day_tokens.items():
             if n >= 2:
                 same_day_repeats += 1
                 issues.append(f"Día {day.get('day', '?')}: '{tok}' repetido {n}x el mismo día")
+        for fr, n in day_fruits.items():
+            if n >= 2:
+                fruit_repeats += 1
+                issues.append(f"Día {day.get('day', '?')}: fruta '{fr}' en {n} comidas el mismo día (repetición)")
     egg_cap = max(3, round(total_meals * 0.25))  # ~2-3 en 12 comidas
     if egg_meals > egg_cap:
         issues.append(f"Huevo en {egg_meals}/{total_meals} comidas (cap sugerido {egg_cap})")
@@ -11102,6 +11177,7 @@ def build_variety_report(plan: dict) -> dict:
         cross_day_proteins = {}
     return {"total_meals": total_meals, "egg_meals": egg_meals, "cremoso": cremoso,
             "premium": premium, "same_day_repeats": same_day_repeats,
+            "fruit_repeats": fruit_repeats,
             "cross_day_proteins": cross_day_proteins, "issues": issues,
             "ok": not issues}
 

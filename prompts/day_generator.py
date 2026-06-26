@@ -158,6 +158,19 @@ REGLAS ESTRICTAS:
        galletas de soda → revisor médico rechazó por "calidad nutricional
        cuestionable, basándose excesivamente en galletas de soda como
        componente principal".
+
+    f) COHERENCIA DE FRUTAS Y SABORES (P2-DISH-COHERENCE · 2026-06-25):
+       - NO repitas la MISMA fruta en más de UNA comida de ESTE DÍA. Si el desayuno ya lleva
+         mango, la merienda usa OTRA fruta (lechosa, guineo, fresa, piña, manzana…). Repetir la
+         misma fruta dos veces el mismo día se siente monótono y poco apetecible.
+       - NO combines fruta dulce dominante (mango, piña, lechosa madura, guineo maduro) con
+         huevos revueltos/salado en el MISMO plato. Ejemplo MALO: "Revoltillo de huevos con
+         coliflor y mango". La fruta dulce va con yogurt/avena/nueces/queso fresco o sola como
+         postre, NO mezclada dentro de un plato salado de huevo. Pareo válido: "Revoltillo con
+         vegetales + casabe" y la fruta aparte si hace falta.
+       - El plato debe sonar APETECIBLE: piensa si un dominicano se lo comería con gusto. Combos
+         chocantes (fruta dulce + almidón salado, fruta + pescado, dulce + picante fuerte) están
+         PROHIBIDOS salvo que sean un plato reconocido.
 """
 
 
