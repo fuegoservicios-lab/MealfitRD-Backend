@@ -11,7 +11,7 @@ from embeddings_provider import get_text_embedding
 # CHILDREN_MULTIPLIER) eran raw `os.environ.get` y no aparecían en
 # `/health/version` ni en `get_knobs_registry_snapshot()`. Importable a top-level
 # porque `knobs.py` no depende de constants ni de graph_orchestrator (cero ciclo).
-from knobs import _env_int, _env_float
+from knobs import _env_int, _env_float, _env_bool
 
 logger = logging.getLogger(__name__)
 
@@ -919,6 +919,26 @@ CHUNK_GC_DEAD_LETTER_BATCH = max(10, min(10000, int(os.environ.get("CHUNK_GC_DEA
 # iniciales, sube a 100. Si quieres preservar comportamiento legacy estricto,
 # bájalo a 1.
 PANTRY_GUARD_MIN_ITEMS = max(0, min(500, _env_int("MEALFIT_PANTRY_GUARD_MIN_ITEMS", 10)))  # [P2-1-KNOBS-HYGIENE · 2026-06-15] vía helper, no os.environ raw
+
+# [P1-RENEWAL-PANTRY-IGNORE · 2026-06-26] Variety-first en la generación de plan COMPLETO
+# (`/api/plans/analyze[/stream]`): una renovación genera un menú NUEVO, y la lista de compras del
+# plan ES LA QUE DEFINE qué comprar — NO se amarra a la nevera previa. Por eso el guard estricto de
+# nevera NO debe correr en este endpoint por default (matchea la intención documentada "Renovar Ciclo
+# ignora nevera"; los flujos pantry-aware reales —Cambiar Plato `/swap-meal`, día completo
+# `/regenerate-day`— son endpoints SEPARADOS que NO pasan por `_run_pantry_validation_for_initial_chunk`).
+#
+# Por qué el default es OFF (skip): el skip previo (P1-PANTRY-GUARD-REGEN-SKIP) dependía de que el
+# request llevara `update_reason` en el payload — señal LEAKY: si el usuario renovaba por un entry-point
+# que no setea `update_reason` (no pasa por el modal Actualizar), el guard estricto se aplicaba a la
+# nevera poblada → rechazaba el plan variado nuevo → tras agotar retries entregaba un plan matemático
+# de emergencia band-0.0. Incidente real user d4bc3af5 (corr=9040fc1d, 2026-06-26 07:00): 39 ítems en
+# nevera + update_reason ausente → `[PANTRY GUARD] RECHAZO unauthorized=15` → retries agotados → plan
+# `_is_fallback` band-0.0 entregado. Una nevera ≥ PANTRY_GUARD_MIN_ITEMS SIEMPRE implica un plan previo +
+# restock ("Ya compré la lista"), o sea SIEMPRE es un renew → debe ignorar la nevera.
+#
+# Flip a True → restaura el guard estricto en la generación inicial (comportamiento previo, gated por
+# update_reason/min-items). Tooltip-anchor: P1-RENEWAL-PANTRY-IGNORE.
+INITIAL_CHUNK_PANTRY_GUARD_ENABLED = _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_GUARD", False)
 
 # [P2-6 · 2026-05-08] Alertas proactivas sobre fallback no-atómico del pool.
 # `update_user_health_profile_atomic` cae al path legacy (get + update) cuando

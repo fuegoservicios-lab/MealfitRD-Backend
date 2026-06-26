@@ -7,15 +7,18 @@ ciegos: requieren validación en vivo (benchmark + canary) y/o proceso humano. E
 
 ## 1. Motor de macros determinista (P1-1 + P1-2)
 
-### Qué es y por qué está apagado
+### Qué es
 
 El "cerebro dividido" determinista — solver LSQ de porciones (`portion_solver._box_lsq`) + protein-closer
 (`_close_protein_gap_for_meal`) + techo de proteína (`_trim_day_protein_to_ceiling`) + reconcile
-protein-preserving — vive en [`graph_orchestrator.py:10923`](../graph_orchestrator.py#L10923)..11057 y está
-**gateado por `MEALFIT_MACRO_SOLVER_ENABLED` (default `False`)**. Con el knob OFF, las porciones las
-decide el LLM "a ojo" → benchmark medido: **proteína 16% MAPE, solo ~24% de días con los 4 macros en
-banda [0.90,1.12]**. El closer/ceiling/reconcile cuelgan del MISMO gate (no son separables: comparten la
-DB de macros, slot fractions y egg-budget), así que P1-1 y P1-2 son **un solo rollout**.
+protein-preserving — vive en `_apply_macro_engine` ([`graph_orchestrator.py:12646`](../graph_orchestrator.py#L12646),
+solver gate :12658 / cal-reconcile :12754) y está **gateado por `MEALFIT_MACRO_SOLVER_ENABLED`**.
+
+> **[P1-MACRO-SOLVER-DEFAULT-ON · 2026-06-26] Default flipeado `False`→`True` en código** (tras cerrar el
+> canary de abajo). Con el knob OFF, las porciones las decide el LLM "a ojo" → benchmark medido: **proteína
+> 16% MAPE, solo ~24% de días con los 4 macros en banda [0.90,1.12]**. El closer/ceiling/reconcile cuelgan
+> del MISMO gate (no son separables: comparten la DB de macros, slot fractions y egg-budget), así que P1-1 y
+> P1-2 son **un solo rollout**. Rollback de una línea sin redeploy: `MEALFIT_MACRO_SOLVER_ENABLED=False`.
 
 > Verificado 2026-06-14: la DB de macros (`master_ingredients`) está **100% poblada** (105/105 con
 > macros completos; hierro 97, satfat 84, potasio 97, fdc 97). Activar es viable a nivel de datos.
@@ -63,7 +66,7 @@ en vivo. Por eso: validar con benchmark + canary ANTES de fijar el default.
 
 | Knob | Default | Efecto |
 |---|---|---|
-| `MEALFIT_MACRO_SOLVER_ENABLED` | `False` | **gate maestro del cerebro dividido** |
+| `MEALFIT_MACRO_SOLVER_ENABLED` | `True` (P1-MACRO-SOLVER-DEFAULT-ON, 2026-06-26; era `False`) | **gate maestro del cerebro dividido** |
 | `MEALFIT_MACRO_SOLVER_PROTEIN_TOPUP` | `True` | top-up legacy si el closer está off |
 | `MEALFIT_MACRO_SOLVER_CAL_RECONCILE` | `True` | nivela kcal/día al target tras el solver |
 | `MEALFIT_PROTEIN_FLOOR` | `True` | closer + techo de proteína (dentro del gate del solver) |
@@ -132,5 +135,5 @@ certificado. Esto es **PROCESO, no código** (`code_closeable=false`); el códig
 |---|---|
 | P1-5 derivados de alérgenos | ✅ implementado + test |
 | P1-3 embarazo/lactancia + condiciones comunes | ✅ implementado + test |
-| P1-1 + P1-2 motor de macros | ⏳ **staging listo** (observabilidad + SOP); flip pendiente de tu canary |
+| P1-1 + P1-2 motor de macros | ✅ **default ON en código** (P1-MACRO-SOLVER-DEFAULT-ON, 2026-06-26); canary cerrado (0% fallback, proteína ~7.3% MAPE, all-4-en-banda ↑). Rollback: `MEALFIT_MACRO_SOLVER_ENABLED=False` |
 | P1-4 revisión humana | ⏳ proceso documentado; ejecución por nutricionista pendiente |

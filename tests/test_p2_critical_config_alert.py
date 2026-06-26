@@ -1,7 +1,8 @@
 """[P2-CRITICAL-CONFIG-ALERT · 2026-06-15] Alerta de configuración crítica mal seteada en prod (gap-audit G7+G10).
 
-G7: el motor de precisión (MACRO_SOLVER_ENABLED) tiene default de código False y solo está ON por el .env del
-VPS → un redeploy con env limpio lo apaga SIN aviso (proteína ~16% MAPE). G10: los guards de seguridad
+G7: el motor de precisión (MACRO_SOLVER_ENABLED) — default de código True desde P1-MACRO-SOLVER-DEFAULT-ON
+(2026-06-26; era False) — emite la alerta solo si alguien lo setea EXPLÍCITAMENTE =False en prod (override
+accidental → porcionado "a ojo", proteína ~16% MAPE). G10: los guards de seguridad
 clínica (cap renal/alérgenos/gate de revisión/reglas por condición) default True → un override a False los
 apaga sin alerta runtime. `get_critical_config_warnings()` (pura) los detecta SOLO en producción; el lifespan
 los emite/resuelve en system_alerts.

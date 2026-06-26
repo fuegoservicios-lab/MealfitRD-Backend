@@ -5089,6 +5089,14 @@ def _meta_learning_model_name() -> str:
 _PRO_MODEL_NAME = _plan_pro_model_name()
 _FLASH_MODEL_NAME = _plan_flash_model_name()
 
+# [P1-PLANNER-PRO-FALLBACK · 2026-06-26] El planificador (esqueleto) corría SOLO en flash sin red de
+# seguridad: si el breaker COMPARTIDO de flash se abría bajo carga concurrente (otros usuarios
+# generando) o flash timeouteaba 3×, el nodo moría → EXTREME GRACEFUL DEGRADATION → plan de emergencia
+# band-0.0 ("IA saturada") AUNQUE DeepSeek estuviera sano. El self-critique YA cae a pro cuando flash
+# falla; el planner no. Con esto ON, el planner reintenta UNA vez con pro (breaker independiente, menos
+# cargado) antes de degradar. Flip a False → comportamiento previo (flash-only, degrada a emergencia).
+PLANNER_PRO_FALLBACK_ENABLED = _env_bool("MEALFIT_PLANNER_PRO_FALLBACK_ENABLED", True)
+
 # [P6-EVALUATOR-USE-PRO] Knob para escalar EL EVALUATOR del self-critique a Pro,
 # manteniendo Flash en day_generators y corrector. El evaluator es UN solo call
 # (vs 3 paralelos en day_gen) y su decisión gate-quea las correcciones — si
@@ -5799,29 +5807,19 @@ async def plan_skeleton_node(state: PlanState) -> dict:
     # los simples (que usan flash) no se ven afectados.
     _planner_cb = _get_circuit_breaker(planner_model)
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=8),
-        # [P2-ORCH-4 · 2026-05-28] El 429 spending-cap es persistente: reintentar
-        # es desperdicio puro. Falla rápido (resto de errores siguen reintentando;
-        # parse/Pydantic se auto-corrigen con el bump de temperatura por intento).
-        retry=retry_if_exception(lambda e: not _is_plan_spend_cap_error(e)),
-        reraise=True,
-        before_sleep=lambda retry_state: logger.warning(f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
-    )
-    async def invoke_planner():
-        if not await _planner_cb.acan_proceed():
-            raise Exception(f"Circuit Breaker OPEN para {planner_model} - LLM cascade failure prevented")
+    # [P1-PLANNER-PRO-FALLBACK · 2026-06-26] Core de la invocación parametrizado por (llm, cb, model)
+    # para poder reintentar con PRO si flash falla (espejo del self-critique pro-fallback).
+    async def _do_planner_invoke(_llm, _cb, _model_label):
+        if not await _cb.acan_proceed():
+            raise Exception(f"Circuit Breaker OPEN para {_model_label} - LLM cascade failure prevented")
         try:
-            logger.info(f"⏳ [PLANIFICADOR] Generando esqueleto del plan...")
+            logger.info(f"⏳ [PLANIFICADOR] Generando esqueleto del plan ({_model_label})...")
             # P0-4: Hard timeout con cancelación graceful. El constructor pone
             # timeout=45 pero el SDK no siempre lo respeta con sockets colgados.
             # tenacity hará 3 retries, con cap explícito de 50s/intento mantenemos
             # el peor caso ~150s. _safe_ainvoke garantiza cleanup del socket.
             # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] Cuando el knob está
-            # habilitado, enviar SystemMessage + HumanMessage para que Gemini
-            # reciba el system prompt como `system_instruction` separado
-            # (target canónico del implicit caching).
+            # habilitado, enviar SystemMessage + HumanMessage como system_instruction separado.
             if PROMPT_CACHE_SYSTEM_MESSAGE:
                 planner_payload = [
                     SystemMessage(content=PLANNER_SYSTEM_PROMPT),
@@ -5829,31 +5827,62 @@ async def plan_skeleton_node(state: PlanState) -> dict:
                 ]
             else:
                 planner_payload = prompt_text
-            res = await _safe_ainvoke(planner_llm, planner_payload, timeout=50.0)
-            # [P1-PLANNER-NONE-GUARD · 2026-06-15] El parser de structured-output
-            # (PydanticToolsParser, first_tool_only) devuelve None cuando el modelo
-            # NO emite tool-call (texto plano: posible bajo carga o thinking-disabled).
-            # Sin este guard, aguas abajo `response.model_dump()`/`.dict()` lanzaba
-            # AttributeError FUERA del scope de tenacity → el handler global lo
-            # degradaba a fallback matemático total, quemando un transient que un
-            # retry (con bump de temperatura por intento) recupera. Lo tratamos como
-            # fallo de parseo recuperable: NO `arecord_success`, raise → tenacity
-            # reintenta (ValueError no es spend-cap, el predicado de retry lo cubre)
-            # y, agotados los intentos, propaga un error TIPADO (no AttributeError).
+            res = await _safe_ainvoke(_llm, planner_payload, timeout=50.0)
+            # [P1-PLANNER-NONE-GUARD · 2026-06-15] El parser de structured-output devuelve None cuando
+            # el modelo NO emite tool-call (texto plano bajo carga). Tratarlo como fallo recuperable.
             if res is None:
                 raise ValueError(
                     "[PLANIFICADOR] structured output devolvió None (modelo sin tool-call)"
                 )
-            await _planner_cb.arecord_success()
+            await _cb.arecord_success()
             return res
         except Exception as e:
-            # [P1-LLM-TRANSIENT-5XX · 2026-05-21 · P1-ORCH-1/2 · 2026-05-28]
-            # Helper centralizado: excluye del CB los 5xx transitorios de Google
-            # Y el 429 spending-cap (persistente); además activa el latch del cap.
-            await _record_cb_failure_unless_transient(_planner_cb, e)
+            # [P1-LLM-TRANSIENT-5XX] Helper centralizado: excluye del CB los 5xx transitorios y el
+            # 429 spending-cap (persistente); además activa el latch del cap.
+            await _record_cb_failure_unless_transient(_cb, e)
             raise e
 
-    response = await invoke_planner()
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=8),
+        # [P2-ORCH-4 · 2026-05-28] El 429 spending-cap es persistente: reintentar es desperdicio puro.
+        retry=retry_if_exception(lambda e: not _is_plan_spend_cap_error(e)),
+        reraise=True,
+        before_sleep=lambda retry_state: logger.warning(f"⚠️  [PLANIFICADOR] Reintento #{retry_state.attempt_number}...")
+    )
+    async def invoke_planner():
+        return await _do_planner_invoke(planner_llm, _planner_cb, planner_model)
+
+    try:
+        response = await invoke_planner()
+    except Exception as _planner_flash_err:
+        # [P1-PLANNER-PRO-FALLBACK · 2026-06-26] Sin esta red, si el breaker COMPARTIDO de flash se abre
+        # bajo carga concurrente (otros usuarios), o flash timeoutea 3×, el planner muere → EXTREME
+        # GRACEFUL DEGRADATION → plan de emergencia band-0.0 ("IA saturada") con DeepSeek SANO (incidente
+        # user d4bc3af5, corr=0dcc4bf8, 2026-06-26 07:25: breaker flash abierto por un user vegano
+        # concurrente). 1 intento con PRO (breaker independiente, menos cargado) antes de degradar. Si el
+        # planner YA es pro (paid/forced) o pro también falla → degradación genuina. Anchor: P1-PLANNER-PRO-FALLBACK.
+        if PLANNER_PRO_FALLBACK_ENABLED and _PRO_MODEL_NAME and _PRO_MODEL_NAME != planner_model:
+            logger.warning(
+                f"🔄 [P1-PLANNER-PRO-FALLBACK] Planner falló con '{planner_model}' "
+                f"({type(_planner_flash_err).__name__}: {str(_planner_flash_err)[:120]}) → "
+                f"reintentando esqueleto con '{_PRO_MODEL_NAME}'."
+            )
+            _pro_planner_llm = ChatDeepSeek(
+                model=_PRO_MODEL_NAME, temperature=base_temp, max_retries=0, timeout=90,
+            ).with_structured_output(PlanSkeletonModel)
+            _pro_planner_cb = _get_circuit_breaker(_PRO_MODEL_NAME)
+            try:
+                response = await _do_planner_invoke(_pro_planner_llm, _pro_planner_cb, _PRO_MODEL_NAME)
+                logger.info(f"✅ [P1-PLANNER-PRO-FALLBACK] Esqueleto recuperado con '{_PRO_MODEL_NAME}'.")
+            except Exception as _planner_pro_err:
+                logger.error(
+                    f"🛑 [P1-PLANNER-PRO-FALLBACK] Pro también falló "
+                    f"({type(_planner_pro_err).__name__}): degradando a emergencia."
+                )
+                raise _planner_flash_err
+        else:
+            raise
 
     duration = round(time.time() - start_time, 2)
     logger.info(f"✅ [PLANIFICADOR] Esqueleto generado en {duration}s")
@@ -8536,9 +8565,20 @@ def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> boo
 
 
 # [P3-MACRO-SOLVER · 2026-06-13] Knob del "cerebro dividido" (lado determinista):
-# re-escala porciones para clavar macros desde master_ingredients. Default False
-# (rollout gradual; requiere la DB de macros poblada — ver food_db_integration.md).
-MACRO_SOLVER_ENABLED = _env_bool("MEALFIT_MACRO_SOLVER_ENABLED", False)
+# re-escala porciones para clavar macros desde master_ingredients.
+# [P1-MACRO-SOLVER-DEFAULT-ON · 2026-06-26] Default flipeado False→True. El canary documentado en
+# docs/macro_rollout_and_validation.md (§1 paso 2) YA se corrió y validó en el VPS: con el solver ON
+# all-4-macros-en-banda subió ~18.5%→28.1% (§1b) y el benchmark vivo (2026-06-26) midió 0% fallback,
+# proteína ~7.3% MAPE — el criterio de aceptación ("all-4 sube, proteína MAPE baja, fallback NO sube")
+# se cumplió, y el VPS lo lleva ON vía .env desde el rollout. El default de código quedaba en False → un
+# redeploy con .env limpio (o dev local) revertía SILENCIOSAMENTE al porcionado "a ojo" del LLM (proteína
+# ~16% MAPE, ~24% de días con los 4 macros en banda) y dejaba MUERTO todo el cerebro dividido que cuelga
+# de este AND (solver :12658, cal-reconcile :12754, closer/techo de proteína). Mismo patrón y razón que
+# P1-MACRO-RECONCILE-DEFAULT (MACRO_AWARE_RECONCILE, 2026-06-18): alinear el default de código con la
+# config validada de prod. El alert macro_engine_disabled_in_prod (get_critical_config_warnings) ahora
+# solo dispara si alguien setea EXPLÍCITAMENTE =False en prod (override accidental). Rollback sin redeploy:
+# MEALFIT_MACRO_SOLVER_ENABLED=False. tooltip-anchor: P1-MACRO-SOLVER-DEFAULT-ON.
+MACRO_SOLVER_ENABLED = _env_bool("MEALFIT_MACRO_SOLVER_ENABLED", True)
 
 # [P2-PER-MEAL-MACRO-TRUTHUP · 2026-06-25] Antes del solver, re-calcula los macros de cada comida
 # desde el catálogo (suma de `macros_from_ingredient_string` sobre `ingredients_raw`) cuando la
@@ -8745,6 +8785,16 @@ VARIETY_HARD_GATE_EGG_SLACK = _env_int("MEALFIT_VARIETY_HARD_GATE_EGG_SLACK", 1)
 # legítimamente el mismo día (pollo a la plancha + pescado a la plancha) → gatear-las sobre-reintentaría.
 VARIETY_GATE_FRUIT_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_REPEAT", True)
 VARIETY_GATE_BASE_DISH_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT", False)
+# [P1-VARIETY-REPEAT-GRACEFUL · 2026-06-26] Degradación con gracia del gate de variedad-repetida.
+# En el ÚLTIMO intento (attempt >= MAX_ATTEMPTS) la fruta-repetida / plato-base-repetido NO debe
+# RECHAZAR el plan: es un defecto cosmético y bloquearlo convierte un plan válido en un fallback de
+# emergencia (`_is_fallback=True`) → el usuario ve "La IA está temporalmente saturada" (mensaje
+# ENGAÑOSO: DeepSeek está sano) y se queda SIN plan. Incidente real user d4bc3af5 (corr=20394088,
+# 2026-06-26 06:19): los 3 intentos fueron rechazados SOLO por fruta repetida el mismo día → emergency
+# fallback → "saturada". En intentos 1..N-1 el gate SÍ rechaza (presiona al LLM a diversificar la
+# fruta); en el intento final entrega el plan con la repetición (advisory) en vez de cero-plan. Flip a
+# False → comportamiento previo (rechazo en TODOS los intentos, riesgo de "saturada" recurrente).
+VARIETY_REPEAT_GATE_LAST_ATTEMPT_ADVISORY = _env_bool("MEALFIT_VARIETY_REPEAT_GATE_LAST_ATTEMPT_ADVISORY", True)
 
 # [P3-PROTEIN-FLOOR · 2026-06-13] Cierre DURO del déficit de proteína (la re-auditoría del
 # plan fresco encontró que se entregaba 68% del target). El closer rellena cada comida a
@@ -10729,6 +10779,97 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         return False
 
 
+# [P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Mapa proteína cárnica → sinónimos que satisfacen
+# "presente en ingredientes" + display canónico. El LLM a veces titula un plato con una proteína que
+# NO incluye ('Pollo a la Plancha' con 0g de pollo — solo ñame/brócoli; el closer rellenó con camarón).
+PHANTOM_PROTEIN_NAMEFIX_ENABLED = _env_bool("MEALFIT_PHANTOM_PROTEIN_NAMEFIX", True)
+_PHANTOM_PROTEIN_SYNS = {
+    "pollo": ["pollo", "pechuga", "muslo"],
+    "cerdo": ["cerdo", "chuleta de cerdo", "lomo de cerdo", "longaniza"],
+    "res": ["res", "carne de res", "bistec", "molida"],
+    "pescado": ["pescado", "filete", "tilapia", "dorado", "mero", "bacalao", "salmon", "salmón",
+                "merluza", "chillo", "sardina", "corvina"],
+    "pavo": ["pavo"],
+    "salami": ["salami"],
+    "camaron": ["camaron", "camarón", "camarones"],
+    "atun": ["atun", "atún"],
+}
+_PHANTOM_PROTEIN_DISPLAY = {
+    "pollo": "Pollo", "cerdo": "Cerdo", "res": "Res", "pescado": "Pescado",
+    "pavo": "Pavo", "salami": "Salami", "camaron": "Camarones", "atun": "Atún",
+}
+
+
+def _fix_phantom_protein_in_name(meal: dict, strip_accents_fn) -> bool:
+    """[P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Honestidad del nombre del plato: si el título LIDERA con
+    una proteína cárnica AUSENTE de sus ingredientes (el LLM la inventó — caso real 'Pollo a la Plancha'
+    con 0g de pollo; el closer rellenó con camarón → 'Pollo a la Plancha … y Camarones') y hay OTRA
+    proteína cárnica REAL presente, reemplaza la fantasma por la real y borra el sufijo redundante que el
+    reflejo del closer ya añadió → 'Camarones a la Plancha …'.
+
+    CONSERVADOR y fail-safe (validado sobre planes reales del owner, cero falsos positivos):
+    - Solo la proteína LÍDER (la que el comensal lee primero).
+    - Sin reemplazo cárnico real (proteína del plato = lácteo/yogurt, p.ej. 'Cerdo a la Parrilla con
+      Salsa de Yogurt') → NO toca el nombre: eso es una incoherencia de GENERACIÓN que un rename no
+      arregla honestamente (el plato sigue siendo ñame+yogurt, no cerdo).
+    - Cero cambios si la proteína del título SÍ está (Pechuga de Pollo real, Chuleta de Cerdo real).
+    Gated por PHANTOM_PROTEIN_NAMEFIX_ENABLED. Mutates meal. Retorna True si renombró. Anchor: P1-PHANTOM-PROTEIN-NAMEFIX."""
+    import re
+    try:
+        if not PHANTOM_PROTEIN_NAMEFIX_ENABLED:
+            return False
+        name = str(meal.get("name") or "").strip()
+        if not name:
+            return False
+        ings = meal.get("ingredients_raw") or meal.get("ingredients") or []
+        il = strip_accents_fn(" ".join(str(i) for i in ings).lower())
+        nl = strip_accents_fn(name.lower())
+
+        def _present(canon, text):
+            return any(re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"\b", text)
+                       for s in _PHANTOM_PROTEIN_SYNS[canon])
+
+        # proteínas cárnicas en el NOMBRE, ordenadas por posición (la líder primero)
+        in_name = []
+        for canon in _PHANTOM_PROTEIN_SYNS:
+            positions = [m.start() for s in _PHANTOM_PROTEIN_SYNS[canon]
+                         for m in [re.search(r"\b" + re.escape(strip_accents_fn(s.lower())) + r"\b", nl)] if m]
+            if positions:
+                in_name.append((canon, min(positions)))
+        if not in_name:
+            return False
+        in_name.sort(key=lambda x: x[1])
+        lead_canon = in_name[0][0]
+        if _present(lead_canon, il):
+            return False  # la proteína líder SÍ está → no es fantasma
+        real = next((c for c in _PHANTOM_PROTEIN_SYNS if c != lead_canon and _present(c, il)), None)
+        if not real:
+            return False  # sin reemplazo cárnico → fail-safe (no inventar, no estropear)
+        # Reemplazar la PRIMERA aparición de la proteína-fantasma líder en el nombre ORIGINAL (regex
+        # case-insensitive sobre sus sinónimos; evita el bug de mapear posiciones del nombre
+        # accent-stripped al original con acentos).
+        lead_pat = r"\b(?:" + "|".join(re.escape(s) for s in _PHANTOM_PROTEIN_SYNS[lead_canon]) + r")\b"
+        new, n = re.subn(lead_pat, _PHANTOM_PROTEIN_DISPLAY.get(real, real.capitalize()),
+                         name, count=1, flags=re.IGNORECASE)
+        if n == 0:
+            return False
+        # Borrar el sufijo redundante ' y <Real>' / ' con <Real>' que el reflejo del closer añadió.
+        for conn in (" y ", " con "):
+            for s in _PHANTOM_PROTEIN_SYNS[real]:
+                new = re.sub(conn + re.escape(s) + r"\b", "", new, flags=re.IGNORECASE)
+        new = re.sub(r"\s+", " ", new).strip()
+        if new and new != name:
+            logger.info(f"🎭 [P1-PHANTOM-PROTEIN-NAMEFIX] '{name[:48]}' → '{new[:48]}' "
+                        f"(fantasma '{lead_canon}' ausente de ingredientes; real '{real}').")
+            meal["name"] = new
+            return True
+        return False
+    except Exception as e:
+        logger.warning(f"[P1-PHANTOM-PROTEIN-NAMEFIX] falló para meal {str(meal.get('name'))[:40]!r}: "
+                       f"{type(e).__name__}: {e}")
+        return False
+
+
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, fill_pct: float = 0.92, max_add_g: int = 300) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
@@ -12515,7 +12656,8 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
 # Behavior-preserving: el cuerpo es el bloque original sin cambios. Muta `result`/`days` in-place; retorna None.
 def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition):
     # [P3-MACRO-SOLVER · 2026-06-13] Cerebro dividido — lado determinista (gated por
-    # knob MEALFIT_MACRO_SOLVER_ENABLED, default False). Tras el balancing legacy
+    # knob MEALFIT_MACRO_SOLVER_ENABLED, default True desde P1-MACRO-SOLVER-DEFAULT-ON
+    # 2026-06-26; =False revierte al porcionado legacy). Tras el balancing legacy
     # (que escala los NÚMEROS de macros sin tocar los ingredientes y tapa la
     # inconsistencia con un disclaimer) y la consolidación, re-escala las PORCIONES
     # reales de cada meal para clavar su target de macros (= macro diario × cal_share)
@@ -13550,6 +13692,28 @@ async def assemble_plan_node(state: PlanState) -> dict:
         except Exception as _mc_e:
             logger.warning(f"[MACRO-CAPTURE] {type(_mc_e).__name__}: {_mc_e}")
     _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
+
+    # [P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Honestidad del nombre del plato: corre DESPUÉS del closer
+    # (que ya reflejó en el nombre la proteína de rescate vía `_reflect_added_protein_in_name`). Corrige
+    # títulos que LIDERAN con una proteína cárnica AUSENTE de los ingredientes (el LLM la inventó, p.ej.
+    # 'Pollo a la Plancha … y Camarones' sin pollo → 'Camarones a la Plancha …'). Fail-safe per-meal:
+    # solo actúa cuando hay un reemplazo cárnico real; los platos genuinamente incoherentes (proteína =
+    # lácteo/yogurt) quedan intactos. Anchor: P1-PHANTOM-PROTEIN-NAMEFIX.
+    if PHANTOM_PROTEIN_NAMEFIX_ENABLED:
+        try:
+            from constants import strip_accents as _sa_phantom
+        except Exception:
+            import unicodedata as _ud_phantom
+            def _sa_phantom(s):
+                return "".join(c for c in _ud_phantom.normalize("NFKD", str(s)) if not _ud_phantom.combining(c))
+        _phantom_fixed = 0
+        for _pd in (days or []):
+            for _pm in (_pd.get("meals", []) or []):
+                if _fix_phantom_protein_in_name(_pm, _sa_phantom):
+                    _phantom_fixed += 1
+        if _phantom_fixed:
+            logger.info(f"🎭 [P1-PHANTOM-PROTEIN-NAMEFIX] {_phantom_fixed} nombre(s) de plato corregido(s) "
+                        f"(proteína fantasma del título → proteína real del plato).")
 
     # Calcular shopping lists
     # Solo usar user_id real (autenticado); session_id no tiene inventory en DB
@@ -15620,11 +15784,27 @@ Responde ÚNICAMENTE con el JSON de revisión.
                     severity = _severity_max(severity, "high")
                 # [P2-VARIETY-GATE-REPEAT] Fruta dulce repetida / plato-base repetido el mismo día →
                 # rechazo (retry acotado). Detector en build_variety_report; lever upstream = prompt 15(f).
-                for _rep_issue in _variety_repeat_gate_issues(_vr):
-                    logger.warning(f"🍓 [P2-VARIETY-GATE-REPEAT] {_rep_issue[:64]}… → rechazo para diversificar")
-                    approved = False
-                    issues.append(_rep_issue)
-                    severity = _severity_max(severity, "high")
+                # [P1-VARIETY-REPEAT-GRACEFUL · 2026-06-26] En el intento FINAL este gate NO rechaza:
+                # una fruta repetida es cosmética y bloquearla convierte un plan válido en "IA saturada"
+                # (cero-plan). En intentos 1..N-1 SÍ rechaza (presiona a diversificar). Anchor: P1-VARIETY-REPEAT-GRACEFUL.
+                _rep_issues = _variety_repeat_gate_issues(_vr)
+                if _rep_issues:
+                    _vg_attempt = int(state.get("attempt", 1))
+                    _vg_is_final = _vg_attempt >= MAX_ATTEMPTS
+                    if VARIETY_REPEAT_GATE_LAST_ATTEMPT_ADVISORY and _vg_is_final:
+                        logger.warning(
+                            f"🍓 [P1-VARIETY-REPEAT-GRACEFUL] Variedad-repetida en intento final "
+                            f"({_vg_attempt}/{MAX_ATTEMPTS}) → ADVISORY (entrego el plan en vez de "
+                            f"'saturada'). {len(_rep_issues)} issue(s): {_rep_issues[0][:60]}…"
+                        )
+                        if isinstance(_vr, dict):
+                            _vr["_repeat_gate_advisory_final_attempt"] = True
+                    else:
+                        for _rep_issue in _rep_issues:
+                            logger.warning(f"🍓 [P2-VARIETY-GATE-REPEAT] {_rep_issue[:64]}… → rechazo para diversificar")
+                            approved = False
+                            issues.append(_rep_issue)
+                            severity = _severity_max(severity, "high")
         except Exception as _vg_e:
             logger.warning(f"[P3-VARIETY-HARD-GATE] validador falló: {type(_vg_e).__name__}: {_vg_e}")
 

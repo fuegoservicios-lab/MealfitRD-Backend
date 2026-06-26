@@ -1087,6 +1087,21 @@ def _run_pantry_validation_for_initial_chunk(
     Shuffle (`_filter_days_by_fresh_pantry`) — esa SÍ es "update dishes" y
     debe respetar lo comprado. Tooltip-anchor: P1-PANTRY-GUARD-REGEN-SKIP.
     """
+    # [P1-RENEWAL-PANTRY-IGNORE · 2026-06-26] Variety-first: el endpoint de plan COMPLETO ignora la
+    # nevera por default. La lista de compras del plan nuevo DEFINE qué comprar; amarrar el renew a la
+    # nevera poblada rechazaba el plan variado → emergency band-0.0 (incidente d4bc3af5 2026-06-26).
+    # El skip por `update_reason` (abajo) era leaky: si el request no llevaba el campo, el guard se
+    # aplicaba igual. Este skip incondicional (gated por knob default-OFF) cierra ese hueco. Los flujos
+    # pantry-aware reales (/swap-meal, /regenerate-day) son endpoints SEPARADOS. Anchor: P1-RENEWAL-PANTRY-IGNORE.
+    from constants import INITIAL_CHUNK_PANTRY_GUARD_ENABLED as _IPG_ENABLED
+    if not _IPG_ENABLED:
+        _user_label_vf = actual_user_id or "guest"
+        logger.info(
+            f"⏭️ [{transport_label}/RENEWAL-PANTRY-IGNORE] Pantry guard skip user={_user_label_vf}: "
+            f"renovación de plan completo es variety-first → ignora la nevera previa. La lista de "
+            f"compras del plan define qué comprar (knob MEALFIT_INITIAL_CHUNK_PANTRY_GUARD=False)."
+        )
+        return result
     if update_reason:
         _user_label_regen = actual_user_id or "guest"
         logger.info(
