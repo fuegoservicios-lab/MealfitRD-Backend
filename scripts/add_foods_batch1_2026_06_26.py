@@ -100,8 +100,8 @@ PRICES = {
     "Coco":                  {"packages": [{"unit": "unidad", "grams": 300, "label": "1 coco (~300g pulpa)", "price": 69}]},  # alimento nuevo (coco entero)
     # --- Lácteos vegetales — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
     "Leche de almendras":    {"packages": [{"unit": "carton", "grams": 946, "label": "32 oz", "price": 260}]},
-    "Leche de coco":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "Coco unidad@69" es COCO ENTERO (fruta), no leche de coco (bebida)
-    "Leche de soya":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: sin precio en la tabla
+    "Leche de coco":         {"packages": [{"unit": "carton", "grams": 946, "label": "32 oz", "price": 289}]},
+    "Leche de soya":         {"packages": [{"unit": "carton", "grams": 946, "label": "32 oz", "price": 184}]},
     "Leche de avena":        {"packages": [{"unit": "carton", "grams": 1000, "label": "1 L", "price": 124}]},
     "Yogur de coco":         {"packages": [{"unit": "pote", "grams": 170, "label": "6 oz regular", "price": 50},
                                            {"unit": "pote", "grams": 227, "label": "8 oz griego", "price": 95}]},
