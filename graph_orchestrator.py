@@ -9868,10 +9868,13 @@ def _scan_diet_violations(plan: dict, diet_type) -> list:
         return []  # balanced / omnívora / desconocida → sin restricción de dieta
     # Análogo plant-based ADYACENTE al término ("de soya", "vegano", "vegetal", "de coco"…). Solo excusa
     # cuando aparece pegado tras el término — un plant lejano no excusa la proteína animal real.
+    # [P1-DIET-PLANT-MILK-WIRE · 2026-06-26] +avena/arroz/nuez/nueces/avellana: las leches vegetales nuevas
+    # del catálogo (Leche de avena, etc.) NO deben marcarse como lácteo en vegano. Seguro: no existe un
+    # producto ANIMAL "leche/yogur de avena/arroz/nuez". tooltip-anchor: P1-DIET-PLANT-MILK-WIRE.
     _plant_adj = _re.compile(
         r"^\s*(?:de\s+|estilo\s+|tipo\s+|a\s+la\s+)?"
-        r"(?:soya|soja|coco|almendra|almendras|mani|cacahuate|maranon|anacardo|cajuil|guisante|"
-        r"arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
+        r"(?:soya|soja|coco|almendra|almendras|avena|arroz|nuez|nueces|avellana|mani|cacahuate|maranon|"
+        r"anacardo|cajuil|guisante|arveja|seitan|tempeh|vegan[oa]?|vegetal(?:es)?|plant)\b"
     )
     violations = []
     for day in plan.get("days", []) or []:
