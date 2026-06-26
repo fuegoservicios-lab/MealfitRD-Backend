@@ -10658,14 +10658,20 @@ def _meal_slot_is_light(meal: dict, strip_accents_fn) -> bool:
     return "merienda" in slot_low or "desayuno" in slot_low or "snack" in slot_low
 
 
+# [P2-DISH-COHERENCE-NAMEFIX · 2026-06-25] Stopwords es-DO para el reflejo del nombre: no se
+# capitalizan ('Carne de Res', no 'Carne De Res') ni cuentan como token significativo de la proteína.
+_NAME_STOPWORDS = {"de", "del", "la", "el", "los", "las", "con", "y", "a", "en", "sin", "al"}
+
+
 def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_fn) -> bool:
-    """[P2-DISH-COHERENCE · 2026-06-25] Si el closer añadió `protein_name` como FUENTE PRINCIPAL de
-    proteína y el nombre del plato NO la menciona, refléjala en el nombre. Un plato nunca debe
-    esconder su proteína principal: el caso observado fue un snack 'Puñado de Almendras y Nueces
-    con Ralladura de Limón' que llevaba 115g de camarón solo en los ingredientes (el usuario leía
-    el nombre y no esperaba camarón). Idempotente: si el primer token de la proteína (≥4 chars) ya
-    está en el nombre, no toca nada. Conector ' y ' si el nombre ya usa ' con ', si no ' con '.
-    Gated por CLOSER_DISH_COHERENCE_ENABLED. Retorna True si renombró. Anchor: P2-DISH-COHERENCE."""
+    """[P2-DISH-COHERENCE · 2026-06-25 · NAMEFIX 2026-06-25] Si el closer añadió `protein_name` como
+    FUENTE PRINCIPAL de proteína y el nombre del plato NO la menciona, refléjala en el nombre. Un
+    plato nunca debe esconder su proteína principal (caso real: snack 'Puñado de Almendras' con 115g
+    de camarón solo en los ingredientes). Idempotente: si CUALQUIER token significativo (≥3 chars, sin
+    stopwords) de la proteína ya está en el nombre, no toca nada — evita duplicar ('Res Molida y Carne
+    de Res'). El display preserva la proteína COMPLETA con conectores en minúscula ('carne de res' →
+    'Carne de Res', no el truncado 'Carne De'). Conector ' y ' si el nombre ya usa ' con ', si no
+    ' con '. Gated por CLOSER_DISH_COHERENCE_ENABLED. Retorna True si renombró. Anchor: P2-DISH-COHERENCE."""
     try:
         if not CLOSER_DISH_COHERENCE_ENABLED:
             return False
@@ -10674,11 +10680,16 @@ def _reflect_added_protein_in_name(meal: dict, protein_name: str, strip_accents_
         if not name or not pname:
             return False
         name_low = strip_accents_fn(name.lower())
-        nm_low = strip_accents_fn(pname.lower())
-        tok = nm_low.split()[0] if nm_low else ""
-        if tok and len(tok) >= 4 and tok in name_low:
-            return False  # la proteína ya está en el nombre → no duplicar
-        proper = " ".join(w.capitalize() for w in pname.split()[:2])  # "yogur griego" → "Yogur Griego"
+        # tokens significativos de la proteína (sin stopwords, ≥3 chars). Si ALGUNO ya está en el
+        # nombre, la proteína ya está representada → no duplicar (ej. 'res' de 'carne de res' ya en
+        # 'Res Molida'; 'queso' de 'queso mozzarella' ya en 'Queso Blanco').
+        sig_tokens = [t for t in strip_accents_fn(pname.lower()).split()
+                      if len(t) >= 3 and t not in _NAME_STOPWORDS]
+        if not sig_tokens or any(t in name_low for t in sig_tokens):
+            return False
+        # Display: nombre COMPLETO de la proteína, conectores en minúscula, resto capitalizado.
+        proper = " ".join(w if w.lower() in _NAME_STOPWORDS else w.capitalize()
+                          for w in pname.split())
         connector = " y " if " con " in f" {name_low} " else " con "
         meal["name"] = f"{name}{connector}{proper}"
         return True
