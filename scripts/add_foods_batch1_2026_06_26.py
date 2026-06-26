@@ -97,20 +97,23 @@ PRICES = {
     "Mandarina":             {"price_per_lb": 109},
     "Toronja":               {"price_per_lb": 140},
     "Uva":                   {"price_per_lb": 169},
-    # --- Lácteos vegetales (por litro/unidad) ---
-    "Leche de almendras":    {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Leche de coco":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Leche de soya":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Leche de avena":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Yogur de coco":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    # --- Proteína animal económica/premium ---
-    "Sardinas en lata":      {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Muslo de pollo":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Hígado de res":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Salmón":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Tilapia":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Pavo molido":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Mero":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    # --- Lácteos vegetales — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
+    "Leche de almendras":    {"packages": [{"unit": "carton", "grams": 946, "label": "32 oz", "price": 260}]},
+    "Leche de coco":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: "Coco unidad@69" es COCO ENTERO (fruta), no leche de coco (bebida)
+    "Leche de soya":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: sin precio en la tabla
+    "Leche de avena":        {"packages": [{"unit": "carton", "grams": 1000, "label": "1 L", "price": 124}]},
+    "Yogur de coco":         {"packages": [{"unit": "pote", "grams": 170, "label": "6 oz regular", "price": 50},
+                                           {"unit": "pote", "grams": 227, "label": "8 oz griego", "price": 95}]},
+    # --- Proteína animal económica/premium — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
+    "Sardinas en lata":      {"packages": [{"unit": "lata", "grams": 125, "label": "125 g", "price": 33},
+                                           {"unit": "lata", "grams": 425, "label": "15 oz", "price": 57}]},
+    "Muslo de pollo":        {"price_per_lb": 68},
+    "Hígado de res":         {"price_per_lb": 119},
+    "Salmón":                {"packages": [{"unit": "paquete", "grams": 85, "label": "3 oz", "price": 490},
+                                           {"unit": "paquete", "grams": 323, "label": "11.4 oz", "price": 1060}]},
+    "Tilapia":               {"price_per_lb": 130},
+    "Pavo molido":           {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 320}]},
+    "Mero":                  {"price_per_lb": 290},
 }
 
 # record-key → columna DB
