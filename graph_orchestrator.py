@@ -8540,6 +8540,15 @@ def _skeleton_protein_present(assigned_label: str, ingredients_text: str) -> boo
 # (rollout gradual; requiere la DB de macros poblada — ver food_db_integration.md).
 MACRO_SOLVER_ENABLED = _env_bool("MEALFIT_MACRO_SOLVER_ENABLED", False)
 
+# [P2-PER-MEAL-MACRO-TRUTHUP · 2026-06-25] Antes del solver, re-calcula los macros de cada comida
+# desde el catálogo (suma de `macros_from_ingredient_string` sobre `ingredients_raw`) cuando la
+# cobertura es alta. Cierra el modo en que una etiqueta de proteína INFLADA del LLM (caso real:
+# "Huevos Duros" mostraba 41g/306kcal para 3 huevos, que aportan ~19g/208kcal) hace que el
+# protein-closer SALTE esa comida (cree que ya cumple el piso) → el día queda bajo el piso con un
+# número mentiroso por-comida. Band-safe: corre ANTES del solver/closer/reconcile, que siguen
+# enforzando el target diario aguas abajo. Flip a False revierte. Anchor: P2-PER-MEAL-MACRO-TRUTHUP.
+MACRO_TRUTHUP_ENABLED = _env_bool("MEALFIT_PER_MEAL_MACRO_TRUTHUP", True)
+
 # [P3-PROTEIN-TOPUP · 2026-06-13] Tras el escalado del solver, si una comida sigue corta
 # de proteína, añade una porción de la proteína más magra del pool aprobado del día para
 # cerrar el gap (el escalado no crea proteína inexistente; esto sí). Solo activo con el
@@ -10374,6 +10383,69 @@ def _recover_meal_macros(meal: dict, ratio_p: float, ratio_c: float, ratio_f: fl
             f"C:{round(_meal_macro_num(meal.get('carbs')))}g",
             f"G:{round(_meal_macro_num(meal.get('fats')))}g",
         ]
+
+
+_TRUTHUP_CONDIMENT_HINTS = ("al gusto", "a gusto", "opcional", "para servir", "para decorar",
+                            "pizca", "una pizca", "cantidad necesaria", "c/n")
+
+
+def _truth_up_meal_macros_from_catalog(meal: dict, db, *, min_coverage: float = 0.6,
+                                       min_dev_g: float = 8.0, min_dev_pct: float = 0.20) -> bool:
+    """[P2-PER-MEAL-MACRO-TRUTHUP · 2026-06-25] Recalcula los macros mostrados de una comida desde
+    el catálogo (suma de `db.macros_from_ingredient_string` por línea de `ingredients_raw`), y los
+    snapea a la verdad cuando (a) el catálogo resuelve >= `min_coverage` de las líneas con cantidad
+    (las líneas tipo 'sal al gusto' se excluyen del denominador) y (b) la proteína mostrada diverge
+    de la del catálogo más de `min_dev_g` g O `min_dev_pct`. Cierra el caso del LLM que infla la
+    proteína por-comida ('3 huevos = 41g' cuando son ~19g) → el closer la salta creyendo que cumple.
+    Corre ANTES del solver/closer → band-safe (el target diario lo siguen enforzando aguas abajo).
+    Mutates `meal`. Retorna True si corrigió. Anchor: P2-PER-MEAL-MACRO-TRUTHUP."""
+    try:
+        if not MACRO_TRUTHUP_ENABLED:
+            return False
+        raw = meal.get("ingredients_raw")
+        if not isinstance(raw, list) or not raw:
+            raw = meal.get("ingredients")
+        if not isinstance(raw, list) or not raw:
+            return False
+        try:
+            from constants import strip_accents as _sa
+        except Exception:
+            def _sa(s):
+                import unicodedata
+                return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+        tot = {"protein": 0.0, "carbs": 0.0, "fats": 0.0, "kcal": 0.0}
+        n_quant = n_res = 0
+        for ing in raw:
+            s = str(ing)
+            if any(h in _sa(s.lower()) for h in _TRUTHUP_CONDIMENT_HINTS):
+                continue  # condimento "al gusto" → no cuenta para cobertura ni macros
+            n_quant += 1
+            mc = db.macros_from_ingredient_string(s)
+            if mc:
+                n_res += 1
+                tot["protein"] += mc["protein"]; tot["carbs"] += mc["carbs"]
+                tot["fats"] += mc["fats"]; tot["kcal"] += mc["kcal"]
+        if n_quant == 0 or n_res == 0:
+            return False
+        if (n_res / n_quant) < min_coverage:
+            return False  # demasiado sin resolver → la estimación del LLM es lo mejor disponible
+        cur_p = _meal_macro_num(meal.get("protein"))
+        dev = abs(cur_p - tot["protein"])
+        if dev < min_dev_g and (cur_p <= 0 or dev / cur_p < min_dev_pct):
+            return False  # ya coherente con sus ingredientes
+        meal["protein"] = round(tot["protein"])
+        meal["carbs"] = round(tot["carbs"])
+        meal["fats"] = round(tot["fats"])
+        meal["cals"] = round(tot["kcal"])
+        meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+        logger.info(f"🧾 [P2-PER-MEAL-MACRO-TRUTHUP] {str(meal.get('name'))[:40]!r}: proteína "
+                    f"{cur_p:.0f}g→{tot['protein']:.0f}g (cobertura {n_res}/{n_quant}) — etiqueta "
+                    f"alineada a sus ingredientes antes del closer.")
+        return True
+    except Exception as e:
+        logger.warning(f"[P2-PER-MEAL-MACRO-TRUTHUP] falló para meal "
+                       f"{str(meal.get('name'))[:40]!r}: {type(e).__name__}: {e}")
+        return False
 
 
 def _apply_macro_solver_to_meal(meal: dict, slot_target: dict, db) -> bool:
@@ -12424,6 +12496,10 @@ def _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form
                         "carbs": _cg * _share,
                         "fats": _fg * _share,
                     }
+                    # [P2-PER-MEAL-MACRO-TRUTHUP] Alinea los macros mostrados a sus ingredientes
+                    # ANTES del solver/closer → si la etiqueta del LLM venía inflada, el closer ve la
+                    # proteína REAL y no salta una comida que de verdad está baja. Band-safe.
+                    _truth_up_meal_macros_from_catalog(_m, _nut_db)
                     if _apply_macro_solver_to_meal(_m, _slot_target, _nut_db):
                         _solver_n += 1
                     # [P3-PROTEIN-FLOOR] Cierre del déficit: rellena al TARGET de proteína del
