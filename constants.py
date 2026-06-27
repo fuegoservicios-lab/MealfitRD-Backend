@@ -1536,6 +1536,130 @@ def get_nutritional_category(base_ingredient: str) -> str:
             return category
     return None
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Coherencia comida↔HORARIO (es-DO).
+# ──────────────────────────────────────────────────────────────────────────────
+# SSOT del mapa de apropiación por slot + helpers puros (sin deps de graph_orchestrator,
+# así agent.py / tools.py / graph_orchestrator.py lo importan sin ciclos). Decisión de
+# producto (owner 2026-06-27): el arroz/locrio/pasta en el DESAYUNO = SIEMPRE duro
+# (no degrada); el "arroz de noche" / comida de desayuno en la CENA = duro CON degradación
+# a advisory en el intento final (nunca cero-plan). El match es WORD-BOUNDARY sobre el
+# NOMBRE del plato (NO los ingredientes) — anti-falso-positivo: así "Panqueques de harina
+# de arroz" en desayuno NO se flagea como "arroz", protegiendo la creatividad (G5). Las
+# exclusiones cubren los modificadores donde el token es parte de otro alimento (harina de
+# arroz, pasta de maní, leche de arroz). Tokens YA normalizados (sin acentos, minúscula):
+# "lasaña"→"lasana", "ñoqui"→"noqui". `hardness`: "hard"=rechaza en todos los intentos;
+# "soft"=degrada a advisory en el intento final. tooltip-anchor: P1-SLOT-APPROPRIATENESS
+_SLOT_RICE_EXCLUDE = (
+    "harina de arroz", "leche de arroz", "vinagre de arroz", "galleta de arroz",
+    "papel de arroz", "agua de arroz", "crema de arroz",
+)
+SLOT_INAPPROPRIATE_FOODS = {
+    "desayuno": [
+        {"label": "arroz/locrio/moro", "tokens": ("arroz", "locrio", "moro", "morito"),
+         "hardness": "hard", "exclude": _SLOT_RICE_EXCLUDE},
+        {"label": "pasta/espaguetis/lasaña", "tokens": (
+            "espagueti", "espaguetis", "macarron", "macarrones", "lasana", "coditos",
+            "fideos", "tallarines", "pastelon", "ravioli", "penne", "noqui", "rigatoni"),
+         "hardness": "hard"},
+        {"label": "sopón de almuerzo (sancocho/asopao/mondongo)", "tokens": (
+            "sancocho", "asopao", "mondongo"), "hardness": "hard"},
+    ],
+    "cena": [
+        {"label": "arroz/locrio/moro (\"arroz de noche\")", "tokens": ("arroz", "locrio", "moro", "morito"),
+         "hardness": "soft", "exclude": _SLOT_RICE_EXCLUDE},
+        {"label": "pasta/espaguetis pesados de noche", "tokens": (
+            "espagueti", "espaguetis", "macarron", "macarrones", "lasana", "coditos",
+            "fideos", "tallarines", "pastelon", "ravioli", "penne", "noqui", "rigatoni"),
+         "hardness": "soft"},
+        {"label": "comida de desayuno en la cena (cereal/panqueque/waffle)", "tokens": (
+            "cereal", "hojuelas", "panqueque", "pancake", "waffle", "crepe", "crepa"),
+         "hardness": "soft"},
+    ],
+}
+
+# Guía POSITIVA por slot (es-DO) inyectada a los prompts de UPDATE (swap/chat-modify) y usada
+# en los mensajes de rechazo del gate S1 — describe qué SÍ va en cada horario.
+SLOT_POSITIVE_HINT = {
+    "desayuno": ("El desayuno dominicano va: mangú/víveres, avena/cereales calientes, pan/tostadas, "
+                 "batido/bowl o revoltillo — con proteína y fruta."),
+    "almuerzo": ("El almuerzo es el plato fuerte: arroz+habichuela+proteína+ensalada, locrio, moro, "
+                 "asopao, pasta criolla, o pescado/carne con tubérculo y vegetal."),
+    "cena": ("La cena es más ligera que el almuerzo: pescado/pollo a la plancha, tortilla/revoltillo de "
+             "cena, sopa ligera, wrap o bowl de proteína + vegetales + un tubérculo (batata/yuca/casabe). "
+             "Evita el \"arroz de noche\" y los guisos pesados."),
+    "merienda": ("La merienda es un snack ligero (150-300 kcal): yogur+fruta, batido, casabe/galleta "
+                 "integral con queso, fruta con maní, o huevo duro con fruta."),
+}
+
+# Mapa de canonicalización de meal_type es-DO → key del mapa de apropiación. SSOT propio para
+# evitar dependencia circular con `graph_orchestrator._SLOT_KEY_MAP` (graph importa constants).
+_SLOT_CANON_MAP = {
+    "desayuno": "desayuno", "breakfast": "desayuno",
+    "almuerzo": "almuerzo", "comida": "almuerzo", "lunch": "almuerzo",
+    "cena": "cena", "dinner": "cena",
+    "merienda": "merienda", "snack": "merienda", "merienda am": "merienda",
+    "merienda pm": "merienda", "media manana": "merienda", "media tarde": "merienda",
+    "merienda matutina": "merienda", "merienda vespertina": "merienda",
+}
+
+
+def canonical_slot_key(meal_type: str):
+    """[P1-SLOT-APPROPRIATENESS] Normaliza un meal_type es-DO ('Desayuno'/'Cena'/'Merienda AM'…)
+    a su key canónica del mapa de apropiación. Devuelve None si no reconoce el slot."""
+    return _SLOT_CANON_MAP.get(strip_accents(str(meal_type or "").lower()).strip())
+
+
+def slot_violations_for_meal_name(name: str, slot_key: str) -> list:
+    """[P1-SLOT-APPROPRIATENESS] SSOT del detector de apropiación horaria. Devuelve
+    [{label, hard}] de categorías de alimento que NO corresponden al `slot_key`
+    (ya canonicalizado: desayuno/almuerzo/cena/merienda). Match WORD-BOUNDARY sobre el
+    NOMBRE (anti-falso-positivo: no mira ingredientes; respeta exclusiones de modificadores
+    como 'harina de arroz'). Pura → unit-testable. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    rules = SLOT_INAPPROPRIATE_FOODS.get(slot_key)
+    if not rules:
+        return []
+    nlow = strip_accents(str(name or "").lower())
+    if not nlow:
+        return []
+    out = []
+    for rule in rules:
+        if any(strip_accents(ex.lower()) in nlow for ex in rule.get("exclude", ())):
+            continue
+        for tok in rule["tokens"]:
+            try:
+                if re.search(r"\b" + re.escape(strip_accents(tok.lower())), nlow):
+                    out.append({"label": rule["label"], "hard": rule.get("hardness") == "hard"})
+                    break
+            except Exception:
+                if tok in nlow:
+                    out.append({"label": rule["label"], "hard": rule.get("hardness") == "hard"})
+                    break
+    return out
+
+
+def build_meal_timing_rules(meal_type: str) -> str:
+    """[P1-SLOT-APPROPRIATENESS] SSOT del directivo compacto de coherencia de HORARIO para los
+    prompts de UPDATE (swap S3 / chat-modify): qué NO va en este slot + guía positiva es-DO.
+    Devuelve '' si el slot no se reconoce. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    slot = canonical_slot_key(meal_type)
+    if not slot:
+        return ""
+    parts = []
+    rules = SLOT_INAPPROPRIATE_FOODS.get(slot)
+    if rules:
+        prohibited = "; ".join(r["label"] for r in rules)
+        parts.append(
+            f"- 🕒 COHERENCIA DE HORARIO ({meal_type}): este plato es para el {slot}. "
+            f"NO uses en este horario: {prohibited}."
+        )
+    hint = SLOT_POSITIVE_HINT.get(slot)
+    if hint:
+        parts.append(f"- 🍽️ {hint}")
+    return ("\n    " + "\n    ".join(parts)) if parts else ""
+
+
 import unicodedata
 import re
 from datetime import datetime, timezone, timedelta

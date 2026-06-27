@@ -1455,6 +1455,9 @@ from constants import (
     # `RECIPE_INGREDIENT_STOPWORDS` vivía hardcodeado en el orquestador con
     # riesgo de divergir de COMPLEX_TECHNIQUE_KEYWORDS al añadir vocabulario.
     COMPLEX_TECHNIQUE_KEYWORDS, RECIPE_INGREDIENT_STOPWORDS,
+    # [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) SSOT de coherencia comida↔horario.
+    slot_violations_for_meal_name, canonical_slot_key, build_meal_timing_rules,
+    SLOT_POSITIVE_HINT,
 )
 
 # [P2-ORCH-8 · 2026-05-28] Reconciliación per-user vs PLAN_CHUNK_SIZE. Si el
@@ -7893,6 +7896,41 @@ def _detect_slot_incoherence(days: list) -> list:
     return issues
 
 
+def _detect_slot_appropriateness(days: list) -> list:
+    """[P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Detector DETERMINISTA de platos cuyo TIPO
+    no encaja con su horario para un dominicano: arroz/locrio/pasta en DESAYUNO; "arroz de noche" /
+    comida de desayuno (cereal/panqueque) en la CENA. Reusa el SSOT
+    `constants.slot_violations_for_meal_name` (match word-boundary sobre el NOMBRE — anti-falso-positivo:
+    NO flagea "Panqueques de harina de arroz" por el modificador, protegiendo la creatividad G5).
+    Devuelve una lista de dicts {day, slot, name, label, hard, text}. Es el PRODUCTOR del gate de retry
+    en `review_plan_node` (S1). El prompt del day_generator (§9/§15) ya pedía esto advisory; este gate lo
+    vuelve enforced. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    issues: list = []
+    for day in days or []:
+        if not isinstance(day, dict):
+            continue
+        day_num = day.get("day", "?")
+        for m in day.get("meals", []) or []:
+            if not isinstance(m, dict):
+                continue
+            slot_key = _SLOT_KEY_MAP.get(_norm_text(m.get("meal", "")))
+            if not slot_key:
+                continue
+            name = m.get("name", "")
+            for v in slot_violations_for_meal_name(name, slot_key):
+                _fix = SLOT_POSITIVE_HINT.get(slot_key, "")
+                issues.append({
+                    "day": day_num, "slot": slot_key, "name": name,
+                    "label": v["label"], "hard": v["hard"],
+                    "text": (
+                        f"COMIDA FUERA DE HORARIO (rechazo de coherencia cultural es-DO): Día {day_num}, "
+                        f"{slot_key}: «{name}» es {v['label']}, que no corresponde al {slot_key} dominicano. "
+                        f"Cámbialo por un plato propio del horario. {_fix}"
+                    ),
+                })
+    return issues
+
+
 @_node_label("self_critique")
 async def self_critique_node(state: PlanState) -> dict:
     """Evalúa los días generados y aplica correcciones in-place si hay deficiencias."""
@@ -9080,6 +9118,14 @@ BAND_GATE_USE_MACROS_ONLY = _env_bool("MEALFIT_BAND_GATE_USE_MACROS_ONLY", False
 BAND_RETRY_GATE_ENABLED = _env_bool("MEALFIT_BAND_RETRY_GATE", True)
 BAND_RETRY_THRESHOLD = _env_float("MEALFIT_BAND_RETRY_THRESHOLD", 0.5)
 
+# [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Gate de COHERENCIA DE HORARIO: rechaza platos
+# cuyo TIPO no encaja con su slot (arroz/locrio/pasta en desayuno = duro; "arroz de noche" / comida
+# de desayuno en la cena = duro con degradación a advisory en el intento final). Gobierna el gate de
+# retry en review_plan_node (S1) Y el backstop per-comida de las superficies de UPDATE (swap S3 /
+# regenerate-day S2). Default ON (la convención horaria es-DO es el ejemplo central del owner). Rollback
+# sin redeploy: MEALFIT_SLOT_APPROPRIATENESS_GATE=false. tooltip-anchor: P1-SLOT-APPROPRIATENESS
+SLOT_APPROPRIATENESS_GATE_ENABLED = _env_bool("MEALFIT_SLOT_APPROPRIATENESS_GATE", True)
+
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
 # PRODUCCIÓN, delata una degradación SILENCIOSA si está mal seteada. Función PURA (lee los knobs módulo-nivel
@@ -10004,6 +10050,28 @@ def clinical_backstop_for_meal(meal: dict, *, allergies=None, diet_type=None, fo
     except Exception as _clin_e:
         return [f"error de re-validación clínica ({type(_clin_e).__name__}: {_clin_e}) — bloqueo conservador"]
     return out
+
+
+def slot_coherence_backstop_for_meal(meal: dict, meal_type: str) -> list:
+    """[P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Backstop DETERMINISTA per-comida de coherencia
+    de HORARIO, reusable por las superficies de UPDATE (swap S3 / regenerate-day S2). Espejo de
+    `clinical_backstop_for_meal` pero CALIDAD, no seguridad: reusa el SSOT
+    `constants.slot_violations_for_meal_name` (match word-boundary sobre el NOMBRE). Devuelve lista de
+    strings de violación (vacía = ok). Gateado por SLOT_APPROPRIATENESS_GATE_ENABLED. FAIL-OPEN: un error
+    del detector NUNCA bloquea el update (a diferencia del backstop clínico, abortivo) — la coherencia de
+    horario es cosmética; degradarla es preferible a un cero-plato. tooltip-anchor: P1-SLOT-APPROPRIATENESS"""
+    if not SLOT_APPROPRIATENESS_GATE_ENABLED or not isinstance(meal, dict):
+        return []
+    try:
+        slot_key = canonical_slot_key(meal_type) or _SLOT_KEY_MAP.get(_norm_text(meal_type))
+        if not slot_key:
+            return []
+        out = []
+        for v in slot_violations_for_meal_name(meal.get("name", ""), slot_key):
+            out.append(f"{v['label']} no corresponde al {slot_key} (coherencia de horario es-DO)")
+        return out
+    except Exception:
+        return []
 
 
 def renal_protein_trim_for_update(meals: list, protein_ceiling_g: float, db=None, *, renal_capped: bool = True) -> bool:
@@ -16028,6 +16096,44 @@ Responde ÚNICAMENTE con el JSON de revisión.
                             severity = _severity_max(severity, "high")
         except Exception as _vg_e:
             logger.warning(f"[P3-VARIETY-HARD-GATE] validador falló: {type(_vg_e).__name__}: {_vg_e}")
+
+    # [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Gate de COHERENCIA DE HORARIO: rechaza platos
+    # cuyo TIPO no encaja con su slot. Decisión de producto (owner): arroz/locrio/pasta en DESAYUNO =
+    # SIEMPRE duro (no degrada); "arroz de noche" / comida de desayuno en la CENA = duro CON degradación
+    # a advisory en el intento final → nunca cero-plan (best-attempt se entrega con banner degraded).
+    # Productor: `_detect_slot_appropriateness` (SSOT `slot_violations_for_meal_name`, match word-boundary
+    # sobre el NOMBRE, anti-falso-positivo). El prompt (day_generator §9/§15) ya lo pedía advisory; este
+    # gate lo vuelve enforced (espejo de _variety_repeat_gate_issues). Anchor: P1-SLOT-APPROPRIATENESS.
+    if SLOT_APPROPRIATENESS_GATE_ENABLED:
+        try:
+            _slot_app_issues = _detect_slot_appropriateness(plan.get("days", []) if isinstance(plan, dict) else [])
+            if _slot_app_issues:
+                _sa_attempt = int(state.get("attempt", 1))
+                _sa_is_final = _sa_attempt >= MAX_ATTEMPTS
+                _sa_has_hard = any(i.get("hard") for i in _slot_app_issues)
+                # Degrada a advisory en el intento FINAL solo si NO hay violación dura (desayuno con
+                # arroz/locrio = siempre duro por decisión de producto). Mezcla hard+soft en intento
+                # final → rechaza igual (el plan se entrega como best-attempt con banner degraded).
+                if _sa_is_final and not _sa_has_hard:
+                    logger.warning(
+                        f"🕒 [P1-SLOT-APPROPRIATENESS] {len(_slot_app_issues)} incoherencia(s) de horario "
+                        f"en intento final ({_sa_attempt}/{MAX_ATTEMPTS}) sin violación dura → ADVISORY "
+                        f"(entrego el plan). Primera: {_slot_app_issues[0]['label']} en "
+                        f"{_slot_app_issues[0]['slot']} (Día {_slot_app_issues[0]['day']})."
+                    )
+                    if isinstance(plan, dict):
+                        plan["_slot_appropriateness_advisory_final"] = True
+                else:
+                    for _sa in _slot_app_issues:
+                        logger.warning(
+                            f"🕒 [P1-SLOT-APPROPRIATENESS] {_sa['label']} en {_sa['slot']} "
+                            f"(Día {_sa['day']}, hard={_sa['hard']}) → rechazo para coherencia de horario."
+                        )
+                        approved = False
+                        issues.append(_sa["text"])
+                        severity = _severity_max(severity, "high")
+        except Exception as _sa_e:
+            logger.warning(f"[P1-SLOT-APPROPRIATENESS] validador falló: {type(_sa_e).__name__}: {_sa_e}")
 
     # [P2-SHOPPING-COMPLETENESS · 2026-06-21] Gate de lista de compras VACÍA — INDEPENDIENTE del
     # modo del coherence guard (en warn/off el guard no rechaza; este gate sí). Si el plan tiene

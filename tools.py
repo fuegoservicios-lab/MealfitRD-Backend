@@ -739,6 +739,18 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         except Exception as _cm_gm_e:
             logger.debug(f"[P2-CHATMODIFY-GAINMUSCLE-DENSITY] directiva densidad (modify) falló: {_cm_gm_e}")
 
+    # [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Guía de coherencia de HORARIO al prompt de
+    # chat-modify (ADVISORY, no backstop: si el usuario pide explícitamente algo fuera de horario su
+    # deseo gana — el item 1 del template manda "Aplica EXACTAMENTE el cambio… DEBES incluirlo").
+    # SSOT constants.build_meal_timing_rules. Paridad de PROMPT con swap S3 / day_generator S1.
+    try:
+        from constants import build_meal_timing_rules as _bmtr
+        _timing_block = _bmtr(meal_type)
+        if _timing_block:
+            context_extras = _timing_block + "\n" + context_extras
+    except Exception as _tr_e:
+        logger.debug(f"[P1-SLOT-APPROPRIATENESS] timing rules chat-modify fallaron (no bloquea): {_tr_e}")
+
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),

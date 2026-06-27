@@ -31,7 +31,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 # de un solo nivel: `graph_orchestrator` NO importa `agent` (verificado), no
 # hay ciclo. Si en el futuro la dirección de import cambia, mover el helper
 # a un módulo neutro.
-from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal
+from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, slot_coherence_backstop_for_meal, SLOT_APPROPRIATENESS_GATE_ENABLED
 import concurrent.futures
 import traceback
 from datetime import datetime, timezone
@@ -931,6 +931,18 @@ def swap_meal(form_data: dict):
         except Exception as _cond_e:
             logger.debug(f"[P1-UPDATE-MICROS] directivas condición/fármaco fallaron (no bloquea): {_cond_e}")
 
+    # [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Inyecta las reglas de coherencia de HORARIO del
+    # slot al prompt del swap (paridad con day_generator §9/§15 de S1). El usuario solo pidió "cámbialo"
+    # → el sistema debe elegir un plato propio del horario. SSOT constants.build_meal_timing_rules.
+    if SLOT_APPROPRIATENESS_GATE_ENABLED:
+        try:
+            from constants import build_meal_timing_rules as _bmtr
+            _timing_block = _bmtr(meal_type)
+            if _timing_block:
+                context_extras += _timing_block
+        except Exception as _tr_e:
+            logger.debug(f"[P1-SLOT-APPROPRIATENESS] timing rules swap fallaron (no bloquea): {_tr_e}")
+
     prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
         rejected_meal=rejected_meal,
         meal_type=meal_type,
@@ -1276,6 +1288,30 @@ def swap_meal(form_data: dict):
                     f"una alternativa segura."
                 )
                 raise ValueError("CLINICAL_VIOLATION: " + "; ".join(_clin_viol))
+
+        # [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Backstop de coherencia de HORARIO en swap:
+        # el usuario solo pidió "cámbialo" (no un plato específico) → NO debemos meter un plato fuera de
+        # horario ("arroz de noche", arroz/locrio en desayuno, comida de desayuno en cena). Espejo del
+        # backstop clínico pero CALIDAD: presiona retry vía feedback; si persiste tras los retries, el
+        # except cae al fallback slot-genérico. NO levanta en strict_pantry-sin-inventario (evita un 422
+        # por una cuestión de calidad). El ValueError NO cuenta como CB failure (P2-CB-GUARDRAIL-NOT-FAILURE).
+        if SLOT_APPROPRIATENESS_GATE_ENABLED and not (strict_pantry and not clean_ingredients):
+            try:
+                _slot_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
+                _slot_viol = slot_coherence_backstop_for_meal(_slot_dump, meal_type)
+            except Exception:
+                _slot_viol = []
+            if _slot_viol:
+                logger.warning(
+                    f"🕒 [P1-SLOT-APPROPRIATENESS] swap fuera de horario | meal_type={meal_type} | viol={_slot_viol}"
+                )
+                _current_prompt[0] = prompt_text + (
+                    f"\n\n🕒 COHERENCIA DE HORARIO (OBLIGATORIO): el plato anterior no encaja con el horario "
+                    f"«{meal_type}»: {'; '.join(_slot_viol)}. Propón un plato que SÍ corresponda a ese momento "
+                    f"del día para un dominicano — el arroz/locrio/pasta van en almuerzo/cena (NUNCA desayuno); "
+                    f"la cena es ligera (evita 'arroz de noche' y comidas de desayuno). Mantén los macros objetivo."
+                )
+                raise ValueError("SLOT_INCOHERENCE: " + "; ".join(_slot_viol))
 
         return res
 
