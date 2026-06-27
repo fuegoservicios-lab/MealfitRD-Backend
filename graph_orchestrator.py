@@ -9234,6 +9234,9 @@ BARIATRIC_YOGURT_CAP_G = _env_int("MEALFIT_BARIATRIC_YOGURT_CAP_G", 120, validat
 # rechazó 'guineo 240g en merienda → dumping') y de AGUACATE/grasa densa (≤30g — rechazó '0.5 aguacate excede
 # 1/4'). Complementa el cap de queso/yogurt. Anchor: P1-BARIATRIC-PROTEIN-DENSITY
 BARIATRIC_FRUIT_CAP_G = _env_int("MEALFIT_BARIATRIC_FRUIT_CAP_G", 80, validator=lambda v: 40 <= v <= 200)
+# [P1-BARIATRIC-TORONJA · 2026-06-27] Las frutas de ALTO índice glucémico (guineo/mango/uva/piña/plátano) tienen
+# un cap más estricto (≤50g) — el revisor médico rechazaba 'mango 103g/guineo 83g' por dumping aún capeadas a 80g.
+BARIATRIC_HIGHGI_FRUIT_CAP_G = _env_int("MEALFIT_BARIATRIC_HIGHGI_FRUIT_CAP_G", 50, validator=lambda v: 30 <= v <= 100)
 BARIATRIC_AVOCADO_CAP_G = _env_int("MEALFIT_BARIATRIC_AVOCADO_CAP_G", 30, validator=lambda v: 15 <= v <= 80)
 BARIATRIC_NUT_CAP_G = _env_int("MEALFIT_BARIATRIC_NUT_CAP_G", 20, validator=lambda v: 10 <= v <= 60)
 # [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] (iter 4 — GAP2 del crítico adversario) Cap de VOLUMEN AGREGADO por
@@ -13420,10 +13423,12 @@ _BARIATRIC_CHEESE_TOKENS = ("queso",)
 _BARIATRIC_YOGURT_TOKENS = ("yogur", "yogurt")
 # [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] (iter 3) tokens de fruta (start-anchored vía _name_has_token →
 # plural-safe, sin colisión mid-word tipo 'pina'↔'espinaca') + grasa densa para el cap bariátrico de porción.
-_BARIATRIC_FRUIT_TOKENS = ("guineo", "banana", "platano maduro", "mango", "uva", "pina", "lechosa", "papaya",
-                           "manzana", "pera", "melon", "sandia", "mandarina", "naranja", "fresa", "melocoton",
-                           "durazno", "kiwi", "guayaba", "pinia", "chinola", "tamarindo", "nispero", "ciruela",
-                           "cereza", "granadilla", "carambola", "jagua", "zapote", "mamon")
+# [P1-BARIATRIC-TORONJA] frutas de ALTO IG → cap más estricto (≤50g). Se chequean ANTES que el grupo general
+# de fruta (≤80g) en `_caps` (gana el primer token group que matchea).
+_BARIATRIC_HIGHGI_FRUIT_TOKENS = ("guineo", "banana", "platano", "mango", "uva", "pina", "pinia")
+_BARIATRIC_FRUIT_TOKENS = ("lechosa", "papaya", "manzana", "pera", "melon", "sandia", "mandarina", "naranja",
+                           "fresa", "melocoton", "durazno", "kiwi", "guayaba", "chinola", "tamarindo", "nispero",
+                           "ciruela", "cereza", "granadilla", "carambola", "jagua", "zapote", "mamon")
 _BARIATRIC_FAT_TOKENS = ("aguacate",)
 # [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] nueces/semillas: densidad calórica muy alta → cap estricto por comida.
 _BARIATRIC_NUT_TOKENS = ("almendra", "nuez", "nueces", "mani", "cacahuate", "merey", "maranon", "pistacho",
@@ -13483,6 +13488,7 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
         from nutrition_db import rescale_ingredient_string as _resc
         _caps = ((_BARIATRIC_CHEESE_TOKENS, int(BARIATRIC_CHEESE_CAP_G)),
                  (_BARIATRIC_YOGURT_TOKENS, int(BARIATRIC_YOGURT_CAP_G)),
+                 (_BARIATRIC_HIGHGI_FRUIT_TOKENS, int(BARIATRIC_HIGHGI_FRUIT_CAP_G)),  # alto-IG primero (≤50g)
                  (_BARIATRIC_FRUIT_TOKENS, int(BARIATRIC_FRUIT_CAP_G)),
                  (_BARIATRIC_FAT_TOKENS, int(BARIATRIC_AVOCADO_CAP_G)),
                  (_BARIATRIC_NUT_TOKENS, int(BARIATRIC_NUT_CAP_G)))
@@ -13527,6 +13533,12 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                     rec_idx, rec_kcal = [], 0.0
                     for j, ing in enumerate(ings):
                         if j in capped_idx or not isinstance(ing, str):
+                            continue
+                        # [P1-BARIATRIC-TORONJA] NO recuperar escalando un ítem que TAMBIÉN tiene cap (queso/
+                        # fruta/yogurt/nuez/aguacate) → re-inflaría por encima de su propio tope (bug: manzana
+                        # 80→133 al recuperar las kcal de un mango capeado). Solo escala proteína/vegetales libres.
+                        _lowj = _norm_text(ing)
+                        if any(_name_has_token(_t, _lowj) for _toks, _c in _caps for _t in _toks):
                             continue
                         mcj = db.macros_from_ingredient_string(ing) or {}
                         if not mcj.get("grams"):
@@ -13614,7 +13626,14 @@ _GEN_INCONGRUENT_IN_BATIDO = ("papa", "yuca", "batata", "yautia", "mapuey", "nam
                               "pan integral", "pan blanco", "platano", "huevo", "clara", "yema", "mangu", "tostada")
 # Ítems "libres" (no de catálogo) que NUNCA se dropean como glitch (agua/condimentos/cítrico al gusto).
 _GEN_FREE_ITEM_TOKENS = ("agua", "hielo", "sal", "pimienta", "especia", "al gusto", "limon", "vinagre", "canela",
-                         "hierba", "perejil", "cilantro", "oregano", "comino", "ajo en polvo", "stevia", "vainilla")
+                         "hierba", "perejil", "cilantro", "oregano", "comino", "ajo en polvo", "stevia", "vainilla",
+                         "caldo", "broth", "consome", "sopa", "sofrito", "sazon", "te ", "infusion", "jengibre")
+# Palabras de unidad/conector a ignorar al contar "palabras de contenido" de un ingrediente (anti-falso-positivo
+# del drop de glitch: 'caldo de verduras' = multi-palabra legítimo; 'EsGuineocas' = una palabra = garble).
+_GEN_UNIT_FILLER_WORDS = frozenset((
+    "de", "la", "el", "con", "y", "a", "taza", "tazas", "cda", "cdta", "cdas", "cdtas", "cucharada",
+    "cucharadita", "cucharadas", "g", "gr", "gramo", "gramos", "ml", "unidad", "unidades", "pieza", "piezas",
+    "rodaja", "rodajas", "lonja", "lonjas", "mediano", "mediana", "pequeno", "pequena", "grande", "taza/s"))
 
 
 def _generation_sanity_autofix(plan, db=None) -> int:
@@ -13664,10 +13683,20 @@ def _generation_sanity_autofix(plan, db=None) -> int:
                         if not _ver:
                             _mc = db.macros_from_ingredient_string(ing) or {}
                             if not _mc.get("grams"):
-                                logger.info(f"🩹 [P3-GEN-SANITY] dropeado '{str(ing)[:34]}' (nombre irresoluble/glitch)")
-                                changed = True
-                                fixed += 1
-                                continue
+                                # [P3-GEN-SANITY] CONSERVADOR: solo dropear GARBLE de UNA palabra de contenido
+                                # (token mashed tipo 'EsGuineocas'). Los nombres multi-palabra ('caldo de
+                                # verduras', 'salsa criolla') son legítimos aunque no estén en catálogo → NO dropear.
+                                try:
+                                    from nutrition_db import _strip_qty_prefix as _sqp, _GRAM_HINT_RE as _ghr
+                                    _core = _ghr.sub("", _sqp(str(ing))).strip()
+                                    _content = [w for w in _norm_text(_core).split() if w not in _GEN_UNIT_FILLER_WORDS]
+                                except Exception:
+                                    _content = []
+                                if len(_content) <= 1 and _content:
+                                    logger.info(f"🩹 [P3-GEN-SANITY] dropeado '{str(ing)[:34]}' (nombre irresoluble/glitch de 1 palabra)")
+                                    changed = True
+                                    fixed += 1
+                                    continue
                     keep.append(ing)
                 if changed and keep:  # nunca dejar la comida sin ingredientes
                     m["ingredients"] = keep

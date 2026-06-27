@@ -351,7 +351,10 @@ CONDITION_RULES: tuple = (
     # queso/lácteos es el backstop del rechazo literal #1; el prompt cubre dumping/volumen/proteína-primero.
     ConditionRule(
         id="bariatric", label="Cirugía bariátrica (sleeve/bypass/manga)", terms=BARIATRIC_CONDITION_TERMS,
-        precedence=20, substitutions=_DM2_SUGAR_SUBS, sub_negatives=_DM2_SUGAR_NEGATIVES,
+        # [P1-BARIATRIC-TORONJA · 2026-06-27] + _DM2_GLYCEMIC_SUBS: incluye TORONJA→Fresa (contraindicación
+        # ABSOLUTA bariátrica: inhibe CYP3A4 → toxicidad farmacológica + irrita la anastomosis; el revisor la
+        # rechazaba CRÍTICO, corr=c42e0575) + refinados→integral (IG bajo, también deseable en bariátrica).
+        precedence=20, substitutions=_DM2_SUGAR_SUBS + _DM2_GLYCEMIC_SUBS, sub_negatives=_DM2_SUGAR_NEGATIVES,
         prompt_block=(
             "🔻 REGLA CLÍNICA — CIRUGÍA BARIÁTRICA (sleeve/bypass/manga, fase de MANTENIMIENTO / dieta general, "
             ">6 meses post-op; prevención de SÍNDROME DE DUMPING y obstrucción del pouch):\n"
