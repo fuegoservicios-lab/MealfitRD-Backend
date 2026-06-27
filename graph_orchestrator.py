@@ -13176,6 +13176,51 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         return 0
 
 
+def _enforce_meal_count(days: list, target_meal_types: list) -> int:
+    """[P1-CLINICAL-MEAL-COUNT · 2026-06-27] FUERZA el conteo de comidas/día decidido clínicamente. El
+    day_generator (y el self-critique) a veces AÑADE meriendas pese a la directiva del prompt — el LLM no es
+    determinista — así un plan DM2 de "3 comidas" salía 4/3/4 (observado en vivo, corr 6994d55d). Esto recorta
+    cada día al target: conserva una comida por cada slot objetivo (en orden), descarta las extras (típicamente
+    meriendas sobrantes). Corre ANTES del motor de macros → `_canonical_slot_fractions` re-distribuye el target
+    diario entre las comidas restantes (el TOTAL del día se preserva, solo cambia el reparto por slot). NO añade
+    comidas si el día trae MENOS que el target (el LLM rara vez produce de menos). Devuelve nº recortadas.
+    Fail-safe. tooltip-anchor: P1-CLINICAL-MEAL-COUNT"""
+    try:
+        from collections import Counter
+        tcanon = [_SLOT_KEY_MAP.get(_norm_text(str(t)), _norm_text(str(t))) for t in (target_meal_types or [])]
+        if not tcanon:
+            return 0
+        tcount = Counter(tcanon)
+        n_target = len(tcanon)
+        trimmed = 0
+        for day in days or []:
+            if not isinstance(day, dict):
+                continue
+            meals = day.get("meals")
+            if not isinstance(meals, list) or len(meals) <= n_target:
+                continue
+            keep_idx, used = [], Counter()
+            for i, m in enumerate(meals):
+                slot = _SLOT_KEY_MAP.get(_norm_text(str((m or {}).get("meal", ""))), _norm_text(str((m or {}).get("meal", ""))))
+                if used[slot] < tcount.get(slot, 0):
+                    keep_idx.append(i)
+                    used[slot] += 1
+            if len(keep_idx) < n_target:   # slots renombrados/raros: completa con las primeras restantes
+                for i in range(len(meals)):
+                    if i not in keep_idx:
+                        keep_idx.append(i)
+                        if len(keep_idx) >= n_target:
+                            break
+            keep_idx = sorted(keep_idx[:n_target])
+            if len(keep_idx) < len(meals):
+                trimmed += len(meals) - len(keep_idx)
+                day["meals"] = [meals[i] for i in keep_idx]
+        return trimmed
+    except Exception as _emc_e:
+        logger.warning(f"[P1-CLINICAL-MEAL-COUNT] enforce_meal_count falló (no bloquea): {type(_emc_e).__name__}: {_emc_e}")
+        return 0
+
+
 # [MACRO-ENGINE-EXTRACT · 2026-06-19] Motor de sizing DETERMINISTA extraído VERBATIM de assemble_plan_node
 # (solver → closer → trim-techo → cal-reconcile → capa clínica FS1-FS9). Razón: hacerlo LLAMABLE para que el
 # harness de validación offline (scripts/macro_sizing_replay.py) reproduzca SOLO este motor sobre planes crudos
@@ -14228,6 +14273,24 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 }, ensure_ascii=False, default=str) + "\n")
         except Exception as _mc_e:
             logger.warning(f"[MACRO-CAPTURE] {type(_mc_e).__name__}: {_mc_e}")
+
+    # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] ENFORCEMENT del conteo de comidas: el day-gen/self-critique a
+    # veces añade meriendas pese a la directiva (observado en vivo: DM2→3 salía 4/3/4). Recortamos al conteo
+    # clínico ANTES del motor de macros → los macros del día se re-distribuyen a las comidas restantes (total
+    # diario preservado). Sin señal clínica el target es 4 → NO recorta los planes normales de 4. Gateado por knob.
+    if CLINICAL_MEAL_COUNT_ENABLED:
+        try:
+            from nutrition_calculator import decide_meals_per_day, meal_types_for_count
+            _mc_dec = decide_meals_per_day(form_data, _daily_cals)
+            _mc_trim = _enforce_meal_count(days, meal_types_for_count(_mc_dec["num_meals"]))
+            if _mc_trim:
+                logger.info(
+                    f"🍽️ [P1-CLINICAL-MEAL-COUNT] enforcement: {_mc_trim} comida(s) extra recortada(s) para "
+                    f"cumplir {_mc_dec['num_meals']}/día ({_mc_dec['source']}: {_mc_dec['reason'][:60]})."
+                )
+        except Exception as _mce:
+            logger.warning(f"[P1-CLINICAL-MEAL-COUNT] enforcement en assemble falló (no bloquea): {type(_mce).__name__}: {_mce}")
+
     _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
 
     # [P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Honestidad del nombre del plato: corre DESPUÉS del closer

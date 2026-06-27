@@ -91,6 +91,36 @@ def test_all_splits_sum_to_one():
         assert abs(sum(split.values()) - 1.0) < 1e-9, f"split {n} no suma 1.0"
 
 
+def test_enforce_meal_count_trims_extra_meriendas():
+    """El day-gen a veces añade meriendas pese a la directiva (DM2→3 salió 4/3/4 en vivo). El enforcement
+    recorta al target conservando los slots principales y descartando las extras; el total de macros se
+    re-distribuye downstream (no se testea aquí, es del motor de macros)."""
+    import graph_orchestrator as g
+
+    def _day(slots):
+        return {"meals": [{"meal": s, "name": s} for s in slots]}
+
+    days = [
+        _day(["Desayuno", "Almuerzo", "Merienda", "Cena"]),   # 4 → 3
+        _day(["Desayuno", "Almuerzo", "Cena"]),               # ya 3
+        _day(["Desayuno", "Merienda", "Almuerzo", "Cena"]),   # 4 (merienda en medio) → 3
+    ]
+    trimmed = g._enforce_meal_count(days, nc.meal_types_for_count(3))
+    assert trimmed == 2
+    for d in days:
+        assert [m["meal"] for m in d["meals"]] == ["Desayuno", "Almuerzo", "Cena"]
+
+
+def test_enforce_meal_count_does_not_pad():
+    """Si el día trae MENOS comidas que el target, NO se padea (deja como está)."""
+    import graph_orchestrator as g
+    d = [{"meals": [{"meal": s, "name": s} for s in ["Desayuno", "Almuerzo", "Merienda", "Cena"]]}]
+    assert g._enforce_meal_count(d, nc.meal_types_for_count(5)) == 0
+    assert len(d[0]["meals"]) == 4
+    # target 4 sobre día de 4 → no toca
+    assert g._enforce_meal_count(d, nc.meal_types_for_count(4)) == 0
+
+
 def test_canonical_fractions_adapt_to_count():
     import graph_orchestrator as g
     for n in (3, 5, 6):
