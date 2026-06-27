@@ -9195,6 +9195,14 @@ UPDATE_MICRO_STEER_ENABLED = _env_bool("MEALFIT_UPDATE_MICRO_STEER", True)
 # → 4 (comportamiento actual). Default ON. Rollback: =false. Anchor: P1-CLINICAL-MEAL-COUNT
 CLINICAL_MEAL_COUNT_ENABLED = _env_bool("MEALFIT_CLINICAL_MEAL_COUNT", True)
 
+# [P1-DM2-GLYCEMIC-PORTION-CAP · 2026-06-27] Para DM2/prediabetes, cap DURO de la porción de víver/almidón de
+# ALTO índice glucémico (batata/yuca/papa/plátano maduro/mangú/casabe) a ≤cap_g por comida — el revisor médico
+# rechazaba '376g batata en una comida' por carga glucémica. Determinista (no depende del LLM, complementa la
+# directiva del prompt). Recupera las calorías escalando los ingredientes NO-almidón del plato → mantiene las
+# kcal en banda (los carbos bajan, que es el objetivo DM2). Default ON. Rollback: =false. Anchor: P1-DM2-GLYCEMIC-PORTION-CAP
+DM2_GLYCEMIC_PORTION_CAP_ENABLED = _env_bool("MEALFIT_DM2_GLYCEMIC_PORTION_CAP", True)
+DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 150, validator=lambda v: 60 <= v <= 400)
+
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
 # PRODUCCIÓN, delata una degradación SILENCIOSA si está mal seteada. Función PURA (lee los knobs módulo-nivel
@@ -13221,6 +13229,125 @@ def _enforce_meal_count(days: list, target_meal_types: list) -> int:
         return 0
 
 
+# [P1-DM2-GLYCEMIC-PORTION-CAP · 2026-06-27] Víveres/almidones de ALTO índice glucémico (tokens normalizados,
+# word-boundary). NO incluye arroz/pan blancos (los swapea condition_rules a integral antes) ni plátano VERDE
+# (bajo IG, recomendado en DM2). 'papa' lleva exclusión de 'papaya' (colisión de prefijo).
+_DM2_HIGH_GI_STARCH_TOKENS = ("batata", "yuca", "yautia", "name", "platano maduro", "mangu", "casabe", "papa")
+_DM2_HIGH_GI_CAP_EXCLUDE = ("papaya", "harina de", "leche de", "vinagre de", "agua de")
+
+
+def _ing_kcal_estimate(mc: dict) -> float:
+    if not mc:
+        return 0.0
+    k = mc.get("kcal") or mc.get("cals") or mc.get("calories")
+    if k:
+        try:
+            return float(k)
+        except (TypeError, ValueError):
+            pass
+    return (4.0 * float(mc.get("protein") or 0) + 4.0 * float(mc.get("carbs") or 0)
+            + 9.0 * float(mc.get("fats") or mc.get("fat") or 0))
+
+
+def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int | None = None) -> int:
+    """[P1-DM2-GLYCEMIC-PORTION-CAP · 2026-06-27] Para planes DM2/prediabetes, recorta la PORCIÓN de cada
+    víver/almidón de alto índice glucémico (batata/yuca/papa/plátano maduro/mangú/casabe) a ≤cap_g por comida
+    (default 150g) — el revisor médico rechazaba '376g batata en una comida' por carga glucémica postprandial.
+    DETERMINISTA (no depende de que el LLM obedezca la directiva del prompt). Para no dejar un hueco calórico
+    que rompa el band gate de macros, RECUPERA las kcal removidas escalando proporcionalmente los OTROS
+    ingredientes del plato (no-almidón); en renal EXCLUYE los de grupo proteína (no subir proteína iatrogénica).
+    Resultado: kcal del plato ~iguales (band-safe), carbos abajo (objetivo DM2), índice glucémico abajo.
+    Recomputa los macros del plato. Corre POST-sizing (si corriera antes, el motor re-inflaría la porción).
+    Gateado por DM2_GLYCEMIC_PORTION_CAP_ENABLED + condición DM2. Devuelve nº de porciones recortadas.
+    Fail-safe. tooltip-anchor: P1-DM2-GLYCEMIC-PORTION-CAP"""
+    if not DM2_GLYCEMIC_PORTION_CAP_ENABLED:
+        return 0
+    try:
+        from micronutrients import _has_condition
+        from constants import DIABETES_CONDITION_TERMS
+        _conds = []
+        for _k in ("medicalConditions", "medical_conditions", "conditions", "otherConditions", "other_conditions"):
+            _v = (form_data or {}).get(_k)
+            if isinstance(_v, (list, tuple)):
+                _conds.extend(str(x) for x in _v)
+            elif _v:
+                _conds.append(str(_v))
+        if not _has_condition(_conds, DIABETES_CONDITION_TERMS):
+            return 0
+        cap = int(cap_g or DM2_HIGH_GI_CAP_G)
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        from nutrition_db import rescale_ingredient_string as _resc
+        _renal = _has_condition(_conds, _RENAL_CONDITION_TERMS)
+        capped = 0
+        for day in days or []:
+            if not isinstance(day, dict):
+                continue
+            for m in (day.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                removed_kcal = 0.0
+                capped_idx = set()
+                for i, ing in enumerate(ings):
+                    if not isinstance(ing, str):
+                        continue
+                    low = _norm_text(ing)
+                    if any(ex in low for ex in _DM2_HIGH_GI_CAP_EXCLUDE):
+                        continue
+                    if not any(_name_has_token(t, low) for t in _DM2_HIGH_GI_STARCH_TOKENS):
+                        continue
+                    mc = db.macros_from_ingredient_string(ing) or {}
+                    grams = mc.get("grams")
+                    if not grams or float(grams) <= cap:
+                        continue
+                    factor = cap / float(grams)
+                    new_ing = _resc(ing, factor)
+                    if new_ing == ing:
+                        continue
+                    removed_kcal += _ing_kcal_estimate(mc) * (1.0 - factor)
+                    ings[i] = new_ing
+                    capped_idx.add(i)
+                    capped += 1
+                    logger.info(f"🩸 [P1-DM2-GLYCEMIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{cap}g (DM2)")
+                if not capped_idx:
+                    continue
+                # Recuperar las kcal removidas escalando los OTROS ingredientes (band-safe). En renal,
+                # excluir los de grupo proteína (no subir proteína por encima del cap KDIGO).
+                if removed_kcal > 1.0:
+                    rec_idx, rec_kcal = [], 0.0
+                    for j, ing in enumerate(ings):
+                        if j in capped_idx or not isinstance(ing, str):
+                            continue
+                        try:
+                            if _renal and _ingredient_macro_group(ing, db) == "protein":
+                                continue
+                        except Exception:
+                            pass
+                        mcj = db.macros_from_ingredient_string(ing) or {}
+                        if not mcj.get("grams"):
+                            continue  # no escalable ('al gusto', no resoluble)
+                        kj = _ing_kcal_estimate(mcj)
+                        if kj > 0:
+                            rec_idx.append(j)
+                            rec_kcal += kj
+                    if rec_idx and rec_kcal > 0:
+                        rfactor = max(1.0, min(2.5, (rec_kcal + removed_kcal) / rec_kcal))
+                        for j in rec_idx:
+                            ings[j] = _resc(ings[j], rfactor)
+                try:
+                    _truth_up_meal_macros_from_strings(m, db)
+                except Exception:
+                    pass
+        return capped
+    except Exception as _dgc_e:
+        logger.warning(f"[P1-DM2-GLYCEMIC-PORTION-CAP] falló (no bloquea): {type(_dgc_e).__name__}: {_dgc_e}")
+        return 0
+
+
 # [MACRO-ENGINE-EXTRACT · 2026-06-19] Motor de sizing DETERMINISTA extraído VERBATIM de assemble_plan_node
 # (solver → closer → trim-techo → cal-reconcile → capa clínica FS1-FS9). Razón: hacerlo LLAMABLE para que el
 # harness de validación offline (scripts/macro_sizing_replay.py) reproduzca SOLO este motor sobre planes crudos
@@ -14292,6 +14419,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
             logger.warning(f"[P1-CLINICAL-MEAL-COUNT] enforcement en assemble falló (no bloquea): {type(_mce).__name__}: {_mce}")
 
     _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
+
+    # [P1-DM2-GLYCEMIC-PORTION-CAP · 2026-06-27] Cap DURO de porción de víver alto-IG (batata/yuca/papa/
+    # plátano maduro/mangú/casabe) ≤150g por comida para DM2 — corre POST-sizing (el motor ya cuadró los
+    # macros; aquí recortamos el almidón glucémico y recuperamos las kcal escalando los otros ingredientes →
+    # band-safe). Cierra el rechazo del revisor médico ('376g batata, carga glucémica alta'). Gateado+DM2.
+    if DM2_GLYCEMIC_PORTION_CAP_ENABLED:
+        try:
+            _dm2_capped = cap_dm2_high_gi_portions(days, form_data)
+            if _dm2_capped:
+                logger.info(f"🩸 [P1-DM2-GLYCEMIC-PORTION-CAP] {_dm2_capped} porción(es) de almidón alto-IG "
+                            f"recortada(s) a ≤{DM2_HIGH_GI_CAP_G}g (DM2).")
+        except Exception as _dgc:
+            logger.warning(f"[P1-DM2-GLYCEMIC-PORTION-CAP] cap en assemble falló (no bloquea): {type(_dgc).__name__}: {_dgc}")
 
     # [P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Honestidad del nombre del plato: corre DESPUÉS del closer
     # (que ya reflejó en el nombre la proteína de rescate vía `_reflect_added_protein_in_name`). Corrige
