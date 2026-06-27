@@ -4862,6 +4862,43 @@ def _decrement_ledger_by_meal(ledger: dict, meal: dict, db) -> None:
             continue
 
 
+def _day_exceeds_pantry(meals: list, orig_ledger: dict, db, *, tol_frac: float = 0.05, tol_g: float = 15.0):
+    """[P2-REGEN-DAY-MACRO-REBALANCE · 2026-06-27] (audit Fase 2) ¿La suma de gramos que el DÍA consume de
+    cada ítem de pantry excede lo disponible en el inventario ORIGINAL (pre-loop)? Sirve para REVERTIR el
+    rebalanceador de macros a nivel-día si escaló una porción por encima de la Nevera (never-worse-than-
+    current). NO usa `_decrement_ledger_by_meal` (clampa a 0 → no detecta sobre-consumo); acumula el
+    consumo per-ítem y lo compara contra el original con tolerancia (redondeo). Ignora ingredientes NO
+    presentes en el ledger (externos, ya permitidos por `_external_tolerance` del swap). Devuelve
+    (excede: bool, detalle: str). Fail-safe → (False, ''). tooltip-anchor: P2-REGEN-DAY-MACRO-REBALANCE"""
+    try:
+        need: dict = {}
+        for m in meals or []:
+            if not isinstance(m, dict):
+                continue
+            for ing in (m.get("ingredients") or []):
+                try:
+                    s = ing if isinstance(ing, str) else (ing.get("name") or ing.get("item") or "")
+                    if not s:
+                        continue
+                    mm = db.macros_from_ingredient_string(s)
+                    if not mm:
+                        continue
+                    nm, grams = mm.get("name"), mm.get("grams")
+                    if nm and grams:
+                        need[nm] = need.get(nm, 0.0) + float(grams)
+                except Exception:
+                    continue
+        for nm, g in need.items():
+            avail = orig_ledger.get(nm)
+            if avail is None:
+                continue  # ingrediente externo (no pantry) → permitido
+            if g > avail * (1.0 + tol_frac) + tol_g:
+                return True, f"{nm}: necesita ~{int(g)}g pero hay ~{int(avail)}g"
+        return False, ""
+    except Exception:
+        return False, ""
+
+
 # [P5-DAY-REGEN-VARIETY-PROTEIN · 2026-06-23] Detección de la proteína principal de un plato
 # (nombre + ingredientes) para excluirla en los swaps siguientes del día → 4 proteínas distintas,
 # no 2 de res. Orden: principales primero, lácteos/legumbres al final (queso/yogurt son la
@@ -5092,6 +5129,9 @@ def api_regenerate_day(
 
         _db = IngredientNutritionDB()
         ledger = _inventory_grams_ledger(get_raw_user_inventory(user_id), _db)
+        # [P2-REGEN-DAY-MACRO-REBALANCE · 2026-06-27] Snapshot del inventario ORIGINAL (antes de que el loop
+        # decremente el ledger) para revalidar el día tras el rebalanceador de macros y revertir si excede.
+        _orig_ledger_grams = dict(ledger)
         # [P2-REGEN-DAY-LEDGER-LEAK · 2026-06-24] (re-audit P2-3) Decrementar el ledger también por los
         # platos CONSERVADOS (no solo los regenerados) para que un swap posterior no re-reclame un
         # ingrediente que un plato kept ya consume. Knob default ON. tooltip-anchor: P2-REGEN-DAY-LEDGER-LEAK
@@ -5264,6 +5304,38 @@ def api_regenerate_day(
                 "deficits": [],
             }
 
+        # [P2-REGEN-DAY-MACRO-REBALANCE · 2026-06-27] (audit Fase 2 / Finding 1) Rebalanceador de macros a
+        # nivel-DÍA: la MISMA maquinaria que en S1 lleva all-4-en-banda de ~53% a ~87% (re-apunta carbos/grasas
+        # al target diario re-cuantizando hacia la porción cocinable más cercana — corrige el drift de redondeo
+        # acumulado que el swap per-comida no toca). regenerate-day NO lo corría. Protein-preserving (renal:
+        # target_protein=0). RIESGO PANTRY: escalar UP puede exceder la Nevera → revalidamos el día contra el
+        # inventario ORIGINAL y REVERTIMOS si rompe (never-worse-than-current). Fail-safe. Default ON; rollback:
+        # MEALFIT_REGEN_DAY_MACRO_REBALANCE=false. (Los closers per-comida del swap siguen OFF — requieren A/B
+        # con scripts/macro_sizing_replay.) tooltip-anchor: P2-REGEN-DAY-MACRO-REBALANCE
+        if (
+            regenerated > 0 and not _ai_unavailable
+            and os.environ.get("MEALFIT_REGEN_DAY_MACRO_REBALANCE", "true").strip().lower() in ("1", "true", "yes", "on")
+            and (day_target.get("carbs_g") or day_target.get("fats_g"))
+        ):
+            try:
+                from graph_orchestrator import _rebalance_day_macros_to_target
+                import copy as _copy_rb
+                _real_meals = [m for m in new_meals if isinstance(m, dict)]
+                _pre_rb = _copy_rb.deepcopy(new_meals)
+                _changed = _rebalance_day_macros_to_target(
+                    _real_meals, float(day_target.get("carbs_g") or 0), float(day_target.get("fats_g") or 0),
+                    _db, target_protein=(0.0 if _renal_capped else float(day_target.get("protein_g") or 0)),
+                )
+                if _changed:
+                    _exceeds, _why = _day_exceeds_pantry(new_meals, _orig_ledger_grams, _db)
+                    if _exceeds:
+                        logger.info(f"🎚 [P2-REGEN-DAY-MACRO-REBALANCE] rebalance rompió pantry → revertido | {_why}")
+                        new_meals[:] = _pre_rb
+                    else:
+                        logger.info("🎚 [P2-REGEN-DAY-MACRO-REBALANCE] macros del día re-apuntadas al target")
+            except Exception as _rbd_e:
+                logger.warning(f"[P2-REGEN-DAY-MACRO-REBALANCE] rebalance del día falló (no bloquea): {type(_rbd_e).__name__}: {_rbd_e}")
+
         # Persistencia atómica de days[day_index].meals (espejo de _swap_mutator, escalado al día).
         def _day_mutator(pd: dict) -> dict:
             _days = pd.get("days")
@@ -5366,11 +5438,32 @@ def api_regenerate_day(
                 )
                 logger.info(f"⚠️ [P2-REGEN-DAY-WARN-MULTI-AXIS] día bajo objetivo: {_deficits}")
 
+        # [P2-REGEN-DAY-BAND-SCORE · 2026-06-27] (audit Fase 2 / Finding 10) Telemetría de precisión de macros
+        # del día regenerado (mismo score determinista que el banner de S1) — antes los updates NO tenían
+        # visibilidad de banda (el borde superior 112% / sobre-entrega nunca se medía). Observabilidad pura
+        # (no bloquea); habilita el A/B del rebalance/closers. tooltip-anchor: P2-REGEN-DAY-BAND-SCORE
+        _band_score = None
+        try:
+            from graph_orchestrator import compute_clinical_band_score
+            _band_score = compute_clinical_band_score(
+                {"days": [{"meals": new_meals}],
+                 "macros": {"protein": day_target.get("protein_g"), "carbs": day_target.get("carbs_g"),
+                            "fats": day_target.get("fats_g")},
+                 "calories": day_target.get("kcal")}, {})
+            logger.info(
+                f"📊 [P2-REGEN-DAY-BAND-SCORE] day band_score={_band_score.get('score')} "
+                f"macros_only={_band_score.get('score_macros_only')} per_macro={_band_score.get('per_macro')}"
+            )
+        except Exception as _bs_e:
+            logger.debug(f"[P2-REGEN-DAY-BAND-SCORE] band score falló (no bloquea): {_bs_e}")
+
         return {
             "success": True,
             "day_index": day_index,
             "meals_regenerated": regenerated,
             "slots_kept": slots_kept,
+            # [P2-REGEN-DAY-BAND-SCORE] precisión de macros del día (telemetría; null si falló el cálculo).
+            "band_score": _band_score,
             # [P1-REGEN-DAY-RETARGET] aviso honesto si el día quedó bajo en proteína vs objetivo.
             "day_quality_warning": _day_warning,
             # [P1-REGEN-DAY-PARTIAL-AI-DEGRADE · 2026-06-24] Señaliza interrupción por IA caída a mitad:
