@@ -299,7 +299,21 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     available_carbs = list(filtered_carbs)
     available_veggies = list(filtered_veggies)
     available_fruits = list(filtered_fruits)
-    
+
+    # [VARIETY-DEBUG · 2026-06-27] Diagnóstico temporal: ¿por qué la renovación converge a los mismos staples
+    # en vivo cuando la función aislada varía? Loguea el tamaño del pool filtrado + los filtros aplicados.
+    try:
+        logger.info(
+            f"🔎 [VARIETY-DEBUG] avail_prot={len(available_proteins)} (sample={available_proteins[:8]}) "
+            f"avail_carb={len(available_carbs)} avail_veg={len(available_veggies)} avail_fruit={len(available_fruits)} | "
+            f"diet={(form_data or {}).get('diet')}/{(form_data or {}).get('dietType')} "
+            f"allergies={(form_data or {}).get('allergies')} dislikes={(form_data or {}).get('dislikes')} "
+            f"temp_dislikes={list(((form_data or {}).get('temporary_dislikes') or {}).keys())[:8]} "
+            f"force_variety={force_variety} hist_len={len(history_text or '')} db_freq_n={len(db_freq_map)}"
+        )
+    except Exception:
+        pass
+
     # Guard clause: si las restricciones eliminaron TODOS los ingredientes
     # (ej: vegano con muchas alergias), dejar libertad total al LLM
     if not available_proteins or not available_carbs:
