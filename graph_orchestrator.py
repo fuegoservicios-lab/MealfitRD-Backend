@@ -8756,6 +8756,14 @@ LOW_COVERAGE_MEAL_FLOOR = _env_float("MEALFIT_LOW_COVERAGE_MEAL_FLOOR", 0.6)
 # en fix-in-place → el revisor aprueba al 1er intento. Flip a False revierte a rechazar.
 RECIPE_COHERENCE_AUTOFIX = _env_bool("MEALFIT_RECIPE_COHERENCE_AUTOFIX", True)
 
+# [P3-GEN-SANITY-AUTOFIX · 2026-06-27] Autofix determinista post-assemble de DOS artefactos de generación del
+# LLM que el revisor médico cazaba (corr=579fb9a3, workflow de investigación): (#4) ingrediente INCONGRUENTE
+# (almidón/huevo) dentro de un batido/jugo → dropear; (#5) nombre GLITCHEADO/irresoluble ('EsGuineocas' =
+# 'Espinacas'+'Guineo' fusionado) que NO resuelve al catálogo verificado NI a gramos (pura basura, aporta 0
+# macros) → dropear. Conservador: solo dropea basura pura/incongruente clara; NUNCA deja una comida vacía;
+# recalcula macros de la comida tocada. Default ON. Rollback: =false. tooltip-anchor: P3-GEN-SANITY-AUTOFIX
+GEN_SANITY_AUTOFIX_ENABLED = _env_bool("MEALFIT_GEN_SANITY_AUTOFIX", True)
+
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
 # (severity critical → regen) si encuentra uno. Defensa-en-profundidad sobre el revisor
@@ -13600,6 +13608,79 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
         return 0
 
 
+# [P3-GEN-SANITY-AUTOFIX · 2026-06-27] tokens de batido + ingredientes incongruentes en un batido (almidón/huevo).
+_GEN_BATIDO_NAME_TOKENS = ("batido", "smoothie", "licuado", "shake", "malteada", "jugo de")
+_GEN_INCONGRUENT_IN_BATIDO = ("papa", "yuca", "batata", "yautia", "mapuey", "name", "casabe", "arroz", "pasta",
+                              "pan integral", "pan blanco", "platano", "huevo", "clara", "yema", "mangu", "tostada")
+# Ítems "libres" (no de catálogo) que NUNCA se dropean como glitch (agua/condimentos/cítrico al gusto).
+_GEN_FREE_ITEM_TOKENS = ("agua", "hielo", "sal", "pimienta", "especia", "al gusto", "limon", "vinagre", "canela",
+                         "hierba", "perejil", "cilantro", "oregano", "comino", "ajo en polvo", "stevia", "vainilla")
+
+
+def _generation_sanity_autofix(plan, db=None) -> int:
+    """[P3-GEN-SANITY-AUTOFIX · 2026-06-27] Autofix determinista de artefactos de generación del LLM, post-assemble:
+    #4 ingrediente INCONGRUENTE (almidón/huevo) en un batido/jugo → dropear; #5 nombre GLITCHEADO/irresoluble
+    (no resuelve al catálogo verificado NI a gramos = pura basura) → dropear. Conservador (solo basura pura/
+    incongruencia clara), nunca deja la comida vacía, recalcula macros. Gateado + fail-safe. Devuelve nº de drops.
+    tooltip-anchor: P3-GEN-SANITY-AUTOFIX"""
+    if not GEN_SANITY_AUTOFIX_ENABLED or not isinstance(plan, dict):
+        return 0
+    try:
+        from shopping_calculator import _is_verified_for_shopping
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        fixed = 0
+        for day in plan.get("days", []) or []:
+            if not isinstance(day, dict):
+                continue
+            for m in (day.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                ings = m.get("ingredients")
+                if not isinstance(ings, list) or not ings:
+                    continue
+                name_low = _norm_text(m.get("name", ""))
+                is_batido = any(t in name_low for t in _GEN_BATIDO_NAME_TOKENS)
+                keep, changed = [], False
+                for ing in ings:
+                    if not isinstance(ing, str):
+                        keep.append(ing)
+                        continue
+                    low = _norm_text(ing)
+                    # #4: almidón/huevo dentro de un batido → incongruente.
+                    if is_batido and any(_name_has_token(t, low) for t in _GEN_INCONGRUENT_IN_BATIDO):
+                        logger.info(f"🩹 [P3-GEN-SANITY] dropeado '{str(ing)[:34]}' (incongruente en batido)")
+                        changed = True
+                        fixed += 1
+                        continue
+                    # #5: nombre irresoluble (no catálogo verificado Y sin gramos) → glitch puro. Fail-open
+                    # (si no podemos verificar, NO dropear). Excluye ítems libres (agua/condimentos).
+                    if not any(f in low for f in _GEN_FREE_ITEM_TOKENS):
+                        try:
+                            _ver = _is_verified_for_shopping(ing)
+                        except Exception:
+                            _ver = True  # fail-open
+                        if not _ver:
+                            _mc = db.macros_from_ingredient_string(ing) or {}
+                            if not _mc.get("grams"):
+                                logger.info(f"🩹 [P3-GEN-SANITY] dropeado '{str(ing)[:34]}' (nombre irresoluble/glitch)")
+                                changed = True
+                                fixed += 1
+                                continue
+                    keep.append(ing)
+                if changed and keep:  # nunca dejar la comida sin ingredientes
+                    m["ingredients"] = keep
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
+        return fixed
+    except Exception as _gsa_e:
+        logger.warning(f"[P3-GEN-SANITY] falló (no bloquea): {type(_gsa_e).__name__}: {_gsa_e}")
+        return 0
+
+
 # [MACRO-ENGINE-EXTRACT · 2026-06-19] Motor de sizing DETERMINISTA extraído VERBATIM de assemble_plan_node
 # (solver → closer → trim-techo → cal-reconcile → capa clínica FS1-FS9). Razón: hacerlo LLAMABLE para que el
 # harness de validación offline (scripts/macro_sizing_replay.py) reproduzca SOLO este motor sobre planes crudos
@@ -14873,6 +14954,17 @@ async def assemble_plan_node(state: PlanState) -> dict:
     # a critical por `review_plan_node`.
     affected_days_set = set(state.get("_affected_days") or [])
     _run_assembly_validations(result, skeleton, affected_days_set)
+
+    # [P3-GEN-SANITY-AUTOFIX · 2026-06-27] Limpieza determinista de artefactos de generación del LLM (corre para
+    # TODOS los planes, post-validations): #4 almidón/huevo incongruente en batidos, #5 nombres glitcheados
+    # irresolubles ('EsGuineocas'). Conservador + fail-safe; reduce las observaciones del revisor.
+    if GEN_SANITY_AUTOFIX_ENABLED:
+        try:
+            _gsa_n = _generation_sanity_autofix(result)
+            if _gsa_n:
+                logger.info(f"🩹 [P3-GEN-SANITY-AUTOFIX] {_gsa_n} ingrediente(s) glitcheado(s)/incongruente(s) dropeado(s).")
+        except Exception as _gsa:
+            logger.warning(f"[P3-GEN-SANITY-AUTOFIX] en assemble falló (no bloquea): {type(_gsa).__name__}: {_gsa}")
 
     # [P1-shop-coh-1 · 2026-05-07 / P1-C v2 · 2026-05-07] Guard recetas↔lista.
     # v1: presence/absence (cap_swallowed_modifier, fantasmas).
