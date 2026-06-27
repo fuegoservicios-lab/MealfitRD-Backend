@@ -57,7 +57,7 @@ def _load_records():
 PRICES = {
     # PRECIOS RD (La Sirena/Nacional, 2026-06-26)
     "Cacao en polvo":        {"packages": [{"unit": "paquete", "grams": 200, "label": "200 g", "price": 130}]},
-    "Dátiles":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # PENDIENTE: sin precio en la tabla
+    "Dátiles":               {"price_per_lb": 340},
     "Pasas":                 {"packages": [{"unit": "paquete", "grams": 250, "label": "250 g", "price": 189}]},
     "Ciruela pasa":          {"packages": [{"unit": "tarro", "grams": 454, "label": "16 oz", "price": 199}]},
     "Cangrejo":              {"price_per_lb": 479},
