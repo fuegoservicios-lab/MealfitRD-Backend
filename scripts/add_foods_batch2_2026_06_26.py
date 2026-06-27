@@ -69,15 +69,15 @@ def _load_records():
 #   Ejemplo envase:  "Bulgur": {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 95}]},
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 PRICES = {
-    # --- Vegetales ---
-    "Puerro":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Cundeamor":             {"price_per_lb": None, "price_per_unit": None, "market_packages": None},   # reemplaza Berza (descartados Ají gustoso [≈cubanela] y Culantro [≈cilantro] por redundancia)
-    "Bok choy":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Lechuga romana":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # reemplaza Maíz tierno (dup de "Maíz dulce en granos")
-    "Nabo":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Alcachofa":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Palmito":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Cebollín":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    # --- Vegetales — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
+    "Puerro":                {"packages": [{"unit": "paquete", "grams": 300, "label": "paquete (~300 g est.)", "price": 48}]},  # gramos estimados (empaque no los imprime)
+    "Cundeamor":             {"packages": [{"unit": "paquete", "grams": 300, "label": "paquete (~300 g est.)", "price": 50}]},  # reemplaza Berza; gramos estimados
+    "Bok choy":              {"packages": [{"unit": "paquete", "grams": 250, "label": "250 g", "price": 90}]},
+    "Lechuga romana":        {"packages": [{"unit": "paquete", "grams": 907, "label": "2 lb", "price": 158}]},   # reemplaza Maíz tierno; libera alias de "Lechuga"
+    "Nabo":                  {"price_per_lb": 28},
+    "Alcachofa":             {"packages": [{"unit": "unidad", "grams": 128, "label": "1 alcachofa (~128 g pulpa)", "price": 345}]},  # cara (importada)
+    "Palmito":               {"packages": [{"unit": "lata", "grams": 400, "label": "14.1 oz", "price": 275}]},
+    "Cebollín":              {"packages": [{"unit": "paquete", "grams": 375, "label": "25 unid (~375 g)", "price": 229}]},
     # --- Frutas ---
     "Pera":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Kiwi":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
