@@ -5,6 +5,9 @@
 Vegetales: Puerro, Cundeamor, Bok choy, Lechuga romana, Nabo, Alcachofa, Palmito, Cebollín
 (slot de Berza→Cundeamor/melón amargo, tras descartar Ají gustoso [≈Ají cubanela] y Culantro [≈Cilantro] por
 redundancia/confusión de nombre; Maíz tierno descartado = dup de "Maíz dulce en granos" → Lechuga romana).
+Lácteos: Queso cheddar, Queso gouda, Leche de cabra (era Requesón ≈ "Queso ricotta" existente), Kéfir.
+NOTA: al --commit, el script LIBERA aliases reclamados por genéricas (ver _ALIAS_RELEASES): "lechuga romana"
+de "Lechuga" y "chuleta"/"chuleta de cerdo" de "Cerdo", para que las variantes específicas no dupliquen.
 
 NUTRICIÓN: 100% USDA FoodData Central, curada + verificada adversarialmente (workflow batch2). Vive en
 `scripts/data/new_foods_batch2_2026_06_26.json` (SSOT del dato). Convención del catálogo respetada:
@@ -113,10 +116,20 @@ PRICES = {
     # --- Lácteos ---
     "Queso cheddar":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Queso gouda":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Requesón":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Leche de cabra":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # reemplaza Requesón (≈ "Queso ricotta" ya existente)
     "Kéfir":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     # --- Víveres ---
     "Mapuey":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+}
+
+# Aliases que entradas GENÉRICAS deben LIBERAR cuando insertamos la variante específica (la variante reclama
+# el alias). El barrido de colisiones (2026-06-26) detectó que las genéricas verificadas los reclamaban →
+# colisión/duplicado. Se libera SOLO si la variante específica ya está en el catálogo (no deja huérfano el
+# alias). Decisión del owner: mantener "Lechuga romana" y "Chuleta de cerdo" como entradas propias.
+#   {variante_específica_nueva: (entrada_genérica_existente, [aliases_a_quitar_de_la_genérica])}
+_ALIAS_RELEASES = {
+    "Lechuga romana":   ("Lechuga", ["lechuga romana"]),
+    "Chuleta de cerdo": ("Cerdo", ["chuleta de cerdo", "chuleta"]),
 }
 
 # record-key → columna DB
@@ -176,6 +189,7 @@ def main():
 
     today = datetime.date.today()
     inserted = skipped_exist = skipped_price = 0
+    inserted_names = []
     with psycopg.connect(_NEON) as conn:
         existing = {row[0] for row in conn.execute("SELECT name FROM public.master_ingredients").fetchall()}
         for r in recs:
@@ -213,6 +227,20 @@ def main():
                   f"({r['kcal']}kcal/{r['protein_g']}P) unit={cols.get('price_per_unit')} lb={cols.get('price_per_lb')} "
                   f"pkgs={len(price.get('packages') or [])}")
             inserted += 1
+            inserted_names.append(nm)
+        # Liberar aliases reclamados por entradas genéricas → la variante específica los reclama. Solo si la
+        # variante está presente (insertada en esta corrida o ya existente), para no dejar el alias huérfano.
+        present = set(existing) | set(inserted_names)
+        for specific, (generic, to_remove) in _ALIAS_RELEASES.items():
+            if specific not in present:
+                continue
+            for al in to_remove:
+                if COMMIT:
+                    conn.execute(
+                        "UPDATE public.master_ingredients SET aliases = array_remove(aliases, %s) WHERE name = %s",
+                        (al, generic),
+                    )
+            print(f"  {'~ LIBERADO' if COMMIT else '~ (dry) liberaría'} alias {to_remove} de '{generic}' → ahora los reclama '{specific}'")
         if COMMIT:
             conn.commit()
             print(f"\nCOMMITTED. insertados={inserted}, ya-existen={skipped_exist}, sin-precio={skipped_price}")

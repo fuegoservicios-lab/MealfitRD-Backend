@@ -804,13 +804,7 @@
     "category": "Despensa",
     "aliases": [
       "harina de avena",
-      "avena en hojuelas",
-      "avena cruda",
-      "hojuelas de avena",
-      "oats",
-      "rolled oats",
-      "oatmeal",
-      "avena seca"
+      "oatmeal"
     ],
     "default_unit": "lb",
     "is_dominican_cultivar": false,
@@ -849,10 +843,6 @@
     "category": "Despensa",
     "aliases": [
       "pan de agua",
-      "pan dominicano",
-      "pan blanco",
-      "pan frances",
-      "pan de manteca",
       "white bread"
     ],
     "default_unit": "unidad",
@@ -1199,8 +1189,7 @@
       "pistache",
       "pistaches",
       "pistachio",
-      "pistachios",
-      "nuez de pistacho"
+      "pistachios"
     ],
     "default_unit": "lb",
     "is_dominican_cultivar": false,
@@ -1239,10 +1228,8 @@
     "category": "Despensa",
     "aliases": [
       "mantequilla de almendra",
-      "crema de almendras",
       "crema de almendra",
-      "almond butter",
-      "pasta de almendras"
+      "almond butter"
     ],
     "default_unit": "lb",
     "is_dominican_cultivar": false,
@@ -1284,8 +1271,7 @@
       "chuleta",
       "chuleta de puerco",
       "pork chop",
-      "pork loin chop",
-      "lomo de cerdo en chuleta"
+      "pork loin chop"
     ],
     "default_unit": "lb",
     "is_dominican_cultivar": false,
@@ -1368,11 +1354,8 @@
     "category": "Proteínas",
     "aliases": [
       "pechuga de pavo",
-      "pavo",
       "pechuga de pavo cruda",
-      "turkey breast",
-      "filete de pavo",
-      "pavo crudo"
+      "turkey breast"
     ],
     "default_unit": "lb",
     "is_dominican_cultivar": false,
@@ -1705,47 +1688,44 @@
     "provenance": "USDA SR Legacy #173420 (Cheese, gouda 01018); as-sold per 100 g. Verificado OK adversarialmente. CORRECCIÓN provenance: la nota previa decía Atwater diff -3.5% pero el cálculo real 4*24.9+4*2.22+9*27.4=355.1 vs 356 = +0.3% (perfecto). Ca 700, P 546 (el más alto del grupo), satfat 17.6, Na 819 (mayor que cheddar), chol 114, B12 1.54, Zn 3.9, vitA RAE 165, Se 14.5, K 121, Mg 29 coinciden con SR Legacy 01018. sugars=carbs (2.22) es artefacto de lactosa residual de la entrada base. density_g_per_cup=132 (1 taza diced), density_g_per_unit=28 (1 oz/slice)."
   },
   {
-    "name": "Requesón",
-    "slug": "requeson",
+    "name": "Leche de cabra",
+    "slug": "leche_de_cabra",
     "category": "Lácteos",
     "aliases": [
-      "requeson",
-      "ricotta",
-      "queso ricotta",
-      "ricotta cheese",
-      "requeson de leche entera",
-      "queso fresco ricotta"
+      "leche de cabra",
+      "leche caprina",
+      "goat milk"
     ],
-    "default_unit": "lb",
+    "default_unit": "litro",
     "is_dominican_cultivar": false,
-    "density_g_per_cup": 246,
+    "density_g_per_cup": 244,
     "density_g_per_unit": null,
-    "kcal": 174,
-    "protein_g": 11.3,
-    "carbs_g": 3.04,
-    "fats_g": 13,
+    "kcal": 69,
+    "protein_g": 3.56,
+    "carbs_g": 4.45,
+    "fats_g": 4.14,
     "fiber_g": 0,
-    "sugars_g": 0.27,
-    "satfat_g": 8.3,
-    "sodium_mg": 84,
-    "cholesterol_mg": 51,
-    "calcium_mg": 207,
-    "iron_mg": 0.38,
-    "potassium_mg": 105,
-    "magnesium_mg": 11,
-    "phosphorus_mg": 158,
-    "zinc_mg": 1.16,
-    "vit_d_mcg": 0.6,
-    "b12_mcg": 0.34,
-    "folate_mcg_dfe": 12,
-    "vit_a_mcg_rae": 120,
-    "vit_c_mg": 0,
-    "vit_e_mg": 0.11,
-    "vit_k_mcg": 1.1,
-    "selenium_mcg": 14.5,
-    "omega3_ala_g": 0.07,
-    "fdc_id": 173417,
-    "provenance": "USDA SR Legacy #173417 (Cheese, ricotta, whole milk 01036); requesón ricotta-like, as-sold per 100 g. Verificado OK adversarialmente. CORRECCIÓN provenance: la nota previa decía Atwater diff -7.4% pero el cálculo real 4*11.3+4*3.04+9*13=174.4 vs 174 = -0.2% (perfecto). Ca 207, P 158, satfat 8.3, Na 84 (mucho menor que quesos curados, correcto), chol 51, B12 0.34, vitA RAE 120, Se 14.5, Zn 1.16, K 105, Mg 11 coinciden con SR Legacy 01036. kcal 174 cae en el extremo alto del rango ancla (98-174, ricotta entera). Más húmedo y bajo en sodio que cheddar/gouda. density_g_per_cup=246 (1 taza USDA); per-unit null por venderse a peso."
+    "sugars_g": 4.45,
+    "satfat_g": 2.67,
+    "sodium_mg": 50,
+    "cholesterol_mg": 11,
+    "calcium_mg": 134,
+    "iron_mg": 0.05,
+    "potassium_mg": 204,
+    "magnesium_mg": 14,
+    "phosphorus_mg": 111,
+    "zinc_mg": 0.3,
+    "vit_d_mcg": 0.3,
+    "b12_mcg": 0.065,
+    "folate_mcg_dfe": 1,
+    "vit_a_mcg_rae": 57,
+    "vit_c_mg": 1.3,
+    "vit_e_mg": 0.07,
+    "vit_k_mcg": 0.3,
+    "selenium_mcg": 1.4,
+    "omega3_ala_g": 0.04,
+    "fdc_id": 171279,
+    "provenance": "USDA FDC #171279 (Milk, goat, fluid; SR Legacy 11116000) per 100 g. VERIFICADO OK por auditor adversario (2026-06-26) — sin correcciones. Atwater 4P+4C+9F = 4×3.56 + 4×4.45 + 9×4.14 = 69.30 kcal vs 69 listado (+0.4%, consistente). Validación INDEPENDIENTE cross-source (milkfacts.info y nutritionvalue.org, ambos compilados del USDA Nutrient DB): Ca 134, K 204, P 111, prot 3.56, grasa 4.14, vit A 57 RAE — coinciden exactamente. Ca 134 mg es el sello distintivo de leche caprina entera; perfil de leche entera (grasa 4.14, NO descremada NI queso). Azúcar 4.45 = lactosa (sin fibra). Trace minerals/vitaminas del SR Legacy: Fe 0.05, Zn 0.30, Se 1.4, vit E (alfa-tocoferol) 0.07, vit K 0.3, folato DFE 1, B12 0.065, vit C 1.3, Mg 14, Na 50, colesterol 11, ALA 18:3 n-3 0.04 g. vit_d=0.3 mcg refleja correctamente la entrada base SIN fortificar 'Milk, goat, fluid' — decisión deliberada y documentada; la variante 'with added vitamin D' reporta ~1.3 mcg (la fortificación NO es estándar en leche caprina RD, se conserva el valor conservador). Leche caprina entera fluida as-sold. aliases sin 'leche' pelado verificado — NO colisiona con 'Leche' (vaca)."
   },
   {
     "name": "Kéfir",
@@ -1796,13 +1776,10 @@
     "category": "Víveres",
     "aliases": [
       "mapuey",
-      "name mapuey",
       "cush-cush yam",
       "cushcush",
       "dioscorea trifida",
-      "name de mapuey",
-      "yampee",
-      "name"
+      "yampee"
     ],
     "default_unit": "lb",
     "is_dominican_cultivar": true,
