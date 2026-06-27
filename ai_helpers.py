@@ -423,6 +423,18 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         _is_bariatric = any(t in _cb for t in _BARIA_T2)
     except Exception:
         _is_bariatric = False
+    # [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] (iter 5) Nueces/semillas ENTERAS → riesgo OBSTRUCTIVO del pouch
+    # (el revisor rechazó crítico 'maní/chía/pistachos enteros'). Penalizar fuerte (×0.1) en el pool veg/grasa para
+    # bariátrica → preferir mantequillas/molidas. Las formas molidas/mantequilla/fileteada NO se penalizan.
+    if _is_bariatric and veggie_weights:
+        _WHOLE_NUT_SEED_TOKENS = ("mani", "almendra", "nuez", "nueces", "pistacho", "maranon", "merey",
+                                  "avellana", "semilla", "pepita", "chia", "ajonjoli", "sesamo", "linaza")
+        for _vi, _v in enumerate(available_veggies):
+            _vn = strip_accents(str(_v).lower())
+            if "mantequilla" in _vn or "molid" in _vn or "fileteada" in _vn:
+                continue  # ya en forma segura (molida / mantequilla / fileteada)
+            if any(_t in _vn for _t in _WHOLE_NUT_SEED_TOKENS):
+                veggie_weights[_vi] *= 0.1
     if _main_goal in _GOALS_PENALIZE_PROCESSED or _is_bariatric:
         # [P1-BARIATRIC-PROTEIN-DENSITY] bariátrica penaliza embutidos grasos como proteína-main: el revisor
         # médico los rechaza (grasa saturada/sodio/aditivos → dumping + intolerancia). Visto corr=5ffd78cf:

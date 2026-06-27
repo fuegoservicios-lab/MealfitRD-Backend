@@ -13422,6 +13422,29 @@ _BARIATRIC_NUT_TOKENS = ("almendra", "nuez", "nueces", "mani", "cacahuate", "mer
                          "avellana", "semilla", "linaza", "chia", "ajonjoli", "sesamo")
 
 
+def _resc_cap_coherent(ing: str, factor: float, target_g: int) -> str:
+    """[P1-BARIATRIC-CAP-LABEL · 2026-06-27] Reescala como `rescale_ingredient_string`, pero si la cantidad LÍDER
+    queda fraccionaria/no-medible (<0.5 — ej. '1 Piña' × 0.33 = '0.33 Piña', incomestible) reescribe a gramos
+    ('80 g de Piña mediano'). El revisor médico rechazaba la etiqueta inconsistente ('1 Piña mediano (80 g)').
+    Los ítems ya en gramos ('150g'→'30g', líder 30) NO se tocan. tooltip-anchor: P1-BARIATRIC-CAP-LABEL"""
+    from nutrition_db import rescale_ingredient_string as _resc
+    new_ing = _resc(ing, factor)
+    if new_ing == ing:
+        return new_ing
+    try:
+        from nutrition_db import _LEAD_QTY_RE, _GRAM_HINT_RE, _strip_qty_prefix
+        mq = _LEAD_QTY_RE.match(new_ing)
+        if mq:
+            lead = float(str(mq.group(1)).replace(",", "."))
+            if lead < 0.5:  # fracción no-medible de una unidad → reescribir a gramos coherentes
+                name = _GRAM_HINT_RE.sub("", _strip_qty_prefix(new_ing)).strip(" ,.-")
+                if name:
+                    return f"{int(round(target_g))} g de {name}"
+    except Exception:
+        pass
+    return new_ing
+
+
 def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
     """[P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Para planes de pacientes post-cirugía bariátrica, recorta la
     porción de QUESO (≤BARIATRIC_CHEESE_CAP_G, default 30g) y YOGURT (≤BARIATRIC_YOGURT_CAP_G, default 120g) por
@@ -13479,7 +13502,7 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                     if not grams or float(grams) <= cap:
                         continue
                     factor = cap / float(grams)
-                    new_ing = _resc(ing, factor)
+                    new_ing = _resc_cap_coherent(ing, factor, cap)  # [P1-BARIATRIC-CAP-LABEL] etiqueta coherente
                     if new_ing == ing:
                         continue
                     removed_kcal += _ing_kcal_estimate(mc) * (1.0 - factor)
