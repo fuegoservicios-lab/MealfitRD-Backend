@@ -119,10 +119,11 @@ PRICES = {
     "Arenque":               {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 175},
                                            {"unit": "paquete", "grams": 227, "label": "filete 8 oz", "price": 230}]},  # alimento NUEVO (preservado, alto sodio)
     # --- Lácteos ---
-    "Queso cheddar":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Queso gouda":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Queso cheddar":         {"price_per_lb": 299},
+    "Queso gouda":           {"price_per_lb": 320},
     "Leche de cabra en polvo": {"packages": [{"unit": "paquete", "grams": 340, "label": "12 oz", "price": 1330}]},   # reemplaza Requesón; POLVO (no había líquida en RD)
-    "Kéfir":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Kéfir":                 {"packages": [{"unit": "pote", "grams": 170, "label": "6 oz", "price": 120},
+                                           {"unit": "pote", "grams": 907, "label": "32 oz", "price": 420}]},
     # --- Víveres ---
     "Mapuey":                {"price_per_lb": 99},
 }
