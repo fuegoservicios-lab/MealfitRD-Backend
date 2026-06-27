@@ -5704,6 +5704,28 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         
     techniques_str = "\n".join(techniques_lines)
 
+    # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] Decide la cantidad de comidas/día desde los datos clínicos
+    # (mapea la tabla del owner: DM2/resistencia insulina → 3 pocas e intensas; hipoglucemia/bariátrica/
+    # insulina → 5-6 frecuentes; alto gasto → 5; override del usuario respetado). Se computa AQUÍ una sola
+    # vez: la directiva entra al prompt del planner (coherencia de pools) y la MISMA decisión se aplica
+    # determinísticamente sobre `meal_types` tras el LLM (enforcement abajo). tooltip-anchor: P1-CLINICAL-MEAL-COUNT
+    _meal_count_decision = None
+    _meal_count_directive = ""
+    if CLINICAL_MEAL_COUNT_ENABLED:
+        try:
+            from nutrition_calculator import decide_meals_per_day, meal_types_for_count
+            _mc_kcal = (nutrition or {}).get("target_calories") or (nutrition or {}).get("total_daily_calories") or (nutrition or {}).get("calories")
+            _meal_count_decision = decide_meals_per_day(form_data, _mc_kcal)
+            _mc_types_planner = meal_types_for_count(_meal_count_decision["num_meals"])
+            _meal_count_directive = (
+                f"\n🍽️ ESTRUCTURA DE COMIDAS (OBLIGATORIO, decidido clínicamente): cada día DEBE tener "
+                f"EXACTAMENTE estas {_meal_count_decision['num_meals']} comidas en `meal_types`, en este orden: "
+                f"{_mc_types_planner}. Razón: {_meal_count_decision['reason']}. Dimensiona los pools "
+                f"(proteínas/carbos/frutas) para cubrir ese número de comidas. NO añadas ni quites slots.\n"
+            )
+        except Exception as _mc_pe:
+            logger.warning(f"[P1-CLINICAL-MEAL-COUNT] decisor falló al construir directiva (no bloquea): {type(_mc_pe).__name__}: {_mc_pe}")
+
     # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] El prompt se compone en dos
     # tramos. Cuando `PROMPT_CACHE_SYSTEM_MESSAGE=True` (default), el tramo
     # ESTÁTICO (`PLANNER_SYSTEM_PROMPT`) viaja en un `SystemMessage` separado
@@ -5726,6 +5748,7 @@ async def plan_skeleton_node(state: PlanState) -> dict:
         f"{ctx['super_personalization_context']}\n\n"
         f"Técnicas de cocción asignadas (una por día):\n"
         f"{techniques_str}\n\n"
+        f"{_meal_count_directive}"
     )
     if PROMPT_CACHE_SYSTEM_MESSAGE:
         prompt_text = dynamic_prompt_text
@@ -5942,6 +5965,26 @@ async def plan_skeleton_node(state: PlanState) -> dict:
             d['protein_pool'] = ['Lentejas']
             logger.warning(f"⚠️ [SKELETON SCRUB] Día {d.get('day')}: protein_pool vacío tras scrub, "
                   f"inyectado 'Lentejas' como fallback")
+
+    # 4. [P1-CLINICAL-MEAL-COUNT · 2026-06-27] Enforcement DETERMINISTA de la cantidad de comidas/día
+    # clínica: forzamos `meal_types` de cada día a la decisión computada arriba (no depende de que el
+    # planner LLM obedezca la directiva). El day_generator genera EXACTAMENTE estos slots
+    # (build_day_assignment_context) y el resto del pipeline se adapta a len(meals). Sin señal clínica el
+    # decisor devuelve 4 (= comportamiento actual, cero cambio estructural). tooltip-anchor: P1-CLINICAL-MEAL-COUNT
+    if CLINICAL_MEAL_COUNT_ENABLED and _meal_count_decision:
+        try:
+            from nutrition_calculator import meal_types_for_count
+            _mc_types = meal_types_for_count(_meal_count_decision["num_meals"])
+            for _d in skel_days:
+                _d["meal_types"] = list(_mc_types)
+            skeleton["_meal_count_decision"] = _meal_count_decision
+            if _meal_count_decision.get("source") != "default":
+                logger.info(
+                    f"🍽️ [P1-CLINICAL-MEAL-COUNT] {_meal_count_decision['num_meals']} comidas/día "
+                    f"({_meal_count_decision['source']}: {_meal_count_decision['reason']}) → meal_types={_mc_types}"
+                )
+        except Exception as _mc_oe:
+            logger.warning(f"[P1-CLINICAL-MEAL-COUNT] override de meal_types falló (usa skeleton del LLM): {type(_mc_oe).__name__}: {_mc_oe}")
 
     _emit_progress(state, "metric", {
         "node": "plan_skeleton",
@@ -9145,6 +9188,13 @@ DISH_QUALITY_TELEMETRY_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_TELEMETRY", Tru
 # Nevera). Default ON (el skip pantry-aware elimina el riesgo que la auditoría citó). Anchor: P2-UPDATE-MICRO-STEER
 UPDATE_MICRO_STEER_ENABLED = _env_bool("MEALFIT_UPDATE_MICRO_STEER", True)
 
+# [P1-CLINICAL-MEAL-COUNT · 2026-06-27] La cantidad de comidas/día del plan la decide la IA desde los datos
+# clínicos del formulario (DM2/resistencia insulina → 3 pocas e intensas; hipoglucemia/bariátrica/insulina →
+# 5-6 frecuentes; alto gasto → 5), con override opcional del usuario (num_meals/mealsPerDay). Acerca el plan
+# al nivel clínico (tabla del owner). Determinista en el skeleton (override de meal_types). Sin señal clínica
+# → 4 (comportamiento actual). Default ON. Rollback: =false. Anchor: P1-CLINICAL-MEAL-COUNT
+CLINICAL_MEAL_COUNT_ENABLED = _env_bool("MEALFIT_CLINICAL_MEAL_COUNT", True)
+
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
 # PRODUCCIÓN, delata una degradación SILENCIOSA si está mal seteada. Función PURA (lee los knobs módulo-nivel
@@ -11923,6 +11973,9 @@ _SLOT_KEY_MAP = {
     "merienda": "merienda", "snack": "merienda", "merienda am": "merienda",
     "merienda pm": "merienda", "media manana": "merienda", "media tarde": "merienda",
     "merienda matutina": "merienda", "merienda vespertina": "merienda",
+    # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] merienda nocturna del plan de 6 comidas → mapea a merienda
+    # para que reciba su fracción (merienda_noche) vía el reparto ordenado de _canonical_slot_fractions.
+    "merienda nocturna": "merienda", "merienda noche": "merienda", "merienda de la noche": "merienda",
 }
 
 

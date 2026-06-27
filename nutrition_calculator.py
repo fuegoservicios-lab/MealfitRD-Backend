@@ -286,11 +286,111 @@ def calculate_macros(target_calories: int, goal: str, weight_kg: float = None,
 # Splits por # de comidas (fracción del total diario por slot). Suman 1.0.
 # 4 comidas es el default del producto (desayuno/almuerzo/merienda/cena).
 MEAL_SLOT_SPLITS: dict = {
+    # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] 2 y 6 añadidos para cubrir el rango clínico 2-6
+    # (pocas e intensas ↔ pequeñas y frecuentes). 2 es override-only (raro); 6 = bariátrica/hipoglucemia.
+    2: {"almuerzo": 0.50, "cena": 0.50},
     3: {"desayuno": 0.30, "almuerzo": 0.40, "cena": 0.30},
     4: {"desayuno": 0.20, "almuerzo": 0.35, "merienda": 0.15, "cena": 0.30},
     5: {"desayuno": 0.20, "merienda_am": 0.10, "almuerzo": 0.35,
         "merienda_pm": 0.10, "cena": 0.25},
+    6: {"desayuno": 0.18, "merienda_am": 0.12, "almuerzo": 0.28,
+        "merienda_pm": 0.12, "cena": 0.22, "merienda_noche": 0.08},
 }
+
+# [P1-CLINICAL-MEAL-COUNT · 2026-06-27] meal_types canónicos por cantidad de comidas. El planner produce
+# `meal_types` (DaySkeletonModel) y el day_generator genera EXACTAMENTE esos slots (build_day_assignment_context
+# línea ~374). Orden alineado con el reparto de meriendas de MEAL_SLOT_SPLITS (AM→PM→Nocturna).
+MEAL_TYPES_BY_COUNT: dict = {
+    2: ["Almuerzo", "Cena"],
+    3: ["Desayuno", "Almuerzo", "Cena"],
+    4: ["Desayuno", "Almuerzo", "Merienda", "Cena"],
+    5: ["Desayuno", "Merienda AM", "Almuerzo", "Merienda PM", "Cena"],
+    6: ["Desayuno", "Merienda AM", "Almuerzo", "Merienda PM", "Cena", "Merienda Nocturna"],
+}
+
+
+def meal_types_for_count(n: int) -> list:
+    """[P1-CLINICAL-MEAL-COUNT · 2026-06-27] Lista de `meal_types` es-DO para `n` comidas (cae a 4 si
+    `n` no está en el set). tooltip-anchor: P1-CLINICAL-MEAL-COUNT"""
+    return list(MEAL_TYPES_BY_COUNT.get(n, MEAL_TYPES_BY_COUNT[4]))
+
+
+def _mc_norm_text(value) -> str:
+    """Normaliza condiciones/medicamentos (lista o string) a un blob lower sin acentos para matching."""
+    import unicodedata
+    if isinstance(value, (list, tuple)):
+        raw = " ".join(str(v) for v in value)
+    else:
+        raw = str(value or "")
+    return unicodedata.normalize("NFD", raw.lower()).encode("ascii", "ignore").decode("ascii")
+
+
+def decide_meals_per_day(form_data: dict, daily_kcal: float | None = None) -> dict:
+    """[P1-CLINICAL-MEAL-COUNT · 2026-06-27] Decide CUÁNTAS comidas/día debe tener el plan, mapeando la
+    evidencia clínica (tabla del owner): 2-3 'pocas e intensas' (mejoran sensibilidad a la insulina) ↔
+    4-6 'pequeñas y frecuentes' (evitan hipoglucemia, facilitan altas calorías sin saturar). Es el lado
+    "nivel clínico" del feature: la frecuencia la deriva la IA de los datos médicos del formulario, NO el
+    usuario (salvo override explícito `num_meals`/`mealsPerDay`).
+
+    Prioridad (la SEGURIDAD manda — el riesgo de hipoglucemia SIEMPRE gana sobre el reduce de DM2):
+      1. Override explícito del usuario (num_meals/mealsPerDay/meals_per_day), clamp [2,6].
+      2. Cirugía bariátrica → 6 (porciones pequeñas y frecuentes).
+      3. Riesgo de hipoglucemia — condición (hipoglucemia) O medicación (insulina/sulfonilureas) → 5
+         (comidas frecuentes evitan caídas de glucosa). DEBE ir ANTES de DM2: un DM2 en insulina NO
+         debe reducir comidas (sería iatrogénico).
+      4. DM2 / resistencia a la insulina / prediabetes / síndrome metabólico (SIN riesgo de hipo) → 3
+         (pocas e intensas mejoran la sensibilidad a la insulina).
+      5. Gasto calórico muy alto (≥2900 kcal/día, atleta) → 5 (repartir evita saturar).
+      6. Default → 4 (estructura estándar del producto).
+
+    Devuelve {"num_meals": int, "reason": str, "source": "override"|"clinical"|"default"}. Fail-safe →
+    4/default ante cualquier error. tooltip-anchor: P1-CLINICAL-MEAL-COUNT"""
+    try:
+        fd = form_data or {}
+        # 1. Override explícito del usuario (campo opcional del formulario / data hook).
+        raw = fd.get("num_meals") or fd.get("mealsPerDay") or fd.get("meals_per_day")
+        if raw not in (None, "", 0):
+            try:
+                n = int(raw)
+                if 2 <= n <= 6:
+                    return {"num_meals": n, "reason": "preferencia explícita del usuario", "source": "override"}
+            except (TypeError, ValueError):
+                pass
+        conds = _mc_norm_text(fd.get("medicalConditions") or fd.get("medical_conditions") or fd.get("conditions"))
+        meds = _mc_norm_text(fd.get("medications") or fd.get("medicamentos"))
+        # 2. Bariátrica.
+        if any(k in conds for k in ("bariatr", "bypass gastric", "manga gastric", "gastrectom", "sleeve gastric")):
+            return {"num_meals": 6, "reason": "post-cirugía bariátrica: porciones pequeñas y frecuentes", "source": "clinical"}
+        # 3. Riesgo de hipoglucemia (condición o medicación) — SEGURIDAD, antes de DM2.
+        hypo_cond = any(k in conds for k in ("hipoglucemia", "hipoglicemia", "hypoglycemia"))
+        hypo_med = any(k in meds for k in (
+            "insulina", "insulin", "glibenclamida", "gliburida", "glimepirida", "glipizida",
+            "gliclazida", "glicazida", "sulfonilurea", "sulfonylurea"))
+        if hypo_cond or hypo_med:
+            return {"num_meals": 5,
+                    "reason": "riesgo de hipoglucemia (condición o medicación): comidas frecuentes evitan caídas de glucosa",
+                    "source": "clinical"}
+        # 4. DM2 / resistencia a la insulina / prediabetes (sin riesgo de hipo).
+        if any(k in conds for k in (
+                "diabetes tipo 2", "diabetes mellitus tipo 2", "dm2", "dm 2",
+                "resistencia a la insulina", "insulin resistance", "prediabetes", "prediabetico",
+                "sindrome metabolico", "metabolic syndrome")):
+            return {"num_meals": 3,
+                    "reason": "DM2/resistencia a la insulina: pocas comidas e intensas mejoran la sensibilidad a la insulina",
+                    "source": "clinical"}
+        # 5. Gasto calórico muy alto.
+        try:
+            _k = float(daily_kcal or 0)
+        except (TypeError, ValueError):
+            _k = 0.0
+        if _k >= 2900:
+            return {"num_meals": 5,
+                    "reason": f"gasto calórico alto (~{round(_k)} kcal): repartir en más comidas evita saturar la digestión",
+                    "source": "clinical"}
+        # 6. Default.
+        return {"num_meals": 4, "reason": "estructura estándar (4 comidas)", "source": "default"}
+    except Exception:
+        return {"num_meals": 4, "reason": "fallback (error en el decisor)", "source": "default"}
 
 
 def allocate_macros_per_slot(
