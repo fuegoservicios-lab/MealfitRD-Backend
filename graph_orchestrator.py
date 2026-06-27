@@ -9815,6 +9815,7 @@ _DIET_SEAFOOD_TERMS = (  # pescado + mariscos
     "pescado", "atun", "salmon", "tilapia", "bacalao", "sardina", "mero", "chillo", "dorado",
     "carite", "arenque", "merluza", "camaron", "langosta", "cangrejo", "langostino", "marisco",
     "calamar", "pulpo", "lambi", "surimi", "anchoa", "caviar",
+    "mejillones", "mejillon", "almeja", "ostra", "vieira",  # [P1-VARIETY-CATALOG-POOLS] mariscos del catálogo
 )
 _DIET_EGG_TERMS = (
     "huevo", "huevos", "clara", "claras", "yema", "yemas",

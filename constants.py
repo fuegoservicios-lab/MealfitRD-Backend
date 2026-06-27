@@ -1364,7 +1364,17 @@ DOMINICAN_PROTEINS = [
     "Salami Dominicano", "Camarones", "Chuleta", "Longaniza",
     "Habichuelas Rojas", "Habichuelas Negras", "Habichuelas Blancas",
     "Gandules", "Lentejas", "Garbanzos",
-    "Queso Ricotta", "Queso Blanco", "Queso Mozzarella", "Yogurt"
+    "Queso Ricotta", "Queso Blanco", "Queso Mozzarella", "Yogurt",
+    # [P1-VARIETY-CATALOG-POOLS · 2026-06-27] Proteínas verificadas del catálogo (202) añadidas a la rotación
+    # para que cada renovación explote toda la variedad. El filtro de dieta (_get_fast_filtered_catalogs) y el
+    # backstop P1-DIET-HARD-GUARD excluyen estas animales para vegano/vegetariano/pescetariano. Nombres EXACTOS
+    # del catálogo (resuelven en la lista de compras). Tofu NO se añade (P3-TOFU-REMOVE).
+    "Muslo de pollo", "Pavo molido", "Hígado de res", "Costilla de cerdo",
+    "Mero", "Tilapia", "Salmón", "Bacalao", "Sardinas en lata", "Arenque",
+    "Conejo", "Chivo", "Pulpo", "Calamar", "Mejillones", "Cangrejo", "Jamón de pavo",
+    "Edamame", "Soya texturizada", "Frijoles pintos", "Habas", "Guisantes secos",
+    "Queso de hoja", "Queso cottage", "Queso parmesano", "Queso cheddar", "Queso gouda",
+    "Yogurt griego entero",
 ]
 # [P3-TOFU-REMOVE · 2026-06-22] "Soya/Tofu" eliminado del pool de proteínas ofrecibles: el owner
 # confirmó que La Sirena NO vende tofu (ni carne de soya como producto verificado). El esqueleto ya
@@ -1374,8 +1384,10 @@ DOMINICAN_PROTEINS = [
 # ahora = leguminosas (Gandules/Lentejas/Garbanzos/Habichuelas). Tooltip-anchor: P3-TOFU-REMOVE.
 
 DOMINICAN_CARBS = [
-    "Plátano Verde", "Plátano Maduro", "Yuca", "Batata", "Arroz Blanco", 
-    "Arroz Integral", "Avena", "Pan Integral", "Papas", "Guineítos Verdes", "Ñame", "Yautía"
+    "Plátano Verde", "Plátano Maduro", "Yuca", "Batata", "Arroz Blanco",
+    "Arroz Integral", "Avena", "Pan Integral", "Papas", "Guineítos Verdes", "Ñame", "Yautía",
+    # [P1-VARIETY-CATALOG-POOLS · 2026-06-27] Carbos/granos verificados del catálogo añadidos a la rotación.
+    "Quinoa", "Pasta integral", "Bulgur", "Cebada", "Casabe", "Mapuey", "Tortilla integral", "Harina de Negrito",
 ]
 
 PROTEIN_SYNONYMS = {
@@ -1450,7 +1462,13 @@ DOMINICAN_VEGGIES_FATS = [
     "Aguacate", "Berenjena", "Tayota", "Repollo", "Zanahoria",
     "Molondrones", "Brócoli", "Coliflor", "Tomate", "Vainitas",
     "Aceitunas", "Cebolla", "Ajíes", "Aceite de Oliva", "Nueces/Almendras",
-    "Auyama"
+    "Auyama",
+    # [P1-VARIETY-CATALOG-POOLS · 2026-06-27] Vegetales + grasas/semillas verificados del catálogo (202).
+    "Espinacas", "Pepino", "Lechuga", "Apio", "Espárragos", "Champiñones", "Remolacha", "Kale", "Rúcula",
+    "Berro", "Calabacín", "Repollo morado", "Rábano", "Coles de Bruselas", "Puerro", "Bok choy", "Nabo",
+    "Alcachofa", "Palmito", "Cebollín", "Cundeamor",
+    "Maní", "Merey", "Pistachos", "Semillas de chía", "Semillas de girasol", "Semillas de calabaza",
+    "Linaza", "Mantequilla de maní", "Mantequilla de almendras", "Ajonjolí", "Almendras fileteadas",
 ]
 
 VEGGIE_FAT_SYNONYMS = {
@@ -1478,7 +1496,12 @@ VEGGIE_FAT_SYNONYMS = {
 
 DOMINICAN_FRUITS = [
     "Guineo", "Mango", "Piña", "Lechosa", "Chinola",
-    "Limón", "Fresa", "Naranja", "Sandía", "Melón"
+    "Limón", "Fresa", "Naranja", "Sandía", "Melón",
+    # [P1-VARIETY-CATALOG-POOLS · 2026-06-27] Frutas FRESCAS verificadas añadidas. Se EXCLUYEN a propósito de la
+    # rotación diaria los treats/secos (Cereza maraschino, Durazno en almíbar, Dátiles, Pasas, Ciruela pasa,
+    # Tamarindo) y el Coco (alto en grasa) — son meriendas/endulzantes ocasionales, no fruta fresca del día.
+    "Manzana", "Guayaba", "Guanábana", "Níspero", "Mandarina", "Toronja", "Uva", "Pera", "Kiwi",
+    "Ciruela", "Arándanos",
 ]
 
 FRUIT_SYNONYMS = {
@@ -1943,10 +1966,18 @@ def _get_fast_filtered_catalogs(allergies: tuple, dislikes: tuple, diet: str):
     normalized_restrictions = [strip_accents(r.lower()) for r in restrictions]
     
     # Reglas genéricas CATCH-ALL de mariscos y carnes
+    # [P1-VARIETY-CATALOG-POOLS · 2026-06-27] Pescados/mariscos y carnes/aves ESPECÍFICOS del catálogo (202
+    # alimentos). Crítico de SEGURIDAD: el regex \bpescado\b/\bcarne\b NO matchea 'salmon'/'mero'/'pulpo'/
+    # 'conejo'/'chivo'/'pavo' por nombre → sin esto, al expandir las pools de variedad un VEGANO/VEGETARIANO
+    # recibiría esas proteínas. Vegano y vegetariano añaden "carne"+"marisco" → disparan AMBOS catch-alls;
+    # pescetariano añade SOLO "carne" → se le excluyen carnes de tierra pero pescado/mariscos quedan permitidos.
     if any(r in ["mariscos", "seafood", "marisco"] for r in normalized_restrictions):
-        normalized_restrictions.extend(["camaron", "camarones", "pescado", "atun"])
+        normalized_restrictions.extend(["camaron", "camarones", "pescado", "atun",
+            "mero", "tilapia", "salmon", "bacalao", "sardina", "sardinas", "arenque", "merluza",
+            "pulpo", "calamar", "mejillones", "mejillon", "cangrejo", "langosta", "langostino", "lambi"])
     if any(r in ["carne", "carnes", "meat"] for r in normalized_restrictions):
-        normalized_restrictions.extend(["pollo", "cerdo", "res", "chuleta", "longaniza", "salami"])
+        normalized_restrictions.extend(["pollo", "cerdo", "res", "chuleta", "longaniza", "salami",
+            "pavo", "conejo", "chivo", "cabro", "higado", "costilla", "jamon", "muslo", "pernil"])
     # [P2-VARIETY-CATALOG-NOT-FILTERED · 2026-06-22] (audit fresco P2-4) Catch-all de categorías de alérgenos
     # cuyos chips llegan como CATEGORÍA ("lácteos"/"frutos secos"/"huevo"...) y NO matchean los nombres
     # concretos del catálogo (Queso, Yogurt, Nueces, Huevos) — análogo al catch-all de mariscos/carne de arriba.
