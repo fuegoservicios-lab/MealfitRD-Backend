@@ -19,9 +19,10 @@ def _wire(monkeypatch, capture=None):
     """Mockea closer/reconcile/candidatos para probar la ORQUESTACIÓN sin DB real."""
     import graph_orchestrator as g
 
-    def fake_closer(m, target, db, cands, fill_pct=0.92):
+    def fake_closer(m, target, db, cands, fill_pct=0.92, max_add_g=300):
         if capture is not None:
             capture["cands"] = cands
+            capture["max_add_g"] = max_add_g
         cur = g._meal_macro_num(m.get("protein"))
         if cur >= target * 0.9:
             return 0

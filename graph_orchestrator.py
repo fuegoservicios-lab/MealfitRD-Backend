@@ -9272,6 +9272,11 @@ BARIATRIC_FRUIT_CAP_G = _env_int("MEALFIT_BARIATRIC_FRUIT_CAP_G", 80, validator=
 BARIATRIC_HIGHGI_FRUIT_CAP_G = _env_int("MEALFIT_BARIATRIC_HIGHGI_FRUIT_CAP_G", 50, validator=lambda v: 30 <= v <= 100)
 BARIATRIC_AVOCADO_CAP_G = _env_int("MEALFIT_BARIATRIC_AVOCADO_CAP_G", 30, validator=lambda v: 15 <= v <= 80)
 BARIATRIC_NUT_CAP_G = _env_int("MEALFIT_BARIATRIC_NUT_CAP_G", 20, validator=lambda v: 10 <= v <= 60)
+# [P1-BARIATRIC-PROTEIN-PORTION · 2026-06-27] Tope de PROTEÍNA ANIMAL por comida que el re-cierre post-cap puede
+# inyectar (≤90g de alimento ≈ ~22g proteína). Sin esto, `_repair_protein_floor_post_caps` metía 213g de camarones
+# para clavar el target del slot → el revisor rechazaba por volumen/sobrecarga. ~6 comidas × ~22g = 132g posibles ≥
+# piso 80g, así que es compatible con cumplir el piso. tooltip-anchor: P1-BARIATRIC-PROTEIN-PORTION
+BARIATRIC_PROTEIN_PORTION_CAP_G = _env_int("MEALFIT_BARIATRIC_PROTEIN_PORTION_CAP_G", 90, validator=lambda v: 50 <= v <= 150)
 # [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] (iter 4 — GAP2 del crítico adversario) Cap de VOLUMEN AGREGADO por
 # comida: el solver inflaba porciones (×7 ciruelas=287g, 690g de vegetales) para clavar kcal del slot, ignorando
 # el pouch. Suma los gramos de sólidos por comida; si excede, recorta los ítems NO-proteicos y RECUPERA las kcal
@@ -13781,29 +13786,47 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
         _cands = [c for c in _cands if not any(_t in _sa(str(c[1]).lower()) for _t in _DAIRY)]
         if not _cands:
             return 0
+        # [P1-BARIATRIC-PROTEIN-PORTION] En bariátrica cada inyección por comida se limita a ≤BARIATRIC_PROTEIN_
+        # PORTION_CAP_G (volumen del pouch) — sin esto el closer metía 213g de camarones para clavar el target del
+        # slot (rechazo del revisor). En no-bariátrica se mantiene el max_add_g amplio del closer.
+        try:
+            from constants import BARIATRIC_CONDITION_TERMS as _BT_R
+            _is_baria = any(any(_t in _c for _t in _BT_R) for _c in _condition_strings(form_data))
+        except Exception:
+            _is_baria = False
+        _max_add = int(BARIATRIC_PROTEIN_PORTION_CAP_G) if _is_baria else 300
+        _day_floor_pct = 0.90
         added = 0
         for _d in days or []:
             if not isinstance(_d, dict):
                 continue
-            _ms = _d.get("meals") or []
+            _ms = [m for m in (_d.get("meals") or []) if isinstance(m, dict)]
             if not _ms:
                 continue
+            _day_floor = _pg * _day_floor_pct
+            _day_cur = sum(_meal_macro_num(_m.get("protein")) for _m in _ms)
+            if _day_cur >= _day_floor:
+                continue  # [día-floor] el día YA cumple el piso → NO sobre-disparar (evita 91g/114% de banda)
             _fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
             _touched = False
             for _i, _m in enumerate(_ms):
-                if not isinstance(_m, dict) or _m.get("_final_protein_close"):
+                if _day_cur >= _day_floor:
+                    break  # alcanzamos el piso del DÍA → parar (no llenar cada comida a su target = sobre-banda)
+                if _m.get("_final_protein_close"):
                     continue
                 _share = _fracs[_i] if (_fracs and _i < len(_fracs)) else (1.0 / max(1, len(_ms)))
                 _slot_target = _pg * _share
                 _cur = _meal_macro_num(_m.get("protein"))
                 if _slot_target <= 0 or _cur >= _slot_target * 0.90:
-                    continue  # ya cumple el piso post-cap
+                    continue  # esta comida ya cumple su slot
                 _m["_protein_closed"] = False  # permitir el re-cierre (el del motor corrió PRE-cap)
-                _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands, fill_pct=PROTEIN_FLOOR_FILL_PCT)
+                _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands,
+                                                 fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add)
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
                     _touched = True
+                    _day_cur = sum(_meal_macro_num(_mm.get("protein")) for _mm in _ms)  # recomputar piso del día
             # Re-cuadrar C/F del día preservando la proteína recién cerrada (reusa el reconcile probado).
             if _touched:
                 try:
