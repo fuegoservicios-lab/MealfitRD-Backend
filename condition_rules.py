@@ -73,6 +73,22 @@ _DM2_SUGAR_SUBS = (
 _DM2_SUGAR_NEGATIVES = ("sin azucar", "no azucar", "0 azucar", "cero azucar", "libre de azucar",
                         "0% azucar", "sin azucares", "bajo en azucar")
 
+# [P1-DM2-GLYCEMIC-GUARD · 2026-06-27] Sustituciones DETERMINISTAS calorie-neutral para DM2 que el revisor
+# médico estaba rechazando: (1) TORONJA/POMELO → fruta baja en IG: la toronja inhibe CYP3A4 y potencia
+# sulfonilureas/repaglinida/saxagliptina → riesgo de hipoglucemia severa. Decisión del owner: evitarla SIEMPRE
+# en DM2 (sin depender de que el usuario declare el fármaco). (2) REFINADOS de alto índice glucémico → su
+# versión INTEGRAL (mismo alimento, mismas calorías, IG mucho menor) → aplana el pico postprandial. preserve_qty
+# (mismo gramaje, el delta de macros lo ajusta el guard). Naturalmente idempotente (lo integral no re-matchea
+# el token "blanco"). Reusa el motor de sustitución → aplica en S1 (Guard 3) y en las superficies de UPDATE
+# (condition_substitution_backstop_for_meal). Los reemplazos resuelven al catálogo verificado.
+_DM2_GLYCEMIC_SUBS = (
+    (("toronja", "pomelo", "grapefruit"), "Fresa", "toronja/pomelo (interacción CYP3A4 con antidiabéticos → hipoglucemia)", True),
+    (("arroz blanco", "arroz pulido"), "Arroz integral", "arroz blanco refinado (IG alto)", True),
+    (("pan blanco", "pan rallado", "pan de molde blanco", "pan de agua"), "Pan integral", "pan blanco/refinado (IG alto)", True),
+    (("tortilla de trigo", "tortilla de harina"), "Pan integral", "tortilla de trigo refinada (IG alto)", True),
+    (("harina de trigo refinada", "harina blanca de trigo"), "Avena", "harina refinada (IG alto)", True),
+)
+
 _HTA_SODIUM_SUBS = (
     (("embutido", "salami", "longaniza", "salchicha", "mortadela", "tocineta",
       "bacon", "chorizo", "jamon", "jamón"), "Pechuga de pollo", "embutidos", True),
@@ -175,7 +191,7 @@ CONDITION_RULES: tuple = (
     ),
     ConditionRule(
         id="dm2", label="Diabetes T2 / prediabetes", terms=DIABETES_CONDITION_TERMS,
-        precedence=30, substitutions=_DM2_SUGAR_SUBS, sub_negatives=_DM2_SUGAR_NEGATIVES,
+        precedence=30, substitutions=_DM2_SUGAR_SUBS + _DM2_GLYCEMIC_SUBS, sub_negatives=_DM2_SUGAR_NEGATIVES,
         prompt_block=(
             "🩸 REGLA CLÍNICA — DIABETES T2 / PREDIABETES (ADA 2025/2026, CALIDAD DEL CARBOHIDRATO):\n"
             "   • NO se trata de 'bajar los carbohidratos' ni de un % fijo: prioriza la CALIDAD del carbohidrato.\n"
@@ -183,6 +199,12 @@ CONDITION_RULES: tuple = (
             "gandules), avena, vegetales abundantes y fruta entera con cáscara.\n"
             "   • GRANOS INTEGRALES INTACTOS: arroz integral, avena y víveres con fibra (batata, yuca, plátano "
             "verde) sobre harinas refinadas, pan blanco y arroz blanco pelado.\n"
+            "   • PORCIÓN DE ALMIDÓN — MÁXIMO ~150 g por comida de víver/almidón de ALTO índice glucémico "
+            "(batata, yuca, papa, plátano maduro, arroz, pan, casabe). NO sirvas porciones grandes (300-400g) "
+            "de un solo almidón: dispara la glucosa postprandial. Reparte el resto del plato en proteína magra, "
+            "grasa saludable y vegetales/fibra para aplanar el pico.\n"
+            "   • PROHIBIDA la TORONJA/POMELO: interactúa con medicamentos antidiabéticos (CYP3A4) y puede causar "
+            "hipoglucemia severa. Usa otras frutas bajas en índice glucémico (fresa, manzana, cítricos pequeños).\n"
             "   • PROHIBIDAS las bebidas azucaradas y los azúcares añadidos (miel, sirope, dulces); endulza con "
             "fruta o estevia.\n"
             "   • Combina SIEMPRE el carbohidrato con proteína + grasa saludable + fibra en la misma comida."),
