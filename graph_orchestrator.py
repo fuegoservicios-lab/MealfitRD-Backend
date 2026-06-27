@@ -7729,6 +7729,14 @@ _MAIN_PROTEIN_ALIASES = {
 # sin ser problema.
 _HEAVY_PROTEIN_LABELS = {"pollo", "pavo", "cerdo", "res", "pescado", "atun"}
 
+# [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] Proteínas PRINCIPALES cuya repetición el MISMO día fatiga al
+# usuario (pedido explícito del owner: vio huevo en desayuno+cena el mismo día). Incluye las pesadas + HUEVO
+# (antes exento como "light protein" que podía repetirse same-day; el owner cambió esa filosofía: prefiere que
+# un alimento se repita en DÍAS DISTINTOS, no el mismo día). EXCLUYE legumbres (gandules/habichuelas/lentejas)
+# y yogurt a propósito: en RD el arroz-con-habichuela y el yogurt de merienda se repiten same-day por cultura
+# y no fatigan como una proteína-plato. tooltip-anchor: P1-VARIETY-SAME-DAY-PROTEIN
+_SAME_DAY_PROTEIN_GATE_LABELS = _HEAVY_PROTEIN_LABELS | {"huevo"}
+
 
 def _count_cross_day_heavy_protein_repetition(days: list, min_days: int = 3) -> dict:
     """[P2-ORCH-6 · 2026-05-28] Cuenta en cuántos días DISTINTOS aparece cada
@@ -8791,6 +8799,13 @@ VARIETY_GATE_BASE_DISH_REPEAT = _env_bool("MEALFIT_VARIETY_GATE_BASE_DISH_REPEAT
 # lo hace gate de RETRY (con la misma degradación a advisory en intento final que el resto de gates de
 # variedad → cero riesgo de cero-plan). Default ON: el owner pidió explícitamente que esto NO pase.
 VARIETY_GATE_FRUIT_CLASH = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_CLASH", True)
+# [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] Gate de RETRY cuando la misma proteína PRINCIPAL (huevo, pollo,
+# pavo, cerdo, res, pescado, atún — ver _SAME_DAY_PROTEIN_GATE_LABELS) aparece en 2+ comidas del MISMO día.
+# Pedido del owner: repetir el mismo alimento el mismo día fatiga; prefiere repetirlo en días distintos. Misma
+# degradación a advisory en intento final que el resto de gates de variedad (VARIETY_REPEAT_GATE_LAST_ATTEMPT_
+# ADVISORY) → cero riesgo de cero-plan/"saturada". Default ON. Flip a False revierte a la filosofía previa
+# (huevo/proteína podían repetirse el mismo día sin rechazo).
+VARIETY_GATE_SAME_DAY_PROTEIN = _env_bool("MEALFIT_VARIETY_GATE_SAME_DAY_PROTEIN", True)
 # [P1-FRUIT-DEDUP · 2026-06-26] (auditoría gap #7) De-dup DETERMINISTA de fruta dulce repetida el mismo día:
 # reescribe la 2ª+ aparición a una fruta del pool no usada ese día (nombre + ingredientes). Cierra el cierre
 # que el gate de variedad dejaba abierto (project_variety_repeat_graceful: en el intento final el gate degrada
@@ -11522,11 +11537,13 @@ def build_variety_report(plan: dict) -> dict:
             import unicodedata
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
     total_meals = egg_meals = cremoso = premium = same_day_repeats = fruit_repeats = sweet_savory_clash = 0
+    same_day_protein_repeats = 0
     issues = []
     for day in plan.get("days", []) or []:
         meals = day.get("meals", []) or []
         day_tokens = {}
         day_fruits = {}
+        day_proteins = {}  # [P1-VARIETY-SAME-DAY-PROTEIN] proteína principal → nº de comidas que la usan ese día
         for meal in meals:
             total_meals += 1
             name_low = strip_accents(str(meal.get("name", "")).lower())
@@ -11546,6 +11563,15 @@ def build_variety_report(plan: dict) -> dict:
             for fr in _FEATURED_FRUITS:
                 if fr in name_low:
                     day_fruits[fr] = day_fruits.get(fr, 0) + 1
+            # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] Proteína principal (huevo + pesadas) por comida →
+            # detecta la misma proteína en ≥2 comidas del mismo día (huevo en desayuno + cena). Usa
+            # word-boundary (\b vía _name_has_token) y NO el substring de _detect_main_items, que daría falsos
+            # positivos como 'res' dentro de 'fresas' o 'atun' dentro de otros nombres.
+            _meal_blob = name_low + " " + ings_low
+            for _plabel in _SAME_DAY_PROTEIN_GATE_LABELS:
+                if any(_name_has_token(strip_accents(_al), _meal_blob)
+                       for _al in _MAIN_PROTEIN_ALIASES.get(_plabel, ())):
+                    day_proteins[_plabel] = day_proteins.get(_plabel, 0) + 1
             # [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (audit gap #5) Pareo intra-plato chocante en el NOMBRE:
             # fruta dulce dominante + base salada (mango+arroz / revoltillo+mango / coliflor+mango). El conteo
             # alimenta el gate de retry (_variety_repeat_gate_issues); aquí se surface también como issue advisory.
@@ -11564,6 +11590,10 @@ def build_variety_report(plan: dict) -> dict:
             if n >= 2:
                 fruit_repeats += 1
                 issues.append(f"Día {day.get('day', '?')}: fruta '{fr}' en {n} comidas el mismo día (repetición)")
+        for _plabel, n in day_proteins.items():
+            if n >= 2:
+                same_day_protein_repeats += 1
+                issues.append(f"Día {day.get('day', '?')}: proteína '{_plabel}' en {n} comidas el mismo día (repetición)")
     egg_cap = max(3, round(total_meals * 0.25))  # ~2-3 en 12 comidas
     if egg_meals > egg_cap:
         issues.append(f"Huevo en {egg_meals}/{total_meals} comidas (cap sugerido {egg_cap})")
@@ -11590,6 +11620,7 @@ def build_variety_report(plan: dict) -> dict:
     return {"total_meals": total_meals, "egg_meals": egg_meals, "cremoso": cremoso,
             "premium": premium, "same_day_repeats": same_day_repeats,
             "fruit_repeats": fruit_repeats, "sweet_savory_clash": sweet_savory_clash,
+            "same_day_protein_repeats": same_day_protein_repeats,
             "cross_day_proteins": cross_day_proteins, "issues": issues,
             "ok": not issues}
 
@@ -11627,6 +11658,16 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
                 "PLATO-BASE REPETIDO EL MISMO DÍA (rechazo de variedad): el mismo tipo de plato "
                 "(p.ej. revoltillo/huevos revueltos, batido) aparece 2+ veces el mismo día. Rota a "
                 "preparaciones distintas en cada comida del día."
+            )
+        # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] La MISMA proteína principal (huevo/pollo/pavo/cerdo/res/
+        # pescado/atún) en 2+ comidas del mismo día fatiga → rechazo (retry acotado; advisory en intento final).
+        if VARIETY_GATE_SAME_DAY_PROTEIN and int(variety_report.get("same_day_protein_repeats", 0)) > 0:
+            out.append(
+                "MISMA PROTEÍNA REPETIDA EL MISMO DÍA (rechazo de variedad): la misma proteína principal "
+                "(p.ej. HUEVO, pollo, pavo, cerdo, res, pescado, atún) aparece en 2+ comidas del mismo día — "
+                "comer lo mismo el mismo día fatiga. Usa una proteína DISTINTA en cada comida del día. Está "
+                "BIEN repetir un alimento en DÍAS DISTINTOS (p.ej. huevo el lunes y el miércoles), pero NO dos "
+                "veces el mismo día. Rota: huevo, pollo, res, cerdo, pescado, atún, queso, yogur, legumbres."
             )
     except Exception:
         return []

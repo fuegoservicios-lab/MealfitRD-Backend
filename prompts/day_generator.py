@@ -133,7 +133,9 @@ REGLAS ESTRICTAS:
          • Tostada de aguacate con huevo
        Ejemplos PROHIBIDOS: "Salteado de lentejas", "Locrio de…", "Pechuga al grill con puré", "Croquetas horneadas con guarnición", cualquier cosa que parezca un mini-almuerzo.
 
-    d) CENA — más ligera que el almuerzo. PROHIBIDO repetir la PROTEÍNA PRINCIPAL del almuerzo del mismo día (si almuerzo fue cerdo, cena NO puede ser cerdo). PROHIBIDO repetir el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día (si almuerzo fue plátano, cena NO puede ser plátano). Rota a otra proteína del pool y a otro carbo (batata/arroz/yuca/ñame/casabe). Patrones válidos:
+    d) CENA — más ligera que el almuerzo. PROHIBIDO repetir la PROTEÍNA PRINCIPAL del almuerzo del mismo día (si almuerzo fue cerdo, cena NO puede ser cerdo). PROHIBIDO repetir el CARBOHIDRATO PRINCIPAL del almuerzo del mismo día (si almuerzo fue plátano, cena NO puede ser plátano). Rota a otra proteína del pool y a otro carbo (batata/arroz/yuca/ñame/casabe).
+
+       ⛔ REGLA AMPLIA DE VARIEDAD (P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27): la MISMA proteína principal —INCLUIDO EL HUEVO— NO debe aparecer en 2+ comidas del MISMO día, en NINGUNA combinación de slots (ni desayuno+cena, ni desayuno+merienda, ni almuerzo+cena). Ejemplo PROHIBIDO real: desayuno "Batido con claras de huevo" + cena "Tortilla de huevos" (huevo 2 veces el mismo día). Si el desayuno lleva huevo, las demás comidas del día usan OTRA proteína (pollo, res, cerdo, pescado, atún, queso, yogur, legumbres). ✅ SÍ está permitido repetir un alimento en DÍAS DISTINTOS (huevo el lunes y el miércoles) — lo que fatiga es comerlo dos veces el MISMO día. Patrones válidos:
        • Pescado/pollo a la plancha + ensalada + tubérculo distinto al del almuerzo
        • Tortilla/revoltillo de cena con vegetales + casabe o pan integral
        • Sopa ligera de pollo/vegetales con proteína magra
