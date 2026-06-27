@@ -86,7 +86,9 @@ PRICES = {
     "Ciruela":               {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 199}]},
     "Arándanos":             {"packages": [{"unit": "paquete", "grams": 450, "label": "450 g", "price": 198}]},
     "Tamarindo":             {"price_per_lb": 245},
-    "Cereza":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: frasco "cereza" (6/10/16oz) ¿acerola en almíbar o maraschino? nutrición divergiría — pendiente
+    "Cereza maraschino":     {"packages": [{"unit": "frasco", "grams": 170, "label": "6 oz", "price": 175},
+                                           {"unit": "frasco", "grams": 283, "label": "10 oz", "price": 219},
+                                           {"unit": "frasco", "grams": 454, "label": "16 oz", "price": 298}]},  # golosina (azúcar); la acerola NO se consigue en RD, solo maraschino
     "Granada":               {"packages": [{"unit": "paquete", "grams": 113, "label": "4 oz", "price": 290}]},
     # --- Granos / carbos (Despensa) ---
     "Bulgur":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
