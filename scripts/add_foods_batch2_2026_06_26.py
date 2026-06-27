@@ -94,7 +94,7 @@ PRICES = {
     # --- Granos / carbos (Despensa) ---  (Cuscús descartado: no se vende en Sirena/Nacional; Pan de agua: saltado)
     "Bulgur":                {"packages": [{"unit": "paquete", "grams": 680, "label": "24 oz", "price": 255}]},
     "Cebada":                {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 118}]},
-    "Harina de avena":       {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # PENDIENTE drop → "Harina de Negrito" (oat flour no se consigue; Negrito=crema de trigo)
+    "Harina de Negrito":     {"packages": [{"unit": "paquete", "grams": 290, "label": "290 g", "price": 59}]},   # reemplaza Harina de avena (oat flour no se consigue en RD); crema de trigo fortificada
     # --- Especias / hierbas (Despensa) — PRECIOS RD (La Sirena/Nacional, 2026-06-26); uso ~1-5 g ---
     "Comino":                {"packages": [{"unit": "pote", "grams": 28, "label": "1 oz", "price": 55}]},
     "Cúrcuma":               {"price_per_lb": 99},
