@@ -55,11 +55,12 @@ def _load_records():
 # o "packages": [{"unit","grams","label","price"}]. Deja None lo que no tengas → NO se inserta.
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 PRICES = {
-    "Cacao en polvo":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Dátiles":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Pasas":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Ciruela pasa":          {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Cangrejo":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    # PRECIOS RD (La Sirena/Nacional, 2026-06-26)
+    "Cacao en polvo":        {"packages": [{"unit": "paquete", "grams": 200, "label": "200 g", "price": 130}]},
+    "Dátiles":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # PENDIENTE: sin precio en la tabla
+    "Pasas":                 {"packages": [{"unit": "paquete", "grams": 250, "label": "250 g", "price": 189}]},
+    "Ciruela pasa":          {"packages": [{"unit": "tarro", "grams": 454, "label": "16 oz", "price": 199}]},
+    "Cangrejo":              {"price_per_lb": 479},
 }
 
 _COLMAP = {
