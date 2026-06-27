@@ -1,11 +1,12 @@
-"""[P1-CATALOG-EXPANSION-BATCH2 · 2026-06-26] Inserta el LOTE 2 de 43 alimentos nuevos al catálogo
-(master_ingredients, Neon) para llevarlo de 157 → 200: 8 vegetales + 8 frutas + 5 granos + 6 especias/hierbas
-+ 3 semillas/grasas + 8 proteína animal + 4 lácteos + 1 víver. Cierra los huecos de variedad restantes
+"""[P1-CATALOG-EXPANSION-BATCH2 · 2026-06-26] Inserta el LOTE 2 de 44 alimentos nuevos al catálogo
+(master_ingredients, Neon) para llevarlo de 157 → 201: 8 vegetales + 8 frutas + 5 granos + 6 especias/hierbas
++ 3 semillas/grasas + 9 proteína animal (incl. Arenque) + 4 lácteos + 1 víver. Cierra los huecos de variedad restantes
 (granos delgados, especias para apetecibilidad, proteína animal por presupuesto, frutas/vegetales para 30 días).
 Vegetales: Puerro, Cundeamor, Bok choy, Lechuga romana, Nabo, Alcachofa, Palmito, Cebollín
 (slot de Berza→Cundeamor/melón amargo, tras descartar Ají gustoso [≈Ají cubanela] y Culantro [≈Cilantro] por
 redundancia/confusión de nombre; Maíz tierno descartado = dup de "Maíz dulce en granos" → Lechuga romana).
-Lácteos: Queso cheddar, Queso gouda, Leche de cabra (era Requesón ≈ "Queso ricotta" existente), Kéfir.
+Lácteos: Queso cheddar, Queso gouda, Leche de cabra EN POLVO (era Requesón ≈ "Queso ricotta"; POLVO porque
+no se consigue líquida en RD), Kéfir. Proteína animal +Arenque (preservado/ahumado, alto sodio).
 NOTA: al --commit, el script LIBERA aliases reclamados por genéricas (ver _ALIAS_RELEASES): "lechuga romana"
 de "Lechuga" y "chuleta"/"chuleta de cerdo" de "Cerdo", para que las variantes específicas no dupliquen.
 
@@ -113,10 +114,12 @@ PRICES = {
     "Pulpo":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Calamar":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Mejillones":            {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Arenque":               {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 175},
+                                           {"unit": "paquete", "grams": 227, "label": "filete 8 oz", "price": 230}]},  # alimento NUEVO (preservado, alto sodio)
     # --- Lácteos ---
     "Queso cheddar":         {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Queso gouda":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Leche de cabra":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # reemplaza Requesón (≈ "Queso ricotta" ya existente)
+    "Leche de cabra en polvo": {"packages": [{"unit": "paquete", "grams": 340, "label": "12 oz", "price": 1330}]},   # reemplaza Requesón; POLVO (no había líquida en RD)
     "Kéfir":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     # --- Víveres ---
     "Mapuey":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
