@@ -107,15 +107,15 @@ PRICES = {
     "Ajonjolí":              {"price_per_lb": 235},
     "Pistachos":             {"packages": [{"unit": "tarro", "grams": 227, "label": "8 oz", "price": 459}]},
     "Mantequilla de almendras": {"packages": [{"unit": "tarro", "grams": 200, "label": "200 g", "price": 525}]},
-    # --- Proteína animal económica/premium ---
-    "Chuleta de cerdo":      {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Costilla de cerdo":     {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Pechuga de pavo":       {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Conejo":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Chivo":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Pulpo":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Calamar":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Mejillones":            {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    # --- Proteína animal — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
+    #   Chuleta de cerdo DESCARTADA (chuleta ya verificada vía "Cerdo"); Pechuga de pavo DESCARTADA (no se vende
+    #   en RD, solo Jamón de pavo que ya existe). Costillas SÍ se agregan aparte.
+    "Costilla de cerdo":     {"price_per_lb": 189},
+    "Conejo":                {"price_per_lb": 225},
+    "Chivo":                 {"price_per_lb": 299},
+    "Pulpo":                 {"price_per_lb": 345},
+    "Calamar":               {"price_per_lb": 230},   # 2 lb / 460 = 230/lb
+    "Mejillones":            {"packages": [{"unit": "paquete", "grams": 907, "label": "32 oz", "price": 519}]},
     "Arenque":               {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 175},
                                            {"unit": "paquete", "grams": 227, "label": "filete 8 oz", "price": 230}]},  # alimento NUEVO (preservado, alto sodio)
     # --- Lácteos ---
@@ -124,7 +124,7 @@ PRICES = {
     "Leche de cabra en polvo": {"packages": [{"unit": "paquete", "grams": 340, "label": "12 oz", "price": 1330}]},   # reemplaza Requesón; POLVO (no había líquida en RD)
     "Kéfir":                 {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     # --- Víveres ---
-    "Mapuey":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Mapuey":                {"price_per_lb": 99},
 }
 
 # Aliases que entradas GENÉRICAS deben LIBERAR cuando insertamos la variante específica (la variante reclama
@@ -134,7 +134,8 @@ PRICES = {
 #   {variante_específica_nueva: (entrada_genérica_existente, [aliases_a_quitar_de_la_genérica])}
 _ALIAS_RELEASES = {
     "Lechuga romana":   ("Lechuga", ["lechuga romana"]),
-    "Chuleta de cerdo": ("Cerdo", ["chuleta de cerdo", "chuleta"]),
+    # "Chuleta de cerdo" descartada (el owner: chuleta ya está verificada vía "Cerdo"; solo se agregó Costilla) →
+    # la chuleta SE QUEDA con "Cerdo", no se libera.
 }
 
 # record-key → columna DB
