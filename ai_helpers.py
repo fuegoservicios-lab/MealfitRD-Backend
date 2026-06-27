@@ -408,6 +408,21 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     )
     _GOALS_PENALIZE_FATTY_FRESH = {"gain_muscle"}
     _main_goal = (form_data.get("mainGoal") or "").strip().lower() if form_data else ""
+    # [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] El paciente bariátrico necesita proteína ANIMAL densa en
+    # comidas pequeñas: una base de leguminosa (baja densidad) no alcanza el piso de proteína en el volumen del
+    # pouch y el revisor médico la rechaza por fibra/FODMAPs + déficit (visto corr=5b30b71f: Garbanzos×2). Por eso
+    # bariátrica recibe el MISMO trato que gain_muscle: NO forzar leguminosa como proteína-main + sustituir las
+    # proteínas-main de baja densidad por animal. tooltip-anchor: P1-BARIATRIC-PROTEIN-DENSITY
+    _is_bariatric = False
+    try:
+        from constants import BARIATRIC_CONDITION_TERMS as _BARIA_T2, strip_accents as _sa_b2
+        _cb = _sa_b2(
+            " ".join(str(x) for x in ((form_data.get("medicalConditions") or []) if form_data else []))
+            + " " + str((form_data.get("otherConditions") or "") if form_data else "")
+        ).lower()
+        _is_bariatric = any(t in _cb for t in _BARIA_T2)
+    except Exception:
+        _is_bariatric = False
     if _main_goal in _GOALS_PENALIZE_PROCESSED:
         _penalized_count = 0
         for i, p in enumerate(available_proteins):
@@ -460,10 +475,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     _GOALS_SKIP_LEGUME_GUARANTEE = {"gain_muscle"}  # tooltip-anchor: legume_guarantee_goal_gate
     LEGUME_NAMES = {"habichuelas rojas", "habichuelas negras", "gandules", "lentejas", "garbanzos"}
     has_legume = any(p.lower() in LEGUME_NAMES for p in unique_proteins)
-    if not has_legume and _main_goal in _GOALS_SKIP_LEGUME_GUARANTEE:
+    if not has_legume and (_main_goal in _GOALS_SKIP_LEGUME_GUARANTEE or _is_bariatric):
         logger.info(
-            f"🥩 [GARANTÍA NUTRICIONAL] Omitida para goal='{_main_goal}' — la leguminosa "
-            f"no se impone como proteína principal (manda el piso de proteína)."
+            f"🥩 [GARANTÍA NUTRICIONAL] Omitida para goal='{_main_goal}'{' (bariátrica)' if _is_bariatric else ''} — "
+            f"la leguminosa no se impone como proteína principal (manda el piso de proteína)."
         )
     elif not has_legume:
         available_legumes = [p for p in available_proteins if p.lower() in LEGUME_NAMES]
@@ -490,7 +505,7 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # generación del día (no se IMPONEN como main). Knob rollback: MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN.
     # Tooltip-anchor: P3-GAINMUSCLE-PROTEIN-DENSITY.
     # Set EXPLÍCITO `_LOW_DENSITY_AS_MAIN` elevado a nivel módulo (P2-9) — reusado por swap_meal.
-    if _main_goal == "gain_muscle" and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True):
+    if (_main_goal == "gain_muscle" or _is_bariatric) and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True):
         _low_mains = [p for p in unique_proteins if p.lower() in _LOW_DENSITY_AS_MAIN]
         if _low_mains:
             _hd_pool = [(p, w) for p, w in zip(available_proteins, protein_weights)

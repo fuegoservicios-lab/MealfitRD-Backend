@@ -1399,7 +1399,39 @@ def get_nutrition_targets(form_data: dict) -> dict:
 
     # 4. Macronutrientes exactos distribuidos en base al objetivo y calorías REVISADAS para la IA
     macros = calculate_macros(target_calories, goal, weight_kg=weight, body_fat_pct=body_fat)
-    
+
+    # [P1-BARIATRIC-PROTEIN-TARGET · 2026-06-27] El pouch post-bariátrico no tolera el volumen de proteína
+    # de un target estándar por peso (visto en vivo corr=5b30b71f: target 100g → la comida pequeña no lo
+    # alcanza → el gate de piso de proteína + el revisor rechazan por DÉFICIT). La guía bariátrica es 60-90g/día
+    # de alta calidad, NO el target por peso corporal. Capeamos la proteína a un máximo bariátrico-apropiado
+    # (knob, default 90g) y redistribuimos las kcal liberadas a GRASA (no carbos → evita carga glucémica/dumping)
+    # para mantener el total calórico. Hace el piso alcanzable en volumen pequeño. tooltip-anchor: P1-BARIATRIC-PROTEIN-TARGET
+    try:
+        from constants import BARIATRIC_CONDITION_TERMS as _BARIA_T, strip_accents as _sa_b
+        _cond_blob_b = _sa_b(
+            " ".join(str(x) for x in (form_data.get("medicalConditions") or []))
+            + " " + str(form_data.get("otherConditions") or "")
+        ).lower()
+        _is_baria = any(t in _cond_blob_b for t in _BARIA_T)
+    except Exception:
+        _is_baria = False
+    if _is_baria:
+        _baria_cap = _nc_env_float("MEALFIT_BARIATRIC_PROTEIN_MAX_G", 90.0)
+        for _mac in (macros, original_macros):
+            try:
+                _p = float(_mac.get("protein_g") or 0)
+                if _p > _baria_cap:
+                    _freed = (_p - _baria_cap) * 4.0
+                    _mac["protein_g"] = round(_baria_cap)
+                    _mac["protein_str"] = f"{round(_baria_cap)}g"
+                    _new_fats = round(float(_mac.get("fats_g") or 0) + _freed / 9.0)
+                    _mac["fats_g"] = _new_fats
+                    _mac["fats_str"] = f"{_new_fats}g"
+            except Exception:
+                pass
+        logger.info(f"🔻 [P1-BARIATRIC-PROTEIN-TARGET] proteína bariátrica capeada a ≤{round(_baria_cap)}g/día "
+                    f"(volumen del pouch); kcal liberadas → grasa.")
+
     # Descripción legible del objetivo
     goal_labels = {
         "lose_fat": "Pérdida de Grasa (Déficit 20%)",

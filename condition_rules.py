@@ -353,8 +353,11 @@ CONDITION_RULES: tuple = (
         id="bariatric", label="Cirugía bariátrica (sleeve/bypass/manga)", terms=BARIATRIC_CONDITION_TERMS,
         precedence=20, substitutions=_DM2_SUGAR_SUBS, sub_negatives=_DM2_SUGAR_NEGATIVES,
         prompt_block=(
-            "🔻 REGLA CLÍNICA — CIRUGÍA BARIÁTRICA (sleeve/bypass/manga, mantenimiento; prevención de "
-            "SÍNDROME DE DUMPING y obstrucción del pouch):\n"
+            "🔻 REGLA CLÍNICA — CIRUGÍA BARIÁTRICA (sleeve/bypass/manga, fase de MANTENIMIENTO / dieta general, "
+            ">6 meses post-op; prevención de SÍNDROME DE DUMPING y obstrucción del pouch):\n"
+            "   • FASE MANTENIMIENTO: el paciente tolera DIETA GENERAL (vegetales y frutas enteras, fibra, granos "
+            "integrales, leguminosas como acompañante, pescado/mariscos, especias suaves) — NO es dieta líquida/"
+            "puré de fase temprana. El control va en CANTIDAD y AZÚCAR, no en prohibir alimentos generales.\n"
             "   • POUCH PEQUEÑO: cada comida cabe en ~150-200 mL. Comidas PRINCIPALES ≤200 g de sólidos; "
             "MERIENDAS ≤150 g. Ninguna comida voluminosa. Total del día 1400-1700 kcal en 6 comidas; NUNCA "
             "por debajo de 1400 kcal (desnutrición).\n"

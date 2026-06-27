@@ -168,5 +168,15 @@ def test_preserve_qty_flag_only_on_weight_bearing_staples():
 
 
 def test_dm2_sugar_subs_are_not_weight_bearing():
+    # [P1-DM2-GLYCEMIC-GUARD · 2026-06-27] La fila DM2 ahora combina _DM2_SUGAR_SUBS + _DM2_GLYCEMIC_SUBS.
+    # Los subs de AZÚCAR siguen siendo NO weight-bearing (la unidad misma es lo contraindicado: "1 cda de miel"
+    # → preservar el prefijo dejaría la palabra ofensora). Los subs GLUCÉMICOS (refinado→integral, mismo gramaje)
+    # SÍ son weight-bearing por diseño (mismo alimento, mismas calorías, el delta de macros lo ajusta el guard).
     subs = cr.collect_substitutions({"medicalConditions": ["Diabetes T2"]})
-    assert subs and all(s["preserve_qty"] is False for s in subs)
+    assert subs
+    by_label = {s["label"]: s["preserve_qty"] for s in subs}
+    for _sugar in ("miel", "sirope/jarabe", "panela/melaza", "leche condensada", "bebida azucarada", "azúcar"):
+        if _sugar in by_label:
+            assert by_label[_sugar] is False, f"sub de azúcar '{_sugar}' NO debe preservar cantidad"
+    # los swaps glucémicos refinado→integral SÍ preservan cantidad (recalcula macros por delta)
+    assert by_label.get("arroz blanco refinado (IG alto)") is True

@@ -16423,12 +16423,35 @@ async def review_plan_node(state: PlanState) -> dict:
         # nightly/chunk dentro del TTL. Mismo texto, cero cambio semántico. Rama
         # else = string plano legacy (rollback sin redeploy vía el knob existente
         # MEALFIT_PROMPT_CACHE_SYSTEM_MESSAGE). tooltip-anchor: P3-COST-REVIEWER-CACHE
+        # [P1-BARIATRIC-PHASE-CONTEXT · 2026-06-27] El reviewer recibía solo "Condiciones: ['Cirugía Bariátrica']"
+        # → aplicaba por defecto las reglas MÁS conservadoras (fase post-op TEMPRANA: líquida/puré, sin fibra/
+        # irritantes/mariscos) y rechazaba un plan de MANTENIMIENTO legítimo (visto corr=5b30b71f: 30+ rechazos
+        # por fibra/vegetales enteros/leguminosas/granos integrales). Quien usa la app está a meses de la cirugía
+        # (mantenimiento), no a 2 semanas. Le declaramos la fase para que calibre. Anchor: P1-BARIATRIC-PHASE-CONTEXT
+        _baria_note = ""
+        try:
+            from constants import BARIATRIC_CONDITION_TERMS as _BT_R, strip_accents as _sa_r
+            _mc_blob_r = _sa_r(" ".join(str(x) for x in (medical_conditions or []))).lower()
+            if any(t in _mc_blob_r for t in _BT_R):
+                _baria_note = (
+                    "\n--- CONTEXTO CLÍNICO (FASE BARIÁTRICA) ---\n"
+                    "El paciente con cirugía bariátrica está en FASE DE MANTENIMIENTO (dieta general, >6 meses "
+                    "post-operatorio), NO en fase temprana (líquida/puré). Evalúa con criterios de MANTENIMIENTO: "
+                    "porciones pequeñas, proteína-primero, evitar AZÚCAR SIMPLE/dumping y controlar volumen y lácteos. "
+                    "NO rechaces alimentos de dieta general bien tolerados en mantenimiento (vegetales y frutas "
+                    "enteras, fibra, leguminosas como acompañante, granos integrales, especias suaves, pescado/"
+                    "mariscos cocidos, vinagre o limón en cantidad culinaria normal). Reserva el rechazo CRÍTICO para "
+                    "riesgos REALES de mantenimiento: azúcar libre/miel, porciones excesivas, frituras o déficit de proteína.\n"
+                )
+        except Exception:
+            _baria_note = ""
+
         review_human_content = f"""--- RESTRICCIONES DEL PACIENTE ---
 Alergias declaradas: {json.dumps(allergies) if allergies else "Ninguna"}
 Condiciones médicas: {json.dumps(medical_conditions) if medical_conditions else "Ninguna"}
 Tipo de dieta: {diet_type}
 Alimentos que no le gustan: {json.dumps(dislikes) if dislikes else "Ninguno"}
-
+{_baria_note}
 --- REPORTE DE INVESTIGACIÓN CLÍNICA (FACT-CHECKING) ---
 {fact_check_report}
 

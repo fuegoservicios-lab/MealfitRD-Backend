@@ -138,8 +138,11 @@ def test_prompt_context_dm2():
     assert "ADA" in txt
     assert "FIBRA" in txt.upper()
     assert "bebidas azucaradas" in txt.lower()
-    # ADA 2026: NO debe vender %carbos ni índice glucémico como feature.
-    assert "índice glucémico" not in txt.lower() or "sin obsesionarse" in txt.lower()
+    # [P1-DM2-GLYCEMIC-GUARD · 2026-06-27] El owner activó el guard glucémico: DM2 ahora SÍ usa el índice
+    # glucémico de forma CONSTRUCTIVA (preferir integral/fibra sobre refinado de alto IG, no como obsesión de
+    # %carbos). La regla previa "no mencionar IG" quedó superseded. Verificamos el encuadre constructivo:
+    # promueve granos integrales / calidad del carbohidrato.
+    assert "integral" in txt.lower() or "calidad del carbohidrato" in txt.lower()
 
 
 def test_prompt_context_renal():
