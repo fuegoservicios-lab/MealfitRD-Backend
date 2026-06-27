@@ -1569,10 +1569,9 @@ SLOT_INAPPROPRIATE_FOODS = {
     "cena": [
         {"label": "arroz/locrio/moro (\"arroz de noche\")", "tokens": ("arroz", "locrio", "moro", "morito"),
          "hardness": "soft", "exclude": _SLOT_RICE_EXCLUDE},
-        {"label": "pasta/espaguetis pesados de noche", "tokens": (
-            "espagueti", "espaguetis", "macarron", "macarrones", "lasana", "coditos",
-            "fideos", "tallarines", "pastelon", "ravioli", "penne", "noqui", "rigatoni"),
-         "hardness": "soft"},
+        # [P1-SLOT-CENA-PASTA-OK · 2026-06-27] La PASTA/espagueti SÍ va en la cena dominicana (carbo ligero de
+        # digestión rápida; "cenar espaguetis" es común) → NO se bloquea de noche. Solo queda inapropiada en el
+        # DESAYUNO. Decisión del owner. Antes estaba como soft-block en cena (suposición cultural incorrecta).
         {"label": "comida de desayuno en la cena (cereal/panqueque/waffle)", "tokens": (
             "cereal", "hojuelas", "panqueque", "pancake", "waffle", "crepe", "crepa"),
          "hardness": "soft"},
