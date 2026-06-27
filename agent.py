@@ -556,7 +556,19 @@ def swap_meal(form_data: dict):
         context_extras += f"\n    - 🚫 EXCLUSIÓN ESTRICTA: ESTÁ TOTALMENTE PROHIBIDO generar cualquier plato o ingrediente principal de esta lista: {', '.join(list(all_disliked))}. NINGÚN PLATO NUEVO PUEDE LLAMARSE IGUAL NI PARECERSE."
         
     if liked_meals: context_extras += f"\n    - PLATOS FAVORITOS (PARA INSPIRACIÓN): {', '.join(liked_meals)}"
-    
+
+    # [P1-SWAP-SAME-DAY-VARIETY · 2026-06-27] Las otras comidas del MISMO día → el plato nuevo NO debe repetir
+    # su proteína/alimento principal (el swap era ciego al día → metía soya/huevo cuando otra comida ya lo usaba).
+    same_day_other_meals = form_data.get("same_day_other_meals") or []
+    if same_day_other_meals:
+        context_extras += (
+            f"\n    - 🔄 VARIEDAD DEL DÍA (OBLIGATORIO): las OTRAS comidas de HOY son: "
+            f"{', '.join(same_day_other_meals)}. El plato nuevo DEBE usar una proteína/alimento PRINCIPAL "
+            f"DISTINTO al de esas comidas. Comer el mismo alimento dos veces el mismo día fatiga: si otra "
+            f"comida de hoy ya usa huevo, soya, pollo, res, cerdo, pescado, queso o una legumbre, este plato "
+            f"NO debe usar el mismo — elige una proteína diferente. (Repetir en DÍAS distintos sí está bien.)"
+        )
+
     swap_reason = form_data.get("swap_reason", "dislike")
     
     if swap_reason == 'variety':

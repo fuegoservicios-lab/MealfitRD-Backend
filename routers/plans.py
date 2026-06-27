@@ -4305,6 +4305,41 @@ def _enrich_clinical_from_profile(data: dict, user_id: str) -> None:
         logger.warning(f"⚠️ [P0-UPDATE-CLINICAL-GUARD] enrich perfil falló (no bloquea): {_enrich_e}")
 
 
+def _same_day_other_meals_for_swap(user_id, rejected_meal):
+    """[P1-SWAP-SAME-DAY-VARIETY · 2026-06-27] Para un swap individual, devuelve los NOMBRES de las OTRAS
+    comidas del MISMO día que el plato a cambiar, para que el LLM no repita la proteína/alimento principal del
+    día (el swap JIT no recibía contexto del día → cambiaba 'Batata con Mozzarella' por 'Yuca con Soya' cuando
+    el almuerzo YA era Soya). Backend-only: el frontend no manda day_index al /swap-meal, así que ubicamos el
+    día buscando el plato rechazado por nombre en el plan más reciente del usuario. Fail-open: cualquier error
+    o no-match → [] (el swap procede sin la restricción, como antes). Tooltip-anchor: P1-SWAP-SAME-DAY-VARIETY."""
+    if not user_id or user_id == "guest" or not rejected_meal:
+        return []
+    try:
+        from db_core import execute_sql_query as _exq
+        from constants import strip_accents as _sa
+        import json as _json
+        row = _exq("SELECT plan_data FROM meal_plans WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+                   (user_id,), fetch_one=True)
+        if not row:
+            return []
+        pd = row.get("plan_data")
+        if isinstance(pd, str):
+            pd = _json.loads(pd)
+        if not isinstance(pd, dict):
+            return []
+        rn = _sa(str(rejected_meal).lower()).strip()
+        for day in pd.get("days", []) or []:
+            meals = day.get("meals", []) or []
+            names = [str(m.get("name", "")) for m in meals if isinstance(m, dict)]
+            if any(_sa(n.lower()).strip() == rn for n in names):
+                # encontrado el día → devolver los nombres de las OTRAS comidas
+                return [n for n in names if _sa(n.lower()).strip() != rn and n.strip()]
+        return []
+    except Exception as _e:
+        logger.debug(f"[P1-SWAP-SAME-DAY-VARIETY] no se pudo derivar el día (no bloquea): {_e}")
+        return []
+
+
 @router.post("/swap-meal")
 def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), verified_user_id: Optional[str] = Depends(verify_api_quota), _rl: None = Depends(_SWAP_LIMITER)):  # [P2-GUEST-LLM-RATELIMIT · 2026-05-30] throttle guest LLM
     try:
@@ -4407,6 +4442,16 @@ def api_swap_meal(background_tasks: BackgroundTasks, data: dict = Body(...), ver
                 logger.info(f"🔥 [HOT SIGNAL] Inyectando {len(data['liked_meals'])} likes y {len(data['disliked_meals'])} rechazos al JIT Swap.")
             except Exception as e:
                 logger.warning(f"⚠️ [HOT SIGNAL] Error recuperando señales en tiempo real: {e}")
+
+        # [P1-SWAP-SAME-DAY-VARIETY · 2026-06-27] Inyecta las OTRAS comidas del día para que el plato nuevo NO
+        # repita la proteína/alimento principal el mismo día (el swap era ciego al resto del día).
+        try:
+            _same_day = _same_day_other_meals_for_swap(user_id, rejected_meal)
+            if _same_day:
+                data["same_day_other_meals"] = _same_day
+                logger.info(f"🔄 [SWAP SAME-DAY-VARIETY] Otras comidas del día (evitar repetir proteína): {_same_day}")
+        except Exception as _sdv_e:
+            logger.debug(f"[P1-SWAP-SAME-DAY-VARIETY] inyección falló (no bloquea): {_sdv_e}")
 
         result = swap_meal(data)
         # [P2-SWAP-CHARGE-ON-SUCCESS · 2026-06-24] Cobro post-éxito (default): swap_meal entregó un plato.
