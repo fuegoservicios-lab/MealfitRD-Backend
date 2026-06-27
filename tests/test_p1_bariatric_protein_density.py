@@ -48,12 +48,13 @@ def test_cap_bariatric_caps_fruit_and_avocado():
 
 
 def test_cap_bariatric_does_not_touch_spinach_via_pina_token():
-    # 'pina' (start-anchored) NO debe capear 'espinaca' como si fuera fruta
+    # 'pina' (start-anchored) NO debe capear 'espinaca' como si fuera fruta. Meal pequeño (≤300g) para aislar
+    # el check del token de fruta y NO disparar el cap de VOLUMEN agregado (iter 4).
     import graph_orchestrator as g
-    days = [{"day": 1, "meals": [{"name": "x", "ingredients": ["300g de Espinaca salteada", "90g de Pollo"]}]}]
+    days = [{"day": 1, "meals": [{"meal": "Almuerzo", "name": "x", "ingredients": ["120g de Espinaca salteada"]}]}]
     g.cap_bariatric_portions(days, {"medicalConditions": ["Cirugía Bariátrica"]}, db=_StubDB())
-    # espinaca no es fruta → su gramaje no se recorta por el cap de fruta (puede subir por recovery, nunca a 80)
-    assert _grams(days[0]["meals"][0]["ingredients"][0]) >= 300
+    # espinaca no es fruta → el cap de fruta (≤80g) NO la recorta; sigue en 120g
+    assert _grams(days[0]["meals"][0]["ingredients"][0]) == 120
 
 
 def test_cap_bariatric_fruit_noop_non_bariatric():

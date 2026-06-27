@@ -1416,7 +1416,7 @@ def get_nutrition_targets(form_data: dict) -> dict:
     except Exception:
         _is_baria = False
     if _is_baria:
-        _baria_cap = _nc_env_float("MEALFIT_BARIATRIC_PROTEIN_MAX_G", 90.0)
+        _baria_cap = _nc_env_float("MEALFIT_BARIATRIC_PROTEIN_MAX_G", 80.0)
         for _mac in (macros, original_macros):
             try:
                 _p = float(_mac.get("protein_g") or 0)

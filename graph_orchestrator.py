@@ -9227,6 +9227,14 @@ BARIATRIC_YOGURT_CAP_G = _env_int("MEALFIT_BARIATRIC_YOGURT_CAP_G", 120, validat
 # 1/4'). Complementa el cap de queso/yogurt. Anchor: P1-BARIATRIC-PROTEIN-DENSITY
 BARIATRIC_FRUIT_CAP_G = _env_int("MEALFIT_BARIATRIC_FRUIT_CAP_G", 80, validator=lambda v: 40 <= v <= 200)
 BARIATRIC_AVOCADO_CAP_G = _env_int("MEALFIT_BARIATRIC_AVOCADO_CAP_G", 30, validator=lambda v: 15 <= v <= 80)
+BARIATRIC_NUT_CAP_G = _env_int("MEALFIT_BARIATRIC_NUT_CAP_G", 20, validator=lambda v: 10 <= v <= 60)
+# [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] (iter 4 — GAP2 del crítico adversario) Cap de VOLUMEN AGREGADO por
+# comida: el solver inflaba porciones (×7 ciruelas=287g, 690g de vegetales) para clavar kcal del slot, ignorando
+# el pouch. Suma los gramos de sólidos por comida; si excede, recorta los ítems NO-proteicos y RECUPERA las kcal
+# escalando la PROTEÍNA (baja el volumen Y sube el piso proteico de paso). Default ON. Rollback: =false.
+BARIATRIC_VOLUME_CAP_ENABLED = _env_bool("MEALFIT_BARIATRIC_VOLUME_CAP", True)
+BARIATRIC_MEAL_VOLUME_G = _env_int("MEALFIT_BARIATRIC_MEAL_VOLUME_G", 300, validator=lambda v: 150 <= v <= 600)
+BARIATRIC_SNACK_VOLUME_G = _env_int("MEALFIT_BARIATRIC_SNACK_VOLUME_G", 200, validator=lambda v: 100 <= v <= 400)
 
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
@@ -13406,8 +13414,12 @@ _BARIATRIC_YOGURT_TOKENS = ("yogur", "yogurt")
 # plural-safe, sin colisión mid-word tipo 'pina'↔'espinaca') + grasa densa para el cap bariátrico de porción.
 _BARIATRIC_FRUIT_TOKENS = ("guineo", "banana", "platano maduro", "mango", "uva", "pina", "lechosa", "papaya",
                            "manzana", "pera", "melon", "sandia", "mandarina", "naranja", "fresa", "melocoton",
-                           "durazno", "kiwi", "guayaba", "pinia", "chinola", "tamarindo")
+                           "durazno", "kiwi", "guayaba", "pinia", "chinola", "tamarindo", "nispero", "ciruela",
+                           "cereza", "granadilla", "carambola", "jagua", "zapote", "mamon")
 _BARIATRIC_FAT_TOKENS = ("aguacate",)
+# [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] nueces/semillas: densidad calórica muy alta → cap estricto por comida.
+_BARIATRIC_NUT_TOKENS = ("almendra", "nuez", "nueces", "mani", "cacahuate", "merey", "maranon", "pistacho",
+                         "avellana", "semilla", "linaza", "chia", "ajonjoli", "sesamo")
 
 
 def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
@@ -13441,7 +13453,8 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
         _caps = ((_BARIATRIC_CHEESE_TOKENS, int(BARIATRIC_CHEESE_CAP_G)),
                  (_BARIATRIC_YOGURT_TOKENS, int(BARIATRIC_YOGURT_CAP_G)),
                  (_BARIATRIC_FRUIT_TOKENS, int(BARIATRIC_FRUIT_CAP_G)),
-                 (_BARIATRIC_FAT_TOKENS, int(BARIATRIC_AVOCADO_CAP_G)))
+                 (_BARIATRIC_FAT_TOKENS, int(BARIATRIC_AVOCADO_CAP_G)),
+                 (_BARIATRIC_NUT_TOKENS, int(BARIATRIC_NUT_CAP_G)))
         capped = 0
         for day in days or []:
             if not isinstance(day, dict):
@@ -13499,6 +13512,65 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                     _truth_up_meal_macros_from_strings(m, db)
                 except Exception:
                     pass
+
+        # [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] (iter 4 — GAP2) 2ª pasada: cap de VOLUMEN AGREGADO por comida.
+        # El solver infla porciones (×7 ciruelas=287g, 690g vegetales) para clavar kcal, ignorando el pouch. Suma
+        # los gramos de sólidos; si exceden el límite (300g comida principal / 200g merienda), recorta los ítems
+        # NO-proteicos por un factor común y RECUPERA las kcal escalando la PROTEÍNA (baja volumen + sube proteína).
+        if BARIATRIC_VOLUME_CAP_ENABLED:
+            for day in days or []:
+                if not isinstance(day, dict):
+                    continue
+                for m in (day.get("meals") or []):
+                    if not isinstance(m, dict):
+                        continue
+                    ings = m.get("ingredients")
+                    if not isinstance(ings, list):
+                        continue
+                    _slot = _norm_text(str(m.get("meal") or m.get("slot") or m.get("name") or ""))
+                    _is_snack = ("merienda" in _slot) or ("snack" in _slot)
+                    _vol_cap = BARIATRIC_SNACK_VOLUME_G if _is_snack else BARIATRIC_MEAL_VOLUME_G
+                    _prot_idx, _np_idx, _total_g, _np_g, _np_kcal, _prot_kcal = [], [], 0.0, 0.0, 0.0, 0.0
+                    for i, ing in enumerate(ings):
+                        if not isinstance(ing, str):
+                            continue
+                        mc = db.macros_from_ingredient_string(ing) or {}
+                        g = mc.get("grams")
+                        if not g:
+                            continue
+                        g = float(g)
+                        _total_g += g
+                        _kc = _ing_kcal_estimate(mc)
+                        try:
+                            _is_prot = _ingredient_macro_group(ing, db) == "protein"
+                        except Exception:
+                            _is_prot = False
+                        if _is_prot:
+                            _prot_idx.append(i); _prot_kcal += _kc
+                        else:
+                            _np_idx.append(i); _np_g += g; _np_kcal += _kc
+                    if _total_g <= _vol_cap or _np_g <= 0:
+                        continue
+                    _prot_g = _total_g - _np_g
+                    _target_np = max(0.0, float(_vol_cap) - _prot_g)
+                    _factor = max(0.1, min(1.0, _target_np / _np_g)) if _np_g > 0 else 1.0
+                    if _factor >= 0.999:
+                        continue
+                    # Recortar SOLO los ítems no-proteicos hasta caber en el pouch. NO se recupera kcal escalando
+                    # proteína (eso re-inflaría el volumen, que es la restricción DURA del pouch). El leve déficit
+                    # calórico lo absorbe la tolerancia de banda + el reconcile de día; el piso de proteína se
+                    # garantiza vía el target bariátrico capeado (80g) — no vía volumen. La proteína queda intacta.
+                    for j in _np_idx:
+                        _new = _resc(ings[j], _factor)
+                        if _new != ings[j]:
+                            ings[j] = _new
+                    capped += 1
+                    logger.info(f"🔻 [P1-BARIATRIC-VOLUME-CAP] '{str(m.get('meal') or m.get('name'))[:30]}' "
+                                f"{round(_total_g)}g→≤{_vol_cap}g (recorte ×{round(_factor, 2)} no-proteico, bariátrica)")
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
         return capped
     except Exception as _bgc_e:
         logger.warning(f"[P1-BARIATRIC-PORTION-CAP] falló (no bloquea): {type(_bgc_e).__name__}: {_bgc_e}")
