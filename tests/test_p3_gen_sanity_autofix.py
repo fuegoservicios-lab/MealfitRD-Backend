@@ -100,6 +100,19 @@ def test_free_items_never_dropped(monkeypatch):
     assert not any("esguineocas" in i for i in ings)
 
 
+def test_batido_keeps_fruit_drops_tuber(monkeypatch):
+    # [P1-BARIATRIC-TORONJA] falso positivo cerrado: 'papa'(token) matcheaba 'papaya'. Un batido CONSERVA frutas
+    # (papaya/lechosa) y solo dropea tubérculos/granos/huevo (papa = potato).
+    import graph_orchestrator as g
+    _patch_verified(monkeypatch)
+    plan = {"days": [{"day": 1, "meals": [{"meal": "Merienda", "name": "Batido de Lechosa", "ingredients": [
+        "27g de lechosa (papaya) madura", "120g de Yogurt", "0.5 papa mediana (75g)"]}]}]}
+    g._generation_sanity_autofix(plan, db=_StubDB())
+    ings = [i.lower() for i in plan["days"][0]["meals"][0]["ingredients"]]
+    assert any("papaya" in i or "lechosa" in i for i in ings), "papaya/lechosa NO debe dropearse de un batido"
+    assert not any("papa mediana" in i for i in ings), "la papa (tubérculo) sí debe dropearse del batido"
+
+
 def test_anchors():
     go = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     assert "P3-GEN-SANITY-AUTOFIX" in go and "def _generation_sanity_autofix" in go

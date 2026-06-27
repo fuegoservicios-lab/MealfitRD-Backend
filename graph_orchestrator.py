@@ -13634,6 +13634,11 @@ _GEN_UNIT_FILLER_WORDS = frozenset((
     "de", "la", "el", "con", "y", "a", "taza", "tazas", "cda", "cdta", "cdas", "cdtas", "cucharada",
     "cucharadita", "cucharadas", "g", "gr", "gramo", "gramos", "ml", "unidad", "unidades", "pieza", "piezas",
     "rodaja", "rodajas", "lonja", "lonjas", "mediano", "mediana", "pequeno", "pequena", "grande", "taza/s"))
+# [P1-BARIATRIC-TORONJA] Frutas que SÍ van en un batido — NUNCA se dropean por el check de incongruencia (#4).
+# Cierra el falso positivo 'papa'(token)↔'papaya' que dropeaba lechosa/papaya de un batido legítimo.
+_GEN_BATIDO_OK_FRUITS = ("papaya", "lechosa", "guineo", "banana", "fresa", "mango", "pina", "pinia", "mandarina",
+                         "manzana", "mora", "uva", "melon", "sandia", "kiwi", "durazno", "melocoton", "cereza",
+                         "guayaba", "nispero", "ciruela", "naranja", "chinola", "tamarindo", "mamey", "mamon")
 
 
 def _generation_sanity_autofix(plan, db=None) -> int:
@@ -13667,8 +13672,10 @@ def _generation_sanity_autofix(plan, db=None) -> int:
                         keep.append(ing)
                         continue
                     low = _norm_text(ing)
-                    # #4: almidón/huevo dentro de un batido → incongruente.
-                    if is_batido and any(_name_has_token(t, low) for t in _GEN_INCONGRUENT_IN_BATIDO):
+                    # #4: almidón/huevo dentro de un batido → incongruente. PERO nunca dropear una FRUTA (un batido
+                    # es de fruta); solo tubérculos/granos/huevo. Cierra el falso positivo 'papa'(token)↔'papaya'.
+                    if (is_batido and not any(_fr in low for _fr in _GEN_BATIDO_OK_FRUITS)
+                            and any(_name_has_token(t, low) for t in _GEN_INCONGRUENT_IN_BATIDO)):
                         logger.info(f"🩹 [P3-GEN-SANITY] dropeado '{str(ing)[:34]}' (incongruente en batido)")
                         changed = True
                         fixed += 1
