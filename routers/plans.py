@@ -377,6 +377,14 @@ _REQUIRED_FORM_FIELDS = (
 # de fallo silencioso de safety médica para alergias/condiciones.
 _REQUIRED_NONEMPTY_ARRAY_FIELDS = frozenset({"allergies", "medicalConditions"})
 
+# [P2-FORM-FREETEXT-SATISFIES · 2026-06-27] Un array required-no-vacío se satisface TAMBIÉN si el usuario
+# escribió su valor en el TEXTO LIBRE companion (ej. "cirugía bariátrica" en "otra condición médica" sin
+# marcar chip). El gate del NextButton del step ya lo aceptaba, pero `_validate_form_data_min` (y el frontend
+# `findFirstIncompleteField`) miraban solo el array → rebotaban al usuario que escribió a mano. El backend
+# MERGEA el companion en el array canónico downstream (`_merge_other_text_fields`/arun_plan_pipeline), así que
+# el allergen-guard/reviewer/reglas SÍ lo ven → aceptarlo aquí es seguro. tooltip-anchor: P2-FORM-FREETEXT-SATISFIES
+_FREE_TEXT_COMPANION_FIELDS = {"allergies": "otherAllergies", "medicalConditions": "otherConditions"}
+
 # [P0-FORM-4] Valores aceptados para `weightUnit`. Comparación case-insensitive
 # tras `.strip()` — frontend manda "lb"/"kg" pero un cliente legacy podría
 # mandar "LB"/" lb "/etc. Cualquier otro valor (incluyendo "lbs", "kgs",
@@ -577,12 +585,21 @@ def _validate_form_data_min(data: dict) -> tuple[bool, list[str]]:
         # explícito, así que un usuario sin alergias reales sigue pasando esta
         # validación con un solo click.
         if value is None or (isinstance(value, str) and value.strip() == ""):
+            # [P2-FORM-FREETEXT-SATISFIES] presencia satisfecha por el texto libre companion.
+            _comp = _FREE_TEXT_COMPANION_FIELDS.get(field)
+            if _comp and str(data.get(_comp) or "").strip():
+                continue
             missing.append(field)
         elif (
             field in _REQUIRED_NONEMPTY_ARRAY_FIELDS
             and isinstance(value, list)
             and len(value) == 0
         ):
+            # [P2-FORM-FREETEXT-SATISFIES] array vacío pero el usuario escribió a mano (otherConditions/
+            # otherAllergies) → válido (el merge downstream lo lleva al array canónico que ve el guard).
+            _comp = _FREE_TEXT_COMPANION_FIELDS.get(field)
+            if _comp and str(data.get(_comp) or "").strip():
+                continue
             missing.append(field)
     return (len(missing) == 0, missing)
 
