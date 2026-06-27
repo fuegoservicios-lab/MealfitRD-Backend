@@ -300,20 +300,6 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     available_veggies = list(filtered_veggies)
     available_fruits = list(filtered_fruits)
 
-    # [VARIETY-DEBUG · 2026-06-27] Diagnóstico temporal: ¿por qué la renovación converge a los mismos staples
-    # en vivo cuando la función aislada varía? Loguea el tamaño del pool filtrado + los filtros aplicados.
-    try:
-        logger.info(
-            f"🔎 [VARIETY-DEBUG] avail_prot={len(available_proteins)} (sample={available_proteins[:8]}) "
-            f"avail_carb={len(available_carbs)} avail_veg={len(available_veggies)} avail_fruit={len(available_fruits)} | "
-            f"diet={(form_data or {}).get('diet')}/{(form_data or {}).get('dietType')} "
-            f"allergies={(form_data or {}).get('allergies')} dislikes={(form_data or {}).get('dislikes')} "
-            f"temp_dislikes={list(((form_data or {}).get('temporary_dislikes') or {}).keys())[:8]} "
-            f"force_variety={force_variety} hist_len={len(history_text or '')} db_freq_n={len(db_freq_map)}"
-        )
-    except Exception:
-        pass
-
     # Guard clause: si las restricciones eliminaron TODOS los ingredientes
     # (ej: vegano con muchas alergias), dejar libertad total al LLM
     if not available_proteins or not available_carbs:
@@ -543,6 +529,13 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
             _pool_f = [(f, w) for f, w in _pool_f if f != pick]
             
     # ======= GROCERY CYCLE LOCK (Ahorro de Supermercado) =======
+    # [P1-VARIETY-RENEWAL-NO-CYCLE-LOCK · 2026-06-27] El cycle-lock reutiliza los ingredientes base del ciclo de
+    # compras (quincenal/mensual) para que el usuario NO tenga que re-comprar mid-ciclo. Efecto colateral: cada
+    # renovación dentrega LOS MISMOS alimentos (solo varían los platos). El owner pidió priorizar VARIEDAD de
+    # ingredientes sobre el reuso ("no me des los mismos a menos que lo necesite"). Default OFF → cada renovación
+    # elige ingredientes nuevos del pool (202) y actualiza la base del ciclo (el shopping list refleja lo nuevo).
+    # Flip a True (MEALFIT_GROCERY_CYCLE_LOCK=true) restaura el ahorro (reuso de las compras del ciclo).
+    GROCERY_CYCLE_LOCK_ENABLED = _env_bool("MEALFIT_GROCERY_CYCLE_LOCK", False)
     grocery_duration = form_data.get("groceryDuration", "weekly") if form_data else "weekly"
     grocery_days = 7
     if grocery_duration == "biweekly": grocery_days = 15
@@ -571,8 +564,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                         days_elapsed = (now - cycle_start).days
                         
                         # Si es < 2 días, es regeneración del mismo plan base, actualizaremos el ciclo.
-                        if 2 <= days_elapsed < grocery_days:
-                            # ¡BLOQUEO ACTIVO! Forzamos la reutilización de ingredientes.
+                        if 2 <= days_elapsed < grocery_days and GROCERY_CYCLE_LOCK_ENABLED:
+                            # ¡BLOQUEO ACTIVO! Forzamos la reutilización de ingredientes (ahorro de supermercado).
                             cycle_locked = True
                             unique_proteins = grocery_cycle.get("base_proteins", unique_proteins)
                             unique_carbs = grocery_cycle.get("base_carbs", unique_carbs)
@@ -582,7 +575,12 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
                             logger.info(f"🔓 [GROCERY CYCLE] Ciclo expirado ({days_elapsed} >= {grocery_days} días). Iniciando nuevo ciclo.")
                             new_cycle_started = True
                         else:
-                            logger.info(f"🔄 [GROCERY CYCLE] Regeneración en Día {days_elapsed} del ciclo. Actualizando Plan Base.")
+                            # [P1-VARIETY-RENEWAL-NO-CYCLE-LOCK] Día 2..N con lock OFF (default) → variety-first:
+                            # NO reutilizamos; se eligen ingredientes nuevos y se actualiza la base del ciclo.
+                            if 2 <= days_elapsed < grocery_days:
+                                logger.info(f"🎨 [GROCERY CYCLE] Variety-first (lock OFF) en Día {days_elapsed}/{grocery_days} → ingredientes NUEVOS (no reuso).")
+                            else:
+                                logger.info(f"🔄 [GROCERY CYCLE] Regeneración en Día {days_elapsed} del ciclo. Actualizando Plan Base.")
                             new_cycle_started = True
                     except Exception as e:
                         logger.error(f"Error parseando fecha del ciclo: {e}")
