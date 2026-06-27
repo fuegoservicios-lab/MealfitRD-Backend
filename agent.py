@@ -31,7 +31,7 @@ from knobs import _env_str, _env_float, _env_int, _env_bool  # [P3-CHAT-MODEL-KN
 # de un solo nivel: `graph_orchestrator` NO importa `agent` (verificado), no
 # hay ciclo. Si en el futuro la dirección de import cambia, mover el helper
 # a un módulo neutro.
-from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, slot_coherence_backstop_for_meal, SLOT_APPROPRIATENESS_GATE_ENABLED
+from graph_orchestrator import _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, slot_coherence_backstop_for_meal, SLOT_APPROPRIATENESS_GATE_ENABLED, appetibility_fix_for_update, _meal_has_sweet_savory_clash, UPDATE_APPETIBILITY_GUARD
 import concurrent.futures
 import traceback
 from datetime import datetime, timezone
@@ -1313,6 +1313,29 @@ def swap_meal(form_data: dict):
                 )
                 raise ValueError("SLOT_INCOHERENCE: " + "; ".join(_slot_viol))
 
+        # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Pareo chocante fruta+salado en swap
+        # (ej. "Arroz con Mango"): el usuario solo pidió "cámbialo" → presiona retry para un plato
+        # coherente (espejo del backstop de slot: fail-open, no 422 en strict_pantry-sin-inventario,
+        # el ValueError NO cuenta como CB failure). La proteína fantasma se corrige determinista en _out.
+        if UPDATE_APPETIBILITY_GUARD and not (strict_pantry and not clean_ingredients):
+            try:
+                _appet_dump = res.model_dump() if hasattr(res, "model_dump") else (res if isinstance(res, dict) else {})
+                _has_clash = _meal_has_sweet_savory_clash(_appet_dump)
+            except Exception:
+                _has_clash = False
+            if _has_clash:
+                logger.warning(
+                    f"🍓 [P1-UPDATE-APPETIBILITY] swap con pareo fruta+salado | meal_type={meal_type} | "
+                    f"name={str(_appet_dump.get('name'))[:48]!r}"
+                )
+                _current_prompt[0] = prompt_text + (
+                    "\n\n🍓 COHERENCIA DE SABOR (OBLIGATORIO): el plato anterior combina fruta dulce dominante "
+                    "(mango, piña, lechosa…) con una base salada (arroz, huevo revuelto, crucíferas). Eso choca. "
+                    "La fruta dulce va con yogur/avena/nueces/queso fresco o sola — NUNCA con arroz, huevo salado "
+                    "ni vegetales salados. Reemplaza la fruta por una guarnición salada coherente. Mantén los macros."
+                )
+                raise ValueError("SWEET_SAVORY_CLASH")
+
         return res
 
     try:
@@ -1594,6 +1617,19 @@ def swap_meal(form_data: dict):
             condition_substitution_backstop_for_meal(_out, form_data)
         except Exception as _cs_e:
             logger.warning(f"[P2-UPDATE-CONDITION-SUBST] condition-subst en swap falló (no bloquea): {type(_cs_e).__name__}: {_cs_e}")
+
+    # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Honestidad de nombre (proteína fantasma) +
+    # detección de clash sobre el plato FINAL (cubre también el path de fallback que esquiva el retry-loop).
+    # namefix es determinista e idempotente; el clash en el plato final solo se loguea (advisory).
+    if isinstance(_out, dict):
+        try:
+            _appet = appetibility_fix_for_update(_out)
+            if _appet.get("name_fixed"):
+                logger.info(f"🎭 [P1-UPDATE-APPETIBILITY] nombre de swap corregido (proteína fantasma) | meal_type={meal_type}")
+            if _appet.get("sweet_savory_clash"):
+                logger.warning(f"🍓 [P1-UPDATE-APPETIBILITY] plato final de swap mantiene pareo fruta+salado (advisory) | meal_type={meal_type}")
+        except Exception as _ap_e:
+            logger.warning(f"[P1-UPDATE-APPETIBILITY] appetibility fix en swap falló (no bloquea): {type(_ap_e).__name__}: {_ap_e}")
     return _out
 
 

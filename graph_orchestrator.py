@@ -9126,6 +9126,12 @@ BAND_RETRY_THRESHOLD = _env_float("MEALFIT_BAND_RETRY_THRESHOLD", 0.5)
 # sin redeploy: MEALFIT_SLOT_APPROPRIATENESS_GATE=false. tooltip-anchor: P1-SLOT-APPROPRIATENESS
 SLOT_APPROPRIATENESS_GATE_ENABLED = _env_bool("MEALFIT_SLOT_APPROPRIATENESS_GATE", True)
 
+# [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Lleva a las superficies de UPDATE (swap S3 /
+# regenerate-day S2 / chat-modify) los detectores de APETECIBILIDAD que S1 ya corre en review_plan_node:
+# honestidad de nombre (proteína fantasma) + pareo chocante fruta+salado. Sin esto un swap podía entregar
+# "Pollo a la Plancha" sin pollo o "Arroz con Mango". Default ON. Rollback: =false. Anchor: P1-UPDATE-APPETIBILITY
+UPDATE_APPETIBILITY_GUARD = _env_bool("MEALFIT_UPDATE_APPETIBILITY_GUARD", True)
+
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
 # PRODUCCIÓN, delata una degradación SILENCIOSA si está mal seteada. Función PURA (lee los knobs módulo-nivel
@@ -11004,6 +11010,30 @@ def _fix_phantom_protein_in_name(meal: dict, strip_accents_fn) -> bool:
         return False
 
 
+def appetibility_fix_for_update(meal: dict) -> dict:
+    """[P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Lleva a las superficies de UPDATE (swap S3 /
+    regenerate-day S2 / chat-modify) los detectores de apetecibilidad que S1 corre en review_plan_node:
+      1. Honestidad del nombre (proteína fantasma): reusa `_fix_phantom_protein_in_name` — rename DETERMINISTA
+         e idempotente (mutates meal["name"]); fail-safe (sin reemplazo cárnico real NO toca el nombre).
+      2. Pareo chocante fruta+salado: detección per-comida vía `_meal_has_sweet_savory_clash` (SSOT con S1).
+    Devuelve {"name_fixed": bool, "sweet_savory_clash": bool}. El caller decide qué hacer con el clash
+    (swap → presión de retry; chat-modify → advisory porque no hay retry barato y el cambio lo pide el
+    usuario). CALIDAD, no seguridad → FAIL-OPEN. Gateado por UPDATE_APPETIBILITY_GUARD.
+    tooltip-anchor: P1-UPDATE-APPETIBILITY"""
+    out = {"name_fixed": False, "sweet_savory_clash": False}
+    if not UPDATE_APPETIBILITY_GUARD or not isinstance(meal, dict):
+        return out
+    try:
+        out["name_fixed"] = bool(_fix_phantom_protein_in_name(meal, strip_accents))
+    except Exception:
+        pass
+    try:
+        out["sweet_savory_clash"] = _meal_has_sweet_savory_clash(meal)
+    except Exception:
+        pass
+    return out
+
+
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, fill_pct: float = 0.92, max_add_g: int = 300) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
@@ -11519,6 +11549,21 @@ _SAVORY_CLASH_TOKENS = ("arroz", "moro", "locrio", "pasta", "espagueti", "macarr
                         "revoltillo", "revuelto", "coliflor", "brocoli", "berenjena")
 
 
+def _meal_has_sweet_savory_clash(meal: dict) -> bool:
+    """[P1-FRUIT-SAVORY-CLASH] True si el NOMBRE del plato combina una fruta dulce dominante con una
+    base salada (mango+arroz, revoltillo+mango, coliflor+mango). SSOT del detector per-comida —
+    reusado por build_variety_report (S1) y appetibility_fix_for_update (S2/S3). Match word-boundary
+    sobre el nombre (anti-falso-positivo). FAIL-SAFE: error → False. tooltip-anchor: P1-FRUIT-SAVORY-CLASH"""
+    try:
+        name_low = strip_accents(str((meal or {}).get("name", "")).lower())
+        if not name_low:
+            return False
+        return (any(_name_has_token(fr, name_low) for fr in _SWEET_DOMINANT_FRUITS)
+                and any(_name_has_token(tok, name_low) for tok in _SAVORY_CLASH_TOKENS))
+    except Exception:
+        return False
+
+
 def _name_has_token(token: str, text_low: str) -> bool:
     """True si `token` aparece en `text_low` (ya en minúscula/sin acentos) con frontera de palabra
     inicial → evita que 'pina' matchee 'espina' o 'macarron' matchee substrings. [P1-FRUIT-SAVORY-CLASH]"""
@@ -11644,8 +11689,7 @@ def build_variety_report(plan: dict) -> dict:
             # [P1-FRUIT-SAVORY-CLASH · 2026-06-26] (audit gap #5) Pareo intra-plato chocante en el NOMBRE:
             # fruta dulce dominante + base salada (mango+arroz / revoltillo+mango / coliflor+mango). El conteo
             # alimenta el gate de retry (_variety_repeat_gate_issues); aquí se surface también como issue advisory.
-            if (any(_name_has_token(fr, name_low) for fr in _SWEET_DOMINANT_FRUITS)
-                    and any(_name_has_token(tok, name_low) for tok in _SAVORY_CLASH_TOKENS)):
+            if _meal_has_sweet_savory_clash(meal):  # [P1-FRUIT-SAVORY-CLASH] SSOT compartido con S2/S3
                 sweet_savory_clash += 1
                 issues.append(
                     f"Día {day.get('day', '?')}: '{meal.get('name', '?')}' combina fruta dulce dominante con "

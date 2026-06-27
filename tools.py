@@ -28,7 +28,7 @@ import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
-from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal
+from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, appetibility_fix_for_update
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
 # callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
 # Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
@@ -1099,6 +1099,18 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             condition_substitution_backstop_for_meal(new_meal_data, _cond_form)
         except Exception as _cs_e:
             logger.warning(f"[P2-UPDATE-CONDITION-SUBST] condition-subst en modify falló (no bloquea): {type(_cs_e).__name__}: {_cs_e}")
+
+        # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Honestidad de nombre (proteína fantasma) +
+        # detección de pareo fruta+salado — paridad con S1/swap. namefix determinista e idempotente; el clash
+        # solo se loguea (advisory: el chat-modify no tiene retry barato y el cambio lo dirige el usuario).
+        try:
+            _appet = appetibility_fix_for_update(new_meal_data)
+            if _appet.get("name_fixed"):
+                logger.info(f"🎭 [P1-UPDATE-APPETIBILITY] nombre de modify corregido (proteína fantasma) | day={day_number} meal={meal_type}")
+            if _appet.get("sweet_savory_clash"):
+                logger.warning(f"🍓 [P1-UPDATE-APPETIBILITY] modify mantiene pareo fruta+salado (advisory) | day={day_number} meal={meal_type}")
+        except Exception as _ap_e:
+            logger.warning(f"[P1-UPDATE-APPETIBILITY] appetibility fix en modify falló (no bloquea): {type(_ap_e).__name__}: {_ap_e}")
 
         target_day["meals"][target_meal_index] = new_meal_data
 
