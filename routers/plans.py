@@ -10787,7 +10787,11 @@ def api_plans_history_list(
                     "name": m.get("name"),
                     "meal": m.get("meal") or "",
                 })
-                if len(preview_meals) >= 4:
+                # [P1-CLINICAL-MEAL-COUNT · 2026-06-27] Cap a 6 (no 4): con planes de 5-6 comidas un cap de 4
+                # hacía que el badge "+N" del Historial (overflow = total - mostrados) MINTIERA u ocultara
+                # comidas sin señal (un plan de 6 con cap 4 + max 4 chips = "+0", 2 comidas invisibles). 6 = la
+                # cantidad máxima posible de comidas (clamp 2-6). El frontend igual solo pinta 3-4 chips + "+N".
+                if len(preview_meals) >= 6:
                     break
 
         # Goal/diet con fallback root → assessment (espeja
