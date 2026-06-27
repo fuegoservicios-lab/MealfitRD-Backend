@@ -103,10 +103,10 @@ PRICES = {
                                            {"unit": "frasco", "grams": 227, "label": "8 oz", "price": 325}]},
     "Curry en polvo":        {"packages": [{"unit": "frasco", "grams": 57, "label": "2 oz", "price": 100}]},
     "Cebolla en polvo":      {"packages": [{"unit": "frasco", "grams": 78, "label": "2.75 oz", "price": 105}]},
-    # --- Semillas / grasas (Despensa) ---
-    "Ajonjolí":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Pistachos":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Mantequilla de almendras": {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    # --- Semillas / grasas (Despensa) — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
+    "Ajonjolí":              {"price_per_lb": 235},
+    "Pistachos":             {"packages": [{"unit": "tarro", "grams": 227, "label": "8 oz", "price": 459}]},
+    "Mantequilla de almendras": {"packages": [{"unit": "tarro", "grams": 200, "label": "200 g", "price": 525}]},
     # --- Proteína animal económica/premium ---
     "Chuleta de cerdo":      {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Costilla de cerdo":     {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
