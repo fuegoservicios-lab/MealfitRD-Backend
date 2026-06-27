@@ -9138,6 +9138,13 @@ UPDATE_APPETIBILITY_GUARD = _env_bool("MEALFIT_UPDATE_APPETIBILITY_GUARD", True)
 # para macros. NUNCA es gate (no rechaza planes por esto). Default ON. Rollback: =false. Anchor: P2-DISH-QUALITY
 DISH_QUALITY_TELEMETRY_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_TELEMETRY", True)
 
+# [P2-UPDATE-MICRO-STEER · 2026-06-27] (audit G2) Inyecta los pisos de micros (Mg/Fe/Ca/fibra/K) al prompt
+# de las superficies de UPDATE (swap S3 / chat-modify) — cierra el gap: el usuario SANO sin condición NO
+# recibía guía de densidad al cambiar platos (S1 sí). ADVISORY (prompt), nunca gate. El caller NO la inyecta
+# en el path pantry-strict (el pantry manda; añadir presión de micros subiría fallos de convergencia con la
+# Nevera). Default ON (el skip pantry-aware elimina el riesgo que la auditoría citó). Anchor: P2-UPDATE-MICRO-STEER
+UPDATE_MICRO_STEER_ENABLED = _env_bool("MEALFIT_UPDATE_MICRO_STEER", True)
+
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
 # PRODUCCIÓN, delata una degradación SILENCIOSA si está mal seteada. Función PURA (lee los knobs módulo-nivel
@@ -11038,6 +11045,41 @@ def appetibility_fix_for_update(meal: dict) -> dict:
     except Exception:
         pass
     return out
+
+
+def build_update_micronutrient_directive(form_data: dict) -> str:
+    """[P2-UPDATE-MICRO-STEER · 2026-06-27] (audit G2) SSOT del directivo de pisos de micronutrientes
+    (Mg/Fe/Ca/fibra/K) para las superficies de UPDATE (swap S3 / chat-modify), reusando los MISMOS inputs
+    que S1 (`build_micronutrient_targets_directive`). Cierra el gap: el usuario SANO sin condición NO recibía
+    pisos de densidad al cambiar platos (S1 sí; updates solo re-medían). ADVISORY (prompt), nunca gate.
+    Devuelve '' si OFF/fail. El CALLER decide cuándo inyectarla (NO en el path pantry-strict — el pantry manda
+    y la presión de micros subiría fallos de convergencia). tooltip-anchor: P2-UPDATE-MICRO-STEER"""
+    if not UPDATE_MICRO_STEER_ENABLED or not isinstance(form_data, dict):
+        return ""
+    try:
+        from micronutrients import build_micronutrient_targets_directive
+        _kcal = form_data.get("target_calories") or form_data.get("daily_calories") or form_data.get("kcal")
+        _preg = False
+        try:
+            from nutrition_calculator import _is_pregnancy_or_lactation as _ipl
+            _preg = bool(_ipl(form_data))
+        except Exception:
+            _preg = False
+        _kelev = False
+        if POTASSIUM_PANEL_MED_AWARE_ENABLED:
+            try:
+                from medication_rules import detect_potassium_elevating_med
+                _kelev = bool(detect_potassium_elevating_med(form_data))
+            except Exception:
+                _kelev = False
+        return build_micronutrient_targets_directive(
+            sex=form_data.get("gender", "female"), age=form_data.get("age"),
+            conditions=_condition_strings(form_data), daily_kcal=_kcal,
+            pregnant=_preg, k_elevating_med=_kelev,
+            goal=form_data.get("mainGoal") or form_data.get("goal"))
+    except Exception as _ms_e:
+        logger.debug(f"[P2-UPDATE-MICRO-STEER] directiva falló (no bloquea): {type(_ms_e).__name__}: {_ms_e}")
+        return ""
 
 
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,

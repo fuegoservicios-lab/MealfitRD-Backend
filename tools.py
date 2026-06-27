@@ -751,6 +751,24 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     except Exception as _tr_e:
         logger.debug(f"[P1-SLOT-APPROPRIATENESS] timing rules chat-modify fallaron (no bloquea): {_tr_e}")
 
+    # [P2-UPDATE-MICRO-STEER · 2026-06-27] (audit G2) Pisos de micros (Mg/Fe/Ca/fibra/K) al prompt de
+    # chat-modify — paridad de densidad con S1/swap. SKIP en el path pantry-strict (reciclaje: clean_ingredients
+    # sin allow_pantry_expansion) para no subir fallos de convergencia con la Nevera. SSOT del orquestador.
+    if not (clean_ingredients and not allow_pantry_expansion):
+        try:
+            from graph_orchestrator import build_update_micronutrient_directive as _bmd
+            _mform = dict(form_data or {})
+            if not _mform.get("medicalConditions") and not _mform.get("medical_conditions"):
+                _mform["medicalConditions"] = _hp.get("medicalConditions") or _hp.get("medical_conditions") or []
+            for _k in ("gender", "age"):
+                if not _mform.get(_k) and _hp.get(_k):
+                    _mform[_k] = _hp.get(_k)
+            _micro_block = _bmd(_mform)
+            if _micro_block:
+                context_extras = _micro_block + "\n" + context_extras
+        except Exception as _msc_e:
+            logger.debug(f"[P2-UPDATE-MICRO-STEER] micro steer chat-modify falló (no bloquea): {_msc_e}")
+
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),
         desc=target_meal.get('desc'),

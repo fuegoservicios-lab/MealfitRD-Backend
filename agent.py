@@ -943,6 +943,19 @@ def swap_meal(form_data: dict):
         except Exception as _tr_e:
             logger.debug(f"[P1-SLOT-APPROPRIATENESS] timing rules swap fallaron (no bloquea): {_tr_e}")
 
+    # [P2-UPDATE-MICRO-STEER · 2026-06-27] (audit G2) Inyecta los pisos de micros (Mg/Fe/Ca/fibra/K) al prompt
+    # del swap — el usuario SANO sin condición no los recibía (S1 sí; paridad de densidad nutricional). SOLO
+    # cuando NO hay pantry detectada (usuario va de compras): con la Nevera-strict el pantry manda y añadir
+    # presión de micros subiría fallos de convergencia. SSOT graph_orchestrator.build_update_micronutrient_directive.
+    if not clean_ingredients:
+        try:
+            from graph_orchestrator import build_update_micronutrient_directive as _bmd
+            _micro_block = _bmd(form_data)
+            if _micro_block:
+                context_extras += "\n    " + _micro_block.strip()
+        except Exception as _msw_e:
+            logger.debug(f"[P2-UPDATE-MICRO-STEER] micro steer swap falló (no bloquea): {_msw_e}")
+
     prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
         rejected_meal=rejected_meal,
         meal_type=meal_type,
