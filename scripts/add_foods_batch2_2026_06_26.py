@@ -92,16 +92,17 @@ PRICES = {
                                            {"unit": "frasco", "grams": 454, "label": "16 oz", "price": 298}]},  # golosina (azúcar); la acerola NO se consigue en RD, solo maraschino
     "Granada":               {"packages": [{"unit": "paquete", "grams": 113, "label": "4 oz", "price": 290}]},
     # --- Granos / carbos (Despensa) ---  (Cuscús descartado: no se vende en Sirena/Nacional; Pan de agua: saltado)
-    "Bulgur":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Cebada":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Harina de avena":       {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # ¿se consigue en RD? si no, dropear (Avena en hojuelas ya existe)
-    # --- Especias / hierbas (Despensa) — uso ~1-5 g; suele venderse por frasco/funda ---
-    "Comino":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Cúrcuma":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Laurel":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Tomillo":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Curry en polvo":        {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Cebolla en polvo":      {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Bulgur":                {"packages": [{"unit": "paquete", "grams": 680, "label": "24 oz", "price": 255}]},
+    "Cebada":                {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 118}]},
+    "Harina de avena":       {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # PENDIENTE drop → "Harina de Negrito" (oat flour no se consigue; Negrito=crema de trigo)
+    # --- Especias / hierbas (Despensa) — PRECIOS RD (La Sirena/Nacional, 2026-06-26); uso ~1-5 g ---
+    "Comino":                {"packages": [{"unit": "pote", "grams": 28, "label": "1 oz", "price": 55}]},
+    "Cúrcuma":               {"price_per_lb": 99},
+    "Laurel":                {"packages": [{"unit": "pote", "grams": 100, "label": "100 g", "price": 150}]},
+    "Tomillo":               {"packages": [{"unit": "sobre", "grams": 14, "label": "0.5 oz", "price": 55},
+                                           {"unit": "frasco", "grams": 227, "label": "8 oz", "price": 325}]},
+    "Curry en polvo":        {"packages": [{"unit": "frasco", "grams": 57, "label": "2 oz", "price": 100}]},
+    "Cebolla en polvo":      {"packages": [{"unit": "frasco", "grams": 78, "label": "2.75 oz", "price": 105}]},
     # --- Semillas / grasas (Despensa) ---
     "Ajonjolí":              {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Pistachos":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
