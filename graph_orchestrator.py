@@ -8930,6 +8930,12 @@ VARIETY_REPEAT_GATE_LAST_ATTEMPT_ADVISORY = _env_bool("MEALFIT_VARIETY_REPEAT_GA
 # validador duro (review_plan_node) rechaza/reintenta si el día queda < floor_pct del target.
 PROTEIN_FLOOR_ENABLED = _env_bool("MEALFIT_PROTEIN_FLOOR", True)
 PROTEIN_FLOOR_FILL_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_FILL_PCT", 0.92)  # closer determinista
+# [P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura, auditoría workflow) Re-cierre FINAL del piso de
+# proteína DESPUÉS de los caps clínicos. Raíz del déficit recurrente (64g/80g): el closer del motor corre PRE-cap;
+# los caps DM2/bariátrica recortan lácteos (queso=proteína) y recuperan kcal escalando carbos/veg → el % de
+# proteína cae bajo el piso. Esta pasada re-cierra con proteína ANIMAL DENSA NO-LÁCTEA + re-cuadra C/F. RENAL:
+# skip total (fail-secure, techo KDIGO). Default ON. Rollback: =false.
+REPAIR_PROTEIN_POST_CAPS = _env_bool("MEALFIT_REPAIR_PROTEIN_POST_CAPS", True)
 PROTEIN_FLOOR_HARD_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT", 0.90)  # gate de retry
 PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
 # [P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Garantía DURA del piso de proteína (Fase 2 del
@@ -13717,6 +13723,72 @@ def _generation_sanity_autofix(plan, db=None) -> int:
         return 0
 
 
+def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict, db=None) -> int:
+    """[P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura) Re-cierre FINAL del piso de proteína tras los caps
+    clínicos. El closer del motor (_close_protein_gap_for_meal) corre DENTRO de _apply_macro_engine (PRE-cap) y es
+    idempotente; los caps DM2/bariátrica recortan lácteos (queso=22g prot/100g, yogurt=10g) DESPUÉS y recuperan kcal
+    escalando carbos/veg → el % de proteína del día cae bajo el piso (déficit recurrente 64g/80g que el revisor
+    rechazaba). Esta pasada re-cierra el gap con proteína ANIMAL DENSA NO-LÁCTEA (no la re-recortan los caps de
+    lácteo) hasta fill_pct del target por slot, y re-cuadra C/F con `_macro_aware_day_reconcile` (preserva la
+    proteína). SEGURIDAD: RENAL → skip TOTAL (nunca inyectar proteína sobre el techo KDIGO). Idempotente (fill-to-
+    target: no sobre-añade; flag `_final_protein_close`). Gateado + fail-safe. tooltip-anchor: P1-PROTEIN-FLOOR-POST-CAPS"""
+    if not (REPAIR_PROTEIN_POST_CAPS and PROTEIN_FLOOR_ENABLED):
+        return 0
+    try:
+        # RENAL fail-secure: jamás inyectar proteína en ERC (techo KDIGO 0.8 g/kg).
+        if _is_renal_condition(form_data):
+            return 0
+        macros = (nutrition or {}).get("macros") or {}
+        _pg = float(macros.get("protein_g") or 0)
+        _cg = float(macros.get("carbs_g") or 0)
+        _fg = float(macros.get("fats_g") or 0)
+        if _pg <= 0:
+            return 0
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        from constants import strip_accents as _sa
+        _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=18.0)
+        # Solo animal DENSA NO-LÁCTEA: los lácteos ya están capeados; re-añadirlos los re-recortaría.
+        _DAIRY = ("queso", "yogur", "yogurt", "leche", "ricotta", "cottage", "requeson")
+        _cands = [c for c in _cands if not any(_t in _sa(str(c[1]).lower()) for _t in _DAIRY)]
+        if not _cands:
+            return 0
+        added = 0
+        for _d in days or []:
+            if not isinstance(_d, dict):
+                continue
+            _ms = _d.get("meals") or []
+            if not _ms:
+                continue
+            _fracs = _canonical_slot_fractions(_ms) if SLOT_DISTRIBUTION_ENABLED else None
+            _touched = False
+            for _i, _m in enumerate(_ms):
+                if not isinstance(_m, dict) or _m.get("_final_protein_close"):
+                    continue
+                _share = _fracs[_i] if (_fracs and _i < len(_fracs)) else (1.0 / max(1, len(_ms)))
+                _slot_target = _pg * _share
+                _cur = _meal_macro_num(_m.get("protein"))
+                if _slot_target <= 0 or _cur >= _slot_target * 0.90:
+                    continue  # ya cumple el piso post-cap
+                _m["_protein_closed"] = False  # permitir el re-cierre (el del motor corrió PRE-cap)
+                _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands, fill_pct=PROTEIN_FLOOR_FILL_PCT)
+                if _g > 0:
+                    added += _g
+                    _m["_final_protein_close"] = True
+                    _touched = True
+            # Re-cuadrar C/F del día preservando la proteína recién cerrada (reusa el reconcile probado).
+            if _touched:
+                try:
+                    _macro_aware_day_reconcile(_ms, _cg, _fg, db)
+                except Exception:
+                    pass
+        return added
+    except Exception as _rp_e:
+        logger.warning(f"[P1-PROTEIN-FLOOR-POST-CAPS] falló (no bloquea): {type(_rp_e).__name__}: {_rp_e}")
+        return 0
+
+
 # [MACRO-ENGINE-EXTRACT · 2026-06-19] Motor de sizing DETERMINISTA extraído VERBATIM de assemble_plan_node
 # (solver → closer → trim-techo → cal-reconcile → capa clínica FS1-FS9). Razón: hacerlo LLAMABLE para que el
 # harness de validación offline (scripts/macro_sizing_replay.py) reproduzca SOLO este motor sobre planes crudos
@@ -14815,6 +14887,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"fruta ≤{BARIATRIC_FRUIT_CAP_G}g, aguacate ≤{BARIATRIC_AVOCADO_CAP_G}g, bariátrica).")
         except Exception as _bgc:
             logger.warning(f"[P1-BARIATRIC-PORTION-CAP] cap en assemble falló (no bloquea): {type(_bgc).__name__}: {_bgc}")
+
+    # [P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura) Re-cierre FINAL del piso de proteína tras los caps
+    # clínicos: los caps recortan lácteos (=proteína) → déficit recurrente (64g/80g). Re-cierra con proteína animal
+    # DENSA NO-LÁCTEA + reconcile C/F. RENAL skip (fail-secure). Reusa closer + reconcile probados. Última garantía
+    # antes de que el estado fluya a shopping/review → el band-score se mide contra el estado FINAL.
+    if REPAIR_PROTEIN_POST_CAPS:
+        try:
+            _rp_added = _repair_protein_floor_post_caps(days, nutrition, form_data)
+            if _rp_added:
+                logger.info(f"🔒 [P1-PROTEIN-FLOOR-POST-CAPS] +{round(_rp_added)}g proteína animal densa post-caps "
+                            f"(re-cierre del piso tras recorte de lácteos) + reconcile C/F.")
+        except Exception as _rp:
+            logger.warning(f"[P1-PROTEIN-FLOOR-POST-CAPS] en assemble falló (no bloquea): {type(_rp).__name__}: {_rp}")
 
     # [P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Honestidad del nombre del plato: corre DESPUÉS del closer
     # (que ya reflejó en el nombre la proteína de rescate vía `_reflect_added_protein_in_name`). Corrige
