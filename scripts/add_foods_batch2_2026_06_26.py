@@ -1,6 +1,7 @@
-"""[P1-CATALOG-EXPANSION-BATCH2 · 2026-06-26] Inserta el LOTE 2 de 44 alimentos nuevos al catálogo
-(master_ingredients, Neon) para llevarlo de 157 → 201: 8 vegetales + 8 frutas + 5 granos + 6 especias/hierbas
-+ 3 semillas/grasas + 9 proteína animal (incl. Arenque) + 4 lácteos + 1 víver. Cierra los huecos de variedad restantes
+"""[P1-CATALOG-EXPANSION-BATCH2 · 2026-06-26] Inserta el LOTE 2 (~42 alimentos, ajustándose por disponibilidad RD)
+al catálogo (master_ingredients, Neon) para llevarlo de 157 → ~199: 8 vegetales + 8 frutas + 3 granos (Cuscús/
+Pan de agua descartados por no venderse) + 6 especias/hierbas + 3 semillas/grasas + 9 proteína animal (incl.
+Arenque) + 4 lácteos + 1 víver. Cierra los huecos de variedad restantes
 (granos delgados, especias para apetecibilidad, proteína animal por presupuesto, frutas/vegetales para 30 días).
 Vegetales: Puerro, Cundeamor, Bok choy, Lechuga romana, Nabo, Alcachofa, Palmito, Cebollín
 (slot de Berza→Cundeamor/melón amargo, tras descartar Ají gustoso [≈Ají cubanela] y Culantro [≈Cilantro] por
@@ -90,12 +91,10 @@ PRICES = {
                                            {"unit": "frasco", "grams": 283, "label": "10 oz", "price": 219},
                                            {"unit": "frasco", "grams": 454, "label": "16 oz", "price": 298}]},  # golosina (azúcar); la acerola NO se consigue en RD, solo maraschino
     "Granada":               {"packages": [{"unit": "paquete", "grams": 113, "label": "4 oz", "price": 290}]},
-    # --- Granos / carbos (Despensa) ---
+    # --- Granos / carbos (Despensa) ---  (Cuscús descartado: no se vende en Sirena/Nacional; Pan de agua: saltado)
     "Bulgur":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Cuscús":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Cebada":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Harina de avena":       {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Pan de agua":           {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    "Harina de avena":       {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # ¿se consigue en RD? si no, dropear (Avena en hojuelas ya existe)
     # --- Especias / hierbas (Despensa) — uso ~1-5 g; suele venderse por frasco/funda ---
     "Comino":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Cúrcuma":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
