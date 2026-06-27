@@ -9132,6 +9132,12 @@ SLOT_APPROPRIATENESS_GATE_ENABLED = _env_bool("MEALFIT_SLOT_APPROPRIATENESS_GATE
 # "Pollo a la Plancha" sin pollo o "Arroz con Mango". Default ON. Rollback: =false. Anchor: P1-UPDATE-APPETIBILITY
 UPDATE_APPETIBILITY_GUARD = _env_bool("MEALFIT_UPDATE_APPETIBILITY_GUARD", True)
 
+# [P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) Telemetría ADVISORY de 'realness' de los platos:
+# mide cuántos parecen placeholder/crudo (nombre genérico, ingredientes-placeholder, receta no sustantiva)
+# en vez de platos reales cocinados — el objetivo más débil del owner (creatividad). Análogo a band_score
+# para macros. NUNCA es gate (no rechaza planes por esto). Default ON. Rollback: =false. Anchor: P2-DISH-QUALITY
+DISH_QUALITY_TELEMETRY_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_TELEMETRY", True)
+
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
 # PRODUCCIÓN, delata una degradación SILENCIOSA si está mal seteada. Función PURA (lee los knobs módulo-nivel
@@ -11738,6 +11744,86 @@ def build_variety_report(plan: dict) -> dict:
             "ok": not issues}
 
 
+# [P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) Señales de plato NO-real (placeholder/crudo) — el
+# OPUESTO de la creatividad que el owner pide ("no un disparate"). Tokens normalizados (sin acento, minúscula).
+_DISH_GENERIC_NAME_TOKENS = (
+    "plato del almuerzo", "cena del dia", "desayuno del dia", "merienda del dia", "plato del dia",
+    "plan matematico", "comida saludable", "comida balanceada", "plato balanceado", "comida del dia",
+)
+_DISH_RAW_INGREDIENT_TOKENS = (   # ingredientes-placeholder que parecen comida sin serlo (auto-fill degradado)
+    "proteina magra al gusto", "carbohidratos complejos", "vegetales mixtos",
+)
+_DISH_GENERIC_RECIPE_STEPS = ("preparar todo", "cocinar", "servir", "preparar", "mezclar todo")
+
+
+def _meal_dish_quality_issue(meal: dict):
+    """[P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) ¿El plato parece un placeholder/crudo en vez de un
+    plato real cocinado? Señales: nombre vacío/genérico-placeholder, ingredientes-placeholder ('Proteína magra
+    al gusto'), o receta NO sustantiva (<2 pasos reales — solo 'preparar/cocinar/servir' genéricos, ignorando
+    los prefijos de los 3 pilares). Pura → (low: bool, reason: str|None). ADVISORY (mide G5); NUNCA gate.
+    tooltip-anchor: P2-DISH-QUALITY"""
+    if not isinstance(meal, dict):
+        return False, None
+    try:
+        name_low = strip_accents(str(meal.get("name", "")).lower()).strip()
+        if not name_low:
+            return True, "nombre vacío"
+        if any(tok in name_low for tok in _DISH_GENERIC_NAME_TOKENS):
+            return True, f"nombre placeholder ('{name_low[:40]}')"
+        ings = meal.get("ingredients_raw") or meal.get("ingredients") or []
+        ings_low = strip_accents(" ".join(str(i) for i in ings).lower())
+        if any(tok in ings_low for tok in _DISH_RAW_INGREDIENT_TOKENS):
+            return True, "ingredientes placeholder (no comprables/genéricos)"
+        recipe = meal.get("recipe") or []
+        if isinstance(recipe, str):
+            recipe = [recipe]
+        substantive = 0
+        for step in recipe:
+            s_low = strip_accents(str(step).lower()).strip()
+            for pref in ("mise en place:", "el toque de fuego:", "montaje:"):
+                if s_low.startswith(pref):
+                    s_low = s_low[len(pref):].strip()
+                    break
+            if len(s_low) >= 12 and s_low not in _DISH_GENERIC_RECIPE_STEPS:
+                substantive += 1
+        if substantive < 2:
+            return True, f"receta no sustantiva ({substantive} paso(s) reales)"
+        return False, None
+    except Exception:
+        return False, None
+
+
+def compute_dish_quality_report(plan: dict) -> dict:
+    """[P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) Telemetría ADVISORY de 'realness' de los platos:
+    cuántos parecen placeholder/crudo en vez de platos reales cocinados. Mide G5 (creatividad/apetecibilidad)
+    análogo a `compute_clinical_band_score` para macros — antes G5 no tenía NINGUNA medición. NUNCA gate.
+    Fail-safe → {}. tooltip-anchor: P2-DISH-QUALITY"""
+    try:
+        total = low = 0
+        issues = []
+        for day in plan.get("days", []) or []:
+            if not isinstance(day, dict):
+                continue
+            for m in (day.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                total += 1
+                _lo, _why = _meal_dish_quality_issue(m)
+                if _lo:
+                    low += 1
+                    if len(issues) < 20:
+                        issues.append(f"Día {day.get('day', '?')}: «{str(m.get('name'))[:40]}» — {_why}")
+        return {
+            "total_meals": total,
+            "low_quality_meals": low,
+            "low_quality_ratio": round(low / total, 3) if total else None,
+            "issues": issues,
+        }
+    except Exception as _dq_e:
+        logger.warning(f"[P2-DISH-QUALITY] report falló: {type(_dq_e).__name__}: {_dq_e}")
+        return {}
+
+
 def _variety_repeat_gate_issues(variety_report: dict) -> list:
     """[P2-VARIETY-GATE-REPEAT · 2026-06-25] Convierte fruta-repetida / plato-base-repetido (advisory
     en `build_variety_report`) en motivos de RECHAZO para `review_plan_node` cuando los knobs están ON.
@@ -12589,6 +12675,22 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
             plan["variety_report"] = build_variety_report(plan)
         except Exception as _vr_e:
             logger.warning(f"[P3-VARIETY] error: {type(_vr_e).__name__}: {_vr_e}")
+
+    # [P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) Telemetría ADVISORY de 'realness' de los platos —
+    # primera medición de G5 (creatividad). Se almacena en el plan (observabilidad/PDF/Dashboard) y se loguea.
+    # NUNCA gate (no rechaza el plan). El lever de mejora es upstream (prompt + catálogo); esto lo MIDE.
+    if DISH_QUALITY_TELEMETRY_ENABLED:
+        try:
+            _dq = compute_dish_quality_report(plan)
+            plan["dish_quality_report"] = _dq
+            if _dq.get("low_quality_meals"):
+                logger.info(
+                    f"🍽️ [P2-DISH-QUALITY] {_dq.get('low_quality_meals')}/{_dq.get('total_meals')} platos "
+                    f"placeholder/crudos (ratio={_dq.get('low_quality_ratio')}). Ej: "
+                    f"{(_dq.get('issues') or ['—'])[0]}"
+                )
+        except Exception as _dq_e:
+            logger.warning(f"[P2-DISH-QUALITY] telemetría falló (no bloquea): {type(_dq_e).__name__}: {_dq_e}")
 
     # ── Guard 7 (M1): trazabilidad de proveniencia USDA FDC (espejo [P3-DATA-PROVENANCE]) ──
     # NO en fallbacks: el plan matemático usa ingredientes-plantilla genéricos ("arroz blanco", sin
@@ -13584,10 +13686,17 @@ async def assemble_plan_node(state: PlanState) -> dict:
             # del meal (estima desde cals + split si vienen en 0) — antes shippeaba
             # protein=0 + placeholder "Plan Matemático" y el usuario veía 0g.
             _recover_meal_macros(m, _ratio_p, _ratio_c, _ratio_f)
-            if "ingredients" not in m: m["ingredients"] = ["Proteína magra al gusto", "Carbohidratos complejos", "Vegetales mixtos"]
+            # [P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) Path DEGRADADO (faltaban ingredientes/receta):
+            # rellenamos un placeholder para pasar validación, pero lo MARCAMOS honestamente en vez de
+            # presentarlo como un plato real (un placeholder crudo es lo OPUESTO a la creatividad de G5).
+            if "ingredients" not in m:
+                m["ingredients"] = ["Proteína magra al gusto", "Carbohidratos complejos", "Vegetales mixtos"]
+                m["_dish_quality_degraded"] = True
             if "difficulty" not in m: m["difficulty"] = "Fácil"
             if "desc" not in m: m["desc"] = "Comida saludable y balanceada."
-            if "recipe" not in m: m["recipe"] = ["Mise en place: Preparar todo", "El Toque de Fuego: Cocinar", "Montaje: Servir"]
+            if "recipe" not in m:
+                m["recipe"] = ["Mise en place: Preparar todo", "El Toque de Fuego: Cocinar", "Montaje: Servir"]
+                m["_dish_quality_degraded"] = True
             
     target_cals = result["calories"]
 
