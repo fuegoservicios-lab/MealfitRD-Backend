@@ -79,15 +79,15 @@ PRICES = {
     "Alcachofa":             {"packages": [{"unit": "unidad", "grams": 128, "label": "1 alcachofa (~128 g pulpa)", "price": 345}]},  # cara (importada)
     "Palmito":               {"packages": [{"unit": "lata", "grams": 400, "label": "14.1 oz", "price": 275}]},
     "Cebollín":              {"packages": [{"unit": "paquete", "grams": 375, "label": "25 unid (~375 g)", "price": 229}]},
-    # --- Frutas ---
-    "Pera":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Kiwi":                  {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Durazno":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Ciruela":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Arándanos":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Tamarindo":             {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Acerola":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
-    "Granada":               {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
+    # --- Frutas — PRECIOS RD (La Sirena/Nacional, 2026-06-26) ---
+    "Pera":                  {"price_per_lb": 99},
+    "Kiwi":                  {"packages": [{"unit": "paquete", "grams": 450, "label": "450 g", "price": 275}]},
+    "Durazno en almíbar":    {"packages": [{"unit": "lata", "grams": 431, "label": "15.2 oz", "price": 180}]},  # único durazno en RD (en almíbar, azúcar añadida)
+    "Ciruela":               {"packages": [{"unit": "paquete", "grams": 454, "label": "16 oz", "price": 199}]},
+    "Arándanos":             {"packages": [{"unit": "paquete", "grams": 450, "label": "450 g", "price": 198}]},
+    "Tamarindo":             {"price_per_lb": 245},
+    "Cereza":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},   # FLAG: frasco "cereza" (6/10/16oz) ¿acerola en almíbar o maraschino? nutrición divergiría — pendiente
+    "Granada":               {"packages": [{"unit": "paquete", "grams": 113, "label": "4 oz", "price": 290}]},
     # --- Granos / carbos (Despensa) ---
     "Bulgur":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
     "Cuscús":                {"price_per_unit": None, "price_per_lb": None, "market_packages": None},
