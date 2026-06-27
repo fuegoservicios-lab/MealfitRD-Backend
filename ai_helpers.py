@@ -423,7 +423,10 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         _is_bariatric = any(t in _cb for t in _BARIA_T2)
     except Exception:
         _is_bariatric = False
-    if _main_goal in _GOALS_PENALIZE_PROCESSED:
+    if _main_goal in _GOALS_PENALIZE_PROCESSED or _is_bariatric:
+        # [P1-BARIATRIC-PROTEIN-DENSITY] bariátrica penaliza embutidos grasos como proteína-main: el revisor
+        # médico los rechaza (grasa saturada/sodio/aditivos → dumping + intolerancia). Visto corr=5ffd78cf:
+        # el pool eligió 'Longaniza' → rechazo crítico.
         _penalized_count = 0
         for i, p in enumerate(available_proteins):
             p_norm = strip_accents(p.lower())
@@ -451,7 +454,16 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     fruit_weights = []
     if available_fruits:
         fruit_weights = [1.0 / (fruit_freq.get(f, 0) + 1) for f in available_fruits]
-    
+        # [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] Bariátrica: penaliza frutas de ALTO índice glucémico
+        # (guineo/mango/uva/piña/plátano) → prefiere bajo-IG (fresa/lechosa/mandarina/manzana). El revisor médico
+        # rechazaba mango (clash) y guineo en porción grande por dumping (corr=5ffd78cf). Penalty ×0.15 (graceful:
+        # si solo hay alto-IG disponible, igual se eligen). tooltip-anchor: P1-BARIATRIC-PROTEIN-DENSITY
+        if _is_bariatric:
+            _HIGH_GI_FRUITS = ("guineo", "banana", "mango", "uva", "pina", "platano", "melon", "sandia", "tamarindo")
+            for _i, _f in enumerate(available_fruits):
+                if any(_g in strip_accents(_f.lower()) for _g in _HIGH_GI_FRUITS):
+                    fruit_weights[_i] *= 0.15
+
     # random.choices puede dar duplicados, así que aseguramos unicidad
     unique_proteins = []
     _pool_p = list(zip(available_proteins, protein_weights))
@@ -506,10 +518,19 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # Tooltip-anchor: P3-GAINMUSCLE-PROTEIN-DENSITY.
     # Set EXPLÍCITO `_LOW_DENSITY_AS_MAIN` elevado a nivel módulo (P2-9) — reusado por swap_meal.
     if (_main_goal == "gain_muscle" or _is_bariatric) and _env_bool("MEALFIT_GAINMUSCLE_HIGH_DENSITY_PROTEIN", True):
-        _low_mains = [p for p in unique_proteins if p.lower() in _LOW_DENSITY_AS_MAIN]
+        # [P1-BARIATRIC-PROTEIN-DENSITY] para bariátrica el set "reemplazable como main" incluye TAMBIÉN los
+        # embutidos grasos (no solo baja densidad) → garantiza proteína animal magra en las comidas principales.
+        def _should_replace_main(_p):
+            _pl = strip_accents(_p.lower())
+            if _pl in _LOW_DENSITY_AS_MAIN:
+                return True
+            if _is_bariatric and any(_kw in _pl for _kw in _PROCESSED_MEAT_KEYWORDS):
+                return True
+            return False
+        _low_mains = [p for p in unique_proteins if _should_replace_main(p)]
         if _low_mains:
             _hd_pool = [(p, w) for p, w in zip(available_proteins, protein_weights)
-                        if p not in unique_proteins and p.lower() not in _LOW_DENSITY_AS_MAIN]
+                        if p not in unique_proteins and not _should_replace_main(p)]
             for _rep in _low_mains:
                 if not _hd_pool:
                     break  # sin alta-densidad disponible → conservar el de baja densidad (graceful)

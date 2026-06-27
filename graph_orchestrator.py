@@ -9222,6 +9222,11 @@ DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 150, validator=lambda 
 BARIATRIC_PORTION_CAP_ENABLED = _env_bool("MEALFIT_BARIATRIC_PORTION_CAP", True)
 BARIATRIC_CHEESE_CAP_G = _env_int("MEALFIT_BARIATRIC_CHEESE_CAP_G", 30, validator=lambda v: 15 <= v <= 80)
 BARIATRIC_YOGURT_CAP_G = _env_int("MEALFIT_BARIATRIC_YOGURT_CAP_G", 120, validator=lambda v: 60 <= v <= 250)
+# [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] (iter 3) Cap determinista de FRUTA (≤80g/comida — el revisor
+# rechazó 'guineo 240g en merienda → dumping') y de AGUACATE/grasa densa (≤30g — rechazó '0.5 aguacate excede
+# 1/4'). Complementa el cap de queso/yogurt. Anchor: P1-BARIATRIC-PROTEIN-DENSITY
+BARIATRIC_FRUIT_CAP_G = _env_int("MEALFIT_BARIATRIC_FRUIT_CAP_G", 80, validator=lambda v: 40 <= v <= 200)
+BARIATRIC_AVOCADO_CAP_G = _env_int("MEALFIT_BARIATRIC_AVOCADO_CAP_G", 30, validator=lambda v: 15 <= v <= 80)
 
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
@@ -13397,6 +13402,12 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
 
 _BARIATRIC_CHEESE_TOKENS = ("queso",)
 _BARIATRIC_YOGURT_TOKENS = ("yogur", "yogurt")
+# [P1-BARIATRIC-PROTEIN-DENSITY · 2026-06-27] (iter 3) tokens de fruta (start-anchored vía _name_has_token →
+# plural-safe, sin colisión mid-word tipo 'pina'↔'espinaca') + grasa densa para el cap bariátrico de porción.
+_BARIATRIC_FRUIT_TOKENS = ("guineo", "banana", "platano maduro", "mango", "uva", "pina", "lechosa", "papaya",
+                           "manzana", "pera", "melon", "sandia", "mandarina", "naranja", "fresa", "melocoton",
+                           "durazno", "kiwi", "guayaba", "pinia", "chinola", "tamarindo")
+_BARIATRIC_FAT_TOKENS = ("aguacate",)
 
 
 def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
@@ -13428,7 +13439,9 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
             db = IngredientNutritionDB()
         from nutrition_db import rescale_ingredient_string as _resc
         _caps = ((_BARIATRIC_CHEESE_TOKENS, int(BARIATRIC_CHEESE_CAP_G)),
-                 (_BARIATRIC_YOGURT_TOKENS, int(BARIATRIC_YOGURT_CAP_G)))
+                 (_BARIATRIC_YOGURT_TOKENS, int(BARIATRIC_YOGURT_CAP_G)),
+                 (_BARIATRIC_FRUIT_TOKENS, int(BARIATRIC_FRUIT_CAP_G)),
+                 (_BARIATRIC_FAT_TOKENS, int(BARIATRIC_AVOCADO_CAP_G)))
         capped = 0
         for day in days or []:
             if not isinstance(day, dict):
@@ -14585,8 +14598,9 @@ async def assemble_plan_node(state: PlanState) -> dict:
         try:
             _baria_capped = cap_bariatric_portions(days, form_data)
             if _baria_capped:
-                logger.info(f"🔻 [P1-BARIATRIC-PORTION-CAP] {_baria_capped} porción(es) de queso/yogurt "
-                            f"recortada(s) (queso ≤{BARIATRIC_CHEESE_CAP_G}g, yogurt ≤{BARIATRIC_YOGURT_CAP_G}g, bariátrica).")
+                logger.info(f"🔻 [P1-BARIATRIC-PORTION-CAP] {_baria_capped} porción(es) recortada(s) "
+                            f"(queso ≤{BARIATRIC_CHEESE_CAP_G}g, yogurt ≤{BARIATRIC_YOGURT_CAP_G}g, "
+                            f"fruta ≤{BARIATRIC_FRUIT_CAP_G}g, aguacate ≤{BARIATRIC_AVOCADO_CAP_G}g, bariátrica).")
         except Exception as _bgc:
             logger.warning(f"[P1-BARIATRIC-PORTION-CAP] cap en assemble falló (no bloquea): {type(_bgc).__name__}: {_bgc}")
 
