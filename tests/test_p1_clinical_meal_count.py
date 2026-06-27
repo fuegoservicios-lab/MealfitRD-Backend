@@ -62,6 +62,23 @@ def test_failsafe_on_garbage():
     assert nc.decide_meals_per_day(None)["num_meals"] == 4
 
 
+def test_real_form_labels_and_freetext():
+    """Payloads EXACTOS del formulario (InteractiveQuestions.jsx): el chip dice 'Diabetes T2' (no
+    'Diabetes tipo 2') y hipoglucemia/bariátrica solo entran por texto libre (otherConditions)."""
+    # chip "Diabetes T2" → debe matchear (era el bug: el decisor buscaba 'diabetes tipo 2'/'dm2')
+    assert nc.decide_meals_per_day({"medicalConditions": ["Diabetes T2"]})["num_meals"] == 3
+    # chip Diabetes T2 + chip medicación Insulina → 5 (seguridad hipo)
+    assert nc.decide_meals_per_day({"medicalConditions": ["Diabetes T2"], "medications": ["Insulina"]})["num_meals"] == 5
+    assert nc.decide_meals_per_day({"medicalConditions": ["Diabetes T2"], "medications": ["Glibenclamida"]})["num_meals"] == 5
+    # texto libre del formulario (otherConditions / otherMedications) también se lee
+    assert nc.decide_meals_per_day({"medicalConditions": [], "otherConditions": "tengo hipoglucemia reactiva"})["num_meals"] == 5
+    assert nc.decide_meals_per_day({"otherConditions": "cirugía bariátrica (bypass gástrico)"})["num_meals"] == 6
+    assert nc.decide_meals_per_day({"otherMedications": "uso insulina glargina"})["num_meals"] == 5
+    # condiciones del formulario que NO cambian el conteo → 4
+    for c in ("Hipertensión", "Colesterol Alto", "Gastritis", "SOP (PCOS)", "Hipotiroidismo"):
+        assert nc.decide_meals_per_day({"medicalConditions": [c]})["num_meals"] == 4, c
+
+
 def test_meal_types_by_count():
     assert nc.meal_types_for_count(3) == ["Desayuno", "Almuerzo", "Cena"]
     assert nc.meal_types_for_count(6)[-1] == "Merienda Nocturna"

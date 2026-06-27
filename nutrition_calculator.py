@@ -316,12 +316,23 @@ def meal_types_for_count(n: int) -> list:
 
 
 def _mc_norm_text(value) -> str:
-    """Normaliza condiciones/medicamentos (lista o string) a un blob lower sin acentos para matching."""
+    """Normaliza condiciones/medicamentos a un blob lower sin acentos para matching. Aplana listas
+    ANIDADAS y strings (acepta `[medicalConditions_list, otherConditions_str, ...]`) → así el decisor
+    ve también el texto libre del formulario (otherConditions/otherMedications)."""
     import unicodedata
-    if isinstance(value, (list, tuple)):
-        raw = " ".join(str(v) for v in value)
-    else:
-        raw = str(value or "")
+    parts: list = []
+
+    def _walk(v):
+        if v is None:
+            return
+        if isinstance(v, (list, tuple)):
+            for x in v:
+                _walk(x)
+        else:
+            parts.append(str(v))
+
+    _walk(value)
+    raw = " ".join(parts)
     return unicodedata.normalize("NFD", raw.lower()).encode("ascii", "ignore").decode("ascii")
 
 
@@ -356,8 +367,16 @@ def decide_meals_per_day(form_data: dict, daily_kcal: float | None = None) -> di
                     return {"num_meals": n, "reason": "preferencia explícita del usuario", "source": "override"}
             except (TypeError, ValueError):
                 pass
-        conds = _mc_norm_text(fd.get("medicalConditions") or fd.get("medical_conditions") or fd.get("conditions"))
-        meds = _mc_norm_text(fd.get("medications") or fd.get("medicamentos"))
+        # Incluye el TEXTO LIBRE del formulario (otherConditions/otherMedications) además de los chips,
+        # para que "hipoglucemia"/"cirugía bariátrica" escritos a mano también disparen la decisión.
+        conds = _mc_norm_text([
+            fd.get("medicalConditions"), fd.get("medical_conditions"), fd.get("conditions"),
+            fd.get("otherConditions"), fd.get("other_conditions"),
+        ])
+        meds = _mc_norm_text([
+            fd.get("medications"), fd.get("medicamentos"),
+            fd.get("otherMedications"), fd.get("other_medications"),
+        ])
         # 2. Bariátrica.
         if any(k in conds for k in ("bariatr", "bypass gastric", "manga gastric", "gastrectom", "sleeve gastric")):
             return {"num_meals": 6, "reason": "post-cirugía bariátrica: porciones pequeñas y frecuentes", "source": "clinical"}
@@ -372,7 +391,8 @@ def decide_meals_per_day(form_data: dict, daily_kcal: float | None = None) -> di
                     "source": "clinical"}
         # 4. DM2 / resistencia a la insulina / prediabetes (sin riesgo de hipo).
         if any(k in conds for k in (
-                "diabetes tipo 2", "diabetes mellitus tipo 2", "dm2", "dm 2",
+                "diabetes tipo 2", "diabetes mellitus tipo 2", "diabetes t2", "diabetes tipo ii",
+                "dm2", "dm 2", "dm-2",
                 "resistencia a la insulina", "insulin resistance", "prediabetes", "prediabetico",
                 "sindrome metabolico", "metabolic syndrome")):
             return {"num_meals": 3,
