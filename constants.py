@@ -1799,6 +1799,16 @@ GASTRITIS_CONDITION_TERMS = (
     "gastric", "gastrico", "agruras", "dispepsia", "esofagitis", "hernia hiatal",
 )
 
+# [P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Tokens de cirugía bariátrica (sleeve/bypass/manga/balón) — SSOT
+# compartido por `nutrition_calculator.decide_meals_per_day` (→ 6 comidas pequeñas y frecuentes) y la
+# `ConditionRule` bariátrica de `condition_rules.py` (reglas anti-dumping + topes de porción para el pouch).
+# Normalizados (minúscula, sin acento); detección por substring (`t in c`). 'sleeve gastric'/'manga gastric'
+# (no 'manga'/'sleeve' desnudos, que colisionarían con ropa). tooltip-anchor: P1-BARIATRIC-CLINICAL-RULES
+BARIATRIC_CONDITION_TERMS = (
+    "bariatr", "cirugia bariatrica", "bypass gastric", "manga gastric", "gastrectom",
+    "sleeve gastric", "balon gastric", "balon intragastric", "cirugia de obesidad",
+)
+
 def get_reverse_synonyms_map():
     """Crea un diccionario inverso donde la clave es la variante ('pechuga') y el valor es el término base ('pollo').
     Incluye tanto las versiones con acento como sin acento para máxima resiliencia."""

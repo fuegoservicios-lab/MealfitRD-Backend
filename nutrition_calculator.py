@@ -377,8 +377,12 @@ def decide_meals_per_day(form_data: dict, daily_kcal: float | None = None) -> di
             fd.get("medications"), fd.get("medicamentos"),
             fd.get("otherMedications"), fd.get("other_medications"),
         ])
-        # 2. Bariátrica.
-        if any(k in conds for k in ("bariatr", "bypass gastric", "manga gastric", "gastrectom", "sleeve gastric")):
+        # 2. Bariátrica. [P1-BARIATRIC-CLINICAL-RULES] tokens SSOT en constants (compartidos con la ConditionRule).
+        try:
+            from constants import BARIATRIC_CONDITION_TERMS as _BARIA_TERMS
+        except Exception:
+            _BARIA_TERMS = ("bariatr", "bypass gastric", "manga gastric", "gastrectom", "sleeve gastric")
+        if any(k in conds for k in _BARIA_TERMS):
             return {"num_meals": 6, "reason": "post-cirugía bariátrica: porciones pequeñas y frecuentes", "source": "clinical"}
         # 3. Riesgo de hipoglucemia (condición o medicación) — SEGURIDAD, antes de DM2.
         hypo_cond = any(k in conds for k in ("hipoglucemia", "hipoglicemia", "hypoglycemia"))

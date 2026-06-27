@@ -8887,6 +8887,16 @@ VARIETY_GATE_FRUIT_CLASH = _env_bool("MEALFIT_VARIETY_GATE_FRUIT_CLASH", True)
 # ADVISORY) → cero riesgo de cero-plan/"saturada". Default ON. Flip a False revierte a la filosofía previa
 # (huevo/proteína podían repetirse el mismo día sin rechazo).
 VARIETY_GATE_SAME_DAY_PROTEIN = _env_bool("MEALFIT_VARIETY_GATE_SAME_DAY_PROTEIN", True)
+# [P2-VARIETY-HIGH-MEALCOUNT-RELAX · 2026-06-27] Con 5-6 comidas/día (clínico: bariátrica/hipoglucemia/alto
+# gasto), exigir una proteína Y una fruta DISTINTAS en CADA comida es irreal (no hay 6 proteínas principales ni
+# 6 frutas dulces para rotar sin forzar repetición) → el gate same-day-protein/fruit rechazaba en bucle y
+# ENTREGABA degradado un plan bariátrico legítimo (caso real corr=558af493: rechazo crítico). En comidas pequeñas
+# y frecuentes la repetición de proteína es además clínicamente NORMAL (proteína-forward, volumen pequeño). Por
+# eso, con meals_per_day >= UMBRAL los gates same-day-protein y fruit-repeat degradan a ADVISORY (siguen en
+# build_variety_report como telemetría, pero NO fuerzan retry). Default ON; flip a False revierte al gate estricto
+# en todos los conteos. tooltip-anchor: P2-VARIETY-HIGH-MEALCOUNT-RELAX
+VARIETY_GATE_HIGH_MEALCOUNT_RELAX = _env_bool("MEALFIT_VARIETY_GATE_HIGH_MEALCOUNT_RELAX", True)
+VARIETY_GATE_RELAX_MIN_MEALS = _env_int("MEALFIT_VARIETY_GATE_RELAX_MIN_MEALS", 5)
 # [P1-FRUIT-DEDUP · 2026-06-26] (auditoría gap #7) De-dup DETERMINISTA de fruta dulce repetida el mismo día:
 # reescribe la 2ª+ aparición a una fruta del pool no usada ese día (nombre + ingredientes). Cierra el cierre
 # que el gate de variedad dejaba abierto (project_variety_repeat_graceful: en el intento final el gate degrada
@@ -9202,6 +9212,16 @@ CLINICAL_MEAL_COUNT_ENABLED = _env_bool("MEALFIT_CLINICAL_MEAL_COUNT", True)
 # kcal en banda (los carbos bajan, que es el objetivo DM2). Default ON. Rollback: =false. Anchor: P1-DM2-GLYCEMIC-PORTION-CAP
 DM2_GLYCEMIC_PORTION_CAP_ENABLED = _env_bool("MEALFIT_DM2_GLYCEMIC_PORTION_CAP", True)
 DM2_HIGH_GI_CAP_G = _env_int("MEALFIT_DM2_HIGH_GI_CAP_G", 150, validator=lambda v: 60 <= v <= 400)
+
+# [P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Para pacientes post-cirugía bariátrica, cap DURO de la porción de
+# QUESO y LÁCTEOS por comida — el revisor médico rechazó un plan bariátrico por "5¼ lonjas de queso en una
+# merienda" (riesgo de dumping + sobrecarga de volumen del pouch). Backstop determinista del rechazo literal
+# (complementa el prompt_block de la ConditionRule bariátrica + la prohibición de azúcar simple vía subs).
+# Recupera las kcal escalando los OTROS ingredientes del plato (band-safe), igual que el cap DM2. Default ON.
+# Rollback: =false. Anchor: P1-BARIATRIC-CLINICAL-RULES
+BARIATRIC_PORTION_CAP_ENABLED = _env_bool("MEALFIT_BARIATRIC_PORTION_CAP", True)
+BARIATRIC_CHEESE_CAP_G = _env_int("MEALFIT_BARIATRIC_CHEESE_CAP_G", 30, validator=lambda v: 15 <= v <= 80)
+BARIATRIC_YOGURT_CAP_G = _env_int("MEALFIT_BARIATRIC_YOGURT_CAP_G", 120, validator=lambda v: 60 <= v <= 250)
 
 
 # [P2-CRITICAL-CONFIG-ALERT · 2026-06-15] (gap-audit G7+G10) Inventario de configuración crítica que, EN
@@ -11758,9 +11778,12 @@ def build_variety_report(plan: dict) -> dict:
             return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
     total_meals = egg_meals = cremoso = premium = same_day_repeats = fruit_repeats = sweet_savory_clash = 0
     same_day_protein_repeats = 0
+    meals_per_day_max = 0  # [P2-VARIETY-HIGH-MEALCOUNT-RELAX] mayor nº de comidas en un día (relaja gates en 5-6 comidas)
     issues = []
     for day in plan.get("days", []) or []:
         meals = day.get("meals", []) or []
+        if len(meals) > meals_per_day_max:
+            meals_per_day_max = len(meals)
         day_tokens = {}
         day_fruits = {}
         day_proteins = {}  # [P1-VARIETY-SAME-DAY-PROTEIN] proteína principal → nº de comidas que la usan ese día
@@ -11840,6 +11863,7 @@ def build_variety_report(plan: dict) -> dict:
             "premium": premium, "same_day_repeats": same_day_repeats,
             "fruit_repeats": fruit_repeats, "sweet_savory_clash": sweet_savory_clash,
             "same_day_protein_repeats": same_day_protein_repeats,
+            "meals_per_day": meals_per_day_max,
             "cross_day_proteins": cross_day_proteins, "issues": issues,
             "ok": not issues}
 
@@ -11854,6 +11878,14 @@ _DISH_RAW_INGREDIENT_TOKENS = (   # ingredientes-placeholder que parecen comida 
     "proteina magra al gusto", "carbohidratos complejos", "vegetales mixtos",
 )
 _DISH_GENERIC_RECIPE_STEPS = ("preparar todo", "cocinar", "servir", "preparar", "mezclar todo")
+# [P2-DISH-QUALITY-PEEL · 2026-06-27] Instrucción sin sentido detectada por el revisor médico en un plan real
+# ("2.5 Fresas (solo la cáscara)"): ninguna de estas frutas se come "solo la cáscara". EXCLUYE ralladura/zest
+# (uso legítimo de cáscara de limón/naranja como saborizante). Frutas que se comen enteras/sin cáscara separable
+# comestible (berries, uva) o cuya pulpa es lo comestible (guineo, manzana, pera): pedir "solo la cáscara" es
+# un artefacto de generación. tooltip-anchor: P2-DISH-QUALITY-PEEL
+_DISH_PEEL_ONLY_PHRASES = ("solo la cascara", "solamente la cascara", "unicamente la cascara", "solo cascara")
+_DISH_PEELLESS_FRUITS = ("fresa", "uva", "mora", "arandano", "frambuesa", "cereza",
+                         "guineo", "banana", "manzana", "pera", "melocoton", "durazno")
 
 
 def _meal_dish_quality_issue(meal: dict):
@@ -11874,6 +11906,14 @@ def _meal_dish_quality_issue(meal: dict):
         ings_low = strip_accents(" ".join(str(i) for i in ings).lower())
         if any(tok in ings_low for tok in _DISH_RAW_INGREDIENT_TOKENS):
             return True, "ingredientes placeholder (no comprables/genéricos)"
+        # [P2-DISH-QUALITY-PEEL · 2026-06-27] porción anatómicamente imposible ('solo la cáscara' en fruta que
+        # no se come así) — rechazo real del revisor médico. Excluye ralladura/zest (uso legítimo de cáscara).
+        for _ing in ings:
+            _il = strip_accents(str(_ing).lower())
+            if ("ralladura" in _il) or ("zest" in _il):
+                continue
+            if any(_p in _il for _p in _DISH_PEEL_ONLY_PHRASES) and any(_f in _il for _f in _DISH_PEELLESS_FRUITS):
+                return True, f"instrucción imposible: '{str(_ing)[:40]}' (esa fruta no se come 'solo la cáscara')"
         recipe = meal.get("recipe") or []
         if isinstance(recipe, str):
             recipe = [recipe]
@@ -11934,7 +11974,14 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
     if not isinstance(variety_report, dict):
         return out
     try:
-        if VARIETY_GATE_FRUIT_REPEAT and int(variety_report.get("fruit_repeats", 0)) > 0:
+        # [P2-VARIETY-HIGH-MEALCOUNT-RELAX · 2026-06-27] En planes de 5-6 comidas/día (bariátrica/hipoglucemia/
+        # alto gasto) es irreal exigir una proteína Y una fruta DISTINTAS por comida; repetirlas es clínicamente
+        # normal en comidas pequeñas y frecuentes. Degradar SOLO los gates same-day-protein y fruit-repeat a
+        # advisory (siguen en build_variety_report como telemetría). El clash fruta+salado y el base-dish NO se
+        # relajan (son coherencia, no conteo). tooltip-anchor: P2-VARIETY-HIGH-MEALCOUNT-RELAX
+        _mpd = int(variety_report.get("meals_per_day", 0) or 0)
+        _relax_high_mc = VARIETY_GATE_HIGH_MEALCOUNT_RELAX and _mpd >= VARIETY_GATE_RELAX_MIN_MEALS
+        if VARIETY_GATE_FRUIT_REPEAT and not _relax_high_mc and int(variety_report.get("fruit_repeats", 0)) > 0:
             out.append(
                 "FRUTA REPETIDA EL MISMO DÍA (rechazo de variedad): una misma fruta dulce aparece en "
                 "2+ comidas del mismo día. Usa una fruta DISTINTA en cada comida del día (lechosa, "
@@ -11960,7 +12007,7 @@ def _variety_repeat_gate_issues(variety_report: dict) -> list:
             )
         # [P1-VARIETY-SAME-DAY-PROTEIN · 2026-06-27] La MISMA proteína principal (huevo/pollo/pavo/cerdo/res/
         # pescado/atún) en 2+ comidas del mismo día fatiga → rechazo (retry acotado; advisory en intento final).
-        if VARIETY_GATE_SAME_DAY_PROTEIN and int(variety_report.get("same_day_protein_repeats", 0)) > 0:
+        if VARIETY_GATE_SAME_DAY_PROTEIN and not _relax_high_mc and int(variety_report.get("same_day_protein_repeats", 0)) > 0:
             out.append(
                 "MISMA PROTEÍNA REPETIDA EL MISMO DÍA (rechazo de variedad): la misma proteína principal "
                 "(p.ej. HUEVO, pollo, pavo, cerdo, res, pescado, atún) aparece en 2+ comidas del mismo día — "
@@ -13348,6 +13395,103 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
         return 0
 
 
+_BARIATRIC_CHEESE_TOKENS = ("queso",)
+_BARIATRIC_YOGURT_TOKENS = ("yogur", "yogurt")
+
+
+def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
+    """[P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Para planes de pacientes post-cirugía bariátrica, recorta la
+    porción de QUESO (≤BARIATRIC_CHEESE_CAP_G, default 30g) y YOGURT (≤BARIATRIC_YOGURT_CAP_G, default 120g) por
+    comida — el revisor médico rechazaba '5¼ lonjas de queso en una merienda' (riesgo de dumping + sobrecarga de
+    volumen del pouch). DETERMINISTA (backstop del rechazo literal; el prompt_block + la prohibición de azúcar
+    cubren el resto). Para no dejar hueco calórico que rompa el band gate, RECUPERA las kcal removidas escalando
+    los OTROS ingredientes del plato (incluida otra proteína si existe → preserva el piso proteico) y recomputa
+    los macros. Corre POST-sizing (igual que el cap DM2; antes, el motor re-inflaría la porción). Gateado por
+    BARIATRIC_PORTION_CAP_ENABLED + condición bariátrica. Devuelve nº de porciones recortadas. Fail-safe.
+    tooltip-anchor: P1-BARIATRIC-CLINICAL-RULES"""
+    if not BARIATRIC_PORTION_CAP_ENABLED:
+        return 0
+    try:
+        from micronutrients import _has_condition
+        from constants import BARIATRIC_CONDITION_TERMS
+        _conds = []
+        for _k in ("medicalConditions", "medical_conditions", "conditions", "otherConditions", "other_conditions"):
+            _v = (form_data or {}).get(_k)
+            if isinstance(_v, (list, tuple)):
+                _conds.extend(str(x) for x in _v)
+            elif _v:
+                _conds.append(str(_v))
+        if not _has_condition(_conds, BARIATRIC_CONDITION_TERMS):
+            return 0
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        from nutrition_db import rescale_ingredient_string as _resc
+        _caps = ((_BARIATRIC_CHEESE_TOKENS, int(BARIATRIC_CHEESE_CAP_G)),
+                 (_BARIATRIC_YOGURT_TOKENS, int(BARIATRIC_YOGURT_CAP_G)))
+        capped = 0
+        for day in days or []:
+            if not isinstance(day, dict):
+                continue
+            for m in (day.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                removed_kcal = 0.0
+                capped_idx = set()
+                for i, ing in enumerate(ings):
+                    if not isinstance(ing, str):
+                        continue
+                    low = _norm_text(ing)
+                    cap = next((c for toks, c in _caps if any(_name_has_token(t, low) for t in toks)), None)
+                    if cap is None:
+                        continue
+                    mc = db.macros_from_ingredient_string(ing) or {}
+                    grams = mc.get("grams")
+                    if not grams or float(grams) <= cap:
+                        continue
+                    factor = cap / float(grams)
+                    new_ing = _resc(ing, factor)
+                    if new_ing == ing:
+                        continue
+                    removed_kcal += _ing_kcal_estimate(mc) * (1.0 - factor)
+                    ings[i] = new_ing
+                    capped_idx.add(i)
+                    capped += 1
+                    logger.info(f"🔻 [P1-BARIATRIC-PORTION-CAP] '{str(ing)[:40]}' {round(float(grams))}g→{cap}g (bariátrica)")
+                if not capped_idx:
+                    continue
+                # Recuperar las kcal removidas escalando los OTROS ingredientes (band-safe). NO se excluye
+                # proteína: para bariátrica conviene recuperar vía otra proteína del plato si existe (preserva
+                # el piso proteico mientras baja el volumen del lácteo ofensor).
+                if removed_kcal > 1.0:
+                    rec_idx, rec_kcal = [], 0.0
+                    for j, ing in enumerate(ings):
+                        if j in capped_idx or not isinstance(ing, str):
+                            continue
+                        mcj = db.macros_from_ingredient_string(ing) or {}
+                        if not mcj.get("grams"):
+                            continue  # no escalable ('al gusto', no resoluble)
+                        kj = _ing_kcal_estimate(mcj)
+                        if kj > 0:
+                            rec_idx.append(j)
+                            rec_kcal += kj
+                    if rec_idx and rec_kcal > 0:
+                        rfactor = max(1.0, min(2.5, (rec_kcal + removed_kcal) / rec_kcal))
+                        for j in rec_idx:
+                            ings[j] = _resc(ings[j], rfactor)
+                try:
+                    _truth_up_meal_macros_from_strings(m, db)
+                except Exception:
+                    pass
+        return capped
+    except Exception as _bgc_e:
+        logger.warning(f"[P1-BARIATRIC-PORTION-CAP] falló (no bloquea): {type(_bgc_e).__name__}: {_bgc_e}")
+        return 0
+
+
 # [MACRO-ENGINE-EXTRACT · 2026-06-19] Motor de sizing DETERMINISTA extraído VERBATIM de assemble_plan_node
 # (solver → closer → trim-techo → cal-reconcile → capa clínica FS1-FS9). Razón: hacerlo LLAMABLE para que el
 # harness de validación offline (scripts/macro_sizing_replay.py) reproduzca SOLO este motor sobre planes crudos
@@ -14432,6 +14576,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"recortada(s) a ≤{DM2_HIGH_GI_CAP_G}g (DM2).")
         except Exception as _dgc:
             logger.warning(f"[P1-DM2-GLYCEMIC-PORTION-CAP] cap en assemble falló (no bloquea): {type(_dgc).__name__}: {_dgc}")
+
+    # [P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] Cap DURO de queso (≤30g) y yogurt (≤120g) por comida para
+    # pacientes post-cirugía bariátrica — corre POST-sizing, recupera kcal escalando otros ingredientes
+    # (band-safe). Backstop del rechazo del revisor médico ('5¼ lonjas de queso → dumping/volumen'). Gateado
+    # por BARIATRIC_PORTION_CAP_ENABLED + condición bariátrica.
+    if BARIATRIC_PORTION_CAP_ENABLED:
+        try:
+            _baria_capped = cap_bariatric_portions(days, form_data)
+            if _baria_capped:
+                logger.info(f"🔻 [P1-BARIATRIC-PORTION-CAP] {_baria_capped} porción(es) de queso/yogurt "
+                            f"recortada(s) (queso ≤{BARIATRIC_CHEESE_CAP_G}g, yogurt ≤{BARIATRIC_YOGURT_CAP_G}g, bariátrica).")
+        except Exception as _bgc:
+            logger.warning(f"[P1-BARIATRIC-PORTION-CAP] cap en assemble falló (no bloquea): {type(_bgc).__name__}: {_bgc}")
 
     # [P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Honestidad del nombre del plato: corre DESPUÉS del closer
     # (que ya reflejó en el nombre la proteína de rescate vía `_reflect_added_protein_in_name`). Corrige

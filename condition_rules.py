@@ -27,6 +27,7 @@ from constants import (
     DYSLIPIDEMIA_CONDITION_TERMS, ANEMIA_CONDITION_TERMS,
     PREGNANCY_CONDITION_TERMS, HYPOTHYROID_CONDITION_TERMS, GOUT_CONDITION_TERMS,
     NAFLD_CONDITION_TERMS, PCOS_CONDITION_TERMS, GASTRITIS_CONDITION_TERMS,
+    BARIATRIC_CONDITION_TERMS,
 )
 
 SAFETY_HARD = "safety_hard"            # reglas que el motor REESCRIBE determinísticamente
@@ -338,6 +339,55 @@ CONDITION_RULES: tuple = (
             "   • PREFIERE: avena, arroz, viandas hervidas, vegetales cocidos no ácidos, proteínas magras "
             "(pollo/pescado/pavo a la plancha), lácteos bajos en grasa según tolerancia.\n"
             "   • Este plan es ORIENTATIVO; la tolerancia a cada alimento es individual y la define tu médico."),
+    ),
+    # [P1-BARIATRIC-CLINICAL-RULES · 2026-06-27] (audit corr=558af493: plan bariátrico RECHAZADO CRÍTICO por
+    # el revisor médico → "5¼ lonjas de queso" (dumping/volumen), miel (azúcar simple), pescado en merienda
+    # nocturna, "2.5 fresas solo la cáscara"). El chip 'Cirugía Bariátrica' (P2-FORM-FREETEXT-SATISFIES) ya
+    # enrutaba 6 comidas (P1-CLINICAL-MEAL-COUNT) pero NO había reglas clínicas → el generador producía platos
+    # inseguros y el reviewer los rechazaba → plan degradado. Ruleset diseñado + verificado adversarialmente
+    # (workflow 3 lentes clínicas + crítico). SAFETY_HARD: substitutions deterministas (azúcar simple → estevia,
+    # reusa _DM2_SUGAR_SUBS) + cap de porción determinista (cap_bariatric_portions, graph_orchestrator) + este
+    # prompt_block. precedence 20 (alta: por encima de DM2/HTA; por debajo de renal/embarazo). El cap duro de
+    # queso/lácteos es el backstop del rechazo literal #1; el prompt cubre dumping/volumen/proteína-primero.
+    ConditionRule(
+        id="bariatric", label="Cirugía bariátrica (sleeve/bypass/manga)", terms=BARIATRIC_CONDITION_TERMS,
+        precedence=20, substitutions=_DM2_SUGAR_SUBS, sub_negatives=_DM2_SUGAR_NEGATIVES,
+        prompt_block=(
+            "🔻 REGLA CLÍNICA — CIRUGÍA BARIÁTRICA (sleeve/bypass/manga, mantenimiento; prevención de "
+            "SÍNDROME DE DUMPING y obstrucción del pouch):\n"
+            "   • POUCH PEQUEÑO: cada comida cabe en ~150-200 mL. Comidas PRINCIPALES ≤200 g de sólidos; "
+            "MERIENDAS ≤150 g. Ninguna comida voluminosa. Total del día 1400-1700 kcal en 6 comidas; NUNCA "
+            "por debajo de 1400 kcal (desnutrición).\n"
+            "   • PROTEÍNA PRIMERO E INVIOLABLE: piso 60-80 g/día (≈15-20 g por comida principal, 8-12 g por "
+            "merienda). Sirve la proteína blanda (huevo, yogurt griego, pollo/res guisada y desmenuzada, "
+            "pescado, queso) ANTES que cualquier almidón. Si no cabe todo, se sacrifica el almidón, NUNCA la "
+            "proteína; si el piso no se alcanza, añade otra fuente proteica pequeña en vez de almidón.\n"
+            "   • PROHIBIDO TODO AZÚCAR SIMPLE/LIBRE (dispara dumping): miel, azúcar, panela, melaza, sirope, "
+            "leche condensada, jugos/refrescos/gaseosas/malta, frutas en almíbar y dulces (habichuelas con "
+            "dulce, dulce de leche/coco/batata). Endulza con estevia, canela o fruta entera medida.\n"
+            "   • SIN BEBIDAS CON LA COMIDA: no incluyas líquidos junto a sólidos en la misma comida; agua/té/"
+            "café sin azúcar van ENTRE comidas. NADA de gaseosas ni alcohol. NADA de agua de coco/jugo (azúcar "
+            "líquido → dumping).\n"
+            "   • TOPES DUROS DE PORCIÓN POR COMIDA: queso ≤30 g (1 lonja entera, MÁX 1 comida con queso/día); "
+            "yogurt griego natural sin azúcar ≤120 g; MÁX 2 porciones lácteas/día en total (queso+yogurt+leche); "
+            "huevo 1-2 uds; pollo 60-90 g cocido; res 70 g; pescado 70-90 g; UN solo almidón pequeño (arroz/"
+            "pasta ~45-50 g o víver hervido ~60 g) SOLO en almuerzo/cena; fruta 60-80 g, máx 2/día. En el plato "
+            "criollo arroz+habichuela cuentan como UN almidón (no ambos en porción llena).\n"
+            "   • CARGA GLUCÉMICA BAJA: ~≤30 g de carbohidrato por comida. NO combines fruta + almidón + lácteo "
+            "en la misma comida; la fruta va con proteína, nunca sola (toda merienda DEBE llevar ≥6 g de "
+            "proteína — prohibida la merienda de solo fruta o solo almidón).\n"
+            "   • MERIENDA NOCTURNA = SOLO proteína láctea ligera o huevo (yogurt griego 120 g, 1 huevo duro, "
+            "queso ≤30 g o leche descremada 200 ml). PROHIBIDO pescado, carne, almidón y grasa densa (maní/"
+            "aguacate) de noche.\n"
+            "   • COCCIÓN BLANDA Y HÚMEDA: horno/hervido/plancha/vapor/guisado; carnes guisadas o desmenuzadas, "
+            "nunca secas/correosas (obstruyen el pouch); víveres hervidos. PROHIBIDAS las frituras (maduros "
+            "fritos, tostones, pollo frito, chicharrón). Aceite ≤1 cdita (5 g) por comida.\n"
+            "   • PORCIONES REALISTAS Y POSIBLES: usa unidades enteras y gramos/tazas claros (ej. '1 lonja de "
+            "queso (30 g)', '4 fresas enteras', '120 g de yogurt'). PROHIBIDAS las fracciones absurdas "
+            "('5¼ lonjas', '2.5 fresas', '0.25 cda') y las instrucciones imposibles ('fresa solo la cáscara').\n"
+            "   • El paciente bariátrico requiere SUPLEMENTACIÓN (multivitamínico, B12, hierro, calcio citrato, "
+            "vitamina D); NO intentes cubrir déficits con alimentos en exceso de volumen. Plan ORIENTATIVO que "
+            "no sustituye al equipo bariátrico."),
     ),
 )
 
