@@ -5085,6 +5085,13 @@ def api_regenerate_day(
                     _bio[_k] = _v if _v not in (None, "", 0) else _hp_bio.get(_k)
                 _bio["activityLevel"] = data.get("activityLevel") or data.get("activity_level") or _hp_bio.get("activityLevel") or _hp_bio.get("activity_level")
                 _bio["goal"] = data.get("goal") or data.get("mainGoal") or _hp_bio.get("goal") or _hp_bio.get("mainGoal") or "maintenance"
+                # [P1-REGEN-DAY-CLINICAL-PARITY · 2026-06-27] Pasar condiciones/alergias/fármacos al cálculo de
+                # targets → get_nutrition_targets aplica el cap clínico (p.ej. proteína bariátrica ≤80g, no 100g).
+                # Sin esto el retarget regeneraba un día bariátrico contra una meta NO-bariátrica (paridad S1↔S2).
+                for _ck in ("medicalConditions", "otherConditions", "medical_conditions",
+                            "medications", "otherMedications", "allergies", "otherAllergies"):
+                    _cv = data.get(_ck)
+                    _bio[_ck] = _cv if _cv not in (None, "", [], 0) else _hp_bio.get(_ck)
                 if _bio.get("weight") and _bio.get("height"):
                     _nt = _gnt(_bio)
                     _gm = _nt.get("macros") or {}
@@ -5352,6 +5359,60 @@ def api_regenerate_day(
                         logger.info("🎚 [P2-REGEN-DAY-MACRO-REBALANCE] macros del día re-apuntadas al target")
             except Exception as _rbd_e:
                 logger.warning(f"[P2-REGEN-DAY-MACRO-REBALANCE] rebalance del día falló (no bloquea): {type(_rbd_e).__name__}: {_rbd_e}")
+
+        # [P1-REGEN-DAY-CLINICAL-PARITY · 2026-06-27] Paridad S1↔S2: el día regenerado pasa por la MISMA
+        # maquinaria clínica de assemble_plan_node — caps de porción DM2/bariátrica (anti-dumping + volumen del
+        # pouch) + re-cierre del piso de proteína post-cap (FASE A). regenerate-day NO los corría → un día
+        # bariátrico regenerado salía SIN reglas bariátricas (porciones grandes de queso/fruta/aguacate, proteína
+        # a 100g en vez de 80g). Los caps solo RECORTAN (pantry-safe). FASE A AÑADE proteína animal densa → se
+        # revalida contra la Nevera ORIGINAL y se REVIERTE si la rompe (never-worse-than-current, espejo del
+        # rebalance). RENAL lo respeta (FASE A hace skip total por KDIGO). Gateado + fail-safe (jamás bloquea el
+        # update). Knob MEALFIT_REGEN_DAY_CLINICAL_PARITY (default ON). tooltip-anchor: P1-REGEN-DAY-CLINICAL-PARITY
+        if (
+            regenerated > 0 and not _ai_unavailable
+            and os.environ.get("MEALFIT_REGEN_DAY_CLINICAL_PARITY", "true").strip().lower() in ("1", "true", "yes", "on")
+        ):
+            try:
+                from graph_orchestrator import (
+                    cap_dm2_high_gi_portions as _cap_dm2,
+                    cap_bariatric_portions as _cap_baria,
+                    _repair_protein_floor_post_caps as _repair_pf,
+                )
+                import copy as _copy_cp
+                try:
+                    from db import get_user_profile as _gup_clin
+                    _hp_clin = (_gup_clin(user_id) or {}).get("health_profile") or {}
+                except Exception:
+                    _hp_clin = {}
+                _clin_form = {
+                    "medicalConditions": data.get("medicalConditions") or _hp_clin.get("medicalConditions"),
+                    "otherConditions": data.get("otherConditions") or _hp_clin.get("otherConditions"),
+                    "allergies": data.get("allergies") or _hp_clin.get("allergies"),
+                    "otherAllergies": data.get("otherAllergies") or _hp_clin.get("otherAllergies"),
+                }
+                _day_wrap = [{"meals": [m for m in new_meals if isinstance(m, dict)]}]
+                _n_dm2 = _cap_dm2(_day_wrap, _clin_form, _db)        # trim almidón alto-IG (DM2) — pantry-safe
+                _n_bar = _cap_baria(_day_wrap, _clin_form, _db)      # trim queso/yogurt/fruta/aguacate (bariátrica)
+                # FASE A (piso de proteína post-cap), pantry-guarded: si añade y rompe la Nevera, revertir.
+                _pre_pf = _copy_cp.deepcopy(new_meals)
+                _added_pf = _repair_pf(
+                    _day_wrap,
+                    {"macros": {"protein_g": day_target.get("protein_g"),
+                                "carbs_g": day_target.get("carbs_g"), "fats_g": day_target.get("fats_g")}},
+                    _clin_form, _db,
+                )
+                if _added_pf > 0:
+                    _exc_pf, _why_pf = _day_exceeds_pantry(new_meals, _orig_ledger_grams, _db)
+                    if _exc_pf:
+                        logger.info(f"🔒 [P1-REGEN-DAY-CLINICAL-PARITY] FASE A rompió pantry → revertida | {_why_pf}")
+                        new_meals[:] = _pre_pf
+                if _n_dm2 or _n_bar or _added_pf:
+                    logger.info(
+                        f"🔒 [P1-REGEN-DAY-CLINICAL-PARITY] día regenerado: cap_dm2={_n_dm2} "
+                        f"cap_baria={_n_bar} fase_a=+{round(_added_pf)}g"
+                    )
+            except Exception as _cp_e:
+                logger.warning(f"[P1-REGEN-DAY-CLINICAL-PARITY] falló (no bloquea): {type(_cp_e).__name__}: {_cp_e}")
 
         # Persistencia atómica de days[day_index].meals (espejo de _swap_mutator, escalado al día).
         def _day_mutator(pd: dict) -> dict:
