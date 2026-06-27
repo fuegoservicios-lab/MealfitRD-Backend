@@ -349,10 +349,22 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
     # el costo del supermercado (3 proteínas vs 2 al mes es marginal en costo).
     _GOALS_FORCE_MAX_VARIETY = {"gain_muscle", "lose_weight"}
     _main_goal_for_variety = (form_data.get("mainGoal") or "").strip().lower() if form_data else ""
-    if variety_level != "max" and _main_goal_for_variety in _GOALS_FORCE_MAX_VARIETY:
+    # [P1-REVIEWER-TRANSIENT-RETRY · 2026-06-27] (FASE C) Bariátrica también auto-promueve a variety_level=max:
+    # 6 comidas pequeñas con solo 2 proteínas base → repetición same-day (el reviewer y el gate same-day-protein
+    # lo penalizan); más proteínas distintas = menos monotonía + mejor reparto del piso proteico en volumen pequeño.
+    _baria_for_variety = False
+    try:
+        from constants import BARIATRIC_CONDITION_TERMS as _BT_V, strip_accents as _sa_v
+        _cbv = _sa_v(" ".join(str(x) for x in ((form_data.get("medicalConditions") or []) if form_data else []))
+                     + " " + str((form_data.get("otherConditions") or "") if form_data else "")).lower()
+        _baria_for_variety = any(t in _cbv for t in _BT_V)
+    except Exception:
+        _baria_for_variety = False
+    if variety_level != "max" and (_main_goal_for_variety in _GOALS_FORCE_MAX_VARIETY or _baria_for_variety):
         variety_level = "max"
+        _vary_reason = "bariátrica" if _baria_for_variety else f"goal='{_main_goal_for_variety}'"
         logger.info(
-            f"🎯 [GOAL VARIETY] Auto-promovido a variety_level=max por goal='{_main_goal_for_variety}' "
+            f"🎯 [GOAL VARIETY] Auto-promovido a variety_level=max por {_vary_reason} "
             f"(más proteínas distintas = menos repetición almuerzo↔cena)."
         )
     

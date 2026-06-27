@@ -1624,6 +1624,33 @@ def _is_pool_timeout_error(exc: Exception) -> bool:
     )
 
 
+def _is_reviewer_transient_error(exc) -> bool:
+    """[P1-REVIEWER-TRANSIENT-RETRY · 2026-06-27] (arquitectura, FASE B) True si el fallo del reviewer es de
+    INFRAESTRUCTURA (timeout/5xx/pool/parse del structured-output) y NO un rechazo clínico. Whitelist de TIPOS de
+    excepción (NUNCA por substring del mensaje) para no enmascarar un rechazo clínico real. Un fallo así NO debe
+    marcarse `critical` (que abortaría el plan + descartaría un buen intento como veredicto rank-3) — debe permitir
+    REINTENTAR el reviewer. Si todos los intentos fallan transitorios, se entrega el plan degradado (las capas
+    DETERMINISTAS de seguridad —alérgenos/renal/caps/piso proteico— ya corrieron). tooltip-anchor: P1-REVIEWER-TRANSIENT-RETRY"""
+    try:
+        if _is_transient_upstream_error(exc) or _is_pool_timeout_error(exc):
+            return True
+        import json as _json
+        import asyncio as _aio
+        import concurrent.futures as _cf
+        # TIMEOUT del reviewer (modo de fallo #1: el LLM tarda > timeout) → transitorio, reintentable.
+        if isinstance(exc, (TimeoutError, _aio.TimeoutError, _cf.TimeoutError)):
+            return True
+        if isinstance(exc, _json.JSONDecodeError):
+            return True
+        # pydantic ValidationError / LangChain OutputParserException → el structured-output del reviewer no parseó.
+        if type(exc).__name__ in ("ValidationError", "OutputParserException", "ValidationException", "ResponseError",
+                                  "TimeoutError", "TimeoutException", "ReadTimeout", "ConnectTimeout", "APITimeoutError"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _is_transient_upstream_error(exc: BaseException) -> bool:
     """[P1-LLM-TRANSIENT-5XX · 2026-05-21] Detecta errores 5xx transitorios
     de Google que NO deben contar como failure en el LLMCircuitBreaker.
@@ -15966,6 +15993,11 @@ def _attempt_quality_rank(review_passed: bool, severity: Optional[str]) -> int:
     """
     if review_passed:
         return 0
+    # [P1-REVIEWER-TRANSIENT-RETRY · 2026-06-27] (FASE B) Un error TRANSITORIO del reviewer (infra/parse) NO es un
+    # veredicto clínico → rank 99: nunca debe ganarle a un intento con veredicto real (ni promoverse a best ni
+    # descartar un buen intento). Distinto de 'critical' (rank 3 = peor rechazo clínico real).
+    if (severity or "") == "transient_reviewer_error":
+        return 99
     return _SEVERITY_RANK.get(severity or "minor", 1)
 
 
@@ -16852,11 +16884,22 @@ Responde ÚNICAMENTE con el JSON de revisión.
             severity = result.severity
             llm_affected_days = result.affected_days
         except Exception as e:
-            logger.warning(f"⚠️  [REVISOR] Error en structured output, RECHAZANDO por defecto (Fail-Closed): {e}")
             approved = False
-            issues = ["Error en la estructura del revisor médico. Forzando regeneración por seguridad clínica."]
-            severity = "critical"
             llm_affected_days = []
+            # [P1-REVIEWER-TRANSIENT-RETRY · 2026-06-27] (FASE B) Distinguir error de INFRAESTRUCTURA del reviewer
+            # (timeout/5xx/pool/parse de structured-output) de un rechazo CLÍNICO real. Un fallo transitorio NO debe
+            # marcarse 'critical' (abortaría + descartaría un buen intento). Se marca 'transient_reviewer_error' →
+            # should_retry lo reintenta (no es critical/high) y _attempt_quality_rank lo manda a rank 99 (nunca
+            # compite contra un veredicto clínico real). Si TODOS los intentos fallan transitorios, se entrega el
+            # plan degradado (las capas deterministas de seguridad ya corrieron).
+            if _is_reviewer_transient_error(e):
+                logger.warning(f"⚠️  [REVISOR] Error TRANSITORIO del reviewer ({type(e).__name__}) → reintentar reviewer, NO rechazo clínico: {e}")
+                issues = ["Error transitorio del revisor médico (infraestructura/parse) — reintentando."]
+                severity = "transient_reviewer_error"
+            else:
+                logger.warning(f"⚠️  [REVISOR] Error en structured output, RECHAZANDO por defecto (Fail-Closed): {e}")
+                issues = ["Error en la estructura del revisor médico. Forzando regeneración por seguridad clínica."]
+                severity = "critical"
 
     duration = round(time.time() - start_time, 2)
 
