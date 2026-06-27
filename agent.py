@@ -561,12 +561,16 @@ def swap_meal(form_data: dict):
     # su proteína/alimento principal (el swap era ciego al día → metía soya/huevo cuando otra comida ya lo usaba).
     same_day_other_meals = form_data.get("same_day_other_meals") or []
     if same_day_other_meals:
+        # [P1-SWAP-SAME-DAY-VARIETY · 2026-06-27] PREFERENCIA (no obligación): comer lo mismo el mismo día
+        # fatiga, pero esto NO debe pelear con el guard de despensa (usar lo comprado) ni hacer fallar el swap.
+        # Por eso es soft + "usando ingredientes disponibles": si la única opción viable repite, entrega plato
+        # válido igual. (Si la generación es full-variety sin despensa, el gate determinista de S1 igual aplica.)
         context_extras += (
-            f"\n    - 🔄 VARIEDAD DEL DÍA (OBLIGATORIO): las OTRAS comidas de HOY son: "
-            f"{', '.join(same_day_other_meals)}. El plato nuevo DEBE usar una proteína/alimento PRINCIPAL "
-            f"DISTINTO al de esas comidas. Comer el mismo alimento dos veces el mismo día fatiga: si otra "
-            f"comida de hoy ya usa huevo, soya, pollo, res, cerdo, pescado, queso o una legumbre, este plato "
-            f"NO debe usar el mismo — elige una proteína diferente. (Repetir en DÍAS distintos sí está bien.)"
+            f"\n    - 🔄 VARIEDAD DEL DÍA (preferencia fuerte): las OTRAS comidas de HOY son: "
+            f"{', '.join(same_day_other_meals)}. Comer el mismo alimento dos veces el mismo día fatiga → "
+            f"PREFIERE una proteína/alimento principal DISTINTO al de esas comidas, eligiendo entre los "
+            f"ingredientes que YA tienes disponibles. Si NO hay otra proteína disponible en tu despensa, "
+            f"prioriza un plato VÁLIDO y coherente aunque repita (no inventes ingredientes que no tengas)."
         )
 
     swap_reason = form_data.get("swap_reason", "dislike")
