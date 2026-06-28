@@ -8814,6 +8814,16 @@ LEAF_VOLUME_CAP_G       = max(30, min(200, _env_int("MEALFIT_LEAF_VOLUME_CAP_GRA
 # cuando la miel ya no está). Acento-tolerante, elimina el artículo previo (evita género roto), salta texturas, usa los
 # tokens reales del sub. Rollback: MEALFIT_SUBST_RECIPE_REWRITE=false. tooltip-anchor: P1-SUBST-RECIPE-REWRITE
 SUBST_RECIPE_REWRITE_ENABLED = _env_bool("MEALFIT_SUBST_RECIPE_REWRITE", True)
+# [P1-FASE-A-FAT-TOPUP · 2026-06-28] Tras FASE A anclar proteína animal MAGRA (reemplaza lácteos grasos), la grasa del día
+# cae bajo banda (band fats 0.0). El reconcile ya escala la grasa al máx (×1.8) pero no hay suficiente grasa que escalar
+# → añade aceite de oliva virgen MODERADO hasta el PISO de banda (0.90×target, NO la banda completa: grasa ligeramente
+# baja es clínicamente deseable post-bariátrico). Guards clínicos (ASMBS, review adversaria): per-comida ≤cap (dumping/
+# esteatorrea), headroom calórico (no exceder 1.12×kcal target → no desplaza proteína), olo aceite MUFA (no frito/
+# saturado/frutos secos), skip renal heredado de FASE A. Rollback: MEALFIT_FASE_A_FAT_TOPUP=false. tooltip-anchor: P1-FASE-A-FAT-TOPUP
+FASE_A_FAT_TOPUP_ENABLED = _env_bool("MEALFIT_FASE_A_FAT_TOPUP", True)
+FASE_A_FAT_TOPUP_FLOOR_PCT = max(0.5, min(1.0, _env_float("MEALFIT_FASE_A_FAT_TOPUP_FLOOR_PCT", 0.90)))
+HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G = max(5, min(20, _env_int("MEALFIT_HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G", 13)))
+HEALTHY_FAT_MAX_PER_MEAL_NONBARIATRIC_G = max(8, min(40, _env_int("MEALFIT_HEALTHY_FAT_MAX_PER_MEAL_NONBARIATRIC_G", 20)))
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
@@ -14374,6 +14384,72 @@ def _night_rice_autofix(days: list, db=None) -> int:
         return 0
 
 
+def _topup_healthy_fat_to_band_floor(meals: list, target_fats: float, target_kcal: float, db, *, is_bariatric: bool) -> int:
+    """[P1-FASE-A-FAT-TOPUP · 2026-06-28] Tras FASE A + reconcile, si la grasa del DÍA sigue bajo el PISO de banda
+    (FASE_A_FAT_TOPUP_FLOOR_PCT×target), añade aceite de oliva virgen extra (MUFA, dumping-risk mínimo vs frito/saturado/
+    frutos secos) DISTRIBUIDO en las comidas principales (almuerzo/cena), cada una ≤cap per-comida, SOLO hasta el piso
+    (NO la banda completa — grasa ligeramente baja es clínicamente preferible post-bariátrico a desplazar proteína).
+    Guards clínicos (ASMBS, review adversaria): (1) headroom calórico — nunca exceder 1.12×target_kcal (no desplaza
+    proteína ni rompe el cap calórico); (2) per-comida ≤cap (esteatorrea/dumping/tolerancia); (3) skip si la comida ya
+    tiene grasa visible (aceite/aguacate). Idempotente (flag `_fat_topup`), determinista, fail-safe. Corre como ÚLTIMA
+    mutación de macros de FASE A → ningún reconcile posterior la recorta. tooltip-anchor: P1-FASE-A-FAT-TOPUP"""
+    if not FASE_A_FAT_TOPUP_ENABLED or target_fats <= 0:
+        return 0
+    try:
+        if any(m.get("_fat_topup") for m in meals):   # idempotente: ya se hizo top-up este día
+            return 0
+        floor = target_fats * FASE_A_FAT_TOPUP_FLOOR_PCT
+        curF = sum(_meal_macro_num(m.get("fats")) for m in meals)
+        if curF >= floor:
+            return 0
+        per_meal_cap = HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G if is_bariatric else HEALTHY_FAT_MAX_PER_MEAL_NONBARIATRIC_G
+        kcal_ceiling = 1.12 * target_kcal if target_kcal > 0 else float("inf")
+        from constants import strip_accents as _sa_f
+        _FAT_PRESENT = ("aceite", "oliva", "aguacate", "mantequilla", "tocino", "manteca")
+        _MAIN_SLOTS = ("almuerzo", "cena", "lunch", "dinner")
+        added_total = 0
+        for m in meals:
+            if curF >= floor:
+                break
+            slot = _sa_f(str(m.get("type", "") or m.get("meal", "")).lower())
+            if not any(s in slot for s in _MAIN_SLOTS):
+                continue
+            txt = _sa_f((str(m.get("name", "")) + " " + " ".join(str(i) for i in (m.get("ingredients") or []))).lower())
+            if any(t in txt for t in _FAT_PRESENT):
+                continue  # ya tiene grasa visible → no duplicar
+            cur_day_kcal = sum(_meal_macro_num(mm.get("cals")) for mm in meals)
+            kcal_room = kcal_ceiling - cur_day_kcal
+            if kcal_room < 45:  # <5g de grasa de headroom → no vale la pena / rompería kcal
+                break
+            import math as _math
+            need = floor - curF
+            # ceil del déficit → aterriza EN/sobre el piso (no 1-2g corto por truncamiento int); acotado por el cap
+            # per-comida y por el headroom calórico (floor, no exceder kcal).
+            add = int(min(float(per_meal_cap), _math.ceil(need), _math.floor(kcal_room / 9.0)))
+            if add < 5:
+                continue
+            line = f"{add}g de aceite de oliva virgen extra"
+            m.setdefault("ingredients", []).append(line)
+            if isinstance(m.get("ingredients_raw"), list):
+                m["ingredients_raw"].append(line)
+            mf = round(_meal_macro_num(m.get("fats")) + add)
+            m["fats"] = mf
+            m["cals"] = round(_meal_macro_num(m.get("cals")) + add * 9)
+            m["protein"] = round(_meal_macro_num(m.get("protein")))
+            m["carbs"] = round(_meal_macro_num(m.get("carbs")))
+            m["macros"] = [f"P:{m['protein']}g", f"C:{m['carbs']}g", f"G:{mf}g"]
+            m["_fat_topup"] = True
+            curF += add
+            added_total += add
+        if added_total:
+            logger.info(f"🫒 [P1-FASE-A-FAT-TOPUP] +{added_total}g aceite de oliva distribuido "
+                        f"(grasa día → {round(curF)}g, piso={round(floor)}g, bariátrico={is_bariatric}).")
+        return added_total
+    except Exception as _ft_e:
+        logger.warning(f"[P1-FASE-A-FAT-TOPUP] falló (no bloquea): {type(_ft_e).__name__}: {_ft_e}")
+        return 0
+
+
 def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict, db=None) -> int:
     """[P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura) Re-cierre FINAL del piso de proteína tras los caps
     clínicos. El closer del motor (_close_protein_gap_for_meal) corre DENTRO de _apply_macro_engine (PRE-cap) y es
@@ -14461,6 +14537,10 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
             if _touched:
                 try:
                     _macro_aware_day_reconcile(_ms, _cg, _fg, db)
+                    # [P1-FASE-A-FAT-TOPUP] El reconcile escala la grasa al máx (×1.8) pero la proteína magra densa deja
+                    # poca grasa que escalar → si sigue bajo el piso de banda, top-up MODERADO de aceite de oliva. Corre
+                    # como ÚLTIMA mutación de macros (ningún reconcile posterior la recorta). Headroom calórico interno.
+                    _topup_healthy_fat_to_band_floor(_ms, _fg, (4.0 * _pg + 4.0 * _cg + 9.0 * _fg), db, is_bariatric=_is_baria)
                 except Exception:
                     pass
         return added
