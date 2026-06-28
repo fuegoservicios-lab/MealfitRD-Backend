@@ -11018,7 +11018,13 @@ _MEAT_PROTEIN_HINT = ("pollo", "pavo", "cerdo", "res", "carne", "pescado", "atun
                       "salmon", "salmón", "mero", "chillo", "bacalao", "calamar", "mariscos", "higado", "hígado",
                       # [P1-CLOSER-SWEET-GUARD] mariscos: el cerrador metió "Piña con Ricotta y Cangrejo" (corr=713b8e84)
                       "cangrejo", "jaiba", "langosta", "langostino", "pulpo", "almeja", "mejillon", "mejillón",
-                      "ostra", "ostion", "ostión", "concha", "salpicon", "salpicón")
+                      "ostra", "ostion", "ostión", "concha", "salpicon", "salpicón",
+                      # [P1-CLOSER-SWEET-GUARD] carnes/aves faltantes: el cerrador metió "Yogurt con Lechosa y CHIVO"
+                      # (corr=6b859fc4). Lista completa de carnes para cerrar la clase (sweet-guard + categoría).
+                      "chivo", "cabra", "cabrito", "cordero", "conejo", "pato", "codorniz", "ternera", "bistec",
+                      "bisteck", "churrasco", "costilla", "chorizo", "salchicha", "salchichon", "salchichón",
+                      "tocino", "tocineta", "jamon", "jamón", "morcilla", "butifarra", "filete", "pechuga",
+                      "muslo", "molleja", "pernil")  # NO 'molida' → falso positivo (linaza/almendra/canela molida)
 # [P1-CLOSER-SWEET-GUARD] Preparaciones SALADAS que anulan el marcador dulce: un "ceviche de lechosa VERDE" o un
 # "guiso" NO es postre aunque el nombre traiga una fruta/token dulce → ahí SÍ va proteína de mar/carne.
 _SWEET_MEAL_SAVORY_OVERRIDE = ("ceviche", "verde", "guisad", "saltead", "encebollad", "escabeche",

@@ -77,6 +77,24 @@ def test_crab_blocked_from_sweet_pineapple():
     assert g._close_protein_gap_for_meal(sweet, 25, None, cands) == 0, "no debe meter cangrejo en un plato de piña dulce"
 
 
+def test_goat_and_meats_are_savory():
+    """[corr=6b859fc4] el cerrador metió 'Yogurt con Lechosa y Chivo' — chivo/cordero/conejo/etc. deben contar como
+    carne para que el sweet-guard los bloquee en platos dulces."""
+    for meat in ("chivo", "cabra", "cordero", "conejo", "pato", "ternera", "chorizo", "jamon", "pernil"):
+        assert meat in g._MEAT_PROTEIN_HINT, meat
+
+
+def test_ground_seeds_not_flagged_as_meat():
+    """'molida' NO debe estar en la lista de carnes (falso positivo: linaza/almendra/canela molida)."""
+    assert "molida" not in g._MEAT_PROTEIN_HINT
+
+
+def test_goat_blocked_from_sweet_yogurt():
+    sweet = _meal("Yogurt Griego con Lechosa y Linaza Molida")
+    cands = [(0.20, "Chivo", _Info("Chivo", 27)), (0.25, "Pechuga de pollo", _Info("Pechuga de pollo", 31))]
+    assert g._close_protein_gap_for_meal(sweet, 25, None, cands) == 0, "no debe meter chivo en un yogurt+fruta dulce"
+
+
 def test_anchor():
     src = (g.__file__)
     import pathlib
