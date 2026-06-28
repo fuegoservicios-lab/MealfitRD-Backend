@@ -9352,6 +9352,15 @@ BARIATRIC_NUT_CAP_G = _env_int("MEALFIT_BARIATRIC_NUT_CAP_G", 20, validator=lamb
 # el revisor flageaba "4.75 cdta de canela" (cumarina, tóxica), "3.75 cdta de aceite", "3.25 cda de linaza". Default
 # ON. Rollback: MEALFIT_BARIATRIC_CONDIMENT_CAP=false. tooltip-anchor: P1-BARIATRIC-CONDIMENT-CAP
 BARIATRIC_CONDIMENT_CAP_ENABLED = _env_bool("MEALFIT_BARIATRIC_CONDIMENT_CAP", True)
+# [P1-BARIATRIC-CROSSDAY-CONDIMENT-CAP · 2026-06-28] Cap ACUMULADO POR DÍA (no per-comida) de canela y linaza/chía. El cap
+# per-comida no ve la dosis sumada cross-día (canela en Desayuno+Merienda PM+Merienda Nocturna = ~3 cdta). Límites clínicos
+# (verificados ASMBS/EFSA): CANELA ≤0.5 cdta/día (1 cdta Cassia ≈ hasta 18mg cumarina ≈ 3× el TDI EFSA 0.1mg/kg → hepato-
+# toxicidad crónica + hipoglucemia reactiva); LINAZA/chía MOLIDA ≤1 cda ≈10g/día (tolerancia de fibra/bolo + no desplazar
+# proteína del pouch — la obstrucción es por semilla ENTERA, ya prohibida en el prompt, NO por la molida). Rollback:
+# MEALFIT_BARIATRIC_CROSSDAY_CONDIMENT_CAP=false. tooltip-anchor: P1-BARIATRIC-CROSSDAY-CONDIMENT-CAP
+BARIATRIC_CROSSDAY_CONDIMENT_CAP_ENABLED = _env_bool("MEALFIT_BARIATRIC_CROSSDAY_CONDIMENT_CAP", True)
+BARIATRIC_CANELA_DAILY_CAP_CDTA = _env_float("MEALFIT_BARIATRIC_CANELA_DAILY_CAP_CDTA", 0.5, validator=lambda v: 0.25 <= v <= 1.0)
+BARIATRIC_LINAZA_DAILY_CAP_CDA = _env_float("MEALFIT_BARIATRIC_LINAZA_DAILY_CAP_CDA", 1.0, validator=lambda v: 0.5 <= v <= 1.5)
 # [P1-BARIATRIC-PROTEIN-PORTION · 2026-06-27] Tope de PROTEÍNA ANIMAL por comida que el re-cierre post-cap puede
 # inyectar (≤90g de alimento ≈ ~22g proteína). Sin esto, `_repair_protein_floor_post_caps` metía 213g de camarones
 # para clavar el target del slot → el revisor rechazaba por volumen/sobrecarga. ~6 comidas × ~22g = 132g posibles ≥
@@ -14058,6 +14067,80 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                             _truth_up_meal_macros_from_strings(m, db)
                         except Exception:
                             pass
+
+        # [P1-BARIATRIC-CROSSDAY-CONDIMENT-CAP · 2026-06-28] 3ª pasada: cap ACUMULADO POR DÍA de canela (≤0.5 cdta) y
+        # linaza/chía (≤1 cda ≈10g). El per-comida no ve la dosis sumada cross-día. Suma el nº líder de cada ítem matcheado
+        # en TODAS las comidas del día; si excede, MANTIENE ítems enteros desde el primero hasta el cap, recorta el ítem-
+        # frontera a la fracción restante (legible) y ELIMINA los sobrantes (condimento opcional). Idempotente (2ª corrida:
+        # total ≤ cap → no-op), fail-safe (parse/except per-ítem → continue). Reusa _name_has_token/_norm_text/_resc.
+        if BARIATRIC_CROSSDAY_CONDIMENT_CAP_ENABLED:
+            from nutrition_db import _LEAD_QTY_RE as _LQ_x
+            _xday = ((("canela", "cinnamon"), float(BARIATRIC_CANELA_DAILY_CAP_CDTA)),
+                     (("linaza", "chia"), float(BARIATRIC_LINAZA_DAILY_CAP_CDA)))
+            for day in days or []:
+                if not isinstance(day, dict):
+                    continue
+                _dmeals = [m for m in (day.get("meals") or []) if isinstance(m, dict)]
+                for _toks, _dcap in _xday:
+                    _hits = []  # (mi, ii, lead)
+                    _total = 0.0
+                    for _mi, m in enumerate(_dmeals):
+                        _ings = m.get("ingredients")
+                        if not isinstance(_ings, list):
+                            continue
+                        for _ii, ing in enumerate(_ings):
+                            if not isinstance(ing, str):
+                                continue
+                            _low = _norm_text(ing)
+                            if not any(_name_has_token(t, _low) for t in _toks):
+                                continue
+                            mq = _LQ_x.match(ing.strip())
+                            if not mq:
+                                continue
+                            try:
+                                lead = float(str(mq.group(1)).replace(",", "."))
+                            except Exception:
+                                continue
+                            if lead > 0:
+                                _total += lead
+                                _hits.append((_mi, _ii, lead))
+                    if _total <= _dcap + 1e-9 or not _hits:
+                        continue  # idempotente: ya ≤ cap diario → no-op
+                    _running = 0.0
+                    _remove = []  # (mi, ii)
+                    _touched = set()
+                    for _mi, _ii, lead in _hits:
+                        if _running >= _dcap - 1e-9:
+                            _remove.append((_mi, _ii)); continue  # ya alcanzamos el cap → eliminar sobrante
+                        if _running + lead <= _dcap + 1e-9:
+                            _running += lead; continue  # cabe entero
+                        _keep = max(0.0, _dcap - _running)  # frontera: recortar a lo que queda
+                        _running = _dcap
+                        _ings = _dmeals[_mi].get("ingredients")
+                        if _keep <= 1e-6:
+                            _remove.append((_mi, _ii))
+                        else:
+                            _new_ing = _resc(_ings[_ii], _keep / lead)
+                            if _new_ing != _ings[_ii]:
+                                _ings[_ii] = _new_ing; capped += 1; _touched.add(_mi)
+                    # eliminar sobrantes (índices desc por meal para no desfasar)
+                    from collections import defaultdict as _dd_x
+                    _bym = _dd_x(list)
+                    for _mi, _ii in _remove:
+                        _bym[_mi].append(_ii)
+                    for _mi, _iis in _bym.items():
+                        _ings = _dmeals[_mi].get("ingredients")
+                        for _ii in sorted(_iis, reverse=True):
+                            if 0 <= _ii < len(_ings):
+                                del _ings[_ii]; capped += 1; _touched.add(_mi)
+                    if _touched:
+                        logger.info(f"🔻 [P1-BARIATRIC-CROSSDAY-CONDIMENT-CAP] {_toks[0]} día-total "
+                                    f"{round(_total, 2)}→≤{_dcap} (bariátrica)")
+                        for _mi in _touched:
+                            try:
+                                _truth_up_meal_macros_from_strings(_dmeals[_mi], db)
+                            except Exception:
+                                pass
 
         # [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] (iter 4 — GAP2) 2ª pasada: cap de VOLUMEN AGREGADO por comida.
         # El solver infla porciones (×7 ciruelas=287g, 690g vegetales) para clavar kcal, ignorando el pouch. Suma

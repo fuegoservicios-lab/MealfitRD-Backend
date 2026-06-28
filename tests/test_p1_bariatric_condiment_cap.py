@@ -25,18 +25,20 @@ def test_condiment_count_cap_canela_aceite_linaza():
     ings = " | ".join(days[0]["meals"][0]["ingredients"]).lower()
     assert n >= 3
     assert "4.75" not in ings and "3.75" not in ings and "3.25" not in ings  # capeados
-    assert "1.5" in ings  # canela → 1.5
-    # aceite y linaza → 2
-    assert "2 cdta de aceite" in ings or "2.0 cdta de aceite" in ings
-    assert "2 cda de linaza" in ings or "2.0 cda de linaza" in ings
+    # [P1-BARIATRIC-CROSSDAY-CONDIMENT-CAP] el per-comida deja canela 1.5/linaza 2.0, PERO el cap cross-día (mismo día)
+    # los baja más: canela ≤0.5 cdta/día, linaza ≤1 cda/día. Aceite NO tiene cap cross-día → queda en 2.
+    assert "0.5" in ings  # canela → 0.5 (cross-día)
+    assert "2 cdta de aceite" in ings or "2.0 cdta de aceite" in ings  # aceite per-comida (sin cross-día)
+    assert "1 cda de linaza" in ings or "1.0 cda de linaza" in ings  # linaza → 1 cda (cross-día)
 
 
 def test_condiment_cap_leaves_small_amounts_alone():
+    # cantidades ≤ cap (canela 0.5 cross-día, aceite 1 cda per-comida) → intactas
     days = [{"day": 0, "meals": [{"meal": "Cena", "name": "Pollo",
-        "ingredients": ["1 cdta de canela", "1 cda de aceite de oliva"]}]}]
+        "ingredients": ["0.5 cdta de canela", "1 cda de aceite de oliva"]}]}]
     g.cap_bariatric_portions(days, _FORM)
     ings = " | ".join(days[0]["meals"][0]["ingredients"]).lower()
-    assert "1 cdta de canela" in ings and "1 cda de aceite" in ings  # ≤ cap → intactos
+    assert "0.5 cdta de canela" in ings and "1 cda de aceite" in ings  # ≤ cap → intactos
 
 
 def test_condiment_cap_knob_and_anchor():
