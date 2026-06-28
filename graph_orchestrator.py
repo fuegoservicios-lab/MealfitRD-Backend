@@ -13886,17 +13886,30 @@ def _generation_sanity_autofix(plan, db=None) -> int:
                         if not _ver:
                             _mc = db.macros_from_ingredient_string(ing) or {}
                             if not _mc.get("grams"):
-                                # [P3-GEN-SANITY] CONSERVADOR: solo dropear GARBLE de UNA palabra de contenido
-                                # (token mashed tipo 'EsGuineocas'). Los nombres multi-palabra ('caldo de
-                                # verduras', 'salsa criolla') son legítimos aunque no estén en catálogo → NO dropear.
+                                # [P3-GEN-SANITY] Dropear GARBLE del LLM (mash-tokens tipo 'EsGuineocas',
+                                # 'Esfresascas frescas'). [P3-GEN-SANITY-GARBLE-MULTIWORD · 2026-06-27] Antes solo
+                                # 1 palabra → '75g de Esfresascas frescas' (2 palabras, '_strip_qty_prefix' no quita
+                                # el adjetivo 'frescas') SOBREVIVÍA en la receta aunque VERIFIED-ONLY lo sacaba de la
+                                # lista (guards divergentes). Ahora también dropea multi-palabra cuando TODA palabra de
+                                # contenido es token LARGO (≥7) que NO resuelve al catálogo por separado (db.lookup
+                                # None) → mash alucinado. Platos compuestos legítimos sobreviven: 'caldo de verduras'
+                                # ('caldo'<7) y los que tienen ≥1 palabra catalogada. Fail-open.
                                 try:
                                     from nutrition_db import _strip_qty_prefix as _sqp, _GRAM_HINT_RE as _ghr
                                     _core = _ghr.sub("", _sqp(str(ing))).strip()
                                     _content = [w for w in _norm_text(_core).split() if w not in _GEN_UNIT_FILLER_WORDS]
                                 except Exception:
                                     _content = []
-                                if len(_content) <= 1 and _content:
-                                    logger.info(f"🩹 [P3-GEN-SANITY] dropeado '{str(ing)[:34]}' (nombre irresoluble/glitch de 1 palabra)")
+                                _garble = False
+                                if len(_content) == 1 and _content:
+                                    _garble = True  # 'EsGuineocas' (mash de 1 palabra)
+                                elif len(_content) >= 2:
+                                    try:
+                                        _garble = all((len(_w) >= 7) and (db.lookup(_w) is None) for _w in _content)
+                                    except Exception:
+                                        _garble = False  # fail-open: si no podemos verificar, NO dropear
+                                if _garble:
+                                    logger.info(f"🩹 [P3-GEN-SANITY] dropeado '{str(ing)[:34]}' (nombre irresoluble/glitch del LLM)")
                                     changed = True
                                     fixed += 1
                                     continue

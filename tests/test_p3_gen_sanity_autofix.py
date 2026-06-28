@@ -15,11 +15,21 @@ _BACKEND = Path(nc.__file__).resolve().parent
 
 
 class _StubDB:
+    # palabras que NO resuelven al catálogo (glitch del LLM) → lookup None
+    _UNRESOLVABLE = ("esfresascas", "esguineocas", "frescas", "guineocas")
+
     def macros_from_ingredient_string(self, s):
         import re
+        # Espeja el real (nutrition_db): lookup(name) PRIMERO → si no resuelve, None (el hint de gramos NO basta).
+        if any(u in str(s).lower() for u in self._UNRESOLVABLE):
+            return None
         m = re.match(r"\s*(\d+(?:\.\d+)?)\s*g", str(s))
         g = float(m.group(1)) if m else None
         return {"grams": g, "protein": (g or 0) * 0.1, "carbs": (g or 0) * 0.1, "fats": 0.0, "kcal": (g or 0)}
+
+    def lookup(self, raw_name):
+        # [P3-GEN-SANITY-GARBLE-MULTIWORD] None para mash-tokens irresolubles; objeto para palabras reales.
+        return None if any(u in str(raw_name).lower() for u in self._UNRESOLVABLE) else object()
 
 
 def _patch_verified(monkeypatch, unverified=("esguineocas",)):
@@ -51,6 +61,22 @@ def test_drops_garbled_unresolvable_name(monkeypatch):
     ings = plan["days"][0]["meals"][0]["ingredients"]
     assert not any("esguineocas" in i.lower() for i in ings), ings
     assert any("pollo" in i.lower() for i in ings)
+
+
+def test_drops_multiword_garble_keeps_compound(monkeypatch):
+    """[P3-GEN-SANITY-GARBLE-MULTIWORD · 2026-06-27] '75g de Esfresascas frescas' (mash multi-palabra) debe
+    dropearse — antes sobrevivía porque solo se atacaba garble de 1 palabra. Un compuesto legítimo con palabra
+    corta ('salsa criolla casera', 'salsa'<7) NO debe caer."""
+    import graph_orchestrator as g
+    _patch_verified(monkeypatch, unverified=("esfresascas", "frescas", "salsa"))
+    plan = {"days": [{"day": 1, "meals": [
+        {"meal": "Cena", "name": "Pollo",
+         "ingredients": ["90g de Pollo", "75g de Esfresascas frescas", "Salsa criolla casera"]}]}]}
+    g._generation_sanity_autofix(plan, db=_StubDB())
+    ings = [i.lower() for i in plan["days"][0]["meals"][0]["ingredients"]]
+    assert not any("esfresascas" in i for i in ings), f"garble multi-palabra debe dropearse: {ings}"
+    assert any("salsa criolla" in i for i in ings), f"compuesto legítimo (palabra <7) NO debe caer: {ings}"
+    assert any("pollo" in i for i in ings)
 
 
 def test_normal_meal_untouched(monkeypatch):
