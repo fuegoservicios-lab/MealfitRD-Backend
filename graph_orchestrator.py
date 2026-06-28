@@ -9284,6 +9284,11 @@ BARIATRIC_FRUIT_CAP_G = _env_int("MEALFIT_BARIATRIC_FRUIT_CAP_G", 80, validator=
 BARIATRIC_HIGHGI_FRUIT_CAP_G = _env_int("MEALFIT_BARIATRIC_HIGHGI_FRUIT_CAP_G", 50, validator=lambda v: 30 <= v <= 100)
 BARIATRIC_AVOCADO_CAP_G = _env_int("MEALFIT_BARIATRIC_AVOCADO_CAP_G", 30, validator=lambda v: 15 <= v <= 80)
 BARIATRIC_NUT_CAP_G = _env_int("MEALFIT_BARIATRIC_NUT_CAP_G", 20, validator=lambda v: 10 <= v <= 60)
+# [P1-BARIATRIC-CONDIMENT-CAP · 2026-06-27] Cap por COUNT (número líder) de condimentos densos/tóxicos en unidades
+# de cuchara (cda/cdta) que el cap por-gramos NO atrapa (macros_from_ingredient_string no resuelve gramos de cda):
+# el revisor flageaba "4.75 cdta de canela" (cumarina, tóxica), "3.75 cdta de aceite", "3.25 cda de linaza". Default
+# ON. Rollback: MEALFIT_BARIATRIC_CONDIMENT_CAP=false. tooltip-anchor: P1-BARIATRIC-CONDIMENT-CAP
+BARIATRIC_CONDIMENT_CAP_ENABLED = _env_bool("MEALFIT_BARIATRIC_CONDIMENT_CAP", True)
 # [P1-BARIATRIC-PROTEIN-PORTION · 2026-06-27] Tope de PROTEÍNA ANIMAL por comida que el re-cierre post-cap puede
 # inyectar (≤90g de alimento ≈ ~22g proteína). Sin esto, `_repair_protein_floor_post_caps` metía 213g de camarones
 # para clavar el target del slot → el revisor rechazaba por volumen/sobrecarga. ~6 comidas × ~22g = 132g posibles ≥
@@ -11276,7 +11281,8 @@ def build_update_micronutrient_directive(form_data: dict) -> str:
 
 
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
-                                *, fill_pct: float = 0.92, max_add_g: int = 300) -> int:
+                                *, fill_pct: float = 0.92, max_add_g: int = 300,
+                                slot_cal_target: float = 0.0) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
     INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
@@ -11361,6 +11367,18 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             chosen = _pool[0][0]  # la más magra (candidates ya viene ordenado)
         gap = target - cur_p
         grams = int(round(gap / (chosen.protein / 100.0)))
+        grams = min(grams, max_add_g)
+        # [P1-CLOSER-CALORIE-AWARE · 2026-06-27] No exceder el headroom calórico del slot: añadir proteína sube kcal,
+        # y en bariátrica (caps recortan mucho lácteo → +110g re-añadido) eso rompía la banda de calorías (band 0.58,
+        # kcal fuera). Si el slot ya está en/sobre su target de kcal → no añadir aquí (el piso se cubre donde haya
+        # espacio). Espejo del cal-aware de `_protein_topup_meal`. SOLO aplica si el caller pasa slot_cal_target
+        # (FASE A); los demás callers conservan el piso de 10g original.
+        if slot_cal_target and slot_cal_target > 0 and (getattr(chosen, "kcal", 0) or 0) > 0:
+            _cur_cal = _meal_macro_num(meal.get("cals"))
+            _head = slot_cal_target - _cur_cal
+            grams = min(grams, int(_head / (chosen.kcal / 100.0))) if _head > 0 else 0
+            if grams < 10:
+                return 0  # sin headroom calórico → no añadir aquí (el piso se cubre en otra comida con espacio)
         grams = max(10, min(grams, max_add_g))
         f = grams / 100.0
         nm = str(chosen.name).lower()
@@ -13545,6 +13563,13 @@ _BARIATRIC_FAT_TOKENS = ("aguacate",)
 # [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] nueces/semillas: densidad calórica muy alta → cap estricto por comida.
 _BARIATRIC_NUT_TOKENS = ("almendra", "nuez", "nueces", "mani", "cacahuate", "merey", "maranon", "pistacho",
                          "avellana", "semilla", "linaza", "chia", "ajonjoli", "sesamo")
+# [P1-BARIATRIC-CONDIMENT-CAP · 2026-06-27] (token group, max_count) — cap del NÚMERO líder, no de gramos. Canela
+# más estricta (cumarina). Aceite/semillas ≤2 cucharadas/cucharaditas. El cap por-gramos no atrapa unidades de cuchara.
+_BARIATRIC_CONDIMENT_COUNT_CAPS = (
+    (("canela", "cinnamon"), 1.5),
+    (("aceite",), 2.0),
+    (("linaza", "chia", "ajonjoli", "sesamo", "semilla"), 2.0),
+)
 
 
 def _resc_cap_coherent(ing: str, factor: float, target_g: int) -> str:
@@ -13667,6 +13692,51 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                     _truth_up_meal_macros_from_strings(m, db)
                 except Exception:
                     pass
+
+        # [P1-BARIATRIC-CONDIMENT-CAP · 2026-06-27] Cap por COUNT (número líder) de canela/aceite/linaza en unidades
+        # de cuchara — el cap por-gramos de arriba NO los atrapa (cda/cdta no resuelven a gramos). Cierra el rechazo
+        # "4.75 cdta de canela" (cumarina), "3.75 cdta de aceite", "3.25 cda de linaza". Fail-safe.
+        if BARIATRIC_CONDIMENT_CAP_ENABLED:
+            from nutrition_db import _LEAD_QTY_RE as _LQ
+            for day in days or []:
+                if not isinstance(day, dict):
+                    continue
+                for m in (day.get("meals") or []):
+                    if not isinstance(m, dict):
+                        continue
+                    ings = m.get("ingredients")
+                    if not isinstance(ings, list):
+                        continue
+                    _cc_changed = False
+                    for i, ing in enumerate(ings):
+                        if not isinstance(ing, str):
+                            continue
+                        low = _norm_text(ing)
+                        _cap_n = next((c for toks, c in _BARIATRIC_CONDIMENT_COUNT_CAPS
+                                       if any(_name_has_token(t, low) for t in toks)), None)
+                        if _cap_n is None:
+                            continue
+                        mq = _LQ.match(ing.strip())
+                        if not mq:
+                            continue
+                        try:
+                            lead = float(str(mq.group(1)).replace(",", "."))
+                        except Exception:
+                            continue
+                        if lead <= _cap_n or lead <= 0:
+                            continue
+                        new_ing = _resc(ing, _cap_n / lead)
+                        if new_ing != ing:
+                            ings[i] = new_ing
+                            _cc_changed = True
+                            capped += 1
+                            logger.info(f"🔻 [P1-BARIATRIC-CONDIMENT-CAP] '{str(ing)[:40]}' "
+                                        f"{round(lead, 2)}→{_cap_n} (bariátrica)")
+                    if _cc_changed:
+                        try:
+                            _truth_up_meal_macros_from_strings(m, db)
+                        except Exception:
+                            pass
 
         # [P1-BARIATRIC-VOLUME-CAP · 2026-06-27] (iter 4 — GAP2) 2ª pasada: cap de VOLUMEN AGREGADO por comida.
         # El solver infla porciones (×7 ciruelas=287g, 690g vegetales) para clavar kcal, ignorando el pouch. Suma
@@ -13972,8 +14042,12 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                 if _slot_target <= 0 or _cur >= _slot_target * 0.90:
                     continue  # esta comida ya cumple su slot
                 _m["_protein_closed"] = False  # permitir el re-cierre (el del motor corrió PRE-cap)
+                # [P1-CLOSER-CALORIE-AWARE] headroom calórico del slot = kcal del día × share → el closer no infla
+                # kcal por encima del target (evita el band 0.58/kcal-fuera del re-cierre pesado en bariátrica).
+                _slot_cal = (4.0 * _pg + 4.0 * _cg + 9.0 * _fg) * _share
                 _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands,
-                                                 fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add)
+                                                 fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
+                                                 slot_cal_target=_slot_cal)
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
