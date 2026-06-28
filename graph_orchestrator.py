@@ -11005,7 +11005,27 @@ _DAIRY_EGG_PROTEIN_HINT = ("huevo", "clara", "yogur", "yogurt", "queso", "ricott
 _CLOSER_GENERIC_PROTEIN_WORDS = frozenset((
     "queso", "carne", "pescado", "filete", "pechuga", "yogur", "yogurt", "proteina", "proteína", "fresco", "blanco"))
 _MEAT_PROTEIN_HINT = ("pollo", "pavo", "cerdo", "res", "carne", "pescado", "atun", "atún",
-                      "sardina", "camaron", "camarón", "tilapia", "lomo", "chuleta", "longaniza")
+                      "sardina", "camaron", "camarón", "tilapia", "lomo", "chuleta", "longaniza",
+                      "salmon", "salmón", "mero", "chillo", "bacalao", "calamar", "mariscos", "higado")
+# [P1-CLOSER-COHERENCE · 2026-06-27] Marcadores de plato DULCE (postre/desayuno dulce): yogurt+fruta, avena+guineo,
+# batido, tortilla con fresas, etc. Si la comida es dulce, NUNCA inyectar proteína SALADA (camarón/pescado/carne) —
+# era el rechazo crítico (camarones en avena dulce / yogurt+lechosa). El piso de proteína va a las comidas saladas.
+_SWEET_MEAL_MARKERS = ("yogur", "yogurt", "avena", "batido", "smoothie", "licuado", "granola", "overnight",
+                       "panqueque", "pancake", "waffle", "hotcake", "crepe", "crepa", "cereal", "miel",
+                       "mermelada", "mango", "guineo", "banana", "fresa", "lechosa", "papaya", "guayaba",
+                       "pina", "piña", "manzana", "mora", "arandano", "arándano", "kiwi", "melon", "melón",
+                       "uva", "durazno", "melocoton", "cereza", "mamey", "nispero", "chocolate", "cacao")
+
+
+def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
+    """[P1-CLOSER-COHERENCE] True si el NOMBRE de la comida indica un contexto DULCE (fruta dulce, yogurt, avena,
+    batido, panqueque…) donde una proteína salada (camarón/pescado/carne) sería organolépticamente aberrante.
+    Conservador: solo mira el nombre (no ingredientes) para no falsos-positivos por un topping menor."""
+    try:
+        nlow = strip_accents_fn(str(meal.get("name", "")).lower())
+        return any(mk in nlow for mk in _SWEET_MEAL_MARKERS)
+    except Exception:
+        return False
 
 
 def _safe_high_density_proteins(allergies, db, min_protein: float = 18.0) -> list:
@@ -11287,6 +11307,16 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
                 if any(t in nlow for t in _RAW_EGG_TERMS):
                     continue
             _pool.append((info, nlow))
+        # [P1-CLOSER-SWEET-GUARD · 2026-06-27] En plato DULCE (yogurt+fruta, avena+guineo, batido, tortilla con
+        # fresas) NO inyectar proteína SALADA (camarón/pescado/carne) — era el rechazo CRÍTICO de corr=26311f6f
+        # (FASE A metió +81g de camarones en 8 comidas dulces). Filtra el pool; si queda vacío → return 0 (el piso
+        # de proteína se cubre en las comidas saladas, no se fuerza un combo aberrante). Gateado por coherencia de plato.
+        if CLOSER_DISH_COHERENCE_ENABLED and _pool and _is_sweet_meal(meal, _sa):
+            _pool_sweet = [(info, nlow) for (info, nlow) in _pool
+                           if not any(h in nlow for h in _MEAT_PROTEIN_HINT)]
+            if not _pool_sweet:
+                return 0  # comida dulce sin proteína dulce-compatible → no meter camarón/pescado/carne
+            _pool = _pool_sweet
         if not _pool:
             return 0  # no-cook sin candidato seguro → no forzar carne cruda en un batido
         # Dish-fit: 1) congruencia (proteína ya mencionada en el plato) → escala el tema;
