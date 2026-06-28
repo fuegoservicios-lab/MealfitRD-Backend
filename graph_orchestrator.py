@@ -8798,6 +8798,10 @@ NIGHT_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_NIGHT_RICE_AUTOFIX", True)
 # de assemble — el quantize previo corre antes del macro engine, cuyo solver re-introduce decimales absurdos
 # ("37.87 g de lechosa", "4.73g de mozzarella"). Flip a False revierte. tooltip-anchor: P1-CLOSER-COHERENCE
 ASSEMBLE_FINAL_QUANTIZE = _env_bool("MEALFIT_ASSEMBLE_FINAL_QUANTIZE", True)
+# [P1-RECIPE-SLICE-GRAMS · 2026-06-27] Convierte unidades VAGAS de queso/embutido ('0.5 lonja/pedazo de queso' —
+# ¿qué significa media lonja de algo vago?) a GRAMOS medibles ('15 g de queso'). El usuario lo señaló como
+# incoherente. Default ON. Rollback: MEALFIT_RECIPE_SLICE_GRAMS=false. tooltip-anchor: P1-RECIPE-SLICE-GRAMS
+RECIPE_SLICE_GRAMS_ENABLED = _env_bool("MEALFIT_RECIPE_SLICE_GRAMS", True)
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
@@ -13913,6 +13917,75 @@ _NIGHT_RICE_CARB_FACTOR = 1.4
 _NIGHT_RICE_NAME_RE = _re.compile(r"\b(arroz\s+(?:blanco|integral|guisado|al\s+vapor)|arroz)\b", _re.I)
 
 
+# [P1-RECIPE-SLICE-GRAMS · 2026-06-27] Unidades VAGAS de tajada/loncha que NO comunican una cantidad medible cuando
+# son fraccionarias ("0.5 lonja/pedazo de queso"). Alimentos lonjeables + default de gramos por unidad.
+_VAGUE_SLICE_UNITS = ("lonja", "lonjas", "loncha", "lonchas", "pedazo", "pedazos", "tajada", "tajadas")
+_VAGUE_SLICE_FOOD_RE = _re.compile(
+    r"(queso|jamon|jamón|jamoneta|pavo|salami|mortadela|salchichon|salchichón|pechuga\s+de\s+pavo)\b.*",
+    _re.I)
+_SLICE_GRAMS_PER_UNIT = 25   # 1 lonja/pedazo de queso/embutido ≈ 25g
+_SLICE_GRAMS_FLOOR = 15      # mínimo medible
+
+
+def _recipe_slice_units_to_grams(days: list, db=None) -> int:
+    """[P1-RECIPE-SLICE-GRAMS · 2026-06-27] Convierte 'X lonja/pedazo/tajada de queso/embutido' (unidad vaga +
+    fracción sin sentido, p.ej. '0.5 lonja/pedazo de queso') a GRAMOS medibles ('15 g de queso'). Default 25g/unidad,
+    floor 15g, redondeo a múltiplo de 5. Recomputa macros. Determinista, idempotente (tras el fix ya es gramos),
+    fail-safe. tooltip-anchor: P1-RECIPE-SLICE-GRAMS"""
+    if not RECIPE_SLICE_GRAMS_ENABLED:
+        return 0
+    try:
+        from nutrition_db import _LEAD_QTY_RE as _LQ
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        fixed = 0
+        for day in days or []:
+            if not isinstance(day, dict):
+                continue
+            for m in (day.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                _ch = False
+                for i, ing in enumerate(ings):
+                    if not isinstance(ing, str):
+                        continue
+                    low = _norm_text(ing)
+                    if not any(u in low for u in _VAGUE_SLICE_UNITS):
+                        continue
+                    _mf = _VAGUE_SLICE_FOOD_RE.search(ing)
+                    if not _mf:
+                        continue  # unidad vaga pero no es queso/embutido → no tocar (ej. 'pedazo de pollo')
+                    mq = _LQ.match(ing.strip())
+                    if not mq:
+                        continue
+                    try:
+                        qty = float(str(mq.group(1)).replace(",", "."))
+                    except Exception:
+                        continue
+                    if qty <= 0:
+                        continue
+                    grams = max(_SLICE_GRAMS_FLOOR, int(round(qty * _SLICE_GRAMS_PER_UNIT / 5.0) * 5))
+                    name = _re.sub(r"\([^)]*\)", "", _mf.group(0)).strip(" ,.-")  # 'queso cottage' (sin hint '(Ng)')
+                    if not name:
+                        continue
+                    ings[i] = f"{grams} g de {name}"
+                    _ch = True
+                    fixed += 1
+                if _ch:
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
+        return fixed
+    except Exception as _rsg_e:
+        logger.warning(f"[P1-RECIPE-SLICE-GRAMS] falló (no bloquea): {type(_rsg_e).__name__}: {_rsg_e}")
+        return 0
+
+
 def _night_rice_autofix(days: list, db=None) -> int:
     """[P1-NIGHT-RICE-AUTOFIX · 2026-06-27] (audit G4) Autofix DETERMINISTA del "arroz de noche": reescribe el
     ARROZ simple de la CENA por un tubérculo nocturno (batata/yuca/casabe, rotado por día) — ingrediente Y NOMBRE
@@ -15189,6 +15262,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"(re-cierre del piso tras recorte de lácteos) + reconcile C/F.")
         except Exception as _rp:
             logger.warning(f"[P1-PROTEIN-FLOOR-POST-CAPS] en assemble falló (no bloquea): {type(_rp).__name__}: {_rp}")
+
+    # [P1-RECIPE-SLICE-GRAMS · 2026-06-27] Convierte 'X lonja/pedazo/tajada de queso/embutido' a GRAMOS antes del
+    # quantize final ('0.5 lonja/pedazo de queso' → '15 g de queso') — el usuario lo señaló como incoherente.
+    if RECIPE_SLICE_GRAMS_ENABLED:
+        try:
+            _sg_n = _recipe_slice_units_to_grams(days)
+            if _sg_n:
+                logger.info(f"🧀 [P1-RECIPE-SLICE-GRAMS] {_sg_n} ingrediente(s) 'lonja/pedazo de queso' → gramos.")
+        except Exception as _sg_e:
+            logger.warning(f"[P1-RECIPE-SLICE-GRAMS] callsite falló (no bloquea): {type(_sg_e).__name__}: {_sg_e}")
 
     # [P1-CLOSER-COHERENCE · 2026-06-27] Quantize FINAL de porciones a valores HUMANOS (múltiplo de 5g): el quantize
     # previo corre ANTES del macro engine, cuyo solver/closer re-introducen decimales no-medibles ("37.87 g de
