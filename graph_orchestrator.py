@@ -17526,15 +17526,29 @@ Responde ÚNICAMENTE con el JSON de revisión.
     if _short_days:
         _tgt_p = _short_days[0][2]
         _sd_str = "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short_days)
+        # [P3-PROTEIN-FLOOR-MSG-GOAL-AWARE · 2026-06-28] El % y el motivo deben reflejar la realidad: el piso aplica
+        # a TODOS los objetivos (protege contra sub-entrega), no solo a ganancia muscular; y para bariátrica el gate
+        # es el % relajado (80%), no 90%. Antes el mensaje hardcodeaba "ganancia muscular" + 90% → engañoso para un
+        # usuario de mantenimiento bariátrico (confundía el diagnóstico).
+        _eff_pct = PROTEIN_FLOOR_HARD_PCT
+        try:
+            from constants import BARIATRIC_CONDITION_TERMS as _BT_M
+            if form_data and any(any(_t in _c for _t in _BT_M) for _c in _condition_strings(form_data)):
+                _eff_pct = PROTEIN_FLOOR_HARD_PCT_BARIATRIC
+        except Exception:
+            pass
+        _goal_lc = str((form_data or {}).get("mainGoal") or (form_data or {}).get("goal") or "").strip().lower()
+        _motivo = ("ganancia muscular" if _goal_lc in ("gain_muscle", "ganar_musculo", "ganar musculo", "bulk")
+                   else "adecuación proteica diaria")
         logger.warning(f"🛡 [P3-PROTEIN-FLOOR] {len(_short_days)} día(s) bajo el piso de "
-                       f"proteína ({int(PROTEIN_FLOOR_HARD_PCT*100)}% de {int(_tgt_p)}g): {_sd_str}")
+                       f"proteína ({int(_eff_pct*100)}% de {int(_tgt_p)}g): {_sd_str}")
         approved = False
         issues.append(
-            f"DÉFICIT DE PROTEÍNA (rechazo clínico para ganancia muscular): el plan no "
+            f"DÉFICIT DE PROTEÍNA (rechazo clínico — {_motivo}): el plan no "
             f"alcanza el piso de proteína en {_sd_str}. Cada comida PRINCIPAL (almuerzo y "
             f"cena) DEBE incluir una fuente animal de alta densidad (pollo, pescado, cerdo, "
             f"res, huevos, queso) dimensionada en gramos para que cada día sume al menos "
-            f"{int(PROTEIN_FLOOR_HARD_PCT*100)}% del target ({int(_tgt_p)}g). NO dependas solo "
+            f"{int(_eff_pct*100)}% del target ({int(_tgt_p)}g). NO dependas solo "
             f"de leguminosas/almidón en las comidas principales."
         )
         severity = _severity_max(severity, "high")
