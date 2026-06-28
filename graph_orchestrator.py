@@ -8834,6 +8834,11 @@ HEALTHY_FAT_MAX_PER_MEAL_NONBARIATRIC_G = max(8, min(40, _env_int("MEALFIT_HEALT
 # días donde añade PROTEÍNA → un día con proteína OK pero kcal < banda (0.95×target) se quedaba bajo (band kcal 2/3). NO
 # es límite físico: cerrar ~400 kcal se hace con grasa MUFA (9 kcal/g, volumen despreciable, dumping-safe, sin conflicto
 # DM2) en comidas SALADAS. Aim 0.96×target (margen sobre el piso 0.95 del scorer). Rollback: =false. Anchor: P1-BARIATRIC-DAY-KCAL-FLOOR
+# [P1-BAR-CF · 2026-06-28] Corre los caps clínicos de porción (DM2/bariátrico) dentro de la SSOT clínica
+# (_apply_deterministic_clinical_layer) → se aplican también en los paths degradados/partial que BYPASSAN assemble
+# (fallback matemático, partial reparado, post-swap) y se entregaban sin capear. Idempotente en el happy path.
+# Rollback: MEALFIT_BARIATRIC_CLINICAL_FINALIZE=false (assemble sigue capeando el caso bueno). Anchor: P1-BAR-CF
+BARIATRIC_CLINICAL_FINALIZE_ENABLED = _env_bool("MEALFIT_BARIATRIC_CLINICAL_FINALIZE", True)
 BARIATRIC_DAY_KCAL_FLOOR_ENABLED = _env_bool("MEALFIT_BARIATRIC_DAY_KCAL_FLOOR", True)
 BARIATRIC_DAY_KCAL_FLOOR_PCT = max(0.90, min(1.0, _env_float("MEALFIT_BARIATRIC_DAY_KCAL_FLOOR_PCT", 0.96)))
 DAY_KCAL_FLOOR_MAX_FAT_PER_MEAL_G = max(8, min(20, _env_int("MEALFIT_DAY_KCAL_FLOOR_MAX_FAT_PER_MEAL_G", 15)))
@@ -13540,6 +13545,28 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
                 logger.info(f"🔎 [P2-MACRO-TRUTHUP] Recompute de macros desde strings finales en {_tu_n} comida(s)")
         except Exception as _tu_e:
             logger.warning(f"[P2-MACRO-TRUTHUP] error: {type(_tu_e).__name__}: {_tu_e}")
+
+    # ── Guard 8z.0 (caps clínicos de porción) [P1-BAR-CF · 2026-06-28] ──
+    # Los caps DM2/bariátrico (queso≤30g, yogurt≤120g, fruta≤40g, volumen≤300g, alto-IG≤150g) viven INLINE en
+    # assemble_plan_node (post macro-engine). Pero los PATHS DEGRADADOS (fallback matemático, partial reparado,
+    # post-swap) BYPASSAN assemble y llegaban a entregarse con porciones sin capear ("920 g de queso fresco" visto en
+    # vivo). Esos 3 paths SÍ pasan por esta SSOT clínica con form_data → añadir los caps aquí los cubre. HONESTO:
+    # (1) en el happy path esta capa corre DENTRO del macro-engine (antes del rebalance + los caps inline finales que
+    #     son el enforcer real) → aquí es idempotente/redundante (`if grams<=cap: continue` → no-op). No rompe band 1.0.
+    # (2) limpia el plan ENTREGADO/persistido en paths degradados; NO cambia lo que el revisor ya vio (los exits corren
+    #     post-review) — el objetivo es no ENTREGAR porciones peligrosas, el revisor sigue siendo el backstop.
+    # No-bariátrico/no-DM2: cada cap retorna 0 por su guard de condición interno → cero impacto. Fail-safe per-cap.
+    if BARIATRIC_CLINICAL_FINALIZE_ENABLED:
+        _bcf_days = plan.get("days") if isinstance(plan, dict) else None
+        if isinstance(_bcf_days, list):
+            try:
+                _bcf_dm2 = cap_dm2_high_gi_portions(_bcf_days, form_data, db=_db)
+                _bcf_bar = cap_bariatric_portions(_bcf_days, form_data, db=_db)
+                if _bcf_dm2 or _bcf_bar:
+                    logger.info(f"🧩 [P1-BAR-CF] caps clínicos en capa SSOT (path degradado/partial): "
+                                f"{_bcf_bar} bariátrico, {_bcf_dm2} dm2.")
+            except Exception as _bcf_e:
+                logger.warning(f"[P1-BAR-CF] caps en capa clínica no-op: {type(_bcf_e).__name__}: {_bcf_e}")
 
     # ── Guard 8z.1 (ERC re-verificación POST-truthup) [P1-RENAL-TRUTHUP-RECHECK · 2026-06-19, audit fresco P1-3] ──
     # Guard 8z (MACRO-TRUTHUP, arriba) reescribe meal['protein'] re-sumando los strings FINALES de ingredientes
@@ -21603,7 +21630,13 @@ def _build_fallback_day(nutr: dict, day_number: int,
     [P0-ORCH-1 · 2026-05-28] `restricted_tokens` filtra alérgenos: cada slot
     elige la primera plantilla segura. Vacío → menú histórico idéntico.
     """
-    target_cal = nutr.get('target_calories', 2000)
+    # [P1-FALLBACK-BAND-AWARE · 2026-06-28] Sanear: target ausente/None/0/patológico → default 2000 (piso 1200 evita un
+    # fallback peligrosamente hipocalórico). `.get(...,2000)` NO basta: si la key existe con None, devuelve None. NO se
+    # escala hacia banda a propósito (un fallback de emergencia ligeramente bajo banda es el lado seguro post-bariátrico).
+    target_cal = nutr.get('target_calories')
+    if not target_cal or not (1200 <= float(target_cal) <= 3500):
+        target_cal = 2000
+    target_cal = int(round(float(target_cal)))
     macros_dict = nutr.get('macros', {})
     target_pro = macros_dict.get('protein_g', 150)
     target_car = macros_dict.get('carbs_g', 200)
@@ -21662,7 +21695,16 @@ def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_off
     [P0-ORCH-1 · 2026-05-28] `restricted_tokens` (de `_fallback_restricted_tokens`)
     filtra alérgenos en cada slot. Vacío → menú histórico idéntico.
     """
-    target_cal = nutr.get('target_calories', 2000)
+    # [P1-FALLBACK-BAND-AWARE · 2026-06-28] El fallback nace con el target del usuario YA capeado en preflight (ceiling
+    # bariátrico / cap renal). Saneamos defensivamente: target ausente o patológico (0/None/fuera de [1200,3500]) → default
+    # seguro 2000. El piso 1200 evita un fallback peligrosamente hipocalórico. NO escalamos hacia banda a propósito: un plan
+    # de contingencia de emergencia ligeramente bajo banda es el lado SEGURO post-bariátrico (review clínica adversaria).
+    target_cal = nutr.get('target_calories')
+    if not target_cal or not (1200 <= float(target_cal) <= 3500):
+        if target_cal:
+            logger.warning(f"[P1-FALLBACK-BAND-AWARE] target_calories={target_cal} fuera de [1200,3500]; default 2000.")
+        target_cal = 2000
+    target_cal = int(round(float(target_cal)))
     macros_dict = nutr.get('macros', {})
     target_pro = macros_dict.get('protein_g', 150)
     target_car = macros_dict.get('carbs_g', 200)
