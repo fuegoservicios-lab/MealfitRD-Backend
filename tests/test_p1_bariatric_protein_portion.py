@@ -19,7 +19,7 @@ _NUT = {"macros": {"protein_g": 80, "carbs_g": 180, "fats_g": 53}}
 def _wire(monkeypatch, cap=None):
     import graph_orchestrator as g
 
-    def fake_closer(m, target, db, cands, fill_pct=0.92, max_add_g=300, slot_cal_target=0.0):
+    def fake_closer(m, target, db, cands, fill_pct=0.92, max_add_g=300, slot_cal_target=0.0, enforce_min_threshold=True):
         if cap is not None:
             cap["max_add_g"] = max_add_g
         cur = g._meal_macro_num(m.get("protein"))

@@ -8979,8 +8979,8 @@ PROTEIN_FLOOR_FILL_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_FILL_PCT", 0.92)  # c
 # [P3-PROTEIN-CLOSER-MIN-THRESHOLD · 2026-06-28] Umbral mínimo para PEGAR una proteína en el closer: por debajo de
 # esto, el add es trivial/relleno (10g camarón ≈2g prot, 25g chivo ≈6g) y daña la coherencia → no se añade (el piso
 # se cubre donde haya espacio + REPAIR_PROTEIN_POST_CAPS). Rollback al comportamiento previo: GRAMS=10, PROTEIN_G=0.
-PROTEIN_CLOSER_MIN_GRAMS = _env_int("MEALFIT_PROTEIN_CLOSER_MIN_GRAMS", 20, validator=lambda v: 0 <= v <= 100)
-PROTEIN_CLOSER_MIN_PROTEIN_G = _env_float("MEALFIT_PROTEIN_CLOSER_MIN_PROTEIN_G", 6.0)
+PROTEIN_CLOSER_MIN_GRAMS = _env_int("MEALFIT_PROTEIN_CLOSER_MIN_GRAMS", 12, validator=lambda v: 0 <= v <= 100)
+PROTEIN_CLOSER_MIN_PROTEIN_G = _env_float("MEALFIT_PROTEIN_CLOSER_MIN_PROTEIN_G", 3.0)
 # [P3-PROTEIN-CLOSER-SCALE-FIRST · 2026-06-28] Antes de PEGAR una proteína nueva, intentar CRECER una proteína de
 # densidad media/alta YA presente en el plato (subir la pechuga/pescado/queso fresco existente) — más "chef" que
 # bolt-on. Clamp ≤2×, respeta headroom calórico. Si no hay proteína escalable → cae al pool/append actual. Rollback:
@@ -11389,7 +11389,7 @@ def _try_scale_existing_protein(meal: dict, target_protein: float, db, strip_acc
 
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, fill_pct: float = 0.92, max_add_g: int = 300,
-                                slot_cal_target: float = 0.0) -> int:
+                                slot_cal_target: float = 0.0, enforce_min_threshold: bool = True) -> int:
     """[P3-PROTEIN-FLOOR · 2026-06-13] Rellena el meal hasta ~fill_pct del target de proteína
     del slot con una proteína de ALTA DENSIDAD allergen-safe (de `candidates`), integrada como
     INGREDIENTE real en gramos (no como nota). Cierra el déficit que el escalado no puede (no
@@ -11494,14 +11494,15 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             grams = min(grams, int(_head / (chosen.kcal / 100.0))) if _head > 0 else 0
             if grams < 10:
                 return 0  # sin headroom calórico → no añadir aquí (el piso se cubre en otra comida con espacio)
-        # [P3-PROTEIN-CLOSER-MIN-THRESHOLD · 2026-06-28] No PEGAR proteína TRIVIAL como ingrediente extra: el revisor
-        # y el usuario rechazaban "10g de camarones cocido" / "25g de chivo" tackeados con un paso robótico. Si la
-        # porción o su aporte proteico son triviales → NO añadir (el piso se cubre en comidas con espacio real;
-        # REPAIR_PROTEIN_POST_CAPS re-cierra cross-meal). Replica el piso de 15g que _protein_topup_meal ya tiene.
+        # [P3-PROTEIN-CLOSER-MIN-THRESHOLD · 2026-06-28] No PEGAR proteína TRIVIAL como ingrediente extra (10g camarón
+        # de relleno) — coherencia en la generación normal. PERO el reparador del PISO de proteína (FASE A) pasa
+        # enforce_min_threshold=False: es prioridad CLÍNICA cumplir el piso (≥90% de 80g), y bloquear sus cierres
+        # pequeños causaba déficit (Día 65/80, band 0.42 en corr=5a3f31d6). La coherencia del tack-on la cubren
+        # scale-first (crece existente), el sweet-guard y el wording natural — no este umbral de tamaño.
         _p_contrib = grams * (float(getattr(chosen, "protein", 0) or 0) / 100.0)
-        if grams < PROTEIN_CLOSER_MIN_GRAMS or _p_contrib < PROTEIN_CLOSER_MIN_PROTEIN_G:
+        if enforce_min_threshold and (grams < PROTEIN_CLOSER_MIN_GRAMS or _p_contrib < PROTEIN_CLOSER_MIN_PROTEIN_G):
             return 0
-        grams = max(PROTEIN_CLOSER_MIN_GRAMS, min(grams, max_add_g))
+        grams = max((PROTEIN_CLOSER_MIN_GRAMS if enforce_min_threshold else 10), min(grams, max_add_g))
         f = grams / 100.0
         nm = str(chosen.name).lower()
         cook = "" if no_cook else " cocido"
@@ -14254,7 +14255,7 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
                 _slot_cal = (4.0 * _pg + 4.0 * _cg + 9.0 * _fg) * _share
                 _g = _close_protein_gap_for_meal(_m, _slot_target, db, _cands,
                                                  fill_pct=PROTEIN_FLOOR_FILL_PCT, max_add_g=_max_add,
-                                                 slot_cal_target=_slot_cal)
+                                                 slot_cal_target=_slot_cal, enforce_min_threshold=False)
                 if _g > 0:
                     added += _g
                     _m["_final_protein_close"] = True
