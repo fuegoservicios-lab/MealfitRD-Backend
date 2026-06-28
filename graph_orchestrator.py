@@ -6977,7 +6977,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             # (`_day_fallback`) para que review/scoring puedan degradar calidad.
             _restricted = _fallback_restricted_tokens(form_data)
             for f_day in failed_days:
-                fb_day = _build_fallback_day(nutrition, f_day, _restricted)
+                # [P1-FALLBACK-BARIATRIC-CURATED] día fallido de un bariátrico → 6 comidas curadas (consistente con el resto).
+                fb_day = _build_fallback_day(nutrition, f_day, _restricted, form_data=form_data)
                 fb_day["_day_fallback"] = True
                 _skel = next((d for d in skeleton_days if d.get("day") == f_day), None)
                 if _skel and _skel.get("day_name"):
@@ -9361,6 +9362,12 @@ BARIATRIC_CONDIMENT_CAP_ENABLED = _env_bool("MEALFIT_BARIATRIC_CONDIMENT_CAP", T
 BARIATRIC_CROSSDAY_CONDIMENT_CAP_ENABLED = _env_bool("MEALFIT_BARIATRIC_CROSSDAY_CONDIMENT_CAP", True)
 BARIATRIC_CANELA_DAILY_CAP_CDTA = _env_float("MEALFIT_BARIATRIC_CANELA_DAILY_CAP_CDTA", 0.5, validator=lambda v: 0.25 <= v <= 1.0)
 BARIATRIC_LINAZA_DAILY_CAP_CDA = _env_float("MEALFIT_BARIATRIC_LINAZA_DAILY_CAP_CDA", 1.0, validator=lambda v: 0.5 <= v <= 1.5)
+# [P1-FALLBACK-BARIATRIC-CURATED · 2026-06-28] Cuando un usuario bariátrico cae al fallback crítico (rechazo médico /
+# schema inválido), entrega un plan bariátrico CURADO de 6 comidas clínicamente vetadas por construcción (porciones ≤caps,
+# proteína densa MOIST, sin crudos, coherencia nombre↔ingredientes) en vez del pool genérico de 3 comidas. Default True;
+# rollback: MEALFIT_FALLBACK_BARIATRIC_CURATED=false → fallback genérico previo intacto. tooltip-anchor: P1-FALLBACK-BARIATRIC-CURATED
+FALLBACK_BARIATRIC_CURATED_ENABLED = _env_bool("MEALFIT_FALLBACK_BARIATRIC_CURATED", True)
+FALLBACK_BARIATRIC_MEAL_COUNT = max(3, min(6, _env_int("MEALFIT_FALLBACK_BARIATRIC_MEAL_COUNT", 6)))
 # [P1-BARIATRIC-PROTEIN-PORTION · 2026-06-27] Tope de PROTEÍNA ANIMAL por comida que el re-cierre post-cap puede
 # inyectar (≤90g de alimento ≈ ~22g proteína). Sin esto, `_repair_protein_floor_post_caps` metía 213g de camarones
 # para clavar el target del slot → el revisor rechazaba por volumen/sobrecarga. ~6 comidas × ~22g = 132g posibles ≥
@@ -21716,11 +21723,127 @@ def _select_safe_fallback_meal(pool: list, restricted_tokens: frozenset):
     return pool[-1] if pool else None
 
 
+def _fallback_is_bariatric(form_data: dict) -> bool:
+    """[P1-FALLBACK-BARIATRIC-CURATED · 2026-06-28] True si el form declara condición bariátrica. Reusa el MISMO SSOT que
+    cap_bariatric_portions (_has_condition + BARIATRIC_CONDITION_TERMS) sobre los 5 campos canónicos. Fail-safe: cualquier
+    excepción / knob off / form_data None → False (cae al fallback genérico). tooltip-anchor: P1-FALLBACK-BARIATRIC-CURATED"""
+    if not FALLBACK_BARIATRIC_CURATED_ENABLED or not isinstance(form_data, dict):
+        return False
+    try:
+        from micronutrients import _has_condition
+        from constants import BARIATRIC_CONDITION_TERMS as _BT_FB
+        _c = []
+        for _k in ("medicalConditions", "medical_conditions", "conditions", "otherConditions", "other_conditions"):
+            _v = form_data.get(_k)
+            if isinstance(_v, (list, tuple)):
+                _c.extend(str(x) for x in _v)
+            elif _v:
+                _c.append(str(_v))
+        return _has_condition(_c, _BT_FB)
+    except Exception as _fbe:
+        logger.warning(f"[P1-FALLBACK-BARIATRIC-CURATED] detección falló (no bloquea): {type(_fbe).__name__}: {_fbe}")
+        return False
+
+
+# [P1-FALLBACK-BARIATRIC-CURATED] Ratios cal/macro por slot del fallback bariátrico de 6 comidas (suman 1.0).
+_BARIATRIC_FALLBACK_RATIOS = {
+    6: {"Desayuno": 0.20, "Merienda AM": 0.12, "Almuerzo": 0.28, "Merienda PM": 0.12, "Cena": 0.18, "Merienda Nocturna": 0.10},
+}
+
+# [P1-FALLBACK-BARIATRIC-CURATED · 2026-06-28] Pool de 6 slots clínicamente VETADO por construcción (review adversaria
+# código+clínico ASMBS). Formato 4-tuple idéntico al genérico: (name, frozenset(tokens), desc, [ingredients]). Reglas
+# garantizadas: porciones ≤caps (queso30/yogurt≤120/fruta≤80/aguacate≤30/volumen≤300g comida·≤200g merienda), proteína
+# densa MOIST (pescado/huevo/yogurt griego/pollo GUISADO — no seco), sin crudos, coherencia nombre↔ingredientes, sin
+# condimentos densos (caps cross-día = no-op). NO usa cottage (el cap de queso ("queso") lo amputaría a 30g → yogurt
+# griego en su lugar). Ingredientes con GRAMOS resolubles en el catálogo Neon (verificado: 26/28; galleta/caldo NO
+# resuelven → casabe/auyama). Último item de cada slot = frozenset() neutral (vegano, fail-safe bajo multi-alergia).
+# Tokens en inglés (egg/dairy/fish/oats/gluten/chicken/legume) consistentes con _detect_restricted_tokens.
+_FALLBACK_MEAL_POOLS_BARIATRIC = {
+    "Desayuno": [
+        ("Huevos Revueltos con Yuca", frozenset({"egg"}),
+         "2 huevos revueltos con yuca cocida. Proteína densa, sin crudos.",
+         ["2 unidades huevo", "100g yuca cocida"]),
+        ("Yogurt Griego con Avena", frozenset({"dairy", "oats", "gluten"}),
+         "Yogurt griego sin azúcar con avena cocida. Anti-dumping.",
+         ["115g yogurt griego", "30g avena cocida"]),
+        ("Yuca con Aguacate", frozenset(),
+         "Yuca cocida con aguacate. Suave, bajo volumen, sin crudos.",
+         ["120g yuca cocida", "25g aguacate"]),
+    ],
+    "Merienda AM": [
+        ("Sardinas con Casabe", frozenset({"fish"}),
+         "Sardinas en agua escurridas con casabe. Proteína MOIST.",
+         ["60g sardinas en agua escurridas", "20g casabe"]),
+        ("Queso Blanco con Manzana", frozenset({"dairy"}),
+         "Queso blanco con manzana. Porción medida.",
+         ["30g queso blanco", "60g manzana"]),
+        ("Zanahoria Cocida", frozenset(),
+         "Zanahoria cocida al vapor. Merienda ligera, sin crudos.",
+         ["120g zanahoria cocida"]),
+    ],
+    "Almuerzo": [
+        ("Mero a la Plancha con Papa y Brócoli", frozenset({"fish"}),
+         "Mero a la plancha con papa cocida y brócoli al vapor. Proteína densa primero.",
+         ["150g mero a la plancha", "80g papa cocida", "60g brocoli al vapor"]),
+        ("Pollo Guisado con Yuca y Tayota", frozenset({"chicken"}),
+         "Pollo guisado húmedo con yuca cocida y tayota. Proteína MOIST (guisada, no seca).",
+         ["120g pollo guisado", "90g yuca cocida", "70g tayota cocida"]),
+        ("Lentejas Guisadas con Arroz", frozenset({"legume"}),
+         "Lentejas guisadas con arroz blanco. Proteína vegetal, volumen controlado.",
+         ["120g lentejas guisadas", "80g arroz blanco cocido"]),
+        ("Auyama Guisada con Yuca", frozenset(),
+         "Auyama guisada con yuca cocida. Opción vegetal suave, fácil de digerir.",
+         ["120g auyama cocida", "80g yuca cocida"]),
+    ],
+    "Merienda PM": [
+        ("Atún con Casabe", frozenset({"fish"}),
+         "Atún en agua escurrido con casabe. Proteína MOIST, bajo volumen.",
+         ["80g atun en agua escurrido", "20g casabe"]),
+        ("Yogurt Griego con Fresa", frozenset({"dairy"}),
+         "Yogurt griego sin azúcar con fresa. Lácteo suave, anti-dumping.",
+         ["115g yogurt griego", "60g fresa"]),
+        ("Garbanzos Cocidos", frozenset({"legume"}),
+         "Garbanzos cocidos. Proteína vegetal, porción de merienda.",
+         ["100g garbanzos cocidos"]),
+        ("Zanahoria con Aguacate", frozenset(),
+         "Zanahoria cocida con aguacate. Merienda ligera.",
+         ["100g zanahoria cocida", "25g aguacate"]),
+    ],
+    "Cena": [
+        ("Tilapia al Horno con Batata", frozenset({"fish"}),
+         "Tilapia al horno con batata cocida y vainitas. Cena ligera, sin crudos.",
+         ["150g tilapia al horno", "75g batata cocida", "65g vainitas cocidas"]),
+        ("Huevos con Berenjena Asada", frozenset({"egg"}),
+         "Huevos cocidos con berenjena asada. Proteína MOIST blanda, bajo volumen.",
+         ["2 unidades huevo", "100g berenjena asada"]),
+        ("Habichuelas Guisadas con Arroz", frozenset({"legume"}),
+         "Habichuelas guisadas con arroz blanco. Proteína vegetal.",
+         ["80g habichuelas guisadas", "80g arroz blanco cocido"]),
+        ("Auyama con Vainitas", frozenset(),
+         "Auyama cocida con vainitas. Cena vegetal suave.",
+         ["120g auyama cocida", "80g vainitas cocidas"]),
+    ],
+    "Merienda Nocturna": [
+        ("Yogurt Griego Natural", frozenset({"dairy"}),
+         "Yogurt griego sin azúcar. Ultra-ligero, evita dumping nocturno.",
+         ["115g yogurt griego"]),
+        ("Atún en Agua", frozenset({"fish"}),
+         "Atún en agua escurrido, porción pequeña. Proteína lenta nocturna.",
+         ["60g atun en agua escurrido"]),
+        ("Zanahoria Cocida", frozenset(),
+         "Zanahoria cocida, porción pequeña. Merienda nocturna ligera.",
+         ["100g zanahoria cocida"]),
+    ],
+}
+
+
 def _build_fallback_day(nutr: dict, day_number: int,
-                        restricted_tokens: frozenset = frozenset()) -> dict:
+                        restricted_tokens: frozenset = frozenset(),
+                        form_data: dict = None) -> dict:
     """P1-A5: extraída del closure local de `arun_plan_pipeline`.
 
-    Construye un día fallback determinista (3 comidas balanceadas).
+    Construye un día fallback determinista. [P1-FALLBACK-BARIATRIC-CURATED] Si `form_data` declara condición bariátrica →
+    6 comidas del pool CURADO bariátrico; si no → 3 comidas del pool genérico (comportamiento histórico, byte-idéntico).
 
     [P0-ORCH-1 · 2026-05-28] `restricted_tokens` filtra alérgenos: cada slot
     elige la primera plantilla segura. Vacío → menú histórico idéntico.
@@ -21755,16 +21878,26 @@ def _build_fallback_day(nutr: dict, day_number: int,
             "recipe": ["Mise en place: Preparar todo", "El Toque de Fuego: Cocinar la proteína", "Montaje: Servir"]
         }
 
-    # (meal_type, ratio_cal, ratio_pro, ratio_car, ratio_fat) — ratios idénticos al menú histórico.
-    _slots = (
-        ("Desayuno", 0.3, 0.3, 0.3, 0.3),
-        ("Almuerzo", 0.4, 0.4, 0.4, 0.4),
-        ("Cena",     0.3, 0.3, 0.3, 0.3),
-    )
+    # [P1-FALLBACK-BARIATRIC-CURATED · 2026-06-28] Bariátrico → 6 comidas del pool curado; si no → 3 comidas genéricas
+    # (histórico, byte-idéntico). Fail-safe: slot ausente en el pool curado cae al genérico; ratio único por slot aplicado
+    # a cal/pro/car/fat (igual que el genérico).
+    if _fallback_is_bariatric(form_data):
+        from nutrition_calculator import meal_types_for_count
+        _n = FALLBACK_BARIATRIC_MEAL_COUNT
+        _slot_names = meal_types_for_count(_n)
+        _ratios = _BARIATRIC_FALLBACK_RATIOS.get(_n) or _BARIATRIC_FALLBACK_RATIOS[6]
+        _slots = tuple((s, _ratios.get(s, 1.0 / max(1, len(_slot_names)))) for s in _slot_names)
+        _pool = _FALLBACK_MEAL_POOLS_BARIATRIC
+    else:
+        # (meal_type, ratio) — ratios idénticos al menú histórico.
+        _slots = (("Desayuno", 0.3), ("Almuerzo", 0.4), ("Cena", 0.3))
+        _pool = _FALLBACK_MEAL_POOLS
+
     meals = []
-    for meal_type, r_cal, r_pro, r_car, r_fat in _slots:
-        tmpl = _select_safe_fallback_meal(_FALLBACK_MEAL_POOLS[meal_type], restricted_tokens)
-        meals.append(create_meal(tmpl, r_cal, r_pro, r_car, r_fat, meal_type))
+    for meal_type, r in _slots:
+        _slot_pool = _pool.get(meal_type) or _FALLBACK_MEAL_POOLS.get(meal_type)
+        tmpl = _select_safe_fallback_meal(_slot_pool, restricted_tokens)
+        meals.append(create_meal(tmpl, r, r, r, r, meal_type))
 
     return {
         "day": day_number,
@@ -21778,7 +21911,7 @@ def _build_fallback_day(nutr: dict, day_number: int,
 
 
 def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_offset: int = 0,
-                               restricted_tokens: frozenset = frozenset()) -> dict:
+                               restricted_tokens: frozenset = frozenset(), form_data: dict = None) -> dict:
     """P1-A5: extraída del closure local de `arun_plan_pipeline`.
 
     Fallback matemático determinista para evitar caídas del sistema.
@@ -21806,7 +21939,7 @@ def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_off
     target_fat = macros_dict.get('fats_g', 60)
 
     safe_num_days = max(1, int(num_days or 1))
-    days = [_build_fallback_day(nutr, day_offset + i + 1, restricted_tokens) for i in range(safe_num_days)]
+    days = [_build_fallback_day(nutr, day_offset + i + 1, restricted_tokens, form_data=form_data) for i in range(safe_num_days)]
 
     plan = {
         "main_goal": goal,
@@ -21844,6 +21977,9 @@ def _get_extreme_fallback_plan(nutr: dict, goal: str, num_days: int = 3, day_off
     if restricted_tokens:
         plan["_allergen_filtered"] = True
         plan["_allergen_tokens"] = sorted(restricted_tokens)
+    # [P1-FALLBACK-BARIATRIC-CURATED] Telemetría: el fallback usó el pool curado bariátrico (6 comidas vetadas).
+    if _fallback_is_bariatric(form_data):
+        plan["_fallback_bariatric_curated"] = True
     return plan
 
 
@@ -21872,7 +22008,7 @@ def _is_plan_complete(plan: dict, requested_days: int) -> bool:
 
 
 def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int,
-                         restricted_tokens: frozenset = frozenset()) -> bool:
+                         restricted_tokens: frozenset = frozenset(), form_data: dict = None) -> bool:
     """P1-A5: extraída del closure local. `nutrition` y `requested_days`
     ahora kwargs explícitos.
 
@@ -21928,14 +22064,14 @@ def _repair_partial_plan(plan: dict, *, nutrition: dict, requested_days: int,
                 d["day"] = idx + 1
             new_days.append(d)
         else:
-            new_days.append(_build_fallback_day(nutrition, idx + 1, restricted_tokens))
+            new_days.append(_build_fallback_day(nutrition, idx + 1, restricted_tokens, form_data=form_data))
             replaced_count += 1
             repaired = True
 
     # Rellenar faltantes
     filled_count = 0
     while len(new_days) < requested_days:
-        new_days.append(_build_fallback_day(nutrition, len(new_days) + 1, restricted_tokens))
+        new_days.append(_build_fallback_day(nutrition, len(new_days) + 1, restricted_tokens, form_data=form_data))
         filled_count += 1
         repaired = True
 
@@ -22680,6 +22816,8 @@ def _apply_critical_review_guardrails(
             # [P0-ORCH-1] CRÍTICO: esta rama se dispara por rechazo médico/alergia.
             # El fallback DEBE excluir el alérgeno declarado, nunca reintroducirlo.
             restricted_tokens=_fallback_restricted_tokens(actual_form_data),
+            # [P1-FALLBACK-BARIATRIC-CURATED] bariátrico → 6 comidas curadas en vez del genérico de 3.
+            form_data=actual_form_data,
         )
         fallback_plan["_is_fallback"] = True
         fallback_plan["_critical_rejection"] = True
@@ -22772,6 +22910,7 @@ def _apply_final_defense_guardrails(
             actual_form_data.get("mainGoal", "Salud General"),
             num_days=requested_days,
             restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
+            form_data=actual_form_data,  # [P1-FALLBACK-BARIATRIC-CURATED]
         )
     elif not _is_plan_complete(plan_final, requested_days):
         days_count = len(plan_final.get("days") or [])
@@ -22780,7 +22919,8 @@ def _apply_final_defense_guardrails(
               f"Días: {days_count}/{requested_days}, inválidos: {invalid_count}. Reparando.")
         # P1-9: `_repair_partial_plan` ya setea el flag en plan_final si repara.
         _repair_partial_plan(plan_final, nutrition=nutrition, requested_days=requested_days,
-                             restricted_tokens=_fallback_restricted_tokens(actual_form_data))  # [P0-ORCH-1]
+                             restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
+                             form_data=actual_form_data)  # [P1-FALLBACK-BARIATRIC-CURATED]
 
     # Inyectar profile_embedding para que el caller lo guarde en la BD
     if final_state.get("profile_embedding") and final_state.get("plan_result"):
@@ -24054,6 +24194,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                     actual_form_data.get("mainGoal", "Salud General"),
                     num_days=requested_days,
                     restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
+                    form_data=actual_form_data,  # [P1-FALLBACK-BARIATRIC-CURATED]
                 )
                 final_state["attempt"] = 1
                 final_state["review_passed"] = True
@@ -24061,7 +24202,8 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 # P1-9: `_repair_partial_plan` ya setea `plan_partial["_is_fallback"]=True`
                 # cuando hace cualquier reparación. Nada más que hacer aquí.
                 _repair_partial_plan(plan_partial, nutrition=nutrition, requested_days=requested_days,
-                                     restricted_tokens=_fallback_restricted_tokens(actual_form_data))  # [P0-ORCH-1]
+                                     restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
+                                     form_data=actual_form_data)  # [P1-FALLBACK-BARIATRIC-CURATED]
 
             # [P1-SPEND-CAP-ALERT · 2026-05-28] Si el pipeline cayó por el spending
             # cap de Gemini: (1) marcar plan_result para que routers/plans.py emita
@@ -24211,6 +24353,7 @@ async def arun_plan_pipeline(form_data: dict, history: list = None, taste_profil
                 actual_form_data.get("mainGoal", "Salud General"),
                 num_days=requested_days,
                 restricted_tokens=_fallback_restricted_tokens(actual_form_data),  # [P0-ORCH-1]
+                form_data=actual_form_data,  # [P1-FALLBACK-BARIATRIC-CURATED]
             )
             # Marcar para que el caller (router/cron) NO lo persista como plan
             # real. `_is_fallback` ya lo setea `_get_extreme_fallback_plan`, pero
