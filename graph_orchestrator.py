@@ -8820,6 +8820,11 @@ SUBST_RECIPE_REWRITE_ENABLED = _env_bool("MEALFIT_SUBST_RECIPE_REWRITE", True)
 # baja es clínicamente deseable post-bariátrico). Guards clínicos (ASMBS, review adversaria): per-comida ≤cap (dumping/
 # esteatorrea), headroom calórico (no exceder 1.12×kcal target → no desplaza proteína), olo aceite MUFA (no frito/
 # saturado/frutos secos), skip renal heredado de FASE A. Rollback: MEALFIT_FASE_A_FAT_TOPUP=false. tooltip-anchor: P1-FASE-A-FAT-TOPUP
+# [P1-COHERENCE-FINALIZE · 2026-06-28] Los 3 fixes de coherencia de unidad (slice-grams, leaf-cap, quantize) SOLO corrían
+# en assemble_plan_node. Un plan entregado por un path que salta assemble (partial/rechazado-pero-entregado/SSE-fallback)
+# se persistía con unidades vagas ("1¼ lonjas de queso"). `finalize_plan_data_coherence` los aplica DEFENSIVAMENTE antes de
+# persistir (INSERT chokepoint). Idempotente → no-op donde assemble ya corrió (band 1.00 intacto). Rollback: =false.
+COHERENCE_FINALIZE_ENABLED = _env_bool("MEALFIT_COHERENCE_FINALIZE", True)
 FASE_A_FAT_TOPUP_ENABLED = _env_bool("MEALFIT_FASE_A_FAT_TOPUP", True)
 FASE_A_FAT_TOPUP_FLOOR_PCT = max(0.5, min(1.0, _env_float("MEALFIT_FASE_A_FAT_TOPUP_FLOOR_PCT", 0.90)))
 HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G = max(5, min(20, _env_int("MEALFIT_HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G", 13)))
@@ -14202,6 +14207,43 @@ _VAGUE_SLICE_FOOD_RE = _re.compile(
     _re.I)
 _SLICE_GRAMS_PER_UNIT = 25   # 1 lonja/pedazo de queso/embutido ≈ 25g
 _SLICE_GRAMS_FLOOR = 15      # mínimo medible
+
+
+def finalize_plan_data_coherence(days: list, db=None) -> tuple:
+    """[P1-COHERENCE-FINALIZE · 2026-06-28] Aplica el post-engine coherence stack (slice-grams → leaf-cap → quantize) de
+    forma DEFENSIVA antes de cualquier persist, para los paths que saltan assemble_plan_node (partial/degradado/SSE-fallback/
+    chunk). ORDEN load-bearing: slice-grams ANTES de quantize ("1¼ lonja de queso"→"30 g" antes de redondear gramos);
+    leaf-cap antes de quantize. Las 3 fns son idempotentes + fail-safe → re-correr donde assemble ya las aplicó es no-op
+    (NO toca el band 1.00 del caso bueno). NO incluye los caps clínicos DM2/bariátrico ni FASE A (necesitan form_data/
+    nutrition, ausentes en el persist boundary; quedan en assemble). Muta `days` in-place. Devuelve (total_fixed, summary).
+    tooltip-anchor: P1-COHERENCE-FINALIZE"""
+    if not COHERENCE_FINALIZE_ENABLED or not isinstance(days, list) or not days:
+        return (0, "")
+    total = 0
+    parts = []
+    try:
+        if RECIPE_SLICE_GRAMS_ENABLED:
+            _n = _recipe_slice_units_to_grams(days, db)
+            if _n:
+                total += _n; parts.append(f"slice={_n}")
+    except Exception as _e1:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] slice-grams no-op: {type(_e1).__name__}: {_e1}")
+    try:
+        if LEAF_VOLUME_CAP_ENABLED:
+            _n = _cap_leaf_volume_in_meals(days, db)
+            if _n:
+                total += _n; parts.append(f"leaf={_n}")
+    except Exception as _e2:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] leaf-cap no-op: {type(_e2).__name__}: {_e2}")
+    try:
+        if ASSEMBLE_FINAL_QUANTIZE:
+            from nutrition_db import IngredientNutritionDB as _QDB
+            _n = _apply_portion_quantization({"days": days}, db or _QDB())
+            if _n:
+                total += _n; parts.append(f"quantize={_n}")
+    except Exception as _e3:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] quantize no-op: {type(_e3).__name__}: {_e3}")
+    return (total, ", ".join(parts))
 
 
 def _recipe_slice_units_to_grams(days: list, db=None) -> int:

@@ -29816,6 +29816,21 @@ def process_plan_chunk_queue(target_plan_id=None):
                             new_total = len(merged_days)
                             plan_data['total_days_generated'] = new_total
 
+                            # [P1-COHERENCE-FINALIZE · 2026-06-28] Escudo defensivo del chunk worker: el T1 persiste los
+                            # days de semanas 2+ vía UPDATE crudo (~30433), bypaseando ambos chokepoints de db_plans.
+                            # Los days ya pasaron por assemble en run_plan_pipeline → normalmente no-op (idempotente);
+                            # defensivo si ese path dejara de finalizar. Corre ANTES del recompute de micros (que así ve
+                            # ingredientes ya en gramos). Bajo el FOR UPDATE+advisory lock ya tomado (I7-safe), CPU-only.
+                            try:
+                                if isinstance(plan_data.get("days"), list):
+                                    from graph_orchestrator import finalize_plan_data_coherence as _fpc_chunk
+                                    _n_ck, _summ_ck = _fpc_chunk(plan_data["days"])
+                                    if _n_ck:
+                                        logger.info(f"🧩 [P1-COHERENCE-FINALIZE] chunk T1 plan {meal_plan_id} semana "
+                                                    f"{week_number} ({_summ_ck}).")
+                            except Exception as _fce_ck:
+                                logger.warning(f"[P1-COHERENCE-FINALIZE] chunk T1 no-op: {type(_fce_ck).__name__}: {_fce_ck}")
+
                             # [P1-MICRONUTRIENT-CHUNK-RECOMPUTE · 2026-06-24] Recalcula el panel de micros
                             # sobre el plan COMPLETO tras anexar el chunk. Antes el reporte se computaba 1
                             # sola vez en assemble (semana 1) y NUNCA se recalculaba al crecer el plan → un

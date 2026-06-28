@@ -832,6 +832,19 @@ def _build_meal_plan_insert_sql(data: dict, with_returning: bool = False):
     # (cron_tasks.py:5118) lo poblaba a costa de chunks que fallaban antes.
     if "plan_data" in data:
         data["plan_data"] = _ensure_grocery_start_date(data["plan_data"])
+        # [P1-COHERENCE-FINALIZE · 2026-06-28] Escudo defensivo: aplica el coherence stack (slice-grams/leaf-cap/quantize)
+        # a `days` antes de CUALQUIER INSERT — cubre los paths que saltan assemble_plan_node (partial/rechazado-pero-
+        # entregado/SSE-fallback) y persistían "1¼ lonjas de queso" crudo. Idempotente (no-op si assemble ya corrió →
+        # band 1.00 intacto), fail-safe (nunca bloquea el INSERT). Import LAZY: graph_orchestrator importa db_plans (ciclo).
+        try:
+            _pd = data["plan_data"]
+            if isinstance(_pd, dict) and isinstance(_pd.get("days"), list):
+                from graph_orchestrator import finalize_plan_data_coherence as _fpc
+                _n, _summ = _fpc(_pd["days"])
+                if _n:
+                    logger.info(f"🧩 [P1-COHERENCE-FINALIZE] pre-INSERT aplicó coherencia a un plan no-finalizado ({_summ}).")
+        except Exception as _fce:
+            logger.warning(f"[P1-COHERENCE-FINALIZE] pre-INSERT no-op: {type(_fce).__name__}: {_fce}")
 
     # [P0-1/CENTRAL] Último escudo para herencia cross-plan de lifetime lessons.
     # save_new_meal_plan_atomic y save_new_meal_plan_robust ya invocan
