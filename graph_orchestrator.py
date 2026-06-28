@@ -8802,6 +8802,13 @@ ASSEMBLE_FINAL_QUANTIZE = _env_bool("MEALFIT_ASSEMBLE_FINAL_QUANTIZE", True)
 # ¿qué significa media lonja de algo vago?) a GRAMOS medibles ('15 g de queso'). El usuario lo señaló como
 # incoherente. Default ON. Rollback: MEALFIT_RECIPE_SLICE_GRAMS=false. tooltip-anchor: P1-RECIPE-SLICE-GRAMS
 RECIPE_SLICE_GRAMS_ENABLED = _env_bool("MEALFIT_RECIPE_SLICE_GRAMS", True)
+# [P3-LEAF-VOLUME-CAP · 2026-06-28] El solver clasifica las hojas crudas (rúcula/lechuga/espinaca) como grupo "carbs"
+# (su macro dominante por kcal) y las escala para clavar el target de carbs → "5.5 taza de rúcula (165g)" en un
+# revoltillo (montaña de hojas). Las hojas son ~5 kcal/taza → recortarlas NO mueve macros pero sí la coherencia/UX.
+# Cap post-assemble (más seguro que tocar el solver que da band 1.00): recorta hojas a un máximo razonable por comida.
+# Rollback: MEALFIT_LEAF_VOLUME_CAP=false. tooltip-anchor: P3-LEAF-VOLUME-CAP
+LEAF_VOLUME_CAP_ENABLED = _env_bool("MEALFIT_LEAF_VOLUME_CAP", True)
+LEAF_VOLUME_CAP_G       = max(30, min(200, _env_int("MEALFIT_LEAF_VOLUME_CAP_GRAMS", 75)))   # ~2.5 tazas de hoja cruda
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
@@ -14100,7 +14107,7 @@ def _recipe_slice_units_to_grams(days: list, db=None) -> int:
     if not RECIPE_SLICE_GRAMS_ENABLED:
         return 0
     try:
-        from nutrition_db import _LEAD_QTY_RE as _LQ
+        from nutrition_db import _LEAD_QTY_RE as _LQ, _normalize_unicode_fractions as _nuf
         if db is None:
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
@@ -14124,7 +14131,10 @@ def _recipe_slice_units_to_grams(days: list, db=None) -> int:
                     _mf = _VAGUE_SLICE_FOOD_RE.search(ing)
                     if not _mf:
                         continue  # unidad vaga pero no es queso/embutido → no tocar (ej. 'pedazo de pollo')
-                    mq = _LQ.match(ing.strip())
+                    # [P1-RECIPE-SLICE-GRAMS-UNICODE · 2026-06-28] normalizar fracción unicode ANTES del match líder:
+                    # "1¼ lonjas de queso" → "1.25 lonjas..." (sin esto _LEAD_QTY_RE captura solo "1", qty=1.0 y el
+                    # ¼ podía sobrevivir). Mismo patrón que nutrition_db (todas sus llamadas a _LEAD_QTY_RE lo hacen).
+                    mq = _LQ.match(_nuf(ing.strip()))
                     if not mq:
                         continue
                     try:
@@ -14148,6 +14158,60 @@ def _recipe_slice_units_to_grams(days: list, db=None) -> int:
         return fixed
     except Exception as _rsg_e:
         logger.warning(f"[P1-RECIPE-SLICE-GRAMS] falló (no bloquea): {type(_rsg_e).__name__}: {_rsg_e}")
+        return 0
+
+
+def _cap_leaf_volume_in_meals(days: list, db=None) -> int:
+    """[P3-LEAF-VOLUME-CAP · 2026-06-28] Recorta el volumen de HOJAS crudas (rúcula/lechuga/espinaca…) que el solver
+    infla para clavar carbs ('5.5 taza de rúcula (165g)' en un revoltillo). Las hojas son ~5 kcal/taza → el recorte
+    NO mueve macros de forma material, pero arregla la coherencia (un humano no come 5 tazas de rúcula en una comida).
+    Usa `grams_from_ingredient_string` (resuelve taza→gramos vía densidad o el hint '(Ng)') y `rescale_ingredient_string`
+    (escala qty líder + hint juntos). Determinista, idempotente (post-cap el volumen ya es ≤cap), fail-safe per-ingrediente.
+    tooltip-anchor: P3-LEAF-VOLUME-CAP"""
+    if not LEAF_VOLUME_CAP_ENABLED:
+        return 0
+    try:
+        from nutrition_db import _LEAF_TOKENS, rescale_ingredient_string as _resc
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        capped = 0
+        for day in days or []:
+            if not isinstance(day, dict):
+                continue
+            for m in (day.get("meals") or []):
+                if not isinstance(m, dict):
+                    continue
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                _ch = False
+                for i, ing in enumerate(ings):
+                    if not isinstance(ing, str):
+                        continue
+                    low = _norm_text(ing)
+                    if not any(t in low for t in _LEAF_TOKENS):
+                        continue
+                    try:
+                        grams = db.grams_from_ingredient_string(ing)
+                    except Exception:
+                        grams = None
+                    if not grams or float(grams) <= LEAF_VOLUME_CAP_G:
+                        continue
+                    factor = LEAF_VOLUME_CAP_G / float(grams)
+                    new_ing = _resc(ing, factor)
+                    if new_ing and new_ing != ing:
+                        ings[i] = new_ing
+                        _ch = True
+                        capped += 1
+                if _ch:
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
+        return capped
+    except Exception as _lc_e:
+        logger.warning(f"[P3-LEAF-VOLUME-CAP] falló (no bloquea): {type(_lc_e).__name__}: {_lc_e}")
         return 0
 
 
@@ -15015,8 +15079,10 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 recipe_list = [recipe_list] if recipe_list.strip() else []
             elif not isinstance(recipe_list, list):
                 recipe_list = []
-            disclaimer = f"⚠️ Nota del Nutricionista AI: Las cantidades de los ingredientes fueron ajustadas matemáticamente para corregir un desvío de {abs(adjustment)} kcal."
-            if not any("Nota del Nutricionista AI" in str(s) for s in recipe_list):
+            # [P3-RECIPE-NOTE-TONE · 2026-06-28] copy suavizado: el usuario notó que "ajustadas matemáticamente para
+            # corregir un desvío de N kcal" delata el solver. Mismo significado, tono de nutricionista (sin números crudos).
+            disclaimer = "💡 Ajustamos ligeramente las porciones para que tus calorías del día cuadren con precisión."
+            if not any("💡 Ajustamos" in str(s) or "Nota del Nutricionista AI" in str(s) for s in recipe_list):
                 largest_meal["recipe"] = recipe_list + [disclaimer]
                 
             logger.info(f"⚖️ [MACRO BALANCING] Día {day.get('day')}: Desviación {diff}kcal -> Ajustado {adjustment}kcal en '{largest_meal.get('meal')}'")
@@ -15055,8 +15121,8 @@ async def assemble_plan_node(state: PlanState) -> dict:
                         recipe_list = [recipe_list] if recipe_list.strip() else []
                     elif not isinstance(recipe_list, list):
                         recipe_list = []
-                    disclaimer = f"⚠️ Nota del Nutricionista AI: Las porciones fueron escaladas un {abs(1 - scale_factor)*100:.0f}% matemáticamente para cumplir tu meta estricta."
-                    if not any("Nota del Nutricionista AI" in str(s) for s in recipe_list):
+                    disclaimer = "💡 Ajustamos las porciones de este día para que cuadren con tu meta calórica."
+                    if not any("💡 Ajustamos" in str(s) or "Nota del Nutricionista AI" in str(s) for s in recipe_list):
                         meal["recipe"] = recipe_list + [disclaimer]
                         
             new_total = sum(m.get("cals", 0) for m in day_meals)
@@ -15444,6 +15510,16 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 logger.info(f"🧀 [P1-RECIPE-SLICE-GRAMS] {_sg_n} ingrediente(s) 'lonja/pedazo de queso' → gramos.")
         except Exception as _sg_e:
             logger.warning(f"[P1-RECIPE-SLICE-GRAMS] callsite falló (no bloquea): {type(_sg_e).__name__}: {_sg_e}")
+
+    # [P3-LEAF-VOLUME-CAP · 2026-06-28] Recorta hojas crudas infladas por el solver ('5.5 taza de rúcula') a un máximo
+    # razonable por comida. Corre antes del quantize final (que redondea el resultado a fracciones de taza humanas).
+    if LEAF_VOLUME_CAP_ENABLED:
+        try:
+            _lc_n = _cap_leaf_volume_in_meals(days)
+            if _lc_n:
+                logger.info(f"🥬 [P3-LEAF-VOLUME-CAP] {_lc_n} hoja(s) cruda(s) recortada(s) a ≤{LEAF_VOLUME_CAP_G}g/comida.")
+        except Exception as _lc_e2:
+            logger.warning(f"[P3-LEAF-VOLUME-CAP] callsite falló (no bloquea): {type(_lc_e2).__name__}: {_lc_e2}")
 
     # [P1-CLOSER-COHERENCE · 2026-06-27] Quantize FINAL de porciones a valores HUMANOS (múltiplo de 5g): el quantize
     # previo corre ANTES del macro engine, cuyo solver/closer re-introducen decimales no-medibles ("37.87 g de
