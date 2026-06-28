@@ -940,6 +940,30 @@ PANTRY_GUARD_MIN_ITEMS = max(0, min(500, _env_int("MEALFIT_PANTRY_GUARD_MIN_ITEM
 # update_reason/min-items). Tooltip-anchor: P1-RENEWAL-PANTRY-IGNORE.
 INITIAL_CHUNK_PANTRY_GUARD_ENABLED = _env_bool("MEALFIT_INITIAL_CHUNK_PANTRY_GUARD", False)
 
+# [P1-RENEWAL-PANTRY-AWARE · 2026-06-28] Modo "completar nevera" en la renovación.
+# Objetivo del owner: al Renovar plan → variedad (intacta) + REUSAR los DURADEROS
+# sobrantes de la nevera como SUGERENCIA + (Fase 2) lista de SOLO los faltantes
+# (perecederos) para tener la nevera al 100%. Diseño verificado contra el código
+# (workflow renovar-plan-pantry-audit, 2026-06-28).
+#
+# Tensión resuelta (band-0.0, incidente d4bc3af5): el reuso de nevera como GATE
+# colapsaba la variedad y degradaba planes (por eso P1-RENEWAL-PANTRY-IGNORE apagó
+# la nevera en renovación). Aquí el reuso entra SOLO como prompt-hint ADVISORY:
+# se mantiene update_reason='variety' (el reviewer SIGUE saltando la validación de
+# despensa, P1-VARIETY-IGNORE-PANTRY) y los duraderos van como sugerencia capada,
+# NUNCA 'OBLIGATORIO agotar'. Así es estructuralmente imposible reintroducir el gate.
+#
+# Master switch, default OFF (rollout incremental, rollback sin redeploy). Cuando ON
+# Y el request trae `_renewal_pantry_aware=True`, build_pantry_context emite el bloque
+# de duraderos advisory en vez de cadena vacía.
+RENEWAL_PANTRY_AWARE_ENABLED = _env_bool("MEALFIT_RENEWAL_PANTRY_AWARE_ENABLED", False)
+# Cap de duraderos inyectados al prompt: pocos = más variedad, más = más reuso.
+# Default conservador 8 (evita inflar el prompt o colapsar variedad). Clamp [0, 50].
+RENEWAL_DURABLE_HINT_MAX_ITEMS = max(0, min(50, _env_int("MEALFIT_RENEWAL_DURABLE_HINT_MAX_ITEMS", 8)))
+# [Fase 2] Lista de faltantes (pantry_completion_list) derivada READ-ONLY post-plan:
+# lo que el plan necesita y la nevera NO cubre (perecederos consumidos). Default OFF.
+PANTRY_COMPLETION_LIST_ENABLED = _env_bool("MEALFIT_PANTRY_COMPLETION_LIST_ENABLED", False)
+
 # [P2-6 · 2026-05-08] Alertas proactivas sobre fallback no-atómico del pool.
 # `update_user_health_profile_atomic` cae al path legacy (get + update) cuando
 # `connection_pool=None` y `MEALFIT_REQUIRE_ATOMIC_POOL≠1` (default). Ese

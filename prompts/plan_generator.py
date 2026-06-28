@@ -1434,8 +1434,77 @@ def build_temporal_adherence_context(day_of_week_adherence: dict) -> str:
     return ctx
 
 
+# [P1-RENEWAL-PANTRY-AWARE · 2026-06-28] Lista a nivel módulo para reuso entre
+# build_pantry_context (clasificación Zero-Waste) y _build_durable_advisory_hint
+# (filtra perecederos del hint de reuso — esos van a la lista de faltantes, no al
+# bloque "úsalo"). Misma lista que antes era local en build_pantry_context.
+_PANTRY_PERISHABLE_KEYWORDS = [
+    "aguacate", "pescado", "pollo", "carne", "res", "cerdo", "tomate", "lechuga", "espinaca",
+    "brocoli", "brócoli", "guineo", "platano", "plátano", "banano", "manzana", "fresa",
+    "vegetal", "cebolla", "cilantro", "verdura", "marisco", "camaron", "camarón", "queso",
+    "leche", "yogurt", "huevo", "zanahoria", "pimiento", "aji", "ají", "berenjena",
+    "calabacín", "zucchini",
+]
+
+
+def _build_durable_advisory_hint(form_data: dict) -> str:
+    """[P1-RENEWAL-PANTRY-AWARE · 2026-06-28] Bloque ADVISORY (no obligatorio) de
+    los DURADEROS sobrantes que el usuario aún tiene, para el modo "completar
+    nevera" de la renovación. Diferencias clave con el bloque Zero-Waste normal:
+      - SOLO duraderos (filtra perecederos por seguridad: un perecedero va a la
+        lista de FALTANTES, no a "úsalo").
+      - Capado por RENEWAL_DURABLE_HINT_MAX_ITEMS (no inflar el prompt).
+      - Tono SUGERENCIA: prioriza variedad y alimentos NUEVOS; usa los duraderos
+        solo cuando encajen. NUNCA 'OBLIGATORIO agotar' (esa frase colapsaba la
+        variedad → band-0.0). El reviewer NO valida contra esto (sigue variety).
+    """
+    durables = form_data.get("durable_pantry_ingredients") or []
+    if not durables or not isinstance(durables, list):
+        return ""
+    clean = [d.strip() for d in durables if d and isinstance(d, str) and len(d.strip()) > 2]
+    # Defensa: excluir cualquier PERECEDERO mal clasificado del hint de reuso.
+    clean = [d for d in clean if not any(k in d.lower() for k in _PANTRY_PERISHABLE_KEYWORDS)]
+    if not clean:
+        return ""
+    try:
+        from constants import RENEWAL_DURABLE_HINT_MAX_ITEMS as _CAP
+    except Exception:
+        _CAP = 8
+    clean = clean[:max(0, int(_CAP))]
+    if not clean:
+        return ""
+    import json
+    ctx = "\n--- ♻️ DURADEROS QUE YA TIENES (SUGERENCIA — no obligatorio) ---\n"
+    ctx += "El usuario aún tiene en su nevera estos ingredientes DE LARGA DURACIÓN:\n"
+    ctx += f"{json.dumps(clean, ensure_ascii=False)}\n"
+    ctx += ("INSTRUCCIÓN: PRIORIZA la VARIEDAD y alimentos NUEVOS y diferentes al plan "
+            "anterior. Usa estos duraderos SOLO como complemento cuando encajen "
+            "naturalmente en un plato nuevo — NO fuerces su uso, NO repitas los platos "
+            "del plan anterior, y NO es obligatorio agotarlos.\n")
+    ctx += "----------------------------------------------------------\n"
+    return ctx
+
+
 def build_pantry_context(form_data: dict) -> str:
     """Genera el bloque de reciclaje de despensa (Zero-Waste predictivo)."""
+    # [P1-VARIETY-IGNORE-PANTRY · 2026-06-20 / P1-RENEWAL-PANTRY-AWARE · 2026-06-28]
+    # "Renovar Plan Actual" (variety) ignora la despensa por diseño: genera un plan
+    # NUEVO con alimentos DIFERENTES (emitir el bloque Zero-Waste produciría platos
+    # casi idénticos al plan anterior). review_plan_node también salta la validación
+    # para variety. EXCEPCIÓN gated (default OFF): el modo "completar nevera" (knob ON
+    # + `_renewal_pantry_aware`) emite los DURADEROS sobrantes como SUGERENCIA advisory
+    # (no 'OBLIGATORIO'), desde un campo SEPARADO (durable_pantry_ingredients) — por eso
+    # se evalúa ANTES del guard de current_pantry. Sigue siendo variety → el reviewer NO
+    # valida → el reuso jamás es gate → imposible reintroducir el band-0.0 (d4bc3af5).
+    if form_data.get("update_reason") == "variety":
+        try:
+            from constants import RENEWAL_PANTRY_AWARE_ENABLED as _RPA
+        except Exception:
+            _RPA = False
+        if _RPA and form_data.get("_renewal_pantry_aware"):
+            return _build_durable_advisory_hint(form_data)
+        return ""
+
     current_pantry = form_data.get("current_pantry_ingredients") or form_data.get("current_shopping_list", [])
     if not current_pantry or not isinstance(current_pantry, list):
         return ""
@@ -1447,24 +1516,7 @@ def build_pantry_context(form_data: dict) -> str:
     if form_data.get("_is_rotation_reroll", False):
         return ""
 
-    # [P1-VARIETY-IGNORE-PANTRY · 2026-06-20] "Renovar Plan Actual" (variety)
-    # genera a propósito un plan NUEVO con alimentos DIFERENTES al plan previo —
-    # NO es un reaprovechamiento de despensa. Emitir el bloque Zero-Waste aquí le
-    # diría al LLM "reusa tu nevera", produciendo platos casi idénticos al plan
-    # anterior y contradiciendo la intención del usuario. Por eso lo suprimimos.
-    # La validación simétrica en review_plan_node también se salta para 'variety'
-    # (de lo contrario el reviewer rechazaría los platos nuevos por no estar en la
-    # despensa → retries → plan degradado).
-    if form_data.get("update_reason") == "variety":
-        return ""
-
-    PERISHABLE_KEYWORDS = [
-        "aguacate", "pescado", "pollo", "carne", "res", "cerdo", "tomate", "lechuga", "espinaca",
-        "brocoli", "brócoli", "guineo", "platano", "plátano", "banano", "manzana", "fresa",
-        "vegetal", "cebolla", "cilantro", "verdura", "marisco", "camaron", "camarón", "queso",
-        "leche", "yogurt", "huevo", "zanahoria", "pimiento", "aji", "ají", "berenjena",
-        "calabacín", "zucchini"
-    ]
+    PERISHABLE_KEYWORDS = _PANTRY_PERISHABLE_KEYWORDS
 
     perishables = []
     stables = []
