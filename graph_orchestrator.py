@@ -13649,6 +13649,11 @@ def cap_dm2_high_gi_portions(days: list, form_data: dict, db=None, *, cap_g: int
                         continue
                     mc = db.macros_from_ingredient_string(ing) or {}
                     grams = mc.get("grams")
+                    if not grams:  # [P3-CAP-GRAMS-FALLBACK · 2026-06-28] nombre no resuelto al catálogo → usar los
+                        try:       # gramos LÍDERES del string (atrapa cantidades peligrosas tipo '750 g de queso de freír')
+                            grams = db.grams_from_ingredient_string(ing)
+                        except Exception:
+                            grams = None
                     if not grams or float(grams) <= cap:
                         continue
                     factor = cap / float(grams)
@@ -13796,6 +13801,11 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
                         continue
                     mc = db.macros_from_ingredient_string(ing) or {}
                     grams = mc.get("grams")
+                    if not grams:  # [P3-CAP-GRAMS-FALLBACK · 2026-06-28] nombre no resuelto → gramos LÍDERES del string
+                        try:       # (atrapa '750 g de queso de freír' que el cap por-catálogo dejaba pasar = peligroso)
+                            grams = db.grams_from_ingredient_string(ing)
+                        except Exception:
+                            grams = None
                     if not grams or float(grams) <= cap:
                         continue
                     factor = cap / float(grams)
