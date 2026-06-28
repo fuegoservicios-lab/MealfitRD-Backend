@@ -8790,6 +8790,10 @@ RECIPE_COHERENCE_AUTOFIX = _env_bool("MEALFIT_RECIPE_COHERENCE_AUTOFIX", True)
 # macros) → dropear. Conservador: solo dropea basura pura/incongruente clara; NUNCA deja una comida vacía;
 # recalcula macros de la comida tocada. Default ON. Rollback: =false. tooltip-anchor: P3-GEN-SANITY-AUTOFIX
 GEN_SANITY_AUTOFIX_ENABLED = _env_bool("MEALFIT_GEN_SANITY_AUTOFIX", True)
+# [P1-NIGHT-RICE-AUTOFIX · 2026-06-27] Autofix determinista del "arroz de noche" (G4): reescribe arroz simple en
+# la cena por tubérculo nocturno ANTES del reviewer → evita el retry más común del gate P1-SLOT-APPROPRIATENESS
+# (ahorra una regeneración completa de tokens). El gate queda como backstop. Flip a False revierte a solo-gate.
+NIGHT_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_NIGHT_RICE_AUTOFIX", True)
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
@@ -13755,6 +13759,80 @@ def _generation_sanity_autofix(plan, db=None) -> int:
         return 0
 
 
+# [P1-NIGHT-RICE-AUTOFIX · 2026-06-27] Tubérculos nocturnos que sustituyen el "arroz de noche" en la cena
+# (rotación por día para variedad cross-day). Solo se autofixea el ARROZ simple — moro/locrio/morito (platos
+# compuestos donde el arroz es integral al plato) se dejan al gate (raros; reescribir su nombre quedaría torpe).
+_NIGHT_RICE_SUB_ROTATION = ("Batata", "Yuca", "Casabe", "Ñame", "Auyama")
+# arroz cocido ~28g carb/100g vs tubérculo hervido ~20g/100g → ×1.4 para preservar la carga de carbos (el motor
+# de macros corre DESPUÉS y termina de cuadrar).
+_NIGHT_RICE_CARB_FACTOR = 1.4
+_NIGHT_RICE_NAME_RE = _re.compile(r"\b(arroz\s+(?:blanco|integral|guisado|al\s+vapor)|arroz)\b", _re.I)
+
+
+def _night_rice_autofix(days: list, db=None) -> int:
+    """[P1-NIGHT-RICE-AUTOFIX · 2026-06-27] (audit G4) Autofix DETERMINISTA del "arroz de noche": reescribe el
+    ARROZ simple de la CENA por un tubérculo nocturno (batata/yuca/casabe, rotado por día) — ingrediente Y NOMBRE
+    — corre ANTES del macro engine para que el motor dimensione el tubérculo y el reviewer (gate
+    P1-SLOT-APPROPRIATENESS) NO dispare el retry de 'arroz de noche' (la causa #1 de retries → ahorra una
+    regeneración completa de tokens). NO toca moro/locrio/morito (platos compuestos → se dejan al gate; raros).
+    Respeta las exclusiones de modificadores (harina/leche/vinagre de arroz). Carb-matched (~×1.4), idempotente
+    (tras el fix el nombre ya no dice 'arroz'), fail-safe. El gate sigue como backstop. Gateado por
+    NIGHT_RICE_AUTOFIX_ENABLED. tooltip-anchor: P1-NIGHT-RICE-AUTOFIX"""
+    if not NIGHT_RICE_AUTOFIX_ENABLED:
+        return 0
+    try:
+        from constants import canonical_slot_key, _SLOT_RICE_EXCLUDE, strip_accents as _sa
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        fixed = 0
+        for di, day in enumerate(days or []):
+            if not isinstance(day, dict):
+                continue
+            for m in day.get("meals", []) or []:
+                if not isinstance(m, dict):
+                    continue
+                if canonical_slot_key(m.get("meal", "")) != "cena":
+                    continue
+                name = str(m.get("name") or "")
+                name_low = _sa(name.lower())
+                if "arroz" not in name_low or any(_ex in name_low for _ex in _SLOT_RICE_EXCLUDE):
+                    continue  # sin arroz en el nombre, o es 'harina/leche de arroz' (modificador) → no tocar
+                sub = _NIGHT_RICE_SUB_ROTATION[di % len(_NIGHT_RICE_SUB_ROTATION)]
+                _sub_low = _sa(sub.lower())
+                ings = m.get("ingredients")
+                if not isinstance(ings, list):
+                    continue
+                _changed = False
+                for j, ing in enumerate(ings):
+                    ing_low = _sa(str(ing).lower())
+                    if "arroz" not in ing_low or any(_ex in ing_low for _ex in _SLOT_RICE_EXCLUDE):
+                        continue
+                    if _sub_low in ing_low:  # ya es el tubérculo → idempotencia
+                        continue
+                    try:
+                        _g = db.grams_from_ingredient_string(str(ing)) or 0
+                    except Exception:
+                        _g = 0
+                    _new_g = int(round(_g * _NIGHT_RICE_CARB_FACTOR)) if _g > 0 else 150
+                    ings[j] = f"{_new_g} g de {sub}"
+                    _changed = True
+                _new_name = _NIGHT_RICE_NAME_RE.sub(sub, name)
+                if _new_name != name:
+                    m["name"] = _new_name
+                    _changed = True
+                if _changed:
+                    try:
+                        _truth_up_meal_macros_from_strings(m, db)
+                    except Exception:
+                        pass
+                    fixed += 1
+        return fixed
+    except Exception as _nra_e:
+        logger.warning(f"[P1-NIGHT-RICE-AUTOFIX] falló (no bloquea): {type(_nra_e).__name__}: {_nra_e}")
+        return 0
+
+
 def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict, db=None) -> int:
     """[P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura) Re-cierre FINAL del piso de proteína tras los caps
     clínicos. El closer del motor (_close_protein_gap_for_meal) corre DENTRO de _apply_macro_engine (PRE-cap) y es
@@ -14908,6 +14986,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 )
         except Exception as _mce:
             logger.warning(f"[P1-CLINICAL-MEAL-COUNT] enforcement en assemble falló (no bloquea): {type(_mce).__name__}: {_mce}")
+
+    # [P1-NIGHT-RICE-AUTOFIX · 2026-06-27] (audit G4) Reescribe el "arroz de noche" simple de la cena por un
+    # tubérculo nocturno ANTES del macro engine → el motor dimensiona el tubérculo y el reviewer no dispara el
+    # retry del gate P1-SLOT-APPROPRIATENESS (causa #1 de retries, p.ej. corr=fda748d8). El gate sigue como
+    # backstop. Determinista, idempotente, fail-safe.
+    if NIGHT_RICE_AUTOFIX_ENABLED:
+        try:
+            _nr_fixed = _night_rice_autofix(days)
+            if _nr_fixed:
+                logger.info(f"🕒 [P1-NIGHT-RICE-AUTOFIX] {_nr_fixed} cena(s) con 'arroz de noche' reescrita(s) "
+                            f"a tubérculo nocturno (batata/yuca/casabe) pre-reviewer.")
+        except Exception as _nra_c:
+            logger.warning(f"[P1-NIGHT-RICE-AUTOFIX] callsite en assemble falló (no bloquea): {type(_nra_c).__name__}: {_nra_c}")
 
     _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
 
