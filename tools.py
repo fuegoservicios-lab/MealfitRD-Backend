@@ -1118,6 +1118,42 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         except Exception as _cs_e:
             logger.warning(f"[P2-UPDATE-CONDITION-SUBST] condition-subst en modify falló (no bloquea): {type(_cs_e).__name__}: {_cs_e}")
 
+        # [P1-SWAP-PORTION-CAP · 2026-06-27] (paridad S1↔S4 chat-modify) Caps de porción DETERMINISTAS — DM2
+        # (almidón alto-IG) + bariátrica (queso ≤30g / yogurt ≤120g / fruta / aguacate / frutos secos + volumen del
+        # pouch). El chat-modify, igual que swap_meal, tenía TODOS los backstops MENOS los caps de porción → el LLM
+        # podía colar porciones de riesgo (5 lonjas de queso) al modificar un plato por chat. Solo RECORTAN (recuperan
+        # kcal escalando otros ingredientes → macro-safe); como el recorte de lácteo baja proteína, RE-CERRAMOS el
+        # piso del slot con proteína animal densa NO-láctea (espejo FASE A, max_add_g=90; renal → skip KDIGO).
+        # Idempotente, fail-open. tooltip-anchor: P1-SWAP-PORTION-CAP
+        try:
+            from graph_orchestrator import (cap_dm2_high_gi_portions as _cap_dm2_m,
+                                            cap_bariatric_portions as _cap_baria_m,
+                                            _close_protein_gap_for_meal as _close_pc_m,
+                                            _safe_high_density_proteins as _safe_pc_m)
+            from nutrition_db import IngredientNutritionDB as _CapDBm
+            _cap_form_m = dict(form_data or {})
+            if not _cap_form_m.get("medicalConditions") and not _cap_form_m.get("medical_conditions"):
+                _cap_form_m["medicalConditions"] = _hp.get("medicalConditions") or _hp.get("medical_conditions") or []
+            _cap_db_m = _CapDBm()
+            _wrap_m = [{"meals": [new_meal_data]}]
+            _ndm = _cap_dm2_m(_wrap_m, _cap_form_m, _cap_db_m)
+            _nbm = _cap_baria_m(_wrap_m, _cap_form_m, _cap_db_m)
+            _is_renal_m = bool((plan_data.get("renal_protein_cap") or {}).get("applied"))
+            if (_ndm or _nbm) and original_protein and not _is_renal_m:
+                _cur_pm = float(new_meal_data.get("protein") or 0)
+                if _cur_pm < 0.90 * float(original_protein):
+                    new_meal_data["_protein_closed"] = False
+                    _cands_pm = [c for c in _safe_pc_m(_clin_allergies, _cap_db_m, min_protein=18.0)
+                                 if not any(_t in str(c[1]).lower()
+                                            for _t in ("queso", "yogur", "leche", "ricotta", "cottage", "requeson"))]
+                    if _cands_pm:
+                        _close_pc_m(new_meal_data, float(original_protein), _cap_db_m, _cands_pm, max_add_g=90)
+            if _ndm or _nbm:
+                logger.info(f"🔒 [P1-SWAP-PORTION-CAP] plato de modify recortado: cap_dm2={_ndm} "
+                            f"cap_baria={_nbm} | day={day_number} meal={meal_type}")
+        except Exception as _pcm_e:
+            logger.warning(f"[P1-SWAP-PORTION-CAP] cap de porción en modify falló (no bloquea): {type(_pcm_e).__name__}: {_pcm_e}")
+
         # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Honestidad de nombre (proteína fantasma) +
         # detección de pareo fruta+salado — paridad con S1/swap. namefix determinista e idempotente; el clash
         # solo se loguea (advisory: el chat-modify no tiene retry barato y el cambio lo dirige el usuario).
