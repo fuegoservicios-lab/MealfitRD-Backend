@@ -206,6 +206,9 @@ def mark_regen_day_done(user_id: str, plan_id: str, day_index: int) -> bool:
     if not user_id or not plan_id:
         return False
     try:
+        import json as _json  # [P1-REGEN-DAY-IDEMPOTENCY-JSONFIX · 2026-06-28] _json era NameError aquí (el import
+        # de la línea 54 es local de OTRA función) → la marca de idempotencia fallaba SIEMPRE, y un retry del cliente
+        # tras corte de red re-corría el loop LLM y RE-COBRABA. Import local (mismo patrón que el otro callsite).
         key = _regen_day_dedup_kv_key(user_id, plan_id, day_index)
         execute_sql_write(
             """
