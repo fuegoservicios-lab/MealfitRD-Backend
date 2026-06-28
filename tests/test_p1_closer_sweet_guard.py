@@ -55,6 +55,28 @@ def test_savory_protein_into_savory_meal_ok():
     assert added > 0, "en plato salado SÍ debe cerrar el piso de proteína"
 
 
+def test_seafood_is_savory():
+    """[corr=713b8e84] el cerrador metió 'Piña con Ricotta y Cangrejo' — cangrejo/mariscos deben contar como
+    proteína SALADA para que el sweet-guard los bloquee en platos dulces."""
+    for sea in ("cangrejo", "langosta", "pulpo", "almeja", "mejillon", "jaiba"):
+        assert sea in g._MEAT_PROTEIN_HINT, sea
+
+
+def test_savory_override_ceviche_and_verde():
+    """Una preparación salada (ceviche, fruta VERDE/unripe, guiso) NO es postre aunque traiga un token dulce —
+    ahí SÍ va proteína de mar/carne."""
+    assert g._is_sweet_meal({"name": "Ceviche de Lechosa Verde con Limón y Cangrejo"}, _sa) is False
+    assert g._is_sweet_meal({"name": "Guineítos Verdes Salteados con Pollo"}, _sa) is False
+    # pero piña fresca (madura, sin override) SÍ es dulce → bloquea mariscos
+    assert g._is_sweet_meal({"name": "Piña Fresca con Queso Ricotta"}, _sa) is True
+
+
+def test_crab_blocked_from_sweet_pineapple():
+    sweet = _meal("Piña Fresca con Queso Ricotta")
+    cands = [(0.20, "Cangrejo", _Info("Cangrejo", 19)), (0.25, "Pechuga de pollo", _Info("Pechuga de pollo", 31))]
+    assert g._close_protein_gap_for_meal(sweet, 25, None, cands) == 0, "no debe meter cangrejo en un plato de piña dulce"
+
+
 def test_anchor():
     src = (g.__file__)
     import pathlib

@@ -11006,7 +11006,15 @@ _CLOSER_GENERIC_PROTEIN_WORDS = frozenset((
     "queso", "carne", "pescado", "filete", "pechuga", "yogur", "yogurt", "proteina", "proteína", "fresco", "blanco"))
 _MEAT_PROTEIN_HINT = ("pollo", "pavo", "cerdo", "res", "carne", "pescado", "atun", "atún",
                       "sardina", "camaron", "camarón", "tilapia", "lomo", "chuleta", "longaniza",
-                      "salmon", "salmón", "mero", "chillo", "bacalao", "calamar", "mariscos", "higado")
+                      "salmon", "salmón", "mero", "chillo", "bacalao", "calamar", "mariscos", "higado", "hígado",
+                      # [P1-CLOSER-SWEET-GUARD] mariscos: el cerrador metió "Piña con Ricotta y Cangrejo" (corr=713b8e84)
+                      "cangrejo", "jaiba", "langosta", "langostino", "pulpo", "almeja", "mejillon", "mejillón",
+                      "ostra", "ostion", "ostión", "concha", "salpicon", "salpicón")
+# [P1-CLOSER-SWEET-GUARD] Preparaciones SALADAS que anulan el marcador dulce: un "ceviche de lechosa VERDE" o un
+# "guiso" NO es postre aunque el nombre traiga una fruta/token dulce → ahí SÍ va proteína de mar/carne.
+_SWEET_MEAL_SAVORY_OVERRIDE = ("ceviche", "verde", "guisad", "saltead", "encebollad", "escabeche",
+                               "agridulce", "salpicon", "salpicón", "al vapor con", "ensalada de pollo",
+                               "ensalada de atun", "ensalada de atún")
 # [P1-CLOSER-COHERENCE · 2026-06-27] Marcadores de plato DULCE (postre/desayuno dulce): yogurt+fruta, avena+guineo,
 # batido, tortilla con fresas, etc. Si la comida es dulce, NUNCA inyectar proteína SALADA (camarón/pescado/carne) —
 # era el rechazo crítico (camarones en avena dulce / yogurt+lechosa). El piso de proteína va a las comidas saladas.
@@ -11023,6 +11031,8 @@ def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
     Conservador: solo mira el nombre (no ingredientes) para no falsos-positivos por un topping menor."""
     try:
         nlow = strip_accents_fn(str(meal.get("name", "")).lower())
+        if any(ov in nlow for ov in _SWEET_MEAL_SAVORY_OVERRIDE):
+            return False  # ceviche / fruta verde / guiso → preparación salada, no postre
         return any(mk in nlow for mk in _SWEET_MEAL_MARKERS)
     except Exception:
         return False
