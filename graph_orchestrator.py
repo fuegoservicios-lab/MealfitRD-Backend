@@ -9220,6 +9220,14 @@ SURGICAL_PROMOTE_REVALIDATE = _env_bool("MEALFIT_SURGICAL_PROMOTE_REVALIDATE", T
 # glucémico (`_critical_is_purely_glycemic`) Y no menciona otra preocupación de seguridad. Default True;
 # flip a False revierte al downgrade incondicional previo. Anchor: P1-DM2-GLYCEMIC-ONLY.
 DM2_DOWNGRADE_GLYCEMIC_ONLY = _env_bool("MEALFIT_DM2_DOWNGRADE_GLYCEMIC_ONLY", True)
+# [P1-BARIATRIC-CRITICAL-RETRY · 2026-06-28] Bariátrico: un rechazo CRÍTICO de ELECCIÓN DE COMIDA (porción/volumen/grano-
+# crudo/especia/azúcar) lo puede CORREGIR un retry con feedback (el revisor le devuelve las razones y se regenera surgical
+# las comidas ofensivas) → degradar a 'high' regenerable en vez de fallback INMEDIATO (hoy crítico→"end" = CERO retries).
+# El revisor RE-GATEA cada retry y, agotados los intentos, cae al fallback CURADO → cero pérdida de autoridad clínica.
+# Excluye los criticals NO-regenerables (allergen/renal/diet/schema por flag + embarazo/mercurio/celíaca/interacción
+# farmacológica por marca). Default True; rollback sin redeploy: MEALFIT_BARIATRIC_CRITICAL_SOFT_REJECT=false → crítico
+# bariátrico vuelve a fallback inmediato.
+BARIATRIC_CRITICAL_SOFT_REJECT = _env_bool("MEALFIT_BARIATRIC_CRITICAL_SOFT_REJECT", True)
 # [P2-FOLD-RESTRICTION-ALIASES · 2026-06-16] (gap-audit P2-15) Defensa-en-profundidad latente: pliega
 # intolerances/restrictions/foodRestrictions → `allergies` en _merge_other_text_fields, para simetría con
 # `_detect_restricted_tokens` (que YA lee esos 6 campos para el fallback). El wizard es-DO actual NO emite
@@ -9756,6 +9764,16 @@ def _is_renal_condition(form_data) -> bool:
 def _is_diabetes_condition(form_data) -> bool:
     """[P3-CONDITION-RULES] True si el perfil declara diabetes/prediabetes (regla ADA 2026)."""
     return any(any(t in c for t in _DIABETES_CONDITION_TERMS) for c in _condition_strings(form_data))
+
+
+def _is_bariatric_condition(form_data) -> bool:
+    """[P1-BARIATRIC-CRITICAL-RETRY · 2026-06-28] True si el perfil declara cirugía bariátrica (mismo SSOT de términos
+    que cap_bariatric_portions). Fail-safe: import roto → False (no degrada el crítico, va a fallback)."""
+    try:
+        from constants import BARIATRIC_CONDITION_TERMS as _BT
+    except Exception:
+        return False
+    return any(any(t in c for t in _BT) for c in _condition_strings(form_data))
 
 
 def _cap_macros_dict_renal(md, cap_g: float, reassign_to: str):
@@ -10684,6 +10702,35 @@ def _critical_is_purely_glycemic(issues) -> bool:
         if any(g in t for g in _GLYCEMIC_MARKERS):
             glyc = True
     return glyc
+
+
+# [P1-BARIATRIC-CRITICAL-RETRY · 2026-06-28] Marcas de criticals bariátricos NO-regenerables: concerns CONTEXTUALES que
+# NO cambian entre intentos (embarazo/lactancia/mercurio/celíaca/interacción farmacológica). allergen/renal/diet/schema ya
+# se excluyen por flag aguas arriba. NO incluye porción/volumen/grano-crudo/especia/azúcar (esas SÍ las corrige el LLM).
+# Marcas sin acento (los issues se comparan accent-stripped).
+_BARIATRIC_NONREGENERABLE_MARKERS = (
+    "embaraz", "lactancia", "mercurio", "celiac",
+    "interaccion", "medicament", "warfarina", "metformina", "anticoagulante",
+)
+
+
+def _critical_is_bariatric_regenerable(issues) -> bool:
+    """[P1-BARIATRIC-CRITICAL-RETRY] True si el crítico bariátrico es una violación de ELECCIÓN DE COMIDA que un retry con
+    feedback puede corregir (porción/volumen/grano-crudo/especia/azúcar), y NINGUNA marca contextual no-regenerable
+    (embarazo/mercurio/celíaca/interacción). Conservador: issues vacío → False (no degradar → fallback)."""
+    if not issues:
+        return False
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    for raw in issues:
+        t = strip_accents(str(raw).lower())
+        if any(m in t for m in _BARIATRIC_NONREGENERABLE_MARKERS):
+            return False
+    return True
 
 
 # [P3-FOOD-SAFETY · 2026-06-13] Seguridad alimentaria determinista: el huevo es un alimento
@@ -18693,6 +18740,26 @@ Responde ÚNICAMENTE con el JSON de revisión.
                 and _is_diabetes_condition(form_data)):
             logger.warning("🩸 [P3-CONDITION-RULES] DM2: rechazo glucémico CRÍTICO degradado a 'high' "
                            "→ entrega el plan real (con fibra ADA) + advertencia, no fallback matemático.")
+            severity = "high"
+
+        # [P1-BARIATRIC-CRITICAL-RETRY · 2026-06-28] Bariátrico: un crítico de ELECCIÓN DE COMIDA (porción/volumen/grano-
+        # crudo/especia/azúcar) lo puede CORREGIR un retry con feedback (el revisor le devuelve las razones vía
+        # invoke_planner y se regeneran SURGICAL solo las comidas ofensivas vía _affected_days) → degradar a 'high'
+        # (regenerable) en vez de fallback INMEDIATO (hoy crítico→"end" = CERO retries; los "4 intentos" del log eran 4
+        # generaciones independientes muriendo al primer crítico). El revisor RE-GATEA cada retry y, agotados los intentos
+        # (MAX_ATTEMPTS), `_apply_critical_review_guardrails` cae al fallback CURADO → CERO pérdida de autoridad clínica
+        # (no se debilita el revisor; solo se le dan 1-2 intentos dirigidos antes de la red). Excluye los criticals NO-
+        # regenerables: allergen/renal/diet/schema (por flag, idéntico a DM2) + embarazo/mercurio/celíaca/interacción (por
+        # marca, _critical_is_bariatric_regenerable). `elif`: si el gate DM2 ya degradó (comórbido DM2+bariátrico), no re-
+        # procesa. Knob MEALFIT_BARIATRIC_CRITICAL_SOFT_REJECT.
+        elif (BARIATRIC_CRITICAL_SOFT_REJECT and CONDITION_RULES_ENABLED and severity == "critical"
+                and not plan.get("_schema_invalid") and not _had_allergen_critical
+                and not _had_renal_critical and not _had_diet_critical
+                and _critical_is_bariatric_regenerable(issues)
+                and _is_bariatric_condition(form_data)):
+            logger.warning("🔁 [P1-BARIATRIC-CRITICAL-RETRY] Bariátrico: crítico de elección de comida degradado a 'high' "
+                           "→ retry quirúrgico con feedback antes del fallback (el revisor re-gatea cada intento). "
+                           f"Razones: {(issues or [])[:2]}")
             severity = "high"
 
         result = {
