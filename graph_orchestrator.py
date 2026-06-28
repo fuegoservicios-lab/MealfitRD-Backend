@@ -11353,12 +11353,17 @@ def _try_scale_existing_protein(meal: dict, target_protein: float, db, strip_acc
             return 0
         _, idx, mc = best
         cur_ing_p = float(mc["protein"])
-        factor = min((cur_ing_p + gap) / cur_ing_p, scale_max)
+        # [P3-PROTEIN-CLOSER-SCALE-FIRST] Solo crecer si cierra el gap COMPLETO dentro del clamp 2× + headroom; si no,
+        # return 0 → cae al append (que cierra del todo). Antes el clamp dejaba un crecimiento PARCIAL + marcaba
+        # _protein_closed → el gap quedaba abierto (déficit del piso en bariátrica). Cierre completo o nada.
+        factor_needed = (cur_ing_p + gap) / cur_ing_p
+        if factor_needed > scale_max:
+            return 0  # crecer no cierra el gap completo → append
+        factor = factor_needed
         if slot_cal_target and slot_cal_target > 0 and float(mc.get("kcal") or 0) > 0:
             _head = slot_cal_target - _meal_macro_num(meal.get("cals"))
-            if _head <= 0:
-                return 0
-            factor = min(factor, 1.0 + _head / float(mc["kcal"]))
+            if _head <= 0 or (1.0 + _head / float(mc["kcal"])) < factor_needed:
+                return 0  # sin headroom para cerrar completo creciendo → append
         if factor <= 1.01:
             return 0  # sin margen real para crecer
         _d = factor - 1.0
@@ -14210,10 +14215,15 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
             from nutrition_db import IngredientNutritionDB
             db = IngredientNutritionDB()
         from constants import strip_accents as _sa
-        _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=18.0)
-        # Solo animal DENSA NO-LÁCTEA: los lácteos ya están capeados; re-añadirlos los re-recortaría.
-        _DAIRY = ("queso", "yogur", "yogurt", "leche", "ricotta", "cottage", "requeson")
-        _cands = [c for c in _cands if not any(_t in _sa(str(c[1]).lower()) for _t in _DAIRY)]
+        # [P3-PROTEIN-FLOOR-SWEET-DAIRY · 2026-06-28] En platos DULCES (yogur+fruta, avena) la proteína COHERENTE es
+        # LÁCTEA — el sweet-guard del closer bloquea carne salada ahí, así que SIN candidatos lácteos FASE A no podía
+        # cerrar el piso en meriendas dulces (déficit recurrente en bariátrica: Día 61/80, band 0.25). Incluimos YOGUR
+        # (densidad media; cap bariátrico 120g, el add ≤90g es seguro) ADEMÁS de la carne densa. Excluimos QUESOS/leche
+        # (cap 30g → 90g los excedería; los caps NO re-corren tras FASE A). En platos SALADOS el closer prefiere la
+        # carne densa por categoría; el yogur queda para los dulces vía el no_cook/dairy-egg + sweet-guard.
+        _cands = _safe_high_density_proteins(form_data.get("allergies"), db, min_protein=10.0)
+        _DAIRY_EXCLUDE = ("queso", "ricotta", "cottage", "requeson", "leche")  # quesos (cap 30g) + leche; yogur SÍ entra
+        _cands = [c for c in _cands if not any(_t in _sa(str(c[1]).lower()) for _t in _DAIRY_EXCLUDE)]
         if not _cands:
             return 0
         # [P1-BARIATRIC-PROTEIN-PORTION] En bariátrica cada inyección por comida se limita a ≤BARIATRIC_PROTEIN_

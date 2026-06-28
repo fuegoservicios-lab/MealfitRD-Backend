@@ -65,15 +65,18 @@ def test_no_deficit_no_change(monkeypatch):
     assert added == 0
 
 
-def test_candidates_exclude_dairy(monkeypatch):
+def test_candidates_exclude_cheeses_allow_yogurt(monkeypatch):
+    # [P3-PROTEIN-FLOOR-SWEET-DAIRY · 2026-06-28] Los QUESOS/leche (cap 30g → 90g los excedería) NO son candidatos;
+    # pero el YOGUR SÍ (cap 120g, add ≤90g seguro) — es la proteína coherente para cerrar el piso en platos dulces.
     cap = {}
     g = _wire(monkeypatch, capture=cap)
     days = [{"day": 1, "meals": [{"meal": "Almuerzo", "protein": 5, "cals": 400}]}]
     g._repair_protein_floor_post_caps(days, _NUT, {"medicalConditions": ["Cirugía Bariátrica"]}, db=object())
     names = [str(c[1]).lower() for c in cap.get("cands", [])]
     assert names, "el closer debió recibir candidatos"
-    assert not any(("queso" in n or "yogur" in n or "leche" in n or "ricotta" in n) for n in names), \
-        f"los candidatos del re-cierre NO deben ser lácteos (ya capeados): {names}"
+    assert not any(("queso" in n or "ricotta" in n or "cottage" in n or "leche" in n) for n in names), \
+        f"los QUESOS/leche NO deben ser candidatos (cap 30g): {names}"
+    assert any("yogur" in n for n in names), f"el yogur SÍ debe entrar (proteína coherente para dulces): {names}"
     assert any("pollo" in n or "pescado" in n for n in names)
 
 
