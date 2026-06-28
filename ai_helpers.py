@@ -179,6 +179,19 @@ _LOW_DENSITY_AS_MAIN = {
     "yogurt",  # regular ~4g prot/100g (NO "yogurt griego" — ése es alto en proteína, exact-match)
 }
 
+# [P1-BARIATRIC-DENSE-ANCHOR · 2026-06-28] Quesos de RELLENO / alto-grasa / bajo-valor-proteico-por-porción que el pouch
+# bariátrico NO debe usar como proteína PRINCIPAL (corr=3b318e57: el LLM ancló en "Salteado de Queso de Freír" — relleno
+# + frito — que el swap NO cazaba porque no estaba en _LOW_DENSITY_AS_MAIN). Se UNE al set global SOLO si _is_bariatric
+# (NO global: gain_muscle puede usar queso como main legítimamente). Calibrado por review CLÍNICA adversaria (ASMBS):
+# EXCLUYE solo los quesos pobres-como-ancla; deliberadamente NO incluye cottage/ricotta/yogurt griego/CLARAS — esas son
+# anclas LEGÍTIMAS post-bariátricas (húmedas, densas en proteína, mejor toleradas que el pollo seco) y NO se degradan
+# aquí. Nombres EXACTOS del catálogo (constants.py DOMINICAN_PROTEINS) en minúscula+strip_accents (exact-match).
+# tooltip-anchor: P1-BARIATRIC-DENSE-ANCHOR
+_BARIATRIC_LOW_DENSITY_AS_MAIN = {
+    "queso de freir", "queso blanco", "queso mozzarella",
+    "queso de hoja", "queso parmesano", "queso cheddar", "queso gouda",
+}
+
 
 def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, user_id: str = None, rejection_reasons: list = None) -> str:
     """Implementa Inversión de Control Determinista para evitar Mode Collapse en el LLM."""
@@ -547,6 +560,8 @@ def get_deterministic_variety_prompt(history_text: str, form_data: dict = None, 
         def _should_replace_main(_p):
             _pl = strip_accents(_p.lower())
             if _pl in _LOW_DENSITY_AS_MAIN:
+                return True
+            if _is_bariatric and _pl in _BARIATRIC_LOW_DENSITY_AS_MAIN:  # [P1-BARIATRIC-DENSE-ANCHOR] quesos-relleno
                 return True
             if _is_bariatric and any(_kw in _pl for _kw in _PROCESSED_MEAT_KEYWORDS):
                 return True
