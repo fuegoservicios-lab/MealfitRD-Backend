@@ -21,10 +21,11 @@ from graph_orchestrator import _apply_portion_quantization
 
 # ---------- Helper offline: redondeo por tipo de unidad ----------
 
-def test_huevo_discreto_a_medio():
+def test_huevo_discreto_a_entero():
+    # [P3-HUMAN-WHOLE-DISCRETE · 2026-06-28] huevo es indivisible → ENTERO (antes 0.5; medio huevo no es cocinable).
     out, fac = q("0.66 huevos enteros")
-    assert out == "0.5 huevos enteros"
-    assert fac < 1.0
+    assert out == "1 huevos enteros"
+    assert fac > 1.0
 
 
 def test_papa_redondea_a_entero():
@@ -33,9 +34,10 @@ def test_papa_redondea_a_entero():
     assert "(600g)" in out  # hint escalado + integerizado
 
 
-def test_rebanada_a_medio():
+def test_rebanada_a_entero():
+    # [P3-HUMAN-WHOLE-DISCRETE · 2026-06-28] rebanada de pan → ENTERO (antes 3.5; media rebanada no es práctica).
     out, _ = q("3.74 rebanadas de pan integral (112.08g)")
-    assert out.startswith("3.5 rebanadas")
+    assert out.startswith("4 rebanadas")
 
 
 def test_taza_a_cuarto():
@@ -148,16 +150,17 @@ class _FakeDB:
 
 
 def test_apply_quantization_ajusta_macros_por_delta():
-    # 0.66 huevos (~33g) → 0.5 huevos (~25g): el delta de macros se resta.
+    # [P3-HUMAN-WHOLE-DISCRETE · 2026-06-28] 0.66 huevos → 1 huevo entero (sube): el delta de macros se SUMA
+    # consistentemente (antes el huevo iba a 0.5 y bajaba; ahora va a entero y sube — el mecanismo de delta es el mismo).
     meal = {"name": "Tortilla", "ingredients": ["0.66 huevos enteros"],
             "protein": 30, "carbs": 5, "fats": 10, "cals": 250}
     plan = {"days": [{"day": 1, "meals": [meal]}]}
     n = _apply_portion_quantization(plan, _FakeDB())
     assert n == 1
-    assert meal["ingredients"][0] == "0.5 huevos enteros"
-    # macros bajaron (porción menor) pero siguen consistentes
-    assert meal["protein"] < 30
-    assert meal["cals"] < 250
+    assert meal["ingredients"][0] == "1 huevos enteros"
+    # macros subieron (porción mayor) pero siguen consistentes
+    assert meal["protein"] > 30
+    assert meal["cals"] > 250
     assert meal["macros"][0] == f"P:{meal['protein']}g"
 
 

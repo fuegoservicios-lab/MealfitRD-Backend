@@ -190,6 +190,15 @@ _THIRD, _TWOTHIRD = 1.0 / 3.0, 2.0 / 3.0
 _CUP_FRACS = (0.0, 0.25, _THIRD, 0.5, _TWOTHIRD, 0.75, 1.0)
 _SPOON_FRACS = (0.0, 0.25, 0.5, 0.75, 1.0)
 _COUNT_FRACS = (0.0, 0.5, 1.0)
+# [P3-HUMAN-WHOLE-DISCRETE · 2026-06-28] Algunos discretos NO se parten: medio huevo / media rebanada / 2.5 huevos
+# son incocinables. Estos van a ENTERO. (batata/plátano/tomate/cebolla/aguacate/guineo SÍ se parten → conservan 0.5.)
+_COUNT_FRACS_WHOLE = (0.0, 1.0)
+_WHOLE_ONLY_TOKENS = ("huevo", "rebanada", "tostada", "galleta", "pan integral", "pan blanco", "tortilla", "wrap")
+# [P3-HUMAN-LEAF-CUP · 2026-06-28] Hojas en taza: 1/3 y 2/3 de taza de lechuga son irreales ("3.33 taza"). Sin tercios.
+_CUP_FRACS_LEAF = (0.0, 0.5, 1.0)
+_LEAF_TOKENS = ("lechuga", "espinaca", "repollo", "berro", "rucula", "arugula", "kale", "acelga", "hoja")
+_QUANTIZE_DISCRETE_WHOLE_ONLY = os.environ.get("MEALFIT_QUANTIZE_DISCRETE_WHOLE_ONLY", "true").strip().lower() in ("1", "true", "yes", "on")
+_QUANTIZE_LEAF_CUP_NO_THIRDS = os.environ.get("MEALFIT_QUANTIZE_LEAF_CUP_NO_THIRDS", "true").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _detect_kind(raw: str) -> str:
@@ -262,11 +271,17 @@ def quantize_ingredient_string(s: str):
         if new_qty <= 0:  # <2.5 g: ya es pesable en báscula de precisión, no inflar
             return _integerize_gram_hint(raw), 1.0
     elif kind == "cup":
-        new_qty = _snap_qty(qty, _CUP_FRACS)
+        _fr = _CUP_FRACS
+        if _QUANTIZE_LEAF_CUP_NO_THIRDS and any(t in low for t in _LEAF_TOKENS):
+            _fr = _CUP_FRACS_LEAF  # [P3-HUMAN-LEAF-CUP] hojas: sin tercios ('3.33 taza lechuga')
+        new_qty = _snap_qty(qty, _fr)
     elif kind == "spoon":
         new_qty = _snap_qty(qty, _SPOON_FRACS)
     else:  # count (discreto: huevo/papa/rebanada/fruta)
-        new_qty = _snap_qty(qty, _COUNT_FRACS)
+        _fr = _COUNT_FRACS
+        if _QUANTIZE_DISCRETE_WHOLE_ONLY and any(t in low for t in _WHOLE_ONLY_TOKENS):
+            _fr = _COUNT_FRACS_WHOLE  # [P3-HUMAN-WHOLE-DISCRETE] huevo/pan/rebanada → entero (nunca 0.5/2.5)
+        new_qty = _snap_qty(qty, _fr)
     if abs(new_qty - qty) < 1e-4:
         return _integerize_gram_hint(raw), 1.0
     factor = new_qty / qty

@@ -8902,6 +8902,9 @@ CLOSER_DISH_COHERENCE_ENABLED = _env_bool("MEALFIT_CLOSER_DISH_COHERENCE", True)
 # pollo) en vez del primer token genérico ("queso"). Cierra el bug "batido con ricotta recibe un 2º queso
 # (mozzarella)". Flip a False revierte al match por primer-token. tooltip-anchor: P1-CLOSER-COHERENCE
 CLOSER_CONGRUENCE_FULLNAME = _env_bool("MEALFIT_CLOSER_CONGRUENCE_FULLNAME", True)
+# [P3-SWEET-GUARD-INGREDIENTS · 2026-06-28] El sweet-guard mira también los INGREDIENTES (no solo el nombre) para
+# detectar plato dulce → cerró 'Yogurt con Lechosa y Chivo' (nombre sin marcador dulce). Flip False = solo nombre.
+SWEET_GUARD_CHECK_INGREDIENTS = _env_bool("MEALFIT_SWEET_GUARD_CHECK_INGREDIENTS", True)
 
 # [P3-SUPPLEMENT-ADVICE · 2026-06-13] A partir de los gaps del panel de micros (vit D/calcio/
 # hierro/B12), genera recomendaciones de suplementación accionables (suplemento+dosis+alimentos
@@ -8973,6 +8976,11 @@ VARIETY_REPEAT_GATE_LAST_ATTEMPT_ADVISORY = _env_bool("MEALFIT_VARIETY_REPEAT_GA
 # validador duro (review_plan_node) rechaza/reintenta si el día queda < floor_pct del target.
 PROTEIN_FLOOR_ENABLED = _env_bool("MEALFIT_PROTEIN_FLOOR", True)
 PROTEIN_FLOOR_FILL_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_FILL_PCT", 0.92)  # closer determinista
+# [P3-PROTEIN-CLOSER-MIN-THRESHOLD · 2026-06-28] Umbral mínimo para PEGAR una proteína en el closer: por debajo de
+# esto, el add es trivial/relleno (10g camarón ≈2g prot, 25g chivo ≈6g) y daña la coherencia → no se añade (el piso
+# se cubre donde haya espacio + REPAIR_PROTEIN_POST_CAPS). Rollback al comportamiento previo: GRAMS=10, PROTEIN_G=0.
+PROTEIN_CLOSER_MIN_GRAMS = _env_int("MEALFIT_PROTEIN_CLOSER_MIN_GRAMS", 20, validator=lambda v: 0 <= v <= 100)
+PROTEIN_CLOSER_MIN_PROTEIN_G = _env_float("MEALFIT_PROTEIN_CLOSER_MIN_PROTEIN_G", 6.0)
 # [P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura, auditoría workflow) Re-cierre FINAL del piso de
 # proteína DESPUÉS de los caps clínicos. Raíz del déficit recurrente (64g/80g): el closer del motor corre PRE-cap;
 # los caps DM2/bariátrica recortan lácteos (queso=proteína) y recuperan kcal escalando carbos/veg → el % de
@@ -11041,14 +11049,24 @@ _SWEET_MEAL_MARKERS = ("yogur", "yogurt", "avena", "batido", "smoothie", "licuad
 
 
 def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
-    """[P1-CLOSER-COHERENCE] True si el NOMBRE de la comida indica un contexto DULCE (fruta dulce, yogurt, avena,
-    batido, panqueque…) donde una proteína salada (camarón/pescado/carne) sería organolépticamente aberrante.
-    Conservador: solo mira el nombre (no ingredientes) para no falsos-positivos por un topping menor."""
+    """[P1-CLOSER-COHERENCE] True si la comida es un contexto DULCE (fruta dulce, yogurt, avena, batido, panqueque…)
+    donde una proteína salada (camarón/pescado/carne) sería organolépticamente aberrante.
+    [P3-SWEET-GUARD-INGREDIENTS · 2026-06-28] Antes solo miraba el NOMBRE → 'Yogurt Griego con Lechosa y Chivo' pasaba
+    si el nombre no traía marcador dulce; ahora también mira los INGREDIENTES (yogurt/avena/fruta dulce) — cerró el
+    caso real R2 (chivo en yogurt+lechosa). El override salado (ceviche/verde/guiso/ensalada de pollo) se chequea
+    primero para no falsos-positivos. Gateado por SWEET_GUARD_CHECK_INGREDIENTS."""
     try:
         nlow = strip_accents_fn(str(meal.get("name", "")).lower())
         if any(ov in nlow for ov in _SWEET_MEAL_SAVORY_OVERRIDE):
             return False  # ceviche / fruta verde / guiso → preparación salada, no postre
-        return any(mk in nlow for mk in _SWEET_MEAL_MARKERS)
+        if any(mk in nlow for mk in _SWEET_MEAL_MARKERS):
+            return True
+        if SWEET_GUARD_CHECK_INGREDIENTS:
+            ing_low = strip_accents_fn(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
+            if any(ov in ing_low for ov in _SWEET_MEAL_SAVORY_OVERRIDE):
+                return False
+            return any(mk in ing_low for mk in _SWEET_MEAL_MARKERS)
+        return False
     except Exception:
         return False
 
@@ -11389,7 +11407,14 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             grams = min(grams, int(_head / (chosen.kcal / 100.0))) if _head > 0 else 0
             if grams < 10:
                 return 0  # sin headroom calórico → no añadir aquí (el piso se cubre en otra comida con espacio)
-        grams = max(10, min(grams, max_add_g))
+        # [P3-PROTEIN-CLOSER-MIN-THRESHOLD · 2026-06-28] No PEGAR proteína TRIVIAL como ingrediente extra: el revisor
+        # y el usuario rechazaban "10g de camarones cocido" / "25g de chivo" tackeados con un paso robótico. Si la
+        # porción o su aporte proteico son triviales → NO añadir (el piso se cubre en comidas con espacio real;
+        # REPAIR_PROTEIN_POST_CAPS re-cierra cross-meal). Replica el piso de 15g que _protein_topup_meal ya tiene.
+        _p_contrib = grams * (float(getattr(chosen, "protein", 0) or 0) / 100.0)
+        if grams < PROTEIN_CLOSER_MIN_GRAMS or _p_contrib < PROTEIN_CLOSER_MIN_PROTEIN_G:
+            return 0
+        grams = max(PROTEIN_CLOSER_MIN_GRAMS, min(grams, max_add_g))
         f = grams / 100.0
         nm = str(chosen.name).lower()
         cook = "" if no_cook else " cocido"
@@ -11405,13 +11430,13 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
         rec = meal.get("recipe")
         if isinstance(rec, list):
-            # Nota SIN gramaje hardcodeado: el ingrediente (que puede re-escalarse en el trim/
-            # cuantización) es la fuente de verdad → la nota nunca se desfasa.
-            verb = "Añade" if no_cook else "Cocina e incorpora"
-            # [P1-CLOSER-COHERENCE] En comida ligera/batido el add REFUERZA la proteína (no es "fuente principal");
-            # decirlo "principal" en una merienda sonaba forzado. En plato fuerte sí es la fuente de proteína.
-            _role = "para reforzar la proteína de esta comida" if (no_cook or light) else "como fuente de proteína de esta comida"
-            meal["recipe"] = rec + [f"💪 {verb} el {nm} indicado en los ingredientes {_role}."]
+            # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28] Paso de receta NATURAL (no el robótico que delataba el
+            # relleno del solver). Sin gramaje hardcodeado (el ingrediente es la fuente de verdad tras el quantize).
+            if no_cook:
+                _step = f"Incorpora {nm} a la preparación y mezcla bien antes de servir."
+            else:
+                _step = f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
+            meal["recipe"] = rec + [f"💪 {_step}"]
         # [P2-DISH-COHERENCE] El closer acaba de meter `chosen` como proteína PRINCIPAL: refléjala
         # en el nombre si no estaba (no esconder la proteína principal del plato).
         _reflect_added_protein_in_name(meal, chosen.name, _sa)
@@ -13382,9 +13407,12 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         target_meal["macros"] = [f"P:{round(tp)}g", f"C:{round(tc)}g", f"G:{round(tf)}g"]
         rec = target_meal.get("recipe")
         if isinstance(rec, list):
-            verb = "Añade" if no_cook else "Cocina e incorpora"
-            target_meal["recipe"] = rec + [
-                f"💪 {verb} el {nm} indicado en los ingredientes (proteína magra de esta comida)."]
+            # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28] paso natural (no robótico).
+            if no_cook:
+                _step = f"Incorpora {nm} a la preparación y mezcla bien antes de servir."
+            else:
+                _step = f"Cocina {nm} a la plancha o hervido y sírvelo como proteína magra del plato."
+            target_meal["recipe"] = rec + [f"💪 {_step}"]
         # 2) quitar kcal_add/4 gramos de carbos → mantiene kcal CONSTANTE (reusa el carb-trim cuantizador)
         carbs_g_to_remove = kcal_add / 4.0
         new_carb_day_target = max(0.0, (day_c + c_add) - carbs_g_to_remove)

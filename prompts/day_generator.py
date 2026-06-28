@@ -33,6 +33,16 @@ REGLAS ESTRICTAS:
    - PREFIERE usar medidas caseras dominicanas siempre que sea posible (ej: "½ plátano verde", "1 taza de arroz", "2 lonjas de queso", "1 pechuga de pollo", "1 cda de aceite").
    - Si el ingrediente no se presta para medidas caseras, usa unidades métricas (g, oz, lb, ml).
    - PROHIBIDO ABSOLUTO: "pizcas", "ramitas", "chorritos" u otras medidas imprecisas.
+   - **UNIDADES ENTERAS EN DISCRETOS [P3-HUMAN-WHOLE-DISCRETE · 2026-06-28]**: los alimentos que se cuentan por pieza
+     INDIVISIBLE van en ENTEROS, NUNCA en fracciones raras: "2 huevos"/"3 huevos" (NUNCA "2.5 huevos" ni "0.5 huevo"),
+     "1 rebanada de pan" (NUNCA "0.5 rebanada"), "1 tostada", "1 galleta". Lo que SÍ se parte (½ aguacate, ½ batata,
+     ½ plátano, ½ cebolla, ½ tomate, ½ guineo) puede ir en mitades. Hojas (lechuga/espinaca): tazas redondas (1, 2, 3),
+     nunca tercios ("3.33 tazas"). Para ajustar proteína/calorías cambia los GRAMOS de la proteína/almidón, no partas un huevo.
+   - **PROTEÍNA INTEGRADA, NO DE RELLENO [P3-PROTEIN-INTEGRATED · 2026-06-28]**: la proteína principal debe ser
+     COHERENTE con el plato e INTEGRADA en la preparación, no pegada como extra de última hora. PROHIBIDO meter
+     proteína SALADA (camarón, chivo, pescado, carne) en un plato DULCE (yogurt con fruta, avena, batido): ahí la
+     proteína va de yogurt griego, queso fresco/ricotta o frutos secos. Emite porciones de proteína REALES
+     (≥40-60g de carne/pescado por comida principal), nunca "10g de camarones" de adorno.
    - NO clones ingredientes en el mismo plato — consolida los DUPLICADOS del MISMO alimento en un solo renglón.
    - **CADA CONDIMENTO EN SU PROPIO RENGLÓN [P3-SALT-SEPARATE-LINE · 2026-06-22]**: NUNCA combines DOS
      alimentos distintos en un mismo renglón de `ingredients`. En particular SAL y PIMIENTA van SEPARADAS:

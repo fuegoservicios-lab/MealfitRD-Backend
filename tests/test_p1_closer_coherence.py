@@ -86,7 +86,9 @@ def test_d_blendable_cheeses_not_dropped():
 
 
 # ---- FIX E ----
-def test_e_light_meal_wording_reforzar():
-    assert "para reforzar la proteína de esta comida" in _SRC
-    # ya no se afirma "fuente principal" de forma incondicional en el closer ligero
+def test_e_light_meal_wording_natural():
+    # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28] el paso de receta ya NO usa "fuente principal" ni el robótico
+    # "incorpora el X indicado en los ingredientes para reforzar la proteína" → paso natural integrado.
     assert "como fuente principal de \n" not in _SRC
+    assert "indicado en los ingredientes para reforzar la proteína" not in _SRC
+    assert "Incorpora" in _SRC and "mezcla bien antes de servir" in _SRC
