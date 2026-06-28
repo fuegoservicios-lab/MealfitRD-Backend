@@ -11203,6 +11203,13 @@ _SWEET_MEAL_MARKERS = ("yogur", "yogurt", "avena", "batido", "smoothie", "licuad
 # matcheando "yogurt" (prefijo en boundary). Texto ya viene strip_accents. tooltip-anchor: P1-SWEET-MARKER-WORDBOUNDARY
 _SWEET_MARKER_RE = _re.compile(r"\b(" + "|".join(_re.escape(_m) for _m in _SWEET_MEAL_MARKERS) + r")")
 
+# [P1-FAT-TOPUP-SKIP-BEVERAGE · 2026-06-28] El day-kcal-floor / fat-topup añaden aceite de oliva a comidas SALADAS bajo
+# banda. `_is_sweet_meal` NO marca dulce a una BEBIDA salada-neutra ("leche tibia con canela", "infusión de manzanilla")
+# → el fix le metía aceite a un té/leche (incoherente; el revisor lo flageó como esteatorrea/inusual). Estos markers de
+# BEBIDA se saltan además del sweet-guard. tooltip-anchor: P1-FAT-TOPUP-SKIP-BEVERAGE
+_BEVERAGE_MEAL_MARKERS = ("infusion", "manzanilla", "leche tibia", "leche caliente", "bebida", "te de", "agua de",
+                          "cafe", "te verde", "te negro", "tisana")
+
 
 def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
     """[P1-CLOSER-COHERENCE] True si la comida es un contexto DULCE (fruta dulce, yogurt, avena, batido, panqueque…)
@@ -14500,6 +14507,8 @@ def _topup_healthy_fat_to_band_floor(meals: list, target_fats: float, target_kca
             txt = _sa_f((str(m.get("name", "")) + " " + " ".join(str(i) for i in (m.get("ingredients") or []))).lower())
             if any(t in txt for t in _FAT_PRESENT):
                 continue  # ya tiene grasa visible → no duplicar
+            if any(b in _sa_f(str(m.get("name", "")).lower()) for b in _BEVERAGE_MEAL_MARKERS):
+                continue  # [P1-FAT-TOPUP-SKIP-BEVERAGE] bebida/infusión → aceite incoherente
             cur_day_kcal = sum(_meal_macro_num(mm.get("cals")) for mm in meals)
             kcal_room = kcal_ceiling - cur_day_kcal
             if kcal_room < 45:  # <5g de grasa de headroom → no vale la pena / rompería kcal
@@ -14591,6 +14600,9 @@ def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dic
                 _txt = _sa_k((str(m.get("name", "")) + " " + " ".join(str(i) for i in (m.get("ingredients") or []))).lower())
                 if any(t in _txt for t in _FAT_PRESENT):
                     continue  # ya tiene grasa visible → no duplicar (coordina con FASE A fat-topup)
+                _nm_bev = _sa_k(str(m.get("name", "")).lower())
+                if any(b in _nm_bev for b in _BEVERAGE_MEAL_MARKERS):
+                    continue  # [P1-FAT-TOPUP-SKIP-BEVERAGE] bebida/infusión/leche tibia → aceite incoherente
                 room = ceiling - day_kcal
                 if room < 45:
                     break
