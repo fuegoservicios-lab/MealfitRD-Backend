@@ -52,6 +52,23 @@ try:
 except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a ON (seguro)
     MINOR_SAFETY_GATE_ENABLED = True
 
+# [P1-BARIATRIC-KCAL-CEILING · 2026-06-28] Techo calórico pouch-realista post-bariátrico. MEDIDO en vivo: el target =
+# TDEE completo (ej. 2203 kcal/95kg) ignora la capacidad física del pouch (~150-200mL) → el plan entrega lo que cabe
+# (~1700) → band kcal penaliza un target IRREAL. El techo alinea el denominador. Default 2000 (calibrado por review
+# clínica ASMBS: capea lo genuinamente irreal SIN inducir déficit/sarcopenia en el bariátrico estable en mantenimiento;
+# la app asume fase post-op establecida). Clamp [1600, 2200]. Gating (bariátrico, NO embarazo/menor/superávit, target>techo)
+# vive en get_nutrition_targets. Knobs auto-registrados en _KNOBS_REGISTRY. Anchor: P1-BARIATRIC-KCAL-CEILING.
+try:
+    from knobs import _env_bool as _nc_env_bool_baria, _env_int as _nc_env_int_baria
+    BARIATRIC_KCAL_CEILING_ENABLED = _nc_env_bool_baria("MEALFIT_BARIATRIC_KCAL_CEILING_ENABLED", True)
+    _BARIA_CEIL_RANGE = lambda v: 1600 <= v <= 2200  # noqa: E731 (inline, consistente con _MIN_KCAL_RANGE)
+    BARIATRIC_KCAL_CEILING_KCAL = _nc_env_int_baria(
+        "MEALFIT_BARIATRIC_KCAL_CEILING_KCAL", 2000, validator=_BARIA_CEIL_RANGE
+    )
+except Exception:  # pragma: no cover - knobs siempre disponible en prod; fail-safe a ON + 2000 (clínico conservador)
+    BARIATRIC_KCAL_CEILING_ENABLED = True
+    BARIATRIC_KCAL_CEILING_KCAL = 2000
+
 
 def _min_target_kcal(gender) -> int:
     """[P1-MIN-CALORIE-FLOOR · 2026-06-15] Piso clínico de calorías por sexo (mujer 1200 / hombre 1500).
@@ -1383,6 +1400,47 @@ def get_nutrition_targets(form_data: dict) -> dict:
         logger.warning(f"⚠️ [P1-MIN-CALORIE-FLOOR] Objetivo {_pre_floor_calories} kcal < piso clínico "
                        f"{_min_kcal} kcal ({gender}) → elevado al piso. Requiere revisión profesional (FS9).")
 
+    # [P1-BARIATRIC-KCAL-CEILING · 2026-06-28] TECHO calórico pouch-realista. MEDIDO en vivo: el target = TDEE completo
+    # (ej. 2203 kcal/95kg) ignora la capacidad física del pouch (~150-200mL) → el plan entrega ~lo que cabe (1600-1950)
+    # → band kcal penaliza un DENOMINADOR irreal. El techo alinea el target con la realidad fisiológica. Corre tras los
+    # pisos (embarazo/menor/min_kcal) y ANTES de original_target_calories (1395) + ambas calculate_macros (1398/1401) →
+    # dashboard Y plan usan el target capeado con UNA recompute. Gating (calibrado por review clínica ASMBS):
+    #   (a) bariátrico (BARIATRIC_CONDITION_TERMS, mismo SSOT que P1-BARIATRIC-PROTEIN-TARGET);
+    #   (b) NO embarazo NI menor — safety floors GANAN (su requerimiento energético sube);
+    #   (c) NO metas de SUPERÁVIT (gain_muscle/performance) — forzar déficit a quien pidió ganar masa es iatrogénico;
+    #   (d) target > techo — nunca SUBE kcal (lose_fat ya en déficit no se re-capea).
+    # Default 2000 (NO 1800): la app asume fase post-op ESTABLECIDA (graph_orchestrator ~17604) donde el pouch ya se
+    # adaptó; 2000 capea lo genuinamente irreal (TDEE 2200+) sin inducir déficit/sarcopenia en el bariátrico estable en
+    # mantenimiento legítimo. El form NO captura etapa post-op → 2000 + veto-superávit es la mitigación conservadora.
+    # tooltip-anchor: P1-BARIATRIC-KCAL-CEILING
+    _bariatric_kcal_ceiling_applied = None
+    _goal_is_surplus = GOAL_ADJUSTMENTS.get(goal, 0.0) > 0  # gain_muscle (+0.15) / performance (+0.10)
+    if (BARIATRIC_KCAL_CEILING_ENABLED and not _pregnancy_safety and not _minor_safety and not _goal_is_surplus):
+        _is_baria_ceiling = False
+        try:
+            from constants import BARIATRIC_CONDITION_TERMS as _BARIA_CT, strip_accents as _sa_ct
+            _blob_ct = _sa_ct(
+                " ".join(str(x) for x in (form_data.get("medicalConditions") or []))
+                + " " + str(form_data.get("otherConditions") or "")
+            ).lower()
+            _is_baria_ceiling = any(t in _blob_ct for t in _BARIA_CT)
+        except Exception:
+            _is_baria_ceiling = False
+        if _is_baria_ceiling and target_calories > BARIATRIC_KCAL_CEILING_KCAL:
+            _pre_ceiling = target_calories
+            target_calories = BARIATRIC_KCAL_CEILING_KCAL
+            _bariatric_kcal_ceiling_applied = {
+                "applied": True,
+                "pre_ceiling_calories": _pre_ceiling,
+                "ceiling_to": BARIATRIC_KCAL_CEILING_KCAL,
+                "note": ("🏥 Post-cirugía bariátrica: tu mantenimiento teórico (TDEE) es " + str(_pre_ceiling)
+                         + " kcal, pero la capacidad del pouch hace inalcanzable ese volumen de comida. El objetivo del "
+                         "plan se ajusta a " + str(BARIATRIC_KCAL_CEILING_KCAL) + " kcal/día (ingesta realista). Si ya "
+                         "estás en tu peso meta y estable, comenta con tu equipo bariátrico si necesitas más calorías."),
+            }
+            logger.info(f"🔻 [P1-BARIATRIC-KCAL-CEILING] target {_pre_ceiling} → {BARIATRIC_KCAL_CEILING_KCAL} kcal "
+                        f"(pouch realista; alinea el denominador del band con la realidad fisiológica).")
+
     calculation_details_str = (
         f"BMR (Mifflin-St Jeor): {bmr} kcal | "
         f"TDEE ({activity_level}, ×{ACTIVITY_MULTIPLIERS.get(activity_level, 1.55)}): {tdee} kcal | "
@@ -1457,6 +1515,8 @@ def get_nutrition_targets(form_data: dict) -> dict:
         result["low_calorie_floored"] = _low_calorie_floored
     if _minor_safety:
         result["minor_safety"] = _minor_safety
+    if _bariatric_kcal_ceiling_applied:
+        result["bariatric_kcal_ceiling_applied"] = _bariatric_kcal_ceiling_applied  # [P1-BARIATRIC-KCAL-CEILING]
 
     logger.info(f"\n🔢 [CALCULADORA NUTRICIONAL] Resultados exactos:")
     logger.info(f"   📊 BMR: {bmr} kcal (Peso: {weight_display}, Altura: {height}cm, Edad: {age}, Género: {gender})")
