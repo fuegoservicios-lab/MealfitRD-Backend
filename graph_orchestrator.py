@@ -8981,6 +8981,11 @@ PROTEIN_FLOOR_FILL_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_FILL_PCT", 0.92)  # c
 # se cubre donde haya espacio + REPAIR_PROTEIN_POST_CAPS). Rollback al comportamiento previo: GRAMS=10, PROTEIN_G=0.
 PROTEIN_CLOSER_MIN_GRAMS = _env_int("MEALFIT_PROTEIN_CLOSER_MIN_GRAMS", 20, validator=lambda v: 0 <= v <= 100)
 PROTEIN_CLOSER_MIN_PROTEIN_G = _env_float("MEALFIT_PROTEIN_CLOSER_MIN_PROTEIN_G", 6.0)
+# [P3-PROTEIN-CLOSER-SCALE-FIRST · 2026-06-28] Antes de PEGAR una proteína nueva, intentar CRECER una proteína de
+# densidad media/alta YA presente en el plato (subir la pechuga/pescado/queso fresco existente) — más "chef" que
+# bolt-on. Clamp ≤2×, respeta headroom calórico. Si no hay proteína escalable → cae al pool/append actual. Rollback:
+# MEALFIT_PROTEIN_CLOSER_SCALE_FIRST=false. tooltip-anchor: P3-PROTEIN-CLOSER-SCALE-FIRST
+PROTEIN_CLOSER_SCALE_FIRST = _env_bool("MEALFIT_PROTEIN_CLOSER_SCALE_FIRST", True)
 # [P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura, auditoría workflow) Re-cierre FINAL del piso de
 # proteína DESPUÉS de los caps clínicos. Raíz del déficit recurrente (64g/80g): el closer del motor corre PRE-cap;
 # los caps DM2/bariátrica recortan lácteos (queso=proteína) y recuperan kcal escalando carbos/veg → el % de
@@ -11308,6 +11313,80 @@ def build_update_micronutrient_directive(form_data: dict) -> str:
         return ""
 
 
+def _try_scale_existing_protein(meal: dict, target_protein: float, db, strip_accents_fn, *,
+                                slot_cal_target: float = 0.0, scale_max: float = 2.0,
+                                min_density: float = 12.0, min_added_protein: float = 4.0) -> int:
+    """[P3-PROTEIN-CLOSER-SCALE-FIRST · 2026-06-28] Antes de PEGAR una proteína nueva como ingrediente extra, intenta
+    CRECER la proteína de mayor densidad YA presente en el plato (pechuga/pescado/queso fresco/huevo) — es el cierre
+    más "chef": misma comida, porción mayor, en vez de un bolt-on incoherente. Escala el renglón con
+    rescale_ingredient_string, ajusta los macros del meal por el delta, clamp ≤scale_max, respeta el headroom calórico
+    del slot. Devuelve gramos de ALIMENTO añadidos (0 si no hay proteína escalable, o si el crecimiento sería trivial
+    → cae al pool/append). Determinista, idempotente (marca `_protein_closed`), fail-safe. tooltip-anchor:
+    P3-PROTEIN-CLOSER-SCALE-FIRST"""
+    try:
+        cur_p = _meal_macro_num(meal.get("protein"))
+        gap = target_protein - cur_p
+        if gap <= 0:
+            return 0
+        ings = meal.get("ingredients")
+        if not isinstance(ings, list) or not ings:
+            return 0
+        best = None  # (densidad, idx, macros)
+        for i, ing in enumerate(ings):
+            if not isinstance(ing, str):
+                continue
+            try:
+                if _ingredient_macro_group(ing, db) != "protein":
+                    continue  # solo crecer renglones cuyo grupo dominante ES proteína (no semillas/almidón)
+            except Exception:
+                continue
+            mc = db.macros_from_ingredient_string(ing) or {}
+            _g, _p = mc.get("grams"), mc.get("protein")
+            if not _g or not _p or float(_g) <= 0 or float(_p) <= 0:
+                continue
+            _dens = float(_p) / float(_g) * 100.0
+            if _dens < min_density:
+                continue  # densidad baja (yogur/ricotta) → crecerla no cierra el gap dentro del clamp 2×
+            if best is None or _dens > best[0]:
+                best = (_dens, i, mc)
+        if best is None:
+            return 0
+        _, idx, mc = best
+        cur_ing_p = float(mc["protein"])
+        factor = min((cur_ing_p + gap) / cur_ing_p, scale_max)
+        if slot_cal_target and slot_cal_target > 0 and float(mc.get("kcal") or 0) > 0:
+            _head = slot_cal_target - _meal_macro_num(meal.get("cals"))
+            if _head <= 0:
+                return 0
+            factor = min(factor, 1.0 + _head / float(mc["kcal"]))
+        if factor <= 1.01:
+            return 0  # sin margen real para crecer
+        _d = factor - 1.0
+        if cur_ing_p * _d < min_added_protein:
+            return 0  # crecimiento trivial → mejor caer al pool/append
+        from nutrition_db import rescale_ingredient_string as _resc
+        new_ing = _resc(str(ings[idx]), factor)
+        if new_ing == ings[idx]:
+            return 0
+        ings[idx] = new_ing
+        _raw = meal.get("ingredients_raw")
+        if isinstance(_raw, list) and idx < len(_raw):
+            try:
+                _raw[idx] = _resc(str(_raw[idx]), factor)
+            except Exception:
+                pass
+        meal["protein"] = round(cur_p + cur_ing_p * _d)
+        meal["carbs"] = round(_meal_macro_num(meal.get("carbs")) + float(mc.get("carbs") or 0) * _d)
+        meal["fats"] = round(_meal_macro_num(meal.get("fats")) + float(mc.get("fats") or 0) * _d)
+        meal["cals"] = round(_meal_macro_num(meal.get("cals")) + float(mc.get("kcal") or 0) * _d)
+        meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+        meal["_protein_closed"] = True  # [P3-PROTEIN-IDEMPOTENT]
+        return int(round(float(mc["grams"]) * _d))
+    except Exception as _se:
+        logger.debug(f"[P3-PROTEIN-CLOSER-SCALE-FIRST] falló (no bloquea): {type(_se).__name__}: {_se}")
+        return 0
+
+
 def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, candidates,
                                 *, fill_pct: float = 0.92, max_add_g: int = 300,
                                 slot_cal_target: float = 0.0) -> int:
@@ -11332,6 +11411,14 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             def _sa(s):
                 import unicodedata
                 return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+        # [P3-PROTEIN-CLOSER-SCALE-FIRST · 2026-06-28] Preferir CRECER una proteína ya presente (más "chef") antes de
+        # pegar una nueva como ingrediente extra. Si lo logra → listo; si no hay proteína escalable, cae al pool/append.
+        if PROTEIN_CLOSER_SCALE_FIRST:
+            _g_scaled = _try_scale_existing_protein(meal, target, db, _sa, slot_cal_target=slot_cal_target)
+            if _g_scaled > 0:
+                logger.info(f"🍳 [P3-PROTEIN-CLOSER-SCALE-FIRST] +{_g_scaled}g a la proteína EXISTENTE "
+                            f"(en vez de pegar otra) | meal={str(meal.get('name'))[:30]}")
+                return _g_scaled
         name_low = _sa(str(meal.get("name", "")).lower())
         no_cook = any(b in name_low for b in _NO_COOK_BLENDED)
         # [P2-DISH-COHERENCE] El slot manda sobre el nombre: una merienda/desayuno es SIEMPRE

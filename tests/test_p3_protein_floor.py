@@ -125,14 +125,18 @@ def test_closer_congruencia_escala_proteina_del_plato():
     assert "pollo" in nuevo and "camaron" not in nuevo  # escaló pollo, no metió camarón
 
 
-def test_closer_congruencia_por_token_con_queso():
-    # "...con Queso..." debe escalar el queso (token), NO meter camarón ajeno.
-    meal = {"name": "Revuelto de Huevos con Queso y Batata", "protein": 14, "carbs": 50, "fats": 16,
-            "cals": 14*4+50*4+16*9, "ingredients": ["2 huevos", "50g de queso", "1 batata"]}
-    cands = _safe_high_density_proteins(["Ninguna"], _db())  # camarones es el más magro
+def test_closer_escala_proteina_existente():
+    # [P3-PROTEIN-CLOSER-SCALE-FIRST · 2026-06-28] Con una proteína magra YA presente, el closer la CRECE en vez de
+    # pegar otra ajena. (Reemplaza el viejo test de "congruencia por token con queso": P1-CLOSER-COHERENCE quitó la
+    # congruencia por el token GENÉRICO 'queso' —era el bug mozzarella-en-ricotta—; el cierre "chef" ahora es escalar
+    # la proteína existente.)
+    meal = {"name": "Revuelto de Huevos con Pollo y Batata", "protein": 14, "carbs": 50, "fats": 16,
+            "cals": 14 * 4 + 50 * 4 + 16 * 9, "ingredients": ["60g de pollo", "1 taza de arroz (158g)"]}
+    cands = _safe_high_density_proteins(["Ninguna"], _db())  # camarones es el más magro del pool
     _close_protein_gap_for_meal(meal, 28.0, _db(), cands, fill_pct=0.92)
     nuevo = " ".join(str(i) for i in meal["ingredients"]).lower()
-    assert "queso" in nuevo and "camaron" not in nuevo
+    assert "pollo" in nuevo and "camaron" not in nuevo  # creció el pollo existente, NO metió camarón
+    assert len(meal["ingredients"]) == 2  # NO añadió un ingrediente nuevo
 
 
 def test_closer_nota_sin_gramaje_hardcodeado():
@@ -143,7 +147,10 @@ def test_closer_nota_sin_gramaje_hardcodeado():
     cands = _safe_high_density_proteins(["Ninguna"], _db())
     _close_protein_gap_for_meal(meal, 42.0, _db(), cands, fill_pct=0.92)
     nota = next((s for s in meal["recipe"] if "💪" in s), "")
-    assert nota and "ingredientes" in nota
+    # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28] paso natural (no el robótico "indicado en los ingredientes"); lo
+    # esencial: sin gramaje hardcodeado (se desfasaría tras el trim/quantize).
+    assert nota
+    assert "indicado en los ingredientes" not in nota
     assert not _re.search(r"\d+\s*g de", nota)  # sin "Xg de ..." en la nota
 
 
