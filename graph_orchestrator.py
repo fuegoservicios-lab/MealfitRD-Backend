@@ -8829,6 +8829,14 @@ FASE_A_FAT_TOPUP_ENABLED = _env_bool("MEALFIT_FASE_A_FAT_TOPUP", True)
 FASE_A_FAT_TOPUP_FLOOR_PCT = max(0.5, min(1.0, _env_float("MEALFIT_FASE_A_FAT_TOPUP_FLOOR_PCT", 0.90)))
 HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G = max(5, min(20, _env_int("MEALFIT_HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G", 13)))
 HEALTHY_FAT_MAX_PER_MEAL_NONBARIATRIC_G = max(8, min(40, _env_int("MEALFIT_HEALTHY_FAT_MAX_PER_MEAL_NONBARIATRIC_G", 20)))
+# [P1-BARIATRIC-DAY-KCAL-FLOOR · 2026-06-28] Backstop band-aware de KCAL a nivel día. MEDIDO: el plan bariátrico nace
+# ~1500 kcal/día (el volume cap descarta kcal sin recuperación, comentario propio del código) y FASE A solo sube kcal en
+# días donde añade PROTEÍNA → un día con proteína OK pero kcal < banda (0.95×target) se quedaba bajo (band kcal 2/3). NO
+# es límite físico: cerrar ~400 kcal se hace con grasa MUFA (9 kcal/g, volumen despreciable, dumping-safe, sin conflicto
+# DM2) en comidas SALADAS. Aim 0.96×target (margen sobre el piso 0.95 del scorer). Rollback: =false. Anchor: P1-BARIATRIC-DAY-KCAL-FLOOR
+BARIATRIC_DAY_KCAL_FLOOR_ENABLED = _env_bool("MEALFIT_BARIATRIC_DAY_KCAL_FLOOR", True)
+BARIATRIC_DAY_KCAL_FLOOR_PCT = max(0.90, min(1.0, _env_float("MEALFIT_BARIATRIC_DAY_KCAL_FLOOR_PCT", 0.96)))
+DAY_KCAL_FLOOR_MAX_FAT_PER_MEAL_G = max(8, min(20, _env_int("MEALFIT_DAY_KCAL_FLOOR_MAX_FAT_PER_MEAL_G", 15)))
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
@@ -11183,6 +11191,12 @@ _SWEET_MEAL_MARKERS = ("yogur", "yogurt", "avena", "batido", "smoothie", "licuad
                        "mermelada", "mango", "guineo", "banana", "fresa", "lechosa", "papaya", "guayaba",
                        "pina", "piña", "manzana", "mora", "arandano", "arándano", "kiwi", "melon", "melón",
                        "uva", "durazno", "melocoton", "cereza", "mamey", "nispero", "chocolate", "cacao")
+# [P1-SWEET-MARKER-WORDBOUNDARY · 2026-06-28] Match con frontera de palabra IZQUIERDA (`\b<marker>`) en vez de substring
+# naïve: "pina" (piña) matcheaba DENTRO de "es-PINA-ca" (espinaca) → un revoltillo de huevo con espinaca se marcaba DULCE,
+# rompiendo el sweet-guard del closer (le metía lácteo en vez de carne) y el day-kcal-floor (saltaba la comida salada).
+# `\bpina` NO matchea en "espinaca" (sin boundary antes de 'pina') pero SÍ "piña"/"pina colada"; `\byogur` sigue
+# matcheando "yogurt" (prefijo en boundary). Texto ya viene strip_accents. tooltip-anchor: P1-SWEET-MARKER-WORDBOUNDARY
+_SWEET_MARKER_RE = _re.compile(r"\b(" + "|".join(_re.escape(_m) for _m in _SWEET_MEAL_MARKERS) + r")")
 
 
 def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
@@ -11196,13 +11210,13 @@ def _is_sweet_meal(meal: dict, strip_accents_fn) -> bool:
         nlow = strip_accents_fn(str(meal.get("name", "")).lower())
         if any(ov in nlow for ov in _SWEET_MEAL_SAVORY_OVERRIDE):
             return False  # ceviche / fruta verde / guiso → preparación salada, no postre
-        if any(mk in nlow for mk in _SWEET_MEAL_MARKERS):
+        if _SWEET_MARKER_RE.search(nlow):  # [P1-SWEET-MARKER-WORDBOUNDARY] no falso-positivo "pina"⊂"espinaca"
             return True
         if SWEET_GUARD_CHECK_INGREDIENTS:
             ing_low = strip_accents_fn(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
             if any(ov in ing_low for ov in _SWEET_MEAL_SAVORY_OVERRIDE):
                 return False
-            return any(mk in ing_low for mk in _SWEET_MEAL_MARKERS)
+            return bool(_SWEET_MARKER_RE.search(ing_low))
         return False
     except Exception:
         return False
@@ -14492,6 +14506,94 @@ def _topup_healthy_fat_to_band_floor(meals: list, target_fats: float, target_kca
         return 0
 
 
+def _repair_day_kcal_floor_post_caps(days: list, nutrition: dict, form_data: dict, db=None) -> int:
+    """[P1-BARIATRIC-DAY-KCAL-FLOOR · 2026-06-28] Backstop band-aware de KCAL a nivel DÍA para bariátrico. El plan nace
+    ~1500 kcal/día (el BARIATRIC_VOLUME_CAP descarta kcal sin recuperación — comentario propio del código) y FASE A solo
+    sube kcal en días donde añade PROTEÍNA → un día con proteína OK pero kcal bajo banda (0.95×target del scorer) se
+    quedaba bajo. Esta pasada añade GRASA MUFA densa (aceite de oliva: ~0 volumen del pouch, dumping-safe, SIN conflicto
+    glucémico DM2) a las comidas SALADAS hasta ~0.96×target. Corre DESPUÉS de los caps + FASE A (el volume cap no la borra)
+    y ANTES del quantize. RENAL skip (fail-secure, no toca el techo KDIGO). Idempotente (flag `_day_kcal_floor`), fail-safe,
+    GRACEFUL (si el día es dulce-heavy sin slots salados, se acerca lo que puede — grasa ligeramente baja es aceptable).
+    NO toca días ya en banda (protege band 1.0 del caso bueno). tooltip-anchor: P1-BARIATRIC-DAY-KCAL-FLOOR"""
+    if not BARIATRIC_DAY_KCAL_FLOOR_ENABLED:
+        return 0
+    try:
+        if _is_renal_condition(form_data):
+            return 0
+        from constants import BARIATRIC_CONDITION_TERMS as _BT_K, strip_accents as _sa_k
+        _is_baria = any(any(t in c for t in _BT_K) for c in _condition_strings(form_data))
+        if not _is_baria:
+            return 0
+        macros = (nutrition or {}).get("macros") or {}
+        _pg = float(macros.get("protein_g") or 0); _cg = float(macros.get("carbs_g") or 0); _fg = float(macros.get("fats_g") or 0)
+        target_kcal = 4.0 * _pg + 4.0 * _cg + 9.0 * _fg
+        if target_kcal <= 0:
+            return 0
+        floor = target_kcal * BARIATRIC_DAY_KCAL_FLOOR_PCT
+        ceiling = 1.05 * target_kcal  # banda kcal superior del scorer → no sobre-disparar
+        per_meal_cap = DAY_KCAL_FLOOR_MAX_FAT_PER_MEAL_G
+        _FAT_PRESENT = ("aceite", "oliva", "aguacate", "mantequilla", "tocino", "manteca")
+        import math as _math_k
+        added_kcal = 0
+        if db is None:
+            try:
+                from nutrition_db import IngredientNutritionDB as _KDB
+                db = _KDB()
+            except Exception:
+                db = None
+        for d in days or []:
+            if not isinstance(d, dict):
+                continue
+            ms = [m for m in (d.get("meals") or []) if isinstance(m, dict)]
+            if not ms:
+                continue
+            day_kcal = sum(_meal_macro_num(m.get("cals")) for m in ms)
+            if day_kcal >= floor:
+                continue  # día ya en/sobre banda → NO tocar (protege band 1.0 no-bariátrico/caso bueno)
+            _changed = False
+            for m in ms:
+                if day_kcal >= floor:
+                    break
+                if m.get("_day_kcal_floor"):
+                    continue
+                try:
+                    if _is_sweet_meal(m, _sa_k):
+                        continue  # aceite en una merienda dulce es incoherente → solo comidas saladas
+                except Exception:
+                    pass
+                _txt = _sa_k((str(m.get("name", "")) + " " + " ".join(str(i) for i in (m.get("ingredients") or []))).lower())
+                if any(t in _txt for t in _FAT_PRESENT):
+                    continue  # ya tiene grasa visible → no duplicar (coordina con FASE A fat-topup)
+                room = ceiling - day_kcal
+                if room < 45:
+                    break
+                need = floor - day_kcal
+                add_g = int(min(float(per_meal_cap), _math_k.ceil(need / 9.0), _math_k.floor(room / 9.0)))
+                if add_g < 4:
+                    continue
+                line = f"{add_g}g de aceite de oliva virgen extra"
+                m.setdefault("ingredients", []).append(line)
+                if isinstance(m.get("ingredients_raw"), list):
+                    m["ingredients_raw"].append(line)
+                mf = round(_meal_macro_num(m.get("fats")) + add_g)
+                m["fats"] = mf
+                m["cals"] = round(_meal_macro_num(m.get("cals")) + add_g * 9)
+                m["protein"] = round(_meal_macro_num(m.get("protein")))
+                m["carbs"] = round(_meal_macro_num(m.get("carbs")))
+                m["macros"] = [f"P:{m['protein']}g", f"C:{m['carbs']}g", f"G:{mf}g"]
+                m["_day_kcal_floor"] = True
+                day_kcal += add_g * 9
+                added_kcal += add_g * 9
+                _changed = True
+        if added_kcal:
+            logger.info(f"🍳 [P1-BARIATRIC-DAY-KCAL-FLOOR] +{round(added_kcal)} kcal (aceite de oliva en comidas saladas) "
+                        f"para subir días bajo el piso de banda ({int(BARIATRIC_DAY_KCAL_FLOOR_PCT*100)}% de {round(target_kcal)} kcal).")
+        return added_kcal
+    except Exception as _dk_e:
+        logger.warning(f"[P1-BARIATRIC-DAY-KCAL-FLOOR] falló (no bloquea): {type(_dk_e).__name__}: {_dk_e}")
+        return 0
+
+
 def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict, db=None) -> int:
     """[P1-PROTEIN-FLOOR-POST-CAPS · 2026-06-27] (arquitectura) Re-cierre FINAL del piso de proteína tras los caps
     clínicos. El closer del motor (_close_protein_gap_for_meal) corre DENTRO de _apply_macro_engine (PRE-cap) y es
@@ -15717,6 +15819,18 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"(re-cierre del piso tras recorte de lácteos) + reconcile C/F.")
         except Exception as _rp:
             logger.warning(f"[P1-PROTEIN-FLOOR-POST-CAPS] en assemble falló (no bloquea): {type(_rp).__name__}: {_rp}")
+
+    # [P1-BARIATRIC-DAY-KCAL-FLOOR · 2026-06-28] Tras cerrar PROTEÍNA (FASE A), cierra KCAL: si un día bariátrico quedó
+    # bajo el piso de banda (0.95×target del scorer) — típicamente porque ya cumplía proteína y FASE A no lo tocó, + el
+    # volume cap descartó kcal — añade grasa MUFA densa en comidas saladas. Corre DESPUÉS de los caps (no la borran) y
+    # ANTES del quantize. RENAL skip + idempotente + graceful.
+    if BARIATRIC_DAY_KCAL_FLOOR_ENABLED:
+        try:
+            _dk_added = _repair_day_kcal_floor_post_caps(days, nutrition, form_data)
+            if _dk_added:
+                logger.info(f"🍳 [P1-BARIATRIC-DAY-KCAL-FLOOR] +{round(_dk_added)} kcal para subir días bajo banda.")
+        except Exception as _dk:
+            logger.warning(f"[P1-BARIATRIC-DAY-KCAL-FLOOR] en assemble falló (no bloquea): {type(_dk).__name__}: {_dk}")
 
     # [P1-RECIPE-SLICE-GRAMS · 2026-06-27] Convierte 'X lonja/pedazo/tajada de queso/embutido' a GRAMOS antes del
     # quantize final ('0.5 lonja/pedazo de queso' → '15 g de queso') — el usuario lo señaló como incoherente.
