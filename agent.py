@@ -1631,6 +1631,39 @@ def swap_meal(form_data: dict):
         except Exception as _cs_e:
             logger.warning(f"[P2-UPDATE-CONDITION-SUBST] condition-subst en swap falló (no bloquea): {type(_cs_e).__name__}: {_cs_e}")
 
+    # [P1-SWAP-PORTION-CAP · 2026-06-27] (paridad S1↔S3) Caps de porción DETERMINISTAS — DM2 (almidón alto-IG:
+    # batata/yuca/papa/plátano maduro/casabe ≤cap_g) + bariátrica (queso ≤30g / yogurt ≤120g / fruta / aguacate /
+    # frutos secos + volumen del pouch). S1 y regenerate-day (S2) ya los corren; el swap individual solo tenía
+    # slot-target + prompt → el LLM no siempre obedece la directiva de porción (5 lonjas de queso en una cena
+    # bariátrica colaban sin backstop). Solo RECORTAN (recuperan kcal escalando otros ingredientes → macro-safe);
+    # como el recorte de lácteo baja proteína, RE-CERRAMOS el piso del slot con proteína animal densa NO-láctea
+    # (espejo de FASE A; renal → skip KDIGO). Idempotente, fail-open. tooltip-anchor: P1-SWAP-PORTION-CAP
+    if isinstance(_out, dict):
+        try:
+            from graph_orchestrator import (cap_dm2_high_gi_portions as _cap_dm2_s,
+                                            cap_bariatric_portions as _cap_baria_s,
+                                            _close_protein_gap_for_meal as _close_pc,
+                                            _safe_high_density_proteins as _safe_pc)
+            from nutrition_db import IngredientNutritionDB as _CapDB
+            _cap_db = _CapDB()
+            _wrap = [{"meals": [_out]}]
+            _nd = _cap_dm2_s(_wrap, form_data, _cap_db)
+            _nb = _cap_baria_s(_wrap, form_data, _cap_db)
+            if (_nd or _nb) and target_protein and not _renal_capped:
+                _cur_p = float(_out.get("protein") or 0)
+                if _cur_p < 0.90 * float(target_protein):
+                    _out["_protein_closed"] = False
+                    _cands_pc = [c for c in _safe_pc(allergies, _cap_db, min_protein=18.0)
+                                 if not any(_t in str(c[1]).lower()
+                                            for _t in ("queso", "yogur", "leche", "ricotta", "cottage", "requeson"))]
+                    if _cands_pc:
+                        _close_pc(_out, float(target_protein), _cap_db, _cands_pc, max_add_g=90)
+            if _nd or _nb:
+                logger.info(f"🔒 [P1-SWAP-PORTION-CAP] plato de swap recortado: cap_dm2={_nd} "
+                            f"cap_baria={_nb} | meal_type={meal_type}")
+        except Exception as _pc_e:
+            logger.warning(f"[P1-SWAP-PORTION-CAP] cap de porción en swap falló (no bloquea): {type(_pc_e).__name__}: {_pc_e}")
+
     # [P1-UPDATE-APPETIBILITY · 2026-06-27] (audit Fase 0) Honestidad de nombre (proteína fantasma) +
     # detección de clash sobre el plato FINAL (cubre también el path de fallback que esquiva el retry-loop).
     # namefix es determinista e idempotente; el clash en el plato final solo se loguea (advisory).
