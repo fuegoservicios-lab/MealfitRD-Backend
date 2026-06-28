@@ -410,7 +410,20 @@ CONDITION_RULES: tuple = (
             "('5¼ lonjas', '2.5 fresas', '0.25 cda') y las instrucciones imposibles ('fresa solo la cáscara').\n"
             "   • El paciente bariátrico requiere SUPLEMENTACIÓN (multivitamínico, B12, hierro, calcio citrato, "
             "vitamina D); NO intentes cubrir déficits con alimentos en exceso de volumen. Plan ORIENTATIVO que "
-            "no sustituye al equipo bariátrico."),
+            "no sustituye al equipo bariátrico.\n"
+            "   ──────────────────────────────────────────────────────────────────\n"
+            "   📋 EJEMPLO DE UN DÍA BARIÁTRICO CORRECTO (imita esta FORMA: proteína primero, porciones pequeñas en "
+            "gramos enteros, nombre = ingredientes, cocido, sin azúcar, sin bebida junto al sólido):\n"
+            "     • Desayuno — «Revoltillo de Huevo con Casabe»: 2 huevos revueltos, 20 g de casabe, 1 cdta de aceite.\n"
+            "     • Merienda AM — «Yogurt Griego con Fresas»: 120 g de yogurt griego natural sin azúcar, 60 g de fresas.\n"
+            "     • Almuerzo — «Pollo Guisado Desmenuzado con Arroz»: 80 g de pollo guisado desmenuzado, 45 g de arroz "
+            "blanco, ensalada verde (lechuga, tomate, pepino).\n"
+            "     • Merienda PM — «Atún con Casabe»: 80 g de atún en agua escurrido, 20 g de casabe.\n"
+            "     • Cena — «Pescado al Horno con Auyama»: 90 g de filete de pescado al horno, 60 g de auyama hervida, "
+            "vainitas al vapor.\n"
+            "     • Merienda Nocturna — «Yogurt Griego Natural»: 120 g de yogurt griego natural sin azúcar.\n"
+            "   Nota cómo CADA comida principal sirve la proteína blanda primero, lleva UN solo almidón pequeño, ningún "
+            "azúcar, porciones realistas en gramos enteros, y el título coincide con los ingredientes. GENERA ASÍ."),
     ),
 )
 

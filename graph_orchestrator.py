@@ -5278,6 +5278,13 @@ def _is_skeleton_fidelity_rejection(rejection_reasons) -> bool:
 # a retries (attempt>1 conserva el modelo de fiabilidad).
 DAYGEN_LITE_FOR_EASY = _env_bool("MEALFIT_DAYGEN_LITE_FOR_EASY", False)
 DAYGEN_EASY_MODEL = _env_str("MEALFIT_DAYGEN_EASY_MODEL", _FLASH_LITE_DEFAULT) or _FLASH_LITE_DEFAULT
+# [P1-BARIATRIC-DAYGEN-PRO · 2026-06-28] El perfil bariátrico es el clínicamente más denso (≥74 líneas de reglas + schema
+# + pools + macros), pero en tier gratis lo generaba FLASH mientras el revisor médico es PRO → asimetría generador-débil/
+# revisor-fuerte que producía rechazos críticos→fallback. Bariátrico usa PRO desde attempt 1 en TODOS los tiers (simetría
+# con el revisor). Default True; rollback sin redeploy: MEALFIT_BARIATRIC_DAYGEN_PRO=false → vuelve al routing por tier.
+# Trade-off aceptado: ~+$0.05/plan + ~+40s en tier gratis para el segmento bariátrico (minoría de volumen; el fallback
+# degradado es peor UX que un plan PRO bien generado).
+BARIATRIC_DAYGEN_PRO = _env_bool("MEALFIT_BARIATRIC_DAYGEN_PRO", True)
 
 
 def _route_model_for_day_generator(
@@ -5288,6 +5295,7 @@ def _route_model_for_day_generator(
     """[P4-MODEL-1] Routing especializado para el day generator.
 
     Reglas:
+      0. [P1-BARIATRIC-DAYGEN-PRO] Perfil bariátrico → PRO desde attempt 1 (gana sobre tier y sobre DAYGEN_LITE).
       1. Attempt #1 o knob deshabilitado → routing default (`_route_model`).
       2. Attempt > 1 + prev rejection con skeleton fidelity → escalar a Pro.
       3. Attempt > 1 sin esa señal → routing default (Flash si easy, Pro
@@ -5299,6 +5307,21 @@ def _route_model_for_day_generator(
     Pro en el retry específico mejora la adherencia ~25 puntos a costo
     de ~$0.05 extra por plan (estimado por intento que escala).
     """
+    # [P1-BARIATRIC-DAYGEN-PRO] Override al TOPE: bariátrico → PRO desde attempt 1, ganando sobre el routing por tier
+    # (FLASH en gratis) Y sobre el override DAYGEN_LITE_FOR_EASY (que podría degradar a flash-lite). Fail-safe: cualquier
+    # excepción de detección → cae al routing normal (nunca rompe la generación). Reusa el detector SSOT detect_active_rules.
+    if BARIATRIC_DAYGEN_PRO:
+        try:
+            from condition_rules import detect_active_rules
+            if any(getattr(r, "id", None) == "bariatric" for r in detect_active_rules(form_data)):
+                logger.info(
+                    f"🔀 [P1-BARIATRIC-DAYGEN-PRO] Perfil bariátrico → day generator PRO ({_PRO_MODEL_NAME}) "
+                    f"desde attempt {attempt} (simetría con revisor clínico PRO; FLASH no retiene las reglas bariátricas)."
+                )
+                return _PRO_MODEL_NAME
+        except Exception as _bdp_e:
+            logger.warning(f"[P1-BARIATRIC-DAYGEN-PRO] detección falló (no bloquea, cae al routing normal): {_bdp_e}")
+
     if attempt <= 1 or not DAY_GEN_RETRY_USE_PRO:
         _base = _route_model(form_data, attempt)
         # [P2-DAYGEN-LITE-EASY · 2026-05-28] Override lite solo en attempt 1 y solo
