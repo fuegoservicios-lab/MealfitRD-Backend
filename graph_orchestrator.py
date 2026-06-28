@@ -8993,6 +8993,12 @@ PROTEIN_CLOSER_SCALE_FIRST = _env_bool("MEALFIT_PROTEIN_CLOSER_SCALE_FIRST", Tru
 # skip total (fail-secure, techo KDIGO). Default ON. Rollback: =false.
 REPAIR_PROTEIN_POST_CAPS = _env_bool("MEALFIT_REPAIR_PROTEIN_POST_CAPS", True)
 PROTEIN_FLOOR_HARD_PCT = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT", 0.90)  # gate de retry
+# [P3-BARIATRIC-PROTEIN-FLOOR-RELAX · 2026-06-28] Piso MÁS BAJO para bariátrica: el pouch limita físicamente la
+# ingesta y el target ya está capeado a 80g; exigir 90% (72g) en comidas diminutas + dulces es inviable y fuerza
+# re-cierres agresivos (+102g) que rompen las bandas de grasa/kcal. 80% (64g) es clínicamente razonable post-bariátrica
+# (metas típicas 60-80g/día). La condición bariátrica manda sobre la severidad de gain_muscle para el piso.
+PROTEIN_FLOOR_HARD_PCT_BARIATRIC = _env_float("MEALFIT_PROTEIN_FLOOR_HARD_PCT_BARIATRIC", 0.80,
+                                              validator=lambda v: 0.5 <= v <= 0.95)
 PROTEIN_FLOOR_HARD_GATE = _env_bool("MEALFIT_PROTEIN_FLOOR_HARD_GATE", True)
 # [P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Garantía DURA del piso de proteína (Fase 2 del
 # build "todo terreno" pedido por el owner). Hasta ahora el piso era best-effort: si el LLM
@@ -9506,7 +9512,7 @@ def _meal_macro_num(x) -> float:
         return 0.0
 
 
-def _protein_floor_shortfall(plan, *, renal_capped: bool):
+def _protein_floor_shortfall(plan, *, renal_capped: bool, form_data: dict = None):
     """[P3-PROTEIN-FLOOR / P2-PROTEIN-FLOOR-FAILHARD · 2026-06-21] Días bajo el piso de
     proteína (HARD_PCT × target diario). SSOT compartido por `review_plan_node` (gate de
     retry, severity 'high') y `_apply_critical_review_guardrails` (backstop fail-hard al
@@ -9530,10 +9536,19 @@ def _protein_floor_shortfall(plan, *, renal_capped: bool):
                 _tgt_p = float(_mp.group(1))
         if not _tgt_p or _tgt_p <= 0:
             return []
+        # [P3-BARIATRIC-PROTEIN-FLOOR-RELAX · 2026-06-28] Piso bariátrico relajado (el pouch limita la ingesta; el
+        # target ya está capeado a 80g — 90% es inviable en comidas diminutas/dulces y rompe grasa/kcal al forzarlo).
+        _pct = PROTEIN_FLOOR_HARD_PCT
+        try:
+            from constants import BARIATRIC_CONDITION_TERMS as _BT_PF
+            if form_data and any(any(_t in _c for _t in _BT_PF) for _c in _condition_strings(form_data)):
+                _pct = PROTEIN_FLOOR_HARD_PCT_BARIATRIC
+        except Exception:
+            pass
         _short = []
         for _i, _day in enumerate(plan.get("days", []) or [], 1):
             _dp = sum(_meal_macro_num(_mm.get("protein")) for _mm in (_day.get("meals", []) or []))
-            if _dp < PROTEIN_FLOOR_HARD_PCT * _tgt_p:
+            if _dp < _pct * _tgt_p:
                 _short.append((_day.get("day", _i), round(_dp), round(_tgt_p)))
         return _short
     except Exception as _pf_e:
@@ -10440,7 +10455,7 @@ def _surgical_promote_blocked_reason(new_plan_result: dict, form_data: dict):
         return None
     try:
         _renal_capped = bool((new_plan_result.get("renal_protein_cap") or {}).get("applied"))
-        _short = _protein_floor_shortfall(new_plan_result, renal_capped=_renal_capped)
+        _short = _protein_floor_shortfall(new_plan_result, renal_capped=_renal_capped, form_data=form_data)
         if _short:
             return "piso de proteína: " + "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short[:4])
         if DIET_HARD_GUARD:
@@ -14235,7 +14250,9 @@ def _repair_protein_floor_post_caps(days: list, nutrition: dict, form_data: dict
         except Exception:
             _is_baria = False
         _max_add = int(BARIATRIC_PROTEIN_PORTION_CAP_G) if _is_baria else 300
-        _day_floor_pct = 0.90
+        # [P3-BARIATRIC-PROTEIN-FLOOR-RELAX · 2026-06-28] En bariátrica apunta al piso relajado (80%): el pouch no da
+        # para 90% del target capeado, y forzarlo metía +102g rompiendo grasa/kcal. Alinea con el gate del shortfall.
+        _day_floor_pct = PROTEIN_FLOOR_HARD_PCT_BARIATRIC if _is_baria else 0.90
         added = 0
         for _d in days or []:
             if not isinstance(_d, dict):
@@ -17495,7 +17512,7 @@ Responde ÚNICAMENTE con el JSON de revisión.
     # (SSOT compartido con el backstop fail-hard de `_apply_critical_review_guardrails`). Aquí el
     # gate sigue marcando severity 'high' → retry: el LLM puede arreglarlo en otro intento. La
     # garantía DURA (sustituir por fallback si se agotan los retries) vive en el backstop al finalizar.
-    _short_days = _protein_floor_shortfall(plan, renal_capped=_renal_capped_plan)
+    _short_days = _protein_floor_shortfall(plan, renal_capped=_renal_capped_plan, form_data=form_data)
     if _short_days:
         _tgt_p = _short_days[0][2]
         _sd_str = "; ".join(f"Día {d}: {p}g de {t}g" for d, p, t in _short_days)
@@ -22042,7 +22059,8 @@ def _apply_critical_review_guardrails(
     if (PROTEIN_FLOOR_FAILHARD_GATE and not review_passed
             and isinstance(plan_result, dict) and not already_fallback):
         _renal_capped_final = bool((plan_result.get("renal_protein_cap") or {}).get("applied"))
-        _pf_short = _protein_floor_shortfall(plan_result, renal_capped=_renal_capped_final)
+        _pf_short = _protein_floor_shortfall(plan_result, renal_capped=_renal_capped_final,
+                                             form_data=final_state.get("form_data"))
         if _pf_short:
             _protein_floor_breach = True
             logger.error(
