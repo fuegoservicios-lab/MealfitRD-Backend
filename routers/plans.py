@@ -7467,10 +7467,32 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         # con None (JSON-compliant, frontend graceful). El bug raíz (de
         # dónde viene el NaN) queda como follow-up para identificar +
         # arreglar en la fórmula upstream.
+        # [P1-RENEWAL-PANTRY-AWARE · 2026-06-28 · Fase 2] Lista de FALTANTES para
+        # "completar la nevera al 100%": lo que el plan NECESITA menos lo que el
+        # usuario YA TIENE en la nevera (resta CUANTITATIVA). READ-ONLY/derivada —
+        # NO se persiste ni toca aggregated_shopping_list_* (la canónica queda
+        # byte-idéntica). Reusa `_inv_snap` (ya fetchado arriba) para no re-consultar
+        # user_inventory. Gated OFF por default (MEALFIT_PANTRY_COMPLETION_LIST_ENABLED).
+        pantry_completion_list: list = []
+        try:
+            from constants import PANTRY_COMPLETION_LIST_ENABLED
+            if PANTRY_COMPLETION_LIST_ENABLED:
+                from shopping_calculator import compute_pantry_completion_delta
+                pantry_completion_list = compute_pantry_completion_delta(
+                    user_id,
+                    merged_plan_data,
+                    multiplier=household_multiplier,
+                    inventory_override=_inv_snap,
+                    categorize=False,
+                ) or []
+        except Exception as _pcl_e:
+            logger.warning(f"[RECALC] pantry_completion_list falló (no aborta): {_pcl_e}")
+
         return {
             "success": True,
             "plan_data": _sanitize_floats_for_json(merged_plan_data),
             "_coherence_warnings": _sanitize_floats_for_json(_coherence_warnings),
+            "pantry_completion_list": _sanitize_floats_for_json(pantry_completion_list),
         }
 
     except HTTPException:

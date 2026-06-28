@@ -8419,6 +8419,50 @@ def get_shopping_list_delta(
     
     return res
 
+
+def compute_pantry_completion_delta(
+    user_id: str,
+    plan_result: dict,
+    multiplier: float = 1.0,
+    *,
+    inventory_override: list | None = None,
+    categorize: bool = True,
+    structured: bool = True,
+):
+    """[P1-RENEWAL-PANTRY-AWARE · 2026-06-28 · Fase 2] Lista de FALTANTES para
+    "completar la nevera al 100%" para este plan: lo que el plan NECESITA MENOS lo
+    que el usuario YA TIENE en la nevera (resta CUANTITATIVA real). Es decir, lo que
+    debe comprar para que su nevera cubra el plan ("te faltan 2L de leche, 0.4kg de
+    pollo").
+
+    Es READ-ONLY y DERIVADO: reusa get_shopping_list_delta(is_new_plan=False) que
+    deduce el inventario físico cuantitativamente. NUNCA toca la lista canónica
+    (aggregated_shopping_list_*, que se persiste con is_new_plan=True). Deduce SOLO
+    el inventario físico actual (la nevera) — NO 'consumidos' (irrelevante para un
+    plan recién renovado). Si el caller ya tiene el snapshot de nevera (p.ej. el
+    recalc lo fetcha una vez como `_inv_snap`), pasarlo vía `inventory_override`
+    evita un segundo fetch a user_inventory.
+
+    Gating: el caller debe respetar constants.PANTRY_COMPLETION_LIST_ENABLED (default
+    OFF). Esta función NO consulta el knob (es pura/reutilizable).
+    """
+    if not user_id or user_id == "guest":
+        return {} if categorize else []
+    inv = inventory_override
+    if inv is None:
+        inv, _ = fetch_inventory_and_consumed_for_plan(user_id, plan_result, is_new_plan=False)
+    return get_shopping_list_delta(
+        user_id,
+        plan_result,
+        is_new_plan=False,
+        categorize=categorize,
+        structured=structured,
+        multiplier=multiplier,
+        inventory_override=inv,
+        consumed_override=[],
+    )
+
+
 def get_realtime_pantry(plan_result: dict, consumed_ingredients: list[str]) -> list[str]:
     all_ingredients = []
     days = plan_result.get("days", [])
