@@ -6,7 +6,7 @@ d4bc3af5) fue que el reuso como GATE colapsaba la variedad y degradaba planes.
 
 Contrato verificado aquí:
   - default OFF: build_pantry_context(variety) sigue devolviendo "" (nevera ignorada).
-  - knob ON + `_renewal_pantry_aware`: emite los DURADEROS como sugerencia advisory,
+  - knob ON + `renewal_pantry_aware`: emite los DURADEROS como sugerencia advisory,
     NUNCA 'OBLIGATORIO', filtra perecederos (esos van a la lista de faltantes), y
     respeta el cap.
   - review_plan_node NO se tocó: sigue saltando la validación para variety, así que
@@ -38,14 +38,14 @@ def test_default_knob_is_off():
 
 def test_default_off_variety_returns_empty():
     # Aun con el flag y duraderos, con el knob OFF (default) variety ignora la nevera.
-    out = build_pantry_context(_form(_renewal_pantry_aware=True,
+    out = build_pantry_context(_form(renewal_pantry_aware=True,
                                      durable_pantry_ingredients=["arroz", "aceite de oliva"]))
     assert out == ""
 
 
 def test_on_without_flag_returns_empty(monkeypatch):
     monkeypatch.setattr(constants, "RENEWAL_PANTRY_AWARE_ENABLED", True)
-    # Knob ON pero sin `_renewal_pantry_aware` → variety puro (sigue vacío).
+    # Knob ON pero sin `renewal_pantry_aware` → variety puro (sigue vacío).
     out = build_pantry_context(_form(durable_pantry_ingredients=["arroz"]))
     assert out == ""
 
@@ -53,7 +53,7 @@ def test_on_without_flag_returns_empty(monkeypatch):
 def test_on_with_flag_emits_durables_advisory(monkeypatch):
     monkeypatch.setattr(constants, "RENEWAL_PANTRY_AWARE_ENABLED", True)
     out = build_pantry_context(_form(
-        _renewal_pantry_aware=True,
+        renewal_pantry_aware=True,
         durable_pantry_ingredients=["arroz", "aceite de oliva", "lentejas"],
     ))
     assert out != ""
@@ -71,7 +71,7 @@ def test_works_without_current_pantry(monkeypatch):
     monkeypatch.setattr(constants, "RENEWAL_PANTRY_AWARE_ENABLED", True)
     out = build_pantry_context({
         "update_reason": "variety",
-        "_renewal_pantry_aware": True,
+        "renewal_pantry_aware": True,
         "durable_pantry_ingredients": ["arroz", "avena"],
     })
     assert "arroz" in out and "avena" in out
@@ -81,7 +81,7 @@ def test_perishables_filtered_from_hint(monkeypatch):
     monkeypatch.setattr(constants, "RENEWAL_PANTRY_AWARE_ENABLED", True)
     # 'pollo' y 'leche' son perecederos → NO van al hint de reuso (van a faltantes).
     out = build_pantry_context(_form(
-        _renewal_pantry_aware=True,
+        renewal_pantry_aware=True,
         durable_pantry_ingredients=["arroz", "pollo", "leche"],
     ))
     assert "arroz" in out

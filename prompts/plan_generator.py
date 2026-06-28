@@ -1473,6 +1473,13 @@ def _build_durable_advisory_hint(form_data: dict) -> str:
     clean = clean[:max(0, int(_CAP))]
     if not clean:
         return ""
+    try:
+        import logging
+        logging.getLogger("plan_generator").info(
+            f"♻️ [P1-RENEWAL-PANTRY-AWARE] hint advisory de {len(clean)} duradero(s) emitido al prompt"
+        )
+    except Exception:
+        pass
     import json
     ctx = "\n--- ♻️ DURADEROS QUE YA TIENES (SUGERENCIA — no obligatorio) ---\n"
     ctx += "El usuario aún tiene en su nevera estos ingredientes DE LARGA DURACIÓN:\n"
@@ -1501,7 +1508,10 @@ def build_pantry_context(form_data: dict) -> str:
             from constants import RENEWAL_PANTRY_AWARE_ENABLED as _RPA
         except Exception:
             _RPA = False
-        if _RPA and form_data.get("_renewal_pantry_aware"):
+        # NOTA: `renewal_pantry_aware` SIN prefijo `_` a propósito — es un input del
+        # cliente, no una clave interna; con `_` el sanitizador P0-A2 del router
+        # (/analyze/stream) lo strippearía (graph_orchestrator._strip... whitelist).
+        if _RPA and form_data.get("renewal_pantry_aware"):
             return _build_durable_advisory_hint(form_data)
         return ""
 
