@@ -8809,6 +8809,11 @@ RECIPE_SLICE_GRAMS_ENABLED = _env_bool("MEALFIT_RECIPE_SLICE_GRAMS", True)
 # Rollback: MEALFIT_LEAF_VOLUME_CAP=false. tooltip-anchor: P3-LEAF-VOLUME-CAP
 LEAF_VOLUME_CAP_ENABLED = _env_bool("MEALFIT_LEAF_VOLUME_CAP", True)
 LEAF_VOLUME_CAP_G       = max(30, min(200, _env_int("MEALFIT_LEAF_VOLUME_CAP_GRAMS", 75)))   # ~2.5 tazas de hoja cruda
+# [P1-SUBST-RECIPE-REWRITE · 2026-06-28] Tras sustituir un ingrediente por condición/alérgeno (DM2 quita "miel"),
+# reescribe las menciones del ingrediente VIEJO en los PASOS de la receta → evita el "paso fantasma" ("añade la miel"
+# cuando la miel ya no está). Acento-tolerante, elimina el artículo previo (evita género roto), salta texturas, usa los
+# tokens reales del sub. Rollback: MEALFIT_SUBST_RECIPE_REWRITE=false. tooltip-anchor: P1-SUBST-RECIPE-REWRITE
+SUBST_RECIPE_REWRITE_ENABLED = _env_bool("MEALFIT_SUBST_RECIPE_REWRITE", True)
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
@@ -9788,6 +9793,86 @@ _COND_SUB_QTY_PREFIX_RE = _re.compile(
     r"^\s*(\d[\d.,/]*\s*[a-záéíóúñ]*\.?\s*(?:de\s+)?)", _re.IGNORECASE)
 
 
+# [P1-SUBST-RECIPE-REWRITE · 2026-06-28] Tokens que NO se usan para localizar el ingrediente viejo en los pasos:
+# texturas/preparaciones culinarias (un paso "forma una crema suave" NO debe reescribirse si el sub fue
+# 'crema de leche'→yogurt), básicos casi-ubicuos (agua/sal/aceite) y preposiciones/unidades. Conservador: ante la
+# duda, no reescribir (preferimos dejar una mención que corromper prosa legítima — hallazgo de la review adversaria).
+_SUBST_REWRITE_SKIP_TOKENS = frozenset({
+    "crema", "masa", "salsa", "caldo", "base", "punto", "leche", "agua", "aceite", "sal", "sugar",
+    "de", "del", "con", "sin", "para", "una", "uno", "los", "las", "the",
+    "gramos", "gramo", "taza", "tazas", "cucharada", "cucharadas", "cda", "cdas", "cdta", "cucharadita",
+    "onza", "onzas", "libra", "libras", "lonja", "lonjas", "pedazo", "pedazos", "vaso", "vasos",
+    "cubito", "cubitos", "lata", "latas", "botella", "pizca", "ramita", "diente", "dientes",
+    "unidad", "unidades",
+})
+
+_SUBST_ARTICLE_RE_BODY = r"(?:\b(?:el|la|los|las|un|una|unos|unas)\s+)?\b"
+
+
+def _accent_loose_body(tok: str) -> str:
+    """Convierte un token normalizado en cuerpo regex insensible a acentos: 'azucar' → 'az[uúü]car'.
+    Cierra el bug donde el paso dice 'azúcar' (con tilde) pero el token buscado era 'azucar' (sin)."""
+    _vmap = {"a": "[aá]", "e": "[eé]", "i": "[ií]", "o": "[oó]", "u": "[uúü]", "n": "[nñ]", "c": "[cç]"}
+    return "".join(_vmap.get(ch, _re.escape(ch)) for ch in tok)
+
+
+def _strip_qty_prefix_for_step(s: str) -> str:
+    """Nombre del ingrediente sin cantidad/unidad, para insertarlo en un paso. '100g de pollo' → 'pollo';
+    'Stevia al gusto' → 'Stevia al gusto'. Fail-safe (devuelve el original si no matchea)."""
+    try:
+        m = _re.match(r"^\s*[\d.,/]+\s*[a-záéíóúñ]*\.?\s*(?:de\s+)?(.+)$", str(s), _re.IGNORECASE)
+        return (m.group(1).strip() if m else str(s)).strip()
+    except Exception:
+        return str(s)
+
+
+def _rewrite_recipe_steps_after_subs(meal: dict, token_subs: list) -> bool:
+    """[P1-SUBST-RECIPE-REWRITE · 2026-06-28] Reescribe menciones del ingrediente sustituido en los PASOS de la receta.
+    `token_subs`: lista de (tokens_busqueda: list[str], nombre_nuevo: str). Diseño verificado por review adversaria:
+    acento-tolerante (matchea 'azúcar' aunque el token sea 'azucar'), ELIMINA el artículo previo (evita 'la aceite'),
+    salta texturas culinarias (no toca 'forma una crema suave'), longest-token-first (no parte multi-palabra), `\\b`
+    exacto + plural opcional (no `\\w*` que tragaba 'cremoso'). Determinista, idempotente (post-fix el token viejo ya no
+    está), fail-safe. NO toca ingredients ni macros (solo `meal['recipe']`). Devuelve True si cambió algún paso."""
+    rec = meal.get("recipe")
+    steps = list(rec) if isinstance(rec, list) else ([] if rec is None else [str(rec)])
+    if not steps or not token_subs:
+        return False
+    pats = []  # (compiled_pattern, new_display) ordenados por longitud de token DESC
+    _seen = set()
+    for tokens, new in token_subs:
+        new_disp = _strip_qty_prefix_for_step(new)
+        for tok in sorted({str(t).strip().lower() for t in (tokens or []) if t}, key=len, reverse=True):
+            if len(tok) < 4 or tok in _SUBST_REWRITE_SKIP_TOKENS:
+                continue
+            if tok in _seen:
+                continue
+            _seen.add(tok)
+            try:
+                pat = _re.compile(_SUBST_ARTICLE_RE_BODY + _accent_loose_body(tok) + r"(?:es|s)?\b", _re.IGNORECASE)
+            except Exception:
+                continue
+            pats.append((len(tok), pat, new_disp))
+    if not pats:
+        return False
+    pats.sort(key=lambda x: x[0], reverse=True)
+    changed = False
+    out = []
+    for st in steps:
+        s = str(st)
+        for _ln, pat, new_disp in pats:
+            def _rep(m, _nd=new_disp):
+                # descapitaliza salvo inicio de paso (preserva prosa es-DO: "vierte stevia", no "vierte Stevia")
+                return (_nd[:1].upper() + _nd[1:]) if m.start() == 0 else (_nd[:1].lower() + _nd[1:])
+            s2 = pat.sub(_rep, s)
+            if s2 != s:
+                s = _re.sub(r"\s{2,}", " ", s2).strip()
+                changed = True
+        out.append(s)
+    if changed:
+        meal["recipe"] = out
+    return changed
+
+
 def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentinel: str,
                               on_meal_fixed=None) -> int:
     """[P0-ALLERGEN-SUBS · 2026-06-14] Motor de swap determinista COMPARTIDO por las sustituciones
@@ -9837,6 +9922,7 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
         for meal in day.get("meals", []) or []:
             labels, conds, changed = [], set(), False
             swaps = []  # (string_viejo, string_nuevo) — solo de la lista canónica, para el delta de macros
+            recipe_token_subs = []  # (tokens_busqueda, nombre_nuevo) — para reescribir los pasos (P1-SUBST-RECIPE-REWRITE)
             for key in ("ingredients", "ingredients_raw"):
                 ings = meal.get(key)
                 if not isinstance(ings, list):
@@ -9856,6 +9942,7 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                             out.append(new)
                         if key == "ingredients":
                             swaps.append((str(ing), new))
+                            recipe_token_subs.append((s.get("tokens") or [], new))
                         labels.append(s["label"]); conds.add(s["condition"]); changed = True
                     else:
                         out.append(ing)
@@ -9887,6 +9974,14 @@ def _apply_substitutions_core(plan: dict, subs: list, note_builder, note_sentine
                             meal["fats"] = max(0, round(_meal_macro_num(meal.get("fats")) + _d["fats"]))
                             meal["cals"] = max(0, round(_meal_macro_num(meal.get("cals")) + _d["kcal"]))
                             meal["macros"] = [f"P:{meal['protein']}g", f"C:{meal['carbs']}g", f"G:{meal['fats']}g"]
+                    except Exception:
+                        pass
+                # [P1-SUBST-RECIPE-REWRITE · 2026-06-28] Reescribe las menciones del ingrediente VIEJO en los pasos de la
+                # receta ANTES de la nota (para que la nota siga siendo la última línea). Solo usa los tokens de la lista
+                # canónica `ingredients` (recipe_token_subs). Fail-safe: si falla, los pasos quedan intactos.
+                if SUBST_RECIPE_REWRITE_ENABLED and recipe_token_subs:
+                    try:
+                        _rewrite_recipe_steps_after_subs(meal, recipe_token_subs)
                     except Exception:
                         pass
                 uniq = sorted(set(labels))

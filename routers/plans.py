@@ -4082,6 +4082,39 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 "detail": "El Chef AI no pudo detallar esta receta ahora. Mostrando la versión original; intenta de nuevo en un momento.",
             }
 
+        # [P1-RECIPE-EXPAND-COHERENCE · 2026-06-28] Valida coherencia receta↔ingredientes del output del Chef AI ANTES
+        # de cobrar/persistir. Reusa el validador + knob de swap/modify (`MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE`). El
+        # validador V1 atrapa proteínas-fantasma (la receta dice "pollo"/"pescado" pero los ingredientes no lo tienen —
+        # caso `cap_swallowed_modifier`, p.ej. el Chef renombró "filete de pescado" a "dorado"). NO cubre miel/azúcar ni
+        # variantes de queso (no son proteínas canónicas) — para eso está el endurecimiento del prompt (regla 5). Soft-fail
+        # (HTTP 200 + operation_failed, NO marca isExpanded) → no persiste pasos incoherentes y el cliente puede reintentar
+        # sin error rojo. Fail-open: si el validador crashea, NO bloquea (degrada al comportamiento pre-fix).
+        try:
+            from nutrition_calculator import (
+                validate_meal_recipe_ingredients_coherence as _v_coh,
+                _swap_recipe_coherence_enabled as _coh_on,
+            )
+            if _coh_on():
+                _passed, _divs, _summary = _v_coh({
+                    "ingredients": data.get("ingredients") or [],
+                    "recipe": expanded_steps,
+                })
+                if not _passed:
+                    logger.warning(
+                        f"[P1-RECIPE-EXPAND-COHERENCE] expand incoherente meal='{req_name}' "
+                        f"plan={req_plan_id} div={_divs}; soft-fail, no se persiste."
+                    )
+                    return {
+                        "success": False,
+                        "operation_failed": True,
+                        "coherence_check_failed": True,
+                        "expanded_recipe": req_recipe_original or [],
+                        "detail": "El Chef no pudo detallar la receta sin salirse de tus ingredientes. Intenta de nuevo.",
+                    }
+        except Exception as _ce:
+            logger.warning(f"[P1-RECIPE-EXPAND-COHERENCE] validador falló (no bloquea persistencia): "
+                           f"{type(_ce).__name__}: {_ce}")
+
         # Éxito real: cobrar cuota ahora (no antes — ver nota arriba).
         if user_id and user_id != "guest":
             log_api_usage(user_id, "llm_recipe_expand")
