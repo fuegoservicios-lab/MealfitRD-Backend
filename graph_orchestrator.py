@@ -8794,6 +8794,10 @@ GEN_SANITY_AUTOFIX_ENABLED = _env_bool("MEALFIT_GEN_SANITY_AUTOFIX", True)
 # la cena por tubérculo nocturno ANTES del reviewer → evita el retry más común del gate P1-SLOT-APPROPRIATENESS
 # (ahorra una regeneración completa de tokens). El gate queda como backstop. Flip a False revierte a solo-gate.
 NIGHT_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_NIGHT_RICE_AUTOFIX", True)
+# [P1-CLOSER-COHERENCE · 2026-06-27] Re-corre el quantize de porciones a valores HUMANOS (múltiplo de 5g) al FINAL
+# de assemble — el quantize previo corre antes del macro engine, cuyo solver re-introduce decimales absurdos
+# ("37.87 g de lechosa", "4.73g de mozzarella"). Flip a False revierte. tooltip-anchor: P1-CLOSER-COHERENCE
+ASSEMBLE_FINAL_QUANTIZE = _env_bool("MEALFIT_ASSEMBLE_FINAL_QUANTIZE", True)
 
 # [C2-ALLERGEN-GUARD · 2026-06-13] Backstop DETERMINISTA de alérgenos en review_plan_node:
 # escanea los ingredientes vs las alergias declaradas (+ sinónimos) y rechaza-duro
@@ -8890,6 +8894,10 @@ VARIETY_REPORT_ENABLED = _env_bool("MEALFIT_VARIETY_REPORT", True)
 # del ingrediente añadido en el nombre. Flip a False revierte al comportamiento legacy. Anchor:
 # P2-DISH-COHERENCE.
 CLOSER_DISH_COHERENCE_ENABLED = _env_bool("MEALFIT_CLOSER_DISH_COHERENCE", True)
+# [P1-CLOSER-COHERENCE · 2026-06-27] Congruencia del closer por token ESPECÍFICO del nombre (ricotta/mozzarella/
+# pollo) en vez del primer token genérico ("queso"). Cierra el bug "batido con ricotta recibe un 2º queso
+# (mozzarella)". Flip a False revierte al match por primer-token. tooltip-anchor: P1-CLOSER-COHERENCE
+CLOSER_CONGRUENCE_FULLNAME = _env_bool("MEALFIT_CLOSER_CONGRUENCE_FULLNAME", True)
 
 # [P3-SUPPLEMENT-ADVICE · 2026-06-13] A partir de los gaps del panel de micros (vit D/calcio/
 # hierro/B12), genera recomendaciones de suplementación accionables (suplemento+dosis+alimentos
@@ -10947,7 +10955,9 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
             return 0
         f = grams / 100.0
         name_disp = str(info.name).lower()
-        line = f"{grams}g de {name_disp} ({grams}g)"
+        # [P1-CLOSER-COHERENCE · 2026-06-27] sin el hint duplicado "(Ng)" (ej. "4.73g de queso (4.73g)") — el líder
+        # ya está en gramos; el quantize final lo redondea a valor humano.
+        line = f"{grams}g de {name_disp}"
         meal.setdefault("ingredients", []).append(line)
         if isinstance(meal.get("ingredients_raw"), list):
             meal["ingredients_raw"].append(line)
@@ -10976,8 +10986,13 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
 # dura). El closer rellena cada comida a su target de proteína del slot con una proteína de
 # ALTA DENSIDAD allergen-safe, integrada como ingrediente real (gramos), y el reconcile
 # protein-preserving nivela las kcal escalando SOLO carbos/grasas (la proteína queda fija).
-# Proteínas no-cocción-safe (para batidos/ensaladas frías): yogur/queso/whey, NUNCA huevo crudo.
-_NO_COOK_SAFE_PROTEIN_HINT = ("yogur", "yogurt", "queso", "whey", "proteina", "proteína", "ricotta")
+# Proteínas no-cocción-safe (para batidos/ensaladas frías): SOLO formas BATIBLES/blandas — yogur, ricotta, cottage,
+# requesón, queso crema/blanco/fresco, whey/proteína. NUNCA huevo crudo. [P1-CLOSER-COHERENCE · 2026-06-27] El
+# "queso" genérico dejaba pasar MOZZARELLA/cheddar/parmesano/gouda/de freír al pool de un BATIDO (un 2º queso de
+# pizza en un licuado = incoherente, rechazo del usuario). Lista explícita → solo quesos que SÍ van en un batido.
+_NO_COOK_SAFE_PROTEIN_HINT = ("yogur", "yogurt", "ricotta", "requeson", "cottage",
+                              "queso crema", "queso blanco", "queso fresco",
+                              "whey", "proteina", "proteína")
 # [P3-PROTEIN-FLOOR] Dish-fit del closer: comidas ligeras (desayuno/merienda) prefieren
 # proteína de huevo/lácteo; las principales prefieren carne — evita combos incongruentes
 # (camarón en un revoltillo de desayuno). Congruencia (proteína ya en el plato) gana primero.
@@ -10985,6 +11000,10 @@ _LIGHT_MEAL_HINT = ("desayuno", "merienda", "avena", "batido", "smoothie", "licu
                     "tostada", "yogur", "fruta", "panqueque", "omelet", "tortilla", "revoltillo",
                     "cereal", "granola", "bowl", "snack")
 _DAIRY_EGG_PROTEIN_HINT = ("huevo", "clara", "yogur", "yogurt", "queso", "ricotta", "whey", "proteina", "proteína")
+# [P1-CLOSER-COHERENCE · 2026-06-27] Palabras GENÉRICAS de proteína que NO sirven para congruencia (las comparten
+# varios alimentos → "queso" matchea ricotta Y mozzarella). La congruencia exige un token ESPECÍFICO fuera de esta lista.
+_CLOSER_GENERIC_PROTEIN_WORDS = frozenset((
+    "queso", "carne", "pescado", "filete", "pechuga", "yogur", "yogurt", "proteina", "proteína", "fresco", "blanco"))
 _MEAT_PROTEIN_HINT = ("pollo", "pavo", "cerdo", "res", "carne", "pescado", "atun", "atún",
                       "sardina", "camaron", "camarón", "tilapia", "lomo", "chuleta", "longaniza")
 
@@ -11278,10 +11297,20 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             # (baja densidad → gramos absurdos); para esas cae a categoría. Matchea por TOKEN
             # (1ª palabra del nombre, ej. "queso" de "queso mozzarella") para que "con queso"
             # en el plato escale el queso en vez de meter una proteína ajena.
-            _tok = nlow.split()[0] if nlow else ""
-            if _tok and len(_tok) >= 4 and _tok in meal_text and (info.protein or 0) >= 18:
-                chosen = info
-                break
+            if CLOSER_CONGRUENCE_FULLNAME:
+                # [P1-CLOSER-COHERENCE] Congruencia por token ESPECÍFICO (ricotta/mozzarella/pollo), NO el genérico
+                # "queso" — antes "queso mozzarella".split()[0]="queso" matcheaba "queso ricotta" del plato y metía un
+                # 2º queso ajeno. Ahora solo declara congruencia si un token específico del candidato (≥4 chars, fuera
+                # de _CLOSER_GENERIC_PROTEIN_WORDS) aparece en el plato → escala el MISMO alimento, no otro.
+                _cong_toks = [t for t in nlow.split() if len(t) >= 4 and t not in _CLOSER_GENERIC_PROTEIN_WORDS]
+                if (info.protein or 0) >= 18 and any(t in meal_text for t in _cong_toks):
+                    chosen = info
+                    break
+            else:
+                _tok = nlow.split()[0] if nlow else ""
+                if _tok and len(_tok) >= 4 and _tok in meal_text and (info.protein or 0) >= 18:
+                    chosen = info
+                    break
         if chosen is None:
             _pref = _DAIRY_EGG_PROTEIN_HINT if light else _MEAT_PROTEIN_HINT
             for info, nlow in _pool:
@@ -11296,7 +11325,7 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         f = grams / 100.0
         nm = str(chosen.name).lower()
         cook = "" if no_cook else " cocido"
-        line = f"{grams}g de {nm}{cook} ({grams}g)"
+        line = f"{grams}g de {nm}{cook}"  # [P1-CLOSER-COHERENCE] sin hint duplicado "(Ng)"; quantize final lo redondea
         meal.setdefault("ingredients", []).append(line)
         if isinstance(meal.get("ingredients_raw"), list):
             meal["ingredients_raw"].append(line)
@@ -11311,9 +11340,10 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
             # Nota SIN gramaje hardcodeado: el ingrediente (que puede re-escalarse en el trim/
             # cuantización) es la fuente de verdad → la nota nunca se desfasa.
             verb = "Añade" if no_cook else "Cocina e incorpora"
-            meal["recipe"] = rec + [
-                f"💪 {verb} el {nm} indicado en los ingredientes como fuente principal de "
-                f"proteína de esta comida."]
+            # [P1-CLOSER-COHERENCE] En comida ligera/batido el add REFUERZA la proteína (no es "fuente principal");
+            # decirlo "principal" en una merienda sonaba forzado. En plato fuerte sí es la fuente de proteína.
+            _role = "para reforzar la proteína de esta comida" if (no_cook or light) else "como fuente de proteína de esta comida"
+            meal["recipe"] = rec + [f"💪 {verb} el {nm} indicado en los ingredientes {_role}."]
         # [P2-DISH-COHERENCE] El closer acaba de meter `chosen` como proteína PRINCIPAL: refléjala
         # en el nombre si no estaba (no esconder la proteína principal del plato).
         _reflect_added_protein_in_name(meal, chosen.name, _sa)
@@ -13272,7 +13302,7 @@ def _swap_excess_carbs_to_protein_for_day(meals, p_target_day, c_target_day, db,
         c_add = (chosen.carbs or 0.0) * f
         f_add = (chosen.fats or 0.0) * f
         kcal_add = 4 * p_add + 4 * c_add + 9 * f_add
-        line = f"{grams_food}g de {nm}{'' if no_cook else ' cocido'} ({grams_food}g)"
+        line = f"{grams_food}g de {nm}{'' if no_cook else ' cocido'}"  # [P1-CLOSER-COHERENCE] sin hint duplicado
         target_meal.setdefault("ingredients", []).append(line)
         if isinstance(target_meal.get("ingredients_raw"), list):
             target_meal["ingredients_raw"].append(line)
@@ -13665,7 +13695,11 @@ def cap_bariatric_portions(days: list, form_data: dict, db=None) -> int:
 # [P3-GEN-SANITY-AUTOFIX · 2026-06-27] tokens de batido + ingredientes incongruentes en un batido (almidón/huevo).
 _GEN_BATIDO_NAME_TOKENS = ("batido", "smoothie", "licuado", "shake", "malteada", "jugo de")
 _GEN_INCONGRUENT_IN_BATIDO = ("papa", "yuca", "batata", "yautia", "mapuey", "name", "casabe", "arroz", "pasta",
-                              "pan integral", "pan blanco", "platano", "huevo", "clara", "yema", "mangu", "tostada")
+                              "pan integral", "pan blanco", "platano", "huevo", "clara", "yema", "mangu", "tostada",
+                              # [P1-CLOSER-COHERENCE · 2026-06-27] quesos FIRMES/de fundir/añejos no van en un batido
+                              # (ricotta/cottage/crema SÍ son batibles → no se listan). Backstop si el LLM los genera.
+                              "mozzarella", "queso de freir", "queso de freír", "queso frito", "queso de hoja",
+                              "parmesano", "cheddar", "gouda", "quesillo", "queso de papa", "manchego", "provolone")
 # Ítems "libres" (no de catálogo) que NUNCA se dropean como glitch (agua/condimentos/cítrico al gusto).
 _GEN_FREE_ITEM_TOKENS = ("agua", "hielo", "sal", "pimienta", "especia", "al gusto", "limon", "vinagre", "canela",
                          "hierba", "perejil", "cilantro", "oregano", "comino", "ajo en polvo", "stevia", "vainilla",
@@ -15041,6 +15075,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"(re-cierre del piso tras recorte de lácteos) + reconcile C/F.")
         except Exception as _rp:
             logger.warning(f"[P1-PROTEIN-FLOOR-POST-CAPS] en assemble falló (no bloquea): {type(_rp).__name__}: {_rp}")
+
+    # [P1-CLOSER-COHERENCE · 2026-06-27] Quantize FINAL de porciones a valores HUMANOS (múltiplo de 5g): el quantize
+    # previo corre ANTES del macro engine, cuyo solver/closer re-introducen decimales no-medibles ("37.87 g de
+    # lechosa", "4.73g de mozzarella"). Esta pasada los redondea + re-cuadra macros (la fn aplica el delta). Última
+    # mutación de cantidades antes de shopping/review → la lista y la receta quedan con gramos humanos. Fail-safe.
+    if ASSEMBLE_FINAL_QUANTIZE:
+        try:
+            from nutrition_db import IngredientNutritionDB as _QDB
+            _q_n = _apply_portion_quantization({"days": days}, _QDB())
+            if _q_n:
+                logger.info(f"📏 [P1-CLOSER-COHERENCE] quantize final: porciones humanas en {_q_n} comida(s) post-engine.")
+        except Exception as _fq_e:
+            logger.warning(f"[P1-CLOSER-COHERENCE] quantize final en assemble falló (no bloquea): {type(_fq_e).__name__}: {_fq_e}")
 
     # [P1-PHANTOM-PROTEIN-NAMEFIX · 2026-06-26] Honestidad del nombre del plato: corre DESPUÉS del closer
     # (que ya reflejó en el nombre la proteína de rescate vía `_reflect_added_protein_in_name`). Corrige
