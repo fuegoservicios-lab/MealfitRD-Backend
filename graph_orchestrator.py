@@ -8818,6 +8818,14 @@ GEN_SANITY_AUTOFIX_ENABLED = _env_bool("MEALFIT_GEN_SANITY_AUTOFIX", True)
 # la cena por tubérculo nocturno ANTES del reviewer → evita el retry más común del gate P1-SLOT-APPROPRIATENESS
 # (ahorra una regeneración completa de tokens). El gate queda como backstop. Flip a False revierte a solo-gate.
 NIGHT_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_NIGHT_RICE_AUTOFIX", True)
+# [P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Guard UNIVERSAL: vegetales del catálogo mencionados en los PASOS de la
+# receta pero ausentes de ingredients[] (bug en vivo: "calabacín" en los pasos de un revoltillo, sin estar en la lista →
+# no entra a compras ni a macros). Macro-safe por construcción: solo category=='Vegetales' AND kcal/100g ≤ MAX_KCAL
+# (excluye proteína/lácteo/víver/fruta/despensa/aceite/legumbre) AND fuera de stop-list de hierbas/aromáticos. Default True;
+# rollback sin redeploy: MEALFIT_RECIPE_STEP_VEG_GUARD=false.
+RECIPE_STEP_VEG_GUARD_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_VEG_GUARD", True)
+RECIPE_STEP_GUARD_MAX_KCAL = _env_float("MEALFIT_RECIPE_STEP_GUARD_MAX_KCAL", 60.0, validator=lambda v: 10.0 <= v <= 200.0)
+RECIPE_STEP_GUARD_MAX_PER_MEAL = _env_int("MEALFIT_RECIPE_STEP_GUARD_MAX_PER_MEAL", 3, validator=lambda v: 1 <= v <= 10)
 # [P1-CLOSER-COHERENCE · 2026-06-27] Re-corre el quantize de porciones a valores HUMANOS (múltiplo de 5g) al FINAL
 # de assemble — el quantize previo corre antes del macro engine, cuyo solver re-introduce decimales absurdos
 # ("37.87 g de lechosa", "4.73g de mozzarella"). Flip a False revierte. tooltip-anchor: P1-CLOSER-COHERENCE
@@ -14570,6 +14578,93 @@ def _cap_leaf_volume_in_meals(days: list, db=None) -> int:
         return 0
 
 
+# [P1-RECIPE-STEP-INGREDIENT-COHERENCE] Hierbas/aromáticos que el catálogo cataloga como 'Vegetales' pero se usan en
+# dosis mínima (no se agregan como componente de 100g) + stop-list dura de genéricos de cocina. Tokens sin acento.
+_RECIPE_STEP_VEG_CONDIMENT_STOPLIST = frozenset({
+    "ajo", "cilantro", "perejil", "cebollin", "cebollino", "oregano", "laurel", "tomillo", "romero",
+    "albahaca", "hierbabuena", "menta", "aji picante", "aji cubanela", "aji gustoso", "pimienta",
+    "comino", "azafran", "jengibre", "cebolleta", "puerro",
+})
+_RECIPE_STEP_VEG_HARD_STOP = frozenset({"agua", "sal", "hielo"})
+
+
+def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3) -> int:
+    """[P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Guard UNIVERSAL determinista: detecta VEGETALES del catálogo
+    verificado mencionados en los PASOS (recipe[]) pero AUSENTES de ingredients[] y los agrega con porción 100g, para que
+    entren a la lista de compras + macros. Bug en vivo (plan normal): "Revoltillo" cuyos pasos dicen "agrega el calabacín
+    rallado" pero calabacín no estaba en ingredients[] → no se compraba + macros sub-contados.
+
+    Corre ANTES de `_apply_macro_engine` → el vegetal agregado pasa por allergen scan + reconcile + truth-up + quantize +
+    shopping + coherence guard (simetría I6/I7 preservada: ambos lados del guard ven el ingrediente).
+
+    Macro-safe POR CONSTRUCCIÓN: solo `category=='Vegetales'` AND `kcal/100g ≤ max_kcal` → excluye proteína/lácteo/víver/
+    fruta/despensa (aceite 900, lentejas 361, maní 630) y vegetales densos. Excluye hierbas/aromáticos (cilantro/perejil/
+    ajo) por stop-list + ajo por kcal. Determinista, idempotente (`normalize_name not in present`), fail-safe (excepción→0).
+    NO agrega agua/sal/hielo ni menciones negadas ("sin calabacín"). tooltip-anchor: P1-RECIPE-STEP-INGREDIENT-COHERENCE"""
+    try:
+        from shopping_calculator import get_master_ingredients, normalize_name
+        from constants import strip_accents as _sa
+    except Exception:
+        return 0
+    try:
+        rows = get_master_ingredients() or []
+    except Exception:
+        return 0
+    veg = {}  # token (sin acento) -> Nombre canónico
+    for r in rows:
+        try:
+            if (r.get("category") or "") != "Vegetales":
+                continue
+            _kcal = r.get("kcal_per_100g")
+            if _kcal is None or float(_kcal) > float(max_kcal):
+                continue
+            nm = (r.get("name") or "").strip()
+            tok = _sa(nm.lower()).strip()
+            if len(tok) < 4 or tok in _RECIPE_STEP_VEG_CONDIMENT_STOPLIST or tok in _RECIPE_STEP_VEG_HARD_STOP:
+                continue
+            veg[tok] = nm
+        except Exception:
+            continue
+    if not veg:
+        return 0
+    added_total = 0
+    for day in (days or []):
+        for meal in (day.get("meals") or []):
+            try:
+                present = set()
+                for ing in (meal.get("ingredients") or []):
+                    try:
+                        present.add(normalize_name(ing))
+                    except Exception:
+                        pass
+                recipe_txt = _sa(" ".join(str(s) for s in (meal.get("recipe") or [])).lower())
+                if not recipe_txt:
+                    continue
+                added_this = 0
+                for tok, nm in veg.items():
+                    if added_this >= max_per_meal:
+                        break
+                    if not _re.search(r"\b" + _re.escape(tok) + r"\b", recipe_txt):
+                        continue
+                    if _re.search(r"\bsin\s+" + _re.escape(tok), recipe_txt):  # negación ("sin calabacín")
+                        continue
+                    try:
+                        if normalize_name(nm) in present:
+                            continue
+                    except Exception:
+                        pass
+                    meal.setdefault("ingredients", []).append(f"100g {nm}")
+                    try:
+                        present.add(normalize_name(nm))
+                    except Exception:
+                        pass
+                    added_this += 1
+                    added_total += 1
+            except Exception:
+                continue
+    return added_total
+
+
 def _night_rice_autofix(days: list, db=None) -> int:
     """[P1-NIGHT-RICE-AUTOFIX · 2026-06-27] (audit G4) Autofix DETERMINISTA del "arroz de noche": reescribe el
     ARROZ simple de la CENA por un tubérculo nocturno (batata/yuca/casabe, rotado por día) — ingrediente Y NOMBRE
@@ -15976,6 +16071,19 @@ async def assemble_plan_node(state: PlanState) -> dict:
                             f"a tubérculo nocturno (batata/yuca/casabe) pre-reviewer.")
         except Exception as _nra_c:
             logger.warning(f"[P1-NIGHT-RICE-AUTOFIX] callsite en assemble falló (no bloquea): {type(_nra_c).__name__}: {_nra_c}")
+
+    # [P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Vegetales mencionados en los pasos pero ausentes de ingredients[]
+    # (fantasma "calabacín") → agregar ANTES del macro engine para que entren a allergen scan + reconcile + shopping +
+    # coherence. Universal (NO gateado a bariátrico — el bug es de planes normales). Determinista/idempotente/fail-safe.
+    if RECIPE_STEP_VEG_GUARD_ENABLED:
+        try:
+            _veg_added = _add_missing_recipe_step_vegetables(
+                days, max_kcal=RECIPE_STEP_GUARD_MAX_KCAL, max_per_meal=RECIPE_STEP_GUARD_MAX_PER_MEAL)
+            if _veg_added:
+                logger.info(f"🥗 [P1-RECIPE-STEP-INGREDIENT-COHERENCE] {_veg_added} vegetal(es) de los pasos "
+                            f"agregado(s) a ingredients[] (entran a compras + macros).")
+        except Exception as _rsv:
+            logger.warning(f"[P1-RECIPE-STEP-INGREDIENT-COHERENCE] guard falló (no bloquea): {type(_rsv).__name__}: {_rsv}")
 
     _apply_macro_engine(result, days, skeleton, _daily_cals, _pg, _cg, _fg, form_data, nutrition)
 

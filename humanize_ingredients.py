@@ -108,6 +108,44 @@ def strip_accents(s: str) -> str:
     import unicodedata
     return ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
 
+def _polish_countunit_display(raw_ingredient: str, qty_str: str, name: str) -> str:
+    """[P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Pulido cosmético del ingrediente sin unidad métrica (el quantize
+    no lo toca porque "cda"/count no son unidades métricas). Display-only (corre dentro de humanize_plan_ingredients, POST
+    macros/shopping → no altera datos). Dos reglas deterministas:
+      (a) "0.25 cda"/"¼ cda"/"1/4 cda" de X → "1 cdta de X" (¼ cucharada es impráctica).
+      (b) "1 <plural>" → "1 <singular>" usando DOMINICAN_HOUSEHOLD_MEASURES (match EXACTO del plural → evita romper
+          gramática con adjetivos no mapeados). Ej: "1 huevos enteros"→"1 huevo entero", "1 huevos"→"1 huevo".
+    Cualquier otro caso: devuelve el original intacto."""
+    try:
+        qty = 1.0
+        _qs = (qty_str or "").strip().replace(',', '.')
+        if '/' in _qs:
+            _p = _qs.split('/')
+            qty = float(_p[0]) / float(_p[1])
+        elif _qs:
+            qty = float(_qs)
+    except (ValueError, ZeroDivisionError, IndexError):
+        return raw_ingredient
+
+    name_l = strip_accents((name or "").lower().strip())
+
+    # (a) ¼ cda → 1 cdta
+    m_spoon = re.match(r'^(cda|cucharada)s?\b\s*(?:de\s+)?(.*)$', name_l)
+    if m_spoon and 0 < qty <= 0.34:
+        rest = re.sub(r'^\s*(?:cda|cucharada)s?\b\s*(?:de\s+)?', '', name, flags=re.IGNORECASE).strip()
+        return f"1 cdta de {rest}" if rest else raw_ingredient
+
+    # (b) "1 <plural>" → "1 <singular>" (match exacto del plural)
+    if abs(qty - 1.0) < 1e-6 and name_l:
+        for meas in sorted(DOMINICAN_HOUSEHOLD_MEASURES.values(),
+                           key=lambda mm: len(mm.get("plural", "")), reverse=True):
+            pl = strip_accents((meas.get("plural") or "").lower())
+            if pl and name_l == pl:
+                return f"1 {meas['singular']}"
+
+    return raw_ingredient
+
+
 def humanize_ingredient(raw_ingredient: str) -> str:
     """
     Convierte un ingrediente en gramos/ml a medidas caseras si aplica.
@@ -125,8 +163,10 @@ def humanize_ingredient(raw_ingredient: str) -> str:
     name = raw_ingredient[match.end():].strip()
     
     if not unit:
-        # Ya está en unidades (ej. "2 huevos"), no tocar
-        return raw_ingredient
+        # [P1-RECIPE-STEP-INGREDIENT-COHERENCE · 2026-06-28] Caso SIN unidad métrica (count/cucharada): el quantize lo
+        # deja como vino ("0.25 cda de aceite", "1 huevos enteros"). Pulido cosmético display-only (corre POST-macros →
+        # no toca compras/macros): (a) "0.25 cda"→"1 cdta"; (b) "1 <plural>"→"1 <singular>". Resto intacto.
+        return _polish_countunit_display(raw_ingredient, qty_str, name)
         
     unit = unit.lower()
     
