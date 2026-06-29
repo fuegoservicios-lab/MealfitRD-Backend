@@ -8974,6 +8974,14 @@ RAW_EGG_BLENDED_SUBSTITUTE_ENABLED = _env_bool("MEALFIT_RAW_EGG_BLENDED_SUBSTITU
 # (solo nota, como 'no_cook'). Default True (seguridad); flip a False revierte al scan solo-huevo.
 RAW_SEAFOOD_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_SEAFOOD_SAFETY", True)
 
+# [P1-RAW-VIVER-SAFETY · 2026-06-28] Extiende el scan food-safety a VÍVERES CIANOGÉNICOS (yuca/cassava/yautía/ñame) y
+# LEGUMINOSAS secas (habichuela/frijol/lenteja/gandul/haba/garbanzo/edamame) servidos CRUDOS. Bug en vivo: "Ceviche de
+# yuca con edamame" servía yuca CRUDA sin cocción → la yuca cruda libera cianuro (linamarina); las habichuelas crudas/mal
+# cocidas tienen fitohemaglutinina (PHA, intoxicación con 4-5 unidades). El cook-indicator (guisad/hervid/cocid/sopa/lata...)
+# absuelve el caso COCIDO, que en es-DO es la inmensa mayoría → falsos-positivos mínimos. Macro-preservante (solo nota, como
+# el seafood). Default True (seguridad); flip a False revierte. Anchor: P1-RAW-VIVER-SAFETY.
+RAW_VIVER_SAFETY_ENABLED = _env_bool("MEALFIT_RAW_VIVER_SAFETY", True)
+
 # [P3-PORTION-QUANTIZE · 2026-06-13] Redondea las porciones del plan a unidades de cocina
 # medibles (¼ taza, ¼ cda, ½ unidad discreta, 5 g) ajustando los macros por el delta exacto.
 # Cierra el hallazgo de la auditoría: las fracciones decimales no medibles ('0.66 huevos',
@@ -10891,12 +10899,17 @@ _BLEND_EGG_REPLACEMENT = "Yogurt griego sin azúcar"
 # Tokens ESTRECHOS: nombres de plato inequívocamente crudo (ceviche/sushi/...) + frases explícitas
 # ('pescado crudo'). NO 'crudo'/'cruda' desnudo → matchearía 'zanahoria cruda' (vegetal seguro).
 _RAW_SEAFOOD_MEAT_TERMS = (  # INEQUÍVOCOS: plato crudo de pescado/carne, match standalone.
-    "ceviche", "cebiche", "sushi", "sashimi", "tiradito",
+    "sushi", "sashimi", "tiradito",
     "pescado crudo", "carne cruda", "res cruda", "atun crudo", "salmon crudo", "marisco crudo",
 )
-# [review P2] tartar/carpaccio existen también de VEGETAL ('tartar de remolacha', 'carpaccio de calabacín')
-# → ambiguos: solo flagean si co-ocurren con un sustantivo de proteína ANIMAL en el mismo texto.
-_RAW_PREP_AMBIGUOUS = ("tartar", "tartare", "carpaccio")
+# [P2-RAW-SEAFOOD-FALSE-POSITIVE · 2026-06-28] "ceviche"/"cebiche" SALEN del standalone → en RD existe el "ceviche de
+# yuca"/vegetal, y matchear la sola palabra "ceviche" disparaba un banner de pescado-crudo en un plato vegetariano (bug en
+# vivo: "Ceviche de yuca con edamame"). Pasan a la rama AMBIGUA: solo flagean si co-ocurre proteína ANIMAL real en el plato
+# (igual que tartar/carpaccio, que existen de vegetal). sushi/sashimi/tiradito SIGUEN standalone (siempre son pescado
+# crudo). HUECO PRE-EXISTENTE conocido (follow-up): pescado crudo "disfrazado" sin keyword de plato ("atún marinado en
+# limón", "salmón curado") — no se añade aquí porque "marinad/curad/escabech" falsearían marinados COCIDOS ("pollo marinado
+# a la plancha"); cerrarlo requiere chequear estado-de-cocción en la rama ambigua.
+_RAW_PREP_AMBIGUOUS = ("tartar", "tartare", "carpaccio", "ceviche", "cebiche")
 _RAW_ANIMAL_PROTEIN_TERMS = ("pescado", "atun", "salmon", "res", "carne", "ternera", "marisco", "camaron",
                              "pulpo", "vieira", "ostra", "bacalao", "mero", "tilapia", "chillo", "filete",
                              # [P2-RAW-POULTRY-SAFETY · 2026-06-19] (audit fresco P2-8) Ave en la lista de
@@ -10951,6 +10964,89 @@ def _scan_raw_seafood_meat_violations(plan: dict) -> list:
                 hit = bool(_RAW_ANIMAL_PROTEIN_RE.search(text))
             if hit:
                 out.append((di, mi, meal.get("name", "?")))
+    return out
+
+
+# [P1-RAW-VIVER-SAFETY · 2026-06-28] Víveres cianogénicos (yuca/cassava → linamarina/HCN; yautía/ñame → oxalatos) +
+# leguminosas secas (PHA/fitohemaglutinina) que DEBEN cocerse. Tokens accent-free, match por límite de palabra `\b`
+# (evita falsos: 'haba'⊄'habano', 'name'(ñame)⊄'nombre'). 'casabe' NO va aquí (es yuca ya deshidratada/tostada = cocida).
+_MUST_COOK_VIVER_LEGUME_TERMS = (
+    "yuca", "cassava", "mandioca", "yautia", "name", "malanga", "lleren",
+    "habichuela", "frijol", "frijoles", "lenteja", "gandul", "haba", "garbanzo", "edamame",
+)
+import re as _viv_re
+# `(?:s|es)?` cubre plurales es-DO (habichuela→habichuelas, frijol→frijoles, yuca→yucas) sin perder el límite de palabra.
+_MUST_COOK_VIVER_LEGUME_RE = _viv_re.compile(
+    r"\b(?:" + "|".join(_viv_re.escape(_t) for _t in _MUST_COOK_VIVER_LEGUME_TERMS) + r")(?:s|es)?\b")
+# Indicadores de COCCIÓN (absuelven): si el nombre/receta los menciona, el víver/legumbre va cocido → no flag.
+# 'casabe'/'mangu'/'sancocho'/'moro'/'locrio'/'asopao'/'potaje' = preparaciones es-DO inequívocamente cocidas.
+_VIVER_LEGUME_COOK_INDICATORS = (
+    "hervid", "cocid", "cocin", "cuece", "cuec", "guisad", "al horno", "horne", "frit", "asad", "estofad",
+    "sancoch", "potaje", "moro", "locrio", "asopao", "sopa", "crema", "pure", "majad", "mangu", "casabe",
+    "enlatad", "de lata", "al vapor", "vapor", "saltea", "saltead", "salcoch", "tostad",
+)
+_FOOD_SAFETY_NOTE_RAW_VIVER = (
+    "⚠️ Seguridad alimentaria: la yuca y otros víveres (yautía/ñame) y las leguminosas (habichuelas/frijoles/lentejas) "
+    "deben servirse SIEMPRE BIEN COCIDOS — hierve hasta ablandar y DESCARTA el agua de cocción. Crudos o mal cocidos "
+    "contienen toxinas naturales (la yuca, glucósidos cianogénicos → cianuro; las habichuelas, fitohemaglutinina). "
+    "Nunca los sirvas crudos ni 'curados' solo en cítrico."
+)
+_FOOD_SAFETY_NOTE_RAW_VIVER_BLENDED = (
+    "⚠️ Seguridad alimentaria: NO licúes yuca, víveres ni leguminosas CRUDOS en un batido — deben hervirse hasta ablandar "
+    "(la yuca cruda libera cianuro; las habichuelas crudas, fitohemaglutinina). Elimina este batido o cámbialo por un "
+    "ingrediente apto para licuar en crudo (fruta/avena/yogur)."
+)
+
+
+def _meal_has_must_cook_viver(meal: dict, strip_accents) -> bool:
+    """[P1-RAW-VIVER-SAFETY] True si el meal nombra (en `name` o `ingredients[]`) un víver/legumbre que DEBE cocerse."""
+    parts = [str(meal.get("name", ""))]
+    for ing in (meal.get("ingredients", []) or []):
+        parts.append(str(ing))
+    text = strip_accents(" ".join(parts).lower())
+    return bool(_MUST_COOK_VIVER_LEGUME_RE.search(text))
+
+
+def _meal_viver_is_cooked(meal: dict, strip_accents) -> bool:
+    """[P1-RAW-VIVER-SAFETY] True si name+recipe indican cocción. EXCLUYE las líneas de la propia nota de seguridad
+    (que contienen 'Seguridad alimentaria') para que la nota NUNCA se auto-absuelva (verdict food-safety c-3)."""
+    parts = [str(meal.get("name", ""))]
+    rec = meal.get("recipe")
+    if isinstance(rec, list):
+        parts.extend(str(s) for s in rec if "Seguridad alimentaria" not in str(s))
+    text = strip_accents(" ".join(parts).lower())
+    return any(c in text for c in _VIVER_LEGUME_COOK_INDICATORS)
+
+
+def _meal_viver_is_blended(meal: dict, strip_accents) -> bool:
+    """[P1-RAW-VIVER-SAFETY] True si el meal es una preparación LICUADA (batido/jugo) — peor caso (no hay cocción posible
+    aguas abajo). Reusa `_NO_COOK_BLENDED` (el set del scanner de huevo)."""
+    parts = [str(meal.get("name", ""))]
+    rec = meal.get("recipe")
+    if isinstance(rec, list):
+        parts.extend(str(s) for s in rec)
+    text = strip_accents(" ".join(parts).lower())
+    return any(b in text for b in _NO_COOK_BLENDED)
+
+
+def _scan_raw_viver_violations(plan: dict) -> list:
+    """[P1-RAW-VIVER-SAFETY · 2026-06-28] Detecta víveres cianogénicos/leguminosas servidos CRUDOS (presentes en
+    name/ingredients SIN indicador de cocción en name/recipe). Retorna (day_idx, meal_idx, name, blended). Espejo de
+    `_scan_raw_egg_violations`; sesgo a seguridad (falso 'crudo' = nota inocua; falso 'cocido' sería peligroso)."""
+    try:
+        from constants import strip_accents
+    except Exception:
+        def strip_accents(s):
+            import unicodedata
+            return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c))
+    out = []
+    for di, day in enumerate(plan.get("days", []) or []):
+        for mi, meal in enumerate(day.get("meals", []) or []):
+            if not _meal_has_must_cook_viver(meal, strip_accents):
+                continue
+            if _meal_viver_is_cooked(meal, strip_accents):
+                continue
+            out.append((di, mi, meal.get("name", "?"), _meal_viver_is_blended(meal, strip_accents)))
     return out
 
 
@@ -11059,6 +11155,25 @@ def _apply_food_safety_fixes(plan: dict) -> int:
                 continue  # idempotente
             meal["recipe"] = rec + [_FOOD_SAFETY_NOTE_RAW_SEAFOOD]
             meal["_food_safety_seafood"] = True   # campo propio: NO pisa `_food_safety_fixed` del huevo si coexisten
+            fixed += 1
+    # [P1-RAW-VIVER-SAFETY · 2026-06-28] Víveres cianogénicos (yuca/cassava/yautía/ñame) + leguminosas secas servidos
+    # CRUDOS → nota de seguridad determinista (macro-preservante, NO reescribe el token → cero riesgo de coherencia
+    # receta↔lista; igual patrón que el seafood). 'blended' (batido con víver crudo) = peor caso → nota que DESACONSEJA el
+    # plato (no se puede cocer aguas abajo). Idempotente por substring propio.
+    if RAW_VIVER_SAFETY_ENABLED:
+        for di, mi, _vname, _blended in _scan_raw_viver_violations(plan):
+            try:
+                meal = plan["days"][di]["meals"][mi]
+            except (KeyError, IndexError, TypeError):
+                continue
+            rec = meal.get("recipe")
+            if not isinstance(rec, list):
+                rec = [] if rec is None else [str(rec)]
+            if any("deben servirse SIEMPRE BIEN COCIDOS" in str(s) or "NO licúes yuca" in str(s) for s in rec):
+                continue  # idempotente
+            _vnote = _FOOD_SAFETY_NOTE_RAW_VIVER_BLENDED if _blended else _FOOD_SAFETY_NOTE_RAW_VIVER
+            meal["recipe"] = rec + [_vnote]
+            meal["_food_safety_viver"] = "blended" if _blended else "raw"
             fixed += 1
     return fixed
 
