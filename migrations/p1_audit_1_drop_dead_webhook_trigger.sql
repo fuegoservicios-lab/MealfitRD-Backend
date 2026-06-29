@@ -13,7 +13,7 @@
 --   1. Secret en cleartext dentro de pg_proc — visible a cualquier rol con
 --      `SELECT` sobre `pg_catalog.pg_proc`. Zero rotabilidad sin DDL.
 --   2. URL apunta a un dominio `vercel.app` que pre-data la migración a
---      Easypanel/Nixpacks (per `backend/.env.example`). Si el host quedó
+--      el VPS Oracle (per `backend/.env.example`). Si el host quedó
 --      stale, cada INSERT disparaba un pg_net request a un endpoint muerto.
 --   3. Dependencia obligatoria de la extensión `pg_net` para algo que el
 --      backend puede polear directamente.

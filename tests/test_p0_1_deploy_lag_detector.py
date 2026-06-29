@@ -2,7 +2,7 @@
 de despliegue (`_alert_deploy_lag_marker_stale`).
 
 Bug original (audit 2026-05-10):
-    El binario corriendo en EasyPanel quedó rezagado vs HEAD. Logs Postgres
+    El binario corriendo en el VPS Oracle quedó rezagado vs HEAD. Logs Postgres
     mostraron `column "updated_at" does not exist` cada hora (cron P3-B
     golpeando un schema que HEAD ya había corregido en P0-OBS-1) más
     `column "completed_at"`, `column "acquired_at"`, `column "generation_status"`

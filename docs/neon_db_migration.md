@@ -60,7 +60,7 @@ Migración inicial ejecutada 2026-06-12: 43 tablas, 42/43 row-counts exactos
 ## SOP de cutover
 
 1. `python scripts/migrate_db_to_neon.py --reset-neon` (re-sync final con datos frescos; idealmente con backend detenido o en ventana de bajo tráfico).
-2. Flip `MEALFIT_DB_BACKEND=neon` en el entorno (VPS/EasyPanel) + restart.
+2. Flip `MEALFIT_DB_BACKEND=neon` en el entorno (VPS Oracle) + restart.
 3. Verificar log de boot: `Backend de datos: NEON` + `/ready` 200 + `/health/version` drift check.
 4. Golden-path manual: login → perfil → nevera → generar plan.
 5. Rollback si algo falla: `MEALFIT_DB_BACKEND=supabase` + restart (los datos de Supabase quedan congelados al momento del paso 1 — minimizar la ventana).

@@ -9,7 +9,7 @@ Bug observado (audit production-readiness 2026-05-15):
     (rate limit upstream, pool exhaustion, network blip) el thread daemon
     vive hasta que el proceso reinicia. Bajo carga de 100+ chats concurrentes
     + un blip de 5min, eso acumula cientos de threads zombies → memory +
-    GIL pressure → degradación gradual del worker que Easypanel termina
+    GIL pressure → degradación gradual del worker que el VPS Oracle termina
     OOM-killeando. Clase de bug "el servidor empieza lento después de un día
     y nadie sabe por qué".
 

@@ -16,7 +16,6 @@ from llm_provider import (
     ChatDeepSeek as _ChatDeepSeekBase,
     DEEPSEEK_FLASH,
     DEEPSEEK_PRO,
-    GLM_FLASH,
     PAID_TIERS,
     get_user_tier,
 )
@@ -4851,7 +4850,7 @@ Si DOS O MÁS scores son < 6, o si ALGÚN score es < 4, marca needs_correction=T
 # Trade-off documentado: este P-fix REMUEVE el escalado automático a Pro
 # para estos 3 nodos. Mitigación: cada nodo tiene su propio knob de
 # override — si la calidad regresiona en un perfil clínico, el SRE pone
-# `MEALFIT_<NODE>_MODEL=gemini-3.1-pro-preview` en EasyPanel sin redeploy.
+# `MEALFIT_<NODE>_MODEL=gemini-3.1-pro-preview` en el VPS Oracle sin redeploy.
 #
 # Sigue convención P3-PREVIEW-MODEL-KNOB (CLAUDE.md): callsites en
 # crons/loops productivos leen model ID desde knob — modelos preview pueden
@@ -4981,8 +4980,8 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 # [P3-PLAN-MODEL-KNOBS · 2026-05-20] Modelos del plan-gen pipeline ahora
 # via knobs (no hardcoded). Cierre del gap C4 del audit
 # `docs/gaps-audit-2026-05.md`: pre-fix estos eran string literals
-# inmutables → swap requería redeploy + Nixpacks rebuild (~5min) + bumpear
-# `_LAST_KNOWN_PFIX`. Con knobs, SRE setea env var en EasyPanel + restart
+# inmutables → swap requería redeploy + rebuild del deploy (~5min) + bumpear
+# `_LAST_KNOWN_PFIX`. Con knobs, SRE setea env var en el VPS Oracle + restart
 # worker = <1 min.
 #
 # Por qué importa para COSTOS:
@@ -4994,7 +4993,7 @@ def _sanitize_form_data_for_prompt(form_data: dict) -> dict:
 #     (mismo riesgo R2 que vision_agent — CB stale 4.4 días en 2026-05-11).
 #
 # SOP migración (validable sin redeploy):
-#   1. Setear `MEALFIT_FLASH_MODEL=gemini-3.5-flash` en EasyPanel.
+#   1. Setear `MEALFIT_FLASH_MODEL=gemini-3.5-flash` en el VPS Oracle.
 #   2. Restart worker.
 #   3. Esperar 4-6 horas para acumular eventos.
 #   4. Query `SELECT model, ROUND(100.0*SUM(cached_tokens)/SUM(input_tokens),2)
@@ -5059,7 +5058,7 @@ def _self_critique_model_name() -> str:
 
     Default: `_FLASH_MODEL_NAME` (preserva comportamiento pre-fix). Para
     activar el A/B de ahorro: setear `MEALFIT_SELF_CRITIQUE_MODEL=gemini-3.1-flash-lite`
-    en EasyPanel/.env y restart del worker. Para revertir: cadena vacía o
+    en el VPS Oracle/.env y restart del worker. Para revertir: cadena vacía o
     el nombre del modelo Flash original.
 
     Costo estimado en `self_critique` últimos 7 días (datos prod 2026-05-22):
@@ -5116,7 +5115,7 @@ def _meta_learning_model_name() -> str:
 # existentes que comparan strings literales (e.g. `if model == _FLASH_MODEL_NAME`).
 # Estos NO se re-leen en runtime — para cambiar el modelo se requiere restart
 # del worker (que re-importa el módulo). Aceptable trade-off: env var seteada
-# en EasyPanel + restart = <1min, vs PR + merge + Nixpacks rebuild = ~10min.
+# en el VPS Oracle + restart = <1min, vs PR + merge + rebuild del deploy = ~10min.
 _PRO_MODEL_NAME = _plan_pro_model_name()
 _FLASH_MODEL_NAME = _plan_flash_model_name()
 
@@ -5287,42 +5286,36 @@ DAYGEN_EASY_MODEL = _env_str("MEALFIT_DAYGEN_EASY_MODEL", _FLASH_LITE_DEFAULT) o
 # degradado es peor UX que un plan PRO bien generado).
 BARIATRIC_DAYGEN_PRO = _env_bool("MEALFIT_BARIATRIC_DAYGEN_PRO", True)
 
-# [P1-GLM-CASCADE · 2026-06-29] Cascada de modelos del day generator (el grueso del gasto LLM) por COSTO: intenta primero
-# glm-4.7-flash (Zhipu, ~gratis) y, SOLO si falla (error/timeout/CB-open/quota 429), cae a deepseek-v4-flash y luego a
-# deepseek-v4-pro (última instancia). Cada fallo avanza al siguiente modelo (vía los 3 reintentos de tenacity del day-gen).
-# Bariátrico → directo a deepseek-v4-pro (perfil clínico más difícil; sin glm/flash). El revisor médico/fact-checker NO usan
-# la cascada (siguen en pro — son la red de seguridad). Default ON; rollback sin redeploy: MEALFIT_GLM_DAYGEN=false → la
-# cascada arranca en deepseek-v4-flash (comportamiento previo). Los IDs son overrideables por knob (P3-PREVIEW-MODEL-KNOB).
-GLM_DAYGEN_ENABLED = _env_bool("MEALFIT_GLM_DAYGEN", True)
-GLM_DAYGEN_MODEL = _env_str("MEALFIT_GLM_DAYGEN_MODEL", GLM_FLASH) or GLM_FLASH
+# [P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] Cascada de modelos del day generator (el grueso del gasto LLM) por COSTO, SOLO
+# DeepSeek (GLM eliminado — su tier gratis rate-limitea hasta ser inusable, 429 en 1 sola llamada). Intención del owner:
+# deepseek-v4-flash es SUFICIENTE por default; deepseek-v4-pro SOLO cuando flash no alcanza. Por eso:
+#   - attempt 1 → [deepseek-v4-flash, deepseek-v4-pro]: flash primario; pro SOLO si el call de flash FALLA (API/timeout/CB).
+#   - attempt > 1 (el plan de flash fue RECHAZADO por el revisor → flash no fue suficiente) → [deepseek-v4-pro].
+#   - bariátrico → [deepseek-v4-pro] directo (perfil clínico más difícil).
+# Minimiza costo/llamadas: en el caso normal el día se genera con UNA llamada flash (pro solo en fallo/rechazo). El revisor
+# médico/fact-checker mantienen su routing risk-tier (pro para condiciones). Knob de escalada: MEALFIT_DAY_GEN_RETRY_USE_PRO.
 
 
 def _day_model_chain(form_data: dict, attempt: int, prev_rejection_reasons=None) -> list:
-    """[P1-GLM-CASCADE · 2026-06-29] Devuelve la CADENA de modelos a intentar en orden para generar UN día, por COSTO
-    creciente: [glm-4.7-flash, deepseek-v4-flash, deepseek-v4-pro]. El day-gen avanza al siguiente en cada fallo (cada
-    reintento de tenacity) o si el CB del modelo actual está abierto. Garantías:
-      - BARIÁTRICO → [deepseek-v4-pro] (chain de 1; perfil clínico más difícil, sin capas baratas). Reusa
-        _is_bariatric_condition + BARIATRIC_DAYGEN_PRO (simetría con P1-BARIATRIC-DAYGEN-PRO).
-      - Skeleton-fidelity rejection en retry (P4-MODEL-1) → arranca directo en deepseek-v4-pro.
-      - GLM off / no configurado → arranca en deepseek-v4-flash.
-    Dedup preservando orden (en prod _FLASH_MODEL_NAME puede == PRO). La cadena SIEMPRE termina en deepseek-v4-pro (calidad
-    garantizada como última instancia; el revisor médico re-gatea cada intento)."""
-    # Bariátrico: directo a PRO (sin capas baratas).
+    """[P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos a intentar para generar UN día, optimizada por COSTO:
+    flash SUFICIENTE por default, pro SOLO cuando no alcanza. El day-gen avanza al siguiente en cada fallo (reintentos de
+    tenacity) o si el CB del modelo está abierto.
+      - BARIÁTRICO → [deepseek-v4-pro] (perfil clínico más difícil; sin capa flash). Reusa _is_bariatric_condition.
+      - RETRY (attempt>1 = el plan anterior de flash fue rechazado → flash insuficiente) → [deepseek-v4-pro].
+      - attempt 1 → [deepseek-v4-flash, deepseek-v4-pro]: flash primario, pro SOLO si el call de flash falla (reliability).
+    Dedup preservando orden (si MEALFIT_FLASH_MODEL==pro, queda [pro]). SIEMPRE termina en pro (última instancia)."""
+    # Bariátrico: directo a PRO (sin capa flash).
     if BARIATRIC_DAYGEN_PRO:
         try:
             if _is_bariatric_condition(form_data):
                 return [_PRO_MODEL_NAME]
         except Exception:
             pass
-    # Retry por skeleton-fidelity → PRO directo (el LLM débil ya falló la fidelidad).
-    if attempt > 1 and DAY_GEN_RETRY_USE_PRO and _is_skeleton_fidelity_rejection(prev_rejection_reasons):
+    # Retry tras rechazo: flash no fue suficiente → PRO para el reintento.
+    if attempt > 1 and DAY_GEN_RETRY_USE_PRO:
         return [_PRO_MODEL_NAME]
-    chain = []
-    if GLM_DAYGEN_ENABLED:
-        chain.append(GLM_DAYGEN_MODEL)               # glm-4.7-flash (barato)
-    chain.append(DEEPSEEK_FLASH)                      # deepseek-v4-flash (medio)
-    chain.append(_PRO_MODEL_NAME)                     # deepseek-v4-pro (última instancia)
-    # dedup preservando orden
+    # attempt 1: flash primario (suficiente por default), pro SOLO como fallback si el call de flash falla.
+    chain = [_FLASH_MODEL_NAME, _PRO_MODEL_NAME]
     _seen, _out = set(), []
     for m in chain:
         if m and m not in _seen:
@@ -6437,7 +6430,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         else:
             prompt_text = dynamic_day_prompt + DAY_GENERATOR_SYSTEM_PROMPT
 
-        # [P1-GLM-CASCADE · 2026-06-29] CADENA de modelos por costo: glm-4.7-flash → deepseek-v4-flash → deepseek-v4-pro
+        # [P1-DEEPSEEK-FLASH-FIRST · 2026-06-28] CADENA de modelos por costo (solo DeepSeek): deepseek-v4-flash → deepseek-v4-pro
         # (bariátrico → [deepseek-v4-pro]). El day-gen avanza al siguiente en CADA fallo (los 3 reintentos de tenacity) o si
         # el CB del modelo actual está abierto. Reusa el escalado skeleton-fidelity de P4-MODEL-1 dentro de _day_model_chain.
         _day_chain = _day_model_chain(
@@ -6450,8 +6443,8 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
         from tools_nutrition import NUTRITION_TOOLS, consultar_nutricion
 
         def _build_day_llm(_model: str):
-            """[P1-GLM-CASCADE] Construye el LLM (+tools/json) para UN modelo del chain. ChatDeepSeek rutea el provider
-            por prefijo (glm* → GLM, resto → DeepSeek). JSON mode incompatible con tool-calling → no bindea tools."""
+            """[P1-DEEPSEEK-FLASH-FIRST] Construye el LLM (+tools/json) para UN modelo del chain (deepseek-v4-flash/pro).
+            JSON mode incompatible con tool-calling → no bindea tools."""
             _kw = dict(
                 model=_model,
                 temperature=temp_override if temp_override is not None else (base_temp if attempt == 1 else (base_temp + 0.1)),
@@ -6496,7 +6489,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
             before_sleep=lambda rs: logger.warning(f"⚠️  [DÍA {day_num}] Reintento #{rs.attempt_number}...")
         )
         async def invoke_day():
-            # [P1-GLM-CASCADE] Selección de modelo del chain con cascada: usa el idx actual (avanza en cada fallo) y, si
+            # [P1-DEEPSEEK-FLASH-FIRST] Selección de modelo del chain con cascada: usa el idx actual (avanza en cada fallo) y, si
             # el CB de ese modelo está abierto, salta al siguiente del chain DENTRO de esta misma llamada. Construye el
             # LLM (provider correcto por prefijo) para el modelo elegido.
             _idx = min(_chain_state["idx"], len(_day_chain) - 1)
@@ -6511,7 +6504,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 raise Exception(f"Circuit Breaker OPEN para todo el chain {_day_chain} - LLM cascade failure prevented")
             day_llm_with_tools = _build_day_llm(day_model)
             if _idx > 0:
-                logger.info(f"🔻 [P1-GLM-CASCADE] DÍA {day_num}: cascada a modelo #{_idx+1}/{len(_day_chain)} ({day_model}) "
+                logger.info(f"🔻 [P1-DEEPSEEK-FLASH-FIRST] DÍA {day_num}: escalada a modelo #{_idx+1}/{len(_day_chain)} ({day_model}) "
                             f"tras fallo del anterior.")
             try:
                 # [P1-PROMPT-CACHE-SYSTEMMSG · 2026-05-15] SystemMessage al
@@ -6613,7 +6606,7 @@ async def generate_days_parallel_node(state: PlanState) -> dict:
                 # [P1-ORCH-1/2 · 2026-05-28] Helper centralizado: excluye 5xx
                 # transitorios + 429 spending-cap (y activa el latch del cap).
                 await _record_cb_failure_unless_transient(_day_cb, e)  # P1-Q3
-                # [P1-GLM-CASCADE] Avanza al siguiente modelo del chain → el próximo reintento de tenacity usará
+                # [P1-DEEPSEEK-FLASH-FIRST] Avanza al siguiente modelo del chain → el próximo reintento de tenacity usará
                 # deepseek-v4-flash y luego deepseek-v4-pro (cascada por costo: barato primero, pro como última instancia).
                 _chain_state["idx"] = _idx + 1
                 raise e
@@ -20703,7 +20696,7 @@ _PLAN_GRAPH_LAST_INVALIDATION_REASON: str | None = None
 
 # [P3-READY-REASON · 2026-05-12] Snapshot del último error de build del grafo,
 # expuesto via `is_plan_graph_ready_with_reason()` → `/ready`.
-# Pre-fix `/ready` retornaba `not_ready` sin razón; orquestadores (EasyPanel,
+# Pre-fix `/ready` retornaba `not_ready` sin razón; orquestadores (VPS Oracle,
 # k8s, load balancer) sólo veían "503 not_ready" sin pista de QUÉ falló.
 # Ahora si el build crashea por timeout DB / missing API key / langgraph
 # version mismatch, el operador ve el tipo de excepción + mensaje truncado

@@ -665,7 +665,7 @@ def _resolve_pricing_table() -> Dict[str, Dict[str, int]]:
 
     Knob es opcional; si falla parsear, log debug y se usa solo defaults
     (fail-safe: no rompe la instrumentación si alguien typea mal el JSON
-    en EasyPanel).
+    en el VPS Oracle).
     """
     table = dict(_DEFAULT_LLM_PRICING_MICROS_PER_M)
     raw = os.environ.get("MEALFIT_LLM_PRICING_JSON", "").strip()

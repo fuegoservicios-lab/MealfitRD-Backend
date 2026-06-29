@@ -69,7 +69,7 @@ _FACT_SHADOW_SAMPLE_RATE = _env_float(
 # 2026-05-12` exige knob para TODOS los modelos preview de Google ("CB row
 # stale por preview model durante 4.4 días" en audit 2026-05-11). Sin
 # estos knobs, una deprecation de Google tira la extracción de hechos
-# hasta redeploy (45min Easypanel cold start). Tooltip-anchor:
+# hasta redeploy (45min de cold start del VPS Oracle). Tooltip-anchor:
 # P2-NEW-FACTEX-PRIMARY-MODEL-KNOB.
 # [P0-DEEPSEEK-MIGRATION · 2026-06-12] Defaults DeepSeek V4 Flash: la
 # extracción de hechos es tarea de background (structured extraction a

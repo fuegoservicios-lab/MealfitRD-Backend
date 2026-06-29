@@ -2,7 +2,7 @@
 
 **Auditor**: staff engineer (Claude Opus 4.7).
 **Scope**: workspace-root + `backend/` (FastAPI + LangGraph + Supabase + APScheduler) + `frontend/` (React 19 + Vite 7 + JS).
-**Contexto del owner**: 1 dev solo, MVP <100 usuarios, deploy EasyPanel + Nixpacks (VPS), sin incendio activo.
+**Contexto del owner**: 1 dev solo, MVP <100 usuarios, deploy en el VPS Oracle, sin incendio activo.
 **Filtro de priorización**: para early-stage solo-founder priorizo (a) quick wins de seguridad/cost, (b) deuda obvia que destrabe refactors futuros, (c) observabilidad de negocio, (d) blast-radius de bugs. NO priorizo TypeScript migration, refactor masivo a paquetes, ni alternativas a PayPal — esos costos solo pagan a otra escala.
 
 ---
@@ -19,7 +19,7 @@ Workspace dir con 3 repos git distintos ( `.gitignore` raíz confirma `backend/`
 
 **Madurez sorprendentemente alta**: `_LAST_KNOWN_PFIX` marker, registry de knobs `MEALFIT_*`, ~80 P-fixes documentados, deploy-lag detector con SOP, Sentry PII scrubbing en ambos lados, RLS + atomic helpers + advisory locks, CHECK constraints DB-level, 32+ system_alerts canónicos, doc tables auto-paritadas con tests parser-based, marker→test cross-link enforzado. La fragilidad NO es por inmadurez, sino por **concentración de masa** en archivos enormes (graph_orchestrator, cron_tasks, routers/plans) y por **acumulación de scripts one-shot** en raíz del backend.
 
-**Producto**: 100% es-DO hardcoded (decisión de producto P3-I18N-DEFERRED), PayPal único proveedor (no decisión documentada pero implícita), Vercel para frontend, EasyPanel+Nixpacks para backend, Supabase para DB+auth+RLS.
+**Producto**: 100% es-DO hardcoded (decisión de producto P3-I18N-DEFERRED), PayPal único proveedor (no decisión documentada pero implícita), Vercel para frontend, el VPS Oracle para backend, Supabase para DB+auth+RLS.
 
 ---
 
@@ -109,7 +109,7 @@ Convención: **Impacto** Alto/Medio/Bajo (qué tan visible es el daño si NO se 
 | # | Hallazgo | Impacto | Esfuerzo | Recomendación | Quick win | Repo |
 |---|---|---|---|---|---|---|
 | H1 | Sentry frontend ✓ + backend ✓ (P1-SENTRY-PII-SCRUBBING-* ambos). Replays maskAllText ✓. Sampling driven from env ✓. **Bien**. | — | — | Mantener. | — | ambos |
-| H2 | Logging estructurado: `logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")` — texto plano, NO json. Para grep en logs EasyPanel está bien, pero correlation_id por request no existe. Difícil seguir un user_id a través de los nodos LangGraph. | Medio | S | Añadir `correlation_id` (uuid4) por request en middleware FastAPI + propagarlo via `contextvars` al logger. Cost bajo, valor alto cuando debugees un incident con 5 callsites en cascada. | 🟢 | backend |
+| H2 | Logging estructurado: `logging.basicConfig(format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")` — texto plano, NO json. Para grep en logs del VPS Oracle está bien, pero correlation_id por request no existe. Difícil seguir un user_id a través de los nodos LangGraph. | Medio | S | Añadir `correlation_id` (uuid4) por request en middleware FastAPI + propagarlo via `contextvars` al logger. Cost bajo, valor alto cuando debugees un incident con 5 callsites en cascada. | 🟢 | backend |
 | H3 | Métricas de negocio: `pipeline_metrics` tabla ya existe + `_chunk_heartbeat_baseline` + alerts. Pero NO existe vista agregada "planes/día por tier", "costo LLM/usuario", "conversión registro→primer-plan→pagado". Sin esto, tienes ruido operacional pero ceguera de negocio. | Alto | M | Crear dashboard mínimo (puede ser solo views SQL en Supabase): `mv_daily_business_metrics` con (date, plans_generated, plans_completed, users_active, users_paid, llm_cost_estimate). Actualizar via cron diario. Conectar a Metabase / Grafana / un Markdown statique generado por cron. | No | backend |
 | H4 | Tracing: NO hay distributed tracing entre request → agent node → tool → db. Sentry tiene `browserTracingIntegration` pero esto es solo client-side. | Bajo | L | Sentry tiene `fastapi-sentry` que ya está en `sentry-sdk[fastapi]==2.59.0` (requirements.txt:14). Verificar que `@sentry_sdk.trace` decorator esté aplicado a nodos pesados. Bajo prioridad para <100 MAU. | No | backend |
 
@@ -136,11 +136,11 @@ Convención: **Impacto** Alto/Medio/Bajo (qué tan visible es el daño si NO se 
 
 | # | Hallazgo | Impacto | Esfuerzo | Recomendación | Quick win | Repo |
 |---|---|---|---|---|---|---|
-| K1 | EasyPanel + Nixpacks confirmado por el owner. Deploy-lag detector ✓ (P0-PROD-1-DEPLOY). SOP via endpoint admin. | — | — | Mantener. | — | backend |
+| K1 | El VPS Oracle confirmado por el owner. Deploy-lag detector ✓ (P0-PROD-1-DEPLOY). SOP via endpoint admin. | — | — | Mantener. | — | backend |
 | K2 | Vercel para frontend. CSP Report-Only (D1). HSTS + X-Frame-Options + Permissions-Policy ya en `vercel.json:8+`. | — | — | Mantener + ver D1. | — | frontend |
-| K3 | Secrets management: env vars en EasyPanel + Vercel. `.env.production` en frontend repo está intencionalmente trackeado (solo VITE_* públicos, documentado en `.gitignore:31`). | — | — | Bien. Mantener. | — | ambos |
-| K4 | Crons orquestador: APScheduler ✓ in-process. Riesgo: si el worker se cae, los crons se caen. EasyPanel restart pero crons que estaban "missed" se pierden. | Medio | M | APScheduler tiene `MISSED` event listener — verificar que `_scheduler_alert_listener` ([app.py:102+](../app.py#L102)) los re-encola o solo alerta. Si solo alerta sin retry, considerar `RECOVERABLE` listener custom. Postponer hasta ver casos reales. | No | backend |
-| K5 | Backups EasyPanel del VPS (snapshot del disk): **requiere investigación**. Si el VPS se corrompe sin backup, perderías estado local (sqlite si se usa, logs, deferrals_pending.jsonl). | Bajo | S | Verificar en EasyPanel: ¿snapshots automáticos activos? Hetzner/DigitalOcean tienen snapshots semanales. La DB (Supabase) está separada — eso protege lo valioso. | 🟢 | devops |
+| K3 | Secrets management: env vars en el VPS Oracle + Vercel. `.env.production` en frontend repo está intencionalmente trackeado (solo VITE_* públicos, documentado en `.gitignore:31`). | — | — | Bien. Mantener. | — | ambos |
+| K4 | Crons orquestador: APScheduler ✓ in-process. Riesgo: si el worker se cae, los crons se caen. El VPS Oracle hace restart pero crons que estaban "missed" se pierden. | Medio | M | APScheduler tiene `MISSED` event listener — verificar que `_scheduler_alert_listener` ([app.py:102+](../app.py#L102)) los re-encola o solo alerta. Si solo alerta sin retry, considerar `RECOVERABLE` listener custom. Postponer hasta ver casos reales. | No | backend |
+| K5 | Backups del VPS Oracle (snapshot del disk): **requiere investigación**. Si el VPS se corrompe sin backup, perderías estado local (sqlite si se usa, logs, deferrals_pending.jsonl). | Bajo | S | Verificar en el VPS Oracle: ¿snapshots automáticos activos? Hetzner/DigitalOcean tienen snapshots semanales. La DB (Supabase) está separada — eso protege lo valioso. | 🟢 | devops |
 
 ---
 
@@ -238,6 +238,6 @@ Listadas aquí para no inventar hallazgos:
 - **F4**: `sentiment_classifier.py` modelo + costo + latencia.
 - **F6**: tests de regresión cobertura para facts + memory.
 - **G3**: a11y score Lighthouse.
-- **K5**: backups EasyPanel del VPS.
+- **K5**: backups del VPS Oracle.
 
 Cada uno es resoluble en <1h de investigación localizada. Ninguno es bloqueante para empezar el roadmap; se atacan progresivamente.

@@ -6,10 +6,10 @@ por commits olvidados sin push.
 Contexto del incidente que motivó este script (audit P0-AUDIT 2026-05-25):
     El operador cerró bundle P0-REGEN-BILLING + P1-COH-BENIGN-SKIP en local pero
     NO ejecutó `git push`. 2 commits ahead + 12 files unstaged quedaron sin
-    propagar a `origin/main`. El binario en EasyPanel seguía corriendo el commit
+    propagar a `origin/main`. El binario en el VPS Oracle seguía corriendo el commit
     anterior; el cron `_alert_deploy_lag_marker_stale` disparó alert
     `deploy_lag_drift_vs_expected` correctamente, pero el operador asumió
-    que el problema era Nixpacks cache hit hasta hacer forensic.
+    que el problema era cache hit del deploy hasta hacer forensic.
 
     Lección: el cron del backend NO puede detectar este modo (vive dentro del
     binario deployado, no tiene acceso al árbol git local). El operador debe

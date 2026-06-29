@@ -6,7 +6,7 @@ Bundle scope (2 P1):
      dicts globales `_embedding_cache = {}` y `_pantry_embeddings_cache = {}`
      por instancias de `_BoundedEmbeddingCache` (LRU con maxsize). Pre-fix
      crecían monotónicamente (1-5 MB/mes en RAM del worker) → OOM eventual
-     en EasyPanel sin alerta. Knob `MEALFIT_EMBEDDING_CACHE_MAXSIZE`.
+     en el VPS Oracle sin alerta. Knob `MEALFIT_EMBEDDING_CACHE_MAXSIZE`.
   2. **P1-FRONTEND-LOCALSTORAGE-HOT-PATHS** — 6 callsites raw
      `localStorage.setItem(...)` en hot paths migrados a `safeLocalStorageSet`:
        - Settings.jsx:~589 (preferencia notificaciones)

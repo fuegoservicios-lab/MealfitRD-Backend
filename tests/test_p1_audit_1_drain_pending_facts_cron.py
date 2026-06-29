@@ -9,7 +9,7 @@ tenía:
 
 ambos en cleartext dentro de pg_proc — visibles a cualquier rol con
 `SELECT` sobre `pg_catalog.pg_proc`. La URL apuntaba a Vercel; el backend
-ya está en Easypanel/Nixpacks. Cero rotabilidad sin DDL.
+ya está en el VPS Oracle. Cero rotabilidad sin DDL.
 
 Fix:
   - Migración `p1_audit_1_drop_dead_webhook_trigger.sql` dropea

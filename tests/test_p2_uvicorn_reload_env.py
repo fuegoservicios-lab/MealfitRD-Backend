@@ -2,7 +2,7 @@
 
 `backend/app.py:__main__` NO debe hardcodear `reload=True` en `uvicorn.run(...)`.
 Pre-fix tenía `reload=True` literal: si alguien arrancase el server vía
-`python app.py` en producción (no es el path actual de EasyPanel/Nixpacks
+`python app.py` en producción (no es el path actual del VPS Oracle
 pero un futuro script-change podría reintroducirlo), uvicorn watchea el
 filesystem y re-importa módulos en cada cambio. Eso rompe el estado
 in-process (cache de knobs, _SCHEDULER_*, connection pools).

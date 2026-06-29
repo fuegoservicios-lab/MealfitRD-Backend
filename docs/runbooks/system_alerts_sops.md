@@ -113,7 +113,7 @@ solo re-emite mientras hay drift, no resuelve el origen.
 
 Leer `metadata.live_marker` y `metadata.expected_marker` desde la fila de
 `system_alerts`. El primero es el `_LAST_KNOWN_PFIX` del binario corriendo
-en EasyPanel; el segundo es `app_kv_store.expected_last_known_pfix` que el
+en el VPS Oracle; el segundo es `app_kv_store.expected_last_known_pfix` que el
 operador o el script `publish_pfix_marker.py` actualizó.
 
 ```sql
@@ -129,7 +129,7 @@ SELECT metadata->>'live_marker'   AS live,
 
 - `expected > live` (caso típico): HEAD ya tiene P-fix nuevo + KV se
   actualizó, pero el binario no se redeployó. **Resolución: redeploy en
-  EasyPanel** (pull + restart). Tras el restart, el binario nuevo reporta
+  el VPS Oracle** (pull + restart). Tras el restart, el binario nuevo reporta
   `live = expected` y el cron next-eval no re-emite.
 - `live > expected` (raro): el binario tiene P-fix más nuevo que el KV.
   Caso ocurre si alguien deployó sin correr `publish_pfix_marker.py`

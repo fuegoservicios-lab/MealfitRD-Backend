@@ -88,7 +88,7 @@ def test_p2_1_requires_expected_marker_when_auto_bump(system_source: str) -> Non
     assert pattern.search(system_source), (
         "Guard `if auto_bump and not expected_marker_param: raise HTTPException(400)` "
         "ausente. Sin él, auto_bump ciego podría sincronizar KV con binario "
-        "incorrecto (e.g., EasyPanel deployó commit equivocado)."
+        "incorrecto (e.g., el VPS Oracle deployó commit equivocado)."
     )
 
 

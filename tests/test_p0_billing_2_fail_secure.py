@@ -6,7 +6,7 @@ Bug pre-fix:
     `if not PAYPAL_CLIENT_ID or not PAYPAL_SECRET: success = True` →
     cualquier POST con un `subscription_id` arbitrario UPDATE-aba
     `user_profiles` con el tier solicitado por el cliente. Si el contenedor
-    perdía las env vars (rotación rota, misconfig de Easypanel post-rolling
+    perdía las env vars (rotación rota, misconfig del VPS Oracle post-rolling
     deploy), el sistema entraba en fail-OPEN — paywall completamente
     bypasseable. El comentario legacy lo admitía:
         `(SECURITY RISK IF PRODUCTION)`

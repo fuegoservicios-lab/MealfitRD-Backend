@@ -1941,7 +1941,7 @@ def modify_pantry_inventory(user_id: str, items_to_add: list[str] = None, items_
 def _local_date_str_for_user() -> str:
     """Fecha LOCAL del servidor en formato YYYY-MM-DD. NOTA: el chat agent
     corre server-side; idealmente el cliente pasaria su fecha local, pero
-    para v1 usamos la fecha del servidor (Easypanel/DO ambos en UTC-4 o
+    para v1 usamos la fecha del servidor (el VPS Oracle, UTC-4 o
     similar). Si en el futuro el agente necesita la fecha exacta del
     cliente, parametrizar via state."""
     from datetime import datetime, timezone, timedelta

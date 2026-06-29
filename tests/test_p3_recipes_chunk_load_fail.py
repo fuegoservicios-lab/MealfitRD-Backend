@@ -3,7 +3,7 @@
 Pre-fix: `frontend/src/pages/Recipes.jsx::handleDownloadPDF` y
 `frontend/src/pages/Dashboard.jsx::handleDownloadPDF` hacían
 `const html2pdf = (await import('html2pdf.js')).default` sin try/catch
-dedicado. Si Vercel/CDN dropea el chunk (red intermitente, rotación de
+dedicado. Si el CDN dropea el chunk (red intermitente, rotación de
 build invalidando hashes mientras la pestaña vive), el outer try/catch del
 handler reporta un toast genérico "Error al descargar PDF" — usuario no
 sabe que fue un fail de red y no intenta refresh + retry (que arreglaría

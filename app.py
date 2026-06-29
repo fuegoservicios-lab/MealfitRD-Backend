@@ -31,7 +31,7 @@ _PROCESS_START_ISO = datetime.now(timezone.utc).isoformat()
 #     y fechas anteriores al floor (último audit cerrado).
 #   - Si subes el floor del test, sube también el valor aquí — el commit
 #     que sube uno sin el otro debería fallar el test en CI.
-_LAST_KNOWN_PFIX = "P1-RAW-VIVER-SAFETY · 2026-06-28"
+_LAST_KNOWN_PFIX = "P1-DEEPSEEK-FLASH-FIRST · 2026-06-28"
 
 # [P1-SENTRY-SAMPLE-COST · 2026-05-12] Sentry sampling driven from env vars
 # con default seguro 0.1 (10%). Pre-fix tenía `traces_sample_rate=1.0` y
@@ -269,8 +269,8 @@ _SCHEDULER_MISFIRE_GRACE_S = _env_int("MEALFIT_SCHEDULER_MISFIRE_GRACE_S", 180)
 # Default 5 min (subido de 2 el [P1-D · 2026-05-12]): el audit 2026-05-12
 # observó un burst que cruzó la ventana de 2min (cascade abierto >35min
 # tras restart porque jobs encolados durante downtime expiraron POSTERIOR
-# al grace=2min). 5min cubre deploys rolling estándar de Easypanel y
-# Nixpacks sin ocultar MISSED genuinos (autoheals P0-LIVE-1 / P0-AUDIT-1
+# al grace=2min). 5min cubre deploys rolling estándar del VPS Oracle
+# sin ocultar MISSED genuinos (autoheals P0-LIVE-1 / P0-AUDIT-1
 # + EVENT_JOB_EXECUTED listener P1-NEW-2 siguen cerrando cualquier MISSED
 # real en <5min cuando el job re-ejecuta exitosamente, sin importar el
 # grace). Clamp [0, 15] — 0 desactiva totalmente la supresión (back-compat),
@@ -501,7 +501,7 @@ def _maybe_emit_inline_cascade_alert(job_id: str) -> None:
                     f"MISSED en ventana {window_s:.0f}s (threshold={threshold}). "
                     f"Cron `_alert_scheduler_cascade_missed` confirmará en su "
                     f"siguiente tick (interval=MEALFIT_SCHEDULER_CASCADE_INTERVAL_MIN). "
-                    f"Posibles causas: thread pool saturado, restart EasyPanel, "
+                    f"Posibles causas: thread pool saturado, restart del worker (VPS Oracle), "
                     f"GC pause sostenida."
                 ),
                 json.dumps({
@@ -874,11 +874,11 @@ async def _hardfloor_autoheal_loop(interval_s: int):
 
 # [P1-SCHEDULER-LEADER-LOCK · 2026-05-27] Leader election para el
 # `BackgroundScheduler` in-process. Razón: el scheduler corre dentro del
-# proceso uvicorn; si EasyPanel/gunicorn arranca con >1 worker, los crons se
+# proceso uvicorn; si el VPS Oracle/gunicorn arranca con >1 worker, los crons se
 # ejecutan N veces (UPSERTs duplicados a `system_alerts`, races de pickup en
 # `plan_chunk_queue`, N× hard-floor loops). El repo asume 1 worker (ver
 # comentario ~L338) pero NO existe Dockerfile/Procfile versionado que lo fije
-# — el worker count vivía sólo en la UI de EasyPanel → asunción no enforced.
+# — el worker count vivía sólo en la config del VPS Oracle → asunción no enforced.
 #
 # Este guard adquiere un advisory lock de Postgres a NIVEL DE SESIÓN sobre una
 # conexión session-mode (5432) dedicada que se mantiene abierta toda la vida
@@ -1510,7 +1510,7 @@ async def lifespan(app: FastAPI):
         # inmediatamente sin BLOQUEAR el teardown esperando a que terminen los
         # jobs en curso. Pre-fix `scheduler.shutdown()` defaultea a `wait=True`
         # → con `_chunk_worker` mid-LLM-call (multi-minuto) el shutdown podía
-        # colgarse más allá del kill-grace de EasyPanel → SIGKILL. (Los writes
+        # colgarse más allá del kill-grace del VPS Oracle → SIGKILL. (Los writes
         # del worker son data-safe: rollback de transacción + CHECK I8; lo que
         # se evita acá es el hang del deploy y el trabajo LLM desperdiciado.)
         scheduler.shutdown(wait=False)
@@ -1728,7 +1728,7 @@ def health_version():
 
     Comparación esperada:
       - `last_known_pfix` debe coincidir con `_LAST_KNOWN_PFIX` en HEAD.
-      - `git_sha` (inyectado por Nixpacks/EasyPanel via env var) debe
+      - `git_sha` (inyectado por el deploy del VPS Oracle via env var) debe
         coincidir con el SHA que el repo apunta como producción.
       - `knobs_count` debe ser ≥ al número de knobs registrados localmente
         (vía `python -c "from graph_orchestrator import get_knobs_registry_snapshot; print(len(get_knobs_registry_snapshot()))"`).
@@ -1931,7 +1931,7 @@ def health_version():
     except Exception:
         pass
 
-    git_sha = os.environ.get("GIT_SHA") or os.environ.get("VERCEL_GIT_COMMIT_SHA") or "unknown"
+    git_sha = os.environ.get("GIT_SHA") or "unknown"
     return {
         "git_sha": git_sha,
         "git_short_sha": git_sha[:7] if git_sha != "unknown" else "unknown",
@@ -2170,7 +2170,7 @@ app.add_middleware(
         "http://127.0.0.1:5174",
         "https://mealfitrd.com",
         "https://www.mealfitrd.com"
-    ], # Añadida la URL de producción de Vercel
+    ], # Dominios de producción (servidos por nginx en el VPS Oracle)
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
@@ -2641,8 +2641,8 @@ def api_migrate_guest(
 
 if __name__ == "__main__":
     # [P2-UVICORN-RELOAD-ENV · 2026-05-12] `reload` controlado por env var.
-    # Pre-fix tenía `reload=True` hardcoded. En EasyPanel actualmente se
-    # arranca via Nixpacks (no `python app.py`), pero un futuro script change
+    # Pre-fix tenía `reload=True` hardcoded. En el VPS Oracle actualmente se
+    # arranca via el deploy automatizado (no `python app.py`), pero un futuro script change
     # podría re-introducir este entry point en producción con el flag activo
     # — auto-reload en prod re-importa módulos cada cambio de archivo y
     # rompe cualquier estado in-process (cache de knobs, _SCHEDULER_*, pools).

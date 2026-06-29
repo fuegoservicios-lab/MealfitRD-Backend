@@ -344,7 +344,7 @@ async def api_verify_subscription(data: dict = Body(...), verified_user_id: str 
         # [P0-BILLING-2 · 2026-05-12] Fail-secure si faltan env vars PayPal
         # en producción. Pre-fix: cuando ambas keys eran falsy, el handler
         # forzaba `success` a True (bypass completo de verificación). Si el
-        # contenedor perdía las env vars (rotación rota, misconfig Easypanel),
+        # contenedor perdía las env vars (rotación rota, misconfig del VPS Oracle),
         # CUALQUIER POST con `subscription_id` arbitrario upgradeaba el plan.
         # Anchor: P0-BILLING-2-FAIL-SECURE.
         env_ready = bool(PAYPAL_CLIENT_ID and PAYPAL_SECRET)

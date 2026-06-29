@@ -1555,7 +1555,7 @@ def _aggregate_coherence_block_history_metrics():
 # ---------------------------------------------------------------------------
 # [P0-1-DEPLOY-LAG · 2026-05-10] Detector de deriva de despliegue.
 #
-# Problema observado en el audit 2026-05-10: el binario corriendo en EasyPanel
+# Problema observado en el audit 2026-05-10: el binario corriendo en el VPS Oracle
 # quedó rezagado vs HEAD. Síntomas: PostgreSQL emitió `column "updated_at"
 # does not exist` cada hora (cron del watchdog P3-B golpeando un schema que
 # HEAD ya había corregido en P0-OBS-1) y otros errores de columnas (`completed_at`,
@@ -1690,7 +1690,7 @@ def _alert_deploy_lag_marker_stale():
                         f"El binario en producción reporta marker `{live_marker}`, "
                         f"con fecha {marker_date.date().isoformat()} "
                         f"({age_hours:.1f}h ≥ umbral {threshold_h}h). "
-                        f"Verificar que `git push` + redeploy en EasyPanel ocurrieron "
+                        f"Verificar que `git push` + redeploy en el VPS Oracle ocurrieron "
                         f"tras el último cierre de P-fix."
                     ),
                     json.dumps({
@@ -1754,7 +1754,7 @@ def _alert_deploy_lag_marker_stale():
                     (
                         f"Producción reporta `{live_marker}` pero "
                         f"`app_kv_store.{_DEPLOY_LAG_KV_KEY}` publica `{expected_marker}`. "
-                        f"Forzar pull + restart en EasyPanel."
+                        f"Forzar pull + restart en el VPS Oracle."
                     ),
                     json.dumps({
                         "live_marker": live_marker,
@@ -2559,7 +2559,7 @@ def _alert_pipeline_metrics_silence():
                         f"`pipeline_metrics` no recibió ninguna fila con "
                         f"`node={observed_node!r}` en los últimos "
                         f"{threshold_min}min. Causas probables: "
-                        f"(1) deploy lag — binario en EasyPanel anterior al "
+                        f"(1) deploy lag — binario en el VPS Oracle anterior al "
                         f"cierre P0-PROD-1 sigue crasheando inserts con `is_guest`; "
                         f"(2) `_hardfloor_autoheal_loop` cancelado en shutdown "
                         f"y no re-arrancado; (3) drift de schema en pipeline_metrics; "
@@ -2758,7 +2758,7 @@ def _alert_scheduler_cascade_missed():
                     f"Posibles causas: worker reiniciado (cold-start procesa MISSED "
                     f"pendientes), pool DB saturado bloqueando jobs >grace_time, "
                     f"o burst de jobs alineados en la misma ventana. Verificar "
-                    f"logs del orquestador (EasyPanel/k8s) para reinicios recientes."
+                    f"logs del orquestador (VPS Oracle/k8s) para reinicios recientes."
                 ),
                 json.dumps({
                     "lookback_hours": lookback_h,
@@ -2858,7 +2858,7 @@ def _resolve_stale_scheduler_alerts() -> None:
         - Jobs renombrados o eliminados entre deploys (el alert_key
           viejo no matchea el job_id nuevo).
         - Race entre MISSED y EXECUTED (worker reinició entre eventos).
-        - Deploy lag: si el binario en EasyPanel aún NO tiene P1-NEW-2,
+        - Deploy lag: si el binario en el VPS Oracle aún NO tiene P1-NEW-2,
           el listener no escucha EXECUTED y todos los alerts acumulan.
 
       Audit 2026-05-10 mostró 26 alerts `scheduler_missed_*` unresolved
@@ -4127,7 +4127,7 @@ def _sweep_stale_scheduler_missed_alerts() -> None:
     1-2min) pero NO para jobs raros (interval ≥30min): la alert se queda
     `resolved_at IS NULL` indefinidamente hasta el próximo tick legítimo.
 
-    Live evidence 2026-05-27: cascada de 25 misses post-restart EasyPanel.
+    Live evidence 2026-05-27: cascada de 25 misses post-restart del VPS Oracle.
     6 jobs frecuentes auto-resolvieron en 20s vía listener; 19 jobs raros
     (cada 30min/1h) siguieron unresolved 7+min después. Dashboard de alerts
     activas se ensucia con cada cold-start, agitando SRE.
@@ -5279,7 +5279,7 @@ def _drain_pending_facts_queue() -> None:
 
       1. Secret en cleartext dentro del cuerpo de la función — visible a
          cualquier rol con `SELECT` sobre `pg_proc`. Cero rotabilidad sin DDL.
-      2. URL apuntaba a Vercel; el backend ya se sirve desde Easypanel/Nixpacks
+      2. URL apuntaba a Vercel; el backend ya se sirve desde el VPS Oracle
          (per `backend/.env.example`). Si el host Vercel quedó stale, cada
          INSERT disparaba un pg_net request a un endpoint muerto.
       3. Dependencia obligatoria de la extensión `pg_net` — innecesaria si el

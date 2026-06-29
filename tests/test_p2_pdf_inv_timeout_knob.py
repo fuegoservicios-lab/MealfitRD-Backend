@@ -6,7 +6,7 @@ Motivación (audit 2026-05-14):
     (mount, focus, PDF download, restock) pasaban el literal `2000` ms.
     Si Supabase entraba en degradación tail-latency (incidente regional,
     pool exhausted, network blip), no había forma de subir el timeout
-    sin redeploy del frontend (Vercel build). El cron P2-SHOPPING-3
+    sin redeploy del frontend (rebuild). El cron P2-SHOPPING-3
     `_alert_pdf_stale_inventory_fallback_burst` detectaría el burst de
     fallbacks pero la mitigación requería rebuild + redeploy.
 

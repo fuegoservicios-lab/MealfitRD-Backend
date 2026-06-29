@@ -4,7 +4,7 @@
 
     "client-id": import.meta.env.VITE_PAYPAL_CLIENT_ID || "ARVcVpVZ-...",
 
-El fallback era un client_id de PayPal real (no placeholder). Si Vercel
+El fallback era un client_id de PayPal real (no placeholder). Si el deploy
 perdía la env var (typo en deploy parcial, rotación incompleta), el SDK
 seguía cargando el ID hardcoded del commit — posiblemente apuntando al
 merchant equivocado o un client deshabilitado. Anti-pattern porque

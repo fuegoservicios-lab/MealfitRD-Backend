@@ -187,11 +187,11 @@ def session_cookie_iat(value: str) -> Optional[int]:
 # era dict literal dentro de `verify_api_quota`. Cualquier ajuste de pricing
 # (e.g. "subir basic de 50 a 75 esta semana para retención") requería:
 #   1. PR + review.
-#   2. Merge a main + redeploy EasyPanel.
-#   3. Esperar nixpacks build (~3-5min).
+#   2. Merge a main + redeploy en el VPS Oracle.
+#   3. Esperar rebuild del deploy (~3-5min).
 #   4. Validar via /health/version que el deploy lag detector confirma.
 # Total: ~30 min para cambiar UN número. Con env vars: SRE/founder
-# setea `MEALFIT_TIER_LIMIT_BASIC=75` en EasyPanel + reinicia worker = <1 min.
+# setea `MEALFIT_TIER_LIMIT_BASIC=75` en el VPS Oracle + reinicia worker = <1 min.
 #
 # Defaults preservan pricing actual. Auto-registry en `_KNOBS_REGISTRY`
 # → visible en `/health/version` para audit del valor activo en cada
@@ -199,7 +199,7 @@ def session_cookie_iat(value: str) -> Optional[int]:
 #
 # Por qué module-level (no per-request lookup):
 #   `_env_int` se llama una vez en import time. Para cambiar el valor sin
-#   redeploy, basta con bumpear la env var + restart del worker (EasyPanel
+#   redeploy, basta con bumpear la env var + restart del worker (en el VPS Oracle,
 #   uvicorn). El cost de re-leer env var por cada request sería marginal
 #   pero innecesario — los tiers no cambian intra-request.
 _TIER_LIMITS = {

@@ -13,8 +13,8 @@ El SHADOW path ya tenía knob (P3-FACT-EXTRACTOR-SHADOW-AB · 2026-05-14)
 pero el PRIMARY no — gap detectado en el audit 2026-05-15. Convención
 canónica `P3-PREVIEW-MODEL-KNOB · 2026-05-12` exige knob para TODOS los
 modelos preview de Google. Sin estos knobs, una deprecation de Google
-tira la extracción de hechos hasta redeploy completo (45min Easypanel
-cold start observado en incidente 2026-05-11 con `gemini-3.1-pro-preview`
+tira la extracción de hechos hasta redeploy completo (45min de cold start
+del VPS Oracle observado en incidente 2026-05-11 con `gemini-3.1-pro-preview`
 4.4 días stale en circuit breaker).
 
 Defensas que el test enforza:

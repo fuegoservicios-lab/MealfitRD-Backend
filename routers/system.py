@@ -704,7 +704,7 @@ def admin_force_deploy_lag_check(
         2 veces seguidas no duplica filas (ON CONFLICT DO UPDATE).
       - Con `auto_bump=true` + `expected_marker` MISMATCH live: NO bumpea
         (defiende contra "el binario deployado no es el que pediste" — p.ej.
-        EasyPanel deployó commit equivocado). Operador investiga.
+        el VPS Oracle deployó commit equivocado). Operador investiga.
     """
     _verify_admin_token(request.headers.get("authorization"))
     _check_admin_rate_limit(request)  # [P2-ADMIN-RATE-LIMIT]
@@ -828,7 +828,7 @@ def admin_force_deploy_lag_check(
         "drift": drift,
         "kv_bumped": kv_bumped,
         "message": (
-            "Drift detectado: forzar redeploy en EasyPanel." if drift
+            "Drift detectado: forzar redeploy en el VPS Oracle." if drift
             else (
                 "Sin drift: prod ejecuta la versión publicada en KV."
                 if expected_marker else

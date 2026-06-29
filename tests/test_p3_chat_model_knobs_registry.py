@@ -13,7 +13,7 @@ auto-registran en `_KNOBS_REGISTRY` via `_env_int/_env_float/_env_bool/_env_str`
 Pre-fix (cerrado P2-AUDIT-1 · 2026-05-15) los 4 helpers usaban
 `os.environ.get("MEALFIT_<KNOB>", "<default>")` directo → no aparecían en
 el registry. Un SRE que seteaba `MEALFIT_CHAT_AGENT_MODEL=gemini-3.1-flash`
-en EasyPanel no podía verificar el cambio sin releer el source.
+en el VPS Oracle no podía verificar el cambio sin releer el source.
 
 P3-CHAT-MODEL-KNOBS-REGISTRY · 2026-05-15 migra los 4 helpers a `_env_str(...)`,
 cerrando el último gap de la convención P3-NEW-D para modelos de chat.

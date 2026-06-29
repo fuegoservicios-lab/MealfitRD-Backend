@@ -1259,7 +1259,7 @@ def split_with_absorb(total_days: int, base: int = 3) -> list[int]:
 # y `_pantry_embeddings_cache` se popula desde el matcher de pantry en el
 # pipeline de generación. Con miles de planes/mes y ~50-200 strings únicos
 # por plan, RAM del worker FastAPI subía ~1-5 MB/mes sin techo → OOM eventual
-# en contenedor EasyPanel sin alerta previa.
+# en contenedor del VPS Oracle sin alerta previa.
 #
 # Diseño: dict-like LRU bound por maxsize. Preserva la API in/out actual
 # (`text not in cache`, `cache[text] = emb`, `return cache[text]`) para no
