@@ -5311,6 +5311,21 @@ def api_regenerate_day(
                 "_skip_slot_target_override": True,
                 "diet_type": data.get("diet_type") or data.get("dietType") or "balanced",
                 "goal": data.get("goal") or data.get("mainGoal"),
+                # [P2-REGEN-DAY-BIOMETRICS-PROPAGATE · 2026-06-29] (cierre follow-up testing en vivo) Propaga los
+                # biométricos —ya hidratados en `data` por _enrich_clinical_from_profile (block P2-UPDATE-HYDRATE-
+                # BIOMETRICS)— al meal_form. El meal_form es un dict de keys EXPLÍCITAS (no hace spread de `data`),
+                # así que sin esto swap_meal recibía form SIN weight/height/age → get_nutrition_targets caía a
+                # defaults (154lb/25/moderate) → WARN P2-MINOR-GATE/P0-FORM-4 + cualquier lógica biométrica del swap
+                # (micro-steer, caps) trabajaba con datos falsos. El band-0.0 ya lo cerró el skip del slot-override;
+                # esto es defensa-en-profundidad. Solo se pasan si existen (None → swap usa su default).
+                # tooltip-anchor: P2-REGEN-DAY-BIOMETRICS-PROPAGATE
+                "weight": data.get("weight"),
+                "height": data.get("height"),
+                "age": data.get("age"),
+                "gender": data.get("gender"),
+                "weightUnit": data.get("weightUnit"),
+                "activityLevel": data.get("activityLevel") or data.get("activity_level"),
+                "bodyFat": data.get("bodyFat"),
                 "allergies": data.get("allergies") or [],
                 "dislikes": data.get("dislikes") or [],
                 # [P1-UPDATE-SUPERPERS / P1-UPDATE-MICROS · 2026-06-23] Transportar súper-personalización
