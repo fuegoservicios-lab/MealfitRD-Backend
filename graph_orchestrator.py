@@ -8870,6 +8870,9 @@ NIGHT_RICE_AUTOFIX_ENABLED = _env_bool("MEALFIT_NIGHT_RICE_AUTOFIX", True)
 # (excluye proteína/lácteo/víver/fruta/despensa/aceite/legumbre) AND fuera de stop-list de hierbas/aromáticos. Default True;
 # rollback sin redeploy: MEALFIT_RECIPE_STEP_VEG_GUARD=false.
 RECIPE_STEP_VEG_GUARD_ENABLED = _env_bool("MEALFIT_RECIPE_STEP_VEG_GUARD", True)
+# [P1-RECIPE-STEP-VEG-VARIETY-DEDUP · 2026-06-29] El guard no debe añadir el genérico del catálogo ("Lechuga") si ya hay una
+# VARIEDAD en los ingredientes ("lechuga romana picada") — evita el duplicado visto en vivo. Default True.
+RECIPE_STEP_VEG_VARIETY_DEDUP = _env_bool("MEALFIT_RECIPE_STEP_VEG_VARIETY_DEDUP", True)
 RECIPE_STEP_GUARD_MAX_KCAL = _env_float("MEALFIT_RECIPE_STEP_GUARD_MAX_KCAL", 60.0, validator=lambda v: 10.0 <= v <= 200.0)
 RECIPE_STEP_GUARD_MAX_PER_MEAL = _env_int("MEALFIT_RECIPE_STEP_GUARD_MAX_PER_MEAL", 3, validator=lambda v: 1 <= v <= 10)
 # [P1-CLOSER-COHERENCE · 2026-06-27] Re-corre el quantize de porciones a valores HUMANOS (múltiplo de 5g) al FINAL
@@ -11415,6 +11418,11 @@ def _protein_topup_meal(meal: dict, slot_cal_target: float, db, approved_protein
 _NO_COOK_SAFE_PROTEIN_HINT = ("yogur", "yogurt", "ricotta", "requeson", "cottage",
                               "queso crema", "queso blanco", "queso fresco",
                               "whey", "proteina", "proteína")
+# [P1-PROTEIN-STEP-SOFT-DAIRY · 2026-06-29] El paso del closer "Cocina X a la plancha o hervido y sírvelo como proteína del
+# plato" era incoherente para LÁCTEOS BLANDOS (cottage/ricotta/yogur): no se cocinan a la plancha (se desarman) y la frase
+# "como proteína del plato" miente cuando son un añadido. Para esos → wording "Incorpora ... y mézclalo" (honesto sea
+# principal o añadido). Default True; flip a False revierte al wording previo.
+PROTEIN_STEP_SOFT_DAIRY_WORDING = _env_bool("MEALFIT_PROTEIN_STEP_SOFT_DAIRY_WORDING", True)
 # [P3-PROTEIN-FLOOR] Dish-fit del closer: comidas ligeras (desayuno/merienda) prefieren
 # proteína de huevo/lácteo; las principales prefieren carne — evita combos incongruentes
 # (camarón en un revoltillo de desayuno). Congruencia (proteína ya en el plato) gana primero.
@@ -11938,8 +11946,11 @@ def _close_protein_gap_for_meal(meal: dict, slot_protein_target: float, db, cand
         if isinstance(rec, list):
             # [P3-CLOSER-RECIPE-INTEGRATE · 2026-06-28] Paso de receta NATURAL (no el robótico que delataba el
             # relleno del solver). Sin gramaje hardcodeado (el ingrediente es la fuente de verdad tras el quantize).
-            if no_cook:
-                _step = f"Incorpora {nm} a la preparación y mezcla bien antes de servir."
+            # [P1-PROTEIN-STEP-SOFT-DAIRY · 2026-06-29] Lácteos blandos (cottage/ricotta/yogur/requesón/whey) → wording
+            # honesto: NO van "a la plancha/hervido" (se desarman) y la frase es válida sean proteína principal o añadido.
+            _nm_sa = _sa(nm)
+            if no_cook or (PROTEIN_STEP_SOFT_DAIRY_WORDING and any(h in _nm_sa for h in _NO_COOK_SAFE_PROTEIN_HINT)):
+                _step = f"Incorpora {nm} a la preparación y mézclalo antes de servir."
             else:
                 _step = f"Cocina {nm} a la plancha o hervido y sírvelo como proteína del plato."
             meal["recipe"] = rec + [f"💪 {_step}"]
@@ -14798,6 +14809,10 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3) 
                         present.add(normalize_name(ing))
                     except Exception:
                         pass
+                # [P1-RECIPE-STEP-VEG-VARIETY-DEDUP · 2026-06-29] Texto crudo (accent-free) de los ingredientes para el
+                # dedup por TOKEN: "lechuga romana picada" ya trae el token 'lechuga' aunque normalice distinto que el
+                # canónico "Lechuga" → evita añadir un duplicado de variedad.
+                _ing_text = _sa(" ".join(str(i) for i in (meal.get("ingredients") or [])).lower())
                 recipe_txt = _sa(" ".join(str(s) for s in (meal.get("recipe") or [])).lower())
                 if not recipe_txt:
                     continue
@@ -14808,6 +14823,11 @@ def _add_missing_recipe_step_vegetables(days, *, max_kcal=60.0, max_per_meal=3) 
                     if not _re.search(r"\b" + _re.escape(tok) + r"\b", recipe_txt):
                         continue
                     if _re.search(r"\bsin\s+" + _re.escape(tok), recipe_txt):  # negación ("sin calabacín")
+                        continue
+                    # [P1-RECIPE-STEP-VEG-VARIETY-DEDUP] Si el token base ya aparece en algún ingrediente (cualquier
+                    # variedad: "lechuga romana", "repollo morado"), NO re-añadir el genérico del catálogo → evita duplicado.
+                    if (RECIPE_STEP_VEG_VARIETY_DEDUP
+                            and _re.search(r"\b" + _re.escape(tok) + r"\b", _ing_text)):
                         continue
                     try:
                         if normalize_name(nm) in present:

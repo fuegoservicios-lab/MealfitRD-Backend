@@ -1,6 +1,36 @@
 import re
 import math
 
+try:
+    from knobs import _env_bool
+except Exception:  # fail-safe: si knobs no resuelve, el fix queda ON por default (es backstop seguro)
+    def _env_bool(_name, _default=False):
+        import os
+        return (os.environ.get(_name, "1" if _default else "0") or "").strip().lower() in ("1", "true", "yes", "on")
+
+# [P1-INGREDIENT-DOUBLE-FRACTION · 2026-06-29] Backstop de DISPLAY: neutraliza cantidades malformadas con DOBLE fracción
+# ("0.5 jugo de 0.5 limón" → "jugo de 0.5 limón"). Si tras la cantidad líder el resto del nombre YA contiene su propia
+# cantidad+sustantivo contable ("de 0.5 limón"), la líder es un prepend espurio. Default True; flip a False revierte.
+INGREDIENT_DOUBLE_FRACTION_FIX = _env_bool("MEALFIT_INGREDIENT_DOUBLE_FRACTION_FIX", True)
+# cantidad interna "de <num> <sustantivo>": fracción legítima del nombre (jugo de ½ limón).
+_INNER_QTY_NOUN_RE = re.compile(r'\bde\s+(?:\d+(?:[.,]\d+)?|½|¼|¾)\s+\w+', re.IGNORECASE)
+# cantidad líder (acepta decimal o fracción unicode) seguida de un resto que contiene "de <num> ...".
+_LEAD_PLUS_INNER_RE = re.compile(r'^\s*(?:\d+(?:[.,]\d+)?|½|¼|¾)\s+(.*\bde\s+(?:\d|½|¼|¾).+)$', re.IGNORECASE)
+
+
+def _collapse_double_fraction(ing) -> str:
+    """[P1-INGREDIENT-DOUBLE-FRACTION] "0.5 jugo de 0.5 limón" → "jugo de 0.5 limón" (la cantidad líder es un prepend
+    espurio sobre un nombre que ya trae su fracción). Idempotente (re-pasar "jugo de 0.5 limón" no matchea → intacto) y
+    fail-safe (no-string / excepción → devuelve el original). NO toca strings normales ("150g de arroz", "2 huevos")."""
+    try:
+        s = str(ing).strip()
+        m = _LEAD_PLUS_INNER_RE.match(s)
+        if m and _INNER_QTY_NOUN_RE.search(m.group(1)):
+            return m.group(1)  # conserva el nombre con su fracción legítima; quita la líder espuria
+        return ing
+    except Exception:
+        return ing
+
 # Diccionario de equivalencias para medidas caseras dominicanas
 # key: string base simplificado
 # value: dict con:
@@ -282,7 +312,9 @@ def humanize_plan_ingredients(plan_result: dict) -> dict:
                     meal["ingredients_raw"] = list(meal["ingredients"])
                 humanized_ingredients = []
                 for ing in meal["ingredients"]:
-                    humanized = humanize_ingredient(ing)
+                    # [P1-INGREDIENT-DOUBLE-FRACTION] backstop de display: colapsa "0.5 jugo de 0.5 limón" antes de humanizar.
+                    ing_clean = _collapse_double_fraction(ing) if INGREDIENT_DOUBLE_FRACTION_FIX else ing
+                    humanized = humanize_ingredient(ing_clean)
                     humanized_ingredients.append(humanized)
                 meal["ingredients"] = humanized_ingredients
     return plan_result
