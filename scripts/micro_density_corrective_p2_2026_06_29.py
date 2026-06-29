@@ -21,6 +21,11 @@ van as-eaten (líquido/cremoso). Si tu catálogo guarda la avena/harina ya cocid
 match para que confirmes la base ANTES de commitear.
 
     NEON_DATABASE_URL(_POOLED) en .env.  python scripts/micro_density_corrective_p2_2026_06_29.py [--commit]
+
+ESTADO (verificado en Neon 2026-06-29): el catálogo YA tenía density_g_per_cup poblada para casi todos los
+cup-foods (Avena=80, Leche=244, Harina de trigo=125, Yogurt/griego=245, Arroz=185) — el backfill previo ya
+los cubrió. El ÚNICO con NULL era "Harina de maíz precocida", corregido a 120 g/taza (kcal 361.8 = polvo seco).
+Este script queda como red de seguridad idempotente para futuros INSERTs de cup-foods.
 """
 import os, sys
 try:
@@ -41,8 +46,8 @@ DENSITY = {
     "Avena": 80, "Avena en hojuelas": 80, "Hojuelas de avena": 80,
     # leche (líquida): ~244 g/taza
     "Leche": 244, "Leche entera": 244, "Leche descremada": 245, "Leche semidescremada": 244,
-    # harina (de trigo, DRY): ~120 g/taza; maíz ~110
-    "Harina": 120, "Harina de trigo": 120, "Harina de maíz": 110,
+    # harina (de trigo, DRY): ~125 g/taza; maíz precocida ~120
+    "Harina": 120, "Harina de trigo": 125, "Harina de maíz precocida": 120, "Harina de maíz": 110,
     # yogurt (griego/natural, as-eaten): ~245 g/taza
     "Yogurt griego": 245, "Yogur griego": 245, "Yogurt": 245, "Yogur": 245, "Yogurt natural": 245,
 }
