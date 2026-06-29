@@ -9593,11 +9593,30 @@ _MICRO_SOFT_REJECT_KEYS = frozenset({"fiber_g", "potassium_mg", "magnesium_mg", 
 # OFF (opt-in): añade kcal → requiere A/B de banda macro antes de activar (mismo rollout que los closers de swap
 # y el soft-reject). Renal → skip Mg+fibra (hiperkalemia / leguminosas contraindicadas). tooltip-anchor: P1-MICRONUTRIENT-CLOSER
 MICRONUTRIENT_CLOSER_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CLOSER", False)
-_MICRO_CLOSER_KEYS = frozenset({"fiber_g", "magnesium_mg", "calcium_mg"})
+# [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] (re-audit objetivo · P1) El closer cubría solo 3 de los 18 micros del
+# panel (fibra/Mg/Ca). HIERRO (piso 18mg en mujeres menstruantes / 27mg en embarazo) y FOLATO (600mcg embarazo)
+# son los déficits poblacionales de MAYOR consecuencia y vivían SOLO con un nudge al prompt — la misma debilidad
+# pre-fix que el audit calificó P1 para fibra/Mg/Ca. El steer ya los enmarca como "GANABLES con comida". Se añaden
+# hierro/folato/zinc/vit C (todos food-achievable: legumbres/hígado/hoja-verde/cítricos), con TECHO UL por micro
+# (a diferencia de fibra/Mg/Ca, hierro/zinc tienen toxicidad → NO sobre-escalar hígado/vísceras). Vit D/B12 quedan
+# EXCLUIDOS (no se cierran con comida en cantidades realistas). tooltip-anchor: P1-MICRO-CLOSER-COVERAGE
+_MICRO_CLOSER_KEYS = frozenset({
+    "fiber_g", "magnesium_mg", "calcium_mg",
+    "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
+})
 MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 80)))
 MICRONUTRIENT_CLOSER_MAX_SCALE = max(1.1, min(3.0, _env_float("MEALFIT_MICRONUTRIENT_CLOSER_MAX_SCALE", 1.6)))
-# map report-key → key del dict de db.micros_from_ingredient_string (la fibra allá es 'fiber', no 'fiber_g').
-_MICRO_CLOSER_INGREDIENT_KEY = {"fiber_g": "fiber", "magnesium_mg": "magnesium_mg", "calcium_mg": "calcium_mg"}
+# map report-key → key del dict de db.micros_from_ingredient_string (la fibra allá es 'fiber', no 'fiber_g';
+# el resto son identidad — verificado contra micronutrients.py:295-308 / nutrition_db.micros_from_ingredient_string).
+_MICRO_CLOSER_INGREDIENT_KEY = {
+    "fiber_g": "fiber", "magnesium_mg": "magnesium_mg", "calcium_mg": "calcium_mg",
+    "iron_mg": "iron_mg", "folate_mcg": "folate_mcg", "zinc_mg": "zinc_mg", "vit_c_mg": "vit_c_mg",
+}
+# TECHOS UL (Tolerable Upper Intake Level, IOM) por micro — el closer NUNCA escala un ingrediente más allá del UL
+# del día (defensa contra escalar hígado/vísceras al cerrar hierro). Fibra/Mg/Ca NO llevan UL aquí: el UL de Mg
+# (350mg) aplica solo a SUPLEMENTOS, no a comida, y fibra no tiene UL → escalar comida es seguro. Folato UL 1000mcg
+# es de ácido fólico SINTÉTICO (el folato de comida no tiene UL), pero lo aplicamos como techo conservador.
+_MICRO_CLOSER_UL = {"iron_mg": 45.0, "zinc_mg": 40.0, "folate_mcg": 1000.0, "vit_c_mg": 2000.0}
 # (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura alta (mitiga el falso positivo de sal 'al gusto'):
 SODIUM_SUGAR_DEGRADE_ENABLED = _env_bool("MEALFIT_SODIUM_SUGAR_DEGRADE", False)
 SODIUM_SUGAR_DEGRADE_MIN_COVERAGE = _env_float("MEALFIT_SODIUM_SUGAR_DEGRADE_MIN_COVERAGE", 0.75)
@@ -10716,27 +10735,36 @@ def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None
         return False
 
 
-def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None) -> int:
-    """[P1-MICRONUTRIENT-CLOSER · 2026-06-29] (audit objetivo · P1-4) Lever DETERMINISTA de micros alcanzables —
+def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_strict: bool = False) -> int:
+    """[P1-MICRONUTRIENT-CLOSER · 2026-06-29 · cobertura+updates re-audit P1-MICRO-CLOSER-COVERAGE/UPDATES 2026-06-29]
+    Lever DETERMINISTA de micros alcanzables —
     espejo del closer de proteína (`_close_protein_gap_for_meal`/`_repair_protein_floor_post_caps`), que cierra
     la asimetría identificada en el audit: la proteína tiene cierre determinista post-caps, pero los micros eran
     SOLO un nudge al prompt (advisory). Para un usuario sano con fibra 18/25g nada cerraba la brecha.
 
-    Corre tras el macro engine. Detecta los micros ALCANZABLES (`_MICRO_CLOSER_KEYS` = fibra/Mg/Ca) que el reporte
-    advisory marca genuinamente BAJO el piso DRI **con cobertura alta** (`status=='bajo'`, NO 'estimado_bajo' que
-    es incierto). Para cada uno, por DÍA deficitario, ESCALA el ingrediente existente más rico en ese micro
-    (vegetal/leguminosa/hoja/lácteo, ya en el plato) hasta cerrar el déficit del día, acotado por:
+    Corre tras el macro engine. Detecta los micros ALCANZABLES (`_MICRO_CLOSER_KEYS` = fibra/Mg/Ca + hierro/folato/
+    zinc/vit C tras P1-MICRO-CLOSER-COVERAGE) que el reporte advisory marca genuinamente BAJO el piso DRI **con
+    cobertura alta** (`status=='bajo'`, NO 'estimado_bajo' que es incierto). Recorre DÍA-por-fuera, micro-por-dentro,
+    con un PRESUPUESTO de kcal COMPARTIDO por día (`MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY`) → el total añadido al día
+    está acotado sin importar cuántos micros se cierren (cierra el invariante "≤80 kcal/día" que un budget per-micro
+    rompía al crecer el set de micros). Para cada micro deficitario ESCALA el ingrediente existente más rico
+    (vegetal/leguminosa/hoja/lácteo/carne, ya en el plato), acotado por:
       - factor ≤ MICRONUTRIENT_CLOSER_MAX_SCALE,
-      - kcal añadidas ≤ MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY (no desplaza proteína ni rompe la banda),
+      - kcal añadidas del día ≤ presupuesto restante (compartido entre micros),
+      - el total del micro tras escalar ≤ su TECHO UL (`_MICRO_CLOSER_UL`, p.ej. hierro 45mg) — defensa contra
+        toxicidad al escalar hígado/vísceras (fibra/Mg/Ca no llevan UL de comida),
     y recomputa los macros del plato desde strings. NO añade ingredientes nuevos → NO toca alérgenos, ni la
     coherencia receta↔lista, ni introduce platos raros (el ingrediente ya estaba en la receta y la lista).
 
-    SKIPS clínicos: en ERC (renal) NO cierra Mg ni fibra (hiperkalemia / leguminosas contraindicadas — el panel ya
-    suprime esas notas en renal). Default OFF (`MICRONUTRIENT_CLOSER_ENABLED`): añade kcal → requiere A/B de banda
-    macro antes de activar en prod (mismo rollout que los closers de swap y el soft-reject). Idempotente en la
-    práctica (tras cerrar, el día ya cumple → no re-escala), fail-open. Muta `plan` in-place. Devuelve nº de
-    ajustes. tooltip-anchor: P1-MICRONUTRIENT-CLOSER"""
-    if not MICRONUTRIENT_CLOSER_ENABLED or not isinstance(plan, dict):
+    SKIPS clínicos: en ERC (renal) NO cierra fibra/Mg/hierro/folato/zinc/vit C (leguminosas/hígado/cítricos cargan
+    K/P/proteína contraindicados — la adecuación de micros en ERC la maneja el panel renal-aware + el gate de
+    nefrólogo); solo calcio queda cerrable (comportamiento previo). `pantry_strict=True` → SKIP total: escalar un
+    ingrediente añade comida, contraindicado al cocinar ESTRICTAMENTE desde la nevera (la superficie pantry-strict
+    no puede "comprar más" — el closer es una inteligencia de "ir de compras"). Default OFF
+    (`MICRONUTRIENT_CLOSER_ENABLED`): añade kcal → requiere A/B de banda macro antes de activar en prod (mismo rollout
+    que los closers de swap y el soft-reject). Idempotente en la práctica (tras cerrar, el día ya cumple → no
+    re-escala), fail-open. Muta `plan` in-place. Devuelve nº de ajustes. tooltip-anchor: P1-MICRONUTRIENT-CLOSER"""
+    if not MICRONUTRIENT_CLOSER_ENABLED or pantry_strict or not isinstance(plan, dict):
         return 0
     try:
         from micronutrients import build_micronutrient_report
@@ -10781,7 +10809,11 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None) -> int:
                 continue
             if g.get("status") != "bajo":  # 'estimado_bajo' = cobertura incierta → no forzar
                 continue
-            if _renal and k in ("magnesium_mg", "fiber_g"):
+            # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] En ERC, además de Mg/fibra, NO cerramos hierro/folato/zinc/
+            # vit C: sus fuentes (legumbres/hígado/cítricos) cargan K/P/proteína contraindicados. Solo calcio queda
+            # cerrable (preserva comportamiento previo). La adecuación de micros en renal la maneja el panel
+            # renal-aware + el gate de nefrólogo, no este lever de "ir de compras".
+            if _renal and k in ("magnesium_mg", "fiber_g", "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg"):
                 continue
             try:
                 floors[k] = float(g.get("piso") or 0)
@@ -10790,11 +10822,20 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None) -> int:
         if not floors:
             return 0
         adjustments = 0
-        for k, floor in floors.items():
-            ing_key = _MICRO_CLOSER_INGREDIENT_KEY[k]
-            for _d in _days:
-                if not isinstance(_d, dict):
-                    continue
+        # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] DÍA-por-fuera con presupuesto de kcal COMPARTIDO entre micros →
+        # el total añadido por día está acotado a MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY sin importar cuántos micros
+        # se cierren (con 7 micros un budget per-micro permitía hasta 7× el techo → rompía la banda macro). El aporte
+        # por micro se recomputa DESPUÉS de cada escala (re-lee ingredients) → si una hoja cubre fibra+folato+hierro,
+        # escalarla una vez baja el déficit de los 3.
+        for _d in _days:
+            if not isinstance(_d, dict):
+                continue
+            kcal_budget_left = float(MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY)
+            for k, floor in floors.items():
+                if kcal_budget_left <= 1.0:
+                    break  # presupuesto kcal del día agotado → no más escalas hoy
+                ing_key = _MICRO_CLOSER_INGREDIENT_KEY[k]
+                _ul = _MICRO_CLOSER_UL.get(k)
                 day_total = 0.0
                 best = None  # (contrib, meal, ing_idx, ing_str, kcal_now)
                 for _m in (_d.get("meals") or []):
@@ -10829,7 +10870,15 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None) -> int:
                 deficit = floor - day_total
                 factor = min(MICRONUTRIENT_CLOSER_MAX_SCALE, 1.0 + (deficit / contrib))
                 if kcal_now > 0:
-                    factor = min(factor, 1.0 + (MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY / kcal_now))
+                    # presupuesto kcal COMPARTIDO del día (no per-micro)
+                    factor = min(factor, 1.0 + (kcal_budget_left / kcal_now))
+                if _ul is not None and _ul > 0 and contrib > 0:
+                    # [P1-MICRO-CLOSER-COVERAGE] no escalar el total del micro del día por encima de su UL
+                    # (toxicidad: hierro 45mg / zinc 40mg). headroom = UL − total actual del micro.
+                    headroom = _ul - day_total
+                    if headroom <= 0:
+                        continue  # el día ya está en/sobre el UL para este micro → no escalar
+                    factor = min(factor, 1.0 + (headroom / contrib))
                 if factor <= 1.0 + 1e-3:
                     continue
                 new_ing = _resc(ing_str, factor)
@@ -10840,6 +10889,8 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None) -> int:
                     _truth_up_meal_macros_from_strings(meal, db)
                 except Exception:
                     pass
+                if kcal_now > 0:
+                    kcal_budget_left -= kcal_now * (factor - 1.0)
                 adjustments += 1
         if adjustments:
             logger.info(
@@ -14951,6 +15002,24 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None) -> int:
                 total += 1
         except Exception as _enn:
             logger.warning(f"[P2-RECIPE-NONEMPTY-BACKSTOP] backstop en finalizador de update no-op: {type(_enn).__name__}: {_enn}")
+        # [P1-RECIPE-QUANTIZE-UPDATES · 2026-06-29] (re-audit objetivo · P1) El quantize de porciones a unidades
+        # de cocina medibles (¼ taza, ½ unidad discreta, 5 g) corría SOLO en form-gen (assemble); los updates
+        # corren los MISMOS closers de macros que RE-INTRODUCEN decimales no medibles ('0.66 huevos', '4.73g de
+        # mozzarella', '0.53 taza') y los persistían crudos en receta + lista de compras + PDF — un usuario veía
+        # porciones humanas en todo el plan EXCEPTO el plato recién editado. Como ÚLTIMA mutación del finalizer
+        # (tras veg-fantasma/slice-grams/leaf-cap/night-rice/nonempty, que pueden añadir/escalar ingredientes),
+        # redondea cada porción y AJUSTA los macros del plato por el delta EXACTO del aporte reescalado → receta↔
+        # macro↔lista quedan coherentes en swap/chat-modify/regen-day. Reusa el MISMO `_apply_portion_quantization`
+        # de form-gen (envolviendo el meal como mini-plan `{"days": _wrap}`). Idempotente (tras redondear ya es
+        # medible → no-op), fail-open. Gated por ASSEMBLE_FINAL_QUANTIZE (mismo knob que form-gen).
+        # tooltip-anchor: P1-RECIPE-QUANTIZE-UPDATES
+        try:
+            if ASSEMBLE_FINAL_QUANTIZE:
+                _nq = _apply_portion_quantization({"days": _wrap}, db)
+                if _nq:
+                    total += _nq
+        except Exception as _eq:
+            logger.warning(f"[P1-RECIPE-QUANTIZE-UPDATES] quantize en finalizador de update no-op: {type(_eq).__name__}: {_eq}")
         # [P2-DISH-QUALITY-GATE · 2026-06-29] (audit objetivo · P2-7) Advisory de calidad en updates (paridad de
         # telemetría con S1): si tras los backstops el plato sigue placeholder/crudo, lo marcamos para que el
         # frontend/PDF lo señalice (no bloquea — el update no tiene retry barato como el gate de S1).
@@ -14964,7 +15033,7 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None) -> int:
         if total:
             logger.info(
                 f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {total} fix(es) de coherencia de receta en plato de update "
-                f"(veg-fantasma/slice-grams/leaf-cap/night-rice)"
+                f"(veg-fantasma/slice-grams/leaf-cap/night-rice/nonempty/quantize)"
             )
         return total
     except Exception as _e:

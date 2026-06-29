@@ -1478,13 +1478,21 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
             # tooltip-anchor: P2-CHATMODIFY-MICROS-STALE
             if os.environ.get("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
                 try:
-                    from graph_orchestrator import recompute_micronutrient_report_for_plan
+                    from graph_orchestrator import recompute_micronutrient_report_for_plan, _close_micro_gaps_for_plan
                     _micro_form_cm = {
                         "gender": _hp.get("gender") or _hp.get("sex"),
                         "age": _hp.get("age"),
                         "medicalConditions": _hp.get("medicalConditions") or _hp.get("medical_conditions"),
                         "medications": _hp.get("medications"),
                     }
+                    # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] (re-audit objetivo · P1) Cierre DETERMINISTA de micros
+                    # alcanzables ANTES de recomputar el panel → chat-modify no re-abre en silencio un déficit que
+                    # form-gen había cerrado. pantry-strict = la misma señal canónica del resto del flujo del modify
+                    # (`clean_ingredients and not allow_pantry_expansion`): cocinar desde la nevera NO puede "comprar
+                    # más" → se SALTA. Self-guards en MICRONUTRIENT_CLOSER_ENABLED, kcal/UL-bounded, renal-skip interno.
+                    # tooltip-anchor: P1-MICRO-CLOSER-UPDATES
+                    _ps_cm = bool(clean_ingredients) and not allow_pantry_expansion
+                    _close_micro_gaps_for_plan(plan_data_fresh, _micro_form_cm, db=None, pantry_strict=_ps_cm)
                     recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)
                 except Exception as _cm_micro_e:
                     logger.debug(f"[P2-CHATMODIFY-MICROS-STALE] recompute (chat-modify) falló: {_cm_micro_e}")

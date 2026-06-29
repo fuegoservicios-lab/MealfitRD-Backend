@@ -33,11 +33,19 @@ def test_knob_off_by_default():
 
 
 def test_keys_and_mapping():
-    assert g._MICRO_CLOSER_KEYS == frozenset({"fiber_g", "magnesium_mg", "calcium_mg"})
-    # La fibra en el dict de micros_from_ingredient_string es 'fiber', no 'fiber_g'.
+    # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] el set base (fibra/Mg/Ca) + los 4 nuevos food-achievable.
+    assert g._MICRO_CLOSER_KEYS == frozenset({
+        "fiber_g", "magnesium_mg", "calcium_mg",
+        "iron_mg", "folate_mcg", "zinc_mg", "vit_c_mg",
+    })
+    # La fibra en el dict de micros_from_ingredient_string es 'fiber', no 'fiber_g'; el resto identidad.
     assert g._MICRO_CLOSER_INGREDIENT_KEY["fiber_g"] == "fiber"
     assert g._MICRO_CLOSER_INGREDIENT_KEY["magnesium_mg"] == "magnesium_mg"
     assert g._MICRO_CLOSER_INGREDIENT_KEY["calcium_mg"] == "calcium_mg"
+    assert g._MICRO_CLOSER_INGREDIENT_KEY["iron_mg"] == "iron_mg"
+    assert g._MICRO_CLOSER_INGREDIENT_KEY["folate_mcg"] == "folate_mcg"
+    # cada report-key del closer tiene su mapping a la key del dict de micros (sin huérfanos).
+    assert set(g._MICRO_CLOSER_KEYS) == set(g._MICRO_CLOSER_INGREDIENT_KEY.keys())
 
 
 def test_wired_before_guard5_in_assemble():

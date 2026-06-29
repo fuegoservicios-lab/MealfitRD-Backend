@@ -4823,7 +4823,16 @@ def api_swap_meal_persist(
             # tooltip-anchor: P2-SWAP-MICROS-STALE
             if os.environ.get("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
                 try:
-                    from graph_orchestrator import recompute_micronutrient_report_for_plan
+                    from graph_orchestrator import recompute_micronutrient_report_for_plan, _close_micro_gaps_for_plan
+                    # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] (re-audit objetivo · P1) Cierre DETERMINISTA de micros
+                    # alcanzables (fibra/Mg/Ca/hierro/folato/zinc/vit C) ANTES de recomputar el panel → el swap no
+                    # re-abre en silencio un déficit que form-gen había cerrado (espejo del closer de proteína, que
+                    # SÍ corre en swap). Escala un ingrediente EXISTENTE (pantry-neutral) salvo en pantry-strict
+                    # (swap desde la Nevera marca `pantry_constrained`), donde el closer se SALTA: no se puede
+                    # "comprar más" cocinando desde la nevera. Self-guards en MICRONUTRIENT_CLOSER_ENABLED (ON en prod),
+                    # kcal/UL-bounded, renal-skip interno. tooltip-anchor: P1-MICRO-CLOSER-UPDATES
+                    _ps_swap = bool(isinstance(new_meal, dict) and new_meal.get("pantry_constrained"))
+                    _close_micro_gaps_for_plan(plan_data, _micro_form, db=None, pantry_strict=_ps_swap)
                     recompute_micronutrient_report_for_plan(plan_data, _micro_form, db=None)
                 except Exception as _mfe:
                     logger.debug(f"[P2-SWAP-MICROS-STALE] recompute (swap) falló: {_mfe}")
@@ -5491,13 +5500,19 @@ def api_regenerate_day(
             # (nunca bloquea el update). Knob MEALFIT_UPDATE_RECOMPUTE_MICROS.
             if os.environ.get("MEALFIT_UPDATE_RECOMPUTE_MICROS", "true").strip().lower() in ("1", "true", "yes", "on"):
                 try:
-                    from graph_orchestrator import recompute_micronutrient_report_for_plan
+                    from graph_orchestrator import recompute_micronutrient_report_for_plan, _close_micro_gaps_for_plan
                     _micro_form = {
                         "gender": data.get("gender") or data.get("sex"),
                         "age": data.get("age"),
                         "medicalConditions": data.get("medicalConditions"),
                         "medications": data.get("medications"),
                     }
+                    # [P1-MICRO-CLOSER-UPDATES · 2026-06-29] (re-audit objetivo · P1) regenerate-day es
+                    # PANTRY-STRICT por diseño (loop de swaps cocinando desde la nevera) → `pantry_strict=True`:
+                    # el closer se SALTA (escalar un ingrediente añadiría comida que el usuario no tiene). Se cablea
+                    # por simetría con swap/chat-modify + documentación + future-proof si aparece un path no-strict.
+                    # La adecuación de micros del día regenerado depende de lo disponible en la nevera (correcto).
+                    _close_micro_gaps_for_plan(pd, _micro_form, db=_db, pantry_strict=True)
                     recompute_micronutrient_report_for_plan(pd, _micro_form, db=_db)
                 except Exception as _mfe:
                     logger.debug(f"[P1-UPDATE-MICROS] recompute (regen-day) falló: {_mfe}")
