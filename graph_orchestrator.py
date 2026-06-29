@@ -8852,6 +8852,10 @@ LOW_COVERAGE_MEAL_FLOOR = _env_float("MEALFIT_LOW_COVERAGE_MEAL_FLOOR", 0.6)
 # añade). El caso "reverse" ya lo auto-parchea review_plan_node. Convierte reject-and-retry
 # en fix-in-place → el revisor aprueba al 1er intento. Flip a False revierte a rechazar.
 RECIPE_COHERENCE_AUTOFIX = _env_bool("MEALFIT_RECIPE_COHERENCE_AUTOFIX", True)
+# [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] (audit objetivo · P2-11) Garantiza que ningún plato se entregue con
+# receta vacía/no-sustantiva (el LLM degradado bajo presión de tokens/CB puede emitir recipe=[] o un solo paso
+# genérico). Rellena con un template estructurado de 3 pilares derivado de name+ingredients. Rollback: =false.
+RECIPE_NONEMPTY_BACKSTOP_ENABLED = _env_bool("MEALFIT_RECIPE_NONEMPTY_BACKSTOP", True)
 
 # [P3-GEN-SANITY-AUTOFIX · 2026-06-27] Autofix determinista post-assemble de DOS artefactos de generación del
 # LLM que el revisor médico cazaba (corr=579fb9a3, workflow de investigación): (#4) ingrediente INCONGRUENTE
@@ -9409,6 +9413,12 @@ UPDATE_APPETIBILITY_GUARD = _env_bool("MEALFIT_UPDATE_APPETIBILITY_GUARD", True)
 # en vez de platos reales cocinados — el objetivo más débil del owner (creatividad). Análogo a band_score
 # para macros. NUNCA es gate (no rechaza planes por esto). Default ON. Rollback: =false. Anchor: P2-DISH-QUALITY
 DISH_QUALITY_TELEMETRY_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_TELEMETRY", True)
+# [P2-DISH-QUALITY-GATE · 2026-06-29] (audit objetivo · P2-7) Promueve dish_quality de telemetría pura a GATE
+# SUAVE: si la fracción de platos placeholder/crudos supera el umbral, rechaza para retry (degrada a advisory en
+# el intento final, nunca cero-plan). Default OFF (opt-in) — el lever upstream (prompt+catálogo) ya da 0% fallback
+# en el happy-path; activar tras A/B para no inundar de retries. Umbral 0.34 = ≥1/3 de los platos genuinamente pobres.
+DISH_QUALITY_SOFT_GATE_ENABLED = _env_bool("MEALFIT_DISH_QUALITY_SOFT_GATE", False)
+DISH_QUALITY_REJECT_RATIO = max(0.1, min(1.0, _env_float("MEALFIT_DISH_QUALITY_REJECT_RATIO", 0.34)))
 
 # [P2-UPDATE-MICRO-STEER · 2026-06-27] (audit G2) Inyecta los pisos de micros (Mg/Fe/Ca/fibra/K) al prompt
 # de las superficies de UPDATE (swap S3 / chat-modify) — cierra el gap: el usuario SANO sin condición NO
@@ -12794,6 +12804,48 @@ def _meal_dish_quality_issue(meal: dict):
         return False, None
 
 
+def _ensure_nonempty_recipe(meal: dict) -> bool:
+    """[P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] (audit objetivo · P2-11) Backstop DETERMINISTA de receta
+    cocinable: si un plato llega con receta VACÍA (`recipe` ausente o `[]`) o NO sustantiva (<2 pasos reales —
+    el LLM degradó bajo presión de tokens / circuit-breaker), rellena con un template estructurado de 3 pilares
+    (Mise en place / El Toque de Fuego / Montaje) DERIVADO de `name` + `ingredients`, en vez de entregar pasos
+    vacíos o el placeholder genérico ('Cocinar'/'Servir') que `_meal_dish_quality_issue` igual marcaría. Los
+    pasos generados superan el umbral sustantivo (>12 chars, no genéricos) → un plato realmente cocinable. Marca
+    `_dish_quality_degraded` (honestidad: el frontend/PDF pueden señalizarlo). Determinista, idempotente (NO toca
+    un plato con receta real), fail-safe. Muta `meal` in-place. Devuelve True si rellenó. Gateado por
+    RECIPE_NONEMPTY_BACKSTOP_ENABLED. tooltip-anchor: P2-RECIPE-NONEMPTY-BACKSTOP"""
+    if not RECIPE_NONEMPTY_BACKSTOP_ENABLED or not isinstance(meal, dict):
+        return False
+    try:
+        recipe = meal.get("recipe") or []
+        if isinstance(recipe, str):
+            recipe = [recipe]
+        substantive = 0
+        for step in recipe:
+            s_low = strip_accents(str(step).lower()).strip()
+            for pref in ("mise en place:", "el toque de fuego:", "montaje:"):
+                if s_low.startswith(pref):
+                    s_low = s_low[len(pref):].strip()
+                    break
+            if len(s_low) >= 12 and s_low not in _DISH_GENERIC_RECIPE_STEPS:
+                substantive += 1
+        if substantive >= 2:
+            return False  # ya tiene receta real → no tocar
+        name = str(meal.get("name") or "").strip() or "el plato"
+        ings = [str(i).strip() for i in (meal.get("ingredients") or []) if str(i).strip()]
+        ings_txt = ", ".join(ings[:6]) if ings else "los ingredientes de la receta"
+        meal["recipe"] = [
+            f"Mise en place: Lava, pela y mide {ings_txt}; ten todo listo antes de cocinar.",
+            f"El Toque de Fuego: Cocina los ingredientes principales de «{name}» con la técnica indicada "
+            f"(plancha, horno o hervido) a fuego medio hasta el punto deseado, sazonando al gusto.",
+            f"Montaje: Emplata «{name}», rectifica la sal y sirve a la temperatura adecuada.",
+        ]
+        meal["_dish_quality_degraded"] = True
+        return True
+    except Exception:
+        return False
+
+
 def compute_dish_quality_report(plan: dict) -> dict:
     """[P2-DISH-QUALITY · 2026-06-27] (audit Fase 3 / G5) Telemetría ADVISORY de 'realness' de los platos:
     cuántos parecen placeholder/crudo en vez de platos reales cocinados. Mide G5 (creatividad/apetecibilidad)
@@ -14822,6 +14874,19 @@ def finalize_plan_data_coherence(days: list, db=None) -> tuple:
                 total += _n; parts.append(f"quantize={_n}")
     except Exception as _e3:
         logger.warning(f"[P1-COHERENCE-FINALIZE] quantize no-op: {type(_e3).__name__}: {_e3}")
+    # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Persist boundary (INSERT/chunk degradado/SSE-fallback que salta
+    # assemble): ningún plato debe persistirse con receta vacía/no-sustantiva. Idempotente (no toca receta real).
+    try:
+        if RECIPE_NONEMPTY_BACKSTOP_ENABLED:
+            _nrf = 0
+            for _d in days or []:
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                    if isinstance(_m, dict) and _ensure_nonempty_recipe(_m):
+                        _nrf += 1
+            if _nrf:
+                total += _nrf; parts.append(f"recipe_fill={_nrf}")
+    except Exception as _e4:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] recipe-nonempty no-op: {type(_e4).__name__}: {_e4}")
     return (total, ", ".join(parts))
 
 
@@ -14871,10 +14936,35 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None) -> int:
             total += _cap_leaf_volume_in_meals(_wrap, db)
         except Exception as _el:
             logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] leaf-cap no-op: {type(_el).__name__}: {_el}")
+        # [P2-SLOT-CORRECTOR · 2026-06-29] (audit objetivo · P2-10) Corrector DETERMINISTA de slot en updates:
+        # un swap/modify/regen que entrega "arroz simple" en la CENA tras agotar los retries del slot-backstop se
+        # corrige a tubérculo nocturno (batata/yuca/casabe) — ingrediente + NOMBRE + pasos de receta + macros — en
+        # vez de entregar el disparate de horario. Solo actúa sobre cena con arroz simple (no moro/locrio). Reusa
+        # el MISMO corrector de form-gen (ahora recipe-coherente). Gated por NIGHT_RICE_AUTOFIX_ENABLED, fail-open.
+        try:
+            total += _night_rice_autofix(_wrap, db)
+        except Exception as _enr:
+            logger.warning(f"[P2-SLOT-CORRECTOR] night-rice en finalizador de update no-op: {type(_enr).__name__}: {_enr}")
+        # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] Garantiza pasos cocinables si el LLM del update degradó.
+        try:
+            if _ensure_nonempty_recipe(meal):
+                total += 1
+        except Exception as _enn:
+            logger.warning(f"[P2-RECIPE-NONEMPTY-BACKSTOP] backstop en finalizador de update no-op: {type(_enn).__name__}: {_enn}")
+        # [P2-DISH-QUALITY-GATE · 2026-06-29] (audit objetivo · P2-7) Advisory de calidad en updates (paridad de
+        # telemetría con S1): si tras los backstops el plato sigue placeholder/crudo, lo marcamos para que el
+        # frontend/PDF lo señalice (no bloquea — el update no tiene retry barato como el gate de S1).
+        try:
+            _dq_lo, _dq_why = _meal_dish_quality_issue(meal)
+            if _dq_lo:
+                meal["_dish_quality_degraded"] = True
+                logger.warning(f"🍽️ [P2-DISH-QUALITY-GATE] plato de update placeholder/crudo (advisory): {_dq_why}")
+        except Exception as _dqu:
+            logger.warning(f"[P2-DISH-QUALITY-GATE] advisory de dish-quality en update no-op: {type(_dqu).__name__}: {_dqu}")
         if total:
             logger.info(
                 f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {total} fix(es) de coherencia de receta en plato de update "
-                f"(veg-fantasma/slice-grams/leaf-cap)"
+                f"(veg-fantasma/slice-grams/leaf-cap/night-rice)"
             )
         return total
     except Exception as _e:
@@ -15146,6 +15236,18 @@ def _night_rice_autofix(days: list, db=None) -> int:
                 if _new_name != name:
                     m["name"] = _new_name
                     _changed = True
+                # [P2-SLOT-CORRECTOR · 2026-06-29] (audit objetivo · P2-10) Reescribe también los PASOS de
+                # receta (arroz→tubérculo): sin esto el autofix renombraba el plato y cambiaba el ingrediente
+                # pero dejaba "cocina el arroz" en los steps → incoherencia receta↔ingrediente latente. Con esto
+                # el corrector queda 100% coherente, lo que permite reusarlo seguro en las superficies de UPDATE.
+                if _changed:
+                    _recipe = m.get("recipe")
+                    if isinstance(_recipe, list):
+                        _new_recipe = [_NIGHT_RICE_NAME_RE.sub(sub, s) if isinstance(s, str) else s for s in _recipe]
+                        if _new_recipe != _recipe:
+                            m["recipe"] = _new_recipe
+                    elif isinstance(_recipe, str) and _recipe:
+                        m["recipe"] = _NIGHT_RICE_NAME_RE.sub(sub, _recipe)
                 if _changed:
                     try:
                         _truth_up_meal_macros_from_strings(m, db)
@@ -16029,9 +16131,11 @@ async def assemble_plan_node(state: PlanState) -> dict:
                 m["_dish_quality_degraded"] = True
             if "difficulty" not in m: m["difficulty"] = "Fácil"
             if "desc" not in m: m["desc"] = "Comida saludable y balanceada."
-            if "recipe" not in m:
-                m["recipe"] = ["Mise en place: Preparar todo", "El Toque de Fuego: Cocinar", "Montaje: Servir"]
-                m["_dish_quality_degraded"] = True
+            # [P2-RECIPE-NONEMPTY-BACKSTOP · 2026-06-29] (audit objetivo · P2-11) Cubre `recipe` ausente Y
+            # `[]`/no-sustantiva con un template sustantivo derivado de name+ingredients. El fill genérico previo
+            # ("Preparar todo"/"Cocinar"/"Servir") seguía siendo flagueado por _meal_dish_quality_issue y NO
+            # cubría recipe=[]. tooltip-anchor: P2-RECIPE-NONEMPTY-BACKSTOP
+            _ensure_nonempty_recipe(m)
             
     target_cals = result["calories"]
 
@@ -18817,6 +18921,38 @@ Responde ÚNICAMENTE con el JSON de revisión.
                         severity = _severity_max(severity, "high")
         except Exception as _sa_e:
             logger.warning(f"[P1-SLOT-APPROPRIATENESS] validador falló: {type(_sa_e).__name__}: {_sa_e}")
+
+    # [P2-DISH-QUALITY-GATE · 2026-06-29] (audit objetivo · P2-7) Gate SUAVE de calidad de plato: si una fracción
+    # ≥ DISH_QUALITY_REJECT_RATIO de los platos son placeholder/crudos (nombre genérico, ingredientes 'Proteína
+    # magra al gusto', receta no sustantiva que el backstop determinista no pudo rescatar), rechaza para retry,
+    # degradando a advisory en el intento final (nunca cero-plan; espejo de los gates de slot/variedad). Recompute
+    # FRESCO sobre el plan ENTREGADO (post-backstops/fill). Default OFF (opt-in). Anchor: P2-DISH-QUALITY-GATE.
+    if DISH_QUALITY_SOFT_GATE_ENABLED:
+        try:
+            _dqg = compute_dish_quality_report(plan)
+            _dq_ratio = _dqg.get("low_quality_ratio")
+            if _dq_ratio is not None and _dq_ratio >= DISH_QUALITY_REJECT_RATIO:
+                _dq_attempt = int(state.get("attempt", 1))
+                if _dq_attempt >= MAX_ATTEMPTS:
+                    logger.warning(
+                        f"🍽️ [P2-DISH-QUALITY-GATE] {_dq_ratio:.0%} de platos placeholder/crudos en intento "
+                        f"final ({_dq_attempt}/{MAX_ATTEMPTS}) → ADVISORY (entrego el plan)."
+                    )
+                    if isinstance(plan, dict):
+                        plan["_dish_quality_advisory_final"] = True
+                else:
+                    logger.warning(
+                        f"🍽️ [P2-DISH-QUALITY-GATE] {_dq_ratio:.0%} de platos placeholder/crudos "
+                        f"(≥{DISH_QUALITY_REJECT_RATIO:.0%}) → rechazo para mejorar la calidad de los platos."
+                    )
+                    approved = False
+                    issues.append(
+                        f"{_dqg.get('low_quality_meals')} plato(s) parecen placeholder/crudos: "
+                        f"{(_dqg.get('issues') or ['?'])[0][:80]}"
+                    )
+                    severity = _severity_max(severity, "high")
+        except Exception as _dqg_e:
+            logger.warning(f"[P2-DISH-QUALITY-GATE] gate falló: {type(_dqg_e).__name__}: {_dqg_e}")
 
     # [P2-SHOPPING-COMPLETENESS · 2026-06-21] Gate de lista de compras VACÍA — INDEPENDIENTE del
     # modo del coherence guard (en warn/off el guard no rechaza; este gate sí). Si el plan tiene

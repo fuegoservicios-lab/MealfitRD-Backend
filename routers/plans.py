@@ -5361,6 +5361,12 @@ def api_regenerate_day(
                 "deficits": [],
             }
 
+        # [P2-REGEN-DAY-DEFICIT-HONESTY · 2026-06-29] (audit objetivo · P2-2) Distingue déficit-por-NEVERA
+        # (legítimo: el rebalance/FASE A SÍ podían cerrar pero rompían la Nevera → revertidos) de déficit
+        # ALCANZABLE (la Nevera daba: el residual es drift). Si algún revert pantry disparó, el día está
+        # genuinamente limitado por inventario → el warning dice "agrega ítems"; si NO, dice "ajusta porciones".
+        _pantry_limited = False
+
         # [P2-REGEN-DAY-MACRO-REBALANCE · 2026-06-27] (audit Fase 2 / Finding 1) Rebalanceador de macros a
         # nivel-DÍA: la MISMA maquinaria que en S1 lleva all-4-en-banda de ~53% a ~87% (re-apunta carbos/grasas
         # al target diario re-cuantizando hacia la porción cocinable más cercana — corrige el drift de redondeo
@@ -5388,6 +5394,7 @@ def api_regenerate_day(
                     if _exceeds:
                         logger.info(f"🎚 [P2-REGEN-DAY-MACRO-REBALANCE] rebalance rompió pantry → revertido | {_why}")
                         new_meals[:] = _pre_rb
+                        _pantry_limited = True  # [P2-REGEN-DAY-DEFICIT-HONESTY] el déficit residual es por Nevera
                     else:
                         logger.info("🎚 [P2-REGEN-DAY-MACRO-REBALANCE] macros del día re-apuntadas al target")
             except Exception as _rbd_e:
@@ -5439,6 +5446,7 @@ def api_regenerate_day(
                     if _exc_pf:
                         logger.info(f"🔒 [P1-REGEN-DAY-CLINICAL-PARITY] FASE A rompió pantry → revertida | {_why_pf}")
                         new_meals[:] = _pre_pf
+                        _pantry_limited = True  # [P2-REGEN-DAY-DEFICIT-HONESTY] el déficit de proteína es por Nevera
                 if _n_dm2 or _n_bar or _added_pf:
                     logger.info(
                         f"🔒 [P1-REGEN-DAY-CLINICAL-PARITY] día regenerado: cap_dm2={_n_dm2} "
@@ -5543,11 +5551,20 @@ def api_regenerate_day(
                     if _new_carbs < 0.85 * day_target["carbs_g"]:
                         _deficits.append(f"~{round(_new_carbs)}g de carbohidratos (objetivo ~{round(day_target['carbs_g'])}g)")
             if _deficits:
-                _day_warning = (
-                    "Este día quedó en " + "; ".join(_deficits) + ", por debajo de tu objetivo. "
-                    "Tu Nevera puede no tener suficiente: agrega más ítems o ajusta las porciones."
+                # [P2-REGEN-DAY-DEFICIT-HONESTY · 2026-06-29] (audit objetivo · P2-2) Mensaje HONESTO según la causa:
+                # si el rebalance/FASE A revirtieron por Nevera, el déficit es por inventario (agrega ítems); si NO
+                # (slots_kept también lo confirma), es un residual alcanzable (ajusta porciones / renueva el ciclo).
+                _pantry_signal = _pantry_limited or (slots_kept and len(slots_kept) > 0)
+                if _pantry_signal:
+                    _tail = "Tu Nevera puede no tener suficiente para tu objetivo: agrega más ítems y vuelve a generar."
+                else:
+                    _tail = ("Ajusta las porciones o renueva el ciclo para acercarte a tu objetivo "
+                             "(tu Nevera sí alcanza; es un ajuste fino de cantidades).")
+                _day_warning = "Este día quedó en " + "; ".join(_deficits) + ", por debajo de tu objetivo. " + _tail
+                logger.info(
+                    f"⚠️ [P2-REGEN-DAY-WARN-MULTI-AXIS] día bajo objetivo: {_deficits} | "
+                    f"pantry_limited={bool(_pantry_signal)}"
                 )
-                logger.info(f"⚠️ [P2-REGEN-DAY-WARN-MULTI-AXIS] día bajo objetivo: {_deficits}")
 
         # [P2-REGEN-DAY-BAND-SCORE · 2026-06-27] (audit Fase 2 / Finding 10) Telemetría de precisión de macros
         # del día regenerado (mismo score determinista que el banner de S1) — antes los updates NO tenían
@@ -5577,6 +5594,9 @@ def api_regenerate_day(
             "band_score": _band_score,
             # [P1-REGEN-DAY-RETARGET] aviso honesto si el día quedó bajo en proteína vs objetivo.
             "day_quality_warning": _day_warning,
+            # [P2-REGEN-DAY-DEFICIT-HONESTY · 2026-06-29] True si el déficit es por Nevera insuficiente (revert
+            # pantry o slots no-cambiables); False/None si es un residual alcanzable (ajuste fino de porciones).
+            "day_deficit_pantry_limited": bool(_pantry_limited or (slots_kept and len(slots_kept) > 0)) if _day_warning else None,
             # [P1-REGEN-DAY-PARTIAL-AI-DEGRADE · 2026-06-24] Señaliza interrupción por IA caída a mitad:
             # el día se persistió con los platos logrados (+ originales padeados, sin pérdida), NO se cobró
             # crédito, y el frontend muestra un aviso accionable "reintenta para completar" — distinto del

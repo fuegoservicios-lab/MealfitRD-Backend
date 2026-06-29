@@ -102,6 +102,10 @@ def test_finalizer_orchestrates_subfunctions(monkeypatch):
     monkeypatch.setattr(g, "_recipe_slice_units_to_grams", _fake_slice)
     monkeypatch.setattr(g, "_cap_leaf_volume_in_meals", _fake_leaf)
     monkeypatch.setattr(g, "_truth_up_meal_macros_from_strings", _fake_truthup)
+    # [P2-10/P2-11] El finalizador también corre night-rice + recipe-nonempty; los mockeamos a no-op
+    # para aislar la orquestación veg/slice/leaf de este test.
+    monkeypatch.setattr(g, "_night_rice_autofix", lambda wrap, db=None: 0)
+    monkeypatch.setattr(g, "_ensure_nonempty_recipe", lambda meal: False)
 
     meal = {"name": "Revoltillo", "ingredients": ["3 huevos"], "recipe": ["Saltea el brócoli"]}
     # Pasamos un db dummy para que NO construya IngredientNutritionDB() (que tocaría Neon).

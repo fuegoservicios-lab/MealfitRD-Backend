@@ -955,6 +955,33 @@ def swap_meal(form_data: dict):
                 context_extras += "\n    " + _micro_block.strip()
         except Exception as _msw_e:
             logger.debug(f"[P2-UPDATE-MICRO-STEER] micro steer swap falló (no bloquea): {_msw_e}")
+    else:
+        # [P2-PANTRY-MICRO-SOFT · 2026-06-29] (audit objetivo · P2-12) En pantry-strict NO inyectamos el steer
+        # CUANTITATIVO (subiría fallos de convergencia con la Nevera) pero SÍ una preferencia SUAVE: que, entre
+        # lo disponible, priorice ingredientes densos en micros. Cierra la asimetría "S1 siempre orienta micros;
+        # el update pantry-strict no daba NINGUNA guía". tooltip-anchor: P2-PANTRY-MICRO-SOFT
+        try:
+            from graph_orchestrator import MICRONUTRIENT_STEER_ENABLED as _mse
+            if _mse:
+                context_extras += ("\n    - 🧪 DENSIDAD DE MICROS (preferencia suave, sin salir de la Nevera): "
+                                   "entre los ingredientes disponibles, prioriza los más ricos en magnesio, hierro, "
+                                   "calcio y fibra (hojas verdes, leguminosas, semillas, vegetales de color).")
+        except Exception:
+            pass
+
+    # [P2-VERIFIED-ONLY-UPDATE · 2026-06-29] (audit objetivo · P2-6) Paridad de catálogo con S1: cuando el usuario
+    # va de compras (no pantry-strict), el LLM del swap podía inventar un alimento/especia fuera del catálogo
+    # verificado-por-precio → sobrevive en el TEXTO de la receta y se cae de la lista (incoherencia receta↔lista,
+    # no costeable). Inyectamos el MISMO bloque "USA EXCLUSIVAMENTE" de S1 (gated por el mismo knob vía el helper;
+    # string cacheado). SKIP en pantry-strict (los ingredientes ya son del catálogo). tooltip-anchor: P2-VERIFIED-ONLY-UPDATE
+    if not clean_ingredients:
+        try:
+            from graph_orchestrator import _get_verified_catalog_instruction as _gvci
+            _vc_block = _gvci(form_data)
+            if _vc_block:
+                context_extras += "\n    " + _vc_block.strip()
+        except Exception as _vcsw_e:
+            logger.debug(f"[P2-VERIFIED-ONLY-UPDATE] verified catalog swap falló (no bloquea): {_vcsw_e}")
 
     prompt_text = SWAP_MEAL_PROMPT_TEMPLATE.format(
         rejected_meal=rejected_meal,

@@ -1578,6 +1578,11 @@ def get_nutritional_category(base_ingredient: str) -> str:
 _SLOT_RICE_EXCLUDE = (
     "harina de arroz", "leche de arroz", "vinagre de arroz", "galleta de arroz",
     "papel de arroz", "agua de arroz", "crema de arroz",
+    # [P2-SLOT-RICE-TANGENTIAL · 2026-06-29] (audit objetivo · P2-9) Menciones TANGENCIALES de arroz que
+    # NO hacen del plato un "arroz blanco" (el detector es name-based, ciego a cantidad): una cena
+    # legítimamente ligera con "un toque de arroz" o un "crocante de arroz inflado" no debe disparar el
+    # falso positivo de "arroz de noche". Reduce el ruido sin tocar el detector. tooltip-anchor: P2-SLOT-RICE-TANGENTIAL
+    "toque de arroz", "crocante de arroz", "arroz inflado", "crujiente de arroz",
 )
 SLOT_INAPPROPRIATE_FOODS = {
     "desayuno": [
@@ -1598,6 +1603,19 @@ SLOT_INAPPROPRIATE_FOODS = {
         # DESAYUNO. Decisión del owner. Antes estaba como soft-block en cena (suposición cultural incorrecta).
         {"label": "comida de desayuno en la cena (cereal/panqueque/waffle)", "tokens": (
             "cereal", "hojuelas", "panqueque", "pancake", "waffle", "crepe", "crepa"),
+         "hardness": "soft"},
+    ],
+    # [P2-SLOT-MERIENDA · 2026-06-29] (audit objetivo · P2-8) Cierra el gap "el gate enforced solo cubre
+    # desayuno/cena": un PLATO FUERTE disfrazado de merienda (mini-almuerzo) ahora se flagea en TODAS las
+    # superficies (gate S1 + backstops swap/regenerate-day/chat-modify) porque todas leen este SSOT. Tokens =
+    # técnicas/platos fuertes (espejo conceptual de `_HEAVY_TECHNIQUE_KEYWORDS` del detector advisory de S1).
+    # NO incluye 'arroz'/'habichuela' sueltos: "Arroz con leche" es una merienda/postre dominicana legítima
+    # (anclado por test_p1_slot_appropriateness). hardness=soft (degrada a advisory en el intento final, nunca
+    # cero-plan — coherente con la filosofía de slot). tooltip-anchor: P2-SLOT-MERIENDA
+    "merienda": [
+        {"label": "plato fuerte (locrio/moro/guiso/sancocho) en la merienda", "tokens": (
+            "locrio", "moro", "morito", "asopao", "sancocho", "mondongo", "mofongo", "pastelon",
+            "salteado", "guisado", "guisada", "estofado", "encebollado", "croquetas"),
          "hardness": "soft"},
     ],
 }

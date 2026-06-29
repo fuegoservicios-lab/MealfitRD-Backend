@@ -768,6 +768,32 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 context_extras = _micro_block + "\n" + context_extras
         except Exception as _msc_e:
             logger.debug(f"[P2-UPDATE-MICRO-STEER] micro steer chat-modify falló (no bloquea): {_msc_e}")
+    else:
+        # [P2-PANTRY-MICRO-SOFT · 2026-06-29] (audit objetivo · P2-12) Pantry-strict-reuse: preferencia SUAVE de
+        # densidad de micros (sin el steer cuantitativo que sube fallos de convergencia con la Nevera). Espejo del
+        # swap. tooltip-anchor: P2-PANTRY-MICRO-SOFT
+        try:
+            from graph_orchestrator import MICRONUTRIENT_STEER_ENABLED as _mse
+            if _mse:
+                context_extras = ("- 🧪 DENSIDAD DE MICROS (preferencia suave, sin salir de la Nevera): entre los "
+                                  "ingredientes disponibles, prioriza los más ricos en magnesio, hierro, calcio y "
+                                  "fibra (hojas verdes, leguminosas, semillas, vegetales de color).\n" + context_extras)
+        except Exception:
+            pass
+
+    # [P2-VERIFIED-ONLY-UPDATE · 2026-06-29] (audit objetivo · P2-6) Paridad de catálogo con S1: en el path no
+    # pantry-strict (el usuario autoriza compras), inyectamos el bloque "USA EXCLUSIVAMENTE" del catálogo
+    # verificado-por-precio para que el chat-modify no introduzca alimentos/especias fuera de catálogo (que se
+    # caerían de la lista de compras → receta no costeable). Gated por el mismo knob vía el helper; cacheado.
+    # SKIP en pantry-strict (los ingredientes ya son del catálogo). tooltip-anchor: P2-VERIFIED-ONLY-UPDATE
+    if not (clean_ingredients and not allow_pantry_expansion):
+        try:
+            from graph_orchestrator import _get_verified_catalog_instruction as _gvci
+            _vc_block = _gvci(form_data)
+            if _vc_block:
+                context_extras = _vc_block + "\n" + context_extras
+        except Exception as _vcc_e:
+            logger.debug(f"[P2-VERIFIED-ONLY-UPDATE] verified catalog chat-modify falló (no bloquea): {_vcc_e}")
 
     modify_prompt = MODIFY_MEAL_PROMPT_TEMPLATE.format(
         name=target_meal.get('name'),

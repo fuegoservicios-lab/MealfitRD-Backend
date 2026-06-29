@@ -84,11 +84,16 @@ def test_chunk_t1_chokepoint_wired():
 
 
 def test_order_slice_before_quantize():
-    # el orden interno (slice → leaf → quantize) es load-bearing; ancla que no se reordene
+    # el orden interno (slice → leaf → quantize) es load-bearing; ancla que no se reordene.
+    # [P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] El veg-guard ahora corre ANTES (al tope de la fn) y el
+    # recipe-nonempty backstop DESPUÉS; la ventana se amplía a 4000 chars para abarcar la fn completa,
+    # pero la invariante slice→leaf→quantize sigue intacta.
     src = (_BACKEND / "graph_orchestrator.py").read_text(encoding="utf-8")
     i = src.index("def finalize_plan_data_coherence")
-    body = src[i:i + 2000]
+    body = src[i:i + 4000]
     p_slice = body.index("_recipe_slice_units_to_grams")
     p_leaf = body.index("_cap_leaf_volume_in_meals")
     p_quant = body.index("_apply_portion_quantization")
     assert p_slice < p_leaf < p_quant, "orden slice→leaf→quantize es load-bearing"
+    # El veg-guard corre ANTES del slice (para que el veg añadido entre a slice/quantize).
+    assert body.index("_add_missing_recipe_step_vegetables(days)") < p_slice
