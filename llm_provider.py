@@ -61,41 +61,6 @@ logger = logging.getLogger(__name__)
 DEEPSEEK_FLASH = "deepseek-v4-flash"
 DEEPSEEK_PRO = "deepseek-v4-pro"
 
-# [P1-GLM-CASCADE · 2026-06-29] GLM (Zhipu / Z.ai) como capa de modelo BARATA, primera de la cascada del day generator
-# (glm-4.7-flash → deepseek-v4-flash → deepseek-v4-pro). API OpenAI-compatible (base z.ai), mismo mecanismo de thinking-off
-# (`extra_body.thinking={type:disabled}`) y tool-calling/json-mode que DeepSeek (verificado en vivo 2026-06-29). El provider
-# se elige por PREFIJO del model_id (`glm*` → GLM creds; resto → DeepSeek). Key SIEMPRE desde env `GLM_API_KEY` (NUNCA
-# hardcodeada). Si falta la key, los modelos glm-* fallan con 401 → la cascada cae a DeepSeek (degradación segura).
-GLM_FLASH = "glm-4.7-flash"
-_GLM_MISSING_KEY_PLACEHOLDER = "MISSING_GLM_API_KEY"
-_warned_missing_glm_key = False
-
-
-def _glm_base_url() -> str:
-    """Base URL OpenAI-compatible de GLM/Zhipu (internacional z.ai). Knob para China/proxy."""
-    return _env_str("MEALFIT_GLM_BASE_URL", "https://api.z.ai/api/paas/v4")
-
-
-def _glm_api_key() -> str:
-    """API key GLM desde env `GLM_API_KEY` (o `ZHIPU_API_KEY`). Placeholder no-vacío si falta (401 explícito →
-    la cascada del day generator cae a DeepSeek; nunca tira el boot)."""
-    global _warned_missing_glm_key
-    key = (os.environ.get("GLM_API_KEY") or os.environ.get("ZHIPU_API_KEY") or "").strip()
-    if key:
-        return key
-    if not _warned_missing_glm_key:
-        logger.error(
-            "❌ [LLM-PROVIDER] GLM_API_KEY no configurada — los modelos glm-* fallarán con 401 hasta setearla "
-            "(.env del VPS) y reiniciar el worker. La cascada del day generator caerá a DeepSeek (degradación segura)."
-        )
-        _warned_missing_glm_key = True
-    return _GLM_MISSING_KEY_PLACEHOLDER
-
-
-def _is_glm_model(model_id) -> bool:
-    """True si el model_id es de GLM/Zhipu (prefijo `glm`)."""
-    return bool(model_id) and str(model_id).strip().lower().startswith("glm")
-
 # [P1-DEEPSEEK-THINKING-OFF · 2026-06-13] DeepSeek-V4 trae "thinking mode"
 # (chain-of-thought) NATIVO ENCENDIDO por default. Para la generación de planes
 # (tool-calling con `consultar_nutricion` + relleno de macros) el reasoning NO
@@ -306,19 +271,10 @@ class ChatDeepSeek(ChatOpenAI):
             _extra = dict(kwargs.get("extra_body") or {})
             _extra.setdefault("thinking", {"type": "disabled"})
             kwargs["extra_body"] = _extra
-        # [P1-GLM-CASCADE · 2026-06-29] Provider por PREFIJO del model_id: `glm*` → creds GLM (z.ai); resto → DeepSeek.
-        # Los callsites NO pasan api_key/base_url (vienen del provider correcto según el modelo). thinking-off + structured
-        # output overrides son provider-agnósticos (ambos OpenAI-compatible con el mismo param `thinking`).
-        if _is_glm_model(model):
-            api_key = api_key or _glm_api_key()
-            base_url = base_url or _glm_base_url()
-        else:
-            api_key = api_key or _deepseek_api_key()
-            base_url = base_url or _deepseek_base_url()
         super().__init__(
             model=model,
-            api_key=api_key,
-            base_url=base_url,
+            api_key=api_key or _deepseek_api_key(),
+            base_url=base_url or _deepseek_base_url(),
             **kwargs,
         )
 
