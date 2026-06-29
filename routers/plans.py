@@ -7126,6 +7126,29 @@ def api_recalculate_shopping_list(data: dict = Body(...), verified_user_id: Opti
         }
         household_multiplier = compute_household_multiplier(_multiplier_source)
 
+        # [P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · P1-2) /recalculate era la ÚNICA
+        # superficie list-mutating SIN defensa de coherencia de RECETA: reconstruye la lista de compras
+        # desde `ingredients[]`, así que si un plato tiene un vegetal mencionado en los PASOS pero ausente
+        # de ingredients[] (o una unidad vaga tipo 'lonja de queso'), la lista nace incoherente con la
+        # receta. Pase determinista per-meal ANTES de recomputar las listas → la lista canónica refleja
+        # ingredients[] recipe-coherentes. Idempotente (no-op donde form-gen/swap/modify ya finalizaron el
+        # plato), fail-open. NO muta el contrato de persistencia de `days` (el callback sigue preservando
+        # los days FRESH); solo asegura que la LISTA que el usuario compra cubra lo que las recetas piden.
+        # El bloqueo/auto-patch determinista a nivel-aggregator queda fuera de scope (subsistema frágil
+        # del monster-split revertido; el residual lo cubre la telemetría warn + banner ya existentes).
+        # tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE
+        try:
+            from graph_orchestrator import finalize_single_meal_recipe_coherence as _fin_rc_rc
+            _rc_fixed = 0
+            for _d in (plan_data.get("days") or []):
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else []):
+                    if isinstance(_m, dict):
+                        _rc_fixed += _fin_rc_rc(_m)
+            if _rc_fixed:
+                logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_rc_fixed} fix(es) de coherencia de receta en /recalculate (lista canónica)")
+        except Exception as _rc_fin_e:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] finalizador en /recalculate falló (no bloquea): {type(_rc_fin_e).__name__}: {_rc_fin_e}")
+
         # Generar las 3 variantes escaladas dinámicamente según el householdSize
         # usando el delta matemático para evitar duplicados si hay inventario (Gap 3).
         # [P1-5] Fetch inventario + consumidos UNA vez para que las 3 listas

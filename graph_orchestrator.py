@@ -8906,6 +8906,12 @@ SUBST_RECIPE_REWRITE_ENABLED = _env_bool("MEALFIT_SUBST_RECIPE_REWRITE", True)
 # se persistía con unidades vagas ("1¼ lonjas de queso"). `finalize_plan_data_coherence` los aplica DEFENSIVAMENTE antes de
 # persistir (INSERT chokepoint). Idempotente → no-op donde assemble ya corrió (band 1.00 intacto). Rollback: =false.
 COHERENCE_FINALIZE_ENABLED = _env_bool("MEALFIT_COHERENCE_FINALIZE", True)
+# [P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Los finalizadores de
+# coherencia de RECETA de assemble (veg-fantasma en pasos → ingredients[], slice-grams, leaf-cap) NO corrían en
+# NINGUNA superficie de update → reaparecía el bug ghost-vegetal (un vegetal en los pasos ausente de la lista no
+# se compra + sub-cuenta macros) y unidades vagas en platos swapeados/modificados. `finalize_single_meal_recipe_coherence`
+# los aplica per-meal en swap/chat-modify (regenerate-day los hereda vía el loop de swap). Rollback: =false.
+UPDATE_RECIPE_FINALIZE_ENABLED = _env_bool("MEALFIT_UPDATE_RECIPE_FINALIZE", True)
 FASE_A_FAT_TOPUP_ENABLED = _env_bool("MEALFIT_FASE_A_FAT_TOPUP", True)
 FASE_A_FAT_TOPUP_FLOOR_PCT = max(0.5, min(1.0, _env_float("MEALFIT_FASE_A_FAT_TOPUP_FLOOR_PCT", 0.90)))
 HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G = max(5, min(20, _env_int("MEALFIT_HEALTHY_FAT_MAX_PER_MEAL_BARIATRIC_G", 13)))
@@ -9569,6 +9575,19 @@ CONDITION_PANEL_DEGRADE_MARGIN = _env_float("MEALFIT_CONDITION_PANEL_DEGRADE_MAR
 # (P2-5) Micros ALCANZABLES con alimentos bajo el piso DRI (fibra/K/Mg/Ca). vit D/hierro/B12 EXCLUIDOS:
 MICRONUTRIENT_SOFT_REJECT_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_SOFT_REJECT", False)
 _MICRO_SOFT_REJECT_KEYS = frozenset({"fiber_g", "potassium_mg", "magnesium_mg", "calcium_mg"})
+# [P1-MICRONUTRIENT-CLOSER · 2026-06-29] (audit objetivo · P1-4) Lever DETERMINISTA de micros alcanzables (espejo
+# del closer de proteína): tras el macro engine, si fibra/Mg/Ca quedan BAJO el piso DRI con cobertura ALTA
+# (status=='bajo', no 'estimado_bajo'), ESCALA un ingrediente existente rico en ese micro (vegetal/leguminosa/
+# hoja/lácteo) en el día deficitario — SIN añadir ingredientes nuevos (no toca alérgenos/lista/coherencia: el
+# ingrediente ya está en el plato). Cierra la asimetría "proteína=lever determinista; micros=solo nudge". Default
+# OFF (opt-in): añade kcal → requiere A/B de banda macro antes de activar (mismo rollout que los closers de swap
+# y el soft-reject). Renal → skip Mg+fibra (hiperkalemia / leguminosas contraindicadas). tooltip-anchor: P1-MICRONUTRIENT-CLOSER
+MICRONUTRIENT_CLOSER_ENABLED = _env_bool("MEALFIT_MICRONUTRIENT_CLOSER", False)
+_MICRO_CLOSER_KEYS = frozenset({"fiber_g", "magnesium_mg", "calcium_mg"})
+MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY = max(20, min(200, _env_int("MEALFIT_MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY", 80)))
+MICRONUTRIENT_CLOSER_MAX_SCALE = max(1.1, min(3.0, _env_float("MEALFIT_MICRONUTRIENT_CLOSER_MAX_SCALE", 1.6)))
+# map report-key → key del dict de db.micros_from_ingredient_string (la fibra allá es 'fiber', no 'fiber_g').
+_MICRO_CLOSER_INGREDIENT_KEY = {"fiber_g": "fiber", "magnesium_mg": "magnesium_mg", "calcium_mg": "calcium_mg"}
 # (P2-8) Sodio/azúcar añadida sobre el techo WHO + cobertura alta (mitiga el falso positivo de sal 'al gusto'):
 SODIUM_SUGAR_DEGRADE_ENABLED = _env_bool("MEALFIT_SODIUM_SUGAR_DEGRADE", False)
 SODIUM_SUGAR_DEGRADE_MIN_COVERAGE = _env_float("MEALFIT_SODIUM_SUGAR_DEGRADE_MIN_COVERAGE", 0.75)
@@ -10685,6 +10704,142 @@ def recompute_micronutrient_report_for_plan(plan: dict, form_data: dict, db=None
     except Exception as _mn_e:
         logger.warning(f"[P1-UPDATE-MICROS] recompute micro report falló (no bloquea): {type(_mn_e).__name__}: {_mn_e}")
         return False
+
+
+def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None) -> int:
+    """[P1-MICRONUTRIENT-CLOSER · 2026-06-29] (audit objetivo · P1-4) Lever DETERMINISTA de micros alcanzables —
+    espejo del closer de proteína (`_close_protein_gap_for_meal`/`_repair_protein_floor_post_caps`), que cierra
+    la asimetría identificada en el audit: la proteína tiene cierre determinista post-caps, pero los micros eran
+    SOLO un nudge al prompt (advisory). Para un usuario sano con fibra 18/25g nada cerraba la brecha.
+
+    Corre tras el macro engine. Detecta los micros ALCANZABLES (`_MICRO_CLOSER_KEYS` = fibra/Mg/Ca) que el reporte
+    advisory marca genuinamente BAJO el piso DRI **con cobertura alta** (`status=='bajo'`, NO 'estimado_bajo' que
+    es incierto). Para cada uno, por DÍA deficitario, ESCALA el ingrediente existente más rico en ese micro
+    (vegetal/leguminosa/hoja/lácteo, ya en el plato) hasta cerrar el déficit del día, acotado por:
+      - factor ≤ MICRONUTRIENT_CLOSER_MAX_SCALE,
+      - kcal añadidas ≤ MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY (no desplaza proteína ni rompe la banda),
+    y recomputa los macros del plato desde strings. NO añade ingredientes nuevos → NO toca alérgenos, ni la
+    coherencia receta↔lista, ni introduce platos raros (el ingrediente ya estaba en la receta y la lista).
+
+    SKIPS clínicos: en ERC (renal) NO cierra Mg ni fibra (hiperkalemia / leguminosas contraindicadas — el panel ya
+    suprime esas notas en renal). Default OFF (`MICRONUTRIENT_CLOSER_ENABLED`): añade kcal → requiere A/B de banda
+    macro antes de activar en prod (mismo rollout que los closers de swap y el soft-reject). Idempotente en la
+    práctica (tras cerrar, el día ya cumple → no re-escala), fail-open. Muta `plan` in-place. Devuelve nº de
+    ajustes. tooltip-anchor: P1-MICRONUTRIENT-CLOSER"""
+    if not MICRONUTRIENT_CLOSER_ENABLED or not isinstance(plan, dict):
+        return 0
+    try:
+        from micronutrients import build_micronutrient_report
+        from nutrition_db import rescale_ingredient_string as _resc
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        _fd = form_data or {}
+        _sex = _fd.get("gender") or "female"
+        try:
+            from nutrition_calculator import _is_pregnancy_or_lactation as _ipl
+            _pregnant = bool(_ipl(_fd))
+        except Exception:
+            _pregnant = False
+        _k_elev = False
+        try:
+            from medication_rules import detect_potassium_elevating_med
+            _k_elev = bool(detect_potassium_elevating_med(_fd))
+        except Exception:
+            _k_elev = False
+        _conditions = _condition_strings(_fd)
+        _renal = any(("renal" in str(c).lower() or "erc" in str(c).lower()) for c in (_conditions or []))
+        _days = plan.get("days") or []
+        _ndays = len(_days) or 1
+        try:
+            _daily_kcal = sum(
+                _meal_macro_num(_m.get("cals"))
+                for _d in _days
+                for _m in ((_d.get("meals") or []) if isinstance(_d, dict) else [])
+            ) / _ndays
+        except Exception:
+            _daily_kcal = 0.0
+        _report = build_micronutrient_report(
+            plan, db, sex=_sex, conditions=_conditions, daily_kcal=_daily_kcal,
+            fiber_per_1000kcal=DM2_FIBER_G_PER_1000KCAL,
+            age=_fd.get("age"), pregnant=_pregnant, k_elevating_med=_k_elev,
+        )
+        floors = {}
+        for g in (_report.get("gaps") or []):
+            k = g.get("key")
+            if k not in _MICRO_CLOSER_KEYS:
+                continue
+            if g.get("status") != "bajo":  # 'estimado_bajo' = cobertura incierta → no forzar
+                continue
+            if _renal and k in ("magnesium_mg", "fiber_g"):
+                continue
+            try:
+                floors[k] = float(g.get("piso") or 0)
+            except Exception:
+                continue
+        if not floors:
+            return 0
+        adjustments = 0
+        for k, floor in floors.items():
+            ing_key = _MICRO_CLOSER_INGREDIENT_KEY[k]
+            for _d in _days:
+                if not isinstance(_d, dict):
+                    continue
+                day_total = 0.0
+                best = None  # (contrib, meal, ing_idx, ing_str, kcal_now)
+                for _m in (_d.get("meals") or []):
+                    if not isinstance(_m, dict):
+                        continue
+                    ings = _m.get("ingredients")
+                    if not isinstance(ings, list):
+                        continue
+                    for i, ing in enumerate(ings):
+                        if not isinstance(ing, str):
+                            continue
+                        try:
+                            mic = db.micros_from_ingredient_string(ing)
+                        except Exception:
+                            mic = None
+                        if not mic:
+                            continue
+                        c = mic.get(ing_key)
+                        if not c or c <= 0:
+                            continue
+                        day_total += float(c)
+                        if best is None or float(c) > best[0]:
+                            try:
+                                _mac = db.macros_from_ingredient_string(ing)
+                                _kc = float(_mac.get("kcal") or 0) if _mac else 0.0
+                            except Exception:
+                                _kc = 0.0
+                            best = (float(c), _m, i, ing, _kc)
+                if day_total >= floor or best is None:
+                    continue
+                contrib, meal, idx, ing_str, kcal_now = best
+                deficit = floor - day_total
+                factor = min(MICRONUTRIENT_CLOSER_MAX_SCALE, 1.0 + (deficit / contrib))
+                if kcal_now > 0:
+                    factor = min(factor, 1.0 + (MICRONUTRIENT_CLOSER_MAX_KCAL_PER_DAY / kcal_now))
+                if factor <= 1.0 + 1e-3:
+                    continue
+                new_ing = _resc(ing_str, factor)
+                if not new_ing or new_ing == ing_str:
+                    continue
+                meal["ingredients"][idx] = new_ing
+                try:
+                    _truth_up_meal_macros_from_strings(meal, db)
+                except Exception:
+                    pass
+                adjustments += 1
+        if adjustments:
+            logger.info(
+                f"🧪 [P1-MICRONUTRIENT-CLOSER] {adjustments} ajuste(s) de micros alcanzables "
+                f"(escala determinista de ingrediente existente; micros={sorted(floors)})"
+            )
+        return adjustments
+    except Exception as _mc_e:
+        logger.warning(f"[P1-MICRONUTRIENT-CLOSER] falló (no bloquea): {type(_mc_e).__name__}: {_mc_e}")
+        return 0
 
 
 def _surgical_promote_blocked_reason(new_plan_result: dict, form_data: dict):
@@ -13484,6 +13639,18 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception:
             _k_elev_med = False
 
+    # [P1-MICRONUTRIENT-CLOSER · 2026-06-29] (audit objetivo · P1-4) Closer DETERMINISTA de micros alcanzables
+    # (fibra/Mg/Ca) ANTES del panel (Guard 5) → el reporte final refleja sus ajustes. Default OFF (opt-in,
+    # A/B-pending): escala un ingrediente existente rico en el micro deficitario, kcal-bounded, renal-skip.
+    # Cierra la asimetría "proteína=lever determinista; micros=solo nudge". No-op si el knob está OFF.
+    if MICRONUTRIENT_CLOSER_ENABLED and _db is not None:
+        try:
+            _nmc = _close_micro_gaps_for_plan(plan, form_data, _db)
+            if _nmc:
+                logger.info(f"🧪 [P1-MICRONUTRIENT-CLOSER] {_nmc} micro(s) alcanzable(s) cerrados deterministamente en assemble")
+        except Exception as _mc_e:
+            logger.warning(f"[P1-MICRONUTRIENT-CLOSER] closer en assemble falló (no bloquea): {type(_mc_e).__name__}: {_mc_e}")
+
     # ── Guard 5 (FS4/FS8): panel de micros + suplementación accionable (espejo [P3-MICRONUTRIENTS]) ──
     if MICRONUTRIENT_REPORT_ENABLED and _db is not None:
         try:
@@ -14610,6 +14777,30 @@ def finalize_plan_data_coherence(days: list, db=None) -> tuple:
     total = 0
     parts = []
     try:
+        # [P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] Veg-fantasma en pasos → ingredients[] también en el persist
+        # boundary (cubre el sliver degradado/partial/SSE-fallback que salta assemble). Idempotente (no-op si el
+        # veg ya está en la lista, p.ej. un plan que SÍ pasó por assemble). Si añade, truth-up de los meals tocados
+        # (assemble lo cuenta vía macro engine; aquí no hay engine). Corre PRIMERO para que el veg entre a slice/quantize.
+        if RECIPE_STEP_VEG_GUARD_ENABLED:
+            _nv = _add_missing_recipe_step_vegetables(days)
+            if _nv:
+                total += _nv; parts.append(f"veg={_nv}")
+                try:
+                    if db is None:
+                        from nutrition_db import IngredientNutritionDB as _VDB
+                        db = _VDB()
+                    for _d in days or []:
+                        for _m in (_d.get("meals") or []) if isinstance(_d, dict) else []:
+                            if isinstance(_m, dict):
+                                try:
+                                    _truth_up_meal_macros_from_strings(_m, db)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+    except Exception as _e0:
+        logger.warning(f"[P1-COHERENCE-FINALIZE] veg-guard no-op: {type(_e0).__name__}: {_e0}")
+    try:
         if RECIPE_SLICE_GRAMS_ENABLED:
             _n = _recipe_slice_units_to_grams(days, db)
             if _n:
@@ -14632,6 +14823,63 @@ def finalize_plan_data_coherence(days: list, db=None) -> tuple:
     except Exception as _e3:
         logger.warning(f"[P1-COHERENCE-FINALIZE] quantize no-op: {type(_e3).__name__}: {_e3}")
     return (total, ", ".join(parts))
+
+
+def finalize_single_meal_recipe_coherence(meal: dict, db=None) -> int:
+    """[P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Aplica los
+    finalizadores deterministas de COHERENCIA DE RECETA de la generación a UN solo plato producido por una
+    superficie de UPDATE (swap S3 / chat-modify S4; regenerate-day los hereda porque es un loop de swap_meal).
+    En form-gen estos corren en `assemble_plan_node` ANTES de entregar; los updates persistían el plato del LLM
+    SIN ellos → reaparecía el bug ghost-vegetal (un vegetal mencionado en los PASOS pero ausente de
+    `ingredients[]` → no se compra + sub-cuenta macros) y las unidades vagas ('0.5 lonja de queso').
+
+    Envuelve el meal en un mini-plan `[{"meals":[meal]}]` y reusa el MISMO SSOT en el ORDEN load-bearing:
+      1. `_add_missing_recipe_step_vegetables` (+ truth-up del veg añadido — assemble lo cuenta vía macro
+         engine; aquí no hay engine, así que recomputamos macros desde strings; el veg es ≤60 kcal/100g).
+      2. `_recipe_slice_units_to_grams` ('lonja/pedazo de queso' → gramos; ya hace truth-up interno).
+      3. `_cap_leaf_volume_in_meals` (recorta hojas crudas infladas; ya hace truth-up interno).
+
+    NO incluye el forward-coherence patch (`_auto_patch_recipe_forward_coherence`): es error-string-driven y la
+    dirección forward (receta menciona proteína/carb/veg ausente) YA la cubre `validate_meal_recipe_ingredients_coherence`
+    como retry-gate en swap/chat-modify. Idempotente (re-correr donde assemble ya aplicó = no-op), fail-open (un
+    error NUNCA bloquea el update — espejo de los otros backstops de update). Muta `meal` in-place. Devuelve nº de
+    fixes aplicados. Gateado por UPDATE_RECIPE_FINALIZE_ENABLED. tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE"""
+    if not UPDATE_RECIPE_FINALIZE_ENABLED or not isinstance(meal, dict):
+        return 0
+    try:
+        if db is None:
+            from nutrition_db import IngredientNutritionDB
+            db = IngredientNutritionDB()
+        _wrap = [{"meals": [meal]}]
+        total = 0
+        try:
+            if RECIPE_STEP_VEG_GUARD_ENABLED:
+                _nv = _add_missing_recipe_step_vegetables(_wrap)
+                if _nv:
+                    total += _nv
+                    try:
+                        _truth_up_meal_macros_from_strings(meal, db)
+                    except Exception:
+                        pass
+        except Exception as _ev:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] veg-guard no-op: {type(_ev).__name__}: {_ev}")
+        try:
+            total += _recipe_slice_units_to_grams(_wrap, db)
+        except Exception as _es:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] slice-grams no-op: {type(_es).__name__}: {_es}")
+        try:
+            total += _cap_leaf_volume_in_meals(_wrap, db)
+        except Exception as _el:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] leaf-cap no-op: {type(_el).__name__}: {_el}")
+        if total:
+            logger.info(
+                f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {total} fix(es) de coherencia de receta en plato de update "
+                f"(veg-fantasma/slice-grams/leaf-cap)"
+            )
+        return total
+    except Exception as _e:
+        logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] falló (no bloquea): {type(_e).__name__}: {_e}")
+        return 0
 
 
 def _recipe_slice_units_to_grams(days: list, db=None) -> int:

@@ -1676,6 +1676,20 @@ def swap_meal(form_data: dict):
                 logger.warning(f"🍓 [P1-UPDATE-APPETIBILITY] plato final de swap mantiene pareo fruta+salado (advisory) | meal_type={meal_type}")
         except Exception as _ap_e:
             logger.warning(f"[P1-UPDATE-APPETIBILITY] appetibility fix en swap falló (no bloquea): {type(_ap_e).__name__}: {_ap_e}")
+
+    # [P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Finalizadores de
+    # coherencia de RECETA que assemble_plan_node corre en form-gen pero NINGÚN update corría: veg-fantasma en los
+    # PASOS → ingredients[] (para que se compre + cuente macros), 'lonja de queso' → gramos, cap de hojas infladas.
+    # Espejo per-meal del bundle de S1; idempotente, fail-open. regenerate-day lo hereda (es loop de swap_meal).
+    # tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE
+    if isinstance(_out, dict):
+        try:
+            from graph_orchestrator import finalize_single_meal_recipe_coherence as _fin_rc
+            _nfix = _fin_rc(_out)
+            if _nfix:
+                logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix} fix(es) de coherencia de receta en plato de swap | meal_type={meal_type}")
+        except Exception as _fin_e:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] finalizador de receta en swap falló (no bloquea): {type(_fin_e).__name__}: {_fin_e}")
     return _out
 
 

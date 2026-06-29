@@ -10,7 +10,7 @@ from langchain_core.tools import tool
 from llm_provider import ChatDeepSeek, DEEPSEEK_FLASH, resolve_model_for_user
 from pydantic import BaseModel, Field
 from tenacity import retry, stop_after_attempt, wait_exponential
-from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry
+from constants import normalize_ingredient_for_tracking, strip_accents, validate_ingredients_against_pantry, canonical_slot_key, slot_violations_for_meal_name, build_meal_timing_rules
 logger = logging.getLogger(__name__)
 
 from db import (
@@ -28,7 +28,7 @@ import threading
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Reuso del CB per-modelo del
 # graph_orchestrator. Espejo del patrón de `agent.py` (P1-CHAT-CB-EXTEND).
 # `run_plan_pipeline` ya se importa desde el mismo módulo — no añade ciclo.
-from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, appetibility_fix_for_update
+from graph_orchestrator import run_plan_pipeline, _get_circuit_breaker, clinical_backstop_for_meal, UPDATE_CLINICAL_GUARD, renal_protein_trim_for_update, food_safety_backstop_for_meal, condition_substitution_backstop_for_meal, appetibility_fix_for_update, SLOT_APPROPRIATENESS_GATE_ENABLED
 # [P1-TOOLS-LLM-HARDENING · 2026-05-20] Knobs auto-registrados para los 2
 # callsites Gemini de este módulo (analyze_preferences_agent / execute_modify_single_meal).
 # Pre-fix: ambos hardcodean `gemini-3.1-pro-preview` (viola P3-PREVIEW-MODEL-KNOB)
@@ -845,6 +845,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
     _tu_db_holder = [None]
     _update_macro_truthup_enabled = lambda: os.environ.get(  # noqa: E731
         "MEALFIT_UPDATE_MACRO_TRUTHUP", "true").strip().lower() in ("1", "true", "yes", "on")
+    # [P1-CHAT-SLOT-BACKSTOP · 2026-06-29] Contador de intentos del slot-backstop: degradamos a
+    # advisory en el intento FINAL (nunca convertir una incoherencia de horario — cosmética/
+    # fail-open — en el abort duro de "FALLO POR INVENTARIO"). tooltip-anchor: P1-CHAT-SLOT-BACKSTOP
+    _slot_attempt = [0]
 
     @retry(
         stop=stop_after_attempt(3),
@@ -856,6 +860,7 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         )
     )
     def invoke_with_retry():
+        _slot_attempt[0] += 1
         res = modify_llm.invoke(current_prompt[0])
 
         # Validación post-generación
@@ -976,6 +981,51 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 logger.warning(
                     f"[P1-SWAP-MACROS] validator helper falló (no aborta): "
                     f"{type(_macros_exc).__name__}: {_macros_exc}"
+                )
+
+        # [P1-CHAT-SLOT-BACKSTOP · 2026-06-29] (audit objetivo · paridad chat-modify ↔ swap/S1)
+        # Apropiación de HORARIO en chat-modify — era la ÚNICA superficie de update que NO la
+        # revalidaba (swap S3 la tiene como ValueError→retry en agent.py:1311; S1 como gate en
+        # review_plan_node). Un "cámbiame la cena" podía colar 'arroz de noche' o comida-de-desayuno
+        # (cereal/panqueque) en la cena sin filtro. Presión de retry SELECTIVA: solo cuando el item
+        # fuera de horario NO está en el texto del cambio del usuario (deseo explícito gana — si
+        # teclea 'ponme arroz en la cena', su pedido manda, igual que el item 1 del template). En el
+        # intento FINAL degradamos a advisory (no raise) para NUNCA convertir una incoherencia
+        # cosmética/fail-open en el abort de "FALLO POR INVENTARIO". Gate maestro
+        # SLOT_APPROPRIATENESS_GATE_ENABLED (el mismo de S1/swap). tooltip-anchor: P1-CHAT-SLOT-BACKSTOP
+        if SLOT_APPROPRIATENESS_GATE_ENABLED:
+            try:
+                _slot_key = canonical_slot_key(meal_type)
+                if _slot_key:
+                    _meal_dump_s = res.model_dump() if hasattr(res, "model_dump") else (
+                        res if isinstance(res, dict) else {}
+                    )
+                    _meal_viols = slot_violations_for_meal_name(_meal_dump_s.get("name", ""), _slot_key)
+                    if _meal_viols:
+                        # Etiquetas que el usuario pidió EXPLÍCITAMENTE en `changes` (mismo SSOT
+                        # name-based aplicado al texto del pedido) → su deseo gana, no se reintenta.
+                        _requested = {v["label"] for v in slot_violations_for_meal_name(changes or "", _slot_key)}
+                        _unrequested = [v for v in _meal_viols if v["label"] not in _requested]
+                        if _unrequested and _slot_attempt[0] < 3:
+                            _slot_labels = "; ".join(v["label"] for v in _unrequested)
+                            logger.warning(
+                                f"🕒 [P1-CHAT-SLOT-BACKSTOP] modify produjo plato fuera de horario "
+                                f"(no pedido) → retry | slot={_slot_key} meal_type={meal_type} | "
+                                f"viol={_slot_labels} attempt={_slot_attempt[0]}"
+                            )
+                            current_prompt[0] = modify_prompt + (
+                                f"\n\n🛑 ATENCIÓN AL INTENTO FALLIDO ANTERIOR:\n"
+                                f"El plato que devolviste NO corresponde al {_slot_key} dominicano "
+                                f"({_slot_labels}). El usuario NO pidió ese alimento; cámbialo por un "
+                                f"plato propio del {_slot_key}." + (build_meal_timing_rules(meal_type) or "")
+                            )
+                            raise ValueError(f"plato fuera de horario ({_slot_key}): {_slot_labels}")
+            except ValueError:
+                raise
+            except Exception as _slot_exc:
+                logger.warning(
+                    f"[P1-CHAT-SLOT-BACKSTOP] slot backstop en modify falló (no aborta): "
+                    f"{type(_slot_exc).__name__}: {_slot_exc}"
                 )
 
         return res
@@ -1165,6 +1215,30 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                 logger.warning(f"🍓 [P1-UPDATE-APPETIBILITY] modify mantiene pareo fruta+salado (advisory) | day={day_number} meal={meal_type}")
         except Exception as _ap_e:
             logger.warning(f"[P1-UPDATE-APPETIBILITY] appetibility fix en modify falló (no bloquea): {type(_ap_e).__name__}: {_ap_e}")
+
+        # [P1-CHAT-SLOT-BACKSTOP · 2026-06-29] Si tras los retries el plato AÚN queda fuera de horario
+        # (deseo explícito del usuario o degradación en el intento final), marcamos advisory para
+        # telemetría/frontend — espejo de `_slot_appropriateness_advisory_final` de S1. No bloquea.
+        if SLOT_APPROPRIATENESS_GATE_ENABLED:
+            try:
+                _slot_key_final = canonical_slot_key(meal_type)
+                if _slot_key_final and slot_violations_for_meal_name(new_meal_data.get("name", ""), _slot_key_final):
+                    new_meal_data["_slot_advisory"] = True
+                    logger.info(f"🕒 [P1-CHAT-SLOT-BACKSTOP] plato de modify entregado fuera de horario (advisory) | day={day_number} meal={meal_type}")
+            except Exception as _slf_e:
+                logger.warning(f"[P1-CHAT-SLOT-BACKSTOP] flag advisory de slot en modify falló (no bloquea): {type(_slf_e).__name__}: {_slf_e}")
+
+        # [P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Finalizadores de
+        # coherencia de RECETA que assemble corre en form-gen pero el chat-modify no: veg-fantasma en los PASOS →
+        # ingredients[] (se compra + cuenta macros), 'lonja de queso' → gramos, cap de hojas infladas. Espejo per-meal
+        # del bundle de S1; idempotente, fail-open. tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE
+        try:
+            from graph_orchestrator import finalize_single_meal_recipe_coherence as _fin_rc_m
+            _nfix_m = _fin_rc_m(new_meal_data)
+            if _nfix_m:
+                logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix_m} fix(es) de coherencia de receta en plato de modify | day={day_number} meal={meal_type}")
+        except Exception as _fin_me:
+            logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] finalizador de receta en modify falló (no bloquea): {type(_fin_me).__name__}: {_fin_me}")
 
         target_day["meals"][target_meal_index] = new_meal_data
 
