@@ -5303,6 +5303,12 @@ def api_regenerate_day(
                 "target_protein": round(float(meal.get("protein") or 0) * _meal_scale["protein"]) or meal.get("protein"),
                 "target_carbs": round(float(meal.get("carbs") or 0) * _meal_scale["carbs"]) or meal.get("carbs"),
                 "target_fats": round(float(meal.get("fats") or 0) * _meal_scale["fats"]) or meal.get("fats"),
+                # [P2-REGEN-DAY-SLOT-OVERRIDE-SKIP · 2026-06-29] Estos targets per-comida YA están retargeteados
+                # hacia el objetivo del DÍA (P1-REGEN-DAY-RETARGET, contra el target real del plan). Señaliza a
+                # swap_meal que NO los re-derive con SWAP_TARGET_FROM_SLOT: este meal_form NO trae biométricos
+                # (weight/height/age) → get_nutrition_targets caería a defaults (~2949 kcal) y sobre-asignaría
+                # cada slot → día fuera de banda. Aquí el retarget manda. tooltip-anchor: P2-REGEN-DAY-SLOT-OVERRIDE-SKIP
+                "_skip_slot_target_override": True,
                 "diet_type": data.get("diet_type") or data.get("dietType") or "balanced",
                 "goal": data.get("goal") or data.get("mainGoal"),
                 "allergies": data.get("allergies") or [],
@@ -5658,6 +5664,29 @@ def api_regenerate_day(
             )
         except Exception as _bs_e:
             logger.debug(f"[P2-REGEN-DAY-BAND-SCORE] band score falló (no bloquea): {_bs_e}")
+
+        # [P2-REGEN-DAY-BAND-WARN · 2026-06-29] (re-audit live testing) El aviso honesto de arriba es solo-DÉFICIT
+        # (bajo-target: proteína <90% / kcal-carbs <85%). Un día FUERA DE BANDA por SOBRE-entrega o mixto
+        # (band_score de macros bajo SIN déficit) se entregaba CALLADO — caso en vivo: band_score=0.0 sin aviso.
+        # Si la precisión de macros (score_macros_only) cae bajo el umbral y no hubo ya un aviso, avisa honesto
+        # (dirección-agnóstico). El band ya está computado arriba. tooltip-anchor: P2-REGEN-DAY-BAND-WARN
+        if _day_warning is None and isinstance(_band_score, dict):
+            try:
+                _bmo = _band_score.get("score_macros_only")
+                _bwarn_thr = float(os.environ.get("MEALFIT_REGEN_DAY_BAND_WARN_THRESHOLD", "0.5"))
+                if _bmo is not None and _bmo < _bwarn_thr:
+                    _pantry_signal = _pantry_limited or (slots_kept and len(slots_kept) > 0)
+                    _tail = ("Tu Nevera puede no tener suficiente para clavar tu objetivo: agrega más ítems y vuelve a generar."
+                             if _pantry_signal else
+                             "Ajusta las porciones o renueva el ciclo para acercarte a tu objetivo.")
+                    _day_warning = (f"Este día quedó con los macros fuera de tu banda objetivo "
+                                    f"(precisión {round(_bmo * 100)}%). " + _tail)
+                    logger.info(
+                        f"⚠️ [P2-REGEN-DAY-BAND-WARN] día fuera de banda (macros_only={_bmo}) sin déficit → "
+                        f"aviso honesto | pantry_limited={bool(_pantry_signal)}"
+                    )
+            except Exception as _bw_e:
+                logger.debug(f"[P2-REGEN-DAY-BAND-WARN] no-op: {_bw_e}")
 
         return {
             "success": True,

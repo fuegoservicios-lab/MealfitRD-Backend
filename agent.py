@@ -503,6 +503,14 @@ def swap_meal(form_data: dict):
     if (
         _p28_uid and _p28_uid != "guest"
         and os.environ.get("MEALFIT_SWAP_TARGET_FROM_SLOT", "false").strip().lower() in ("1", "true", "yes", "on")
+        # [P2-REGEN-DAY-SLOT-OVERRIDE-SKIP · 2026-06-29] regenerate-day YA retargetea cada plato hacia el
+        # objetivo del DÍA (P1-REGEN-DAY-RETARGET, contra el target REAL del plan) y pasa esos targets per-comida
+        # en target_*. El slot-override re-deriva el target con `get_nutrition_targets(form_data)`, PERO el
+        # meal_form de regen NO trae biométricos (weight/height/age) → cae a defaults (154lb/170/25 → ~2949 kcal,
+        # vs el goal real ~2141) → sobre-asigna cada slot → el día sale fuera de banda (band_score 0.0). En regen,
+        # los targets del retarget son AUTORITATIVOS → saltamos el override. El swap standalone (con biométricos
+        # en el request) lo conserva. tooltip-anchor: P2-REGEN-DAY-SLOT-OVERRIDE-SKIP
+        and not form_data.get("_skip_slot_target_override")
     ):
         try:
             from nutrition_calculator import get_nutrition_targets as _gnt8, allocate_macros_per_slot as _alloc8
