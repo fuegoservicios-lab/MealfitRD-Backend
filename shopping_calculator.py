@@ -5878,6 +5878,13 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
 
     logging.info(f"🛒 [AGGREGATE] {len(plan_ingredients)} raw items → {len(plan_names)} unique names: {sorted(plan_names)[:30]}...")
 
+    # [P2-SEASONING-RESTOCK-CLEAR · 2026-06-29] Set de nombres (normalizados) que el usuario YA tiene en su
+    # Nevera (consumed/inventario). Lo consume el SEASONING-CATALOG-KEEP más abajo para NO re-listar un
+    # condimento verificado que la Nevera ya cubre: el plan suele emitir el condimento de forma NOMINAL
+    # ("al gusto"/"pizca", sin peso), así que la deducción por peso no lo resta y el seasoning-keep lo
+    # re-inyectaba como "1 empaque" aunque ya esté comprado (caso Vainilla tras restock; clase
+    # P3-RESTOCK-LECHE-UNIT — asimetría de unidad lista↔inventario). tooltip-anchor: P2-SEASONING-RESTOCK-CLEAR
+    _consumed_name_set = set()
     for item in consumed_ingredients:
         if not item or len(item) < 3: continue
         # [P2-PDF-1] Mismo yield para consumed: si el plato consumido fue
@@ -5895,6 +5902,11 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
         name = _strip_presentation_modifier_prefix(name)
         if not name: continue
         if name.lower() in ["ola", "olas"]: name = "Cebolla"
+        # [P2-SEASONING-RESTOCK-CLEAR] registra el nombre normalizado de lo que el usuario ya tiene.
+        try:
+            _consumed_name_set.add(normalize_name(name))
+        except Exception:
+            _consumed_name_set.add(str(name).strip().lower())
         aggregated[name][unit] -= float(qty)  # P2-NEW-11: SIN multiplier (ver contrato arriba)
 
     # --- RESOLUCIÓN DE FRICCIÓN DE UNIDADES (Híbridas) ---
@@ -8044,6 +8056,20 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
                     _keep_seasoning = _is_verified_for_shopping(name) and (price_per_lb > 0 or price_per_unit > 0)
                 except Exception:
                     _keep_seasoning = False
+            # [P2-SEASONING-RESTOCK-CLEAR · 2026-06-29] Si el usuario YA tiene este condimento en su Nevera
+            # (consumed/inventario), NO lo re-listes como "1 empaque": el plan lo emitió nominal ("al gusto"),
+            # la deducción por peso no lo restó, y el seasoning-keep lo re-inyectaba aunque ya esté comprado
+            # (caso Vainilla tras restock; clase P3-RESTOCK-LECHE-UNIT). Match por nombre normalizado, fail-open.
+            if _keep_seasoning:
+                try:
+                    if normalize_name(name) in _consumed_name_set:
+                        _keep_seasoning = False
+                        logging.info(
+                            f"🧊 [P2-SEASONING-RESTOCK-CLEAR] '{name}' ya está en tu Nevera "
+                            f"(consumed/inventario) → no se re-lista como empaque."
+                        )
+                except Exception:
+                    pass
             if _keep_seasoning:
                 try:
                     _seas_g = float(master_item.get("container_weight_g") or 0) or float(master_item.get("density_g_per_unit") or 0)
