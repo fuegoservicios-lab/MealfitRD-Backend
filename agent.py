@@ -1712,11 +1712,27 @@ def swap_meal(form_data: dict):
     if isinstance(_out, dict):
         try:
             from graph_orchestrator import finalize_single_meal_recipe_coherence as _fin_rc
-            _nfix = _fin_rc(_out)
+            # [P2-STEPVEG-PANTRY-GUARD · 2026-06-29] pantry-strict = el swap está armado desde la Nevera
+            # (clean_ingredients no vacío) → el finalizer NO añade veg de catálogo (no se puede comprar más).
+            _nfix = _fin_rc(_out, pantry_strict=bool(clean_ingredients))
             if _nfix:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix} fix(es) de coherencia de receta en plato de swap | meal_type={meal_type}")
         except Exception as _fin_e:
             logger.warning(f"[P1-UPDATE-RECIPE-FINALIZE] finalizador de receta en swap falló (no bloquea): {type(_fin_e).__name__}: {_fin_e}")
+    # [P2-MACRO-UPD-3 · 2026-06-29] (re-audit objetivo · P2) Telemetría de banda per-comida (paridad del canal
+    # degraded/alert con S1): loguea si el plato swapeado quedó materialmente fuera de la banda del target de
+    # proteína del slot (drift >15%). No bloquea (el validador ±15% per-comida es el guard user-facing).
+    if isinstance(_out, dict):
+        try:
+            _tp_b = float(target_protein or 0)
+            if _tp_b > 0:
+                _dp_b = abs(float(_out.get("protein") or 0) - _tp_b) / _tp_b
+                if _dp_b > 0.15:
+                    _out["_macro_band_low"] = True
+                    logger.info(f"📊 [P2-MACRO-UPD-3] plato de swap fuera de banda de proteína "
+                                f"(drift {_dp_b:.0%} vs target del slot) — telemetría | meal_type={meal_type}")
+        except Exception:
+            pass
     return _out
 
 

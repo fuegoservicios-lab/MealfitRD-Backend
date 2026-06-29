@@ -7920,10 +7920,17 @@ def aggregate_and_deduct_shopping_list(plan_ingredients: list[str], consumed_ing
             # [P1-VERIFIED-ONLY-OBSERVABILITY · 2026-06-21] WARNING (no info) para que el
             # drop sea grep-able en prod: este es el punto exacto donde un ingrediente de
             # receta fuera de los 119 desaparece de la lista. Espejo del guard (P1-VERIFIED-ONLY-OBSERVABILITY).
+            # [P2-OFF-CATALOG-SNAP-RESOLVED · 2026-06-29] (re-audit objetivo · P2 F4) El "snap fuzzy al master más
+            # cercano" que un audit podría proponer YA ocurrió: `_is_verified_for_shopping(name)` → `normalize_name`
+            # aplica regex + FUZZY difflib (INTENTO 5, ratio≥0.87) + embedding ANTES de devolver False. Si llegamos
+            # aquí, NINGÚN tier resolvió el nombre a un master verificado → es off-catálogo GENUINO (garble/alimento
+            # no vendido), y dropear es lo CORRECTO (costear un fantasma con price=0 descuadraría el total). La
+            # defensa primaria es upstream (P2-VERIFIED-ONLY-UPDATE inyecta el catálogo al swap/chat-modify). NO
+            # re-implementar un snap aquí: arriesgaría mis-snap en un subsistema de coherencia. tooltip-anchor: P2-OFF-CATALOG-SNAP-RESOLVED
             logging.warning(
                 "[VERIFIED-ONLY-DROP] '%s' excluido de la lista: fuera del catálogo "
-                "verificado de 119 (probable desobediencia del LLM al prompt upstream). "
-                "Si es sustantivo, la lista de compras queda incompleta.",
+                "verificado (ni regex/fuzzy/embedding lo resolvieron → off-catálogo genuino). "
+                "Si es sustantivo, la lista de compras queda incompleta (defensa primaria: prompt upstream).",
                 name,
             )
             continue

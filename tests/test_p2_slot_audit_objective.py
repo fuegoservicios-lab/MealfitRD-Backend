@@ -32,10 +32,40 @@ def test_merienda_respects_legit_snacks_and_postre():
     assert c.slot_violations_for_meal_name("Casabe con queso", "merienda") == []
 
 
-def test_almuerzo_not_added_no_false_positive():
-    # No añadimos reglas de almuerzo (FP-risk): locrio/arroz SÍ van en almuerzo.
+def test_almuerzo_legit_dishes_clean():
+    # [P2-SLOT-ALMUERZO · 2026-06-29] locrio/arroz/sopa/ensalada SIGUEN limpios en almuerzo (plato fuerte legítimo).
     assert c.slot_violations_for_meal_name("Locrio de cerdo", "almuerzo") == []
     assert c.slot_violations_for_meal_name("Arroz con habichuela y pollo", "almuerzo") == []
+    assert c.slot_violations_for_meal_name("Sancocho de res", "almuerzo") == []
+    assert c.slot_violations_for_meal_name("Ensalada César con pollo", "almuerzo") == []
+
+
+def test_almuerzo_flags_breakfast_food_and_dessert_main():
+    # [P2-SLOT-ALMUERZO · 2026-06-29] un desayuno/postre como PLATO PRINCIPAL del almuerzo = soft.
+    assert c.slot_violations_for_meal_name("Panqueques de avena con miel", "almuerzo")
+    assert c.slot_violations_for_meal_name("Cereal con leche", "almuerzo")
+    assert c.slot_violations_for_meal_name("Helado de vainilla", "almuerzo")
+    # soft (degrada en intento final, nunca cero-plan)
+    v = c.slot_violations_for_meal_name("Waffles con fruta", "almuerzo")
+    assert v and all(not x["hard"] for x in v)
+
+
+# ───────────────────────── P2-SLOT-CENA-HEAVY-SOUP / P2-SLOT-MERIENDA-JUNK ─────────────────────────
+def test_cena_flags_heavy_soup_soft():
+    v = c.slot_violations_for_meal_name("Sancocho de siete carnes", "cena")
+    assert v and all(not x["hard"] for x in v), "sopón pesado de noche = soft (no zero-plan)"
+    assert c.slot_violations_for_meal_name("Mondongo", "cena")
+    # cena ligera legítima NO se flagea
+    assert c.slot_violations_for_meal_name("Pescado al horno con ensalada", "cena") == []
+
+
+def test_merienda_flags_junk_but_keeps_legit_dr_snacks():
+    assert c.slot_violations_for_meal_name("Pizza personal", "merienda")
+    assert c.slot_violations_for_meal_name("Hamburguesa con queso", "merienda")
+    # snacks dominicanos legítimos NO se flagean (empanada/pastelito/chicharrón/frituras)
+    assert c.slot_violations_for_meal_name("Empanada de pollo", "merienda") == []
+    assert c.slot_violations_for_meal_name("Chicharrón de cerdo", "merienda") == []
+    assert c.slot_violations_for_meal_name("Tostones con queso frito", "merienda") == []
 
 
 # ───────────────────────── P2-9: contexto/cantidad ─────────────────────────

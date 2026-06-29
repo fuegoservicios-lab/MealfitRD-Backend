@@ -1242,6 +1242,51 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         except Exception as _ap_e:
             logger.warning(f"[P1-UPDATE-APPETIBILITY] appetibility fix en modify falló (no bloquea): {type(_ap_e).__name__}: {_ap_e}")
 
+        # [P2-MACRO-UPD-1 · 2026-06-29] (re-audit objetivo · P2) Paridad de closers de macros con swap/regen-day:
+        # chat-modify solo cerraba proteína POST-CAP; ahora corre el rebalance + el closer de proteína STANDALONE
+        # (mismos knobs que swap: MEALFIT_UPDATE_MACRO_REBALANCE / MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER), anclados al
+        # macro ORIGINAL del plato (original_protein/carbs/fats, capturados arriba) → un modify no deja caer el
+        # macro bajo el del plato previo. SKIP en pantry-strict (el closer AÑADE proteína = comida fuera de la
+        # nevera) y en renal (cap KDIGO manda). El finalizer (abajo) re-cuantiza lo añadido. tooltip-anchor: P2-MACRO-UPD-1
+        _ps_macro = bool(clean_ingredients) and not allow_pantry_expansion
+        _is_renal_macro = bool((plan_data.get("renal_protein_cap") or {}).get("applied"))
+        if (not _ps_macro and not _is_renal_macro
+                and os.environ.get("MEALFIT_UPDATE_MACRO_REBALANCE", "false").strip().lower() in ("1", "true", "yes", "on")
+                and (original_protein or original_carbs or original_fats)):
+            try:
+                from graph_orchestrator import _rebalance_day_macros_to_target as _rb_m
+                from nutrition_db import IngredientNutritionDB as _RbDBm
+                _rb_m([new_meal_data], float(original_carbs or 0), float(original_fats or 0), _RbDBm(),
+                      target_protein=float(original_protein or 0))
+            except Exception as _rbm_e:
+                logger.warning(f"[P2-MACRO-UPD-1] rebalance en modify falló (no bloquea): {type(_rbm_e).__name__}: {_rbm_e}")
+        if (not _ps_macro and not _is_renal_macro
+                and os.environ.get("MEALFIT_SWAP_PER_MEAL_MACRO_CLOSER", "false").strip().lower() in ("1", "true", "yes", "on")
+                and original_protein and float(original_protein or 0) > 0
+                and float(new_meal_data.get("protein") or 0) < float(original_protein)):
+            try:
+                from graph_orchestrator import _close_protein_gap_for_meal as _cpg_m, _safe_high_density_proteins as _shdp_m
+                from nutrition_db import IngredientNutritionDB as _ClDBm
+                _cl_db_m = _ClDBm()
+                _cands_m = _shdp_m(_clin_allergies, _cl_db_m, min_protein=18.0)
+                if _cands_m:
+                    _cpg_m(new_meal_data, float(original_protein), _cl_db_m, _cands_m)
+            except Exception as _cpgm_e:
+                logger.warning(f"[P2-MACRO-UPD-1] protein-closer en modify falló (no bloquea): {type(_cpgm_e).__name__}: {_cpgm_e}")
+        # [P2-MACRO-UPD-3 · 2026-06-29] (re-audit objetivo · P2) Telemetría de banda per-comida (paridad del canal
+        # degraded/alert con S1): loguea si el plato modificado quedó materialmente fuera de la banda del macro
+        # original (drift >15%). No bloquea (la banda ±15% per-comida del validador es el guard user-facing).
+        try:
+            _op = float(original_protein or 0)
+            if _op > 0:
+                _dp = abs(float(new_meal_data.get("protein") or 0) - _op) / _op
+                if _dp > 0.15:
+                    new_meal_data["_macro_band_low"] = True
+                    logger.info(f"📊 [P2-MACRO-UPD-3] plato de modify fuera de banda de proteína "
+                                f"(drift {_dp:.0%} vs original) — telemetría | day={day_number} meal={meal_type}")
+        except Exception:
+            pass
+
         # [P1-CHAT-SLOT-BACKSTOP · 2026-06-29] Si tras los retries el plato AÚN queda fuera de horario
         # (deseo explícito del usuario o degradación en el intento final), marcamos advisory para
         # telemetría/frontend — espejo de `_slot_appropriateness_advisory_final` de S1. No bloquea.
@@ -1260,7 +1305,10 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
         # del bundle de S1; idempotente, fail-open. tooltip-anchor: P1-UPDATE-RECIPE-FINALIZE
         try:
             from graph_orchestrator import finalize_single_meal_recipe_coherence as _fin_rc_m
-            _nfix_m = _fin_rc_m(new_meal_data)
+            # [P2-STEPVEG-PANTRY-GUARD · 2026-06-29] pantry-strict = cocinar desde la nevera (señal canónica del
+            # modify) → el finalizer NO añade veg de catálogo que el usuario no tiene.
+            _ps_fin = bool(clean_ingredients) and not allow_pantry_expansion
+            _nfix_m = _fin_rc_m(new_meal_data, pantry_strict=_ps_fin)
             if _nfix_m:
                 logger.info(f"🍳 [P1-UPDATE-RECIPE-FINALIZE] {_nfix_m} fix(es) de coherencia de receta en plato de modify | day={day_number} meal={meal_type}")
         except Exception as _fin_me:
@@ -1496,6 +1544,14 @@ def execute_modify_single_meal(user_id: str, day_number: int, meal_type: str, ch
                     recompute_micronutrient_report_for_plan(plan_data_fresh, _micro_form_cm, db=None)
                 except Exception as _cm_micro_e:
                     logger.debug(f"[P2-CHATMODIFY-MICROS-STALE] recompute (chat-modify) falló: {_cm_micro_e}")
+                # [P2-DISHQUAL-SURFACE-UPDATES · 2026-06-29] (re-audit objetivo · P2) Recomputa el agregado
+                # plan-level dish_quality_report tras el modify (no stale en Dashboard/PDF). Best-effort.
+                try:
+                    from graph_orchestrator import compute_dish_quality_report, DISH_QUALITY_TELEMETRY_ENABLED as _dqt_c
+                    if _dqt_c:
+                        plan_data_fresh["dish_quality_report"] = compute_dish_quality_report(plan_data_fresh)
+                except Exception as _dqc_e:
+                    logger.debug(f"[P2-DISHQUAL-SURFACE-UPDATES] recompute dish-quality (chat-modify) falló: {_dqc_e}")
 
             return plan_data_fresh
 

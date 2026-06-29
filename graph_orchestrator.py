@@ -9393,6 +9393,23 @@ BAND_GATE_USE_MACROS_ONLY = _env_bool("MEALFIT_BAND_GATE_USE_MACROS_ONLY", False
 #   post-grafo (low_band_score) informa. Rollback: MEALFIT_BAND_RETRY_GATE=False.
 BAND_RETRY_GATE_ENABLED = _env_bool("MEALFIT_BAND_RETRY_GATE", True)
 BAND_RETRY_THRESHOLD = _env_float("MEALFIT_BAND_RETRY_THRESHOLD", 0.5)
+# [P2-BAND-GATE-PER-MACRO · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-BANDGATE-LOOSE) El gate de retry puntúa
+# la banda COMBINADA (kcal-inflada): solo dispara cuando <1/3 de las celdas están en banda → un plan con UN macro
+# entero fuera de banda todos los días igual se entrega con banner. Este lever añade una condición POR-MACRO: si
+# CUALQUIER macro individual (proteína/carbs/grasas) tiene <`PER_MACRO_THRESHOLD` de sus celdas en banda, fuerza
+# retry. Default OFF (subir el volumen de retry requiere A/B contra pipeline_metrics de prod, igual que BAND_RETRY).
+# tooltip-anchor: P2-BAND-GATE-PER-MACRO
+BAND_GATE_PER_MACRO = _env_bool("MEALFIT_BAND_GATE_PER_MACRO", False)
+BAND_GATE_PER_MACRO_THRESHOLD = max(0.0, min(1.0, _env_float("MEALFIT_BAND_GATE_PER_MACRO_THRESHOLD", 0.34)))
+# [P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer aditivo de CARBOS para
+# el caso en que el reconcile (clamp [0.4,1.8]) se satura (carbos del día muy por debajo de la banda, p.ej. <56%
+# del target → necesita >1.8×). Escala el ingrediente CARBO-dominante existente más rico hacia el target con un
+# clamp más alto, acotado por techo calórico (no rompe kcal). Espejo del closer de proteína (asimetría: proteína
+# tiene 3 closers, carbs/grasas ninguno). Default OFF (añade kcal → A/B de banda antes de activar). El fat-floor
+# reusa `_topup_healthy_fat_to_band_floor` standalone bajo el mismo knob. tooltip-anchor: P2-CARB-FLOOR
+CARB_FLOOR_ENABLED = _env_bool("MEALFIT_CARB_FLOOR", False)
+CARB_FLOOR_MAX_SCALE = max(1.8, min(4.0, _env_float("MEALFIT_CARB_FLOOR_MAX_SCALE", 2.5)))
+CARB_FLOOR_TOL = max(0.0, min(0.5, _env_float("MEALFIT_CARB_FLOOR_TOL", 0.10)))
 
 # [P1-SLOT-APPROPRIATENESS · 2026-06-27] (audit G4) Gate de COHERENCIA DE HORARIO: rechaza platos
 # cuyo TIPO no encaja con su slot (arroz/locrio/pasta en desayuno = duro; "arroz de noche" / comida
@@ -10803,11 +10820,19 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
             age=_fd.get("age"), pregnant=_pregnant, k_elevating_med=_k_elev,
         )
         floors = {}
+        _estimado_bajo_skipped = 0
         for g in (_report.get("gaps") or []):
             k = g.get("key")
             if k not in _MICRO_CLOSER_KEYS:
                 continue
             if g.get("status") != "bajo":  # 'estimado_bajo' = cobertura incierta → no forzar
+                # [P2-MICRO-ESTIMADO-BAJO · 2026-06-29] (re-audit objetivo · P2) Telemetría: un micro cerrable
+                # bajo el piso pero con cobertura INCIERTA (status='estimado_bajo' por NULLs residuales en el
+                # catálogo) se omite a propósito (no forzar sobre datos inciertos — conservador-by-design). Lo
+                # contamos para vigilar si el lever real (backfill de NULLs en el catálogo) sigue pendiente.
+                # tooltip-anchor: P2-MICRO-ESTIMADO-BAJO
+                if g.get("status") == "estimado_bajo":
+                    _estimado_bajo_skipped += 1
                 continue
             # [P1-MICRO-CLOSER-COVERAGE · 2026-06-29] En ERC, además de Mg/fibra, NO cerramos hierro/folato/zinc/
             # vit C: sus fuentes (legumbres/hígado/cítricos) cargan K/P/proteína contraindicados. Solo calcio queda
@@ -10819,6 +10844,9 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                 floors[k] = float(g.get("piso") or 0)
             except Exception:
                 continue
+        if _estimado_bajo_skipped:
+            logger.info(f"🧪 [P2-MICRO-ESTIMADO-BAJO] {_estimado_bajo_skipped} micro(s) cerrable(s) omitido(s) por "
+                        f"status=estimado_bajo (cobertura incierta; lever real: backfill de NULLs en el catálogo)")
         if not floors:
             return 0
         adjustments = 0
@@ -10836,8 +10864,13 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                     break  # presupuesto kcal del día agotado → no más escalas hoy
                 ing_key = _MICRO_CLOSER_INGREDIENT_KEY[k]
                 _ul = _MICRO_CLOSER_UL.get(k)
+                # [P2-MICRO-MULTISOURCE · 2026-06-29] (re-audit objetivo · P2 MICRO-CLOSER-SINGLE-INGREDIENT)
+                # Recolecta TODOS los contribuyentes del micro en el día (no solo el más rico) y los escala
+                # richest-first hasta cerrar el piso o agotar el presupuesto kcal del día → cierra déficits que un
+                # solo ingrediente (factor≤MAX_SCALE) no alcanza. Si tras agotar contribuyentes/budget el día sigue
+                # bajo el piso, lo LOGUEA (distingue "cerrado" de "closer insuficiente" → evita falsa confianza).
+                contributors = []  # (contrib, meal, ing_idx, ing_str, kcal_now)
                 day_total = 0.0
-                best = None  # (contrib, meal, ing_idx, ing_str, kcal_now)
                 for _m in (_d.get("meals") or []):
                     if not isinstance(_m, dict):
                         continue
@@ -10857,41 +10890,46 @@ def _close_micro_gaps_for_plan(plan: dict, form_data: dict, db=None, pantry_stri
                         if not c or c <= 0:
                             continue
                         day_total += float(c)
-                        if best is None or float(c) > best[0]:
-                            try:
-                                _mac = db.macros_from_ingredient_string(ing)
-                                _kc = float(_mac.get("kcal") or 0) if _mac else 0.0
-                            except Exception:
-                                _kc = 0.0
-                            best = (float(c), _m, i, ing, _kc)
-                if day_total >= floor or best is None:
+                        try:
+                            _mac = db.macros_from_ingredient_string(ing)
+                            _kc = float(_mac.get("kcal") or 0) if _mac else 0.0
+                        except Exception:
+                            _kc = 0.0
+                        contributors.append((float(c), _m, i, ing, _kc))
+                if day_total >= floor or not contributors:
                     continue
-                contrib, meal, idx, ing_str, kcal_now = best
-                deficit = floor - day_total
-                factor = min(MICRONUTRIENT_CLOSER_MAX_SCALE, 1.0 + (deficit / contrib))
-                if kcal_now > 0:
-                    # presupuesto kcal COMPARTIDO del día (no per-micro)
-                    factor = min(factor, 1.0 + (kcal_budget_left / kcal_now))
-                if _ul is not None and _ul > 0 and contrib > 0:
-                    # [P1-MICRO-CLOSER-COVERAGE] no escalar el total del micro del día por encima de su UL
-                    # (toxicidad: hierro 45mg / zinc 40mg). headroom = UL − total actual del micro.
-                    headroom = _ul - day_total
-                    if headroom <= 0:
-                        continue  # el día ya está en/sobre el UL para este micro → no escalar
-                    factor = min(factor, 1.0 + (headroom / contrib))
-                if factor <= 1.0 + 1e-3:
-                    continue
-                new_ing = _resc(ing_str, factor)
-                if not new_ing or new_ing == ing_str:
-                    continue
-                meal["ingredients"][idx] = new_ing
-                try:
-                    _truth_up_meal_macros_from_strings(meal, db)
-                except Exception:
-                    pass
-                if kcal_now > 0:
-                    kcal_budget_left -= kcal_now * (factor - 1.0)
-                adjustments += 1
+                contributors.sort(key=lambda t: t[0], reverse=True)  # richest-first
+                for contrib, meal, idx, ing_str, kcal_now in contributors:
+                    if day_total >= floor or kcal_budget_left <= 1.0:
+                        break
+                    deficit = floor - day_total
+                    factor = min(MICRONUTRIENT_CLOSER_MAX_SCALE, 1.0 + (deficit / contrib))
+                    if kcal_now > 0:
+                        factor = min(factor, 1.0 + (kcal_budget_left / kcal_now))  # presupuesto kcal COMPARTIDO del día
+                    if _ul is not None and _ul > 0 and contrib > 0:
+                        # [P1-MICRO-CLOSER-COVERAGE] no escalar el total del micro del día por encima de su UL
+                        # (toxicidad: hierro 45mg / zinc 40mg). headroom = UL − total actual del micro.
+                        headroom = _ul - day_total
+                        if headroom <= 0:
+                            break  # el día ya está en/sobre el UL para este micro → no escalar más
+                        factor = min(factor, 1.0 + (headroom / contrib))
+                    if factor <= 1.0 + 1e-3:
+                        continue  # este contribuyente no aporta margen útil → probar el siguiente
+                    new_ing = _resc(ing_str, factor)
+                    if not new_ing or new_ing == ing_str:
+                        continue
+                    meal["ingredients"][idx] = new_ing
+                    try:
+                        _truth_up_meal_macros_from_strings(meal, db)
+                    except Exception:
+                        pass
+                    if kcal_now > 0:
+                        kcal_budget_left -= kcal_now * (factor - 1.0)
+                    day_total += contrib * (factor - 1.0)  # el micro sube por el aporte reescalado
+                    adjustments += 1
+                if day_total < floor:
+                    logger.info(f"🧪 [P2-MICRO-CLOSER-RESIDUAL] {k}: el día sigue bajo el piso tras el cierre "
+                                f"(≈{day_total:.1f} < {floor:.1f}); closer insuficiente (budget/UL/contribuyentes)")
         if adjustments:
             logger.info(
                 f"🧪 [P1-MICRONUTRIENT-CLOSER] {adjustments} ajuste(s) de micros alcanzables "
@@ -12451,6 +12489,72 @@ def _trim_day_carbs_to_target(meals: list, target_carbs: float, db, *, tol: floa
         return False
 
 
+def _close_carb_gap_for_day(meals: list, target_carbs: float, target_kcal: float, db, *,
+                            tol: float = 0.10, max_scale: float = 2.5) -> bool:
+    """[P2-CARB-FLOOR · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-CARBFAT-NOCLOSER) Closer ADITIVO de carbos —
+    espejo direccional de `_trim_day_carbs_to_target` (que baja carbos sobre-banda) y del closer de proteína (que
+    sube proteína bajo-piso). Cierra la asimetría histórica: la proteína tenía 3 closers aditivos, carbos/grasas
+    NINGUNO. Cuando el día entrega carbos MUY bajo la banda (< target*(1-tol)) porque el reconcile (clamp 1.8) se
+    saturó, ESCALA el ingrediente CARBO-dominante existente más rico hacia el target con un clamp más alto
+    (`max_scale`), acotado por el techo calórico (no excede 1.12×target_kcal → no rompe kcal ni desplaza proteína)
+    y re-cuantiza. NO añade ingredientes nuevos (coherencia receta↔lista intacta). Recompute HONESTO de macros
+    desde el string reescalado. Mutates meals. Retorna True si escaló. Default OFF (CARB_FLOOR_ENABLED). Fail-safe.
+    tooltip-anchor: P2-CARB-FLOOR"""
+    if not CARB_FLOOR_ENABLED or target_carbs <= 0:
+        return False
+    try:
+        from nutrition_db import rescale_ingredient_string as _resc, quantize_ingredient_string as _quant
+        cur = sum(_meal_macro_num(m.get("carbs")) for m in meals)
+        if cur >= target_carbs * (1.0 - tol):
+            return False  # ya en/sobre el piso de banda → nada que cerrar
+        best = None  # (carbs_contrib, meal, idx, ing_str)
+        for m in meals:
+            ings = m.get("ingredients")
+            if not isinstance(ings, list):
+                continue
+            for idx, ing in enumerate(ings):
+                if _ingredient_macro_group(str(ing), db) != "carbs":
+                    continue
+                _c = (db.macros_from_ingredient_string(str(ing)) or {}).get("carbs") or 0.0
+                if _c > 0 and (best is None or _c > best[0]):
+                    best = (float(_c), m, idx, str(ing))
+        if best is None:
+            return False
+        contrib, m, idx, orig = best
+        deficit = target_carbs - cur
+        factor = min(max_scale, 1.0 + (deficit / contrib))
+        if target_kcal > 0:
+            cur_kcal = sum(_meal_macro_num(mm.get("cals")) for mm in meals)
+            _mo_k = (db.macros_from_ingredient_string(orig) or {}).get("kcal") or 0.0
+            if _mo_k > 0:
+                kcal_room = (1.12 * target_kcal) - cur_kcal
+                if kcal_room <= 0:
+                    return False
+                factor = min(factor, 1.0 + (kcal_room / _mo_k))
+        if factor <= 1.0 + 1e-3:
+            return False
+        quant, _f = _quant(_resc(orig, factor))
+        if quant == orig:
+            return False
+        _mo = db.macros_from_ingredient_string(orig) or {}
+        _mn = db.macros_from_ingredient_string(quant) or {}
+        ings = m.get("ingredients")
+        ings[idx] = quant
+        raw = m.get("ingredients_raw")
+        if isinstance(raw, list) and len(raw) == len(ings):
+            raw[idx] = _resc(str(raw[idx]), factor * _f)
+        _np = max(0, round(_meal_macro_num(m.get("protein")) + ((_mn.get("protein") or 0) - (_mo.get("protein") or 0))))
+        _nc = max(0, round(_meal_macro_num(m.get("carbs")) + ((_mn.get("carbs") or 0) - (_mo.get("carbs") or 0))))
+        _nf = max(0, round(_meal_macro_num(m.get("fats")) + ((_mn.get("fats") or 0) - (_mo.get("fats") or 0))))
+        m["protein"], m["carbs"], m["fats"] = _np, _nc, _nf
+        m["cals"] = max(0, round(4 * _np + 4 * _nc + 9 * _nf))
+        m["macros"] = [f"P:{_np}g", f"C:{_nc}g", f"G:{_nf}g"]
+        return True
+    except Exception as e:
+        logger.warning(f"[P2-CARB-FLOOR] carb-closer falló: {type(e).__name__}: {e}")
+        return False
+
+
 def _rebalance_day_macros_to_target(meals: list, target_carbs: float, target_fats: float, db,
                                     *, target_protein: float = 0.0, tol: float = 0.04, passes: int = 3) -> bool:
     """[P3-MACRO-REBALANCE · 2026-06-19] Corre DESPUÉS de la cuantización (FS2). La cuantización redondea cada
@@ -13691,6 +13795,28 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
         except Exception as _rr_e:
             logger.warning(f"[P1-MACRO-POSTQUANT-RECONCILE] error: {type(_rr_e).__name__}: {_rr_e}")
 
+    # ── Guard 4b-2 (P2-CARB-FLOOR · re-audit objetivo): closer ADITIVO de carbos cuando el reconcile (clamp 1.8)
+    # se satura y los carbos del día quedan MUY bajo la banda. Espejo del closer de proteína (cierra la asimetría:
+    # proteína 3 closers, carbos ninguno). Escala el carbo-dominante existente más rico + re-cuantiza, acotado por
+    # techo calórico. Default OFF (CARB_FLOOR_ENABLED → añade kcal, A/B antes de activar). El lado GRASA ya lo cubre
+    # `_topup_healthy_fat_to_band_floor` (FASE A). Fail-safe.
+    if CARB_FLOOR_ENABLED and _db is not None:
+        try:
+            _tc_cf = _meal_macro_num(active_macros.get("carbs_str"))
+            if _tc_cf > 0:
+                _cf_days = 0
+                for _d in plan.get("days", []) or []:
+                    if _close_carb_gap_for_day(_d.get("meals", []) or [], _tc_cf, _daily_cals, _db,
+                                               tol=CARB_FLOOR_TOL, max_scale=CARB_FLOOR_MAX_SCALE):
+                        _cf_days += 1
+                if _cf_days and PORTION_QUANTIZE_ENABLED:
+                    _apply_portion_quantization(plan, _db)
+                if _cf_days:
+                    logger.info(f"🎯 [P2-CARB-FLOOR] cerró el piso de carbos en {_cf_days} día(s) "
+                                f"(escala determinista, target {_tc_cf:.0f}g)")
+        except Exception as _cf_e:
+            logger.warning(f"[P2-CARB-FLOOR] carb-floor en assemble no-op: {type(_cf_e).__name__}: {_cf_e}")
+
     # ── Guard 4d (FS6/ERC verificación FINAL) [P1-RENAL-RECHECK-POST-SUBS · 2026-06-18, review P1] ──
     # La cuantización (Guard 4) + carb-trim (4b) + post-quant reconcile (4c) recomputan macros desde porciones
     # redondeadas DESPUÉS del trim renal de Guard 3.6 → el redondeo al alza de un ingrediente proteína-dominante
@@ -13751,6 +13877,27 @@ def _apply_deterministic_clinical_layer(plan: dict, form_data: dict, nutrition: 
             _nmc = _close_micro_gaps_for_plan(plan, form_data, _db)
             if _nmc:
                 logger.info(f"🧪 [P1-MICRONUTRIENT-CLOSER] {_nmc} micro(s) alcanzable(s) cerrados deterministamente en assemble")
+                # [P2-MICROCLOSER-BAND-RECHECK · 2026-06-29] (re-audit objetivo · P2 XCUT-MICROCLOSER-NO-BAND-RECHECK)
+                # El closer corre DESPUÉS del reconcile+quantize finales y añade ≤presupuesto kcal/día de carbos
+                # (escala una fuente rica en fibra/Mg/Ca) → puede empujar los carbos de un día sobre la banda sin
+                # re-chequeo. Re-trim de carbos (recorta OTRAS fuentes carbo-dominantes hacia el target, preservando
+                # el cierre del micro y la proteína) + re-quantize de los días tocados. Idempotente (no-op si ya en
+                # banda), fail-safe. Reusa el target/knobs de Guard 4b. tooltip-anchor: P2-MICROCLOSER-BAND-RECHECK
+                if CARB_TARGET_TRIM_ENABLED:
+                    try:
+                        _tc_mc = _meal_macro_num(active_macros.get("carbs_str"))
+                        if _tc_mc > 0:
+                            _retrim = 0
+                            for _d in plan.get("days", []) or []:
+                                if _trim_day_carbs_to_target(_d.get("meals", []) or [], _tc_mc, _db, tol=CARB_TARGET_TRIM_TOL):
+                                    _retrim += 1
+                            if _retrim and PORTION_QUANTIZE_ENABLED:
+                                _apply_portion_quantization(plan, _db)
+                            if _retrim:
+                                logger.info(f"🎯 [P2-MICROCLOSER-BAND-RECHECK] re-trim de carbos en {_retrim} día(s) "
+                                            f"tras el micro-closer (preserva el cierre del micro)")
+                    except Exception as _mcbr_e:
+                        logger.warning(f"[P2-MICROCLOSER-BAND-RECHECK] re-trim post-closer no-op: {type(_mcbr_e).__name__}: {_mcbr_e}")
         except Exception as _mc_e:
             logger.warning(f"[P1-MICRONUTRIENT-CLOSER] closer en assemble falló (no bloquea): {type(_mc_e).__name__}: {_mc_e}")
 
@@ -14941,7 +15088,7 @@ def finalize_plan_data_coherence(days: list, db=None) -> tuple:
     return (total, ", ".join(parts))
 
 
-def finalize_single_meal_recipe_coherence(meal: dict, db=None) -> int:
+def finalize_single_meal_recipe_coherence(meal: dict, db=None, pantry_strict: bool = False) -> int:
     """[P1-UPDATE-RECIPE-FINALIZE · 2026-06-29] (audit objetivo · paridad updates ↔ form-gen) Aplica los
     finalizadores deterministas de COHERENCIA DE RECETA de la generación a UN solo plato producido por una
     superficie de UPDATE (swap S3 / chat-modify S4; regenerate-day los hereda porque es un loop de swap_meal).
@@ -14969,7 +15116,12 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None) -> int:
         _wrap = [{"meals": [meal]}]
         total = 0
         try:
-            if RECIPE_STEP_VEG_GUARD_ENABLED:
+            # [P2-STEPVEG-PANTRY-GUARD · 2026-06-29] (re-audit objetivo · P2 XCUT-STEPVEG-BREAKS-PANTRY) El
+            # veg-guard AÑADE un vegetal de catálogo (100g) mencionado en los PASOS pero ausente de
+            # ingredients[]. En un update PANTRY-STRICT (cocinar desde la nevera) eso introduce un alimento que
+            # el usuario NO tiene → dobla la invariante "cocina de tu nevera". Se SALTA en pantry-strict (el
+            # resto del finalizer sigue corriendo). En no-pantry-strict (va de compras) el veg sí se añade.
+            if RECIPE_STEP_VEG_GUARD_ENABLED and not pantry_strict:
                 _nv = _add_missing_recipe_step_vegetables(_wrap)
                 if _nv:
                     total += _nv
@@ -15002,6 +15154,15 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None) -> int:
                 total += 1
         except Exception as _enn:
             logger.warning(f"[P2-RECIPE-NONEMPTY-BACKSTOP] backstop en finalizador de update no-op: {type(_enn).__name__}: {_enn}")
+        # [P2-APPET-UPD-SANITY · 2026-06-29] (re-audit objetivo · P2 APPET-UPD-SANITY-2) El autofix de artefactos
+        # de generación (dropea almidón/huevo INCONGRUENTE en un batido + nombres GLITCHEADOS/irresolubles) corría
+        # SOLO en form-gen assemble; un swap/modify/regen podía persistir el mismo artefacto (recipe↔lista divergente).
+        # Corre ANTES del quantize (cambia el SET de ingredientes → quantize redondea el set final). Recalcula macros
+        # internamente, fail-safe, idempotente. tooltip-anchor: P2-APPET-UPD-SANITY
+        try:
+            total += _generation_sanity_autofix({"days": _wrap}, db)
+        except Exception as _esa:
+            logger.warning(f"[P2-APPET-UPD-SANITY] sanity-autofix en finalizador de update no-op: {type(_esa).__name__}: {_esa}")
         # [P1-RECIPE-QUANTIZE-UPDATES · 2026-06-29] (re-audit objetivo · P1) El quantize de porciones a unidades
         # de cocina medibles (¼ taza, ½ unidad discreta, 5 g) corría SOLO en form-gen (assemble); los updates
         # corren los MISMOS closers de macros que RE-INTRODUCEN decimales no medibles ('0.66 huevos', '4.73g de
@@ -15020,6 +15181,29 @@ def finalize_single_meal_recipe_coherence(meal: dict, db=None) -> int:
                     total += _nq
         except Exception as _eq:
             logger.warning(f"[P1-RECIPE-QUANTIZE-UPDATES] quantize en finalizador de update no-op: {type(_eq).__name__}: {_eq}")
+        # [P2-RECIPE-HUMANIZE-UPDATES · 2026-06-29] (re-audit objetivo · P2 RECIPE-HUMANIZE-UPDATES-2) La
+        # humanización de display (colapso de doble-fracción, '1 huevos'→'1 huevo', '¼ cda'→'1 cdta', medidas
+        # caseras) corría SOLO en form-gen (g_o.py:16929 sobre el result SSE); los platos editados mostraban
+        # strings crudos en app + PDF. Display-only: NO toca recipe ni macros; preserva `ingredients_raw` (lo usa
+        # el aggregator de la lista → coherencia receta↔lista intacta). Corre DESPUÉS del quantize (formatea la
+        # porción ya redondeada). Idempotente (re-correr no re-sobrescribe ingredients_raw). tooltip-anchor: P2-RECIPE-HUMANIZE-UPDATES
+        try:
+            from humanize_ingredients import humanize_plan_ingredients as _humanize
+            _humanize({"days": _wrap})
+        except Exception as _eh:
+            logger.warning(f"[P2-RECIPE-HUMANIZE-UPDATES] humanize en finalizador de update no-op: {type(_eh).__name__}: {_eh}")
+        # [P2-APPET-UPD-CRITIQUE · 2026-06-29] (re-audit objetivo · P2 APPET-UPD-CRITIQUE-1) Centraliza el detector
+        # de clash fruta-dulce↔base-salada (name-only SSOT, anti-falso-positivo) en el finalizer compartido → TODAS
+        # las superficies de update (incl. /recalculate, que no llama appetibility_fix_for_update) emiten el advisory.
+        # NO escaneo ingredients[] para fruta+pescado: la cocina caribeña parea fruta tropical con pescado/marisco
+        # legítimamente (pescado con salsa de mango, camarones con piña) → alto FP. Advisory-only (flag para PDF/
+        # frontend), nunca bloquea. tooltip-anchor: P2-APPET-UPD-CRITIQUE
+        try:
+            if UPDATE_APPETIBILITY_GUARD and _meal_has_sweet_savory_clash(meal):
+                meal["_appetibility_combo_warning"] = True
+                logger.info("🍓 [P2-APPET-UPD-CRITIQUE] plato de update con pareo fruta-dulce+salado (advisory)")
+        except Exception as _eac:
+            logger.warning(f"[P2-APPET-UPD-CRITIQUE] advisory de combo en update no-op: {type(_eac).__name__}: {_eac}")
         # [P2-DISH-QUALITY-GATE · 2026-06-29] (audit objetivo · P2-7) Advisory de calidad en updates (paridad de
         # telemetría con S1): si tras los backstops el plato sigue placeholder/crudo, lo marcamos para que el
         # frontend/PDF lo señalice (no bloquea — el update no tiene retry barato como el gate de S1).
@@ -19054,11 +19238,21 @@ Responde ÚNICAMENTE con el JSON de revisión.
             _bsr_val = (_bsr.get("score_macros_only")
                         if BAND_GATE_USE_MACROS_ONLY and _bsr.get("score_macros_only") is not None
                         else _bsr.get("score"))
-            if _bsr_val is not None and _bsr_val < BAND_RETRY_THRESHOLD:
-                _low = [k for k, v in (_bsr.get("per_macro") or {}).items()
+            _per_macro = _bsr.get("per_macro") or {}
+            _agg_trigger = (_bsr_val is not None and _bsr_val < BAND_RETRY_THRESHOLD)
+            # [P2-BAND-GATE-PER-MACRO · 2026-06-29] (re-audit objetivo · P2 MACRO-FG-BANDGATE-LOOSE) El score
+            # AGREGADO es kcal-inflado → solo dispara con <1/3 de celdas en banda. Además, si CUALQUIER macro
+            # individual tiene <PER_MACRO_THRESHOLD de sus celdas en banda (un macro entero fuera de banda casi
+            # todos los días), fuerza retry. Default OFF (subir volumen de retry requiere A/B vs pipeline_metrics).
+            _per_macro_low = [k for k, v in _per_macro.items()
+                              if v is not None and k != "kcal" and v < BAND_GATE_PER_MACRO_THRESHOLD]
+            _per_macro_trigger = bool(BAND_GATE_PER_MACRO and _per_macro_low)
+            if _agg_trigger or _per_macro_trigger:
+                _low = [k for k, v in _per_macro.items()
                         if v is not None and v < 0.5 and k != "kcal"]
                 logger.warning(f"📊 [P2-BAND-RETRY-GATE] band_score={_bsr_val} < {BAND_RETRY_THRESHOLD} "
-                               f"(per_macro={_bsr.get('per_macro')}) → rechazo para reintentar el balanceo de macros.")
+                               f"(agg={_agg_trigger} per_macro_trigger={_per_macro_trigger} low={_per_macro_low} "
+                               f"per_macro={_per_macro}) → rechazo para reintentar el balanceo de macros.")
                 approved = False
                 issues.append(
                     "PRECISIÓN DE MACROS BAJA: varios días tienen macros fuera de la banda objetivo "

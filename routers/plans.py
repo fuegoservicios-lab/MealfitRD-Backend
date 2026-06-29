@@ -4082,6 +4082,32 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                 "detail": "El Chef AI no pudo detallar esta receta ahora. Mostrando la versión original; intenta de nuevo en un momento.",
             }
 
+        # [P2-EXPAND-FINALIZE · 2026-06-29] (re-audit objetivo · P2 RECIPE-EXPAND-NO-FINALIZE-4) ANTES de validar/
+        # persistir, corre la coherencia veg-en-pasos↔ingredients del finalizer sobre los pasos expandidos del Chef
+        # AI: si introdujo un VEGETAL en los PASOS ausente de ingredients[] (ventana sinónimo-vs-catálogo que el
+        # validador reject-only NO cubre), lo añade a ingredients[] → se compra. `_add_missing_recipe_step_vegetables`
+        # solo HACE APPEND (no modifica/dropea existentes) → el delta = la cola tras len(original) es exactamente lo
+        # añadido (length-safe, sin quantize/humanize que complicarían el conteo). El callback de persistencia (abajo)
+        # escribe esos veg en ingredients[] del meal target (cierra el caveat "el callback solo escribía recipe").
+        # Fail-open. Gated por UPDATE_RECIPE_FINALIZE + el veg-guard. tooltip-anchor: P2-EXPAND-FINALIZE
+        _expand_added_ings = []
+        try:
+            from graph_orchestrator import (_add_missing_recipe_step_vegetables as _veg_exp,
+                                            UPDATE_RECIPE_FINALIZE_ENABLED as _urf_exp,
+                                            RECIPE_STEP_VEG_GUARD_ENABLED as _vge_exp)
+            if _urf_exp and _vge_exp and isinstance(data.get("ingredients"), list):
+                _base_ings = [str(i) for i in (data.get("ingredients") or [])]
+                _wrap_exp = [{"meals": [{"name": req_name, "ingredients": list(_base_ings),
+                                         "recipe": list(expanded_steps)}]}]
+                if _veg_exp(_wrap_exp):
+                    _fin_ings = _wrap_exp[0]["meals"][0].get("ingredients") or []
+                    _expand_added_ings = [str(x) for x in _fin_ings[len(_base_ings):]]
+                    if _expand_added_ings:
+                        logger.info(f"🥦 [P2-EXPAND-FINALIZE] {len(_expand_added_ings)} veg de los pasos expandidos "
+                                    f"añadido(s) a ingredients[] para coherencia receta↔lista | meal='{req_name}'")
+        except Exception as _exf_e:
+            logger.warning(f"[P2-EXPAND-FINALIZE] finalize en expand no-op: {type(_exf_e).__name__}: {_exf_e}")
+
         # [P1-RECIPE-EXPAND-COHERENCE · 2026-06-28] Valida coherencia receta↔ingredientes del output del Chef AI ANTES
         # de cobrar/persistir. Reusa el validador + knob de swap/modify (`MEALFIT_SWAP_RECIPE_COHERENCE_VALIDATE`). El
         # validador V1 atrapa proteínas-fantasma (la receta dice "pollo"/"pescado" pero los ingredientes no lo tienen —
@@ -4214,6 +4240,19 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                     if not isinstance(days_fresh, list):
                         return False
 
+                    def _append_expand_veg(_meal: dict) -> None:
+                        # [P2-EXPAND-FINALIZE] persiste los veg que el finalizer añadió desde los pasos
+                        # expandidos (APPEND-only + dedup laxo → no clobbea ingredients/ingredients_raw existentes).
+                        if not _expand_added_ings or not isinstance(_meal, dict):
+                            return
+                        _ex = _meal.setdefault("ingredients", [])
+                        _ex_low = {str(x).strip().lower() for x in _ex}
+                        for _ai in _expand_added_ings:
+                            if str(_ai).strip().lower() not in _ex_low:
+                                _ex.append(_ai)
+                                if isinstance(_meal.get("ingredients_raw"), list):
+                                    _meal["ingredients_raw"].append(_ai)
+
                     updated_in_callback = False
 
                     # Camino 1: targeting preciso por (day_index, meal_index).
@@ -4233,6 +4272,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                             if isinstance(target_meal_fresh, dict) and target_meal_fresh.get("name") == req_name:
                                 target_meal_fresh["recipe"] = expanded_steps
                                 target_meal_fresh["isExpanded"] = True
+                                _append_expand_veg(target_meal_fresh)
                                 updated_in_callback = True
 
                     # Camino 2: si no targeteamos por índices, propagar a TODAS
@@ -4252,6 +4292,7 @@ def api_expand_recipe(data: dict = Body(...), verified_user_id: Optional[str] = 
                                 if m.get("name") == req_name and m.get("recipe") == req_recipe_original:
                                     m["recipe"] = expanded_steps
                                     m["isExpanded"] = True
+                                    _append_expand_veg(m)
                                     updated_in_callback = True
                                     # NO break: propagamos a todas las ocurrencias.
 
@@ -4836,6 +4877,16 @@ def api_swap_meal_persist(
                     recompute_micronutrient_report_for_plan(plan_data, _micro_form, db=None)
                 except Exception as _mfe:
                     logger.debug(f"[P2-SWAP-MICROS-STALE] recompute (swap) falló: {_mfe}")
+                # [P2-DISHQUAL-SURFACE-UPDATES · 2026-06-29] (re-audit objetivo · P2 XCUT-DISHQUAL-NOT-SURFACED)
+                # Recomputa el agregado plan-level `dish_quality_report` (hoy solo en assemble) tras el swap → el
+                # Dashboard/PDF no quedan stale. El flag per-comida `_dish_quality_degraded` ya lo setea el finalizer
+                # y persiste en el meal. Best-effort, gated por DISH_QUALITY_TELEMETRY_ENABLED. tooltip-anchor: P2-DISHQUAL-SURFACE-UPDATES
+                try:
+                    from graph_orchestrator import compute_dish_quality_report, DISH_QUALITY_TELEMETRY_ENABLED as _dqt_s
+                    if _dqt_s:
+                        plan_data["dish_quality_report"] = compute_dish_quality_report(plan_data)
+                except Exception as _dqs_e:
+                    logger.debug(f"[P2-DISHQUAL-SURFACE-UPDATES] recompute dish-quality (swap) falló: {_dqs_e}")
 
             return plan_data
 
@@ -5516,6 +5567,14 @@ def api_regenerate_day(
                     recompute_micronutrient_report_for_plan(pd, _micro_form, db=_db)
                 except Exception as _mfe:
                     logger.debug(f"[P1-UPDATE-MICROS] recompute (regen-day) falló: {_mfe}")
+                # [P2-DISHQUAL-SURFACE-UPDATES · 2026-06-29] (re-audit objetivo · P2) Recomputa el agregado
+                # plan-level dish_quality_report tras regenerar el día (no stale en Dashboard/PDF). Best-effort.
+                try:
+                    from graph_orchestrator import compute_dish_quality_report, DISH_QUALITY_TELEMETRY_ENABLED as _dqt_r
+                    if _dqt_r:
+                        pd["dish_quality_report"] = compute_dish_quality_report(pd)
+                except Exception as _dqr_e:
+                    logger.debug(f"[P2-DISHQUAL-SURFACE-UPDATES] recompute dish-quality (regen-day) falló: {_dqr_e}")
             return pd
 
         result = update_plan_data_atomic(plan_id, _day_mutator, user_id=verified_user_id)

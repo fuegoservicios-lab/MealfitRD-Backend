@@ -1604,6 +1604,26 @@ SLOT_INAPPROPRIATE_FOODS = {
         {"label": "comida de desayuno en la cena (cereal/panqueque/waffle)", "tokens": (
             "cereal", "hojuelas", "panqueque", "pancake", "waffle", "crepe", "crepa"),
          "hardness": "soft"},
+        # [P2-SLOT-CENA-HEAVY-SOUP · 2026-06-29] (re-audit objetivo · P2) El prompt prohíbe los sopones
+        # pesados de noche pero el gate no los enforzaba (asimetría vs la regla "sopón de almuerzo" del
+        # desayuno). sancocho/asopao/mondongo son culturalmente platos de mediodía, pesados para la cena.
+        # hardness=soft (degrada a advisory en el intento final, nunca cero-plan). Conservador: NO añadimos
+        # 'guisada'/'frito' (falso positivo en cenas ligeras legítimas). tooltip-anchor: P2-SLOT-CENA-HEAVY-SOUP
+        {"label": "sopón/guiso pesado de noche (sancocho/asopao/mondongo)", "tokens": (
+            "sancocho", "asopao", "mondongo"), "hardness": "soft"},
+    ],
+    # [P2-SLOT-ALMUERZO · 2026-06-29] (re-audit objetivo · P2) El almuerzo es el plato fuerte; un desayuno
+    # (panqueque/cereal/granola) o un postre standalone (helado/flan) como PLATO PRINCIPAL del almuerzo es
+    # incoherente. Set TIGHT y curado: NO incluye arroz/sopa/asopao/ensalada (todos legítimos en almuerzo — el
+    # "no añadir almuerzo" del lote previo era por el arroz, no por un blocklist de desayuno/postre). hardness=
+    # soft (nunca cero-plan). Estos tokens van en desayuno/merienda (F2 creatividad: panqueques de avena/harina),
+    # pero como PLATO PRINCIPAL del almuerzo son incoherentes. tooltip-anchor: P2-SLOT-ALMUERZO
+    "almuerzo": [
+        {"label": "comida de desayuno como plato principal del almuerzo (cereal/panqueque/waffle)", "tokens": (
+            "cereal", "hojuelas", "granola", "panqueque", "pancake", "waffle"),
+         "hardness": "soft"},
+        {"label": "postre standalone como plato principal del almuerzo (helado/flan)", "tokens": (
+            "helado", "flan"), "hardness": "soft"},
     ],
     # [P2-SLOT-MERIENDA · 2026-06-29] (audit objetivo · P2-8) Cierra el gap "el gate enforced solo cubre
     # desayuno/cena": un PLATO FUERTE disfrazado de merienda (mini-almuerzo) ahora se flagea en TODAS las
@@ -1617,6 +1637,13 @@ SLOT_INAPPROPRIATE_FOODS = {
             "locrio", "moro", "morito", "asopao", "sancocho", "mondongo", "mofongo", "pastelon",
             "salteado", "guisado", "guisada", "estofado", "encebollado", "croquetas"),
          "hardness": "soft"},
+        # [P2-SLOT-MERIENDA-JUNK · 2026-06-29] (re-audit objetivo · P2) Comida chatarra / plato completo como
+        # "merienda". CONSERVADOR a propósito: solo tokens INEQUÍVOCAMENTE de comida-completa/junk. EXCLUIDOS
+        # deliberadamente: empanada/pastelito, chicharrón, frituras/yaniqueque/catibía (TODAS meriendas
+        # dominicanas legítimas) y 'frito'/'frita' suelto (falso positivo en tostones/queso frito). hardness=soft.
+        # tooltip-anchor: P2-SLOT-MERIENDA-JUNK
+        {"label": "comida chatarra/plato completo como merienda (pizza/hamburguesa/yaroa)", "tokens": (
+            "pizza", "hamburguesa", "yaroa"), "hardness": "soft"},
     ],
 }
 

@@ -21,6 +21,14 @@ REGLAS ESTRICTAS:
      • "Ají morrón" = pimiento dulce / campana (rojo, verde o amarillo), grueso y carnoso. Úsalo cuando el plato lleva el pimiento dulce como PROTAGONISTA o como recipiente: "pimientos rellenos" / "morrones rellenos", fajitas, ensaladas, salteados con pimiento dulce, brochetas, pollo a la jardinera.
      • "Ají cubanela" = ají verde alargado y delgado de cocina. Úsalo SOLO como base de sazón/sofrito en guisos, habichuelas, carnes guisadas. NUNCA para rellenar.
      • REGLA DURA: para CUALQUIER plato de "rellenos" donde el pimiento es el que se rellena, el ingrediente DEBE ser "Ají morrón" (jamás "ají cubanela"). Si nombras un plato "Pimientos Rellenos", el ingrediente es "Ají morrón".
+2.5. TRANSFORMA LOS STAPLES EN PLATOS CRIOLLOS APETECIBLES [P2-CREATIVITY-TRANSFORM · 2026-06-29]: NO sirvas el
+   staple "crudo/simple" por defecto (ni "proteína a la plancha + arroz blanco" en cada comida). Conviértelo en una
+   preparación criolla apetecible, manteniendo CADA componente desglosado en `ingredients` (para que la lista de
+   compras lo costee). Ejemplos por staple: harina → panqueques / bollos / arepas / tortillas / empanadas al horno;
+   avena → panqueques de avena / overnight oats / avena cremosa; yuca → bollos de yuca / arepitas / casabe / yuca al
+   mojo; plátano → mofongo / mangú / tostones; maíz → arepitas / chacá; huevo → tortilla / revoltillo. Aplica
+   ESPECIALMENTE a MERIENDA y CENA (no solo al desayuno). La creatividad es en la PREPARACIÓN, NUNCA en inventar
+   alimentos fuera del catálogo verificado (regla 5 manda). Mantén la coherencia receta↔ingredientes (regla 8).
 3. RECETAS PROFESIONALES: Los pasos (`recipe`) DEBEN incluir los prefijos:
    - "Mise en place: [preparación previa]"
    - "El Toque de Fuego: [cocción]"
