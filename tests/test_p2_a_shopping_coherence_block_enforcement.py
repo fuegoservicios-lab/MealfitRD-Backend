@@ -52,12 +52,19 @@ def _bypass_form_data():
 
 
 def _minimal_plan(*, with_block=None, with_schema_invalid=False):
-    """Plan mínimo que pasa schema validation (or not, si with_schema_invalid)."""
+    """Plan mínimo que pasa schema validation (or not, si with_schema_invalid).
+
+    [2026-06-29] Macros EN BANDA (delivered == target, band_score=1.0) para que el gate ortogonal
+    P2-BAND-RETRY-GATE (añadido 2026-06-21, default ON) NO interfiera: sin macros el band_score era 0.0 y
+    el gate rechazaba/elevaba severidad, contaminando la prueba del consumer del `_shopping_coherence_block`
+    (este test es del CONSUMER, no de la banda). 150p·4 + 200c·4 + 67f·9 ≈ 2003 kcal (coherente)."""
     plan = {
         "calories": 2000,
+        "macros": {"protein": 150, "carbs": 200, "fats": 67},
         "days": [
             {"day": 1, "meals": [
-                {"meal": "almuerzo", "name": "Pollo con arroz", "ingredients": ["200 g pollo", "150 g arroz"]}
+                {"meal": "almuerzo", "name": "Pollo con arroz", "ingredients": ["200 g pollo", "150 g arroz"],
+                 "protein": 150, "carbs": 200, "fats": 67, "cals": 2000}
             ]}
         ],
     }
